@@ -1,14 +1,16 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, fsyncSync, mkdirSync, openSync, readFileSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
+import { summarizeParkChecks } from './park.mjs'
 import { listProcesses, ownedProcesses } from '../owned-processes.mjs'
 
 export const STATES = [
   'cold-start',
   'settled-idle',
+  'parked-idle',
   'first-inference',
   'active-transcription',
   'post-meeting',
@@ -24,6 +26,7 @@ export const ATTRIBUTABLE_PROCESS_KINDS = [
   'speaker-utility',
   'llama-server',
   'fm-serve',
+  'sidecar-supervisor',
   'crashpad'
 ]
 
@@ -91,6 +94,10 @@ export function classifyProcess(entry) {
   const role = baseRole(entry)
   const cmd = commandText(entry)
   if (role.includes('crashpad')) return 'crashpad'
+  // The supervise wrapper carries its sidecar's path in argv; it must not be counted as that sidecar.
+  if (/^metis-mac-helper(\.exe)?$/.test(role) && /metis-mac-helper(\.exe)?\s+supervise(\s|$)/.test(cmd)) {
+    return 'sidecar-supervisor'
+  }
   if (role === 'llama-server' || role === 'llama-server.exe' || cmd.includes('llama-server')) return 'llama-server'
   if (cmd.includes('fm serve') || (role === 'fm' && cmd.includes(' serve'))) return 'fm-serve'
   if (cmd.includes('--type=gpu-process') || role.includes('helper (gpu)')) return 'gpu'
@@ -120,12 +127,37 @@ export function parseProveLocalTtftOutput(text) {
   return warmTtftMs
 }
 
+/** Classifies a saved prove-local-ttft run without throwing on a failed proof: a slow hosted runner is a
+ *  measured PASS/FAIL/TIMEOUT to record, not a reason to drop the census. */
+export function parseProveLocalTtftOutcome(text) {
+  const output = String(text ?? '')
+  if (!output.includes('prove-local-ttft: Métis Local warm-suggest TTFT proof')) {
+    throw new Error('TTFT artifact is not output from scripts/prove-local-ttft.mjs')
+  }
+  const timeout = /prewarm timed out after (\d+)ms \(limit (\d+)ms\)/.exec(output)
+  if (timeout) return { outcome: 'TIMEOUT', prewarmElapsedMs: Number(timeout[1]), prewarmTimeoutMs: Number(timeout[2]) }
+  const warm = /^warm TTFT:\s*(\d+)\s*ms\s*$/im.exec(output)
+  if (/\[prove-local-ttft\]\s+FAIL|FAILED:/i.test(output)) {
+    const health = /healthy on \S+ after (\d+)ms/.exec(output)
+    const prewarm = /prewarm \(cold prefill\):\s*(\d+)\s*ms/.exec(output)
+    return {
+      outcome: 'FAIL',
+      ...(health ? { healthMs: Number(health[1]) } : {}),
+      ...(prewarm ? { prewarmColdPrefillMs: Number(prewarm[1]) } : {}),
+      ...(warm ? { warmTtftMs: Number(warm[1]) } : {})
+    }
+  }
+  // A run cut off before any verdict (no warm TTFT, no FAIL line) is still a measured non-PASS outcome.
+  if (!warm) return { outcome: 'INCOMPLETE' }
+  return { outcome: 'PASS', warmTtftMs: parseProveLocalTtftOutput(output) }
+}
+
 export function proveLocalTtftEvidenceFromArtifact(path, { cwd = process.cwd() } = {}) {
   const artifact = readEvidenceArtifact(path, cwd)
   return {
     recorded: true,
     command: PROVE_LOCAL_TTFT_COMMAND,
-    warmTtftMs: parseProveLocalTtftOutput(artifact.text),
+    ...parseProveLocalTtftOutcome(artifact.text),
     artifact: {
       path: artifact.path,
       sha256: sha256Text(artifact.text)
@@ -240,12 +272,13 @@ export function sanitizeProcessSample(sample) {
     rssBytes: sample.rssBytes ?? null,
     physFootprintBytes: sample.physFootprintBytes ?? null,
     workingSetBytes: sample.workingSetBytes ?? null,
+    privateBytes: sample.privateBytes ?? null,
     cpuSeconds: sample.cpuSeconds ?? null
   }
 }
 
 export function sanitizeReport(report) {
-  return {
+  const sanitized = {
     schemaVersion: 1,
     generatedAt: report.generatedAt,
     ticket: 'M2-0009',
@@ -266,6 +299,7 @@ export function sanitizeReport(report) {
     processIdentities: report.processIdentities.map(sanitizeProcessSample),
     samples: report.samples.map((sample) => ({
       tMs: sample.tMs,
+      ...(typeof sample.parked === 'boolean' ? { parked: sample.parked } : {}),
       processes: sample.processes.map(sanitizeProcessSample)
     })),
     summary: report.summary,
@@ -274,6 +308,8 @@ export function sanitizeReport(report) {
     proveLocalTtft: report.proveLocalTtft,
     windowsWorkingSet: report.windowsWorkingSet
   }
+  if (report.parkedIdle) sanitized.parkedIdle = report.parkedIdle
+  return sanitized
 }
 
 export function rendererScenarioProbeSource(scenario) {
@@ -350,6 +386,18 @@ function windowsWorkingSetEvidenceFromSamples(platform, samples) {
     measured,
     metric: 'Win32_Process.WorkingSetSize',
     lane: 'windows-qa'
+  }
+}
+
+function summarizeParkedSamples(samples) {
+  const tracked = samples.filter((sample) => typeof sample.parked === 'boolean')
+  const total = tracked.length
+  const parked = tracked.filter((sample) => sample.parked).length
+  return {
+    samples: total,
+    parked,
+    notParked: total - parked,
+    parkedCoverage: total === 0 ? 0 : parked / total
   }
 }
 
@@ -443,6 +491,7 @@ $pids = @(${pids.join(',')});
 Get-CimInstance Win32_Process | Where-Object { $pids -contains $_.ProcessId } | ForEach-Object { [pscustomobject]@{
   pid = $_.ProcessId;
   ws = $_.WorkingSetSize;
+  priv = $_.PrivatePageCount;
   user = $_.UserModeTime;
   kernel = $_.KernelModeTime;
   cmd = $_.CommandLine
@@ -464,12 +513,17 @@ function win32ResourceRows(pids) {
     parsed = []
   }
   const rows = Array.isArray(parsed) ? parsed : [parsed]
+  return normalizeWin32ResourceRows(rows)
+}
+
+export function normalizeWin32ResourceRows(rows) {
   const result = new Map()
   for (const row of rows) {
     if (!row || typeof row.pid !== 'number') continue
     result.set(row.pid, {
       workingSetBytes: Number(row.ws) || 0,
       rssBytes: Number(row.ws) || 0,
+      privateBytes: row.priv == null || !Number.isFinite(Number(row.priv)) ? null : Number(row.priv),
       cpuSeconds: ((Number(row.user) || 0) + (Number(row.kernel) || 0)) / 10_000_000,
       commandLine: typeof row.cmd === 'string' ? row.cmd : ''
     })
@@ -488,6 +542,7 @@ function processIdentity(entry, resource = {}) {
     rssBytes: resource.rssBytes ?? null,
     physFootprintBytes: resource.physFootprintBytes ?? null,
     workingSetBytes: resource.workingSetBytes ?? null,
+    privateBytes: resource.privateBytes ?? null,
     cpuSeconds: resource.cpuSeconds ?? 0
   }
 }
@@ -616,14 +671,30 @@ export async function collectCensus(options) {
   const started = now()
   const end = started + seconds * 1000
   const samples = []
+  const parkChecks = [...(options.parkedIdle?.checks ?? [])]
+  let latestParkCheck = parkChecks.at(-1) ?? null
+  let nextParkCheck = started + 60_000
   while (true) {
+    const sampledAt = now()
+    if (state === 'parked-idle' && typeof options.checkPark === 'function' && (sampledAt >= nextParkCheck || sampledAt >= end)) {
+      latestParkCheck = await options.checkPark(sampledAt)
+      parkChecks.push(latestParkCheck)
+      while (nextParkCheck <= sampledAt) nextParkCheck += 60_000
+    }
     const table = listProcessesFn(platform)
     const owned = ownedProcessPopulation({ mainPid: options.mainPid, installRoot: options.installRoot, platform, table })
     const processes = sampleOwnedProcessesFn(owned, platform)
-    const sampledAt = now()
-    samples.push({ tMs: sampledAt - started, processes })
+    samples.push({
+      tMs: sampledAt - started,
+      ...(state === 'parked-idle' && latestParkCheck ? { parked: Boolean(latestParkCheck.parked) } : {}),
+      processes
+    })
     if (sampledAt >= end) break
-    await sleepFn(Math.min(intervalMs, Math.max(1, end - sampledAt)))
+    const nextAt =
+      state === 'parked-idle' && typeof options.checkPark === 'function'
+        ? Math.min(sampledAt + intervalMs, nextParkCheck, end)
+        : Math.min(sampledAt + intervalMs, end)
+    await sleepFn(Math.max(1, nextAt - sampledAt))
   }
 
   const processIdentities = validateCensusIdentity(samples, options.mainPid)
@@ -648,7 +719,113 @@ export async function collectCensus(options) {
     proveLocalTtft: options.proveLocalTtft ?? { recorded: false, command: PROVE_LOCAL_TTFT_COMMAND },
     windowsWorkingSet: options.windowsWorkingSet ?? windowsWorkingSetEvidenceFromSamples(platform, samples)
   }
+  if (state === 'parked-idle') {
+    report.summary = {
+      ...report.summary,
+      budgetOneCorePercent: 1,
+      overBudget: report.summary.oneCoreCpuPercent > 1
+    }
+    report.parkedIdle = {
+      ...(options.parkedIdle ?? {}),
+      checks: parkChecks,
+      summary: {
+        ...summarizeParkChecks(parkChecks),
+        sampleSummary: summarizeParkedSamples(samples)
+      }
+    }
+  }
   return sanitizeReport(report)
+}
+
+export const STREAM_SCHEMA = 'census-stream/1'
+
+/** Truncates `path`, then returns a writer that appends one JSON line per call and flushes it at once,
+ *  so a run that is killed keeps every line written so far. */
+export function openNdjsonWriter(path) {
+  mkdirSync(dirname(path), { recursive: true })
+  const fd = openSync(path, 'w')
+  return (record) => {
+    writeSync(fd, `${JSON.stringify(record)}\n`, undefined, 'utf8')
+    fsyncSync(fd)
+  }
+}
+
+function streamProcess(sample) {
+  return {
+    pid: sample.pid,
+    startedMs: sample.startedMs,
+    kind: sample.kind,
+    rssBytes: sample.rssBytes ?? null,
+    physFootprintBytes: sample.physFootprintBytes ?? null,
+    workingSetBytes: sample.workingSetBytes ?? null,
+    privateBytes: sample.privateBytes ?? null,
+    cpuSeconds: sample.cpuSeconds ?? null
+  }
+}
+
+/**
+ * Long-run census: one header line, one line per sample written as it is taken, and a trailer only on a
+ * normal end ('completed', or 'main-exited' once the main pid is gone). Aborting `signal` stops the run
+ * with no trailer, as a killed process would. Samples are scheduled from the previous sample's start.
+ * Nothing is retained in memory. `afterSample` runs after each written sample line.
+ */
+export async function streamCensus(options) {
+  const platform = options.platform ?? process.platform
+  const state = validateState(options.state)
+  const seconds = Number(options.seconds ?? DEFAULT_SECONDS)
+  const intervalMs = Number(options.intervalMs ?? DEFAULT_INTERVAL_MS)
+  if (!(seconds > 0)) throw new Error('--seconds must be positive')
+  if (!(intervalMs > 0)) throw new Error('--interval-ms must be positive')
+  if (!options.installRoot) throw new Error('installRoot is required')
+  if (!Number.isInteger(options.mainPid)) throw new Error('mainPid is required')
+  const productVersion = cleanProductVersion(options.productVersion)
+  if (!productVersion) throw new Error('productVersion is required')
+  if (typeof options.writeLine !== 'function') throw new Error('writeLine is required')
+
+  const now = options.now ?? Date.now
+  const sleepFn = options.sleep ?? sleep
+  const listProcessesFn = options.listProcesses ?? listProcesses
+  const sampleOwnedProcessesFn = options.sampleOwnedProcesses ?? sampleOwnedProcesses
+  const started = now()
+  const endMs = seconds * 1000
+  options.writeLine({
+    record: 'header',
+    schema: STREAM_SCHEMA,
+    state,
+    platform,
+    productVersion,
+    mainPid: options.mainPid,
+    intervalMs,
+    startedAt: new Date(started).toISOString(),
+    profileKind: options.profileKind ?? 'representative-synthetic'
+  })
+
+  let count = 0
+  while (true) {
+    if (options.signal?.aborted) return { outcome: 'aborted', samples: count, startedAt: started }
+    const sampleStart = now()
+    const table = listProcessesFn(platform)
+    const owned = ownedProcessPopulation({ mainPid: options.mainPid, installRoot: options.installRoot, platform, table })
+    const processes = sampleOwnedProcessesFn(owned, platform)
+    const mainAlive = processes.some((process) => process.pid === options.mainPid && process.kind === 'main')
+    count += 1
+    options.writeLine({
+      record: 'sample',
+      tMs: sampleStart - started,
+      processes: processes.map(streamProcess),
+      mainAlive,
+      sampleDurationMs: now() - sampleStart
+    })
+    await options.afterSample?.({ samples: count, tMs: sampleStart - started })
+    if (options.signal?.aborted) return { outcome: 'aborted', samples: count, startedAt: started }
+    const outcome = !mainAlive ? 'main-exited' : sampleStart - started >= endMs ? 'completed' : null
+    if (outcome) {
+      options.writeLine({ record: 'trailer', outcome, samples: count, endedAt: new Date(now()).toISOString() })
+      return { outcome, samples: count, startedAt: started }
+    }
+    const nextAt = Math.min(sampleStart + intervalMs, started + endMs)
+    await sleepFn(Math.max(0, nextAt - now()))
+  }
 }
 
 export function writeJson(path, value) {

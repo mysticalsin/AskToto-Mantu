@@ -31,6 +31,20 @@ export function closedSince(ledger, recordsByTicket, since) {
 }
 
 /**
+ * S1 by dependency: the closed tickets a ticket depends on, whatever their records' timestamps say.
+ * @param {object} ledger
+ * @param {string} ticketId
+ * @returns {string[] | null} ticket ids, or null when `ticketId` is not in the ledger
+ */
+export function populationOf(ledger, ticketId) {
+  const tickets = Array.isArray(ledger?.tickets) ? ledger.tickets : []
+  const target = tickets.find((ticket) => ticket?.id === ticketId)
+  if (!target) return null
+  const dependencies = new Set(Array.isArray(target.depends_on) ? target.depends_on : [])
+  return tickets.filter((ticket) => dependencies.has(ticket?.id) && CLOSED.has(ticket?.status)).map((ticket) => ticket.id)
+}
+
+/**
  * S2 (size) + S3 (selection): the ⌈fraction × n⌉ ids (at least 1 when n > 0) whose
  * sha256("<seed>:<id>") hex is smallest, printed sorted by id.
  * @param {string[]} ids
@@ -55,10 +69,12 @@ function usageExit(message) {
 }
 
 function main() {
-  const { values } = parseArgs({ options: { ledger: { type: 'string' }, since: { type: 'string' }, seed: { type: 'string' } } })
-  if (!values.ledger) return usageExit('usage: sample.mjs --ledger <path> --since <YYYY-MM-DD|instant> --seed <string>')
+  const { values } = parseArgs({ options: { ledger: { type: 'string' }, since: { type: 'string' }, 'population-of': { type: 'string' }, seed: { type: 'string' } } })
+  const of = values['population-of']
+  if (!values.ledger) return usageExit('usage: sample.mjs --ledger <path> (--since <YYYY-MM-DD|instant> | --population-of <ticket>) --seed <string>')
   if (!values.seed) return usageExit('sample.mjs: --seed is required and must be non-empty')
-  if (!values.since || Number.isNaN(Date.parse(values.since))) return usageExit('sample.mjs: --since must be a parseable date or instant')
+  if ((of === undefined) === (values.since === undefined)) return usageExit('sample.mjs: give exactly one of --since or --population-of')
+  if (values.since !== undefined && Number.isNaN(Date.parse(values.since))) return usageExit('sample.mjs: --since must be a parseable date or instant')
 
   let program
   try {
@@ -66,9 +82,11 @@ function main() {
   } catch (error) {
     return usageExit(`could not read the ledger: ${error.message}`)
   }
-  const population = closedSince(program.ledger, program.recordsByTicket, values.since)
+  const population = of === undefined ? closedSince(program.ledger, program.recordsByTicket, values.since) : populationOf(program.ledger, of)
+  if (population === null) return usageExit(`sample.mjs: unknown ticket ${of}`)
   const sample = drawSample(population, values.seed)
-  console.log(JSON.stringify({ since: values.since, seed: values.seed, population, sample }, null, 2))
+  const populationRule = of === undefined ? 'closed-since' : 'depends-on-closed'
+  console.log(JSON.stringify({ since: values.since ?? null, populationRule, of: of ?? null, seed: values.seed, population, sample }, null, 2))
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

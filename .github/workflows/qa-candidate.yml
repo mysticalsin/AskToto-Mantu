@@ -581,7 +581,7 @@ jobs:
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 
   # Blocking: a candidate whose QA capture source does not engage cannot satisfy the 1 h meeting scenario's
-  # acc 4c (OD-31). Runs this run's QA-identity bytes on a fresh profile with a WAV as the microphone.
+  # acceptance evidence. Runs this run's QA-identity bytes on a fresh profile with a WAV as the microphone.
   capture-file-smoke-mac:
     name: File-fed capture smoke (macOS QA identity)
     needs: provenance
@@ -618,6 +618,74 @@ jobs:
           name: capture-file-smoke-mac
           path: capture-report/
           if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+
+  # Report-only measurement (M2-0516), never a gate and never ST-1 evidence: short launches (--purpose
+  # window-construction, st1Evidence: false) that build the boot window under each QA-identity rendering variant,
+  # in both chromes, twice, interleaved, all on this one runner so the numbers compare. A first-run profile builds
+  # the opaque exclusive onboarding window; an onboarded bar profile builds the transparent overlay. Each report's
+  # bootStages carries createWindow.construct (with the chrome and variant built), createWindow.navigate and
+  # createWindow.firstShow.
+  st1-mac-window:
+    name: ST-1 window construction per variant and chrome (report-only)
+    needs: provenance
+    runs-on: macos-latest
+    timeout-minutes: 45
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-provenance
+          path: provenance
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-mac-qa-identity
+          path: assets
+      - name: Verify every byte against the provenance
+        run: node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
+      - name: Measure the window constructor per variant and chrome
+        continue-on-error: true
+        run: |
+          mkdir -p st1-report onboarded-profile
+          installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
+          if [ -z "$installer" ]; then
+            echo "::error::candidate-mac-qa-identity did not contain a zip installer for ST-1."
+            exit 1
+          fi
+          # The durable settings of a user who finished onboarding with the bar layout (plain JSON is a supported read path).
+          printf '{"onboardingDone":true,"onboardingDoneAt":%s000,"recordingConsent":true,"overlayLayout":"bar","autoHideOverlay":false}\n' "$(date +%s)" > onboarded-profile/settings.json
+          for repeat in 1 2; do
+            for variant in shipped spellcheck-off paint-when-hidden prewarm-spellchecker prewarm-view; do
+              for chrome in opaque transparent; do
+                template=()
+                if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi
+                run="window-$variant-$chrome-$repeat"
+                node scripts/qa/st-1.mjs \
+                  --installer "$installer" \
+                  --provenance provenance/provenance.json \
+                  --fixtures none \
+                  "${template[@]}" \
+                  --minutes 0.5 \
+                  --purpose window-construction \
+                  --window-variant "$variant" \
+                  --report-dir "st1-report/$run" \
+                  --out "st1-report/$run/$run.json" \
+                  || echo "::warning::$run ended without PASS; its report says why."
+              done
+            done
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: st-1-macos-window
+          path: st1-report/
+          if-no-files-found: warn
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 
   st1-windows-external:
