@@ -4535,9 +4535,7 @@ const { forceQuit: forceQuitMétis, exitAndRelaunch } = installExitPaths(app, {
   warn: (...args) => mainLog.warn(...args)
 })
 
-// Built once, after the `win` binding, the settings store and the sidecar teardown above exist. The window
-// accessor reads `win` on every call (never a captured BrowserWindow), so recreating the window never
-// leaves the context holding a stale one.
+// Built once, after `win`, the settings store and sidecar teardown exist; mainWindow reads `win` per call (INV-LAZY).
 const appContext = createAppContext({
   mainWindow: () => win,
   settings: { get: getSettings, set: setSettings },
