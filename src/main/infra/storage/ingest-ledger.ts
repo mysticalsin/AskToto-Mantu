@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from 'node:fs'
+import { mkdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { app } from 'electron'
 import type { Settings } from '@shared/ipc'
@@ -65,17 +65,16 @@ export function classifyIngestLedgerBytes(buf: Buffer): IngestLedgerLoad {
 export async function writeIngestLedger(settings: Settings, legacyPath: string, value: BrainIndex): Promise<void> {
   const mode = ingestLedgerMode()
   const body = JSON.stringify(value, null, 2)
+  const userDataPath = userDataIngestLedgerPath()
   if (mode === 'switch') {
-    const p = userDataIngestLedgerPath()
-    if (!existsSync(dirname(p))) mkdirSync(dirname(p), { recursive: true })
-    await writeSaved(p, body, !!settings.encryptTranscripts)
+    await mkdir(dirname(userDataPath), { recursive: true })
+    await writeSaved(userDataPath, body, !!settings.encryptTranscripts)
     return
   }
-  if (mode === 'expand') {
-    const p = userDataIngestLedgerPath()
-    if (!existsSync(dirname(p))) mkdirSync(dirname(p), { recursive: true })
-    await writeSaved(p, body, !!settings.encryptTranscripts)
-  }
-  if (!existsSync(dirname(legacyPath))) mkdirSync(dirname(legacyPath), { recursive: true })
+  await mkdir(dirname(legacyPath), { recursive: true })
   await writeSaved(legacyPath, body, !!settings.encryptTranscripts)
+  if (mode === 'expand') {
+    await mkdir(dirname(userDataPath), { recursive: true })
+    await writeSaved(userDataPath, body, !!settings.encryptTranscripts)
+  }
 }

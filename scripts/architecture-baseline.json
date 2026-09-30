@@ -42,7 +42,7 @@
     "src/main/brain/corrections.ts": 1637,
     "src/main/brain/ingest.ts": 3077,
     "src/main/brain/publish.ts": 990,
-    "src/main/brain/store.ts": 1197,
+    "src/main/brain/store.ts": 1193,
     "src/main/cli.ts": 1690,
     "src/main/import-jobs.ts": 1198,
     "src/main/index.ts": 9884,
