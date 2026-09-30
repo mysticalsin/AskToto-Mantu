@@ -9,11 +9,13 @@
  * (localReady + per-task *Ready flags).
  */
 import { existsSync } from 'node:fs'
-import { freemem } from 'node:os'
+import { availableMemoryGB } from './available-memory'
 import type { AskMode, Settings } from '@shared/ipc'
 import type { ModelTier, ProviderId } from '@shared/providers'
 import { resolveBinaryPath, detectPlatform } from './local-runtime'
 import { isDownloaded, assertRamOk } from './local-models'
+import { auditLog } from '../logger'
+import { hostFloorOverridden } from '../qa-hk-m'
 
 /** Ask modes Métis Local is scoped to in v1 — never answer/recap; only opted-in vision may exceed base tier. */
 const LOCAL_SCOPED_MODES: ReadonlySet<AskMode> = new Set(['suggest', 'summary', 'vision'])
@@ -171,7 +173,9 @@ export function localVisionPrivacyRequired(
  *  and conservative in the safe direction: refusing a warm costs one cold start on the next real ask,
  *  never correctness. A real ask still loads the model regardless — this gates only speculative loads. */
 function freeRamGBValue(): number {
-  return freemem() / 1024 ** 3
+  // M2-0430: available memory, not freemem() — see available-memory.ts for why macOS freemem() refused
+  // every warm on a 32 GB Mac.
+  return availableMemoryGB()
 }
 
 export const PREWARM_MIN_FREE_RAM_GB = 4
@@ -186,12 +190,25 @@ export function localPrewarmEligible(
   s: Pick<Settings, 'localLlm' | 'resilience'>,
   allowed: string[] | null,
   cloudReady = true,
-  freeRamGB = freeRamGBValue()
+  freeRamGB = freeRamGBValue(),
+  purpose: 'suggest' | 'summary' = 'suggest'
 ): boolean {
   if (!s.localLlm.enabled) return false
   if (!orgAllowlistPermitsLocal(allowed)) return false
+  if (!prewarmWanted(s, cloudReady, purpose)) return false
   // MQA-270 (B8): both unattended warms (boot, window-focus) route through here — one floor covers both.
-  if (freeRamGB < PREWARM_MIN_FREE_RAM_GB) return false
+  // Checked last so the QA host-floor gate (qa-hk-m.ts, M2-0482) is consulted, and audited, only when this floor
+  // alone would refuse the warm.
+  return freeRamGB >= PREWARM_MIN_FREE_RAM_GB || hostFloorOverridden('prewarm-available-ram', auditLog)
+}
+
+function prewarmWanted(
+  s: Pick<Settings, 'localLlm' | 'resilience'>,
+  cloudReady: boolean,
+  purpose: 'suggest' | 'summary'
+): boolean {
+  // M2-0430: the Stop-time summary warm is worth it whenever Local summaries will serve the recap.
+  if (purpose === 'summary' && s.localLlm.useFor.summary) return true
   // "Local first for suggestions" — the original condition: local WILL serve the next suggest.
   if (s.localLlm.useFor.suggest) return true
   // The hedge now starts an on-device backup at t=0 on every interactive ask (index.ts's hedgeDelayMs),
