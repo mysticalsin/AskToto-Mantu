@@ -59,6 +59,8 @@ export const BOOT_STAGES = [
   'createWindow.firstShow'
 ] as const
 export type BootStage = (typeof BOOT_STAGES)[number]
+/** Why the boot-work gate opened: the boot window's first show, the fallback timer, or at once (no hidden window). */
+export const BOOT_WORK_RELEASE_REASONS = ['show', 'fallback', 'immediate'] as const
 /** The boot window's rendering configuration: the shipped one, or a QA-only variant the ST-1 window job builds it
  *  under (boot-window-rendering.ts, M2-0516). */
 export const BOOT_WINDOW_VARIANTS = ['shipped', 'spellcheck-off', 'paint-when-hidden', 'prewarm-spellchecker', 'prewarm-view'] as const
@@ -197,6 +199,11 @@ export const OBSERVABILITY_EVENTS = {
     /** createWindow.construct only: whether the constructor built a transparent window, and under which variant. */
     transparent: 'flag',
     windowVariant: BOOT_WINDOW_VARIANTS
+  },
+  /** The boot-work gate opened (M2-0518): why, and how many queued jobs it held until then. */
+  'app.boot.work.released': {
+    reason: BOOT_WORK_RELEASE_REASONS,
+    held: 'int'
   },
   /** Overlay renderer stopped answering Chromium. */
   'app.unresponsive': {

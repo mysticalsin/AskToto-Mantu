@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLog: vi.fn() }))
 vi.mock('../mac-helper', () => ({ macStatFlagsSpawnSpec: vi.fn(() => null) }))
 
-import { mainLog } from '../logger'
+import { auditLog, mainLog } from '../logger'
 import { createBootWork, type BootWorkWindow } from './boot-work'
 
 function fakeWindow(opts: { visible?: boolean; destroyed?: boolean } = {}): EventEmitter & BootWorkWindow & { show(): void } {
@@ -139,6 +139,50 @@ describe('createBootWork (M2-0031)', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('audits the gate opening on the first show with the jobs it held, outside the show task (M2-0518)', async () => {
+    vi.mocked(auditLog).mockClear()
+    const work = createBootWork({ limit: 1, fallbackMs: 60_000 })
+    const win = fakeWindow()
+    work.run('runBootSidecarReaper', () => new Promise<void>(() => {}))
+    work.run('startAvailableMemorySampler', vi.fn())
+    work.releaseAfterFirstShow(win)
+    await settle()
+    expect(auditLog).not.toHaveBeenCalled()
+
+    win.show()
+    expect(auditLog).not.toHaveBeenCalled()
+    await nextTask()
+    expect(auditLog).toHaveBeenCalledTimes(1)
+    expect(auditLog).toHaveBeenCalledWith('app.boot.work.released', { reason: 'show', held: 2 })
+  })
+
+  it('audits a fallback opening, so work held for a window that never showed is on record (M2-0518)', async () => {
+    vi.mocked(auditLog).mockClear()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const work = createBootWork({ fallbackMs: 5_000 })
+      const job = vi.fn()
+      work.run('recoverOrphanDrafts', job)
+      work.releaseAfterFirstShow(fakeWindow())
+      vi.advanceTimersByTime(5_000)
+      await settle()
+      expect(job).toHaveBeenCalledTimes(1)
+      expect(auditLog).toHaveBeenCalledWith('app.boot.work.released', { reason: 'fallback', held: 1 })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('audits an immediate opening once, and never again for a later show (M2-0518)', async () => {
+    vi.mocked(auditLog).mockClear()
+    const work = createBootWork()
+    work.releaseAfterFirstShow(null)
+    work.releaseAfterFirstShow(fakeWindow({ visible: true }))
+    await settle()
+    expect(auditLog).toHaveBeenCalledTimes(1)
+    expect(auditLog).toHaveBeenCalledWith('app.boot.work.released', { reason: 'immediate', held: 0 })
   })
 
   it('opens at once for a destroyed window, and logs a failing job without stopping the queue', async () => {

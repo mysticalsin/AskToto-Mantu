@@ -253,6 +253,8 @@ export type AuditEvent =
   | 'app.boot.watch_cleared'
   // M2-0515: one native boot stage's own main-thread duration (tray stages, window construction and first show).
   | 'app.boot.stage'
+  // M2-0518: the boot-work gate opened ({ reason: show | fallback | immediate, held }), so no held boot job is silent.
+  | 'app.boot.work.released'
   // FITO-185-F: menu-bar Tray create succeeded/failed — hardprove AXExtrasMenuBar needs a diagnosable trail.
   | 'tray.created'
   | 'tray.failed'

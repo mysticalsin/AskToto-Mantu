@@ -1,7 +1,9 @@
 /**
- * Boot work that first paint does not need (meetings-folder setup, import recovery, the brain resume and
- * index loads). M2-0031: run all at once at launch, these jobs filled the libuv pool while the window was
- * being built, so an async userData write waited behind them.
+ * Boot work that first paint does not need (meetings-folder setup, import and draft recovery, the retention
+ * sweep, the brain resume and index loads, and boot child processes such as the sidecar reaper's `ps` listing).
+ * M2-0031: run all at once at launch, these jobs filled the libuv pool while the window was being built, so an
+ * async userData write waited behind them. M2-0518 put the remaining boot child processes and fs/crypto jobs
+ * behind the same gate.
  *
  * Invariants:
  *   - No job starts before the gate opens: the boot window's first show, or `fallbackMs` if it never shows.
@@ -10,9 +12,12 @@
  *     threads stay free for userData writes, dns.lookup and crypto. A job leaves the count when its promise
  *     settles, or after `holdMs`, so one long job (a model pass) never starves the ones queued behind it.
  *   - Jobs start in the order they were queued. A job that throws or rejects is logged and the queue goes on.
+ *   - No held job is silent: when the gate opens, one `app.boot.work.released` audit line says why (show,
+ *     fallback or immediate) and how many queued jobs it held, written in a task of its own.
  */
+import { BOOT_WORK_RELEASE_REASONS } from '../infra/observability/projection'
 import { reservedPoolCapacity } from '../infra/storage/gateway'
-import { mainLog } from '../logger'
+import { auditLog, mainLog } from '../logger'
 
 /** The slice of BrowserWindow the gate reads. */
 export interface BootWorkWindow {
@@ -33,6 +38,8 @@ export interface BootWork {
   /** Opens the gate when `win` shows. A missing, destroyed or already visible window opens it at once. */
   releaseAfterFirstShow(win: BootWorkWindow | null | undefined): void
 }
+
+type BootWorkReleaseReason = (typeof BOOT_WORK_RELEASE_REASONS)[number]
 
 /** A boot fs job settles in seconds; past this it is doing its own long work, not the launch burst. */
 const HOLD_MS = 10_000
@@ -85,10 +92,12 @@ export function createBootWork(options: BootWorkOptions = {}): BootWork {
     setImmediate(startNext)
   }
 
-  const release = (): void => {
+  const release = (reason: BootWorkReleaseReason): void => {
     if (released) return
     released = true
     if (fallback !== undefined) clearTimeout(fallback)
+    const held = queue.length
+    setImmediate(() => auditLog('app.boot.work.released', { reason, held }))
     pump()
   }
 
@@ -99,11 +108,11 @@ export function createBootWork(options: BootWorkOptions = {}): BootWork {
     },
     releaseAfterFirstShow(win) {
       if (!win || win.isDestroyed() || win.isVisible()) {
-        release()
+        release('immediate')
         return
       }
-      win.once('show', release)
-      fallback = setTimeout(release, fallbackMs)
+      win.once('show', () => release('show'))
+      fallback = setTimeout(() => release('fallback'), fallbackMs)
       fallback.unref?.()
     }
   }
