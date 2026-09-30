@@ -1,7 +1,7 @@
 name: QA candidate
 
 # Builds one candidate once (M2-0187): every shipped macOS and Windows installer plus the macOS
-# QA-identity variant, from one named main commit, in one run. It records provenance (sha256 per
+# QA-identity variant, from one named commit of main or release/1.9.x, in one run. It records provenance (sha256 per
 # installer, commit, run, runner image, Node, Electron and electron-builder versions, builder config
 # hashes), then verifies, installs and launches every installer by sha256. Packaged gates elsewhere
 # consume these bytes by sha256, and promote-candidate.yml publishes the same bytes. This workflow never
@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       commit:
-        description: main's current commit (full 40-character SHA)
+        description: the dispatched branch's current commit (main or release/1.9.x; full 40-character SHA)
         required: true
         type: string
   pull_request:
@@ -23,6 +23,7 @@ on:
       - .github/workflows/qa-candidate.yml
       - build/qa-identity.electron-builder.yml
       - scripts/qa/provenance.mjs
+      - scripts/qa/release-line.mjs
       - scripts/qa/st-1.mjs
       - scripts/qa/lib/st-1-core.mjs
 
@@ -40,19 +41,78 @@ defaults:
 jobs:
   guard:
     name: Check what this run may build
-    if: github.repository == 'mysticalsin/AskToto-Mantu' && (github.event_name == 'pull_request' || github.ref == 'refs/heads/main')
+    if: github.repository == 'mysticalsin/AskToto-Mantu'
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 5
+    env:
+      # The public release feed: the same repository promote-candidate.yml publishes to.
+      FEED: mysticalsin/Metis-Releases
     steps:
-      - name: The named commit is main's head
+      - name: Only main and release/1.9.x build candidates
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          case "$GITHUB_REF" in
+            refs/heads/main|refs/heads/release/1.9.x) ;;
+            *)
+              echo "::error::$GITHUB_REF may not build a candidate. Dispatch on refs/heads/main or refs/heads/release/1.9.x."
+              exit 1 ;;
+          esac
+      - name: The named commit is the dispatched ref's head
         if: github.event_name == 'workflow_dispatch'
         env:
           COMMIT: ${{ inputs.commit }}
         run: |
           if [ "$COMMIT" != "$GITHUB_SHA" ]; then
-            echo "::error::main is at $GITHUB_SHA and the named commit differs. Dispatch again naming main's current commit."
+            echo "::error::$GITHUB_REF is at $GITHUB_SHA and the named commit differs. Dispatch again naming the current head of $GITHUB_REF."
             exit 1
           fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      # A dispatch fails on a problem. A pull request only warns, so the glue runs before the cut depends on it.
+      - name: The version is legal for this ref and unused on the feed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHECK_REF: ${{ github.event_name == 'pull_request' && format('refs/heads/{0}', github.base_ref) || github.ref }}
+          REPORT_ONLY: ${{ github.event_name == 'pull_request' }}
+        run: |
+          feed_failed() {
+            if [ "$REPORT_ONLY" = true ]; then
+              echo "::warning::$1 failed, so the version was not checked against the feed."
+              exit 0
+            fi
+            echo "::error::$1 failed. The feed could not be read, so this run does not build."
+            exit 1
+          }
+          feed_dir="$RUNNER_TEMP/feed"
+          mkdir -p "$feed_dir"
+          gh api "repos/$FEED/git/matching-refs/tags" --paginate --jq '.[].ref | sub("^refs/tags/"; "")' > "$feed_dir/tags.txt" \
+            || feed_failed "gh api repos/$FEED/git/matching-refs/tags"
+          gh api "repos/$FEED/releases?per_page=100" --paginate --jq '.[] | select(.draft | not) | .tag_name' > "$feed_dir/releases.txt" \
+            || feed_failed "gh api repos/$FEED/releases"
+          flags=()
+          if [ "$REPORT_ONLY" = true ]; then flags+=(--report-only); fi
+          node scripts/qa/release-line.mjs check --ref "$CHECK_REF" --package package.json \
+            --tags "$feed_dir/tags.txt" --releases "$feed_dir/releases.txt" "${flags[@]}"
+      # Hotfixes build on the promoted base, so a branch that lost it can never ship as its successor.
+      - name: The branch contains the promoted 1.9.7 commit
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/release/1.9.x'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v1.9.7 --repo "$FEED" --pattern provenance.json --dir "$RUNNER_TEMP/base" \
+            || { echo "::error::gh release download v1.9.7 --repo $FEED failed. The promoted base could not be read."; exit 1; }
+          base=$(jq -r .commit "$RUNNER_TEMP/base/provenance.json")
+          if ! [[ "$base" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::The v1.9.7 provenance.json on $FEED names no 40-character commit."
+            exit 1
+          fi
+          git merge-base --is-ancestor "$base" "$GITHUB_SHA" \
+            || { echo "::error::$GITHUB_REF at $GITHUB_SHA does not contain the promoted v1.9.7 commit $base."; exit 1; }
 
   build-mac:
     name: Build ${{ matrix.variant }}
