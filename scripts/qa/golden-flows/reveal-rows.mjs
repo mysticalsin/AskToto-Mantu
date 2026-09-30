@@ -9,6 +9,7 @@ import { runProcess, sleep } from '../lib/app-driver.mjs'
 import { AUDIT_POLL_MS, parkAndProve, parseAuditLog, readAuditLog } from './smoke-support.mjs'
 
 const RV_TIMEOUT_MS = 15_000
+export const RV_BOOT_ROW_ID = 'RV-boot-launch-activate-stays-parked'
 // The budget a direct relaunch's run() gives the relaunched instance to boot, hand off to the running app
 // and exit. A detached relaunch (the Windows shortcut's `start`) resolves run() before that boot, so its
 // reveal window adds this budget on top of RV_TIMEOUT_MS instead of spending the boot inside it.
@@ -25,7 +26,8 @@ export const RV_SCENARIOS = Object.freeze([
   { id: 'RV-4-tray-show', platform: 'all', reason: 'tray', automation: 'tray-menu' },
   { id: 'RV-4-global-hotkey', platform: 'all', reason: 'hotkey', automation: 'global-hotkey' },
   { id: 'RV-1-macos-finder-spotlight-launchpad', platform: 'darwin', reason: 'activate', automation: 'finder-open-app-file' },
-  { id: 'RV-3-windows-shortcut-relaunch', platform: 'win32', reason: 'second-instance', automation: 'windows-shortcut' }
+  { id: 'RV-3-windows-shortcut-relaunch', platform: 'win32', reason: 'second-instance', automation: 'windows-shortcut' },
+  { id: RV_BOOT_ROW_ID, platform: 'darwin', reason: 'activate', automation: 'launchservices-cold-launch' }
 ])
 
 export function initialRvRows(platform) {
