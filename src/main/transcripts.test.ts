@@ -39,6 +39,15 @@ import type { SaveMeeting, Settings } from '@shared/ipc'
 const V2_MARKER = 'ATKENC2\n'
 const parseEnvelope = (file: string): Record<string, unknown> =>
   JSON.parse(readFileSync(file).subarray(V2_MARKER.length).toString('utf8'))
+const RECALL_SOURCE = 'recall.ts'
+const RECALL_RE_OWNER = 'recall.ts'
+const recallLineRe = (): RegExp => {
+  const recallSrc = readFileSync(join(__dirname, RECALL_SOURCE), 'utf8')
+  const m = recallSrc.match(/const lineRe = (\/\^.*\/gm)/)
+  expect(m, `${RECALL_RE_OWNER}'s line regex not found — did it move?`).toBeTruthy()
+  // eslint-disable-next-line no-eval
+  return eval(m![1])
+}
 
 vi.mock('electron')
 
@@ -87,11 +96,7 @@ describe('MQA-245 — a diarization cluster label is not wrapped in the generic 
     // The real risk of touching a durable format: a line the writer emits that the reader cannot match
     // disappears from recall entirely. Assert against recall.ts's OWN regex, read from source, so this
     // cannot drift into testing a copy of the pattern that no longer ships.
-    const recallSrc = readFileSync(join(__dirname, 'recall.ts'), 'utf8')
-    const m = recallSrc.match(/const lineRe = (\/\^.*\/gm)/)
-    expect(m, "recall.ts's line regex not found — did it move?").toBeTruthy()
-    // eslint-disable-next-line no-eval
-    const lineRe: RegExp = eval(m![1])
+    const lineRe = recallLineRe()
 
     const t = Date.parse('2026-02-02T10:00:00Z')
     const body = formatTranscript([
@@ -107,11 +112,7 @@ describe('MQA-245 — a diarization cluster label is not wrapped in the generic 
   })
 
   it('keeps ASR text with embedded line breaks parseable by recall.ts', () => {
-    const recallSrc = readFileSync(join(__dirname, 'recall.ts'), 'utf8')
-    const m = recallSrc.match(/const lineRe = (\/\^.*\/gm)/)
-    expect(m, "recall.ts's line regex not found — did it move?").toBeTruthy()
-    // eslint-disable-next-line no-eval
-    const lineRe: RegExp = eval(m![1])
+    const lineRe = recallLineRe()
 
     const t = Date.parse('2026-02-02T10:00:00Z')
     const body = formatTranscript([
@@ -125,10 +126,7 @@ describe('MQA-245 — a diarization cluster label is not wrapped in the generic 
   })
 
   it('the legacy "Speaker (Speaker 1)" form still parses — old meetings do not change meaning', () => {
-    const recallSrc = readFileSync(join(__dirname, 'recall.ts'), 'utf8')
-    const m = recallSrc.match(/const lineRe = (\/\^.*\/gm)/)
-    // eslint-disable-next-line no-eval
-    const lineRe: RegExp = eval(m![1])
+    const lineRe = recallLineRe()
     const legacy = '**[10:00:00] Speaker (Speaker 1):** an older saved line'
     const hit = [...legacy.matchAll(lineRe)]
     expect(hit).toHaveLength(1)
