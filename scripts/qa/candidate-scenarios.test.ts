@@ -319,6 +319,15 @@ describe('packaged-smoke row verdict extraction', () => {
       notCovered: [{ row: 'RE-HIDE-3-meeting-hide', reason: 'Run with a permitted microphone.' }]
     })
   })
+
+  it('fails the lane assessment when an extra RV row is BLOCKED_EXTERNAL', () => {
+    const report = macPassReport()
+    report.rv.push({ id: 'RV-5-boot', status: 'BLOCKED_EXTERNAL', evidence: null, unblock: 'Dispatch the boot proof on hosted runners.' })
+    const assessment = assessPackagedSmokeReport(report, 'mac')
+    expect(assessment.problems).toContain('RV-5-boot is BLOCKED_EXTERNAL, not PASS.')
+    expect(assessment.problems).not.toEqual([])
+    expect(assessment.notCovered).toContainEqual({ row: 'RV-5-boot', reason: 'Dispatch the boot proof on hosted runners.' })
+  })
 })
 
 describe('outcomeForExit', () => {
@@ -572,6 +581,36 @@ describe('lane.json', () => {
     expect(summary).toContain('| hist: HIST-clean-bar-open | `PASS` |')
     expect(summary).toContain('| re_hide: RE-HIDE-3-meeting-hide | `BLOCKED_EXTERNAL` |')
     expect(contentProblems(JSON.stringify(packaged), { account: 'runner' })).toEqual([])
+  })
+
+  it('fails packaged-lifecycle when the scenario exits 0 but writes no packaged-smoke report', () => {
+    const packagedArgv = scenarioCommand({
+      scenario: 'packaged-lifecycle',
+      platform: 'mac',
+      installer: 'assets/Metis-1.0.0.dmg',
+      sha256: MAC_SHA,
+      outDir: 'candidate-scenario',
+      app: '../../_temp/candidate-install/Metis.app'
+    })
+    const packaged = laneRecord({
+      scenario: 'packaged-lifecycle',
+      platform: 'mac',
+      env,
+      provenance,
+      candidateRun: '4242',
+      installer: 'assets/Metis-1.0.0.dmg',
+      sha256: MAC_SHA,
+      argv: packagedArgv,
+      exitCode: 0,
+      detail: '',
+      reportWritten: false
+    })
+    expect(packaged).toMatchObject({
+      outcome: 'FAIL',
+      report: null,
+      detail: 'packaged-smoke.json was not written.'
+    })
+    expect('row_verdicts' in packaged).toBe(false)
   })
 
   it('refuses a provenance from another run than candidate_run', () => {

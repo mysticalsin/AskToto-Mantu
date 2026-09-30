@@ -274,7 +274,9 @@ export function assessPackagedSmokeReport(report, platform) {
   for (const id of PACKAGED_LIFECYCLE_RV_ROWS[platform] ?? []) {
     const row = rvById.get(id)
     if (!row) problems.push(`${id} is missing from packaged-smoke rv rows.`)
-    else if (row.status !== 'PASS') problems.push(`${id} is ${row.status}, not PASS.`)
+  }
+  for (const row of row_verdicts.rv) {
+    if (row.status !== 'PASS') problems.push(`${row.id || 'unnamed RV row'} is ${row.status}, not PASS.`)
   }
 
   const notCovered = []
@@ -338,7 +340,10 @@ export function assertCandidateProvenance(provenance, candidateRun) {
 export function laneRecord({ scenario, platform, env, provenance, candidateRun, installer, sha256, argv, exitCode, detail, reportWritten, reportAssessment = undefined }) {
   const target = platformEntry(scenario, platform)
   assertCandidateProvenance(provenance, candidateRun)
-  const assessmentProblems = reportAssessment?.problems ?? []
+  const assessmentProblems = [
+    ...(scenarioEntry(scenario).reportAssessment && !reportWritten ? [`${target.report} was not written.`] : []),
+    ...(reportAssessment?.problems ?? [])
+  ]
   const outcome = outcomeForExit(scenario, exitCode) === 'PASS' && assessmentProblems.length ? 'FAIL' : outcomeForExit(scenario, exitCode)
   const host = RUNNER_LABELS[platform]
   const notCovered = [
