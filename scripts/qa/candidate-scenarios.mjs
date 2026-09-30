@@ -182,6 +182,9 @@ export function outcomeForExit(scenario, exitCode) {
  *  command never names the runner's home or temp directory. */
 export function scenarioCommand({ scenario, platform, installer, installedApp = installer, sha256, outDir }) {
   const target = platformEntry(scenario, platform)
+  const inputs = [installer, installedApp, outDir]
+  const absoluteInputs = inputs.filter((arg) => isAbsolute(arg) || /^[A-Za-z]:[\\/]/.test(arg))
+  if (absoluteInputs.length) throw new Error(`The scenario command must use repository-relative paths; got ${absoluteInputs.length} absolute.`)
   const argv = [
     target.script,
     ...target.args({ installer, installedApp, sha256, report: join(outDir, target.report).replaceAll('\\', '/') })
