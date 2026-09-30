@@ -223,7 +223,6 @@ import {
   topClamp
 } from './island/geometry'
 import { observeExclusiveBounds } from './island/exclusive-bounds-repair'
-import { releaseParkMinimumSize } from './island/park-minimum-size'
 import { openOverlaySettingsSurface, revealOverlaySurface, skipUnchangedChrome } from './island/overlay-surface'
 import {
   OVERLAY_REST_BACKGROUND,
@@ -3434,7 +3433,11 @@ function parkOverlayAfterHideSpring(force = false): boolean {
   currentWidth = park.width
   islandResting = true
   userAnchorY = park.y
-  releaseParkMinimumSize(win)
+  try {
+    win.setMinimumSize(1, 1)
+  } catch {
+    /* headless */
+  }
   applyOverlaySurfaceChrome()
   commitParkedOverlayBounds(park)
   overlayCursorWatchHovering = false

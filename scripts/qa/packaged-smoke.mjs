@@ -1111,8 +1111,10 @@ export function rightEdgeStateMismatches(observation, state, layout) {
 /**
  * Installs (idempotently) the cursor stub, the click-through capture and the geometry trace on every live
  * window. The trace keeps the last frames of the overlay: each app write ('write', the requested rect), each
- * minimum-size write ('minimum', its size) and each native move/resize ('frame', the resulting rect), so a
- * frame no write asked for shows as native, next to the constraint write that preceded it.
+ * minimum-size write ('minimum', its size), each window call that can change the native style mask or trigger
+ * a reframe ('call', its name and primitive arguments, with the frame at the call; applyOverlaySurfaceChrome
+ * shows as its setBackgroundColor/setOpacity calls) and each native move/resize ('frame', the resulting rect),
+ * so a frame no write asked for shows as native, next to the call that preceded it.
  */
 const MAIN_RE_HIDE_SHIM = `(() => {
   const { screen, BrowserWindow } = globalThis.__metisReHideElectron
@@ -1121,15 +1123,37 @@ const MAIN_RE_HIDE_SHIM = `(() => {
     state.realCursor = screen.getCursorScreenPoint.bind(screen)
     screen.getCursorScreenPoint = () => state.cursor ?? state.realCursor()
   }
-  const trace = (w, kind, bounds) => {
+  const trace = (w, kind, bounds, call) => {
     try {
       if (!/\\/renderer\\/index\\.html/.test(w.webContents.getURL())) return
-      state.geometry.push({ t: Date.now(), kind, bounds })
-      if (state.geometry.length > 40) state.geometry.shift()
+      state.geometry.push(call ? { t: Date.now(), kind, bounds, call } : { t: Date.now(), kind, bounds })
+      if (state.geometry.length > 80) state.geometry.shift()
     } catch {
       /* a closing window: the trace is evidence only */
     }
   }
+  const primitive = (value) => typeof value !== 'object' && typeof value !== 'function'
+  const traceArgs = (args) =>
+    args.map((arg) =>
+      arg && typeof arg === 'object' ? Object.fromEntries(Object.entries(arg).filter(([, value]) => primitive(value))) : arg
+    )
+  const TRACED_CALLS = [
+    'setOpacity',
+    'setBackgroundColor',
+    'setHasShadow',
+    'setResizable',
+    'setMovable',
+    'setAlwaysOnTop',
+    'setVisibleOnAllWorkspaces',
+    'setContentProtection',
+    'setSize',
+    'setContentSize',
+    'setContentBounds',
+    'setMaximumSize',
+    'show',
+    'showInactive',
+    'hide'
+  ]
   for (const w of BrowserWindow.getAllWindows()) {
     if (w.isDestroyed() || w.__metisReHideWrapped) continue
     const setIgnoreMouseEvents = w.setIgnoreMouseEvents.bind(w)
@@ -1137,8 +1161,17 @@ const MAIN_RE_HIDE_SHIM = `(() => {
     const setPosition = w.setPosition.bind(w)
     const setMinimumSize = w.setMinimumSize.bind(w)
     w.__metisReHideWrapped = true
+    for (const name of TRACED_CALLS) {
+      if (typeof w[name] !== 'function') continue
+      const original = w[name].bind(w)
+      w[name] = (...args) => {
+        trace(w, 'call', w.getBounds(), { name, args: traceArgs(args) })
+        return original(...args)
+      }
+    }
     w.setIgnoreMouseEvents = (ignore, options) => {
       state.clickThrough.set(w, ignore === true)
+      trace(w, 'call', w.getBounds(), { name: 'setIgnoreMouseEvents', args: traceArgs([ignore, options]) })
       return setIgnoreMouseEvents(ignore, options)
     }
     w.setBounds = (bounds, animate) => {
@@ -1159,9 +1192,9 @@ const MAIN_RE_HIDE_SHIM = `(() => {
   return true
 })()`
 
-/** The overlay geometry trace since `since` (ms epoch): rects only, never page content. */
+/** The overlay geometry trace since `since` (ms epoch): rects and call names only, never page content. */
 const mainReHideGeometrySince = (since) =>
-  `(() => globalThis.__metisReHide.geometry.filter((entry) => entry.t >= ${Number(since)}).map((entry) => ({ ms: entry.t - ${Number(since)}, kind: entry.kind, bounds: entry.bounds })))()`
+  `(() => globalThis.__metisReHide.geometry.filter((entry) => entry.t >= ${Number(since)}).map(({ t, ...entry }) => ({ ms: t - ${Number(since)}, ...entry })))()`
 
 const MAIN_RE_HIDE_SNAPSHOT = `(() => {
   const { screen, BrowserWindow } = globalThis.__metisReHideElectron
@@ -1433,9 +1466,13 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     const held = await observe()
     const heldOk = rightEdgeStateMatches(held, 'parked', 'hide')
     const geometry = await main(mainReHideGeometrySince(clickedAt))
+    // No native frame of the overlay may leave the work area at any point of the Hide, even one reverted
+    // before the held read: drawer, band and tab all lie inside it.
+    const workAreaY = held.win?.workArea?.y
+    const framesAboveWorkArea = geometry.filter((entry) => entry.kind === 'frame' && !(entry.bounds.y >= workAreaY))
     return {
-      pass: hideVisible && parked.ok && heldOk,
-      evidence: { meetingLive: true, hideVisible, parked: summarize(parked.observed), after500ms: summarize(held), geometry }
+      pass: hideVisible && parked.ok && heldOk && framesAboveWorkArea.length === 0,
+      evidence: { meetingLive: true, hideVisible, parked: summarize(parked.observed), after500ms: summarize(held), framesAboveWorkArea, geometry }
     }
   })
 

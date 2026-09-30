@@ -3,36 +3,27 @@
  * at {x:1020, y:29, w:4, h:560+32} instead of the requested {x:1020, y:61, w:4, h:560}.
  *
  * Root cause.
- * - OBSERVED (smoke evidence): x, width and the bottom edge equal the band; the top is 32 px higher. In
- *   AppKit's bottom-left coordinates the frame origin is unchanged and only the height grew, which is what a
- *   frame re-derived from a content rect of a titled window does: it adds the title strip above the content.
- *   No bounds writer in index.ts can produce it (every right-edge height is at most the 560 px drawer), so the
- *   frame is native.
- * - DERIVED (Electron source, shell/browser/native_window_mac.mm): a `frame: false` window keeps
- *   NSWindowStyleMaskTitled unless `roundedCorners: false`; Electron notes there that its frameless window
- *   "still has titlebar attached" and converts minimum sizes through the original content rect for that
- *   reason. The overlay is built with `roundedCorners: true`, so it carries a hidden title strip.
- * - ASSUMED (to be confirmed by the packaged-smoke geometry trace of this row): the trigger is the park's own
- *   `setMinimumSize(1, 1)`. It re-applied the native size constraints on every park even when they were
- *   already 1×1, and the frame change that follows is applied by AppKit on a later pass, not inside the
- *   call, so the synchronous park and its readback cannot see it. It lands after the park only sometimes:
- *   during a live meeting the Hide control parks immediately from the click (auto-hide is off while a
- *   capture runs, so no exit spring precedes it), while the drawer is still painting.
- * - LEAD_ACTION: before merge, dispatch the macOS packaged-smoke lane on this branch, file the
- *   RE-HIDE-3-meeting-hide 'geometry' evidence (write/minimum/frame trace), and confirm no 'frame' entry with
- *   y=29/h=592 follows the park; if one appears, name its preceding write and reopen. If the trace shows the
- *   frame change comes from Chromium's size-constraint update (a style-mask change) rather than the
- *   minimum-size write itself, the same guard applies and this mechanism is reworded.
+ * - OBSERVED (packaged-smoke geometry trace of this row, ms after the Hide click): 405 write = band, 413 frame =
+ *   band, 529 frame = {y:29, h:592} with no app write of any kind in between. The frame change is native and
+ *   lands on a later AppKit pass, which is why it is intermittent: it only fails the row when it lands before
+ *   the row reads the band.
+ * - OBSERVED: x, width and the bottom edge equal the band; the top is 32 px higher. In AppKit's bottom-left
+ *   coordinates the origin is unchanged and only the height grew: the frame of a titled window re-derived from
+ *   its content rect, which adds the title strip above the content.
+ * - DERIVED (Electron, shell/browser/native_window_mac.mm): a `frame: false` window keeps
+ *   NSWindowStyleMaskTitled unless `roundedCorners: false`, which makes it NSWindowStyleMaskBorderless. The
+ *   overlay was built with `roundedCorners: true`, so its content rect is the whole frame and any re-derive
+ *   adds a 32 px strip it never drew.
  *
- * Fix: the park releases the minimum size through `releaseParkMinimumSize`, which never re-writes an unchanged
- * minimum, so no native constraint change follows the park. The window below models the assumed AppKit
- * behavior; `hidePark` runs the park's window writes in the order parkOverlayAfterHideSpring issues them.
+ * Fix at the cause: the overlay chrome is borderless (`roundedCorners: false`). Frame and content rect are
+ * then the same rect, so no later native pass, whatever triggers it, can move a parked band. The window below
+ * models that AppKit behavior from the constructor options; `hidePark` runs the park's window writes in the
+ * order parkOverlayAfterHideSpring issues them, and the native pass fires at the trace's 529 ms.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { rightEdgeHoverRestRect, rightEdgeSidecarBounds, type DisplayMetrics, type Rect } from './geometry'
-import { releaseParkMinimumSize } from './park-minimum-size'
+import { overlayWindowChrome, rightEdgeHoverRestRect, rightEdgeSidecarBounds, type DisplayMetrics, type Rect } from './geometry'
 
-/** The macOS packaged-smoke runner of the two failing runs. */
+/** The macOS packaged-smoke runner of the failing runs. */
 const runner: DisplayMetrics = {
   bounds: { x: 0, y: 0, width: 1024, height: 768 },
   workArea: { x: 0, y: 31, width: 1024, height: 674 },
@@ -42,35 +33,57 @@ const runner: DisplayMetrics = {
   source: 'heuristic'
 }
 const TITLE_STRIP_PX = 32
+const NATIVE_REFRAME_MS = 529 - 405
+
+interface MacWindowOptions {
+  frame: boolean
+  roundedCorners: boolean
+}
 
 /**
- * A frameless-but-titled NSWindow. A minimum-size write re-applies its size constraints; AppKit re-derives
- * the frame from the content rect on a later pass, keeping the bottom edge and adding the title strip above.
+ * An NSWindow built the way Electron builds it on macOS. A frameless window's content view fills its frame;
+ * a later native pass re-derives the frame from that content rect, keeping the bottom edge and adding the title
+ * strip above it when the window is titled. No app call triggers the pass.
  */
-class TitledFramelessWindow {
+class MacOverlayWindow {
+  readonly titled: boolean
   bounds: Rect = rightEdgeSidecarBounds(runner, { open: true })
-  minimum: [number, number] = [1, 1]
-  minimumWrites: Array<[number, number]> = []
+  opacity = 1
+  clickThrough = false
+
+  constructor(options: MacWindowOptions) {
+    this.titled = options.frame || options.roundedCorners
+  }
 
   getBounds(): Rect { return { ...this.bounds } }
-  setBounds(bounds: Rect): void { this.bounds = { ...bounds } }
-  getMinimumSize(): [number, number] { return [...this.minimum] }
+  setMinimumSize(): void {}
+  setOpacity(opacity: number): void { this.opacity = opacity }
+  setIgnoreMouseEvents(ignore: boolean): void { this.clickThrough = ignore }
 
-  setMinimumSize(width: number, height: number): void {
-    this.minimum = [width, height]
-    this.minimumWrites.push([width, height])
-    setTimeout(() => {
-      const { x, y, width: w, height: h } = this.bounds
-      this.bounds = { x, y: y - TITLE_STRIP_PX, width: w, height: h + TITLE_STRIP_PX }
-    }, 0)
+  setBounds(bounds: Rect): void {
+    this.bounds = { ...bounds }
+    setTimeout(() => this.reframeFromContentRect(), NATIVE_REFRAME_MS)
+  }
+
+  private reframeFromContentRect(): void {
+    if (!this.titled) return
+    const { x, y, width, height } = this.bounds
+    this.bounds = { x, y: y - TITLE_STRIP_PX, width, height: height + TITLE_STRIP_PX }
   }
 }
 
-/** The explicit right-edge Hide park: release the minimum size, then commit the band. */
-function hidePark(win: TitledFramelessWindow, releaseMinimum: (win: TitledFramelessWindow) => void): Rect {
+/** The overlay as createWindow builds it: frameless, with the transparent (post-onboarding) chrome. */
+function overlayWindow(): MacOverlayWindow {
+  return new MacOverlayWindow({ frame: false, roundedCorners: overlayWindowChrome(false).roundedCorners })
+}
+
+/** The explicit right-edge Hide park: minimum size, chrome (opacity 0), band, click-through. */
+function hidePark(win: MacOverlayWindow): Rect {
   const band = rightEdgeHoverRestRect(undefined, runner)
-  releaseMinimum(win)
+  win.setMinimumSize()
+  win.setOpacity(0)
   win.setBounds(band)
+  win.setIgnoreMouseEvents(true)
   return band
 }
 
@@ -78,43 +91,33 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-describe('right-edge Hide park on a frameless titled macOS window (RE-HIDE-3-meeting-hide)', () => {
-  it('the park before the fix (an unconditional 1×1 write) reproduces the smoke failure: 32 px above the band', async () => {
+describe('right-edge Hide park on the macOS overlay window (RE-HIDE-3-meeting-hide)', () => {
+  it('a titled frameless window reproduces the smoke failure: a native pass puts the band 32 px above itself', async () => {
     vi.useFakeTimers()
-    const win = new TitledFramelessWindow()
-    const band = hidePark(win, (w) => w.setMinimumSize(1, 1))
+    const win = new MacOverlayWindow({ frame: false, roundedCorners: true })
+    const band = hidePark(win)
     expect(band).toEqual({ x: 1020, y: 61, width: 4, height: 560 })
     expect(win.getBounds()).toEqual(band)
-    await vi.runAllTimersAsync()
+    await vi.advanceTimersByTimeAsync(NATIVE_REFRAME_MS)
     expect(win.getBounds()).toEqual({ x: 1020, y: 29, width: 4, height: 592 })
     expect(win.getBounds().y).toBeLessThan(runner.workArea.y)
   })
 
+  it('the overlay chrome builds a borderless window', () => {
+    expect(overlayWindow().titled).toBe(false)
+    expect(new MacOverlayWindow({ frame: false, roundedCorners: overlayWindowChrome(true).roundedCorners }).titled).toBe(false)
+  })
+
   it('an explicit Hide from the live-meeting drawer stays on the requested band after every native pass', async () => {
     vi.useFakeTimers()
-    const win = new TitledFramelessWindow()
-    const band = hidePark(win, releaseParkMinimumSize)
+    const win = overlayWindow()
+    const band = hidePark(win)
+    await vi.advanceTimersByTimeAsync(NATIVE_REFRAME_MS)
+    expect(win.getBounds()).toEqual(band)
     await vi.runAllTimersAsync()
     expect(win.getBounds()).toEqual(band)
     expect(win.getBounds().y).toBeGreaterThanOrEqual(runner.workArea.y)
-    expect(win.minimumWrites).toEqual([])
-  })
-
-  it('still releases a leftover larger minimum on park', () => {
-    vi.useFakeTimers()
-    const win = new TitledFramelessWindow()
-    win.minimum = [880, 600]
-    hidePark(win, releaseParkMinimumSize)
-    expect(win.minimumWrites).toEqual([[1, 1]])
-    expect(win.getMinimumSize()).toEqual([1, 1])
-  })
-
-  it('a headless window whose minimum size cannot be read does not break the park', () => {
-    const headless = {
-      getMinimumSize: (): number[] => { throw new Error('headless') },
-      setMinimumSize: vi.fn()
-    }
-    expect(() => releaseParkMinimumSize(headless)).not.toThrow()
-    expect(headless.setMinimumSize).not.toHaveBeenCalled()
+    expect(win.opacity).toBe(0)
+    expect(win.clickThrough).toBe(true)
   })
 })

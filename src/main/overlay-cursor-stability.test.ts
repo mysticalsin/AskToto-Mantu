@@ -15,7 +15,6 @@ import {
   type DisplayMetrics,
   type Rect
 } from './island/geometry'
-import { releaseParkMinimumSize } from './island/park-minimum-size'
 import {
   ASK_REVEAL_MIN_HEIGHT_PX,
   isIncompleteAskReveal,
@@ -64,7 +63,6 @@ function nativeHover(options: {
       bounds = { ...next }
       setBoundsCalls.push({ ...next })
     },
-    getMinimumSize: () => [1, 1],
     setMinimumSize: () => {},
     showInactive: () => {}
   }
@@ -113,7 +111,6 @@ function nativeHover(options: {
     parkedOverlayBounds: () => parked,
     applyOverlaySurfaceChrome: () => {},
     commitParkedOverlayBounds: (park: Rect) => { bounds = park },
-    releaseParkMinimumSize,
     applyHideClickThrough: () => {},
     startOverlayCursorWatch: () => {}
   }
