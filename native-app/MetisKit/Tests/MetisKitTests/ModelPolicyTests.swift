@@ -48,6 +48,13 @@ final class ModelPolicyTests: XCTestCase {
         XCTAssertTrue(ModelPolicy.verify(signed, secret: "shared-secret"))
     }
 
+    func testSignedUnmanagedPayloadRoundTrip() {
+        let signature = ModelPolicy.signUnmanaged(issuedAt: 2000, secret: "shared-secret")
+        XCTAssertTrue(ModelPolicy.verifyUnmanaged(issuedAt: 2000, signature: signature, secret: "shared-secret"))
+        XCTAssertFalse(ModelPolicy.verifyUnmanaged(issuedAt: 2001, signature: signature, secret: "shared-secret"))
+        XCTAssertFalse(ModelPolicy.verifyUnmanaged(issuedAt: 2000, signature: signature, secret: "wrong-secret"))
+    }
+
     func testVerifyRejectsWrongSecret() {
         let doc = fullDocument()
         let signature = ModelPolicy.sign(doc, secret: "shared-secret")
@@ -140,10 +147,57 @@ final class ModelPolicyClientTests: XCTestCase {
     func testRefreshTreatsNullPolicyAsNotManaged() async {
         let url = URL(string: "https://operator.test/v1/model-policy")!
         let client = ModelPolicyClient(cacheURL: Self.tempCacheURL()) { _ in
-            Self.jsonResponse(["ok": true, "policy": NSNull()], url: url)
+            Self.jsonResponse([
+                "ok": true,
+                "policy": NSNull(),
+                "issuedAt": 2000,
+                "signature": ModelPolicy.signUnmanaged(issuedAt: 2000, secret: "shared-secret")
+            ], url: url)
         }
         let outcome = await client.refresh(url: url, secret: "shared-secret")
         XCTAssertEqual(outcome, .notManaged)
+    }
+
+    func testRefreshRejectsUnsignedNullPolicyAndKeepsCachedPolicy() async {
+        let doc = Self.fullDocument()
+        let signature = ModelPolicy.sign(doc, secret: "shared-secret")
+        let url = URL(string: "https://operator.test/v1/model-policy")!
+        let failSwitch = FailSwitch()
+        let client = ModelPolicyClient(cacheURL: Self.tempCacheURL()) { _ in
+            if failSwitch.shouldFail {
+                return Self.jsonResponse(["ok": true, "policy": NSNull()], url: url)
+            }
+            return Self.jsonResponse(Self.encodableJson(SignedModelPolicy(policy: doc, signature: signature)), url: url)
+        }
+        XCTAssertEqual(await client.refresh(url: url, secret: "shared-secret"), .applied)
+        failSwitch.shouldFail = true
+        let outcome = await client.refresh(url: url, secret: "shared-secret")
+        if case .rejected = outcome {} else { XCTFail("expected .rejected, got \(outcome)") }
+        let active = await client.activePolicy()
+        XCTAssertEqual(active?.version, 1000)
+    }
+
+    func testRefreshIgnoresReplayedSignedNullPolicyOlderThanCachedPolicy() async {
+        let doc = Self.fullDocument()
+        let signature = ModelPolicy.sign(doc, secret: "shared-secret")
+        let url = URL(string: "https://operator.test/v1/model-policy")!
+        let failSwitch = FailSwitch()
+        let client = ModelPolicyClient(cacheURL: Self.tempCacheURL()) { _ in
+            if failSwitch.shouldFail {
+                return Self.jsonResponse([
+                    "ok": true,
+                    "policy": NSNull(),
+                    "issuedAt": 999,
+                    "signature": ModelPolicy.signUnmanaged(issuedAt: 999, secret: "shared-secret")
+                ], url: url)
+            }
+            return Self.jsonResponse(Self.encodableJson(SignedModelPolicy(policy: doc, signature: signature)), url: url)
+        }
+        XCTAssertEqual(await client.refresh(url: url, secret: "shared-secret"), .applied)
+        failSwitch.shouldFail = true
+        XCTAssertEqual(await client.refresh(url: url, secret: "shared-secret"), .notManaged)
+        let active = await client.activePolicy()
+        XCTAssertEqual(active?.version, 1000)
     }
 
     func testCachePersistsAcrossClientInstancesForOfflineUse() async {

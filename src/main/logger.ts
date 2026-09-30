@@ -251,6 +251,8 @@ export type AuditEvent =
   | 'app.recovery'
   // FITO-185-E: 15s MQA-175 callback closed the boot watch (finally), whether brain resume ran or threw.
   | 'app.boot.watch_cleared'
+  // M2-0515: one native boot stage's own main-thread duration (tray stages, window construction and first show).
+  | 'app.boot.stage'
   // FITO-185-F: menu-bar Tray create succeeded/failed — hardprove AXExtrasMenuBar needs a diagnosable trail.
   | 'tray.created'
   | 'tray.failed'

@@ -24,6 +24,7 @@ import { freemem, tmpdir, totalmem } from 'node:os'
 import { basename, dirname, join, win32 } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { chromium } from 'playwright'
+import { LOCAL_LLM_SETTINGS } from './lib/local-llm-settings.mjs'
 import { listProcesses, ownedProcesses, roleCounts } from './owned-processes.mjs'
 
 const READY_TIMEOUT_MS = 150_000
@@ -354,21 +355,7 @@ export function hostFloorOverrides(records) {
 
 function seedLocalLlmSettings(profile) {
   mkdirSync(profile, { recursive: true, mode: 0o700 })
-  writeFileSync(
-    join(profile, 'settings.json'),
-    JSON.stringify(
-      {
-        localLlm: {
-          enabled: true,
-          modelId: 'qwen3.5-0.8b',
-          useFor: { suggest: true, summary: false, vision: false },
-          fallback: true
-        }
-      },
-      null,
-      2
-    )
-  )
+  writeFileSync(join(profile, 'settings.json'), JSON.stringify(LOCAL_LLM_SETTINGS, null, 2))
 }
 
 async function waitFor(predicate, timeoutMs, intervalMs = POLL_MS) {

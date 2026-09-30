@@ -38,10 +38,14 @@ export interface AutoHideState {
    *  by itself reveal the bar — only `dwell-elapsed` flips `hovering`, and a `pointer-leave` before then
    *  cancels it with no reveal ever happening. */
   hoverPending: boolean
+  /** Main's cursor watch reported this hover (`reveal-now` with `native`) and has not reported it gone.
+   *  While held, a DOM pointer-leave is not a leave: the pointer can rest in the notch zone above the
+   *  window, or the bar can shrink out from under a still pointer. Main reports the real leave itself. */
+  nativeHold: boolean
 }
 
 export function initialAutoHideState(enabled: boolean): AutoHideState {
-  return { enabled, hovering: false, forced: false, graceArmed: false, hoverPending: false }
+  return { enabled, hovering: false, forced: false, graceArmed: false, hoverPending: false, nativeHold: false }
 }
 
 /** The single derived question the renderer asks each render: show the full bar (true) or the slim peek
@@ -56,10 +60,13 @@ export type AutoHideEvent =
   | { type: 'set-enabled'; enabled: boolean }
   | { type: 'set-forced'; forced: boolean }
   | { type: 'pointer-enter' }
-  | { type: 'pointer-leave' }
+  /** `native`: main's cursor watch saw the pointer leave. Without it, the page's own mouseleave. */
+  | { type: 'pointer-leave'; native?: boolean }
   | { type: 'grace-elapsed' }
   | { type: 'dwell-elapsed' }
-  | { type: 'reveal-now' }
+  /** `native`: main's cursor watch reports the pointer on the bar or in its reveal zone. Top center only: main
+   *  owns that hover until it reports the leave; the right-edge dock keeps its page-owned leave (M2-0428). */
+  | { type: 'reveal-now'; native?: boolean }
   | { type: 'collapse-now' }
 
 /** Pure transition. Returns the SAME reference when nothing changes so a `useReducer` consumer doesn't
@@ -71,7 +78,7 @@ export function reduceAutoHide(s: AutoHideState, e: AutoHideEvent): AutoHideStat
       // Toggling the setting resets any pending collapse: turning it OFF means always-revealed (nothing to
       // collapse), turning it ON starts from a clean slate so it settles to peek unless hover/force holds
       // it open.
-      return { ...s, enabled: e.enabled, graceArmed: false }
+      return { ...s, enabled: e.enabled, graceArmed: false, nativeHold: false }
     }
     case 'set-forced': {
       if (e.forced === s.forced) return s
@@ -96,11 +103,20 @@ export function reduceAutoHide(s: AutoHideState, e: AutoHideEvent): AutoHideStat
       return { ...s, hoverPending: true }
     }
     case 'pointer-leave': {
-      if (!s.hovering && !s.graceArmed && !s.hoverPending) return s
+      if (s.nativeHold && !e.native) return s
+      // Main and the page each report the same leave. A second leave while the grace runs is the same
+      // leave: it must not cancel the grace and snap the bar shut 500 ms early.
+      if (!s.hovering && !s.hoverPending && !s.nativeHold) return s
       // A leave before the dwell elapsed cancels it outright — the bar never opened, so there's nothing to
       // ease back from. Otherwise, only schedule a collapse when auto-hide is on and nothing else is
       // forcing the bar open.
-      return { ...s, hovering: false, hoverPending: false, graceArmed: s.enabled && !s.forced && s.hovering }
+      return {
+        ...s,
+        hovering: false,
+        hoverPending: false,
+        nativeHold: false,
+        graceArmed: s.graceArmed || (s.enabled && !s.forced && s.hovering)
+      }
     }
     case 'grace-elapsed': {
       if (!s.graceArmed) return s
@@ -113,13 +129,14 @@ export function reduceAutoHide(s: AutoHideState, e: AutoHideEvent): AutoHideStat
     case 'reveal-now': {
       // Main cursor-watch already dwelled. Open Ask chrome now — do not wait for
       // OverlayPeek click or a second renderer dwell (Ultron a40a22f 880×44 Show Métis).
-      if (s.hovering && !s.graceArmed && !s.hoverPending) return s
-      return { ...s, hovering: true, graceArmed: false, hoverPending: false }
+      const nativeHold = s.nativeHold || e.native === true
+      if (s.hovering && !s.graceArmed && !s.hoverPending && s.nativeHold === nativeHold) return s
+      return { ...s, hovering: true, graceArmed: false, hoverPending: false, nativeHold }
     }
     case 'collapse-now': {
       // Leave pill / Settings → Hide: park immediately. Do not arm grace (that kept a stub bar).
-      if (!s.hovering && !s.graceArmed && !s.hoverPending) return s
-      return { ...s, hovering: false, hoverPending: false, graceArmed: false }
+      if (!s.hovering && !s.graceArmed && !s.hoverPending && !s.nativeHold) return s
+      return { ...s, hovering: false, hoverPending: false, graceArmed: false, nativeHold: false }
     }
     default:
       return s

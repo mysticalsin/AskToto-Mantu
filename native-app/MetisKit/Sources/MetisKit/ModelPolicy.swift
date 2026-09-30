@@ -9,11 +9,8 @@ import CryptoKit
 /// The native app has no cloud-model call site today (`Intelligence.swift` only wraps Apple's
 /// on-device Foundation Models framework — see its own doc comment) — there is nothing yet to route
 /// through a resolved policy. `ModelPolicyRuntime` below still fetches, verifies, caches, and is wired
-/// into `MetisApp.swift`'s launch (start + <=60s poll), so the app is ready the day a cloud-routed
-/// capability is added, and so the fleet owner's policy audit trail includes every platform, not just
-/// the Electron app. What is genuinely missing is a device pairing/license flow for this app (this
-/// package has no Keychain or network credential storage anywhere yet) — until one exists,
-/// `ModelPolicyRuntime`'s `secretProvider` has no credential to return and every poll tick no-ops.
+/// into `MetisApp.swift`'s launch (start + <=60s poll), so the app enforces the fleet document as soon
+/// as the existing Operator URL/secret values are provisioned.
 public enum ModelPolicyCapability: String, CaseIterable, Codable, Sendable {
     case askChat
     case commandAgent
@@ -101,12 +98,24 @@ public enum ModelPolicy {
         return "metis-model-policy.v1.\(policy.version).\(policy.updatedAt).\(policy.updatedBy).\(capString)"
     }
 
+    /// Matches `canonicalUnmanagedModelPolicyPayload` in src/shared/model-policy.ts. The Operator signs
+    /// a `policy: null` response too, so a forged or replayed response cannot disable a cached policy.
+    public static func canonicalUnmanagedPayload(issuedAt: Int) -> String {
+        "metis-model-policy.v1.unmanaged.\(issuedAt)"
+    }
+
     /// HMAC-SHA256 over `canonicalPayload`, hex-encoded lowercase — matches `hmacHex`
     /// (operator/src/hmac.ts) and `createHmac('sha256', ...)` (src/main/model-policy-client.ts) bit
     /// for bit given the same secret and document.
     public static func sign(_ policy: ModelPolicyDocument, secret: String) -> String {
         let key = SymmetricKey(data: Data(secret.utf8))
         let mac = HMAC<SHA256>.authenticationCode(for: Data(canonicalPayload(policy).utf8), using: key)
+        return mac.map { String(format: "%02x", $0) }.joined()
+    }
+
+    public static func signUnmanaged(issuedAt: Int, secret: String) -> String {
+        let key = SymmetricKey(data: Data(secret.utf8))
+        let mac = HMAC<SHA256>.authenticationCode(for: Data(canonicalUnmanagedPayload(issuedAt: issuedAt).utf8), using: key)
         return mac.map { String(format: "%02x", $0) }.joined()
     }
 
@@ -117,6 +126,15 @@ public enum ModelPolicy {
         guard let signatureBytes = hexDecode(signed.signature.lowercased()) else { return false }
         return HMAC<SHA256>.isValidAuthenticationCode(
             signatureBytes, authenticating: Data(canonicalPayload(signed.policy).utf8), using: key
+        )
+    }
+
+    public static func verifyUnmanaged(issuedAt: Int, signature: String, secret: String) -> Bool {
+        guard !secret.isEmpty, !signature.isEmpty else { return false }
+        let key = SymmetricKey(data: Data(secret.utf8))
+        guard let signatureBytes = hexDecode(signature.lowercased()) else { return false }
+        return HMAC<SHA256>.isValidAuthenticationCode(
+            signatureBytes, authenticating: Data(canonicalUnmanagedPayload(issuedAt: issuedAt).utf8), using: key
         )
     }
 
@@ -181,10 +199,19 @@ public actor ModelPolicyClient {
             return .networkError
         }
         guard let policy = body.policy else {
-            // The Operator has no fleet policy configured: "not managed", not a rejection. Clears any
-            // previously cached policy — the owner deliberately unset it.
-            current = nil
-            try? FileManager.default.removeItem(at: cacheURL)
+            guard let issuedAt = body.issuedAt, let signature = body.signature else {
+                return .rejected("unmanaged signature")
+            }
+            guard ModelPolicy.verifyUnmanaged(issuedAt: issuedAt, signature: signature, secret: secret) else {
+                return .rejected("unmanaged signature")
+            }
+            // The Operator has no fleet policy configured: "not managed", not a rejection. Only a
+            // newer signed reply may clear a cached policy, so replayed pre-policy responses cannot
+            // disable enforcement.
+            if current == nil || issuedAt > (current?.version ?? 0) {
+                current = nil
+                try? FileManager.default.removeItem(at: cacheURL)
+            }
             return .notManaged
         }
         guard let signature = body.signature else { return .rejected("missing signature") }
@@ -203,17 +230,16 @@ private struct ModelPolicyFetchBody: Codable {
     let ok: Bool
     let policy: ModelPolicyDocument?
     let signature: String?
+    let issuedAt: Int?
 }
 
 /// Drives `ModelPolicyClient.refresh(url:secret:)` at app start and on a repeating poll, so this native
 /// app participates in the fleet policy the same way the Electron app does (`operator-ingest.ts`'s 60s
 /// heartbeat tick, `src/main/model-policy-client.ts`) instead of only ever holding a client nobody calls.
 ///
-/// `secretProvider` returning `nil` is a silent skip, not an error: this app has no device pairing/
-/// license flow yet (see this file's top doc comment — no other Foundation networking exists in
-/// `native-app/App/` today either), so there is no device-authenticated credential to sign with. The app
-/// target wires this against `UserDefaults` keys nothing populates yet; the day a real pairing flow lands
-/// it only has to start returning a value, this loop already polls and applies correctly.
+/// `secretProvider` returning `nil` is a silent skip, not an error: the app target wires this against
+/// the existing Operator URL/secret values in `UserDefaults`; once provisioned, this loop polls and
+/// applies the signed fleet policy without any further code path.
 public actor ModelPolicyRuntime {
     public typealias SecretProvider = @Sendable () -> String?
     public typealias SleepFn = @Sendable (Duration) async throws -> Void

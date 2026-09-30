@@ -228,6 +228,7 @@ import {
   topClamp
 } from './island/geometry'
 import { observeExclusiveBounds } from './island/exclusive-bounds-repair'
+import { openOverlaySettingsSurface, revealOverlaySurface, skipUnchangedChrome } from './island/overlay-surface'
 import {
   OVERLAY_REST_BACKGROUND,
   SETTINGS_SURFACE_BACKGROUND,
@@ -236,10 +237,10 @@ import {
 } from '@shared/settings-bounds'
 import { ONBOARDING_AUDIO_LOCK_EVENT } from '@shared/onboarding-audio'
 import {
-  CURSOR_REVEAL_DWELL_MS,
   CURSOR_WATCH_INTERVAL_MS,
   OVERLAY_LEAVE_PARK_MS,
   RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS,
+  cursorRevealDwellMs,
   decideCursorWatch,
   overlayWatchStep,
   pointInRect,
@@ -656,10 +657,10 @@ import {
 import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
-import { buildTrayInStages, createSingleFlight, loadPresizedTrayIcon, scheduleTrayAfterFirstPaint, trayIconPaths, yieldToEventLoop } from './boot-tray'
+import { buildTrayInStages, createSingleFlight, formatTrayAccelerator, loadPresizedTrayIcon, scheduleTrayAfterFirstPaint, trayIconPaths, yieldToEventLoop } from './boot-tray'
 import { isBootFirstShowDeferred, scheduleCurrentFirstShow, withBootFirstShowDeferred } from './lifecycle/first-show'
 import { createBootWork } from './lifecycle/boot-work'
-import { startRunObservability, type RunObservability } from './infra/observability/run-observability'
+import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
 import { createResponsivenessTracker } from './infra/observability/responsiveness-tracker'
 import { crashDetail, type CrashKind } from './infra/observability/crash-taxonomy'
@@ -1190,6 +1191,7 @@ let settingsSurfaceOpen = false
 let overlayCursorWatchTimer: ReturnType<typeof setInterval> | null = null
 let overlayCursorWatchEnteredAt: number | null = null
 let overlayCursorWatchHovering = false
+let overlayCursorWatchHeldCursor: { x: number; y: number } | null = null // latched pointer on the last tick that kept the bar open
 let overlayParkLatched = false // explicit Hide: no reopen from the zone the pointer is in until it leaves
 let rightEdgeUnhoveredRevealAt: number | null = null // right-edge reveal the pointer has not visited yet
 // Electron can accept an onboarding setBounds request and then let the compositor clamp it into a
@@ -2327,10 +2329,11 @@ function replaceTransparentOverlayWithExclusiveOnboarding(): void {
 /** Exclusive hero hold, Settings glass, or transparent rest. Hide park is opacity 0. */
 function applyOverlaySurfaceChrome(): void {
   if (!win || win.isDestroyed()) return
+  const chrome = skipUnchangedChrome(win) // runs on every reveal, park and surface change
   if (onboardingExclusiveLive()) {
     try {
-      win.setBackgroundColor(EXCLUSIVE_ONBOARDING_BACKGROUND)
-      win.setOpacity(1)
+      chrome.setBackgroundColor(EXCLUSIVE_ONBOARDING_BACKGROUND)
+      chrome.setOpacity(1)
     } catch {
       /* headless */
     }
@@ -2338,21 +2341,21 @@ function applyOverlaySurfaceChrome(): void {
   }
   if (settingsSurfaceOpen) {
     try {
-      win.setBackgroundColor(SETTINGS_SURFACE_BACKGROUND)
-      win.setOpacity(1)
+      chrome.setBackgroundColor(SETTINGS_SURFACE_BACKGROUND)
+      chrome.setOpacity(1)
     } catch {
       /* headless */
     }
     return
   }
   try {
-    win.setBackgroundColor(OVERLAY_REST_BACKGROUND)
+    chrome.setBackgroundColor(OVERLAY_REST_BACKGROUND)
   } catch {
     /* headless */
   }
   try {
     const layout = parkLayoutForDisplay(liveOverlayLayout(), screen.getDisplayMatching(win.getBounds()))
-    win.setOpacity(hideParkWindowOpacity(layout, islandResting && !isMinimized))
+    chrome.setOpacity(hideParkWindowOpacity(layout, islandResting && !isMinimized))
   } catch {
     /* headless */
   }
@@ -2683,6 +2686,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
   const chrome = overlayWindowChrome(onboardingLive)
   overlayWindowTransparent = chrome.transparent
   const deferFirstShow = isBootFirstShowDeferred()
+  const constructStartedMs = performance.now()
   win = new BrowserWindow({
     title: 'Métis', // Electron otherwise titles the window with the package name until the renderer's <title> loads
     width: firstPaint.width,
@@ -2724,6 +2728,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
       webSecurity: true
     }
   })
+  observability?.recordBootStage('createWindow.construct', performance.now() - constructStartedMs, { transparent: chrome.transparent })
   ensureMetisCommandRuntime({
     getSettings,
     commandControl,
@@ -2782,8 +2787,8 @@ function createWindow(targetDisplay?: Electron.Display): void {
     throw e
   }
   // Both keep the ctor show:true activation (focus + front): exclusive via FITO-185-T, the overlay via show().
-  if (deferFirstShow) scheduleCurrentFirstShow(win, () => win, (firstShown) =>
-    onboardingLive ? showForExclusiveOnboarding(firstShown) : firstShown.isVisible() || firstShown.show())
+  if (deferFirstShow) scheduleCurrentFirstShow(win, () => win, (firstShown) => timeBootStage(observability, 'createWindow.firstShow', () =>
+    onboardingLive ? showForExclusiveOnboarding(firstShown) : firstShown.isVisible() || firstShown.show()))
 
   // Capture THIS window instance so a late 'closed' from a crashed/replaced window can't null out a
   // freshly-recreated one (render-process-gone recovery reassigns `win` before the old one's 'closed'
@@ -3262,6 +3267,7 @@ function stopOverlayCursorWatch(): void {
     overlayCursorWatchTimer = null
   }
   overlayCursorWatchHovering = false
+  overlayCursorWatchHeldCursor = null
   overlayCursorWatchEnteredAt = null
   cancelOverlayLeavePark()
 }
@@ -3306,16 +3312,17 @@ function tickOverlayCursorWatch(): void {
     windowVisible,
     osHoverSeen: overlayCursorWatchHovering,
     hugStub: isIncompleteAskReveal(bounds),
+    heldCursor: overlayCursorWatchHeldCursor,
     placement
   })
   if (islandResting || step.osHoverSeen) rightEdgeUnhoveredRevealAt = null
   // Polling previously bypassed the renderer's 150ms dwell and sent reveal-now on the first tick.
   // A quick menu-bar crossing therefore flashed the whole bar open. Measure continuous native
-  // hover before latching it; a leave resets this below. Already-visible reentry stays immediate.
+  // hover before latching it; a leave resets this below. Already-visible reentry stays immediate. OD-23 dwell.
   if (step.action === 'restore' && (islandResting || !windowVisible)) {
     const now = performance.now()
     overlayCursorWatchEnteredAt ??= now
-    if (now - overlayCursorWatchEnteredAt < CURSOR_REVEAL_DWELL_MS) return
+    if (now - overlayCursorWatchEnteredAt < cursorRevealDwellMs(placement)) return
   }
   overlayCursorWatchEnteredAt = null
   overlayCursorWatchHovering = step.osHoverSeen
@@ -3348,6 +3355,7 @@ function tickOverlayCursorWatch(): void {
     rightEdgeUnhoveredRevealAt = null
     notifyOverlayCursorHover(false)
   }
+  overlayCursorWatchHeldCursor = overlayCursorWatchHovering && !islandResting ? cursor : null
   /* stay / leave-ignored: never setBounds on a stay tick — that was the 40fps hide/reveal stutter */
 }
 
@@ -3543,14 +3551,6 @@ function restoreBarWidth(): void {
   overlayParkLatched = false
   islandResting = false
   applyHideClickThrough()
-  applyOverlaySurfaceChrome()
-  // LSUIElement / tray Show-Hide can leave the window hidden. Hover reveal must
-  // showInactive (never show+focus) so the top-edge path works without hunting the menu.
-  try {
-    if (!win.isVisible()) win.showInactive()
-  } catch {
-    /* headless */
-  }
   try {
     win.setAlwaysOnTop(true, 'screen-saver')
   } catch {
@@ -3560,32 +3560,24 @@ function restoreBarWidth(): void {
   const b = win.getBounds()
   const layout = liveOverlayLayout()
   const placement = resolvedOverlayPlacementForDisplay(display)
+  let next: Electron.Rectangle
   if (placement === 'right-edge') {
-    const sidecar = rightEdgeSidecarBounds(getDisplayMetrics(display), {
-      open: true,
-      normalizedY: rightEdgeYForDisplay(display)
-    })
-    currentWidth = sidecar.width
-    if (b.x === sidecar.x && b.y === sidecar.y && b.width === sidecar.width && b.height === sidecar.height) return
-    win.setBounds(sidecar, false)
-    return
+    next = rightEdgeSidecarBounds(getDisplayMetrics(display), { open: true, normalizedY: rightEdgeYForDisplay(display) })
+    currentWidth = next.width
+  } else {
+    // Hide/Island reveal keeps the 120 Ask floor. Never Math.max a leftover Settings 800+ slab
+    // (Ultron 880×1017 Expand Métis). Bar idle hugs the bar.
+    let revealedHeight = overlayUsesHover(layout)
+      ? askRevealHeight({ currentHeight: b.height, lastBarHeight, minReveal: ASK_REVEAL_MIN_HEIGHT_PX })
+      : rememberBarContentHeight(Math.max(lastBarHeight, BAR_HEIGHT), BAR_IDLE_HEIGHT_PX)
+    if (isSettingsTallHeight(revealedHeight)) revealedHeight = overlayUsesHover(layout) ? ASK_REVEAL_MIN_HEIGHT_PX : BAR_IDLE_HEIGHT_PX
+    const wasBarWidth = currentWidth === BAR_WIDTH
+    currentWidth = BAR_WIDTH
+    const y = topClamp(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
+    const x = wasBarWidth ? b.x : recenterXForWidth(b.x, b.width, BAR_WIDTH, display.workArea, 0)
+    next = { x, y, width: BAR_WIDTH, height: revealedHeight }
   }
-  // Hide/Island reveal keeps the 120 Ask floor. Never Math.max a leftover Settings 800+ slab
-  // (Ultron 880×1017 Expand Métis). Bar idle hugs the bar.
-  let revealedHeight = overlayUsesHover(layout)
-    ? askRevealHeight({ currentHeight: b.height, lastBarHeight, minReveal: ASK_REVEAL_MIN_HEIGHT_PX })
-    : rememberBarContentHeight(Math.max(lastBarHeight, BAR_HEIGHT), BAR_IDLE_HEIGHT_PX)
-  if (isSettingsTallHeight(revealedHeight)) {
-    revealedHeight = overlayUsesHover(layout) ? ASK_REVEAL_MIN_HEIGHT_PX : BAR_IDLE_HEIGHT_PX
-  }
-  const wasBarWidth = currentWidth === BAR_WIDTH
-  currentWidth = BAR_WIDTH
-  // Preserve the historic top-center path verbatim.
-  const y = topClamp(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
-  const x = wasBarWidth ? b.x : recenterXForWidth(b.x, b.width, BAR_WIDTH, display.workArea, 0)
-  // Already the below-notch bar — do not setBounds y=0 and fight the OS clamp.
-  if (b.x === x && b.y === y && b.width === BAR_WIDTH && b.height === revealedHeight) return
-  win.setBounds({ x, y, width: BAR_WIDTH, height: revealedHeight }, false)
+  revealOverlaySurface(win, next, applyOverlaySurfaceChrome)
 }
 
 function repairOverlayBoundsForReveal(): void {
@@ -3622,10 +3614,9 @@ function applySettingsSurface(): void {
   } catch {
     /* headless */
   }
-  applyOverlaySurfaceChrome()
   const display = screen.getDisplayMatching(win.getBounds())
   const rect = settingsOpenRect(getDisplayMetrics(display), ISLAND_TOP_MARGIN)
-  win.setBounds(rect, false)
+  openOverlaySettingsSurface(win, rect, applyOverlaySurfaceChrome)
   applyHideClickThrough()
 }
 
@@ -3831,6 +3822,14 @@ function revealRightEdgeDockInPage(): void {
   notifyOverlayCursorHover(true, true)
 }
 
+/** Keyboard/tray/relaunch reveal of top-center Hide/Island: the page paints it; main holds it until a pointer visits and leaves. */
+function revealTopCenterHoverInPage(): void {
+  if (!win || win.isDestroyed() || islandResting || settingsSurfaceOpen || !overlayUsesHover(liveOverlayLayout())) return
+  if (resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(win.getBounds())) === 'right-edge') return
+  if (!overlayCursorWatchTimer) startOverlayCursorWatch()
+  notifyOverlayCursorHover(true)
+}
+
 const revealController = createRevealController({
   ensureWindow,
   legacyRevealEnabled: revealLegacyEnabled,
@@ -3842,6 +3841,7 @@ const revealController = createRevealController({
     isMinimized = false
     restoreBarWidth()
     revealRightEdgeDockInPage()
+    revealTopCenterHoverInPage()
   },
   repairOffscreenBounds: repairOverlayBoundsForReveal,
   disableClickThrough: () => {
@@ -4365,6 +4365,8 @@ function moveBy(dx: number, dy: number): void {
     w.setBounds(next)
     return
   }
+  // Top-center Hide/Island stays anchored under the notch; a drag would move its park position (M2-0431).
+  if (!settingsSurfaceOpen && overlayUsesHover(liveOverlayLayout())) return
   const x = b.x + dx
   const y = b.y + dy
   // Free movement anywhere that keeps the window reachable on SOME display — covers dragging clean
@@ -4735,13 +4737,8 @@ function startMeetingNotifier(): void {
  *  accelerator labels never go stale — see rebuildTrayMenu(). */
 function buildTrayMenu(): Menu {
   const user = getSettings().shortcuts ?? {}
-  const winKeys = process.platform === 'win32'
-  const fmtAccel = (a: string): string =>
-    !a ? '' : winKeys
-      ? a.replace(/CommandOrControl|CmdOrCtrl|Control/g, 'Ctrl').replace(/Command|Meta|Super/g, 'Win').replace(/Return/g, 'Enter')
-      : a.replace(/CommandOrControl|CmdOrCtrl|Command|Meta/g, '⌘').replace(/Shift/g, '⇧').replace(/Alt/g, '⌥').replace(/Control/g, 'Ctrl').replace(/Return/g, '↵').replace(/\+/g, '')
   const label = (base: string, action: HotkeyAction): string => {
-    const k = fmtAccel(resolveShortcut(action, user))
+    const k = formatTrayAccelerator(resolveShortcut(action, user), process.platform)
     return k ? `${base}  (${k})` : base
   }
   return Menu.buildFromTemplate([
@@ -4797,7 +4794,7 @@ function createTray(): void {
       auditLog('tray.created', { emptyIcon })
     },
     attachMenu: () => tray?.setContextMenu(buildTrayMenu()),
-    time: (label, fn) => (observability ? observability.timePhase(label, fn) : fn()),
+    time: (label, fn) => timeBootStage(observability, label, fn),
     fail: (e) => auditLog('tray.failed', { message: e instanceof Error ? e.message : String(e) })
   }))
 }

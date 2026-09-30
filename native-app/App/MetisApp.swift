@@ -39,12 +39,8 @@ struct MetisApp: App {
 
     // MARK: Fleet model policy (M2-0412)
 
-    /// `UserDefaults` keys nothing in this app populates yet — this app has no device pairing/license
-    /// flow (no Keychain or network credential storage anywhere in `native-app/` today, see
-    /// `OperatorDeviceAuth`'s and `ModelPolicyRuntime`'s doc comments). The poller below is real and
-    /// tested; it starts fetching and enforcing the fleet policy the moment these three values exist.
-    /// Status: BLOCKED_EXTERNAL — native fleet-policy fetch stays inactive until M2-0145's native pairing
-    /// flow lands and provisions the Operator URL and device secret.
+    /// Existing Operator URL/secret provisioning keys. The poller below is real and tested; it starts
+    /// fetching and enforcing the fleet policy the moment these values exist.
     static let operatorURLDefaultsKey = "metis.operatorURL"
     static let operatorIngestSecretDefaultsKey = "metis.operatorIngestSecret"
     private static let operatorDeviceInstallIDDefaultsKey = "metis.operatorDeviceInstallID"
@@ -102,9 +98,8 @@ struct RootView: View {
         }
         .animation(.easeInOut(duration: 0.5), value: onboardingDoneAt == 0)
         .task {
-            // M2-0412: start the fleet model policy poller for the app's lifetime. A no-op today (see
-            // MetisApp.operatorURLDefaultsKey's doc comment) until a device pairing flow populates the URL
-            // and ingest secret; from then on this fetches at launch and re-polls every <=60s.
+            // M2-0412: start the fleet model policy poller for the app's lifetime. It fetches at launch
+            // and re-polls every <=60s once the existing Operator URL/secret values are provisioned.
             guard let urlString = UserDefaults.standard.string(forKey: MetisApp.operatorURLDefaultsKey),
                   let url = URL(string: urlString)
             else { return }
