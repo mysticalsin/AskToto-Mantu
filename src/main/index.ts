@@ -213,7 +213,7 @@ import {
   rightEdgeSidecarBounds,
   rightEdgeParkLayout,
   rightAnchoredParkPosition,
-  rightAnchoredParkHolds,
+  sameRect,
   resolveOverlayPlacement,
   parkAfterExclusiveOnboarding,
   parkedHoverReanchor,
@@ -1189,8 +1189,7 @@ let overlayCursorWatchEnteredAt: number | null = null
 let overlayCursorWatchHovering = false
 let overlayParkLatched = false // explicit Hide: no reopen from the zone the pointer is in until it leaves
 let rightEdgeUnhoveredRevealAt: number | null = null // right-edge reveal the pointer has not visited yet
-// The right-edge Hide band the last park wrote; null when the last park was anything else.
-let parkedRightEdgeBand: Electron.Rectangle | null = null
+let parkedRightEdgeBand: Electron.Rectangle | null = null // the last park's right-edge Hide band, else null
 // Electron can accept an onboarding setBounds request and then let the compositor clamp it into a
 // normal-window card. Keep this narrowly scoped to the opaque onboarding owner; normal overlay layouts
 // must remain free to resize and park themselves.
@@ -2351,11 +2350,10 @@ function commitParkedOverlayBounds(park: { x: number; y: number; width: number; 
   win.setBounds(park, false)
   parkedRightEdgeBand = null
   try {
-    const display = screen.getDisplayMatching(park)
-    // A right-edge park the OS widened (Windows minimum width) keeps its right edge at the work-area edge.
-    const rightEdge = resolvedOverlayPlacementForDisplay(display) === 'right-edge'
-    parkedRightEdgeBand = rightEdge && parkLayoutForDisplay(liveOverlayLayout(), display) === 'hide' ? park : null
     const after = win.getBounds()
+    // A right-edge park the OS widened (Windows minimum width) keeps its right edge at the work-area edge.
+    const rightEdge = resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(park)) === 'right-edge'
+    if (rightEdge && parkLayoutForDisplay(liveOverlayLayout(), screen.getDisplayMatching(park)) === 'hide') parkedRightEdgeBand = park
     const target = rightEdge ? rightAnchoredParkPosition(park, after.width) : park
     if (after.x !== target.x || after.y !== target.y) win.setPosition(target.x, target.y, false)
   } catch {
@@ -2388,25 +2386,13 @@ function ensureExclusiveBoundsEventGuard(w: BrowserWindow, displayId: number): v
   exclusiveBoundsEventGuard = { window: w, displayId, stop }
 }
 
-function hasExclusiveOnboardingBounds(
-  actual: { x: number; y: number; width: number; height: number },
-  expected: { x: number; y: number; width: number; height: number }
-): boolean {
-  return (
-    actual.x === expected.x &&
-    actual.y === expected.y &&
-    actual.width === expected.width &&
-    actual.height === expected.height
-  )
-}
-
 /** A replay only retires its transparent predecessor after the opaque successor already covers its display. */
 function coversExclusiveOnboardingDisplay(w: BrowserWindow, expectedDisplay?: Electron.Display): boolean {
   try {
     if (w.isDestroyed() || !w.isVisible()) return false
     const bounds = w.getBounds()
     const display = expectedDisplay ?? screen.getDisplayMatching(bounds)
-    return hasExclusiveOnboardingBounds(bounds, exclusiveOnboardingBounds(display.bounds, display.workArea))
+    return sameRect(bounds, exclusiveOnboardingBounds(display.bounds, display.workArea))
   } catch {
     return false
   }
@@ -2417,7 +2403,7 @@ function reconcileExclusiveOnboardingBounds(w: BrowserWindow, display: Electron.
   const stage = exclusiveOnboardingBounds(display.bounds, display.workArea)
   try {
     w.setBounds(stage, false)
-    if (!hasExclusiveOnboardingBounds(w.getBounds(), stage)) {
+    if (!sameRect(w.getBounds(), stage)) {
       w.setBounds(stage, false)
       w.setPosition(stage.x, stage.y, false)
     }
@@ -2439,7 +2425,7 @@ function armExclusiveBoundsWatch(w: BrowserWindow, displayId: number): void {
     const display = screen.getAllDisplays().find(candidate => candidate.id === displayId) ?? screen.getPrimaryDisplay()
     const stage = exclusiveOnboardingBounds(display.bounds, display.workArea)
     try {
-      if (hasExclusiveOnboardingBounds(w.getBounds(), stage)) {
+      if (sameRect(w.getBounds(), stage)) {
         if (Date.now() >= expiresAt) stopExclusiveBoundsWatch()
         return
       }
@@ -2728,19 +2714,11 @@ function createWindow(targetDisplay?: Electron.Display): void {
   } catch {
     /* headless */
   }
-  // The invisible right-edge Hide band is never dragged (it is click-through), so any frame it moves to
-  // after its park is native, never the user's: re-commit the band.
-  const overlay = win
+  const overlay = win // the click-through right-edge Hide band is never dragged: its moves after a park are native
   observeParkedBounds(overlay, {
     parked: () => (win === overlay && islandResting && !settingsSurfaceOpen && !isMinimized ? parkedRightEdgeBand : null),
-    holds: rightAnchoredParkHolds,
-    commit: (band) => {
-      const moved = overlay.getBounds()
-      mainLog.info(
-        `[overlay-watch] re-park band from=${moved.width}x${moved.height}@(${moved.x},${moved.y}) to=${band.width}x${band.height}@(${band.x},${band.y}) after a native frame change`
-      )
-      commitParkedOverlayBounds(band)
-    }
+    commit: commitParkedOverlayBounds,
+    log: message => mainLog.info(message)
   })
   if (onboardingLive) applyExclusiveOnboardingStage(win, placementDisplay)
   applyOverlayAlwaysOnTop(win)

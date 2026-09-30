@@ -28,6 +28,10 @@ export interface Rect {
   height: number
 }
 
+export function sameRect(a: Rect, b: Rect): boolean {
+  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
+}
+
 /**
  * Per-display metrics used by the notch-aware clamp. `bounds`/`workArea` are always Electron's own
  * `Display.bounds`/`Display.workArea` (top-left-origin, already in the coordinate space `setBounds`

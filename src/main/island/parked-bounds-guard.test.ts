@@ -123,6 +123,23 @@ describe('parked right-edge Hide band', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
+  it('defaults to the right-anchored park test and logs each re-commit from the native frame', async () => {
+    vi.useFakeTimers()
+    const window = new NativeWindow()
+    const band = rightEdgeHoverRestRect(undefined, runner)
+    const log = vi.fn()
+    observeParkedBounds(window, { parked: () => band, commit: (rect) => commitPark(window, rect), log })
+    commitPark(window, band)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(log).not.toHaveBeenCalled()
+
+    window.addTitleStrip()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(window.getBounds()).toEqual(band)
+    expect(log).toHaveBeenCalledTimes(1)
+    expect(log.mock.calls[0][0]).toContain('from=4x592@(1020,29) to=4x560@(1020,61)')
+  })
+
   it('gives each park its own budget', async () => {
     vi.useFakeTimers()
     const { window, band, state } = parkedWindow()
