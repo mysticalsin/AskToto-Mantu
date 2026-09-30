@@ -382,9 +382,10 @@ export function evidenceProblems(evidenceText, provenance) {
 
 /**
  * releaseNotes' shape is normative: version, commit, candidate run, promotion run, owner-channel/
- * hand-install framing (never Latest), signing mode and the evidence summary.
+ * hand-install framing (never Latest), signing mode and the evidence summary. A release/1.9.x candidate adds
+ * one line naming it a hotfix of 1.9.7.
  */
-export function releaseNotes({ provenance, evidence, promotionRunUrl }) {
+export function releaseNotes({ provenance, evidence, promotionRunUrl, candidateBranch = 'main' }) {
   const macBuild = provenance.builds.find((build) => build.variant === 'mac')
   const macSigning =
     macBuild.signing.mode === 'qa-identity'
@@ -394,11 +395,16 @@ export function releaseNotes({ provenance, evidence, promotionRunUrl }) {
   const assets = promotableAssets(provenance).sort((a, b) => a.name.localeCompare(b.name))
   const rows = assets.map((asset) => `| \`${asset.name}\` | \`${asset.sha256}\` |`).join('\n')
 
+  const hotfix =
+    candidateBranch === 'release/1.9.x'
+      ? `**Hotfix:** a hotfix of 1.9.7 built from release/1.9.x at commit \`${provenance.commit}\`.\n\n`
+      : ''
+
   return `Owner-channel prerelease of Métis ${provenance.version}. These files are the exact bytes of QA candidate run [${provenance.run.id}](${provenance.run.url}), built once from commit \`${provenance.commit}\` and promoted by [this run](${promotionRunUrl}) without rebuilding.
 
 **This is not a signed customer release.** ${macSigning} The Windows installers carry no Authenticode signature. On macOS, allow the first launch in System Settings → Privacy & Security → Open Anyway; on Windows, choose More info → Run anyway. In-app update does not offer this build, so install it by hand.
 
-**Evidence:** ${evidence.count} passing record(s) (${evidence.tickets.join(', ')}) bound to these bytes. Evidence file SHA-256: \`${evidence.sha256}\`.
+${hotfix}**Evidence:** ${evidence.count} passing record(s) (${evidence.tickets.join(', ')}) bound to these bytes. Evidence file SHA-256: \`${evidence.sha256}\`.
 
 | File | SHA-256 |
 |---|---|
@@ -412,7 +418,7 @@ ${rows}
  * Never builds. Proves the candidate's provenance and the promotion evidence, then stages exactly the
  * promotable bytes plus SHA256SUMS.txt and the original provenance.json bytes for upload.
  */
-export async function prepareRelease({ provenancePath, evidencePath, downloadsDir, outDir, candidateRun, candidateCommit, env }) {
+export async function prepareRelease({ provenancePath, evidencePath, downloadsDir, outDir, candidateRun, candidateCommit, candidateBranch, env }) {
   const provenanceBytes = readFileSync(provenancePath)
   const provenance = JSON.parse(provenanceBytes.toString('utf8'))
   const evidenceBytes = readFileSync(evidencePath)
@@ -454,7 +460,7 @@ export async function prepareRelease({ provenancePath, evidencePath, downloadsDi
   const evidence = { count: evidenceRecords.length, tickets, sha256: sha256Bytes(evidenceBytes) }
   const promotionRunUrl = `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}`
 
-  const notes = releaseNotes({ provenance, evidence, promotionRunUrl })
+  const notes = releaseNotes({ provenance, evidence, promotionRunUrl, candidateBranch })
   writeFileSync(join(outDir, 'notes.md'), notes)
 
   return { manifest, notes }
@@ -499,7 +505,7 @@ function usage() {
       '  stage <variant> <release-dir> <out-dir>\n' +
       '  assemble <records-dir> <out-dir>\n' +
       '  verify <provenance.json> <dir> <variant>...\n' +
-      '  prepare-release <provenance.json> <evidence.jsonl> <downloads-dir> <out-dir> --candidate-run <id> --candidate-commit <sha>\n' +
+      '  prepare-release <provenance.json> <evidence.jsonl> <downloads-dir> <out-dir> --candidate-run <id> --candidate-commit <sha> [--candidate-branch <head_branch>]\n' +
       '  check-release <manifest.json> <uploaded.json>'
   )
   process.exitCode = 2
@@ -539,8 +545,9 @@ async function main(argv) {
         if (!provenancePath || !evidencePath || !downloadsDir || !outDir) return usage()
         const candidateRun = flagValue(flags, '--candidate-run')
         const candidateCommit = flagValue(flags, '--candidate-commit')
+        const candidateBranch = flagValue(flags, '--candidate-branch')
         if (!candidateRun || !candidateCommit) return usage()
-        await prepareRelease({ provenancePath, evidencePath, downloadsDir, outDir, candidateRun, candidateCommit, env: process.env })
+        await prepareRelease({ provenancePath, evidencePath, downloadsDir, outDir, candidateRun, candidateCommit, candidateBranch, env: process.env })
         break
       }
       case 'check-release': {
