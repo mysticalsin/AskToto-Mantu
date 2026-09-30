@@ -1,12 +1,16 @@
+import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { IPC } from '@shared/ipc'
 import { CURSOR_WATCH_INTERVAL_MS, TOP_CENTER_REVEAL_DWELL_MS, decideCursorWatch } from './cursor-watch'
 import {
   CURSOR_WATCH_IDLE_INTERVAL_MS,
   CURSOR_WATCH_NEAR_PX,
   PRESENTER_IDLE_BLUR_MS,
   createAdaptiveCursorWatch,
+  createOverlayIdleSignal,
   createPresenterIdleSignal,
-  cursorWatchIntervalMs
+  cursorWatchIntervalMs,
+  overlayCursorWatchIntervalMs
 } from './idle-throttle'
 
 const rest = { x: 700, y: 0, width: 400, height: 40 }
@@ -197,5 +201,107 @@ describe('createPresenterIdleSignal', () => {
     signal.setParked(false)
     vi.advanceTimersByTime(1000)
     expect(published).toEqual([true, true, false])
+  })
+})
+
+describe('overlayCursorWatchIntervalMs', () => {
+  const far = { x: 100, y: 900 }
+  // Inside the band around the bar, outside the band around the reveal zone.
+  const nearBar = { x: 200, y: 300 }
+  const live = { restRect: rest, bounds: bar, transitioning: false }
+
+  it('treats the live bounds as the revealed bar only when not parked and visible', () => {
+    expect(overlayCursorWatchIntervalMs({ ...live, cursor: nearBar, islandResting: false, windowVisible: true })).toBe(24)
+    expect(overlayCursorWatchIntervalMs({ ...live, cursor: far, islandResting: false, windowVisible: true })).toBe(
+      CURSOR_WATCH_IDLE_INTERVAL_MS
+    )
+  })
+
+  it('ignores parked or tray-hidden bounds, so only the reveal zone keeps the watch fast', () => {
+    expect(overlayCursorWatchIntervalMs({ ...live, cursor: nearBar, islandResting: true, windowVisible: true })).toBe(
+      CURSOR_WATCH_IDLE_INTERVAL_MS
+    )
+    expect(overlayCursorWatchIntervalMs({ ...live, cursor: nearBar, islandResting: false, windowVisible: false })).toBe(
+      CURSOR_WATCH_IDLE_INTERVAL_MS
+    )
+    expect(
+      overlayCursorWatchIntervalMs({ ...live, cursor: { x: 900, y: 10 }, islandResting: true, windowVisible: false })
+    ).toBe(24)
+  })
+})
+
+describe('createOverlayIdleSignal', () => {
+  function fakeWindow(focused = true) {
+    const windowEvents = new EventEmitter()
+    const pageEvents = new EventEmitter()
+    const sent: Array<[string, unknown]> = []
+    const w = {
+      destroyed: false,
+      isDestroyed: () => w.destroyed,
+      isFocused: () => focused,
+      on: (event: string, listener: () => void) => windowEvents.on(event, listener),
+      emit: (event: string) => windowEvents.emit(event),
+      webContents: {
+        send: (channel: string, payload: unknown) => sent.push([channel, payload]),
+        on: (event: string, listener: () => void) => pageEvents.on(event, listener),
+        emit: (event: string) => pageEvents.emit(event)
+      },
+      sent
+    }
+    return w
+  }
+
+  it('sends idle on the presenter channel when the window parks or hides, and active on reveal', () => {
+    const w = fakeWindow()
+    let parked = false
+    const idle = createOverlayIdleSignal({ window: () => w as never, parked: () => parked })
+    idle.attach(w as never)
+    parked = true
+    w.emit('hide')
+    parked = false
+    idle.sync()
+    expect(w.sent).toEqual([
+      [IPC.presenterIdle, { idle: true }],
+      [IPC.presenterIdle, { idle: false }]
+    ])
+  })
+
+  it('turns idle after the window stays blurred for the blur delay and republishes to a reloaded page', () => {
+    const w = fakeWindow()
+    const idle = createOverlayIdleSignal({ window: () => w as never, parked: () => false, blurDelayMs: 1000 })
+    idle.attach(w as never)
+    w.emit('blur')
+    vi.advanceTimersByTime(999)
+    expect(w.sent).toEqual([])
+    vi.advanceTimersByTime(1)
+    expect(w.sent).toEqual([[IPC.presenterIdle, { idle: true }]])
+    w.webContents.emit('dom-ready')
+    w.emit('focus')
+    expect(w.sent.map(([, s]) => s)).toEqual([{ idle: true }, { idle: true }, { idle: false }])
+  })
+
+  it('starts the blur clock for a window created unfocused', () => {
+    const w = fakeWindow(false)
+    createOverlayIdleSignal({ window: () => w as never, parked: () => false, blurDelayMs: 1000 }).attach(w as never)
+    vi.advanceTimersByTime(1000)
+    expect(w.sent).toEqual([[IPC.presenterIdle, { idle: true }]])
+  })
+
+  it('ignores events from a replaced window and never sends to a destroyed one', () => {
+    const old = fakeWindow()
+    const next = fakeWindow()
+    let current = old
+    let parked = false
+    const idle = createOverlayIdleSignal({ window: () => current as never, parked: () => parked })
+    idle.attach(old as never)
+    current = next
+    idle.attach(next as never)
+    parked = true
+    old.emit('hide')
+    expect(next.sent).toEqual([])
+    next.destroyed = true
+    next.emit('hide')
+    expect(old.sent).toEqual([])
+    expect(next.sent).toEqual([])
   })
 })

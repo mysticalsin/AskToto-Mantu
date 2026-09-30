@@ -7,7 +7,10 @@
  * page's animation loops can follow.
  */
 
-import { CURSOR_WATCH_INTERVAL_MS, inflateRect, pointInRect } from './cursor-watch'
+import type { BrowserWindow } from 'electron'
+import { IPC } from '@shared/ipc'
+import { type AdaptiveTimer, createAdaptiveTimer } from '../infra/scheduler/adaptive-timer'
+import { CURSOR_WATCH_INTERVAL_MS, inflateRect, overlayWatchTreatAsRevealed, pointInRect } from './cursor-watch'
 import type { Rect } from './geometry'
 
 /** Parked with the pointer far from the reveal zone: nothing can reveal before the pointer crosses the band. */
@@ -39,49 +42,29 @@ export function cursorWatchIntervalMs(input: {
   return CURSOR_WATCH_IDLE_INTERVAL_MS
 }
 
-export type AdaptiveCursorWatch = {
-  /** (Re)starts the loop; the first tick lands one fast interval later. */
-  start(): void
-  stop(): void
-  running(): boolean
+/** cursorWatchIntervalMs for the live overlay: its bounds count as the revealed bar only when the watch treats
+ *  the window as revealed (not parked, not tray-hidden). */
+export function overlayCursorWatchIntervalMs(input: {
+  cursor: { x: number; y: number }
+  restRect: Rect
+  bounds: Rect
+  islandResting: boolean
+  windowVisible: boolean
+  transitioning: boolean
+}): number {
+  return cursorWatchIntervalMs({
+    cursor: input.cursor,
+    restRect: input.restRect,
+    revealedRect: overlayWatchTreatAsRevealed(input.islandResting, input.windowVisible) ? input.bounds : null,
+    transitioning: input.transitioning
+  })
 }
 
-/**
- * A self-rescheduling timer: after each tick it asks `intervalMs()` for the next delay. A tick that stops or
- * restarts the watch itself wins; the finished tick never schedules a second timer on top of it.
- */
-export function createAdaptiveCursorWatch(opts: {
-  tick: () => void
-  intervalMs: () => number
-}): AdaptiveCursorWatch {
-  let timer: ReturnType<typeof setTimeout> | null = null
-  let active = false
-  // Bumped by every start/stop; a tick from an older generation never reschedules.
-  let generation = 0
-  const schedule = (gen: number, delay: number): void => {
-    timer = setTimeout(() => {
-      timer = null
-      opts.tick()
-      if (gen === generation) schedule(gen, opts.intervalMs())
-    }, delay)
-    timer.unref?.()
-  }
-  const stop = (): void => {
-    generation += 1
-    active = false
-    if (timer) clearTimeout(timer)
-    timer = null
-  }
-  return {
-    start() {
-      stop()
-      active = true
-      schedule(generation, CURSOR_WATCH_INTERVAL_MS)
-    },
-    stop,
-    // True from start() to stop(), including while a tick runs.
-    running: () => active
-  }
+export type AdaptiveCursorWatch = AdaptiveTimer
+
+/** The cursor watch loop: the first tick lands one fast interval after start, then `intervalMs()` decides. */
+export function createAdaptiveCursorWatch(opts: { tick: () => void; intervalMs: () => number }): AdaptiveCursorWatch {
+  return createAdaptiveTimer({ ...opts, firstDelayMs: CURSOR_WATCH_INTERVAL_MS })
 }
 
 export type PresenterIdleState = { idle: boolean }
@@ -147,5 +130,55 @@ export function createPresenterIdleSignal(opts: {
     },
     current,
     dispose: clearBlurTimer
+  }
+}
+
+type OverlayWindow = Pick<BrowserWindow, 'isDestroyed' | 'isFocused' | 'on'> & {
+  webContents: Pick<BrowserWindow['webContents'], 'send' | 'on'>
+}
+
+export type OverlayIdleSignal = {
+  /** Re-reads `parked()`; call wherever the overlay reveals, parks or changes surface. */
+  sync(): void
+  /** Binds a newly created overlay window; events from a window that is no longer `window()` are ignored. */
+  attach(self: OverlayWindow): void
+}
+
+/**
+ * The presenter idle signal wired to the live overlay window: focus/blur drive the blur clock, show/hide
+ * re-read the park state, and a (re)loaded page receives the current state because it missed earlier sends.
+ * Published on IPC.presenterIdle as { idle }.
+ */
+export function createOverlayIdleSignal(deps: {
+  window: () => OverlayWindow | null
+  parked: () => boolean
+  blurDelayMs?: number
+}): OverlayIdleSignal {
+  const signal = createPresenterIdleSignal({
+    blurDelayMs: deps.blurDelayMs,
+    publish: (state) => {
+      const w = deps.window()
+      if (!w || w.isDestroyed()) return
+      try {
+        w.webContents.send(IPC.presenterIdle, state)
+      } catch {
+        /* renderer gone */
+      }
+    }
+  })
+  const sync = (): void => signal.setParked(deps.parked())
+  return {
+    sync,
+    attach(self) {
+      const whenCurrent = (fn: () => void) => (): void => {
+        if (deps.window() === self) fn()
+      }
+      signal.setFocused(self.isFocused())
+      self.on('focus', whenCurrent(() => signal.setFocused(true)))
+      self.on('blur', whenCurrent(() => signal.setFocused(false)))
+      self.on('show', whenCurrent(sync))
+      self.on('hide', whenCurrent(sync))
+      self.webContents.on('dom-ready', whenCurrent(() => signal.republish()))
+    }
   }
 }
