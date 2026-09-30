@@ -30,7 +30,7 @@ export const RUNNER_LABELS = Object.freeze({ mac: 'macos-latest', win: 'windows-
 
 /** userData directory name per installed variant: Electron takes it from the packaged package.json name,
  *  which build/qa-identity.electron-builder.yml sets to asktoto-qa for the QA identity. */
-export const PROFILE_DIRS = Object.freeze({ 'mac-qa-identity': 'asktoto-qa' })
+export const PROFILE_DIRS = Object.freeze({ mac: 'asktoto', 'mac-qa-identity': 'asktoto-qa' })
 
 /**
  * A scenario runs on each platform it declares. A platform entry names the qa-candidate variant and
@@ -57,6 +57,23 @@ export const SCENARIOS = Object.freeze({
         args: ({ installer, sha256, report }) => ['--zip', installer, '--sha256', sha256, '--out', report],
         report: 'fault-fatal-relaunch.json',
         settings: LOCAL_LLM_SETTINGS
+      })
+    })
+  }),
+  // M2-0471: on promotable macOS bytes, SIGSTOP main for 15 s, then require exactly one sanitized stall
+  // bundle and one app.stall.sampled audit event. The long idle plus sleep/wake row is reported as
+  // BLOCKED_EXTERNAL by the scenario because hosted runners cannot provide that physical-host setup.
+  'stall-sampler': Object.freeze({
+    ticket: 'M2-0471',
+    qaOnlyHook: false,
+    exits: Object.freeze({ 0: 'PASS', 1: 'FAIL', 2: 'PRECONDITION' }),
+    platforms: Object.freeze({
+      mac: Object.freeze({
+        variant: 'mac',
+        artifact: 'candidate-mac',
+        script: 'scripts/qa/stall-sampler-hosted.mjs',
+        args: ({ app, report }) => [app, report, '--stop-seconds', '15'],
+        report: 'stall-sampler.json'
       })
     })
   }),

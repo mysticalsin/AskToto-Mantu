@@ -6,7 +6,10 @@ const root = join(__dirname, '..', '..')
 const read = (name: string): string => readFileSync(join(root, '.github', 'workflows', name), 'utf8').replace(/\r\n/g, '\n')
 const workflow = read('program-audit.yml')
 
-const INPUTS = ['mode', 'ledger-path', 'records-path', 'population-of', 'since', 'seed', 'gate', 'checker-ref']
+const INPUTS = [
+  'mode', 'ledger-path', 'records-path', 'population-of', 'since', 'seed', 'gate',
+  'gates-path', 'provenance-path', 'notes-path', 'checker-ref'
+]
 
 /** The `inputs:` block declared under one trigger, as the list of input names. */
 function inputNames(trigger: 'workflow_call' | 'workflow_dispatch'): string[] {
@@ -19,7 +22,7 @@ function inputNames(trigger: 'workflow_call' | 'workflow_dispatch'): string[] {
 }
 
 describe('M2-0509 program-audit workflow', () => {
-  it('runs on workflow_call and workflow_dispatch only, with the same eight inputs on both', () => {
+  it('runs on workflow_call and workflow_dispatch only, with the same eleven inputs on both', () => {
     expect(workflow).toMatch(/\non:\n {2}workflow_call:\n/)
     expect(workflow).toContain('\n  workflow_dispatch:\n')
     for (const trigger of ['push:', 'pull_request:', 'release:', 'schedule:']) {
@@ -77,6 +80,28 @@ describe('M2-0509 program-audit workflow', () => {
     expect(workflow).toContain('node .program-audit-scripts/scripts/program/velocity.mjs "${args[@]}"')
   })
 
+  it('M2-0511 release-check runs check.mjs --release on the three release paths, with the ledger history for the sample', () => {
+    const validate = workflow.slice(workflow.indexOf('name: Validate the inputs'), workflow.indexOf('name: Checkout the caller'))
+    expect(validate).toContain('backfill | sample | velocity | release-check')
+    expect(validate).toContain('[ "$MODE" = "release-check" ] && { [ -z "$GATES_PATH" ] || [ -z "$PROVENANCE_PATH" ] || [ -z "$NOTES_PATH" ]; }')
+    expect(validate).toContain('release-check mode requires gates-path, provenance-path and notes-path')
+
+    for (const [env, input] of [['GATES_PATH', 'gates-path'], ['PROVENANCE_PATH', 'provenance-path'], ['NOTES_PATH', 'notes-path']]) {
+      expect(workflow).toContain(`${env}: \${{ inputs.${input} }}`)
+    }
+    const callers = workflow.split('uses: actions/checkout@')[1].split('\n      - ')[0]
+    expect(callers).toContain("fetch-depth: ${{ inputs.mode == 'release-check' && '0' || '1' }}")
+
+    const step = workflow.slice(workflow.indexOf('name: Check the release gates'))
+    expect(step).toContain("if: inputs.mode == 'release-check'")
+    expect(step).toContain(`version="$(jq -er '.version' "$GATES_PATH")"`)
+    expect(step).toContain(
+      'node .program-audit-scripts/scripts/evidence/check.mjs --release "$version" --gates "$GATES_PATH" --provenance "$PROVENANCE_PATH" ' +
+        '--ledger "$LEDGER_PATH" --notes "$NOTES_PATH" > "$OUT_DIR/release-check.txt" 2>&1 || status=$?'
+    )
+    expect(step).toContain('exit "$status"')
+  })
+
   it('passes inputs through env, never interpolated into a shell script', () => {
     const scripts = [...workflow.matchAll(/run: \|\n((?: {10}.*\n|\n)+)/g)].map((m) => m[1])
     expect(scripts.length).toBeGreaterThan(0)
@@ -86,7 +111,7 @@ describe('M2-0509 program-audit workflow', () => {
   it('uploads a program-audit-<mode> artifact and writes each result to the job summary', () => {
     expect(workflow).toContain('name: program-audit-${{ inputs.mode }}')
     expect(workflow).toContain('path: out/program-audit/')
-    expect(workflow.match(/>> "\$GITHUB_STEP_SUMMARY"/g)).toHaveLength(3)
+    expect(workflow.match(/>> "\$GITHUB_STEP_SUMMARY"/g)).toHaveLength(4)
   })
 
   it('names only this public repository', () => {

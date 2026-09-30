@@ -41,6 +41,29 @@ export function withBootFirstShowDeferred(create: () => void): void {
   }
 }
 
+/** M2-0516: runs `navigate` for a window just constructed. Deferred (boot's window only), it runs in its own
+ *  task, the one right after the constructor's, and ahead of a first show scheduled after this call: immediates
+ *  run in order, and 'ready-to-show' cannot come before a navigation. A deferred navigation is skipped when the
+ *  window was replaced or destroyed before its turn, and its throw goes to `fail` instead of escaping the task.
+ *  Not deferred (replay handoff, recovery), it runs synchronously in the constructing task, throws included. */
+export function navigateWindow<W extends FirstShowWindow>(
+  deferred: boolean,
+  win: W,
+  current: () => unknown,
+  navigate: (win: W) => void,
+  fail: (error: unknown) => void
+): void {
+  if (!deferred) return navigate(win)
+  setImmediate(() => {
+    if (current() !== win || win.isDestroyed()) return
+    try {
+      navigate(win)
+    } catch (error) {
+      fail(error)
+    }
+  })
+}
+
 /** scheduleFirstShow for a window that may be replaced before its first show: `show` runs only while
  *  `current()` is still this window, and a throwing show (headless) is swallowed. */
 export function scheduleCurrentFirstShow<W extends FirstShowWindow>(

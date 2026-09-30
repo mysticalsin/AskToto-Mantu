@@ -108,10 +108,41 @@ export function historyEntry(tMs, outcome) {
   return { tMs, ...outcome.value }
 }
 
-/** The app's own native boot stage timings (tray stages, window construction and first show): every
+/** The boot window variants the QA-identity build can construct (src/main/infra/observability/projection.ts
+ *  BOOT_WINDOW_VARIANTS, M2-0516). An ST-1 run always launches 'shipped'. */
+export const WINDOW_VARIANTS = ['shipped', 'spellcheck-off', 'paint-when-hidden', 'prewarm-spellchecker', 'prewarm-view']
+
+/** The only purpose besides ST-1 itself: a short launch that measures the window constructor under one variant. */
+export const WINDOW_CONSTRUCTION = 'window-construction'
+
+/**
+ * `--purpose` and `--window-variant`, checked: `{ purpose, windowVariant }` or `{ error }`. Without a purpose the
+ * run is ST-1 and builds the shipped window, so a variant is refused there; a window-construction run names
+ * one known variant.
+ * @param {{ purpose?: string, windowVariant?: string }} args
+ */
+export function runPurpose({ purpose, windowVariant }) {
+  if (purpose === undefined) {
+    if (windowVariant !== undefined) return { error: `--window-variant needs --purpose ${WINDOW_CONSTRUCTION}` }
+    return { purpose: 'st-1', windowVariant: 'shipped' }
+  }
+  if (purpose !== WINDOW_CONSTRUCTION) return { error: `--purpose must be ${WINDOW_CONSTRUCTION}, got ${JSON.stringify(purpose)}` }
+  if (!WINDOW_VARIANTS.includes(windowVariant)) {
+    return { error: `--window-variant must be one of ${WINDOW_VARIANTS.join(', ')}, got ${JSON.stringify(windowVariant)}` }
+  }
+  return { purpose, windowVariant }
+}
+
+/** The candidate's environment: this one, on the isolated profile, with the window variant set explicitly so an
+ *  inherited value can never reach an ST-1 run. */
+export function candidateEnv(env, profile, windowVariant) {
+  return { ...env, ASKTOTO_USERDATA: profile, METIS_QA_WINDOW_VARIANT: windowVariant }
+}
+
+/** The app's own native boot stage timings (tray stages, window construction, navigation and first show): every
  *  `app.boot.stage` record of an audit log's text, in order, so each run names its long stretches without a
- *  CPU profile. Lines that are not a complete JSON record are skipped. A window stage keeps the chrome it
- *  built. With the launch's wall-clock spawn time, each stage also says when its record was written since
+ *  CPU profile. Lines that are not a complete JSON record are skipped. A window stage keeps the chrome and
+ *  variant it built. With the launch's wall-clock spawn time, each stage also says when its record was written since
  *  the spawn (`sinceSpawnMs`): the app writes it in a task after the stage, so it bounds the stage's end
  *  from above. */
 export function bootStagesFromAudit(auditText, spawnedWallMs) {
@@ -131,6 +162,7 @@ export function bootStagesFromAudit(auditText, spawnedWallMs) {
       ms: typeof record.ms === 'number' ? Math.round(record.ms * 10) / 10 : null,
       ts: record.ts,
       ...(typeof record.transparent === 'boolean' ? { transparent: record.transparent } : {}),
+      ...(typeof record.windowVariant === 'string' ? { windowVariant: record.windowVariant } : {}),
       ...(typeof spawnedWallMs === 'number' && Number.isFinite(endedAt) ? { sinceSpawnMs: endedAt - spawnedWallMs } : {})
     })
   }
@@ -248,9 +280,10 @@ export function emptyRun() {
  * The ST-1 report. `complete` is false for the periodic partial report and for a run the harness itself
  * could not finish (`harnessError`); either has verdict INCOMPLETE, because a measurement that stopped
  * early proves nothing either way. A complete run's verdict comes from the criteria alone; the runner
- * witness and the boot stages are report-only.
+ * witness and the boot stages are report-only. A window-construction run (`purpose`) says so, names its variant
+ * and is never ST-1 evidence (`st1Evidence: false`), whatever its verdict.
  */
-export function buildReport({ row, history = false, installer, candidate, minutes, measured, evidence, fixtures, attribution, complete, harnessError }) {
+export function buildReport({ row, history = false, installer, candidate, minutes, measured, evidence, fixtures, attribution, complete, harnessError, purpose = 'st-1', windowVariant = 'shipped' }) {
   const criteria = evaluateCriteria(row, measured, evidence, { history })
   // The control row has nothing to exercise: its verdict is the criteria alone.
   const exercised = row === 'none' || evidence?.exercised
@@ -258,6 +291,7 @@ export function buildReport({ row, history = false, installer, candidate, minute
   const timeline = [...measured.samples, ...measured.late.map((entry) => ({ ...entry, late: true }))].sort((a, b) => a.tMs - b.tMs)
   return {
     harness: 'ST-1',
+    ...(purpose === WINDOW_CONSTRUCTION ? { purpose, st1Evidence: false, windowVariant } : {}),
     row,
     ...(history ? { historyRow: true } : {}),
     platform: process.platform,
@@ -299,10 +333,11 @@ export function buildReport({ row, history = false, installer, candidate, minute
 }
 
 /** The launch itself never reached a candidate to measure: a genuine FAIL (inspector: false), never a
- *  skipped row. */
-export function buildLaunchFailureReport({ row, installer, candidate, fixtures, reason }) {
+ *  skipped row. A window-construction launch is marked as in buildReport. */
+export function buildLaunchFailureReport({ row, installer, candidate, fixtures, reason, purpose = 'st-1', windowVariant = 'shipped' }) {
   return {
     harness: 'ST-1',
+    ...(purpose === WINDOW_CONSTRUCTION ? { purpose, st1Evidence: false, windowVariant } : {}),
     row,
     platform: process.platform,
     arch: process.arch,
