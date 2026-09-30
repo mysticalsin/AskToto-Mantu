@@ -6,15 +6,21 @@
  * isolated ASKTOTO_USERDATA profile and the env names a known row, and it writes only content-free markers the
  * harness reads before it SIGKILLs main.
  */
+import { join } from 'node:path'
 import { app } from 'electron'
 import { auditLog, mainLog } from './logger'
 import { bundledFfmpegPath, startFfmpegDecode } from './ffmpeg-decoder'
 import { ensureLocalRuntimeStarted } from './llm/local'
 import * as localRuntime from './llm/local-runtime'
 import { recordSidecarIntent } from './infra/process/registry'
-import { hkMScenarioFromEnv, hkMSetupFailedDetail, productionHkMDeps, runHkMScenario } from './qa-hk-m'
+import { armQaHostFloorOverride, hkMScenarioFromEnv, hkMSetupFailedDetail, productionHkMDeps, runHkMScenario } from './qa-hk-m'
 
 export { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-identity'
+
+// M2-0482: the QA RAM-floor override is decided once, at import, before index.ts consults any floor. It reads the
+// launch env, not app.getPath('userData'), so it does not depend on index.ts's later setPath. Electron's default
+// userData is appData/<app name>; the gate stays off unless the packaged app runs on a different, isolated profile.
+armQaHostFloorOverride(process.env, app.isPackaged, join(app.getPath('appData'), app.getName()))
 
 const hkMScenario = hkMScenarioFromEnv(process.env, app.isPackaged)
 if (hkMScenario) {
