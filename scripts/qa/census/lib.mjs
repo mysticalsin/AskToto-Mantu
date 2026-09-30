@@ -9,6 +9,7 @@ import { listProcesses, ownedProcesses } from '../owned-processes.mjs'
 export const STATES = [
   'cold-start',
   'settled-idle',
+  'parked-idle',
   'first-inference',
   'active-transcription',
   'post-meeting',
@@ -276,7 +277,7 @@ export function sanitizeProcessSample(sample) {
 }
 
 export function sanitizeReport(report) {
-  return {
+  const sanitized = {
     schemaVersion: 1,
     generatedAt: report.generatedAt,
     ticket: 'M2-0009',
@@ -305,6 +306,8 @@ export function sanitizeReport(report) {
     proveLocalTtft: report.proveLocalTtft,
     windowsWorkingSet: report.windowsWorkingSet
   }
+  if (report.parkedIdle) sanitized.parkedIdle = report.parkedIdle
+  return sanitized
 }
 
 export function rendererScenarioProbeSource(scenario) {
@@ -363,6 +366,17 @@ export function summarize(samples, wallSeconds) {
     byKind: Object.fromEntries([...byKind.entries()].sort(([a], [b]) => a.localeCompare(b))),
     gpuSampled: gpuProcesses.length > 0,
     gpuPids: gpuProcesses.map((sample) => sample.pid).sort((a, b) => a - b)
+  }
+}
+
+function summarizeParkChecks(checks) {
+  const total = checks.length
+  const parked = checks.filter((check) => check.parked).length
+  return {
+    checks: total,
+    parked,
+    notParked: total - parked,
+    parkedCoverage: total === 0 ? 0 : parked / total
   }
 }
 
@@ -654,12 +668,18 @@ export async function collectCensus(options) {
   const started = now()
   const end = started + seconds * 1000
   const samples = []
+  const parkChecks = [...(options.parkedIdle?.checks ?? [])]
+  let nextParkCheck = started + 60_000
   while (true) {
     const table = listProcessesFn(platform)
     const owned = ownedProcessPopulation({ mainPid: options.mainPid, installRoot: options.installRoot, platform, table })
     const processes = sampleOwnedProcessesFn(owned, platform)
     const sampledAt = now()
     samples.push({ tMs: sampledAt - started, processes })
+    if (state === 'parked-idle' && typeof options.checkPark === 'function' && (sampledAt >= nextParkCheck || sampledAt >= end)) {
+      parkChecks.push(await options.checkPark(sampledAt))
+      while (nextParkCheck <= sampledAt) nextParkCheck += 60_000
+    }
     if (sampledAt >= end) break
     await sleepFn(Math.min(intervalMs, Math.max(1, end - sampledAt)))
   }
@@ -685,6 +705,18 @@ export async function collectCensus(options) {
     rendererTrace: options.rendererTrace ?? { captured: false, scenarios: [] },
     proveLocalTtft: options.proveLocalTtft ?? { recorded: false, command: PROVE_LOCAL_TTFT_COMMAND },
     windowsWorkingSet: options.windowsWorkingSet ?? windowsWorkingSetEvidenceFromSamples(platform, samples)
+  }
+  if (state === 'parked-idle') {
+    report.summary = {
+      ...report.summary,
+      budgetOneCorePercent: 1,
+      overBudget: report.summary.oneCoreCpuPercent > 1
+    }
+    report.parkedIdle = {
+      ...(options.parkedIdle ?? {}),
+      checks: parkChecks,
+      summary: summarizeParkChecks(parkChecks)
+    }
   }
   return sanitizeReport(report)
 }

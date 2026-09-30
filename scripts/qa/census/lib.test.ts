@@ -40,12 +40,14 @@ describe('resource census state contract', () => {
     expect(STATES).toEqual([
       'cold-start',
       'settled-idle',
+      'parked-idle',
       'first-inference',
       'active-transcription',
       'post-meeting',
       'post-recovery'
     ])
     expect(missingStates(['cold-start', 'settled-idle'])).toEqual([
+      'parked-idle',
       'first-inference',
       'active-transcription',
       'post-meeting',
@@ -65,6 +67,7 @@ describe('resource census state contract', () => {
       'post-recovery'
     ])
     expect(stateRequiresAttachPrecondition('settled-idle')).toBe(false)
+    expect(stateRequiresAttachPrecondition('parked-idle')).toBe(false)
     expect(stateRequiresAttachPrecondition('first-inference')).toBe(true)
     expect(() =>
       validateStatePrecondition({
@@ -401,6 +404,56 @@ describe('resource census CPU formula', () => {
     })
   })
 
+  it('adds parked-idle informational budget fields without failing the census', async () => {
+    let clockMs = 0
+    const report = await collectCensus({
+      state: 'parked-idle',
+      seconds: 300,
+      intervalMs: 300_000,
+      platform: 'darwin',
+      installRoot: '/Applications/Metis.app',
+      mainPid: 100,
+      productVersion: '1.9.6',
+      parkedIdle: {
+        boundsSignal: 'Browser.getWindowForTarget/getWindowBounds',
+        expectedBounds: { width: 8, height: 2 },
+        checks: [{ observedAt: new Date(0).toISOString(), bounds: { width: 8, height: 2 }, parked: true }]
+      },
+      listProcesses: () => [
+        {
+          pid: 100,
+          ppid: 1,
+          startedMs,
+          exe: '/Applications/Metis.app/Contents/MacOS/Metis',
+          role: 'Metis'
+        }
+      ],
+      sampleOwnedProcesses: () => [
+        {
+          pid: 100,
+          startedMs,
+          role: 'Metis',
+          kind: 'main',
+          rssBytes: 100,
+          physFootprintBytes: 80,
+          workingSetBytes: null,
+          cpuSeconds: clockMs / 1000
+        }
+      ],
+      now: () => clockMs,
+      sleep: async (ms: number) => {
+        clockMs += ms
+      }
+    })
+
+    expect(report.summary).toMatchObject({
+      oneCoreCpuPercent: 100,
+      budgetOneCorePercent: 1,
+      overBudget: true
+    })
+    expect((report as any).parkedIdle.summary).toEqual({ checks: 1, parked: 1, notParked: 0, parkedCoverage: 1 })
+  })
+
   it('normalizes Windows private bytes from the same resource row as working set', () => {
     const rows = normalizeWin32ResourceRows([
       {
@@ -465,6 +518,11 @@ describe('resource census report boundary', () => {
     expect(stateCoverageForRun('settled-idle')).toEqual([
       { state: 'cold-start', status: 'SUPPORTED_NOT_RUN', unblockStep: 'Run node scripts/qa/census/run.mjs --state cold-start --seconds 300.' },
       { state: 'settled-idle', status: 'MEASURED' },
+      {
+        state: 'parked-idle',
+        status: 'SUPPORTED_NOT_RUN',
+        unblockStep: 'Run node scripts/qa/census/run.mjs --state parked-idle --seconds 300.'
+      },
       {
         state: 'first-inference',
         status: 'BLOCKED_EXTERNAL',
@@ -698,9 +756,14 @@ describe('resource census GitHub Actions lane', () => {
     expect(workflow).toContain('node scripts/qa/census/run.mjs')
     expect(workflow).toContain('for state in cold-start settled-idle; do')
     expect(workflow).toContain('--state "$state"')
+    expect(workflow).toContain('profile.mjs --layout hide "$RUNNER_TEMP/metis-census-parked-profile"')
+    expect(workflow).toContain('--state parked-idle')
     expect(workflow).toContain('darwin-$state.json')
     expect(workflow).toContain('win32-$state.json')
+    expect(workflow).toContain('darwin-parked-idle.json')
+    expect(workflow).toContain('win32-parked-idle.json')
     expect(workflow).toContain('profile-manifest.json')
+    expect(workflow).toContain('parked-profile-manifest.json')
     expect(workflow).toContain('resource-census-profile.json')
     expect(workflow).toContain('settled-idle')
     expect(workflow).toContain('--seconds 300')
@@ -709,7 +772,7 @@ describe('resource census GitHub Actions lane', () => {
   })
 
   it('reads the profile manifest from the path profile.mjs prints and never gates the census on the TTFT proof', () => {
-    expect(workflow.match(/sed -n 's\/\^\\\[census-profile\\\] manifest \/\/p'/g)).toHaveLength(2)
+    expect(workflow.match(/sed -n 's\/\^\\\[census-profile\\\] manifest \/\/p'/g)).toHaveLength(4)
     expect(workflow).not.toContain('cp "$RUNNER_TEMP/metis-census-profile/resource-census-profile.json"')
     const ttftStep = workflow.slice(workflow.indexOf('- name: Record local TTFT proof'), workflow.indexOf('- name: Measure hosted census states'))
     expect(ttftStep).toContain('continue-on-error: true')
