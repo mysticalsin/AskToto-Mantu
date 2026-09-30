@@ -32,10 +32,9 @@ import { MeetingOpenErrorToast } from './components/MeetingOpenErrorToast'
 import { OperatorGateToast } from './components/OperatorGateToast'
 import { QuickActions, type QuickKind } from './components/QuickActions'
 import { ConfirmSheet } from './ui/ConfirmSheet'
-import { useAsk, useAutoResize, useSettings, useAuth, type AnswerState } from './state'
+import { useAsk, useAutoResize, type AnswerState } from './state'
 import { useWindowDrag } from './lib/window-drag'
 import { noteCrashContext } from './lib/crash-context'
-import { NavigationGuardService, type NavigationGuardRequest } from './lib/navigation-guard'
 import {
   AUTO_HIDE_GRACE_MS,
   REVEAL_DWELL_MS,
@@ -101,7 +100,7 @@ import {
 import { playCue, playClick, setSoundsEnabled } from './lib/sound'
 import { DEFAULT_SHORTCUTS, ASK_MEMORY_IDLE_MS } from '@shared/ipc'
 import { applyCaveman, DEFAULT_ASK_CAVEMAN } from '@shared/caveman-ask'
-import type { HotkeyAction, TranscriptLine, ConversationMode, ChatTurn, LicenseGateVerdict, MetisCommandState } from '@shared/ipc'
+import type { HotkeyAction, TranscriptLine, ConversationMode, ChatTurn, MetisCommandState } from '@shared/ipc'
 import type { RecapStatus } from '@shared/recap-status'
 import { HOTKEY_ACTIONS } from '@shared/ipc'
 import { useTapControl } from './lib/tap/tap-control'
@@ -129,24 +128,14 @@ import {
   transcriptHasContent
 } from '@shared/quick-actions'
 import { micSpeakerLabel } from '@shared/speaker-names'
-import { onboardingLaunchFromSearch } from './lib/onboarding-launch'
+import { useAppBoot } from './app/hooks/useAppBoot'
+import { useViewRouter } from './app/hooks/useViewRouter'
 
 function recapWriteKey(ownerId: string, runId: string): string {
   return `${ownerId}\u0000${runId}`
 }
 
 type View = RendererView
-
-/** Main uses this one-shot launch hint only when Act 6 chose "set up AI" after the save had replied. */
-function initialViewFromLaunch(): View {
-  if (typeof location === 'undefined') return 'answer'
-  return onboardingLaunchFromSearch(location.search).view
-}
-
-function initialSettingsTabFromLaunch(): 'ai' | undefined {
-  if (typeof location === 'undefined') return undefined
-  return onboardingLaunchFromSearch(location.search).settingsTab
-}
 
 /** A renderer can be retired while an auto-hide callback is already queued. Parking is best effort. */
 function parkOverlayAfterHide(force = false): void {
@@ -288,7 +277,25 @@ export function App(): JSX.Element {
   }, [])
   const windowDrag = useWindowDrag(onWindowDragStart, { noTouch: true })
 
-  const { settings, bootError: settingsBootError, patch, saveKey, recoverEncryptedProfile, clearKey, testKey, refresh } = useSettings()
+  const [savedPath, setSavedPath] = useState<string | null>(null)
+  const {
+    settings,
+    settingsBootError,
+    patch,
+    saveKey,
+    recoverEncryptedProfile,
+    clearKey,
+    testKey,
+    refresh,
+    auth,
+    bootError,
+    bootSlow,
+    licenseEnforced,
+    licenseGate,
+    licenseGatePending,
+    recheckLicenseGate,
+    entityNames
+  } = useAppBoot({ demo: DEMO, savedPath })
   // This is deliberately an opaque main-owned capability. Until main provides a verified allowlisted
   // consequence, the right edge lets the user cancel it but will never invite confirmation blind.
   const [commandState, setCommandState] = useState<MetisCommandState>({ proposalId: null })
@@ -301,73 +308,6 @@ export function App(): JSX.Element {
   // IT-managed lock on contentProtection (Settings gates the same toggle with this) — Bar's Private-view
   // icon must go inert rather than silently no-op when clicked under a managed profile.
   const stealthLocked = settings?.managedKeys?.includes('contentProtection') ?? false
-  const auth = useAuth() // Azure AD gate (only enforces when configured)
-  const bootError = settingsBootError ?? auth.bootError
-  // FITO-185-X: mid-wait escape on the post-onboarding Loading strip (Tony: never forever Loading).
-  const [bootSlow, setBootSlow] = useState(false)
-
-  // ── License enforcement master switch ──────────────────────────────────────────────────────────
-  // OFF for now: every copy is treated as valid and the activation gate never renders, regardless of
-  // the stored `licenseGateEnabled` setting — including a machine-wide managed-config that sets (and
-  // locks) licenseGateEnabled:true, which is completely inert while this is off. All the licensing code
-  // (main/license.ts, the LicenseGate component, the settings toggle, the heartbeat) is intact.
-  // Flipping this constant ALONE ships a brick: Settings.tsx's LICENSE_UI_ENABLED gates the only
-  // activation form in the app, and main's 12h heartbeat is gated on `licenseValid`, which nothing but a
-  // successful activation can set. Both switches move together, in one change, or not at all.
-  const LICENSE_ENFORCEMENT = false
-  const licenseEnforced = LICENSE_ENFORCEMENT && settings?.licenseGateEnabled === true
-
-  // License gate verdict (main/license.ts checkLicenseGrace(), via the license:gate IPC channel). Only
-  // fetched while enforcement is on AND settings.licenseGateEnabled is true. Re-fetches if either flips.
-  const [licenseGate, setLicenseGate] = useState<LicenseGateVerdict | null>(null)
-  useEffect(() => {
-    if (!licenseEnforced) {
-      setLicenseGate(null)
-      return
-    }
-    let cancelled = false
-    // FITO-185-X: bound license:gate — a hung invoke must not pin the post-boot Loading strip forever.
-    // Fail-open (allowed:true) on timeout/reject so Reload/bar can paint; LicenseGate still shows when
-    // a real verdict says !allowed.
-    const failOpen: LicenseGateVerdict = { gateEnabled: true, allowed: true }
-    const timer = window.setTimeout(() => {
-      if (!cancelled) setLicenseGate(failOpen)
-    }, 5000)
-    void window.toto.licenseGate().then(
-      (v) => {
-        if (!cancelled) setLicenseGate(v)
-      },
-      () => {
-        if (!cancelled) setLicenseGate(failOpen)
-      }
-    ).finally(() => {
-      window.clearTimeout(timer)
-    })
-    return () => {
-      cancelled = true
-      window.clearTimeout(timer)
-    }
-  }, [licenseEnforced])
-  // Re-fetches the verdict AND the underlying settings (a successful activation changes both
-  // licenseServerUrl and the server-authoritative license fields) — used by LicenseGate's Activate and
-  // Retry actions. The gate drops on its own, once `licenseGate.allowed` flips true, on the next render.
-  const recheckLicenseGate = useCallback(async () => {
-    const [verdict] = await Promise.all([window.toto.licenseGate(), refresh()])
-    setLicenseGate(verdict)
-  }, [refresh])
-
-  // FITO-185-X: mid-wait Reload on post-onboarding Loading strip (hooks must stay above early returns).
-  useEffect(() => {
-    const pendingLicense = licenseEnforced && licenseGate == null
-    const onStrip =
-      DEMO == null && !isOnboardingBoot(settings) && (auth.status == null || pendingLicense) && !bootError
-    if (!onStrip) {
-      setBootSlow(false)
-      return
-    }
-    const t = window.setTimeout(() => setBootSlow(true), 5000)
-    return () => window.clearTimeout(t)
-  }, [settings, auth.status, licenseEnforced, licenseGate, bootError])
 
   const ask = useAsk() // answer view + recap
   const suggest = useAsk() // live copilot card
@@ -405,9 +345,6 @@ export function App(): JSX.Element {
   const prewarmWatermarkRef = useRef({ lineCount: 0, at: 0 })
 
   const onQuestionRef = useRef<(l: TranscriptLine) => void>(() => {})
-  // Canonical people/account names for the ASR entity-casing bias (see lib/entity-casing.ts). Fetched
-  // below (once on mount, refreshed after a meeting saves); declared here so useListen can read it.
-  const [entityNames, setEntityNames] = useState<string[]>([])
   const listen = useListen(
     (l) => onQuestionRef.current(l),
     settings?.asrCorrections,
@@ -457,17 +394,31 @@ export function App(): JSX.Element {
   }, [listen.captureDegraded, patch])
 
   const [input, setInput] = useState('')
+  const [collapsed, setCollapsed] = useState(false)
+  const [minimized, setMinimized] = useState(false) // collapsed to the floating control mini-pill
   // Every view except the idle bar is a lazy chunk. A view switch inside a click handler renders on
   // React 18's synchronous discrete lane — if the target chunk isn't loaded yet the component
   // suspends DURING sync input and React throws #426 ("A component suspended while responding to
   // synchronous input"), crashing to the error boundary ("Métis hit a snag") instead of showing
   // the Suspense fallback. Reproduced physically on first "Start listening" (cold Copilot chunk).
   // The documented fix: mark view switches as transitions — the old view stays up for the few ms the
-  // chunk needs, then the new one mounts. setView keeps its identity via the useCallback wrapper.
-  const [view, setViewRaw] = useState<View>(initialViewFromLaunch)
-  const setView = useCallback((v: View | ((prev: View) => View)): void => {
-    startTransition(() => setViewRaw(v))
-  }, [])
+  // chunk needs, then the new one mounts. useViewRouter owns the transition wrapper and settings route.
+  const {
+    view,
+    setView,
+    setViewRaw,
+    settingsInitialTab,
+    settingsNotice,
+    openSettings,
+    openSettingsDefault,
+    navigationGuard,
+    setNavigationReveal,
+    navigationGuardRequest,
+    onReviewDirtyChange,
+    confirmReviewNavigation,
+    guardReviewNav,
+    approveReviewNav
+  } = useViewRouter({ setCollapsed, setMinimized })
   // See crash-context.ts for why this runs in render rather than an effect.
   noteCrashContext({ view, listening: listen.listening })
 
@@ -497,8 +448,6 @@ export function App(): JSX.Element {
     // records a meeting no longer pays 212 kB of parse at every boot for views they never open.
   }, [])
 
-  const [collapsed, setCollapsed] = useState(false)
-  const [minimized, setMinimized] = useState(false) // collapsed to the floating control mini-pill
   // Widen the minimized pill's window ONLY while the consent banner is actually on-screen (it auto-dismisses
   // after a few seconds, or stays for the whole session in require-indicator mode). Driven by the reminder's
   // own open state via onOpenChange, not by the raw `listening` flag — otherwise the pill stayed 500px wide
@@ -552,13 +501,6 @@ export function App(): JSX.Element {
   // keeps showing the generated text (recapGenTarget stays set), but without this the refusal was
   // invisible and the user only discovered it on reopening the meeting, by which point it was gone.
   const [recapSaveError, setRecapSaveError] = useState<string | null>(null)
-  // Which Settings tab to open on (e.g. the bar's mode icon → 'personalize', calendar CTA → 'calendar').
-  const [settingsInitialTab, setSettingsInitialTab] = useState<'personalize' | 'calendar' | 'ai' | undefined>(
-    initialSettingsTabFromLaunch
-  )
-  // Shown as a banner inside Settings — set when we redirect the user there for a specific reason
-  // (e.g. no provider configured) so the redirect explains itself instead of looking broken.
-  const [settingsNotice, setSettingsNotice] = useState<string | undefined>(undefined)
   // Wave 2 failover chip: hide locally the instant the user dismisses, keyed by the event's `at`.
   // refresh() after dismissFailoverNotice can race a concurrent focus poll and re-show the same hop
   // from a stale getSettings snapshot — comparing `at` keeps the chip down until a NEW failover lands.
@@ -632,25 +574,9 @@ export function App(): JSX.Element {
   // duplicate index row and a duplicate brain ingest / wiki card. This claim is taken synchronously,
   // before the first await, and released only when a save definitively gives up so a retry stays possible.
   const claimedSavesRef = useRef<Set<string>>(new Set())
-  const [savedPath, setSavedPath] = useState<string | null>(null)
   // M2-0430: content-free Stop -> transcript saved / first recap token / recap done spans, audited by main.
   const writeupSpansRef = useRef(new WriteupSpans((report) => void window.toto.reportWriteupSpan(report)))
   const recapBaselineRef = useRef<{ runId: string; text: string } | null>(null)
-  // Refresh the entity-casing name list once on mount, and again whenever a meeting finishes saving —
-  // the best available "the brain might have new names" signal (extraction itself runs async in main
-  // after the save, so this is a best-effort refresh, not a guarantee the very latest meeting is in it).
-  useEffect(() => {
-    let alive = true
-    void window.toto
-      .brainEntityNames()
-      .then((r) => {
-        if (alive) setEntityNames(r.names)
-      })
-      .catch(() => {})
-    return () => {
-      alive = false
-    }
-  }, [savedPath])
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saveAttempts, setSaveAttempts] = useState(0)
   // The auto-save ladder is spent — no further attempt is scheduled. saveAttempts alone can't say this:
@@ -855,15 +781,12 @@ export function App(): JSX.Element {
     setRightEdgeDockDismissed(false)
     dispatchAutoHide({ type: 'pointer-enter' })
   }, [])
-  const navigationGuardRef = useRef<NavigationGuardService | null>(null)
-  if (!navigationGuardRef.current) navigationGuardRef.current = new NavigationGuardService()
-  const navigationGuard = navigationGuardRef.current
-  navigationGuard.setReveal(() => {
-    revealOverlay()
-    setCollapsed(false)
-  })
-  const [navigationGuardRequest, setNavigationGuardRequest] = useState<NavigationGuardRequest | null>(() => navigationGuard.current())
-  useEffect(() => navigationGuard.subscribe(() => setNavigationGuardRequest(navigationGuard.current())), [navigationGuard])
+  useEffect(() => {
+    setNavigationReveal(() => {
+      revealOverlay()
+      setCollapsed(false)
+    })
+  }, [setNavigationReveal, revealOverlay])
   const onOverlayPointerEnter = useCallback(() => {
     if (rightEdgePresentation) {
       const nextLock = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'renderer-pointer-enter' })
@@ -916,49 +839,6 @@ export function App(): JSX.Element {
   // Idempotence latch for endReview() re-entry — see endReview's own comment for the exact hazard it
   // guards against. Cleared at the start of every fresh session (startListen) so a later stop can fire.
   const stoppingRef = useRef(false)
-  // Mirrors Review's own recapDirty (an in-progress, unsaved recap edit) so the global Escape handler can
-  // gate on the same check Review's in-panel exits (Resume / New meeting / Recent meetings) already use —
-  // Escape used to be the only exit that could silently discard an edit, since its sole guard was
-  // activeElement being an INPUT/TEXTAREA, which misses focus sitting on the Save/Cancel buttons or
-  // elsewhere. Kept in sync by Review via the onReviewDirtyChange callback below.
-  const reviewDirtyRef = useRef<{ dirty: boolean; save?: () => Promise<boolean> }>({ dirty: false })
-  const onReviewDirtyChange = useCallback((dirty: boolean, save?: () => Promise<boolean>): void => {
-    reviewDirtyRef.current = { dirty, save }
-  }, [])
-  // Mirrors `view` for guardReviewNav below via a ref (rather than closing over the `view` state value
-  // directly), so the helper keeps a STABLE identity across renders — required because several callers
-  // (onBarHistory, onBarSettings, and the memoized Bar callbacks) are themselves memoized with empty/near-
-  // empty dep arrays for React.memo(Bar); a guard fn whose identity changed on every view switch would
-  // force those deps to include it and defeat that memoization (see "Stabilized Bar callbacks" below).
-  const viewRef = useRef(view)
-  viewRef.current = view
-
-  // Shared guard for every view-switch path that could otherwise silently discard an in-progress, unsaved
-  // recap edit on Review (see reviewDirtyRef above and its two existing call sites: onBarMinimize,
-  // onTogglePanel). Only fires the confirm when Review is actually open AND dirty; every other view-switch
-  // (History, Settings, and the hotkey dispatch below) used to skip this check entirely and navigate away
-  // ungated, silently dropping the edit.
-  const confirmReviewNavigation = useCallback(async (): Promise<boolean> => {
-    if (viewRef.current !== 'review' || !reviewDirtyRef.current.dirty) return true
-    const choice = await navigationGuard.request({
-      title: 'Save recap changes?',
-      message: 'You have unsaved edits in this recap. Save them before leaving, discard them, or cancel to keep editing.',
-      saveLabel: 'Save',
-      discardLabel: 'Discard',
-      cancelLabel: 'Cancel',
-      destructive: true
-    })
-    if (choice === 'cancel') return false
-    if (choice === 'save') return reviewDirtyRef.current.save ? reviewDirtyRef.current.save() : false
-    return true
-  }, [navigationGuard])
-  const guardReviewNav = useCallback((proceed: () => void): void => {
-    void (async () => {
-      if (!(await confirmReviewNavigation())) return
-      proceed()
-    })()
-  }, [confirmReviewNavigation])
-  const approveReviewNav = useCallback(async (): Promise<boolean> => confirmReviewNavigation(), [confirmReviewNavigation])
   // Set by endReview() while waiting for listen.stop()'s asynchronous terminal drain before the recap is
   // generated. Healthy queued windows commit first; a no-progress expiry instead leaves an incomplete
   // warning on listen.error — terminal does not itself guarantee a complete transcript. See maybeFireRecap.
@@ -1381,15 +1261,6 @@ export function App(): JSX.Element {
     suggest.run({ mode: 'answer', prompt: buildNoDecisionPrompt(listen.text()) + GUARD_LINE })
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fire on new transcript lines only
   }, [listen.lines])
-
-  const openSettings = useCallback((tab?: 'personalize' | 'calendar' | 'ai', notice?: string): void => {
-    setSettingsInitialTab(tab) // generic open (no tab) → default tab; callers can target a specific one
-    setSettingsNotice(notice)
-    setMinimized(false)
-    void window.toto.minimize(false)
-    setView('settings')
-    setCollapsed(false)
-  }, [])
 
   // Single readiness gate for EVERY user-initiated request entry point (not just submit). When the
   // active provider has no key / no CLI connection, route the user to Settings instead of firing an
@@ -2809,16 +2680,6 @@ export function App(): JSX.Element {
       setCollapsed(false)
     })
   }, [guardReviewNav])
-  // Shared by onBarSettings and the tray/hotkey 'settings' branch below — always resets to the default
-  // tab and clears any leftover programmatic notice, so opening Settings via either entry point never
-  // leaks a stale requireProvider redirect (wrong tab + stale "why am I here" banner) from a previous
-  // openSettings(tab, notice) call.
-  const openSettingsDefault = useCallback((): void => {
-    setSettingsInitialTab(undefined)
-    setSettingsNotice(undefined)
-    setView((v) => (v === 'settings' ? 'answer' : 'settings'))
-    setCollapsed(false)
-  }, [])
   const lastSettingsToggleRef = useRef(0)
   const onBarSettings = useCallback(() => {
     const now = Date.now()
@@ -3487,10 +3348,7 @@ export function App(): JSX.Element {
         }}
         onBack={() => setView('answer')}
         onConnectCalendar={() => {
-          setSettingsInitialTab('calendar')
-          setSettingsNotice(undefined)
-          setView('settings')
-          setCollapsed(false)
+          openSettings('calendar')
         }}
         onNewChat={reset}
         // savedPath is the FULL path returned by the save IPC; RecallView's rows compare against the bare
@@ -3726,11 +3584,6 @@ export function App(): JSX.Element {
                   ? reviewBody
                   : answerBody
 
-  // A license-gate verdict is only ever pending when the gate itself is on (default off) — and
-  // settings.licenseGateEnabled is already known the moment `settings` resolves, so this adds no extra
-  // wait for the common case of an unlicensed build.
-  const licenseGatePending = licenseEnforced && licenseGate == null
-
   // FITO-185-I: exclusive first-run must paint Act 1 (or at least the poster bed) WITHOUT waiting for
   // settings/auth IPC. Missing settings ≡ onboarding not done (same fail-closed as main's
   // onboardingExclusiveLive). Live settings replace provisional defaults when getSettings lands.
@@ -3740,7 +3593,7 @@ export function App(): JSX.Element {
   // License gate — outranks SSO and onboarding below: a revoked or unlicensed device must learn that
   // before it ever burns an SSO sign-in round trip (or sits behind onboarding). Only ever renders when
   // the gate is on (settings.licenseGateEnabled) AND the verdict says this device isn't allowed to run.
-  if (DEMO == null && licenseEnforced && licenseGate && !licenseGate.allowed) {
+  if (DEMO == null && settings && licenseEnforced && licenseGate && !licenseGate.allowed) {
     return (
       <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
         <Panel>
