@@ -36,12 +36,14 @@ import {
   type ProvenantField,
   type IndexUnavailableCause
 } from '@shared/brain'
-import { resolveMeetingsFolder, readSavedFile, writeSaved, decodeSavedResult, envelopeKeyKind } from '../transcripts'
+import { resolveMeetingsFolder, readSavedFile, writeSaved, writeSavedSync, decodeSavedResult, envelopeKeyKind } from '../transcripts'
 import { classifyAll, storageAt } from '../infra/storage/meetings-storage'
 import {
   activeIngestLedgerPath,
   classifyIngestLedgerBytes,
   ingestLedgerMode,
+  type IngestLedgerLoad,
+  userDataIngestLedgerPath,
   writeIngestLedger
 } from '../infra/storage/ingest-ledger'
 import { mainLog, auditLog } from '../logger'
@@ -505,11 +507,7 @@ export const INDEX_AUTO_SNAPSHOT_CAP = 5
  *  failure is not: retrying safeStorage on a timer risks Keychain prompts, and the bytes have not changed. */
 export const INDEX_IO_RETRY_MS = 30_000
 
-type IndexLoad =
-  | { kind: 'ready'; index: BrainIndex }
-  | { kind: 'absent' }
-  | { kind: 'corrupt' } // decoded, but not a valid index for this build
-  | { kind: 'unavailable'; cause: IndexUnavailableCause; detail?: string } // detail: log-only (errno / decode reason)
+type IndexLoad = IngestLedgerLoad
 type ResolvedIndex = Exclude<IndexLoad, { kind: 'corrupt' }>
 
 // Stable machine-readable refusal codes. Keep each string defined once here; both read-only and rebuild
@@ -556,7 +554,7 @@ export class BrainIndexRebuildError extends Error {
 
 /** Pure classification of index.json bytes. No filesystem writes. */
 export function classifyIndexBytes(buf: Buffer): IndexLoad {
-  return classifyIngestLedgerBytes(buf) as IndexLoad
+  return classifyIngestLedgerBytes(buf)
 }
 
 // Stat-keyed memo, one entry per `.brain` dir's index.json. NOT session state: an entry is used only
@@ -624,8 +622,35 @@ function setAsideCorruptIndex(p: string): ResolvedIndex {
   return { kind: 'absent' }
 }
 
+function seedSwitchIndexFromLegacy(s: Settings, activePath: string): ResolvedIndex {
+  const legacyPath = join(brainDir(s), INDEX_REL)
+  let legacyBytes: Buffer
+  try {
+    legacyBytes = readFileSync(legacyPath)
+  } catch (e) {
+    if (errnoCode(e) === 'ENOENT') return { kind: 'absent' }
+    return { kind: 'unavailable', cause: 'io', detail: errnoCode(e) }
+  }
+  const legacyLoad = classifyIndexBytes(legacyBytes)
+  if (legacyLoad.kind === 'ready') {
+    try {
+      mkdirSync(dirname(activePath), { recursive: true })
+      writeSavedSync(activePath, JSON.stringify(legacyLoad.index, null, 2), !!s.encryptTranscripts)
+      const st = statSync(activePath)
+      const load: ResolvedIndex = { kind: 'ready', index: legacyLoad.index }
+      indexCache.set(activePath, { mtimeMs: st.mtimeMs, size: st.size, at: Date.now(), load })
+      return load
+    } catch (e) {
+      return { kind: 'unavailable', cause: 'io', detail: errnoCode(e) }
+    }
+  }
+  if (legacyLoad.kind === 'absent') return { kind: 'absent' }
+  if (legacyLoad.kind === 'corrupt') return { kind: 'unavailable', cause: 'corrupt-kept' }
+  return legacyLoad
+}
+
 function loadIndex(s: Settings): ResolvedIndex {
-  const p = activeIngestLedgerPath(join(brainDir(s), INDEX_REL))
+  const p = activeIngestLedgerPath(s, join(brainDir(s), INDEX_REL))
   const hit = indexCache.get(p)
 
   let mtimeMs: number
@@ -637,6 +662,11 @@ function loadIndex(s: Settings): ResolvedIndex {
   } catch (e) {
     if (errnoCode(e) === 'ENOENT') {
       indexCache.delete(p)
+      if (ingestLedgerMode() === 'switch') {
+        const seeded = seedSwitchIndexFromLegacy(s, p)
+        if (seeded.kind === 'unavailable') return recordUnavailable(p, hit, -1, -1, seeded)
+        return seeded
+      }
       return { kind: 'absent' }
     }
     return recordUnavailable(p, hit, -1, -1, { kind: 'unavailable', cause: 'io', detail: errnoCode(e) })
@@ -671,7 +701,7 @@ function loadIndex(s: Settings): ResolvedIndex {
 
 async function loadIndexAsync(s: Settings): Promise<ResolvedIndex> {
   const legacyPath = join(brainDir(s), INDEX_REL)
-  const p = activeIngestLedgerPath(legacyPath)
+  const p = activeIngestLedgerPath(s, legacyPath)
   if (ingestLedgerMode() === 'switch') return loadIndex(s)
   const hit = indexCache.get(p)
   const gateway = storageAt(resolveMeetingsFolder(s))
@@ -778,7 +808,7 @@ export async function writeIndex(s: Settings, v: BrainIndex): Promise<void> {
   if (blocked) throw new BrainIndexUnavailableError(blocked)
   const legacyPath = join(brainDir(s), INDEX_REL)
   await writeIngestLedger(s, legacyPath, v)
-  indexCache.delete(activeIngestLedgerPath(legacyPath))
+  indexCache.delete(activeIngestLedgerPath(s, legacyPath))
 }
 
 // ── Typed accessors ──────────────────────────────────────────────────────────
@@ -992,14 +1022,14 @@ export function listPreservedBrainIndexes(settings: Settings): PreservedBrainInd
 
 export function currentBrainIndexIsReadable(settings: Settings): boolean {
   try {
-    return classifyIndexBytes(readFileSync(join(brainDir(settings), INDEX_REL))).kind === 'ready'
+    return classifyIndexBytes(readFileSync(activeIngestLedgerPath(settings, join(brainDir(settings), INDEX_REL)))).kind === 'ready'
   } catch {
     return false
   }
 }
 
 function preserveCurrentIndexBeforeRestore(settings: Settings): void {
-  const current = join(brainDir(settings), INDEX_REL)
+  const current = activeIngestLedgerPath(settings, join(brainDir(settings), INDEX_REL))
   if (!existsSync(current)) return
   const preserveDir = preservedIndexDir(settings)
   const preservePath = join(preserveDir, `index.before-restore-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomBytes(3).toString('hex')}.json`)
@@ -1029,8 +1059,8 @@ export function restorePreservedBrainIndex(
   if (classifyIndexBytes(sourceBytes).kind !== 'ready') return { ok: false, error: 'not-restorable' }
   if (!opts.allowReplaceReadable && currentBrainIndexIsReadable(settings)) return { ok: false, error: 'current-readable' }
 
-  const root = brainDir(settings)
-  const target = join(root, INDEX_REL)
+  const target = activeIngestLedgerPath(settings, join(brainDir(settings), INDEX_REL))
+  const root = dirname(target)
   const tmp = join(root, `index.restore-${randomBytes(6).toString('hex')}.tmp`)
   try {
     mkdirSync(root, { recursive: true })
@@ -1082,8 +1112,7 @@ function assertRebuildKeyContextAllowsPreserve(indexBytes: Buffer): void {
 }
 
 function preserveUnreadableIndexBeforeRebuild(settings: Settings): void {
-  const root = brainDir(settings)
-  const indexPath = join(root, INDEX_REL)
+  const indexPath = activeIngestLedgerPath(settings, join(brainDir(settings), INDEX_REL))
   let indexBytes: Buffer
   try {
     indexBytes = readFileSync(indexPath)
@@ -1151,12 +1180,15 @@ export function purgeBrain(settings: Settings, opts: { mode: 'rebuild'; preserve
   if (opts.mode === 'rebuild') preserveUnreadableIndexBeforeRebuild(settings)
   const journalPath = join(root, 'corrections.json')
   const preserveTo = `${root}.corrections-preserve.json`
+  const userDataLedger = userDataIngestLedgerPath(settings)
   let preserve = false
   try {
     preserve = opts.mode === 'rebuild' && opts.preserveCorrections && existsSync(journalPath)
     if (preserve) cpSync(journalPath, preserveTo)
     const preservedDir = preservedIndexDir(settings)
     if (existsSync(root)) rmSync(root, { recursive: true, force: true })
+    rmSync(userDataLedger, { force: true })
+    indexCache.delete(userDataLedger)
     if (opts.mode === 'erase') rmSync(preservedDir, { recursive: true, force: true })
     resetMatchKeyCacheForTests() // Receipt Mode must not match against a wiped corpus
     if (preserve) {
@@ -1168,7 +1200,7 @@ export function purgeBrain(settings: Settings, opts: { mode: 'rebuild'; preserve
       const remaining = readdirSync(root)
       return { ok: remaining.length === 1 && remaining[0] === 'corrections.json' }
     }
-    return { ok: !existsSync(root) && (opts.mode !== 'erase' || !existsSync(preservedDir)) }
+    return { ok: !existsSync(root) && !existsSync(userDataLedger) && (opts.mode !== 'erase' || !existsSync(preservedDir)) }
   } catch (e) {
     console.warn('[brain] purgeBrain: could not remove', root, e)
     // MI-2.5 Fix F: a mid-wipe failure (OneDrive/AV holding a file open partway through the recursive

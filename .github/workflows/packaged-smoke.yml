@@ -92,6 +92,8 @@ jobs:
           hdiutil attach -nobrowse -readonly -mountpoint "$volume" release/Metis-*.dmg > /dev/null
           ditto "$volume/Metis.app" "$RUNNER_TEMP/smoke/Metis.app"
           hdiutil detach "$volume" > /dev/null
+      - name: Record M2-0205 ledger rollout packaged evidence status
+        run: node scripts/qa/m2-0205-ledger-rollout-report.mjs release/Metis-*.dmg smoke-report/m2-0205-ledger-rollout.json
       # continue-on-error so a genuine sidecar-boot-reaper defect can never hide the RV/HIST rows below by
       # aborting the job early (INTEGRATION-SMOKE-RED-2026-09-28); it is still surfaced by the gate step
       # after the artifact upload, via steps.sidecar-reaper.outcome (unaffected by continue-on-error).
@@ -303,6 +305,8 @@ jobs:
           $setup = Get-Item release/Metis-Setup-*.exe
           $install = Start-Process -FilePath $setup.FullName -ArgumentList '/S', "/D=$env:RUNNER_TEMP\smoke" -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw "Setup exited with $($install.ExitCode)." }
+      - name: Record M2-0205 ledger rollout packaged evidence status
+        run: node scripts/qa/m2-0205-ledger-rollout-report.mjs release/Metis-Setup-*.exe smoke-report/m2-0205-ledger-rollout.json
       # continue-on-error so a genuine sidecar-boot-reaper defect can never hide the RV/HIST rows below by
       # aborting the job early (INTEGRATION-SMOKE-RED-2026-09-28); it is still surfaced by the gate step
       # after the artifact upload, via steps.sidecar-reaper.outcome (unaffected by continue-on-error).
