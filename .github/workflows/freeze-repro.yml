@@ -7,6 +7,14 @@ name: M2-0008 freeze repro
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: Bundle mode to run. hosted-live is main-guarded by both jobs.
+        required: true
+        type: choice
+        default: dry-run
+        options:
+          - dry-run
+          - hosted-live
       release_repo:
         description: Repository that publishes the 1.9.6 artifacts and SHA256SUMS.
         required: true
@@ -64,16 +72,24 @@ jobs:
           hdiutil attach -nobrowse -readonly -mountpoint "$volume" "$artifact" > /dev/null
           ditto "$volume/Metis.app" "$RUNNER_TEMP/m2-0008-app/Metis.app"
           hdiutil detach "$volume" > /dev/null
+      - name: Install hosted-live dependencies
+        if: inputs.mode == 'hosted-live'
+        run: npm ci
       - name: Run the M2-0008 hosted bundle check
         env:
           ARTIFACT_SHA256: ${{ inputs.macos_artifact_sha256 }}
         run: |
+          if [[ "${{ inputs.mode }}" == hosted-live ]]; then
+            mode_args=(--hosted-live --qa-host-label macos-latest)
+          else
+            mode_args=(--dry-run)
+          fi
           bash scripts/qa/freeze-repro/run-matrix.sh \
             --artifact "$ARTIFACT_SHA256" \
             --build-run-id "$GITHUB_RUN_ID" \
             --app "$RUNNER_TEMP/m2-0008-app/Metis.app" \
             --out out/m2-0008-freeze-repro \
-            --dry-run
+            "${mode_args[@]}"
           node scripts/evidence/check.mjs --ticket M2-0008 --bundle out/m2-0008-freeze-repro
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: ${{ !cancelled() }}
@@ -117,16 +133,24 @@ jobs:
           if ($p.ExitCode -ne 0) { throw "installer exited $($p.ExitCode)" }
           PS1
           powershell -NoProfile -File "$RUNNER_TEMP/m2-0008-install.ps1" -Artifact "$artifact_win" -InstallDir "$install_dir"
+      - name: Install hosted-live dependencies
+        if: inputs.mode == 'hosted-live'
+        run: npm ci
       - name: Run the M2-0008 hosted bundle check
         env:
           ARTIFACT_SHA256: ${{ inputs.windows_artifact_sha256 }}
         run: |
+          if [[ "${{ inputs.mode }}" == hosted-live ]]; then
+            mode_args=(--hosted-live --qa-host-label windows-latest)
+          else
+            mode_args=(--dry-run)
+          fi
           bash scripts/qa/freeze-repro/run-matrix.sh \
             --artifact "$ARTIFACT_SHA256" \
             --build-run-id "$GITHUB_RUN_ID" \
             --app "$RUNNER_TEMP/m2-0008-install/Metis.exe" \
             --out out/m2-0008-freeze-repro \
-            --dry-run
+            "${mode_args[@]}"
           node scripts/evidence/check.mjs --ticket M2-0008 --bundle out/m2-0008-freeze-repro
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: ${{ !cancelled() }}

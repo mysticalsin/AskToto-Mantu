@@ -608,12 +608,20 @@ function m2_0008HostedLiveProblems(root, { environment, fuse, fifo, blockers, ro
       !(Number.isInteger(host.memory_bytes) && host.memory_bytes > 0)) {
     problems.push('environment.json: hosted-live must record host os_version, arch and memory_bytes')
   }
+  const hostedWindows = environment.host?.label === 'windows-latest'
+  const automaticRows = hostedWindows
+    ? ['row-1-history-open', 'row-4-second-instance-reopen']
+    : M2_0008_AUTOMATIC_ROWS
+  const blockedRows = hostedWindows
+    ? ['row-2-brain-status-blocked-brain', ...M2_0008_BLOCKED_ROWS]
+    : M2_0008_BLOCKED_ROWS
+
   if (fuse?.node_options_fuse === 'NOT_EXERCISED') problems.push('node-options-fuse.json: hosted-live must exercise the fuse probe')
-  if (Array.isArray(fifo?.fixtures) && !fifo.fixtures.every((fixture) => typeof fixture?.opened_by_1_9_6 === 'boolean')) {
+  if (!hostedWindows && Array.isArray(fifo?.fixtures) && !fifo.fixtures.every((fixture) => typeof fixture?.opened_by_1_9_6 === 'boolean')) {
     problems.push('fifo-fixtures.json: hosted-live must record opened_by_1_9_6 as true or false for every FIFO fixture')
   }
 
-  for (const row of M2_0008_AUTOMATIC_ROWS) {
+  for (const row of automaticRows) {
     const result = rows.find((entry) => entry.row === row && Object.hasOwn(entry, 'operator_result'))
     if (!result || result.automatic !== true || !M2_0008_EXERCISED.has(result.operator_result)) {
       problems.push(`matrix.jsonl: ${row} must be an automatic row that was exercised`)
@@ -628,18 +636,32 @@ function m2_0008HostedLiveProblems(root, { environment, fuse, fifo, blockers, ro
         problems.push(`matrix.jsonl: ${row} operator_result must be the one derived from its observation`)
       }
     }
-    const sample = rows.find((entry) => entry.row === row && Object.hasOwn(entry, 'sampled'))
-    if (!sample || sample.sampled !== true || sample.main_sample !== true || !(sample.renderer_samples >= 1) ||
-        sample.renderers_selected_by !== '--type=renderer') {
-      problems.push(`matrix.jsonl: ${row} must have main and role-selected renderer samples`)
-    } else if (!existsSync(join(root, 'samples', `${row}-main.sample.txt`))) {
-      problems.push(`samples/${row}-main.sample.txt: missing`)
+    if (hostedWindows) {
+      const sample = rows.find((entry) => entry.row === row && Object.hasOwn(entry, 'sampled'))
+      if (!sample || sample.sampled !== false || !/sampling unavailable/.test(sample.reason ?? '')) {
+        problems.push(`matrix.jsonl: ${row} must record why Windows hosted-live did not sample processes`)
+      }
+    } else {
+      const sample = rows.find((entry) => entry.row === row && Object.hasOwn(entry, 'sampled'))
+      if (!sample || sample.sampled !== true || sample.main_sample !== true || !(sample.renderer_samples >= 1) ||
+          sample.renderers_selected_by !== '--type=renderer') {
+        problems.push(`matrix.jsonl: ${row} must have main and role-selected renderer samples`)
+      } else if (!existsSync(join(root, 'samples', `${row}-main.sample.txt`))) {
+        problems.push(`samples/${row}-main.sample.txt: missing`)
+      }
+    }
+  }
+
+  if (hostedWindows) {
+    const macActivate = rows.find((entry) => entry.row === 'row-3-macos-activate' && Object.hasOwn(entry, 'operator_result'))
+    if (macActivate?.status !== 'not-applicable' || !/macOS-only/.test(macActivate.reason ?? '')) {
+      problems.push('matrix.jsonl: row-3-macos-activate must be not-applicable on windows-latest with an exact reason')
     }
   }
 
   const blocked = Array.isArray(blockers?.blockers) ? blockers.blockers : []
   const blockerListing = (key, id) => blocked.some((blocker) => Array.isArray(blocker[key]) && blocker[key].includes(id))
-  for (const row of M2_0008_BLOCKED_ROWS) {
+  for (const row of blockedRows) {
     const entry = rows.find((candidate) => candidate.row === row && Object.hasOwn(candidate, 'operator_result'))
     if (entry?.status !== 'BLOCKED_EXTERNAL' || !nonEmptyString(entry.unblock_step) || !blockerListing('rows', row)) {
       problems.push(`matrix.jsonl: ${row} must be BLOCKED_EXTERNAL with an unblock_step listed in external-blockers.json`)
@@ -652,13 +674,17 @@ function m2_0008HostedLiveProblems(root, { environment, fuse, fifo, blockers, ro
     }
   }
   const signal = interrupts.find((candidate) => candidate.interrupt === 'process-signal')
-  if (!signal || signal.automatic !== true || !M2_0008_EXERCISED.has(signal.result) || typeof signal.exited_within_10s !== 'boolean') {
+  if (hostedWindows) {
+    if (signal?.status !== 'not-applicable' || !/Windows hosted-live/.test(signal.reason ?? '')) {
+      problems.push('interrupt-results.jsonl: process-signal must be not-applicable on windows-latest with an exact reason')
+    }
+  } else if (!signal || signal.automatic !== true || !M2_0008_EXERCISED.has(signal.result) || typeof signal.exited_within_10s !== 'boolean') {
     problems.push('interrupt-results.jsonl: process-signal must run automatically and record exited_within_10s')
   }
 
   const summary = readJsonFile(join(root, 'hosted-live-summary.json'), problems, 'hosted-live-summary.json')
   if (summary) {
-    const symptomSeen = rows.some((entry) => M2_0008_AUTOMATIC_ROWS.includes(entry.row) && entry.operator_result === 'observed')
+    const symptomSeen = rows.some((entry) => automaticRows.includes(entry.row) && entry.operator_result === 'observed')
     if (summary.mode !== 'hosted-live' || typeof summary.reproduced !== 'boolean' || !nonEmptyString(summary.conclusion)) {
       problems.push('hosted-live-summary.json: must record mode, reproduced and conclusion')
     } else if (summary.reproduced !== symptomSeen) {

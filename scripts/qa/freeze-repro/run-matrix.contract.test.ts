@@ -112,6 +112,19 @@ function hostedStubs(root: string, { sampleFails = false } = {}) {
   return { app, bin, sampleLog, openLog }
 }
 
+function hostedWindowsStubs(root: string) {
+  const bin = join(root, 'bin')
+  mkdirSync(bin, { recursive: true })
+  const app = join(root, 'Metis.exe')
+  const launchLog = join(root, 'metis-launches.txt')
+  const forbiddenLog = join(root, 'forbidden-tools.txt')
+  writeExecutable(app, `#!/usr/bin/env bash\nfor arg in "$@"; do [ "$arg" = "-e" ] && exit 0; done\nprintf '%s\\n' "$*" >> '${bashPath(launchLog)}'\nexec sleep 120\n`)
+  for (const tool of ['pgrep', 'sample']) {
+    writeExecutable(join(bin, tool), `#!/usr/bin/env bash\nprintf '%s\\n' '${tool}' >> '${bashPath(forbiddenLog)}'\nexit 42\n`)
+  }
+  return { app, bin, launchLog, forbiddenLog }
+}
+
 function hostedEnv(root: string, stubs: ReturnType<typeof hostedStubs>, port: number, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     ...process.env,
@@ -127,6 +140,20 @@ function hostedEnv(root: string, stubs: ReturnType<typeof hostedStubs>, port: nu
     // ahead of the caller's PATH.
     M2_0008_CONTRACT_PGREP_BIN: bashPath(join(stubs.bin, 'pgrep')),
     M2_0008_CONTRACT_PS_BIN: bashPath(join(stubs.bin, 'ps')),
+    M2_0008_CONTRACT_CDP_PORT: String(port),
+    ...extra
+  }
+}
+
+function hostedWindowsEnv(stubs: ReturnType<typeof hostedWindowsStubs>, port: number, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    PATH: [stubs.bin, dirname(process.execPath), process.env.PATH ?? ''].join(delimiter),
+    GITHUB_RUN_ID: '789',
+    M2_0008_CONTRACT_ALLOW_NON_DARWIN: '1',
+    M2_0008_CONTRACT_LAUNCH_SETTLE_SECONDS: '1',
+    M2_0008_CONTRACT_POLL_WAIT_SECONDS: '1',
+    M2_0008_CONTRACT_REOPEN_SETTLE_SECONDS: '1',
     M2_0008_CONTRACT_CDP_PORT: String(port),
     ...extra
   }
@@ -584,6 +611,72 @@ describe('M2-0462 hosted-live mode', () => {
       rmSync(root, { recursive: true, force: true })
     }
   })
+})
+
+describe('M2-0463 Windows hosted-live mode', () => {
+  it('launches Metis.exe with a synthetic profile, drives row 1 and row 4, and never uses pgrep or sample', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'm2-0463-windows-hosted-'))
+    const out = join(root, 'bundle')
+    const devtools = await fakeDevTools()
+    try {
+      const stubs = hostedWindowsStubs(root)
+      const result = await runClosedStdin(
+        [...hostedArgs(out, stubs.app), '--qa-host-label', 'windows-latest'],
+        hostedWindowsEnv(stubs, devtools.port)
+      )
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)
+      expect(existsSync(stubs.forbiddenLog)).toBe(false)
+
+      const launches = readFileSync(stubs.launchLog, 'utf8').split(/\r?\n/).filter(Boolean)
+      expect(launches).toHaveLength(2)
+      expect(launches.every((line) => line.includes('--user-data-dir='))).toBe(true)
+      expect(launches.every((line) => line.includes('--remote-debugging-port='))).toBe(true)
+
+      const matrix = jsonl(join(out, 'matrix.jsonl'))
+      expect(matrix.find((entry) => entry.row === 'row-1-history-open' && 'operator_result' in entry))
+        .toMatchObject({ automatic: true, operator_result: 'pass', drive_method: expect.stringContaining('window.toto.recallList()') })
+      expect(matrix.find((entry) => entry.row === 'row-4-second-instance-reopen' && 'operator_result' in entry))
+        .toMatchObject({ automatic: true, operator_result: 'pass', drive_method: expect.stringContaining('re-launch Metis.exe') })
+      expect(matrix.find((entry) => entry.row === 'row-3-macos-activate'))
+        .toMatchObject({ operator_result: 'not-applicable', reason: expect.stringContaining('macOS-only') })
+      expect(matrix.find((entry) => entry.row === 'row-2-brain-status-blocked-brain'))
+        .toMatchObject({ status: 'BLOCKED_EXTERNAL', unblock_step: expect.stringContaining('FIFO') })
+      for (const row of ['row-5-dataless-brain-idle', 'row-9-network-off-flapping']) {
+        expect(matrix.find((entry) => entry.row === row), row).toMatchObject({ status: 'BLOCKED_EXTERNAL' })
+      }
+      for (const row of ['row-1-history-open', 'row-4-second-instance-reopen']) {
+        expect(matrix.find((entry) => entry.row === row && 'sampled' in entry), row)
+          .toMatchObject({ sampled: false, reason: expect.stringContaining('sampling unavailable') })
+      }
+
+      const summary = JSON.parse(readFileSync(join(out, 'hosted-live-summary.json'), 'utf8'))
+      expect(summary).toMatchObject({
+        mode: 'hosted-live',
+        automatic_rows: ['row-1-history-open', 'row-4-second-instance-reopen'],
+        not_applicable_rows: ['row-3-macos-activate'],
+        reproduced: false
+      })
+      expect(summary.blocked_external_rows).toContain('row-2-brain-status-blocked-brain')
+
+      const environment = JSON.parse(readFileSync(join(out, 'environment.json'), 'utf8'))
+      expect(environment).toMatchObject({ mode: 'hosted-live', host: { label: 'windows-latest' } })
+      const evidenceImport = JSON.parse(readFileSync(join(out, 'M2-0008.evidence-import.json'), 'utf8'))
+      expect(evidenceImport).toMatchObject({
+        mode: 'hosted-live',
+        result: 'PASS',
+        environment: { kind: 'hosted-runner', host: 'windows-latest' },
+        ci_run_id: 789,
+        sample_failures: 0,
+        matrix_result_failures: 0
+      })
+      expect(evidenceImport.blocked_external_rows).toContain('row-2-brain-status-blocked-brain')
+      expect(m2_0008BundleProblems(out)).toEqual([])
+    } finally {
+      await devtools.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 120_000)
 })
 
 describe('M2-0462 cdp-observe derivation', () => {
