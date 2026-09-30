@@ -46,3 +46,35 @@ describe('M2-0008 freeze repro workflow', () => {
     expect(workflow).not.toContain('secrets.')
   })
 })
+
+describe('M2-0194 QA candidate mode of the freeze repro workflow', () => {
+  it('takes a qa-candidate run id and downloads that run\'s provenance and installer with read-only permissions', () => {
+    expect(workflow).toMatch(/\n {6}candidate_run:\n {8}description: >-\n[\s\S]*?required: false/)
+    expect(workflow).toMatch(/permissions:\n {2}contents: read\n {2}actions: read\n/)
+    expect(workflow).toContain('gh run download "$CANDIDATE_RUN" --repo "$GITHUB_REPOSITORY" --name candidate-provenance')
+    expect(workflow).toContain('--name candidate-mac')
+    expect(workflow).toContain('--name candidate-win')
+    expect(workflow.match(/node scripts\/qa\/provenance\.mjs verify /g)).toHaveLength(2)
+    expect(workflow).not.toContain('secrets.')
+  })
+
+  it('checks the candidate hash before anything is installed, and fails the job on a mismatch', () => {
+    const mac = workflow.slice(workflow.indexOf('  macos:'), workflow.indexOf('  windows:'))
+    const win = workflow.slice(workflow.indexOf('  windows:'))
+    expect(mac.indexOf('provenance.mjs verify')).toBeLessThan(mac.indexOf('shasum -a 256 -c -'))
+    expect(mac.indexOf('shasum -a 256 -c -')).toBeLessThan(mac.indexOf('hdiutil attach'))
+    expect(win.indexOf('provenance.mjs verify')).toBeLessThan(win.indexOf('sha256sum -c -'))
+    expect(win.indexOf('sha256sum -c -')).toBeLessThan(win.indexOf('Start-Process'))
+    expect(win).toContain("-name 'Metis-Setup-*.exe'")
+  })
+
+  it('emits and checks the M2-0194 bundle only in candidate mode and keeps the main-only guard', () => {
+    expect(workflow.match(/--candidate-run "\$CANDIDATE_RUN"/g)).toHaveLength(2)
+    expect(workflow.match(/node scripts\/evidence\/check\.mjs --ticket M2-0194 --bundle out\/m2-0194-freeze-repro/g)).toHaveLength(2)
+    expect(workflow).toContain('name: m2-0194-freeze-repro-macos')
+    expect(workflow).toContain('name: m2-0194-freeze-repro-windows')
+    expect(workflow.match(/if: inputs\.candidate_run == ''/g)).toHaveLength(2)
+    expect(workflow.match(/if: inputs\.candidate_run != ''/g)).toHaveLength(4)
+    for (const use of workflow.match(/uses: [^\n]+/g) ?? []) expect(use).toMatch(/@[0-9a-f]{40} #/)
+  })
+})
