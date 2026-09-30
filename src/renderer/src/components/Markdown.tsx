@@ -1,5 +1,6 @@
 import { isValidElement, cloneElement, useEffect, useRef, type ReactElement } from 'react'
 import { Streamdown } from 'streamdown'
+import 'streamdown/styles.css'
 import { CodeBlock, warmHighlighter } from './CodeBlock'
 import { safeHref } from '@shared/safe-url'
 

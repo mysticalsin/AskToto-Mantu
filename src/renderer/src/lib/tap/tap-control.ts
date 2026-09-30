@@ -10,10 +10,8 @@
  * mic-in-use indicator either way; Settings copy owns the "mic stays on while armed" disclosure.
  */
 import { useEffect, useRef } from 'react'
-import { extractFeatures } from './features'
-import { makeTrainGate, runGates, type RejectReason } from './gates'
-import { classify, type TapProfile } from './classify'
-import { TAP_WORKLET_SRC } from './tap-worklet-src'
+import type { RejectReason } from './gates'
+import type { TapProfile } from './classify'
 
 /** A keydown this close to an acoustic onset means "the user is typing", not "the user tapped". */
 const KEYDOWN_VETO_MS = 80
@@ -30,8 +28,11 @@ export interface TapCandidatePayload {
 }
 
 let cachedUrl: string | null = null
-function tapWorkletUrl(): string {
-  if (!cachedUrl) cachedUrl = URL.createObjectURL(new Blob([TAP_WORKLET_SRC], { type: 'text/javascript' }))
+async function tapWorkletUrl(): Promise<string> {
+  if (!cachedUrl) {
+    const { TAP_WORKLET_SRC } = await import('./tap-worklet-src')
+    cachedUrl = URL.createObjectURL(new Blob([TAP_WORKLET_SRC], { type: 'text/javascript' }))
+  }
   return cachedUrl
 }
 
@@ -70,7 +71,7 @@ export async function startTapCapture(opts: {
   }
   const ctx = new AudioContext()
   try {
-    await ctx.audioWorklet.addModule(tapWorkletUrl())
+    await ctx.audioWorklet.addModule(await tapWorkletUrl())
   } catch (e) {
     stream.getTracks().forEach((t) => t.stop())
     void ctx.close()
@@ -131,6 +132,12 @@ export async function startTapControl(opts: {
   sensitivity: number
   onEvent: (e: TapEvent) => void
 }): Promise<TapControlSession> {
+  // FFT / classifier / worklet stay out of the overlay boot chunk; tap is off by default.
+  const [{ makeTrainGate, runGates }, { extractFeatures }, { classify }] = await Promise.all([
+    import('./gates'),
+    import('./features'),
+    import('./classify')
+  ])
   const train = makeTrainGate()
   let lastKeydown = -Infinity
   const onKey = (): void => {
