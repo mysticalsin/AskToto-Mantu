@@ -12,10 +12,10 @@ import { randomUUID } from 'node:crypto'
  * consecutive launches of the shipped 1.5.4 Windows build died exactly that way and left nothing behind
  * except six Crashpad minidumps the app never looked at.
  *
- * Nothing inside a dying process can report on it, so the record has to be written BEFORE the risky work
- * and removed AFTER it: a file that is still there on the next launch IS the report. That one fact
- * drives both halves of the recovery — the durable trace (what died, when, and which minidump belongs to
- * it) and the routing decision (skip the boot step that did the killing).
+ * Nothing inside a dying process can report on it, so the record has to be written before early boot
+ * work and removed after IPC/window readiness: a file that is still there on the next launch IS the
+ * report. That one fact drives both halves of the recovery — the durable trace (what died, when, and
+ * which minidump belongs to it) and the routing decision (skip the boot step that did the killing).
  *
  * Deliberately dependency-free (node built-ins only): this runs before anything else can be trusted, and
  * must never be the reason a boot fails.
@@ -26,13 +26,12 @@ const SENTINEL = 'boot-incomplete.json'
 /** One minidump found in the Crashpad database, with the mtime that decides which one is newest. */
 type CrashDump = { name: string; mtimeMs: number }
 
-/** The run currently in progress, as recorded on disk. `consecutive` counts the early deaths that
- *  immediately preceded it, so a repeat offender is distinguishable from a one-off. */
+/** The run currently in progress, as recorded on disk. `consecutive` counts the deaths for this marker
+ *  that immediately preceded it, so a repeat offender is distinguishable from a one-off. */
 export type BootRecord = { startedAt: string; pid: number; version: string; consecutive: number }
 
-/** A previous run that started and never reached the end of boot, plus the Crashpad minidump that most
- *  likely belongs to it — the app already writes those (crashReporter.start in index.ts) and has never
- *  once read one. */
+/** A previous run that started and never reached this marker's clear point, plus the Crashpad minidump
+ *  that most likely belongs to it. */
 export type EarlyDeath = BootRecord & { crashDump: string | null }
 
 function sentinelPath(userData: string): string {
@@ -85,8 +84,8 @@ export function newestCrashDump(userData: string): string | null {
 }
 
 /**
- * Open a boot watch: claim the sentinel for this run and report the previous run if it never closed one.
- * Call once, as early in the ready sequence as the userData path is settled.
+ * Open the early boot watch: claim the sentinel for this run and report the previous run if it never
+ * closed one. Call once, as early in the ready sequence as the userData path is settled.
  */
 export function beginBootWatch(
   userData: string,
@@ -120,8 +119,8 @@ export function beginBootWatch(
   return previous ? { ...previous, consecutive, crashDump: newestCrashDump(userData) } : null
 }
 
-/** Close the boot watch: this run got past the step that kills. Idempotent — also called on a graceful
- *  quit, so quitting inside the watch window is never mistaken for a death. */
+/** Close the early boot watch: this run got past IPC/window readiness. Idempotent — also called on a
+ *  graceful quit, so quitting inside the watch window is never mistaken for a death. */
 export function endBootWatch(userData: string): void {
   try {
     rmSync(sentinelPath(userData), { force: true })

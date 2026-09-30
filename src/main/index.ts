@@ -652,6 +652,7 @@ import {
 import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
+import { beginBrainResumeWatch, endBrainResumeWatch, describeBrainResumeDeath, readBrainResumeDeath } from './brain-resume-watch'
 import { buildTrayInStages, createSingleFlight, formatTrayAccelerator, loadPresizedTrayIcon, scheduleTrayAfterFirstPaint, trayIconPaths, yieldToEventLoop } from './boot-tray'
 import { isBootFirstShowDeferred, scheduleCurrentFirstShow, withBootFirstShowDeferred } from './lifecycle/first-show'
 import { createBootWork } from './lifecycle/boot-work'
@@ -4529,6 +4530,7 @@ const { forceQuit: forceQuitMétis, exitAndRelaunch } = installExitPaths(app, {
   closeBootWatch: () => {
     setBootPowerSaveBlock(false)
     endBootWatch(app.getPath('userData'))
+    endBrainResumeWatch(app.getPath('userData'))
   },
   warn: (...args) => mainLog.warn(...args)
 })
@@ -4798,9 +4800,8 @@ function rebuildTrayMenu(): void {
 // power-save blocker for the duration of a meeting keeps the process at normal priority regardless of
 // window visibility. Module-level id: only one meeting can be active at a time.
 let recordingPowerSaveBlockerId: number | null = null
-// FITO-185-B: hold prevent-app-suspension from beginBootWatch until endBootWatch so the 15s MQA-175
-// clear (and exclusive hidden-window first paint) is not deferred by App Nap while boot-incomplete.json
-// stays stuck. Separate id from the meeting blocker — boot ends long before a meeting starts.
+// Hold prevent-app-suspension until the delayed brain resume window closes, so App Nap cannot defer the
+// marker clear. Separate id from the meeting blocker — boot ends long before a meeting starts.
 let bootPowerSaveBlockerId: number | null = null
 function setBootPowerSaveBlock(on: boolean): void {
   if (on) {
@@ -9305,11 +9306,11 @@ if (!app.requestSingleInstanceLock()) {
   // this process ever runs again: no crash-*.log, no audit line, no window, no dialog. Only the NEXT
   // launch can report it, and only if this one left a mark before doing the dangerous work.
   const earlyDeath = beginBootWatch(app.getPath('userData'), app.getVersion())
-  // FITO-185-B: keep the process unsuspended until the 15s endBootWatch / will-quit clear runs.
+  // Keep the process unsuspended until the delayed brain-resume marker clears.
   setBootPowerSaveBlock(true)
   // FITO-185-G-SHOW / G-TIMER: idempotent sentinel clear. Purpose of boot-incomplete is early death
-  // BEFORE ready; once createWindow+registerIpc completed we are past the kill zone. Brain work stays
-  // on the 15s timer (power-save still held until then). Multiple callers race safely.
+  // before IPC/window readiness; once createWindow+registerIpc completed we are past that kill zone.
+  // The 15s brain-resume step has its own marker. Multiple callers race safely.
   let bootWatchClosed = false
   const clearBootWatchOnce = (reason: string): void => {
     if (bootWatchClosed) return
@@ -9671,8 +9672,8 @@ if (!app.requestSingleInstanceLock()) {
   revealController.markBootComplete()
   // FITO-185-G-SHOW: createWindow completed → past kill zone; clear sentinel (brain stays on 15s).
   clearBootWatchOnce('createWindow')
-  // FITO-185-G-TIMER: also setImmediate + unlock-screen so App Nap / locked-screen cannot leave
-  // boot-incomplete stuck when the 15s timer is deferred.
+  // Also setImmediate + unlock-screen so App Nap / locked-screen cannot leave the early boot sentinel
+  // stuck after IPC/window readiness.
   setImmediate(() => clearBootWatchOnce('setImmediate'))
   try {
     powerMonitor.on('unlock-screen', () => clearBootWatchOnce('unlock-screen'))
@@ -9729,20 +9730,32 @@ if (!app.requestSingleInstanceLock()) {
   // depending on cloud-sync events; provider-free runs only repair already-saved local extractions.
   const BRAIN_RECONCILE_MS = 60 * 1000
   setTimeout(() => {
-    // MQA-175: this timer is the boot step an unreadable `.brain` kills — it is the first thing after
-    // launch that decrypts index.json. When the previous run died before boot completed, this launch
-    // deliberately does not walk back into it: the brain resume and its reconcile interval are skipped
-    // for this session only, so the user reaches a working app instead of a sixth silent vanish. The
-    // watch is cleared in `finally` either way (FITO-185-E), so a throw from any brain step cannot leave
-    // boot-incomplete.json stuck for the next launch.
+    // This timer is the first launch step that can decrypt the brain index. It owns a separate resume
+    // marker because the early boot sentinel is already cleared once IPC/window readiness is established.
+    // A stale resume marker safe-starts this session only; the marker is cleared in finally when JS keeps
+    // control, but a native death inside the resume leaves it for the next launch.
+    const brainResumeDeath = readBrainResumeDeath(app.getPath('userData'))
     try {
-      if (earlyDeath) {
-        mainLog.warn(`[boot] safe start — skipping the brain backfill/reconcile resume: ${describeEarlyDeath(earlyDeath)}`)
-        auditLog('app.error.early_death', { consecutive: earlyDeath.consecutive, recoveryStatus: 'safe_start' })
+      if (earlyDeath || brainResumeDeath) {
+        const death = brainResumeDeath ? describeBrainResumeDeath(brainResumeDeath) : describeEarlyDeath(earlyDeath!)
+        mainLog.warn(`[boot] safe start — skipping the brain backfill/reconcile resume: ${death}`)
+        auditLog('app.error.early_death', {
+          consecutive: brainResumeDeath?.consecutive ?? earlyDeath!.consecutive,
+          recoveryStatus: 'safe_start'
+        })
       } else {
         // Per-step isolation: one failing resume must not skip the remaining boot work or the finally clear.
         try {
-          bootWork.run('resumeBackfillIfPending', () => resumeBackfillIfPending().catch((e) => mainLog.warn('[boot] resumeBackfillIfPending failed:', e)))
+          bootWork.run('resumeBackfillIfPending', async () => {
+            beginBrainResumeWatch(app.getPath('userData'), app.getVersion())
+            try {
+              await resumeBackfillIfPending()
+            } catch (e) {
+              mainLog.warn('[boot] resumeBackfillIfPending failed:', e)
+            } finally {
+              endBrainResumeWatch(app.getPath('userData'))
+            }
+          })
         } catch (e) {
           mainLog.warn('[boot] resumeBackfillIfPending failed:', e)
         }
@@ -9781,10 +9794,10 @@ if (!app.requestSingleInstanceLock()) {
         }
       }
     } finally {
-      // Power-save stays until here so the 15s brain step is not App-Napped; sentinel may already
-      // have been cleared earlier (G-SHOW/G-TIMER) — clearBootWatchOnce is idempotent.
+      // Power-save stays until the 15s brain work has been admitted; the early boot sentinel may already
+      // have been cleared earlier, while the brain-resume marker is owned by the resume job above.
       setBootPowerSaveBlock(false)
-      clearBootWatchOnce('mqa-175')
+      if (brainResumeDeath) endBrainResumeWatch(app.getPath('userData'))
     }
   }, 15_000)
 
@@ -9847,8 +9860,9 @@ app.on('will-quit', () => {
   try {
     setBootPowerSaveBlock(false)
     endBootWatch(app.getPath('userData'))
+    endBrainResumeWatch(app.getPath('userData'))
   } catch (e) {
-    mainLog.warn('[will-quit] endBootWatch failed', e)
+    mainLog.warn('[will-quit] boot watch cleanup failed', e)
   }
   // will-quit can fire BEFORE the app ever finished becoming ready — a quit requested during the async
   // startup sequence, an automation/Playwright app.close(), or an early abort. Calling globalShortcut in
