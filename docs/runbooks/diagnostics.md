@@ -17,7 +17,8 @@ in [`README.md`](../../README.md)):
 ## 2. The support bundle
 
 Settings → About → Diagnostics offers **Export diagnostics bundle**. It asks where to save, then copies the logs, the crash records, the boot
-sentinel and a `MANIFEST.txt` listing exactly which files made it. A locked or missing file is skipped and the manifest shows
+sentinel, the newest ten stall bundles from `diagnostics/stalls/` (thread stacks and symbol names only; the raw `sample`
+captures beside them are never copied) and a `MANIFEST.txt` listing exactly which files made it. A locked or missing file is skipped and the manifest shows
 that. The export is gated like every privileged channel (sender check and sign-in). A user sends the folder; nobody asks
 for a transcript.
 
@@ -29,6 +30,19 @@ history was left out). The top-level counts cover everything read. `scope` repea
 its first `app.started` onward, with per-UTC-day buckets and the soak counts: stalls over 5 s, unclean shutdowns, orphaned
 sidecars reaped (by reason, and after an unclean exit), reveal no-ops (`already-visible` or `failed`) and brain-index
 quarantines.
+
+The owner bugs close only on that summary (M2-0199). `scripts/qa/owner-soak/closure.mjs` applies the pre-registered
+`closure-rule-1` to it: an owner-channel version (1.9.7, a 1.9.7-hotfix.N or a later release), at least ten active weekday
+UTC days, and zero stalls over 5 s, zero orphans reaped after an unclean exit and zero reveal no-ops. Any of those three
+reopens the freeze (B1: stalls, reveal no-ops) or the heaviness (B2: orphans) with a `release/1.9.x` hotfix-ticket stub and
+the stall bundles from the exported folder attached. Until a CLOSE record is accepted in writing, B1 reads "fixed for the
+DERIVED cause" and B2 "fixed for the CONFIRMED orphan mechanism"; `check.mjs --ticket M2-0199` refuses "fixed" otherwise.
+Both run only in the `owner-closure.yml` workflow:
+
+```bash verify-dry
+node scripts/qa/owner-soak/closure.mjs --summary scripts/qa/owner-soak/fixtures/closure-summary.json --out out/owner-closure
+node scripts/evidence/check.mjs --ticket M2-0199 --bundle out/owner-closure
+```
 
 ## 3. Prove the audit trail is intact
 

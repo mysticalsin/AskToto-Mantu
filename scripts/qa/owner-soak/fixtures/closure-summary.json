@@ -1,0 +1,45 @@
+{
+  "kind": "metis-diagnostics-summary",
+  "schema": 2,
+  "generatedAt": "2026-10-17T12:00:00.000Z",
+  "app": { "version": "1.9.7", "platform": "darwin", "arch": "arm64" },
+  "window": { "from": "2026-10-05T08:00:00.000Z", "to": "2026-10-16T18:00:00.000Z", "records": 280, "generations": 2, "truncated": false },
+  "boots": { "started": 14, "prevShutdown": { "clean": 13, "unclean": 0, "unknown": 1 } },
+  "stalls": { "under2s": 6, "2to5s": 1, "5to30s": 0, "30sPlus": 0 },
+  "crashes": { "fatal": 0, "nonFatal": 0, "unclassified": 0 },
+  "reveals": { "created": 14, "shown": 40, "already-visible": 0, "failed": 0 },
+  "events": { "app.started": 14, "app.stall": 7, "reveal": 54 },
+  "scope": {
+    "version": "1.9.7",
+    "from": "2026-10-05T08:00:00.000Z",
+    "to": "2026-10-16T18:00:00.000Z",
+    "records": 280,
+    "boots": { "started": 14, "prevShutdown": { "clean": 13, "unclean": 0, "unknown": 1 } },
+    "stalls": { "under2s": 6, "2to5s": 1, "5to30s": 0, "30sPlus": 0 },
+    "crashes": { "fatal": 0, "nonFatal": 0, "unclassified": 0 },
+    "reveals": { "created": 14, "shown": 40, "already-visible": 0, "failed": 0 },
+    "events": { "app.started": 14, "app.stall": 7, "reveal": 54 },
+    "daySpan": 12,
+    "idleDays": 1,
+    "days": {
+      "2026-10-05": { "records": 24, "boots": 1, "uncleanShutdowns": 0, "stallsOver5s": 0, "orphanReaps": 0, "revealNoOps": 0, "brainIndexQuarantined": 0 },
+      "2026-10-06": { "records": 24, "boots": 1, "uncleanShutdowns": 0, "stallsOver5s": 0, "orphanReaps": 0, "revealNoOps": 0, "brainIndexQuarantined": 0 },
+      "2026-10-07": { "records": 24, "boots": 1, "uncleanShutdowns": 0, "stallsOver5s": 0, "orphanReaps": 0, "revealNoOps": 0, "brainIndexQuarantined": 0 },
+      "2026-10-08": { "records": 24, "boots": 2, "uncleanShutdowns": 0, "stallsOver5s": 0, "orphanReaps": 0, "revealNoOps": 0, "brainIndexQuarantined": 0 },
+      "2026-10-09": { "records": 24, "boots": 1, "uncleanShutdowns": 0, "stallsOver5s": 0, "orphanReaps": 0, "revealNoOps": 0, "brainIndexQuarantined": 0 },
+      "2026-10-10": { "records": 20, "boots": 1, "uncleanShutdowns": 0, "stallsOver5s": 0, "orphanReaps": 0, "revealNoOps": 0, "brainIndexQuarantined": 0 },
+      "2026-10-12": { "records": 24, "boots": 1, "uncleanShutdowns": 0, "stallsOver5s": 0, "orphanReaps": 0, "revealNoOps": 0, "brainIndexQuarantined": 0 },
+      "2026-10-13": { "records": 24, "boots": 2, "uncleanShutdowns": 0, "stallsOver5s": 0, "orphanReaps": 0, "revealNoOps": 0, "brainIndexQuarantined": 0 },
+      "2026-10-14": { "records": 24, "boots": 1, "uncleanShutdowns": 0, "stallsOver5s": 0, "orphanReaps": 0, "revealNoOps": 0, "brainIndexQuarantined": 0 },
+      "2026-10-15": { "records": 24, "boots": 1, "uncleanShutdowns": 0, "stallsOver5s": 0, "orphanReaps": 0, "revealNoOps": 0, "brainIndexQuarantined": 0 },
+      "2026-10-16": { "records": 20, "boots": 2, "uncleanShutdowns": 0, "stallsOver5s": 0, "orphanReaps": 0, "revealNoOps": 0, "brainIndexQuarantined": 0 }
+    },
+    "soak": {
+      "stallsOver5s": 0,
+      "uncleanShutdowns": 0,
+      "orphanReaps": { "registry": 0, "legacy-orphan": 0, "afterUncleanExit": 0 },
+      "revealNoOps": 0,
+      "brainIndexQuarantined": 0
+    }
+  }
+}

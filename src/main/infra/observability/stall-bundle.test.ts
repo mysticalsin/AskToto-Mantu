@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { bundleDir, captureDir, collectStallCaptures, projectSample, MAX_BUNDLES, MAX_BUNDLE_BYTES } from './stall-bundle'
+import { bundleDir, captureDir, collectStallCaptures, exportableStallBundles, projectSample, MAX_BUNDLES, MAX_BUNDLE_BYTES } from './stall-bundle'
 
 const POSIX = process.platform !== 'win32'
 const BOOT_ID = '0123abcd-1111-2222-3333-444455556666'
@@ -255,5 +255,43 @@ describe('collectStallCaptures', () => {
       rmSync(bare, { recursive: true, force: true })
       rmSync(fileParent, { recursive: true, force: true })
     }
+  })
+})
+
+describe('exportableStallBundles', () => {
+  let userData: string
+  beforeEach(() => {
+    userData = mkdtempSync(join(tmpdir(), 'metis-stall-export-'))
+  })
+  afterEach(() => {
+    rmSync(userData, { recursive: true, force: true })
+  })
+
+  it('lists a bundle the collector wrote, and never a raw capture or a stray file', async () => {
+    mkdirSync(captureDir(userData), { recursive: true })
+    writeFileSync(join(captureDir(userData), `${BOOT_ID}.1790000000000.23456.sample`), REPORT)
+    await collectStallCaptures(userData)
+    writeFileSync(join(captureDir(userData), `${BOOT_ID}.1790000000001.7000.sample`), REPORT)
+    writeFileSync(join(bundleDir(userData), 'notes.txt'), 'not a bundle')
+
+    expect(await exportableStallBundles(userData)).toEqual([`${BOOT_ID}.1790000000000.23456.txt`])
+  })
+
+  it('returns at most MAX_BUNDLES names, newest capture first', async () => {
+    mkdirSync(bundleDir(userData), { recursive: true })
+    for (let i = 0; i < 12; i++) {
+      writeFileSync(join(bundleDir(userData), `${BOOT_ID}.${1_790_000_000_000 + i}.6000.txt`), 'bundle', { mode: 0o600 })
+    }
+    const names = await exportableStallBundles(userData)
+    expect(names).toHaveLength(MAX_BUNDLES)
+    expect(names[0]).toBe(`${BOOT_ID}.1790000000011.6000.txt`)
+    expect(names[names.length - 1]).toBe(`${BOOT_ID}.1790000000002.6000.txt`)
+  })
+
+  it('resolves to [] when there is no bundle directory, or when userData is a file', async () => {
+    expect(await exportableStallBundles(userData)).toEqual([])
+    const file = join(userData, 'not-a-dir')
+    writeFileSync(file, 'x')
+    expect(await exportableStallBundles(file)).toEqual([])
   })
 })

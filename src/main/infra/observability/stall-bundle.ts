@@ -135,17 +135,30 @@ async function bundleCapture(userData: string, path: string, capture: Capture): 
   }
 }
 
-async function pruneBundles(userData: string): Promise<void> {
-  const names = await readdir(bundleDir(userData)).catch((): string[] => [])
-  const newestFirst = names
+/** Well-formed bundle names only, newest capture first; anything else in the directory is ignored. */
+function bundlesNewestFirst(names: readonly string[]): string[] {
+  return names
     .flatMap((name) => {
       const m = BUNDLE_NAME.exec(name)
       return m ? [{ name, capturedAtMs: Number(m[1]) }] : []
     })
     .sort((a, b) => b.capturedAtMs - a.capturedAtMs)
-  for (const { name } of newestFirst.slice(MAX_BUNDLES)) {
+    .map(({ name }) => name)
+}
+
+async function pruneBundles(userData: string): Promise<void> {
+  const names = await readdir(bundleDir(userData)).catch((): string[] => [])
+  for (const name of bundlesNewestFirst(names).slice(MAX_BUNDLES)) {
     await rm(join(bundleDir(userData), name), { force: true }).catch(() => undefined)
   }
+}
+
+/** The bundle file names Export diagnostics bundle copies out of bundleDir() (M2-0199): the newest
+ *  MAX_BUNDLES well-formed bundles. raw/ is never listed, because a raw capture holds install and image
+ *  paths. Never rejects; a missing directory yields []. */
+export async function exportableStallBundles(userData: string): Promise<string[]> {
+  const names = await readdir(bundleDir(userData)).catch((): string[] => [])
+  return bundlesNewestFirst(names).slice(0, MAX_BUNDLES)
 }
 
 /** Turn every pending capture into a bundle or a failure, delete it either way, then keep the newest

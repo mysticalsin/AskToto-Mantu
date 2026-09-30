@@ -662,6 +662,7 @@ import { crashDetail, type CrashKind } from './infra/observability/crash-taxonom
 import { createRevealTrace } from './infra/observability/reveal-trace'
 import { createHistoryTracer } from './infra/observability/history-trace'
 import { copyDiagnosticsSummary } from './infra/observability/diagnostics-summary'
+import { bundleDir as stallBundleDir, exportableStallBundles } from './infra/observability/stall-bundle'
 import { createReloadBudget } from './lifecycle/reload-budget'
 import { formatRenderLoopDiagnostics, showRenderLoopHaltedDialog } from './lifecycle/render-loop-halted-dialog'
 import { installProxyAwareFetch } from './net/install-proxy'
@@ -705,7 +706,6 @@ import {
 } from './whisper-import'
 import { buildPolishPrompt, parsePolishResponse, polishBatches, type PolishLine } from './polish'
 import { detectLanguage as detectTextLanguage } from '@shared/lang-id'
-import type { TranscriptLine } from '@shared/ipc'
 import { pickAudioFile, consumePickedAudio, offerAudioPaths } from './import-audio'
 import {
   ImportJobManager,
@@ -860,7 +860,7 @@ import {
   scheduleRebuild,
   purgeGraphArtifacts
 } from './graphify'
-import { SaveMeetingSchema, SaveNoteSchema, stripProvisionalLines } from '@shared/ipc'
+import { SaveMeetingSchema, SaveNoteSchema, stripProvisionalLines, type TranscriptLine } from '@shared/ipc'
 import {
   PROVIDERS,
   PROVIDER_IDS,
@@ -6513,12 +6513,11 @@ function registerIpc(): void {
   // Recall delete: GDPR right-to-erasure for a saved meeting — removes the file + its index row.
   // Confirmed with a native, unmissable modal BEFORE deleting (sync — blocks until the user answers) so a
   // single click is unambiguous: no "did that register?" two-click pattern that's easy to misread as broken.
-  // Support diagnosability: nothing in this app uploads anywhere by design (crashReporter
-  // uploadToServer:false, zero telemetry), so the ONLY way the log trail reaches support is the user
-  // exporting it. Copies logs/ (main + audit + rotated audit generations), crash-*.log dumps, and the
-  // boot sentinel into a user-chosen folder, plus a MANIFEST naming the app version and every file
-  // copied. Deliberately NEVER copies meetings, .brain/, wiki/, or settings.json — diagnostics must not
-  // become an accidental data-exfiltration path for content.
+  // Support diagnosability: nothing in this app uploads anywhere by design (crashReporter uploadToServer:false,
+  // zero telemetry), so the ONLY way the log trail reaches support is the user exporting it. Copies logs/ (main +
+  // audit + rotated audit generations), crash-*.log dumps, the boot sentinel and the redacted M2-0192 stall
+  // bundles (never their raw captures) into a user-chosen folder, plus a MANIFEST naming the app version and every
+  // file copied. Deliberately NEVER copies meetings, .brain/, wiki/, or settings.json — not a content exfil path.
   ipcMain.handle(IPC.diagnosticsExport, async (e): Promise<DiagnosticsExportResult> => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
@@ -6554,6 +6553,7 @@ function registerIpc(): void {
       }
       const sentinel = join(userData, 'boot-incomplete.json')
       if (existsSync(sentinel)) copy(sentinel, 'boot-incomplete.json')
+      for (const f of await exportableStallBundles(userData)) copy(join(stallBundleDir(userData), f), f)
       const manifest = [
         `Métis diagnostics bundle`,
         `exported: ${new Date().toISOString()}`,

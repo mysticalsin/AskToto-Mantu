@@ -12,6 +12,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
 import { EXCERPT_FILES, STALL_BUNDLE_NAMES_FILE, STALL_BUNDLE_NAME, excerptOf } from '../qa/freeze-repro/attribution-bundle.mjs'
+import { DEFAULT_OUT_DIR as M2_0199_DEFAULT_BUNDLE, closureDirProblems } from '../qa/owner-soak/closure.mjs'
 import { EVIDENCE_LEVELS, latestByLevel, readRecordStore, recordsInPrBody, recordProblems, sha256Hex } from './record.mjs'
 
 export const TICKET_STATUSES = Object.freeze([
@@ -899,7 +900,7 @@ async function main() {
   const hasPrEvent = typeof values['pr-event'] === 'string'
   const hasTicket = typeof values.ticket === 'string'
   if ([hasLedger, hasPrEvent, hasTicket].filter(Boolean).length !== 1) {
-    return usageExit('usage: check.mjs --ledger <path>  |  check.mjs --pr-event <path>  |  check.mjs --ticket M2-0008|M2-0194 [--bundle <path>]')
+    return usageExit('usage: check.mjs --ledger <path>  |  check.mjs --pr-event <path>  |  check.mjs --ticket M2-0008|M2-0194|M2-0199 [--bundle <path>]')
   }
 
   if (hasLedger) {
@@ -926,9 +927,12 @@ async function main() {
   if (hasTicket) {
     const checker = {
       'M2-0008': { check: m2_0008BundleProblems, defaultBundle: M2_0008_DEFAULT_BUNDLE },
-      'M2-0194': { check: m2_0194BundleProblems, defaultBundle: M2_0194_DEFAULT_BUNDLE }
+      'M2-0194': { check: m2_0194BundleProblems, defaultBundle: M2_0194_DEFAULT_BUNDLE },
+      // The owner-bug closure directory closure.mjs writes: refuses 'fixed' for B1 or B2 without the
+      // MEASURED CLOSE record and the owner's ACCEPTED record.
+      'M2-0199': { check: closureDirProblems, defaultBundle: M2_0199_DEFAULT_BUNDLE }
     }[values.ticket]
-    if (!checker) return usageExit('only --ticket M2-0008 and --ticket M2-0194 are supported in this public-repo checker')
+    if (!checker) return usageExit('only --ticket M2-0008, M2-0194 and M2-0199 are supported in this public-repo checker')
     const bundle = values.bundle ?? checker.defaultBundle
     const problems = checker.check(resolve(bundle))
     if (problems.length > 0) {

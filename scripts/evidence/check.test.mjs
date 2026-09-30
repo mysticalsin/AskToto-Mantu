@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { RECORD_SCHEMA } from './record.mjs'
+import { writeClosure } from '../qa/owner-soak/closure.mjs'
 import { TEST_WORKFLOW, ledgerProblems, loadProgram, outputProblems, prProblems, githubApi, m2_0008BundleProblems, m2_0194BundleProblems } from './check.mjs'
 
 const SHA1_A = '1'.repeat(40)
@@ -619,6 +620,30 @@ test('C30 CLI --ticket M2-0194 validates a bundle and rejects an incomplete one;
   rmSync(join(root, 'stall-bundle-names.json'))
   assert.throws(() => execFileSync(process.execPath, [cliPath, '--ticket', 'M2-0194', '--bundle', root], { stdio: 'pipe' }), (error) => error.status === 1)
   assert.throws(() => execFileSync(process.execPath, [cliPath, '--ticket', 'M2-0001', '--bundle', root], { stdio: 'pipe' }), (error) => error.status === 2)
+})
+
+test('C31 CLI --ticket M2-0199 accepts the interim wording and refuses fixed without the owner ACCEPTED record', () => {
+  const root = join(mkdtempSync(join(tmpdir(), 'm2-0199-closure-cli-')), 'closure')
+  const fixture = fileURLToPath(new URL('../qa/owner-soak/fixtures/closure-summary.json', import.meta.url))
+  assert.equal(writeClosure({ summary: JSON.parse(readFileSync(fixture, 'utf8')), out: root }).verdict, 'CLOSE')
+  const cliPath = fileURLToPath(new URL('./check.mjs', import.meta.url))
+  const output = execFileSync(process.execPath, [cliPath, '--ticket', 'M2-0199', '--bundle', root], { encoding: 'utf8' })
+  assert.match(output, /M2-0199 bundle: OK/)
+
+  writeFileSync(join(root, 'bug-status.md'), 'b1_status: fixed\nb2_status: fixed for the CONFIRMED orphan mechanism\n')
+  assert.throws(
+    () => execFileSync(process.execPath, [cliPath, '--ticket', 'M2-0199', '--bundle', root], { stdio: 'pipe' }),
+    (error) => error.status === 1 && /B1 may not say 'fixed'/.test(String(error.stderr))
+  )
+  const recordSha = createHash('sha256').update(readFileSync(join(root, 'closure-record.md'))).digest('hex')
+  writeFileSync(join(root, 'owner-acceptance.md'), [
+    'evidence_level: ACCEPTED',
+    'ticket: M2-0199',
+    'decision: accept',
+    'accepted_on: 2026-10-19',
+    `closure_record_sha256: ${recordSha}`
+  ].join('\n') + '\n')
+  assert.match(execFileSync(process.execPath, [cliPath, '--ticket', 'M2-0199', '--bundle', root], { encoding: 'utf8' }), /M2-0199 bundle: OK/)
 })
 
 const HOSTED_AUTOMATIC_ROWS = ['row-1-history-open', 'row-2-brain-status-blocked-brain', 'row-3-macos-activate', 'row-4-second-instance-reopen']
