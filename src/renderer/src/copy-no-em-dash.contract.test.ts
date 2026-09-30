@@ -17,6 +17,7 @@ const FILES = [
   'src/renderer/src/components/Settings.tsx',
   'src/renderer/src/components/Review.tsx',
   'src/renderer/src/components/RecallView.tsx',
+  'src/renderer/src/components/history/hydration.ts',
   'src/renderer/src/components/QuickActions.tsx',
   'src/renderer/src/components/Answer.tsx',
   'src/renderer/src/components/Copilot.tsx',
