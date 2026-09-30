@@ -112,13 +112,24 @@ function hostedStubs(root: string, { sampleFails = false } = {}) {
   return { app, bin, sampleLog, openLog }
 }
 
-function hostedWindowsStubs(root: string) {
+function hostedWindowsStubs(root: string, { secondLaunchFails = false } = {}) {
   const bin = join(root, 'bin')
   mkdirSync(bin, { recursive: true })
   const app = join(root, 'Metis.exe')
   const launchLog = join(root, 'metis-launches.txt')
+  const launchCount = join(root, 'metis-launch-count.txt')
   const forbiddenLog = join(root, 'forbidden-tools.txt')
-  writeExecutable(app, `#!/usr/bin/env bash\nfor arg in "$@"; do [ "$arg" = "-e" ] && exit 0; done\nprintf '%s\\n' "$*" >> '${bashPath(launchLog)}'\nexec sleep 120\n`)
+  writeExecutable(app, [
+    '#!/usr/bin/env bash',
+    'for arg in "$@"; do [ "$arg" = "-e" ] && exit 0; done',
+    `count=0; [ ! -f '${bashPath(launchCount)}' ] || count=$(cat '${bashPath(launchCount)}')`,
+    'count=$((count + 1))',
+    `printf '%s\\n' "$count" > '${bashPath(launchCount)}'`,
+    `printf '%s\\n' "$*" >> '${bashPath(launchLog)}'`,
+    secondLaunchFails ? '[ "$count" -ne 2 ] || exit 17' : ':',
+    'exec sleep 120',
+    ''
+  ].join('\n'))
   for (const tool of ['pgrep', 'sample']) {
     writeExecutable(join(bin, tool), `#!/usr/bin/env bash\nprintf '%s\\n' '${tool}' >> '${bashPath(forbiddenLog)}'\nexit 42\n`)
   }
@@ -672,6 +683,36 @@ describe('M2-0463 Windows hosted-live mode', () => {
       })
       expect(evidenceImport.blocked_external_rows).toContain('row-2-brain-status-blocked-brain')
       expect(m2_0008BundleProblems(out)).toEqual([])
+    } finally {
+      await devtools.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  it('records row 4 as not-exercised when the second Metis.exe launch exits non-zero', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'm2-0463-windows-hosted-'))
+    const out = join(root, 'bundle')
+    const devtools = await fakeDevTools()
+    try {
+      const stubs = hostedWindowsStubs(root, { secondLaunchFails: true })
+      const result = await runClosedStdin(
+        [...hostedArgs(out, stubs.app), '--qa-host-label', 'windows-latest'],
+        hostedWindowsEnv(stubs, devtools.port)
+      )
+
+      expect(result.status).toBe(2)
+      expect(existsSync(stubs.forbiddenLog)).toBe(false)
+
+      const matrix = jsonl(join(out, 'matrix.jsonl'))
+      expect(matrix.find((entry) => entry.row === 'row-4-second-instance-reopen' && 'operator_result' in entry))
+        .toMatchObject({ automatic: true, operator_result: 'not-exercised', precondition: 'relaunch-failed' })
+
+      const evidenceImport = JSON.parse(readFileSync(join(out, 'M2-0008.evidence-import.json'), 'utf8'))
+      expect(evidenceImport).toMatchObject({
+        mode: 'hosted-live',
+        result: 'FAIL',
+        matrix_result_failures: 1
+      })
     } finally {
       await devtools.close()
       rmSync(root, { recursive: true, force: true })

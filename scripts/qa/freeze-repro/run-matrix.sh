@@ -209,6 +209,15 @@ record_not_applicable_interrupt() {
   append_jsonl "$OUT/interrupt-results.jsonl" "{\"interrupt\":$(json_string "$1"),\"result\":\"not-applicable\",\"status\":\"not-applicable\",\"reason\":$(json_string "$2")}"
 }
 
+app_profile_path() {
+  local profile=$1
+  if [[ "${HOSTED_WINDOWS:-0}" == 1 ]] && command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$profile"
+    return
+  fi
+  printf '%s' "$profile"
+}
+
 sample_pid() {
   local pid=$1
   local label=$2
@@ -232,8 +241,10 @@ sample_pid() {
 
 launch_app() {
   local profile=$1
+  local app_profile
   write_launch_plan "$profile"
-  ASKTOTO_USERDATA="$profile" "$EXE" "--user-data-dir=$profile" "--remote-debugging-port=$CDP_PORT" >/dev/null 2>"$OUT/app.stderr.txt" &
+  app_profile=$(app_profile_path "$profile")
+  ASKTOTO_USERDATA="$app_profile" "$EXE" "--user-data-dir=$app_profile" "--remote-debugging-port=$CDP_PORT" >/dev/null 2>"$OUT/app.stderr.txt" &
   APP_PID=$!
   sleep "$LAUNCH_SETTLE_SECONDS"
 }
@@ -294,8 +305,10 @@ sample_app() {
 
 write_launch_plan() {
   local profile=$1
+  local app_profile
+  app_profile=$(app_profile_path "$profile")
   cat > "$OUT/launch-plan.json" <<EOF_LAUNCH
-{"asktoto_userdata_env":true,"electron_user_data_dir_switch":true,"profile":$(json_string "$(redact_string "$profile")"),"argv":["--user-data-dir=<profile>","--remote-debugging-port=$CDP_PORT"]}
+{"asktoto_userdata_env":true,"electron_user_data_dir_switch":true,"profile":$(json_string "$(redact_string "$app_profile")"),"argv":["--user-data-dir=<profile>","--remote-debugging-port=$CDP_PORT"]}
 EOF_LAUNCH
 }
 
@@ -484,6 +497,8 @@ write_environment() {
 host_os_version() {
   if command -v sw_vers >/dev/null 2>&1; then
     sw_vers -productVersion 2>/dev/null || uname -r
+  elif [[ "${HOSTED_WINDOWS:-0}" == 1 ]] && command -v powershell >/dev/null 2>&1; then
+    powershell -NoProfile -Command "(Get-CimInstance Win32_OperatingSystem).Version" 2>/dev/null | tr -d '\r' || uname -r
   else
     uname -r
   fi
@@ -856,7 +871,7 @@ run_hosted_live_matrix() {
 }
 
 run_windows_hosted_live_matrix() {
-  local reopen_status=ok second_pid=""
+  local reopen_status=ok second_pid="" app_profile
 
   hosted_row "row-1-history-open" history \
     "cdp Runtime.evaluate window.toto.recallList() against the synthetic profile" ok
@@ -870,11 +885,13 @@ run_windows_hosted_live_matrix() {
     "macOS-only activation row; windows-latest has no open(1) activation equivalent" \
     ',"automatic":false'
 
-  ASKTOTO_USERDATA="$PROFILE" "$EXE" "--user-data-dir=$PROFILE" "--remote-debugging-port=$CDP_PORT" >/dev/null 2>>"$OUT/app.stderr.txt" &
+  app_profile=$(app_profile_path "$PROFILE")
+  ASKTOTO_USERDATA="$app_profile" "$EXE" "--user-data-dir=$app_profile" "--remote-debugging-port=$CDP_PORT" >/dev/null 2>>"$OUT/app.stderr.txt" &
   second_pid=$!
   sleep "$REOPEN_SETTLE_SECONDS"
   if ! kill -0 "$second_pid" >/dev/null 2>&1; then
-    wait "$second_pid" >/dev/null 2>&1 || true
+    wait "$second_pid" >/dev/null 2>&1 || reopen_status="relaunch-failed"
+    second_pid=""
   fi
   hosted_row "row-4-second-instance-reopen" none \
     "re-launch Metis.exe with ASKTOTO_USERDATA=<profile> and --user-data-dir=<profile>" "$reopen_status"
@@ -1138,6 +1155,13 @@ if [[ "$HOSTED_LIVE" == 1 ]]; then
   write_hosted_summary
   write_evidence_records "$RESULT"
   write_lead_action
+  if [[ "${HOSTED_WINDOWS:-0}" == 1 ]]; then
+    hosted_matrix_summary="rows 1 and 4 automatic, row 3 not-applicable, rows 2, 5 and 9 BLOCKED_EXTERNAL"
+    hosted_sample_summary="process samples not collected on windows-latest; see per-row sampling records in matrix.jsonl"
+  else
+    hosted_matrix_summary="rows 1-4 automatic, rows 5 and 9 BLOCKED_EXTERNAL"
+    hosted_sample_summary="Main/renderer samples: \`samples/\`"
+  fi
   cat > "$OUT/README.md" <<EOF_HOSTED_README
 # M2-0008 Freeze Repro Bundle (hosted-live)
 
@@ -1146,13 +1170,13 @@ if [[ "$HOSTED_LIVE" == 1 ]]; then
 - Conclusion: $HOSTED_CONCLUSION
 - Artifact sha256: \`$ARTIFACT\`
 - Build run id: \`$BUILD_RUN_ID\`
-- Matrix rows (rows 1-4 automatic, rows 5 and 9 BLOCKED_EXTERNAL): \`matrix.jsonl\`
+- Matrix rows ($hosted_matrix_summary): \`matrix.jsonl\`
 - Run summary: \`hosted-live-summary.json\`
 - FIFO fixture evidence: \`fifo-fixtures.json\`
 - NODE_OPTIONS fuse state: \`node-options-fuse.json\`
 - Interrupt checks for ADR-021/C10: \`interrupt-results.jsonl\`
 - Cloud-account blockers and their unblock step: \`external-blockers.json\`
-- Main/renderer samples: \`samples/\`
+- $hosted_sample_summary
 - DiagnosticReports .spin/.hang copies, if any: \`diagnostic-reports/\`
 - DiagnosticReports consent/filter manifest: \`diagnostic-reports.json\`
 - Evidence import manifest: \`M2-0008.evidence-import.json\`
