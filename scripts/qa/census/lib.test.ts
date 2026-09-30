@@ -591,15 +591,18 @@ describe('resource census representative profile', () => {
       expect(persisted.localLlm.enabled).toBe(true)
       expect(manifest).toMatchObject({
         profileKind: 'representative-synthetic',
-        meetingsFolder: join(root, 'meetings'),
-        expectedPopulationHints: ATTRIBUTABLE_PROCESS_KINDS
+        meetingCount: 59,
+        layout: 'bar',
+        localLlm: { enabled: true, modelId: 'qwen3.5-0.8b' },
+        brain: { enabled: true },
+        datalessMeetings: 0
       })
-      expect(manifest.meetings.length).toBeGreaterThanOrEqual(2)
-      expect(brainIndex.documents.map((document: { file: string }) => document.file)).toEqual(
-        manifest.meetings.map((meeting: { file: string }) => meeting.file)
-      )
-      for (const meeting of manifest.meetings) {
-        const text = readFileSync(join(root, 'meetings', meeting.file), 'utf8')
+      expect(manifest).not.toHaveProperty('meetingsFolder')
+      expect(manifest).not.toHaveProperty('meetings')
+      const indexedFiles = Object.keys(brainIndex.ingested)
+      expect(indexedFiles).toHaveLength(59)
+      for (const file of indexedFiles) {
+        const text = readFileSync(join(root, 'meetings', file), 'utf8')
         expect(text).toContain('type: meeting-transcript')
         expect(text).toContain('## Full transcript')
       }
