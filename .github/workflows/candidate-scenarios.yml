@@ -152,6 +152,7 @@ jobs:
           app=$(find "$target" -maxdepth 1 -name '*.app' -print -quit)
           [ -n "$app" ] || { echo "::error::The installer holds no .app bundle."; exit 1; }
           codesign --verify --deep --strict "$app"
+          echo "path=$app" >> "$GITHUB_OUTPUT"
           echo "app=$app" >> "$GITHUB_OUTPUT"
       - name: Start from a fresh profile seeded only with the scenario's settings
         run: node scripts/qa/candidate-scenarios.mjs profile --scenario "$SCENARIO" --platform mac
