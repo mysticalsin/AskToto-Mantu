@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import vm from 'node:vm'
 import ts from 'typescript'
 import { describe, expect, it, vi } from 'vitest'
@@ -95,7 +96,9 @@ describe('exclusive onboarding renderer recovery', () => {
     })
     const recoveryUrl = overlayRendererUrl()
 
-    expect(recoveryUrl).toBe('file:///renderer/index.html?exclusiveOnboarding=1')
+    const expectedUrl = new URL(pathToFileURL(join('/fixture', '../renderer/index.html')).toString())
+    expectedUrl.searchParams.set('exclusiveOnboarding', '1')
+    expect(recoveryUrl).toBe(expectedUrl.href)
 
     // Real BrowserWindow#loadURL returns a Promise; M2-0037 now observes it (`.catch(...)` on the result).
     const loadURL = vi.fn(() => Promise.resolve())
