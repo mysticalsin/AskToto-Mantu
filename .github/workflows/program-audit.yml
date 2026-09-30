@@ -231,6 +231,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$OUT_DIR"
+          sha256sum "$GATES_PATH" "$PROVENANCE_PATH" "$NOTES_PATH" > "$OUT_DIR/release-inputs.sha256"
           version="$(jq -er '.version' "$GATES_PATH")"
           status=0
           node .program-audit-scripts/scripts/evidence/check.mjs --release "$version" --gates "$GATES_PATH" --provenance "$PROVENANCE_PATH" --ledger "$LEDGER_PATH" --notes "$NOTES_PATH" > "$OUT_DIR/release-check.txt" 2>&1 || status=$?
