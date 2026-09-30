@@ -47,9 +47,10 @@ export const UNRELATED_FIXTURE_LIFETIME_MS =
   READY_TIMEOUT_MS + SCENARIO_TIMEOUT_MS + SURVIVOR_BOUND_MS + READY_TIMEOUT_MS + RELAUNCH_SETTLE_MS + 60_000
 const MODEL_SCENARIOS = Object.freeze(['model-starting', 'active-inference'])
 const GIB = 1024 ** 3
-// qwen3.5-0.8b's minTotalRamGB (src/main/llm/local-models.ts): assertRamOk refuses when ceil(totalmem / GiB) is below it.
-const HK_M_MODEL_MIN_TOTAL_RAM_GB = 8
-// PREWARM_MIN_FREE_RAM_GB (src/main/llm/local-routing.ts): window.toto.localPrewarm starts nothing below this much
+// minTotalRamGB of the model HK-M loads (qwen3.5-0.8b in src/main/llm/local-models.ts): assertRamOk refuses when
+// ceil(totalmem / GiB) is below it. hk-m.test.ts fails if this and the app's value diverge.
+export const HK_M_MODEL_MIN_TOTAL_RAM_GB = 8
+// PREWARM_MIN_FREE_RAM_GB (exported by src/main/llm/local-routing.ts, pinned by hk-m.test.ts): window.toto.localPrewarm starts nothing below this much
 // available memory. Recorded as evidence only; the harness never changes that floor.
 export const PREWARM_MIN_FREE_RAM_GB = 4
 
