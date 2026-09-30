@@ -1824,9 +1824,27 @@ export async function runOverlayStabilityRows({ page, main, openSettings, rows, 
 
   await step('OV-STABLE', async () => {
     await setCursor(away)
-    await page.evaluate(() => window.toto.setSettings({ overlayPlacement: 'top-center', overlayLayout: 'hide', autoHideOverlay: true }))
+    // Each bridge call is awaited inside the page and returns a primitive (restoreHoverParkableLayout's
+    // pattern): handing the bridged promise itself back to Playwright let Windows collect it mid-call.
+    await page.evaluate(async () => {
+      await window.toto.setSettings({ overlayPlacement: 'top-center', overlayLayout: 'hide', autoHideOverlay: true })
+    })
+    const settingsDeadline = Date.now() + 10_000
+    let applied = false
+    while (!applied && Date.now() < settingsDeadline) {
+      applied = await page.evaluate(async () => {
+        const settings = await window.toto.getSettings()
+        return settings.overlayPlacement === 'top-center' && settings.overlayLayout === 'hide' && settings.autoHideOverlay === true
+      }).catch(() => false)
+      if (!applied) await wait(100)
+    }
+    if (!applied) throw new Error('top-center Hide settings were not applied')
     await wait(1_000)
-    if (!parkedHide(await snapshot())) await page.evaluate(() => window.toto.parkAfterHide(true))
+    if (!parkedHide(await snapshot())) {
+      await page.evaluate(async () => {
+        await window.toto.parkAfterHide(true)
+      })
+    }
     const parked = await waitUntil(parkedHide, 5_000)
     if (!parked.ok) throw new Error(`top-center Hide did not park: ${JSON.stringify(parked.observed)}`)
     await main(MAIN_OV_RECORDER)
