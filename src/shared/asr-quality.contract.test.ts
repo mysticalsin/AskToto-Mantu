@@ -6,6 +6,11 @@ import { LANGUAGE_NAMES } from './lang-id'
 
 const root = process.cwd()
 const read = (rel: string): string => readFileSync(join(root, rel), 'utf8').replace(/\r\n/g, '\n')
+const settingsSource = (): string =>
+  [
+    'src/renderer/src/components/Settings.tsx',
+    'src/renderer/src/features/settings/AiSection.tsx'
+  ].map(read).join('\n')
 
 describe('ASR quality ship — stored preference and truthful runtime reporting', () => {
   it('schema + DEFAULT_SETTINGS + listen/App fallbacks all default asrQuality to best', () => {
@@ -22,7 +27,7 @@ describe('ASR quality ship — stored preference and truthful runtime reporting'
   })
 
   it('Settings identifies the compact packaged live model and labels the large live preference development-only', () => {
-    const settings = read('src/renderer/src/components/Settings.tsx')
+    const settings = settingsSource()
     expect(settings).toMatch(/if \(!shouldUseBundledAsr\(import\.meta\.env\.PROD, bundled\)\)/)
     expect(settings).toMatch(/label="Prefer large live Whisper \(development\)"/)
     expect(settings).toMatch(/Live Whisper uses the compact Whisper base model in this build\./)
@@ -35,7 +40,7 @@ describe('ASR quality ship — stored preference and truthful runtime reporting'
       /qualityDegraded: requestedQuality === 'best' && engine !== 'webgpu'/
     )
     expect(read('src/renderer/src/App.tsx')).toMatch(/asrWebgpuFallbackAt/)
-    const settings = read('src/renderer/src/components/Settings.tsx')
+    const settings = settingsSource()
     expect(settings).toMatch(/A recent live session used Whisper base instead of the requested large model\./)
     expect(settings).toMatch(/Packaged builds use Whisper base for live transcription\./)
     expect(settings).toMatch(/The optional larger\s+download changes imported recordings only\./)

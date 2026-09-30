@@ -32,7 +32,10 @@ const indexSource = read('index.ts')
 const ingestSource = read('brain', 'ingest.ts')
 const storeSource = read('store.ts')
 const openaiSource = read('llm', 'openai.ts')
-const settingsSource = read('..', 'renderer', 'src', 'components', 'Settings.tsx')
+const settingsSource = [
+  read('..', 'renderer', 'src', 'components', 'Settings.tsx'),
+  read('..', 'renderer', 'src', 'features', 'settings', 'AiSection.tsx')
+].join('\n')
 const indexHtml = read('..', 'renderer', 'index.html')
 
 describe('no Cloudflare account token can reach a build', () => {

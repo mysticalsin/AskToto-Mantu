@@ -157,6 +157,7 @@ export { pickReadyProvider }
 export { screenRecordingJustGranted }
 export {
   AppleEngineNotice,
+  CoreAsrAssetsRow,
   LocalAiSection,
   asrImportModelDescription,
   coreAsrAssetsView,

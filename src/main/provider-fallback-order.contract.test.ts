@@ -4,7 +4,10 @@ import { describe, expect, it } from 'vitest'
 
 const INDEX = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const IPC = readFileSync(join(__dirname, '..', 'shared', 'ipc.ts'), 'utf8')
-const SETTINGS = readFileSync(join(__dirname, '..', 'renderer', 'src', 'components', 'Settings.tsx'), 'utf8')
+const SETTINGS = [
+  readFileSync(join(__dirname, '..', 'renderer', 'src', 'components', 'Settings.tsx'), 'utf8'),
+  readFileSync(join(__dirname, '..', 'renderer', 'src', 'features', 'settings', 'AiSection.tsx'), 'utf8')
+].join('\n')
 const ANSWER = readFileSync(join(__dirname, '..', 'renderer', 'src', 'components', 'Answer.tsx'), 'utf8')
 const APP = readFileSync(join(__dirname, '..', 'renderer', 'src', 'App.tsx'), 'utf8')
 

@@ -66,7 +66,7 @@ function blockAfter(startAnchor: string, endMarker: string): string {
 }
 
 describe('Local AI distinguishes bundled compact weights from optional downloads (MQA-319)', () => {
-  const block = blockAfter('function LocalAiSection(', '\n// CLI Integration section')
+  const block = blockAfter('function LocalAiSection(', '\nfunction CliIntegration(')
   // Copy assertions run over the code with `//` comments stripped. The comments explain WHY the old
   // wording was wrong and legitimately quote it; that text never reaches a user.
   const copy = block.replace(/^\s*\/\/.*$/gm, '')
@@ -269,7 +269,7 @@ describe('MQA-069 — the Advanced model fields commit on the debounce boundary,
   })
 
   it('LazyInput forwards `list` so the model fields keep their datalist suggestions', () => {
-    expect(blockAfter('function LazyInput(', '\ntype AsrCorrection')).toMatch(/list=\{list\}/)
+    expect(blockAfter('function LazyInput(', '\n// FILE: ui/')).toMatch(/list=\{list\}/)
   })
 })
 
@@ -376,7 +376,7 @@ describe('CLI Integration copy — managed install, not npm i -g', () => {
 })
 
 describe('Set up automatically shows an honest status chip', () => {
-  const cli = (): string => blockAfter('function CliIntegration(', '\n// End CLI Integration section.')
+  const cli = (): string => blockAfter('function CliIntegration(', '\n// FILE: features/settings/CalendarTab.tsx')
   const install = (): string =>
     blockAfter('const runInstall = async (id: \'claude-cli\' | \'codex-cli\')', 'const connect = async')
 
