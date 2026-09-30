@@ -38,6 +38,19 @@ describe('History row status (rowStatus, RowStatusChip)', () => {
     expect(rowStatus({}, undefined)).toBeNull()
   })
 
+  it('writes every chip label and tooltip without an em dash (user-facing copy rule)', () => {
+    const statuses = [
+      rowStatus({ notDownloaded: true }, undefined),
+      rowStatus({ notDownloaded: true }, { state: 'hydrating' }),
+      rowStatus({ notDownloaded: true }, { state: 'failed', error: 'Offline.' }),
+      rowStatus({ locked: true }, undefined)
+    ]
+    for (const status of statuses) {
+      expect(status).not.toBeNull()
+      expect(`${status?.label} ${status?.title}`).not.toContain('—')
+    }
+  })
+
   it('renders a live download as an announced status and nothing for a plain row', () => {
     const html = renderToStaticMarkup(<RowStatusChip meeting={{ notDownloaded: true }} hydration={{ state: 'hydrating' }} />)
     expect(html).toContain('role="status"')
