@@ -28,10 +28,6 @@ export interface Rect {
   height: number
 }
 
-export function sameRect(a: Rect, b: Rect): boolean {
-  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
-}
-
 /**
  * Per-display metrics used by the notch-aware clamp. `bounds`/`workArea` are always Electron's own
  * `Display.bounds`/`Display.workArea` (top-left-origin, already in the coordinate space `setBounds`
@@ -338,19 +334,6 @@ export function rightEdgeHoverRestRect(normalizedY: number | undefined, m: Displ
 export function rightAnchoredParkPosition(requested: Rect, actualWidth: number): { x: number; y: number } {
   if (actualWidth <= requested.width) return { x: requested.x, y: requested.y }
   return { x: requested.x + requested.width - actualWidth, y: requested.y }
-}
-
-/**
- * A right-edge park still holds `requested`: the same y, height and right edge, at any width the OS
- * widened it to (see rightAnchoredParkPosition). Anything else is a frame the park did not write.
- */
-export function rightAnchoredParkHolds(actual: Rect, requested: Rect): boolean {
-  return (
-    actual.y === requested.y &&
-    actual.height === requested.height &&
-    actual.x + actual.width === requested.x + requested.width &&
-    actual.width >= requested.width
-  )
 }
 
 /**

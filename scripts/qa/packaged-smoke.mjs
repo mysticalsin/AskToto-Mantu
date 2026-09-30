@@ -1107,8 +1107,9 @@ export function rightEdgeStateMismatches(observation, state, layout) {
 
 /**
  * Installs (idempotently) the cursor stub, the click-through capture and the geometry trace on every live
- * window. The trace keeps the last frames of the overlay: each app write ('write', the requested rect) and
- * each native move/resize ('frame', the resulting rect), so a frame no write asked for shows as native.
+ * window. The trace keeps the last frames of the overlay: each app write ('write', the requested rect), each
+ * minimum-size write ('minimum', its size) and each native move/resize ('frame', the resulting rect), so a
+ * frame no write asked for shows as native, next to the constraint write that preceded it.
  */
 const MAIN_RE_HIDE_SHIM = `(() => {
   const { screen, BrowserWindow } = globalThis.__metisReHideElectron
@@ -1131,6 +1132,7 @@ const MAIN_RE_HIDE_SHIM = `(() => {
     const setIgnoreMouseEvents = w.setIgnoreMouseEvents.bind(w)
     const setBounds = w.setBounds.bind(w)
     const setPosition = w.setPosition.bind(w)
+    const setMinimumSize = w.setMinimumSize.bind(w)
     w.__metisReHideWrapped = true
     w.setIgnoreMouseEvents = (ignore, options) => {
       state.clickThrough.set(w, ignore === true)
@@ -1143,6 +1145,10 @@ const MAIN_RE_HIDE_SHIM = `(() => {
     w.setPosition = (x, y, animate) => {
       trace(w, 'write', { ...w.getBounds(), x, y })
       return setPosition(x, y, animate)
+    }
+    w.setMinimumSize = (width, height) => {
+      trace(w, 'minimum', { width, height })
+      return setMinimumSize(width, height)
     }
     w.on('move', () => trace(w, 'frame', w.getBounds()))
     w.on('resize', () => trace(w, 'frame', w.getBounds()))
@@ -1418,7 +1424,8 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     const clickedAt = await main('Date.now()')
     await hideControl().click({ timeout: 5_000 })
     const parked = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', 'hide'), 3_000)
-    // Held: the band is still the park after the window of a late native frame change (M2-0526).
+    // Held: the band is still the park after a late native frame change (M2-0526). A stricter assertion,
+    // not a retry. The 500 ms window is empirical: long enough for a late native frame change to land.
     await wait(500)
     const held = await observe()
     const heldOk = rightEdgeStateMatches(held, 'parked', 'hide')
