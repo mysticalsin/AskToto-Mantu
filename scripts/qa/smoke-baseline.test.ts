@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -106,6 +107,28 @@ describe('smoke-baseline comparator', () => {
     expect(() => loadBaseline(baselineText({ x: { status: 'BLOCKED_EXTERNAL', ticket: 'M2-0461' } }))).toThrow(MalformedInput)
     expect(() => loadBaseline(baselineText({ x: { status: 'BLOCKED_EXTERNAL', reason: 'why' } }))).toThrow(MalformedInput)
     expect(() => loadBaseline(baselineText({ x: { status: 'BLOCKED_EXTERNAL', reason: 'why', ticket: 'nope' } }))).toThrow(MalformedInput)
+  })
+
+  it('says MISSING, not still blocked, for a BLOCKED_EXTERNAL baseline row with no report', () => {
+    const result = run({ 'sidecar-boot-reaper/realLlama': BLOCKED })
+    expect(result.exitCode).toBe(0)
+    expect(result.annotations[0]).toContain('stays MISSING')
+  })
+
+  it('CLI exits 0 with no regression, 1 on a regression and 2 on malformed input', () => {
+    const script = fileURLToPath(new URL('./smoke-baseline.mjs', import.meta.url))
+    const baselinePath = join(dir, 'baseline.json')
+    const cli = () =>
+      spawnSync(process.execPath, [script, dir, 'win32', baselinePath], { encoding: 'utf8', env: { ...process.env, GITHUB_STEP_SUMMARY: '' } })
+    write('packaged-smoke.json', smokeReport([{ id: 'a', status: 'PASS' }]))
+    write('baseline.json', baselineText({ 'packaged-smoke/a': { status: 'PASS' } }))
+    expect(cli().status).toBe(0)
+    write('baseline.json', baselineText({ 'packaged-smoke/a': { status: 'PASS' }, 'packaged-smoke/b': { status: 'PASS' } }))
+    const regressed = cli()
+    expect(regressed.status).toBe(1)
+    expect(regressed.stdout).toContain('::error')
+    write('baseline.json', '{ malformed')
+    expect(cli().status).toBe(2)
   })
 
   it('ships a valid checked-in baseline covering both platforms', () => {

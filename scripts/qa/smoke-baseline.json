@@ -1,6 +1,8 @@
 {
   "schema": 1,
-  "seededFromRun": "36572749687",
+  "seededFromRun": "provisional",
+  "provisional": "Rows mirror pre-M2-0460 hosted runs (36572749687, 36551144543), not a run on a commit containing eb58e6ca.",
+  "LEAD_ACTION": "re-seed smoke-baseline.json from the first green m2/integration packaged-smoke run after eb58e6ca and record its run id in the file and the PR",
   "platforms": {
     "darwin": {
       "rows": {
@@ -13,7 +15,7 @@
         "sidecar-boot-reaper/realLlama": {
           "status": "BLOCKED_EXTERNAL",
           "reason": "Seed the packaged local model assets.",
-          "ticket": "M2-0461"
+          "ticket": "M2-0460"
         },
         "mac-helper-supervise": { "status": "PASS" },
         "packaged-smoke/RV-1-macos-open-activate": { "status": "PASS" },
@@ -47,7 +49,7 @@
         "sidecar-boot-reaper/realLlama": {
           "status": "BLOCKED_EXTERNAL",
           "reason": "The real llama-server proof runs on macOS packaged smoke only.",
-          "ticket": "M2-0461"
+          "ticket": "M2-0460"
         },
         "packaged-smoke/RV-3-windows-exe-relaunch": { "status": "PASS" },
         "packaged-smoke/RV-4-tray-show": { "status": "PASS" },

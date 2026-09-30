@@ -135,7 +135,7 @@ export function compareRows(baselineRows, currentRows) {
     } else if (base.status === 'BLOCKED_EXTERNAL' && status === 'PASS') {
       annotations.push(annotation('notice', 'Promote smoke row', `${id} now passes; promote it to PASS in scripts/qa/smoke-baseline.json.`))
     } else if (base.status === 'BLOCKED_EXTERNAL' && status !== 'FAIL') {
-      annotations.push(annotation('warning', 'Smoke row blocked', `${id} stays BLOCKED_EXTERNAL (${base.ticket}): ${base.reason}`))
+      annotations.push(annotation('warning', 'Smoke row blocked', `${id} stays ${status === 'MISSING' ? 'MISSING' : 'BLOCKED_EXTERNAL'} (${base.ticket}): ${base.reason}`))
     }
   }
   for (const [id, current] of currentRows) {
@@ -148,7 +148,7 @@ export function compareRows(baselineRows, currentRows) {
 
 function summaryMarkdown(platform, seededFromRun, table) {
   return [
-    `### Smoke baseline vs current (${platform}, baseline from run ${seededFromRun})`,
+    `### Smoke baseline vs current (${platform}, baseline seed: ${seededFromRun})`,
     '',
     '| Row | Baseline | Current |',
     '| --- | --- | --- |',
