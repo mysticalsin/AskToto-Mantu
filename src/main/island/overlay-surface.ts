@@ -41,6 +41,14 @@ export function skipUnchangedChrome(w: OverlaySurfaceWindow): OverlayChromeSette
   }
 }
 
+/** Transparent rest chrome, opacity first: a window leaving Settings for the Hide park drops to opacity 0
+ *  while it still has the Settings frame, so neither the rest background nor the park bounds that follow is
+ *  ever shown at a size the window is about to leave. */
+export function applyRestChrome(chrome: OverlayChromeSetter, background: string, opacity: number): void {
+  chrome.setOpacity(opacity)
+  chrome.setBackgroundColor(background)
+}
+
 /** Reveal order: bounds, then visibility, then chrome. The window keeps its parked opacity (0 for Hide) and
  *  stays hidden until it has its revealed bounds, so the parked frame is never shown and then resized as a
  *  second hard cut. Bounds the window already has (below the notch, or the open drawer) are not re-applied,

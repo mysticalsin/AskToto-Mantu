@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { hideParkWindowOpacity, rightEdgeSidecarBounds, settingsOpenRect, type DisplayMetrics, type Rect } from './geometry'
 import {
+  applyRestChrome,
   openOverlaySettingsSurface,
   revealOverlaySurface,
   skipUnchangedChrome,
@@ -156,5 +157,37 @@ describe('M2-0431 Settings never shows an opaque slab before its resize', () => 
     openOverlaySettingsSurface(w, settingsOpenRect(DISPLAY, 8), chromeFor(w, SETTINGS))
     before(calls, 'setBounds', `setBackgroundColor:${SETTINGS_SURFACE_BACKGROUND}`)
     expect(calls).not.toContain('setOpacity:1')
+  })
+})
+
+describe('M2-0431 leaving Settings for the Hide park is never shown at the Settings size', () => {
+  // Packaged OV-BG (Windows run 36727727804): leaveSettingsSurface applied the rest background while the window
+  // was still 880×800 at opacity 1, then setWindowMode parked it: one call at opacity 1 off its turn's target.
+  it('drops to opacity 0 before the rest background and the park bounds', () => {
+    const settings = settingsOpenRect(DISPLAY, 8)
+    const { w, calls, state } = mockWindow({ bounds: settings, opacity: 1, background: SETTINGS_SURFACE_BACKGROUND })
+    const shownOffTarget: string[] = []
+    const record = <A extends unknown[]>(name: string, call: (...args: A) => void) => (...args: A) => {
+      call(...args)
+      if (state.opacity === 1 && (state.bounds.width !== PARKED_HIDE.width || state.bounds.height !== PARKED_HIDE.height)) {
+        shownOffTarget.push(name)
+      }
+    }
+    w.setOpacity = record('setOpacity', w.setOpacity)
+    w.setBackgroundColor = record('setBackgroundColor', w.setBackgroundColor)
+    w.setBounds = record('setBounds', w.setBounds)
+
+    applyRestChrome(skipUnchangedChrome(w), OVERLAY_REST_BACKGROUND, hideParkWindowOpacity('hide', true)) // leaveSettingsSurface
+    w.setBounds(PARKED_HIDE) // setWindowMode → commitParkedOverlayBounds
+
+    before(calls, 'setOpacity:0', `setBackgroundColor:${OVERLAY_REST_BACKGROUND}`)
+    expect(shownOffTarget).toEqual([])
+    expect(state).toMatchObject({ bounds: PARKED_HIDE, opacity: 0, background: OVERLAY_REST_BACKGROUND })
+  })
+
+  it('a revealed bar keeps opacity 1 and only its background changes', () => {
+    const { w, calls } = mockWindow({ bounds: REVEALED_BAR, opacity: 1, background: SETTINGS_SURFACE_BACKGROUND })
+    applyRestChrome(skipUnchangedChrome(w), OVERLAY_REST_BACKGROUND, hideParkWindowOpacity('hide', false))
+    expect(calls).toEqual([`setBackgroundColor:${OVERLAY_REST_BACKGROUND}`])
   })
 })

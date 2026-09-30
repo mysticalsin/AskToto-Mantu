@@ -223,7 +223,7 @@ import {
   topClamp
 } from './island/geometry'
 import { observeExclusiveBounds } from './island/exclusive-bounds-repair'
-import { openOverlaySettingsSurface, revealOverlaySurface, skipUnchangedChrome } from './island/overlay-surface'
+import { applyRestChrome, openOverlaySettingsSurface, revealOverlaySurface, skipUnchangedChrome } from './island/overlay-surface'
 import { createOverlayRevealLog, type OverlayTransitionCause } from './island/overlay-reveal-log'
 import {
   OVERLAY_REST_BACKGROUND,
@@ -2333,13 +2333,8 @@ function applyOverlaySurfaceChrome(): void {
     return
   }
   try {
-    chrome.setBackgroundColor(OVERLAY_REST_BACKGROUND)
-  } catch {
-    /* headless */
-  }
-  try {
     const layout = parkLayoutForDisplay(liveOverlayLayout(), screen.getDisplayMatching(win.getBounds()))
-    chrome.setOpacity(hideParkWindowOpacity(layout, islandResting && !isMinimized))
+    applyRestChrome(chrome, OVERLAY_REST_BACKGROUND, hideParkWindowOpacity(layout, islandResting && !isMinimized))
   } catch {
     /* headless */
   }
