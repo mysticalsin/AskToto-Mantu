@@ -3,9 +3,9 @@ import { exciseDeletedMeeting } from './brain/ingest'
 import { join, basename } from 'node:path'
 import { safeMeetingBasename } from './meeting-path'
 import {
-  parseMeetingDocument,
+  parse,
   readMeetingFields as frontmatter,
-  serializeMeetingDocument,
+  serialize,
   setMeetingField,
   stripMeetingFrontmatter
 } from './features/meetings/meeting-document'
@@ -451,14 +451,14 @@ export async function renameMeeting(
   // Replace the frontmatter `title:` value (always written double-quoted — see saveMeeting/saveNote)
   // within the frontmatter block only, so a coincidental "title:"-looking line in the transcript body
   // can never be mistaken for it.
-  const doc = parseMeetingDocument(text)
+  const doc = parse(text)
   if (!doc) return { ok: false, error: 'Not a meeting transcript.' }
   if (!doc.lines.some((line) => /^title:\s*"(?:[^"\\]|\\.)*"\s*$/.test(line))) {
     return { ok: false, error: 'Could not find a title to rename in this file.' }
   }
   // The codec writes the value verbatim: a title containing `$&`-style sequences (e.g. "Deal $&Co") is
   // never interpreted as a String.replace pattern.
-  let updated = serializeMeetingDocument(setMeetingField(doc, 'title', `"${yamlSafeRenameTitle(title)}"`))
+  let updated = serialize(setMeetingField(doc, 'title', `"${yamlSafeRenameTitle(title)}"`))
 
   // Replace the body's first H1 heading (the only "# " line — recap sections use "## "). Best-effort:
   // an old/malformed file missing it still gets the frontmatter update above.
@@ -592,9 +592,9 @@ export async function updateMeetingRecap(
   }
 
   if (recapStatus !== undefined) {
-    const doc = parseMeetingDocument(updated)
+    const doc = parse(updated)
     if (!doc) return { ok: false, error: 'Could not save the summary status: missing meeting frontmatter.' }
-    updated = serializeMeetingDocument(setMeetingField(doc, 'recap_status', recapStatus))
+    updated = serialize(setMeetingField(doc, 'recap_status', recapStatus))
   }
 
   try {
@@ -687,9 +687,9 @@ export async function setMeetingCrmPushed(
   if (!read.ok) return read
   const { text, encrypted: wasEncrypted } = read
 
-  const doc = parseMeetingDocument(text)
+  const doc = parse(text)
   if (!doc) return { ok: false, error: 'Not a meeting transcript.' }
-  const updated = serializeMeetingDocument(setMeetingField(doc, 'crm_pushed', key))
+  const updated = serialize(setMeetingField(doc, 'crm_pushed', key))
   if (updated === text) return { ok: true } // already recorded against this exact payload
 
   try {
@@ -723,11 +723,11 @@ export async function setMeetingConfidential(
   if (!read.ok) return read
   const { text, encrypted: wasEncrypted } = read
 
-  const doc = parseMeetingDocument(text)
+  const doc = parse(text)
   if (!doc) return { ok: false, error: 'Not a meeting transcript.' }
   // Unflagging removes the line entirely (absence = not confidential, same as a meeting that never
   // had the flag) rather than writing `confidential: false` — one canonical "no flag present" shape.
-  const updated = serializeMeetingDocument(setMeetingField(doc, 'confidential', confidential ? 'true' : null))
+  const updated = serialize(setMeetingField(doc, 'confidential', confidential ? 'true' : null))
   if (updated === text) return { ok: true } // already in the requested state
 
   try {
@@ -754,7 +754,7 @@ export async function isMeetingConfidentialOnDisk(settings: Settings, file: stri
   if (read.status !== 'ok') return true // missing / unreadable — fail closed
   const text = decodeSaved(read.bytes)
   if (!text) return true
-  if (!parseMeetingDocument(text)) return true
+  if (!parse(text)) return true
   return /^true$/i.test(frontmatter(text).confidential ?? '')
 }
 

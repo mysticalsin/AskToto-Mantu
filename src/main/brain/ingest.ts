@@ -33,7 +33,7 @@ import { localBaseReady } from '../llm/local-routing'
 import { intelligenceNoProviderMessage, intelligenceRequiresLocal } from '@shared/intelligence-pass'
 import { verifyIntegrity } from '../llm/local-models'
 import { getState as localRuntimeState, activeStreams as localActiveStreams } from '../llm/local-runtime'
-import { parseMeetingDocument, readMeetingFields } from '../features/meetings/meeting-document'
+import { parse, readMeetingFields } from '../features/meetings/meeting-document'
 import { isLocalPreemption, localSlotTokens, whenLocalInteractiveIdle } from '../llm/local'
 import {
   EXTRACTION_REMINDER, ExtractionDoesNotFitError, LOCAL_EXTRACTION_OUTPUT_TOKENS, MIN_LOCAL_WINDOW_CHARS,
@@ -1705,7 +1705,7 @@ export function ingestFailureDetails(
 
 /** Reads the app-written meeting mode from the leading YAML frontmatter only. */
 export function readMeetingSourceMode(md: string): string {
-  const doc = parseMeetingDocument(md)
+  const doc = parse(md)
   if (!doc) return ''
 
   const raw = doc.lines.join('\n').match(/^mode:\s*(.*?)\s*$/m)?.[1]?.trim() ?? ''

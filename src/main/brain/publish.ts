@@ -15,7 +15,7 @@ import {
   type EntityKind,
   type LedgerCommitment
 } from '@shared/brain'
-import { hasMeetingFlag, parseMeetingDocument, readMeetingFields } from '../features/meetings/meeting-document'
+import { hasMeetingFlag, parse, readMeetingFields } from '../features/meetings/meeting-document'
 import { resolveMeetingsFolder, readSavedFile, writeSaved, parseRecapMarkdown } from '../transcripts'
 import { listEntities, readPerson, readAccount, readDeal, readIndex, readMeetingExtraction, listMeetingExtractions, slugify } from './store'
 import { readAliasMap, resolveEntitySlug, type AliasMap } from './corrections'
@@ -146,7 +146,7 @@ function readFrontmatterFlag(md: string, key: string): boolean {
  *  head rather than the whole file, so "no closing `---` in what I read" must be distinguished from "read
  *  the whole thing, no flag there" — the first is unknown and has to fail closed. */
 function hasFrontmatterBlock(md: string): boolean {
-  return parseMeetingDocument(md) !== null
+  return parse(md) !== null
 }
 
 /** How much of a team transcript is read to decide its confidential flag. Frontmatter sits at byte 0 and

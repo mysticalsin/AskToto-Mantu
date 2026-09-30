@@ -27,15 +27,18 @@ export interface MeetingDocument {
 
 /** Splits a meeting file into frontmatter lines and body. Null when there is no complete leading block —
  *  a missing block and an unclosed one are indistinguishable to callers, and both must fail closed. */
-export function parseMeetingDocument(text: string): MeetingDocument | null {
+export function parse(text: string): MeetingDocument | null {
   const m = FRONTMATTER.exec(text)
   if (!m) return null
   return { lines: m[2].split(/\r?\n/), eol: m[1] === '\r\n' ? '\r\n' : '\n', body: text.slice(m[0].length) }
 }
 
-export function serializeMeetingDocument(doc: MeetingDocument): string {
+export function serialize(doc: MeetingDocument): string {
   return `---${doc.eol}${doc.lines.join(doc.eol)}${doc.eol}---${doc.body}`
 }
+
+export const parseMeetingDocument = parse
+export const serializeMeetingDocument = serialize
 
 /** Decodes one raw frontmatter value. Undoes the YAML escaping the writers apply (`\` → `\\`, `"` → `\"`):
  *  without the inverse the escapes reach History verbatim and the rename box re-escapes them on every
@@ -49,7 +52,7 @@ function decodeScalar(raw: string): string {
 /** The frontmatter's `key: value` pairs, decoded; empty when the file has no complete block. */
 export function readMeetingFields(text: string): Record<string, string> {
   const out: Record<string, string> = {}
-  for (const line of parseMeetingDocument(text)?.lines ?? []) {
+  for (const line of parse(text)?.lines ?? []) {
     const kv = line.match(/^([a-z_]+):\s*(.*)$/i)
     if (kv) out[kv[1]] = decodeScalar(kv[2])
   }
@@ -60,7 +63,7 @@ export function readMeetingFields(text: string): Record<string, string> {
  *  never let a later value override an earlier `true`; false when there is no complete block. */
 export function hasMeetingFlag(text: string, key: string): boolean {
   const wanted = key.toLowerCase()
-  return (parseMeetingDocument(text)?.lines ?? []).some((line) => {
+  return (parse(text)?.lines ?? []).some((line) => {
     const kv = line.match(/^([a-z_]+):\s*(.*)$/i)
     return kv !== null && kv[1].toLowerCase() === wanted && /^true$/i.test(decodeScalar(kv[2]))
   })
@@ -68,7 +71,7 @@ export function hasMeetingFlag(text: string, key: string): boolean {
 
 /** The file with its frontmatter block (and the line ending after it) removed. */
 export function stripMeetingFrontmatter(text: string): string {
-  const doc = parseMeetingDocument(text)
+  const doc = parse(text)
   return doc ? doc.body.replace(/^\r?\n/, '') : text
 }
 

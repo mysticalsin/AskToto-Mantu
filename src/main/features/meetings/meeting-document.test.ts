@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   hasMeetingFlag,
-  parseMeetingDocument,
+  parse,
   readMeetingFields,
-  serializeMeetingDocument,
+  serialize,
   setMeetingField,
   stripMeetingFrontmatter
 } from './meeting-document'
@@ -13,7 +13,7 @@ const CRLF = LF.replace(/\n/g, '\r\n')
 
 describe('meeting-document codec', () => {
   it('parses LF frontmatter into lines, eol and body', () => {
-    expect(parseMeetingDocument(LF)).toEqual({
+    expect(parse(LF)).toEqual({
       lines: ['type: meeting-transcript', 'title: "Weekly sync"', 'confidential: true'],
       eol: '\n',
       body: '\n\n# Weekly sync\n'
@@ -21,7 +21,7 @@ describe('meeting-document codec', () => {
   })
 
   it('parses CRLF frontmatter with no carriage return left in a line', () => {
-    expect(parseMeetingDocument(CRLF)).toEqual({
+    expect(parse(CRLF)).toEqual({
       lines: ['type: meeting-transcript', 'title: "Weekly sync"', 'confidential: true'],
       eol: '\r\n',
       body: '\r\n\r\n# Weekly sync\r\n'
@@ -30,8 +30,8 @@ describe('meeting-document codec', () => {
   })
 
   it('round-trips LF and CRLF byte for byte', () => {
-    expect(serializeMeetingDocument(parseMeetingDocument(LF)!)).toBe(LF)
-    expect(serializeMeetingDocument(parseMeetingDocument(CRLF)!)).toBe(CRLF)
+    expect(serialize(parse(LF)!)).toBe(LF)
+    expect(serialize(parse(CRLF)!)).toBe(CRLF)
   })
 
   it('decodes quoted scalars, escaped quotes and backslashes; strips brackets from flow lists', () => {
@@ -44,21 +44,21 @@ describe('meeting-document codec', () => {
   })
 
   it('returns no block and empty fields when frontmatter is missing', () => {
-    expect(parseMeetingDocument('# Just a heading\n')).toBeNull()
+    expect(parse('# Just a heading\n')).toBeNull()
     expect(readMeetingFields('# Just a heading\n')).toEqual({})
     expect(stripMeetingFrontmatter('# Just a heading\n')).toBe('# Just a heading\n')
   })
 
   it('treats unclosed frontmatter as no block, in LF and CRLF', () => {
-    expect(parseMeetingDocument('---\ntype: x\nconfidential: true\n')).toBeNull()
-    expect(parseMeetingDocument('---\r\ntype: x\r\nconfidential: true\r\n')).toBeNull()
+    expect(parse('---\ntype: x\nconfidential: true\n')).toBeNull()
+    expect(parse('---\r\ntype: x\r\nconfidential: true\r\n')).toBeNull()
     expect(readMeetingFields('---\ntype: x\n')).toEqual({})
   })
 
   it('tolerates trailing spaces or tabs after the delimiters and keeps the eol from the opening line', () => {
-    const doc = parseMeetingDocument('---\t\r\ntype: x\r\nconfidential: true\r\n--- \r\n\r\nbody')
+    const doc = parse('---\t\r\ntype: x\r\nconfidential: true\r\n--- \r\n\r\nbody')
     expect(doc).toEqual({ lines: ['type: x', 'confidential: true'], eol: '\r\n', body: '\r\n\r\nbody' })
-    expect(parseMeetingDocument('---\ntype: x\n---  \nbody')?.eol).toBe('\n')
+    expect(parse('---\ntype: x\n---  \nbody')?.eol).toBe('\n')
   })
 
   it('hasMeetingFlag is true when any duplicate line is true and false without a block', () => {
@@ -69,7 +69,7 @@ describe('meeting-document codec', () => {
   })
 
   it('does not close on a line that merely starts with three dashes', () => {
-    expect(parseMeetingDocument('---\ntype: x\n----\nmore\n')).toBeNull()
+    expect(parse('---\ntype: x\n----\nmore\n')).toBeNull()
   })
 
   it('reads a summary-only meeting document', () => {
@@ -84,13 +84,13 @@ describe('meeting-document codec', () => {
   })
 
   it('sets, replaces and removes a field without changing the line ending', () => {
-    const doc = parseMeetingDocument(CRLF)!
-    expect(serializeMeetingDocument(setMeetingField(doc, 'recap_status', 'ready'))).toBe(
+    const doc = parse(CRLF)!
+    expect(serialize(setMeetingField(doc, 'recap_status', 'ready'))).toBe(
       CRLF.replace('confidential: true\r\n', 'confidential: true\r\nrecap_status: ready\r\n')
     )
-    expect(serializeMeetingDocument(setMeetingField(doc, 'confidential', null))).toBe(
+    expect(serialize(setMeetingField(doc, 'confidential', null))).toBe(
       CRLF.replace('confidential: true\r\n', '')
     )
-    expect(serializeMeetingDocument(setMeetingField(doc, 'title', '"Renamed $&"'))).toContain('title: "Renamed $&"\r\n')
+    expect(serialize(setMeetingField(doc, 'title', '"Renamed $&"'))).toContain('title: "Renamed $&"\r\n')
   })
 })
