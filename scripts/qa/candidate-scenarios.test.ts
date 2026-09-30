@@ -67,7 +67,7 @@ describe('candidateRunProblems (the run guard)', () => {
 
 describe('the scenario registry', () => {
   it('declares fault-fatal-relaunch on macOS, installing the Metis-QA zip variant', () => {
-    expect(Object.keys(SCENARIOS)).toEqual(['fault-fatal-relaunch'])
+    expect(Object.keys(SCENARIOS)).toEqual(['fault-fatal-relaunch', 'renderer-kill'])
     const mac = SCENARIOS['fault-fatal-relaunch'].platforms.mac
     expect(Object.keys(SCENARIOS['fault-fatal-relaunch'].platforms)).toEqual(['mac'])
     expect(mac.variant).toBe('mac-qa-identity')
@@ -78,6 +78,53 @@ describe('the scenario registry', () => {
     expect(mac.report).toBe('fault-fatal-relaunch.json')
     expect(mac.settings).toEqual(LOCAL_LLM_SETTINGS)
     expect(LOCAL_LLM_SETTINGS.localLlm).toMatchObject({ enabled: true, modelId: 'qwen3.5-0.8b' })
+  })
+
+  it('declares renderer-kill on macOS, installing the promotable DMG with no lane-seeded settings', () => {
+    const entry = SCENARIOS['renderer-kill']
+    expect(entry.ticket).toBe('M2-0469')
+    expect(entry.qaOnlyHook).toBe(false)
+    expect(Object.keys(entry.platforms)).toEqual(['mac'])
+    const mac = entry.platforms.mac
+    expect(mac.variant).toBe('mac')
+    expect(mac.artifact).toBe('candidate-mac')
+    expect(VARIANTS.mac.promotable).toBe(true)
+    expect(VARIANTS.mac.assets('1.0.0')).toContain('Metis-1.0.0.dmg')
+    expect(mac.script).toBe('scripts/qa/renderer-kill.mjs')
+    expect(existsSync(join(root, mac.script))).toBe(true)
+    expect(mac.report).toBe('renderer-kill.json')
+    expect('settings' in mac).toBe(false)
+    expect(outcomeForExit('renderer-kill', 0)).toBe('PASS')
+    expect(outcomeForExit('renderer-kill', 1)).toBe('FAIL')
+    expect(outcomeForExit('renderer-kill', 2)).toBe('PRECONDITION')
+    expect(resolveScenario({ scenario: 'renderer-kill', sha256: { mac: MAC_SHA } })).toEqual({
+      mac: { variant: 'mac', artifact: 'candidate-mac', sha256: MAC_SHA }
+    })
+    expect(() => resolveScenario({ scenario: 'renderer-kill', sha256: { mac: MAC_SHA, win: MAC_SHA } })).toThrow(
+      /win_sha256 is set, but renderer-kill does not run on win/
+    )
+  })
+
+  it('runs renderer-kill on the DMG, 4 kills within 60 s, with a repository-relative report path', () => {
+    expect(
+      scenarioCommand({
+        scenario: 'renderer-kill',
+        platform: 'mac',
+        installer: 'assets/Metis-1.0.0.dmg',
+        sha256: MAC_SHA,
+        outDir: 'candidate-scenario'
+      })
+    ).toEqual([
+      'scripts/qa/renderer-kill.mjs',
+      'assets/Metis-1.0.0.dmg',
+      'candidate-scenario/renderer-kill.json',
+      '--sha256',
+      MAC_SHA,
+      '--times',
+      '4',
+      '--window',
+      '60'
+    ])
   })
 
   it('binds every entry to a qa-candidate artifact of its platform, and to promotable bytes unless it needs a QA-only hook', () => {
@@ -147,6 +194,15 @@ describe('the fresh profile', () => {
       /asktoto-qa userData directory already exists/
     )
     expect(existsSync(join(appData, 'asktoto-qa', 'settings.json'))).toBe(false)
+  })
+
+  it('checks the promotable Metis userData directory is fresh and seeds nothing for renderer-kill', () => {
+    expect(prepareProfile({ scenario: 'renderer-kill', platform: 'mac', appDataDir: appData })).toBeNull()
+    expect(existsSync(join(appData, 'Metis'))).toBe(false)
+    mkdirSync(join(appData, 'Metis'))
+    expect(() => prepareProfile({ scenario: 'renderer-kill', platform: 'mac', appDataDir: appData })).toThrow(
+      /Metis userData directory already exists/
+    )
   })
 })
 

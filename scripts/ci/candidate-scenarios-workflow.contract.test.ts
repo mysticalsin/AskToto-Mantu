@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { RUNNER_LABELS, SCENARIOS } from '../qa/candidate-scenarios.mjs'
+import { VARIANTS } from '../qa/provenance.mjs'
 import { findUnpinnedUses } from './check-workflow-pins.mjs'
 
 const root = join(__dirname, '..', '..')
@@ -66,6 +67,7 @@ describe('candidate-scenarios.yml', () => {
     expect(scenario).toContain('        type: choice')
     const options = block(scenario, '        options:', 8).map((line) => line.trim().replace(/^- /, ''))
     expect(options).toEqual(Object.keys(SCENARIOS))
+    expect(options).toContain('renderer-kill')
   })
 
   it('reads contents and actions only, uses no secrets, and pins every action by full SHA', () => {
@@ -126,6 +128,19 @@ describe('candidate-scenarios.yml', () => {
     expect(install).toContain('ditto -x -k "$INSTALLER" "$target"')
     expect(mac[stepIndex(mac, '--name "$ARTIFACT"')]).toContain('gh run download "$CANDIDATE_RUN"')
     expect(job('mac')).toContain('      ARTIFACT: ${{ needs.guard.outputs.mac_artifact }}')
+  })
+
+  it('can install every macOS installer a registry scenario may select: the promotable DMG and the QA zip', () => {
+    const install = steps('mac').find((step) => step.includes('codesign --verify')) ?? ''
+    const kinds = new Set(
+      Object.values(SCENARIOS).flatMap((scenario) => {
+        const mac = (scenario.platforms as Record<string, { variant: string }>).mac
+        return mac ? VARIANTS[mac.variant as keyof typeof VARIANTS].assets('1.0.0').map((asset) => asset.slice(asset.lastIndexOf('.'))) : []
+      })
+    )
+    expect([...kinds].sort()).toEqual(['.dmg', '.zip'])
+    for (const kind of kinds) expect(install).toContain(`*${kind})`)
+    expect(workflow).toContain('-f scenario=renderer-kill -f mac_sha256=<Metis DMG sha256 from SHA256SUMS.txt>')
   })
 
   it('uploads the lane artifact on every run and fails only after the upload', () => {

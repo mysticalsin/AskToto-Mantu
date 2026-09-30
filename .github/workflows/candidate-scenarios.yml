@@ -7,6 +7,8 @@ name: Candidate scenarios
 # the app, signs, publishes, or pushes a tag. Runs only from main, on a qa-candidate.yml dispatch on main.
 #   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> \
 #     -f scenario=fault-fatal-relaunch -f mac_sha256=<Metis-QA zip sha256 from SHA256SUMS.txt>
+#   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> \
+#     -f scenario=renderer-kill -f mac_sha256=<Metis DMG sha256 from SHA256SUMS.txt>
 run-name: Candidate scenario ${{ inputs.scenario }} on ${{ inputs.candidate_run }}
 
 on:
@@ -22,6 +24,7 @@ on:
         type: choice
         options:
           - fault-fatal-relaunch
+          - renderer-kill
       mac_sha256:
         description: sha256 of the macOS installer the scenario installs (empty when it does not run on macOS)
         required: false
