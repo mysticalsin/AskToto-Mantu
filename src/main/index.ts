@@ -3313,7 +3313,14 @@ function tickOverlayCursorWatch(): void {
     cancelOverlayLeavePark()
     restoreBarWidth()
     notifyOverlayCursorHover(true, restoredFromParkedRail)
-    noteOverlay('cursor-watch') // transition log only: a hug-stub restore can repeat per tick until the bar settles
+    const after = win.getBounds()
+    // Transition log only (a hug-stub restore can repeat per tick until the bar settles).
+    if (after.width !== bounds.width || after.height !== bounds.height || !windowVisible) {
+      mainLog.info(
+        `[overlay-watch] reveal cursor=(${cursor.x},${cursor.y}) from=${bounds.width}x${bounds.height}@(${bounds.x},${bounds.y}) to=${after.width}x${after.height}@(${after.x},${after.y}) visible=${windowVisible}`
+      )
+    }
+    noteOverlay('cursor-watch')
   } else if (step.action === 'hover-enter') {
     cancelOverlayLeavePark()
     notifyOverlayCursorHover(true)
@@ -3422,6 +3429,7 @@ function parkOverlayAfterHideSpring(force = false): boolean {
   const layout = liveOverlayLayout()
   if (!overlayUsesHover(layout)) return false
   const display = screen.getDisplayMatching(win.getBounds())
+  const before = win.getBounds()
   const park = parkedOverlayBounds(layout, display)
   currentWidth = park.width
   islandResting = true
@@ -3447,6 +3455,11 @@ function parkOverlayAfterHideSpring(force = false): boolean {
     /* headless */
   }
   if (resolvedOverlayPlacementForDisplay(display) === 'right-edge') notifyOverlayCursorHover(false, false, true)
+  if (before.width !== park.width || before.height !== park.height || before.y !== park.y) {
+    mainLog.info(
+      `[overlay-watch] park ${layout} from=${before.width}x${before.height}@(${before.x},${before.y}) to=${park.width}x${park.height}@(${park.x},${park.y})`
+    )
+  }
   return true
 }
 
@@ -3654,20 +3667,6 @@ function setWindowMode(): void {
 }
 
 const reveals = createRevealTrace({ audit: auditLog, window: () => win, layout: liveOverlayLayout, parked: () => islandResting })
-const overlayRevealLog = createOverlayRevealLog({ now: () => performance.now(), log: (line) => mainLog.info(line), audit: auditLog })
-
-/** M2-0431: called after anything that may reveal or park the overlay. It reads the window's actual state, so
- *  a refused or repeated action logs nothing; a transition is logged with its cause, and a reveal that parks
- *  within 2 s with no click or keypress is audited as overlay.flash. */
-function noteOverlay(cause: OverlayTransitionCause): void {
-  if (!win || win.isDestroyed()) return
-  const b = win.getBounds()
-  const c = screen.getCursorScreenPoint()
-  const context = { placement: resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(b)), layout: liveOverlayLayout() }
-  const detail = `bounds=${b.width}x${b.height}@(${b.x},${b.y}) cursor=(${c.x},${c.y})`
-  if (islandResting || !win.isVisible()) overlayRevealLog.parked(cause, context, detail)
-  else overlayRevealLog.revealed(cause, context, detail)
-}
 
 /** Self-heal a null `win` (e.g. a one-time createWindow() throw during boot) by retrying the window
  *  creation once at call time, instead of leaving window-dependent hotkeys dead for the process
@@ -3685,6 +3684,21 @@ function ensureWindow(): BrowserWindow | null {
     }
     return win
   })
+}
+
+const overlayRevealLog = createOverlayRevealLog({ now: () => performance.now(), log: (line) => mainLog.info(line), audit: auditLog })
+
+/** M2-0431: called after anything that may reveal or park the overlay. It reads the window's actual state, so
+ *  a refused or repeated action logs nothing; a transition is logged with its cause, and a reveal that parks
+ *  within 2 s with no click or keypress is audited as overlay.flash. */
+function noteOverlay(cause: OverlayTransitionCause): void {
+  if (!win || win.isDestroyed()) return
+  const b = win.getBounds()
+  const c = screen.getCursorScreenPoint()
+  const context = { placement: resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(b)), layout: liveOverlayLayout() }
+  const detail = `bounds=${b.width}x${b.height}@(${b.x},${b.y}) cursor=(${c.x},${c.y})`
+  if (islandResting || !win.isVisible()) overlayRevealLog.parked(cause, context, detail)
+  else overlayRevealLog.revealed(cause, context, detail)
 }
 
 /**
