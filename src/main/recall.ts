@@ -1,53 +1,27 @@
-import { unlink, writeFile } from 'node:fs/promises'
 import { exciseDeletedMeeting } from './brain/ingest'
 import { join, basename } from 'node:path'
 import { safeMeetingBasename } from './meeting-path'
 import { resolveMeetingsFolder, decodeSaved, isEncryptedBytes, writeSaved, formatTranscript, DEBRIEF_HEADING } from './transcripts'
-import { classifyAll, storageAt } from './infra/storage/meetings-storage'
-import type { FileClass, HydrationProgress } from './infra/storage/gateway'
+import { storageAt } from './infra/storage/meetings-storage'
+import type { HydrationProgress, ReadOptions } from './infra/storage/gateway'
+import { DRAFT_FILENAME, UNREADABLE, frontmatter, isMeetingDocumentType, meetingFiles, readMeetings } from './history-read'
+import { editMeetingIndex, removeMeetingFile } from './meeting-files'
 import { getSettings } from './store'
 import { detectLanguage } from '@shared/lang-id'
 import { measuredDurationMs } from '@shared/meeting-duration'
 import { readRecapStatus, recapStatusValidationError, type RecapStatus } from '@shared/recap-status'
-import type { MeetingSummary, RecallHit, RecallReadResult, Settings, TranscriptLine } from '@shared/ipc'
+import type { RecallReadResult, Settings, TranscriptLine } from '@shared/ipc'
+import type { RecallHydration } from '@shared/recall-hydration'
 
-// Independent meeting-history backend (own implementation, no third-party source). Reads the saved
-// transcript markdown files and provides list + keyword search so managers (and Dust agents) can
-// recall past meetings. Reads are ASYNC (off the main-process event loop) and each file is read once.
+// Independent meeting-history backend (own implementation, no third-party source): reading one saved
+// meeting back, editing it, and deleting it. History's list and search read path lives in history-read.ts.
+// Reaches the meetings folder only through the storage gateway and meeting-files.ts, never node:fs.
+export { listMeetings, searchMeetings, searchMeetingsLatest, type HistoryRow } from './history-read'
 
-// A well-formed double-quoted YAML scalar, capturing its body: the shape every title/mode value is
-// written in (see saveMeeting's frontmatter block in transcripts.ts, and renameMeeting below).
-const QUOTED_SCALAR = /^"((?:[^"\\]|\\.)*)"\s*$/
-
-function frontmatter(text: string): Record<string, string> {
-  const out: Record<string, string> = {}
-  const m = text.match(/^---\n([\s\S]*?)\n---/)
-  if (!m) return out
-  for (const line of m[1].split('\n')) {
-    const kv = line.match(/^([a-z_]+):\s*(.*)$/i)
-    if (!kv) continue
-    // Undo the YAML escaping the writers apply (`\` → `\\`, `"` → `\"` — transcripts.ts's yamlSafeTitle
-    // and yamlSafeRenameTitle below): this is the only reader, so without the inverse the escapes reach
-    // History verbatim AND the rename box, which is pre-filled from this same value, re-escapes what was
-    // already escaped on every commit — the backslashes double per rename, unbounded. Anything that is
-    // not a well-formed quoted scalar (the `[a, b]` flow lists this frontmatter also carries, or a plain
-    // unquoted value like `date:`) keeps the original outer-character strip untouched.
-    const quoted = kv[2].match(QUOTED_SCALAR)
-    out[kv[1]] = quoted ? quoted[1].replace(/\\(["\\])/g, '$1') : kv[2].replace(/^["[]|["\]]$/g, '').trim()
-  }
-  return out
-}
-
-// `meeting-summary` is a first-class saved meeting under managed summary-only retention. Keep the accepted
-// document kinds and recap boundaries in one place: History, search, recap editing, and erasure must never
-// disagree about whether that privacy-preserving meeting exists.
-const MEETING_DOCUMENT_TYPES = new Set(['meeting-transcript', 'meeting-summary'])
+// The recap's sibling section per document type (see isMeetingDocumentType in history-read.ts): History,
+// search, recap editing, and erasure must never disagree about where a recap ends.
 const FULL_TRANSCRIPT_HEADING_RE = /^## Full transcript\b/m
 const RETENTION_HEADING_RE = /^## Retention\b/m
-
-function isMeetingDocumentType(type: string | undefined): boolean {
-  return !type || MEETING_DOCUMENT_TYPES.has(type)
-}
 
 function recapSectionEndRe(type: string | undefined): RegExp {
   return type === 'meeting-summary' ? RETENTION_HEADING_RE : FULL_TRANSCRIPT_HEADING_RE
@@ -55,12 +29,6 @@ function recapSectionEndRe(type: string | undefined): RegExp {
 
 function recapSectionEndIndex(afterNotesHeading: string, type: string | undefined): number {
   return afterNotesHeading.search(recapSectionEndRe(type))
-}
-
-async function meetingFiles(folder: string, signal?: AbortSignal): Promise<string[]> {
-  const listing = await storageAt(folder).list('', { signal })
-  if (listing.status !== 'ok') return []
-  return listing.names.filter((name) => name.endsWith('.md') && name !== 'README.md' && name !== 'index.md')
 }
 
 async function readMeetingBytes(folder: string, file: string): Promise<{ ok: true; bytes: Buffer } | { ok: false; error: string }> {
@@ -76,215 +44,6 @@ async function readMeetingText(folder: string, file: string): Promise<{ ok: true
   const text = decodeSaved(read.bytes)
   if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
   return { ok: true, text, encrypted: isEncryptedBytes(read.bytes) }
-}
-
-async function readFolderText(folder: string, file: string): Promise<string | null> {
-  const read = await storageAt(folder).read(file)
-  return read.status === 'ok' ? read.bytes.toString('utf8') : null
-}
-
-/** A History row. `notDownloaded` marks a file whose bytes are not on this device (a cloud-only
- *  placeholder): listed from its name, never read; opening it hydrates it explicitly. Like `locked`
- *  below, it is not yet declared on the shared MeetingSummary type and flows through as an own property. */
-export type HistoryRow = MeetingSummary & { notDownloaded?: true }
-
-interface Read {
-  sum: HistoryRow
-  text: string
-}
-
-/** A MeetingSummary stub for a REAL encrypted meeting that failed to decrypt on this device (foreign
- *  keychain — see transcripts.ts's UNDECRYPTABLE_MSG), kept in list/search results instead of dropped,
- *  with `locked: true` as the affordance signal. NOTE: `locked` is not yet declared on the shared
- *  MeetingSummary type (src/shared/ipc.ts, outside this file's scope) — it still flows through at
- *  runtime (see lockedStub/readMeetingUncached below) since it's a real own property on the object, not
- *  a type-only annotation. A renderer that wants to show a lock icon needs a `'locked' in m` runtime
- *  check today, or `locked?: boolean` added to MeetingSummary itself as a follow-up. */
-interface LockedMeetingSummary extends MeetingSummary {
-  locked: true
-}
-
-// Métis's own filenames are always `YYYY-MM-DD_HHMMSS-<slug>.md` (see stamp()/slug() in transcripts.ts).
-// These two patterns are the only signal left to tell a real meeting from a non-meeting file once
-// decryption has failed — its `type:` frontmatter can't be read — so lockedStub() below uses them to
-// keep genuinely non-meeting files dropped, same as the decryptable path already does via fm.type.
-const DRAFT_FILENAME = /^\.autosave-draft-/ // saveDraftTranscript's in-progress autosave — never a real meeting
-const NOTE_FILENAME = /^\d{4}-\d{2}-\d{2}_\d{6}-note-/ // saveNote always inserts this literal segment
-// Deliberately a separate copy of sweepExpiredMeetings' own FILENAME_TIMESTAMP regex further down this
-// file, rather than hoisting one shared const above both — keeps this change scoped to the read path
-// without reordering unrelated retention-sweep code.
-const STUB_FILENAME_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(\d{2})-/
-
-/** Best-effort display stub for a real meeting file we can't render right now, so it stays visible
- *  (instead of silently vanishing) with a lock affordance. Returns null for the one case a filename
- *  alone can still rule out as NOT a meeting: a draft autosave or a quick note (see DRAFT_FILENAME/
- *  NOTE_FILENAME). `label` names the reason in the title — undecryptable on this device ("Locked", the
- *  default) vs. temporarily unreadable ("Unavailable", see UNREADABLE); both need the same visible row. */
-function lockedStub(file: string, label = 'Locked'): LockedMeetingSummary | null {
-  if (DRAFT_FILENAME.test(file) || NOTE_FILENAME.test(file)) return null
-  const m = file.match(STUB_FILENAME_TIMESTAMP)
-  const date = m ? new Date(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}`) : null
-  const slugPart = file.replace(/\.md$/, '').replace(STUB_FILENAME_TIMESTAMP, '').replace(/-/g, ' ').trim()
-  return {
-    file,
-    title: `${label} — ${slugPart || file}`,
-    date: date && !isNaN(date.getTime()) ? date.toISOString() : '',
-    mode: 'general',
-    durationMin: 0,
-    participants: [],
-    locked: true
-  }
-}
-
-// Per-file read cache validated by (mtimeMs, size) on every use. List and search previously re-read
-// AND re-decrypted every meeting file on every call — per keystroke while searching — the one path
-// that degrades linearly as the library grows, with decryption work on the main process. A stat()
-// replaces the full read+decode when the file is unchanged; any mtime/size change re-reads, and a
-// vanished file drops its entry. Saved meetings are immutable-after-write, so hits are the norm.
-// Null results (non-meeting or undecryptable files) are cached too, so they stop costing reads. A file
-// whose bytes are not on this device is answered with a fresh 'Not downloaded' row and never cached here:
-// hydration changes neither mtimeMs nor size, so a cached stub would outlive the download. A keystroke
-// still never re-reads such a file: the gateway remembers a dataless, unknown or timed-out read for
-// FAILURE_TTL_MS, and forgets it when an explicit open hydrates the file. Any other failed read (a
-// share-lock, a transient error) is deliberately never cached (see UNREADABLE below).
-interface CacheEntry {
-  mtimeMs: number
-  size: number
-  read: Read | null
-}
-// Least-recently-used, so a pathological folder (or repeated folder switches) cannot grow it without
-// limit and a full cache drops one cold entry instead of every warm one. A Map iterates in insertion
-// order, so re-inserting on every hit keeps the coldest entry first.
-const READ_CACHE_MAX = 2000
-const readCache = new Map<string, CacheEntry>()
-
-function cachedRead(path: string): CacheEntry | undefined {
-  const entry = readCache.get(path)
-  if (entry) {
-    readCache.delete(path)
-    readCache.set(path, entry)
-  }
-  return entry
-}
-
-function cacheRead(path: string, entry: CacheEntry): void {
-  readCache.delete(path)
-  readCache.set(path, entry)
-  if (readCache.size > READ_CACHE_MAX) readCache.delete(readCache.keys().next().value as string)
-}
-
-/** Sentinel for "this file could not be READ at all" — an unhydrated OneDrive Files-On-Demand
- *  placeholder while offline, or an AV/EDR share-lock (the same transient conditions writeSaved
- *  already retries around, see transcripts.ts). Kept distinct from `null` ("not a meeting file"),
- *  which is a permanent verdict and safe to cache. A thrown read is neither: stat() still succeeds on
- *  a placeholder, and hydration changes neither mtimeMs nor size, so caching that failure would key it
- *  to a value nothing invalidates and the meeting would stay invisible until the app restarts. */
-const UNREADABLE = Symbol('unreadable')
-
-/** The row for a file whose bytes are not on this device: listed, never read. */
-function notDownloadedRow(file: string): Read | null {
-  const stub = lockedStub(file, 'Not downloaded')
-  return stub ? { text: '', sum: { ...stub, notDownloaded: true } } : null
-}
-
-function unavailableRow(file: string): Read | null {
-  const stub = lockedStub(file, 'Unavailable')
-  return stub ? { text: '', sum: stub } : null
-}
-
-/** Read + decode one file (async), parse its frontmatter. Null if it isn't a saved meeting.
- *  `fileClass` comes from the listing's one batched classify, so a file classified dataless or unknown is
- *  answered as a 'Not downloaded' row without ever being read. Served from readCache when the file is
- *  unchanged since the last read. */
-async function readMeeting(folder: string, file: string, fileClass: FileClass | undefined, signal?: AbortSignal): Promise<Read | null> {
-  const path = join(folder, file)
-  if (!fileClass || fileClass.status === 'missing') {
-    readCache.delete(path)
-    return null
-  }
-  if (!('version' in fileClass)) {
-    readCache.delete(path)
-    return unavailableRow(file)
-  }
-  if (!fileClass.isRegular) {
-    // A FIFO, socket or device is never opened by a listing or a search: it would pin a pool thread.
-    readCache.delete(path)
-    return unavailableRow(file)
-  }
-  const { mtimeMs, size } = fileClass.version
-  const notLocal = (): Read | null => {
-    readCache.delete(path)
-    return notDownloadedRow(file)
-  }
-  if (fileClass.status !== 'ok') return notLocal()
-  const hit = cachedRead(path)
-  if (hit && hit.mtimeMs === mtimeMs && hit.size === size) return hit.read
-  const read = await readMeetingUncached(folder, file, signal)
-  if (read === NOT_LOCAL) return notLocal()
-  if (read === UNREADABLE) {
-    // Drop any stale entry and cache nothing, so the next list/search retries the read instead of
-    // serving a transient failure the user has no way to invalidate. The meeting keeps its row as a
-    // stub rather than disappearing from History and search with no signal at all.
-    readCache.delete(path)
-    return unavailableRow(file)
-  }
-  cacheRead(path, { mtimeMs, size, read })
-  return read
-}
-
-/** Reads one listing's files: a single batched classify, then a read of each file classified local. Aborting
- *  `signal` ends the queued classify and every queued read at the gateway, and the listing comes back empty. */
-async function readMeetings(folder: string, files: readonly string[], signal?: AbortSignal): Promise<Array<Read | null>> {
-  const gateway = storageAt(folder)
-  const classes = await classifyAll({ ...gateway, classify: (paths) => gateway.classify(paths, { signal }) }, files)
-  if (signal?.aborted) return []
-  const read = await Promise.all(files.map((f) => readMeeting(folder, f, classes.get(f), signal)))
-  // Reads cut short by a superseding search answer 'Unavailable'; those rows are not a listing.
-  return signal?.aborted ? [] : read
-}
-
-/** The gateway says this file's bytes are not on this device (or would not arrive in time). */
-const NOT_LOCAL = Symbol('not-local')
-
-async function readMeetingUncached(folder: string, file: string, signal?: AbortSignal): Promise<Read | null | typeof UNREADABLE | typeof NOT_LOCAL> {
-  const raw = await storageAt(folder).read(file, { signal })
-  if (raw.status !== 'ok') {
-    if (raw.status === 'dataless' || raw.status === 'unknown' || raw.status === 'timeout') return NOT_LOCAL
-    // A THROWN read means "can't read it right now", which is not the same verdict as "not a meeting
-    // file" — the caller must not cache it, and must not drop the meeting. Split out from the catch
-    // below so only the read itself can produce it: decodeSaved never throws (see transcripts.ts).
-    return UNREADABLE
-  }
-  try {
-    const text = decodeSaved(raw.bytes)
-    if (!text) {
-      // decodeSaved returns '' both for "not a meeting file" and for a REAL meeting encrypted at rest
-      // that this device's keychain can't decrypt (a different machine/user — see transcripts.ts's
-      // UNDECRYPTABLE_MSG). Only the latter should still show up, as a locked stub, so it never just
-      // vanishes; a file that isn't one of Métis's encrypted saves at all stays dropped.
-      if (!isEncryptedBytes(raw.bytes)) return null
-      const stub = lockedStub(file)
-      return stub ? { text: '', sum: stub } : null
-    }
-    const fm = frontmatter(text)
-    if (!isMeetingDocumentType(fm.type)) return null
-    const topics = (fm.topics || '').split(',').map((s) => s.trim()).filter(Boolean)
-    return {
-      text,
-      sum: {
-        file,
-        title: fm.title || file.replace(/\.md$/, ''),
-        date: fm.date || '',
-        mode: fm.mode || 'general',
-        durationMin: Number(fm.duration_min || 0),
-        participants: (fm.participants || '').split(',').map((s) => s.trim()).filter(Boolean),
-        ...(topics.length ? { topics } : {}),
-        ...(fm.confidential === 'true' ? { confidential: true } : {})
-      }
-    }
-  } catch {
-    return null
-  }
 }
 
 /** Background repair only fills missing notes. Nonempty incomplete notes may contain manual edits;
@@ -315,14 +74,61 @@ export async function listMeetingsNeedingRecap(): Promise<Array<{ file: string; 
   return out
 }
 
-/** Newest-first list of saved meetings. */
-export async function listMeetings(): Promise<HistoryRow[]> {
-  const folder = resolveMeetingsFolder(getSettings())
-  const read = await readMeetings(folder, await meetingFiles(folder))
-  return read
-    .filter((r): r is Read => r !== null)
-    .map((r) => r.sum)
-    .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+/** An explicit open that needs a download while another meeting's download holds the one slot. */
+export const HYDRATION_BUSY_MSG = 'Another meeting is still downloading. Open this one when it finishes.'
+/** An explicit open whose download started and did not finish (offline, provider error, a minute passed). */
+export const HYDRATION_FAILED_MSG = 'Could not download this meeting. Check your connection and try again.'
+
+/** True while an explicit open of a file that may need a download holds the one hydration slot. */
+let hydrating = false
+
+/**
+ * History's explicit open of one meeting (IPC.recallRead, IPC.recallOpen), reporting its download to the
+ * renderer through `send`. `open` is the read itself (recallRead or meetingOpenTarget) given the options.
+ *
+ * Invariants:
+ *   - At most one explicit open may hydrate at a time. The open classifies its file first: a file whose
+ *     classify does not show it on this device (dataless, unknown, timed out, unavailable) is the only
+ *     kind that takes the slot, from its classify until it settles; any other file opens without a
+ *     download and never takes or waits on the slot. A may-download open that finds the slot taken
+ *     answers HYDRATION_BUSY_MSG unread.
+ *   - A download that starts sends 'hydrating', then exactly one 'done' or 'failed' once the open settles;
+ *     an open that needed no download sends nothing. A failed download answers HYDRATION_FAILED_MSG.
+ *   - `send` throwing (a closed window) never fails the open.
+ */
+export async function openExplicitly<T extends { ok: boolean; error?: string }>(
+  file: string,
+  send: (event: RecallHydration) => void,
+  open: (options: Pick<ReadOptions, 'hydrate' | 'onProgress'>) => Promise<T>
+): Promise<T | { ok: false; error: string }> {
+  const report = (event: RecallHydration): void => {
+    try {
+      send(event)
+    } catch {
+      // the renderer went away; the open still answers its caller
+    }
+  }
+  const safeName = safeMeetingBasename(file)
+  const fileClass = safeName ? (await storageAt(resolveMeetingsFolder(getSettings())).classify([safeName])).get(safeName) : undefined
+  if (!fileClass || fileClass.status === 'ok' || fileClass.status === 'missing') return open({ hydrate: false })
+  if (hydrating) return { ok: false, error: HYDRATION_BUSY_MSG }
+  hydrating = true
+  let progress = null as HydrationProgress['state'] | null
+  try {
+    const result = await open({
+      hydrate: true,
+      onProgress: (p) => {
+        progress = p.state
+        if (p.state === 'hydrating') report({ file, state: 'hydrating' })
+      }
+    })
+    if (progress === 'done') report({ file, state: 'done' })
+    if (progress !== 'hydrating') return result
+    report({ file, state: 'failed', error: HYDRATION_FAILED_MSG })
+    return { ok: false, error: HYDRATION_FAILED_MSG }
+  } finally {
+    hydrating = false
+  }
 }
 
 /**
@@ -467,9 +273,8 @@ export async function deleteMeeting(file: string): Promise<{ ok: boolean; error?
   if (!safeName) {
     return { ok: false, error: 'Invalid meeting file name.' }
   }
-  const fullPath = join(folder, safeName)
   try {
-    await unlink(fullPath)
+    await removeMeetingFile(folder, safeName)
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code
     if (code === 'ENOENT') return { ok: false, error: 'Meeting file not found.' }
@@ -477,16 +282,14 @@ export async function deleteMeeting(file: string): Promise<{ ok: boolean; error?
   }
   // Remove the matching row from index.md (best-effort — a missing / unreadable index is not fatal).
   try {
-    const indexPath = join(folder, 'index.md')
-    const raw = await readFolderText(folder, 'index.md')
-    if (raw === null) return { ok: true }
     // Each row ends with `| [open](safeName) |` — match the exact filename in the link cell.
     const escaped = safeName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const filtered = raw
-      .split('\n')
-      .filter((line) => !new RegExp(`\\(${escaped}\\)`).test(line))
-      .join('\n')
-    if (filtered !== raw) await writeFile(indexPath, filtered, 'utf8')
+    await editMeetingIndex(folder, (raw) =>
+      raw
+        .split('\n')
+        .filter((line) => !new RegExp(`\\(${escaped}\\)`).test(line))
+        .join('\n')
+    )
   } catch {
     /* index update is best-effort; never fail the delete because of it */
   }
@@ -566,24 +369,20 @@ export async function renameMeeting(
   // carries titles for encrypted files in the first place (see saveMeeting/appendIndexRow).
   if (!wasEncrypted) {
     try {
-      const indexPath = join(folder, 'index.md')
-      const rawIndex = await readFolderText(folder, 'index.md')
-      if (rawIndex === null) return { ok: true }
       const marker = `[open](${safeName})`
       const safeTitleCell = title.replace(/\|/g, '/')
-      let changed = false
-      const updatedIndex = rawIndex
-        .split('\n')
-        .map((line) => {
-          if (!line.includes(marker)) return line
-          const cells = line.split('|')
-          if (cells.length < 6) return line
-          cells[2] = ` ${safeTitleCell} `
-          changed = true
-          return cells.join('|')
-        })
-        .join('\n')
-      if (changed) await writeFile(indexPath, updatedIndex, 'utf8')
+      await editMeetingIndex(folder, (rawIndex) =>
+        rawIndex
+          .split('\n')
+          .map((line) => {
+            if (!line.includes(marker)) return line
+            const cells = line.split('|')
+            if (cells.length < 6) return line
+            cells[2] = ` ${safeTitleCell} `
+            return cells.join('|')
+          })
+          .join('\n')
+      )
     } catch {
       /* index update is best-effort; never fail the rename because of it */
     }
@@ -880,7 +679,7 @@ const OWNED_FRONTMATTER_TYPES = new Set(['meeting-transcript', 'meeting-summary'
  * must still go. A THROWN read is UNREADABLE, never `false`: "could not read it right now" is not the
  * same verdict as "confirmed not ours" — collapsing them lets a real, transiently-locked meeting be
  * silently skipped by an erasure request that then reports success (MQA-103). Mirrors the exact
- * tri-state discipline readMeetingUncached's UNREADABLE sentinel already establishes above.
+ * tri-state discipline readMeetingUncached's UNREADABLE sentinel already establishes in history-read.ts.
  */
 async function isOwnedMeetingFile(folder: string, file: string): Promise<boolean | typeof UNREADABLE> {
   if (DRAFT_FILENAME.test(file) || FILENAME_TIMESTAMP.test(file)) return true
@@ -940,14 +739,14 @@ export async function deleteAllMeetings(): Promise<{
       continue
     }
     try {
-      await unlink(join(folder, file))
+      await removeMeetingFile(folder, file)
       deleted++
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') failed.push(file)
     }
   }
   try {
-    await unlink(join(folder, 'index.md')) // recreated fresh (header-only) on the next save
+    await removeMeetingFile(folder, 'index.md') // recreated fresh (header-only) on the next save
   } catch {
     /* best-effort — a missing/unwritable index doesn't fail the overall wipe */
   }
@@ -988,49 +787,4 @@ export async function sweepExpiredMeetings(retentionDays: number): Promise<{ del
     }
   }
   return { deleted }
-}
-
-/** Keyword search across saved meetings; returns scored hits with a snippet. */
-export async function searchMeetings(query: string, signal?: AbortSignal): Promise<RecallHit[]> {
-  const folder = resolveMeetingsFolder(getSettings())
-  const terms = query.toLowerCase().split(/\s+/).filter((t) => t.length > 1)
-  if (!terms.length) return []
-  const read = await readMeetings(folder, await meetingFiles(folder, signal), signal)
-  const hits: RecallHit[] = []
-  for (const r of read) {
-    if (!r) continue
-    const { sum, text } = r
-    // Strip the frontmatter block before scoring/snippeting so boilerplate keys (type, source,
-    // status, etc.) don't manufacture hits or snippets for terms that never appear in the actual
-    // recap/transcript body (mirrors the delimiter the frontmatter() helper already uses).
-    const body = text.replace(/^---\n[\s\S]*?\n---\n?/, '')
-    const lc = body.toLowerCase()
-    let score = 0
-    for (const t of terms) {
-      const inTitle = sum.title.toLowerCase().includes(t) ? 3 : 0
-      const count = lc.split(t).length - 1
-      score += inTitle + count
-    }
-    if (score === 0) continue
-    // Anchor the snippet on a term that actually occurs in the body, falling back to terms[0] only
-    // if none do (a multi-word search whose first word only matched via the title bonus).
-    const anchor = terms.find((t) => lc.includes(t)) ?? terms[0]
-    const first = lc.indexOf(anchor)
-    const start = Math.max(0, first - 60)
-    const snippet = body.slice(start, start + 200).replace(/\s+/g, ' ').trim()
-    hits.push({ ...sum, snippet, score })
-  }
-  return hits.sort((a, b) => b.score - a.score).slice(0, 25)
-}
-
-let activeSearch: AbortController | null = null
-
-/** The IPC search: a newer keystroke aborts the search still queued at the storage gateway, whose caller
- *  gets `[]`. */
-export function searchMeetingsLatest(query: string): Promise<RecallHit[]> {
-  activeSearch?.abort()
-  const search = (activeSearch = new AbortController())
-  return searchMeetings(query, search.signal).finally(() => {
-    if (activeSearch === search) activeSearch = null
-  })
 }

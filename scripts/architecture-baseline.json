@@ -44,8 +44,7 @@
     "src/main/brain/store.ts": 1197,
     "src/main/cli.ts": 1690,
     "src/main/import-jobs.ts": 1198,
-    "src/main/index.ts": 9884,
-    "src/main/recall.ts": 1036,
+    "src/main/index.ts": 9883,
     "src/main/store.ts": 1367,
     "src/main/transcripts.ts": 1211,
     "src/renderer/src/App.tsx": 4360,
@@ -125,7 +124,6 @@
     "src/main/brain/publish.ts": 20,
     "src/main/brain/store.ts": 63,
     "src/main/graphify.ts": 17,
-    "src/main/recall.ts": 5,
     "src/main/transcripts.ts": 33
   },
   "FF-06": {},

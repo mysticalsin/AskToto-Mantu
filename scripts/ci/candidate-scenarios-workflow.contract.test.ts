@@ -48,9 +48,10 @@ const stepIndex = (all: string[], fragment: string) => {
 }
 
 describe('candidate-scenarios.yml', () => {
-  it('is dispatched by hand only, with the candidate run, a scenario choice and one sha256 per platform', () => {
+  it('self-registers on pull requests and dispatches by hand with the candidate run, a scenario choice and one sha256 per platform', () => {
     const on = block(lines, 'on:', 0).filter((line) => /^ {2}\S/.test(line))
-    expect(on).toEqual(['  workflow_dispatch:'])
+    expect(on).toEqual(['  pull_request:', '  workflow_dispatch:'])
+    expect(block(lines, '  pull_request:', 2)).toEqual(['    paths:', '      - .github/workflows/candidate-scenarios.yml'])
     const inputs = block(lines, '    inputs:', 4)
     expect(inputs.filter((line) => /^ {6}\S/.test(line)).map((line) => line.trim())).toEqual([
       'candidate_run:',
@@ -59,7 +60,8 @@ describe('candidate-scenarios.yml', () => {
       'win_sha256:'
     ])
     expect(block(inputs, '      candidate_run:', 6)).toContain('        required: true')
-    expect(workflow).toMatch(/^run-name: .*\$\{\{ inputs\.scenario \}\}.*\$\{\{ inputs\.candidate_run \}\}$/m)
+    expect(workflow).toContain("'Candidate scenarios (registration)'")
+    expect(workflow).toContain("format('Candidate scenario {0} on {1}', inputs.scenario, inputs.candidate_run)")
   })
 
   it('offers exactly the registry scenarios as choices', () => {
@@ -79,7 +81,7 @@ describe('candidate-scenarios.yml', () => {
 
   it('guards on this repository and main, and refuses any run that is not a qa-candidate.yml dispatch on main', () => {
     const guard = job('guard')
-    const repositoryGuard = "if: github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'"
+    const repositoryGuard = "if: github.event_name == 'workflow_dispatch' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'"
     expect(guard).toContain(`    ${repositoryGuard}`)
     expect(read('qa-candidate.yml')).toContain("github.repository == 'mysticalsin/AskToto-Mantu'")
     // qa-candidate.yml builds on main and release/1.9.x only; this lane stays narrower and takes main candidates only.
@@ -102,7 +104,7 @@ describe('candidate-scenarios.yml', () => {
     for (const platform of platforms) {
       const body = job(platform)
       expect(body).toContain('    needs: guard')
-      expect(body).toContain(`    if: needs.guard.outputs.${platform} == 'true'`)
+      expect(body).toContain(`    if: github.event_name == 'workflow_dispatch' && needs.guard.outputs.${platform} == 'true'`)
       expect(body).toContain(`    runs-on: ${RUNNER_LABELS[platform as keyof typeof RUNNER_LABELS]}`)
       expect(block(job('guard'), '    outputs:', 4).join('\n')).toContain(`${platform}_sha256: \${{ steps.resolve.outputs.${platform}_sha256 }}`)
     }
@@ -116,17 +118,26 @@ describe('candidate-scenarios.yml', () => {
       'jq -r .run.id provenance/provenance.json',
       'node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" mac',
       'codesign --verify --deep --strict',
+      'echo "path=$app" >> "$GITHUB_OUTPUT"',
       'candidate-scenarios.mjs profile',
       'candidate-scenarios.mjs run'
     ].map((fragment) => stepIndex(mac, fragment))
     expect(order).toEqual([...order].sort((a, b) => a - b))
     const install = mac[stepIndex(mac, 'codesign')]
-    expect(install).toContain('target="$RUNNER_TEMP/candidate-install"')
+    expect(install).toContain('id: install')
+    expect(install).toContain('target="candidate-install"')
+    expect(install).toContain('rm -rf "$target"')
     expect(install).toContain('mkdir "$target"')
+    expect(install).toContain('volume="$RUNNER_TEMP/candidate-volume"')
     expect(install).toContain('hdiutil attach')
     expect(install).toContain('ditto -x -k "$INSTALLER" "$target"')
+    expect(install).toContain('echo "app=$app" >> "$GITHUB_OUTPUT"')
     expect(mac[stepIndex(mac, '--name "$ARTIFACT"')]).toContain('gh run download "$CANDIDATE_RUN"')
     expect(job('mac')).toContain('      ARTIFACT: ${{ needs.guard.outputs.mac_artifact }}')
+    const run = mac[stepIndex(mac, 'candidate-scenarios.mjs run')]
+    expect(run).toContain('INSTALLER: ${{ steps.installer.outputs.path }}')
+    expect(run).toContain('APP: ${{ steps.install.outputs.app }}')
+    expect(run).toContain('--app "$APP"')
   })
 
   it('gives ex-suite a scenario step and job timeout that cover its 3 launches of at least 130 s plus boot, quit and the control', () => {
