@@ -23,7 +23,12 @@ for a transcript.
 
 Alongside the raw files, `src/main/infra/observability/diagnostics-summary.ts` reduces the audit trail to counts: boots and how
 the previous run ended, stalls bucketed by duration, fatal and non-fatal crashes, and reveal outcomes. Counts are safe to
-paste into a ticket.
+paste into a ticket. The tray's **Copy diagnostics summary** pastes schema 2: it reads the rotated `audit-<stamp>.log`
+generations and then the live `audit.log`, oldest first, within a fixed byte budget (`window.truncated` says when older
+history was left out). The top-level counts cover everything read. `scope` repeats them for the running version only, from
+its first `app.started` onward, with per-UTC-day buckets and the soak counts: stalls over 5 s, unclean shutdowns, orphaned
+sidecars reaped (by reason, and after an unclean exit), reveal no-ops (`already-visible` or `failed`) and brain-index
+quarantines.
 
 ## 3. Prove the audit trail is intact
 
