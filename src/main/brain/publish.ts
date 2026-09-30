@@ -15,7 +15,7 @@ import {
   type EntityKind,
   type LedgerCommitment
 } from '@shared/brain'
-import { parseMeetingDocument, readMeetingFields } from '../features/meetings/meeting-document'
+import { hasMeetingFlag, parseMeetingDocument, readMeetingFields } from '../features/meetings/meeting-document'
 import { resolveMeetingsFolder, readSavedFile, writeSaved, parseRecapMarkdown } from '../transcripts'
 import { listEntities, readPerson, readAccount, readDeal, readIndex, readMeetingExtraction, listMeetingExtractions, slugify } from './store'
 import { readAliasMap, resolveEntitySlug, type AliasMap } from './corrections'
@@ -139,7 +139,7 @@ function teamMeetingKey(teamFolder: string, file: string): string {
  *  "confidential: true"-looking line inside the transcript/recap/debrief body (e.g. a participant
  *  literally saying those words), matching recall.ts's own frontmatter-block-scoped parsing. */
 function readFrontmatterFlag(md: string, key: string): boolean {
-  return /^true$/i.test(readMeetingFields(md)[key] ?? '')
+  return hasMeetingFlag(md, key)
 }
 
 /** True only when `md` carries a COMPLETE leading frontmatter block. The team scan below reads a bounded

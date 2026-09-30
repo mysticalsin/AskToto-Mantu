@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  hasMeetingFlag,
   parseMeetingDocument,
   readMeetingFields,
   serializeMeetingDocument,
@@ -52,6 +53,19 @@ describe('meeting-document codec', () => {
     expect(parseMeetingDocument('---\ntype: x\nconfidential: true\n')).toBeNull()
     expect(parseMeetingDocument('---\r\ntype: x\r\nconfidential: true\r\n')).toBeNull()
     expect(readMeetingFields('---\ntype: x\n')).toEqual({})
+  })
+
+  it('tolerates trailing spaces or tabs after the delimiters and keeps the eol from the opening line', () => {
+    const doc = parseMeetingDocument('---\t\r\ntype: x\r\nconfidential: true\r\n--- \r\n\r\nbody')
+    expect(doc).toEqual({ lines: ['type: x', 'confidential: true'], eol: '\r\n', body: '\r\n\r\nbody' })
+    expect(parseMeetingDocument('---\ntype: x\n---  \nbody')?.eol).toBe('\n')
+  })
+
+  it('hasMeetingFlag is true when any duplicate line is true and false without a block', () => {
+    expect(hasMeetingFlag('---\nconfidential: true\nconfidential: false\n---\n', 'confidential')).toBe(true)
+    expect(hasMeetingFlag('---\nconfidential: "true"\n---\n', 'confidential')).toBe(true)
+    expect(hasMeetingFlag('---\nconfidential: false\n---\n', 'confidential')).toBe(false)
+    expect(hasMeetingFlag('confidential: true\n', 'confidential')).toBe(false)
   })
 
   it('does not close on a line that merely starts with three dashes', () => {

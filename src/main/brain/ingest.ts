@@ -33,7 +33,7 @@ import { localBaseReady } from '../llm/local-routing'
 import { intelligenceNoProviderMessage, intelligenceRequiresLocal } from '@shared/intelligence-pass'
 import { verifyIntegrity } from '../llm/local-models'
 import { getState as localRuntimeState, activeStreams as localActiveStreams } from '../llm/local-runtime'
-import { parseMeetingDocument } from '../features/meetings/meeting-document'
+import { parseMeetingDocument, readMeetingFields } from '../features/meetings/meeting-document'
 import { isLocalPreemption, localSlotTokens, whenLocalInteractiveIdle } from '../llm/local'
 import {
   EXTRACTION_REMINDER, ExtractionDoesNotFitError, LOCAL_EXTRACTION_OUTPUT_TOKENS, MIN_LOCAL_WINDOW_CHARS,
@@ -1763,8 +1763,9 @@ export async function ingestExtraction(
   // (the meeting's actual start time) is tried when `date:` is missing or unparseable, then the file's
   // own mtime as a last resort, so a blank/garbage date never silently sorts as the oldest thing on
   // the Commitment Ledger.
+  const fields = readMeetingFields(md)
   const readFrontmatterDate = (field: 'date' | 'start'): string | null => {
-    const raw = md.match(new RegExp(`^${field}:\\s*"?([^"\\n]+?)"?\\s*$`, 'm'))?.[1]
+    const raw = fields[field]
     return raw && !Number.isNaN(Date.parse(raw)) ? raw : null
   }
   let date = readFrontmatterDate('date') ?? readFrontmatterDate('start')

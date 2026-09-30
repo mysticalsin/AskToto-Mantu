@@ -8,8 +8,11 @@
  *  written in (see saveMeeting's frontmatter block in transcripts.ts). */
 const QUOTED_SCALAR = /^"((?:[^"\\]|\\.)*)"\s*$/
 
-/** Opening `---` line, the block's lines, and a closing `---` that ends its line (or the file). */
-const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---(?=\r?\n|$)/
+/** Opening `---` line, the block's lines, and a closing `---` that ends its line (or the file). Trailing
+ *  spaces/tabs after either delimiter are tolerated (editors leave them; YAML allows them). A longer run
+ *  such as `----` is NOT a delimiter, so a block closed that way is "no block" and callers fail closed
+ *  (readConfidentialMeetings then excludes the meeting rather than publishing it). */
+const FRONTMATTER = /^---[ \t]*(\r?\n)([\s\S]*?)\r?\n---[ \t]*(?=\r?\n|$)/
 
 const LINE_KEY = /^([a-z_]+):/i
 
@@ -27,7 +30,7 @@ export interface MeetingDocument {
 export function parseMeetingDocument(text: string): MeetingDocument | null {
   const m = FRONTMATTER.exec(text)
   if (!m) return null
-  return { lines: m[1].split(/\r?\n/), eol: text.startsWith('---\r\n') ? '\r\n' : '\n', body: text.slice(m[0].length) }
+  return { lines: m[2].split(/\r?\n/), eol: m[1] === '\r\n' ? '\r\n' : '\n', body: text.slice(m[0].length) }
 }
 
 export function serializeMeetingDocument(doc: MeetingDocument): string {
@@ -51,6 +54,16 @@ export function readMeetingFields(text: string): Record<string, string> {
     if (kv) out[kv[1]] = decodeScalar(kv[2])
   }
   return out
+}
+
+/** True when ANY frontmatter line for `key` decodes to `true` (case-insensitive), so a duplicated key can
+ *  never let a later value override an earlier `true`; false when there is no complete block. */
+export function hasMeetingFlag(text: string, key: string): boolean {
+  const wanted = key.toLowerCase()
+  return (parseMeetingDocument(text)?.lines ?? []).some((line) => {
+    const kv = line.match(/^([a-z_]+):\s*(.*)$/i)
+    return kv !== null && kv[1].toLowerCase() === wanted && /^true$/i.test(decodeScalar(kv[2]))
+  })
 }
 
 /** The file with its frontmatter block (and the line ending after it) removed. */

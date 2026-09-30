@@ -429,6 +429,24 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
       expect(set.has('crlf-secret.md')).toBe(true)
       expect(set.has('open.md')).toBe(false)
     })
+
+    it('readConfidentialMeetings excludes a confidential meeting whose closing delimiter has trailing whitespace', () => {
+      writeFileSync(
+        join(folder, 'spaced-secret.md'),
+        meetingMd({ date: '2026-01-02', confidential: true }).replace(/\n---\n/, '\n--- \n'),
+        'utf8'
+      )
+      expect(readConfidentialMeetings(s).has('spaced-secret.md')).toBe(true)
+    })
+
+    it('readConfidentialMeetings excludes a meeting when any duplicated confidential line is true', () => {
+      writeFileSync(
+        join(folder, 'dup-secret.md'),
+        meetingMd({ date: '2026-01-02', confidential: true }).replace(/\n---\n/, '\nconfidential: false\n---\n'),
+        'utf8'
+      )
+      expect(readConfidentialMeetings(s).has('dup-secret.md')).toBe(true)
+    })
   })
 
   // ── MQA-074 / MQA-077: the confidential gate must fail CLOSED on a meeting it cannot read ────────────

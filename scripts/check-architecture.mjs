@@ -36,7 +36,7 @@ const CHILD_PROCESS_MODULES = new Set(['child_process', 'node:child_process'])
 const MEETING_DOCUMENT_CODEC = 'src/main/features/meetings/meeting-document.ts'
 // A regex literal that anchors on a `---` line at the start of the text, or on a newline followed by `---`.
 const FRONTMATTER_DELIMITER_REGEX = /\^(?:\(\?:)?-{3}|\\n-{3}/
-const MEETINGS_ROOT_READERS =new Set([
+const MEETINGS_ROOT_READERS = new Set([
   'src/main/brain/ingest.ts',
   'src/main/brain/publish.ts',
   'src/main/brain/store.ts',
