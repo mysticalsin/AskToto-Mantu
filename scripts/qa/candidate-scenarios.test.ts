@@ -13,6 +13,7 @@ import {
   assertCandidateProvenance,
   candidateRunProblems,
   contentProblems,
+  installerKindForScenario,
   laneAnnotation,
   laneRecord,
   laneSummary,
@@ -29,6 +30,7 @@ import { VARIANTS } from './provenance.mjs'
 const root = join(__dirname, '..', '..')
 const sha = (text: string) => createHash('sha256').update(text).digest('hex')
 const MAC_SHA = sha('qa zip bytes')
+const STALL_SHA = sha('promotable dmg bytes')
 const WIN_SHA = sha('setup bytes')
 const COMMIT = 'a'.repeat(40)
 
@@ -70,7 +72,7 @@ describe('candidateRunProblems (the run guard)', () => {
 
 describe('the scenario registry', () => {
   it('declares fault-fatal-relaunch on macOS, installing the Metis-QA zip variant', () => {
-    expect(Object.keys(SCENARIOS)).toEqual(['fault-fatal-relaunch', 'sidecar-boot-reaper', 'packaged-lifecycle'])
+    expect(Object.keys(SCENARIOS)).toEqual(['fault-fatal-relaunch', 'stall-sampler', 'sidecar-boot-reaper', 'packaged-lifecycle'])
     const mac = SCENARIOS['fault-fatal-relaunch'].platforms.mac
     expect(Object.keys(SCENARIOS['fault-fatal-relaunch'].platforms)).toEqual(['mac'])
     expect(mac.variant).toBe('mac-qa-identity')
@@ -81,6 +83,25 @@ describe('the scenario registry', () => {
     expect(mac.report).toBe('fault-fatal-relaunch.json')
     expect(mac.settings).toEqual(LOCAL_LLM_SETTINGS)
     expect(LOCAL_LLM_SETTINGS.localLlm).toMatchObject({ enabled: true, modelId: 'qwen3.5-0.8b' })
+  })
+
+  it('declares stall-sampler on macOS, installing promotable DMG bytes and using the 15 s stop', () => {
+    const mac = SCENARIOS['stall-sampler'].platforms.mac
+    expect(Object.keys(SCENARIOS['stall-sampler'].platforms)).toEqual(['mac'])
+    expect(SCENARIOS['stall-sampler'].qaOnlyHook).toBe(false)
+    expect(mac.variant).toBe('mac')
+    expect(mac.artifact).toBe('candidate-mac')
+    expect(VARIANTS.mac.assets('1.0.0')).toEqual(['Metis-1.0.0.dmg', 'Metis-1.0.0.zip'])
+    expect(mac.script).toBe('scripts/qa/stall-sampler-hosted.mjs')
+    expect(existsSync(join(root, mac.script))).toBe(true)
+    expect(mac.args({ app: 'candidate-install/Metis.app', report: 'candidate-scenario/stall-sampler.json' })).toEqual([
+      'candidate-install/Metis.app',
+      'candidate-scenario/stall-sampler.json',
+      '--stop-seconds',
+      '15'
+    ])
+    expect(mac.report).toBe('stall-sampler.json')
+    expect(Object.hasOwn(mac, 'settings')).toBe(false)
   })
 
   it('binds every entry to a qa-candidate artifact of its platform, and to promotable bytes unless it needs a QA-only hook', () => {
@@ -104,14 +125,17 @@ describe('the scenario registry', () => {
     expect(() => resolveScenario({ scenario: 'fault-fatal-relaunch', sha256: { mac: MAC_SHA, win: MAC_SHA } })).toThrow(
       /win_sha256 is set, but fault-fatal-relaunch does not run on win/
     )
+    expect(resolveScenario({ scenario: 'stall-sampler', sha256: { mac: STALL_SHA, win: '' } })).toEqual({
+      mac: { variant: 'mac', artifact: 'candidate-mac', sha256: STALL_SHA }
+    })
     expect(() => resolveScenario({ scenario: 'hk-m', sha256: { mac: MAC_SHA } })).toThrow(/Unknown scenario "hk-m"/)
     expect(() => resolveScenario({ scenario: 'toString', sha256: { mac: MAC_SHA } })).toThrow(/Unknown scenario/)
   })
 
   it('publishes one job switch per platform for the workflow', () => {
-    const plan = resolveScenario({ scenario: 'fault-fatal-relaunch', sha256: { mac: MAC_SHA } })
+    const plan = resolveScenario({ scenario: 'stall-sampler', sha256: { mac: STALL_SHA } })
     expect(resolveOutputs(plan)).toBe(
-      `mac=true\nmac_variant=mac-qa-identity\nmac_artifact=candidate-mac-qa-identity\nmac_sha256=${MAC_SHA}\nwin=false\n`
+      `mac=true\nmac_variant=mac\nmac_artifact=candidate-mac\nmac_sha256=${STALL_SHA}\nwin=false\n`
     )
   })
 
@@ -175,7 +199,7 @@ describe('the scenario registry', () => {
     expect(Object.keys(scenario.platforms)).toEqual(['mac', 'win'])
     expect(scenario.reportAssessment).toBe('packaged-smoke')
     const { mac, win } = scenario.platforms
-    expect(mac).toMatchObject({ variant: 'mac', artifact: 'candidate-mac', report: 'packaged-smoke.json', isolatedProfiles: true })
+    expect(mac).toMatchObject({ variant: 'mac', artifact: 'candidate-mac', installerKind: 'mac-dmg', report: 'packaged-smoke.json', isolatedProfiles: true })
     expect(win).toMatchObject({ variant: 'win', artifact: 'candidate-win', report: 'packaged-smoke.json', isolatedProfiles: true })
     for (const target of [mac, win]) {
       expect(target.script).toBe('scripts/qa/packaged-smoke.mjs')
@@ -185,6 +209,8 @@ describe('the scenario registry', () => {
       mac: { variant: 'mac', artifact: 'candidate-mac', sha256: MAC_SHA },
       win: { variant: 'win', artifact: 'candidate-win', sha256: WIN_SHA }
     })
+    expect(installerKindForScenario('packaged-lifecycle', 'mac')).toBe('mac-dmg')
+    expect(installerKindForScenario('packaged-lifecycle', 'win')).toBe('win')
   })
 
   it('runs packaged-lifecycle through packaged-smoke on the installed app', () => {
@@ -224,6 +250,17 @@ describe('installer selection through candidate-installer', () => {
     expect(await selectCandidateInstaller(dir, plan.win.sha256, 'win')).toBe(join(dir, 'Metis-Setup-1.0.0.exe'))
     await expect(selectCandidateInstaller(dir, sha('portable bytes'), 'win')).rejects.toThrow(/No installer matches/)
   })
+
+  it('selects the DMG, never the ZIP, for the packaged-lifecycle mac leg', async () => {
+    writeFileSync(join(dir, 'Metis-1.0.0.dmg'), 'dmg bytes')
+    writeFileSync(join(dir, 'Metis-1.0.0.zip'), 'zip bytes')
+    expect(await selectCandidateInstaller(dir, sha('dmg bytes'), installerKindForScenario('packaged-lifecycle', 'mac'))).toBe(
+      join(dir, 'Metis-1.0.0.dmg')
+    )
+    await expect(selectCandidateInstaller(dir, sha('zip bytes'), installerKindForScenario('packaged-lifecycle', 'mac'))).rejects.toThrow(
+      /No installer matches/
+    )
+  })
 })
 
 describe('the fresh profile', () => {
@@ -237,6 +274,12 @@ describe('the fresh profile', () => {
     const settings = prepareProfile({ scenario: 'fault-fatal-relaunch', platform: 'mac', appDataDir: appData })
     expect(settings).toBe(join(appData, 'asktoto-qa', 'settings.json'))
     expect(JSON.parse(readFileSync(settings as string, 'utf8'))).toEqual(LOCAL_LLM_SETTINGS)
+  })
+
+  it('does not seed settings for the promotable stall-sampler profile', () => {
+    const settings = prepareProfile({ scenario: 'stall-sampler', platform: 'mac', appDataDir: appData })
+    expect(settings).toBeNull()
+    expect(existsSync(join(appData, 'asktoto'))).toBe(false)
   })
 
   it('refuses a QA userData directory that already exists', () => {
@@ -335,6 +378,9 @@ describe('outcomeForExit', () => {
     expect(outcomeForExit('fault-fatal-relaunch', 0)).toBe('PASS')
     expect(outcomeForExit('fault-fatal-relaunch', 1)).toBe('FAIL')
     expect(outcomeForExit('fault-fatal-relaunch', 2)).toBe('PRECONDITION')
+    expect(outcomeForExit('stall-sampler', 0)).toBe('PASS')
+    expect(outcomeForExit('stall-sampler', 1)).toBe('FAIL')
+    expect(outcomeForExit('stall-sampler', 2)).toBe('PRECONDITION')
     expect(outcomeForExit('fault-fatal-relaunch', 3)).toBe('FAIL')
     expect(outcomeForExit('fault-fatal-relaunch', null)).toBe('FAIL')
   })
@@ -420,6 +466,34 @@ describe('lane.json', () => {
     expect(() => scenarioCommand({ ...absolute, installer: '/tmp/Metis-QA.zip' })).toThrow(/repository-relative/)
     expect(() => scenarioCommand({ ...absolute, installer: 'C:\\temp\\Metis-QA.zip' })).toThrow(/repository-relative/)
     expect(() => scenarioCommand({ ...absolute, platform: 'win', installer: 'assets/x.exe' })).toThrow(/does not run on win/)
+  })
+
+  it('runs the stall sampler proof against the installed app with a 15 s stop', () => {
+    const argv = scenarioCommand({
+      scenario: 'stall-sampler',
+      platform: 'mac',
+      installer: 'assets/Metis-1.0.0.dmg',
+      app: 'candidate-install/Metis.app',
+      sha256: STALL_SHA,
+      outDir: 'candidate-scenario'
+    })
+    expect(argv).toEqual([
+      'scripts/qa/stall-sampler-hosted.mjs',
+      'candidate-install/Metis.app',
+      'candidate-scenario/stall-sampler.json',
+      '--stop-seconds',
+      '15'
+    ])
+    expect(() =>
+      scenarioCommand({
+        scenario: 'stall-sampler',
+        platform: 'mac',
+        installer: 'assets/Metis-1.0.0.dmg',
+        app: '/tmp/Metis.app',
+        sha256: STALL_SHA,
+        outDir: 'candidate-scenario'
+      })
+    ).toThrow(/repository-relative/)
   })
 
   it('records the evidence-record fields of the run', () => {
