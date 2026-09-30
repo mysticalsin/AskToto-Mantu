@@ -7,6 +7,8 @@ name: Candidate scenarios
 # the app, signs, publishes, or pushes a tag. Runs only from main, on a qa-candidate.yml dispatch on main.
 #   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> \
 #     -f scenario=fault-fatal-relaunch -f mac_sha256=<Metis-QA zip sha256 from SHA256SUMS.txt>
+#   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> \
+#     -f scenario=ex-suite -f mac_sha256=<Metis DMG sha256 from SHA256SUMS.txt>
 run-name: Candidate scenario ${{ inputs.scenario }} on ${{ inputs.candidate_run }}
 
 on:
@@ -22,6 +24,7 @@ on:
         type: choice
         options:
           - fault-fatal-relaunch
+          - ex-suite
       mac_sha256:
         description: sha256 of the macOS installer the scenario installs (empty when it does not run on macOS)
         required: false
@@ -122,6 +125,7 @@ jobs:
           installer=$(node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" mac)
           echo "path=$installer" >> "$GITHUB_OUTPUT"
       - name: Install into a fresh directory and verify the signature
+        id: install
         env:
           INSTALLER: ${{ steps.installer.outputs.path }}
         run: |
@@ -140,6 +144,7 @@ jobs:
           app=$(find "$target" -maxdepth 1 -name '*.app' -print -quit)
           [ -n "$app" ] || { echo "::error::The installer holds no .app bundle."; exit 1; }
           codesign --verify --deep --strict "$app"
+          echo "app=$app" >> "$GITHUB_OUTPUT"
       - name: Start from a fresh profile seeded only with the scenario's settings
         run: node scripts/qa/candidate-scenarios.mjs profile --scenario "$SCENARIO" --platform mac
       - name: Run the scenario
@@ -148,12 +153,13 @@ jobs:
         timeout-minutes: 40
         env:
           INSTALLER: ${{ steps.installer.outputs.path }}
+          INSTALLED_APP: ${{ steps.install.outputs.app }}
         run: >
           node scripts/qa/candidate-scenarios.mjs run
           --scenario "$SCENARIO" --platform mac
           --installer "$INSTALLER" --sha256 "$INSTALLER_SHA256"
           --provenance provenance/provenance.json --candidate-run "$CANDIDATE_RUN"
-          --out "$OUT"
+          --out "$OUT" --installed "$INSTALLED_APP"
       - name: Content-free gate
         id: scan
         if: always()

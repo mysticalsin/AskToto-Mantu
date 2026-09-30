@@ -11,13 +11,13 @@
 //   node scripts/qa/candidate-scenarios.mjs guard <run.json> <candidate_run>
 //   node scripts/qa/candidate-scenarios.mjs profile --scenario <s> --platform <p>
 //   node scripts/qa/candidate-scenarios.mjs run --scenario <s> --platform <p> --installer <relative path>
-//       --sha256 <hex> --provenance <provenance.json> --candidate-run <id> --out <relative dir>
+//       --sha256 <hex> --provenance <provenance.json> --candidate-run <id> --out <relative dir> [--installed <.app>]
 //   node scripts/qa/candidate-scenarios.mjs scan <dir> --account <runner account>
 // Node builtins only, so the guard job needs no npm ci.
 import { spawnSync } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, isAbsolute, join } from 'node:path'
+import { basename, isAbsolute, join, relative } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { LOCAL_LLM_SETTINGS } from './lib/local-llm-settings.mjs'
 import { VARIANTS } from './provenance.mjs'
@@ -30,14 +30,15 @@ export const RUNNER_LABELS = Object.freeze({ mac: 'macos-latest', win: 'windows-
 
 /** userData directory name per installed variant: Electron takes it from the packaged package.json name,
  *  which build/qa-identity.electron-builder.yml sets to asktoto-qa for the QA identity. */
-export const PROFILE_DIRS = Object.freeze({ 'mac-qa-identity': 'asktoto-qa' })
+export const PROFILE_DIRS = Object.freeze({ mac: 'asktoto', 'mac-qa-identity': 'asktoto-qa' })
 
 /**
  * A scenario runs on each platform it declares. A platform entry names the qa-candidate variant and
  * artifact it installs, the script and arguments it runs, the report file the script writes, and the
  * settings it seeds into the fresh profile. qaOnlyHook marks a scenario that needs a hook compiled only
  * into QA-identity bytes; every other scenario installs a promotable variant so its records bind to bytes
- * that can ship.
+ * that can ship. installerSuffix, when set, is the only installer kind the scenario accepts. args receives
+ * `installed`, the installed .app relative to the repository, for a script that drives the installed app.
  */
 export const SCENARIOS = Object.freeze({
   // M2-0026: onFatal "Relaunch Métis", then a census 10 s later with no orphaned owned sidecar. The
@@ -54,6 +55,27 @@ export const SCENARIOS = Object.freeze({
         args: ({ installer, sha256, report }) => ['--zip', installer, '--sha256', sha256, '--out', report],
         report: 'fault-fatal-relaunch.json',
         settings: LOCAL_LLM_SETTINGS
+      })
+    })
+  }),
+  // M2-0033 acceptance[7] (M2-0470): seeded ingest ledgers survive repeated clean relaunches and no
+  // llama-server starts in the first 120 s of a boot, on the promotable DMG. The script seeds its own isolated
+  // ASKTOTO_USERDATA profile, so the lane seeds no settings.
+  'ex-suite': Object.freeze({
+    ticket: 'M2-0033',
+    qaOnlyHook: false,
+    exits: Object.freeze({ 0: 'PASS', 1: 'FAIL', 2: 'PRECONDITION' }),
+    platforms: Object.freeze({
+      mac: Object.freeze({
+        variant: 'mac',
+        artifact: 'candidate-mac',
+        installerSuffix: '.dmg',
+        script: 'scripts/qa/ex-suite.mjs',
+        args: ({ installed, report }) => {
+          if (!installed) throw new Error('ex-suite needs the installed app (--installed).')
+          return ['--packaged', installed, report, '--relaunches', '3']
+        },
+        report: 'ex-suite.json'
       })
     })
   })
@@ -161,11 +183,18 @@ export function outcomeForExit(scenario, exitCode) {
   return Number.isInteger(exitCode) && Object.hasOwn(exits, exitCode) ? exits[exitCode] : 'FAIL'
 }
 
-/** The argv (after `node`) that runs a scenario. Every argument is repository-relative, so the recorded
- *  command never names the runner's home or temp directory. */
-export function scenarioCommand({ scenario, platform, installer, sha256, outDir }) {
+/**
+ * The argv (after `node`) that runs a scenario. Every argument is repository-relative, so the recorded
+ * command never names the runner's home or temp directory.
+ * @param {{ scenario: string, platform: string, installer: string, sha256: string, outDir: string, installed?: string }} options
+ */
+export function scenarioCommand({ scenario, platform, installer, sha256, outDir, installed }) {
   const target = platformEntry(scenario, platform)
-  const argv = [target.script, ...target.args({ installer, sha256, report: join(outDir, target.report).replaceAll('\\', '/') })]
+  if (target.installerSuffix && !installer.toLowerCase().endsWith(target.installerSuffix)) {
+    throw new Error(`${scenario} installs a ${target.installerSuffix} installer; the selected installer is ${basename(installer)}.`)
+  }
+  const report = join(outDir, target.report).replaceAll('\\', '/')
+  const argv = [target.script, ...target.args({ installer, sha256, report, installed })]
   const absolute = argv.filter((arg) => isAbsolute(arg) || /^[A-Za-z]:[\\/]/.test(arg))
   if (absolute.length) throw new Error(`The scenario command must use repository-relative paths; got ${absolute.length} absolute.`)
   return argv
@@ -322,7 +351,9 @@ function run(values) {
   const target = platformEntry(scenario, platform)
   assertCandidateProvenance(provenance, candidateRun)
 
-  const argv = scenarioCommand({ scenario, platform, installer, sha256, outDir })
+  // The install step's .app lives under the runner temp; the command names it relative to the checkout.
+  const installed = values.installed ? relative(process.cwd(), values.installed).replaceAll('\\', '/') : undefined
+  const argv = scenarioCommand({ scenario, platform, installer, sha256, outDir, installed })
   mkdirSync(outDir, { recursive: true })
   const child = spawnSync(process.execPath, argv, { stdio: ['ignore', 'inherit', 'pipe'], encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
   process.stderr.write(child.stderr ?? '')
