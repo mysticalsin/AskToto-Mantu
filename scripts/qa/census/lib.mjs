@@ -24,6 +24,7 @@ export const ATTRIBUTABLE_PROCESS_KINDS = [
   'speaker-utility',
   'llama-server',
   'fm-serve',
+  'sidecar-supervisor',
   'crashpad'
 ]
 
@@ -91,6 +92,10 @@ export function classifyProcess(entry) {
   const role = baseRole(entry)
   const cmd = commandText(entry)
   if (role.includes('crashpad')) return 'crashpad'
+  // The supervise wrapper carries its sidecar's path in argv; it must not be counted as that sidecar.
+  if (/^metis-mac-helper(\.exe)?$/.test(role) && /metis-mac-helper(\.exe)?\s+supervise(\s|$)/.test(cmd)) {
+    return 'sidecar-supervisor'
+  }
   if (role === 'llama-server' || role === 'llama-server.exe' || cmd.includes('llama-server')) return 'llama-server'
   if (cmd.includes('fm serve') || (role === 'fm' && cmd.includes(' serve'))) return 'fm-serve'
   if (cmd.includes('--type=gpu-process') || role.includes('helper (gpu)')) return 'gpu'
