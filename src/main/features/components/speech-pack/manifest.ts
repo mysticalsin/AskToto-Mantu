@@ -58,10 +58,18 @@ export const SELF_TEST_FIXTURE = {
   sha256: '148b936b43ce7c546a866e64da059f0458aee2d65e617f16e9d94f06e8d99ed6'
 } as const
 
-/** Commit of Xenova/whisper-base the pack is fetched from. Not recorded yet, so the pack cannot be fetched. */
+/**
+ * Commit of Xenova/whisper-base the pack is fetched from. Not recorded yet, so the pack cannot be fetched.
+ * LEAD_ACTION: list the commits of Xenova/whisper-base through the Hugging Face API (tree endpoint per
+ * revision), find the 40-hex commit whose LFS oids (sha256) and sizes match the 11 files pinned below, and set it here.
+ */
 export const WHISPER_BASE_REVISION: string | null = null
 
-/** sherpa-onnx release archive for the Parakeet pack. Not recorded yet, so the pack cannot be fetched. */
+/**
+ * sherpa-onnx release archive for the Parakeet pack. Not recorded yet, so the pack cannot be fetched.
+ * LEAD_ACTION: download https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2
+ * once and set { url, bytes, sha256 } from that exact file (byte count and sha256 of the downloaded archive).
+ */
 export const PARAKEET_ARCHIVE_PIN: SpeechPackArchivePin | null = null
 
 const PARAKEET_DIR = 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8'

@@ -571,10 +571,10 @@ describe('speech-pack engine', () => {
       })
     })
 
-    it('counts the archive and the extraction peak in the disk check', async () => {
+    it('counts the archive and the extraction cap in the disk check', async () => {
       server = await serveArchive()
       const c = archiveComponent(server.base)
-      const need = archiveBytes.length + total(c) + DISK_HEADROOM_BYTES
+      const need = archiveBytes.length + 100_000 + DISK_HEADROOM_BYTES
       const engine = make([c], { freeBytes: () => need - 1, extractArchive: async () => undefined })
       engine.enqueue([PARAKEET])
       await engine.whenIdle()

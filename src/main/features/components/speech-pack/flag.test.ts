@@ -14,4 +14,8 @@ describe('speech-pack flag', () => {
     expect(speechPackEnabled({ METIS_SPEECH_PACK: 'off' }, ['--speech-pack=on'])).toBe(true)
     expect(speechPackEnabled({ METIS_SPEECH_PACK: 'on' }, ['--speech-pack=off'])).toBe(false)
   })
+  it('the last command-line occurrence wins', () => {
+    expect(speechPackEnabled({}, ['--speech-pack=on', '--speech-pack=off'])).toBe(false)
+    expect(speechPackEnabled({}, ['--speech-pack=off', '--speech-pack=on'])).toBe(true)
+  })
 })

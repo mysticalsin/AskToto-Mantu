@@ -162,6 +162,18 @@ describe('downloadVerified', () => {
     expect(sleeps).toEqual([7000])
   })
 
+  it('retries a 503 error page served as HTML instead of reporting captive', async () => {
+    server = await serve((req, res, i) => {
+      if (i === 0) {
+        res.statusCode = 503
+        res.setHeader('content-type', 'text/html')
+        res.end('<html>busy</html>')
+      } else rangeHandler(body)(req, res, i)
+    })
+    await downloadVerified(request(`${server.base}/pin/model.bin`), deps())
+    expect(sleeps).toHaveLength(1)
+  })
+
   it('caps the exponential backoff', async () => {
     server = await serve((_req, res) => {
       res.statusCode = 500

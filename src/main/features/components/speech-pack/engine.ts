@@ -264,8 +264,8 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
         if (!options.extractArchive) throw new SpeechPackError('http', 'no archive extractor available')
         bytesTotal = source.archive.bytes
         const held = (await sizeOf(archiveDest)) === source.archive.bytes ? source.archive.bytes : await sizeOf(`${archiveDest}.partial`)
-        // Download remainder, plus the extracted files while the archive still exists.
-        required += Math.max(0, source.archive.bytes - held) + componentBytes(c)
+        // Download remainder, plus the extraction cap (the archive holds files beyond the pinned ones) while the archive still exists.
+        required += Math.max(0, source.archive.bytes - held) + source.extractCapBytes
       }
       const free = await freeBytes(await nearestExisting(staging))
       if (free < required) throw new SpeechPackError('disk', 'not enough free disk space', required, free)

@@ -170,13 +170,14 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
       await discard()
       throw new Transient('http', 0, true)
     }
-    if (isHtmlContentType(contentType)) {
-      await res.body?.cancel().catch(() => undefined)
-      throw new SpeechPackError('captive', 'received a web page instead of the file')
-    }
+    // Throttling and server errors are checked before the content type: CDN error pages are served as HTML.
     if (res.status === 429 || res.status >= 500) {
       await res.body?.cancel().catch(() => undefined)
       throw new Transient('http', parseRetryAfter(res.headers.get('retry-after')))
+    }
+    if (isHtmlContentType(contentType)) {
+      await res.body?.cancel().catch(() => undefined)
+      throw new SpeechPackError('captive', 'received a web page instead of the file')
     }
     if (res.status !== 200 && res.status !== 206) {
       await res.body?.cancel().catch(() => undefined)
@@ -289,10 +290,15 @@ export async function downloadVerified(req: DownloadRequest, deps: DownloadDeps)
       const backoff = Math.min(timing.backoffCapMs, timing.backoffBaseMs * 2 ** (attempts - 1)) * (0.5 + deps.random() / 2)
       const wait = Math.max(backoff, Math.min(err.retryAfterMs, timing.retryAfterCapMs))
       // Pause and cancel must not wait out a long Retry-After.
-      await Promise.race([
-        deps.sleep(wait),
-        new Promise<void>((resolve) => req.signal.addEventListener('abort', () => resolve(), { once: true }))
-      ])
+      const stopWaiting = new AbortController()
+      try {
+        await Promise.race([
+          deps.sleep(wait),
+          new Promise<void>((resolve) => req.signal.addEventListener('abort', () => resolve(), { once: true, signal: stopWaiting.signal }))
+        ])
+      } finally {
+        stopWaiting.abort()
+      }
     }
   }
 }
