@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
@@ -11,6 +11,10 @@ import { describe, expect, it } from 'vitest'
  * Add a file here when it becomes user-facing; do not add an exception list.
  */
 const root = join(__dirname, '..', '..', '..')
+const DIRECTORIES = [
+  'src/renderer/src/features/settings',
+  'src/renderer/src/ui'
+]
 const FILES = [
   'src/renderer/src/App.tsx',
   'src/renderer/src/components/Bar.tsx',
@@ -32,6 +36,20 @@ const FILES = [
   'intelligence/src/App.tsx'
 ]
 
+function listFiles(relDir: string): string[] {
+  const absDir = join(root, relDir)
+  if (!existsSync(absDir)) return []
+  return readdirSync(absDir, { withFileTypes: true })
+    .flatMap((entry) => {
+      const rel = `${relDir}/${entry.name}`
+      if (entry.isDirectory()) return listFiles(rel)
+      return /\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name) ? [rel] : []
+    })
+    .sort()
+}
+
+const COPY_FILES = [...FILES, ...DIRECTORIES.flatMap(listFiles)]
+
 /** Remove block comments, JSX comments and line comments. Strings are left alone (a `//` inside a URL string
  *  only truncates that one line, which can hide an em dash but never invent one). */
 export function stripComments(source: string): string {
@@ -43,7 +61,7 @@ export function stripComments(source: string): string {
 }
 
 describe('no em dashes in user-facing copy', () => {
-  for (const rel of FILES) {
+  for (const rel of COPY_FILES) {
     it(rel, () => {
       const text = stripComments(readFileSync(join(root, rel), 'utf8').replace(/\r\n/g, '\n'))
       const hits = text
