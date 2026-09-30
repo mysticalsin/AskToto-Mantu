@@ -127,6 +127,16 @@ jobs:
           HK_M_CYCLES: ${{ inputs.hk_m_cycles == '20' && '20' || '1' }}
           HK_M_BUDGET_MS: ${{ inputs.hk_m_cycles == '20' && '8100000' || '1200000' }}
         run: node scripts/qa/hk-m.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/hk-m.json --cycles "$HK_M_CYCLES" --budget-ms "$HK_M_BUDGET_MS"
+      # ADR-018 (M2-0039): this build's parked Hide overlay, real pointer from rest into the right-edge band, net
+      # reveal latency p95 <= 150 ms. continue-on-error so the report is always uploaded; the gate step after the
+      # upload fails the job on FAIL and warns on BLOCKED_EXTERNAL (a runner that cannot move the pointer).
+      - name: Measure parked reveal latency (ADR-018)
+        id: reveal-latency
+        continue-on-error: true
+        timeout-minutes: 10
+        run: |
+          node scripts/qa/census/profile.mjs "$RUNNER_TEMP/metis-reveal-profile" --overlay-layout hide
+          node scripts/qa/census/reveal-latency.mjs --app "$RUNNER_TEMP/smoke/Metis.app" --profile "$RUNNER_TEMP/metis-reveal-profile" --output smoke-report/reveal-latency.json
       - name: Launch, exercise RV reopen routes, quit cleanly, and check that nothing survives
         id: smoke
         timeout-minutes: 10
@@ -223,7 +233,7 @@ jobs:
           echo "::notice title=tccutil probe::$(cat "$RUNNER_TEMP/tccutil-summary.txt")"
           exit 0
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: ${{ always() && !cancelled() && (steps.sidecar-reaper.outcome != 'skipped' || steps.supervise-helper.outcome != 'skipped' || steps.hk-m.outcome != 'skipped' || steps.smoke.outcome != 'skipped') }}
+        if: ${{ always() && !cancelled() && (steps.sidecar-reaper.outcome != 'skipped' || steps.supervise-helper.outcome != 'skipped' || steps.hk-m.outcome != 'skipped' || steps.reveal-latency.outcome != 'skipped' || steps.smoke.outcome != 'skipped') }}
         with:
           name: packaged-smoke-macos
           path: smoke-report/
@@ -244,6 +254,9 @@ jobs:
             exit 1
           fi
           echo "::warning title=HK-M blocked::HK-M result=$result — not a live pass of every row; see smoke-report/hk-m.json for the exact unblock steps."
+      - name: Fail the job if parked reveal latency failed (not a BLOCKED_EXTERNAL report)
+        if: always() && steps.reveal-latency.outcome == 'failure'
+        run: node scripts/qa/census/reveal-latency-gate.mjs smoke-report/reveal-latency.json
       # A rehearsal must be 100/100: fails on result=fail, result=blocked and any NOT_RUN row, and the job
       # summary names the cycle count. (bash runs with pipefail, so a failing node fails the step.)
       - name: Fail the HK-M rehearsal unless every row passed
@@ -311,12 +324,20 @@ jobs:
         continue-on-error: true
         timeout-minutes: 10
         run: node scripts/qa/sidecar-boot-reaper.mjs "$RUNNER_TEMP/smoke/Metis.exe" smoke-report/sidecar-boot-reaper.json
+      # ADR-018 (M2-0039): same measurement and gate as the mac job.
+      - name: Measure parked reveal latency (ADR-018)
+        id: reveal-latency
+        continue-on-error: true
+        timeout-minutes: 10
+        run: |
+          node scripts/qa/census/profile.mjs "$RUNNER_TEMP/metis-reveal-profile" --overlay-layout hide
+          node scripts/qa/census/reveal-latency.mjs --app "$RUNNER_TEMP/smoke/Metis.exe" --profile "$RUNNER_TEMP/metis-reveal-profile" --output smoke-report/reveal-latency.json
       - name: Launch, exercise RV reopen routes, quit cleanly, and check that nothing survives
         id: smoke
         timeout-minutes: 10
         run: node scripts/qa/packaged-smoke.mjs "$RUNNER_TEMP/smoke/Metis.exe" smoke-report/packaged-smoke.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: ${{ always() && !cancelled() && (steps.sidecar-reaper.outcome != 'skipped' || steps.smoke.outcome != 'skipped') }}
+        if: ${{ always() && !cancelled() && (steps.sidecar-reaper.outcome != 'skipped' || steps.reveal-latency.outcome != 'skipped' || steps.smoke.outcome != 'skipped') }}
         with:
           name: packaged-smoke-windows
           path: smoke-report/
@@ -325,3 +346,6 @@ jobs:
       - name: Fail the job if the sidecar boot reaper proof itself failed (not a BLOCKED_EXTERNAL row)
         if: always() && steps.sidecar-reaper.outcome == 'failure'
         run: exit 1
+      - name: Fail the job if parked reveal latency failed (not a BLOCKED_EXTERNAL report)
+        if: always() && steps.reveal-latency.outcome == 'failure'
+        run: node scripts/qa/census/reveal-latency-gate.mjs smoke-report/reveal-latency.json

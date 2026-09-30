@@ -307,6 +307,41 @@ describe('packaged-smoke workflow HK-M cycles input', () => {
   })
 })
 
+describe('packaged-smoke parked reveal latency (ADR-018, M2-0039)', () => {
+  const measureName = 'Measure parked reveal latency (ADR-018)'
+  const gateName = 'Fail the job if parked reveal latency failed (not a BLOCKED_EXTERNAL report)'
+  const jobs = {
+    mac: { text: workflow.slice(workflow.indexOf('\n  mac:\n'), workflow.indexOf('\n  windows:\n')), app: 'Metis.app', artifact: 'packaged-smoke-macos' },
+    windows: { text: workflow.slice(workflow.indexOf('\n  windows:\n')), app: 'Metis.exe', artifact: 'packaged-smoke-windows' }
+  }
+  const step = (job: string, name: string): string => {
+    const start = job.indexOf(`      - name: ${name}\n`)
+    expect(start, `step not found: ${name}`).toBeGreaterThan(-1)
+    const next = job.indexOf('\n      - ', start + 1)
+    return job.slice(start, next === -1 ? undefined : next)
+  }
+
+  it.each(Object.entries(jobs))('measures this build on a Hide profile before the smoke launch in the %s job', (_, job) => {
+    const block = step(job.text, measureName)
+    expect(block).toContain('id: reveal-latency')
+    expect(block).toContain('continue-on-error: true')
+    expect(block).toContain('node scripts/qa/census/profile.mjs "$RUNNER_TEMP/metis-reveal-profile" --overlay-layout hide')
+    expect(block).toContain(
+      `node scripts/qa/census/reveal-latency.mjs --app "$RUNNER_TEMP/smoke/${job.app}" --profile "$RUNNER_TEMP/metis-reveal-profile" --output smoke-report/reveal-latency.json`
+    )
+    expect(job.text.indexOf(`- name: ${measureName}`)).toBeLessThan(job.text.indexOf(`- name: ${launchStepName}`))
+  })
+
+  it.each(Object.entries(jobs))('uploads the report and fails the %s job only through the gate', (_, job) => {
+    const upload = job.text.slice(job.text.indexOf('- uses: actions/upload-artifact@'), job.text.indexOf(`name: ${job.artifact}`))
+    expect(upload).toContain("steps.reveal-latency.outcome != 'skipped'")
+    const gate = step(job.text, gateName)
+    expect(gate).toContain("if: always() && steps.reveal-latency.outcome == 'failure'")
+    expect(gate).toContain('node scripts/qa/census/reveal-latency-gate.mjs smoke-report/reveal-latency.json')
+    expect(job.text.indexOf(`- name: ${gateName}`)).toBeGreaterThan(job.text.indexOf(`name: ${job.artifact}`))
+  })
+})
+
 describe('packaged-smoke workflow supply chain', () => {
   it('pins every action to a full commit sha', () => {
     const uses = [...workflow.matchAll(/^\s+- uses: (\S+)/gm)].map((match) => match[1])

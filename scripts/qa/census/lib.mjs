@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:net'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
@@ -241,6 +242,24 @@ export function validateProfileForState(state, settings) {
     throw new Error(
       `parked-idle needs a profile whose overlayLayout parks (${PARKING_LAYOUTS.join(' or ')}); build one with profile.mjs --overlay-layout hide`
     )
+  }
+}
+
+/** parked-idle is only parked idle with the pointer proven away from every reveal zone, so it needs a point to move it to. */
+export function validatePointerAwayForState(state, pointerAway) {
+  if (validateState(state) !== 'parked-idle') return
+  if (!pointerAway) throw new Error('parked-idle needs --pointer-away <x,y>, a point away from every reveal zone')
+}
+
+/** Written in place of a parked-idle census when the runner cannot move the pointer: never a measurement. */
+export function parkedIdleBlockedReport({ platform, reason }) {
+  return {
+    state: 'parked-idle',
+    platform,
+    status: 'BLOCKED_EXTERNAL',
+    reason,
+    unblockStep:
+      'Run node scripts/qa/census/run.mjs --state parked-idle --pointer-away <x,y> on a session that can move the pointer (an interactive desktop).'
   }
 }
 
@@ -495,7 +514,7 @@ Get-CimInstance Win32_Process | Where-Object { $pids -contains $_.ProcessId } | 
   cmd = $_.CommandLine
 } } | ConvertTo-Json -Compress`
 
-function win32PowerShell() {
+export function win32PowerShell() {
   return join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
 }
 
@@ -696,6 +715,27 @@ export async function collectCensus(options) {
     windowsWorkingSet: options.windowsWorkingSet ?? windowsWorkingSetEvidenceFromSamples(platform, samples)
   }
   return sanitizeReport(report)
+}
+
+/** Drops provider keys and tokens from the environment a measured app is launched with. */
+export function stripSecretEnv(env) {
+  const next = { ...env }
+  for (const key of Object.keys(next)) {
+    if (/_API_KEY$/i.test(key) || /TOKEN/i.test(key) || /SECRET/i.test(key)) delete next[key]
+  }
+  return next
+}
+
+export async function freeLoopbackPort() {
+  const server = createServer()
+  await new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  const address = server.address()
+  await new Promise((resolve) => server.close(resolve))
+  if (!address || typeof address === 'string') throw new Error('could not allocate a loopback port')
+  return address.port
 }
 
 export function writeJson(path, value) {

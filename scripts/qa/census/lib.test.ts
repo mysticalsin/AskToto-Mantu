@@ -716,11 +716,37 @@ describe('resource census GitHub Actions lane', () => {
     expect(workflow.match(/--state parked-idle/g)).toHaveLength(2)
     expect(workflow).toContain('census-output/darwin-parked-idle.json')
     expect(workflow).toContain('census-output/win32-parked-idle.json')
-    expect(workflow).toContain('CGWarpMouseCursorPosition')
-    expect(workflow).toContain('[System.Windows.Forms.Cursor]::Position')
+    // run.mjs moves the pointer with CGWarpMouseCursorPosition / Cursor::Position (pointer.mjs) and reads it back.
+    expect(workflow.match(/--pointer-away 400,400/g)).toHaveLength(2)
     const parked = workflow.indexOf('- name: Measure parked-idle census')
     expect(parked).toBeGreaterThan(workflow.indexOf('- name: Measure hosted census states'))
     expect(parked).toBeLessThan(workflow.indexOf('- name: Record run identity and file digests'))
+  })
+
+  it('never writes a parked-idle census when the pointer could not be moved away', () => {
+    expect(workflow).not.toContain('pointer warp unavailable')
+    expect(workflow).not.toMatch(/\|\|\s*echo/)
+    for (const step of workflow.split('- name: Measure parked-idle census').slice(1)) {
+      const body = step.slice(0, step.indexOf('- name:'))
+      expect(body).not.toContain('continue-on-error')
+      expect(body.indexOf('--pointer-away')).toBeLessThan(body.indexOf('--output'))
+    }
+  })
+
+  it('measures packaged reveal latency on both OSes from the parked profile, after the parked-idle census', () => {
+    expect(workflow.match(/- name: Measure parked reveal latency \(ADR-018\)/g)).toHaveLength(2)
+    expect(workflow.match(/node scripts\/qa\/census\/reveal-latency\.mjs/g)).toHaveLength(2)
+    expect(workflow).toContain('census-output/darwin-reveal-latency.json')
+    expect(workflow).toContain('census-output/win32-reveal-latency.json')
+    for (const step of workflow.split('- name: Measure parked reveal latency (ADR-018)').slice(1)) {
+      const body = step.slice(0, step.indexOf('- name:'))
+      expect(body).toContain('--profile "$RUNNER_TEMP/metis-census-parked-profile"')
+      expect(body).toContain('if: ${{ !cancelled() }}')
+      expect(body).not.toContain('continue-on-error')
+    }
+    const reveal = workflow.indexOf('- name: Measure parked reveal latency')
+    expect(reveal).toBeGreaterThan(workflow.indexOf('- name: Measure parked-idle census'))
+    expect(reveal).toBeLessThan(workflow.indexOf('- name: Record run identity and file digests'))
   })
 })
 
