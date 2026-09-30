@@ -142,6 +142,100 @@ function packagedSmokeJobRuns(event: GitHubEvent): boolean {
   return event.eventName === 'pull_request' || event.ref.startsWith('refs/heads/')
 }
 
+interface WorkflowStep {
+  name: string
+  text: string
+}
+
+function macSteps(): WorkflowStep[] {
+  const macJob = workflow.slice(workflow.indexOf('\n  mac:\n'), workflow.indexOf('\n  windows:\n'))
+  return macJob
+    .split('\n      - ')
+    .slice(1)
+    .map((text) => ({ name: text.match(/name:\s+(.+)/)?.[1] ?? text.split('\n')[0], text }))
+}
+
+const probeStepName = 'Probe tccutil reset ScreenCapture without sudo (report only)'
+const launchStepName = 'Launch, exercise RV reopen routes, quit cleanly, and check that nothing survives'
+
+function probeCommands(): string {
+  const step = macSteps().find((candidate) => candidate.name === probeStepName)
+  expect(step, 'tccutil probe step not found in the mac job').toBeDefined()
+  return step!.text
+    .split('\n')
+    .filter((line) => !line.trim().startsWith('#') && !line.startsWith('name:'))
+    .join('\n')
+}
+
+describe('packaged-smoke tccutil probe (M2-0472)', () => {
+  it('sits in the mac job after the last app launch and only in the mac job', () => {
+    const names = macSteps().map((step) => step.name)
+    const probe = names.indexOf(probeStepName)
+    expect(probe).toBeGreaterThan(-1)
+    expect(probe).toBeGreaterThan(names.indexOf(launchStepName))
+    const launchesAfter = macSteps()
+      .slice(probe + 1)
+      .filter((step) => /packaged-smoke\.mjs|hk-m\.mjs|sidecar-boot-reaper\.mjs/.test(step.text))
+    expect(launchesAfter).toEqual([])
+    expect(workflow.slice(workflow.indexOf('\n  windows:\n'))).not.toContain('tccutil')
+  })
+
+  it('resets only ScreenCapture for the bundle id read from the installed Info.plist', () => {
+    const commands = probeCommands()
+    expect(commands).toContain("PlistBuddy -c 'Print :CFBundleIdentifier' \"$RUNNER_TEMP/smoke/Metis.app/Contents/Info.plist\"")
+    const calls = commands.split('\n').filter((line) => /\/usr\/bin\/tccutil\b/.test(line))
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toContain('/usr/bin/tccutil reset ScreenCapture "$bundle"')
+    expect([...commands.matchAll(/\/usr\/bin\/tccutil\s+(\S+)\s+(\S+)/g)].map((m) => `${m[1]} ${m[2]}`)).toEqual(['reset ScreenCapture'])
+    expect(commands).toContain('uid=$(id -u)')
+    expect(commands).toContain('[ "$uid" -eq 0 ]')
+  })
+
+  it('never uses sudo for tccutil', () => {
+    const commands = probeCommands()
+    for (const line of commands.split('\n')) {
+      if (/\btccutil\b/.test(line)) expect(line).not.toMatch(/\bsudo\b/)
+    }
+    expect(commands).not.toMatch(/sudo\s+(-\S+\s+)*\/usr\/bin/)
+    // Every sudo is the row-B sqlite3 seed/cleanup, the `tcc_has sudo` read of that database, or the root-user notice.
+    const remaining = commands
+      .replace(/\bsudo sqlite3\b/g, '')
+      .replace(/\btcc_has sudo\b/g, '')
+      .replace(/so a non-sudo reset cannot be measured/, '')
+    expect(remaining).not.toMatch(/\bsudo\b/)
+    expect(commands.match(/\bsudo sqlite3\b/g)).toHaveLength(2)
+  })
+
+  it('cannot fail the job', () => {
+    const step = macSteps().find((candidate) => candidate.name === probeStepName)!.text
+    expect(step).toContain('continue-on-error: true')
+    expect(step).toContain('set +eo pipefail')
+    expect(step.trimEnd().endsWith('exit 0')).toBe(true)
+    expect(step).toContain('::notice title=tccutil probe::')
+  })
+
+  it('gates the row-B seed on workflow_dispatch', () => {
+    const commands = probeCommands()
+    expect(commands).toContain('EVENT_NAME: ${{ github.event_name }}')
+    const gate = commands.indexOf('if [ "$EVENT_NAME" != "workflow_dispatch" ]; then')
+    const seed = commands.indexOf('INSERT OR REPLACE INTO access')
+    expect(gate).toBeGreaterThan(-1)
+    expect(seed).toBeGreaterThan(gate)
+    expect(commands.indexOf('else', gate)).toBeLessThan(seed)
+    expect(commands).toContain('csrutil: $sip')
+  })
+
+  it('writes the content-free report into the uploaded smoke-report directory', () => {
+    const commands = probeCommands()
+    expect(commands).toContain('smoke-report/tccutil-probe.json')
+    expect(commands).toContain('sw_vers -productVersion')
+    expect(commands).toContain('|<bundle>|g')
+    expect(commands).toContain('<path>')
+    for (const field of ['schema', 'macos', 'sip', 'uid_is_root', 'rows']) expect(commands).toContain(field)
+    expect(workflow).toMatch(/name: packaged-smoke-macos\n\s+path: smoke-report\/\n/)
+  })
+})
+
 // Resolves `${{ inputs.hk_m_cycles == '20' && A || B }}`; push and pull_request runs have no input (undefined).
 function resolveCyclesExpression(value: string, hkMCycles: string | undefined): string {
   const match = value.match(/^\$\{\{ inputs\.hk_m_cycles == '20' && '?([^' ]+)'? \|\| '?([^' ]+)'? \}\}$/)
