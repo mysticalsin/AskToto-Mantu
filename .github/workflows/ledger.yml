@@ -72,3 +72,7 @@ jobs:
         env:
           LEDGER_PATH: ${{ inputs.ledger-path }}
         run: node .evidence-checker/scripts/evidence/check.mjs --ledger "$LEDGER_PATH"
+      - name: Run the claims check (no two IN_PROGRESS tickets on one hot unit)
+        env:
+          LEDGER_PATH: ${{ inputs.ledger-path }}
+        run: node .evidence-checker/scripts/program/claims-check.mjs --ledger "$LEDGER_PATH"
