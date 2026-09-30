@@ -7,7 +7,10 @@ import { LANGUAGE_NAMES } from './lang-id'
 const root = process.cwd()
 const read = (rel: string): string => readFileSync(join(root, rel), 'utf8').replace(/\r\n/g, '\n')
 const settingsSource = (): string =>
-  read('src/renderer/src/features/settings/AiSection.tsx')
+  [
+    'src/renderer/src/features/settings/AiSection.tsx',
+    'src/renderer/src/features/settings/AudioTab.tsx'
+  ].map(read).join('\n')
 
 describe('ASR quality ship — stored preference and truthful runtime reporting', () => {
   it('schema + DEFAULT_SETTINGS + listen/App fallbacks all default asrQuality to best', () => {
