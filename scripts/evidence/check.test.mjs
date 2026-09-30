@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -540,6 +540,29 @@ test('C28 CLI --ticket M2-0008 validates a freeze repro bundle path', () => {
   const cliPath = fileURLToPath(new URL('./check.mjs', import.meta.url))
   const output = execFileSync(process.execPath, [cliPath, '--ticket', 'M2-0008', '--bundle', root], { encoding: 'utf8' })
   assert.match(output, /M2-0008 bundle: OK/)
+})
+
+test('C29 CLI --ticket M2-0198 validates a soak record: a supported verdict exits 0, a contradicted one exits 1', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'check-soak-'))
+  const cliPath = fileURLToPath(new URL('./check.mjs', import.meta.url))
+  const content = [
+    '# Owner soak, five-day window', '', 'evidence_level: MEASURED', 'rule: soak-rule-1', 'app_version: 1.9.7',
+    'consecutive_active_days: 5', 'first_day: 2026-10-01', 'last_day: 2026-10-05', 'stalls_over_5s: 0',
+    'unclean_shutdowns: 1', 'orphan_reaps: 2', 'orphan_reaps_after_unclean_exit: 2', 'reveal_no_ops: 0',
+    'brain_index_quarantined: 0', 'verdict: HOLD', ''
+  ].join('\n')
+  const good = join(dir, 'good.md')
+  const bad = join(dir, 'bad.md')
+  writeFileSync(good, content)
+  writeFileSync(bad, content.replace('verdict: HOLD', 'verdict: PROCEED'))
+
+  const output = execFileSync(process.execPath, [cliPath, '--ticket', 'M2-0198', '--record', good], { encoding: 'utf8' })
+  assert.match(output, /M2-0198 soak record: OK/)
+  const failed = spawnSync(process.execPath, [cliPath, '--ticket', 'M2-0198', '--record', bad], { encoding: 'utf8' })
+  assert.equal(failed.status, 1)
+  assert.match(failed.stderr, /contradicts the counts/)
+  const missing = spawnSync(process.execPath, [cliPath, '--ticket', 'M2-0198', '--record', join(dir, 'none.md')], { encoding: 'utf8' })
+  assert.equal(missing.status, 2)
 })
 
 // --- PR rules (P1-P7) and githubApi (G1) ---
