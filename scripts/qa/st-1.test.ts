@@ -8,6 +8,8 @@ import {
   emptyRun,
   evaluateCriteria,
   historyEntry,
+  historySummary,
+  parseArgs,
   pinnedExpression,
   recordSample,
   releaseExpression,
@@ -329,6 +331,90 @@ describe('buildReport', () => {
       verdicts.push(withWitness.verdict)
     }
     expect(verdicts).toEqual(['PASS', 'FAIL'])
+  })
+})
+
+describe('parseArgs (M2-0193)', () => {
+  it('reads valued flags as camelCase keys over the defaults, and a bare flag as true wherever it stands', () => {
+    expect(parseArgs(['--history', '--fixtures', 'fifo', '--cloud-dir', 'x'], { minutes: '5' })).toEqual({
+      minutes: '5',
+      history: 'true',
+      fixtures: 'fifo',
+      cloudDir: 'x'
+    })
+    expect(parseArgs(['--fixtures', 'none', '--minutes', '3', '--history'], { minutes: '5' })).toEqual({
+      minutes: '3',
+      fixtures: 'none',
+      history: 'true'
+    })
+  })
+})
+
+describe('the History row (M2-0193)', () => {
+  const open = (tMs: number, ms: number, extra: Record<string, unknown> = {}) => ({
+    tMs,
+    ms,
+    rows: 6,
+    notDownloaded: 4,
+    searchMs: 40,
+    hits: 0,
+    ...extra
+  })
+  const historyRun = (history: unknown[]) => ({ ...emptyRun(), samples: [goodSample(1_000)], loop: { p99Ms: 12, maxMs: 40 }, history })
+  const historyCriteria = (history: unknown[]) =>
+    Object.fromEntries(evaluateCriteria('fifo', historyRun(history), {}, { history: true }).map((c) => [c.name, c.pass]))
+
+  it('passes when every probe, the first included, opens and searches with a usable list within 2 s', () => {
+    expect(historyCriteria([open(20_000, 1_900), open(25_000, 30)])).toMatchObject({
+      'history-probed': true,
+      'history-open < 2000': true,
+      'history-search < 2000': true
+    })
+  })
+
+  it('fails History open on a first call that waits out the 2 s budget, even when every later call is fast', () => {
+    const criteria = historyCriteria([open(20_000, 2_004), open(25_000, 30), open(30_000, 25)])
+    expect(criteria['history-open < 2000']).toBe(false)
+    expect(criteria['history-search < 2000']).toBe(true)
+  })
+
+  it('fails on a hung or failed open, and fails search on a failed or slow search alone', () => {
+    expect(historyCriteria([{ tMs: 20_000, hung: true, ms: 10_000 }])['history-open < 2000']).toBe(false)
+    expect(historyCriteria([{ tMs: 20_000, hung: true, ms: 10_000 }])['history-search < 2000']).toBe(false)
+    expect(historyCriteria([{ tMs: 20_000, ms: 5, error: 'boom' }])['history-open < 2000']).toBe(false)
+    const failedSearch = historyCriteria([open(20_000, 30, { hits: undefined, searchError: 'boom' })])
+    expect(failedSearch['history-open < 2000']).toBe(true)
+    expect(failedSearch['history-search < 2000']).toBe(false)
+    expect(historyCriteria([open(20_000, 30, { searchMs: 2_000 })])['history-search < 2000']).toBe(false)
+  })
+
+  it('fails every History criterion when no probe reached a window, ignoring skipped probes otherwise', () => {
+    const none = historyCriteria([{ tMs: 20_000, skipped: 'no window' }])
+    expect(none).toMatchObject({ 'history-probed': false, 'history-open < 2000': false, 'history-search < 2000': false })
+    expect(historyCriteria([{ tMs: 20_000, skipped: 'no window' }, open(25_000, 30)])['history-open < 2000']).toBe(true)
+  })
+
+  it('adds no History criterion without --history', () => {
+    expect(evaluateCriteria('fifo', historyRun([open(20_000, 9_000)]), {}).map((c) => c.name)).not.toContain('history-open < 2000')
+    expect(report({ measured: historyRun([open(20_000, 9_000)]) }).verdict).toBe('PASS')
+  })
+
+  it('reports the first call apart from the rest, and fails the report on it', () => {
+    const measured = historyRun([{ tMs: 20_000, skipped: 'no window' }, open(25_000, 2_050), open(30_000, 30, { searchMs: 90, notDownloaded: 5 })])
+    expect(historySummary(measured)).toEqual({
+      probes: 2,
+      firstOpenMs: 2_050,
+      maxOpenMs: 2_050,
+      maxSearchMs: 90,
+      maxRows: 6,
+      maxNotDownloaded: 5
+    })
+    const built = report({ row: 'fifo', history: true, measured, evidence: { exercised: true, fixturesOpened: ['x'] } })
+    expect(built.historyRow).toBe(true)
+    expect(built.historySummary?.firstOpenMs).toBe(2_050)
+    expect(built.verdict).toBe('FAIL')
+    expect(report({ row: 'fifo', history: true, measured: historyRun([open(25_000, 30)]), evidence: { exercised: true } }).verdict).toBe('PASS')
+    expect(report().historySummary).toBeUndefined()
   })
 })
 

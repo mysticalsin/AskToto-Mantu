@@ -31,6 +31,8 @@ on:
       - src/main/boot-window-rendering.ts
       - src/main/lifecycle/first-show.ts
       - src/main/lifecycle/boot-work.ts
+      # The admission the ST-1 History row measures (M2-0193).
+      - src/main/infra/storage/admission.ts
 
 permissions:
   contents: read
@@ -578,6 +580,72 @@ jobs:
           if-no-files-found: warn
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 
+  # The History row (M2-0193): History open and search against the FIFO fixtures, each answering with a
+  # usable degraded list within 2 s, the first call included, with main loop p99 < 50 ms. Report-only per
+  # owner decision OD-24, like the fifo row. The real dataless half needs a cloud provider's evicted files,
+  # which a hosted runner has none of: it is recorded as BLOCKED_EXTERNAL with its unblock step.
+  st1-mac-history:
+    name: ST-1 History row (macOS)
+    needs: provenance
+    runs-on: macos-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-provenance
+          path: provenance
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-mac-qa-identity
+          path: assets
+      - name: Verify every byte against the provenance
+        run: node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
+      - name: Measure History open and search on the FIFO fixtures
+        continue-on-error: true
+        run: |
+          mkdir -p st1-report
+          installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
+          if [ -z "$installer" ]; then
+            echo "::error::candidate-mac-qa-identity did not contain a zip installer for ST-1."
+            exit 1
+          fi
+          node scripts/qa/st-1.mjs \
+            --installer "$installer" \
+            --provenance provenance/provenance.json \
+            --fixtures fifo \
+            --history \
+            --minutes 3 \
+            --out st1-report/st-1-macos-fifo-history.json
+      - name: Record the dataless History row's unblock step
+        if: always()
+        run: |
+          mkdir -p st1-report
+          cat > st1-report/st-1-macos-dataless-history-blocked.json <<'EOF'
+          {
+            "harness": "ST-1",
+            "row": "dataless",
+            "historyRow": true,
+            "verdict": "BLOCKED_EXTERNAL",
+            "reason": "Requires the macOS QA account with a signed-in cloud provider whose meeting files are evicted (dataless); a hosted runner has none.",
+            "unblockStep": "On the macOS QA account, evict a folder of meeting files with the provider, then run scripts/qa/st-1.mjs against the verified candidate zip with --fixtures dataless --history, --cloud-dir pointing at that folder, --main-log pointing at the candidate main log, --minutes 3, and upload the JSON report.",
+            "provenanceArtifact": "candidate-provenance"
+          }
+          EOF
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: st-1-macos-history
+          path: st1-report/
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+
   st1-windows-external:
     name: ST-1-W external unblock record
     needs: provenance
@@ -601,6 +669,17 @@ jobs:
             "provenanceArtifact": "candidate-provenance"
           }
           '@ | Set-Content -NoNewline st1-report/st-1-windows-blocked.json
+          @'
+          {
+            "harness": "ST-1-W",
+            "row": "dataless",
+            "historyRow": true,
+            "verdict": "BLOCKED_EXTERNAL",
+            "reason": "Requires a managed Windows QA laptop or hosted account with real cloud-provider dataless placeholders.",
+            "unblockStep": "Run scripts/qa/st-1.mjs against the verified candidate installer on the managed Windows QA laptop with --fixtures dataless --history, --cloud-dir pointing at evicted placeholder files, --main-log pointing at the candidate main log, --exe pointing at the installed Metis.exe, --minutes 3, and upload the JSON report.",
+            "provenanceArtifact": "candidate-provenance"
+          }
+          '@ | Set-Content -NoNewline st1-report/st-1-windows-history-blocked.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: st-1-windows-blocked

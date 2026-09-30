@@ -11,6 +11,10 @@
  *     the free count. Metadata calls are short and drive listings and degraded rows.
  *   - Waiting is bounded: a waiter leaves when its signal aborts, and acquire() refuses at once when
  *     MAX_QUEUED requests wait or every permit is held by a call running STUCK_AFTER_MS or more.
+ *   - Waiters already queued when every permit turns stuck are refused at that moment too. Otherwise a
+ *     request that queued while the blocking calls were still young sat out its own deadline (2 s for a
+ *     listing, History's whole degraded-view budget) while every later request was refused at once: the
+ *     ~2 s first History call of a stalled meetings root.
  */
 import { mainLog } from '../../logger'
 
@@ -34,12 +38,20 @@ export interface Admission {
   release(): void
 }
 
+/** A queued request: handed a permit, or refused when every permit turns stuck. */
+interface Waiter {
+  admit(): void
+  refuse(): void
+}
+
 export function createAdmission(capacity: number): Admission {
   let free = capacity
   const running = new Set<{ startedAt: number }>()
-  const waiting: Record<Lane, Array<() => void>> = { metadata: [], content: [] }
+  const waiting: Record<Lane, Waiter[]> = { metadata: [], content: [] }
   /** performance.now() when acquire() first refused because every permit was stuck; null otherwise. */
   let refusingSince: number | null = null
+  /** Fires when the youngest running call turns stuck while requests wait; null when not armed. */
+  let stuckTimer: ReturnType<typeof setTimeout> | null = null
 
   function everyPermitStuck(): boolean {
     const now = performance.now()
@@ -55,9 +67,28 @@ export function createAdmission(capacity: number): Admission {
     return true
   }
 
+  function waiters(): number {
+    return waiting.metadata.length + waiting.content.length
+  }
+
+  /** Arms stuckTimer for the moment every permit's call will have run STUCK_AFTER_MS, if requests wait. */
+  function watchQueue(): void {
+    if (stuckTimer !== null || waiters() === 0 || running.size < capacity) return
+    const youngest = Math.max(...[...running].map((call) => call.startedAt))
+    stuckTimer = setTimeout(refuseQueuedIfStuck, Math.max(0, youngest + STUCK_AFTER_MS - performance.now()))
+    stuckTimer.unref?.()
+  }
+
+  function refuseQueuedIfStuck(): void {
+    stuckTimer = null
+    if (waiters() === 0) return
+    if (!refuseWhileStuck()) return watchQueue()
+    for (const waiter of [...waiting.metadata.splice(0), ...waiting.content.splice(0)]) waiter.refuse()
+  }
+
   function release(): void {
     const next = waiting.metadata.shift() ?? waiting.content.shift()
-    if (next) next()
+    if (next) next.admit()
     else free += 1
   }
 
@@ -67,27 +98,30 @@ export function createAdmission(capacity: number): Admission {
       free -= 1
       return Promise.resolve('admitted')
     }
-    if (refuseWhileStuck() || waiting.metadata.length + waiting.content.length >= MAX_QUEUED) {
+    if (refuseWhileStuck() || waiters() >= MAX_QUEUED) {
       return Promise.resolve('refused')
     }
     const queue = waiting[lane]
     return new Promise((resolve) => {
-      function admit(): void {
+      function answer(result: AcquireResult): void {
         signal.removeEventListener('abort', leave)
-        resolve('admitted')
+        resolve(result)
       }
+      const waiter: Waiter = { admit: () => answer('admitted'), refuse: () => answer('refused') }
       function leave(): void {
-        queue.splice(queue.indexOf(admit), 1)
+        queue.splice(queue.indexOf(waiter), 1)
         resolve('ended')
       }
-      queue.push(admit)
+      queue.push(waiter)
       signal.addEventListener('abort', leave, { once: true })
+      watchQueue()
     })
   }
 
   function run<T>(call: () => Promise<T>): Promise<T> {
     const entry = { startedAt: performance.now() }
     running.add(entry)
+    watchQueue()
     return new Promise<T>((resolve) => resolve(call())).finally(() => {
       running.delete(entry)
       if (refusingSince !== null) {

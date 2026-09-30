@@ -13,6 +13,23 @@
 /** Where in-flight evaluations live inside the candidate, keyed per evaluation. */
 export const PENDING_GLOBAL = '__st1pending'
 
+/** History's degraded-view budget: a History open or search answers with a usable list within this. */
+export const HISTORY_BUDGET_MS = 2_000
+
+/** Command-line flags as camelCase keys over `defaults`: `--cloud-dir x` becomes `cloudDir: 'x'`. A flag
+ *  with no value (last, or followed by another flag) is the string 'true'. */
+export function parseArgs(argv, defaults = {}) {
+  const args = { ...defaults }
+  for (let i = 0; i < argv.length; i++) {
+    const flag = argv[i]
+    if (!flag.startsWith('--')) continue
+    const key = flag.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())
+    const next = argv[i + 1]
+    args[key] = next === undefined || next.startsWith('--') ? 'true' : argv[++i]
+  }
+  return args
+}
+
 /** Resolves with `promise`'s outcome, or `{ ok: false, timedOut: true }` after `ms`. Never rejects; the
  *  timer is cleared as soon as either side settles. */
 export function withTimeout(promise, ms) {
@@ -150,8 +167,42 @@ export function witnessSummary(timeline, loop) {
   return { loop: loop ?? null, write: { maxMs: max('writeMs') }, cpuBusyMaxPct: max('cpuBusyPct') }
 }
 
-/** The pass/fail criteria. They read only the measurement, never the attribution evidence. */
-export function evaluateCriteria(row, measured, evidence) {
+/** The History probes that reached a window (`skipped` ones did not: no window bridged History yet). */
+function historyProbes(measured) {
+  return measured.history.filter((entry) => !entry.skipped)
+}
+
+/** Whether one History probe opened History (list + brain status) with a list, or searched with results,
+ *  within HISTORY_BUDGET_MS. A hung or failed probe did neither; a failed search (`searchError`) did not
+ *  search. */
+function openedInBudget(entry) {
+  return !entry.hung && !entry.error && typeof entry.rows === 'number' && entry.ms < HISTORY_BUDGET_MS
+}
+function searchedInBudget(entry) {
+  return !entry.hung && !entry.error && !entry.searchError && typeof entry.hits === 'number' && entry.searchMs < HISTORY_BUDGET_MS
+}
+
+/** The History row's summary: the first probe is History's first call, the one that paid any start-up wait. */
+export function historySummary(measured) {
+  const probes = historyProbes(measured)
+  const max = (key) => {
+    const values = probes.map((entry) => entry[key]).filter((value) => typeof value === 'number')
+    return values.length > 0 ? Math.max(...values) : null
+  }
+  return {
+    probes: probes.length,
+    firstOpenMs: probes[0]?.ms ?? null,
+    maxOpenMs: max('ms'),
+    maxSearchMs: max('searchMs'),
+    maxRows: max('rows'),
+    maxNotDownloaded: max('notDownloaded')
+  }
+}
+
+/** The pass/fail criteria. They read only the measurement, never the attribution evidence. The History row
+ *  (`history`) adds History open and search: every probe, the first one included, answers within
+ *  HISTORY_BUDGET_MS. */
+export function evaluateCriteria(row, measured, evidence, { history = false } = {}) {
   const criteria = [
     { name: 'inspector', pass: true }, // only reached once the candidate actually produced a working inspector
     { name: 'has-samples', pass: measured.samples.length > 0 },
@@ -162,6 +213,14 @@ export function evaluateCriteria(row, measured, evidence) {
     { name: 'dns-lookup < 250', pass: measured.samples.every((s) => s.lookupMs < 250) }
   ]
   if (row === 'dataless') criteria.push({ name: 'still-dataless', pass: evidence?.stillDataless === true })
+  if (history) {
+    const probes = historyProbes(measured)
+    criteria.push(
+      { name: 'history-probed', pass: probes.length > 0 },
+      { name: `history-open < ${HISTORY_BUDGET_MS}`, pass: probes.length > 0 && probes.every(openedInBudget) },
+      { name: `history-search < ${HISTORY_BUDGET_MS}`, pass: probes.length > 0 && probes.every(searchedInBudget) }
+    )
+  }
   return criteria
 }
 
@@ -177,8 +236,8 @@ export function emptyRun() {
  * early proves nothing either way. A complete run's verdict comes from the criteria alone; the runner
  * witness and the boot stages are report-only.
  */
-export function buildReport({ row, installer, candidate, minutes, measured, evidence, fixtures, attribution, complete, harnessError }) {
-  const criteria = evaluateCriteria(row, measured, evidence)
+export function buildReport({ row, history = false, installer, candidate, minutes, measured, evidence, fixtures, attribution, complete, harnessError }) {
+  const criteria = evaluateCriteria(row, measured, evidence, { history })
   // The control row has nothing to exercise: its verdict is the criteria alone.
   const exercised = row === 'none' || evidence?.exercised
   const verdict = !complete ? 'INCOMPLETE' : !exercised ? 'NOT_EXERCISED' : criteria.every((c) => c.pass) ? 'PASS' : 'FAIL'
@@ -186,6 +245,7 @@ export function buildReport({ row, installer, candidate, minutes, measured, evid
   return {
     harness: 'ST-1',
     row,
+    ...(history ? { historyRow: true } : {}),
     platform: process.platform,
     arch: process.arch,
     installer,
@@ -202,6 +262,7 @@ export function buildReport({ row, installer, candidate, minutes, measured, evid
     exercised: evidence?.exercised ?? null,
     ...(row === 'fifo' ? { fixturesOpened: evidence?.fixturesOpened ?? null } : {}),
     ...(row === 'dataless' ? { stillDataless: evidence?.stillDataless ?? null } : {}),
+    ...(history ? { historySummary: historySummary(measured) } : {}),
     criteria,
     verdict,
     complete,

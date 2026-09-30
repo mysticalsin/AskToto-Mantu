@@ -11,7 +11,26 @@ afterEach(() => {
   // test unless cleared explicitly here too.
   vi.restoreAllMocks()
   vi.clearAllMocks()
+  vi.useRealTimers()
 })
+
+/** Fake timers whose clock also drives performance.now(), the clock admission.ts ages calls by. */
+function fakeClock(): void {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+}
+
+/** A call run under a held permit that settles only when the test says so. */
+function hold(admission: ReturnType<typeof createAdmission>): { running: Promise<string>; settle: () => Promise<void> } {
+  let resolve: (value: string) => void = () => {}
+  const running = admission.run(() => new Promise<string>((r) => (resolve = r)))
+  return {
+    running,
+    settle: async () => {
+      resolve('done')
+      await running
+    }
+  }
+}
 
 /** admission.ts has no timers of its own: acquire()/run() settle on plain microtasks. Races `pending`
  *  against an already-resolved sentinel so a genuinely pending promise reports 'pending' without ever
@@ -152,6 +171,61 @@ describe('createAdmission', () => {
     resolveB('done')
     await runningB
     expect(mainLog.info).toHaveBeenCalledTimes(1) // the episode was already closed; settling B logs nothing more
+  })
+
+  it('refuses the waiters already queued the moment every permit turns stuck, not at their own deadline (M2-0193)', async () => {
+    fakeClock()
+    const admission = createAdmission(2)
+    await expect(admission.acquire('content', signal())).resolves.toBe('admitted')
+    await expect(admission.acquire('content', signal())).resolves.toBe('admitted')
+    const a = hold(admission) // starts at 0
+    await vi.advanceTimersByTimeAsync(500)
+    const b = hold(admission) // starts at 500: every permit is stuck from 2 500
+
+    const metadata = admission.acquire('metadata', signal())
+    const content = admission.acquire('content', signal())
+    await vi.advanceTimersByTimeAsync(1_999) // 2 499: b has run 1 999 ms
+    expect(await peek(metadata)).toBe('pending')
+    expect(await peek(content)).toBe('pending')
+    expect(mainLog.warn).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(1) // 2 500
+    await expect(metadata).resolves.toBe('refused')
+    await expect(content).resolves.toBe('refused')
+    expect(mainLog.warn).toHaveBeenCalledTimes(1)
+    expect(mainLog.warn).toHaveBeenCalledWith(expect.any(String), { capacity: 2 })
+
+    // The refused waiters hold nothing: both permits return to the free count as the stuck calls settle.
+    await a.settle()
+    await b.settle()
+    expect(mainLog.info).toHaveBeenCalledTimes(1)
+    await expect(admission.acquire('content', signal())).resolves.toBe('admitted')
+    await expect(admission.acquire('content', signal())).resolves.toBe('admitted')
+    expect(await peek(admission.acquire('content', signal()))).toBe('pending')
+  })
+
+  it('keeps a waiter queued while a permit changes hands before turning stuck, and refuses it once the new call does (M2-0193)', async () => {
+    fakeClock()
+    const admission = createAdmission(2)
+    await expect(admission.acquire('content', signal())).resolves.toBe('admitted')
+    await expect(admission.acquire('content', signal())).resolves.toBe('admitted')
+    const a = hold(admission) // starts at 0
+    hold(admission) // starts at 0 and never settles
+
+    const first = admission.acquire('metadata', signal())
+    await vi.advanceTimersByTimeAsync(1_000)
+    await a.settle() // at 1 000 the permit goes to the waiter, which runs a call that never settles
+    await expect(first).resolves.toBe('admitted')
+    hold(admission) // starts at 1 000
+
+    const second = admission.acquire('metadata', signal())
+    await vi.advanceTimersByTimeAsync(1_999) // 2 999: the first call is stuck, the newest has run 1 999 ms
+    expect(await peek(second)).toBe('pending')
+    expect(mainLog.warn).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(1) // 3 000
+    await expect(second).resolves.toBe('refused')
+    expect(mainLog.warn).toHaveBeenCalledTimes(1)
   })
 
   it('refuses at once when MAX_QUEUED requests already wait', async () => {
