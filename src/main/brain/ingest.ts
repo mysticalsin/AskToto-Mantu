@@ -417,22 +417,18 @@ export const buildExtractionSystem = (extra = ''): string =>
 
 // ── Windowed extraction (Task MI-4, kills D2 — the old hard 24k truncation) ──────────────────────────
 
-// Same size as the old hardcoded `.slice(0, 24000)` — a transcript at or under this length takes the
-// EXACT single-completion-call path it always has (see splitIntoWindows's own byte-identity guarantee).
+// Same size as the old hardcoded `.slice(0, 24000)`; transcripts at or under it keep the exact
+// single-completion path.
 const WINDOW_SIZE = 24000
-// ~1k of trailing context carried into the next window so a fact split across a window boundary (a
-// number stated in one line, its supporting clause in the next) still has a chance to align in EITHER
-// window — small relative to WINDOW_SIZE, so it never meaningfully multiplies completion-call volume.
+// Trailing context for boundary-split facts; small enough not to meaningfully multiply calls.
 const WINDOW_OVERLAP = 1000
 
-/** The largest window (chars) whose local extraction request fits a slot of `slotTokens` (INV-FIT in
- *  local-extraction-fit.ts), capped at WINDOW_SIZE. */
+/** Largest local extraction window that fits one runtime slot, capped at WINDOW_SIZE. */
 export function localExtractionWindowChars(slotTokens: number): number {
   return fitWindowChars(slotTokens, buildExtractionSystem(EXTRACTION_REMINDER).length, WINDOW_SIZE)
 }
 
-/** Window size for this route: fitted to the local slot when Métis Local is asked first, else WINDOW_SIZE.
- *  `local` says whether the size came from the slot, which is what makes a context overflow permanent. */
+/** Window size for this route; `local` means overflow is permanent for the current runtime slot. */
 function extractionWindowSize(s: Settings, route: IngestRoute): { size: number; local: boolean } {
   const first = pickProviderCandidates(s, route)[0]
   if (first?.provider !== 'local') return { size: WINDOW_SIZE, local: false }
@@ -440,7 +436,6 @@ function extractionWindowSize(s: Settings, route: IngestRoute): { size: number; 
   try {
     slotTokens = localSlotTokens(first.model)
   } catch {
-    // An unknown persisted model id: the local call itself reports that, so size as before.
     return { size: WINDOW_SIZE, local: false }
   }
   return { size: localExtractionWindowChars(slotTokens), local: true }
@@ -454,11 +449,7 @@ function classifyIngestFailure(error: unknown, unreadable: boolean): BrainIngest
   return 'provider_error'
 }
 
-/** Split `text` into sequential windows of at most `size` chars, cut at line boundaries so a window
- *  never splits a transcript line, with `overlap` chars of trailing context carried into the next
- *  window. Returns `[text]` UNCHANGED when `text.length <= size` — the single-window path every
- *  transcript at or under the threshold takes, byte-identical to pre-MI-4 behavior (a 1-element array's
- *  `.join()` below reproduces `text` exactly, so no downstream branching is needed for that case). */
+/** Split into line-preserving windows with overlap. Text at or under `size` returns unchanged. */
 export function splitIntoWindows(text: string, size = WINDOW_SIZE, overlap = WINDOW_OVERLAP): string[] {
   if (text.length <= size) return [text]
   const lines = text.split('\n')
@@ -478,15 +469,8 @@ export function splitIntoWindows(text: string, size = WINDOW_SIZE, overlap = WIN
         ov.unshift(cur[j])
         ovLen += cur[j].length + 1
       }
-      // MQA-017: `i` only advances on the push path below, so the reseeded window MUST be able to accept
-      // this line — otherwise the same branch fires again on the same `i`, pushes an identical window,
-      // and reseeds identical state forever: an infinite loop that grows `windows` without bound and
-      // wedges the main process (this runs synchronously on it, via extractMeeting). Reachable whenever
-      // one line's overlap seed plus the next line exceeds `size` — e.g. two adjacent very long lines.
-      // Dropping the overlap guarantees forward progress: with an empty `cur` the guard below is false,
-      // so the line is always consumed, and a single line longer than `size` becomes its own oversized
-      // window rather than looping. Losing overlap context on that boundary is the correct trade against
-      // hanging the app.
+      // MQA-017: the reseeded window must accept this line or the same `i` loops forever.
+      // Drop overlap on that boundary so long adjacent lines still make forward progress.
       if (ovLen + lineLen > size) {
         cur = []
         curLen = 0

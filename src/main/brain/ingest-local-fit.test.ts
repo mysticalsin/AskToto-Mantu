@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { app } from 'electron'
@@ -169,8 +169,7 @@ describe('M2-0034: background extraction fits a 4,096-token local slot and class
   })
 
   it('classifies an unavailable extraction path before any model call', async () => {
-    localBaseReadyMock.mockReturnValue(false)
-    writeFileSync(join(meetingsFolder, 'unavailable.md'), '---\ndate: 2026-09-29\n---\nTHEM: Short synthetic meeting.', 'utf8')
+    mkdirSync(join(meetingsFolder, 'unavailable.md'))
 
     expect(await startBackfill()).toEqual({ queued: 1 })
     await drain()

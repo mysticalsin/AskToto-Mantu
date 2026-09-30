@@ -26,7 +26,7 @@ export const FM_CONTEXT_TOKENS = 4096
  *  next start would get on this machine. Every local request must fit one slot. */
 export function localSlotTokens(modelId: string): number {
   const paths = resolveLocalModelPaths(modelId)
-  const running = localRuntime.getActiveModelKey() === paths.gguf ? localRuntime.activeContextPerSlotTokens() : null
+  const running = localRuntime.getActiveModelKey() === paths.gguf ? localRuntime.activeSlotTokens() : null
   return running ?? Math.floor(paths.ctxSize / paths.parallel)
 }
 
