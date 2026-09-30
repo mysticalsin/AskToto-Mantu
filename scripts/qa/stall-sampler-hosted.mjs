@@ -23,7 +23,7 @@ const DEFAULT_STOP_SECONDS = 15
 export const IDLE_SLEEP_WAKE_ROW = Object.freeze({
   row: 'idle-60m-sleep-wake',
   status: 'BLOCKED_EXTERNAL',
-  unblock: 'Run this row on a long-lived or physical macOS QA host that can remain idle for 60 minutes, including one sleep and wake, before the stop.'
+  unblock: 'Run this row on a long-lived physical macOS QA host that can remain idle for 60 minutes, including one sleep and one wake, before the stop.'
 })
 
 class Precondition extends Error {}

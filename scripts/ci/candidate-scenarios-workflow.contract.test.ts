@@ -125,6 +125,7 @@ describe('candidate-scenarios.yml', () => {
     expect(install).toContain('target="candidate-install"')
     expect(install).toContain('rm -rf "$target"')
     expect(install).toContain('mkdir "$target"')
+    expect(install).toContain('volume="$RUNNER_TEMP/candidate-volume"')
     expect(install).toContain('hdiutil attach')
     expect(install).toContain('ditto -x -k "$INSTALLER" "$target"')
     expect(install).toContain('echo "path=$app" >> "$GITHUB_OUTPUT"')
