@@ -358,6 +358,105 @@ async function locatorVisible(locator) {
   return locator.first().isVisible({ timeout: 500 }).catch(() => false)
 }
 
+export function navigationViewReadiness(snapshot, request) {
+  if (request.view === 'history') {
+    if (snapshot.searchVisible !== true) return { ready: false, reason: 'history search field was not visible' }
+    if (snapshot.searchEnabled !== true) return { ready: false, reason: 'history search field was not interactive' }
+    if (request.title && snapshot.targetMeetingButtonVisible !== true) {
+      return { ready: false, reason: 'target history row was not visible' }
+    }
+    if (request.title && snapshot.targetMeetingButtonEnabled !== true) {
+      return { ready: false, reason: 'target history row was not interactive' }
+    }
+    return { ready: true, reason: null }
+  }
+
+  if (snapshot.backVisible !== true) return { ready: false, reason: 'review back button was not visible' }
+  if (snapshot.backEnabled !== true) return { ready: false, reason: 'review back button was not interactive' }
+  if (request.title && snapshot.titleVisible !== true) return { ready: false, reason: 'target review was not visible' }
+  if (snapshot.guardVisible === true) return { ready: false, reason: 'navigation guard was still open' }
+  return { ready: true, reason: null }
+}
+
+function navigationSnapshotDiagnostic(snapshot) {
+  if (!snapshot) return null
+  return {
+    searchVisible: snapshot.searchVisible === true,
+    searchEnabled: snapshot.searchEnabled === true,
+    targetMeetingButtonVisible: snapshot.targetMeetingButtonVisible === true,
+    targetMeetingButtonEnabled: snapshot.targetMeetingButtonEnabled === true,
+    backVisible: snapshot.backVisible === true,
+    backEnabled: snapshot.backEnabled === true,
+    titleVisible: snapshot.titleVisible === true,
+    guardVisible: snapshot.guardVisible === true
+  }
+}
+
+async function readNavigationViewSnapshot(page, request) {
+  return page.evaluate(({ title }) => {
+    const visible = (node) => {
+      if (!(node instanceof HTMLElement)) return false
+      const style = window.getComputedStyle(node)
+      return style.visibility !== 'hidden' && style.display !== 'none' && node.getClientRects().length > 0
+    }
+    const enabled = (node) =>
+      node instanceof HTMLElement &&
+      !node.hasAttribute('disabled') &&
+      node.getAttribute('aria-disabled') !== 'true'
+    const buttons = Array.from(document.querySelectorAll('button'))
+    const buttonMatching = (pattern) =>
+      buttons.find((button) => {
+        const label = `${button.getAttribute('aria-label') ?? ''} ${button.textContent ?? ''}`
+        return pattern.test(label)
+      }) ?? null
+    const targetButton = title
+      ? buttons.find((button) => `${button.getAttribute('aria-label') ?? ''} ${button.textContent ?? ''}`.includes(title)) ?? null
+      : null
+    const search = document.querySelector('[aria-label="Search past meetings"]')
+    const back = buttonMatching(/Back to history/i)
+    const guard = document.querySelector('[role="dialog"][aria-label="Save recap changes?"]')
+    return {
+      searchVisible: visible(search),
+      searchEnabled: enabled(search),
+      targetMeetingButtonVisible: title ? visible(targetButton) : null,
+      targetMeetingButtonEnabled: title ? enabled(targetButton) : null,
+      backVisible: visible(back),
+      backEnabled: enabled(back),
+      titleVisible: title ? (document.body?.innerText ?? '').includes(title) : null,
+      guardVisible: visible(guard)
+    }
+  }, { title: request.title ?? null })
+}
+
+export async function waitForNavigationView(page, request, options = {}) {
+  const timeoutMs = options.timeoutMs ?? 15_000
+  const pollMs = options.pollMs ?? 100
+  const wait = options.wait ?? sleep
+  const deadline = Date.now() + timeoutMs
+  let lastSnapshot = null
+  let lastReadError = null
+
+  while (Date.now() < deadline) {
+    try {
+      lastSnapshot = await readNavigationViewSnapshot(page, request)
+      lastReadError = null
+      const verdict = navigationViewReadiness(lastSnapshot, request)
+      if (verdict.ready) return lastSnapshot
+    } catch (err) {
+      lastReadError = err
+    }
+    await wait(pollMs)
+  }
+
+  const verdict = lastSnapshot ? navigationViewReadiness(lastSnapshot, request) : null
+  const reason = lastReadError
+    ? `renderer readiness probe failed: ${lastReadError?.message ?? String(lastReadError)}`
+    : verdict?.reason ?? 'renderer readiness probe produced no observation'
+  throw new Error(
+    `${request.view} view was not reached: ${reason}; readiness=${JSON.stringify(navigationSnapshotDiagnostic(lastSnapshot))}`
+  )
+}
+
 async function ensureNavigationGuardHarnessState(page, browser) {
   const state = await page.evaluate(async (patch) => {
     const before = await window.toto.getSettings()
@@ -540,9 +639,10 @@ async function expectGuard(page) {
   await page.getByRole('dialog', { name: 'Save recap changes?' }).waitFor({ timeout: 15_000 })
 }
 
-async function returnToHistoryFromReview(page) {
+async function returnToHistoryFromReview(page, options = {}) {
+  if (options.reviewTitle) await waitForNavigationView(page, { view: 'review', title: options.reviewTitle })
   await page.getByRole('button', { name: /Back to history/ }).first().click({ timeout: 15_000 })
-  await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+  await waitForNavigationView(page, { view: 'history', title: options.historyTitle })
 }
 
 async function cancelRecapEdit(page) {
@@ -744,8 +844,8 @@ async function runPackagedNavigationGuardRows({ port, rows, executable, env }) {
     await runNavigationStep(rows, 'HIST-dirty-discard-recent', async () => {
       await openDirtyReview(page, 'Smoke navigation alpha', 'Discard by Recent meetings.')
       await chooseDirtyHistoryNavigation(page, 'Discard', () => page.getByRole('button', { name: /Smoke navigation beta/ }).first().click({ timeout: 15_000 }))
-      await waitForText(page, 'Smoke navigation beta')
-      await returnToHistoryFromReview(page)
+      await waitForNavigationView(page, { view: 'review', title: 'Smoke navigation beta' })
+      await returnToHistoryFromReview(page, { reviewTitle: 'Smoke navigation beta', historyTitle: 'Smoke navigation alpha' })
       return { decision: 'discard', entry: 'review-recent-meeting', openedTargetMeeting: true }
     })
 
@@ -753,9 +853,9 @@ async function runPackagedNavigationGuardRows({ port, rows, executable, env }) {
       const suffix = 'Saved by Recent meetings navigation guard.'
       await openDirtyReview(page, 'Smoke navigation alpha', suffix)
       await chooseDirtyHistoryNavigation(page, 'Save', () => page.getByRole('button', { name: /Smoke navigation beta/ }).first().click({ timeout: 15_000 }))
-      await waitForText(page, 'Smoke navigation beta')
+      await waitForNavigationView(page, { view: 'review', title: 'Smoke navigation beta' })
       await expectSavedRecap(page, seeded.first, suffix)
-      await returnToHistoryFromReview(page)
+      await returnToHistoryFromReview(page, { reviewTitle: 'Smoke navigation beta', historyTitle: 'Smoke navigation alpha' })
       return { decision: 'save', entry: 'review-recent-meeting', persistedBeforeNavigation: true }
     })
 

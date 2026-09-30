@@ -26,6 +26,7 @@ import {
   initialRvRows,
   initialNavigationGuardRows,
   initialRightEdgeHideRows,
+  navigationViewReadiness,
   rightEdgeExpectedRects,
   rightEdgeHideParkMatches,
   rightEdgeStateMatches,
@@ -33,7 +34,8 @@ import {
   runRevealRow,
   seedOnboardedProfile,
   smokeReport,
-  smokeVerdict
+  smokeVerdict,
+  waitForNavigationView
 } from './packaged-smoke.mjs'
 
 interface ProcessEntry {
@@ -800,6 +802,61 @@ describe('initialNavigationGuardRows', () => {
     expect(rows.some((row) => row.state === 'dirty')).toBe(true)
     expect(rows.every((row) => row.status === 'PENDING')).toBe(true)
     expect(rows.every((row) => row.unblock === null)).toBe(true)
+  })
+})
+
+describe('navigation view readiness', () => {
+  const historyReady = {
+    searchVisible: true,
+    searchEnabled: true,
+    targetMeetingButtonVisible: true,
+    targetMeetingButtonEnabled: true,
+    backVisible: false,
+    backEnabled: false,
+    titleVisible: false,
+    guardVisible: false
+  }
+  const reviewReady = {
+    searchVisible: false,
+    searchEnabled: false,
+    targetMeetingButtonVisible: false,
+    targetMeetingButtonEnabled: false,
+    backVisible: true,
+    backEnabled: true,
+    titleVisible: true,
+    guardVisible: false
+  }
+
+  it('requires interactive app-side controls before History or Review is considered reached', () => {
+    expect(navigationViewReadiness(historyReady, { view: 'history', title: 'Smoke navigation alpha' })).toEqual({
+      ready: true,
+      reason: null
+    })
+    expect(
+      navigationViewReadiness({ ...historyReady, targetMeetingButtonEnabled: false }, { view: 'history', title: 'Smoke navigation alpha' })
+    ).toEqual({ ready: false, reason: 'target history row was not interactive' })
+    expect(navigationViewReadiness(reviewReady, { view: 'review', title: 'Smoke navigation beta' })).toEqual({
+      ready: true,
+      reason: null
+    })
+    expect(navigationViewReadiness({ ...reviewReady, guardVisible: true }, { view: 'review', title: 'Smoke navigation beta' })).toEqual({
+      ready: false,
+      reason: 'navigation guard was still open'
+    })
+  })
+
+  it('polls renderer readiness and reports why the requested view was not reached', async () => {
+    const snapshots = [
+      { ...reviewReady, backVisible: false, titleVisible: false },
+      { ...reviewReady, titleVisible: false }
+    ]
+    const page = {
+      evaluate: async () => snapshots.shift() ?? { ...reviewReady, titleVisible: false }
+    }
+
+    await expect(
+      waitForNavigationView(page, { view: 'review', title: 'Smoke navigation beta' }, { timeoutMs: 5, pollMs: 1, wait: async () => undefined })
+    ).rejects.toThrow(/review view was not reached: target review was not visible/)
   })
 })
 
