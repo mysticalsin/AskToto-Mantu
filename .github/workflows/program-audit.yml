@@ -1,14 +1,9 @@
 name: Program audit
 
 # Reusable audit lane for a program ledger (M2-0509): the evidence back-fill (M2-0238), the
-<<<<<<< HEAD
-# re-execution draw (ADR-017, M2-0002), the velocity forecast (M2-0197) and the release evidence
-# preflight, run in CI only (D-28).
-=======
 # re-execution draw (ADR-017, M2-0002), the velocity forecast (M2-0197) and the release gate check
 # (M2-0511: check.mjs --release against the gate file, the candidate's provenance.json and the release
 # file, with the version taken from the gate file), run in CI only (D-28).
->>>>>>> origin/m2/integration
 # The ledger and its evidence records live in a private repository that never appears here (AGENTS.md
 # #1), so this is a `workflow_call` workflow in the same shape as ledger.yml: the caller's own workflow
 #   jobs:
@@ -61,29 +56,17 @@ on:
         type: string
         default: m3
       gates-path:
-<<<<<<< HEAD
-        description: release-check mode, gates input path in the caller's checkout
-=======
         description: release-check mode, the release gate file (schema in scripts/evidence/check.mjs)
->>>>>>> origin/m2/integration
         required: false
         type: string
         default: ''
       provenance-path:
-<<<<<<< HEAD
-        description: release-check mode, provenance input path in the caller's checkout
-=======
         description: release-check mode, the candidate's provenance.json
->>>>>>> origin/m2/integration
         required: false
         type: string
         default: ''
       notes-path:
-<<<<<<< HEAD
-        description: release-check mode, notes input path in the caller's checkout
-=======
         description: release-check mode, the release file <version>.md
->>>>>>> origin/m2/integration
         required: false
         type: string
         default: ''
@@ -128,29 +111,17 @@ on:
         type: string
         default: m3
       gates-path:
-<<<<<<< HEAD
-        description: release-check mode, gates input path
-=======
         description: release-check mode, the release gate file (schema in scripts/evidence/check.mjs)
->>>>>>> origin/m2/integration
         required: false
         type: string
         default: ''
       provenance-path:
-<<<<<<< HEAD
-        description: release-check mode, provenance input path
-=======
         description: release-check mode, the candidate's provenance.json
->>>>>>> origin/m2/integration
         required: false
         type: string
         default: ''
       notes-path:
-<<<<<<< HEAD
-        description: release-check mode, notes input path
-=======
         description: release-check mode, the release file <version>.md
->>>>>>> origin/m2/integration
         required: false
         type: string
         default: ''
@@ -255,37 +226,16 @@ jobs:
           fi
           node .program-audit-scripts/scripts/program/velocity.mjs "${args[@]}"
           cat "$OUT_DIR/FORECAST.md" >> "$GITHUB_STEP_SUMMARY"
-<<<<<<< HEAD
-      - name: Check the release evidence inputs
-=======
       - name: Check the release gates
->>>>>>> origin/m2/integration
         if: inputs.mode == 'release-check'
         run: |
           set -euo pipefail
           mkdir -p "$OUT_DIR"
-<<<<<<< HEAD
-          for path in "$GATES_PATH" "$PROVENANCE_PATH" "$NOTES_PATH"; do
-            if [ ! -f "$path" ]; then
-              echo "release-check input not found: $path" >&2
-              exit 2
-            fi
-          done
-          {
-            echo "# Release-check inputs"
-            echo
-            echo "Gate: $GATE"
-            echo
-            sha256sum "$GATES_PATH" "$PROVENANCE_PATH" "$NOTES_PATH" | awk '{ print "- `" $2 "` sha256 `" $1 "`" }'
-          } > "$OUT_DIR/release-check.md"
-          cat "$OUT_DIR/release-check.md" >> "$GITHUB_STEP_SUMMARY"
-=======
           version="$(jq -er '.version' "$GATES_PATH")"
           status=0
           node .program-audit-scripts/scripts/evidence/check.mjs --release "$version" --gates "$GATES_PATH" --provenance "$PROVENANCE_PATH" --ledger "$LEDGER_PATH" --notes "$NOTES_PATH" > "$OUT_DIR/release-check.txt" 2>&1 || status=$?
           { echo '```text'; cat "$OUT_DIR/release-check.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
->>>>>>> origin/m2/integration
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always() && hashFiles('out/program-audit/**') != ''
         with:

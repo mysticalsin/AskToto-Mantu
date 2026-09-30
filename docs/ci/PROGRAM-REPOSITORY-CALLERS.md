@@ -4,9 +4,8 @@ This public repository owns the reusable workflows. The program repository owns 
 caller workflows below and its runtime variables. Keep the caller content here as the
 public, non-test source of truth for the lead to install in that repository.
 
-`release-check` in `program-audit-dispatch.yml` is a preflight only: it checks that
-the three requested inputs exist and records their sha256 hashes. The first
-release-check run belongs to M2-0511.
+`release-check` in `program-audit-dispatch.yml` wires the release evidence inputs to
+the reusable audit workflow. The first release-check run belongs to M2-0511.
 
 ## `ledger-check.yml`
 

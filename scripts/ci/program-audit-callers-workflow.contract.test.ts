@@ -17,14 +17,22 @@ const PUBLIC_AUDIT = 'mysticalsin/AskToto-Mantu/.github/workflows/program-audit.
 const literal = (...codes: number[]): string => String.fromCharCode(...codes)
 const PRIVATE_PROGRAM_PATH_PATTERNS = [
   new RegExp(`${literal(100, 111, 99, 115)}\\/${literal(109, 101, 116, 105, 115, 45, 50, 46, 48)}`),
-  new RegExp(`${literal(101, 118, 105, 100, 101, 110, 99, 101)}\\/${literal(114, 101, 99, 111, 114, 100, 115)}`),
-  new RegExp(`${literal(108, 101, 100, 103, 101, 114)}\\/${literal(116, 105, 99, 107, 101, 116, 115, 46, 106, 115, 111, 110)}`)
+  new RegExp(
+    `${literal(101, 118, 105, 100, 101, 110, 99, 101)}\\/${literal(114, 101, 99, 111, 114, 100, 115)}`
+  ),
+  new RegExp(
+    `${literal(108, 101, 100, 103, 101, 114)}\\/${literal(116, 105, 99, 107, 101, 116, 115, 46, 106, 115, 111, 110)}`
+  )
 ]
 
 function callerBlock(fileName: string): string {
-  const match = callerDoc.match(new RegExp(`## \`${fileName.replace('.', '\\.')}\`\\n\\n\`\`\`yaml\\n([\\s\\S]*?)\\n\`\`\``))
+  const escapedFileName = fileName.replace('.', '\\.')
+  const fence = '```'
+  const pattern = `## ${'`'}${escapedFileName}${'`'}\\n\\n${fence}yaml\\n([\\s\\S]*?)\\n${fence}`
+  const match = callerDoc.match(new RegExp(pattern))
   expect(match).not.toBeNull()
-  return `${match?.[1] ?? ''}\n`
+  if (!match) throw new Error(`Missing caller block for ${fileName}`)
+  return `${match[1]}\n`
 }
 
 const ledgerCaller = callerBlock('ledger-check.yml')
@@ -76,13 +84,20 @@ describe('M2-0510 program repository caller workflows', () => {
 
   it('records all lead handoffs needed to meet acceptance items 3 and 4', () => {
     expect(callerDoc).toContain(
-      "LEAD_ACTION: add ledger-check.yml and program-audit-dispatch.yml to the program repository's .github/workflows/ and supersede the caller on branch m2-0057-sanitize-prior-exec"
+      'LEAD_ACTION: add ledger-check.yml and program-audit-dispatch.yml to the program ' +
+        "repository's .github/workflows/ " +
+        'and supersede the caller on branch m2-0057-sanitize-prior-exec'
     )
     expect(callerDoc).toContain(
-      'LEAD_ACTION: set repository variables PROGRAM_LEDGER_PATH and PROGRAM_RECORDS_PATH in the program repository to its ledger and evidence-records paths'
+      'LEAD_ACTION: set repository variables PROGRAM_LEDGER_PATH and PROGRAM_RECORDS_PATH in the program repository ' +
+        'to its ledger and evidence-records paths'
     )
-    expect(callerDoc).toContain('LEAD_ACTION: dispatch backfill on program main and record the run id and uploaded artifact')
-    expect(callerDoc).toContain('LEAD_ACTION: dispatch velocity with gate=m3 on program main and record the run id and uploaded artifact')
+    expect(callerDoc).toContain(
+      'LEAD_ACTION: dispatch backfill on program main and record the run id and uploaded artifact'
+    )
+    expect(callerDoc).toContain(
+      'LEAD_ACTION: dispatch velocity with gate=m3 on program main and record the run id and uploaded artifact'
+    )
     expect(callerDoc).toContain(
       'LEAD_ACTION: commit FORECAST.md citing the velocity run id before D-14\'s needed_by date, 2026-10-09'
     )
@@ -90,7 +105,17 @@ describe('M2-0510 program repository caller workflows', () => {
   })
 
   it('exposes exactly the program audit dispatch inputs with the required defaults', () => {
-    for (const input of ['mode', 'population_of', 'since', 'seed', 'gate', 'gates_path', 'provenance_path', 'notes_path']) {
+    const expectedInputs = [
+      'mode',
+      'population_of',
+      'since',
+      'seed',
+      'gate',
+      'gates_path',
+      'provenance_path',
+      'notes_path'
+    ]
+    for (const input of expectedInputs) {
       expect(auditCaller).toMatch(new RegExp(`^ {6}${input}:$`, 'm'))
     }
     for (const mode of ['backfill', 'sample', 'velocity', 'release-check']) {
@@ -152,7 +177,9 @@ describe('M2-0510 program repository caller workflows', () => {
 
     const auditInputs = workflowCallInputs(reusableAudit)
     for (const job of ['backfill', 'sample_population', 'sample_since', 'velocity', 'release_check']) {
-      for (const key of withKeys(jobBlock(auditCaller, job))) expect(auditInputs.has(key)).toBe(true)
+      for (const key of withKeys(jobBlock(auditCaller, job))) {
+        expect(auditInputs.has(key)).toBe(true)
+      }
     }
   })
 })

@@ -7,7 +7,6 @@ const read = (name: string): string => readFileSync(join(root, '.github', 'workf
 const workflow = read('program-audit.yml')
 
 const INPUTS = [
-<<<<<<< HEAD
   'mode',
   'ledger-path',
   'records-path',
@@ -19,10 +18,6 @@ const INPUTS = [
   'provenance-path',
   'notes-path',
   'checker-ref'
-=======
-  'mode', 'ledger-path', 'records-path', 'population-of', 'since', 'seed', 'gate',
-  'gates-path', 'provenance-path', 'notes-path', 'checker-ref'
->>>>>>> origin/m2/integration
 ]
 
 /** The `inputs:` block declared under one trigger, as the list of input names. */
@@ -36,11 +31,7 @@ function inputNames(trigger: 'workflow_call' | 'workflow_dispatch'): string[] {
 }
 
 describe('M2-0509 program-audit workflow', () => {
-<<<<<<< HEAD
-  it('runs on workflow_call and workflow_dispatch only, with the same inputs on both', () => {
-=======
   it('runs on workflow_call and workflow_dispatch only, with the same eleven inputs on both', () => {
->>>>>>> origin/m2/integration
     expect(workflow).toMatch(/\non:\n {2}workflow_call:\n/)
     expect(workflow).toContain('\n  workflow_dispatch:\n')
     for (const trigger of ['push:', 'pull_request:', 'release:', 'schedule:']) {
