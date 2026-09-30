@@ -67,7 +67,7 @@ export const WHISPER_BASE_REVISION: string | null = null
 
 /**
  * sherpa-onnx release archive for the Parakeet pack. Not recorded yet, so the pack cannot be fetched.
- * LEAD_ACTION: download https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2
+ * LEAD_ACTION: download the sherpa-onnx asr-models release asset named sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2
  * once and set { url, bytes, sha256 } from that exact file (byte count and sha256 of the downloaded archive).
  */
 export const PARAKEET_ARCHIVE_PIN: SpeechPackArchivePin | null = null
