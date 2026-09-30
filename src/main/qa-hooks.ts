@@ -12,7 +12,7 @@ import { bundledFfmpegPath, startFfmpegDecode } from './ffmpeg-decoder'
 import { ensureLocalRuntimeStarted } from './llm/local'
 import * as localRuntime from './llm/local-runtime'
 import { recordSidecarIntent } from './infra/process/registry'
-import { hkMScenarioFromEnv, productionHkMDeps, runHkMScenario } from './qa-hk-m'
+import { hkMScenarioFromEnv, hkMSetupFailedDetail, productionHkMDeps, runHkMScenario } from './qa-hk-m'
 
 export { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-identity'
 
@@ -28,7 +28,11 @@ if (hkMScenario) {
         productionHkMDeps(
           { ensureLocalRuntimeStarted, localRuntime, bundledFfmpegPath, startFfmpegDecode, recordSidecarIntent },
           (event) => auditLog(event),
-          (row, error) => mainLog.warn(`[hk-m] ${row} setup failed`, error instanceof Error ? error.message : String(error)),
+          (row, error) => {
+            // The harness deletes the throwaway profile, so the audit marker is what carries the cause out.
+            auditLog('hk-m.setup-failed', hkMSetupFailedDetail(row, error))
+            mainLog.warn(`[hk-m] ${row} setup failed`, error instanceof Error ? error.message : String(error))
+          },
           app.getPath('userData'),
           process.resourcesPath
         )
