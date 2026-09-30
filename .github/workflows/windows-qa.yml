@@ -6,7 +6,10 @@ name: Windows QA
 # the sidecar registry. Uploads content-free JSON only. Optionally compiles native/win-supervise (unsigned,
 # artifact only). It never builds the app, signs, publishes, tags, or changes release.yml.
 # Runs only from main, so the candidate is always an installer a qa-candidate.yml run built and hashed.
+# The capabilities suite is a content-free probe of the hosted runner (OS, hardware, UIA, SendInput, tray, hotkey,
+# audio endpoint, dxdiag, OneDrive env). It has no checkout, runs no repository code and uses no credentials.
 #   gh workflow run windows-qa.yml --ref main -f suite=hk-w -f candidate_run=<run id> -f sha256=<Setup sha256>
+#   gh workflow run windows-qa.yml --ref main -f suite=capabilities
 on:
   workflow_dispatch:
     inputs:
@@ -17,13 +20,14 @@ on:
         type: choice
         options:
           - hk-w
+          - capabilities
       candidate_run:
-        description: qa-candidate.yml run id whose candidate-win artifact is measured
-        required: true
+        description: qa-candidate.yml run id whose candidate-win artifact is measured (suite hk-w only)
+        required: false
         type: string
       sha256:
-        description: sha256 of that run's Metis-Setup-*.exe (see its SHA256SUMS.txt)
-        required: true
+        description: sha256 of that run's Metis-Setup-*.exe (see its SHA256SUMS.txt) (suite hk-w only)
+        required: false
         type: string
       cycles:
         description: Hard-kill cycles
@@ -56,6 +60,14 @@ jobs:
       run:
         shell: pwsh
     steps:
+      - name: Require the candidate inputs before any download
+        env:
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+          CANDIDATE_SHA256: ${{ inputs.sha256 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:CANDIDATE_RUN -notmatch '^[0-9]+$') { throw 'candidate_run must be a numeric run id.' }
+          if ($env:CANDIDATE_SHA256 -notmatch '^[0-9A-Fa-f]{64}$') { throw 'sha256 must be 64 hex characters.' }
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
@@ -111,3 +123,118 @@ jobs:
           path: hk-w-output/
           if-no-files-found: error
           retention-days: 30
+
+  capabilities:
+    name: Capabilities probe (Windows)
+    if: inputs.suite == 'capabilities' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Probe the runner
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $out = Join-Path $env:RUNNER_TEMP 'windows-qa-capabilities'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $caps = Join-Path $out 'capabilities.txt'
+          Set-Content -Path $caps -Value "probe_started_utc: $([DateTime]::UtcNow.ToString('o'))"
+          # Every probe catches its own exception so one failure never hides the others.
+          function Probe([string]$Key, [scriptblock]$Body) {
+            try { $value = (& $Body | Out-String).Trim() }
+            catch { $value = "ERROR: $($_.Exception.GetType().Name): $($_.Exception.Message)" }
+            Add-Content -Path $caps -Value "${Key}: $($value -replace '\s*\r?\n\s*', ' ')"
+          }
+          Probe 'runner.name' { $env:RUNNER_NAME }
+          Probe 'runner.os' { "$($env:RUNNER_OS) $($env:RUNNER_ARCH)" }
+          Probe 'image.os' { $env:ImageOS }
+          Probe 'image.version' { $env:ImageVersion }
+          Probe 'os.caption' { (Get-CimInstance Win32_OperatingSystem).Caption }
+          Probe 'os.build' { (Get-CimInstance Win32_OperatingSystem).BuildNumber }
+          Probe 'cpu.name' { (Get-CimInstance Win32_Processor | Select-Object -First 1).Name }
+          Probe 'cpu.logical_cores' { [Environment]::ProcessorCount }
+          Probe 'memory.total_gb' { [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 1) }
+          Probe 'gpu.adapters' { (Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name }) -join '; ' }
+          Probe 'audio.devices' { (Get-CimInstance Win32_SoundDevice | ForEach-Object { $_.Name }) -join '; ' }
+          Probe 'user.interactive' { [Environment]::UserInteractive }
+          Probe 'session.id' { (Get-Process -Id $PID).SessionId }
+          Probe 'uia.automation_element_available' {
+            Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+            $null -ne [System.Windows.Automation.AutomationElement]::RootElement
+          }
+          Probe 'uia.invoke_action' {
+            Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+            $root = [System.Windows.Automation.AutomationElement]::RootElement
+            $children = $root.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
+            $found = 0
+            foreach ($child in $children) {
+              $pattern = $null
+              if ($child.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) { $found++ }
+            }
+            "top_level_elements=$($children.Count) invoke_pattern_elements=$found"
+          }
+          Add-Type -Namespace Qa -Name Native -MemberDefinition @'
+          [StructLayout(LayoutKind.Sequential)] public struct KEYBDINPUT { public ushort wVk; public ushort wScan; public uint dwFlags; public uint time; public IntPtr dwExtraInfo; }
+          [StructLayout(LayoutKind.Explicit, Size = 32)] public struct INPUT { [FieldOffset(0)] public uint type; [FieldOffset(8)] public KEYBDINPUT ki; }
+          [DllImport("user32.dll", SetLastError = true)] public static extern uint SendInput(uint n, INPUT[] inputs, int size);
+          [DllImport("user32.dll", SetLastError = true)] public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint modifiers, uint vk);
+          [DllImport("user32.dll", SetLastError = true)] public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+          '@
+          Probe 'sendinput.symbol_available' { $null -ne [Qa.Native].GetMethod('SendInput') }
+          Probe 'sendinput.key_action' {
+            # F24 key down then up: no application binds it.
+            $down = New-Object Qa.Native+INPUT
+            $down.type = 1
+            $down.ki.wVk = 0x87
+            $up = New-Object Qa.Native+INPUT
+            $up.type = 1
+            $up.ki.wVk = 0x87
+            $up.ki.dwFlags = 2
+            $size = [Runtime.InteropServices.Marshal]::SizeOf([type][Qa.Native+INPUT])
+            $sent = [Qa.Native]::SendInput(2, [Qa.Native+INPUT[]]@($down, $up), $size)
+            "events_sent=$sent last_error=$([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
+          }
+          Probe 'tray.notify_icon_action' {
+            Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+            $icon = New-Object System.Windows.Forms.NotifyIcon
+            try {
+              $icon.Icon = [System.Drawing.SystemIcons]::Application
+              $icon.Visible = $true
+              "visible=$($icon.Visible)"
+            } finally { $icon.Dispose() }
+          }
+          Probe 'global_hotkey.register_action' {
+            # CTRL+ALT+F24 (MOD_CONTROL | MOD_ALT, VK_F24).
+            $registered = [Qa.Native]::RegisterHotKey([IntPtr]::Zero, 1, 0x3, 0x87)
+            $lastError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+            if ($registered) { [void][Qa.Native]::UnregisterHotKey([IntPtr]::Zero, 1) }
+            "registered=$registered last_error=$lastError"
+          }
+          Probe 'audio.default_capture_endpoint_action' {
+            $capture = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture'
+            $active = @(Get-ChildItem $capture -ErrorAction Stop | Where-Object { (Get-ItemProperty $_.PSPath).DeviceState -eq 1 })
+            "active_capture_endpoints=$($active.Count)"
+          }
+          Probe 'gpu.dxdiag_action' {
+            $dxdiag = Join-Path $out 'dxdiag.txt'
+            $proc = Start-Process -FilePath dxdiag -ArgumentList '/t', $dxdiag -PassThru
+            if (-not $proc.WaitForExit(90000)) { $proc.Kill(); throw 'dxdiag did not finish within 90 s' }
+            "exit_code=$($proc.ExitCode) file_present=$(Test-Path $dxdiag)"
+          }
+          Probe 'onedrive.env_present' { [bool]$env:OneDrive }
+          Probe 'edr.assumed' { 'ASSUMED: no EDR agent on the hosted runner image; not measured' }
+          Add-Content -Path $caps -Value "probe_finished_utc: $([DateTime]::UtcNow.ToString('o'))"
+          Get-ChildItem -Path $out -File | Where-Object { $_.Name -ne 'SHA256SUMS.txt' } |
+            ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" } |
+            Set-Content -Path (Join-Path $out 'SHA256SUMS.txt')
+          Get-Content $caps | Add-Content $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: windows-qa-capabilities
+          path: ${{ runner.temp }}/windows-qa-capabilities/
+          if-no-files-found: error
+          retention-days: 14
