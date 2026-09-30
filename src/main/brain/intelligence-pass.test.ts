@@ -22,7 +22,8 @@ vi.mock('../llm/local-routing', () => ({
 }))
 
 const localRuntimeStateMock = vi.hoisted(() => vi.fn<() => string>(() => 'stopped'))
-vi.mock('../llm/local-runtime', () => ({
+vi.mock('../llm/local-runtime', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../llm/local-runtime')>()),
   getState: localRuntimeStateMock,
   activeStreams: () => 0
 }))

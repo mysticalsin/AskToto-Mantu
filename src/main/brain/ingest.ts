@@ -443,8 +443,12 @@ function isContextOverflow(error: unknown): boolean {
   return error instanceof LocalContextOverflowError || isLocalContextOverflow(error)
 }
 
+export function fitWindowChars(slotTokens: number, systemChars: number, maxChars: number): number {
+  return fitLocalExtractionWindowChars(slotTokens, systemChars, maxChars)
+}
+
 export function localExtractionWindowChars(slotTokens: number): number {
-  return fitLocalExtractionWindowChars(slotTokens, buildExtractionSystem(EXTRACTION_REMINDER).length, WINDOW_SIZE)
+  return fitWindowChars(slotTokens, buildExtractionSystem(EXTRACTION_REMINDER).length, WINDOW_SIZE)
 }
 
 function extractionWindowSize(s: Settings, route: IngestRoute): { size: number; local: boolean } {
