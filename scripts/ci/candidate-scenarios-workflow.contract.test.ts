@@ -143,6 +143,17 @@ describe('candidate-scenarios.yml', () => {
     expect(workflow).toContain('-f scenario=renderer-kill -f mac_sha256=<Metis DMG sha256 from SHA256SUMS.txt>')
   })
 
+  it('authorises System Events GUI scripting from the registry after the install and before the scenario', () => {
+    const mac = steps('mac')
+    const grant = stepIndex(mac, 'candidate-scenarios.mjs grant-gui')
+    expect(mac[grant]).toContain('node scripts/qa/candidate-scenarios.mjs grant-gui --scenario "$SCENARIO" --platform mac')
+    expect(mac[grant]).not.toContain('continue-on-error')
+    expect(mac[grant]).not.toMatch(/^\s+if:/m)
+    expect(grant).toBeGreaterThan(stepIndex(mac, 'codesign --verify'))
+    expect(grant).toBeLessThan(stepIndex(mac, 'candidate-scenarios.mjs run'))
+    expect((SCENARIOS['renderer-kill'].platforms.mac as { guiScripting?: boolean }).guiScripting).toBe(true)
+  })
+
   it('uploads the lane artifact on every run and fails only after the upload', () => {
     const mac = steps('mac')
     const scenario = mac[stepIndex(mac, 'candidate-scenarios.mjs run')]

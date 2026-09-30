@@ -8,9 +8,13 @@ import { recordProblems } from '../evidence/record.mjs'
 import { selectCandidateInstaller } from './candidate-installer.mjs'
 import {
   SCENARIOS,
+  TCC_DATABASES,
+  ancestorPids,
   assertCandidateProvenance,
   candidateRunProblems,
   contentProblems,
+  executableFromLsof,
+  guiScriptingGrants,
   laneAnnotation,
   laneRecord,
   laneSummary,
@@ -157,6 +161,56 @@ describe('the scenario registry', () => {
     expect(resolveOutputs(plan)).toBe(
       `mac=true\nmac_variant=mac-qa-identity\nmac_artifact=candidate-mac-qa-identity\nmac_sha256=${MAC_SHA}\nwin=false\n`
     )
+  })
+})
+
+describe('System Events GUI scripting grants (grant-gui)', () => {
+  it('is declared by renderer-kill, which drives the halted dialog, and by no scenario that does not', () => {
+    expect((SCENARIOS['renderer-kill'].platforms.mac as { guiScripting?: boolean }).guiScripting).toBe(true)
+    expect('guiScripting' in SCENARIOS['fault-fatal-relaunch'].platforms.mac).toBe(false)
+  })
+
+  it('walks the process chain up to, not including, launchd, and survives a cycle', () => {
+    const table = ['  1     0', ' 40     1', ' 41    40', '  900  41', 'garbage', ' 901   900', ''].join('\n')
+    expect(ancestorPids(table, 901)).toEqual([901, 900, 41, 40])
+    expect(ancestorPids(table, 1)).toEqual([])
+    expect(ancestorPids(' 5 6\n 6 5\n', 5)).toEqual([5, 6])
+  })
+
+  it("reads the executable path from lsof's first name record", () => {
+    expect(executableFromLsof('p41\nftxt\nn/opt/runner/bin/Runner.Worker\nftxt\nn/usr/lib/dyld\n')).toBe('/opt/runner/bin/Runner.Worker')
+    expect(executableFromLsof('p41\n')).toBeNull()
+  })
+
+  it('grants Accessibility in the system database and Automation of System Events in the user database', () => {
+    const grants = guiScriptingGrants(['/bin/bash', '/usr/bin/osascript', '/bin/bash', "/opt/it's/agent"])
+    const system = grants.system.split('\n')
+    const user = grants.user.split('\n')
+    expect(system).toHaveLength(3)
+    expect(user).toHaveLength(3)
+    for (const line of system) {
+      expect(line).toMatch(/^INSERT OR REPLACE INTO access \(service, client, client_type, auth_value, auth_reason, /)
+      expect(line).toMatch(/VALUES \('kTCCServiceAccessibility', '\/.*', 1, 2, 4, 1, 0, 'UNUSED', 0, /)
+    }
+    for (const line of user) expect(line).toMatch(/VALUES \('kTCCServiceAppleEvents', '\/.*', 1, 2, 3, 1, 0, 'com\.apple\.systemevents', 0, /)
+    expect(grants.system).toContain("'/opt/it''s/agent'")
+    expect(TCC_DATABASES.system).toBe('/Library/Application Support/com.apple.TCC/TCC.db')
+    expect(TCC_DATABASES.user.startsWith('/')).toBe(false)
+  })
+
+  it('refuses no clients or a client that is not an absolute path', () => {
+    expect(() => guiScriptingGrants([])).toThrow(/at least one client/)
+    expect(() => guiScriptingGrants(['bash'])).toThrow(/absolute executable path/)
+  })
+
+  it('changes nothing for a scenario that declares no GUI scripting', () => {
+    const child = spawnSync(
+      process.execPath,
+      ['scripts/qa/candidate-scenarios.mjs', 'grant-gui', '--scenario', 'fault-fatal-relaunch', '--platform', 'mac'],
+      { cwd: root, encoding: 'utf8' }
+    )
+    expect(child.status).toBe(0)
+    expect(child.stdout).toContain('fault-fatal-relaunch (mac) needs no GUI scripting; nothing granted.')
   })
 })
 

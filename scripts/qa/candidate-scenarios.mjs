@@ -10,11 +10,12 @@
 //   node scripts/qa/candidate-scenarios.mjs resolve --scenario <s> [--mac-sha256 <hex>] [--win-sha256 <hex>]
 //   node scripts/qa/candidate-scenarios.mjs guard <run.json> <candidate_run>
 //   node scripts/qa/candidate-scenarios.mjs profile --scenario <s> --platform <p>
+//   node scripts/qa/candidate-scenarios.mjs grant-gui --scenario <s> --platform <p>
 //   node scripts/qa/candidate-scenarios.mjs run --scenario <s> --platform <p> --installer <relative path>
 //       --sha256 <hex> --provenance <provenance.json> --candidate-run <id> --out <relative dir>
 //   node scripts/qa/candidate-scenarios.mjs scan <dir> --account <runner account>
 // Node builtins only, so the guard job needs no npm ci.
-import { spawnSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, isAbsolute, join } from 'node:path'
@@ -38,7 +39,7 @@ export const PROFILE_DIRS = Object.freeze({ 'mac-qa-identity': 'asktoto-qa', mac
  * artifact it installs, the script and arguments it runs, the report file the script writes, and the
  * settings it seeds into the fresh profile. qaOnlyHook marks a scenario that needs a hook compiled only
  * into QA-identity bytes; every other scenario installs a promotable variant so its records bind to bytes
- * that can ship.
+ * that can ship. guiScripting marks a platform entry that drives the app's native UI through System Events.
  */
 export const SCENARIOS = Object.freeze({
   // M2-0026: onFatal "Relaunch Métis", then a census 10 s later with no orphaned owned sidecar. The
@@ -71,11 +72,61 @@ export const SCENARIOS = Object.freeze({
         artifact: 'candidate-mac',
         script: 'scripts/qa/renderer-kill.mjs',
         args: ({ installer, sha256, report }) => [installer, report, '--sha256', sha256, '--times', '4', '--window', '60'],
-        report: 'renderer-kill.json'
+        report: 'renderer-kill.json',
+        // It finds the halted dialog and clicks its Quit button through System Events, so the lane
+        // authorises GUI scripting (grant-gui) before it runs.
+        guiScripting: true
       })
     })
   })
 })
+
+/** Where macOS keeps TCC decisions: Accessibility in the system database, Automation (Apple events) in the
+ *  user's. Hosted macOS runners run with SIP disabled, so both are writable with sudo. */
+export const TCC_DATABASES = Object.freeze({
+  system: '/Library/Application Support/com.apple.TCC/TCC.db',
+  user: join('Library', 'Application Support', 'com.apple.TCC', 'TCC.db')
+})
+
+/** The pids from `pid` up to, not including, launchd: TCC attributes an osascript call to the responsible
+ *  process at the top of this chain, which on a hosted runner is the runner's own agent. */
+export function ancestorPids(psText, pid) {
+  const parent = new Map()
+  for (const line of psText.split('\n')) {
+    const match = /^\s*(\d+)\s+(\d+)\s*$/.exec(line)
+    if (match) parent.set(Number(match[1]), Number(match[2]))
+  }
+  const chain = []
+  for (let current = pid; current > 1 && !chain.includes(current); current = parent.get(current) ?? 0) chain.push(current)
+  return chain
+}
+
+/** The executable path in `lsof -a -p <pid> -d txt -Fn` output: its first name record. */
+export function executableFromLsof(text) {
+  return String(text ?? '').split('\n').find((line) => line.startsWith('n/'))?.slice(1) ?? null
+}
+
+/**
+ * The SQL that lets each client (an absolute executable path) script the GUI through System Events:
+ * Accessibility in the system database and Automation of System Events in the user's, both allowed
+ * (auth_value 2). INSERT OR REPLACE on the table's primary key makes a rerun idempotent.
+ * @returns {{ system: string, user: string }}
+ */
+export function guiScriptingGrants(clients) {
+  const paths = [...new Set(clients)]
+  if (!paths.length || paths.some((path) => typeof path !== 'string' || !path.startsWith('/'))) {
+    throw new Error('GUI scripting grants need at least one client, each an absolute executable path.')
+  }
+  const quote = (text) => `'${text.replaceAll("'", "''")}'`
+  const grant = (service, client, reason, target) =>
+    'INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, ' +
+    'indirect_object_identifier_type, indirect_object_identifier, flags, last_modified) VALUES ' +
+    `(${quote(service)}, ${quote(client)}, 1, 2, ${reason}, 1, 0, ${quote(target)}, 0, CAST(strftime('%s','now') AS INTEGER));`
+  return {
+    system: paths.map((client) => grant('kTCCServiceAccessibility', client, 4, 'UNUSED')).join('\n'),
+    user: paths.map((client) => grant('kTCCServiceAppleEvents', client, 3, 'com.apple.systemevents')).join('\n')
+  }
+}
 
 const SHA256 = /^[0-9a-f]{64}$/
 
@@ -329,6 +380,28 @@ function lastLine(text) {
   return String(text ?? '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1) ?? ''
 }
 
+/** Authorises System Events GUI scripting for this job's process chain, node and osascript, when the
+ *  scenario's platform entry declares guiScripting; otherwise changes nothing. */
+function grantGui(values) {
+  const scenario = required(values, 'scenario')
+  const platform = required(values, 'platform')
+  if (!platformEntry(scenario, platform).guiScripting) {
+    console.log(`${scenario} (${platform}) needs no GUI scripting; nothing granted.`)
+    return 0
+  }
+  if (process.platform !== 'darwin') throw new Error('grant-gui authorises System Events on macOS only.')
+  const exec = (file, args) => execFileSync(file, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] })
+  const clients = ancestorPids(exec('/bin/ps', ['-axo', 'pid=,ppid=']), process.pid)
+    .map((pid) => executableFromLsof(exec('/usr/sbin/lsof', ['-a', '-p', String(pid), '-d', 'txt', '-Fn'])))
+    .filter(Boolean)
+  const grants = guiScriptingGrants([...clients, process.execPath, '/usr/bin/osascript'])
+  exec('/usr/bin/sudo', ['/usr/bin/sqlite3', TCC_DATABASES.system, grants.system])
+  exec('/usr/bin/sudo', ['/usr/bin/sqlite3', join(homedir(), TCC_DATABASES.user), grants.user])
+  // Counts only: the clients are runner paths, and this log is public.
+  console.log(`Granted Accessibility and System Events automation to ${grants.user.split('\n').length} executables.`)
+  return 0
+}
+
 function run(values) {
   const scenario = required(values, 'scenario')
   const platform = required(values, 'platform')
@@ -398,6 +471,8 @@ function main(argv) {
       console.log(settings ? 'Fresh profile seeded with the scenario settings.' : 'Fresh profile; the scenario seeds no settings.')
       return 0
     }
+    case 'grant-gui':
+      return grantGui(values)
     case 'run':
       return run(values)
     case 'scan': {
@@ -408,7 +483,7 @@ function main(argv) {
       return problems.length ? 1 : 0
     }
     default:
-      throw new Error('usage: candidate-scenarios.mjs <resolve|guard|profile|run|scan> ...')
+      throw new Error('usage: candidate-scenarios.mjs <resolve|guard|profile|grant-gui|run|scan> ...')
   }
 }
 

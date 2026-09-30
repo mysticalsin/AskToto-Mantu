@@ -307,6 +307,16 @@ function osascript(script) {
   return execFileSync('osascript', ['-e', script], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 }).trim()
 }
 
+/** True only when this process may both send Apple events to System Events (Automation) and read other
+ *  apps' UI elements through it (Accessibility): without the second, every dialog look would say 'none'. */
+function guiScriptingAuthorised() {
+  try {
+    return osascript('tell application "System Events" to get UI elements enabled') === 'true'
+  } catch {
+    return false
+  }
+}
+
 function haltedDialog(pid, action) {
   try {
     const answer = osascript(dialogScript(pid, action))
@@ -397,10 +407,11 @@ async function run(args, observation) {
   let installRoot = null
   let mainExited = false
   try {
-    try {
-      osascript('tell application "System Events" to count processes')
-    } catch {
-      throw new Precondition('System Events GUI scripting is unavailable; grant Accessibility to the runner (M2-0007)')
+    if (!guiScriptingAuthorised()) {
+      throw new Precondition(
+        'System Events GUI scripting is not authorised (Accessibility and Automation of System Events); ' +
+          'the candidate-scenarios lane grants both with candidate-scenarios.mjs grant-gui before the scenario'
+      )
     }
     installRoot = realpathSync.native(await resolveApp(args, workDir))
     const executable = join(installRoot, 'Contents', 'MacOS', basename(installRoot, '.app'))

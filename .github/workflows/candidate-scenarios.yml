@@ -145,6 +145,11 @@ jobs:
           codesign --verify --deep --strict "$app"
       - name: Start from a fresh profile seeded only with the scenario's settings
         run: node scripts/qa/candidate-scenarios.mjs profile --scenario "$SCENARIO" --platform mac
+      # An unattended osascript gets -1743 or no UI elements without a TCC grant. The hosted image runs with
+      # SIP disabled, so this writes the grants the scenario's registry entry declares (guiScripting) for
+      # this job's process chain; a scenario that declares none is left untouched.
+      - name: Authorise System Events GUI scripting when the scenario drives native UI
+        run: node scripts/qa/candidate-scenarios.mjs grant-gui --scenario "$SCENARIO" --platform mac
       - name: Run the scenario
         id: scenario
         continue-on-error: true
