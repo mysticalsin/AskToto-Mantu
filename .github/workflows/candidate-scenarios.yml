@@ -7,6 +7,8 @@ name: Candidate scenarios
 # the app, signs, publishes, or pushes a tag. Runs only from main, on a qa-candidate.yml dispatch on main.
 #   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> \
 #     -f scenario=fault-fatal-relaunch -f mac_sha256=<Metis-QA zip sha256 from SHA256SUMS.txt>
+#   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> -f scenario=sidecar-boot-reaper \
+#     -f mac_sha256=<Metis DMG sha256> -f win_sha256=<Metis Setup sha256>
 #   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> \
 #     -f scenario=renderer-kill -f mac_sha256=<Metis DMG sha256 from SHA256SUMS.txt>
 run-name: Candidate scenario ${{ inputs.scenario }} on ${{ inputs.candidate_run }}
@@ -24,6 +26,7 @@ on:
         type: choice
         options:
           - fault-fatal-relaunch
+          - sidecar-boot-reaper
           - renderer-kill
       mac_sha256:
         description: sha256 of the macOS installer the scenario installs (empty when it does not run on macOS)
@@ -59,6 +62,10 @@ jobs:
       mac_variant: ${{ steps.resolve.outputs.mac_variant }}
       mac_artifact: ${{ steps.resolve.outputs.mac_artifact }}
       mac_sha256: ${{ steps.resolve.outputs.mac_sha256 }}
+      win: ${{ steps.resolve.outputs.win }}
+      win_variant: ${{ steps.resolve.outputs.win_variant }}
+      win_artifact: ${{ steps.resolve.outputs.win_artifact }}
+      win_sha256: ${{ steps.resolve.outputs.win_sha256 }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -125,6 +132,7 @@ jobs:
           installer=$(node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" mac)
           echo "path=$installer" >> "$GITHUB_OUTPUT"
       - name: Install into a fresh directory and verify the signature
+        id: install
         env:
           INSTALLER: ${{ steps.installer.outputs.path }}
         run: |
@@ -143,6 +151,7 @@ jobs:
           app=$(find "$target" -maxdepth 1 -name '*.app' -print -quit)
           [ -n "$app" ] || { echo "::error::The installer holds no .app bundle."; exit 1; }
           codesign --verify --deep --strict "$app"
+          echo "app=$app" >> "$GITHUB_OUTPUT"
       - name: Start from a fresh profile seeded only with the scenario's settings
         run: node scripts/qa/candidate-scenarios.mjs profile --scenario "$SCENARIO" --platform mac
       # An unattended osascript gets -1743 or no UI elements without a TCC grant. The hosted image runs with
@@ -156,12 +165,13 @@ jobs:
         timeout-minutes: 40
         env:
           INSTALLER: ${{ steps.installer.outputs.path }}
+          APP: ${{ steps.install.outputs.app }}
         run: >
           node scripts/qa/candidate-scenarios.mjs run
           --scenario "$SCENARIO" --platform mac
           --installer "$INSTALLER" --sha256 "$INSTALLER_SHA256"
           --provenance provenance/provenance.json --candidate-run "$CANDIDATE_RUN"
-          --out "$OUT"
+          --out "$OUT" --app "$APP"
       - name: Content-free gate
         id: scan
         if: always()
@@ -171,6 +181,94 @@ jobs:
         if: always()
         with:
           name: candidate-scenario-${{ inputs.scenario }}-mac
+          path: candidate-scenario/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Fail unless the scenario passed and every file was content-free
+        if: always() && (steps.scenario.outcome != 'success' || steps.scan.outcome != 'success')
+        run: |
+          echo "::error::$SCENARIO did not PASS on candidate $CANDIDATE_RUN, or a file failed the content-free gate (see lane.json and the summary)."
+          exit 1
+
+  win:
+    name: ${{ inputs.scenario }} (Windows)
+    needs: guard
+    if: needs.guard.outputs.win == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      SCENARIO: ${{ inputs.scenario }}
+      CANDIDATE_RUN: ${{ inputs.candidate_run }}
+      VARIANT: ${{ needs.guard.outputs.win_variant }}
+      ARTIFACT: ${{ needs.guard.outputs.win_artifact }}
+      INSTALLER_SHA256: ${{ needs.guard.outputs.win_sha256 }}
+      OUT: candidate-scenario
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      # Only so the scenario scripts' imports (playwright-core) resolve. The lane never builds the app.
+      - run: npm ci
+      - name: Download the candidate's provenance and the scenario's installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "$CANDIDATE_RUN" --repo "$GITHUB_REPOSITORY" --name candidate-provenance --dir provenance
+          gh run download "$CANDIDATE_RUN" --repo "$GITHUB_REPOSITORY" --name "$ARTIFACT" --dir assets
+      - name: Verify the bytes against the provenance and select the installer by sha256
+        id: installer
+        run: |
+          node scripts/qa/provenance.mjs verify provenance/provenance.json assets "$VARIANT"
+          if [ "$(node -p "require('./provenance/provenance.json').run.id")" != "$CANDIDATE_RUN" ]; then
+            echo "::error::provenance.json belongs to another run than candidate_run $CANDIDATE_RUN."
+            exit 1
+          fi
+          installer=$(node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" win)
+          echo "path=$installer" >> "$GITHUB_OUTPUT"
+      # Silent install into a fresh directory, as qa-candidate.yml smoke-win does (/S /D=<dir>).
+      - name: Install the Setup silently into a fresh directory
+        id: install
+        shell: pwsh
+        env:
+          INSTALLER: ${{ steps.installer.outputs.path }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $target = Join-Path $env:RUNNER_TEMP 'candidate-install'
+          New-Item -ItemType Directory -Path $target | Out-Null
+          $setup = (Resolve-Path $env:INSTALLER).Path
+          $install = Start-Process -FilePath $setup -ArgumentList '/S', "/D=$target" -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Setup exited with $($install.ExitCode)." }
+          $app = Join-Path $target 'Metis.exe'
+          if (-not (Test-Path $app)) { throw 'The Setup installed no Metis.exe.' }
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "app=$app"
+      - name: Start from a fresh profile seeded only with the scenario's settings
+        run: node scripts/qa/candidate-scenarios.mjs profile --scenario "$SCENARIO" --platform win
+      - name: Run the scenario
+        id: scenario
+        continue-on-error: true
+        timeout-minutes: 40
+        env:
+          INSTALLER: ${{ steps.installer.outputs.path }}
+          APP: ${{ steps.install.outputs.app }}
+        run: >
+          node scripts/qa/candidate-scenarios.mjs run
+          --scenario "$SCENARIO" --platform win
+          --installer "$INSTALLER" --sha256 "$INSTALLER_SHA256"
+          --provenance provenance/provenance.json --candidate-run "$CANDIDATE_RUN"
+          --out "$OUT" --app "$APP"
+      - name: Content-free gate
+        id: scan
+        if: always()
+        continue-on-error: true
+        run: node scripts/qa/candidate-scenarios.mjs scan "$OUT" --account "$(id -un)"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: candidate-scenario-${{ inputs.scenario }}-win
           path: candidate-scenario/
           if-no-files-found: warn
           retention-days: 30

@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -31,6 +31,7 @@ import { VARIANTS } from './provenance.mjs'
 const root = join(__dirname, '..', '..')
 const sha = (text: string) => createHash('sha256').update(text).digest('hex')
 const MAC_SHA = sha('qa zip bytes')
+const WIN_SHA = sha('setup bytes')
 const COMMIT = 'a'.repeat(40)
 
 const successfulDispatch = {
@@ -71,7 +72,7 @@ describe('candidateRunProblems (the run guard)', () => {
 
 describe('the scenario registry', () => {
   it('declares fault-fatal-relaunch on macOS, installing the Metis-QA zip variant', () => {
-    expect(Object.keys(SCENARIOS)).toEqual(['fault-fatal-relaunch', 'renderer-kill'])
+    expect(Object.keys(SCENARIOS)).toEqual(['fault-fatal-relaunch', 'sidecar-boot-reaper', 'renderer-kill'])
     const mac = SCENARIOS['fault-fatal-relaunch'].platforms.mac
     expect(Object.keys(SCENARIOS['fault-fatal-relaunch'].platforms)).toEqual(['mac'])
     expect(mac.variant).toBe('mac-qa-identity')
@@ -162,6 +163,58 @@ describe('the scenario registry', () => {
       `mac=true\nmac_variant=mac-qa-identity\nmac_artifact=candidate-mac-qa-identity\nmac_sha256=${MAC_SHA}\nwin=false\n`
     )
   })
+
+  it('declares sidecar-boot-reaper on the promotable mac DMG (real llama-server required) and the win Setup', () => {
+    const scenario = SCENARIOS['sidecar-boot-reaper']
+    expect(scenario.ticket).toBe('M2-0027')
+    expect(scenario.qaOnlyHook).toBe(false)
+    expect(scenario.exits).toEqual({ 0: 'PASS', 1: 'FAIL', 2: 'PRECONDITION' })
+    expect(Object.keys(scenario.platforms)).toEqual(['mac', 'win'])
+    const { mac, win } = scenario.platforms
+    expect(mac).toMatchObject({ variant: 'mac', artifact: 'candidate-mac', report: 'sidecar-boot-reaper.json', isolatedProfiles: true })
+    expect(win).toMatchObject({ variant: 'win', artifact: 'candidate-win', report: 'sidecar-boot-reaper.json', isolatedProfiles: true })
+    for (const target of [mac, win]) {
+      expect(target.script).toBe('scripts/qa/sidecar-boot-reaper.mjs')
+      expect(existsSync(join(root, target.script))).toBe(true)
+    }
+    expect(VARIANTS.mac.assets('1.0.0')).toContain('Metis-1.0.0.dmg')
+    expect(VARIANTS.win.assets('1.0.0')).toContain('Metis-Setup-1.0.0.exe')
+    expect('notCovered' in mac).toBe(false)
+    expect(win.notCovered.map(({ row }) => row)).toEqual(['realLlama', 'legacyOrphan'])
+  })
+
+  it('requires both the DMG and the Setup sha256 for sidecar-boot-reaper and switches both jobs on', () => {
+    expect(() => resolveScenario({ scenario: 'sidecar-boot-reaper', sha256: { mac: MAC_SHA } })).toThrow(/win_sha256 is required/)
+    expect(() => resolveScenario({ scenario: 'sidecar-boot-reaper', sha256: { win: WIN_SHA } })).toThrow(/mac_sha256 is required/)
+    const plan = resolveScenario({ scenario: 'sidecar-boot-reaper', sha256: { mac: MAC_SHA, win: WIN_SHA } })
+    expect(plan).toEqual({
+      mac: { variant: 'mac', artifact: 'candidate-mac', sha256: MAC_SHA },
+      win: { variant: 'win', artifact: 'candidate-win', sha256: WIN_SHA }
+    })
+    expect(resolveOutputs(plan)).toBe(
+      `mac=true\nmac_variant=mac\nmac_artifact=candidate-mac\nmac_sha256=${MAC_SHA}\n` +
+        `win=true\nwin_variant=win\nwin_artifact=candidate-win\nwin_sha256=${WIN_SHA}\n`
+    )
+  })
+
+  it('runs the reaper on the installed app with --require-real-llama on macOS only', () => {
+    const base = { scenario: 'sidecar-boot-reaper', sha256: MAC_SHA, outDir: 'candidate-scenario' }
+    expect(scenarioCommand({ ...base, platform: 'mac', installer: 'assets/Metis-1.0.0.dmg', app: '../../_temp/candidate-install/Metis.app' })).toEqual([
+      'scripts/qa/sidecar-boot-reaper.mjs',
+      '../../_temp/candidate-install/Metis.app',
+      'candidate-scenario/sidecar-boot-reaper.json',
+      '--require-real-llama'
+    ])
+    expect(scenarioCommand({ ...base, platform: 'win', installer: 'assets/Metis-Setup-1.0.0.exe', app: '../../_temp/candidate-install/Metis.exe' })).toEqual([
+      'scripts/qa/sidecar-boot-reaper.mjs',
+      '../../_temp/candidate-install/Metis.exe',
+      'candidate-scenario/sidecar-boot-reaper.json'
+    ])
+    expect(() => scenarioCommand({ ...base, platform: 'mac', installer: 'assets/Metis-1.0.0.dmg' })).toThrow(/pass the installed app with --app/)
+    expect(() => scenarioCommand({ ...base, platform: 'win', installer: 'a.exe', app: 'D:\\a\\_temp\\Metis.exe' })).toThrow(/repository-relative/)
+    expect(outcomeForExit('sidecar-boot-reaper', 2)).toBe('PRECONDITION')
+    expect(outcomeForExit('sidecar-boot-reaper', 0)).toBe('PASS')
+  })
 })
 
 describe('System Events GUI scripting grants (grant-gui)', () => {
@@ -227,6 +280,14 @@ describe('installer selection through candidate-installer', () => {
     expect(await selectCandidateInstaller(dir, plan.mac.sha256, 'mac')).toBe(join(dir, 'Metis-QA-1.0.0.zip'))
     await expect(selectCandidateInstaller(dir, sha('another build'), 'mac')).rejects.toThrow(/No installer matches/)
   })
+
+  it('selects the Setup, never the Portable, for the sidecar-boot-reaper win leg', async () => {
+    writeFileSync(join(dir, 'Metis-Setup-1.0.0.exe'), 'setup bytes')
+    writeFileSync(join(dir, 'Metis-Portable-1.0.0.exe'), 'portable bytes')
+    const plan = resolveScenario({ scenario: 'sidecar-boot-reaper', sha256: { mac: MAC_SHA, win: WIN_SHA } })
+    expect(await selectCandidateInstaller(dir, plan.win.sha256, 'win')).toBe(join(dir, 'Metis-Setup-1.0.0.exe'))
+    await expect(selectCandidateInstaller(dir, sha('portable bytes'), 'win')).rejects.toThrow(/No installer matches/)
+  })
 })
 
 describe('the fresh profile', () => {
@@ -256,6 +317,15 @@ describe('the fresh profile', () => {
     mkdirSync(join(appData, 'Metis'))
     expect(() => prepareProfile({ scenario: 'renderer-kill', platform: 'mac', appDataDir: appData })).toThrow(
       /Metis userData directory already exists/
+    )
+  })
+
+  it('writes nothing for a scenario that runs only on its own isolated profiles, on either platform', () => {
+    expect(prepareProfile({ scenario: 'sidecar-boot-reaper', platform: 'mac', appDataDir: appData })).toBeNull()
+    expect(prepareProfile({ scenario: 'sidecar-boot-reaper', platform: 'win', appDataDir: null })).toBeNull()
+    expect(readdirSync(appData)).toEqual([])
+    expect(() => prepareProfile({ scenario: 'fault-fatal-relaunch', platform: 'mac', appDataDir: null })).toThrow(
+      /No fresh-profile location is declared for mac/
     )
   })
 })
@@ -414,6 +484,49 @@ describe('lane.json', () => {
     expect(laneAnnotation(lane(1, 'a survivor'))).toBe('::error title=fault-fatal-relaunch FAIL::a survivor')
     expect(laneAnnotation(lane(0))).toBeNull()
     expect(laneSummary(lane(0))).toContain('| build_run_id | `4242` |')
+  })
+
+  it('lists the rows the Windows reaper leg cannot prove as not covered, in lane.json and the summary', () => {
+    const app = '../../_temp/candidate-install/Metis.exe'
+    const winArgv = scenarioCommand({
+      scenario: 'sidecar-boot-reaper',
+      platform: 'win',
+      installer: 'assets/Metis-Setup-1.0.0.exe',
+      sha256: WIN_SHA,
+      outDir: 'candidate-scenario',
+      app
+    })
+    const win = laneRecord({
+      scenario: 'sidecar-boot-reaper',
+      platform: 'win',
+      env: { GITHUB_RUN_ID: '5151', ImageOS: 'win25', ImageVersion: '20260920.1' },
+      provenance,
+      candidateRun: '4242',
+      installer: 'assets/Metis-Setup-1.0.0.exe',
+      sha256: WIN_SHA,
+      argv: winArgv,
+      exitCode: 0,
+      detail: '',
+      reportWritten: true
+    })
+    expect(win).toMatchObject({
+      ticket: 'M2-0027',
+      variant: 'win',
+      installer: 'Metis-Setup-1.0.0.exe',
+      environment: { kind: 'hosted-runner', host: 'windows-latest' },
+      command: `node scripts/qa/sidecar-boot-reaper.mjs ${app} candidate-scenario/sidecar-boot-reaper.json`,
+      outcome: 'PASS',
+      report: 'sidecar-boot-reaper.json',
+      not_covered: [
+        { row: 'realLlama', reason: expect.stringMatching(/macOS only/) },
+        { row: 'legacyOrphan', reason: expect.stringMatching(/macOS only/) }
+      ]
+    })
+    const summary = laneSummary(win)
+    expect(summary).toContain('| not covered: realLlama |')
+    expect(summary).toContain('| not covered: legacyOrphan |')
+    expect(contentProblems(JSON.stringify(win), { account: 'runneradmin' })).toEqual([])
+    expect('not_covered' in lane(0)).toBe(false)
   })
 
   it('refuses a provenance from another run than candidate_run', () => {
