@@ -10,7 +10,7 @@ const register = JSON.parse(read('../../media/launch-film/CLAIMS.json'))
 const claimIds = register.claims.map((claim) => claim.id)
 const storyboard = JSON.parse(read('./storyboard.json'))
 const shotList = JSON.parse(read('./shot-list.json'))
-const log =JSON.parse(read('./render-log.json'))
+const log = JSON.parse(read('./render-log.json'))
 const shots = parseBrief(read('./composition-brief.md'))
 
 test('the composition brief lists every field for every shot, against the register', () => {
@@ -41,7 +41,7 @@ test('the recorded route is the full /brag route', () => {
 })
 
 test('a slim-route render fails the check', () => {
-  for (const invocation of ['/brag', '/brag-slim', '/brag --fullish']) {
+  for (const invocation of ['/brag', '/brag-slim', '/brag-slim --full', '/brag --fullish']) {
     assert.deepEqual(checkRoute({ ...log, route: { invocation } }), ['route is not /brag --full'], invocation)
   }
 })
@@ -53,7 +53,8 @@ test('the final render is blocked until both reviews are signed off', () => {
 })
 
 test('the reference-clip attempt and result are recorded', () => {
-  assert.equal(log.reference_clip.attempted, true)
+  assert.equal(log.reference_clip.attempted, false)
+  assert.equal(log.reference_clip.status, 'BLOCKED_EXTERNAL')
   assert.ok(['viewed', 'not viewed'].includes(log.reference_clip.result))
   assert.deepEqual(checkRenderLog({ ...log, reference_clip: undefined }).filter((p) => p.startsWith('reference')).length, 1)
 })

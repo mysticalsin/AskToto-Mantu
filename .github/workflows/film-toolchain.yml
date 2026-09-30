@@ -113,19 +113,41 @@ jobs:
           name: film-non-product-scenes
           path: film/scenes/rendered/*.mp4
           if-no-files-found: error
-      # The pre-production review set (M2-0389): a contact sheet (one frame from the middle of each
-      # non-product scene) and a low-resolution animatic of the scenes in order, for sign-off in
-      # film/storyboard/render-log.json before the /brag --full render.
+      # The pre-production review set (M2-0389), built from the shot order of
+      # film/storyboard/composition-brief.md (S01-S06), each shot at its In/Out length: a contact sheet
+      # (one frame per shot) and a low-resolution animatic, for sign-off in film/storyboard/render-log.json
+      # before the /brag --full render. A shot with no rendered source yet (the SH-*C concept shots) is a
+      # labelled slate; NP-02 and NP-03 are not in the cut and are left out.
       - name: Draw the contact sheet and animatic
         run: |
-          mkdir -p "$SCENES_DIR/review"
-          for video in "$SCENES_DIR"/NP-*.mp4; do
-            id=$(basename "$video" .mp4)
-            ffmpeg -v error -y -ss 1.5 -i "$video" -frames:v 1 -vf scale=960:-2 "$SCENES_DIR/review/$id.png"
-            printf "file '%s'\n" "$video" >> "$SCENES_DIR/review/list.txt"
-          done
-          ffmpeg -v error -y -pattern_type glob -i "$SCENES_DIR/review/NP-*.png" -vf 'tile=3x2' -frames:v 1 "$SCENES_DIR/review/contact-sheet.png"
-          ffmpeg -v error -y -f concat -safe 0 -i "$SCENES_DIR/review/list.txt" -vf scale=960:-2 -c:v libx264 -pix_fmt yuv420p "$SCENES_DIR/review/animatic.mp4"
+          review="$SCENES_DIR/review"
+          font=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
+          mkdir -p "$review"
+          : > "$review/list.txt"
+          # Each line: shot id, source (a rendered scene id, or a concept shot id), length in seconds.
+          while read -r shot source length; do
+            segment="$review/$shot.mp4"
+            if [ -f "$SCENES_DIR/$source.mp4" ]; then
+              ffmpeg -v error -y -i "$SCENES_DIR/$source.mp4" \
+                -vf "scale=960:540,setsar=1,fps=30,tpad=stop_mode=clone:stop_duration=$length" \
+                -t "$length" -an -c:v libx264 -pix_fmt yuv420p "$segment"
+            else
+              ffmpeg -v error -y -f lavfi -i "color=c=0x1c1c22:s=960x540:r=30:d=$length" \
+                -vf "drawtext=fontfile=$font:text='$shot $source (slate, no render yet)':fontcolor=white:fontsize=32:x=(w-text_w)/2:y=(h-text_h)/2" \
+                -c:v libx264 -pix_fmt yuv420p "$segment"
+            fi
+            ffmpeg -v error -y -ss 1.5 -i "$segment" -frames:v 1 "$review/$shot.png"
+            printf "file '%s'\n" "$segment" >> "$review/list.txt"
+          done <<'SHOTS'
+          S01 NP-01 4
+          S02 SH-01C 6
+          S03 SH-02C 8
+          S04 SH-03C 8
+          S05 NP-05 4
+          S06 NP-04 4
+          SHOTS
+          ffmpeg -v error -y -pattern_type glob -i "$review/S0*.png" -vf 'tile=3x2' -frames:v 1 "$review/contact-sheet.png"
+          ffmpeg -v error -y -f concat -safe 0 -i "$review/list.txt" -c copy "$review/animatic.mp4"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: film-preproduction-review

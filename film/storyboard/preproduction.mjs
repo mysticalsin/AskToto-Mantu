@@ -34,12 +34,12 @@ export function checkBrief(shots, claimIds) {
 /** Problems with the render log: only the full /brag route may render, and only after both sign-offs. */
 export function checkRenderLog(log) {
   const problems = []
-  if (!/^\/brag\b.*\s--full(\s|$)/.test(log.route?.invocation ?? '')) problems.push('route is not /brag --full')
+  if (!/^\/brag(\s+\S+)*\s+--full(\s|$)/.test(log.route?.invocation ?? '')) problems.push('route is not /brag --full')
   const { contact_sheet: sheet, animatic } = log.signoffs ?? {}
   if (sheet?.status !== 'SIGNED_OFF') problems.push('contact sheet is not signed off')
   if (animatic?.status !== 'SIGNED_OFF') problems.push('animatic is not signed off')
   const clip = log.reference_clip
-  if (!clip?.attempted || !['viewed', 'not viewed'].includes(clip.result)) problems.push('reference clip attempt and result are not recorded')
+  if (typeof clip?.attempted !== 'boolean' || !['viewed', 'not viewed'].includes(clip.result)) problems.push('reference clip attempt and result are not recorded')
   return problems
 }
 

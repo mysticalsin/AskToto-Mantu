@@ -6,12 +6,25 @@
     "note": "Without --full, /brag drops to brag-slim on Opus 5.5; the route check rejects that route."
   },
   "signoffs": {
-    "contact_sheet": { "status": "PENDING", "artifact": "film-preproduction-review", "reviewer": null },
-    "animatic": { "status": "PENDING", "artifact": "film-preproduction-review", "reviewer": null }
+    "contact_sheet": {
+      "status": "PENDING",
+      "artifact": "film-preproduction-review",
+      "reviewer": null,
+      "LEAD_ACTION": "Download artifact film-preproduction-review from the Film toolchain run, review contact-sheet.png, set signoffs.contact_sheet.status to SIGNED_OFF and fill in the reviewer, before the /brag --full render."
+    },
+    "animatic": {
+      "status": "PENDING",
+      "artifact": "film-preproduction-review",
+      "reviewer": null,
+      "LEAD_ACTION": "Download artifact film-preproduction-review from the Film toolchain run, review animatic.mp4, set signoffs.animatic.status to SIGNED_OFF and fill in the reviewer, before the /brag --full render."
+    }
   },
+  "final_render_gate": "The final-render job must run checkRenderLog (film/storyboard/preproduction.mjs) on this file and fail on any problem.",
   "reference_clip": {
-    "attempted": true,
+    "attempted": false,
+    "status": "BLOCKED_EXTERNAL",
     "result": "not viewed",
-    "reason": "The pipeline that prepared this set has no network access, so the X reference clip could not be opened. The hook was chosen from the claim register alone; view the clip before the hook is locked."
+    "reason": "The pipeline that prepared this set has no network access, so no attempt to open the X reference clip was possible. The hook was chosen from the claim register alone.",
+    "step": "Open the X reference clip at the link held in the private program tracker, record viewed or not viewed here, and do this before the hook is locked."
   }
 }

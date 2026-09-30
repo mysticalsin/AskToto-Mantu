@@ -32,7 +32,7 @@ Cut and staying cut: the privacy scene (privacy line is cut, D-12), the comparis
 1. `hook-concepts.md` selection recorded.
 2. `composition-brief.md` complete for every shot.
 3. Contact sheet and animatic drawn by the `Film toolchain` workflow (artifact `film-preproduction-review`).
-4. Both signed off in `render-log.json`.
+4. Both signed off in `render-log.json`. Pending, `LEAD_ACTION`: download artifact `film-preproduction-review` from the Film toolchain run, review `contact-sheet.png` and `animatic.mp4`, and set `signoffs.*.status` to `SIGNED_OFF` with the reviewer, before the `/brag --full` render. The final-render job must run `checkRenderLog` on `render-log.json` and fail on any problem.
 5. Render invoked as `/brag --full`.
 
 ## Reference clip
