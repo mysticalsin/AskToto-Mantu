@@ -31,7 +31,7 @@ describe('M2-0510 program repository caller workflows', () => {
   })
 
   it('keeps private program repository paths out of public caller files and tests', () => {
-    for (const text of [ledger, audit, read('program-audit-callers-workflow.contract.test.ts')]) {
+    for (const text of [ledger, audit, readFileSync(__filename, 'utf8')]) {
       for (const pattern of PRIVATE_PROGRAM_PATH_PATTERNS) expect(text).not.toMatch(pattern)
     }
   })
