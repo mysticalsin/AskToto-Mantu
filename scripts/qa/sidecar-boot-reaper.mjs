@@ -304,10 +304,19 @@ function processAlive(pid) {
   }
 }
 
-function launch(executable, profile, port) {
-  const env = { ...process.env, ASKTOTO_USERDATA: profile, METIS_DISABLE_APPLE_FM: '1' }
+// The real llama-server proof needs the sidecar to become a launchd orphan after SIGKILL of main. With supervision
+// on (the shipped default) the helper kills it within about 2 s, so that proof asks for supervision off, which
+// also emulates a legacy unsupervised orphan.
+const REAL_LLAMA_SUPERVISION = 'off'
+
+export function launchEnv(profile, extraEnv = {}) {
+  const env = { ...process.env, ASKTOTO_USERDATA: profile, METIS_DISABLE_APPLE_FM: '1', ...extraEnv }
   for (const key of Object.keys(env)) if (/_API_KEY$/i.test(key)) delete env[key]
-  return spawn(executable, [`--remote-debugging-port=${port}`], { env, stdio: 'ignore' })
+  return env
+}
+
+function launch(executable, profile, port, extraEnv = {}) {
+  return spawn(executable, [`--remote-debugging-port=${port}`], { env: launchEnv(profile, extraEnv), stdio: 'ignore' })
 }
 
 function seedLocalLlmSettings(profile) {
@@ -427,6 +436,7 @@ function initialObservation(kind) {
 
 function initialRealLlamaObservation() {
   const observation = initialObservation('real-llama-server')
+  observation.supervision = REAL_LLAMA_SUPERVISION
   observation.timingsMs.llamaStarted = null
   observation.pids.orphan = null
   return observation
@@ -437,6 +447,7 @@ export function summarizeProof(report) {
     schema: 1,
     ticket: 'M2-0233',
     kind: report.kind,
+    ...(report.supervision ? { supervision: report.supervision } : {}),
     result: report.result,
     failures: report.failures,
     unblock: report.unblock,
@@ -569,7 +580,7 @@ async function runRealLlamaProof({ installRoot, executable }) {
 
     const firstPort = await freeLoopbackPort()
     const firstStartedAt = Date.now()
-    first = launch(executable, profile, firstPort)
+    first = launch(executable, profile, firstPort, { METIS_SUPERVISION: REAL_LLAMA_SUPERVISION })
     observation.pids.firstMain = first.pid ?? null
     if (!first.pid) throw new Failure('first main pid was unavailable')
     if (!(await waitForRendererReady(profile))) throw new Failure('first launch did not reach renderer ready')
@@ -594,7 +605,7 @@ async function runRealLlamaProof({ installRoot, executable }) {
     if (!orphaned) throw new Failure('llama-server did not become a launchd orphan after SIGKILL')
 
     const secondPort = await freeLoopbackPort()
-    second = launch(executable, profile, secondPort)
+    second = launch(executable, profile, secondPort, { METIS_SUPERVISION: REAL_LLAMA_SUPERVISION })
     observation.pids.secondMain = second.pid ?? null
     if (!second.pid) throw new Failure('second main pid was unavailable')
 
