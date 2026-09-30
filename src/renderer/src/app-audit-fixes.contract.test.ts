@@ -22,7 +22,6 @@ import { meetingSaveIsRedundant, tapProfileMismatch } from './App'
 // Normalize CRLF → LF: this is a Windows checkout, so any anchor whose newline sits mid-string would
 // never match against \r\n.
 const source = readFileSync(join(__dirname, 'App.tsx'), 'utf8').replace(/\r\n/g, '\n')
-const appBootSource = readFileSync(join(__dirname, 'app', 'hooks', 'useAppBoot.ts'), 'utf8').replace(/\r\n/g, '\n')
 
 /** Source slice from `start` up to (excluding) the next `end`. Throws loudly if either anchor moved. */
 function blockBetween(start: string, end: string): string {
@@ -88,7 +87,7 @@ describe('MQA-068 — the license enforcement switch no longer advertises a safe
   // with no activation form, since that form is gated by Settings.tsx's own LICENSE_UI_ENABLED). What is
   // pinned here is the disclosure — the comment used to promise that flipping THIS constant restored
   // licensing "exactly as before", which is the trap that produced the drift in the first place.
-  const block = blockBetweenIn(appBootSource, '// ── License enforcement master switch', 'const licenseEnforced')
+  const block = blockBetween('// ── License enforcement master switch', 'export function App')
 
   it('still ships with enforcement off', () => {
     expect(block).toMatch(/const LICENSE_ENFORCEMENT = false/)

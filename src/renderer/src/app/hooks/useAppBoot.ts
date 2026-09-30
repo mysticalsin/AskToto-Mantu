@@ -6,9 +6,10 @@ import { isOnboardingBoot } from '../../lib/onboarding-boot'
 type UseAppBootOptions = {
   demo: string | null
   savedPath: string | null
+  licenseEnforcement: boolean
 }
 
-export function useAppBoot({ demo, savedPath }: UseAppBootOptions): {
+export function useAppBoot({ demo, savedPath, licenseEnforcement }: UseAppBootOptions): {
   settings: ReturnType<typeof useSettings>['settings']
   settingsBootError: string | null
   patch: ReturnType<typeof useSettings>['patch']
@@ -31,16 +32,7 @@ export function useAppBoot({ demo, savedPath }: UseAppBootOptions): {
   const bootError = settingsBootError ?? auth.bootError
   const [bootSlow, setBootSlow] = useState(false)
 
-  // ── License enforcement master switch ──────────────────────────────────────────────────────────
-  // OFF for now: every copy is treated as valid and the activation gate never renders, regardless of
-  // the stored `licenseGateEnabled` setting — including a machine-wide managed-config that sets (and
-  // locks) licenseGateEnabled:true, which is completely inert while this is off. All the licensing code
-  // (main/license.ts, the LicenseGate component, the settings toggle, the heartbeat) is intact.
-  // Flipping this constant ALONE ships a brick: Settings.tsx's LICENSE_UI_ENABLED gates the only
-  // activation form in the app, and main's 12h heartbeat is gated on `licenseValid`, which nothing but a
-  // successful activation can set. Both switches move together, in one change, or not at all.
-  const LICENSE_ENFORCEMENT = false
-  const licenseEnforced = LICENSE_ENFORCEMENT && settings?.licenseGateEnabled === true
+  const licenseEnforced = licenseEnforcement && settings?.licenseGateEnabled === true
   const [licenseGate, setLicenseGate] = useState<LicenseGateVerdict | null>(null)
 
   useEffect(() => {

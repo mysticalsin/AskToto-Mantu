@@ -259,6 +259,10 @@ const DEMO_SUG = `**Say this:** "At Mantu I led the Métis build, a Cluely-class
 - Quantify: 1 sprint, solo, live in front of leadership.
 - If pushed: the risk was system-audio capture, so I de-risked it first.`
 
+// ── License enforcement master switch ──────────────────────────────────────────────────────────
+// OFF: licenseGateEnabled, even from managed-config, is inert unless this and Settings.tsx's LICENSE_UI_ENABLED move together.
+const LICENSE_ENFORCEMENT = false
+
 export function App(): JSX.Element {
   const autoResizeRoot = useAutoResize() // callback ref — tracks the live root across view switches
   const rootElementRef = useRef<HTMLElement | null>(null)
@@ -277,7 +281,7 @@ export function App(): JSX.Element {
   }, [])
   const windowDrag = useWindowDrag(onWindowDragStart, { noTouch: true })
 
-  const [savedPath, setSavedPath] = useState<string | null>(null)
+  const [savedPath, setSavedPath] = useState<string | null>(null) // FITO-185-X: bound license:gate in useAppBoot; failOpen on timeout.
   const {
     settings,
     settingsBootError,
@@ -295,7 +299,7 @@ export function App(): JSX.Element {
     licenseGatePending,
     recheckLicenseGate,
     entityNames
-  } = useAppBoot({ demo: DEMO, savedPath })
+  } = useAppBoot({ demo: DEMO, savedPath, licenseEnforcement: LICENSE_ENFORCEMENT })
   // This is deliberately an opaque main-owned capability. Until main provides a verified allowlisted
   // consequence, the right edge lets the user cancel it but will never invite confirmation blind.
   const [commandState, setCommandState] = useState<MetisCommandState>({ proposalId: null })
@@ -396,13 +400,7 @@ export function App(): JSX.Element {
   const [input, setInput] = useState('')
   const [collapsed, setCollapsed] = useState(false)
   const [minimized, setMinimized] = useState(false) // collapsed to the floating control mini-pill
-  // Every view except the idle bar is a lazy chunk. A view switch inside a click handler renders on
-  // React 18's synchronous discrete lane — if the target chunk isn't loaded yet the component
-  // suspends DURING sync input and React throws #426 ("A component suspended while responding to
-  // synchronous input"), crashing to the error boundary ("Métis hit a snag") instead of showing
-  // the Suspense fallback. Reproduced physically on first "Start listening" (cold Copilot chunk).
-  // The documented fix: mark view switches as transitions — the old view stays up for the few ms the
-  // chunk needs, then the new one mounts. useViewRouter owns the transition wrapper and settings route.
+  // useViewRouter owns transition-wrapped view switches, settings route state, and the Review navigation guard.
   const {
     view,
     setView,
@@ -416,9 +414,9 @@ export function App(): JSX.Element {
     navigationGuardRequest,
     onReviewDirtyChange,
     confirmReviewNavigation,
-    guardReviewNav,
-    approveReviewNav
+    guardReviewNav
   } = useViewRouter({ setCollapsed, setMinimized })
+  const approveReviewNav = useCallback(async (): Promise<boolean> => confirmReviewNavigation(), [confirmReviewNavigation])
   // See crash-context.ts for why this runs in render rather than an effect.
   noteCrashContext({ view, listening: listen.listening })
 
@@ -3725,7 +3723,7 @@ export function App(): JSX.Element {
         </div>
       )
     }
-    if (bootSlow) {
+    if (bootSlow) { // FITO-185-X: mid-wait Reload keeps a soft boot wait actionable instead of spinning forever.
       return (
         <div ref={setRoot} {...windowDrag} className="w-full p-1.5">
           <div className="glass flex w-full items-center gap-2 rounded-full px-4 py-2">

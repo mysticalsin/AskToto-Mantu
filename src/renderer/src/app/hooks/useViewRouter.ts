@@ -37,7 +37,6 @@ export function useViewRouter({
   onReviewDirtyChange: (dirty: boolean, save?: () => Promise<boolean>) => void
   confirmReviewNavigation: () => Promise<boolean>
   guardReviewNav: (proceed: () => void) => void
-  approveReviewNav: () => Promise<boolean>
 } {
   const [view, setViewRaw] = useState<RendererView>(initialViewFromLaunch)
   const setView = useCallback((v: RendererView | ((prev: RendererView) => RendererView)): void => {
@@ -97,8 +96,6 @@ export function useViewRouter({
       proceed()
     })()
   }, [confirmReviewNavigation])
-  const approveReviewNav = useCallback(async (): Promise<boolean> => confirmReviewNavigation(), [confirmReviewNavigation])
-
   return {
     view,
     setView,
@@ -112,7 +109,6 @@ export function useViewRouter({
     navigationGuardRequest,
     onReviewDirtyChange,
     confirmReviewNavigation,
-    guardReviewNav,
-    approveReviewNav
+    guardReviewNav
   }
 }
