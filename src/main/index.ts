@@ -653,10 +653,10 @@ import {
 import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
-import { buildTrayInStages, createSingleFlight, loadPresizedTrayIcon, scheduleTrayAfterFirstPaint, trayIconPaths, yieldToEventLoop } from './boot-tray'
+import { buildTrayInStages, createSingleFlight, formatTrayAccelerator, loadPresizedTrayIcon, scheduleTrayAfterFirstPaint, trayIconPaths, yieldToEventLoop } from './boot-tray'
 import { isBootFirstShowDeferred, scheduleCurrentFirstShow, withBootFirstShowDeferred } from './lifecycle/first-show'
 import { createBootWork } from './lifecycle/boot-work'
-import { startRunObservability, type RunObservability } from './infra/observability/run-observability'
+import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
 import { createResponsivenessTracker } from './infra/observability/responsiveness-tracker'
 import { crashDetail, type CrashKind } from './infra/observability/crash-taxonomy'
@@ -2670,6 +2670,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
   const chrome = overlayWindowChrome(onboardingLive)
   overlayWindowTransparent = chrome.transparent
   const deferFirstShow = isBootFirstShowDeferred()
+  const constructStartedMs = performance.now()
   win = new BrowserWindow({
     title: 'Métis', // Electron otherwise titles the window with the package name until the renderer's <title> loads
     width: firstPaint.width,
@@ -2711,6 +2712,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
       webSecurity: true
     }
   })
+  observability?.recordBootStage('createWindow.construct', performance.now() - constructStartedMs, { transparent: chrome.transparent })
   ensureMetisCommandRuntime({
     getSettings,
     commandControl,
@@ -2769,8 +2771,8 @@ function createWindow(targetDisplay?: Electron.Display): void {
     throw e
   }
   // Both keep the ctor show:true activation (focus + front): exclusive via FITO-185-T, the overlay via show().
-  if (deferFirstShow) scheduleCurrentFirstShow(win, () => win, (firstShown) =>
-    onboardingLive ? showForExclusiveOnboarding(firstShown) : firstShown.isVisible() || firstShown.show())
+  if (deferFirstShow) scheduleCurrentFirstShow(win, () => win, (firstShown) => timeBootStage(observability, 'createWindow.firstShow', () =>
+    onboardingLive ? showForExclusiveOnboarding(firstShown) : firstShown.isVisible() || firstShown.show()))
 
   // Capture THIS window instance so a late 'closed' from a crashed/replaced window can't null out a
   // freshly-recreated one (render-process-gone recovery reassigns `win` before the old one's 'closed'
@@ -4741,13 +4743,8 @@ function startMeetingNotifier(): void {
  *  accelerator labels never go stale — see rebuildTrayMenu(). */
 function buildTrayMenu(): Menu {
   const user = getSettings().shortcuts ?? {}
-  const winKeys = process.platform === 'win32'
-  const fmtAccel = (a: string): string =>
-    !a ? '' : winKeys
-      ? a.replace(/CommandOrControl|CmdOrCtrl|Control/g, 'Ctrl').replace(/Command|Meta|Super/g, 'Win').replace(/Return/g, 'Enter')
-      : a.replace(/CommandOrControl|CmdOrCtrl|Command|Meta/g, '⌘').replace(/Shift/g, '⇧').replace(/Alt/g, '⌥').replace(/Control/g, 'Ctrl').replace(/Return/g, '↵').replace(/\+/g, '')
   const label = (base: string, action: HotkeyAction): string => {
-    const k = fmtAccel(resolveShortcut(action, user))
+    const k = formatTrayAccelerator(resolveShortcut(action, user), process.platform)
     return k ? `${base}  (${k})` : base
   }
   return Menu.buildFromTemplate([
@@ -4803,7 +4800,7 @@ function createTray(): void {
       auditLog('tray.created', { emptyIcon })
     },
     attachMenu: () => tray?.setContextMenu(buildTrayMenu()),
-    time: (label, fn) => (observability ? observability.timePhase(label, fn) : fn()),
+    time: (label, fn) => timeBootStage(observability, label, fn),
     fail: (e) => auditLog('tray.failed', { message: e instanceof Error ? e.message : String(e) })
   }))
 }
