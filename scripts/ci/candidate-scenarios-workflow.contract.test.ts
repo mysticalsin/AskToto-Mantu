@@ -115,17 +115,25 @@ describe('candidate-scenarios.yml', () => {
       'jq -r .run.id provenance/provenance.json',
       'node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" mac',
       'codesign --verify --deep --strict',
+      'echo "path=$app" >> "$GITHUB_OUTPUT"',
       'candidate-scenarios.mjs profile',
       'candidate-scenarios.mjs run'
     ].map((fragment) => stepIndex(mac, fragment))
     expect(order).toEqual([...order].sort((a, b) => a - b))
     const install = mac[stepIndex(mac, 'codesign')]
-    expect(install).toContain('target="$RUNNER_TEMP/candidate-install"')
+    expect(install).toContain('id: installed_app')
+    expect(install).toContain('target="candidate-install"')
+    expect(install).toContain('rm -rf "$target"')
     expect(install).toContain('mkdir "$target"')
     expect(install).toContain('hdiutil attach')
     expect(install).toContain('ditto -x -k "$INSTALLER" "$target"')
+    expect(install).toContain('echo "path=$app" >> "$GITHUB_OUTPUT"')
     expect(mac[stepIndex(mac, '--name "$ARTIFACT"')]).toContain('gh run download "$CANDIDATE_RUN"')
     expect(job('mac')).toContain('      ARTIFACT: ${{ needs.guard.outputs.mac_artifact }}')
+    const run = mac[stepIndex(mac, 'candidate-scenarios.mjs run')]
+    expect(run).toContain('INSTALLER: ${{ steps.installer.outputs.path }}')
+    expect(run).toContain('INSTALLED_APP: ${{ steps.installed_app.outputs.path }}')
+    expect(run).toContain('--installed-app "$INSTALLED_APP"')
   })
 
   it('uploads the lane artifact on every run and fails only after the upload', () => {

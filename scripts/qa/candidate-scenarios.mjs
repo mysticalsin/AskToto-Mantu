@@ -30,7 +30,7 @@ export const RUNNER_LABELS = Object.freeze({ mac: 'macos-latest', win: 'windows-
 
 /** userData directory name per installed variant: Electron takes it from the packaged package.json name,
  *  which build/qa-identity.electron-builder.yml sets to asktoto-qa for the QA identity. */
-export const PROFILE_DIRS = Object.freeze({ 'mac-qa-identity': 'asktoto-qa' })
+export const PROFILE_DIRS = Object.freeze({ mac: 'asktoto', 'mac-qa-identity': 'asktoto-qa' })
 
 /**
  * A scenario runs on each platform it declares. A platform entry names the qa-candidate variant and
@@ -54,6 +54,23 @@ export const SCENARIOS = Object.freeze({
         args: ({ installer, sha256, report }) => ['--zip', installer, '--sha256', sha256, '--out', report],
         report: 'fault-fatal-relaunch.json',
         settings: LOCAL_LLM_SETTINGS
+      })
+    })
+  }),
+  // M2-0471: on promotable macOS bytes, SIGSTOP main for 15 s, then require exactly one sanitized stall
+  // bundle and one app.stall.sampled audit event. The long idle plus sleep/wake row is reported as
+  // BLOCKED_EXTERNAL by the scenario because hosted runners cannot provide that physical-host setup.
+  'stall-sampler': Object.freeze({
+    ticket: 'M2-0471',
+    qaOnlyHook: false,
+    exits: Object.freeze({ 0: 'PASS', 1: 'FAIL', 2: 'PRECONDITION' }),
+    platforms: Object.freeze({
+      mac: Object.freeze({
+        variant: 'mac',
+        artifact: 'candidate-mac',
+        script: 'scripts/qa/stall-sampler-hosted.mjs',
+        args: ({ installedApp, report }) => [installedApp, report, '--stop-seconds', '15'],
+        report: 'stall-sampler.json'
       })
     })
   })
@@ -163,9 +180,12 @@ export function outcomeForExit(scenario, exitCode) {
 
 /** The argv (after `node`) that runs a scenario. Every argument is repository-relative, so the recorded
  *  command never names the runner's home or temp directory. */
-export function scenarioCommand({ scenario, platform, installer, sha256, outDir }) {
+export function scenarioCommand({ scenario, platform, installer, installedApp = installer, sha256, outDir }) {
   const target = platformEntry(scenario, platform)
-  const argv = [target.script, ...target.args({ installer, sha256, report: join(outDir, target.report).replaceAll('\\', '/') })]
+  const argv = [
+    target.script,
+    ...target.args({ installer, installedApp, sha256, report: join(outDir, target.report).replaceAll('\\', '/') })
+  ]
   const absolute = argv.filter((arg) => isAbsolute(arg) || /^[A-Za-z]:[\\/]/.test(arg))
   if (absolute.length) throw new Error(`The scenario command must use repository-relative paths; got ${absolute.length} absolute.`)
   return argv
@@ -315,6 +335,7 @@ function run(values) {
   const scenario = required(values, 'scenario')
   const platform = required(values, 'platform')
   const installer = required(values, 'installer')
+  const installedApp = values['installed-app']
   const sha256 = required(values, 'sha256').trim().toLowerCase()
   const outDir = required(values, 'out')
   const candidateRun = required(values, 'candidate-run')
@@ -322,7 +343,7 @@ function run(values) {
   const target = platformEntry(scenario, platform)
   assertCandidateProvenance(provenance, candidateRun)
 
-  const argv = scenarioCommand({ scenario, platform, installer, sha256, outDir })
+  const argv = scenarioCommand({ scenario, platform, installer, installedApp, sha256, outDir })
   mkdirSync(outDir, { recursive: true })
   const child = spawnSync(process.execPath, argv, { stdio: ['ignore', 'inherit', 'pipe'], encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
   process.stderr.write(child.stderr ?? '')
