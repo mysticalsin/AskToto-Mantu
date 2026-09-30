@@ -60,7 +60,7 @@ const syncNameSet = new Set<string>(syncNames)
  * Only ever revise an entry DOWNWARD when that file is migrated further; never raise it.
  */
 const BASELINE = {
-  'transcripts.ts': 27,
+  'transcripts.ts': 22,
   'brain/ingest.ts': 0,
   'brain/inputs.ts': 0,
   'brain/consolidate.ts': 0,
