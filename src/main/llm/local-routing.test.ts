@@ -7,7 +7,7 @@
  * exported, pure boundary index.ts actually calls: local-routing.ts (localEligibleFor / localBaseReady /
  * pickPrimaryProvider) and local.ts (streamLocal).
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DEFAULT_SETTINGS, type AskStart, type Settings } from '@shared/ipc'
@@ -22,6 +22,10 @@ vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>()
   return { ...actual, existsSync: () => fsState.binaryExists }
 })
+vi.mock('../logger', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../logger')>()),
+  auditLog: vi.fn()
+}))
 
 const localRuntimeMock = vi.hoisted(() => ({
   resolveBinaryPath: vi.fn(() => [{ path: `/resources/llama/mac/${process.arch}/llama-server`, variant: 'mac' as const }]),
@@ -88,9 +92,13 @@ import {
   resolveRoutingMode,
   localPrimaryEligibleFor,
   pickPrimaryProvider,
-  allowCrossProviderFailover
+  allowCrossProviderFailover,
+  localPrewarmEligible,
+  PREWARM_MIN_FREE_RAM_GB
 } from './local-routing'
 import { streamLocal } from './local'
+import { auditLog } from '../logger'
+import { armQaHostFloorOverride } from '../qa-hk-m'
 import { importedTranscriptText, runImportedRecap } from '../import-recap'
 
 type LocalLlmSettings = {
@@ -928,5 +936,61 @@ describe('streamLocal', () => {
     await flush()
     expect(localRuntimeMock.beginStream).not.toHaveBeenCalled()
     expect(localRuntimeMock.endStream).not.toHaveBeenCalled()
+  })
+})
+
+// M2-0482: the prewarm available-memory floor under the one QA host-floor gate (qa-hk-m.ts qaHostFloorOverride).
+describe('localPrewarmEligible under the QA host-floor gate', () => {
+  const warmable = {
+    ...DEFAULT_SETTINGS,
+    localLlm: { ...DEFAULT_SETTINGS.localLlm, enabled: true, useFor: { suggest: true, summary: false, vision: false } }
+  }
+  const QA_ENV = { ASKTOTO_USERDATA: '/qa-profile', METIS_QA_HOST_FLOOR_OVERRIDE: '1' }
+  const DEFAULT_USER_DATA = '/Library/Application Support/Metis'
+
+  afterEach(() => {
+    armQaHostFloorOverride({}, false, DEFAULT_USER_DATA)
+  })
+
+  it('gate off: 3.9 GiB available refuses the warm and 4 GiB allows it, with no audit', () => {
+    expect(PREWARM_MIN_FREE_RAM_GB).toBe(4)
+    expect(localPrewarmEligible(warmable, null, true, 3.9)).toBe(false)
+    expect(localPrewarmEligible(warmable, null, true, 4)).toBe(true)
+    expect(auditLog).not.toHaveBeenCalledWith('local.host-floor-override', expect.anything())
+  })
+
+  it('gate on: skips only the available-memory floor and audits its first lift once', () => {
+    expect(armQaHostFloorOverride(QA_ENV, true, DEFAULT_USER_DATA)).toBe(true)
+    expect(localPrewarmEligible(warmable, null, true, 3.9)).toBe(true)
+    expect(localPrewarmEligible(warmable, null, true, 0.5)).toBe(true)
+    const lifts = vi.mocked(auditLog).mock.calls.filter(([event]) => event === 'local.host-floor-override')
+    expect(lifts).toEqual([
+      [
+        'local.host-floor-override',
+        { floor: 'prewarm-available-ram', hostTotalBytes: expect.any(Number), hostAvailableBytes: expect.any(Number) }
+      ]
+    ])
+  })
+
+  it('gate on: localLlm.enabled, the org allowlist and the warm conditions still refuse, and nothing is audited', () => {
+    armQaHostFloorOverride(QA_ENV, true, DEFAULT_USER_DATA)
+    expect(localPrewarmEligible({ ...warmable, localLlm: { ...warmable.localLlm, enabled: false } }, null, true, 3.9)).toBe(false)
+    expect(localPrewarmEligible(warmable, ['anthropic'], true, 3.9)).toBe(false)
+    const unwanted = {
+      ...warmable,
+      resilience: { ...warmable.resilience, hedge: false },
+      localLlm: { ...warmable.localLlm, fallback: false, useFor: { suggest: false, summary: false, vision: false } }
+    }
+    expect(localPrewarmEligible(unwanted, null, false, 3.9)).toBe(false)
+    expect(localPrewarmEligible(unwanted, null, false, 8)).toBe(false)
+    expect(auditLog).not.toHaveBeenCalledWith('local.host-floor-override', expect.anything())
+  })
+
+  it('the explicit env on an unpackaged app or the default profile leaves the floor in force', () => {
+    armQaHostFloorOverride(QA_ENV, false, DEFAULT_USER_DATA)
+    expect(localPrewarmEligible(warmable, null, true, 3.9)).toBe(false)
+    armQaHostFloorOverride({ ...QA_ENV, ASKTOTO_USERDATA: DEFAULT_USER_DATA }, true, DEFAULT_USER_DATA)
+    expect(localPrewarmEligible(warmable, null, true, 3.9)).toBe(false)
+    expect(auditLog).not.toHaveBeenCalledWith('local.host-floor-override', expect.anything())
   })
 })
