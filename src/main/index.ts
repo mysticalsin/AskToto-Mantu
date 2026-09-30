@@ -657,6 +657,8 @@ import { isBootFirstShowDeferred, scheduleCurrentFirstShow, withBootFirstShowDef
 import { createBootWork } from './lifecycle/boot-work'
 import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
+import { storageAt } from './infra/storage/meetings-storage'
+import { createAppContext } from './app/context'
 import { createResponsivenessTracker } from './infra/observability/responsiveness-tracker'
 import { crashDetail, type CrashKind } from './infra/observability/crash-taxonomy'
 import { createRevealTrace } from './infra/observability/reveal-trace'
@@ -4531,6 +4533,19 @@ const { forceQuit: forceQuitMétis, exitAndRelaunch } = installExitPaths(app, {
     endBootWatch(app.getPath('userData'))
   },
   warn: (...args) => mainLog.warn(...args)
+})
+
+// Built once, after the `win` binding, the settings store and the sidecar teardown above exist. The window
+// accessor reads `win` on every call (never a captured BrowserWindow), so recreating the window never
+// leaves the context holding a stale one.
+const appContext = createAppContext({
+  mainWindow: () => win,
+  settings: { get: getSettings, set: setSettings },
+  audit: auditLog,
+  supervisor: { stopAll: stopAllSidecars },
+  gateway: () => storageAt(resolveMeetingsFolder(getSettings())),
+  scheduler: { runAsMaintenance },
+  clock: { now: () => Date.now() }
 })
 
 function registerEmergencyForceQuitShortcut(): boolean {
