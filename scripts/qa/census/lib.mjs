@@ -120,12 +120,37 @@ export function parseProveLocalTtftOutput(text) {
   return warmTtftMs
 }
 
+/** Classifies a saved prove-local-ttft run without throwing on a failed proof: a slow hosted runner is a
+ *  measured PASS/FAIL/TIMEOUT to record, not a reason to drop the census. */
+export function parseProveLocalTtftOutcome(text) {
+  const output = String(text ?? '')
+  if (!output.includes('prove-local-ttft: Métis Local warm-suggest TTFT proof')) {
+    throw new Error('TTFT artifact is not output from scripts/prove-local-ttft.mjs')
+  }
+  const timeout = /prewarm timed out after (\d+)ms \(limit (\d+)ms\)/.exec(output)
+  if (timeout) return { outcome: 'TIMEOUT', prewarmElapsedMs: Number(timeout[1]), prewarmTimeoutMs: Number(timeout[2]) }
+  const warm = /^warm TTFT:\s*(\d+)\s*ms\s*$/im.exec(output)
+  if (/\[prove-local-ttft\]\s+FAIL|FAILED:/i.test(output)) {
+    const health = /healthy on \S+ after (\d+)ms/.exec(output)
+    const prewarm = /prewarm \(cold prefill\):\s*(\d+)\s*ms/.exec(output)
+    return {
+      outcome: 'FAIL',
+      ...(health ? { healthMs: Number(health[1]) } : {}),
+      ...(prewarm ? { prewarmColdPrefillMs: Number(prewarm[1]) } : {}),
+      ...(warm ? { warmTtftMs: Number(warm[1]) } : {})
+    }
+  }
+  // A run cut off before any verdict (no warm TTFT, no FAIL line) is still a measured non-PASS outcome.
+  if (!warm) return { outcome: 'INCOMPLETE' }
+  return { outcome: 'PASS', warmTtftMs: parseProveLocalTtftOutput(output) }
+}
+
 export function proveLocalTtftEvidenceFromArtifact(path, { cwd = process.cwd() } = {}) {
   const artifact = readEvidenceArtifact(path, cwd)
   return {
     recorded: true,
     command: PROVE_LOCAL_TTFT_COMMAND,
-    warmTtftMs: parseProveLocalTtftOutput(artifact.text),
+    ...parseProveLocalTtftOutcome(artifact.text),
     artifact: {
       path: artifact.path,
       sha256: sha256Text(artifact.text)
