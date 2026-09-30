@@ -765,6 +765,7 @@ import { listMeetings, searchMeetingsLatest } from './history-read'
 import {
   listMeetingsNeedingRecap,
   recallRead,
+  openExplicitly,
   deleteMeeting,
   renameMeeting,
   updateMeetingRecap,
@@ -6471,7 +6472,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.recallRead, async (e, file: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    return recallRead(String(file ?? ''), { hydrate: true })
+    return openExplicitly(String(file ?? ''), (event) => e.sender.send(IPC.recallHydration, event), (options) => recallRead(String(file ?? ''), options))
   })
 
   // Recall export: a user-initiated DECRYPTED markdown copy of ONE saved meeting, so an external tool —
@@ -6887,7 +6888,6 @@ function registerIpc(): void {
     }
     return { text }
   })
-
 
   // --- Cloud STT live WebSocket (Nova-3 / Soniox) ---
   // Main holds Operator/CF credentials; renderer only streams Float32 PCM + receives finals.
@@ -8925,7 +8925,7 @@ function registerIpc(): void {
     // which would execute a .command/.app/.exe. Mirror deleteMeeting()/debriefSave()'s .md guard.
     if (!safeName) return ''
     // Encrypted transcripts are unreadable in an editor — the target is a decrypted temp copy instead.
-    const target = await meetingOpenTarget(folder, safeName, { hydrate: true })
+    const target = await openExplicitly(safeName, (event) => e.sender.send(IPC.recallHydration, event), (options) => meetingOpenTarget(folder, safeName, options))
     if (!target.ok) return target.error
     auditLog('recall.open', { encrypted: target.encrypted })
     return shell.openPath(target.path)
