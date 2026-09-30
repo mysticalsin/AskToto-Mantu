@@ -13,6 +13,8 @@ import {
   isOwnerChannelVersion,
   writeClosure
 } from './closure.mjs'
+import { isStallBundle } from '../freeze-repro/attribution-bundle.mjs'
+import { isStallBundle as collectorIsStallBundle } from '../../../src/main/infra/observability/stall-bundle'
 
 // Ten active weekdays (2026-10-05..09 and 12..16), an active Saturday and an idle Sunday, all counts zero.
 const FIXTURE = join(__dirname, 'fixtures', 'closure-summary.json')
@@ -20,6 +22,21 @@ const summary = (): any => JSON.parse(readFileSync(FIXTURE, 'utf8'))
 const BOOT = '0f8fad5b-d9cb-469f-a165-70867728950e'
 const bundle = (capturedAtMs: number, stalledMs = 6000): string => `${BOOT}.${capturedAtMs}.${stalledMs}.txt`
 const sha256 = (path: string): string => createHash('sha256').update(readFileSync(path)).digest('hex')
+// Exactly what the collector (src/main/infra/observability/stall-bundle.ts) writes for bundle(capturedAtMs, stalledMs).
+const bundleText = (capturedAtMs: number, stalledMs = 6000): string =>
+  [
+    'metis stall bundle v1',
+    `bootId: ${BOOT}`,
+    `capturedAt: ${new Date(capturedAtMs).toISOString()}`,
+    `stalledMs: ${stalledMs}`,
+    'source: sample(1), 5 s at 10 ms; thread stacks and symbol names only',
+    '',
+    'Thread 0 (main)  500',
+    '+ 500 start  (in dyld) + 6076',
+    '+   500 ???  (in Electron Framework) + 0x1a2b',
+    '+     500 <redacted>',
+    ''
+  ].join('\n')
 
 function withSoak(overrides: { stallsOver5s?: number; revealNoOps?: number; afterUncleanExit?: number }): any {
   const s = summary()
@@ -187,8 +204,8 @@ describe('closure directory and the M2-0199 validator', () => {
       { ts: '2026-10-08T11:00:00.000Z', event: 'app.stall.sampled', bootId: BOOT, stalledMs: 7000, bundle: 'Thread 1 (main).txt' }
     ]
     writeFileSync(join(exportDir, 'audit.log'), `${rows.map((row) => JSON.stringify(row)).join('\n')}\nnot json\n`)
-    writeFileSync(join(exportDir, inScope), 'metis stall bundle v1\n')
-    writeFileSync(join(exportDir, beforeScope), 'metis stall bundle v1\n')
+    writeFileSync(join(exportDir, inScope), bundleText(1_791_000_000_000))
+    writeFileSync(join(exportDir, beforeScope), bundleText(1_780_000_000_000))
     writeFileSync(join(exportDir, 'Thread 1 (main).txt'), 'x')
 
     expect(writeClosure({ summary: withSoak({ stallsOver5s: 1 }), exportDir, out }).verdict).toBe('REOPEN')
@@ -207,10 +224,54 @@ describe('closure directory and the M2-0199 validator', () => {
     writeFileSync(join(out, FILES.status), `b1_status: ${INTERIM_STATUS.B1}\nb2_status: ${INTERIM_STATUS.B2}\n`)
     expect(closureDirProblems(out).join('\n')).toMatch(/B1 must be 'reopened'/)
 
+    writeFileSync(join(out, FILES.status), `b1_status: reopened\nb2_status: ${INTERIM_STATUS.B2}\n`)
+    writeFileSync(join(out, FILES.stalls, inScope), 'meeting notes\n')
+    expect(closureDirProblems(out).join('\n')).toMatch(/is not a redacted collector bundle/)
+
     rmSync(join(out, FILES.stalls), { recursive: true })
     expect(closureDirProblems(out).join('\n')).toMatch(/named by the record but not attached/)
     rmSync(join(out, FILES.hotfixStub))
     expect(closureDirProblems(out).join('\n')).toMatch(/hotfix-ticket stub/)
+  })
+
+  it('never copies an audited bundle-named file whose content is not a redacted collector bundle into the artifact', () => {
+    const exportDir = join(work, 'export')
+    mkdirSync(exportDir)
+    const planted = bundle(1_791_000_000_000)
+    const appended = bundle(1_791_000_000_100)
+    const rows = [
+      { ts: '2026-10-07T10:00:00.000Z', event: 'app.stall.sampled', bootId: BOOT, stalledMs: 6000, bundle: planted },
+      { ts: '2026-10-07T11:00:00.000Z', event: 'app.stall.sampled', bootId: BOOT, stalledMs: 6000, bundle: appended }
+    ]
+    writeFileSync(join(exportDir, 'audit.log'), `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`)
+    const privateText = 'Q3 pricing call with the client\nowner@example.com\n/Users/someone/Meetings/q3.md\n'
+    writeFileSync(join(exportDir, planted), privateText)
+    writeFileSync(join(exportDir, appended), `${bundleText(1_791_000_000_100)}+ 1 Q3 pricing call with the client\n`)
+
+    expect(writeClosure({ summary: withSoak({ stallsOver5s: 1 }), exportDir, out }).verdict).toBe('REOPEN')
+    expect(readFileSync(join(out, FILES.record), 'utf8')).toContain('sampler_bundles: none')
+    expect(readdirSync(out)).not.toContain(FILES.stalls)
+    for (const file of readdirSync(out)) {
+      expect(readFileSync(join(out, file), 'utf8'), file).not.toMatch(/pricing|example\.com|\/Users\//)
+    }
+    expect(closureDirProblems(out)).toEqual([])
+  })
+
+  it('checks bundle content exactly as the collector-side isStallBundle does', () => {
+    const name = bundle(1_791_000_000_000)
+    const good = bundleText(1_791_000_000_000)
+    const cases: [string, string][] = [
+      [name, good],
+      [name, `${good}[truncated]\n`],
+      [bundle(1_791_000_000_001), good],
+      [name, 'meeting notes\n'],
+      [name, `${good}+ 1 open  (in libfoo.dylib) + 4\n/Users/someone/q3.md\n`],
+      [name, `${good}+ 1 Q3 pricing call\n`],
+      [name, good.split('Thread 0')[0]],
+      ['notes.txt', good]
+    ]
+    for (const [caseName, text] of cases) expect(isStallBundle(caseName, text), text).toBe(collectorIsStallBundle(caseName, text))
+    expect(cases.map(([caseName, text]) => isStallBundle(caseName, text))).toEqual([true, true, false, false, false, false, false, false])
   })
 
   it('refuses a REOPEN without the exported diagnostics bundle, a verdict the counts contradict, and a user path', () => {

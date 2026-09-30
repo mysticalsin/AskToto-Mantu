@@ -21,6 +21,47 @@ const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 export const STALL_BUNDLE_NAME = new RegExp(`^${UUID}\\.\\d{1,15}\\.\\d{1,15}\\.txt$`)
 const AUDIT_LOG_NAME = /^audit(-\d+)?\.log$/
 
+/** Largest file a collector bundle can be: MAX_BUNDLE_BYTES of stacks plus room for the header. */
+export const MAX_STALL_BUNDLE_FILE_BYTES = 512 * 1024 + 4096
+const BUNDLE_NAME_PARTS = new RegExp(`^(${UUID})\\.(\\d{1,15})\\.(\\d{1,15})\\.txt$`)
+const BUNDLE_THREAD = /^Thread \d+( \(main\))? {2}\d+$/
+const BUNDLE_FRAME = /^[+!:| ]*\d+ (.+)$/
+const BUNDLE_FRAME_REST = [/^\S.*? {2}\(in [^)]+\) \+ \d+$/, /^\?\?\? {2}\(in [^)]+\) \+ 0x[0-9a-f]+$/, /^\?\?\?$/, /^<redacted>$/]
+const UNSAFE = /[/\\@\p{Cc}]/u
+
+/**
+ * The script-side mirror of isStallBundle in src/main/infra/observability/stall-bundle.ts (a parity test
+ * keeps them in step): true only when `text` is exactly the header the collector writes for the capture
+ * `name` encodes, then a thread header first and only thread headers and projected frame lines after it,
+ * none holding `/`, `\`, `@` or a control character, optionally ending in `[truncated]`. Pure.
+ */
+export function isStallBundle(name, text) {
+  const m = BUNDLE_NAME_PARTS.exec(name)
+  if (!m) return false
+  const capturedAt = new Date(Number(m[2]))
+  if (Number.isNaN(capturedAt.getTime())) return false
+  const header = [
+    'metis stall bundle v1',
+    `bootId: ${m[1]}`,
+    `capturedAt: ${capturedAt.toISOString()}`,
+    `stalledMs: ${Number(m[3])}`,
+    'source: sample(1), 5 s at 10 ms; thread stacks and symbol names only',
+    ''
+  ]
+  const lines = text.split('\n')
+  if (lines.length < header.length + 2 || lines[lines.length - 1] !== '') return false
+  if (header.some((line, i) => lines[i] !== line)) return false
+  const stacks = lines.slice(header.length, -1)
+  if (!BUNDLE_THREAD.test(stacks[0])) return false
+  return stacks.every((line, i) => {
+    if (UNSAFE.test(line)) return false
+    if (line === '[truncated]') return i === stacks.length - 1
+    if (BUNDLE_THREAD.test(line)) return true
+    const frame = BUNDLE_FRAME.exec(line)
+    return frame !== null && BUNDLE_FRAME_REST.some((rest) => rest.test(frame[1]))
+  })
+}
+
 /** The excerpt an audit event belongs to, or null when the event is not part of the attribution record. */
 export function excerptOf(event) {
   if (event === 'app.stall' || event === 'app.stall.summary') return 'stall'

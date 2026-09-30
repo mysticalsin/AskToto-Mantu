@@ -19,12 +19,12 @@
 //   PENDING  : no violation yet, fewer than MIN_WORKING_DAYS working days: keep the build and soak on.
 //   Until a bug is fixed it carries its interim wording (INTERIM_STATUS), never 'fixed'.
 // Every file written holds UTC dates, counts, versions and stall-bundle file names only.
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
-import { STALL_BUNDLE_NAME } from '../freeze-repro/attribution-bundle.mjs'
+import { MAX_STALL_BUNDLE_FILE_BYTES, STALL_BUNDLE_NAME, isStallBundle } from '../freeze-repro/attribution-bundle.mjs'
 import { PROMOTED_BASE, RETIRED_VERSION } from '../release-line.mjs'
 
 export const CLOSURE_RULE_ID = 'closure-rule-1'
@@ -159,9 +159,22 @@ export function evaluateClosure(summary) {
   }
 }
 
+/** A regular file (never a symlink) no larger than a bundle, whose content is a collector bundle. */
+function isAttachableBundle(exportDir, name) {
+  try {
+    const path = join(exportDir, name)
+    const info = lstatSync(path)
+    if (!info.isFile() || info.size > MAX_STALL_BUNDLE_FILE_BYTES) return false
+    return isStallBundle(name, readFileSync(path, 'utf8'))
+  } catch {
+    return false
+  }
+}
+
 /**
  * Stall-bundle file names the sampler audited (app.stall.sampled) inside the closure scope, that the
- * exported diagnostics folder also carries. Only well-formed bundle names are ever returned.
+ * exported diagnostics folder also carries as a redacted collector bundle (isStallBundle). A bundle-named
+ * file with any other content, a symlink or a directory is never returned, so it never reaches the artifact.
  */
 export function attachedSamplerBundles(exportDir, scope) {
   const files = new Set(readdirSync(exportDir))
@@ -176,7 +189,7 @@ export function attachedSamplerBundles(exportDir, scope) {
       }
       if (row?.event !== 'app.stall.sampled' || typeof row.bundle !== 'string' || !STALL_BUNDLE_NAME.test(row.bundle)) continue
       if (typeof row.ts !== 'string' || (scope.from && row.ts < scope.from) || (scope.to && row.ts > scope.to)) continue
-      if (files.has(row.bundle)) names.add(row.bundle)
+      if (files.has(row.bundle) && isAttachableBundle(exportDir, row.bundle)) names.add(row.bundle)
     }
   }
   return [...names].sort()
@@ -367,6 +380,7 @@ function recordProblems(root, text) {
   for (const name of listField(fields.get('sampler_bundles'))) {
     if (!STALL_BUNDLE_NAME.test(name)) problems.push(`${FILES.record}: sampler_bundles must hold stall-bundle file names only`)
     else if (!existsSync(join(root, FILES.stalls, name))) problems.push(`${FILES.stalls}/${name}: named by the record but not attached`)
+    else if (!isAttachableBundle(join(root, FILES.stalls), name)) problems.push(`${FILES.stalls}/${name}: is not a redacted collector bundle`)
   }
   return { problems, fields }
 }
