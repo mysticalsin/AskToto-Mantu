@@ -52,10 +52,22 @@ describe('macSupervisorHelperPath', () => {
 })
 
 describe('sidecar supervision flag', () => {
-  it('is opt-in and mac-only', () => {
-    expect(sidecarSupervisionEnabled({}, 'darwin')).toBe(false)
-    expect(sidecarSupervisionEnabled({ METIS_SIDECAR_SUPERVISION: '1' }, 'darwin')).toBe(true)
-    expect(sidecarSupervisionEnabled({ METIS_SIDECAR_SUPERVISION: '1' }, 'win32')).toBe(false)
+  it('is on by default for darwin with empty env and argv, and never on win32 or linux', () => {
+    expect(sidecarSupervisionEnabled({}, 'darwin', [])).toBe(true)
+    expect(sidecarSupervisionEnabled({}, 'win32', [])).toBe(false)
+    expect(sidecarSupervisionEnabled({}, 'linux', [])).toBe(false)
+    expect(sidecarSupervisionEnabled({ METIS_SUPERVISION: 'on' }, 'linux', [])).toBe(false)
+  })
+
+  it('honours the off overrides from env and argv', () => {
+    expect(sidecarSupervisionEnabled({ METIS_SUPERVISION: 'off' }, 'darwin', [])).toBe(false)
+    expect(sidecarSupervisionEnabled({}, 'darwin', ['--supervision=off'])).toBe(false)
+  })
+
+  it('keeps the legacy METIS_SIDECAR_SUPERVISION spelling: 1 is on, 0 is a kill switch', () => {
+    expect(sidecarSupervisionEnabled({ METIS_SIDECAR_SUPERVISION: '1' }, 'darwin', [])).toBe(true)
+    expect(sidecarSupervisionEnabled({ METIS_SIDECAR_SUPERVISION: '0' }, 'darwin', [])).toBe(false)
+    expect(sidecarSupervisionEnabled({ METIS_SIDECAR_SUPERVISION: '1' }, 'win32', [])).toBe(false)
   })
 
   it('honours the named supervision flag from env and argv, with off winning over the legacy env var', () => {
@@ -76,7 +88,9 @@ describe('spawnSidecarProcess', () => {
     const audit = vi.fn()
     const options: SpawnOptions = { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }
 
-    const result = spawnSidecarProcess('llama-server', '/bin/llama-server', ['--port', '0'], options, audit, {})
+    const result = spawnSidecarProcess('llama-server', '/bin/llama-server', ['--port', '0'], options, audit, {
+      METIS_SUPERVISION: 'off'
+    })
 
     expect(result).toEqual({ child, supervised: false })
     expect(spawnMock.spawn).toHaveBeenCalledWith('/bin/llama-server', ['--port', '0'], options)
