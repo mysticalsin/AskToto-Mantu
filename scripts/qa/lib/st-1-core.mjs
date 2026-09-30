@@ -66,16 +66,19 @@ export function failureRecord(step, tMs, outcome, boundMs) {
 /**
  * Files one sample's outcome into `run`. An answer within `lateAfterMs` is a sample; a slower answer is
  * late but keeps its values; a sample that never answered is late and an error; a failed evaluation is an
- * error only.
+ * error only. `witness`, when given, is the runner's own state at the sample instant (report-only); every
+ * timeline entry this files, late ones included, carries it.
  */
-export function recordSample(run, tMs, outcome, { lateAfterMs, boundMs }) {
+export function recordSample(run, tMs, outcome, options) {
+  const { lateAfterMs, boundMs, witness } = options
+  const witnessed = witness ? { witness } : {}
   if (outcome.ok) {
-    const entry = { tMs, ...outcome.value, answeredMs: Math.round(outcome.elapsedMs) }
+    const entry = { tMs, ...outcome.value, answeredMs: Math.round(outcome.elapsedMs), ...witnessed }
     if (outcome.elapsedMs > lateAfterMs) run.late.push(entry)
     else run.samples.push(entry)
     return
   }
-  if (outcome.timedOut) run.late.push({ tMs, hung: true })
+  if (outcome.timedOut) run.late.push({ tMs, hung: true, ...witnessed })
   run.errors.push(failureRecord('sample', tMs, outcome, boundMs))
 }
 
@@ -86,6 +89,65 @@ export function historyEntry(tMs, outcome) {
   if (outcome.timedOut) return { tMs, hung: true, ms }
   if (!outcome.ok) return { tMs, error: outcome.error, ms }
   return { tMs, ...outcome.value }
+}
+
+/** The app's own native boot stage timings (tray stages, window construction and first show): every
+ *  `app.boot.stage` record of an audit log's text, in order, so each run names its long stretches without a
+ *  CPU profile. Lines that are not a complete JSON record are skipped. A window stage keeps the chrome it
+ *  built. With the launch's wall-clock spawn time, each stage also says when its record was written since
+ *  the spawn (`sinceSpawnMs`): the app writes it in a task after the stage, so it bounds the stage's end
+ *  from above. */
+export function bootStagesFromAudit(auditText, spawnedWallMs) {
+  const stages = []
+  for (const line of auditText.split('\n')) {
+    if (!line.includes('"app.boot.stage"')) continue
+    let record
+    try {
+      record = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (record.event !== 'app.boot.stage') continue
+    const endedAt = Date.parse(record.ts)
+    stages.push({
+      stage: record.stage,
+      ms: typeof record.ms === 'number' ? Math.round(record.ms * 10) / 10 : null,
+      ts: record.ts,
+      ...(typeof record.transparent === 'boolean' ? { transparent: record.transparent } : {}),
+      ...(typeof spawnedWallMs === 'number' && Number.isFinite(endedAt) ? { sinceSpawnMs: endedAt - spawnedWallMs } : {})
+    })
+  }
+  return stages
+}
+
+const CPU_BUSY_TIMES = new Set(['user', 'nice', 'sys', 'irq'])
+
+/** The machine's CPU busy share in percent (one decimal) between two `os.cpus()` snapshots: user, nice, sys
+ *  and irq time over all time, summed over every core. Null without a previous snapshot or elapsed time. */
+export function cpuBusyPct(previous, current) {
+  if (!previous || !current) return null
+  let busy = 0
+  let total = 0
+  for (const [snapshot, sign] of [[current, 1], [previous, -1]]) {
+    for (const cpu of snapshot) {
+      for (const [name, value] of Object.entries(cpu.times)) {
+        total += sign * value
+        if (CPU_BUSY_TIMES.has(name)) busy += sign * value
+      }
+    }
+  }
+  return total > 0 ? Math.round((busy / total) * 1000) / 10 : null
+}
+
+/** The report's runner witness: the harness's own loop delay over the whole run (`loop`, null until it is
+ *  read), the slowest probe write and the busiest CPU interval over every timeline entry's witness. A value
+ *  no entry measured is null. */
+export function witnessSummary(timeline, loop) {
+  const max = (key) => {
+    const values = timeline.map((entry) => entry.witness?.[key]).filter((value) => typeof value === 'number')
+    return values.length > 0 ? Math.max(...values) : null
+  }
+  return { loop: loop ?? null, write: { maxMs: max('writeMs') }, cpuBusyMaxPct: max('cpuBusyPct') }
 }
 
 /** The pass/fail criteria. They read only the measurement, never the attribution evidence. */
@@ -106,19 +168,21 @@ export function evaluateCriteria(row, measured, evidence) {
 /** A report with an empty measurement; `measure` fills it in place, so a partial report can be written at
  *  any moment. */
 export function emptyRun() {
-  return { poolSize: null, setupAtMs: null, samples: [], late: [], history: [], errors: [], profiler: null, loop: null }
+  return { poolSize: null, setupAtMs: null, samples: [], late: [], history: [], errors: [], profiler: null, loop: null, witnessLoop: null }
 }
 
 /**
  * The ST-1 report. `complete` is false for the periodic partial report and for a run the harness itself
  * could not finish (`harnessError`); either has verdict INCOMPLETE, because a measurement that stopped
- * early proves nothing either way. A complete run's verdict comes from the criteria alone.
+ * early proves nothing either way. A complete run's verdict comes from the criteria alone; the runner
+ * witness and the boot stages are report-only.
  */
 export function buildReport({ row, installer, candidate, minutes, measured, evidence, fixtures, attribution, complete, harnessError }) {
   const criteria = evaluateCriteria(row, measured, evidence)
   // The control row has nothing to exercise: its verdict is the criteria alone.
   const exercised = row === 'none' || evidence?.exercised
   const verdict = !complete ? 'INCOMPLETE' : !exercised ? 'NOT_EXERCISED' : criteria.every((c) => c.pass) ? 'PASS' : 'FAIL'
+  const timeline = [...measured.samples, ...measured.late.map((entry) => ({ ...entry, late: true }))].sort((a, b) => a.tMs - b.tMs)
   return {
     harness: 'ST-1',
     row,
@@ -145,9 +209,11 @@ export function buildReport({ row, installer, candidate, minutes, measured, evid
     // Report-only attribution evidence; no criterion reads it.
     errors: measured.errors,
     setupAtMs: measured.setupAtMs,
-    timeline: [...measured.samples, ...measured.late.map((entry) => ({ ...entry, late: true }))].sort((a, b) => a.tMs - b.tMs),
+    timeline,
+    witness: witnessSummary(timeline, measured.witnessLoop),
     history: measured.history,
     cpuProfile: measured.profiler,
+    bootStages: attribution.bootStages ?? null,
     mainLog: !attribution.mainLog
       ? null
       : attribution.mainLog.error

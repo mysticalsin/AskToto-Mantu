@@ -109,7 +109,7 @@ export async function ensureLocalRuntimeStarted(
   modelId: string,
   vision = false,
   canStartSpeculatively?: () => boolean,
-  // M2-0460: only the packaged HK-M proof holds a token that verifyIntegrity honours (qa-hk-m.ts).
+  // M2-0460: only the HK-M hook's model start holds this token; it marks that start and lifts nothing (qa-hk-m.ts).
   ramFloorOverride?: HkMRamFloorOverride
 ): Promise<void> {
   // Only unattended callers pass this gate. A real user request deliberately omits it, so an import

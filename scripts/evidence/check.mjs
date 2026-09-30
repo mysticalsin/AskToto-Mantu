@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
+import { EXCERPT_FILES, STALL_BUNDLE_NAMES_FILE, STALL_BUNDLE_NAME, excerptOf } from '../qa/freeze-repro/attribution-bundle.mjs'
 import { EVIDENCE_LEVELS, latestByLevel, readRecordStore, recordsInPrBody, recordProblems, sha256Hex } from './record.mjs'
 
 export const TICKET_STATUSES = Object.freeze([
@@ -19,6 +20,18 @@ export const TICKET_STATUSES = Object.freeze([
 export const DECISION_STATES = Object.freeze(['OPEN', 'ANSWERED_AS_DEFAULT', 'ANSWERED_CHANGED'])
 export const TEST_WORKFLOW = '.github/workflows/build.yml'
 export const M2_0008_DEFAULT_BUNDLE = 'out/m2-0008-freeze-repro'
+export const M2_0194_DEFAULT_BUNDLE = 'out/m2-0194-freeze-repro'
+
+// Rows and interrupt checks every freeze-repro matrix records, whichever ticket's bundle carries it.
+const REQUIRED_MATRIX_ROWS = Object.freeze([
+  'row-1-history-open',
+  'row-2-brain-status-blocked-brain',
+  'row-3-macos-activate',
+  'row-4-second-instance-reopen',
+  'row-5-dataless-brain-idle',
+  'row-9-network-off-flapping'
+])
+const REQUIRED_INTERRUPTS = Object.freeze(['network-off', 'file-provider-cancel', 'process-signal'])
 
 const READY_DEP = new Set(['ENGINEERING_COMPLETE', 'DONE', 'DEFERRED', 'BLOCKED_EXTERNAL'])
 // The evidence levels ENGINEERING_COMPLETE can prove without an external party (§ ENGINEERING_COMPLETE
@@ -577,6 +590,112 @@ function fixtureLabelProblem(row) {
   return `matrix.jsonl: ${row.row ?? '(unknown row)'} fixture must be a content-free fixture label`
 }
 
+const M2_0008_AUTOMATIC_ROWS = Object.freeze([
+  'row-1-history-open',
+  'row-2-brain-status-blocked-brain',
+  'row-3-macos-activate',
+  'row-4-second-instance-reopen'
+])
+const M2_0008_BLOCKED_ROWS = Object.freeze(['row-5-dataless-brain-idle', 'row-9-network-off-flapping'])
+const M2_0008_BLOCKED_INTERRUPTS = Object.freeze(['network-off', 'file-provider-cancel'])
+const M2_0008_EXERCISED = new Set(['observed', 'pass', 'fail'])
+const HOSTED_RUNNER_HOSTS = new Set(['macos-latest', 'windows-latest'])
+const nonEmptyString = (value) => typeof value === 'string' && value.trim() !== ''
+
+/**
+ * The extra shape a `run-matrix.sh --hosted-live` bundle must have (M2-0462): the mode and content-free
+ * host facts are recorded, every automatic row was driven, judged from its own observation and sampled
+ * (main plus renderers chosen by role), the process-signal interrupt ran, and every row or interrupt that
+ * needs a cloud-file account is BLOCKED_EXTERNAL with its unblock step. Dry-run and QA-live bundles never
+ * reach this function.
+ */
+function m2_0008HostedLiveProblems(root, { environment, fuse, fifo, blockers, rows, interrupts }) {
+  const problems = []
+  for (const file of ['hosted-live-summary.json', 'M2-0008.evidence-import.json', 'owner-bug-records.json']) {
+    if (!existsSync(join(root, file))) problems.push(`${file}: missing from the hosted-live bundle`)
+  }
+  if (problems.length > 0) return problems
+
+  const host = environment.host
+  if (!isPlainObject(host) || !nonEmptyString(host.os_version) || !nonEmptyString(host.arch) ||
+      !(Number.isInteger(host.memory_bytes) && host.memory_bytes > 0)) {
+    problems.push('environment.json: hosted-live must record host os_version, arch and memory_bytes')
+  }
+  if (fuse?.node_options_fuse === 'NOT_EXERCISED') problems.push('node-options-fuse.json: hosted-live must exercise the fuse probe')
+  if (Array.isArray(fifo?.fixtures) && !fifo.fixtures.every((fixture) => typeof fixture?.opened_by_1_9_6 === 'boolean')) {
+    problems.push('fifo-fixtures.json: hosted-live must record opened_by_1_9_6 as true or false for every FIFO fixture')
+  }
+
+  for (const row of M2_0008_AUTOMATIC_ROWS) {
+    const result = rows.find((entry) => entry.row === row && Object.hasOwn(entry, 'operator_result'))
+    if (!result || result.automatic !== true || !M2_0008_EXERCISED.has(result.operator_result)) {
+      problems.push(`matrix.jsonl: ${row} must be an automatic row that was exercised`)
+    } else {
+      if (!nonEmptyString(result.drive_method)) problems.push(`matrix.jsonl: ${row} must record its drive_method`)
+      const observation = result.observation
+      const cdp = observation?.cdp
+      if (!isPlainObject(cdp) || typeof cdp.main_answered !== 'boolean' || !nonEmptyString(cdp.renderer_round_trip) ||
+          !nonEmptyString(cdp.window_visible_observed_by)) {
+        problems.push(`matrix.jsonl: ${row} must record its renderer round trip, main answer and window observation`)
+      } else if (observation.operator_result !== result.operator_result) {
+        problems.push(`matrix.jsonl: ${row} operator_result must be the one derived from its observation`)
+      }
+    }
+    const sample = rows.find((entry) => entry.row === row && Object.hasOwn(entry, 'sampled'))
+    if (!sample || sample.sampled !== true || sample.main_sample !== true || !(sample.renderer_samples >= 1) ||
+        sample.renderers_selected_by !== '--type=renderer') {
+      problems.push(`matrix.jsonl: ${row} must have main and role-selected renderer samples`)
+    } else if (!existsSync(join(root, 'samples', `${row}-main.sample.txt`))) {
+      problems.push(`samples/${row}-main.sample.txt: missing`)
+    }
+  }
+
+  const blocked = Array.isArray(blockers?.blockers) ? blockers.blockers : []
+  const blockerListing = (key, id) => blocked.some((blocker) => Array.isArray(blocker[key]) && blocker[key].includes(id))
+  for (const row of M2_0008_BLOCKED_ROWS) {
+    const entry = rows.find((candidate) => candidate.row === row && Object.hasOwn(candidate, 'operator_result'))
+    if (entry?.status !== 'BLOCKED_EXTERNAL' || !nonEmptyString(entry.unblock_step) || !blockerListing('rows', row)) {
+      problems.push(`matrix.jsonl: ${row} must be BLOCKED_EXTERNAL with an unblock_step listed in external-blockers.json`)
+    }
+  }
+  for (const interrupt of M2_0008_BLOCKED_INTERRUPTS) {
+    const entry = interrupts.find((candidate) => candidate.interrupt === interrupt)
+    if (entry?.status !== 'BLOCKED_EXTERNAL' || !nonEmptyString(entry.unblock_step) || !blockerListing('interrupts', interrupt)) {
+      problems.push(`interrupt-results.jsonl: ${interrupt} must be BLOCKED_EXTERNAL with an unblock_step listed in external-blockers.json`)
+    }
+  }
+  const signal = interrupts.find((candidate) => candidate.interrupt === 'process-signal')
+  if (!signal || signal.automatic !== true || !M2_0008_EXERCISED.has(signal.result) || typeof signal.exited_within_10s !== 'boolean') {
+    problems.push('interrupt-results.jsonl: process-signal must run automatically and record exited_within_10s')
+  }
+
+  const summary = readJsonFile(join(root, 'hosted-live-summary.json'), problems, 'hosted-live-summary.json')
+  if (summary) {
+    const symptomSeen = rows.some((entry) => M2_0008_AUTOMATIC_ROWS.includes(entry.row) && entry.operator_result === 'observed')
+    if (summary.mode !== 'hosted-live' || typeof summary.reproduced !== 'boolean' || !nonEmptyString(summary.conclusion)) {
+      problems.push('hosted-live-summary.json: must record mode, reproduced and conclusion')
+    } else if (summary.reproduced !== symptomSeen) {
+      problems.push('hosted-live-summary.json: reproduced must match the automatic rows that observed a symptom')
+    }
+  }
+
+  const evidenceImport = readJsonFile(join(root, 'M2-0008.evidence-import.json'), problems, 'M2-0008.evidence-import.json')
+  if (evidenceImport) {
+    if (evidenceImport.mode !== 'hosted-live') problems.push('M2-0008.evidence-import.json: mode must be hosted-live')
+    if (evidenceImport.environment?.kind !== 'hosted-runner' || !HOSTED_RUNNER_HOSTS.has(evidenceImport.environment?.host)) {
+      problems.push('M2-0008.evidence-import.json: environment must be the hosted-runner kind on macos-latest or windows-latest')
+    }
+    if (Object.hasOwn(evidenceImport, 'qa_host_label')) problems.push('M2-0008.evidence-import.json: hosted-live must not carry a QA host label')
+    if (evidenceImport.artifact_sha256 !== environment.artifact_sha256) {
+      problems.push('M2-0008.evidence-import.json: artifact_sha256 must match environment.json')
+    }
+    if (!(Number.isInteger(evidenceImport.build_run_id) && evidenceImport.build_run_id > 0)) {
+      problems.push('M2-0008.evidence-import.json: build_run_id must be a positive integer')
+    }
+  }
+  return problems
+}
+
 export function m2_0008BundleProblems(bundlePath) {
   const root = resolve(bundlePath)
   const problems = []
@@ -655,19 +774,12 @@ export function m2_0008BundleProblems(bundlePath) {
     const problem = fixtureLabelProblem(row)
     if (problem) problems.push(problem)
   }
-  for (const row of [
-    'row-1-history-open',
-    'row-2-brain-status-blocked-brain',
-    'row-3-macos-activate',
-    'row-4-second-instance-reopen',
-    'row-5-dataless-brain-idle',
-    'row-9-network-off-flapping'
-  ]) {
+  for (const row of REQUIRED_MATRIX_ROWS) {
     if (!rowIds.has(row)) problems.push(`matrix.jsonl: missing ${row}`)
   }
 
   const interruptIds = new Set(interrupts.map((row) => row.interrupt))
-  for (const interrupt of ['network-off', 'file-provider-cancel', 'process-signal']) {
+  for (const interrupt of REQUIRED_INTERRUPTS) {
     if (!interruptIds.has(interrupt)) problems.push(`interrupt-results.jsonl: missing ${interrupt}`)
   }
 
@@ -680,6 +792,95 @@ export function m2_0008BundleProblems(bundlePath) {
   }
   if (!leadAction.includes('OBSERVED') || !leadAction.includes('DERIVED')) {
     problems.push('M2-0008.lead-action.md: must require OBSERVED/DERIVED labels')
+  }
+
+  if (environment?.mode === 'hosted-live') {
+    problems.push(...m2_0008HostedLiveProblems(root, { environment, fuse, fifo, blockers, rows, interrupts }))
+  }
+
+  return problems
+}
+
+/** M2-0194 attribution bundle: the freeze-repro matrix run against an exact QA candidate, plus content-free
+ *  audit excerpts and the names (never the contents) of the stall bundles the sampler wrote. */
+export function m2_0194BundleProblems(bundlePath) {
+  const root = resolve(bundlePath)
+  const problems = []
+  const requiredFiles = [
+    'README.md',
+    'environment.json',
+    'external-blockers.json',
+    'matrix.jsonl',
+    'interrupt-results.jsonl',
+    ...Object.values(EXCERPT_FILES),
+    STALL_BUNDLE_NAMES_FILE,
+    'M2-0194.lead-action.md'
+  ]
+  for (const file of requiredFiles) {
+    if (!existsSync(join(root, file))) problems.push(`${file}: missing from M2-0194 bundle`)
+  }
+  if (problems.length > 0) return problems
+
+  const environment = readJsonFile(join(root, 'environment.json'), problems, 'environment.json')
+  const blockers = readJsonFile(join(root, 'external-blockers.json'), problems, 'external-blockers.json')
+  const names = readJsonFile(join(root, STALL_BUNDLE_NAMES_FILE), problems, STALL_BUNDLE_NAMES_FILE)
+  const rows = jsonlRows(join(root, 'matrix.jsonl'), problems, 'matrix.jsonl')
+  const interrupts = jsonlRows(join(root, 'interrupt-results.jsonl'), problems, 'interrupt-results.jsonl')
+  const leadAction = readFileSync(join(root, 'M2-0194.lead-action.md'), 'utf8')
+
+  if (environment?.ticket !== 'M2-0194') problems.push('environment.json: ticket must be M2-0194')
+  if (typeof environment?.artifact_sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(environment.artifact_sha256)) {
+    problems.push('environment.json: artifact_sha256 must be a lowercase sha256')
+  }
+  if (!/^[1-9]\d*$/.test(String(environment?.candidate_run ?? ''))) {
+    problems.push('environment.json: candidate_run must be the qa-candidate run id')
+  }
+  if (blockers?.ticket !== 'M2-0194') problems.push('external-blockers.json: ticket must be M2-0194')
+  if (!Array.isArray(blockers?.blockers)) {
+    problems.push('external-blockers.json: blockers array is required')
+  } else {
+    for (const blocker of blockers.blockers) {
+      if (blocker.status !== 'BLOCKED_EXTERNAL') problems.push('external-blockers.json: blockers must be BLOCKED_EXTERNAL')
+      if (typeof blocker.unblock_step !== 'string' || blocker.unblock_step.trim() === '') {
+        problems.push('external-blockers.json: every blocker needs an unblock_step')
+      }
+    }
+  }
+
+  const rowIds = new Set(rows.map((row) => row.row))
+  for (const row of rows) {
+    const problem = fixtureLabelProblem(row)
+    if (problem) problems.push(problem)
+  }
+  for (const row of REQUIRED_MATRIX_ROWS) {
+    if (!rowIds.has(row)) problems.push(`matrix.jsonl: missing ${row}`)
+  }
+  const interruptIds = new Set(interrupts.map((row) => row.interrupt))
+  for (const interrupt of REQUIRED_INTERRUPTS) {
+    if (!interruptIds.has(interrupt)) problems.push(`interrupt-results.jsonl: missing ${interrupt}`)
+  }
+
+  for (const [excerpt, file] of Object.entries(EXCERPT_FILES)) {
+    for (const row of jsonlRows(join(root, file), problems, file)) {
+      if (excerptOf(row.event) !== excerpt) problems.push(`${file}: event ${JSON.stringify(row.event)} does not belong in the ${excerpt} excerpt`)
+    }
+  }
+  if (!Array.isArray(names?.names)) {
+    problems.push(`${STALL_BUNDLE_NAMES_FILE}: names array is required`)
+  } else if (!names.names.every((name) => typeof name === 'string' && STALL_BUNDLE_NAME.test(name))) {
+    problems.push(`${STALL_BUNDLE_NAMES_FILE}: entries must be stall bundle file names only`)
+  }
+
+  if (!leadAction.includes('LEAD_ACTION:')) problems.push('M2-0194.lead-action.md: missing LEAD_ACTION handoff')
+  const dryRun = environment?.dry_run === 1 || environment?.dry_run === true || environment?.mode === 'dry-run'
+  const liveHandoff = leadAction.includes('LIVE_VERIFIED')
+  if (!leadAction.includes('M2-0194')) {
+    problems.push('M2-0194.lead-action.md: must name M2-0194')
+  }
+  if (dryRun && liveHandoff) {
+    problems.push('M2-0194.lead-action.md: dry-run bundles must not hand off a LIVE_VERIFIED filing')
+  } else if (!dryRun && !liveHandoff) {
+    problems.push('M2-0194.lead-action.md: must hand off filing the M2-0194 LIVE_VERIFIED record')
   }
 
   return problems
@@ -698,7 +899,7 @@ async function main() {
   const hasPrEvent = typeof values['pr-event'] === 'string'
   const hasTicket = typeof values.ticket === 'string'
   if ([hasLedger, hasPrEvent, hasTicket].filter(Boolean).length !== 1) {
-    return usageExit('usage: check.mjs --ledger <path>  |  check.mjs --pr-event <path>  |  check.mjs --ticket M2-0008 [--bundle <path>]')
+    return usageExit('usage: check.mjs --ledger <path>  |  check.mjs --pr-event <path>  |  check.mjs --ticket M2-0008|M2-0194 [--bundle <path>]')
   }
 
   if (hasLedger) {
@@ -723,13 +924,18 @@ async function main() {
   }
 
   if (hasTicket) {
-    if (values.ticket !== 'M2-0008') return usageExit('only --ticket M2-0008 is supported in this public-repo checker')
-    const problems = m2_0008BundleProblems(resolve(values.bundle ?? M2_0008_DEFAULT_BUNDLE))
+    const checker = {
+      'M2-0008': { check: m2_0008BundleProblems, defaultBundle: M2_0008_DEFAULT_BUNDLE },
+      'M2-0194': { check: m2_0194BundleProblems, defaultBundle: M2_0194_DEFAULT_BUNDLE }
+    }[values.ticket]
+    if (!checker) return usageExit('only --ticket M2-0008 and --ticket M2-0194 are supported in this public-repo checker')
+    const bundle = values.bundle ?? checker.defaultBundle
+    const problems = checker.check(resolve(bundle))
     if (problems.length > 0) {
       for (const problem of problems) console.error(`- ${problem}`)
       process.exit(1)
     }
-    console.log(`M2-0008 bundle: OK (${values.bundle ?? M2_0008_DEFAULT_BUNDLE})`)
+    console.log(`${values.ticket} bundle: OK (${bundle})`)
     return
   }
 
