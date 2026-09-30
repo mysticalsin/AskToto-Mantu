@@ -571,7 +571,6 @@ import {
   updateEntityField,
   readFieldProvenance,
   rejectCommitment,
-  isJournalCorruptionBlocked,
   isJournalCorruptionBlockedAsync,
   clearJournalCorruptionLock,
   readCorrectionsJournal,
@@ -588,17 +587,12 @@ import {
 } from './intelligence'
 import {
   loadIndexForStatus as loadBrainIndexForStatus,
-  writeIndex as writeBrainIndex,
   indexUnavailable,
   indexUnavailableAsync,
   indexUnavailableMessage,
-  writeGraph as writeBrainGraph,
   readPerson as readBrainPerson,
-  writePerson as writeBrainPerson,
   readAccount as readBrainAccount,
-  writeAccount as writeBrainAccount,
   readDeal as readBrainDeal,
-  writeDeal as writeBrainDeal,
   listEntities as listBrainEntities,
   loadEntityDisplayNames as loadBrainEntityDisplayNames,
   loadMeetingExtraction as loadBrainMeetingExtraction,
@@ -608,8 +602,7 @@ import {
   restorePreservedBrainIndex,
   deletePreservedBrainIndex,
   setDealOutcome,
-  slugify as brainSlugify,
-  brainDir as brainStoreDir
+  slugify as brainSlugify
 } from './brain/store'
 import { brainStatusCounts, readBrainDashboard } from './brain/dashboard-read'
 import { buildBrainContext } from './brain/context'
@@ -698,7 +691,6 @@ import { resolveCloudSttGatewayId } from './cloud-stt/credentials'
 import { resolveEnterpriseLiveProfile } from '../shared/enterprise-live-profile'
 import { effectiveCloudSttProvider } from '../shared/cloud-stt-provider'
 import { shouldRecoverCompletedOnboardingExit } from './onboarding-exit-fallback'
-
 import {
   resetLanguageFollow as resetImportLanguageFollow,
   setWhisperImportTierAdmission,
@@ -707,7 +699,6 @@ import {
 } from './whisper-import'
 import { buildPolishPrompt, parsePolishResponse, polishBatches, type PolishLine } from './polish'
 import { detectLanguage as detectTextLanguage } from '@shared/lang-id'
-import type { TranscriptLine } from '@shared/ipc'
 import { pickAudioFile, consumePickedAudio, offerAudioPaths } from './import-audio'
 import {
   ImportJobManager,
@@ -810,7 +801,6 @@ import {
   estimateEmailSummaryMinutes,
   estimateMcpPushMinutes,
   estimateNoteTakingMinutes,
-  estimateSecondBrainMinutes,
   wordsFromTexts
 } from '@shared/time-saved-events'
 import { createOutlookDraft, createOutlookEvent, outlookWriteStatus } from './outlook-write'
@@ -862,7 +852,7 @@ import {
   scheduleRebuild,
   purgeGraphArtifacts
 } from './graphify'
-import { SaveMeetingSchema, SaveNoteSchema, stripProvisionalLines } from '@shared/ipc'
+import { SaveMeetingSchema, SaveNoteSchema, stripProvisionalLines, type TranscriptLine } from '@shared/ipc'
 import {
   PROVIDERS,
   PROVIDER_IDS,
@@ -4538,12 +4528,9 @@ const { forceQuit: forceQuitMétis, exitAndRelaunch } = installExitPaths(app, {
 // Built once, after `win`, the settings store and sidecar teardown exist; mainWindow reads `win` per call (INV-LAZY).
 const appContext = createAppContext({
   mainWindow: () => win,
-  settings: { get: getSettings, set: setSettings },
-  audit: auditLog,
-  supervisor: { stopAll: stopAllSidecars },
-  gateway: () => storageAt(resolveMeetingsFolder(getSettings())),
-  scheduler: { runAsMaintenance },
-  clock: { now: () => Date.now() }
+  settings: { get: getSettings, set: setSettingsWithSpeakerPolicy },
+  audit: auditLog, supervisor: { stopAll: stopAllSidecars }, scheduler: { runAsMaintenance },
+  gateway: () => storageAt(resolveMeetingsFolder(getSettings())), clock: { now: () => Date.now() }
 })
 
 function registerEmergencyForceQuitShortcut(): boolean {

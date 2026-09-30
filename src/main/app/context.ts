@@ -17,6 +17,7 @@ export interface AppContext {
   readonly mainWindow: () => BrowserWindow | null
   /** mainWindow() when it exists and is not destroyed, otherwise null. */
   readonly liveMainWindow: () => BrowserWindow | null
+  /** set is index.ts's policy-enforcing writer (Speaker Intelligence revocation included), never the raw store write. */
   readonly settings: {
     readonly get: () => Settings
     readonly set: (patch: Partial<Settings>) => Settings
