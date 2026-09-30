@@ -63,6 +63,12 @@ const RV_TIMEOUT_MS = 15_000
 // and exit. A detached relaunch (the Windows shortcut's `start`) resolves run() before that boot, so its
 // reveal window adds this budget on top of RV_TIMEOUT_MS instead of spending the boot inside it.
 const RELAUNCH_BOOT_MS = 10_000
+// How long after app.renderer.ready the boot row keeps watching before it reads the overlay: the launch's
+// own activate can arrive after the renderer is up, and a reveal it wrongly honoured shows by then.
+const BOOT_OBSERVE_MS = 5_000
+const BOOT_QUIT_TIMEOUT_MS = 30_000
+// The parked Hide window's size (OVERLAY_HIDE_PARK): a revealed overlay is always larger.
+const PARKED_WINDOW = Object.freeze({ width: 8, height: 2 })
 // Content-free audit context a failing RV row carries: this many records before the relaunch baseline,
 // and at most RV_AUDIT_AFTER after it.
 const RV_AUDIT_BEFORE = 3
@@ -88,6 +94,8 @@ export const LIFECYCLE_EVENTS = Object.freeze([
   'app.shutdown.clean'
 ])
 
+export const RV_BOOT_ROW_ID = 'RV-boot-launch-activate-stays-parked'
+
 export const RV_SCENARIOS = Object.freeze([
   { id: 'RV-1-macos-open-activate', platform: 'darwin', reason: 'activate', automation: 'open-app-path' },
   { id: 'RV-2-macos-open-new-instance', platform: 'darwin', reason: 'second-instance', automation: 'open-new-instance' },
@@ -95,7 +103,8 @@ export const RV_SCENARIOS = Object.freeze([
   { id: 'RV-4-tray-show', platform: 'all', reason: 'tray', automation: 'tray-menu' },
   { id: 'RV-4-global-hotkey', platform: 'all', reason: 'hotkey', automation: 'global-hotkey' },
   { id: 'RV-1-macos-finder-spotlight-launchpad', platform: 'darwin', reason: 'activate', automation: 'finder-open-app-file' },
-  { id: 'RV-3-windows-shortcut-relaunch', platform: 'win32', reason: 'second-instance', automation: 'windows-shortcut' }
+  { id: 'RV-3-windows-shortcut-relaunch', platform: 'win32', reason: 'second-instance', automation: 'windows-shortcut' },
+  { id: RV_BOOT_ROW_ID, platform: 'darwin', reason: 'activate', automation: 'launchservices-cold-launch' }
 ])
 
 export const NAVIGATION_GUARD_SCENARIOS = Object.freeze([
@@ -266,6 +275,26 @@ export function initialNavigationGuardRows() {
     evidence: null,
     unblock: null
   }))
+}
+
+/**
+ * Pure verdict of the LaunchServices cold-launch row. `precondition` is a reason string when the runner
+ * could not deliver the profile env or the CDP port through LaunchServices; the row is then PRECONDITION
+ * and never PASS. Every observation must be positively known: an unobserved `parked` or `settingsOpened`
+ * (null) fails rather than passes.
+ */
+export function bootLaunchActivateVerdict(observation) {
+  if (observation.precondition) {
+    return { status: 'PRECONDITION', failures: [], reason: observation.precondition }
+  }
+  if (observation.rendererReady !== true) {
+    return { status: 'PRECONDITION', failures: [], reason: 'app.renderer.ready was not observed after the LaunchServices launch' }
+  }
+  const failures = []
+  if (observation.activateReveals !== 0) failures.push('activate_reveal_during_boot')
+  if (observation.parked !== true) failures.push('not_parked_after_boot')
+  if (observation.settingsOpened !== false) failures.push('settings_opened_on_boot')
+  return { status: failures.length === 0 ? 'PASS' : 'FAIL', failures, reason: null }
 }
 
 function completeRvRow(rows, id, patch) {
@@ -872,6 +901,115 @@ export function buildWindowsShortcutLauncher({ auditLogDir, executable, userData
   return { shortcutPath, launcherPath, launcherBody, shortcutScript, launchScript }
 }
 
+async function bootObservation({ port, auditLogPath }) {
+  const activateReveals = auditRecords(auditLogPath).filter((r) => r.event === 'reveal' && r.reason === 'activate').length
+  return withOverlayPage(port, async (page, browser) => {
+    const size = await page.evaluate(() => ({ width: window.outerWidth, height: window.outerHeight }))
+    const otherPages = browser
+      .contexts()
+      .flatMap((context) => context.pages())
+      .filter((candidate) => !candidate.isClosed() && !isOverlayUrl(candidate.url())).length
+    // Settings is a surface of the overlay window itself (its tab strip), not a separate page.
+    const settingsTabs = await page.getByRole('tab', { name: 'Brain' }).count()
+    return {
+      activateReveals,
+      parked: size.width <= PARKED_WINDOW.width && size.height <= PARKED_WINDOW.height,
+      settingsOpened: settingsTabs > 0 || otherPages > 0
+    }
+  })
+}
+
+/**
+ * Cold-launch the packaged app through LaunchServices, the way Finder, the Dock and Spotlight do, so the
+ * launch's own `activate` reaches the app before boot completes. Spawning the binary never delivers it.
+ * `open` does not forward this process's environment, so the isolated profile goes through `open --env`,
+ * or `launchctl setenv` when that is refused; the CDP port rides `--args`. The row records which method
+ * carried it. It runs before the main smoke launch, in its own profile, and quits the app it started.
+ */
+async function runBootLaunchActivateRow({ target, installRoot, platform, rows }) {
+  const profile = mkdtempSync(join(tmpdir(), 'metis-smoke-boot-'))
+  const auditLogPath = join(profile, 'logs', 'audit.log')
+  const launchctlKeys = []
+  let port = null
+  let method = null
+  const observation = { precondition: null, rendererReady: false, activateReveals: null, parked: null, settingsOpened: null }
+  try {
+    seedOnboardedProfile(profile)
+    port = await freeLoopbackPort()
+    const appArgs = ['--args', `--remote-debugging-port=${port}`]
+    method = 'open-env'
+    let launched = await runProcess('open', ['-a', target, '--env', `ASKTOTO_USERDATA=${profile}`, ...appArgs], 20_000)
+    if (launched.error || launched.code !== 0) {
+      method = 'launchctl-setenv'
+      const set = await runProcess('launchctl', ['setenv', 'ASKTOTO_USERDATA', profile], 10_000)
+      if (set.error || set.code !== 0) {
+        observation.precondition = 'neither open --env nor launchctl setenv could pass the profile env through LaunchServices'
+      } else {
+        launchctlKeys.push('ASKTOTO_USERDATA')
+        launched = await runProcess('open', ['-a', target, ...appArgs], 20_000)
+        if (launched.error || launched.code !== 0) observation.precondition = 'open could not launch the app with the CDP port'
+      }
+    }
+
+    if (!observation.precondition) {
+      const deadline = Date.now() + READY_TIMEOUT_MS
+      while (Date.now() < deadline && !hasEvent(parseAuditLog(readAuditLog(auditLogPath)), 'app.renderer.ready')) {
+        await sleep(AUDIT_POLL_MS)
+      }
+      observation.rendererReady = hasEvent(parseAuditLog(readAuditLog(auditLogPath)), 'app.renderer.ready')
+      if (!observation.rendererReady) {
+        observation.precondition = 'the app never reported app.renderer.ready in the isolated profile, so the profile env did not reach it'
+      }
+    }
+
+    if (!observation.precondition) {
+      await sleep(BOOT_OBSERVE_MS)
+      try {
+        Object.assign(observation, await bootObservation({ port, auditLogPath }))
+      } catch {
+        observation.precondition = 'the CDP port did not reach the app through LaunchServices'
+      }
+    }
+  } catch (err) {
+    observation.precondition = `boot row harness error: ${err?.message ?? err}`
+  } finally {
+    try {
+      await withOverlayPage(port, (page) => page.evaluate(() => void window.toto.quit()))
+    } catch {
+      /* not reachable: the owned-process sweep below ends it */
+    }
+    const quitDeadline = Date.now() + BOOT_QUIT_TIMEOUT_MS
+    while (Date.now() < quitDeadline && ownedProcesses(listProcesses(platform), { mainPid: null, installRoot, platform }).length > 0) {
+      await sleep(CENSUS_POLL_MS)
+    }
+    killOwned(ownedProcesses(listProcesses(platform), { mainPid: null, installRoot, platform }))
+    for (const key of launchctlKeys) await runProcess('launchctl', ['unsetenv', key], 10_000)
+    try {
+      rmSync(profile, { recursive: true, force: true })
+    } catch {
+      /* best effort */
+    }
+  }
+
+  const verdict = bootLaunchActivateVerdict(observation)
+  console.error(`[packaged-smoke] ${RV_BOOT_ROW_ID} ${verdict.status} ${JSON.stringify({ method, failures: verdict.failures, reason: verdict.reason })}`)
+  completeRvRow(rows, RV_BOOT_ROW_ID, {
+    status: verdict.status,
+    evidence: {
+      method,
+      rendererReady: observation.rendererReady,
+      activateReveals: observation.activateReveals,
+      parked: observation.parked,
+      settingsOpened: observation.settingsOpened,
+      failures: verdict.failures
+    },
+    unblock:
+      verdict.status === 'PASS'
+        ? null
+        : verdict.reason ?? 'Inspect the packaged-smoke artifact: the launch activate revealed the window, left it unparked or opened Settings.'
+  })
+}
+
 async function runPackagedRvRows({ platform, target, executable, auditLogPath, rows, env }) {
   const userData = env.ASKTOTO_USERDATA
   const hideBeforeReveal = async () => parkAndProve({ executable, env, userData })
@@ -1133,6 +1271,15 @@ async function main() {
     if (rootBefore.length > 0) {
       observation.installRootBusy = true
       return
+    }
+
+    if (platform === 'darwin') {
+      await runBootLaunchActivateRow({ target, installRoot, platform, rows: observation.rv })
+      // The boot row's app is gone before the main launch; a leftover would break the root-residency rule.
+      if (ownedProcesses(listProcesses(platform), { mainPid: null, installRoot, platform }).length > 0) {
+        observation.installRootBusy = true
+        return
+      }
     }
 
     profile = mkdtempSync(join(tmpdir(), 'metis-smoke-'))
