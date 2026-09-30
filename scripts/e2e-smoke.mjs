@@ -3,7 +3,7 @@
 // `main`, uses a disposable profile, and drives the same onboarding a new user sees.
 // The onboarding/right-edge/Bar verification flows live in qa/golden-flows/onboarding-flows.mjs and the
 // launch/wait/screenshot/close primitives in qa/lib/app-driver.mjs.
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { createOnboardingFlows } from './qa/golden-flows/onboarding-flows.mjs'
@@ -60,6 +60,10 @@ function assertFreshBuild() {
     join(ROOT, 'src', 'shared', 'overlay-placement.ts'),
     join(ROOT, 'src', 'shared', 'overlay-presentation.ts'),
     join(ROOT, 'src', 'renderer', 'src', 'styles.css'),
+    join(ROOT, 'src', 'renderer', 'src', 'tokens.css'),
+    ...readdirSync(join(ROOT, 'src', 'renderer', 'src', 'styles')).map((name) =>
+      join(ROOT, 'src', 'renderer', 'src', 'styles', name)
+    ),
     join(ROOT, 'src', 'main', 'index.ts'),
     join(ROOT, 'src', 'main', 'island', 'geometry.ts'),
     join(ROOT, 'src', 'preload', 'index.ts')

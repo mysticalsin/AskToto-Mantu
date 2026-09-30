@@ -45,6 +45,11 @@
 //                     time in ISO-8601 UTC. Used by the sidecar registry/reaper; name is deliberately not
 //                     part of the identity, because names are not safe across PID reuse.
 //
+//   supervise --parent <pid> -- <cmd> [args...]  Long-running wrapper. Creates a process group, spawns
+//                     <cmd> with inherited stdout/stderr, watches <pid> with kqueue NOTE_EXIT, and
+//                     kills the process group if the parent dies. This is the source-of-orphan fix for
+//                     local sidecars; the registry/reaper remains the next-launch safety net.
+//
 //   stall-watch       Long-running, one per boot. --pid <main> --alive <file> --capture-prefix <path>
 //                     --stale-after-ms <ms>. Every 5 s it stats <file>; when its mtime has not changed
 //                     for more than <ms> of awake time it runs /usr/bin/sample on <main> into
@@ -52,8 +57,19 @@
 //                     then prints `sampled` or `failed`. It samples only its own parent and exits once
 //                     <main> is no longer its parent. src/main/infra/observability/stall-sampler.ts owns
 //                     the protocol; all redaction, retention and auditing happen there, not here.
+//
+//   code-identity <path>  One-shot, read-only. Reads the static code signature of <path> (an app bundle or a
+//                     binary) and prints ONE JSON object {identifier, cdhash, teamId, adhoc}. cdhash is the
+//                     lowercase hex code-directory hash macOS pins Screen Recording to for an ad-hoc build;
+//                     it is "" for unsigned code. src/main/capture-permissions uses it to tell a grant held
+//                     by another build from a plain denial. Never touches the permissions database.
+//
+//   bundle-copies <bundle-id>  One-shot, read-only. Asks LaunchServices for every installed app with that
+//                     bundle id and prints ONE JSON object {copies:[{path, version}]}. Several copies with one
+//                     bundle id compete for one Screen Recording entry.
 import AppKit
 import Darwin
+import Security
 import Speech
 import Vision
 
@@ -75,6 +91,13 @@ func emitFrontmost(_ app: NSRunningApplication?) {
 }
 
 func watchFrontmost() -> Never {
+    // Exit the moment the launching process dies: this watcher only prints on app activation, so without the
+    // parent watch a hard-killed main would leave it running until its next write hits a closed pipe.
+    let parent = getppid()
+    let parentWatch = DispatchSource.makeProcessSource(identifier: parent, eventMask: .exit, queue: .main)
+    parentWatch.setEventHandler { exit(0) }
+    parentWatch.resume()
+    if getppid() != parent { exit(0) }
     // Emit the current app immediately so the consumer has initial state without waiting for a switch.
     emitFrontmost(NSWorkspace.shared.frontmostApplication)
     NSWorkspace.shared.notificationCenter.addObserver(
@@ -467,12 +490,34 @@ func runStallWatch(_ options: [String]) -> Never {
     }
     guard getppid() == pid else { fail("stall-watch: --pid \(pid) is not this helper's parent") }
 
+    // The poll wait is a kqueue wait on the parent, so main's death ends this helper at once instead of at the
+    // next 5 s tick: a hard-killed app must leave no helper behind within the supervision bound.
+    let kq = kqueue()
+    if kq >= 0 {
+        var parentEvent = kevent(
+            ident: UInt(pid),
+            filter: Int16(EVFILT_PROC),
+            flags: UInt16(EV_ADD | EV_ENABLE),
+            fflags: UInt32(NOTE_EXIT),
+            data: 0,
+            udata: nil
+        )
+        _ = kevent(kq, &parentEvent, 1, nil, 0, nil)
+    }
+    guard getppid() == pid else { exit(0) }
+
     var lastMtime = mtimeNs(alivePath)
     var lastChangeAt = awakeMs()
     var sampledThisStall = false
     var lastSampleAt: UInt64?
     while true {
-        sleep(stallPollSeconds)
+        if kq >= 0 {
+            var out = kevent()
+            var timeout = timespec(tv_sec: Int(stallPollSeconds), tv_nsec: 0)
+            if kevent(kq, nil, 0, &out, 1, &timeout) > 0 { exit(0) }
+        } else {
+            sleep(stallPollSeconds)
+        }
         // A dead parent reparents this helper, so getppid() changes: exit rather than ever sample a
         // process this helper did not come from.
         guard getppid() == pid else { exit(0) }
@@ -497,11 +542,216 @@ func runStallWatch(_ options: [String]) -> Never {
     }
 }
 
+// MARK: - supervise
+
+private var supervisedChildPid: pid_t = -1
+private var forwardedSignal: Int32 = 0
+
+func signalForwarder(_ signal: Int32) {
+    forwardedSignal = signal
+    if supervisedChildPid > 0 {
+        kill(supervisedChildPid, signal)
+    }
+}
+
+// Xcode 26's SDK marks WIFEXITED/WIFSIGNALED/WTERMSIG/WEXITSTATUS as function-like C macros,
+// which Swift cannot import. Reimplement them over the raw wait(2) status word.
+private func waitTermSig(_ status: Int32) -> Int32 { status & 0x7f }
+private func waitExited(_ status: Int32) -> Bool { waitTermSig(status) == 0 }
+private func waitSignaled(_ status: Int32) -> Bool {
+    let termsig = waitTermSig(status)
+    return termsig != 0 && termsig != 0x7f
+}
+private func waitExitStatus(_ status: Int32) -> Int32 { (status >> 8) & 0xff }
+
+func exitWithChildStatus(_ status: Int32) -> Never {
+    if waitExited(status) {
+        exit(waitExitStatus(status))
+    }
+    if waitSignaled(status) {
+        let termsig = waitTermSig(status)
+        signal(SIGTERM, SIG_DFL)
+        signal(termsig, SIG_DFL)
+        raise(termsig)
+        exit(128 + termsig)
+    }
+    exit(1)
+}
+
+// Exit status of a supervise setup failure (bad arguments, setpgid, kqueue, spawn). The supervised child was
+// never started, so the caller may spawn it directly. Any other status is the child's own or a later abort.
+let superviseSetupFailureStatus: Int32 = 125
+
+func superviseSetupFailure(_ message: String) -> Never {
+    FileHandle.standardError.write((message + "\n").data(using: .utf8)!)
+    exit(superviseSetupFailureStatus)
+}
+
+// TERM the group, wait up to 2 s for the direct child, then SIGKILL the whole group unconditionally so
+// grandchildren that ignore TERM die too. The helper leads the group, so the final SIGKILL ends it as well:
+// callers write any diagnostic before calling.
+func terminateSupervisedGroup() {
+    guard supervisedChildPid > 0 else { return }
+    signal(SIGTERM, SIG_IGN)
+    signal(SIGINT, SIG_IGN)
+    killpg(getpgrp(), SIGTERM)
+    let deadline = Date().addingTimeInterval(2)
+    var status: Int32 = 0
+    while Date() < deadline {
+        let waited = waitpid(supervisedChildPid, &status, WNOHANG)
+        if waited == supervisedChildPid {
+            supervisedChildPid = -1
+            break
+        }
+        usleep(50_000)
+    }
+    killpg(getpgrp(), SIGKILL)
+}
+
+func abortSupervise(_ message: String? = nil) -> Never {
+    if let message { FileHandle.standardError.write((message + "\n").data(using: .utf8)!) }
+    terminateSupervisedGroup()
+    exit(1)
+}
+
+func runSupervise(_ options: [String]) -> Never {
+    guard options.count >= 4, options[0] == "--parent", let parent = pid_t(options[1]), options[2] == "--" else {
+        superviseSetupFailure("usage: metis-mac-helper supervise --parent <pid> -- <cmd> [args...]")
+    }
+    let command = options[3]
+    let childArgs = Array(options.dropFirst(3))
+    guard getppid() == parent else {
+        superviseSetupFailure("supervise: --parent \(parent) is not this helper's parent")
+    }
+    guard setpgid(0, 0) == 0 else {
+        superviseSetupFailure("supervise: setpgid failed: \(String(cString: strerror(errno)))")
+    }
+
+    let kq = kqueue()
+    guard kq >= 0 else { superviseSetupFailure("supervise: kqueue failed: \(String(cString: strerror(errno)))") }
+    var parentEvent = kevent(
+        ident: UInt(parent),
+        filter: Int16(EVFILT_PROC),
+        flags: UInt16(EV_ADD | EV_ENABLE),
+        fflags: UInt32(NOTE_EXIT),
+        data: 0,
+        udata: nil
+    )
+    guard kevent(kq, &parentEvent, 1, nil, 0, nil) == 0 else {
+        superviseSetupFailure("supervise: parent watch failed: \(String(cString: strerror(errno)))")
+    }
+    guard getppid() == parent else { superviseSetupFailure("supervise: parent exited before the watch was armed") }
+
+    let argv = childArgs.map { strdup($0) } + [nil]
+    defer {
+        for arg in argv where arg != nil { free(arg) }
+    }
+    var child: pid_t = 0
+    let spawnResult = command.withCString { commandC in
+        argv.withUnsafeBufferPointer { buffer in
+            posix_spawn(&child, commandC, nil, nil, UnsafeMutablePointer(mutating: buffer.baseAddress!), environ)
+        }
+    }
+    guard spawnResult == 0 else {
+        superviseSetupFailure("supervise: spawn failed: \(String(cString: strerror(spawnResult)))")
+    }
+    supervisedChildPid = child
+    signal(SIGTERM, signalForwarder)
+    signal(SIGINT, signalForwarder)
+
+    var status: Int32 = 0
+    while true {
+        let waited = waitpid(child, &status, WNOHANG)
+        if waited == child {
+            supervisedChildPid = -1
+            exitWithChildStatus(status)
+        }
+        if waited < 0 && errno != EINTR {
+            abortSupervise("supervise: waitpid failed: \(String(cString: strerror(errno)))")
+        }
+        if getppid() != parent {
+            abortSupervise()
+        }
+        var out = kevent()
+        var timeout = timespec(tv_sec: 0, tv_nsec: 50_000_000)
+        let events = kevent(kq, nil, 0, &out, 1, &timeout)
+        if events > 0 {
+            abortSupervise()
+        }
+        if events < 0 && errno != EINTR {
+            abortSupervise("supervise: parent watch read failed: \(String(cString: strerror(errno)))")
+        }
+        if forwardedSignal != 0 {
+            usleep(50_000)
+        }
+    }
+}
+
+// MARK: - code-identity / bundle-copies
+
+struct CodeIdentityResult: Encodable {
+    let identifier: String
+    let cdhash: String
+    let teamId: String
+    let adhoc: Bool
+}
+
+struct BundleCopy: Encodable {
+    let path: String
+    let version: String
+}
+
+struct BundleCopiesResult: Encodable {
+    let copies: [BundleCopy]
+}
+
+func emitJson<T: Encodable>(_ value: T, command: String) -> Never {
+    do {
+        let encoded = try JSONEncoder().encode(value)
+        FileHandle.standardOutput.write(encoded)
+        FileHandle.standardOutput.write("\n".data(using: .utf8)!)
+    } catch {
+        fail("\(command): could not encode result: \(error.localizedDescription)")
+    }
+    exit(0)
+}
+
+func runCodeIdentity(path: String) -> Never {
+    var staticCode: SecStaticCode?
+    guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &staticCode) == errSecSuccess,
+          let code = staticCode else {
+        fail("code-identity: cannot read code at \(path)")
+    }
+    var infoRef: CFDictionary?
+    guard SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &infoRef) == errSecSuccess,
+          let info = infoRef as? [String: Any] else {
+        fail("code-identity: no signing information for \(path)")
+    }
+    let cdhash = (info[kSecCodeInfoUnique as String] as? Data)?.map { String(format: "%02x", $0) }.joined() ?? ""
+    let flags = (info[kSecCodeInfoFlags as String] as? NSNumber)?.uint32Value ?? 0
+    emitJson(CodeIdentityResult(
+        identifier: info[kSecCodeInfoIdentifier as String] as? String ?? "",
+        cdhash: cdhash,
+        teamId: info[kSecCodeInfoTeamIdentifier as String] as? String ?? "",
+        adhoc: SecCodeSignatureFlags(rawValue: flags).contains(.adhoc)
+    ), command: "code-identity")
+}
+
+func runBundleCopies(bundleId: String) -> Never {
+    let copies = NSWorkspace.shared.urlsForApplications(withBundleIdentifier: bundleId).map { url in
+        BundleCopy(
+            path: url.path,
+            version: Bundle(url: url)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+        )
+    }
+    emitJson(BundleCopiesResult(copies: copies), command: "bundle-copies")
+}
+
 // MARK: - entry point
 
 let arguments = CommandLine.arguments
 guard arguments.count >= 2 else {
-    fail("usage: metis-mac-helper <watch-frontmost|ocr|transcribe|screen-metrics|stat-flags|proc-info|stall-watch> [path|-]")
+    fail("usage: metis-mac-helper <watch-frontmost|ocr|transcribe|screen-metrics|stat-flags|proc-info|supervise|stall-watch|code-identity|bundle-copies> [path|-]")
 }
 switch arguments[1] {
 case "watch-frontmost":
@@ -522,8 +772,20 @@ case "proc-info":
         fail("usage: metis-mac-helper proc-info <pid>")
     }
     runProcInfo(pidText: arguments[2])
+case "supervise":
+    runSupervise(Array(arguments.dropFirst(2)))
 case "stall-watch":
     runStallWatch(Array(arguments.dropFirst(2)))
+case "code-identity":
+    guard arguments.count >= 3 else {
+        fail("usage: metis-mac-helper code-identity <path>")
+    }
+    runCodeIdentity(path: arguments[2])
+case "bundle-copies":
+    guard arguments.count >= 3 else {
+        fail("usage: metis-mac-helper bundle-copies <bundle-id>")
+    }
+    runBundleCopies(bundleId: arguments[2])
 default:
     fail("unknown command: \(arguments[1])")
 }

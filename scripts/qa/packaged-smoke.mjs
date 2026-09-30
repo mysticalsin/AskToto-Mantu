@@ -56,7 +56,7 @@ import { AUDIT_POLL_MS, isOverlayUrl, parseAuditLog, readAuditLog } from './gold
 import { listProcesses, ownedProcesses, roleCounts, survivors as computeSurvivors } from './owned-processes.mjs'
 
 export { NAVIGATION_GUARD_BOOTSTRAP_PATCH, NAVIGATION_GUARD_SCENARIOS, initialNavigationGuardRows } from './golden-flows/navigation-guard-rows.mjs'
-export { RV_SCENARIOS, buildWindowsShortcutLauncher, initialRvRows, isPassingRevealEvidence, runRevealRow } from './golden-flows/reveal-rows.mjs'
+export { RV_SCENARIOS, auditDiagnostic, buildWindowsShortcutLauncher, initialRvRows, isPassingRevealEvidence, runRevealRow } from './golden-flows/reveal-rows.mjs'
 export { isOverlayUrl, parseAuditLog, waitUntilParked } from './golden-flows/smoke-support.mjs'
 
 const READY_TIMEOUT_MS = 150_000 // a cold first launch on a hosted runner; the same budget as check-packaged-launch

@@ -599,4 +599,24 @@ describe('resource census GitHub Actions lane', () => {
     expect(workflow).toContain('node scripts/prove-local-ttft.mjs')
     expect(workflow).toContain('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2')
   })
+
+  it('measures install footprint per OS and records run identity with file digests', () => {
+    expect(workflow.match(/node scripts\/qa\/census\/footprint\.mjs/g)).toHaveLength(2)
+    expect(workflow).toContain('darwin-footprint.json')
+    expect(workflow).toContain('win32-footprint.json')
+    expect(workflow.match(/run-identity\.json/g)?.length).toBeGreaterThanOrEqual(4)
+    expect(workflow.match(/FILES\.sha256/g)?.length).toBeGreaterThanOrEqual(4)
+  })
+
+  it('downloads the real 1.9.6 release, verifies SHA256SUMS before install, and only runs on main', () => {
+    expect(workflow).toContain('default: mysticalsin/Metis-Releases')
+    expect(workflow).toContain('default: v1.9.6-unsigned')
+    expect(workflow).not.toContain('"$GITHUB_REPOSITORY"')
+    expect(workflow.match(/--repo "\$RELEASE_REPO" --pattern 'SHA256SUMS\*'/g)).toHaveLength(2)
+    expect(workflow.match(/node scripts\/qa\/verify-sha256sums\.mjs/g)).toHaveLength(2)
+    expect(workflow.indexOf('verify-sha256sums.mjs')).toBeLessThan(workflow.indexOf('hdiutil attach'))
+    expect(workflow.lastIndexOf('verify-sha256sums.mjs')).toBeLessThan(workflow.indexOf('$setup.FullName /S'))
+    expect(workflow.match(/if: github\.ref == 'refs\/heads\/main'/g)).toHaveLength(2)
+    expect(workflow).not.toContain('secrets.')
+  })
 })

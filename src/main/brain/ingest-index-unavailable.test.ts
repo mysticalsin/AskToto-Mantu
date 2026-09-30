@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash, randomBytes } from 'node:crypto'
@@ -19,6 +19,7 @@ import {
 } from './ingest'
 import { brainDir, indexUnavailable, readIndex } from './store'
 import { writeSaved } from '../transcripts'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 import { resetSecretKeyCache } from '../secrets'
 
@@ -102,6 +103,7 @@ describe('brain ingest — gated behind an unreadable index.json', () => {
   }
 
   beforeEach(() => {
+    useStorageForTests()
     delete process.env.ASKTOTO_LOCAL_KEYSTORE
     resetSecretKeyCache()
     userData = mkdtempSync(join(tmpdir(), 'metis-index-unavailable-ud-'))
@@ -142,7 +144,7 @@ describe('brain ingest — gated behind an unreadable index.json', () => {
     const beforeIndex = sha256(readFileSync(primary))
     const beforeSentinel = readFileSync(sentinelPath)
 
-    expect(startBackfill()).toEqual({ queued: 0 })
+    expect(await startBackfill()).toEqual({ queued: 0 })
     await waitForIdle()
 
     expect(createStreamMock).not.toHaveBeenCalled()
@@ -202,20 +204,55 @@ describe('brain ingest — gated behind an unreadable index.json', () => {
     expect(createStreamMock).not.toHaveBeenCalled()
   })
 
-  it('I7: explicit rebuild (startRebuild) is the repair path — it purges and writes a readable index', async () => {
+  it('I7: explicit rebuild (startRebuild) refuses an unreadable index and keeps .brain byte-identical', async () => {
+    const beforeIndex = sha256(readFileSync(primary))
+    const beforeSentinel = readFileSync(sentinelPath)
+
+    const r = await startRebuild(s)
+    await waitForIdle()
+
+    expect(r.queued).toBe(0)
+    expect(r.error).toContain('Nothing was changed')
+    expect(createStreamMock).not.toHaveBeenCalled()
+    expect(indexUnavailable(s)).toBe('undecryptable')
+    expect(sha256(readFileSync(primary))).toBe(beforeIndex)
+    expect(readFileSync(sentinelPath)).toEqual(beforeSentinel)
+    expect(existsSync(join(meetingsFolder, '.brain-preserved'))).toBe(false)
+  })
+
+  it('I7b: startRebuild refuses a compatible-shape future-schema index and keeps it byte-identical', async () => {
+    writeFileSync(primary, JSON.stringify({ ...readIndex(s), schema_version: 99 }), 'utf8')
+    expect(indexUnavailable(s)).toBe('unsupported')
     const beforeIndex = sha256(readFileSync(primary))
 
     const r = await startRebuild(s)
     await waitForIdle()
 
-    expect(r.queued).toBeGreaterThan(0)
-    expect(createStreamMock).toHaveBeenCalled()
-    expect(indexUnavailable(s)).toBeNull()
-    expect(readIndex(s).ingested['unreachable-a.md']?.ok).toBe(true)
-    const preservedDir = join(meetingsFolder, '.brain-preserved')
-    const preserved = readdirSync(preservedDir)
-    expect(preserved).toHaveLength(1)
-    expect(sha256(readFileSync(join(preservedDir, preserved[0])))).toBe(beforeIndex)
+    expect(r.queued).toBe(0)
+    expect(r.error).toContain('newer version of Métis')
+    expect(createStreamMock).not.toHaveBeenCalled()
+    expect(sha256(readFileSync(primary))).toBe(beforeIndex)
+    expect(existsSync(sentinelPath)).toBe(true)
+  })
+
+  it("I7c: startRebuild refuses a 'corrupt-kept' index with recovery copy (no 'Update Métis') and keeps it byte-identical", async () => {
+    for (let i = 0; i < 5; i++) {
+      writeFileSync(join(brainDir(s), `index.corrupt-auto-2026-09-2${i}T00-00-00-000Z-seed${i}.json`), `seed-snapshot-${i}`)
+    }
+    writeFileSync(primary, Buffer.from('{"ingested": tru', 'utf8'))
+    expect(indexUnavailable(s)).toBe('corrupt-kept')
+    const beforeIndex = sha256(readFileSync(primary))
+
+    const r = await startRebuild(s)
+    await waitForIdle()
+
+    expect(r.queued).toBe(0)
+    expect(r.error).toContain('The index was kept, so no data was lost')
+    expect(r.error).toContain('index.corrupt-auto-')
+    expect(r.error).not.toContain('Update Métis')
+    expect(createStreamMock).not.toHaveBeenCalled()
+    expect(sha256(readFileSync(primary))).toBe(beforeIndex)
+    expect(existsSync(sentinelPath)).toBe(true)
   })
 
   it('I8: startRebuild reports a keychain refusal message and leaves a keychain-wrapped index unchanged', async () => {
@@ -230,7 +267,7 @@ describe('brain ingest — gated behind an unreadable index.json', () => {
 
     expect(r).toEqual({
       queued: 0,
-      error: "Make sure this device can read the existing index (keychain/local key unlocked, file downloaded), then retry. Nothing was changed."
+      error: "Make sure this device can read the existing index (keychain/local key unlocked, file downloaded), then retry. The index was kept, so no data was lost. Nothing was changed."
     })
     expect(r.error).toContain('keychain')
     expect(sha256(readFileSync(primary))).toBe(beforeIndex)

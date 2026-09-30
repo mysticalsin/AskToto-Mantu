@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   combinedReport,
   hasAtLeastEvent,
+  launchEnv,
   observedReapedOrphan,
   parseMacHelperProcInfo,
   parseSidecarRegistry,
@@ -82,6 +83,31 @@ describe('sidecar boot reaper proof helpers', () => {
 
     expect(realLlama.timingsMs).toMatchObject({ sidecarStarted: 2, llamaStarted: 2 })
     expect(realLlama.pids).toMatchObject({ sidecar: 11, orphan: 11 })
+  })
+
+  it('passes the requested supervision through to the launch env and leaves it to the build default otherwise', () => {
+    expect(launchEnv('/tmp/p', { METIS_SUPERVISION: 'off' })).toMatchObject({
+      ASKTOTO_USERDATA: '/tmp/p',
+      METIS_DISABLE_APPLE_FM: '1',
+      METIS_SUPERVISION: 'off'
+    })
+    expect((launchEnv('/tmp/p') as NodeJS.ProcessEnv).METIS_SUPERVISION).toBe(process.env.METIS_SUPERVISION)
+  })
+
+  it('records the requested supervision in a proof summary that carries one, and omits it otherwise', () => {
+    const base = {
+      kind: 'real-llama-server',
+      result: 'pass',
+      failures: [],
+      unblock: null,
+      timingsMs: {},
+      pids: {},
+      reapedReason: 'registry',
+      events: {},
+      processes: {}
+    }
+    expect(summarizeProof({ ...base, supervision: 'off' }).supervision).toBe('off')
+    expect('supervision' in summarizeProof(base)).toBe(false)
   })
 
   it('preserves a stand-in argv element containing spaces exactly, the way KERN_PROCARGS2 does but a re-split ps command column cannot', () => {

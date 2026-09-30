@@ -1,11 +1,12 @@
 name: Windows QA
 
-# Manual evidence lane for M2-0029. Downloads an existing packaged release installer, installs it on a
-# hosted Windows runner, and runs HK-W: 20 cycles that hard-kill only Metis.exe (Stop-Process -Id) and
+# Manual evidence lane for M2-0029. Downloads candidate-win from a qa-candidate.yml run (M2-0187), verifies
+# the Setup installer against the sha256 the lead names, installs it on a hosted Windows runner, and runs HK-W: 20 cycles that hard-kill only Metis.exe (Stop-Process -Id) and
 # census every owned descendant 5 s later. It also verifies the GetProcessTimes start-time path used by
 # the sidecar registry. Uploads content-free JSON only. Optionally compiles native/win-supervise (unsigned,
 # artifact only). It never builds the app, signs, publishes, tags, or changes release.yml.
-#   gh workflow run windows-qa.yml --ref <branch> -f suite=hk-w
+# Runs only from main, so the candidate is always an installer a qa-candidate.yml run built and hashed.
+#   gh workflow run windows-qa.yml --ref main -f suite=hk-w -f candidate_run=<run id> -f sha256=<Setup sha256>
 on:
   workflow_dispatch:
     inputs:
@@ -16,12 +17,13 @@ on:
         type: choice
         options:
           - hk-w
-      # The default predates src/main/infra/process/registry.ts; the lead must pass a tag built after the
-      # M2-0027 registry, otherwise the report marks the registry start-time path BLOCKED_EXTERNAL.
-      release_tag:
-        description: Release tag whose Windows installer is measured (must contain the process registry)
+      candidate_run:
+        description: qa-candidate.yml run id whose candidate-win artifact is measured
         required: true
-        default: v1.9.6
+        type: string
+      sha256:
+        description: sha256 of that run's Metis-Setup-*.exe (see its SHA256SUMS.txt)
+        required: true
         type: string
       cycles:
         description: Hard-kill cycles
@@ -38,15 +40,18 @@ permissions:
   contents: read
 
 concurrency:
-  group: windows-qa-${{ github.ref }}-${{ inputs.suite }}
+  group: windows-qa-${{ github.ref }}-${{ inputs.suite }}-${{ inputs.candidate_run }}
   cancel-in-progress: false
 
 jobs:
   hk-w:
     name: HK-W (Windows)
-    if: inputs.suite == 'hk-w'
+    if: inputs.suite == 'hk-w' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'
     runs-on: windows-latest
     timeout-minutes: 120
+    permissions:
+      contents: read
+      actions: read
     defaults:
       run:
         shell: pwsh
@@ -59,16 +64,23 @@ jobs:
           node-version: 22.22.3
           cache: npm
       - run: npm ci
-      - name: Download and install the packaged release
+      - name: Download the candidate, verify its sha256, and install it
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+          CANDIDATE_SHA256: ${{ inputs.sha256 }}
         run: |
           $ErrorActionPreference = 'Stop'
+          if ($env:CANDIDATE_RUN -notmatch '^[0-9]+$') { throw 'candidate_run must be a numeric run id.' }
           New-Item -ItemType Directory -Force -Path release-artifact, hk-w-output | Out-Null
-          gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern 'Metis-Setup-*.exe' --dir release-artifact --clobber
-          $setup = Get-Item release-artifact/Metis-Setup-*.exe
-          (Get-FileHash $setup.FullName -Algorithm SHA256).Hash | Set-Content hk-w-output/SHA256SUMS.txt
+          $workflow = gh run view $env:CANDIDATE_RUN --repo $env:GITHUB_REPOSITORY --json workflowName --jq .workflowName
+          if ($workflow -ne 'QA candidate') { throw "Run $($env:CANDIDATE_RUN) is '$workflow', not a QA candidate run." }
+          gh run download $env:CANDIDATE_RUN --repo $env:GITHUB_REPOSITORY --name candidate-win --dir release-artifact
+          if ($LASTEXITCODE -ne 0) { throw 'Could not download candidate-win.' }
+          $setupPath = node scripts/qa/candidate-installer.mjs release-artifact $env:CANDIDATE_SHA256
+          if ($LASTEXITCODE -ne 0) { throw 'The downloaded installer does not match the named sha256.' }
+          $setup = Get-Item $setupPath
+          "$($env:CANDIDATE_SHA256.Trim().ToLower())  $($setup.Name)" | Set-Content hk-w-output/SHA256SUMS.txt
           $target = Join-Path $env:RUNNER_TEMP 'hk-w-install'
           if (Test-Path $target) { Remove-Item $target -Recurse -Force }
           New-Item -ItemType Directory -Path $target | Out-Null
@@ -95,7 +107,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
-          name: hk-w-windows-${{ inputs.release_tag }}
+          name: hk-w-windows-${{ inputs.candidate_run }}
           path: hk-w-output/
           if-no-files-found: error
           retention-days: 30

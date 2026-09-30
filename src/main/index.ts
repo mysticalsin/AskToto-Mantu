@@ -175,10 +175,15 @@ import {
   workingCliOrder
 } from '@shared/ask-routing'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
+import { registerWriteupIpc } from './ipc/writeup'
 import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText, macStallWatchCommand } from './mac-helper'
+import * as screenPerm from './capture-permissions/screen-permission-runtime'
+import { isOrphanScreenSourcesRejection } from './capture-permissions/loopback-grant'
+import { registerScreenPermissionIpc } from './ipc/screen-permission-ipc'
 import { configureSidecarRegistry, createSidecarRegistry } from './infra/process/registry'
 import { runBootSidecarReaper } from './infra/process/reaper'
+import { startAvailableMemorySampler } from './infra/scheduler/memory-sampler'
 import {
   createSpeakerId,
   type SpeakerEnrollmentSnapshot,
@@ -526,7 +531,7 @@ import { createScreenPreprocess, type ScreenPreprocess } from './screen-preproce
 import { startForegroundWatcher } from './foreground-watcher'
 import { createStopAll } from './infra/process/stop-all'
 import { installExitPaths } from './lifecycle/exit-paths'
-import { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-identity'
+import { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-hooks'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
 import {
   createKeyedSingleFlight,
@@ -561,6 +566,7 @@ import {
   readFieldProvenance,
   rejectCommitment,
   isJournalCorruptionBlocked,
+  isJournalCorruptionBlockedAsync,
   clearJournalCorruptionLock,
   readCorrectionsJournal,
   readAliasMap,
@@ -575,11 +581,11 @@ import {
   syncIntelContentProtection
 } from './intelligence'
 import {
-  readIndex as readBrainIndex,
+  loadIndexForStatus as loadBrainIndexForStatus,
   writeIndex as writeBrainIndex,
   indexUnavailable,
+  indexUnavailableAsync,
   indexUnavailableMessage,
-  readGraph as readBrainGraph,
   writeGraph as writeBrainGraph,
   readPerson as readBrainPerson,
   writePerson as writeBrainPerson,
@@ -588,8 +594,8 @@ import {
   readDeal as readBrainDeal,
   writeDeal as writeBrainDeal,
   listEntities as listBrainEntities,
-  listMeetingExtractions as listBrainMeetingExtractions,
-  readMeetingExtraction as readBrainMeetingExtraction,
+  loadEntityDisplayNames as loadBrainEntityDisplayNames,
+  loadMeetingExtraction as loadBrainMeetingExtraction,
   purgeBrain,
   listPreservedBrainIndexes,
   currentBrainIndexIsReadable,
@@ -599,6 +605,7 @@ import {
   slugify as brainSlugify,
   brainDir as brainStoreDir
 } from './brain/store'
+import { brainStatusCounts, readBrainDashboard } from './brain/dashboard-read'
 import { buildBrainContext } from './brain/context'
 import { buildSystem, buildSystemParts } from './personas'
 import { applyCaveman } from '@shared/caveman-ask'
@@ -639,6 +646,9 @@ import {
 import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
+import { buildTrayInStages, createSingleFlight, loadPresizedTrayIcon, scheduleTrayAfterFirstPaint, trayIconPaths, yieldToEventLoop } from './boot-tray'
+import { isBootFirstShowDeferred, scheduleCurrentFirstShow, withBootFirstShowDeferred } from './lifecycle/first-show'
+import { createBootWork } from './lifecycle/boot-work'
 import { startRunObservability, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
 import { createResponsivenessTracker } from './infra/observability/responsiveness-tracker'
@@ -708,8 +718,8 @@ import {
   catchUpIntelligenceIndexIfNeeded,
   runIntelligenceIndex,
   setIntelligenceIndexWork,
-  lastIndexedAt,
-  intelligenceIndexStatus,
+  lastIndexedAtAsync,
+  intelligenceIndexStatusAsync,
   SIGN_IN_INDEX_COPY
 } from './brain/intelligence-index'
 import { startIntelligenceWork } from './brain/intelligence-work'
@@ -735,11 +745,9 @@ import {
   recapMarkdownToHtml,
   resolveMeetingsFolder,
   ensureMeetingsFolder,
-  isEncryptedFile,
-  decryptToTemp,
-  sweepStaleTempFiles,
-  readSavedFile
+  sweepStaleTempFiles
 } from './transcripts'
+import { meetingOpenTarget, readSavedMeeting } from './history-actions'
 import { getPlatformPermissions, probeScreenCapture, noteScreenCaptureOutcome } from './platform-perms'
 import { collectVisionStream, runScreenCaptureCheck } from './screen-capture-check'
 import {
@@ -1198,27 +1206,6 @@ function speculativeLocalWorkAllowed(): boolean {
 // here was one of the two module-level structures that only ever grew (RAM audit, 2026-09-05).
 const notifiedImportJobs = new BoundedSet<string>(500)
 
-type BrainStatusCounts = { people: number; accounts: number; deals: number; nodes: number; edges: number }
-let brainStatusCountsCache: { folder: string; revision: number; counts: BrainStatusCounts } | null = null
-
-/** Status is polled frequently by two windows. Re-scan graph/entity directories only after a revision change. */
-function brainStatusCounts(s: ReturnType<typeof getSettings>, revision: number): BrainStatusCounts {
-  const folder = resolveMeetingsFolder(s)
-  if (brainStatusCountsCache?.folder === folder && brainStatusCountsCache.revision === revision) {
-    return brainStatusCountsCache.counts
-  }
-  const graph = readBrainGraph(s)
-  const counts = {
-    people: listBrainEntities(s, 'person').length,
-    accounts: listBrainEntities(s, 'account').length,
-    deals: listBrainEntities(s, 'deal').length,
-    nodes: graph.nodes.length,
-    edges: graph.edges.length
-  }
-  brainStatusCountsCache = { folder, revision, counts }
-  return counts
-}
-
 function noteIpcDenied(reason: 'no_window' | 'sender' | 'frame'): void {
   if (!shouldSampleIpcDeny()) return
   auditLog('security.ipc_denied', { reason })
@@ -1522,6 +1509,7 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
   closingDecoderJobId = null
   decoderExpectedUrl = ''
   decoderWin = new BrowserWindow({
+    title: 'Métis',
     show: false,
     skipTaskbar: true,
     webPreferences: {
@@ -2664,7 +2652,9 @@ function createWindow(targetDisplay?: Electron.Display): void {
   }
   const chrome = overlayWindowChrome(onboardingLive)
   overlayWindowTransparent = chrome.transparent
+  const deferFirstShow = isBootFirstShowDeferred()
   win = new BrowserWindow({
+    title: 'Métis', // Electron otherwise titles the window with the package name until the renderer's <title> loads
     width: firstPaint.width,
     height: firstPaint.height,
     x: firstPaint.x,
@@ -2690,7 +2680,8 @@ function createWindow(targetDisplay?: Electron.Display): void {
     // 185-Y hid exclusive until paint (ctor show gated off while onboarding live) and left
     // the window off-screen ~5s (WINDOW_AT≈5s) — Ultron stamp bar FAIL: Act1 ≤300ms from
     // PROCESS START. Shell (CSS poster + Métis + Next) is in first HTML parse; never wait.
-    show: true,
+    show: !deferFirstShow, // M2-0031: the boot window is built hidden and shown next task, never gated on 'ready-to-show'
+    paintWhenInitiallyHidden: false, // M2-0031: its first frame is painted in the show task, not the constructor's
     backgroundColor: chrome.backgroundColor,
     acceptFirstMouse: true, // macOS: first click activates + hits the target without needing a second click
     webPreferences: {
@@ -2721,7 +2712,8 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // FITO-185-Z: show exclusive NOW (ctor show:true + activating show). The no-JS Act1
   // shell (poster CSS + Métis + Next) is in index.html — never hide-for-seconds.
   // FITO-185-T: activating show (not showInactive) so Act 1 is not behind Finder.
-  if (onboardingLive) {
+  // M2-0031: a boot window built hidden takes this same show in the next task (scheduleCurrentFirstShow below).
+  if (onboardingLive && !deferFirstShow) {
     try {
       showForExclusiveOnboarding(win)
     } catch {
@@ -2759,6 +2751,9 @@ function createWindow(targetDisplay?: Electron.Display): void {
     win = null
     throw e
   }
+  // Both keep the ctor show:true activation (focus + front): exclusive via FITO-185-T, the overlay via show().
+  if (deferFirstShow) scheduleCurrentFirstShow(win, () => win, (firstShown) =>
+    onboardingLive ? showForExclusiveOnboarding(firstShown) : firstShown.isVisible() || firstShown.show())
 
   // Capture THIS window instance so a late 'closed' from a crashed/replaced window can't null out a
   // freshly-recreated one (render-process-gone recovery reassigns `win` before the old one's 'closed'
@@ -2986,7 +2981,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
   overlay.webContents.on('dom-ready', () => {
     pollAct1Paint()
   })
-  overlay.once('ready-to-show', pollAct1Paint)
+  overlay.once('ready-to-show', pollAct1Paint) // never fires under paintWhenInitiallyHidden:false; the other triggers reveal Act1
   overlay.webContents.once('did-finish-load', pollAct1Paint)
   // FITO-185-G-SHOW: hard reassert at 2s (already shown; belt-and-suspenders).
   if (onboardingLive) {
@@ -3830,6 +3825,10 @@ let fatalHandled = false
  * never kills the overlay. No crashReporter upload by design (zero telemetry).
  */
 function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown): void {
+  // M2-0429: a refused macOS capture, already audited as capture.failed by its caller — not a crash.
+  if (kind === 'unhandledRejection' && isOrphanScreenSourcesRejection(err, process.platform)) {
+    return void mainLog.warn('[capture] desktopCapturer rejected a screen-source request (Screen Recording not in effect)')
+  }
   const detail = err instanceof Error ? err.stack || err.message : String(err)
   persistCrash(kind, detail, err instanceof Error ? err.message : String(err))
   if (kind !== 'uncaughtException' || fatalHandled) return
@@ -3902,6 +3901,7 @@ async function captureScreenshotOnce(displayId: number): Promise<CapturedScreen>
   // MQA-110: this real capture just proved whether screen recording works right now — fold that back
   // into the readiness cache so a permission revoked after the boot probe stops reporting stale 'granted'.
   noteScreenCaptureOutcome(sources.length > 0)
+  screenPerm.screenPermission().noteOutcome(sources.length > 0)
   const matched = sources.find((s) => String(s.display_id) === String(disp.id))
   if (!matched && sources.length > 1) {
     auditLog('capture.display_mismatch', {
@@ -4681,30 +4681,30 @@ function buildTrayMenu(): Menu {
   ])
 }
 
+const startTrayBuild = createSingleFlight()
 function createTray(): void {
-  // FITO-185-AB: idempotent, same contract as createWindow. The exclusive-onboarding hoist runs
-  // createTray before the boot awaits and boot's own runStep('createTray') runs it again — without
-  // this the second call adds a duplicate menu-bar item and orphans the first Tray.
+  // FITO-185-AB: idempotent, same contract as createWindow. The exclusive-onboarding hoist runs createTray before the
+  // boot awaits and boot's own runStep('createTray') runs it again — without this the second call adds a duplicate
+  // menu-bar item and orphans the first Tray. A build still in flight counts as created (startTrayBuild ignores it).
   if (tray && !tray.isDestroyed()) return
-  try {
-    const iconPath = app.isPackaged
-      ? join(process.resourcesPath, 'icon.png')
-      : join(__dirname, '../../build/icon.png')
-    let img = nativeImage.createFromPath(iconPath)
-    if (!img.isEmpty()) img = img.resize({ width: 18, height: 18 })
-    const emptyIcon = img.isEmpty()
-    tray = new Tray(emptyIcon ? nativeImage.createEmpty() : img)
-    // FITO-185-F: always give AXExtrasMenuBar a title on darwin (empty-icon fallback used to be the
-    // only path; hardprove saw kAXErrorCannotComplete with a title-less LSUIElement status item).
-    if (process.platform === 'darwin') tray.setTitle(' ◉ Métis')
-    tray.setToolTip('Métis')
-    tray.setContextMenu(buildTrayMenu())
-    // Menu-bar / tray logo click is the Settings entry Tony uses. applySettingsSurface runs inside sendHotkey.
-    tray.on('click', () => sendHotkey('settings'))
-    auditLog('tray.created', { emptyIcon })
-  } catch (e) {
-    auditLog('tray.failed', { message: e instanceof Error ? e.message : String(e) })
-  }
+  const iconPaths = trayIconPaths(app.isPackaged ? process.resourcesPath : join(__dirname, '../../build'))
+  startTrayBuild(() => buildTrayInStages<Electron.NativeImage>({
+    loadIcon: (time) => loadPresizedTrayIcon(nativeImage, iconPaths, process.platform, time),
+    create(img) {
+      const emptyIcon = img.isEmpty()
+      tray = new Tray(emptyIcon ? nativeImage.createEmpty() : img)
+      // FITO-185-F: always give AXExtrasMenuBar a title on darwin (empty-icon fallback used to be the
+      // only path; hardprove saw kAXErrorCannotComplete with a title-less LSUIElement status item).
+      if (process.platform === 'darwin') tray.setTitle(' ◉ Métis')
+      tray.setToolTip('Métis')
+      // Menu-bar / tray logo click is the Settings entry Tony uses. applySettingsSurface runs inside sendHotkey.
+      tray.on('click', () => sendHotkey('settings'))
+      auditLog('tray.created', { emptyIcon })
+    },
+    attachMenu: () => tray?.setContextMenu(buildTrayMenu()),
+    time: (label, fn) => (observability ? observability.timePhase(label, fn) : fn()),
+    fail: (e) => auditLog('tray.failed', { message: e instanceof Error ? e.message : String(e) })
+  }))
 }
 
 /** Rebuild the tray's context menu after a shortcut rebind. createTray() only builds the menu once at
@@ -4943,26 +4943,8 @@ function registerIpc(): void {
     if (!parsed.success) return { ok: false, reason: 'invalid_confirmation' }
     return commandControl.cancel({ ...parsed.data, webContentsId: e.sender.id })
   })
-  // Deep-link to the relevant macOS Privacy pane once a permission has been denied — getUserMedia never
-  // re-prompts after a Deny, so without this a denied user has no in-app path back to granting it. The
-  // x-apple.systempreferences scheme only exists on macOS; a no-op elsewhere.
-  ipcMain.handle(IPC.permissionsOpenSettings, (e, kind: unknown) => {
-    assertMainWindow(e)
-    if (process.platform === 'darwin') {
-      const pane = kind === 'screenRecording' ? 'Privacy_ScreenCapture' : 'Privacy_Microphone'
-      void shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${pane}`)
-      return
-    }
-    if (process.platform === 'win32') {
-      // Windows has no single TCC-style "Screen Recording" permission like macOS; the closest deep link
-      // is the App graphics capture privacy page (added in the Windows 10 2004 update). Picked over the
-      // generic 'ms-settings:privacy' page because it's the actual per-capability toggle; on Windows
-      // builds that predate it, an unrecognized ms-settings URI opens the Settings home instead of
-      // erroring, so no separate fallback URI is needed here.
-      const uri = kind === 'screenRecording' ? 'ms-settings:privacy-graphicscaptureprogrammatic' : 'ms-settings:privacy-microphone'
-      void shell.openExternal(uri)
-    }
-  })
+  // Open the Privacy pane, and the M2-0429 Screen Recording Repair / "It's already on" / Show in Finder.
+  registerScreenPermissionIpc(assertMainWindow)
   // Front-load the OS permission prompts during onboarding (macOS only) so the first real meeting
   // isn't interrupted by them. Serial, and only for permissions not yet granted: mic has a direct
   // prompt API; Screen Recording has none, but a 1px desktopCapturer probe registers the app with
@@ -4980,7 +4962,7 @@ function registerIpc(): void {
           await systemPreferences.askForMediaAccess('microphone').catch(() => false)
         }
         if (systemPreferences.getMediaAccessStatus('screen') !== 'granted') {
-          await probeScreenCapture()
+          await screenPerm.probeScreenWithHistory()
         }
       }
       if (process.platform === 'win32') {
@@ -5119,8 +5101,9 @@ function registerIpc(): void {
     // connection first: mcpSaveConnection, mcpClickupConnect and mcpDisconnect. The renderer's own
     // patch({ mcpConnections }) calls are redundant echoes of what main just persisted, and state.ts's
     // patch() re-seeds React state from this handler's return value, so dropping the key here costs the
-    // UI nothing. clickupClientId is main-owned too (written only by the DCR step).
-    for (const k of ['mcpConnections', 'clickupClientId', 'planeClientId']) {
+    // UI nothing. clickupClientId is main-owned too (written only by the DCR step), and so is the M2-0429
+    // Screen Recording history (permissionState): a renderer patch must not fake it to steer the diagnosis.
+    for (const k of ['mcpConnections', 'clickupClientId', 'planeClientId', 'permissionState']) {
       if (k in p) delete (p as Record<string, unknown>)[k]
     }
     // Operator entitlement state (PLAN.md P2.2b #2): only a successful heartbeat
@@ -5938,7 +5921,7 @@ function registerIpc(): void {
   // failure, which is an acceptable (and honest — "reconnect ClickUp") outcome for a background retry.
   async function retryOutboundAction(action: OutboundAction): Promise<{ ok: boolean; error?: string }> {
     // Re-check disk on every retry tick — a meeting flagged confidential AFTER enqueue must never leave.
-    if (action.meetingFile && isMeetingConfidentialOnDisk(getSettings(), action.meetingFile)) {
+    if (action.meetingFile && (await isMeetingConfidentialOnDisk(getSettings(), action.meetingFile))) {
       // Dequeue without sending — returning ok:true removes the entry; a hard error would retry forever.
       auditLog('mcp.push.skipped_confidential', { kind: action.kind, action: action.action, source: 'disk' })
       return { ok: true }
@@ -6120,7 +6103,7 @@ function registerIpc(): void {
     const s = getSettings()
     // Wave 4 / QA defense-in-depth: never push confidential meetings. Prefer disk frontmatter over the
     // renderer flag — a buggy UI could omit args.confidential. Unreadable files fail closed.
-    const diskConfidential = meetingFile ? isMeetingConfidentialOnDisk(s, meetingFile) : false
+    const diskConfidential = meetingFile ? await isMeetingConfidentialOnDisk(s, meetingFile) : false
     const argConfidential = args && typeof args === 'object' && (args as { confidential?: unknown }).confidential === true
     if (diskConfidential || argConfidential) {
       auditLog('mcp.push.skipped_confidential', {
@@ -6439,9 +6422,9 @@ function registerIpc(): void {
       return { ok: false, error: 'Not a saved meeting file.' }
     }
     try {
-      const source = join(resolveMeetingsFolder(getSettings()), safeName)
-      const text = readSavedFile(source) // decodes the ATKENC2 envelope when the file is encrypted
-      // readSavedFile returns '' (never throws) when the envelope can't be decrypted on this device —
+      // Decodes the ATKENC2 envelope when the file is encrypted; read through the storage gateway.
+      const text = await readSavedMeeting(resolveMeetingsFolder(getSettings()), safeName)
+      // readSavedMeeting returns '' (never throws) when the envelope can't be decrypted on this device —
       // without this guard the export would "succeed" as a 0-byte file (adversarial review finding).
       if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
       const dialogOpts = {
@@ -7047,15 +7030,29 @@ function registerIpc(): void {
     const s = getSettings()
     // publicSettings().providerReady is the same "can a cloud/CLI provider actually answer" test the ask
     // path uses — when it is false, local is what will serve the next suggest, so it is worth warming.
-    if (!speculativeLocalWorkAllowed() || !localPrewarmEligible(s, getAllowedProviders(), publicSettings().providerReady)) return
+    const purpose = parsed.data.purpose ?? 'suggest'
+    if (
+      !speculativeLocalWorkAllowed() ||
+      !localPrewarmEligible(s, getAllowedProviders(), publicSettings().providerReady, undefined, purpose)
+    ) return
     // Warm the EXACT same [system, user] prefix a real suggest request sends (F4 hardening) — built by
     // the SAME helper (llm/prewarm.ts) a unit test cross-checks against buildSystem()/userText() directly,
     // so any future drift between the live suggest path and what prewarm warms fails a test.
     // prewarmLocal (llm/local.ts) is engine-aware: it warms whichever engine pickLocalEngine would give
     // the next real suggest — fm serve on macOS 27+ with Apple Intelligence live, llama-server otherwise.
+    const warmFailed = (err: unknown): void =>
+      mainLog.warn('[local-prewarm] failed', err instanceof Error ? err.message : String(err))
+    if (purpose === 'summary') {
+      // M2-0430: the Stop-time warm targets the summary slot with the recap's own prefix, so the recap
+      // that follows the drain starts on a loaded model instead of queueing behind a cold start.
+      const summaryMessages = buildPrewarmMessages(parsed.data.text, s, 'summary')
+      void prewarmLocal(s.localLlm.modelId, summaryMessages, speculativeLocalWorkAllowed, 'summary').catch(warmFailed)
+      return
+    }
     void prewarmLocal(s.localLlm.modelId, buildPrewarmMessages(parsed.data.text, s), speculativeLocalWorkAllowed)
-      .catch((err) => mainLog.warn('[local-prewarm] failed', err instanceof Error ? err.message : String(err)))
+      .catch(warmFailed)
   })
+  registerWriteupIpc(assertMainWindow)
 
   // --- Screen capture ---
   ipcMain.handle(IPC.captureScreen, async (event) => {
@@ -8195,7 +8192,7 @@ function registerIpc(): void {
       try {
         // Source versions, not only a count of successful filenames, decide whether Intelligence is
         // current. requestBackfill detects changed/deleted sources and schedules the clean rebuild.
-        const r = requestBackfill()
+        const r = await requestBackfill()
         auditLog('brain.backfill.start', { queued: r.queued, deferred: r.deferred, automatic: true })
       } catch (err) {
         mainLog.warn('[brain] automatic dashboard backfill check failed:', err)
@@ -8203,7 +8200,7 @@ function registerIpc(): void {
     })()
     return result
   })
-  ipcMain.handle(IPC.brainStatus, (e) => {
+  ipcMain.handle(IPC.brainStatus, async (e) => {
     assertBrainReader(e)
     if (!requireAuth()) {
       return {
@@ -8220,11 +8217,11 @@ function registerIpc(): void {
       }
     }
     const s = getSettings()
-    const idx = readBrainIndex(s)
+    const idx = await loadBrainIndexForStatus(s)
     // M2-0003: non-null while an existing index.json exists but cannot be used on this device — idx
     // above is then only the empty stand-in, so this must be read before deciding what "no data" means.
-    const unavailable = indexUnavailable(s)
-    const counts = brainStatusCounts(s, idx.revision)
+    const unavailable = await indexUnavailableAsync(s)
+    const counts = await brainStatusCounts(s, idx.revision)
     // T6 6c: durable failure counts read straight from the index — unlike backfill.failed below (an
     // ephemeral per-run counter), these stay visible for as long as a source has ok:false, independent
     // of whether a backfill run happens to be active right now.
@@ -8254,13 +8251,13 @@ function registerIpc(): void {
       ...(failure.topError ? { topError: failure.topError } : {}),
       // MI-2.5 review round 3: computed fresh from the on-disk sentinel each poll — lets BrainView offer
       // the in-app "Reset corrections lock" recovery instead of a hand-deleted hidden .brain file.
-      corruptionBlocked: isJournalCorruptionBlocked(s),
+      corruptionBlocked: await isJournalCorruptionBlockedAsync(s),
       // MQA-230: entity files can still hold items attributed to an already-deleted meeting until the
       // deferred source refresh runs (it needs a usable provider). Surfaced so the UI can say the
       // cleanup is pending instead of silently claiming the delete was complete.
       cleanupPending: idx.sourceRefreshRequested === true,
-      lastIndexedAt: lastIndexedAt(s),
-      intelligenceIndex: intelligenceIndexStatus(s),
+      lastIndexedAt: await lastIndexedAtAsync(s),
+      intelligenceIndex: await intelligenceIndexStatusAsync(s),
       // M2-0003: surfaces the degraded read-only state instead of silently reporting an empty brain.
       ...(unavailable ? { indexUnavailable: unavailable, error: indexUnavailableMessage(unavailable) } : {})
     }
@@ -8362,37 +8359,19 @@ function registerIpc(): void {
     return { ok: true, cleared }
   })
   // Full assembled dataset for the Mantu Intelligence dashboard (decrypted in main when needed).
-  ipcMain.handle(IPC.brainRead, (e) => {
+  ipcMain.handle(IPC.brainRead, async (e) => {
     assertBrainReader(e)
     if (!requireAuth()) throw new Error('Not signed in.')
-    const s = getSettings()
-    const index = readBrainIndex(s)
-    return {
-      index,
-      graph: readBrainGraph(s),
-      people: listBrainEntities(s, 'person').map((slug) => readBrainPerson(s, slug)).filter(Boolean),
-      accounts: listBrainEntities(s, 'account').map((slug) => readBrainAccount(s, slug)).filter(Boolean),
-      deals: listBrainEntities(s, 'deal').map((slug) => readBrainDeal(s, slug)).filter(Boolean),
-      meetings: listBrainMeetingExtractions(s)
-        .map((slug) => readBrainMeetingExtraction(s, slug))
-        .filter((meeting): meeting is NonNullable<typeof meeting> => !!meeting && !!index.ingested[meeting.source_file]?.ok)
-    }
+    return readBrainDashboard(getSettings())
   })
   // Canonical people/account NAMES ONLY (never quotes, roles, deals, or any other entity field) — feeds
   // the renderer's ASR entity-casing bias (lib/entity-casing.ts) so a live transcript can spell a known
   // name correctly. Read-only, best-effort: an unsigned-in/empty brain just yields no names, never throws,
   // since this runs opportunistically (mount + after a meeting saves), not in response to a user action.
-  ipcMain.handle(IPC.brainEntityNames, (e) => {
+  ipcMain.handle(IPC.brainEntityNames, async (e) => {
     assertMainWindow(e)
     if (!requireAuth()) return { names: [] }
-    const s = getSettings()
-    const people = listBrainEntities(s, 'person')
-      .map((slug) => readBrainPerson(s, slug)?.name)
-      .filter((n): n is string => !!n)
-    const accounts = listBrainEntities(s, 'account')
-      .map((slug) => readBrainAccount(s, slug)?.name)
-      .filter((n): n is string => !!n)
-    return { names: Array.from(new Set([...people, ...accounts])).slice(0, 500) }
+    return loadBrainEntityDisplayNames(getSettings())
   })
   // Deal outcome — the human closes the loop the LLM never may (see DealEntitySchema.outcome). Main-window
   // only: it's a brain WRITE, like brainCommitmentSettle. Same slug convention too: the renderer sends the
@@ -8558,12 +8537,12 @@ function registerIpc(): void {
 
   // Task MI-3: two read-only channels feeding the CRM record pages, the Review.tsx entity strip, and the
   // needs-attention queue. Same guard pattern as the other brain reads — no audit event (nothing mutates).
-  ipcMain.handle(IPC.brainMeetingExtraction, (e, raw) => {
+  ipcMain.handle(IPC.brainMeetingExtraction, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) return null
     const parsed = MeetingExtractionQuerySchema.safeParse(raw)
     if (!parsed.success) return null
-    return readBrainMeetingExtraction(getSettings(), brainSlugify(basename(parsed.data.file)))
+    return loadBrainMeetingExtraction(getSettings(), brainSlugify(basename(parsed.data.file)))
   })
   ipcMain.handle(IPC.brainAttention, (e) => {
     assertMainWindow(e)
@@ -8770,6 +8749,7 @@ function registerIpc(): void {
     if (r.canceled || !r.filePath) return { ok: false as const }
     const html = recapMarkdownToHtml(md, input?.title)
     const pdfWin = new BrowserWindow({
+      title: 'Métis',
       show: false,
       webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, devTools: DEVTOOLS_ENABLED, webSecurity: true }
     })
@@ -8870,7 +8850,7 @@ function registerIpc(): void {
     assertMainWindow(e)
     return requireAuth() ? searchMeetings(String(q ?? '')) : []
   })
-  ipcMain.handle(IPC.recallOpen, (e, file: string) => {
+  ipcMain.handle(IPC.recallOpen, async (e, file: string) => {
     assertMainWindow(e)
     if (!requireAuth()) return ''
     const folder = resolveMeetingsFolder(getSettings())
@@ -8879,12 +8859,11 @@ function registerIpc(): void {
     // (could be Desktop/Downloads), and shell.openPath launches the OS handler for whatever it finds,
     // which would execute a .command/.app/.exe. Mirror deleteMeeting()/debriefSave()'s .md guard.
     if (!safeName) return ''
-    const path = join(folder, safeName)
-    const encrypted = isEncryptedFile(path)
-    auditLog('recall.open', { encrypted })
-    // Encrypted transcripts are unreadable in an editor — open a decrypted temp copy instead.
-    if (encrypted) return shell.openPath(decryptToTemp(path))
-    return shell.openPath(path)
+    // Encrypted transcripts are unreadable in an editor — the target is a decrypted temp copy instead.
+    const target = await meetingOpenTarget(folder, safeName)
+    if (!target.ok) return target.error
+    auditLog('recall.open', { encrypted: target.encrypted })
+    return shell.openPath(target.path)
   })
   ipcMain.handle(IPC.historySettled, (e, report: unknown) => {
     assertMainWindow(e)
@@ -9129,23 +9108,24 @@ if (!app.requestSingleInstanceLock()) {
   })
   app.whenReady().then(async () => {
   initLogging() // route main-process logs to a rotated file before anything else can fail
+  const bootWork = createBootWork() // M2-0031: non-first-paint fs work starts after the first show, under the pool cap
   configureSidecarRegistry(createSidecarRegistry(app.getPath('userData')))
   await runBootSidecarReaper(app.getPath('userData'))
+  startAvailableMemorySampler() // M2-0430: background vm_stat reading for the local-model memory gate
   // M2-0033: unattended model work waits for the maintenance gate.
   startMaintenanceGate({ interactiveActive: () => localRuntime.activeStreams() + fmRuntime.activeStreams() > 0 })
   app.on('web-contents-created', (_event, contents) => {
     contents.on('input-event', (_inputEvent, input) => noteUserInput(input.type))
   })
   // FITO-185-Z / AA: exclusive Act1 must appear ≤300ms from process start. Do not await
-  // proxy/CLI/key seeding before first paint — hoist tray+IPC+window for wiped-profile exclusive.
-  // Call createTray/registerIpc/createWindow directly (runStep/clearBootWatchOnce are declared
-  // later in this whenReady callback — using them here fails CI typecheck "used before declaration").
+  // proxy/CLI/key seeding before first paint — hoist IPC+window for wiped-profile exclusive (tray: M2-0422).
+  // Call registerIpc/createWindow directly (runStep/clearBootWatchOnce are declared later in this whenReady callback — "used before declaration").
   // Later boot still runs createWindow idempotently (early return if win exists).
   if (onboardingExclusiveLive()) {
     try {
-      createTray()
       registerIpc()
-      createWindow()
+      await yieldToEventLoop() // M2-0031: IPC registration, window construction and first show are separate tasks
+      withBootFirstShowDeferred(createWindow)
     } catch (e) {
       mainLog.warn('[boot] FITO-185-Z early exclusive window failed:', e)
     }
@@ -9356,6 +9336,7 @@ if (!app.requestSingleInstanceLock()) {
   // System-audio loopback: when the renderer calls getDisplayMedia for audio,
   // hand back the system audio loopback device (the "Them" channel) only.
   // Screenshot capture uses desktopCapturer directly, so no video track is ever returned here.
+  runStep('initScreenPermission', screenPerm.initScreenPermission)
   runStep('setDisplayMediaHandler', () => {
   session.defaultSession.setDisplayMediaRequestHandler(
     async (request, callback) => {
@@ -9447,24 +9428,14 @@ if (!app.requestSingleInstanceLock()) {
       // saved, or sent. This is the only way to capture the "them" side of a call on macOS.
       //
       // getSources can BOTH return empty transiently (fresh grant) AND reject outright with "Failed to
-      // get sources." (a ScreenCaptureKit hiccup, often right after a content-protection toggle). This
-      // callback is async, so a reject escapes as a fatal unhandledRejection and crashes the app on
-      // Listen start. Guard every path: retry on empty OR throw, then deny gracefully — a callback({})
-      // makes the renderer's getDisplayMedia reject with AbortError, which listen.ts already catches and
-      // surfaces as "couldn't capture system audio" instead of taking the whole app down.
-      const sources: Electron.DesktopCapturerSource[] = await getScreenSourcesWithRetry(
-        () => desktopCapturer.getSources({ types: ['screen'] }),
-        isUsableScreenSource,
-        {
-          onError: (error, attempt) =>
-            mainLog.warn(`[display-media] getSources failed (attempt ${attempt}): ${error instanceof Error ? error.message : String(error)}`)
-        }
-      )
-      if (!sources.length) {
-        auditLog('capture.failed', { reason: 'loopback_no_screen_source', phase: 'listen' })
-      }
-      const screenSrc = sources[0]
-      callback(screenSrc ? { video: screenSrc, audio: 'loopback' } : {})
+      // get sources." (a ScreenCaptureKit hiccup, or a Screen Recording grant not in effect). M2-0429: a
+      // capture the diagnosis already knows macOS will refuse is denied before any getSources call, and
+      // every other path retries and never rejects (capture-permissions/loopback-grant.ts). A deny is
+      // callback(null), never callback({}): for a request that asked for video, Electron rejects {} with
+      // "Video was requested, but no video stream was provided". The renderer's getDisplayMedia then rejects
+      // and listen.ts falls back to the microphone with the diagnosis-backed note.
+      const screenSrc = await screenPerm.acquireListenScreenSource()
+      callback(screenSrc ? { video: screenSrc, audio: 'loopback' } : screenPerm.DENY_DISPLAY_MEDIA)
   }
   })
 
@@ -9618,10 +9589,8 @@ if (!app.requestSingleInstanceLock()) {
   // Catch the case where encryption was already on (managed-config or a previous run) with a stale
   // plaintext graph sitting on disk since before the first settingsGet poll from the renderer.
   runStep('purgeGraphIfEncryptedAndStale', () => purgeGraphIfEncryptedAndStale('encryption-active-boot'))
-  // createTray/registerShortcuts stay ahead of createWindow (see the boot-order comment above).
   // FITO-185-X: registerIpc also stays ahead of createWindow — handlers read win/tray lazily at
   // invocation time, and first paint must not race loadURL before settings/auth IPC exists.
-  runStep('createTray', createTray)
   runStep('registerShortcuts', registerShortcuts)
   // FITO-185-X: registerIpc BEFORE createWindow/loadURL so getSettings/authStatus/licenseGate
   // handlers exist before the renderer can invoke. FITO-185-H put IPC immediately after createWindow
@@ -9629,7 +9598,10 @@ if (!app.requestSingleInstanceLock()) {
   // "Loading" strip Tony still hits when exclusive exits or settings IPC is late.
   runStep('registerIpc', registerIpc)
   clearBootWatchOnce('registerIpc')
-  runStep('createWindow', createWindow)
+  await yieldToEventLoop() // M2-0422: window construction is its own task
+  withBootFirstShowDeferred(() => runStep('createWindow', createWindow))
+  scheduleTrayAfterFirstPaint(win, () => runStep('createTray', createTray))
+  bootWork.releaseAfterFirstShow(win)
   revealController.markBootComplete()
   // FITO-185-G-SHOW: createWindow completed → past kill zone; clear sentinel (brain stays on 15s).
   clearBootWatchOnce('createWindow')
@@ -9641,6 +9613,7 @@ if (!app.requestSingleInstanceLock()) {
   } catch (e) {
     mainLog.warn('[boot] powerMonitor unlock-screen hook failed:', e)
   }
+  await yieldToEventLoop() // M2-0422: post-window boot steps are a separate task
   // screen-preprocess documents refresh() as "Call on startup and after settings change" — only the second
   // half was ever wired, so an opted-in user got a dead fast path (and a silent cloud image upload on every
   // screen ask) for the whole session after each relaunch (MQA-178). Deliberately AFTER createWindow+registerIpc:
@@ -9648,24 +9621,23 @@ if (!app.requestSingleInstanceLock()) {
   // IPC must be live first so the renderer's getSettings() is not blocked waiting on preprocess.
   // Silent on macOS by construction: eligibility now requires the Screen Recording grant to ALREADY exist
   // (screenCaptureGranted above), so this reconcile can never be what raises the TCC prompt (MQA-209).
-  runStep('refreshScreenPreprocess', refreshScreenPreprocess)
-  // Synchronous OneDrive filesystem work (mkdir + two writeFileSync calls on first run) — nothing
-  // before the window depends on the folder existing yet (saveMeeting/saveNote create it themselves on
-  // first use), so it no longer sits ahead of createWindow on the boot path.
-  runStep('ensureMeetingsFolder', () => ensureMeetingsFolder(getSettings()))
+  bootWork.run('refreshScreenPreprocess', () => runStep('refreshScreenPreprocess', refreshScreenPreprocess))
+  // Synchronous OneDrive fs work (mkdir + two writeFileSync on first run) that nothing needs before the first show:
+  // saveMeeting/saveNote create the folder themselves on first use.
+  bootWork.run('ensureMeetingsFolder', () => runStep('ensureMeetingsFolder', () => ensureMeetingsFolder(getSettings())))
   runStep('initializeImportJobs', initializeImportJobs)
   startOperatorRuntime(() => getSettings(), operatorRuntimeHooks())
   startOperatorOverlayPoll(() => getSettings())
   // Import checkpoints are encrypted and main-owned. Resume after IPC registration so the hidden decoder
   // can safely report chunks as soon as it starts, without delaying first paint.
-  const recoverImports = (): void => {
+  const recoverImports = (): Promise<unknown> | undefined => {
     if (!requireAuth()) {
       setTimeout(recoverImports, 1000)
-      return
+      return undefined
     }
-    void importJobs?.recover().catch((error) => mainLog.warn('[import-jobs] recovery failed:', error))
+    return importJobs?.recover().catch((error) => mainLog.warn('[import-jobs] recovery failed:', error))
   }
-  recoverImports()
+  bootWork.run('recoverImports', recoverImports)
   runStep('registerScreenListeners', registerScreenListeners)
   // Notch/menu-bar metrics for the island top clamp (MQA-275) — invalidate-on-topology-change, same
   // event set registerScreenListeners just subscribed to, plus powerMonitor resume (a notch MacBook can
@@ -9682,6 +9654,7 @@ if (!app.requestSingleInstanceLock()) {
       void probeScreenCapture().catch(() => false)
     })
   }
+  runStep('resumeScreenRepair', screenPerm.resumeScreenRepairOnBoot) // M2-0429: the boot half of a Repair
   runStep('startMeetingNotifier', startMeetingNotifier)
   runStep('initAutoUpdate', () => initAutoUpdate(() => win))
   // Resume durable live/backfill work and reconcile OneDrive-synced meeting files after first paint.
@@ -9703,18 +9676,20 @@ if (!app.requestSingleInstanceLock()) {
       } else {
         // Per-step isolation: one failing resume must not skip the remaining boot work or the finally clear.
         try {
-          resumeBackfillIfPending()
+          bootWork.run('resumeBackfillIfPending', () => resumeBackfillIfPending().catch((e) => mainLog.warn('[boot] resumeBackfillIfPending failed:', e)))
         } catch (e) {
           mainLog.warn('[boot] resumeBackfillIfPending failed:', e)
         }
         try {
-          reconcileMeetingsInBackground()
+          bootWork.run('reconcileMeetingsInBackground', () => reconcileMeetingsInBackground().catch((e) => mainLog.warn('[boot] reconcileMeetingsInBackground failed:', e)))
         } catch (e) {
           mainLog.warn('[boot] reconcileMeetingsInBackground failed:', e)
         }
         // Registered here rather than alongside the timer so safe start skips the recurring brain work too,
         // not just the single resume — the reconcile tick reads the same index.json.
-        trackTimer(setInterval(reconcileMeetingsInBackground, BRAIN_RECONCILE_MS))
+        trackTimer(setInterval(() => {
+          void reconcileMeetingsInBackground().catch((e) => mainLog.warn('[brain] reconcile tick failed:', e))
+        }, BRAIN_RECONCILE_MS))
         // Product cadence is three named slots (06:00, 12:00, 18:00 America/Toronto), not an hourly
         // consolidation poll. Catch up if Métis was closed across a slot; then arm the next timeout.
         try {
@@ -9723,9 +9698,7 @@ if (!app.requestSingleInstanceLock()) {
           mainLog.warn('[boot] wireIntelligenceIndexWork failed:', e)
         }
         try {
-          void catchUpIntelligenceIndexIfNeeded().catch((e) =>
-            mainLog.error('[intelligence-index] launch catch-up failed:', e)
-          )
+          bootWork.run('catchUpIntelligenceIndexIfNeeded', () => catchUpIntelligenceIndexIfNeeded().catch((e) => mainLog.error('[intelligence-index] launch catch-up failed:', e)))
         } catch (e) {
           mainLog.warn('[boot] catchUpIntelligenceIndexIfNeeded failed:', e)
         }
@@ -9736,7 +9709,7 @@ if (!app.requestSingleInstanceLock()) {
         }
         // Consolidation runs once per launch; the named slots own the recurring pass. Both are automatic triggers (infra/scheduler/policy.ts).
         try {
-          void runConsolidationIfDue().catch((e) => mainLog.warn('[brain] demoted consolidation check failed:', e))
+          bootWork.run('runConsolidationIfDue', () => runConsolidationIfDue().catch((e) => mainLog.warn('[brain] demoted consolidation check failed:', e)))
         } catch (e) {
           mainLog.warn('[boot] runConsolidationIfDue failed:', e)
         }

@@ -146,6 +146,30 @@ async function healthPayload(env: AdminCtx['env']): Promise<Record<string, unkno
   }
 }
 
+/** Columns `schema-alter.sql` adds on top of `schema.sql`'s tables: the migration head. A D1 that has the
+ *  tables but never ran the alter step reports its absent columns as `table.column` in `missing`.
+ *  `migrate.contract.test.ts` asserts this list covers every `ADD COLUMN` in `schema-alter.sql`. */
+export const EXPECTED_D1_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+  seats: ['country', 'city', 'region', 'lat', 'lon', 'last_index_at', 'hostname', 'sso_email', 'license', 'approval', 'license_jti'],
+  pulses: ['region'],
+  crm_sends: ['meeting_hash', 'attempt', 'latency_ms', 'remote_id', 'remote_url', 'action'],
+  issued_licenses: ['group_id', 'tier', 'member', 'activated_device', 'activated_at'],
+  asks: ['question_type', 'path_tag'],
+  audit: ['request_id', 'route'],
+  integrations: [
+    'auth_kind',
+    'header_name',
+    'transport',
+    'mode',
+    'allow_writes',
+    'config_json',
+    'tools_json',
+    'last_test_json',
+    'last_test_at',
+    'notes'
+  ]
+}
+
 export async function d1SchemaStatus(db: D1DatabaseLike | undefined): Promise<{ ok: boolean; tables: string[]; missing: string[] }> {
   if (!db) return { ok: true, tables: [], missing: [] }
   const tables: string[] = []
@@ -153,8 +177,13 @@ export async function d1SchemaStatus(db: D1DatabaseLike | undefined): Promise<{ 
   for (const table of EXPECTED_D1_TABLES) {
     try {
       const info = await db.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>()
-      if (info.results && info.results.length > 0) tables.push(table)
-      else missing.push(table)
+      if (info.results && info.results.length > 0) {
+        tables.push(table)
+        const present = new Set(info.results.map((c) => c.name))
+        for (const column of EXPECTED_D1_COLUMNS[table] ?? []) {
+          if (!present.has(column)) missing.push(`${table}.${column}`)
+        }
+      } else missing.push(table)
     } catch {
       missing.push(table)
     }

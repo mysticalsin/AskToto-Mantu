@@ -1,5 +1,8 @@
 # Métis 1.8.1 security gate — 20-control checklist
 
+> **Point-in-time verdict (1.8.1, 2026-08-31).** Later releases are not covered. The guardrails that bind current work are in
+> [`AGENTS.md`](../../AGENTS.md) section 6; the operating procedures are in [`../runbooks/operations.md`](../runbooks/operations.md).
+
 **Product:** Métis (AskToto-Mantu). Electron local note-taker + Fly license server + Cloudflare AI proxy + Graph/MCP.
 **Scope:** desktop main + renderer IPC, local files, `license-server/` HTTP, `cloudflare-proxy/` Worker. Overlay chrome, island geometry, onboarding, identity card, latency / time-saved, starfield, orbs, pill, and Brain PRs are frozen and were not used as evidence or as a place to hide findings.
 **Method:** Tony's 20-point list, mapped onto this product. Reuses `docs/security/AUDIT-10.md`. No invented cloud DB. No CAPTCHA on the overlay. No fake anon key.

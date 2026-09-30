@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
@@ -41,7 +42,7 @@ import {
 const appearanceLib = readFileSync(join(__dirname, './onboarding-appearance.ts'), 'utf8')
 const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
 const component = readFileSync(join(__dirname, '../components/OnboardingAppearance.tsx'), 'utf8')
-const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
+const css = readAppCss()
 const design = readFileSync(join(__dirname, '../../../../DESIGN.md'), 'utf8')
 const geometry = readFileSync(join(__dirname, '../../../main/island/geometry.ts'), 'utf8')
 const indexMain = readFileSync(join(__dirname, '../../../main/index.ts'), 'utf8')

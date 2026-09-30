@@ -6,6 +6,11 @@ export function isScreenCapturePermissionError(message: string): boolean {
   return /screen recording permission|screen[- ]capture permissions?|screen recording.*(?:denied|off|not granted)|screen[- ]capture.*(?:denied|not granted)|granted screen recording just now|quit and reopen m[eé]tis/i.test(message)
 }
 
+/** M2-0429: the manual fallback when Repair cannot reset the Screen Recording entry itself (an entry in the
+ *  system database needs an administrator). One string, shown by main's repair result and by the renderer. */
+export const SCREEN_REPAIR_MANUAL_GUIDANCE =
+  'Métis could not reset its Screen Recording entry by itself. In System Settings → Privacy & Security → Screen & System Audio Recording, select Métis and remove it with “–”, then add /Applications/Metis.app back with “+” and switch it on.'
+
 /**
  * The "already granted, but this process never saw it" case: macOS only applies a fresh Screen Recording
  * grant to the NEXT launch, so a same-session retry keeps failing with an empty source list even though

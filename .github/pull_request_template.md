@@ -7,6 +7,25 @@
 - Implementer model: <!-- e.g. claude-sonnet-5 -->
 - Reviewing model: <!-- the validator; its session must differ from the implementer's -->
 
+## Refactor classification
+
+Select exactly one. Mixed refactor PRs are rejected; send the pure move first, then the behaviour change.
+
+- [ ] Pure move
+- [ ] Behaviour change
+
+Refactor checklist:
+
+- [ ] Moved files are recorded in the source map (`docs/PLATFORM-MAP.md`); CI fails a PR that moved files without touching it
+- [ ] No test case or guard call site (`assertMainWindow`, `denyIfLimited`, `assertBrainReader`, `requireAuth`, `registerHandler`) was dropped, or each drop is listed below
+
+## Removed guards and tests
+
+<!--
+  One line per removed test case or guard call site: `- <what was removed> => <its replacement>`.
+  CI compares counts on base and head and fails a drop that is not listed line for line.
+-->
+
 ## What changed and why
 
 <!-- One paragraph. Link the ticket in the internal tracker. -->
