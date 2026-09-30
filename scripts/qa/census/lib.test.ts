@@ -862,7 +862,12 @@ describe('resource census GitHub Actions lane', () => {
   it('downloads the real 1.9.6 release, verifies SHA256SUMS before install, and only runs on main', () => {
     expect(workflow).toContain('default: mysticalsin/Metis-Releases')
     expect(workflow).toContain('default: v1.9.6-unsigned')
-    expect(workflow).not.toContain('"$GITHUB_REPOSITORY"')
+    const releaseDownloadSteps = workflow.match(/- name: Download the packaged release artifact\n(?: {8}.+\n)+/g) ?? []
+    expect(releaseDownloadSteps).toHaveLength(2)
+    for (const step of releaseDownloadSteps) {
+      expect(step).toContain('--repo "$RELEASE_REPO"')
+      expect(step).not.toContain('"$GITHUB_REPOSITORY"')
+    }
     expect(workflow.match(/--repo "\$RELEASE_REPO" --pattern 'SHA256SUMS\*'/g)).toHaveLength(2)
     expect(workflow.match(/node scripts\/qa\/verify-sha256sums\.mjs/g)).toHaveLength(2)
     expect(workflow.indexOf('verify-sha256sums.mjs')).toBeLessThan(workflow.indexOf('hdiutil attach'))
