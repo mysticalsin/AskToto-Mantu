@@ -167,7 +167,7 @@ function hkMStep(hkMCycles: string | undefined) {
     timeoutMinutes: Number(field(/\n {8}timeout-minutes: (.+)\n/)),
     cycles: field(/\n {10}HK_M_CYCLES: (.+)\n/),
     budgetMs: field(/\n {10}HK_M_BUDGET_MS: (.+)\n/),
-    command: block.match(/\n {8}run: (.+)\n/)?.[1]
+    command: block.match(/\n {8}run: (.+)(?:\n|$)/)?.[1]
   }
 }
 
@@ -182,7 +182,7 @@ describe('packaged-smoke workflow HK-M cycles input', () => {
     const block = eventBlock('workflow_dispatch')
     expect(block.join('\n')).toContain('    inputs:\n      hk_m_cycles:')
     expect(block.some((line) => line.trim() === 'type: choice')).toBe(true)
-    expect(block.filter((line) => /^ {8}- /.test(line)).map((line) => cleanScalar(line.slice(10)))).toEqual(['1', '20'])
+    expect(block.filter((line) => /^ {10}- /.test(line)).map((line) => cleanScalar(line.slice(12)))).toEqual(['1', '20'])
     expect(block.some((line) => line.trim() === "default: '1'")).toBe(true)
   })
 
