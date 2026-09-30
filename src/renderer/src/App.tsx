@@ -903,9 +903,7 @@ export function App(): JSX.Element {
         setRightEdgeDockDismissed(false)
         dispatchAutoHide({ type: 'reveal-now' })
       } else {
-        // Main parked the dock: render the rail now (draft kept), never a drawer inside the parked window.
-        // Hide keeps its drawer mounted while the page is collapsed, so this must not depend on whether
-        // the page still thought it was revealed; every reveal path clears the dismissal again.
+        // Main parked the dock: always render the rail (draft kept); every reveal path clears the dismissal.
         if (d.parked && rightEdgePresentation) {
           wasRevealedRef.current = false
           setRightEdgeDockDismissed(true)
