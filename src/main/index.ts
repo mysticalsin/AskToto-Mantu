@@ -652,13 +652,7 @@ import {
 import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
-import {
-  brainResumeSafeStartDecision,
-  endBrainResumeWatch,
-  finishBrainResumeTimer,
-  queueBrainResumeBackfill,
-  recordBrainResumeSafeStart
-} from './brain-resume-watch'
+import { brainResumeSafeStartDecision, endBrainResumeWatch, finishBrainResumeTimer, queueBrainResumeBackfill, recordBrainResumeSafeStart } from './brain-resume-watch'
 import { buildTrayInStages, createSingleFlight, formatTrayAccelerator, loadPresizedTrayIcon, scheduleTrayAfterFirstPaint, trayIconPaths, yieldToEventLoop } from './boot-tray'
 import { isBootFirstShowDeferred, scheduleCurrentFirstShow, withBootFirstShowDeferred } from './lifecycle/first-show'
 import { createBootWork } from './lifecycle/boot-work'
@@ -9724,7 +9718,9 @@ if (!app.requestSingleInstanceLock()) {
   runStep('resumeScreenRepair', screenPerm.resumeScreenRepairOnBoot) // M2-0429: the boot half of a Repair
   runStep('startMeetingNotifier', startMeetingNotifier)
   runStep('initAutoUpdate', () => initAutoUpdate(() => win))
-  // Resume durable live/backfill work after first paint. Directory scans beat fs.watch for synced files.
+  // Resume durable live/backfill work after first paint. Directory scans beat fs.watch for synced files:
+  // cloud providers often deliver existing files before watcher events, and the reconcile tick is the
+  // cheap catch-all for changes the initial boot/backfill pass did not observe.
   const BRAIN_RECONCILE_MS = 60 * 1000
   setTimeout(() => {
     // First launch step that can decrypt the brain index: use a marker separate from the early sentinel.
@@ -9749,11 +9745,12 @@ if (!app.requestSingleInstanceLock()) {
         } catch (e) {
           mainLog.warn('[boot] reconcileMeetingsInBackground failed:', e)
         }
-        // Register here so safe start skips recurring brain work too; the reconcile tick reads index.json.
+        // Registered here rather than alongside the timer setup so safe start skips recurring brain work
+        // too; the reconcile tick reads index.json and must not run after a poisoned-index early death.
         trackTimer(setInterval(() => {
           void reconcileMeetingsInBackground().catch((e) => mainLog.warn('[brain] reconcile tick failed:', e))
         }, BRAIN_RECONCILE_MS))
-        // Product cadence is three named slots, not an hourly poll; catch up, then arm the next timeout.
+        // Product cadence is three named slots (06:00, 12:00, 18:00 America/Toronto); catch up, then arm the next timeout.
         try {
           wireIntelligenceIndexWork()
         } catch (e) {
@@ -9769,7 +9766,7 @@ if (!app.requestSingleInstanceLock()) {
         } catch (e) {
           mainLog.warn('[boot] scheduleIntelligenceIndex failed:', e)
         }
-        // Consolidation runs once per launch; named slots own the recurring pass.
+        // Consolidation runs once per launch; named slots own the recurring pass (infra/scheduler/policy.ts).
         try {
           bootWork.run('runConsolidationIfDue', () => runConsolidationIfDue().catch((e) => mainLog.warn('[brain] demoted consolidation check failed:', e)))
         } catch (e) {

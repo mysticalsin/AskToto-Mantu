@@ -2,8 +2,14 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { beginBootWatch, endBootWatch } from './boot-sentinel'
-import { beginBrainResumeWatch, describeBrainResumeDeath, endBrainResumeWatch, readBrainResumeDeath } from './brain-resume-watch'
+import { beginBootWatch, endBootWatch, type EarlyDeath } from './boot-sentinel'
+import {
+  beginBrainResumeWatch,
+  brainResumeSafeStartDecision,
+  describeBrainResumeDeath,
+  endBrainResumeWatch,
+  readBrainResumeDeath
+} from './brain-resume-watch'
 
 describe('M2-0038 — boot sentinel and delayed brain-resume marker are separate', () => {
   let userData: string
@@ -80,5 +86,34 @@ describe('M2-0038 — boot sentinel and delayed brain-resume marker are separate
       consecutive: 1
     })
     expect(existsSync(marker)).toBe(true)
+  })
+
+  it('brainResumeSafeStartDecision routes resume markers ahead of early boot deaths', () => {
+    const earlyDeath: EarlyDeath = {
+      startedAt: '2026-09-30T09:59:00.000Z',
+      pid: 99,
+      version: '2.0.0',
+      consecutive: 2,
+      crashDump: null
+    }
+
+    expect(brainResumeSafeStartDecision(userData, null)).toBeNull()
+
+    const earlyOnly = brainResumeSafeStartDecision(userData, earlyDeath)
+    expect(earlyOnly).toMatchObject({ reason: 'early-boot', consecutive: 2 })
+
+    const marker = join(userData, 'brain-resume-incomplete.json')
+    mkdirSync(userData, { recursive: true })
+    writeFileSync(
+      marker,
+      JSON.stringify({ startedAt: '2026-09-30T10:00:15.000Z', pid: 123, version: '2.0.0', consecutive: 0 }),
+      'utf8'
+    )
+
+    const resumeOnly = brainResumeSafeStartDecision(userData, null)
+    expect(resumeOnly).toMatchObject({ reason: 'brain-resume', consecutive: 1 })
+
+    const both = brainResumeSafeStartDecision(userData, earlyDeath)
+    expect(both).toMatchObject({ reason: 'brain-resume', consecutive: 1 })
   })
 })

@@ -106,6 +106,8 @@ export function recordBrainResumeSafeStart(safeStart: BrainResumeSafeStart, logg
 }
 
 export function finishBrainResumeTimer(userData: string, safeStart: BrainResumeSafeStart | null): void {
+  // Safe-start cleanup deliberately clears the stale resume marker, so repeated brain-resume offenders
+  // start their count again unless they die in the watched resume window before this cleanup runs.
   if (safeStart?.reason === 'brain-resume') endBrainResumeWatch(userData)
 }
 
