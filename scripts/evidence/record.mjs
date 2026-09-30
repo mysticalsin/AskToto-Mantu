@@ -22,7 +22,10 @@ const SHA256_RE = /^[0-9a-f]{64}$/
 const SESSION_MODEL_RE = /^[a-z0-9][a-z0-9.-]{0,63}$/
 const SESSION_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/
 const HOST_RE = /^[a-z0-9][a-z0-9._-]{0,62}$/
-const ENVIRONMENT_KINDS = Object.freeze(['ci', 'qa-mac', 'windows-laptop', 'windows-runner', 'owner-mac'])
+const ENVIRONMENT_KINDS = Object.freeze(['ci', 'qa-mac', 'windows-laptop', 'windows-runner', 'owner-mac', 'hosted-runner'])
+// A hosted-runner record names the GitHub-hosted runner image that executed the check; every other
+// kind keeps the generic HOST_RE label rule.
+const HOSTED_RUNNER_HOSTS = Object.freeze(['macos-latest', 'windows-latest'])
 const CAPABILITY_RE = /^[a-z0-9][a-z0-9._-]*$/
 const DECISION_RE = /^D-\d+$/
 const TEST_PATH_RE = /\.(test|spec)\.[cm]?[jt]sx?$/
@@ -95,6 +98,9 @@ function isEnvironment(value) {
   if (!isPlainObject(value)) return 'environment: expected an object'
   if (!ENVIRONMENT_KINDS.includes(value.kind)) return `environment.kind: expected one of ${ENVIRONMENT_KINDS.join(', ')}`
   if (typeof value.host !== 'string' || !HOST_RE.test(value.host)) return 'environment.host: expected a registered lowercase label'
+  if (value.kind === 'hosted-runner' && !HOSTED_RUNNER_HOSTS.includes(value.host)) {
+    return `environment.host: a hosted-runner record must name ${HOSTED_RUNNER_HOSTS.map((host) => `'${host}'`).join(' or ')}`
+  }
   return null
 }
 function isCommand(value) {
@@ -256,6 +262,10 @@ export function recordProblems(record) {
       }
       if ((level === 'HOST_CONFIGURED' || level === 'LIVE_VERIFIED') && kind === 'ci') {
         problems.push(`environment.kind: must not be 'ci' for ${level}`)
+      }
+      if (kind === 'hosted-runner' && (level === 'HOST_CONFIGURED' || level === 'LIVE_VERIFIED' || level === 'MEASURED') &&
+          !has('ci_run_id')) {
+        problems.push(`ci_run_id: required for a hosted-runner ${level} record`)
       }
     }
   }

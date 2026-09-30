@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -12,6 +12,7 @@ import {
 } from '../../src/main/island/geometry'
 import {
   LIFECYCLE_EVENTS,
+  auditDiagnostic,
   buildWindowsShortcutLauncher,
   NAVIGATION_GUARD_BOOTSTRAP_PATCH,
   childPidReserved,
@@ -398,6 +399,142 @@ describe('runRevealRow', () => {
       unblock: 'missing second-instance reveal'
     })
   })
+
+  const auditLine = (record: Record<string, unknown>): string => `${JSON.stringify(record)}\n`
+
+  it('waits for a detached relaunch reveal that lands after run() resolves, within the row reveal window', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'metis-rv-row-'))
+    const auditLogPath = join(dir, 'audit.log')
+    try {
+      writeFileSync(auditLogPath, auditLine({ event: 'app.renderer.ready' }))
+      const rows = initialRvRows('win32')
+      let waitedWith: number | undefined
+
+      await runRevealRow({
+        auditLogPath,
+        rows,
+        id: 'RV-3-windows-shortcut-relaunch',
+        reason: 'second-instance',
+        prepare: async () => ({ code: 0, signal: null, error: false }),
+        run: async () => {
+          // The shortcut's cmd launcher detaches Metis.exe: the relaunched instance hands off after run() returns.
+          setTimeout(() => {
+            appendFileSync(auditLogPath, auditLine({ event: 'reveal', reason: 'second-instance', outcome: 'shown', parked: true, layout: 'hide' }))
+          }, 300)
+          return { code: 0, signal: null, error: false }
+        },
+        revealTimeoutMs: 3_000,
+        waitForRevealRecord: async (path, reason, seenCount, timeoutMs) => {
+          waitedWith = timeoutMs
+          const deadline = Date.now() + (timeoutMs ?? 0)
+          while (Date.now() < deadline) {
+            const matches = parseAuditLog(readFileSync(path, 'utf8')).filter((r) => r.event === 'reveal' && r.reason === reason)
+            if (matches.length > seenCount) return matches[matches.length - 1]
+            await new Promise((resolve) => setTimeout(resolve, 50))
+          }
+          return null
+        },
+        failure: 'missing Windows shortcut reveal'
+      })
+
+      expect(waitedWith).toBe(3_000)
+      const row = rows.find((entry) => entry.id === 'RV-3-windows-shortcut-relaunch')
+      expect(row).toMatchObject({ status: 'PASS', unblock: null })
+      expect(row).not.toHaveProperty('diagnostics')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('on failure records the launch outcome and the content-free audit events around the relaunch', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'metis-rv-row-'))
+    const auditLogPath = join(dir, 'audit.log')
+    const secret = 'C:/Users/someone/private-meeting.txt'
+    try {
+      writeFileSync(
+        auditLogPath,
+        auditLine({ event: 'app.started', version: '1.0.0', message: secret }) +
+          auditLine({ event: 'app.renderer.ready' })
+      )
+      const rows = initialRvRows('win32')
+
+      await runRevealRow({
+        auditLogPath,
+        rows,
+        id: 'RV-3-windows-shortcut-relaunch',
+        reason: 'second-instance',
+        prepare: async () => {
+          appendFileSync(auditLogPath, auditLine({ event: 'reveal', reason: 'second-instance', outcome: 'shown', parked: false, isVisible: true, layout: 'hide', ms: 2 }))
+          return { code: 0, signal: null, error: false }
+        },
+        run: async () => {
+          appendFileSync(auditLogPath, auditLine({ event: 'security.ipc_denied', reason: secret }))
+          return { code: null, signal: 'timeout', error: false }
+        },
+        revealTimeoutMs: 300,
+        failure: 'missing Windows shortcut reveal'
+      })
+
+      const row = rows.find((entry) => entry.id === 'RV-3-windows-shortcut-relaunch') as { diagnostics?: unknown } | undefined
+      expect(row).toMatchObject({ status: 'FAIL', evidence: null, unblock: 'missing Windows shortcut reveal' })
+      expect(row?.diagnostics).toEqual({
+        stage: 'no-reveal',
+        prepare: { code: 0, signal: null, error: false },
+        launch: { code: null, signal: 'timeout', error: false },
+        waitedMs: expect.any(Number),
+        auditBefore: [
+          { event: 'app.started' },
+          { event: 'app.renderer.ready' },
+          { event: 'reveal', reason: 'second-instance', outcome: 'shown', isVisible: true, parked: false, layout: 'hide', ms: 2 }
+        ],
+        auditAfter: [{ event: 'security.ipc_denied' }]
+      })
+      expect(JSON.stringify(row)).not.toContain(secret)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('names the prepare stage when the row never got to relaunch', async () => {
+    const rows = initialRvRows('win32')
+    let launched = false
+
+    await runRevealRow({
+      auditLogPath: join(tmpdir(), 'metis-rv-row-absent', 'audit.log'),
+      rows,
+      id: 'RV-3-windows-shortcut-relaunch',
+      reason: 'second-instance',
+      prepare: async () => ({ code: 1, signal: null, error: true }),
+      run: async () => {
+        launched = true
+        return { code: 0, signal: null, error: false }
+      },
+      failure: 'missing Windows shortcut reveal'
+    })
+
+    expect(launched).toBe(false)
+    const row = rows.find((entry) => entry.id === 'RV-3-windows-shortcut-relaunch') as { diagnostics?: unknown } | undefined
+    expect(row?.diagnostics).toMatchObject({
+      stage: 'prepare',
+      prepare: { code: 1, signal: null, error: true },
+      launch: null,
+      auditBefore: [],
+      auditAfter: []
+    })
+  })
+})
+
+describe('auditDiagnostic', () => {
+  it('keeps only the event name of non-reveal records and the typed projection fields of reveals', () => {
+    expect(auditDiagnostic({ event: 'app.crash', message: 'stack with /private/path' })).toEqual({ event: 'app.crash' })
+    expect(auditDiagnostic({ event: 'reveal', reason: 'tray', outcome: 'failed', parked: true, detail: { nested: 'x' } })).toEqual({
+      event: 'reveal',
+      reason: 'tray',
+      outcome: 'failed',
+      parked: true
+    })
+    expect(auditDiagnostic({ seq: 3 })).toEqual({ event: null })
+  })
 })
 
 describe('smokeReport', () => {
@@ -697,6 +834,19 @@ describe('buildWindowsShortcutLauncher', () => {
     expect(built.shortcutScript).toContain('CreateShortcut')
     expect(built.shortcutScript).toContain('Metis-smoke-launch.cmd')
     expect(built.shortcutScript).toContain('WorkingDirectory')
+  })
+
+  it('creates the .lnk in one script and opens it in another, so COM activation never spends the relaunch budget', () => {
+    const built = buildWindowsShortcutLauncher({
+      auditLogDir: 'C:\\tmp\\logs',
+      executable: 'C:\\Metis\\Metis.exe',
+      userData: 'C:\\tmp\\profile'
+    })
+
+    expect(built.shortcutScript).toContain('$shortcut.Save()')
+    expect(built.shortcutScript).not.toContain('Start-Process')
+    expect(built.launchScript).toBe(`Start-Process -FilePath ${JSON.stringify(built.shortcutPath)}`)
+    expect(built.launchScript).not.toContain('ComObject')
   })
 
   it('refuses to build a launcher without ASKTOTO_USERDATA, rather than silently dropping the isolated profile', () => {

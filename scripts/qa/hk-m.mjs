@@ -12,7 +12,7 @@
  * The report is content-free: no paths, command lines, profile locations, transcripts, or secrets.
  */
 
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import {
   chmodSync,
   copyFileSync,
@@ -25,7 +25,7 @@ import {
   rmSync,
   writeFileSync
 } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { arch, freemem, tmpdir, totalmem } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { listProcesses, ownedProcesses, roleCounts, survivors as computeSurvivors } from './owned-processes.mjs'
@@ -46,6 +46,12 @@ const RELAUNCH_SETTLE_MS = 3_000
 export const UNRELATED_FIXTURE_LIFETIME_MS =
   READY_TIMEOUT_MS + SCENARIO_TIMEOUT_MS + SURVIVOR_BOUND_MS + READY_TIMEOUT_MS + RELAUNCH_SETTLE_MS + 60_000
 const MODEL_SCENARIOS = Object.freeze(['model-starting', 'active-inference'])
+const GIB = 1024 ** 3
+// qwen3.5-0.8b's minTotalRamGB (src/main/llm/local-models.ts): assertRamOk refuses when ceil(totalmem / GiB) is below it.
+const HK_M_MODEL_MIN_TOTAL_RAM_GB = 8
+// PREWARM_MIN_FREE_RAM_GB (src/main/llm/local-routing.ts): window.toto.localPrewarm starts nothing below this much
+// available memory. Recorded as evidence only; the harness never changes that floor.
+export const PREWARM_MIN_FREE_RAM_GB = 4
 
 function usage() {
   console.error('usage: node scripts/qa/hk-m.mjs <Metis.app> <report.json> [--cycles 20] [--budget-ms N]')
@@ -125,7 +131,10 @@ function summarizeEvidence(records, registry, sidecars) {
       localRuntimeStart: countEvent(records, 'local.runtime.start'),
       hkActiveInference: countEvent(records, 'hk-m.active-inference'),
       hkFfmpegImport: countEvent(records, 'hk-m.ffmpeg-import'),
-      hkRegistryWrite: countEvent(records, 'hk-m.registry-write')
+      hkRegistryWrite: countEvent(records, 'hk-m.registry-write'),
+      localRuntimeMissing: countEvent(records, 'local.runtime.missing'),
+      hkSetupFailed: countEvent(records, 'hk-m.setup-failed'),
+      hkRamFloorOverride: countEvent(records, 'hk-m.ram-floor-override')
     },
     registry: {
       intent: registry.filter((record) => record.kind === 'intent').length,
@@ -149,7 +158,9 @@ export function scenarioEvidence(scenario, { records, registry, sidecars }) {
         ok: false,
         status: 'BLOCKED_EXTERNAL',
         failure: 'scenario_not_triggered',
-        unblock: 'The app did not start a local model sidecar for this row: confirm the bundled local model is packaged and intact.',
+        unblock:
+          'The app never reached a local model start for this row (no local.runtime.start or model sidecar.spawn) and ' +
+          "reported no hk-m.setup-failed: compare this run's host facts and localRuntimeMissing count with a passing run.",
         evidence
       }
     }
@@ -162,7 +173,9 @@ export function scenarioEvidence(scenario, { records, registry, sidecars }) {
         ok: false,
         status: 'BLOCKED_EXTERNAL',
         failure: 'scenario_not_triggered',
-        unblock: 'The app never reported a live completion (hk-m.active-inference): confirm the bundled local model starts on this runner.',
+        unblock:
+          'The app never reported a live completion (hk-m.active-inference) and reported no hk-m.setup-failed: ' +
+          "compare this run's host facts and localRuntimeMissing count with a passing run.",
         evidence
       }
     }
@@ -363,6 +376,103 @@ export function scenarioStillStarting(proof) {
 }
 
 /**
+ * The row's failure when the app reported that its setup threw (hk-m.setup-failed carries only the Error class name),
+ * else null. Such a row can never trigger, so it ends at the next poll instead of waiting out SCENARIO_TIMEOUT_MS.
+ */
+export function setupFailure(records) {
+  const record = records.find((entry) => entry.event === 'hk-m.setup-failed')
+  if (!record) return null
+  const errorClass = typeof record.error === 'string' && /^[A-Za-z_$][\w$]{0,63}$/.test(record.error) ? record.error : 'Error'
+  return `setup_failed:${errorClass}`
+}
+
+export function keepWaitingForScenario(proof, records) {
+  return scenarioStillStarting(proof) && setupFailure(records) === null
+}
+
+/** Available bytes from `vm_stat` (free + inactive + speculative + purgeable pages) as the app reads them; null if unparsable. */
+export function availableBytesFromVmStat(output) {
+  const pageSize = /page size of (\d+) bytes/.exec(output)
+  if (!pageSize) return null
+  let pages = 0
+  for (const kind of ['free', 'inactive', 'speculative', 'purgeable']) {
+    const line = new RegExp(`^Pages ${kind}:\\s+(\\d+)\\.?\\s*$`, 'm').exec(output)
+    if (!line) return null
+    pages += Number(line[1])
+  }
+  return pages * Number(pageSize[1])
+}
+
+export function advertisedRamFloorRefuses(totalmemBytes) {
+  return Math.ceil(totalmemBytes / GIB) < HK_M_MODEL_MIN_TOTAL_RAM_GB
+}
+
+export function prewarmFreeRamFloorPasses(availableBytes) {
+  return availableBytes / GIB >= PREWARM_MIN_FREE_RAM_GB
+}
+
+function commandOutput(file, args) {
+  try {
+    return execFileSync(file, args, { encoding: 'utf8', timeout: 2_000, stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+  } catch {
+    return null
+  }
+}
+
+function numberOrNull(text) {
+  const value = Number(text)
+  return text && Number.isFinite(value) ? value : null
+}
+
+/** Content-free facts about the runner: memory as Node and the kernel report it, CPUs, OS version and arch. */
+function hostFacts() {
+  const totalmemBytes = totalmem()
+  return {
+    totalmemBytes,
+    hwMemsizeBytes: numberOrNull(commandOutput('/usr/sbin/sysctl', ['-n', 'hw.memsize'])),
+    hwNcpu: numberOrNull(commandOutput('/usr/sbin/sysctl', ['-n', 'hw.ncpu'])),
+    macosVersion: commandOutput('/usr/bin/sw_vers', ['-productVersion']),
+    arch: arch(),
+    advertisedRamGB: Math.ceil(totalmemBytes / GIB),
+    modelMinTotalRamGB: HK_M_MODEL_MIN_TOTAL_RAM_GB,
+    advertisedRamFloorRefuses: advertisedRamFloorRefuses(totalmemBytes)
+  }
+}
+
+/** Memory at a row's start, and whether the localPrewarm free-memory floor would let that path start the model. */
+function rowStartMemory() {
+  const freememBytes = freemem()
+  const vmStat = commandOutput('/usr/bin/vm_stat', [])
+  const vmStatAvailableBytes = vmStat === null ? null : availableBytesFromVmStat(vmStat)
+  return {
+    freememBytes,
+    vmStatAvailableBytes,
+    prewarmFreeRamFloorPasses: prewarmFreeRamFloorPasses(vmStatAvailableBytes ?? freememBytes)
+  }
+}
+
+/**
+ * Run-level memory evidence: how many rows started the model under the HK-M-only RAM-floor override (with the host
+ * memory it was applied on), and how many rows began below the localPrewarm free-memory floor.
+ */
+export function runMemorySummary(host, rows) {
+  const sampled = rows.filter((row) => row.memoryAtStart)
+  return {
+    ramFloorOverride: {
+      rows: rows.filter((row) => (row.evidence?.audit?.hkRamFloorOverride ?? 0) > 0).length,
+      totalmemBytes: host?.totalmemBytes ?? null,
+      hwMemsizeBytes: host?.hwMemsizeBytes ?? null,
+      advertisedRamGB: host?.advertisedRamGB ?? null
+    },
+    prewarmFloor: {
+      minFreeRamGB: PREWARM_MIN_FREE_RAM_GB,
+      rowsSampled: sampled.length,
+      rowsRefused: sampled.filter((row) => !row.memoryAtStart.prewarmFreeRamFloorPasses).length
+    }
+  }
+}
+
+/**
  * Starts the app again on the profile the killed instance used, then requires at most one process per runtime
  * role (exactly one when the row had started a model) and nothing owned left over after this instance is killed.
  */
@@ -486,12 +596,17 @@ async function runCycle({ executable, installRoot, scenario, cycle, timings }) {
     // so wait for it rather than killing main on a fixed timer.
     let snap = snapshot()
     const scenarioDeadline = boundedDeadline(SCENARIO_TIMEOUT_MS)
-    while (scenarioStillStarting(snap.proof) && Date.now() < scenarioDeadline && !exitInfo.settled) {
+    while (keepWaitingForScenario(snap.proof, snap.records) && Date.now() < scenarioDeadline && !exitInfo.settled) {
       await sleep(POLL_MS)
       snap = snapshot()
     }
     if (exitInfo.settled) {
       return terminalRow(scenario, cycle, 'FAIL', { failure: 'exited_before_scenario', exit: exitInfo })
+    }
+    const setupFailed = scenarioStillStarting(snap.proof) ? setupFailure(snap.records) : null
+    if (setupFailed) {
+      hardKill(child.pid)
+      return terminalRow(scenario, cycle, 'FAIL', { failure: setupFailed, evidence: snap.proof.evidence })
     }
     if (scenarioStillStarting(snap.proof) && budgetSpent()) {
       hardKill(child.pid)
@@ -612,6 +727,7 @@ async function main() {
     cycles,
     ...(budgetMs !== null ? { budgetMs } : {}),
     scenarios: SCENARIOS,
+    host: process.platform === 'darwin' ? hostFacts() : null,
     result: 'fail',
     rows: []
   }
@@ -635,6 +751,7 @@ async function main() {
       }
     }
     report.result = reportResultForRows(report.rows)
+    Object.assign(report, runMemorySummary(report.host, report.rows))
     writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`)
   }
   for (const signal of ['SIGTERM', 'SIGINT']) {
@@ -651,8 +768,10 @@ async function main() {
       for (const scenario of SCENARIOS) {
         if (budgetSpent()) break
         const timings = {}
+        const memoryAtStart = rowStartMemory()
         const row = await runCycle({ executable, installRoot, scenario, cycle, timings })
         if (timings.ready !== undefined) row.timingsMs = { ...timings, ...row.timingsMs }
+        row.memoryAtStart = memoryAtStart
         report.rows.push(row)
         console.log(progressLine(row))
       }
