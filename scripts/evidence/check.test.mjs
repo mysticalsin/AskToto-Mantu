@@ -612,6 +612,216 @@ test('C30 CLI --ticket M2-0194 validates a bundle and rejects an incomplete one;
   assert.throws(() => execFileSync(process.execPath, [cliPath, '--ticket', 'M2-0001', '--bundle', root], { stdio: 'pipe' }), (error) => error.status === 2)
 })
 
+const HOSTED_AUTOMATIC_ROWS = ['row-1-history-open', 'row-2-brain-status-blocked-brain', 'row-3-macos-activate', 'row-4-second-instance-reopen']
+const HOSTED_UNBLOCK = 'Provision a test cloud-file account (there is none after D-9) and rerun in QA-live mode.'
+
+/** A well-formed `run-matrix.sh --hosted-live` bundle (M2-0462); each test breaks one part of it. */
+function hostedLiveBundle({ symptomRow = null } = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'm2-0462-hosted-bundle-'))
+  const writeJson = (name, value) => writeFileSync(join(root, name), `${JSON.stringify(value, null, 2)}\n`)
+  const writeJsonl = (name, rows) => writeFileSync(join(root, name), rows.map((row) => JSON.stringify(row)).join('\n') + '\n')
+  mkdirSync(join(root, 'samples'))
+  writeFileSync(join(root, 'README.md'), '# M2-0008 (hosted-live)\n')
+  writeFileSync(join(root, 'M2-0008.records.README.md'), '# Evidence Import Manifest\n')
+  writeFileSync(join(root, 'M2-0008.lead-action.md'), 'LEAD_ACTION: File the two M2-0008 owner-bug evidence records and update the hypothesis ranking using OBSERVED and DERIVED labels.\n')
+  writeJson('environment.json', {
+    ticket: 'M2-0008',
+    artifact_sha256: 'a'.repeat(64),
+    dry_run: 0,
+    host: { label: 'macos-latest', os: 'Darwin', os_version: '15.5', arch: 'arm64', memory_bytes: 7516192768 },
+    mode: 'hosted-live'
+  })
+  writeJson('node-options-fuse.json', { node_options_fuse: 'DISABLED_OR_UNAVAILABLE', detail: 'probe recorded' })
+  writeJson('dataless-fixtures.json', { fixtures: [] })
+  writeJson('external-blockers.json', {
+    ticket: 'M2-0008',
+    mode: 'hosted-live',
+    blockers: [{
+      status: 'BLOCKED_EXTERNAL',
+      rows: ['row-5-dataless-brain-idle', 'row-9-network-off-flapping'],
+      interrupts: ['network-off', 'file-provider-cancel'],
+      unblock_step: HOSTED_UNBLOCK
+    }]
+  })
+  writeJson('launch-plan.json', { electron_user_data_dir_switch: true })
+  writeJson('diagnostic-reports.json', {
+    consented: false,
+    source: 'Library/Logs/DiagnosticReports',
+    filter: 'Metis/AskToto process names or sampled process ids only',
+    copied: []
+  })
+  writeJson('fifo-fixtures.json', {
+    kind: 'fifo',
+    count: 7,
+    opened_by_1_9_6: 2,
+    fixtures: [
+      { path: 'Métis Meetings/one.md', opened_by_1_9_6: true },
+      { path: 'Métis Meetings/two.md', opened_by_1_9_6: false },
+      { path: 'Métis Meetings/three.md', opened_by_1_9_6: false },
+      { path: 'Métis Meetings/four.md', opened_by_1_9_6: false },
+      { path: 'Métis Meetings/.brain/index.json', opened_by_1_9_6: true },
+      { path: 'Métis Meetings/.brain/entities/person/person.json', opened_by_1_9_6: false },
+      { path: 'Métis Meetings/.brain/entities/account/account.json', opened_by_1_9_6: false }
+    ]
+  })
+  const matrix = []
+  for (const row of HOSTED_AUTOMATIC_ROWS) {
+    const symptom = row === symptomRow
+    const operatorResult = symptom ? 'observed' : 'pass'
+    writeFileSync(join(root, 'samples', `${row}-main.sample.txt`), 'Sampling process 100\n')
+    writeFileSync(join(root, 'samples', `${row}-renderer-104.sample.txt`), 'Sampling process 104\n')
+    matrix.push({ row, sampled: true, main_pid: 100, main_sample: true, renderer_attempts: 1, renderer_samples: 1, renderers_selected_by: '--type=renderer' })
+    matrix.push({
+      row,
+      operator_result: operatorResult,
+      automatic: true,
+      drive_method: 'cdp Runtime.evaluate',
+      precondition: 'ok',
+      observation: {
+        operator_result: operatorResult,
+        symptom_observed: symptom,
+        reason: symptom ? 'round-trip-timeout' : 'all-round-trips-answered',
+        cdp: {
+          reachable: true,
+          page_targets: 1,
+          renderer_round_trip: 'answered',
+          renderer_round_trip_ms: 12,
+          main_round_trip: symptom ? 'timeout' : 'answered',
+          main_answered: !symptom,
+          drive: 'none',
+          window_visible: true,
+          window_visible_observed_by: 'cdp:document.visibilityState'
+        }
+      }
+    })
+  }
+  matrix.push({ row: 'row-5-dataless-brain-idle', operator_result: 'BLOCKED_EXTERNAL', status: 'BLOCKED_EXTERNAL', unblock_step: HOSTED_UNBLOCK, automatic: false, fixture: 'dataless-brain-index' })
+  matrix.push({ row: 'row-9-network-off-flapping', operator_result: 'BLOCKED_EXTERNAL', status: 'BLOCKED_EXTERNAL', unblock_step: HOSTED_UNBLOCK, automatic: false, fixture: 'dataless-meeting' })
+  writeJsonl('matrix.jsonl', matrix)
+  writeJsonl('interrupt-results.jsonl', [
+    { interrupt: 'network-off', result: 'BLOCKED_EXTERNAL', status: 'BLOCKED_EXTERNAL', unblock_step: HOSTED_UNBLOCK },
+    { interrupt: 'file-provider-cancel', result: 'BLOCKED_EXTERNAL', status: 'BLOCKED_EXTERNAL', unblock_step: HOSTED_UNBLOCK },
+    { interrupt: 'process-signal', result: 'pass', automatic: true, signal: 'TERM', exited_within_10s: true, waited_seconds: 1 }
+  ])
+  writeJson('hosted-live-summary.json', {
+    ticket: 'M2-0008',
+    mode: 'hosted-live',
+    symptom_rows: symptomRow ? [symptomRow] : [],
+    reproduced: symptomRow !== null,
+    conclusion: symptomRow ? 'reproduced: ...' : 'documented-unsuccessful: ...'
+  })
+  writeJson('owner-bug-records.json', { ticket: 'M2-0008', owner_bug_records: [] })
+  writeJson('M2-0008.evidence-import.json', {
+    ticket: 'M2-0008',
+    mode: 'hosted-live',
+    result: 'PASS',
+    artifact_sha256: 'a'.repeat(64),
+    build_run_id: 123,
+    ci_run_id: 456,
+    environment: { kind: 'hosted-runner', host: 'macos-latest' }
+  })
+  return { root, writeJson, writeJsonl, matrix }
+}
+
+test('C29 M2-0008 hosted-live bundle: a documented-unsuccessful run and a reproduced run are both valid', () => {
+  assert.deepEqual(m2_0008BundleProblems(hostedLiveBundle().root), [])
+  assert.deepEqual(m2_0008BundleProblems(hostedLiveBundle({ symptomRow: 'row-1-history-open' }).root), [])
+
+  const cliPath = fileURLToPath(new URL('./check.mjs', import.meta.url))
+  const output = execFileSync(process.execPath, [cliPath, '--ticket', 'M2-0008', '--bundle', hostedLiveBundle().root], { encoding: 'utf8' })
+  assert.match(output, /M2-0008 bundle: OK/)
+})
+
+test('C30 M2-0008 hosted-live bundle requires mode artifacts, host facts and exercised, sampled automatic rows', () => {
+  const noSummaryFile = hostedLiveBundle()
+  rmSync(join(noSummaryFile.root, 'hosted-live-summary.json'))
+  assertProblem(m2_0008BundleProblems(noSummaryFile.root), 'hosted-live-summary.json', 'missing from the hosted-live bundle')
+
+  const missing = hostedLiveBundle()
+  missing.writeJson('environment.json', { ticket: 'M2-0008', artifact_sha256: 'a'.repeat(64), mode: 'hosted-live', host: { label: 'macos-latest' } })
+  assertProblem(m2_0008BundleProblems(missing.root), 'environment.json', 'os_version, arch and memory_bytes')
+
+  const notExercised = hostedLiveBundle()
+  notExercised.writeJsonl('matrix.jsonl', notExercised.matrix.map((entry) =>
+    entry.row === 'row-3-macos-activate' && 'operator_result' in entry ? { ...entry, operator_result: 'not-exercised' } : entry))
+  assertProblem(m2_0008BundleProblems(notExercised.root), 'row-3-macos-activate', 'automatic row that was exercised')
+
+  const typed = hostedLiveBundle()
+  typed.writeJsonl('matrix.jsonl', typed.matrix.map((entry) =>
+    entry.row === 'row-1-history-open' && 'operator_result' in entry ? { ...entry, operator_result: 'observed' } : entry))
+  assertProblem(m2_0008BundleProblems(typed.root), 'row-1-history-open', 'derived from its observation')
+
+  const noObservation = hostedLiveBundle()
+  noObservation.writeJsonl('matrix.jsonl', noObservation.matrix.map((entry) =>
+    entry.row === 'row-2-brain-status-blocked-brain' && 'operator_result' in entry ? { ...entry, observation: null, drive_method: '' } : entry))
+  assertProblem(m2_0008BundleProblems(noObservation.root), 'row-2-brain-status-blocked-brain', 'renderer round trip, main answer and window observation')
+  assertProblem(m2_0008BundleProblems(noObservation.root), 'row-2-brain-status-blocked-brain', 'drive_method')
+
+  const firstThree = hostedLiveBundle()
+  firstThree.writeJsonl('matrix.jsonl', firstThree.matrix.map((entry) =>
+    entry.row === 'row-4-second-instance-reopen' && 'sampled' in entry ? { ...entry, renderers_selected_by: undefined } : entry))
+  assertProblem(m2_0008BundleProblems(firstThree.root), 'row-4-second-instance-reopen', 'role-selected renderer samples')
+
+  const unsampled = hostedLiveBundle()
+  unsampled.writeJsonl('matrix.jsonl', unsampled.matrix.map((entry) =>
+    entry.row === 'row-1-history-open' && 'sampled' in entry ? { ...entry, sampled: false, main_sample: false } : entry))
+  assertProblem(m2_0008BundleProblems(unsampled.root), 'row-1-history-open', 'main and role-selected renderer samples')
+
+  const fifoUnknown = hostedLiveBundle()
+  fifoUnknown.writeJson('fifo-fixtures.json', {
+    kind: 'fifo',
+    count: 6,
+    fixtures: ['a.md', 'b.md', 'c.md', 'd.md', '.brain/index.json', 'e.json'].map((path) => ({ path, opened_by_1_9_6: null }))
+  })
+  assertProblem(m2_0008BundleProblems(fifoUnknown.root), 'fifo-fixtures.json', 'true or false')
+
+  const unprobed = hostedLiveBundle()
+  unprobed.writeJson('node-options-fuse.json', { node_options_fuse: 'NOT_EXERCISED', detail: 'dry-run' })
+  assertProblem(m2_0008BundleProblems(unprobed.root), 'node-options-fuse.json', 'hosted-live')
+})
+
+test('C31 M2-0008 hosted-live bundle requires blocked rows with unblock steps, the process-signal run and a hosted-runner import', () => {
+  const unblocked = hostedLiveBundle()
+  unblocked.writeJsonl('matrix.jsonl', unblocked.matrix.map((entry) =>
+    entry.row === 'row-9-network-off-flapping' ? { ...entry, unblock_step: '' } : entry))
+  assertProblem(m2_0008BundleProblems(unblocked.root), 'row-9-network-off-flapping', 'BLOCKED_EXTERNAL with an unblock_step')
+
+  const unlisted = hostedLiveBundle()
+  unlisted.writeJson('external-blockers.json', { ticket: 'M2-0008', blockers: [{ status: 'BLOCKED_EXTERNAL', rows: [], unblock_step: HOSTED_UNBLOCK }] })
+  assertProblem(m2_0008BundleProblems(unlisted.root), 'row-5-dataless-brain-idle', 'listed in external-blockers.json')
+  assertProblem(m2_0008BundleProblems(unlisted.root), 'file-provider-cancel', 'listed in external-blockers.json')
+
+  const noSignal = hostedLiveBundle()
+  noSignal.writeJsonl('interrupt-results.jsonl', [
+    { interrupt: 'network-off', result: 'BLOCKED_EXTERNAL', status: 'BLOCKED_EXTERNAL', unblock_step: HOSTED_UNBLOCK },
+    { interrupt: 'file-provider-cancel', result: 'BLOCKED_EXTERNAL', status: 'BLOCKED_EXTERNAL', unblock_step: HOSTED_UNBLOCK },
+    { interrupt: 'process-signal', result: 'not-recorded' }
+  ])
+  assertProblem(m2_0008BundleProblems(noSignal.root), 'process-signal', 'exited_within_10s')
+
+  const qaHost = hostedLiveBundle()
+  qaHost.writeJson('M2-0008.evidence-import.json', {
+    ticket: 'M2-0008',
+    mode: 'hosted-live',
+    artifact_sha256: 'b'.repeat(64),
+    build_run_id: 123,
+    qa_host_label: 'qa-mac-1',
+    environment: { kind: 'qa-mac', host: 'qa-mac-1' }
+  })
+  const importProblems = m2_0008BundleProblems(qaHost.root)
+  assertProblem(importProblems, 'evidence-import.json', 'hosted-runner kind')
+  assertProblem(importProblems, 'evidence-import.json', 'QA host label')
+  assertProblem(importProblems, 'evidence-import.json', 'artifact_sha256 must match')
+
+  const mismatch = hostedLiveBundle({ symptomRow: 'row-2-brain-status-blocked-brain' })
+  mismatch.writeJson('hosted-live-summary.json', { ticket: 'M2-0008', mode: 'hosted-live', reproduced: false, conclusion: 'documented-unsuccessful: ...' })
+  assertProblem(m2_0008BundleProblems(mismatch.root), 'hosted-live-summary.json', 'reproduced must match')
+
+  const noSummary = hostedLiveBundle()
+  noSummary.writeJson('hosted-live-summary.json', { ticket: 'M2-0008' })
+  assertProblem(m2_0008BundleProblems(noSummary.root), 'hosted-live-summary.json', 'mode, reproduced and conclusion')
+})
+
 // --- PR rules (P1-P7) and githubApi (G1) ---
 
 const greenRun = Object.freeze({ path: TEST_WORKFLOW, head_sha: SHA1_A, status: 'completed', conclusion: 'success' })
