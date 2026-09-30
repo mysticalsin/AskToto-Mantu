@@ -223,13 +223,7 @@ import {
   topClamp
 } from './island/geometry'
 import { observeExclusiveBounds } from './island/exclusive-bounds-repair'
-import {
-  applyRestChrome,
-  fitSettingsSurface,
-  openOverlaySettingsSurface,
-  revealOverlaySurface,
-  skipUnchangedChrome
-} from './island/overlay-surface'
+import { applyRestChrome, fitSettingsSurface, openOverlaySettingsSurface, revealOverlaySurface, skipUnchangedChrome } from './island/overlay-surface'
 import { createOverlayRevealLog, type OverlayTransitionCause } from './island/overlay-reveal-log'
 import {
   OVERLAY_REST_BACKGROUND,
