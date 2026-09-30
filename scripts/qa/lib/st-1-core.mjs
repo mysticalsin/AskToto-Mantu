@@ -172,14 +172,28 @@ function historyProbes(measured) {
   return measured.history.filter((entry) => !entry.skipped)
 }
 
-/** Whether one History probe opened History (list + brain status) with a list, or searched with results,
- *  within HISTORY_BUDGET_MS. A hung or failed probe did neither; a failed search (`searchError`) did not
- *  search. */
-function openedInBudget(entry) {
-  return !entry.hung && !entry.error && typeof entry.rows === 'number' && entry.ms < HISTORY_BUDGET_MS
+/** Whether one History probe of `row` opened History (list + brain status) with a usable list, or searched
+ *  with results, within HISTORY_BUDGET_MS. A hung or failed probe did neither; a failed search
+ *  (`searchError`) did not search. A usable list lists at least one fixture row, so a fast empty list never
+ *  passes; on the dataless row at least one of them is a 'not downloaded' row (the degraded view). On the
+ *  FIFO row the search must hit at least one fixture (their file names carry the `st1` query); a dataless
+ *  row's fixtures are the QA folder's own files, whose names the query need not match. */
+function openedInBudget(row) {
+  return (entry) =>
+    !entry.hung &&
+    !entry.error &&
+    entry.rows >= 1 &&
+    (row !== 'dataless' || entry.notDownloaded >= 1) &&
+    entry.ms < HISTORY_BUDGET_MS
 }
-function searchedInBudget(entry) {
-  return !entry.hung && !entry.error && !entry.searchError && typeof entry.hits === 'number' && entry.searchMs < HISTORY_BUDGET_MS
+function searchedInBudget(row) {
+  return (entry) =>
+    !entry.hung &&
+    !entry.error &&
+    !entry.searchError &&
+    typeof entry.hits === 'number' &&
+    (row !== 'fifo' || entry.hits >= 1) &&
+    entry.searchMs < HISTORY_BUDGET_MS
 }
 
 /** The History row's summary: the first probe is History's first call, the one that paid any start-up wait. */
@@ -200,8 +214,8 @@ export function historySummary(measured) {
 }
 
 /** The pass/fail criteria. They read only the measurement, never the attribution evidence. The History row
- *  (`history`) adds History open and search: every probe, the first one included, answers within
- *  HISTORY_BUDGET_MS. */
+ *  (`history`) adds History open and search: every probe, the first one included, answers with a usable
+ *  list of fixture rows (and, on the FIFO row, a search hit) within HISTORY_BUDGET_MS. */
 export function evaluateCriteria(row, measured, evidence, { history = false } = {}) {
   const criteria = [
     { name: 'inspector', pass: true }, // only reached once the candidate actually produced a working inspector
@@ -217,8 +231,8 @@ export function evaluateCriteria(row, measured, evidence, { history = false } = 
     const probes = historyProbes(measured)
     criteria.push(
       { name: 'history-probed', pass: probes.length > 0 },
-      { name: `history-open < ${HISTORY_BUDGET_MS}`, pass: probes.length > 0 && probes.every(openedInBudget) },
-      { name: `history-search < ${HISTORY_BUDGET_MS}`, pass: probes.length > 0 && probes.every(searchedInBudget) }
+      { name: `history-open < ${HISTORY_BUDGET_MS}`, pass: probes.length > 0 && probes.every(openedInBudget(row)) },
+      { name: `history-search < ${HISTORY_BUDGET_MS}`, pass: probes.length > 0 && probes.every(searchedInBudget(row)) }
     )
   }
   return criteria

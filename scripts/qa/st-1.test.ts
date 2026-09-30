@@ -357,12 +357,32 @@ describe('the History row (M2-0193)', () => {
     rows: 6,
     notDownloaded: 4,
     searchMs: 40,
-    hits: 0,
+    hits: 4,
     ...extra
   })
   const historyRun = (history: unknown[]) => ({ ...emptyRun(), samples: [goodSample(1_000)], loop: { p99Ms: 12, maxMs: 40 }, history })
-  const historyCriteria = (history: unknown[]) =>
-    Object.fromEntries(evaluateCriteria('fifo', historyRun(history), {}, { history: true }).map((c) => [c.name, c.pass]))
+  const historyCriteria = (history: unknown[], row = 'fifo') =>
+    Object.fromEntries(
+      evaluateCriteria(row, historyRun(history), { stillDataless: true }, { history: true }).map((c) => [c.name, c.pass])
+    )
+
+  it('fails History open on a fast empty list, and search on the FIFO row on a fast empty result', () => {
+    const empty = historyCriteria([open(20_000, 30), open(25_000, 30, { rows: 0, notDownloaded: 0, hits: 0 })])
+    expect(empty['history-open < 2000']).toBe(false)
+    expect(empty['history-search < 2000']).toBe(false)
+    const noHits = historyCriteria([open(20_000, 30, { hits: 0 })])
+    expect(noHits['history-open < 2000']).toBe(true)
+    expect(noHits['history-search < 2000']).toBe(false)
+  })
+
+  it('on the dataless row, needs a not-downloaded row in every list but no search hit on the QA folder', () => {
+    expect(historyCriteria([open(20_000, 30, { hits: 0 })], 'dataless')).toMatchObject({
+      'history-open < 2000': true,
+      'history-search < 2000': true
+    })
+    expect(historyCriteria([open(20_000, 30, { notDownloaded: 0 })], 'dataless')['history-open < 2000']).toBe(false)
+    expect(historyCriteria([open(20_000, 30, { rows: 0, notDownloaded: 0 })], 'dataless')['history-open < 2000']).toBe(false)
+  })
 
   it('passes when every probe, the first included, opens and searches with a usable list within 2 s', () => {
     expect(historyCriteria([open(20_000, 1_900), open(25_000, 30)])).toMatchObject({
