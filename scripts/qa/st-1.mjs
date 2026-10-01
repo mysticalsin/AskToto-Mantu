@@ -88,6 +88,7 @@ import {
   releaseExpression,
   syntheticDatalessPlan,
   runPurpose,
+  shouldProbeHistory,
   withTimeout
 } from './lib/st-1-core.mjs'
 
@@ -561,7 +562,7 @@ async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, 
   while (Date.now() < deadline) {
     const tMs = sinceSpawn()
     if (run.profiler.running && tMs >= PROFILE_UNTIL_MS) await stopProfiler(cdp, run.profiler, cpuProfilePath, tMs)
-    if (historyOn && !historyRunning && tMs >= HISTORY_FROM_MS && tMs - historyLastMs >= HISTORY_EVERY_MS) {
+    if (shouldProbeHistory({ historyOn, historyRunning, tMs, historyLastMs, fromMs: HISTORY_FROM_MS, everyMs: HISTORY_EVERY_MS })) {
       historyLastMs = tMs
       historyRunning = probeHistory(cdp, tMs, history).then((probe) => {
         run.history.push(probe)
@@ -835,7 +836,7 @@ async function main() {
       mainLogLocated = args.mainLog
         ? Promise.resolve({ path: args.mainLog, fromByte: mainLogOffset, exactLaunchOffset: true })
         : locateMainLog(cdp, spawnedWallMs)
-      await measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, historyOn: historyMode === 'on', witnessFile })
+      await measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, witnessFile, historyOn: historyMode === 'on', history })
       mainLog = await mainLogLocated
       evidence = collectExercisedEvidence(args.fixtures, fixtures, args.mainLog, mainLogOffset, root)
       complete = true

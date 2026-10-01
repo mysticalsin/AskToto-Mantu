@@ -108,6 +108,12 @@ export function historyEntry(tMs, outcome) {
   return { tMs, ...outcome.value }
 }
 
+/** Whether this sample should schedule the next History probe. Pure so the idle row can prove no probe is
+ *  scheduled while `--history off` keeps History untouched. */
+export function shouldProbeHistory({ historyOn, historyRunning, tMs, historyLastMs, fromMs, everyMs }) {
+  return historyOn && !historyRunning && tMs >= fromMs && tMs - historyLastMs >= everyMs
+}
+
 /** The representative profile of ARCHITECTURE 6.1: 59 meetings, 6 of them cloud-only, and a mostly
  *  cloud-only `.brain`. */
 export const SYNTHETIC_LOCAL_MEETINGS = 53

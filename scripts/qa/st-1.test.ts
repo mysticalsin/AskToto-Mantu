@@ -16,6 +16,7 @@ import {
   pinnedExpression,
   recordSample,
   releaseExpression,
+  shouldProbeHistory,
   syntheticDatalessPlan,
   runPurpose,
   withTimeout,
@@ -297,6 +298,22 @@ describe('historyEntry', () => {
       tMs: 40_000,
       skipped: 'no window'
     })
+  })
+})
+
+describe('shouldProbeHistory', () => {
+  const due = { historyOn: true, historyRunning: null, tMs: 20_000, historyLastMs: -Infinity, fromMs: 20_000, everyMs: 5_000 }
+
+  it('schedules the first due History probe only when History is on and idle', () => {
+    expect(shouldProbeHistory(due)).toBe(true)
+    expect(shouldProbeHistory({ ...due, historyOn: false })).toBe(false)
+    expect(shouldProbeHistory({ ...due, historyRunning: Promise.resolve() })).toBe(false)
+    expect(shouldProbeHistory({ ...due, tMs: 19_999 })).toBe(false)
+  })
+
+  it('waits for the configured interval after the previous History probe', () => {
+    expect(shouldProbeHistory({ ...due, tMs: 24_999, historyLastMs: 20_000 })).toBe(false)
+    expect(shouldProbeHistory({ ...due, tMs: 25_000, historyLastMs: 20_000 })).toBe(true)
   })
 })
 
