@@ -8764,17 +8764,20 @@ function registerIpc(): void {
   ipcMain.handle(IPC.importJobCancel, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
-    await getImportJobs().cancel(ImportJobIdSchema.parse(raw).jobId)
+    const parsed = ImportJobIdSchema.parse(raw)
+    await getImportJobs().cancel(parsed.jobId)
   })
   ipcMain.handle(IPC.importJobResume, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
-    return importJobView(await getImportJobs().resume(ImportJobIdSchema.parse(raw).jobId))
+    const parsed = ImportJobIdSchema.parse(raw)
+    return importJobView(await getImportJobs().resume(parsed.jobId))
   })
   ipcMain.handle(IPC.importJobRemove, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
-    await getImportJobs().remove(ImportJobIdSchema.parse(raw).jobId)
+    const parsed = ImportJobIdSchema.parse(raw)
+    await getImportJobs().remove(parsed.jobId)
   })
 
   ipcMain.on(IPC.importDecoderReady, (e) => {
