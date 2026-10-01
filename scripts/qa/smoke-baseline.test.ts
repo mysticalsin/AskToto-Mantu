@@ -136,8 +136,10 @@ describe('smoke-baseline comparator', () => {
 
   it('ships a valid checked-in baseline covering both platforms', () => {
     const baseline = loadBaseline(readFileSync(fileURLToPath(new URL('./smoke-baseline.json', import.meta.url)), 'utf8'))
-    expect(baseline.seededFromRun).toBe('36572749687')
-    expect(baseline.provisional).toBeUndefined()
+    expect(baseline.seededFromRun).toBe('provisional')
+    expect(baseline.provisional).toContain('first green m2/integration packaged-smoke run after eb58e6ca')
+    expect(baseline.LEAD_ACTION).toContain('re-seed smoke-baseline.json from the first green m2/integration packaged-smoke run after eb58e6ca')
+    expect(baseline.LEAD_ACTION).toContain('after merge, confirm that the next m2/integration packaged smoke ran this comparator')
     expect(Object.keys(baseline.platforms).sort()).toEqual(['darwin', 'win32'])
     expect(baseline.platforms.darwin.rows['packaged-smoke/RV-boot-launch-activate-stays-parked']).toEqual({ status: 'PASS' })
   })

@@ -1,7 +1,8 @@
 {
   "schema": 1,
-  "seededFromRun": "36572749687",
-  "LEAD_ACTION": "after merge, confirm that the next m2/integration packaged smoke ran this comparator and record the run id",
+  "seededFromRun": "provisional",
+  "provisional": "Provisional seed until the first green m2/integration packaged-smoke run after eb58e6ca is available.",
+  "LEAD_ACTION": "re-seed smoke-baseline.json from the first green m2/integration packaged-smoke run after eb58e6ca and record its run id in the file and the PR; after merge, confirm that the next m2/integration packaged smoke ran this comparator and record the run id",
   "platforms": {
     "darwin": {
       "rows": {
