@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { compare, formatFailureSummary, pngSize, screenshotCoversBox } from './settings-section-visual-compare.mjs'
+import { compare, fitsInside, formatFailureSummary } from './settings-section-visual-compare.mjs'
 
 type Section = {
   key: string
@@ -84,12 +84,16 @@ describe('settings-section-visual-compare compare', () => {
     expect(compared.rows[0]).toEqual(expect.objectContaining({ status: 'FAIL', failures: ['clipped'] }))
   })
 
-  it('judges screenshot clipping from the PNG, not from scroll-panel visibility', () => {
-    const png = Buffer.from('89504e470d0a1a0a0000000d4948445200000384000004b00000000000', 'hex')
+  it('fails a section taller than the tab panel as clipped', () => {
+    const sectionBox = { x: 24, y: 40, width: 820, height: 900 }
+    const panelBox = { x: 16, y: 32, width: 850, height: 640 }
+    const clipped = !fitsInside(sectionBox, panelBox)
 
-    expect(pngSize(png)).toEqual({ width: 900, height: 1200 })
-    expect(screenshotCoversBox(png, { x: 0, y: 700, width: 900, height: 1200 })).toBe(true)
-    expect(screenshotCoversBox(png, { x: 0, y: 0, width: 901, height: 1202 })).toBe(false)
+    expect(clipped).toBe(true)
+    expect(compare(capture([section({ clipped })]), capture([section()]))).toMatchObject({
+      status: 'FAIL',
+      rows: [{ key: 'brain-01-models', status: 'FAIL', failures: ['clipped'] }]
+    })
   })
 
   it('prints failing rows so hosted CI logs name the section that changed', () => {

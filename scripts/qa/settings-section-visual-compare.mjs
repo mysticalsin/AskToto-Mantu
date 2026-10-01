@@ -26,7 +26,6 @@ const SETTINGS_TIMEOUT_MS = 30_000
 const POLL_MS = 250
 const VIEWPORT = Object.freeze({ width: 900, height: 820 })
 const FIT_TOLERANCE_PX = 1
-const PNG_HEADER_LENGTH = 24
 
 function usage() {
   console.error('Usage: node scripts/qa/settings-section-visual-compare.mjs <before executable> <after executable> <out dir>')
@@ -52,26 +51,6 @@ function fitsInside(inner, outer) {
     && inner.y >= outer.y - FIT_TOLERANCE_PX
     && inner.x + inner.width <= outer.x + outer.width + FIT_TOLERANCE_PX
     && inner.y + inner.height <= outer.y + outer.height + FIT_TOLERANCE_PX
-  )
-}
-
-function pngSize(buffer) {
-  if (buffer.length < PNG_HEADER_LENGTH) return null
-  const signature = buffer.subarray(0, 8).toString('hex')
-  if (signature !== '89504e470d0a1a0a') return null
-  return {
-    width: buffer.readUInt32BE(16),
-    height: buffer.readUInt32BE(20)
-  }
-}
-
-function screenshotCoversBox(buffer, box) {
-  if (!box) return false
-  const size = pngSize(buffer)
-  if (!size) return false
-  return (
-    size.width + FIT_TOLERANCE_PX >= Math.round(box.width)
-    && size.height + FIT_TOLERANCE_PX >= Math.round(box.height)
   )
 }
 
@@ -190,8 +169,7 @@ async function captureSections(page, appOutDir) {
       const panelBox = await tabPanel.boundingBox()
       const box = await section.boundingBox()
       const buffer = await section.screenshot({ path: file, animations: 'disabled', caret: 'hide' })
-      const screenshotSize = pngSize(buffer)
-      const clipped = !screenshotCoversBox(buffer, box)
+      const clipped = !fitsInside(box, panelBox)
       sections.push({
         key,
         tab,
@@ -199,9 +177,7 @@ async function captureSections(page, appOutDir) {
         title,
         width: box ? Math.round(box.width) : null,
         height: box ? Math.round(box.height) : null,
-        viewportClipped: !fitsInside(box, panelBox),
-        screenshotWidth: screenshotSize?.width ?? null,
-        screenshotHeight: screenshotSize?.height ?? null,
+        viewportClipped: clipped,
         clipped,
         sha256: sha256(buffer),
         bytes: buffer.length,
@@ -363,4 +339,4 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   })
 }
 
-export { compare, fitsInside, formatFailureSummary, pngSize, screenshotCoversBox }
+export { compare, fitsInside, formatFailureSummary }
