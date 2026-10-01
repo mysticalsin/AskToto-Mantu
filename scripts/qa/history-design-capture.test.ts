@@ -175,6 +175,17 @@ describe('glass background layers (solidGradientLayers)', () => {
     ])
   })
 
+  it("skips the empty image of the glass's final colour-only layer (computed as `none`)", () => {
+    // `background: linear-gradient(tint), linear-gradient(fill), var(--glass-scrim-bar)` computes its
+    // background-image with one entry per layer; the last layer is only a colour, so its image is `none`.
+    const glass = 'linear-gradient(rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.06)), linear-gradient(rgba(28, 11, 52, 0.8), rgba(28, 11, 52, 0.8)), none'
+    expect(solidGradientLayers(glass, toRgba)).toEqual([
+      [255, 255, 255, 0.06],
+      [28, 11, 52, 0.8]
+    ])
+    expect(solidGradientLayers('none, url("noise.png")', toRgba)).toBeNull()
+  })
+
   it('gives up on a layer whose colour cannot be read', () => {
     const unreadable = (): number[] => [Number.NaN, Number.NaN, Number.NaN, Number.NaN]
     expect(solidGradientLayers('linear-gradient(rgb(1, 2, 3), rgb(1, 2, 3))', unreadable)).toBeNull()

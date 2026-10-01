@@ -163,7 +163,8 @@ export function listAnswer(mode, realRows, nowMs) {
 /**
  * A computed `background-image` as solid colour layers, topmost first: [] for 'none', null when any layer
  * is not one colour (a real gradient, an image). The overlay glass paints each translucent fill as
- * linear-gradient(c, c), so such a layer is one colour. A colour token is a whole colour function with its
+ * linear-gradient(c, c), so such a layer is one colour; a `none` entry (the image of a colour-only final
+ * layer in the `background` shorthand) paints nothing and is skipped. A colour token is a whole colour function with its
  * nested parentheses (rgb(28 11 52 / calc(0.8 * 1)), color-mix(in oklab, ...)), a hex colour or
  * `transparent`. `toRgba` turns a CSS colour into [r, g, b, alpha], with a non-finite channel for one it
  * cannot read, which makes the layer unknown (null). Self-contained: the capture also runs it inside the
@@ -185,6 +186,7 @@ export function solidGradientLayers(backgroundImage, toRgba) {
   }
   const colors = []
   for (const layer of layers) {
+    if (layer === 'none') continue
     if (!/^(?:repeating-)?(?:linear|radial|conic)-gradient\(/.test(layer)) return null
     const tokens = []
     const colorStart = /(?<![\w-])(?:rgba?|hsla?|color-mix|color|oklab|oklch|lab|lch|hwb)\(|#[0-9a-fA-F]{3,8}\b|\btransparent\b/g
