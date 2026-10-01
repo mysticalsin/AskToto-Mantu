@@ -16,6 +16,15 @@ export const PENDING_GLOBAL = '__st1pending'
 /** History's degraded-view budget: a History open or search answers with a usable list within this. */
 export const HISTORY_BUDGET_MS = 2_000
 
+/** The History row's first-call budget: History's first recallList answers within this. */
+export const HISTORY_FIRST_LIST_MS = 250
+
+/** The History calls the probe times one by one, in the order the summary lists them. */
+export const HISTORY_CALLS = ['recallList', 'brainStatus', 'recallSearch']
+
+/** What admission.ts logs when every meetings-root permit is held by a stalled call and it starts refusing. */
+export const STORAGE_SATURATED_LOG = '[storage] every permit is held by a stalled call'
+
 /** Command-line flags as camelCase keys over `defaults`: `--cloud-dir x` becomes `cloudDir: 'x'`. A flag
  *  with no value (last, or followed by another flag) is the string 'true'. */
 export function parseArgs(argv, defaults = {}) {
@@ -99,13 +108,76 @@ export function recordSample(run, tMs, outcome, options) {
   run.errors.push(failureRecord('sample', tMs, outcome, boundMs))
 }
 
+/**
+ * An expression (for executeJavaScript in the renderer) that starts every call in `calls` (name → expression)
+ * at once and times each on its own, bounded by `boundMs`. It always fulfils with name → outcome:
+ *   { ms, value }        settled in time
+ *   { ms, error }        rejected (message string)
+ *   { ms, hung: true }   did not settle within boundMs
+ */
+export function timedCallsExpression(calls, boundMs) {
+  const entries = Object.entries(calls).map(([name, expression]) => `[${JSON.stringify(name)}, () => (${expression})]`)
+  return `(() => {
+  const timed = (call) => {
+    const started = performance.now()
+    let timer
+    return Promise.race([
+      Promise.resolve()
+        .then(call)
+        .then(
+          (value) => ({ ms: performance.now() - started, value }),
+          (error) => ({ ms: performance.now() - started, error: String(error?.message ?? error) })
+        ),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve({ ms: performance.now() - started, hung: true }), ${Number(boundMs)})
+      })
+    ]).finally(() => clearTimeout(timer))
+  }
+  return Promise.all([${entries.join(', ')}].map(([name, call]) => timed(call).then((outcome) => [name, outcome]))).then(Object.fromEntries)
+})()`
+}
+
+/** A timed call's report record: its time and how it failed, never its value. */
+function callRecord({ ms, error, hung }) {
+  return { ms, ...(hung ? { hung: true } : {}), ...(error !== undefined ? { error } : {}) }
+}
+
+/**
+ * A probe's per-call outcomes (`open`: recallList and brainStatus, `search`: recallSearch, each a
+ * timedCallsExpression outcome) as the report's record: `calls` holds each call's own time, and the combined
+ * fields stay as before. An open call that did not settle makes the open `hung`, one that failed makes it an
+ * `error`; a search that did not settle or failed is a `searchError`. A probe without per-call outcomes is kept
+ * as it is.
+ */
+function historyRecord({ open, search, ...probe }) {
+  if (!open) return probe
+  const { recallList, brainStatus } = open
+  const record = { ...probe, calls: { recallList: callRecord(recallList), brainStatus: callRecord(brainStatus) } }
+  if (recallList.value) Object.assign(record, recallList.value)
+  const failed = [recallList, brainStatus].find((call) => call.hung || call.error !== undefined)
+  if (failed?.hung) record.hung = true
+  else if (failed) record.error = failed.error
+  if (search) {
+    record.calls.recallSearch = callRecord(search)
+    if (search.hung) record.searchError = `no answer within ${Math.round(search.ms)} ms`
+    else if (search.error !== undefined) record.searchError = search.error
+    else record.hits = search.value
+  }
+  return record
+}
+
 /** One History round trip for the report. A round trip that never settled is `hung` with how long it was
  *  waited for — the signal that History itself stalls. */
 export function historyEntry(tMs, outcome) {
   const ms = Math.round(outcome.elapsedMs)
   if (outcome.timedOut) return { tMs, hung: true, ms }
   if (!outcome.ok) return { tMs, error: outcome.error, ms }
-  return { tMs, ...outcome.value }
+  return { tMs, ...historyRecord(outcome.value) }
+}
+
+/** How many times a main.log text says every meetings-root permit was held by a stalled call. */
+export function countStorageSaturations(mainLogText) {
+  return mainLogText.split('\n').filter((line) => line.includes(STORAGE_SATURATED_LOG)).length
 }
 
 /** The boot window variants the QA-identity build can construct (src/main/infra/observability/projection.ts
@@ -228,20 +300,82 @@ function searchedInBudget(row) {
     entry.searchMs < HISTORY_BUDGET_MS
 }
 
-/** The History row's summary: the first probe is History's first call, the one that paid any start-up wait. */
-export function historySummary(measured) {
+/** Whether a timed call settled (neither hung nor failed) within `budgetMs`. */
+function settledWithin(call, budgetMs) {
+  return Boolean(call) && !call.hung && call.error === undefined && call.ms < budgetMs
+}
+
+/** One History call's times over the probes, by nearest rank: `firstMs` is the first probe's own call (null
+ *  when that probe has no per-call time), `unsettled` counts the calls that hung or failed. */
+function callStats(probes, name) {
+  const calls = probes.map((entry) => entry.calls?.[name]).filter(Boolean)
+  const times = calls.map((call) => call.ms).sort((a, b) => a - b)
+  const rank = (percent) => (times.length > 0 ? times[Math.ceil((percent / 100) * times.length) - 1] : null)
+  return {
+    calls: calls.length,
+    unsettled: calls.filter((call) => call.hung || call.error !== undefined).length,
+    firstMs: probes[0]?.calls?.[name]?.ms ?? null,
+    p50Ms: rank(50),
+    p95Ms: rank(95),
+    maxMs: times.at(-1) ?? null
+  }
+}
+
+/**
+ * The History row's checks, from each call's own time: History's first recallList answers within
+ * HISTORY_FIRST_LIST_MS; every recallList answers with a usable list (as openedInBudget) and every recallSearch
+ * with results (as searchedInBudget) within HISTORY_BUDGET_MS; the main loop's p99 stays under 50 ms. With no
+ * probe every check fails.
+ */
+function historyChecks(row, measured, probes) {
+  const listUsable = (entry) =>
+    settledWithin(entry.calls?.recallList, HISTORY_BUDGET_MS) && entry.rows >= 1 && (row !== 'dataless' || entry.notDownloaded >= 1)
+  const searchUsable = (entry) =>
+    settledWithin(entry.calls?.recallSearch, HISTORY_BUDGET_MS) && typeof entry.hits === 'number' && (row !== 'fifo' || entry.hits >= 1)
+  return [
+    { name: `first-list < ${HISTORY_FIRST_LIST_MS}`, pass: settledWithin(probes[0]?.calls?.recallList, HISTORY_FIRST_LIST_MS) },
+    { name: `list < ${HISTORY_BUDGET_MS}`, pass: probes.length > 0 && probes.every(listUsable) },
+    { name: `search < ${HISTORY_BUDGET_MS}`, pass: probes.length > 0 && probes.every(searchUsable) },
+    { name: 'loop-p99 < 50', pass: measured.loop?.p99Ms < 50 }
+  ]
+}
+
+/**
+ * The History row's summary: the first probe is History's first call, the one that paid any start-up wait.
+ * `calls` gives each call's own times and `verdict` comes from `checks` alone (INCOMPLETE while the run is
+ * not complete); neither changes the report's own criteria or verdict. `firstListCause`, report-only, says why a first recallList missed its budget:
+ * 'admission-saturated' when this launch's main.log says every meetings-root permit was held by a stalled call
+ * (`storageSaturations` > 0), 'unattributed' when it does not, 'main-log-unread' when it could not be read;
+ * null when the first recallList met its budget or no probe ran.
+ * @param {{ row?: string, complete?: boolean, storageSaturations?: number | null }} [options]
+ */
+export function historySummary(measured, options = {}) {
+  const { row, complete = true, storageSaturations = null } = options
   const probes = historyProbes(measured)
   const max = (key) => {
     const values = probes.map((entry) => entry[key]).filter((value) => typeof value === 'number')
     return values.length > 0 ? Math.max(...values) : null
   }
+  const checks = historyChecks(row, measured, probes)
+  const firstListMissed = probes.length > 0 && !checks[0].pass
   return {
     probes: probes.length,
     firstOpenMs: probes[0]?.ms ?? null,
     maxOpenMs: max('ms'),
     maxSearchMs: max('searchMs'),
     maxRows: max('rows'),
-    maxNotDownloaded: max('notDownloaded')
+    maxNotDownloaded: max('notDownloaded'),
+    calls: Object.fromEntries(HISTORY_CALLS.map((name) => [name, callStats(probes, name)])),
+    checks,
+    verdict: !complete ? 'INCOMPLETE' : checks.every((check) => check.pass) ? 'PASS' : 'FAIL',
+    storageSaturations,
+    firstListCause: !firstListMissed
+      ? null
+      : storageSaturations > 0
+        ? 'admission-saturated'
+        : storageSaturations === 0
+          ? 'unattributed'
+          : 'main-log-unread'
   }
 }
 
@@ -310,7 +444,7 @@ export function buildReport({ row, history = false, installer, candidate, minute
     exercised: evidence?.exercised ?? null,
     ...(row === 'fifo' ? { fixturesOpened: evidence?.fixturesOpened ?? null } : {}),
     ...(row === 'dataless' ? { stillDataless: evidence?.stillDataless ?? null } : {}),
-    ...(history ? { historySummary: historySummary(measured) } : {}),
+    ...(history ? { historySummary: historySummary(measured, { row, complete, storageSaturations: attribution.storageSaturations }) } : {}),
     criteria,
     verdict,
     complete,
