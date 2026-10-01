@@ -177,7 +177,7 @@ describe('the scenario registry', () => {
     expect(outcomeForExit('renderer-kill', 1)).toBe('FAIL')
     expect(outcomeForExit('renderer-kill', 2)).toBe('PRECONDITION')
     expect(resolveScenario({ scenario: 'renderer-kill', sha256: { mac: MAC_SHA } })).toEqual({
-      mac: { variant: 'mac', artifact: 'candidate-mac', sha256: MAC_SHA }
+      mac: { variant: 'mac', artifact: 'candidate-mac', sha256: MAC_SHA, timeoutMinutes: 60, stepTimeoutMinutes: 40 }
     })
     expect(() => resolveScenario({ scenario: 'renderer-kill', sha256: { mac: MAC_SHA, win: MAC_SHA } })).toThrow(
       /win_sha256 is set, but renderer-kill does not run on win/
