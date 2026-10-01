@@ -200,8 +200,7 @@ function isCreateStreamCall(node: ts.Node): node is ts.CallExpression {
   return ts.isPropertyAccessExpression(expr) && expr.name.text === 'createStream'
 }
 
-function createStreamSites(file: string): CreateStreamSite[] {
-  const text = src(file)
+function createStreamSitesInText(file: string, text: string): CreateStreamSite[] {
   const createStreamMarkers = [...text.matchAll(/(?<!function )\bcreateStream\(/g)]
   if (createStreamMarkers.length === 0) return []
   const sf = sourceFileFor(text)
@@ -214,6 +213,17 @@ function createStreamSites(file: string): CreateStreamSite[] {
   }
   visit(sf)
   return sites
+}
+
+function createStreamSites(file: string): CreateStreamSite[] {
+  return createStreamSitesInText(file, src(file))
+}
+
+function siteKey(site: CreateStreamSite): string {
+  if (site.fn.name === 'new Promise' && site.fn.ancestors[0]) {
+    return `${site.file}#${site.fn.ancestors[0].name}/new Promise`
+  }
+  return `${site.file}#${site.fn.name}`
 }
 
 function modelArgumentText(site: CreateStreamSite): string {
@@ -230,24 +240,54 @@ function modelArgumentText(site: CreateStreamSite): string {
   return ts.isShorthandPropertyAssignment(model) ? model.name.text : model.initializer.getText(sf)
 }
 
+function expressionResolvesThroughPolicy(expression: ts.Expression): boolean {
+  return resolvesThroughPolicy(expression.getText(expression.getSourceFile()))
+}
+
+function bodyDeclaresModelThroughPolicy(body: string, modelName: string): boolean {
+  const sf = sourceFileFor(body)
+  let found = false
+  const visit = (node: ts.Node): void => {
+    if (found) return
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === modelName &&
+      node.initializer &&
+      expressionResolvesThroughPolicy(node.initializer)
+    ) {
+      found = true
+      return
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      ts.isIdentifier(node.left) &&
+      node.left.text === modelName &&
+      expressionResolvesThroughPolicy(node.right)
+    ) {
+      found = true
+      return
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sf)
+  return found
+}
+
 function policyBodyFor(site: CreateStreamSite): string {
   if (resolvesThroughPolicy(site.fn.body)) return site.fn.body
   const modelArg = modelArgumentText(site)
-  if (!modelArg || /^[`'"]/.test(modelArg)) return site.fn.body
+  if (!/^[A-Za-z_$][\w$]*$/.test(modelArg)) return site.fn.body
   const visibleBodies = [site.fn.body, ...site.fn.ancestors.map((fn) => fn.body)]
-  const declaration = visibleBodies.find((body) =>
-    new RegExp(`\\b(?:const|let|var)\\s+${modelArg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b[\\s\\S]*?\\b(?:narrowAllowedForCapability|resolveManagedModel|localModelAllowedByPolicy)\\(`).test(body)
-  )
-  if (declaration) return declaration
-  const ancestor = site.fn.ancestors.find((fn) => resolvesThroughPolicy(fn.body))
-  return ancestor?.body ?? site.fn.body
+  return visibleBodies.find((body) => bodyDeclaresModelThroughPolicy(body, modelArg)) ?? site.fn.body
 }
 
 // A call site that only streams a candidate handed to it names the function that built the candidate;
 // that function must itself resolve through the policy.
 const CANDIDATE_BUILDERS: Record<string, string> = {
   'src/main/brain/ingest.ts#runCompletionOnce': 'pickProviderCandidates',
-  'src/main/brain/ingest.ts#new Promise': 'pickProviderCandidates'
+  'src/main/brain/ingest.ts#runCompletionOnce/new Promise': 'pickProviderCandidates'
 }
 
 function actualIndexFunction(name: string, globals: Record<string, unknown>): (...args: any[]) => any {
@@ -281,7 +321,7 @@ describe('M2-0412 — every createStream( call site in src/main resolves through
     }
   })
 
-  it.each(sites.map((s) => [`${s.file}#${s.fn.name}`, s] as const))('%s resolves through the policy', (key, site) => {
+  it.each(sites.map((s) => [siteKey(s), s] as const))('%s resolves through the policy', (key, site) => {
     const builder = CANDIDATE_BUILDERS[key]
     const body = builder ? namedFunction(site.text, builder) : policyBodyFor(site)
     expect(resolvesThroughPolicy(body), key).toBe(true)
@@ -291,15 +331,15 @@ describe('M2-0412 — every createStream( call site in src/main resolves through
     const fixture = `
       function registerIpc() {
         narrowAllowedForCapability(settings, allowed, 'askChat')
+        const rawModel = settings.providerModels.openai
         ipcMain.handle('ask', () => {
-          createStream({ model: 'raw-model' })
+          createStream({ model: rawModel })
         })
       }
     `
-    const call = fixture.indexOf('createStream')
-    const fn = enclosingFunction(fixture, call)
-    expect(fn.name).toBe("ipcMain.handle('ask')")
-    expect(resolvesThroughPolicy(fn.body)).toBe(false)
+    const [site] = createStreamSitesInText('fixture', fixture)
+    expect(site.fn.name).toBe("ipcMain.handle('ask')")
+    expect(resolvesThroughPolicy(policyBodyFor(site))).toBe(false)
   })
 
   it('gates the Settings local screen-check branch on the localModel policy before creating a stream', () => {
