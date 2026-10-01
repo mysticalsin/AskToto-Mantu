@@ -262,6 +262,7 @@ async function main() {
       row: 'POLICY-01',
       platform,
       firstApplyMs,
+      switchMs: requiredSwitchMs,
       requiredSwitchMs,
       blockedSwitchMs,
       switchBoundMs: 60_000,
