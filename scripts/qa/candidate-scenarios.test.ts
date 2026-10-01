@@ -393,13 +393,14 @@ describe('the fresh profile', () => {
     expect(existsSync(join(appData, 'asktoto-qa', 'settings.json'))).toBe(false)
   })
 
-  it('checks the promotable Metis userData directory is fresh and seeds nothing for renderer-kill', () => {
+  it('writes nothing for renderer-kill, which runs the app only on its own ASKTOTO_USERDATA profile', () => {
+    expect(SCENARIOS['renderer-kill'].platforms.mac).toMatchObject({ isolatedProfiles: true })
     expect(prepareProfile({ scenario: 'renderer-kill', platform: 'mac', appDataDir: appData })).toBeNull()
-    expect(existsSync(join(appData, 'Metis'))).toBe(false)
-    mkdirSync(join(appData, 'Metis'))
-    expect(() => prepareProfile({ scenario: 'renderer-kill', platform: 'mac', appDataDir: appData })).toThrow(
-      /Metis userData directory already exists/
-    )
+    expect(readdirSync(appData)).toEqual([])
+    // A default profile left by an earlier run does not touch the isolated proof.
+    mkdirSync(join(appData, 'asktoto'))
+    expect(prepareProfile({ scenario: 'renderer-kill', platform: 'mac', appDataDir: appData })).toBeNull()
+    expect(readdirSync(appData)).toEqual(['asktoto'])
   })
 
   it('writes nothing for a scenario that runs only on its own isolated profiles, on either platform', () => {
