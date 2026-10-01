@@ -337,6 +337,7 @@ const api = {
   recallOpen: (file: string): Promise<string> => ipcRenderer.invoke(IPC.recallOpen, file),
   recallRead: (file: string): Promise<RecallReadResult> => ipcRenderer.invoke(IPC.recallRead, file),
   // An explicit recallRead/recallOpen downloading one cloud-only meeting: hydrating, then done or failed.
+  // LEAD_ACTION: M2-0032 consumes the hydration progress event and MeetingSummary.notDownloaded
   onRecallHydration: (cb: (d: RecallHydration) => void): Unsub => sub(IPC.recallHydration, cb),
   // User-initiated decrypted markdown copy of ONE saved meeting (native save dialog in main). Exists so
   // external tools (e.g. Claude local ingesting into the second brain) can read a meeting even when

@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { RUNNER_LABELS, SCENARIOS, resolveScenario } from '../qa/candidate-scenarios.mjs'
 import { LAUNCH_MIN_MS, worstCaseRunMs } from '../qa/ex-suite.mjs'
+import { VARIANTS } from '../qa/provenance.mjs'
 import { findUnpinnedUses } from './check-workflow-pins.mjs'
 
 const root = join(__dirname, '..', '..')
@@ -69,6 +70,7 @@ describe('candidate-scenarios.yml', () => {
     expect(scenario).toContain('        type: choice')
     const options = block(scenario, '        options:', 8).map((line) => line.trim().replace(/^- /, ''))
     expect(options).toEqual(Object.keys(SCENARIOS))
+    expect(options).toContain('renderer-kill')
   })
 
   it('reads contents and actions only, uses no secrets, and pins every action by full SHA', () => {
@@ -148,6 +150,35 @@ describe('candidate-scenarios.yml', () => {
     expect(run).toContain('INSTALLER: ${{ steps.installer.outputs.path }}')
     expect(run).toContain('APP: ${{ steps.install.outputs.app }}')
     expect(run).toContain('--app "$APP"')
+  })
+
+  it('can install every macOS installer a registry scenario may select: the promotable DMG and the QA zip', () => {
+    const install = steps('mac').find((step) => step.includes('codesign --verify')) ?? ''
+    const kinds = new Set(
+      Object.values(SCENARIOS).flatMap((scenario) => {
+        const mac = (scenario.platforms as Record<string, { variant: string }>).mac
+        return mac ? VARIANTS[mac.variant as keyof typeof VARIANTS].assets('1.0.0').map((asset) => asset.slice(asset.lastIndexOf('.'))) : []
+      })
+    )
+    expect([...kinds].sort()).toEqual(['.dmg', '.zip'])
+    for (const kind of kinds) expect(install).toContain(`*${kind})`)
+    // hdiutil attach -mountpoint needs an existing directory: the DMG arm creates it before attaching.
+    const dmgArm = install.slice(install.indexOf('*.dmg)'), install.indexOf('*.zip)'))
+    expect(dmgArm).toContain('mkdir -p "$volume"')
+    expect(dmgArm.indexOf('mkdir -p "$volume"')).toBeLessThan(dmgArm.indexOf('hdiutil attach'))
+    expect(dmgArm).toContain('-mountpoint "$volume"')
+    expect(workflow).toContain('-f scenario=renderer-kill -f mac_sha256=<Metis DMG sha256 from SHA256SUMS.txt>')
+  })
+
+  it('authorises System Events GUI scripting from the registry after the install and before the scenario', () => {
+    const mac = steps('mac')
+    const grant = stepIndex(mac, 'candidate-scenarios.mjs grant-gui')
+    expect(mac[grant]).toContain('node scripts/qa/candidate-scenarios.mjs grant-gui --scenario "$SCENARIO" --platform mac')
+    expect(mac[grant]).not.toContain('continue-on-error')
+    expect(mac[grant]).not.toMatch(/^\s+if:/m)
+    expect(grant).toBeGreaterThan(stepIndex(mac, 'codesign --verify'))
+    expect(grant).toBeLessThan(stepIndex(mac, 'candidate-scenarios.mjs run'))
+    expect((SCENARIOS['renderer-kill'].platforms.mac as { guiScripting?: boolean }).guiScripting).toBe(true)
   })
 
   it('sets an upload-safe idle-soak deadline before running each hosted scenario job', () => {
