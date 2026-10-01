@@ -17,6 +17,8 @@ name: Candidate scenarios
 #     -f mac_sha256=<Metis DMG sha256> -f win_sha256=<Metis Setup sha256>
 #   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> -f scenario=packaged-lifecycle \
 #     -f mac_sha256=<Metis DMG sha256> -f win_sha256=<Metis Setup sha256>
+#   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> \
+#     -f scenario=renderer-kill -f mac_sha256=<Metis DMG sha256 from SHA256SUMS.txt>
 # The pull_request trigger on this file's own path only registers the workflow with GitHub (M2-0501): the
 # run it creates skips every job, uses no runner minutes and reaches no secret.
 run-name: ${{ github.event_name == 'pull_request' && 'Candidate scenarios (registration)' || format('Candidate scenario {0} on {1}', inputs.scenario, inputs.candidate_run) }}
@@ -42,6 +44,7 @@ on:
           - idle-soak
           - sidecar-boot-reaper
           - packaged-lifecycle
+          - renderer-kill
       mac_sha256:
         description: sha256 of the macOS installer the scenario installs (empty when it does not run on macOS)
         required: false
@@ -164,6 +167,7 @@ jobs:
           case "$INSTALLER" in
             *.dmg)
               volume="$RUNNER_TEMP/candidate-volume"
+              mkdir -p "$volume"
               hdiutil attach -nobrowse -readonly -mountpoint "$volume" "$INSTALLER" > /dev/null
               bundle=$(cd "$volume" && ls -d *.app)
               ditto "$volume/$bundle" "$target/$bundle"
@@ -178,6 +182,11 @@ jobs:
           echo "app=$app" >> "$GITHUB_OUTPUT"
       - name: Start from a fresh profile seeded only with the scenario's settings
         run: node scripts/qa/candidate-scenarios.mjs profile --scenario "$SCENARIO" --platform mac
+      # An unattended osascript gets -1743 or no UI elements without a TCC grant. The hosted image runs with
+      # SIP disabled, so this writes the grants the scenario's registry entry declares (guiScripting) for
+      # this job's process chain; a scenario that declares none is left untouched.
+      - name: Authorise System Events GUI scripting when the scenario drives native UI
+        run: node scripts/qa/candidate-scenarios.mjs grant-gui --scenario "$SCENARIO" --platform mac
       - name: Set the soak deadline
         id: soak-deadline
         env:

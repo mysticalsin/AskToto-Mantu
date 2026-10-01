@@ -7,6 +7,7 @@ import {
   MAIN_RE_HIDE_SHIM,
   MAIN_RE_HIDE_SNAPSHOT,
   mainInspector,
+  pinnedBridgeCall,
   setMainCursor
 } from './right-edge-hide-rows.mjs'
 import { withOverlayPage } from './navigation-guard-rows.mjs'
@@ -159,9 +160,7 @@ export async function runOverlayStabilityRows({ page, main, openSettings, rows, 
 
   await step('OV-STABLE', async () => {
     await setCursor(away)
-    await page.evaluate(async () => {
-      await window.toto.setSettings({ overlayPlacement: 'top-center', overlayLayout: 'hide', autoHideOverlay: true })
-    })
+    await page.evaluate(pinnedBridgeCall, ['setSettings', [{ overlayPlacement: 'top-center', overlayLayout: 'hide', autoHideOverlay: true }]])
     const settingsDeadline = Date.now() + 10_000
     let applied = false
     while (!applied && Date.now() < settingsDeadline) {
@@ -174,9 +173,7 @@ export async function runOverlayStabilityRows({ page, main, openSettings, rows, 
     if (!applied) throw new Error('top-center Hide settings were not applied')
     await wait(1_000)
     if (!parkedHide(await snapshot())) {
-      await page.evaluate(async () => {
-        await window.toto.parkAfterHide(true)
-      })
+      await page.evaluate(pinnedBridgeCall, ['parkAfterHide', [true]])
     }
     const parked = await waitUntil(parkedHide, 5_000)
     if (!parked.ok) throw new Error(`top-center Hide did not park: ${JSON.stringify(parked.observed)}`)

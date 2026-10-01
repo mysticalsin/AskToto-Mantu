@@ -253,6 +253,8 @@ export type AuditEvent =
   | 'app.boot.watch_cleared'
   // M2-0515: one native boot stage's own main-thread duration (tray stages, window construction and first show).
   | 'app.boot.stage'
+  // M2-0518: the boot-work gate opened ({ reason: show | fallback | immediate, held }), so no held boot job is silent.
+  | 'app.boot.work.released'
   // FITO-185-F: menu-bar Tray create succeeded/failed — hardprove AXExtrasMenuBar needs a diagnosable trail.
   | 'tray.created'
   | 'tray.failed'
@@ -358,6 +360,11 @@ export type AuditEvent =
   | 'operator.license.activated'
   | 'operator.license.cleared'
   | 'operator.gate.blocked'
+  // M2-0412: a fleet model policy fetched from the Operator failed schema validation or signature
+  // verification (tampered in transit, or signed with a secret this device no longer holds) and was
+  // rejected outright — the device keeps using its last known-good cached policy (or today's
+  // defaults, if it never had one). Reason only, never the raw payload.
+  | 'operator.model_policy.rejected'
 
 /** What an event may carry: an observability event only its allowlisted fields. */
 export type AuditDetail<E extends AuditEvent> = E extends ObservabilityEvent ? ObservabilityDetail<E> : Record<string, unknown>

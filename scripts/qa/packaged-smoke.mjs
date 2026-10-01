@@ -82,6 +82,7 @@ export {
   rightEdgeExpectedRects,
   rightEdgeHideParkMatches,
   rightEdgeMeetingHideVerdict,
+  pinnedBridgeCall,
   rightEdgeStateMatches,
   rightEdgeStateMismatches,
   runRightEdgeHideRows

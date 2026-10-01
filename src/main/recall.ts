@@ -86,7 +86,8 @@ export const HYDRATION_BUSY_MSG = 'Another meeting is still downloading. Open th
 /** An explicit open whose download started and did not finish (offline, provider error, a minute passed). */
 export const HYDRATION_FAILED_MSG = 'Could not download this meeting. Check your connection and try again.'
 
-/** True while an explicit open of a file that may need a download holds the one hydration slot. */
+/** True while an explicit open of a file that may need a download, or the fs read its failed download
+ *  left running, holds the one hydration slot. */
 let hydrating = false
 
 /**
@@ -98,7 +99,10 @@ let hydrating = false
  *     classify does not show it on this device (dataless, unknown, timed out, unavailable) is the only
  *     kind that takes the slot, from its classify until it settles; any other file opens without a
  *     download and never takes or waits on the slot. A may-download open that finds the slot taken
- *     answers HYDRATION_BUSY_MSG unread.
+ *     answers HYDRATION_BUSY_MSG unread, taking no content permit.
+ *   - A failed download (its deadline passed, the provider failed) keeps the slot until its fs read
+ *     settles, so at most one hydrate read holds a content permit and list, search and local opens
+ *     always keep the rest.
  *   - A download that starts sends 'hydrating', then exactly one 'done' or 'failed' once the open settles;
  *     an open that needed no download sends nothing. A failed download answers HYDRATION_FAILED_MSG.
  *   - `send` throwing (a closed window) never fails the open.
@@ -120,21 +124,25 @@ export async function openExplicitly<T extends { ok: boolean; error?: string }>(
   if (!fileClass || fileClass.status === 'ok' || fileClass.status === 'missing') return open({ hydrate: false })
   if (hydrating) return { ok: false, error: HYDRATION_BUSY_MSG }
   hydrating = true
-  let progress = null as HydrationProgress['state'] | null
+  let progress = null as HydrationProgress | null
   try {
     const result = await open({
       hydrate: true,
       onProgress: (p) => {
-        progress = p.state
+        progress = p
         if (p.state === 'hydrating') report({ file, state: 'hydrating' })
       }
     })
-    if (progress === 'done') report({ file, state: 'done' })
-    if (progress !== 'hydrating') return result
+    if (!progress) return result
+    if (progress.state === 'done') {
+      report({ file, state: 'done' })
+      return result
+    }
     report({ file, state: 'failed', error: HYDRATION_FAILED_MSG })
     return { ok: false, error: HYDRATION_FAILED_MSG }
   } finally {
-    hydrating = false
+    if (progress?.state === 'failed') void progress.settled.then(() => (hydrating = false))
+    else hydrating = false
   }
 }
 
