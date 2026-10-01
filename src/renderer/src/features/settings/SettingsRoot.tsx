@@ -1649,7 +1649,7 @@ function PersonalizeModes({
               <MoreHorizontal size={15} />
             </button>
             {overflowOpen && (
-              <div className="absolute right-0 top-8 z-20 min-w-[180px] rounded-[10px] border border-[var(--cl-border)] bg-[var(--cl-bg,#1a1a2e)] shadow-lg">
+              <div className="absolute right-0 top-8 z-20 min-w-[180px] rounded-[10px] border border-[var(--cl-border)] bg-[var(--cl-bg)] shadow-lg">
                 {isBuiltinSelected ? (
                   <>
                     <button
