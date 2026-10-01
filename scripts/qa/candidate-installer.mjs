@@ -13,7 +13,8 @@ const SHA256 = /^[0-9a-f]{64}$/
 /** The installer files each platform may select from. Windows installs only the Setup, never the Portable. */
 export const INSTALLER_KINDS = Object.freeze({
   win: Object.freeze({ label: 'Metis-Setup-*.exe', pattern: /^Metis-Setup-.*\.exe$/ }),
-  mac: Object.freeze({ label: '*.dmg or *.zip', pattern: /\.(dmg|zip)$/ })
+  mac: Object.freeze({ label: '*.dmg or *.zip', pattern: /\.(dmg|zip)$/ }),
+  'mac-dmg': Object.freeze({ label: 'Metis-*.dmg', pattern: /^Metis-.*\.dmg$/ })
 })
 
 export async function selectCandidateInstaller(dir, expectedSha256, platform = 'win') {
