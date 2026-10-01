@@ -2664,7 +2664,6 @@ async function requestBackfillRunAsync(options: BackfillStartOptions = {}, befor
   const observer: BackfillObserver = { run, resolve, s: getSettings(), sources: new Map(), preparing: true, gates: 0, settling: false, published: false, initialOkSourceVersions: new Map() }
   backfillObserver = observer
   for (const job of [...queue, ...inFlightJobs]) observeSource(jobKey(job))
-  observeClaimedSourceRefreshWork()
   addCompletionGate(observer, beforeComplete)
   try {
     const before = await readIndexAsync(observer.s)
@@ -2860,6 +2859,8 @@ async function startBackfillAsync(onDrained?: () => void | Promise<void>, option
   if (scan.some((folder) => folder.status === 'failed')) throw new Error('a meetings folder could not be listed')
   for (const source of scan.flatMap((folder) => folder.sources)) {
     const record = idx.ingested[source.key]
+    const slug = extractionSlug(source.key)
+    const strategy = extractedSlugs.has(slug) || (!providerAvailable && await loadMeetingExtraction(s, slug) !== null) ? ('reconcile' as const) : undefined
     if (inFlight.has(source.key) || (!options.force && record?.ok && (source.version ? record.sourceVersion === source.version : !record.sourceVersion))) continue
     if (!source.local) {
       notOnDevice += 1
@@ -2872,7 +2873,6 @@ async function startBackfillAsync(onDrained?: () => void | Promise<void>, option
       continue
     }
     if (admission.action === 'revive') toRevive.push(source.key)
-    const strategy = extractedSlugs.has(extractionSlug(source.key)) ? ('reconcile' as const) : undefined
     if (providerAvailable || strategy === 'reconcile') {
       candidates.push({
         file: source.file,
