@@ -27,9 +27,7 @@ const reviewedScopes = [
   { path: 'build/entitlements.mas.inherit.plist', axis: 'packaging-inputs' },
   { path: 'build/managed-config.example.json', axis: 'packaging-inputs' },
   { path: 'build/managed-config.enterprise.example.json', axis: 'packaging-inputs' },
-  { path: 'build/install-metis.command', axis: 'packaging-inputs' },
-  { path: 'build/Install Metis.command', axis: 'packaging-inputs' },
-  { path: 'scripts/install-metis-mac.sh', axis: 'packaging-inputs' },
+  { path: 'scripts/check-release.mjs', axis: 'packaging-inputs' },
   { path: 'src/shared/metis-command-session.ts', axis: 'command-wake' },
   { path: 'src/shared/metis-command-parse.ts', axis: 'command-wake' },
   { path: 'src/shared/metis-command-proposal.ts', axis: 'command-wake' },
@@ -215,8 +213,8 @@ const ticketActions = [
     },
     evidence: [
       'docs/INSTALL.md:26 tells users not to remove quarantine manually.',
-      'scripts/install-metis-mac.sh:83 clears quarantine.',
-      'build/install-metis.command:55 clears quarantine.'
+      'Removed by M2-0457: scripts/install-metis-mac.sh and the two build/ .command helpers cleared quarantine.',
+      'scripts/check-release.mjs now refuses .command/.sh files and quarantine-clearing text in the artifacts directory.'
     ]
   },
   {

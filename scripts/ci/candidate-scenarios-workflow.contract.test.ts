@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { RUNNER_LABELS, SCENARIOS, resolveScenario } from '../qa/candidate-scenarios.mjs'
 import { LAUNCH_MIN_MS, worstCaseRunMs } from '../qa/ex-suite.mjs'
+import { VARIANTS } from '../qa/provenance.mjs'
 import { findUnpinnedUses } from './check-workflow-pins.mjs'
 
 const root = join(__dirname, '..', '..')
@@ -69,6 +70,7 @@ describe('candidate-scenarios.yml', () => {
     expect(scenario).toContain('        type: choice')
     const options = block(scenario, '        options:', 8).map((line) => line.trim().replace(/^- /, ''))
     expect(options).toEqual(Object.keys(SCENARIOS))
+    expect(options).toContain('renderer-kill')
   })
 
   it('reads contents and actions only, uses no secrets, and pins every action by full SHA', () => {
@@ -150,8 +152,38 @@ describe('candidate-scenarios.yml', () => {
     expect(run).toContain('--app "$APP"')
   })
 
-  it('sets an upload-safe idle-soak deadline before running the mac scenario', () => {
+  it('can install every macOS installer a registry scenario may select: the promotable DMG and the QA zip', () => {
+    const install = steps('mac').find((step) => step.includes('codesign --verify')) ?? ''
+    const kinds = new Set(
+      Object.values(SCENARIOS).flatMap((scenario) => {
+        const mac = (scenario.platforms as Record<string, { variant: string }>).mac
+        return mac ? VARIANTS[mac.variant as keyof typeof VARIANTS].assets('1.0.0').map((asset) => asset.slice(asset.lastIndexOf('.'))) : []
+      })
+    )
+    expect([...kinds].sort()).toEqual(['.dmg', '.zip'])
+    for (const kind of kinds) expect(install).toContain(`*${kind})`)
+    // hdiutil attach -mountpoint needs an existing directory: the DMG arm creates it before attaching.
+    const dmgArm = install.slice(install.indexOf('*.dmg)'), install.indexOf('*.zip)'))
+    expect(dmgArm).toContain('mkdir -p "$volume"')
+    expect(dmgArm.indexOf('mkdir -p "$volume"')).toBeLessThan(dmgArm.indexOf('hdiutil attach'))
+    expect(dmgArm).toContain('-mountpoint "$volume"')
+    expect(workflow).toContain('-f scenario=renderer-kill -f mac_sha256=<Metis DMG sha256 from SHA256SUMS.txt>')
+  })
+
+  it('authorises System Events GUI scripting from the registry after the install and before the scenario', () => {
     const mac = steps('mac')
+    const grant = stepIndex(mac, 'candidate-scenarios.mjs grant-gui')
+    expect(mac[grant]).toContain('node scripts/qa/candidate-scenarios.mjs grant-gui --scenario "$SCENARIO" --platform mac')
+    expect(mac[grant]).not.toContain('continue-on-error')
+    expect(mac[grant]).not.toMatch(/^\s+if:/m)
+    expect(grant).toBeGreaterThan(stepIndex(mac, 'codesign --verify'))
+    expect(grant).toBeLessThan(stepIndex(mac, 'candidate-scenarios.mjs run'))
+    expect((SCENARIOS['renderer-kill'].platforms.mac as { guiScripting?: boolean }).guiScripting).toBe(true)
+  })
+
+  it('sets an upload-safe idle-soak deadline before running each hosted scenario job', () => {
+    const mac = steps('mac')
+    const win = steps('win')
     const jobStart = mac[0]
     expect(jobStart).toContain('name: Record the job start time')
     expect(jobStart).toContain('id: job-start')
@@ -168,6 +200,15 @@ describe('candidate-scenarios.yml', () => {
     expect(run).toContain('SOAK_DEADLINE_EPOCH_MS: ${{ steps.soak-deadline.outputs.epoch_ms }}')
     expect(stepIndex(mac, 'Record the job start time')).toBe(0)
     expect(stepIndex(mac, 'Set the soak deadline')).toBeLessThan(stepIndex(mac, 'candidate-scenarios.mjs run'))
+
+    expect(win[0]).toContain('name: Record the job start time')
+    const winDeadline = win[stepIndex(win, 'Set the soak deadline')]
+    expect(winDeadline).toContain('WIN_TIMEOUT_MINUTES: ${{ needs.guard.outputs.win_timeout_minutes }}')
+    expect(winDeadline).toContain("import { jobSafeDeadlineEpochMs } from './scripts/qa/soak/idle-soak.mjs'")
+    expect(winDeadline).toContain('timeoutMinutes: Number(process.env.WIN_TIMEOUT_MINUTES)')
+    expect(win[stepIndex(win, 'candidate-scenarios.mjs run')]).toContain('SOAK_DEADLINE_EPOCH_MS: ${{ steps.soak-deadline.outputs.epoch_ms }}')
+    expect(stepIndex(win, 'Record the job start time')).toBe(0)
+    expect(stepIndex(win, 'Set the soak deadline')).toBeLessThan(stepIndex(win, 'candidate-scenarios.mjs run'))
   })
 
   it('gives ex-suite a scenario step and job timeout that cover its 3 launches of at least 130 s plus boot, quit and the control', () => {
@@ -209,14 +250,16 @@ describe('candidate-scenarios.yml', () => {
     const options = block(block(block(lines, '    inputs:', 4), '      scenario:', 6), '        options:', 8).map((line) => line.trim())
     expect(options).toContain('- idle-soak')
     expect(options).toContain('- sidecar-boot-reaper')
-    expect(Object.keys(SCENARIOS['idle-soak'].platforms)).toEqual(['mac'])
+    expect(Object.keys(SCENARIOS['idle-soak'].platforms)).toEqual(['mac', 'win'])
     expect(Object.keys(SCENARIOS['sidecar-boot-reaper'].platforms)).toEqual(['mac', 'win'])
     expect(job('win')).toContain('    runs-on: windows-latest')
   })
 
-  it('keeps per-scenario timeouts in the registry and gives only idle-soak the long mac job', () => {
+  it('keeps per-scenario timeouts in the registry and gives idle-soak long hosted jobs', () => {
     expect(SCENARIOS['idle-soak'].platforms.mac.timeoutMinutes).toBe(355)
     expect(SCENARIOS['idle-soak'].platforms.mac.stepTimeoutMinutes).toBe(340)
+    expect(SCENARIOS['idle-soak'].platforms.win.timeoutMinutes).toBe(355)
+    expect(SCENARIOS['idle-soak'].platforms.win.stepTimeoutMinutes).toBe(340)
     expect(job('win')).toContain('    timeout-minutes: ${{ fromJSON(needs.guard.outputs.win_timeout_minutes) }}')
     const win = steps('win')
     expect(win[stepIndex(win, 'candidate-scenarios.mjs run')]).toContain(
