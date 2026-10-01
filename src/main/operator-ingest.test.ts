@@ -529,15 +529,14 @@ describe('fleet model policy scheduler', () => {
       policyClientMock.refreshModelPolicy.mockResolvedValueOnce({ changed: true, ok: true })
 
       startOperatorRuntime(() => SETTINGS, { onReadinessChanged })
-      await flushPromises()
-      await flushPromises()
-      // The first heartbeat's broadcast is never swallowed (entitlements may have changed).
-      expect(onReadinessChanged).toHaveBeenCalledTimes(1)
+      // The heartbeat drains the durable outbox through real file I/O, so wait for it rather than
+      // counting microtask turns. The first heartbeat's broadcast is never swallowed (entitlements may
+      // have changed).
+      await vi.waitFor(() => expect(onReadinessChanged).toHaveBeenCalledTimes(1))
 
       electronMock.app.emit('browser-window-focus')
-      await flushPromises()
+      await vi.waitFor(() => expect(onReadinessChanged).toHaveBeenCalledTimes(2))
       expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(2)
-      expect(onReadinessChanged).toHaveBeenCalledTimes(2)
     } finally {
       vi.useRealTimers()
     }

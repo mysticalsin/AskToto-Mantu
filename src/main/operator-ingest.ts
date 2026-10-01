@@ -38,6 +38,12 @@ if (HEARTBEAT_MS % POLICY_POLL_MS !== 0) {
 // Offline→online is detected within this window, well inside the 1 s immediate-refresh bound.
 const NETWORK_WATCH_MS = 500
 
+if (POLICY_POLL_MS % NETWORK_WATCH_MS !== 0) {
+  throw new Error('POLICY_POLL_MS must be divisible by NETWORK_WATCH_MS')
+}
+const POLICY_POLL_TICKS = POLICY_POLL_MS / NETWORK_WATCH_MS
+const HEARTBEAT_TICKS = HEARTBEAT_MS / NETWORK_WATCH_MS
+
 export interface OperatorRuntimeSettings {
   operatorUrl?: string
   operatorIngestSecret?: string
@@ -472,29 +478,27 @@ export function startOperatorRuntime(
   app.on('browser-window-focus', onFocus)
   app.on('activate', onActivate)
   powerMonitor.on('resume', onResume)
-  // Electron has no network-online event: watch the OS connectivity flag for an offline→online edge.
-  let wasOnline = net.isOnline()
-  const networkWatch = setInterval(() => {
-    const online = net.isOnline()
-    if (online && !wasOnline) pollPolicy('network-online')
-    wasOnline = online
-  }, NETWORK_WATCH_MS)
-  if (typeof networkWatch === 'object' && networkWatch && 'unref' in networkWatch) networkWatch.unref()
   policySignalUnsubscribers = [
     () => app.removeListener('browser-window-focus', onFocus),
     () => app.removeListener('activate', onActivate),
-    () => powerMonitor.removeListener('resume', onResume),
-    () => clearInterval(networkWatch)
+    () => powerMonitor.removeListener('resume', onResume)
   ]
   pollPolicy('startup')
   void tick()
-  // One timer at the policy cadence: every firing polls the policy, every second firing runs the heartbeat.
+  // One timer at the network-watch cadence: every firing checks the OS connectivity flag (Electron has no
+  // network-online event) for an offline→online edge, every POLICY_POLL_MS polls the policy, and every
+  // HEARTBEAT_MS runs the heartbeat.
+  let wasOnline = net.isOnline()
   let firings = 0
   heartbeatTimer = setInterval(() => {
-    pollPolicy('interval')
+    const online = net.isOnline()
+    if (online && !wasOnline) pollPolicy('network-online')
+    wasOnline = online
     firings += 1
-    if (firings % (HEARTBEAT_MS / POLICY_POLL_MS) === 0) void tick()
-  }, POLICY_POLL_MS)
+    if (firings % POLICY_POLL_TICKS !== 0) return
+    pollPolicy('interval')
+    if (firings % HEARTBEAT_TICKS === 0) void tick()
+  }, NETWORK_WATCH_MS)
   if (typeof heartbeatTimer === 'object' && heartbeatTimer && 'unref' in heartbeatTimer) {
     heartbeatTimer.unref()
   }
