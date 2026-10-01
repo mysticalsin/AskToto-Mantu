@@ -251,6 +251,8 @@ export type AuditEvent =
   | 'app.recovery'
   // FITO-185-E: 15s MQA-175 callback closed the boot watch (finally), whether brain resume ran or threw.
   | 'app.boot.watch_cleared'
+  // M2-0515: one native boot stage's own main-thread duration (tray stages, window construction and first show).
+  | 'app.boot.stage'
   // FITO-185-F: menu-bar Tray create succeeded/failed — hardprove AXExtrasMenuBar needs a diagnosable trail.
   | 'tray.created'
   | 'tray.failed'
@@ -323,6 +325,9 @@ export type AuditEvent =
   // floor was lifted during an HK-M row ({ modelId, advertisedGB, requiredGB, totalmemBytes }).
   | 'hk-m.setup-failed'
   | 'hk-m.ram-floor-override'
+  // M2-0494: the packaged QA build is feeding a WAV from its isolated profile as the microphone
+  // (main/qa-capture-source.ts). { active: true } only — never the path or file name.
+  | 'qa.capture.file_source'
   // M2-0482: the packaged, isolated-profile QA gate (qa-hk-m.ts qaHostFloorOverride) first lifted a RAM floor in this
   // process. Once per floor: { floor: "prewarm-available-ram" | "advertised-ram", hostTotalBytes, hostAvailableBytes }.
   | 'local.host-floor-override'

@@ -7,7 +7,14 @@ name: Windows QA
 # artifact only). It never builds the app, signs, publishes, tags, or changes release.yml.
 # Runs only from main, so the candidate is always an installer a qa-candidate.yml run built and hashed.
 #   gh workflow run windows-qa.yml --ref main -f suite=hk-w -f candidate_run=<run id> -f sha256=<Setup sha256>
+# The pull_request trigger on this file's own path only registers the workflow with GitHub (M2-0501): the
+# run it creates skips every job, uses no runner minutes and reaches no secret.
+run-name: ${{ github.event_name == 'pull_request' && 'Windows QA (registration)' || format('Windows QA {0}', inputs.suite) }}
+
 on:
+  pull_request:
+    paths:
+      - .github/workflows/windows-qa.yml
   workflow_dispatch:
     inputs:
       suite:
@@ -46,7 +53,7 @@ concurrency:
 jobs:
   hk-w:
     name: HK-W (Windows)
-    if: inputs.suite == 'hk-w' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' && inputs.suite == 'hk-w' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'
     runs-on: windows-latest
     timeout-minutes: 120
     permissions:

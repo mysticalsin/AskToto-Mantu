@@ -5,6 +5,8 @@ import {
   CURSOR_WATCH_INTERVAL_MS,
   OVERLAY_LEAVE_PARK_MS,
   RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS,
+  TOP_CENTER_REVEAL_DWELL_MS,
+  cursorRevealDwellMs,
   decideCursorWatch,
   overlayWatchNeedsRestore,
   overlayWatchShouldParkOnLeave,
@@ -15,6 +17,7 @@ import {
 } from './cursor-watch'
 import {
   HOVER_ISLAND_HEIGHT_MAX_PX,
+  TOP_CENTER_HOVER_HALF_WIDTH_PX,
   hoverWatchRestRect,
   islandSafeTop,
   rightEdgeSidecarBounds,
@@ -36,9 +39,13 @@ describe('cursor-in-rect (Mac Dynamic Island hover)', () => {
     expect(rest.y).toBe(0)
     expect(rest.height).toBe(tonyMac.workArea.y - tonyMac.bounds.y + 1)
     expect(rest.height).toBeLessThan(44)
-    expect(rest.width).toBe(tonyMac.workArea.width)
+    // Owner decision OD-23 (M2-0431): the notch area only, ±150 px around the bar's centre.
+    expect(rest.width).toBe(2 * TOP_CENTER_HOVER_HALF_WIDTH_PX)
+    expect(rest.x).toBe(900 - TOP_CENTER_HOVER_HALF_WIDTH_PX)
     expect(pointInRect({ x: 900, y: 12 }, rest)).toBe(true)
     expect(pointInRect({ x: 900, y: 200 }, rest)).toBe(false)
+    expect(pointInRect({ x: 24, y: 12 }, rest)).toBe(false)
+    expect(pointInRect({ x: 1770, y: 8 }, rest)).toBe(false)
   })
 
   it('revealed bar at y=39 stays open when the pointer is in the island (Y=12)', () => {
@@ -177,6 +184,9 @@ describe('cursor-in-rect (Mac Dynamic Island hover)', () => {
     expect(overlayWatchShouldParkOnLeave({ decision: 'hide', islandResting: false, osHoverSeen: false })).toBe(false)
     expect(OVERLAY_LEAVE_PARK_MS).toBeGreaterThanOrEqual(400)
     expect(OVERLAY_LEAVE_PARK_MS).toBeLessThanOrEqual(2000)
+    // M2-0431: the backstop outlasts the page's leave (AUTO_HIDE_GRACE_MS 500 + OVERLAY_HIDE_MS 280), so it
+    // never cuts the fade-out short.
+    expect(OVERLAY_LEAVE_PARK_MS).toBeGreaterThan(500 + 280)
     expect(pointInRect({ x: 900, y: 600 }, rest)).toBe(false)
     expect(pointInRect({ x: 900, y: 600 }, revealed)).toBe(false)
   })
@@ -197,11 +207,38 @@ describe('Hide top-edge hover: main-process step sequence (Ultron re-check)', ()
     expect(s).toEqual({ action: 'stay', osHoverSeen: false })
   })
 
-  it('top edge left / camera / right / first work-area row reveals from park and latches', () => {
-    for (const cursor of [{ x: 24, y: 12 }, { x: 900, y: 12 }, { x: 1770, y: 8 }, { x: 900, y: 0 }, { x: 24, y: tonyMac.workArea.y }]) {
+  it('notch area left / camera / right / first work-area row reveals from park and latches', () => {
+    for (const cursor of [{ x: 760, y: 12 }, { x: 900, y: 12 }, { x: 1040, y: 8 }, { x: 900, y: 0 }, { x: 900, y: tonyMac.workArea.y }]) {
       const s = overlayWatchStep({ cursor, restRect: rest, revealedRect: PARK, islandResting: true, windowVisible: true, osHoverSeen: false })
       expect(s).toEqual({ action: 'restore', osHoverSeen: true })
     }
+  })
+
+  it('OD-23: menu-bar positions outside the notch area never reveal from park', () => {
+    for (const cursor of [{ x: 24, y: 12 }, { x: 1770, y: 8 }, { x: 1253, y: 27 }, { x: 24, y: tonyMac.workArea.y }]) {
+      const s = overlayWatchStep({ cursor, restRect: rest, revealedRect: PARK, islandResting: true, windowVisible: true, osHoverSeen: false })
+      expect(s).toEqual({ action: 'stay', osHoverSeen: false })
+    }
+  })
+
+  it('OD-23: a revealed bar parks once the pointer goes to a status menu outside the notch area', () => {
+    const s = overlayWatchStep({ cursor: { x: 1700, y: 10 }, restRect: rest, revealedRect: ASK, islandResting: false, windowVisible: true, osHoverSeen: true })
+    expect(s).toEqual({ action: 'park', osHoverSeen: false })
+  })
+
+  it('M2-0431: a bar that collapses under a still pointer is not a leave; the pointer moving away is', () => {
+    const tall = { ...ASK, height: 576 }
+    const collapsed = { ...ASK, height: 144 }
+    const pointer = { x: 524, y: 194 }
+    const onTall = overlayWatchStep({ cursor: pointer, restRect: rest, revealedRect: tall, islandResting: false, windowVisible: true, osHoverSeen: true })
+    expect(onTall).toEqual({ action: 'stay', osHoverSeen: true })
+    const shrunk = { cursor: pointer, restRect: rest, revealedRect: collapsed, islandResting: false, windowVisible: true, osHoverSeen: true }
+    // Without the held pointer this is the owner's 09-29 park: 3 px past the 144 px bar plus its grace.
+    expect(overlayWatchStep(shrunk).action).toBe('park')
+    expect(overlayWatchStep({ ...shrunk, heldCursor: pointer })).toEqual({ action: 'stay', osHoverSeen: true })
+    expect(overlayWatchStep({ ...shrunk, cursor: { x: 524, y: 260 }, heldCursor: pointer }).action).toBe('park')
+    // Not latched (a reveal the pointer never visited): the held point never turns it into a main-owned stay.
+    expect(overlayWatchStep({ ...shrunk, osHoverSeen: false, heldCursor: pointer }).action).toBe('leave-ignored')
   })
 
   it('tray-hidden window still reveals from the top edge (showInactive path)', () => {
@@ -265,7 +302,9 @@ describe('Hide top-edge hover: main-process step sequence (Ultron re-check)', ()
     resting = true
     bounds = PARK
     expect(run(AWAY).action).toBe('stay')
-    expect(run({ x: 24, y: 12 }).action).toBe('restore')
+    // OD-23: the menu bar outside the notch area is not a re-hover; the notch area is.
+    expect(run({ x: 24, y: 12 }).action).toBe('stay')
+    expect(run({ x: 1000, y: 12 }).action).toBe('restore')
     expect(bounds).toEqual(ASK)
     expect(resting).toBe(false)
   })
@@ -368,5 +407,11 @@ describe('right-edge reveal band (owner report: right-edge Hide never revealed f
     expect(OVERLAY_LEAVE_PARK_MS).toBe(800)
     expect(CURSOR_REVEAL_DWELL_MS).toBe(150)
     expect(RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS).toBeGreaterThan(OVERLAY_LEAVE_PARK_MS)
+  })
+
+  it('OD-23: the top-center notch zone dwells 250 ms; the right-edge band keeps its 150 ms dwell', () => {
+    expect(TOP_CENTER_REVEAL_DWELL_MS).toBe(250)
+    expect(cursorRevealDwellMs('top-center')).toBe(TOP_CENTER_REVEAL_DWELL_MS)
+    expect(cursorRevealDwellMs('right-edge')).toBe(CURSOR_REVEAL_DWELL_MS)
   })
 })

@@ -107,7 +107,8 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
     expect(parked.backgroundColor).toBe(OVERLAY_TRANSPARENT_BACKGROUND)
     expect(parked.backgroundColor).toBe('#00000000')
     expect(parked.fullscreenable).toBe(false)
-    expect(parked.roundedCorners).toBe(true)
+    // M2-0526: borderless on macOS, so no hidden title strip can grow a parked frame.
+    expect(parked.roundedCorners).toBe(false)
     expect(exclusiveMayUseSimpleFullScreen(parked.transparent)).toBe(false)
   })
 

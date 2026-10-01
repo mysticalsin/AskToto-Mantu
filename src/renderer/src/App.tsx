@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState, lazy, Suspense, startTransition } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, lazy, Suspense, startTransition } from 'react'
 import { Bar } from './components/Bar'
 /** FITO-185-J: sync OnboardingV2 — exclusive Act 1 must not wait on a lazy chunk (DemoScene stays lazy inside Experience). */
 import { OnboardingV2 } from './components/OnboardingExperience'
@@ -74,6 +74,7 @@ import {
   circleRestSpringAfterCollapse,
   circleRestSpringAfterExpand,
   circleRestSpringClassName,
+  overlayHideParkedClassName,
   overlayShowPeek,
   overlaySpringAfterHide,
   overlaySpringAfterReveal,
@@ -804,7 +805,7 @@ export function App(): JSX.Element {
   const wasRevealedRef = useRef(overlaySurfaceRevealed)
   const overlayRevealedRef = useRef(overlaySurfaceRevealed)
   overlayRevealedRef.current = overlaySurfaceRevealed
-  useEffect(() => {
+  useLayoutEffect(() => { // in the reveal's own commit: the first painted frame is the in-spring at opacity 0
     if (!overlayIdle) {
       setOverlaySpring('rest')
       springIdleRef.current = false
@@ -892,16 +893,14 @@ export function App(): JSX.Element {
         // message as a new enter produces the visible close → reopen flash reported in device QA.
         if (rightEdgePresentation && shouldIgnoreRightEdgeNativeHover(rightEdgeDismissalLockRef.current, d.restoredFromParkedRail)) return
         if (rightEdgePresentation && d.restoredFromParkedRail) {
-          rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(
-            rightEdgeDismissalLockRef.current,
-            { type: 'native-hover-restored' }
-          )
+          rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'native-hover-restored' })
         }
         // Main restores the native drawer before it emits this fallback hover signal. Mirror the
         // ordinary pointer-enter path here so a deliberately parked edge dock cannot leave a
         // full-size transparent window behind a renderer-only rail.
         setRightEdgeDockDismissed(false)
-        dispatchAutoHide({ type: 'reveal-now' })
+        if (rightEdgePresentation) dispatchAutoHide({ type: 'reveal-now' })
+        else dispatchAutoHide({ type: 'reveal-now', native: true })
       } else {
         // Main parked the dock: always render the rail (draft kept); every reveal path clears the dismissal.
         if (d.parked && rightEdgePresentation) {
@@ -909,7 +908,7 @@ export function App(): JSX.Element {
           setRightEdgeDockDismissed(true)
           setOverlaySpring('rest')
         }
-        dispatchAutoHide({ type: 'pointer-leave' })
+        dispatchAutoHide({ type: 'pointer-leave', native: true })
       }
     })
   }, [rightEdgePresentation])
@@ -4076,6 +4075,7 @@ export function App(): JSX.Element {
           <div
             className={[
               overlayIdle ? overlaySpringClassName(overlaySpring, rightEdgePresentation ? 'right' : 'top') : circleRestSpringClassName(circleRestSpring),
+              overlayIdle && !rightEdgePresentation ? overlayHideParkedClassName(overlaySpring, overlaySurfaceRevealed, overlayRestsHidden(overlayLayout)) : '',
               // The drawer's own position is absolute. Keep this animation host full-height too so
               // percentage heights resolve to the 360×560 native sidecar rather than its empty flow box.
               rightEdgeDockVisible ? 'h-full' : ''

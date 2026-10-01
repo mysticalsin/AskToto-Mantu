@@ -20,7 +20,9 @@
  *     (meetings-storage.ts): gateways over different roots still run on the same pool.
  *   - A deadline or an abort releases the caller; the fs call keeps its permit until it settles.
  *   - Content is read only after the dataless detector says the bytes are on this device. 'dataless' and
- *     'unknown' files are never opened, and at most one detector probe runs at a time.
+ *     'unknown' files are never opened, and at most one detector probe runs at a time. The one exception is
+ *     a `hydrate` read: the user's explicit open of a single file, under a content permit. A `hydrate`
+ *     read refuses a non-regular file (FIFO, socket, device).
  *   - Paths are relative to the injected root and never leave it. A read resolves symlinks only after
  *     classification (on Windows, resolving a path opens the file) and reads the resolved path only if it
  *     lies inside the resolved root.
@@ -42,6 +44,8 @@ const RESERVED_POOL_THREADS = 2
 const METADATA_DEADLINE_MS = 2_000
 /** A local meeting or `.brain` file (a few MB at most) reads in milliseconds. */
 const CONTENT_DEADLINE_MS = 5_000
+/** An explicit open of one cloud-only file waits for the provider's download this long. */
+const HYDRATE_DEADLINE_MS = 60_000
 /** How long a read that returned no content is answered from memory, without touching the file. */
 const FAILURE_TTL_MS = 60_000
 /** Abort reason of a request's own deadline, which tells it apart from the caller's abort. */
@@ -61,8 +65,11 @@ export type ContentVersion = Omit<FileVersion, 'path'>
 /** 'ok': the bytes are on this device. 'dataless' | 'unknown': they may not be, so nothing reads them.
  *  `isSymlink` is the directory entry's own type, never the target's — a caller that treats a name as
  *  identity (e.g. promoting a draft-named file into History) must reject `isSymlink: true` rather than
- *  read through it, even though `read()` itself still follows in-root symlinks. */
-export type FileClass = { status: 'ok' | 'dataless' | 'unknown'; version: ContentVersion; isSymlink: boolean } | StorageFailure
+ *  read through it, even though `read()` itself still follows in-root symlinks. `isRegular` is the stat of
+ *  the target: a FIFO, socket or device is not a file to read, and a `hydrate` read refuses one. */
+export type FileClass =
+  | { status: 'ok' | 'dataless' | 'unknown'; version: ContentVersion; isSymlink: boolean; isRegular: boolean }
+  | StorageFailure
 
 export type ReadResult =
   | { status: 'ok'; version: ContentVersion; bytes: Buffer }
@@ -76,6 +83,17 @@ export interface RequestOptions {
   signal?: AbortSignal
 }
 
+/** What an explicit open reports while one cloud-only file downloads. */
+export type HydrationProgress = { state: 'hydrating' } | { state: 'done'; bytes: number }
+
+export interface ReadOptions extends RequestOptions {
+  /** A user-initiated open of this one file: skips the dataless check and reads it under a content permit,
+   *  waiting for the download for up to a minute. Never for a listing or a search. */
+  hydrate?: boolean
+  /** Called (never throwing into the gateway) as a `hydrate` read starts and ends. */
+  onProgress?: (progress: HydrationProgress) => void
+}
+
 export interface StorageGateway {
   /** The entry names of a directory under the root. */
   list(relDir: string, options?: RequestOptions): Promise<ListResult>
@@ -84,7 +102,7 @@ export interface StorageGateway {
   classify(relPaths: readonly string[], options?: RequestOptions): Promise<Map<string, FileClass>>
   /** A file's bytes, read only when they are on this device. Concurrent reads of one version share one fs
    *  call and one buffer: treat it as read-only. */
-  read(relPath: string, options?: RequestOptions): Promise<ReadResult>
+  read(relPath: string, options?: ReadOptions): Promise<ReadResult>
 }
 
 /** The fs calls the gateway makes; each is one libuv pool request. Injectable so tests can hold a call
@@ -93,7 +111,7 @@ export interface StorageFs {
   readdir(path: string): Promise<string[]>
   readFile(path: string): Promise<Buffer>
   realpath(path: string): Promise<string>
-  stat(path: string): Promise<{ mtimeMs: number; ctimeMs: number; size: number }>
+  stat(path: string): Promise<{ mtimeMs: number; ctimeMs: number; size: number; isFile?: () => boolean }>
   /** Unlike `stat`, never follows the final path component: the only way to tell a plain file apart
    *  from a symlink wearing its name (e.g. a symlink planted with a draft-shaped name that points at
    *  another meeting already inside the root — `stat`/`realpath`'s in-root check alone would not catch
@@ -115,6 +133,7 @@ export interface StorageGatewayOptions {
   admission?: Admission
 }
 
+type StatedFile = { file: FileVersion; regular: boolean }
 type Settled<T> = { status: 'ok'; value: T } | StorageFailure
 type Unread = Exclude<ReadResult, { status: 'ok' }>
 type LocalRead = { result: ReadResult; rememberUnavailable: boolean }
@@ -167,6 +186,14 @@ function failureOf(error: unknown): StorageFailure {
 
 function settle<T>(pending: Promise<T>): Promise<Settled<T>> {
   return pending.then((value): Settled<T> => ({ status: 'ok', value }), failureOf)
+}
+
+function reportProgress(onProgress: ReadOptions['onProgress'], progress: HydrationProgress): void {
+  try {
+    onProgress?.(progress)
+  } catch {
+    // a broken listener must not reject the read
+  }
 }
 
 function versionOf({ mtimeMs, ctimeMs, size }: FileVersion): ContentVersion {
@@ -280,11 +307,11 @@ export function createStorageGateway({
     return untilEnded(settle(admission.run(fsCall)), request, 'running')
   }
 
-  async function statFile(path: string, request: Request): Promise<Settled<FileVersion>> {
+  async function statFile(path: string, request: Request): Promise<Settled<StatedFile>> {
     const stats = await call('metadata', request, () => fs.stat(path))
     if (stats.status !== 'ok') return stats
-    const { mtimeMs, ctimeMs, size } = stats.value
-    return { status: 'ok', value: { path, mtimeMs, ctimeMs, size } }
+    const { mtimeMs, ctimeMs, size, isFile } = stats.value
+    return { status: 'ok', value: { file: { path, mtimeMs, ctimeMs, size }, regular: isFile ? isFile.call(stats.value) : true } }
   }
 
   /** Whether `path` names a symlink itself. Unreadable (settled failure) counts as a symlink: a caller
@@ -334,16 +361,25 @@ export function createStorageGateway({
     return untilEnded(reading, request, 'running')
   }
 
-  async function readLocal(base: string, path: string, request: Request): Promise<LocalRead> {
-    const file = await statFile(path, request)
-    if (file.status !== 'ok') return { result: file, rememberUnavailable: file.status === 'unavailable' }
-    const version = versionOf(file.value)
-    const presence = (await presenceWithin([file.value], request)).get(path)
-    if (request.signal.aborted) return { result: request.ended('waiting'), rememberUnavailable: false }
-    if (presence !== 'local') return { result: { status: presence ?? 'unknown', version }, rememberUnavailable: false }
+  async function readLocal(base: string, path: string, request: Request, { hydrate, onProgress }: ReadOptions): Promise<LocalRead> {
+    const stated = await statFile(path, request)
+    if (stated.status !== 'ok') return { result: stated, rememberUnavailable: stated.status === 'unavailable' }
+    // Only an explicit hydrate read refuses a FIFO, socket or device: it skips the detector, so nothing
+    // else stands between it and an open that no peer may ever answer. A plain read keeps the
+    // detector-first order (the K0-K2 tests and ST-1's FIFO row rely on it). Callers that must never open
+    // a non-regular file classify first and refuse it before they read.
+    if (hydrate && !stated.value.regular) return { result: { status: 'unavailable', code: 'NOT_REGULAR' }, rememberUnavailable: false }
+    const version = versionOf(stated.value.file)
+    if (!hydrate) {
+      const presence = (await presenceWithin([stated.value.file], request)).get(path)
+      if (request.signal.aborted) return { result: request.ended('waiting'), rememberUnavailable: false }
+      if (presence !== 'local') return { result: { status: presence ?? 'unknown', version }, rememberUnavailable: false }
+    }
     const real = await resolveInside(base, path, request)
     if (real.status !== 'ok') return { result: real, rememberUnavailable: false }
+    if (hydrate) reportProgress(onProgress, { state: 'hydrating' })
     const bytes = await readShared(real.value, version, request)
+    if (hydrate && bytes.status === 'ok') reportProgress(onProgress, { state: 'done', bytes: bytes.value.length })
     return { result: bytes.status === 'ok' ? { status: 'ok', version, bytes: bytes.value } : bytes, rememberUnavailable: false }
   }
 
@@ -379,20 +415,22 @@ export function createStorageGateway({
       const request = openRequest(METADATA_DEADLINE_MS, signal)
       try {
         const stats = await Promise.all(
-          relPaths.map(async (rel): Promise<[string, Settled<FileVersion>, boolean]> => {
+          relPaths.map(async (rel): Promise<[string, Settled<StatedFile>, boolean]> => {
             const path = underRoot(base, rel)
             if (!path) return [rel, outsideRoot(), true]
             const [file, link] = await Promise.all([statFile(path, request), isSymlink(path, request)])
             return [rel, file, link]
           })
         )
-        const files = stats.flatMap(([, file]) => (file.status === 'ok' ? [file.value] : []))
+        // A non-regular entry never reaches the detector: it is not a file whose presence can be probed.
+        const files = stats.flatMap(([, file]) => (file.status === 'ok' && file.value.regular ? [file.value.file] : []))
         const presence = files.length > 0 ? await presenceWithin(files, request) : new Map<string, ContentPresence>()
         return new Map(
           stats.map(([rel, file, link]): [string, FileClass] => {
             if (file.status !== 'ok') return [rel, file]
-            const verdict = presence.get(file.value.path)
-            return [rel, { status: verdict === 'local' ? 'ok' : (verdict ?? 'unknown'), version: versionOf(file.value), isSymlink: link }]
+            const verdict = presence.get(file.value.file.path)
+            const status = verdict === 'local' ? 'ok' : (verdict ?? 'unknown')
+            return [rel, { status, version: versionOf(file.value.file), isSymlink: link, isRegular: file.value.regular }]
           })
         )
       } finally {
@@ -400,18 +438,22 @@ export function createStorageGateway({
       }
     },
 
-    async read(relPath, { signal } = {}) {
+    async read(relPath, options = {}) {
+      const { signal, hydrate } = options
       const current = currentRoot()
       if (current.status !== 'ok') return current
       const base = current.root
       const path = underRoot(base, relPath)
       if (!path) return outsideRoot()
-      const remembered = failures.get(path)
+      const remembered = hydrate ? undefined : failures.get(path)
       if (remembered && remembered.expiresAt > performance.now()) return remembered.result
-      const request = openRequest(CONTENT_DEADLINE_MS, signal)
+      const request = openRequest(hydrate ? HYDRATE_DEADLINE_MS : CONTENT_DEADLINE_MS, signal)
       try {
-        const { result, rememberUnavailable } = await readLocal(base, path, request)
-        if (result.status !== 'ok' && (REMEMBERED.has(result.status) || (rememberUnavailable && result.status === 'unavailable'))) remember(path, result)
+        const { result, rememberUnavailable } = await readLocal(base, path, request, options)
+        // An explicit open answers for itself: its timeout says nothing about a later listing. Its success
+        // does: the bytes are now here, so a remembered 'dataless' must stop answering for this file.
+        if (hydrate && result.status === 'ok') failures.delete(path)
+        if (!hydrate && result.status !== 'ok' && (REMEMBERED.has(result.status) || (rememberUnavailable && result.status === 'unavailable'))) remember(path, result)
         return result
       } finally {
         request.close()
