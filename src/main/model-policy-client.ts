@@ -136,22 +136,34 @@ export function getActiveModelPolicy(settings: ModelPolicyClientSettings): Model
  */
 export async function refreshModelPolicy(settings: ModelPolicyClientSettings, now: number = Date.now()): Promise<boolean> {
   void now
-  const before = getActiveModelPolicy(settings)
-  await fetchAndApplyModelPolicy(settings)
-  return getActiveModelPolicy(settings)?.version !== before?.version
+  return (await refreshModelPolicyChecked(settings)).changed
 }
 
-async function fetchAndApplyModelPolicy(settings: ModelPolicyClientSettings): Promise<void> {
+/** Like `refreshModelPolicy`, but also reports whether the Operator was actually reached: `ok: false`
+ *  is a transport, HTTP or malformed-body failure the caller should retry soon. A definite answer —
+ *  including a rejected (unsigned/invalid) policy or an unconfigured Operator — is `ok: true`. */
+export async function refreshModelPolicyChecked(
+  settings: ModelPolicyClientSettings,
+  source?: string
+): Promise<{ changed: boolean; ok: boolean }> {
+  const before = getActiveModelPolicy(settings)
+  const ok = await fetchAndApplyModelPolicy(settings, source)
+  return { changed: getActiveModelPolicy(settings)?.version !== before?.version, ok }
+}
+
+async function fetchAndApplyModelPolicy(settings: ModelPolicyClientSettings, source?: string): Promise<boolean> {
   const url = resolveOperatorBaseUrl(settings)
   const secret = resolveOperatorCredential(settings)
-  if (!url || !secret) return
+  if (!url || !secret) return true
   ensureLoadedFromDisk(secret)
   const machineId = getDurableMachineId()
-  if (!machineId) return
+  if (!machineId) return true
   let res: Response
   try {
     const deviceId = hashOperatorId(machineId)
     const headers = operatorHmacHeaders(secret, deviceId, '')
+    // Diagnostic only (not signed): lets QA tell a timer poll from an immediate signal.
+    if (source) headers['x-metis-policy-refresh-source'] = source
     res = await fetchImpl(`${url}/v1/model-policy`, {
       method: 'GET',
       headers,
@@ -160,7 +172,7 @@ async function fetchAndApplyModelPolicy(settings: ModelPolicyClientSettings): Pr
     })
   } catch (e) {
     mainLog.warn('[model-policy] fetch threw:', e)
-    return
+    return false
   }
   const text = await res.text().catch(() => '')
   const inspected = inspectBundleResponse({
@@ -172,16 +184,16 @@ async function fetchAndApplyModelPolicy(settings: ModelPolicyClientSettings): Pr
   })
   if (!inspected.ok || !res.ok) {
     mainLog.warn(`[model-policy] fetch failed: ${res.status}`)
-    return
+    return false
   }
   let json: unknown
   try {
     json = JSON.parse(text)
   } catch {
-    return
+    return false
   }
   const body = json as { ok?: boolean; policy?: unknown; signature?: unknown; issuedAt?: unknown }
-  if (body.ok !== true) return
+  if (body.ok !== true) return true
   if (body.policy === null) {
     // "Not managed" only clears a held policy when the Operator signed it, and only when it is newer
     // than that policy — an unsigned, forged or replayed reply must never switch enforcement off.
@@ -191,22 +203,23 @@ async function fetchAndApplyModelPolicy(settings: ModelPolicyClientSettings): Pr
       !verifyPayloadLocal(secret, canonicalUnmanagedModelPolicyPayload(unmanaged.data.issuedAt), unmanaged.data.signature)
     ) {
       if (currentPolicy) auditLog('operator.model_policy.rejected', { reason: 'unmanaged-signature' })
-      return
+      return true
     }
     if (currentPolicy && unmanaged.data.issuedAt > currentPolicy.version) clearCache()
-    return
+    return true
   }
   const parsed = SignedModelPolicySchema.safeParse({ policy: body.policy, signature: body.signature })
   if (!parsed.success) {
     auditLog('operator.model_policy.rejected', { reason: 'schema' })
-    return
+    return true
   }
   if (!verifySignatureLocal(secret, parsed.data.policy, parsed.data.signature)) {
     auditLog('operator.model_policy.rejected', { reason: 'signature' })
-    return
+    return true
   }
   currentPolicy = parsed.data.policy
   writeCache(parsed.data.policy, parsed.data.signature)
+  return true
 }
 
 /** Same `string[] | null` shape every eligibility/failover check already threads through — narrows an

@@ -31,6 +31,7 @@ import {
   OV_STABLE_PATH_MS,
   overlayStablePath,
   overlaySurfaceChanges,
+  pinnedBridgeCall,
   rightEdgeExpectedRects,
   rightEdgeHideParkMatches,
   rightEdgeStateMatches,
@@ -1143,5 +1144,48 @@ describe('bootLaunchActivateVerdict', () => {
 
   it('is PRECONDITION when the renderer never became ready', () => {
     expect(bootLaunchActivateVerdict({ ...passing, rendererReady: false }).status).toBe('PRECONDITION')
+  })
+})
+
+describe('pinnedBridgeCall (M2-0519)', () => {
+  const scope = globalThis as unknown as { window?: unknown; __metisSmokeBridgePending?: Set<Promise<unknown>> }
+
+  function bridgeWith(toggle: (...args: unknown[]) => Promise<unknown>): void {
+    scope.window = { toto: { toggle } }
+    delete scope.__metisSmokeBridgePending
+  }
+
+  it('keeps the pending bridge call reachable from the page until it settles, and returns nothing', async () => {
+    let settle: (value: unknown) => void = () => undefined
+    const bridged = new Promise((resolve) => {
+      settle = resolve
+    })
+    const seen: unknown[][] = []
+    bridgeWith((...args) => {
+      seen.push(args)
+      return bridged
+    })
+    try {
+      const call = pinnedBridgeCall(['toggle', ['a', 1]])
+      expect(seen).toEqual([['a', 1]])
+      expect([...(scope.__metisSmokeBridgePending ?? [])]).toEqual([bridged])
+      settle({ visible: true })
+      await expect(call).resolves.toBeUndefined()
+      expect(scope.__metisSmokeBridgePending?.size).toBe(0)
+    } finally {
+      delete scope.window
+      delete scope.__metisSmokeBridgePending
+    }
+  })
+
+  it('rejects with the bridge call’s error and still releases it', async () => {
+    bridgeWith(() => Promise.reject(new Error('no window')))
+    try {
+      await expect(pinnedBridgeCall(['toggle', []])).rejects.toThrow('no window')
+      expect(scope.__metisSmokeBridgePending?.size).toBe(0)
+    } finally {
+      delete scope.window
+      delete scope.__metisSmokeBridgePending
+    }
   })
 })

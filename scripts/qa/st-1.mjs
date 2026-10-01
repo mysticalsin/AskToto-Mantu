@@ -46,14 +46,19 @@
  *       [--purpose window-construction --window-variant <variant>]
  *
  * `--purpose window-construction` marks a short launch made only to measure the boot window's constructor under
- * one QA-identity rendering variant (shipped, spellcheck-off, paint-when-hidden, prewarm-spellchecker,
- * prewarm-view), passed to the candidate as METIS_QA_WINDOW_VARIANT. Its report says `st1Evidence: false` and is
+ * one QA-identity rendering variant (shipped, spellcheck-off, paint-when-hidden, prewarm-spellchecker), passed to
+ * the candidate as METIS_QA_WINDOW_VARIANT. Its report says `st1Evidence: false` and is
  * never ST-1 evidence. Every other run launches the shipped variant.
  *
  * Every in-app wait is bounded and every failure to answer is recorded in the report's `errors` (step, tMs,
  * message) while the run continues: only the criteria decide PASS or FAIL. The report is rewritten every
  * 30 s while the run lasts and once more however it ends, so the report directory always holds one; a run
  * that stopped early says INCOMPLETE.
+ *
+ * `--gate-window <dir> [--out <gate.json>]` launches nothing: it reads every window-construction report one folder
+ * below `<dir>` and applies the window-construction gate (M2-0519): every shipped createWindow.prewarm and
+ * createWindow.construct, in both chromes, present and under 250 ms. It prints and writes the gate, and exits 1
+ * when the gate fails.
  *
  * Exit codes: 0 PASS, 1 FAIL, NOT_EXERCISED or INCOMPLETE, 2 usage.
  */
@@ -95,6 +100,7 @@ import {
   runPurpose,
   shouldProbeHistory,
   timedCallsExpression,
+  windowConstructionGate,
   withTimeout
 } from './lib/st-1-core.mjs'
 
@@ -731,8 +737,45 @@ function cleanup({ kind, root, profile, unzipDir, witnessFile }) {
   if (unzipDir) rmSync(unzipDir, { recursive: true, force: true })
 }
 
+/** Every report one folder below `dir` (`<dir>/<run>/<run>.json`), each named by its path relative to `dir`. A
+ *  file that does not parse is skipped; the gate then finds its stages missing. */
+function readWindowReports(dir) {
+  const reports = []
+  for (const run of readdirSync(dir, { withFileTypes: true })) {
+    if (!run.isDirectory()) continue
+    for (const file of readdirSync(join(dir, run.name))) {
+      if (!file.endsWith('.json')) continue
+      try {
+        reports.push({ name: join(run.name, file), report: JSON.parse(readFileSync(join(dir, run.name, file), 'utf8')) })
+      } catch {
+        /* not a report */
+      }
+    }
+  }
+  return reports
+}
+
+/** The window-construction gate over a report directory: 0 when it passes, 1 when it fails. */
+function gateWindow(dir, out) {
+  const gate = { harness: 'ST-1', gate: 'window-construction', ...windowConstructionGate(existsSync(dir) ? readWindowReports(dir) : []) }
+  if (out) {
+    mkdirSync(dirname(out), { recursive: true })
+    writeFileSync(out, `${JSON.stringify(gate, null, 2)}\n`)
+  }
+  console.log(JSON.stringify(gate, null, 2))
+  for (const failure of gate.failures) console.error(`[st-1] window gate FAIL — ${failure}`)
+  return gate.pass ? 0 : 1
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2), { minutes: String(DEFAULT_MINUTES) })
+  if (args.gateWindow !== undefined) {
+    if (args.gateWindow === 'true') {
+      console.error('usage: node scripts/qa/st-1.mjs --gate-window <report dir> [--out <gate.json>]')
+      return 2
+    }
+    return gateWindow(args.gateWindow, args.out)
+  }
   if (!args.installer || !args.provenance || !args.fixtures) {
     console.error('usage: node scripts/qa/st-1.mjs --installer <path> --provenance <path> --fixtures fifo|dataless|synthetic-dataless|none [options]')
     return 2

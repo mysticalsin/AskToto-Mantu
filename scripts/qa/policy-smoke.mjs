@@ -5,8 +5,8 @@
  * the production Worker and `src/main/model-policy-client.ts` — see src/shared/model-policy.ts),
  * launches the installed packaged app pointed at it via `METIS_OPERATOR_URL`/
  * `METIS_OPERATOR_INGEST_SECRET`, and proves the running app's cached fleet model policy switches to
- * a NEW version the test Operator starts serving mid-run, within 60 s, through nothing but its own
- * 30s policy poll — never a restart, never a fake result.
+ * a NEW version the test Operator starts serving mid-run, within 45 s, through its policy scheduler
+ * or an immediate Operator heartbeat hint — never a restart, never a fake result.
  *
  * TLS: the app's Operator client only ever accepts `https://` (resolveOperatorBaseUrl), so the test
  * Operator needs a real certificate even though it is local-only. Minted on the fly with the `openssl`
@@ -37,9 +37,13 @@ const CACHE_FILE = 'model-policy-cache.json'
 // One heartbeat cycle (<=60s per M2-0412 acceptance) plus generous boot jitter for a cold packaged
 // launch on a shared hosted runner.
 const FIRST_APPLY_TIMEOUT_MS = 90_000
-// The acceptance bound itself (<=60s) plus a small margin for the poll granularity below.
-const SWITCH_TIMEOUT_MS = 65_000
+const POLICY_POLL_INTERVAL_MS = 30_000
+const SWITCH_BOUND_MS = 45_000
+// M2-0432: acceptance requires margin below the former 60s bound.
+const SWITCH_TIMEOUT_MS = SWITCH_BOUND_MS
 const POLL_MS = 2_000
+// Refresh sources the app emits for its own timers; every other source is an immediate signal.
+const TIMER_POLL_SOURCES = new Set(['interval', 'failure-backoff', 'startup'])
 
 class Precondition extends Error {}
 class BlockedExternal extends Error {}
@@ -104,19 +108,29 @@ function mintSelfSignedCert(dir) {
  *  is to be a correctly-signed, mutable source the packaged app polls. */
 function startTestOperator(tls) {
   const state = { current: policyDoc(1, 'anthropic', 'claude-haiku-4-5-20251001') }
+  const policyFetches = []
+  const heartbeats = []
   const server = createHttpsServer(tls, (req, res) => {
     res.setHeader('content-type', 'application/json')
     if (req.url === '/v1/model-policy' && req.method === 'GET') {
       const policy = state.current
+      // The app labels each refresh with what triggered it (timer poll vs focus/resume/network/Operator hint).
+      policyFetches.push({
+        ts: Date.now(),
+        version: policy.version,
+        source: String(req.headers['x-metis-policy-refresh-source'] ?? 'unknown')
+      })
       res.end(JSON.stringify({ ok: true, policy, signature: sign(policy) }))
       return
     }
     if (req.url === '/v1/heartbeat' && req.method === 'POST') {
+      heartbeats.push(Date.now())
       req.resume()
       req.on('end', () => {
         res.end(JSON.stringify({
           ok: true,
           retry: [],
+          modelPolicyVersion: state.current.version,
           fundedProviders: [],
           approved: true,
           tier: 'metis-light',
@@ -131,7 +145,7 @@ function startTestOperator(tls) {
     req.resume()
     res.end(JSON.stringify({ ok: true }))
   })
-  return { server, state }
+  return { server, state, policyFetches, heartbeats }
 }
 
 function readCachedPolicyVersion(profile) {
@@ -200,7 +214,7 @@ async function main() {
     certDir = mkdtempSync(join(tmpdir(), 'policy-smoke-cert-'))
     const tls = mintSelfSignedCert(certDir)
     const port = await freeLoopbackPort()
-    const { server, state } = startTestOperator(tls)
+    const { server, state, policyFetches, heartbeats } = startTestOperator(tls)
     httpsServer = server
     await new Promise((resolve, reject) => {
       server.once('error', reject)
@@ -234,8 +248,23 @@ async function main() {
     }
 
     // Change the policy on the test Operator mid-run — no restart, no re-launch.
+    const lastPolicyFetchBeforeSwitch = policyFetches.at(-1)?.ts ?? null
+    const switchStartedAt = Date.now()
     state.current = policyDoc(2, 'openai', 'gpt-5')
     const switchMs = await waitForVersion(profile, 2, SWITCH_TIMEOUT_MS)
+    // The fetch that delivered version 2, and the trigger the app itself reported for it.
+    const switchingFetch = policyFetches.find((fetch) => fetch.ts >= switchStartedAt && fetch.version === 2) ?? null
+    const firstHeartbeatAfterSwitch = heartbeats.find((ts) => ts >= switchStartedAt) ?? null
+    const policyFetchGapMs = switchingFetch !== null && lastPolicyFetchBeforeSwitch !== null
+      ? switchingFetch.ts - lastPolicyFetchBeforeSwitch
+      : null
+    const heartbeatToPolicyFetchMs = switchingFetch !== null && firstHeartbeatAfterSwitch !== null
+      ? switchingFetch.ts - firstHeartbeatAfterSwitch
+      : null
+    const switchTrigger = switchingFetch?.source ?? null
+    const switchSource = switchTrigger === null
+      ? null
+      : TIMER_POLL_SOURCES.has(switchTrigger) ? 'poll' : 'immediate-signal'
 
     report(reportPath, {
       ok: switchMs !== null,
@@ -243,15 +272,20 @@ async function main() {
       platform,
       firstApplyMs,
       switchMs,
-      switchBoundMs: 60_000,
+      switchBoundMs: SWITCH_BOUND_MS,
+      pollIntervalMs: POLICY_POLL_INTERVAL_MS,
+      switchSource,
+      switchTrigger,
+      policyFetchGapMs,
+      heartbeatToPolicyFetchMs,
       // Observed: the verified policy version the running app cached. NOT observed: the model an ask then
       // used — the packaged app exposes no non-interactive ask hook and an ask needs a live provider
       // credential (BLOCKED_EXTERNAL; the per-call routing is covered by the desktop unit/contract tests).
       evidence: 'cached-policy-version',
       modelUsedObserved: false,
-      passed: switchMs !== null && switchMs <= 60_000
+      passed: switchMs !== null && switchMs <= SWITCH_BOUND_MS
     })
-    process.exit(switchMs !== null && switchMs <= 60_000 ? 0 : 1)
+    process.exit(switchMs !== null && switchMs <= SWITCH_BOUND_MS ? 0 : 1)
   } catch (e) {
     if (e instanceof BlockedExternal) {
       report(reportPath, { ok: true, row: 'POLICY-01', blockedExternal: true, reason: e.message })

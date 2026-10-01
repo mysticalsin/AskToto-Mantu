@@ -653,7 +653,7 @@ import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
 import { buildTrayInStages, createSingleFlight, formatTrayAccelerator, loadPresizedTrayIcon, scheduleTrayAfterFirstPaint, trayIconPaths, yieldToEventLoop } from './boot-tray'
-import { BOOT_WINDOW_OPTIONS, BOOT_WINDOW_VARIANT, yieldBeforeBootWindow } from './boot-window-rendering'
+import { BOOT_WINDOW_OPTIONS, BOOT_WINDOW_VARIANT, takeBootWindowPrewarmMs, yieldBeforeBootWindow } from './boot-window-rendering'
 import { isBootFirstShowDeferred, navigateWindow, scheduleCurrentFirstShow, withBootFirstShowDeferred } from './lifecycle/first-show'
 import { createBootWork } from './lifecycle/boot-work'
 import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
@@ -2729,6 +2729,8 @@ function createWindow(targetDisplay?: Electron.Display): void {
     ...BOOT_WINDOW_OPTIONS.window // M2-0516: a QA-identity-only variant's values; none in every shipping build
   })
   observability?.recordBootStage('createWindow.construct', performance.now() - constructStartedMs, { transparent: chrome.transparent, windowVariant: BOOT_WINDOW_VARIANT })
+  const prewarmMs = takeBootWindowPrewarmMs() // M2-0519: the boot prewarm ran before observability started; recorded once
+  if (prewarmMs !== null) observability?.recordBootStage('createWindow.prewarm', prewarmMs, { transparent: chrome.transparent, windowVariant: BOOT_WINDOW_VARIANT })
   ensureMetisCommandRuntime({
     getSettings,
     commandControl,
@@ -4159,10 +4161,7 @@ function visionCheckContextFromSettings(): import('@shared/screen-capture-check'
 }
 
 /** Isolated vision ask for the Settings self-check. Never askStart, never overlay chat, never a teammate push. */
-function askVisionForScreenCheck(
-  backend: 'local' | 'api',
-  image: string
-): Promise<{ text: string; label: string }> {
+function askVisionForScreenCheck(backend: 'local' | 'api', image: string): Promise<{ text: string; label: string }> {
   const s = getSettings()
   const req: AskStart = {
     id: `screen-check-${Date.now()}`,
@@ -4172,6 +4171,9 @@ function askVisionForScreenCheck(
     history: []
   }
   if (backend === 'local') {
+    if (!localModelAllowedByPolicy(getActiveModelPolicy(s), s.localLlm.modelId)) {
+      return Promise.reject(new Error('The selected provider is not allowed by the fleet model policy.'))
+    }
     return collectVisionStream((handlers) =>
       createStream({
         providerId: 'local',
