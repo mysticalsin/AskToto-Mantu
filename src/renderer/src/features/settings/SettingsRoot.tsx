@@ -10,7 +10,7 @@ import {
   type ReactNode
 } from 'react'
 import type { NavigationGuardService } from '../../lib/navigation-guard'
-import { TapControlCard } from './TapControlCard'
+import { TapControlCard } from '../../components/TapCalibration'
 import { PersonalizeModes } from './PersonalizeModes'
 import { IntelligenceTab } from './IntelligenceTab'
 import { OperatorLicenseCard } from './OperatorLicenseCard'
