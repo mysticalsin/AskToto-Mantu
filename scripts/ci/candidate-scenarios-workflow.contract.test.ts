@@ -47,9 +47,10 @@ const stepIndex = (all: string[], fragment: string) => {
 }
 
 describe('candidate-scenarios.yml', () => {
-  it('is dispatched by hand only, with the candidate run, a scenario choice and one sha256 per platform', () => {
+  it('self-registers on pull requests and dispatches by hand with the candidate run, a scenario choice and one sha256 per platform', () => {
     const on = block(lines, 'on:', 0).filter((line) => /^ {2}\S/.test(line))
-    expect(on).toEqual(['  workflow_dispatch:'])
+    expect(on).toEqual(['  pull_request:', '  workflow_dispatch:'])
+    expect(block(lines, '  pull_request:', 2)).toEqual(['    paths:', '      - .github/workflows/candidate-scenarios.yml'])
     const inputs = block(lines, '    inputs:', 4)
     expect(inputs.filter((line) => /^ {6}\S/.test(line)).map((line) => line.trim())).toEqual([
       'candidate_run:',
@@ -58,7 +59,8 @@ describe('candidate-scenarios.yml', () => {
       'win_sha256:'
     ])
     expect(block(inputs, '      candidate_run:', 6)).toContain('        required: true')
-    expect(workflow).toMatch(/^run-name: .*\$\{\{ inputs\.scenario \}\}.*\$\{\{ inputs\.candidate_run \}\}$/m)
+    expect(workflow).toContain("'Candidate scenarios (registration)'")
+    expect(workflow).toContain("format('Candidate scenario {0} on {1}', inputs.scenario, inputs.candidate_run)")
   })
 
   it('offers exactly the registry scenarios as choices', () => {
@@ -78,7 +80,7 @@ describe('candidate-scenarios.yml', () => {
 
   it('guards on this repository and main, and refuses any run that is not a qa-candidate.yml dispatch on main', () => {
     const guard = job('guard')
-    const repositoryGuard = "if: github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'"
+    const repositoryGuard = "if: github.event_name == 'workflow_dispatch' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'"
     expect(guard).toContain(`    ${repositoryGuard}`)
     expect(read('qa-candidate.yml')).toContain("github.repository == 'mysticalsin/AskToto-Mantu'")
     // qa-candidate.yml builds on main and release/1.9.x only; this lane stays narrower and takes main candidates only.
@@ -101,7 +103,7 @@ describe('candidate-scenarios.yml', () => {
     for (const platform of platforms) {
       const body = job(platform)
       expect(body).toContain('    needs: guard')
-      expect(body).toContain(`    if: needs.guard.outputs.${platform} == 'true'`)
+      expect(body).toContain(`    if: github.event_name == 'workflow_dispatch' && needs.guard.outputs.${platform} == 'true'`)
       expect(body).toContain(`    runs-on: ${RUNNER_LABELS[platform as keyof typeof RUNNER_LABELS]}`)
       expect(block(job('guard'), '    outputs:', 4).join('\n')).toContain(`${platform}_sha256: \${{ steps.resolve.outputs.${platform}_sha256 }}`)
     }
@@ -115,17 +117,26 @@ describe('candidate-scenarios.yml', () => {
       'jq -r .run.id provenance/provenance.json',
       'node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" mac',
       'codesign --verify --deep --strict',
+      'echo "path=$app" >> "$GITHUB_OUTPUT"',
       'candidate-scenarios.mjs profile',
       'candidate-scenarios.mjs run'
     ].map((fragment) => stepIndex(mac, fragment))
     expect(order).toEqual([...order].sort((a, b) => a - b))
     const install = mac[stepIndex(mac, 'codesign')]
-    expect(install).toContain('target="$RUNNER_TEMP/candidate-install"')
+    expect(install).toContain('id: install')
+    expect(install).toContain('target="candidate-install"')
+    expect(install).toContain('rm -rf "$target"')
     expect(install).toContain('mkdir "$target"')
+    expect(install).toContain('volume="$RUNNER_TEMP/candidate-volume"')
     expect(install).toContain('hdiutil attach')
     expect(install).toContain('ditto -x -k "$INSTALLER" "$target"')
+    expect(install).toContain('echo "app=$app" >> "$GITHUB_OUTPUT"')
     expect(mac[stepIndex(mac, '--name "$ARTIFACT"')]).toContain('gh run download "$CANDIDATE_RUN"')
     expect(job('mac')).toContain('      ARTIFACT: ${{ needs.guard.outputs.mac_artifact }}')
+    const run = mac[stepIndex(mac, 'candidate-scenarios.mjs run')]
+    expect(run).toContain('INSTALLER: ${{ steps.installer.outputs.path }}')
+    expect(run).toContain('APP: ${{ steps.install.outputs.app }}')
+    expect(run).toContain('--app "$APP"')
   })
 
   it('uploads the lane artifact on every run and fails only after the upload', () => {
@@ -151,5 +162,75 @@ describe('candidate-scenarios.yml', () => {
     const verdict = mac[upload + 1]
     expect(verdict).toContain("if: always() && (steps.scenario.outcome != 'success' || steps.scan.outcome != 'success')")
     expect(verdict).toContain('exit 1')
+  })
+
+  it('offers sidecar-boot-reaper, which runs on both the macOS and the Windows job', () => {
+    const options = block(block(block(lines, '    inputs:', 4), '      scenario:', 6), '        options:', 8).map((line) => line.trim())
+    expect(options).toContain('- sidecar-boot-reaper')
+    expect(Object.keys(SCENARIOS['sidecar-boot-reaper'].platforms)).toEqual(['mac', 'win'])
+    expect(job('win')).toContain('    runs-on: windows-latest')
+  })
+
+  it('hands the installed app to the scenario on macOS', () => {
+    const mac = steps('mac')
+    const install = mac[stepIndex(mac, 'codesign --verify --deep --strict')]
+    expect(install).toContain('id: install')
+    expect(install).toContain('echo "app=$app" >> "$GITHUB_OUTPUT"')
+    const scenario = mac[stepIndex(mac, 'candidate-scenarios.mjs run')]
+    expect(scenario).toContain('APP: ${{ steps.install.outputs.app }}')
+    expect(scenario).toContain('--app "$APP"')
+  })
+
+  it('installs the verified Setup selected by win_sha256 silently into a fresh directory before the scenario on Windows', () => {
+    const win = steps('win')
+    const order = [
+      '--name candidate-provenance',
+      'node scripts/qa/provenance.mjs verify provenance/provenance.json assets "$VARIANT"',
+      "require('./provenance/provenance.json').run.id",
+      'node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" win',
+      "'/S', \"/D=$target\"",
+      'candidate-scenarios.mjs profile --scenario "$SCENARIO" --platform win',
+      'candidate-scenarios.mjs run'
+    ].map((fragment) => stepIndex(win, fragment))
+    expect(order).toEqual([...order].sort((a, b) => a - b))
+    expect(job('win')).toContain('      INSTALLER_SHA256: ${{ needs.guard.outputs.win_sha256 }}')
+    expect(job('win')).toContain('      ARTIFACT: ${{ needs.guard.outputs.win_artifact }}')
+    expect(win[stepIndex(win, '--name "$ARTIFACT"')]).toContain('gh run download "$CANDIDATE_RUN"')
+
+    const install = win[stepIndex(win, "'/S', \"/D=$target\"")]
+    expect(install).toContain('id: install')
+    expect(install).toContain('shell: pwsh')
+    expect(install).toContain("$target = Join-Path $env:RUNNER_TEMP 'candidate-install'")
+    expect(install).toContain('New-Item -ItemType Directory -Path $target')
+    expect(install).toContain('-Wait -PassThru')
+    expect(install).toContain('if ($install.ExitCode -ne 0)')
+    expect(install).toContain("$app = Join-Path $target 'Metis.exe'")
+    expect(install).toContain('Add-Content -Path $env:GITHUB_OUTPUT -Value "app=$app"')
+
+    const scenario = win[stepIndex(win, 'candidate-scenarios.mjs run')]
+    expect(scenario).toContain('--platform win')
+    expect(scenario).toContain('APP: ${{ steps.install.outputs.app }}')
+    expect(scenario).toContain('--app "$APP"')
+  })
+
+  it('uploads the Windows lane artifact on every run and fails only after the upload', () => {
+    const win = steps('win')
+    const scenario = win[stepIndex(win, 'candidate-scenarios.mjs run')]
+    expect(scenario).toContain('id: scenario')
+    expect(scenario).toContain('continue-on-error: true')
+    const scan = win[stepIndex(win, 'candidate-scenarios.mjs scan')]
+    expect(scan).toContain('id: scan')
+    expect(scan).toContain('if: always()')
+    expect(scan).toContain('continue-on-error: true')
+
+    const upload = stepIndex(win, 'actions/upload-artifact@')
+    expect(win[upload]).toContain('if: always()')
+    expect(win[upload]).toContain('name: candidate-scenario-${{ inputs.scenario }}-win')
+    expect(win[upload]).toContain('path: candidate-scenario/')
+    expect(job('win')).toContain('      OUT: candidate-scenario')
+    expect(stepIndex(win, 'candidate-scenarios.mjs scan')).toBeGreaterThan(stepIndex(win, 'candidate-scenarios.mjs run'))
+    expect(upload).toBeGreaterThan(stepIndex(win, 'candidate-scenarios.mjs scan'))
+    expect(win).toHaveLength(upload + 2)
+    expect(win[upload + 1]).toContain("if: always() && (steps.scenario.outcome != 'success' || steps.scan.outcome != 'success')")
   })
 })

@@ -799,7 +799,7 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
       transparent: true,
       backgroundColor: OVERLAY_TRANSPARENT_BACKGROUND,
       fullscreenable: false,
-      roundedCorners: true
+      roundedCorners: false
     })
     expect(exclusiveMayUseSimpleFullScreen(true)).toBe(false)
     expect(exclusiveMayUseSimpleFullScreen(false)).toBe(true)

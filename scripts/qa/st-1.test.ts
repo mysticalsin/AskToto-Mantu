@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { BOOT_WINDOW_VARIANTS } from '../../src/main/infra/observability/projection'
 import {
   PENDING_GLOBAL,
+  WINDOW_VARIANTS,
   bootStagesFromAudit,
   buildLaunchFailureReport,
   buildReport,
+  candidateEnv,
   cpuBusyPct,
   emptyRun,
   evaluateCriteria,
@@ -11,6 +14,7 @@ import {
   pinnedExpression,
   recordSample,
   releaseExpression,
+  runPurpose,
   withTimeout,
   witnessSummary
 } from './lib/st-1-core.mjs'
@@ -178,6 +182,63 @@ describe('bootStagesFromAudit (M2-0515)', () => {
   it('leaves sinceSpawnMs out without a spawn time, and ms null when the record has none', () => {
     const text = JSON.stringify({ ts: '2026-09-29T10:00:00.400Z', event: 'app.boot.stage', stage: 'createTray.loadIcon' })
     expect(bootStagesFromAudit(text)).toEqual([{ stage: 'createTray.loadIcon', ms: null, ts: '2026-09-29T10:00:00.400Z' }])
+  })
+
+  it('keeps the variant a window stage was built under, and the navigation stage (M2-0516)', () => {
+    const text = [
+      JSON.stringify({ ts: '2026-09-29T10:00:00.400Z', event: 'app.boot.stage', stage: 'createWindow.construct', ms: 760, transparent: false, windowVariant: 'spellcheck-off' }),
+      JSON.stringify({ ts: '2026-09-29T10:00:00.450Z', event: 'app.boot.stage', stage: 'createWindow.navigate', ms: 31.04 })
+    ].join('\n')
+    expect(bootStagesFromAudit(text)).toEqual([
+      { stage: 'createWindow.construct', ms: 760, ts: '2026-09-29T10:00:00.400Z', transparent: false, windowVariant: 'spellcheck-off' },
+      { stage: 'createWindow.navigate', ms: 31, ts: '2026-09-29T10:00:00.450Z' }
+    ])
+  })
+})
+
+describe('window-construction runs (M2-0516)', () => {
+  it('knows exactly the variants the app can build', () => {
+    expect(WINDOW_VARIANTS).toEqual([...BOOT_WINDOW_VARIANTS])
+  })
+
+  it('makes a run without a purpose an ST-1 run on the shipped window, and refuses a variant there', () => {
+    expect(runPurpose({})).toEqual({ purpose: 'st-1', windowVariant: 'shipped' })
+    expect(runPurpose({ windowVariant: 'paint-when-hidden' }).error).toMatch(/--window-variant needs --purpose window-construction/)
+  })
+
+  it('takes a window-construction run with one known variant, and refuses an unknown purpose or variant', () => {
+    expect(runPurpose({ purpose: 'window-construction', windowVariant: 'prewarm-view' })).toEqual({
+      purpose: 'window-construction',
+      windowVariant: 'prewarm-view'
+    })
+    expect(runPurpose({ purpose: 'window-construction' }).error).toMatch(/--window-variant must be one of shipped, /)
+    expect(runPurpose({ purpose: 'window-construction', windowVariant: 'transparent' }).error).toMatch(/got "transparent"/)
+    expect(runPurpose({ purpose: 'st-2', windowVariant: 'shipped' }).error).toMatch(/--purpose must be window-construction/)
+  })
+
+  it('always sets the variant for the candidate, so an inherited value never reaches an ST-1 run', () => {
+    const env = candidateEnv({ PATH: '/bin', METIS_QA_WINDOW_VARIANT: 'prewarm-view' }, '/tmp/profile', 'shipped')
+    expect(env).toEqual({ PATH: '/bin', ASKTOTO_USERDATA: '/tmp/profile', METIS_QA_WINDOW_VARIANT: 'shipped' })
+  })
+
+  it('marks its report and launch failure as never ST-1 evidence, whatever the verdict; an ST-1 report carries no mark', () => {
+    const built = report({ purpose: 'window-construction', windowVariant: 'spellcheck-off' })
+    expect(built).toMatchObject({ purpose: 'window-construction', st1Evidence: false, windowVariant: 'spellcheck-off', verdict: 'PASS' })
+    const failed = buildLaunchFailureReport({
+      row: 'none',
+      installer: 'Metis-QA.zip',
+      candidate,
+      fixtures: [],
+      reason: 'no inspector',
+      purpose: 'window-construction',
+      windowVariant: 'prewarm-view'
+    })
+    expect(failed).toMatchObject({ purpose: 'window-construction', st1Evidence: false, windowVariant: 'prewarm-view', verdict: 'FAIL' })
+    for (const st1 of [report({ purpose: 'st-1', windowVariant: 'shipped' }), report()]) {
+      expect(st1).not.toHaveProperty('purpose')
+      expect(st1).not.toHaveProperty('st1Evidence')
+      expect(st1).not.toHaveProperty('windowVariant')
+    }
   })
 })
 
