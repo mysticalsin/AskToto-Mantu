@@ -81,6 +81,19 @@ export function rendererRows(rows, mainPid) {
 }
 
 /**
+ * Renderer pids below main in `samples` that were not running just before the final kill. The baseline is
+ * the process table sampled before that kill, so a reload attempt spawned between the kill and the first
+ * sample still counts, and the killed pid, being in the baseline, never does while its row lingers.
+ * @returns {Set<number>}
+ */
+export function newRendererPids(preKillRows, samples, mainPid) {
+  const baseline = new Set(rendererRows(preKillRows, mainPid).map((row) => row.pid))
+  const found = new Set()
+  for (const rows of samples) for (const row of rendererRows(rows, mainPid)) if (!baseline.has(row.pid)) found.add(row.pid)
+  return found
+}
+
+/**
  * The overlay renderer's pid, only when the mapping is unambiguous: exactly one page exposes window.toto,
  * CDP SystemInfo.getProcessInfo names exactly one renderer, and the process table's renderers below main
  * are exactly that pid. Anything else is a problem, never a guess.
@@ -449,10 +462,14 @@ async function run(args, observation) {
 
     let firstKillAt = null
     let lastKillAt = null
+    let preFinalKillRows = []
     for (let kill = 1; kill <= args.times; kill++) {
       if (!mainAlive()) break
-      const row = rendererRows(ps(), mainPid).find((entry) => entry.pid === current)
-      if (!row) throw new Failure(`overlay renderer ${current} vanished before kill ${kill}`)
+      const rows = ps()
+      if (!rendererRows(rows, mainPid).some((entry) => entry.pid === current)) {
+        throw new Failure(`overlay renderer ${current} vanished before kill ${kill}`)
+      }
+      if (kill === args.times) preFinalKillRows = rows
       const killedAt = Date.now()
       process.kill(current, 'SIGKILL')
       firstKillAt ??= killedAt
@@ -467,7 +484,6 @@ async function run(args, observation) {
     }
 
     if (observation.kills.length === args.times) {
-      const baseline = new Set(rendererRows(ps(), mainPid).map((row) => row.pid))
       const newRenderers = new Set()
       const overlays = new Set()
       const watchEnd = lastKillAt + AFTER_HALT_WATCH_MS
@@ -479,7 +495,7 @@ async function run(args, observation) {
             observation.afterHalt.dialogMs = Date.now() - lastKillAt
           }
         }
-        for (const row of rendererRows(ps(), mainPid)) if (!baseline.has(row.pid)) newRenderers.add(row.pid)
+        for (const pid of newRendererPids(preFinalKillRows, [ps()], mainPid)) newRenderers.add(pid)
         // Any page exposing window.toto again means the overlay came back, whether or not its pid maps.
         const seen = await probe(port, mainPid)
         if (seen && seen.totoPages > 0) {

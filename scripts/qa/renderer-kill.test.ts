@@ -6,6 +6,7 @@ import {
   dialogScript,
   emptyObservation,
   eventCounts,
+  newRendererPids,
   overlayRendererMapping,
   parsePs,
   rendererRows,
@@ -182,6 +183,39 @@ describe('rendererRows', () => {
     )
     expect(rows).toHaveLength(5)
     expect(rendererRows(rows, MAIN).map((row) => row.pid)).toEqual([601, 602])
+  })
+})
+
+describe('newRendererPids', () => {
+  const row = (pid: number, ppid: number, type = 'renderer') => ({
+    pid,
+    ppid,
+    started: 'Wed Sep 30 10:00:00 2026',
+    command: `/Applications/X.app/Contents/Frameworks/X Helper.app/X --type=${type}`
+  })
+
+  it('counts a renderer spawned right after the final kill, before the first watch sample', () => {
+    // Before the 4th kill: the overlay renderer 604 and an unrelated pre-existing renderer 610.
+    const preKill = [row(510, MAIN, 'gpu-process'), row(604, MAIN), row(610, MAIN)]
+    // The first watch sample already holds 705, a reload attempt; 604's row still lingers.
+    const firstSample = [row(510, MAIN, 'gpu-process'), row(604, MAIN), row(610, MAIN), row(705, MAIN)]
+    expect([...newRendererPids(preKill, [firstSample], MAIN)]).toEqual([705])
+
+    const attempt = passingRun()
+    attempt.afterHalt.rendererProcesses = newRendererPids(preKill, [firstSample], MAIN).size
+    expect(attempt.afterHalt.rendererProcesses).toBeGreaterThan(0)
+    expect(verdict(attempt).result).toBe('FAIL')
+  })
+
+  it('counts nothing when only the pre-kill renderers remain, and ignores renderers outside main', () => {
+    const preKill = [row(604, MAIN), row(610, MAIN)]
+    const samples = [[row(604, MAIN), row(610, MAIN)], [row(610, MAIN), row(900, 1)], [row(610, MAIN)]]
+    expect(newRendererPids(preKill, samples, MAIN).size).toBe(0)
+  })
+
+  it('counts each new pid once across samples', () => {
+    const samples = [[row(705, MAIN)], [row(705, MAIN), row(706, MAIN)]]
+    expect([...newRendererPids([row(604, MAIN)], samples, MAIN)]).toEqual([705, 706])
   })
 })
 
