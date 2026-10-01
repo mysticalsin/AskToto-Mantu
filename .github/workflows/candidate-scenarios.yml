@@ -15,6 +15,8 @@ name: Candidate scenarios
 #     -f scenario=idle-soak -f mac_sha256=<Metis dmg sha256 from SHA256SUMS.txt>
 #   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> -f scenario=sidecar-boot-reaper \
 #     -f mac_sha256=<Metis DMG sha256> -f win_sha256=<Metis Setup sha256>
+#   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> -f scenario=packaged-lifecycle \
+#     -f mac_sha256=<Metis DMG sha256> -f win_sha256=<Metis Setup sha256>
 # The pull_request trigger on this file's own path only registers the workflow with GitHub (M2-0501): the
 # run it creates skips every job, uses no runner minutes and reaches no secret.
 run-name: ${{ github.event_name == 'pull_request' && 'Candidate scenarios (registration)' || format('Candidate scenario {0} on {1}', inputs.scenario, inputs.candidate_run) }}
@@ -39,6 +41,7 @@ on:
           - stall-sampler
           - idle-soak
           - sidecar-boot-reaper
+          - packaged-lifecycle
       mac_sha256:
         description: sha256 of the macOS installer the scenario installs (empty when it does not run on macOS)
         required: false
@@ -147,8 +150,7 @@ jobs:
             echo "::error::provenance.json belongs to another run than candidate_run $CANDIDATE_RUN."
             exit 1
           fi
-          selector=mac
-          if [ "$SCENARIO" = idle-soak ]; then selector=mac-dmg; fi
+          selector=$(node scripts/qa/candidate-scenarios.mjs installer-kind --scenario "$SCENARIO" --platform mac)
           installer=$(node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" "$selector")
           echo "path=$installer" >> "$GITHUB_OUTPUT"
       - name: Install into a fresh directory and verify the signature
@@ -258,7 +260,8 @@ jobs:
             echo "::error::provenance.json belongs to another run than candidate_run $CANDIDATE_RUN."
             exit 1
           fi
-          installer=$(node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" win)
+          selector=$(node scripts/qa/candidate-scenarios.mjs installer-kind --scenario "$SCENARIO" --platform win)
+          installer=$(node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" "$selector")
           echo "path=$installer" >> "$GITHUB_OUTPUT"
       # Silent install into a fresh directory, as qa-candidate.yml smoke-win does (/S /D=<dir>).
       - name: Install the Setup silently into a fresh directory

@@ -121,6 +121,7 @@ describe('candidate-scenarios.yml', () => {
       '--name candidate-provenance',
       'node scripts/qa/provenance.mjs verify provenance/provenance.json assets "$VARIANT"',
       'jq -r .run.id provenance/provenance.json',
+      'candidate-scenarios.mjs installer-kind --scenario "$SCENARIO" --platform mac',
       'node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" "$selector"',
       'codesign --verify --deep --strict',
       'echo "path=$app" >> "$GITHUB_OUTPUT"',
@@ -141,8 +142,7 @@ describe('candidate-scenarios.yml', () => {
     expect(job('mac')).toContain('      ARTIFACT: ${{ needs.guard.outputs.mac_artifact }}')
     expect(job('mac')).toContain('    timeout-minutes: ${{ fromJSON(needs.guard.outputs.mac_timeout_minutes) }}')
     const selector = mac[stepIndex(mac, 'node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" "$selector"')]
-    expect(selector).toContain('selector=mac')
-    expect(selector).toContain('if [ "$SCENARIO" = idle-soak ]; then selector=mac-dmg; fi')
+    expect(selector).toContain('candidate-scenarios.mjs installer-kind --scenario "$SCENARIO" --platform mac')
     const run = mac[stepIndex(mac, 'candidate-scenarios.mjs run')]
     expect(run).toContain('timeout-minutes: ${{ fromJSON(needs.guard.outputs.mac_step_timeout_minutes) }}')
     expect(run).toContain('INSTALLER: ${{ steps.installer.outputs.path }}')
@@ -224,6 +224,14 @@ describe('candidate-scenarios.yml', () => {
     )
   })
 
+  it('offers packaged-lifecycle, which runs on both hosted platform jobs', () => {
+    const options = block(block(block(lines, '    inputs:', 4), '      scenario:', 6), '        options:', 8).map((line) => line.trim())
+    expect(options).toContain('- packaged-lifecycle')
+    expect(Object.keys(SCENARIOS['packaged-lifecycle'].platforms)).toEqual(['mac', 'win'])
+    expect(job('mac')).toContain('    runs-on: macos-latest')
+    expect(job('win')).toContain('    runs-on: windows-latest')
+  })
+
   it('hands the installed app to the scenario on macOS, after the signature check', () => {
     const mac = steps('mac')
     const install = mac[stepIndex(mac, 'codesign --verify --deep --strict')]
@@ -241,7 +249,8 @@ describe('candidate-scenarios.yml', () => {
       '--name candidate-provenance',
       'node scripts/qa/provenance.mjs verify provenance/provenance.json assets "$VARIANT"',
       "require('./provenance/provenance.json').run.id",
-      'node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" win',
+      'candidate-scenarios.mjs installer-kind --scenario "$SCENARIO" --platform win',
+      'node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" "$selector"',
       "'/S', \"/D=$target\"",
       'candidate-scenarios.mjs profile --scenario "$SCENARIO" --platform win',
       'candidate-scenarios.mjs run'
