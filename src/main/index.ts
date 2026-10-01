@@ -1896,8 +1896,6 @@ function initializeImportJobs(): void {
     concurrency: MAX_CONCURRENT_DECODES
   })
   const speechPackBlocked =
-    typeof resolveLocalSpeechPackPolicy === 'function' &&
-    typeof getAdminLocalSpeechPackPolicy === 'function' &&
     resolveLocalSpeechPackPolicy(getSettings(), getAdminLocalSpeechPackPolicy()) === 'blocked'
   if (!speechPackBlocked) {
     void ensureImportAsrAssets((pct) => {

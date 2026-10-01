@@ -199,7 +199,9 @@ function readRawPolicyFrom(p: string): string | null {
 
 function parseLocalSpeechPackContent(raw: string): LocalSpeechPackPolicy | null {
   try {
-    const parsed = LocalSpeechPackPolicySchema.safeParse(JSON.parse(raw)?.localSpeechPack)
+    const value = JSON.parse(raw)?.localSpeechPack
+    if (value === undefined) return null
+    const parsed = LocalSpeechPackPolicySchema.safeParse(value)
     return parsed.success ? parsed.data : null
   } catch {
     return null
@@ -207,7 +209,9 @@ function parseLocalSpeechPackContent(raw: string): LocalSpeechPackPolicy | null 
 }
 
 // readTrustedAdminManaged() owns the machine policy trust check and reads through the verified fd.
-// Cache verified content, not a bare trust verdict; mtime/inode plus a short TTL pick up IT edits.
+// Cache the verified bytes, not a bare trust verdict: the caller must never stat one file and then
+// read another after a replace. Path + dev + inode + mtime keep fast test rebuilds and IT edits from
+// reusing a stale admin snapshot during the short reprobe TTL.
 const ADMIN_POLICY_REPROBE_MS = 60_000
 let _adminManagedCache: {
   path: string
@@ -297,9 +301,10 @@ export function getEgressAllowlist(): string[] | null {
   }
 }
 
+/** Raw managed provider allowlist. Machine (admin) policy wins over the per-user managed file, mirroring
+ *  validatedManaged() precedence. Read from raw JSON because `allowedProviders` is a policy key, not a
+ *  settings-schema key, and an explicit empty array is a deny-all policy. */
 export function getAllowedProviders(): string[] | null {
-  // Machine (admin) policy wins over the per-user managed file, mirroring validatedManaged() precedence.
-  // Read from the raw JSON because `allowedProviders` is a policy key, not a settings-schema key.
   const admin = adminManagedContent()
   const user = readRawPolicyFrom(join(dir(), 'managed-config.json'))
   return (admin ? parseAllowedContent(admin) : null) ?? (user ? parseAllowedContent(user) : null)
