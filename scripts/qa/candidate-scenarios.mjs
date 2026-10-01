@@ -151,6 +151,35 @@ export const SCENARIOS = Object.freeze({
           'displayAwake',
           'hostFloorOverride',
           'hostMemory',
+          'memory',
+          'modelState'
+        ])
+      }),
+      win: Object.freeze({
+        ticket: 'M2-0493',
+        variant: 'win',
+        artifact: 'candidate-win',
+        script: 'scripts/qa/soak/idle-soak.mjs',
+        args: ({ app, report }) => [
+          '--app', app,
+          '--profile', 'candidate-scenario/profile',
+          '--hours', '5.5',
+          '--out', 'candidate-scenario',
+          ...(process.env.SOAK_DEADLINE_EPOCH_MS ? ['--deadline-epoch-ms', process.env.SOAK_DEADLINE_EPOCH_MS] : [])
+        ],
+        report: 'idle-soak.json',
+        profileLayout: 'hide',
+        timeoutMinutes: 355,
+        stepTimeoutMinutes: 340,
+        outcomeFromReport: true,
+        laneReportFields: Object.freeze([
+          'rule',
+          'hoursMeasured',
+          'parkedCoverage',
+          'displayAwake',
+          'hostFloorOverride',
+          'hostMemory',
+          'memory',
           'modelState'
         ])
       })
@@ -555,7 +584,7 @@ export function laneRecord({
   return {
     schema: LANE_SCHEMA,
     scenario,
-    ticket: scenarioEntry(scenario).ticket,
+    ticket: target.ticket ?? scenarioEntry(scenario).ticket,
     platform,
     runner_image: { label: host, image_os: env.ImageOS ?? null, image_version: env.ImageVersion ?? null },
     build_run_id: provenance.run.id,

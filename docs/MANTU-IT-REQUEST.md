@@ -123,7 +123,7 @@ Then provide:
 |---|---|
 | Application (client) ID | `AZURE_CLIENT_ID` |
 | Directory (tenant) ID | `AZURE_TENANT_ID` |
-| Allowed email domain (e.g. `mantu.com`) | `azureAllowedDomain` (managed-config) |
+| Allowed email domain (e.g. `example.com`) | `azureAllowedDomain` (managed-config) |
 
 **Security notes for review:** the app is a public PKCE client (no secret to leak). The Graph access token is
 obtained on-device via the system browser, stored only in an OS-keychain-encrypted cache, never logged, and
@@ -152,8 +152,9 @@ credentials and on runners being allowed to start.
   half-published release live.
 - Auto-update through `electron-updater` is wired to the same GitHub Releases feed, so once the first
   signed release ships, subsequent updates reach users without another manual install.
-- Enterprise policy controls (SSO, license gate, provider policy, transcript encryption, redaction,
-  retention) are implemented and lockable machine-wide via `managed-config.json`.
+- Enterprise policy controls (SSO, provider policy, transcript encryption, redaction, retention) are implemented and
+  lockable machine-wide via `managed-config.json`. The license gate is compiled off until the licensing
+  tickets re-enable and verify it, so it is not an enterprise control today.
 
 Reference docs in the repo: `docs/SIGNING.md` (credential requirements per channel) and
 `docs/ENTERPRISE_RELEASE.md` (operator checklist).

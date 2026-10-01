@@ -12,9 +12,11 @@ import {
   jobSafeDeadlineEpochMs,
   launchEnv,
   soakSeconds,
+  startDisplayAwake,
   summarizeModelStateFromStream,
   waitForCdpVersion
 } from './idle-soak.mjs'
+import { pointerMoveCommand } from '../census/run.mjs'
 
 describe('idle-soak deadline arithmetic', () => {
   it('leaves upload reserve inside a 355-minute hosted job while allowing the 5.5 h leg', () => {
@@ -143,6 +145,21 @@ describe('idle-soak launch environment and model state', () => {
     expect(summarizeModelStateFromStream(`${line(0, 'main')}\n`)).toMatchObject({
       llamaServerRan: false,
       sidecarSupervisorRan: false
+    })
+  })
+
+  it('constructs the Windows parked-soak pointer move with user32 SetCursorPos', () => {
+    const command = pointerMoveCommand('win32', { x: 32, y: 200 })
+    expect(command.executable).toMatch(/powershell\.exe$/i)
+    expect(command.method).toBe('user32.SetCursorPos')
+    expect(command.args.join(' ')).toContain('SetCursorPos(32, 200)')
+  })
+
+  it('does not claim display-awake support on unsupported platforms', () => {
+    expect(startDisplayAwake('linux')).toMatchObject({
+      recorded: false,
+      command: null,
+      reason: 'unsupported platform linux'
     })
   })
 })

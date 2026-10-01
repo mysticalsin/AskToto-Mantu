@@ -176,8 +176,9 @@ describe('candidate-scenarios.yml', () => {
     expect((SCENARIOS['renderer-kill'].platforms.mac as { guiScripting?: boolean }).guiScripting).toBe(true)
   })
 
-  it('sets an upload-safe idle-soak deadline before running the mac scenario', () => {
+  it('sets an upload-safe idle-soak deadline before running each hosted scenario job', () => {
     const mac = steps('mac')
+    const win = steps('win')
     const jobStart = mac[0]
     expect(jobStart).toContain('name: Record the job start time')
     expect(jobStart).toContain('id: job-start')
@@ -194,6 +195,15 @@ describe('candidate-scenarios.yml', () => {
     expect(run).toContain('SOAK_DEADLINE_EPOCH_MS: ${{ steps.soak-deadline.outputs.epoch_ms }}')
     expect(stepIndex(mac, 'Record the job start time')).toBe(0)
     expect(stepIndex(mac, 'Set the soak deadline')).toBeLessThan(stepIndex(mac, 'candidate-scenarios.mjs run'))
+
+    expect(win[0]).toContain('name: Record the job start time')
+    const winDeadline = win[stepIndex(win, 'Set the soak deadline')]
+    expect(winDeadline).toContain('WIN_TIMEOUT_MINUTES: ${{ needs.guard.outputs.win_timeout_minutes }}')
+    expect(winDeadline).toContain("import { jobSafeDeadlineEpochMs } from './scripts/qa/soak/idle-soak.mjs'")
+    expect(winDeadline).toContain('timeoutMinutes: Number(process.env.WIN_TIMEOUT_MINUTES)')
+    expect(win[stepIndex(win, 'candidate-scenarios.mjs run')]).toContain('SOAK_DEADLINE_EPOCH_MS: ${{ steps.soak-deadline.outputs.epoch_ms }}')
+    expect(stepIndex(win, 'Record the job start time')).toBe(0)
+    expect(stepIndex(win, 'Set the soak deadline')).toBeLessThan(stepIndex(win, 'candidate-scenarios.mjs run'))
   })
 
   it('gives ex-suite a scenario step and job timeout that cover its 3 launches of at least 130 s plus boot, quit and the control', () => {
@@ -235,14 +245,16 @@ describe('candidate-scenarios.yml', () => {
     const options = block(block(block(lines, '    inputs:', 4), '      scenario:', 6), '        options:', 8).map((line) => line.trim())
     expect(options).toContain('- idle-soak')
     expect(options).toContain('- sidecar-boot-reaper')
-    expect(Object.keys(SCENARIOS['idle-soak'].platforms)).toEqual(['mac'])
+    expect(Object.keys(SCENARIOS['idle-soak'].platforms)).toEqual(['mac', 'win'])
     expect(Object.keys(SCENARIOS['sidecar-boot-reaper'].platforms)).toEqual(['mac', 'win'])
     expect(job('win')).toContain('    runs-on: windows-latest')
   })
 
-  it('keeps per-scenario timeouts in the registry and gives only idle-soak the long mac job', () => {
+  it('keeps per-scenario timeouts in the registry and gives idle-soak long hosted jobs', () => {
     expect(SCENARIOS['idle-soak'].platforms.mac.timeoutMinutes).toBe(355)
     expect(SCENARIOS['idle-soak'].platforms.mac.stepTimeoutMinutes).toBe(340)
+    expect(SCENARIOS['idle-soak'].platforms.win.timeoutMinutes).toBe(355)
+    expect(SCENARIOS['idle-soak'].platforms.win.stepTimeoutMinutes).toBe(340)
     expect(job('win')).toContain('    timeout-minutes: ${{ fromJSON(needs.guard.outputs.win_timeout_minutes) }}')
     const win = steps('win')
     expect(win[stepIndex(win, 'candidate-scenarios.mjs run')]).toContain(
