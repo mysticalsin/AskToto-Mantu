@@ -15,7 +15,17 @@ import {
   wavFromPcm,
   writeCaptureWav
 } from './capture-wav.mjs'
-import { auditHasEvent, countTokenMatches, distinctiveTokens, launchSpec, meetingFiles, seedProfile } from './file-capture.mjs'
+import {
+  LISTEN_CLICK,
+  STOP_CLICK,
+  TRANSCRIPT_CLICK,
+  auditHasEvent,
+  countTokenMatches,
+  distinctiveTokens,
+  launchSpec,
+  meetingFiles,
+  seedProfile
+} from './file-capture.mjs'
 import { buildReport, judge } from './file-capture-smoke.mjs'
 
 const dirs: string[] = []
@@ -52,6 +62,19 @@ const observed = (over: Record<string, unknown> = {}) => ({
   totalMs: 150_000,
   ...over
 })
+
+function evalClickExpression(expression: string, element: { click: () => void } | null): { clicked: boolean; result: boolean; selector: string | null } {
+  let clicked = false
+  let selector: string | null = null
+  const document = {
+    querySelector: (value: string) => {
+      selector = value
+      return element ? { click: () => { clicked = true } } : null
+    }
+  }
+  const result = Function('document', `return ${expression}`)(document) as boolean
+  return { clicked, result, selector }
+}
 
 describe('capture WAV: command construction', () => {
   it('speaks with say after a -- guard and converts with afconvert to 16-bit PCM mono', () => {
@@ -111,6 +134,8 @@ describe('profile seeding and launch', () => {
     expect(saved.onboardingDone).toBe(true)
     expect(saved.asrEngine).toBe('whisper')
     expect(saved.localLlm.enabled).toBe(false)
+    expect(saved.audioSource).toBe('mic')
+    expect(saved.encryptTranscripts).toBe(false)
     expect(saved.meetingsFolder.startsWith(profile)).toBe(true)
   })
 
@@ -139,6 +164,28 @@ describe('profile seeding and launch', () => {
     expect(auditHasEvent(profile)).toBe(false)
     writeFileSync(join(profile, 'logs', 'audit-170.log'), `${JSON.stringify({ event: 'qa.capture.file_source', active: true })}\n`)
     expect(auditHasEvent(profile)).toBe(true)
+  })
+})
+
+describe('Bar driver controls', () => {
+  it.each([
+    ['Listen', LISTEN_CLICK, 'button[aria-label="Start listening"]'],
+    ['Transcript', TRANSCRIPT_CLICK, '[data-bar-transcript]'],
+    ['Stop', STOP_CLICK, 'button[aria-label="Stop and end meeting"]']
+  ])('clicks the real %s control and reports success', (_name, expression, expectedSelector) => {
+    expect(evalClickExpression(expression, { click: () => undefined })).toEqual({
+      clicked: true,
+      result: true,
+      selector: expectedSelector
+    })
+  })
+
+  it.each([
+    ['Listen', LISTEN_CLICK],
+    ['Transcript', TRANSCRIPT_CLICK],
+    ['Stop', STOP_CLICK]
+  ])('reports false when the %s control is absent', (_name, expression) => {
+    expect(evalClickExpression(expression, null).result).toBe(false)
   })
 })
 

@@ -63,8 +63,10 @@ export function seedProfile(profileDir) {
     backgroundScreenContext: false,
     instantSuggestions: false,
     speakerId: { enabled: false, saveVoiceprints: false },
+    audioSource: 'mic',
     showLiveTranscript: true,
-    autoSaveTranscripts: true
+    autoSaveTranscripts: true,
+    encryptTranscripts: false
   }
   writeFileSync(join(profileDir, 'settings.json'), `${JSON.stringify(seeded, null, 2)}\n`, { mode: 0o600 })
   return { settings: seeded, meetingsFolder }
@@ -171,7 +173,8 @@ async function cdpPage(port) {
 const clickByLabel = (label) =>
   `(() => { const b = document.querySelector('button[aria-label=${JSON.stringify(label)}]'); if (!b) return false; b.click(); return true })()`
 export const LISTEN_CLICK = clickByLabel('Start listening')
-export const STOP_CLICK = clickByLabel('End meeting & get summary')
+export const STOP_CLICK = clickByLabel('Stop and end meeting')
+export const TRANSCRIPT_CLICK = `(() => { const b = document.querySelector('[data-bar-transcript]'); if (!b) return false; b.click(); return true })()`
 /** The Bar's Listen control exists: the overlay has rendered and onboarding is done. */
 export const LISTEN_PRESENT = `!!document.querySelector('button[aria-label="Start listening"]')`
 /** The live transcript's line count; the waiting and empty placeholders are not lines. */
@@ -252,6 +255,7 @@ export async function runFileCapture({ installer, workDir = mkdtempSync(join(tmp
     observed.ready = true
     observed.asrEngine = (await page.evaluate(ASR_ENGINE).catch(() => null)) ?? null
     if (!(await page.evaluate(LISTEN_CLICK))) throw new Error('Listen control vanished before the click')
+    await page.evaluate(TRANSCRIPT_CLICK).catch(() => false)
     const listenStarted = Date.now()
     await waitFor(async () => {
       let count
@@ -265,7 +269,7 @@ export async function runFileCapture({ installer, workDir = mkdtempSync(join(tmp
       if (count >= LIVE_LINES_NEEDED && observed.linesReachedMs === null) observed.linesReachedMs = Date.now() - listenStarted
       return observed.linesReachedMs !== null && Date.now() - listenStarted >= listenMs
     }, LINES_TIMEOUT_MS)
-    await page.evaluate(STOP_CLICK)
+    if (!(await page.evaluate(STOP_CLICK))) throw new Error('Stop control vanished before the click')
     const saved = await waitFor(() => {
       const now = meetingFiles(meetingsFolder).filter((file) => !before.includes(file))
       return now.length > 0 ? now : null
