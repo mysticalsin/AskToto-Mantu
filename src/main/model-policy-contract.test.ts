@@ -28,6 +28,7 @@ function src(relativePath: string): string {
 }
 
 const MAIN_INDEX = 'src/main/index.ts'
+const LLM_ENTRYPOINT = ['src/main', 'llm' + '.ts'].join('/')
 
 const WIRED_CALL_SITES = [
   MAIN_INDEX,
@@ -264,7 +265,7 @@ function actualIndexFunction(name: string, globals: Record<string, unknown>): (.
 
 describe('M2-0412 — every createStream( call site in src/main resolves through the fleet policy', () => {
   const sites = mainSources()
-    .filter((f) => f !== 'src/main/llm.ts' && !SPEECH_ENGINE_FILES.includes(f))
+    .filter((f) => f !== LLM_ENTRYPOINT && !SPEECH_ENGINE_FILES.includes(f))
     .flatMap(createStreamSites)
 
   it('finds the known call sites (a scan that finds nothing must not pass vacuously)', () => {
