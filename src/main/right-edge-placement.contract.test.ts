@@ -29,22 +29,37 @@ describe('right-edge placement main-process contract', () => {
     expect(cursorWatch).toMatch(/notifyOverlayCursorHover\(true, restoredFromParkedRail\)/)
     const reanchor = section(index, 'function registerScreenListeners()', 'function toggleVisible')
     expect(reanchor).toMatch(/resolvedOverlayPlacementForDisplay\(display\) === 'right-edge'/)
-    expect(reanchor).toMatch(/overlayPositionForDisplay\(/)
+    // M2-0202: the right-edge reanchor places through the geometry authority's one writer.
+    expect(reanchor).toMatch(/applyRightEdgeBounds\('open', display\)/)
+    expect(reanchor).toMatch(/applyRightEdgeBounds\('rest', display, layout\)/)
   })
 
-  it('keeps sidecar dragging explicitly vertical and persists its normalized local preference', () => {
+  it('keeps sidecar dragging explicitly vertical and persists its per-display anchor', () => {
     const move = section(index, 'function moveBy(', '/**\n * Keep the overlay reachable')
     expect(move).toMatch(/resolvedOverlayPlacementForDisplay\(display\) === 'right-edge'/)
     expect(move).toMatch(/screen\.getDisplayMatching\(b\)/)
-    expect(move).toMatch(/normalizeRightEdgeY\(b\.y \+ dy, height, getDisplayMetrics\(display\)\)/)
-    expect(move).toMatch(/queueRightEdgeYForDisplay\(display, normalizedY\)/)
+    // M2-0202: a drag changes only the anchor A (dy), and every rect follows it from the authority.
+    expect(move).toMatch(/queueRightEdgeAnchorForDisplay\(display, rightEdgeAnchorY\(display\) \+ dy\)/)
+    expect(move).toMatch(/applyRightEdgeBounds\(islandResting \? 'rest' : 'open', display\)/)
     expect(move).not.toMatch(/x: b\.x \+ dx/)
     expect(move).not.toMatch(/display\.id !== fromDisplayId/)
-    const persist = section(index, 'function queueRightEdgeYForDisplay', 'function overlayCursorWatchWanted')
-    expect(persist).toMatch(/overlayRightEdgeYByDisplay/)
+    const persist = section(index, 'function queueRightEdgeAnchorForDisplay', 'function overlayCursorWatchWanted')
+    expect(persist).toMatch(/overlayRightEdgeAnchorByDisplay/)
+    expect(persist).toMatch(/rightEdgeAnchorLocked\(getLockedKeys\(\)\)/)
     expect(persist).toMatch(/\}, 350\)/)
     expect(persist).toMatch(/setSettings\(/)
     expect(persist).toMatch(/if \(!key\) return/)
+  })
+
+  it('RE-G10: every right-edge placement path goes through applyRightEdgeBounds, including a placement change', () => {
+    // Behavior is proven by the lifted paths in src/shared/right-edge-geometry.test.ts; the settings handler is
+    // too large to lift, so its revealed right-edge branch is pinned here.
+    const settings = section(index, 'const layoutChanged = cur.overlayLayout', '// Flipping follow-up memory')
+    expect(settings).toMatch(/=== 'right-edge'\) \{\s*applyRightEdgeBounds\('open', display\)/)
+    const writer = section(index, 'function applyRightEdgeBounds(', 'function rightEdgeHoldRegion(')
+    expect(writer).toMatch(/const rect = rightEdgeBounds\(surface, display, layout\)/)
+    // No right-edge rect is computed from the legacy normalized-Y helpers any more.
+    expect(index).not.toMatch(/normalizeRightEdgeY|rightEdgeSidecarBounds|rightEdgeYForDisplay/)
   })
 
   it('keeps sidecar placement independent of chrome and notch/hardware state', () => {

@@ -38,11 +38,13 @@ import {
   isForbiddenHideParkHairline,
   isVisibleHideSlab,
   parkedHoverReanchor,
+  firstPaintOverlayBounds,
   ISLAND_NOTCH_STRUT_PX,
   type DisplayMetrics,
   type Rect
 } from './geometry'
 import { resolveOverlayPresentation } from '@shared/overlay-presentation'
+import { anchorY, legacyTabRect, revealBand } from '@shared/right-edge-geometry'
 
 /**
  * geometry.test.ts — MQA-275. Pins the pure positioning math extracted from src/main/index.ts (the
@@ -853,5 +855,54 @@ describe('overlay chrome modes resolve through placement', () => {
     expect(autohide).toMatch(/case 'pointer-leave'/)
     expect(resolveOverlayPresentation({ placement: 'top-center', layout: 'bar' }).layout).toBe('bar')
     expect(resolveOverlayPresentation({ placement: 'right-edge', layout: 'bar' }).layout).toBe('island')
+  })
+})
+
+/**
+ * Invariant (issue #124 class): every park transition lands where its placement parks it. Top-center parks at
+ * the display top (y = bounds.y, y = 0 on a display at the origin). At the right edge (M2-0202 DEV-RE-5) the
+ * park lies inside the work area at the stored anchor: Hide on the reveal band, Island on the rail tab centred
+ * on A. Launch, exclusive-onboarding exit and display reanchor all resolve to the same rect.
+ */
+describe('M2-0202 park invariant', () => {
+  const displays: DisplayMetrics[] = [
+    metrics({ workArea: LAPTOP_WORK_AREA }),
+    metrics({ workArea: { x: 0, y: 0, width: 853, height: 432 }, bounds: { x: 0, y: 0, width: 853, height: 480 }, hasNotch: false, menuBarHeight: 0 }),
+    metrics({ workArea: { x: -1920, y: 0, width: 1920, height: 1040 }, bounds: { x: -1920, y: 0, width: 1920, height: 1080 }, hasNotch: false, menuBarHeight: 0 }),
+    metrics({ workArea: LAPTOP_RIGHT_WORK_AREA })
+  ]
+
+  it('top-center Hide and Island parks land at the display top', () => {
+    for (const m of displays) {
+      for (const layout of ['hide', 'island'] as const) {
+        const park = parkAfterExclusiveOnboarding(layout, m, 8, 'top-center')
+        expect(park.y).toBe(m.bounds.y)
+        expect(parkedHoverReanchor(layout, true, m, 8, 'top-center')).toEqual(park)
+      }
+    }
+  })
+
+  it('right-edge parks land inside the work area at the stored anchor, on every path', () => {
+    for (const m of displays) {
+      const wa = m.workArea
+      for (const f of [undefined, 0, 0.15, 0.5, 0.9, 1]) {
+        const a = anchorY(wa, f)
+        const hide = parkAfterExclusiveOnboarding('hide', m, 8, 'right-edge', f)
+        const island = parkAfterExclusiveOnboarding('island', m, 8, 'right-edge', f)
+        expect(hide).toEqual(revealBand(wa, a))
+        expect(island).toEqual(legacyTabRect(wa, a))
+        for (const park of [hide, island]) {
+          expect(park.y).toBeGreaterThanOrEqual(wa.y)
+          expect(park.y + park.height).toBeLessThanOrEqual(wa.y + wa.height)
+          expect(park.x + park.width).toBeLessThanOrEqual(wa.x + wa.width)
+        }
+        expect(island.y + island.height / 2).toBe(a)
+        expect(parkedHoverReanchor('hide', true, m, 8, 'right-edge', f)).toEqual(hide)
+        expect(parkedHoverReanchor('island', true, m, 8, 'right-edge', f)).toEqual(island)
+        expect(
+          firstPaintOverlayBounds({ onboardingDone: true, bounds: m.bounds, workArea: wa, layout: 'island', metrics: m, topMargin: 8, placement: 'right-edge', anchor: f })
+        ).toEqual(island)
+      }
+    }
   })
 })

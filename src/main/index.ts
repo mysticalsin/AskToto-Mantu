@@ -208,9 +208,7 @@ import {
   hoverRestTop,
   hoverWatchRestRect,
   overlayRestSize,
-  normalizeRightEdgeY,
   overlayPlacementPosition,
-  rightEdgeSidecarBounds,
   rightEdgeParkLayout,
   rightAnchoredParkPosition,
   resolveOverlayPlacement,
@@ -233,6 +231,19 @@ import {
 } from '@shared/settings-bounds'
 import { ONBOARDING_AUDIO_LOCK_EVENT } from '@shared/onboarding-audio'
 import {
+  RIGHT_EDGE_DEFAULT_ANCHOR,
+  anchorFraction,
+  anchorY,
+  holdRegion,
+  legacyDrawerRect,
+  legacyTabRect,
+  resolveRightEdgeAnchor,
+  restRect,
+  revealCorridor,
+  rightEdgeAnchorLocked
+} from '@shared/right-edge-geometry'
+import {
+  CURSOR_LEAVE_GRACE_PX,
   CURSOR_WATCH_INTERVAL_MS,
   OVERLAY_LEAVE_PARK_MS,
   RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS,
@@ -1173,9 +1184,14 @@ let lastBarHeight = BAR_HEIGHT // remember the bar's content height to restore o
 // bar parked near the bottom all the way to the top of the screen, 24px at a time, and it stayed there.
 // Keeping the anchor separate lets the slide be temporary — up to fit, back down when the content shrinks.
 let userAnchorY: number | null = null
-// Sidecar vertical positions are normalised per local display. Persist only once after a drag settles.
-const pendingRightEdgeYByDisplay = new Map<string, number>()
-let rightEdgeYSaveTimer: ReturnType<typeof setTimeout> | null = null
+// Right-edge anchor fractions per local display (right-edge-geometry.ts). A drag updates the pending value at
+// once, so every rect follows it, and persists it once after the drag settles.
+const pendingRightEdgeAnchorByDisplay = new Map<string, number>()
+let rightEdgeAnchorSaveTimer: ReturnType<typeof setTimeout> | null = null
+// Display keys whose legacy normalized Y was converted this session: a failed write is not retried per tick.
+const migratedRightEdgeAnchorKeys = new Set<string>()
+// After a band reveal: the y the pointer revealed the right-edge drawer from, until it first enters the drawer.
+let rightEdgeRevealY: number | null = null
 let currentWidth = BAR_WIDTH // window width; narrows to PILL_WIDTH while collapsed to the control mini-pill
 // True while collapsed to the control mini-pill. Guards lastBarHeight below: the pill's own (much shorter)
 // content height must never overwrite the remembered full-bar height, or expanding back out would apply
@@ -2341,16 +2357,19 @@ function applyOverlaySurfaceChrome(): void {
   }
 }
 
-/** Hide/island park at bounds.y. Re-assert if darwin clamped into workArea.y≈39. */
+/** Hide/island park at bounds.y. Re-assert if darwin clamped into workArea.y≈39. A right-edge park (the
+ *  authority's rest rect, which parkedOverlayBounds returns) is written by applyRightEdgeBounds. */
 function commitParkedOverlayBounds(park: { x: number; y: number; width: number; height: number }): void {
   if (!win || win.isDestroyed()) return
+  const display = screen.getDisplayMatching(park)
+  if (resolvedOverlayPlacementForDisplay(display) === 'right-edge') {
+    applyRightEdgeBounds('rest', display)
+    return
+  }
   win.setBounds(park, false)
   try {
     const after = win.getBounds()
-    // A right-edge park the OS widened (Windows minimum width) keeps its right edge at the work-area edge.
-    const rightEdge = resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(park)) === 'right-edge'
-    const target = rightEdge ? rightAnchoredParkPosition(park, after.width) : park
-    if (after.x !== target.x || after.y !== target.y) win.setPosition(target.x, target.y, false)
+    if (after.x !== park.x || after.y !== park.y) win.setPosition(park.x, park.y, false)
   } catch {
     /* headless */
   }
@@ -2530,13 +2549,7 @@ function exitExclusiveOnboardingStage(): void {
   lastBarHeight = BAR_HEIGHT
   const display = screen.getDisplayMatching(win.getBounds())
   const layout = liveOverlayLayout()
-  const park = parkAfterExclusiveOnboarding(
-    parkLayoutForDisplay(layout, display),
-    getDisplayMetrics(display),
-    ISLAND_TOP_MARGIN,
-    liveOverlayPlacement(),
-    rightEdgeYForDisplay(display)
-  )
+  const park = parkedOverlayBounds(layout, display)
   currentWidth = park.width
   islandResting = overlayUsesHover(layout)
   userAnchorY = park.y
@@ -2652,7 +2665,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
     metrics: placementMetrics,
     topMargin: ISLAND_TOP_MARGIN,
     placement,
-    normalizedY: rightEdgeYForDisplay(placementDisplay)
+    anchor: placement === 'right-edge' ? rightEdgeAnchorForDisplay(placementDisplay) : undefined
   })
   if (onboardingLive) {
     currentWidth = firstPaint.width
@@ -3152,14 +3165,41 @@ function resolvedOverlayPlacementForDisplay(display: Electron.Display): OverlayP
   return resolveOverlayPlacement(liveOverlayPlacement(), getDisplayMetrics(display))
 }
 
-function rightEdgeYForDisplay(display: Pick<Electron.Display, 'id'>): number | undefined {
+/**
+ * The display's right-edge anchor fraction f. A drag's pending value wins; otherwise the stored anchor, or,
+ * on a display's first resolve, its converted legacy normalized Y, which is written as the new key once
+ * (never under a lock on either key).
+ */
+function rightEdgeAnchorForDisplay(display: Pick<Electron.Display, 'id' | 'workArea'>): number {
   const key = overlayDisplayKey(display.id)
-  if (!key) return undefined
-  const value = getSettings().overlayRightEdgeYByDisplay[key]
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+  if (!key) return RIGHT_EDGE_DEFAULT_ANCHOR
+  const pending = pendingRightEdgeAnchorByDisplay.get(key)
+  if (pending !== undefined) return pending
+  const settings = getSettings()
+  const { f, persist } = resolveRightEdgeAnchor({
+    workArea: display.workArea,
+    anchor: settings.overlayRightEdgeAnchorByDisplay[key],
+    legacyY: settings.overlayRightEdgeYByDisplay[key],
+    lockedKeys: getLockedKeys()
+  })
+  if (persist && !migratedRightEdgeAnchorKeys.has(key)) {
+    migratedRightEdgeAnchorKeys.add(key)
+    try {
+      setSettings({ overlayRightEdgeAnchorByDisplay: { ...settings.overlayRightEdgeAnchorByDisplay, [key]: f } })
+    } catch (error) {
+      mainLog.warn('[overlay-placement] could not migrate the right-edge position', error)
+    }
+  }
+  return f
 }
 
-/** The one main-process bridge from live Electron displays to pure placement geometry. */
+/** The anchor A (handle-centre y in DIP) on `display`. */
+function rightEdgeAnchorY(display: Pick<Electron.Display, 'id' | 'workArea'>): number {
+  return anchorY(display.workArea, rightEdgeAnchorForDisplay(display))
+}
+
+/** The one main-process bridge from live Electron displays to pure placement geometry. Right-edge windows
+ *  are placed by applyRightEdgeBounds, never here. */
 function overlayPositionForDisplay(
   width: number,
   height: number,
@@ -3173,8 +3213,7 @@ function overlayPositionForDisplay(
     height,
     layout,
     metrics: getDisplayMetrics(display),
-    topMargin,
-    normalizedY: rightEdgeYForDisplay(display)
+    topMargin
   })
 }
 
@@ -3182,52 +3221,103 @@ function overlayPositionForDisplay(
 function parkLayoutForDisplay(layout: OverlayLayout, display: Electron.Display): OverlayLayout {
   if (layout !== 'hide' || resolvedOverlayPlacementForDisplay(display) !== 'right-edge') return layout
   const others = screen.getAllDisplays().filter((other) => other.id !== display.id).map((other) => other.bounds)
-  return rightEdgeParkLayout(layout, getDisplayMetrics(display), others, rightEdgeYForDisplay(display))
+  return rightEdgeParkLayout(layout, getDisplayMetrics(display), others, rightEdgeAnchorForDisplay(display))
 }
 
 function parkedOverlayBounds(layout: OverlayLayout, display: Electron.Display): Electron.Rectangle {
+  if (resolvedOverlayPlacementForDisplay(display) === 'right-edge') return rightEdgeBounds('rest', display, layout)
   return parkAfterExclusiveOnboarding(
     parkLayoutForDisplay(layout, display),
     getDisplayMetrics(display),
     ISLAND_TOP_MARGIN,
-    liveOverlayPlacement(),
-    rightEdgeYForDisplay(display)
+    liveOverlayPlacement()
   )
 }
 
 function overlayHoverRestRect(layout: OverlayLayout, display: Electron.Display): Electron.Rectangle {
+  const rightEdge = resolvedOverlayPlacementForDisplay(display) === 'right-edge'
   return hoverWatchRestRect(
     layout,
     getDisplayMetrics(display),
     liveOverlayPlacement(),
-    rightEdgeYForDisplay(display)
+    rightEdge ? rightEdgeAnchorForDisplay(display) : undefined
   )
 }
 
-/** Persist only the deliberate vertical sidecar position, trailing one drag gesture. */
-function queueRightEdgeYForDisplay(display: Pick<Electron.Display, 'id'>, normalizedY: number): void {
-  if (getLockedKeys().includes('overlayRightEdgeYByDisplay')) return
+/**
+ * Right-edge window bounds from the shared authority at the display's anchor: 'open' is the legacy drawer;
+ * 'rest' is the Hide park (rest 'none', the invisible reveal band) or the Island rail tab.
+ */
+function rightEdgeBounds(surface: 'open' | 'rest', display: Electron.Display, layout: OverlayLayout = liveOverlayLayout()): Electron.Rectangle {
+  const a = rightEdgeAnchorY(display)
+  if (surface === 'open') return legacyDrawerRect(display.workArea, a)
+  return parkLayoutForDisplay(layout, display) === 'hide' ? restRect('none', display.workArea, a) : legacyTabRect(display.workArea, a)
+}
+
+/**
+ * The only writer of right-edge window bounds (M2-0202 D8c). Every right-edge path (park, reveal, drag,
+ * display reanchor, window mode, placement change) sets bounds here, from rightEdgeBounds, so the open
+ * window, the rest and the band always agree on one anchor. A rest the OS widened (Windows minimum width)
+ * keeps its right edge at the work-area edge.
+ */
+function applyRightEdgeBounds(surface: 'open' | 'rest', display: Electron.Display, layout: OverlayLayout = liveOverlayLayout()): Electron.Rectangle {
+  const rect = rightEdgeBounds(surface, display, layout)
+  currentWidth = rect.width
+  userAnchorY = rect.y
+  if (!win || win.isDestroyed()) return rect
+  if (surface === 'open') {
+    const b = win.getBounds()
+    if (b.x !== rect.x || b.y !== rect.y || b.width !== rect.width || b.height !== rect.height) win.setBounds(rect, false)
+    return rect
+  }
+  win.setBounds(rect, false)
+  try {
+    const after = win.getBounds()
+    const target = rightAnchoredParkPosition(rect, after.width)
+    if (after.x !== target.x || after.y !== target.y) win.setPosition(target.x, target.y, false)
+  } catch {
+    /* headless */
+  }
+  return rect
+}
+
+/**
+ * Where the pointer keeps the revealed right-edge drawer open: the authority's holdRegion, with the
+ * post-band-reveal corridor until the pointer first enters the drawer.
+ */
+function rightEdgeHoldRegion(display: Electron.Display, cursor: { x: number; y: number }): Electron.Rectangle[] {
+  const a = rightEdgeAnchorY(display)
+  const open = rightEdgeBounds('open', display)
+  if (rightEdgeRevealY !== null && pointInRect(cursor, open)) rightEdgeRevealY = null
+  const edgeX = display.workArea.x + display.workArea.width
+  const corridor = rightEdgeRevealY === null ? null : revealCorridor(open, rightEdgeRevealY, edgeX)
+  return holdRegion(display.workArea, open, a, { gracePx: CURSOR_LEAVE_GRACE_PX, edgeX, corridor })
+}
+
+/** Persist only the deliberate anchor, trailing one drag gesture. `centreY` is the dragged handle centre. */
+function queueRightEdgeAnchorForDisplay(display: Pick<Electron.Display, 'id' | 'workArea'>, centreY: number): void {
+  if (rightEdgeAnchorLocked(getLockedKeys())) return
   const key = overlayDisplayKey(display.id)
   if (!key) return
-  const bounded = Math.max(0, Math.min(1, normalizedY))
-  pendingRightEdgeYByDisplay.set(key, bounded)
-  if (rightEdgeYSaveTimer) return
-  rightEdgeYSaveTimer = setTimeout(() => {
-    rightEdgeYSaveTimer = null
-    const pending = Object.fromEntries(pendingRightEdgeYByDisplay)
-    pendingRightEdgeYByDisplay.clear()
+  // Stored inside the anchor clamp, so a drag back from past a bound moves at once.
+  pendingRightEdgeAnchorByDisplay.set(key, anchorFraction(display.workArea, anchorY(display.workArea, anchorFraction(display.workArea, centreY))))
+  if (rightEdgeAnchorSaveTimer) return
+  rightEdgeAnchorSaveTimer = setTimeout(() => {
+    rightEdgeAnchorSaveTimer = null
+    const pending = Object.fromEntries(pendingRightEdgeAnchorByDisplay)
+    pendingRightEdgeAnchorByDisplay.clear()
     if (Object.keys(pending).length === 0 || liveOverlayPlacement() !== 'right-edge') return
     try {
-      if (getLockedKeys().includes('overlayRightEdgeYByDisplay')) return
+      if (rightEdgeAnchorLocked(getLockedKeys())) return
       const settings = getSettings()
       setSettings({
-        overlayRightEdgeYByDisplay: { ...settings.overlayRightEdgeYByDisplay, ...pending }
+        overlayRightEdgeAnchorByDisplay: { ...settings.overlayRightEdgeAnchorByDisplay, ...pending }
       })
     } catch (error) {
       mainLog.warn('[overlay-placement] could not persist right-edge position', error)
     }
   }, 350)
-  rightEdgeYSaveTimer.unref?.()
+  rightEdgeAnchorSaveTimer.unref?.()
 }
 
 function overlayCursorWatchWanted(): boolean {
@@ -3291,6 +3381,7 @@ function tickOverlayCursorWatch(): void {
     osHoverSeen: overlayCursorWatchHovering,
     hugStub: isIncompleteAskReveal(bounds),
     heldCursor: overlayCursorWatchHeldCursor,
+    holdRegion: placement === 'right-edge' ? rightEdgeHoldRegion(display, cursor) : undefined,
     placement
   })
   if (islandResting || step.osHoverSeen) rightEdgeUnhoveredRevealAt = null
@@ -3308,6 +3399,8 @@ function tickOverlayCursorWatch(): void {
     const restoredFromParkedRail = islandResting
     cancelOverlayLeavePark()
     restoreBarWidth()
+    // A band reveal holds the corridor from where the pointer revealed it until the pointer reaches the drawer.
+    if (placement === 'right-edge' && restoredFromParkedRail) rightEdgeRevealY = cursor.y
     notifyOverlayCursorHover(true, restoredFromParkedRail)
     const after = win.getBounds()
     // Transition log only (a hug-stub restore can repeat per tick until the bar settles).
@@ -3379,13 +3472,15 @@ function pointerInIslandOrBar(opts?: { ignoreWindow?: boolean }): boolean {
   const bounds = win.getBounds()
   // A Settings-tall ghost is not the Ask bar. (900, 600) over 880×1017 must still park 8×2.
   if (isSettingsTallHeight(bounds.height) && !settingsSurfaceOpen) return false
+  const placement = resolvedOverlayPlacementForDisplay(display)
   return (
     decideCursorWatch({
       cursor,
       restRect: rest,
       revealedRect: bounds,
       revealed: true,
-      placement: resolvedOverlayPlacementForDisplay(display)
+      placement,
+      holdRegion: placement === 'right-edge' ? rightEdgeHoldRegion(display, cursor) : undefined
     }) === 'stay'
   )
 }
@@ -3508,6 +3603,10 @@ function anchorTopCenter(): void {
     return
   }
   const display = screen.getDisplayMatching(win.getBounds())
+  if (resolvedOverlayPlacementForDisplay(display) === 'right-edge') {
+    applyRightEdgeBounds(islandResting ? 'rest' : 'open', display)
+    return
+  }
   const b = win.getBounds()
   const { x, y } = overlayPositionForDisplay(
     b.width,
@@ -3542,8 +3641,9 @@ function restoreBarWidth(): void {
   const placement = resolvedOverlayPlacementForDisplay(display)
   let next: Electron.Rectangle
   if (placement === 'right-edge') {
-    next = rightEdgeSidecarBounds(getDisplayMetrics(display), { open: true, normalizedY: rightEdgeYForDisplay(display) })
-    currentWidth = next.width
+    // Bounds first, then visibility and chrome (revealOverlaySurface finds them already applied).
+    rightEdgeRevealY = null
+    next = applyRightEdgeBounds('open', display)
   } else {
     // Hide/Island reveal keeps the 120 Ask floor. Never Math.max a leftover Settings 800+ slab
     // (Ultron 880×1017 Expand Métis). Bar idle hugs the bar.
@@ -3564,6 +3664,12 @@ function repairOverlayBoundsForReveal(): void {
   if (!win || win.isDestroyed() || onboardingExclusiveLive()) return
   const b = win.getBounds()
   const display = screen.getDisplayMatching(b)
+  // The authority's right-edge rects lie inside the work area by construction; a generic height clamp would
+  // cut the drawer below its authority height.
+  if (!settingsSurfaceOpen && resolvedOverlayPlacementForDisplay(display) === 'right-edge') {
+    applyRightEdgeBounds(islandResting ? 'rest' : 'open', display)
+    return
+  }
   const { workArea } = display
   const height = clampHeight(b.height, workArea.height)
   const visible =
@@ -3653,12 +3759,12 @@ function setWindowMode(): void {
   } catch {
     /* headless / lifted placement stub */
   }
+  if (resolvedOverlayPlacementForDisplay(display) === 'right-edge') {
+    applyRightEdgeBounds('open', display)
+    return
+  }
   const nextHeight = clampHeight(height, workArea.height)
-  const placement = resolvedOverlayPlacementForDisplay(display)
-  const position =
-    placement === 'right-edge'
-      ? overlayPositionForDisplay(currentWidth, nextHeight, liveOverlayLayout(), display, ISLAND_TOP_MARGIN)
-      : { x: recenterXForWidth(b.x, b.width, currentWidth, workArea, 16), y: b.y }
+  const position = { x: recenterXForWidth(b.x, b.width, currentWidth, workArea, 16), y: b.y }
   win.setBounds({ ...position, width: currentWidth, height: nextHeight }, false)
 }
 
@@ -4339,24 +4445,12 @@ function moveBy(dx: number, dy: number): void {
   const b = w.getBounds()
   const fromDisplayId = screen.getDisplayMatching(b).id
   // Right edge is a vertical-only sidecar. Keeping ownership on its current display avoids a
-  // misleading cross-display drag while preserving a stable per-display normalized Y.
+  // misleading cross-display drag while preserving a stable per-display anchor. A drag changes only the
+  // anchor A; the drawer, the tab and the band all follow it from the authority.
   const display = screen.getDisplayMatching(b)
-  if (resolvedOverlayPlacementForDisplay(display) === 'right-edge') {
-    const height = clampHeight(b.height, display.workArea.height)
-    const normalizedY = normalizeRightEdgeY(b.y + dy, height, getDisplayMetrics(display))
-    const position = overlayPlacementPosition({
-      placement: 'right-edge',
-      width: b.width,
-      height,
-      layout: liveOverlayLayout(),
-      metrics: getDisplayMetrics(display),
-      topMargin: ISLAND_TOP_MARGIN,
-      normalizedY
-    })
-    const next = { ...b, ...position, height }
-    userAnchorY = next.y
-    if (dy !== 0) queueRightEdgeYForDisplay(display, normalizedY)
-    w.setBounds(next)
+  if (!settingsSurfaceOpen && resolvedOverlayPlacementForDisplay(display) === 'right-edge') {
+    if (dy !== 0) queueRightEdgeAnchorForDisplay(display, rightEdgeAnchorY(display) + dy)
+    applyRightEdgeBounds(islandResting ? 'rest' : 'open', display)
     return
   }
   // Top-center Hide/Island stays anchored under the notch; a drag would move its park position (M2-0431).
@@ -4405,22 +4499,13 @@ function registerScreenListeners(): void {
       const display = screen.getDisplayMatching(win.getBounds())
       const layout = liveOverlayLayout()
       const placement = resolvedOverlayPlacementForDisplay(display)
-      const park = parkedHoverReanchor(
-        layout,
-        islandResting,
-        getDisplayMetrics(display),
-        ISLAND_TOP_MARGIN,
-        placement,
-        rightEdgeYForDisplay(display)
-      )
+      const park = parkedHoverReanchor(layout, islandResting, getDisplayMetrics(display), ISLAND_TOP_MARGIN, placement)
       if (park) {
         overlayCursorWatchHovering = false
         if (placement === 'right-edge') {
-          const rest = parkedOverlayBounds(layout, display) // honors a right edge shared with a new display
-          currentWidth = rest.width
-          userAnchorY = rest.y
+          // The rest at the stored anchor, from the authority; honors a right edge shared with a new display.
           applyOverlaySurfaceChrome()
-          commitParkedOverlayBounds(rest)
+          applyRightEdgeBounds('rest', display, layout)
           applyHideClickThrough()
         } else {
           parkOverlayAfterHideSpring()
@@ -4431,14 +4516,9 @@ function registerScreenListeners(): void {
     const b = win.getBounds()
     const display = screen.getDisplayMatching(b)
     // A sidecar owns its screen edge, so topology changes must recompute both axes from its
-    // persisted normalized Y before generic reachability logic considers a free-form position.
+    // persisted anchor before generic reachability logic considers a free-form position.
     if (!settingsSurfaceOpen && resolvedOverlayPlacementForDisplay(display) === 'right-edge') {
-      const height = clampHeight(b.height, display.workArea.height)
-      const position = overlayPositionForDisplay(b.width, height, liveOverlayLayout(), display, ISLAND_TOP_MARGIN)
-      userAnchorY = position.y
-      if (b.x !== position.x || b.y !== position.y || b.height !== height) {
-        win.setBounds({ ...b, ...position, height })
-      }
+      applyRightEdgeBounds('open', display)
       return
     }
     const { workArea: wa } = display
@@ -5322,6 +5402,8 @@ function registerIpc(): void {
             applyOverlaySurfaceChrome()
             commitParkedOverlayBounds(park)
             applyHideClickThrough()
+          } else if (resolvedOverlayPlacementForDisplay(display) === 'right-edge') {
+            applyRightEdgeBounds('open', display)
           } else {
             const b = win.getBounds()
             const position = overlayPositionForDisplay(b.width, b.height, layout, display, ISLAND_TOP_MARGIN)

@@ -725,9 +725,11 @@ describe('right-edge Hide rows (RE-HIDE)', () => {
     expect(expected.drawer).toEqual(rightEdgeSidecarBounds(windows, { open: true }))
     expect(expected.tab).toEqual(parkAfterExclusiveOnboarding('island', windows, 8, 'right-edge'))
     expect(expected.band).toEqual(parkAfterExclusiveOnboarding('hide', windows, 8, 'right-edge'))
-    // The observed Windows parks: Island rail at y 141, Hide band at the drawer's y 39.
-    expect(expected.tab).toEqual({ x: 960, y: 141, width: 52, height: 52 })
-    expect(expected.band.y).toBe(39)
+    // M2-0202: one anchor A = 0.15 × 720 = 108 places the rail (centred on A) and the drawer (A − 36); the
+    // Hide band is the authority's revealBand, [wa.y+48, wa.bottom−48] whatever the anchor.
+    expect(expected.tab).toEqual({ x: 960, y: 82, width: 52, height: 52 })
+    expect(expected.drawer.y).toBe(72)
+    expect(expected.band).toEqual({ x: 1020, y: 48, width: 4, height: 624 })
   })
 
   it('accepts a Hide park the OS widened only when its right edge stays at the work-area edge', () => {
@@ -755,8 +757,8 @@ describe('right-edge Hide rows (RE-HIDE)', () => {
   })
 
   it('names the parked criteria a Windows readback misses, so a failing row says which one', () => {
-    // Run 36645827157 readback: the widened band flush at the edge is a bounds match.
-    const bounds = { x: 992, y: 39, width: 32, height: 560 }
+    // The run 36645827157 readback shape on the M2-0202 band: widened to 32 px, flush at the edge, is a bounds match.
+    const bounds = { x: 992, y: 48, width: 32, height: 624 }
     const win = (opacity: number, clickThrough: boolean | null) => ({ bounds, opacity, clickThrough, visible: true, displayBounds: windows.bounds, workArea: windows.workArea })
     const page = { dock: true, drawer: false, rail: true, hideControl: false, meetingLive: false, composerFocused: false, draft: '' }
     expect(rightEdgeStateMismatches({ win: win(0, true), page }, 'parked', 'hide')).toEqual([])

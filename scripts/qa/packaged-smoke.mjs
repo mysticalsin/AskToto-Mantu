@@ -1176,7 +1176,19 @@ export const RIGHT_EDGE_HIDE_SCENARIOS = Object.freeze([
   { id: 'RE-HIDE-4-island-meeting-leave-parks', layout: 'island' }
 ])
 
-const RIGHT_EDGE = Object.freeze({ margin: 12, tab: 52, drawerWidth: 360, drawerHeight: 560, band: 4, normalizedY: 0.2 })
+/** Mirrors src/shared/right-edge-geometry.ts for a fresh profile (anchor f = 0.15); a unit test holds the two equal. */
+const RIGHT_EDGE = Object.freeze({
+  margin: 12,
+  tab: 52,
+  drawerWidth: 360,
+  drawerHeight: 560,
+  band: 4,
+  bandCorner: 48,
+  anchor: 0.15,
+  anchorInset: 84,
+  drawerAboveAnchor: 36,
+  tabAboveAnchor: 26
+})
 /** Right-edge only (src/main/island/cursor-watch.ts RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS). */
 const RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS = 3000
 const MEETING_UNBLOCK =
@@ -1193,21 +1205,30 @@ export function initialRightEdgeHideRows() {
   }))
 }
 
-function rightEdgeY(height, workArea) {
-  const min = workArea.y + RIGHT_EDGE.margin
-  const max = workArea.y + workArea.height - height - RIGHT_EDGE.margin
-  return Math.round(min + (max - min) * RIGHT_EDGE.normalizedY)
-}
+const clampTo = (value, min, max) => Math.min(Math.max(value, min), max)
 
-/** Expected native bounds on `workArea`: the open drawer, the Island rail tab and the Hide reveal band. */
+/** Expected native bounds on `workArea`: the open drawer, the Island rail tab and the Hide reveal band, all
+ *  from the one anchor A (the handle centre). */
 export function rightEdgeExpectedRects(workArea) {
   const right = workArea.x + workArea.width
-  const drawerHeight = Math.min(RIGHT_EDGE.drawerHeight, Math.max(RIGHT_EDGE.tab, workArea.height - RIGHT_EDGE.margin * 2))
-  const drawerY = rightEdgeY(drawerHeight, workArea)
+  const bottom = workArea.y + workArea.height
+  const anchor = clampTo(
+    Math.round(workArea.y + RIGHT_EDGE.anchor * workArea.height),
+    workArea.y + RIGHT_EDGE.anchorInset,
+    bottom - RIGHT_EDGE.anchorInset
+  )
+  const drawerHeight = Math.min(RIGHT_EDGE.drawerHeight, workArea.height - RIGHT_EDGE.margin * 2)
+  const drawerY = clampTo(anchor - RIGHT_EDGE.drawerAboveAnchor, workArea.y + RIGHT_EDGE.margin, bottom - RIGHT_EDGE.margin - drawerHeight)
+  const tabY = clampTo(anchor - RIGHT_EDGE.tabAboveAnchor, workArea.y + RIGHT_EDGE.margin, bottom - RIGHT_EDGE.margin - RIGHT_EDGE.tab)
   return {
     drawer: { x: right - RIGHT_EDGE.margin - RIGHT_EDGE.drawerWidth, y: drawerY, width: RIGHT_EDGE.drawerWidth, height: drawerHeight },
-    tab: { x: right - RIGHT_EDGE.margin - RIGHT_EDGE.tab, y: rightEdgeY(RIGHT_EDGE.tab, workArea), width: RIGHT_EDGE.tab, height: RIGHT_EDGE.tab },
-    band: { x: right - RIGHT_EDGE.band, y: drawerY, width: RIGHT_EDGE.band, height: drawerHeight }
+    tab: { x: right - RIGHT_EDGE.margin - RIGHT_EDGE.tab, y: tabY, width: RIGHT_EDGE.tab, height: RIGHT_EDGE.tab },
+    band: {
+      x: right - RIGHT_EDGE.band,
+      y: workArea.y + RIGHT_EDGE.bandCorner,
+      width: RIGHT_EDGE.band,
+      height: workArea.height - RIGHT_EDGE.bandCorner * 2
+    }
   }
 }
 
