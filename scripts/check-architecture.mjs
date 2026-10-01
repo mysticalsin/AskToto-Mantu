@@ -33,6 +33,9 @@ const PATH_LIKE_TS = /^[^\s]*\.tsx?$/
 const DIALOG_NAMES = new Set(['confirm', 'alert', 'prompt'])
 const FS_MODULES = new Set(['fs', 'node:fs', 'fs/promises', 'node:fs/promises'])
 const CHILD_PROCESS_MODULES = new Set(['child_process', 'node:child_process'])
+const MEETING_DOCUMENT_CODEC = 'src/main/features/meetings/meeting-document.ts'
+// A regex literal that anchors on a `---` line at the start of the text, or on a newline followed by `---`.
+const FRONTMATTER_DELIMITER_REGEX = /\^(?:\(\?:)?-{3}|\\n-{3}/
 const MEETINGS_ROOT_READERS = new Set([
   'src/main/brain/ingest.ts',
   'src/main/brain/publish.ts',
@@ -55,6 +58,7 @@ const RULES = [
   ['FF-10', 'Process spawning outside src/main/infra/process/'],
   ['FF-11', 'BrowserWindow construction outside src/main/windows/'],
   ['FF-14', 'Background timers outside src/main/infra/scheduler/'],
+  ['FF-15', 'Frontmatter-delimiter regexes outside the meeting-document codec'],
 ]
 
 const RULE_IDS = RULES.map(([id]) => id)
@@ -113,6 +117,9 @@ export function countSourceFile(file, text) {
   }
   if (isProductionFile(file) && file.startsWith('src/main/') && !file.startsWith('src/main/infra/scheduler/')) {
     add('FF-14', countBackgroundTimers(sourceFile))
+  }
+  if (isProductionFile(file) && file.startsWith('src/main/') && file !== MEETING_DOCUMENT_CODEC) {
+    add('FF-15', countFrontmatterDelimiterRegexes(sourceFile))
   }
 
   return counts
@@ -586,6 +593,20 @@ function countBrowserWindowConstruction(sourceFile) {
         count += 1
       }
     }
+    ts.forEachChild(node, visit)
+  }
+  ts.forEachChild(sourceFile, visit)
+  return count
+}
+
+/**
+ * @param {ts.SourceFile} sourceFile Parsed source file.
+ * @returns {number} Regex literals that parse a `---` frontmatter block themselves.
+ */
+function countFrontmatterDelimiterRegexes(sourceFile) {
+  let count = 0
+  const visit = (node) => {
+    if (ts.isRegularExpressionLiteral(node) && FRONTMATTER_DELIMITER_REGEX.test(node.text)) count += 1
     ts.forEachChild(node, visit)
   }
   ts.forEachChild(sourceFile, visit)

@@ -1,6 +1,8 @@
 import type { RenderProcessGoneDetails } from 'electron'
 import type { AuditEvent } from '../../logger'
 import { OVERLAY_LAYOUTS } from '@shared/overlay-chrome'
+import { OVERLAY_PLACEMENTS } from '@shared/overlay-placement'
+import { OVERLAY_FLASH_ZONES } from '../../island/overlay-reveal-log'
 import { RENDERER_VIEWS } from '@shared/renderer-view'
 import { redactSecrets } from '@shared/redact'
 import { CRASH_KINDS, RECOVERY_STATUSES } from './crash-taxonomy'
@@ -9,7 +11,10 @@ import { CRASH_KINDS, RECOVERY_STATUSES } from './crash-taxonomy'
  * INV-PROJECTED: observability events pass through an event-specific allowlist.
  * INV-CONTENT-FREE: values are kind-checked, and error text is scrubbed before persistence.
  */
-export type ObservabilityEvent = Extract<AuditEvent, `app.${string}` | `sidecar.${string}` | `history.${string}` | 'reveal'>
+export type ObservabilityEvent = Extract<
+  AuditEvent,
+  `app.${string}` | `sidecar.${string}` | `history.${string}` | 'reveal' | 'overlay.flash'
+>
 export type FieldKind =
   | 'flag'
   | 'int'
@@ -55,9 +60,14 @@ export const BOOT_STAGES = [
   'createTray.buildMenu',
   'createTray.attachMenu',
   'createWindow.construct',
+  'createWindow.navigate',
   'createWindow.firstShow'
 ] as const
 export type BootStage = (typeof BOOT_STAGES)[number]
+/** The boot window's rendering configuration: the shipped one, or a QA-only variant the ST-1 window job builds it
+ *  under (boot-window-rendering.ts, M2-0516). */
+export const BOOT_WINDOW_VARIANTS = ['shipped', 'spellcheck-off', 'paint-when-hidden', 'prewarm-spellchecker', 'prewarm-view'] as const
+export type BootWindowVariant = (typeof BOOT_WINDOW_VARIANTS)[number]
 export const HISTORY_STAGES = ['received', 'served', 'settled'] as const
 export const HISTORY_OUTCOMES = ['ok', 'failed', 'discarded'] as const
 const RENDER_GONE_REASONS = [
@@ -189,8 +199,9 @@ export const OBSERVABILITY_EVENTS = {
     bootId: 'id',
     stage: BOOT_STAGES,
     ms: 'ms',
-    /** createWindow.construct only: whether the constructor built a transparent window. */
-    transparent: 'flag'
+    /** createWindow.construct only: whether the constructor built a transparent window, and under which variant. */
+    transparent: 'flag',
+    windowVariant: BOOT_WINDOW_VARIANTS
   },
   /** Overlay renderer stopped answering Chromium. */
   'app.unresponsive': {
@@ -209,6 +220,13 @@ export const OBSERVABILITY_EVENTS = {
     layout: OVERLAY_LAYOUTS,
     outcome: REVEAL_OUTCOMES,
     ms: 'ms'
+  },
+  /** M2-0431: a reveal that parked within 2 s with no click or keypress (island/overlay-reveal-log.ts). */
+  'overlay.flash': {
+    visibleMs: 'ms',
+    zone: OVERLAY_FLASH_ZONES,
+    placement: OVERLAY_PLACEMENTS,
+    layout: OVERLAY_LAYOUTS
   },
   /** Long-lived local sidecar spawned. */
   'sidecar.spawn': {

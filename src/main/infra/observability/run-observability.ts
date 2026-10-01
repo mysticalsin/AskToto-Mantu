@@ -13,7 +13,7 @@
 import { performance } from 'node:perf_hooks'
 import { beginRunWatch, markAlive, markShutdownClean, type PriorShutdown } from '../../boot-sentinel'
 import type { AuditSink } from '../../logger'
-import type { BootStage } from './projection'
+import type { BootStage, BootWindowVariant } from './projection'
 import { startStallMonitor, type StallMonitor, type StallMonitorOptions } from './stall-monitor'
 import { startStallSampler, type StallSampler, type StallSamplerOptions } from './stall-sampler'
 
@@ -60,6 +60,7 @@ export interface RunObservabilityOptions {
 /** What a window stage built. */
 export interface BootStageDetail {
   transparent?: boolean
+  windowVariant?: BootWindowVariant
 }
 
 export interface RunObservability {
