@@ -35,6 +35,7 @@ const root = join(__dirname, '..', '..')
 const sha = (text: string) => createHash('sha256').update(text).digest('hex')
 const MAC_SHA = sha('qa zip bytes')
 const STALL_SHA = sha('promotable dmg bytes')
+const IDLE_SHA = sha('idle soak dmg bytes')
 const WIN_SHA = sha('setup bytes')
 const COMMIT = 'a'.repeat(40)
 
@@ -80,6 +81,7 @@ describe('the scenario registry', () => {
       'fault-fatal-relaunch',
       'ex-suite',
       'stall-sampler',
+      'idle-soak',
       'sidecar-boot-reaper',
       'packaged-lifecycle',
       'renderer-kill'
@@ -219,9 +221,49 @@ describe('the scenario registry', () => {
     }
   })
 
+  it('declares idle-soak on macOS, installing promotable DMG bytes with the hosted long-run timeout', () => {
+    const scenario = SCENARIOS['idle-soak']
+    const mac = scenario.platforms.mac
+    expect(scenario.ticket).toBe('M2-0492')
+    expect(scenario.qaOnlyHook).toBe(false)
+    expect(scenario.exits).toEqual({ 0: 'PASS', 1: 'FAIL_OR_INCOMPLETE', 2: 'PRECONDITION' })
+    expect(Object.keys(scenario.platforms)).toEqual(['mac'])
+    expect(mac).toMatchObject({
+      variant: 'mac',
+      artifact: 'candidate-mac',
+      script: 'scripts/qa/soak/idle-soak.mjs',
+      report: 'idle-soak.json',
+      profileLayout: 'hide',
+      timeoutMinutes: 355,
+      stepTimeoutMinutes: 340
+    })
+    expect(mac.outcomeFromReport).toBe(true)
+    expect(existsSync(join(root, mac.script))).toBe(true)
+    expect(VARIANTS.mac.assets('1.0.0')).toContain('Metis-1.0.0.dmg')
+    expect(mac.args({ app: 'candidate-install/Metis.app', report: 'candidate-scenario/idle-soak.json' })).toEqual([
+      '--app',
+      'candidate-install/Metis.app',
+      '--profile',
+      'candidate-scenario/profile',
+      '--hours',
+      '5.5',
+      '--out',
+      'candidate-scenario'
+    ])
+    expect(mac.laneReportFields).toEqual([
+      'rule',
+      'hoursMeasured',
+      'parkedCoverage',
+      'displayAwake',
+      'hostFloorOverride',
+      'hostMemory',
+      'modelState'
+    ])
+  })
+
   it('requires the sha256 inputs a scenario needs and refuses any it does not use', () => {
     expect(resolveScenario({ scenario: 'fault-fatal-relaunch', sha256: { mac: ` ${MAC_SHA.toUpperCase()}\n`, win: '' } })).toEqual({
-      mac: { variant: 'mac-qa-identity', artifact: 'candidate-mac-qa-identity', sha256: MAC_SHA }
+      mac: { variant: 'mac-qa-identity', artifact: 'candidate-mac-qa-identity', sha256: MAC_SHA, timeoutMinutes: 60, stepTimeoutMinutes: 40 }
     })
     expect(() => resolveScenario({ scenario: 'fault-fatal-relaunch', sha256: { mac: '' } })).toThrow(/mac_sha256 is required/)
     expect(() => resolveScenario({ scenario: 'fault-fatal-relaunch', sha256: { mac: 'v1.9.6' } })).toThrow(/mac_sha256 is required/)
@@ -229,7 +271,10 @@ describe('the scenario registry', () => {
       /win_sha256 is set, but fault-fatal-relaunch does not run on win/
     )
     expect(resolveScenario({ scenario: 'stall-sampler', sha256: { mac: STALL_SHA, win: '' } })).toEqual({
-      mac: { variant: 'mac', artifact: 'candidate-mac', sha256: STALL_SHA }
+      mac: { variant: 'mac', artifact: 'candidate-mac', sha256: STALL_SHA, timeoutMinutes: 60, stepTimeoutMinutes: 40 }
+    })
+    expect(resolveScenario({ scenario: 'idle-soak', sha256: { mac: IDLE_SHA, win: '' } })).toEqual({
+      mac: { variant: 'mac', artifact: 'candidate-mac', sha256: IDLE_SHA, timeoutMinutes: 355, stepTimeoutMinutes: 340 }
     })
     expect(() => resolveScenario({ scenario: 'hk-m', sha256: { mac: MAC_SHA } })).toThrow(/Unknown scenario "hk-m"/)
     expect(() => resolveScenario({ scenario: 'toString', sha256: { mac: MAC_SHA } })).toThrow(/Unknown scenario/)
@@ -238,7 +283,14 @@ describe('the scenario registry', () => {
   it('publishes one job switch per platform for the workflow', () => {
     const plan = resolveScenario({ scenario: 'stall-sampler', sha256: { mac: STALL_SHA } })
     expect(resolveOutputs(plan)).toBe(
-      `mac=true\nmac_variant=mac\nmac_artifact=candidate-mac\nmac_sha256=${STALL_SHA}\nwin=false\n`
+      `mac=true\nmac_variant=mac\nmac_artifact=candidate-mac\nmac_sha256=${STALL_SHA}\nmac_timeout_minutes=60\nmac_step_timeout_minutes=40\nwin=false\n`
+    )
+  })
+
+  it('publishes the long mac timeout only for idle-soak', () => {
+    const plan = resolveScenario({ scenario: 'idle-soak', sha256: { mac: IDLE_SHA } })
+    expect(resolveOutputs(plan)).toBe(
+      `mac=true\nmac_variant=mac\nmac_artifact=candidate-mac\nmac_sha256=${IDLE_SHA}\nmac_timeout_minutes=355\nmac_step_timeout_minutes=340\nwin=false\n`
     )
   })
 
@@ -266,12 +318,12 @@ describe('the scenario registry', () => {
     expect(() => resolveScenario({ scenario: 'sidecar-boot-reaper', sha256: { win: WIN_SHA } })).toThrow(/mac_sha256 is required/)
     const plan = resolveScenario({ scenario: 'sidecar-boot-reaper', sha256: { mac: MAC_SHA, win: WIN_SHA } })
     expect(plan).toEqual({
-      mac: { variant: 'mac', artifact: 'candidate-mac', sha256: MAC_SHA },
-      win: { variant: 'win', artifact: 'candidate-win', sha256: WIN_SHA }
+      mac: { variant: 'mac', artifact: 'candidate-mac', sha256: MAC_SHA, timeoutMinutes: 60, stepTimeoutMinutes: 40 },
+      win: { variant: 'win', artifact: 'candidate-win', sha256: WIN_SHA, timeoutMinutes: 60, stepTimeoutMinutes: 40 }
     })
     expect(resolveOutputs(plan)).toBe(
-      `mac=true\nmac_variant=mac\nmac_artifact=candidate-mac\nmac_sha256=${MAC_SHA}\n` +
-        `win=true\nwin_variant=win\nwin_artifact=candidate-win\nwin_sha256=${WIN_SHA}\n`
+      `mac=true\nmac_variant=mac\nmac_artifact=candidate-mac\nmac_sha256=${MAC_SHA}\nmac_timeout_minutes=60\nmac_step_timeout_minutes=40\n` +
+        `win=true\nwin_variant=win\nwin_artifact=candidate-win\nwin_sha256=${WIN_SHA}\nwin_timeout_minutes=60\nwin_step_timeout_minutes=40\n`
     )
   })
 
@@ -309,8 +361,8 @@ describe('the scenario registry', () => {
       expect(existsSync(join(root, target.script))).toBe(true)
     }
     expect(resolveScenario({ scenario: 'packaged-lifecycle', sha256: { mac: MAC_SHA, win: WIN_SHA } })).toEqual({
-      mac: { variant: 'mac', artifact: 'candidate-mac', sha256: MAC_SHA },
-      win: { variant: 'win', artifact: 'candidate-win', sha256: WIN_SHA }
+      mac: { variant: 'mac', artifact: 'candidate-mac', sha256: MAC_SHA, timeoutMinutes: 60, stepTimeoutMinutes: 40 },
+      win: { variant: 'win', artifact: 'candidate-win', sha256: WIN_SHA, timeoutMinutes: 60, stepTimeoutMinutes: 40 }
     })
     expect(installerKindForScenario('packaged-lifecycle', 'mac')).toBe('mac-dmg')
     expect(installerKindForScenario('packaged-lifecycle', 'win')).toBe('win')
@@ -396,6 +448,14 @@ describe('installer selection through candidate-installer', () => {
     await expect(selectCandidateInstaller(dir, sha('another build'), 'mac')).rejects.toThrow(/No installer matches/)
   })
 
+  it('selects only the promotable DMG for idle-soak', async () => {
+    writeFileSync(join(dir, 'Metis-1.0.0.dmg'), 'idle soak dmg bytes')
+    writeFileSync(join(dir, 'Metis-1.0.0.zip'), 'idle soak zip bytes')
+    const plan = resolveScenario({ scenario: 'idle-soak', sha256: { mac: IDLE_SHA } })
+    expect(await selectCandidateInstaller(dir, plan.mac.sha256, 'mac-dmg')).toBe(join(dir, 'Metis-1.0.0.dmg'))
+    await expect(selectCandidateInstaller(dir, sha('idle soak zip bytes'), 'mac-dmg')).rejects.toThrow(/No installer matches/)
+  })
+
   it('selects the Setup, never the Portable, for the sidecar-boot-reaper win leg', async () => {
     writeFileSync(join(dir, 'Metis-Setup-1.0.0.exe'), 'setup bytes')
     writeFileSync(join(dir, 'Metis-Portable-1.0.0.exe'), 'portable bytes')
@@ -443,6 +503,27 @@ describe('the fresh profile', () => {
     expect(settings).toBeNull()
     expect(existsSync(join(appData, 'asktoto'))).toBe(false)
   })
+
+  it('builds the idle-soak representative Hide profile with local LLM enabled', () => {
+    const cwd = process.cwd()
+    const scratch = mkdtempSync(join(tmpdir(), 'candidate-scenarios-idle-profile-'))
+    try {
+      process.chdir(scratch)
+      const manifest = prepareProfile({ scenario: 'idle-soak', platform: 'mac', appDataDir: appData })
+      expect(manifest).toBe(join(scratch, 'candidate-scenario', 'profile', 'resource-census-profile.json'))
+      const parsed = JSON.parse(readFileSync(manifest as string, 'utf8'))
+      expect(parsed).toMatchObject({
+        profileKind: 'representative-synthetic',
+        layout: 'hide',
+        localLlm: { enabled: true, modelId: 'qwen3.5-0.8b' }
+      })
+      expect(() => prepareProfile({ scenario: 'idle-soak', platform: 'mac', appDataDir: appData })).toThrow(/idle-soak profile directory already exists/)
+    } finally {
+      process.chdir(cwd)
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
 
   it('refuses a QA userData directory that already exists', () => {
     mkdirSync(join(appData, 'asktoto-qa'))
@@ -668,6 +749,37 @@ describe('lane.json', () => {
     ).toThrow(/repository-relative/)
   })
 
+  it('runs idle-soak against the installed app, generated Hide profile and upload-safe deadline', () => {
+    const previous = process.env.SOAK_DEADLINE_EPOCH_MS
+    process.env.SOAK_DEADLINE_EPOCH_MS = '1790000000000'
+    try {
+      const argv = scenarioCommand({
+        scenario: 'idle-soak',
+        platform: 'mac',
+        installer: 'assets/Metis-1.0.0.dmg',
+        app: 'candidate-install/Metis.app',
+        sha256: IDLE_SHA,
+        outDir: 'candidate-scenario'
+      })
+      expect(argv).toEqual([
+        'scripts/qa/soak/idle-soak.mjs',
+        '--app',
+        'candidate-install/Metis.app',
+        '--profile',
+        'candidate-scenario/profile',
+        '--hours',
+        '5.5',
+        '--out',
+        'candidate-scenario',
+        '--deadline-epoch-ms',
+        '1790000000000'
+      ])
+    } finally {
+      if (previous === undefined) delete process.env.SOAK_DEADLINE_EPOCH_MS
+      else process.env.SOAK_DEADLINE_EPOCH_MS = previous
+    }
+  })
+
   it('records the evidence-record fields of the run', () => {
     expect(lane(0)).toEqual({
       schema: 1,
@@ -773,6 +885,76 @@ describe('lane.json', () => {
     expect(summary).toContain('| not covered: legacyOrphan |')
     expect(contentProblems(JSON.stringify(win), { account: 'runneradmin' })).toEqual([])
     expect('not_covered' in lane(0)).toBe(false)
+  })
+
+  it('copies idle-soak acceptance fields from the report into lane.json', () => {
+    const idleArgv = scenarioCommand({
+      scenario: 'idle-soak',
+      platform: 'mac',
+      installer: 'assets/Metis-1.0.0.dmg',
+      sha256: IDLE_SHA,
+      outDir: 'candidate-scenario',
+      app: 'candidate-install/Metis.app'
+    })
+    const lane = (laneRecord as any)({
+      scenario: 'idle-soak',
+      platform: 'mac',
+      env,
+      provenance,
+      candidateRun: '4242',
+      installer: 'assets/Metis-1.0.0.dmg',
+      sha256: IDLE_SHA,
+      argv: idleArgv,
+      exitCode: 0,
+      detail: '',
+      reportWritten: true,
+      reportData: {
+        outcome: 'PASS',
+        rule: { id: 'IDLE-GROWTH-1', rulesSha256: 'b'.repeat(64) },
+        hoursMeasured: 5.49,
+        parkedCoverage: 0.97,
+        displayAwake: { recorded: true, command: 'caffeinate -d', pid: 123 },
+        hostFloorOverride: true,
+        hostMemory: { totalBytes: 7_516_192_768 },
+        modelState: { llamaServerRan: false, sidecarSupervisorRan: false, note: 'llama-server never ran during the leg; the growth rule was still judged' }
+      }
+    })
+    expect(lane).toMatchObject({
+      scenario: 'idle-soak',
+      ticket: 'M2-0492',
+      variant: 'mac',
+      artifact_sha256: IDLE_SHA,
+      outcome: 'PASS',
+      report: 'idle-soak.json',
+      rule: { id: 'IDLE-GROWTH-1', rulesSha256: 'b'.repeat(64) },
+      hoursMeasured: 5.49,
+      parkedCoverage: 0.97,
+      displayAwake: { recorded: true, command: 'caffeinate -d', pid: 123 },
+      hostFloorOverride: true,
+      hostMemory: { totalBytes: 7_516_192_768 },
+      modelState: { llamaServerRan: false, sidecarSupervisorRan: false }
+    })
+    expect(contentProblems(JSON.stringify(lane), { account: 'runner' })).toEqual([])
+  })
+
+  it('uses the idle-soak report outcome so exit 1 can remain INCOMPLETE', () => {
+    const lane = (laneRecord as any)({
+      scenario: 'idle-soak',
+      platform: 'mac',
+      env,
+      provenance,
+      candidateRun: '4242',
+      installer: 'assets/Metis-1.0.0.dmg',
+      sha256: IDLE_SHA,
+      argv: ['scripts/qa/soak/idle-soak.mjs'],
+      exitCode: 1,
+      detail: 'parked coverage below 95%',
+      reportWritten: true,
+      reportData: { outcome: 'INCOMPLETE', parkedCoverage: 0.9 }
+    })
+    expect(lane.outcome).toBe('INCOMPLETE')
+    expect(lane.detail).toBe('parked coverage below 95%')
+    expect(lane.parkedCoverage).toBe(0.9)
   })
 
   it('records packaged-lifecycle row verdicts and fails when a required RV row is not PASS', () => {

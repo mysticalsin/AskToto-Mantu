@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { RUNNER_LABELS, SCENARIOS } from '../qa/candidate-scenarios.mjs'
+import { RUNNER_LABELS, SCENARIOS, resolveScenario } from '../qa/candidate-scenarios.mjs'
 import { LAUNCH_MIN_MS, worstCaseRunMs } from '../qa/ex-suite.mjs'
 import { VARIANTS } from '../qa/provenance.mjs'
 import { findUnpinnedUses } from './check-workflow-pins.mjs'
@@ -109,12 +109,17 @@ describe('candidate-scenarios.yml', () => {
       expect(body).toContain(`    if: github.event_name == 'workflow_dispatch' && needs.guard.outputs.${platform} == 'true'`)
       expect(body).toContain(`    runs-on: ${RUNNER_LABELS[platform as keyof typeof RUNNER_LABELS]}`)
       expect(block(job('guard'), '    outputs:', 4).join('\n')).toContain(`${platform}_sha256: \${{ steps.resolve.outputs.${platform}_sha256 }}`)
+      expect(block(job('guard'), '    outputs:', 4).join('\n')).toContain(`${platform}_timeout_minutes: \${{ steps.resolve.outputs.${platform}_timeout_minutes }}`)
+      expect(block(job('guard'), '    outputs:', 4).join('\n')).toContain(
+        `${platform}_step_timeout_minutes: \${{ steps.resolve.outputs.${platform}_step_timeout_minutes }}`
+      )
     }
   })
 
   it('installs the verified candidate bytes selected by sha256 into a fresh directory before the scenario', () => {
     const mac = steps('mac')
     const order = [
+      'Record the job start time',
       '--name candidate-provenance',
       'node scripts/qa/provenance.mjs verify provenance/provenance.json assets "$VARIANT"',
       'jq -r .run.id provenance/provenance.json',
@@ -137,7 +142,11 @@ describe('candidate-scenarios.yml', () => {
     expect(install).toContain('echo "app=$app" >> "$GITHUB_OUTPUT"')
     expect(mac[stepIndex(mac, '--name "$ARTIFACT"')]).toContain('gh run download "$CANDIDATE_RUN"')
     expect(job('mac')).toContain('      ARTIFACT: ${{ needs.guard.outputs.mac_artifact }}')
+    expect(job('mac')).toContain('    timeout-minutes: ${{ fromJSON(needs.guard.outputs.mac_timeout_minutes) }}')
+    const selector = mac[stepIndex(mac, 'node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" "$selector"')]
+    expect(selector).toContain('candidate-scenarios.mjs installer-kind --scenario "$SCENARIO" --platform mac')
     const run = mac[stepIndex(mac, 'candidate-scenarios.mjs run')]
+    expect(run).toContain('timeout-minutes: ${{ fromJSON(needs.guard.outputs.mac_step_timeout_minutes) }}')
     expect(run).toContain('INSTALLER: ${{ steps.installer.outputs.path }}')
     expect(run).toContain('APP: ${{ steps.install.outputs.app }}')
     expect(run).toContain('--app "$APP"')
@@ -167,11 +176,30 @@ describe('candidate-scenarios.yml', () => {
     expect((SCENARIOS['renderer-kill'].platforms.mac as { guiScripting?: boolean }).guiScripting).toBe(true)
   })
 
-  it('gives ex-suite a scenario step and job timeout that cover its 3 launches of at least 130 s plus boot, quit and the control', () => {
-    const minutes = (text: string) => Number(text.match(/timeout-minutes: (\d+)/)?.[1])
+  it('sets an upload-safe idle-soak deadline before running the mac scenario', () => {
     const mac = steps('mac')
-    const stepMs = minutes(mac[stepIndex(mac, 'candidate-scenarios.mjs run')]) * 60_000
-    const jobMs = minutes(job('mac').find((line) => /^ {4}timeout-minutes:/.test(line)) ?? '') * 60_000
+    const jobStart = mac[0]
+    expect(jobStart).toContain('name: Record the job start time')
+    expect(jobStart).toContain('id: job-start')
+    expect(jobStart).toContain('date +%s')
+    const deadline = mac[stepIndex(mac, 'Set the soak deadline')]
+    expect(deadline).toContain('id: soak-deadline')
+    expect(deadline).toContain('JOB_STARTED_AT_MS: ${{ steps.job-start.outputs.epoch_ms }}')
+    expect(deadline).toContain('MAC_TIMEOUT_MINUTES: ${{ needs.guard.outputs.mac_timeout_minutes }}')
+    expect(deadline).toContain("import { jobSafeDeadlineEpochMs } from './scripts/qa/soak/idle-soak.mjs'")
+    expect(deadline).toContain('jobSafeDeadlineEpochMs({')
+    expect(deadline).toContain('jobStartedAtMs: Number(process.env.JOB_STARTED_AT_MS)')
+    expect(deadline).toContain('timeoutMinutes: Number(process.env.MAC_TIMEOUT_MINUTES)')
+    const run = mac[stepIndex(mac, 'candidate-scenarios.mjs run')]
+    expect(run).toContain('SOAK_DEADLINE_EPOCH_MS: ${{ steps.soak-deadline.outputs.epoch_ms }}')
+    expect(stepIndex(mac, 'Record the job start time')).toBe(0)
+    expect(stepIndex(mac, 'Set the soak deadline')).toBeLessThan(stepIndex(mac, 'candidate-scenarios.mjs run'))
+  })
+
+  it('gives ex-suite a scenario step and job timeout that cover its 3 launches of at least 130 s plus boot, quit and the control', () => {
+    const plan = resolveScenario({ scenario: 'ex-suite', sha256: { mac: 'a'.repeat(64) } })
+    const stepMs = plan.mac.stepTimeoutMinutes * 60_000
+    const jobMs = plan.mac.timeoutMinutes * 60_000
     expect(SCENARIOS['ex-suite'].platforms.mac.args({ app: 'Metis.app', report: 'r.json' })).toContain('3')
     expect(worstCaseRunMs(3)).toBeGreaterThanOrEqual(3 * LAUNCH_MIN_MS)
     expect(stepMs).toBeGreaterThanOrEqual(worstCaseRunMs(3))
@@ -203,11 +231,23 @@ describe('candidate-scenarios.yml', () => {
     expect(verdict).toContain('exit 1')
   })
 
-  it('offers sidecar-boot-reaper, which runs on both the macOS and the Windows job', () => {
+  it('offers idle-soak and sidecar-boot-reaper from the registry', () => {
     const options = block(block(block(lines, '    inputs:', 4), '      scenario:', 6), '        options:', 8).map((line) => line.trim())
+    expect(options).toContain('- idle-soak')
     expect(options).toContain('- sidecar-boot-reaper')
+    expect(Object.keys(SCENARIOS['idle-soak'].platforms)).toEqual(['mac'])
     expect(Object.keys(SCENARIOS['sidecar-boot-reaper'].platforms)).toEqual(['mac', 'win'])
     expect(job('win')).toContain('    runs-on: windows-latest')
+  })
+
+  it('keeps per-scenario timeouts in the registry and gives only idle-soak the long mac job', () => {
+    expect(SCENARIOS['idle-soak'].platforms.mac.timeoutMinutes).toBe(355)
+    expect(SCENARIOS['idle-soak'].platforms.mac.stepTimeoutMinutes).toBe(340)
+    expect(job('win')).toContain('    timeout-minutes: ${{ fromJSON(needs.guard.outputs.win_timeout_minutes) }}')
+    const win = steps('win')
+    expect(win[stepIndex(win, 'candidate-scenarios.mjs run')]).toContain(
+      'timeout-minutes: ${{ fromJSON(needs.guard.outputs.win_step_timeout_minutes) }}'
+    )
   })
 
   it('offers packaged-lifecycle, which runs on both hosted platform jobs', () => {
