@@ -33,7 +33,7 @@ import { PROVIDERS, filterAllowedProviders } from '@shared/providers'
 import { MetisMark } from './MetisMark'
 import { AgentStatus, InlineOrb } from './AgentStatus'
 import { accelLabel, isWindows } from '../lib/keys'
-import { isEncryptedProfileRecoveryError } from '../lib/onboarding-completion'
+import { isEncryptedProfileRecoveryError } from '../features/onboarding/onboarding-completion'
 
 /** Microsoft 4-square glyph (no lucide equivalent). */
 function MsLogo({ size = 16 }: { size?: number }): JSX.Element {

@@ -14,7 +14,7 @@ import {
 import { getApiKey, getAllowedProviders } from '../store'
 import { localBaseReady } from '../llm/local-routing'
 import { getState as localRuntimeState } from '../llm/local-runtime'
-import { operatorAskTransport, operatorFundedProviders } from '../operator-ingest'
+import { operatorAskTransport, operatorFundedProviders } from '../features/operator/operator-ingest'
 import { resolvePortalCloudflareModel } from '@shared/ask-routing'
 import { intelligenceRequiresLocal } from '@shared/intelligence-pass'
 

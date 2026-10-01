@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createAsrModelProtocolHandler } from './asr-model-protocol'
+import { createAsrModelProtocolHandler } from './features/asr/asr-model-protocol'
 
 /**
  * Source-contract tests for the C_Main fix batch (main/index.ts + main/store.ts wiring gaps). Same

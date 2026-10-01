@@ -10,11 +10,11 @@ vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLo
 const managedDustChat = vi.hoisted(() =>
   vi.fn(async () => ({ ok: true as const, text: 'Data and AI, AI wiki' }))
 )
-vi.mock('../dust-cli-chat', () => ({
+vi.mock('../features/dust/dust-cli-chat', () => ({
   runManagedDustChat: (...args: unknown[]) => managedDustChat(...args),
   projectNameForDataAndAiAsk: () => undefined
 }))
-vi.mock('../dust-projects', () => ({
+vi.mock('../features/dust/dust-projects', () => ({
   fetchDustProjects: async () => ({ ok: false, error: 'test' }),
   matchDataAndAiProjects: () => []
 }))

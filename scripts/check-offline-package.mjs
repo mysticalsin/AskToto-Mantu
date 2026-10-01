@@ -13,7 +13,7 @@ const testFile = /\.(?:test|spec)\.(?:ts|tsx|js|mjs)$/
 const QWEN_DOWNLOAD_ALLOWED = ['src/main/llm/local-models.ts', 'src/main/llm/local-model-download.ts']
 // Import ASR: bundled resources first; userData fetch is the reviewed fallback when the installer
 // or a dev checkout is missing weights. Only this file may hold the sherpa-onnx archive URL.
-const PARAKEET_DOWNLOAD_ALLOWED = ['src/main/asr-bundled-ensure.ts']
+const PARAKEET_DOWNLOAD_ALLOWED = ['src/main/features/asr/asr-bundled-ensure.ts']
 
 const forbidden = [
   {

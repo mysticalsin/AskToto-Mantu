@@ -10,8 +10,10 @@
  * "inject everything Electron-specific" shape as stall-monitor.ts's test seams, so this module stays
  * importable and testable outside a real Electron process.
  */
+import { performance } from 'node:perf_hooks'
 import { beginRunWatch, markAlive, markShutdownClean, type PriorShutdown } from '../../boot-sentinel'
 import type { AuditSink } from '../../logger'
+import type { BootStage, BootWindowVariant } from './projection'
 import { startStallMonitor, type StallMonitor, type StallMonitorOptions } from './stall-monitor'
 import { startStallSampler, type StallSampler, type StallSamplerOptions } from './stall-sampler'
 
@@ -49,7 +51,16 @@ export interface RunObservabilityOptions {
     startStallSampler?: (opts: StallSamplerOptions) => StallSampler
     setIntervalFn?: (handler: () => void, ms: number) => Timer
     clearIntervalFn?: (handle: Timer) => void
+    now?: () => number
+    /** Runs `flush` in a later main-thread task (setImmediate in production). */
+    scheduleFlush?: (flush: () => void) => void
   }
+}
+
+/** What a window stage built. */
+export interface BootStageDetail {
+  transparent?: boolean
+  windowVariant?: BootWindowVariant
 }
 
 export interface RunObservability {
@@ -60,9 +71,22 @@ export interface RunObservability {
    *  clearing it every tick (stall-monitor.ts). Wrap any boot step or background-timer callback worth
    *  naming on a late tick; returns `fn`'s result. */
   timePhase<T>(label: string, fn: () => T): T
-  /** Stop the heartbeat and the stall monitor and audit `app.shutdown.clean`. Call once, last, from
-   *  `will-quit`. Idempotent. */
+  /** timePhase for a native boot stage (M2-0515): its duration is also recorded as `app.boot.stage`,
+   *  whether `fn` returns or throws (a throw is rethrown), so every run names each stage's cost. */
+  timeBootStage<T>(stage: BootStage, fn: () => T): T
+  /** Records `app.boot.stage` for a stage the caller timed itself (a constructor whose assignment must stay
+   *  in place). The audit write runs in a later main-thread task, never inside the task it measures: the
+   *  audit transport is synchronous. */
+  recordBootStage(stage: BootStage, ms: number, detail?: BootStageDetail): void
+  /** Flush pending boot stage records, stop the heartbeat and the stall monitor and audit
+   *  `app.shutdown.clean`. Call once, last, from `will-quit`. Idempotent. */
   shutdownClean(uptimeS: number): void
+}
+
+/** Runs one native boot stage through `observability.timeBootStage` once observability has started, and
+ *  untimed before that (M2-0515). */
+export function timeBootStage<T>(observability: RunObservability | null, stage: BootStage, fn: () => T): T {
+  return observability ? observability.timeBootStage(stage, fn) : fn()
 }
 
 const ALIVE_INTERVAL_MS = 10_000
@@ -77,6 +101,8 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
   const doStartStallSampler = deps.startStallSampler ?? startStallSampler
   const setIntervalFn = deps.setIntervalFn ?? setInterval
   const clearIntervalFn = deps.clearIntervalFn ?? clearInterval
+  const now = deps.now ?? (() => performance.now())
+  const scheduleFlush = deps.scheduleFlush ?? ((flush: () => void) => void setImmediate(flush))
   const powerMonitor = opts.powerMonitor
 
   const { bootId, prior } = doBeginRunWatch(opts.userData)
@@ -129,15 +155,44 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
   powerMonitor.on('resume', onWake)
   powerMonitor.on('unlock-screen', onWake)
 
+  // Boot stage records wait here for one flush in a later task, so no audit write lands inside a measured task.
+  let pendingStages: { stage: BootStage; ms: number; detail?: BootStageDetail }[] = []
+  const flushBootStages = (): void => {
+    const records = pendingStages
+    pendingStages = []
+    for (const { stage, ms, detail } of records) opts.audit('app.boot.stage', { bootId, stage, ms, ...detail })
+  }
+  const recordBootStage = (stage: BootStage, ms: number, detail?: BootStageDetail): void => {
+    pendingStages.push({ stage, ms, detail })
+    if (pendingStages.length === 1) scheduleFlush(flushBootStages)
+  }
+
   let stopped = false
   return {
     priorShutdown: prior.prevShutdown,
     timePhase<T>(label: string, fn: () => T): T {
       return stallMonitor.timePhase(label, fn)
     },
+    timeBootStage<T>(stage: BootStage, fn: () => T): T {
+      let ms = 0
+      try {
+        return stallMonitor.timePhase(stage, () => {
+          const start = now()
+          try {
+            return fn()
+          } finally {
+            ms = now() - start
+          }
+        })
+      } finally {
+        recordBootStage(stage, ms)
+      }
+    },
+    recordBootStage,
     shutdownClean(uptimeS: number): void {
       if (stopped) return
       stopped = true
+      flushBootStages()
       // Before the heartbeat stops, so the helper can never see the marker go stale during the rest of
       // will-quit.
       stallSampler?.stop()

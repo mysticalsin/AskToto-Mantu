@@ -21,7 +21,7 @@ const hosted = vi.hoisted(() => ({
     url: 'https://operator.test', secret: 'synthetic-seat-license'
   }))
 }))
-vi.mock('../operator-ingest', () => ({
+vi.mock('../features/operator/operator-ingest', () => ({
   operatorFundedProviders: hosted.providers,
   operatorAskTransport: hosted.transport
 }))

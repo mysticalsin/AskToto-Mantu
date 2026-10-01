@@ -33,13 +33,16 @@ npm run check:bugs
 ## 2. Physical QA of a packaged build
 
 Unit tests prove functions; the physical suite proves the shipped app against real IPC, real settings on disk and real
-streaming. Two hosted lanes drive it without touching a developer machine:
+streaming. Hosted lanes drive it without touching a developer machine:
 
 - `packaged-smoke.yml` builds the unsigned app on macOS and Windows runners, installs it into a fresh directory and runs
   `scripts/qa/packaged-smoke.mjs`: the app starts, the renderer reports ready, it quits cleanly and nothing it started is
   alive five seconds later.
 - `windows-qa.yml` installs a released Windows build and runs HK-W, hard-killing only Metis and taking a census of every
   descendant process.
+- `candidate-scenarios.yml` installs the installer of a `qa-candidate.yml` run on main, selected by sha256, on a fresh
+  profile and runs one scenario from the registry in `scripts/qa/candidate-scenarios.mjs` (first: `fault-fatal-relaunch`).
+  It uploads the scenario report and a `lane.json` whose fields match the evidence record.
 
 ```bash verify-dry
 node scripts/qa/packaged-smoke.mjs

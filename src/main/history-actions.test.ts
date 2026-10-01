@@ -80,6 +80,49 @@ describe('meetingOpenTarget (History "Open")', () => {
     writeFileSync(join(folder, NAME), '# Weekly sync\n')
     expect(await meetingOpenTarget(folder, NAME)).toEqual({ ok: false, error: MEETING_NOT_READABLE_MSG })
   })
+
+  describe('with a counted fs', () => {
+    let reads: string[]
+    let notRegular: boolean
+    let presence: ContentPresence
+
+    beforeEach(async () => {
+      const { readdir, readFile, realpath, stat, lstat } = await import('node:fs/promises')
+      reads = []
+      notRegular = false
+      presence = 'dataless'
+      useStorageForTests({
+        detector: { classify: async (files) => new Map(files.map((file): [string, ContentPresence] => [file.path, presence])) },
+        fs: {
+          readdir: (p) => readdir(p),
+          readFile: (p) => {
+            reads.push(p)
+            return readFile(p)
+          },
+          realpath: (p) => realpath(p),
+          stat: async (p) => {
+            const s = await stat(p)
+            return notRegular ? { mtimeMs: s.mtimeMs, ctimeMs: s.ctimeMs, size: s.size, isFile: () => false } : s
+          },
+          lstat: (p) => lstat(p).then((s) => ({ isSymbolicLink: s.isSymbolicLink() }))
+        }
+      })
+      writeFileSync(join(folder, NAME), '# Weekly sync\n')
+    })
+
+    it.each([false, true])('refuses a non-regular meeting file without reading it (hydrate: %s)', async (hydrate) => {
+      // The detector calls it local, so only the classify-first refusal keeps a plain read from opening it.
+      notRegular = true
+      presence = 'local'
+      expect(await meetingOpenTarget(folder, NAME, { hydrate })).toEqual({ ok: false, error: MEETING_NOT_READABLE_MSG })
+      expect(reads).toEqual([])
+    })
+
+    it('an explicit open reads a cloud-only meeting exactly once and hands it over', async () => {
+      expect(await meetingOpenTarget(folder, NAME, { hydrate: true })).toEqual({ ok: true, path: join(folder, NAME), encrypted: false })
+      expect(reads).toHaveLength(1)
+    })
+  })
 })
 
 describe('readSavedMeeting (History "Export copy")', () => {

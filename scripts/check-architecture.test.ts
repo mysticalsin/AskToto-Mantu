@@ -38,6 +38,7 @@ const RULE_IDS = [
   'FF-11',
   'FF-14',
   'FF-15',
+  'FF-16',
 ]
 
 function sortedViolationLines(stdout: string): string[] {
@@ -322,6 +323,7 @@ describe('architecture ratchet pure functions', () => {
       'FF-11': {},
       'FF-14': {},
       'FF-15': {},
+      'FF-16': {},
     }, null, 2)}\n`)
     expect(Object.keys(JSON.parse(canonical) as Counts)).toEqual(RULE_IDS)
     expect(formatBaseline(JSON.parse(canonical) as Counts)).toBe(canonical)
@@ -537,6 +539,24 @@ describe('architecture source detectors', () => {
     })
   })
 
+  describe('FF-15 frontmatter-delimiter regexes outside the meeting-document codec', () => {
+    it('counts delimiter regexes in src/main production files except the codec', () => {
+      const text = [
+        'const a = text.match(/^---\\n([\\s\\S]*?)\\n---/)',
+        'const b = text.replace(/^---\\r?\\n[\\s\\S]*?\\r?\\n---\\n?/, "")',
+        'const c = /^(?:---)/',
+        'const d = /^## Full transcript/m',
+        'const e = "^---\\n"',
+      ].join('\n')
+      // Extension appended so the FF-07 detector does not count these fixture names as source paths.
+      const ext = '.' + 'ts'
+      expect(countSourceFile('src/main/reader' + ext, text)).toEqual({ 'FF-15': 3 })
+      expect(countSourceFile('src/main/features/meetings/meeting-document' + ext, text)).toEqual({})
+      expect(countSourceFile('src/main/reader.test' + ext, text)).toEqual({})
+      expect(countSourceFile('src/renderer/src/reader' + ext, text)).toEqual({})
+    })
+  })
+
   describe('FF-14 background timers outside src/main/infra/scheduler', () => {
     it('counts background intervals and self-rearming timeouts in src/main only', () => {
       const text = [
@@ -576,7 +596,7 @@ describe('architecture source detectors', () => {
   })
 })
 
-describe('FF-15 top-level modules under src/main and src/renderer/src/lib', () => {
+describe('FF-16 top-level modules under src/main and src/renderer/src/lib', () => {
   it('counts production files directly under the two directories', () => {
     expect(countTopLevelModule('src/main/operator-queue.ts')).toBe(1)
     expect(countTopLevelModule('src/renderer/src/lib/onboarding-flow.ts')).toBe(1)

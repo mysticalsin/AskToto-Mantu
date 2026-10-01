@@ -7,8 +7,8 @@
  *
  * Anchors are function/branch names, never line numbers, so reordering unrelated code doesn't break this.
  */
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { join, relative } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { pickReadyProvider, detectHint, licenseErrorMessage, SETTINGS_CONTENT_SCROLL_CLASS, settingsScrollClipsOverflowX } from './Settings'
 import { licenseErrorMessage as onboardingLicenseErrorMessage } from './OnboardingExperience'
@@ -17,7 +17,29 @@ import { licenseErrorMessage as gateLicenseErrorMessage } from './LicenseGate'
 // Normalize CRLF → LF: on a Windows checkout Settings.tsx has \r\n line endings, and a marker whose
 // newline sits mid-string (e.g. finding 5's '))}\n          </div>') would never match '))}\r\n...'.
 // Normalizing keeps every anchor line-ending-independent without weakening what each one pins.
-const source = readFileSync(join(__dirname, 'Settings.tsx'), 'utf8').replace(/\r\n/g, '\n')
+//
+// Settings is being split into ui/ primitives and features/settings sections (M2-0071), so the anchors are
+// resolved over Settings.tsx plus every .ts/.tsx under those two directories: a section keeps its contract
+// wherever it lives. Each file is preceded by a "// FILE:" line so a moved block stays attributable.
+function listSources(dir: string): string[] {
+  if (!existsSync(dir)) return []
+  return readdirSync(dir, { withFileTypes: true })
+    .flatMap((entry) => {
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) return listSources(full)
+      return /\.tsx?$/.test(entry.name) ? [full] : []
+    })
+    .sort()
+}
+const rendererSrc = join(__dirname, '..')
+const sourceFiles = [
+  join(__dirname, 'Settings.tsx'),
+  ...listSources(join(rendererSrc, 'features', 'settings')),
+  ...listSources(join(rendererSrc, 'ui'))
+]
+const source = sourceFiles
+  .map((file) => `// FILE: ${relative(rendererSrc, file).replace(/\\/g, '/')}\n${readFileSync(file, 'utf8').replace(/\r\n/g, '\n')}`)
+  .join('\n')
 
 describe('legacy licence activation errors', () => {
   it('explains a non-persistent device setup without blaming the network', () => {
@@ -44,7 +66,7 @@ function blockAfter(startAnchor: string, endMarker: string): string {
 }
 
 describe('Local AI distinguishes bundled compact weights from optional downloads (MQA-319)', () => {
-  const block = blockAfter('function LocalAiSection(', '\nfunction StepBadge(')
+  const block = blockAfter('function LocalAiSection(', '\nfunction CliIntegration(')
   // Copy assertions run over the code with `//` comments stripped. The comments explain WHY the old
   // wording was wrong and legitimately quote it; that text never reaches a user.
   const copy = block.replace(/^\s*\/\/.*$/gm, '')
@@ -247,7 +269,7 @@ describe('MQA-069 — the Advanced model fields commit on the debounce boundary,
   })
 
   it('LazyInput forwards `list` so the model fields keep their datalist suggestions', () => {
-    expect(blockAfter('function LazyInput(', '\ntype AsrCorrection')).toMatch(/list=\{list\}/)
+    expect(blockAfter('function LazyInput(', '\n// FILE: ui/')).toMatch(/list=\{list\}/)
   })
 })
 
@@ -354,7 +376,7 @@ describe('CLI Integration copy — managed install, not npm i -g', () => {
 })
 
 describe('Set up automatically shows an honest status chip', () => {
-  const cli = (): string => blockAfter('function CliIntegration(', '\nfunction McpConnectionCard(')
+  const cli = (): string => blockAfter('function CliIntegration(', '\n// FILE: features/settings/CalendarTab.tsx')
   const install = (): string =>
     blockAfter('const runInstall = async (id: \'claude-cli\' | \'codex-cli\')', 'const connect = async')
 
@@ -420,7 +442,7 @@ describe('Set up Dust installs the managed CLI, then signs in', () => {
   })
 
   it('the Set up Dust button copy is install, not reconnect / No CLI', () => {
-    const block = blockAfter("title={active ? 'Dust CLI · Your agents (active)'", '\nfunction getAudioChoices(')
+    const block = blockAfter("title={active ? 'Dust CLI · Your agents (active)'", '\n// FILE: ')
     const copy = block.replace(/^\s*\/\/.*$/gm, '')
     expect(copy).toMatch(/Installing Dust CLI/)
     expect(copy).toMatch(/Installs the Dust CLI, then opens your browser/)
@@ -437,7 +459,7 @@ describe('BRAIN-CONNECTORS — one-click ClickUp and Plane, Polo form stays', ()
 
   it('ClickUp and Plane default cards have no MCP URL field', () => {
     const clickup = blockAfter('function ClickupCard(', '\nfunction PlaneCard(')
-    const plane = blockAfter('function PlaneCard(', '\nfunction AgentPicker(')
+    const plane = blockAfter('function PlaneCard(', '\nfunction getAudioChoices(')
     expect(productCopy).not.toMatch(/MCP endpoint URL/)
     expect(clickup).toMatch(/<ClickUpMark/)
     expect(plane).toMatch(/<PlaneMark/)
@@ -488,7 +510,7 @@ describe('BRAIN-CONNECTORS — one-click ClickUp and Plane, Polo form stays', ()
 // Instant validate: Dust connect must live-ping and fail loud. No green Connected from a saved key
 // alone, and never an auto-sent chat as the "proof".
 describe('Dust instant validate proves a live connection', () => {
-  const setup = (): string => blockAfter('function DustSetup(', '\nfunction getAudioChoices(')
+  const setup = (): string => blockAfter('function DustSetup(', '\n// FILE: ')
   const copy = (): string => setup().replace(/^\s*\/\/.*$/gm, '')
 
   it('CLI import does not paint ok:true / Loading agents before the live prove', () => {

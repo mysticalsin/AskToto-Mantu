@@ -31,6 +31,22 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') && !contains(fromJSON('["refs/heads/main","refs/heads/master","refs/heads/m2/integration"]'), github.ref)) }}
 
 jobs:
+  # M2-0525 — decides whether the macOS-only Native job runs (scripts/ci/native-changes.sh: always on
+  # m2/integration, main, master, release/*, pull requests and dispatch; on a ticket-branch push only when it
+  # touches the native surface). A skipped job leaves the run green.
+  changes:
+    name: Native surface changed
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      native: ${{ steps.native.outputs.native }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - id: native
+        run: bash scripts/ci/native-changes.sh
+
   quality:
     # Matrix over both host platforms is LOAD-BEARING. This job was ubuntu-only for the app's whole
     # history, so every Windows-gated test was a silent false-pass: nothing ever executed the win32
@@ -97,6 +113,8 @@ jobs:
       - run: npm run check:colors
 
   native:
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     # The two Swift halves of the product that no Node job can reach (M2-0050): the MetisKit package's
     # tests, the native SwiftUI shell, and the shipped metis-mac-helper sidecar. Until this job existed the
     # README's "26 tests green" was a claim nothing executed and the helper had no behavioural test at all.

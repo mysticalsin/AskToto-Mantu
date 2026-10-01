@@ -75,13 +75,13 @@ import { PROVIDERS, type ProviderId } from '@shared/providers'
 import { PERMISSIONS_POLL_MS } from '../state'
 import { InlineOrb } from './AgentStatus'
 import { MetisMark } from './MetisMark'
-import { prefetchOnboardingDemoChunks } from '../lib/onboarding-demo-prefetch'
+import { prefetchOnboardingDemoChunks } from '../features/onboarding/onboarding-demo-prefetch'
 // Keep the scripted demo ready when the user reaches Reveal; its heavy Answer/Copilot
 // children remain lazy inside the demo scene.
 import { OnboardingDemoScene } from './OnboardingDemoScene'
 import { OnboardingAppearance } from './OnboardingAppearance'
 import { KineticGrid } from './onboarding/KineticGrid'
-import { shouldMountKineticGrid } from '../lib/onboarding-kinetic-grid'
+import { shouldMountKineticGrid } from '../features/onboarding/onboarding-kinetic-grid'
 import { isWindows } from '../lib/keys'
 import { ONBOARDING_PERSONAS, type OnboardingPersonaId } from '../lib/persona-vibe'
 import {
@@ -92,16 +92,16 @@ import {
   sceneAfterReveal,
   sceneAfterSetup,
   type OnboardingScene
-} from '../lib/onboarding-flow'
+} from '../features/onboarding/onboarding-flow'
 import {
   appearanceSettingsPatch,
   resolveOnboardingPlacementSync,
   saveOnboardingAppearanceChoice,
   seedOnboardingAppearance,
   seedOnboardingPlacement
-} from '../lib/onboarding-appearance'
+} from '../features/onboarding/onboarding-appearance'
 import { persistOverlayPlacement } from '../lib/overlay-placement-save'
-import { onboardingReadinessCopy } from '../lib/onboarding-readiness-copy'
+import { onboardingReadinessCopy } from '../features/onboarding/onboarding-readiness-copy'
 import {
   createOnboardingCompletionFlow,
   ENCRYPTED_PROFILE_RECOVERY_UNCONFIRMED_MESSAGE,
@@ -111,9 +111,9 @@ import {
   persistOnboardingCompletion,
   type OnboardingCompletionOutcome,
   type OnboardingCompletionState
-} from '../lib/onboarding-completion'
-import { createOnboardingMusicBed, haltAllOnboardingAudio, lockOnboardingAudio } from '../lib/onboarding-music'
-import { closeOnboardingPortal, disposePortalAudio, playBarLand, playPortalOpen, requestBarLand, requestOnboardingPortalOpen } from '../lib/onboarding-portal'
+} from '../features/onboarding/onboarding-completion'
+import { createOnboardingMusicBed, haltAllOnboardingAudio, lockOnboardingAudio } from '../features/onboarding/onboarding-music'
+import { closeOnboardingPortal, disposePortalAudio, playBarLand, playPortalOpen, requestBarLand, requestOnboardingPortalOpen } from '../features/onboarding/onboarding-portal'
 import {
   TELL_THE_ROOM_CHECKBOX,
   TELL_THE_ROOM_LEAD,
@@ -121,14 +121,14 @@ import {
   TELL_THE_ROOM_READY,
   TELL_THE_ROOM_TITLE,
   TELL_THE_ROOM_WHY
-} from '../lib/onboarding-tell-the-room'
+} from '../features/onboarding/onboarding-tell-the-room'
 import {
   ONBOARDING_HERO_POSTER_SRC,
   ONBOARDING_HERO_VIDEO_SRC,
   playOnboardingVideo,
   preloadOnboardingHeroVideo,
   resolveOnboardingHeroVideoSrc
-} from '../lib/onboarding-hero-video'
+} from '../features/onboarding/onboarding-hero-video'
 
 // Same icon-per-mode mapping as the Settings → Personalize `ModePicker` (ModePicker.tsx) — one mode,
 // one icon, everywhere it appears, rather than inventing a second icon language just for this scene.

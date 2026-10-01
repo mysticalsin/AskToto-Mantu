@@ -12,7 +12,7 @@ import {
   lerp2,
   rippleOffset,
   tileWarp
-} from '../../lib/onboarding-kinetic-grid'
+} from '../../features/onboarding/onboarding-kinetic-grid'
 
 function prefersReducedMotion(): boolean {
   return typeof window !== 'undefined' && typeof window.matchMedia === 'function'

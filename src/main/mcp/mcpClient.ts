@@ -18,7 +18,7 @@
  * anything (that's main/index.ts's job) and never renders UI. Lives in the main process alongside
  * src/main/llm/* — the renderer never talks to an MCP endpoint directly.
  *
- * DEFENSIVE-CODING CONVENTIONS (mirrors src/main/llm/dust.ts + src/main/dustcli.ts):
+ * DEFENSIVE-CODING CONVENTIONS (mirrors src/main/llm/dust.ts + src/main/features/dust/dustcli.ts):
  *   - every network call is wrapped so a failure returns { ok: false, error } — never throws into
  *     an unhandled rejection, never crashes the main process.
  *   - a hard timeout bounds every call (a remote MCP server may be unreachable, slow, or hung) via

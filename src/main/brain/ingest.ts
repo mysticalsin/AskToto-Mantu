@@ -27,12 +27,13 @@ import { fnv1a } from '@shared/hash'
 import { alignQuote, verifyNumericFact, extractNumerals, numeralDerivable } from '@shared/grounding'
 import { getSettings, getApiKey, getAllowedProviders, setApiKey, setSettings } from '../store'
 import { createStream } from '../llm'
-import { operatorAskTransport, operatorFundedProviders } from '../operator-ingest'
+import { operatorAskTransport, operatorFundedProviders } from '../features/operator/operator-ingest'
 import { resolvePortalCloudflareModel } from '@shared/ask-routing'
 import { localBaseReady } from '../llm/local-routing'
 import { intelligenceNoProviderMessage, intelligenceRequiresLocal } from '@shared/intelligence-pass'
 import { verifyIntegrity } from '../llm/local-models'
 import { getState as localRuntimeState, activeStreams as localActiveStreams } from '../llm/local-runtime'
+import { parse, readMeetingFields } from '../features/meetings/meeting-document'
 import { isLocalPreemption, localSlotTokens, whenLocalInteractiveIdle } from '../llm/local'
 import {
   EXTRACTION_REMINDER, ExtractionDoesNotFitError, LOCAL_EXTRACTION_OUTPUT_TOKENS, MIN_LOCAL_WINDOW_CHARS,
@@ -54,7 +55,7 @@ import {
 } from './inputs'
 // Static (eager) import — NOT `await import()`: the main process is bytecode-compiled and dynamic import
 // throws there (see llm/dust.ts's own note). dustcli.ts imports nothing from brain/, so no cycle.
-import { refreshDustCliSession } from '../dustcli'
+import { refreshDustCliSession } from '../features/dust/dustcli'
 import { auditLog, mainLog } from '../logger'
 import { appendTimeSavedEvent } from '../time-saved-log'
 import { estimateSecondBrainMinutes } from '@shared/time-saved-events'
@@ -1704,10 +1705,10 @@ export function ingestFailureDetails(
 
 /** Reads the app-written meeting mode from the leading YAML frontmatter only. */
 export function readMeetingSourceMode(md: string): string {
-  const frontmatter = md.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1]
-  if (!frontmatter) return ''
+  const doc = parse(md)
+  if (!doc) return ''
 
-  const raw = frontmatter.match(/^mode:\s*(.*?)\s*$/m)?.[1]?.trim() ?? ''
+  const raw = doc.lines.join('\n').match(/^mode:\s*(.*?)\s*$/m)?.[1]?.trim() ?? ''
   const quoted = raw.match(/^(['"])(.*)\1$/)
   const mode = (quoted ? quoted[2] : raw).trim()
   return mode.length <= 100 ? mode : ''
@@ -1763,7 +1764,7 @@ export async function ingestExtraction(
   // own mtime as a last resort, so a blank/garbage date never silently sorts as the oldest thing on
   // the Commitment Ledger.
   const readFrontmatterDate = (field: 'date' | 'start'): string | null => {
-    const raw = md.match(new RegExp(`^${field}:\\s*"?([^"\\n]+?)"?\\s*$`, 'm'))?.[1]
+    const raw = readMeetingFields(md)[field]
     return raw && !Number.isNaN(Date.parse(raw)) ? raw : null
   }
   let date = readFrontmatterDate('date') ?? readFrontmatterDate('start')

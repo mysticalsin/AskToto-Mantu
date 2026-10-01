@@ -5,7 +5,7 @@
  * matching the HOST running `npm install` — cross-building (e.g. `--win` from this macOS dev machine)
  * silently leaves the target's package missing. electron-builder's asarUnpack glob then copies whatever
  * happens to be in node_modules regardless of target, so the build exits 0 with no native ASR addon for
- * that platform (src/main/parakeet.ts falls back to Whisper with no build-time signal). This hard-fails
+ * that platform (src/main/features/parakeet/parakeet.ts falls back to Whisper with no build-time signal). This hard-fails
  * instead, after first attempting a safe, version-pinned auto-provision.
  */
 import { existsSync, readFileSync } from 'node:fs'

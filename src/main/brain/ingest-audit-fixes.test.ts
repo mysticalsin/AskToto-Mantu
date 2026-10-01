@@ -55,7 +55,7 @@ const createStreamMock = vi.hoisted(() => vi.fn())
 vi.mock('../llm', () => ({ createStream: createStreamMock }))
 
 const refreshDustCliSessionMock = vi.hoisted(() => vi.fn())
-vi.mock('../dustcli', () => ({ refreshDustCliSession: refreshDustCliSessionMock }))
+vi.mock('../features/dust/dustcli', () => ({ refreshDustCliSession: refreshDustCliSessionMock }))
 
 // MQA-046 is an ORDERING defect: whether the store is still being written when it is wiped. The real
 // purgeBrain is kept (the rebuild must genuinely work); it only records when it ran, relative to the

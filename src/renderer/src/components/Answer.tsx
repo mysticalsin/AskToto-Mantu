@@ -7,7 +7,7 @@ import { TextButton } from './ui'
 import { AgentStatus } from './AgentStatus'
 import { useFlash } from '../lib/useFlash'
 import { accelLabel } from '../lib/keys'
-import { isOnboardingDemoActive } from '../lib/onboarding-demo-guard'
+import { isOnboardingDemoActive } from '../features/onboarding/onboarding-demo-guard'
 
 /** A fact-check verdict: parse a leading "VERDICT: <X>" line; the rest is the bulleted reasoning. */
 const VERDICTS: Record<string, { label: string; chip: string }> = {

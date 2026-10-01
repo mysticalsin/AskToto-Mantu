@@ -4,7 +4,7 @@ import type { StreamHandlers } from './shared'
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp', getVersion: () => '1.8.2' } }))
 const machineIdentity = vi.hoisted(() => ({ durableId: 'machine-test' as string | null }))
-vi.mock('../license', () => ({
+vi.mock('../features/license/license', () => ({
   getMachineId: () => 'machine-test',
   getDurableMachineId: () => machineIdentity.durableId
 }))

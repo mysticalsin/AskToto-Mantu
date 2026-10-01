@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState, lazy, Suspense, startTransition } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, lazy, Suspense, startTransition } from 'react'
 import { Bar } from './components/Bar'
 /** FITO-185-J: sync OnboardingV2 — exclusive Act 1 must not wait on a lazy chunk (DemoScene stays lazy inside Experience). */
 import { OnboardingV2 } from './components/OnboardingExperience'
@@ -9,8 +9,8 @@ import { Panel } from './components/Panel'
 import {
   isOnboardingBoot,
   provisionalOnboardingSettings
-} from './lib/onboarding-boot'
-import { installOnboardingAudioLockHooks, lockOnboardingAudio } from './lib/onboarding-music'
+} from './features/onboarding/onboarding-boot'
+import { installOnboardingAudioLockHooks, lockOnboardingAudio } from './features/onboarding/onboarding-music'
 // Heavy, rarely-first views are code-split so they don't weigh down the overlay's startup. Answer and
 // Copilot pull in Markdown.tsx -> streamdown + shiki/core, which have no reason to parse/execute before
 // the user has asked anything — deferring them keeps that weight out of the eager boot chunk.
@@ -74,6 +74,7 @@ import {
   circleRestSpringAfterCollapse,
   circleRestSpringAfterExpand,
   circleRestSpringClassName,
+  overlayHideParkedClassName,
   overlayShowPeek,
   overlaySpringAfterHide,
   overlaySpringAfterReveal,
@@ -128,7 +129,7 @@ import {
   transcriptHasContent
 } from '@shared/quick-actions'
 import { micSpeakerLabel } from '@shared/speaker-names'
-import { onboardingLaunchFromSearch } from './lib/onboarding-launch'
+import { onboardingLaunchFromSearch } from './features/onboarding/onboarding-launch'
 
 function recapWriteKey(ownerId: string, runId: string): string {
   return `${ownerId}\u0000${runId}`
@@ -722,7 +723,9 @@ export function App(): JSX.Element {
     forceParkAfterHideRef.current = true
     setRightEdgeDockDismissed(true)
     dispatchAutoHide({ type: 'collapse-now' })
-  }, [])
+    // Auto-hide is off while a capture runs, so no exit spring will request this park: request it now.
+    if (!overlayIdle) parkCurrentOverlayAfterHide()
+  }, [overlayIdle, parkCurrentOverlayAfterHide])
   useEffect(() => {
     dispatchAutoHide({ type: 'set-enabled', enabled: overlayIdle })
   }, [overlayIdle])
@@ -802,7 +805,7 @@ export function App(): JSX.Element {
   const wasRevealedRef = useRef(overlaySurfaceRevealed)
   const overlayRevealedRef = useRef(overlaySurfaceRevealed)
   overlayRevealedRef.current = overlaySurfaceRevealed
-  useEffect(() => {
+  useLayoutEffect(() => { // in the reveal's own commit: the first painted frame is the in-spring at opacity 0
     if (!overlayIdle) {
       setOverlaySpring('rest')
       springIdleRef.current = false
@@ -890,18 +893,22 @@ export function App(): JSX.Element {
         // message as a new enter produces the visible close → reopen flash reported in device QA.
         if (rightEdgePresentation && shouldIgnoreRightEdgeNativeHover(rightEdgeDismissalLockRef.current, d.restoredFromParkedRail)) return
         if (rightEdgePresentation && d.restoredFromParkedRail) {
-          rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(
-            rightEdgeDismissalLockRef.current,
-            { type: 'native-hover-restored' }
-          )
+          rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'native-hover-restored' })
         }
         // Main restores the native drawer before it emits this fallback hover signal. Mirror the
         // ordinary pointer-enter path here so a deliberately parked edge dock cannot leave a
         // full-size transparent window behind a renderer-only rail.
         setRightEdgeDockDismissed(false)
-        dispatchAutoHide({ type: 'reveal-now' })
+        if (rightEdgePresentation) dispatchAutoHide({ type: 'reveal-now' })
+        else dispatchAutoHide({ type: 'reveal-now', native: true })
       } else {
-        dispatchAutoHide({ type: 'pointer-leave' })
+        // Main parked the dock: always render the rail (draft kept); every reveal path clears the dismissal.
+        if (d.parked && rightEdgePresentation) {
+          wasRevealedRef.current = false
+          setRightEdgeDockDismissed(true)
+          setOverlaySpring('rest')
+        }
+        dispatchAutoHide({ type: 'pointer-leave', native: true })
       }
     })
   }, [rightEdgePresentation])
@@ -3107,6 +3114,12 @@ export function App(): JSX.Element {
         setView(listen.listening ? 'copilot' : 'answer')
         setCollapsed(false)
         setFocusSignal((x) => x + 1)
+        // A summoned right-edge dock opens at once with the composer focused, even after an explicit Hide.
+        if (rightEdgePresentation) {
+          rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'explicit-reveal' })
+          setRightEdgeDockDismissed(false)
+          dispatchAutoHide({ type: 'reveal-now' })
+        }
       })
     } else if (a === 'hide') {
       // toggle(), not hide(): Desk Tap Control is the only caller that reaches this branch (the keyboard
@@ -3226,6 +3239,9 @@ export function App(): JSX.Element {
       setView('answer')
     } else if (!collapsed) {
       setCollapsed(true)
+    } else if (rightEdgePresentation) {
+      // A hidden right-edge window would reopen from the band; park it like the dock's Hide control.
+      closeRightEdgeDock()
     } else {
       void window.toto.hide()
     }
@@ -4017,7 +4033,8 @@ export function App(): JSX.Element {
             open={false}
             onOpen={revealOverlay}
             onClose={closeRightEdgeDock}
-            canClose={overlayIdle && !autoHideForced}
+            canClose={rightEdgeDockVisible}
+            focusSignal={focusSignal}
             commandState={commandState}
             value={input}
             onChange={setInput}
@@ -4058,6 +4075,7 @@ export function App(): JSX.Element {
           <div
             className={[
               overlayIdle ? overlaySpringClassName(overlaySpring, rightEdgePresentation ? 'right' : 'top') : circleRestSpringClassName(circleRestSpring),
+              overlayIdle && !rightEdgePresentation ? overlayHideParkedClassName(overlaySpring, overlaySurfaceRevealed, overlayRestsHidden(overlayLayout)) : '',
               // The drawer's own position is absolute. Keep this animation host full-height too so
               // percentage heights resolve to the 360×560 native sidecar rather than its empty flow box.
               rightEdgeDockVisible ? 'h-full' : ''
@@ -4081,7 +4099,8 @@ export function App(): JSX.Element {
               open={true}
               onOpen={revealOverlay}
               onClose={closeRightEdgeDock}
-              canClose={overlayIdle && !autoHideForced}
+              canClose={rightEdgeDockVisible}
+              focusSignal={focusSignal}
               commandState={commandState}
               value={input}
               onChange={setInput}

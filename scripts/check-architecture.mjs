@@ -13,12 +13,12 @@
  * failure. When counts rise, edit the baseline only after review, such as for a pure move that relocates
  * existing violations. With no baseline yet, CI prints the seed JSON to commit.
  *
- * FF-15 is a per-file flag (1 for each production module directly under src/main or src/renderer/src/lib), so
- * the top-level module count is the sum of the FF-15 entries in the baseline. It can only fall (a moved file's
+ * FF-16 is a per-file flag (1 for each production module directly under src/main or src/renderer/src/lib), so
+ * the top-level module count is the sum of the FF-16 entries in the baseline. It can only fall (a moved file's
  * entry must be deleted) and a new top-level file has no entry, so it fails.
  *
  * Each group below moves as its own pure-move PR that scripts/refactor/verify-move.mjs passes: move the files
- * with their tests, rewrite only import specifiers, delete the moved files' FF-15 entries (and re-home their
+ * with their tests, rewrite only import specifiers, delete the moved files' FF-16 entries (and re-home their
  * FF-07 / FF-05 entries), then push and read the CI run. The moves are not applied here because they cannot be
  * verified without running the suite, which runs only in CI.
  * LEAD_ACTION: move src/main/operator-* (incl. operator-skill-*, operator-test-keypair) to src/main/features/operator/
@@ -49,6 +49,9 @@ const PATH_LIKE_TS = /^[^\s]*\.tsx?$/
 const DIALOG_NAMES = new Set(['confirm', 'alert', 'prompt'])
 const FS_MODULES = new Set(['fs', 'node:fs', 'fs/promises', 'node:fs/promises'])
 const CHILD_PROCESS_MODULES = new Set(['child_process', 'node:child_process'])
+const MEETING_DOCUMENT_CODEC = 'src/main/features/meetings/meeting-document.ts'
+// A regex literal that anchors on a `---` line at the start of the text, or on a newline followed by `---`.
+const FRONTMATTER_DELIMITER_REGEX = /\^(?:\(\?:)?-{3}|\\n-{3}/
 const MEETINGS_ROOT_READERS = new Set([
   'src/main/brain/ingest.ts',
   'src/main/brain/publish.ts',
@@ -71,7 +74,8 @@ const RULES = [
   ['FF-10', 'Process spawning outside src/main/infra/process/'],
   ['FF-11', 'BrowserWindow construction outside src/main/windows/'],
   ['FF-14', 'Background timers outside src/main/infra/scheduler/'],
-  ['FF-15', 'Production modules directly under src/main or src/renderer/src/lib'],
+  ['FF-15', 'Frontmatter-delimiter regexes outside the meeting-document codec'],
+  ['FF-16', 'Production modules directly under src/main or src/renderer/src/lib'],
 ]
 
 // `.tsx` is included on purpose: a top-level component or hook is as much a flat module as a `.ts` helper.
@@ -133,6 +137,9 @@ export function countSourceFile(file, text) {
   }
   if (isProductionFile(file) && file.startsWith('src/main/') && !file.startsWith('src/main/infra/scheduler/')) {
     add('FF-14', countBackgroundTimers(sourceFile))
+  }
+  if (isProductionFile(file) && file.startsWith('src/main/') && file !== MEETING_DOCUMENT_CODEC) {
+    add('FF-15', countFrontmatterDelimiterRegexes(sourceFile))
   }
 
   return counts
@@ -625,6 +632,20 @@ function countBrowserWindowConstruction(sourceFile) {
 
 /**
  * @param {ts.SourceFile} sourceFile Parsed source file.
+ * @returns {number} Regex literals that parse a `---` frontmatter block themselves.
+ */
+function countFrontmatterDelimiterRegexes(sourceFile) {
+  let count = 0
+  const visit = (node) => {
+    if (ts.isRegularExpressionLiteral(node) && FRONTMATTER_DELIMITER_REGEX.test(node.text)) count += 1
+    ts.forEachChild(node, visit)
+  }
+  ts.forEachChild(sourceFile, visit)
+  return count
+}
+
+/**
+ * @param {ts.SourceFile} sourceFile Parsed source file.
  * @returns {number} Background timer violations.
  */
 function countBackgroundTimers(sourceFile) {
@@ -742,9 +763,9 @@ function collectCurrentCounts() {
   const current = {}
   for (const file of walkSourceFiles()) {
     const text = readFileSync(join(repoRoot, file), 'utf8').replace(/\r\n/g, '\n')
-    // Copy so adding FF-15 does not mutate the object countSourceFile returned.
+    // Copy so adding FF-16 does not mutate the object countSourceFile returned.
     const fileCounts = { ...countSourceFile(file, text) }
-    if (countTopLevelModule(file) > 0) fileCounts['FF-15'] = 1
+    if (countTopLevelModule(file) > 0) fileCounts['FF-16'] = 1
     for (const [rule, count] of Object.entries(fileCounts)) {
       current[rule] ??= {}
       current[rule][file] = count

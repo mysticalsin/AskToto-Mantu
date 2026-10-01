@@ -80,7 +80,7 @@ describe('MQA-068 — no artifact may advertise licensing that cannot run', () =
 
   it("main's own header does not claim the subsystem is wired into live enforcement", () => {
     if (!enforcementCompiledOff) return
-    const header = read('src/main/license.ts').slice(0, 1400)
+    const header = read('src/main/features/license/license.ts').slice(0, 1400)
     expect(header).toMatch(/COMPILED OFF/)
     expect(header).toContain('MQA-068')
   })

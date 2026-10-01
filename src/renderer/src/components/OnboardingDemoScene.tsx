@@ -35,9 +35,9 @@ import {
   demoFrameAt,
   demoNextLeavesTour,
   type DemoCursorTarget
-} from '../lib/onboarding-demo'
+} from '../features/onboarding/onboarding-demo'
 import { cursorPositionAt, type Point } from '../lib/synthetic-cursor'
-import { setOnboardingDemoActive } from '../lib/onboarding-demo-guard'
+import { setOnboardingDemoActive } from '../features/onboarding/onboarding-demo-guard'
 import { ModeRecapView, modeRecapSections } from './ModeRecap'
 import { OnboardingDemoPreviewBoundary } from './OnboardingDemoPreviewBoundary'
 import {
@@ -58,7 +58,7 @@ import {
   type DemoPlaybackClock,
   type DemoPlaybackPhase,
   type DemoPlaybackSnapshot
-} from '../lib/onboarding-demo-controls'
+} from '../features/onboarding/onboarding-demo-controls'
 
 // Same weight rationale as App.tsx's own lazy Answer/Copilot: both pull in Markdown.tsx -> streamdown +
 // shiki/core, which has no reason to be in the eager boot chunk before this act.
@@ -66,7 +66,7 @@ const Answer = lazy(() => import('./Answer').then((m) => ({ default: m.Answer })
 const Copilot = lazy(() => import('./Copilot').then((m) => ({ default: m.Copilot })))
 
 /** @deprecated Prefer lib/onboarding-demo-prefetch — kept as re-export for older imports. */
-export { prefetchOnboardingDemoChunks } from '../lib/onboarding-demo-prefetch'
+export { prefetchOnboardingDemoChunks } from '../features/onboarding/onboarding-demo-prefetch'
 
 /** Transcript / frame React commits — not every rAF. Cursor is DOM-driven. */
 export const DEMO_COMMIT_MS = 100

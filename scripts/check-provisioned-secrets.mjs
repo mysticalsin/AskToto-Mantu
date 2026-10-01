@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 // check-provisioned-secrets.mjs — the release-build gate for every embedded-credential family that falls
 // back to a committed DEV placeholder key when packaging did not provision the real thing
-// (ticket M2-0056). A release build that ships src/main/operator-skill-key.ts's or
-// src/main/license-lease-key.ts's DEV_* fallback is trusting a public key with no matching private half
+// (ticket M2-0056). A release build that ships src/main/features/operator/operator-skill-key.ts's or
+// src/main/features/license/license-lease-key.ts's DEV_* fallback is trusting a public key with no matching private half
 // this project controls — every packaged skill-pack signature check, and every offline license lease,
 // would verify against a key anyone who clones this repo can find.
 //
 // ONE gate, via the shared helper scripts/lib/provisioned-secret.mjs, covers both families that share
 // this exact "provisioned resource, or committed DEV placeholder" shape:
-//   1. operator skill-pack public key  — <resources>/operator/pubkey.json       (src/main/operator-skill-key.ts)
-//   2. license-lease public key        — <resources>/license-lease/pubkey.json  (src/main/license-lease-key.ts)
+//   1. operator skill-pack public key  — <resources>/operator/pubkey.json       (src/main/features/operator/operator-skill-key.ts)
+//   2. license-lease public key        — <resources>/license-lease/pubkey.json  (src/main/features/license/license-lease-key.ts)
 //
 // The embedded Cloudflare proxy key is DELIBERATELY out of this gate: it is an opt-in credential with
 // no committed DEV placeholder to fall back to, so a keyless build is already a valid release for it.

@@ -1,7 +1,7 @@
 /**
  * Métis member-pass + offline-first license types.
  *
- * Extends the existing phone-home product (`src/main/license.ts`, `license-server/`).
+ * Extends the existing phone-home product (`src/main/features/license/license.ts`, `license-server/`).
  * This is not a second license system. Binding contract: docs/design/IDENTITY-CARD.md
  * and docs/license-v1.openapi.yaml.
  *

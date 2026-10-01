@@ -10,7 +10,9 @@
  * Inert unless the app is packaged AND running on an isolated QA profile AND the env names a known row.
  */
 import { access, mkdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { totalmem } from 'node:os'
+import { join, resolve } from 'node:path'
+import { availableMemoryGB } from './llm/available-memory'
 import type { AuditEvent } from './logger'
 import type { bundledFfmpegPath, startFfmpegDecode } from './ffmpeg-decoder'
 import type * as localRuntime from './llm/local-runtime'
@@ -28,11 +30,68 @@ export function hkMScenarioFromEnv(env: NodeJS.ProcessEnv, packaged: boolean): H
 }
 
 /**
- * M2-0460: the HK-M-only lift of the bundled model's advertised-RAM floor (local-models.ts assertRamOk). A hosted
- * runner that exposes 7 GiB reads as 7 against the 0.8B model's floor of 8, so the user-facing gate refuses the start
- * before the runtime is reached. Tokens are minted only inside productionHkMDeps' model start (the set below is
- * module-private), and a minted token is honoured only while hkMScenarioFromEnv names a row. Any other value, caller
- * or process gets the unchanged gate.
+ * M2-0482: the one gate for every RAM-floor override, shared with M2-0460's HK-M rows. A hosted runner that exposes
+ * 7 GiB reads as 7 against the 0.8B model's advertised-RAM floor of 8, and can sit under the prewarm available-memory
+ * floor, so the user-facing gates refuse the start before the runtime is reached. The override holds only for a
+ * packaged app on an isolated ASKTOTO_USERDATA profile (not the default userData path) whose launch env asks for it
+ * exactly: METIS_QA_HOST_FLOOR_OVERRIDE=1, or METIS_HK_M_SCENARIO naming a known row. `userDataPath` is the default
+ * userData path the app would use without ASKTOTO_USERDATA.
+ */
+export function qaHostFloorOverride(env: NodeJS.ProcessEnv, packaged: boolean, userDataPath: string): boolean {
+  if (!packaged) return false
+  const profile = env.ASKTOTO_USERDATA?.trim()
+  // Case-folded: the default macOS and Windows volumes are case-insensitive, so a differently cased spelling of the
+  // default profile is still the default profile.
+  if (!profile || resolve(profile).toLowerCase() === resolve(userDataPath).toLowerCase()) return false
+  return env.METIS_QA_HOST_FLOOR_OVERRIDE === '1' || hkMScenarioFromEnv(env, packaged) !== null
+}
+
+export type HostFloor = 'prewarm-available-ram' | 'advertised-ram'
+export type HostMemory = { readonly hostTotalBytes: number; readonly hostAvailableBytes: number }
+export type HostFloorOverrideAudit = (
+  event: Extract<AuditEvent, 'local.host-floor-override'>,
+  detail: { floor: HostFloor } & HostMemory
+) => void
+
+function currentHostMemory(): HostMemory {
+  return { hostTotalBytes: totalmem(), hostAvailableBytes: Math.round(availableMemoryGB() * 1024 ** 3) }
+}
+
+// Decided once per process by armQaHostFloorOverride (qa-hooks.ts, as index.ts imports it): the launch env
+// and packaging never change while the process runs, and not every floor's module can read Electron's app object.
+let hostFloorOverrideArmed = false
+const reportedHostFloors = new Set<HostFloor>()
+
+export function armQaHostFloorOverride(env: NodeJS.ProcessEnv, packaged: boolean, userDataPath: string): boolean {
+  hostFloorOverrideArmed = qaHostFloorOverride(env, packaged, userDataPath)
+  reportedHostFloors.clear()
+  return hostFloorOverrideArmed
+}
+
+/**
+ * Asked only where `floor` has already refused. True when the armed gate lifts it; the first lift of each floor in a
+ * process emits one content-free audit event carrying the host's memory figures and nothing else.
+ */
+export function hostFloorOverridden(
+  floor: HostFloor,
+  audit: HostFloorOverrideAudit,
+  host: () => HostMemory = currentHostMemory
+): boolean {
+  if (!hostFloorOverrideArmed) return false
+  if (!reportedHostFloors.has(floor)) {
+    reportedHostFloors.add(floor)
+    const { hostTotalBytes, hostAvailableBytes } = host()
+    audit('local.host-floor-override', { floor, hostTotalBytes, hostAvailableBytes })
+  }
+  return true
+}
+
+/**
+ * M2-0460: the token the HK-M hook's own model start carries down to assertRamOk. Since M2-0482 it is a caller of the
+ * one gate and lifts nothing itself: a minted token counts only while the armed qaHostFloorOverride decision holds for
+ * a known HK-M row, and then it marks that start with the per-start hk-m.ram-floor-override the HK-M report counts.
+ * Tokens are minted only inside productionHkMDeps' model start (the set below is module-private); any other value,
+ * caller or process counts as no token.
  */
 export interface HkMRamFloorOverride {
   readonly kind: 'hk-m-ram-floor'
@@ -41,7 +100,7 @@ const mintedRamFloorOverrides = new WeakSet<object>()
 
 export function hkMRamFloorOverrideActive(override: unknown, env: NodeJS.ProcessEnv, packaged: boolean): boolean {
   if (typeof override !== 'object' || override === null || !mintedRamFloorOverrides.has(override)) return false
-  return hkMScenarioFromEnv(env, packaged) !== null
+  return hostFloorOverrideArmed && hkMScenarioFromEnv(env, packaged) !== null
 }
 
 /** Content-free detail for hk-m.setup-failed: the row and the error's class name, never its message. */
@@ -100,8 +159,8 @@ const REGISTRY_WRITE_INTERVAL_MS = 2
  * cannot load modules lazily, and importing them here would drag the Electron-bound modules into this file's unit test.
  */
 export interface HkMModules {
-  // Spelled out rather than `typeof` llm/local: local-models.ts and local.ts import the override from this file, so
-  // importing llm/local here would close an import cycle. qa-hooks.ts passes the real function, which tsc checks.
+  // Spelled out rather than `typeof` llm/local: local-models.ts and local.ts import the floor gate and token from this
+  // file, so importing llm/local here would close an import cycle. qa-hooks.ts passes the real function, which tsc checks.
   readonly ensureLocalRuntimeStarted: (
     modelId: string,
     vision?: boolean,
@@ -126,6 +185,9 @@ export function productionHkMDeps(
   return {
     audit,
     onError,
+    // Text-only and ungated. On a 7 GiB host the advertised-RAM floor is lifted by the armed qaHostFloorOverride
+    // gate (METIS_HK_M_SCENARIO names this row), the same single gate every other QA start goes through; the token
+    // only marks this start as the HK-M hook's own.
     startLocalModel: async () => {
       await modules.ensureLocalRuntimeStarted(HK_M_MODEL_ID, false, undefined, ramFloorOverride)
     },
