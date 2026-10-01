@@ -581,7 +581,8 @@ jobs:
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 
   # The History row (M2-0193): History open and search against the FIFO fixtures, each answering with a
-  # usable degraded list within 2 s, the first call included, with main loop p99 < 50 ms. Report-only per
+  # usable degraded list within 2 s, the first call included, with main loop p99 < 50 ms; each History call
+  # is also timed on its own and judged by historySummary (first recallList < 250 ms, M2-0512). Report-only per
   # owner decision OD-24, like the fifo row. The real dataless half needs a cloud provider's evicted files,
   # which a hosted runner has none of: it is recorded as BLOCKED_EXTERNAL with its unblock step.
   st1-mac-history:
@@ -623,6 +624,23 @@ jobs:
             --history \
             --minutes 3 \
             --out st1-report/st-1-macos-fifo-history.json
+      # M2-0512: the History row's per-call split (recallList, brainStatus, recallSearch: first, p50, p95, max),
+      # its own verdict (first recallList < 250 ms, every list and search < 2 s, main loop p99 < 50 ms) and the
+      # cause of a slow first recallList, readable from the run page without downloading the artifact.
+      - name: Show the History row's per-call split
+        if: always()
+        run: |
+          report=st1-report/st-1-macos-fifo-history.json
+          if [ ! -f "$report" ]; then
+            echo "::warning::$report was not written; the History row has no per-call split."
+            exit 0
+          fi
+          {
+            echo '### ST-1 History row (macOS, fifo): historySummary'
+            echo '```json'
+            jq '.historySummary' "$report"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Record the dataless History row's unblock step
         if: always()
         run: |
