@@ -329,7 +329,7 @@ function completeNavigationRow(rows, id, patch) {
   if (row) Object.assign(row, patch)
 }
 
-async function findOverlayPage(browser, timeout = 15_000) {
+export async function findOverlayPage(browser, timeout = 15_000) {
   const deadline = Date.now() + timeout
   while (Date.now() < deadline) {
     const pages = browser.contexts().flatMap((context) => context.pages())
@@ -447,7 +447,7 @@ async function ensureHistory(page) {
   await clickHistory(page)
 }
 
-async function ensureIdleBar(page) {
+export async function ensureIdleBar(page) {
   const search = page.getByLabel('Search past meetings')
   if (await locatorVisible(search)) {
     await page.getByRole('button', { name: 'History' }).first().click({ timeout: 15_000 })
@@ -492,7 +492,7 @@ async function seedNavigationMeetings(page) {
   })
 }
 
-async function clickHistory(page) {
+export async function clickHistory(page) {
   await page.getByRole('button', { name: 'History' }).first().click({ timeout: 15_000 })
   await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
 }
@@ -1640,7 +1640,7 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
 }
 
 /** Minimal Chrome DevTools Protocol client for the main process's Node inspector. */
-async function mainInspector(inspectPort) {
+export async function mainInspector(inspectPort) {
   const deadline = Date.now() + 30_000
   let wsUrl = null
   while (!wsUrl && Date.now() < deadline) {
@@ -1783,7 +1783,7 @@ export function computeCleanupTargets({ child, ownedAtQuit, mainPid, installRoot
   return [...targets.values()]
 }
 
-function freeLoopbackPort() {
+export function freeLoopbackPort() {
   return new Promise((resolve, reject) => {
     const server = createServer()
     server.once('error', reject)

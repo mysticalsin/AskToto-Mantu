@@ -143,3 +143,36 @@ describe('QA candidate workflow: which refs and versions may build (M2-0499)', (
     expect(workflow).toContain('      - scripts/qa/release-line.mjs\n')
   })
 })
+
+describe('QA candidate History design evidence (M2-0032)', () => {
+  const block = jobBlocks.get('history-design-mac') ?? ''
+
+  it('captures the promotable macOS DMG, verified against the provenance, after the candidate is recorded', () => {
+    expect(block).toMatch(/^    needs: provenance$/m)
+    expect(block).toMatch(/^    runs-on: macos-latest$/m)
+    expect(block).toContain('name: candidate-mac\n')
+    expect(block).toContain('node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac\n')
+    expect(block).toContain('hdiutil attach -nobrowse -readonly')
+    expect(block).toContain('node scripts/qa/history-design-capture.mjs "$APP" --out history-design')
+  })
+
+  it('uploads the captures and report even when a check fails', () => {
+    const [upload] = uploads(block)
+    expect(upload).toContain('if: always()')
+    expect(upload).toContain('name: history-design-macos')
+    expect(upload).toContain('path: history-design/')
+    expect(upload).toContain('if-no-files-found: error')
+    expect(upload).toContain("retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}")
+  })
+
+  it('self-tests when the capture or the History views it captures change', () => {
+    for (const path of [
+      'scripts/qa/history-design-capture.mjs',
+      'scripts/qa/lib/history-design.mjs',
+      'src/renderer/src/components/RecallView.tsx',
+      'src/renderer/src/components/history/**'
+    ]) {
+      expect(workflow).toContain(`      - ${path}\n`)
+    }
+  })
+})
