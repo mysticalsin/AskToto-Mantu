@@ -1446,11 +1446,12 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
   }
   // Main broadcasts the placement/layout change, and the page re-renders from its refreshed settings.
   // Give that refresh time to land, so an Escape below never reaches a stale top-center page.
+  // Every bridge call (window.toto.*) is awaited inside the page and nothing is returned: handing the bridged
+  // promise itself back to Playwright let Windows collect it mid-call ("Promise was collected").
   const setLayout = async (layout) => {
-    await page.evaluate(
-      (next) => window.toto.setSettings({ overlayPlacement: 'right-edge', overlayLayout: next, autoHideOverlay: true }),
-      layout
-    )
+    await page.evaluate(async (next) => {
+      await window.toto.setSettings({ overlayPlacement: 'right-edge', overlayLayout: next, autoHideOverlay: true })
+    }, layout)
     for (let waited = 0; waited < 1_500 && !(await rightEdgePageState(page)).dock; waited += 100) await wait(100)
   }
   // The navigation rows before these leave a full view (History/Review) open, which replaces the dock
@@ -1468,7 +1469,9 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     await setLayout(layout)
     await leaveFullViews()
     if (!rightEdgeStateMatches(await observe(), 'parked', layout)) {
-      await page.evaluate(() => window.toto.parkAfterHide(true))
+      await page.evaluate(async () => {
+        await window.toto.parkAfterHide(true)
+      })
     }
     const parked = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', layout), 5_000)
     if (!parked.ok) {
@@ -1554,7 +1557,9 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
   await step('RE-HIDE-5-toggle-hide-latches', async () => {
     await park('hide')
     const revealed = await revealAtEdge()
-    await page.evaluate(() => window.toto.toggle())
+    await page.evaluate(async () => {
+      await window.toto.toggle()
+    })
     const hidden = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', 'hide'), 2_000)
     // The pointer stays over the band the Hide was issued from.
     await wait(600)
@@ -1580,7 +1585,9 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
         await setCursor(awayPoint(revealed.win))
       }
       const parked = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', layout), 3_000)
-      await page.evaluate(() => window.toto.toggle())
+      await page.evaluate(async () => {
+        await window.toto.toggle()
+      })
       const revealed = await waitUntil((o) => rightEdgeStateMatches(o, 'revealed') && o.page.composerFocused, 3_000)
       const autoParked = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', layout), RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS + 5_000)
       return {
