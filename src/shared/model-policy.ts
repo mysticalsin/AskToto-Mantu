@@ -15,9 +15,9 @@
  * text-to-speech path, no embedding model is called): they stay in the signed document so the portal
  * and audit trail are complete, but nothing enforces them and Settings does not claim otherwise.
  *
- * Native Mac app: MetisKit's policy poller exists (ModelPolicy.swift) but stays inactive until an
- * Operator credential is provisioned (BLOCKED_EXTERNAL; native pairing lands with M2-0145). The native
- * app has no cloud-model call site to route yet. Nothing here claims native enforcement.
+ * Native Mac app: MetisKit's policy poller (ModelPolicy.swift) is wired at app launch and polls every
+ * <=60s once the existing Operator URL/secret values are provisioned. The native app has no cloud-model
+ * call site today; its on-device Foundation Models path remains the only native model surface.
  */
 import { z } from 'zod'
 

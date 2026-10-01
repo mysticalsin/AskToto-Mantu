@@ -66,7 +66,7 @@ function blockAfter(startAnchor: string, endMarker: string): string {
 }
 
 describe('Local AI distinguishes bundled compact weights from optional downloads (MQA-319)', () => {
-  const block = blockAfter('function LocalAiSection(', '\n// CLI Integration section')
+  const block = blockAfter('function LocalAiSection(', '\nfunction CliIntegration(')
   // Copy assertions run over the code with `//` comments stripped. The comments explain WHY the old
   // wording was wrong and legitimately quote it; that text never reaches a user.
   const copy = block.replace(/^\s*\/\/.*$/gm, '')
@@ -269,7 +269,7 @@ describe('MQA-069 — the Advanced model fields commit on the debounce boundary,
   })
 
   it('LazyInput forwards `list` so the model fields keep their datalist suggestions', () => {
-    expect(blockAfter('function LazyInput(', '\ntype AsrCorrection')).toMatch(/list=\{list\}/)
+    expect(blockAfter('function LazyInput(', '\n// FILE: ui/')).toMatch(/list=\{list\}/)
   })
 })
 
@@ -376,7 +376,7 @@ describe('CLI Integration copy — managed install, not npm i -g', () => {
 })
 
 describe('Set up automatically shows an honest status chip', () => {
-  const cli = (): string => blockAfter('function CliIntegration(', '\nfunction McpConnectionCard(')
+  const cli = (): string => blockAfter('function CliIntegration(', '\n// FILE: features/settings/CalendarTab.tsx')
   const install = (): string =>
     blockAfter('const runInstall = async (id: \'claude-cli\' | \'codex-cli\')', 'const connect = async')
 
@@ -704,10 +704,10 @@ describe('M2-0412 fleet model policy — "managed by your organization" banner',
     expect(block).toMatch(/set on the Operator portal/)
   })
 
-  it('never lets the provider tiles below silently offer a choice outside the fleet policy (informational banner, not yet a hard lock in the tiles themselves)', () => {
-    // Documents today's actual scope honestly: the banner surfaces the managed state; narrowing which
-    // provider tiles are selectable to the fleet policy set (like allowedProviders already does) is
-    // tracked as a follow-up, not silently implied by this test.
+  it('never lets the provider tiles below silently offer a choice outside the fleet policy', () => {
+    expect(source).toContain('const providerLocked = locked || modelPolicyLocked')
+    expect(source).toContain('locked={providerLocked}')
+    expect(source).toContain('disabled={providerLocked}')
     expect(source).toContain('askChatPolicy.provider')
     expect(source).toContain('askChatPolicy.model')
   })
@@ -728,14 +728,15 @@ describe('M2-0412 fleet model policy — "managed by your organization" banner',
     expect(thinking).toMatch(/modelPolicyLocked \|\| settings\.managedKeys\.includes\('providerModelsThinking'\)/)
   })
 
-  it('also surfaces the stt and localModel capabilities as managed banners (owner-manageable but not force-applied — src/shared/model-policy.ts)', () => {
-    const sttBlock = blockAfter('const sttPolicy = settings.modelPolicyCapabilities.stt', '{sttPolicy &&')
-    expect(sttBlock).toMatch(/const localModelPolicy = settings\.modelPolicyCapabilities\.localModel/)
-    const banners = blockAfter('{sttPolicy &&', '{/* CLI Integration')
-    expect(banners).toMatch(/sttPolicy &&/)
-    expect(banners).toMatch(/localModelPolicy &&/)
-    expect(banners).toMatch(/Managed by your organization/)
-    expect(banners).toMatch(/set on the Operator portal/)
+  it('also surfaces the stt and localModel capabilities as managed banners in their split settings sections', () => {
+    const localBanner = blockAfter('const localModelPolicy = settings.modelPolicyCapabilities.localModel', '{/* CLI Integration')
+    expect(localBanner).toMatch(/localModelPolicy &&/)
+    expect(localBanner).toMatch(/MODEL_POLICY_CAPABILITY_LABELS\.localModel/)
+    const sttBanner = blockAfter('const sttPolicy = settings.modelPolicyCapabilities.stt', '<Section title="Listen to"')
+    expect(sttBanner).toMatch(/sttPolicy &&/)
+    expect(sttBanner).toMatch(/MODEL_POLICY_CAPABILITY_LABELS\.stt/)
+    expect(`${localBanner}\n${sttBanner}`).toMatch(/Managed by your organization/)
+    expect(`${localBanner}\n${sttBanner}`).toMatch(/set on the Operator portal/)
     expect(source).toContain('sttPolicy.provider')
     expect(source).toContain('localModelPolicy.provider')
   })

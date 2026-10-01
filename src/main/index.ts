@@ -658,7 +658,8 @@ import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
 import { buildTrayInStages, createSingleFlight, formatTrayAccelerator, loadPresizedTrayIcon, scheduleTrayAfterFirstPaint, trayIconPaths, yieldToEventLoop } from './boot-tray'
-import { isBootFirstShowDeferred, scheduleCurrentFirstShow, withBootFirstShowDeferred } from './lifecycle/first-show'
+import { BOOT_WINDOW_OPTIONS, BOOT_WINDOW_VARIANT, yieldBeforeBootWindow } from './boot-window-rendering'
+import { isBootFirstShowDeferred, navigateWindow, scheduleCurrentFirstShow, withBootFirstShowDeferred } from './lifecycle/first-show'
 import { createBootWork } from './lifecycle/boot-work'
 import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
@@ -2725,10 +2726,12 @@ function createWindow(targetDisplay?: Electron.Display): void {
       nodeIntegration: false,
       devTools: DEVTOOLS_ENABLED,
       backgroundThrottling: false,
-      webSecurity: true
-    }
+      webSecurity: true,
+      ...BOOT_WINDOW_OPTIONS.webPreferences
+    },
+    ...BOOT_WINDOW_OPTIONS.window // M2-0516: a QA-identity-only variant's values; none in every shipping build
   })
-  observability?.recordBootStage('createWindow.construct', performance.now() - constructStartedMs, { transparent: chrome.transparent })
+  observability?.recordBootStage('createWindow.construct', performance.now() - constructStartedMs, { transparent: chrome.transparent, windowVariant: BOOT_WINDOW_VARIANT })
   ensureMetisCommandRuntime({
     getSettings,
     commandControl,
@@ -2737,11 +2740,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
 
   try {
   // Frameless transparent windows on darwin still inherit an OS min (~44). Hide park is 8×2.
-  try {
-    win.setMinimumSize(1, 1)
-  } catch {
-    /* headless */
-  }
+  try { win.setMinimumSize(1, 1) } catch { /* headless */ }
   if (onboardingLive) applyExclusiveOnboardingStage(win, placementDisplay)
   applyOverlayAlwaysOnTop(win)
   // FITO-185-Z: show exclusive NOW (ctor show:true + activating show). The no-JS Act1
@@ -2749,11 +2748,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // FITO-185-T: activating show (not showInactive) so Act 1 is not behind Finder.
   // M2-0031: a boot window built hidden takes this same show in the next task (scheduleCurrentFirstShow below).
   if (onboardingLive && !deferFirstShow) {
-    try {
-      showForExclusiveOnboarding(win)
-    } catch {
-      /* headless */
-    }
+    try { showForExclusiveOnboarding(win) } catch { /* headless */ }
   }
   // Apply the same capture-protection decision during onboarding and normal overlay use.
   win.setContentProtection(contentProtectionOn())
@@ -2786,9 +2781,6 @@ function createWindow(targetDisplay?: Electron.Display): void {
     win = null
     throw e
   }
-  // Both keep the ctor show:true activation (focus + front): exclusive via FITO-185-T, the overlay via show().
-  if (deferFirstShow) scheduleCurrentFirstShow(win, () => win, (firstShown) => timeBootStage(observability, 'createWindow.firstShow', () =>
-    onboardingLive ? showForExclusiveOnboarding(firstShown) : firstShown.isVisible() || firstShown.show()))
 
   // Capture THIS window instance so a late 'closed' from a crashed/replaced window can't null out a
   // freshly-recreated one (render-process-gone recovery reassigns `win` before the old one's 'closed'
@@ -2961,19 +2953,26 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // The one-time onboarding destination belongs to this replacement only. Later renderer recovery
   // should preserve the user's current surface rather than repeatedly forcing Settings.
   postOnboardingDestination = 'answer'
-  // Bounded launch evidence only. Normal onboarding never serializes renderer state to disk.
-  if (process.env.ASKTOTO_MAC_LAUNCH_GATE === '1') {
-    bindAct1DomProbe(win.webContents, {
-      expectedUrl: rendererUrl,
-      outPath: join(app.getPath('userData'), 'logs', 'act1-dom.json'),
-      audit: (summary) => auditLog('app.act1.dom', summary)
+  // M2-0516: boot's window navigates in its own task, after the constructor's and before its first show's; every
+  // other caller navigates here (lifecycle/first-show.ts). `win` inside is the window being navigated.
+  navigateWindow(deferFirstShow, win, () => win, (win) => timeBootStage(observability, 'createWindow.navigate', () => {
+    // Bounded launch evidence only. Normal onboarding never serializes renderer state to disk.
+    if (process.env.ASKTOTO_MAC_LAUNCH_GATE === '1') {
+      bindAct1DomProbe(win.webContents, {
+        expectedUrl: rendererUrl,
+        outPath: join(app.getPath('userData'), 'logs', 'act1-dom.json'),
+        audit: (summary) => auditLog('app.act1.dom', summary)
+      })
+    }
+    // MQA-318 / M2-0006: unconditional — never gated on ASKTOTO_MAC_LAUNCH_GATE, unlike bindAct1DomProbe
+    // above. A session with app.started but no renderer.ready must always be visible in the audit log.
+    bindReadinessThenNavigate(win, rendererUrl, () => {
+      auditLog('app.renderer.ready', { version: app.getVersion(), platform: process.platform, arch: process.arch })
     })
-  }
-  // MQA-318 / M2-0006: unconditional — never gated on ASKTOTO_MAC_LAUNCH_GATE, unlike bindAct1DomProbe
-  // above. A session with app.started but no renderer.ready must always be visible in the audit log.
-  bindReadinessThenNavigate(win, rendererUrl, () => {
-    auditLog('app.renderer.ready', { version: app.getVersion(), platform: process.platform, arch: process.arch })
-  })
+  }), (e) => mainLog.error('[createWindow] boot navigation failed:', e))
+  // Both keep the ctor show:true activation (focus + front): exclusive via FITO-185-T, the overlay via show().
+  if (deferFirstShow) scheduleCurrentFirstShow(win, () => win, (firstShown) => timeBootStage(observability, 'createWindow.firstShow', () =>
+    onboardingLive ? showForExclusiveOnboarding(firstShown) : firstShown.isVisible() || firstShown.show()))
   const overlay = win
   let exclusiveRevealed = false
   const revealExclusiveWhenPainted = (): void => {
@@ -9226,7 +9225,7 @@ if (!app.requestSingleInstanceLock()) {
   if (onboardingExclusiveLive()) {
     try {
       registerIpc()
-      await yieldToEventLoop() // M2-0031: IPC registration, window construction and first show are separate tasks
+      await yieldBeforeBootWindow() // M2-0031: IPC registration, window construction and first show are separate tasks
       withBootFirstShowDeferred(createWindow)
     } catch (e) {
       mainLog.warn('[boot] FITO-185-Z early exclusive window failed:', e)
@@ -9700,7 +9699,7 @@ if (!app.requestSingleInstanceLock()) {
   // "Loading" strip Tony still hits when exclusive exits or settings IPC is late.
   runStep('registerIpc', registerIpc)
   clearBootWatchOnce('registerIpc')
-  await yieldToEventLoop() // M2-0422: window construction is its own task
+  await yieldBeforeBootWindow() // M2-0422: window construction is its own task
   withBootFirstShowDeferred(() => runStep('createWindow', createWindow))
   scheduleTrayAfterFirstPaint(win, () => runStep('createTray', createTray))
   bootWork.releaseAfterFirstShow(win)
