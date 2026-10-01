@@ -11,10 +11,12 @@ import {
   type RowHydration
 } from './hydration'
 
+// The danger chip sits on a darkening fill with a red ring: a red tint under red text lifts the backing
+// enough to drop it below WCAG AA (4.5:1) once the translucent glass is over a light desktop.
 const TONE_CLASS = {
   muted: 'bg-white/[0.06] text-[color:var(--color-ink-3)]',
   accent: 'bg-[var(--color-accent-soft)] text-[color:var(--color-accent-text)]',
-  danger: 'bg-[var(--color-danger)]/10 text-[var(--color-danger)]'
+  danger: 'bg-black/25 text-[var(--color-danger)] ring-1 ring-inset ring-[var(--color-danger)]/40'
 } as const
 
 /** The explicit-open downloads main reports, by meeting basename. `onDone` runs after each finished
