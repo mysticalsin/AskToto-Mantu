@@ -37,6 +37,7 @@ import {
   rightEdgeStateMatches,
   rightEdgeStateMismatches,
   runRevealRow,
+  seedNavigationMeetings,
   seedOnboardedProfile,
   smokeReport,
   smokeVerdict
@@ -925,6 +926,69 @@ describe('navigationMeetingTitles', () => {
       alpha: 'Smoke navigation alpha HIST dirty save bar',
       beta: 'Smoke navigation beta HIST dirty save bar'
     })
+  })
+})
+
+describe('seedNavigationMeetings', () => {
+  it('refreshes an already-open History view so freshly saved smoke meetings are visible', async () => {
+    const events: string[] = []
+    const search = {
+      first: () => search,
+      isVisible: async () => true,
+      waitFor: async (options: { state?: string }) => events.push(`search:${options.state ?? 'visible'}`)
+    }
+    const history = {
+      first: () => history,
+      click: async () => events.push('history:click'),
+      waitFor: async () => events.push('history:wait')
+    }
+    const page = {
+      evaluate: async (_fn: unknown, titles: ReturnType<typeof navigationMeetingTitles>) => {
+        events.push(`seed:${titles.alpha}`)
+        return { first: 'alpha.md', second: 'beta.md', titles }
+      },
+      getByLabel: () => search,
+      getByRole: () => history,
+      waitForTimeout: async (ms: number) => events.push(`wait:${ms}`)
+    }
+
+    const seeded = await seedNavigationMeetings(page, 'HIST dirty save bar')
+
+    expect(seeded.titles.alpha).toBe('Smoke navigation alpha HIST dirty save bar')
+    expect(events).toEqual([
+      'seed:Smoke navigation alpha HIST dirty save bar',
+      'history:click',
+      'search:hidden',
+      'wait:450',
+      'history:click',
+      'search:visible'
+    ])
+  })
+
+  it('does not toggle History when the seeded meetings are created before History opens', async () => {
+    const events: string[] = []
+    const search = {
+      first: () => search,
+      isVisible: async () => false,
+      waitFor: async (options: { state?: string }) => events.push(`search:${options.state ?? 'visible'}`)
+    }
+    const history = {
+      first: () => history,
+      click: async () => events.push('history:click')
+    }
+    const page = {
+      evaluate: async (_fn: unknown, titles: ReturnType<typeof navigationMeetingTitles>) => {
+        events.push(`seed:${titles.alpha}`)
+        return { first: 'alpha.md', second: 'beta.md', titles }
+      },
+      getByLabel: () => search,
+      getByRole: () => history,
+      waitForTimeout: async (ms: number) => events.push(`wait:${ms}`)
+    }
+
+    await seedNavigationMeetings(page)
+
+    expect(events).toEqual(['seed:Smoke navigation alpha'])
   })
 })
 

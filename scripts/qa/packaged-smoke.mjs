@@ -490,8 +490,17 @@ export function navigationMeetingTitles(label = '') {
   }
 }
 
-async function seedNavigationMeetings(page, label = '') {
-  return page.evaluate(async (titles) => {
+async function refreshOpenHistoryAfterSeed(page) {
+  const search = page.getByLabel('Search past meetings')
+  if (!(await locatorVisible(search))) return
+  await page.getByRole('button', { name: 'History' }).first().click({ timeout: 15_000 })
+  await search.waitFor({ state: 'hidden', timeout: 15_000 })
+  await page.waitForTimeout(450)
+  await clickHistory(page)
+}
+
+export async function seedNavigationMeetings(page, label = '') {
+  const seeded = await page.evaluate(async (titles) => {
     const startedAt = Date.now()
     const first = await window.toto.saveTranscript({
       title: titles.alpha,
@@ -517,6 +526,8 @@ async function seedNavigationMeetings(page, label = '') {
       titles
     }
   }, navigationMeetingTitles(label))
+  await refreshOpenHistoryAfterSeed(page)
+  return seeded
 }
 
 async function clickHistory(page) {
