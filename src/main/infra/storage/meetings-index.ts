@@ -1,5 +1,5 @@
 import { app } from 'electron'
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
 import { decodeSaved, decodeSavedResult, writeSaved } from '../../transcripts'
@@ -61,15 +61,14 @@ export function meetingsIndexPath(userData = app.getPath('userData')): string {
 export async function writeMeetingsIndex(index: MeetingsIndex, userData?: string): Promise<void> {
   const path = meetingsIndexPath(userData)
   const parsed = MeetingsIndexSchema.parse(index)
-  mkdirSync(dirname(path), { recursive: true })
+  await mkdir(dirname(path), { recursive: true })
   await writeSaved(path, JSON.stringify(parsed, null, 2), true)
 }
 
 export async function readMeetingsIndex(userData?: string): Promise<MeetingsIndex | null> {
   const path = meetingsIndexPath(userData)
-  if (!existsSync(path)) return null
   try {
-    const decoded = decodeSavedResult(readFileSync(path))
+    const decoded = decodeSavedResult(await readFile(path))
     if (!decoded.ok) return null
     return MeetingsIndexSchema.parse(JSON.parse(decoded.text))
   } catch {
