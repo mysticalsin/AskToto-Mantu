@@ -2,9 +2,9 @@ import { app } from 'electron'
 import { mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
-import { decodeSaved, decodeSavedResult, writeSaved } from '../../transcripts'
 import { readMeetingFields as frontmatter } from './meeting-document'
 import type { ContentVersion, StorageGateway } from './gateway'
+import { decodeSaved, decodeSavedResult, writeSaved } from './saved-file'
 
 export const MEETINGS_INDEX_FILE = 'meetings-index.c5.json'
 export const MEETINGS_INDEX_SCHEMA_VERSION = 1
