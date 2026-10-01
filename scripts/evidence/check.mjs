@@ -42,6 +42,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
+import { DEFAULT_OUT_DIR as SOAK_OUT_DIR, RECORD_FILE as SOAK_RECORD_FILE, soakRecordProblems } from '../qa/owner-soak/verdict.mjs'
 import { EXCERPT_FILES, STALL_BUNDLE_NAMES_FILE, STALL_BUNDLE_NAME, excerptOf } from '../qa/freeze-repro/attribution-bundle.mjs'
 import { VARIANTS, promotableAssets } from '../qa/provenance.mjs'
 import { EVIDENCE_LEVELS, latestByLevel, readRecordStore, recordsInPrBody, recordProblems, sha256Hex } from './record.mjs'
@@ -1219,6 +1220,7 @@ function releaseMain(values) {
 
 async function main() {
   const usage = 'usage: check.mjs --ledger <path>  |  check.mjs --pr-event <path>  |  check.mjs --ticket M2-0008|M2-0194 [--bundle <path>]  |  ' +
+    'check.mjs --ticket M2-0198 [--record <path>]  |  ' +
     'check.mjs --release <version> --gates <gates.json> --provenance <provenance.json> --ledger <tickets.json> --notes <release notes .md>'
   let values
   try {
@@ -1228,6 +1230,7 @@ async function main() {
         'pr-event': { type: 'string' },
         ticket: { type: 'string' },
         bundle: { type: 'string' },
+        record: { type: 'string' },
         release: { type: 'string' },
         gates: { type: 'string' },
         provenance: { type: 'string' },
@@ -1272,11 +1275,27 @@ async function main() {
   }
 
   if (hasTicket) {
+    if (values.ticket === 'M2-0198') {
+      const recordPath = values.record ?? join(SOAK_OUT_DIR, SOAK_RECORD_FILE)
+      let text
+      try {
+        text = readFileSync(resolve(recordPath), 'utf8')
+      } catch (error) {
+        return usageExit(`could not read the soak record: ${error.message}`)
+      }
+      const problems = soakRecordProblems(text)
+      if (problems.length > 0) {
+        for (const problem of problems) console.error(`- ${problem}`)
+        process.exit(1)
+      }
+      console.log(`M2-0198 soak record: OK (${recordPath})`)
+      return
+    }
     const checker = {
       'M2-0008': { check: m2_0008BundleProblems, defaultBundle: M2_0008_DEFAULT_BUNDLE },
       'M2-0194': { check: m2_0194BundleProblems, defaultBundle: M2_0194_DEFAULT_BUNDLE }
     }[values.ticket]
-    if (!checker) return usageExit('only --ticket M2-0008 and --ticket M2-0194 are supported in this public-repo checker')
+    if (!checker) return usageExit('only --ticket M2-0008, M2-0194 and M2-0198 are supported in this public-repo checker')
     const bundle = values.bundle ?? checker.defaultBundle
     const problems = checker.check(resolve(bundle))
     if (problems.length > 0) {

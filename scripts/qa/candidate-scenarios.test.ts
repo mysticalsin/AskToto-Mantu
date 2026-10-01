@@ -69,7 +69,7 @@ describe('candidateRunProblems (the run guard)', () => {
 
 describe('the scenario registry', () => {
   it('declares fault-fatal-relaunch on macOS, installing the Metis-QA zip variant', () => {
-    expect(Object.keys(SCENARIOS)).toEqual(['fault-fatal-relaunch', 'stall-sampler', 'sidecar-boot-reaper'])
+    expect(Object.keys(SCENARIOS)).toEqual(['fault-fatal-relaunch', 'ex-suite', 'stall-sampler', 'sidecar-boot-reaper'])
     const mac = SCENARIOS['fault-fatal-relaunch'].platforms.mac
     expect(Object.keys(SCENARIOS['fault-fatal-relaunch'].platforms)).toEqual(['mac'])
     expect(mac.variant).toBe('mac-qa-identity')
@@ -80,6 +80,46 @@ describe('the scenario registry', () => {
     expect(mac.report).toBe('fault-fatal-relaunch.json')
     expect(mac.settings).toEqual(LOCAL_LLM_SETTINGS)
     expect(LOCAL_LLM_SETTINGS.localLlm).toMatchObject({ enabled: true, modelId: 'qwen3.5-0.8b' })
+  })
+
+  it('declares ex-suite on macOS, installing the promotable Metis DMG and seeding no lane settings', () => {
+    const entry = SCENARIOS['ex-suite']
+    expect(entry.ticket).toBe('M2-0033')
+    expect(entry.qaOnlyHook).toBe(false)
+    expect(entry.exits).toEqual({ 0: 'PASS', 1: 'FAIL', 2: 'PRECONDITION' })
+    expect(Object.keys(entry.platforms)).toEqual(['mac'])
+    const mac = entry.platforms.mac
+    expect(mac.variant).toBe('mac')
+    expect(mac.artifact).toBe('candidate-mac')
+    expect(VARIANTS.mac.promotable).toBe(true)
+    expect(VARIANTS.mac.assets('1.0.0')).toContain('Metis-1.0.0.dmg')
+    expect(mac.installerSuffix).toBe('.dmg')
+    expect(mac.script).toBe('scripts/qa/ex-suite.mjs')
+    expect(existsSync(join(root, mac.script))).toBe(true)
+    expect(mac.report).toBe('ex-suite.json')
+    expect('settings' in mac).toBe(false)
+    expect(resolveScenario({ scenario: 'ex-suite', sha256: { mac: MAC_SHA } })).toEqual({
+      mac: { variant: 'mac', artifact: 'candidate-mac', sha256: MAC_SHA }
+    })
+    expect(() => resolveScenario({ scenario: 'ex-suite', sha256: { mac: MAC_SHA, win: MAC_SHA } })).toThrow(/does not run on win/)
+    expect(outcomeForExit('ex-suite', 2)).toBe('PRECONDITION')
+  })
+
+  it('runs ex-suite --packaged on the installed app, relative to the checkout, with 3 launches, and only from a DMG', () => {
+    const base = { scenario: 'ex-suite', platform: 'mac', sha256: MAC_SHA, outDir: 'candidate-scenario' }
+    expect(scenarioCommand({ ...base, installer: 'assets/Metis-1.0.0.dmg', app: '../../_temp/candidate-install/Metis.app' })).toEqual([
+      'scripts/qa/ex-suite.mjs',
+      '--packaged',
+      '../../_temp/candidate-install/Metis.app',
+      'candidate-scenario/ex-suite.json',
+      '--relaunches',
+      '3'
+    ])
+    expect(() => scenarioCommand({ ...base, installer: 'assets/Metis-1.0.0.zip', app: 'Metis.app' })).toThrow(/installs a \.dmg installer/)
+    expect(() => scenarioCommand({ ...base, installer: 'assets/Metis-1.0.0.dmg' })).toThrow(/needs the installed app/)
+    expect(() => scenarioCommand({ ...base, installer: 'assets/Metis-1.0.0.dmg', app: '/tmp/candidate-install/Metis.app' })).toThrow(
+      /repository-relative/
+    )
   })
 
   it('declares stall-sampler on macOS, installing promotable DMG bytes and using the 15 s stop', () => {
@@ -223,6 +263,15 @@ describe('the fresh profile', () => {
     const settings = prepareProfile({ scenario: 'fault-fatal-relaunch', platform: 'mac', appDataDir: appData })
     expect(settings).toBe(join(appData, 'asktoto-qa', 'settings.json'))
     expect(JSON.parse(readFileSync(settings as string, 'utf8'))).toEqual(LOCAL_LLM_SETTINGS)
+  })
+
+  it('checks that the shipping userData directory is fresh for ex-suite and seeds nothing into it', () => {
+    expect(prepareProfile({ scenario: 'ex-suite', platform: 'mac', appDataDir: appData })).toBeNull()
+    expect(existsSync(join(appData, 'asktoto'))).toBe(false)
+    mkdirSync(join(appData, 'asktoto'))
+    expect(() => prepareProfile({ scenario: 'ex-suite', platform: 'mac', appDataDir: appData })).toThrow(
+      /asktoto userData directory already exists/
+    )
   })
 
   it('does not seed settings for the promotable stall-sampler profile', () => {
@@ -531,5 +580,38 @@ describe('candidate-scenarios.mjs run', () => {
     expect(lane).toMatchObject({ exit_code: 2, outcome: 'PRECONDITION', build_run_id: 4242, ci_run_id: 5151, report: null })
     expect(lane.detail).toMatch(/^\[fault-fatal-relaunch\] (This proof runs on macOS only\.|Zip sha256 mismatch)/)
     expect(child.stdout).toContain('::warning title=fault-fatal-relaunch PRECONDITION (not PASS)::')
+  })
+
+  it('passes ex-suite the installed app relative to the checkout and records its PRECONDITION report', () => {
+    mkdirSync(join(root, scratch), { recursive: true })
+    writeFileSync(join(root, scratch, 'provenance.json'), JSON.stringify({ commit: COMMIT, run: { id: 4242 } }))
+    const outDir = `${scratch}/report`.replaceAll('\\', '/')
+    // The installed app does not exist, so ex-suite stops at a precondition on every host (off macOS first,
+    // on macOS at the bundle check) and never launches anything; it still writes its report.
+    const child = spawnSync(
+      process.execPath,
+      [
+        'scripts/qa/candidate-scenarios.mjs',
+        'run',
+        '--scenario', 'ex-suite',
+        '--platform', 'mac',
+        '--installer', `${scratch}/assets/Metis-1.0.0.dmg`.replaceAll('\\', '/'),
+        '--sha256', MAC_SHA,
+        '--provenance', join(scratch, 'provenance.json'),
+        '--candidate-run', '4242',
+        '--out', outDir,
+        '--app', join(root, scratch, 'install', 'Metis.app')
+      ],
+      { cwd: root, encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: 'true', GITHUB_STEP_SUMMARY: '', GITHUB_RUN_ID: '5151' } }
+    )
+    expect(child.status).toBe(1)
+    const lane = JSON.parse(readFileSync(join(root, outDir, 'lane.json'), 'utf8'))
+    expect(lane).toMatchObject({ scenario: 'ex-suite', ticket: 'M2-0033', variant: 'mac', exit_code: 2, outcome: 'PRECONDITION', report: 'ex-suite.json' })
+    expect(lane.command).toBe(
+      `node scripts/qa/ex-suite.mjs --packaged ${scratch.replaceAll('\\', '/')}/install/Metis.app ${outDir}/ex-suite.json --relaunches 3`
+    )
+    expect(lane.detail).toMatch(/^\[ex-suite\] PRECONDITION: (The packaged EX suite runs on macOS only\.|The installed app is not a \.app bundle\.)/)
+    const report = JSON.parse(readFileSync(join(root, outDir, 'ex-suite.json'), 'utf8'))
+    expect(report).toMatchObject({ ticket: 'M2-0033', result: 'PRECONDITION', exitCode: 2, control: { status: 'BLOCKED_EXTERNAL' } })
   })
 })
