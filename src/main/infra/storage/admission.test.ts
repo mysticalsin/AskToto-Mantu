@@ -32,7 +32,8 @@ function hold(admission: ReturnType<typeof createAdmission>): { running: Promise
   }
 }
 
-/** admission.ts has no timers of its own: acquire()/run() settle on plain microtasks. Races `pending`
+/** acquire()/run() settle on plain microtasks; admission.ts's only timer refuses queued waiters once every
+ *  permit turns stuck, which the tests that need it drive with fakeClock(). Races `pending`
  *  against an already-resolved sentinel so a genuinely pending promise reports 'pending' without ever
  *  hanging the test. */
 async function peek<T>(pending: Promise<T>): Promise<T | 'pending'> {
