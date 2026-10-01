@@ -39,24 +39,25 @@ describe('right-edge placement main-process contract', () => {
     expect(move).toMatch(/resolvedOverlayPlacementForDisplay\(display\) === 'right-edge'/)
     expect(move).toMatch(/screen\.getDisplayMatching\(b\)/)
     // M2-0202: a drag changes only the anchor A (dy), and every rect follows it from the authority.
-    expect(move).toMatch(/queueRightEdgeAnchorForDisplay\(display, rightEdgeAnchorY\(display\) \+ dy\)/)
+    expect(move).toMatch(/rightEdgeAnchors\.drag\(display, rightEdgeAnchors\.y\(display\) \+ dy\)/)
     expect(move).toMatch(/applyRightEdgeBounds\(islandResting \? 'rest' : 'open', display\)/)
     expect(move).not.toMatch(/x: b\.x \+ dx/)
     expect(move).not.toMatch(/display\.id !== fromDisplayId/)
-    const persist = section(index, 'function queueRightEdgeAnchorForDisplay', 'function overlayCursorWatchWanted')
-    expect(persist).toMatch(/overlayRightEdgeAnchorByDisplay/)
-    expect(persist).toMatch(/rightEdgeAnchorLocked\(getLockedKeys\(\)\)/)
-    expect(persist).toMatch(/\}, 350\)/)
-    expect(persist).toMatch(/setSettings\(/)
-    expect(persist).toMatch(/if \(!key\) return/)
+    // The debounce, lock and display-key rules run in island/right-edge-anchor.test.ts; this pins main's wiring
+    // of the anchor store to the settings keys and the lock list.
+    const persist = section(index, 'const rightEdgeAnchors = createRightEdgeAnchors({', 'function overlayCursorWatchWanted')
+    expect(persist).toMatch(/legacy: getSettings\(\)\.overlayRightEdgeYByDisplay/)
+    expect(persist).toMatch(/setSettings\(\{ overlayRightEdgeAnchorByDisplay: \{ \.\.\.getSettings\(\)\.overlayRightEdgeAnchorByDisplay, \.\.\.anchors \} \}\)/)
+    expect(persist).toMatch(/lockedKeys: getLockedKeys/)
+    expect(persist).toMatch(/rightEdgeLive: \(\) => liveOverlayPlacement\(\) === 'right-edge'/)
   })
 
   it('RE-G10: every right-edge placement path goes through applyRightEdgeBounds, including a placement change', () => {
-    // Behavior is proven by the lifted paths in src/shared/right-edge-geometry.test.ts; the settings handler is
+    // Behavior is proven by the lifted paths in overlay-placement.contract.test.ts; the settings handler is
     // too large to lift, so its revealed right-edge branch is pinned here.
     const settings = section(index, 'const layoutChanged = cur.overlayLayout', '// Flipping follow-up memory')
     expect(settings).toMatch(/=== 'right-edge'\) \{\s*applyRightEdgeBounds\('open', display\)/)
-    const writer = section(index, 'function applyRightEdgeBounds(', 'function rightEdgeHoldRegion(')
+    const writer = section(index, 'function applyRightEdgeBounds(', 'function overlayCursorWatchWanted')
     expect(writer).toMatch(/const rect = rightEdgeBounds\(surface, display, layout\)/)
     // No right-edge rect is computed from the legacy normalized-Y helpers any more.
     expect(index).not.toMatch(/normalizeRightEdgeY|rightEdgeSidecarBounds|rightEdgeYForDisplay/)

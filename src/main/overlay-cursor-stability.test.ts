@@ -22,7 +22,7 @@ import {
   overlayUsesHover,
   rememberBarContentHeight
 } from '@shared/overlay-chrome'
-import { anchorY, holdRegion, legacyDrawerRect, revealCorridor } from '@shared/right-edge-geometry'
+import { createRightEdgeAnchors } from './island/right-edge-anchor'
 
 const source = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
 
@@ -118,11 +118,15 @@ function nativeHover(options: {
     commitParkedOverlayBounds: (park: Rect) => { bounds = park },
     applyHideClickThrough: () => {},
     startOverlayCursorWatch: () => {},
-    // The lifted right-edge hold region (M2-0202) reads the anchor and the open drawer from the authority.
-    rightEdgeAnchorY: (d: DisplayMetrics) => anchorY(d.workArea),
-    rightEdgeBounds: (_surface: 'open', d: DisplayMetrics) => legacyDrawerRect(d.workArea, anchorY(d.workArea)),
-    holdRegion,
-    revealCorridor
+    // The right-edge hold region (M2-0202) is the real anchor store at the default anchor, nothing persisted.
+    rightEdgeAnchors: createRightEdgeAnchors({
+      stored: () => ({ anchors: {}, legacy: {} }),
+      saveAnchors: () => {},
+      lockedKeys: () => [],
+      rightEdgeLive: () => true,
+      warn: () => {},
+      later: () => {}
+    })
   }
   // Lifts one shipped function, dropping only its TypeScript parameter and return annotations.
   const lift = (signature: string, stop: string, jsSignature = signature.replace(/\): \w+ \{$/, ') {')): string => {
@@ -133,11 +137,6 @@ function nativeHover(options: {
     return source.slice(begin, end).replace(signature, jsSignature)
   }
   const handler = lift('function tickOverlayCursorWatch(): void {', 'function notifyOverlayCursorHover')
-  const holdRegionHandler = lift(
-    'function rightEdgeHoldRegion(display: Electron.Display, cursor: { x: number; y: number }): Electron.Rectangle[] {',
-    '/** Persist only the deliberate anchor',
-    'function rightEdgeHoldRegion(display, cursor) {'
-  )
   const parkHandler = lift('function parkOverlayAfterHideSpring(force = false): boolean {', 'function applyHideClickThrough')
   const layoutChangeHandler = lift('function parkOverlayForLayoutChange(): void {', '/** Pin the overlay')
   const moveHandler = lift('function moveBy(dx: number, dy: number): void {', '/**\n * Keep the overlay reachable', 'function moveBy(dx, dy) {')
@@ -152,14 +151,12 @@ function nativeHover(options: {
     let overlayCursorWatchEnteredAt = null;
     let overlayParkLatched = ${rightEdge?.latched === true};
     let rightEdgeUnhoveredRevealAt = ${rightEdge?.unhoveredRevealAt ?? null};
-    let rightEdgeRevealY = null;
     let currentWidth = 0;
     let lastBarHeight = 120;
     let userAnchorY = 0;
     let overlayCursorWatchTimer = 1;
     function restoreBarWidth() { overlayParkLatched = false; islandResting = false; currentWidth = restoreWindow(); }
     ${handler}
-    ${holdRegionHandler}
     ${parkHandler}
     ${layoutChangeHandler}
     ${moveHandler}
