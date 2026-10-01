@@ -659,9 +659,10 @@ import { asrModelBytes } from './features/asr/asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
 import { buildTrayInStages, createSingleFlight, formatTrayAccelerator, loadPresizedTrayIcon, scheduleTrayAfterFirstPaint, trayIconPaths, yieldToEventLoop } from './boot-tray'
-import { BOOT_WINDOW_OPTIONS, BOOT_WINDOW_VARIANT, yieldBeforeBootWindow } from './boot-window-rendering'
+import { BOOT_WINDOW_OPTIONS, BOOT_WINDOW_VARIANT, takeBootWindowPrewarmMs, yieldBeforeBootWindow } from './boot-window-rendering'
 import { isBootFirstShowDeferred, navigateWindow, scheduleCurrentFirstShow, withBootFirstShowDeferred } from './lifecycle/first-show'
 import { createBootWork } from './lifecycle/boot-work'
+import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
 import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
 import { createResponsivenessTracker } from './infra/observability/responsiveness-tracker'
@@ -1959,7 +1960,7 @@ async function verifyCliSessions(now = Date.now()): Promise<void> {
   // would spawn the probe twice for the same provider.
   if (cliSessionSweep) return cliSessionSweep
   cliSessionSweep = (async () => {
-    // Never reject. One caller is a bare `void verifyCliSessions()` at boot, and an async body with no
+    // Never reject. One caller is a bare `void verifyCliSessions()` in a boot job, and an async body with no
     // guard is precisely how a transient settings-read failure becomes an unhandledRejection — which
     // onFatal turns into a crash-*.log and an `app.crash` audit entry for something that crashed nothing.
     // Same guarded shape startMeetingPoller uses, and for the same reason.
@@ -2728,6 +2729,8 @@ function createWindow(targetDisplay?: Electron.Display): void {
     ...BOOT_WINDOW_OPTIONS.window // M2-0516: a QA-identity-only variant's values; none in every shipping build
   })
   observability?.recordBootStage('createWindow.construct', performance.now() - constructStartedMs, { transparent: chrome.transparent, windowVariant: BOOT_WINDOW_VARIANT })
+  const prewarmMs = takeBootWindowPrewarmMs() // M2-0519: the boot prewarm ran before observability started; recorded once
+  if (prewarmMs !== null) observability?.recordBootStage('createWindow.prewarm', prewarmMs, { transparent: chrome.transparent, windowVariant: BOOT_WINDOW_VARIANT })
   ensureMetisCommandRuntime({
     getSettings,
     commandControl,
@@ -2782,6 +2785,8 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // freshly-recreated one (render-process-gone recovery reassigns `win` before the old one's 'closed'
   // may fire). Only clear the module ref when it still points at the window that closed.
   const self = win
+  // M2-0518: App Nap must not throttle the shown overlay once the boot power-save hold ends.
+  holdAppSuspensionWhileVisible(self, powerSaveBlocker)
   // `closed` fires after BrowserWindow.destroy() has torn down WebContents. Cache the numeric owner
   // while it is valid; touching `self.webContents` from the callback throws and falsely crashes Métis.
   const selfWebContentsId = self.webContents.id
@@ -4156,10 +4161,7 @@ function visionCheckContextFromSettings(): import('@shared/screen-capture-check'
 }
 
 /** Isolated vision ask for the Settings self-check. Never askStart, never overlay chat, never a teammate push. */
-function askVisionForScreenCheck(
-  backend: 'local' | 'api',
-  image: string
-): Promise<{ text: string; label: string }> {
+function askVisionForScreenCheck(backend: 'local' | 'api', image: string): Promise<{ text: string; label: string }> {
   const s = getSettings()
   const req: AskStart = {
     id: `screen-check-${Date.now()}`,
@@ -4169,6 +4171,9 @@ function askVisionForScreenCheck(
     history: []
   }
   if (backend === 'local') {
+    if (!localModelAllowedByPolicy(getActiveModelPolicy(s), s.localLlm.modelId)) {
+      return Promise.reject(new Error('The selected provider is not allowed by the fleet model policy.'))
+    }
     return collectVisionStream((handlers) =>
       createStream({
         providerId: 'local',
@@ -9241,8 +9246,9 @@ if (!app.requestSingleInstanceLock()) {
   initLogging() // route main-process logs to a rotated file before anything else can fail
   const bootWork = createBootWork() // M2-0031: non-first-paint fs work starts after the first show, under the pool cap
   configureSidecarRegistry(createSidecarRegistry(app.getPath('userData')))
-  await runBootSidecarReaper(app.getPath('userData'))
-  startAvailableMemorySampler() // M2-0430: background vm_stat reading for the local-model memory gate
+  // M2-0518: child processes first paint does not need; the reaper spares this launch's own sidecars, the memory gate reads freemem() meanwhile.
+  bootWork.run('runBootSidecarReaper', () => runBootSidecarReaper(app.getPath('userData')))
+  bootWork.run('startAvailableMemorySampler', () => { startAvailableMemorySampler() }) // M2-0430: vm_stat reading for the local-model memory gate
   // M2-0033: unattended model work waits for the maintenance gate.
   startMaintenanceGate({ interactiveActive: () => localRuntime.activeStreams() + fmRuntime.activeStreams() > 0 })
   app.on('web-contents-created', (_event, contents) => {
@@ -9276,7 +9282,8 @@ if (!app.requestSingleInstanceLock()) {
   }
   // Warm the CLI binary cache at boot when a CLI provider is connected, so the session's FIRST CLI ask
   // doesn't stall on the login-shell PATH lookup (it only ran on sign-in before — i.e. once ever).
-  try {
+  // M2-0518: both spawn child processes, so they start behind the first show.
+  bootWork.run('warmCliSessions', () => {
     const s0 = getSettings()
     if (s0.cliConnected['claude-cli'] || s0.cliConnected['codex-cli']) {
       prewarmCli()
@@ -9284,13 +9291,16 @@ if (!app.requestSingleInstanceLock()) {
       // runs otherwise leaves the app asserting a provider it cannot use until the first ask fails.
       void verifyCliSessions()
     }
-  } catch {
-    /* best-effort warm-up */
-  }
+  })
   // Seed an optional installer-embedded Cloudflare proxy key, once per profile, so a fresh install of
   // the default provider can answer with zero paste-a-key setup when the operator chose to embed one.
   // See embedded-cloudflare-key.ts — a no-op when no bundle was packaged.
-  importEmbeddedCloudflareKey()
+  // M2-0518: the first-launch seed decrypts the bundle and writes the keystore, so it starts behind the first show;
+  // the renderer then re-reads settings, so a seeded provider shows as ready without a relaunch.
+  bootWork.run('importEmbeddedCloudflareKey', () => {
+    importEmbeddedCloudflareKey()
+    notifySettingsChanged()
+  })
   {
     setModeSkillsOverlayRoot(join(app.getPath('userData'), 'skills-overrides'))
     const boot = getSettings()
@@ -9321,13 +9331,14 @@ if (!app.requestSingleInstanceLock()) {
       }
     }
     // The warm is unattended model work: it waits for the maintenance gate, so it never starts in the boot quiet period.
-    void provisionLocalModel(getSettings().localLlm, getAllowedProviders(), ensureLocalModel)
+    // M2-0518: provisioning stats, hashes and downloads model files, so it starts behind the first show.
+    bootWork.run('provisionLocalModel', () => provisionLocalModel(getSettings().localLlm, getAllowedProviders(), ensureLocalModel)
       .then((ready) => {
         if (!ready) return
         refreshScreenPreprocess()
         void runAsMaintenance(warmLocalIfReady)
       })
-      .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
+      .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e)))
     void runAsMaintenance(warmLocalIfReady)
   }
   // Windows toast attribution: a process's AppUserModelID must match the installed shortcut's AUMID
@@ -9414,13 +9425,14 @@ if (!app.requestSingleInstanceLock()) {
   sweepStaleTempFiles() // remove any decrypted-transcript temp copies orphaned by a previous hard-kill
   // Promote any orphaned crash-recovery drafts into real meetings BEFORE the retention sweep, so a
   // recovered meeting is visible in History and immediately subject to the same retention policy.
-  recoverOrphanDrafts(getSettings()).then((r) => {
+  // M2-0518: both read (and decrypt) the meetings root, so they start behind the first show, in this order.
+  bootWork.run('recoverOrphanDrafts', () => recoverOrphanDrafts(getSettings()).then((r) => {
     if (r.recovered > 0) auditLog('transcript.recovered', { recovered: r.recovered })
-  }).catch(() => { /* best-effort — never block startup */ })
+  }).catch(() => { /* best-effort — never block startup */ }))
   // Auto-delete meetings past the configured retention window (off by default — see transcriptRetentionDays).
   // Runs at launch AND every 6 hours after: this overlay realistically stays up for weeks, so a launch-only
   // sweep silently stopped enforcing retention the day after boot (storage-limitation promise broken).
-  const runRetentionSweep = (): void => {
+  const runRetentionSweep = (): Promise<void> =>
     sweepExpiredMeetings(getSettings().transcriptRetentionDays).then((r) => {
       if (r.deleted > 0) {
         auditLog('transcript.deleted', { bulk: true, expired: true, deleted: r.deleted })
@@ -9433,9 +9445,8 @@ if (!app.requestSingleInstanceLock()) {
         )
       }
     }).catch(() => { /* best-effort — never block startup or the interval */ })
-  }
-  runRetentionSweep()
-  trackTimer(setInterval(runRetentionSweep, 6 * 60 * 60 * 1000))
+  bootWork.run('runRetentionSweep', runRetentionSweep)
+  trackTimer(setInterval(() => void runRetentionSweep(), 6 * 60 * 60 * 1000))
   // Guarded like the neighboring dock.setIcon / crash-log pruning below — a throw here must never abort
   // createTray/registerShortcuts/createWindow further down the boot sequence.
   if (process.platform === 'darwin') {

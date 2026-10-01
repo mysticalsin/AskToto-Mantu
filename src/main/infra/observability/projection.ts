@@ -51,7 +51,7 @@ export const SIDECAR_REAP_SKIP_REASONS = [
   'kill-failed',
   'ambiguous-entry'
 ] as const
-/** The native tray and window boot stages, each timed on its own (M2-0515, M2-0517). */
+/** The native tray and window boot stages, each timed on its own (M2-0515, M2-0517, M2-0519). */
 export const BOOT_STAGES = [
   'createTray.loadIcon',
   'createTray.loadIcon.fallback',
@@ -59,14 +59,17 @@ export const BOOT_STAGES = [
   'createTray.decorate',
   'createTray.buildMenu',
   'createTray.attachMenu',
+  'createWindow.prewarm',
   'createWindow.construct',
   'createWindow.navigate',
   'createWindow.firstShow'
 ] as const
 export type BootStage = (typeof BOOT_STAGES)[number]
+/** Why the boot-work gate opened: the boot window's first show, the fallback timer, or at once (no hidden window). */
+export const BOOT_WORK_RELEASE_REASONS = ['show', 'fallback', 'immediate'] as const
 /** The boot window's rendering configuration: the shipped one, or a QA-only variant the ST-1 window job builds it
- *  under (boot-window-rendering.ts, M2-0516). */
-export const BOOT_WINDOW_VARIANTS = ['shipped', 'spellcheck-off', 'paint-when-hidden', 'prewarm-spellchecker', 'prewarm-view'] as const
+ *  under (boot-window-rendering.ts, M2-0516). The shipped one prewarms a bare web contents (M2-0519). */
+export const BOOT_WINDOW_VARIANTS = ['shipped', 'spellcheck-off', 'paint-when-hidden', 'prewarm-spellchecker'] as const
 export type BootWindowVariant = (typeof BOOT_WINDOW_VARIANTS)[number]
 export const HISTORY_STAGES = ['received', 'served', 'settled'] as const
 export const HISTORY_OUTCOMES = ['ok', 'failed', 'discarded'] as const
@@ -199,9 +202,14 @@ export const OBSERVABILITY_EVENTS = {
     bootId: 'id',
     stage: BOOT_STAGES,
     ms: 'ms',
-    /** createWindow.construct only: whether the constructor built a transparent window, and under which variant. */
+    /** createWindow.prewarm and createWindow.construct only: whether the boot window is transparent, and its variant. */
     transparent: 'flag',
     windowVariant: BOOT_WINDOW_VARIANTS
+  },
+  /** The boot-work gate opened (M2-0518): why, and how many queued jobs it held until then. */
+  'app.boot.work.released': {
+    reason: BOOT_WORK_RELEASE_REASONS,
+    held: 'int'
   },
   /** Overlay renderer stopped answering Chromium. */
   'app.unresponsive': {
