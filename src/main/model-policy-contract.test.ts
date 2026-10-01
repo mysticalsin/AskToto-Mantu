@@ -1,7 +1,8 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import vm from 'node:vm'
 import * as ts from 'typescript'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 /**
  * Structural proof (same "readFileSync + regex over the real source" pattern as
@@ -200,6 +201,8 @@ function isCreateStreamCall(node: ts.Node): node is ts.CallExpression {
 
 function createStreamSites(file: string): CreateStreamSite[] {
   const text = src(file)
+  const createStreamMarkers = [...text.matchAll(/(?<!function )\bcreateStream\(/g)]
+  if (createStreamMarkers.length === 0) return []
   const sf = sourceFileFor(text)
   const sites: CreateStreamSite[] = []
   const visit = (node: ts.Node): void => {
@@ -240,6 +243,19 @@ function policyBodyFor(site: CreateStreamSite): string {
 const CANDIDATE_BUILDERS: Record<string, string> = {
   'src/main/brain/ingest.ts#runCompletionOnce': 'pickProviderCandidates',
   'src/main/brain/ingest.ts#new Promise': 'pickProviderCandidates'
+}
+
+function actualIndexFunction(name: string, globals: Record<string, unknown>): (...args: any[]) => any {
+  const sf = sourceFileFor(src(MAIN_INDEX))
+  const declaration = sf.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name)
+  expect(declaration, `Actual source function ${name} was not found`).toBeDefined()
+  if (!declaration) return () => undefined
+  const compiled = ts.transpileModule(`${declaration.getText(sf)}\nglobalThis.result = ${name};`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }
+  }).outputText
+  const context = vm.createContext(globals)
+  vm.runInContext(compiled, context, { timeout: 1_000 })
+  return (context as { result: (...args: any[]) => any }).result
 }
 
 describe('M2-0412 — every createStream( call site in src/main resolves through the fleet policy', () => {
@@ -288,6 +304,29 @@ describe('M2-0412 — every createStream( call site in src/main resolves through
     expect(localBranch.indexOf('localModelAllowedByPolicy')).toBeLessThan(localBranch.indexOf('createStream('))
     expect(localBranch.indexOf('Promise.reject')).toBeLessThan(localBranch.indexOf('createStream('))
     expect(localBranch).toContain('The selected provider is not allowed by the fleet model policy.')
+  })
+
+  it('rejects the Settings local screen-check branch with the policy error before any stream starts', async () => {
+    const policy = { version: 1 }
+    const createStream = vi.fn()
+    const localModelAllowedByPolicy = vi.fn(() => false)
+    const askVisionForScreenCheck = actualIndexFunction('askVisionForScreenCheck', {
+      VISION_CHECK_PROMPT: 'Describe the screen.',
+      VISION_CHECK_SYSTEM: 'Answer briefly.',
+      getSettings: () => ({ localLlm: { modelId: 'blocked-local-model' } }),
+      getActiveModelPolicy: () => policy,
+      localModelAllowedByPolicy,
+      collectVisionStream: vi.fn(),
+      createStream,
+      PROVIDERS: { local: { label: 'Metis Local' } }
+    })
+
+    await expect(askVisionForScreenCheck('local', 'base64-image')).rejects.toMatchObject({
+      name: 'Error',
+      message: 'The selected provider is not allowed by the fleet model policy.'
+    })
+    expect(localModelAllowedByPolicy).toHaveBeenCalledWith(policy, 'blocked-local-model')
+    expect(createStream).not.toHaveBeenCalled()
   })
 })
 
