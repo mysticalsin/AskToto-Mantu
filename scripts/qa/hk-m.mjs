@@ -3,7 +3,7 @@
  * HK-M packaged sidecar supervision proof. Runs only against an installed macOS app on hosted QA.
  *
  * Usage:
- *   node scripts/qa/hk-m.mjs <Metis.app> <report.json> [--cycles 20] [--budget-ms N] [--supervision shipped|forced-on]
+ *   node scripts/qa/hk-m.mjs <Metis.app> <report.json> [--cycles 20] [--budget-ms N] [--supervision shipped|forced-on] [--profile fresh|shared]
  *
  * --budget-ms is a total wall-clock budget: no wait starts or continues past it, and every row not reached is
  * reported NOT_RUN (a failure). One progress line per row goes to stdout, and the report is written even when
@@ -55,12 +55,13 @@ export const PREWARM_MIN_FREE_RAM_GB = 4
 
 function usage() {
   console.error(
-    'usage: node scripts/qa/hk-m.mjs <Metis.app> <report.json> [--cycles 20] [--budget-ms N] [--supervision shipped|forced-on]'
+    'usage: node scripts/qa/hk-m.mjs <Metis.app> <report.json> [--cycles 20] [--budget-ms N] [--supervision shipped|forced-on] [--profile fresh|shared]'
   )
   process.exit(2)
 }
 
 const SUPERVISION_MODES = ['shipped', 'forced-on']
+const PROFILE_MODES = ['fresh', 'shared']
 
 /**
  * Environment for a launched app. `shipped` strips both supervision variables so the build's own default decides
@@ -95,7 +96,10 @@ function parseArgs(argv) {
   const supervisionIndex = argv.indexOf('--supervision')
   const supervisionMode = supervisionIndex === -1 ? 'shipped' : argv[supervisionIndex + 1]
   if (!SUPERVISION_MODES.includes(supervisionMode)) usage()
-  return { appPath: argv[0], reportPath: argv[1], cycles, budgetMs, supervisionMode }
+  const profileIndex = argv.indexOf('--profile')
+  const profileMode = profileIndex === -1 ? 'fresh' : argv[profileIndex + 1]
+  if (!PROFILE_MODES.includes(profileMode)) usage()
+  return { appPath: argv[0], reportPath: argv[1], cycles, budgetMs, supervisionMode, profileMode }
 }
 
 // Wall-clock end of the run's budget; Infinity when no budget was given.
@@ -253,6 +257,50 @@ export function runtimeRoleVerdict(sidecars, expectRuntime) {
   return { ok: true, counts }
 }
 
+function runtimeRoleTotal(sidecars) {
+  return sidecars.filter((entry) => LOCAL_MODEL_ROLES.includes(entry.role)).length
+}
+
+export function unreapedDeadRegistryCount({ registry, records, table }) {
+  const livePids = new Set(table.map((entry) => entry.pid))
+  const accountedDeadPids = new Set(
+    records
+      .filter(
+        (record) =>
+          typeof record.pid === 'number' &&
+          (record.event === 'sidecar.reaped' ||
+            (record.event === 'sidecar.reap.skipped' && record.reason === 'pid-not-alive'))
+      )
+      .map((record) => record.pid)
+  )
+  return registry.filter(
+    (record) =>
+      record.kind === 'spawned' && typeof record.pid === 'number' && !livePids.has(record.pid) && !accountedDeadPids.has(record.pid)
+  ).length
+}
+
+export function sharedProfileRelaunchVerdict({ owned, registry, records, table, previousDeadRegistryCount }) {
+  const orphans = owned.filter((entry) => entry.ppid === 1)
+  const runtimeTotal = runtimeRoleTotal(owned.filter((entry) => entry.role !== 'Metis'))
+  const deadRegistry = unreapedDeadRegistryCount({ registry, records, table })
+  const evidence = {
+    orphans: roleCounts(orphans),
+    runtimeTotal,
+    deadRegistry
+  }
+  if (orphans.length > 0) return { ok: false, failure: 'shared_profile_orphan_after_relaunch', evidence }
+  if (runtimeTotal > 1) return { ok: false, failure: 'shared_profile_multiple_runtimes_after_relaunch', evidence }
+  if (previousDeadRegistryCount !== null && deadRegistry > previousDeadRegistryCount) {
+    return { ok: false, failure: 'shared_profile_unreaped_dead_registry_entries_grew', evidence }
+  }
+  return { ok: true, deadRegistry, evidence }
+}
+
+export function finalSigtermVerdict(survivors) {
+  if (survivors.length === 0) return { ok: true, survivors: {} }
+  return { ok: false, failure: 'final_sigterm_owned_processes_survived', survivors: roleCounts(survivors) }
+}
+
 /**
  * The codesign/entitlement criterion, observed live: the packaged llama-server cold-started as a child of the
  * supervise wrapper (so the shipped entitlements allowed the helper to spawn it) and never fell back to a
@@ -297,6 +345,24 @@ function terminalRow(scenario, cycle, status, detail = {}) {
   return { scenario, cycle, status, ...detail }
 }
 
+export function createProfilePlan({ profileMode, makeProfile = () => mkdtempSync(join(tmpdir(), 'metis-hk-m-')), remove = removeTempDir }) {
+  if (!PROFILE_MODES.includes(profileMode)) throw new Error(`unsupported HK-M profile mode: ${profileMode}`)
+  let sharedProfile = null
+  return {
+    profileForRow() {
+      if (profileMode === 'fresh') return { profile: makeProfile(), removeAfterRow: true }
+      if (sharedProfile === null) sharedProfile = makeProfile()
+      return { profile: sharedProfile, removeAfterRow: false }
+    },
+    cleanup() {
+      if (sharedProfile === null) return false
+      const removed = remove(sharedProfile)
+      sharedProfile = null
+      return removed
+    }
+  }
+}
+
 export function reportResultForRows(rows) {
   if (rows.some((row) => row.status === 'FAIL' || row.status === 'NOT_RUN')) return 'fail'
   if (rows.some((row) => row.status === 'BLOCKED_EXTERNAL')) return 'blocked'
@@ -305,6 +371,13 @@ export function reportResultForRows(rows) {
 
 export function exitCodeForReportResult(result) {
   return result === 'pass' ? 0 : 1
+}
+
+export function ensureSharedFinalSigtermRow(rows, profileMode, reason) {
+  if (profileMode !== 'shared') return rows
+  if (rows.some((row) => row.scenario === 'final-sigterm')) return rows
+  rows.push(terminalRow('final-sigterm', 0, 'NOT_RUN', { failure: reason }))
+  return rows
 }
 
 // A killed app can still land a late write in its temp dir while it is removed. That is a cleanup problem, not an
@@ -501,7 +574,8 @@ export function runMemorySummary(host, rows) {
  * Starts the app again on the profile the killed instance used, then requires at most one process per runtime
  * role (exactly one when the row had started a model) and nothing owned left over after this instance is killed.
  */
-async function relaunchAndCountRuntimes({ executable, installRoot, profile, env, expectRuntime }) {
+async function relaunchAndCountRuntimes({ executable, installRoot, profile, env, expectRuntime, sharedProfileState = null }) {
+  const readyBaseline = countEvent(readAudit(profile), 'app.renderer.ready')
   const child = spawn(executable, [], {
     env: { ...env, METIS_HK_M_SCENARIO: expectRuntime ? 'model-starting' : 'idle' },
     stdio: 'ignore'
@@ -518,11 +592,10 @@ async function relaunchAndCountRuntimes({ executable, installRoot, profile, env,
   let ownedAtKill = []
   try {
     const readyDeadline = boundedDeadline(READY_TIMEOUT_MS)
-    // The profile's audit log spans both boots, so the second renderer.ready marks this instance.
-    while (!exited && Date.now() < readyDeadline && countEvent(readAudit(profile), 'app.renderer.ready') < 2) {
+    while (!exited && Date.now() < readyDeadline && countEvent(readAudit(profile), 'app.renderer.ready') <= readyBaseline) {
       await sleep(POLL_MS)
     }
-    if (exited || countEvent(readAudit(profile), 'app.renderer.ready') < 2) {
+    if (exited || countEvent(readAudit(profile), 'app.renderer.ready') <= readyBaseline) {
       return { ok: false, failure: budgetSpent() ? 'budget_exhausted' : 'relaunch_not_ready' }
     }
     if (expectRuntime) {
@@ -538,6 +611,17 @@ async function relaunchAndCountRuntimes({ executable, installRoot, profile, env,
       expectRuntime
     )
     if (!verdict.ok) return verdict
+    if (sharedProfileState) {
+      const shared = sharedProfileRelaunchVerdict({
+        owned: ownedAtKill,
+        registry: readRegistry(profile),
+        records: readAudit(profile),
+        table: listProcesses('darwin'),
+        previousDeadRegistryCount: sharedProfileState.previousDeadRegistryCount
+      })
+      if (!shared.ok) return { ...shared, counts: verdict.counts }
+      sharedProfileState.previousDeadRegistryCount = shared.deadRegistry
+    }
     hardKill(child.pid)
     const killedAt = Date.now()
     let left = []
@@ -553,7 +637,7 @@ async function relaunchAndCountRuntimes({ executable, installRoot, profile, env,
   }
 }
 
-async function runCycle({ executable, installRoot, scenario, cycle, timings, supervisionMode }) {
+async function runCycle({ executable, installRoot, scenario, cycle, timings, supervisionMode, profileLease = null, sharedProfileState = null }) {
   const rootResidents = ownedProcesses(listProcesses('darwin'), { mainPid: null, installRoot, platform: 'darwin' })
   if (rootResidents.length > 0) {
     return terminalRow(scenario, cycle, 'FAIL', { failure: 'install_root_busy', before: roleCounts(rootResidents) })
@@ -569,8 +653,12 @@ async function runCycle({ executable, installRoot, scenario, cycle, timings, sup
     })
   }
 
-  const profile = mkdtempSync(join(tmpdir(), 'metis-hk-m-'))
+  const profile = profileLease?.profile ?? mkdtempSync(join(tmpdir(), 'metis-hk-m-'))
+  const removeProfileAfterRow = profileLease?.removeAfterRow !== false
   const env = launchEnv({ baseEnv: process.env, profile, scenario, supervisionMode })
+  const auditBaseline = readAudit(profile).length
+  const registryBaseline = readRegistry(profile).length
+  const readyBaseline = countEvent(readAudit(profile), 'app.renderer.ready')
 
   const child = spawn(executable, [], { env, stdio: 'ignore' })
   const exitInfo = { settled: false, code: null, signal: null }
@@ -592,10 +680,10 @@ async function runCycle({ executable, installRoot, scenario, cycle, timings, sup
       if (exitInfo.settled) {
         return terminalRow(scenario, cycle, 'FAIL', { failure: 'exited_before_ready', exit: exitInfo })
       }
-      if (hasEvent(readAudit(profile), 'app.renderer.ready')) break
+      if (countEvent(readAudit(profile), 'app.renderer.ready') > readyBaseline) break
       await sleep(POLL_MS)
     }
-    if (!hasEvent(readAudit(profile), 'app.renderer.ready')) {
+    if (countEvent(readAudit(profile), 'app.renderer.ready') <= readyBaseline) {
       hardKill(child.pid)
       if (budgetSpent()) return terminalRow(scenario, cycle, 'NOT_RUN', { failure: 'budget_exhausted' })
       return terminalRow(scenario, cycle, 'FAIL', { failure: 'renderer_not_ready' })
@@ -603,8 +691,8 @@ async function runCycle({ executable, installRoot, scenario, cycle, timings, sup
     timings.ready = Date.now() - startedAt
 
     const snapshot = () => {
-      const records = readAudit(profile)
-      const registry = readRegistry(profile)
+      const records = readAudit(profile).slice(auditBaseline)
+      const registry = readRegistry(profile).slice(registryBaseline)
       const table = listProcesses('darwin')
       const owned = ownedProcesses(table, { mainPid: child.pid, installRoot, platform: 'darwin' })
       const sidecars = owned.filter((entry) => entry.pid !== child.pid)
@@ -694,13 +782,15 @@ async function runCycle({ executable, installRoot, scenario, cycle, timings, sup
           installRoot,
           profile,
           env,
-          expectRuntime: MODEL_SCENARIOS.includes(scenario)
+          expectRuntime: MODEL_SCENARIOS.includes(scenario),
+          sharedProfileState
         })
         if (!relaunch.ok) {
           if (relaunch.failure === 'budget_exhausted') return terminalRow(scenario, cycle, 'NOT_RUN', { failure: 'budget_exhausted' })
           return terminalRow(scenario, cycle, 'FAIL', {
             failure: relaunch.failure,
             relaunch: { runtimes: relaunch.counts ?? {} },
+            ...(relaunch.evidence ? { sharedProfile: relaunch.evidence } : {}),
             evidence: scenarioProof.evidence
           })
         }
@@ -709,6 +799,7 @@ async function runCycle({ executable, installRoot, scenario, cycle, timings, sup
           processes: { atKill: roleCounts(ownedAtKill), survivors: {} },
           unrelatedSameName: { role: unrelated.role, survived: true },
           relaunch: { runtimes: relaunch.counts },
+          ...(relaunch.evidence ? { sharedProfile: relaunch.evidence } : {}),
           evidence: scenarioProof.evidence
         })
       }
@@ -723,7 +814,51 @@ async function runCycle({ executable, installRoot, scenario, cycle, timings, sup
     if (child.pid && !exitInfo.settled) hardKill(child.pid)
     stopUnrelatedFixture(unrelated)
     removeTempDir(unrelated.dir)
-    removeTempDir(profile)
+    if (removeProfileAfterRow) removeTempDir(profile)
+  }
+}
+
+async function finalSigtermCheck({ executable, installRoot, profile, supervisionMode }) {
+  const env = launchEnv({ baseEnv: process.env, profile, scenario: 'idle', supervisionMode })
+  const readyBaseline = countEvent(readAudit(profile), 'app.renderer.ready')
+  const child = spawn(executable, [], { env, stdio: 'ignore' })
+  let exited = false
+  child.once('exit', () => {
+    exited = true
+  })
+  child.once('error', () => {
+    exited = true
+  })
+  const owned = () => ownedProcesses(listProcesses('darwin'), { mainPid: child.pid, installRoot, platform: 'darwin' })
+  try {
+    const readyDeadline = boundedDeadline(READY_TIMEOUT_MS)
+    while (!exited && Date.now() < readyDeadline && countEvent(readAudit(profile), 'app.renderer.ready') <= readyBaseline) {
+      await sleep(POLL_MS)
+    }
+    if (exited || countEvent(readAudit(profile), 'app.renderer.ready') <= readyBaseline) {
+      return terminalRow('final-sigterm', 0, budgetSpent() ? 'NOT_RUN' : 'FAIL', {
+        failure: budgetSpent() ? 'budget_exhausted' : 'final_sigterm_not_ready'
+      })
+    }
+    const ownedAtTerm = owned()
+    try {
+      process.kill(child.pid, 'SIGTERM')
+    } catch {
+      /* The survivor check below decides whether anything owned is still alive. */
+    }
+    const termedAt = Date.now()
+    let left = []
+    while (Date.now() - termedAt <= SURVIVOR_BOUND_MS) {
+      left = computeSurvivors(ownedAtTerm, listProcesses('darwin'), { installRoot, platform: 'darwin' })
+      const verdict = finalSigtermVerdict(left)
+      if (verdict.ok) return terminalRow('final-sigterm', 0, 'PASS', { processes: { survivors: verdict.survivors } })
+      await sleep(POLL_MS)
+    }
+    for (const entry of left) hardKill(entry.pid)
+    const verdict = finalSigtermVerdict(left)
+    return terminalRow('final-sigterm', 0, 'FAIL', { failure: verdict.failure, processes: { survivors: verdict.survivors } })
+  } finally {
+    if (child.pid && !exited) hardKill(child.pid)
   }
 }
 
@@ -735,7 +870,7 @@ function progressLine(row) {
 }
 
 async function main() {
-  const { appPath, reportPath, cycles, budgetMs, supervisionMode } = parseArgs(process.argv.slice(2))
+  const { appPath, reportPath, cycles, budgetMs, supervisionMode, profileMode } = parseArgs(process.argv.slice(2))
   mkdirSync(dirname(reportPath), { recursive: true })
   if (budgetMs !== null) budgetEnd = Date.now() + budgetMs
   const report = {
@@ -744,6 +879,7 @@ async function main() {
     platform: process.platform,
     cycles,
     supervisionMode,
+    profileMode,
     ...(budgetMs !== null ? { budgetMs } : {}),
     scenarios: SCENARIOS,
     host: process.platform === 'darwin' ? hostFacts() : null,
@@ -769,6 +905,7 @@ async function main() {
         }
       }
     }
+    ensureSharedFinalSigtermRow(report.rows, profileMode, reason)
     report.result = reportResultForRows(report.rows)
     Object.assign(report, runMemorySummary(report.host, report.rows))
     writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`)
@@ -780,22 +917,45 @@ async function main() {
     })
   }
 
+  let profilePlan = null
   try {
     const installRoot = realpathSync.native(appPath)
     const executable = macExecutable(installRoot)
+    profilePlan = createProfilePlan({ profileMode })
+    const sharedProfileState = profileMode === 'shared' ? { previousDeadRegistryCount: null } : null
     for (let cycle = 1; cycle <= cycles && !budgetSpent(); cycle++) {
       for (const scenario of SCENARIOS) {
         if (budgetSpent()) break
         const timings = {}
         const memoryAtStart = rowStartMemory()
-        const row = await runCycle({ executable, installRoot, scenario, cycle, timings, supervisionMode })
+        const row = await runCycle({
+          executable,
+          installRoot,
+          scenario,
+          cycle,
+          timings,
+          supervisionMode,
+          profileLease: profilePlan.profileForRow(),
+          sharedProfileState
+        })
         if (timings.ready !== undefined) row.timingsMs = { ...timings, ...row.timingsMs }
         row.memoryAtStart = memoryAtStart
         report.rows.push(row)
         console.log(progressLine(row))
       }
     }
+    if (profileMode === 'shared' && !budgetSpent()) {
+      const row = await finalSigtermCheck({
+        executable,
+        installRoot,
+        profile: profilePlan.profileForRow().profile,
+        supervisionMode
+      })
+      report.rows.push(row)
+      console.log(progressLine(row))
+    }
   } finally {
+    profilePlan?.cleanup()
     if (cleanupWarnings.length > 0) report.cleanupWarnings = cleanupWarnings
     finalize(budgetSpent() ? 'budget_exhausted' : 'aborted')
   }

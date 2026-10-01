@@ -36,12 +36,13 @@ export const PROFILE_DIRS = Object.freeze({ mac: 'asktoto', 'mac-qa-identity': '
 /**
  * A scenario runs on each platform it declares. A platform entry names the qa-candidate variant and
  * artifact it installs, the script and arguments it runs (args receives the installer, its sha256, the
- * report path and the installed app), the report file the script writes, and the settings it seeds into the
- * fresh profile. isolatedProfiles marks a script that runs the app only on its own throwaway
- * ASKTOTO_USERDATA profiles, so the default profile is never touched. notCovered lists report rows the
- * platform cannot prove, each with the reason; lane.json carries them as a residual. qaOnlyHook marks a
+ * report path and the installed app, relative to the repository), the report file the script writes, and the
+ * settings it seeds into the fresh profile. isolatedProfiles marks a script that runs the app only on its own
+ * throwaway ASKTOTO_USERDATA profiles, so the default profile is never touched. notCovered lists report rows
+ * the platform cannot prove, each with the reason; lane.json carries them as a residual. qaOnlyHook marks a
  * scenario that needs a hook compiled only into QA-identity bytes; every other scenario installs a
- * promotable variant so its records bind to bytes that can ship.
+ * promotable variant so its records bind to bytes that can ship. installerSuffix, when set, is the only
+ * installer kind the scenario accepts.
  */
 export const SCENARIOS = Object.freeze({
   // M2-0026: onFatal "Relaunch Métis", then a census 10 s later with no orphaned owned sidecar. The
@@ -58,6 +59,27 @@ export const SCENARIOS = Object.freeze({
         args: ({ installer, sha256, report }) => ['--zip', installer, '--sha256', sha256, '--out', report],
         report: 'fault-fatal-relaunch.json',
         settings: LOCAL_LLM_SETTINGS
+      })
+    })
+  }),
+  // M2-0033 acceptance[7] (M2-0470): seeded ingest ledgers survive repeated clean relaunches and no
+  // llama-server starts in the first 120 s of a boot, on the promotable DMG. The script seeds its own isolated
+  // ASKTOTO_USERDATA profile, so the lane seeds no settings.
+  'ex-suite': Object.freeze({
+    ticket: 'M2-0033',
+    qaOnlyHook: false,
+    exits: Object.freeze({ 0: 'PASS', 1: 'FAIL', 2: 'PRECONDITION' }),
+    platforms: Object.freeze({
+      mac: Object.freeze({
+        variant: 'mac',
+        artifact: 'candidate-mac',
+        installerSuffix: '.dmg',
+        script: 'scripts/qa/ex-suite.mjs',
+        args: ({ app, report }) => {
+          if (!app) throw new Error('ex-suite needs the installed app (--app).')
+          return ['--packaged', app, report, '--relaunches', '3']
+        },
+        report: 'ex-suite.json'
       })
     })
   }),
@@ -269,6 +291,9 @@ export function outcomeForExit(scenario, exitCode) {
  *  @param {{ scenario: string, platform: string, installer: string, sha256: string, outDir: string, app?: string }} options */
 export function scenarioCommand({ scenario, platform, installer, sha256, outDir, app }) {
   const target = platformEntry(scenario, platform)
+  if (target.installerSuffix && !installer.toLowerCase().endsWith(target.installerSuffix)) {
+    throw new Error(`${scenario} installs a ${target.installerSuffix} installer; the selected installer is ${basename(installer)}.`)
+  }
   const argv = [target.script, ...target.args({ installer, sha256, report: join(outDir, target.report).replaceAll('\\', '/'), app })]
   if (argv.some((arg) => typeof arg !== 'string' || arg === '')) {
     throw new Error(`The ${scenario} command is missing an argument; pass the installed app with --app.`)

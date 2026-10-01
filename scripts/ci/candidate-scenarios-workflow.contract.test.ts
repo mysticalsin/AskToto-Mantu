@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { RUNNER_LABELS, SCENARIOS } from '../qa/candidate-scenarios.mjs'
+import { RUNNER_LABELS, SCENARIOS, resolveScenario } from '../qa/candidate-scenarios.mjs'
+import { LAUNCH_MIN_MS, worstCaseRunMs } from '../qa/ex-suite.mjs'
 import { findUnpinnedUses } from './check-workflow-pins.mjs'
 
 const root = join(__dirname, '..', '..')
@@ -169,6 +170,16 @@ describe('candidate-scenarios.yml', () => {
     expect(stepIndex(mac, 'Set the soak deadline')).toBeLessThan(stepIndex(mac, 'candidate-scenarios.mjs run'))
   })
 
+  it('gives ex-suite a scenario step and job timeout that cover its 3 launches of at least 130 s plus boot, quit and the control', () => {
+    const plan = resolveScenario({ scenario: 'ex-suite', sha256: { mac: 'a'.repeat(64) } })
+    const stepMs = plan.mac.stepTimeoutMinutes * 60_000
+    const jobMs = plan.mac.timeoutMinutes * 60_000
+    expect(SCENARIOS['ex-suite'].platforms.mac.args({ app: 'Metis.app', report: 'r.json' })).toContain('3')
+    expect(worstCaseRunMs(3)).toBeGreaterThanOrEqual(3 * LAUNCH_MIN_MS)
+    expect(stepMs).toBeGreaterThanOrEqual(worstCaseRunMs(3))
+    expect(jobMs).toBeGreaterThan(stepMs)
+  })
+
   it('uploads the lane artifact on every run and fails only after the upload', () => {
     const mac = steps('mac')
     const scenario = mac[stepIndex(mac, 'candidate-scenarios.mjs run')]
@@ -213,13 +224,14 @@ describe('candidate-scenarios.yml', () => {
     )
   })
 
-  it('hands the installed app to the scenario on macOS', () => {
+  it('hands the installed app to the scenario on macOS, after the signature check', () => {
     const mac = steps('mac')
     const install = mac[stepIndex(mac, 'codesign --verify --deep --strict')]
-    expect(install).toContain('id: install')
+    expect(install).toContain('        id: install')
     expect(install).toContain('echo "app=$app" >> "$GITHUB_OUTPUT"')
+    expect(install.indexOf('echo "app=$app"')).toBeGreaterThan(install.indexOf('codesign --verify --deep --strict'))
     const scenario = mac[stepIndex(mac, 'candidate-scenarios.mjs run')]
-    expect(scenario).toContain('APP: ${{ steps.install.outputs.app }}')
+    expect(scenario).toContain('          APP: ${{ steps.install.outputs.app }}')
     expect(scenario).toContain('--app "$APP"')
   })
 
