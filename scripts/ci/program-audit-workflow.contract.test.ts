@@ -7,8 +7,17 @@ const read = (name: string): string => readFileSync(join(root, '.github', 'workf
 const workflow = read('program-audit.yml')
 
 const INPUTS = [
-  'mode', 'ledger-path', 'records-path', 'population-of', 'since', 'seed', 'gate',
-  'gates-path', 'provenance-path', 'notes-path', 'checker-ref'
+  'mode',
+  'ledger-path',
+  'records-path',
+  'population-of',
+  'since',
+  'seed',
+  'gate',
+  'gates-path',
+  'provenance-path',
+  'notes-path',
+  'checker-ref'
 ]
 
 /** The `inputs:` block declared under one trigger, as the list of input names. */
@@ -55,9 +64,10 @@ describe('M2-0509 program-audit workflow', () => {
 
   it('validates mode, a 40-hex seed and exactly one of population-of or since before any checkout', () => {
     const validate = workflow.slice(workflow.indexOf('name: Validate the inputs'), workflow.indexOf('name: Checkout the caller'))
-    expect(validate).toContain('backfill | sample | velocity')
+    expect(validate).toContain('backfill | sample | velocity | release-check')
     expect(validate).toContain("'^[0-9a-f]{40}$'")
     expect(validate).toContain('exactly one of population-of or since')
+    expect(validate).toContain('release-check mode requires $name')
     expect(validate).toContain('exit 2')
   })
 
@@ -78,6 +88,9 @@ describe('M2-0509 program-audit workflow', () => {
     expect(workflow).toContain('args=(--ledger "$LEDGER_PATH" --gate "$GATE" --out-dir "$OUT_DIR")')
     expect(workflow).toContain('args+=(--records "$RECORDS_PATH")')
     expect(workflow).toContain('node .program-audit-scripts/scripts/program/velocity.mjs "${args[@]}"')
+
+    expect(workflow).toContain("if: inputs.mode == 'release-check'")
+    expect(workflow).toContain('sha256sum "$GATES_PATH" "$PROVENANCE_PATH" "$NOTES_PATH"')
   })
 
   it('M2-0511 release-check runs check.mjs --release on the three release paths, with the ledger history for the sample', () => {

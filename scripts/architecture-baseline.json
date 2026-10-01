@@ -39,12 +39,12 @@
   "FF-04": {
     "src/main/auth.ts": 999,
     "src/main/brain/corrections.ts": 1637,
-    "src/main/brain/ingest.ts": 3077,
-    "src/main/brain/publish.ts": 990,
+    "src/main/brain/ingest.ts": 3078,
+    "src/main/brain/publish.ts": 974,
     "src/main/brain/store.ts": 1197,
     "src/main/cli.ts": 1690,
     "src/main/import-jobs.ts": 1198,
-    "src/main/index.ts": 9883,
+    "src/main/index.ts": 9882,
     "src/main/store.ts": 1367,
     "src/main/transcripts.ts": 1211,
     "src/renderer/src/App.tsx": 4360,
@@ -55,7 +55,9 @@
     "src/renderer/src/components/OnboardingExperience.tsx": 1910,
     "src/renderer/src/components/RecallView.tsx": 1349,
     "src/renderer/src/components/Review.tsx": 1950,
-    "src/renderer/src/components/Settings.tsx": 8098,
+    "src/renderer/src/components/Settings.tsx": 3996,
+    "src/renderer/src/features/settings/AiSection.tsx": 2410,
+    "src/renderer/src/features/settings/AudioTab.tsx": 921,
     "src/renderer/src/features/settings/DustSetup.tsx": 980,
     "src/renderer/src/lib/listen.ts": 3144,
     "src/shared/ipc.ts": 2452
@@ -226,7 +228,7 @@
     "src/main/speaker-id.test.ts": 6,
     "src/main/speaker-session-wiring.test.ts": 2,
     "src/main/sync-fs-meetings-root.contract.test.ts": 21,
-    "src/main/tonight-1.8.5-kinetic-checklist.contract.test.ts": 17,
+    "src/main/tonight-1.8.5-kinetic-checklist.contract.test.ts": 18,
     "src/main/transcripts.test.ts": 2,
     "src/main/whisper-asr-host.test.ts": 6,
     "src/main/will-quit-guard.test.ts": 1,
@@ -302,7 +304,7 @@
     "src/shared/asr-engine.contract.test.ts": 5,
     "src/shared/asr-latency.test.ts": 1,
     "src/shared/asr-quality.contract.test.ts": 13,
-    "src/shared/cli-setup-status.test.ts": 2,
+    "src/shared/cli-setup-status.test.ts": 3,
     "src/shared/dust-validate.test.ts": 1,
     "src/shared/license-types.contract.test.ts": 1,
     "src/shared/overlay-chrome.test.ts": 4,
@@ -352,5 +354,6 @@
     "src/main/operator-overlay.ts": 1,
     "src/main/screen-preprocess.ts": 1,
     "src/main/updater.ts": 1
-  }
+  },
+  "FF-15": {}
 }

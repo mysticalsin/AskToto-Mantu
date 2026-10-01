@@ -126,8 +126,11 @@ describe('cli setup status machine — Installing → Waiting for login → Conn
 describe('CLI setup never stores tokens in the Operator vault', () => {
   it('the walk module and Settings CLI card do not write vault secrets', () => {
     const walk = readFileSync(join(__dirname, './cli-setup-status.ts'), 'utf8')
-    const settings = readFileSync(join(__dirname, '../renderer/src/components/Settings.tsx'), 'utf8')
-    const card = settings.slice(settings.indexOf('function CliIntegration('), settings.indexOf('function McpConnectionCard('))
+    const settings = readFileSync(join(__dirname, '../renderer/src/features/settings/AiSection.tsx'), 'utf8')
+    const settingsShell = readFileSync(join(__dirname, '../renderer/src/components/Settings.tsx'), 'utf8')
+    const cardStart = settings.indexOf('function CliIntegration(')
+    expect(cardStart).toBeGreaterThan(-1)
+    const card = settings.slice(cardStart)
     const stripped = `${walk}\n${card}`.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
     expect(stripped).not.toMatch(/operatorVault|writeSecret|mcpSecrets|safeStorage\.encrypt/)
     expect(walk.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')).not.toMatch(
@@ -137,6 +140,6 @@ describe('CLI setup never stores tokens in the Operator vault', () => {
     expect(card).toMatch(/data-cli-setup-chip/)
     expect(card).toMatch(/Set up automatically/)
     expect(card).toMatch(/Waiting for login/)
-    expect(settings).toMatch(/haltAllOnboardingAudio\(\)/)
+    expect(settingsShell).toMatch(/haltAllOnboardingAudio\(\)/)
   })
 })

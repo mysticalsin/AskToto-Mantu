@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
 import {
   isBootFirstShowDeferred,
+  navigateWindow,
   scheduleCurrentFirstShow,
   scheduleFirstShow,
   withBootFirstShowDeferred,
@@ -89,5 +90,51 @@ describe('boot first-show deferral (M2-0031)', () => {
     })
     await flush()
     expect(show).not.toHaveBeenCalled()
+  })
+})
+
+describe('navigateWindow (M2-0516)', () => {
+  it('navigates the boot window in its own task: after the constructing task, before a first show scheduled after it', async () => {
+    const win = fakeWindow()
+    const order: string[] = []
+    navigateWindow(true, win, () => win, (navigated) => order.push(navigated === win ? 'navigate' : 'wrong window'), () => order.push('fail'))
+    scheduleCurrentFirstShow(win, () => win, () => order.push('show'))
+    expect(order).toEqual([])
+    await flush()
+    expect(order).toEqual(['navigate', 'show'])
+  })
+
+  it('navigates every other caller synchronously, in the constructing task, and lets its throw escape', () => {
+    const win = fakeWindow()
+    const navigate = vi.fn()
+    navigateWindow(false, win, () => null, navigate, vi.fn())
+    expect(navigate).toHaveBeenCalledExactlyOnceWith(win)
+    expect(() =>
+      navigateWindow(false, win, () => win, () => {
+        throw new Error('no url')
+      }, vi.fn())
+    ).toThrow('no url')
+  })
+
+  it('skips a boot window replaced or destroyed before its turn', async () => {
+    const navigate = vi.fn()
+    const fail = vi.fn()
+    navigateWindow(true, fakeWindow(), () => fakeWindow(), navigate, fail)
+    const destroyed = fakeWindow({ destroyed: true })
+    navigateWindow(true, destroyed, () => destroyed, navigate, fail)
+    await flush()
+    expect(navigate).not.toHaveBeenCalled()
+    expect(fail).not.toHaveBeenCalled()
+  })
+
+  it("hands a deferred navigation's throw to fail instead of escaping its task", async () => {
+    const win = fakeWindow()
+    const error = new Error('load refused')
+    const fail = vi.fn()
+    navigateWindow(true, win, () => win, () => {
+      throw error
+    }, fail)
+    await flush()
+    expect(fail).toHaveBeenCalledExactlyOnceWith(error)
   })
 })
