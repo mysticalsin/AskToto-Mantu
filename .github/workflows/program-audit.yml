@@ -51,7 +51,7 @@ on:
         type: string
         default: ''
       gate:
-        description: velocity mode, gate label for the forecast
+        description: velocity and release-check modes, gate label
         required: false
         type: string
         default: m3
@@ -106,7 +106,7 @@ on:
         type: string
         default: ''
       gate:
-        description: velocity mode, gate label for the forecast
+        description: velocity and release-check modes, gate label
         required: false
         type: string
         default: m3
@@ -171,6 +171,14 @@ jobs:
               echo "sample mode requires exactly one of population-of or since" >&2; exit 2
             fi
           fi
+          if [ "$MODE" = "release-check" ]; then
+            for name in GATES_PATH PROVENANCE_PATH NOTES_PATH; do
+              if [ -z "${!name}" ]; then
+                echo "release-check mode requires $name" >&2
+                exit 2
+              fi
+            done
+          fi
       - name: Checkout the caller's ledger and evidence records
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -223,6 +231,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$OUT_DIR"
+          sha256sum "$GATES_PATH" "$PROVENANCE_PATH" "$NOTES_PATH" > "$OUT_DIR/release-inputs.sha256"
           version="$(jq -er '.version' "$GATES_PATH")"
           status=0
           node .program-audit-scripts/scripts/evidence/check.mjs --release "$version" --gates "$GATES_PATH" --provenance "$PROVENANCE_PATH" --ledger "$LEDGER_PATH" --notes "$NOTES_PATH" > "$OUT_DIR/release-check.txt" 2>&1 || status=$?
