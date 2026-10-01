@@ -150,7 +150,7 @@ export async function runHkMScenario(scenario: HkMScenario, deps: HkMDeps): Prom
   }
 }
 
-const HK_M_MODEL_ID = 'qwen3.5-0.8b'
+export const HK_M_MODEL_ID = 'qwen3.5-0.8b'
 const HK_M_DECODE_SECONDS = 600
 const REGISTRY_WRITE_INTERVAL_MS = 2
 

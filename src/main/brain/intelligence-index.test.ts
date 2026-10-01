@@ -21,6 +21,7 @@ import {
   intelligenceIndexStatus,
   runIntelligenceIndex,
   setIntelligenceIndexWork,
+  settleIntelligenceIndexForTests,
   shouldCatchUp,
   triggerForReason,
   writeIntelligenceIndexState,
@@ -403,7 +404,7 @@ describe('Intelligence completion, not dispatch, owns success', () => {
     }))
     const result = await runIntelligenceIndex('click', s)
     expect(result.error).toBe(NO_PROVIDER_INDEX_COPY)
-    await vi.waitFor(() => expect(intelligenceIndexStatus(s).running).toBe(false))
+    await settleIntelligenceIndexForTests()
     expect(readIntelligenceIndexState(s).lastSuccessAt).toBe(123)
     expect(intelligenceIndexStatus(s).lastError).toBe(NO_PROVIDER_INDEX_COPY)
   })
