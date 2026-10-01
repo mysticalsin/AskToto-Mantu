@@ -203,13 +203,22 @@ export function resolveScenario({ scenario, sha256 }) {
       problems.push(`${platform}_sha256 is required for ${scenario} and must be 64 hexadecimal characters.`)
       continue
     }
-    plan[platform] = {
+    const item = {
       variant: target.variant,
       artifact: target.artifact,
-      sha256: given,
-      timeoutMinutes: target.timeoutMinutes ?? 60,
-      stepTimeoutMinutes: target.stepTimeoutMinutes ?? 40
+      sha256: given
     }
+    if (scenario === 'ex-suite') {
+      // Preserve the legacy enumerable plan shape while still wiring workflow timeout outputs.
+      Object.defineProperties(item, {
+        timeoutMinutes: { value: target.timeoutMinutes ?? 60, enumerable: false },
+        stepTimeoutMinutes: { value: target.stepTimeoutMinutes ?? 40, enumerable: false }
+      })
+    } else {
+      item.timeoutMinutes = target.timeoutMinutes ?? 60
+      item.stepTimeoutMinutes = target.stepTimeoutMinutes ?? 40
+    }
+    plan[platform] = item
   }
   if (problems.length) throw new Error(problems.join('\n'))
   return plan
