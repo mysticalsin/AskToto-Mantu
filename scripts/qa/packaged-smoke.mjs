@@ -78,6 +78,7 @@ export {
   LATE_NATIVE_FRAME_HOLD_MS,
   framesAboveWorkArea,
   initialRightEdgeHideRows,
+  rightEdgePageChromeState,
   rightEdgeExpectedRects,
   rightEdgeHideParkMatches,
   rightEdgeMeetingHideVerdict,

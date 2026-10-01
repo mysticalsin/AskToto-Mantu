@@ -35,6 +35,7 @@ import {
   rightEdgeExpectedRects,
   rightEdgeHideParkMatches,
   rightEdgeMeetingHideVerdict,
+  rightEdgePageChromeState,
   rightEdgeStateMatches,
   rightEdgeStateMismatches,
   runRevealRow,
@@ -774,6 +775,17 @@ describe('right-edge Hide rows (RE-HIDE)', () => {
     expect(rightEdgeStateMismatches({ win: win(0, null), page }, 'parked', 'hide')).toEqual(['clickThrough'])
     expect(rightEdgeStateMismatches({ win: win(0, true), page }, 'parked', 'island')).toEqual(['bounds', 'opacity', 'clickThrough'])
     expect(rightEdgeStateMismatches(null, 'parked', 'hide')).toEqual(['observation'])
+  })
+
+  it('treats a mounted but aria-hidden right-edge drawer as parked rail chrome', () => {
+    expect(rightEdgePageChromeState({ rootOpen: false, drawerAriaHidden: 'true', tabAriaExpanded: 'false' })).toEqual({
+      drawer: false,
+      rail: true
+    })
+    expect(rightEdgePageChromeState({ rootOpen: true, drawerAriaHidden: null, tabAriaExpanded: 'true' })).toEqual({
+      drawer: true,
+      rail: false
+    })
   })
 
   it('keeps RE-HIDE-3 meeting Hide held for late native frames and carries geometry evidence', () => {

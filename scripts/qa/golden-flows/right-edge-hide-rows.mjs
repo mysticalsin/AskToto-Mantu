@@ -215,14 +215,26 @@ export const MAIN_RE_HIDE_SNAPSHOT = `(() => {
 export const setMainCursor = (point) =>
   `(() => { globalThis.__metisReHide.cursor = ${point ? JSON.stringify({ x: Math.round(point.x), y: Math.round(point.y) }) : 'null'}; return true })()`
 
+export function rightEdgePageChromeState({ rootOpen, drawerAriaHidden, tabAriaExpanded }) {
+  const drawer = rootOpen === true && drawerAriaHidden !== 'true'
+  return { drawer, rail: !drawer && tabAriaExpanded === 'false' }
+}
+
 async function rightEdgePageState(page) {
   return page.evaluate(() => {
     const input = document.querySelector('.right-edge-sidecar__chat-input')
-    const drawer = document.querySelector('.right-edge-sidecar__drawer') !== null
+    const root = document.querySelector('.right-edge-sidecar')
+    const drawerElement = document.querySelector('.right-edge-sidecar__drawer')
+    const tab = document.querySelector('.right-edge-sidecar__tab')
+    const rootOpen = root?.classList.contains('right-edge-sidecar--open') === true
+    const drawerAriaHidden = drawerElement?.getAttribute('aria-hidden') ?? null
+    const tabAriaExpanded = tab?.getAttribute('aria-expanded') ?? null
+    const drawer = rootOpen === true && drawerAriaHidden !== 'true'
+    const rail = !drawer && tabAriaExpanded === 'false'
     return {
-      dock: document.querySelector('.right-edge-sidecar') !== null,
+      dock: root !== null,
       drawer,
-      rail: !drawer && document.querySelector('.right-edge-sidecar__tab') !== null,
+      rail: tab !== null && rail,
       hideControl: document.querySelector('button[aria-label="Hide Métis"]') !== null,
       meetingLive: document.querySelector('[aria-label="Meeting controls"]') !== null,
       composerFocused: input !== null && document.activeElement === input,
