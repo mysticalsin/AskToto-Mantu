@@ -26,6 +26,7 @@ import {
   initialRvRows,
   initialNavigationGuardRows,
   initialRightEdgeHideRows,
+  navigationMeetingTitles,
   rightEdgeExpectedRects,
   rightEdgeHideParkMatches,
   rightEdgeStateMatches,
@@ -800,6 +801,20 @@ describe('initialNavigationGuardRows', () => {
     expect(rows.some((row) => row.state === 'dirty')).toBe(true)
     expect(rows.every((row) => row.status === 'PENDING')).toBe(true)
     expect(rows.every((row) => row.unblock === null)).toBe(true)
+  })
+})
+
+describe('navigationMeetingTitles', () => {
+  it('keeps the original seeded names for clean rows and gives dirty rows isolated meeting pairs', () => {
+    expect(navigationMeetingTitles()).toEqual({
+      alpha: 'Smoke navigation alpha',
+      beta: 'Smoke navigation beta'
+    })
+
+    expect(navigationMeetingTitles('HIST dirty save bar')).toEqual({
+      alpha: 'Smoke navigation alpha HIST dirty save bar',
+      beta: 'Smoke navigation beta HIST dirty save bar'
+    })
   })
 })
 
