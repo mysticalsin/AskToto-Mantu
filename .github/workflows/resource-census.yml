@@ -33,7 +33,7 @@ jobs:
   macos:
     name: Resource census (macOS)
     runs-on: macos-latest
-    timeout-minutes: 80
+    timeout-minutes: 90
     if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -86,9 +86,23 @@ jobs:
             --output census-output/darwin-footprint.json
       - name: Build representative synthetic profile
         run: |
-          node scripts/qa/census/profile.mjs "$RUNNER_TEMP/metis-census-profile"
-          cp "$RUNNER_TEMP/metis-census-profile/resource-census-profile.json" census-output/profile-manifest.json
+          # Read resource-census-profile.json from the path profile.mjs prints, so a Windows RUNNER_TEMP
+          # (D:\a\_temp) cannot diverge between where the script writes and where this step reads.
+          node scripts/qa/census/profile.mjs "$RUNNER_TEMP/metis-census-profile" | tee census-output/profile.log
+          manifest=$(sed -n 's/^\[census-profile\] manifest //p' census-output/profile.log)
+          test -n "$manifest"
+          cp "$manifest" census-output/profile-manifest.json
+      - name: Build parked hide synthetic profile
+        run: |
+          node scripts/qa/census/profile.mjs --layout hide "$RUNNER_TEMP/metis-census-parked-profile" | tee census-output/parked-profile.log
+          manifest=$(sed -n 's/^\[census-profile\] manifest //p' census-output/parked-profile.log)
+          test -n "$manifest"
+          cp "$manifest" census-output/parked-profile-manifest.json
       - name: Record local TTFT proof
+        # Hosted runners are CPU-only and slow for local inference: the proof's PASS/FAIL/TIMEOUT outcome is
+        # recorded in the census artifact but must never gate the resource census steps below.
+        continue-on-error: true
+        timeout-minutes: 20
         env:
           ASKTOTO_USERDATA: ${{ runner.temp }}/metis-census-profile
         run: node scripts/prove-local-ttft.mjs > census-output/prove-local-ttft.log 2>&1
@@ -103,8 +117,11 @@ jobs:
               --seconds 300
               --app "$RUNNER_TEMP/resource-census-install/Metis.app"
               --output "census-output/darwin-$state.json"
-              --ttft-output census-output/prove-local-ttft.log
             )
+            # A proof that died before printing its header leaves nothing to record; the census still runs.
+            if grep -q 'prove-local-ttft: ' census-output/prove-local-ttft.log; then
+              args+=(--ttft-output census-output/prove-local-ttft.log)
+            fi
             if [ "$state" = settled-idle ]; then
               args+=(
                 --trace-scenario parked-bar-orb
@@ -114,6 +131,11 @@ jobs:
             fi
             node "${args[@]}"
           done
+          METIS_QA_PROFILE="$RUNNER_TEMP/metis-census-parked-profile" node scripts/qa/census/run.mjs \
+            --state parked-idle \
+            --seconds 300 \
+            --app "$RUNNER_TEMP/resource-census-install/Metis.app" \
+            --output census-output/darwin-parked-idle.json
       - name: Record run identity and file digests
         if: always()
         env:
@@ -135,7 +157,7 @@ jobs:
   windows:
     name: Resource census (Windows)
     runs-on: windows-latest
-    timeout-minutes: 80
+    timeout-minutes: 90
     if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -183,8 +205,18 @@ jobs:
             --output census-output/win32-footprint.json
       - name: Build representative synthetic profile
         run: |
-          node scripts/qa/census/profile.mjs "$RUNNER_TEMP/metis-census-profile"
-          cp "$RUNNER_TEMP/metis-census-profile/resource-census-profile.json" census-output/profile-manifest.json
+          # Read the manifest from the path profile.mjs prints, so a Windows RUNNER_TEMP (D:\a\_temp) cannot
+          # diverge between where the script writes and where this step reads.
+          node scripts/qa/census/profile.mjs "$RUNNER_TEMP/metis-census-profile" | tee census-output/profile.log
+          manifest=$(sed -n 's/^\[census-profile\] manifest //p' census-output/profile.log)
+          test -n "$manifest"
+          cp "$manifest" census-output/profile-manifest.json
+      - name: Build parked hide synthetic profile
+        run: |
+          node scripts/qa/census/profile.mjs --layout hide "$RUNNER_TEMP/metis-census-parked-profile" | tee census-output/parked-profile.log
+          manifest=$(sed -n 's/^\[census-profile\] manifest //p' census-output/parked-profile.log)
+          test -n "$manifest"
+          cp "$manifest" census-output/parked-profile-manifest.json
       - name: Measure hosted census states
         env:
           METIS_QA_PROFILE: ${{ runner.temp }}/metis-census-profile
@@ -196,6 +228,11 @@ jobs:
               --app "$RUNNER_TEMP/resource-census-install/Metis.exe" \
               --output "census-output/win32-$state.json"
           done
+          METIS_QA_PROFILE="$RUNNER_TEMP/metis-census-parked-profile" node scripts/qa/census/run.mjs \
+            --state parked-idle \
+            --seconds 300 \
+            --app "$RUNNER_TEMP/resource-census-install/Metis.exe" \
+            --output census-output/win32-parked-idle.json
       - name: Record run identity and file digests
         if: always()
         env:

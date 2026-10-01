@@ -185,6 +185,7 @@ export const IPC = {
   historySettled: 'history:settled',
   recallOpen: 'recall:open',
   recallRead: 'recall:read',
+  recallHydration: 'recall:hydration', // main → renderer: an explicit open downloading one cloud-only meeting
   recallExportPlain: 'recall:export-plain', // user-initiated decrypted md copy of ONE meeting
   recallDelete: 'recall:delete',
   recallRename: 'recall:rename',
@@ -1909,9 +1910,9 @@ export interface MeetingSummary {
   /** Task MI-5: frontmatter `confidential: true` — excludes this meeting from every published wiki
    *  surface (note card, entity timelines/current-facts, indexes). Undefined/false = not confidential. */
   confidential?: boolean
-  /** True for a real encrypted meeting that failed to decrypt on this device — listed as a locked
-   *  stub (no preview) so it's visible with a lock affordance instead of silently vanishing. */
+  /** True for a real encrypted meeting this device can't decrypt: a locked stub (no preview), never silently dropped. */
   locked?: boolean
+  notDownloaded?: boolean // bytes not on this device: listed by name, never read; an explicit open downloads it
 }
 export interface RecallHit extends MeetingSummary {
   snippet: string
@@ -2345,7 +2346,6 @@ export type WriteupSpanPayload = z.infer<typeof WriteupSpanPayloadSchema>
 /** Settings' view of Apple's on-device engine. 'unlicensed' needs the owner to accept the CLI terms. */
 export const APPLE_ENGINE_STATUSES = ['unsupported', 'disabled', 'available', 'unlicensed', 'unavailable'] as const
 export type AppleEngineStatus = typeof APPLE_ENGINE_STATUSES[number]
-
 
 // ─── Licensing (phone-home activation against a self-hosted license server; see main/license.ts) ──────
 export const LicenseActivatePayloadSchema = z.object({

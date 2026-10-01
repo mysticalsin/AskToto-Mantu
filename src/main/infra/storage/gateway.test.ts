@@ -11,7 +11,7 @@ vi.mock('../../mac-helper', () => ({ macStatFlagsSpawnSpec: vi.fn(() => null) })
 
 import { createFifo, releaseFifo } from '../../../../scripts/qa/fixtures/fifo.mjs'
 import type { ContentPresence, DatalessDetector, FileVersion } from './dataless'
-import { createStorageGateway, threadpoolSize, type StorageFs } from './gateway'
+import { createStorageGateway, HYDRATE_DEADLINE_MS, threadpoolSize, type StorageFs } from './gateway'
 
 const ROOT = join(sep, 'meetings')
 const ROOT2 = join(sep, 'meetings2')
@@ -419,6 +419,82 @@ describe('classify-before-read (D1-D6)', () => {
     await expect(gateway.read('cloud.md')).resolves.toMatchObject({ status: 'dataless' })
     await expect(gateway.read('odd.md')).resolves.toMatchObject({ status: 'unknown' })
     expect(fs.calls.some((call) => call.startsWith('realpath') || call.startsWith('readFile'))).toBe(false)
+  })
+
+  it('classify flags a non-regular file without probing it and an explicit open refuses to read it', async () => {
+    const memory = memoryFs({ 'pipe.md': 'P' })
+    const fs = { ...memory, stat: async (path: string) => ({ ...(await memory.stat(path)), isFile: () => false }) }
+    const detector = fakeDetector()
+    const gateway = createStorageGateway({ root: () => ROOT, detector, fs, poolSize: 4 })
+
+    expect((await gateway.classify(['pipe.md'])).get('pipe.md')).toMatchObject({ isRegular: false })
+    await expect(gateway.read('pipe.md', { hydrate: true })).resolves.toEqual({ status: 'unavailable', code: 'NOT_REGULAR' })
+    expect(detector.classify).not.toHaveBeenCalled()
+    expect(memory.calls.some((call) => call.startsWith('readFile'))).toBe(false)
+  })
+
+  it('a hydrate read opens a dataless file once, under a permit, reporting progress; a plain read still refuses it', async () => {
+    const fs = memoryFs({ 'cloud.md': 'CC' })
+    const gateway = createStorageGateway({ root: () => ROOT, detector: fakeDetector(), fs, poolSize: 4 })
+    const progress: unknown[] = []
+
+    await expect(gateway.read('cloud.md')).resolves.toMatchObject({ status: 'dataless' })
+    const opened = await gateway.read('cloud.md', { hydrate: true, onProgress: (p) => progress.push(p) })
+
+    expect(opened.status).toBe('ok')
+    expect(progress).toEqual([{ state: 'hydrating' }, { state: 'done', bytes: 2 }])
+    expect(fs.calls.filter((call) => call.startsWith('readFile'))).toHaveLength(1)
+  })
+
+  it('a hydrate read past its deadline reports failed, whose settled waits for the held read to return its permit', async () => {
+    const fs = memoryFs({ 'cloud.md': 'CC', 'a.md': 'A' })
+    const gateway = createStorageGateway({ root: () => ROOT, detector: fakeDetector(), fs, poolSize: 3 }) // cap = 1
+    const progress: Array<{ state: string; status?: string; settled?: Promise<void> }> = []
+    const held = fs.hold('readFile', 'cloud.md')
+
+    const opening = gateway.read('cloud.md', { hydrate: true, onProgress: (p) => progress.push(p) })
+    await flush()
+    await vi.advanceTimersByTimeAsync(HYDRATE_DEADLINE_MS)
+
+    await expect(opening).resolves.toEqual({ status: 'timeout' })
+    expect(progress.map((p) => [p.state, p.status])).toEqual([['hydrating', undefined], ['failed', 'timeout']])
+    let settled = false
+    void progress[1]?.settled?.then(() => (settled = true))
+    await flush()
+    expect(settled).toBe(false)
+
+    held.release()
+    await flush()
+    expect(settled).toBe(true)
+    await expect(gateway.read('a.md')).resolves.toMatchObject({ status: 'ok' })
+  })
+
+  it('a hydrate read the provider fails reports failed with its settled already resolved', async () => {
+    const fs = memoryFs({ 'cloud.md': 'CC' })
+    const gateway = createStorageGateway({ root: () => ROOT, detector: fakeDetector(), fs, poolSize: 4 })
+    const progress: Array<{ state: string; status?: string; settled?: Promise<void> }> = []
+    fs.fail('readFile', 'cloud.md', 'EIO')
+
+    await expect(gateway.read('cloud.md', { hydrate: true, onProgress: (p) => progress.push(p) })).resolves.toEqual({ status: 'unavailable', code: 'EIO' })
+    expect(progress.map((p) => [p.state, p.status])).toEqual([['hydrating', undefined], ['failed', 'unavailable']])
+    await expect(progress[1]?.settled).resolves.toBeUndefined()
+  })
+
+  it('a successful hydrate read forgets the remembered dataless answer, so the next plain read returns the bytes', async () => {
+    const fs = memoryFs({ 'cloud.md': 'CC' })
+    let local = false
+    const detector: DatalessDetector = {
+      classify: async (files) => new Map(files.map((file): [string, ContentPresence] => [file.path, local ? 'local' : 'dataless'])),
+    }
+    const gateway = createStorageGateway({ root: () => ROOT, detector, fs, poolSize: 4 })
+
+    await expect(gateway.read('cloud.md')).resolves.toMatchObject({ status: 'dataless' })
+    await expect(gateway.read('cloud.md', { hydrate: true })).resolves.toMatchObject({ status: 'ok' })
+    local = true
+    const next = await gateway.read('cloud.md')
+
+    expect(next.status).toBe('ok')
+    expect(next.status === 'ok' && next.bytes.toString()).toBe('CC')
   })
 
   it("read returns a local file's bytes and version", async () => {
