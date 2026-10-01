@@ -17,6 +17,7 @@ export const OV_STABLE_PATH_MS = 180_000
 const OV_STOP_MS = 400
 const OV_MENU_BAR_STOPS_X = Object.freeze([24, 1253, 1770])
 const OV_REFERENCE_WIDTH = 1920
+/** src/main/island/geometry.ts TOP_CENTER_HOVER_HALF_WIDTH_PX (OD-23) plus clearance: a stop never grazes the notch area. */
 const OV_NOTCH_HALF_WIDTH = 150
 const OV_NOTCH_CLEARANCE = 60
 const OV_HOVER_HOLD_MS = 2_500
@@ -111,6 +112,13 @@ const MAIN_OV_BACKGROUND = `(() => {
   return w ? { readback: w.getBackgroundColor().toLowerCase(), requested: globalThis.__metisOv?.requestedBackground ?? null } : null
 })()`
 
+/**
+ * Runs the OV rows against a live overlay (same `main`/`page` contract as runRightEdgeHideRows). `flashCount`
+ * reads how many `overlay.flash` audit records the app has written so far. `openSettings` drives the app's own
+ * main-process Settings entry (the tray click → sendHotkey('settings') in src/main/index.ts), so OV-BG covers
+ * applySettingsSurface's resize and background order, not only the renderer's view switch; it resolves false
+ * when that entry is unavailable. Rows never throw.
+ */
 export async function runOverlayStabilityRows({ page, main, openSettings, rows, flashCount = () => 0, wait = sleep, pathMs = OV_STABLE_PATH_MS }) {
   const complete = (id, patch) => {
     const row = rows.find((entry) => entry.id === id)

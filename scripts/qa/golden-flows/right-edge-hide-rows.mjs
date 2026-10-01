@@ -551,6 +551,8 @@ export async function mainInspector(inspectPort) {
   }
   const evaluate = async (expression) =>
     (await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }))?.result?.value
+  // The app holds its Tray in a module-local binding, so find the live instance on the heap and emit the same
+  // 'click' the OS delivers: its listener is the product's own Settings entry (sendHotkey('settings')).
   const clickTray = async () => {
     const prototype = await send('Runtime.evaluate', { expression: 'globalThis.__metisReHideElectron.Tray.prototype' })
     const trays = await send('Runtime.queryObjects', { prototypeObjectId: prototype.result.objectId })
