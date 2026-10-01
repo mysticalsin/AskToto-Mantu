@@ -207,7 +207,7 @@ describe('the Custom provider tile can actually be selected (finding 5)', () => 
 
 describe('About footer version', () => {
   it('reads the release version from package.json instead of hard-coding a stale value', () => {
-    expect(source).toContain("import appPackage from '../../../../package.json'")
+    expect(source).toContain("import appPackage from '../../../../../package.json'")
     expect(source).toMatch(/Métis \{appPackage\.version\} · Mantu/)
     expect(source).not.toMatch(/Métis 1\.0\.0 · Mantu/)
   })

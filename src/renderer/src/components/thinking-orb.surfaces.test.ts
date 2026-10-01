@@ -15,6 +15,7 @@ const SURFACES = [
   'SignInWall.tsx',
   'LicenseGate.tsx',
   'Settings.tsx',
+  '../features/settings/SettingsRoot.tsx',
   'RecallView.tsx',
   'ReviewEntityStrip.tsx',
   'Onboarding.tsx',

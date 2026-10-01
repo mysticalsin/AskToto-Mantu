@@ -20,7 +20,7 @@ const experience = readFileSync(join(root, 'src/renderer/src/components/Onboardi
 const app = readFileSync(join(root, 'src/renderer/src/App.tsx'), 'utf8')
 const index = readFileSync(join(root, 'src/main/index.ts'), 'utf8')
 // Settings is being split (M2-0071): connected-state and AI provider proofs live in moved settings sections.
-const settings = ['components/Settings.tsx', 'features/settings/DustSetup.tsx', 'features/settings/AiSection.tsx']
+const settings = ['features/settings/SettingsRoot.tsx', 'features/settings/DustSetup.tsx', 'features/settings/AiSection.tsx']
   .map((file) => readFileSync(join(root, 'src/renderer/src', file), 'utf8'))
   .join('\n')
 const intel = readFileSync(join(root, 'src/main/intelligence.ts'), 'utf8')

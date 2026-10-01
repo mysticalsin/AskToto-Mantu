@@ -8,7 +8,7 @@ import { OVERLAY_LAYOUT_COPY, OVERLAY_LAYOUTS } from '@shared/overlay-chrome'
 import { OverlayChromePicker } from './OverlayChromePicker'
 
 const picker = readFileSync(join(__dirname, './OverlayChromePicker.tsx'), 'utf8')
-const settings = readFileSync(join(__dirname, './Settings.tsx'), 'utf8')
+const settings = readFileSync(join(__dirname, '../features/settings/SettingsRoot.tsx'), 'utf8')
 const css = readAppCss()
 
 describe('Settings overlay chrome cards', () => {

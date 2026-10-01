@@ -167,7 +167,7 @@ describe('orb selection persist + Bar-only law', () => {
     const app = readFileSync(join(__dirname, '../renderer/src/App.tsx'), 'utf8')
     const orb = readFileSync(join(__dirname, '../renderer/src/components/ObsidianOrb.tsx'), 'utf8')
     const pill = readFileSync(join(__dirname, '../renderer/src/components/ControlPill.tsx'), 'utf8')
-    const settings = readFileSync(join(__dirname, '../renderer/src/components/Settings.tsx'), 'utf8')
+    const settings = readFileSync(join(__dirname, '../renderer/src/features/settings/SettingsRoot.tsx'), 'utf8')
     expect(app).toMatch(/decideCircleRestMinimize/)
     expect(app).toMatch(/styleChanged/)
     expect(app).toMatch(/if \(view === 'settings'\) return/)
