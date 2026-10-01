@@ -136,9 +136,10 @@ function notDownloadedRow(file: string): Read | null {
   return stub ? { text: '', sum: { ...stub, notDownloaded: true } } : null
 }
 
+/** The row for a file that could not be read right now: listed, retried on the next listing. */
 function unavailableRow(file: string): Read | null {
   const stub = lockedStub(file, 'Unavailable')
-  return stub ? { text: '', sum: stub } : null
+  return stub ? { text: '', sum: { ...stub, unavailable: true } } : null
 }
 
 /** Read + decode one file (async), parse its frontmatter. Null if it isn't a saved meeting.

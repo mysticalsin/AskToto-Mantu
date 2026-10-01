@@ -260,6 +260,12 @@ export const OBSERVABILITY_EVENTS = {
     ipcMs: 'ms',
     renderMs: 'ms',
     resultCount: 'int'
+  },
+  /** A committed navigation a History request took part in; `from === to` is the toggle-race no-op. */
+  'history.transition': {
+    from: RENDERER_VIEWS,
+    to: RENDERER_VIEWS,
+    committedAtMs: 'ms'
   }
 } as const satisfies { readonly [E in ObservabilityEvent]: EventFields }
 

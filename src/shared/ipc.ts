@@ -28,15 +28,8 @@ export type PreservedBrainIndexListResult = {
   copies: PreservedBrainIndexCopy[]
 }
 
-export const HistoryTraceSchema = z.object({ requestId: z.string().uuid(), sentAt: z.number().finite().positive() })
-export type HistoryTrace = z.infer<typeof HistoryTraceSchema>
-export const HistorySettledSchema = z.object({
-  requestId: z.string().uuid(),
-  outcome: z.enum(['ok', 'failed', 'discarded']),
-  ipcMs: z.number().finite().nonnegative(),
-  renderMs: z.number().finite().nonnegative().optional()
-})
-export type HistorySettled = z.infer<typeof HistorySettledSchema>
+export type { HistorySettled, HistoryTrace, HistoryTransition } from './history-trace'
+export { HistorySettledSchema, HistoryTraceSchema, HistoryTransitionSchema } from './history-trace'
 export const RendererCrashContextSchema = z.object({ view: z.enum(RENDERER_VIEWS), listening: z.boolean() })
 export type RendererCrashContext = z.infer<typeof RendererCrashContextSchema>
 export interface RendererCrashReport extends RendererCrashContext {
@@ -183,6 +176,7 @@ export const IPC = {
   recallList: 'recall:list',
   recallSearch: 'recall:search',
   historySettled: 'history:settled',
+  historyTransition: 'history:transition',
   recallOpen: 'recall:open',
   recallRead: 'recall:read',
   recallHydration: 'recall:hydration', // main → renderer: an explicit open downloading one cloud-only meeting
@@ -1913,6 +1907,7 @@ export interface MeetingSummary {
   /** True for a real encrypted meeting this device can't decrypt: a locked stub (no preview), never silently dropped. */
   locked?: boolean
   notDownloaded?: boolean // bytes not on this device: listed by name, never read; an explicit open downloads it
+  unavailable?: boolean // could not be read right now (a failed read or a non-regular entry): listed by name
 }
 export interface RecallHit extends MeetingSummary {
   snippet: string

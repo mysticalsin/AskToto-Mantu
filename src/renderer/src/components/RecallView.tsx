@@ -5,10 +5,8 @@ import {
   FileDown,
   FileText,
   Network,
-  RefreshCw,
   ExternalLink,
   ChevronLeft,
-  Calendar,
   Trash2,
   Pencil,
   Brain,
@@ -26,16 +24,17 @@ import { brainStatusError, brainStatusIsWorking } from './brain-status-refresh'
 import { INTELLIGENCE_STATUS_UNAVAILABLE } from '@shared/intelligence-pass'
 import { accelLabel } from '../lib/keys'
 import { ImportQueue } from './ImportQueue'
+import { UpcomingSection } from './UpcomingSection'
 import { isImportDropFile, pickedFiles, skippedImportMessage } from './import-queue'
-import { RowStatusChip, useRecallHydration } from './history/RowStatusChip'
+import { RowDownloadButton, RowIcon, RowStatusChip, useRecallHydration } from './history/RowStatusChip'
 import type { RowHydration } from './history/hydration'
+import { DegradedBanner } from './history/DegradedBanner'
+import { armSlowNotice, degradedBanner, listBody, nextListPhase, type ListPhase } from './history/list-status'
 import type {
   MeetingSummary,
   RecallHit,
   GraphStatus,
   GraphRelated,
-  CalendarTodayResult,
-  CalendarEvent,
   ImportAudioPickResult,
   ImportAssetsProgress,
   ImportJobView
@@ -105,14 +104,6 @@ export function friendlyDate(dateKey: string): string {
   yesterday.setDate(today.getDate() - 1)
   if (dateKey === yesterday.toLocaleDateString('en-CA')) return 'Yesterday'
   return new Date(y, m - 1, d).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
-}
-
-/** Format a calendar event start/end time for the upcoming row. */
-function fmtTime(iso: string): string {
-  if (!iso) return ''
-  const d = new Date(iso)
-  if (isNaN(d.getTime())) return ''
-  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 }
 
 /** "1 meeting" / "2 meetings" (or an irregular plural like "person" → "people") — the Intelligence strip's
@@ -368,99 +359,6 @@ function Related({
   )
 }
 
-// ---------------------------------------------------------------------------
-// Upcoming calendar section
-// ---------------------------------------------------------------------------
-
-function CompactEventRow({ ev }: { ev: CalendarEvent }): JSX.Element {
-  return (
-    <div className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-white/[0.06]">
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-[12px] font-medium text-[color:var(--color-ink)]">
-          {ev.subject}
-        </div>
-        {ev.location && (
-          <div className="truncate text-[10px] text-[color:var(--color-ink-3)]">
-            {ev.location}
-          </div>
-        )}
-      </div>
-      <div className="shrink-0 text-right text-[11px] tabular-nums text-[color:var(--color-ink-3)]">
-        {ev.allDay ? 'All day' : fmtTime(ev.start)}
-      </div>
-    </div>
-  )
-}
-
-function UpcomingSection({
-  onConnectCalendar
-}: {
-  onConnectCalendar?: () => void
-}): JSX.Element {
-  const [res, setRes] = useState<CalendarTodayResult | null>(null)
-  const [loading, setLoading] = useState(true)
-
-  const load = useCallback(async (): Promise<void> => {
-    setLoading(true)
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
-    try {
-      setRes(await window.toto.calendarToday(tz))
-    } catch {
-      setRes({ ok: false, error: 'Calendar unavailable.' })
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    void load()
-  }, [load])
-
-  const showConnect = !loading && (!res?.ok || res?.needsConsent)
-  const events = res?.ok && res.events ? res.events.slice(0, 3) : []
-
-  return (
-    <div className="mb-1.5">
-      <div className="mb-1 flex items-center justify-between px-1">
-        <div className="cl-eyebrow flex items-center gap-1.5 text-[color:var(--color-ink-3)]">
-          {loading ? <InlineOrb kind="searching" /> : <RefreshCw size={10} />}
-          Upcoming
-        </div>
-        {!loading && res?.ok && (
-          <button
-            type="button"
-            onClick={() => void load()}
-            aria-label="Refresh calendar"
-            className="no-drag focus-ring grid h-5 w-5 place-items-center rounded-full text-[color:var(--color-ink-3)] hover:bg-white/10 hover:text-[color:var(--color-ink)]"
-          >
-            <RefreshCw size={9} />
-          </button>
-        )}
-      </div>
-      {showConnect ? (
-        <button
-          type="button"
-          onClick={onConnectCalendar}
-          className="no-drag focus-ring flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-white/[0.06]"
-        >
-          <Calendar size={13} className="shrink-0 text-[color:var(--color-ink-3)]" />
-          <span className="text-[12px] text-[color:var(--color-ink-2)]">Connect your calendar</span>
-        </button>
-      ) : events.length === 0 && !loading ? (
-        <div className="px-2 py-1 text-[12px] text-[color:var(--color-ink-3)]">
-          No upcoming events today.
-        </div>
-      ) : (
-        <div className="flex flex-col gap-0.5">
-          {events.map((ev, i) => (
-            <CompactEventRow key={i} ev={ev} />
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
 // Cap the first paint of the meeting list to the most recent N — a daily user can accumulate hundreds of
 // saved meetings, and rendering all of them (grouped, per-row) on every keystroke in the search box (which
 // re-renders before the debounced IPC search even replaces `items`) visibly stutters. The "Show all"
@@ -472,7 +370,8 @@ const INITIAL_RENDER_CAP = 100
 // debounced search resolves) don't re-render every already-rendered row, only ones whose props changed.
 // ---------------------------------------------------------------------------
 
-const MeetingRow = memo(function MeetingRow({
+/** Exported for unit testing. */
+export const MeetingRow = memo(function MeetingRow({
   meeting,
   isSelected,
   isActive,
@@ -577,11 +476,7 @@ const MeetingRow = memo(function MeetingRow({
               onDoubleClick={() => onOpen(m.file)}
               className="no-drag focus-ring flex flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-white/[0.06]"
             >
-              {m.locked ? (
-                <Lock size={12} className="shrink-0 text-[color:var(--color-ink-3)]" aria-label="Encrypted, can't be opened on this device" />
-              ) : (
-                <FileText size={12} className="shrink-0 text-[color:var(--color-ink-3)]" />
-              )}
+              <RowIcon meeting={m} />
               {/* T6 6d: smallest-possible Mantu Intelligence indicator — a dot, color is state (never
                   color alone; title carries the text for pointer users, aria-label for assistive tech —
                   it must exist in the accessibility tree, not be aria-hidden decoration). */}
@@ -638,6 +533,8 @@ const MeetingRow = memo(function MeetingRow({
                 </span>
               </div>
             </button>
+
+            <RowDownloadButton meeting={m} hydration={hydration} onOpen={onOpen} />
 
             {/* Rename — opens an inline title input; see onStartEdit. */}
             <button
@@ -778,7 +675,10 @@ export function RecallView({
   // against this stable value instead of re-running groupByLocalDate synchronously on each keystroke.
   const [debouncedQ, setDebouncedQ] = useState('')
   const [items, setItems] = useState<(MeetingSummary | RecallHit)[]>([])
-  const [loading, setLoading] = useState(true)
+  /** The list request's phase (list-status.ts): bounded loading, slow, failed or answered. */
+  const [phase, setPhase] = useState<ListPhase>('loading')
+  /** Bumped by the degraded banner's Retry to re-run the fetch effect below for the same query. */
+  const [reloadKey, setReloadKey] = useState(0)
   /** File whose knowledge-graph Related panel is expanded. */
   const [open, setOpen] = useState<string | null>(null)
   /** Single-click selection for the "Open ↵" footer action. */
@@ -976,7 +876,10 @@ export function RecallView({
     const seq = ++fetchSeqRef.current
     const p = query ? window.toto.recallSearch(query) : window.toto.recallList()
     p.then((l) => {
-      if (seq === fetchSeqRef.current) setItems(l)
+      if (seq !== fetchSeqRef.current) return
+      setItems(l)
+      // This answer superseded whatever request was still out, so it also ends that request's spinner.
+      setPhase((current) => nextListPhase(current, 'answered'))
     }).catch(() => {})
   }, [])
   const hydrations = useRecallHydration(refreshList) // a finished download re-lists, so its row shows the meeting
@@ -1097,8 +1000,14 @@ export function RecallView({
   // A stale-guard drops out-of-order resolutions so a slow earlier response can't overwrite a newer one.
   useEffect(() => {
     let stale = false
+    let cancelSlow = (): void => {}
     const run = (): void => {
-      setLoading(true)
+      setPhase((current) => nextListPhase(current, 'request'))
+      // A source that has not answered within HISTORY_DEGRADED_MS turns the spinner into the degraded
+      // banner, keeping the rows already shown; the answer, whenever it lands, still replaces them.
+      cancelSlow = armSlowNotice(() => {
+        if (!stale) setPhase((current) => nextListPhase(current, 'slow'))
+      })
       const seq = ++fetchSeqRef.current
       const query = q.trim()
       const request = query ? null : beginHistoryRequest()
@@ -1116,24 +1025,31 @@ export function RecallView({
             unpaintedRequestRef.current = request
           }
         } else request?.discarded()
+        if (!stale) setPhase((current) => nextListPhase(current, 'answered'))
       })
-        .catch(() => request?.failed())
-        .finally(() => {
-          if (!stale) setLoading(false)
+        .catch(() => {
+          request?.failed()
+          // A failure superseded by refreshList's newer answer is not a failed list.
+          if (!stale) setPhase((current) => nextListPhase(current, seq === fetchSeqRef.current ? 'failed' : 'answered'))
         })
+        .finally(() => cancelSlow())
     }
     if (!q.trim()) {
       run()
       return () => {
         stale = true
+        cancelSlow()
       }
     }
     const t = setTimeout(run, 250)
     return () => {
       stale = true
       clearTimeout(t)
+      cancelSlow()
     }
-  }, [q])
+  }, [q, reloadKey])
+
+  const retryList = useCallback((): void => setReloadKey((key) => key + 1), [])
 
   useEffect(() => {
     unpaintedRequestRef.current?.painted()
@@ -1189,6 +1105,9 @@ export function RecallView({
     }
     return capped
   }, [allGroups, showAll, totalCount])
+
+  const body = listBody(phase, totalCount)
+  const banner = useMemo(() => degradedBanner(phase, items), [phase, items])
 
   return (
     <div
@@ -1255,13 +1174,15 @@ export function RecallView({
         <GraphBar onOpenSettings={onOpenSettings} onDashboardOpen={onDashboardOpen} />
       </div>
 
+      {banner && <DegradedBanner banner={banner} onRetry={retryList} />}
+
       {/* ── DATE-GROUPED MEETING LIST ───────────────────────────────────── */}
       <div ref={listRef} tabIndex={-1} className="scroll-thin min-h-0 flex-1 overflow-y-auto pr-1">
-        {loading ? (
+        {body === 'spinner' ? (
           <div className="py-2">
             <AgentStatus kind="searching" size="inline" caption />
           </div>
-        ) : items.length === 0 ? (
+        ) : body === 'blank' ? null : body === 'empty' ? (
           <div className="py-2 text-[13px] text-[color:var(--color-ink-2)]">
             {q.trim()
               ? 'No matching meetings.'

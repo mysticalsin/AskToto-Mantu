@@ -16,6 +16,7 @@ const SURFACES = [
   'LicenseGate.tsx',
   'Settings.tsx',
   'RecallView.tsx',
+  'UpcomingSection.tsx',
   'ReviewEntityStrip.tsx',
   'Onboarding.tsx',
   'OnboardingExperience.tsx',

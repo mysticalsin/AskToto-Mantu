@@ -35,6 +35,7 @@ import { ConfirmSheet } from './ui/ConfirmSheet'
 import { useAsk, useAutoResize, useSettings, useAuth, type AnswerState } from './state'
 import { useWindowDrag } from './lib/window-drag'
 import { noteCrashContext } from './lib/crash-context'
+import { useTransitionView } from './lib/history-transition'
 import { NavigationGuardService, type NavigationGuardRequest } from './lib/navigation-guard'
 import {
   AUTO_HIDE_GRACE_MS,
@@ -463,11 +464,8 @@ export function App(): JSX.Element {
   // synchronous input"), crashing to the error boundary ("Métis hit a snag") instead of showing
   // the Suspense fallback. Reproduced physically on first "Start listening" (cold Copilot chunk).
   // The documented fix: mark view switches as transitions — the old view stays up for the few ms the
-  // chunk needs, then the new one mounts. setView keeps its identity via the useCallback wrapper.
-  const [view, setViewRaw] = useState<View>(initialViewFromLaunch)
-  const setView = useCallback((v: View | ((prev: View) => View)): void => {
-    startTransition(() => setViewRaw(v))
-  }, [])
+  // chunk needs, then the new one mounts. setView keeps a stable identity and records History transitions.
+  const [view, setView, setViewRaw] = useTransitionView(initialViewFromLaunch)
   // See crash-context.ts for why this runs in render rather than an effect.
   noteCrashContext({ view, listening: listen.listening })
 
