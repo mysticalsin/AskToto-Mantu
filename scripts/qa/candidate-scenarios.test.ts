@@ -9,10 +9,14 @@ import { selectCandidateInstaller } from './candidate-installer.mjs'
 import {
   PACKAGED_LIFECYCLE_RV_ROWS,
   SCENARIOS,
+  TCC_DATABASES,
+  ancestorPids,
   assessPackagedSmokeReport,
   assertCandidateProvenance,
   candidateRunProblems,
   contentProblems,
+  executableFromLsof,
+  guiScriptingGrants,
   installerKindForScenario,
   laneAnnotation,
   laneRecord,
@@ -73,7 +77,15 @@ describe('candidateRunProblems (the run guard)', () => {
 
 describe('the scenario registry', () => {
   it('declares fault-fatal-relaunch on macOS, installing the Metis-QA zip variant', () => {
-    expect(Object.keys(SCENARIOS)).toEqual(['fault-fatal-relaunch', 'ex-suite', 'stall-sampler', 'idle-soak', 'sidecar-boot-reaper', 'packaged-lifecycle'])
+    expect(Object.keys(SCENARIOS)).toEqual([
+      'fault-fatal-relaunch',
+      'ex-suite',
+      'stall-sampler',
+      'idle-soak',
+      'sidecar-boot-reaper',
+      'packaged-lifecycle',
+      'renderer-kill'
+    ])
     const mac = SCENARIOS['fault-fatal-relaunch'].platforms.mac
     expect(Object.keys(SCENARIOS['fault-fatal-relaunch'].platforms)).toEqual(['mac'])
     expect(mac.variant).toBe('mac-qa-identity')
@@ -145,6 +157,58 @@ describe('the scenario registry', () => {
     expect(Object.hasOwn(mac, 'settings')).toBe(false)
   })
 
+  it('declares renderer-kill on macOS, installing the promotable DMG with no lane-seeded settings', () => {
+    const entry = SCENARIOS['renderer-kill']
+    expect(entry.ticket).toBe('M2-0469')
+    expect(entry.qaOnlyHook).toBe(false)
+    expect(Object.keys(entry.platforms)).toEqual(['mac'])
+    const mac = entry.platforms.mac
+    expect(mac.variant).toBe('mac')
+    expect(mac.artifact).toBe('candidate-mac')
+    expect(VARIANTS.mac.promotable).toBe(true)
+    expect(VARIANTS.mac.assets('1.0.0')).toContain('Metis-1.0.0.dmg')
+    expect(mac.installerSuffix).toBe('.dmg')
+    expect(installerKindForScenario('renderer-kill', 'mac')).toBe('mac-dmg')
+    expect(mac.script).toBe('scripts/qa/renderer-kill.mjs')
+    expect(existsSync(join(root, mac.script))).toBe(true)
+    expect(mac.report).toBe('renderer-kill.json')
+    expect('settings' in mac).toBe(false)
+    expect(outcomeForExit('renderer-kill', 0)).toBe('PASS')
+    expect(outcomeForExit('renderer-kill', 1)).toBe('FAIL')
+    expect(outcomeForExit('renderer-kill', 2)).toBe('PRECONDITION')
+    expect(resolveScenario({ scenario: 'renderer-kill', sha256: { mac: MAC_SHA } })).toEqual({
+      mac: { variant: 'mac', artifact: 'candidate-mac', sha256: MAC_SHA, timeoutMinutes: 60, stepTimeoutMinutes: 40 }
+    })
+    expect(() => resolveScenario({ scenario: 'renderer-kill', sha256: { mac: MAC_SHA, win: MAC_SHA } })).toThrow(
+      /win_sha256 is set, but renderer-kill does not run on win/
+    )
+  })
+
+  it('runs renderer-kill on the DMG, 4 kills within 60 s, with a repository-relative report path', () => {
+    expect(
+      scenarioCommand({
+        scenario: 'renderer-kill',
+        platform: 'mac',
+        installer: 'assets/Metis-1.0.0.dmg',
+        sha256: MAC_SHA,
+        outDir: 'candidate-scenario'
+      })
+    ).toEqual([
+      'scripts/qa/renderer-kill.mjs',
+      'assets/Metis-1.0.0.dmg',
+      'candidate-scenario/renderer-kill.json',
+      '--sha256',
+      MAC_SHA,
+      '--times',
+      '4',
+      '--window',
+      '60'
+    ])
+    expect(() =>
+      scenarioCommand({ scenario: 'renderer-kill', platform: 'mac', installer: 'assets/Metis-1.0.0.zip', sha256: MAC_SHA, outDir: 'candidate-scenario' })
+    ).toThrow(/installs a \.dmg installer/)
+  })
+
   it('binds every entry to a qa-candidate artifact of its platform, and to promotable bytes unless it needs a QA-only hook', () => {
     for (const [name, scenario] of Object.entries(SCENARIOS)) {
       for (const [platform, target] of Object.entries(scenario.platforms)) {
@@ -157,13 +221,14 @@ describe('the scenario registry', () => {
     }
   })
 
-  it('declares idle-soak on macOS, installing promotable DMG bytes with the hosted long-run timeout', () => {
+  it('declares idle-soak on macOS and Windows, installing promotable bytes with the hosted long-run timeout', () => {
     const scenario = SCENARIOS['idle-soak']
     const mac = scenario.platforms.mac
+    const win = scenario.platforms.win
     expect(scenario.ticket).toBe('M2-0492')
     expect(scenario.qaOnlyHook).toBe(false)
     expect(scenario.exits).toEqual({ 0: 'PASS', 1: 'FAIL_OR_INCOMPLETE', 2: 'PRECONDITION' })
-    expect(Object.keys(scenario.platforms)).toEqual(['mac'])
+    expect(Object.keys(scenario.platforms)).toEqual(['mac', 'win'])
     expect(mac).toMatchObject({
       variant: 'mac',
       artifact: 'candidate-mac',
@@ -173,12 +238,35 @@ describe('the scenario registry', () => {
       timeoutMinutes: 355,
       stepTimeoutMinutes: 340
     })
+    expect(win).toMatchObject({
+      ticket: 'M2-0493',
+      variant: 'win',
+      artifact: 'candidate-win',
+      script: 'scripts/qa/soak/idle-soak.mjs',
+      report: 'idle-soak.json',
+      profileLayout: 'hide',
+      timeoutMinutes: 355,
+      stepTimeoutMinutes: 340
+    })
     expect(mac.outcomeFromReport).toBe(true)
+    expect(win.outcomeFromReport).toBe(true)
     expect(existsSync(join(root, mac.script))).toBe(true)
+    expect(existsSync(join(root, win.script))).toBe(true)
     expect(VARIANTS.mac.assets('1.0.0')).toContain('Metis-1.0.0.dmg')
+    expect(VARIANTS.win.assets('1.0.0')).toContain('Metis-Setup-1.0.0.exe')
     expect(mac.args({ app: 'candidate-install/Metis.app', report: 'candidate-scenario/idle-soak.json' })).toEqual([
       '--app',
       'candidate-install/Metis.app',
+      '--profile',
+      'candidate-scenario/profile',
+      '--hours',
+      '5.5',
+      '--out',
+      'candidate-scenario'
+    ])
+    expect(win.args({ app: 'candidate-install/Metis.exe', report: 'candidate-scenario/idle-soak.json' })).toEqual([
+      '--app',
+      'candidate-install/Metis.exe',
       '--profile',
       'candidate-scenario/profile',
       '--hours',
@@ -193,8 +281,10 @@ describe('the scenario registry', () => {
       'displayAwake',
       'hostFloorOverride',
       'hostMemory',
+      'memory',
       'modelState'
     ])
+    expect(win.laneReportFields).toEqual(mac.laneReportFields)
   })
 
   it('requires the sha256 inputs a scenario needs and refuses any it does not use', () => {
@@ -209,8 +299,10 @@ describe('the scenario registry', () => {
     expect(resolveScenario({ scenario: 'stall-sampler', sha256: { mac: STALL_SHA, win: '' } })).toEqual({
       mac: { variant: 'mac', artifact: 'candidate-mac', sha256: STALL_SHA, timeoutMinutes: 60, stepTimeoutMinutes: 40 }
     })
-    expect(resolveScenario({ scenario: 'idle-soak', sha256: { mac: IDLE_SHA, win: '' } })).toEqual({
-      mac: { variant: 'mac', artifact: 'candidate-mac', sha256: IDLE_SHA, timeoutMinutes: 355, stepTimeoutMinutes: 340 }
+    expect(() => resolveScenario({ scenario: 'idle-soak', sha256: { mac: IDLE_SHA, win: '' } })).toThrow(/win_sha256 is required/)
+    expect(resolveScenario({ scenario: 'idle-soak', sha256: { mac: IDLE_SHA, win: WIN_SHA } })).toEqual({
+      mac: { variant: 'mac', artifact: 'candidate-mac', sha256: IDLE_SHA, timeoutMinutes: 355, stepTimeoutMinutes: 340 },
+      win: { variant: 'win', artifact: 'candidate-win', sha256: WIN_SHA, timeoutMinutes: 355, stepTimeoutMinutes: 340 }
     })
     expect(() => resolveScenario({ scenario: 'hk-m', sha256: { mac: MAC_SHA } })).toThrow(/Unknown scenario "hk-m"/)
     expect(() => resolveScenario({ scenario: 'toString', sha256: { mac: MAC_SHA } })).toThrow(/Unknown scenario/)
@@ -223,10 +315,11 @@ describe('the scenario registry', () => {
     )
   })
 
-  it('publishes the long mac timeout only for idle-soak', () => {
-    const plan = resolveScenario({ scenario: 'idle-soak', sha256: { mac: IDLE_SHA } })
+  it('publishes the long timeouts for both idle-soak legs', () => {
+    const plan = resolveScenario({ scenario: 'idle-soak', sha256: { mac: IDLE_SHA, win: WIN_SHA } })
     expect(resolveOutputs(plan)).toBe(
-      `mac=true\nmac_variant=mac\nmac_artifact=candidate-mac\nmac_sha256=${IDLE_SHA}\nmac_timeout_minutes=355\nmac_step_timeout_minutes=340\nwin=false\n`
+      `mac=true\nmac_variant=mac\nmac_artifact=candidate-mac\nmac_sha256=${IDLE_SHA}\nmac_timeout_minutes=355\nmac_step_timeout_minutes=340\n` +
+        `win=true\nwin_variant=win\nwin_artifact=candidate-win\nwin_sha256=${WIN_SHA}\nwin_timeout_minutes=355\nwin_step_timeout_minutes=340\n`
     )
   })
 
@@ -320,6 +413,56 @@ describe('the scenario registry', () => {
   })
 })
 
+describe('System Events GUI scripting grants (grant-gui)', () => {
+  it('is declared by renderer-kill, which drives the halted dialog, and by no scenario that does not', () => {
+    expect((SCENARIOS['renderer-kill'].platforms.mac as { guiScripting?: boolean }).guiScripting).toBe(true)
+    expect('guiScripting' in SCENARIOS['fault-fatal-relaunch'].platforms.mac).toBe(false)
+  })
+
+  it('walks the process chain up to, not including, launchd, and survives a cycle', () => {
+    const table = ['  1     0', ' 40     1', ' 41    40', '  900  41', 'garbage', ' 901   900', ''].join('\n')
+    expect(ancestorPids(table, 901)).toEqual([901, 900, 41, 40])
+    expect(ancestorPids(table, 1)).toEqual([])
+    expect(ancestorPids(' 5 6\n 6 5\n', 5)).toEqual([5, 6])
+  })
+
+  it("reads the executable path from lsof's first name record", () => {
+    expect(executableFromLsof('p41\nftxt\nn/opt/runner/bin/Runner.Worker\nftxt\nn/usr/lib/dyld\n')).toBe('/opt/runner/bin/Runner.Worker')
+    expect(executableFromLsof('p41\n')).toBeNull()
+  })
+
+  it('grants Accessibility in the system database and Automation of System Events in the user database', () => {
+    const grants = guiScriptingGrants(['/bin/bash', '/usr/bin/osascript', '/bin/bash', "/opt/it's/agent"])
+    const system = grants.system.split('\n')
+    const user = grants.user.split('\n')
+    expect(system).toHaveLength(3)
+    expect(user).toHaveLength(3)
+    for (const line of system) {
+      expect(line).toMatch(/^INSERT OR REPLACE INTO access \(service, client, client_type, auth_value, auth_reason, /)
+      expect(line).toMatch(/VALUES \('kTCCServiceAccessibility', '\/.*', 1, 2, 4, 1, 0, 'UNUSED', 0, /)
+    }
+    for (const line of user) expect(line).toMatch(/VALUES \('kTCCServiceAppleEvents', '\/.*', 1, 2, 3, 1, 0, 'com\.apple\.systemevents', 0, /)
+    expect(grants.system).toContain("'/opt/it''s/agent'")
+    expect(TCC_DATABASES.system).toBe('/Library/Application Support/com.apple.TCC/TCC.db')
+    expect(TCC_DATABASES.user.startsWith('/')).toBe(false)
+  })
+
+  it('refuses no clients or a client that is not an absolute path', () => {
+    expect(() => guiScriptingGrants([])).toThrow(/at least one client/)
+    expect(() => guiScriptingGrants(['bash'])).toThrow(/absolute executable path/)
+  })
+
+  it('changes nothing for a scenario that declares no GUI scripting', () => {
+    const child = spawnSync(
+      process.execPath,
+      ['scripts/qa/candidate-scenarios.mjs', 'grant-gui', '--scenario', 'fault-fatal-relaunch', '--platform', 'mac'],
+      { cwd: root, encoding: 'utf8' }
+    )
+    expect(child.status).toBe(0)
+    expect(child.stdout).toContain('fault-fatal-relaunch (mac) needs no GUI scripting; nothing granted.')
+  })
+})
+
 describe('installer selection through candidate-installer', () => {
   let dir: string
   beforeEach(() => {
@@ -337,9 +480,17 @@ describe('installer selection through candidate-installer', () => {
   it('selects only the promotable DMG for idle-soak', async () => {
     writeFileSync(join(dir, 'Metis-1.0.0.dmg'), 'idle soak dmg bytes')
     writeFileSync(join(dir, 'Metis-1.0.0.zip'), 'idle soak zip bytes')
-    const plan = resolveScenario({ scenario: 'idle-soak', sha256: { mac: IDLE_SHA } })
+    const plan = resolveScenario({ scenario: 'idle-soak', sha256: { mac: IDLE_SHA, win: WIN_SHA } })
     expect(await selectCandidateInstaller(dir, plan.mac.sha256, 'mac-dmg')).toBe(join(dir, 'Metis-1.0.0.dmg'))
     await expect(selectCandidateInstaller(dir, sha('idle soak zip bytes'), 'mac-dmg')).rejects.toThrow(/No installer matches/)
+  })
+
+  it('selects the Setup, never the Portable, for the idle-soak win leg', async () => {
+    writeFileSync(join(dir, 'Metis-Setup-1.0.0.exe'), 'setup bytes')
+    writeFileSync(join(dir, 'Metis-Portable-1.0.0.exe'), 'portable bytes')
+    const plan = resolveScenario({ scenario: 'idle-soak', sha256: { mac: IDLE_SHA, win: WIN_SHA } })
+    expect(await selectCandidateInstaller(dir, plan.win.sha256, installerKindForScenario('idle-soak', 'win'))).toBe(join(dir, 'Metis-Setup-1.0.0.exe'))
+    await expect(selectCandidateInstaller(dir, sha('portable bytes'), installerKindForScenario('idle-soak', 'win'))).rejects.toThrow(/No installer matches/)
   })
 
   it('selects the Setup, never the Portable, for the sidecar-boot-reaper win leg', async () => {
@@ -395,7 +546,7 @@ describe('the fresh profile', () => {
     const scratch = mkdtempSync(join(tmpdir(), 'candidate-scenarios-idle-profile-'))
     try {
       process.chdir(scratch)
-      const manifest = prepareProfile({ scenario: 'idle-soak', platform: 'mac', appDataDir: appData })
+      const manifest = prepareProfile({ scenario: 'idle-soak', platform: 'win', appDataDir: appData })
       expect(manifest).toBe(join(scratch, 'candidate-scenario', 'profile', 'resource-census-profile.json'))
       const parsed = JSON.parse(readFileSync(manifest as string, 'utf8'))
       expect(parsed).toMatchObject({
@@ -403,7 +554,7 @@ describe('the fresh profile', () => {
         layout: 'hide',
         localLlm: { enabled: true, modelId: 'qwen3.5-0.8b' }
       })
-      expect(() => prepareProfile({ scenario: 'idle-soak', platform: 'mac', appDataDir: appData })).toThrow(/idle-soak profile directory already exists/)
+      expect(() => prepareProfile({ scenario: 'idle-soak', platform: 'win', appDataDir: appData })).toThrow(/idle-soak profile directory already exists/)
     } finally {
       process.chdir(cwd)
       rmSync(scratch, { recursive: true, force: true })
@@ -417,6 +568,16 @@ describe('the fresh profile', () => {
       /asktoto-qa userData directory already exists/
     )
     expect(existsSync(join(appData, 'asktoto-qa', 'settings.json'))).toBe(false)
+  })
+
+  it('writes nothing for renderer-kill, which runs the app only on its own ASKTOTO_USERDATA profile', () => {
+    expect(SCENARIOS['renderer-kill'].platforms.mac).toMatchObject({ isolatedProfiles: true })
+    expect(prepareProfile({ scenario: 'renderer-kill', platform: 'mac', appDataDir: appData })).toBeNull()
+    expect(readdirSync(appData)).toEqual([])
+    // A default profile left by an earlier run does not touch the isolated proof.
+    mkdirSync(join(appData, 'asktoto'))
+    expect(prepareProfile({ scenario: 'renderer-kill', platform: 'mac', appDataDir: appData })).toBeNull()
+    expect(readdirSync(appData)).toEqual(['asktoto'])
   })
 
   it('writes nothing for a scenario that runs only on its own isolated profiles, on either platform', () => {
@@ -650,6 +811,28 @@ describe('lane.json', () => {
         '--deadline-epoch-ms',
         '1790000000000'
       ])
+      expect(
+        scenarioCommand({
+          scenario: 'idle-soak',
+          platform: 'win',
+          installer: 'assets/Metis-Setup-1.0.0.exe',
+          app: 'candidate-install/Metis.exe',
+          sha256: WIN_SHA,
+          outDir: 'candidate-scenario'
+        })
+      ).toEqual([
+        'scripts/qa/soak/idle-soak.mjs',
+        '--app',
+        'candidate-install/Metis.exe',
+        '--profile',
+        'candidate-scenario/profile',
+        '--hours',
+        '5.5',
+        '--out',
+        'candidate-scenario',
+        '--deadline-epoch-ms',
+        '1790000000000'
+      ])
     } finally {
       if (previous === undefined) delete process.env.SOAK_DEADLINE_EPOCH_MS
       else process.env.SOAK_DEADLINE_EPOCH_MS = previous
@@ -792,6 +975,7 @@ describe('lane.json', () => {
         displayAwake: { recorded: true, command: 'caffeinate -d', pid: 123 },
         hostFloorOverride: true,
         hostMemory: { totalBytes: 7_516_192_768 },
+        memory: { judgedMetric: 'physFootprintBytes', workingSetReported: false, workingSetJudged: false },
         modelState: { llamaServerRan: false, sidecarSupervisorRan: false, note: 'llama-server never ran during the leg; the growth rule was still judged' }
       }
     })
@@ -808,9 +992,58 @@ describe('lane.json', () => {
       displayAwake: { recorded: true, command: 'caffeinate -d', pid: 123 },
       hostFloorOverride: true,
       hostMemory: { totalBytes: 7_516_192_768 },
+      memory: { judgedMetric: 'physFootprintBytes', workingSetReported: false, workingSetJudged: false },
       modelState: { llamaServerRan: false, sidecarSupervisorRan: false }
     })
     expect(contentProblems(JSON.stringify(lane), { account: 'runner' })).toEqual([])
+  })
+
+  it('records the Windows idle-soak lane as M2-0493 and copies private-bytes judgment fields', () => {
+    const idleArgv = scenarioCommand({
+      scenario: 'idle-soak',
+      platform: 'win',
+      installer: 'assets/Metis-Setup-1.0.0.exe',
+      sha256: WIN_SHA,
+      outDir: 'candidate-scenario',
+      app: 'candidate-install/Metis.exe'
+    })
+    const lane = (laneRecord as any)({
+      scenario: 'idle-soak',
+      platform: 'win',
+      env: { GITHUB_RUN_ID: '5151', ImageOS: 'win25', ImageVersion: '20260920.1' },
+      provenance,
+      candidateRun: '4242',
+      installer: 'assets/Metis-Setup-1.0.0.exe',
+      sha256: WIN_SHA,
+      argv: idleArgv,
+      exitCode: 0,
+      detail: '',
+      reportWritten: true,
+      reportData: {
+        outcome: 'PASS',
+        rule: { id: 'IDLE-GROWTH-1', rulesSha256: 'b'.repeat(64) },
+        hoursMeasured: 5.49,
+        parkedCoverage: 0.97,
+        displayAwake: { recorded: true, command: 'SetThreadExecutionState ES_CONTINUOUS|ES_SYSTEM_REQUIRED|ES_DISPLAY_REQUIRED', pid: 456 },
+        hostFloorOverride: true,
+        hostMemory: { totalBytes: 7_516_192_768 },
+        memory: { judgedMetric: 'privateBytes', workingSetReported: true, workingSetJudged: false },
+        modelState: { llamaServerRan: false, sidecarSupervisorRan: false }
+      }
+    })
+    expect(lane).toMatchObject({
+      scenario: 'idle-soak',
+      ticket: 'M2-0493',
+      platform: 'win',
+      variant: 'win',
+      installer: 'Metis-Setup-1.0.0.exe',
+      artifact_sha256: WIN_SHA,
+      environment: { kind: 'hosted-runner', host: 'windows-latest' },
+      outcome: 'PASS',
+      memory: { judgedMetric: 'privateBytes', workingSetReported: true, workingSetJudged: false }
+    })
+    expect(lane.command).toBe('node scripts/qa/soak/idle-soak.mjs --app candidate-install/Metis.exe --profile candidate-scenario/profile --hours 5.5 --out candidate-scenario')
+    expect(contentProblems(JSON.stringify(lane), { account: 'runneradmin' })).toEqual([])
   })
 
   it('uses the idle-soak report outcome so exit 1 can remain INCOMPLETE', () => {

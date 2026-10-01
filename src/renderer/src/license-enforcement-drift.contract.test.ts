@@ -25,7 +25,7 @@ const REPO = join(__dirname, '..', '..', '..')
 const read = (rel: string): string => readFileSync(join(REPO, rel), 'utf8').replace(/\r\n/g, '\n')
 
 const appSrc = read('src/renderer/src/App.tsx')
-const settingsSrc = read('src/renderer/src/components/Settings.tsx')
+const settingsSrc = read('src/renderer/src/features/settings/SettingsRoot.tsx')
 
 /** The single source of truth every assertion below keys off. */
 const enforcementCompiledOff =

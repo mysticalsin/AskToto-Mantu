@@ -2,9 +2,10 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readAppCss } from '../../../../../scripts/lib/read-app-css.mjs'
 import { describe, expect, it } from 'vitest'
-import { canMarkOnboardingDone } from './onboarding-flow'
-import { ONBOARDING_HERO_VIDEO_SRC, ONBOARDING_HERO_VIDEO_REMOTE_SRC } from './onboarding-hero-video'
 import {
+  canMarkOnboardingDone,
+  ONBOARDING_HERO_VIDEO_REMOTE_SRC,
+  ONBOARDING_HERO_VIDEO_SRC,
   KINETIC_COLORS,
   KINETIC_DPR_CAP,
   KINETIC_GRID_SCENES,
@@ -13,16 +14,16 @@ import {
   lerp2,
   rippleOffset,
   shouldMountKineticGrid,
+  shouldMountStarfield,
   tileWarp
-} from './onboarding-kinetic-grid'
-import { shouldMountStarfield } from './onboarding-starfield-spec'
+} from './index'
 
 const root = join(__dirname, '..', '..')
 const kineticLib = readFileSync(join(__dirname, './onboarding-kinetic-grid.ts'), 'utf8')
 const kineticHost = readFileSync(join(root, 'components/onboarding/KineticGrid.tsx'), 'utf8')
 const experience = readFileSync(join(root, 'components/OnboardingExperience.tsx'), 'utf8')
 const demo = readFileSync(join(root, 'components/OnboardingDemoScene.tsx'), 'utf8')
-const settings = readFileSync(join(root, 'components/Settings.tsx'), 'utf8')
+const settings = readFileSync(join(root, 'features/settings/SettingsRoot.tsx'), 'utf8')
 const css = readAppCss()
 const engine = readFileSync(join(__dirname, './onboarding-starfield-engine.ts'), 'utf8')
 const flow = readFileSync(join(__dirname, './onboarding-flow.ts'), 'utf8')
