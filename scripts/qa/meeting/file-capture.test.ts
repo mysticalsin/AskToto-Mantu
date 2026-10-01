@@ -125,6 +125,7 @@ describe('profile seeding and launch', () => {
     const profile = tempDir()
     const { meetingsFolder } = seedProfile(profile)
     expect(meetingFiles(meetingsFolder)).toHaveLength(2)
+    writeFileSync(join(meetingsFolder, 'README.md'), 'bookkeeping')
     writeFileSync(join(meetingsFolder, '2026-09-30_100000-new.md'), 'x')
     mkdirSync(join(meetingsFolder, 'sub'))
     writeFileSync(join(meetingsFolder, 'sub', 'more.md'), 'x')

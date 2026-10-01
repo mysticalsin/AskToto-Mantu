@@ -43,9 +43,20 @@ export function countTokenMatches(text, tokens) {
  * would reach for a permission or a model this run does not use: local LLM, screen context, speaker id.
  */
 export function seedProfile(profileDir) {
-  const { settings, meetingsFolder } = writeRepresentativeProfile(profileDir)
+  const { settings } = writeRepresentativeProfile(profileDir)
+  const meetingsFolder = join(profileDir, 'capture-meetings')
+  mkdirSync(join(meetingsFolder, '.brain'), { recursive: true })
+  const baseline = [
+    '2026-09-30_090000-capture-baseline-1.md',
+    '2026-09-30_091500-capture-baseline-2.md'
+  ]
+  for (const file of baseline) {
+    writeFileSync(join(meetingsFolder, file), '---\ntype: meeting-transcript\n---\n\n# Synthetic capture baseline\n', { mode: 0o600 })
+  }
+  writeFileSync(join(meetingsFolder, 'index.md'), baseline.map((file) => `- [[${file}]]`).join('\n') + '\n', { mode: 0o600 })
   const seeded = {
     ...settings,
+    meetingsFolder,
     onboardingDone: true,
     asrEngine: 'whisper',
     localLlm: { ...settings.localLlm, enabled: false },
@@ -68,7 +79,9 @@ export function launchSpec({ executable, profileDir, wavPath, port, baseEnv = pr
   }
 }
 
-/** Every saved meeting file under the meetings folder: Markdown, not the index and not the hidden brain. */
+const BOOKKEEPING_MARKDOWN = new Set(['index.md', 'README.md'])
+
+/** Every saved meeting file under the meetings folder: Markdown, not bookkeeping and not the hidden brain. */
 export function meetingFiles(folder) {
   if (!existsSync(folder)) return []
   const found = []
@@ -77,7 +90,7 @@ export function meetingFiles(folder) {
       if (entry.name.startsWith('.')) continue
       const path = join(dir, entry.name)
       if (entry.isDirectory()) walk(path)
-      else if (entry.name.endsWith('.md') && entry.name !== 'index.md') found.push(path)
+      else if (entry.name.endsWith('.md') && !BOOKKEEPING_MARKDOWN.has(entry.name)) found.push(path)
     }
   }
   walk(folder)
