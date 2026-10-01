@@ -174,14 +174,12 @@ function readLockedFrom(p: string): string[] {
   }
 }
 
-/** Read the `allowedProviders` policy array out of raw managed-config JSON text. It is NOT a settings
- *  key, so it must be parsed here rather than via validatedManaged() (which drops non-schema keys). */
+/** Read raw managed-config policy keys that validatedManaged() drops because they are not settings. */
 function parseAllowedContent(raw: string): string[] | null {
   try {
     const obj = JSON.parse(raw)
     const list = obj?.allowedProviders
-    // An explicit empty array is a real deny-all policy, not "no policy" — only an absent/non-array
-    // key means null (no restriction). Collapsing the two let `"allowedProviders": []` fail open.
+    // Empty array is deny-all; only absent/non-array means no restriction.
     if (!Array.isArray(list)) return null
     return [...new Set(list.filter((x): x is string => typeof x === 'string'))]
   } catch {
@@ -208,10 +206,8 @@ function parseLocalSpeechPackContent(raw: string): LocalSpeechPackPolicy | null 
   }
 }
 
-// readTrustedAdminManaged() owns the machine policy trust check and reads through the verified fd.
-// Cache the verified bytes, not a bare trust verdict: the caller must never stat one file and then
-// read another after a replace. Path + dev + inode + mtime keep fast test rebuilds and IT edits from
-// reusing a stale admin snapshot during the short reprobe TTL.
+// readTrustedAdminManaged() owns the trust check and reads through the verified fd; cache those bytes.
+// Path + dev + inode + mtime prevent replace races and stale fast-test/admin-edit snapshots.
 const ADMIN_POLICY_REPROBE_MS = 60_000
 let _adminManagedCache: {
   path: string
@@ -236,9 +232,7 @@ export function resetAdminManagedCache(): void {
   _adminManagedCache = null
 }
 
-/** Test-only: drop the admin-policy content snapshot between cases that redirect ProgramData /
- *  recreate the policy file. Same class of flake as resetSettingsCacheForTests — mtime collision +
- *  wall-clock TTL would otherwise serve a previous case's bytes (or skip the probe entirely). */
+/** Test-only: drop admin-policy bytes between ProgramData redirection/recreate cases. */
 export function resetAdminManagedCacheForTests(): void {
   _adminManagedCache = null
 }
