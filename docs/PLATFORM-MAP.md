@@ -78,6 +78,6 @@ Separate App Store submission from `native-app/`. Does not use the `Metis-Releas
 
 - Windows-only bug → `electron-builder.win.yml`, `src/main/win-security.ts`, win branches in `src/main/**`.
 - macOS(Electron)-only bug → `electron-builder.yml` mac section, `native/mac-helper/**`, darwin branches.
-- Cross-platform Electron bug → `src/main/**`, `src/renderer/**`, `src/shared/**`.
+- Cross-platform Electron bug → `src/main/**`, `src/renderer/**`, `src/shared/**`; History list/search read path → `src/main/history-read.ts`.
 - Native macOS app → `native-app/App/**` (UI) or `native-app/MetisKit/**` (logic).
 - "How does it ship" → bump version + tag; CI publishes to `Metis-Releases`; clients poll `latest*.yml`.
