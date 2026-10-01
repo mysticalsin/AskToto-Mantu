@@ -1901,6 +1901,12 @@ function initializeImportJobs(): void {
   })
 }
 
+function getImportJobs(): ImportJobManager {
+  initializeImportJobs()
+  if (!importJobs) throw new Error('Audio import service is unavailable.')
+  return importJobs
+}
+
 /** Minimal .env loader (no dep) — dev convenience; prod uses in-app key. */
 function loadDotEnv(): void {
   for (const p of [join(process.cwd(), '.env'), join(app.getAppPath(), '.env')]) {
@@ -8730,14 +8736,14 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const parsed = ImportAudioStartSchema.parse(raw)
-    if (!importJobs) throw new Error('Audio import service is unavailable.')
-    return importJobView(await importJobs.start(consumePickedAudio(parsed.token)))
+    const jobs = getImportJobs()
+    return importJobView(await jobs.start(consumePickedAudio(parsed.token)))
   })
   ipcMain.handle(IPC.importAudioStartBatch, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const parsed = ImportAudioStartBatchSchema.parse(raw)
-    if (!importJobs) throw new Error('Audio import service is unavailable.')
+    const jobs = getImportJobs()
     const sources = []
     const errors: string[] = []
     for (const token of parsed.tokens) {
@@ -8748,33 +8754,30 @@ function registerIpc(): void {
       }
     }
     if (!sources.length) throw new Error(errors[0] || 'Could not start the imports.')
-    return (await importJobs.startMany(sources)).map(importJobView)
+    return (await jobs.startMany(sources)).map(importJobView)
   })
   ipcMain.handle(IPC.importJobsList, (e) => {
     assertMainWindow(e)
-    if (!requireAuth() || !importJobs) return []
-    return importJobs.list().map(importJobView)
+    if (!requireAuth()) return []
+    return getImportJobs().list().map(importJobView)
   })
   ipcMain.handle(IPC.importJobCancel, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const parsed = ImportJobIdSchema.parse(raw)
-    if (!importJobs) throw new Error('Audio import service is unavailable.')
-    await importJobs.cancel(parsed.jobId)
+    await getImportJobs().cancel(parsed.jobId)
   })
   ipcMain.handle(IPC.importJobResume, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const parsed = ImportJobIdSchema.parse(raw)
-    if (!importJobs) throw new Error('Audio import service is unavailable.')
-    return importJobView(await importJobs.resume(parsed.jobId))
+    return importJobView(await getImportJobs().resume(parsed.jobId))
   })
   ipcMain.handle(IPC.importJobRemove, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const parsed = ImportJobIdSchema.parse(raw)
-    if (!importJobs) throw new Error('Audio import service is unavailable.')
-    await importJobs.remove(parsed.jobId)
+    await getImportJobs().remove(parsed.jobId)
   })
 
   ipcMain.on(IPC.importDecoderReady, (e) => {
