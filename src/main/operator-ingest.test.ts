@@ -96,6 +96,7 @@ vi.mock('./model-policy-client', () => ({
 let operatorKeysEntitled = true
 vi.mock('./operator-entitlements-state', () => ({
   recordOperatorHeartbeatResult: () => {},
+  resetOperatorEntitlementsState: () => {},
   operatorEntitled: (feature: string) => (feature === 'operator_keys' ? operatorKeysEntitled : true)
 }))
 
@@ -481,6 +482,28 @@ describe('fleet model policy scheduler', () => {
       notifyOperatorNetworkOnline()
       await flushPromises()
       expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(5)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('broadcasts readiness immediately when an Operator policy response applies a newer version', async () => {
+    vi.useFakeTimers()
+    try {
+      const onReadinessChanged = vi.fn()
+      captureFetch()
+      policyClientMock.refreshModelPolicy
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(true)
+
+      startOperatorRuntime(() => SETTINGS, { onReadinessChanged })
+      await flushPromises()
+      expect(onReadinessChanged).toHaveBeenCalledTimes(1)
+
+      electronMock.app.emit('browser-window-focus')
+      await flushPromises()
+      expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(2)
+      expect(onReadinessChanged).toHaveBeenCalledTimes(2)
     } finally {
       vi.useRealTimers()
     }
