@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { LOCAL_MODELS } from '../../src/main/llm/local-models'
+import { PREWARM_MIN_FREE_RAM_GB as APP_PREWARM_MIN_FREE_RAM_GB } from '../../src/main/llm/local-routing'
+import { HK_M_MODEL_ID } from '../../src/main/qa-hk-m'
 import { parseVmStatAvailableBytes } from '../../src/main/llm/available-memory'
 import {
   advertisedRamFloorRefuses,
@@ -6,6 +9,7 @@ import {
   createProfilePlan,
   ensureSharedFinalSigtermRow,
   exitCodeForReportResult,
+  HK_M_MODEL_MIN_TOTAL_RAM_GB,
   finalSigtermVerdict,
   keepWaitingForScenario,
   launchEnv,
@@ -23,6 +27,8 @@ import {
   unreapedDeadRegistryCount,
   UNRELATED_FIXTURE_LIFETIME_MS
 } from './hk-m.mjs'
+
+vi.mock('electron')
 
 describe('HK-M temp directory cleanup', () => {
   it('requests retries and does not turn a one-off ENOTEMPTY into a failure', () => {
@@ -513,6 +519,16 @@ describe('HK-M host memory evidence', () => {
     expect(advertisedRamFloorRefuses(7 * GIB)).toBe(true)
     expect(advertisedRamFloorRefuses(8e9)).toBe(false)
     expect(advertisedRamFloorRefuses(8 * GIB)).toBe(false)
+  })
+
+  it('uses the total-RAM floor of the model HK-M loads', () => {
+    const model = LOCAL_MODELS.find((entry) => entry.id === HK_M_MODEL_ID)
+    expect(model).toBeDefined()
+    expect(HK_M_MODEL_MIN_TOTAL_RAM_GB).toBe(model?.minTotalRamGB)
+  })
+
+  it('uses the free-RAM floor of the app prewarm gate', () => {
+    expect(PREWARM_MIN_FREE_RAM_GB).toBe(APP_PREWARM_MIN_FREE_RAM_GB)
   })
 
   it('applies the localPrewarm free-memory floor', () => {
