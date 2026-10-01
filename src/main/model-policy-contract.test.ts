@@ -102,7 +102,7 @@ interface CreateStreamSite {
 }
 
 function sourceFileFor(text: string): ts.SourceFile {
-  return ts.createSourceFile('source.ts', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+  return ts.createSourceFile('source', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
 }
 
 function propertyNameText(name: ts.PropertyName | undefined, sf: ts.SourceFile): string | null {
