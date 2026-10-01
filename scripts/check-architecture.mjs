@@ -33,7 +33,7 @@ const PATH_LIKE_TS = /^[^\s]*\.tsx?$/
 const DIALOG_NAMES = new Set(['confirm', 'alert', 'prompt'])
 const FS_MODULES = new Set(['fs', 'node:fs', 'fs/promises', 'node:fs/promises'])
 const CHILD_PROCESS_MODULES = new Set(['child_process', 'node:child_process'])
-const MEETING_DOCUMENT_CODEC = 'src/main/features/meetings/meeting-document.ts'
+const MEETING_DOCUMENT_CODEC = 'src/main/infra/storage/meeting-document.ts'
 // A regex literal that anchors on a `---` line at the start of the text, or on a newline followed by `---`.
 const FRONTMATTER_DELIMITER_REGEX = /\^(?:\(\?:)?-{3}|\\n-{3}/
 const MEETINGS_ROOT_READERS = new Set([

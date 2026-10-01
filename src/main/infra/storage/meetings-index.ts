@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
 import { decodeSaved, decodeSavedResult, writeSaved } from '../../transcripts'
-import { readMeetingFields as frontmatter } from '../../features/meetings/meeting-document'
+import { readMeetingFields as frontmatter } from './meeting-document'
 import type { ContentVersion, StorageGateway } from './gateway'
 
 export const MEETINGS_INDEX_FILE = 'meetings-index.c5.json'
