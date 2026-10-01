@@ -1,5 +1,6 @@
 {
   "FF-01": {
+    "src/renderer/src/features/onboarding/onboarding-kinetic-grid.test.ts": 1,
     "src/shared/hash.test.ts": 1
   },
   "FF-02": {
@@ -175,7 +176,7 @@
     "src/main/features/dust/dust-oauth.test.ts": 1,
     "src/main/features/operator/operator-ask-routing.contract.test.ts": 4,
     "src/main/features/operator/operator-default-url.contract.test.ts": 1,
-    "src/main/features/operator/operator-readiness.contract.test.ts": 10,
+    "src/main/features/operator/operator-readiness.contract.test.ts": 11,
     "src/main/features/parakeet/parakeet.test.ts": 1,
     "src/main/features/speaker/speaker-id-off-switch.test.ts": 2,
     "src/main/features/speaker/speaker-id.test.ts": 6,

@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readAppCss } from '../../../../../scripts/lib/read-app-css.mjs'
 import { describe, expect, it } from 'vitest'
+import { overlayWindowChrome } from '../../../../main/island/geometry'
 import { canMarkOnboardingDone } from './onboarding-flow'
 import { ONBOARDING_HERO_VIDEO_REMOTE_SRC, ONBOARDING_HERO_VIDEO_SRC } from './onboarding-hero-video'
 import {
@@ -170,6 +171,19 @@ describe('haltAllOnboardingAudio remains correct through Ready and Replay', () =
     expect(replay.indexOf('haltAllOnboardingAudio()')).toBeGreaterThan(-1)
     expect(replay.indexOf('const saved = await patch({ onboardingDone: false })')).toBeLessThan(replay.indexOf('haltAllOnboardingAudio()'))
     expect(replay.indexOf('haltAllOnboardingAudio()')).toBeLessThan(replay.indexOf('window.toto.onboardingEnter()'))
+  })
+})
+
+describe('exclusive window stays opaque hero hold while !onboardingDone', () => {
+  it('live chrome is #05010A and not purple wash', () => {
+    expect(overlayWindowChrome(true)).toEqual({
+      transparent: false,
+      backgroundColor: '#05010A',
+      fullscreenable: true,
+      roundedCorners: false
+    })
+    expect(overlayWindowChrome(true).backgroundColor).not.toBe('#3A0B6B')
+    expect(overlayWindowChrome(false).transparent).toBe(true)
   })
 })
 
