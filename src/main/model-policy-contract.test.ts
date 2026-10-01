@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import * as ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
 /**
@@ -84,41 +85,170 @@ function mainSources(): string[] {
 // Speech-engine `createStream()` calls (sherpa recognizer / extractor streams) are audio decoders, not model calls.
 const SPEECH_ENGINE_FILES = ['src/main/parakeet-asr-host.ts', 'src/main/speaker-embedding-host.ts']
 
-const DECLARATION = /^(?:export )?(?:async )?function (\w+)/gm
+interface EnclosingFunction {
+  name: string
+  body: string
+  node: ts.FunctionLikeDeclaration
+  ancestors: EnclosingFunction[]
+}
 
-/** Source of the column-0 function that contains `index`, plus its name. */
-function enclosingFunction(text: string, index: number): { name: string; body: string } {
-  const decls = [...text.matchAll(DECLARATION)]
-  const start = [...decls].reverse().find((d) => (d.index ?? 0) <= index)
-  if (!start) return { name: '<module>', body: text }
-  const next = decls.find((d) => (d.index ?? 0) > (start.index ?? 0))
-  return { name: start[1], body: text.slice(start.index, next?.index ?? text.length) }
+interface CreateStreamSite {
+  file: string
+  text: string
+  call: ts.CallExpression
+  fn: EnclosingFunction
+}
+
+function sourceFileFor(text: string): ts.SourceFile {
+  return ts.createSourceFile('source.ts', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+}
+
+function propertyNameText(name: ts.PropertyName | undefined, sf: ts.SourceFile): string | null {
+  if (!name) return null
+  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) return name.text
+  return name.getText(sf)
+}
+
+function describeCallbackParent(node: ts.FunctionLikeDeclaration, sf: ts.SourceFile): string | null {
+  const parent = node.parent
+  if (ts.isCallExpression(parent)) {
+    const callee = parent.expression.getText(sf)
+    const firstArg = parent.arguments[0]?.getText(sf).replace(/\s+/g, ' ')
+    return firstArg ? `${callee}(${firstArg})` : callee
+  }
+  if (ts.isNewExpression(parent)) return `new ${parent.expression.getText(sf)}`
+  return null
+}
+
+function functionName(node: ts.FunctionLikeDeclaration, sf: ts.SourceFile): string {
+  const named = 'name' in node ? propertyNameText(node.name, sf) : null
+  if (named) return named
+  const parent = node.parent
+  if (ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)) return parent.name.text
+  if (ts.isPropertyAssignment(parent)) return propertyNameText(parent.name, sf) ?? '<property>'
+  if (ts.isMethodDeclaration(node)) return propertyNameText(node.name, sf) ?? '<method>'
+  return describeCallbackParent(node, sf) ?? '<anonymous>'
+}
+
+function functionBody(node: ts.FunctionLikeDeclaration, text: string): string {
+  return node.body ? text.slice(node.body.getFullStart(), node.body.getEnd()) : text.slice(node.getFullStart(), node.getEnd())
+}
+
+function enclosingFunctionChain(text: string, index: number): EnclosingFunction[] {
+  const sf = sourceFileFor(text)
+  const chain: EnclosingFunction[] = []
+  const visit = (node: ts.Node, ancestors: EnclosingFunction[]): void => {
+    if (index < node.getFullStart() || index > node.getEnd()) return
+    const next =
+      ts.isFunctionDeclaration(node) ||
+      ts.isFunctionExpression(node) ||
+      ts.isArrowFunction(node) ||
+      ts.isMethodDeclaration(node)
+        ? [
+            {
+              name: functionName(node, sf),
+              body: functionBody(node, text),
+              node,
+              ancestors
+            }
+          ]
+        : []
+    const active = next.length ? next : ancestors
+    ts.forEachChild(node, (child) => visit(child, active))
+    if (next.length) chain.push(next[0])
+  }
+  visit(sf, [])
+  return chain.map((fn, i) => ({ ...fn, ancestors: chain.slice(i + 1) }))
+}
+
+/** Innermost function-like source that contains `index`, plus its best stable name. */
+function enclosingFunction(text: string, index: number): EnclosingFunction {
+  const chain = enclosingFunctionChain(text, index)
+  return chain[0] ?? { name: '<module>', body: text, node: sourceFileFor(text) as unknown as ts.FunctionLikeDeclaration, ancestors: [] }
 }
 
 function namedFunction(text: string, name: string): string {
-  const decl = [...text.matchAll(DECLARATION)].find((d) => d[1] === name)
-  if (!decl) throw new Error(`function ${name} not found`)
-  return enclosingFunction(text, decl.index ?? 0).body
+  const match = enclosingFunctionChain(text, text.indexOf(name)).find((fn) => fn.name === name)
+  if (match) return match.body
+  const sf = sourceFileFor(text)
+  let body: string | null = null
+  const visit = (node: ts.Node): void => {
+    if (body) return
+    if (
+      (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node) || ts.isMethodDeclaration(node)) &&
+      functionName(node, sf) === name
+    ) {
+      body = functionBody(node, text)
+      return
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sf)
+  if (!body) throw new Error(`function ${name} not found`)
+  return body
 }
 
-const resolvesThroughPolicy = (body: string): boolean => /\b(?:narrowAllowedForCapability|resolveManagedModel)\(/.test(body)
+const resolvesThroughPolicy = (body: string): boolean =>
+  /\b(?:narrowAllowedForCapability|resolveManagedModel|localModelAllowedByPolicy)\(/.test(body)
+
+function isCreateStreamCall(node: ts.Node): node is ts.CallExpression {
+  if (!ts.isCallExpression(node)) return false
+  const expr = node.expression
+  if (ts.isIdentifier(expr)) return expr.text === 'createStream'
+  return ts.isPropertyAccessExpression(expr) && expr.name.text === 'createStream'
+}
+
+function createStreamSites(file: string): CreateStreamSite[] {
+  const text = src(file)
+  const sf = sourceFileFor(text)
+  const sites: CreateStreamSite[] = []
+  const visit = (node: ts.Node): void => {
+    if (isCreateStreamCall(node)) {
+      sites.push({ file, text, call: node, fn: enclosingFunction(text, node.getStart(sf)) })
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sf)
+  return sites
+}
+
+function modelArgumentText(site: CreateStreamSite): string {
+  const [arg] = site.call.arguments
+  if (!arg || !ts.isObjectLiteralExpression(arg)) return ''
+  const model = arg.properties.find(
+    (prop): prop is ts.PropertyAssignment =>
+      ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name) && prop.name.text === 'model'
+  )
+  return model?.initializer.getText(sourceFileFor(site.text)) ?? ''
+}
+
+function policyBodyFor(site: CreateStreamSite): string {
+  if (resolvesThroughPolicy(site.fn.body)) return site.fn.body
+  const modelArg = modelArgumentText(site)
+  if (!modelArg || /^[`'"]/.test(modelArg)) return site.fn.body
+  const visibleBodies = [site.fn.body, ...site.fn.ancestors.map((fn) => fn.body)]
+  const declaration = visibleBodies.find((body) =>
+    new RegExp(`\\b(?:const|let|var)\\s+${modelArg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b[\\s\\S]*?\\b(?:narrowAllowedForCapability|resolveManagedModel|localModelAllowedByPolicy)\\(`).test(body)
+  )
+  if (declaration) return declaration
+  const ancestor = site.fn.ancestors.find((fn) => resolvesThroughPolicy(fn.body))
+  return ancestor?.body ?? site.fn.body
+}
 
 // A call site that only streams a candidate handed to it names the function that built the candidate;
 // that function must itself resolve through the policy.
 const CANDIDATE_BUILDERS: Record<string, string> = {
-  'src/main/brain/ingest.ts#runCompletionOnce': 'pickProviderCandidates'
+  'src/main/brain/ingest.ts#runCompletionOnce': 'pickProviderCandidates',
+  'src/main/brain/ingest.ts#new Promise': 'pickProviderCandidates'
 }
 
 describe('M2-0412 — every createStream( call site in src/main resolves through the fleet policy', () => {
   const sites = mainSources()
     .filter((f) => f !== 'src/main/llm.ts' && !SPEECH_ENGINE_FILES.includes(f))
-    .flatMap((file) => {
-      const text = src(file)
-      return [...text.matchAll(/(?<!function )\bcreateStream\(/g)].map((m) => ({ file, text, fn: enclosingFunction(text, m.index ?? 0) }))
-    })
+    .flatMap(createStreamSites)
 
   it('finds the known call sites (a scan that finds nothing must not pass vacuously)', () => {
-    const found = new Set(sites.map((s) => `${s.file}#${s.fn.name}`))
+    const found = new Set(sites.flatMap((s) => [s.fn, ...s.fn.ancestors].map((fn) => `${s.file}#${fn.name}`)))
     for (const expected of [
       'src/main/index.ts#runImportPolish',
       'src/main/index.ts#askVisionForScreenCheck',
@@ -132,8 +262,32 @@ describe('M2-0412 — every createStream( call site in src/main resolves through
 
   it.each(sites.map((s) => [`${s.file}#${s.fn.name}`, s] as const))('%s resolves through the policy', (key, site) => {
     const builder = CANDIDATE_BUILDERS[key]
-    const body = builder ? namedFunction(site.text, builder) : site.fn.body
+    const body = builder ? namedFunction(site.text, builder) : policyBodyFor(site)
     expect(resolvesThroughPolicy(body), key).toBe(true)
+  })
+
+  it('sees nested arrow call sites as their innermost owner, so an outer gate cannot hide an ungated stream', () => {
+    const fixture = `
+      function registerIpc() {
+        narrowAllowedForCapability(settings, allowed, 'askChat')
+        ipcMain.handle('ask', () => {
+          createStream({ model: 'raw-model' })
+        })
+      }
+    `
+    const call = fixture.indexOf('createStream')
+    const fn = enclosingFunction(fixture, call)
+    expect(fn.name).toBe("ipcMain.handle('ask')")
+    expect(resolvesThroughPolicy(fn.body)).toBe(false)
+  })
+
+  it('gates the Settings local screen-check branch on the localModel policy before creating a stream', () => {
+    const ask = namedFunction(src(MAIN_INDEX), 'askVisionForScreenCheck')
+    const localBranch = ask.slice(ask.indexOf("if (backend === 'local')"), ask.indexOf('const provider = s.provider'))
+    expect(localBranch).toContain('localModelAllowedByPolicy(getActiveModelPolicy(s), s.localLlm.modelId)')
+    expect(localBranch.indexOf('localModelAllowedByPolicy')).toBeLessThan(localBranch.indexOf('createStream('))
+    expect(localBranch.indexOf('Promise.reject')).toBeLessThan(localBranch.indexOf('createStream('))
+    expect(localBranch).toContain('The selected provider is not allowed by the fleet model policy.')
   })
 })
 

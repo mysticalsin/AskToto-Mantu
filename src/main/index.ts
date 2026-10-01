@@ -4169,12 +4169,16 @@ function askVisionForScreenCheck(
     history: []
   }
   if (backend === 'local') {
+    const model = localModelAllowedByPolicy(getActiveModelPolicy(s), s.localLlm.modelId) ? s.localLlm.modelId : null
+    if (model === null) {
+      return Promise.reject(new Error('The selected provider is not allowed by the fleet model policy.'))
+    }
     return collectVisionStream((handlers) =>
       createStream({
         providerId: 'local',
         kind: 'local',
         apiKey: '',
-        model: s.localLlm.modelId,
+        model,
         temperature: 0,
         idleMs: 90_000,
         maxOutputTokens: 80,
