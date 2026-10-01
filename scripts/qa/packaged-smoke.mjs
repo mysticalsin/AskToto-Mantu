@@ -410,7 +410,7 @@ function navigationSnapshotDiagnostic(snapshot) {
   }
 }
 
-async function readNavigationViewSnapshot(page, request) {
+export async function readNavigationViewSnapshot(page, request) {
   return page.evaluate(({ title }) => {
     const visible = (node) => {
       if (!(node instanceof HTMLElement)) return false
@@ -425,13 +425,20 @@ async function readNavigationViewSnapshot(page, request) {
     const buttonMatching = (pattern) =>
       buttons.find((button) => {
         const label = `${button.getAttribute('aria-label') ?? ''} ${button.textContent ?? ''}`
+        return pattern.test(label) && visible(button)
+      }) ??
+      buttons.find((button) => {
+        const label = `${button.getAttribute('aria-label') ?? ''} ${button.textContent ?? ''}`
         return pattern.test(label)
       }) ?? null
     const targetButton = title
-      ? buttons.find((button) => `${button.getAttribute('aria-label') ?? ''} ${button.textContent ?? ''}`.includes(title)) ?? null
+      ? buttons.find((button) => `${button.getAttribute('aria-label') ?? ''} ${button.textContent ?? ''}`.includes(title) && visible(button)) ??
+        buttons.find((button) => `${button.getAttribute('aria-label') ?? ''} ${button.textContent ?? ''}`.includes(title)) ??
+        null
       : null
     const search = document.querySelector('[aria-label="Search past meetings"]')
     const back = buttonMatching(/Back to history/i)
+    const reviewTitle = title ? document.querySelector('[aria-label="Review meeting title"]') : null
     const guard = document.querySelector('[role="dialog"][aria-label="Save recap changes?"]')
     return {
       searchVisible: visible(search),
@@ -440,7 +447,7 @@ async function readNavigationViewSnapshot(page, request) {
       targetMeetingButtonEnabled: title ? enabled(targetButton) : null,
       backVisible: visible(back),
       backEnabled: enabled(back),
-      titleVisible: title ? (document.body?.innerText ?? '').includes(title) : null,
+      titleVisible: title ? visible(reviewTitle) && (reviewTitle.textContent ?? '').includes(title) : null,
       guardVisible: visible(guard)
     }
   }, { title: request.title ?? null })
@@ -552,12 +559,15 @@ async function settleOverlayForRvRows({ page, executable, env, userData }) {
 
 async function ensureHistory(page) {
   const search = page.getByLabel('Search past meetings')
-  if (await locatorVisible(search)) return
+  if (await locatorVisible(search)) {
+    await waitForNavigationView(page, { view: 'history' })
+    return
+  }
 
   const backToHistory = page.getByRole('button', { name: /Back to history/ })
   if (await locatorVisible(backToHistory)) {
     await backToHistory.first().click({ timeout: 15_000 })
-    await search.waitFor({ timeout: 15_000 })
+    await waitForNavigationView(page, { view: 'history' })
     return
   }
 
@@ -611,7 +621,7 @@ async function seedNavigationMeetings(page) {
 
 async function clickHistory(page) {
   await page.getByRole('button', { name: 'History' }).first().click({ timeout: 15_000 })
-  await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+  await waitForNavigationView(page, { view: 'history' })
 }
 
 async function clickHistoryButton(page) {
@@ -630,7 +640,7 @@ async function clickOpenFullHistoryFromSettings(page) {
 async function openHistoryFromSettings(page) {
   await clickSettingsButton(page)
   await clickOpenFullHistoryFromSettings(page)
-  await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+  await waitForNavigationView(page, { view: 'history' })
 }
 
 async function openMeetingFromHistoryRow(page, title) {
@@ -782,7 +792,7 @@ async function runPackagedNavigationGuardRows({ port, rows, executable, env }) {
     await runNavigationStep(rows, 'HIST-dirty-discard-bar', async () => {
       await openDirtyReview(page, 'Smoke navigation alpha', 'Discard by Bar History.')
       await chooseDirtyHistoryNavigation(page, 'Discard', () => clickHistoryButton(page))
-      await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+      await waitForNavigationView(page, { view: 'history', title: 'Smoke navigation alpha' })
       return { decision: 'discard', entry: 'bar-history', returnedToHistory: true }
     })
 
@@ -790,7 +800,7 @@ async function runPackagedNavigationGuardRows({ port, rows, executable, env }) {
       const suffix = 'Saved by Bar History navigation guard.'
       await openDirtyReview(page, 'Smoke navigation alpha', suffix)
       await chooseDirtyHistoryNavigation(page, 'Save', () => clickHistoryButton(page))
-      await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+      await waitForNavigationView(page, { view: 'history', title: 'Smoke navigation alpha' })
       await expectSavedRecap(page, seeded.first, suffix)
       return { decision: 'save', entry: 'bar-history', persistedBeforeNavigation: true }
     })
@@ -809,7 +819,7 @@ async function runPackagedNavigationGuardRows({ port, rows, executable, env }) {
       await openDirtyReview(page, 'Smoke navigation alpha', 'Discard by Settings Open full history.')
       await chooseDirtyHistoryNavigation(page, 'Discard', () => clickSettingsButton(page))
       await clickOpenFullHistoryFromSettings(page)
-      await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+      await waitForNavigationView(page, { view: 'history', title: 'Smoke navigation alpha' })
       return { decision: 'discard', entry: 'settings-open-full-history', returnedToHistory: true }
     })
 
@@ -818,7 +828,7 @@ async function runPackagedNavigationGuardRows({ port, rows, executable, env }) {
       await openDirtyReview(page, 'Smoke navigation alpha', suffix)
       await chooseDirtyHistoryNavigation(page, 'Save', () => clickSettingsButton(page))
       await clickOpenFullHistoryFromSettings(page)
-      await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+      await waitForNavigationView(page, { view: 'history', title: 'Smoke navigation alpha' })
       await expectSavedRecap(page, seeded.first, suffix)
       return { decision: 'save', entry: 'settings-open-full-history', persistedBeforeNavigation: true }
     })
@@ -836,7 +846,7 @@ async function runPackagedNavigationGuardRows({ port, rows, executable, env }) {
     await runNavigationStep(rows, 'HIST-dirty-discard-back', async () => {
       await openDirtyReview(page, 'Smoke navigation alpha', 'Discard by Back to history.')
       await chooseDirtyHistoryNavigation(page, 'Discard', () => page.getByRole('button', { name: /Back to history/ }).first().click({ timeout: 15_000 }))
-      await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+      await waitForNavigationView(page, { view: 'history', title: 'Smoke navigation alpha' })
       return { decision: 'discard', returnedToHistory: true }
     })
 
@@ -844,7 +854,7 @@ async function runPackagedNavigationGuardRows({ port, rows, executable, env }) {
       const suffix = 'Saved by Back to history navigation guard.'
       await openDirtyReview(page, 'Smoke navigation alpha', suffix)
       await chooseDirtyHistoryNavigation(page, 'Save', () => page.getByRole('button', { name: /Back to history/ }).first().click({ timeout: 15_000 }))
-      await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+      await waitForNavigationView(page, { view: 'history', title: 'Smoke navigation alpha' })
       await expectSavedRecap(page, seeded.first, suffix)
       return { decision: 'save', returnedToHistory: true, persistedBeforeNavigation: true }
     })
