@@ -957,6 +957,7 @@ describe('seedNavigationMeetings', () => {
     expect(seeded.titles.alpha).toBe('Smoke navigation alpha HIST dirty save bar')
     expect(events).toEqual([
       'seed:Smoke navigation alpha HIST dirty save bar',
+      'wait:450',
       'history:click',
       'search:hidden',
       'wait:450',
@@ -989,6 +990,53 @@ describe('seedNavigationMeetings', () => {
     await seedNavigationMeetings(page)
 
     expect(events).toEqual(['seed:Smoke navigation alpha'])
+  })
+
+  it('paces through the save-transcript hot-path limiter instead of failing later rows', async () => {
+    const events: string[] = []
+    let saves = 0
+    const originalWindow = (globalThis as { window?: unknown }).window
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: {
+        toto: {
+          saveTranscript: async (payload: { title: string }) => {
+            saves += 1
+            events.push(`save:${payload.title}`)
+            if (saves === 1) throw new Error('Error invoking remote method \'transcript:save\': Error: Could not save the transcript.')
+            return { path: `/tmp/${payload.title}.md` }
+          }
+        }
+      }
+    })
+    const search = {
+      first: () => search,
+      isVisible: async () => false,
+      waitFor: async () => events.push('search:wait')
+    }
+    const history = {
+      first: () => history,
+      click: async () => events.push('history:click')
+    }
+    const page = {
+      evaluate: async (fn: (titles: ReturnType<typeof navigationMeetingTitles>) => Promise<unknown>, titles: ReturnType<typeof navigationMeetingTitles>) => fn(titles),
+      getByLabel: () => search,
+      getByRole: () => history,
+      waitForTimeout: async (ms: number) => events.push(`wait:${ms}`)
+    }
+
+    try {
+      const seeded = await seedNavigationMeetings(page, 'HIST dirty save recent')
+
+      expect(seeded.titles.beta).toBe('Smoke navigation beta HIST dirty save recent')
+      expect(events).toEqual([
+        'save:Smoke navigation alpha HIST dirty save recent',
+        'save:Smoke navigation alpha HIST dirty save recent',
+        'save:Smoke navigation beta HIST dirty save recent'
+      ])
+    } finally {
+      Object.defineProperty(globalThis, 'window', { configurable: true, value: originalWindow })
+    }
   })
 })
 

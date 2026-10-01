@@ -493,6 +493,8 @@ export function navigationMeetingTitles(label = '') {
 async function refreshOpenHistoryAfterSeed(page) {
   const search = page.getByLabel('Search past meetings')
   if (!(await locatorVisible(search))) return
+  // History's toolbar button has the same debounce as the navigation guard rows; settle after seeding.
+  await page.waitForTimeout(450)
   await page.getByRole('button', { name: 'History' }).first().click({ timeout: 15_000 })
   await search.waitFor({ state: 'hidden', timeout: 15_000 })
   await page.waitForTimeout(450)
@@ -501,8 +503,23 @@ async function refreshOpenHistoryAfterSeed(page) {
 
 export async function seedNavigationMeetings(page, label = '') {
   const seeded = await page.evaluate(async (titles) => {
+    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+    const saveSmokeMeeting = async (payload) => {
+      let lastError = null
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        try {
+          return await window.toto.saveTranscript(payload)
+        } catch (err) {
+          lastError = err
+          const message = err instanceof Error ? err.message : String(err)
+          if (!message.includes('Could not save the transcript')) throw err
+          await sleep(2_200)
+        }
+      }
+      throw lastError ?? new Error('Could not save the transcript.')
+    }
     const startedAt = Date.now()
-    const first = await window.toto.saveTranscript({
+    const first = await saveSmokeMeeting({
       title: titles.alpha,
       mode: 'meeting',
       startedAt,
@@ -511,7 +528,7 @@ export async function seedNavigationMeetings(page, label = '') {
       recap: `## Overview\n${titles.alpha} recap.`,
       recapStatus: 'complete'
     })
-    const second = await window.toto.saveTranscript({
+    const second = await saveSmokeMeeting({
       title: titles.beta,
       mode: 'meeting',
       startedAt: startedAt + 1,
