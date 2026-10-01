@@ -656,6 +656,32 @@ jobs:
             "provenanceArtifact": "candidate-provenance"
           }
           EOF
+      # M2-0512: the lead's filing step travels with the artifact, pinned to the candidate zip's sha256.
+      - name: Record the lead action for the History row
+        if: always()
+        run: |
+          mkdir -p st1-report
+          installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
+          sha=""
+          if [ -n "$installer" ]; then
+            sha=$(shasum -a 256 "$installer" | cut -d' ' -f1)
+          fi
+          jq -n --arg sha "$sha" '{
+            harness: "ST-1",
+            historyRow: true,
+            candidateSha256: $sha,
+            provenanceArtifact: "candidate-provenance",
+            leadAction: "LEAD_ACTION: dispatch qa-candidate ST-1 on the lane candidate (sha256) with --fixtures fifo on macos-latest and --fixtures dataless, plus ST-1-W on windows-latest; file historySummary and the per-call split",
+            blockedExternal: [
+              "st-1-macos-dataless-history-blocked.json",
+              "st-1-windows-history-blocked.json (artifact st-1-windows-blocked)"
+            ]
+          }' > st1-report/st-1-history-lead-action.json
+          {
+            echo '### ST-1 History row: lead action'
+            echo "LEAD_ACTION: dispatch qa-candidate ST-1 on the lane candidate (sha256) with --fixtures fifo on macos-latest and --fixtures dataless, plus ST-1-W on windows-latest; file historySummary and the per-call split"
+            echo "Candidate zip sha256: ${sha:-unknown}"
+          } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
