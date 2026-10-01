@@ -176,3 +176,25 @@ describe('QA candidate History design evidence (M2-0032)', () => {
     }
   })
 })
+
+describe('QA candidate workflow: the shipped window gate (M2-0519)', () => {
+  const block = jobBlocks.get('st1-mac-window') ?? ''
+
+  it('lets the window job fail: no job-level continue-on-error', () => {
+    expect(block).toContain('runs-on: macos-latest')
+    expect(block).not.toMatch(/^    continue-on-error:/m)
+  })
+
+  it('gates the window reports after every launch, enforcing, and uploads the gate with the reports', () => {
+    const jobSteps = steps('st1-mac-window')
+    const measure = jobSteps.findIndex((step) => step.includes('--purpose window-construction'))
+    const gateIndex = jobSteps.findIndex((step) => step.includes('scripts/qa/st-1.mjs --gate-window st1-report'))
+    expect(measure).toBeGreaterThan(-1)
+    expect(gateIndex).toBeGreaterThan(measure)
+    const gate = jobSteps[gateIndex]
+    expect(gate).toMatch(/^        if: always\(\)$/m)
+    expect(gate).not.toMatch(/continue-on-error/)
+    expect(gate).toContain('--out st1-report/window-gate.json')
+    expect(jobSteps.findIndex((step) => step.includes('name: st-1-macos-window'))).toBeGreaterThan(gateIndex)
+  })
+})

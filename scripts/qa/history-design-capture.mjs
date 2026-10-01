@@ -58,6 +58,7 @@ import {
 
 const READY_TIMEOUT_MS = 150_000
 const STATE_TIMEOUT_MS = 10_000
+const SETTLE_TIMEOUT_MS = 1_000
 const QUIT_TIMEOUT_MS = 30_000
 const TAB_STOPS_MAX = 80
 const DOWNLOAD_ERROR = 'OneDrive is offline. Connect, then retry.'
@@ -338,14 +339,34 @@ async function captureState({ page, cdp, main, state, variant, realRows, out }) 
   }
 }
 
+/**
+ * The overlay window is content-sized: the renderer measures its root and main resizes the window to fit.
+ * Waits, bounded, until the window holds the whole root, so a capture never judges a resize still in
+ * flight; content that still overflows when the wait ends is left for the clipping check to fail.
+ */
+async function settleWindow(page) {
+  await page
+    .waitForFunction(
+      () => {
+        const root = document.getElementById('root')
+        return Boolean(root) && root.scrollHeight <= root.clientHeight + 1
+      },
+      undefined,
+      { polling: 'raf', timeout: SETTLE_TIMEOUT_MS }
+    )
+    .catch(() => undefined)
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+}
+
 async function captureReachedState({ page, cdp, main, state, variant, realRows, out }) {
   const drive = await driveState(page, main, state, realRows)
-  const { width, height } = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }))
   const screenshot = join(state.id, `${variant.id}.png`)
   let collected
-  await cdp.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: variant.scale, mobile: false })
+  // Width and height 0 leave the viewport the real window's, so the app's own content sizing still
+  // applies at 2x (layout there can differ by a few pixels); only the device scale factor is emulated.
+  await cdp.send('Emulation.setDeviceMetricsOverride', { width: 0, height: 0, deviceScaleFactor: variant.scale, mobile: false })
   try {
-    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    await settleWindow(page)
     await page.screenshot({ path: join(out, screenshot), scale: 'device' })
     drive.capturedAfterMs = Date.now() - drive.clickedAt
     collected = await page.evaluate(`(${collectHistoryView})(${solidGradientLayers})`)

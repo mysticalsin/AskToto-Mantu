@@ -333,7 +333,7 @@ function Related({
           {data.topics.map((t) => (
             <span
               key={t}
-              className="truncate max-w-full rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-accent-2)]"
+              className="truncate max-w-full rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[color:var(--color-accent-text)]"
             >
               {t}
             </span>
@@ -603,7 +603,7 @@ export const MeetingRow = memo(function MeetingRow({
           {m.topics.slice(0, 3).map((t, i) => (
             <span
               key={`${t}-${i}`}
-              className="truncate max-w-full rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-accent-2)]"
+              className="truncate max-w-full rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[color:var(--color-accent-text)]"
             >
               {t}
             </span>
@@ -1251,7 +1251,7 @@ export function RecallView({
               type="button"
               onClick={onIntelligence}
               title="Mantu Intelligence: your meeting knowledge dashboard"
-              className="no-drag focus-ring flex items-center gap-1.5 rounded-full bg-[var(--color-accent-soft)] px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] ring-1 ring-inset ring-[var(--color-accent)]/30 transition-colors hover:bg-[var(--color-accent)]/25"
+              className="no-drag focus-ring flex items-center gap-1.5 rounded-full bg-[var(--color-accent-soft)] px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-text)] ring-1 ring-inset ring-[var(--color-accent)]/30 transition-colors hover:bg-[var(--color-accent)]/25"
             >
               <Brain size={12} strokeWidth={2.2} /> Intelligence
             </button>

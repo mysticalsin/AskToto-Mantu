@@ -130,6 +130,22 @@ describe('WCAG AA contrast (judgeContrast)', () => {
     expect(composite([0, 0, 0, 0.5], WHITE)).toEqual([127.5, 127.5, 127.5])
   })
 
+  // History's purple pills (Intelligence, related-note chips): the soft accent fill on the panel glass
+  // (tokens.css: scrim, strong fill, white tint). The bright accent is a fill colour; the accent text
+  // colour is the one that clears AA as text on it, over either backdrop.
+  it('fails the bright accent as small text on the accent pill over the panel glass, and passes the accent text colour', () => {
+    const layers = [
+      [13, 4, 28, 0.68],
+      [28, 11, 52, 0.8],
+      [255, 255, 255, 0.06],
+      [127, 0, 218, 0.18]
+    ]
+    for (const backdrop of [BACKDROPS.light, BACKDROPS.dark]) {
+      expect(judgeContrast(textSample({ fg: [166, 77, 255, 1], layers, fontSizePx: 11, fontWeight: 600 }), backdrop).status).toBe('fail')
+      expect(judgeContrast(textSample({ fg: [179, 136, 240, 1], layers, fontSizePx: 11, fontWeight: 600 }), backdrop).status).toBe('pass')
+    }
+  })
+
   it('applies inherited opacity to the text', () => {
     const sample = textSample({ fg: [255, 255, 255, 1], layers: [[0, 0, 0, 1]] })
     expect(judgeContrast(sample, BLACK).status).toBe('pass')

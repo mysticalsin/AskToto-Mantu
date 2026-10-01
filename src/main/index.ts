@@ -660,7 +660,7 @@ import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
 import { buildTrayInStages, createSingleFlight, formatTrayAccelerator, loadPresizedTrayIcon, scheduleTrayAfterFirstPaint, trayIconPaths, yieldToEventLoop } from './boot-tray'
-import { BOOT_WINDOW_OPTIONS, BOOT_WINDOW_VARIANT, yieldBeforeBootWindow } from './boot-window-rendering'
+import { BOOT_WINDOW_OPTIONS, BOOT_WINDOW_VARIANT, takeBootWindowPrewarmMs, yieldBeforeBootWindow } from './boot-window-rendering'
 import { isBootFirstShowDeferred, navigateWindow, scheduleCurrentFirstShow, withBootFirstShowDeferred } from './lifecycle/first-show'
 import { createBootWork } from './lifecycle/boot-work'
 import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
@@ -2730,6 +2730,8 @@ function createWindow(targetDisplay?: Electron.Display): void {
     ...BOOT_WINDOW_OPTIONS.window // M2-0516: a QA-identity-only variant's values; none in every shipping build
   })
   observability?.recordBootStage('createWindow.construct', performance.now() - constructStartedMs, { transparent: chrome.transparent, windowVariant: BOOT_WINDOW_VARIANT })
+  const prewarmMs = takeBootWindowPrewarmMs() // M2-0519: the boot prewarm ran before observability started; recorded once
+  if (prewarmMs !== null) observability?.recordBootStage('createWindow.prewarm', prewarmMs, { transparent: chrome.transparent, windowVariant: BOOT_WINDOW_VARIANT })
   ensureMetisCommandRuntime({
     getSettings,
     commandControl,
