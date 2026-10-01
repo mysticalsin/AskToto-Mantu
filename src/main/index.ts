@@ -178,13 +178,7 @@ import {
   portalFundedCloudflareModel,
   workingCliOrder
 } from '@shared/ask-routing'
-import {
-  getActiveModelPolicy,
-  modelPolicyCapabilitiesForSettings,
-  narrowAllowedForCapability,
-  resolveLocalSpeechPackPolicy,
-  resolveManagedModel
-} from './features/operator/model-policy-client'
+import { getActiveModelPolicy, modelPolicyCapabilitiesForSettings, narrowAllowedForCapability, resolveLocalSpeechPackPolicy, resolveManagedModel } from './features/operator/model-policy-client'
 import { localModelAllowedByPolicy, MODEL_POLICY_CAPABILITIES } from '@shared/model-policy'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import { registerWriteupIpc } from './ipc/writeup'

@@ -130,11 +130,7 @@ import {
   resolveOnboardingHeroVideoSrc
 } from '../features/onboarding/onboarding-hero-video'
 export { speechPackAllowsEnsure, speechPackSetupRowVisible } from '../features/onboarding/onboarding-local-speech-pack-policy'
-import {
-  speechPackAllowsEnsure,
-  speechPackSetupRowVisible,
-  type LocalSpeechPackSetting
-} from '../features/onboarding/onboarding-local-speech-pack-policy'
+import { speechPackAllowsEnsure, speechPackSetupRowVisible, type LocalSpeechPackSetting } from '../features/onboarding/onboarding-local-speech-pack-policy'
 
 const PERSONA_ICONS: Record<OnboardingPersonaId, typeof MessageSquare> = {
   general: MessageSquare,
