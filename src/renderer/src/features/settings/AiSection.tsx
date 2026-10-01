@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useId,
-  useRef,
-  useState
-} from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import {
   AlertCircle,
   Check,
@@ -26,14 +20,7 @@ import {
   Trash2,
   X
 } from 'lucide-react'
-import type {
-  AsrAssetsStatus,
-  AppleEngineStatus,
-  LocalModelSummary,
-  ProfileRecoveryResult,
-  PublicSettings,
-  TestKeyResponse
-} from '@shared/ipc'
+import type { AsrAssetsStatus, AppleEngineStatus, LocalModelSummary, ProfileRecoveryResult, PublicSettings, TestKeyResponse } from '@shared/ipc'
 import { formatResetPhrase } from '@shared/reset-time'
 import { bundleFailureUserMessage, isRepairRequiredBundleMessage, isRetryableBundleMessage } from '@shared/bundle-response'
 import { MODEL_POLICY_CAPABILITY_LABELS } from '@shared/model-policy'
@@ -60,41 +47,28 @@ import { DustSetup } from './DustSetup'
 import { PROFILE_CREDENTIAL_STORE, isProfileUnlockError } from './credential-store'
 import { pickReadyProvider } from './provider-readiness'
 
-// Providers excluded from the generic provider tiles grid + generic "key" Section because they have
-// their OWN dedicated setup card instead (dust → DustSetup, claude-cli/codex-cli → CliIntegration).
-// Gemini used to be listed here too by mistake — it has no dedicated card, so that made it
-// unselectable ANYWHERE in Settings. It's a normal API-key provider like GPT/Grok; removed.
-// Métis Local (kind === 'local') is excluded the same way, below, wherever `selectable`/`keyEntrySection`
-// is computed — it has its own dedicated LocalAiSection card and is keyless, so it must never render a
-// key row or test-key CTA.
+// Providers excluded from generic provider tiles because they have dedicated setup cards.
+// Métis Local is also excluded wherever `selectable`/`keyEntrySection` is computed.
 const CLI_PROVIDERS = new Set<ProviderId>(['dust', 'claude-cli', 'codex-cli'])
-
 
 /** Public release page used only when a signed package reports damaged built-in transcription assets. */
 export const OFFICIAL_METIS_INSTALLER_URL = 'https://github.com/mysticalsin/Metis-Releases/releases/latest'
 
-
-/** The provider Settings nudges the user toward inside "Experience: more models" — an Anthropic key
- *  beats everything, then a configured Dust, then whichever other provider already has a working key
- *  or CLI connection. Drives the small "Best pick" badge on a provider tile. */
+/** Drives the small "Best pick" badge on a provider tile. */
 function recommendedProvider(settings: PublicSettings): ProviderId {
   if (settings.hasKeys['anthropic']) return 'anthropic'
   if (isDustReady(settings.hasKeys, settings.dustWorkspaceId, settings.providerModels)) return 'dust'
-  // Dust was already conclusively ruled out above — exclude it here so a saved-but-unready Dust key
-  // (hasKeys.dust true, workspace/agent not set up) can't fall through and be picked as "ready".
+  // Exclude saved-but-unready Dust so it cannot fall through as "ready".
   const ready = PROVIDER_IDS.find((p) =>
     p !== 'dust' && (PROVIDERS[p].kind === 'cli' ? !!settings.cliConnected?.[p] : !!settings.hasKeys[p])
   )
   return ready ?? 'anthropic'
 }
 
-/** Friendly name for a routed model in the thinking-mode explainer. Keeps raw model ids out of
- *  user-facing copy — recognized brands by name, everything else as a plain tier word. */
+/** Friendly name for a routed model in the thinking-mode explainer. */
 function prettyModel(m: string, provider: ProviderId, tier: 'base' | 'think' | 'deep'): string {
   if (provider === 'dust') {
-    // Dust only has a Base agent + an optional Thinking agent — there is no distinct "deep" agent. The
-    // 'deep' tier resolves (resolveModelTier) to the Thinking agent, or Base if none is configured, so
-    // it shares the Thinking agent's caption rather than naming a tier that doesn't exist.
+    // Dust has no distinct deep agent; deep shares the thinking caption.
     return tier === 'base' ? 'your base agent' : 'your thinking agent'
   }
   if (m) {
@@ -106,8 +80,7 @@ function prettyModel(m: string, provider: ProviderId, tier: 'base' | 'think' | '
   return tier === 'think' ? 'the deeper model' : 'the fast model'
 }
 
-/** One selectable provider tile — shared by the always-visible "featured" grid and the collapsed
- *  "Experience: more models" grid, so both stay visually identical. */
+/** One selectable provider tile shared by both provider grids. */
 function ProviderTile({
   id,
   active,
@@ -155,9 +128,6 @@ function ProviderTile({
   )
 }
 
-// End CLI Integration section.
-
-
 /** Friendly hint for an auto-detected or ambiguous pasted key. Exported for a focused test. */
 export function detectHint(
   value: string,
@@ -168,11 +138,9 @@ export function detectHint(
   if (!v) return null
   const id = detectProvider(v)
   if (id) {
-    // Only promise an auto-switch when one will actually happen: onKeyChange won't switch to a
-    // CLI_PROVIDERS member (e.g. gemini has no selectable UI), so don't claim it did.
+    // Only promise an auto-switch when one will actually happen.
     if (id === current || CLI_PROVIDERS.has(id)) return { kind: 'ok', text: `Detected ${PROVIDERS[id].label}.` }
-    // MQA-095: onKeyChange won't switch to a provider the org blocks either — say so, so the paste
-    // isn't silently ignored while this line claims the provider was "Selected automatically."
+    // Do not claim "Selected automatically" when the org allowlist blocks the switch.
     if (allowed && !allowed.includes(id))
       return { kind: 'tip', text: `Detected ${PROVIDERS[id].label}, restricted by your organization.` }
     return { kind: 'ok', text: `Detected ${PROVIDERS[id].label}. Selected automatically.` }
@@ -211,17 +179,13 @@ export function AiSection({
   const [test, setTest] = useState<{ status: 'idle' | 'loading' | 'ok' | 'error'; message?: string }>({
     status: 'idle'
   })
-  // "Custom" and "Cloudflare" have no working provider without a base URL — that field lives inside
-  // "Advanced", so start it open whenever one of them is active (and re-open if the user switches TO one
-  // later) rather than leaving the one field they actually require hidden behind a collapsed toggle.
+  // Custom/Cloudflare need the Advanced base URL field visible when active.
   const [adv, setAdv] = useState(requiresUserBaseUrl(provider))
   useEffect(() => {
     if (requiresUserBaseUrl(provider)) setAdv(true)
   }, [provider])
   const [filter, setFilter] = useState('')
-  // MQA-261: removing a key is irreversible for the Cloudflare key this build ships, so the trash
-  // icon asks once. Reset whenever the active provider changes, so a confirm armed on one tile can
-  // never be spent on another.
+  // Reset on provider changes so a confirm armed on one tile cannot affect another.
   const [confirmRemove, setConfirmRemove] = useState(false)
   const [restoreMsg, setRestoreMsg] = useState<string | null>(null)
   useEffect(() => {
