@@ -258,182 +258,183 @@ export function RightEdgeSidecar({
       >
         <span className="right-edge-sidecar__rail" aria-hidden="true" />
       </button>
-      {open ? (
-        <aside
-          role="complementary"
-          aria-label="Métis"
-          className="right-edge-sidecar__drawer"
-          style={{ maxWidth: RIGHT_EDGE_DRAWER_WIDTH }}
-          onKeyDown={(event) => {
-            if (dockEscapeHides({ key: event.key, isComposing: event.nativeEvent.isComposing }, canClose)) {
-              event.preventDefault()
-              event.stopPropagation()
-              close()
-            }
-          }}
-        >
-          <div className="right-edge-sidecar__drawer-scroll">
-            <header className="right-edge-sidecar__header">
-              <span className="right-edge-sidecar__header-leading">
-                {canClose ? (
-                  <button type="button" aria-label="Hide Métis" title="Hide" onClick={close} className="right-edge-sidecar__header-back no-drag focus-ring">
-                    <ChevronRight size={18} strokeWidth={1.9} aria-hidden="true" />
-                  </button>
-                ) : null}
-                <span className="right-edge-sidecar__identity">
-                  <span>Métis</span>
+      {/* The drawer stays mounted while parked (hidden and out of the accessibility tree), so a reveal never
+          re-mounts the answer and replays its entrance animation. */}
+      <aside
+        role="complementary"
+        aria-label="Métis"
+        aria-hidden={!open || undefined}
+        className="right-edge-sidecar__drawer"
+        style={{ maxWidth: RIGHT_EDGE_DRAWER_WIDTH }}
+        onKeyDown={(event) => {
+          if (dockEscapeHides({ key: event.key, isComposing: event.nativeEvent.isComposing }, canClose)) {
+            event.preventDefault()
+            event.stopPropagation()
+            close()
+          }
+        }}
+      >
+        <div className="right-edge-sidecar__drawer-scroll">
+          <header className="right-edge-sidecar__header">
+            <span className="right-edge-sidecar__header-leading">
+              {canClose ? (
+                <button type="button" aria-label="Hide Métis" title="Hide" onClick={close} className="right-edge-sidecar__header-back no-drag focus-ring">
+                  <ChevronRight size={18} strokeWidth={1.9} aria-hidden="true" />
+                </button>
+              ) : null}
+              <span className="right-edge-sidecar__identity">
+                <span>Métis</span>
+              </span>
+            </span>
+            <span className="right-edge-sidecar__status" data-right-edge-status={status} aria-live="polite">
+              <span className="right-edge-sidecar__status-dot" aria-hidden="true" />
+              <span>{status}</span>
+            </span>
+          </header>
+
+          {liveNotice ? (
+            <p className="right-edge-sidecar__status-notice" role="status" aria-label={liveNotice} title={liveNotice}>
+              {compactLiveNotice(liveNotice)}
+            </p>
+          ) : null}
+
+          {listening && onToggleListen ? (
+            <div className="right-edge-sidecar__meeting" role="group" aria-label="Meeting controls">
+              <span className="right-edge-sidecar__meeting-label">{paused ? 'Meeting paused' : 'Meeting live'}</span>
+              {typeof startedAt === 'number' && startedAt > 0 ? (
+                <span className="right-edge-sidecar__meeting-time" aria-label="Meeting duration">
+                  <ElapsedClock startedAt={startedAt} paused={paused} pausedMs={pausedMs} pausedAt={pausedAt} />
                 </span>
-              </span>
-              <span className="right-edge-sidecar__status" data-right-edge-status={status} aria-live="polite">
-                <span className="right-edge-sidecar__status-dot" aria-hidden="true" />
-                <span>{status}</span>
-              </span>
-            </header>
-
-            {liveNotice ? (
-              <p className="right-edge-sidecar__status-notice" role="status" aria-label={liveNotice} title={liveNotice}>
-                {compactLiveNotice(liveNotice)}
-              </p>
-            ) : null}
-
-            {listening && onToggleListen ? (
-              <div className="right-edge-sidecar__meeting" role="group" aria-label="Meeting controls">
-                <span className="right-edge-sidecar__meeting-label">{paused ? 'Meeting paused' : 'Meeting live'}</span>
-                {typeof startedAt === 'number' && startedAt > 0 ? (
-                  <span className="right-edge-sidecar__meeting-time" aria-label="Meeting duration">
-                    <ElapsedClock startedAt={startedAt} paused={paused} pausedMs={pausedMs} pausedAt={pausedAt} />
-                  </span>
-                ) : null}
-                {onTogglePause ? (
-                  <DockAction label={paused ? 'Resume meeting' : 'Pause meeting'} onClick={onTogglePause}>
-                    {paused ? <Play size={16} strokeWidth={1.9} /> : <Pause size={16} strokeWidth={1.9} />}
-                  </DockAction>
-                ) : null}
-                <DockAction label="Stop meeting" onClick={onToggleListen} active>
-                  <Square size={16} strokeWidth={1.9} />
+              ) : null}
+              {onTogglePause ? (
+                <DockAction label={paused ? 'Resume meeting' : 'Pause meeting'} onClick={onTogglePause}>
+                  {paused ? <Play size={16} strokeWidth={1.9} /> : <Pause size={16} strokeWidth={1.9} />}
                 </DockAction>
-              </div>
-            ) : null}
-
-            <section
-              aria-label={body !== undefined && body !== null ? 'Métis response' : 'Métis ready'}
-              aria-live="polite"
-              className="right-edge-sidecar__body"
-              tabIndex={body !== undefined && body !== null ? 0 : undefined}
-            >
-              {body !== undefined && body !== null ? (
-                <div className="right-edge-sidecar__answer">{body}</div>
-              ) : (
-                <div className="right-edge-sidecar__empty">
-                  <span className="right-edge-sidecar__empty-mark"><MantuMark size={22} round /></span>
-                  <p>Ready when you are</p>
-                  <span>Ask Métis, capture your screen, or start a meeting.</span>
-                </div>
-              )}
-            </section>
-
-            <div className="right-edge-sidecar__actions" aria-label="Métis actions">
-              <div className="right-edge-sidecar__action-rail" data-right-edge-action-rail="true">
-                {onCapture ? (
-                  <DockAction
-                    label="Capture screen"
-                    status={capturing ? 'Capturing' : undefined}
-                    onClick={onCapture}
-                    disabled={capturing}
-                    active={capturing}
-                  >
-                    {capturing ? <LoaderCircle size={17} strokeWidth={1.9} className="right-edge-sidecar__spin" /> : <Image size={17} strokeWidth={1.9} />}
-                  </DockAction>
-                ) : null}
-                {onSpotlightRef ? (
-                  <DockAction
-                    label="Spotlight Ref"
-                    status={spotlightReady ? undefined : 'Connect Dust'}
-                    onClick={onSpotlightRef}
-                  >
-                    <FileSearch size={17} strokeWidth={1.9} />
-                  </DockAction>
-                ) : null}
-                {onSettings ? (
-                  <DockAction label="Open settings" onClick={onSettings}>
-                    <Settings size={17} strokeWidth={1.9} />
-                  </DockAction>
-                ) : null}
-                {onOpenIntelligence ? (
-                  <DockAction
-                    label="Mantu Intelligence"
-                    status={capturing ? 'Capturing' : intelligence.status === 'opening' ? 'Opening' : undefined}
-                    onClick={openIntelligence}
-                    disabled={intelligence.status === 'opening' || capturing}
-                  >
-                    {intelligence.status === 'opening' ? <LoaderCircle size={17} strokeWidth={1.9} className="right-edge-sidecar__spin" /> : <Brain size={17} strokeWidth={1.9} />}
-                  </DockAction>
-                ) : null}
-                {!listening && onToggleListen ? <span className="right-edge-sidecar__action-divider" aria-hidden="true" /> : null}
-                {!listening && onToggleListen ? (
-                  <DockAction
-                    label="Start listening"
-                    onClick={onToggleListen}
-                  >
-                    <AudioLines size={17} strokeWidth={1.9} />
-                  </DockAction>
-                ) : null}
-                {listening && onTranscript ? (
-                  <button
-                    type="button"
-                    aria-label={transcriptShown ? 'Hide transcript' : 'Show transcript'}
-                    aria-pressed={transcriptShown}
-                    className="right-edge-sidecar__history no-drag focus-ring"
-                    onClick={onTranscript}
-                  >
-                    Transcript
-                  </button>
-                ) : onHistory ? (
-                  <button
-                    type="button"
-                    aria-label="Open History"
-                    className="right-edge-sidecar__history no-drag focus-ring"
-                    onClick={onHistory}
-                    title="History"
-                  >
-                    History
-                  </button>
-                ) : null}
-              </div>
+              ) : null}
+              <DockAction label="Stop meeting" onClick={onToggleListen} active>
+                <Square size={16} strokeWidth={1.9} />
+              </DockAction>
             </div>
+          ) : null}
 
-            {intelligence.status === 'error' ? <p className="right-edge-sidecar__notice" role="status">{intelligence.error}</p> : null}
-            {commandState.proposalId ? (
-              <section className="right-edge-sidecar__pending" aria-label="Pending command without a verified preview" role="status">
-                <p>A pending external action has no verified summary. It cannot be approved here.</p>
+          <section
+            aria-label={body !== undefined && body !== null ? 'Métis response' : 'Métis ready'}
+            aria-live="polite"
+            className="right-edge-sidecar__body"
+            tabIndex={body !== undefined && body !== null ? 0 : undefined}
+          >
+            {body !== undefined && body !== null ? (
+              <div className="right-edge-sidecar__answer">{body}</div>
+            ) : (
+              <div className="right-edge-sidecar__empty">
+                <span className="right-edge-sidecar__empty-mark"><MantuMark size={22} round /></span>
+                <p>Ready when you are</p>
+                <span>Ask Métis, capture your screen, or start a meeting.</span>
+              </div>
+            )}
+          </section>
+
+          <div className="right-edge-sidecar__actions" aria-label="Métis actions">
+            <div className="right-edge-sidecar__action-rail" data-right-edge-action-rail="true">
+              {onCapture ? (
+                <DockAction
+                  label="Capture screen"
+                  status={capturing ? 'Capturing' : undefined}
+                  onClick={onCapture}
+                  disabled={capturing}
+                  active={capturing}
+                >
+                  {capturing ? <LoaderCircle size={17} strokeWidth={1.9} className="right-edge-sidecar__spin" /> : <Image size={17} strokeWidth={1.9} />}
+                </DockAction>
+              ) : null}
+              {onSpotlightRef ? (
+                <DockAction
+                  label="Spotlight Ref"
+                  status={spotlightReady ? undefined : 'Connect Dust'}
+                  onClick={onSpotlightRef}
+                >
+                  <FileSearch size={17} strokeWidth={1.9} />
+                </DockAction>
+              ) : null}
+              {onSettings ? (
+                <DockAction label="Open settings" onClick={onSettings}>
+                  <Settings size={17} strokeWidth={1.9} />
+                </DockAction>
+              ) : null}
+              {onOpenIntelligence ? (
+                <DockAction
+                  label="Mantu Intelligence"
+                  status={capturing ? 'Capturing' : intelligence.status === 'opening' ? 'Opening' : undefined}
+                  onClick={openIntelligence}
+                  disabled={intelligence.status === 'opening' || capturing}
+                >
+                  {intelligence.status === 'opening' ? <LoaderCircle size={17} strokeWidth={1.9} className="right-edge-sidecar__spin" /> : <Brain size={17} strokeWidth={1.9} />}
+                </DockAction>
+              ) : null}
+              {!listening && onToggleListen ? <span className="right-edge-sidecar__action-divider" aria-hidden="true" /> : null}
+              {!listening && onToggleListen ? (
+                <DockAction
+                  label="Start listening"
+                  onClick={onToggleListen}
+                >
+                  <AudioLines size={17} strokeWidth={1.9} />
+                </DockAction>
+              ) : null}
+              {listening && onTranscript ? (
                 <button
                   type="button"
-                  aria-label="Cancel pending action"
-                  disabled={pendingCancelStatus === 'cancelling'}
-                  onClick={cancelPendingCommand}
-                  className="right-edge-sidecar__pending-cancel no-drag focus-ring"
+                  aria-label={transcriptShown ? 'Hide transcript' : 'Show transcript'}
+                  aria-pressed={transcriptShown}
+                  className="right-edge-sidecar__history no-drag focus-ring"
+                  onClick={onTranscript}
                 >
-                  {pendingCancelStatus === 'cancelling' ? 'Cancelling…' : 'Cancel pending action'}
+                  Transcript
                 </button>
-                {pendingCancelStatus === 'cancelled' ? <p>The pending action was cancelled.</p> : null}
-                {pendingCancelStatus === 'unavailable' ? <p>That pending action is no longer available.</p> : null}
-              </section>
-            ) : null}
-
-            <div className="right-edge-sidecar__composer">
-              <SidecarChat
-                value={value}
-                onChange={onChange}
-                onSubmit={onSubmit}
-                onStop={onStop}
-                busy={busy}
-                stoppable={stoppable}
-                inputRef={composerRef}
-              />
+              ) : onHistory ? (
+                <button
+                  type="button"
+                  aria-label="Open History"
+                  className="right-edge-sidecar__history no-drag focus-ring"
+                  onClick={onHistory}
+                  title="History"
+                >
+                  History
+                </button>
+              ) : null}
             </div>
           </div>
-        </aside>
-      ) : null}
+
+          {intelligence.status === 'error' ? <p className="right-edge-sidecar__notice" role="status">{intelligence.error}</p> : null}
+          {commandState.proposalId ? (
+            <section className="right-edge-sidecar__pending" aria-label="Pending command without a verified preview" role="status">
+              <p>A pending external action has no verified summary. It cannot be approved here.</p>
+              <button
+                type="button"
+                aria-label="Cancel pending action"
+                disabled={pendingCancelStatus === 'cancelling'}
+                onClick={cancelPendingCommand}
+                className="right-edge-sidecar__pending-cancel no-drag focus-ring"
+              >
+                {pendingCancelStatus === 'cancelling' ? 'Cancelling…' : 'Cancel pending action'}
+              </button>
+              {pendingCancelStatus === 'cancelled' ? <p>The pending action was cancelled.</p> : null}
+              {pendingCancelStatus === 'unavailable' ? <p>That pending action is no longer available.</p> : null}
+            </section>
+          ) : null}
+
+          <div className="right-edge-sidecar__composer">
+            <SidecarChat
+              value={value}
+              onChange={onChange}
+              onSubmit={onSubmit}
+              onStop={onStop}
+              busy={busy}
+              stoppable={stoppable}
+              inputRef={composerRef}
+            />
+          </div>
+        </div>
+      </aside>
     </div>
   )
 }

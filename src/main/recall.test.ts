@@ -9,6 +9,7 @@ import { meetingOpenTarget } from './history-actions'
 import type { Settings, SaveMeeting } from '@shared/ipc'
 import type { RecallHydration } from '@shared/recall-hydration'
 import { useStorageForTests } from './infra/storage/meetings-storage'
+import { HYDRATE_DEADLINE_MS } from './infra/storage/gateway'
 
 /**
  * The lines a successful read must have.
@@ -1085,6 +1086,15 @@ describe('isMeetingConfidentialOnDisk — MCP push defense-in-depth', () => {
     await expect(isMeetingConfidentialOnDisk(testSettings, basename(file))).resolves.toBe(true)
   })
 
+  it('fails closed when a duplicated confidential field has any true value', async () => {
+    const file = await saveMeeting(testSettings, meeting)
+    const name = basename(file)
+    const text = readFileSync(file, 'utf8').replace('\n---\n', '\nconfidential: true\nconfidential: false\n---\n')
+    writeFileSync(file, text, 'utf8')
+
+    await expect(isMeetingConfidentialOnDisk(testSettings, name)).resolves.toBe(true)
+  })
+
   it('fails closed on a missing or path-traversal file name', async () => {
     await expect(isMeetingConfidentialOnDisk(testSettings, 'no-such-meeting.md')).resolves.toBe(true)
     await expect(isMeetingConfidentialOnDisk(testSettings, '../escape.md')).resolves.toBe(true)
@@ -1328,6 +1338,58 @@ describe('recall — dataless files are listed, never read (M2-0193)', () => {
       expect(events).toEqual([
         { file: first, state: 'hydrating' },
         { file: first, state: 'done' },
+        { file: second, state: 'hydrating' },
+        { file: second, state: 'done' }
+      ])
+    })
+
+    it('a download past its deadline sends failed and keeps the slot until its read settles; list, search and local opens still answer', async () => {
+      const firstPath = await saveMeeting(testSettings, meeting('Cloud one', 1_700_100_000_000))
+      const secondPath = await saveMeeting(testSettings, meeting('Cloud two', 1_700_200_000_000))
+      const localPath = await saveMeeting(testSettings, meeting('Local sync', 1_700_000_000_000))
+      const [first, second, local] = [basename(firstPath), basename(secondPath), basename(localPath)]
+      cloudOnly.add(firstPath)
+      cloudOnly.add(secondPath)
+      let finishDownload!: () => void
+      heldRead = { path: firstPath, until: new Promise((resolve) => (finishDownload = resolve)) }
+      const events: RecallHydration[] = []
+      let downloadStarted!: () => void
+      const started = new Promise<void>((resolve) => (downloadStarted = resolve))
+      const send = (event: RecallHydration): void => {
+        events.push(event)
+        if (event.state === 'hydrating') downloadStarted()
+      }
+
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        const downloading = openRead(first, send)
+        await started
+        await vi.advanceTimersByTimeAsync(HYDRATE_DEADLINE_MS)
+        expect(await downloading).toEqual({ ok: false, error: HYDRATION_FAILED_MSG })
+        expect(events).toEqual([
+          { file: first, state: 'hydrating' },
+          { file: first, state: 'failed', error: HYDRATION_FAILED_MSG }
+        ])
+
+        // The timed-out read still holds its content permit: a second download would hold the other one.
+        reads.length = 0
+        expect(await openRead(second, send)).toEqual({ ok: false, error: HYDRATION_BUSY_MSG })
+        expect(await openExplicitly(second, send, (options) => meetingOpenTarget(folder, second, options))).toEqual({ ok: false, error: HYDRATION_BUSY_MSG })
+        const list = await listMeetings()
+        expect(list.find((m) => m.file === first)?.notDownloaded).toBe(true)
+        expect(list.find((m) => m.file === second)?.notDownloaded).toBe(true)
+        expect(list.find((m) => m.file === local)?.title).toBe('Local sync')
+        expect((await searchMeetings('march')).map((m) => m.file)).toEqual([local])
+        expect((await openRead(local, send)).ok).toBe(true)
+        expect(reads).not.toContain(secondPath)
+        expect(events).toHaveLength(2)
+      } finally {
+        finishDownload()
+        vi.useRealTimers()
+      }
+
+      await vi.waitFor(async () => expect((await openRead(second, send)).ok).toBe(true))
+      expect(events.slice(2)).toEqual([
         { file: second, state: 'hydrating' },
         { file: second, state: 'done' }
       ])

@@ -18,7 +18,11 @@ describe('MQA-294 licence readiness and credential boundaries', () => {
     expect(source('preload/index.ts')).toContain('sub(IPC.settingsChanged, cb)')
     expect(source('renderer/src/state.ts')).toContain('window.toto.onSettingsChanged(onFocus)')
     expect(source('main/index.ts')).toContain('onReadinessChanged: notifySettingsChanged')
-    expect(source('renderer/src/components/Settings.tsx')).toContain('await refreshSettings()')
+    const settingsSources = [
+      source('renderer/src/features/settings/SettingsRoot.tsx'),
+      source('renderer/src/features/settings/OperatorLicenseCard.tsx')
+    ].join('\n')
+    expect(settingsSources).toContain('await refreshSettings()')
   })
 
   it('rejects an activation if its verified endpoint changed during the request', () => {
@@ -33,7 +37,7 @@ describe('MQA-294 licence readiness and credential boundaries', () => {
   })
 
   it('does not bind a masked legacy credential input to persisted settings', () => {
-    const settings = source('renderer/src/components/Settings.tsx')
+    const settings = source('renderer/src/features/settings/SettingsRoot.tsx')
     expect(settings).not.toContain("value={settings.operatorIngestSecret || ''}")
     expect(settings).not.toContain('onChange={(e) => patch({ operatorIngestSecret: e.target.value })}')
     expect(settings).not.toContain('Heartbeat still needs the ingest secret')

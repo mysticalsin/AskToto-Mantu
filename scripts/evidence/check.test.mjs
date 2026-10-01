@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -546,6 +546,29 @@ test('C28 CLI --ticket M2-0008 validates a freeze repro bundle path', () => {
   assert.match(output, /M2-0008 bundle: OK/)
 })
 
+test('C29 CLI --ticket M2-0198 validates a soak record: a supported verdict exits 0, a contradicted one exits 1', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'check-soak-'))
+  const cliPath = fileURLToPath(new URL('./check.mjs', import.meta.url))
+  const content = [
+    '# Owner soak, five-day window', '', 'evidence_level: MEASURED', 'rule: soak-rule-1', 'app_version: 1.9.7',
+    'consecutive_active_days: 5', 'first_day: 2026-10-01', 'last_day: 2026-10-05', 'stalls_over_5s: 0',
+    'unclean_shutdowns: 1', 'orphan_reaps: 2', 'orphan_reaps_after_unclean_exit: 2', 'reveal_no_ops: 0',
+    'brain_index_quarantined: 0', 'verdict: HOLD', ''
+  ].join('\n')
+  const good = join(dir, 'good.md')
+  const bad = join(dir, 'bad.md')
+  writeFileSync(good, content)
+  writeFileSync(bad, content.replace('verdict: HOLD', 'verdict: PROCEED'))
+
+  const output = execFileSync(process.execPath, [cliPath, '--ticket', 'M2-0198', '--record', good], { encoding: 'utf8' })
+  assert.match(output, /M2-0198 soak record: OK/)
+  const failed = spawnSync(process.execPath, [cliPath, '--ticket', 'M2-0198', '--record', bad], { encoding: 'utf8' })
+  assert.equal(failed.status, 1)
+  assert.match(failed.stderr, /contradicts the counts/)
+  const missing = spawnSync(process.execPath, [cliPath, '--ticket', 'M2-0198', '--record', join(dir, 'none.md')], { encoding: 'utf8' })
+  assert.equal(missing.status, 2)
+})
+
 const STALL_BUNDLE = '0f8fad5b-d9cb-469f-a165-70867728950e.1700000000000.31000.txt'
 
 function writeM2_0194Bundle(root, { environment = {}, leadAction } = {}) {
@@ -571,7 +594,7 @@ function writeM2_0194Bundle(root, { environment = {}, leadAction } = {}) {
   writeRows('sidecar-excerpt.jsonl', [{ event: 'sidecar.spawn', name: 'asr' }])
 }
 
-test('C33 M2-0194 bundle check requires the matrix, the four excerpts and stall bundle names only', () => {
+test('C30 M2-0194 bundle check requires the matrix, the four excerpts and stall bundle names only', () => {
   const root = mkdtempSync(join(tmpdir(), 'm2-0194-bundle-'))
   writeM2_0194Bundle(root)
   assert.deepEqual(m2_0194BundleProblems(root), [])
@@ -613,7 +636,7 @@ test('C33 M2-0194 bundle check requires the matrix, the four excerpts and stall 
   assertProblem(m2_0194BundleProblems(root), 'sampler-excerpt.jsonl: missing from M2-0194 bundle')
 })
 
-test('C34 CLI --ticket M2-0194 validates a bundle and rejects an incomplete one; other tickets exit 2', () => {
+test('C31 CLI --ticket M2-0194 validates a bundle and rejects an incomplete one; other tickets exit 2', () => {
   const root = mkdtempSync(join(tmpdir(), 'm2-0194-bundle-cli-'))
   writeM2_0194Bundle(root)
   const cliPath = fileURLToPath(new URL('./check.mjs', import.meta.url))
@@ -736,7 +759,7 @@ function hostedLiveBundle({ symptomRow = null } = {}) {
   return { root, writeJson, writeJsonl, matrix }
 }
 
-test('C29 M2-0008 hosted-live bundle: a documented-unsuccessful run and a reproduced run are both valid', () => {
+test('C30 M2-0008 hosted-live bundle: a documented-unsuccessful run and a reproduced run are both valid', () => {
   assert.deepEqual(m2_0008BundleProblems(hostedLiveBundle().root), [])
   assert.deepEqual(m2_0008BundleProblems(hostedLiveBundle({ symptomRow: 'row-1-history-open' }).root), [])
 
@@ -745,7 +768,7 @@ test('C29 M2-0008 hosted-live bundle: a documented-unsuccessful run and a reprod
   assert.match(output, /M2-0008 bundle: OK/)
 })
 
-test('C30 M2-0008 hosted-live bundle requires mode artifacts, host facts and exercised, sampled automatic rows', () => {
+test('C31 M2-0008 hosted-live bundle requires mode artifacts, host facts and exercised, sampled automatic rows', () => {
   const noSummaryFile = hostedLiveBundle()
   rmSync(join(noSummaryFile.root, 'hosted-live-summary.json'))
   assertProblem(m2_0008BundleProblems(noSummaryFile.root), 'hosted-live-summary.json', 'missing from the hosted-live bundle')
@@ -793,7 +816,7 @@ test('C30 M2-0008 hosted-live bundle requires mode artifacts, host facts and exe
   assertProblem(m2_0008BundleProblems(unprobed.root), 'node-options-fuse.json', 'hosted-live')
 })
 
-test('C31 M2-0008 hosted-live bundle requires blocked rows with unblock steps, the process-signal run and a hosted-runner import', () => {
+test('C32 M2-0008 hosted-live bundle requires blocked rows with unblock steps, the process-signal run and a hosted-runner import', () => {
   const unblocked = hostedLiveBundle()
   unblocked.writeJsonl('matrix.jsonl', unblocked.matrix.map((entry) =>
     entry.row === 'row-9-network-off-flapping' ? { ...entry, unblock_step: '' } : entry))
