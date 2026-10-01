@@ -27,7 +27,7 @@ import { ImportQueue } from './ImportQueue'
 import { UpcomingSection } from './UpcomingSection'
 import { isImportDropFile, pickedFiles, skippedImportMessage } from './import-queue'
 import { RowDownloadButton, RowIcon, RowStatusChip, useRecallHydration } from './history/RowStatusChip'
-import type { RowHydration } from './history/hydration'
+import { openOnRow, type RowHydration } from './history/hydration'
 import { DegradedBanner } from './history/DegradedBanner'
 import { armSlowNotice, degradedBanner, listBody, nextListPhase, type ListPhase } from './history/list-status'
 import type {
@@ -623,20 +623,6 @@ export const MeetingRow = memo(function MeetingRow({
     </div>
   )
 })
-
-/**
- * The explicit open of a cloud-only row. The row owns the outcome: a failed download or read is reported
- * under that row, beside its 'Download failed' chip and Retry, never as a window-wide notice stacked above
- * History (whose panel height budget has no room for one). A retry starts from a clean row.
- */
-export function openOnRow(
-  file: string,
-  row: { clear: (file: string) => void; flag: (file: string, message: string) => void },
-  open: (file: string, reportError: (message: string) => void) => void
-): void {
-  row.clear(file)
-  open(file, (message) => row.flag(file, message))
-}
 
 // ---------------------------------------------------------------------------
 // Main export

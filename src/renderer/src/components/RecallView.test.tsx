@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { MeetingRow, openOnRow } from './RecallView'
+import { MeetingRow } from './RecallView'
+import { openOnRow } from './history/hydration'
 import { DegradedBanner } from './history/DegradedBanner'
 import {
   HISTORY_DEGRADED_MS,
