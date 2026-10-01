@@ -6,6 +6,7 @@ import {
   EXIT_CODES,
   MIN_PARKED_COVERAGE,
   UPLOAD_RESERVE_MINUTES,
+  classifySoakResult,
   exitCodeForOutcome,
   initialParkPreconditionError,
   jobSafeDeadlineEpochMs,
@@ -48,6 +49,35 @@ describe('idle-soak outcome mapping', () => {
     expect(exitCodeForOutcome({ growthOutcome: 'INCOMPLETE', parkedCoverage: 1 })).toBe(EXIT_CODES.FAIL_OR_INCOMPLETE)
     expect(exitCodeForOutcome({ launchPrecondition: true, growthOutcome: 'PASS', parkedCoverage: 1 })).toBe(EXIT_CODES.PRECONDITION)
     expect(exitCodeForOutcome({ parkPrecondition: true, growthOutcome: 'PASS', parkedCoverage: 1 })).toBe(EXIT_CODES.PRECONDITION)
+  })
+
+  it('keeps short growth legs and low parked coverage INCOMPLETE, never PASS', () => {
+    expect(classifySoakResult({ censusExit: { code: 0, signal: null }, growthOutcome: 'INCOMPLETE', parkedCoverage: 1 })).toMatchObject({
+      outcome: 'INCOMPLETE',
+      exitCode: EXIT_CODES.FAIL_OR_INCOMPLETE
+    })
+    expect(classifySoakResult({ censusExit: { code: 0, signal: null }, growthOutcome: 'PASS', parkedCoverage: 0.94 })).toMatchObject({
+      outcome: 'INCOMPLETE',
+      exitCode: EXIT_CODES.FAIL_OR_INCOMPLETE,
+      detail: expect.stringContaining('below')
+    })
+  })
+
+  it('keeps census failures INCOMPLETE and preconditions as PRECONDITION', () => {
+    expect(classifySoakResult({ censusExit: { code: 1, signal: null }, growthOutcome: 'PASS', parkedCoverage: 1 })).toMatchObject({
+      outcome: 'INCOMPLETE',
+      exitCode: EXIT_CODES.FAIL_OR_INCOMPLETE,
+      detail: 'census exited 1'
+    })
+    expect(classifySoakResult({ censusExit: { code: null, signal: 'SIGTERM' }, growthOutcome: 'PASS', parkedCoverage: 1 })).toMatchObject({
+      outcome: 'INCOMPLETE',
+      exitCode: EXIT_CODES.FAIL_OR_INCOMPLETE,
+      detail: 'census terminated by SIGTERM'
+    })
+    expect(classifySoakResult({ censusExit: { code: 2, signal: null }, growthOutcome: 'PASS', parkedCoverage: 1 })).toMatchObject({
+      outcome: 'PRECONDITION',
+      exitCode: EXIT_CODES.PRECONDITION
+    })
   })
 
   it('maps a CDP readiness failure before the first park check to PRECONDITION', async () => {

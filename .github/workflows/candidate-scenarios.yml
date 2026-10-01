@@ -144,7 +144,9 @@ jobs:
             echo "::error::provenance.json belongs to another run than candidate_run $CANDIDATE_RUN."
             exit 1
           fi
-          installer=$(node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" mac)
+          selector=mac
+          if [ "$SCENARIO" = idle-soak ]; then selector=mac-dmg; fi
+          installer=$(node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" "$selector")
           echo "path=$installer" >> "$GITHUB_OUTPUT"
       - name: Install into a fresh directory and verify the signature
         id: install

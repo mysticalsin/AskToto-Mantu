@@ -120,7 +120,7 @@ describe('candidate-scenarios.yml', () => {
       '--name candidate-provenance',
       'node scripts/qa/provenance.mjs verify provenance/provenance.json assets "$VARIANT"',
       'jq -r .run.id provenance/provenance.json',
-      'node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" mac',
+      'node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" "$selector"',
       'codesign --verify --deep --strict',
       'echo "path=$app" >> "$GITHUB_OUTPUT"',
       'candidate-scenarios.mjs profile',
@@ -139,6 +139,9 @@ describe('candidate-scenarios.yml', () => {
     expect(mac[stepIndex(mac, '--name "$ARTIFACT"')]).toContain('gh run download "$CANDIDATE_RUN"')
     expect(job('mac')).toContain('      ARTIFACT: ${{ needs.guard.outputs.mac_artifact }}')
     expect(job('mac')).toContain('    timeout-minutes: ${{ fromJSON(needs.guard.outputs.mac_timeout_minutes) }}')
+    const selector = mac[stepIndex(mac, 'node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" "$selector"')]
+    expect(selector).toContain('selector=mac')
+    expect(selector).toContain('if [ "$SCENARIO" = idle-soak ]; then selector=mac-dmg; fi')
     const run = mac[stepIndex(mac, 'candidate-scenarios.mjs run')]
     expect(run).toContain('timeout-minutes: ${{ fromJSON(needs.guard.outputs.mac_step_timeout_minutes) }}')
     expect(run).toContain('INSTALLER: ${{ steps.installer.outputs.path }}')

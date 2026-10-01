@@ -49,6 +49,30 @@ export function exitCodeForOutcome({ launchPrecondition = false, parkPreconditio
   return growthOutcome === 'PASS' ? EXIT_CODES.PASS : EXIT_CODES.FAIL_OR_INCOMPLETE
 }
 
+export function classifySoakResult({ censusExit, growthOutcome, parkedCoverage }) {
+  if (censusExit?.code === EXIT_CODES.PRECONDITION) {
+    return { outcome: 'PRECONDITION', exitCode: EXIT_CODES.PRECONDITION, detail: null }
+  }
+  if (censusExit?.code !== 0) {
+    const detail = censusExit?.signal
+      ? `census terminated by ${censusExit.signal}`
+      : `census exited ${censusExit?.code ?? 'unknown'}`
+    return { outcome: 'INCOMPLETE', exitCode: EXIT_CODES.FAIL_OR_INCOMPLETE, detail }
+  }
+  if (parkedCoverage < MIN_PARKED_COVERAGE) {
+    return {
+      outcome: 'INCOMPLETE',
+      exitCode: EXIT_CODES.FAIL_OR_INCOMPLETE,
+      detail: `parked coverage ${parkedCoverage} is below ${MIN_PARKED_COVERAGE}`
+    }
+  }
+  return {
+    outcome: growthOutcome === 'PASS' ? 'PASS' : growthOutcome,
+    exitCode: exitCodeForOutcome({ growthOutcome, parkedCoverage }),
+    detail: null
+  }
+}
+
 export function launchEnv(baseEnv, profile, { hostFloorOverride = true } = {}) {
   const env = {}
   for (const [key, value] of Object.entries(baseEnv)) {
@@ -317,14 +341,12 @@ async function main(argv = process.argv.slice(2), env = process.env) {
     const parkSummary = summarizeParkChecks(parkChecks)
     const parkedCoverage = parkSummary.parkedCoverage
     const growthOutcome = verdict?.outcome ?? 'INCOMPLETE'
-    const outcome =
-      censusExit.code === 2 ? 'PRECONDITION' : parkedCoverage < MIN_PARKED_COVERAGE ? 'INCOMPLETE' : growthOutcome
-    const exitCode = censusExit.code === 2 ? EXIT_CODES.PRECONDITION : exitCodeForOutcome({ growthOutcome, parkedCoverage })
+    const result = classifySoakResult({ censusExit, growthOutcome, parkedCoverage })
     writeReport(output.report, {
       schema: 'idle-soak/1',
       scenario: 'idle-soak',
       rule: { id: RULE_ID, rulesSha256: rulesSha256() },
-      outcome,
+      outcome: result.outcome,
       productVersion,
       requestedHours: hours,
       secondsPlanned: seconds,
@@ -350,10 +372,12 @@ async function main(argv = process.argv.slice(2), env = process.env) {
       },
       censusExit,
       growthExit: { code: growth.status, signal: growth.signal },
-      detail: outcome === 'PASS' ? null : precondition ?? verdict?.failed?.join(', ') ?? censusStderr.trim().split(/\r?\n/).at(-1) ?? null
+      detail: result.outcome === 'PASS'
+        ? null
+        : precondition ?? result.detail ?? verdict?.failed?.join(', ') ?? censusStderr.trim().split(/\r?\n/).at(-1) ?? null
     })
     removeScenarioOwnedProfile(profile, outDir)
-    return exitCode
+    return result.exitCode
   } catch (error) {
     const exitCode = error?.exitCode === EXIT_CODES.PRECONDITION ? EXIT_CODES.PRECONDITION : EXIT_CODES.FAIL_OR_INCOMPLETE
     writeReport(output.report, {

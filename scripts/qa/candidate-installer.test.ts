@@ -47,6 +47,8 @@ describe('selectCandidateInstaller on macOS', () => {
   it('returns the DMG or the zip whose sha256 matches', async () => {
     expect(await selectCandidateInstaller(dir, sha('dmg bytes'), 'mac')).toBe(join(dir, 'Metis-1.0.0.dmg'))
     expect(await selectCandidateInstaller(dir, sha('zip bytes'), 'mac')).toBe(join(dir, 'Metis-1.0.0.zip'))
+    expect(await selectCandidateInstaller(dir, sha('dmg bytes'), 'mac-dmg')).toBe(join(dir, 'Metis-1.0.0.dmg'))
+    await expect(selectCandidateInstaller(dir, sha('zip bytes'), 'mac-dmg')).rejects.toThrow(/No installer matches/)
   })
 
   it('never selects a Windows installer, and never falls back when nothing matches', async () => {

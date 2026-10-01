@@ -2,7 +2,7 @@
 // download a qa-candidate.yml artifact (candidate-win, candidate-mac or candidate-mac-qa-identity) and
 // install only bytes that match; a differing or missing installer is an error, never a fallback to
 // another file.
-//   node scripts/qa/candidate-installer.mjs <dir> <sha256> [win|mac]   (prints the installer path)
+//   node scripts/qa/candidate-installer.mjs <dir> <sha256> [win|mac|mac-dmg]   (prints the installer path)
 import { readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -13,7 +13,8 @@ const SHA256 = /^[0-9a-f]{64}$/
 /** The installer files each platform may select from. Windows installs only the Setup, never the Portable. */
 export const INSTALLER_KINDS = Object.freeze({
   win: Object.freeze({ label: 'Metis-Setup-*.exe', pattern: /^Metis-Setup-.*\.exe$/ }),
-  mac: Object.freeze({ label: '*.dmg or *.zip', pattern: /\.(dmg|zip)$/ })
+  mac: Object.freeze({ label: '*.dmg or *.zip', pattern: /\.(dmg|zip)$/ }),
+  'mac-dmg': Object.freeze({ label: '*.dmg', pattern: /\.dmg$/ })
 })
 
 export async function selectCandidateInstaller(dir, expectedSha256, platform = 'win') {

@@ -254,6 +254,14 @@ describe('installer selection through candidate-installer', () => {
     await expect(selectCandidateInstaller(dir, sha('another build'), 'mac')).rejects.toThrow(/No installer matches/)
   })
 
+  it('selects only the promotable DMG for idle-soak', async () => {
+    writeFileSync(join(dir, 'Metis-1.0.0.dmg'), 'idle soak dmg bytes')
+    writeFileSync(join(dir, 'Metis-1.0.0.zip'), 'idle soak zip bytes')
+    const plan = resolveScenario({ scenario: 'idle-soak', sha256: { mac: IDLE_SHA } })
+    expect(await selectCandidateInstaller(dir, plan.mac.sha256, 'mac-dmg')).toBe(join(dir, 'Metis-1.0.0.dmg'))
+    await expect(selectCandidateInstaller(dir, sha('idle soak zip bytes'), 'mac-dmg')).rejects.toThrow(/No installer matches/)
+  })
+
   it('selects the Setup, never the Portable, for the sidecar-boot-reaper win leg', async () => {
     writeFileSync(join(dir, 'Metis-Setup-1.0.0.exe'), 'setup bytes')
     writeFileSync(join(dir, 'Metis-Portable-1.0.0.exe'), 'portable bytes')
