@@ -129,9 +129,9 @@ import {
   preloadOnboardingHeroVideo,
   resolveOnboardingHeroVideoSrc
 } from '../lib/onboarding-hero-video'
+export { speechPackAllowsEnsure, speechPackSetupRowVisible } from '../lib/local-speech-pack-policy'
+import { speechPackAllowsEnsure, speechPackSetupRowVisible } from '../lib/local-speech-pack-policy'
 
-// Same icon-per-mode mapping as the Settings → Personalize `ModePicker` (ModePicker.tsx) — one mode,
-// one icon, everywhere it appears, rather than inventing a second icon language just for this scene.
 const PERSONA_ICONS: Record<OnboardingPersonaId, typeof MessageSquare> = {
   general: MessageSquare,
   meeting: CalendarDays,
@@ -549,19 +549,6 @@ export function asrStatusIsReady(status: AsrAssetsStatus | null | undefined): bo
   return Boolean(status?.ready || status?.status === 'ready')
 }
 
-export function speechPackAllowsEnsure(policy: PublicSettings['localSpeechPack'] | null | undefined): boolean {
-  return policy !== 'blocked'
-}
-
-export function speechPackSetupRowVisible(policy: PublicSettings['localSpeechPack'] | null | undefined): boolean {
-  return speechPackAllowsEnsure(policy)
-}
-
-/** Act 3 — "scan first, then present a completed configuration": two DIFFERENT claims the scene makes,
- *  kept as one pure derivation so both stay honest and are each independently testable.
- *  `scanDone` only means every row has left 'checking' — loading (bytes moving) still counts as
- *  scanned. Safe to reveal the Listen-only caveat. `allReady` stays false while any row is
- *  loading / action / blocked / restart. */
 export interface SetupScanSummary {
   scanDone: boolean
   allReady: boolean
@@ -1238,8 +1225,6 @@ export function OnboardingExperience({
     }
   }, [speechPackBlocked])
   const [restarting, setRestarting] = useState(false)
-  // M2-0429: the screen row is derived, never set piecemeal: the diagnosis (fresh grant needing a relaunch, a
-  // grant held by another copy, …) plus the self-test result. Green only once the self-test heard system audio.
   useEffect(() => {
     if (scene !== 'setup') return
     const s = screenRowStatus(screenSetup.perms, screenSetup.check, isWindows)
@@ -1261,12 +1246,6 @@ export function OnboardingExperience({
     if (scene !== 'setup') return
     let live = true
     const base: SetupRow[] = [
-      // No acceleration row (MQA-201): it asserted "ready / detected" unconditionally, justified by a
-      // claim that the build was arm64-only. It is not — the mac target is universal (electron-builder
-      // verifies x64 Mach-O slices) and Windows ships x64 only. Nor can the renderer honestly answer the
-      // question at this point: on Windows the llama variant
-      // (vulkan vs cpu) is only decided when a sidecar is first spawned, which has not happened yet at
-      // onboarding. docs/ONBOARDING-EXPERIENCE.md's rule is to show only rows that are actually true.
       ...(speechPackSetupRowVisible(speechPackPolicy) ? [{ key: 'asr', label: 'On-device transcription', icon: Sparkles, state: 'checking' } satisfies SetupRow] : []),
       { key: 'brain', label: 'Private meeting brain', icon: FolderLock, state: 'checking' },
       { key: 'mic', label: 'Microphone', icon: Mic, state: 'checking' },

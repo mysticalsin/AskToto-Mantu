@@ -189,9 +189,9 @@ function parseAllowedContent(raw: string): string[] | null {
   }
 }
 
-function readAllowedFrom(p: string): string[] | null {
+function readRawPolicyFrom(p: string): string | null {
   try {
-    return parseAllowedContent(readFileSync(p, 'utf8'))
+    return readFileSync(p, 'utf8')
   } catch {
     return null
   }
@@ -199,38 +199,15 @@ function readAllowedFrom(p: string): string[] | null {
 
 function parseLocalSpeechPackContent(raw: string): LocalSpeechPackPolicy | null {
   try {
-    const obj = JSON.parse(raw)
-    const parsed = LocalSpeechPackPolicySchema.safeParse(obj?.localSpeechPack)
+    const parsed = LocalSpeechPackPolicySchema.safeParse(JSON.parse(raw)?.localSpeechPack)
     return parsed.success ? parsed.data : null
   } catch {
     return null
   }
 }
 
-function readLocalSpeechPackFrom(p: string): LocalSpeechPackPolicy | null {
-  try {
-    return parseLocalSpeechPackContent(readFileSync(p, 'utf8'))
-  } catch {
-    return null
-  }
-}
-
-// The machine-wide org-policy path lives in win-security.ts (single source of truth). On Windows it is
-// only honored when admin-owned + not user-writable, and readTrustedAdminManaged() reads its content
-// through the SAME held fd that verified that trust (closes the check-path/read-path TOCTOU a plain
-// `trustedAdminManagedPath() ? readFileSync(path) : ...` pattern would reopen). On macOS/Linux the
-// root-owned parent dir already enforces the trust boundary, so it's a plain read there.
-
-// Snapshot of the admin policy content, because the two accessors below run OUTSIDE getSettings()'s
-// cache — on every renderer settings fetch, on every ask, and (via localReady) on screen-preprocess's
-// 6 s tick — and on win32 each raw read runs a synchronous PowerShell Get-Acl probe measured at
-// 0.5-1.9 s, freezing the main process for 10-30% of wall clock (MQA-034).
-//
-// What is cached is the VERIFIED CONTENT, never a bare "this path is trusted" verdict, so a file swapped
-// in behind a forged mtime can at worst make us keep serving bytes that already passed the ACL check —
-// it can never get its own bytes honored. Invalidation matches getSettings()'s own envelope (the admin
-// file's mtime, so an IT policy edit still lands without an app restart), plus a wall-clock ceiling so a
-// DACL-only change — which no mtime can reveal — is re-probed within the minute rather than never.
+// readTrustedAdminManaged() owns the machine policy trust check and reads through the verified fd.
+// Cache verified content, not a bare trust verdict; mtime/inode plus a short TTL pick up IT edits.
 const ADMIN_POLICY_REPROBE_MS = 60_000
 let _adminManagedCache: {
   path: string
@@ -304,11 +281,6 @@ export function getLockedKeys(): string[] {
 }
 
 /**
- * Optional org allowlist of LLM provider ids (data-residency / governance), from managed-config
- * `allowedProviders`. Null = no restriction (all providers allowed). Enforced in the main process before
- * any screen/transcript egress, so a policy can confine data to approved/DPA-backed providers.
- */
-/**
  * Optional org allowlist of network HOSTS (managed-config `egressAllowlist`, see docs/NETWORK-EGRESS.md).
  * Null = no restriction, which is every install's behavior unless IT sets the key. Same precedence as
  * `allowedProviders`: machine (admin) policy wins over the per-user managed file. Enforced at boot by
@@ -329,12 +301,14 @@ export function getAllowedProviders(): string[] | null {
   // Machine (admin) policy wins over the per-user managed file, mirroring validatedManaged() precedence.
   // Read from the raw JSON because `allowedProviders` is a policy key, not a settings-schema key.
   const admin = adminManagedContent()
-  return (admin ? parseAllowedContent(admin) : null) ?? readAllowedFrom(join(dir(), 'managed-config.json'))
+  const user = readRawPolicyFrom(join(dir(), 'managed-config.json'))
+  return (admin ? parseAllowedContent(admin) : null) ?? (user ? parseAllowedContent(user) : null)
 }
 
 export function getAdminLocalSpeechPackPolicy(): LocalSpeechPackPolicy | null {
   const admin = adminManagedContent()
-  return (admin ? parseLocalSpeechPackContent(admin) : null) ?? readLocalSpeechPackFrom(join(dir(), 'managed-config.json'))
+  const user = readRawPolicyFrom(join(dir(), 'managed-config.json'))
+  return (admin ? parseLocalSpeechPackContent(admin) : null) ?? (user ? parseLocalSpeechPackContent(user) : null)
 }
 
 /** Providers whose key currently comes from an environment variable — for those, in-app 'Remove' is a

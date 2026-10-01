@@ -19,6 +19,7 @@ import {
   canonicalModelPolicyPayload,
   canonicalUnmanagedModelPolicyPayload,
   effectiveLocalSpeechPackPolicy,
+  MODEL_POLICY_CAPABILITIES,
   narrowAllowedProvidersForCapability,
   pinManagedModel,
   SignedModelPolicySchema,
@@ -233,6 +234,12 @@ export function resolveManagedModel(
   currentModel: string
 ): string {
   return pinManagedModel(getActiveModelPolicy(settings), capability, provider, currentModel)
+}
+
+export function modelPolicyCapabilitiesForSettings(settings: ModelPolicyClientSettings): Record<string, { provider: string; model: string }> {
+  const policy = getActiveModelPolicy(settings)
+  if (!policy) return {}
+  return Object.fromEntries(MODEL_POLICY_CAPABILITIES.map((cap) => [cap, { provider: policy.capabilities[cap].provider, model: policy.capabilities[cap].model }]))
 }
 
 export function resolveLocalSpeechPackPolicy(

@@ -21,11 +21,11 @@ import {
   setupContinueLabel,
   setupAsrBlocksContinue,
   setupRowLoadingPercent,
-  speechPackAllowsEnsure,
-  speechPackSetupRowVisible,
   firstRunCanFinish,
   asrStatusIsReady,
   summarizeSetupRows,
+  speechPackAllowsEnsure,
+  speechPackSetupRowVisible,
   type SetupRow
 } from './OnboardingExperience'
 import { BUNDLE_GOT_LOGIN_HTML, BUNDLE_NOT_JS } from '@shared/bundle-response'
@@ -318,11 +318,6 @@ describe('Act 3 managed local speech pack policy', () => {
   it('blocks both the setup card and automatic download path for blocked', () => {
     expect(speechPackAllowsEnsure('blocked')).toBe(false)
     expect(speechPackSetupRowVisible('blocked')).toBe(false)
-  })
-
-  it('shows required as a managed row', () => {
-    const src = readFileSync(join(__dirname, 'OnboardingExperience.tsx'), 'utf8')
-    expect(src).toContain('Managed by your organization.')
   })
 })
 

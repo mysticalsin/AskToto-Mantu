@@ -178,8 +178,8 @@ import {
   portalFundedCloudflareModel,
   workingCliOrder
 } from '@shared/ask-routing'
-import { getActiveModelPolicy, narrowAllowedForCapability, resolveLocalSpeechPackPolicy, resolveManagedModel } from './model-policy-client'
-import { localModelAllowedByPolicy, MODEL_POLICY_CAPABILITIES } from '@shared/model-policy'
+import { getActiveModelPolicy, modelPolicyCapabilitiesForSettings, narrowAllowedForCapability, resolveLocalSpeechPackPolicy, resolveManagedModel } from './model-policy-client'
+import { localModelAllowedByPolicy } from '@shared/model-policy'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import { registerWriteupIpc } from './ipc/writeup'
 import * as fmRuntime from './llm/fm-runtime'
@@ -1894,7 +1894,11 @@ function initializeImportJobs(): void {
     newId: () => randomBytes(16).toString('hex'),
     concurrency: MAX_CONCURRENT_DECODES
   })
-  if (!localSpeechPackBlocked()) {
+  const speechPackBlocked =
+    typeof resolveLocalSpeechPackPolicy === 'function' &&
+    typeof getAdminLocalSpeechPackPolicy === 'function' &&
+    resolveLocalSpeechPackPolicy(getSettings(), getAdminLocalSpeechPackPolicy()) === 'blocked'
+  if (!speechPackBlocked) {
     void ensureImportAsrAssets((pct) => {
       publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
     }).catch((err) => {
@@ -2126,21 +2130,6 @@ function publicSettings(): PublicSettings {
     modelPolicyCapabilities: modelPolicyCapabilitiesForSettings(s),
     localSpeechPack: resolveLocalSpeechPackPolicy(s, getAdminLocalSpeechPackPolicy())
   }
-}
-
-/** M2-0412: the fleet policy's effective provider+model, per capability, for Settings' managed/locked
- *  display — {} (nothing locked) when no fleet policy has ever been set ("not managed"). */
-function modelPolicyCapabilitiesForSettings(s: Settings): Record<string, { provider: string; model: string }> {
-  const policy = getActiveModelPolicy(s)
-  if (!policy) return {}
-  return Object.fromEntries(
-    MODEL_POLICY_CAPABILITIES.map((cap) => [cap, { provider: policy.capabilities[cap].provider, model: policy.capabilities[cap].model }])
-  )
-}
-
-function localSpeechPackBlocked(): boolean {
-  const s = getSettings()
-  return resolveLocalSpeechPackPolicy(s, getAdminLocalSpeechPackPolicy()) === 'blocked'
 }
 
 /** Wiped-profile / mid-tour: exclusive fullscreen owns the display until onboardingDone. */
@@ -9629,7 +9618,7 @@ if (!app.requestSingleInstanceLock()) {
     })
     safeHandle(IPC.asrAssetsEnsure, async (e) => {
       assertMainWindow(e)
-      if (localSpeechPackBlocked()) return asrAssetsStatusSnapshot()
+      if (resolveLocalSpeechPackPolicy(getSettings(), getAdminLocalSpeechPackPolicy()) === 'blocked') return asrAssetsStatusSnapshot()
       try {
         await ensureImportAsrAssets((pct) => {
           publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
