@@ -695,3 +695,49 @@ describe('Cloudflare tile opens Operator OAuth, not a key-paste card', () => {
     expect(preload).toMatch(/cloudflareConnect:/)
   })
 })
+
+describe('M2-0412 fleet model policy — "managed by your organization" banner', () => {
+  it('reads modelPolicyCapabilities.askChat (Worker-authoritative, never client-computed) and shows the portal as the source', () => {
+    const block = blockAfter('const askChatPolicy = settings.modelPolicyCapabilities.askChat', '{/* CLI Integration')
+    expect(block).toMatch(/askChatPolicy &&/)
+    expect(block).toMatch(/Managed by your organization/)
+    expect(block).toMatch(/set on the Operator portal/)
+  })
+
+  it('never lets the provider tiles below silently offer a choice outside the fleet policy', () => {
+    expect(source).toContain('const providerLocked = locked || modelPolicyLocked')
+    expect(source).toContain('locked={providerLocked}')
+    expect(source).toContain('disabled={providerLocked}')
+    expect(source).toContain('askChatPolicy.provider')
+    expect(source).toContain('askChatPolicy.model')
+  })
+
+  it('shows a visible "not managed" state when no policy capability is set', () => {
+    const banners = blockAfter('{Object.keys(settings.modelPolicyCapabilities).length === 0 &&', '{askChatPolicy &&')
+    expect(banners).toMatch(/Object\.keys\(settings\.modelPolicyCapabilities\)\.length === 0/)
+    expect(banners).toMatch(/Models: not managed/)
+    expect(banners).toMatch(/Operator portal/)
+  })
+
+  it('locks the base and thinking model fields while a policy governs askChat, naming the portal as the source', () => {
+    expect(source).toContain('const modelPolicyLocked = !!askChatPolicy')
+    const base = blockAfter('Base model · fast, cheap', 'Thinking model · hard, coding questions')
+    expect(base).toMatch(/modelPolicyLocked \|\| settings\.managedKeys\.includes\('providerModels'\)/)
+    expect(base).toMatch(/modelPolicyLocked && <span className=\{managedChipCls\}>Managed by the Operator portal/)
+    const thinking = blockAfter('Thinking model · hard, coding questions', 'datalist id')
+    expect(thinking).toMatch(/modelPolicyLocked \|\| settings\.managedKeys\.includes\('providerModelsThinking'\)/)
+  })
+
+  it('also surfaces the stt and localModel capabilities as managed banners in their split settings sections', () => {
+    const localBanner = blockAfter('const localModelPolicy = settings.modelPolicyCapabilities.localModel', '{/* CLI Integration')
+    expect(localBanner).toMatch(/localModelPolicy &&/)
+    expect(localBanner).toMatch(/MODEL_POLICY_CAPABILITY_LABELS\.localModel/)
+    const sttBanner = blockAfter('const sttPolicy = settings.modelPolicyCapabilities.stt', '<Section title="Listen to"')
+    expect(sttBanner).toMatch(/sttPolicy &&/)
+    expect(sttBanner).toMatch(/MODEL_POLICY_CAPABILITY_LABELS\.stt/)
+    expect(`${localBanner}\n${sttBanner}`).toMatch(/Managed by your organization/)
+    expect(`${localBanner}\n${sttBanner}`).toMatch(/set on the Operator portal/)
+    expect(source).toContain('sttPolicy.provider')
+    expect(source).toContain('localModelPolicy.provider')
+  })
+})

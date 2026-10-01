@@ -28,7 +28,8 @@ import { alignQuote, verifyNumericFact, extractNumerals, numeralDerivable } from
 import { getSettings, getApiKey, getAllowedProviders, setApiKey, setSettings } from '../store'
 import { createStream } from '../llm'
 import { operatorAskTransport, operatorFundedProviders } from '../features/operator/operator-ingest'
-import { resolvePortalCloudflareModel } from '@shared/ask-routing'
+import { CLI_PROVIDER_IDS, resolvePortalCloudflareModel } from '@shared/ask-routing'
+import { narrowAllowedForCapability, resolveManagedModel } from '../features/operator/model-policy-client'
 import { localBaseReady } from '../llm/local-routing'
 import { intelligenceNoProviderMessage, intelligenceRequiresLocal } from '@shared/intelligence-pass'
 import { verifyIntegrity } from '../llm/local-models'
@@ -171,7 +172,9 @@ function pickProviderCandidates(
   // Honor the org's allowedProviders policy — this background pipeline streams the full meeting
   // transcript to the provider, so an org that pinned e.g. ["dust"] for data residency must not have
   // it silently sent to any other keyed provider (the interactive ask path already filters the same way).
-  const allowed = getAllowedProviders()
+  // M2-0412: the fleet model policy's 'recap' capability narrows this the same way the org allowlist
+  // does — CLI providers and 'local' are exempt (their own toggles govern them, not this policy).
+  const allowed = narrowAllowedForCapability(s, getAllowedProviders(), 'recap', [...CLI_PROVIDER_IDS, 'local'])
   const order = [s.provider, ...(Object.keys(PROVIDERS) as ProviderId[])]
   const seen = new Set<ProviderId>()
   const candidates: IntelligencePassCandidate[] = []
@@ -202,6 +205,8 @@ function pickProviderCandidates(
     // chain and pickFailover); this pipeline has to exempt it the same way or the two disagree about
     // which providers exist.
     if (def.kind !== 'cli' && !model) continue
+    // M2-0412: fleet policy pins the final model for a provider it governs, same as the interactive ask path.
+    if (def.kind !== 'cli') model = resolveManagedModel(s, 'recap', p, model)
     candidates.push({ provider: p, model, key, ...(operatorTransport ? { operatorTransport } : {}) })
   }
   // Last-resort local fallback: appended AFTER every cloud candidate, never ahead of one, so a
@@ -282,7 +287,7 @@ function runCompletionOnce(
   const isLocal = provider === 'local'
   const req: AskStart = isLocal
     ? ({ id, mode: 'summary', prompt: '', transcript: userText, history: [] } as AskStart)
-    : ({ id, mode: 'answer', prompt: userText, history: [] } as AskStart)
+    : ({ id, mode: 'recap', prompt: userText, history: [] } as AskStart)
   return new Promise<string>((resolve, reject) => {
     let out = ''
     createStream({
