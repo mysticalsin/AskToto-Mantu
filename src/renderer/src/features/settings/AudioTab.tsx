@@ -15,10 +15,8 @@ import { ToggleRow } from '../../ui/Toggle'
 import { AsrModelRow, CoreAsrAssetsRow, WhisperQualityRow } from './AiSection'
 
 export { LazyTextarea } from '../../ui/LazyText'
-
 // Local extension until PublicSettings exposes the WebGPU-to-WASM ASR downgrade marker.
 type SettingsWithAsrWebgpuFallback = PublicSettings & { asrWebgpuFallbackAt?: number | null }
-
 type AsrCorrection = PublicSettings['asrCorrections'][number]
 
 /** One `heard => correct` line per correction, in order. Exported for a focused test. */

@@ -131,17 +131,7 @@ export { FieldHint } from './ui'
 export { ExpandableSection } from '../ui/Section'
 export { DustSetup } from '../features/settings/DustSetup'
 export { PROFILE_CREDENTIAL_STORE, isProfileUnlockError } from '../features/settings/credential-store'
-export {
-  AppleEngineNotice,
-  CoreAsrAssetsRow,
-  LocalAiSection,
-  asrImportModelDescription,
-  coreAsrAssetsView,
-  detectHint,
-  readCoreAsrAssetsStatus,
-  retryCoreAsrAssets,
-  WhisperQualityRow
-} from '../features/settings/AiSection'
+export { AppleEngineNotice, CoreAsrAssetsRow, LocalAiSection, asrImportModelDescription, coreAsrAssetsView, detectHint, readCoreAsrAssetsStatus, retryCoreAsrAssets, WhisperQualityRow } from '../features/settings/AiSection'
 export { parseAsrCorrections, sameAsrCorrections, serializeAsrCorrections } from '../features/settings/AudioTab'
 
 export { OFFICIAL_METIS_INSTALLER_URL } from '../features/settings/AiSection'
