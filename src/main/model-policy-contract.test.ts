@@ -218,11 +218,15 @@ function createStreamSites(file: string): CreateStreamSite[] {
 function modelArgumentText(site: CreateStreamSite): string {
   const [arg] = site.call.arguments
   if (!arg || !ts.isObjectLiteralExpression(arg)) return ''
+  const sf = sourceFileFor(site.text)
   const model = arg.properties.find(
-    (prop): prop is ts.PropertyAssignment =>
-      ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name) && prop.name.text === 'model'
+    (prop): prop is ts.PropertyAssignment | ts.ShorthandPropertyAssignment =>
+      ((ts.isPropertyAssignment(prop) || ts.isShorthandPropertyAssignment(prop)) &&
+        ts.isIdentifier(prop.name) &&
+        prop.name.text === 'model')
   )
-  return model?.initializer.getText(sourceFileFor(site.text)) ?? ''
+  if (!model) return ''
+  return ts.isShorthandPropertyAssignment(model) ? model.name.text : model.initializer.getText(sf)
 }
 
 function policyBodyFor(site: CreateStreamSite): string {
@@ -266,7 +270,7 @@ describe('M2-0412 — every createStream( call site in src/main resolves through
   it('finds the known call sites (a scan that finds nothing must not pass vacuously)', () => {
     const found = new Set(sites.flatMap((s) => [s.fn, ...s.fn.ancestors].map((fn) => `${s.file}#${fn.name}`)))
     for (const expected of [
-      'src/main/index.ts#runImportPolish',
+      `${MAIN_INDEX}#runImportPolish`,
       'src/main/index.ts#askVisionForScreenCheck',
       'src/main/index.ts#registerIpc',
       'src/main/import-recap.ts#runImportedRecap',

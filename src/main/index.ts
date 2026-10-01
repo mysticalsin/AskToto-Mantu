@@ -4156,10 +4156,7 @@ function visionCheckContextFromSettings(): import('@shared/screen-capture-check'
 }
 
 /** Isolated vision ask for the Settings self-check. Never askStart, never overlay chat, never a teammate push. */
-function askVisionForScreenCheck(
-  backend: 'local' | 'api',
-  image: string
-): Promise<{ text: string; label: string }> {
+function askVisionForScreenCheck(backend: 'local' | 'api', image: string): Promise<{ text: string; label: string }> {
   const s = getSettings()
   const req: AskStart = {
     id: `screen-check-${Date.now()}`,
@@ -4169,8 +4166,7 @@ function askVisionForScreenCheck(
     history: []
   }
   if (backend === 'local') {
-    const model = localModelAllowedByPolicy(getActiveModelPolicy(s), s.localLlm.modelId) ? s.localLlm.modelId : null
-    if (model === null) {
+    if (!localModelAllowedByPolicy(getActiveModelPolicy(s), s.localLlm.modelId)) {
       return Promise.reject(new Error('The selected provider is not allowed by the fleet model policy.'))
     }
     return collectVisionStream((handlers) =>
@@ -4178,7 +4174,7 @@ function askVisionForScreenCheck(
         providerId: 'local',
         kind: 'local',
         apiKey: '',
-        model,
+        model: s.localLlm.modelId,
         temperature: 0,
         idleMs: 90_000,
         maxOutputTokens: 80,
