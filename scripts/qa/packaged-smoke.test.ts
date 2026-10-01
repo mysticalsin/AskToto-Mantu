@@ -1263,7 +1263,7 @@ describe('pinnedBridgeCall (M2-0519)', () => {
   const scope = globalThis as unknown as { window?: unknown; __metisSmokeBridgePending?: Set<Promise<unknown>> }
 
   function bridgeWith(toggle: (...args: unknown[]) => Promise<unknown>): void {
-    scope.window = { toto: { toggle } }
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: { toto: { toggle } } })
     delete scope.__metisSmokeBridgePending
   }
 
@@ -1285,7 +1285,7 @@ describe('pinnedBridgeCall (M2-0519)', () => {
       await expect(call).resolves.toBeUndefined()
       expect(scope.__metisSmokeBridgePending?.size).toBe(0)
     } finally {
-      delete scope.window
+      Object.defineProperty(globalThis, 'window', { configurable: true, value: undefined })
       delete scope.__metisSmokeBridgePending
     }
   })
@@ -1296,7 +1296,7 @@ describe('pinnedBridgeCall (M2-0519)', () => {
       await expect(pinnedBridgeCall(['toggle', []])).rejects.toThrow('no window')
       expect(scope.__metisSmokeBridgePending?.size).toBe(0)
     } finally {
-      delete scope.window
+      Object.defineProperty(globalThis, 'window', { configurable: true, value: undefined })
       delete scope.__metisSmokeBridgePending
     }
   })
