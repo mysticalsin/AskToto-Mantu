@@ -13,6 +13,23 @@
 /** Where in-flight evaluations live inside the candidate, keyed per evaluation. */
 export const PENDING_GLOBAL = '__st1pending'
 
+/** History's degraded-view budget: a History open or search answers with a usable list within this. */
+export const HISTORY_BUDGET_MS = 2_000
+
+/** Command-line flags as camelCase keys over `defaults`: `--cloud-dir x` becomes `cloudDir: 'x'`. A flag
+ *  with no value (last, or followed by another flag) is the string 'true'. */
+export function parseArgs(argv, defaults = {}) {
+  const args = { ...defaults }
+  for (let i = 0; i < argv.length; i++) {
+    const flag = argv[i]
+    if (!flag.startsWith('--')) continue
+    const key = flag.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())
+    const next = argv[i + 1]
+    args[key] = next === undefined || next.startsWith('--') ? 'true' : argv[++i]
+  }
+  return args
+}
+
 /** Resolves with `promise`'s outcome, or `{ ok: false, timedOut: true }` after `ms`. Never rejects; the
  *  timer is cleared as soon as either side settles. */
 export function withTimeout(promise, ms) {
@@ -91,10 +108,41 @@ export function historyEntry(tMs, outcome) {
   return { tMs, ...outcome.value }
 }
 
-/** The app's own native boot stage timings (tray stages, window construction and first show): every
+/** The boot window variants the QA-identity build can construct (src/main/infra/observability/projection.ts
+ *  BOOT_WINDOW_VARIANTS, M2-0516). An ST-1 run always launches 'shipped'. */
+export const WINDOW_VARIANTS = ['shipped', 'spellcheck-off', 'paint-when-hidden', 'prewarm-spellchecker', 'prewarm-view']
+
+/** The only purpose besides ST-1 itself: a short launch that measures the window constructor under one variant. */
+export const WINDOW_CONSTRUCTION = 'window-construction'
+
+/**
+ * `--purpose` and `--window-variant`, checked: `{ purpose, windowVariant }` or `{ error }`. Without a purpose the
+ * run is ST-1 and builds the shipped window, so a variant is refused there; a window-construction run names
+ * one known variant.
+ * @param {{ purpose?: string, windowVariant?: string }} args
+ */
+export function runPurpose({ purpose, windowVariant }) {
+  if (purpose === undefined) {
+    if (windowVariant !== undefined) return { error: `--window-variant needs --purpose ${WINDOW_CONSTRUCTION}` }
+    return { purpose: 'st-1', windowVariant: 'shipped' }
+  }
+  if (purpose !== WINDOW_CONSTRUCTION) return { error: `--purpose must be ${WINDOW_CONSTRUCTION}, got ${JSON.stringify(purpose)}` }
+  if (!WINDOW_VARIANTS.includes(windowVariant)) {
+    return { error: `--window-variant must be one of ${WINDOW_VARIANTS.join(', ')}, got ${JSON.stringify(windowVariant)}` }
+  }
+  return { purpose, windowVariant }
+}
+
+/** The candidate's environment: this one, on the isolated profile, with the window variant set explicitly so an
+ *  inherited value can never reach an ST-1 run. */
+export function candidateEnv(env, profile, windowVariant) {
+  return { ...env, ASKTOTO_USERDATA: profile, METIS_QA_WINDOW_VARIANT: windowVariant }
+}
+
+/** The app's own native boot stage timings (tray stages, window construction, navigation and first show): every
  *  `app.boot.stage` record of an audit log's text, in order, so each run names its long stretches without a
- *  CPU profile. Lines that are not a complete JSON record are skipped. A window stage keeps the chrome it
- *  built. With the launch's wall-clock spawn time, each stage also says when its record was written since
+ *  CPU profile. Lines that are not a complete JSON record are skipped. A window stage keeps the chrome and
+ *  variant it built. With the launch's wall-clock spawn time, each stage also says when its record was written since
  *  the spawn (`sinceSpawnMs`): the app writes it in a task after the stage, so it bounds the stage's end
  *  from above. */
 export function bootStagesFromAudit(auditText, spawnedWallMs) {
@@ -114,6 +162,7 @@ export function bootStagesFromAudit(auditText, spawnedWallMs) {
       ms: typeof record.ms === 'number' ? Math.round(record.ms * 10) / 10 : null,
       ts: record.ts,
       ...(typeof record.transparent === 'boolean' ? { transparent: record.transparent } : {}),
+      ...(typeof record.windowVariant === 'string' ? { windowVariant: record.windowVariant } : {}),
       ...(typeof spawnedWallMs === 'number' && Number.isFinite(endedAt) ? { sinceSpawnMs: endedAt - spawnedWallMs } : {})
     })
   }
@@ -150,8 +199,56 @@ export function witnessSummary(timeline, loop) {
   return { loop: loop ?? null, write: { maxMs: max('writeMs') }, cpuBusyMaxPct: max('cpuBusyPct') }
 }
 
-/** The pass/fail criteria. They read only the measurement, never the attribution evidence. */
-export function evaluateCriteria(row, measured, evidence) {
+/** The History probes that reached a window (`skipped` ones did not: no window bridged History yet). */
+function historyProbes(measured) {
+  return measured.history.filter((entry) => !entry.skipped)
+}
+
+/** Whether one History probe of `row` opened History (list + brain status) with a usable list, or searched
+ *  with results, within HISTORY_BUDGET_MS. A hung or failed probe did neither; a failed search
+ *  (`searchError`) did not search. A usable list lists at least one fixture row, so a fast empty list never
+ *  passes; on the dataless row at least one of them is a 'not downloaded' row (the degraded view). On the
+ *  FIFO row the search must hit at least one fixture (their file names carry the `st1` query); a dataless
+ *  row's fixtures are the QA folder's own files, whose names the query need not match. */
+function openedInBudget(row) {
+  return (entry) =>
+    !entry.hung &&
+    !entry.error &&
+    entry.rows >= 1 &&
+    (row !== 'dataless' || entry.notDownloaded >= 1) &&
+    entry.ms < HISTORY_BUDGET_MS
+}
+function searchedInBudget(row) {
+  return (entry) =>
+    !entry.hung &&
+    !entry.error &&
+    !entry.searchError &&
+    typeof entry.hits === 'number' &&
+    (row !== 'fifo' || entry.hits >= 1) &&
+    entry.searchMs < HISTORY_BUDGET_MS
+}
+
+/** The History row's summary: the first probe is History's first call, the one that paid any start-up wait. */
+export function historySummary(measured) {
+  const probes = historyProbes(measured)
+  const max = (key) => {
+    const values = probes.map((entry) => entry[key]).filter((value) => typeof value === 'number')
+    return values.length > 0 ? Math.max(...values) : null
+  }
+  return {
+    probes: probes.length,
+    firstOpenMs: probes[0]?.ms ?? null,
+    maxOpenMs: max('ms'),
+    maxSearchMs: max('searchMs'),
+    maxRows: max('rows'),
+    maxNotDownloaded: max('notDownloaded')
+  }
+}
+
+/** The pass/fail criteria. They read only the measurement, never the attribution evidence. The History row
+ *  (`history`) adds History open and search: every probe, the first one included, answers with a usable
+ *  list of fixture rows (and, on the FIFO row, a search hit) within HISTORY_BUDGET_MS. */
+export function evaluateCriteria(row, measured, evidence, { history = false } = {}) {
   const criteria = [
     { name: 'inspector', pass: true }, // only reached once the candidate actually produced a working inspector
     { name: 'has-samples', pass: measured.samples.length > 0 },
@@ -162,6 +259,14 @@ export function evaluateCriteria(row, measured, evidence) {
     { name: 'dns-lookup < 250', pass: measured.samples.every((s) => s.lookupMs < 250) }
   ]
   if (row === 'dataless') criteria.push({ name: 'still-dataless', pass: evidence?.stillDataless === true })
+  if (history) {
+    const probes = historyProbes(measured)
+    criteria.push(
+      { name: 'history-probed', pass: probes.length > 0 },
+      { name: `history-open < ${HISTORY_BUDGET_MS}`, pass: probes.length > 0 && probes.every(openedInBudget(row)) },
+      { name: `history-search < ${HISTORY_BUDGET_MS}`, pass: probes.length > 0 && probes.every(searchedInBudget(row)) }
+    )
+  }
   return criteria
 }
 
@@ -175,17 +280,20 @@ export function emptyRun() {
  * The ST-1 report. `complete` is false for the periodic partial report and for a run the harness itself
  * could not finish (`harnessError`); either has verdict INCOMPLETE, because a measurement that stopped
  * early proves nothing either way. A complete run's verdict comes from the criteria alone; the runner
- * witness and the boot stages are report-only.
+ * witness and the boot stages are report-only. A window-construction run (`purpose`) says so, names its variant
+ * and is never ST-1 evidence (`st1Evidence: false`), whatever its verdict.
  */
-export function buildReport({ row, installer, candidate, minutes, measured, evidence, fixtures, attribution, complete, harnessError }) {
-  const criteria = evaluateCriteria(row, measured, evidence)
+export function buildReport({ row, history = false, installer, candidate, minutes, measured, evidence, fixtures, attribution, complete, harnessError, purpose = 'st-1', windowVariant = 'shipped' }) {
+  const criteria = evaluateCriteria(row, measured, evidence, { history })
   // The control row has nothing to exercise: its verdict is the criteria alone.
   const exercised = row === 'none' || evidence?.exercised
   const verdict = !complete ? 'INCOMPLETE' : !exercised ? 'NOT_EXERCISED' : criteria.every((c) => c.pass) ? 'PASS' : 'FAIL'
   const timeline = [...measured.samples, ...measured.late.map((entry) => ({ ...entry, late: true }))].sort((a, b) => a.tMs - b.tMs)
   return {
     harness: 'ST-1',
+    ...(purpose === WINDOW_CONSTRUCTION ? { purpose, st1Evidence: false, windowVariant } : {}),
     row,
+    ...(history ? { historyRow: true } : {}),
     platform: process.platform,
     arch: process.arch,
     installer,
@@ -202,6 +310,7 @@ export function buildReport({ row, installer, candidate, minutes, measured, evid
     exercised: evidence?.exercised ?? null,
     ...(row === 'fifo' ? { fixturesOpened: evidence?.fixturesOpened ?? null } : {}),
     ...(row === 'dataless' ? { stillDataless: evidence?.stillDataless ?? null } : {}),
+    ...(history ? { historySummary: historySummary(measured) } : {}),
     criteria,
     verdict,
     complete,
@@ -224,10 +333,11 @@ export function buildReport({ row, installer, candidate, minutes, measured, evid
 }
 
 /** The launch itself never reached a candidate to measure: a genuine FAIL (inspector: false), never a
- *  skipped row. */
-export function buildLaunchFailureReport({ row, installer, candidate, fixtures, reason }) {
+ *  skipped row. A window-construction launch is marked as in buildReport. */
+export function buildLaunchFailureReport({ row, installer, candidate, fixtures, reason, purpose = 'st-1', windowVariant = 'shipped' }) {
   return {
     harness: 'ST-1',
+    ...(purpose === WINDOW_CONSTRUCTION ? { purpose, st1Evidence: false, windowVariant } : {}),
     row,
     platform: process.platform,
     arch: process.arch,

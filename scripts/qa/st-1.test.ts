@@ -1,16 +1,22 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { BOOT_WINDOW_VARIANTS } from '../../src/main/infra/observability/projection'
 import {
   PENDING_GLOBAL,
+  WINDOW_VARIANTS,
   bootStagesFromAudit,
   buildLaunchFailureReport,
   buildReport,
+  candidateEnv,
   cpuBusyPct,
   emptyRun,
   evaluateCriteria,
   historyEntry,
+  historySummary,
+  parseArgs,
   pinnedExpression,
   recordSample,
   releaseExpression,
+  runPurpose,
   withTimeout,
   witnessSummary
 } from './lib/st-1-core.mjs'
@@ -179,6 +185,63 @@ describe('bootStagesFromAudit (M2-0515)', () => {
     const text = JSON.stringify({ ts: '2026-09-29T10:00:00.400Z', event: 'app.boot.stage', stage: 'createTray.loadIcon' })
     expect(bootStagesFromAudit(text)).toEqual([{ stage: 'createTray.loadIcon', ms: null, ts: '2026-09-29T10:00:00.400Z' }])
   })
+
+  it('keeps the variant a window stage was built under, and the navigation stage (M2-0516)', () => {
+    const text = [
+      JSON.stringify({ ts: '2026-09-29T10:00:00.400Z', event: 'app.boot.stage', stage: 'createWindow.construct', ms: 760, transparent: false, windowVariant: 'spellcheck-off' }),
+      JSON.stringify({ ts: '2026-09-29T10:00:00.450Z', event: 'app.boot.stage', stage: 'createWindow.navigate', ms: 31.04 })
+    ].join('\n')
+    expect(bootStagesFromAudit(text)).toEqual([
+      { stage: 'createWindow.construct', ms: 760, ts: '2026-09-29T10:00:00.400Z', transparent: false, windowVariant: 'spellcheck-off' },
+      { stage: 'createWindow.navigate', ms: 31, ts: '2026-09-29T10:00:00.450Z' }
+    ])
+  })
+})
+
+describe('window-construction runs (M2-0516)', () => {
+  it('knows exactly the variants the app can build', () => {
+    expect(WINDOW_VARIANTS).toEqual([...BOOT_WINDOW_VARIANTS])
+  })
+
+  it('makes a run without a purpose an ST-1 run on the shipped window, and refuses a variant there', () => {
+    expect(runPurpose({})).toEqual({ purpose: 'st-1', windowVariant: 'shipped' })
+    expect(runPurpose({ windowVariant: 'paint-when-hidden' }).error).toMatch(/--window-variant needs --purpose window-construction/)
+  })
+
+  it('takes a window-construction run with one known variant, and refuses an unknown purpose or variant', () => {
+    expect(runPurpose({ purpose: 'window-construction', windowVariant: 'prewarm-view' })).toEqual({
+      purpose: 'window-construction',
+      windowVariant: 'prewarm-view'
+    })
+    expect(runPurpose({ purpose: 'window-construction' }).error).toMatch(/--window-variant must be one of shipped, /)
+    expect(runPurpose({ purpose: 'window-construction', windowVariant: 'transparent' }).error).toMatch(/got "transparent"/)
+    expect(runPurpose({ purpose: 'st-2', windowVariant: 'shipped' }).error).toMatch(/--purpose must be window-construction/)
+  })
+
+  it('always sets the variant for the candidate, so an inherited value never reaches an ST-1 run', () => {
+    const env = candidateEnv({ PATH: '/bin', METIS_QA_WINDOW_VARIANT: 'prewarm-view' }, '/tmp/profile', 'shipped')
+    expect(env).toEqual({ PATH: '/bin', ASKTOTO_USERDATA: '/tmp/profile', METIS_QA_WINDOW_VARIANT: 'shipped' })
+  })
+
+  it('marks its report and launch failure as never ST-1 evidence, whatever the verdict; an ST-1 report carries no mark', () => {
+    const built = report({ purpose: 'window-construction', windowVariant: 'spellcheck-off' })
+    expect(built).toMatchObject({ purpose: 'window-construction', st1Evidence: false, windowVariant: 'spellcheck-off', verdict: 'PASS' })
+    const failed = buildLaunchFailureReport({
+      row: 'none',
+      installer: 'Metis-QA.zip',
+      candidate,
+      fixtures: [],
+      reason: 'no inspector',
+      purpose: 'window-construction',
+      windowVariant: 'prewarm-view'
+    })
+    expect(failed).toMatchObject({ purpose: 'window-construction', st1Evidence: false, windowVariant: 'prewarm-view', verdict: 'FAIL' })
+    for (const st1 of [report({ purpose: 'st-1', windowVariant: 'shipped' }), report()]) {
+      expect(st1).not.toHaveProperty('purpose')
+      expect(st1).not.toHaveProperty('st1Evidence')
+      expect(st1).not.toHaveProperty('windowVariant')
+    }
+  })
 })
 
 describe('cpuBusyPct (M2-0515)', () => {
@@ -329,6 +392,110 @@ describe('buildReport', () => {
       verdicts.push(withWitness.verdict)
     }
     expect(verdicts).toEqual(['PASS', 'FAIL'])
+  })
+})
+
+describe('parseArgs (M2-0193)', () => {
+  it('reads valued flags as camelCase keys over the defaults, and a bare flag as true wherever it stands', () => {
+    expect(parseArgs(['--history', '--fixtures', 'fifo', '--cloud-dir', 'x'], { minutes: '5' })).toEqual({
+      minutes: '5',
+      history: 'true',
+      fixtures: 'fifo',
+      cloudDir: 'x'
+    })
+    expect(parseArgs(['--fixtures', 'none', '--minutes', '3', '--history'], { minutes: '5' })).toEqual({
+      minutes: '3',
+      fixtures: 'none',
+      history: 'true'
+    })
+  })
+})
+
+describe('the History row (M2-0193)', () => {
+  const open = (tMs: number, ms: number, extra: Record<string, unknown> = {}) => ({
+    tMs,
+    ms,
+    rows: 6,
+    notDownloaded: 4,
+    searchMs: 40,
+    hits: 4,
+    ...extra
+  })
+  const historyRun = (history: unknown[]) => ({ ...emptyRun(), samples: [goodSample(1_000)], loop: { p99Ms: 12, maxMs: 40 }, history })
+  const historyCriteria = (history: unknown[], row = 'fifo') =>
+    Object.fromEntries(
+      evaluateCriteria(row, historyRun(history), { stillDataless: true }, { history: true }).map((c) => [c.name, c.pass])
+    )
+
+  it('fails History open on a fast empty list, and search on the FIFO row on a fast empty result', () => {
+    const empty = historyCriteria([open(20_000, 30), open(25_000, 30, { rows: 0, notDownloaded: 0, hits: 0 })])
+    expect(empty['history-open < 2000']).toBe(false)
+    expect(empty['history-search < 2000']).toBe(false)
+    const noHits = historyCriteria([open(20_000, 30, { hits: 0 })])
+    expect(noHits['history-open < 2000']).toBe(true)
+    expect(noHits['history-search < 2000']).toBe(false)
+  })
+
+  it('on the dataless row, needs a not-downloaded row in every list but no search hit on the QA folder', () => {
+    expect(historyCriteria([open(20_000, 30, { hits: 0 })], 'dataless')).toMatchObject({
+      'history-open < 2000': true,
+      'history-search < 2000': true
+    })
+    expect(historyCriteria([open(20_000, 30, { notDownloaded: 0 })], 'dataless')['history-open < 2000']).toBe(false)
+    expect(historyCriteria([open(20_000, 30, { rows: 0, notDownloaded: 0 })], 'dataless')['history-open < 2000']).toBe(false)
+  })
+
+  it('passes when every probe, the first included, opens and searches with a usable list within 2 s', () => {
+    expect(historyCriteria([open(20_000, 1_900), open(25_000, 30)])).toMatchObject({
+      'history-probed': true,
+      'history-open < 2000': true,
+      'history-search < 2000': true
+    })
+  })
+
+  it('fails History open on a first call that waits out the 2 s budget, even when every later call is fast', () => {
+    const criteria = historyCriteria([open(20_000, 2_004), open(25_000, 30), open(30_000, 25)])
+    expect(criteria['history-open < 2000']).toBe(false)
+    expect(criteria['history-search < 2000']).toBe(true)
+  })
+
+  it('fails on a hung or failed open, and fails search on a failed or slow search alone', () => {
+    expect(historyCriteria([{ tMs: 20_000, hung: true, ms: 10_000 }])['history-open < 2000']).toBe(false)
+    expect(historyCriteria([{ tMs: 20_000, hung: true, ms: 10_000 }])['history-search < 2000']).toBe(false)
+    expect(historyCriteria([{ tMs: 20_000, ms: 5, error: 'boom' }])['history-open < 2000']).toBe(false)
+    const failedSearch = historyCriteria([open(20_000, 30, { hits: undefined, searchError: 'boom' })])
+    expect(failedSearch['history-open < 2000']).toBe(true)
+    expect(failedSearch['history-search < 2000']).toBe(false)
+    expect(historyCriteria([open(20_000, 30, { searchMs: 2_000 })])['history-search < 2000']).toBe(false)
+  })
+
+  it('fails every History criterion when no probe reached a window, ignoring skipped probes otherwise', () => {
+    const none = historyCriteria([{ tMs: 20_000, skipped: 'no window' }])
+    expect(none).toMatchObject({ 'history-probed': false, 'history-open < 2000': false, 'history-search < 2000': false })
+    expect(historyCriteria([{ tMs: 20_000, skipped: 'no window' }, open(25_000, 30)])['history-open < 2000']).toBe(true)
+  })
+
+  it('adds no History criterion without --history', () => {
+    expect(evaluateCriteria('fifo', historyRun([open(20_000, 9_000)]), {}).map((c) => c.name)).not.toContain('history-open < 2000')
+    expect(report({ measured: historyRun([open(20_000, 9_000)]) }).verdict).toBe('PASS')
+  })
+
+  it('reports the first call apart from the rest, and fails the report on it', () => {
+    const measured = historyRun([{ tMs: 20_000, skipped: 'no window' }, open(25_000, 2_050), open(30_000, 30, { searchMs: 90, notDownloaded: 5 })])
+    expect(historySummary(measured)).toEqual({
+      probes: 2,
+      firstOpenMs: 2_050,
+      maxOpenMs: 2_050,
+      maxSearchMs: 90,
+      maxRows: 6,
+      maxNotDownloaded: 5
+    })
+    const built = report({ row: 'fifo', history: true, measured, evidence: { exercised: true, fixturesOpened: ['x'] } })
+    expect(built.historyRow).toBe(true)
+    expect(built.historySummary?.firstOpenMs).toBe(2_050)
+    expect(built.verdict).toBe('FAIL')
+    expect(report({ row: 'fifo', history: true, measured: historyRun([open(25_000, 30)]), evidence: { exercised: true } }).verdict).toBe('PASS')
+    expect(report().historySummary).toBeUndefined()
   })
 })
 

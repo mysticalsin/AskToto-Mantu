@@ -115,7 +115,7 @@ export function rightEdgeStateMismatches(observation, state, layout) {
  * Installs (idempotently) the cursor stub, the click-through capture and the geometry trace on every live
  * window. The trace records only primitive geometry and call names; it never captures page content.
  */
-const MAIN_RE_HIDE_SHIM = `(() => {
+export const MAIN_RE_HIDE_SHIM = `(() => {
   const { screen, BrowserWindow } = globalThis.__metisReHideElectron
   const state = (globalThis.__metisReHide ??= { cursor: null, clickThrough: new WeakMap(), geometry: [] })
   if (!state.realCursor) {
@@ -195,7 +195,7 @@ const MAIN_RE_HIDE_SHIM = `(() => {
 const mainReHideGeometrySince = (since) =>
   `(() => globalThis.__metisReHide.geometry.filter((entry) => entry.t >= ${Number(since)}).map(({ t, ...entry }) => ({ ms: t - ${Number(since)}, ...entry })))()`
 
-const MAIN_RE_HIDE_SNAPSHOT = `(() => {
+export const MAIN_RE_HIDE_SNAPSHOT = `(() => {
   const { screen, BrowserWindow } = globalThis.__metisReHideElectron
   const state = globalThis.__metisReHide
   const w = BrowserWindow.getAllWindows().find((c) => !c.isDestroyed() && /\\/renderer\\/index\\.html/.test(c.webContents.getURL()))
@@ -212,7 +212,7 @@ const MAIN_RE_HIDE_SNAPSHOT = `(() => {
   }
 })()`
 
-const setMainCursor = (point) =>
+export const setMainCursor = (point) =>
   `(() => { globalThis.__metisReHide.cursor = ${point ? JSON.stringify({ x: Math.round(point.x), y: Math.round(point.y) }) : 'null'}; return true })()`
 
 async function rightEdgePageState(page) {
@@ -512,7 +512,7 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
 }
 
 /** Minimal Chrome DevTools Protocol client for the main process's Node inspector. */
-async function mainInspector(inspectPort) {
+export async function mainInspector(inspectPort) {
   const deadline = Date.now() + 30_000
   let wsUrl = null
   while (!wsUrl && Date.now() < deadline) {
@@ -539,18 +539,31 @@ async function mainInspector(inspectPort) {
     socket.addEventListener('open', () => resolve())
     socket.addEventListener('error', () => reject(new Error('main-process inspector socket failed to connect')))
   })
-  const evaluate = async (expression) => {
+  const send = async (method, params) => {
     const id = nextId++
     const answer = new Promise((resolve) => pending.set(id, resolve))
-    socket.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression, awaitPromise: true, returnByValue: true } }))
-    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('main-process evaluate timed out')), 10_000))
+    socket.send(JSON.stringify({ id, method, params }))
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error(`main-process ${method} timed out`)), 10_000))
     const message = await Promise.race([answer, timeout])
     if (message.error) throw new Error(message.error.message)
     if (message.result?.exceptionDetails) throw new Error(message.result.exceptionDetails.exception?.description ?? message.result.exceptionDetails.text)
-    return message.result?.result?.value
+    return message.result
+  }
+  const evaluate = async (expression) =>
+    (await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }))?.result?.value
+  const clickTray = async () => {
+    const prototype = await send('Runtime.evaluate', { expression: 'globalThis.__metisReHideElectron.Tray.prototype' })
+    const trays = await send('Runtime.queryObjects', { prototypeObjectId: prototype.result.objectId })
+    const clicked = await send('Runtime.callFunctionOn', {
+      objectId: trays.objects.objectId,
+      functionDeclaration:
+        "function () { const live = (t) => { try { return !t.isDestroyed() } catch { return false } }; const tray = this.find(live); if (!tray) return false; let bounds = {}; try { bounds = tray.getBounds() } catch {} tray.emit('click', {}, bounds); return true }",
+      returnByValue: true
+    })
+    return clicked?.result?.value === true
   }
   await evaluate("globalThis.__metisReHideElectron = process.mainModule.require('electron'); true")
-  return { evaluate, close: () => socket.close() }
+  return { evaluate, clickTray, close: () => socket.close() }
 }
 
 export async function runPackagedRightEdgeHideRows({ port, inspectPort, rows }) {

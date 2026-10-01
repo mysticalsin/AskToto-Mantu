@@ -58,12 +58,21 @@ import { basename, dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { attach, freeLoopbackPort, killOwned, ownedCensus, runProcess, sleep } from './lib/app-driver.mjs'
 import { initialNavigationGuardRows, runPackagedNavigationGuardRows, withOverlayPage } from './golden-flows/navigation-guard-rows.mjs'
+import { initialOverlayStabilityRows, runPackagedOverlayStabilityRows } from './golden-flows/overlay-stability-rows.mjs'
 import { initialRightEdgeHideRows, runPackagedRightEdgeHideRows } from './golden-flows/right-edge-hide-rows.mjs'
 import { initialRvRows, RV_BOOT_ROW_ID, runPackagedRvRows } from './golden-flows/reveal-rows.mjs'
 import { AUDIT_POLL_MS, isOverlayUrl, parseAuditLog, readAuditLog } from './golden-flows/smoke-support.mjs'
 import { listProcesses, ownedProcesses, roleCounts, survivors as computeSurvivors } from './owned-processes.mjs'
 
 export { NAVIGATION_GUARD_BOOTSTRAP_PATCH, NAVIGATION_GUARD_SCENARIOS, initialNavigationGuardRows } from './golden-flows/navigation-guard-rows.mjs'
+export {
+  initialOverlayStabilityRows,
+  OVERLAY_STABILITY_SCENARIOS,
+  OV_STABLE_PATH_MS,
+  overlayStablePath,
+  overlaySurfaceChanges,
+  runOverlayStabilityRows
+} from './golden-flows/overlay-stability-rows.mjs'
 export {
   RIGHT_EDGE_HIDE_SCENARIOS,
   LATE_NATIVE_FRAME_HOLD_MS,
@@ -171,6 +180,17 @@ export function smokeVerdict(observation) {
       Array.isArray(observation.rightEdgeHide) &&
       observation.rightEdgeHide.some((row) => !rowIsTerminal(row))
   )
+  fail(
+    'overlay_stability_failed',
+    Array.isArray(observation.overlayStability) && observation.overlayStability.some((row) => row.status === 'FAIL')
+  )
+  fail(
+    'overlay_stability_incomplete',
+    observation.readyMs !== null &&
+      !observation.exitedEarly &&
+      Array.isArray(observation.overlayStability) &&
+      observation.overlayStability.some((row) => !rowIsTerminal(row))
+  )
   fail('smoke_incomplete', failures.length === 0 && observation.survivors === null)
 
   return { result: failures.length === 0 ? 'pass' : 'fail', failures }
@@ -203,6 +223,7 @@ export function smokeReport(observation) {
     rv: observation.rv,
     navigationGuard: observation.navigationGuard,
     rightEdgeHide: observation.rightEdgeHide ?? null,
+    overlayStability: observation.overlayStability ?? null,
     processes: {
       atQuit: observation.ownedAtQuit === null ? null : roleCounts(observation.ownedAtQuit),
       survivors: observation.survivors === null ? null : roleCounts(observation.survivors)
@@ -457,6 +478,7 @@ async function main() {
     rv: initialRvRows(platform),
     navigationGuard: initialNavigationGuardRows(),
     rightEdgeHide: initialRightEdgeHideRows(),
+    overlayStability: initialOverlayStabilityRows(),
     survivors: null,
     survivorsGoneMs: null
   }
@@ -528,6 +550,7 @@ async function main() {
     if (observation.readyMs !== null && !observation.exitedEarly) {
       await runPackagedNavigationGuardRows({ port, rows: observation.navigationGuard, executable, env })
       await runPackagedRvRows({ platform, target, executable, auditLogPath, rows: observation.rv, env })
+      await runPackagedOverlayStabilityRows({ port, inspectPort, auditLogPath, rows: observation.overlayStability })
       await runPackagedRightEdgeHideRows({ port, inspectPort, rows: observation.rightEdgeHide })
 
       const survivalDeadline = Date.now() + SURVIVAL_MS

@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { RUNNER_LABELS, SCENARIOS } from '../qa/candidate-scenarios.mjs'
+import { RUNNER_LABELS, SCENARIOS, resolveScenario } from '../qa/candidate-scenarios.mjs'
+import { LAUNCH_MIN_MS, worstCaseRunMs } from '../qa/ex-suite.mjs'
 import { findUnpinnedUses } from './check-workflow-pins.mjs'
 
 const root = join(__dirname, '..', '..')
@@ -47,9 +48,10 @@ const stepIndex = (all: string[], fragment: string) => {
 }
 
 describe('candidate-scenarios.yml', () => {
-  it('is dispatched by hand only, with the candidate run, a scenario choice and one sha256 per platform', () => {
+  it('self-registers on pull requests and dispatches by hand with the candidate run, a scenario choice and one sha256 per platform', () => {
     const on = block(lines, 'on:', 0).filter((line) => /^ {2}\S/.test(line))
-    expect(on).toEqual(['  workflow_dispatch:'])
+    expect(on).toEqual(['  pull_request:', '  workflow_dispatch:'])
+    expect(block(lines, '  pull_request:', 2)).toEqual(['    paths:', '      - .github/workflows/candidate-scenarios.yml'])
     const inputs = block(lines, '    inputs:', 4)
     expect(inputs.filter((line) => /^ {6}\S/.test(line)).map((line) => line.trim())).toEqual([
       'candidate_run:',
@@ -58,7 +60,8 @@ describe('candidate-scenarios.yml', () => {
       'win_sha256:'
     ])
     expect(block(inputs, '      candidate_run:', 6)).toContain('        required: true')
-    expect(workflow).toMatch(/^run-name: .*\$\{\{ inputs\.scenario \}\}.*\$\{\{ inputs\.candidate_run \}\}$/m)
+    expect(workflow).toContain("'Candidate scenarios (registration)'")
+    expect(workflow).toContain("format('Candidate scenario {0} on {1}', inputs.scenario, inputs.candidate_run)")
   })
 
   it('offers exactly the registry scenarios as choices', () => {
@@ -78,7 +81,7 @@ describe('candidate-scenarios.yml', () => {
 
   it('guards on this repository and main, and refuses any run that is not a qa-candidate.yml dispatch on main', () => {
     const guard = job('guard')
-    const repositoryGuard = "if: github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'"
+    const repositoryGuard = "if: github.event_name == 'workflow_dispatch' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'"
     expect(guard).toContain(`    ${repositoryGuard}`)
     expect(read('qa-candidate.yml')).toContain("github.repository == 'mysticalsin/AskToto-Mantu'")
     // qa-candidate.yml builds on main and release/1.9.x only; this lane stays narrower and takes main candidates only.
@@ -101,31 +104,90 @@ describe('candidate-scenarios.yml', () => {
     for (const platform of platforms) {
       const body = job(platform)
       expect(body).toContain('    needs: guard')
-      expect(body).toContain(`    if: needs.guard.outputs.${platform} == 'true'`)
+      expect(body).toContain(`    if: github.event_name == 'workflow_dispatch' && needs.guard.outputs.${platform} == 'true'`)
       expect(body).toContain(`    runs-on: ${RUNNER_LABELS[platform as keyof typeof RUNNER_LABELS]}`)
       expect(block(job('guard'), '    outputs:', 4).join('\n')).toContain(`${platform}_sha256: \${{ steps.resolve.outputs.${platform}_sha256 }}`)
+      expect(block(job('guard'), '    outputs:', 4).join('\n')).toContain(`${platform}_timeout_minutes: \${{ steps.resolve.outputs.${platform}_timeout_minutes }}`)
+      expect(block(job('guard'), '    outputs:', 4).join('\n')).toContain(
+        `${platform}_step_timeout_minutes: \${{ steps.resolve.outputs.${platform}_step_timeout_minutes }}`
+      )
     }
   })
 
   it('installs the verified candidate bytes selected by sha256 into a fresh directory before the scenario', () => {
     const mac = steps('mac')
     const order = [
+      'Record the job start time',
       '--name candidate-provenance',
       'node scripts/qa/provenance.mjs verify provenance/provenance.json assets "$VARIANT"',
       'jq -r .run.id provenance/provenance.json',
-      'node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" mac',
+      'candidate-scenarios.mjs installer-kind --scenario "$SCENARIO" --platform mac',
+      'node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" "$selector"',
       'codesign --verify --deep --strict',
+      'echo "path=$app" >> "$GITHUB_OUTPUT"',
       'candidate-scenarios.mjs profile',
       'candidate-scenarios.mjs run'
     ].map((fragment) => stepIndex(mac, fragment))
     expect(order).toEqual([...order].sort((a, b) => a - b))
     const install = mac[stepIndex(mac, 'codesign')]
-    expect(install).toContain('target="$RUNNER_TEMP/candidate-install"')
+    expect(install).toContain('id: install')
+    expect(install).toContain('target="candidate-install"')
+    expect(install).toContain('rm -rf "$target"')
     expect(install).toContain('mkdir "$target"')
+    expect(install).toContain('volume="$RUNNER_TEMP/candidate-volume"')
     expect(install).toContain('hdiutil attach')
     expect(install).toContain('ditto -x -k "$INSTALLER" "$target"')
+    expect(install).toContain('echo "app=$app" >> "$GITHUB_OUTPUT"')
     expect(mac[stepIndex(mac, '--name "$ARTIFACT"')]).toContain('gh run download "$CANDIDATE_RUN"')
     expect(job('mac')).toContain('      ARTIFACT: ${{ needs.guard.outputs.mac_artifact }}')
+    expect(job('mac')).toContain('    timeout-minutes: ${{ fromJSON(needs.guard.outputs.mac_timeout_minutes) }}')
+    const selector = mac[stepIndex(mac, 'node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" "$selector"')]
+    expect(selector).toContain('candidate-scenarios.mjs installer-kind --scenario "$SCENARIO" --platform mac')
+    const run = mac[stepIndex(mac, 'candidate-scenarios.mjs run')]
+    expect(run).toContain('timeout-minutes: ${{ fromJSON(needs.guard.outputs.mac_step_timeout_minutes) }}')
+    expect(run).toContain('INSTALLER: ${{ steps.installer.outputs.path }}')
+    expect(run).toContain('APP: ${{ steps.install.outputs.app }}')
+    expect(run).toContain('--app "$APP"')
+  })
+
+  it('sets an upload-safe idle-soak deadline before running each hosted scenario job', () => {
+    const mac = steps('mac')
+    const win = steps('win')
+    const jobStart = mac[0]
+    expect(jobStart).toContain('name: Record the job start time')
+    expect(jobStart).toContain('id: job-start')
+    expect(jobStart).toContain('date +%s')
+    const deadline = mac[stepIndex(mac, 'Set the soak deadline')]
+    expect(deadline).toContain('id: soak-deadline')
+    expect(deadline).toContain('JOB_STARTED_AT_MS: ${{ steps.job-start.outputs.epoch_ms }}')
+    expect(deadline).toContain('MAC_TIMEOUT_MINUTES: ${{ needs.guard.outputs.mac_timeout_minutes }}')
+    expect(deadline).toContain("import { jobSafeDeadlineEpochMs } from './scripts/qa/soak/idle-soak.mjs'")
+    expect(deadline).toContain('jobSafeDeadlineEpochMs({')
+    expect(deadline).toContain('jobStartedAtMs: Number(process.env.JOB_STARTED_AT_MS)')
+    expect(deadline).toContain('timeoutMinutes: Number(process.env.MAC_TIMEOUT_MINUTES)')
+    const run = mac[stepIndex(mac, 'candidate-scenarios.mjs run')]
+    expect(run).toContain('SOAK_DEADLINE_EPOCH_MS: ${{ steps.soak-deadline.outputs.epoch_ms }}')
+    expect(stepIndex(mac, 'Record the job start time')).toBe(0)
+    expect(stepIndex(mac, 'Set the soak deadline')).toBeLessThan(stepIndex(mac, 'candidate-scenarios.mjs run'))
+
+    expect(win[0]).toContain('name: Record the job start time')
+    const winDeadline = win[stepIndex(win, 'Set the soak deadline')]
+    expect(winDeadline).toContain('WIN_TIMEOUT_MINUTES: ${{ needs.guard.outputs.win_timeout_minutes }}')
+    expect(winDeadline).toContain("import { jobSafeDeadlineEpochMs } from './scripts/qa/soak/idle-soak.mjs'")
+    expect(winDeadline).toContain('timeoutMinutes: Number(process.env.WIN_TIMEOUT_MINUTES)')
+    expect(win[stepIndex(win, 'candidate-scenarios.mjs run')]).toContain('SOAK_DEADLINE_EPOCH_MS: ${{ steps.soak-deadline.outputs.epoch_ms }}')
+    expect(stepIndex(win, 'Record the job start time')).toBe(0)
+    expect(stepIndex(win, 'Set the soak deadline')).toBeLessThan(stepIndex(win, 'candidate-scenarios.mjs run'))
+  })
+
+  it('gives ex-suite a scenario step and job timeout that cover its 3 launches of at least 130 s plus boot, quit and the control', () => {
+    const plan = resolveScenario({ scenario: 'ex-suite', sha256: { mac: 'a'.repeat(64) } })
+    const stepMs = plan.mac.stepTimeoutMinutes * 60_000
+    const jobMs = plan.mac.timeoutMinutes * 60_000
+    expect(SCENARIOS['ex-suite'].platforms.mac.args({ app: 'Metis.app', report: 'r.json' })).toContain('3')
+    expect(worstCaseRunMs(3)).toBeGreaterThanOrEqual(3 * LAUNCH_MIN_MS)
+    expect(stepMs).toBeGreaterThanOrEqual(worstCaseRunMs(3))
+    expect(jobMs).toBeGreaterThan(stepMs)
   })
 
   it('uploads the lane artifact on every run and fails only after the upload', () => {
@@ -153,20 +215,43 @@ describe('candidate-scenarios.yml', () => {
     expect(verdict).toContain('exit 1')
   })
 
-  it('offers sidecar-boot-reaper, which runs on both the macOS and the Windows job', () => {
+  it('offers idle-soak and sidecar-boot-reaper from the registry', () => {
     const options = block(block(block(lines, '    inputs:', 4), '      scenario:', 6), '        options:', 8).map((line) => line.trim())
+    expect(options).toContain('- idle-soak')
     expect(options).toContain('- sidecar-boot-reaper')
+    expect(Object.keys(SCENARIOS['idle-soak'].platforms)).toEqual(['mac', 'win'])
     expect(Object.keys(SCENARIOS['sidecar-boot-reaper'].platforms)).toEqual(['mac', 'win'])
     expect(job('win')).toContain('    runs-on: windows-latest')
   })
 
-  it('hands the installed app to the scenario on macOS', () => {
+  it('keeps per-scenario timeouts in the registry and gives idle-soak long hosted jobs', () => {
+    expect(SCENARIOS['idle-soak'].platforms.mac.timeoutMinutes).toBe(355)
+    expect(SCENARIOS['idle-soak'].platforms.mac.stepTimeoutMinutes).toBe(340)
+    expect(SCENARIOS['idle-soak'].platforms.win.timeoutMinutes).toBe(355)
+    expect(SCENARIOS['idle-soak'].platforms.win.stepTimeoutMinutes).toBe(340)
+    expect(job('win')).toContain('    timeout-minutes: ${{ fromJSON(needs.guard.outputs.win_timeout_minutes) }}')
+    const win = steps('win')
+    expect(win[stepIndex(win, 'candidate-scenarios.mjs run')]).toContain(
+      'timeout-minutes: ${{ fromJSON(needs.guard.outputs.win_step_timeout_minutes) }}'
+    )
+  })
+
+  it('offers packaged-lifecycle, which runs on both hosted platform jobs', () => {
+    const options = block(block(block(lines, '    inputs:', 4), '      scenario:', 6), '        options:', 8).map((line) => line.trim())
+    expect(options).toContain('- packaged-lifecycle')
+    expect(Object.keys(SCENARIOS['packaged-lifecycle'].platforms)).toEqual(['mac', 'win'])
+    expect(job('mac')).toContain('    runs-on: macos-latest')
+    expect(job('win')).toContain('    runs-on: windows-latest')
+  })
+
+  it('hands the installed app to the scenario on macOS, after the signature check', () => {
     const mac = steps('mac')
     const install = mac[stepIndex(mac, 'codesign --verify --deep --strict')]
-    expect(install).toContain('id: install')
+    expect(install).toContain('        id: install')
     expect(install).toContain('echo "app=$app" >> "$GITHUB_OUTPUT"')
+    expect(install.indexOf('echo "app=$app"')).toBeGreaterThan(install.indexOf('codesign --verify --deep --strict'))
     const scenario = mac[stepIndex(mac, 'candidate-scenarios.mjs run')]
-    expect(scenario).toContain('APP: ${{ steps.install.outputs.app }}')
+    expect(scenario).toContain('          APP: ${{ steps.install.outputs.app }}')
     expect(scenario).toContain('--app "$APP"')
   })
 
@@ -176,7 +261,8 @@ describe('candidate-scenarios.yml', () => {
       '--name candidate-provenance',
       'node scripts/qa/provenance.mjs verify provenance/provenance.json assets "$VARIANT"',
       "require('./provenance/provenance.json').run.id",
-      'node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" win',
+      'candidate-scenarios.mjs installer-kind --scenario "$SCENARIO" --platform win',
+      'node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" "$selector"',
       "'/S', \"/D=$target\"",
       'candidate-scenarios.mjs profile --scenario "$SCENARIO" --platform win',
       'candidate-scenarios.mjs run'

@@ -261,6 +261,7 @@ function hkMStep(hkMCycles: string | undefined) {
     timeoutMinutes: Number(field(/\n {8}timeout-minutes: (.+)\n/)),
     cycles: field(/\n {10}HK_M_CYCLES: (.+)\n/),
     budgetMs: field(/\n {10}HK_M_BUDGET_MS: (.+)\n/),
+    profile: block.match(/\n {10}HK_M_PROFILE: (.+)\n/)?.[1],
     command: block.match(/\n {8}run: (.+)(?:\n|$)/)?.[1]
   }
 }
@@ -274,16 +275,31 @@ function macJobTimeout(hkMCycles: string | undefined): number {
 describe('packaged-smoke workflow HK-M cycles input', () => {
   it('offers hk_m_cycles on workflow_dispatch as a choice of 1 or 20 defaulting to 1', () => {
     const block = eventBlock('workflow_dispatch')
+    const cycles = block.slice(
+      block.findIndex((line) => line.trim() === 'hk_m_cycles:'),
+      block.findIndex((line) => line.trim() === 'hk_m_profile:')
+    )
     expect(block.join('\n')).toContain('    inputs:\n      hk_m_cycles:')
-    expect(block.some((line) => line.trim() === 'type: choice')).toBe(true)
-    expect(block.filter((line) => /^ {10}- /.test(line)).map((line) => cleanScalar(line.slice(12)))).toEqual(['1', '20'])
-    expect(block.some((line) => line.trim() === "default: '1'")).toBe(true)
+    expect(cycles.some((line) => line.trim() === 'type: choice')).toBe(true)
+    expect(cycles.filter((line) => /^ {10}- /.test(line)).map((line) => cleanScalar(line.slice(12)))).toEqual(['1', '20'])
+    expect(cycles.some((line) => line.trim() === "default: '1'")).toBe(true)
+  })
+
+  it('offers hk_m_profile beside hk_m_cycles as fresh or shared defaulting to fresh', () => {
+    const block = eventBlock('workflow_dispatch')
+    expect(block.join('\n')).toContain('      hk_m_cycles:')
+    expect(block.join('\n')).toContain('      hk_m_profile:')
+    const profile = block.slice(block.findIndex((line) => line.trim() === 'hk_m_profile:'))
+    expect(profile.some((line) => line.trim() === 'type: choice')).toBe(true)
+    expect(profile.filter((line) => /^ {10}- /.test(line)).slice(0, 2).map((line) => cleanScalar(line.slice(12)))).toEqual(['fresh', 'shared'])
+    expect(profile.some((line) => line.trim() === 'default: fresh')).toBe(true)
   })
 
   it.each([undefined, '1'])('keeps the default path at one cycle, 1200000 ms, step timeout 25 (input %s)', (input) => {
     const step = hkMStep(input)
     expect(step).toMatchObject({ timeoutMinutes: 25, cycles: '1', budgetMs: '1200000' })
-    expect(step.command).toBe('node scripts/qa/hk-m.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/hk-m.json --cycles "$HK_M_CYCLES" --budget-ms "$HK_M_BUDGET_MS"')
+    expect(step.profile).toBe("${{ inputs.hk_m_profile || 'fresh' }}")
+    expect(step.command).toBe('node scripts/qa/hk-m.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/hk-m.json --cycles "$HK_M_CYCLES" --profile "$HK_M_PROFILE" --budget-ms "$HK_M_BUDGET_MS"')
     expect(macJobTimeout(input)).toBe(120)
   })
 
@@ -292,6 +308,7 @@ describe('packaged-smoke workflow HK-M cycles input', () => {
     const step = hkMStep('20')
     expect(step).toMatchObject({ timeoutMinutes: 140, cycles: '20', budgetMs: '8100000' })
     expect(candidate).toContain('--cycles 20 --budget-ms 8100000')
+    expect(candidate).toContain('--cycles 20 --profile shared --budget-ms 8100000')
     expect(candidate).toContain('timeout-minutes: 140')
     expect(macJobTimeout('20')).toBeGreaterThan(140)
     expect(macJobTimeout('20')).toBeLessThanOrEqual(180)
@@ -300,7 +317,7 @@ describe('packaged-smoke workflow HK-M cycles input', () => {
   it('fails a 20-cycle rehearsal unless the report is a full pass and names the cycle count', () => {
     const block = stepBlock('Fail the HK-M rehearsal unless every row passed')
     expect(block).toContain("if: always() && inputs.hk_m_cycles == '20'")
-    expect(block).toContain('HK-M rehearsal: 20 cycles')
+    expect(block).toContain("HK-M rehearsal: 20 cycles (${{ inputs.hk_m_profile || 'fresh' }} profile)")
     expect(block).toContain("row.status === 'NOT_RUN'")
     expect(block).toContain("r.result === 'pass' && notRun === 0 ? 0 : 1")
     expect(block).toContain('GITHUB_STEP_SUMMARY')
