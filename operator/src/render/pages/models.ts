@@ -14,8 +14,11 @@ import type { DashboardPayload } from '../../dashboard'
 import { emptyState, esc, pageHeader, type RenderCtx } from '../index'
 import { when } from './_shared'
 import {
+  DEFAULT_LOCAL_SPEECH_PACK,
+  LOCAL_SPEECH_PACK_VALUES,
   MODEL_POLICY_CAPABILITIES,
   MODEL_POLICY_CAPABILITY_LABELS,
+  type LocalSpeechPackPolicy,
   type ModelPolicyCapability,
   type ModelPolicyDocument
 } from '../../../../src/shared/model-policy'
@@ -38,6 +41,27 @@ function capabilityEditRow(cap: ModelPolicyCapability, policy: ModelPolicyDocume
     <label>Provider <input type="text" name="${cap}.provider" value="${esc(entry?.provider ?? '')}" required maxlength="64"></label>
     <label>Model <input type="text" name="${cap}.model" value="${esc(entry?.model ?? '')}" required maxlength="200"></label>
     <label>Fallbacks <input type="text" name="${cap}.fallbacks" value="${esc(entry ? fallbacksText(entry.fallbacks) : '')}" placeholder="provider:model, provider:model"></label>
+  </div>`
+}
+
+function localSpeechPackLabel(value: LocalSpeechPackPolicy): string {
+  if (value === 'required') return 'Required — managed download starts automatically'
+  if (value === 'blocked') return 'Blocked — no onboarding card or download'
+  return 'Offered — automatic onboarding download'
+}
+
+function localSpeechPackReadRow(policy: ModelPolicyDocument | null): string {
+  const value = policy?.localSpeechPack ?? DEFAULT_LOCAL_SPEECH_PACK
+  return `<div class="rule"><h3>Local speech pack</h3><p>${esc(localSpeechPackLabel(value))}</p></div>`
+}
+
+function localSpeechPackEditRow(policy: ModelPolicyDocument | null): string {
+  const value = policy?.localSpeechPack ?? DEFAULT_LOCAL_SPEECH_PACK
+  return `<div class="rule model-policy-row">
+    <h3>Local speech pack</h3>
+    <label>Policy <select name="localSpeechPack">
+      ${LOCAL_SPEECH_PACK_VALUES.map((v) => `<option value="${v}"${v === value ? ' selected' : ''}>${esc(localSpeechPackLabel(v))}</option>`).join('')}
+    </select></label>
   </div>`
 }
 
@@ -70,6 +94,7 @@ function editFormScript(nonce: string): string {
     e.preventDefault();
     var fd = new FormData(form);
     var capabilities = {};
+    var localSpeechPack = String(fd.get('localSpeechPack') || 'offered').trim();
     for (var i = 0; i < caps.length; i++) {
       var cap = caps[i];
       var fallbacksRaw = String(fd.get(cap + '.fallbacks') || '').trim();
@@ -89,7 +114,7 @@ function editFormScript(nonce: string): string {
     fetch('/v1/admin/model-policy.json', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ capabilities: capabilities })
+      body: JSON.stringify({ capabilities: capabilities, localSpeechPack: localSpeechPack })
     }).then(function (res) {
       return res.json().then(function (body) { return { ok: res.ok, body: body }; });
     }).then(function (result) {
@@ -111,6 +136,7 @@ export function renderModels(data: DashboardPayload, ctx: RenderCtx): string {
   const readCard = `<article class="card pad-b10">
     <p class="eyebrow">Fleet model policy</p>
     ${policy ? '' : '<p class="muted">Not managed: no owner policy has been set yet. Every app uses its own local defaults.</p>'}
+    ${localSpeechPackReadRow(policy)}
     ${MODEL_POLICY_CAPABILITIES.map((cap) => capabilityReadRow(cap, policy)).join('')}
   </article>`
   const editCard =
@@ -118,6 +144,7 @@ export function renderModels(data: DashboardPayload, ctx: RenderCtx): string {
       ? `<article class="card pad-b10">
     <p class="eyebrow">Change the policy</p>
     <form id="model-policy-form">
+      ${localSpeechPackEditRow(policy)}
       ${MODEL_POLICY_CAPABILITIES.map((cap) => capabilityEditRow(cap, policy)).join('')}
       <button type="submit" class="primary">Save policy</button>
       <p id="model-policy-msg" class="muted"></p>
