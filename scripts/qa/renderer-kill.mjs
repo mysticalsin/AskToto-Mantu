@@ -151,7 +151,7 @@ export function emptyObservation({ times, windowS }) {
  * the previous one, which bounds the reload's time alive after its did-finish-load) or kills spanning the
  * window is a PRECONDITION: the product would then be right to reload again. Otherwise PASS needs all of:
  * `times` render-process-gone crashes, times-1 automatic reloads, one app.render_loop_halted, no overlay
- * renderer after the halt, no app.error.reload_failed, main alive throughout, the halted dialog seen
+ * renderer and no new renderer process after the halt, no app.error.reload_failed, main alive throughout, the halted dialog seen
  * through System Events and quit through its Quit button, and no survivor or orphan in the census.
  * @param {Observation} observation
  * @returns {{ result: 'PASS' | 'FAIL' | 'PRECONDITION', failures: string[], preconditions: string[] }}
@@ -187,6 +187,13 @@ export function verdict(observation) {
   }
   if (observation.afterHalt.overlayRenderers > 0) {
     failures.push(`an overlay renderer came back within ${observation.afterHalt.watchMs} ms of the last kill (reload storm)`)
+  }
+  // A 4th reload attempt spawns a renderer before its page reaches the preload, so any new renderer process
+  // under main after the last kill fails the run even if no page ever exposes window.toto.
+  if (observation.afterHalt.rendererProcesses > 0) {
+    failures.push(
+      `${observation.afterHalt.rendererProcesses} new renderer processes started within ${observation.afterHalt.watchMs} ms of the last kill (reload attempt)`
+    )
   }
   if (events['app.error.reload_failed'] > 0) failures.push(`${events['app.error.reload_failed']} app.error.reload_failed audits`)
   if (!observation.afterHalt.dialog) failures.push('no halted dialog with Reload and Quit buttons was found through System Events')

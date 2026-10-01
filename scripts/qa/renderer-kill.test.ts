@@ -65,6 +65,16 @@ describe('verdict', () => {
     ])
   })
 
+  it('fails a 4th reload attempt whose renderer never exposes window.toto within the watch', () => {
+    const attempt = passingRun()
+    attempt.afterHalt.rendererProcesses = 1
+    expect(verdict(attempt)).toEqual({
+      result: 'FAIL',
+      failures: ['1 new renderer processes started within 20000 ms of the last kill (reload attempt)'],
+      preconditions: []
+    })
+  })
+
   it('fails a missing app.render_loop_halted even when the dialog showed', () => {
     const run = passingRun()
     run.events = eventCounts(audit({ halts: 0 }))
