@@ -394,7 +394,11 @@ export function startOperatorRuntime(
     const generation = runtimeGeneration
     const beat = await operatorHeartbeat(getSettings())
     if (generation !== runtimeGeneration) return
-    hooks?.onReadinessChanged?.()
+    if (suppressNextHeartbeatReadiness) {
+      suppressNextHeartbeatReadiness = false
+    } else {
+      hooks?.onReadinessChanged?.()
+    }
     if (beat.retry.length && hooks?.onCrmRetry) {
       await hooks.onCrmRetry(beat.retry)
     }
@@ -407,10 +411,11 @@ export function startOperatorRuntime(
   let policyInFlight = false
   let policyPending = false
   let policyFailureBackoffMs = POLICY_FAILURE_BACKOFF_INITIAL_MS
+  let suppressNextHeartbeatReadiness = false
   const schedulePolicyRetry = (): void => {
     if (policyRetryTimer || policyGeneration !== runtimeGeneration) return
     const delay = Math.min(policyFailureBackoffMs, POLICY_POLL_MS)
-    policyFailureBackoffMs = Math.min(policyFailureBackoffMs * 2, POLICY_POLL_MS)
+    policyFailureBackoffMs = POLICY_POLL_MS
     policyRetryTimer = setTimeout(() => {
       policyRetryTimer = null
       pollPolicy('failure-backoff')
@@ -461,6 +466,8 @@ export function startOperatorRuntime(
     () => app.removeListener('network-online' as never, notifyOperatorNetworkOnline as never)
   ]
   pollPolicy('startup')
+  hooks?.onReadinessChanged?.()
+  suppressNextHeartbeatReadiness = true
   void tick()
   // One timer at the policy cadence: every firing polls the policy, every second firing runs the heartbeat.
   let firings = 0
