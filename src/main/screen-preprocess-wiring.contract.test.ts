@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest'
  */
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const settingsSrc = readFileSync(
-  join(__dirname, '..', 'renderer', 'src', 'components', 'Settings.tsx'),
+  join(__dirname, '..', 'renderer', 'src', 'features', 'settings', 'AudioTab.tsx'),
   'utf8'
 )
 
