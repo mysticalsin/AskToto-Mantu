@@ -26,7 +26,11 @@
  *
  * `--history` makes it the History row: every History probe also runs a search (recallSearch) through the
  * same bridge, and the criteria add History open and search, each answering with a usable (possibly
- * degraded: not-downloaded rows) list within 2 s on every probe, the first call included. Only counts and
+ * degraded: not-downloaded rows) list within 2 s on every probe, the first call included. Every probe also
+ * times recallList, brainStatus and recallSearch on their own (`calls`), and the report's `historySummary`
+ * gives each call's first, p50, p95 and max time with the History row's own verdict (first recallList
+ * < 250 ms, every list and search within 2 s, main loop p99 < 50 ms) and, for a slow first recallList,
+ * whether this launch's main.log says every meetings-root permit was held by a stalled call. Only counts and
  * timings leave the renderer, never a row or a hit.
  *
  * Usage:
@@ -36,14 +40,19 @@
  *       [--out <report.json>] [--report-dir <dir>] [--purpose window-construction --window-variant <variant>]
  *
  * `--purpose window-construction` marks a short launch made only to measure the boot window's constructor under
- * one QA-identity rendering variant (shipped, spellcheck-off, paint-when-hidden, prewarm-spellchecker,
- * prewarm-view), passed to the candidate as METIS_QA_WINDOW_VARIANT. Its report says `st1Evidence: false` and is
+ * one QA-identity rendering variant (shipped, spellcheck-off, paint-when-hidden, prewarm-spellchecker), passed to
+ * the candidate as METIS_QA_WINDOW_VARIANT. Its report says `st1Evidence: false` and is
  * never ST-1 evidence. Every other run launches the shipped variant.
  *
  * Every in-app wait is bounded and every failure to answer is recorded in the report's `errors` (step, tMs,
  * message) while the run continues: only the criteria decide PASS or FAIL. The report is rewritten every
  * 30 s while the run lasts and once more however it ends, so the report directory always holds one; a run
  * that stopped early says INCOMPLETE.
+ *
+ * `--gate-window <dir> [--out <gate.json>]` launches nothing: it reads every window-construction report one folder
+ * below `<dir>` and applies the window-construction gate (M2-0519): every shipped createWindow.prewarm and
+ * createWindow.construct, in both chromes, present and under 250 ms. It prints and writes the gate, and exits 1
+ * when the gate fails.
  *
  * Exit codes: 0 PASS, 1 FAIL, NOT_EXERCISED or INCOMPLETE, 2 usage.
  */
@@ -72,6 +81,7 @@ import {
   buildLaunchFailureReport,
   buildReport,
   candidateEnv,
+  countStorageSaturations,
   cpuBusyPct,
   emptyRun,
   failureRecord,
@@ -81,6 +91,8 @@ import {
   recordSample,
   releaseExpression,
   runPurpose,
+  timedCallsExpression,
+  windowConstructionGate,
   withTimeout
 } from './lib/st-1-core.mjs'
 
@@ -106,6 +118,9 @@ const PROFILE_STOP_TIMEOUT_MS = 30_000
 const HISTORY_FROM_MS = 20_000
 const HISTORY_EVERY_MS = 5_000
 const HISTORY_TIMEOUT_MS = 10_000
+/** Each History call's own bound in the renderer: twice the 2 s budget, and the open plus the search still
+ *  settle within HISTORY_TIMEOUT_MS, so every call of a probe keeps its own time even when one of them hangs. */
+const HISTORY_CALL_BOUND_MS = 4_000
 const MAIN_LOG_QUERY_TIMEOUT_MS = 10_000
 /** What the History row searches for: any query exercises the whole search path over every row. */
 const HISTORY_SEARCH_QUERY = 'st1'
@@ -404,9 +419,23 @@ const MAIN_LOG_PATH = `(() => {
   }
 })()`
 
+/** History's open: recallList and brainStatus started together, as History does, each timed on its own. */
+const HISTORY_OPEN_CALLS = timedCallsExpression(
+  {
+    recallList: 'window.toto.recallList().then((rows) => ({ rows: rows.length, notDownloaded: rows.filter((row) => row.notDownloaded).length }))',
+    brainStatus: 'window.toto.brainStatus().then(() => true)'
+  },
+  HISTORY_CALL_BOUND_MS
+)
+const HISTORY_SEARCH_CALL = timedCallsExpression(
+  { recallSearch: `window.toto.recallSearch(${JSON.stringify(HISTORY_SEARCH_QUERY)}).then((hits) => hits.length)` },
+  HISTORY_CALL_BOUND_MS
+)
+
 /** One History open (recallList + brainStatus) through the real preload bridge, timed inside the main
- *  process, then (the History row, `search`) one search. The results stay in the renderer: only counts come
- *  back — rows, not-downloaded rows and hits. */
+ *  process (`ms`, `searchMs`) and per call inside the renderer (`open`, `search`), then (the History row,
+ *  `search`) one search. The results stay in the renderer: only counts come back — rows, not-downloaded rows
+ *  and hits. lib/st-1-core.mjs historyEntry turns the outcomes into the report's record. */
 const historyProbe = (search) => `(async () => {
   const load = process.mainModule?.require
   if (typeof load !== 'function') return { skipped: 'process.mainModule.require is unavailable in the compiled main' }
@@ -418,20 +447,18 @@ const historyProbe = (search) => `(async () => {
     )
     if (!bridged) continue
     let started = performance.now()
-    let opened
+    let open
     try {
-      opened = await win.webContents.executeJavaScript(
-        'Promise.all([window.toto.recallList(), window.toto.brainStatus()]).then(([rows]) => ({ rows: rows.length, notDownloaded: rows.filter((row) => row.notDownloaded).length }))'
-      )
+      open = await win.webContents.executeJavaScript(${JSON.stringify(HISTORY_OPEN_CALLS)})
     } catch (error) {
       return { ms: performance.now() - started, error: String(error?.message ?? error) }
     }
-    const probe = { ms: performance.now() - started, ...opened }
+    const probe = { ms: performance.now() - started, open }
     if (!${Boolean(search)}) return probe
     started = performance.now()
     try {
-      const hits = await win.webContents.executeJavaScript(${JSON.stringify(`window.toto.recallSearch(${JSON.stringify(HISTORY_SEARCH_QUERY)}).then((hits) => hits.length)`)})
-      return { ...probe, searchMs: performance.now() - started, hits }
+      const { recallSearch } = await win.webContents.executeJavaScript(${JSON.stringify(HISTORY_SEARCH_CALL)})
+      return { ...probe, searchMs: performance.now() - started, search: recallSearch }
     } catch (error) {
       return { ...probe, searchMs: performance.now() - started, searchError: String(error?.message ?? error) }
     }
@@ -629,6 +656,17 @@ function readBootStages(profile, spawnedWallMs) {
   }
 }
 
+/** How many times this launch's main.log says every meetings-root permit was held by a stalled call; null
+ *  when it could not be read. Never throws. */
+function readStorageSaturations(mainLog) {
+  try {
+    if (!mainLog?.path || !existsSync(mainLog.path)) return null
+    return countStorageSaturations(readFileSync(mainLog.path).subarray(mainLog.fromByte).toString('utf8'))
+  } catch {
+    return null
+  }
+}
+
 /** Whether the run actually reached the fixtures, and (dataless only) whether they stayed unread. */
 function collectExercisedEvidence(kind, fixtures, mainLogPath, mainLogOffset, root) {
   if (kind === 'none') return { exercised: null }
@@ -673,8 +711,45 @@ function cleanup({ kind, root, profile, unzipDir, witnessFile }) {
   if (unzipDir) rmSync(unzipDir, { recursive: true, force: true })
 }
 
+/** Every report one folder below `dir` (`<dir>/<run>/<run>.json`), each named by its path relative to `dir`. A
+ *  file that does not parse is skipped; the gate then finds its stages missing. */
+function readWindowReports(dir) {
+  const reports = []
+  for (const run of readdirSync(dir, { withFileTypes: true })) {
+    if (!run.isDirectory()) continue
+    for (const file of readdirSync(join(dir, run.name))) {
+      if (!file.endsWith('.json')) continue
+      try {
+        reports.push({ name: join(run.name, file), report: JSON.parse(readFileSync(join(dir, run.name, file), 'utf8')) })
+      } catch {
+        /* not a report */
+      }
+    }
+  }
+  return reports
+}
+
+/** The window-construction gate over a report directory: 0 when it passes, 1 when it fails. */
+function gateWindow(dir, out) {
+  const gate = { harness: 'ST-1', gate: 'window-construction', ...windowConstructionGate(existsSync(dir) ? readWindowReports(dir) : []) }
+  if (out) {
+    mkdirSync(dirname(out), { recursive: true })
+    writeFileSync(out, `${JSON.stringify(gate, null, 2)}\n`)
+  }
+  console.log(JSON.stringify(gate, null, 2))
+  for (const failure of gate.failures) console.error(`[st-1] window gate FAIL — ${failure}`)
+  return gate.pass ? 0 : 1
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2), { minutes: String(DEFAULT_MINUTES) })
+  if (args.gateWindow !== undefined) {
+    if (args.gateWindow === 'true') {
+      console.error('usage: node scripts/qa/st-1.mjs --gate-window <report dir> [--out <gate.json>]')
+      return 2
+    }
+    return gateWindow(args.gateWindow, args.out)
+  }
   if (!args.installer || !args.provenance || !args.fixtures) {
     console.error('usage: node scripts/qa/st-1.mjs --installer <path> --provenance <path> --fixtures fifo|dataless|none [--history] [options]')
     return 2
@@ -738,6 +813,7 @@ async function main() {
   let mainLog = null
   let appEvidence = null
   let bootStages = null
+  let storageSaturations = null
   let spawnedWallMs = null
   // The runner witness's probe write, on the temp volume the profile is created on.
   const witnessFile = join(tmpdir(), `st1-witness-${process.pid}.txt`)
@@ -754,7 +830,7 @@ async function main() {
       minutes,
       measured: run,
       evidence,
-      attribution: { mainLog, appEvidence, bootStages },
+      attribution: { mainLog, appEvidence, bootStages, storageSaturations },
       complete,
       harnessError
     })
@@ -828,6 +904,7 @@ async function main() {
     if (child && profile && !launchFailure) {
       appEvidence = copyAppEvidence(profile, mainLog, join(reportDir, `${reportBase}-app`))
       bootStages = readBootStages(profile, spawnedWallMs)
+      storageSaturations = readStorageSaturations(mainLog)
     }
     // A cleanup failure is rethrown after this block, never from it: a throw inside `finally` would replace
     // the error that is already propagating.

@@ -623,7 +623,8 @@ jobs:
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 
   # The History row (M2-0193): History open and search against the FIFO fixtures, each answering with a
-  # usable degraded list within 2 s, the first call included, with main loop p99 < 50 ms. Report-only per
+  # usable degraded list within 2 s, the first call included, with main loop p99 < 50 ms; each History call
+  # is also timed on its own and judged by historySummary (first recallList < 250 ms, M2-0512). Report-only per
   # owner decision OD-24, like the fifo row. The real dataless half needs a cloud provider's evicted files,
   # which a hosted runner has none of: it is recorded as BLOCKED_EXTERNAL with its unblock step.
   st1-mac-history:
@@ -665,6 +666,23 @@ jobs:
             --history \
             --minutes 3 \
             --out st1-report/st-1-macos-fifo-history.json
+      # M2-0512: the History row's per-call split (recallList, brainStatus, recallSearch: first, p50, p95, max),
+      # its own verdict (first recallList < 250 ms, every list and search < 2 s, main loop p99 < 50 ms) and the
+      # cause of a slow first recallList, readable from the run page without downloading the artifact.
+      - name: Show the History row's per-call split
+        if: always()
+        run: |
+          report=st1-report/st-1-macos-fifo-history.json
+          if [ ! -f "$report" ]; then
+            echo "::warning::$report was not written; the History row has no per-call split."
+            exit 0
+          fi
+          {
+            echo '### ST-1 History row (macOS, fifo): historySummary'
+            echo '```json'
+            jq '.historySummary' "$report"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Record the dataless History row's unblock step
         if: always()
         run: |
@@ -680,6 +698,32 @@ jobs:
             "provenanceArtifact": "candidate-provenance"
           }
           EOF
+      # M2-0512: the lead's filing step travels with the artifact, pinned to the candidate zip's sha256.
+      - name: Record the lead action for the History row
+        if: always()
+        run: |
+          mkdir -p st1-report
+          installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
+          sha=""
+          if [ -n "$installer" ]; then
+            sha=$(shasum -a 256 "$installer" | cut -d' ' -f1)
+          fi
+          jq -n --arg sha "$sha" '{
+            harness: "ST-1",
+            historyRow: true,
+            candidateSha256: $sha,
+            provenanceArtifact: "candidate-provenance",
+            leadAction: "LEAD_ACTION: dispatch qa-candidate ST-1 on the lane candidate (sha256) with --fixtures fifo on macos-latest and --fixtures dataless, plus ST-1-W on windows-latest; file historySummary and the per-call split",
+            blockedExternal: [
+              "st-1-macos-dataless-history-blocked.json",
+              "st-1-windows-history-blocked.json (artifact st-1-windows-blocked)"
+            ]
+          }' > st1-report/st-1-history-lead-action.json
+          {
+            echo '### ST-1 History row: lead action'
+            echo "LEAD_ACTION: dispatch qa-candidate ST-1 on the lane candidate (sha256) with --fixtures fifo on macos-latest and --fixtures dataless, plus ST-1-W on windows-latest; file historySummary and the per-call split"
+            echo "Candidate zip sha256: ${sha:-unknown}"
+          } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
@@ -688,18 +732,19 @@ jobs:
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 
-  # Report-only measurement (M2-0516), never a gate and never ST-1 evidence: short launches (--purpose
+  # Window-construction measurement (M2-0516), never ST-1 evidence: short launches (--purpose
   # window-construction, st1Evidence: false) that build the boot window under each QA-identity rendering variant,
   # in both chromes, twice, interleaved, all on this one runner so the numbers compare. A first-run profile builds
   # the opaque exclusive onboarding window; an onboarded bar profile builds the transparent overlay. Each report's
-  # bootStages carries createWindow.construct (with the chrome and variant built), createWindow.navigate and
-  # createWindow.firstShow.
+  # bootStages carries createWindow.prewarm and createWindow.construct (with the chrome and variant built),
+  # createWindow.navigate and createWindow.firstShow. The other variants stay report-only; the shipped window is
+  # gated (M2-0519): the job fails unless every shipped createWindow.prewarm and createWindow.construct is present
+  # and under 250 ms in both chromes.
   st1-mac-window:
-    name: ST-1 window construction per variant and chrome (report-only)
+    name: ST-1 window construction per variant and chrome (shipped gated < 250 ms)
     needs: provenance
     runs-on: macos-latest
     timeout-minutes: 45
-    continue-on-error: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -729,7 +774,7 @@ jobs:
           # The durable settings of a user who finished onboarding with the bar layout (plain JSON is a supported read path).
           printf '{"onboardingDone":true,"onboardingDoneAt":%s000,"recordingConsent":true,"overlayLayout":"bar","autoHideOverlay":false}\n' "$(date +%s)" > onboarded-profile/settings.json
           for repeat in 1 2; do
-            for variant in shipped spellcheck-off paint-when-hidden prewarm-spellchecker prewarm-view; do
+            for variant in shipped spellcheck-off paint-when-hidden prewarm-spellchecker; do
               for chrome in opaque transparent; do
                 template=()
                 if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi
@@ -748,6 +793,9 @@ jobs:
               done
             done
           done
+      - name: Gate the shipped window (createWindow.prewarm and createWindow.construct < 250 ms in both chromes)
+        if: always()
+        run: node scripts/qa/st-1.mjs --gate-window st1-report --out st1-report/window-gate.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
