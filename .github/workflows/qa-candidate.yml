@@ -616,14 +616,8 @@ jobs:
             sfDatalessProbe: { settable: $settable, errno: $errno, output: $probe }
           }' > st1-report/st-1-macos-real-dataless.json
           cat st1-report/st-1-macos-real-dataless.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: always()
-        with:
-          name: st-1-macos-synthetic-dataless
-          path: st1-report/
-          if-no-files-found: error
-          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
       - name: Check the DMG's own stat-flags helper on local paths
+        if: always()
         run: |
           mkdir -p stat-flags-report
           dmg=$(find assets-mac -maxdepth 1 -name '*.dmg' -print -quit)
@@ -647,10 +641,30 @@ jobs:
             mode: "local-only",
             helper: "candidate-mac DMG: Contents/Resources/mac-helper/metis-mac-helper",
             verdict: $verdict,
+            rows: {
+              local: { matchesStat: ($output | test("local=[0-9]+")), sfDatalessSet: false },
+              apfsCompressed: { matchesStat: ($output | test("compressed=[0-9]+")), sfDatalessSet: false },
+              nonAscii: { matchesStat: ($output | test("unicode=[0-9]+")), sfDatalessSet: false },
+              unstatable: { value: null, matchesExpected: ($output | test("missing=null")) }
+            },
             datalessFileCheck: "NOT_RUN_ON_HOSTED",
             output: $output
           }' > stat-flags-report/stat-flags-macos.json
           exit "$status"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: st-1-macos-synthetic-dataless
+          path: st1-report/st-1-macos-synthetic-dataless.json
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: st-1-macos-real-dataless
+          path: st1-report/st-1-macos-real-dataless.json
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:

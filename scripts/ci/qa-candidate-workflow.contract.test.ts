@@ -58,10 +58,14 @@ describe('QA candidate job st1-mac-dataless-synthetic (M2-0505, OD-36)', () => {
     expect(job).toContain('scripts/qa/stat-flags-fixture.sh "$helper" --local-only')
     expect(job).toContain('stat-flags-report/stat-flags-macos.json')
     expect(job).toContain('datalessFileCheck: "NOT_RUN_ON_HOSTED"')
+    expect(job).toContain('local: { matchesStat:')
+    expect(job).toContain('apfsCompressed: { matchesStat:')
+    expect(job).toContain('nonAscii: { matchesStat:')
+    expect(job).toContain('unstatable: { value: null')
   })
 
-  it('uploads the synthetic-dataless report and the stat-flags result even when a step failed', () => {
-    for (const name of ['st-1-macos-synthetic-dataless', 'stat-flags-macos']) {
+  it('uploads the synthetic-dataless report, real-dataless hosted row and stat-flags result even when a step failed', () => {
+    for (const name of ['st-1-macos-synthetic-dataless', 'st-1-macos-real-dataless', 'stat-flags-macos']) {
       const upload = job.split('- uses: actions/upload-artifact@').find((part) => part.includes(`name: ${name}\n`))
       expect(upload, `upload of ${name}`).toBeDefined()
       expect(upload).toContain('if: always()')
