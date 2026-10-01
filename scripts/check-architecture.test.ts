@@ -16,7 +16,6 @@ import {
   compareCounts,
   countDependencyViolations,
   countSourceFile,
-  countTopLevelModule,
   formatBaseline,
   lowerBaseline,
 } from './check-architecture.mjs'
@@ -38,7 +37,6 @@ const RULE_IDS = [
   'FF-11',
   'FF-14',
   'FF-15',
-  'FF-16',
 ]
 
 function sortedViolationLines(stdout: string): string[] {
@@ -323,7 +321,6 @@ describe('architecture ratchet pure functions', () => {
       'FF-11': {},
       'FF-14': {},
       'FF-15': {},
-      'FF-16': {},
     }, null, 2)}\n`)
     expect(Object.keys(JSON.parse(canonical) as Counts)).toEqual(RULE_IDS)
     expect(formatBaseline(JSON.parse(canonical) as Counts)).toBe(canonical)
@@ -593,27 +590,6 @@ describe('architecture source detectors', () => {
       expect(countSourceFile('src/main/infra/scheduler/timers.ts', text)).toEqual({})
       expect(countSourceFile('src/renderer/src/timers.ts', text)).toEqual({})
     })
-  })
-})
-
-describe('FF-16 top-level modules under src/main and src/renderer/src/lib', () => {
-  const sourcePath = (...parts: string[]): string => parts.join('/')
-  const ts = '.' + 'ts'
-  const tsx = ts + 'x'
-
-  it('counts production files directly under the two directories', () => {
-    expect(countTopLevelModule(sourcePath('src', 'main', 'operator-queue' + ts))).toBe(1)
-    expect(countTopLevelModule(sourcePath('src', 'renderer', 'src', 'lib', 'onboarding-flow' + ts))).toBe(1)
-    expect(countTopLevelModule(sourcePath('src', 'renderer', 'src', 'lib', 'useFlash' + tsx))).toBe(1)
-  })
-
-  it('ignores tests, declaration files, feature folders and other directories', () => {
-    expect(countTopLevelModule(sourcePath('src', 'main', 'operator-queue.test' + ts))).toBe(0)
-    expect(countTopLevelModule(sourcePath('src', 'main', 'tar-bz2-extract.d' + ts))).toBe(0)
-    expect(countTopLevelModule(sourcePath('src', 'main', 'features', 'operator', 'queue' + ts))).toBe(0)
-    expect(countTopLevelModule(sourcePath('src', 'renderer', 'src', 'features', 'onboarding', 'flow' + ts))).toBe(0)
-    expect(countTopLevelModule(sourcePath('src', 'renderer', 'src', 'lib', 'tap', 'index' + ts))).toBe(0)
-    expect(countTopLevelModule(sourcePath('src', 'shared', 'hash' + ts))).toBe(0)
   })
 })
 
