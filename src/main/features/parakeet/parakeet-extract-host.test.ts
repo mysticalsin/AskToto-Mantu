@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 const extractTarBz2Windows = vi.hoisted(() => vi.fn())
 
-vi.mock('../../scripts/tar-bz2-extract.mjs', () => ({ extractTarBz2Windows }))
+vi.mock('../../../../scripts/tar-bz2-extract.mjs', () => ({ extractTarBz2Windows }))
 
 import { attachParakeetExtractHost } from './parakeet-extract-host'
 

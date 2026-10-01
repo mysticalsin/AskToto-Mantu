@@ -1,5 +1,5 @@
 /** Windows-only Parakeet archive extraction runs here, never on Electron's main thread. */
-import { extractTarBz2Windows } from '../../scripts/tar-bz2-extract.mjs'
+import { extractTarBz2Windows } from '../../../../scripts/tar-bz2-extract.mjs'
 
 export interface ParakeetExtractHostPort {
   on(event: 'message', listener: (event: { data?: unknown } | unknown) => void): unknown
