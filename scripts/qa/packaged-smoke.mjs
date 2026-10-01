@@ -1995,13 +1995,15 @@ async function mainInspector(inspectPort) {
     (await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }))?.result?.value
   // The app holds its Tray in a module-local binding, so find the live instance on the heap and emit the same
   // 'click' the OS delivers: its listener is the product's own Settings entry (sendHotkey('settings')).
+  // The heap query also returns objects that merely inherit Tray.prototype without being native trays (seen on
+  // Windows); a native method throws "Illegal invocation" on those, so each candidate is probed and skipped.
   const clickTray = async () => {
     const prototype = await send('Runtime.evaluate', { expression: 'globalThis.__metisReHideElectron.Tray.prototype' })
     const trays = await send('Runtime.queryObjects', { prototypeObjectId: prototype.result.objectId })
     const clicked = await send('Runtime.callFunctionOn', {
       objectId: trays.objects.objectId,
       functionDeclaration:
-        "function () { const tray = this.find((t) => !t.isDestroyed()); if (!tray) return false; tray.emit('click', {}, tray.getBounds()); return true }",
+        "function () { const live = (t) => { try { return !t.isDestroyed() } catch { return false } }; const tray = this.find(live); if (!tray) return false; let bounds = {}; try { bounds = tray.getBounds() } catch {} tray.emit('click', {}, bounds); return true }",
       returnByValue: true
     })
     return clicked?.result?.value === true
