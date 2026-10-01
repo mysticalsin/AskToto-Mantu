@@ -1,4 +1,7 @@
 import { EventEmitter } from 'node:events'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import ts from 'typescript'
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLog: vi.fn() }))
@@ -198,5 +201,74 @@ describe('createBootWork (M2-0031)', () => {
     expect(after).toHaveBeenCalledTimes(1)
     expect(vi.mocked(mainLog.warn)).toHaveBeenCalledWith('[boot] throws failed:', expect.any(Error))
     expect(vi.mocked(mainLog.warn)).toHaveBeenCalledWith('[boot] rejects failed:', expect.any(Error))
+  })
+})
+
+describe('boot wiring in index.ts (M2-0518)', () => {
+  // index.ts boots Electron at import, so the wiring is read from its syntax tree: every launch reference to a
+  // boot child process or fs/crypto job must sit inside a job handed to bootWork.run.
+  const indexPath = join(__dirname, '..', 'index.ts')
+  const indexSource = ts.createSourceFile(indexPath, readFileSync(indexPath, 'utf8'), ts.ScriptTarget.Latest, true)
+
+  const findAll = (root: ts.Node, match: (node: ts.Node) => boolean): ts.Node[] => {
+    const found: ts.Node[] = []
+    const visit = (node: ts.Node): void => {
+      if (match(node)) found.push(node)
+      ts.forEachChild(node, visit)
+    }
+    visit(root)
+    return found
+  }
+  const isCallTo = (node: ts.Node, callee: string): node is ts.CallExpression =>
+    ts.isCallExpression(node) && node.expression.getText(indexSource) === callee
+
+  const whenReady = findAll(indexSource, (node) => isCallTo(node, 'app.whenReady().then')) as ts.CallExpression[]
+  const bootCallback = whenReady[0]?.arguments[0]
+
+  /** True when `node` is, or sits inside, the job argument of a bootWork.run call (or a periodic setInterval re-run). */
+  const insideBootJob = (node: ts.Node): boolean => {
+    for (let current: ts.Node = node; current !== bootCallback && current.parent; current = current.parent) {
+      const parent = current.parent
+      if (isCallTo(parent, 'bootWork.run') && parent.arguments[1] === current) return true
+      if (isCallTo(parent, 'setInterval')) return true
+    }
+    return false
+  }
+
+  it.each([
+    'runBootSidecarReaper',
+    'startAvailableMemorySampler',
+    'prewarmCli',
+    'verifyCliSessions',
+    'importEmbeddedCloudflareKey',
+    'provisionLocalModel',
+    'recoverOrphanDrafts',
+    'runRetentionSweep'
+  ])('starts %s at launch only through the boot-work queue', (name) => {
+    expect(whenReady).toHaveLength(1)
+    expect(bootCallback).toBeDefined()
+    const references = findAll(bootCallback!, (node) =>
+      ts.isIdentifier(node) &&
+      node.text === name &&
+      !(ts.isVariableDeclaration(node.parent) && node.parent.name === node) &&
+      !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node)
+    )
+    expect(references.length, `${name} is never started at launch`).toBeGreaterThan(0)
+    for (const reference of references) {
+      const { line } = indexSource.getLineAndCharacterOfPosition(reference.getStart(indexSource))
+      expect(insideBootJob(reference), `index.ts:${line + 1} starts ${name} outside bootWork.run`).toBe(true)
+    }
+  })
+
+  it('opens the gate on the boot window, and holds app suspension off for every overlay window', () => {
+    expect(bootCallback).toBeDefined()
+    expect(findAll(bootCallback!, (node) => isCallTo(node, 'bootWork.releaseAfterFirstShow'))).toHaveLength(1)
+    const createWindow = indexSource.statements.find(
+      (node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'createWindow'
+    )
+    expect(createWindow).toBeDefined()
+    const holds = findAll(createWindow!, (node) => isCallTo(node, 'holdAppSuspensionWhileVisible')) as ts.CallExpression[]
+    expect(holds).toHaveLength(1)
+    expect(holds[0].arguments[1].getText(indexSource)).toBe('powerSaveBlocker')
   })
 })

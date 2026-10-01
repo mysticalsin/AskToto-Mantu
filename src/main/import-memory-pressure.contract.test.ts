@@ -25,7 +25,7 @@ describe('import-memory pressure contract', () => {
   it('defers every unattended local-start entry point before it can start or warm the sidecar', () => {
     const rendererPrewarm = between(index, 'ipcMain.handle(IPC.localPrewarm', '// --- Screen capture ---')
     const earlyEnsure = between(index, 'Overlap local sidecar start', '// Receipt Mode:')
-    const bootWarm = between(index, 'const warmLocalIfReady = (): void => {', 'void provisionLocalModel(')
+    const bootWarm = between(index, 'const warmLocalIfReady = (): void => {', "bootWork.run('provisionLocalModel'")
     const backgroundVlm = between(screenPreprocess, 'if (!text) {', 'if (!text) return')
     const backgroundVlmStart = between(screenPreprocess, 'async function describeOnce', 'async function describeForWindow')
 

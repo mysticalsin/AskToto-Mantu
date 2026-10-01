@@ -656,6 +656,7 @@ import { buildTrayInStages, createSingleFlight, formatTrayAccelerator, loadPresi
 import { BOOT_WINDOW_OPTIONS, BOOT_WINDOW_VARIANT, yieldBeforeBootWindow } from './boot-window-rendering'
 import { isBootFirstShowDeferred, navigateWindow, scheduleCurrentFirstShow, withBootFirstShowDeferred } from './lifecycle/first-show'
 import { createBootWork } from './lifecycle/boot-work'
+import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
 import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
 import { createResponsivenessTracker } from './infra/observability/responsiveness-tracker'
@@ -2769,6 +2770,8 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // freshly-recreated one (render-process-gone recovery reassigns `win` before the old one's 'closed'
   // may fire). Only clear the module ref when it still points at the window that closed.
   const self = win
+  // M2-0518: App Nap must not throttle the shown overlay once the boot power-save hold ends.
+  holdAppSuspensionWhileVisible(self, powerSaveBlocker)
   // `closed` fires after BrowserWindow.destroy() has torn down WebContents. Cache the numeric owner
   // while it is valid; touching `self.webContents` from the callback throws and falsely crashes Métis.
   const selfWebContentsId = self.webContents.id
@@ -9219,7 +9222,12 @@ if (!app.requestSingleInstanceLock()) {
   // Seed an optional installer-embedded Cloudflare proxy key, once per profile, so a fresh install of
   // the default provider can answer with zero paste-a-key setup when the operator chose to embed one.
   // See embedded-cloudflare-key.ts — a no-op when no bundle was packaged.
-  importEmbeddedCloudflareKey()
+  // M2-0518: the first-launch seed decrypts the bundle and writes the keystore, so it starts behind the first show;
+  // the renderer then re-reads settings, so a seeded provider shows as ready without a relaunch.
+  bootWork.run('importEmbeddedCloudflareKey', () => {
+    importEmbeddedCloudflareKey()
+    notifySettingsChanged()
+  })
   {
     setModeSkillsOverlayRoot(join(app.getPath('userData'), 'skills-overrides'))
     const boot = getSettings()
@@ -9250,13 +9258,14 @@ if (!app.requestSingleInstanceLock()) {
       }
     }
     // The warm is unattended model work: it waits for the maintenance gate, so it never starts in the boot quiet period.
-    void provisionLocalModel(getSettings().localLlm, getAllowedProviders(), ensureLocalModel)
+    // M2-0518: provisioning stats, hashes and downloads model files, so it starts behind the first show.
+    bootWork.run('provisionLocalModel', () => provisionLocalModel(getSettings().localLlm, getAllowedProviders(), ensureLocalModel)
       .then((ready) => {
         if (!ready) return
         refreshScreenPreprocess()
         void runAsMaintenance(warmLocalIfReady)
       })
-      .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
+      .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e)))
     void runAsMaintenance(warmLocalIfReady)
   }
   // Windows toast attribution: a process's AppUserModelID must match the installed shortcut's AUMID
