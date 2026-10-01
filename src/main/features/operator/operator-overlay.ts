@@ -3,7 +3,7 @@ import { HUMANIZER_SKILL_ID, isBuiltinConversationMode, type ModeSkillId } from 
 import { operatorUrlConfigured, resolveOperatorBaseUrl, resolveOperatorCredential } from '@shared/operator'
 import { applyOverlaySkillFile } from '../../mode-skills'
 import { hashOperatorId, operatorHmacHeaders } from './operator-hmac-sign'
-import { getDurableMachineId } from '../license/license'
+import { getDurableMachineId } from '../license'
 import { verifyOperatorSkillPack } from './operator-skill-verify'
 import { mainLog } from '../../logger'
 

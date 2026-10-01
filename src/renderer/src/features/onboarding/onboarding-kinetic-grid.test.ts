@@ -18,7 +18,7 @@ import {
 } from './onboarding-kinetic-grid'
 import { shouldMountStarfield } from './onboarding-starfield-spec'
 
-const root = join(__dirname, '..')
+const root = join(__dirname, '..', '..')
 const kineticLib = readFileSync(join(__dirname, './onboarding-kinetic-grid.ts'), 'utf8')
 const kineticHost = readFileSync(join(root, 'components/onboarding/KineticGrid.tsx'), 'utf8')
 const experience = readFileSync(join(root, 'components/OnboardingExperience.tsx'), 'utf8')

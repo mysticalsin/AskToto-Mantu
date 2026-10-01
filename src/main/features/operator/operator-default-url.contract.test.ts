@@ -106,7 +106,7 @@ describe('operatorHeartbeat DEFAULT_OPERATOR_URL fallback', () => {
 })
 
 describe('Open Operator uses resolveOperatorBaseUrl', () => {
-  const source = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
+  const source = readFileSync(join(__dirname, '..', '..', 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
 
   it('opens the resolved HTTPS base so empty Settings still reach the shipped Worker', () => {
     const start = source.indexOf('ipcMain.handle(IPC.operatorOpen')

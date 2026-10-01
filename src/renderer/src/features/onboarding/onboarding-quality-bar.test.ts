@@ -20,8 +20,8 @@ import {
   STARFIELD_SEED_DT
 } from './onboarding-starfield-spec'
 
-const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
-const demo = readFileSync(join(__dirname, '../components/OnboardingDemoScene.tsx'), 'utf8')
+const experience = readFileSync(join(__dirname, '../../components/OnboardingExperience.tsx'), 'utf8')
+const demo = readFileSync(join(__dirname, '../../components/OnboardingDemoScene.tsx'), 'utf8')
 const engine = readFileSync(join(__dirname, './onboarding-starfield-engine.ts'), 'utf8')
 const css = readAppCss()
 

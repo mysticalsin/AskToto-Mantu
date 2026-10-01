@@ -12,7 +12,7 @@ import { HIGH_TIER_ASR_MODEL, asrModelBytes, asrModelFileUrl } from './asr-model
  * the floor). Both are silent failures, which is why they are pinned rather than trusted.
  */
 describe('MQA-247 — the high-tier ASR manifest', () => {
-  const host = readFileSync(join(__dirname, 'whisper-asr-host.ts'), 'utf8')
+  const host = readFileSync(join(__dirname, '..', '..', 'whisper-asr-host.ts'), 'utf8')
 
   it('pins an immutable commit, never a branch', () => {
     // scripts/fetch-models.mjs builds its URLs as /resolve/main/ — a MUTABLE ref. That is exactly the
@@ -58,7 +58,7 @@ describe('MQA-247 — the high-tier ASR manifest', () => {
   it('the packaged app deliberately does NOT ship it — the exclusion and the fetch must agree', () => {
     // If someone ever un-excludes it, this fetch becomes dead weight AND the installer breaches GitHub's
     // 2 GiB per-asset limit. The two decisions are one decision.
-    const builder = readFileSync(join(__dirname, '..', '..', 'electron-builder.yml'), 'utf8')
+    const builder = readFileSync(join(__dirname, '..', '..', '..', '..', 'electron-builder.yml'), 'utf8')
     expect(builder).toContain(`!${HIGH_TIER_ASR_MODEL.id}/**`)
   })
 })
@@ -71,7 +71,7 @@ describe('MQA-247 — the high-tier ASR manifest', () => {
  * connection. Both are pinned against source because neither has a runtime seam that a unit test reaches.
  */
 describe('MQA-247 — the fetch is reachable and explicit', () => {
-  const REPO = join(__dirname, '..', '..')
+  const REPO = join(__dirname, '..', '..', '..', '..')
   const read = (rel: string): string => readFileSync(join(REPO, rel), 'utf8')
   const readSettings = (): string =>
     read('src/renderer/src/features/settings/AiSection.tsx')

@@ -19,7 +19,7 @@ import {
   requestOnboardingPortalClose
 } from './onboarding-portal'
 
-const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
+const experience = readFileSync(join(__dirname, '../../components/OnboardingExperience.tsx'), 'utf8')
 const css = readAppCss()
 const portalSrc = readFileSync(join(__dirname, './onboarding-portal.ts'), 'utf8')
 const stageStart = css.indexOf('.onboard-stage {')

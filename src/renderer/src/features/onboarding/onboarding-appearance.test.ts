@@ -5,7 +5,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { PublicSettings } from '@shared/ipc'
-import { OnboardingAppearance } from '../components/OnboardingAppearance'
+import { OnboardingAppearance } from '../../components/OnboardingAppearance'
 import { persistOverlayPlacement } from './overlay-placement-save'
 import {
   appearancePreviewEdgeState,
@@ -40,8 +40,8 @@ import {
 } from './onboarding-flow'
 
 const appearanceLib = readFileSync(join(__dirname, './onboarding-appearance.ts'), 'utf8')
-const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
-const component = readFileSync(join(__dirname, '../components/OnboardingAppearance.tsx'), 'utf8')
+const experience = readFileSync(join(__dirname, '../../components/OnboardingExperience.tsx'), 'utf8')
+const component = readFileSync(join(__dirname, '../../components/OnboardingAppearance.tsx'), 'utf8')
 const css = readAppCss()
 const design = readFileSync(join(__dirname, '../../../../DESIGN.md'), 'utf8')
 const geometry = readFileSync(join(__dirname, '../../../main/island/geometry.ts'), 'utf8')

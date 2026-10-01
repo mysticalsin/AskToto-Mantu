@@ -107,12 +107,12 @@ test('checkProvisionedPublicKey: "unreadable" when publicKey is absent or not a 
 // --- readDevPlaceholder (reads the literal straight out of the .ts source, no TS loader) ----------
 
 test('readDevPlaceholder: reads the real DEV_OPERATOR_PUBLIC_KEY out of operator-skill-key.ts', () => {
-  const sourcePath = join(HERE, '..', 'src', 'main', 'operator-skill-key.ts')
+  const sourcePath = join(HERE, '..', 'src', 'main', 'features', 'operator', 'operator-skill-key.ts')
   assert.equal(readDevPlaceholder(sourcePath, 'DEV_OPERATOR_PUBLIC_KEY'), REAL_OPERATOR_PLACEHOLDER)
 })
 
 test('readDevPlaceholder: reads the real DEV_LEASE_PUBLIC_KEY out of license-lease-key.ts', () => {
-  const sourcePath = join(HERE, '..', 'src', 'main', 'license-lease-key.ts')
+  const sourcePath = join(HERE, '..', 'src', 'main', 'features', 'license', 'license-lease-key.ts')
   assert.equal(readDevPlaceholder(sourcePath, 'DEV_LEASE_PUBLIC_KEY'), REAL_LEASE_PLACEHOLDER)
 })
 

@@ -11,7 +11,7 @@ import {
   TELL_THE_ROOM_WHY
 } from './onboarding-tell-the-room'
 
-const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
+const experience = readFileSync(join(__dirname, '../../components/OnboardingExperience.tsx'), 'utf8')
 const css = readAppCss()
 const copy = readFileSync(join(__dirname, './onboarding-tell-the-room.ts'), 'utf8')
 

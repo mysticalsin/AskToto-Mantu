@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-const source = (path: string): string => readFileSync(resolve(__dirname, '..', path), 'utf8')
+const source = (path: string): string => readFileSync(resolve(__dirname, '..', '..', '..', path), 'utf8')
 
 describe('MQA-294 licence readiness and credential boundaries', () => {
   it('publishes only credential-presence flags and gates Listen with that flag', () => {

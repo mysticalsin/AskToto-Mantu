@@ -12,7 +12,7 @@ vi.mock('electron')
 
 const source = ts.createSourceFile(
   'index.ts',
-  readFileSync(join(__dirname, 'index.ts'), 'utf8'),
+  readFileSync(join(__dirname, '..', '..', 'index.ts'), 'utf8'),
   ts.ScriptTarget.Latest,
   true
 )

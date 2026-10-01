@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { createStarfieldBed } from './onboarding-starfield-engine'
 
 const engineSrc = readFileSync(join(__dirname, './onboarding-starfield-engine.ts'), 'utf8')
-const componentSrc = readFileSync(join(__dirname, '../components/OnboardingStarfield.tsx'), 'utf8')
+const componentSrc = readFileSync(join(__dirname, '../../components/OnboardingStarfield.tsx'), 'utf8')
 
 describe('Starfield Close engine — dispose, fail, reduced-motion, no fetch', () => {
   it('WebGL1 failure returns null so the tour can keep the video bed', () => {

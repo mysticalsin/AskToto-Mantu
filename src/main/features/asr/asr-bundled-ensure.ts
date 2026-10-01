@@ -22,7 +22,7 @@ import {
   looksLikeHtmlBytes
 } from '@shared/bundle-response'
 import { mainLog } from '../../logger'
-import { extractParakeetArchiveWindows } from '../parakeet/parakeet-extract'
+import { extractParakeetArchiveWindows } from '../parakeet'
 import { asrManifestComplete } from './asr-manifest'
 
 const execFileAsync = promisify(execFile)
@@ -121,7 +121,7 @@ export function asrAssetsProgress(): AsrAssetsProgress {
 
 export function bundledResourceRoot(): string {
   if (testHooks?.bundledResourceRoot) return testHooks.bundledResourceRoot()
-  const repo = join(__dirname, '..', '..')
+  const repo = join(__dirname, '..', '..', '..', '..')
   return app.isPackaged ? process.resourcesPath : join(repo, 'resources')
 }
 

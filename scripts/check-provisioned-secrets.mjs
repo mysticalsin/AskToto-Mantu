@@ -51,14 +51,14 @@ function resolveFamilies(resourcesDir) {
     {
       label: 'operator skill-pack public key',
       resourcePath: join(resourcesDir, 'operator', 'pubkey.json'),
-      devSourcePath: join(REPO_ROOT, 'src', 'main', 'operator-skill-key.ts'),
+      devSourcePath: join(REPO_ROOT, 'src', 'main', 'features', 'operator', 'operator-skill-key.ts'),
       devConstName: 'DEV_OPERATOR_PUBLIC_KEY',
       fixDetail: ''
     },
     {
       label: 'license-lease public key',
       resourcePath: join(resourcesDir, 'license-lease', 'pubkey.json'),
-      devSourcePath: join(REPO_ROOT, 'src', 'main', 'license-lease-key.ts'),
+      devSourcePath: join(REPO_ROOT, 'src', 'main', 'features', 'license', 'license-lease-key.ts'),
       devConstName: 'DEV_LEASE_PUBLIC_KEY',
       fixDetail: ' — for license-lease that JSON is exactly the body GET /license/pubkey returns'
     }

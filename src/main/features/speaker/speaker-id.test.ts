@@ -394,11 +394,11 @@ describe('autoEnrollFromLabeledWindows — Teams-VTT auto-enrollment flywheel (P
 
 describe('speaker:embed — the Whisper-engine speaker-embedding tap (contract)', () => {
   // index.ts has no unit harness (see MQA-043's test above), so this pins the wiring against the source.
-  const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
-  const preloadSrc = readFileSync(join(__dirname, '..', 'preload', 'index.ts'), 'utf8')
+  const indexSrc = readFileSync(join(__dirname, '..', '..', 'index.ts'), 'utf8')
+  const preloadSrc = readFileSync(join(__dirname, '..', '..', '..', 'preload', 'index.ts'), 'utf8')
 
   it('the IPC channel name exists and follows the parakeetFeed/appleSpeechFeed naming convention', () => {
-    const ipcSrc = readFileSync(join(__dirname, '..', 'shared', 'ipc.ts'), 'utf8')
+    const ipcSrc = readFileSync(join(__dirname, '..', '..', '..', 'shared', 'ipc.ts'), 'utf8')
     expect(ipcSrc).toMatch(/speakerEmbed: 'speaker:embed'/)
   })
 
@@ -433,7 +433,7 @@ describe('speaker:embed — the Whisper-engine speaker-embedding tap (contract)'
   })
 
   it('builds the speaker native host as a dedicated electron-vite entry', () => {
-    const vite = readFileSync(join(__dirname, '..', '..', 'electron.vite.config.ts'), 'utf8')
+    const vite = readFileSync(join(__dirname, '..', '..', '..', '..', 'electron.vite.config.ts'), 'utf8')
     expect(vite).toMatch(
       /'speaker-embedding-host': resolve\(__dirname, 'src\/main\/features\/speaker\/speaker-embedding-host\.ts'\)/
     )
@@ -478,7 +478,7 @@ describe('real sherpa integration (soft-skip when model/addon absent)', () => {
 // with on=true, the same place the Dust conversation resets) must clear it. index.ts has no unit
 // harness, so this pins the wiring against the source, next to the reset it belongs beside.
 describe('the meeting-start boundary resets speaker session labels (MQA-043)', () => {
-  const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+  const indexSrc = readFileSync(join(__dirname, '..', '..', 'index.ts'), 'utf8')
 
   it('calls resetSession() at the listeningState meeting-start boundary', () => {
     const start = indexSrc.indexOf('ipcMain.handle(IPC.listeningState')
