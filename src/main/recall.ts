@@ -10,7 +10,7 @@ import {
 } from './features/meetings/meeting-document'
 import { resolveMeetingsFolder, decodeSaved, isEncryptedBytes, writeSaved, formatTranscript, DEBRIEF_HEADING } from './transcripts'
 import { storageAt } from './infra/storage/meetings-storage'
-import type { HydrationProgress } from './infra/storage/gateway'
+import type { HydrationProgress, ReadOptions } from './infra/storage/gateway'
 import { DRAFT_FILENAME, UNREADABLE, isMeetingDocumentType, meetingFiles, readMeetings } from './history-read'
 import { editMeetingIndex, removeMeetingFile } from './meeting-files'
 import { getSettings } from './store'
@@ -18,6 +18,7 @@ import { detectLanguage } from '@shared/lang-id'
 import { measuredDurationMs } from '@shared/meeting-duration'
 import { readRecapStatus, recapStatusValidationError, type RecapStatus } from '@shared/recap-status'
 import type { RecallReadResult, Settings, TranscriptLine } from '@shared/ipc'
+import type { RecallHydration } from '@shared/recall-hydration'
 
 // Independent meeting-history backend (own implementation, no third-party source): reading one saved
 // meeting back, editing it, and deleting it. History's list and search read path lives in history-read.ts.
@@ -78,6 +79,63 @@ export async function listMeetingsNeedingRecap(): Promise<Array<{ file: string; 
     out.push({ file: f, mode: parsed.mode || read.sum.mode || 'meeting', lines: parsed.lines })
   }
   return out
+}
+
+/** An explicit open that needs a download while another meeting's download holds the one slot. */
+export const HYDRATION_BUSY_MSG = 'Another meeting is still downloading. Open this one when it finishes.'
+/** An explicit open whose download started and did not finish (offline, provider error, a minute passed). */
+export const HYDRATION_FAILED_MSG = 'Could not download this meeting. Check your connection and try again.'
+
+/** True while an explicit open of a file that may need a download holds the one hydration slot. */
+let hydrating = false
+
+/**
+ * History's explicit open of one meeting (IPC.recallRead, IPC.recallOpen), reporting its download to the
+ * renderer through `send`. `open` is the read itself (recallRead or meetingOpenTarget) given the options.
+ *
+ * Invariants:
+ *   - At most one explicit open may hydrate at a time. The open classifies its file first: a file whose
+ *     classify does not show it on this device (dataless, unknown, timed out, unavailable) is the only
+ *     kind that takes the slot, from its classify until it settles; any other file opens without a
+ *     download and never takes or waits on the slot. A may-download open that finds the slot taken
+ *     answers HYDRATION_BUSY_MSG unread.
+ *   - A download that starts sends 'hydrating', then exactly one 'done' or 'failed' once the open settles;
+ *     an open that needed no download sends nothing. A failed download answers HYDRATION_FAILED_MSG.
+ *   - `send` throwing (a closed window) never fails the open.
+ */
+export async function openExplicitly<T extends { ok: boolean; error?: string }>(
+  file: string,
+  send: (event: RecallHydration) => void,
+  open: (options: Pick<ReadOptions, 'hydrate' | 'onProgress'>) => Promise<T>
+): Promise<T | { ok: false; error: string }> {
+  const report = (event: RecallHydration): void => {
+    try {
+      send(event)
+    } catch {
+      // the renderer went away; the open still answers its caller
+    }
+  }
+  const safeName = safeMeetingBasename(file)
+  const fileClass = safeName ? (await storageAt(resolveMeetingsFolder(getSettings())).classify([safeName])).get(safeName) : undefined
+  if (!fileClass || fileClass.status === 'ok' || fileClass.status === 'missing') return open({ hydrate: false })
+  if (hydrating) return { ok: false, error: HYDRATION_BUSY_MSG }
+  hydrating = true
+  let progress = null as HydrationProgress['state'] | null
+  try {
+    const result = await open({
+      hydrate: true,
+      onProgress: (p) => {
+        progress = p.state
+        if (p.state === 'hydrating') report({ file, state: 'hydrating' })
+      }
+    })
+    if (progress === 'done') report({ file, state: 'done' })
+    if (progress !== 'hydrating') return result
+    report({ file, state: 'failed', error: HYDRATION_FAILED_MSG })
+    return { ok: false, error: HYDRATION_FAILED_MSG }
+  } finally {
+    hydrating = false
+  }
 }
 
 /**

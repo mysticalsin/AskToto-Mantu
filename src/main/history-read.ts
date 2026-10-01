@@ -34,9 +34,9 @@ export async function meetingFiles(folder: string, signal?: AbortSignal): Promis
 }
 
 /** A History row. `notDownloaded` marks a file whose bytes are not on this device (a cloud-only
- *  placeholder): listed from its name, never read; opening it hydrates it explicitly. Like `locked`
- *  below, it is not yet declared on the shared MeetingSummary type and flows through as an own property. */
-export type HistoryRow = MeetingSummary & { notDownloaded?: true }
+ *  placeholder): listed from its name, never read; opening it hydrates it explicitly (openExplicitly in
+ *  recall.ts), and History shows it with MeetingSummary.notDownloaded. */
+export type HistoryRow = MeetingSummary
 
 interface Read {
   sum: HistoryRow

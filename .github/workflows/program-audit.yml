@@ -1,7 +1,9 @@
 name: Program audit
 
 # Reusable audit lane for a program ledger (M2-0509): the evidence back-fill (M2-0238), the
-# re-execution draw (ADR-017, M2-0002) and the velocity forecast (M2-0197), run in CI only (D-28).
+# re-execution draw (ADR-017, M2-0002), the velocity forecast (M2-0197) and the release gate check
+# (M2-0511: check.mjs --release against the gate file, the candidate's provenance.json and the release
+# file, with the version taken from the gate file), run in CI only (D-28).
 # The ledger and its evidence records live in a private repository that never appears here (AGENTS.md
 # #1), so this is a `workflow_call` workflow in the same shape as ledger.yml: the caller's own workflow
 #   jobs:
@@ -21,7 +23,7 @@ on:
   workflow_call:
     inputs:
       mode:
-        description: backfill, sample or velocity
+        description: backfill, sample, velocity or release-check
         required: true
         type: string
       ledger-path:
@@ -53,6 +55,21 @@ on:
         required: false
         type: string
         default: m3
+      gates-path:
+        description: release-check mode, the release gate file (schema in scripts/evidence/check.mjs)
+        required: false
+        type: string
+        default: ''
+      provenance-path:
+        description: release-check mode, the candidate's provenance.json
+        required: false
+        type: string
+        default: ''
+      notes-path:
+        description: release-check mode, the release file <version>.md
+        required: false
+        type: string
+        default: ''
       checker-ref:
         description: Ref of this repository to fetch the audit scripts from
         required: false
@@ -61,7 +78,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: backfill, sample or velocity
+        description: backfill, sample, velocity or release-check
         required: true
         type: string
       ledger-path:
@@ -93,6 +110,21 @@ on:
         required: false
         type: string
         default: m3
+      gates-path:
+        description: release-check mode, the release gate file (schema in scripts/evidence/check.mjs)
+        required: false
+        type: string
+        default: ''
+      provenance-path:
+        description: release-check mode, the candidate's provenance.json
+        required: false
+        type: string
+        default: ''
+      notes-path:
+        description: release-check mode, the release file <version>.md
+        required: false
+        type: string
+        default: ''
       checker-ref:
         description: Ref of this repository to fetch the audit scripts from
         required: false
@@ -116,15 +148,21 @@ jobs:
       SINCE: ${{ inputs.since }}
       SEED: ${{ inputs.seed }}
       GATE: ${{ inputs.gate }}
+      GATES_PATH: ${{ inputs.gates-path }}
+      PROVENANCE_PATH: ${{ inputs.provenance-path }}
+      NOTES_PATH: ${{ inputs.notes-path }}
       OUT_DIR: out/program-audit
     steps:
       - name: Validate the inputs
         run: |
           set -euo pipefail
           case "$MODE" in
-            backfill | sample | velocity) ;;
-            *) echo "mode must be backfill, sample or velocity" >&2; exit 2 ;;
+            backfill | sample | velocity | release-check) ;;
+            *) echo "mode must be backfill, sample, velocity or release-check" >&2; exit 2 ;;
           esac
+          if [ "$MODE" = "release-check" ] && { [ -z "$GATES_PATH" ] || [ -z "$PROVENANCE_PATH" ] || [ -z "$NOTES_PATH" ]; }; then
+            echo "release-check mode requires gates-path, provenance-path and notes-path" >&2; exit 2
+          fi
           if [ "$MODE" = "sample" ]; then
             if ! printf '%s' "$SEED" | grep -Eq '^[0-9a-f]{40}$'; then
               echo "sample mode requires a 40-hex seed" >&2; exit 2
@@ -137,6 +175,8 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+          # release-check recomputes the re-execution sample from the ledger at the sample's ledger_commit.
+          fetch-depth: ${{ inputs.mode == 'release-check' && '0' || '1' }}
       - name: Fetch the public audit scripts
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -178,6 +218,16 @@ jobs:
           fi
           node .program-audit-scripts/scripts/program/velocity.mjs "${args[@]}"
           cat "$OUT_DIR/FORECAST.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Check the release gates
+        if: inputs.mode == 'release-check'
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT_DIR"
+          version="$(jq -er '.version' "$GATES_PATH")"
+          status=0
+          node .program-audit-scripts/scripts/evidence/check.mjs --release "$version" --gates "$GATES_PATH" --provenance "$PROVENANCE_PATH" --ledger "$LEDGER_PATH" --notes "$NOTES_PATH" > "$OUT_DIR/release-check.txt" 2>&1 || status=$?
+          { echo '```text'; cat "$OUT_DIR/release-check.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always() && hashFiles('out/program-audit/**') != ''
         with:
