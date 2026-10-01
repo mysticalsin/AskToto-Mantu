@@ -2,11 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { BOOT_WINDOW_VARIANTS } from '../../src/main/infra/observability/projection'
 import {
   PENDING_GLOBAL,
+  STORAGE_SATURATED_LOG,
   WINDOW_VARIANTS,
   bootStagesFromAudit,
   buildLaunchFailureReport,
   buildReport,
   candidateEnv,
+  countStorageSaturations,
   cpuBusyPct,
   emptyRun,
   evaluateCriteria,
@@ -17,6 +19,7 @@ import {
   recordSample,
   releaseExpression,
   runPurpose,
+  timedCallsExpression,
   withTimeout,
   witnessSummary
 } from './lib/st-1-core.mjs'
@@ -482,13 +485,25 @@ describe('the History row (M2-0193)', () => {
 
   it('reports the first call apart from the rest, and fails the report on it', () => {
     const measured = historyRun([{ tMs: 20_000, skipped: 'no window' }, open(25_000, 2_050), open(30_000, 30, { searchMs: 90, notDownloaded: 5 })])
+    // These probes predate the per-call split (M2-0512): no call has its own time, so the row's checks fail.
+    const untimed = { calls: 0, unsettled: 0, firstMs: null, p50Ms: null, p95Ms: null, maxMs: null }
     expect(historySummary(measured)).toEqual({
       probes: 2,
       firstOpenMs: 2_050,
       maxOpenMs: 2_050,
       maxSearchMs: 90,
       maxRows: 6,
-      maxNotDownloaded: 5
+      maxNotDownloaded: 5,
+      calls: { recallList: untimed, brainStatus: untimed, recallSearch: untimed },
+      checks: [
+        { name: 'first-list < 250', pass: false },
+        { name: 'list < 2000', pass: false },
+        { name: 'search < 2000', pass: false },
+        { name: 'loop-p99 < 50', pass: true }
+      ],
+      verdict: 'FAIL',
+      storageSaturations: null,
+      firstListCause: 'main-log-unread'
     })
     const built = report({ row: 'fifo', history: true, measured, evidence: { exercised: true, fixturesOpened: ['x'] } })
     expect(built.historyRow).toBe(true)
@@ -496,6 +511,147 @@ describe('the History row (M2-0193)', () => {
     expect(built.verdict).toBe('FAIL')
     expect(report({ row: 'fifo', history: true, measured: historyRun([open(25_000, 30)]), evidence: { exercised: true } }).verdict).toBe('PASS')
     expect(report().historySummary).toBeUndefined()
+  })
+})
+
+describe('timedCallsExpression (M2-0512)', () => {
+  it('times every call on its own and records a value, a failure or a hang, never rejecting', async () => {
+    const outcomes = (await evaluateGlobally(
+      timedCallsExpression({ answered: 'Promise.resolve(3)', failed: 'Promise.reject(new Error("refused"))', hung: 'new Promise(() => {})' }, 50)
+    )) as Record<string, { ms: number; value?: unknown; error?: string; hung?: boolean }>
+    expect(Object.keys(outcomes)).toEqual(['answered', 'failed', 'hung'])
+    expect(outcomes.answered).toEqual({ ms: expect.any(Number), value: 3 })
+    expect(outcomes.failed).toEqual({ ms: expect.any(Number), error: 'refused' })
+    expect(outcomes.hung).toEqual({ ms: expect.any(Number), hung: true })
+    expect(outcomes.hung.ms).toBeGreaterThanOrEqual(45)
+    expect(outcomes.answered.ms).toBeLessThan(outcomes.hung.ms)
+  })
+})
+
+describe('the History row per call (M2-0512)', () => {
+  type Call = { ms: number; value?: unknown; error?: string; hung?: boolean }
+  /** A probe as the app answers it: per-call outcomes from the renderer, run through historyEntry. */
+  const probe = (tMs: number, calls: { list?: Call; brain?: Call; search?: Call } = {}): Record<string, unknown> =>
+    historyEntry(tMs, {
+      ok: true,
+      elapsedMs: 0,
+      value: {
+        ms: Math.max(calls.list?.ms ?? 30, calls.brain?.ms ?? 5) + 3,
+        open: { recallList: calls.list ?? { ms: 30, value: { rows: 6, notDownloaded: 4 } }, brainStatus: calls.brain ?? { ms: 5, value: true } },
+        searchMs: (calls.search?.ms ?? 40) + 2,
+        search: calls.search ?? { ms: 40, value: 4 }
+      }
+    })
+  const list = (ms: number, value = { rows: 6, notDownloaded: 4 }) => ({ list: { ms, value } })
+  const run = (history: unknown[], p99Ms = 12) => ({ ...emptyRun(), samples: [goodSample(1_000)], loop: { p99Ms, maxMs: 40 }, history })
+  type Options = { row?: string; complete?: boolean; storageSaturations?: number | null }
+  const summary = (history: unknown[], options: Options = {}) => historySummary(run(history), { row: 'fifo', ...options })
+  const checks = (history: unknown[], options: Options = {}) =>
+    Object.fromEntries(summary(history, options).checks.map((c: { name: string; pass: boolean }) => [c.name, c.pass]))
+
+  it('records each call with its own time and keeps the combined fields, never a value', () => {
+    expect(probe(20_000)).toEqual({
+      tMs: 20_000,
+      ms: 33,
+      rows: 6,
+      notDownloaded: 4,
+      searchMs: 42,
+      hits: 4,
+      calls: { recallList: { ms: 30 }, brainStatus: { ms: 5 }, recallSearch: { ms: 40 } }
+    })
+  })
+
+  it('makes the open hung or failed when one of its calls is, and a hung or failed search a searchError', () => {
+    expect(probe(20_000, { brain: { ms: 4_000, hung: true } })).toMatchObject({
+      hung: true,
+      rows: 6,
+      calls: { recallList: { ms: 30 }, brainStatus: { ms: 4_000, hung: true } }
+    })
+    const failedList = probe(20_000, { list: { ms: 12, error: 'boom' } })
+    expect(failedList).toMatchObject({ error: 'boom', calls: { recallList: { ms: 12, error: 'boom' } } })
+    expect(failedList.rows).toBeUndefined()
+    const hungSearch = probe(20_000, { search: { ms: 4_000, hung: true } })
+    expect(hungSearch).toMatchObject({ searchError: 'no answer within 4000 ms', calls: { recallSearch: { ms: 4_000, hung: true } } })
+    expect(hungSearch.hits).toBeUndefined()
+    expect(probe(20_000, { search: { ms: 9, error: 'index gone' } })).toMatchObject({ searchError: 'index gone' })
+  })
+
+  it('gives firstMs and p50/p95/max per call by nearest rank', () => {
+    const calls = summary([probe(20_000, list(100)), probe(25_000, list(30)), probe(30_000, list(20)), probe(35_000, list(40))]).calls
+    expect(calls.recallList).toEqual({ calls: 4, unsettled: 0, firstMs: 100, p50Ms: 30, p95Ms: 100, maxMs: 100 })
+    expect(calls.brainStatus).toMatchObject({ calls: 4, firstMs: 5, maxMs: 5 })
+    expect(calls.recallSearch).toMatchObject({ calls: 4, firstMs: 40, p50Ms: 40 })
+  })
+
+  it('passes a first recallList at 249 ms and fails it at 250 ms, naming the cause from the main.log', () => {
+    expect(summary([probe(20_000, list(249)), probe(25_000)])).toMatchObject({ verdict: 'PASS', firstListCause: null })
+    const slow = [probe(20_000, list(250)), probe(25_000)]
+    expect(checks(slow)['first-list < 250']).toBe(false)
+    expect(summary(slow)).toMatchObject({ verdict: 'FAIL', firstListCause: 'main-log-unread' })
+    expect(summary(slow, { storageSaturations: 2 })).toMatchObject({ storageSaturations: 2, firstListCause: 'admission-saturated' })
+    expect(summary(slow, { storageSaturations: 0 }).firstListCause).toBe('unattributed')
+  })
+
+  it('needs every list and search to settle with a usable answer below 2 s: 1999 ms passes, 2000 ms fails', () => {
+    expect(checks([probe(20_000), probe(25_000, list(1_999))])['list < 2000']).toBe(true)
+    expect(checks([probe(20_000), probe(25_000, list(2_000))])['list < 2000']).toBe(false)
+    expect(checks([probe(20_000), probe(25_000, { search: { ms: 1_999, value: 1 } })])['search < 2000']).toBe(true)
+    expect(checks([probe(20_000), probe(25_000, { search: { ms: 2_000, value: 1 } })])['search < 2000']).toBe(false)
+    expect(checks([probe(20_000), probe(25_000, list(30, { rows: 0, notDownloaded: 0 }))])['list < 2000']).toBe(false)
+    expect(checks([probe(20_000), probe(25_000, { search: { ms: 30, value: 0 } })])['search < 2000']).toBe(false)
+    expect(checks([probe(20_000, list(30, { rows: 6, notDownloaded: 0 }))], { row: 'dataless' })['list < 2000']).toBe(false)
+  })
+
+  it('fails on main-loop p99 at 50 ms and passes below it', () => {
+    expect(historySummary(run([probe(20_000)], 49.9), { row: 'fifo' }).verdict).toBe('PASS')
+    expect(historySummary(run([probe(20_000)], 50), { row: 'fifo' })).toMatchObject({ verdict: 'FAIL', firstListCause: null })
+  })
+
+  it('fails every check on an empty probe set, with no first-call cause to name', () => {
+    for (const history of [[], [{ tMs: 20_000, skipped: 'no window' }]]) {
+      expect(summary(history)).toMatchObject({
+        probes: 0,
+        verdict: 'FAIL',
+        firstListCause: null,
+        calls: { recallList: { calls: 0, firstMs: null, p50Ms: null, p95Ms: null, maxMs: null } }
+      })
+      expect(checks(history)).toEqual({ 'first-list < 250': false, 'list < 2000': false, 'search < 2000': false, 'loop-p99 < 50': true })
+    }
+  })
+
+  it('fails on a hung probe, whether the whole round trip or one call hung', () => {
+    const wholeHung = [{ tMs: 20_000, hung: true, ms: 10_000 }, probe(25_000)]
+    expect(summary(wholeHung, { storageSaturations: 1 })).toMatchObject({ verdict: 'FAIL', firstListCause: 'admission-saturated' })
+    expect(summary(wholeHung).calls.recallList).toMatchObject({ calls: 1, firstMs: null })
+    const listHung = [probe(20_000, { list: { ms: 4_000, hung: true } }), probe(25_000)]
+    expect(checks(listHung)).toMatchObject({ 'first-list < 250': false, 'list < 2000': false, 'search < 2000': true })
+    expect(summary(listHung).calls.recallList).toMatchObject({ unsettled: 1, firstMs: 4_000, maxMs: 4_000 })
+    const searchHung = [probe(20_000), probe(25_000, { search: { ms: 4_000, hung: true } })]
+    expect(checks(searchHung)).toMatchObject({ 'first-list < 250': true, 'list < 2000': true, 'search < 2000': false })
+  })
+
+  it('says INCOMPLETE while the run is not complete, and never changes the report criteria or verdict', () => {
+    expect(summary([probe(20_000)], { complete: false }).verdict).toBe('INCOMPLETE')
+    const slowFirst = run([probe(20_000, list(1_500)), probe(25_000)])
+    const built = report({
+      row: 'fifo',
+      history: true,
+      measured: slowFirst,
+      evidence: { exercised: true },
+      attribution: { mainLog: null, appEvidence: null, storageSaturations: 3 }
+    })
+    expect(built.verdict).toBe('PASS')
+    expect(built.criteria.map((c: { name: string }) => c.name)).not.toContain('first-list < 250')
+    expect(built.historySummary).toMatchObject({ verdict: 'FAIL', storageSaturations: 3, firstListCause: 'admission-saturated' })
+    expect(report({ row: 'fifo', history: true, measured: slowFirst, evidence: { exercised: true }, complete: false }).historySummary?.verdict).toBe(
+      'INCOMPLETE'
+    )
+  })
+
+  it('counts the admission saturation lines of a main.log', () => {
+    const line = `[2026-10-01 10:00:00.000] [warn] ${STORAGE_SATURATED_LOG}; meetings-root requests are degraded { capacity: 2 }`
+    expect(countStorageSaturations(['[info] boot', line, '[info] tray', line].join('\n'))).toBe(2)
+    expect(countStorageSaturations('[info] boot\n')).toBe(0)
   })
 })
 
