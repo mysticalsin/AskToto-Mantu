@@ -1,6 +1,7 @@
 /**
  * The versions of files this process itself wrote into place. Bytes this process has just written are on
- * this device, so the storage gateway answers 'local' for exactly that version without a placeholder probe.
+ * this device, so the storage gateway counts exactly that version 'local' when the placeholder probe cannot
+ * tell or has not answered within a short wait (gateway.ts presenceWithin); a probe answer still wins.
  * The probe is a child process (a cold powershell.exe on Windows) that can outlive the gateway's read
  * deadline on a slow machine; before this, a meeting an import had just saved read back as 'degraded' or
  * 'unknown', and History showed "Could not read the meeting file." for a file that was never cloud-only.

@@ -47,6 +47,10 @@ const METADATA_DEADLINE_MS = 2_000
 const CONTENT_DEADLINE_MS = 5_000
 /** An explicit open of one cloud-only file waits for the provider's download this long. */
 export const HYDRATE_DEADLINE_MS = 60_000
+/** How long a read of only versions this process wrote waits on the placeholder probe (a cold powershell.exe
+ *  on a slow Windows machine can outlive every deadline above) before it counts them local. Under
+ *  METADATA_DEADLINE_MS, so a classify of such files answers too. */
+const LOCAL_WRITE_PROBE_WAIT_MS = 1_000
 /** How long a read that returned no content is answered from memory, without touching the file. */
 const FAILURE_TTL_MS = 60_000
 /** Abort reason of a request's own deadline, which tells it apart from the caller's abort. */
@@ -330,12 +334,21 @@ export function createStorageGateway({
 
   /** The detector's verdicts, or none (every file then counts as unknown) when the request ends first. The
    *  probe runs on, and the detector caches its answer for the next call. A version this process wrote
-   *  itself is local without a probe (local-writes.ts), so it never waits on one. */
+   *  itself (local-writes.ts) is still probed and the probe's answer wins, but where the probe cannot tell
+   *  ('unknown') it is local, and a batch of only such versions waits LOCAL_WRITE_PROBE_WAIT_MS at most. */
   async function presenceWithin(files: readonly FileVersion[], request: Request): Promise<Map<string, ContentPresence>> {
-    const unwritten = files.filter((file) => !isLocalWrite(file))
-    const verdicts = unwritten.length > 0 ? await untilEnded(presenceOf(unwritten), request, 'waiting') : undefined
-    const presence = verdicts instanceof Map ? new Map(verdicts) : new Map<string, ContentPresence>()
-    for (const file of files) if (isLocalWrite(file)) presence.set(file.path, 'local')
+    const ours = files.filter(isLocalWrite)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const probed = presenceOf(files)
+    const pending =
+      ours.length > 0 && ours.length === files.length
+        ? Promise.race([probed, new Promise<Map<string, ContentPresence>>((resolve) => (timer = setTimeout(() => resolve(new Map()), LOCAL_WRITE_PROBE_WAIT_MS)))])
+        : probed
+    const verdicts = await untilEnded(pending, request, 'waiting')
+    clearTimeout(timer)
+    if (!(verdicts instanceof Map)) return new Map<string, ContentPresence>()
+    const presence = new Map(verdicts)
+    for (const file of ours) if ((presence.get(file.path) ?? 'unknown') === 'unknown') presence.set(file.path, 'local')
     return presence
   }
 
