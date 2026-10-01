@@ -535,6 +535,10 @@ describe('fleet model policy scheduler', () => {
       await flushPromises()
 
       expect(f.calls.filter((call) => call.url.endsWith('/v1/heartbeat'))).toHaveLength(1)
+      for (let elapsed = 0; policyClientMock.refreshModelPolicy.mock.calls.length < 2 && elapsed < 1_000; elapsed += 50) {
+        await vi.advanceTimersByTimeAsync(50)
+        await flushPromises()
+      }
       expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(2)
       await vi.advanceTimersByTimeAsync(999)
       await flushPromises()
