@@ -125,6 +125,7 @@ import {
   listDustAgents,
   dustSelectedAgentVision,
   recordMeetingSummarized,
+  getAdminLocalSpeechPackPolicy,
   getSonioxApiKey,
   setSonioxApiKey,
   clearSonioxApiKey
@@ -177,7 +178,7 @@ import {
   portalFundedCloudflareModel,
   workingCliOrder
 } from '@shared/ask-routing'
-import { getActiveModelPolicy, narrowAllowedForCapability, resolveManagedModel } from './model-policy-client'
+import { getActiveModelPolicy, narrowAllowedForCapability, resolveLocalSpeechPackPolicy, resolveManagedModel } from './model-policy-client'
 import { localModelAllowedByPolicy, MODEL_POLICY_CAPABILITIES } from '@shared/model-policy'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import { registerWriteupIpc } from './ipc/writeup'
@@ -1893,12 +1894,14 @@ function initializeImportJobs(): void {
     newId: () => randomBytes(16).toString('hex'),
     concurrency: MAX_CONCURRENT_DECODES
   })
-  void ensureImportAsrAssets((pct) => {
-    publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
-  }).catch((err) => {
-    mainLog.warn('[asr-assets] background ensure failed:', err instanceof Error ? err.message : err)
-    publishAsrAssetsProgress()
-  })
+  if (!localSpeechPackBlocked()) {
+    void ensureImportAsrAssets((pct) => {
+      publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
+    }).catch((err) => {
+      mainLog.warn('[asr-assets] background ensure failed:', err instanceof Error ? err.message : err)
+      publishAsrAssetsProgress()
+    })
+  }
 }
 
 /** Minimal .env loader (no dep) — dev convenience; prod uses in-app key. */
@@ -2120,7 +2123,8 @@ function publicSettings(): PublicSettings {
     loginItemOpenAtLogin,
     version: app.getVersion(),
     allowedProviders: allowed, // org allowlist (null = unrestricted); surfaced so the picker matches enforcement
-    modelPolicyCapabilities: modelPolicyCapabilitiesForSettings(s)
+    modelPolicyCapabilities: modelPolicyCapabilitiesForSettings(s),
+    localSpeechPack: resolveLocalSpeechPackPolicy(s, getAdminLocalSpeechPackPolicy())
   }
 }
 
@@ -2132,6 +2136,11 @@ function modelPolicyCapabilitiesForSettings(s: Settings): Record<string, { provi
   return Object.fromEntries(
     MODEL_POLICY_CAPABILITIES.map((cap) => [cap, { provider: policy.capabilities[cap].provider, model: policy.capabilities[cap].model }])
   )
+}
+
+function localSpeechPackBlocked(): boolean {
+  const s = getSettings()
+  return resolveLocalSpeechPackPolicy(s, getAdminLocalSpeechPackPolicy()) === 'blocked'
 }
 
 /** Wiped-profile / mid-tour: exclusive fullscreen owns the display until onboardingDone. */
@@ -9620,6 +9629,7 @@ if (!app.requestSingleInstanceLock()) {
     })
     safeHandle(IPC.asrAssetsEnsure, async (e) => {
       assertMainWindow(e)
+      if (localSpeechPackBlocked()) return asrAssetsStatusSnapshot()
       try {
         await ensureImportAsrAssets((pct) => {
           publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })

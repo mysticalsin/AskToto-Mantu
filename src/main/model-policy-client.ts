@@ -18,12 +18,14 @@ import { resolveOperatorBaseUrl, resolveOperatorCredential } from '@shared/opera
 import {
   canonicalModelPolicyPayload,
   canonicalUnmanagedModelPolicyPayload,
+  effectiveLocalSpeechPackPolicy,
   narrowAllowedProvidersForCapability,
   pinManagedModel,
   SignedModelPolicySchema,
   SignedUnmanagedModelPolicySchema,
   type ModelPolicyCapability,
-  type ModelPolicyDocument
+  type ModelPolicyDocument,
+  type LocalSpeechPackPolicy
 } from '@shared/model-policy'
 import { getDurableMachineId } from './license'
 import { hashOperatorId, operatorHmacHeaders } from './operator-hmac-sign'
@@ -231,4 +233,11 @@ export function resolveManagedModel(
   currentModel: string
 ): string {
   return pinManagedModel(getActiveModelPolicy(settings), capability, provider, currentModel)
+}
+
+export function resolveLocalSpeechPackPolicy(
+  settings: ModelPolicyClientSettings,
+  adminPolicy: LocalSpeechPackPolicy | null
+): LocalSpeechPackPolicy {
+  return effectiveLocalSpeechPackPolicy(getActiveModelPolicy(settings), adminPolicy)
 }

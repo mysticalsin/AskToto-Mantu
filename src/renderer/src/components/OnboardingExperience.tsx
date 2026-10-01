@@ -549,6 +549,14 @@ export function asrStatusIsReady(status: AsrAssetsStatus | null | undefined): bo
   return Boolean(status?.ready || status?.status === 'ready')
 }
 
+export function speechPackAllowsEnsure(policy: PublicSettings['localSpeechPack'] | null | undefined): boolean {
+  return policy !== 'blocked'
+}
+
+export function speechPackSetupRowVisible(policy: PublicSettings['localSpeechPack'] | null | undefined): boolean {
+  return speechPackAllowsEnsure(policy)
+}
+
 /** Act 3 — "scan first, then present a completed configuration": two DIFFERENT claims the scene makes,
  *  kept as one pure derivation so both stay honest and are each independently testable.
  *  `scanDone` only means every row has left 'checking' — loading (bytes moving) still counts as
@@ -1181,11 +1189,18 @@ export function OnboardingExperience({
   const [asrStatus, setAsrStatus] = useState<AsrAssetsStatus>(IDLE_ASR_STATUS)
   /** Once true, Continue stays unlocked even if ASR poll returns loading. */
   const [setupAccessFailOpen, setSetupAccessFailOpen] = useState(false)
-  const asrReady = asrStatusIsReady(asrStatus)
-  const asrRow = asrAssetsRowStatus(asrStatus, settings?.asrEngine)
+  const speechPackPolicy = settings?.localSpeechPack ?? 'offered'
+  const speechPackBlocked = !speechPackAllowsEnsure(speechPackPolicy)
+  const speechPackManaged = speechPackPolicy === 'required'
+  const asrReady = speechPackBlocked || asrStatusIsReady(asrStatus)
+  const asrRowBase = asrAssetsRowStatus(asrStatus, settings?.asrEngine)
+  const asrRow = speechPackManaged
+    ? { ...asrRowBase, detail: `${asrRowBase.detail} Managed by your organization.` }
+    : asrRowBase
   const doneRef = useRef(false)
 
   useEffect(() => {
+    if (speechPackBlocked) return
     let live = true
     const apply = (s: AsrAssetsStatus): void => {
       if (live) setAsrStatus(s)
@@ -1221,7 +1236,7 @@ export function OnboardingExperience({
       clearInterval(interval)
       unsub?.()
     }
-  }, [])
+  }, [speechPackBlocked])
   const [restarting, setRestarting] = useState(false)
   // M2-0429: the screen row is derived, never set piecemeal: the diagnosis (fresh grant needing a relaunch, a
   // grant held by another copy, …) plus the self-test result. Green only once the self-test heard system audio.
@@ -1252,7 +1267,7 @@ export function OnboardingExperience({
       // question at this point: on Windows the llama variant
       // (vulkan vs cpu) is only decided when a sidecar is first spawned, which has not happened yet at
       // onboarding. docs/ONBOARDING-EXPERIENCE.md's rule is to show only rows that are actually true.
-      { key: 'asr', label: 'On-device transcription', icon: Sparkles, state: 'checking' },
+      ...(speechPackSetupRowVisible(speechPackPolicy) ? [{ key: 'asr', label: 'On-device transcription', icon: Sparkles, state: 'checking' } satisfies SetupRow] : []),
       { key: 'brain', label: 'Private meeting brain', icon: FolderLock, state: 'checking' },
       { key: 'mic', label: 'Microphone', icon: Mic, state: 'checking' },
       // M2-0429: asked up front as a primary step — it is what lets Métis hear the other side of a call.
@@ -1271,38 +1286,41 @@ export function OnboardingExperience({
     void (async () => {
       const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
       await delay(500)
-      void window.toto
-        .asrAssetsEnsure()
-        .then((s) => {
-          if (live) setAsrStatus(s)
-        })
-        .catch((err) => {
-          if (!live) return
-          setAsrStatus(asrEnsureFailureStatus(err))
-        })
-      const asrStatus =
-        (await Promise.race([
-          window.toto.asrAssetsStatus().catch((err) => asrEnsureFailureStatus(err)),
-          new Promise<AsrAssetsStatus>((r) =>
-            setTimeout(
-              () =>
-                r({
-                  ready: false,
-                  status: 'error',
-                  progress: 0,
-                  label: 'Transcription files are still downloading. You can continue and finish them in Settings.',
-                  error: 'Transcription files are still downloading. You can continue and finish them in Settings.'
-                }),
-              ASR_SETUP_FAIL_OPEN_MS
+      if (!speechPackBlocked) {
+        void window.toto
+          .asrAssetsEnsure()
+          .then((s) => {
+            if (live) setAsrStatus(s)
+          })
+          .catch((err) => {
+            if (!live) return
+            setAsrStatus(asrEnsureFailureStatus(err))
+          })
+        const asrStatus =
+          (await Promise.race([
+            window.toto.asrAssetsStatus().catch((err) => asrEnsureFailureStatus(err)),
+            new Promise<AsrAssetsStatus>((r) =>
+              setTimeout(
+                () =>
+                  r({
+                    ready: false,
+                    status: 'error',
+                    progress: 0,
+                    label: 'Transcription files are still downloading. You can continue and finish them in Settings.',
+                    error: 'Transcription files are still downloading. You can continue and finish them in Settings.'
+                  }),
+                ASR_SETUP_FAIL_OPEN_MS
+              )
             )
-          )
-        ])) || asrEnsureFailureStatus()
-      if (live) {
-        if (asrStatus.status === 'error' || !asrStatus.ready) setSetupAccessFailOpen(true)
-        setAsrStatus(asrStatus)
+          ])) || asrEnsureFailureStatus()
+        if (live) {
+          if (asrStatus.status === 'error' || !asrStatus.ready) setSetupAccessFailOpen(true)
+          setAsrStatus(asrStatus)
+        }
+        const asr = asrAssetsRowStatus(asrStatus, settingsRef.current?.asrEngine)
+        const detail = speechPackManaged ? `${asr.detail} Managed by your organization.` : asr.detail
+        set('asr', asr.state, detail, asr.progress)
       }
-      const asr = asrAssetsRowStatus(asrStatus, settingsRef.current?.asrEngine)
-      set('asr', asr.state, asr.detail, asr.progress)
       await delay(450)
       set('brain', 'ready', isWindows ? 'stays on this PC' : 'stays on this Mac')
       await delay(450)
@@ -1353,7 +1371,7 @@ export function OnboardingExperience({
     return () => {
       live = false
     }
-  }, [scene])
+  }, [scene, speechPackBlocked, speechPackManaged])
 
   // --- Live-poll while the scene stays mounted, so a grant flipped in System Settings (possibly in a
   // split view right next to this window) is reflected without the user coming back to click anything.
@@ -1363,7 +1381,7 @@ export function OnboardingExperience({
     const poll = async (): Promise<void> => {
       const perms = await window.toto.getPermissions().catch(() => null)
       const models = await window.toto.localModelsList().catch(() => [])
-      const asrStatusNow = await window.toto.asrAssetsStatus().catch(() => null)
+      const asrStatusNow = speechPackBlocked ? null : await window.toto.asrAssetsStatus().catch(() => null)
       if (!live) return
       if (asrStatusNow) setAsrStatus(asrStatusNow)
       const current = settingsRef.current
@@ -1376,7 +1394,7 @@ export function OnboardingExperience({
       setRows((rs) =>
         rs.map((r) => {
           if (r.key === 'asr' && asr) {
-            return { ...r, state: asr.state, detail: asr.detail, progress: asr.progress }
+            return { ...r, state: asr.state, detail: speechPackManaged ? `${asr.detail} Managed by your organization.` : asr.detail, progress: asr.progress }
           }
           if (r.key === 'local') return { ...r, state: lm.state, detail: lm.detail, progress: lm.progress }
           if (!perms) return r
@@ -1401,9 +1419,10 @@ export function OnboardingExperience({
       clearInterval(interval)
       unsub?.()
     }
-  }, [scene, settings?.localLlm.modelId])
+  }, [scene, settings?.localLlm.modelId, speechPackBlocked, speechPackManaged])
 
   const retryAsr = async (): Promise<void> => {
+    if (speechPackBlocked) return
     const status = await window.toto.asrAssetsEnsure().catch((err) => asrEnsureFailureStatus(err))
     setAsrStatus(status)
     const asr = asrAssetsRowStatus(status, settingsRef.current?.asrEngine)

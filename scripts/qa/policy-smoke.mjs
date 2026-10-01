@@ -67,20 +67,21 @@ function fullCapabilities(provider, model) {
  *  deliberate, deliberately small duplication so this QA tool has zero build/import coupling to a
  *  TypeScript module, verified against that exact function by src/shared/model-policy.test.ts. */
 function canonicalPayload(policy) {
+  const localSpeechPack = policy.localSpeechPack || 'offered'
   const capString = CAPABILITIES.map((k) => {
     const e = policy.capabilities[k]
     const fb = (e.fallbacks || []).map((f) => `${f.provider}:${f.model}`).join(',')
     return `${k}=${e.provider}:${e.model}[${fb}]`
   }).join('|')
-  return `metis-model-policy.v1.${policy.version}.${policy.updatedAt}.${policy.updatedBy}.${capString}`
+  return `metis-model-policy.v1.${policy.version}.${policy.updatedAt}.${policy.updatedBy}.localSpeechPack=${localSpeechPack}.${capString}`
 }
 
 function sign(policy) {
   return createHmac('sha256', TEST_SECRET).update(canonicalPayload(policy)).digest('hex')
 }
 
-function policyDoc(version, provider, model) {
-  return { version, updatedAt: version, updatedBy: 'policy-smoke@example.test', capabilities: fullCapabilities(provider, model) }
+function policyDoc(version, provider, model, localSpeechPack = 'offered') {
+  return { version, updatedAt: version, updatedBy: 'policy-smoke@example.test', localSpeechPack, capabilities: fullCapabilities(provider, model) }
 }
 
 function mintSelfSignedCert(dir) {
@@ -134,13 +135,17 @@ function startTestOperator(tls) {
   return { server, state }
 }
 
-function readCachedPolicyVersion(profile) {
+function readCachedPolicy(profile) {
   try {
     const raw = JSON.parse(readFileSync(join(profile, CACHE_FILE), 'utf8'))
-    return raw?.policy?.version ?? null
+    return raw?.policy ?? null
   } catch {
     return null
   }
+}
+
+function readCachedPolicyVersion(profile) {
+  return readCachedPolicy(profile)?.version ?? null
 }
 
 async function waitForVersion(profile, targetVersion, timeoutMs) {
@@ -234,11 +239,14 @@ async function main() {
     }
 
     // Change the policy on the test Operator mid-run — no restart, no re-launch.
-    state.current = policyDoc(2, 'openai', 'gpt-5')
+    state.current = policyDoc(2, 'openai', 'gpt-5', 'required')
     const switchMs = await waitForVersion(profile, 2, SWITCH_TIMEOUT_MS)
+    const cachedPolicy = readCachedPolicy(profile)
 
+    const localSpeechPackOk = cachedPolicy?.localSpeechPack === 'required'
+    const passed = switchMs !== null && switchMs <= 60_000 && localSpeechPackOk
     report(reportPath, {
-      ok: switchMs !== null,
+      ok: passed,
       row: 'POLICY-01',
       platform,
       firstApplyMs,
@@ -248,10 +256,12 @@ async function main() {
       // used — the packaged app exposes no non-interactive ask hook and an ask needs a live provider
       // credential (BLOCKED_EXTERNAL; the per-call routing is covered by the desktop unit/contract tests).
       evidence: 'cached-policy-version',
+      localSpeechPack: cachedPolicy?.localSpeechPack ?? null,
+      localSpeechPackOk,
       modelUsedObserved: false,
-      passed: switchMs !== null && switchMs <= 60_000
+      passed
     })
-    process.exit(switchMs !== null && switchMs <= 60_000 ? 0 : 1)
+    process.exit(passed ? 0 : 1)
   } catch (e) {
     if (e instanceof BlockedExternal) {
       report(reportPath, { ok: true, row: 'POLICY-01', blockedExternal: true, reason: e.message })

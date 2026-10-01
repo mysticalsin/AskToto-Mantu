@@ -51,6 +51,7 @@ import OpenAI from 'openai'
 import { stripProxyFaultMarker } from './llm/retry'
 import { migrateOverlayLayout } from '@shared/overlay-chrome'
 import { preferredFreshAsrEngine, type FreshAsrEngine } from '@shared/asr-hardware-preference'
+import { LocalSpeechPackPolicySchema, type LocalSpeechPackPolicy } from '@shared/model-policy'
 
 const dir = () => app.getPath('userData')
 const settingsPath = () => join(dir(), 'settings.json')
@@ -196,6 +197,24 @@ function readAllowedFrom(p: string): string[] | null {
   }
 }
 
+function parseLocalSpeechPackContent(raw: string): LocalSpeechPackPolicy | null {
+  try {
+    const obj = JSON.parse(raw)
+    const parsed = LocalSpeechPackPolicySchema.safeParse(obj?.localSpeechPack)
+    return parsed.success ? parsed.data : null
+  } catch {
+    return null
+  }
+}
+
+function readLocalSpeechPackFrom(p: string): LocalSpeechPackPolicy | null {
+  try {
+    return parseLocalSpeechPackContent(readFileSync(p, 'utf8'))
+  } catch {
+    return null
+  }
+}
+
 // The machine-wide org-policy path lives in win-security.ts (single source of truth). On Windows it is
 // only honored when admin-owned + not user-writable, and readTrustedAdminManaged() reads its content
 // through the SAME held fd that verified that trust (closes the check-path/read-path TOCTOU a plain
@@ -311,6 +330,11 @@ export function getAllowedProviders(): string[] | null {
   // Read from the raw JSON because `allowedProviders` is a policy key, not a settings-schema key.
   const admin = adminManagedContent()
   return (admin ? parseAllowedContent(admin) : null) ?? readAllowedFrom(join(dir(), 'managed-config.json'))
+}
+
+export function getAdminLocalSpeechPackPolicy(): LocalSpeechPackPolicy | null {
+  const admin = adminManagedContent()
+  return (admin ? parseLocalSpeechPackContent(admin) : null) ?? readLocalSpeechPackFrom(join(dir(), 'managed-config.json'))
 }
 
 /** Providers whose key currently comes from an environment variable — for those, in-app 'Remove' is a

@@ -22,6 +22,7 @@ import {
   listDustAgents,
   testApiKey,
   getAllowedProviders,
+  getAdminLocalSpeechPackPolicy,
   getLockedKeys,
   resetAsrHardwarePreferenceForTests,
   resetSettingsCacheForTests
@@ -181,6 +182,17 @@ describe('store', () => {
     expect(s.temperature).toBe(0.9)          // user wins over managed
     expect(s.suggestEverySec).toBe(30)       // managed wins over default
     expect(s.contentProtection).toBe(true)   // untouched default
+  })
+
+  it('reads localSpeechPack as a raw MDM policy key, not a user setting', () => {
+    writeFileSync(join(userData, 'managed-config.json'), JSON.stringify({ localSpeechPack: 'blocked' }), 'utf8')
+    expect(getAdminLocalSpeechPackPolicy()).toBe('blocked')
+    expect(getSettings()).not.toHaveProperty('localSpeechPack')
+  })
+
+  it('ignores invalid localSpeechPack values in managed config', () => {
+    writeFileSync(join(userData, 'managed-config.json'), JSON.stringify({ localSpeechPack: 'force-download' }), 'utf8')
+    expect(getAdminLocalSpeechPackPolicy()).toBeNull()
   })
 
   it('drops locked keys when setSettings is called', () => {

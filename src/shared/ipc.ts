@@ -1649,7 +1649,9 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
    *  A capability present here is locked: Settings shows it read-only with "Managed by your
    *  organization — set on the Operator portal" and the portal's own provider/model, never letting
    *  a local setting pick something outside it. */
-  modelPolicyCapabilities: z.record(z.string(), z.object({ provider: z.string(), model: z.string() })).default({})
+  modelPolicyCapabilities: z.record(z.string(), z.object({ provider: z.string(), model: z.string() })).default({}),
+  /** Effective onboarding speech-pack policy after signed Operator policy and MDM narrowing. */
+  localSpeechPack: z.enum(['required', 'offered', 'blocked']).default('offered')
 })
 export type PublicSettings = z.infer<typeof PublicSettingsSchema>
 
@@ -1672,6 +1674,7 @@ export type SettingsPatch = Partial<
     | 'envKeys'
     | 'loginItemOpenAtLogin'
     | 'lastFailover'
+    | 'localSpeechPack'
   >
 >
 
