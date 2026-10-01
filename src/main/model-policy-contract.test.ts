@@ -275,11 +275,35 @@ function bodyDeclaresModelThroughPolicy(body: string, modelName: string): boolea
   return found
 }
 
+function bodyChecksModelExpressionThroughPolicy(body: string, modelExpression: string): boolean {
+  const sf = sourceFileFor(body)
+  let found = false
+  const normalizedModel = modelExpression.replace(/\s+/g, ' ')
+  const callName = (expression: ts.Expression): string | null => {
+    if (ts.isIdentifier(expression)) return expression.text
+    if (ts.isPropertyAccessExpression(expression)) return expression.name.text
+    return null
+  }
+  const visit = (node: ts.Node): void => {
+    if (found) return
+    if (ts.isCallExpression(node) && callName(node.expression) === 'localModelAllowedByPolicy') {
+      const checkedModel = node.arguments[1]?.getText(sf).replace(/\s+/g, ' ')
+      found = checkedModel === normalizedModel
+      if (found) return
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sf)
+  return found
+}
+
 function policyBodyFor(site: CreateStreamSite): string {
   if (resolvesThroughPolicy(site.fn.body)) return site.fn.body
   const modelArg = modelArgumentText(site)
-  if (!/^[A-Za-z_$][\w$]*$/.test(modelArg)) return site.fn.body
   const visibleBodies = [site.fn.body, ...site.fn.ancestors.map((fn) => fn.body)]
+  if (!/^[A-Za-z_$][\w$]*$/.test(modelArg)) {
+    return visibleBodies.find((body) => bodyChecksModelExpressionThroughPolicy(body, modelArg)) ?? site.fn.body
+  }
   return visibleBodies.find((body) => bodyDeclaresModelThroughPolicy(body, modelArg)) ?? site.fn.body
 }
 
