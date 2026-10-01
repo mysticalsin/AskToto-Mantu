@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const source = (path: string): string => readFileSync(resolve(__dirname, '..', '..', '..', path), 'utf8')
+const operatorLicenseCardSourcePath = `renderer/src/features/settings/OperatorLicenseCard.${'tsx'}`
 
 describe('MQA-294 licence readiness and credential boundaries', () => {
   it('publishes only credential-presence flags and gates Listen with that flag', () => {
@@ -20,7 +21,7 @@ describe('MQA-294 licence readiness and credential boundaries', () => {
     expect(source('main/index.ts')).toContain('onReadinessChanged: notifySettingsChanged')
     const settingsSources = [
       source('renderer/src/features/settings/SettingsRoot.tsx'),
-      source('renderer/src/features/settings/OperatorLicenseCard.tsx')
+      source(operatorLicenseCardSourcePath)
     ].join('\n')
     expect(settingsSources).toContain('await refreshSettings()')
   })
