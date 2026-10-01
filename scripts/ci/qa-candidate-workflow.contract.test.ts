@@ -144,6 +144,30 @@ describe('QA candidate workflow: which refs and versions may build (M2-0499)', (
   })
 })
 
+describe('QA candidate workflow: ST-1 fifo and control rows block (OD-21, M2-0520)', () => {
+  it.each([
+    ['st1-mac-fifo', '--fixtures fifo'],
+    ['st1-mac-control', '--fixtures none']
+  ])('%s has no job- or step-level continue-on-error, so a FAIL verdict fails the run', (name, fixtures) => {
+    const block = jobBlocks.get(name) ?? ''
+    expect(block).toContain('runs-on: macos-latest')
+    expect(block).not.toMatch(/continue-on-error/)
+    const measure = steps(name).find((step) => step.includes('node scripts/qa/st-1.mjs'))
+    expect(measure).toContain(fixtures)
+    // The comment lines directly above the job's line.
+    const lines = workflow.split('\n')
+    const comments: string[] = []
+    for (let i = lines.indexOf(`  ${name}:`) - 1; i >= 0 && lines[i].startsWith('  #'); i--) comments.unshift(lines[i])
+    expect(comments[0]).toBe('  # Blocking (OD-21, M2-0433)')
+  })
+
+  it('keeps the History row and the window measurement report-only', () => {
+    expect(jobBlocks.get('st1-mac-history')).toMatch(/^    continue-on-error: true$/m)
+    const measure = steps('st1-mac-window').find((step) => step.includes('--purpose window-construction'))
+    expect(measure).toMatch(/^        continue-on-error: true$/m)
+  })
+})
+
 describe('QA candidate workflow: the shipped window gate (M2-0519)', () => {
   const block = jobBlocks.get('st1-mac-window') ?? ''
 
