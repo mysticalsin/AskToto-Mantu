@@ -26,6 +26,7 @@ const SETTINGS_TIMEOUT_MS = 30_000
 const POLL_MS = 250
 const VIEWPORT = Object.freeze({ width: 900, height: 820 })
 const FIT_TOLERANCE_PX = 1
+const PNG_HEADER_LENGTH = 24
 
 function usage() {
   console.error('Usage: node scripts/qa/settings-section-visual-compare.mjs <before executable> <after executable> <out dir>')
@@ -51,6 +52,26 @@ function fitsInside(inner, outer) {
     && inner.y >= outer.y - FIT_TOLERANCE_PX
     && inner.x + inner.width <= outer.x + outer.width + FIT_TOLERANCE_PX
     && inner.y + inner.height <= outer.y + outer.height + FIT_TOLERANCE_PX
+  )
+}
+
+function pngSize(buffer) {
+  if (buffer.length < PNG_HEADER_LENGTH) return null
+  const signature = buffer.subarray(0, 8).toString('hex')
+  if (signature !== '89504e470d0a1a0a') return null
+  return {
+    width: buffer.readUInt32BE(16),
+    height: buffer.readUInt32BE(20)
+  }
+}
+
+function screenshotCoversBox(buffer, box) {
+  if (!box) return false
+  const size = pngSize(buffer)
+  if (!size) return false
+  return (
+    size.width + FIT_TOLERANCE_PX >= Math.round(box.width)
+    && size.height + FIT_TOLERANCE_PX >= Math.round(box.height)
   )
 }
 
@@ -168,8 +189,9 @@ async function captureSections(page, appOutDir) {
       const file = join(appOutDir, `${key}.png`)
       const panelBox = await tabPanel.boundingBox()
       const box = await section.boundingBox()
-      const clipped = !fitsInside(box, panelBox)
       const buffer = await section.screenshot({ path: file, animations: 'disabled', caret: 'hide' })
+      const screenshotSize = pngSize(buffer)
+      const clipped = !screenshotCoversBox(buffer, box)
       sections.push({
         key,
         tab,
@@ -177,6 +199,9 @@ async function captureSections(page, appOutDir) {
         title,
         width: box ? Math.round(box.width) : null,
         height: box ? Math.round(box.height) : null,
+        viewportClipped: !fitsInside(box, panelBox),
+        screenshotWidth: screenshotSize?.width ?? null,
+        screenshotHeight: screenshotSize?.height ?? null,
         clipped,
         sha256: sha256(buffer),
         bytes: buffer.length,
@@ -260,6 +285,27 @@ function compare(before, after) {
   }
 }
 
+function formatFailureSummary(report) {
+  if (report.result === 'pass') {
+    return `settings-section-visual-compare sections=${report.comparison.sectionCount.before}`
+  }
+  if (report.error) return `settings-section-visual-compare error=${report.error}`
+  const rows = report.comparison?.rows?.filter((row) => row.status !== 'PASS') ?? []
+  const lines = [
+    `settings-section-visual-compare failures=${rows.length} sectionCount=${JSON.stringify(report.comparison?.sectionCount ?? null)}`
+  ]
+  for (const row of rows.slice(0, 20)) {
+    lines.push([
+      `- ${row.key}`,
+      `failures=${row.failures.join(',')}`,
+      `before=${row.before ? `${row.before.width}x${row.before.height} ${row.before.file}` : 'missing'}`,
+      `after=${row.after ? `${row.after.width}x${row.after.height} ${row.after.file}` : 'missing'}`
+    ].join(' '))
+  }
+  if (rows.length > 20) lines.push(`- ${rows.length - 20} more failing rows in settings-section-visual-compare.json`)
+  return lines.join('\n')
+}
+
 async function main() {
   const [beforeExecutable, afterExecutable, outArg] = process.argv.slice(2)
   if (!beforeExecutable || !afterExecutable || !outArg) {
@@ -302,6 +348,11 @@ async function main() {
 
   writeFileSync(join(outDir, 'settings-section-visual-compare.json'), `${JSON.stringify(report, null, 2)}\n`)
   console.log(`settings-section-visual-compare result=${report.result}`)
+  if (report.result === 'pass') {
+    console.log(formatFailureSummary(report))
+  } else {
+    console.error(formatFailureSummary(report))
+  }
   process.exit(report.result === 'pass' ? 0 : 1)
 }
 
@@ -312,4 +363,4 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   })
 }
 
-export { compare, fitsInside }
+export { compare, fitsInside, formatFailureSummary, pngSize, screenshotCoversBox }

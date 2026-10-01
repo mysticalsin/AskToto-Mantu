@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { compare } from './settings-section-visual-compare.mjs'
+import { compare, formatFailureSummary, pngSize, screenshotCoversBox } from './settings-section-visual-compare.mjs'
 
 type Section = {
   key: string
@@ -82,5 +82,23 @@ describe('settings-section-visual-compare compare', () => {
 
     expect(compared.status).toBe('FAIL')
     expect(compared.rows[0]).toEqual(expect.objectContaining({ status: 'FAIL', failures: ['clipped'] }))
+  })
+
+  it('judges screenshot clipping from the PNG, not from scroll-panel visibility', () => {
+    const png = Buffer.from('89504e470d0a1a0a0000000d4948445200000384000004b00000000000', 'hex')
+
+    expect(pngSize(png)).toEqual({ width: 900, height: 1200 })
+    expect(screenshotCoversBox(png, { x: 0, y: 700, width: 900, height: 1200 })).toBe(true)
+    expect(screenshotCoversBox(png, { x: 0, y: 0, width: 901, height: 1202 })).toBe(false)
+  })
+
+  it('prints failing rows so hosted CI logs name the section that changed', () => {
+    const report = {
+      result: 'fail',
+      comparison: compare(capture([section()]), capture([section({ sha256: 'b'.repeat(64) })]))
+    }
+
+    expect(formatFailureSummary(report)).toContain('brain-01-models')
+    expect(formatFailureSummary(report)).toContain('pixels_changed')
   })
 })
