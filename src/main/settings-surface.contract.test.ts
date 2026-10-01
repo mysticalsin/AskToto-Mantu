@@ -34,6 +34,18 @@ const WIN_DISPLAY = {
 }
 
 describe('MQA-286 — Settings open path sets min bounds', () => {
+  it('M2-0431: Settings and reveal route through the ordered surface steps whose order the overlay-surface unit tests prove', () => {
+    const settings = index.slice(index.indexOf('function applySettingsSurface(): void'), index.indexOf('function leaveSettingsSurface'))
+    expect(settings).toMatch(/openOverlaySettingsSurface\(win, rect, applyOverlaySurfaceChrome\)/)
+    expect(settings).not.toMatch(/applyOverlaySurfaceChrome\(\)/)
+    const restore = index.slice(index.indexOf('function restoreBarWidth(): void'), index.indexOf('function repairOverlayBoundsForReveal'))
+    expect(restore).toMatch(/revealOverlaySurface\(win, next, applyOverlaySurfaceChrome\)\r?\n\}/)
+    expect(restore).not.toMatch(/applyOverlaySurfaceChrome\(\)|showInactive|setBounds/)
+    const chrome = index.slice(index.indexOf('function applyOverlaySurfaceChrome'), index.indexOf('/** Hide/island park at bounds.y'))
+    expect(chrome).toMatch(/const chrome = skipUnchangedChrome\(win\)/)
+    expect(chrome).not.toMatch(/win\.set(BackgroundColor|Opacity)\(/)
+  })
+
   it('tray, hotkey, and IPC Settings call applySettingsSurface before the crushed park can win', () => {
     expect(index).toMatch(/function applySettingsSurface\(\): void/)
     expect(index).toMatch(/function leaveSettingsSurface\(\): void/)

@@ -27,6 +27,8 @@ import { INTELLIGENCE_STATUS_UNAVAILABLE } from '@shared/intelligence-pass'
 import { accelLabel } from '../lib/keys'
 import { ImportQueue } from './ImportQueue'
 import { isImportDropFile, pickedFiles, skippedImportMessage } from './import-queue'
+import { RowStatusChip, useRecallHydration } from './history/RowStatusChip'
+import type { RowHydration } from './history/hydration'
 import type {
   MeetingSummary,
   RecallHit,
@@ -482,6 +484,7 @@ const MeetingRow = memo(function MeetingRow({
   error,
   indexStatus,
   indexError,
+  hydration,
   onSelect,
   onOpen,
   onToggleConnections,
@@ -511,6 +514,7 @@ const MeetingRow = memo(function MeetingRow({
   /** FIX 4: the failed source's own error string (bounded — up to 20 across the whole list, see
    *  ingestStatus above), shown as the failed dot's tooltip. Null when unknown/not failed. */
   indexError: string | null
+  hydration: RowHydration | undefined // this row's explicit-open download (useRecallHydration), if any
   onSelect: (file: string) => void
   onOpen: (file: string) => void
   onToggleConnections: (file: string) => void
@@ -599,13 +603,7 @@ const MeetingRow = memo(function MeetingRow({
                 {m.title}
               </span>
 
-              {/* Locked: a real encrypted meeting that couldn't be decrypted on this device. Shown so it
-                  isn't silently missing; opening it surfaces the existing "couldn't be decrypted" error. */}
-              {m.locked && (
-                <span className="shrink-0 rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] text-[color:var(--color-ink-3)]">
-                  Locked
-                </span>
-              )}
+              <RowStatusChip meeting={m} hydration={hydration} />
 
               {/* Analyzing badge */}
               {isActive && (
@@ -981,6 +979,7 @@ export function RecallView({
       if (seq === fetchSeqRef.current) setItems(l)
     }).catch(() => {})
   }, [])
+  const hydrations = useRecallHydration(refreshList) // a finished download re-lists, so its row shows the meeting
 
   const upsertImportJob = useCallback((job: ImportJobView): void => {
     setImportJobs((jobs) => [job, ...jobs.filter((existing) => existing.jobId !== job.jobId)])
@@ -1291,6 +1290,7 @@ export function RecallView({
                     error={rowErrors[m.file] ?? null}
                     indexStatus={meetingIndexStatus(m.file, ingestStatus)}
                     indexError={ingestStatus?.errors.get(m.file) ?? null}
+                    hydration={hydrations[m.file]}
                     onSelect={selectFile}
                     onOpen={openMeeting}
                     onToggleConnections={toggleConnections}

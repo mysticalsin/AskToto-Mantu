@@ -5,8 +5,15 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
+  hoverWatchRestRect,
+  parkAfterExclusiveOnboarding,
+  rightEdgeSidecarBounds,
+  type DisplayMetrics
+} from '../../src/main/island/geometry'
+import {
   LIFECYCLE_EVENTS,
   auditDiagnostic,
+  bootLaunchActivateVerdict,
   buildWindowsShortcutLauncher,
   NAVIGATION_GUARD_BOOTSTRAP_PATCH,
   childPidReserved,
@@ -18,6 +25,15 @@ import {
   readObservationTail,
   initialRvRows,
   initialNavigationGuardRows,
+  initialRightEdgeHideRows,
+  initialOverlayStabilityRows,
+  OV_STABLE_PATH_MS,
+  overlayStablePath,
+  overlaySurfaceChanges,
+  rightEdgeExpectedRects,
+  rightEdgeHideParkMatches,
+  rightEdgeStateMatches,
+  rightEdgeStateMismatches,
   runRevealRow,
   seedOnboardedProfile,
   smokeReport,
@@ -63,6 +79,19 @@ interface Observation {
     id: string
     state: string
     entry: string
+    status: string
+    evidence: Record<string, unknown> | null
+    unblock: string | null
+  }>
+  rightEdgeHide?: Array<{
+    id: string
+    layout: string
+    status: string
+    evidence: Record<string, unknown> | null
+    unblock: string | null
+  }>
+  overlayStability?: Array<{
+    id: string
     status: string
     evidence: Record<string, unknown> | null
     unblock: string | null
@@ -178,6 +207,16 @@ function goodObservation(): Observation {
       status: 'PASS',
       evidence: { observed: true }
     })),
+    rightEdgeHide: initialRightEdgeHideRows().map((row) => ({
+      ...row,
+      status: 'PASS',
+      evidence: { observed: true }
+    })),
+    overlayStability: initialOverlayStabilityRows().map((row) => ({
+      ...row,
+      status: 'PASS',
+      evidence: { observed: true }
+    })),
     survivors: [],
     survivorsGoneMs: 300
   }
@@ -240,6 +279,26 @@ describe('smokeVerdict', () => {
       'an automated navigation guard row never completed after renderer readiness',
       (o) => { o.navigationGuard[0] = { ...o.navigationGuard[0], status: 'PENDING', evidence: null } },
       'navigation_guard_incomplete'
+    ],
+    [
+      'an automated right-edge Hide row failed',
+      (o) => { o.rightEdgeHide![0] = { ...o.rightEdgeHide![0], status: 'FAIL', evidence: null } },
+      'right_edge_hide_failed'
+    ],
+    [
+      'an automated right-edge Hide row never completed after renderer readiness',
+      (o) => { o.rightEdgeHide![0] = { ...o.rightEdgeHide![0], status: 'PENDING', evidence: null } },
+      'right_edge_hide_incomplete'
+    ],
+    [
+      'an overlay stability row failed',
+      (o) => { o.overlayStability![0] = { ...o.overlayStability![0], status: 'FAIL', evidence: null } },
+      'overlay_stability_failed'
+    ],
+    [
+      'an overlay stability row never completed after renderer readiness',
+      (o) => { o.overlayStability![1] = { ...o.overlayStability![1], status: 'PENDING', evidence: null } },
+      'overlay_stability_incomplete'
     ]
   ]
 
@@ -543,6 +602,8 @@ describe('smokeReport', () => {
       'shutdown',
       'rv',
       'navigationGuard',
+      'rightEdgeHide',
+      'overlayStability',
       'processes'
     ])
     expect(Object.keys(report.app ?? {})).toEqual(['version', 'platform', 'arch'])
@@ -589,6 +650,207 @@ describe('smokeReport', () => {
   })
 })
 
+describe('right-edge Hide rows (RE-HIDE)', () => {
+  const display: DisplayMetrics = {
+    bounds: { x: 0, y: 0, width: 1512, height: 982 },
+    workArea: { x: 0, y: 33, width: 1512, height: 949 },
+    hasNotch: true,
+    notchWidth: 200,
+    menuBarHeight: 33,
+    source: 'helper'
+  }
+
+  it('tracks every RE-HIDE scenario as pending automation, meeting rows last', () => {
+    const rows = initialRightEdgeHideRows()
+    expect(rows.map((row) => row.id)).toEqual([
+      'RE-HIDE-1-edge-reveals',
+      'RE-HIDE-2-inset-stays-parked',
+      'RE-HIDE-3-draft-hide-and-escape',
+      'RE-HIDE-5-toggle-hide-latches',
+      'RE-HIDE-6-toggle-reveals-hide',
+      'RE-HIDE-6-toggle-reveals-island',
+      'RE-HIDE-7-layout-change-chrome',
+      'RE-HIDE-3-meeting-hide',
+      'RE-HIDE-4-island-meeting-leave-parks'
+    ])
+    expect(rows.every((row) => row.status === 'PENDING' && row.evidence === null && row.unblock === null)).toBe(true)
+  })
+
+  it('expects exactly the geometry main computes for a fresh profile', () => {
+    const expected = rightEdgeExpectedRects(display.workArea)
+    expect(expected.drawer).toEqual(rightEdgeSidecarBounds(display, { open: true }))
+    expect(expected.tab).toEqual(rightEdgeSidecarBounds(display, { open: false }))
+    expect(expected.band).toEqual(parkAfterExclusiveOnboarding('hide', display, 8, 'right-edge'))
+    expect(expected.band).toEqual(hoverWatchRestRect('hide', display, 'right-edge'))
+    expect(expected.tab).toEqual(parkAfterExclusiveOnboarding('island', display, 8, 'right-edge'))
+  })
+
+  it('accepts only the documented revealed and parked chrome', () => {
+    const { drawer, tab, band } = rightEdgeExpectedRects(display.workArea)
+    const win = (bounds: { x: number; y: number; width: number; height: number }, opacity: number, clickThrough: boolean | null) => ({
+      bounds,
+      opacity,
+      clickThrough,
+      visible: true,
+      displayBounds: display.bounds,
+      workArea: display.workArea
+    })
+    const page = { drawer: false, rail: true, hideControl: false, meetingLive: false, composerFocused: false, draft: '' }
+    const open = { ...page, drawer: true, rail: false, hideControl: true }
+    expect(rightEdgeStateMatches({ win: win(drawer, 1, false), page: open }, 'revealed')).toBe(true)
+    expect(rightEdgeStateMatches({ win: win(drawer, 1, true), page: open }, 'revealed')).toBe(false)
+    expect(rightEdgeStateMatches({ win: win(drawer, 1, false), page }, 'revealed')).toBe(false)
+    expect(rightEdgeStateMatches({ win: win(band, 0, true), page }, 'parked', 'hide')).toBe(true)
+    // The 1.9.6 park: the inset tab, invisible and click-through, is not a Hide park any more.
+    expect(rightEdgeStateMatches({ win: win(tab, 0, true), page }, 'parked', 'hide')).toBe(false)
+    expect(rightEdgeStateMatches({ win: win(band, 1, true), page }, 'parked', 'hide')).toBe(false)
+    expect(rightEdgeStateMatches({ win: win(tab, 1, false), page }, 'parked', 'island')).toBe(true)
+    // An open drawer rendered inside a parked window is the RE-HIDE-4 failure.
+    expect(rightEdgeStateMatches({ win: win(tab, 1, false), page: open }, 'parked', 'island')).toBe(false)
+    expect(rightEdgeStateMatches({ win: win(tab, 0, false), page }, 'parked', 'island')).toBe(false)
+  })
+
+  // Windows packaged smoke: a 1024x768 runner with a 48 px taskbar and a 32 px minimum window width.
+  const windows: DisplayMetrics = {
+    bounds: { x: 0, y: 0, width: 1024, height: 768 },
+    workArea: { x: 0, y: 0, width: 1024, height: 720 },
+    hasNotch: false,
+    notchWidth: 0,
+    menuBarHeight: 0,
+    source: 'heuristic'
+  }
+
+  it('matches main on the Windows runner work area, including the Island rail y', () => {
+    const expected = rightEdgeExpectedRects(windows.workArea)
+    expect(expected.drawer).toEqual(rightEdgeSidecarBounds(windows, { open: true }))
+    expect(expected.tab).toEqual(parkAfterExclusiveOnboarding('island', windows, 8, 'right-edge'))
+    expect(expected.band).toEqual(parkAfterExclusiveOnboarding('hide', windows, 8, 'right-edge'))
+    // The observed Windows parks: Island rail at y 141, Hide band at the drawer's y 39.
+    expect(expected.tab).toEqual({ x: 960, y: 141, width: 52, height: 52 })
+    expect(expected.band.y).toBe(39)
+  })
+
+  it('accepts a Hide park the OS widened only when its right edge stays at the work-area edge', () => {
+    const { band } = rightEdgeExpectedRects(windows.workArea)
+    const edge = windows.workArea.x + windows.workArea.width
+    const win = (bounds: { x: number; y: number; width: number; height: number }) => ({
+      bounds,
+      opacity: 0,
+      clickThrough: true,
+      visible: true,
+      displayBounds: windows.bounds,
+      workArea: windows.workArea
+    })
+    const page = { dock: true, drawer: false, rail: true, hideControl: false, meetingLive: false, composerFocused: false, draft: '' }
+    const flush = { x: edge - 32, y: band.y, width: 32, height: band.height }
+    expect(rightEdgeHideParkMatches(flush, band)).toBe(true)
+    expect(rightEdgeStateMatches({ win: win(flush), page }, 'parked', 'hide')).toBe(true)
+    // Run 36575074348: widened at the requested x, the window crossed the work-area edge.
+    const crossing = { x: band.x, y: band.y, width: 32, height: band.height }
+    expect(rightEdgeHideParkMatches(crossing, band)).toBe(false)
+    expect(rightEdgeStateMatches({ win: win(crossing), page }, 'parked', 'hide')).toBe(false)
+    // Inset from the edge, or the old tab square, is still not a Hide park.
+    expect(rightEdgeHideParkMatches({ ...flush, x: flush.x - 12 }, band)).toBe(false)
+    expect(rightEdgeHideParkMatches(rightEdgeExpectedRects(windows.workArea).tab, band)).toBe(false)
+  })
+
+  it('names the parked criteria a Windows readback misses, so a failing row says which one', () => {
+    // Run 36645827157 readback: the widened band flush at the edge is a bounds match.
+    const bounds = { x: 992, y: 39, width: 32, height: 560 }
+    const win = (opacity: number, clickThrough: boolean | null) => ({ bounds, opacity, clickThrough, visible: true, displayBounds: windows.bounds, workArea: windows.workArea })
+    const page = { dock: true, drawer: false, rail: true, hideControl: false, meetingLive: false, composerFocused: false, draft: '' }
+    expect(rightEdgeStateMismatches({ win: win(0, true), page }, 'parked', 'hide')).toEqual([])
+    expect(rightEdgeStateMismatches({ win: win(0, true), page: { ...page, drawer: true, rail: false } }, 'parked', 'hide')).toEqual(['drawer'])
+    expect(rightEdgeStateMismatches({ win: win(1, false), page }, 'parked', 'hide')).toEqual(['opacity', 'clickThrough'])
+    expect(rightEdgeStateMismatches({ win: win(0, null), page }, 'parked', 'hide')).toEqual(['clickThrough'])
+    expect(rightEdgeStateMismatches({ win: win(0, true), page }, 'parked', 'island')).toEqual(['bounds', 'opacity', 'clickThrough'])
+    expect(rightEdgeStateMismatches(null, 'parked', 'hide')).toEqual(['observation'])
+  })
+})
+
+describe('overlay stability rows (OV, M2-0431)', () => {
+  const mac = { bounds: { x: 0, y: 0, width: 1920, height: 1080 }, workArea: { x: 0, y: 25, width: 1920, height: 1055 } }
+  const windows = { bounds: { x: 0, y: 0, width: 1024, height: 768 }, workArea: { x: 0, y: 0, width: 1024, height: 720 } }
+
+  it('tracks OV-STABLE and OV-BG as pending automation, with a 3-minute path', () => {
+    expect(initialOverlayStabilityRows()).toEqual([
+      { id: 'OV-STABLE', status: 'PENDING', evidence: null, unblock: null },
+      { id: 'OV-BG', status: 'PENDING', evidence: null, unblock: null }
+    ])
+    expect(OV_STABLE_PATH_MS).toBe(180_000)
+  })
+
+  it("stops on the owner's menu-bar points for 400 ms and passes through the right-edge band area", () => {
+    const path = overlayStablePath(mac.bounds, mac.workArea)
+    expect(path.slice(0, 3).map((stop) => stop.point)).toEqual([
+      { x: 24, y: 8 },
+      { x: 1253, y: 8 },
+      { x: 1770, y: 8 }
+    ])
+    expect(path.every((stop) => stop.ms === 400)).toBe(true)
+    expect(path.find((stop) => stop.label === 'right-edge-band')?.point.x).toBe(1919)
+  })
+
+  it('keeps every menu-bar stop outside the notch reveal zone (the bar centre +/-150 px), even on a 1024 px display', () => {
+    for (const display of [mac, windows]) {
+      const hoverZone = hoverWatchRestRect('hide', {
+        bounds: display.bounds,
+        workArea: display.workArea,
+        hasNotch: false,
+        notchWidth: 0,
+        menuBarHeight: display.workArea.y - display.bounds.y,
+        source: 'heuristic'
+      }, 'top-center')
+      for (const stop of overlayStablePath(display.bounds, display.workArea).filter((s) => s.label.startsWith('menu-bar'))) {
+        const insideZone = stop.point.x >= hoverZone.x && stop.point.x < hoverZone.x + hoverZone.width
+        expect(insideZone, `${stop.label} at x=${stop.point.x}`).toBe(false)
+        expect(stop.point.x).toBeGreaterThanOrEqual(display.bounds.x)
+        expect(stop.point.x).toBeLessThan(display.bounds.x + display.bounds.width)
+      }
+    }
+  })
+
+  const parked = { bounds: { x: 956, y: 0, width: 8, height: 2 }, opacity: 0, visible: true }
+  const bar = { x: 520, y: 25, width: 880, height: 120 }
+  const call = (turn: number, name: string, before: typeof parked, after: typeof parked, arg: unknown = null) => ({ turn, call: name, arg, before, after })
+
+  it('counts no change for repeated calls that leave the window as it was', () => {
+    const events = [call(1, 'setBounds', parked, parked), call(1, 'setOpacity', parked, parked, 0), call(2, 'showInactive', parked, parked)]
+    expect(overlaySurfaceChanges(events)).toEqual({ changes: 0, reveals: 0, parks: 0, opacityBeforeTarget: 0, slabBeforeResize: 0 })
+  })
+
+  it('accepts a reveal that sets bounds before opacity 1 and a park that fades before shrinking', () => {
+    const sized = { bounds: bar, opacity: 0, visible: true }
+    const shown = { bounds: bar, opacity: 1, visible: true }
+    const events = [
+      call(1, 'setBounds', parked, sized),
+      call(1, 'setOpacity', sized, shown, 1),
+      call(2, 'setOpacity', shown, sized, 0),
+      call(2, 'setBounds', sized, parked)
+    ]
+    expect(overlaySurfaceChanges(events)).toEqual({ changes: 4, reveals: 1, parks: 1, opacityBeforeTarget: 0, slabBeforeResize: 0 })
+  })
+
+  it('flags opacity 1 while the window still has its parked size (the pre-M2-0431 hard cut)', () => {
+    const shownSmall = { ...parked, opacity: 1 }
+    const shown = { bounds: bar, opacity: 1, visible: true }
+    const events = [call(1, 'setOpacity', parked, shownSmall, 1), call(1, 'setBounds', shownSmall, shown)]
+    expect(overlaySurfaceChanges(events).opacityBeforeTarget).toBe(1)
+  })
+
+  it('flags an opaque Settings background painted before the Settings resize, never the transparent rest', () => {
+    const settings = { x: 520, y: 25, width: 880, height: 800 }
+    const openState = { bounds: settings, opacity: 1, visible: true }
+    const barState = { bounds: bar, opacity: 1, visible: true }
+    const slabFirst = [call(1, 'setBackgroundColor', barState, barState, '#120022'), call(1, 'setBounds', barState, openState)]
+    const resizeFirst = [call(1, 'setBounds', barState, openState), call(1, 'setBackgroundColor', openState, openState, '#120022')]
+    const restFirst = [call(1, 'setBackgroundColor', openState, openState, '#00000000'), call(1, 'setBounds', openState, barState)]
+    expect(overlaySurfaceChanges(slabFirst).slabBeforeResize).toBe(1)
+    expect(overlaySurfaceChanges(resizeFirst).slabBeforeResize).toBe(0)
+    expect(overlaySurfaceChanges(restFirst).slabBeforeResize).toBe(0)
+  })
+})
+
 describe('initialRvRows', () => {
   it('tracks every macOS hosted reopen row as pending automation', () => {
     const rows = initialRvRows('darwin')
@@ -598,7 +860,8 @@ describe('initialRvRows', () => {
       'RV-2-macos-open-new-instance',
       'RV-4-tray-show',
       'RV-4-global-hotkey',
-      'RV-1-macos-finder-spotlight-launchpad'
+      'RV-1-macos-finder-spotlight-launchpad',
+      'RV-boot-launch-activate-stays-parked'
     ])
     expect(rows.every((row) => row.status === 'PENDING')).toBe(true)
     expect(rows.every((row) => row.unblock === null)).toBe(true)
@@ -817,5 +1080,53 @@ describe('computeCleanupTargets', () => {
     )
 
     expect(targets.map((t) => t.pid).sort((a, b) => a - b)).toEqual([100, 101])
+  })
+})
+
+describe('bootLaunchActivateVerdict', () => {
+  const passing = { precondition: null, rendererReady: true, activateReveals: 0, parked: true, settingsOpened: false }
+
+  it('passes only when the launch activate revealed nothing, the overlay is parked and Settings stayed closed', () => {
+    expect(bootLaunchActivateVerdict(passing)).toEqual({ status: 'PASS', failures: [], reason: null })
+  })
+
+  it('fails when an activate reveal was honoured during boot', () => {
+    expect(bootLaunchActivateVerdict({ ...passing, activateReveals: 1 })).toMatchObject({
+      status: 'FAIL',
+      failures: ['activate_reveal_during_boot']
+    })
+  })
+
+  it('fails when the overlay is not parked after boot, or parked was never observed', () => {
+    expect(bootLaunchActivateVerdict({ ...passing, parked: false })).toMatchObject({
+      status: 'FAIL',
+      failures: ['not_parked_after_boot']
+    })
+    expect(bootLaunchActivateVerdict({ ...passing, parked: null }).status).toBe('FAIL')
+  })
+
+  it('fails when Settings opened, or its state was never observed', () => {
+    expect(bootLaunchActivateVerdict({ ...passing, settingsOpened: true })).toMatchObject({
+      status: 'FAIL',
+      failures: ['settings_opened_on_boot']
+    })
+    expect(bootLaunchActivateVerdict({ ...passing, settingsOpened: null }).status).toBe('FAIL')
+  })
+
+  it('reports every defect at once', () => {
+    expect(bootLaunchActivateVerdict({ ...passing, activateReveals: 2, parked: false, settingsOpened: true }).failures).toEqual([
+      'activate_reveal_during_boot',
+      'not_parked_after_boot',
+      'settings_opened_on_boot'
+    ])
+  })
+
+  it('is PRECONDITION, never PASS, when the env or CDP port could not be delivered', () => {
+    const verdict = bootLaunchActivateVerdict({ ...passing, precondition: 'the CDP port did not reach the app' })
+    expect(verdict).toEqual({ status: 'PRECONDITION', failures: [], reason: 'the CDP port did not reach the app' })
+  })
+
+  it('is PRECONDITION when the renderer never became ready', () => {
+    expect(bootLaunchActivateVerdict({ ...passing, rendererReady: false }).status).toBe('PRECONDITION')
   })
 })

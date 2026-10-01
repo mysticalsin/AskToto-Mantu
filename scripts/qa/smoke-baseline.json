@@ -1,8 +1,7 @@
 {
   "schema": 1,
-  "seededFromRun": "provisional",
-  "provisional": "Rows mirror pre-M2-0460 hosted runs (36572749687, 36551144543), not a run on a commit containing eb58e6ca.",
-  "LEAD_ACTION": "re-seed smoke-baseline.json from the first green m2/integration packaged-smoke run after eb58e6ca and record its run id in the file and the PR",
+  "seededFromRun": "36572749687",
+  "LEAD_ACTION": "after merge, confirm that the next m2/integration packaged smoke ran this comparator and record the run id",
   "platforms": {
     "darwin": {
       "rows": {
@@ -23,6 +22,7 @@
         "packaged-smoke/RV-4-tray-show": { "status": "PASS" },
         "packaged-smoke/RV-4-global-hotkey": { "status": "PASS" },
         "packaged-smoke/RV-1-macos-finder-spotlight-launchpad": { "status": "PASS" },
+        "packaged-smoke/RV-boot-launch-activate-stays-parked": { "status": "PASS" },
         "packaged-smoke/HIST-clean-bar-open": { "status": "PASS" },
         "packaged-smoke/HIST-clean-settings-open": { "status": "PASS" },
         "packaged-smoke/HIST-clean-row-doubleclick": { "status": "PASS" },

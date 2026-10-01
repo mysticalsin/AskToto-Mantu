@@ -6,8 +6,7 @@
   "FF-02": {
     "src/main/brain/ingest.ts": 2,
     "src/main/infra/observability/crash-taxonomy.ts": 1,
-    "src/main/infra/observability/projection.ts": 1,
-    "src/renderer/src/components/Settings.tsx": 1
+    "src/main/infra/observability/projection.ts": 1
   },
   "FF-03": {
     "src/main/application-catalog-view.ts": 1,
@@ -40,16 +39,15 @@
   "FF-04": {
     "src/main/auth.ts": 999,
     "src/main/brain/corrections.ts": 1637,
-    "src/main/brain/ingest.ts": 3077,
-    "src/main/brain/publish.ts": 990,
+    "src/main/brain/ingest.ts": 3083,
+    "src/main/brain/publish.ts": 974,
     "src/main/brain/store.ts": 1197,
     "src/main/cli.ts": 1690,
     "src/main/import-jobs.ts": 1198,
-    "src/main/index.ts": 9818,
-    "src/main/recall.ts": 950,
+    "src/main/index.ts": 9953,
     "src/main/store.ts": 1367,
     "src/main/transcripts.ts": 1211,
-    "src/renderer/src/App.tsx": 4341,
+    "src/renderer/src/App.tsx": 4331,
     "src/renderer/src/components/Bar.tsx": 898,
     "src/renderer/src/components/BrainRecordPage.tsx": 831,
     "src/renderer/src/components/BrainView.tsx": 1445,
@@ -57,9 +55,12 @@
     "src/renderer/src/components/OnboardingExperience.tsx": 1910,
     "src/renderer/src/components/RecallView.tsx": 1349,
     "src/renderer/src/components/Review.tsx": 1950,
-    "src/renderer/src/components/Settings.tsx": 9506,
+    "src/renderer/src/features/settings/AiSection.tsx": 2410,
+    "src/renderer/src/features/settings/AudioTab.tsx": 911,
+    "src/renderer/src/features/settings/DustSetup.tsx": 980,
+    "src/renderer/src/features/settings/SettingsRoot.tsx": 1246,
     "src/renderer/src/lib/listen.ts": 3144,
-    "src/shared/ipc.ts": 2452
+    "src/shared/ipc.ts": 2460
   },
   "FF-05a": {
     "src/main/apple-speech.ts": 2,
@@ -107,9 +108,11 @@
     "src/main/mcp/pushQueue.ts": 4,
     "src/main/metrics.ts": 2,
     "src/main/mode-skills.ts": 12,
+    "src/main/model-policy-client.ts": 6,
     "src/main/operator-queue.ts": 7,
     "src/main/operator-skill-key.ts": 2,
     "src/main/parakeet.ts": 2,
+    "src/main/qa-capture-source.ts": 1,
     "src/main/secrets.ts": 13,
     "src/main/selftest.ts": 16,
     "src/main/speaker-id.ts": 6,
@@ -124,7 +127,6 @@
     "src/main/brain/publish.ts": 20,
     "src/main/brain/store.ts": 63,
     "src/main/graphify.ts": 17,
-    "src/main/recall.ts": 5,
     "src/main/transcripts.ts": 33
   },
   "FF-06": {},
@@ -137,6 +139,7 @@
     "scripts/ci-secret-scan.contract.test.ts": 1,
     "scripts/ci/lint-ratchet.contract.test.ts": 21,
     "scripts/ci/packaged-smoke-workflow.contract.test.ts": 2,
+    "scripts/docs/managed-config-docs.test.ts": 9,
     "scripts/ensure-intelligence-bundle.contract.test.ts": 2,
     "scripts/evals/local-recap-safety.test.ts": 3,
     "scripts/mac-chain-gates.contract.test.ts": 2,
@@ -195,6 +198,7 @@
     "src/main/main-lifecycle.contract.test.ts": 2,
     "src/main/managed-node.test.ts": 1,
     "src/main/metis-command-boundary.contract.test.ts": 4,
+    "src/main/model-policy-contract.test.ts": 12,
     "src/main/mqa-175-brain-index-poison.test.ts": 5,
     "src/main/no-emotion-inference.contract.test.ts": 5,
     "src/main/no-show-steals-focus.contract.test.ts": 2,
@@ -203,7 +207,7 @@
     "src/main/onboarding-recovery.contract.test.ts": 2,
     "src/main/operator-ask-routing.contract.test.ts": 4,
     "src/main/operator-default-url.contract.test.ts": 1,
-    "src/main/operator-readiness.contract.test.ts": 10,
+    "src/main/operator-readiness.contract.test.ts": 11,
     "src/main/overlay-cursor-stability.test.ts": 1,
     "src/main/overlay-placement.contract.test.ts": 2,
     "src/main/packaged-model-claims.contract.test.ts": 2,
@@ -227,7 +231,7 @@
     "src/main/speaker-id.test.ts": 6,
     "src/main/speaker-session-wiring.test.ts": 2,
     "src/main/sync-fs-meetings-root.contract.test.ts": 21,
-    "src/main/tonight-1.8.5-kinetic-checklist.contract.test.ts": 16,
+    "src/main/tonight-1.8.5-kinetic-checklist.contract.test.ts": 19,
     "src/main/transcripts.test.ts": 2,
     "src/main/whisper-asr-host.test.ts": 6,
     "src/main/will-quit-guard.test.ts": 1,
@@ -248,7 +252,7 @@
     "src/renderer/src/components/Bar.test.tsx": 1,
     "src/renderer/src/components/BrainView.intelligence-pass.test.ts": 2,
     "src/renderer/src/components/CommandListeningPill.contract.test.ts": 1,
-    "src/renderer/src/components/IdentitySection.test.tsx": 2,
+    "src/renderer/src/components/IdentitySection.test.tsx": 3,
     "src/renderer/src/components/ObsidianOrb.contract.test.ts": 3,
     "src/renderer/src/components/Onboarding.connected.contract.test.ts": 1,
     "src/renderer/src/components/Onboarding.helpers.test.ts": 7,
@@ -303,7 +307,7 @@
     "src/shared/asr-engine.contract.test.ts": 5,
     "src/shared/asr-latency.test.ts": 1,
     "src/shared/asr-quality.contract.test.ts": 13,
-    "src/shared/cli-setup-status.test.ts": 2,
+    "src/shared/cli-setup-status.test.ts": 3,
     "src/shared/dust-validate.test.ts": 1,
     "src/shared/license-types.contract.test.ts": 1,
     "src/shared/overlay-chrome.test.ts": 4,
@@ -353,5 +357,6 @@
     "src/main/operator-overlay.ts": 1,
     "src/main/screen-preprocess.ts": 1,
     "src/main/updater.ts": 1
-  }
+  },
+  "FF-15": {}
 }

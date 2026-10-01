@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { startRunObservability } from './run-observability'
+import { startRunObservability, timeBootStage } from './run-observability'
 import { startStallMonitor } from './stall-monitor'
 import type { PriorRun } from '../../boot-sentinel'
 import type { StallMonitor, StallMonitorOptions } from './stall-monitor'
@@ -200,6 +200,102 @@ describe('startRunObservability', () => {
     const result = observability.timePhase('ensureMeetingsFolder', () => 42)
     expect(timePhaseSpy).toHaveBeenCalledExactlyOnceWith('ensureMeetingsFolder', expect.any(Function))
     expect(result).toBe(42) // forwards the stall monitor's return value, not just the call
+  })
+
+  describe('boot stages (M2-0515)', () => {
+    /** Observability with an injected clock and flush scheduler: `runScheduled` runs the later task. */
+    function bootStageHarness() {
+      const audit = vi.fn()
+      const phases: string[] = []
+      const scheduled: (() => void)[] = []
+      const clock = { now: 0 }
+      const observability = startRunObservability({
+        userData: '/fake',
+        version: '1.9.7',
+        platform: 'darwin',
+        arch: 'arm64',
+        audit,
+        powerMonitor: fakePowerMonitor(),
+        deps: {
+          beginRunWatch: () => ({ bootId: 'boot-7', prior: fakePrior() }),
+          markShutdownClean: vi.fn(() => ({ bootId: 'boot-7', uptimeS: 1, reason: 'will-quit' as const })),
+          startStallMonitor: vi.fn(() =>
+            fakeStallMonitor({
+              timePhase: (label, fn) => {
+                phases.push(label)
+                return fn()
+              }
+            })
+          ),
+          setIntervalFn: vi.fn(() => 1 as unknown as ReturnType<typeof setInterval>),
+          clearIntervalFn: vi.fn(),
+          now: () => clock.now,
+          scheduleFlush: (flush) => void scheduled.push(flush)
+        }
+      })
+      const stageRecords = () => audit.mock.calls.filter(([event]) => event === 'app.boot.stage').map(([, detail]) => detail)
+      const runScheduled = () => scheduled.splice(0).forEach((flush) => flush())
+      return { observability, audit, phases, clock, scheduled, stageRecords, runScheduled }
+    }
+
+    it("timeBootStage returns fn's value, times it as a stall phase and records its own duration", () => {
+      const { observability, phases, clock, stageRecords, runScheduled } = bootStageHarness()
+      const result = observability.timeBootStage('createTray.newTray', () => {
+        clock.now += 312
+        return 'tray'
+      })
+      expect(result).toBe('tray')
+      expect(phases).toEqual(['createTray.newTray'])
+      runScheduled()
+      expect(stageRecords()).toEqual([{ bootId: 'boot-7', stage: 'createTray.newTray', ms: 312 }])
+    })
+
+    it('records a stage that throws and rethrows its error', () => {
+      const { observability, clock, stageRecords, runScheduled } = bootStageHarness()
+      expect(() =>
+        observability.timeBootStage('createWindow.firstShow', () => {
+          clock.now += 40
+          throw new Error('no compositor')
+        })
+      ).toThrow('no compositor')
+      runScheduled()
+      expect(stageRecords()).toEqual([{ bootId: 'boot-7', stage: 'createWindow.firstShow', ms: 40 }])
+    })
+
+    it('never calls the audit sink inside the measured task: one later flush writes every pending record in order', () => {
+      const { observability, audit, scheduled, stageRecords, runScheduled } = bootStageHarness()
+      const callsBefore = audit.mock.calls.length
+      observability.timeBootStage('createTray.loadIcon', () => undefined)
+      observability.recordBootStage('createWindow.construct', 170)
+      expect(audit.mock.calls.length).toBe(callsBefore)
+      expect(scheduled).toHaveLength(1)
+      runScheduled()
+      expect(stageRecords().map((record) => record.stage)).toEqual(['createTray.loadIcon', 'createWindow.construct'])
+    })
+
+    it('recordBootStage carries whether the window it built is transparent', () => {
+      const { observability, stageRecords, runScheduled } = bootStageHarness()
+      observability.recordBootStage('createWindow.construct', 760, { transparent: true })
+      runScheduled()
+      expect(stageRecords()).toEqual([{ bootId: 'boot-7', stage: 'createWindow.construct', ms: 760, transparent: true }])
+    })
+
+    it('shutdownClean flushes pending records before app.shutdown.clean', () => {
+      const { observability, audit, stageRecords } = bootStageHarness()
+      observability.recordBootStage('createTray.attachMenu', 3)
+      observability.shutdownClean(1)
+      expect(stageRecords()).toEqual([{ bootId: 'boot-7', stage: 'createTray.attachMenu', ms: 3 }])
+      const events = audit.mock.calls.map(([event]) => event)
+      expect(events.indexOf('app.boot.stage')).toBeLessThan(events.indexOf('app.shutdown.clean'))
+    })
+
+    it('the free timeBootStage runs the stage untimed before observability starts and through it after', () => {
+      expect(timeBootStage(null, 'createTray.newTray', () => 'untimed')).toBe('untimed')
+      const { observability, stageRecords, runScheduled } = bootStageHarness()
+      expect(timeBootStage(observability, 'createWindow.firstShow', () => 'timed')).toBe('timed')
+      runScheduled()
+      expect(stageRecords()).toEqual([{ bootId: 'boot-7', stage: 'createWindow.firstShow', ms: 0 }])
+    })
   })
 
   it("suspend calls pause(); resume and unlock-screen each call restartIfPaused(), unconditionally and with no local flag gating either", () => {

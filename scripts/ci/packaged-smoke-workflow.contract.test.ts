@@ -142,6 +142,100 @@ function packagedSmokeJobRuns(event: GitHubEvent): boolean {
   return event.eventName === 'pull_request' || event.ref.startsWith('refs/heads/')
 }
 
+interface WorkflowStep {
+  name: string
+  text: string
+}
+
+function macSteps(): WorkflowStep[] {
+  const macJob = workflow.slice(workflow.indexOf('\n  mac:\n'), workflow.indexOf('\n  windows:\n'))
+  return macJob
+    .split('\n      - ')
+    .slice(1)
+    .map((text) => ({ name: text.match(/name:\s+(.+)/)?.[1] ?? text.split('\n')[0], text }))
+}
+
+const probeStepName = 'Probe tccutil reset ScreenCapture without sudo (report only)'
+const launchStepName = 'Launch, exercise RV reopen routes, quit cleanly, and check that nothing survives'
+
+function probeCommands(): string {
+  const step = macSteps().find((candidate) => candidate.name === probeStepName)
+  expect(step, 'tccutil probe step not found in the mac job').toBeDefined()
+  return step!.text
+    .split('\n')
+    .filter((line) => !line.trim().startsWith('#') && !line.startsWith('name:'))
+    .join('\n')
+}
+
+describe('packaged-smoke tccutil probe (M2-0472)', () => {
+  it('sits in the mac job after the last app launch and only in the mac job', () => {
+    const names = macSteps().map((step) => step.name)
+    const probe = names.indexOf(probeStepName)
+    expect(probe).toBeGreaterThan(-1)
+    expect(probe).toBeGreaterThan(names.indexOf(launchStepName))
+    const launchesAfter = macSteps()
+      .slice(probe + 1)
+      .filter((step) => /packaged-smoke\.mjs|hk-m\.mjs|sidecar-boot-reaper\.mjs/.test(step.text))
+    expect(launchesAfter).toEqual([])
+    expect(workflow.slice(workflow.indexOf('\n  windows:\n'))).not.toContain('tccutil')
+  })
+
+  it('resets only ScreenCapture for the bundle id read from the installed Info.plist', () => {
+    const commands = probeCommands()
+    expect(commands).toContain("PlistBuddy -c 'Print :CFBundleIdentifier' \"$RUNNER_TEMP/smoke/Metis.app/Contents/Info.plist\"")
+    const calls = commands.split('\n').filter((line) => /\/usr\/bin\/tccutil\b/.test(line))
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toContain('/usr/bin/tccutil reset ScreenCapture "$bundle"')
+    expect([...commands.matchAll(/\/usr\/bin\/tccutil\s+(\S+)\s+(\S+)/g)].map((m) => `${m[1]} ${m[2]}`)).toEqual(['reset ScreenCapture'])
+    expect(commands).toContain('uid=$(id -u)')
+    expect(commands).toContain('[ "$uid" -eq 0 ]')
+  })
+
+  it('never uses sudo for tccutil', () => {
+    const commands = probeCommands()
+    for (const line of commands.split('\n')) {
+      if (/\btccutil\b/.test(line)) expect(line).not.toMatch(/\bsudo\b/)
+    }
+    expect(commands).not.toMatch(/sudo\s+(-\S+\s+)*\/usr\/bin/)
+    // Every sudo is the row-B sqlite3 seed/cleanup, the `tcc_has sudo` read of that database, or the root-user notice.
+    const remaining = commands
+      .replace(/\bsudo sqlite3\b/g, '')
+      .replace(/\btcc_has sudo\b/g, '')
+      .replace(/so a non-sudo reset cannot be measured/, '')
+    expect(remaining).not.toMatch(/\bsudo\b/)
+    expect(commands.match(/\bsudo sqlite3\b/g)).toHaveLength(2)
+  })
+
+  it('cannot fail the job', () => {
+    const step = macSteps().find((candidate) => candidate.name === probeStepName)!.text
+    expect(step).toContain('continue-on-error: true')
+    expect(step).toContain('set +eo pipefail')
+    expect(step.trimEnd().endsWith('exit 0')).toBe(true)
+    expect(step).toContain('::notice title=tccutil probe::')
+  })
+
+  it('gates the row-B seed on workflow_dispatch', () => {
+    const commands = probeCommands()
+    expect(commands).toContain('EVENT_NAME: ${{ github.event_name }}')
+    const gate = commands.indexOf('if [ "$EVENT_NAME" != "workflow_dispatch" ]; then')
+    const seed = commands.indexOf('INSERT OR REPLACE INTO access')
+    expect(gate).toBeGreaterThan(-1)
+    expect(seed).toBeGreaterThan(gate)
+    expect(commands.indexOf('else', gate)).toBeLessThan(seed)
+    expect(commands).toContain('csrutil: $sip')
+  })
+
+  it('writes the content-free report into the uploaded smoke-report directory', () => {
+    const commands = probeCommands()
+    expect(commands).toContain('smoke-report/tccutil-probe.json')
+    expect(commands).toContain('sw_vers -productVersion')
+    expect(commands).toContain('|<bundle>|g')
+    expect(commands).toContain('<path>')
+    for (const field of ['schema', 'macos', 'sip', 'uid_is_root', 'rows']) expect(commands).toContain(field)
+    expect(workflow).toMatch(/name: packaged-smoke-macos\n\s+path: smoke-report\/\n/)
+  })
+})
+
 // Resolves `${{ inputs.hk_m_cycles == '20' && A || B }}`; push and pull_request runs have no input (undefined).
 function resolveCyclesExpression(value: string, hkMCycles: string | undefined): string {
   const match = value.match(/^\$\{\{ inputs\.hk_m_cycles == '20' && '?([^' ]+)'? \|\| '?([^' ]+)'? \}\}$/)
@@ -167,6 +261,7 @@ function hkMStep(hkMCycles: string | undefined) {
     timeoutMinutes: Number(field(/\n {8}timeout-minutes: (.+)\n/)),
     cycles: field(/\n {10}HK_M_CYCLES: (.+)\n/),
     budgetMs: field(/\n {10}HK_M_BUDGET_MS: (.+)\n/),
+    profile: block.match(/\n {10}HK_M_PROFILE: (.+)\n/)?.[1],
     command: block.match(/\n {8}run: (.+)(?:\n|$)/)?.[1]
   }
 }
@@ -180,16 +275,31 @@ function macJobTimeout(hkMCycles: string | undefined): number {
 describe('packaged-smoke workflow HK-M cycles input', () => {
   it('offers hk_m_cycles on workflow_dispatch as a choice of 1 or 20 defaulting to 1', () => {
     const block = eventBlock('workflow_dispatch')
+    const cycles = block.slice(
+      block.findIndex((line) => line.trim() === 'hk_m_cycles:'),
+      block.findIndex((line) => line.trim() === 'hk_m_profile:')
+    )
     expect(block.join('\n')).toContain('    inputs:\n      hk_m_cycles:')
-    expect(block.some((line) => line.trim() === 'type: choice')).toBe(true)
-    expect(block.filter((line) => /^ {10}- /.test(line)).map((line) => cleanScalar(line.slice(12)))).toEqual(['1', '20'])
-    expect(block.some((line) => line.trim() === "default: '1'")).toBe(true)
+    expect(cycles.some((line) => line.trim() === 'type: choice')).toBe(true)
+    expect(cycles.filter((line) => /^ {10}- /.test(line)).map((line) => cleanScalar(line.slice(12)))).toEqual(['1', '20'])
+    expect(cycles.some((line) => line.trim() === "default: '1'")).toBe(true)
+  })
+
+  it('offers hk_m_profile beside hk_m_cycles as fresh or shared defaulting to fresh', () => {
+    const block = eventBlock('workflow_dispatch')
+    expect(block.join('\n')).toContain('      hk_m_cycles:')
+    expect(block.join('\n')).toContain('      hk_m_profile:')
+    const profile = block.slice(block.findIndex((line) => line.trim() === 'hk_m_profile:'))
+    expect(profile.some((line) => line.trim() === 'type: choice')).toBe(true)
+    expect(profile.filter((line) => /^ {10}- /.test(line)).slice(0, 2).map((line) => cleanScalar(line.slice(12)))).toEqual(['fresh', 'shared'])
+    expect(profile.some((line) => line.trim() === 'default: fresh')).toBe(true)
   })
 
   it.each([undefined, '1'])('keeps the default path at one cycle, 1200000 ms, step timeout 25 (input %s)', (input) => {
     const step = hkMStep(input)
     expect(step).toMatchObject({ timeoutMinutes: 25, cycles: '1', budgetMs: '1200000' })
-    expect(step.command).toBe('node scripts/qa/hk-m.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/hk-m.json --cycles "$HK_M_CYCLES" --budget-ms "$HK_M_BUDGET_MS"')
+    expect(step.profile).toBe("${{ inputs.hk_m_profile || 'fresh' }}")
+    expect(step.command).toBe('node scripts/qa/hk-m.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/hk-m.json --cycles "$HK_M_CYCLES" --profile "$HK_M_PROFILE" --budget-ms "$HK_M_BUDGET_MS"')
     expect(macJobTimeout(input)).toBe(120)
   })
 
@@ -198,6 +308,7 @@ describe('packaged-smoke workflow HK-M cycles input', () => {
     const step = hkMStep('20')
     expect(step).toMatchObject({ timeoutMinutes: 140, cycles: '20', budgetMs: '8100000' })
     expect(candidate).toContain('--cycles 20 --budget-ms 8100000')
+    expect(candidate).toContain('--cycles 20 --profile shared --budget-ms 8100000')
     expect(candidate).toContain('timeout-minutes: 140')
     expect(macJobTimeout('20')).toBeGreaterThan(140)
     expect(macJobTimeout('20')).toBeLessThanOrEqual(180)
@@ -206,7 +317,7 @@ describe('packaged-smoke workflow HK-M cycles input', () => {
   it('fails a 20-cycle rehearsal unless the report is a full pass and names the cycle count', () => {
     const block = stepBlock('Fail the HK-M rehearsal unless every row passed')
     expect(block).toContain("if: always() && inputs.hk_m_cycles == '20'")
-    expect(block).toContain('HK-M rehearsal: 20 cycles')
+    expect(block).toContain("HK-M rehearsal: 20 cycles (${{ inputs.hk_m_profile || 'fresh' }} profile)")
     expect(block).toContain("row.status === 'NOT_RUN'")
     expect(block).toContain("r.result === 'pass' && notRun === 0 ? 0 : 1")
     expect(block).toContain('GITHUB_STEP_SUMMARY')
