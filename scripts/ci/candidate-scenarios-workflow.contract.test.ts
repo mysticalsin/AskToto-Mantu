@@ -116,7 +116,8 @@ describe('candidate-scenarios.yml', () => {
       '--name candidate-provenance',
       'node scripts/qa/provenance.mjs verify provenance/provenance.json assets "$VARIANT"',
       'jq -r .run.id provenance/provenance.json',
-      'node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" mac',
+      'candidate-scenarios.mjs installer-kind --scenario "$SCENARIO" --platform mac',
+      'node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" "$selector"',
       'codesign --verify --deep --strict',
       'echo "path=$app" >> "$GITHUB_OUTPUT"',
       'candidate-scenarios.mjs profile',
@@ -183,6 +184,14 @@ describe('candidate-scenarios.yml', () => {
     expect(job('win')).toContain('    runs-on: windows-latest')
   })
 
+  it('offers packaged-lifecycle, which runs on both hosted platform jobs', () => {
+    const options = block(block(block(lines, '    inputs:', 4), '      scenario:', 6), '        options:', 8).map((line) => line.trim())
+    expect(options).toContain('- packaged-lifecycle')
+    expect(Object.keys(SCENARIOS['packaged-lifecycle'].platforms)).toEqual(['mac', 'win'])
+    expect(job('mac')).toContain('    runs-on: macos-latest')
+    expect(job('win')).toContain('    runs-on: windows-latest')
+  })
+
   it('hands the installed app to the scenario on macOS, after the signature check', () => {
     const mac = steps('mac')
     const install = mac[stepIndex(mac, 'codesign --verify --deep --strict')]
@@ -200,7 +209,8 @@ describe('candidate-scenarios.yml', () => {
       '--name candidate-provenance',
       'node scripts/qa/provenance.mjs verify provenance/provenance.json assets "$VARIANT"',
       "require('./provenance/provenance.json').run.id",
-      'node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" win',
+      'candidate-scenarios.mjs installer-kind --scenario "$SCENARIO" --platform win',
+      'node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" "$selector"',
       "'/S', \"/D=$target\"",
       'candidate-scenarios.mjs profile --scenario "$SCENARIO" --platform win',
       'candidate-scenarios.mjs run'
