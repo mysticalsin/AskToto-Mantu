@@ -78,7 +78,22 @@ describe('readModelPolicy / writeModelPolicy', () => {
     expect(read?.version).toBe(NOW)
     expect(read?.updatedAt).toBe(NOW)
     expect(read?.updatedBy).toBe('owner@example.test')
+    expect(read?.localSpeechPack).toBe('offered')
     expect(read?.capabilities.askChat).toEqual({ provider: 'anthropic', model: 'claude-sonnet-4-6', fallbacks: [] })
+  })
+
+  it('persists a valid localSpeechPack choice', async () => {
+    const db = sqliteD1(freshDb())
+    const result = await writeModelPolicy(db, capabilities(), 'owner@example.test', NOW, 'blocked')
+    expect(result.ok).toBe(true)
+    expect((await readModelPolicy(db))?.localSpeechPack).toBe('blocked')
+  })
+
+  it('rejects an invalid localSpeechPack choice, writing nothing', async () => {
+    const db = sqliteD1(freshDb())
+    const result = await writeModelPolicy(db, capabilities(), 'owner@example.test', NOW, 'download-now')
+    expect(result.ok).toBe(false)
+    expect(await readModelPolicy(db)).toBeNull()
   })
 
   it('a second write replaces the whole document and bumps the version', async () => {
@@ -112,6 +127,7 @@ describe('signModelPolicy / verifyModelPolicySignature', () => {
     version: NOW,
     updatedAt: NOW,
     updatedBy: 'owner@example.test',
+    localSpeechPack: 'offered',
     capabilities: capabilities() as ModelPolicyDocument['capabilities']
   }
 

@@ -18,6 +18,7 @@ import {
   canonicalModelPolicyPayload,
   canonicalUnmanagedModelPolicyPayload,
   resolveModelPolicyCandidates,
+  LocalSpeechPackPolicySchema,
   ModelPolicyDocumentSchema,
   type ModelPolicyCapability,
   type ModelPolicyDocument
@@ -81,17 +82,23 @@ export async function writeModelPolicy(
   db: D1DatabaseLike | undefined,
   capabilities: unknown,
   actor: string,
-  now: number
+  now: number,
+  localSpeechPack: unknown = undefined
 ): Promise<ModelPolicyWriteResult> {
   if (!db) return { ok: false, error: 'db unbound' }
   const parsedCapabilities = ModelPolicyDocumentSchema.shape.capabilities.safeParse(capabilities)
   if (!parsedCapabilities.success) {
     return { ok: false, error: parsedCapabilities.error.issues[0]?.message ?? 'invalid model policy' }
   }
+  const parsedLocalSpeechPack = LocalSpeechPackPolicySchema.safeParse(localSpeechPack)
+  if (!parsedLocalSpeechPack.success) {
+    return { ok: false, error: parsedLocalSpeechPack.error.issues[0]?.message ?? 'invalid local speech pack policy' }
+  }
   const policy: ModelPolicyDocument = {
     version: now,
     updatedAt: now,
     updatedBy: actor,
+    localSpeechPack: parsedLocalSpeechPack.data,
     capabilities: parsedCapabilities.data
   }
   await db
