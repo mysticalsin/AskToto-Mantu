@@ -24,8 +24,11 @@ import { drainOperatorQueue, enqueueOperatorItem, type QueueSendResult } from '.
 import { operatorEntitled, recordOperatorHeartbeatResult, resetOperatorEntitlementsState } from './operator-entitlements-state'
 import { maybeRefreshOperatorIntegrations, resetOperatorIntegrationsState } from './operator-integrations'
 import { parseOperatorHeartbeatEntitlements } from '@shared/operator-entitlements'
+import { refreshModelPolicy } from './model-policy-client'
 
 const HEARTBEAT_MS = 60_000
+// Half the <=60s fleet-policy bound, so a change lands inside it despite timer drift and a slow fetch.
+const POLICY_POLL_MS = 30_000
 
 export interface OperatorRuntimeSettings {
   operatorUrl?: string
@@ -376,10 +379,27 @@ export function startOperatorRuntime(
       await hooks.onCrmRetry(beat.retry)
     }
   }
+  // M2-0412: the fleet model policy polls on its own timer so a slow queue drain or heartbeat can never
+  // push a policy change past the 60 s bound. Best-effort — a failed fetch never blocks the heartbeat.
+  // Broadcast only when the policy actually changed, so Settings' managed/locked display updates without
+  // an idle settings-changed churn every 30 s reaching the renderer.
+  const policyGeneration = runtimeGeneration
+  const pollPolicy = (): void => {
+    void refreshModelPolicy(getSettings())
+      .then((changed) => {
+        if (changed && policyGeneration === runtimeGeneration) hooks?.onReadinessChanged?.()
+      })
+      .catch(() => undefined)
+  }
+  pollPolicy()
   void tick()
+  // One timer at the policy cadence: every firing polls the policy, every second firing runs the heartbeat.
+  let firings = 0
   heartbeatTimer = setInterval(() => {
-    void tick()
-  }, HEARTBEAT_MS)
+    pollPolicy()
+    firings += 1
+    if (firings % (HEARTBEAT_MS / POLICY_POLL_MS) === 0) void tick()
+  }, POLICY_POLL_MS)
   if (typeof heartbeatTimer === 'object' && heartbeatTimer && 'unref' in heartbeatTimer) {
     heartbeatTimer.unref()
   }
