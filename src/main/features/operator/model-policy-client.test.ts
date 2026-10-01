@@ -25,6 +25,7 @@ import {
   narrowAllowedForCapability,
   refreshModelPolicy,
   resetModelPolicyStateForTests,
+  resolveLocalSpeechPackPolicy,
   resolveManagedModel,
   setModelPolicyDirForTests,
   setModelPolicyFetchForTests
@@ -33,11 +34,11 @@ import {
 const SETTINGS = { operatorUrl: 'https://operator.test', operatorIngestSecret: 'shared-secret' }
 const NOW = 1_725_000_000_000
 
-function policy(overrides: Partial<ModelPolicyDocument['capabilities']> = {}): ModelPolicyDocument {
+function policy(overrides: Partial<ModelPolicyDocument['capabilities']> = {}, localSpeechPack: ModelPolicyDocument['localSpeechPack'] = 'offered'): ModelPolicyDocument {
   const base = Object.fromEntries(
     MODEL_POLICY_CAPABILITIES.map((k) => [k, emptyModelPolicyEntry('anthropic', 'claude-sonnet-4-6')])
   ) as ModelPolicyDocument['capabilities']
-  return { version: NOW, updatedAt: NOW, updatedBy: 'owner@example.test', capabilities: { ...base, ...overrides } }
+  return { version: NOW, updatedAt: NOW, updatedBy: 'owner@example.test', localSpeechPack, capabilities: { ...base, ...overrides } }
 }
 
 function sign(secret: string, doc: ModelPolicyDocument): string {
@@ -201,5 +202,28 @@ describe('narrowAllowedForCapability / resolveManagedModel (thin wrappers over t
     )
     expect(resolveManagedModel(SETTINGS, 'askChat', 'anthropic', 'whatever')).toBe('claude-sonnet-4-6')
     expect(resolveManagedModel(SETTINGS, 'askChat', 'claude-cli', 'whatever-the-cli-uses')).toBe('whatever-the-cli-uses')
+  })
+})
+
+describe('resolveLocalSpeechPackPolicy', () => {
+  it('defaults unmanaged fleets to offered', () => {
+    expect(resolveLocalSpeechPackPolicy(SETTINGS, null)).toBe('offered')
+  })
+
+  it('uses the verified signed policy and lets MDM move only toward blocked', async () => {
+    const doc = policy({}, 'required')
+    setModelPolicyFetchForTests(async () => jsonResponse({ ok: true, policy: doc, signature: sign('shared-secret', doc) }))
+    await refreshModelPolicy(SETTINGS, NOW)
+    expect(resolveLocalSpeechPackPolicy(SETTINGS, null)).toBe('required')
+    expect(resolveLocalSpeechPackPolicy(SETTINGS, 'offered')).toBe('offered')
+    expect(resolveLocalSpeechPackPolicy(SETTINGS, 'blocked')).toBe('blocked')
+  })
+
+  it('does not let MDM move blocked back toward offered or required', async () => {
+    const doc = policy({}, 'blocked')
+    setModelPolicyFetchForTests(async () => jsonResponse({ ok: true, policy: doc, signature: sign('shared-secret', doc) }))
+    await refreshModelPolicy(SETTINGS, NOW)
+    expect(resolveLocalSpeechPackPolicy(SETTINGS, 'required')).toBe('blocked')
+    expect(resolveLocalSpeechPackPolicy(SETTINGS, 'offered')).toBe('blocked')
   })
 })
