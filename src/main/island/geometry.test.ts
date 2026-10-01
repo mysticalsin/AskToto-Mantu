@@ -350,7 +350,9 @@ describe('MQA-275 — clamp primitives (moved verbatim from index.ts)', () => {
     expect(island!.y).toBe(second.bounds.y)
     const watch = hoverWatchRestRect('island', second)
     expect(watch.y).toBe(second.bounds.y)
-    expect(watch.width).toBe(second.workArea.width)
+    // Owner decision OD-23 (M2-0431): the notch area of the NEW display, centred on its bar.
+    expect(watch.width).toBe(300)
+    expect(watch.x + watch.width / 2).toBe(second.workArea.x + second.workArea.width / 2)
     expect(watch.height).toBeLessThan(44)
     expect(watch.height).toBe(second.workArea.y - second.bounds.y + 1)
   })
@@ -440,8 +442,9 @@ describe('after exclusive exit — park peek/hide, never 880×816', () => {
     expect(isVisibleHideSlab({ width: 560, height: 103 })).toBe(true)
     expect(isForbiddenMidFlowCard(park)).toBe(false)
     expect(isForbiddenMidFlowCard({ width: 880, height: 816 })).toBe(true)
-    expect(watch.width).toBe(tonyMac.workArea.width)
-    expect(watch.width).toBeGreaterThan(OVERLAY_HIDE_TARGET.width)
+    // Owner decision OD-23 (M2-0431): the notch area (±150 px), never the 560 slab or the full menu bar.
+    expect(watch.width).toBe(300)
+    expect(watch.width).toBeLessThan(OVERLAY_HIDE_TARGET.width)
     expect(watch.height).toBe(tonyMac.workArea.y - tonyMac.bounds.y + 1)
     expect(watch.height).toBeLessThan(44)
     expect(watch.y).toBe(0)
@@ -477,7 +480,9 @@ describe('after exclusive exit — park peek/hide, never 880×816', () => {
     expect(park.height).toBeLessThanOrEqual(8)
     expect(watch.height).toBeLessThan(ISLAND_NOTCH_STRUT_PX)
     expect(watch.height).toBeLessThan(44)
-    expect(watch.width).toBe(flush.workArea.width)
+    // OD-23: the notch area, centred on the flush work area.
+    expect(watch.width).toBe(300)
+    expect(watch.x).toBe((flush.workArea.width - 300) / 2)
     expect(watch.y).toBe(0)
   })
 
@@ -794,7 +799,7 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
       transparent: true,
       backgroundColor: OVERLAY_TRANSPARENT_BACKGROUND,
       fullscreenable: false,
-      roundedCorners: true
+      roundedCorners: false
     })
     expect(exclusiveMayUseSimpleFullScreen(true)).toBe(false)
     expect(exclusiveMayUseSimpleFullScreen(false)).toBe(true)

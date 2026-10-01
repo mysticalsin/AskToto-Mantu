@@ -13,16 +13,27 @@
  * `none` places no fixture: the control row, which tells a boot-time block apart from a fixture reader.
  *
  * Attribution evidence, reported and never judged: every sample's time since spawn, the loop's max since
- * the previous sample and the active libuv resources; a CPU profile of the first 90 s; the profile's
- * audit logs, stall bundles and this launch's main.log; which FIFOs had a reader; and, from +20 s,
- * History's own IPC round trip (recallList + brainStatus) measured in the main window. All of it lands in
- * the report directory (`--report-dir`, else the `--out` file's directory, else out/st-1).
+ * the previous sample, the loop's max during its write (a slow write close to it waited on a main-thread
+ * block, not on the libuv pool) and the active libuv resources; a CPU profile of the first 90 s, with when
+ * it was requested and when the profiler actually started; the profile's audit logs, stall bundles and this
+ * launch's main.log; which FIFOs had a reader; from +20 s, History's own IPC round trip (recallList +
+ * brainStatus) measured in the main window; the app's own native boot stage timings (`bootStages`, read
+ * from the profile's audit trail); and the runner witness (`witness`, on every timeline entry and summed
+ * up in the report): this harness's own event loop delay, a probe write on the temp volume the profile is
+ * on, started with each sample, and the machine's CPU busy share since the previous sample, which tell a
+ * machine-wide stall apart from the app's own. All of it lands in the report directory (`--report-dir`,
+ * else the `--out` file's directory, else out/st-1).
  *
  * Usage:
  *   node scripts/qa/st-1.mjs --installer <Metis-QA-<v>.zip | Metis-Setup-<v>.exe> --provenance <provenance.json>
  *       --fixtures fifo|dataless|none [--count 6] [--cloud-dir <folder of evicted files>] [--main-log <main.log>]
  *       [--exe <installed executable>] [--profile-template <userData dir>] [--minutes 5] [--out <report.json>]
- *       [--report-dir <dir>]
+ *       [--report-dir <dir>] [--purpose window-construction --window-variant <variant>]
+ *
+ * `--purpose window-construction` marks a short launch made only to measure the boot window's constructor under
+ * one QA-identity rendering variant (shipped, spellcheck-off, paint-when-hidden, prewarm-spellchecker,
+ * prewarm-view), passed to the candidate as METIS_QA_WINDOW_VARIANT. Its report says `st1Evidence: false` and is
+ * never ST-1 evidence. Every other run launches the shipped variant.
  *
  * Every in-app wait is bounded and every failure to answer is recorded in the report's `errors` (step, tMs,
  * message) while the run continues: only the criteria decide PASS or FAIL. The report is rewritten every
@@ -45,19 +56,25 @@ import {
   unlinkSync,
   writeFileSync
 } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFile } from 'node:fs/promises'
+import { cpus, tmpdir } from 'node:os'
 import { basename, dirname, join, relative } from 'node:path'
+import { monitorEventLoopDelay } from 'node:perf_hooks'
 import { sha256File } from './provenance.mjs'
 import { createFifo, releaseFifo } from './fixtures/fifo.mjs'
 import {
+  bootStagesFromAudit,
   buildLaunchFailureReport,
   buildReport,
+  candidateEnv,
+  cpuBusyPct,
   emptyRun,
   failureRecord,
   historyEntry,
   pinnedExpression,
   recordSample,
   releaseExpression,
+  runPurpose,
   withTimeout
 } from './lib/st-1-core.mjs'
 
@@ -237,9 +254,9 @@ function placeDatalessFixtures(root, cloudDir) {
  *  surface later, as an 'error' event): the caller must take ownership of the returned child — and be
  *  ready to stop it — before calling inspectorUrl, so every way that wait can end still leaves the child
  *  killable by the caller's cleanup. */
-function spawnCandidate(exe, profile) {
+function spawnCandidate(exe, profile, windowVariant) {
   return spawn(exe, ['--inspect=127.0.0.1:0'], {
-    env: { ...process.env, ASKTOTO_USERDATA: profile },
+    env: candidateEnv(process.env, profile, windowVariant),
     stdio: ['ignore', 'ignore', 'pipe'],
     detached: process.platform !== 'win32'
   })
@@ -370,9 +387,11 @@ const sample = (probeFile) => `(async () => {
   let started = performance.now()
   await writeFile(${JSON.stringify(probeFile)}, String(started))
   const writeMs = performance.now() - started
+  // Read, not reset: the next sample's loopMaxSinceLastMs still covers this write.
+  const loopMaxDuringWriteMs = __st1since.max / 1e6
   started = performance.now()
   await lookup('localhost')
-  return { writeMs, lookupMs: performance.now() - started, loopMaxSinceLastMs, resources }
+  return { writeMs, loopMaxDuringWriteMs, lookupMs: performance.now() - started, loopMaxSinceLastMs, resources }
 })()`
 
 const SUMMARY = '({ p99Ms: __st1.percentile(99) / 1e6, maxMs: __st1.max / 1e6 })'
@@ -412,15 +431,62 @@ const HISTORY_PROBE = `(async () => {
   return { skipped: 'no window exposes window.toto.recallList and brainStatus' }
 })()`
 
-/** Starts the sampling CPU profiler; reports why when it cannot. */
-async function startProfiler(cdp) {
+/** Starts the sampling CPU profiler; reports why when it cannot. `startedAtMs` is stamped when Profiler.start
+ *  answers, so the profile's own clock can be lined up with the timeline; null when it never started. */
+async function startProfiler(cdp, sinceSpawn) {
   try {
     await cdp.send('Profiler.enable', {}, EVALUATE_TIMEOUT_MS)
     await cdp.send('Profiler.setSamplingInterval', { interval: PROFILE_SAMPLING_US }, EVALUATE_TIMEOUT_MS)
     const started = await cdp.send('Profiler.start', {}, EVALUATE_TIMEOUT_MS)
-    return started.late ? { running: false, error: 'Profiler.start did not answer' } : { running: true }
+    return started.late
+      ? { startedAtMs: null, running: false, error: 'Profiler.start did not answer' }
+      : { startedAtMs: sinceSpawn(), running: true }
   } catch (error) {
-    return { running: false, error: error.message }
+    return { startedAtMs: null, running: false, error: error.message }
+  }
+}
+
+/**
+ * The runner witness, report-only: this harness's own event loop delay (one histogram for the whole run, one
+ * read and reset at every sample, as `__st1` and `__st1since` are in the app), a small probe write to `file`
+ * and the machine's CPU busy share since the previous sample. A stall that shows here as well as in the app
+ * was the machine's, not the app's.
+ */
+function startWitness(file) {
+  const loop = monitorEventLoopDelay({ resolution: LOOP_RESOLUTION_MS })
+  loop.enable()
+  const since = monitorEventLoopDelay({ resolution: LOOP_RESOLUTION_MS })
+  since.enable()
+  let previousCpus = cpus()
+  const writes = new Set()
+  return {
+    /** The witness for one sample. The probe write is started here and never awaited: its `writeMs` is filled
+     *  in when it settles (null while pending or when it failed). */
+    sample() {
+      const loopMaxSinceLastMs = since.max / 1e6
+      since.reset()
+      const currentCpus = cpus()
+      const witness = { loopMaxSinceLastMs, writeMs: null, cpuBusyPct: cpuBusyPct(previousCpus, currentCpus) }
+      previousCpus = currentCpus
+      const started = performance.now()
+      const write = writeFile(file, String(started)).then(
+        () => {
+          witness.writeMs = performance.now() - started
+        },
+        () => {}
+      )
+      writes.add(write)
+      void write.then(() => writes.delete(write))
+      return witness
+    },
+    /** Waits (bounded) for the probe writes still in flight, stops both histograms and returns the whole
+     *  run's loop delay. */
+    async stop(timeoutMs) {
+      await withTimeout(Promise.all(writes), timeoutMs)
+      loop.disable()
+      since.disable()
+      return { p99Ms: loop.percentile(99) / 1e6, maxMs: loop.max / 1e6 }
+    }
   }
 }
 
@@ -448,13 +514,15 @@ async function probeHistory(cdp, tMs) {
 
 /** Fills `run` (lib/st-1-core.mjs emptyRun) in place, so a partial report can be written at any moment.
  *  Never throws on a probe that fails or hangs: each is recorded in `run.errors` and the run goes on. */
-async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath }) {
+async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, witnessFile }) {
   const sinceSpawn = () => Math.round(performance.now() - spawnedAt)
   run.setupAtMs = sinceSpawn()
+  const witness = startWitness(witnessFile)
   const setup = await evaluateBounded(cdp, 'setup', SETUP, SETUP_TIMEOUT_MS)
   if (setup.ok) run.poolSize = setup.value
   else run.errors.push(failureRecord('setup', run.setupAtMs, setup, SETUP_TIMEOUT_MS))
-  run.profiler = { startedAtMs: sinceSpawn(), ...(await startProfiler(cdp)) }
+  const requestedAtMs = sinceSpawn()
+  run.profiler = { requestedAtMs, ...(await startProfiler(cdp, sinceSpawn)) }
   const probeFile = join(profile, 'st1-probe.txt')
   let historyRunning = null
   let historyLastMs = -Infinity
@@ -469,8 +537,12 @@ async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath }
         historyRunning = null
       })
     }
-    const outcome = await evaluateBounded(cdp, 'sample', sample(probeFile), SAMPLE_TIMEOUT_MS)
-    recordSample(run, tMs, outcome, { lateAfterMs: EVALUATE_TIMEOUT_MS, boundMs: SAMPLE_TIMEOUT_MS })
+    const answer = evaluateBounded(cdp, 'sample', sample(probeFile), SAMPLE_TIMEOUT_MS)
+    // Queued behind the evaluation's own inspector send (already queued by the call above), so the witness
+    // is taken at the sample instant and never delays the app sample.
+    const sampleWitness = await Promise.resolve().then(() => witness.sample())
+    const outcome = await answer
+    recordSample(run, tMs, outcome, { lateAfterMs: EVALUATE_TIMEOUT_MS, boundMs: SAMPLE_TIMEOUT_MS, witness: sampleWitness })
     await new Promise((resolve) => setTimeout(resolve, SAMPLE_INTERVAL_MS))
   }
   if (run.profiler.running) await stopProfiler(cdp, run.profiler, cpuProfilePath, sinceSpawn())
@@ -479,6 +551,7 @@ async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath }
   const summary = await evaluateBounded(cdp, 'summary', SUMMARY, SETUP_TIMEOUT_MS)
   if (!summary.ok) run.errors.push(failureRecord('summary', summaryAtMs, summary, SETUP_TIMEOUT_MS))
   run.loop = summary.ok ? summary.value : { p99Ms: Infinity, maxMs: Infinity }
+  run.witnessLoop = await witness.stop(SAMPLE_TIMEOUT_MS)
 }
 
 /** Where this launch's main.log is, and the byte it starts at. The file's own birth time tells whether
@@ -534,6 +607,20 @@ function copyAppEvidence(profile, mainLog, dir) {
   return { dir: basename(dir), copied, errors }
 }
 
+/** The app's boot stage timings from the profile's audit logs (rotated generations first, the live audit.log
+ *  last), each with its record time since `spawnedWallMs`. Never throws: an unreadable trail is reported as
+ *  `{ error }`. */
+function readBootStages(profile, spawnedWallMs) {
+  try {
+    const logs = join(profile, 'logs')
+    const names = existsSync(logs) ? readdirSync(logs).filter((entry) => /^audit.*\.log$/.test(entry)) : []
+    names.sort((a, b) => (a === 'audit.log') - (b === 'audit.log') || a.localeCompare(b))
+    return { stages: names.flatMap((name) => bootStagesFromAudit(readFileSync(join(logs, name), 'utf8'), spawnedWallMs)) }
+  } catch (error) {
+    return { error: error.message }
+  }
+}
+
 /** Whether the run actually reached the fixtures, and (dataless only) whether they stayed unread. */
 function collectExercisedEvidence(kind, fixtures, mainLogPath, mainLogOffset, root) {
   if (kind === 'none') return { exercised: null }
@@ -558,7 +645,12 @@ function stopChild(child) {
 /** Tolerates partial state from a failure before everything was created: `root` may never have become a
  *  junction (a usage error can throw right after resolving --cloud-dir but before placing it), and
  *  `profile`/`unzipDir` may still be null if resolveExecutable/prepareProfile never ran. */
-function cleanup({ kind, root, profile, unzipDir }) {
+function cleanup({ kind, root, profile, unzipDir, witnessFile }) {
+  try {
+    rmSync(witnessFile, { force: true })
+  } catch {
+    /* a leftover witness file in the temp directory never fails the run */
+  }
   if (kind === 'dataless' && root) {
     try {
       unlinkSync(root) // ENOENT: never created, or already removed — nothing to do
@@ -589,6 +681,11 @@ async function main() {
   }
   if (args.fixtures === 'dataless' && (!args.cloudDir || !args.mainLog)) {
     console.error('[st-1] FAIL — --fixtures dataless needs --cloud-dir and --main-log')
+    return 2
+  }
+  const { purpose, windowVariant, error: purposeError } = runPurpose(args)
+  if (purposeError) {
+    console.error(`[st-1] FAIL — ${purposeError}`)
     return 2
   }
   const minutes = Number(args.minutes)
@@ -627,19 +724,23 @@ async function main() {
   let evidence = null
   let mainLog = null
   let appEvidence = null
+  let bootStages = null
+  let spawnedWallMs = null
+  // The runner witness's probe write, on the temp volume the profile is created on.
+  const witnessFile = join(tmpdir(), `st1-witness-${process.pid}.txt`)
   let complete = false
   let harnessError = null
   let cleanupError = null
   const reportPath = args.out ?? join(reportDir, `${reportBase}.json`)
   const currentReport = () => {
-    const common = { row: args.fixtures, installer: basename(args.installer), candidate, fixtures }
+    const common = { row: args.fixtures, installer: basename(args.installer), candidate, fixtures, purpose, windowVariant }
     if (launchFailure) return buildLaunchFailureReport({ ...common, reason: launchFailure })
     return buildReport({
       ...common,
       minutes,
       measured: run,
       evidence,
-      attribution: { mainLog, appEvidence },
+      attribution: { mainLog, appEvidence, bootStages },
       complete,
       harnessError
     })
@@ -668,9 +769,9 @@ async function main() {
     // owns a child to stop — including when the inspector never answers (fuse off), the exe is bad
     // ('error') or the candidate dies early ('exit'): every one of those becomes a launch-failure report
     // instead of a detached, unkillable process.
-    const spawnedWallMs = Date.now()
+    spawnedWallMs = Date.now()
     const spawnedAt = performance.now()
-    child = spawnCandidate(resolved.exe, profile)
+    child = spawnCandidate(resolved.exe, profile, windowVariant)
     let wsUrl
     try {
       wsUrl = await inspectorUrl(child)
@@ -686,7 +787,7 @@ async function main() {
       mainLogLocated = args.mainLog
         ? Promise.resolve({ path: args.mainLog, fromByte: mainLogOffset, exactLaunchOffset: true })
         : locateMainLog(cdp, spawnedWallMs)
-      await measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath })
+      await measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, witnessFile })
       mainLog = await mainLogLocated
       evidence = collectExercisedEvidence(args.fixtures, fixtures, args.mainLog, mainLogOffset, root)
       complete = true
@@ -710,11 +811,14 @@ async function main() {
     }
     cdp?.close()
     if (child) stopChild(child)
-    if (child && profile && !launchFailure) appEvidence = copyAppEvidence(profile, mainLog, join(reportDir, `${reportBase}-app`))
+    if (child && profile && !launchFailure) {
+      appEvidence = copyAppEvidence(profile, mainLog, join(reportDir, `${reportBase}-app`))
+      bootStages = readBootStages(profile, spawnedWallMs)
+    }
     // A cleanup failure is rethrown after this block, never from it: a throw inside `finally` would replace
     // the error that is already propagating.
     try {
-      cleanup({ kind: args.fixtures, root, profile, unzipDir })
+      cleanup({ kind: args.fixtures, root, profile, unzipDir, witnessFile })
     } catch (error) {
       cleanupError = error
       harnessError ??= error.message

@@ -76,9 +76,9 @@ describe('Windows QA workflow', () => {
   })
 
   it('guards the capabilities job to main in this repository on a bounded hosted Windows runner', () => {
-    expect(capabilities).toContain(
-      "if: inputs.suite == 'capabilities' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'"
-    )
+    const guard =
+      "if: github.event_name == 'workflow_dispatch' && inputs.suite == 'capabilities' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'"
+    expect(capabilities).toContain(guard)
     expect(capabilities).toContain('runs-on: windows-latest')
     const timeout = capabilities.match(/timeout-minutes: (\d+)/)
     expect(timeout).not.toBeNull()
@@ -103,6 +103,15 @@ describe('Windows QA workflow', () => {
     expect(capabilities).toContain('try { $value = (& $Body | Out-String).Trim() }')
     expect(capabilities).toContain('"ERROR: $($_.Exception.GetType().Name): $($_.Exception.Message)"')
     expect(capabilities).toContain('CTRL+ALT+F24')
+    const addTypeAt = capabilities.indexOf('Add-Type -Namespace Qa -Name Native')
+    expect(addTypeAt).toBeGreaterThan(capabilities.indexOf('function Ensure-NativeUser32'))
+    expect(addTypeAt).toBeLessThan(capabilities.indexOf("Probe 'runner.name'"))
+    for (const key of ['sendinput.symbol_available', 'sendinput.key_action', 'global_hotkey.register_action']) {
+      const probeAt = capabilities.indexOf(`Probe '${key}'`)
+      const nextProbeAt = capabilities.indexOf('\n          Probe ', probeAt + 1)
+      const probe = capabilities.slice(probeAt, nextProbeAt === -1 ? undefined : nextProbeAt)
+      expect(probe).toContain('Ensure-NativeUser32')
+    }
   })
 
   it('declares the SendInput INPUT struct at its 40-byte x64 size', () => {

@@ -13,7 +13,15 @@ name: M2-0238 evidence back-fill
 # example a fixture you add to the dispatching branch before running it), or supply ledger_repository
 # (and a LEDGER_REPO_TOKEN repository secret with read access to it) at dispatch time to back-fill
 # against the real ledger.
+#
+# The pull_request trigger on this file's own path only registers the workflow with GitHub (M2-0501): the
+# run it creates skips the job, uses no runner minutes and never reaches LEDGER_REPO_TOKEN.
+run-name: ${{ github.event_name == 'pull_request' && 'M2-0238 evidence back-fill (registration)' || 'M2-0238 evidence back-fill' }}
+
 on:
+  pull_request:
+    paths:
+      - .github/workflows/m2-0238-backfill.yml
   workflow_dispatch:
     inputs:
       ledger_path:
@@ -41,6 +49,7 @@ concurrency:
 jobs:
   backfill:
     name: Build the evidence back-fill bundle
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

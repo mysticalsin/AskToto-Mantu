@@ -10,7 +10,14 @@ name: Windows QA
 # audio endpoint, dxdiag, OneDrive env). It has no checkout, runs no repository code and uses no credentials.
 #   gh workflow run windows-qa.yml --ref main -f suite=hk-w -f candidate_run=<run id> -f sha256=<Setup sha256>
 #   gh workflow run windows-qa.yml --ref main -f suite=capabilities
+# The pull_request trigger on this file's own path only registers the workflow with GitHub (M2-0501): the
+# run it creates skips every job, uses no runner minutes and reaches no secret.
+run-name: ${{ github.event_name == 'pull_request' && 'Windows QA (registration)' || format('Windows QA {0}', inputs.suite) }}
+
 on:
+  pull_request:
+    paths:
+      - .github/workflows/windows-qa.yml
   workflow_dispatch:
     inputs:
       suite:
@@ -50,7 +57,7 @@ concurrency:
 jobs:
   hk-w:
     name: HK-W (Windows)
-    if: inputs.suite == 'hk-w' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' && inputs.suite == 'hk-w' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'
     runs-on: windows-latest
     timeout-minutes: 120
     permissions:
@@ -126,7 +133,7 @@ jobs:
 
   capabilities:
     name: Capabilities probe (Windows)
-    if: inputs.suite == 'capabilities' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' && inputs.suite == 'capabilities' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'
     runs-on: windows-latest
     timeout-minutes: 10
     permissions:
@@ -147,6 +154,16 @@ jobs:
             try { $value = (& $Body | Out-String).Trim() }
             catch { $value = "ERROR: $($_.Exception.GetType().Name): $($_.Exception.Message)" }
             Add-Content -Path $caps -Value "${Key}: $($value -replace '\s*\r?\n\s*', ' ')"
+          }
+          function Ensure-NativeUser32 {
+            if ('Qa.Native' -as [type]) { return }
+            Add-Type -Namespace Qa -Name Native -MemberDefinition @'
+          [StructLayout(LayoutKind.Sequential)] public struct KEYBDINPUT { public ushort wVk; public ushort wScan; public uint dwFlags; public uint time; public IntPtr dwExtraInfo; }
+          [StructLayout(LayoutKind.Explicit, Size = 40)] public struct INPUT { [FieldOffset(0)] public uint type; [FieldOffset(8)] public KEYBDINPUT ki; }
+          [DllImport("user32.dll", SetLastError = true)] public static extern uint SendInput(uint n, INPUT[] inputs, int size);
+          [DllImport("user32.dll", SetLastError = true)] public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint modifiers, uint vk);
+          [DllImport("user32.dll", SetLastError = true)] public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+          '@
           }
           Probe 'runner.name' { $env:RUNNER_NAME }
           Probe 'runner.os' { "$($env:RUNNER_OS) $($env:RUNNER_ARCH)" }
@@ -176,15 +193,9 @@ jobs:
             }
             "top_level_elements=$($children.Count) invoke_pattern_elements=$found"
           }
-          Add-Type -Namespace Qa -Name Native -MemberDefinition @'
-          [StructLayout(LayoutKind.Sequential)] public struct KEYBDINPUT { public ushort wVk; public ushort wScan; public uint dwFlags; public uint time; public IntPtr dwExtraInfo; }
-          [StructLayout(LayoutKind.Explicit, Size = 40)] public struct INPUT { [FieldOffset(0)] public uint type; [FieldOffset(8)] public KEYBDINPUT ki; }
-          [DllImport("user32.dll", SetLastError = true)] public static extern uint SendInput(uint n, INPUT[] inputs, int size);
-          [DllImport("user32.dll", SetLastError = true)] public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint modifiers, uint vk);
-          [DllImport("user32.dll", SetLastError = true)] public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
-          '@
-          Probe 'sendinput.symbol_available' { $null -ne [Qa.Native].GetMethod('SendInput') }
+          Probe 'sendinput.symbol_available' { Ensure-NativeUser32; $null -ne [Qa.Native].GetMethod('SendInput') }
           Probe 'sendinput.key_action' {
+            Ensure-NativeUser32
             # F24 key down then up: no application binds it.
             $down = New-Object Qa.Native+INPUT
             $down.type = 1
@@ -207,6 +218,7 @@ jobs:
             } finally { $icon.Dispose() }
           }
           Probe 'global_hotkey.register_action' {
+            Ensure-NativeUser32
             # CTRL+ALT+F24 (MOD_CONTROL | MOD_ALT, VK_F24).
             $registered = [Qa.Native]::RegisterHotKey([IntPtr]::Zero, 1, 0x3, 0x87)
             $lastError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
@@ -220,6 +232,7 @@ jobs:
           }
           Probe 'gpu.dxdiag_action' {
             $dxdiag = Join-Path $out 'dxdiag.txt'
+            Set-Content -Path $dxdiag -Value "dxdiag_started_utc: $([DateTime]::UtcNow.ToString('o'))"
             $proc = Start-Process -FilePath dxdiag -ArgumentList '/t', $dxdiag -PassThru
             if (-not $proc.WaitForExit(90000)) { $proc.Kill(); throw 'dxdiag did not finish within 90 s' }
             "exit_code=$($proc.ExitCode) file_present=$(Test-Path $dxdiag)"
