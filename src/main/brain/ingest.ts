@@ -1432,8 +1432,8 @@ function observeClaimedSourceRefreshWork(): void {
 }
 
 function observeSourceRefreshWorkFromIndex(idx: BrainIndex): void {
-  observeClaimedSourceRefreshWork()
   if (!idx.sourceRefreshRequested || idx.replayPending) return
+  observeClaimedSourceRefreshWork()
   for (const key of sourceRefreshScanRetryKeys) observeSource(key)
   if (sourceRefreshWorkKeys.size > 0 || sourceRefreshScanRetryKeys.size > 0) return
   for (const key of claimSourceRefreshWork(idx)) observeSource(key)
@@ -2860,7 +2860,7 @@ async function startBackfillAsync(onDrained?: () => void | Promise<void>, option
   if (scan.some((folder) => folder.status === 'failed')) throw new Error('a meetings folder could not be listed')
   for (const source of scan.flatMap((folder) => folder.sources)) {
     const record = idx.ingested[source.key]
-    if (inFlight.has(source.key) || (!options.force && record?.ok && (!source.version || record.sourceVersion === source.version))) continue
+    if (inFlight.has(source.key) || (!options.force && record?.ok && (source.version ? record.sourceVersion === source.version : !record.sourceVersion))) continue
     if (!source.local) {
       notOnDevice += 1
       continue
