@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
+import { readAppCss } from '../../../../../scripts/lib/read-app-css.mjs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ONBOARDING_PORTAL_CLOSE_GAIN,
@@ -78,7 +78,7 @@ describe('onboarding portal pill + Ready-only finish', () => {
   })
 
   it('Ready is the only finish; does not mount Onboarding.tsx; recordingConsent still required', () => {
-    const app = readFileSync(join(__dirname, '../App.tsx'), 'utf8')
+    const app = readFileSync(join(__dirname, '../../App.tsx'), 'utf8')
     expect(experience).not.toMatch(/from '\.\/Onboarding'/)
     expect(experience).not.toMatch(/<Onboarding[\s>]/)
     expect(experience).not.toMatch(/legacy-full/)
@@ -144,7 +144,7 @@ describe('closeOnboardingPortal call order', () => {
 
 describe('FITO-185-L portal-open on Act 1 first paint', () => {
   it('App exclusive stage ships an opaque portal-open bed from its first paint', () => {
-    const app = readFileSync(join(__dirname, '../App.tsx'), 'utf8')
+    const app = readFileSync(join(__dirname, '../../App.tsx'), 'utf8')
     expect(app).toMatch(/onboard-stage onboard-stage--portal-open onboard-exclusive-lock/)
     const openBlock = css.slice(
       css.indexOf('.onboard-stage.onboard-stage--portal-open {'),

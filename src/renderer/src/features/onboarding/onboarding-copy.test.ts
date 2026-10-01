@@ -9,7 +9,7 @@ function stripComments(src: string): string {
 const files = [
   join(__dirname, '../../components/OnboardingExperience.tsx'),
   join(__dirname, './onboarding-demo.ts'),
-  join(__dirname, './persona-vibe.ts'),
+  join(__dirname, '../../lib/persona-vibe.ts'),
   join(__dirname, './onboarding-tell-the-room.ts'),
   join(__dirname, './onboarding-portal.ts'),
   join(__dirname, './onboarding-appearance.ts'),

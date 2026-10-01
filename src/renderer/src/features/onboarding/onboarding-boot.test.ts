@@ -37,8 +37,8 @@ describe('provisionalOnboardingSettings', () => {
 })
 
 describe('FITO-185-I App boot gate (source contract)', () => {
-  const app = readFileSync(join(__dirname, '../App.tsx'), 'utf8').replace(/\r\n/g, '\n')
-  const indexHtml = readFileSync(join(__dirname, '../../index.html'), 'utf8')
+  const app = readFileSync(join(__dirname, '../../App.tsx'), 'utf8').replace(/\r\n/g, '\n')
+  const indexHtml = readFileSync(join(__dirname, '../../../index.html'), 'utf8')
 
   it('sync-imports OnboardingV2 so exclusive Act 1 does not wait on a lazy chunk', () => {
     expect(app).toMatch(/import\s*\{\s*OnboardingV2\s*\}\s*from\s*'\.\/components\/OnboardingExperience'/)
@@ -86,8 +86,8 @@ describe('FITO-185-I App boot gate (source contract)', () => {
   })
 
   it('keeps the static Act 1 shell hidden unless the exact exclusive startup flag enables it', () => {
-    const gate = readFileSync(join(__dirname, '../../public/onboarding-boot-gate.js'), 'utf8')
-    const boot = readFileSync(join(__dirname, '../../public/act1-boot.js'), 'utf8')
+    const gate = readFileSync(join(__dirname, '../../../public/onboarding-boot-gate.js'), 'utf8')
+    const boot = readFileSync(join(__dirname, '../../../public/act1-boot.js'), 'utf8')
     expect(indexHtml).toMatch(/#boot-bed,\s*#act1-boot-chrome\s*\{\s*display:\s*none/)
     expect(indexHtml).toMatch(/html\.exclusive-onboarding-boot\s+#boot-bed/)
     expect(indexHtml).toMatch(/html\.exclusive-onboarding-boot\s+#act1-boot-chrome/)
@@ -112,10 +112,10 @@ describe('FITO-185-I App boot gate (source contract)', () => {
 })
 
 describe('FITO-185-Z instant Act1 show (no hide-for-seconds)', () => {
-  const indexHtml = readFileSync(join(__dirname, '../../index.html'), 'utf8')
-  const bootJs = readFileSync(join(__dirname, '../../public/act1-boot.js'), 'utf8')
+  const indexHtml = readFileSync(join(__dirname, '../../../index.html'), 'utf8')
+  const bootJs = readFileSync(join(__dirname, '../../../public/act1-boot.js'), 'utf8')
   const experience = readFileSync(join(__dirname, '../../components/OnboardingExperience.tsx'), 'utf8')
-  const main = readFileSync(join(__dirname, '../../../main/index.ts'), 'utf8')
+  const main = readFileSync(join(__dirname, '../../../../../src/main/index.ts'), 'utf8')
 
   it('no-JS shell is poster + Métis wordmark + Next (never waits on video)', () => {
     expect(indexHtml).toMatch(/rel="preload"[^>]*onboarding-hero-poster\.jpg/)
@@ -167,7 +167,7 @@ describe('FITO-185-J electron file paths', () => {
   })
 
   it('exclusive overlay chrome stays opaque #05010A', () => {
-    const geo = readFileSync(join(__dirname, '../../../main/island/geometry.ts'), 'utf8')
+    const geo = readFileSync(join(__dirname, '../../../../../src/main/island/geometry.ts'), 'utf8')
     expect(geo).toMatch(/EXCLUSIVE_ONBOARDING_BACKGROUND = '#05010A'/)
     expect(geo).toMatch(/if \(onboardingLive\)[\s\S]*?transparent: false/)
   })
@@ -191,7 +191,7 @@ describe('FITO-185-N exclusiveOnboarding flag', () => {
   })
 
   it('main createWindow stamps exclusiveOnboarding on packaged file URL too', () => {
-    const main = readFileSync(join(__dirname, '../../../main/index.ts'), 'utf8')
+    const main = readFileSync(join(__dirname, '../../../../../src/main/index.ts'), 'utf8')
     expect(main).toMatch(/function overlayRendererUrl\(\): string/)
     expect(main).toMatch(/const onboardingLive = onboardingExclusiveLive\(\)/)
     expect(main).toMatch(/if \(onboardingLive\) params\.set\('exclusiveOnboarding'/)
@@ -225,7 +225,7 @@ describe('FITO-185-T exclusive Act 1 music after interactive', () => {
   })
 
   it('main exclusive reveal uses showForExclusiveOnboarding under FITO-185-S (no SFS)', () => {
-    const main = readFileSync(join(__dirname, '../../../main/index.ts'), 'utf8')
+    const main = readFileSync(join(__dirname, '../../../../../src/main/index.ts'), 'utf8')
     expect(main).toMatch(/FITO-185-T: Electron 43\+ never SFS/)
     expect(main).toMatch(/showForExclusiveOnboarding\(win\)/)
     expect(main).toMatch(/showForExclusiveOnboarding\(overlay\)/)
@@ -235,9 +235,9 @@ describe('FITO-185-T exclusive Act 1 music after interactive', () => {
 
 
 describe('FITO-185-X post-boot Loading never forever', () => {
-  const app = readFileSync(join(__dirname, '../App.tsx'), 'utf8').replace(/\r\n/g, '\n')
-  const main = readFileSync(join(__dirname, '../../../main/index.ts'), 'utf8')
-  const state = readFileSync(join(__dirname, '../state.ts'), 'utf8')
+  const app = readFileSync(join(__dirname, '../../App.tsx'), 'utf8').replace(/\r\n/g, '\n')
+  const main = readFileSync(join(__dirname, '../../../../../src/main/index.ts'), 'utf8')
+  const state = readFileSync(join(__dirname, '../../state.ts'), 'utf8')
 
   it('Loading strip offers Reload after soft wait and on bootError', () => {
     expect(app).toMatch(/bootSlow/)

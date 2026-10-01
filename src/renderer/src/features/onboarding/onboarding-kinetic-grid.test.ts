@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
+import { readAppCss } from '../../../../../scripts/lib/read-app-css.mjs'
 import { describe, expect, it } from 'vitest'
-import { overlayWindowChrome } from '../../../main/island/geometry'
+import { overlayWindowChrome } from '../../../../../src/main/island/geometry'
 import { canMarkOnboardingDone } from './onboarding-flow'
 import { ONBOARDING_HERO_VIDEO_SRC, ONBOARDING_HERO_VIDEO_REMOTE_SRC } from './onboarding-hero-video'
 import {

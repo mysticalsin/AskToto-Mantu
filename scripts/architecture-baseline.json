@@ -1,6 +1,5 @@
 {
   "FF-01": {
-    "src/renderer/src/features/onboarding/onboarding-kinetic-grid.test.ts": 1,
     "src/shared/hash.test.ts": 1
   },
   "FF-02": {

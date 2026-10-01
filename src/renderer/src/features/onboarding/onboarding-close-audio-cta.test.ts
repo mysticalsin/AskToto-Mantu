@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
+import { readAppCss } from '../../../../../scripts/lib/read-app-css.mjs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ONBOARDING_MUSIC_CLOSE_EVENTS,
@@ -162,11 +162,11 @@ describe('closing onboarding hard-stops the Goldberg Aria', () => {
     expect(v2.indexOf('lockOnboardingAudio()')).toBeGreaterThan(-1)
     expect(v2.indexOf('lockOnboardingAudio()')).toBeLessThan(v2.indexOf('onboardingDone: true'))
 
-    const app = readFileSync(join(__dirname, '../App.tsx'), 'utf8')
+    const app = readFileSync(join(__dirname, '../../App.tsx'), 'utf8')
     expect(app).toMatch(/if \(settings\?\.onboardingDone\) lockOnboardingAudio\(\)/)
     expect(app).toMatch(/installOnboardingAudioLockHooks\(\)/)
 
-    const index = readFileSync(join(__dirname, '../../../main/index.ts'), 'utf8')
+    const index = readFileSync(join(__dirname, '../../../../../src/main/index.ts'), 'utf8')
     expect(index).toMatch(/function lockOnboardingAudioInRenderer/)
     expect(index).toMatch(/ONBOARDING_AUDIO_LOCK_EVENT/)
     const exit = index.slice(index.indexOf('function exitExclusiveOnboardingStage'), index.indexOf('function applyOverlayAlwaysOnTop'))

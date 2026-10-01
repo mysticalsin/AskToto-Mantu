@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
+import { readAppCss } from '../../../../../scripts/lib/read-app-css.mjs'
 import { describe, expect, it } from 'vitest'
 import {
   TELL_THE_ROOM_CHECKBOX,

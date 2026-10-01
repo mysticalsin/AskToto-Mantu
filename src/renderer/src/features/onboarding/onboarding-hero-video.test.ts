@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
+import { readAppCss } from '../../../../../scripts/lib/read-app-css.mjs'
 import { describe, expect, it, vi } from 'vitest'
 import {
   ONBOARDING_HERO_POSTER_SRC,
@@ -13,7 +13,7 @@ import {
 
 const experience = readFileSync(join(__dirname, '../../components/OnboardingExperience.tsx'), 'utf8')
 const css = readAppCss()
-const html = readFileSync(join(__dirname, '../../index.html'), 'utf8')
+const html = readFileSync(join(__dirname, '../../../index.html'), 'utf8')
 
 describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
   it('uses Example’s first-slide clip, muted loop autoplay, object-cover, z-0 under the UI', () => {
@@ -146,7 +146,7 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
   })
 
   it('does not eager-preload from App boot; Act 1 owns local auto load + poster', () => {
-    const appSrc = readFileSync(join(__dirname, '../App.tsx'), 'utf8')
+    const appSrc = readFileSync(join(__dirname, '../../App.tsx'), 'utf8')
     const heroSrc = readFileSync(join(__dirname, './onboarding-hero-video.ts'), 'utf8')
     expect(appSrc).not.toMatch(/preloadOnboardingHeroVideo/)
     expect(experience).toMatch(/preload="auto"/)
@@ -204,7 +204,7 @@ describe('FITO-185-W packaged hero mp4 plays outside asar', () => {
 
   it('Experience uses resolveOnboardingHeroVideoSrc; builder unpacks **/*.mp4; CTA stays hittable', () => {
     expect(experience).toMatch(/resolveOnboardingHeroVideoSrc\(ONBOARDING_HERO_VIDEO_SRC\)/)
-    const builder = readFileSync(join(__dirname, '../../../../electron-builder.yml'), 'utf8')
+    const builder = readFileSync(join(__dirname, '../../../../../electron-builder.yml'), 'utf8')
     const unpack = builder.slice(builder.indexOf('asarUnpack:'), builder.indexOf('extraResources:'))
     expect(unpack).toMatch(/\*\*\/\*\.mp4/)
     expect(css).toMatch(/FITO-185-W: kenburns on poster/)
