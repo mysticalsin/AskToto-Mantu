@@ -23,13 +23,9 @@ import {
 import { join, basename, dirname, resolve } from 'node:path'
 import { readFileSync, existsSync, writeFileSync, readdirSync, unlinkSync, createReadStream, statSync, renameSync, rmdirSync, mkdirSync, copyFileSync } from 'node:fs'
 
-// Enterprise checkbox: DevTools stay reachable only where they are a development tool. No secret ever
-// reaches the renderer (publicSettings strips key material), but DevTools on a packaged build still
-// exposes in-memory renderer state (transcript text, screen-context strings) to anyone at the keyboard,
-// and every security questionnaire asks. Packaged builds ignore ASKTOTO_DEVTOOLS: devEnv() returns
-// undefined once isPackagedBuild() is true, so there is no env backdoor in a shipped DMG/EXE.
-// Shared with intelligence.ts so every window in src/main gates on ONE decision — see
-// dev-env.ts's devToolsEnabled() for why this moved out of this file.
+// Enterprise checkbox: DevTools stay reachable only where they are a development tool. Packaged builds
+// ignore ASKTOTO_DEVTOOLS: devEnv() returns undefined once isPackagedBuild() is true, so there is no env
+// backdoor in shipped builds. Shared with intelligence.ts; dev-env.ts owns the decision.
 const DEVTOOLS_ENABLED = devToolsEnabled()
 import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
