@@ -24,7 +24,7 @@ import { drainOperatorQueue, enqueueOperatorItem, type QueueSendResult } from '.
 import { operatorEntitled, recordOperatorHeartbeatResult, resetOperatorEntitlementsState } from './operator-entitlements-state'
 import { maybeRefreshOperatorIntegrations, resetOperatorIntegrationsState } from './operator-integrations'
 import { parseOperatorHeartbeatEntitlements } from '@shared/operator-entitlements'
-import { refreshModelPolicy } from './model-policy-client'
+import { getActiveModelPolicy, refreshModelPolicy } from './model-policy-client'
 
 export const HEARTBEAT_MS = 60_000
 // Half the <=60s fleet-policy bound, so a change lands inside it despite timer drift and a slow fetch.
@@ -267,6 +267,13 @@ function retryIdsFromHeartbeat(json: unknown): string[] {
   return [...new Set(retry.filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 80))]
 }
 
+function modelPolicyVersionFromHeartbeat(json: unknown): number | null {
+  if (!json || typeof json !== 'object') return null
+  const body = json as { modelPolicyVersion?: unknown; policyVersion?: unknown }
+  const raw = body.modelPolicyVersion ?? body.policyVersion
+  return typeof raw === 'number' && Number.isInteger(raw) && raw >= 0 ? raw : null
+}
+
 export function fundedProvidersFromHeartbeat(json: unknown): string[] {
   if (!json || typeof json !== 'object') return []
   const funded = (json as { fundedProviders?: unknown }).fundedProviders
@@ -375,6 +382,11 @@ export async function operatorHeartbeat(
     recordOperatorHeartbeatResult(res.ok, res.json)
     if (res.ok) {
       maybeRefreshOperatorIntegrations(settings, parseOperatorHeartbeatEntitlements(res.json).integrationsVersion)
+      const policyVersion = modelPolicyVersionFromHeartbeat(res.json)
+      const currentPolicyVersion = getActiveModelPolicy(settings)?.version ?? -1
+      if (policyVersion !== null && policyVersion > currentPolicyVersion) {
+        policyRefreshNow?.('operator-response')
+      }
     }
     return { ok: res.ok, retry: retryIdsFromHeartbeat(res.json) }
   } catch (e) {

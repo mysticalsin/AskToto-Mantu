@@ -82,12 +82,14 @@ const metadata = vi.hoisted(() => {
   }
 })
 const policyClientMock = vi.hoisted(() => ({
+  activePolicy: null as { version: number } | null,
   refreshModelPolicy: vi.fn(async () => false)
 }))
 vi.mock('./store', () => ({ getSettings: metadata.getSettings, setSettings: metadata.setSettings }))
 vi.mock('./auth', () => ({ authStatus: metadata.authStatus }))
 vi.mock('./brain/intelligence-index', () => ({ lastIndexedAt: metadata.lastIndexedAt }))
 vi.mock('./model-policy-client', () => ({
+  getActiveModelPolicy: () => policyClientMock.activePolicy,
   refreshModelPolicy: policyClientMock.refreshModelPolicy
 }))
 // Keep operatorFundedProviders' operator_keys gate focused here; recordOperatorHeartbeatResult's real
@@ -150,6 +152,7 @@ beforeEach(() => {
   electronMock.powerMonitor.removeListener.mockClear()
   policyClientMock.refreshModelPolicy.mockReset()
   policyClientMock.refreshModelPolicy.mockResolvedValue(false)
+  policyClientMock.activePolicy = null
 })
 afterEach(() => {
   stopOperatorRuntime()
@@ -504,6 +507,38 @@ describe('fleet model policy scheduler', () => {
       await flushPromises()
       expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(2)
       expect(onReadinessChanged).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('refreshes immediately when an Operator response carries a newer policy version', async () => {
+    vi.useFakeTimers()
+    try {
+      policyClientMock.activePolicy = { version: 1 }
+      const f = captureFetch()
+      setOperatorFetchForTests((async (input: string | URL | Request, init?: RequestInit) => {
+        const rawBody = String(init?.body ?? '{}')
+        f.calls.push({
+          url: String(input),
+          body: JSON.parse(rawBody) as Record<string, unknown>,
+          rawBody,
+          headers: new Headers(init?.headers)
+        })
+        return new Response('{"ok":true,"modelPolicyVersion":2}', {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        })
+      }) as typeof fetch)
+
+      startOperatorRuntime(() => SETTINGS)
+      await flushPromises()
+
+      expect(f.calls.filter((call) => call.url.endsWith('/v1/heartbeat'))).toHaveLength(1)
+      expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(999)
+      await flushPromises()
+      expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(2)
     } finally {
       vi.useRealTimers()
     }
