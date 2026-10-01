@@ -2549,7 +2549,15 @@ function exitExclusiveOnboardingStage(): void {
   lastBarHeight = BAR_HEIGHT
   const display = screen.getDisplayMatching(win.getBounds())
   const layout = liveOverlayLayout()
-  const park = parkedOverlayBounds(layout, display)
+  // The right edge rests through the geometry authority; every other placement takes the onboarding park.
+  const park = resolvedOverlayPlacementForDisplay(display) === 'right-edge'
+    ? rightEdgeBounds('rest', display, layout)
+    : parkAfterExclusiveOnboarding(
+      parkLayoutForDisplay(layout, display),
+      getDisplayMetrics(display),
+      ISLAND_TOP_MARGIN,
+      liveOverlayPlacement()
+    )
   currentWidth = park.width
   islandResting = overlayUsesHover(layout)
   userAnchorY = park.y
