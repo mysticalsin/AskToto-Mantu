@@ -9,10 +9,14 @@ import { selectCandidateInstaller } from './candidate-installer.mjs'
 import {
   PACKAGED_LIFECYCLE_RV_ROWS,
   SCENARIOS,
+  TCC_DATABASES,
+  ancestorPids,
   assessPackagedSmokeReport,
   assertCandidateProvenance,
   candidateRunProblems,
   contentProblems,
+  executableFromLsof,
+  guiScriptingGrants,
   installerKindForScenario,
   laneAnnotation,
   laneRecord,
@@ -73,7 +77,15 @@ describe('candidateRunProblems (the run guard)', () => {
 
 describe('the scenario registry', () => {
   it('declares fault-fatal-relaunch on macOS, installing the Metis-QA zip variant', () => {
-    expect(Object.keys(SCENARIOS)).toEqual(['fault-fatal-relaunch', 'ex-suite', 'stall-sampler', 'idle-soak', 'sidecar-boot-reaper', 'packaged-lifecycle'])
+    expect(Object.keys(SCENARIOS)).toEqual([
+      'fault-fatal-relaunch',
+      'ex-suite',
+      'stall-sampler',
+      'idle-soak',
+      'sidecar-boot-reaper',
+      'packaged-lifecycle',
+      'renderer-kill'
+    ])
     const mac = SCENARIOS['fault-fatal-relaunch'].platforms.mac
     expect(Object.keys(SCENARIOS['fault-fatal-relaunch'].platforms)).toEqual(['mac'])
     expect(mac.variant).toBe('mac-qa-identity')
@@ -143,6 +155,58 @@ describe('the scenario registry', () => {
     ])
     expect(mac.report).toBe('stall-sampler.json')
     expect(Object.hasOwn(mac, 'settings')).toBe(false)
+  })
+
+  it('declares renderer-kill on macOS, installing the promotable DMG with no lane-seeded settings', () => {
+    const entry = SCENARIOS['renderer-kill']
+    expect(entry.ticket).toBe('M2-0469')
+    expect(entry.qaOnlyHook).toBe(false)
+    expect(Object.keys(entry.platforms)).toEqual(['mac'])
+    const mac = entry.platforms.mac
+    expect(mac.variant).toBe('mac')
+    expect(mac.artifact).toBe('candidate-mac')
+    expect(VARIANTS.mac.promotable).toBe(true)
+    expect(VARIANTS.mac.assets('1.0.0')).toContain('Metis-1.0.0.dmg')
+    expect(mac.installerSuffix).toBe('.dmg')
+    expect(installerKindForScenario('renderer-kill', 'mac')).toBe('mac-dmg')
+    expect(mac.script).toBe('scripts/qa/renderer-kill.mjs')
+    expect(existsSync(join(root, mac.script))).toBe(true)
+    expect(mac.report).toBe('renderer-kill.json')
+    expect('settings' in mac).toBe(false)
+    expect(outcomeForExit('renderer-kill', 0)).toBe('PASS')
+    expect(outcomeForExit('renderer-kill', 1)).toBe('FAIL')
+    expect(outcomeForExit('renderer-kill', 2)).toBe('PRECONDITION')
+    expect(resolveScenario({ scenario: 'renderer-kill', sha256: { mac: MAC_SHA } })).toEqual({
+      mac: { variant: 'mac', artifact: 'candidate-mac', sha256: MAC_SHA, timeoutMinutes: 60, stepTimeoutMinutes: 40 }
+    })
+    expect(() => resolveScenario({ scenario: 'renderer-kill', sha256: { mac: MAC_SHA, win: MAC_SHA } })).toThrow(
+      /win_sha256 is set, but renderer-kill does not run on win/
+    )
+  })
+
+  it('runs renderer-kill on the DMG, 4 kills within 60 s, with a repository-relative report path', () => {
+    expect(
+      scenarioCommand({
+        scenario: 'renderer-kill',
+        platform: 'mac',
+        installer: 'assets/Metis-1.0.0.dmg',
+        sha256: MAC_SHA,
+        outDir: 'candidate-scenario'
+      })
+    ).toEqual([
+      'scripts/qa/renderer-kill.mjs',
+      'assets/Metis-1.0.0.dmg',
+      'candidate-scenario/renderer-kill.json',
+      '--sha256',
+      MAC_SHA,
+      '--times',
+      '4',
+      '--window',
+      '60'
+    ])
+    expect(() =>
+      scenarioCommand({ scenario: 'renderer-kill', platform: 'mac', installer: 'assets/Metis-1.0.0.zip', sha256: MAC_SHA, outDir: 'candidate-scenario' })
+    ).toThrow(/installs a \.dmg installer/)
   })
 
   it('binds every entry to a qa-candidate artifact of its platform, and to promotable bytes unless it needs a QA-only hook', () => {
@@ -349,6 +413,56 @@ describe('the scenario registry', () => {
   })
 })
 
+describe('System Events GUI scripting grants (grant-gui)', () => {
+  it('is declared by renderer-kill, which drives the halted dialog, and by no scenario that does not', () => {
+    expect((SCENARIOS['renderer-kill'].platforms.mac as { guiScripting?: boolean }).guiScripting).toBe(true)
+    expect('guiScripting' in SCENARIOS['fault-fatal-relaunch'].platforms.mac).toBe(false)
+  })
+
+  it('walks the process chain up to, not including, launchd, and survives a cycle', () => {
+    const table = ['  1     0', ' 40     1', ' 41    40', '  900  41', 'garbage', ' 901   900', ''].join('\n')
+    expect(ancestorPids(table, 901)).toEqual([901, 900, 41, 40])
+    expect(ancestorPids(table, 1)).toEqual([])
+    expect(ancestorPids(' 5 6\n 6 5\n', 5)).toEqual([5, 6])
+  })
+
+  it("reads the executable path from lsof's first name record", () => {
+    expect(executableFromLsof('p41\nftxt\nn/opt/runner/bin/Runner.Worker\nftxt\nn/usr/lib/dyld\n')).toBe('/opt/runner/bin/Runner.Worker')
+    expect(executableFromLsof('p41\n')).toBeNull()
+  })
+
+  it('grants Accessibility in the system database and Automation of System Events in the user database', () => {
+    const grants = guiScriptingGrants(['/bin/bash', '/usr/bin/osascript', '/bin/bash', "/opt/it's/agent"])
+    const system = grants.system.split('\n')
+    const user = grants.user.split('\n')
+    expect(system).toHaveLength(3)
+    expect(user).toHaveLength(3)
+    for (const line of system) {
+      expect(line).toMatch(/^INSERT OR REPLACE INTO access \(service, client, client_type, auth_value, auth_reason, /)
+      expect(line).toMatch(/VALUES \('kTCCServiceAccessibility', '\/.*', 1, 2, 4, 1, 0, 'UNUSED', 0, /)
+    }
+    for (const line of user) expect(line).toMatch(/VALUES \('kTCCServiceAppleEvents', '\/.*', 1, 2, 3, 1, 0, 'com\.apple\.systemevents', 0, /)
+    expect(grants.system).toContain("'/opt/it''s/agent'")
+    expect(TCC_DATABASES.system).toBe('/Library/Application Support/com.apple.TCC/TCC.db')
+    expect(TCC_DATABASES.user.startsWith('/')).toBe(false)
+  })
+
+  it('refuses no clients or a client that is not an absolute path', () => {
+    expect(() => guiScriptingGrants([])).toThrow(/at least one client/)
+    expect(() => guiScriptingGrants(['bash'])).toThrow(/absolute executable path/)
+  })
+
+  it('changes nothing for a scenario that declares no GUI scripting', () => {
+    const child = spawnSync(
+      process.execPath,
+      ['scripts/qa/candidate-scenarios.mjs', 'grant-gui', '--scenario', 'fault-fatal-relaunch', '--platform', 'mac'],
+      { cwd: root, encoding: 'utf8' }
+    )
+    expect(child.status).toBe(0)
+    expect(child.stdout).toContain('fault-fatal-relaunch (mac) needs no GUI scripting; nothing granted.')
+  })
+})
+
 describe('installer selection through candidate-installer', () => {
   let dir: string
   beforeEach(() => {
@@ -454,6 +568,16 @@ describe('the fresh profile', () => {
       /asktoto-qa userData directory already exists/
     )
     expect(existsSync(join(appData, 'asktoto-qa', 'settings.json'))).toBe(false)
+  })
+
+  it('writes nothing for renderer-kill, which runs the app only on its own ASKTOTO_USERDATA profile', () => {
+    expect(SCENARIOS['renderer-kill'].platforms.mac).toMatchObject({ isolatedProfiles: true })
+    expect(prepareProfile({ scenario: 'renderer-kill', platform: 'mac', appDataDir: appData })).toBeNull()
+    expect(readdirSync(appData)).toEqual([])
+    // A default profile left by an earlier run does not touch the isolated proof.
+    mkdirSync(join(appData, 'asktoto'))
+    expect(prepareProfile({ scenario: 'renderer-kill', platform: 'mac', appDataDir: appData })).toBeNull()
+    expect(readdirSync(appData)).toEqual(['asktoto'])
   })
 
   it('writes nothing for a scenario that runs only on its own isolated profiles, on either platform', () => {
