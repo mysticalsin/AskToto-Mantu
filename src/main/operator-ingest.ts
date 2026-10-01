@@ -1,4 +1,4 @@
-import { app } from 'electron'
+import { app, powerMonitor } from 'electron'
 import { hostname as osHostname } from 'node:os'
 import { filterFundedProviders } from '@shared/ask-routing'
 import { inspectBundleResponse } from '@shared/bundle-response'
@@ -26,9 +26,14 @@ import { maybeRefreshOperatorIntegrations, resetOperatorIntegrationsState } from
 import { parseOperatorHeartbeatEntitlements } from '@shared/operator-entitlements'
 import { refreshModelPolicy } from './model-policy-client'
 
-const HEARTBEAT_MS = 60_000
+export const HEARTBEAT_MS = 60_000
 // Half the <=60s fleet-policy bound, so a change lands inside it despite timer drift and a slow fetch.
-const POLICY_POLL_MS = 30_000
+export const POLICY_POLL_MS = 30_000
+const POLICY_FAILURE_BACKOFF_INITIAL_MS = 1_000
+
+if (HEARTBEAT_MS % POLICY_POLL_MS !== 0) {
+  throw new Error('HEARTBEAT_MS must be divisible by POLICY_POLL_MS')
+}
 
 export interface OperatorRuntimeSettings {
   operatorUrl?: string
@@ -42,6 +47,9 @@ export interface OperatorRuntimeSettings {
 }
 
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
+let policyRetryTimer: ReturnType<typeof setTimeout> | null = null
+let policyRefreshNow: ((source: string) => void) | null = null
+let policySignalUnsubscribers: Array<() => void> = []
 let runtimeGeneration = 0
 let lastAskId: string | null = null
 let fetchImpl: typeof fetch = fetch
@@ -61,6 +69,18 @@ export function stopOperatorRuntime(): void {
     clearInterval(heartbeatTimer)
     heartbeatTimer = null
   }
+  if (policyRetryTimer) {
+    clearTimeout(policyRetryTimer)
+    policyRetryTimer = null
+  }
+  for (const unsubscribe of policySignalUnsubscribers.splice(0)) {
+    unsubscribe()
+  }
+  policyRefreshNow = null
+}
+
+export function notifyOperatorNetworkOnline(): void {
+  policyRefreshNow?.('network-online')
 }
 
 function resolveUrl(settings: OperatorRuntimeSettings, env = process.env): string {
@@ -384,19 +404,68 @@ export function startOperatorRuntime(
   // Broadcast only when the policy actually changed, so Settings' managed/locked display updates without
   // an idle settings-changed churn every 30 s reaching the renderer.
   const policyGeneration = runtimeGeneration
-  const pollPolicy = (): void => {
+  let policyInFlight = false
+  let policyPending = false
+  let policyFailureBackoffMs = POLICY_FAILURE_BACKOFF_INITIAL_MS
+  const schedulePolicyRetry = (): void => {
+    if (policyRetryTimer || policyGeneration !== runtimeGeneration) return
+    const delay = Math.min(policyFailureBackoffMs, POLICY_POLL_MS)
+    policyFailureBackoffMs = Math.min(policyFailureBackoffMs * 2, POLICY_POLL_MS)
+    policyRetryTimer = setTimeout(() => {
+      policyRetryTimer = null
+      pollPolicy('failure-backoff')
+    }, delay)
+    if (typeof policyRetryTimer === 'object' && policyRetryTimer && 'unref' in policyRetryTimer) {
+      policyRetryTimer.unref()
+    }
+  }
+  const pollPolicy = (_source: string): void => {
+    if (policyGeneration !== runtimeGeneration) return
+    if (policyRetryTimer) {
+      clearTimeout(policyRetryTimer)
+      policyRetryTimer = null
+    }
+    if (policyInFlight) {
+      policyPending = true
+      return
+    }
+    policyInFlight = true
     void refreshModelPolicy(getSettings())
       .then((changed) => {
+        policyFailureBackoffMs = POLICY_FAILURE_BACKOFF_INITIAL_MS
         if (changed && policyGeneration === runtimeGeneration) hooks?.onReadinessChanged?.()
       })
-      .catch(() => undefined)
+      .catch(() => {
+        schedulePolicyRetry()
+      })
+      .finally(() => {
+        policyInFlight = false
+        if (policyPending && policyGeneration === runtimeGeneration) {
+          policyPending = false
+          pollPolicy('pending')
+        }
+      })
   }
-  pollPolicy()
+  policyRefreshNow = pollPolicy
+  const onPolicySignal = (): void => {
+    pollPolicy('immediate-signal')
+  }
+  app.on('browser-window-focus', onPolicySignal)
+  app.on('activate', onPolicySignal)
+  powerMonitor.on('resume', onPolicySignal)
+  app.on('network-online' as never, notifyOperatorNetworkOnline as never)
+  policySignalUnsubscribers = [
+    () => app.removeListener('browser-window-focus', onPolicySignal),
+    () => app.removeListener('activate', onPolicySignal),
+    () => powerMonitor.removeListener('resume', onPolicySignal),
+    () => app.removeListener('network-online' as never, notifyOperatorNetworkOnline as never)
+  ]
+  pollPolicy('startup')
   void tick()
   // One timer at the policy cadence: every firing polls the policy, every second firing runs the heartbeat.
   let firings = 0
   heartbeatTimer = setInterval(() => {
-    pollPolicy()
+    pollPolicy('interval')
     firings += 1
     if (firings % (HEARTBEAT_MS / POLICY_POLL_MS) === 0) void tick()
   }, POLICY_POLL_MS)

@@ -5,7 +5,7 @@
  * the production Worker and `src/main/model-policy-client.ts` — see src/shared/model-policy.ts),
  * launches the installed packaged app pointed at it via `METIS_OPERATOR_URL`/
  * `METIS_OPERATOR_INGEST_SECRET`, and proves the running app's cached fleet model policy switches to
- * a NEW version the test Operator starts serving mid-run, within 60 s, through nothing but its own
+ * a NEW version the test Operator starts serving mid-run, within 45 s, through nothing but its own
  * 30s policy poll — never a restart, never a fake result.
  *
  * TLS: the app's Operator client only ever accepts `https://` (resolveOperatorBaseUrl), so the test
@@ -37,8 +37,10 @@ const CACHE_FILE = 'model-policy-cache.json'
 // One heartbeat cycle (<=60s per M2-0412 acceptance) plus generous boot jitter for a cold packaged
 // launch on a shared hosted runner.
 const FIRST_APPLY_TIMEOUT_MS = 90_000
-// The acceptance bound itself (<=60s) plus a small margin for the poll granularity below.
-const SWITCH_TIMEOUT_MS = 65_000
+const POLICY_POLL_INTERVAL_MS = 30_000
+const SWITCH_BOUND_MS = 45_000
+// M2-0432: acceptance requires margin below the former 60s bound.
+const SWITCH_TIMEOUT_MS = SWITCH_BOUND_MS
 const POLL_MS = 2_000
 
 class Precondition extends Error {}
@@ -243,15 +245,17 @@ async function main() {
       platform,
       firstApplyMs,
       switchMs,
-      switchBoundMs: 60_000,
+      switchBoundMs: SWITCH_BOUND_MS,
+      pollIntervalMs: POLICY_POLL_INTERVAL_MS,
+      switchSource: 'poll',
       // Observed: the verified policy version the running app cached. NOT observed: the model an ask then
       // used — the packaged app exposes no non-interactive ask hook and an ask needs a live provider
       // credential (BLOCKED_EXTERNAL; the per-call routing is covered by the desktop unit/contract tests).
       evidence: 'cached-policy-version',
       modelUsedObserved: false,
-      passed: switchMs !== null && switchMs <= 60_000
+      passed: switchMs !== null && switchMs <= SWITCH_BOUND_MS
     })
-    process.exit(switchMs !== null && switchMs <= 60_000 ? 0 : 1)
+    process.exit(switchMs !== null && switchMs <= SWITCH_BOUND_MS ? 0 : 1)
   } catch (e) {
     if (e instanceof BlockedExternal) {
       report(reportPath, { ok: true, row: 'POLICY-01', blockedExternal: true, reason: e.message })

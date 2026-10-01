@@ -4,22 +4,57 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { OPERATOR_HMAC_HEADERS } from '@shared/operator-hmac'
 import {
+  HEARTBEAT_MS,
+  notifyOperatorNetworkOnline,
   operatorFundedProviders,
   operatorHeartbeat,
+  POLICY_POLL_MS,
   recordOperatorAsk,
   recordOperatorCrmSend,
   recordOperatorRating,
   resolveQuestionType,
   setOperatorFetchForTests,
   setOperatorFundedProvidersForTests,
-  setOperatorQueueDirForTests
+  setOperatorQueueDirForTests,
+  startOperatorRuntime,
+  stopOperatorRuntime
 } from './operator-ingest'
 import { enqueueOperatorItem, loadQueueState, saveQueueState } from './operator-queue'
 import { hashOperatorId, signOperatorIngest } from './operator-hmac-sign'
 import { resetOperatorIntegrationsStateForTests, setOperatorIntegrationsFetchForTests } from './operator-integrations'
 
+const electronMock = vi.hoisted(() => {
+  type Listener = (...args: unknown[]) => void
+  const makeEmitter = () => {
+    const listeners = new Map<string, Set<Listener>>()
+    return {
+      on: vi.fn((event: string, listener: Listener) => {
+        const set = listeners.get(event) ?? new Set<Listener>()
+        set.add(listener)
+        listeners.set(event, set)
+      }),
+      removeListener: vi.fn((event: string, listener: Listener) => {
+        listeners.get(event)?.delete(listener)
+      }),
+      emit: (event: string, ...args: unknown[]) => {
+        for (const listener of listeners.get(event) ?? []) listener(...args)
+      },
+      listenerCount: (event: string) => listeners.get(event)?.size ?? 0,
+      reset: () => {
+        listeners.clear()
+      }
+    }
+  }
+  const app = {
+    ...makeEmitter(),
+    getPath: () => '/tmp',
+    getVersion: () => '1.8.0-test'
+  }
+  return { app, powerMonitor: makeEmitter() }
+})
 vi.mock('electron', () => ({
-  app: { getPath: () => '/tmp', getVersion: () => '1.8.0-test' }
+  app: electronMock.app,
+  powerMonitor: electronMock.powerMonitor
 }))
 vi.mock('./license', () => ({
   getMachineId: () => 'machine-test-0001',
@@ -46,9 +81,15 @@ const metadata = vi.hoisted(() => {
     lastIndexedAt: vi.fn(() => 1_700_000_000_333)
   }
 })
+const policyClientMock = vi.hoisted(() => ({
+  refreshModelPolicy: vi.fn(async () => false)
+}))
 vi.mock('./store', () => ({ getSettings: metadata.getSettings, setSettings: metadata.setSettings }))
 vi.mock('./auth', () => ({ authStatus: metadata.authStatus }))
 vi.mock('./brain/intelligence-index', () => ({ lastIndexedAt: metadata.lastIndexedAt }))
+vi.mock('./model-policy-client', () => ({
+  refreshModelPolicy: policyClientMock.refreshModelPolicy
+}))
 // Keep operatorFundedProviders' operator_keys gate focused here; recordOperatorHeartbeatResult's real
 // settings persistence is exercised directly in operator-entitlements-state.test.ts. The store mock
 // above exists only to isolate seat metadata from host profile files.
@@ -100,14 +141,28 @@ beforeEach(() => {
     })) as typeof fetch)
   resetOperatorIntegrationsStateForTests()
   operatorKeysEntitled = true // matches today's ungated behavior unless a test says otherwise
+  electronMock.app.reset()
+  electronMock.powerMonitor.reset()
+  electronMock.app.on.mockClear()
+  electronMock.app.removeListener.mockClear()
+  electronMock.powerMonitor.on.mockClear()
+  electronMock.powerMonitor.removeListener.mockClear()
+  policyClientMock.refreshModelPolicy.mockReset()
+  policyClientMock.refreshModelPolicy.mockResolvedValue(false)
 })
 afterEach(() => {
+  stopOperatorRuntime()
   setOperatorFetchForTests(null)
   setOperatorQueueDirForTests(null)
   setOperatorIntegrationsFetchForTests(null)
   resetOperatorIntegrationsStateForTests()
   rmSync(queueDir, { recursive: true, force: true })
 })
+
+async function flushPromises(): Promise<void> {
+  await Promise.resolve()
+  await Promise.resolve()
+}
 
 describe('resolveQuestionType', () => {
   it('prefers the caller label, falls back to local classification, never free-form', () => {
@@ -394,6 +449,103 @@ describe('operatorHeartbeat v2 seat fields + queue reporting', () => {
     const beat = await operatorHeartbeat(SETTINGS)
     expect(beat.ok).toBe(true)
     expect(operatorFundedProviders()).toEqual(['groq'])
+  })
+})
+
+describe('fleet model policy scheduler', () => {
+  it('asserts heartbeat and policy poll cadence divisibility at module load', () => {
+    expect(HEARTBEAT_MS % POLICY_POLL_MS).toBe(0)
+  })
+
+  it('refreshes immediately on startup, focus, resume, and network-online signals', async () => {
+    vi.useFakeTimers()
+    try {
+      const f = captureFetch()
+      startOperatorRuntime(() => SETTINGS)
+      await flushPromises()
+      expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(1)
+      expect(f.calls[0].url).toBe('https://operator.test/v1/heartbeat')
+
+      electronMock.app.emit('browser-window-focus')
+      await flushPromises()
+      expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(2)
+
+      electronMock.powerMonitor.emit('resume')
+      await flushPromises()
+      expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(3)
+
+      electronMock.app.emit('network-online')
+      await flushPromises()
+      expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(4)
+
+      notifyOperatorNetworkOnline()
+      await flushPromises()
+      expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(5)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('polls policy every POLICY_POLL_MS and heartbeats every HEARTBEAT_MS without exceeding the cap', async () => {
+    vi.useFakeTimers()
+    try {
+      const f = captureFetch()
+      startOperatorRuntime(() => SETTINGS)
+      await flushPromises()
+      expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(1)
+      expect(f.calls.filter((call) => call.url.endsWith('/v1/heartbeat'))).toHaveLength(1)
+
+      await vi.advanceTimersByTimeAsync(POLICY_POLL_MS - 1)
+      expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(1)
+      await flushPromises()
+      expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(2)
+      expect(f.calls.filter((call) => call.url.endsWith('/v1/heartbeat'))).toHaveLength(1)
+
+      await vi.advanceTimersByTimeAsync(POLICY_POLL_MS)
+      await flushPromises()
+      expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(3)
+      expect(f.calls.filter((call) => call.url.endsWith('/v1/heartbeat'))).toHaveLength(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('backs off failed policy refreshes without waiting longer than POLICY_POLL_MS', async () => {
+    vi.useFakeTimers()
+    try {
+      policyClientMock.refreshModelPolicy
+        .mockRejectedValueOnce(new Error('policy unavailable'))
+        .mockRejectedValueOnce(new Error('still unavailable'))
+        .mockResolvedValue(false)
+      startOperatorRuntime(() => SETTINGS)
+      await flushPromises()
+      expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(POLICY_POLL_MS - 1)
+      await flushPromises()
+      expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(2)
+
+      await vi.advanceTimersByTimeAsync(POLICY_POLL_MS - 1)
+      await flushPromises()
+      expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('removes policy signal listeners when the runtime stops', () => {
+    startOperatorRuntime(() => SETTINGS)
+    expect(electronMock.app.listenerCount('browser-window-focus')).toBe(1)
+    expect(electronMock.app.listenerCount('network-online')).toBe(1)
+    expect(electronMock.powerMonitor.listenerCount('resume')).toBe(1)
+
+    stopOperatorRuntime()
+
+    expect(electronMock.app.listenerCount('browser-window-focus')).toBe(0)
+    expect(electronMock.app.listenerCount('network-online')).toBe(0)
+    expect(electronMock.powerMonitor.listenerCount('resume')).toBe(0)
   })
 })
 
