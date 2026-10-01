@@ -211,6 +211,48 @@ export function candidateEnv(env, profile, windowVariant) {
   return { ...env, ASKTOTO_USERDATA: profile, METIS_QA_WINDOW_VARIANT: windowVariant }
 }
 
+/** The window-construction gate's budget (M2-0519): every shipped createWindow.prewarm and createWindow.construct
+ *  stays under it, in both chromes. */
+export const WINDOW_STAGE_BUDGET_MS = 250
+
+/** The boot stages the window-construction gate holds to its budget. */
+export const GATED_WINDOW_STAGES = ['createWindow.prewarm', 'createWindow.construct']
+
+/**
+ * The window-construction gate (M2-0519) over a set of window-construction reports: `{ pass, rows, failures }`.
+ * Only the shipped variant is gated; the other variants stay report-only. It fails unless every shipped report
+ * carries each gated stage with a measured ms under WINDOW_STAGE_BUDGET_MS, and the shipped reports built both
+ * chromes (opaque and transparent). A shipped report without boot stages (a launch that never reached the window)
+ * fails as missing, never passes as absent. `rows` lists every shipped gated stage found, per report.
+ * @param {Array<{ name: string, report: any }>} reports
+ */
+export function windowConstructionGate(reports, budgetMs = WINDOW_STAGE_BUDGET_MS) {
+  const rows = []
+  const failures = []
+  const chromes = new Set()
+  const shipped = reports.filter(({ report }) => report?.purpose === WINDOW_CONSTRUCTION && report.windowVariant === 'shipped')
+  if (shipped.length === 0) failures.push('no shipped window-construction report')
+  for (const { name, report } of shipped) {
+    const stages = Array.isArray(report.bootStages?.stages) ? report.bootStages.stages : []
+    for (const stage of GATED_WINDOW_STAGES) {
+      const found = stages.filter((entry) => entry.stage === stage)
+      if (found.length === 0) failures.push(`${name}: ${stage} missing`)
+      for (const entry of found) {
+        const chrome = entry.transparent === true ? 'transparent' : entry.transparent === false ? 'opaque' : null
+        if (chrome) chromes.add(chrome)
+        rows.push({ report: name, stage, chrome, ms: entry.ms })
+        if (typeof entry.ms !== 'number') failures.push(`${name}: ${stage} has no measured ms`)
+        else if (entry.ms >= budgetMs) failures.push(`${name}: ${stage} ${entry.ms} ms >= ${budgetMs} ms`)
+        if (!chrome) failures.push(`${name}: ${stage} does not say which chrome it built`)
+      }
+    }
+  }
+  for (const chrome of ['opaque', 'transparent']) {
+    if (shipped.length > 0 && !chromes.has(chrome)) failures.push(`no shipped ${chrome} window was measured`)
+  }
+  return { pass: failures.length === 0, budgetMs, rows, failures }
+}
+
 /** The app's own native boot stage timings (tray stages, window construction, navigation and first show): every
  *  `app.boot.stage` record of an audit log's text, in order, so each run names its long stretches without a
  *  CPU profile. Lines that are not a complete JSON record are skipped. A window stage keeps the chrome and
