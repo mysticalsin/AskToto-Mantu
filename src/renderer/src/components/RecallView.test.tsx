@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { MeetingRow } from './RecallView'
+import { MeetingRow, openOnRow } from './RecallView'
 import { DegradedBanner } from './history/DegradedBanner'
 import {
   HISTORY_DEGRADED_MS,
@@ -32,6 +32,7 @@ function row(meeting: Partial<MeetingSummary>, hydration?: RowHydration, onOpen:
       hydration={hydration}
       onSelect={noop}
       onOpen={onOpen}
+      onDownload={onOpen}
       onToggleConnections={noop}
       onTrash={noop}
       onExport={noop}
@@ -79,6 +80,36 @@ describe('History rows that are not on this device (MeetingRow)', () => {
     expect(html).not.toContain('Download')
     expect(html).not.toContain('In OneDrive')
     expect(html).not.toContain('Unavailable')
+  })
+})
+
+describe('Explicit open of a cloud-only row (openOnRow)', () => {
+  it('reports a failed download on that row, never through the window-wide notice', () => {
+    const shown: Record<string, string> = { 'cloud.md': 'Previous failure.' }
+    const row = {
+      clear: (file: string): void => {
+        delete shown[file]
+      },
+      flag: (file: string, message: string): void => {
+        shown[file] = message
+      }
+    }
+    const open = vi.fn((_file: string, reportError: (message: string) => void) => {
+      // a retry starts from a clean row: the previous failure is gone before the open runs
+      expect(shown).toEqual({})
+      reportError('OneDrive is offline. Connect, then retry.')
+    })
+
+    openOnRow('cloud.md', row, open)
+
+    expect(open).toHaveBeenCalledWith('cloud.md', expect.any(Function))
+    expect(shown).toEqual({ 'cloud.md': 'OneDrive is offline. Connect, then retry.' })
+  })
+
+  it('leaves the row clean when the open succeeds', () => {
+    const flag = vi.fn()
+    openOnRow('cloud.md', { clear: noop, flag }, noop)
+    expect(flag).not.toHaveBeenCalled()
   })
 })
 

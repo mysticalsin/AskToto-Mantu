@@ -3035,7 +3035,8 @@ export function App(): JSX.Element {
   }, [])
 
   // Open a saved meeting from History as a read-only recap (Cluely recap detail) via the recall:read IPC.
-  const openPastMeeting = useCallback(async (file: string) => {
+  // A caller that shows the failure itself (a History row's explicit download) passes `reportError`.
+  const openPastMeeting = useCallback(async (file: string, reportError?: (message: string) => void) => {
     setOpenMeetingError(null)
     followup.clear() // the viewed meeting is about to change — a stale draft from whatever was reviewed
     // before must never carry over and render/send as THIS meeting's follow-up (see followup's own
@@ -3044,7 +3045,8 @@ export function App(): JSX.Element {
     if (!r.ok) {
       // recallRead already returns an exact, actionable message (not found / undecryptable on this
       // device / invalid name) — surface it instead of leaving the click looking completely dead.
-      setOpenMeetingError(r.error || 'Could not open that meeting.')
+      if (reportError) reportError(r.error || 'Could not open that meeting.')
+      else setOpenMeetingError(r.error || 'Could not open that meeting.')
       return
     }
     setOpenMeetingError(null)

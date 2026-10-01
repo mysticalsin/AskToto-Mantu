@@ -386,6 +386,7 @@ export const MeetingRow = memo(function MeetingRow({
   hydration,
   onSelect,
   onOpen,
+  onDownload,
   onToggleConnections,
   onTrash,
   onExport,
@@ -416,6 +417,8 @@ export const MeetingRow = memo(function MeetingRow({
   hydration: RowHydration | undefined // this row's explicit-open download (useRecallHydration), if any
   onSelect: (file: string) => void
   onOpen: (file: string) => void
+  /** The explicit open of a cloud-only row (its Download/Retry action or a double-click) — see openOnRow. */
+  onDownload: (file: string) => void
   onToggleConnections: (file: string) => void
   onTrash: (file: string, title: string) => void
   /** Export a decrypted .md copy via a native save dialog (main process) — see recallExportPlain. */
@@ -473,7 +476,7 @@ export const MeetingRow = memo(function MeetingRow({
             <button
               type="button"
               onClick={() => onSelect(m.file)}
-              onDoubleClick={() => onOpen(m.file)}
+              onDoubleClick={() => (m.notDownloaded ? onDownload : onOpen)(m.file)}
               className="no-drag focus-ring flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-white/[0.06]"
             >
               <RowIcon meeting={m} />
@@ -534,7 +537,7 @@ export const MeetingRow = memo(function MeetingRow({
               </div>
             </button>
 
-            <RowDownloadButton meeting={m} hydration={hydration} onOpen={onOpen} />
+            <RowDownloadButton meeting={m} hydration={hydration} onOpen={onDownload} />
 
             {/* Rename — opens an inline title input; see onStartEdit. */}
             <button
@@ -587,7 +590,7 @@ export const MeetingRow = memo(function MeetingRow({
         )}
       </div>
 
-      {/* Rename/delete error — transient inline message; see onTrash/commitEdit. */}
+      {/* Rename/delete/open error — transient inline message; see onTrash/commitEdit/openOnRow. */}
       {error && <div className="px-7 pb-1 text-[11px] text-[var(--color-danger)]">{error}</div>}
 
       {/* Search snippet (RecallHit only) */}
@@ -621,6 +624,20 @@ export const MeetingRow = memo(function MeetingRow({
   )
 })
 
+/**
+ * The explicit open of a cloud-only row. The row owns the outcome: a failed download or read is reported
+ * under that row, beside its 'Download failed' chip and Retry, never as a window-wide notice stacked above
+ * History (whose panel height budget has no room for one). A retry starts from a clean row.
+ */
+export function openOnRow(
+  file: string,
+  row: { clear: (file: string) => void; flag: (file: string, message: string) => void },
+  open: (file: string, reportError: (message: string) => void) => void
+): void {
+  row.clear(file)
+  open(file, (message) => row.flag(file, message))
+}
+
 // ---------------------------------------------------------------------------
 // Main export
 // ---------------------------------------------------------------------------
@@ -645,8 +662,9 @@ export function RecallView({
   activeFile?: string
   /** Optional: called by the "New chat ⌘R" footer button. */
   onNewChat?: () => void
-  /** Optional: open a meeting's recap in-app (Cluely recap detail). Falls back to OS-open when absent. */
-  onOpenMeeting?: (file: string) => void
+  /** Optional: open a meeting's recap in-app (Cluely recap detail). Falls back to OS-open when absent.
+   *  `reportError`, when given, receives the failure instead of the app's window-wide notice. */
+  onOpenMeeting?: (file: string, reportError?: (message: string) => void) => void
   /** Optional: opens the Mantu Intelligence dashboard (brain view). */
   onIntelligence?: () => void
   /** Optional: opens Settings → AI — GraphBar's no-provider message needs a real way out, and this view
@@ -1060,9 +1078,9 @@ export function RecallView({
 
   /** Open the selected file (or the first item as a fallback) — in-app recap when wired, else OS-open. */
   const openMeeting = useCallback(
-    (f: string): void => {
+    (f: string, reportError?: (message: string) => void): void => {
       if (onOpenMeeting) {
-        onOpenMeeting(f)
+        onOpenMeeting(f, reportError)
         return
       }
       // shell.openPath (behind recallOpen) resolves to an empty string on success, or an error message
@@ -1074,6 +1092,10 @@ export function RecallView({
       })
     },
     [onOpenMeeting, flagRowError]
+  )
+  const downloadMeeting = useCallback(
+    (f: string): void => openOnRow(f, { clear: clearRowError, flag: flagRowError }, openMeeting),
+    [clearRowError, flagRowError, openMeeting]
   )
   const openSelected = (): void => {
     // While a debounced search is still in flight, `items` still holds the PREVIOUS query's results —
@@ -1214,6 +1236,7 @@ export function RecallView({
                     hydration={hydrations[m.file]}
                     onSelect={selectFile}
                     onOpen={openMeeting}
+                    onDownload={downloadMeeting}
                     onToggleConnections={toggleConnections}
                     onTrash={trashMeeting}
                     onExport={exportMeeting}
