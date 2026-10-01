@@ -42,6 +42,8 @@ const SWITCH_BOUND_MS = 45_000
 // M2-0432: acceptance requires margin below the former 60s bound.
 const SWITCH_TIMEOUT_MS = SWITCH_BOUND_MS
 const POLL_MS = 2_000
+// Refresh sources the app emits for its own timers; every other source is an immediate signal.
+const TIMER_POLL_SOURCES = new Set(['interval', 'failure-backoff', 'startup'])
 
 class Precondition extends Error {}
 class BlockedExternal extends Error {}
@@ -111,8 +113,13 @@ function startTestOperator(tls) {
   const server = createHttpsServer(tls, (req, res) => {
     res.setHeader('content-type', 'application/json')
     if (req.url === '/v1/model-policy' && req.method === 'GET') {
-      policyFetches.push(Date.now())
       const policy = state.current
+      // The app labels each refresh with what triggered it (timer poll vs focus/resume/network/Operator hint).
+      policyFetches.push({
+        ts: Date.now(),
+        version: policy.version,
+        source: String(req.headers['x-metis-policy-refresh-source'] ?? 'unknown')
+      })
       res.end(JSON.stringify({ ok: true, policy, signature: sign(policy) }))
       return
     }
@@ -241,21 +248,23 @@ async function main() {
     }
 
     // Change the policy on the test Operator mid-run — no restart, no re-launch.
-    const lastPolicyFetchBeforeSwitch = policyFetches.at(-1) ?? null
+    const lastPolicyFetchBeforeSwitch = policyFetches.at(-1)?.ts ?? null
     const switchStartedAt = Date.now()
     state.current = policyDoc(2, 'openai', 'gpt-5')
     const switchMs = await waitForVersion(profile, 2, SWITCH_TIMEOUT_MS)
-    const firstPolicyFetchAfterSwitch = policyFetches.find((ts) => ts >= switchStartedAt) ?? null
+    // The fetch that delivered version 2, and the trigger the app itself reported for it.
+    const switchingFetch = policyFetches.find((fetch) => fetch.ts >= switchStartedAt && fetch.version === 2) ?? null
     const firstHeartbeatAfterSwitch = heartbeats.find((ts) => ts >= switchStartedAt) ?? null
-    const policyFetchGapMs = firstPolicyFetchAfterSwitch !== null && lastPolicyFetchBeforeSwitch !== null
-      ? firstPolicyFetchAfterSwitch - lastPolicyFetchBeforeSwitch
+    const policyFetchGapMs = switchingFetch !== null && lastPolicyFetchBeforeSwitch !== null
+      ? switchingFetch.ts - lastPolicyFetchBeforeSwitch
       : null
-    const heartbeatToPolicyFetchMs = firstPolicyFetchAfterSwitch !== null && firstHeartbeatAfterSwitch !== null
-      ? firstPolicyFetchAfterSwitch - firstHeartbeatAfterSwitch
+    const heartbeatToPolicyFetchMs = switchingFetch !== null && firstHeartbeatAfterSwitch !== null
+      ? switchingFetch.ts - firstHeartbeatAfterSwitch
       : null
-    const switchSource = heartbeatToPolicyFetchMs !== null && heartbeatToPolicyFetchMs >= 0 && heartbeatToPolicyFetchMs <= POLL_MS
-      ? 'immediate-signal'
-      : 'poll'
+    const switchTrigger = switchingFetch?.source ?? null
+    const switchSource = switchTrigger === null
+      ? null
+      : TIMER_POLL_SOURCES.has(switchTrigger) ? 'poll' : 'immediate-signal'
 
     report(reportPath, {
       ok: switchMs !== null,
@@ -266,6 +275,7 @@ async function main() {
       switchBoundMs: SWITCH_BOUND_MS,
       pollIntervalMs: POLICY_POLL_INTERVAL_MS,
       switchSource,
+      switchTrigger,
       policyFetchGapMs,
       heartbeatToPolicyFetchMs,
       // Observed: the verified policy version the running app cached. NOT observed: the model an ask then

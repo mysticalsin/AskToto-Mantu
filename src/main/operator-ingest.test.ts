@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { OPERATOR_HMAC_HEADERS } from '@shared/operator-hmac'
 import {
   HEARTBEAT_MS,
-  notifyOperatorNetworkOnline,
   operatorFundedProviders,
   operatorHeartbeat,
   POLICY_POLL_MS,
@@ -50,11 +49,13 @@ const electronMock = vi.hoisted(() => {
     getPath: () => '/tmp',
     getVersion: () => '1.8.0-test'
   }
-  return { app, powerMonitor: makeEmitter() }
+  const net = { online: true, isOnline: vi.fn(() => net.online) }
+  return { app, powerMonitor: makeEmitter(), net }
 })
 vi.mock('electron', () => ({
   app: electronMock.app,
-  powerMonitor: electronMock.powerMonitor
+  powerMonitor: electronMock.powerMonitor,
+  net: electronMock.net
 }))
 vi.mock('./license', () => ({
   getMachineId: () => 'machine-test-0001',
@@ -83,14 +84,15 @@ const metadata = vi.hoisted(() => {
 })
 const policyClientMock = vi.hoisted(() => ({
   activePolicy: null as { version: number } | null,
-  refreshModelPolicy: vi.fn(async () => false)
+  // Stands in for refreshModelPolicyChecked: (settings, source) -> { changed, ok }.
+  refreshModelPolicy: vi.fn(async (_settings?: unknown, _source?: string) => ({ changed: false, ok: true }))
 }))
 vi.mock('./store', () => ({ getSettings: metadata.getSettings, setSettings: metadata.setSettings }))
 vi.mock('./auth', () => ({ authStatus: metadata.authStatus }))
 vi.mock('./brain/intelligence-index', () => ({ lastIndexedAt: metadata.lastIndexedAt }))
 vi.mock('./model-policy-client', () => ({
   getActiveModelPolicy: () => policyClientMock.activePolicy,
-  refreshModelPolicy: policyClientMock.refreshModelPolicy
+  refreshModelPolicyChecked: policyClientMock.refreshModelPolicy
 }))
 // Keep operatorFundedProviders' operator_keys gate focused here; recordOperatorHeartbeatResult's real
 // settings persistence is exercised directly in operator-entitlements-state.test.ts. The store mock
@@ -150,8 +152,9 @@ beforeEach(() => {
   electronMock.app.removeListener.mockClear()
   electronMock.powerMonitor.on.mockClear()
   electronMock.powerMonitor.removeListener.mockClear()
+  electronMock.net.online = true
   policyClientMock.refreshModelPolicy.mockReset()
-  policyClientMock.refreshModelPolicy.mockResolvedValue(false)
+  policyClientMock.refreshModelPolicy.mockResolvedValue({ changed: false, ok: true })
   policyClientMock.activePolicy = null
 })
 afterEach(() => {
@@ -478,29 +481,57 @@ describe('fleet model policy scheduler', () => {
       await flushPromises()
       expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(3)
 
-      electronMock.app.emit('network-online')
+      electronMock.app.emit('activate')
       await flushPromises()
       expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(4)
-
-      notifyOperatorNetworkOnline()
-      await flushPromises()
-      expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(5)
+      expect(policyClientMock.refreshModelPolicy.mock.calls.map((call) => call[1])).toEqual([
+        'startup',
+        'focus',
+        'resume',
+        'activate'
+      ])
     } finally {
       vi.useRealTimers()
     }
   })
 
-  it('broadcasts readiness immediately when an Operator policy response applies a newer version', async () => {
+  it('refreshes within 1 s of the OS reporting an offline→online transition, and not while it stays online', async () => {
+    vi.useFakeTimers()
+    try {
+      captureFetch()
+      electronMock.net.online = false
+      startOperatorRuntime(() => SETTINGS)
+      await flushPromises()
+      expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(1)
+
+      electronMock.net.online = true
+      await vi.advanceTimersByTimeAsync(1_000)
+      await flushPromises()
+      expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(2)
+      expect(policyClientMock.refreshModelPolicy.mock.calls[1][1]).toBe('network-online')
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('broadcasts readiness when a policy refresh changes the policy, and after every heartbeat', async () => {
     vi.useFakeTimers()
     try {
       const onReadinessChanged = vi.fn()
       captureFetch()
-      policyClientMock.refreshModelPolicy
-        .mockResolvedValueOnce(false)
-        .mockResolvedValueOnce(true)
+      policyClientMock.refreshModelPolicy.mockResolvedValueOnce({ changed: false, ok: true })
+      policyClientMock.refreshModelPolicy.mockResolvedValueOnce({ changed: true, ok: true })
 
       startOperatorRuntime(() => SETTINGS, { onReadinessChanged })
       await flushPromises()
+      await flushPromises()
+      // The first heartbeat's broadcast is never swallowed (entitlements may have changed).
       expect(onReadinessChanged).toHaveBeenCalledTimes(1)
 
       electronMock.app.emit('browser-window-focus')
@@ -577,17 +608,29 @@ describe('fleet model policy scheduler', () => {
   it('backs off failed policy refreshes without waiting longer than POLICY_POLL_MS', async () => {
     vi.useFakeTimers()
     try {
+      // The client reports an unreachable Operator as ok:false (it never throws).
       policyClientMock.refreshModelPolicy
-        .mockRejectedValueOnce(new Error('policy unavailable'))
-        .mockRejectedValueOnce(new Error('still unavailable'))
-        .mockResolvedValue(false)
+        .mockResolvedValueOnce({ changed: false, ok: false })
+        .mockResolvedValueOnce({ changed: false, ok: false })
+        .mockResolvedValue({ changed: false, ok: true })
       startOperatorRuntime(() => SETTINGS)
       await flushPromises()
       expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(1)
 
-      await vi.advanceTimersByTimeAsync(POLICY_POLL_MS - 1)
+      await vi.advanceTimersByTimeAsync(999)
+      expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(1)
       await flushPromises()
       expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(2)
+      expect(policyClientMock.refreshModelPolicy.mock.calls[1][1]).toBe('failure-backoff')
+
+      await vi.advanceTimersByTimeAsync(POLICY_POLL_MS - 1000 - 1)
+      await flushPromises()
+      expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(1)
+      await flushPromises()
+      expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(3)
+      await vi.advanceTimersByTimeAsync(0)
 
       await vi.advanceTimersByTimeAsync(POLICY_POLL_MS - 1)
       await flushPromises()
@@ -600,14 +643,55 @@ describe('fleet model policy scheduler', () => {
   it('removes policy signal listeners when the runtime stops', () => {
     startOperatorRuntime(() => SETTINGS)
     expect(electronMock.app.listenerCount('browser-window-focus')).toBe(1)
-    expect(electronMock.app.listenerCount('network-online')).toBe(1)
+    expect(electronMock.app.listenerCount('activate')).toBe(1)
     expect(electronMock.powerMonitor.listenerCount('resume')).toBe(1)
 
     stopOperatorRuntime()
 
     expect(electronMock.app.listenerCount('browser-window-focus')).toBe(0)
-    expect(electronMock.app.listenerCount('network-online')).toBe(0)
+    expect(electronMock.app.listenerCount('activate')).toBe(0)
     expect(electronMock.powerMonitor.listenerCount('resume')).toBe(0)
+  })
+
+  it('stops watching the network when the runtime stops', async () => {
+    vi.useFakeTimers()
+    try {
+      captureFetch()
+      electronMock.net.online = false
+      startOperatorRuntime(() => SETTINGS)
+      await flushPromises()
+      stopOperatorRuntime()
+      electronMock.net.online = true
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('runs one refresh at a time: a signal during a fetch queues exactly one follow-up', async () => {
+    vi.useFakeTimers()
+    try {
+      captureFetch()
+      let release: (() => void) | undefined
+      policyClientMock.refreshModelPolicy.mockImplementationOnce(
+        () => new Promise((resolve) => { release = () => resolve({ changed: false, ok: true }) })
+      )
+      startOperatorRuntime(() => SETTINGS)
+      await flushPromises()
+      electronMock.app.emit('browser-window-focus')
+      electronMock.powerMonitor.emit('resume')
+      await flushPromises()
+      expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(1)
+
+      release?.()
+      await flushPromises()
+      await flushPromises()
+      expect(policyClientMock.refreshModelPolicy).toHaveBeenCalledTimes(2)
+      expect(policyClientMock.refreshModelPolicy.mock.calls[1][1]).toBe('resume')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
