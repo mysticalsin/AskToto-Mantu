@@ -2,8 +2,8 @@ import { app } from 'electron'
 import { mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
-import { decodeSaved, decodeSavedResult, writeSaved } from '../../transcripts'
 import { readMeetingFields as frontmatter } from './meeting-document'
+import { decodeSaved, decodeSavedResult, writeEncryptedSavedFile } from './saved-file'
 import type { ContentVersion, StorageGateway } from './gateway'
 
 export const MEETINGS_INDEX_FILE = 'meetings-index.c5.json'
@@ -62,7 +62,7 @@ export async function writeMeetingsIndex(index: MeetingsIndex, userData?: string
   const path = meetingsIndexPath(userData)
   const parsed = MeetingsIndexSchema.parse(index)
   await mkdir(dirname(path), { recursive: true })
-  await writeSaved(path, JSON.stringify(parsed, null, 2), true)
+  await writeEncryptedSavedFile(path, JSON.stringify(parsed, null, 2))
 }
 
 export async function readMeetingsIndex(userData?: string): Promise<MeetingsIndex | null> {
