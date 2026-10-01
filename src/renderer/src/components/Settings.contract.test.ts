@@ -407,7 +407,7 @@ describe('Set up automatically shows an honest status chip', () => {
 // with its own download-page fallback ("Always reachable so the user is never stranded") hidden, because
 // that link renders only in phase 'blocked' or 'idle'.
 describe('MQA-164 — a failed update download leaves the Settings row with a way out', () => {
-  const block = (): string => blockAfter('function UpdatesSection(', '\nfunction ModePromptEditor')
+  const block = (): string => blockAfter('function UpdatesSection(', '\n// FILE: features/settings/TapControlCard.tsx')
 
   it('tells the user only a QA-approved Latest is offered', () => {
     expect(block()).toMatch(/QA-approved Latest from Metis-Releases/)
@@ -452,14 +452,14 @@ describe('Set up Dust installs the managed CLI, then signs in', () => {
 })
 
 describe('BRAIN-CONNECTORS — one-click ClickUp and Plane, Polo form stays', () => {
-  const product = blockAfter('function ProductConnectCard(', '\nfunction ClickupCard(')
-  const polo = blockAfter('function McpConnectionCard(', '\nconst primaryBtnStyle')
-  const intelligence = blockAfter('function IntelligenceTab(', '\nfunction GraphSection(')
+  const product = blockAfter('function ProductConnectCard(', '\nexport function ClickupCard(')
+  const polo = blockAfter('function McpConnectionCard(', '\nexport const primaryBtnStyle')
+  const intelligence = blockAfter('function IntelligenceTab(', '\nexport function GraphSection(')
   const productCopy = product.replace(/^\s*\/\/.*$/gm, '')
 
   it('ClickUp and Plane default cards have no MCP URL field', () => {
-    const clickup = blockAfter('function ClickupCard(', '\nfunction PlaneCard(')
-    const plane = blockAfter('function PlaneCard(', '\nconst OPERATOR_ENTITLEMENT_LABELS')
+    const clickup = blockAfter('function ClickupCard(', '\nexport function PlaneCard(')
+    const plane = blockAfter('function PlaneCard(', '\nexport const OPERATOR_ENTITLEMENT_LABELS')
     expect(productCopy).not.toMatch(/MCP endpoint URL/)
     expect(clickup).toMatch(/<ClickUpMark/)
     expect(plane).toMatch(/<PlaneMark/)

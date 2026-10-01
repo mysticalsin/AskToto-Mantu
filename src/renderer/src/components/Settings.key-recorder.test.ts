@@ -17,7 +17,7 @@ import { describe, expect, it } from 'vitest'
  * pinned against source. The accelerator-shape half of the fix is behaviour-tested in
  * src/shared/accelerator.test.ts.
  */
-const settingsSrc = readFileSync(join(__dirname, '../features/settings/SettingsRoot.tsx'), 'utf8')
+const settingsSrc = readFileSync(join(__dirname, '../features/settings/Shortcuts.tsx'), 'utf8')
 const recorder = settingsSrc.slice(settingsSrc.indexOf('function KeyRecorder('), settingsSrc.indexOf('function Shortcuts('))
 const handler = recorder.slice(recorder.indexOf('const onKeyDown'), recorder.indexOf('const onBlur'))
 
