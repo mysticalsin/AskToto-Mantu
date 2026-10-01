@@ -1,41 +1,9 @@
-import {
-  closeSync,
-  constants,
-  copyFileSync,
-  cpSync,
-  existsSync,
-  fsyncSync,
-  mkdirSync,
-  openSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  renameSync,
-  statSync,
-  writeFileSync
-} from 'node:fs'
+import { closeSync, constants, copyFileSync, cpSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { join, basename, dirname } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import type { PreservedBrainIndexCopy, Settings } from '@shared/ipc'
 import { invalidateMatchKeyDir, resetMatchKeyCacheForTests } from './match-key-cache'
-import {
-  BrainIndexSchema,
-  BrainGraphSchema,
-  PersonEntitySchema,
-  AccountEntitySchema,
-  DealEntitySchema,
-  MeetingExtractionSchema,
-  BRAIN_SCHEMA_VERSION,
-  type BrainIndex,
-  type BrainGraph,
-  type PersonEntity,
-  type AccountEntity,
-  type DealEntity,
-  type MeetingExtraction,
-  type Confidence,
-  type ProvenantField,
-  type IndexUnavailableCause
-} from '@shared/brain'
+import { BrainIndexSchema, BrainGraphSchema, PersonEntitySchema, AccountEntitySchema, DealEntitySchema, MeetingExtractionSchema, BRAIN_SCHEMA_VERSION, type BrainIndex, type BrainGraph, type PersonEntity, type AccountEntity, type DealEntity, type MeetingExtraction, type Confidence, type ProvenantField, type IndexUnavailableCause } from '@shared/brain'
 import { resolveMeetingsFolder, readSavedFile, writeSaved, decodeSavedResult, envelopeKeyKind } from '../transcripts'
 import { classifyAll, storageAt } from '../infra/storage/meetings-storage'
 import { activeIngestLedgerPath, classifyIngestLedgerBytes, ingestLedgerMode, readUserDataIngestLedger, seedUserDataIngestLedgerFromLegacy, type IngestLedgerLoad, userDataIngestLedgerPath, writeIngestLedger } from '../infra/storage/ingest-ledger'
@@ -76,17 +44,14 @@ function deleteCurrentUserDataIngestLedger(settings: Settings): void {
 function deleteAllUserDataIngestLedgers(settings: Settings): void {
   const current = userDataIngestLedgerPath(settings)
   deleteCurrentUserDataIngestLedger(settings)
-  const dir = dirname(current)
-  let names: string[]
+  let names: string[], dir = dirname(current)
   try {
     names = readDirectoryEntriesSync(dir)
   } catch (e) {
     if (errnoCode(e) === 'ENOENT') return
     throw e
   }
-  for (const name of names) {
-    if (/^index-[0-9a-f]{16}\.json$/i.test(name)) removePathTreeSync(join(dir, name), { force: true })
-  }
+  for (const name of names) if (/^index-[0-9a-f]{16}\.json$/i.test(name)) removePathTreeSync(join(dir, name), { force: true })
 }
 
 export function slugify(s: string): string {

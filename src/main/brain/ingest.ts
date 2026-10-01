@@ -2820,14 +2820,13 @@ async function startBackfillAsync(onDrained?: () => void | Promise<void>, option
     if (!(await brainInputsLocal(s, scan))) return { queued: 0 }
     const idx = await readIndexAsync(s)
     const route = options.route ?? 'default'
-  const providerAvailable =
-    route === 'intelligence-pass' ? pickIntelligencePassCandidates(s).length > 0 : hasUsableProvider(s)
-  if (!options.force && !options.allowSourceRefresh && (idx.sourceRefreshRequested || hasSourceDrift(scan, idx))) {
+  const providerAvailable = route === 'intelligence-pass' ? pickIntelligencePassCandidates(s).length > 0 : hasUsableProvider(s)
+  const canRepairSavedExtraction = !providerAvailable && await hasSavedReconciliationCandidateForSettings(s, scan)
+  if (!options.force && !options.allowSourceRefresh && (idx.sourceRefreshRequested || hasSourceDrift(scan, idx)) && !canRepairSavedExtraction) {
     void requestSourceRefresh(s).catch((e) => mainLog.warn('[brain] source refresh request failed:', e))
     return providerAvailable ? { queued: 0 } : { queued: 0, deferred: 'no-provider' }
   }
   if (!idx.backfillRequested) updateIndexDetached(s, (i) => { i.backfillRequested = true })
-  const already = new Set(Object.entries(idx.ingested).filter(([, v]) => v.ok).map(([k]) => k))
   // An extraction file is a resumable checkpoint, not proof of a successful ingest: a crash can land
   // between writeMeetingExtraction and the entity merge/index update. Those entries are re-merged from
   // disk below without another LLM call.
@@ -2860,13 +2859,13 @@ async function startBackfillAsync(onDrained?: () => void | Promise<void>, option
   const toRevive: string[] = []
   if (scan.some((folder) => folder.status === 'failed')) throw new Error('a meetings folder could not be listed')
   for (const source of scan.flatMap((folder) => folder.sources)) {
-    if (already.has(source.key) || inFlight.has(source.key)) continue
+    const record = idx.ingested[source.key]
+    if (inFlight.has(source.key) || (!options.force && record?.ok && (!source.version || record.sourceVersion === source.version))) continue
     if (!source.local) {
       notOnDevice += 1
       continue
     }
     observeSource(source.key)
-    const record = idx.ingested[source.key]
     const admission = admitSource(record, { version: source.version, changedAtMs: source.changedAtMs }, trigger, now)
     if (admission.action === 'hold') {
       held[admission.reason] += 1
@@ -3063,13 +3062,14 @@ export async function reconcileMeetingsInBackground(): Promise<void> {
     // no longer bails on hasActiveBackfill() alone. requestBackfill re-pumps the stalled queue below.
     if (backfillPreparing || sourceRefreshRunning || (hasActiveBackfill() && hasJobsInFlight())) return
     const idx = await readIndexAsync(s)
-    if (idx.sourceRefreshRequested || await hasMeetingSourceDrift(s, idx)) {
+    const canRepairSavedExtraction = !hasUsableProvider(s) && await hasSavedReconciliationCandidateForSettings(s)
+    if ((idx.sourceRefreshRequested || await hasMeetingSourceDrift(s, idx)) && !canRepairSavedExtraction) {
       // The try/catch below only catches synchronous throws; an async rejection escaping here would be
       // reported as an unhandledRejection → a false app.crash record on EVERY 60s tick (same as MQA-155).
       void requestSourceRefresh(s).catch((e) => mainLog.warn('[brain] source refresh request failed:', e))
       return
     }
-    if (!hasUsableProvider(s) && !(await hasSavedReconciliationCandidateForSettings(s))) return
+    if (!hasUsableProvider(s) && !canRepairSavedExtraction) return
     await requestBackfill()
   } catch (error) {
     mainLog.warn(`[brain] background meeting reconciliation skipped: ${error instanceof Error ? error.message : String(error)}`)
