@@ -24,6 +24,7 @@ import {
   firstRunCanFinish,
   asrStatusIsReady,
   summarizeSetupRows,
+  setupRowsForSpeechPackPolicy,
   speechPackAllowsEnsure,
   speechPackSetupRowVisible,
   type SetupRow
@@ -313,11 +314,14 @@ describe('Act 3 managed local speech pack policy', () => {
     expect(speechPackAllowsEnsure('required')).toBe(true)
     expect(speechPackSetupRowVisible('offered')).toBe(true)
     expect(speechPackSetupRowVisible('required')).toBe(true)
+    expect(setupRowsForSpeechPackPolicy('offered').some((row) => row.key === 'asr')).toBe(true)
+    expect(setupRowsForSpeechPackPolicy('required').some((row) => row.key === 'asr')).toBe(true)
   })
 
   it('blocks both the setup card and automatic download path for blocked', () => {
     expect(speechPackAllowsEnsure('blocked')).toBe(false)
     expect(speechPackSetupRowVisible('blocked')).toBe(false)
+    expect(setupRowsForSpeechPackPolicy('blocked').some((row) => row.key === 'asr')).toBe(false)
   })
 })
 

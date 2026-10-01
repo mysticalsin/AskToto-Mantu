@@ -237,26 +237,40 @@ async function main() {
     if (firstApplyMs === null) {
       throw new Error(`the app never cached the initial fleet model policy within ${FIRST_APPLY_TIMEOUT_MS}ms`)
     }
+    const initialPolicy = readCachedPolicy(profile)
 
     // Change the policy on the test Operator mid-run — no restart, no re-launch.
     state.current = policyDoc(2, 'openai', 'gpt-5', 'required')
-    const switchMs = await waitForVersion(profile, 2, SWITCH_TIMEOUT_MS)
-    const cachedPolicy = readCachedPolicy(profile)
+    const requiredSwitchMs = await waitForVersion(profile, 2, SWITCH_TIMEOUT_MS)
+    const requiredPolicy = readCachedPolicy(profile)
 
-    const localSpeechPackOk = cachedPolicy?.localSpeechPack === 'required'
-    const passed = switchMs !== null && switchMs <= 60_000 && localSpeechPackOk
+    state.current = policyDoc(3, 'openai', 'gpt-5', 'blocked')
+    const blockedSwitchMs = await waitForVersion(profile, 3, SWITCH_TIMEOUT_MS)
+    const blockedPolicy = readCachedPolicy(profile)
+
+    const localSpeechPackObserved = {
+      offered: initialPolicy?.localSpeechPack === 'offered',
+      required: requiredPolicy?.localSpeechPack === 'required',
+      blocked: blockedPolicy?.localSpeechPack === 'blocked'
+    }
+    const requiredSwitchOk = requiredSwitchMs !== null && requiredSwitchMs <= 60_000
+    const blockedSwitchOk = blockedSwitchMs !== null && blockedSwitchMs <= 60_000
+    const localSpeechPackOk = Object.values(localSpeechPackObserved).every(Boolean)
+    const passed = requiredSwitchOk && blockedSwitchOk && localSpeechPackOk
     report(reportPath, {
       ok: passed,
       row: 'POLICY-01',
       platform,
       firstApplyMs,
-      switchMs,
+      requiredSwitchMs,
+      blockedSwitchMs,
       switchBoundMs: 60_000,
       // Observed: the verified policy version the running app cached. NOT observed: the model an ask then
       // used — the packaged app exposes no non-interactive ask hook and an ask needs a live provider
       // credential (BLOCKED_EXTERNAL; the per-call routing is covered by the desktop unit/contract tests).
       evidence: 'cached-policy-version',
-      localSpeechPack: cachedPolicy?.localSpeechPack ?? null,
+      localSpeechPack: blockedPolicy?.localSpeechPack ?? null,
+      localSpeechPackObserved,
       localSpeechPackOk,
       modelUsedObserved: false,
       passed

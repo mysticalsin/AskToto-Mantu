@@ -130,7 +130,7 @@ import {
   resolveOnboardingHeroVideoSrc
 } from '../lib/onboarding-hero-video'
 export { speechPackAllowsEnsure, speechPackSetupRowVisible } from '../lib/local-speech-pack-policy'
-import { speechPackAllowsEnsure, speechPackSetupRowVisible } from '../lib/local-speech-pack-policy'
+import { speechPackAllowsEnsure, speechPackSetupRowVisible, type LocalSpeechPackSetting } from '../lib/local-speech-pack-policy'
 
 const PERSONA_ICONS: Record<OnboardingPersonaId, typeof MessageSquare> = {
   general: MessageSquare,
@@ -375,6 +375,17 @@ export interface SetupRow {
   state: SetupRowState
   detail?: string
   progress?: number
+}
+
+export function setupRowsForSpeechPackPolicy(policy: LocalSpeechPackSetting): SetupRow[] {
+  return [
+    ...(speechPackSetupRowVisible(policy) ? [{ key: 'asr', label: 'On-device transcription', icon: Sparkles, state: 'checking' } satisfies SetupRow] : []),
+    { key: 'brain', label: 'Private meeting brain', icon: FolderLock, state: 'checking' },
+    { key: 'mic', label: 'Microphone', icon: Mic, state: 'checking' },
+    { key: 'screen', label: MEETING_AUDIO_SCREEN_LABEL, icon: MonitorUp, state: 'checking' },
+    { key: 'ai', label: 'Métis AI', icon: Cloud, state: 'checking' },
+    { key: 'local', label: 'On-device model', icon: Cpu, state: 'checking' }
+  ]
 }
 
 /** The microphone row for an OS permission status. 'denied' MUST be its own state: getUserMedia never
@@ -1245,17 +1256,7 @@ export function OnboardingExperience({
   useEffect(() => {
     if (scene !== 'setup') return
     let live = true
-    const base: SetupRow[] = [
-      ...(speechPackSetupRowVisible(speechPackPolicy) ? [{ key: 'asr', label: 'On-device transcription', icon: Sparkles, state: 'checking' } satisfies SetupRow] : []),
-      { key: 'brain', label: 'Private meeting brain', icon: FolderLock, state: 'checking' },
-      { key: 'mic', label: 'Microphone', icon: Mic, state: 'checking' },
-      // M2-0429: asked up front as a primary step — it is what lets Métis hear the other side of a call.
-      { key: 'screen', label: MEETING_AUDIO_SCREEN_LABEL, icon: MonitorUp, state: 'checking' },
-      // Act 3 (MQA-279): AI readiness, derived from the SAME `providerReady`/`provider` publicSettings()
-      // computes for every other gate in the app — see `aiRowStatus` above.
-      { key: 'ai', label: 'Métis AI', icon: Cloud, state: 'checking' },
-      { key: 'local', label: 'On-device model', icon: Cpu, state: 'checking' }
-    ]
+    const base = setupRowsForSpeechPackPolicy(speechPackPolicy)
     setRows(base)
     const set = (key: string, state: SetupRowState, detail?: string, progress?: number): void => {
       if (!live) return
