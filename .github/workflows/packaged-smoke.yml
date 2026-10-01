@@ -30,6 +30,13 @@ on:
           - '1'
           - '20'
         default: '1'
+      hk_m_profile:
+        description: 'HK-M profile mode'
+        type: choice
+        options:
+          - fresh
+          - shared
+        default: fresh
 
 permissions:
   contents: read
@@ -126,7 +133,8 @@ jobs:
         env:
           HK_M_CYCLES: ${{ inputs.hk_m_cycles == '20' && '20' || '1' }}
           HK_M_BUDGET_MS: ${{ inputs.hk_m_cycles == '20' && '8100000' || '1200000' }}
-        run: node scripts/qa/hk-m.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/hk-m.json --cycles "$HK_M_CYCLES" --budget-ms "$HK_M_BUDGET_MS"
+          HK_M_PROFILE: ${{ inputs.hk_m_profile || 'fresh' }}
+        run: node scripts/qa/hk-m.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/hk-m.json --cycles "$HK_M_CYCLES" --profile "$HK_M_PROFILE" --budget-ms "$HK_M_BUDGET_MS"
       - name: Launch, exercise RV reopen routes, quit cleanly, and check that nothing survives
         id: smoke
         timeout-minutes: 10
@@ -249,7 +257,7 @@ jobs:
       - name: Fail the HK-M rehearsal unless every row passed
         if: always() && inputs.hk_m_cycles == '20'
         run: |
-          echo "### HK-M rehearsal: 20 cycles" >> "$GITHUB_STEP_SUMMARY"
+          echo "### HK-M rehearsal: 20 cycles (${{ inputs.hk_m_profile || 'fresh' }} profile)" >> "$GITHUB_STEP_SUMMARY"
           node -e "
             const r = JSON.parse(require('fs').readFileSync('smoke-report/hk-m.json', 'utf8'))
             const rows = r.rows || []

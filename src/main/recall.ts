@@ -1,10 +1,17 @@
 import { exciseDeletedMeeting } from './brain/ingest'
 import { join, basename } from 'node:path'
 import { safeMeetingBasename } from './meeting-path'
+import {
+  hasMeetingFlag,
+  parse,
+  readMeetingFields as frontmatter,
+  serialize,
+  setMeetingField
+} from './features/meetings/meeting-document'
 import { resolveMeetingsFolder, decodeSaved, isEncryptedBytes, writeSaved, formatTranscript, DEBRIEF_HEADING } from './transcripts'
 import { storageAt } from './infra/storage/meetings-storage'
 import type { HydrationProgress, ReadOptions } from './infra/storage/gateway'
-import { DRAFT_FILENAME, UNREADABLE, frontmatter, isMeetingDocumentType, meetingFiles, readMeetings } from './history-read'
+import { DRAFT_FILENAME, UNREADABLE, isMeetingDocumentType, meetingFiles, readMeetings } from './history-read'
 import { editMeetingIndex, removeMeetingFile } from './meeting-files'
 import { getSettings } from './store'
 import { detectLanguage } from '@shared/lang-id'
@@ -344,15 +351,14 @@ export async function renameMeeting(
   // Replace the frontmatter `title:` value (always written double-quoted — see saveMeeting/saveNote)
   // within the frontmatter block only, so a coincidental "title:"-looking line in the transcript body
   // can never be mistaken for it.
-  const fmMatch = text.match(/^---\n[\s\S]*?\n---/)
-  if (!fmMatch) return { ok: false, error: 'Not a meeting transcript.' }
-  const escapedTitle = yamlSafeRenameTitle(title)
-  // Replacement FUNCTIONS, not template-literal strings: String.replace treats a string replacement's `$`
-  // sequences ($$, $&, $`, $') as special, so a title containing them (e.g. "Deal $&Co") would otherwise
-  // mangle the output (or splice in the old title / whole match) instead of being written verbatim.
-  const newFmBlock = fmMatch[0].replace(/^title:\s*"(?:[^"\\]|\\.)*"\s*$/m, () => `title: "${escapedTitle}"`)
-  if (newFmBlock === fmMatch[0]) return { ok: false, error: 'Could not find a title to rename in this file.' }
-  let updated = text.slice(0, fmMatch.index!) + newFmBlock + text.slice(fmMatch.index! + fmMatch[0].length)
+  const doc = parse(text)
+  if (!doc) return { ok: false, error: 'Not a meeting transcript.' }
+  if (!doc.lines.some((line) => /^title:\s*"(?:[^"\\]|\\.)*"\s*$/.test(line))) {
+    return { ok: false, error: 'Could not find a title to rename in this file.' }
+  }
+  // The codec writes the value verbatim: a title containing `$&`-style sequences (e.g. "Deal $&Co") is
+  // never interpreted as a String.replace pattern.
+  let updated = serialize(setMeetingField(doc, 'title', `"${yamlSafeRenameTitle(title)}"`))
 
   // Replace the body's first H1 heading (the only "# " line — recap sections use "## "). Best-effort:
   // an old/malformed file missing it still gets the frontmatter update above.
@@ -482,11 +488,9 @@ export async function updateMeetingRecap(
   }
 
   if (recapStatus !== undefined) {
-    const fm = updated.match(/^---\n([\s\S]*?)\n---/)
-    if (!fm) return { ok: false, error: 'Could not save the summary status: missing meeting frontmatter.' }
-    const fields = fm[1].split('\n').filter((line) => !/^recap_status:/i.test(line))
-    fields.push(`recap_status: ${recapStatus}`)
-    updated = `---\n${fields.join('\n')}\n---${updated.slice(fm[0].length)}`
+    const doc = parse(updated)
+    if (!doc) return { ok: false, error: 'Could not save the summary status: missing meeting frontmatter.' }
+    updated = serialize(setMeetingField(doc, 'recap_status', recapStatus))
   }
 
   try {
@@ -579,13 +583,10 @@ export async function setMeetingCrmPushed(
   if (!read.ok) return read
   const { text, encrypted: wasEncrypted } = read
 
-  const fmMatch = text.match(/^---\n[\s\S]*?\n---/)
-  if (!fmMatch) return { ok: false, error: 'Not a meeting transcript.' }
-  const newFmBlock = /^crm_pushed:\s*.*$/m.test(fmMatch[0])
-    ? fmMatch[0].replace(/^crm_pushed:\s*.*$/m, `crm_pushed: ${key}`)
-    : fmMatch[0].replace(/\n---$/, `\ncrm_pushed: ${key}\n---`)
-  if (newFmBlock === fmMatch[0]) return { ok: true } // already recorded against this exact payload
-  const updated = text.slice(0, fmMatch.index!) + newFmBlock + text.slice(fmMatch.index! + fmMatch[0].length)
+  const doc = parse(text)
+  if (!doc) return { ok: false, error: 'Not a meeting transcript.' }
+  const updated = serialize(setMeetingField(doc, 'crm_pushed', key))
+  if (updated === text) return { ok: true } // already recorded against this exact payload
 
   try {
     await writeSaved(fullPath, updated, wasEncrypted)
@@ -618,21 +619,12 @@ export async function setMeetingConfidential(
   if (!read.ok) return read
   const { text, encrypted: wasEncrypted } = read
 
-  const fmMatch = text.match(/^---\n[\s\S]*?\n---/)
-  if (!fmMatch) return { ok: false, error: 'Not a meeting transcript.' }
-  const hasFlag = /^confidential:\s*.*$/m.test(fmMatch[0])
-  let newFmBlock: string
-  if (confidential) {
-    newFmBlock = hasFlag
-      ? fmMatch[0].replace(/^confidential:\s*.*$/m, 'confidential: true')
-      : fmMatch[0].replace(/\n---$/, '\nconfidential: true\n---')
-  } else {
-    // Unflagging removes the line entirely (absence = not confidential, same as a meeting that never
-    // had the flag) rather than writing `confidential: false` — one canonical "no flag present" shape.
-    newFmBlock = fmMatch[0].replace(/^confidential:\s*.*\r?\n/m, '')
-  }
-  if (newFmBlock === fmMatch[0] && confidential === hasFlag) return { ok: true } // already in the requested state
-  const updated = text.slice(0, fmMatch.index!) + newFmBlock + text.slice(fmMatch.index! + fmMatch[0].length)
+  const doc = parse(text)
+  if (!doc) return { ok: false, error: 'Not a meeting transcript.' }
+  // Unflagging removes the line entirely (absence = not confidential, same as a meeting that never
+  // had the flag) rather than writing `confidential: false` — one canonical "no flag present" shape.
+  const updated = serialize(setMeetingField(doc, 'confidential', confidential ? 'true' : null))
+  if (updated === text) return { ok: true } // already in the requested state
 
   try {
     await writeSaved(fullPath, updated, wasEncrypted)
@@ -658,10 +650,8 @@ export async function isMeetingConfidentialOnDisk(settings: Settings, file: stri
   if (read.status !== 'ok') return true // missing / unreadable — fail closed
   const text = decodeSaved(read.bytes)
   if (!text) return true
-  const fmMatch = text.match(/^---\n([\s\S]*?)\n---/)
-  if (!fmMatch) return true
-  const m = fmMatch[1].match(/^confidential:\s*(.*)\s*$/m)
-  return !!m && /^"?true"?$/i.test(m[1].trim())
+  if (!parse(text)) return true
+  return hasMeetingFlag(text, 'confidential')
 }
 
 // Every file Métis itself writes into the meetings folder carries one of these frontmatter types (see
