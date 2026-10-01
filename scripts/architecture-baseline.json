@@ -39,8 +39,8 @@
   "FF-04": {
     "src/main/auth.ts": 999,
     "src/main/brain/corrections.ts": 1637,
-    "src/main/brain/ingest.ts": 3077,
-    "src/main/brain/publish.ts": 990,
+    "src/main/brain/ingest.ts": 3078,
+    "src/main/brain/publish.ts": 974,
     "src/main/brain/store.ts": 1197,
     "src/main/cli.ts": 1690,
     "src/main/import-jobs.ts": 1198,
@@ -354,5 +354,6 @@
     "src/main/operator-overlay.ts": 1,
     "src/main/screen-preprocess.ts": 1,
     "src/main/updater.ts": 1
-  }
+  },
+  "FF-15": {}
 }
