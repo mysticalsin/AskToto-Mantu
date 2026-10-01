@@ -434,7 +434,9 @@ describe('speaker:embed — the Whisper-engine speaker-embedding tap (contract)'
 
   it('builds the speaker native host as a dedicated electron-vite entry', () => {
     const vite = readFileSync(join(__dirname, '..', '..', 'electron.vite.config.ts'), 'utf8')
-    expect(vite).toMatch(/'speaker-embedding-host': resolve\(__dirname, 'src\/main\/speaker-embedding-host\.ts'\)/)
+    expect(vite).toMatch(
+      /'speaker-embedding-host': resolve\(__dirname, 'src\/main\/features\/speaker\/speaker-embedding-host\.ts'\)/
+    )
   })
 
   it('the preload bridges it with the same {samples, speaker} payload shape as parakeetFeed', () => {
