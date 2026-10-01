@@ -36,20 +36,27 @@ describe('the boot window variant (M2-0516)', () => {
 
   it('reaches the audit trail with the constructor stage, and the navigation stage is admitted too', () => {
     const bootId = '123e4567-e89b-42d3-a456-426614174000'
-    const construct = { bootId, stage: 'createWindow.construct', ms: 700, transparent: true, windowVariant: 'prewarm-view' }
+    const construct = { bootId, stage: 'createWindow.construct', ms: 700, transparent: true, windowVariant: 'prewarm-spellchecker' }
     expect(projectEvent('app.boot.stage', construct)).toEqual(construct)
     expect(projectEvent('app.boot.stage', { ...construct, windowVariant: 'not-a-variant' })).not.toHaveProperty('windowVariant')
+    // M2-0519: the view prewarm ships, so it is no longer a variant of its own.
+    expect(projectEvent('app.boot.stage', { ...construct, windowVariant: 'prewarm-view' })).not.toHaveProperty('windowVariant')
     expect(projectEvent('app.boot.stage', { bootId, stage: 'createWindow.navigate', ms: 30 })).toEqual({
       bootId,
       stage: 'createWindow.navigate',
       ms: 30
     })
   })
+
+  it('reaches the audit trail with the prewarm stage, its chrome and variant (M2-0519)', () => {
+    const prewarm = { bootId: '123e4567-e89b-42d3-a456-426614174000', stage: 'createWindow.prewarm', ms: 93, transparent: false, windowVariant: 'shipped' }
+    expect(projectEvent('app.boot.stage', prewarm)).toEqual(prewarm)
+  })
 })
 
 describe('bootWindowOptions (M2-0516)', () => {
   it('sets no option for shipped or a prewarm variant, so the window is exactly its inline options', () => {
-    for (const variant of ['shipped', 'prewarm-spellchecker', 'prewarm-view'] as const) {
+    for (const variant of ['shipped', 'prewarm-spellchecker'] as const) {
       expect(bootWindowOptions(variant)).toEqual({ window: {}, webPreferences: {} })
     }
   })
@@ -71,12 +78,12 @@ describe('bootWindowYield (M2-0516)', () => {
     return { order, prewarms, yieldTask }
   }
 
-  it('only yields for a variant without a prewarm', async () => {
+  it('prewarms a bare web contents for shipped and every option variant (M2-0519)', async () => {
     const { order, prewarms, yieldTask } = recorder()
     for (const variant of ['shipped', 'spellcheck-off', 'paint-when-hidden'] as const) {
       await bootWindowYield(variant, prewarms, yieldTask, vi.fn())()
     }
-    expect(order).toEqual(['yield', 'yield', 'yield'])
+    expect(order).toEqual(['yield', 'view', 'yield', 'yield', 'view', 'yield', 'yield', 'view', 'yield'])
   })
 
   it('runs the prewarm in a task of its own between the caller’s and the constructor’s, once', async () => {
@@ -88,10 +95,13 @@ describe('bootWindowYield (M2-0516)', () => {
     expect(order).toEqual(['yield', 'spellchecker', 'yield', 'yield'])
   })
 
-  it('prewarms a bare web contents for prewarm-view', async () => {
+  it('prewarms a bare web contents for the shipped window, once', async () => {
     const { order, prewarms, yieldTask } = recorder()
-    await bootWindowYield('prewarm-view', prewarms, yieldTask, vi.fn())()
+    const beforeWindow = bootWindowYield('shipped', prewarms, yieldTask, vi.fn())
+    await beforeWindow()
     expect(order).toEqual(['yield', 'view', 'yield'])
+    await beforeWindow()
+    expect(order).toEqual(['yield', 'view', 'yield', 'yield'])
   })
 
   it('reports a prewarm that throws and still yields to the constructor', async () => {
@@ -99,8 +109,31 @@ describe('bootWindowYield (M2-0516)', () => {
     const error = new Error('no web contents')
     const fail = vi.fn()
     const throwing = { spellchecker: vi.fn(), view: () => { throw error } }
-    await bootWindowYield('prewarm-view', throwing, yieldTask, fail)()
+    await bootWindowYield('shipped', throwing, yieldTask, fail)()
     expect(fail).toHaveBeenCalledExactlyOnceWith(error)
     expect(order).toEqual(['yield', 'yield'])
+  })
+
+  it('hands the prewarm’s own duration to measured, once, thrown or not (M2-0519)', async () => {
+    const { yieldTask } = recorder()
+    let clock = 1_000
+    const now = (): number => clock
+    const slowView = { spellchecker: vi.fn(), view: () => void (clock += 93) }
+    const measured = vi.fn()
+    const beforeWindow = bootWindowYield('shipped', slowView, yieldTask, vi.fn(), measured, now)
+    await beforeWindow()
+    await beforeWindow()
+    expect(measured).toHaveBeenCalledExactlyOnceWith(93)
+
+    const throwing = {
+      spellchecker: vi.fn(),
+      view: () => {
+        clock += 40
+        throw new Error('no web contents')
+      }
+    }
+    const measuredThrow = vi.fn()
+    await bootWindowYield('shipped', throwing, yieldTask, vi.fn(), measuredThrow, now)()
+    expect(measuredThrow).toHaveBeenCalledExactlyOnceWith(40)
   })
 })
