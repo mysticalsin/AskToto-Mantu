@@ -53,13 +53,32 @@ public struct ModelPolicyDocument: Codable, Equatable, Sendable {
     public let version: Int
     public let updatedAt: Int
     public let updatedBy: String
+    public let localSpeechPack: String
     public let capabilities: [String: ModelPolicyEntry]
 
-    public init(version: Int, updatedAt: Int, updatedBy: String, capabilities: [String: ModelPolicyEntry]) {
+    public init(version: Int, updatedAt: Int, updatedBy: String, localSpeechPack: String = "offered", capabilities: [String: ModelPolicyEntry]) {
         self.version = version
         self.updatedAt = updatedAt
         self.updatedBy = updatedBy
+        self.localSpeechPack = localSpeechPack
         self.capabilities = capabilities
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case version
+        case updatedAt
+        case updatedBy
+        case localSpeechPack
+        case capabilities
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decode(Int.self, forKey: .version)
+        updatedAt = try container.decode(Int.self, forKey: .updatedAt)
+        updatedBy = try container.decode(String.self, forKey: .updatedBy)
+        localSpeechPack = try container.decodeIfPresent(String.self, forKey: .localSpeechPack) ?? "offered"
+        capabilities = try container.decode([String: ModelPolicyEntry].self, forKey: .capabilities)
     }
 
     /// `nil` when the document is missing an entry for one of the seven fixed capabilities — a
@@ -111,7 +130,7 @@ public enum ModelPolicy {
             let fallbacks = entry.fallbacks.map { "\($0.provider):\($0.model)" }.joined(separator: ",")
             return "\(capability.rawValue)=\(entry.provider):\(entry.model)[\(fallbacks)]"
         }.joined(separator: "|")
-        return "metis-model-policy.v1.\(policy.version).\(policy.updatedAt).\(policy.updatedBy).\(capString)"
+        return "metis-model-policy.v1.\(policy.version).\(policy.updatedAt).\(policy.updatedBy).localSpeechPack=\(policy.localSpeechPack).\(capString)"
     }
 
     /// Matches `canonicalUnmanagedModelPolicyPayload` in src/shared/model-policy.ts. The Operator signs

@@ -8,6 +8,8 @@ import {
   ModelPolicyDocumentSchema,
   narrowAllowedProvidersForCapability,
   pinManagedModel,
+  effectiveLocalSpeechPackPolicy,
+  type LocalSpeechPackPolicy,
   resolveModelPolicyCandidates,
   resolveModelPolicyChoice,
   SignedModelPolicySchema,
@@ -22,6 +24,7 @@ function policyWith(overrides: Partial<ModelPolicyDocument['capabilities']> = {}
     version: updatedAt,
     updatedAt,
     updatedBy: 'owner@example.com',
+    localSpeechPack: 'offered',
     capabilities: { ...base, ...overrides }
   }
 }
@@ -32,6 +35,17 @@ describe('ModelPolicyDocumentSchema', () => {
       askChat: { provider: 'anthropic', model: 'claude-sonnet-4-6', fallbacks: [{ provider: 'openai', model: 'gpt-5' }] }
     })
     expect(ModelPolicyDocumentSchema.safeParse(doc).success).toBe(true)
+  })
+
+  it('defaults localSpeechPack to offered for older persisted policy rows', () => {
+    const { localSpeechPack: _drop, ...legacy } = policyWith()
+    void _drop
+    const parsed = ModelPolicyDocumentSchema.parse(legacy)
+    expect(parsed.localSpeechPack).toBe('offered')
+  })
+
+  it('rejects an unknown localSpeechPack value', () => {
+    expect(ModelPolicyDocumentSchema.safeParse({ ...policyWith(), localSpeechPack: 'download-everything' }).success).toBe(false)
   })
 
   it('rejects a document missing a capability', () => {
@@ -71,7 +85,7 @@ describe('canonicalModelPolicyPayload', () => {
   it('is stable for the same document constructed via a different key order', () => {
     const a = policyWith({ askChat: { provider: 'anthropic', model: 'claude-sonnet-4-6', fallbacks: [] } })
     const bCapabilities = { ...a.capabilities }
-    const b: ModelPolicyDocument = { updatedBy: a.updatedBy, version: a.version, updatedAt: a.updatedAt, capabilities: bCapabilities }
+    const b: ModelPolicyDocument = { updatedBy: a.updatedBy, version: a.version, updatedAt: a.updatedAt, localSpeechPack: a.localSpeechPack, capabilities: bCapabilities }
     expect(canonicalModelPolicyPayload(a)).toBe(canonicalModelPolicyPayload(b))
   })
 
@@ -87,6 +101,7 @@ describe('canonicalModelPolicyPayload', () => {
     const doc = policyWith()
     expect(canonicalModelPolicyPayload(doc)).toBe(
       'metis-model-policy.v1.1000.1000.owner@example.com.' +
+        'localSpeechPack=offered.' +
         'askChat=anthropic:claude-sonnet-4-6[]|' +
         'commandAgent=anthropic:claude-sonnet-4-6[]|' +
         'recap=anthropic:claude-sonnet-4-6[]|' +
@@ -100,6 +115,12 @@ describe('canonicalModelPolicyPayload', () => {
   it('changes when a fallback list changes', () => {
     const a = policyWith({ askChat: { provider: 'anthropic', model: 'x', fallbacks: [{ provider: 'openai', model: 'gpt-5' }] } })
     const b = policyWith({ askChat: { provider: 'anthropic', model: 'x', fallbacks: [] } })
+    expect(canonicalModelPolicyPayload(a)).not.toBe(canonicalModelPolicyPayload(b))
+  })
+
+  it('changes when localSpeechPack changes', () => {
+    const a = policyWith()
+    const b = { ...a, localSpeechPack: 'blocked' as const }
     expect(canonicalModelPolicyPayload(a)).not.toBe(canonicalModelPolicyPayload(b))
   })
 })
@@ -182,6 +203,28 @@ describe('localModelAllowedByPolicy', () => {
     expect(localModelAllowedByPolicy(doc, 'qwen3.5-0.8b')).toBe(true)
     expect(localModelAllowedByPolicy(doc, 'qwen3.5-2b')).toBe(true)
     expect(localModelAllowedByPolicy(doc, 'some-other-model')).toBe(false)
+  })
+})
+
+describe('effectiveLocalSpeechPackPolicy', () => {
+  function doc(localSpeechPack: LocalSpeechPackPolicy | undefined): ModelPolicyDocument | null {
+    return localSpeechPack ? { ...policyWith(), localSpeechPack } : null
+  }
+
+  it('defaults unmanaged fleets to offered', () => {
+    expect(effectiveLocalSpeechPackPolicy(null, null)).toBe('offered')
+  })
+
+  it('uses the signed Operator value when there is no MDM override', () => {
+    expect(effectiveLocalSpeechPackPolicy(doc('required'), null)).toBe('required')
+    expect(effectiveLocalSpeechPackPolicy(doc('blocked'), null)).toBe('blocked')
+  })
+
+  it('lets MDM move only toward blocked', () => {
+    expect(effectiveLocalSpeechPackPolicy(doc('required'), 'offered')).toBe('offered')
+    expect(effectiveLocalSpeechPackPolicy(doc('required'), 'blocked')).toBe('blocked')
+    expect(effectiveLocalSpeechPackPolicy(doc('offered'), 'required')).toBe('offered')
+    expect(effectiveLocalSpeechPackPolicy(doc('blocked'), 'offered')).toBe('blocked')
   })
 })
 

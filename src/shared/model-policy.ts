@@ -32,6 +32,11 @@ export const MODEL_POLICY_CAPABILITIES = [
 ] as const
 export type ModelPolicyCapability = (typeof MODEL_POLICY_CAPABILITIES)[number]
 
+export const LOCAL_SPEECH_PACK_VALUES = ['required', 'offered', 'blocked'] as const
+export type LocalSpeechPackPolicy = (typeof LOCAL_SPEECH_PACK_VALUES)[number]
+export const DEFAULT_LOCAL_SPEECH_PACK: LocalSpeechPackPolicy = 'offered'
+export const LocalSpeechPackPolicySchema = z.enum(LOCAL_SPEECH_PACK_VALUES).default(DEFAULT_LOCAL_SPEECH_PACK)
+
 export const MODEL_POLICY_CAPABILITY_LABELS: Record<ModelPolicyCapability, string> = {
   askChat: 'Ask / chat',
   commandAgent: 'Command agent',
@@ -76,6 +81,7 @@ export const ModelPolicyDocumentSchema = z.object({
   version: z.number().int().nonnegative(),
   updatedAt: z.number().int().nonnegative(),
   updatedBy: z.string().trim().min(1).max(200),
+  localSpeechPack: LocalSpeechPackPolicySchema,
   capabilities: ModelPolicyCapabilitiesSchema
 })
 export type ModelPolicyDocument = z.infer<typeof ModelPolicyDocumentSchema>
@@ -94,12 +100,13 @@ export type SignedModelPolicy = z.infer<typeof SignedModelPolicySchema>
  */
 export function canonicalModelPolicyPayload(policy: ModelPolicyDocument): string {
   const cap = policy.capabilities
+  const localSpeechPack = LocalSpeechPackPolicySchema.parse(policy.localSpeechPack)
   const capString = MODEL_POLICY_CAPABILITIES.map((key) => {
     const entry = cap[key]
     const fallbacks = entry.fallbacks.map((f) => `${f.provider}:${f.model}`).join(',')
     return `${key}=${entry.provider}:${entry.model}[${fallbacks}]`
   }).join('|')
-  return `metis-model-policy.v1.${policy.version}.${policy.updatedAt}.${policy.updatedBy}.${capString}`
+  return `metis-model-policy.v1.${policy.version}.${policy.updatedAt}.${policy.updatedBy}.localSpeechPack=${localSpeechPack}.${capString}`
 }
 
 /**
@@ -234,6 +241,25 @@ export function localModelAllowedByPolicy(policy: ModelPolicyDocument | null, mo
   if (!policy) return true
   const entry = policy.capabilities.localModel
   return entry.model === modelId || entry.fallbacks.some((f) => f.model === modelId)
+}
+
+const LOCAL_SPEECH_PACK_WEIGHT: Record<LocalSpeechPackPolicy, number> = {
+  required: 0,
+  offered: 1,
+  blocked: 2
+}
+
+/**
+ * Operator policy is authoritative, but an admin-managed local file may make the speech-pack posture
+ * more restrictive. It can never turn `blocked` into `offered`/`required`, or `offered` into `required`.
+ */
+export function effectiveLocalSpeechPackPolicy(
+  operatorPolicy: ModelPolicyDocument | null,
+  adminPolicy: LocalSpeechPackPolicy | null
+): LocalSpeechPackPolicy {
+  const operatorValue = operatorPolicy?.localSpeechPack ?? DEFAULT_LOCAL_SPEECH_PACK
+  if (!adminPolicy) return operatorValue
+  return LOCAL_SPEECH_PACK_WEIGHT[adminPolicy] > LOCAL_SPEECH_PACK_WEIGHT[operatorValue] ? adminPolicy : operatorValue
 }
 
 /** Default document shape for the Models portal page's "start from today's defaults" affordance —

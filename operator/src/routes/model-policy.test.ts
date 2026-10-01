@@ -128,14 +128,15 @@ describe('GET/PUT /v1/admin/model-policy.json', () => {
       new Request('https://operator.test/v1/admin/model-policy.json', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ capabilities: capabilities({ askChat: { provider: 'openai', model: 'gpt-5' } }) })
+        body: JSON.stringify({ localSpeechPack: 'required', capabilities: capabilities({ askChat: { provider: 'openai', model: 'gpt-5' } }) })
       }),
       { ...env(), DB: db },
       { access: ownerAccess },
       { store, now: NOW }
     )
     expect(put.status).toBe(200)
-    const putBody = (await put.json()) as { policy: { capabilities: { askChat: { provider: string; model: string } } } }
+    const putBody = (await put.json()) as { policy: { localSpeechPack: string; capabilities: { askChat: { provider: string; model: string } } } }
+    expect(putBody.policy.localSpeechPack).toBe('required')
     expect(putBody.policy.capabilities.askChat).toEqual({ provider: 'openai', model: 'gpt-5', fallbacks: [] })
 
     const auditRows = await store.listAudit(10, { action: 'model-policy.update' })
@@ -148,8 +149,24 @@ describe('GET/PUT /v1/admin/model-policy.json', () => {
       { access: ownerAccess },
       { store, now: NOW + 1000 }
     )
-    const getBody = (await get.json()) as { policy: { capabilities: { askChat: { provider: string } } } }
+    const getBody = (await get.json()) as { policy: { localSpeechPack: string; capabilities: { askChat: { provider: string } } } }
+    expect(getBody.policy.localSpeechPack).toBe('required')
     expect(getBody.policy.capabilities.askChat.provider).toBe('openai')
+  })
+
+  it('PUT with an invalid localSpeechPack value is rejected with 400, writing nothing', async () => {
+    const db = sqliteD1(freshDb())
+    const res = await handleRequest(
+      new Request('https://operator.test/v1/admin/model-policy.json', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ localSpeechPack: 'surprise', capabilities: capabilities() })
+      }),
+      { ...env(), DB: db },
+      { access: ownerAccess },
+      { store: memoryStore(), now: NOW }
+    )
+    expect(res.status).toBe(400)
   })
 
   it('PUT by a non-owner admin is refused with 403 and an audit event, writing nothing', async () => {
@@ -230,9 +247,10 @@ describe('GET /v1/model-policy (device-authenticated)', () => {
     const req = await signedGet('/v1/model-policy', 'a'.repeat(32))
     const res = await handleRequest(req, { ...env(), DB: db }, {}, { store: memoryStore(), now: NOW })
     expect(res.status).toBe(200)
-    const body = (await res.json()) as { ok: boolean; policy: { version: number }; signature: string }
+    const body = (await res.json()) as { ok: boolean; policy: { version: number; localSpeechPack: string }; signature: string }
     expect(body.ok).toBe(true)
     expect(body.policy.version).toBe(NOW)
+    expect(body.policy.localSpeechPack).toBe('offered')
     expect(await verifyModelPolicySignature(TEST_INGEST_SECRET, body.policy as never, body.signature)).toBe(true)
   })
 
