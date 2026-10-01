@@ -174,7 +174,7 @@ describe('createAdmission', () => {
     expect(mainLog.info).toHaveBeenCalledTimes(1) // the episode was already closed; settling B logs nothing more
   })
 
-  it('refuses the waiters already queued the moment every permit turns stuck, not at their own deadline (M2-0193)', async () => {
+  it('refuses the metadata waiters already queued the moment every permit turns stuck, not at their own deadline (M2-0193)', async () => {
     fakeClock()
     const admission = createAdmission(2)
     await expect(admission.acquire('content', signal())).resolves.toBe('admitted')
@@ -192,17 +192,37 @@ describe('createAdmission', () => {
 
     await vi.advanceTimersByTimeAsync(1) // 2 500
     await expect(metadata).resolves.toBe('refused')
-    await expect(content).resolves.toBe('refused')
+    expect(await peek(content)).toBe('pending') // a content waiter waits on to its own deadline
     expect(mainLog.warn).toHaveBeenCalledTimes(1)
     expect(mainLog.warn).toHaveBeenCalledWith(expect.any(String), { capacity: 2 })
 
-    // The refused waiters hold nothing: both permits return to the free count as the stuck calls settle.
+    // The refused waiter holds nothing: a's permit goes to the content waiter, b's back to the free count.
     await a.settle()
+    await expect(content).resolves.toBe('admitted')
     await b.settle()
+    admission.release() // the content waiter's permit
     expect(mainLog.info).toHaveBeenCalledTimes(1)
     await expect(admission.acquire('content', signal())).resolves.toBe('admitted')
     await expect(admission.acquire('content', signal())).resolves.toBe('admitted')
     expect(await peek(admission.acquire('content', signal()))).toBe('pending')
+  })
+
+  it('hands a slow call\'s permit to a content waiter queued before every permit turned stuck (M2-0193)', async () => {
+    fakeClock()
+    const admission = createAdmission(2)
+    await expect(admission.acquire('content', signal())).resolves.toBe('admitted')
+    await expect(admission.acquire('content', signal())).resolves.toBe('admitted')
+    const a = hold(admission) // a read slowed by a scan of a fresh save
+    hold(admission) // never settles
+
+    const content = admission.acquire('content', signal())
+    await vi.advanceTimersByTimeAsync(2_000) // every permit is stuck; nothing is refused yet
+    expect(await peek(content)).toBe('pending')
+    await expect(admission.acquire('content', signal())).resolves.toBe('refused') // a new request is
+
+    await vi.advanceTimersByTimeAsync(500)
+    await a.settle() // the slow read settles within the waiter's own deadline
+    await expect(content).resolves.toBe('admitted')
   })
 
   it('keeps a waiter queued while a permit changes hands before turning stuck, and refuses it once the new call does (M2-0193)', async () => {
