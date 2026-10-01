@@ -35,6 +35,10 @@ if (HEARTBEAT_MS % POLICY_POLL_MS !== 0) {
   throw new Error('HEARTBEAT_MS must be divisible by POLICY_POLL_MS')
 }
 
+function isImmediatePolicyRefreshSource(source: string): boolean {
+  return source === 'immediate-signal' || source === 'network-online' || source === 'operator-response'
+}
+
 export interface OperatorRuntimeSettings {
   operatorUrl?: string
   operatorIngestSecret?: string
@@ -424,6 +428,16 @@ export function startOperatorRuntime(
   let policyPending = false
   let policyFailureBackoffMs = POLICY_FAILURE_BACKOFF_INITIAL_MS
   let suppressNextHeartbeatReadiness = false
+  const runPolicyRefresh = (): Promise<void> => {
+    return refreshModelPolicy(getSettings())
+      .then((changed) => {
+        policyFailureBackoffMs = POLICY_FAILURE_BACKOFF_INITIAL_MS
+        if (changed && policyGeneration === runtimeGeneration) hooks?.onReadinessChanged?.()
+      })
+      .catch(() => {
+        schedulePolicyRetry()
+      })
+  }
   const schedulePolicyRetry = (): void => {
     if (policyRetryTimer || policyGeneration !== runtimeGeneration) return
     const delay = Math.min(policyFailureBackoffMs, POLICY_POLL_MS)
@@ -436,25 +450,22 @@ export function startOperatorRuntime(
       policyRetryTimer.unref()
     }
   }
-  const pollPolicy = (_source: string): void => {
+  const pollPolicy = (source: string): void => {
     if (policyGeneration !== runtimeGeneration) return
     if (policyRetryTimer) {
       clearTimeout(policyRetryTimer)
       policyRetryTimer = null
     }
     if (policyInFlight) {
+      if (isImmediatePolicyRefreshSource(source)) {
+        void runPolicyRefresh()
+        return
+      }
       policyPending = true
       return
     }
     policyInFlight = true
-    void refreshModelPolicy(getSettings())
-      .then((changed) => {
-        policyFailureBackoffMs = POLICY_FAILURE_BACKOFF_INITIAL_MS
-        if (changed && policyGeneration === runtimeGeneration) hooks?.onReadinessChanged?.()
-      })
-      .catch(() => {
-        schedulePolicyRetry()
-      })
+    void runPolicyRefresh()
       .finally(() => {
         policyInFlight = false
         if (policyPending && policyGeneration === runtimeGeneration) {
