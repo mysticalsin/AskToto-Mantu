@@ -4,6 +4,7 @@ import type { PublicSettings } from '@shared/ipc'
 import { LANGUAGE_OPTIONS } from '@shared/lang-id'
 import { isCloudOnlyProfile, resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
 import { effectiveCloudSttProvider, type CloudSttProviderId } from '@shared/cloud-stt-provider'
+import { MODEL_POLICY_CAPABILITY_LABELS } from '@shared/model-policy'
 import { isWindows } from '../../lib/keys'
 import { FieldHint, TextButton } from '../../components/ui'
 import { LazyInput } from '../../ui/LazyText'
@@ -13,16 +14,12 @@ import { Section } from '../../ui/Section'
 import { ToggleRow } from '../../ui/Toggle'
 import { AsrModelRow, CoreAsrAssetsRow, WhisperQualityRow } from './AiSection'
 
-// asrWebgpuFallbackAt (WebGPU→WASM ASR downgrade marker) is a sibling addition to the settings schema
-// not yet reflected in the shared PublicSettings type this file imports. Read/write it through this
-// local extension so today's type still checks and the note below picks up the real field once
-// @shared/ipc catches up, with no edit needed here.
+export { LazyTextarea } from '../../ui/LazyText'
+// Local extension until PublicSettings exposes the WebGPU-to-WASM ASR downgrade marker.
 type SettingsWithAsrWebgpuFallback = PublicSettings & { asrWebgpuFallbackAt?: number | null }
-
 type AsrCorrection = PublicSettings['asrCorrections'][number]
 
-/** One `heard => correct` line per correction, in order. Pure (and lossy by design — a blank line or a
- *  line with no "=>" or an empty "from" simply isn't a correction yet). Exported for a focused test. */
+/** One `heard => correct` line per correction, in order. Exported for a focused test. */
 export function serializeAsrCorrections(items: AsrCorrection[]): string {
   return items.map((c) => `${c.from} => ${c.to}`).join('\n')
 }
@@ -42,24 +39,12 @@ export function parseAsrCorrections(raw: string): AsrCorrection[] {
     .slice(0, 100)
 }
 
-/** Value-equality for two correction arrays (order-sensitive — that's how they render as lines). Pure.
- *  Exported for a focused test. */
+/** Value-equality for two correction arrays; order-sensitive by design. */
 export function sameAsrCorrections(a: AsrCorrection[], b: AsrCorrection[]): boolean {
   return a.length === b.length && a.every((c, i) => c.from === b[i].from && c.to === b[i].to)
 }
 
-/**
- * The vocabulary-corrections textarea is a controlled input over a DERIVED, LOSSY value: the array is
- * serialized to `heard => correct` lines and re-parsed on every change, and the parse silently drops a
- * blank line (e.g. one just started with Enter, before "=>" exists yet). A plain LazyTextarea isn't
- * enough here: once the debounced commit round-trips through patch() → new `corrections` prop, that new
- * prop is the RE-SERIALIZED (blank-line-stripped) array, which — compared naively — looks like a fresh
- * external edit and would resync `local`, wiping the very newline the user just typed.
- *
- * Fix: compare the incoming prop against the last array WE ourselves committed (by value, not by the
- * serialized string). Only an external change (profile switch, undo, another window) — one that doesn't
- * match what we just committed — is allowed to overwrite in-progress typing.
- */
+/** Keeps in-progress typing intact while lossy correction parsing round-trips through settings. */
 function VocabCorrectionsTextarea({
   corrections,
   onCommit,
@@ -111,8 +96,6 @@ function VocabCorrectionsTextarea({
     />
   )
 }
-
-
 /**
  * "Suggest names from your meetings" — one-click seeding of the vocabulary-corrections list from the
  * brain's known people/account names (brain:entityNames). Fetches lazily on first click (not on every
@@ -183,10 +166,6 @@ function VocabSuggestions({
     </div>
   )
 }
-
-
-
-
 /** Seat Soniox API key for cloud STT (optional; Nova is the default transcript source). */
 function SonioxKeySeat({
   hasKey,
@@ -589,8 +568,19 @@ export function AudioTab({
     }
   }, [settings.asrEngine])
 
+  const sttPolicy = settings.modelPolicyCapabilities.stt
+
   return (
 <div className="flex min-w-0 max-w-full flex-col gap-6">
+                {sttPolicy && (
+                  <div className="flex items-center gap-2 rounded-[10px] border border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)] p-3 text-[12px] text-[color:var(--cl-foreground)]">
+                    <Info size={14} className="shrink-0 text-[color:var(--cl-primary)]" />
+                    <span>
+                      Managed by your organization: {MODEL_POLICY_CAPABILITY_LABELS.stt} uses <strong>{sttPolicy.provider}</strong> (
+                      {sttPolicy.model}), set on the Operator portal.
+                    </span>
+                  </div>
+                )}
                 <Section title="Listen to" desc="Whose audio Métis transcribes during a meeting." icon={Mic}>
                   <div className="mb-2"><ManagedChip keys={settings.managedKeys} k="audioSource" /></div>
                   <AudioChoices settings={settings} patch={patch} />
