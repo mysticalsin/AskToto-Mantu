@@ -1433,8 +1433,9 @@ function observeClaimedSourceRefreshWork(): void {
 
 function observeSourceRefreshWorkFromIndex(idx: BrainIndex): void {
   observeClaimedSourceRefreshWork()
+  if (!idx.sourceRefreshRequested || idx.replayPending) return
   for (const key of sourceRefreshScanRetryKeys) observeSource(key)
-  if (sourceRefreshWorkKeys.size > 0 || sourceRefreshScanRetryKeys.size > 0 || !idx.sourceRefreshRequested || idx.replayPending) return
+  if (sourceRefreshWorkKeys.size > 0 || sourceRefreshScanRetryKeys.size > 0) return
   for (const key of claimSourceRefreshWork(idx)) observeSource(key)
 }
 
@@ -2664,7 +2665,6 @@ async function requestBackfillRunAsync(options: BackfillStartOptions = {}, befor
   backfillObserver = observer
   for (const job of [...queue, ...inFlightJobs]) observeSource(jobKey(job))
   observeClaimedSourceRefreshWork()
-  for (const key of sourceRefreshScanRetryKeys) observeSource(key)
   addCompletionGate(observer, beforeComplete)
   try {
     const before = await readIndexAsync(observer.s)

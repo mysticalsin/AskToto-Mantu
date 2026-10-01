@@ -113,7 +113,10 @@ export function hasSourceDrift(scan: SourceScan, idx: BrainIndex): boolean {
 export function hasIncompleteSource(scan: SourceScan, idx: BrainIndex): boolean {
   for (const folder of scan) {
     if (folder.status !== 'ok') return true
-    if (folder.sources.some((source) => source.local && !idx.ingested[source.key]?.ok)) return true
+    if (folder.sources.some((source) => {
+      const record = idx.ingested[source.key]
+      return source.local && (!record?.ok || (!!source.version && record.sourceVersion !== source.version))
+    })) return true
   }
   return false
 }
@@ -122,7 +125,10 @@ export function countUnextracted(scan: SourceScan, idx: BrainIndex): number {
   let count = 0
   for (const folder of scan) {
     if (folder.status !== 'ok') continue
-    for (const source of folder.sources) if (!idx.ingested[source.key]?.ok) count += 1
+    for (const source of folder.sources) {
+      const record = idx.ingested[source.key]
+      if (!record?.ok || (!!source.version && record.sourceVersion !== source.version)) count += 1
+    }
   }
   return count
 }
@@ -191,5 +197,8 @@ export function extractionSlug(key: string): string {
 
 export function hasSavedReconciliationCandidate(scan: SourceScan, idx: BrainIndex, extracted: ReadonlySet<string>): boolean {
   const own = scan.find((folder) => folder.source === 'meetings')
-  return own?.status === 'ok' && own.sources.some((source) => !idx.ingested[source.key]?.ok && extracted.has(extractionSlug(source.key))) || false
+  return own?.status === 'ok' && own.sources.some((source) => {
+    const record = idx.ingested[source.key]
+    return (!record?.ok || (!!source.version && record.sourceVersion !== source.version)) && extracted.has(extractionSlug(source.key))
+  }) || false
 }
