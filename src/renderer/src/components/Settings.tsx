@@ -125,6 +125,12 @@ import { haltAllOnboardingAudio, unlockOnboardingAudio } from '../lib/onboarding
 // Kept importable from here: its focused tests and callers predate the move to features/settings.
 export { pickReadyProvider }
 export { screenRecordingJustGranted }
+export { PROVIDER_IDS, applyInteractiveGuardrail, detectProvider, isDustReady, requiresUserBaseUrl } from '@shared/providers'
+export { canShowConnected, cliSetupChip, nextCliSetupStep } from '@shared/cli-setup-status'
+export { FieldHint } from './ui'
+export { ExpandableSection } from '../ui/Section'
+export { DustSetup } from '../features/settings/DustSetup'
+export { PROFILE_CREDENTIAL_STORE, isProfileUnlockError } from '../features/settings/credential-store'
 export {
   AppleEngineNotice,
   CoreAsrAssetsRow,

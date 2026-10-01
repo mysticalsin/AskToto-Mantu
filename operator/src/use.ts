@@ -66,6 +66,10 @@ export type UseFail = {
 
 export const OPERATOR_KEYS_NOT_ENTITLED = 'This seat is not entitled to use Operator-funded providers.'
 
+function policyCapabilityForUse(req: UseRequest): 'askChat' | 'recap' {
+  return req.mode === 'recap' ? 'recap' : 'askChat'
+}
+
 async function providerRefused(res: Response, secrets: readonly string[], screenshot = false): Promise<UseFail> {
   // Upstream errors can echo image/prompt content. Screenshot requests expose status only.
   const raw = screenshot ? '' : await res.text().catch(() => '')
@@ -423,7 +427,7 @@ export async function handleUse(
   if (!(await seatHasEntitlement(store, seat, now, 'operator_keys'))) {
     return fail(OPERATOR_KEYS_NOT_ENTITLED, 403, { code: 'not-entitled' })
   }
-  const refusal = await enforceModelPolicy(env.DB, 'askChat', parsed.req.provider, parsed.req.model)
+  const refusal = await enforceModelPolicy(env.DB, policyCapabilityForUse(parsed.req), parsed.req.provider, parsed.req.model)
   if (refusal) {
     await store.audit(crypto.randomUUID(), now, deviceId, 'model-policy.blocked', null, `${parsed.req.provider}/${parsed.req.model}`)
     return fail(refusal.error, refusal.status, { code: refusal.code })

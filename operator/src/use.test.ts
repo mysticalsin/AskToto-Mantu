@@ -575,6 +575,30 @@ describe('M2-0412 fleet model policy enforcement on /v1/use (server-side, cannot
     expect(((await res.json()) as { code: string }).code).toBe('model_not_allowed')
   })
 
+  it('derives recap capability from /v1/use mode instead of forcing askChat', async () => {
+    const store = memoryStore()
+    await addOpenAIKey(store)
+    await approveDevice(store)
+    const db = await dbWithPolicy({ recap: { provider: 'openai', model: 'gpt-4o-mini' } })
+    const body = JSON.stringify({
+      provider: 'openai',
+      model: 'gpt-4o-mini',
+      mode: 'recap',
+      messages: [{ role: 'user', content: 'Summarize this meeting.' }]
+    })
+    const providerFetch: typeof fetch = async () =>
+      new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    const res = await handleRequest(await signedRequest('/v1/use', body, 'use-policy-recap-ok'), { ...env(), DB: db }, {}, {
+      store,
+      now: NOW,
+      providerFetch
+    })
+    expect(res.status).toBe(200)
+  })
+
   it('does not enforce anything on /v1/use when no fleet policy has ever been set (not managed = today defaults)', async () => {
     const store = memoryStore()
     await addAnthropicKey(store)
