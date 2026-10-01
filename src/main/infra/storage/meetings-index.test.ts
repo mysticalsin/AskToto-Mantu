@@ -169,6 +169,50 @@ describe('meetings index store', () => {
     expect(readFileSync(indexPath, 'utf8')).toContain('ATKENC2')
   })
 
+  it('rebuilds an undecryptable ATKENC2 index from a gateway listing', async () => {
+    const indexPath = join(userData, 'userData', MEETINGS_INDEX_FILE)
+    mkdirSync(join(userData, 'userData'), { recursive: true })
+    writeFileSync(
+      indexPath,
+      Buffer.concat([
+        Buffer.from('ATKENC2\n'),
+        Buffer.from(
+          JSON.stringify({
+            v: 2,
+            iv: Buffer.alloc(12).toString('base64'),
+            tag: Buffer.alloc(16).toString('base64'),
+            ct: Buffer.from('ciphertext').toString('base64'),
+            kLocal: `S:${Buffer.from('foreign-keychain-wrap').toString('base64')}`
+          })
+        )
+      ])
+    )
+    vi.mocked(safeStorage.decryptString).mockImplementationOnce(() => {
+      throw new Error('foreign keychain')
+    })
+    const gateway = gatewayFixture({
+      '2026-10-01_090000-planning.md': {
+        text: '---\ntitle: "Planning"\ndate: "2026-10-01T09:00:00.000Z"\n---\n'
+      }
+    }) as StorageGateway & { reads: string[] }
+
+    const rebuilt = await loadOrRebuildMeetingsIndex({
+      roots: [{ id: 'primary', path: '/synthetic/meetings', gateway }]
+    })
+
+    expect(rebuilt.status).toBe('rebuilt')
+    expect(rebuilt.index.roots[0].entries).toMatchObject([
+      {
+        file: '2026-10-01_090000-planning.md',
+        title: 'Planning',
+        localState: 'local'
+      }
+    ])
+    expect(gateway.list).toHaveBeenCalled()
+    expect(gateway.reads).toEqual(['2026-10-01_090000-planning.md'])
+    expect(readFileSync(indexPath, 'utf8')).toContain('ATKENC2')
+  })
+
   it('keeps a valid index without touching the listings', async () => {
     const index = indexFixture()
     await writeMeetingsIndex(index)
@@ -181,5 +225,31 @@ describe('meetings index store', () => {
     expect(loaded).toEqual({ status: 'loaded', index })
     expect(gateway.list).not.toHaveBeenCalled()
     expect(gateway.reads).toEqual([])
+  })
+
+  it('does not replace a corrupt index with a partial rebuild when a root listing is unavailable', async () => {
+    const indexPath = join(userData, 'userData', MEETINGS_INDEX_FILE)
+    mkdirSync(join(userData, 'userData'), { recursive: true })
+    writeFileSync(indexPath, '{not json', 'utf8')
+    const unavailableGateway = {
+      list: vi.fn(async () => ({ status: 'unavailable', code: 'EPERM' })),
+      classify: vi.fn(),
+      read: vi.fn()
+    } as unknown as StorageGateway
+
+    const rebuilt = await loadOrRebuildMeetingsIndex({
+      roots: [{ id: 'primary', path: '/synthetic/meetings', gateway: unavailableGateway }]
+    })
+
+    expect(rebuilt).toEqual({
+      status: 'rebuilt',
+      index: {
+        schema_version: 1,
+        rebuilt_at: expect.any(String),
+        roots: []
+      }
+    })
+    expect(unavailableGateway.classify).not.toHaveBeenCalled()
+    expect(readFileSync(indexPath, 'utf8')).toBe('{not json')
   })
 })

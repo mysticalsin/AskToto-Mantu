@@ -2,8 +2,8 @@ import { app } from 'electron'
 import { mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
+import { decodeSaved, decodeSavedResult, writeSaved } from '../../transcripts'
 import { readMeetingFields as frontmatter } from './meeting-document'
-import { decodeSaved, decodeSavedResult, writeEncryptedSavedFile } from './saved-file'
 import type { ContentVersion, StorageGateway } from './gateway'
 
 export const MEETINGS_INDEX_FILE = 'meetings-index.c5.json'
@@ -62,7 +62,7 @@ export async function writeMeetingsIndex(index: MeetingsIndex, userData?: string
   const path = meetingsIndexPath(userData)
   const parsed = MeetingsIndexSchema.parse(index)
   await mkdir(dirname(path), { recursive: true })
-  await writeEncryptedSavedFile(path, JSON.stringify(parsed, null, 2))
+  await writeSaved(path, JSON.stringify(parsed, null, 2), true)
 }
 
 export async function readMeetingsIndex(userData?: string): Promise<MeetingsIndex | null> {
@@ -84,7 +84,7 @@ export async function loadOrRebuildMeetingsIndex(options: {
   const current = await readMeetingsIndex(options.userData)
   if (current) return { status: 'loaded', index: current }
   const rebuilt = await rebuildMeetingsIndexFromListings(options.roots, options.now)
-  await writeMeetingsIndex(rebuilt, options.userData)
+  if (rebuilt.roots.length === options.roots.length) await writeMeetingsIndex(rebuilt, options.userData)
   return { status: 'rebuilt', index: rebuilt }
 }
 
@@ -95,7 +95,8 @@ export async function rebuildMeetingsIndexFromListings(
   const indexedRoots: MeetingsIndexRoot[] = []
   for (const root of roots) {
     const listing = await root.gateway.list('')
-    const names = listing.status === 'ok' ? listing.names.filter(isCandidateMeetingFile).sort() : []
+    if (listing.status !== 'ok') continue
+    const names = listing.names.filter(isCandidateMeetingFile).sort()
     const classes = await root.gateway.classify(names)
     const entries: MeetingsIndexEntry[] = []
     for (const file of names) {
