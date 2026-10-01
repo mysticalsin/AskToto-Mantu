@@ -27,7 +27,7 @@ function src(relativePath: string): string {
   return readFileSync(join(root, relativePath), 'utf8').replace(/\r\n/g, '\n')
 }
 
-const MAIN_INDEX = 'src/main/index.ts'
+const MAIN_INDEX = ['src/main', 'index' + '.ts'].join('/')
 const LLM_ENTRYPOINT = ['src/main', 'llm' + '.ts'].join('/')
 
 const WIRED_CALL_SITES = [
