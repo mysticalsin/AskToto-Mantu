@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Hosted macOS idle soak (M2-0492). Launches the installed promotable app on the representative Hide
+// Hosted idle soak (M2-0492/M2-0493). Launches the installed promotable app on the representative Hide
 // profile, keeps the display awake, proves the parked overlay, streams the long-run census, re-checks park
 // coverage every 10 minutes, and judges the stream with IDLE-GROWTH-1.
 import { spawn, spawnSync } from 'node:child_process'
@@ -184,6 +184,31 @@ function startCaffeinate(platform = process.platform) {
   return { recorded: true, command: 'caffeinate -d', pid: child.pid ?? null, child }
 }
 
+function windowsPowerShell() {
+  return join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+}
+
+function startWindowsExecutionState() {
+  const command = 'SetThreadExecutionState ES_CONTINUOUS|ES_SYSTEM_REQUIRED|ES_DISPLAY_REQUIRED'
+  const script = `
+Add-Type -Namespace Soak -Name Native -MemberDefinition '[DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint esFlags);'
+$flags = 0x80000000 -bor 0x00000001 -bor 0x00000002
+while ($true) {
+  [void][Soak.Native]::SetThreadExecutionState($flags)
+  Start-Sleep -Seconds 30
+}
+`
+  const child = spawn(windowsPowerShell(), ['-NoProfile', '-NonInteractive', '-Command', script], { stdio: 'ignore' })
+  child.once('error', () => {})
+  return { recorded: true, command, pid: child.pid ?? null, child }
+}
+
+export function startDisplayAwake(platform = process.platform) {
+  if (platform === 'darwin') return startCaffeinate(platform)
+  if (platform === 'win32') return startWindowsExecutionState()
+  return { recorded: false, command: null, reason: `unsupported platform ${platform}` }
+}
+
 function stopChild(child, signal = 'SIGTERM') {
   if (child && !child.killed) child.kill(signal)
 }
@@ -242,9 +267,11 @@ async function main(argv = process.argv.slice(2), env = process.env) {
   const deadlineEpochMs = values['deadline-epoch-ms'] ? Number(values['deadline-epoch-ms']) : undefined
   const seconds = soakSeconds({ hours, deadlineEpochMs })
   if (seconds <= 0) throw new Error('deadline leaves no time to sample')
+  const platform = process.platform
+  if (!['darwin', 'win32'].includes(platform)) throw new Error(`idle-soak is only supported on macOS and Windows; observed ${platform}`)
   validateParkedIdleProfile(profile)
-  const target = resolveInstallTarget(app, 'darwin')
-  const productVersion = resolveProductVersion({ installRoot: target.installRoot, executable: target.executable, platform: 'darwin' })
+  const target = resolveInstallTarget(app, platform)
+  const productVersion = resolveProductVersion({ installRoot: target.installRoot, executable: target.executable, platform })
   const output = {
     samples: join(outDir, 'idle-soak.ndjson'),
     auditCounts: join(outDir, 'audit-counts.json'),
@@ -253,14 +280,14 @@ async function main(argv = process.argv.slice(2), env = process.env) {
   }
   mkdirSync(outDir, { recursive: true })
 
-  const displayAwake = startCaffeinate('darwin')
+  const displayAwake = startDisplayAwake(platform)
   let appChild = null
   let checker = null
   let census = null
   let parkChecks = []
   let precondition = null
   try {
-    const pointer = movePointerOffTopEdge('darwin')
+    const pointer = movePointerOffTopEdge(platform)
     const port = await freeLoopbackPort()
     const cdpUrl = `http://127.0.0.1:${port}`
     appChild = spawn(target.executable, [`--remote-debugging-port=${port}`], {
@@ -360,6 +387,11 @@ async function main(argv = process.argv.slice(2), env = process.env) {
       displayAwake: { recorded: displayAwake.recorded, command: displayAwake.command, pid: displayAwake.pid ?? null },
       hostFloorOverride: true,
       hostMemory: { totalBytes: totalmem() },
+      memory: {
+        judgedMetric: verdict?.memoryMetric ?? null,
+        workingSetReported: platform === 'win32',
+        workingSetJudged: false
+      },
       modelState: {
         llamaServerRan: modelState.llamaServerRan,
         sidecarSupervisorRan: modelState.sidecarSupervisorRan,
@@ -392,6 +424,11 @@ async function main(argv = process.argv.slice(2), env = process.env) {
       displayAwake: { recorded: displayAwake.recorded, command: displayAwake.command, pid: displayAwake.pid ?? null },
       hostFloorOverride: true,
       hostMemory: { totalBytes: totalmem() },
+      memory: {
+        judgedMetric: null,
+        workingSetReported: platform === 'win32',
+        workingSetJudged: false
+      },
       modelState: { llamaServerRan: false, sidecarSupervisorRan: false, note: 'llama-server never ran during the leg; the growth rule was still judged if samples existed' },
       detail: error?.message ?? String(error)
     })
