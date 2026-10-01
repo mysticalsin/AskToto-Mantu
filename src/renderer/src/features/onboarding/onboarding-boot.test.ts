@@ -162,7 +162,7 @@ describe('FITO-185-Z instant Act1 show (no hide-for-seconds)', () => {
 describe('FITO-185-J electron file paths', () => {
   it('boot poster uses Vite asset import, not a leading-slash public path', () => {
     const bootSrc = readFileSync(join(__dirname, './onboarding-boot.ts'), 'utf8')
-    expect(bootSrc).toMatch(/import bootPosterUrl from '\.\.\/assets\/onboarding-hero-poster\.jpg'/)
+    expect(bootSrc).toMatch(/import bootPosterUrl from '\.\.\/\.\.\/assets\/onboarding-hero-poster\.jpg'/)
     expect(bootSrc).not.toMatch(/ONBOARDING_BOOT_POSTER_HREF = '\/onboarding-hero-poster\.jpg'/)
   })
 

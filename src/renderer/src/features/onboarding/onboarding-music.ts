@@ -11,7 +11,7 @@ import { ONBOARDING_AUDIO_LOCK_EVENT } from '@shared/onboarding-audio'
 
 export const ONBOARDING_MUSIC_FILE = 'goldberg-variations-aria.ogg'
 export const ONBOARDING_MUSIC_SRC = new URL(
-  `../assets/music/${ONBOARDING_MUSIC_FILE}`,
+  `../../assets/music/${ONBOARDING_MUSIC_FILE}`,
   import.meta.url
 ).href
 export const ONBOARDING_MUSIC_GAIN = 0.3

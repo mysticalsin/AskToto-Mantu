@@ -9,7 +9,7 @@
  * settings replace them when IPC lands.
  */
 import { DEFAULT_SETTINGS, PublicSettingsSchema, type PublicSettings } from '@shared/ipc'
-import bootPosterUrl from '../assets/onboarding-hero-poster.jpg'
+import bootPosterUrl from '../../assets/onboarding-hero-poster.jpg'
 
 /**
  * FITO-185-N: main stamps ?exclusiveOnboarding=1 on the renderer URL while

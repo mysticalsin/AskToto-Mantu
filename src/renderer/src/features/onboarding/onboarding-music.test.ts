@@ -12,7 +12,7 @@ import {
   playOnboardingAudio
 } from './onboarding-music'
 
-const musicDir = join(__dirname, '../assets/music')
+const musicDir = join(__dirname, '../../assets/music')
 const oggPath = join(musicDir, ONBOARDING_MUSIC_FILE)
 const licensePath = join(musicDir, 'LICENSE.OPEN-GOLDBERG.txt')
 const production = readFileSync(join(__dirname, './onboarding-music.ts'), 'utf8')

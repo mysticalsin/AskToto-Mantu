@@ -4,8 +4,8 @@
  * at first paint. Remote URL kept as a documented mirror / future refresh source.
  * Exclusive hero hold (`#05010A`) is last-resort only — poster + local mp4 must show first.
  */
-import localHeroUrl from '../assets/onboarding-hero-lady-planet.mp4'
-import localPosterUrl from '../assets/onboarding-hero-poster.jpg'
+import localHeroUrl from '../../assets/onboarding-hero-lady-planet.mp4'
+import localPosterUrl from '../../assets/onboarding-hero-poster.jpg'
 
 /** Documented CloudFront mirror of the same April 29 clip (not the runtime default). */
 export const ONBOARDING_HERO_VIDEO_REMOTE_SRC =
