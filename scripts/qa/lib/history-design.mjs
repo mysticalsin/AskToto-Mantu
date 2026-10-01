@@ -163,8 +163,11 @@ export function listAnswer(mode, realRows, nowMs) {
 /**
  * A computed `background-image` as solid colour layers, topmost first: [] for 'none', null when any layer
  * is not one colour (a real gradient, an image). The overlay glass paints each translucent fill as
- * linear-gradient(c, c), so such a layer is one colour. `toRgba` turns a CSS colour into [r, g, b, alpha].
- * Self-contained: the capture also runs it inside the renderer.
+ * linear-gradient(c, c), so such a layer is one colour. A colour token is a whole colour function with its
+ * nested parentheses (rgb(28 11 52 / calc(0.8 * 1)), color-mix(in oklab, ...)), a hex colour or
+ * `transparent`. `toRgba` turns a CSS colour into [r, g, b, alpha], with a non-finite channel for one it
+ * cannot read, which makes the layer unknown (null). Self-contained: the capture also runs it inside the
+ * renderer.
  */
 export function solidGradientLayers(backgroundImage, toRgba) {
   if (!backgroundImage || backgroundImage === 'none') return []
@@ -183,9 +186,22 @@ export function solidGradientLayers(backgroundImage, toRgba) {
   const colors = []
   for (const layer of layers) {
     if (!/^(?:repeating-)?(?:linear|radial|conic)-gradient\(/.test(layer)) return null
-    const tokens = layer.match(/(?:rgba?|hsla?|color|oklab|oklch|lab|lch|hwb)\([^()]*\)|#[0-9a-fA-F]{3,8}\b|\btransparent\b/g) ?? []
+    const tokens = []
+    const colorStart = /(?<![\w-])(?:rgba?|hsla?|color-mix|color|oklab|oklch|lab|lch|hwb)\(|#[0-9a-fA-F]{3,8}\b|\btransparent\b/g
+    for (let match = colorStart.exec(layer); match; match = colorStart.exec(layer)) {
+      let end = colorStart.lastIndex
+      if (match[0].endsWith('(')) {
+        for (let open = 1; end < layer.length && open > 0; end++) {
+          if (layer[end] === '(') open++
+          else if (layer[end] === ')') open--
+        }
+        colorStart.lastIndex = end
+      }
+      tokens.push(layer.slice(match.index, end))
+    }
     if (tokens.length === 0) return null
     const values = tokens.map(toRgba)
+    if (!values.every((value) => value.length === 4 && value.every(Number.isFinite))) return null
     if (!values.every((value) => value.every((c, i) => Math.abs(c - values[0][i]) < 1e-6))) return null
     colors.push(values[0])
   }
@@ -226,7 +242,10 @@ export function requiredRatio(sample) {
  */
 export function judgeContrast(sample, backdrop) {
   if (sample.disabled) return { status: 'exempt', reason: 'inactive control (WCAG 1.4.3)' }
-  if (sample.bgImage) return { status: 'indeterminate', reason: 'background image or gradient behind the text' }
+  if (sample.bgImage) {
+    const behind = typeof sample.bgImage === 'string' ? `: ${sample.bgImage.slice(0, 160)}` : ''
+    return { status: 'indeterminate', reason: `background image or gradient behind the text${behind}` }
+  }
   const bg = sample.layers.reduce((under, layer) => composite(layer, under), [...backdrop])
   const fg = composite([sample.fg[0], sample.fg[1], sample.fg[2], (sample.fg[3] ?? 1) * (sample.opacity ?? 1)], bg)
   const ratio = contrastRatio(fg, bg)
@@ -289,8 +308,14 @@ export function judgeCapture({ state, variant, collected, roles, tabOrder, drive
   }
   if (!collected || collected.samples.length === 0) problems.push('no text was found in the History view')
   if (contrast.failures.length > 0) problems.push(`${contrast.failures.length} contrast failure(s)`)
-  if (contrast.indeterminate.length > 0) problems.push(`${contrast.indeterminate.length} contrast sample(s) indeterminate`)
-  if (clipping.failures.length > 0) problems.push(`${clipping.failures.length} clipped element(s)`)
+  if (contrast.indeterminate.length > 0) {
+    const [first] = contrast.indeterminate
+    problems.push(`${contrast.indeterminate.length} contrast sample(s) indeterminate, first "${first.label}": ${first.reason}`)
+  }
+  if (clipping.failures.length > 0) {
+    const [first] = clipping.failures
+    problems.push(`${clipping.failures.length} clipped element(s), first "${first.label}": ${first.failures.join(', ')}`)
+  }
   if (missingRoles.length > 0) problems.push(`${missingRoles.length} accessibility role(s) missing`)
   if (missingKeyboard.length > 0) problems.push(`${missingKeyboard.length} action(s) not reachable by keyboard`)
   return { state: state.id, variant: variant.id, verdict: problems.length === 0 ? 'PASS' : 'FAIL', problems, contrast, clipping, missingRoles, missingKeyboard }

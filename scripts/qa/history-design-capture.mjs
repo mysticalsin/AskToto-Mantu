@@ -145,8 +145,9 @@ const REVEAL_OVERLAY = `(() => {
 
 /**
  * Runs in the renderer: marks the History view's root and returns every visible text, placeholder and
- * named icon in it, with what the contrast and clipping checks need. Colours go through a canvas so any
- * CSS colour syntax (oklab, color-mix) arrives as sRGB [r, g, b, alpha]. Each ancestor contributes its
+ * named icon in it, with what the contrast and clipping checks need. Colours are resolved by a hidden
+ * probe's computed `color` (calc() channels, color-mix) and then go through a canvas so any CSS colour
+ * syntax arrives as sRGB [r, g, b, alpha]; one the probe rejects is non-finite. Each ancestor contributes its
  * background-color, then its solid gradient layers bottom to top (solidLayers is solidGradientLayers).
  */
 function collectHistoryView(solidLayers) {
@@ -154,10 +155,16 @@ function collectHistoryView(solidLayers) {
   canvas.width = 1
   canvas.height = 1
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  const probe = document.createElement('i')
+  probe.style.display = 'none'
+  document.body.append(probe)
   const rgba = (css) => {
+    probe.style.color = ''
+    probe.style.color = css
+    if (!probe.style.color) return [Number.NaN, Number.NaN, Number.NaN, Number.NaN]
     ctx.clearRect(0, 0, 1, 1)
     ctx.fillStyle = '#000'
-    ctx.fillStyle = css
+    ctx.fillStyle = getComputedStyle(probe).color
     ctx.fillRect(0, 0, 1, 1)
     const d = ctx.getImageData(0, 0, 1, 1).data
     return [d[0], d[1], d[2], d[3] / 255]
@@ -193,7 +200,7 @@ function collectHistoryView(solidLayers) {
       const bg = rgba(s.backgroundColor)
       if (bg[3] > 0) layers.push(bg)
       const solids = solidLayers(s.backgroundImage, rgba)
-      if (solids === null) bgImage = true
+      if (solids === null) bgImage = s.backgroundImage
       else for (const color of [...solids].reverse()) if (color[3] > 0) layers.push(color)
     }
     let clipAncestor = null
@@ -228,6 +235,7 @@ function collectHistoryView(solidLayers) {
       clipAncestor
     })
   }
+  probe.remove()
   return { scope, viewport: { width: innerWidth, height: innerHeight }, samples }
 }
 

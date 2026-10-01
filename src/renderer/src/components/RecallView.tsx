@@ -474,7 +474,7 @@ export const MeetingRow = memo(function MeetingRow({
               type="button"
               onClick={() => onSelect(m.file)}
               onDoubleClick={() => onOpen(m.file)}
-              className="no-drag focus-ring flex flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-white/[0.06]"
+              className="no-drag focus-ring flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-white/[0.06]"
             >
               <RowIcon meeting={m} />
               {/* T6 6d: smallest-possible Mantu Intelligence indicator — a dot, color is state (never

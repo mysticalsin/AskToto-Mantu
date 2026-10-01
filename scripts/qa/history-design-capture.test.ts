@@ -160,6 +160,31 @@ describe('glass background layers (solidGradientLayers)', () => {
     expect(solidGradientLayers('linear-gradient(90deg, rgb(1, 2, 3) 0%, rgb(1, 2, 3) 100%)', toRgba)).toEqual([[1, 2, 3, 1]])
   })
 
+  it('reads a whole colour function with nested parentheses as one colour (calc() alpha, color-mix)', () => {
+    // What the probe resolves each whole token to; anything else (a fragment like `calc(0.8 * 1)`) is unreadable.
+    const resolved: Record<string, number[]> = {
+      'rgb(28 11 52 / calc(0.8 * 1))': [28, 11, 52, 0.8],
+      'color-mix(in oklab, rgb(255, 255, 255) 6%, transparent)': [255, 255, 255, 0.06]
+    }
+    const probe = (css: string): number[] => resolved[css] ?? [Number.NaN, Number.NaN, Number.NaN, Number.NaN]
+    const glass =
+      'linear-gradient(color-mix(in oklab, rgb(255, 255, 255) 6%, transparent), color-mix(in oklab, rgb(255, 255, 255) 6%, transparent)), linear-gradient(rgb(28 11 52 / calc(0.8 * 1)), rgb(28 11 52 / calc(0.8 * 1)))'
+    expect(solidGradientLayers(glass, probe)).toEqual([
+      [255, 255, 255, 0.06],
+      [28, 11, 52, 0.8]
+    ])
+  })
+
+  it('gives up on a layer whose colour cannot be read', () => {
+    const unreadable = (): number[] => [Number.NaN, Number.NaN, Number.NaN, Number.NaN]
+    expect(solidGradientLayers('linear-gradient(rgb(1, 2, 3), rgb(1, 2, 3))', unreadable)).toBeNull()
+  })
+
+  it('names the background it could not read in the indeterminate reason', () => {
+    const sample = textSample({ bgImage: 'conic-gradient(red, blue)' })
+    expect(judgeContrast(sample, BLACK)).toEqual({ status: 'indeterminate', reason: 'background image or gradient behind the text: conic-gradient(red, blue)' })
+  })
+
   it('has no layers for none, and gives up on a real gradient or an image', () => {
     expect(solidGradientLayers('none', toRgba)).toEqual([])
     expect(solidGradientLayers('linear-gradient(90deg, rgb(0, 0, 0), rgb(255, 255, 255))', toRgba)).toBeNull()
