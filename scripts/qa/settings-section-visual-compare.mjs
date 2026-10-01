@@ -17,6 +17,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 
 const READY_TIMEOUT_MS = 150_000
@@ -24,6 +25,7 @@ const CONNECT_TIMEOUT_MS = 30_000
 const SETTINGS_TIMEOUT_MS = 30_000
 const POLL_MS = 250
 const VIEWPORT = Object.freeze({ width: 900, height: 820 })
+const FIT_TOLERANCE_PX = 1
 
 function usage() {
   console.error('Usage: node scripts/qa/settings-section-visual-compare.mjs <before executable> <after executable> <out dir>')
@@ -40,6 +42,16 @@ function slug(value) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function fitsInside(inner, outer) {
+  if (!inner || !outer) return false
+  return (
+    inner.x >= outer.x - FIT_TOLERANCE_PX
+    && inner.y >= outer.y - FIT_TOLERANCE_PX
+    && inner.x + inner.width <= outer.x + outer.width + FIT_TOLERANCE_PX
+    && inner.y + inner.height <= outer.y + outer.height + FIT_TOLERANCE_PX
+  )
 }
 
 function readAuditLog(profile) {
@@ -154,8 +166,10 @@ async function captureSections(page, appOutDir) {
         ?? `Section ${index + 1}`
       const key = `${slug(tab)}-${String(index + 1).padStart(2, '0')}-${slug(title)}`
       const file = join(appOutDir, `${key}.png`)
-      const buffer = await section.screenshot({ path: file })
+      const panelBox = await tabPanel.boundingBox()
       const box = await section.boundingBox()
+      const clipped = !fitsInside(box, panelBox)
+      const buffer = await section.screenshot({ path: file, animations: 'disabled', caret: 'hide' })
       sections.push({
         key,
         tab,
@@ -163,6 +177,7 @@ async function captureSections(page, appOutDir) {
         title,
         width: box ? Math.round(box.width) : null,
         height: box ? Math.round(box.height) : null,
+        clipped,
         sha256: sha256(buffer),
         bytes: buffer.length,
         file: `${basename(appOutDir)}/${basename(file)}`
@@ -225,14 +240,15 @@ function compare(before, after) {
       if (left.width !== right.width || left.height !== right.height) failures.push('dimensions_changed')
       if (left.sha256 !== right.sha256) failures.push('pixels_changed')
     }
+    if (left?.clipped || right?.clipped) failures.push('clipped')
     rows.push({
       key,
       tab: left?.tab ?? right?.tab ?? null,
       title: left?.title ?? right?.title ?? null,
       status: failures.length === 0 ? 'PASS' : 'FAIL',
       failures,
-      before: left ? { sha256: left.sha256, bytes: left.bytes, width: left.width, height: left.height, file: left.file } : null,
-      after: right ? { sha256: right.sha256, bytes: right.bytes, width: right.width, height: right.height, file: right.file } : null
+      before: left ? { sha256: left.sha256, bytes: left.bytes, width: left.width, height: left.height, clipped: left.clipped, file: left.file } : null,
+      after: right ? { sha256: right.sha256, bytes: right.bytes, width: right.width, height: right.height, clipped: right.clipped, file: right.file } : null
     })
   }
 
@@ -266,6 +282,7 @@ async function main() {
       result: comparison.status === 'PASS' ? 'pass' : 'fail',
       platform: process.platform,
       viewport: VIEWPORT,
+      notes: ['ExpandableSection bodies are captured in their default collapsed state.'],
       captures: [
         { label: before.label, status: before.status, sectionCount: before.sectionCount },
         { label: after.label, status: after.status, sectionCount: after.sectionCount }
@@ -288,7 +305,11 @@ async function main() {
   process.exit(report.result === 'pass' ? 0 : 1)
 }
 
-main().catch((err) => {
-  console.error(err instanceof Error ? err.stack ?? err.message : err)
-  process.exit(1)
-})
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((err) => {
+    console.error(err instanceof Error ? err.stack ?? err.message : err)
+    process.exit(1)
+  })
+}
+
+export { compare, fitsInside }

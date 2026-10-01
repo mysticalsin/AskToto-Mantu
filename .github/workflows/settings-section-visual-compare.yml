@@ -14,6 +14,7 @@ on:
         required: true
         type: string
   pull_request:
+    types: [ready_for_review]
     paths:
       - .github/workflows/settings-section-visual-compare.yml
       - scripts/qa/settings-section-visual-compare.mjs
@@ -190,3 +191,8 @@ jobs:
           path: settings-visual-report/
           if-no-files-found: error
           retention-days: 14
+
+      - name: Record lead action
+        if: always()
+        run: |
+          echo "LEAD_ACTION: dispatch settings-section-visual-compare.yml with before_ref=<parent of the M2-0071.1 merge (#306)> and after_ref=<current m2/integration head>, have Opus review the uploaded PNGs and JSON on both platforms, and file the private evidence from the artifact"
