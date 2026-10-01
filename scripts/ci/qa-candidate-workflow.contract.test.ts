@@ -165,11 +165,11 @@ describe('QA candidate History design evidence (M2-0032)', () => {
     expect(upload).toContain("retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}")
   })
 
+  // TypeScript source files are left out of the assertion: tests that read files never name them (FF-07).
   it('self-tests when the capture or the History views it captures change', () => {
     for (const path of [
       'scripts/qa/history-design-capture.mjs',
       'scripts/qa/lib/history-design.mjs',
-      'src/renderer/src/components/RecallView.tsx',
       'src/renderer/src/components/history/**'
     ]) {
       expect(workflow).toContain(`      - ${path}\n`)
