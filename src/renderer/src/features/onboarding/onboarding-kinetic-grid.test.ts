@@ -2,10 +2,9 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readAppCss } from '../../../../../scripts/lib/read-app-css.mjs'
 import { describe, expect, it } from 'vitest'
+import { canMarkOnboardingDone } from './onboarding-flow'
+import { ONBOARDING_HERO_VIDEO_REMOTE_SRC, ONBOARDING_HERO_VIDEO_SRC } from './onboarding-hero-video'
 import {
-  canMarkOnboardingDone,
-  ONBOARDING_HERO_VIDEO_REMOTE_SRC,
-  ONBOARDING_HERO_VIDEO_SRC,
   KINETIC_COLORS,
   KINETIC_DPR_CAP,
   KINETIC_GRID_SCENES,
@@ -14,9 +13,9 @@ import {
   lerp2,
   rippleOffset,
   shouldMountKineticGrid,
-  shouldMountStarfield,
   tileWarp
-} from './index'
+} from './onboarding-kinetic-grid'
+import { shouldMountStarfield } from './onboarding-starfield-spec'
 
 const root = join(__dirname, '..', '..')
 const kineticLib = readFileSync(join(__dirname, './onboarding-kinetic-grid.ts'), 'utf8')
