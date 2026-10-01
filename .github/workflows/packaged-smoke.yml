@@ -142,7 +142,7 @@ jobs:
         run: node scripts/qa/packaged-smoke.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/packaged-smoke.json
       # continue-on-error, same reason as the sidecar reaper above: a genuine POLICY-01 regression
       # must never be hidden by aborting the job before the artifact upload/gate steps below run.
-      - name: "M2-0412 POLICY-01: change the fleet model policy on a test Operator, prove the running app switches within 60s"
+      - name: "M2-0432 POLICY-01: change the fleet model policy on a test Operator, prove the running app switches within 45s"
         id: policy-smoke
         continue-on-error: true
         timeout-minutes: 5
@@ -337,7 +337,7 @@ jobs:
         run: node scripts/qa/packaged-smoke.mjs "$RUNNER_TEMP/smoke/Metis.exe" smoke-report/packaged-smoke.json
       # continue-on-error, same reason as the sidecar reaper above: a genuine POLICY-01 regression
       # must never be hidden by aborting the job before the artifact upload/gate steps below run.
-      - name: "M2-0412 POLICY-01: change the fleet model policy on a test Operator, prove the running app switches within 60s"
+      - name: "M2-0432 POLICY-01: change the fleet model policy on a test Operator, prove the running app switches within 45s"
         id: policy-smoke
         continue-on-error: true
         timeout-minutes: 5
