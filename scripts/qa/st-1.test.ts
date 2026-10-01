@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { BOOT_WINDOW_VARIANTS } from '../../src/main/infra/observability/projection'
 import {
+  GATED_WINDOW_STAGES,
   PENDING_GLOBAL,
   STORAGE_SATURATED_LOG,
+  WINDOW_STAGE_BUDGET_MS,
   WINDOW_VARIANTS,
   bootStagesFromAudit,
   buildLaunchFailureReport,
@@ -20,6 +22,7 @@ import {
   releaseExpression,
   runPurpose,
   timedCallsExpression,
+  windowConstructionGate,
   withTimeout,
   witnessSummary
 } from './lib/st-1-core.mjs'
@@ -212,10 +215,12 @@ describe('window-construction runs (M2-0516)', () => {
   })
 
   it('takes a window-construction run with one known variant, and refuses an unknown purpose or variant', () => {
-    expect(runPurpose({ purpose: 'window-construction', windowVariant: 'prewarm-view' })).toEqual({
+    expect(runPurpose({ purpose: 'window-construction', windowVariant: 'prewarm-spellchecker' })).toEqual({
       purpose: 'window-construction',
-      windowVariant: 'prewarm-view'
+      windowVariant: 'prewarm-spellchecker'
     })
+    // M2-0519: the view prewarm ships, so it is no longer a variant of its own.
+    expect(runPurpose({ purpose: 'window-construction', windowVariant: 'prewarm-view' }).error).toMatch(/got "prewarm-view"/)
     expect(runPurpose({ purpose: 'window-construction' }).error).toMatch(/--window-variant must be one of shipped, /)
     expect(runPurpose({ purpose: 'window-construction', windowVariant: 'transparent' }).error).toMatch(/got "transparent"/)
     expect(runPurpose({ purpose: 'st-2', windowVariant: 'shipped' }).error).toMatch(/--purpose must be window-construction/)
@@ -244,6 +249,87 @@ describe('window-construction runs (M2-0516)', () => {
       expect(st1).not.toHaveProperty('st1Evidence')
       expect(st1).not.toHaveProperty('windowVariant')
     }
+  })
+})
+
+describe('windowConstructionGate (M2-0519)', () => {
+  const stage = (name: string, ms: number | null, transparent?: boolean) => ({
+    stage: name,
+    ms,
+    ts: '2026-10-01T10:00:00.000Z',
+    ...(transparent === undefined ? {} : { transparent, windowVariant: 'shipped' })
+  })
+  const windowReport = (windowVariant: string, stages: unknown[] | null) => ({
+    harness: 'ST-1',
+    purpose: 'window-construction',
+    st1Evidence: false,
+    windowVariant,
+    bootStages: stages === null ? null : { stages }
+  })
+  const shipped = (transparent: boolean, prewarmMs: number | null, constructMs: number | null) =>
+    windowReport('shipped', [
+      stage('createWindow.prewarm', prewarmMs, transparent),
+      stage('createWindow.construct', constructMs, transparent),
+      stage('createWindow.navigate', 400),
+      stage('createTray.newTray', 900)
+    ])
+  const passing = [
+    { name: 'window-shipped-opaque-1/a.json', report: shipped(false, 12, 111) },
+    { name: 'window-shipped-transparent-1/a.json', report: shipped(true, 9, 93) }
+  ]
+
+  it('passes when every shipped prewarm and construct is under 250 ms in both chromes, ignoring other stages and variants', () => {
+    const gate = windowConstructionGate([
+      ...passing,
+      { name: 'window-spellcheck-off-opaque-1/a.json', report: windowReport('spellcheck-off', [stage('createWindow.construct', 900, false)]) },
+      { name: 'st-1.json', report: { harness: 'ST-1', row: 'none' } }
+    ])
+    expect(gate).toMatchObject({ pass: true, budgetMs: 250, failures: [] })
+    expect(gate.rows).toEqual([
+      { report: 'window-shipped-opaque-1/a.json', stage: 'createWindow.prewarm', chrome: 'opaque', ms: 12 },
+      { report: 'window-shipped-opaque-1/a.json', stage: 'createWindow.construct', chrome: 'opaque', ms: 111 },
+      { report: 'window-shipped-transparent-1/a.json', stage: 'createWindow.prewarm', chrome: 'transparent', ms: 9 },
+      { report: 'window-shipped-transparent-1/a.json', stage: 'createWindow.construct', chrome: 'transparent', ms: 93 }
+    ])
+  })
+
+  it('fails a shipped prewarm or construct at or over 250 ms, in either chrome', () => {
+    const gate = windowConstructionGate([
+      { name: 'o.json', report: shipped(false, 250, 111) },
+      { name: 't.json', report: shipped(true, 9, 595) }
+    ])
+    expect(gate.pass).toBe(false)
+    expect(gate.failures).toEqual(['o.json: createWindow.prewarm 250 ms >= 250 ms', 't.json: createWindow.construct 595 ms >= 250 ms'])
+  })
+
+  it('fails a shipped report missing a gated stage, a launch without boot stages, and a stage without ms or chrome', () => {
+    const gate = windowConstructionGate([
+      ...passing,
+      { name: 'no-prewarm.json', report: windowReport('shipped', [stage('createWindow.construct', 100, false)]) },
+      { name: 'launch-failed.json', report: windowReport('shipped', null) },
+      { name: 'no-ms.json', report: shipped(true, null, 100) },
+      { name: 'no-chrome.json', report: windowReport('shipped', [stage('createWindow.prewarm', 5), stage('createWindow.construct', 100, true)]) }
+    ])
+    expect(gate.pass).toBe(false)
+    expect(gate.failures).toEqual([
+      'no-prewarm.json: createWindow.prewarm missing',
+      'launch-failed.json: createWindow.prewarm missing',
+      'launch-failed.json: createWindow.construct missing',
+      'no-ms.json: createWindow.prewarm has no measured ms',
+      'no-chrome.json: createWindow.prewarm does not say which chrome it built'
+    ])
+  })
+
+  it('fails when a chrome was never measured, and when there is no shipped report at all', () => {
+    expect(windowConstructionGate([passing[0]]).failures).toEqual(['no shipped transparent window was measured'])
+    expect(windowConstructionGate([]).failures).toEqual(['no shipped window-construction report'])
+    const variantsOnly = windowConstructionGate([{ name: 'v.json', report: windowReport('prewarm-spellchecker', [stage('createWindow.construct', 100, false)]) }])
+    expect(variantsOnly).toMatchObject({ pass: false, failures: ['no shipped window-construction report'] })
+  })
+
+  it('holds the gated stages to 250 ms', () => {
+    expect(WINDOW_STAGE_BUDGET_MS).toBe(250)
+    expect(GATED_WINDOW_STAGES).toEqual(['createWindow.prewarm', 'createWindow.construct'])
   })
 })
 
