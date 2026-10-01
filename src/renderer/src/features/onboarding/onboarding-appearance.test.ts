@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { PublicSettings } from '@shared/ipc'
 import { OnboardingAppearance } from '../../components/OnboardingAppearance'
-import { persistOverlayPlacement } from './overlay-placement-save'
+import { persistOverlayPlacement } from '../../lib/overlay-placement-save'
 import {
   appearancePreviewEdgeState,
   appearancePreviewInitialPhase,
