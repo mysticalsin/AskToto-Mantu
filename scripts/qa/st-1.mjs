@@ -40,8 +40,8 @@
  *       [--out <report.json>] [--report-dir <dir>] [--purpose window-construction --window-variant <variant>]
  *
  * `--purpose window-construction` marks a short launch made only to measure the boot window's constructor under
- * one QA-identity rendering variant (shipped, spellcheck-off, paint-when-hidden, prewarm-spellchecker,
- * prewarm-view), passed to the candidate as METIS_QA_WINDOW_VARIANT. Its report says `st1Evidence: false` and is
+ * one QA-identity rendering variant (shipped, spellcheck-off, paint-when-hidden, prewarm-spellchecker), passed to
+ * the candidate as METIS_QA_WINDOW_VARIANT. Its report says `st1Evidence: false` and is
  * never ST-1 evidence. Every other run launches the shipped variant.
  *
  * Every in-app wait is bounded and every failure to answer is recorded in the report's `errors` (step, tMs,

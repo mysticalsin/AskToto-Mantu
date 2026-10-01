@@ -694,8 +694,8 @@ jobs:
   # window-construction, st1Evidence: false) that build the boot window under each QA-identity rendering variant,
   # in both chromes, twice, interleaved, all on this one runner so the numbers compare. A first-run profile builds
   # the opaque exclusive onboarding window; an onboarded bar profile builds the transparent overlay. Each report's
-  # bootStages carries createWindow.construct (with the chrome and variant built), createWindow.navigate and
-  # createWindow.firstShow.
+  # bootStages carries createWindow.prewarm and createWindow.construct (with the chrome and variant built),
+  # createWindow.navigate and createWindow.firstShow.
   st1-mac-window:
     name: ST-1 window construction per variant and chrome (report-only)
     needs: provenance
@@ -731,7 +731,7 @@ jobs:
           # The durable settings of a user who finished onboarding with the bar layout (plain JSON is a supported read path).
           printf '{"onboardingDone":true,"onboardingDoneAt":%s000,"recordingConsent":true,"overlayLayout":"bar","autoHideOverlay":false}\n' "$(date +%s)" > onboarded-profile/settings.json
           for repeat in 1 2; do
-            for variant in shipped spellcheck-off paint-when-hidden prewarm-spellchecker prewarm-view; do
+            for variant in shipped spellcheck-off paint-when-hidden prewarm-spellchecker; do
               for chrome in opaque transparent; do
                 template=()
                 if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi

@@ -182,7 +182,7 @@ export function countStorageSaturations(mainLogText) {
 
 /** The boot window variants the QA-identity build can construct (src/main/infra/observability/projection.ts
  *  BOOT_WINDOW_VARIANTS, M2-0516). An ST-1 run always launches 'shipped'. */
-export const WINDOW_VARIANTS = ['shipped', 'spellcheck-off', 'paint-when-hidden', 'prewarm-spellchecker', 'prewarm-view']
+export const WINDOW_VARIANTS = ['shipped', 'spellcheck-off', 'paint-when-hidden', 'prewarm-spellchecker']
 
 /** The only purpose besides ST-1 itself: a short launch that measures the window constructor under one variant. */
 export const WINDOW_CONSTRUCTION = 'window-construction'

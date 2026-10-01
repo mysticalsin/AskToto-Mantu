@@ -212,10 +212,12 @@ describe('window-construction runs (M2-0516)', () => {
   })
 
   it('takes a window-construction run with one known variant, and refuses an unknown purpose or variant', () => {
-    expect(runPurpose({ purpose: 'window-construction', windowVariant: 'prewarm-view' })).toEqual({
+    expect(runPurpose({ purpose: 'window-construction', windowVariant: 'prewarm-spellchecker' })).toEqual({
       purpose: 'window-construction',
-      windowVariant: 'prewarm-view'
+      windowVariant: 'prewarm-spellchecker'
     })
+    // M2-0519: the view prewarm ships, so it is no longer a variant of its own.
+    expect(runPurpose({ purpose: 'window-construction', windowVariant: 'prewarm-view' }).error).toMatch(/got "prewarm-view"/)
     expect(runPurpose({ purpose: 'window-construction' }).error).toMatch(/--window-variant must be one of shipped, /)
     expect(runPurpose({ purpose: 'window-construction', windowVariant: 'transparent' }).error).toMatch(/got "transparent"/)
     expect(runPurpose({ purpose: 'st-2', windowVariant: 'shipped' }).error).toMatch(/--purpose must be window-construction/)
