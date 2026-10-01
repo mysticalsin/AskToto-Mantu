@@ -19,6 +19,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSyn
 import { homedir } from 'node:os'
 import { basename, isAbsolute, join, relative } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { writeRepresentativeProfile } from './census/profile.mjs'
 import { LOCAL_LLM_SETTINGS } from './lib/local-llm-settings.mjs'
 import { VARIANTS } from './provenance.mjs'
 
@@ -116,6 +117,41 @@ export const SCENARIOS = Object.freeze({
       })
     })
   }),
+  // M2-0492: hosted macOS idle soak on promotable DMG bytes. The tool launches the installed app on the
+  // representative Hide profile, streams the 5.5 h parked-idle census, and judges IDLE-GROWTH-1.
+  'idle-soak': Object.freeze({
+    ticket: 'M2-0492',
+    qaOnlyHook: false,
+    exits: Object.freeze({ 0: 'PASS', 1: 'FAIL_OR_INCOMPLETE', 2: 'PRECONDITION' }),
+    platforms: Object.freeze({
+      mac: Object.freeze({
+        variant: 'mac',
+        artifact: 'candidate-mac',
+        script: 'scripts/qa/soak/idle-soak.mjs',
+        args: ({ app, report }) => [
+          '--app', app,
+          '--profile', 'candidate-scenario/profile',
+          '--hours', '5.5',
+          '--out', 'candidate-scenario',
+          ...(process.env.SOAK_DEADLINE_EPOCH_MS ? ['--deadline-epoch-ms', process.env.SOAK_DEADLINE_EPOCH_MS] : [])
+        ],
+        report: 'idle-soak.json',
+        profileLayout: 'hide',
+        timeoutMinutes: 355,
+        stepTimeoutMinutes: 340,
+        outcomeFromReport: true,
+        laneReportFields: Object.freeze([
+          'rule',
+          'hoursMeasured',
+          'parkedCoverage',
+          'displayAwake',
+          'hostFloorOverride',
+          'hostMemory',
+          'modelState'
+        ])
+      })
+    })
+  }),
   // M2-0027 acceptance[4] via M2-0468: SIGKILL main with a live sidecar, relaunch, orphan reaped within 5 s of
   // boot. The legacy rule is off in QA-identity bytes, so both platforms install promotable bytes. macOS
   // requires the real llama-server and legacy-orphan rows (a BLOCKED_EXTERNAL there is a PRECONDITION, not a PASS).
@@ -194,12 +230,12 @@ function platformEntry(scenario, platform) {
  * Checks the dispatch inputs against the registry: the scenario must exist, every platform it runs on
  * needs a 64-hex sha256, and a sha256 for a platform it does not run on is refused rather than ignored.
  * Returns the normalized plan per platform; throws listing every problem.
- * @returns {Record<string, { variant: string, artifact: string, sha256: string }>}
+ * @returns {Record<string, { variant: string, artifact: string, sha256: string, timeoutMinutes: number, stepTimeoutMinutes: number }>}
  */
 export function resolveScenario({ scenario, sha256 }) {
   const entry = scenarioEntry(scenario)
   const problems = []
-  /** @type {Record<string, { variant: string, artifact: string, sha256: string }>} */
+  /** @type {Record<string, { variant: string, artifact: string, sha256: string, timeoutMinutes: number, stepTimeoutMinutes: number }>} */
   const plan = {}
   for (const platform of PLATFORMS) {
     const given = String(sha256[platform] ?? '').trim().toLowerCase()
@@ -212,7 +248,22 @@ export function resolveScenario({ scenario, sha256 }) {
       problems.push(`${platform}_sha256 is required for ${scenario} and must be 64 hexadecimal characters.`)
       continue
     }
-    plan[platform] = { variant: target.variant, artifact: target.artifact, sha256: given }
+    const item = {
+      variant: target.variant,
+      artifact: target.artifact,
+      sha256: given
+    }
+    if (scenario === 'ex-suite') {
+      // Preserve the legacy enumerable plan shape while still wiring workflow timeout outputs.
+      Object.defineProperties(item, {
+        timeoutMinutes: { value: target.timeoutMinutes ?? 60, enumerable: false },
+        stepTimeoutMinutes: { value: target.stepTimeoutMinutes ?? 40, enumerable: false }
+      })
+    } else {
+      item.timeoutMinutes = target.timeoutMinutes ?? 60
+      item.stepTimeoutMinutes = target.stepTimeoutMinutes ?? 40
+    }
+    plan[platform] = item
   }
   if (problems.length) throw new Error(problems.join('\n'))
   return plan
@@ -227,6 +278,8 @@ export function resolveOutputs(plan) {
       lines.push(`${platform}_variant=${plan[platform].variant}`)
       lines.push(`${platform}_artifact=${plan[platform].artifact}`)
       lines.push(`${platform}_sha256=${plan[platform].sha256}`)
+      lines.push(`${platform}_timeout_minutes=${plan[platform].timeoutMinutes}`)
+      lines.push(`${platform}_step_timeout_minutes=${plan[platform].stepTimeoutMinutes}`)
     }
   }
   return `${lines.join('\n')}\n`
@@ -262,6 +315,12 @@ export function candidateRunProblems(run, candidateRun) {
 export function prepareProfile({ scenario, platform, appDataDir }) {
   const target = platformEntry(scenario, platform)
   if (target.isolatedProfiles) return null
+  if (target.profileLayout) {
+    const profile = join(process.cwd(), 'candidate-scenario', 'profile')
+    if (existsSync(profile)) throw new Error('The idle-soak profile directory already exists; the profile is not fresh.')
+    writeRepresentativeProfile(profile, undefined, { layout: target.profileLayout })
+    return join(profile, 'resource-census-profile.json')
+  }
   if (!appDataDir) throw new Error(`No fresh-profile location is declared for ${platform}.`)
   const name = PROFILE_DIRS[target.variant]
   if (!name) throw new Error(`No userData directory is declared for variant ${target.variant}.`)
@@ -386,15 +445,34 @@ export function assertCandidateProvenance(provenance, candidateRun) {
  *   reportAssessment?: any
  * }} input
  */
-export function laneRecord({ scenario, platform, env, provenance, candidateRun, installer, sha256, argv, exitCode, detail, reportWritten, reportAssessment = undefined }) {
+export function laneRecord({
+  scenario,
+  platform,
+  env,
+  provenance,
+  candidateRun,
+  installer,
+  sha256,
+  argv,
+  exitCode,
+  detail,
+  reportWritten,
+  reportData = null,
+  reportAssessment = undefined
+}) {
   const target = platformEntry(scenario, platform)
   assertCandidateProvenance(provenance, candidateRun)
+  const mappedOutcome = outcomeForExit(scenario, exitCode)
   const assessmentProblems = [
     ...(scenarioEntry(scenario).reportAssessment && !reportWritten ? [`${target.report} was not written.`] : []),
     ...(reportAssessment?.problems ?? [])
   ]
-  const outcome = outcomeForExit(scenario, exitCode) === 'PASS' && assessmentProblems.length ? 'FAIL' : outcomeForExit(scenario, exitCode)
+  const reportOutcome = target.outcomeFromReport && typeof reportData?.outcome === 'string' ? reportData.outcome : mappedOutcome
+  const outcome = reportOutcome === 'PASS' && assessmentProblems.length ? 'FAIL' : reportOutcome
   const host = RUNNER_LABELS[platform]
+  const reportFields = target.laneReportFields
+    ? Object.fromEntries(target.laneReportFields.filter((key) => reportData && Object.hasOwn(reportData, key)).map((key) => [key, reportData[key]]))
+    : {}
   const notCovered = [
     ...(target.notCovered ?? []).map(({ row, reason }) => ({ row, reason })),
     ...(reportAssessment?.notCovered ?? [])
@@ -417,6 +495,7 @@ export function laneRecord({ scenario, platform, env, provenance, candidateRun, 
     outcome,
     report: reportWritten ? target.report : null,
     detail: outcome === 'PASS' ? null : assessmentProblems.join('\n') || detail || null,
+    ...reportFields,
     ...(reportAssessment?.row_verdicts ? { row_verdicts: reportAssessment.row_verdicts } : {}),
     ...(notCovered.length ? { not_covered: notCovered } : {})
   }
@@ -549,10 +628,12 @@ function run(values) {
   const detail = child.signal ? `terminated by ${child.signal}` : child.error ? child.error.message : lastLine(child.stderr)
   const reportPath = join(outDir, target.report)
   const reportWritten = existsSync(reportPath)
+  let reportData = null
   let reportAssessment
   if (reportWritten) {
     try {
-      reportAssessment = assessScenarioReport({ scenario, platform, report: JSON.parse(readFileSync(reportPath, 'utf8')) })
+      reportData = JSON.parse(readFileSync(reportPath, 'utf8'))
+      reportAssessment = assessScenarioReport({ scenario, platform, report: reportData })
     } catch (error) {
       reportAssessment = { problems: [`${target.report} could not be parsed: ${error.message}`], row_verdicts: undefined, notCovered: [] }
     }
@@ -570,6 +651,7 @@ function run(values) {
     exitCode: child.status,
     detail,
     reportWritten,
+    reportData,
     reportAssessment
   })
   writeFileSync(join(outDir, 'lane.json'), `${JSON.stringify(lane, null, 2)}\n`)
