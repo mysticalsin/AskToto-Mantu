@@ -162,6 +162,11 @@ describe('candidate-scenarios.yml', () => {
     )
     expect([...kinds].sort()).toEqual(['.dmg', '.zip'])
     for (const kind of kinds) expect(install).toContain(`*${kind})`)
+    // hdiutil attach -mountpoint needs an existing directory: the DMG arm creates it before attaching.
+    const dmgArm = install.slice(install.indexOf('*.dmg)'), install.indexOf('*.zip)'))
+    expect(dmgArm).toContain('mkdir -p "$volume"')
+    expect(dmgArm.indexOf('mkdir -p "$volume"')).toBeLessThan(dmgArm.indexOf('hdiutil attach'))
+    expect(dmgArm).toContain('-mountpoint "$volume"')
     expect(workflow).toContain('-f scenario=renderer-kill -f mac_sha256=<Metis DMG sha256 from SHA256SUMS.txt>')
   })
 

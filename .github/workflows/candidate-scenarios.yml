@@ -167,6 +167,7 @@ jobs:
           case "$INSTALLER" in
             *.dmg)
               volume="$RUNNER_TEMP/candidate-volume"
+              mkdir -p "$volume"
               hdiutil attach -nobrowse -readonly -mountpoint "$volume" "$INSTALLER" > /dev/null
               bundle=$(cd "$volume" && ls -d *.app)
               ditto "$volume/$bundle" "$target/$bundle"
