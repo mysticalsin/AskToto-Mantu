@@ -577,9 +577,12 @@ function loadSession(): void {
       json = opened.text
       // Migrate to the backend now in force when another one wrote the file (best-effort).
       try {
-        const current = seal(json, BARE_FORMAT)
-        if (current.kind !== 'unavailable' && current.kind !== opened.kind) {
-          atomicWriteSync(sessionPath(), current.bytes, { tmp: uniqueTmpPath(sessionPath()) })
+        const targetKind = useFileBackend() ? 'file' : 'keychain'
+        if (opened.kind !== targetKind) {
+          const current = seal(json, BARE_FORMAT)
+          if (current.kind !== 'unavailable') {
+            atomicWriteSync(sessionPath(), current.bytes, { tmp: uniqueTmpPath(sessionPath()) })
+          }
         }
       } catch { /* best-effort */ }
     }

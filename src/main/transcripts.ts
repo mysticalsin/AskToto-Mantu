@@ -11,8 +11,8 @@ import { randomBytes, createCipheriv, createDecipheriv, publicEncrypt, constants
 import type { SaveMeeting, SaveNote, Settings, RecapExport, TranscriptLine } from '@shared/ipc'
 import { isSummaryOnlyProfile, resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
 import { encryptSecret, isKeychainAvailable, useFileBackend } from './secrets'
-import { atomicWrite, atomicWriteSync, uniqueTmpPath, writeFileIfMissing } from './infra/fs/atomic-write'
-import { removeFile, removeFilesBestEffort, sweepMatchingFilesBestEffort } from './infra/fs/temp-cleanup'
+import { atomicWrite, atomicWriteSync, uniqueTmpPath, writeFileIfMissingSync } from './infra/fs/atomic-write'
+import { removeFile, removeFilesBestEffortSync, sweepMatchingFilesBestEffortSync } from './infra/fs/temp-cleanup'
 import {
   MARKER_ATKENC1,
   MARKER_ATKENC2,
@@ -375,7 +375,7 @@ export function decryptToTemp(path: string, bytes?: Buffer): string {
   if (!tempCleanupHooked) {
     tempCleanupHooked = true
     app.on('will-quit', () => {
-      removeFilesBestEffort(decryptedTemps)
+      removeFilesBestEffortSync(decryptedTemps)
       decryptedTemps.clear()
     })
   }
@@ -392,7 +392,7 @@ export function decryptToTemp(path: string, bytes?: Buffer): string {
  *   app.whenReady().then(() => { sweepStaleTempFiles(); … })
  */
 export function sweepStaleTempFiles(): void {
-  sweepMatchingFilesBestEffort(app.getPath('temp'), /^asktoto-[0-9a-f]+-.*\.md$/)
+  sweepMatchingFilesBestEffortSync(app.getPath('temp'), /^asktoto-[0-9a-f]+-.*\.md$/)
 }
 
 const README = `# Métis — Meeting transcripts
@@ -415,13 +415,13 @@ const INDEX_HEADER = `# Métis Meetings — Index
 |------|-------|------|----------|------|
 `
 
-/** Ensure the meetings folder exists and schedule non-blocking README/index bootstrap. */
+/** Ensure the meetings folder exists and bootstrap README/index before callers append rows. */
 export function ensureMeetingsFolder(settings: Settings): string {
   const folder = resolveMeetingsFolder(settings)
   try {
     mkdirSync(folder, { recursive: true })
-    void writeFileIfMissing(join(folder, 'README.md'), README).catch(() => undefined)
-    void writeFileIfMissing(join(folder, 'index.md'), INDEX_HEADER).catch(() => undefined)
+    writeFileIfMissingSync(join(folder, 'README.md'), README)
+    writeFileIfMissingSync(join(folder, 'index.md'), INDEX_HEADER)
   } catch {
     /* fail-open: folder may be offline/unwritable */
   }

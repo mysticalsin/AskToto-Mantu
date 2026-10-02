@@ -1191,6 +1191,20 @@ describe('old-meeting Keychain recovery (T7): allowKeychainRecovery + self-heali
     return file
   }
 
+  it('will-quit removes decrypted temp files synchronously before returning', async () => {
+    const file = await writeOldKeychainMeeting()
+    process.env.ASKTOTO_LOCAL_KEYSTORE = '1'
+    const tmp = decryptToTemp(file)
+    expect(existsSync(tmp)).toBe(true)
+
+    const appOnCalls = vi.mocked(app.on).mock.calls as Array<[string, () => void]>
+    const listener = appOnCalls.find(([event]) => event === 'will-quit')?.[1]
+    expect(listener).toBeTypeOf('function')
+    listener!()
+
+    expect(existsSync(tmp)).toBe(false)
+  })
+
   it('recovery flag off: an old "S:" meeting still fails to decrypt while the local keystore is forced (unchanged bulk-read behavior)', async () => {
     const file = await writeOldKeychainMeeting()
     process.env.ASKTOTO_LOCAL_KEYSTORE = '1'

@@ -74,6 +74,21 @@ export function atomicWriteSync(path: string, data: string | Uint8Array, options
 }
 
 /** Best-effort bootstrap helper: create a small sidecar file once, never replacing existing user content. */
+export function writeFileIfMissingSync(path: string, data: string | Uint8Array, options: Pick<AtomicWriteOptions, 'mode'> = {}): boolean {
+  let fd: number | undefined
+  try {
+    fd = openSync(path, 'wx', options.mode ?? 0o600)
+    writeFileSync(fd, data)
+    fsyncSync(fd)
+    return true
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'EEXIST') return false
+    throw e
+  } finally {
+    if (fd !== undefined) closeSync(fd)
+  }
+}
+
 export async function writeFileIfMissing(path: string, data: string | Uint8Array, options: Pick<AtomicWriteOptions, 'mode'> = {}): Promise<boolean> {
   let handle: Awaited<ReturnType<typeof open>> | undefined
   try {
