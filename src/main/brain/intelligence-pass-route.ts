@@ -14,9 +14,9 @@ import {
 import { getApiKey, getAllowedProviders } from '../store'
 import { localBaseReady } from '../llm/local-routing'
 import { getState as localRuntimeState } from '../llm/local-runtime'
-import { operatorAskTransport, operatorFundedProviders } from '../operator-ingest'
+import { operatorAskTransport, operatorFundedProviders } from '../features/operator/operator-ingest'
 import { CLI_PROVIDER_IDS, resolvePortalCloudflareModel } from '@shared/ask-routing'
-import { narrowAllowedForCapability, resolveManagedModel } from '../model-policy-client'
+import { narrowAllowedForCapability, resolveManagedModel } from '../features/operator/model-policy-client'
 import { intelligenceRequiresLocal } from '@shared/intelligence-pass'
 
 export type IntelligencePassCandidate = {

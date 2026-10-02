@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { type AskStart, DUST_SPOTLIGHT_REF_AGENT_ID } from '@shared/ipc'
 import { streamDust, resetDustConversation } from './dust'
 import type { StreamHandlers } from './shared'
-import type { runManagedDustChat as runManagedDustChatFn } from '../dust-cli-chat'
+import type { runManagedDustChat as runManagedDustChatFn } from '../features/dust/dust-cli-chat'
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp' } }))
 vi.mock('../auth', () => ({ authStatus: () => ({ email: null, name: null }) }))
@@ -13,11 +13,11 @@ type RunManagedDustChat = typeof runManagedDustChatFn
 const managedDustChat = vi.hoisted(() =>
   vi.fn<RunManagedDustChat>(async () => ({ ok: true, text: 'Data and AI, AI wiki' }))
 )
-vi.mock('../dust-cli-chat', () => ({
+vi.mock('../features/dust/dust-cli-chat', () => ({
   runManagedDustChat: (...args: Parameters<RunManagedDustChat>) => managedDustChat(...args),
   projectNameForDataAndAiAsk: () => undefined
 }))
-vi.mock('../dust-projects', () => ({
+vi.mock('../features/dust/dust-projects', () => ({
   fetchDustProjects: async () => ({ ok: false, error: 'test' }),
   matchDataAndAiProjects: () => []
 }))

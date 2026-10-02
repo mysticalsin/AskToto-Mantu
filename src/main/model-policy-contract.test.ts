@@ -10,7 +10,7 @@ import { describe, expect, it, vi } from 'vitest'
  * to end against a live Operator) that every REAL model call site in src/main resolves its
  * provider/model through the fleet model policy module (M2-0412) rather than only through
  * settings/allowedProviders. Pure resolver behaviour (precedence, narrowing, pinning) is covered by
- * src/shared/model-policy.test.ts and src/main/model-policy-client.test.ts; this test only pins that
+ * src/shared/model-policy.test.ts and src/main/features/operator/model-policy-client.test.ts; this test only pins that
  * each call site actually calls in.
  *
  * "Every call site" means every place that currently picks a cloud provider + model at all (see
@@ -40,7 +40,7 @@ const WIRED_CALL_SITES = [
 describe('M2-0412 — every real model call site resolves through the fleet policy module', () => {
   it.each(WIRED_CALL_SITES)('%s imports from model-policy-client', (path) => {
     const text = src(path)
-    expect(text).toMatch(/from ['"][./]+model-policy-client['"]/)
+    expect(text).toMatch(/from ['"][./]+features\/operator\/model-policy-client['"]/)
   })
 
   it('the interactive ask path (index.ts) narrows providers AND pins the model for the askChat capability', () => {
@@ -85,7 +85,10 @@ function mainSources(): string[] {
 }
 
 // Speech-engine `createStream()` calls (sherpa recognizer / extractor streams) are audio decoders, not model calls.
-const SPEECH_ENGINE_FILES = ['src/main/parakeet-asr-host.ts', 'src/main/speaker-embedding-host.ts']
+const SPEECH_ENGINE_FILES = [
+  'src/main/infra/parakeet/parakeet-asr-host.ts',
+  'src/main/features/speaker/speaker-embedding-host.ts'
+]
 
 interface EnclosingFunction {
   name: string

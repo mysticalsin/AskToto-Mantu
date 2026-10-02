@@ -4,7 +4,7 @@
  * pointer-events: none. Canvas stays opacity 0 until the first composed frame.
  */
 import { useEffect, useRef } from 'react'
-import { createStarfieldBed, type StarfieldBed } from '../lib/onboarding-starfield-engine'
+import { createStarfieldBed, type StarfieldBed } from '../features/onboarding/onboarding-starfield-engine'
 
 function prefersReducedMotion(): boolean {
   return typeof window !== 'undefined' && typeof window.matchMedia === 'function'

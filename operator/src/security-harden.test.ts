@@ -324,7 +324,7 @@ describe('admin mutation rate limit', () => {
 })
 
 describe('device id format is enforced before the signature check (B11)', () => {
-  // A real device id is hashOperatorId(getMachineId()) (src/main/operator-hmac-sign.ts): a 32-character
+  // A real device id is hashOperatorId(getMachineId()) (src/main/features/operator/operator-hmac-sign.ts): a 32-character
   // lowercase hex string. DEVICE_ID_RE (operator/src/hmac.ts) is deliberately wider than that (letters
   // both cases, digits, `. _ -`, 8 to 128 chars) so a future id scheme has room, while still rejecting
   // anything that could carry a newline, HTML, or an unbounded length into a nonce key, a rate-bucket

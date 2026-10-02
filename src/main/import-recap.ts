@@ -17,7 +17,7 @@ import {
 import type { TranscriptLine } from '@shared/ipc'
 import { localFallbackEligibleFor, localPrimaryEligibleFor, resolveRoutingMode } from './llm/local-routing'
 import { CLI_PROVIDER_IDS, resolvePortalCloudflareModel } from '@shared/ask-routing'
-import { narrowAllowedForCapability, resolveManagedModel } from './model-policy-client'
+import { narrowAllowedForCapability, resolveManagedModel } from './features/operator/model-policy-client'
 import { createStream } from './llm'
 import type { ImportJob } from './import-jobs'
 import { localImportRecapProblem } from './import-recap-validation'

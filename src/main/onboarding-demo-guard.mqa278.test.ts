@@ -12,7 +12,7 @@ vi.mock('electron')
 
 /**
  * MQA-278 — the Act 2 onboarding demo (a scripted fake meeting shown before the user configures
- * anything, src/renderer/src/lib/onboarding-demo.ts) drives the REAL Bar/Copilot/Answer components with
+ * anything, src/renderer/src/features/onboarding/onboarding-demo.ts) drives the REAL Bar/Copilot/Answer components with
  * fake data. This proves the belt-and-suspenders half of the safety rule: even if a demo-tagged payload
  * were somehow handed to the real persistence paths, they refuse it before touching disk or the brain.
  * The renderer never actually calls these — see onboarding-demo.mqa277.test.ts's structural contract

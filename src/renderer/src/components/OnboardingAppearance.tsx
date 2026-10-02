@@ -21,7 +21,7 @@ import {
   placementPreviewCaption,
   reduceAppearancePreview,
   type AppearancePreviewPhase
-} from '../lib/onboarding-appearance'
+} from '../features/onboarding/onboarding-appearance'
 
 function AppearanceLivePreview({ layout, placement }: { layout: OverlayLayout; placement: OverlayPlacement }): JSX.Element {
   const presentation = resolveOverlayPresentation({ layout, placement })

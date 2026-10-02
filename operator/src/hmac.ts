@@ -33,7 +33,7 @@ export interface HmacFail {
 }
 
 /** The desktop's real device id is `hashOperatorId(getMachineId())`
- *  (`src/main/operator-hmac-sign.ts`): `sha256(machineId).slice(0, 32)`, always 32 lowercase hex
+ *  (`src/main/features/operator/operator-hmac-sign.ts`): `sha256(machineId).slice(0, 32)`, always 32 lowercase hex
  *  characters. This pattern is deliberately wider (letters upper and lower, digits, `. _ -`, 8 to 128
  *  chars) so a future id scheme has room without a breaking change, while still rejecting anything
  *  that could carry a newline, HTML, or an unbounded length into logs, audit text, or a D1 key. */

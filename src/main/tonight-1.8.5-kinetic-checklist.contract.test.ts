@@ -34,8 +34,8 @@ const orb = readFileSync(join(root, 'src/shared/overlay-orb.ts'), 'utf8')
 const chrome = readFileSync(join(root, 'src/shared/overlay-chrome.ts'), 'utf8')
 const geometry = readFileSync(join(root, 'src/main/island/geometry.ts'), 'utf8')
 const jarvis = readFileSync(join(root, 'src/renderer/src/lib/jarvis-orb.ts'), 'utf8')
-const flow = readFileSync(join(root, 'src/renderer/src/lib/onboarding-flow.ts'), 'utf8')
-const kinetic = readFileSync(join(root, 'src/renderer/src/lib/onboarding-kinetic-grid.ts'), 'utf8')
+const flow = readFileSync(join(root, 'src/renderer/src/features/onboarding/onboarding-flow.ts'), 'utf8')
+const kinetic = readFileSync(join(root, 'src/renderer/src/features/onboarding/onboarding-kinetic-grid.ts'), 'utf8')
 const css = readAppCss()
 
 describe('KineticGrid release checklist', () => {
