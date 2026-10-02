@@ -198,8 +198,9 @@ const clickByLabels = (labels) =>
   })()`
 const clickTranscriptControl = () =>
   `(() => {
-    const visible = [...document.querySelectorAll('section')]
-      .some((section) => section.firstElementChild?.textContent.trim() === 'Transcript')
+    const visible = !!document.querySelector('[data-qa-live-transcript]')
+      || [...document.querySelectorAll('section')]
+        .some((section) => section.firstElementChild?.textContent.trim() === 'Transcript')
     if (visible) return true
     const direct = document.querySelector('[data-bar-transcript]')
     if (direct) { direct.click(); return true }
@@ -218,9 +219,15 @@ export const STOP_CLICK = clickByLabels(['Stop and end meeting', 'End meeting'])
 export const TRANSCRIPT_CLICK = clickTranscriptControl()
 /** The Bar's Listen control exists: the overlay has rendered and onboarding is done. */
 export const LISTEN_PRESENT = `!!document.querySelector('button[aria-label="Start listening"]')`
+/** A Stop control exists only after the app has accepted the Listen click as an active capture. */
+export const STOP_PRESENT = `!!document.querySelector('button[aria-label="Stop and end meeting"], button[aria-label="End meeting"]')`
+/** The transcript panel is visible and can be counted without toggling the Bar control again. */
+export const TRANSCRIPT_PRESENT = `!!document.querySelector('[data-qa-live-transcript]')
+  || [...document.querySelectorAll('section')].some((s) => s.firstElementChild?.textContent.trim() === 'Transcript')`
 /** The live transcript's line count; the waiting and empty placeholders are not lines. */
 export const LINE_COUNT = `(() => {
-  const section = [...document.querySelectorAll('section')].find((s) => s.firstElementChild?.textContent.trim() === 'Transcript')
+  const section = document.querySelector('[data-qa-live-transcript]')
+    || [...document.querySelectorAll('section')].find((s) => s.firstElementChild?.textContent.trim() === 'Transcript')
   const rows = section?.querySelector('.scroll-thin')
   if (!rows) return 0
   return [...rows.children].filter((row) => !/^(Waiting for speech…|No audio yet\\.)$/.test(row.textContent.trim())).length
@@ -296,7 +303,13 @@ export async function runFileCapture({ installer, workDir = mkdtempSync(join(tmp
     observed.ready = true
     observed.asrEngine = (await page.evaluate(ASR_ENGINE).catch(() => null)) ?? null
     if (!(await page.evaluate(LISTEN_CLICK))) throw new Error('Listen control vanished before the click')
-    await page.evaluate(TRANSCRIPT_CLICK).catch(() => false)
+    if (!(await waitFor(() => page.evaluate(STOP_PRESENT), 10_000, 250))) throw new Error('Listen did not enter active capture')
+    const transcriptVisible = await waitFor(async () => {
+      if (await page.evaluate(TRANSCRIPT_PRESENT).catch(() => false)) return true
+      await page.evaluate(TRANSCRIPT_CLICK).catch(() => false)
+      return page.evaluate(TRANSCRIPT_PRESENT).catch(() => false)
+    }, 10_000, 250)
+    if (!transcriptVisible) throw new Error('Transcript panel did not open')
     const listenStarted = Date.now()
     await waitFor(async () => {
       let count

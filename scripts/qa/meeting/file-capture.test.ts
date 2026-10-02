@@ -11,6 +11,7 @@ import {
   buildCaptureWav,
   captureWavSummary,
   englishSentences,
+  normalizePcmPeak,
   pcmOf,
   sayArgs,
   wavFromPcm,
@@ -18,7 +19,9 @@ import {
 } from './capture-wav.mjs'
 import {
   LISTEN_CLICK,
+  STOP_PRESENT,
   STOP_CLICK,
+  TRANSCRIPT_PRESENT,
   TRANSCRIPT_CLICK,
   auditHasEvent,
   countTokenMatches,
@@ -80,6 +83,11 @@ function evalClickExpression(
   const document = {
     querySelector: (value: string) => {
       selector = value
+      if (value.includes('button[aria-label=')) {
+        const labels = [...value.matchAll(/button\[aria-label="([^"]+)"\]/g)].map((match) => match[1])
+        const button = elements.find((candidate) => labels.includes(candidate.label ?? ''))
+        return button ? buttonFor(button) : null
+      }
       const element = elements.find((candidate) => candidate.matches?.includes(value))
       return element ? buttonFor(element) : null
     },
@@ -132,6 +140,23 @@ describe('capture WAV: command construction', () => {
     const list = Buffer.concat([Buffer.from('LIST'), Buffer.from([4, 0, 0, 0]), Buffer.from('abcd')])
     const withList = Buffer.concat([plain.subarray(0, 36), list, plain.subarray(36)])
     expect(pcmOf(withList)).toEqual(pcm)
+  })
+
+  it('normalizes each synthetic speech clip to a VAD-robust peak without clipping', () => {
+    const pcm = Buffer.alloc(8)
+    pcm.writeInt16LE(100, 0)
+    pcm.writeInt16LE(-200, 2)
+    pcm.writeInt16LE(0, 4)
+    pcm.writeInt16LE(50, 6)
+    const normalized = normalizePcmPeak(pcm, 0.5)
+    expect(normalized.readInt16LE(0)).toBe(8192)
+    expect(normalized.readInt16LE(2)).toBe(-16384)
+    expect(normalized.readInt16LE(4)).toBe(0)
+    expect(normalized.readInt16LE(6)).toBe(4096)
+  })
+
+  it('leaves all-silent PCM silent when normalizing', () => {
+    expect(normalizePcmPeak(Buffer.alloc(6))).toEqual(Buffer.alloc(6))
   })
 
   it('writes the WAV into the profile and reports its sha256 and duration', () => {
@@ -244,6 +269,23 @@ describe('Bar driver controls', () => {
       clicked: [],
       result: true,
       selector: 'section'
+    })
+  })
+
+  it('recognizes the active Stop controls before the smoke starts counting transcript lines', () => {
+    expect(evalClickExpression(STOP_PRESENT, [{ label: 'Stop and end meeting' }]).result).toBe(true)
+    expect(evalClickExpression(STOP_PRESENT, [{ label: 'End meeting' }]).result).toBe(true)
+    expect(evalClickExpression(STOP_PRESENT, [{ label: 'Start listening' }]).result).toBe(false)
+  })
+
+  it('checks transcript visibility without toggling the Bar transcript control', () => {
+    expect(evalClickExpression(TRANSCRIPT_PRESENT, [{ text: 'Transcript' }], { transcriptVisible: true })).toMatchObject({
+      clicked: [],
+      result: true
+    })
+    expect(evalClickExpression(TRANSCRIPT_PRESENT, [{ text: 'Transcript' }])).toMatchObject({
+      clicked: [],
+      result: false
     })
   })
 

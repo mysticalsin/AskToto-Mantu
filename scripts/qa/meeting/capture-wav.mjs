@@ -78,6 +78,27 @@ export function wavFromPcm(pcm, sampleRate = CAPTURE_SAMPLE_RATE) {
   return Buffer.concat([header, pcm])
 }
 
+/**
+ * Normalize signed 16-bit PCM to a conservative speech peak. This only shapes the synthetic QA fixture:
+ * production capture/VAD stays unchanged, while hosted fake-device playback gets speech safely above the
+ * live worklet's RMS floor without clipping.
+ */
+export function normalizePcmPeak(pcm, targetPeak = 0.5) {
+  let peak = 0
+  for (let offset = 0; offset + 1 < pcm.length; offset += 2) {
+    peak = Math.max(peak, Math.abs(pcm.readInt16LE(offset)))
+  }
+  if (peak === 0) return Buffer.from(pcm)
+  const target = Math.max(1, Math.min(32767, Math.round(32767 * targetPeak)))
+  const gain = target / peak
+  const out = Buffer.alloc(pcm.length)
+  for (let offset = 0; offset + 1 < pcm.length; offset += 2) {
+    const sample = Math.round(pcm.readInt16LE(offset) * gain)
+    out.writeInt16LE(Math.max(-32768, Math.min(32767, sample)), offset)
+  }
+  return out
+}
+
 function defaultRun(command, args) {
   execFileSync(command, args, { stdio: 'ignore' })
 }
@@ -99,7 +120,7 @@ export function buildCaptureWav({ sentences = englishSentences(), run = defaultR
       const wav = join(scratch, `s${index}.wav`)
       run('/usr/bin/say', sayArgs(text, aiff))
       run('/usr/bin/afconvert', afconvertArgs(aiff, wav))
-      return pcmOf(readFileSync(wav))
+      return normalizePcmPeak(pcmOf(readFileSync(wav)))
     })
     const round = Buffer.concat(spoken.flatMap((pcm) => [pcm, silence]))
     const parts = []
