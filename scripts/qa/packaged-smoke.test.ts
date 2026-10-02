@@ -795,6 +795,37 @@ describe('right-edge Hide rows (RE-HIDE)', () => {
     })
   })
 
+  it('pins the bridge promise that Playwright awaits until the IPC call settles', async () => {
+    type SmokeGlobal = typeof globalThis & {
+      window?: { toto: { toggle: () => Promise<void> } }
+      __metisSmokeBridgePending?: Set<Promise<unknown>>
+    }
+    const smokeGlobal = globalThis as SmokeGlobal
+    const previousWindow = smokeGlobal.window
+    const previousPending = smokeGlobal.__metisSmokeBridgePending
+    let release!: () => void
+    const deferred = new Promise<void>((resolve) => {
+      release = resolve
+    })
+
+    try {
+      smokeGlobal.__metisSmokeBridgePending = new Set()
+      smokeGlobal.window = { toto: { toggle: () => deferred } }
+      const pending = pinnedBridgeCall(['toggle', []]) as Promise<void>
+
+      expect(smokeGlobal.__metisSmokeBridgePending.has(pending)).toBe(true)
+      release()
+      await pending
+      await Promise.resolve()
+      expect(smokeGlobal.__metisSmokeBridgePending.has(pending)).toBe(false)
+    } finally {
+      if (previousWindow === undefined) delete smokeGlobal.window
+      else smokeGlobal.window = previousWindow
+      if (previousPending === undefined) delete smokeGlobal.__metisSmokeBridgePending
+      else smokeGlobal.__metisSmokeBridgePending = previousPending
+    }
+  })
+
   it('keeps RE-HIDE-3 meeting Hide held for late native frames and carries geometry evidence', () => {
     expect(LATE_NATIVE_FRAME_HOLD_MS).toBe(500)
     const { band } = rightEdgeExpectedRects(windows.workArea)
