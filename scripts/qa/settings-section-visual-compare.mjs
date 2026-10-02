@@ -88,16 +88,6 @@ async function removeProfileDir(profile, options = {}) {
   }
 }
 
-function fitsInside(inner, outer) {
-  if (!inner || !outer) return false
-  return (
-    inner.x >= outer.x - FIT_TOLERANCE_PX
-    && inner.y >= outer.y - FIT_TOLERANCE_PX
-    && inner.x + inner.width <= outer.x + outer.width + FIT_TOLERANCE_PX
-    && inner.y + inner.height <= outer.y + outer.height + FIT_TOLERANCE_PX
-  )
-}
-
 function pngSize(buffer) {
   if (!Buffer.isBuffer(buffer) || buffer.length < 24) return null
   if (buffer.subarray(0, 8).toString('hex') !== PNG_SIGNATURE) return null
@@ -114,8 +104,8 @@ function screenshotCoversBox(buffer, box) {
   )
 }
 
-function sectionCaptureClipped({ buffer, sectionBox, panelBox }) {
-  return !fitsInside(sectionBox, panelBox) || !screenshotCoversBox(buffer, sectionBox)
+function sectionCaptureClipped({ buffer, sectionBox }) {
+  return !screenshotCoversBox(buffer, sectionBox)
 }
 
 async function installDeterministicSettingsQaBridge(page) {
@@ -364,7 +354,6 @@ async function captureSections(page, appOutDir) {
     if (!stable) console.warn(`settings-section-visual-compare warning=tab did not fully settle tab=${slug(tab)}`)
 
     const tabPanel = page.locator('main[role="tabpanel"]')
-    const panelBox = await tabPanel.boundingBox()
     const count = await tabPanel.locator('section').count()
     for (let index = 0; index < count; index += 1) {
       const section = tabPanel.locator('section').nth(index)
@@ -376,7 +365,7 @@ async function captureSections(page, appOutDir) {
       const file = join(appOutDir, `${key}.png`)
       const box = await section.boundingBox()
       const buffer = await section.screenshot({ path: file, animations: 'disabled', caret: 'hide' })
-      const clipped = sectionCaptureClipped({ buffer, sectionBox: box, panelBox })
+      const clipped = sectionCaptureClipped({ buffer, sectionBox: box })
       sections.push({
         key,
         tab,
@@ -544,4 +533,4 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   })
 }
 
-export { compare, fitsInside, formatFailureSummary, pngSize, removeProfileDir, screenshotCoversBox, sectionCaptureClipped, setQaBridgeMember }
+export { compare, formatFailureSummary, pngSize, removeProfileDir, screenshotCoversBox, sectionCaptureClipped, setQaBridgeMember }
