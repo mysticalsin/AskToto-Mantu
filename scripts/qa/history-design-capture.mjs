@@ -388,6 +388,27 @@ async function captureReachedState({ page, cdp, main, state, variant, realRows, 
   return { judged: { ...judged, scope: collected.scope, bannerAfterMs: drive.bannerAfterMs ?? null, capturedAfterMs: drive.capturedAfterMs, tabOrder }, screenshot }
 }
 
+/**
+ * One unjudged pass of the run's first capture. The first fixture-driven History open, device-metrics
+ * override and screenshot pay one-time costs (window resize, screenshot pipeline start-up) that would
+ * otherwise land inside the loading capture's HISTORY_DEGRADED_MS budget; nothing from this pass is
+ * written or judged, and a failure here is left for the real capture to report.
+ */
+async function warmUp({ page, cdp, main, realRows }) {
+  const [variant] = DESIGN_VARIANTS
+  try {
+    await applyVariant(page, cdp, main, variant)
+    await driveState(page, main, HISTORY_DESIGN_STATES[0], realRows)
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 0, height: 0, deviceScaleFactor: variant.scale, mobile: false })
+    await settleWindow(page)
+    await page.screenshot({ scale: 'device' })
+  } catch {
+    // The matrix drives and judges every state from scratch.
+  } finally {
+    await cdp.send('Emulation.clearDeviceMetricsOverride').catch(() => undefined)
+  }
+}
+
 async function seedMeetings(page) {
   await page.evaluate(async (titles) => {
     const startedAt = Date.now()
@@ -465,6 +486,7 @@ async function main() {
     if (!realRows.some((row) => row.title === SAMPLE_MEETINGS[0])) throw new Error('the saved sample meetings are not listed')
     await main(INSTALL_FIXTURE_HANDLERS)
     const cdp = await page.context().newCDPSession(page)
+    await warmUp({ page, cdp, main, realRows })
     for (const variant of DESIGN_VARIANTS) {
       await applyVariant(page, cdp, main, variant)
       for (const state of HISTORY_DESIGN_STATES) {
