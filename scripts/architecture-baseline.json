@@ -23,6 +23,7 @@
     "src/renderer/src/components/OnboardingStarfield.tsx": 1,
     "src/renderer/src/components/RecordingIndicator.tsx": 1,
     "src/renderer/src/features/onboarding/onboarding-starfield-engine.ts": 1,
+    "src/renderer/src/features/onboarding/onboarding-starfield-spec.ts": 1,
     "src/renderer/src/lib/bar-toolbar-layout.ts": 1,
     "src/renderer/src/lib/scramble.ts": 1,
     "src/renderer/src/lib/use-command-mic.ts": 1,

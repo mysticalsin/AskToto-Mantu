@@ -112,7 +112,7 @@ test('readDevPlaceholder: reads the real DEV_OPERATOR_PUBLIC_KEY out of operator
 })
 
 test('readDevPlaceholder: reads the real DEV_LEASE_PUBLIC_KEY out of license-lease-key.ts', () => {
-  const sourcePath = join(HERE, '..', 'src', 'main', 'features', 'license', 'license-lease-key.ts')
+  const sourcePath = join(HERE, '..', 'src', 'main', 'infra', 'license', 'license-lease-key.ts')
   assert.equal(readDevPlaceholder(sourcePath, 'DEV_LEASE_PUBLIC_KEY'), REAL_LEASE_PLACEHOLDER)
 })
 

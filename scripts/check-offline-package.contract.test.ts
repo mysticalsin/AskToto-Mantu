@@ -8,7 +8,7 @@ describe('check-offline-package Parakeet allowlist', () => {
   it('still forbids the sherpa-onnx asr-models URL outside the reviewed downloader', () => {
     expect(src).toMatch(/sherpa-onnx\\\/releases\\\/download\\\/asr-models/)
     expect(src).toMatch(/PARAKEET_DOWNLOAD_ALLOWED/)
-    expect(src).toMatch(/src\/main\/features\/asr\/asr-bundled-ensure\.ts/)
+    expect(src).toMatch(/src\/main\/infra\/asr\/asr-bundled-ensure\.ts/)
     expect(src).not.toMatch(/PARAKEET_DOWNLOAD_ALLOWED = \[[^\]]*src\/main\/index\.ts/)
   })
 

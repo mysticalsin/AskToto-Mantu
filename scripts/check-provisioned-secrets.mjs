@@ -58,7 +58,7 @@ function resolveFamilies(resourcesDir) {
     {
       label: 'license-lease public key',
       resourcePath: join(resourcesDir, 'license-lease', 'pubkey.json'),
-      devSourcePath: join(REPO_ROOT, 'src', 'main', 'features', 'license', 'license-lease-key.ts'),
+      devSourcePath: join(REPO_ROOT, 'src', 'main', 'infra', 'license', 'license-lease-key.ts'),
       devConstName: 'DEV_LEASE_PUBLIC_KEY',
       fixDetail: ' — for license-lease that JSON is exactly the body GET /license/pubkey returns'
     }
