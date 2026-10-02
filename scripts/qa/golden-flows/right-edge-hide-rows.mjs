@@ -71,10 +71,11 @@ function rightEdgeY(height, aboveAnchor, workArea) {
 export function rightEdgeExpectedRects(workArea) {
   const right = workArea.x + workArea.width
   const drawerHeight = Math.min(RIGHT_EDGE.drawerHeight, workArea.height - RIGHT_EDGE.margin * 2)
+  const drawerY = rightEdgeY(drawerHeight, RIGHT_EDGE.drawerAboveAnchor, workArea)
   return {
     drawer: {
       x: right - RIGHT_EDGE.margin - RIGHT_EDGE.drawerWidth,
-      y: rightEdgeY(drawerHeight, RIGHT_EDGE.drawerAboveAnchor, workArea),
+      y: drawerY,
       width: RIGHT_EDGE.drawerWidth,
       height: drawerHeight
     },
