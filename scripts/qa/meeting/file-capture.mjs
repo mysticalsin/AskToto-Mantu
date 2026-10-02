@@ -118,6 +118,21 @@ export function auditHasEvent(profileDir, event = AUDIT_EVENT) {
     )
 }
 
+/** Harvests content-free end-state observations after Stop or after a post-ready driver failure. */
+export function harvestCaptureArtifacts(observed, { profileDir, meetingsFolder, before, saved = null, sentences = englishSentences() }) {
+  const after = meetingFiles(meetingsFolder)
+  observed.meetingFilesAfter = after.length
+  const newFiles = saved ?? after.filter((file) => !before.includes(file))
+  if (newFiles.length > 0) {
+    observed.savedBytes = statSync(newFiles[0]).size
+    const tokens = distinctiveTokens(sentences)
+    observed.tokenTotal = tokens.length
+    observed.tokenMatches = countTokenMatches(readFileSync(newFiles[0], 'utf8'), tokens)
+  }
+  observed.auditEvent = auditHasEvent(profileDir)
+  return observed
+}
+
 /** Extracts the QA zip into `dir` and returns the app's executable. */
 export function installQaZip(zipPath, dir) {
   execFileSync('ditto', ['-x', '-k', zipPath, dir])
@@ -274,19 +289,12 @@ export async function runFileCapture({ installer, workDir = mkdtempSync(join(tmp
       const now = meetingFiles(meetingsFolder).filter((file) => !before.includes(file))
       return now.length > 0 ? now : null
     }, SAVE_TIMEOUT_MS)
-    observed.meetingFilesAfter = meetingFiles(meetingsFolder).length
-    if (saved) {
-      observed.savedBytes = statSync(saved[0]).size
-      const tokens = distinctiveTokens(englishSentences())
-      observed.tokenTotal = tokens.length
-      observed.tokenMatches = countTokenMatches(readFileSync(saved[0], 'utf8'), tokens)
-    }
-    observed.auditEvent = auditHasEvent(profileDir)
-    return observed
+    return harvestCaptureArtifacts(observed, { profileDir, meetingsFolder, before, saved })
   } catch (error) {
     // Only a failure before the app was ready is a precondition; once ready, a driver error is a failed run.
     if (!observed.ready) throw error
     observed.driverError = true
+    harvestCaptureArtifacts(observed, { profileDir, meetingsFolder, before })
     return observed
   } finally {
     page?.close()

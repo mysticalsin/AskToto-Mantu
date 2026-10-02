@@ -22,6 +22,7 @@ import {
   auditHasEvent,
   countTokenMatches,
   distinctiveTokens,
+  harvestCaptureArtifacts,
   launchSpec,
   meetingFiles,
   seedProfile
@@ -164,6 +165,30 @@ describe('profile seeding and launch', () => {
     expect(auditHasEvent(profile)).toBe(false)
     writeFileSync(join(profile, 'logs', 'audit-170.log'), `${JSON.stringify({ event: 'qa.capture.file_source', active: true })}\n`)
     expect(auditHasEvent(profile)).toBe(true)
+  })
+
+  it('harvests audit, saved-meeting and token counts after a post-ready driver failure', () => {
+    const profile = tempDir()
+    const { meetingsFolder } = seedProfile(profile)
+    const before = meetingFiles(meetingsFolder)
+    mkdirSync(join(profile, 'logs'))
+    writeFileSync(join(profile, 'logs', 'audit.log'), `${JSON.stringify({ event: 'qa.capture.file_source', active: true })}\n`)
+    const saved = join(meetingsFolder, '2026-09-30_100000-new.md')
+    writeFileSync(saved, 'The alpha budget confirm words are final.')
+    const observedState = observed({ auditEvent: false, meetingFilesAfter: before.length, savedBytes: 0, tokenMatches: 0, tokenTotal: 0 })
+
+    harvestCaptureArtifacts(observedState, {
+      profileDir: profile,
+      meetingsFolder,
+      before,
+      sentences: ['Alpha budget confirm.', 'Final words.']
+    })
+
+    expect(observedState.auditEvent).toBe(true)
+    expect(observedState.meetingFilesAfter).toBe(before.length + 1)
+    expect(observedState.savedBytes).toBeGreaterThan(0)
+    expect(observedState.tokenMatches).toBe(5)
+    expect(observedState.tokenTotal).toBe(5)
   })
 })
 

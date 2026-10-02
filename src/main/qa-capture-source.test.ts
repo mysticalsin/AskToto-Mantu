@@ -49,12 +49,13 @@ function install(env: Record<string, string | undefined>, opts: { qaIdentity?: b
 }
 
 describe('installQaCaptureSource — active path', () => {
-  it('appends both fake-capture switches before ready and audits { active: true } only after ready', async () => {
+  it('appends the fake media switches before ready and audits { active: true } only after ready', async () => {
     const { profile, wav } = fixture()
     const { decision, appendSwitch, audit, ready } = install({ ASKTOTO_USERDATA: profile, [QA_CAPTURE_ENV]: wav })
 
     expect(decision.reason).toBeNull()
     expect(appendSwitch.mock.calls).toEqual([
+      ['use-fake-ui-for-media-stream'],
       ['use-fake-device-for-media-stream'],
       ['use-file-for-fake-audio-capture', realpathSync(wav)]
     ])
@@ -144,10 +145,14 @@ describe('qaCaptureSwitches — pure decision', () => {
     realpath: (path: string) => path
   }
 
-  it('returns the two switches with the resolved path when every condition holds', () => {
+  it('returns the fake media switches with the resolved path when every condition holds', () => {
     const file = join(profile, 'in.wav')
     expect(qaCaptureSwitches({ ...base, env: { ASKTOTO_USERDATA: profile, [QA_CAPTURE_ENV]: file } })).toEqual({
-      switches: [['use-fake-device-for-media-stream'], ['use-file-for-fake-audio-capture', file]],
+      switches: [
+        ['use-fake-ui-for-media-stream'],
+        ['use-fake-device-for-media-stream'],
+        ['use-file-for-fake-audio-capture', file]
+      ],
       reason: null
     })
   })
@@ -168,7 +173,7 @@ describe('qaCaptureSwitches — pure decision', () => {
   })
 })
 
-describe('permission surface — the hook fakes no grant', () => {
+describe('permission surface — the hook touches no native grant API', () => {
   it('touches nothing on the host but isPackaged, commandLine and whenReady', async () => {
     const { profile, wav } = fixture()
     const { host, ready } = fakeHost()
