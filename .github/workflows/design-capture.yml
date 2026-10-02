@@ -11,7 +11,14 @@ name: Design capture
 # On demand only: gh workflow run design-capture.yml --ref <branch>. The QA-only renderer entry is built
 # here with METIS_DESIGN_CAPTURE=1 and is excluded from every installer (electron-builder*.yml), so this
 # job's build is never a release artifact. Never on tags.
+# The pull_request trigger on this file's own path only registers the workflow with GitHub (M2-0501):
+# the run it creates skips the job and uses no runner minutes.
+run-name: ${{ github.event_name == 'pull_request' && 'Design capture (registration)' || 'Design capture' }}
+
 on:
+  pull_request:
+    paths:
+      - .github/workflows/design-capture.yml
   workflow_dispatch:
 
 permissions:
@@ -27,6 +34,7 @@ defaults:
 
 jobs:
   capture:
+    if: github.event_name == 'workflow_dispatch'
     name: Capture (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45

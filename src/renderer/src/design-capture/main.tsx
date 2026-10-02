@@ -1,5 +1,6 @@
 import React from 'react'
 import { createRoot } from 'react-dom/client'
+import '../tokens.css'
 import './capture.css'
 import { DesignIndex, DesignSurface } from './DesignSurface'
 import { DESIGN_STATE_IDS, resolveDesignState } from './states'

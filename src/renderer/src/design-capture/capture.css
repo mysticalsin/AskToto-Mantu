@@ -1,25 +1,8 @@
-/* Design-capture surface: self-contained tokens, light by default and dark under prefers-color-scheme, so the
-   capture job's colour-scheme emulation decides the theme. Nothing here imports the app stylesheet. */
+/* Design-capture surface. Its light/dark palette (--dc-*) lives in tokens.css under .design-capture, imported
+   before this file; nothing here imports the app stylesheet. This :root rule follows tokens.css's dark-only
+   color-scheme, so it wins and the capture job's colour-scheme emulation decides the theme. */
 :root {
   color-scheme: light dark;
-  --dc-bg: #f4f2f8;
-  --dc-card: #ffffff;
-  --dc-ink: #1b1524;
-  --dc-ink-2: #4c4358;
-  --dc-hair: rgba(27, 21, 36, 0.14);
-  --dc-accent: #7f00da;
-  --dc-danger: #b3261e;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --dc-bg: #0e0b14;
-    --dc-card: #1c1726;
-    --dc-ink: #f6f3fa;
-    --dc-ink-2: #c5bdd2;
-    --dc-hair: rgba(255, 255, 255, 0.16);
-    --dc-accent: #b388f0;
-    --dc-danger: #f0717a;
-  }
 }
 
 html,
