@@ -39,6 +39,7 @@ import { dirname, join } from 'node:path'
 import { app } from 'electron'
 import { z } from 'zod'
 import { mainLog } from './logger'
+import { pinChildEnv } from './net/egress-policy'
 
 const OCR_TIMEOUT_MS = 8_000
 /** Skip lines Vision itself doubts — low-confidence fragments add noise, not context. */
@@ -281,7 +282,7 @@ export function getMacScreenMetrics(): Promise<RawScreenMetric[] | null> {
     }
     let proc: ReturnType<typeof spawn>
     try {
-      proc = spawn(spec.command, spec.args, { stdio: ['ignore', 'pipe', 'pipe'] })
+      proc = spawn(spec.command, spec.args, { env: pinChildEnv(process.env), stdio: ['ignore', 'pipe', 'pipe'] })
     } catch (e) {
       mainLog.warn('[mac-helper] screen-metrics spawn failed', e instanceof Error ? e.message : String(e))
       resolve(null)
@@ -334,7 +335,7 @@ export function getProcessIdentity(pid: number): Promise<ProcessIdentity | null>
     }
     let proc: ReturnType<typeof spawn>
     try {
-      proc = spawn(spec.command, spec.args, { stdio: ['ignore', 'pipe', 'pipe'] })
+      proc = spawn(spec.command, spec.args, { env: pinChildEnv(process.env), stdio: ['ignore', 'pipe', 'pipe'] })
     } catch (e) {
       mainLog.warn('[mac-helper] proc-info spawn failed', e instanceof Error ? e.message : String(e))
       resolve(null)
@@ -412,7 +413,7 @@ export function extractScreenText(imageB64: string): Promise<string | null> {
     }
     let proc: ReturnType<typeof spawn>
     try {
-      proc = spawn(macHelperPath(), ['ocr', '-'], { stdio: ['pipe', 'pipe', 'pipe'] })
+      proc = spawn(macHelperPath(), ['ocr', '-'], { env: pinChildEnv(process.env), stdio: ['pipe', 'pipe', 'pipe'] })
     } catch (e) {
       mainLog.warn('[mac-helper] ocr spawn failed', e instanceof Error ? e.message : String(e))
       resolve(null)

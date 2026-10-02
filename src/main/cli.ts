@@ -41,6 +41,10 @@ import { PROVIDERS } from '@shared/providers'
 import type { CliActionResult, CliInstallResult, CliSessionVerdict } from '@shared/ipc'
 import { managedCliEntry, managedCliCommand, installManagedCli } from './cli-installer'
 import { classifyExhaustion } from './llm/exhaustion'
+import { childNetworkBlocked, pinChildEnv } from './net/egress-policy'
+import { cliEnv, cliEgressBlockedMessage } from './cli-env'
+
+export { cliEnv, cliEgressBlockedMessage }
 
 const execFileAsync = promisify(execFile)
 
@@ -292,29 +296,6 @@ function managedBinFallback(bin: string): string | null {
   } catch {
     return null
   }
-}
-
-/** Env for spawning a CLI. For claude-cli, strip Claude-Code session + proxy vars so the spawned
- *  `claude` runs as a clean standalone invocation against the user's own keychain login (avoids a
- *  hang when Métis is itself launched from a Claude Code session, and ignores a proxy base URL).
- *  Also strips ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN so the spawned `claude -p` uses the
- *  interactive CLI login (honours the "no key required" contract) and not silent API-key billing. */
-export function cliEnv(provider: ProviderId): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env }
-  if (provider === 'claude-cli') {
-    for (const k of Object.keys(env)) {
-      if (/^CLAUDE_CODE/i.test(k) || k === 'CLAUDECODE' || k === 'CLAUDE_AGENT_SDK_VERSION' || k === 'CLAUDE_TMPDIR') {
-        delete env[k]
-      }
-    }
-    delete env.ANTHROPIC_BASE_URL
-    // Remove API-key vars so `claude -p` auths via the user's CLI login, not API-key billing.
-    delete env.ANTHROPIC_API_KEY
-    delete env.ANTHROPIC_AUTH_TOKEN
-  } else if (provider === 'codex-cli') {
-    delete env.OPENAI_BASE_URL
-  }
-  return env
 }
 
 // ─── Windows .cmd shim spawn ─────────────────────────────────────────────────────
@@ -626,6 +607,10 @@ export function runCliStream(opts: RunCliStreamOpts): { abort: () => void } {
     if (!cfg) {
       return fail(`${label}: unsupported CLI provider '${opts.providerId}'.`)
     }
+    if (childNetworkBlocked()) {
+      wd.clear()
+      return fail(cliEgressBlockedMessage(label))
+    }
 
     const absBin = await resolveBin(cfg.bin)
     if (!absBin) {
@@ -837,7 +822,7 @@ export async function detectCli(provider: ProviderId): Promise<CliActionResult> 
     const { stdout } = await execFileAsync(spawnTarget.command, spawnTarget.args, {
       windowsHide: true,
       windowsVerbatimArguments: spawnTarget.windowsVerbatimArguments,
-      env: { ...process.env, ...spawnTarget.env }
+      env: { ...pinChildEnv(process.env), ...spawnTarget.env }
     })
     return { ok: true, version: stdout.trim().slice(0, 40) }
   } catch {
@@ -1018,6 +1003,7 @@ export async function testCli(provider: ProviderId): Promise<CliActionResult> {
   const cfg = CLI_CONFIGS[provider]
   const label = PROVIDERS[provider]?.label ?? provider
   if (!cfg) return { ok: false, error: `${label}: unsupported CLI provider.` }
+  if (childNetworkBlocked()) return { ok: false, error: cliEgressBlockedMessage(label) }
 
   const absBin = await resolveBin(cfg.bin)
   if (!absBin) return { ok: false, error: `${label} not installed` }
@@ -1440,6 +1426,8 @@ export async function installCli(
   if (!pkg) {
     return { ok: false, error: 'No installer for this provider.' }
   }
+  // npm resolves the registry itself, so this child's traffic is invisible to the guard.
+  if (childNetworkBlocked()) return { ok: false, error: cliEgressBlockedMessage(PROVIDERS[provider]?.label ?? provider) }
 
   return new Promise<CliInstallResult>((resolve) => {
     const loginShell = process.env.SHELL || '/bin/zsh'

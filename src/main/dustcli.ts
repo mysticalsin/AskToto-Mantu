@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import type { DustCliImport } from '@shared/ipc'
 import { killWindowsProcessTree, resolveBin, resolveSpawnTarget } from './cli'
+import { childNetworkBlocked } from './net/egress-policy'
 import { DUST_KEYCHAIN_SERVICE, readDustSecret } from './dust-secret-store'
 
 
@@ -100,6 +101,8 @@ const DUST_STATUS_TIMEOUT_MS = 25_000
  * Never rejects: the caller re-reads the keychain regardless of how the CLI ended.
  */
 function runDustStatus(target: ReturnType<typeof resolveSpawnTarget>): Promise<void> {
+  // The refresh talks to the identity provider from inside the child, where no egress guard reaches.
+  if (childNetworkBlocked()) return Promise.resolve()
   return new Promise<void>((resolve) => {
     const child = spawn(target.command, target.args, {
       // CI=1 suppresses the spinner / update-check UI.

@@ -21,6 +21,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { macWatcherSpawnSpec } from './mac-helper'
 import { WINDOWS_POWERSHELL } from './win-security'
+import { pinChildEnv } from './net/egress-policy'
 
 export interface ForegroundInfo {
   /** Windows: Win32 HWND as a decimal string — stable per top-level window for its lifetime.
@@ -192,7 +193,7 @@ export function startForegroundWatcher(
     }
     let proc: ChildProcess
     try {
-      proc = spawn(command, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+      proc = spawn(command, args, { env: pinChildEnv(process.env), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
     } catch (e) {
       failed(e instanceof Error ? e.message : String(e))
       return

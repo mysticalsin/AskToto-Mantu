@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { macHelperPath, macHelperPresent } from './mac-helper'
 import { mainLog } from './logger'
+import { pinChildEnv } from './net/egress-policy'
 import { APPLE_LOCALES } from '@shared/lang-id'
 
 const SAMPLE_RATE = 16000
@@ -97,7 +98,7 @@ export async function appleSpeechTranscribe(samples: Float32Array, locale?: stri
         // The optional trailing locale pins the recognizer's language (see main.swift's runTranscribe);
         // omitted → the helper keeps its original system-locale behavior.
         const args = locale ? ['transcribe', tmpPath, locale] : ['transcribe', tmpPath]
-        proc = spawn(macHelperPath(), args, { stdio: ['ignore', 'pipe', 'pipe'] })
+        proc = spawn(macHelperPath(), args, { env: pinChildEnv(process.env), stdio: ['ignore', 'pipe', 'pipe'] })
       } catch (e) {
         mainLog.warn('[apple-speech] spawn failed', e instanceof Error ? e.message : String(e))
         resolve('')
