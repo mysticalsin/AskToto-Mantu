@@ -24,18 +24,27 @@
  * refresh tokens didn't exist before this module did.
  */
 
-import { app, safeStorage } from 'electron'
-import { existsSync, readFileSync, renameSync, writeFileSync, rmSync } from 'node:fs'
+import { app } from 'electron'
+import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { useFileBackend, encryptSecret, decryptSecret, prepareFileKeyForWrite } from '../secrets'
+import { isKeychainAvailable } from '../secrets'
+import { atomicWriteSync } from '../infra/fs/atomic-write'
+import {
+  MARKER_BIDSTACK_FILE,
+  MARKER_MCP_FILE,
+  open,
+  seal,
+  secretFileFormat,
+  type EnvelopeFormat
+} from '../infra/secrets/envelope'
 import { mainLog } from '../logger'
 
-// Same marker convention as store.ts's AES_KEY_MARKER, distinct value so the two families never collide.
+// Same marker convention as store.ts's API-key files, distinct value so the two families never collide.
 // A single marker works for every connectionId — AES-GCM encryption is already keyed to the file itself.
-const AES_KEY_MARKER = Buffer.from('ATKMCP1\n')
+const MCP_FORMAT = secretFileFormat(MARKER_MCP_FILE)
 
 const LEGACY_BIDSTACK_KEY_FILE = 'key-bidstack.bin'
-const LEGACY_BIDSTACK_MARKER = Buffer.from('ATKBID1\n')
+const LEGACY_BIDSTACK_FORMAT = secretFileFormat(MARKER_BIDSTACK_FILE)
 
 /**
  * A connectionId is interpolated straight into a filename, so it must never contain a path separator or
@@ -80,29 +89,15 @@ function writeSecretFile(p: string, plaintext: string, label: string): void {
   // Fail closed before overwriting: an existing ATKMCP1 blob may be encrypted under a file key this
   // machine can no longer unwrap (Windows DPAPI bound to another account), and those bytes are the
   // only copy. No-op on a profile that has no file key. Mirrors store.ts's setApiKey.
-  prepareFileKeyForWrite()
-  let blob: Buffer
-  if (useFileBackend()) {
-    blob = Buffer.concat([AES_KEY_MARKER, encryptSecret(plaintext)])
-  } else {
-    if (!safeStorage.isEncryptionAvailable()) {
-      throw new Error(`Encryption is unavailable on this machine. Métis cannot safely store this ${label}.`)
-    }
-    blob = safeStorage.encryptString(plaintext)
+  const sealed = seal(plaintext, MCP_FORMAT, { prepareKey: true })
+  if (sealed.kind === 'unavailable') {
+    throw new Error(`Encryption is unavailable on this machine. Métis cannot safely store this ${label}.`)
   }
   // Atomic write: a crash mid-write must not leave a truncated/corrupt file where the previous
   // ciphertext was (it would silently read back as "no key" and cost a re-paste or a re-consent).
-  // Same tmp-file + rename pattern as store.ts's setApiKey.
-  const tmp = `${p}.tmp`
   try {
-    writeFileSync(tmp, blob, { mode: 0o600 })
-    renameSync(tmp, p)
+    atomicWriteSync(p, sealed.bytes)
   } catch (e) {
-    try {
-      if (existsSync(tmp)) rmSync(tmp) // don't leave an orphaned .tmp behind
-    } catch {
-      /* ignore */
-    }
     throw new Error(
       `Couldn't save the ${label} — Métis can't write to its data folder${
         e instanceof Error && e.message ? ` (${e.message})` : ''
@@ -134,38 +129,27 @@ export function setMcpRefreshToken(connectionId: string, token: string): void {
   refreshCache.set(connectionId, trimmed)
 }
 
-function readKeyFile(p: string, marker: Buffer): string {
-  let key = ''
+function readKeyFile(p: string, format: EnvelopeFormat): string {
   try {
-    const buf = readFileSync(p)
-    if (buf.length > marker.length && buf.subarray(0, marker.length).equals(marker)) {
-      try {
-        key = decryptSecret(buf.subarray(marker.length))
-      } catch {
-        key = '' // corrupt or key rotated
-      }
-    } else if (!process.env.ASKTOTO_LOCAL_KEYSTORE && safeStorage.isEncryptionAvailable()) {
-      try {
-        key = safeStorage.decryptString(buf)
-      } catch {
-        /* not a safeStorage blob for this OS user — unreadable */
-      }
-    }
+    const opened = open(readFileSync(p), format, {
+      keychain: !process.env.ASKTOTO_LOCAL_KEYSTORE && isKeychainAvailable()
+    })
+    // Corrupt, key rotated, or not a blob this OS user can unwrap: unreadable, never a partial secret.
+    return opened.kind === 'file' || opened.kind === 'keychain' ? opened.text : ''
   } catch {
-    /* file missing or unreadable */
+    return '' // file missing or unreadable
   }
-  return key
 }
 
 export function getMcpApiKey(connectionId: string): string {
   const cached = cache.get(connectionId)
   if (cached !== undefined) return cached
-  let key = readKeyFile(keyPath(connectionId), AES_KEY_MARKER)
+  let key = readKeyFile(keyPath(connectionId), MCP_FORMAT)
   // Legacy fallback: an existing BidStack connection whose key still lives at the pre-generalization
   // path. Only consulted when the new-path file has nothing readable — a real key-mcp-bidstack.bin
   // always wins.
   if (!key && connectionId === 'bidstack') {
-    key = readKeyFile(join(app.getPath('userData'), LEGACY_BIDSTACK_KEY_FILE), LEGACY_BIDSTACK_MARKER)
+    key = readKeyFile(join(app.getPath('userData'), LEGACY_BIDSTACK_KEY_FILE), LEGACY_BIDSTACK_FORMAT)
   }
   cache.set(connectionId, key)
   return key
@@ -216,7 +200,7 @@ export function clearMcpApiKey(connectionId: string): boolean {
 export function getMcpRefreshToken(connectionId: string): string {
   const cached = refreshCache.get(connectionId)
   if (cached !== undefined) return cached
-  const token = readKeyFile(refreshPath(connectionId), AES_KEY_MARKER)
+  const token = readKeyFile(refreshPath(connectionId), MCP_FORMAT)
   refreshCache.set(connectionId, token)
   return token
 }
@@ -253,7 +237,7 @@ export function setMcpClientSecret(connectionId: string, secret: string): void {
 export function getMcpClientSecret(connectionId: string): string {
   const cached = clientSecretCache.get(connectionId)
   if (cached !== undefined) return cached
-  const secret = readKeyFile(clientSecretPath(connectionId), AES_KEY_MARKER)
+  const secret = readKeyFile(clientSecretPath(connectionId), MCP_FORMAT)
   clientSecretCache.set(connectionId, secret)
   return secret
 }

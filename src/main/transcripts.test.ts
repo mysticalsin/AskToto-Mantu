@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
+  type PathLike,
   mkdtempSync,
   rmSync,
   readFileSync,
@@ -1150,7 +1151,7 @@ describe('old-meeting Keychain recovery (T7): allowKeychainRecovery + self-heali
     // node:fs/promises.rename mock (vi.restoreAllMocks() doesn't undo .mockImplementation() on a
     // factory-vended vi.fn() — only on a real vi.spyOn) — re-establish the real-rename default so
     // saveMeeting below isn't sabotaged by a prior test's leftover override.
-    vi.mocked(renameAsync).mockImplementation(async (src: string, dest: string) => renameSync(src, dest))
+    vi.mocked(renameAsync).mockImplementation(async (src: PathLike, dest: PathLike) => renameSync(src, dest))
     // decryptToTemp writes its plaintext copy under app.getPath('temp') — route that to a real,
     // per-test directory instead of the shared default mock path, which nothing here creates on disk.
     // Sandboxed per-run (see __mocks__/electron.ts) rather than a hardcoded literal — only `temp` matters
@@ -1189,6 +1190,20 @@ describe('old-meeting Keychain recovery (T7): allowKeychainRecovery + self-heali
     expect((parseEnvelope(file).kLocal as string).startsWith('S:')).toBe(true) // sanity: real 'S:' envelope
     return file
   }
+
+  it('will-quit removes decrypted temp files synchronously before returning', async () => {
+    const file = await writeOldKeychainMeeting()
+    process.env.ASKTOTO_LOCAL_KEYSTORE = '1'
+    const tmp = decryptToTemp(file)
+    expect(existsSync(tmp)).toBe(true)
+
+    const appOnCalls = vi.mocked(app.on).mock.calls as Array<[string, () => void]>
+    const listener = appOnCalls.find(([event]) => event === 'will-quit')?.[1]
+    expect(listener).toBeTypeOf('function')
+    listener!()
+
+    expect(existsSync(tmp)).toBe(false)
+  })
 
   it('recovery flag off: an old "S:" meeting still fails to decrypt while the local keystore is forced (unchanged bulk-read behavior)', async () => {
     const file = await writeOldKeychainMeeting()
