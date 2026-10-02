@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 const root = join(__dirname, '..', '..')
 const workflow = readFileSync(join(root, '.github', 'workflows', 'qa-candidate.yml'), 'utf8').replace(/\r\n/g, '\n')
+const ownerSandboxProbe = readFileSync(join(root, 'scripts', 'hermetic', 'prove-owner-sandbox.sh'), 'utf8').replace(/\r\n/g, '\n')
 
 /** A job's text: from its two-space key to the next two-space key. No YAML library is a dependency here. */
 function jobBlock(name: string): string {
@@ -291,12 +292,17 @@ describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
       expect(probe).toBeLessThan(download)
 
       const block = jobSteps[probe]
-      expect(block).toContain('bash scripts/hermetic/run-under-owner-sandbox.sh /bin/ls "$target"')
-      expect(block).toContain('"$HOME/Library/CloudStorage"')
-      expect(block).toContain('"$HOME/Library/Application Support/Metis"')
-      expect(block).toContain('Operation not permitted|deny|sandbox')
-      expect(block).toContain('exit 1')
+      expect(block).toContain('bash scripts/hermetic/prove-owner-sandbox.sh')
     }
+
+    expect(workflow).toContain('      - scripts/hermetic/prove-owner-sandbox.sh\n')
+    expect(workflow).toContain('      - scripts/hermetic/run-under-owner-sandbox.sh\n')
+    expect(workflow).toContain('      - scripts/hermetic/owner-account.sb\n')
+    expect(ownerSandboxProbe).toContain('bash scripts/hermetic/run-under-owner-sandbox.sh /bin/ls "$target"')
+    expect(ownerSandboxProbe).toContain('"$HOME/Library/CloudStorage"')
+    expect(ownerSandboxProbe).toContain('"$HOME/Library/Application Support/Metis"')
+    expect(ownerSandboxProbe).toContain("grep -Fqi 'Operation not permitted'")
+    expect(ownerSandboxProbe).not.toContain('Operation not permitted|deny|sandbox')
   })
 
   it('runs every strict candidate verification and launch through the owner-account sandbox wrapper', () => {
@@ -316,9 +322,15 @@ describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
 
       const cleanup = steps(name).find((step) => step.includes('name: Remove ST-1 temporary state')) ?? ''
       expect(cleanup).toMatch(/^        if: always\(\)$/m)
-      expect(cleanup).toContain('rm -rf "$RUNNER_TEMP"/metis-st1-*')
+      expect(cleanup).toContain('rm -rf')
+      expect(cleanup).toContain('"$RUNNER_TEMP"/metis-st1-*')
       expect(cleanup).toContain('"$RUNNER_TEMP"/st1-unzip-*')
       expect(cleanup).toContain('"$RUNNER_TEMP"/st1-witness-*')
+      expect(cleanup).toContain('"$HOME/Library/Logs/asktoto-qa"')
+      expect(cleanup).toContain('"$HOME/Library/Preferences/com.mantu.asktoto.qa.plist"')
+      expect(cleanup).toContain('"$HOME/Library/Saved Application State/com.mantu.asktoto.qa.savedState"')
+      expect(cleanup).toContain('"$HOME/Library/Caches/com.mantu.asktoto.qa"')
+      expect(cleanup).toContain('security delete-generic-password -s "asktoto-qa Safe Storage" || true')
     }
   })
 })
