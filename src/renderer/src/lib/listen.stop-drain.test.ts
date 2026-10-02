@@ -1608,6 +1608,7 @@ describe('M2-0535 Whisper initialization error ownership', () => {
   })
 
   it('keeps a pending network retry through capture admission until the replacement is ready', async () => {
+    vi.mocked(window.toto.asrBundled).mockResolvedValue(false)
     let resolveDisplay!: (stream: MediaStream) => void
     getDisplayMediaImpl = () => new Promise((resolve) => { resolveDisplay = resolve })
     const starting = render('whisper').start('system', 'fast', 'whisper', 'English')
@@ -1643,6 +1644,7 @@ describe('M2-0535 Whisper initialization error ownership', () => {
   })
 
   it('retries a first-Listen network load failure and surfaces a repair failure from the replacement', async () => {
+    vi.mocked(window.toto.asrBundled).mockResolvedValue(false)
     await render('parakeet').start('system', 'fast', 'whisper', 'English')
     await settle()
     const retired = workers.at(-1)!

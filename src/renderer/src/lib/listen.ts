@@ -127,16 +127,11 @@ const THEM_LOST_MSG =
 // Backpressure became user-visible truncation: transcription fell behind capture long enough that
 // audio windows were discarded. Exact-string contract like the other sticky notes.
 const DROPPED_MSG = 'Transcription fell behind, so some audio was skipped. The transcript may have gaps.'
-// Exact text of the "offline, waiting to reconnect" / "reconnected, restarting" notes, shared by
-// armNetworkRetry (sets them) and the worker's 'ready' handler (clears them once recovery succeeds) —
-// matched by exact string so other sticky notes (THEM_SILENT_MSG, the Parakeet-fallback footnote) are
-// never accidentally cleared by a network recovery that has nothing to do with them.
+// Exact retry notes; matched by exact string so network recovery never clears unrelated sticky notes.
 const OFFLINE_MSG =
   "No internet connection. The speech model is paused and will restart automatically once you're back online."
 const RECONNECTING_MSG = 'Back online. Restarting the speech model…'
-// A model-load failure that looks connectivity-related (DNS/fetch/ECONNREFUSED-style messages
-// transformers.js/fetch surface), so it can be distinguished from a genuine non-network load failure
-// (e.g. a missing bundled file) — which should surface as-is instead of wrongly claiming "you're offline".
+// Connectivity-shaped model-load failures; bundled/local load failures must surface as repair guidance.
 const NETWORK_ERR =
   /network|fetch failed|enotfound|econnrefused|getaddrinfo|offline|dns|failed to fetch|err_internet_disconnected/i
 
@@ -1576,16 +1571,8 @@ export function useListen(
     networkRetryCleanupRef.current = null
   }, [])
 
-  /**
-   * Whisper's model only needs the network the FIRST time it loads (the bundled/packaged app loads from
-   * local resources and never touches the network at all — see whisper.worker.ts's allowRemoteModels
-   * guard). So the only way wifi can break transcription is a load failure before the model is ready.
-   * When that failure looks connectivity-related (offline, or the error text matches NETWORK_ERR), this
-   * shows a clear, sticky note and automatically retries the load once the browser reports 'online' —
-   * instead of leaving Whisper dead for the rest of the meeting with no visible explanation. Returns
-   * false for a non-network load failure (or one after the model was already ready), so the caller falls
-   * through to the original raw-error behavior unchanged.
-   */
+  // Remote Whisper can fail before the first model load; bundled/local failures surface as repair guidance.
+  // Network-shaped remote load failures get a sticky offline/reconnecting note plus one replacement init.
   const armNetworkRetry = useCallback(
     (rawMessage: string): boolean => {
       if (readyRef.current) return false // already loaded — a per-window error, not a load failure
