@@ -290,11 +290,13 @@ sample_app() {
   fi
   local main_sampled=true
   printf '%s\n' "$APP_PID" >> "$OUT/app-pids.txt"
+  local main_sample_start_ms
+  main_sample_start_ms=$(epoch_ms)
   if ! sample_pid "$APP_PID" "$row-main"; then
     main_sampled=false
     SAMPLE_FAILURES=$((SAMPLE_FAILURES + 1))
   else
-    append_jsonl "$OUT/sample-index.jsonl" "{\"row\":$(json_string "$row"),\"role\":\"main\",\"capturedMs\":$(epoch_ms),\"file\":$(json_string "samples/$row-main.sample.txt")}"
+    append_jsonl "$OUT/sample-index.jsonl" "{\"row\":$(json_string "$row"),\"role\":\"main\",\"capturedMs\":$((main_sample_start_ms + 5000)),\"file\":$(json_string "samples/$row-main.sample.txt")}"
   fi
   local rp renderer_successes=0 renderer_attempts=0
   while IFS= read -r rp; do

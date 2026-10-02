@@ -6,6 +6,15 @@ import { EXCERPT_FILES, STALLS_FILE, excerptOf, excerptRows, stallBundleNames, w
 
 const BOOT = '0f8fad5b-d9cb-469f-a165-70867728950e'
 const jsonl = (rows: object[]): string => rows.map((row) => `${JSON.stringify(row)}\n`).join('')
+const mainThreadSample = `Sampling process 4242 for 10 seconds with 1 millisecond of run time between samples
+Call graph:
+    2500 Thread_12345   DispatchQueue_1: com.apple.main-thread  (serial)
+    + 2500 start  (in dyld) + 1904
+    + ! 2499 main  (in /Applications/Metis.app/Contents/MacOS/Metis) + 12
+    + ! : 2498 -[NSApplication run]  (in AppKit) + 512
+    240 Thread_67890
+    + 240 worker_secret  (in SecretRenderer) + 1
+`
 
 describe('M2-0194 attribution excerpts', () => {
   it('assigns each attribution event to exactly one excerpt and ignores the rest', () => {
@@ -52,7 +61,7 @@ describe('M2-0194 attribution excerpts', () => {
         ])
       )
       mkdirSync(join(out, 'samples'), { recursive: true })
-      writeFileSync(join(out, 'samples', 'row-1-history-open-main.sample.txt'), '    1 main + 0 (Metis)\n')
+      writeFileSync(join(out, 'samples', 'row-1-history-open-main.sample.txt'), mainThreadSample)
       writeFileSync(join(out, 'sample-index.jsonl'), jsonl([
         { row: 'row-1-history-open', role: 'main', capturedMs: Date.parse('2026-10-02T12:00:01.009Z'), file: 'samples/row-1-history-open-main.sample.txt' }
       ]))
@@ -75,7 +84,9 @@ describe('M2-0194 attribution excerpts', () => {
       expect(read(EXCERPT_FILES.sidecar)).toContain('sidecar.spawn')
       expect(read(EXCERPT_FILES.stall)).toContain('app.stall')
       expect(read(EXCERPT_FILES.stall)).toContain('"stalledMs":31000')
-      expect(read(STALLS_FILE)).toContain('"frames":[{"symbol":"main","image":"Metis"}]')
+      expect(read(STALLS_FILE)).toContain('"frames":[{"symbol":"start","image":"dyld"},{"symbol":"main","image":"Metis"},{"symbol":"-[NSApplication run]","image":"AppKit"}]')
+      expect(read(STALLS_FILE)).not.toContain('worker_secret')
+      expect(read(STALLS_FILE)).not.toContain('SecretRenderer')
       expect(read(STALLS_FILE)).toContain('"row":"row-1-history-open"')
       expect(JSON.parse(read('stall-bundle-names.json'))).toEqual({ names: [name] })
       expect(read('stall-bundle-names.json')).not.toContain('secret-frame')

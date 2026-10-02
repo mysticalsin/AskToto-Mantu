@@ -154,11 +154,25 @@ function readSampleFrames(samplesDir, sampleFile) {
     return { frames: [], errorClass: 'sample_directory_missing' }
   }
   const frames = []
+  let inCallGraph = false
+  let inMainThread = false
   for (const line of readFileSync(samplePath, 'utf8').split(/\r?\n/)) {
-    const match = line.match(/^\s*\d+\s+(.+?)\s+\(([^)]+)\)/)
+    if (!inCallGraph) {
+      inCallGraph = line.trim() === 'Call graph:'
+      continue
+    }
+    const isThreadHeader = /^\s*\d+\s+Thread[_\s]/.test(line)
+    if (isThreadHeader) {
+      if (inMainThread) break
+      inMainThread = /\bcom\.apple\.main-thread\b/.test(line)
+      continue
+    }
+    if (!inMainThread) continue
+    const frameLine = line.replace(/^\s*[+!:| ]+\s*/, '').replace(/^\d+\s+/, '')
+    const match = frameLine.match(/^(.+?)\s+\(in\s+([^)]+)\)/)
     if (!match) continue
     const symbol = match[1].replace(/\s+\+\s+\d+.*$/, '').trim()
-    const image = basename(match[2].trim().split(/\s+/)[0])
+    const image = basename(match[2].trim())
     if (symbol && image) frames.push({ symbol, image })
     if (frames.length >= 12) break
   }
