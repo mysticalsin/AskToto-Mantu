@@ -29,6 +29,7 @@ import {
   initialNavigationGuardRows,
   initialRightEdgeHideRows,
   navigationViewReadiness,
+  returnToHistoryFromReview,
   readNavigationViewSnapshot,
   navigationMeetingTitles,
   initialOverlayStabilityRows,
@@ -1030,6 +1031,34 @@ describe('navigation view readiness', () => {
     await expect(
       waitForNavigationView(page, { view: 'review', title: 'Smoke navigation beta' }, { timeoutMs: 5, pollMs: 1, wait: async () => undefined })
     ).rejects.toThrow(/review view was not reached: target review was not visible/)
+  })
+
+  it('waits for the requested Review title before returning to the requested History row', async () => {
+    const evaluateTitles: Array<string | null> = []
+    const clicked: string[] = []
+    const page = {
+      evaluate: async (_fn: unknown, arg: { title?: string | null }) => {
+        evaluateTitles.push(arg.title ?? null)
+        if (arg.title === 'Smoke navigation beta') return reviewReady
+        if (arg.title === 'Smoke navigation alpha') return historyReady
+        throw new Error(`unexpected navigation title ${arg.title ?? '<none>'}`)
+      },
+      getByRole: (_role: string, options: { name: RegExp }) => ({
+        first: () => ({
+          click: async () => {
+            clicked.push(String(options.name))
+          }
+        })
+      })
+    }
+
+    await returnToHistoryFromReview(page, {
+      reviewTitle: 'Smoke navigation beta',
+      historyTitle: 'Smoke navigation alpha'
+    })
+
+    expect(evaluateTitles).toEqual(['Smoke navigation beta', 'Smoke navigation alpha'])
+    expect(clicked).toEqual(['/Back to history/'])
   })
 
   it('does not treat a Recent meetings row title as the open Review title', async () => {

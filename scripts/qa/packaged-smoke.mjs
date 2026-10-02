@@ -70,6 +70,7 @@ export {
   initialNavigationGuardRows,
   navigationMeetingTitles,
   navigationViewReadiness,
+  returnToHistoryFromReview,
   readNavigationViewSnapshot,
   waitForNavigationView,
   seedNavigationMeetings

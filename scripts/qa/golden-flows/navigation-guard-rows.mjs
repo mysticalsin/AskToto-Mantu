@@ -223,12 +223,15 @@ async function settleOverlayForRvRows({ page, executable, env, userData }) {
 
 async function ensureHistory(page) {
   const search = page.getByLabel('Search past meetings')
-  if (await locatorVisible(search)) return
+  if (await locatorVisible(search)) {
+    await waitForNavigationView(page, { view: 'history' })
+    return
+  }
 
   const backToHistory = page.getByRole('button', { name: /Back to history/ })
   if (await locatorVisible(backToHistory)) {
     await backToHistory.first().click({ timeout: 15_000 })
-    await search.waitFor({ timeout: 15_000 })
+    await waitForNavigationView(page, { view: 'history' })
     return
   }
 
@@ -319,7 +322,7 @@ export async function seedNavigationMeetings(page, label = '') {
 
 async function clickHistory(page) {
   await page.getByRole('button', { name: 'History' }).first().click({ timeout: 15_000 })
-  await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+  await waitForNavigationView(page, { view: 'history' })
 }
 
 async function clickHistoryButton(page) {
@@ -338,7 +341,7 @@ async function clickOpenFullHistoryFromSettings(page) {
 async function openHistoryFromSettings(page) {
   await clickSettingsButton(page)
   await clickOpenFullHistoryFromSettings(page)
-  await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+  await waitForNavigationView(page, { view: 'history' })
 }
 
 async function openMeetingFromHistoryRow(page, title) {
@@ -369,9 +372,10 @@ async function expectGuard(page) {
   await page.getByRole('dialog', { name: 'Save recap changes?' }).waitFor({ timeout: 15_000 })
 }
 
-async function returnToHistoryFromReview(page) {
+export async function returnToHistoryFromReview(page, options = {}) {
+  if (options.reviewTitle) await waitForNavigationView(page, { view: 'review', title: options.reviewTitle })
   await page.getByRole('button', { name: /Back to history/ }).first().click({ timeout: 15_000 })
-  await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+  await waitForNavigationView(page, { view: 'history', title: options.historyTitle })
 }
 
 async function cancelRecapEdit(page) {
@@ -502,7 +506,7 @@ export async function runPackagedNavigationGuardRows({ port, rows, executable, e
       const rowSeeded = await seedNavigationMeetings(page, 'HIST dirty discard bar')
       await openDirtyReview(page, rowSeeded.titles.alpha, 'Discard by Bar History.')
       await chooseDirtyHistoryNavigation(page, 'Discard', () => clickHistoryButton(page))
-      await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+      await waitForNavigationView(page, { view: 'history', title: rowSeeded.titles.alpha })
       return { decision: 'discard', entry: 'bar-history', returnedToHistory: true }
     }, recoverNavigationGuardHarness)
 
@@ -511,7 +515,7 @@ export async function runPackagedNavigationGuardRows({ port, rows, executable, e
       const rowSeeded = await seedNavigationMeetings(page, 'HIST dirty save bar')
       await openDirtyReview(page, rowSeeded.titles.alpha, suffix)
       await chooseDirtyHistoryNavigation(page, 'Save', () => clickHistoryButton(page))
-      await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+      await waitForNavigationView(page, { view: 'history', title: rowSeeded.titles.alpha })
       await expectSavedRecap(page, rowSeeded.first, suffix)
       return { decision: 'save', entry: 'bar-history', persistedBeforeNavigation: true }
     }, recoverNavigationGuardHarness)
@@ -532,7 +536,7 @@ export async function runPackagedNavigationGuardRows({ port, rows, executable, e
       await openDirtyReview(page, rowSeeded.titles.alpha, 'Discard by Settings Open full history.')
       await chooseDirtyHistoryNavigation(page, 'Discard', () => clickSettingsButton(page))
       await clickOpenFullHistoryFromSettings(page)
-      await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+      await waitForNavigationView(page, { view: 'history', title: rowSeeded.titles.alpha })
       return { decision: 'discard', entry: 'settings-open-full-history', returnedToHistory: true }
     }, recoverNavigationGuardHarness)
 
@@ -542,7 +546,7 @@ export async function runPackagedNavigationGuardRows({ port, rows, executable, e
       await openDirtyReview(page, rowSeeded.titles.alpha, suffix)
       await chooseDirtyHistoryNavigation(page, 'Save', () => clickSettingsButton(page))
       await clickOpenFullHistoryFromSettings(page)
-      await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+      await waitForNavigationView(page, { view: 'history', title: rowSeeded.titles.alpha })
       await expectSavedRecap(page, rowSeeded.first, suffix)
       return { decision: 'save', entry: 'settings-open-full-history', persistedBeforeNavigation: true }
     }, recoverNavigationGuardHarness)
@@ -562,7 +566,7 @@ export async function runPackagedNavigationGuardRows({ port, rows, executable, e
       const rowSeeded = await seedNavigationMeetings(page, 'HIST dirty discard back')
       await openDirtyReview(page, rowSeeded.titles.alpha, 'Discard by Back to history.')
       await chooseDirtyHistoryNavigation(page, 'Discard', () => page.getByRole('button', { name: /Back to history/ }).first().click({ timeout: 15_000 }))
-      await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+      await waitForNavigationView(page, { view: 'history', title: rowSeeded.titles.alpha })
       return { decision: 'discard', returnedToHistory: true }
     }, recoverNavigationGuardHarness)
 
@@ -571,7 +575,7 @@ export async function runPackagedNavigationGuardRows({ port, rows, executable, e
       const rowSeeded = await seedNavigationMeetings(page, 'HIST dirty save back')
       await openDirtyReview(page, rowSeeded.titles.alpha, suffix)
       await chooseDirtyHistoryNavigation(page, 'Save', () => page.getByRole('button', { name: /Back to history/ }).first().click({ timeout: 15_000 }))
-      await page.getByLabel('Search past meetings').waitFor({ timeout: 15_000 })
+      await waitForNavigationView(page, { view: 'history', title: rowSeeded.titles.alpha })
       await expectSavedRecap(page, rowSeeded.first, suffix)
       return { decision: 'save', returnedToHistory: true, persistedBeforeNavigation: true }
     }, recoverNavigationGuardHarness)
@@ -591,8 +595,8 @@ export async function runPackagedNavigationGuardRows({ port, rows, executable, e
       const rowSeeded = await seedNavigationMeetings(page, 'HIST dirty discard recent')
       await openDirtyReview(page, rowSeeded.titles.alpha, 'Discard by Recent meetings.')
       await chooseDirtyHistoryNavigation(page, 'Discard', () => page.getByRole('button', { name: new RegExp(rowSeeded.titles.beta) }).first().click({ timeout: 15_000 }))
-      await waitForText(page, rowSeeded.titles.beta)
-      await returnToHistoryFromReview(page)
+      await waitForNavigationView(page, { view: 'review', title: rowSeeded.titles.beta })
+      await returnToHistoryFromReview(page, { reviewTitle: rowSeeded.titles.beta, historyTitle: rowSeeded.titles.alpha })
       return { decision: 'discard', entry: 'review-recent-meeting', openedTargetMeeting: true }
     }, recoverNavigationGuardHarness)
 
@@ -601,9 +605,9 @@ export async function runPackagedNavigationGuardRows({ port, rows, executable, e
       const rowSeeded = await seedNavigationMeetings(page, 'HIST dirty save recent')
       await openDirtyReview(page, rowSeeded.titles.alpha, suffix)
       await chooseDirtyHistoryNavigation(page, 'Save', () => page.getByRole('button', { name: new RegExp(rowSeeded.titles.beta) }).first().click({ timeout: 15_000 }))
-      await waitForText(page, rowSeeded.titles.beta)
+      await waitForNavigationView(page, { view: 'review', title: rowSeeded.titles.beta })
       await expectSavedRecap(page, rowSeeded.first, suffix)
-      await returnToHistoryFromReview(page)
+      await returnToHistoryFromReview(page, { reviewTitle: rowSeeded.titles.beta, historyTitle: rowSeeded.titles.alpha })
       return { decision: 'save', entry: 'review-recent-meeting', persistedBeforeNavigation: true }
     }, recoverNavigationGuardHarness)
 
