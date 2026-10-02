@@ -9,7 +9,7 @@ import { app } from 'electron'
 import { auditLog, mainLog } from '../../logger'
 import { resolveBinaryPath } from '../../llm/local-runtime'
 import { WINDOWS_POWERSHELL } from '../../win-security'
-import { argsFingerprint, getProcessIdentity, type SidecarRecord } from './registry'
+import { activeSidecarRegistry, argsFingerprint, getProcessIdentity, type SidecarRecord } from './registry'
 
 const require = createRequire(import.meta.url)
 
@@ -40,6 +40,9 @@ export interface ReaperOptions {
   readonly userData: string
   readonly currentMain: ProcessIdentity
   readonly llamaServerRealpath: string
+  /** This launch's registry session. The reaper runs after the first show (M2-0518), when this launch may
+   *  already have spawned and registered sidecars; its own records are never reap candidates. */
+  readonly currentSessionId?: string
   readonly adapters?: Partial<ReaperAdapters>
 }
 
@@ -59,7 +62,7 @@ export async function reapBootSidecars(options: ReaperOptions): Promise<void> {
   const adapters = { ...defaultAdapters(), ...options.adapters }
   const runDir = join(options.userData, 'run')
   const records = adapters.readRegistryRecords(runDir)
-  await reapRegistryRecords(records, adapters)
+  await reapRegistryRecords(records.filter((record) => record.sessionId !== options.currentSessionId), adapters)
   await reapLegacyLlamaOrphans(options, adapters, registeredPids(records))
 }
 
@@ -274,7 +277,7 @@ export async function runBootSidecarReaper(userData = app.getPath('userData')): 
     const currentMain = await getProductionProcessInfo(process.pid)
     const llama = productionLlamaRealpath()
     if (!currentMain || !llama) return
-    await reapBootSidecars({ userData, currentMain, llamaServerRealpath: llama })
+    await reapBootSidecars({ userData, currentMain, llamaServerRealpath: llama, currentSessionId: activeSidecarRegistry()?.sessionId })
   } catch (error) {
     mainLog.warn('[sidecar.reaper] boot reaper failed', error)
   }

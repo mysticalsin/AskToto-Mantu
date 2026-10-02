@@ -24,6 +24,7 @@ export const NAV_SECTIONS = [
     items: [
       { id: 'keys', label: 'Keys' },
       { id: 'connectors', label: 'Connectors' },
+      { id: 'models', label: 'Models' },
       { id: 'audit', label: 'Audit' },
       { id: 'settings', label: 'Settings' }
     ]
@@ -40,6 +41,7 @@ export type NavId =
   | 'notifications'
   | 'keys'
   | 'connectors'
+  | 'models'
   | 'audit'
   | 'settings'
 
