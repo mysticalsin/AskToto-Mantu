@@ -1379,6 +1379,7 @@ export function useListen(
   const ensureWorker = useCallback((): Worker => {
     if (workerRef.current) return workerRef.current
     const w = new Worker(new URL('./whisper.worker.ts', import.meta.url), { type: 'module' })
+    readyRef.current = false
     w.onmessage = (e: MessageEvent): void => {
       if (workerRef.current !== w) return // terminated/replaced worker from an earlier session
       const m = e.data as {
@@ -1418,7 +1419,7 @@ export function useListen(
         // armNetworkRetry is defined further down (after ensureWorker) and forward-referenced via closure
         // — same pattern as pump → fallBackToWhisper above. It only runs later, once this handler actually
         // fires, by which point it's fully initialized; deliberately omitted from this useCallback's deps.
-        if (pendingWhisperEpochRef.current !== sessionEpochRef.current) {
+        if (readyRef.current && pendingWhisperEpochRef.current !== sessionEpochRef.current) {
           return // replacement session owns the placeholder, embed slot, busy flag and queue
         }
         if (!armNetworkRetry(m.message ?? '')) {
