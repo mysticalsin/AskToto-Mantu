@@ -9410,7 +9410,9 @@ if (!app.requestSingleInstanceLock()) {
     return
   }
   if (!app.isPackaged) loadDotEnv() // dev convenience only; never read a stray .env in production
-  sweepStaleTempFiles() // remove any decrypted-transcript temp copies orphaned by a previous hard-kill
+  // Remove decrypted-transcript temp copies orphaned by a previous hard-kill after first show; the sweep
+  // can touch the profile filesystem and first paint does not depend on it.
+  bootWork.run('sweepStaleTempFiles', sweepStaleTempFiles)
   // Promote any orphaned crash-recovery drafts into real meetings BEFORE the retention sweep, so a
   // recovered meeting is visible in History and immediately subject to the same retention policy.
   // M2-0518: both read (and decrypt) the meetings root, so they start behind the first show, in this order.
@@ -9590,11 +9592,13 @@ if (!app.requestSingleInstanceLock()) {
       ? process.resourcesPath
       : join(REPO_ROOT, 'resources')
     let asrBundledCache: boolean | null = null
+    let readAsrBundledStatus = (): boolean => false
     const asrBundledReady = (): boolean => {
-      if (asrBundledCache === null) asrBundledCache = app.isPackaged ? importAsrAssetsReady() : asrManifestComplete(RES_BASE)
+      if (asrBundledCache === null) asrBundledCache = readAsrBundledStatus()
       return asrBundledCache
     }
     bootWork.run('primeAsrBundledStatus', () => { asrBundledReady() })
+    readAsrBundledStatus = (): boolean => app.isPackaged ? importAsrAssetsReady() : asrManifestComplete(RES_BASE)
     const safeHandle = (channel: string, listener: (...args: any[]) => unknown): void => {
       try {
         ipcMain.removeHandler(channel)

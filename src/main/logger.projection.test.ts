@@ -14,7 +14,7 @@ vi.mock('node:os', async (importOriginal) => ({
   tmpdir: () => logFixture.root
 }))
 
-import { auditLog, auditLogPath, setAuditActor } from './logger'
+import { auditLog, auditLogPath, setAuditActor, settleAuditLogForTests } from './logger'
 
 const readLastRecord = (): Record<string, unknown> => {
   const lines = readFileSync(auditLogPath(), 'utf8')
@@ -27,7 +27,7 @@ const readLastRecord = (): Record<string, unknown> => {
 afterAll(() => rmSync(logFixture.root, { recursive: true, force: true }))
 
 describe('auditLog observability projection', () => {
-  it('projects app.crash, drops actor and unknown title, and scrubs a path-bearing message', () => {
+  it('projects app.crash, drops actor and unknown title, and scrubs a path-bearing message', async () => {
     setAuditActor(() => 'jane.doe@acme-corp.example')
     const detail = {
       kind: 'boot',
@@ -37,6 +37,7 @@ describe('auditLog observability projection', () => {
     } as ObservabilityDetail<'app.crash'>
 
     auditLog('app.crash', detail)
+    await settleAuditLogForTests()
 
     const record = readLastRecord()
     expect(record.event).toBe('app.crash')
@@ -48,10 +49,11 @@ describe('auditLog observability projection', () => {
     expect(JSON.stringify(record)).not.toContain('Meetings')
   })
 
-  it('leaves attributed events unchanged', () => {
+  it('leaves attributed events unchanged', async () => {
     setAuditActor(() => 'jane.doe@acme-corp.example')
 
     auditLog('settings.changed', { probe: 'chain-1', nested: { kept: true } })
+    await settleAuditLogForTests()
 
     const record = readLastRecord()
     expect(record.event).toBe('settings.changed')
