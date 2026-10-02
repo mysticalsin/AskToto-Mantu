@@ -10,15 +10,18 @@
 //   node scripts/qa/candidate-scenarios.mjs resolve --scenario <s> [--mac-sha256 <hex>] [--win-sha256 <hex>]
 //   node scripts/qa/candidate-scenarios.mjs guard <run.json> <candidate_run>
 //   node scripts/qa/candidate-scenarios.mjs profile --scenario <s> --platform <p>
+//   node scripts/qa/candidate-scenarios.mjs grant-gui --scenario <s> --platform <p>
+//   node scripts/qa/candidate-scenarios.mjs installer-kind --scenario <s> --platform <p>
 //   node scripts/qa/candidate-scenarios.mjs run --scenario <s> --platform <p> --installer <relative path>
 //       --sha256 <hex> --provenance <provenance.json> --candidate-run <id> --out <relative dir> [--app <installed app>]
 //   node scripts/qa/candidate-scenarios.mjs scan <dir> --account <runner account>
 // Node builtins only, so the guard job needs no npm ci.
-import { spawnSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, isAbsolute, join, relative } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { writeRepresentativeProfile } from './census/profile.mjs'
 import { LOCAL_LLM_SETTINGS } from './lib/local-llm-settings.mjs'
 import { VARIANTS } from './provenance.mjs'
 
@@ -30,17 +33,37 @@ export const RUNNER_LABELS = Object.freeze({ mac: 'macos-latest', win: 'windows-
 
 /** userData directory name per installed variant: Electron takes it from the packaged package.json name,
  *  which build/qa-identity.electron-builder.yml sets to asktoto-qa for the QA identity. */
-export const PROFILE_DIRS = Object.freeze({ 'mac-qa-identity': 'asktoto-qa' })
+export const PROFILE_DIRS = Object.freeze({ mac: 'asktoto', 'mac-qa-identity': 'asktoto-qa' })
+
+export const PACKAGED_LIFECYCLE_RV_ROWS = Object.freeze({
+  mac: Object.freeze([
+    'RV-1-macos-open-activate',
+    'RV-1-macos-finder-spotlight-launchpad',
+    'RV-2-macos-open-new-instance',
+    'RV-4-tray-show',
+    'RV-4-global-hotkey',
+    'RV-boot-launch-activate-stays-parked'
+  ]),
+  win: Object.freeze([
+    'RV-3-windows-exe-relaunch',
+    'RV-3-windows-shortcut-relaunch',
+    'RV-4-tray-show',
+    'RV-4-global-hotkey'
+  ])
+})
 
 /**
  * A scenario runs on each platform it declares. A platform entry names the qa-candidate variant and
  * artifact it installs, the script and arguments it runs (args receives the installer, its sha256, the
- * report path and the installed app), the report file the script writes, and the settings it seeds into the
- * fresh profile. isolatedProfiles marks a script that runs the app only on its own throwaway
- * ASKTOTO_USERDATA profiles, so the default profile is never touched. notCovered lists report rows the
- * platform cannot prove, each with the reason; lane.json carries them as a residual. qaOnlyHook marks a
+ * report path and the installed app, relative to the repository), the report file the script writes, and the
+ * settings it seeds into the fresh profile. isolatedProfiles marks a script that runs the app only on its own
+ * throwaway ASKTOTO_USERDATA profiles, so the default profile is never touched. notCovered lists report rows
+ * the platform cannot prove, each with the reason; lane.json carries them as a residual. qaOnlyHook marks a
  * scenario that needs a hook compiled only into QA-identity bytes; every other scenario installs a
- * promotable variant so its records bind to bytes that can ship.
+ * promotable variant so its records bind to bytes that can ship. installerSuffix, when set, is the only
+ * installer kind the scenario accepts; installerKind, when set, is the candidate-installer.mjs selector the
+ * install step uses instead of the platform. guiScripting marks a platform entry that drives the app's native UI
+ * through System Events.
  */
 export const SCENARIOS = Object.freeze({
   // M2-0026: onFatal "Relaunch Métis", then a census 10 s later with no orphaned owned sidecar. The
@@ -57,6 +80,108 @@ export const SCENARIOS = Object.freeze({
         args: ({ installer, sha256, report }) => ['--zip', installer, '--sha256', sha256, '--out', report],
         report: 'fault-fatal-relaunch.json',
         settings: LOCAL_LLM_SETTINGS
+      })
+    })
+  }),
+  // M2-0033 acceptance[7] (M2-0470): seeded ingest ledgers survive repeated clean relaunches and no
+  // llama-server starts in the first 120 s of a boot, on the promotable DMG. The script seeds its own isolated
+  // ASKTOTO_USERDATA profile, so the lane seeds no settings.
+  'ex-suite': Object.freeze({
+    ticket: 'M2-0033',
+    qaOnlyHook: false,
+    exits: Object.freeze({ 0: 'PASS', 1: 'FAIL', 2: 'PRECONDITION' }),
+    platforms: Object.freeze({
+      mac: Object.freeze({
+        variant: 'mac',
+        artifact: 'candidate-mac',
+        installerSuffix: '.dmg',
+        script: 'scripts/qa/ex-suite.mjs',
+        args: ({ app, report }) => {
+          if (!app) throw new Error('ex-suite needs the installed app (--app).')
+          return ['--packaged', app, report, '--relaunches', '3']
+        },
+        report: 'ex-suite.json'
+      })
+    })
+  }),
+  // M2-0471: on promotable macOS bytes, SIGSTOP main for 15 s, then require exactly one sanitized stall
+  // bundle and one app.stall.sampled audit event. The long idle plus sleep/wake row is reported as
+  // BLOCKED_EXTERNAL by the scenario because hosted runners cannot provide that physical-host setup.
+  'stall-sampler': Object.freeze({
+    ticket: 'M2-0471',
+    qaOnlyHook: false,
+    exits: Object.freeze({ 0: 'PASS', 1: 'FAIL', 2: 'PRECONDITION' }),
+    platforms: Object.freeze({
+      mac: Object.freeze({
+        variant: 'mac',
+        artifact: 'candidate-mac',
+        script: 'scripts/qa/stall-sampler-hosted.mjs',
+        args: ({ app, report }) => [app, report, '--stop-seconds', '15'],
+        report: 'stall-sampler.json'
+      })
+    })
+  }),
+  // M2-0492: hosted macOS idle soak on promotable DMG bytes. The tool launches the installed app on the
+  // representative Hide profile, streams the 5.5 h parked-idle census, and judges IDLE-GROWTH-1.
+  'idle-soak': Object.freeze({
+    ticket: 'M2-0492',
+    qaOnlyHook: false,
+    exits: Object.freeze({ 0: 'PASS', 1: 'FAIL_OR_INCOMPLETE', 2: 'PRECONDITION' }),
+    platforms: Object.freeze({
+      mac: Object.freeze({
+        variant: 'mac',
+        artifact: 'candidate-mac',
+        script: 'scripts/qa/soak/idle-soak.mjs',
+        args: ({ app, report }) => [
+          '--app', app,
+          '--profile', 'candidate-scenario/profile',
+          '--hours', '5.5',
+          '--out', 'candidate-scenario',
+          ...(process.env.SOAK_DEADLINE_EPOCH_MS ? ['--deadline-epoch-ms', process.env.SOAK_DEADLINE_EPOCH_MS] : [])
+        ],
+        report: 'idle-soak.json',
+        profileLayout: 'hide',
+        timeoutMinutes: 355,
+        stepTimeoutMinutes: 340,
+        outcomeFromReport: true,
+        laneReportFields: Object.freeze([
+          'rule',
+          'hoursMeasured',
+          'parkedCoverage',
+          'displayAwake',
+          'hostFloorOverride',
+          'hostMemory',
+          'memory',
+          'modelState'
+        ])
+      }),
+      win: Object.freeze({
+        ticket: 'M2-0493',
+        variant: 'win',
+        artifact: 'candidate-win',
+        script: 'scripts/qa/soak/idle-soak.mjs',
+        args: ({ app, report }) => [
+          '--app', app,
+          '--profile', 'candidate-scenario/profile',
+          '--hours', '5.5',
+          '--out', 'candidate-scenario',
+          ...(process.env.SOAK_DEADLINE_EPOCH_MS ? ['--deadline-epoch-ms', process.env.SOAK_DEADLINE_EPOCH_MS] : [])
+        ],
+        report: 'idle-soak.json',
+        profileLayout: 'hide',
+        timeoutMinutes: 355,
+        stepTimeoutMinutes: 340,
+        outcomeFromReport: true,
+        laneReportFields: Object.freeze([
+          'rule',
+          'hoursMeasured',
+          'parkedCoverage',
+          'displayAwake',
+          'hostFloorOverride',
+          'hostMemory',
+          'memory',
+          'modelState'
+        ])
       })
     })
   }),
@@ -89,8 +214,107 @@ export const SCENARIOS = Object.freeze({
         ])
       })
     })
+  }),
+  // M2-0506: the packaged lifecycle scenario runs packaged-smoke.mjs on the exact promotable candidate
+  // installer bytes, selected by sha256. The report rows stay content-free and lane.json records their
+  // verdicts so RV/HIST/RE-HIDE evidence is bound to the candidate DMG/Setup instead of self-built bytes.
+  'packaged-lifecycle': Object.freeze({
+    ticket: 'M2-0506',
+    qaOnlyHook: false,
+    exits: Object.freeze({ 0: 'PASS', 1: 'FAIL' }),
+    reportAssessment: 'packaged-smoke',
+    platforms: Object.freeze({
+      mac: Object.freeze({
+        variant: 'mac',
+        artifact: 'candidate-mac',
+        installerKind: 'mac-dmg',
+        script: 'scripts/qa/packaged-smoke.mjs',
+        args: ({ app, report }) => [app, report],
+        report: 'packaged-smoke.json',
+        isolatedProfiles: true
+      }),
+      win: Object.freeze({
+        variant: 'win',
+        artifact: 'candidate-win',
+        script: 'scripts/qa/packaged-smoke.mjs',
+        args: ({ app, report }) => [app, report],
+        report: 'packaged-smoke.json',
+        isolatedProfiles: true
+      })
+    })
+  }),
+  // M2-0469 (proves M2-0037): 4 overlay renderer SIGKILLs within 60 s give 3 reloads, then the halted
+  // dialog and no 4th reload. It needs no QA-only hook, so it installs the promotable DMG; the proof seeds
+  // its own onboarded settings into a throwaway ASKTOTO_USERDATA profile, so the default profile is never
+  // opened and the lane seeds none.
+  'renderer-kill': Object.freeze({
+    ticket: 'M2-0469',
+    qaOnlyHook: false,
+    exits: Object.freeze({ 0: 'PASS', 1: 'FAIL', 2: 'PRECONDITION' }),
+    platforms: Object.freeze({
+      mac: Object.freeze({
+        variant: 'mac',
+        artifact: 'candidate-mac',
+        installerKind: 'mac-dmg',
+        installerSuffix: '.dmg',
+        script: 'scripts/qa/renderer-kill.mjs',
+        args: ({ installer, sha256, report }) => [installer, report, '--sha256', sha256, '--times', '4', '--window', '60'],
+        report: 'renderer-kill.json',
+        isolatedProfiles: true,
+        // It finds the halted dialog and clicks its Quit button through System Events, so the lane
+        // authorises GUI scripting (grant-gui) before it runs.
+        guiScripting: true
+      })
+    })
   })
 })
+
+/** Where macOS keeps TCC decisions: Accessibility in the system database, Automation (Apple events) in the
+ *  user's. Hosted macOS runners run with SIP disabled, so both are writable with sudo. */
+export const TCC_DATABASES = Object.freeze({
+  system: '/Library/Application Support/com.apple.TCC/TCC.db',
+  user: join('Library', 'Application Support', 'com.apple.TCC', 'TCC.db')
+})
+
+/** The pids from `pid` up to, not including, launchd: TCC attributes an osascript call to the responsible
+ *  process at the top of this chain, which on a hosted runner is the runner's own agent. */
+export function ancestorPids(psText, pid) {
+  const parent = new Map()
+  for (const line of psText.split('\n')) {
+    const match = /^\s*(\d+)\s+(\d+)\s*$/.exec(line)
+    if (match) parent.set(Number(match[1]), Number(match[2]))
+  }
+  const chain = []
+  for (let current = pid; current > 1 && !chain.includes(current); current = parent.get(current) ?? 0) chain.push(current)
+  return chain
+}
+
+/** The executable path in `lsof -a -p <pid> -d txt -Fn` output: its first name record. */
+export function executableFromLsof(text) {
+  return String(text ?? '').split('\n').find((line) => line.startsWith('n/'))?.slice(1) ?? null
+}
+
+/**
+ * The SQL that lets each client (an absolute executable path) script the GUI through System Events:
+ * Accessibility in the system database and Automation of System Events in the user's, both allowed
+ * (auth_value 2). INSERT OR REPLACE on the table's primary key makes a rerun idempotent.
+ * @returns {{ system: string, user: string }}
+ */
+export function guiScriptingGrants(clients) {
+  const paths = [...new Set(clients)]
+  if (!paths.length || paths.some((path) => typeof path !== 'string' || !path.startsWith('/'))) {
+    throw new Error('GUI scripting grants need at least one client, each an absolute executable path.')
+  }
+  const quote = (text) => `'${text.replaceAll("'", "''")}'`
+  const grant = (service, client, reason, target) =>
+    'INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, ' +
+    'indirect_object_identifier_type, indirect_object_identifier, flags, last_modified) VALUES ' +
+    `(${quote(service)}, ${quote(client)}, 1, 2, ${reason}, 1, 0, ${quote(target)}, 0, CAST(strftime('%s','now') AS INTEGER));`
+  return {
+    system: paths.map((client) => grant('kTCCServiceAccessibility', client, 4, 'UNUSED')).join('\n'),
+    user: paths.map((client) => grant('kTCCServiceAppleEvents', client, 3, 'com.apple.systemevents')).join('\n')
+  }
+}
 
 const SHA256 = /^[0-9a-f]{64}$/
 
@@ -110,12 +334,12 @@ function platformEntry(scenario, platform) {
  * Checks the dispatch inputs against the registry: the scenario must exist, every platform it runs on
  * needs a 64-hex sha256, and a sha256 for a platform it does not run on is refused rather than ignored.
  * Returns the normalized plan per platform; throws listing every problem.
- * @returns {Record<string, { variant: string, artifact: string, sha256: string }>}
+ * @returns {Record<string, { variant: string, artifact: string, sha256: string, timeoutMinutes: number, stepTimeoutMinutes: number }>}
  */
 export function resolveScenario({ scenario, sha256 }) {
   const entry = scenarioEntry(scenario)
   const problems = []
-  /** @type {Record<string, { variant: string, artifact: string, sha256: string }>} */
+  /** @type {Record<string, { variant: string, artifact: string, sha256: string, timeoutMinutes: number, stepTimeoutMinutes: number }>} */
   const plan = {}
   for (const platform of PLATFORMS) {
     const given = String(sha256[platform] ?? '').trim().toLowerCase()
@@ -128,7 +352,22 @@ export function resolveScenario({ scenario, sha256 }) {
       problems.push(`${platform}_sha256 is required for ${scenario} and must be 64 hexadecimal characters.`)
       continue
     }
-    plan[platform] = { variant: target.variant, artifact: target.artifact, sha256: given }
+    const item = {
+      variant: target.variant,
+      artifact: target.artifact,
+      sha256: given
+    }
+    if (scenario === 'ex-suite') {
+      // Preserve the legacy enumerable plan shape while still wiring workflow timeout outputs.
+      Object.defineProperties(item, {
+        timeoutMinutes: { value: target.timeoutMinutes ?? 60, enumerable: false },
+        stepTimeoutMinutes: { value: target.stepTimeoutMinutes ?? 40, enumerable: false }
+      })
+    } else {
+      item.timeoutMinutes = target.timeoutMinutes ?? 60
+      item.stepTimeoutMinutes = target.stepTimeoutMinutes ?? 40
+    }
+    plan[platform] = item
   }
   if (problems.length) throw new Error(problems.join('\n'))
   return plan
@@ -143,6 +382,8 @@ export function resolveOutputs(plan) {
       lines.push(`${platform}_variant=${plan[platform].variant}`)
       lines.push(`${platform}_artifact=${plan[platform].artifact}`)
       lines.push(`${platform}_sha256=${plan[platform].sha256}`)
+      lines.push(`${platform}_timeout_minutes=${plan[platform].timeoutMinutes}`)
+      lines.push(`${platform}_step_timeout_minutes=${plan[platform].stepTimeoutMinutes}`)
     }
   }
   return `${lines.join('\n')}\n`
@@ -178,6 +419,12 @@ export function candidateRunProblems(run, candidateRun) {
 export function prepareProfile({ scenario, platform, appDataDir }) {
   const target = platformEntry(scenario, platform)
   if (target.isolatedProfiles) return null
+  if (target.profileLayout) {
+    const profile = join(process.cwd(), 'candidate-scenario', 'profile')
+    if (existsSync(profile)) throw new Error('The idle-soak profile directory already exists; the profile is not fresh.')
+    writeRepresentativeProfile(profile, undefined, { layout: target.profileLayout })
+    return join(profile, 'resource-census-profile.json')
+  }
   if (!appDataDir) throw new Error(`No fresh-profile location is declared for ${platform}.`)
   const name = PROFILE_DIRS[target.variant]
   if (!name) throw new Error(`No userData directory is declared for variant ${target.variant}.`)
@@ -197,11 +444,75 @@ export function outcomeForExit(scenario, exitCode) {
   return Number.isInteger(exitCode) && Object.hasOwn(exits, exitCode) ? exits[exitCode] : 'FAIL'
 }
 
+/** The candidate-installer selector kind for this scenario/platform. Defaults to the platform. */
+export function installerKindForScenario(scenario, platform) {
+  return platformEntry(scenario, platform).installerKind ?? platform
+}
+
+const REPORT_SECTIONS = Object.freeze([
+  ['rv', 'rv'],
+  ['navigationGuard', 'hist'],
+  ['rightEdgeHide', 're_hide']
+])
+
+function rowVerdict(row) {
+  return {
+    id: String(row?.id ?? ''),
+    status: String(row?.status ?? 'MISSING'),
+    ...(row?.unblock ? { unblock: String(row.unblock) } : {})
+  }
+}
+
+function collectRowVerdicts(report) {
+  return Object.fromEntries(
+    REPORT_SECTIONS.map(([source, target]) => [
+      target,
+      Array.isArray(report?.[source]) ? report[source].map(rowVerdict) : []
+    ])
+  )
+}
+
+/** Extracts content-free verdict rows from packaged-smoke's report and decides whether they prove this
+ *  platform's RV acceptance rows. BLOCKED_EXTERNAL rows are residual not-covered evidence, never PASS. */
+export function assessPackagedSmokeReport(report, platform) {
+  const row_verdicts = collectRowVerdicts(report)
+  const problems = []
+  if (report?.result !== 'pass') problems.push(`packaged-smoke result is ${report?.result ?? 'missing'}, not pass.`)
+
+  const rvById = new Map(row_verdicts.rv.map((row) => [row.id, row]))
+  for (const id of PACKAGED_LIFECYCLE_RV_ROWS[platform] ?? []) {
+    const row = rvById.get(id)
+    if (!row) problems.push(`${id} is missing from packaged-smoke rv rows.`)
+  }
+  for (const row of row_verdicts.rv) {
+    if (row.status !== 'PASS') problems.push(`${row.id || 'unnamed RV row'} is ${row.status}, not PASS.`)
+  }
+
+  const notCovered = []
+  for (const rows of Object.values(row_verdicts)) {
+    for (const row of rows) {
+      if (row.status === 'BLOCKED_EXTERNAL') {
+        notCovered.push({ row: row.id, reason: row.unblock || 'The packaged-smoke row reported BLOCKED_EXTERNAL.' })
+      }
+    }
+  }
+  return { problems, row_verdicts, notCovered }
+}
+
+function assessScenarioReport({ scenario, platform, report }) {
+  const entry = scenarioEntry(scenario)
+  if (entry.reportAssessment === 'packaged-smoke') return assessPackagedSmokeReport(report, platform)
+  return { problems: [], row_verdicts: undefined, notCovered: [] }
+}
+
 /** The argv (after `node`) that runs a scenario. Every argument is repository-relative, so the recorded
  *  command never names the runner's home or temp directory.
  *  @param {{ scenario: string, platform: string, installer: string, sha256: string, outDir: string, app?: string }} options */
 export function scenarioCommand({ scenario, platform, installer, sha256, outDir, app }) {
   const target = platformEntry(scenario, platform)
+  if (target.installerSuffix && !installer.toLowerCase().endsWith(target.installerSuffix)) {
+    throw new Error(`${scenario} installs a ${target.installerSuffix} installer; the selected installer is ${basename(installer)}.`)
+  }
   const argv = [target.script, ...target.args({ installer, sha256, report: join(outDir, target.report).replaceAll('\\', '/'), app })]
   if (argv.some((arg) => typeof arg !== 'string' || arg === '')) {
     throw new Error(`The ${scenario} command is missing an argument; pass the installed app with --app.`)
@@ -223,16 +534,57 @@ export function assertCandidateProvenance(provenance, candidateRun) {
  * (build_run_id, commit, artifact_sha256, ci_run_id, environment, command, exit_code) so the lead copies
  * them into a LIVE_VERIFIED record as they are. A platform that cannot prove some report rows adds
  * not_covered, so a PASS there is never read as covering them.
+ * @param {{
+ *   scenario: string,
+ *   platform: string,
+ *   env: Record<string, string | undefined>,
+ *   provenance: any,
+ *   candidateRun: string | number,
+ *   installer: string,
+ *   sha256: string,
+ *   argv: string[],
+ *   exitCode: number | null,
+ *   detail: string,
+ *   reportWritten: boolean,
+ *   reportAssessment?: any
+ * }} input
  */
-export function laneRecord({ scenario, platform, env, provenance, candidateRun, installer, sha256, argv, exitCode, detail, reportWritten }) {
+export function laneRecord({
+  scenario,
+  platform,
+  env,
+  provenance,
+  candidateRun,
+  installer,
+  sha256,
+  argv,
+  exitCode,
+  detail,
+  reportWritten,
+  reportData = null,
+  reportAssessment = undefined
+}) {
   const target = platformEntry(scenario, platform)
   assertCandidateProvenance(provenance, candidateRun)
-  const outcome = outcomeForExit(scenario, exitCode)
+  const mappedOutcome = outcomeForExit(scenario, exitCode)
+  const assessmentProblems = [
+    ...(scenarioEntry(scenario).reportAssessment && !reportWritten ? [`${target.report} was not written.`] : []),
+    ...(reportAssessment?.problems ?? [])
+  ]
+  const reportOutcome = target.outcomeFromReport && typeof reportData?.outcome === 'string' ? reportData.outcome : mappedOutcome
+  const outcome = reportOutcome === 'PASS' && assessmentProblems.length ? 'FAIL' : reportOutcome
   const host = RUNNER_LABELS[platform]
+  const reportFields = target.laneReportFields
+    ? Object.fromEntries(target.laneReportFields.filter((key) => reportData && Object.hasOwn(reportData, key)).map((key) => [key, reportData[key]]))
+    : {}
+  const notCovered = [
+    ...(target.notCovered ?? []).map(({ row, reason }) => ({ row, reason })),
+    ...(reportAssessment?.notCovered ?? [])
+  ]
   return {
     schema: LANE_SCHEMA,
     scenario,
-    ticket: scenarioEntry(scenario).ticket,
+    ticket: target.ticket ?? scenarioEntry(scenario).ticket,
     platform,
     runner_image: { label: host, image_os: env.ImageOS ?? null, image_version: env.ImageVersion ?? null },
     build_run_id: provenance.run.id,
@@ -246,8 +598,10 @@ export function laneRecord({ scenario, platform, env, provenance, candidateRun, 
     exit_code: exitCode,
     outcome,
     report: reportWritten ? target.report : null,
-    detail: outcome === 'PASS' ? null : detail || null,
-    ...(target.notCovered ? { not_covered: target.notCovered.map(({ row, reason }) => ({ row, reason })) } : {})
+    detail: outcome === 'PASS' ? null : assessmentProblems.join('\n') || detail || null,
+    ...reportFields,
+    ...(reportAssessment?.row_verdicts ? { row_verdicts: reportAssessment.row_verdicts } : {}),
+    ...(notCovered.length ? { not_covered: notCovered } : {})
   }
 }
 
@@ -271,6 +625,9 @@ export function laneSummary(lane) {
   ]
   if (lane.detail) rows.push(['detail', lane.detail])
   for (const { row, reason } of lane.not_covered ?? []) rows.push([`not covered: ${row}`, reason])
+  for (const [group, verdicts] of Object.entries(lane.row_verdicts ?? {})) {
+    for (const row of verdicts) rows.push([`${group}: ${row.id}`, row.status])
+  }
   const cell = (value) => String(value).replaceAll('|', '\\|').replaceAll('`', "'")
   return [
     `### Candidate scenario ${lane.scenario} (${lane.platform}): ${lane.outcome}`,
@@ -354,6 +711,28 @@ function lastLine(text) {
   return String(text ?? '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1) ?? ''
 }
 
+/** Authorises System Events GUI scripting for this job's process chain, node and osascript, when the
+ *  scenario's platform entry declares guiScripting; otherwise changes nothing. */
+function grantGui(values) {
+  const scenario = required(values, 'scenario')
+  const platform = required(values, 'platform')
+  if (!platformEntry(scenario, platform).guiScripting) {
+    console.log(`${scenario} (${platform}) needs no GUI scripting; nothing granted.`)
+    return 0
+  }
+  if (process.platform !== 'darwin') throw new Error('grant-gui authorises System Events on macOS only.')
+  const exec = (file, args) => execFileSync(file, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] })
+  const clients = ancestorPids(exec('/bin/ps', ['-axo', 'pid=,ppid=']), process.pid)
+    .map((pid) => executableFromLsof(exec('/usr/sbin/lsof', ['-a', '-p', String(pid), '-d', 'txt', '-Fn'])))
+    .filter(Boolean)
+  const grants = guiScriptingGrants([...clients, process.execPath, '/usr/bin/osascript'])
+  exec('/usr/bin/sudo', ['/usr/bin/sqlite3', TCC_DATABASES.system, grants.system])
+  exec('/usr/bin/sudo', ['/usr/bin/sqlite3', join(homedir(), TCC_DATABASES.user), grants.user])
+  // Counts only: the clients are runner paths, and this log is public.
+  console.log(`Granted Accessibility and System Events automation to ${grants.user.split('\n').length} executables.`)
+  return 0
+}
+
 function run(values) {
   const scenario = required(values, 'scenario')
   const platform = required(values, 'platform')
@@ -373,6 +752,18 @@ function run(values) {
   const child = spawnSync(process.execPath, argv, { stdio: ['ignore', 'inherit', 'pipe'], encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
   process.stderr.write(child.stderr ?? '')
   const detail = child.signal ? `terminated by ${child.signal}` : child.error ? child.error.message : lastLine(child.stderr)
+  const reportPath = join(outDir, target.report)
+  const reportWritten = existsSync(reportPath)
+  let reportData = null
+  let reportAssessment
+  if (reportWritten) {
+    try {
+      reportData = JSON.parse(readFileSync(reportPath, 'utf8'))
+      reportAssessment = assessScenarioReport({ scenario, platform, report: reportData })
+    } catch (error) {
+      reportAssessment = { problems: [`${target.report} could not be parsed: ${error.message}`], row_verdicts: undefined, notCovered: [] }
+    }
+  }
 
   const lane = laneRecord({
     scenario,
@@ -385,7 +776,9 @@ function run(values) {
     argv,
     exitCode: child.status,
     detail,
-    reportWritten: existsSync(join(outDir, target.report))
+    reportWritten,
+    reportData,
+    reportAssessment
   })
   writeFileSync(join(outDir, 'lane.json'), `${JSON.stringify(lane, null, 2)}\n`)
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, laneSummary(lane))
@@ -427,6 +820,11 @@ function main(argv) {
       else console.log(settings ? 'Fresh profile seeded with the scenario settings.' : 'Fresh profile; the scenario seeds no settings.')
       return 0
     }
+    case 'grant-gui':
+      return grantGui(values)
+    case 'installer-kind':
+      console.log(installerKindForScenario(required(values, 'scenario'), required(values, 'platform')))
+      return 0
     case 'run':
       return run(values)
     case 'scan': {
@@ -437,7 +835,7 @@ function main(argv) {
       return problems.length ? 1 : 0
     }
     default:
-      throw new Error('usage: candidate-scenarios.mjs <resolve|guard|profile|run|scan> ...')
+      throw new Error('usage: candidate-scenarios.mjs <resolve|guard|profile|grant-gui|installer-kind|run|scan> ...')
   }
 }
 

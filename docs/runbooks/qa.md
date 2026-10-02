@@ -41,7 +41,9 @@ streaming. Hosted lanes drive it without touching a developer machine:
 - `windows-qa.yml` installs a released Windows build and runs HK-W, hard-killing only Metis and taking a census of every
   descendant process.
 - `candidate-scenarios.yml` installs the installer of a `qa-candidate.yml` run on main, selected by sha256, on a fresh
-  profile and runs one scenario from the registry in `scripts/qa/candidate-scenarios.mjs` (first: `fault-fatal-relaunch`).
+  profile and runs one scenario from the registry in `scripts/qa/candidate-scenarios.mjs` (`fault-fatal-relaunch`, and
+  `ex-suite` on the Metis DMG: `scripts/qa/ex-suite.mjs --packaged` relaunches the app three times on a seeded ingest
+  ledger, requires that no llama-server starts in the first 120 s of any boot, then starts the model as a positive control).
   It uploads the scenario report and a `lane.json` whose fields match the evidence record.
 
 ```bash verify-dry

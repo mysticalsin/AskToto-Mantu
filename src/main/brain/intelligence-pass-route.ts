@@ -15,7 +15,8 @@ import { getApiKey, getAllowedProviders } from '../store'
 import { localBaseReady } from '../llm/local-routing'
 import { getState as localRuntimeState } from '../llm/local-runtime'
 import { operatorAskTransport, operatorFundedProviders } from '../operator-ingest'
-import { resolvePortalCloudflareModel } from '@shared/ask-routing'
+import { CLI_PROVIDER_IDS, resolvePortalCloudflareModel } from '@shared/ask-routing'
+import { narrowAllowedForCapability, resolveManagedModel } from '../model-policy-client'
 import { intelligenceRequiresLocal } from '@shared/intelligence-pass'
 
 export type IntelligencePassCandidate = {
@@ -53,6 +54,8 @@ function pickConfiguredApiCandidate(
     let model = resolveModelTier(p, s.providerModels, s.providerModelsThinking, 'deep', s.providerModelsDeep)
     if (operatorTransport && p === 'cloudflare') model = resolvePortalCloudflareModel(model, 'deep')
     if (def.kind !== 'cli' && !model) continue
+    // M2-0412: fleet policy pins the final model for a provider it governs, same as the ask/ingest paths.
+    if (def.kind !== 'cli') model = resolveManagedModel(s, 'recap', p, model)
     return { provider: p, model, key, ...(operatorTransport ? { operatorTransport } : {}) }
   }
   return null
@@ -69,7 +72,7 @@ export function intelligencePassLocalReady(s: Settings, allowed: string[] | null
  * while Local is ready. Never the full cloud waterfall.
  */
 export function pickIntelligencePassCandidates(s: Settings): IntelligencePassCandidate[] {
-  const allowed = getAllowedProviders()
+  const allowed = narrowAllowedForCapability(s, getAllowedProviders(), 'recap', [...CLI_PROVIDER_IDS, 'local'])
   const out: IntelligencePassCandidate[] = []
   if (intelligencePassLocalReady(s, allowed)) {
     out.push({ provider: 'local', model: s.localLlm.modelId, key: '' })
