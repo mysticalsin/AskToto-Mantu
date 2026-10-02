@@ -249,9 +249,17 @@ async function rightEdgePageState(page) {
  */
 export function pinnedBridgeCall([method, args]) {
   const pending = (globalThis.__metisSmokeBridgePending ??= new Set())
-  const call = Promise.resolve().then(() => window.toto[method](...args))
+  let call
+  try {
+    call = window.toto[method](...args)
+  } catch (error) {
+    call = Promise.reject(error)
+  }
   pending.add(call)
-  call.finally(() => pending.delete(call))
+  call.then(
+    () => pending.delete(call),
+    () => pending.delete(call)
+  )
   return call
 }
 
