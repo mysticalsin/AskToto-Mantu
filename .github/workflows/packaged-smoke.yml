@@ -255,6 +255,7 @@ jobs:
           fi
           echo "::error::sidecar boot reaper failed; see smoke-report/sidecar-boot-reaper.json."
           exit 1
+
       - name: Fail the job if the POLICY-01 proof itself failed (not a BLOCKED_EXTERNAL row)
         if: always() && steps.policy-smoke.outcome == 'failure'
         run: |
@@ -265,6 +266,7 @@ jobs:
           fi
           echo "::error::POLICY-01 proof failed; see smoke-report/policy-smoke.json."
           exit 1
+
       - name: Fail the job if the mac-helper supervise behaviour proof failed
         if: always() && steps.supervise-helper.outcome == 'failure'
         run: exit 1
@@ -373,6 +375,7 @@ jobs:
           fi
           echo "::error::sidecar boot reaper failed; see smoke-report/sidecar-boot-reaper.json."
           exit 1
+
       - name: Fail the job if the POLICY-01 proof itself failed (not a BLOCKED_EXTERNAL row)
         if: always() && steps.policy-smoke.outcome == 'failure'
         run: |
