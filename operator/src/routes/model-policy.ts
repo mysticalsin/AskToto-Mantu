@@ -42,10 +42,10 @@ export function registerModelPolicyRoutes(): void {
         await auditLog(ctx, 'model-policy.denied', null, safeAuditText(`${ctx.email} is not an owner`))
         return json({ ok: false, error: 'Only the owner may change the fleet model policy.', code: 'not-owner' }, 403)
       }
-      const body = (await request.json().catch(() => null)) as { capabilities?: unknown } | null
+      const body = (await request.json().catch(() => null)) as { capabilities?: unknown; localSpeechPack?: unknown } | null
       if (!body || typeof body !== 'object') return json({ ok: false, error: 'invalid json' }, 400)
       const before = await readModelPolicy(ctx.env.DB)
-      const result = await writeModelPolicy(ctx.env.DB, body.capabilities, ctx.email, ctx.now)
+      const result = await writeModelPolicy(ctx.env.DB, body.capabilities, ctx.email, ctx.now, body.localSpeechPack)
       if (!result.ok) {
         const status = result.error === 'db unbound' ? 503 : 400
         return json({ ok: false, error: result.error }, status)
@@ -55,7 +55,7 @@ export function registerModelPolicyRoutes(): void {
         'model-policy.update',
         null,
         safeAuditText(
-          `before ${JSON.stringify(before?.capabilities ?? null)} after ${JSON.stringify(result.policy.capabilities)}`,
+          `before ${JSON.stringify({ localSpeechPack: before?.localSpeechPack ?? null, capabilities: before?.capabilities ?? null })} after ${JSON.stringify({ localSpeechPack: result.policy.localSpeechPack, capabilities: result.policy.capabilities })}`,
           500
         )
       )

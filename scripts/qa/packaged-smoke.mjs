@@ -64,7 +64,13 @@ import { initialRvRows, RV_BOOT_ROW_ID, runPackagedRvRows } from './golden-flows
 import { AUDIT_POLL_MS, isOverlayUrl, parseAuditLog, readAuditLog } from './golden-flows/smoke-support.mjs'
 import { listProcesses, ownedProcesses, roleCounts, survivors as computeSurvivors } from './owned-processes.mjs'
 
-export { NAVIGATION_GUARD_BOOTSTRAP_PATCH, NAVIGATION_GUARD_SCENARIOS, initialNavigationGuardRows } from './golden-flows/navigation-guard-rows.mjs'
+export {
+  NAVIGATION_GUARD_BOOTSTRAP_PATCH,
+  NAVIGATION_GUARD_SCENARIOS,
+  initialNavigationGuardRows,
+  navigationMeetingTitles,
+  seedNavigationMeetings
+} from './golden-flows/navigation-guard-rows.mjs'
 export {
   initialOverlayStabilityRows,
   OVERLAY_STABILITY_SCENARIOS,

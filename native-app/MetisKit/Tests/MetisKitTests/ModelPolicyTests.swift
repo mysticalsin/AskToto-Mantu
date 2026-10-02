@@ -21,7 +21,7 @@ final class ModelPolicyTests: XCTestCase {
 
     func testCanonicalPayloadMatchesTypeScript() {
         let doc = fullDocument()
-        let expected = "metis-model-policy.v1.1000.1000.owner@example.com." +
+        let expected = "metis-model-policy.v1.1000.1000.owner@example.com.localSpeechPack=offered." +
             "askChat=anthropic:claude-sonnet-4-6[]|" +
             "commandAgent=anthropic:claude-sonnet-4-6[]|" +
             "recap=anthropic:claude-sonnet-4-6[]|" +
