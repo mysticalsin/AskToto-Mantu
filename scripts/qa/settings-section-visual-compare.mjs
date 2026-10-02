@@ -114,8 +114,8 @@ function screenshotCoversBox(buffer, box) {
   )
 }
 
-function sectionCaptureClipped({ buffer, sectionBox }) {
-  return !screenshotCoversBox(buffer, sectionBox)
+function sectionCaptureClipped({ buffer, sectionBox, panelBox }) {
+  return !fitsInside(sectionBox, panelBox) || !screenshotCoversBox(buffer, sectionBox)
 }
 
 async function installDeterministicSettingsQaBridge(page) {
@@ -364,6 +364,7 @@ async function captureSections(page, appOutDir) {
     if (!stable) console.warn(`settings-section-visual-compare warning=tab did not fully settle tab=${slug(tab)}`)
 
     const tabPanel = page.locator('main[role="tabpanel"]')
+    const panelBox = await tabPanel.boundingBox()
     const count = await tabPanel.locator('section').count()
     for (let index = 0; index < count; index += 1) {
       const section = tabPanel.locator('section').nth(index)
@@ -375,7 +376,7 @@ async function captureSections(page, appOutDir) {
       const file = join(appOutDir, `${key}.png`)
       const box = await section.boundingBox()
       const buffer = await section.screenshot({ path: file, animations: 'disabled', caret: 'hide' })
-      const clipped = sectionCaptureClipped({ buffer, sectionBox: box })
+      const clipped = sectionCaptureClipped({ buffer, sectionBox: box, panelBox })
       sections.push({
         key,
         tab,
