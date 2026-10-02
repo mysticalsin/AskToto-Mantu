@@ -20,6 +20,7 @@ import {
   pinnedExpression,
   recordSample,
   releaseExpression,
+  sampleExpression,
   shouldProbeHistory,
   syntheticDatalessPlan,
   runPurpose,
@@ -74,6 +75,7 @@ function report(overrides: Record<string, unknown> = {}) {
 afterEach(() => {
   vi.useRealTimers()
   delete globals[PENDING_GLOBAL]
+  delete (globalThis as Record<string, unknown>).__st1since
 })
 
 describe('withTimeout', () => {
@@ -135,8 +137,59 @@ describe('pinnedExpression', () => {
     })
   })
 
+  it('still returns the expression value when the in-app timer cannot be started', async () => {
+    const originalSetTimeout = globalThis.setTimeout
+    globalThis.setTimeout = (() => {
+      throw new TypeError('testEnabled is not a function')
+    }) as unknown as typeof setTimeout
+    try {
+      await expect(evaluateGlobally(pinnedExpression('timer-6', '41 + 1', 1_000))).resolves.toEqual({ ok: true, value: 42 })
+    } finally {
+      globalThis.setTimeout = originalSetTimeout
+    }
+  })
+
   it('releasing a key that was never stored is harmless', () => {
     expect(() => evaluateGlobally(releaseExpression('never-stored'))).not.toThrow()
+  })
+})
+
+describe('sampleExpression', () => {
+  it('carries a pre-sample boot block into sample 0 and includes the interval after the reset', async () => {
+    let loopMaxNs = 80_000_000
+    const reset = vi.fn(() => {
+      loopMaxNs = 0
+    })
+    ;(globalThis as Record<string, unknown>).__st1since = {
+      get max() {
+        return loopMaxNs
+      },
+      reset
+    }
+    const originalGetBuiltinModule = (process as unknown as { getBuiltinModule?: (name: string) => unknown }).getBuiltinModule
+    ;(process as unknown as { getBuiltinModule?: (name: string) => unknown }).getBuiltinModule = (name) => {
+      if (name === 'node:fs/promises') {
+        return {
+          writeFile: async () => {
+            loopMaxNs = 35_000_000
+          }
+        }
+      }
+      if (name === 'node:dns/promises') return { lookup: async () => ({ address: '127.0.0.1', family: 4 }) }
+      throw new Error(`unexpected module ${name}`)
+    }
+    try {
+      await expect(evaluateGlobally(sampleExpression('probe.txt'))).resolves.toMatchObject({
+        loopMaxSinceLastMs: 80,
+        loopMaxDuringWriteMs: 35,
+        writeMs: expect.any(Number),
+        lookupMs: expect.any(Number),
+        resources: expect.any(Object)
+      })
+      expect(reset).toHaveBeenCalledTimes(2)
+    } finally {
+      ;(process as unknown as { getBuiltinModule?: (name: string) => unknown }).getBuiltinModule = originalGetBuiltinModule
+    }
   })
 })
 
@@ -573,6 +626,15 @@ describe('buildReport', () => {
       exactLaunchOffset: false
     })
     expect(report({ attribution: { mainLog: { error: 'no require' }, appEvidence: null } }).mainLog).toEqual({ error: 'no require' })
+  })
+
+  it('reports when Profiler.start was requested and answered without changing the verdict', () => {
+    const plain = report()
+    const profiler = { requestedAtMs: 615, answeredAtMs: 694, startedAtMs: 694, stoppedAtMs: 300_000, file: 'st-1.cpuprofile' }
+    const withProfiler = report({ measured: { ...emptyRun(), samples: [goodSample(1_000), goodSample(2_000)], loop: { p99Ms: 12, maxMs: 40 }, profiler } })
+    expect(withProfiler.cpuProfile).toEqual(profiler)
+    expect(withProfiler.criteria).toEqual(plain.criteria)
+    expect(withProfiler.verdict).toBe(plain.verdict)
   })
 
   it('returns identical criteria and verdict with and without witness data, and carries bootStages and witness (M2-0515)', () => {

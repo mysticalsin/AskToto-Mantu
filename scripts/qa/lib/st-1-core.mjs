@@ -65,17 +65,46 @@ export function pinnedExpression(key, expression, ms) {
   return `(() => {
   const pending = (globalThis.${PENDING_GLOBAL} ??= {})
   let timer
-  const bounded = Promise.race([
-    Promise.resolve()
-      .then(() => (${expression}))
-      .then((value) => ({ ok: true, value }), (error) => ({ ok: false, error: String(error?.message ?? error) })),
-    new Promise((resolve) => {
+  const clearBound = () => {
+    try {
+      if (timer !== undefined) clearTimeout(timer)
+    } catch {}
+  }
+  const settled = Promise.resolve()
+    .then(() => (${expression}))
+    .then((value) => ({ ok: true, value }), (error) => ({ ok: false, error: String(error?.message ?? error) }))
+  let timeout = new Promise(() => {})
+  try {
+    timeout = new Promise((resolve) => {
       timer = setTimeout(() => resolve({ ok: false, timedOut: true }), ${Number(ms)})
     })
-  ])
-  bounded.then(() => clearTimeout(timer))
+  } catch {}
+  const bounded = Promise.race([settled, timeout]).finally(clearBound)
   pending[${JSON.stringify(key)}] = bounded
   return bounded
+})()`
+}
+
+/** One app-side sample expression. The reported max covers the interval before the sample plus the probe
+ *  write after the histogram reset, so a main-loop block that straddles the reset still reaches this sample. */
+export function sampleExpression(probeFile) {
+  return `(async () => {
+  const loopMaxBeforeWriteMs = __st1since.max / 1e6
+  __st1since.reset()
+  const resources = {}
+  if (typeof process.getActiveResourcesInfo === 'function') {
+    for (const type of process.getActiveResourcesInfo()) resources[type] = (resources[type] ?? 0) + 1
+  }
+  const { writeFile } = process.getBuiltinModule('node:fs/promises')
+  const { lookup } = process.getBuiltinModule('node:dns/promises')
+  let started = performance.now()
+  await writeFile(${JSON.stringify(probeFile)}, String(started))
+  const writeMs = performance.now() - started
+  const loopMaxDuringWriteMs = __st1since.max / 1e6
+  __st1since.reset()
+  started = performance.now()
+  await lookup('localhost')
+  return { writeMs, loopMaxDuringWriteMs, lookupMs: performance.now() - started, loopMaxSinceLastMs: Math.max(loopMaxBeforeWriteMs, loopMaxDuringWriteMs), resources }
 })()`
 }
 
