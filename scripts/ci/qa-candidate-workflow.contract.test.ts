@@ -256,6 +256,73 @@ describe('QA candidate History design evidence (M2-0032)', () => {
   })
 })
 
+describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
+  const strictJobs = ['st1-mac-fifo', 'st1-mac-control']
+
+  it('moves only the strict fifo and control rows to the owner self-hosted Mac label', () => {
+    for (const name of strictJobs) {
+      expect(job(name)).toMatch(/^    runs-on: \[self-hosted, macOS, ARM64, metis-owner-mac\]$/m)
+    }
+
+    expect(job('st1-mac-dataless-synthetic')).toMatch(/^    runs-on: macos-latest$/m)
+    expect(job('st1-mac-history')).toMatch(/^    runs-on: macos-latest$/m)
+    expect(job('st1-mac-window')).toMatch(/^    runs-on: macos-latest$/m)
+  })
+
+  it('keeps dispatch and same-repository PRs, but refuses fork pull requests before code reaches the owner Mac', () => {
+    for (const name of strictJobs) {
+      expect(job(name)).toMatch(
+        /^    if: github\.event_name != 'pull_request' \|\| github\.event\.pull_request\.head\.repo\.full_name == github\.repository$/m
+      )
+    }
+  })
+
+  it('proves the owner-account sandbox before Node setup or candidate artifact download', () => {
+    for (const name of strictJobs) {
+      const jobSteps = steps(name)
+      const checkout = jobSteps.findIndex((step) => step.includes('actions/checkout@'))
+      const probe = jobSteps.findIndex((step) => step.includes('name: Prove owner-account sandbox denies private state'))
+      const setup = jobSteps.findIndex((step) => step.includes('actions/setup-node@'))
+      const download = jobSteps.findIndex((step) => step.includes('actions/download-artifact@'))
+
+      expect(checkout).toBe(0)
+      expect(probe).toBe(1)
+      expect(probe).toBeLessThan(setup)
+      expect(probe).toBeLessThan(download)
+
+      const block = jobSteps[probe]
+      expect(block).toContain('bash scripts/hermetic/run-under-owner-sandbox.sh /bin/ls "$target"')
+      expect(block).toContain('"$HOME/Library/CloudStorage"')
+      expect(block).toContain('"$HOME/Library/Application Support/Metis"')
+      expect(block).toContain('Operation not permitted|deny|sandbox')
+      expect(block).toContain('exit 1')
+    }
+  })
+
+  it('runs every strict candidate verification and launch through the owner-account sandbox wrapper', () => {
+    for (const name of strictJobs) {
+      const block = job(name)
+      expect(block).toContain('bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify')
+      expect(block).toContain('bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/st-1.mjs')
+      expect(block).not.toMatch(/(?:^|\n) {10}node scripts\/qa\/(?:provenance|st-1)\.mjs/)
+    }
+  })
+
+  it('keeps strict rows report-only and removes temp profiles and unzipped candidates on every outcome', () => {
+    for (const name of strictJobs) {
+      const block = job(name)
+      expect(jobContinueOnError(block)).toBe('true')
+      expect(block).toMatch(/^    env:\n      TMPDIR: \$\{\{ runner\.temp \}\}$/m)
+
+      const cleanup = steps(name).find((step) => step.includes('name: Remove ST-1 temporary state')) ?? ''
+      expect(cleanup).toMatch(/^        if: always\(\)$/m)
+      expect(cleanup).toContain('rm -rf "$RUNNER_TEMP"/metis-st1-*')
+      expect(cleanup).toContain('"$RUNNER_TEMP"/st1-unzip-*')
+      expect(cleanup).toContain('"$RUNNER_TEMP"/st1-witness-*')
+    }
+  })
+})
+
 describe('QA candidate workflow: the shipped window gate (M2-0519)', () => {
   const block = jobBlocks.get('st1-mac-window') ?? ''
 
