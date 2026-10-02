@@ -27,6 +27,9 @@ const POLL_MS = 250
 const VIEWPORT = Object.freeze({ width: 900, height: 820 })
 const FIT_TOLERANCE_PX = 1
 const PNG_SIGNATURE = '89504e470d0a1a0a'
+const CHILD_EXIT_TIMEOUT_MS = 10_000
+const CHILD_KILL_TIMEOUT_MS = 5_000
+const PROFILE_CLEANUP_TIMEOUT_MS = 20_000
 
 function usage() {
   console.error('Usage: node scripts/qa/settings-section-visual-compare.mjs <before executable> <after executable> <out dir>')
@@ -43,6 +46,43 @@ function slug(value) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function waitForChildExit(child, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  while (child.exitCode === null && child.signalCode === null && Date.now() < deadline) await sleep(POLL_MS)
+  return child.exitCode !== null || child.signalCode !== null
+}
+
+async function stopChild(child) {
+  if (await waitForChildExit(child, CHILD_EXIT_TIMEOUT_MS)) return true
+  child.kill('SIGKILL')
+  return await waitForChildExit(child, CHILD_KILL_TIMEOUT_MS)
+}
+
+async function removeProfileDir(profile, options = {}) {
+  const rm = options.rm ?? rmSync
+  const wait = options.wait ?? sleep
+  const timeoutMs = options.timeoutMs ?? PROFILE_CLEANUP_TIMEOUT_MS
+  const deadline = Date.now() + timeoutMs
+  let lastError = null
+
+  do {
+    try {
+      rm(profile, { recursive: true, force: true })
+      return { removed: true }
+    } catch (err) {
+      lastError = err
+      const code = err && typeof err === 'object' && 'code' in err ? err.code : null
+      if (!['EBUSY', 'ENOTEMPTY', 'EPERM'].includes(code)) throw err
+      await wait(POLL_MS)
+    }
+  } while (Date.now() < deadline)
+
+  return {
+    removed: false,
+    error: lastError instanceof Error ? lastError.message : String(lastError)
+  }
 }
 
 function fitsInside(inner, outer) {
@@ -285,10 +325,9 @@ async function captureApp(label, executable, outDir) {
     return { label, status: 'CAPTURED', sectionCount: sections.length, sections }
   } finally {
     await browser?.close().catch(() => undefined)
-    const deadline = Date.now() + 10_000
-    while (child.exitCode === null && child.signalCode === null && Date.now() < deadline) await sleep(POLL_MS)
-    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
-    rmSync(profile, { recursive: true, force: true })
+    await stopChild(child)
+    const cleanup = await removeProfileDir(profile)
+    if (!cleanup.removed) console.warn(`settings-section-visual-compare warning=${label} profile cleanup deferred`)
   }
 }
 
@@ -407,4 +446,4 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   })
 }
 
-export { compare, fitsInside, formatFailureSummary, pngSize, screenshotCoversBox, sectionCaptureClipped }
+export { compare, fitsInside, formatFailureSummary, pngSize, removeProfileDir, screenshotCoversBox, sectionCaptureClipped }

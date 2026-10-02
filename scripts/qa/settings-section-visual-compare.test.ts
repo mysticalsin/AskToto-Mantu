@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { compare, formatFailureSummary, pngSize, screenshotCoversBox, sectionCaptureClipped } from './settings-section-visual-compare.mjs'
+import { compare, formatFailureSummary, pngSize, removeProfileDir, screenshotCoversBox, sectionCaptureClipped } from './settings-section-visual-compare.mjs'
 
 type Section = {
   key: string
@@ -121,5 +121,24 @@ describe('settings-section-visual-compare compare', () => {
 
     expect(formatFailureSummary(report)).toContain('brain-01-models')
     expect(formatFailureSummary(report)).toContain('pixels_changed')
+  })
+
+  it('retries transient Windows profile cleanup locks without failing the visual comparison', async () => {
+    let attempts = 0
+    const cleanup = await removeProfileDir('profile', {
+      timeoutMs: 1_000,
+      wait: async () => undefined,
+      rm: () => {
+        attempts += 1
+        if (attempts === 1) {
+          const err = new Error('resource busy or locked') as NodeJS.ErrnoException
+          err.code = 'EBUSY'
+          throw err
+        }
+      }
+    })
+
+    expect(cleanup).toEqual({ removed: true })
+    expect(attempts).toBe(2)
   })
 })
