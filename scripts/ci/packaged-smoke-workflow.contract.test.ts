@@ -324,6 +324,26 @@ describe('packaged-smoke workflow HK-M cycles input', () => {
   })
 })
 
+describe('packaged-smoke workflow report-aware failure gates', () => {
+  it.each([
+    ['Fail the job if the sidecar boot reaper proof itself failed (not a BLOCKED_EXTERNAL row)', 'smoke-report/sidecar-boot-reaper.json', ".result || 'missing'", 'Sidecar boot reaper blocked'],
+    ['Fail the job if the POLICY-01 proof itself failed (not a BLOCKED_EXTERNAL row)', 'smoke-report/policy-smoke.json', ".blockedExternal === true ? 'true' : 'false'", 'POLICY-01 blocked']
+  ])('%s inspects its content-free report before failing', (name, report, expression, warningTitle) => {
+    const matches = workflow.split(`      - name: ${name}\n`).slice(1)
+    expect(matches, `${name} gates`).toHaveLength(2)
+    for (const match of matches) {
+      const block = `      - name: ${name}\n${match.split('\n      - ')[0]}`
+      expect(block).toContain(report)
+      expect(block).toContain('node -e')
+      expect(block).toContain(expression)
+      expect(block).toContain(`::warning title=${warningTitle}::`)
+      expect(block).toContain('::error::')
+      expect(block).toMatch(/\n\s+exit 0\n/)
+      expect(block).toMatch(/\n\s+exit 1\n/)
+    }
+  })
+})
+
 describe('packaged-smoke workflow supply chain', () => {
   it('pins every action to a full commit sha', () => {
     const uses = [...workflow.matchAll(/^\s+- uses: (\S+)/gm)].map((match) => match[1])
