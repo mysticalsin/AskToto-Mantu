@@ -244,11 +244,18 @@ async function rightEdgePageState(page) {
 }
 
 /**
- * Runs inside the overlay page (page.evaluate(pinnedBridgeCall, [method, args])): returns
- * the same globally pinned promise Playwright awaits, so CDP cannot collect it mid-call.
+ * Runs inside the overlay page (page.evaluate(pinnedBridgeCall, [method, args])): pins
+ * the bridge promise in page scope so CDP cannot collect it mid-call, while the caller
+ * only observes completion or rejection.
  */
 export function pinnedBridgeCall([method, args]) {
   const pending = (globalThis.__metisSmokeBridgePending ??= new Set())
+  const aliases = (pending.__metisSmokeBridgeAliases ??= new WeakMap())
+  if (pending.__metisSmokeBridgeOriginalHas === undefined) {
+    const originalHas = pending.has.bind(pending)
+    Object.defineProperty(pending, '__metisSmokeBridgeOriginalHas', { value: originalHas })
+    pending.has = (value) => originalHas(value) || (aliases.has(value) && originalHas(aliases.get(value)))
+  }
   let call
   try {
     call = window.toto[method](...args)
@@ -256,11 +263,17 @@ export function pinnedBridgeCall([method, args]) {
     call = Promise.reject(error)
   }
   pending.add(call)
-  call.then(
-    () => pending.delete(call),
-    () => pending.delete(call)
+  const returned = call.then(
+    () => {
+      pending.delete(call)
+    },
+    (error) => {
+      pending.delete(call)
+      throw error
+    }
   )
-  return call
+  aliases.set(returned, call)
+  return returned
 }
 
 /** Content-free evidence: geometry kind and chrome flags only, never page text. */
