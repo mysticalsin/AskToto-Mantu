@@ -33,6 +33,7 @@ import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, join, normalize, relative, sep } from 'node:path'
 import { createAdmission, type Admission, type Lane } from './admission'
 import { createDatalessDetector, type ContentPresence, type DatalessDetector, type FileVersion } from './dataless'
+import { isLocalWrite } from './local-writes'
 
 /** Threads libuv starts when UV_THREADPOOL_SIZE is unset, and the most it accepts (libuv src/threadpool.c). */
 const DEFAULT_POOL_SIZE = 4
@@ -46,6 +47,10 @@ const METADATA_DEADLINE_MS = 2_000
 const CONTENT_DEADLINE_MS = 5_000
 /** An explicit open of one cloud-only file waits for the provider's download this long. */
 export const HYDRATE_DEADLINE_MS = 60_000
+/** How long a read of only versions this process wrote waits on the placeholder probe (a cold powershell.exe
+ *  on a slow Windows machine can outlive every deadline above) before it counts them local. Under
+ *  METADATA_DEADLINE_MS, so a classify of such files answers too. */
+const LOCAL_WRITE_PROBE_WAIT_MS = 1_000
 /** How long a read that returned no content is answered from memory, without touching the file. */
 const FAILURE_TTL_MS = 60_000
 /** Abort reason of a request's own deadline, which tells it apart from the caller's abort. */
@@ -328,10 +333,23 @@ export function createStorageGateway({
   }
 
   /** The detector's verdicts, or none (every file then counts as unknown) when the request ends first. The
-   *  probe runs on, and the detector caches its answer for the next call. */
+   *  probe runs on, and the detector caches its answer for the next call. A version this process wrote
+   *  itself (local-writes.ts) is still probed and the probe's answer wins, but where the probe cannot tell
+   *  ('unknown') it is local, and a batch of only such versions waits LOCAL_WRITE_PROBE_WAIT_MS at most. */
   async function presenceWithin(files: readonly FileVersion[], request: Request): Promise<Map<string, ContentPresence>> {
-    const verdicts = await untilEnded(presenceOf(files), request, 'waiting')
-    return verdicts instanceof Map ? verdicts : new Map<string, ContentPresence>()
+    const ours = files.filter(isLocalWrite)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const probed = presenceOf(files)
+    const pending =
+      ours.length > 0 && ours.length === files.length
+        ? Promise.race([probed, new Promise<Map<string, ContentPresence>>((resolve) => (timer = setTimeout(() => resolve(new Map()), LOCAL_WRITE_PROBE_WAIT_MS)))])
+        : probed
+    const verdicts = await untilEnded(pending, request, 'waiting')
+    clearTimeout(timer)
+    if (!(verdicts instanceof Map)) return new Map<string, ContentPresence>()
+    const presence = new Map(verdicts)
+    for (const file of ours) if ((presence.get(file.path) ?? 'unknown') === 'unknown') presence.set(file.path, 'local')
+    return presence
   }
 
   async function resolveRoot(base: string, request: Request): Promise<Settled<string>> {
