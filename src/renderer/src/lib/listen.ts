@@ -793,6 +793,7 @@ export function useListen(
 
   const workerRef = useRef<Worker | null>(null)
   const loadedQualityRef = useRef<'best' | 'fast' | null>(null) // quality the warm worker was loaded with
+  const loadingBundledWhisperRef = useRef<boolean | null>(null)
   // The quality the USER actually asked for when start() was called, captured unconditionally of engine
   // and independent of loadedQualityRef (which stays null whenever the whisper worker hasn't loaded yet,
   // e.g. mid-Parakeet/Apple session). fallBackToWhisper and armNetworkRetry's retry() read this so a
@@ -1397,6 +1398,7 @@ export function useListen(
         setState((s) => ({ ...s, loadingPct: (m as { pct?: number }).pct ?? null }))
       } else if (m.type === 'ready') {
         readyRef.current = true
+        loadingBundledWhisperRef.current = null
         if (m.engine) console.info('[whisper] engine:', m.engine)
         // Clear the offline/reconnecting note on a successful recovery — but ONLY that exact note, so an
         // unrelated sticky message (THEM_SILENT_MSG, the Parakeet-fallback footnote) is never clobbered.
@@ -1553,6 +1555,7 @@ export function useListen(
     console.warn(`[listen] ${failedEngine} failing repeatedly — switching to Whisper for the rest of this session`)
     engineRef.current = 'whisper'
     readyRef.current = false
+    loadingBundledWhisperRef.current = null
     parakeetFailures.current = 0
     onFallbackRef.current?.(`${failedEngine === 'apple' ? 'Apple Speech' : 'Parakeet'} failed repeatedly`)
     // Keep fallback silent; onEngineFallback records its Settings footnote.
@@ -1560,6 +1563,7 @@ export function useListen(
     void getAsrBundled()
       .then((bundled) => {
         if (sessionEpochRef.current !== epoch || engineRef.current !== 'whisper') return
+        loadingBundledWhisperRef.current = bundled
         ensureWorker().postMessage({ type: 'init', quality: requestedQualityRef.current, bundled, language: asrLanguageRef.current })
       })
       .catch(() => {})
@@ -1585,6 +1589,7 @@ export function useListen(
   const armNetworkRetry = useCallback(
     (rawMessage: string): boolean => {
       if (readyRef.current) return false // already loaded — a per-window error, not a load failure
+      if (loadingBundledWhisperRef.current) return false // bundled loads are local; surface repair errors as-is
       if (!looksLikeNetworkError(rawMessage, navigator.onLine)) return false // unrelated failure — surface as-is
       setState((s) => ({ ...s, loading: false, loadingPct: null, error: OFFLINE_MSG }))
       disarmNetworkRetry()
@@ -1598,6 +1603,7 @@ export function useListen(
         void getAsrBundled()
           .then((bundled) => {
             if (!liveRef.current || readyRef.current) return
+            loadingBundledWhisperRef.current = bundled
             ensureWorker().postMessage({ type: 'init', quality: requestedQualityRef.current, bundled, language: asrLanguageRef.current })
           })
           .catch(() => {})
@@ -2233,6 +2239,7 @@ export function useListen(
         provisionalRef.current = null // fresh session — no carried-over placeholder from the previous one
         pendingWhisperEmbedRef.current = null
         pendingWhisperStartedAtRef.current = undefined
+        loadingBundledWhisperRef.current = null
         busy.current = false
         liveRef.current = true
         wantsSystemRef.current = source === 'system' || source === 'both'
@@ -2458,6 +2465,7 @@ export function useListen(
               workerRef.current = null
               readyRef.current = false
             }
+            if (!workerRef.current) readyRef.current = false
             loadedQualityRef.current = quality
             setState((s) => ({ ...s, loading: !readyRef.current }))
             // The worker selects the model: 'best' → WebGPU + whisper-large-v3-turbo (~99 languages); 'fast'
@@ -2474,6 +2482,7 @@ export function useListen(
             } else {
               // resetFollow: a fresh session must never inherit the previous meeting's converged
               // language-follow state from a warm worker (see whisper.worker.ts's init handler).
+              loadingBundledWhisperRef.current = bundled
               ensureWorker().postMessage({ type: 'init', quality, bundled, language: asrLanguageRef.current, resetFollow: true })
             }
             if (readyRef.current) pump() // warm worker already ready → drain immediately

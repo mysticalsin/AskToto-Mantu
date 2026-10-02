@@ -1559,6 +1559,18 @@ describe('useListen Stop flush ownership', () => {
 
 
 describe('M2-0535 Whisper initialization error ownership', () => {
+  it('surfaces a bundled Whisper load failure as repair guidance even while offline', async () => {
+    Object.defineProperty(navigator, 'onLine', { value: false, configurable: true })
+    await render('parakeet').start('system', 'fast', 'whisper', 'English')
+    await settle()
+    const worker = workers.at(-1)!
+    worker.emit({ type: 'error', message: BUNDLE_REPAIR })
+    await settle()
+
+    expect(workers).toHaveLength(1)
+    expect(render('whisper')).toMatchObject({ error: BUNDLE_REPAIR, loading: false, listening: true })
+  })
+
   it.each([false, true])('surfaces a first-Listen load failure with prewarm=%s', async (prewarm) => {
     const api = render('whisper')
     if (prewarm) await settle()
@@ -1631,7 +1643,7 @@ describe('M2-0535 Whisper initialization error ownership', () => {
   })
 
   it('retries a first-Listen network load failure and surfaces a repair failure from the replacement', async () => {
-    await render('whisper').start('system', 'fast', 'whisper', 'English')
+    await render('parakeet').start('system', 'fast', 'whisper', 'English')
     await settle()
     const retired = workers.at(-1)!
     retired.emit({ type: 'error', message: 'Failed to fetch' })
@@ -1653,6 +1665,24 @@ describe('M2-0535 Whisper initialization error ownership', () => {
     vi.mocked(window.toto.parakeetStatus).mockRejectedValueOnce(new Error('Synthetic unavailable Parakeet'))
     await render('parakeet').start('system', 'fast', 'parakeet', 'English')
     await settle()
+    const worker = workers.at(-1)!
+    expect(worker.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'init' }))
+    worker.emit({ type: 'error', message: BUNDLE_REPAIR })
+    await settle()
+    expect(render('parakeet')).toMatchObject({ error: BUNDLE_REPAIR, loading: false, listening: true })
+  })
+
+  it('surfaces a load failure after a mid-session fallback to Whisper', async () => {
+    vi.mocked(window.toto.parakeetFeed).mockRejectedValue(new Error('Synthetic native decode rejected'))
+    await render('parakeet').start('system', 'fast', 'parakeet', 'English')
+    await settle()
+    const worklet = worklets.at(-1)!
+
+    for (let i = 0; i < 3; i++) {
+      worklet.emit({ audio: Float32Array.from([0.2 + i / 10]), partial: false })
+      await settle()
+    }
+
     const worker = workers.at(-1)!
     expect(worker.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'init' }))
     worker.emit({ type: 'error', message: BUNDLE_REPAIR })
@@ -1719,5 +1749,31 @@ describe('M2-0535 Whisper initialization error ownership', () => {
     worker.emit({ type: 'error', message: BUNDLE_REPAIR })
     await settle()
     expect(render('whisper')).toMatchObject({ error: BUNDLE_REPAIR, loading: false, listening: true })
+  })
+
+  it('does not dequeue audio while a cold Whisper start waits for the bundled-path lookup', async () => {
+    await render('apple').start('system', 'fast', 'apple', 'English')
+    await settle()
+
+    let resolveBundled!: (bundled: boolean) => void
+    vi.mocked(window.toto.asrBundled).mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => { resolveBundled = resolve })
+    )
+    await render('parakeet').start('system', 'fast', 'whisper', 'English')
+    await settle()
+    const worklet = worklets.at(-1)!
+    worklet.emit({ audio: Float32Array.from([0.2]), partial: false })
+    await settle()
+
+    expect(workers).toHaveLength(0)
+    expect(render('whisper')).toMatchObject({ loading: true, listening: true })
+
+    resolveBundled(true)
+    await settle()
+    const worker = workers.at(-1)!
+    worker.emit({ type: 'ready', qualityDegraded: false })
+    await settle()
+
+    expect(worker.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'audio' }), expect.any(Array))
   })
 })
