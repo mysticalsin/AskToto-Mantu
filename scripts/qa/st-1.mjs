@@ -14,7 +14,7 @@
  *     the representative-profile shape (53 local placeholder meetings, 6 FIFO meetings, a FIFO
  *     `.brain/index.json` and FIFO `.brain` entity files). It proves the main-thread and threadpool
  *     guarantees on candidate bytes; SF_DATALESS detection on real evicted files is not measured here.
- *     Its verdict uses the fifo row's exercised rule.
+ *     Its verdict uses the fifo row's refused-without-opening exercise rule.
  * `none` places no fixture: the control row, which tells a boot-time block apart from a fixture reader.
  *
  * Attribution evidence, reported and never judged: every sample's time since spawn, the loop's max since
@@ -102,7 +102,8 @@ import {
   shouldProbeHistory,
   timedCallsExpression,
   windowConstructionGate,
-  withTimeout
+  withTimeout,
+  writeJsonToStdout
 } from './lib/st-1-core.mjs'
 
 const FIXTURE_KINDS = ['fifo', 'dataless', 'synthetic-dataless', 'none']
@@ -447,7 +448,8 @@ const MAIN_LOG_PATH = `(() => {
 /** History's open: recallList and brainStatus started together, as History does, each timed on its own. */
 const HISTORY_OPEN_CALLS = timedCallsExpression(
   {
-    recallList: 'window.toto.recallList().then((rows) => ({ rows: rows.length, notDownloaded: rows.filter((row) => row.notDownloaded).length }))',
+    recallList:
+      'window.toto.recallList().then((rows) => ({ rows: rows.length, notDownloaded: rows.filter((row) => row.notDownloaded).length, unavailable: rows.filter((row) => row.notDownloaded || row.locked).length }))',
     brainStatus: 'window.toto.brainStatus().then(() => true)'
   },
   HISTORY_CALL_BOUND_MS
@@ -692,12 +694,16 @@ function readStorageSaturations(mainLog) {
   }
 }
 
-/** Whether the run actually reached the fixtures, and (dataless only) whether they stayed unread. */
+/** Fixture state after the run: FIFO-backed rows fail if anything opened them; dataless rows also prove
+ * they stayed unread. */
 function collectExercisedEvidence(kind, fixtures, mainLogPath, mainLogOffset, root) {
   if (kind === 'none') return { exercised: null }
   if (kind === 'fifo' || kind === 'synthetic-dataless') {
     const opened = fixtures.filter((fifo) => releaseFifo(fifo))
-    const evidence = { exercised: opened.length >= 1, fixturesOpened: opened.map((fifo) => relative(root, fifo)) }
+    const evidence = {
+      fixturesOpened: opened.map((fifo) => relative(root, fifo)),
+      fifoMeetingFixtures: fixtures.filter((fixture) => fixture.endsWith('.md')).length
+    }
     // stat reads a FIFO's flags without opening it, so this records the fact without a reader.
     return kind === 'fifo' ? evidence : { ...evidence, sfDatalessSet: datalessFlags(fixtures).some(Boolean) }
   }
@@ -966,7 +972,7 @@ async function main() {
   if (cleanupError) throw cleanupError
 
   const report = currentReport()
-  console.log(JSON.stringify(report, null, 2))
+  await writeJsonToStdout(report)
   return report.verdict === 'PASS' ? 0 : 1
 }
 
