@@ -23,13 +23,7 @@ import {
 import { join, basename, dirname, resolve } from 'node:path'
 import { readFileSync, existsSync, writeFileSync, readdirSync, unlinkSync, createReadStream, statSync, renameSync, rmdirSync, mkdirSync, copyFileSync } from 'node:fs'
 
-// Enterprise checkbox: DevTools stay reachable only where they are a development tool. No secret ever
-// reaches the renderer (publicSettings strips key material), but DevTools on a packaged build still
-// exposes in-memory renderer state (transcript text, screen-context strings) to anyone at the keyboard,
-// and every security questionnaire asks. Packaged builds ignore ASKTOTO_DEVTOOLS: devEnv() returns
-// undefined once isPackagedBuild() is true, so there is no env backdoor in a shipped DMG/EXE.
-// Shared with intelligence.ts so every window in src/main gates on ONE decision — see
-// dev-env.ts's devToolsEnabled() for why this moved out of this file.
+// DevTools stay reachable only where dev-env permits them; packaged builds ignore ASKTOTO_DEVTOOLS.
 const DEVTOOLS_ENABLED = devToolsEnabled()
 import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
@@ -125,6 +119,7 @@ import {
   listDustAgents,
   dustSelectedAgentVision,
   recordMeetingSummarized,
+  getAdminLocalSpeechPackPolicy,
   getSonioxApiKey,
   setSonioxApiKey,
   clearSonioxApiKey
@@ -177,8 +172,8 @@ import {
   portalFundedCloudflareModel,
   workingCliOrder
 } from '@shared/ask-routing'
-import { getActiveModelPolicy, narrowAllowedForCapability, resolveManagedModel } from './model-policy-client'
-import { localModelAllowedByPolicy, MODEL_POLICY_CAPABILITIES } from '@shared/model-policy'
+import { getActiveModelPolicy, modelPolicyCapabilitiesForSettings, narrowAllowedForCapability, resolveLocalSpeechPackPolicy, resolveManagedModel } from './model-policy-client'
+import { localModelAllowedByPolicy } from '@shared/model-policy'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import { registerWriteupIpc } from './ipc/writeup'
 import * as fmRuntime from './llm/fm-runtime'
@@ -659,9 +654,10 @@ import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
 import { buildTrayInStages, createSingleFlight, formatTrayAccelerator, loadPresizedTrayIcon, scheduleTrayAfterFirstPaint, trayIconPaths, yieldToEventLoop } from './boot-tray'
-import { BOOT_WINDOW_OPTIONS, BOOT_WINDOW_VARIANT, yieldBeforeBootWindow } from './boot-window-rendering'
+import { BOOT_WINDOW_OPTIONS, BOOT_WINDOW_VARIANT, takeBootWindowPrewarmMs, yieldBeforeBootWindow } from './boot-window-rendering'
 import { isBootFirstShowDeferred, navigateWindow, scheduleCurrentFirstShow, withBootFirstShowDeferred } from './lifecycle/first-show'
 import { createBootWork } from './lifecycle/boot-work'
+import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
 import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
 import { createResponsivenessTracker } from './infra/observability/responsiveness-tracker'
@@ -1893,12 +1889,22 @@ function initializeImportJobs(): void {
     newId: () => randomBytes(16).toString('hex'),
     concurrency: MAX_CONCURRENT_DECODES
   })
-  void ensureImportAsrAssets((pct) => {
-    publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
-  }).catch((err) => {
-    mainLog.warn('[asr-assets] background ensure failed:', err instanceof Error ? err.message : err)
-    publishAsrAssetsProgress()
-  })
+  const speechPackBlocked =
+    resolveLocalSpeechPackPolicy(getSettings(), getAdminLocalSpeechPackPolicy()) === 'blocked'
+  if (!speechPackBlocked) {
+    void ensureImportAsrAssets((pct) => {
+      publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
+    }).catch((err) => {
+      mainLog.warn('[asr-assets] background ensure failed:', err instanceof Error ? err.message : err)
+      publishAsrAssetsProgress()
+    })
+  }
+}
+
+function getImportJobs(): ImportJobManager {
+  initializeImportJobs()
+  if (!importJobs) throw new Error('Audio import service is unavailable.')
+  return importJobs
 }
 
 /** Minimal .env loader (no dep) — dev convenience; prod uses in-app key. */
@@ -1959,7 +1965,7 @@ async function verifyCliSessions(now = Date.now()): Promise<void> {
   // would spawn the probe twice for the same provider.
   if (cliSessionSweep) return cliSessionSweep
   cliSessionSweep = (async () => {
-    // Never reject. One caller is a bare `void verifyCliSessions()` at boot, and an async body with no
+    // Never reject. One caller is a bare `void verifyCliSessions()` in a boot job, and an async body with no
     // guard is precisely how a transient settings-read failure becomes an unhandledRejection — which
     // onFatal turns into a crash-*.log and an `app.crash` audit entry for something that crashed nothing.
     // Same guarded shape startMeetingPoller uses, and for the same reason.
@@ -2120,18 +2126,9 @@ function publicSettings(): PublicSettings {
     loginItemOpenAtLogin,
     version: app.getVersion(),
     allowedProviders: allowed, // org allowlist (null = unrestricted); surfaced so the picker matches enforcement
-    modelPolicyCapabilities: modelPolicyCapabilitiesForSettings(s)
+    modelPolicyCapabilities: modelPolicyCapabilitiesForSettings(s),
+    localSpeechPack: resolveLocalSpeechPackPolicy(s, getAdminLocalSpeechPackPolicy())
   }
-}
-
-/** M2-0412: the fleet policy's effective provider+model, per capability, for Settings' managed/locked
- *  display — {} (nothing locked) when no fleet policy has ever been set ("not managed"). */
-function modelPolicyCapabilitiesForSettings(s: Settings): Record<string, { provider: string; model: string }> {
-  const policy = getActiveModelPolicy(s)
-  if (!policy) return {}
-  return Object.fromEntries(
-    MODEL_POLICY_CAPABILITIES.map((cap) => [cap, { provider: policy.capabilities[cap].provider, model: policy.capabilities[cap].model }])
-  )
 }
 
 /** Wiped-profile / mid-tour: exclusive fullscreen owns the display until onboardingDone. */
@@ -2728,6 +2725,8 @@ function createWindow(targetDisplay?: Electron.Display): void {
     ...BOOT_WINDOW_OPTIONS.window // M2-0516: a QA-identity-only variant's values; none in every shipping build
   })
   observability?.recordBootStage('createWindow.construct', performance.now() - constructStartedMs, { transparent: chrome.transparent, windowVariant: BOOT_WINDOW_VARIANT })
+  const prewarmMs = takeBootWindowPrewarmMs() // M2-0519: the boot prewarm ran before observability started; recorded once
+  if (prewarmMs !== null) observability?.recordBootStage('createWindow.prewarm', prewarmMs, { transparent: chrome.transparent, windowVariant: BOOT_WINDOW_VARIANT })
   ensureMetisCommandRuntime({
     getSettings,
     commandControl,
@@ -2782,6 +2781,8 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // freshly-recreated one (render-process-gone recovery reassigns `win` before the old one's 'closed'
   // may fire). Only clear the module ref when it still points at the window that closed.
   const self = win
+  // M2-0518: App Nap must not throttle the shown overlay once the boot power-save hold ends.
+  holdAppSuspensionWhileVisible(self, powerSaveBlocker)
   // `closed` fires after BrowserWindow.destroy() has torn down WebContents. Cache the numeric owner
   // while it is valid; touching `self.webContents` from the callback throws and falsely crashes Métis.
   const selfWebContentsId = self.webContents.id
@@ -4156,10 +4157,7 @@ function visionCheckContextFromSettings(): import('@shared/screen-capture-check'
 }
 
 /** Isolated vision ask for the Settings self-check. Never askStart, never overlay chat, never a teammate push. */
-function askVisionForScreenCheck(
-  backend: 'local' | 'api',
-  image: string
-): Promise<{ text: string; label: string }> {
+function askVisionForScreenCheck(backend: 'local' | 'api', image: string): Promise<{ text: string; label: string }> {
   const s = getSettings()
   const req: AskStart = {
     id: `screen-check-${Date.now()}`,
@@ -4169,6 +4167,9 @@ function askVisionForScreenCheck(
     history: []
   }
   if (backend === 'local') {
+    if (!localModelAllowedByPolicy(getActiveModelPolicy(s), s.localLlm.modelId)) {
+      return Promise.reject(new Error('The selected provider is not allowed by the fleet model policy.'))
+    }
     return collectVisionStream((handlers) =>
       createStream({
         providerId: 'local',
@@ -4269,11 +4270,8 @@ const screenPreprocess: ScreenPreprocess = createScreenPreprocess({
   // Windows keeps the VLM-only path (extractScreenText returns null without a helper anyway, but gating
   // here keeps the win32 wiring visibly identical to before).
   extractScreenText: process.platform === 'darwin' ? extractScreenText : undefined,
-  // macOS: never let this background loop be the thing that asks for Screen Recording. captureScreenshotOnce
-  // deliberately lets a `not-determined` status reach desktopCapturer because that is what registers the app
-  // with TCC and raises the system dialog — fine for a user-initiated capture, wrong for a loop armed at boot
-  // (MQA-178), which would pop an unexplained prompt seconds after launch (MQA-209). Undefined off darwin:
-  // Windows has no queryable screen grant and its capture prompts nothing.
+  // macOS: never let this background loop be the thing that asks for Screen Recording at boot.
+  // Undefined off darwin: Windows has no queryable screen grant and its capture prompts nothing.
   screenCaptureGranted:
     process.platform === 'darwin'
       ? () => systemPreferences.getMediaAccessStatus('screen') === 'granted'
@@ -4296,15 +4294,7 @@ function refreshScreenPreprocess(): void {
   screenPreprocess.refresh()
 }
 
-/**
- * Revoke everything privileged that outlives a single IPC call, the moment the session does. ONE place
- * on purpose: the sign-out handler used to tear down only what it remembered, so the background screen
- * pre-analysis engine kept capturing + describing (MQA-154) and the Intelligence dashboard kept
- * rendering the decrypted brain (MQA-169) for a signed-out user, with no in-app way to stop either.
- * Registered on auth's session-cleared hook rather than called from the handler, because a session also
- * ends with no user action at all — max-age eviction and the background re-validation sweep. Import
- * jobs stay at the handler: cancelAll() is async and this hook is not.
- */
+/** Revoke every privileged surface that outlives one IPC call when the session ends. */
 function revokePrivilegedSurface(): void {
   refreshScreenPreprocess() // stops the watcher child, the 6s tick and the cached description
   invalidateCloudSttOwner() // closes authenticated live-speech sockets and invalidates their callbacks
@@ -8730,14 +8720,14 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const parsed = ImportAudioStartSchema.parse(raw)
-    if (!importJobs) throw new Error('Audio import service is unavailable.')
-    return importJobView(await importJobs.start(consumePickedAudio(parsed.token)))
+    const jobs = getImportJobs()
+    return importJobView(await jobs.start(consumePickedAudio(parsed.token)))
   })
   ipcMain.handle(IPC.importAudioStartBatch, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const parsed = ImportAudioStartBatchSchema.parse(raw)
-    if (!importJobs) throw new Error('Audio import service is unavailable.')
+    const jobs = getImportJobs()
     const sources = []
     const errors: string[] = []
     for (const token of parsed.tokens) {
@@ -8748,33 +8738,30 @@ function registerIpc(): void {
       }
     }
     if (!sources.length) throw new Error(errors[0] || 'Could not start the imports.')
-    return (await importJobs.startMany(sources)).map(importJobView)
+    return (await jobs.startMany(sources)).map(importJobView)
   })
   ipcMain.handle(IPC.importJobsList, (e) => {
     assertMainWindow(e)
-    if (!requireAuth() || !importJobs) return []
-    return importJobs.list().map(importJobView)
+    if (!requireAuth()) return []
+    return getImportJobs().list().map(importJobView)
   })
   ipcMain.handle(IPC.importJobCancel, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const parsed = ImportJobIdSchema.parse(raw)
-    if (!importJobs) throw new Error('Audio import service is unavailable.')
-    await importJobs.cancel(parsed.jobId)
+    await getImportJobs().cancel(parsed.jobId)
   })
   ipcMain.handle(IPC.importJobResume, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const parsed = ImportJobIdSchema.parse(raw)
-    if (!importJobs) throw new Error('Audio import service is unavailable.')
-    return importJobView(await importJobs.resume(parsed.jobId))
+    return importJobView(await getImportJobs().resume(parsed.jobId))
   })
   ipcMain.handle(IPC.importJobRemove, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const parsed = ImportJobIdSchema.parse(raw)
-    if (!importJobs) throw new Error('Audio import service is unavailable.')
-    await importJobs.remove(parsed.jobId)
+    await getImportJobs().remove(parsed.jobId)
   })
 
   ipcMain.on(IPC.importDecoderReady, (e) => {
@@ -9241,8 +9228,9 @@ if (!app.requestSingleInstanceLock()) {
   initLogging() // route main-process logs to a rotated file before anything else can fail
   const bootWork = createBootWork() // M2-0031: non-first-paint fs work starts after the first show, under the pool cap
   configureSidecarRegistry(createSidecarRegistry(app.getPath('userData')))
-  await runBootSidecarReaper(app.getPath('userData'))
-  startAvailableMemorySampler() // M2-0430: background vm_stat reading for the local-model memory gate
+  // M2-0518: child processes first paint does not need; the reaper spares this launch's own sidecars, the memory gate reads freemem() meanwhile.
+  bootWork.run('runBootSidecarReaper', () => runBootSidecarReaper(app.getPath('userData')))
+  bootWork.run('startAvailableMemorySampler', () => { startAvailableMemorySampler() }) // M2-0430: vm_stat reading for the local-model memory gate
   // M2-0033: unattended model work waits for the maintenance gate.
   startMaintenanceGate({ interactiveActive: () => localRuntime.activeStreams() + fmRuntime.activeStreams() > 0 })
   app.on('web-contents-created', (_event, contents) => {
@@ -9276,7 +9264,8 @@ if (!app.requestSingleInstanceLock()) {
   }
   // Warm the CLI binary cache at boot when a CLI provider is connected, so the session's FIRST CLI ask
   // doesn't stall on the login-shell PATH lookup (it only ran on sign-in before — i.e. once ever).
-  try {
+  // M2-0518: both spawn child processes, so they start behind the first show.
+  bootWork.run('warmCliSessions', () => {
     const s0 = getSettings()
     if (s0.cliConnected['claude-cli'] || s0.cliConnected['codex-cli']) {
       prewarmCli()
@@ -9284,13 +9273,16 @@ if (!app.requestSingleInstanceLock()) {
       // runs otherwise leaves the app asserting a provider it cannot use until the first ask fails.
       void verifyCliSessions()
     }
-  } catch {
-    /* best-effort warm-up */
-  }
+  })
   // Seed an optional installer-embedded Cloudflare proxy key, once per profile, so a fresh install of
   // the default provider can answer with zero paste-a-key setup when the operator chose to embed one.
   // See embedded-cloudflare-key.ts — a no-op when no bundle was packaged.
-  importEmbeddedCloudflareKey()
+  // M2-0518: the first-launch seed decrypts the bundle and writes the keystore, so it starts behind the first show;
+  // the renderer then re-reads settings, so a seeded provider shows as ready without a relaunch.
+  bootWork.run('importEmbeddedCloudflareKey', () => {
+    importEmbeddedCloudflareKey()
+    notifySettingsChanged()
+  })
   {
     setModeSkillsOverlayRoot(join(app.getPath('userData'), 'skills-overrides'))
     const boot = getSettings()
@@ -9321,13 +9313,14 @@ if (!app.requestSingleInstanceLock()) {
       }
     }
     // The warm is unattended model work: it waits for the maintenance gate, so it never starts in the boot quiet period.
-    void provisionLocalModel(getSettings().localLlm, getAllowedProviders(), ensureLocalModel)
+    // M2-0518: provisioning stats, hashes and downloads model files, so it starts behind the first show.
+    bootWork.run('provisionLocalModel', () => provisionLocalModel(getSettings().localLlm, getAllowedProviders(), ensureLocalModel)
       .then((ready) => {
         if (!ready) return
         refreshScreenPreprocess()
         void runAsMaintenance(warmLocalIfReady)
       })
-      .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
+      .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e)))
     void runAsMaintenance(warmLocalIfReady)
   }
   // Windows toast attribution: a process's AppUserModelID must match the installed shortcut's AUMID
@@ -9414,13 +9407,14 @@ if (!app.requestSingleInstanceLock()) {
   sweepStaleTempFiles() // remove any decrypted-transcript temp copies orphaned by a previous hard-kill
   // Promote any orphaned crash-recovery drafts into real meetings BEFORE the retention sweep, so a
   // recovered meeting is visible in History and immediately subject to the same retention policy.
-  recoverOrphanDrafts(getSettings()).then((r) => {
+  // M2-0518: both read (and decrypt) the meetings root, so they start behind the first show, in this order.
+  bootWork.run('recoverOrphanDrafts', () => recoverOrphanDrafts(getSettings()).then((r) => {
     if (r.recovered > 0) auditLog('transcript.recovered', { recovered: r.recovered })
-  }).catch(() => { /* best-effort — never block startup */ })
+  }).catch(() => { /* best-effort — never block startup */ }))
   // Auto-delete meetings past the configured retention window (off by default — see transcriptRetentionDays).
   // Runs at launch AND every 6 hours after: this overlay realistically stays up for weeks, so a launch-only
   // sweep silently stopped enforcing retention the day after boot (storage-limitation promise broken).
-  const runRetentionSweep = (): void => {
+  const runRetentionSweep = (): Promise<void> =>
     sweepExpiredMeetings(getSettings().transcriptRetentionDays).then((r) => {
       if (r.deleted > 0) {
         auditLog('transcript.deleted', { bulk: true, expired: true, deleted: r.deleted })
@@ -9433,9 +9427,8 @@ if (!app.requestSingleInstanceLock()) {
         )
       }
     }).catch(() => { /* best-effort — never block startup or the interval */ })
-  }
-  runRetentionSweep()
-  trackTimer(setInterval(runRetentionSweep, 6 * 60 * 60 * 1000))
+  bootWork.run('runRetentionSweep', runRetentionSweep)
+  trackTimer(setInterval(() => void runRetentionSweep(), 6 * 60 * 60 * 1000))
   // Guarded like the neighboring dock.setIcon / crash-log pruning below — a throw here must never abort
   // createTray/registerShortcuts/createWindow further down the boot sequence.
   if (process.platform === 'darwin') {
@@ -9620,6 +9613,7 @@ if (!app.requestSingleInstanceLock()) {
     })
     safeHandle(IPC.asrAssetsEnsure, async (e) => {
       assertMainWindow(e)
+      if (resolveLocalSpeechPackPolicy(getSettings(), getAdminLocalSpeechPackPolicy()) === 'blocked') return asrAssetsStatusSnapshot()
       try {
         await ensureImportAsrAssets((pct) => {
           publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
