@@ -636,6 +636,7 @@ const M2_0008_BLOCKED_INTERRUPTS = Object.freeze(['network-off', 'file-provider-
 const M2_0008_EXERCISED = new Set(['observed', 'pass', 'fail'])
 const HOSTED_RUNNER_HOSTS = new Set(['macos-latest', 'windows-latest'])
 const nonEmptyString = (value) => typeof value === 'string' && value.trim() !== ''
+const stallKey = (row) => `${row.tMs ?? 'null'}:${row.stalledMs ?? 'null'}`
 
 /**
  * The extra shape a `run-matrix.sh --hosted-live` bundle must have (M2-0462): the mode and content-free
@@ -976,6 +977,17 @@ export function m2_0194BundleProblems(bundlePath) {
   if (stalls.length !== stallExcerptRows.length) {
     problems.push(`${STALLS_FILE}: must have one entry per app.stall or app.stall.sampled excerpt`)
   }
+  const stallEntryCounts = new Map()
+  for (const stall of stalls) stallEntryCounts.set(stallKey(stall), (stallEntryCounts.get(stallKey(stall)) ?? 0) + 1)
+  for (const excerpt of stallExcerptRows) {
+    const key = stallKey(excerpt)
+    const count = stallEntryCounts.get(key) ?? 0
+    if (count <= 0) {
+      problems.push(`${STALLS_FILE}: missing entry for stall excerpt tMs=${excerpt.tMs ?? 'null'} stalledMs=${excerpt.stalledMs ?? 'null'}`)
+    } else {
+      stallEntryCounts.set(key, count - 1)
+    }
+  }
   for (const stall of stalls) {
     if (!nonEmptyString(stall.row)) problems.push(`${STALLS_FILE}: every stall needs a row`)
     if (!(stall.tMs === null || typeof stall.tMs === 'number')) problems.push(`${STALLS_FILE}: tMs must be numeric or null`)
@@ -994,7 +1006,14 @@ export function m2_0194BundleProblems(bundlePath) {
         }
       }
     }
-    if (stall.status === 'FAIL' && !nonEmptyString(stall.error_class)) problems.push(`${STALLS_FILE}: FAIL entries need an error_class`)
+    if (stall.status === 'FAIL') {
+      if (!nonEmptyString(stall.error_class)) problems.push(`${STALLS_FILE}: FAIL entries need an error_class`)
+      if (!dryRun && environment?.host?.label !== 'windows-latest') problems.push(`${STALLS_FILE}: live macOS stall entries must have a nearest main-thread sample`)
+    }
+    if (stall.status === 'NOT_APPLICABLE') {
+      if (environment?.host?.label !== 'windows-latest') problems.push(`${STALLS_FILE}: NOT_APPLICABLE sampling is only valid on windows-latest`)
+      if (!nonEmptyString(stall.reason)) problems.push(`${STALLS_FILE}: NOT_APPLICABLE entries need a reason`)
+    }
   }
   if (!Array.isArray(names?.names)) {
     problems.push(`${STALL_BUNDLE_NAMES_FILE}: names array is required`)

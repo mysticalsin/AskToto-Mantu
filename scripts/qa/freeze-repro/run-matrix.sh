@@ -146,6 +146,10 @@ append_jsonl() {
   printf '%s\n' "$row" >> "$file"
 }
 
+epoch_ms() {
+  node -e 'console.log(Date.now())'
+}
+
 prompt_result() {
   local id=$1
   local prompt=$2
@@ -289,6 +293,8 @@ sample_app() {
   if ! sample_pid "$APP_PID" "$row-main"; then
     main_sampled=false
     SAMPLE_FAILURES=$((SAMPLE_FAILURES + 1))
+  else
+    append_jsonl "$OUT/sample-index.jsonl" "{\"row\":$(json_string "$row"),\"role\":\"main\",\"capturedMs\":$(epoch_ms),\"file\":$(json_string "samples/$row-main.sample.txt")}"
   fi
   local rp renderer_successes=0 renderer_attempts=0
   while IFS= read -r rp; do
@@ -757,7 +763,9 @@ EOF_HOSTED_RECORDS
 hosted_row() {
   local row=$1 drive=$2 method=$3 precondition=$4
   shift 4
-  local observation result
+  local observation result row_started_ms row_finished_ms
+  row_started_ms=${ROW_WINDOW_STARTED_MS:-$(epoch_ms)}
+  ROW_WINDOW_STARTED_MS=""
   observation=$(run_with_timeout "$OBSERVE_WALL_SECONDS" node "$SCRIPT_DIR/cdp-observe.mjs" \
     --port "$CDP_PORT" --row "$row" --drive "$drive" --timeout-ms "$OBSERVE_TIMEOUT_MS" 2>/dev/null | head -n 1) || true
   result=$(printf '%s' "$observation" | sed -n 's/^{"operator_result":"\([a-z-]*\)".*}$/\1/p')
@@ -768,7 +776,8 @@ hosted_row() {
   [[ "$precondition" == ok ]] || result="not-exercised"
   [[ "$result" != observed ]] || SYMPTOM_ROWS+="$row "
   sample_app "$row"
-  record_row_result "$row" "$result" ",\"automatic\":true,\"drive_method\":$(json_string "$method"),\"precondition\":$(json_string "$precondition"),\"observation\":$observation$*"
+  row_finished_ms=$(epoch_ms)
+  record_row_result "$row" "$result" ",\"automatic\":true,\"drive_method\":$(json_string "$method"),\"precondition\":$(json_string "$precondition"),\"row_started_ms\":$row_started_ms,\"row_finished_ms\":$row_finished_ms,\"observation\":$observation$*"
 }
 
 # Opens every FIFO fixture for writing without blocking and keeps the write ends open. A fixture the app is
@@ -860,12 +869,14 @@ run_hosted_live_matrix() {
     ",\"brain_status_poll_wait_seconds\":$BRAIN_POLL_WAIT_SECONDS"
 
   reopen_status=ok
+  ROW_WINDOW_STARTED_MS=$(epoch_ms)
   "$OPEN_BIN" "$APP" >/dev/null 2>&1 || reopen_status="open-failed"
   sleep "$REOPEN_SETTLE_SECONDS"
   hosted_row "row-3-macos-activate" none "open <app>" "$reopen_status"
 
   reopen_status=ok
   # The second instance gets the same profile, so the app's single-instance lock hands it to the first.
+  ROW_WINDOW_STARTED_MS=$(epoch_ms)
   "$OPEN_BIN" -n --env "ASKTOTO_USERDATA=$PROFILE" "$APP" --args "--user-data-dir=$PROFILE" >/dev/null 2>&1 || reopen_status="open-failed"
   sleep "$REOPEN_SETTLE_SECONDS"
   hosted_row "row-4-second-instance-reopen" none "open -n --env ASKTOTO_USERDATA=<profile> <app> --args --user-data-dir=<profile>" "$reopen_status"
@@ -894,6 +905,7 @@ run_windows_hosted_live_matrix() {
     ',"automatic":false'
 
   app_profile=$(app_profile_path "$PROFILE")
+  ROW_WINDOW_STARTED_MS=$(epoch_ms)
   ASKTOTO_USERDATA="$app_profile" "$EXE" "--user-data-dir=$app_profile" "--remote-debugging-port=$CDP_PORT" >/dev/null 2>>"$OUT/app.stderr.txt" &
   second_pid=$!
   sleep "$REOPEN_SETTLE_SECONDS"
@@ -955,7 +967,13 @@ EOF_LEAD_ACTION
 
 write_attribution_bundle() {
   stop_app
-  node "$SCRIPT_DIR/attribution-bundle.mjs" --out "$OUT" --profile "$PROFILE" --profile "$IDLE_PROFILE"
+  node "$SCRIPT_DIR/attribution-bundle.mjs" \
+    --out "$OUT" \
+    --profile "$PROFILE" \
+    --profile "$IDLE_PROFILE" \
+    --matrix "$OUT/matrix.jsonl" \
+    --sample-index "$OUT/sample-index.jsonl" \
+    --host "$QA_HOST_LABEL"
   if [[ -s "$OUT/stalls.jsonl" ]]; then
     STALL_ATTRIBUTION_FAILURES=$(grep -c '"status":"FAIL"' "$OUT/stalls.jsonl" || true)
   fi
@@ -1125,6 +1143,7 @@ mkdir -p "$SAMPLE_DIR"
 : > "$OUT/matrix.jsonl"
 : > "$OUT/interrupt-results.jsonl"
 : > "$OUT/app-pids.txt"
+: > "$OUT/sample-index.jsonl"
 STAMP="$OUT/run-start.stamp"
 : > "$STAMP"
 

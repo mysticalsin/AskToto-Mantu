@@ -35,11 +35,30 @@ export function excerptOf(event) {
   return null
 }
 
+function auditTMs(row) {
+  if (typeof row.ts === 'string') {
+    const parsed = Date.parse(row.ts)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return null
+}
+
+function stallDurationMs(row) {
+  if (row.event === 'app.stall' && typeof row.durationMs === 'number' && Number.isFinite(row.durationMs)) return row.durationMs
+  if (row.event === 'app.stall.sampled' && typeof row.stalledMs === 'number' && Number.isFinite(row.stalledMs)) return row.stalledMs
+  return null
+}
+
 function projectedAuditRow(row) {
   const out = { event: row.event }
-  if (typeof row.tMs === 'number' && Number.isFinite(row.tMs)) out.tMs = row.tMs
+  const tMs = auditTMs(row)
+  if (tMs !== null) out.tMs = tMs
+  const stalledMs = stallDurationMs(row)
+  if (stalledMs !== null) out.stalledMs = stalledMs
   for (const [key, value] of Object.entries(row)) {
-    if (key === 'event' || key === 'tMs' || key === 'bundle' || key === 'path' || key === 'message') continue
+    if (key === 'event' || key === 'ts' || key === 'tMs' || key === 'stalledMs' || key === 'bundle' || key === 'path' || key === 'message') {
+      continue
+    }
     if (typeof value === 'number' && Number.isFinite(value)) out[key] = value
     else if (ENUM_FIELD.test(key) && typeof value === 'string' && ENUM_VALUE.test(value)) out[key] = value
   }
@@ -82,17 +101,60 @@ function attributionAuditRows(auditText) {
   return rows
 }
 
-function readSampleFrames(samplesDir, row) {
-  const candidates = []
+function readJsonl(path) {
+  if (!existsSync(path)) return []
+  const rows = []
+  for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
+    if (!line) continue
+    try {
+      const row = JSON.parse(line)
+      if (row && typeof row === 'object') rows.push(row)
+    } catch {
+      // A corrupt auxiliary row is ignored here; the evidence checker validates the emitted bundle.
+    }
+  }
+  return rows
+}
+
+function readRowWindows(matrixPath) {
+  return readJsonl(matrixPath)
+    .filter((row) => typeof row.row === 'string' && Number.isFinite(row.row_started_ms) && Number.isFinite(row.row_finished_ms))
+    .map((row) => ({ row: row.row, start: row.row_started_ms, end: row.row_finished_ms }))
+}
+
+function matrixRowAt(tMs, windows) {
+  if (!Number.isFinite(tMs)) return 'unknown'
+  const match = windows.find((window) => tMs >= window.start && tMs <= window.end)
+  return match?.row ?? 'unknown'
+}
+
+function readSampleIndex(sampleIndexPath) {
+  return readJsonl(sampleIndexPath)
+    .filter((row) => row.role === 'main' && Number.isFinite(row.capturedMs) && typeof row.file === 'string')
+    .map((row) => ({ capturedMs: row.capturedMs, file: row.file }))
+}
+
+function closestSample(tMs, sampleIndex) {
+  if (!Number.isFinite(tMs) || sampleIndex.length === 0) return null
+  let best = null
+  for (const sample of sampleIndex) {
+    const distance = Math.abs(sample.capturedMs - tMs)
+    if (!best || distance < best.distance) best = { ...sample, distance }
+  }
+  return best
+}
+
+function readSampleFrames(samplesDir, sampleFile) {
+  if (!sampleFile) return { frames: [], errorClass: 'sample_missing' }
+  const sample = basename(sampleFile)
+  const samplePath = join(samplesDir, sample)
   try {
-    candidates.push(...readdirSync(samplesDir).filter((name) => name === `${row}-main.sample.txt` || name.startsWith(`${row}-renderer-`)).sort())
+    if (!existsSync(samplePath)) return { frames: [], errorClass: 'sample_missing' }
   } catch {
     return { frames: [], errorClass: 'sample_directory_missing' }
   }
-  const sample = candidates.find((name) => name === `${row}-main.sample.txt`) ?? candidates[0]
-  if (!sample) return { frames: [], errorClass: 'sample_missing' }
   const frames = []
-  for (const line of readFileSync(join(samplesDir, sample), 'utf8').split(/\r?\n/)) {
+  for (const line of readFileSync(samplePath, 'utf8').split(/\r?\n/)) {
     const match = line.match(/^\s*\d+\s+(.+?)\s+\(([^)]+)\)/)
     if (!match) continue
     const symbol = match[1].replace(/\s+\+\s+\d+.*$/, '').trim()
@@ -103,17 +165,34 @@ function readSampleFrames(samplesDir, row) {
   return { frames, errorClass: frames.length > 0 ? null : 'sample_frames_missing' }
 }
 
-function stallRowsFromAuditRows(auditRows, samplesDir) {
+function stallRowsFromAuditRows(auditRows, { samplesDir, rowWindows, sampleIndex, host }) {
   const stalls = []
+  const windowsHostedLive = host === 'windows-latest'
   for (const row of auditRows) {
     if (row.event !== 'app.stall' && row.event !== 'app.stall.sampled') continue
-    const matrixRow = typeof row.row === 'string' && row.row ? row.row : 'unknown'
+    const tMs = auditTMs(row)
+    const stalledMs = stallDurationMs(row)
+    const matrixRow = matrixRowAt(tMs, rowWindows)
     const bundle = typeof row.bundle === 'string' ? basename(row.bundle) : null
-    const { frames, errorClass } = readSampleFrames(samplesDir, matrixRow)
+    if (windowsHostedLive) {
+      stalls.push({
+        row: matrixRow,
+        tMs,
+        stalledMs,
+        bundle: bundle && STALL_BUNDLE_NAME.test(bundle) ? bundle : null,
+        frames: [],
+        attribution: null,
+        status: 'NOT_APPLICABLE',
+        reason: 'process sampling unavailable on windows-latest; /usr/bin/sample is macOS-only'
+      })
+      continue
+    }
+    const nearestSample = closestSample(tMs, sampleIndex)
+    const { frames, errorClass } = readSampleFrames(samplesDir, nearestSample?.file)
     stalls.push({
       row: matrixRow,
-      tMs: typeof row.tMs === 'number' ? row.tMs : null,
-      stalledMs: typeof row.stalledMs === 'number' ? row.stalledMs : null,
+      tMs,
+      stalledMs,
       bundle: bundle && STALL_BUNDLE_NAME.test(bundle) ? bundle : null,
       frames,
       attribution: null,
@@ -123,10 +202,19 @@ function stallRowsFromAuditRows(auditRows, samplesDir) {
   return stalls
 }
 
-export function writeAttributionBundle({ profiles, out, samplesDir = join(out, 'samples') }) {
+export function writeAttributionBundle({
+  profiles,
+  out,
+  samplesDir = join(out, 'samples'),
+  matrixPath = join(out, 'matrix.jsonl'),
+  sampleIndexPath = join(out, 'sample-index.jsonl'),
+  host = 'macos-latest'
+}) {
   const rows = { stall: [], reveal: [], sidecar: [], sampler: [] }
   const rawAttributionRows = []
   const names = []
+  const rowWindows = readRowWindows(matrixPath)
+  const sampleIndex = readSampleIndex(sampleIndexPath)
   for (const profile of profiles) {
     const logs = join(profile, 'logs')
     const auditFiles = existsSync(logs) ? readdirSync(logs).filter((name) => AUDIT_LOG_NAME.test(name)).sort() : []
@@ -143,15 +231,32 @@ export function writeAttributionBundle({ profiles, out, samplesDir = join(out, '
   for (const [key, file] of Object.entries(EXCERPT_FILES)) {
     writeFileSync(join(out, file), rows[key].map((row) => `${JSON.stringify(row)}\n`).join(''))
   }
-  writeFileSync(join(out, STALLS_FILE), stallRowsFromAuditRows(rawAttributionRows, samplesDir).map((row) => `${JSON.stringify(row)}\n`).join(''))
+  writeFileSync(
+    join(out, STALLS_FILE),
+    stallRowsFromAuditRows(rawAttributionRows, { samplesDir, rowWindows, sampleIndex, host }).map((row) => `${JSON.stringify(row)}\n`).join('')
+  )
   writeFileSync(join(out, STALL_BUNDLE_NAMES_FILE), `${JSON.stringify({ names: [...new Set(names)].sort() }, null, 2)}\n`)
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const { values } = parseArgs({ options: { profile: { type: 'string', multiple: true }, out: { type: 'string' } } })
+  const { values } = parseArgs({
+    options: {
+      profile: { type: 'string', multiple: true },
+      out: { type: 'string' },
+      matrix: { type: 'string' },
+      'sample-index': { type: 'string' },
+      host: { type: 'string' }
+    }
+  })
   if (!values.out) {
     console.error('usage: attribution-bundle.mjs --out <bundle dir> [--profile <userData dir>]...')
     process.exit(2)
   }
-  writeAttributionBundle({ profiles: (values.profile ?? []).map((path) => resolve(path)), out: resolve(values.out) })
+  writeAttributionBundle({
+    profiles: (values.profile ?? []).map((path) => resolve(path)),
+    out: resolve(values.out),
+    matrixPath: values.matrix ? resolve(values.matrix) : undefined,
+    sampleIndexPath: values['sample-index'] ? resolve(values['sample-index']) : undefined,
+    host: values.host
+  })
 }

@@ -136,4 +136,33 @@ describe('M2-0194 QA candidate mode of the freeze repro workflow', () => {
     expect(workflow.match(/if: inputs\.candidate_run != ''/g)).toHaveLength(6)
     for (const use of workflow.match(/uses: [^\n]+/g) ?? []) expect(use).toMatch(/@[0-9a-f]{40} #/)
   })
+
+  it('spells out each mode and candidate-run combination in the execution blocks', () => {
+    const m2_0008Mac = workflow.slice(
+      workflow.indexOf('      - name: Run the M2-0008 hosted bundle check'),
+      workflow.indexOf('      - name: Run the M2-0194 attribution bundle check')
+    )
+    const m2_0194Mac = workflow.slice(
+      workflow.indexOf('      - name: Run the M2-0194 attribution bundle check'),
+      workflow.indexOf('      - uses: actions/upload-artifact@')
+    )
+    const m2_0008Win = workflow.slice(
+      workflow.lastIndexOf('      - name: Run the M2-0008 hosted bundle check'),
+      workflow.lastIndexOf('      - name: Run the M2-0194 attribution bundle check')
+    )
+    const m2_0194Win = workflow.slice(
+      workflow.lastIndexOf('      - name: Run the M2-0194 attribution bundle check'),
+      workflow.lastIndexOf('      - uses: actions/upload-artifact@')
+    )
+    for (const block of [m2_0008Mac, m2_0194Mac, m2_0008Win, m2_0194Win]) {
+      expect(block).toContain('if [[ "${{ inputs.mode }}" == hosted-live ]]; then')
+      expect(block).toContain('mode_args=(--hosted-live')
+      expect(block).toContain('else')
+      expect(block).toContain('mode_args=(--dry-run)')
+    }
+    expect(m2_0008Mac).toContain("if: inputs.candidate_run == ''")
+    expect(m2_0008Win).toContain("if: inputs.candidate_run == ''")
+    expect(m2_0194Mac).toContain("if: inputs.candidate_run != ''")
+    expect(m2_0194Win).toContain("if: inputs.candidate_run != ''")
+  })
 })
