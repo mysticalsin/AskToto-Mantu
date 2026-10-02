@@ -6,7 +6,7 @@
  * operator runs — scripts/verify-audit-log.mjs is plain ESM, imported directly) proves the chain over
  * them. The tamper cases mutate the produced lines and must be DETECTED — that is the whole control.
  */
-import { readFileSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect, afterAll, vi } from 'vitest'
 
@@ -29,10 +29,10 @@ import { auditLog, auditLogPath, auditChainTip, AUDIT_ARCHIVE_GENERATIONS } from
 import { verifyAuditLines } from '../../scripts/verify-audit-log.mjs'
 
 const readLines = (): string[] =>
-  readFileSync(auditLogPath(), 'utf8')
+  existsSync(auditLogPath()) ? readFileSync(auditLogPath(), 'utf8')
     .split('\n')
     .map((l) => l.replace(/\r$/, ''))
-    .filter((l) => l.length > 0)
+    .filter((l) => l.length > 0) : []
 
 afterAll(() => rmSync(logFixture.root, { recursive: true, force: true }))
 
@@ -41,7 +41,7 @@ describe('MQA-232 — every audit record chains to the one before it', () => {
     expect(auditLogPath()).toBe(join(logFixture.root, 'asktoto-nonapp-logs', 'audit.log'))
   })
 
-  it('writes seq/prev on every record and the verifier proves the chain', () => {
+  it('writes seq/prev on every record and the verifier proves the chain', async () => {
     // An attributed event: app.* is projected and would drop `probe`, leaving the tamper case nothing to edit.
     auditLog('settings.changed', { probe: 'chain-1' })
     auditLog('settings.changed', { probe: 'chain-2' })

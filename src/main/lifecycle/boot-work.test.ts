@@ -241,9 +241,13 @@ describe('boot wiring in index.ts (M2-0518)', () => {
     'prewarmCli',
     'verifyCliSessions',
     'importEmbeddedCloudflareKey',
+    'reconcileLaunchAtLogin',
     'provisionLocalModel',
+    'sweepStaleTempFiles',
     'recoverOrphanDrafts',
-    'runRetentionSweep'
+    'runRetentionSweep',
+    'endBootWatch',
+    'probeScreenCapture'
   ])('starts %s at launch only through the boot-work queue', (name) => {
     expect(whenReady).toHaveLength(1)
     expect(bootCallback).toBeDefined()
@@ -258,6 +262,15 @@ describe('boot wiring in index.ts (M2-0518)', () => {
       const { line } = indexSource.getLineAndCharacterOfPosition(reference.getStart(indexSource))
       expect(insideBootJob(reference), `index.ts:${line + 1} starts ${name} outside bootWork.run`).toBe(true)
     }
+  })
+
+  it('primes the ASR bundled-status probe only through the boot-work queue', () => {
+    expect(bootCallback).toBeDefined()
+    const bootText = bootCallback!.getText(indexSource)
+    expect(bootText).toMatch(/bootWork\.run\('primeAsrBundledStatus', \(\) => \{ asrBundledReady\(\) \}\)/)
+    const asrIpcBeforePrime = bootText.slice(0, bootText.indexOf("bootWork.run('primeAsrBundledStatus'"))
+    expect(asrIpcBeforePrime).not.toMatch(/\basrManifestComplete\(/)
+    expect(asrIpcBeforePrime).not.toMatch(/\bimportAsrAssetsReady\(/)
   })
 
   it('opens the gate on the boot window, and holds app suspension off for every overlay window', () => {
