@@ -1,10 +1,11 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
 import { describe, expect, it } from 'vitest'
 
 const demo = readFileSync(join(__dirname, '../components/OnboardingDemoScene.tsx'), 'utf8')
 const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
-const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
+const css = readAppCss()
 
 describe('Act 2 demo clock — DOM cursor, not setState every rAF', () => {
   it('does not call setLocalMs on every rAF tick; cursor is a ref + transform', () => {

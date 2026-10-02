@@ -1,12 +1,14 @@
 import { PROVIDERS, requiresUserBaseUrl, type ProviderId } from '../../src/shared/providers'
 import { operatorVisionModel, parseOperatorImage, type OperatorImage } from '../../src/shared/operator-vision'
-import { GatewayPrivacyError, verifyDefaultGatewayPrivacy } from './ai-gateway'
+import { GatewayPrivacyError, gatewayPrivacyHeaders, readinessForError, verifyDefaultGatewayPrivacy } from './ai-gateway'
 import { decryptVault } from './crypto'
 import { seatAuthorizedForKeys, SEAT_NOT_APPROVED } from './fleet'
+import { enforceModelPolicy } from './model-policy'
 import { looksLikeSecret, providerRefusedPayload } from './redact'
 import type { OperatorStore, VaultKeyRow } from './store'
 import { persistProxyAsk, proxyTokenCount } from './ask-meter'
 import { seatHasEntitlement } from './tiers'
+import { operatorCallableProvider } from './provider-guard'
 import { decodeVaultPlaintext, isForbiddenVaultProvider, isVaultLlmProvider } from './vault'
 
 const SYSTEM_CAP = 32_000
@@ -41,6 +43,7 @@ export type UseMessage = { role: 'user' | 'assistant'; content: string }
 export type UseRequest = {
   provider: string
   model: string
+  mode?: 'answer' | 'vision' | 'suggest' | 'summary' | 'recap'
   /** Managed Portal CF intent. Server authorizes deep; client cannot self-entitle. */
   tier?: 'base' | 'deep'
   /** Seat AskStart.id — stable metering key (F10 dedupe). */
@@ -63,6 +66,10 @@ export type UseFail = {
 
 export const OPERATOR_KEYS_NOT_ENTITLED = 'This seat is not entitled to use Operator-funded providers.'
 
+function policyCapabilityForUse(req: UseRequest): 'askChat' | 'recap' {
+  return req.mode === 'recap' ? 'recap' : 'askChat'
+}
+
 async function providerRefused(res: Response, secrets: readonly string[], screenshot = false): Promise<UseFail> {
   // Upstream errors can echo image/prompt content. Screenshot requests expose status only.
   const raw = screenshot ? '' : await res.text().catch(() => '')
@@ -80,7 +87,7 @@ async function providerRefused(res: Response, secrets: readonly string[], screen
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { 'content-type': 'application/json; charset=utf-8' }
+    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }
   })
 }
 
@@ -209,7 +216,26 @@ export function parseUseBody(bodyText: string): { ok: true; req: UseRequest } | 
     const id = String((body as { clientAskId: string }).clientAskId).trim()
     if (id.length >= 8 && id.length <= 128) clientAskId = id
   }
-  return { ok: true, req: { provider, model, system, messages, ...(image ? { image } : {}), ...(tier ? { tier } : {}), ...(clientAskId ? { clientAskId } : {}), temperature, maxTokens } }
+  const rawMode = typeof body.mode === 'string' ? body.mode : ''
+  const mode =
+    rawMode === 'answer' || rawMode === 'vision' || rawMode === 'suggest' || rawMode === 'summary' || rawMode === 'recap'
+      ? rawMode
+      : undefined
+  return {
+    ok: true,
+    req: {
+      provider,
+      model,
+      ...(mode ? { mode } : {}),
+      system,
+      messages,
+      ...(image ? { image } : {}),
+      ...(tier ? { tier } : {}),
+      ...(clientAskId ? { clientAskId } : {}),
+      temperature,
+      maxTokens
+    }
+  }
 }
 
 export function openaiMessages(req: UseRequest): unknown[] {
@@ -237,7 +263,7 @@ export function anthropicMessages(req: UseRequest): unknown[] {
 export function screenshotGatewayHeaders(req: UseRequest): Record<string, string> {
   // Enterprise-live F05: text asks are also sensitive; suppress payload logs + cache for all managed uses.
   void req
-  return { 'cf-aig-collect-log-payload': 'false', 'cf-aig-skip-cache': 'true' }
+  return gatewayPrivacyHeaders('rest')
 }
 
 export async function decryptActiveLlmSecret(
@@ -387,7 +413,7 @@ async function callOpenAICompat(
 
 export async function handleUse(
   store: OperatorStore,
-  env: { OPERATOR_VAULT_KEY?: string },
+  env: { OPERATOR_VAULT_KEY?: string; DB?: import('./d1').D1DatabaseLike },
   deviceId: string,
   bodyText: string,
   now: number,
@@ -401,12 +427,15 @@ export async function handleUse(
   if (!(await seatHasEntitlement(store, seat, now, 'operator_keys'))) {
     return fail(OPERATOR_KEYS_NOT_ENTITLED, 403, { code: 'not-entitled' })
   }
+  const refusal = await enforceModelPolicy(env.DB, policyCapabilityForUse(parsed.req), parsed.req.provider, parsed.req.model)
+  if (refusal) {
+    await store.audit(crypto.randomUUID(), now, deviceId, 'model-policy.blocked', null, `${parsed.req.provider}/${parsed.req.model}`)
+    return fail(refusal.error, refusal.status, { code: refusal.code })
+  }
   const unlocked = await decryptActiveLlmSecret(store, env.OPERATOR_VAULT_KEY, parsed.req.provider)
   if (!unlocked) return fail('Operator cannot issue a use', 503)
-  const def = parsed.req.provider in PROVIDERS ? PROVIDERS[parsed.req.provider as ProviderId] : null
-  if (!def || def.kind === 'cli' || def.kind === 'dust' || def.kind === 'local') {
-    return fail('provider not allowed', 400)
-  }
+  const def = operatorCallableProvider(parsed.req.provider)
+  if (!def) return fail('provider not allowed', 400)
   const timedFetch = withProviderTimeout(providerFetch)
   let out: { text: string; inputTokens?: number; outputTokens?: number } | UseFail
   try {
@@ -418,7 +447,10 @@ export async function handleUse(
           : await callOpenAICompat(unlocked.secret, parsed.req, def.baseUrl, timedFetch)
   } catch (error) {
     if (error instanceof GatewayPrivacyError) {
-      return fail('Cloudflare gateway privacy is not verified.', 503, { code: error.code })
+      return fail('Cloudflare gateway privacy is not verified.', 503, {
+        code: error.code,
+        readiness: readinessForError(error)
+      })
     }
     return fail('Operator cannot issue a use', 503)
   }

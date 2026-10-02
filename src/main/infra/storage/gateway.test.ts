@@ -11,7 +11,7 @@ vi.mock('../../mac-helper', () => ({ macStatFlagsSpawnSpec: vi.fn(() => null) })
 
 import { createFifo, releaseFifo } from '../../../../scripts/qa/fixtures/fifo.mjs'
 import type { ContentPresence, DatalessDetector, FileVersion } from './dataless'
-import { createStorageGateway, threadpoolSize, type StorageFs } from './gateway'
+import { createStorageGateway, HYDRATE_DEADLINE_MS, threadpoolSize, type StorageFs } from './gateway'
 
 const ROOT = join(sep, 'meetings')
 const ROOT2 = join(sep, 'meetings2')
@@ -30,7 +30,7 @@ afterEach(() => {
 // Test harness
 // ---------------------------------------------------------------------------------------------------
 
-type FsMethod = 'readdir' | 'readFile' | 'realpath' | 'stat'
+type FsMethod = 'readdir' | 'readFile' | 'realpath' | 'stat' | 'lstat'
 
 interface HeldCall {
   release(): void
@@ -46,6 +46,8 @@ interface TestFs extends StorageFs {
   hold(method: FsMethod, name: string): HeldCall
   fail(method: FsMethod, name: string, code?: string): void
   touch(name: string): void
+  /** Marks an already-registered name as a symlink, the way `lstat` alone (never `stat`) would report it. */
+  markSymlink(name: string): void
 }
 
 function errnoError(code?: string): NodeJS.ErrnoException {
@@ -64,6 +66,7 @@ function memoryFs(files: Record<string, string>): TestFs {
   const entries = new Map<string, { content: string; mtimeMs: number; ctimeMs: number }>()
   const keyOf = (name: string): string => (isAbsolute(name) ? name : join(ROOT, name))
   for (const [name, content] of Object.entries(files)) entries.set(keyOf(name), { content, mtimeMs: 1_000, ctimeMs: 1_000 })
+  const symlinks = new Set<string>()
 
   const calls: string[] = []
   const paths: string[] = []
@@ -115,6 +118,9 @@ function memoryFs(files: Record<string, string>): TestFs {
         entry.ctimeMs += 1
       }
     },
+    markSymlink(name) {
+      symlinks.add(keyOf(name))
+    },
     async readdir(path) {
       return invoke('readdir', path, () => [...entries.keys()].map((key) => basename(key)))
     },
@@ -134,6 +140,12 @@ function memoryFs(files: Record<string, string>): TestFs {
     },
     async realpath(path) {
       return invoke('realpath', path, () => path)
+    },
+    async lstat(path) {
+      return invoke('lstat', path, () => {
+        if (!entries.has(path)) throw errnoError('ENOENT')
+        return { isSymbolicLink: symlinks.has(path) }
+      })
     }
   }
 }
@@ -387,6 +399,18 @@ describe('classify-before-read (D1-D6)', () => {
     for (const file of probed) expect(file).toMatchObject({ mtimeMs: 1_000, ctimeMs: 1_000 })
   })
 
+  it("classify reports a plain file's own isSymlink false and a symlink's true, from lstat alone", async () => {
+    const fs = memoryFs({ 'a.md': 'A', 'linked.md': 'A' })
+    fs.markSymlink('linked.md')
+    const gateway = createStorageGateway({ root: () => ROOT, detector: fakeDetector(), fs, poolSize: 4 })
+
+    const result = await gateway.classify(['a.md', 'linked.md'])
+
+    expect(result.get('a.md')).toMatchObject({ status: 'ok', isSymlink: false })
+    expect(result.get('linked.md')).toMatchObject({ status: 'ok', isSymlink: true })
+    expect(fs.calls).toContain('lstat linked.md')
+  })
+
   it('read never opens a file the detector calls dataless or unknown', async () => {
     const fs = memoryFs({ 'cloud.md': 'C', 'odd.md': 'O' })
     const detector = fakeDetector()
@@ -395,6 +419,82 @@ describe('classify-before-read (D1-D6)', () => {
     await expect(gateway.read('cloud.md')).resolves.toMatchObject({ status: 'dataless' })
     await expect(gateway.read('odd.md')).resolves.toMatchObject({ status: 'unknown' })
     expect(fs.calls.some((call) => call.startsWith('realpath') || call.startsWith('readFile'))).toBe(false)
+  })
+
+  it('classify flags a non-regular file without probing it and an explicit open refuses to read it', async () => {
+    const memory = memoryFs({ 'pipe.md': 'P' })
+    const fs = { ...memory, stat: async (path: string) => ({ ...(await memory.stat(path)), isFile: () => false }) }
+    const detector = fakeDetector()
+    const gateway = createStorageGateway({ root: () => ROOT, detector, fs, poolSize: 4 })
+
+    expect((await gateway.classify(['pipe.md'])).get('pipe.md')).toMatchObject({ isRegular: false })
+    await expect(gateway.read('pipe.md', { hydrate: true })).resolves.toEqual({ status: 'unavailable', code: 'NOT_REGULAR' })
+    expect(detector.classify).not.toHaveBeenCalled()
+    expect(memory.calls.some((call) => call.startsWith('readFile'))).toBe(false)
+  })
+
+  it('a hydrate read opens a dataless file once, under a permit, reporting progress; a plain read still refuses it', async () => {
+    const fs = memoryFs({ 'cloud.md': 'CC' })
+    const gateway = createStorageGateway({ root: () => ROOT, detector: fakeDetector(), fs, poolSize: 4 })
+    const progress: unknown[] = []
+
+    await expect(gateway.read('cloud.md')).resolves.toMatchObject({ status: 'dataless' })
+    const opened = await gateway.read('cloud.md', { hydrate: true, onProgress: (p) => progress.push(p) })
+
+    expect(opened.status).toBe('ok')
+    expect(progress).toEqual([{ state: 'hydrating' }, { state: 'done', bytes: 2 }])
+    expect(fs.calls.filter((call) => call.startsWith('readFile'))).toHaveLength(1)
+  })
+
+  it('a hydrate read past its deadline reports failed, whose settled waits for the held read to return its permit', async () => {
+    const fs = memoryFs({ 'cloud.md': 'CC', 'a.md': 'A' })
+    const gateway = createStorageGateway({ root: () => ROOT, detector: fakeDetector(), fs, poolSize: 3 }) // cap = 1
+    const progress: Array<{ state: string; status?: string; settled?: Promise<void> }> = []
+    const held = fs.hold('readFile', 'cloud.md')
+
+    const opening = gateway.read('cloud.md', { hydrate: true, onProgress: (p) => progress.push(p) })
+    await flush()
+    await vi.advanceTimersByTimeAsync(HYDRATE_DEADLINE_MS)
+
+    await expect(opening).resolves.toEqual({ status: 'timeout' })
+    expect(progress.map((p) => [p.state, p.status])).toEqual([['hydrating', undefined], ['failed', 'timeout']])
+    let settled = false
+    void progress[1]?.settled?.then(() => (settled = true))
+    await flush()
+    expect(settled).toBe(false)
+
+    held.release()
+    await flush()
+    expect(settled).toBe(true)
+    await expect(gateway.read('a.md')).resolves.toMatchObject({ status: 'ok' })
+  })
+
+  it('a hydrate read the provider fails reports failed with its settled already resolved', async () => {
+    const fs = memoryFs({ 'cloud.md': 'CC' })
+    const gateway = createStorageGateway({ root: () => ROOT, detector: fakeDetector(), fs, poolSize: 4 })
+    const progress: Array<{ state: string; status?: string; settled?: Promise<void> }> = []
+    fs.fail('readFile', 'cloud.md', 'EIO')
+
+    await expect(gateway.read('cloud.md', { hydrate: true, onProgress: (p) => progress.push(p) })).resolves.toEqual({ status: 'unavailable', code: 'EIO' })
+    expect(progress.map((p) => [p.state, p.status])).toEqual([['hydrating', undefined], ['failed', 'unavailable']])
+    await expect(progress[1]?.settled).resolves.toBeUndefined()
+  })
+
+  it('a successful hydrate read forgets the remembered dataless answer, so the next plain read returns the bytes', async () => {
+    const fs = memoryFs({ 'cloud.md': 'CC' })
+    let local = false
+    const detector: DatalessDetector = {
+      classify: async (files) => new Map(files.map((file): [string, ContentPresence] => [file.path, local ? 'local' : 'dataless'])),
+    }
+    const gateway = createStorageGateway({ root: () => ROOT, detector, fs, poolSize: 4 })
+
+    await expect(gateway.read('cloud.md')).resolves.toMatchObject({ status: 'dataless' })
+    await expect(gateway.read('cloud.md', { hydrate: true })).resolves.toMatchObject({ status: 'ok' })
+    local = true
+    const next = await gateway.read('cloud.md')
+
+    expect(next.status).toBe('ok')
+    expect(next.status === 'ok' && next.bytes.toString()).toBe('CC')
   })
 
   it("read returns a local file's bytes and version", async () => {

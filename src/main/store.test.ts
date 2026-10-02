@@ -14,6 +14,12 @@ import { tmpdir } from 'node:os'
 import { app, safeStorage } from 'electron'
 import { DEFAULT_SETTINGS } from '@shared/ipc'
 import {
+  MODEL_POLICY_CAPABILITIES,
+  effectiveLocalSpeechPackPolicy,
+  emptyModelPolicyEntry,
+  type ModelPolicyDocument
+} from '@shared/model-policy'
+import {
   getSettings,
   setSettings,
   recordMeetingSummarized,
@@ -22,6 +28,7 @@ import {
   listDustAgents,
   testApiKey,
   getAllowedProviders,
+  getAdminLocalSpeechPackPolicy,
   getLockedKeys,
   resetAsrHardwarePreferenceForTests,
   resetSettingsCacheForTests
@@ -76,6 +83,14 @@ function readPersisted(path: string): Record<string, unknown> {
 }
 
 const mockAppGetPath = app.getPath as ReturnType<typeof vi.fn>
+const NOW = 1_725_000_000_000
+
+function operatorPolicy(localSpeechPack: ModelPolicyDocument['localSpeechPack']): ModelPolicyDocument {
+  const capabilities = Object.fromEntries(
+    MODEL_POLICY_CAPABILITIES.map((capability) => [capability, emptyModelPolicyEntry('openai', 'gpt-5')])
+  ) as ModelPolicyDocument['capabilities']
+  return { version: NOW, updatedAt: NOW, updatedBy: 'owner@example.test', localSpeechPack, capabilities }
+}
 
 describe('store', () => {
   let userData: string
@@ -181,6 +196,27 @@ describe('store', () => {
     expect(s.temperature).toBe(0.9)          // user wins over managed
     expect(s.suggestEverySec).toBe(30)       // managed wins over default
     expect(s.contentProtection).toBe(true)   // untouched default
+  })
+
+  it('reads localSpeechPack as a raw MDM policy key, not a user setting', () => {
+    writeFileSync(join(userData, 'managed-config.json'), JSON.stringify({ localSpeechPack: 'blocked' }), 'utf8')
+    expect(getAdminLocalSpeechPackPolicy()).toBe('blocked')
+    expect(getSettings()).not.toHaveProperty('localSpeechPack')
+  })
+
+  it('ignores invalid localSpeechPack values in managed config', () => {
+    writeFileSync(join(userData, 'managed-config.json'), JSON.stringify({ localSpeechPack: 'force-download' }), 'utf8')
+    expect(getAdminLocalSpeechPackPolicy()).toBeNull()
+  })
+
+  it('does not default localSpeechPack from unrelated managed config keys', () => {
+    writeFileSync(join(userData, 'managed-config.json'), JSON.stringify({ allowedProviders: ['openai'] }), 'utf8')
+    expect(getAdminLocalSpeechPackPolicy()).toBeNull()
+  })
+
+  it('keeps an Operator-required localSpeechPack policy when managed config omits the key', () => {
+    writeFileSync(join(userData, 'managed-config.json'), JSON.stringify({ allowedProviders: ['openai'] }), 'utf8')
+    expect(effectiveLocalSpeechPackPolicy(operatorPolicy('required'), getAdminLocalSpeechPackPolicy())).toBe('required')
   })
 
   it('drops locked keys when setSettings is called', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { verifyDefaultGatewayPrivacy } from './ai-gateway'
+import { gatewayPrivacyHeaders, readinessForError, verifyDefaultGatewayPrivacy } from './ai-gateway'
 import { reviewedGatewayReply } from './ai-gateway.privacy-fixture'
 
 const TOKEN = 'FAKE_GATEWAY_REGRESSION_TOKEN_ONLY'
@@ -69,6 +69,25 @@ describe('R11 SRC-08: gateway privacy is read back, never auto-provisioned', () 
       await expect(verifyDefaultGatewayPrivacy(TOKEN, ACCOUNT, fetcher)).rejects.toMatchObject({ code: 'GATEWAY_CONFIGURATION_UNSAFE' })
     })
   }
+
+  it('reports CONFIGURED after a passing readback and maps failures to UNREVIEWED or BLOCKED', async () => {
+    await expect(verifyDefaultGatewayPrivacy(TOKEN, ACCOUNT, async () => reviewedGatewayReply())).resolves.toBe('CONFIGURED')
+    const missing = await verifyDefaultGatewayPrivacy(TOKEN, ACCOUNT, async () => reply({ success: false }, 404)).catch((e) => e)
+    expect(readinessForError(missing)).toBe('UNREVIEWED')
+    const unsafe = await verifyDefaultGatewayPrivacy(TOKEN, ACCOUNT, async () =>
+      reply({ success: true, result: { id: 'default', collect_logs: true, cache_ttl: 0, logpush: false } })).catch((e) => e)
+    expect(readinessForError(unsafe)).toBe('BLOCKED')
+  })
+
+  it('sends metadata-only headers on the REST route, no log entry on a binding, and refuses an unproven transport', () => {
+    expect(gatewayPrivacyHeaders('rest')).toEqual({
+      'cf-aig-collect-log': 'true', 'cf-aig-collect-log-payload': 'false', 'cf-aig-skip-cache': 'true'
+    })
+    expect(gatewayPrivacyHeaders('binding')).toEqual({
+      'cf-aig-collect-log': 'false', 'cf-aig-collect-log-payload': 'false', 'cf-aig-skip-cache': 'true'
+    })
+    expect(() => gatewayPrivacyHeaders('unproven')).toThrowError(expect.objectContaining({ code: 'GATEWAY_TRANSPORT_BLOCKED' }))
+  })
 
   it('does not create a missing gateway', async () => {
     let calls = 0

@@ -17,6 +17,8 @@
  *  - Screen-hash dedupe: an unchanged screen re-uses the existing description (only its freshness stamp is
  *    bumped) — a static screen costs a capture + hash, never a re-inference.
  *  - Throttled + single-flight: at most one describe at a time, no more often than MIN_DESCRIBE_INTERVAL_MS.
+ *  - Failure backoff (M2-0429): a capture that keeps failing is retried 6 s → 10 min apart and stops after 5
+ *    permission failures, with one screen.preprocess.suspended audit per streak (capture-backoff.ts).
  *  - Gated: runs only when the session is valid AND the `backgroundScreenContext` setting is on AND either
  *    the local model is ready (enabled, provisioned, org-allowed) or on-device OCR is available (macOS
  *    Vision helper — needs no LLM at all) AND, on macOS, Screen Recording is ALREADY granted (this loop
@@ -33,6 +35,7 @@
  * request) is unit-testable with no Electron, no real sidecar, and no timers.
  */
 import type { ForegroundInfo, ForegroundWatcher } from './foreground-watcher'
+import { createCaptureBackoff, isPermissionTypeCaptureFailure } from './capture-backoff'
 
 export interface ScreenShot {
   image: string
@@ -100,6 +103,8 @@ export interface ScreenPreprocessDeps {
    *  Part of eligibility rather than of the capture, so canRun() — what Settings renders — stays the one
    *  truth. Undefined off darwin: there is no queryable screen grant there and a capture prompts nothing. */
   screenCaptureGranted?: () => boolean
+  /** Which OS the capture errors come from (a darwin "Failed to get sources." is a permission failure). */
+  platform?: NodeJS.Platform | string
   fetchImpl?: typeof fetch
   now?: () => number
   log?: (level: 'warn' | 'info', message: string) => void
@@ -185,6 +190,11 @@ export function createScreenPreprocess(deps: ScreenPreprocessDeps): ScreenPrepro
   // machine. Every invalidation this cache has (drop on focus change, refuse on window mismatch) is fed
   // by that watcher, so without it a cached description is a coin flip on the user's next alt-tab.
   let windowSignalDead = false
+  // M2-0429: a capture that keeps failing is retried on an exponential schedule and stops after 5 permission
+  // failures, instead of every 6 s tick — reset by refresh() (a settings change) and by any success.
+  const captureBackoff = createCaptureBackoff()
+  let settingsKey = ''
+  const platform = deps.platform ?? process.platform
 
   // The dep is only ever wired on macOS (index.ts passes extractScreenText iff process.platform === 'darwin');
   // its presence IS the "OCR available" signal — no separate platform check needed here.
@@ -266,10 +276,18 @@ export function createScreenPreprocess(deps: ScreenPreprocessDeps): ScreenPrepro
     if (now() - lastDescribeAt < MIN_DESCRIBE_INTERVAL_MS) return
     // Yield to real user-facing local streams (live suggest/summary) — don't make them wait for a slot.
     if (deps.runtime.activeStreams() > 0) return
+    if (!captureBackoff.canAttempt(now())) return
     describing = true
     lastDescribeAt = now()
     try {
-      const shot = await deps.getScreenshot('bg-screen')
+      let shot: ScreenShot
+      try {
+        shot = await deps.getScreenshot('bg-screen')
+      } catch (e) {
+        noteCaptureFailure(e)
+        throw e
+      }
+      captureBackoff.recordSuccess()
       // main itself flagged this frame as coming from a monitor other than the one it asked for. The live
       // capture path can tell the user that; a background describe cannot, and caching it would answer
       // "what's on my screen" about a monitor nobody looked at. Skip the pass instead (MQA-183).
@@ -338,6 +356,22 @@ export function createScreenPreprocess(deps: ScreenPreprocessDeps): ScreenPrepro
     }
   }
 
+  /** Private View is a deliberate block, not a failure; everything else feeds the backoff, and the streak is
+   *  audited once when attempts stop being frequent. */
+  function noteCaptureFailure(e: unknown): void {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (/private view/i.test(msg)) return
+    const permission = isPermissionTypeCaptureFailure(msg, platform)
+    const failure = captureBackoff.recordFailure(now(), permission)
+    if (failure.suspended) {
+      deps.audit?.('screen.preprocess.suspended', {
+        failures: failure.failures,
+        reason: permission ? 'permission' : 'error',
+        latched: failure.latched
+      })
+    }
+  }
+
   function handleWindowChange(info: ForegroundInfo): void {
     currentWindowId = info.windowId
     cache = null // the cached description belonged to the window we just left
@@ -401,6 +435,13 @@ export function createScreenPreprocess(deps: ScreenPreprocessDeps): ScreenPrepro
   return {
     canRun,
     refresh: () => {
+      // Every settings write lands here (overlay drags included); only a change to what this engine reads
+      // is a reason to retry a suspended capture.
+      const key = JSON.stringify(deps.getSettings())
+      if (key !== settingsKey) {
+        settingsKey = key
+        captureBackoff.reset()
+      }
       if (canRun()) start()
       else if (started) stop()
     },

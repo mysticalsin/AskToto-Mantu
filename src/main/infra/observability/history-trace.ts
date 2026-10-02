@@ -1,5 +1,5 @@
 import type { AuditSink } from '../../logger'
-import { HistorySettledSchema, HistoryTraceSchema } from '@shared/ipc'
+import { HistorySettledSchema, HistoryTraceSchema, HistoryTransitionSchema } from '@shared/ipc'
 
 export interface HistoryTracer {
   /** Serve one History list request; audits `received` and `served` when `rawTrace` is a valid HistoryTrace,
@@ -7,6 +7,8 @@ export interface HistoryTracer {
   traceList<T extends readonly unknown[]>(rawTrace: unknown, list: () => Promise<T>): Promise<T>
   /** Audit the renderer's `settled` report, once, and only for a requestId this tracer received. */
   settle(rawReport: unknown): void
+  /** Audit the renderer's committed History transition when `rawTransition` is a valid HistoryTransition. */
+  transition(rawTransition: unknown): void
 }
 
 export interface HistoryTracerOptions {
@@ -75,6 +77,12 @@ export function createHistoryTracer(opts: HistoryTracerOptions): HistoryTracer {
         ipcMs,
         renderMs
       })
+    },
+    transition(rawTransition: unknown): void {
+      const parsed = HistoryTransitionSchema.safeParse(rawTransition)
+      if (!parsed.success) return
+      const { from, to, committedAtMs } = parsed.data
+      opts.audit('history.transition', { from, to, committedAtMs })
     }
   }
 }

@@ -21,7 +21,7 @@ import { last4OfSecret } from '../vault'
 import type { IntegrationRow, OperatorStore, SeatRow } from '../store'
 import { resolveTierAndEntitlements } from '../tiers'
 
-function decodeOAuthPayload(plaintext: string): OAuthTokenPayload | null {
+export function decodeOAuthPayload(plaintext: string): OAuthTokenPayload | null {
   try {
     const parsed = JSON.parse(plaintext) as unknown
     if (!parsed || typeof parsed !== 'object') return null
@@ -127,7 +127,7 @@ export function parseIntegrationScope(raw: string): IntegrationScope {
 
 /** Empty scope (no `tiers`, no `groups`) means every entitled seat; otherwise the seat's resolved
  *  tier, or membership in one of the listed groups (by device id or SSO email), must match. */
-async function seatInScope(
+export async function seatInScope(
   store: Pick<OperatorStore, 'listGroupMembers'>,
   scope: IntegrationScope,
   seat: Pick<SeatRow, 'device_id' | 'sso_email'>,

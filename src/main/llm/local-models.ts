@@ -2,8 +2,10 @@ import { app } from 'electron'
 import { createHash } from 'node:crypto'
 import { createReadStream, existsSync, statSync, statfsSync } from 'node:fs'
 import { join } from 'node:path'
-import { freemem, totalmem } from 'node:os'
+import { totalmem } from 'node:os'
 import { auditLog, type AuditEvent } from '../logger'
+import { availableMemoryGB } from './available-memory'
+import { hkMRamFloorOverrideActive, hostFloorOverridden, type HkMRamFloorOverride } from '../qa-hk-m'
 
 /**
  * Code-reviewed metadata for the Métis Local model payload.
@@ -148,12 +150,26 @@ export interface LocalSpawnProfile {
  *  spare, while a 16 GB+ machine keeps the faster offloaded configuration. */
 export const GPU_OFFLOAD_MIN_RAM_GB = 12
 
-/** MQA-270 (B9): free RAM required before full GPU offload is chosen. `-ngl 99` on an INTEGRATED GPU
+/** MQA-270 (B9): available RAM required before full GPU offload is chosen. `-ngl 99` on an INTEGRATED GPU
  *  offloads into host DRAM — the same memory everything else needs — and the profile was picked purely
  *  from totalmem(), so a 16 GB machine with 3 GB free still committed the full-offload footprint.
- *  freemem() under-reports on Windows (standby list excluded), so the threshold is generous; failing it
- *  falls to the small-machine profile, which costs speed, never correctness. */
+ *  M2-0430: the reading is available memory (available-memory.ts), not freemem(): on macOS freemem()
+ *  counts only free pages, so a 32 GB M-series Mac with 0.45 GB "free" was forced onto the CPU profile.
+ *  freemem() still under-reports on Windows (standby list excluded), so the threshold is generous; failing
+ *  it falls to the small-machine profile, which costs speed, never correctness. */
 export const GPU_OFFLOAD_MIN_FREE_RAM_GB = 5
+
+/** Tokens per slot on a roomy offloaded machine: a 60-minute meeting transcript plus the recap prompt and
+ *  its 512-token answer, and a full 24,000-character extraction window, both fit one slot.
+ *  Slots stay at two (live suggest on 0, summary and extraction on 1) and the recap pre-empts extraction
+ *  (local.ts) rather than getting a third slot of its own: `-c` is shared across `--parallel` slots, so a
+ *  third slot either cuts every slot's context by a third or adds another slot's worth of KV memory. */
+export const LONG_CONTEXT_SLOT_TOKENS = 24_576
+/** Total and available RAM before the long context is spent. The extra KV cache over the 16K window is
+ *  bounded by the measured CPU-profile slope (about 0.2 MB per token), so under 7 GB; the available floor
+ *  keeps that well inside what the machine can hand out without paging. */
+export const LONG_CONTEXT_MIN_RAM_GB = 24
+export const LONG_CONTEXT_MIN_FREE_RAM_GB = 10
 
 export function spawnProfileFor(
   entry: LocalModelEntry,
@@ -161,7 +177,9 @@ export function spawnProfileFor(
   freeRamGB = freeRamGBValue()
 ): LocalSpawnProfile {
   if (totalRamGB >= GPU_OFFLOAD_MIN_RAM_GB && freeRamGB >= GPU_OFFLOAD_MIN_FREE_RAM_GB) {
-    return { ctxSize: entry.ctxSize, parallel: 2, gpuLayers: 99 }
+    const roomy = totalRamGB >= LONG_CONTEXT_MIN_RAM_GB && freeRamGB >= LONG_CONTEXT_MIN_FREE_RAM_GB
+    const ctxSize = roomy ? Math.max(entry.ctxSize, 2 * LONG_CONTEXT_SLOT_TOKENS) : entry.ctxSize
+    return { ctxSize, parallel: 2, gpuLayers: 99 }
   }
   // Small machine (or a big one that is currently squeezed): no offload, and a context halved from the
   // model's own ceiling so the committed KV cache stays small too. Measured at ~2.8 GB for the 4B,
@@ -234,20 +252,36 @@ export function advertisedRamGB(bytes = totalmem()): number {
 
 /** Same value, exported name used by spawnProfileFor's default argument (declared above it). */
 function freeRamGBValue(): number {
-  return freemem() / 1024 ** 3
+  return availableMemoryGB()
 }
 
 function totalRamGBValue(): number {
   return totalRamGB()
 }
 
-/** Refuse a load when the machine cannot safely run the bundled model. */
-export function assertRamOk(id: string): void {
+/**
+ * Refuse a load when the machine cannot safely run the bundled model. Only the armed QA host-floor gate
+ * (qa-hk-m.ts qaHostFloorOverride: packaged, isolated profile, explicit env) lifts this advertised-RAM check; it never
+ * changes the user-facing gate, and model choice still follows the real host. `ramFloorOverride` (M2-0460's HK-M token)
+ * lifts nothing itself: it only marks a lifted start as the HK-M hook's own.
+ */
+export function assertRamOk(id: string, ramFloorOverride?: HkMRamFloorOverride): void {
   const entry = getModel(id)
   const available = advertisedRamGB()
-  if (available < entry.minTotalRamGB) {
-    throw new InsufficientRamError(id, entry.minTotalRamGB, totalRamGB())
+  if (available >= entry.minTotalRamGB) return
+  if (hostFloorOverridden('advertised-ram', auditLog)) {
+    // The HK-M report counts this per-start marker; local.host-floor-override is the once-per-process record.
+    if (hkMRamFloorOverrideActive(ramFloorOverride, process.env, app.isPackaged)) {
+      auditLog('hk-m.ram-floor-override', {
+        modelId: id,
+        advertisedGB: available,
+        requiredGB: entry.minTotalRamGB,
+        totalmemBytes: totalmem()
+      })
+    }
+    return
   }
+  throw new InsufficientRamError(id, entry.minTotalRamGB, totalRamGB())
 }
 
 /**
@@ -506,8 +540,8 @@ async function verifyFileChecksum(
  * Verify both model files before a cold llama-server start, re-hashing only when a file's on-disk
  * identity is not already cached as verified (see `verifiedFileIdentity`).
  */
-export async function verifyIntegrity(id: string): Promise<void> {
-  assertRamOk(id)
+export async function verifyIntegrity(id: string, ramFloorOverride?: HkMRamFloorOverride): Promise<void> {
+  assertRamOk(id, ramFloorOverride)
   const entry = getModel(id)
   const paths = modelPaths(id)
   const bundled = modelSource(id) === 'bundled'

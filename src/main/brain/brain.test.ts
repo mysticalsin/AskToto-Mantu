@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, existsSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import type { Settings } from '@shared/ipc'
 import { MeetingExtractionSchema, BRAIN_EXTRACTION_PROMPT, type MeetingExtraction, type DealEntity, type PersonEntity } from '@shared/brain'
 import { INJECTION_GUARD } from '@shared/prompts'
@@ -61,8 +62,15 @@ describe('brain', () => {
   let s: Settings
 
   beforeEach(() => {
-    folder = mkdtempSync(join(tmpdir(), 'asktoto-brain-test-'))
+    // realpathSync.native: the gateway resolves the root via fs.realpath before reading under it, and on
+    // Windows CI's short 8.3-style RUNNER~1 temp path a bare mkdtempSync path never matches that resolved
+    // root. useStorageForTests(): without it, updateIndex's async index-unavailable check goes through the
+    // real per-platform dataless probe (a spawned PowerShell process on Windows) instead of treating every
+    // freshly-written temp file as local — a slow/flaky real probe then misclassifies index.json as not
+    // local, which idles every concurrent updateIndex call and silently drops its mutation (M2-0003).
+    folder = realpathSync.native(mkdtempSync(join(tmpdir(), 'asktoto-brain-test-')))
     s = settingsFor(folder)
+    useStorageForTests()
   })
   // MQA-007: settle the index-write lane BEFORE removing the profile. updateIndex writes
   // index.json through a tmp+rename, and a detached one can still be in flight here — under

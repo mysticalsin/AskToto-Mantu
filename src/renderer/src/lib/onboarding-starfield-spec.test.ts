@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
 import { describe, expect, it } from 'vitest'
 import {
   appearOpacity,
@@ -21,7 +22,7 @@ const specSrc = readFileSync(join(__dirname, './onboarding-starfield-spec.ts'), 
 const engineSrc = readFileSync(join(__dirname, './onboarding-starfield-engine.ts'), 'utf8')
 const componentSrc = readFileSync(join(__dirname, '../components/OnboardingStarfield.tsx'), 'utf8')
 const experienceSrc = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
-const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
+const css = readAppCss()
 const html = readFileSync(join(__dirname, '../../index.html'), 'utf8')
 const pkg = readFileSync(join(__dirname, '../../../../package.json'), 'utf8')
 

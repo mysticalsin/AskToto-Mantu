@@ -57,8 +57,19 @@
 //                     then prints `sampled` or `failed`. It samples only its own parent and exits once
 //                     <main> is no longer its parent. src/main/infra/observability/stall-sampler.ts owns
 //                     the protocol; all redaction, retention and auditing happen there, not here.
+//
+//   code-identity <path>  One-shot, read-only. Reads the static code signature of <path> (an app bundle or a
+//                     binary) and prints ONE JSON object {identifier, cdhash, teamId, adhoc}. cdhash is the
+//                     lowercase hex code-directory hash macOS pins Screen Recording to for an ad-hoc build;
+//                     it is "" for unsigned code. src/main/capture-permissions uses it to tell a grant held
+//                     by another build from a plain denial. Never touches the permissions database.
+//
+//   bundle-copies <bundle-id>  One-shot, read-only. Asks LaunchServices for every installed app with that
+//                     bundle id and prints ONE JSON object {copies:[{path, version}]}. Several copies with one
+//                     bundle id compete for one Screen Recording entry.
 import AppKit
 import Darwin
+import Security
 import Speech
 import Vision
 
@@ -676,11 +687,71 @@ func runSupervise(_ options: [String]) -> Never {
     }
 }
 
+// MARK: - code-identity / bundle-copies
+
+struct CodeIdentityResult: Encodable {
+    let identifier: String
+    let cdhash: String
+    let teamId: String
+    let adhoc: Bool
+}
+
+struct BundleCopy: Encodable {
+    let path: String
+    let version: String
+}
+
+struct BundleCopiesResult: Encodable {
+    let copies: [BundleCopy]
+}
+
+func emitJson<T: Encodable>(_ value: T, command: String) -> Never {
+    do {
+        let encoded = try JSONEncoder().encode(value)
+        FileHandle.standardOutput.write(encoded)
+        FileHandle.standardOutput.write("\n".data(using: .utf8)!)
+    } catch {
+        fail("\(command): could not encode result: \(error.localizedDescription)")
+    }
+    exit(0)
+}
+
+func runCodeIdentity(path: String) -> Never {
+    var staticCode: SecStaticCode?
+    guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &staticCode) == errSecSuccess,
+          let code = staticCode else {
+        fail("code-identity: cannot read code at \(path)")
+    }
+    var infoRef: CFDictionary?
+    guard SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &infoRef) == errSecSuccess,
+          let info = infoRef as? [String: Any] else {
+        fail("code-identity: no signing information for \(path)")
+    }
+    let cdhash = (info[kSecCodeInfoUnique as String] as? Data)?.map { String(format: "%02x", $0) }.joined() ?? ""
+    let flags = (info[kSecCodeInfoFlags as String] as? NSNumber)?.uint32Value ?? 0
+    emitJson(CodeIdentityResult(
+        identifier: info[kSecCodeInfoIdentifier as String] as? String ?? "",
+        cdhash: cdhash,
+        teamId: info[kSecCodeInfoTeamIdentifier as String] as? String ?? "",
+        adhoc: SecCodeSignatureFlags(rawValue: flags).contains(.adhoc)
+    ), command: "code-identity")
+}
+
+func runBundleCopies(bundleId: String) -> Never {
+    let copies = NSWorkspace.shared.urlsForApplications(withBundleIdentifier: bundleId).map { url in
+        BundleCopy(
+            path: url.path,
+            version: Bundle(url: url)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+        )
+    }
+    emitJson(BundleCopiesResult(copies: copies), command: "bundle-copies")
+}
+
 // MARK: - entry point
 
 let arguments = CommandLine.arguments
 guard arguments.count >= 2 else {
-    fail("usage: metis-mac-helper <watch-frontmost|ocr|transcribe|screen-metrics|stat-flags|proc-info|supervise|stall-watch> [path|-]")
+    fail("usage: metis-mac-helper <watch-frontmost|ocr|transcribe|screen-metrics|stat-flags|proc-info|supervise|stall-watch|code-identity|bundle-copies> [path|-]")
 }
 switch arguments[1] {
 case "watch-frontmost":
@@ -705,6 +776,16 @@ case "supervise":
     runSupervise(Array(arguments.dropFirst(2)))
 case "stall-watch":
     runStallWatch(Array(arguments.dropFirst(2)))
+case "code-identity":
+    guard arguments.count >= 3 else {
+        fail("usage: metis-mac-helper code-identity <path>")
+    }
+    runCodeIdentity(path: arguments[2])
+case "bundle-copies":
+    guard arguments.count >= 3 else {
+        fail("usage: metis-mac-helper bundle-copies <bundle-id>")
+    }
+    runBundleCopies(bundleId: arguments[2])
 default:
     fail("unknown command: \(arguments[1])")
 }
