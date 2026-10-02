@@ -355,6 +355,42 @@ function historyProbes(measured) {
   return measured.history.filter((entry) => !entry.skipped)
 }
 
+function maxNumber(values) {
+  const numbers = values.filter((value) => typeof value === 'number')
+  return numbers.length > 0 ? Math.max(...numbers) : null
+}
+
+function fifoMeetingFixtures(row, fixtures, fixtureCounts, evidence) {
+  if (typeof evidence?.fifoMeetingFixtures === 'number') return evidence.fifoMeetingFixtures
+  if (row === 'synthetic-dataless' && typeof fixtureCounts?.fifoMeetings === 'number') return fixtureCounts.fifoMeetings
+  return fixtures.filter((fixture) => String(fixture).endsWith('.md')).length
+}
+
+/** FIFO-backed rows are exercised when History reached the fixture set and refused the unreadable meeting
+ * rows without opening a non-regular file. An open reader is reported by its own criterion, never as PASS. */
+function fifoRefusalEvidence(row, measured, evidence, fixtures, fixtureCounts) {
+  if (row !== 'fifo' && row !== 'synthetic-dataless') return null
+  const probes = historyProbes(measured)
+  const requiredUnavailableRows = fifoMeetingFixtures(row, fixtures, fixtureCounts, evidence)
+  const answered = probes.filter((entry) => !entry.hung && !entry.error)
+  const brainStatusAnswered = answered.some((entry) => settledWithin(entry.calls?.brainStatus, Number.POSITIVE_INFINITY))
+  const unavailableRows = maxNumber(answered.map((entry) => entry.unavailable ?? entry.notDownloaded))
+  const matchingProbe = answered.find(
+    (entry) =>
+      typeof (entry.unavailable ?? entry.notDownloaded) === 'number' &&
+      (entry.unavailable ?? entry.notDownloaded) >= requiredUnavailableRows &&
+      settledWithin(entry.calls?.brainStatus, Number.POSITIVE_INFINITY)
+  )
+  return {
+    exercised: Boolean(matchingProbe),
+    reason: matchingProbe ? 'history-refused-fixtures' : 'history-did-not-prove-refusal',
+    historyProbesAnswered: answered.length,
+    unavailableRows,
+    requiredUnavailableRows,
+    brainStatusAnswered
+  }
+}
+
 /** Whether one History probe of `row` opened History (list + brain status) with a usable list, or searched
  *  with results, within HISTORY_BUDGET_MS. A hung or failed probe did neither; a failed search
  *  (`searchError`) did not search. A usable list lists at least one fixture row, so a fast empty list never
@@ -472,6 +508,9 @@ export function evaluateCriteria(row, measured, evidence, { history = false } = 
     { name: 'dns-lookup < 250', pass: measured.samples.every((s) => s.lookupMs < 250) }
   ]
   if (row === 'dataless') criteria.push({ name: 'still-dataless', pass: evidence?.stillDataless === true })
+  if (row === 'fifo' || row === 'synthetic-dataless') {
+    criteria.push({ name: 'non-regular-fixtures-unopened', pass: (evidence?.fixturesOpened ?? []).length === 0 })
+  }
   if (history) {
     const probes = historyProbes(measured)
     criteria.push(
@@ -515,9 +554,19 @@ export function buildReport({
   windowWarmup = false
 }) {
   const criteria = evaluateCriteria(row, measured, evidence, { history })
+  const refusalEvidence = fifoRefusalEvidence(row, measured, evidence, fixtures, fixtureCounts)
   // The control row has nothing to exercise: its verdict is the criteria alone.
-  const exercised = row === 'none' || evidence?.exercised
-  const verdict = !complete ? 'INCOMPLETE' : !exercised ? 'NOT_EXERCISED' : criteria.every((c) => c.pass) ? 'PASS' : 'FAIL'
+  const exercised = refusalEvidence?.exercised ?? (row === 'none' || evidence?.exercised)
+  const openedNonRegularFixture = criteria.some((criterion) => criterion.name === 'non-regular-fixtures-unopened' && !criterion.pass)
+  const verdict = !complete
+    ? 'INCOMPLETE'
+    : openedNonRegularFixture
+      ? 'FAIL'
+      : !exercised
+        ? 'NOT_EXERCISED'
+        : criteria.every((c) => c.pass)
+          ? 'PASS'
+          : 'FAIL'
   const timeline = [...measured.samples, ...measured.late.map((entry) => ({ ...entry, late: true }))].sort((a, b) => a.tMs - b.tMs)
   return {
     harness: 'ST-1',
@@ -538,7 +587,8 @@ export function buildReport({
     loop: measured.loop,
     write: { maxMs: Math.max(0, ...measured.samples.map((s) => s.writeMs)) },
     lookup: { maxMs: Math.max(0, ...measured.samples.map((s) => s.lookupMs)) },
-    exercised: evidence?.exercised ?? null,
+    exercised: refusalEvidence?.exercised ?? evidence?.exercised ?? null,
+    ...(refusalEvidence ? { exerciseEvidence: refusalEvidence } : {}),
     ...(row === 'fifo' || row === 'synthetic-dataless' ? { fixturesOpened: evidence?.fixturesOpened ?? null } : {}),
     ...(row === 'synthetic-dataless'
       ? { fixtureKind: 'synthetic-dataless', fixtureCounts, sfDatalessSet: evidence?.sfDatalessSet ?? null }
@@ -565,6 +615,20 @@ export function buildReport({
         : { fromByte: attribution.mainLog.fromByte, exactLaunchOffset: attribution.mainLog.exactLaunchOffset },
     appEvidence: attribution.appEvidence
   }
+}
+
+export function writeJsonToStdout(value, stdout = process.stdout) {
+  const text = `${JSON.stringify(value, null, 2)}\n`
+  return new Promise((resolve, reject) => {
+    try {
+      stdout.write(text, (error) => {
+        if (error) reject(error)
+        else resolve()
+      })
+    } catch (error) {
+      reject(error)
+    }
+  })
 }
 
 /** The launch itself never reached a candidate to measure: a genuine FAIL (inspector: false), never a
