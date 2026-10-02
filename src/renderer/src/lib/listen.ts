@@ -2603,20 +2603,20 @@ export function useListen(
         } else if (source === 'both' && !micOk && sysOk) {
           note = 'Microphone unavailable. Listening to system audio only.'
         }
-        // Mirror the soft note into the structured captureDegraded state: `micOk` discriminates the side
-        // (note is only non-null on source==='both' with exactly one side up). The persistent chrome (Bar
-        // chip / minimized pill) reads this instead of `error`, which only renders inside the Copilot body
-        // and is invisible with the panel collapsed or the widget minimized — exactly how a whole meeting
-        // ran mic-only unnoticed on 2026-07-20.
+        // Keep the missing-side diagnosis in compact chrome, independently of the Copilot error banner.
+        // note is non-null only for both-source capture with exactly one side up; micOk identifies that side.
         const captureDegraded: CaptureDegraded | null = note
           ? { side: micOk ? 'them' : 'you', note, permission: micOk && isSysPermDenied }
           : null
         themDegradedRef.current = captureDegraded?.side === 'them' ? captureDegraded : null
-        // At least one channel (mic and/or system loopback) is confirmed open here — this is the point
-        // a consent/recording indicator should key off, not the optimistic `listening: true` set at the
-        // top of start() before any capture was actually acquired.
+        // Capture is confirmed now; consent/recording indicators must not use optimistic listening alone.
+        // Preserve Whisper failure/retry state reported while capture acquisition was pending.
         if (!captureAdmissionIsOpen(myEpoch)) return
-        setState((s) => ({ ...s, error: note, captureDegraded, listening: true, capturing: true, loading: !readyRef.current }))
+        setState((s) => ({
+          ...s, captureDegraded, listening: true, capturing: true,
+          error: engineRef.current === 'whisper' ? s.error ?? note : note,
+          loading: !readyRef.current && (engineRef.current !== 'whisper' || s.error === null || s.loading)
+        }))
       } finally {
         // Every exit path (the several early `return`s above, a thrown error, or the normal fall-through)
         // clears the guard so a later, legitimate start() is never permanently blocked.
