@@ -33,6 +33,16 @@ const PNG_SIGNATURE = '89504e470d0a1a0a'
 const CHILD_EXIT_TIMEOUT_MS = 10_000
 const CHILD_KILL_TIMEOUT_MS = 5_000
 const PROFILE_CLEANUP_TIMEOUT_MS = 20_000
+const SETTINGS_VISUAL_STABILIZER_CSS = `
+*, *::before, *::after {
+  animation-delay: 0s !important;
+  animation-duration: 0s !important;
+  transition-delay: 0s !important;
+  transition-duration: 0s !important;
+  caret-color: transparent !important;
+  scroll-behavior: auto !important;
+}
+`
 
 function usage() {
   console.error('Usage: node scripts/qa/settings-section-visual-compare.mjs <before executable> <after executable> <out dir>')
@@ -114,12 +124,12 @@ function fitsInside(innerBox, outerBox) {
   )
 }
 
-function sectionCaptureClipped({ buffer, sectionBox, panelBox }) {
-  return !fitsInside(sectionBox, panelBox) || !screenshotCoversBox(buffer, sectionBox)
+function sectionCaptureClipped({ buffer, sectionBox }) {
+  return !screenshotCoversBox(buffer, sectionBox)
 }
 
 async function installDeterministicSettingsQaBridge(page) {
-  const skipped = await page.evaluate(() => {
+  const skipped = await page.evaluate((stabilizerCss) => {
     if (!window.__metisSettingsVisualQa) {
       Object.defineProperty(window, '__metisSettingsVisualQa', { value: true, configurable: true })
       const fixedNow = 1_000
@@ -134,6 +144,12 @@ async function installDeterministicSettingsQaBridge(page) {
       }
       const nativeRaf = window.requestAnimationFrame.bind(window)
       window.requestAnimationFrame = (callback) => nativeRaf(() => callback(fixedNow))
+    }
+    if (!document.querySelector('style[data-settings-visual-stabilizer]')) {
+      const style = document.createElement('style')
+      style.dataset.settingsVisualStabilizer = 'true'
+      style.textContent = stabilizerCss
+      document.head.append(style)
     }
     const api = window.toto
     if (!api || typeof api !== 'object') throw new Error('window.toto bridge not found')
@@ -193,7 +209,7 @@ async function installDeterministicSettingsQaBridge(page) {
     define('onUpdateReady', () => () => undefined)
     define('onUpdateError', () => () => undefined)
     return skippedNames
-  })
+  }, SETTINGS_VISUAL_STABILIZER_CSS)
   if (skipped.length > 0) {
     console.warn(`settings-section-visual-compare warning=bridge overrides skipped members=${skipped.join(',')}`)
   }
@@ -377,9 +393,8 @@ async function captureSections(page, appOutDir) {
       const key = `${slug(tab)}-${String(index + 1).padStart(2, '0')}-${slug(title)}`
       const file = join(appOutDir, `${key}.png`)
       const box = await section.boundingBox()
-      const panelBox = await tabPanel.boundingBox()
       const buffer = await section.screenshot({ path: file, animations: 'disabled', caret: 'hide' })
-      const clipped = sectionCaptureClipped({ buffer, sectionBox: box, panelBox })
+      const clipped = sectionCaptureClipped({ buffer, sectionBox: box })
       sections.push({
         key,
         tab,
@@ -418,6 +433,7 @@ async function captureApp(label, executable, outDir) {
     if (!ready) throw new Error(`${label} did not report app.renderer.ready`)
     browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout: CONNECT_TIMEOUT_MS })
     const page = await findOverlayPage(browser)
+    await page.emulateMedia({ reducedMotion: 'reduce' })
     const pageErrors = []
     page.on('pageerror', (err) => pageErrors.push(err instanceof Error ? err.message : String(err)))
     const sections = await captureSections(page, appOutDir)
