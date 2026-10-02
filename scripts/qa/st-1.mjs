@@ -10,6 +10,11 @@
  * kinds stand in for a cloud-only meetings-root file that blocks the thread reading it:
  *   - `fifo`: real FIFOs (POSIX only) placed as meeting and `.brain` files.
  *   - `dataless`: real evicted (dataless) files, read from `--cloud-dir`.
+ *   - `synthetic-dataless` (macOS only): the hosted-runner stand-in for a mostly-evicted cloud folder, in
+ *     the representative-profile shape (53 local placeholder meetings, 6 FIFO meetings, a FIFO
+ *     `.brain/index.json` and FIFO `.brain` entity files). It proves the main-thread and threadpool
+ *     guarantees on candidate bytes; SF_DATALESS detection on real evicted files is not measured here.
+ *     Its verdict uses the fifo row's exercised rule.
  * `none` places no fixture: the control row, which tells a boot-time block apart from a fixture reader.
  *
  * Attribution evidence, reported and never judged: every sample's time since spawn, the loop's max since
@@ -17,12 +22,13 @@
  * block, not on the libuv pool) and the active libuv resources; a CPU profile of the first 90 s, with when
  * it was requested and when the profiler actually started; the profile's audit logs, stall bundles and this
  * launch's main.log; which FIFOs had a reader; from +20 s, History's own IPC round trip (recallList +
- * brainStatus, with its row and not-downloaded row counts) measured in the main window; the app's own
- * native boot stage timings (`bootStages`, read from the profile's audit trail); and the runner witness (`witness`, on every timeline entry and summed
- * up in the report): this harness's own event loop delay, a probe write on the temp volume the profile is
- * on, started with each sample, and the machine's CPU busy share since the previous sample, which tell a
- * machine-wide stall apart from the app's own. All of it lands in the report directory (`--report-dir`,
- * else the `--out` file's directory, else out/st-1).
+ * brainStatus, with its row and not-downloaded row counts) measured in the main window (`--history off`
+ * skips those probes, so History stays idle for the whole run); the app's own native boot stage timings
+ * (`bootStages`, read from the profile's audit trail); and the runner witness (`witness`, on every timeline
+ * entry and summed up in the report): this harness's own event loop delay, a probe write on the temp volume
+ * the profile is on, started with each sample, and the machine's CPU busy share since the previous sample,
+ * which tell a machine-wide stall apart from the app's own. All of it lands in the report directory
+ * (`--report-dir`, else the `--out` file's directory, else out/st-1).
  *
  * `--history` makes it the History row: every History probe also runs a search (recallSearch) through the
  * same bridge, and the criteria add History open and search, each answering with a usable (possibly
@@ -34,15 +40,16 @@
  * timings leave the renderer, never a row or a hit.
  *
  * Usage:
- *   node scripts/qa/st-1.mjs --installer <Metis-QA-<v>.zip | Metis-Setup-<v>.exe> --provenance <provenance.json>
- *       --fixtures fifo|dataless|none [--history] [--count 6] [--cloud-dir <folder of evicted files>]
- *       [--main-log <main.log>] [--exe <installed executable>] [--profile-template <userData dir>] [--minutes 5]
- *       [--out <report.json>] [--report-dir <dir>] [--purpose window-construction --window-variant <variant>]
+ *       --fixtures fifo|dataless|synthetic-dataless|none [--history [on|off]] [--count 6]
+ *       [--cloud-dir <folder of evicted files>] [--main-log <main.log>] [--exe <installed executable>]
+ *       [--profile-template <userData dir>] [--minutes 5] [--out <report.json>] [--report-dir <dir>]
+ *       [--purpose window-construction --window-variant <variant> [--window-warmup]]
  *
  * `--purpose window-construction` marks a short launch made only to measure the boot window's constructor under
  * one QA-identity rendering variant (shipped, spellcheck-off, paint-when-hidden, prewarm-spellchecker), passed to
- * the candidate as METIS_QA_WINDOW_VARIANT. Its report says `st1Evidence: false` and is
- * never ST-1 evidence. Every other run launches the shipped variant.
+ * the candidate as METIS_QA_WINDOW_VARIANT. Its report says `st1Evidence: false` and is never ST-1 evidence.
+ * A `--window-warmup` window-construction launch is also marked `warmup: true`; `--gate-window` skips those
+ * rows and reports how many it skipped. Every other run launches the shipped variant.
  *
  * Every in-app wait is bounded and every failure to answer is recorded in the report's `errors` (step, tMs,
  * message) while the run continues: only the criteria decide PASS or FAIL. The report is rewritten every
@@ -90,12 +97,15 @@ import {
   pinnedExpression,
   recordSample,
   releaseExpression,
+  syntheticDatalessPlan,
   runPurpose,
+  shouldProbeHistory,
   timedCallsExpression,
   windowConstructionGate,
   withTimeout
 } from './lib/st-1-core.mjs'
 
+const FIXTURE_KINDS = ['fifo', 'dataless', 'synthetic-dataless', 'none']
 const MIN_FIFO_COUNT = 3
 const DEFAULT_FIFO_COUNT = 6
 const DEFAULT_MINUTES = 5
@@ -178,6 +188,21 @@ function placeFifoFixtures(root, count) {
     createFifo(target)
   }
   return targets
+}
+
+/** The synthetic-dataless profile shape (syntheticDatalessPlan): content-free local placeholder meetings
+ *  and a kernel-blocking FIFO at every path a mostly-evicted cloud folder would present. */
+function placeSyntheticDatalessFixtures(root) {
+  const plan = syntheticDatalessPlan()
+  mkdirSync(root, { recursive: true })
+  for (const name of plan.local) writeFileSync(join(root, name), '')
+  return plan.fifos.map((name) => {
+    const target = join(root, ...name.split('/'))
+    mkdirSync(dirname(target), { recursive: true })
+    rmSync(target, { force: true })
+    createFifo(target)
+    return target
+  })
 }
 
 /** SF_DATALESS, <sys/stat.h>. */
@@ -549,7 +574,7 @@ async function probeHistory(cdp, tMs, search) {
 
 /** Fills `run` (lib/st-1-core.mjs emptyRun) in place, so a partial report can be written at any moment.
  *  Never throws on a probe that fails or hangs: each is recorded in `run.errors` and the run goes on. */
-async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, witnessFile, history }) {
+async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, witnessFile, historyOn, history }) {
   const sinceSpawn = () => Math.round(performance.now() - spawnedAt)
   run.setupAtMs = sinceSpawn()
   const witness = startWitness(witnessFile)
@@ -565,7 +590,7 @@ async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, 
   while (Date.now() < deadline) {
     const tMs = sinceSpawn()
     if (run.profiler.running && tMs >= PROFILE_UNTIL_MS) await stopProfiler(cdp, run.profiler, cpuProfilePath, tMs)
-    if (!historyRunning && tMs >= HISTORY_FROM_MS && tMs - historyLastMs >= HISTORY_EVERY_MS) {
+    if (shouldProbeHistory({ historyOn, historyRunning, tMs, historyLastMs, fromMs: HISTORY_FROM_MS, everyMs: HISTORY_EVERY_MS })) {
       historyLastMs = tMs
       historyRunning = probeHistory(cdp, tMs, history).then((probe) => {
         run.history.push(probe)
@@ -670,9 +695,11 @@ function readStorageSaturations(mainLog) {
 /** Whether the run actually reached the fixtures, and (dataless only) whether they stayed unread. */
 function collectExercisedEvidence(kind, fixtures, mainLogPath, mainLogOffset, root) {
   if (kind === 'none') return { exercised: null }
-  if (kind === 'fifo') {
+  if (kind === 'fifo' || kind === 'synthetic-dataless') {
     const opened = fixtures.filter((fifo) => releaseFifo(fifo))
-    return { exercised: opened.length >= 1, fixturesOpened: opened.map((fifo) => relative(root, fifo)) }
+    const evidence = { exercised: opened.length >= 1, fixturesOpened: opened.map((fifo) => relative(root, fifo)) }
+    // stat reads a FIFO's flags without opening it, so this records the fact without a reader.
+    return kind === 'fifo' ? evidence : { ...evidence, sfDatalessSet: datalessFlags(fixtures).some(Boolean) }
   }
   const stillDataless = datalessFlags(fixtures).every(Boolean)
   const mainLogTail = mainLogPath && existsSync(mainLogPath) ? readFileSync(mainLogPath, 'utf8').slice(mainLogOffset) : ''
@@ -737,6 +764,7 @@ function gateWindow(dir, out) {
     writeFileSync(out, `${JSON.stringify(gate, null, 2)}\n`)
   }
   console.log(JSON.stringify(gate, null, 2))
+  console.error(`[st-1] window gate skipped ${gate.skippedWarmups} warm-up launch${gate.skippedWarmups === 1 ? '' : 'es'}`)
   for (const failure of gate.failures) console.error(`[st-1] window gate FAIL — ${failure}`)
   return gate.pass ? 0 : 1
 }
@@ -751,22 +779,23 @@ async function main() {
     return gateWindow(args.gateWindow, args.out)
   }
   if (!args.installer || !args.provenance || !args.fixtures) {
-    console.error('usage: node scripts/qa/st-1.mjs --installer <path> --provenance <path> --fixtures fifo|dataless|none [--history] [options]')
+    console.error('usage: node scripts/qa/st-1.mjs --installer <path> --provenance <path> --fixtures fifo|dataless|synthetic-dataless|none [options]')
     return 2
   }
-  if (args.history !== undefined && args.history !== 'true') {
-    console.error(`[st-1] FAIL — --history takes no value, got ${JSON.stringify(args.history)}`)
+  if (!FIXTURE_KINDS.includes(args.fixtures)) {
+    console.error(`[st-1] FAIL — --fixtures must be fifo, dataless, synthetic-dataless or none, got ${JSON.stringify(args.fixtures)}`)
+    return 2
+  }
+  if ((args.fixtures === 'fifo' || args.fixtures === 'synthetic-dataless') && process.platform === 'win32') {
+    console.error(`[st-1] FAIL — Windows has no FIFOs; --fixtures ${args.fixtures} is unavailable, use --fixtures dataless`)
+    return 2
+  }
+  if (args.history !== undefined && args.history !== 'true' && args.history !== 'on' && args.history !== 'off') {
+    console.error(`[st-1] FAIL — --history must be a bare flag, on or off, got ${JSON.stringify(args.history)}`)
     return 2
   }
   const history = args.history === 'true'
-  if (args.fixtures !== 'fifo' && args.fixtures !== 'dataless' && args.fixtures !== 'none') {
-    console.error(`[st-1] FAIL — --fixtures must be fifo, dataless or none, got ${JSON.stringify(args.fixtures)}`)
-    return 2
-  }
-  if (args.fixtures === 'fifo' && process.platform === 'win32') {
-    console.error('[st-1] FAIL — Windows has no FIFOs; use --fixtures dataless')
-    return 2
-  }
+  const historyMode = args.history === 'off' ? 'off' : 'on'
   if (args.fixtures === 'dataless' && (!args.cloudDir || !args.mainLog)) {
     console.error('[st-1] FAIL — --fixtures dataless needs --cloud-dir and --main-log')
     return 2
@@ -774,6 +803,15 @@ async function main() {
   const { purpose, windowVariant, error: purposeError } = runPurpose(args)
   if (purposeError) {
     console.error(`[st-1] FAIL — ${purposeError}`)
+    return 2
+  }
+  const windowWarmup = args.windowWarmup === 'true'
+  if (args.windowWarmup !== undefined && args.windowWarmup !== 'true') {
+    console.error(`[st-1] FAIL — --window-warmup is a bare flag, got ${JSON.stringify(args.windowWarmup)}`)
+    return 2
+  }
+  if (windowWarmup && purpose !== 'window-construction') {
+    console.error('[st-1] FAIL — --window-warmup needs --purpose window-construction')
     return 2
   }
   const minutes = Number(args.minutes)
@@ -822,7 +860,7 @@ async function main() {
   let cleanupError = null
   const reportPath = args.out ?? join(reportDir, `${reportBase}.json`)
   const currentReport = () => {
-    const common = { row: args.fixtures, installer: basename(args.installer), candidate, fixtures, purpose, windowVariant }
+    const common = { row: args.fixtures, installer: basename(args.installer), candidate, fixtures, purpose, windowVariant, windowWarmup }
     if (launchFailure) return buildLaunchFailureReport({ ...common, reason: launchFailure })
     return buildReport({
       ...common,
@@ -832,7 +870,9 @@ async function main() {
       evidence,
       attribution: { mainLog, appEvidence, bootStages, storageSaturations },
       complete,
-      harnessError
+      harnessError,
+      historyMode,
+      fixtureCounts: args.fixtures === 'synthetic-dataless' ? syntheticDatalessPlan().counts : null
     })
   }
   /** Never throws: a report that cannot be written must not end the measurement. */
@@ -853,7 +893,13 @@ async function main() {
     const count = args.fixtures === 'fifo' ? Number(args.count ?? DEFAULT_FIFO_COUNT) : undefined
     mainLogOffset = args.mainLog && existsSync(args.mainLog) ? statSync(args.mainLog).size : 0
     fixtures =
-      args.fixtures === 'fifo' ? placeFifoFixtures(root, count) : args.fixtures === 'dataless' ? placeDatalessFixtures(root, args.cloudDir) : []
+      args.fixtures === 'fifo'
+        ? placeFifoFixtures(root, count)
+        : args.fixtures === 'dataless'
+          ? placeDatalessFixtures(root, args.cloudDir)
+          : args.fixtures === 'synthetic-dataless'
+            ? placeSyntheticDatalessFixtures(root)
+            : []
 
     // `child` is assigned before anything can fail waiting for it, so the shared `finally` below always
     // owns a child to stop — including when the inspector never answers (fuse off), the exe is bad
@@ -877,7 +923,7 @@ async function main() {
       mainLogLocated = args.mainLog
         ? Promise.resolve({ path: args.mainLog, fromByte: mainLogOffset, exactLaunchOffset: true })
         : locateMainLog(cdp, spawnedWallMs)
-      await measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, witnessFile, history })
+      await measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, witnessFile, historyOn: historyMode === 'on', history })
       mainLog = await mainLogLocated
       evidence = collectExercisedEvidence(args.fixtures, fixtures, args.mainLog, mainLogOffset, root)
       complete = true

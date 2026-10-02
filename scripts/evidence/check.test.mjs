@@ -576,22 +576,52 @@ function writeM2_0194Bundle(root, { environment = {}, leadAction } = {}) {
   const writeRows = (name, rows) => writeFileSync(join(root, name), rows.map((row) => JSON.stringify(row)).join('\n') + '\n')
   writeFileSync(join(root, 'README.md'), '# M2-0194\n')
   writeFileSync(join(root, 'M2-0194.lead-action.md'), leadAction ?? 'LEAD_ACTION: File the M2-0194 LIVE_VERIFIED record from this bundle.\n')
-  writeJson('environment.json', { ticket: 'M2-0194', artifact_sha256: 'a'.repeat(64), candidate_run: '123456', ...environment })
+  writeJson('environment.json', {
+    ticket: 'M2-0194',
+    artifact_sha256: 'a'.repeat(64),
+    candidate_run: '123456',
+    mode: 'hosted-live',
+    installed_variant: 'macos-dmg',
+    host: { label: 'macos-latest' },
+    ...environment
+  })
   writeJson('external-blockers.json', { ticket: 'M2-0194', blockers: [{ status: 'BLOCKED_EXTERNAL', unblock_step: 'Run on QA account.' }] })
   writeJson('stall-bundle-names.json', { names: [STALL_BUNDLE] })
   writeRows('matrix.jsonl', [
-    { row: 'row-1-history-open' },
-    { row: 'row-2-brain-status-blocked-brain' },
-    { row: 'row-3-macos-activate' },
-    { row: 'row-4-second-instance-reopen' },
+    { row: 'row-1-history-open', operator_result: 'pass', automatic: true },
+    { row: 'row-1-history-open', sampled: true, main_sample: true, renderer_samples: 1, renderers_selected_by: '--type=renderer' },
+    { row: 'row-2-brain-status-blocked-brain', operator_result: 'pass', automatic: true },
+    { row: 'row-2-brain-status-blocked-brain', sampled: true, main_sample: true, renderer_samples: 1, renderers_selected_by: '--type=renderer' },
+    { row: 'row-3-macos-activate', operator_result: 'pass', automatic: true },
+    { row: 'row-3-macos-activate', sampled: true, main_sample: true, renderer_samples: 1, renderers_selected_by: '--type=renderer' },
+    { row: 'row-4-second-instance-reopen', operator_result: 'pass', automatic: true },
+    { row: 'row-4-second-instance-reopen', sampled: true, main_sample: true, renderer_samples: 1, renderers_selected_by: '--type=renderer' },
     { row: 'row-5-dataless-brain-idle', fixture: 'dataless-brain-index' },
     { row: 'row-9-network-off-flapping', fixture: 'dataless-meeting' }
   ])
   writeRows('interrupt-results.jsonl', ['network-off', 'file-provider-cancel', 'process-signal'].map((interrupt) => ({ interrupt })))
-  writeRows('stall-excerpt.jsonl', [{ event: 'app.stall.summary', count: 1 }])
-  writeRows('sampler-excerpt.jsonl', [{ event: 'app.stall.sampled', stalledMs: 31000, bundle: STALL_BUNDLE }])
+  writeRows('stall-excerpt.jsonl', [{ event: 'app.stall', tMs: 1700000000000, stalledMs: 31000 }])
+  writeRows('sampler-excerpt.jsonl', [{ event: 'app.stall.sampled', tMs: 1700000000010, stalledMs: 31000 }])
   writeRows('reveal-excerpt.jsonl', [{ event: 'reveal', outcome: 'shown' }])
   writeRows('sidecar-excerpt.jsonl', [{ event: 'sidecar.spawn', name: 'asr' }])
+  writeRows('stalls.jsonl', [
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000000,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [{ symbol: 'main', image: 'Metis' }],
+      attribution: null
+    },
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000010,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [{ symbol: 'main', image: 'Metis' }],
+      attribution: null
+    }
+  ])
 }
 
 test('C30 M2-0194 bundle check requires the matrix, the four excerpts and stall bundle names only', () => {
@@ -634,6 +664,287 @@ test('C30 M2-0194 bundle check requires the matrix, the four excerpts and stall 
 
   rmSync(join(root, 'sampler-excerpt.jsonl'))
   assertProblem(m2_0194BundleProblems(root), 'sampler-excerpt.jsonl: missing from M2-0194 bundle')
+})
+
+test('C30b M2-0194 hosted-live bundle rejects each live attribution rule gap', () => {
+  const root = mkdtempSync(join(tmpdir(), 'm2-0194-live-rules-'))
+  writeM2_0194Bundle(root)
+
+  const writeJson = (name, value) => writeFileSync(join(root, name), `${JSON.stringify(value)}\n`)
+  const writeRows = (name, rows) => writeFileSync(join(root, name), rows.map((row) => JSON.stringify(row)).join('\n') + '\n')
+
+  writeJson('environment.json', { ticket: 'M2-0194', candidate_run: '123456', artifact_sha256: 'a'.repeat(64), installed_variant: 'macos-dmg' })
+  assertProblem(m2_0194BundleProblems(root), 'mode must be hosted-live or dry-run')
+
+  writeM2_0194Bundle(root)
+  writeJson('environment.json', { ticket: 'M2-0194', mode: 'hosted-live', artifact_sha256: 'a'.repeat(64), installed_variant: 'macos-dmg' })
+  assertProblem(m2_0194BundleProblems(root), 'candidate_run must be the qa-candidate run id')
+
+  writeM2_0194Bundle(root)
+  writeJson('environment.json', { ticket: 'M2-0194', mode: 'hosted-live', candidate_run: '123456', installed_variant: 'macos-dmg' })
+  assertProblem(m2_0194BundleProblems(root), 'artifact_sha256 must be a lowercase sha256')
+
+  writeM2_0194Bundle(root)
+  writeJson('environment.json', {
+    ticket: 'M2-0194',
+    mode: 'hosted-live',
+    candidate_run: '123456',
+    artifact_sha256: 'a'.repeat(64),
+    host: { label: 'macos-latest' }
+  })
+  assertProblem(m2_0194BundleProblems(root), 'installed_variant must be macos-dmg or windows-setup')
+
+  writeM2_0194Bundle(root)
+  writeRows('matrix.jsonl', [
+    { row: 'row-1-history-open', operator_result: 'pass', automatic: true },
+    { row: 'row-1-history-open', sampled: false, reason: 'dry-run-or-no-app' },
+    { row: 'row-2-brain-status-blocked-brain', operator_result: 'pass', automatic: true },
+    { row: 'row-2-brain-status-blocked-brain', sampled: true, main_sample: true, renderer_samples: 1, renderers_selected_by: '--type=renderer' },
+    { row: 'row-3-macos-activate', operator_result: 'pass', automatic: true },
+    { row: 'row-3-macos-activate', sampled: true, main_sample: true, renderer_samples: 1, renderers_selected_by: '--type=renderer' },
+    { row: 'row-4-second-instance-reopen', operator_result: 'pass', automatic: true },
+    { row: 'row-4-second-instance-reopen', sampled: true, main_sample: true, renderer_samples: 1, renderers_selected_by: '--type=renderer' },
+    { row: 'row-5-dataless-brain-idle', fixture: 'dataless-brain-index' },
+    { row: 'row-9-network-off-flapping', fixture: 'dataless-meeting' }
+  ])
+  assertProblem(m2_0194BundleProblems(root), 'row-1-history-open', 'main and role-selected renderer samples')
+
+  writeM2_0194Bundle(root)
+  writeRows('stalls.jsonl', [
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000999,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [{ symbol: 'main', image: 'Metis' }],
+      attribution: null
+    },
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000010,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [{ symbol: 'main', image: 'Metis' }],
+      attribution: null
+    }
+  ])
+  assertProblem(m2_0194BundleProblems(root), 'missing entry for stall excerpt', '1700000000000', '31000')
+
+  writeM2_0194Bundle(root)
+  writeRows('stalls.jsonl', [
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000000,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [],
+      attribution: null,
+      status: 'FAIL',
+      error_class: 'sample_missing'
+    },
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000010,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [{ symbol: 'main', image: 'Metis' }],
+      attribution: null
+    }
+  ])
+  assertProblem(m2_0194BundleProblems(root), 'live macOS stall entries', 'nearest main-thread sample')
+
+  writeM2_0194Bundle(root, { environment: { host: { label: 'windows-latest' }, installed_variant: 'windows-setup' } })
+  writeRows('matrix.jsonl', [
+    { row: 'row-1-history-open', operator_result: 'pass', automatic: true },
+    { row: 'row-1-history-open', sampled: false, reason: 'process sampling unavailable on windows-latest; /usr/bin/sample is macOS-only and pgrep is not used' },
+    {
+      row: 'row-2-brain-status-blocked-brain',
+      operator_result: 'BLOCKED_EXTERNAL',
+      status: 'BLOCKED_EXTERNAL',
+      unblock_step: 'Run the FIFO-dependent row on macos-latest.'
+    },
+    {
+      row: 'row-3-macos-activate',
+      operator_result: 'not-applicable',
+      status: 'not-applicable',
+      reason: 'macOS-only activation row; windows-latest has no open(1) activation equivalent'
+    },
+    { row: 'row-4-second-instance-reopen', operator_result: 'pass', automatic: true },
+    { row: 'row-4-second-instance-reopen', sampled: false, reason: 'process sampling unavailable on windows-latest; /usr/bin/sample is macOS-only and pgrep is not used' },
+    { row: 'row-5-dataless-brain-idle', fixture: 'dataless-brain-index' },
+    { row: 'row-9-network-off-flapping', fixture: 'dataless-meeting' }
+  ])
+  writeRows('stalls.jsonl', [
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000000,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [],
+      attribution: null,
+      status: 'NOT_APPLICABLE',
+      reason: 'process sampling unavailable on windows-latest; /usr/bin/sample is macOS-only'
+    },
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000010,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [],
+      attribution: null,
+      status: 'NOT_APPLICABLE',
+      reason: 'process sampling unavailable on windows-latest; /usr/bin/sample is macOS-only'
+    }
+  ])
+  assert.deepEqual(m2_0194BundleProblems(root), [])
+})
+
+test('C30c M2-0194 hosted-live bundle rejects malformed stall attribution details', () => {
+  const root = mkdtempSync(join(tmpdir(), 'm2-0194-stall-rules-'))
+  const writeRows = (name, rows) => writeFileSync(join(root, name), rows.map((row) => JSON.stringify(row)).join('\n') + '\n')
+
+  writeM2_0194Bundle(root)
+  writeRows('stalls.jsonl', [
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000000,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [{ symbol: 'main', image: 'Metis' }],
+      attribution: null
+    }
+  ])
+  assertProblem(m2_0194BundleProblems(root), 'must have one entry per app.stall or app.stall.sampled excerpt')
+
+  writeM2_0194Bundle(root)
+  writeRows('stalls.jsonl', [
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000000,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [{ symbol: 'main', image: 'Metis' }],
+      attribution: 'x'
+    },
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000010,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [{ symbol: 'main', image: 'Metis' }],
+      attribution: null
+    }
+  ])
+  assertProblem(m2_0194BundleProblems(root), 'attribution must be null')
+
+  writeM2_0194Bundle(root)
+  writeRows('stalls.jsonl', [
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000000,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: Array.from({ length: 13 }, (_, i) => ({ symbol: `frame${i}`, image: 'Metis' })),
+      attribution: null
+    },
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000010,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [{ symbol: 'main', image: 'Metis' }],
+      attribution: null
+    }
+  ])
+  assertProblem(m2_0194BundleProblems(root), 'at most 12 entries')
+
+  writeM2_0194Bundle(root)
+  writeRows('stalls.jsonl', [
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000000,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [{ symbol: 'main', image: '/Applications/Metis.app/Contents/MacOS/Metis' }],
+      attribution: null
+    },
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000010,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [{ symbol: 'main', image: 'Metis' }],
+      attribution: null
+    }
+  ])
+  assertProblem(m2_0194BundleProblems(root), 'symbol and image basename only')
+
+  writeM2_0194Bundle(root)
+  writeRows('stall-excerpt.jsonl', [{ event: 'app.stall', tMs: 1, stalledMs: 1, message: 'meeting text' }])
+  assertProblem(m2_0194BundleProblems(root), 'message is not an allowed content-free attribution field')
+
+  writeM2_0194Bundle(root)
+  writeRows('stalls.jsonl', [
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000000,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [],
+      attribution: null,
+      status: 'FAIL'
+    },
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000010,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [{ symbol: 'main', image: 'Metis' }],
+      attribution: null
+    }
+  ])
+  assertProblem(m2_0194BundleProblems(root), 'FAIL entries need an error_class')
+
+  writeM2_0194Bundle(root)
+  writeRows('stalls.jsonl', [
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000000,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [],
+      attribution: null,
+      status: 'NOT_APPLICABLE',
+      reason: 'process sampling unavailable on windows-latest'
+    },
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000010,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [{ symbol: 'main', image: 'Metis' }],
+      attribution: null
+    }
+  ])
+  assertProblem(m2_0194BundleProblems(root), 'NOT_APPLICABLE sampling is only valid on windows-latest')
+
+  writeM2_0194Bundle(root, { environment: { host: { label: 'windows-latest' }, installed_variant: 'windows-setup' } })
+  writeRows('matrix.jsonl', [
+    { row: 'row-1-history-open', operator_result: 'pass', automatic: true },
+    { row: 'row-1-history-open', sampled: false, reason: 'process sampling unavailable on windows-latest; /usr/bin/sample is macOS-only and pgrep is not used' },
+    {
+      row: 'row-2-brain-status-blocked-brain',
+      operator_result: 'BLOCKED_EXTERNAL',
+      status: 'BLOCKED_EXTERNAL',
+      unblock_step: 'Run the FIFO-dependent row on macos-latest.'
+    },
+    { row: 'row-3-macos-activate', operator_result: 'pass', automatic: true },
+    { row: 'row-4-second-instance-reopen', operator_result: 'pass', automatic: true },
+    { row: 'row-4-second-instance-reopen', sampled: false, reason: 'process sampling unavailable on windows-latest; /usr/bin/sample is macOS-only and pgrep is not used' },
+    { row: 'row-5-dataless-brain-idle', fixture: 'dataless-brain-index' },
+    { row: 'row-9-network-off-flapping', fixture: 'dataless-meeting' }
+  ])
+  assertProblem(m2_0194BundleProblems(root), 'row-3-macos-activate must be not-applicable on windows-latest')
 })
 
 test('C31 CLI --ticket M2-0194 validates a bundle and rejects an incomplete one; other tickets exit 2', () => {

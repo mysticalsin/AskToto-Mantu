@@ -180,6 +180,40 @@ export function countStorageSaturations(mainLogText) {
   return mainLogText.split('\n').filter((line) => line.includes(STORAGE_SATURATED_LOG)).length
 }
 
+/** Whether this sample should schedule the next History probe. Pure so the idle row can prove no probe is
+ *  scheduled while `--history off` keeps History untouched. */
+export function shouldProbeHistory({ historyOn, historyRunning, tMs, historyLastMs, fromMs, everyMs }) {
+  return historyOn && !historyRunning && tMs >= fromMs && tMs - historyLastMs >= everyMs
+}
+
+/** The representative profile of ARCHITECTURE 6.1: 59 meetings, 6 of them cloud-only, and a mostly
+ *  cloud-only `.brain`. */
+export const SYNTHETIC_LOCAL_MEETINGS = 53
+export const SYNTHETIC_FIFO_MEETINGS = 6
+export const SYNTHETIC_BRAIN_ENTITY_FIFOS = 4
+
+/**
+ * Where `--fixtures synthetic-dataless` places things, relative to the meetings root. Hosted runners have
+ * no cloud-file provider, so a kernel-blocking FIFO stands at every path a mostly-evicted cloud folder
+ * would present as unreadable: `local` are content-free placeholder meeting files, `fifos` the paths that
+ * block a reader. Pure: st-1.mjs materializes it.
+ */
+export function syntheticDatalessPlan() {
+  const pad = (n) => String(n).padStart(2, '0')
+  const meeting = (i, tag) => `2026-${pad(1 + Math.floor(i / 28))}-${pad((i % 28) + 1)}_090000-st1-${tag}.md`
+  const local = Array.from({ length: SYNTHETIC_LOCAL_MEETINGS }, (_, i) => meeting(i, 'local'))
+  const meetingFifos = Array.from({ length: SYNTHETIC_FIFO_MEETINGS }, (_, i) => meeting(SYNTHETIC_LOCAL_MEETINGS + i, 'cloud-only'))
+  const brainFifos = [
+    '.brain/index.json',
+    ...Array.from({ length: SYNTHETIC_BRAIN_ENTITY_FIFOS }, (_, i) => `.brain/entities/${i % 2 === 0 ? 'person' : 'org'}/st1-cloud-only-${i + 1}.json`)
+  ]
+  return {
+    local,
+    fifos: [...meetingFifos, ...brainFifos],
+    counts: { localMeetings: local.length, fifoMeetings: meetingFifos.length, brainFifos: brainFifos.length }
+  }
+}
+
 /** The boot window variants the QA-identity build can construct (src/main/infra/observability/projection.ts
  *  BOOT_WINDOW_VARIANTS, M2-0516). An ST-1 run always launches 'shipped'. */
 export const WINDOW_VARIANTS = ['shipped', 'spellcheck-off', 'paint-when-hidden', 'prewarm-spellchecker']
@@ -220,17 +254,20 @@ export const GATED_WINDOW_STAGES = ['createWindow.prewarm', 'createWindow.constr
 
 /**
  * The window-construction gate (M2-0519) over a set of window-construction reports: `{ pass, rows, failures }`.
- * Only the shipped variant is gated; the other variants stay report-only. It fails unless every shipped report
- * carries each gated stage with a measured ms under WINDOW_STAGE_BUDGET_MS, and the shipped reports built both
- * chromes (opaque and transparent). A shipped report without boot stages (a launch that never reached the window)
- * fails as missing, never passes as absent. `rows` lists every shipped gated stage found, per report.
+ * Only the shipped variant is gated; marked warm-ups and the other variants stay report-only. It fails unless
+ * every measured shipped report carries each gated stage with a measured ms under WINDOW_STAGE_BUDGET_MS, and the
+ * measured shipped reports built both chromes (opaque and transparent). A measured shipped report without boot
+ * stages (a launch that never reached the window) fails as missing, never passes as absent. `rows` lists every
+ * measured shipped gated stage found, per report.
  * @param {Array<{ name: string, report: any }>} reports
  */
 export function windowConstructionGate(reports, budgetMs = WINDOW_STAGE_BUDGET_MS) {
   const rows = []
   const failures = []
   const chromes = new Set()
-  const shipped = reports.filter(({ report }) => report?.purpose === WINDOW_CONSTRUCTION && report.windowVariant === 'shipped')
+  const windowReports = reports.filter(({ report }) => report?.purpose === WINDOW_CONSTRUCTION)
+  const warmups = windowReports.filter(({ report }) => report.warmup === true)
+  const shipped = windowReports.filter(({ report }) => report.windowVariant === 'shipped' && report.warmup !== true)
   if (shipped.length === 0) failures.push('no shipped window-construction report')
   for (const { name, report } of shipped) {
     const stages = Array.isArray(report.bootStages?.stages) ? report.bootStages.stages : []
@@ -250,7 +287,7 @@ export function windowConstructionGate(reports, budgetMs = WINDOW_STAGE_BUDGET_M
   for (const chrome of ['opaque', 'transparent']) {
     if (shipped.length > 0 && !chromes.has(chrome)) failures.push(`no shipped ${chrome} window was measured`)
   }
-  return { pass: failures.length === 0, budgetMs, rows, failures }
+  return { pass: failures.length === 0, budgetMs, skippedWarmups: warmups.length, rows, failures }
 }
 
 /** The app's own native boot stage timings (tray stages, window construction, navigation and first show): every
@@ -459,7 +496,24 @@ export function emptyRun() {
  * witness and the boot stages are report-only. A window-construction run (`purpose`) says so, names its variant
  * and is never ST-1 evidence (`st1Evidence: false`), whatever its verdict.
  */
-export function buildReport({ row, history = false, installer, candidate, minutes, measured, evidence, fixtures, attribution, complete, harnessError, purpose = 'st-1', windowVariant = 'shipped' }) {
+export function buildReport({
+  row,
+  history = false,
+  installer,
+  candidate,
+  minutes,
+  measured,
+  evidence,
+  fixtures,
+  attribution,
+  complete,
+  harnessError,
+  historyMode = 'on',
+  fixtureCounts = null,
+  purpose = 'st-1',
+  windowVariant = 'shipped',
+  windowWarmup = false
+}) {
   const criteria = evaluateCriteria(row, measured, evidence, { history })
   // The control row has nothing to exercise: its verdict is the criteria alone.
   const exercised = row === 'none' || evidence?.exercised
@@ -468,6 +522,7 @@ export function buildReport({ row, history = false, installer, candidate, minute
   return {
     harness: 'ST-1',
     ...(purpose === WINDOW_CONSTRUCTION ? { purpose, st1Evidence: false, windowVariant } : {}),
+    ...(purpose === WINDOW_CONSTRUCTION && windowWarmup ? { warmup: true } : {}),
     row,
     ...(history ? { historyRow: true } : {}),
     platform: process.platform,
@@ -484,7 +539,10 @@ export function buildReport({ row, history = false, installer, candidate, minute
     write: { maxMs: Math.max(0, ...measured.samples.map((s) => s.writeMs)) },
     lookup: { maxMs: Math.max(0, ...measured.samples.map((s) => s.lookupMs)) },
     exercised: evidence?.exercised ?? null,
-    ...(row === 'fifo' ? { fixturesOpened: evidence?.fixturesOpened ?? null } : {}),
+    ...(row === 'fifo' || row === 'synthetic-dataless' ? { fixturesOpened: evidence?.fixturesOpened ?? null } : {}),
+    ...(row === 'synthetic-dataless'
+      ? { fixtureKind: 'synthetic-dataless', fixtureCounts, sfDatalessSet: evidence?.sfDatalessSet ?? null }
+      : {}),
     ...(row === 'dataless' ? { stillDataless: evidence?.stillDataless ?? null } : {}),
     ...(history ? { historySummary: historySummary(measured, { row, complete, storageSaturations: attribution.storageSaturations }) } : {}),
     criteria,
@@ -495,6 +553,7 @@ export function buildReport({ row, history = false, installer, candidate, minute
     errors: measured.errors,
     setupAtMs: measured.setupAtMs,
     timeline,
+    historyMode,
     witness: witnessSummary(timeline, measured.witnessLoop),
     history: measured.history,
     cpuProfile: measured.profiler,
@@ -510,10 +569,11 @@ export function buildReport({ row, history = false, installer, candidate, minute
 
 /** The launch itself never reached a candidate to measure: a genuine FAIL (inspector: false), never a
  *  skipped row. A window-construction launch is marked as in buildReport. */
-export function buildLaunchFailureReport({ row, installer, candidate, fixtures, reason, purpose = 'st-1', windowVariant = 'shipped' }) {
+export function buildLaunchFailureReport({ row, installer, candidate, fixtures, reason, purpose = 'st-1', windowVariant = 'shipped', windowWarmup = false }) {
   return {
     harness: 'ST-1',
     ...(purpose === WINDOW_CONSTRUCTION ? { purpose, st1Evidence: false, windowVariant } : {}),
+    ...(purpose === WINDOW_CONSTRUCTION && windowWarmup ? { warmup: true } : {}),
     row,
     platform: process.platform,
     arch: process.arch,

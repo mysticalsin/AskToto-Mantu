@@ -16,8 +16,10 @@ import {
   bootLaunchActivateVerdict,
   buildWindowsShortcutLauncher,
   NAVIGATION_GUARD_BOOTSTRAP_PATCH,
+  LATE_NATIVE_FRAME_HOLD_MS,
   childPidReserved,
   computeCleanupTargets,
+  framesAboveWorkArea,
   isOverlayUrl,
   isPassingRevealEvidence,
   waitUntilParked,
@@ -26,6 +28,10 @@ import {
   initialRvRows,
   initialNavigationGuardRows,
   initialRightEdgeHideRows,
+  navigationViewReadiness,
+  returnToHistoryFromReview,
+  readNavigationViewSnapshot,
+  navigationMeetingTitles,
   initialOverlayStabilityRows,
   OV_STABLE_PATH_MS,
   overlayStablePath,
@@ -33,12 +39,16 @@ import {
   pinnedBridgeCall,
   rightEdgeExpectedRects,
   rightEdgeHideParkMatches,
+  rightEdgeMeetingHideVerdict,
+  rightEdgePageChromeState,
   rightEdgeStateMatches,
   rightEdgeStateMismatches,
   runRevealRow,
+  seedNavigationMeetings,
   seedOnboardedProfile,
   smokeReport,
-  smokeVerdict
+  smokeVerdict,
+  waitForNavigationView
 } from './packaged-smoke.mjs'
 
 interface ProcessEntry {
@@ -333,13 +343,19 @@ describe('smokeVerdict', () => {
     expect(smokeVerdict(observation)).toEqual({ result: 'fail', failures: ['smoke_incomplete'] })
   })
 
-  it('does not fail a completed smoke observation for BLOCKED_EXTERNAL rows', () => {
+  it('does not fail a completed smoke observation for terminal non-pass rows', () => {
     const observation = goodObservation()
     observation.rv[0] = {
       ...observation.rv[0],
       status: 'BLOCKED_EXTERNAL',
       evidence: null,
       unblock: 'Run this row where the outside dependency is available.'
+    }
+    observation.rv[1] = {
+      ...observation.rv[1],
+      status: 'PRECONDITION',
+      evidence: null,
+      unblock: 'Run this row where the launch precondition is available.'
     }
     observation.navigationGuard[0] = {
       ...observation.navigationGuard[0],
@@ -767,6 +783,56 @@ describe('right-edge Hide rows (RE-HIDE)', () => {
     expect(rightEdgeStateMismatches({ win: win(0, true), page }, 'parked', 'island')).toEqual(['bounds', 'opacity', 'clickThrough'])
     expect(rightEdgeStateMismatches(null, 'parked', 'hide')).toEqual(['observation'])
   })
+
+  it('treats a mounted but aria-hidden right-edge drawer as parked rail chrome', () => {
+    expect(rightEdgePageChromeState({ rootOpen: false, drawerAriaHidden: 'true', tabAriaExpanded: 'false' })).toEqual({
+      drawer: false,
+      rail: true
+    })
+    expect(rightEdgePageChromeState({ rootOpen: true, drawerAriaHidden: null, tabAriaExpanded: 'true' })).toEqual({
+      drawer: true,
+      rail: false
+    })
+  })
+
+  it('keeps RE-HIDE-3 meeting Hide held for late native frames and carries geometry evidence', () => {
+    expect(LATE_NATIVE_FRAME_HOLD_MS).toBe(500)
+    const { band } = rightEdgeExpectedRects(windows.workArea)
+    const parkedWin = {
+      bounds: { x: 992, y: band.y, width: 32, height: band.height },
+      opacity: 0,
+      clickThrough: true,
+      visible: true,
+      displayBounds: windows.bounds,
+      workArea: windows.workArea
+    }
+    const page = { dock: true, drawer: false, rail: true, hideControl: false, meetingLive: true, composerFocused: false, draft: '' }
+    const parked = { ok: true, observed: { win: parkedWin, page } }
+    const held = { win: parkedWin, page }
+    const geometry = [
+      { ms: 1, kind: 'write', bounds: band },
+      { ms: 50, kind: 'frame', bounds: parkedWin.bounds },
+      { ms: 100, kind: 'call', bounds: parkedWin.bounds, call: { name: 'setOpacity', args: [0] } }
+    ]
+
+    expect(framesAboveWorkArea(geometry, windows.workArea.y)).toEqual([])
+    expect(rightEdgeMeetingHideVerdict({ meetingLive: true, hideVisible: true, parked, held, geometry })).toEqual({
+      pass: true,
+      evidence: {
+        meetingLive: true,
+        hideVisible: true,
+        parked: expect.objectContaining({ kind: 'hide-band' }),
+        after500ms: expect.objectContaining({ kind: 'hide-band' }),
+        framesAboveWorkArea: [],
+        geometry
+      }
+    })
+
+    const badFrame = { ms: 75, kind: 'frame', bounds: { ...parkedWin.bounds, y: windows.workArea.y - 1 } }
+    const failed = rightEdgeMeetingHideVerdict({ meetingLive: true, hideVisible: true, parked, held, geometry: [...geometry, badFrame] })
+    expect(failed.pass).toBe(false)
+    expect(failed.evidence.framesAboveWorkArea).toEqual([badFrame])
+  })
 })
 
 describe('overlay stability rows (OV, M2-0431)', () => {
@@ -910,6 +976,300 @@ describe('initialNavigationGuardRows', () => {
     expect(rows.some((row) => row.state === 'dirty')).toBe(true)
     expect(rows.every((row) => row.status === 'PENDING')).toBe(true)
     expect(rows.every((row) => row.unblock === null)).toBe(true)
+  })
+})
+
+describe('navigation view readiness', () => {
+  const historyReady = {
+    searchVisible: true,
+    searchEnabled: true,
+    targetMeetingButtonVisible: true,
+    targetMeetingButtonEnabled: true,
+    backVisible: false,
+    backEnabled: false,
+    titleVisible: false,
+    guardVisible: false
+  }
+  const reviewReady = {
+    searchVisible: false,
+    searchEnabled: false,
+    targetMeetingButtonVisible: false,
+    targetMeetingButtonEnabled: false,
+    backVisible: true,
+    backEnabled: true,
+    titleVisible: true,
+    guardVisible: false
+  }
+
+  it('requires interactive app-side controls before History or Review is considered reached', () => {
+    expect(navigationViewReadiness(historyReady, { view: 'history', title: 'Smoke navigation alpha' })).toEqual({
+      ready: true,
+      reason: null
+    })
+    expect(
+      navigationViewReadiness({ ...historyReady, targetMeetingButtonEnabled: false }, { view: 'history', title: 'Smoke navigation alpha' })
+    ).toEqual({ ready: false, reason: 'target history row was not interactive' })
+    expect(navigationViewReadiness(reviewReady, { view: 'review', title: 'Smoke navigation beta' })).toEqual({
+      ready: true,
+      reason: null
+    })
+    expect(navigationViewReadiness({ ...reviewReady, guardVisible: true }, { view: 'review', title: 'Smoke navigation beta' })).toEqual({
+      ready: false,
+      reason: 'navigation guard was still open'
+    })
+  })
+
+  it('polls renderer readiness and reports why the requested view was not reached', async () => {
+    const snapshots = [
+      { ...reviewReady, backVisible: false, titleVisible: false },
+      { ...reviewReady, titleVisible: false }
+    ]
+    const page = {
+      evaluate: async () => snapshots.shift() ?? { ...reviewReady, titleVisible: false }
+    }
+
+    await expect(
+      waitForNavigationView(page, { view: 'review', title: 'Smoke navigation beta' }, { timeoutMs: 5, pollMs: 1, wait: async () => undefined })
+    ).rejects.toThrow(/review view was not reached: target review was not visible/)
+  })
+
+  it('waits for the requested Review title before returning to the requested History row', async () => {
+    const evaluateTitles: Array<string | null> = []
+    const clicked: string[] = []
+    const page = {
+      evaluate: async (_fn: unknown, arg: { title?: string | null }) => {
+        evaluateTitles.push(arg.title ?? null)
+        if (arg.title === 'Smoke navigation beta') return reviewReady
+        if (arg.title === 'Smoke navigation alpha') return historyReady
+        throw new Error(`unexpected navigation title ${arg.title ?? '<none>'}`)
+      },
+      getByRole: (_role: string, options: { name: RegExp }) => ({
+        first: () => ({
+          click: async () => {
+            clicked.push(String(options.name))
+          }
+        })
+      })
+    }
+
+    await returnToHistoryFromReview(page, {
+      reviewTitle: 'Smoke navigation beta',
+      historyTitle: 'Smoke navigation alpha'
+    })
+
+    expect(evaluateTitles).toEqual(['Smoke navigation beta', 'Smoke navigation alpha'])
+    expect(clicked).toEqual(['/Back to history/'])
+  })
+
+  it('does not treat a Recent meetings row title as the open Review title', async () => {
+    class ElementStub {
+      textContent: string
+      private attrs: Map<string, string>
+      private rectCount: number
+      style: { visibility: string; display: string }
+
+      constructor({ text = '', attrs = {}, visible = true }: { text?: string; attrs?: Record<string, string>; visible?: boolean }) {
+        this.textContent = text
+        this.attrs = new Map(Object.entries(attrs))
+        this.rectCount = visible ? 1 : 0
+        this.style = { visibility: visible ? 'visible' : 'hidden', display: visible ? 'block' : 'none' }
+      }
+
+      getAttribute(name: string): string | null {
+        return this.attrs.get(name) ?? null
+      }
+
+      hasAttribute(name: string): boolean {
+        return this.attrs.has(name)
+      }
+
+      getClientRects(): unknown[] {
+        return Array.from({ length: this.rectCount }, () => ({}))
+      }
+    }
+
+    const globalScope = globalThis as typeof globalThis & {
+      window?: unknown
+      document?: unknown
+      HTMLElement?: unknown
+    }
+    const previousWindow = globalScope.window
+    const previousDocument = globalScope.document
+    const previousHTMLElement = globalScope.HTMLElement
+    const recentMeetingButton = new ElementStub({ text: 'Smoke navigation beta' })
+    const backButton = new ElementStub({ text: 'Back to history' })
+
+    try {
+      Object.assign(globalScope, {
+        HTMLElement: ElementStub,
+        window: { getComputedStyle: (node: ElementStub) => node.style },
+        document: {
+          body: { innerText: 'Recent meetings Smoke navigation beta' },
+          querySelectorAll: (selector: string) => (selector === 'button' ? [recentMeetingButton, backButton] : []),
+          querySelector: (selector: string) => {
+            if (selector === '[aria-label="Review meeting title"]') return null
+            if (selector === '[aria-label="Search past meetings"]') return null
+            if (selector === '[role="dialog"][aria-label="Save recap changes?"]') return null
+            return null
+          }
+        }
+      })
+
+      const page = {
+        evaluate: async (fn: (arg: { title: string }) => unknown, arg: { title: string }) => fn(arg)
+      }
+      const snapshot = await readNavigationViewSnapshot(page, { view: 'review', title: 'Smoke navigation beta' })
+
+      expect(snapshot.titleVisible).toBe(false)
+      expect(navigationViewReadiness(snapshot, { view: 'review', title: 'Smoke navigation beta' })).toEqual({
+        ready: false,
+        reason: 'target review was not visible'
+      })
+    } finally {
+      Object.assign(globalScope, {
+        window: previousWindow,
+        document: previousDocument,
+        HTMLElement: previousHTMLElement
+      })
+    }
+  })
+})
+
+describe('navigationMeetingTitles', () => {
+  it('keeps the original seeded names for clean rows and gives dirty rows isolated meeting pairs', () => {
+    expect(navigationMeetingTitles()).toEqual({
+      alpha: 'Smoke navigation alpha',
+      beta: 'Smoke navigation beta'
+    })
+
+    expect(navigationMeetingTitles('HIST dirty save bar')).toEqual({
+      alpha: 'Smoke navigation alpha HIST dirty save bar',
+      beta: 'Smoke navigation beta HIST dirty save bar'
+    })
+  })
+})
+
+describe('seedNavigationMeetings', () => {
+  it('refreshes an already-open History view so freshly saved smoke meetings are visible', async () => {
+    const events: string[] = []
+    const search = {
+      first: () => search,
+      isVisible: async () => true,
+      waitFor: async (options: { state?: string }) => events.push(`search:${options.state ?? 'visible'}`)
+    }
+    const history = {
+      first: () => history,
+      click: async () => events.push('history:click'),
+      waitFor: async () => events.push('history:wait')
+    }
+    const page = {
+      evaluate: async (_fn: unknown, payload: ReturnType<typeof navigationMeetingTitles> | { title: string }) => {
+        if ('title' in payload) {
+          events.push(`snapshot:${payload.title}`)
+          return {
+            searchVisible: true,
+            searchEnabled: true,
+            targetMeetingButtonVisible: true,
+            targetMeetingButtonEnabled: true,
+            backVisible: false,
+            backEnabled: false,
+            titleVisible: false,
+            guardVisible: false
+          }
+        }
+        events.push(`seed:${payload.alpha}`)
+        return { first: 'alpha.md', second: 'beta.md', titles: payload }
+      },
+      getByLabel: () => search,
+      getByRole: () => history,
+      waitForTimeout: async (ms: number) => events.push(`wait:${ms}`)
+    }
+
+    const seeded = await seedNavigationMeetings(page, 'HIST dirty save bar')
+
+    expect(seeded.titles.alpha).toBe('Smoke navigation alpha HIST dirty save bar')
+    expect(events).toEqual([
+      'seed:Smoke navigation alpha HIST dirty save bar',
+      'wait:450',
+      'history:click',
+      'search:hidden',
+      'wait:450',
+      'history:click',
+      'snapshot:Smoke navigation alpha HIST dirty save bar'
+    ])
+  })
+
+  it('does not toggle History when the seeded meetings are created before History opens', async () => {
+    const events: string[] = []
+    const search = {
+      first: () => search,
+      isVisible: async () => false,
+      waitFor: async (options: { state?: string }) => events.push(`search:${options.state ?? 'visible'}`)
+    }
+    const history = {
+      first: () => history,
+      click: async () => events.push('history:click')
+    }
+    const page = {
+      evaluate: async (_fn: unknown, titles: ReturnType<typeof navigationMeetingTitles>) => {
+        events.push(`seed:${titles.alpha}`)
+        return { first: 'alpha.md', second: 'beta.md', titles }
+      },
+      getByLabel: () => search,
+      getByRole: () => history,
+      waitForTimeout: async (ms: number) => events.push(`wait:${ms}`)
+    }
+
+    await seedNavigationMeetings(page)
+
+    expect(events).toEqual(['seed:Smoke navigation alpha'])
+  })
+
+  it('paces through the save-transcript hot-path limiter instead of failing later rows', async () => {
+    const events: string[] = []
+    let saves = 0
+    const originalWindow = (globalThis as { window?: unknown }).window
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: {
+        toto: {
+          saveTranscript: async (payload: { title: string }) => {
+            saves += 1
+            events.push(`save:${payload.title}`)
+            if (saves === 1) throw new Error('Error invoking remote method \'transcript:save\': Error: Could not save the transcript.')
+            return { path: `/tmp/${payload.title}.md` }
+          }
+        }
+      }
+    })
+    const search = {
+      first: () => search,
+      isVisible: async () => false,
+      waitFor: async () => events.push('search:wait')
+    }
+    const history = {
+      first: () => history,
+      click: async () => events.push('history:click')
+    }
+    const page = {
+      evaluate: async (fn: (titles: ReturnType<typeof navigationMeetingTitles>) => Promise<unknown>, titles: ReturnType<typeof navigationMeetingTitles>) => fn(titles),
+      getByLabel: () => search,
+      getByRole: () => history,
+      waitForTimeout: async (ms: number) => events.push(`wait:${ms}`)
+    }
+
+    try {
+      const seeded = await seedNavigationMeetings(page, 'HIST dirty save recent')
+
+      expect(seeded.titles.beta).toBe('Smoke navigation beta HIST dirty save recent')
+      expect(events).toEqual([
+        'save:Smoke navigation alpha HIST dirty save recent',
+        'save:Smoke navigation alpha HIST dirty save recent',
+        'save:Smoke navigation beta HIST dirty save recent'
+      ])
+    } finally {
+      Object.defineProperty(globalThis, 'window', { configurable: true, value: originalWindow })
+    }
   })
 })
 
@@ -1136,7 +1496,7 @@ describe('pinnedBridgeCall (M2-0519)', () => {
   const scope = globalThis as unknown as { window?: unknown; __metisSmokeBridgePending?: Set<Promise<unknown>> }
 
   function bridgeWith(toggle: (...args: unknown[]) => Promise<unknown>): void {
-    scope.window = { toto: { toggle } }
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: { toto: { toggle } } })
     delete scope.__metisSmokeBridgePending
   }
 
@@ -1158,7 +1518,7 @@ describe('pinnedBridgeCall (M2-0519)', () => {
       await expect(call).resolves.toBeUndefined()
       expect(scope.__metisSmokeBridgePending?.size).toBe(0)
     } finally {
-      delete scope.window
+      Object.defineProperty(globalThis, 'window', { configurable: true, value: undefined })
       delete scope.__metisSmokeBridgePending
     }
   })
@@ -1169,7 +1529,7 @@ describe('pinnedBridgeCall (M2-0519)', () => {
       await expect(pinnedBridgeCall(['toggle', []])).rejects.toThrow('no window')
       expect(scope.__metisSmokeBridgePending?.size).toBe(0)
     } finally {
-      delete scope.window
+      Object.defineProperty(globalThis, 'window', { configurable: true, value: undefined })
       delete scope.__metisSmokeBridgePending
     }
   })
