@@ -124,11 +124,12 @@ describe('the read/replace invariant — I/O faults, retry, and quarantine limit
     renameSyncSpy.mockClear()
   })
   afterEach(async () => {
+    vi.useRealTimers()
+    await new Promise<void>((resolve) => setImmediate(resolve))
     await settleBrainWritesForTests()
     failReadOnce = null
     failReadPersistent = null
     failRenameOnce = null
-    vi.useRealTimers()
     vi.restoreAllMocks()
     realFs.rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   })
@@ -192,6 +193,17 @@ describe('the read/replace invariant — I/O faults, retry, and quarantine limit
     const auditCalls = auditSpy.mock.calls.filter((c) => c[0] === 'brain.index.unavailable')
     expect(auditCalls).toHaveLength(1)
     expect(auditCalls[0][1]).toEqual({ cause: 'undecryptable' })
+    expect(warnSpy).not.toHaveBeenCalled()
+  })
+
+  it('writes the unavailable main-log warning asynchronously, not on the readIndex stack', async () => {
+    const warnSpy = vi.spyOn(logger.mainLog, 'warn').mockImplementation(() => undefined as unknown as void)
+    vi.spyOn(logger, 'auditLog').mockImplementation(() => {})
+    writeFileSync(primary, foreignKeyIndexBytes())
+
+    store.readIndex(s)
+    expect(warnSpy).not.toHaveBeenCalled()
+    await new Promise<void>((resolve) => setImmediate(resolve))
     expect(warnSpy).toHaveBeenCalledTimes(1)
   })
 
