@@ -26,6 +26,7 @@ import {
   timedCallsExpression,
   windowConstructionGate,
   withTimeout,
+  writeJsonToStdout,
   witnessSummary
 } from './lib/st-1-core.mjs'
 
@@ -36,6 +37,21 @@ const pending = (): Record<string, unknown> | undefined => globals[PENDING_GLOBA
 
 const candidate = { build_run_id: 1, artifact_sha256: 'a'.repeat(64) }
 const goodSample = (tMs: number) => ({ tMs, writeMs: 2, lookupMs: 1, loopMaxSinceLastMs: 12, resources: {} })
+const refusedHistoryProbe = (tMs = 20_000, notDownloaded = 4) => ({
+  tMs,
+  ms: 33,
+  rows: Math.max(6, notDownloaded),
+  notDownloaded,
+  searchMs: 42,
+  hits: 4,
+  calls: { recallList: { ms: 30 }, brainStatus: { ms: 5 }, recallSearch: { ms: 40 } }
+})
+const refusedRun = (notDownloaded = 4) => ({
+  ...emptyRun(),
+  samples: [goodSample(1_000), goodSample(2_000)],
+  loop: { p99Ms: 12, maxMs: 40 },
+  history: [refusedHistoryProbe(20_000, notDownloaded)]
+})
 
 function report(overrides: Record<string, unknown> = {}) {
   const measured = { ...emptyRun(), samples: [goodSample(1_000), goodSample(2_000)], loop: { p99Ms: 12, maxMs: 40 } }
@@ -472,10 +488,56 @@ describe('buildReport', () => {
     expect(crashed.harnessError).toBe('socket closed')
   })
 
-  it('reports a fifo row no FIFO reader reached as NOT_EXERCISED, naming the opened fixtures', () => {
-    const built = report({ row: 'fifo', evidence: { exercised: false, fixturesOpened: [] } })
-    expect(built.verdict).toBe('NOT_EXERCISED')
+  it('exercises a fifo row when History refused enough fixture meetings and brainStatus answered', () => {
+    const built = report({
+      row: 'fifo',
+      fixtures: ['one.md', 'two.md', '.brain/index.json'],
+      measured: refusedRun(2),
+      evidence: { fixturesOpened: [], fifoMeetingFixtures: 2 }
+    })
+    expect(built.verdict).toBe('PASS')
+    expect(built.exercised).toBe(true)
+    expect(built.exerciseEvidence).toEqual({
+      exercised: true,
+      reason: 'history-refused-fixtures',
+      historyProbesAnswered: 1,
+      unavailableRows: 2,
+      requiredUnavailableRows: 2,
+      brainStatusAnswered: true
+    })
     expect(built.fixturesOpened).toEqual([])
+  })
+
+  it('reports a fifo row History never answered as NOT_EXERCISED, naming the missing refusal evidence', () => {
+    const built = report({
+      row: 'fifo',
+      fixtures: ['one.md', 'two.md'],
+      measured: { ...emptyRun(), samples: [goodSample(1_000)], loop: { p99Ms: 12, maxMs: 40 }, history: [{ tMs: 20_000, skipped: 'no window' }] },
+      evidence: { fixturesOpened: [], fifoMeetingFixtures: 2 }
+    })
+    expect(built.verdict).toBe('NOT_EXERCISED')
+    expect(built.exercised).toBe(false)
+    expect(built.exerciseEvidence).toMatchObject({
+      reason: 'history-did-not-prove-refusal',
+      historyProbesAnswered: 0,
+      unavailableRows: null,
+      requiredUnavailableRows: 2,
+      brainStatusAnswered: false
+    })
+  })
+
+  it('fails a fifo row with its own criterion when any fixture has a reader at the end', () => {
+    const built = report({
+      row: 'fifo',
+      fixtures: ['one.md'],
+      measured: refusedRun(1),
+      evidence: { fixturesOpened: ['one.md'], fifoMeetingFixtures: 1 }
+    })
+    expect(built.verdict).toBe('FAIL')
+    expect(built.criteria.find((c: { name: string }) => c.name === 'non-regular-fixtures-unopened')).toEqual({
+      name: 'non-regular-fixtures-unopened',
+      pass: false
+    })
   })
 
   it('reports the main.log offset or the reason it is unknown', () => {
@@ -628,11 +690,11 @@ describe('the History row (M2-0193)', () => {
       storageSaturations: null,
       firstListCause: 'main-log-unread'
     })
-    const built = report({ row: 'fifo', history: true, measured, evidence: { exercised: true, fixturesOpened: ['x'] } })
+    const built = report({ row: 'fifo', history: true, measured, evidence: { fixturesOpened: ['x'] } })
     expect(built.historyRow).toBe(true)
     expect(built.historySummary?.firstOpenMs).toBe(2_050)
     expect(built.verdict).toBe('FAIL')
-    expect(report({ row: 'fifo', history: true, measured: historyRun([open(25_000, 30)]), evidence: { exercised: true } }).verdict).toBe('PASS')
+    expect(report({ row: 'fifo', history: true, measured: refusedRun(0), evidence: { fixturesOpened: [], fifoMeetingFixtures: 0 } }).verdict).toBe('PASS')
     expect(report().historySummary).toBeUndefined()
   })
 })
@@ -648,6 +710,30 @@ describe('timedCallsExpression (M2-0512)', () => {
     expect(outcomes.hung).toEqual({ ms: expect.any(Number), hung: true })
     expect(outcomes.hung.ms).toBeGreaterThanOrEqual(45)
     expect(outcomes.answered.ms).toBeLessThan(outcomes.hung.ms)
+  })
+})
+
+describe('writeJsonToStdout', () => {
+  it('waits for stdout to accept a report over 64 KiB before returning', async () => {
+    const chunks: string[] = []
+    let flushed = false
+    const report = { harness: 'ST-1', body: 'x'.repeat(70 * 1024) }
+    const stdout = {
+      write(text: string, callback: (error?: Error | null) => void) {
+        chunks.push(text)
+        setTimeout(() => {
+          flushed = true
+          callback()
+        }, 0)
+        return false
+      }
+    }
+
+    await writeJsonToStdout(report, stdout as unknown as typeof process.stdout)
+
+    expect(flushed).toBe(true)
+    expect(chunks.join('').length).toBeGreaterThan(64 * 1024)
+    expect(JSON.parse(chunks.join(''))).toEqual(report)
   })
 })
 
@@ -760,15 +846,13 @@ describe('the History row per call (M2-0512)', () => {
       row: 'fifo',
       history: true,
       measured: slowFirst,
-      evidence: { exercised: true },
+      evidence: { fixturesOpened: [], fifoMeetingFixtures: 0 },
       attribution: { mainLog: null, appEvidence: null, storageSaturations: 3 }
     })
     expect(built.verdict).toBe('PASS')
     expect(built.criteria.map((c: { name: string }) => c.name)).not.toContain('first-list < 250')
     expect(built.historySummary).toMatchObject({ verdict: 'FAIL', storageSaturations: 3, firstListCause: 'admission-saturated' })
-    expect(report({ row: 'fifo', history: true, measured: slowFirst, evidence: { exercised: true }, complete: false }).historySummary?.verdict).toBe(
-      'INCOMPLETE'
-    )
+    expect(report({ row: 'fifo', history: true, measured: slowFirst, evidence: { fixturesOpened: [], fifoMeetingFixtures: 0 }, complete: false }).historySummary?.verdict).toBe('INCOMPLETE')
   })
 
   it('counts the admission saturation lines of a main.log', () => {
@@ -805,12 +889,18 @@ describe('syntheticDatalessPlan', () => {
 })
 
 describe('synthetic-dataless and history reports', () => {
+  const syntheticFixtures = [
+    ...Array.from({ length: 6 }, (_, i) => `fixture-${i + 1}.md`),
+    '.brain/index.json',
+    ...Array.from({ length: 4 }, (_, i) => `.brain/entities/st1-${i + 1}.json`)
+  ]
   const synthetic = (overrides: Record<string, unknown> = {}) =>
     report({
       row: 'synthetic-dataless',
-      fixtures: Array.from({ length: 11 }, (_, i) => `fifo-${i}`),
+      fixtures: syntheticFixtures,
       fixtureCounts: syntheticDatalessPlan().counts,
-      evidence: { exercised: true, fixturesOpened: ['a.md'], sfDatalessSet: false },
+      measured: refusedRun(6),
+      evidence: { fixturesOpened: [], fifoMeetingFixtures: 6, sfDatalessSet: false },
       ...overrides
     })
 
@@ -822,17 +912,19 @@ describe('synthetic-dataless and history reports', () => {
     expect(built.verdict).toBe('PASS')
   })
 
-  it('uses the fifo row exercised rule and the same criteria', () => {
-    expect(synthetic({ evidence: { exercised: false, fixturesOpened: [], sfDatalessSet: false } }).verdict).toBe('NOT_EXERCISED')
-    expect(synthetic().criteria).toEqual(report().criteria)
-    expect(synthetic({ measured: { ...emptyRun(), samples: [goodSample(1_000)], loop: { p99Ms: 12, maxMs: 460 } } }).verdict).toBe('FAIL')
+  it('uses the fifo row refused-without-opening rule and the same timing criteria', () => {
+    expect(synthetic({ measured: { ...refusedRun(5) }, evidence: { fixturesOpened: [], fifoMeetingFixtures: 6, sfDatalessSet: false } }).verdict).toBe(
+      'NOT_EXERCISED'
+    )
+    expect(synthetic().criteria.slice(0, report().criteria.length)).toEqual(report().criteria)
+    expect(synthetic({ measured: { ...refusedRun(6), loop: { p99Ms: 12, maxMs: 460 } } }).verdict).toBe('FAIL')
   })
 
   it('reports historyMode on by default and off when asked, and adds nothing to other rows', () => {
     expect(report().historyMode).toBe('on')
     expect(report({ historyMode: 'off' }).historyMode).toBe('off')
     expect(report({ historyMode: 'off' }).history).toEqual([])
-    expect(report({ row: 'fifo', evidence: { exercised: true, fixturesOpened: [] } })).not.toHaveProperty('fixtureKind')
+    expect(report({ row: 'fifo', measured: refusedRun(0), evidence: { fixturesOpened: [], fifoMeetingFixtures: 0 } })).not.toHaveProperty('fixtureKind')
     expect(report()).not.toHaveProperty('sfDatalessSet')
   })
 })
