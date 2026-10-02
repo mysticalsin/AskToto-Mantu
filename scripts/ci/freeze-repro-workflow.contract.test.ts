@@ -59,11 +59,33 @@ describe('M2-0008 freeze repro workflow', () => {
   })
 
   it('passes hosted-live only when requested and keeps the platform host labels explicit', () => {
+    const m2_0008Mac = workflow.slice(
+      workflow.indexOf('      - name: Run the M2-0008 hosted bundle check'),
+      workflow.indexOf('      - name: Run the M2-0194 attribution bundle check')
+    )
+    const m2_0008Win = workflow.slice(
+      workflow.lastIndexOf('      - name: Run the M2-0008 hosted bundle check'),
+      workflow.lastIndexOf('      - name: Run the M2-0194 attribution bundle check')
+    )
+    const m2_0194Mac = workflow.slice(
+      workflow.indexOf('      - name: Run the M2-0194 attribution bundle check'),
+      workflow.indexOf('      - uses: actions/upload-artifact@')
+    )
+    const m2_0194Win = workflow.slice(
+      workflow.lastIndexOf('      - name: Run the M2-0194 attribution bundle check'),
+      workflow.lastIndexOf('      - uses: actions/upload-artifact@')
+    )
     expect(workflow.match(/if \[\[ "\$\{\{ inputs\.mode \}\}" == hosted-live \]\]; then/g)).toHaveLength(2)
-    expect(workflow.match(/--hosted-live/g)).toHaveLength(2)
-    expect(workflow).toContain('--qa-host-label macos-latest')
-    expect(workflow).toContain('--qa-host-label windows-latest')
-    expect(workflow.match(/--dry-run/g)).toHaveLength(2)
+    expect(m2_0008Mac.match(/--hosted-live/g)).toHaveLength(1)
+    expect(m2_0008Mac).toContain('--qa-host-label macos-latest')
+    expect(m2_0008Mac.match(/--dry-run/g)).toHaveLength(1)
+    expect(m2_0008Win.match(/--hosted-live/g)).toHaveLength(1)
+    expect(m2_0008Win).toContain('--qa-host-label windows-latest')
+    expect(m2_0008Win.match(/--dry-run/g)).toHaveLength(1)
+    expect(m2_0194Mac.match(/--hosted-live/g)).toHaveLength(1)
+    expect(m2_0194Win.match(/--hosted-live/g)).toBeNull()
+    expect(m2_0194Win.match(/--dry-run/g)).toHaveLength(1)
+    expect(workflow.match(/--hosted-live/g)).toHaveLength(3)
   })
 })
 
