@@ -153,10 +153,13 @@ export function rightEdgeStateMismatches(observation, state, layout) {
  */
 export const MAIN_RE_HIDE_SHIM = `(() => {
   const { screen, BrowserWindow } = globalThis.__metisReHideElectron
-  const state = (globalThis.__metisReHide ??= { cursor: null, clickThrough: new WeakMap(), geometry: [] })
+  const state = (globalThis.__metisReHide ??= { cursor: null, cursorReads: 0, clickThrough: new WeakMap(), geometry: [] })
   if (!state.realCursor) {
     state.realCursor = screen.getCursorScreenPoint.bind(screen)
-    screen.getCursorScreenPoint = () => state.cursor ?? state.realCursor()
+    screen.getCursorScreenPoint = () => {
+      if (state.cursor) state.cursorReads += 1
+      return state.cursor ?? state.realCursor()
+    }
   }
   const trace = (w, kind, bounds, call) => {
     try {
@@ -249,7 +252,13 @@ export const MAIN_RE_HIDE_SNAPSHOT = `(() => {
 })()`
 
 export const setMainCursor = (point) =>
-  `(() => { globalThis.__metisReHide.cursor = ${point ? JSON.stringify({ x: Math.round(point.x), y: Math.round(point.y) }) : 'null'}; return true })()`
+  `(() => { globalThis.__metisReHide.cursor = ${point ? JSON.stringify({ x: Math.round(point.x), y: Math.round(point.y) }) : 'null'}; globalThis.__metisReHide.cursorReads = 0; return true })()`
+
+/** How many times main has read the stubbed pointer since the last setMainCursor. */
+export const MAIN_CURSOR_READS = '(() => globalThis.__metisReHide.cursorReads)()'
+
+/** Main reads the pointer once per cursor-watch tick, so two reads prove at least one tick sampled it. */
+export const CURSOR_SAMPLED_READS = 2
 
 export function rightEdgePageChromeState({ rootOpen, drawerAriaHidden, tabAriaExpanded }) {
   const drawer = rootOpen === true && drawerAriaHidden !== 'true'
@@ -364,6 +373,20 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     return { ok: predicate(observed), observed, ms: Date.now() - started }
   }
   const setCursor = (point) => main(setMainCursor(point))
+  // An explicit Hide latches until main samples the pointer outside the band. A fixed sleep can pass with no
+  // cursor-watch tick on a slow runner, so main would never see the pointer leave: hold it away for at least
+  // `minMs` and until main has read it there. Returns the reads seen, as evidence.
+  const leaveTo = async (point, minMs) => {
+    await setCursor(point)
+    const started = Date.now()
+    await wait(minMs)
+    let reads = await main(MAIN_CURSOR_READS)
+    while (reads < CURSOR_SAMPLED_READS && Date.now() - started < 3_000) {
+      await wait(25)
+      reads = await main(MAIN_CURSOR_READS)
+    }
+    return reads
+  }
   const awayPoint = (win) => ({ x: win.workArea.x + 40, y: win.workArea.y + Math.round(win.workArea.height / 2) })
   const edgePoint = (win) => {
     const { drawer } = rightEdgeExpectedRects(win.workArea)
@@ -457,15 +480,13 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     const hideVisible = await hideControl().isVisible()
     await hideControl().click({ timeout: 5_000 })
     const byControl = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', 'hide'), 3_000)
-    await setCursor(awayPoint(byControl.observed.win))
-    await wait(100)
+    await leaveTo(awayPoint(byControl.observed.win), 100)
     const reopened = await revealAtEdge()
     const keptAfterControl = reopened.page.draft === draft
     await composer().focus()
     await page.keyboard.press('Escape')
     const byEscape = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', 'hide'), 3_000)
-    await setCursor(awayPoint(byEscape.observed.win))
-    await wait(100)
+    await leaveTo(awayPoint(byEscape.observed.win), 100)
     const reopenedAgain = await revealAtEdge()
     const keptAfterEscape = reopenedAgain.page.draft === draft
     await composer().fill('')
@@ -484,13 +505,18 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     await wait(600)
     const after600 = await observe()
     const latched = rightEdgeStateMatches(after600, 'parked', 'hide')
-    await setCursor(awayPoint(revealed.win))
-    await wait(150)
+    const awayReads = await leaveTo(awayPoint(revealed.win), 150)
     await setCursor(edgePoint(revealed.win))
     const released = await waitUntil((o) => rightEdgeStateMatches(o, 'revealed'), 2_000)
     return {
       pass: hidden.ok && latched && released.ok,
-      evidence: { hidden: summarize(hidden.observed), after600ms: summarize(after600), bandWorksAfterLeaving: released.ok }
+      evidence: {
+        hidden: summarize(hidden.observed),
+        after600ms: summarize(after600),
+        awayCursorReads: awayReads,
+        bandWorksAfterLeaving: released.ok,
+        released: summarize(released.observed)
+      }
     }
   })
 

@@ -50,6 +50,7 @@ import {
   smokeVerdict,
   waitForNavigationView
 } from './packaged-smoke.mjs'
+import { CURSOR_SAMPLED_READS, MAIN_CURSOR_READS, MAIN_RE_HIDE_SHIM, setMainCursor } from './golden-flows/right-edge-hide-rows.mjs'
 
 interface ProcessEntry {
   pid: number
@@ -784,6 +785,32 @@ describe('right-edge Hide rows (RE-HIDE)', () => {
     expect(rightEdgeStateMismatches({ win: win(0, null), page }, 'parked', 'hide')).toEqual(['clickThrough'])
     expect(rightEdgeStateMismatches({ win: win(0, true), page }, 'parked', 'island')).toEqual(['bounds', 'opacity', 'clickThrough'])
     expect(rightEdgeStateMismatches(null, 'parked', 'hide')).toEqual(['observation'])
+  })
+
+  it('counts main reads of the stubbed pointer, so a row knows the cursor watch sampled it away from the band', () => {
+    const real = { x: 1, y: 1 }
+    const screen = { getCursorScreenPoint: () => real }
+    const g = globalThis as Record<string, unknown>
+    const run = (expression: string): unknown => (0, eval)(expression)
+    g.__metisReHideElectron = { screen, BrowserWindow: { getAllWindows: () => [] } }
+    try {
+      run(MAIN_RE_HIDE_SHIM)
+      run(setMainCursor({ x: 40, y: 400 }))
+      expect(run(MAIN_CURSOR_READS)).toBe(0)
+      expect(screen.getCursorScreenPoint()).toEqual({ x: 40, y: 400 })
+      expect(screen.getCursorScreenPoint()).toEqual({ x: 40, y: 400 })
+      expect(run(MAIN_CURSOR_READS)).toBe(CURSOR_SAMPLED_READS)
+      // A new point starts a fresh count: reads of the previous point never prove the new one was sampled.
+      run(setMainCursor({ x: 1023, y: 380 }))
+      expect(run(MAIN_CURSOR_READS)).toBe(0)
+      // The real pointer is not the stub's: releasing the stub stops the count.
+      run(setMainCursor(null))
+      expect(screen.getCursorScreenPoint()).toBe(real)
+      expect(run(MAIN_CURSOR_READS)).toBe(0)
+    } finally {
+      delete g.__metisReHideElectron
+      delete g.__metisReHide
+    }
   })
 
   it('treats a mounted but aria-hidden right-edge drawer as parked rail chrome', () => {
