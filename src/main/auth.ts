@@ -8,6 +8,7 @@ import type { AuthStatus, SignInResult } from '@shared/ipc'
 import { getSettings, setSettings } from './store'
 import { auditLog, mainLog, setAuditActor } from './logger'
 import { isKeychainAvailable, useFileBackend } from './secrets'
+import { atomicWriteSync, uniqueTmpPath } from './infra/fs/atomic-write'
 import { BARE_FORMAT, open, seal } from './infra/secrets/envelope'
 import { readTrustedAdminManaged } from './win-security'
 
@@ -315,7 +316,7 @@ function makeCachePlugin(): any {
       if (!ctx.cacheHasChanged) return
       try {
         const sealed = seal(ctx.tokenCache.serialize(), BARE_FORMAT)
-        if (sealed.kind !== 'unavailable') writeFileSync(msalCachePath(), sealed.bytes, { mode: 0o600 })
+        if (sealed.kind !== 'unavailable') atomicWriteSync(msalCachePath(), sealed.bytes, { tmp: uniqueTmpPath(msalCachePath()) })
       } catch {
         /* best-effort: token simply won't persist this run */
       }
@@ -578,7 +579,7 @@ function loadSession(): void {
       try {
         const current = seal(json, BARE_FORMAT)
         if (current.kind !== 'unavailable' && current.kind !== opened.kind) {
-          writeFileSync(sessionPath(), current.bytes, { mode: 0o600 })
+          atomicWriteSync(sessionPath(), current.bytes, { tmp: uniqueTmpPath(sessionPath()) })
         }
       } catch { /* best-effort */ }
     }
@@ -603,7 +604,7 @@ function saveSession(s: Session): void {
   try {
     const json = JSON.stringify(s)
     const sealed = seal(json, BARE_FORMAT)
-    if (sealed.kind !== 'unavailable') writeFileSync(sessionPath(), sealed.bytes, { mode: 0o600 })
+    if (sealed.kind !== 'unavailable') atomicWriteSync(sessionPath(), sealed.bytes, { tmp: uniqueTmpPath(sessionPath()) })
   } catch (e) {
     // Session persisted to memory only — sign-in still works for this run, but will silently sign
     // the user out on next launch with no trace unless we log it. Never log session contents

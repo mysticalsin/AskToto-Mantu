@@ -33,6 +33,7 @@ import { refuseIfDemoTagged } from '@shared/demo-guard'
 import { recapStatusValidationError } from '@shared/recap-status'
 import { measuredDurationMs, meetingDurationMinutes } from '@shared/meeting-duration'
 import { classifyAll, storageAt } from './infra/storage/meetings-storage'
+import { recordLocalWrite } from './infra/storage/local-writes'
 import type { FileClass } from './infra/storage/gateway'
 
 // Optional at-rest encryption for transcripts/notes. Two on-disk formats share one fixed-length
@@ -334,9 +335,11 @@ export async function writeSaved(file: string, content: string, encrypt: boolean
   }
   // Unique per-call tmp name: two concurrent writers to the SAME target (e.g. a background brain
   // ingest and an IPC-driven edit both updating one entity file) would otherwise share `${file}.tmp` —
-  // the first rename steals the second writer's bytes and the second rename throws ENOENT. The default
-  // meetings folder lives under OneDrive, so atomicWrite's EPERM/EBUSY rename retry matters here.
+  // the first rename steals the second writer's bytes and the second rename throws ENOENT.
+  // The default meetings folder lives under OneDrive, so atomicWrite's EPERM/EBUSY rename retry matters here.
   await atomicWrite(file, data, { tmp: uniqueTmpPath(file) })
+  // These bytes are on this device: reading them back must not wait on a placeholder probe.
+  await recordLocalWrite(file)
 }
 
 // Decrypted temp copies are tracked and deleted on quit so an encrypted transcript never leaves a

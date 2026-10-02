@@ -34,7 +34,7 @@
  */
 
 import { app } from 'electron'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 import { ENCRYPTED_PROFILE_RECOVERY_ERROR_PREFIX } from '@shared/encrypted-profile-recovery'
@@ -226,9 +226,9 @@ function loadKey({
 
   _key = randomBytes(32)
   if (canWrap) {
-    writeFileSync(p, keychainEncrypt(_key.toString('base64')), { mode: 0o600 })
+    persistKeyFileAtomically(p, keychainEncrypt(_key.toString('base64')))
   } else {
-    writeFileSync(p, _key, { mode: 0o600 })
+    persistKeyFileAtomically(p, _key)
   }
   return _key
 }

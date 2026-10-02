@@ -13,6 +13,7 @@ import {
 import {
   LIFECYCLE_EVENTS,
   auditDiagnostic,
+  bootLaunchActivateVerdict,
   buildWindowsShortcutLauncher,
   NAVIGATION_GUARD_BOOTSTRAP_PATCH,
   childPidReserved,
@@ -25,14 +26,24 @@ import {
   initialRvRows,
   initialNavigationGuardRows,
   initialRightEdgeHideRows,
+  navigationViewReadiness,
+  readNavigationViewSnapshot,
+  navigationMeetingTitles,
+  initialOverlayStabilityRows,
+  OV_STABLE_PATH_MS,
+  overlayStablePath,
+  overlaySurfaceChanges,
+  pinnedBridgeCall,
   rightEdgeExpectedRects,
   rightEdgeHideParkMatches,
   rightEdgeStateMatches,
   rightEdgeStateMismatches,
   runRevealRow,
+  seedNavigationMeetings,
   seedOnboardedProfile,
   smokeReport,
-  smokeVerdict
+  smokeVerdict,
+  waitForNavigationView
 } from './packaged-smoke.mjs'
 
 interface ProcessEntry {
@@ -81,6 +92,12 @@ interface Observation {
   rightEdgeHide?: Array<{
     id: string
     layout: string
+    status: string
+    evidence: Record<string, unknown> | null
+    unblock: string | null
+  }>
+  overlayStability?: Array<{
+    id: string
     status: string
     evidence: Record<string, unknown> | null
     unblock: string | null
@@ -201,6 +218,11 @@ function goodObservation(): Observation {
       status: 'PASS',
       evidence: { observed: true }
     })),
+    overlayStability: initialOverlayStabilityRows().map((row) => ({
+      ...row,
+      status: 'PASS',
+      evidence: { observed: true }
+    })),
     survivors: [],
     survivorsGoneMs: 300
   }
@@ -273,6 +295,16 @@ describe('smokeVerdict', () => {
       'an automated right-edge Hide row never completed after renderer readiness',
       (o) => { o.rightEdgeHide![0] = { ...o.rightEdgeHide![0], status: 'PENDING', evidence: null } },
       'right_edge_hide_incomplete'
+    ],
+    [
+      'an overlay stability row failed',
+      (o) => { o.overlayStability![0] = { ...o.overlayStability![0], status: 'FAIL', evidence: null } },
+      'overlay_stability_failed'
+    ],
+    [
+      'an overlay stability row never completed after renderer readiness',
+      (o) => { o.overlayStability![1] = { ...o.overlayStability![1], status: 'PENDING', evidence: null } },
+      'overlay_stability_incomplete'
     ]
   ]
 
@@ -577,6 +609,7 @@ describe('smokeReport', () => {
       'rv',
       'navigationGuard',
       'rightEdgeHide',
+      'overlayStability',
       'processes'
     ])
     expect(Object.keys(report.app ?? {})).toEqual(['version', 'platform', 'arch'])
@@ -741,6 +774,89 @@ describe('right-edge Hide rows (RE-HIDE)', () => {
   })
 })
 
+describe('overlay stability rows (OV, M2-0431)', () => {
+  const mac = { bounds: { x: 0, y: 0, width: 1920, height: 1080 }, workArea: { x: 0, y: 25, width: 1920, height: 1055 } }
+  const windows = { bounds: { x: 0, y: 0, width: 1024, height: 768 }, workArea: { x: 0, y: 0, width: 1024, height: 720 } }
+
+  it('tracks OV-STABLE and OV-BG as pending automation, with a 3-minute path', () => {
+    expect(initialOverlayStabilityRows()).toEqual([
+      { id: 'OV-STABLE', status: 'PENDING', evidence: null, unblock: null },
+      { id: 'OV-BG', status: 'PENDING', evidence: null, unblock: null }
+    ])
+    expect(OV_STABLE_PATH_MS).toBe(180_000)
+  })
+
+  it("stops on the owner's menu-bar points for 400 ms and passes through the right-edge band area", () => {
+    const path = overlayStablePath(mac.bounds, mac.workArea)
+    expect(path.slice(0, 3).map((stop) => stop.point)).toEqual([
+      { x: 24, y: 8 },
+      { x: 1253, y: 8 },
+      { x: 1770, y: 8 }
+    ])
+    expect(path.every((stop) => stop.ms === 400)).toBe(true)
+    expect(path.find((stop) => stop.label === 'right-edge-band')?.point.x).toBe(1919)
+  })
+
+  it('keeps every menu-bar stop outside the notch reveal zone (the bar centre +/-150 px), even on a 1024 px display', () => {
+    for (const display of [mac, windows]) {
+      const hoverZone = hoverWatchRestRect('hide', {
+        bounds: display.bounds,
+        workArea: display.workArea,
+        hasNotch: false,
+        notchWidth: 0,
+        menuBarHeight: display.workArea.y - display.bounds.y,
+        source: 'heuristic'
+      }, 'top-center')
+      for (const stop of overlayStablePath(display.bounds, display.workArea).filter((s) => s.label.startsWith('menu-bar'))) {
+        const insideZone = stop.point.x >= hoverZone.x && stop.point.x < hoverZone.x + hoverZone.width
+        expect(insideZone, `${stop.label} at x=${stop.point.x}`).toBe(false)
+        expect(stop.point.x).toBeGreaterThanOrEqual(display.bounds.x)
+        expect(stop.point.x).toBeLessThan(display.bounds.x + display.bounds.width)
+      }
+    }
+  })
+
+  const parked = { bounds: { x: 956, y: 0, width: 8, height: 2 }, opacity: 0, visible: true }
+  const bar = { x: 520, y: 25, width: 880, height: 120 }
+  const call = (turn: number, name: string, before: typeof parked, after: typeof parked, arg: unknown = null) => ({ turn, call: name, arg, before, after })
+
+  it('counts no change for repeated calls that leave the window as it was', () => {
+    const events = [call(1, 'setBounds', parked, parked), call(1, 'setOpacity', parked, parked, 0), call(2, 'showInactive', parked, parked)]
+    expect(overlaySurfaceChanges(events)).toEqual({ changes: 0, reveals: 0, parks: 0, opacityBeforeTarget: 0, slabBeforeResize: 0 })
+  })
+
+  it('accepts a reveal that sets bounds before opacity 1 and a park that fades before shrinking', () => {
+    const sized = { bounds: bar, opacity: 0, visible: true }
+    const shown = { bounds: bar, opacity: 1, visible: true }
+    const events = [
+      call(1, 'setBounds', parked, sized),
+      call(1, 'setOpacity', sized, shown, 1),
+      call(2, 'setOpacity', shown, sized, 0),
+      call(2, 'setBounds', sized, parked)
+    ]
+    expect(overlaySurfaceChanges(events)).toEqual({ changes: 4, reveals: 1, parks: 1, opacityBeforeTarget: 0, slabBeforeResize: 0 })
+  })
+
+  it('flags opacity 1 while the window still has its parked size (the pre-M2-0431 hard cut)', () => {
+    const shownSmall = { ...parked, opacity: 1 }
+    const shown = { bounds: bar, opacity: 1, visible: true }
+    const events = [call(1, 'setOpacity', parked, shownSmall, 1), call(1, 'setBounds', shownSmall, shown)]
+    expect(overlaySurfaceChanges(events).opacityBeforeTarget).toBe(1)
+  })
+
+  it('flags an opaque Settings background painted before the Settings resize, never the transparent rest', () => {
+    const settings = { x: 520, y: 25, width: 880, height: 800 }
+    const openState = { bounds: settings, opacity: 1, visible: true }
+    const barState = { bounds: bar, opacity: 1, visible: true }
+    const slabFirst = [call(1, 'setBackgroundColor', barState, barState, '#120022'), call(1, 'setBounds', barState, openState)]
+    const resizeFirst = [call(1, 'setBounds', barState, openState), call(1, 'setBackgroundColor', openState, openState, '#120022')]
+    const restFirst = [call(1, 'setBackgroundColor', openState, openState, '#00000000'), call(1, 'setBounds', openState, barState)]
+    expect(overlaySurfaceChanges(slabFirst).slabBeforeResize).toBe(1)
+    expect(overlaySurfaceChanges(resizeFirst).slabBeforeResize).toBe(0)
+    expect(overlaySurfaceChanges(restFirst).slabBeforeResize).toBe(0)
+  })
+})
+
 describe('initialRvRows', () => {
   it('tracks every macOS hosted reopen row as pending automation', () => {
     const rows = initialRvRows('darwin')
@@ -750,7 +866,8 @@ describe('initialRvRows', () => {
       'RV-2-macos-open-new-instance',
       'RV-4-tray-show',
       'RV-4-global-hotkey',
-      'RV-1-macos-finder-spotlight-launchpad'
+      'RV-1-macos-finder-spotlight-launchpad',
+      'RV-boot-launch-activate-stays-parked'
     ])
     expect(rows.every((row) => row.status === 'PENDING')).toBe(true)
     expect(rows.every((row) => row.unblock === null)).toBe(true)
@@ -798,6 +915,259 @@ describe('initialNavigationGuardRows', () => {
     expect(rows.some((row) => row.state === 'dirty')).toBe(true)
     expect(rows.every((row) => row.status === 'PENDING')).toBe(true)
     expect(rows.every((row) => row.unblock === null)).toBe(true)
+  })
+})
+
+describe('navigation view readiness', () => {
+  const historyReady = {
+    searchVisible: true,
+    searchEnabled: true,
+    targetMeetingButtonVisible: true,
+    targetMeetingButtonEnabled: true,
+    backVisible: false,
+    backEnabled: false,
+    titleVisible: false,
+    guardVisible: false
+  }
+  const reviewReady = {
+    searchVisible: false,
+    searchEnabled: false,
+    targetMeetingButtonVisible: false,
+    targetMeetingButtonEnabled: false,
+    backVisible: true,
+    backEnabled: true,
+    titleVisible: true,
+    guardVisible: false
+  }
+
+  it('requires interactive app-side controls before History or Review is considered reached', () => {
+    expect(navigationViewReadiness(historyReady, { view: 'history', title: 'Smoke navigation alpha' })).toEqual({
+      ready: true,
+      reason: null
+    })
+    expect(
+      navigationViewReadiness({ ...historyReady, targetMeetingButtonEnabled: false }, { view: 'history', title: 'Smoke navigation alpha' })
+    ).toEqual({ ready: false, reason: 'target history row was not interactive' })
+    expect(navigationViewReadiness(reviewReady, { view: 'review', title: 'Smoke navigation beta' })).toEqual({
+      ready: true,
+      reason: null
+    })
+    expect(navigationViewReadiness({ ...reviewReady, guardVisible: true }, { view: 'review', title: 'Smoke navigation beta' })).toEqual({
+      ready: false,
+      reason: 'navigation guard was still open'
+    })
+  })
+
+  it('polls renderer readiness and reports why the requested view was not reached', async () => {
+    const snapshots = [
+      { ...reviewReady, backVisible: false, titleVisible: false },
+      { ...reviewReady, titleVisible: false }
+    ]
+    const page = {
+      evaluate: async () => snapshots.shift() ?? { ...reviewReady, titleVisible: false }
+    }
+
+    await expect(
+      waitForNavigationView(page, { view: 'review', title: 'Smoke navigation beta' }, { timeoutMs: 5, pollMs: 1, wait: async () => undefined })
+    ).rejects.toThrow(/review view was not reached: target review was not visible/)
+  })
+
+  it('does not treat a Recent meetings row title as the open Review title', async () => {
+    class ElementStub {
+      textContent: string
+      private attrs: Map<string, string>
+      private rectCount: number
+      style: { visibility: string; display: string }
+
+      constructor({ text = '', attrs = {}, visible = true }: { text?: string; attrs?: Record<string, string>; visible?: boolean }) {
+        this.textContent = text
+        this.attrs = new Map(Object.entries(attrs))
+        this.rectCount = visible ? 1 : 0
+        this.style = { visibility: visible ? 'visible' : 'hidden', display: visible ? 'block' : 'none' }
+      }
+
+      getAttribute(name: string): string | null {
+        return this.attrs.get(name) ?? null
+      }
+
+      hasAttribute(name: string): boolean {
+        return this.attrs.has(name)
+      }
+
+      getClientRects(): unknown[] {
+        return Array.from({ length: this.rectCount }, () => ({}))
+      }
+    }
+
+    const globalScope = globalThis as typeof globalThis & {
+      window?: unknown
+      document?: unknown
+      HTMLElement?: unknown
+    }
+    const previousWindow = globalScope.window
+    const previousDocument = globalScope.document
+    const previousHTMLElement = globalScope.HTMLElement
+    const recentMeetingButton = new ElementStub({ text: 'Smoke navigation beta' })
+    const backButton = new ElementStub({ text: 'Back to history' })
+
+    try {
+      Object.assign(globalScope, {
+        HTMLElement: ElementStub,
+        window: { getComputedStyle: (node: ElementStub) => node.style },
+        document: {
+          body: { innerText: 'Recent meetings Smoke navigation beta' },
+          querySelectorAll: (selector: string) => (selector === 'button' ? [recentMeetingButton, backButton] : []),
+          querySelector: (selector: string) => {
+            if (selector === '[aria-label="Review meeting title"]') return null
+            if (selector === '[aria-label="Search past meetings"]') return null
+            if (selector === '[role="dialog"][aria-label="Save recap changes?"]') return null
+            return null
+          }
+        }
+      })
+
+      const page = {
+        evaluate: async (fn: (arg: { title: string }) => unknown, arg: { title: string }) => fn(arg)
+      }
+      const snapshot = await readNavigationViewSnapshot(page, { view: 'review', title: 'Smoke navigation beta' })
+
+      expect(snapshot.titleVisible).toBe(false)
+      expect(navigationViewReadiness(snapshot, { view: 'review', title: 'Smoke navigation beta' })).toEqual({
+        ready: false,
+        reason: 'target review was not visible'
+      })
+    } finally {
+      Object.assign(globalScope, {
+        window: previousWindow,
+        document: previousDocument,
+        HTMLElement: previousHTMLElement
+      })
+    }
+  })
+})
+
+describe('navigationMeetingTitles', () => {
+  it('keeps the original seeded names for clean rows and gives dirty rows isolated meeting pairs', () => {
+    expect(navigationMeetingTitles()).toEqual({
+      alpha: 'Smoke navigation alpha',
+      beta: 'Smoke navigation beta'
+    })
+
+    expect(navigationMeetingTitles('HIST dirty save bar')).toEqual({
+      alpha: 'Smoke navigation alpha HIST dirty save bar',
+      beta: 'Smoke navigation beta HIST dirty save bar'
+    })
+  })
+})
+
+describe('seedNavigationMeetings', () => {
+  it('refreshes an already-open History view so freshly saved smoke meetings are visible', async () => {
+    const events: string[] = []
+    const search = {
+      first: () => search,
+      isVisible: async () => true,
+      waitFor: async (options: { state?: string }) => events.push(`search:${options.state ?? 'visible'}`)
+    }
+    const history = {
+      first: () => history,
+      click: async () => events.push('history:click'),
+      waitFor: async () => events.push('history:wait')
+    }
+    const page = {
+      evaluate: async (_fn: unknown, titles: ReturnType<typeof navigationMeetingTitles>) => {
+        events.push(`seed:${titles.alpha}`)
+        return { first: 'alpha.md', second: 'beta.md', titles }
+      },
+      getByLabel: () => search,
+      getByRole: () => history,
+      waitForTimeout: async (ms: number) => events.push(`wait:${ms}`)
+    }
+
+    const seeded = await seedNavigationMeetings(page, 'HIST dirty save bar')
+
+    expect(seeded.titles.alpha).toBe('Smoke navigation alpha HIST dirty save bar')
+    expect(events).toEqual([
+      'seed:Smoke navigation alpha HIST dirty save bar',
+      'wait:450',
+      'history:click',
+      'search:hidden',
+      'wait:450',
+      'history:click',
+      'search:visible'
+    ])
+  })
+
+  it('does not toggle History when the seeded meetings are created before History opens', async () => {
+    const events: string[] = []
+    const search = {
+      first: () => search,
+      isVisible: async () => false,
+      waitFor: async (options: { state?: string }) => events.push(`search:${options.state ?? 'visible'}`)
+    }
+    const history = {
+      first: () => history,
+      click: async () => events.push('history:click')
+    }
+    const page = {
+      evaluate: async (_fn: unknown, titles: ReturnType<typeof navigationMeetingTitles>) => {
+        events.push(`seed:${titles.alpha}`)
+        return { first: 'alpha.md', second: 'beta.md', titles }
+      },
+      getByLabel: () => search,
+      getByRole: () => history,
+      waitForTimeout: async (ms: number) => events.push(`wait:${ms}`)
+    }
+
+    await seedNavigationMeetings(page)
+
+    expect(events).toEqual(['seed:Smoke navigation alpha'])
+  })
+
+  it('paces through the save-transcript hot-path limiter instead of failing later rows', async () => {
+    const events: string[] = []
+    let saves = 0
+    const originalWindow = (globalThis as { window?: unknown }).window
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: {
+        toto: {
+          saveTranscript: async (payload: { title: string }) => {
+            saves += 1
+            events.push(`save:${payload.title}`)
+            if (saves === 1) throw new Error('Error invoking remote method \'transcript:save\': Error: Could not save the transcript.')
+            return { path: `/tmp/${payload.title}.md` }
+          }
+        }
+      }
+    })
+    const search = {
+      first: () => search,
+      isVisible: async () => false,
+      waitFor: async () => events.push('search:wait')
+    }
+    const history = {
+      first: () => history,
+      click: async () => events.push('history:click')
+    }
+    const page = {
+      evaluate: async (fn: (titles: ReturnType<typeof navigationMeetingTitles>) => Promise<unknown>, titles: ReturnType<typeof navigationMeetingTitles>) => fn(titles),
+      getByLabel: () => search,
+      getByRole: () => history,
+      waitForTimeout: async (ms: number) => events.push(`wait:${ms}`)
+    }
+
+    try {
+      const seeded = await seedNavigationMeetings(page, 'HIST dirty save recent')
+
+      expect(seeded.titles.beta).toBe('Smoke navigation beta HIST dirty save recent')
+      expect(events).toEqual([
+        'save:Smoke navigation alpha HIST dirty save recent',
+        'save:Smoke navigation alpha HIST dirty save recent',
+        'save:Smoke navigation beta HIST dirty save recent'
+      ])
+    } finally {
+      Object.defineProperty(globalThis, 'window', { configurable: true, value: originalWindow })
+    }
   })
 })
 
@@ -969,5 +1339,96 @@ describe('computeCleanupTargets', () => {
     )
 
     expect(targets.map((t) => t.pid).sort((a, b) => a - b)).toEqual([100, 101])
+  })
+})
+
+describe('bootLaunchActivateVerdict', () => {
+  const passing = { precondition: null, rendererReady: true, activateReveals: 0, parked: true, settingsOpened: false }
+
+  it('passes only when the launch activate revealed nothing, the overlay is parked and Settings stayed closed', () => {
+    expect(bootLaunchActivateVerdict(passing)).toEqual({ status: 'PASS', failures: [], reason: null })
+  })
+
+  it('fails when an activate reveal was honoured during boot', () => {
+    expect(bootLaunchActivateVerdict({ ...passing, activateReveals: 1 })).toMatchObject({
+      status: 'FAIL',
+      failures: ['activate_reveal_during_boot']
+    })
+  })
+
+  it('fails when the overlay is not parked after boot, or parked was never observed', () => {
+    expect(bootLaunchActivateVerdict({ ...passing, parked: false })).toMatchObject({
+      status: 'FAIL',
+      failures: ['not_parked_after_boot']
+    })
+    expect(bootLaunchActivateVerdict({ ...passing, parked: null }).status).toBe('FAIL')
+  })
+
+  it('fails when Settings opened, or its state was never observed', () => {
+    expect(bootLaunchActivateVerdict({ ...passing, settingsOpened: true })).toMatchObject({
+      status: 'FAIL',
+      failures: ['settings_opened_on_boot']
+    })
+    expect(bootLaunchActivateVerdict({ ...passing, settingsOpened: null }).status).toBe('FAIL')
+  })
+
+  it('reports every defect at once', () => {
+    expect(bootLaunchActivateVerdict({ ...passing, activateReveals: 2, parked: false, settingsOpened: true }).failures).toEqual([
+      'activate_reveal_during_boot',
+      'not_parked_after_boot',
+      'settings_opened_on_boot'
+    ])
+  })
+
+  it('is PRECONDITION, never PASS, when the env or CDP port could not be delivered', () => {
+    const verdict = bootLaunchActivateVerdict({ ...passing, precondition: 'the CDP port did not reach the app' })
+    expect(verdict).toEqual({ status: 'PRECONDITION', failures: [], reason: 'the CDP port did not reach the app' })
+  })
+
+  it('is PRECONDITION when the renderer never became ready', () => {
+    expect(bootLaunchActivateVerdict({ ...passing, rendererReady: false }).status).toBe('PRECONDITION')
+  })
+})
+
+describe('pinnedBridgeCall (M2-0519)', () => {
+  const scope = globalThis as unknown as { window?: unknown; __metisSmokeBridgePending?: Set<Promise<unknown>> }
+
+  function bridgeWith(toggle: (...args: unknown[]) => Promise<unknown>): void {
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: { toto: { toggle } } })
+    delete scope.__metisSmokeBridgePending
+  }
+
+  it('keeps the pending bridge call reachable from the page until it settles, and returns nothing', async () => {
+    let settle: (value: unknown) => void = () => undefined
+    const bridged = new Promise((resolve) => {
+      settle = resolve
+    })
+    const seen: unknown[][] = []
+    bridgeWith((...args) => {
+      seen.push(args)
+      return bridged
+    })
+    try {
+      const call = pinnedBridgeCall(['toggle', ['a', 1]])
+      expect(seen).toEqual([['a', 1]])
+      expect([...(scope.__metisSmokeBridgePending ?? [])]).toEqual([bridged])
+      settle({ visible: true })
+      await expect(call).resolves.toBeUndefined()
+      expect(scope.__metisSmokeBridgePending?.size).toBe(0)
+    } finally {
+      Object.defineProperty(globalThis, 'window', { configurable: true, value: undefined })
+      delete scope.__metisSmokeBridgePending
+    }
+  })
+
+  it('rejects with the bridge call’s error and still releases it', async () => {
+    bridgeWith(() => Promise.reject(new Error('no window')))
+    try {
+      await expect(pinnedBridgeCall(['toggle', []])).rejects.toThrow('no window')
+      expect(scope.__metisSmokeBridgePending?.size).toBe(0)
+    } finally {
+      Object.defineProperty(globalThis, 'window', { configurable: true, value: undefined })
+      delete scope.__metisSmokeBridgePending
+    }
   })
 })

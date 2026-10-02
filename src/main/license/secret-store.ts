@@ -5,10 +5,11 @@
  * Never write a raw license key to settings.json.
  */
 import { app } from 'electron'
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, unlinkSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
 import { encryptSecret, isKeychainAvailable, useFileBackend } from '../secrets'
+import { atomicWriteSync } from '../infra/fs/atomic-write'
 import { BARE_FORMAT, open, seal } from '../infra/secrets/envelope'
 import type { LicenseEdition, LicenseSource } from '@shared/license-types'
 
@@ -65,7 +66,7 @@ export function writeLicenseCache(cache: LicenseCache, userData?: string): void 
   const dir = dirname(path)
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   const buf = wrap(JSON.stringify(cache))
-  writeFileSync(path, buf, { mode: 0o600 })
+  atomicWriteSync(path, buf)
 }
 
 export function clearLicenseCache(userData?: string): void {
