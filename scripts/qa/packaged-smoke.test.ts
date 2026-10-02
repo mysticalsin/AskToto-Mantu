@@ -16,8 +16,10 @@ import {
   bootLaunchActivateVerdict,
   buildWindowsShortcutLauncher,
   NAVIGATION_GUARD_BOOTSTRAP_PATCH,
+  LATE_NATIVE_FRAME_HOLD_MS,
   childPidReserved,
   computeCleanupTargets,
+  framesAboveWorkArea,
   isOverlayUrl,
   isPassingRevealEvidence,
   waitUntilParked,
@@ -27,6 +29,7 @@ import {
   initialNavigationGuardRows,
   initialRightEdgeHideRows,
   navigationViewReadiness,
+  returnToHistoryFromReview,
   readNavigationViewSnapshot,
   navigationMeetingTitles,
   initialOverlayStabilityRows,
@@ -36,6 +39,8 @@ import {
   pinnedBridgeCall,
   rightEdgeExpectedRects,
   rightEdgeHideParkMatches,
+  rightEdgeMeetingHideVerdict,
+  rightEdgePageChromeState,
   rightEdgeStateMatches,
   rightEdgeStateMismatches,
   runRevealRow,
@@ -338,13 +343,19 @@ describe('smokeVerdict', () => {
     expect(smokeVerdict(observation)).toEqual({ result: 'fail', failures: ['smoke_incomplete'] })
   })
 
-  it('does not fail a completed smoke observation for BLOCKED_EXTERNAL rows', () => {
+  it('does not fail a completed smoke observation for terminal non-pass rows', () => {
     const observation = goodObservation()
     observation.rv[0] = {
       ...observation.rv[0],
       status: 'BLOCKED_EXTERNAL',
       evidence: null,
       unblock: 'Run this row where the outside dependency is available.'
+    }
+    observation.rv[1] = {
+      ...observation.rv[1],
+      status: 'PRECONDITION',
+      evidence: null,
+      unblock: 'Run this row where the launch precondition is available.'
     }
     observation.navigationGuard[0] = {
       ...observation.navigationGuard[0],
@@ -772,6 +783,56 @@ describe('right-edge Hide rows (RE-HIDE)', () => {
     expect(rightEdgeStateMismatches({ win: win(0, true), page }, 'parked', 'island')).toEqual(['bounds', 'opacity', 'clickThrough'])
     expect(rightEdgeStateMismatches(null, 'parked', 'hide')).toEqual(['observation'])
   })
+
+  it('treats a mounted but aria-hidden right-edge drawer as parked rail chrome', () => {
+    expect(rightEdgePageChromeState({ rootOpen: false, drawerAriaHidden: 'true', tabAriaExpanded: 'false' })).toEqual({
+      drawer: false,
+      rail: true
+    })
+    expect(rightEdgePageChromeState({ rootOpen: true, drawerAriaHidden: null, tabAriaExpanded: 'true' })).toEqual({
+      drawer: true,
+      rail: false
+    })
+  })
+
+  it('keeps RE-HIDE-3 meeting Hide held for late native frames and carries geometry evidence', () => {
+    expect(LATE_NATIVE_FRAME_HOLD_MS).toBe(500)
+    const { band } = rightEdgeExpectedRects(windows.workArea)
+    const parkedWin = {
+      bounds: { x: 992, y: band.y, width: 32, height: band.height },
+      opacity: 0,
+      clickThrough: true,
+      visible: true,
+      displayBounds: windows.bounds,
+      workArea: windows.workArea
+    }
+    const page = { dock: true, drawer: false, rail: true, hideControl: false, meetingLive: true, composerFocused: false, draft: '' }
+    const parked = { ok: true, observed: { win: parkedWin, page } }
+    const held = { win: parkedWin, page }
+    const geometry = [
+      { ms: 1, kind: 'write', bounds: band },
+      { ms: 50, kind: 'frame', bounds: parkedWin.bounds },
+      { ms: 100, kind: 'call', bounds: parkedWin.bounds, call: { name: 'setOpacity', args: [0] } }
+    ]
+
+    expect(framesAboveWorkArea(geometry, windows.workArea.y)).toEqual([])
+    expect(rightEdgeMeetingHideVerdict({ meetingLive: true, hideVisible: true, parked, held, geometry })).toEqual({
+      pass: true,
+      evidence: {
+        meetingLive: true,
+        hideVisible: true,
+        parked: expect.objectContaining({ kind: 'hide-band' }),
+        after500ms: expect.objectContaining({ kind: 'hide-band' }),
+        framesAboveWorkArea: [],
+        geometry
+      }
+    })
+
+    const badFrame = { ms: 75, kind: 'frame', bounds: { ...parkedWin.bounds, y: windows.workArea.y - 1 } }
+    const failed = rightEdgeMeetingHideVerdict({ meetingLive: true, hideVisible: true, parked, held, geometry: [...geometry, badFrame] })
+    expect(failed.pass).toBe(false)
+    expect(failed.evidence.framesAboveWorkArea).toEqual([badFrame])
+  })
 })
 
 describe('overlay stability rows (OV, M2-0431)', () => {
@@ -972,6 +1033,34 @@ describe('navigation view readiness', () => {
     ).rejects.toThrow(/review view was not reached: target review was not visible/)
   })
 
+  it('waits for the requested Review title before returning to the requested History row', async () => {
+    const evaluateTitles: Array<string | null> = []
+    const clicked: string[] = []
+    const page = {
+      evaluate: async (_fn: unknown, arg: { title?: string | null }) => {
+        evaluateTitles.push(arg.title ?? null)
+        if (arg.title === 'Smoke navigation beta') return reviewReady
+        if (arg.title === 'Smoke navigation alpha') return historyReady
+        throw new Error(`unexpected navigation title ${arg.title ?? '<none>'}`)
+      },
+      getByRole: (_role: string, options: { name: RegExp }) => ({
+        first: () => ({
+          click: async () => {
+            clicked.push(String(options.name))
+          }
+        })
+      })
+    }
+
+    await returnToHistoryFromReview(page, {
+      reviewTitle: 'Smoke navigation beta',
+      historyTitle: 'Smoke navigation alpha'
+    })
+
+    expect(evaluateTitles).toEqual(['Smoke navigation beta', 'Smoke navigation alpha'])
+    expect(clicked).toEqual(['/Back to history/'])
+  })
+
   it('does not treat a Recent meetings row title as the open Review title', async () => {
     class ElementStub {
       textContent: string
@@ -1074,9 +1163,22 @@ describe('seedNavigationMeetings', () => {
       waitFor: async () => events.push('history:wait')
     }
     const page = {
-      evaluate: async (_fn: unknown, titles: ReturnType<typeof navigationMeetingTitles>) => {
-        events.push(`seed:${titles.alpha}`)
-        return { first: 'alpha.md', second: 'beta.md', titles }
+      evaluate: async (_fn: unknown, payload: ReturnType<typeof navigationMeetingTitles> | { title: string }) => {
+        if ('title' in payload) {
+          events.push(`snapshot:${payload.title}`)
+          return {
+            searchVisible: true,
+            searchEnabled: true,
+            targetMeetingButtonVisible: true,
+            targetMeetingButtonEnabled: true,
+            backVisible: false,
+            backEnabled: false,
+            titleVisible: false,
+            guardVisible: false
+          }
+        }
+        events.push(`seed:${payload.alpha}`)
+        return { first: 'alpha.md', second: 'beta.md', titles: payload }
       },
       getByLabel: () => search,
       getByRole: () => history,
@@ -1093,7 +1195,7 @@ describe('seedNavigationMeetings', () => {
       'search:hidden',
       'wait:450',
       'history:click',
-      'search:visible'
+      'snapshot:Smoke navigation alpha HIST dirty save bar'
     ])
   })
 
