@@ -9,7 +9,7 @@
  * meeting-history driver.
  */
 import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { cpSync, createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -61,6 +61,8 @@ export function seedProfile(profileDir) {
     asrEngine: 'whisper',
     asrQuality: 'fast',
     asrLanguage: 'English',
+    overlayPlacement: 'top-center',
+    overlayLayout: 'bar',
     localLlm: { ...settings.localLlm, enabled: false },
     backgroundScreenContext: false,
     instantSuggestions: false,
@@ -165,13 +167,47 @@ async function cdpPage(port) {
       socket.addEventListener('error', () => reject(new Error('CDP socket failed')))
     })
     const pending = new Map()
+    const diagnostics = {
+      whisperEngineMessages: 0,
+      asrLoadFailedMessages: 0,
+      microphoneCaptureFailedMessages: 0,
+      backpressureMessages: 0
+    }
+    const countDiagnosticText = (text) => {
+      if (text.includes('[whisper] engine:')) diagnostics.whisperEngineMessages += 1
+      if (text.includes('ASR load failed')) diagnostics.asrLoadFailedMessages += 1
+      if (text.includes('[listen] microphone capture failed')) diagnostics.microphoneCaptureFailedMessages += 1
+      if (/backpressure/i.test(text)) diagnostics.backpressureMessages += 1
+    }
     let nextId = 1
     socket.addEventListener('message', (event) => {
       const message = JSON.parse(event.data)
+      if (message.method === 'Runtime.consoleAPICalled') {
+        for (const arg of message.params?.args ?? []) {
+          if (typeof arg.value === 'string') countDiagnosticText(arg.value)
+        }
+      } else if (message.method === 'Log.entryAdded') {
+        const text = message.params?.entry?.text
+        if (typeof text === 'string') countDiagnosticText(text)
+      }
       pending.get(message.id)?.(message)
       pending.delete(message.id)
     })
+    const send = (method, params = {}) => {
+      const id = nextId++
+      const answer = new Promise((resolve) => pending.set(id, resolve))
+      socket.send(JSON.stringify({ id, method, params }))
+      return answer.then((message) => {
+        if (message.error) throw new Error(message.error.message ?? `${method} failed`)
+        return message.result
+      })
+    }
     return {
+      send,
+      diagnostics,
+      async enableDiagnostics() {
+        await Promise.allSettled([send('Runtime.enable'), send('Log.enable')])
+      },
       evaluate(expression) {
         const id = nextId++
         const answer = new Promise((resolve) => pending.set(id, resolve))
@@ -215,12 +251,12 @@ const clickTranscriptControl = () =>
     return true
   })()`
 export const LISTEN_CLICK = clickByLabels(['Start listening'])
-export const STOP_CLICK = clickByLabels(['Stop and end meeting', 'End meeting'])
+export const STOP_CLICK = clickByLabels(['Stop and end meeting', 'Stop meeting', 'End meeting'])
 export const TRANSCRIPT_CLICK = clickTranscriptControl()
 /** The Bar's Listen control exists: the overlay has rendered and onboarding is done. */
 export const LISTEN_PRESENT = `!!document.querySelector('button[aria-label="Start listening"]')`
 /** A Stop control exists only after the app has accepted the Listen click as an active capture. */
-export const STOP_PRESENT = `!!document.querySelector('button[aria-label="Stop and end meeting"], button[aria-label="End meeting"]')`
+export const STOP_PRESENT = `!!document.querySelector('button[aria-label="Stop and end meeting"], button[aria-label="Stop meeting"], button[aria-label="End meeting"]')`
 /** The transcript panel is visible and can be counted without toggling the Bar control again. */
 export const TRANSCRIPT_PRESENT = `!!document.querySelector('[data-qa-live-transcript]')
   || [...document.querySelectorAll('section')].some((s) => s.firstElementChild?.textContent.trim() === 'Transcript')`
@@ -233,6 +269,61 @@ export const LINE_COUNT = `(() => {
   return [...rows.children].filter((row) => !/^(Waiting for speech…|No audio yet\\.)$/.test(row.textContent.trim())).length
 })()`
 export const ASR_ENGINE = `window.toto.getSettings().then((s) => String(s.asrEngine))`
+export const MAIN_LOG_PATH = `(() => {
+  const load = process.mainModule?.require
+  if (typeof load !== 'function') return { error: 'process.mainModule.require unavailable' }
+  try {
+    return { path: load('node:path').join(load('electron').app.getPath('logs'), 'main.log') }
+  } catch (error) {
+    return { error: String(error?.message ?? error) }
+  }
+})()`
+export const CAPTURE_DIAGNOSTIC_PROBE = `(async () => {
+  const result = {
+    fakeDevice: false,
+    getUserMediaFailed: false,
+    nonSilentFrames: 0,
+    peakRms: 0,
+    loadingModel: false
+  }
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices()
+    result.fakeDevice = devices.some((device) => /^Fake/i.test(device.label || ''))
+  } catch {
+    result.getUserMediaFailed = true
+  }
+  try {
+    result.loadingModel = document.body.innerText.includes('Loading transcription model')
+      || document.body.innerText.includes('Loading model')
+  } catch {}
+  let stream = null
+  let ctx = null
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    ctx = new AudioContext()
+    const source = ctx.createMediaStreamSource(stream)
+    const analyser = ctx.createAnalyser()
+    analyser.fftSize = 1024
+    source.connect(analyser)
+    const samples = new Float32Array(analyser.fftSize)
+    const deadline = Date.now() + 3000
+    while (Date.now() < deadline) {
+      analyser.getFloatTimeDomainData(samples)
+      let sum = 0
+      for (const value of samples) sum += value * value
+      const rms = Math.sqrt(sum / samples.length)
+      result.peakRms = Math.max(result.peakRms, rms)
+      if (rms > 0.001) result.nonSilentFrames += 1
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+  } catch {
+    result.getUserMediaFailed = true
+  } finally {
+    if (stream) for (const track of stream.getTracks()) track.stop()
+    if (ctx) await ctx.close().catch(() => {})
+  }
+  return result
+})()`
 
 /** Polls `probe` until it returns a truthy value or `timeoutMs` passes; returns the value or null. */
 export async function waitFor(probe, timeoutMs, intervalMs = 1000) {
@@ -262,12 +353,47 @@ async function overlayPage(port, timeoutMs) {
   }, timeoutMs)
 }
 
+async function locateMainLog(page) {
+  try {
+    const answer = await page.evaluate(MAIN_LOG_PATH)
+    if (answer?.path) return { path: answer.path, fromByte: 0 }
+  } catch {
+    /* optional diagnostic only */
+  }
+  return null
+}
+
+function copyCaptureLogs({ profileDir, reportDir, mainLog }) {
+  if (!reportDir) return
+  mkdirSync(reportDir, { recursive: true })
+  const logs = join(profileDir, 'logs')
+  if (existsSync(logs)) {
+    mkdirSync(join(reportDir, 'logs'), { recursive: true })
+    for (const name of readdirSync(logs).filter((entry) => /^audit.*\.log$/.test(entry))) {
+      cpSync(join(logs, name), join(reportDir, 'logs', name))
+    }
+  }
+  if (mainLog?.path && existsSync(mainLog.path)) {
+    writeFileSync(join(reportDir, 'main.log'), readFileSync(mainLog.path).subarray(mainLog.fromByte ?? 0))
+  }
+}
+
+function diagnosticSource(observed) {
+  if ((observed.diagnostics?.fakeDevice || observed.diagnostics?.stderrFakeDeviceInput) && observed.diagnostics?.framesFed === 0) {
+    return 'fake-unreadable'
+  }
+  if (observed.diagnostics?.stderrFakeDeviceInput) return 'fake-file'
+  if (observed.auditEvent || observed.diagnostics?.fakeDevice) return 'fake-file'
+  if (observed.diagnostics?.getUserMediaFailed) return 'none'
+  return 'real'
+}
+
 /**
  * One file-fed capture. Returns counts and booleans only (`ready: false` when the app never became usable;
  * `driverError` when a step failed after it was ready; `pageStoppedAnswering` when a live-line probe failed).
  * `timings` are milliseconds since the launch.
  */
-export async function runFileCapture({ installer, workDir = mkdtempSync(join(tmpdir(), 'metis-file-capture-')), listenMs = LISTEN_MS }) {
+export async function runFileCapture({ installer, workDir = mkdtempSync(join(tmpdir(), 'metis-file-capture-')), listenMs = LISTEN_MS, reportDir = null }) {
   const installDir = join(workDir, 'app')
   const profileDir = join(workDir, 'profile')
   mkdirSync(installDir, { recursive: true })
@@ -280,7 +406,13 @@ export async function runFileCapture({ installer, workDir = mkdtempSync(join(tmp
   const spec = launchSpec({ executable, profileDir, wavPath, port })
   const launched = Date.now()
   const since = () => Date.now() - launched
-  const child = spawn(spec.command, spec.args, { env: spec.env, stdio: 'ignore' })
+  const stderrPath = reportDir ? join(reportDir, 'app-stderr.log') : null
+  if (reportDir) mkdirSync(reportDir, { recursive: true })
+  const stderr = stderrPath ? createWriteStream(stderrPath, { flags: 'a' }) : 'ignore'
+  const child = spawn(spec.command, spec.args, {
+    env: { ...spec.env, ELECTRON_ENABLE_LOGGING: '1', ASKTOTO_DEBUG_RENDERER: '1' },
+    stdio: ['ignore', 'ignore', stderr]
+  })
   const observed = {
     ready: false,
     asrEngine: null,
@@ -294,16 +426,42 @@ export async function runFileCapture({ installer, workDir = mkdtempSync(join(tmp
     auditEvent: false,
     driverError: false,
     pageStoppedAnswering: false,
+    diagnostics: {
+      engine: 'loading',
+      source: 'none',
+      fakeDevice: false,
+      getUserMediaFailed: false,
+      framesFed: 0,
+      peakRms: 0,
+      firstLineMs: null,
+      stderrFakeDeviceInput: false,
+      whisperEngineMessages: 0,
+      asrLoadFailedMessages: 0,
+      microphoneCaptureFailedMessages: 0,
+      backpressureMessages: 0,
+      loadingModel: false
+    },
     totalMs: 0
   }
   let page = null
+  let mainLog = null
   try {
     page = await overlayPage(port, READY_TIMEOUT_MS)
     if (!page) return observed
+    await page.enableDiagnostics()
+    mainLog = await locateMainLog(page)
     observed.ready = true
     observed.asrEngine = (await page.evaluate(ASR_ENGINE).catch(() => null)) ?? null
     if (!(await page.evaluate(LISTEN_CLICK))) throw new Error('Listen control vanished before the click')
     if (!(await waitFor(() => page.evaluate(STOP_PRESENT), 10_000, 250))) throw new Error('Listen did not enter active capture')
+    const probe = await page.evaluate(CAPTURE_DIAGNOSTIC_PROBE).catch(() => null)
+    if (probe) {
+      observed.diagnostics.fakeDevice = probe.fakeDevice === true
+      observed.diagnostics.getUserMediaFailed = probe.getUserMediaFailed === true
+      observed.diagnostics.framesFed = Number(probe.nonSilentFrames ?? 0)
+      observed.diagnostics.peakRms = Number(probe.peakRms ?? 0)
+      observed.diagnostics.loadingModel = probe.loadingModel === true
+    }
     const transcriptVisible = await waitFor(async () => {
       if (await page.evaluate(TRANSCRIPT_PRESENT).catch(() => false)) return true
       await page.evaluate(TRANSCRIPT_CLICK).catch(() => false)
@@ -320,7 +478,10 @@ export async function runFileCapture({ installer, workDir = mkdtempSync(join(tmp
         throw error
       }
       observed.maxLines = Math.max(observed.maxLines, count)
-      if (count >= LIVE_LINES_NEEDED && observed.linesReachedMs === null) observed.linesReachedMs = Date.now() - listenStarted
+      if (count >= LIVE_LINES_NEEDED && observed.linesReachedMs === null) {
+        observed.linesReachedMs = Date.now() - listenStarted
+        observed.diagnostics.firstLineMs = observed.linesReachedMs
+      }
       return observed.linesReachedMs !== null && Date.now() - listenStarted >= listenMs
     }, LINES_TIMEOUT_MS)
     if (!(await page.evaluate(STOP_CLICK))) throw new Error('Stop control vanished before the click')
@@ -336,11 +497,28 @@ export async function runFileCapture({ installer, workDir = mkdtempSync(join(tmp
     harvestCaptureArtifacts(observed, { profileDir, meetingsFolder, before })
     return observed
   } finally {
+    Object.assign(observed.diagnostics, page?.diagnostics ?? {})
     page?.close()
     observed.totalMs = since()
     child.kill('SIGTERM')
     await sleep(2000)
     child.kill('SIGKILL')
+    if (stderr && stderr !== 'ignore') {
+      stderr.end()
+      await new Promise((resolve) => stderr.once('finish', resolve))
+    }
+    observed.diagnostics.engine = observed.diagnostics.asrLoadFailedMessages > 0
+      ? 'load-failed'
+      : observed.diagnostics.whisperEngineMessages > 0
+        ? 'ready'
+        : observed.diagnostics.loadingModel
+          ? 'loading'
+          : 'loading'
+    if (stderrPath && existsSync(stderrPath)) {
+      observed.diagnostics.stderrFakeDeviceInput = /as input to the fake device/.test(readFileSync(stderrPath, 'utf8'))
+    }
+    observed.diagnostics.source = diagnosticSource(observed)
+    copyCaptureLogs({ profileDir, reportDir, mainLog })
     rmSync(workDir, { recursive: true, force: true })
   }
 }

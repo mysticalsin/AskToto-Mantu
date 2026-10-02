@@ -31,7 +31,7 @@ import {
   meetingFiles,
   seedProfile
 } from './file-capture.mjs'
-import { buildReport, judge } from './file-capture-smoke.mjs'
+import { buildReport, diagnosticLine, judge } from './file-capture-smoke.mjs'
 
 const dirs: string[] = []
 const tempDir = (): string => {
@@ -64,6 +64,21 @@ const observed = (over: Record<string, unknown> = {}) => ({
   savedBytes: 900,
   tokenMatches: 5,
   tokenTotal: 12,
+  diagnostics: {
+    engine: 'ready',
+    source: 'fake-file',
+    fakeDevice: true,
+    getUserMediaFailed: false,
+    framesFed: 20,
+    peakRms: 0.12,
+    firstLineMs: 20_000,
+    stderrFakeDeviceInput: true,
+    whisperEngineMessages: 1,
+    asrLoadFailedMessages: 0,
+    microphoneCaptureFailedMessages: 0,
+    backpressureMessages: 0,
+    loadingModel: false
+  },
   totalMs: 150_000,
   ...over
 })
@@ -185,6 +200,8 @@ describe('profile seeding and launch', () => {
     expect(saved.asrEngine).toBe('whisper')
     expect(saved.asrQuality).toBe('fast')
     expect(saved.asrLanguage).toBe('English')
+    expect(saved.overlayPlacement).toBe('top-center')
+    expect(saved.overlayLayout).toBe('bar')
     expect(saved.localLlm.enabled).toBe(false)
     expect(saved.audioSource).toBe('mic')
     expect(saved.encryptTranscripts).toBe(false)
@@ -247,6 +264,7 @@ describe('Bar driver controls', () => {
   it.each([
     ['Listen', LISTEN_CLICK, { label: 'Start listening' }, 'Start listening'],
     ['Transcript', TRANSCRIPT_CLICK, { text: 'View Transcript' }, 'View Transcript'],
+    ['Right edge Stop', STOP_CLICK, { label: 'Stop meeting' }, 'Stop meeting'],
     ['Stop', STOP_CLICK, { label: 'End meeting' }, 'End meeting']
   ])('clicks the real %s control and reports success', (_name, expression, button, clicked) => {
     expect(evalClickExpression(expression, [button])).toMatchObject({
@@ -274,6 +292,7 @@ describe('Bar driver controls', () => {
 
   it('recognizes the active Stop controls before the smoke starts counting transcript lines', () => {
     expect(evalClickExpression(STOP_PRESENT, [{ label: 'Stop and end meeting' }]).result).toBe(true)
+    expect(evalClickExpression(STOP_PRESENT, [{ label: 'Stop meeting' }]).result).toBe(true)
     expect(evalClickExpression(STOP_PRESENT, [{ label: 'End meeting' }]).result).toBe(true)
     expect(evalClickExpression(STOP_PRESENT, [{ label: 'Start listening' }]).result).toBe(false)
   })
@@ -340,6 +359,12 @@ describe('the report', () => {
     const outcome = judge(observed())
     const report = buildReport(observed(), outcome)
     expect(report.asrEngine).toBe('whisper')
+    expect(report.diagnostics).toMatchObject({
+      engine: 'ready',
+      source: 'fake-file',
+      framesFed: 20,
+      firstLineMs: 20_000
+    })
     const leaves: unknown[] = []
     const walk = (value: unknown): void => {
       if (value && typeof value === 'object') Object.values(value).forEach(walk)
@@ -347,7 +372,13 @@ describe('the report', () => {
     }
     walk({ ...report, asrEngine: undefined })
     for (const leaf of leaves) expect(['number', 'boolean', 'string', 'undefined'].includes(typeof leaf) || leaf === null).toBe(true)
-    expect(leaves.filter((leaf) => typeof leaf === 'string')).toEqual(['PASS'])
+    expect(leaves.filter((leaf) => typeof leaf === 'string')).toEqual(['PASS', 'ready', 'fake-file'])
+  })
+
+  it('prints one content-free diagnostic line for failed hosted smokes', () => {
+    expect(diagnosticLine(buildReport(observed({ linesReachedMs: null, diagnostics: { ...observed().diagnostics, source: 'fake-unreadable', framesFed: 0, peakRms: 0, firstLineMs: null } }), judge(observed({ linesReachedMs: null }))))).toBe(
+      'DIAG engine=ready source=fake-unreadable framesFed=0/peak=0.0000 firstLineMs=null'
+    )
   })
 
   it.each([

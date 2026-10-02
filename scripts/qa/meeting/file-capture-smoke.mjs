@@ -50,8 +50,32 @@ export function buildReport(observed, { verdict, checks }) {
       tokenTotal: observed.tokenTotal,
       pageStoppedAnswering: observed.pageStoppedAnswering === true,
       totalMs: observed.totalMs
-    }
+    },
+    diagnostics: observed.diagnostics
+      ? {
+          engine: observed.diagnostics.engine,
+          source: observed.diagnostics.source,
+          fakeDevice: observed.diagnostics.fakeDevice === true,
+          getUserMediaFailed: observed.diagnostics.getUserMediaFailed === true,
+          framesFed: Number(observed.diagnostics.framesFed ?? 0),
+          peakRms: Number(observed.diagnostics.peakRms ?? 0),
+          firstLineMs: observed.diagnostics.firstLineMs,
+          stderrFakeDeviceInput: observed.diagnostics.stderrFakeDeviceInput === true,
+          whisperEngineMessages: Number(observed.diagnostics.whisperEngineMessages ?? 0),
+          asrLoadFailedMessages: Number(observed.diagnostics.asrLoadFailedMessages ?? 0),
+          microphoneCaptureFailedMessages: Number(observed.diagnostics.microphoneCaptureFailedMessages ?? 0),
+          backpressureMessages: Number(observed.diagnostics.backpressureMessages ?? 0),
+          loadingModel: observed.diagnostics.loadingModel === true
+        }
+      : null
   }
+}
+
+export function diagnosticLine(report) {
+  const d = report.diagnostics
+  if (!d) return null
+  const firstLineMs = d.firstLineMs === null || d.firstLineMs === undefined ? 'null' : Math.round(d.firstLineMs)
+  return `DIAG engine=${d.engine} source=${d.source} framesFed=${d.framesFed}/peak=${Number(d.peakRms).toFixed(4)} firstLineMs=${firstLineMs}`
 }
 
 function parseArgs(argv) {
@@ -70,7 +94,7 @@ async function main() {
   mkdirSync(outDir, { recursive: true })
   let observed
   try {
-    observed = await runFileCapture({ installer: args.installer })
+    observed = await runFileCapture({ installer: args.installer, reportDir: outDir })
   } catch (error) {
     console.error(`file-capture precondition: ${error.message}`)
     observed = { ready: false }
@@ -79,6 +103,7 @@ async function main() {
   const report = outcome.checks ? buildReport(observed, outcome) : { verdict: outcome.verdict }
   writeFileSync(join(outDir, 'file-capture-report.json'), `${JSON.stringify(report, null, 2)}\n`)
   console.log(`[file-capture-smoke] ${outcome.verdict} ${JSON.stringify(report.checks ?? {})}`)
+  if (outcome.verdict === 'FAIL') console.log(diagnosticLine(report))
   return outcome.exitCode
 }
 
