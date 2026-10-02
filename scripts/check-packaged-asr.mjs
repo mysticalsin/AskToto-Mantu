@@ -58,6 +58,7 @@ const positional = argv.filter((a) => !a.startsWith('--'))
 const target = resolve(positional[0] || join(root, 'release/win-unpacked/Metis.exe'))
 const timeoutIndex = argv.indexOf('--timeout-seconds')
 const timeoutSeconds = timeoutIndex === -1 ? 180 : Number(argv[timeoutIndex + 1])
+const SAPI_SYNTH_TIMEOUT_MS = 180_000
 const PHRASE = 'The quarterly revenue target is seven million dollars'
 const ENGINES = ['whisper', 'parakeet']
 
@@ -95,7 +96,7 @@ function synthesizeFixture() {
           `$s.Speak('${PHRASE}'); ` +
           `$s.Dispose()`
       ],
-      { encoding: 'utf8', timeout: 60000 }
+      { encoding: 'utf8', timeout: SAPI_SYNTH_TIMEOUT_MS }
     )
   } catch (error) {
     console.error(`[check:packaged-asr] FAIL — could not synthesize the SAPI fixture: ${error instanceof Error ? error.message : String(error)}`)

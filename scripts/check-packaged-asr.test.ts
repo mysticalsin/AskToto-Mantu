@@ -28,6 +28,8 @@ describe('MQA-306 packaged Windows transcription gate', () => {
     expect(source.indexOf('await app.evaluate(installAsrObserver)')).toBeLessThan(source.indexOf('app.firstWindow()'))
     expect(source).toMatch(/MQA-233/)
     expect(source).toMatch(/const timeoutSeconds = timeoutIndex === -1 \? 180/)
+    expect(source).toMatch(/const SAPI_SYNTH_TIMEOUT_MS = 180_000/)
+    expect(source).toMatch(/timeout: SAPI_SYNTH_TIMEOUT_MS/)
     expect(source).toMatch(/readFileSync\(mainLogPath, 'utf8'\)/)
   })
 })
