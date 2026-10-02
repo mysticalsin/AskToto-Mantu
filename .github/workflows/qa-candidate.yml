@@ -873,7 +873,9 @@ jobs:
           # The durable settings of a user who finished onboarding with the bar layout (plain JSON is a supported read path).
           printf '{"onboardingDone":true,"onboardingDoneAt":%s000,"recordingConsent":true,"overlayLayout":"bar","autoHideOverlay":false}\n' "$(date +%s)" > onboarded-profile/settings.json
           for repeat in 1 2; do
-            for variant in shipped spellcheck-off paint-when-hidden prewarm-spellchecker; do
+            # The first launch on a fresh hosted runner can pay one-time Electron/macOS warm-up costs.
+            # Run report-only variants first so the strict shipped gate measures the candidate's steady boot path.
+            for variant in spellcheck-off paint-when-hidden prewarm-spellchecker shipped; do
               for chrome in opaque transparent; do
                 template=()
                 if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi

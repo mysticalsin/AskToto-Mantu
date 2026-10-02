@@ -243,4 +243,10 @@ describe('QA candidate workflow: the shipped window gate (M2-0519)', () => {
     expect(gate).toContain('--out st1-report/window-gate.json')
     expect(jobSteps.findIndex((step) => step.includes('name: st-1-macos-window'))).toBeGreaterThan(gateIndex)
   })
+
+  it('runs report-only window variants before shipped, so a cold hosted runner is not charged to the gated row', () => {
+    const measure = steps('st1-mac-window').find((step) => step.includes('--purpose window-construction')) ?? ''
+    expect(measure).toContain('for variant in spellcheck-off paint-when-hidden prewarm-spellchecker shipped; do')
+    expect(measure.indexOf('prewarm-spellchecker shipped')).toBeLessThan(measure.indexOf('--window-variant "$variant"'))
+  })
 })
