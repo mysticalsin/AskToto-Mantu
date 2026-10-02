@@ -30,6 +30,10 @@ describe('M2-0415 Windows 1.9.6 baseline harness', () => {
       const byId = new Map(report.rows.map((row) => [row.id, row]))
       expect(byId.get('census-cold-start')?.status).toBe('SUPPORTED_NOT_RUN')
       expect(byId.get('census-settled-idle')?.status).toBe('SUPPORTED_NOT_RUN')
+      expect(byId.get('st-1-w-onedrive-placeholders-network-off')?.status).toBe('BLOCKED_EXTERNAL')
+      expect(byId.get('hk-w-end-task-owned-sidecars')?.status).toBe('BLOCKED_EXTERNAL')
+      expect(byId.get('managed-foreground-watcher-cost')?.status).toBe('BLOCKED_EXTERNAL')
+      expect(byId.get('managed-edr-interaction')?.status).toBe('BLOCKED_EXTERNAL')
       for (const state of ['first-inference', 'active-transcription', 'post-meeting', 'post-recovery']) {
         expect(byId.get(`census-${state}`)?.status).toBe('BLOCKED_EXTERNAL')
       }
@@ -37,6 +41,34 @@ describe('M2-0415 Windows 1.9.6 baseline harness', () => {
       for (const row of report.rows.filter((r) => r.status === 'BLOCKED_EXTERNAL')) {
         expect(row.unblock?.length ?? 0).toBeGreaterThan(20)
       }
+    } finally {
+      rmSync(out, { recursive: true, force: true })
+    }
+  })
+
+  it('records the artifact sha and release-note handoff without private program paths', () => {
+    const out = mkdtempSync(join(tmpdir(), 'm2-0195-baseline-'))
+    try {
+      const sha = 'a'.repeat(64)
+      const result = spawnSync('pwsh', ['-NoProfile', '-File', SCRIPT, '-OutDir', out, '-PlanOnly', '-Artifact', sha], {
+        encoding: 'utf8',
+        timeout: 60_000
+      })
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)
+      const environment = JSON.parse(readFileSync(join(out, 'environment.json'), 'utf8')) as {
+        ticket: string
+        artifact_sha256: string
+        host: { label: string }
+      }
+      expect(environment).toMatchObject({
+        ticket: 'M2-0195',
+        artifact_sha256: sha,
+        host: { label: 'windows-latest' }
+      })
+      const handoff = readFileSync(join(out, 'M2-0195.lead-action.md'), 'utf8')
+      expect(handoff).toContain('LEAD_ACTION:')
+      expect(handoff).toContain('1.9.7 release notes')
+      expect(handoff).toContain('ticket or explicit residual')
     } finally {
       rmSync(out, { recursive: true, force: true })
     }
@@ -121,7 +153,9 @@ describe('M2-0415 Windows baseline workflow lane', () => {
     expect(baseline).toContain("node scripts/qa/verify-sha256sums.mjs release-artifact $sums")
     expect(baseline).toContain("Start-Process -FilePath $setup.FullName")
     expect(baseline).toContain("./scripts/qa/windows/baseline.ps1")
+    expect(baseline).toContain("-Artifact $env:WINDOWS_BASELINE_SHA256")
     expect(baseline).toContain("-App \"$env:RUNNER_TEMP\\windows-baseline-install\\Metis.exe\"")
+    expect(baseline).toContain("node scripts/evidence/check.mjs --ticket M2-0195 --bundle baseline-output")
   })
 
   it('uploads the content-free baseline rows for the lead to file as private evidence', () => {

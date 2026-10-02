@@ -1,6 +1,6 @@
 name: Windows 1.9.6 baseline
 
-# Manual evidence lane for M2-0415. Downloads the existing packaged 1.9.6 Windows installer, verifies it
+# Manual evidence lane for M2-0195. Downloads the existing packaged 1.9.6 Windows installer, verifies it
 # against the release's published SHA256SUMS (a mismatch fails the job before install), installs it on a
 # hosted windows-latest runner and runs scripts/qa/windows/baseline.ps1. Rows that need the managed laptop
 # or a signed-in account are reported BLOCKED_EXTERNAL inside the uploaded content-free bundle. It never
@@ -69,6 +69,9 @@ jobs:
           $sums = (Get-Item release-sums/SHA256SUMS*).FullName
           node scripts/qa/verify-sha256sums.mjs release-artifact $sums | Tee-Object -FilePath baseline-output/SHA256SUMS.txt
           if ($LASTEXITCODE -ne 0) { throw 'SHA256SUMS verification failed.' }
+          $setup = Get-Item release-artifact/Metis-Setup-*.exe
+          $sha = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash.ToLower()
+          "WINDOWS_BASELINE_SHA256=$sha" | Add-Content $env:GITHUB_ENV
       - name: Install into runner temp
         run: |
           $ErrorActionPreference = 'Stop'
@@ -90,9 +93,12 @@ jobs:
           METIS_QA_PROFILE: ${{ runner.temp }}/metis-baseline-profile
         run: |
           ./scripts/qa/windows/baseline.ps1 `
+            -Artifact $env:WINDOWS_BASELINE_SHA256 `
             -App "$env:RUNNER_TEMP\windows-baseline-install\Metis.exe" `
             -OutDir baseline-output
           Get-Content baseline-output/baseline.json | Add-Content $env:GITHUB_STEP_SUMMARY
+      - name: Check the evidence bundle contract
+        run: node scripts/evidence/check.mjs --ticket M2-0195 --bundle baseline-output
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
