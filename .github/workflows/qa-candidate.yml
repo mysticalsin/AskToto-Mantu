@@ -838,7 +838,8 @@ jobs:
   # bootStages carries createWindow.prewarm and createWindow.construct (with the chrome and variant built),
   # createWindow.navigate and createWindow.firstShow. The other variants stay report-only; the shipped window is
   # gated (M2-0519): the job fails unless every shipped createWindow.prewarm and createWindow.construct is present
-  # and under 250 ms in both chromes.
+  # and under 250 ms in both chromes. OD-42: each chrome gets one marked warm-up launch before any measured
+  # repeat, and the gate skips those warm-up reports.
   st1-mac-window:
     name: ST-1 window construction per variant and chrome (shipped gated < 250 ms)
     needs: provenance
@@ -872,9 +873,26 @@ jobs:
           fi
           # The durable settings of a user who finished onboarding with the bar layout (plain JSON is a supported read path).
           printf '{"onboardingDone":true,"onboardingDoneAt":%s000,"recordingConsent":true,"overlayLayout":"bar","autoHideOverlay":false}\n' "$(date +%s)" > onboarded-profile/settings.json
+          # The first launch on a fresh hosted runner can pay one-time Electron/macOS warm-up costs.
+          # Keep that launch explicit and marked so the strict shipped gate measures the steady boot path only.
+          for chrome in opaque transparent; do
+            template=()
+            if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi
+            run="window-warmup-shipped-$chrome"
+            node scripts/qa/st-1.mjs \
+              --installer "$installer" \
+              --provenance provenance/provenance.json \
+              --fixtures none \
+              "${template[@]}" \
+              --minutes 0.5 \
+              --purpose window-construction \
+              --window-variant shipped \
+              --window-warmup \
+              --report-dir "st1-report/$run" \
+              --out "st1-report/$run/$run.json" \
+              || echo "::warning::$run ended without PASS; its report says why."
+          done
           for repeat in 1 2; do
-            # The first launch on a fresh hosted runner can pay one-time Electron/macOS warm-up costs.
-            # Run report-only variants first so the strict shipped gate measures the candidate's steady boot path.
             for variant in spellcheck-off paint-when-hidden prewarm-spellchecker shipped; do
               for chrome in opaque transparent; do
                 template=()

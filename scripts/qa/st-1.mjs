@@ -43,12 +43,13 @@
  *       --fixtures fifo|dataless|synthetic-dataless|none [--history [on|off]] [--count 6]
  *       [--cloud-dir <folder of evicted files>] [--main-log <main.log>] [--exe <installed executable>]
  *       [--profile-template <userData dir>] [--minutes 5] [--out <report.json>] [--report-dir <dir>]
- *       [--purpose window-construction --window-variant <variant>]
+ *       [--purpose window-construction --window-variant <variant> [--window-warmup]]
  *
  * `--purpose window-construction` marks a short launch made only to measure the boot window's constructor under
  * one QA-identity rendering variant (shipped, spellcheck-off, paint-when-hidden, prewarm-spellchecker), passed to
- * the candidate as METIS_QA_WINDOW_VARIANT. Its report says `st1Evidence: false` and is
- * never ST-1 evidence. Every other run launches the shipped variant.
+ * the candidate as METIS_QA_WINDOW_VARIANT. Its report says `st1Evidence: false` and is never ST-1 evidence.
+ * A `--window-warmup` window-construction launch is also marked `warmup: true`; `--gate-window` skips those
+ * rows and reports how many it skipped. Every other run launches the shipped variant.
  *
  * Every in-app wait is bounded and every failure to answer is recorded in the report's `errors` (step, tMs,
  * message) while the run continues: only the criteria decide PASS or FAIL. The report is rewritten every
@@ -803,6 +804,15 @@ async function main() {
     console.error(`[st-1] FAIL — ${purposeError}`)
     return 2
   }
+  const windowWarmup = args.windowWarmup === 'true'
+  if (args.windowWarmup !== undefined && args.windowWarmup !== 'true') {
+    console.error(`[st-1] FAIL — --window-warmup is a bare flag, got ${JSON.stringify(args.windowWarmup)}`)
+    return 2
+  }
+  if (windowWarmup && purpose !== 'window-construction') {
+    console.error('[st-1] FAIL — --window-warmup needs --purpose window-construction')
+    return 2
+  }
   const minutes = Number(args.minutes)
   if (!Number.isFinite(minutes) || minutes <= 0) {
     console.error(`[st-1] FAIL — --minutes must be a positive number, got ${JSON.stringify(args.minutes)}`)
@@ -849,7 +859,7 @@ async function main() {
   let cleanupError = null
   const reportPath = args.out ?? join(reportDir, `${reportBase}.json`)
   const currentReport = () => {
-    const common = { row: args.fixtures, installer: basename(args.installer), candidate, fixtures, purpose, windowVariant }
+    const common = { row: args.fixtures, installer: basename(args.installer), candidate, fixtures, purpose, windowVariant, windowWarmup }
     if (launchFailure) return buildLaunchFailureReport({ ...common, reason: launchFailure })
     return buildReport({
       ...common,
