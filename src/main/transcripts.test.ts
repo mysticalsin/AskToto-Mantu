@@ -1224,6 +1224,23 @@ describe('old-meeting Keychain recovery (T7): allowKeychainRecovery + self-heali
     expect(readSavedFile(file)).toContain('OLD-KEYCHAIN-SECRET')
   })
 
+  it('a successful bytes-backed History Open recovery rewraps kLocal to "F:" in place', async () => {
+    const file = await writeOldKeychainMeeting()
+    const before = parseEnvelope(file)
+    process.env.ASKTOTO_LOCAL_KEYSTORE = '1'
+
+    const tmp = decryptToTemp(file, readFileSync(file))
+    const after = parseEnvelope(file)
+
+    expect(readFileSync(tmp, 'utf8')).toContain('OLD-KEYCHAIN-SECRET')
+    expect((before.kLocal as string).startsWith('S:')).toBe(true)
+    expect((after.kLocal as string).startsWith('F:')).toBe(true)
+    expect(after.iv).toBe(before.iv)
+    expect(after.tag).toBe(before.tag)
+    expect(after.ct).toBe(before.ct)
+    expect(readSavedFile(file)).toContain('OLD-KEYCHAIN-SECRET')
+  })
+
   it('does not rewrap a recovered "S:" meeting while packaged safeStorage is the active backend', async () => {
     const file = await writeOldKeychainMeeting()
     const before = parseEnvelope(file)
