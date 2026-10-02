@@ -73,11 +73,12 @@ export function pinnedExpression(key, expression, ms) {
   const settled = Promise.resolve()
     .then(() => (${expression}))
     .then((value) => ({ ok: true, value }), (error) => ({ ok: false, error: String(error?.message ?? error) }))
-  let timeout = new Promise(() => {})
+  let resolveTimeout
+  const timeout = new Promise((resolve) => {
+    resolveTimeout = resolve
+  })
   try {
-    timeout = new Promise((resolve) => {
-      timer = setTimeout(() => resolve({ ok: false, timedOut: true }), ${Number(ms)})
-    })
+    timer = setTimeout(() => resolveTimeout({ ok: false, timedOut: true }), ${Number(ms)})
   } catch {}
   const bounded = Promise.race([settled, timeout]).finally(clearBound)
   pending[${JSON.stringify(key)}] = bounded
