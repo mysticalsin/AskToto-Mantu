@@ -208,7 +208,11 @@ describe('permission surface — the hook touches no native grant API', () => {
       expect(fresh.installQaCaptureSource(host, audit, { qaIdentity: true, env }).reason).toBeNull()
       ready()
       await flush()
-      expect(appendSwitch).toHaveBeenCalledTimes(2)
+      expect(appendSwitch.mock.calls).toEqual([
+        ['use-fake-ui-for-media-stream'],
+        ['use-fake-device-for-media-stream'],
+        ['use-file-for-fake-audio-capture', realpathSync(wav)]
+      ])
       expect(audit).toHaveBeenCalledTimes(1)
     } finally {
       for (const id of forbidden) vi.doUnmock(id)
