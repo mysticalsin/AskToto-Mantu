@@ -129,6 +129,10 @@ export function writeCaptureWav(profileDir, options) {
   return { path, sha256: createHash('sha256').update(wav).digest('hex'), durationSeconds }
 }
 
+export function captureWavSummary({ sha256, durationSeconds }) {
+  return `sha256=${sha256} duration=${durationSeconds.toFixed(1)}s`
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
   const profileDir = process.argv[2]
   if (!profileDir) {
@@ -140,5 +144,5 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exit(2)
   }
   const { sha256, durationSeconds } = writeCaptureWav(profileDir)
-  console.log(`sha256=${sha256} duration=${durationSeconds.toFixed(1)}s`)
+  console.log(captureWavSummary({ sha256, durationSeconds }))
 }

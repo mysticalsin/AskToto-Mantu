@@ -9,6 +9,7 @@ import {
   MIN_SECONDS,
   afconvertArgs,
   buildCaptureWav,
+  captureWavSummary,
   englishSentences,
   pcmOf,
   sayArgs,
@@ -123,6 +124,11 @@ describe('capture WAV: command construction', () => {
     expect(out.sha256).toMatch(/^[0-9a-f]{64}$/)
     expect(readFileSync(out.path).length).toBeGreaterThan(44)
     expect(out.durationSeconds).toBeGreaterThanOrEqual(MIN_SECONDS)
+  })
+
+  it('formats the CLI summary as only the WAV sha256 and duration', () => {
+    const sha256 = 'a'.repeat(64)
+    expect(captureWavSummary({ sha256, durationSeconds: 72.25 })).toBe(`sha256=${sha256} duration=72.3s`)
   })
 })
 
@@ -266,9 +272,13 @@ describe('the report', () => {
     expect(leaves.filter((leaf) => typeof leaf === 'string')).toEqual(['PASS'])
   })
 
-  it('carries no fixture sentence or token', () => {
-    const text = JSON.stringify(buildReport(observed(), judge(observed()))).toLowerCase()
+  it.each([
+    ['PASS report', buildReport(observed(), judge(observed()))],
+    ['PRECONDITION report', { verdict: judge({ ready: false }).verdict }]
+  ])('carries no fixture sentence, token or local path in the %s', (_name, report) => {
+    const text = JSON.stringify(report).toLowerCase()
     for (const sentence of englishSentences()) expect(text).not.toContain(sentence.toLowerCase())
     for (const token of distinctiveTokens(englishSentences())) expect(text).not.toContain(token)
+    for (const forbidden of ['/users/', '/private/', 'qa-capture.wav', 'capture-meetings']) expect(text).not.toContain(forbidden)
   })
 })

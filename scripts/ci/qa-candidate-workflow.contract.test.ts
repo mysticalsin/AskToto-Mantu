@@ -230,6 +230,7 @@ describe('QA candidate workflow: the file-fed capture smoke (M2-0495)', () => {
   it('waits for provenance and runs on macOS', () => {
     expect(job).toMatch(/^    needs: provenance$/m)
     expect(job).toMatch(/^    runs-on: macos-latest$/m)
+    expect(job).toMatch(/^    timeout-minutes: 5$/m)
   })
 
   it('is blocking: no continue-on-error on the job or any step', () => {
