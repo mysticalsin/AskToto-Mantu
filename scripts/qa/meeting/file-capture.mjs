@@ -23,6 +23,7 @@ export const LINES_TIMEOUT_MS = 120_000
 export const LISTEN_MS = 90_000
 export const SAVE_TIMEOUT_MS = 30_000
 export const LIVE_LINES_NEEDED = 2
+export const CDP_STEP_TIMEOUT_MS = 5_000
 
 const STOPWORDS = new Set(['please', 'about', 'their', 'there', 'which', 'would', 'could', 'okay', "let's", 'switch', 'three', 'point'])
 
@@ -169,15 +170,72 @@ async function freePort() {
 }
 
 /** A minimal CDP client over Node's global WebSocket. */
+function timeoutError(label) {
+  const error = new Error(`${label} timed out`)
+  error.name = 'TimeoutError'
+  return error
+}
+
+export async function withTimeout(task, timeoutMs = CDP_STEP_TIMEOUT_MS, label = 'operation') {
+  let timer
+  try {
+    return await Promise.race([
+      task,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(timeoutError(label)), timeoutMs)
+      })
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+export function reduceCdpTarget(target) {
+  const rawUrl = typeof target?.url === 'string' ? target.url : ''
+  let reducedUrl = 'unknown'
+  try {
+    const url = new URL(rawUrl)
+    const file = basename(url.pathname) || url.hostname || 'unknown'
+    reducedUrl = `${url.protocol.replace(/:$/, '')}:${file}${url.hash || ''}`
+  } catch {
+    reducedUrl = rawUrl ? `unknown:${basename(rawUrl)}` : 'unknown'
+  }
+  return { type: String(target?.type ?? 'unknown'), url: reducedUrl }
+}
+
+export function describeOverlayPoll(targets, targetResults = []) {
+  const parts = targets.map((target, index) => {
+    const reduced = reduceCdpTarget(target)
+    const result = targetResults[index] ?? { status: 'not-checked' }
+    const listen = result.status === 'present'
+      ? 'listen=true'
+      : result.status === 'absent'
+        ? 'listen=false'
+        : result.status === 'timeout'
+          ? 'listen=timed-out'
+          : result.status === 'threw'
+            ? `listen=threw:${result.errorName ?? 'Error'}`
+            : `listen=${result.status}`
+    const buttons = Array.isArray(result.buttons) ? result.buttons.join('|') : ''
+    return `${reduced.type} ${reduced.url} ${listen} buttons=${buttons}`
+  })
+  return `no overlay page; targets=${targets.length}${parts.length ? `; ${parts.join('; ')}` : ''}`
+}
+
 async function cdpPage(port) {
   const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()
   const pages = targets.filter((target) => target.type === 'page' && target.webSocketDebuggerUrl)
   const connect = async (wsUrl) => {
     const socket = new WebSocket(wsUrl)
-    await new Promise((resolve, reject) => {
-      socket.addEventListener('open', () => resolve())
-      socket.addEventListener('error', () => reject(new Error('CDP socket failed')))
-    })
+    try {
+      await withTimeout(new Promise((resolve, reject) => {
+        socket.addEventListener('open', () => resolve())
+        socket.addEventListener('error', () => reject(new Error('CDP socket failed')))
+      }), CDP_STEP_TIMEOUT_MS, 'CDP connect')
+    } catch (error) {
+      socket.close()
+      throw error
+    }
     const pending = new Map()
     const diagnostics = {
       whisperEngineMessages: 0,
@@ -224,16 +282,21 @@ async function cdpPage(port) {
         const id = nextId++
         const answer = new Promise((resolve) => pending.set(id, resolve))
         socket.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression, awaitPromise: true, returnByValue: true } }))
-        return answer.then((message) => {
+        return withTimeout(answer.then((message) => {
           if (message.error || message.result?.exceptionDetails) throw new Error('evaluate failed')
           return message.result?.result?.value
-        })
+        }), CDP_STEP_TIMEOUT_MS, 'CDP evaluate')
       },
       close: () => socket.close()
     }
   }
   return { pages, connect }
 }
+
+export const BUTTON_LABELS = `(() => [...document.querySelectorAll('button')]
+  .map((button) => button.getAttribute('aria-label') || (button.textContent || '').trim())
+  .filter(Boolean)
+  .slice(0, 20))()`
 
 const clickByLabels = (labels) =>
   `(() => {
@@ -354,15 +417,28 @@ export async function waitFor(probe, timeoutMs, intervalMs = 1000) {
 }
 
 async function overlayPage(port, timeoutMs) {
-  return waitFor(async () => {
-    const { pages, connect } = await cdpPage(port)
+  let lastTargets = []
+  let lastResults = []
+  const page = await waitFor(async () => {
+    const { pages, connect } = await withTimeout(cdpPage(port), CDP_STEP_TIMEOUT_MS, 'CDP target list')
+    lastTargets = pages
+    lastResults = []
     for (const target of pages) {
-      const page = await connect(target.webSocketDebuggerUrl)
-      if (await page.evaluate(LISTEN_PRESENT).catch(() => false)) return page
-      page.close()
+      let page = null
+      try {
+        page = await connect(target.webSocketDebuggerUrl)
+        const present = await page.evaluate(LISTEN_PRESENT)
+        const buttons = await page.evaluate(BUTTON_LABELS).catch(() => [])
+        lastResults.push({ status: present ? 'present' : 'absent', buttons })
+        if (present) return page
+      } catch (error) {
+        lastResults.push({ status: error?.name === 'TimeoutError' ? 'timeout' : 'threw', errorName: error?.name ?? 'Error', buttons: [] })
+      }
+      page?.close()
     }
     return null
   }, timeoutMs)
+  return { page, reason: page ? null : describeOverlayPoll(lastTargets, lastResults) }
 }
 
 async function locateMainLog(page) {
@@ -465,8 +541,12 @@ export async function runFileCapture({ installer, workDir = mkdtempSync(join(tmp
   let page = null
   let mainLog = null
   try {
-    page = await overlayPage(port, READY_TIMEOUT_MS)
-    if (!page) return observed
+    const overlay = await overlayPage(port, READY_TIMEOUT_MS)
+    page = overlay.page
+    if (!page) {
+      observed.reason = overlay.reason
+      return observed
+    }
     await page.enableDiagnostics()
     mainLog = await locateMainLog(page)
     observed.ready = true

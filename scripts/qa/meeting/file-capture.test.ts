@@ -26,10 +26,13 @@ import {
   appSpawnOptions,
   auditHasEvent,
   countTokenMatches,
+  describeOverlayPoll,
   distinctiveTokens,
   harvestCaptureArtifacts,
   launchSpec,
   meetingFiles,
+  reduceCdpTarget,
+  withTimeout,
   seedProfile
 } from './file-capture.mjs'
 import { buildReport, diagnosticLine, judge, preconditionReason } from './file-capture-smoke.mjs'
@@ -330,6 +333,41 @@ describe('Bar driver controls', () => {
     ['Stop', STOP_CLICK]
   ])('reports false when the %s control is absent', (_name, expression) => {
     expect(evalClickExpression(expression).result).toBe(false)
+  })
+})
+
+describe('CDP overlay discovery diagnostics', () => {
+  it('reduces target URLs to scheme, basename and hash only', () => {
+    expect(reduceCdpTarget({ type: 'page', url: 'file:///private/tmp/App.app/Contents/Resources/index.html#/bar' })).toEqual({
+      type: 'page',
+      url: 'file:index.html#/bar'
+    })
+    expect(reduceCdpTarget({ type: 'background_page', url: 'devtools://devtools/bundled/inspector.html' })).toEqual({
+      type: 'background_page',
+      url: 'devtools:inspector.html'
+    })
+  })
+
+  it('describes a no-overlay poll with counts, reduced targets, listen result and button labels only', () => {
+    const reason = describeOverlayPoll(
+      [
+        { type: 'page', url: 'file:///private/tmp/App.app/Contents/Resources/index.html#/bar' },
+        { type: 'page', url: 'about:blank' }
+      ],
+      [
+        { status: 'absent', buttons: ['Settings', 'Stop meeting'] },
+        { status: 'timeout', buttons: [] }
+      ]
+    )
+    expect(reason).toBe('no overlay page; targets=2; page file:index.html#/bar listen=false buttons=Settings|Stop meeting; page about:blank listen=timed-out buttons=')
+    expect(reason).not.toContain('/private/')
+  })
+
+  it('bounds a CDP target that never answers', async () => {
+    await expect(withTimeout(new Promise(() => {}), 1, 'CDP evaluate')).rejects.toMatchObject({
+      name: 'TimeoutError',
+      message: 'CDP evaluate timed out'
+    })
   })
 })
 
