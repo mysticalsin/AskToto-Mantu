@@ -29,7 +29,8 @@ const RIGHT_EDGE = Object.freeze({
   drawerHeight: 560,
   band: 4,
   bandCorner: 48,
-  anchor: 0.15,
+  // The stored anchor f: the handle centre normalized to the work-area height.
+  normalizedY: 0.15,
   anchorInset: 84,
   drawerAboveAnchor: 36,
   tabAboveAnchor: 26
@@ -54,22 +55,35 @@ export function initialRightEdgeHideRows() {
 
 const clampTo = (value, min, max) => Math.min(Math.max(value, min), max)
 
+/** Top of a `height`-tall right-edge rect placed `aboveAnchor` above the anchor A, inside the work-area margins. */
+function rightEdgeY(height, aboveAnchor, workArea) {
+  const bottom = workArea.y + workArea.height
+  const anchor = clampTo(
+    Math.round(workArea.y + RIGHT_EDGE.normalizedY * workArea.height),
+    workArea.y + RIGHT_EDGE.anchorInset,
+    bottom - RIGHT_EDGE.anchorInset
+  )
+  return clampTo(anchor - aboveAnchor, workArea.y + RIGHT_EDGE.margin, bottom - RIGHT_EDGE.margin - height)
+}
+
 /** Expected native bounds on `workArea`: the open drawer, the Island rail tab and the Hide reveal band, all
  *  from the one anchor A (the handle centre). */
 export function rightEdgeExpectedRects(workArea) {
   const right = workArea.x + workArea.width
-  const bottom = workArea.y + workArea.height
-  const anchor = clampTo(
-    Math.round(workArea.y + RIGHT_EDGE.anchor * workArea.height),
-    workArea.y + RIGHT_EDGE.anchorInset,
-    bottom - RIGHT_EDGE.anchorInset
-  )
   const drawerHeight = Math.min(RIGHT_EDGE.drawerHeight, workArea.height - RIGHT_EDGE.margin * 2)
-  const drawerY = clampTo(anchor - RIGHT_EDGE.drawerAboveAnchor, workArea.y + RIGHT_EDGE.margin, bottom - RIGHT_EDGE.margin - drawerHeight)
-  const tabY = clampTo(anchor - RIGHT_EDGE.tabAboveAnchor, workArea.y + RIGHT_EDGE.margin, bottom - RIGHT_EDGE.margin - RIGHT_EDGE.tab)
   return {
-    drawer: { x: right - RIGHT_EDGE.margin - RIGHT_EDGE.drawerWidth, y: drawerY, width: RIGHT_EDGE.drawerWidth, height: drawerHeight },
-    tab: { x: right - RIGHT_EDGE.margin - RIGHT_EDGE.tab, y: tabY, width: RIGHT_EDGE.tab, height: RIGHT_EDGE.tab },
+    drawer: {
+      x: right - RIGHT_EDGE.margin - RIGHT_EDGE.drawerWidth,
+      y: rightEdgeY(drawerHeight, RIGHT_EDGE.drawerAboveAnchor, workArea),
+      width: RIGHT_EDGE.drawerWidth,
+      height: drawerHeight
+    },
+    tab: {
+      x: right - RIGHT_EDGE.margin - RIGHT_EDGE.tab,
+      y: rightEdgeY(RIGHT_EDGE.tab, RIGHT_EDGE.tabAboveAnchor, workArea),
+      width: RIGHT_EDGE.tab,
+      height: RIGHT_EDGE.tab
+    },
     band: {
       x: right - RIGHT_EDGE.band,
       y: workArea.y + RIGHT_EDGE.bandCorner,
