@@ -133,13 +133,15 @@ describe('capture WAV: command construction', () => {
 })
 
 describe('profile seeding and launch', () => {
-  it('seeds onboarding done, local whisper ASR and the local LLM off', () => {
+  it('seeds onboarding done, fast local English Whisper ASR and the local LLM off', () => {
     const profile = tempDir()
     const { settings } = seedProfile(profile)
     const saved = JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8'))
     expect(saved).toEqual(settings)
     expect(saved.onboardingDone).toBe(true)
     expect(saved.asrEngine).toBe('whisper')
+    expect(saved.asrQuality).toBe('fast')
+    expect(saved.asrLanguage).toBe('English')
     expect(saved.localLlm.enabled).toBe(false)
     expect(saved.audioSource).toBe('mic')
     expect(saved.encryptTranscripts).toBe(false)

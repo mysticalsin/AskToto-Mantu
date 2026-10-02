@@ -59,6 +59,8 @@ export function seedProfile(profileDir) {
     meetingsFolder,
     onboardingDone: true,
     asrEngine: 'whisper',
+    asrQuality: 'fast',
+    asrLanguage: 'English',
     localLlm: { ...settings.localLlm, enabled: false },
     backgroundScreenContext: false,
     instantSuggestions: false,
