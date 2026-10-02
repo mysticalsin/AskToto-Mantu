@@ -580,9 +580,7 @@ function loadSession(): void {
         const targetKind = useFileBackend() ? 'file' : 'keychain'
         if (opened.kind !== targetKind) {
           const current = seal(json, BARE_FORMAT)
-          if (current.kind !== 'unavailable') {
-            atomicWriteSync(sessionPath(), current.bytes, { tmp: uniqueTmpPath(sessionPath()) })
-          }
+          if (current.kind !== 'unavailable') atomicWriteSync(sessionPath(), current.bytes, { tmp: uniqueTmpPath(sessionPath()) })
         }
       } catch { /* best-effort */ }
     }
@@ -601,9 +599,8 @@ function loadSession(): void {
 
 function saveSession(s: Session): void {
   session = s
-  // Always persist — the file backend (dev) or safeStorage (prod) guarantees encryption at rest.
-  // Without encryption neither was written before; we continue to prefer safeStorage in prod for
-  // defence-in-depth, but the file backend removes the "must have keychain" blocker for dev/CI.
+  // Always persist: the active backend guarantees encryption at rest.
+  // This includes dev/CI's file backend, where the credential store may be unavailable.
   try {
     const json = JSON.stringify(s)
     const sealed = seal(json, BARE_FORMAT)

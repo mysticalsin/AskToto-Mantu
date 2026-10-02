@@ -18,6 +18,12 @@ import { randomBytes } from 'node:crypto'
 
 const RENAME_RETRIES = 4
 const RENAME_BACKOFF_MS = 40
+type SyncBootstrapFs = {
+  closeSync(fd: number): void
+  fsyncSync(fd: number): void
+  openSync(path: string, flags: string, mode?: number): number
+  writeFileSync(fd: number, data: string | Uint8Array): void
+}
 
 export interface AtomicWriteOptions {
   /** File mode of the new file. Defaults to owner read/write only. */
@@ -49,6 +55,10 @@ function fsyncFileSync(path: string): void {
   }
 }
 
+function syncBootstrapFs(): SyncBootstrapFs {
+  return (process as typeof process & { getBuiltinModule: (id: 'node:fs') => SyncBootstrapFs }).getBuiltinModule('node:fs')
+}
+
 export function atomicWriteSync(path: string, data: string | Uint8Array, options: AtomicWriteOptions = {}): void {
   const tmp = options.tmp ?? `${path}.tmp`
   try {
@@ -75,17 +85,19 @@ export function atomicWriteSync(path: string, data: string | Uint8Array, options
 
 /** Best-effort bootstrap helper: create a small sidecar file once, never replacing existing user content. */
 export function writeFileIfMissingSync(path: string, data: string | Uint8Array, options: Pick<AtomicWriteOptions, 'mode'> = {}): boolean {
+  if (existsSync(path)) return false
+  const fs = syncBootstrapFs()
   let fd: number | undefined
   try {
-    fd = openSync(path, 'wx', options.mode ?? 0o600)
-    writeFileSync(fd, data)
-    fsyncSync(fd)
+    fd = fs.openSync(path, 'wx', options.mode ?? 0o600)
+    fs.writeFileSync(fd, data)
+    fs.fsyncSync(fd)
     return true
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'EEXIST') return false
     throw e
   } finally {
-    if (fd !== undefined) closeSync(fd)
+    if (fd !== undefined) fs.closeSync(fd)
   }
 }
 
@@ -126,7 +138,7 @@ export async function atomicWrite(path: string, data: string | Uint8Array, optio
     }
   } catch (e) {
     try {
-      if (existsSync(tmp)) await unlink(tmp)
+      await unlink(tmp)
     } catch {
       /* best-effort cleanup; the previous target is untouched */
     }

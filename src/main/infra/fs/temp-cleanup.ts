@@ -1,6 +1,14 @@
-import { readdirSync, unlinkSync } from 'node:fs'
 import { readdir, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
+
+type SyncFs = {
+  readdirSync(path: string): string[]
+  unlinkSync(path: string): void
+}
+
+function syncFs(): SyncFs {
+  return (process as typeof process & { getBuiltinModule: (id: 'node:fs') => SyncFs }).getBuiltinModule('node:fs')
+}
 
 export function removeFile(path: string): Promise<void> {
   return unlink(path)
@@ -11,9 +19,10 @@ export function removeFilesBestEffort(paths: Iterable<string>): void {
 }
 
 export function removeFilesBestEffortSync(paths: Iterable<string>): void {
+  const fs = syncFs()
   for (const path of paths) {
     try {
-      unlinkSync(path)
+      fs.unlinkSync(path)
     } catch {
       /* best-effort cleanup */
     }
@@ -33,11 +42,12 @@ export function sweepMatchingFilesBestEffort(dir: string, pattern: RegExp): void
 }
 
 export function sweepMatchingFilesBestEffortSync(dir: string, pattern: RegExp): void {
+  const fs = syncFs()
   try {
-    for (const name of readdirSync(dir)) {
+    for (const name of fs.readdirSync(dir)) {
       if (pattern.test(name)) {
         try {
-          unlinkSync(join(dir, name))
+          fs.unlinkSync(join(dir, name))
         } catch {
           /* best-effort cleanup */
         }
