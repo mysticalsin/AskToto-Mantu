@@ -73,12 +73,10 @@ describe('QA candidate job st1-mac-dataless-synthetic (M2-0505, OD-36)', () => {
     }
   })
 
-  it('has the same continue-on-error as st1-mac-fifo, so it is blocking exactly when that job is', () => {
-    const fifo = jobBlock('st1-mac-fifo')
-    expect(jobContinueOnError(job)).toBe(jobContinueOnError(fifo))
-    // st1-mac-fifo blocks (M2-0520), so neither the job nor its measurement step may swallow a FAIL.
-    expect(fifo).not.toMatch(/continue-on-error/)
-    expect(job).not.toMatch(/continue-on-error/)
+  it('stays report-only at job and measurement-step level: M2-0520 makes only the fifo and control rows block', () => {
+    expect(jobContinueOnError(job)).toBe('true')
+    const measure = steps('st1-mac-dataless-synthetic').find((step) => step.includes('--fixtures synthetic-dataless'))
+    expect(measure).toMatch(/^        continue-on-error: true$/m)
   })
 
   it('is part of the self-test trigger for its own files', () => {

@@ -536,13 +536,14 @@ jobs:
   # present, in the representative-profile shape, with History idle. That proves the main-thread and
   # threadpool guarantees on candidate bytes; SF_DATALESS detection on real evicted files is measured in the
   # owner's field soak (st-1-macos-real-dataless.json says so and never reads as PASS). The job also runs the
-  # promotable DMG's own metis-mac-helper stat-flags on the paths that need no cloud account. Its
-  # error handling equals st1-mac-fifo's: it blocks exactly when that job does, which is now (M2-0433).
+  # promotable DMG's own metis-mac-helper stat-flags on the paths that need no cloud account. Report-only:
+  # M2-0520 makes only the fifo and control rows blocking (OD-21); this row's verdict never fails the run.
   st1-mac-dataless-synthetic:
     name: ST-1 synthetic dataless row and stat-flags (macOS)
     needs: provenance
     runs-on: macos-latest
     timeout-minutes: 25
+    continue-on-error: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -567,6 +568,7 @@ jobs:
           node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
           node scripts/qa/provenance.mjs verify provenance/provenance.json assets-mac mac
       - name: Measure packaged stall resilience on the synthetic dataless profile
+        continue-on-error: true
         run: |
           mkdir -p st1-report
           installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
