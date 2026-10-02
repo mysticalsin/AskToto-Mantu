@@ -1006,4 +1006,25 @@ describe('synthetic-dataless and history reports', () => {
       brainStatusAnswered: false
     })
   })
+
+  it('turns a complete delayed synthetic-dataless run with no History answer into FAIL, not NOT_EXERCISED', () => {
+    const built = synthetic({
+      historyMode: 'after-idle',
+      measured: {
+        ...emptyRun(),
+        samples: [goodSample(1_000), goodSample(301_000)],
+        loop: { p99Ms: 12, maxMs: 40 },
+        history: []
+      },
+      evidence: { fixturesOpened: [], fifoMeetingFixtures: 6, sfDatalessSet: false }
+    })
+    expect(built.verdict).toBe('FAIL')
+    expect(built.exercised).toBe(false)
+    expect(built.exerciseEvidence).toMatchObject({
+      exercised: false,
+      historyProbesAnswered: 0,
+      requiredUnavailableRows: 6,
+      brainStatusAnswered: false
+    })
+  })
 })

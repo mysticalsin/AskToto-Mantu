@@ -368,8 +368,9 @@ async function captureReachedState({ page, cdp, main, state, variant, realRows, 
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 0, height: 0, deviceScaleFactor: variant.scale, mobile: false })
   try {
     await settleWindow(page)
-    await page.screenshot({ path: join(out, screenshot), scale: 'device' })
     drive.capturedAfterMs = Date.now() - drive.requestedAt
+    await page.screenshot({ path: join(out, screenshot), scale: 'device' })
+    drive.screenshotDoneAfterMs = Date.now() - drive.requestedAt
     collected = await page.evaluate(`(${collectHistoryView})(${solidGradientLayers})`)
   } finally {
     await cdp.send('Emulation.clearDeviceMetricsOverride')
@@ -385,7 +386,17 @@ async function captureReachedState({ page, cdp, main, state, variant, realRows, 
     tabOrder = await walkTabOrder(page)
   }
   const judged = judgeCapture({ state, variant, collected, roles, tabOrder, drive })
-  return { judged: { ...judged, scope: collected.scope, bannerAfterMs: drive.bannerAfterMs ?? null, capturedAfterMs: drive.capturedAfterMs, tabOrder }, screenshot }
+  return {
+    judged: {
+      ...judged,
+      scope: collected.scope,
+      bannerAfterMs: drive.bannerAfterMs ?? null,
+      capturedAfterMs: drive.capturedAfterMs,
+      screenshotDoneAfterMs: drive.screenshotDoneAfterMs,
+      tabOrder
+    },
+    screenshot
+  }
 }
 
 /**

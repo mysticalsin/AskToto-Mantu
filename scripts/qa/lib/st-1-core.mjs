@@ -560,7 +560,7 @@ export function buildReport({
   // The control row has nothing to exercise: its verdict is the criteria alone.
   const exercised = refusalEvidence?.exercised ?? (row === 'none' || evidence?.exercised)
   const openedNonRegularFixture = criteria.some((criterion) => criterion.name === 'non-regular-fixtures-unopened' && !criterion.pass)
-  const delayedHistoryFailed = historyMode === 'after-idle' && refusalEvidence && !refusalEvidence.exercised && measured.history.length > 0
+  const delayedHistoryFailed = historyMode === 'after-idle' && refusalEvidence && !refusalEvidence.exercised
   const verdict = !complete
     ? 'INCOMPLETE'
     : openedNonRegularFixture || delayedHistoryFailed
