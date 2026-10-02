@@ -16,6 +16,7 @@ runs every command block marked `verify` or `verify-dry`. A block is marked by w
 | Install Métis | [`INSTALL.md`](INSTALL.md), [`ENTERPRISE-DEPLOY-WINDOWS.md`](ENTERPRISE-DEPLOY-WINDOWS.md) |
 | Set up a dev environment | [`DEVELOPMENT.md`](DEVELOPMENT.md), and `AGENTS.md` at the repository root for the rules every agent follows |
 | How the app is built | [`asktoto-architecture.md`](asktoto-architecture.md): the 2.0 modular-monolith shape first, then the core loop |
+| Architecture fitness gates | [`ARCHITECTURE.md`](ARCHITECTURE.md): generated FF-04 size schedule and ratchet ownership |
 | Where each platform's code lives and how a fix reaches users | [`PLATFORM-MAP.md`](PLATFORM-MAP.md) |
 | The product target (the north star) | [`design/METIS-PLATFORM-NORTH-STAR.md`](design/METIS-PLATFORM-NORTH-STAR.md) (draft) |
 | What the app may contact | [`NETWORK-EGRESS.md`](NETWORK-EGRESS.md), [`PROVIDER-ROUTING-POLICY.md`](PROVIDER-ROUTING-POLICY.md) |

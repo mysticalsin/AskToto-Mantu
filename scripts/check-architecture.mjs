@@ -218,6 +218,8 @@ export function formatBaseline(counts) {
   return `${JSON.stringify(canonicalCounts(counts), null, 2)}\n`
 }
 
+const LEAD_ACTION_OWNER = 'LEAD_ACTION: assign follow-up owner tickets in architecture-size-schedule.json'
+
 /** @typedef {{ owner: string, target: number, by: string, milestone?: string }} SizeRow */
 /** @typedef {{ rows: Record<string, SizeRow> }} SizeSchedule */
 
@@ -238,7 +240,7 @@ export function validateSizeSchedule(sizeBaseline, schedule) {
       problems.push(`${file} has a size-schedule row but is no longer over 800 lines; delete the row`)
       continue
     }
-    if (!/^M2-\d{4}$/.test(row.owner ?? '')) problems.push(`${file}: owner must be a ticket id like M2-0001`)
+    if (!isSizeScheduleOwner(row.owner)) problems.push(`${file}: owner must be a ticket id like M2-0001 or ${LEAD_ACTION_OWNER}`)
     if (!Number.isInteger(row.target) || row.target < 1 || row.target > 800) problems.push(`${file}: target must be an integer from 1 to 800`)
     if (!/^\d{4}-\d{2}-\d{2}$/.test(row.by ?? '') || Number.isNaN(Date.parse(row.by))) problems.push(`${file}: by must be a YYYY-MM-DD date`)
   }
@@ -255,11 +257,19 @@ export function renderSizeScheduleBlock(schedule) {
     .map(([file, row]) => `| \`${file}\` | ${row.target} | ${row.by}${row.milestone ? ` (${row.milestone})` : ''} | ${row.owner} |`)
   return [
     SIZE_TABLE_START,
-    '| File | Target lines | By | Owner ticket |',
+    '| File | Target lines | By | Owner ticket / action |',
     '| --- | ---: | --- | --- |',
     ...rows,
     SIZE_TABLE_END,
   ].join('\n')
+}
+
+/**
+ * @param {unknown} owner Schedule owner field.
+ * @returns {boolean} Whether the row names a lasting owner or the explicit lead handoff.
+ */
+function isSizeScheduleOwner(owner) {
+  return typeof owner === 'string' && (/^M2-\d{4}$/.test(owner) || owner === LEAD_ACTION_OWNER)
 }
 
 /**

@@ -250,12 +250,6 @@ async function rightEdgePageState(page) {
  */
 export function pinnedBridgeCall([method, args]) {
   const pending = (globalThis.__metisSmokeBridgePending ??= new Set())
-  const aliases = (pending.__metisSmokeBridgeAliases ??= new WeakMap())
-  if (pending.__metisSmokeBridgeOriginalHas === undefined) {
-    const originalHas = pending.has.bind(pending)
-    Object.defineProperty(pending, '__metisSmokeBridgeOriginalHas', { value: originalHas })
-    pending.has = (value) => originalHas(value) || (aliases.has(value) && originalHas(aliases.get(value)))
-  }
   let call
   try {
     call = window.toto[method](...args)
@@ -272,7 +266,6 @@ export function pinnedBridgeCall([method, args]) {
       throw error
     }
   )
-  aliases.set(returned, call)
   return returned
 }
 

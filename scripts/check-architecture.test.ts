@@ -232,6 +232,7 @@ function removeLayeringErrors(root: string): void {
 type SizeSchedule = { rows: Record<string, { owner: string; target: number; by: string; milestone?: string }> }
 
 const row = { owner: 'M2-0001', target: 800, by: '2027-03-31' }
+const leadActionOwner = 'LEAD_ACTION: assign follow-up owner tickets in architecture-size-schedule.json'
 
 function readRepoJson<T>(name: string): T {
   return JSON.parse(readFileSync(join(__dirname, name), 'utf8')) as T
@@ -240,6 +241,10 @@ function readRepoJson<T>(name: string): T {
 describe('FF-04 size schedule', () => {
   it('accepts a schedule that names exactly the baseline files', () => {
     expect(validateSizeSchedule({ 'src/a.mjs': 900 }, { rows: { 'src/a.mjs': row } })).toEqual([])
+  })
+
+  it('accepts the explicit lead-action owner handoff until follow-up owner tickets are assigned', () => {
+    expect(validateSizeSchedule({ 'src/a.mjs': 900 }, { rows: { 'src/a.mjs': { ...row, owner: leadActionOwner } } })).toEqual([])
   })
 
   it('fails a baseline entry without a schedule row', () => {
@@ -271,6 +276,7 @@ describe('FF-04 size schedule', () => {
     }
     const block = renderSizeScheduleBlock(schedule)
     expect(block.indexOf('src/a.mjs')).toBeLessThan(block.indexOf('src/b.mjs'))
+    expect(block).toContain('| File | Target lines | By | Owner ticket / action |')
     expect(block).toContain('| 300 | 2027-03-31 (m10) | M2-0001 |')
     expect(sizeScheduleDocIsCurrent(`# Doc\n\n${block}\n`, schedule)).toBe(true)
     expect(sizeScheduleDocIsCurrent(`# Doc\n\n${block.replace('300', '299')}\n`, schedule)).toBe(false)
@@ -282,6 +288,7 @@ describe('FF-04 size schedule', () => {
     const schedule = readRepoJson<SizeSchedule>('architecture-size-schedule.json')
     expect(validateSizeSchedule(baseline['FF-04'], schedule)).toEqual([])
     expect(schedule.rows['src/main/index.' + 'ts']).toMatchObject({ target: 300, milestone: 'm10' })
+    expect(Object.values(schedule.rows).every((row) => row.owner !== 'M2-0247')).toBe(true)
     const doc = readFileSync(join(__dirname, '..', 'docs', 'ARCHITECTURE.md'), 'utf8')
     expect(sizeScheduleDocIsCurrent(doc, schedule)).toBe(true)
   })
