@@ -55,7 +55,7 @@ function completeNavigationRow(rows, id, patch) {
   if (row) Object.assign(row, patch)
 }
 
-function findOverlayPage(browser, timeout = 15_000) {
+export function findOverlayPage(browser, timeout = 15_000) {
   return findPage(browser, (page) => isOverlayUrl(page.url()), 'overlay page not found', timeout, 100)
 }
 
@@ -238,7 +238,7 @@ async function ensureHistory(page) {
   await clickHistory(page)
 }
 
-async function ensureIdleBar(page) {
+export async function ensureIdleBar(page) {
   const search = page.getByLabel('Search past meetings')
   if (await locatorVisible(search)) {
     await page.getByRole('button', { name: 'History' }).first().click({ timeout: 15_000 })
@@ -321,7 +321,7 @@ export async function seedNavigationMeetings(page, label = '') {
   return seeded
 }
 
-async function clickHistory(page) {
+export async function clickHistory(page) {
   await page.getByRole('button', { name: 'History' }).first().click({ timeout: 15_000 })
   await waitForNavigationView(page, { view: 'history' })
 }
