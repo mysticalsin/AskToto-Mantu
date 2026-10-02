@@ -188,6 +188,16 @@ export function shouldProbeHistory({ historyMode = 'on', historyRunning, history
   return tMs >= fromMs && tMs <= retryUntilMs && tMs - historyLastMs >= everyMs
 }
 
+/** The History probe window. In after-idle mode, the first probe is scheduled from the end of the
+ *  measurement window, not from process spawn, so the row stays idle for the full sampled period. */
+export function historyProbeWindow({ historyMode = 'on', nowMs, minutes, defaultFromMs, retryMs }) {
+  const fromMs = historyMode === 'after-idle' ? nowMs + minutes * 60_000 : defaultFromMs
+  return {
+    fromMs,
+    retryUntilMs: historyMode === 'after-idle' ? fromMs + retryMs : Infinity
+  }
+}
+
 /** The representative profile of ARCHITECTURE 6.1: 59 meetings, 6 of them cloud-only, and a mostly
  *  cloud-only `.brain`. */
 export const SYNTHETIC_LOCAL_MEETINGS = 53
@@ -383,9 +393,16 @@ function fifoRefusalEvidence(row, measured, evidence, fixtures, fixtureCounts) {
       (entry.unavailable ?? entry.notDownloaded) >= requiredUnavailableRows &&
       settledWithin(entry.calls?.brainStatus, Number.POSITIVE_INFINITY)
   )
+  const reason = matchingProbe
+    ? 'history-refused-fixtures'
+    : answered.length === 0
+      ? 'history-did-not-answer'
+      : brainStatusAnswered && typeof unavailableRows === 'number' && unavailableRows < requiredUnavailableRows
+        ? 'history-answer-lacked-required-refusals'
+        : 'history-did-not-prove-refusal'
   return {
     exercised: Boolean(matchingProbe),
-    reason: matchingProbe ? 'history-refused-fixtures' : 'history-did-not-prove-refusal',
+    reason,
     historyProbesAnswered: answered.length,
     unavailableRows,
     requiredUnavailableRows,

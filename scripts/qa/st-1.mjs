@@ -93,6 +93,7 @@ import {
   emptyRun,
   failureRecord,
   historyEntry,
+  historyProbeWindow,
   parseArgs,
   pinnedExpression,
   recordSample,
@@ -592,8 +593,13 @@ async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, 
   let historyLastMs = -Infinity
   let historyAnswered = false
   const deadline = Date.now() + minutes * 60_000
-  const historyFromMs = historyMode === 'after-idle' ? minutes * 60_000 : HISTORY_FROM_MS
-  const historyRetryUntilMs = historyMode === 'after-idle' ? historyFromMs + HISTORY_AFTER_IDLE_RETRY_MS : Infinity
+  const { fromMs: historyFromMs, retryUntilMs: historyRetryUntilMs } = historyProbeWindow({
+    historyMode,
+    nowMs: sinceSpawn(),
+    minutes,
+    defaultFromMs: HISTORY_FROM_MS,
+    retryMs: HISTORY_AFTER_IDLE_RETRY_MS
+  })
   const shouldKeepSampling = () => {
     if (Date.now() < deadline) return true
     if (historyMode !== 'after-idle' || historyAnswered) return Boolean(historyRunning)

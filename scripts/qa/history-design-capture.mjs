@@ -368,9 +368,9 @@ async function captureReachedState({ page, cdp, main, state, variant, realRows, 
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 0, height: 0, deviceScaleFactor: variant.scale, mobile: false })
   try {
     await settleWindow(page)
-    drive.capturedAfterMs = Date.now() - drive.requestedAt
     await page.screenshot({ path: join(out, screenshot), scale: 'device' })
     drive.screenshotDoneAfterMs = Date.now() - drive.requestedAt
+    drive.capturedAfterMs = drive.screenshotDoneAfterMs
     collected = await page.evaluate(`(${collectHistoryView})(${solidGradientLayers})`)
   } finally {
     await cdp.send('Emulation.clearDeviceMetricsOverride')

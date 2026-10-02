@@ -15,6 +15,7 @@ import {
   emptyRun,
   evaluateCriteria,
   historyEntry,
+  historyProbeWindow,
   historySummary,
   parseArgs,
   pinnedExpression,
@@ -446,6 +447,22 @@ describe('shouldProbeHistory', () => {
   })
 })
 
+describe('historyProbeWindow', () => {
+  it('starts after-idle History from the end of the measured idle window, then bounds retries from that start', () => {
+    expect(historyProbeWindow({ historyMode: 'after-idle', nowMs: 12_345, minutes: 5, defaultFromMs: 20_000, retryMs: 60_000 })).toEqual({
+      fromMs: 312_345,
+      retryUntilMs: 372_345
+    })
+  })
+
+  it('keeps the regular History window unchanged', () => {
+    expect(historyProbeWindow({ historyMode: 'on', nowMs: 12_345, minutes: 5, defaultFromMs: 20_000, retryMs: 60_000 })).toEqual({
+      fromMs: 20_000,
+      retryUntilMs: Infinity
+    })
+  })
+})
+
 describe('evaluateCriteria', () => {
   it('fails every loop criterion when the loop summary is missing', () => {
     const criteria = evaluateCriteria('none', { ...emptyRun(), samples: [goodSample(1)] }, null)
@@ -554,7 +571,7 @@ describe('buildReport', () => {
     expect(built.verdict).toBe('NOT_EXERCISED')
     expect(built.exercised).toBe(false)
     expect(built.exerciseEvidence).toMatchObject({
-      reason: 'history-did-not-prove-refusal',
+      reason: 'history-did-not-answer',
       historyProbesAnswered: 0,
       unavailableRows: null,
       requiredUnavailableRows: 2,
@@ -1007,6 +1024,50 @@ describe('synthetic-dataless and history reports', () => {
     })
   })
 
+  it('names an after-idle History answer that stops retries before proving enough refusals', () => {
+    const built = synthetic({
+      historyMode: 'after-idle',
+      measured: {
+        ...emptyRun(),
+        samples: [goodSample(1_000), goodSample(299_000)],
+        loop: { p99Ms: 12, maxMs: 40 },
+        history: [refusedHistoryProbe(312_000, 5)]
+      },
+      evidence: { fixturesOpened: [], fifoMeetingFixtures: 6, sfDatalessSet: false }
+    })
+    expect(built.verdict).toBe('FAIL')
+    expect(built.exerciseEvidence).toMatchObject({
+      exercised: false,
+      reason: 'history-answer-lacked-required-refusals',
+      historyProbesAnswered: 1,
+      unavailableRows: 5,
+      requiredUnavailableRows: 6,
+      brainStatusAnswered: true
+    })
+  })
+
+  it('passes an after-idle synthetic-dataless run whose first History answer proves refusal', () => {
+    const built = synthetic({
+      historyMode: 'after-idle',
+      measured: {
+        ...emptyRun(),
+        samples: [goodSample(1_000), goodSample(299_000)],
+        loop: { p99Ms: 12, maxMs: 40 },
+        history: [refusedHistoryProbe(312_000, 6)]
+      },
+      evidence: { fixturesOpened: [], fifoMeetingFixtures: 6, sfDatalessSet: false }
+    })
+    expect(built.verdict).toBe('PASS')
+    expect(built.exerciseEvidence).toMatchObject({
+      exercised: true,
+      reason: 'history-refused-fixtures',
+      historyProbesAnswered: 1,
+      unavailableRows: 6,
+      requiredUnavailableRows: 6,
+      brainStatusAnswered: true
+    })
+  })
+
   it('turns a complete delayed synthetic-dataless run with no History answer into FAIL, not NOT_EXERCISED', () => {
     const built = synthetic({
       historyMode: 'after-idle',
@@ -1022,6 +1083,7 @@ describe('synthetic-dataless and history reports', () => {
     expect(built.exercised).toBe(false)
     expect(built.exerciseEvidence).toMatchObject({
       exercised: false,
+      reason: 'history-did-not-answer',
       historyProbesAnswered: 0,
       requiredUnavailableRows: 6,
       brainStatusAnswered: false
