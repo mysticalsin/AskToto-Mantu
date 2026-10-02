@@ -168,6 +168,7 @@ function readSampleFrames(samplesDir, sampleFile) {
       continue
     }
     if (!inMainThread) continue
+    if (/^\s*Total number in stack/.test(line)) break
     const frameLine = line.replace(/^\s*[+!:| ]+\s*/, '').replace(/^\d+\s+/, '')
     const match = frameLine.match(/^(.+?)\s+\(in\s+([^)]+)\)/)
     if (!match) continue
