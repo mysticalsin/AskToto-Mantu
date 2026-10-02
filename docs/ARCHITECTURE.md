@@ -26,7 +26,6 @@ Every production file over 800 lines under `src/`, `operator/src/`, `intelligenc
 | `src/main/cli.ts` | 800 | 2027-03-31 | M2-0247 |
 | `src/main/import-jobs.ts` | 800 | 2027-03-31 | M2-0247 |
 | `src/main/index.ts` | 300 | 2027-06-30 (m10) | M2-0247 |
-| `src/main/recall.ts` | 800 | 2027-03-31 | M2-0247 |
 | `src/main/store.ts` | 800 | 2027-03-31 | M2-0247 |
 | `src/main/transcripts.ts` | 800 | 2027-03-31 | M2-0247 |
 | `src/renderer/src/App.tsx` | 800 | 2027-03-31 | M2-0247 |
@@ -37,7 +36,10 @@ Every production file over 800 lines under `src/`, `operator/src/`, `intelligenc
 | `src/renderer/src/components/OnboardingExperience.tsx` | 800 | 2027-03-31 | M2-0247 |
 | `src/renderer/src/components/RecallView.tsx` | 800 | 2027-03-31 | M2-0247 |
 | `src/renderer/src/components/Review.tsx` | 800 | 2027-03-31 | M2-0247 |
-| `src/renderer/src/components/Settings.tsx` | 800 | 2027-03-31 | M2-0247 |
+| `src/renderer/src/features/settings/AiSection.tsx` | 800 | 2027-03-31 | M2-0247 |
+| `src/renderer/src/features/settings/AudioTab.tsx` | 800 | 2027-03-31 | M2-0247 |
+| `src/renderer/src/features/settings/DustSetup.tsx` | 800 | 2027-03-31 | M2-0247 |
+| `src/renderer/src/features/settings/SettingsRoot.tsx` | 800 | 2027-03-31 | M2-0247 |
 | `src/renderer/src/lib/listen.ts` | 800 | 2027-03-31 | M2-0247 |
 | `src/shared/ipc.ts` | 800 | 2027-03-31 | M2-0247 |
 <!-- /FF-04 size schedule -->

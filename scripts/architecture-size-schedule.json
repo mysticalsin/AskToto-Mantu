@@ -19,7 +19,6 @@
     "src/main/cli.ts": { "owner": "M2-0247", "target": 800, "by": "2027-03-31" },
     "src/main/import-jobs.ts": { "owner": "M2-0247", "target": 800, "by": "2027-03-31" },
     "src/main/index.ts": { "owner": "M2-0247", "target": 300, "by": "2027-06-30", "milestone": "m10" },
-    "src/main/recall.ts": { "owner": "M2-0247", "target": 800, "by": "2027-03-31" },
     "src/main/store.ts": { "owner": "M2-0247", "target": 800, "by": "2027-03-31" },
     "src/main/transcripts.ts": { "owner": "M2-0247", "target": 800, "by": "2027-03-31" },
     "src/renderer/src/App.tsx": { "owner": "M2-0247", "target": 800, "by": "2027-03-31" },
@@ -30,7 +29,10 @@
     "src/renderer/src/components/OnboardingExperience.tsx": { "owner": "M2-0247", "target": 800, "by": "2027-03-31" },
     "src/renderer/src/components/RecallView.tsx": { "owner": "M2-0247", "target": 800, "by": "2027-03-31" },
     "src/renderer/src/components/Review.tsx": { "owner": "M2-0247", "target": 800, "by": "2027-03-31" },
-    "src/renderer/src/components/Settings.tsx": { "owner": "M2-0247", "target": 800, "by": "2027-03-31" },
+    "src/renderer/src/features/settings/AiSection.tsx": { "owner": "M2-0247", "target": 800, "by": "2027-03-31" },
+    "src/renderer/src/features/settings/AudioTab.tsx": { "owner": "M2-0247", "target": 800, "by": "2027-03-31" },
+    "src/renderer/src/features/settings/DustSetup.tsx": { "owner": "M2-0247", "target": 800, "by": "2027-03-31" },
+    "src/renderer/src/features/settings/SettingsRoot.tsx": { "owner": "M2-0247", "target": 800, "by": "2027-03-31" },
     "src/renderer/src/lib/listen.ts": { "owner": "M2-0247", "target": 800, "by": "2027-03-31" },
     "src/shared/ipc.ts": { "owner": "M2-0247", "target": 800, "by": "2027-03-31" }
   }
