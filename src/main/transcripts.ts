@@ -1,20 +1,18 @@
 import { app } from 'electron'
 import {
-  readdirSync,
   readFileSync,
   existsSync,
   mkdirSync,
   writeFileSync,
-  appendFileSync,
-  unlinkSync
+  appendFileSync
 } from 'node:fs'
-import { unlink } from 'node:fs/promises'
 import { join, basename } from 'node:path'
 import { randomBytes, createCipheriv, createDecipheriv, publicEncrypt, constants } from 'node:crypto'
 import type { SaveMeeting, SaveNote, Settings, RecapExport, TranscriptLine } from '@shared/ipc'
 import { isSummaryOnlyProfile, resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
 import { encryptSecret, isKeychainAvailable, useFileBackend } from './secrets'
 import { atomicWrite, atomicWriteSync, uniqueTmpPath } from './infra/fs/atomic-write'
+import { removeFile, removeFilesBestEffort, sweepMatchingFilesBestEffort } from './infra/fs/temp-cleanup'
 import {
   MARKER_ATKENC1,
   MARKER_ATKENC2,
@@ -371,19 +369,13 @@ export function decryptToTemp(path: string, bytes?: Buffer): string {
     app.getPath('temp'),
     `asktoto-${randomBytes(6).toString('hex')}-${basename(path).replace(/\.md$/, '')}.md`
   )
-  writeFileSync(tmp, content, { encoding: 'utf8', mode: 0o600 })
+  atomicWriteSync(tmp, content, { tmp: uniqueTmpPath(tmp) })
   lockPathToCurrentUserWin32(tmp) // mode bits are ignored on Windows; enforce owner-only via DACL
   decryptedTemps.add(tmp)
   if (!tempCleanupHooked) {
     tempCleanupHooked = true
     app.on('will-quit', () => {
-      for (const t of decryptedTemps) {
-        try {
-          if (existsSync(t)) unlinkSync(t)
-        } catch {
-          /* best-effort cleanup */
-        }
-      }
+      removeFilesBestEffort(decryptedTemps)
       decryptedTemps.clear()
     })
   }
@@ -400,20 +392,7 @@ export function decryptToTemp(path: string, bytes?: Buffer): string {
  *   app.whenReady().then(() => { sweepStaleTempFiles(); … })
  */
 export function sweepStaleTempFiles(): void {
-  try {
-    const tmp = app.getPath('temp')
-    for (const name of readdirSync(tmp)) {
-      if (/^asktoto-[0-9a-f]+-.*\.md$/.test(name)) {
-        try {
-          unlinkSync(join(tmp, name))
-        } catch {
-          /* best-effort — file may already be deleted or still open */
-        }
-      }
-    }
-  } catch {
-    /* ignore — temp dir unreadable */
-  }
+  sweepMatchingFilesBestEffort(app.getPath('temp'), /^asktoto-[0-9a-f]+-.*\.md$/)
 }
 
 const README = `# Métis — Meeting transcripts
@@ -831,7 +810,7 @@ export async function clearDraftTranscript(settings: Settings, startedAt: number
     if (!existsSync(file)) return
     for (let attempt = 0; ; attempt++) {
       try {
-        await unlink(file)
+        await removeFile(file)
         return
       } catch (e) {
         const code = (e as NodeJS.ErrnoException).code
@@ -889,7 +868,7 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
           // unlink below failed afterward (transient EBUSY/EPERM; this folder is often OneDrive-synced).
           // Re-promoting would write a second, fully duplicate "-recovered-2.md" copy of the same
           // meeting, so just retry the cleanup and move on without touching `recovered`.
-          await unlink(draftPath).catch(() => {
+          await removeFile(draftPath).catch(() => {
             /* still stale for the next run — harmless; the occupied-name guard prevents a dupe */
           })
           continue
@@ -913,7 +892,7 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
         await writeSaved(out, promoted, wasEncrypted)
         occupied.add(basename(out))
         try {
-          await unlink(draftPath)
+          await removeFile(draftPath)
         } catch {
           // The promoted copy is already safely on disk; a future run will see primaryOut exists and
           // skip re-promoting this same stale draft (see the guard above), only retrying its cleanup.

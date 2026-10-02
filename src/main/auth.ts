@@ -963,8 +963,7 @@ export function signOut(): void {
     clearStickyConfigured()
     clearLkgConfig()
   } else {
-    // No live session: the only caller reaching signOut() here is the SignInWall's "Reset Microsoft
-    // sign-in setup" escape hatch (Settings is unreachable behind the wall). Clear a self-serve azure*
+    // No live session: the SignInWall's reset hatch. Clear a self-serve azure*
     // config that bricked the app with a well-formed-but-wrong tenant GUID (MQA-107) so it falls back to
     // usable. resetSelfServeSso() enforces every gate (self-serve only, never an IT/env lock) and no-ops
     // when they don't hold, so a routine already-signed-out signOut() stays a no-op.
