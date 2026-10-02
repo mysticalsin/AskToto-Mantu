@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
 import { describe, expect, it } from 'vitest'
 import {
   ONBOARDING_BAR_LAND_GAIN,
@@ -22,7 +23,7 @@ import {
 const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
 const demo = readFileSync(join(__dirname, '../components/OnboardingDemoScene.tsx'), 'utf8')
 const engine = readFileSync(join(__dirname, './onboarding-starfield-engine.ts'), 'utf8')
-const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
+const css = readAppCss()
 
 function actSlice(src: string, start: string, end: string): string {
   const a = src.indexOf(start)

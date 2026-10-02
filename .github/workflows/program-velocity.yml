@@ -1,0 +1,61 @@
+name: Program Velocity
+
+on:
+  push:
+    branches:
+      - '**'
+    tags-ignore:
+      - 'v*'
+      - 'ffmpeg-sidecar-*'
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      ledger_path:
+        description: 'Path to the checked-out program ledger JSON'
+        required: true
+        type: string
+      records_path:
+        description: 'Optional evidence-record directory'
+        required: false
+        type: string
+      gate:
+        description: 'Gate label for this re-forecast'
+        required: false
+        default: 'm3'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  velocity:
+    name: Velocity forecast
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Contract tests
+        run: node --test scripts/program/velocity.test.mjs
+      - name: Generate forecast artifact
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          LEDGER_PATH: ${{ inputs.ledger_path }}
+          RECORDS_PATH: ${{ inputs.records_path }}
+          GATE: ${{ inputs.gate }}
+        run: |
+          set -euo pipefail
+          args=(--ledger "$LEDGER_PATH" --out-dir out/program-velocity --gate "$GATE")
+          if [ -n "$RECORDS_PATH" ]; then
+            args+=(--records "$RECORDS_PATH")
+          fi
+          node scripts/program/velocity.mjs "${args[@]}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          name: program-velocity-forecast
+          path: out/program-velocity/
+          if-no-files-found: error

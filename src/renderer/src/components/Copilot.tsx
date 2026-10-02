@@ -144,10 +144,10 @@ export const Copilot = memo(function Copilot({
       {captureNotice && (
         <div
           role="status"
-          className="flex flex-col items-start gap-1.5 rounded-lg border border-[var(--color-warn,#fac775)]/30 bg-[var(--color-warn,#fac775)]/10 px-3 py-2 text-[12px] leading-snug text-[color:var(--color-ink-2)] break-words [overflow-wrap:anywhere]"
+          className="flex flex-col items-start gap-1.5 rounded-lg border border-[var(--color-warn)]/30 bg-[var(--color-warn)]/10 px-3 py-2 text-[12px] leading-snug text-[color:var(--color-ink-2)] break-words [overflow-wrap:anywhere]"
         >
           <div className="flex items-start gap-1.5">
-            <EyeOff size={13} className="mt-0.5 shrink-0 text-[color:var(--color-warn,#fac775)]" />
+            <EyeOff size={13} className="mt-0.5 shrink-0 text-[color:var(--color-warn)]" />
             <span>{captureNotice}</span>
           </div>
           {isScreenCapturePermissionError(captureNotice) &&
@@ -155,7 +155,7 @@ export const Copilot = memo(function Copilot({
               <button
                 type="button"
                 onClick={() => void window.toto.relaunch()}
-                className="no-drag focus-ring rounded-full bg-[var(--color-warn,#fac775)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] hover:bg-[var(--color-warn,#fac775)]/25"
+                className="no-drag focus-ring rounded-full bg-[var(--color-warn)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] hover:bg-[var(--color-warn)]/25"
               >
                 Restart Métis
               </button>
@@ -163,7 +163,7 @@ export const Copilot = memo(function Copilot({
               <button
                 type="button"
                 onClick={() => void window.toto.openPermissionSettings('screenRecording')}
-                className="no-drag focus-ring rounded-full bg-[var(--color-warn,#fac775)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] hover:bg-[var(--color-warn,#fac775)]/25"
+                className="no-drag focus-ring rounded-full bg-[var(--color-warn)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] hover:bg-[var(--color-warn)]/25"
               >
                 Open Screen Recording settings
               </button>

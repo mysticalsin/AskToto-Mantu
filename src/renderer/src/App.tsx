@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState, lazy, Suspense, startTransition } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, lazy, Suspense, startTransition } from 'react'
 import { Bar } from './components/Bar'
 /** FITO-185-J: sync OnboardingV2 — exclusive Act 1 must not wait on a lazy chunk (DemoScene stays lazy inside Experience). */
 import { OnboardingV2 } from './components/OnboardingExperience'
@@ -35,6 +35,7 @@ import { ConfirmSheet } from './ui/ConfirmSheet'
 import { useAsk, useAutoResize, useSettings, useAuth, type AnswerState } from './state'
 import { useWindowDrag } from './lib/window-drag'
 import { noteCrashContext } from './lib/crash-context'
+import { useTransitionView } from './lib/history-transition'
 import { NavigationGuardService, type NavigationGuardRequest } from './lib/navigation-guard'
 import {
   AUTO_HIDE_GRACE_MS,
@@ -74,6 +75,7 @@ import {
   circleRestSpringAfterCollapse,
   circleRestSpringAfterExpand,
   circleRestSpringClassName,
+  overlayHideParkedClassName,
   overlayShowPeek,
   overlaySpringAfterHide,
   overlaySpringAfterReveal,
@@ -87,6 +89,7 @@ import { freshMeetingPauseClock, setMeetingPaused } from './lib/meeting-clock'
 import { shouldUseCloudSttEngine } from '@shared/cloud-stt-provider'
 import { resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
 import { transcriptToText, recapPersistAction, type RecapPersistTarget } from './lib/transcript'
+import { WriteupSpans } from './lib/writeup-spans'
 import {
   OwnedOperationGate,
   RecapWriteCoordinator,
@@ -461,11 +464,8 @@ export function App(): JSX.Element {
   // synchronous input"), crashing to the error boundary ("Métis hit a snag") instead of showing
   // the Suspense fallback. Reproduced physically on first "Start listening" (cold Copilot chunk).
   // The documented fix: mark view switches as transitions — the old view stays up for the few ms the
-  // chunk needs, then the new one mounts. setView keeps its identity via the useCallback wrapper.
-  const [view, setViewRaw] = useState<View>(initialViewFromLaunch)
-  const setView = useCallback((v: View | ((prev: View) => View)): void => {
-    startTransition(() => setViewRaw(v))
-  }, [])
+  // chunk needs, then the new one mounts. setView keeps a stable identity and records History transitions.
+  const [view, setView, setViewRaw] = useTransitionView(initialViewFromLaunch)
   // See crash-context.ts for why this runs in render rather than an effect.
   noteCrashContext({ view, listening: listen.listening })
 
@@ -631,6 +631,9 @@ export function App(): JSX.Element {
   // before the first await, and released only when a save definitively gives up so a retry stays possible.
   const claimedSavesRef = useRef<Set<string>>(new Set())
   const [savedPath, setSavedPath] = useState<string | null>(null)
+  // M2-0430: content-free Stop -> transcript saved / first recap token / recap done spans, audited by main.
+  const writeupSpansRef = useRef(new WriteupSpans((report) => void window.toto.reportWriteupSpan(report)))
+  const recapBaselineRef = useRef<{ runId: string; text: string } | null>(null)
   // Refresh the entity-casing name list once on mount, and again whenever a meeting finishes saving —
   // the best available "the brain might have new names" signal (extraction itself runs async in main
   // after the save, so this is a best-effort refresh, not a guarantee the very latest meeting is in it).
@@ -718,7 +721,9 @@ export function App(): JSX.Element {
     forceParkAfterHideRef.current = true
     setRightEdgeDockDismissed(true)
     dispatchAutoHide({ type: 'collapse-now' })
-  }, [])
+    // Auto-hide is off while a capture runs, so no exit spring will request this park: request it now.
+    if (!overlayIdle) parkCurrentOverlayAfterHide()
+  }, [overlayIdle, parkCurrentOverlayAfterHide])
   useEffect(() => {
     dispatchAutoHide({ type: 'set-enabled', enabled: overlayIdle })
   }, [overlayIdle])
@@ -798,7 +803,7 @@ export function App(): JSX.Element {
   const wasRevealedRef = useRef(overlaySurfaceRevealed)
   const overlayRevealedRef = useRef(overlaySurfaceRevealed)
   overlayRevealedRef.current = overlaySurfaceRevealed
-  useEffect(() => {
+  useLayoutEffect(() => { // in the reveal's own commit: the first painted frame is the in-spring at opacity 0
     if (!overlayIdle) {
       setOverlaySpring('rest')
       springIdleRef.current = false
@@ -886,18 +891,22 @@ export function App(): JSX.Element {
         // message as a new enter produces the visible close → reopen flash reported in device QA.
         if (rightEdgePresentation && shouldIgnoreRightEdgeNativeHover(rightEdgeDismissalLockRef.current, d.restoredFromParkedRail)) return
         if (rightEdgePresentation && d.restoredFromParkedRail) {
-          rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(
-            rightEdgeDismissalLockRef.current,
-            { type: 'native-hover-restored' }
-          )
+          rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'native-hover-restored' })
         }
         // Main restores the native drawer before it emits this fallback hover signal. Mirror the
         // ordinary pointer-enter path here so a deliberately parked edge dock cannot leave a
         // full-size transparent window behind a renderer-only rail.
         setRightEdgeDockDismissed(false)
-        dispatchAutoHide({ type: 'reveal-now' })
+        if (rightEdgePresentation) dispatchAutoHide({ type: 'reveal-now' })
+        else dispatchAutoHide({ type: 'reveal-now', native: true })
       } else {
-        dispatchAutoHide({ type: 'pointer-leave' })
+        // Main parked the dock: always render the rail (draft kept); every reveal path clears the dismissal.
+        if (d.parked && rightEdgePresentation) {
+          wasRevealedRef.current = false
+          setRightEdgeDockDismissed(true)
+          setOverlaySpring('rest')
+        }
+        dispatchAutoHide({ type: 'pointer-leave', native: true })
       }
     })
   }, [rightEdgePresentation])
@@ -1137,7 +1146,10 @@ export function App(): JSX.Element {
         })
       return
     }
-    if (savedRef.current === id || meetingSaveGateRef.current.isActive(id)) return
+    // M2-0430: the transcript-first save (maybeFireRecap) may still be in flight when the recap ends. Its
+    // claim holds this create back; when it lands, savedPath re-runs this effect and the recap updates that
+    // file instead of writing a second one. A definitive failure releases the claim so this save can run.
+    if (savedRef.current === id || meetingSaveGateRef.current.isActive(id) || claimedSavesRef.current.has(id)) return
 
     const startedAt = meetingStartRef.current
     const lines = [...listen.lines]
@@ -1211,6 +1223,22 @@ export function App(): JSX.Element {
     mode,
     saveAttempts
   ])
+
+  // M2-0430: the live recap's first token and its terminal state, as spans from the Stop click. Only the
+  // run this meeting owns counts; WriteupSpans reports each span once per Stop. The answer hook keeps the
+  // previous answer's text until the run's first chunk, which arrives over IPC after the render that
+  // starts the run; so the text first seen for this run id is the baseline and the first change from it
+  // is the first token.
+  useEffect(() => {
+    const target = liveRecapTargetRef.current
+    if (!target || target.runId !== answerId || target.ownerId !== String(meetingStartRef.current)) return
+    const baseline = recapBaselineRef.current
+    if (baseline?.runId !== answerId) recapBaselineRef.current = { runId: answerId, text: answerText }
+    else if (answerText !== baseline.text) writeupSpansRef.current.mark('stop_to_first_recap_token')
+    if (!answerStreaming && answerCompletion && answerCompletion !== 'pending') {
+      writeupSpansRef.current.mark('stop_to_recap_done')
+    }
+  }, [answerId, answerText, answerStreaming, answerCompletion])
 
   // record a completed Ask turn into conversation memory (for follow-ups)
   useEffect(() => {
@@ -2209,6 +2237,7 @@ export function App(): JSX.Element {
       return
     }
     stoppingRef.current = false // a fresh session can be stopped again — clear any latch left by the last one
+    writeupSpansRef.current.reset() // spans belong to the Stop of the session being left, never the next one
     // A rapid Stop -> New meeting can start a fresh session while the previous endReview's recap is still
     // waiting on that old session's drain (pendingRecapRef) — drop it so it can't fire into (or read the
     // transcript of) the session that's about to start.
@@ -2332,6 +2361,10 @@ export function App(): JSX.Element {
     // live stop used to skip and leave Notes empty when only Métis Local was ready.
     const canSummarize =
       !!settings?.providerReady || !!settings?.localSummaryReady || !!settings?.localFallbackReady
+    const spans = writeupSpansRef.current
+    const markSaved = (path: string | null): void => {
+      if (path) spans.mark('stop_to_transcript_saved')
+    }
     if (!canSummarize) {
       setRecapSkipped(true)
       ask.clear()
@@ -2341,9 +2374,13 @@ export function App(): JSX.Element {
       // it silently kept a meeting the user threw away. Idempotent via savedRef (which the live saver pins),
       // so the later leave-Review rescue won't double-save. (Matches the onboarding promise that
       // transcripts are saved either way.)
-      void saveLiveMeetingNowRef.current?.(listen.lines, meetingStartRef.current, '')
+      void saveLiveMeetingNowRef.current?.(listen.lines, meetingStartRef.current, '')?.then(markSaved)
       return
     }
+    // M2-0430: the transcript is saved the moment the drain completes, BEFORE the recap is requested, so
+    // History shows the meeting without waiting on a model. The same live saver as the keyless branch pins
+    // savedPath, which turns the recap's terminal write in the auto-save effect into an update of this file.
+    void saveLiveMeetingNowRef.current?.(listen.lines, meetingStartRef.current, '')?.then(markSaved)
     setRecapSkipped(false)
     // Prefer mode:'summary' (base tier, local-eligible) when Métis Local should win — live stop used to
     // always fire mode:'recap' (think tier, out of local scope), so Routing mode → Local / Local summaries
@@ -2407,7 +2444,10 @@ export function App(): JSX.Element {
     // MQA-285: recap/write must not block the Stop click. Warm the on-device sidecar in the background
     // with the transcript we have now so drain + recap do not pay a cold model load. listen.stop() is
     // itself a sync kickoff (drain is async); never await it here.
-    void window.toto.localPrewarm(listen.text().trim().slice(-6000) || 'warm')
+    // M2-0430: warm the SUMMARY slot with the recap's own prefix (the meeting from its start), so the
+    // recap after the drain reuses it; 80,000 chars is the local summary transcript cap.
+    writeupSpansRef.current.stop()
+    void window.toto.localPrewarm(listen.text().trim().slice(0, 80_000) || 'warm', 'summary')
     listen.stop()
     setView('review')
     setCollapsed(false)
@@ -2995,7 +3035,8 @@ export function App(): JSX.Element {
   }, [])
 
   // Open a saved meeting from History as a read-only recap (Cluely recap detail) via the recall:read IPC.
-  const openPastMeeting = useCallback(async (file: string) => {
+  // A caller that shows the failure itself (a History row's explicit download) passes `reportError`.
+  const openPastMeeting = useCallback(async (file: string, reportError?: (message: string) => void) => {
     setOpenMeetingError(null)
     followup.clear() // the viewed meeting is about to change — a stale draft from whatever was reviewed
     // before must never carry over and render/send as THIS meeting's follow-up (see followup's own
@@ -3004,7 +3045,8 @@ export function App(): JSX.Element {
     if (!r.ok) {
       // recallRead already returns an exact, actionable message (not found / undecryptable on this
       // device / invalid name) — surface it instead of leaving the click looking completely dead.
-      setOpenMeetingError(r.error || 'Could not open that meeting.')
+      if (reportError) reportError(r.error || 'Could not open that meeting.')
+      else setOpenMeetingError(r.error || 'Could not open that meeting.')
       return
     }
     setOpenMeetingError(null)
@@ -3072,6 +3114,12 @@ export function App(): JSX.Element {
         setView(listen.listening ? 'copilot' : 'answer')
         setCollapsed(false)
         setFocusSignal((x) => x + 1)
+        // A summoned right-edge dock opens at once with the composer focused, even after an explicit Hide.
+        if (rightEdgePresentation) {
+          rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'explicit-reveal' })
+          setRightEdgeDockDismissed(false)
+          dispatchAutoHide({ type: 'reveal-now' })
+        }
       })
     } else if (a === 'hide') {
       // toggle(), not hide(): Desk Tap Control is the only caller that reaches this branch (the keyboard
@@ -3191,6 +3239,9 @@ export function App(): JSX.Element {
       setView('answer')
     } else if (!collapsed) {
       setCollapsed(true)
+    } else if (rightEdgePresentation) {
+      // A hidden right-edge window would reopen from the band; park it like the dock's Hide control.
+      closeRightEdgeDock()
     } else {
       void window.toto.hide()
     }
@@ -3976,53 +4027,20 @@ export function App(): JSX.Element {
             orbStyle={overlayOrbStyle}
           />
         </div>
-      ) : overlayPeeked ? (
-        rightEdgeDockVisible ? (
-          <RightEdgeSidecar
-            open={false}
-            onOpen={revealOverlay}
-            onClose={closeRightEdgeDock}
-            canClose={overlayIdle && !autoHideForced}
-            commandState={commandState}
-            value={input}
-            onChange={setInput}
-            onSubmit={submit}
-            onStop={onStop}
-            busy={capturing || ask.answer?.streaming === true || suggest.answer?.streaming === true}
-            stoppable={ask.answer?.streaming === true || suggest.answer?.streaming === true}
-            body={barBody}
-            listening={listen.listening}
-            paused={listen.paused}
-            startedAt={meetingStartRef.current}
-            pausedMs={meetingPauseRef.current.pausedMs}
-            pausedAt={meetingPauseRef.current.pausedAt}
-            onToggleListen={toggleListen}
-            onTogglePause={onTogglePause}
-            onTranscript={toggleTranscript}
-            transcriptShown={view === 'copilot' && !collapsed && transcriptShown}
-            capturing={capturing}
-            onCapture={capture}
-            onOpenIntelligence={openIntelligenceDashboard}
-            onSpotlightRef={spotlightRef}
-            spotlightReady={spotlightRefReady}
-            onHistory={onBarHistory}
-            liveNotice={listen.error}
-            onSettings={onBarSettings}
-          />
-        ) : (
+      ) : overlayPeeked && !rightEdgeDockVisible ? (
         // Hide: 8×2 hairline (cursor watch is the sensor). Island: visible peek (hug-width).
         <OverlayPeek
           rest={overlayRestsHidden(overlayLayout) ? 'hide' : 'island'}
           onReveal={revealOverlay}
           stealth={settings?.contentProtection ?? true}
         />
-        )
       ) : (
         <>
           {/* Hide/Island: overlay-spring. Bar Circle/Jarvis: circle-rest-spring only. */}
           <div
             className={[
               overlayIdle ? overlaySpringClassName(overlaySpring, rightEdgePresentation ? 'right' : 'top') : circleRestSpringClassName(circleRestSpring),
+              overlayIdle && !rightEdgePresentation ? overlayHideParkedClassName(overlaySpring, overlaySurfaceRevealed, overlayRestsHidden(overlayLayout)) : '',
               // The drawer's own position is absolute. Keep this animation host full-height too so
               // percentage heights resolve to the 360×560 native sidecar rather than its empty flow box.
               rightEdgeDockVisible ? 'h-full' : ''
@@ -4041,12 +4059,14 @@ export function App(): JSX.Element {
               if (circleRestSpring === 'collapse') commitCircleRestMinimize()
             }}
           >
+          {/* One dock element in one tree position, parked or revealed: flipping `open` never re-mounts it. */}
           {rightEdgeDockVisible ? (
             <RightEdgeSidecar
-              open={true}
+              open={!overlayPeeked}
               onOpen={revealOverlay}
               onClose={closeRightEdgeDock}
-              canClose={overlayIdle && !autoHideForced}
+              canClose={rightEdgeDockVisible}
+              focusSignal={focusSignal}
               commandState={commandState}
               value={input}
               onChange={setInput}
@@ -4131,174 +4151,179 @@ export function App(): JSX.Element {
             focusSignal={focusSignal}
           />}
           </div>
-          {/* Quick actions render as their own row UNDER the whole bar (including its toolbar), only
-              while a meeting is actively being listened to — clean bar with nothing under it at launch
-              and after a meeting ends (Review screen), per Tony's ask. */}
-          {showWideMeetingChrome && (
-            <QuickActions
-              onAction={onQuickAction}
-              rainbowRing={settings?.quickActionsRainbow !== false}
-              providerReady={settings?.providerReady ?? false}
-              localSummaryReady={settings?.localSummaryReady ?? false}
-              localSuggestReady={settings?.localSuggestReady ?? false}
-              localFallbackReady={settings?.localFallbackReady ?? false}
-            />
+          {/* The parked right-edge window is its rail: nothing but the dock above renders in it. */}
+          {overlayPeeked ? null : (
+            <>
+              {/* Quick actions render as their own row UNDER the whole bar (including its toolbar), only
+                  while a meeting is actively being listened to — clean bar with nothing under it at launch
+                  and after a meeting ends (Review screen), per Tony's ask. */}
+              {showWideMeetingChrome && (
+                <QuickActions
+                  onAction={onQuickAction}
+                  rainbowRing={settings?.quickActionsRainbow !== false}
+                  providerReady={settings?.providerReady ?? false}
+                  localSummaryReady={settings?.localSummaryReady ?? false}
+                  localSuggestReady={settings?.localSuggestReady ?? false}
+                  localFallbackReady={settings?.localFallbackReady ?? false}
+                />
+              )}
+              {/* Listen-engine status (offline/reconnecting/crash notes) — shown regardless of which view is
+                  active. Copilot already renders the same `listen.error` text inline among its chips, so skip
+                  it there to avoid showing the same note twice; every other view has no other place for it. */}
+              {showWideMeetingChrome && listen.error && view !== 'copilot' && (
+                <div title={listen.error ?? undefined} className="fade-up rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-1.5 text-[11px] leading-snug text-[var(--color-danger)] line-clamp-2">
+                  {listen.error}
+                </div>
+              )}
+              {/* Opening a past meeting failed (recallRead ok:false) — shown regardless of view, since the
+                  click that triggered it can come from History, Settings' Mantu Intelligence list, or Review's
+                  own Recent-meetings/Related panel. Dismissible since it's a one-off, not a recurring status. */}
+              {openMeetingError && (
+                <div className="fade-up flex items-center justify-between gap-2 rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-1.5 text-[11px] leading-snug text-[var(--color-danger)]">
+                  <span className="line-clamp-2">{openMeetingError}</span>
+                  <button
+                    type="button"
+                    onClick={() => setOpenMeetingError(null)}
+                    className="no-drag shrink-0 opacity-70 hover:opacity-100"
+                    aria-label="Dismiss"
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
+              {/* Writing a generated recap back to its .md was refused. The text itself is still on screen
+                  (recapGenTarget stays set), but it exists nowhere else — say so while the user can still act
+                  on it, instead of letting them navigate away and lose it. */}
+              {recapSaveError && (
+                <div className="fade-up flex items-center justify-between gap-2 rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-1.5 text-[11px] leading-snug text-[var(--color-danger)]">
+                  <span className="line-clamp-2">Couldn’t save this summary: {recapSaveError}</span>
+                  <button
+                    type="button"
+                    onClick={() => setRecapSaveError(null)}
+                    className="no-drag shrink-0 opacity-70 hover:opacity-100"
+                    aria-label="Dismiss"
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
+              {/* Desk Tap Control is calibrated but won't arm on this microphone. Not dismissible: it isn't a
+                  one-off event, it's a standing state that lasts until the user recalibrates. */}
+              {tapMismatch && view !== 'settings' && (
+                <div className="fade-up rounded-xl border border-[var(--color-warn)]/30 bg-[var(--color-warn)]/10 px-3 py-1.5 text-[11px] leading-snug text-[color:var(--color-warn)]">
+                  Desk Tap Control is paused. It was calibrated on a different microphone. Recalibrate it in
+                  Settings → Audio.
+                </div>
+              )}
+              {/* MQA-053 / MQA-059: the ACTIVE provider's credential stopped working and cross-provider
+                  failover absorbed it, so the ask still returned a normal-looking answer. providerReady is
+                  derived from "a key string exists", never from whether that key works, so the CTA below
+                  cannot fire — and Settings goes on showing this provider as active with a key saved. Without
+                  this the degradation is permanent and silent: every later ask runs on a different vendor,
+                  at a different cost, over a different data path, and the user is never given the one fact
+                  that would let them fix it. Scoped to reasons the user must ACT on (a rejected credential,
+                  spent credit); a 60s rate limit or a session cap that resets itself is what "Backups &
+                  limits" already promises to ride out automatically, and nagging about those would train the
+                  user to ignore this. Not dismissible — it is a standing state, not an event, and it clears
+                  itself the moment that provider answers again or its key is changed. */}
+              {settings && view !== 'settings' && !showListeningChrome && (() => {
+                const dead = (settings.unhealthyProviders ?? []).find(
+                  (u) => u.provider === settings.provider && (u.reason === 'auth' || u.reason === 'quota-exhausted')
+                )
+                if (!dead) return null
+                const label = PROVIDERS[settings.provider]?.label ?? settings.provider
+                const isCli = PROVIDERS[settings.provider]?.kind === 'cli'
+                const what =
+                  dead.reason === 'quota-exhausted'
+                    ? `${label} is out of credit`
+                    : isCli
+                      ? `Your ${label} session was rejected`
+                      : `Your ${label} key was rejected`
+                const remedy = dead.reason === 'quota-exhausted' ? 'Top it up or switch provider' : isCli ? 'Reconnect it' : 'Update it'
+                return (
+                  <button
+                    type="button"
+                    onClick={() => openSettings('ai', `${what}. Métis is answering with another provider meanwhile.`)}
+                    className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[var(--color-warn)]/30 bg-[var(--color-warn)]/10 px-3 py-1.5 text-[11px] font-medium text-[color:var(--color-warn)]"
+                  >
+                    {what}. Métis is using another provider. {remedy} in Settings → AI.
+                  </button>
+                )
+              })()}
+              {/* Wave 2 — one-shot failover chip (docs/PROVIDER-ROUTING-POLICY.md). Distinct from the standing
+                  dead-key banner above: this is an EVENT (primary hopped once), dismissible, and clears via
+                  dismissFailoverNotice so it never nags every poll. */}
+              {settings?.lastFailover &&
+                settings.lastFailover.at > failoverDismissedAt &&
+                view !== 'settings' &&
+                !showListeningChrome &&
+                (() => {
+                const hop = settings.lastFailover!
+                const fromLabel = PROVIDERS[hop.from as keyof typeof PROVIDERS]?.label ?? hop.from
+                const toLabel = PROVIDERS[hop.to as keyof typeof PROVIDERS]?.label ?? hop.to
+                return (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFailoverDismissedAt(hop.at)
+                      void window.toto.dismissFailoverNotice().then(() => refresh()).catch(() => {})
+                    }}
+                    className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-white/15 bg-white/[0.06] px-3 py-1.5 text-[11px] font-medium text-[color:var(--color-ink-2)]"
+                  >
+                    Switched from {fromLabel} to {toLabel}
+                    {hop.reason === 'exhausted' ? ' (quota)' : ''}. Tap to dismiss.
+                  </button>
+                )
+              })()}
+              {/* Suppressed once the on-device safety net can answer: this CTA asks for an API key, and a user
+                  running Métis Local with no cloud provider does not need one — that install is finished, not
+                  half-configured. Telling them to "Add your Cloudflare API key" while the local model answers
+                  every question is the app contradicting itself. Same flag the requireProvider gate reads. */}
+              {settings && !rightEdgeDockVisible && !settings.providerReady && !settings.localFallbackReady && !nudgeExpired && view !== 'settings' && !showListeningChrome && (() => {
+                const activeDef = PROVIDERS[settings.provider]
+                // MQA-216: same three cases as requireProvider above, in the same order. Reading a saved key
+                // as proof of an org policy made the CTA tell a Cloudflare user to "switch to an approved
+                // provider" when all they were missing was the Worker URL their operator sends separately.
+                const blockedByOrg = !!settings.allowedProviders && !settings.allowedProviders.includes(settings.provider)
+                const needsEndpoint =
+                  requiresUserBaseUrl(settings.provider) && !providerBaseUrl(settings.provider, settings).trim()
+                const cta = activeDef.kind === 'cli'
+                  ? `Connect ${activeDef.label} in Settings`
+                  : blockedByOrg
+                    ? 'Switch to an approved provider'
+                    : needsEndpoint
+                      ? `Add your ${activeDef.label} endpoint URL`
+                      : `Add your ${activeDef.label} API key`
+                const notice = blockedByOrg
+                  ? "Your organization restricts which providers you can use. Switch to an approved provider here."
+                  : needsEndpoint
+                    ? `No endpoint URL set for ${activeDef.label}. Open Settings → Advanced and add it.`
+                    : 'Add an API key or connect a provider here to ask questions.'
+                return (
+                  <button
+                    type="button"
+                    onClick={() => openSettings('ai', notice)}
+                    className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[var(--color-accent)]/30 bg-[var(--color-accent)] px-3 py-1.5 text-[11px] font-medium text-white hover:brightness-110"
+                  >
+                    {cta}
+                  </button>
+                )
+              })()}
+              {isPanelBody && panelOpen &&
+                (overlayShowsSettingsSheet(view === 'settings' || DEMO === 'settings' ? 'settings' : view, minimized) ? (
+                  // Settings is its own self-contained panel — render directly under the bar (bar stays on top).
+                  <Suspense fallback={<div className="cl-root flex min-h-0 flex-1 rounded-2xl p-6"><AgentStatus kind="loading" size="hero" /></div>}>
+                    <div className="flex min-h-0 flex-1 flex-col">{body}</div>
+                  </Suspense>
+                ) : (
+                  <Panel>
+                    <Suspense fallback={<div className="p-4"><AgentStatus kind="loading" size="hero" /></div>}>
+                      {body}
+                    </Suspense>
+                  </Panel>
+                ))}
+            </>
           )}
-          {/* Listen-engine status (offline/reconnecting/crash notes) — shown regardless of which view is
-              active. Copilot already renders the same `listen.error` text inline among its chips, so skip
-              it there to avoid showing the same note twice; every other view has no other place for it. */}
-          {showWideMeetingChrome && listen.error && view !== 'copilot' && (
-            <div title={listen.error ?? undefined} className="fade-up rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-1.5 text-[11px] leading-snug text-[var(--color-danger)] line-clamp-2">
-              {listen.error}
-            </div>
-          )}
-          {/* Opening a past meeting failed (recallRead ok:false) — shown regardless of view, since the
-              click that triggered it can come from History, Settings' Mantu Intelligence list, or Review's
-              own Recent-meetings/Related panel. Dismissible since it's a one-off, not a recurring status. */}
-          {openMeetingError && (
-            <div className="fade-up flex items-center justify-between gap-2 rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-1.5 text-[11px] leading-snug text-[var(--color-danger)]">
-              <span className="line-clamp-2">{openMeetingError}</span>
-              <button
-                type="button"
-                onClick={() => setOpenMeetingError(null)}
-                className="no-drag shrink-0 opacity-70 hover:opacity-100"
-                aria-label="Dismiss"
-              >
-                ×
-              </button>
-            </div>
-          )}
-          {/* Writing a generated recap back to its .md was refused. The text itself is still on screen
-              (recapGenTarget stays set), but it exists nowhere else — say so while the user can still act
-              on it, instead of letting them navigate away and lose it. */}
-          {recapSaveError && (
-            <div className="fade-up flex items-center justify-between gap-2 rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-1.5 text-[11px] leading-snug text-[var(--color-danger)]">
-              <span className="line-clamp-2">Couldn’t save this summary: {recapSaveError}</span>
-              <button
-                type="button"
-                onClick={() => setRecapSaveError(null)}
-                className="no-drag shrink-0 opacity-70 hover:opacity-100"
-                aria-label="Dismiss"
-              >
-                ×
-              </button>
-            </div>
-          )}
-          {/* Desk Tap Control is calibrated but won't arm on this microphone. Not dismissible: it isn't a
-              one-off event, it's a standing state that lasts until the user recalibrates. */}
-          {tapMismatch && view !== 'settings' && (
-            <div className="fade-up rounded-xl border border-[var(--color-warn,#fac775)]/30 bg-[var(--color-warn,#fac775)]/10 px-3 py-1.5 text-[11px] leading-snug text-[color:var(--color-warn,#fac775)]">
-              Desk Tap Control is paused. It was calibrated on a different microphone. Recalibrate it in
-              Settings → Audio.
-            </div>
-          )}
-          {/* MQA-053 / MQA-059: the ACTIVE provider's credential stopped working and cross-provider
-              failover absorbed it, so the ask still returned a normal-looking answer. providerReady is
-              derived from "a key string exists", never from whether that key works, so the CTA below
-              cannot fire — and Settings goes on showing this provider as active with a key saved. Without
-              this the degradation is permanent and silent: every later ask runs on a different vendor,
-              at a different cost, over a different data path, and the user is never given the one fact
-              that would let them fix it. Scoped to reasons the user must ACT on (a rejected credential,
-              spent credit); a 60s rate limit or a session cap that resets itself is what "Backups &
-              limits" already promises to ride out automatically, and nagging about those would train the
-              user to ignore this. Not dismissible — it is a standing state, not an event, and it clears
-              itself the moment that provider answers again or its key is changed. */}
-          {settings && view !== 'settings' && !showListeningChrome && (() => {
-            const dead = (settings.unhealthyProviders ?? []).find(
-              (u) => u.provider === settings.provider && (u.reason === 'auth' || u.reason === 'quota-exhausted')
-            )
-            if (!dead) return null
-            const label = PROVIDERS[settings.provider]?.label ?? settings.provider
-            const isCli = PROVIDERS[settings.provider]?.kind === 'cli'
-            const what =
-              dead.reason === 'quota-exhausted'
-                ? `${label} is out of credit`
-                : isCli
-                  ? `Your ${label} session was rejected`
-                  : `Your ${label} key was rejected`
-            const remedy = dead.reason === 'quota-exhausted' ? 'Top it up or switch provider' : isCli ? 'Reconnect it' : 'Update it'
-            return (
-              <button
-                type="button"
-                onClick={() => openSettings('ai', `${what}. Métis is answering with another provider meanwhile.`)}
-                className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[var(--color-warn,#fac775)]/30 bg-[var(--color-warn,#fac775)]/10 px-3 py-1.5 text-[11px] font-medium text-[color:var(--color-warn,#fac775)]"
-              >
-                {what}. Métis is using another provider. {remedy} in Settings → AI.
-              </button>
-            )
-          })()}
-          {/* Wave 2 — one-shot failover chip (docs/PROVIDER-ROUTING-POLICY.md). Distinct from the standing
-              dead-key banner above: this is an EVENT (primary hopped once), dismissible, and clears via
-              dismissFailoverNotice so it never nags every poll. */}
-          {settings?.lastFailover &&
-            settings.lastFailover.at > failoverDismissedAt &&
-            view !== 'settings' &&
-            !showListeningChrome &&
-            (() => {
-            const hop = settings.lastFailover!
-            const fromLabel = PROVIDERS[hop.from as keyof typeof PROVIDERS]?.label ?? hop.from
-            const toLabel = PROVIDERS[hop.to as keyof typeof PROVIDERS]?.label ?? hop.to
-            return (
-              <button
-                type="button"
-                onClick={() => {
-                  setFailoverDismissedAt(hop.at)
-                  void window.toto.dismissFailoverNotice().then(() => refresh()).catch(() => {})
-                }}
-                className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-white/15 bg-white/[0.06] px-3 py-1.5 text-[11px] font-medium text-[color:var(--color-ink-2)]"
-              >
-                Switched from {fromLabel} to {toLabel}
-                {hop.reason === 'exhausted' ? ' (quota)' : ''}. Tap to dismiss.
-              </button>
-            )
-          })()}
-          {/* Suppressed once the on-device safety net can answer: this CTA asks for an API key, and a user
-              running Métis Local with no cloud provider does not need one — that install is finished, not
-              half-configured. Telling them to "Add your Cloudflare API key" while the local model answers
-              every question is the app contradicting itself. Same flag the requireProvider gate reads. */}
-          {settings && !rightEdgeDockVisible && !settings.providerReady && !settings.localFallbackReady && !nudgeExpired && view !== 'settings' && !showListeningChrome && (() => {
-            const activeDef = PROVIDERS[settings.provider]
-            // MQA-216: same three cases as requireProvider above, in the same order. Reading a saved key
-            // as proof of an org policy made the CTA tell a Cloudflare user to "switch to an approved
-            // provider" when all they were missing was the Worker URL their operator sends separately.
-            const blockedByOrg = !!settings.allowedProviders && !settings.allowedProviders.includes(settings.provider)
-            const needsEndpoint =
-              requiresUserBaseUrl(settings.provider) && !providerBaseUrl(settings.provider, settings).trim()
-            const cta = activeDef.kind === 'cli'
-              ? `Connect ${activeDef.label} in Settings`
-              : blockedByOrg
-                ? 'Switch to an approved provider'
-                : needsEndpoint
-                  ? `Add your ${activeDef.label} endpoint URL`
-                  : `Add your ${activeDef.label} API key`
-            const notice = blockedByOrg
-              ? "Your organization restricts which providers you can use. Switch to an approved provider here."
-              : needsEndpoint
-                ? `No endpoint URL set for ${activeDef.label}. Open Settings → Advanced and add it.`
-                : 'Add an API key or connect a provider here to ask questions.'
-            return (
-              <button
-                type="button"
-                onClick={() => openSettings('ai', notice)}
-                className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[var(--color-accent)]/30 bg-[var(--color-accent)] px-3 py-1.5 text-[11px] font-medium text-white hover:brightness-110"
-              >
-                {cta}
-              </button>
-            )
-          })()}
-          {isPanelBody && panelOpen &&
-            (overlayShowsSettingsSheet(view === 'settings' || DEMO === 'settings' ? 'settings' : view, minimized) ? (
-              // Settings is its own self-contained panel — render directly under the bar (bar stays on top).
-              <Suspense fallback={<div className="cl-root flex min-h-0 flex-1 rounded-2xl p-6"><AgentStatus kind="loading" size="hero" /></div>}>
-                <div className="flex min-h-0 flex-1 flex-col">{body}</div>
-              </Suspense>
-            ) : (
-              <Panel>
-                <Suspense fallback={<div className="p-4"><AgentStatus kind="loading" size="hero" /></div>}>
-                  {body}
-                </Suspense>
-              </Panel>
-            ))}
         </>
       )}
     </div>

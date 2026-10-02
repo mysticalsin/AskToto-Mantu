@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readAppCss } from '../../../scripts/lib/read-app-css.mjs'
 import { describe, expect, it } from 'vitest'
 
 /**
@@ -24,7 +25,7 @@ import { describe, expect, it } from 'vitest'
 const read = (...p: string[]): string =>
   readFileSync(join(__dirname, ...p), 'utf8').replace(/\r\n/g, '\n')
 
-const css = read('styles.css')
+const css = readAppCss()
 const barSrc = read('components', 'Bar.tsx')
 const appSrc = read('App.tsx')
 

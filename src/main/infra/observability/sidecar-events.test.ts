@@ -46,6 +46,40 @@ describe('observeSidecar', () => {
     expect(audit).toHaveBeenCalledWith('sidecar.spawn', { name: 'llama-server', pid: 4242, pgid: null })
   })
 
+  it('M2-0422: an async resolver defers the spawn audit and never blocks observeSidecar', async () => {
+    const audit = vi.fn()
+    let resolve!: (pgid: number) => void
+    observeSidecar('llama-server', child(4242), audit, undefined, () => new Promise<number>((r) => (resolve = r)))
+
+    expect(audit).not.toHaveBeenCalled()
+    resolve(5151)
+    await Promise.resolve()
+
+    expect(audit).toHaveBeenCalledWith('sidecar.spawn', { name: 'llama-server', pid: 4242, pgid: 5151 })
+  })
+
+  it('M2-0422: an exit that lands before the pgid resolves is audited after the spawn, with the same pgid', async () => {
+    const audit = vi.fn()
+    const proc = child(4242)
+    let resolve!: (pgid: number) => void
+    observeSidecar('fm-serve', proc, audit, undefined, () => new Promise<number>((r) => (resolve = r)))
+
+    proc.exit(1, null)
+    resolve(5151)
+    await new Promise((r) => setImmediate(r))
+
+    expect(audit.mock.calls.map((c) => c[0])).toEqual(['sidecar.spawn', 'sidecar.exit'])
+    expect(audit).toHaveBeenLastCalledWith('sidecar.exit', expect.objectContaining({ pid: 4242, pgid: 5151, code: 1 }))
+  })
+
+  it('M2-0422: a rejected resolver audits a null pgid instead of dropping the spawn', async () => {
+    const audit = vi.fn()
+    observeSidecar('llama-server', child(4242), audit, undefined, () => Promise.reject(new Error('ps failed')))
+    await new Promise((r) => setImmediate(r))
+
+    expect(audit).toHaveBeenCalledWith('sidecar.spawn', { name: 'llama-server', pid: 4242, pgid: null })
+  })
+
   it('emits nothing when the process has no pid', () => {
     const audit = vi.fn()
     observeSidecar('llama-server', child(undefined), audit)

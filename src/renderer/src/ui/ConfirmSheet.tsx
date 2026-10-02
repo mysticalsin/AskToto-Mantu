@@ -20,7 +20,7 @@ export function ConfirmSheet({
         className="glass-strong relative w-full max-w-[420px] rounded-2xl border border-white/15 p-4 shadow-2xl"
       >
         <div className="flex items-start gap-3">
-          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--color-warn,#fac775)]/14 text-[color:var(--color-warn,#fac775)]">
+          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--color-warn)]/14 text-[color:var(--color-warn)]">
             <AlertTriangle size={18} />
           </div>
           <div className="min-w-0 flex-1">

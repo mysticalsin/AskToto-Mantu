@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_SETTINGS, PublicSettingsSchema, type LocalModelSummary } from '@shared/ipc'
-import { LocalAiSection } from './Settings'
+import { AppleEngineNotice, LocalAiSection } from './Settings'
 
 const view = vi.hoisted(() => ({ models: null as LocalModelSummary[] | null }))
 // Render the real card at the IPC boundary. Effects/network are outside this copy-and-controls test;
@@ -94,5 +94,23 @@ describe('Speaker identification in Local AI', () => {
 
   it('hides Save voiceprints while speaker identification is off', () => {
     expect(renderWithSpeakerId({ enabled: false, saveVoiceprints: true })).not.toContain('Save voiceprints')
+  })
+})
+
+describe('M2-0430: Apple Foundation Models licence notice', () => {
+  it('tells the owner how to enable Apple\'s model when the CLI licence has not been accepted', () => {
+    const html = renderToStaticMarkup(<AppleEngineNotice status="unlicensed" />)
+    expect(html).toContain('<code>sudo fm license</code>')
+    expect(html).toContain('license acceptance')
+    expect(html).toContain('restart Métis')
+  })
+
+  it.each(['available', 'unsupported', 'disabled', 'unavailable'] as const)('renders nothing when the engine is %s', (status) => {
+    expect(renderToStaticMarkup(<AppleEngineNotice status={status} />)).toBe('')
+  })
+
+  it('the Local AI card renders no notice before the status arrives', () => {
+    view.models = [bundled]
+    expect(renderToStaticMarkup(<LocalAiSection settings={publicSettingsWith({})} patch={() => {}} />)).not.toContain('fm license')
   })
 })

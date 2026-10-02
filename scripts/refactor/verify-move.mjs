@@ -67,7 +67,7 @@ export function verifyPureMove({ entries, readAtRevision }) {
   const removedFiles = []
   const addedFiles = []
   const modifiedProblems = []
-  const orderProblems = []
+  const modifiedPaths = []
   const unsupported = []
 
   const addTokens = (target, tokens) => {
@@ -99,40 +99,17 @@ export function verifyPureMove({ entries, readAtRevision }) {
       recordRemoved(entry.oldPath, readAtRevision('base', entry.oldPath))
       recordAdded(entry.newPath, readAtRevision('head', entry.newPath))
     } else if (entry.code === 'M') {
-      const before = normalizeImportPaths(readAtRevision('base', entry.path))
-      const after = normalizeImportPaths(readAtRevision('head', entry.path))
-      if (before !== after) modifiedProblems.push(entry.path)
+      modifiedPaths.push(entry.path)
     } else {
       unsupported.push(entry.status)
     }
   }
 
-  const usedAddedIndexes = new Set()
-  for (const removedFile of removedFiles) {
-    const exactIndex = addedFiles.findIndex((addedFile, index) => {
-      return !usedAddedIndexes.has(index) && sameTokenSequence(removedFile.tokens, addedFile.tokens)
-    })
-    if (exactIndex >= 0) {
-      usedAddedIndexes.add(exactIndex)
-      continue
-    }
-
-    const reorderedIndex = addedFiles.findIndex((addedFile, index) => {
-      return !usedAddedIndexes.has(index) && sameTokenMultiset(removedFile.tokens, addedFile.tokens)
-    })
-    if (reorderedIndex >= 0) {
-      usedAddedIndexes.add(reorderedIndex)
-      orderProblems.push({
-        removedPath: removedFile.path,
-        addedPath: addedFiles[reorderedIndex].path
-      })
-      continue
-    }
-
-    orderProblems.push({
-      removedPath: removedFile.path,
-      addedPath: null
-    })
+  const { pairs, orderProblems } = matchMoves(removedFiles, addedFiles)
+  for (const path of modifiedPaths) {
+    const before = normalizeImportPaths(readAtRevision('base', path))
+    const after = normalizeImportPaths(readAtRevision('head', path))
+    if (before !== after && rewriteMovedPathLiterals(before, pairs) !== after) modifiedProblems.push(path)
   }
 
   const tokenProblems = compareMultisets(removed, added)
@@ -143,6 +120,71 @@ export function verifyPureMove({ entries, readAtRevision }) {
     unsupported,
     tokenProblems
   }
+}
+
+// Pairs each removed file with an added file holding the same token sequence. A same-multiset, different-order
+// file is an order problem, and a removal with no counterpart is one with addedPath null.
+function matchMoves(removedFiles, addedFiles) {
+  const pairs = []
+  const orderProblems = []
+  const usedAddedIndexes = new Set()
+  for (const removedFile of removedFiles) {
+    const exactIndex = addedFiles.findIndex((addedFile, index) => {
+      return !usedAddedIndexes.has(index) && sameTokenSequence(removedFile.tokens, addedFile.tokens)
+    })
+    if (exactIndex >= 0) {
+      usedAddedIndexes.add(exactIndex)
+      pairs.push({ oldPath: removedFile.path, newPath: addedFiles[exactIndex].path, tokens: removedFile.tokens.length })
+      continue
+    }
+
+    const reorderedIndex = addedFiles.findIndex((addedFile, index) => {
+      return !usedAddedIndexes.has(index) && sameTokenMultiset(removedFile.tokens, addedFile.tokens)
+    })
+    if (reorderedIndex >= 0) {
+      usedAddedIndexes.add(reorderedIndex)
+      orderProblems.push({ removedPath: removedFile.path, addedPath: addedFiles[reorderedIndex].path })
+      continue
+    }
+
+    orderProblems.push({ removedPath: removedFile.path, addedPath: null })
+  }
+  return { pairs, orderProblems }
+}
+
+// Files the diff relocated unchanged (modulo import paths and comments) with their token counts. check-pr-kind
+// uses it so a behaviour-change PR cannot carry a large move past the pure-move gate.
+export function findMovedFiles({ entries, readAtRevision }) {
+  const removedFiles = []
+  const addedFiles = []
+  const tokensOf = (side, path) => normalizedTokenSequence(readAtRevision(side, path))
+  for (const entry of entries) {
+    if (entry.code === 'A') addedFiles.push({ path: entry.path, tokens: tokensOf('head', entry.path) })
+    else if (entry.code === 'D') removedFiles.push({ path: entry.path, tokens: tokensOf('base', entry.path) })
+    else if (entry.code === 'R') {
+      removedFiles.push({ path: entry.oldPath, tokens: tokensOf('base', entry.oldPath) })
+      addedFiles.push({ path: entry.newPath, tokens: tokensOf('head', entry.newPath) })
+    }
+  }
+  return matchMoves(removedFiles, addedFiles).pairs
+}
+
+// Tests name source paths as string literals. Rewriting exactly a moved file's old path literal (with or without
+// its extension) to its new path is the only literal change a pure move may make to a modified file.
+export function rewriteMovedPathLiterals(source, pairs) {
+  let rewritten = source
+  for (const { oldPath, newPath } of pairs) {
+    for (const [from, to] of [[oldPath, newPath], [stripExtension(oldPath), stripExtension(newPath)]]) {
+      for (const quote of ['"', "'", '`']) {
+        rewritten = rewritten.split(`${quote}${from}${quote}`).join(`${quote}${to}${quote}`)
+      }
+    }
+  }
+  return rewritten
+}
+
+function stripExtension(path) {
+  return path.replace(/\.[cm]?[jt]sx?$/, '')
 }
 
 function sameTokenSequence(left, right) {

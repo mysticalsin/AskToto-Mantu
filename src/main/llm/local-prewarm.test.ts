@@ -397,3 +397,25 @@ describe('MQA-270 (B8) — the free-RAM floor on unattended warms', () => {
     expect(PREWARM_MIN_FREE_RAM_GB).toBe(4)
   })
 })
+
+describe('M2-0430 — the Stop-time summary warm', () => {
+  it('the payload schema carries the whole meeting (up to the 80,000-char local summary cap) only for purpose summary', () => {
+    expect(LocalPrewarmPayloadSchema.safeParse({ text: 'a'.repeat(80_000), purpose: 'summary' }).success).toBe(true)
+    expect(LocalPrewarmPayloadSchema.safeParse({ text: 'a'.repeat(80_001), purpose: 'summary' }).success).toBe(false)
+    expect(LocalPrewarmPayloadSchema.safeParse({ text: 'a'.repeat(24_001), purpose: 'suggest' }).success).toBe(false)
+    expect(LocalPrewarmPayloadSchema.safeParse({ text: 'hi', purpose: 'vision' }).success).toBe(false)
+  })
+
+  it('is eligible whenever Local summaries serve the recap, even with a ready cloud provider and suggest off', () => {
+    const s = settingsFor({ useFor: { suggest: false, summary: true, vision: false }, fallback: false }, NO_HEDGE)
+    expect(localPrewarmEligible(s, null, true, 8, 'summary')).toBe(true)
+    // The suggest warm keeps its own gate for the same profile.
+    expect(localPrewarmEligible(s, null, true, 8)).toBe(false)
+  })
+
+  it('still honours the org allowlist and the available-memory floor', () => {
+    const s = settingsFor({ useFor: { suggest: false, summary: true, vision: false } }, NO_HEDGE)
+    expect(localPrewarmEligible(s, ['anthropic'], true, 8, 'summary')).toBe(false)
+    expect(localPrewarmEligible(s, null, true, PREWARM_MIN_FREE_RAM_GB - 0.1, 'summary')).toBe(false)
+  })
+})

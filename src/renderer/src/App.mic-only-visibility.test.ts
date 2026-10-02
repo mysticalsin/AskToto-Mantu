@@ -8,7 +8,7 @@ const app = readFileSync(join(__dirname, 'App.tsx'), 'utf8').replace(/\r\n/g, '\
 const listen = readFileSync(join(__dirname, 'lib', 'listen.ts'), 'utf8').replace(/\r\n/g, '\n')
 const bar = readFileSync(join(__dirname, 'components', 'Bar.tsx'), 'utf8').replace(/\r\n/g, '\n')
 const pill = readFileSync(join(__dirname, 'components', 'ControlPill.tsx'), 'utf8').replace(/\r\n/g, '\n')
-const settingsUi = readFileSync(join(__dirname, 'components', 'Settings.tsx'), 'utf8').replace(/\r\n/g, '\n')
+const settingsUi = readFileSync(join(__dirname, 'features', 'settings', 'AudioTab.tsx'), 'utf8').replace(/\r\n/g, '\n')
 
 // Tony 2026-07-20: a whole meeting ran with Screen Recording off (15,521 capture.failed audit events).
 // The mic-only soft note only rendered inside the Copilot body — invisible with the panel collapsed or

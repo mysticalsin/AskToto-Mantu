@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { d1Store, type D1DatabaseLike } from './d1'
+import { d1Store } from './d1'
+import { sqliteD1 } from './test-d1'
 import { memoryStore } from './store'
 import type {
   AskRow,
@@ -14,47 +15,6 @@ import type {
   SeatRow,
   TierRow
 } from './store'
-
-/** Real SQLite underneath (node:sqlite, unflagged on Node 22), schema.sql applied verbatim, so these
- *  tests exercise the actual SQL d1.ts sends: dynamic WHERE/JOIN, keyset cursors, ON CONFLICT. */
-function sqliteD1(db: DatabaseSync): D1DatabaseLike {
-  return {
-    prepare(sql: string) {
-      const stmt = db.prepare(sql)
-      let bound: unknown[] = []
-      const wrapper = {
-        bind(...values: unknown[]) {
-          bound = values
-          return wrapper
-        },
-        async first<T>() {
-          const row = stmt.get(...(bound as never[]))
-          return (row as T) ?? null
-        },
-        async all<T>() {
-          return { results: stmt.all(...(bound as never[])) as T[] }
-        },
-        async run() {
-          const result = stmt.run(...(bound as never[]))
-          return { success: true, meta: { changes: Number(result.changes) } }
-        }
-      }
-      return wrapper
-    },
-    async batch(statements) {
-      db.exec('BEGIN')
-      try {
-        const results = []
-        for (const statement of statements) results.push(await statement.run() as { success: boolean })
-        db.exec('COMMIT')
-        return results
-      } catch (error) {
-        db.exec('ROLLBACK')
-        throw error
-      }
-    }
-  }
-}
 
 function freshDb(): DatabaseSync {
   const db = new DatabaseSync(':memory:')

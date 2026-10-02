@@ -1,0 +1,45 @@
+# Local server-intelligence profile (M2-0119, ADR-014): Postgres with a vector
+# extension plus the pinned Hindsight API. One canonical database, no graph
+# store, no queue broker. Test credentials only; nothing here is deployed.
+#
+# Image references are overridable so CI can pin an exact digest without
+# editing this file: METIS_PGVECTOR_IMAGE, METIS_HINDSIGHT_IMAGE.
+
+name: metis-services
+
+services:
+  postgres:
+    image: ${METIS_PGVECTOR_IMAGE:-pgvector/pgvector:0.8.0-pg16}
+    environment:
+      POSTGRES_USER: metis
+      POSTGRES_PASSWORD: metis-local-test-only
+      POSTGRES_DB: hindsight
+    ports:
+      - "127.0.0.1:${METIS_PG_PORT:-54329}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U metis -d hindsight"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  hindsight:
+    image: ${METIS_HINDSIGHT_IMAGE:-ghcr.io/vectorize-io/hindsight-api:0.4.0}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      HINDSIGHT_API_DATABASE_URL: postgresql://metis:metis-local-test-only@postgres:5432/hindsight
+      # The mock provider keeps the contract check free of any provider key.
+      HINDSIGHT_API_LLM_PROVIDER: ${METIS_HINDSIGHT_LLM_PROVIDER:-mock}
+      HINDSIGHT_API_HOST: 0.0.0.0
+      HINDSIGHT_API_PORT: "8888"
+    ports:
+      - "127.0.0.1:${METIS_HINDSIGHT_PORT:-8888}:8888"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request as u; u.urlopen('http://127.0.0.1:8888/health', timeout=3)\""]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s

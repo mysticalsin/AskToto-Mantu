@@ -6,6 +6,7 @@
  * transcript, error, and subscriber behavior are the real useListen code.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ScreenDiagnosis } from '@shared/screen-permission'
 import { WHISPER_WORKLET_SRC } from './whisper-worklet-src'
 
 // keys.ts freezes navigator.platform at import time, before beforeEach can stub the browser. Keep
@@ -97,7 +98,7 @@ let streams: Array<{ kind: 'mic' | 'system'; stream: MediaStream; track: FakeTra
 let addModuleImpl: () => Promise<void>
 let getUserMediaImpl: () => Promise<MediaStream>
 let getDisplayMediaImpl: () => Promise<MediaStream>
-let getPermissionsImpl: () => Promise<{ screenRecording?: string }>
+let getPermissionsImpl: () => Promise<{ screenRecording?: string; screenDiagnosis?: ScreenDiagnosis }>
 let mediaDeviceListeners: Partial<Record<string, () => void>> = {}
 
 type FakeTrack = {
@@ -1375,6 +1376,41 @@ describe('useListen Stop flush ownership', () => {
     expect(streams).toHaveLength(streamsBeforePermission)
     expect(worklets).toHaveLength(workletsBeforePermission)
     expect(streams.filter((entry) => entry.kind === 'system')).toHaveLength(0)
+  })
+
+  it('M2-0429: the permission watcher replaces the mic-only note with the diagnosis and offers Repair', async () => {
+    getDisplayMediaImpl = async () => {
+      throw Object.assign(new Error('screen capture denied'), { name: 'NotAllowedError' })
+    }
+    getPermissionsImpl = async () => ({
+      screenRecording: 'denied',
+      screenDiagnosis: {
+        state: 'not-effective',
+        reasons: ['identity-changed'],
+        action: 'repair',
+        duplicates: [],
+        grantedFor: { version: '1.9.6', cdhash: 'b'.repeat(40) },
+        repairFailed: false
+      }
+    })
+
+    let api = render()
+    await api.start('both', 'fast', 'parakeet', 'English')
+    api = render() // refresh the registered permission effect with listening=true
+    expect(api.captureDegraded).toMatchObject({ side: 'them', permission: true })
+    expect(api.captureDegraded?.repair).toBeFalsy()
+    host.rerunEffect(1)
+    await vi.advanceTimersByTimeAsync(3_000)
+    await settle()
+
+    api = render()
+    expect(window.toto.getPermissions).toHaveBeenCalledTimes(1)
+    expect(api.captureDegraded).toMatchObject({ side: 'them', permission: true, repair: true })
+    expect(api.captureDegraded?.note).toContain('belongs to Métis 1.9.6')
+    expect(api.error).toBe(api.captureDegraded?.note)
+    expect(streams.filter((entry) => entry.kind === 'system')).toHaveLength(0)
+    api.stop()
+    await vi.advanceTimersByTimeAsync(1)
   })
 
   it('retries Windows loopback in place without polling macOS Screen Recording permissions', async () => {

@@ -104,6 +104,34 @@ function errorResponse(status: number, message: string): Response {
   return jsonResponse(status, { error: { message, type: 'metis_proxy_error' } })
 }
 
+/** Largest chat body forwarded upstream; matches the Operator's own `/v1/use` and `/v1/ask` cap so a
+ *  screenshot-bearing Ask that fits there fits here, while an unbounded body cannot be buffered. */
+export const PROXY_MAX_BODY_BYTES = 6_000_000
+
+/** Reads the request body, or returns null once it exceeds `PROXY_MAX_BODY_BYTES` (declared or streamed). */
+async function readCappedBody(request: Request): Promise<string | null> {
+  if (Number(request.headers.get('content-length')) > PROXY_MAX_BODY_BYTES) {
+    await request.body?.cancel().catch(() => undefined)
+    return null
+  }
+  if (!request.body) return ''
+  const reader = request.body.getReader()
+  const decoder = new TextDecoder()
+  let text = ''
+  let bytes = 0
+  for (;;) {
+    const chunk = await reader.read()
+    if (chunk.done) break
+    bytes += chunk.value.byteLength
+    if (bytes > PROXY_MAX_BODY_BYTES) {
+      await reader.cancel().catch(() => undefined)
+      return null
+    }
+    text += decoder.decode(chunk.value, { stream: true })
+  }
+  return text + decoder.decode()
+}
+
 /**
  * Marker for failures ONLY THE OPERATOR can fix — a dead account token, a half-deployed Worker.
  *
@@ -388,12 +416,15 @@ export default {
     const gatewayId = env.CF_AI_GATEWAY_ID?.trim()
     if (gatewayId) upstreamHeaders.set('cf-aig-gateway-id', gatewayId)
 
+    const body = await readCappedBody(request)
+    if (body === null) return errorResponse(413, 'Request is too large.')
+
     let upstream: Response
     try {
       upstream = await fetch(upstreamUrl, {
         method: 'POST',
         headers: upstreamHeaders,
-        body: await request.text()
+        body
       })
     } catch {
       // The thrown error is deliberately not read: a fetch failure can stringify the request it was

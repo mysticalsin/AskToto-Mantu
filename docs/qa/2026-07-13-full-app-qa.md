@@ -1,5 +1,8 @@
 # Métis full physical QA ledger
 
+> **Point-in-time report (2026-07-14).** It describes the builds tested that day. Current defects are in
+> [`BUG-LEDGER.md`](BUG-LEDGER.md); the current QA procedure is [`../runbooks/qa.md`](../runbooks/qa.md).
+
 **Date:** 2026-07-14
 
 ## Test boundary

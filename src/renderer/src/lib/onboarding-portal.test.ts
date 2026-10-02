@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ONBOARDING_PORTAL_CLOSE_GAIN,
@@ -19,7 +20,7 @@ import {
 } from './onboarding-portal'
 
 const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
-const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
+const css = readAppCss()
 const portalSrc = readFileSync(join(__dirname, './onboarding-portal.ts'), 'utf8')
 const stageStart = css.indexOf('.onboard-stage {')
 const stageBlock = css.slice(stageStart, css.indexOf('@media (prefers-reduced-motion: reduce)', stageStart))

@@ -1,0 +1,7 @@
+# Workflow, release and security-control changes need the repository owner's review.
+* @mysticalsin
+/.github/ @mysticalsin
+/.gitleaks.toml @mysticalsin
+/scripts/release/ @mysticalsin
+/src/main/ @mysticalsin
+/operator/ @mysticalsin

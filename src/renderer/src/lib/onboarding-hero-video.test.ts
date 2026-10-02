@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
 import { describe, expect, it, vi } from 'vitest'
 import {
   ONBOARDING_HERO_POSTER_SRC,
@@ -11,7 +12,7 @@ import {
 } from './onboarding-hero-video'
 
 const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
-const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
+const css = readAppCss()
 const html = readFileSync(join(__dirname, '../../index.html'), 'utf8')
 
 describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {

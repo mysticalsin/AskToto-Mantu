@@ -156,7 +156,7 @@ The product promise is one sentence: **a licensed person installs Métis and Ask
 Download (Metis-Releases; AskToto-Mantu source is PUBLIC)
         │
         ▼
-Install (dmg / Install Metis.command / NSIS / portable)
+Install (notarized dmg / NSIS / portable)
         │
         ▼
 Onboarding (six acts, skippable; Listen consent is explicit)
