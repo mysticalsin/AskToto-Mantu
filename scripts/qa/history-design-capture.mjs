@@ -100,9 +100,10 @@ const INSTALL_FIXTURE_HANDLERS = `(() => {
   const { ipcMain } = globalThis.__metisReHideElectron
   const C = ${JSON.stringify(IPC_CHANNELS)}
   const error = ${JSON.stringify(DOWNLOAD_ERROR)}
-  const state = (globalThis.__historyDesign = { list: { kind: 'rows', rows: [] }, search: { kind: 'rows', rows: [] }, read: 'hydrating', requests: 0 })
+  const state = (globalThis.__historyDesign = { list: { kind: 'rows', rows: [] }, search: { kind: 'rows', rows: [] }, read: 'hydrating', requests: 0, requestedAt: 0 })
   const answer = (spec) => {
     state.requests++
+    state.requestedAt = Date.now()
     if (spec.kind === 'pending') return new Promise(() => {})
     if (spec.kind === 'failed') return Promise.reject(new Error('History design fixture: the source failed'))
     return Promise.resolve(spec.rows)
@@ -266,16 +267,22 @@ async function rolesPresent(page, state) {
   return results
 }
 
+/** Waits for History's next list request; returns when main received it (the same wall clock as this process). */
 async function waitForRequest(main, before) {
   const deadline = Date.now() + STATE_TIMEOUT_MS
   while (Date.now() < deadline) {
-    if ((await main('globalThis.__historyDesign.requests')) > before) return
+    const { requests, requestedAt } = await main('(({ requests, requestedAt }) => ({ requests, requestedAt }))(globalThis.__historyDesign)')
+    if (requests > before) return requestedAt
     await sleep(50)
   }
   throw new Error('History did not request its list')
 }
 
-/** Puts History into `state` from a fresh open; returns when the open was clicked and how it went. */
+/**
+ * Puts History into `state` from a fresh open; returns when the open was clicked, when History's list
+ * request reached main, and how it went. The renderer arms its HISTORY_DEGRADED_MS notice when it sends
+ * that request, so the loading capture's budget starts there, not at the harness's click.
+ */
 async function driveState(page, main, state, realRows) {
   // Bar History ignores a toggle within 400 ms of the last one; a fast capture can end inside that window.
   await sleep(450)
@@ -291,9 +298,9 @@ async function driveState(page, main, state, realRows) {
   const before = await main('globalThis.__historyDesign.requests')
   const clickedAt = Date.now()
   await clickHistory(page)
-  await waitForRequest(main, before)
+  const requestedAt = await waitForRequest(main, before)
   const visible = (text, role) => (role ? page.getByRole(role).filter({ hasText: text }) : page.getByText(text)).first().waitFor({ timeout: STATE_TIMEOUT_MS })
-  const drive = { clickedAt }
+  const drive = { clickedAt, requestedAt }
   if (state.id === 'slow' || state.id === 'unavailable' || state.id === 'failed') {
     const [text, role] =
       state.id === 'slow' ? ['OneDrive is slow to answer', 'status'] : state.id === 'failed' ? ['Could not load your meetings', 'alert'] : ['could not be read right now', 'status']
@@ -362,7 +369,7 @@ async function captureReachedState({ page, cdp, main, state, variant, realRows, 
   try {
     await settleWindow(page)
     await page.screenshot({ path: join(out, screenshot), scale: 'device' })
-    drive.capturedAfterMs = Date.now() - drive.clickedAt
+    drive.capturedAfterMs = Date.now() - drive.requestedAt
     collected = await page.evaluate(`(${collectHistoryView})(${solidGradientLayers})`)
   } finally {
     await cdp.send('Emulation.clearDeviceMetricsOverride')
