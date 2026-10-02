@@ -119,6 +119,7 @@ describe('team-transcript ingest', () => {
       name === 'userData' ? deviceTwoUserData : join(deviceTwoUserData, name)
     )
     try {
+      setSettings({ meetingsFolder })
       expect((await startBackfill()).queued).toBe(1)
       await vi.waitFor(() => {
         expect(readIndex(getSettings()).ingested[file]?.ok).toBe(true)

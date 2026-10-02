@@ -279,7 +279,9 @@ describe('right-edge dock', () => {
 
   it('receives the current app-owned paths rather than a duplicate chat or control route', () => {
     const rightEdgeCalls = app.match(/<RightEdgeSidecar[\s\S]*?\/>/g) ?? []
-    expect(rightEdgeCalls).toHaveLength(2)
+    // M2-0431: one dock element whose `open` follows the park, never a parked and a revealed copy.
+    expect(rightEdgeCalls).toHaveLength(1)
+    expect(rightEdgeCalls[0]).toContain('open={!overlayPeeked}')
     for (const call of rightEdgeCalls) {
       expect(call).toContain('value={input}')
       expect(call).toContain('onChange={setInput}')

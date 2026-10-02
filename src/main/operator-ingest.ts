@@ -1,4 +1,4 @@
-import { app } from 'electron'
+import { app, net, powerMonitor } from 'electron'
 import { hostname as osHostname } from 'node:os'
 import { filterFundedProviders } from '@shared/ask-routing'
 import { inspectBundleResponse } from '@shared/bundle-response'
@@ -24,8 +24,25 @@ import { drainOperatorQueue, enqueueOperatorItem, type QueueSendResult } from '.
 import { operatorEntitled, recordOperatorHeartbeatResult, resetOperatorEntitlementsState } from './operator-entitlements-state'
 import { maybeRefreshOperatorIntegrations, resetOperatorIntegrationsState } from './operator-integrations'
 import { parseOperatorHeartbeatEntitlements } from '@shared/operator-entitlements'
+import { getActiveModelPolicy, refreshModelPolicyChecked } from './model-policy-client'
 
-const HEARTBEAT_MS = 60_000
+export const HEARTBEAT_MS = 60_000
+// Half the <=60s fleet-policy bound, so a change lands inside it despite timer drift and a slow fetch.
+export const POLICY_POLL_MS = 30_000
+const POLICY_FAILURE_BACKOFF_INITIAL_MS = 1_000
+
+if (HEARTBEAT_MS % POLICY_POLL_MS !== 0) {
+  throw new Error('HEARTBEAT_MS must be divisible by POLICY_POLL_MS')
+}
+
+// Offline→online is detected within this window, well inside the 1 s immediate-refresh bound.
+const NETWORK_WATCH_MS = 500
+
+if (POLICY_POLL_MS % NETWORK_WATCH_MS !== 0) {
+  throw new Error('POLICY_POLL_MS must be divisible by NETWORK_WATCH_MS')
+}
+const POLICY_POLL_TICKS = POLICY_POLL_MS / NETWORK_WATCH_MS
+const HEARTBEAT_TICKS = HEARTBEAT_MS / NETWORK_WATCH_MS
 
 export interface OperatorRuntimeSettings {
   operatorUrl?: string
@@ -39,6 +56,9 @@ export interface OperatorRuntimeSettings {
 }
 
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
+let policyRetryTimer: ReturnType<typeof setTimeout> | null = null
+let policyRefreshNow: ((source: string) => void) | null = null
+let policySignalUnsubscribers: Array<() => void> = []
 let runtimeGeneration = 0
 let lastAskId: string | null = null
 let fetchImpl: typeof fetch = fetch
@@ -58,6 +78,14 @@ export function stopOperatorRuntime(): void {
     clearInterval(heartbeatTimer)
     heartbeatTimer = null
   }
+  if (policyRetryTimer) {
+    clearTimeout(policyRetryTimer)
+    policyRetryTimer = null
+  }
+  for (const unsubscribe of policySignalUnsubscribers.splice(0)) {
+    unsubscribe()
+  }
+  policyRefreshNow = null
 }
 
 function resolveUrl(settings: OperatorRuntimeSettings, env = process.env): string {
@@ -244,6 +272,13 @@ function retryIdsFromHeartbeat(json: unknown): string[] {
   return [...new Set(retry.filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 80))]
 }
 
+function modelPolicyVersionFromHeartbeat(json: unknown): number | null {
+  if (!json || typeof json !== 'object') return null
+  const body = json as { modelPolicyVersion?: unknown; policyVersion?: unknown }
+  const raw = body.modelPolicyVersion ?? body.policyVersion
+  return typeof raw === 'number' && Number.isInteger(raw) && raw >= 0 ? raw : null
+}
+
 export function fundedProvidersFromHeartbeat(json: unknown): string[] {
   if (!json || typeof json !== 'object') return []
   const funded = (json as { fundedProviders?: unknown }).fundedProviders
@@ -352,6 +387,11 @@ export async function operatorHeartbeat(
     recordOperatorHeartbeatResult(res.ok, res.json)
     if (res.ok) {
       maybeRefreshOperatorIntegrations(settings, parseOperatorHeartbeatEntitlements(res.json).integrationsVersion)
+      const policyVersion = modelPolicyVersionFromHeartbeat(res.json)
+      const currentPolicyVersion = getActiveModelPolicy(settings)?.version ?? -1
+      if (policyVersion !== null && policyVersion > currentPolicyVersion) {
+        policyRefreshNow?.('operator-response')
+      }
     }
     return { ok: res.ok, retry: retryIdsFromHeartbeat(res.json) }
   } catch (e) {
@@ -376,10 +416,89 @@ export function startOperatorRuntime(
       await hooks.onCrmRetry(beat.retry)
     }
   }
+  // M2-0412: the fleet model policy polls on its own timer so a slow queue drain or heartbeat can never
+  // push a policy change past the 60 s bound. Best-effort — a failed fetch never blocks the heartbeat.
+  // Broadcast only when the policy actually changed, so Settings' managed/locked display updates without
+  // an idle settings-changed churn every 30 s reaching the renderer.
+  const policyGeneration = runtimeGeneration
+  let policyInFlight = false
+  let policyPending = false
+  let policyPendingSource = 'pending'
+  let policyFailureBackoffMs = POLICY_FAILURE_BACKOFF_INITIAL_MS
+  const runPolicyRefresh = (source: string): Promise<void> => {
+    return refreshModelPolicyChecked(getSettings(), source)
+      .then(({ changed, ok }) => {
+        if (policyGeneration !== runtimeGeneration) return
+        if (ok) policyFailureBackoffMs = POLICY_FAILURE_BACKOFF_INITIAL_MS
+        else schedulePolicyRetry()
+        if (changed) hooks?.onReadinessChanged?.()
+      })
+      .catch(() => {
+        schedulePolicyRetry()
+      })
+  }
+  const schedulePolicyRetry = (): void => {
+    if (policyRetryTimer || policyGeneration !== runtimeGeneration) return
+    const delay = Math.min(policyFailureBackoffMs, POLICY_POLL_MS)
+    policyFailureBackoffMs = POLICY_POLL_MS
+    policyRetryTimer = setTimeout(() => {
+      policyRetryTimer = null
+      pollPolicy('failure-backoff')
+    }, delay)
+    if (typeof policyRetryTimer === 'object' && policyRetryTimer && 'unref' in policyRetryTimer) {
+      policyRetryTimer.unref()
+    }
+  }
+  const pollPolicy = (source: string): void => {
+    if (policyGeneration !== runtimeGeneration) return
+    if (policyRetryTimer) {
+      clearTimeout(policyRetryTimer)
+      policyRetryTimer = null
+    }
+    // One refresh at a time: a request that lands mid-fetch runs right after it resolves.
+    if (policyInFlight) {
+      policyPending = true
+      policyPendingSource = source
+      return
+    }
+    policyInFlight = true
+    void runPolicyRefresh(source)
+      .finally(() => {
+        policyInFlight = false
+        if (policyPending && policyGeneration === runtimeGeneration) {
+          policyPending = false
+          pollPolicy(policyPendingSource)
+        }
+      })
+  }
+  policyRefreshNow = pollPolicy
+  const onFocus = (): void => pollPolicy('focus')
+  const onActivate = (): void => pollPolicy('activate')
+  const onResume = (): void => pollPolicy('resume')
+  app.on('browser-window-focus', onFocus)
+  app.on('activate', onActivate)
+  powerMonitor.on('resume', onResume)
+  policySignalUnsubscribers = [
+    () => app.removeListener('browser-window-focus', onFocus),
+    () => app.removeListener('activate', onActivate),
+    () => powerMonitor.removeListener('resume', onResume)
+  ]
+  pollPolicy('startup')
   void tick()
+  // One timer at the network-watch cadence: every firing checks the OS connectivity flag (Electron has no
+  // network-online event) for an offline→online edge, every POLICY_POLL_MS polls the policy, and every
+  // HEARTBEAT_MS runs the heartbeat.
+  let wasOnline = net.isOnline()
+  let firings = 0
   heartbeatTimer = setInterval(() => {
-    void tick()
-  }, HEARTBEAT_MS)
+    const online = net.isOnline()
+    if (online && !wasOnline) pollPolicy('network-online')
+    wasOnline = online
+    firings += 1
+    if (firings % POLICY_POLL_TICKS !== 0) return
+    pollPolicy('interval')
+    if (firings % HEARTBEAT_TICKS === 0) void tick()
+  }, NETWORK_WATCH_MS)
   if (typeof heartbeatTimer === 'object' && heartbeatTimer && 'unref' in heartbeatTimer) {
     heartbeatTimer.unref()
   }

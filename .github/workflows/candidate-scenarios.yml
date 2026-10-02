@@ -8,9 +8,17 @@ name: Candidate scenarios
 #   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> \
 #     -f scenario=fault-fatal-relaunch -f mac_sha256=<Metis-QA zip sha256 from SHA256SUMS.txt>
 #   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> \
+#     -f scenario=ex-suite -f mac_sha256=<Metis DMG sha256 from SHA256SUMS.txt>
+#   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> \
 #     -f scenario=stall-sampler -f mac_sha256=<Metis dmg sha256 from SHA256SUMS.txt>
+#   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> \
+#     -f scenario=idle-soak -f mac_sha256=<Metis DMG sha256> -f win_sha256=<Metis Setup sha256>
 #   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> -f scenario=sidecar-boot-reaper \
 #     -f mac_sha256=<Metis DMG sha256> -f win_sha256=<Metis Setup sha256>
+#   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> -f scenario=packaged-lifecycle \
+#     -f mac_sha256=<Metis DMG sha256> -f win_sha256=<Metis Setup sha256>
+#   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> \
+#     -f scenario=renderer-kill -f mac_sha256=<Metis DMG sha256 from SHA256SUMS.txt>
 # The pull_request trigger on this file's own path only registers the workflow with GitHub (M2-0501): the
 # run it creates skips every job, uses no runner minutes and reaches no secret.
 run-name: ${{ github.event_name == 'pull_request' && 'Candidate scenarios (registration)' || format('Candidate scenario {0} on {1}', inputs.scenario, inputs.candidate_run) }}
@@ -31,8 +39,12 @@ on:
         type: choice
         options:
           - fault-fatal-relaunch
+          - ex-suite
           - stall-sampler
+          - idle-soak
           - sidecar-boot-reaper
+          - packaged-lifecycle
+          - renderer-kill
       mac_sha256:
         description: sha256 of the macOS installer the scenario installs (empty when it does not run on macOS)
         required: false
@@ -67,10 +79,14 @@ jobs:
       mac_variant: ${{ steps.resolve.outputs.mac_variant }}
       mac_artifact: ${{ steps.resolve.outputs.mac_artifact }}
       mac_sha256: ${{ steps.resolve.outputs.mac_sha256 }}
+      mac_timeout_minutes: ${{ steps.resolve.outputs.mac_timeout_minutes }}
+      mac_step_timeout_minutes: ${{ steps.resolve.outputs.mac_step_timeout_minutes }}
       win: ${{ steps.resolve.outputs.win }}
       win_variant: ${{ steps.resolve.outputs.win_variant }}
       win_artifact: ${{ steps.resolve.outputs.win_artifact }}
       win_sha256: ${{ steps.resolve.outputs.win_sha256 }}
+      win_timeout_minutes: ${{ steps.resolve.outputs.win_timeout_minutes }}
+      win_step_timeout_minutes: ${{ steps.resolve.outputs.win_step_timeout_minutes }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -102,7 +118,7 @@ jobs:
     needs: guard
     if: github.event_name == 'workflow_dispatch' && needs.guard.outputs.mac == 'true'
     runs-on: macos-latest
-    timeout-minutes: 60
+    timeout-minutes: ${{ fromJSON(needs.guard.outputs.mac_timeout_minutes) }}
     env:
       SCENARIO: ${{ inputs.scenario }}
       CANDIDATE_RUN: ${{ inputs.candidate_run }}
@@ -111,6 +127,9 @@ jobs:
       INSTALLER_SHA256: ${{ needs.guard.outputs.mac_sha256 }}
       OUT: candidate-scenario
     steps:
+      - name: Record the job start time
+        id: job-start
+        run: echo "epoch_ms=$(($(date +%s) * 1000))" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
@@ -134,7 +153,8 @@ jobs:
             echo "::error::provenance.json belongs to another run than candidate_run $CANDIDATE_RUN."
             exit 1
           fi
-          installer=$(node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" mac)
+          selector=$(node scripts/qa/candidate-scenarios.mjs installer-kind --scenario "$SCENARIO" --platform mac)
+          installer=$(node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" "$selector")
           echo "path=$installer" >> "$GITHUB_OUTPUT"
       - name: Install into a fresh directory and verify the signature
         id: install
@@ -147,6 +167,7 @@ jobs:
           case "$INSTALLER" in
             *.dmg)
               volume="$RUNNER_TEMP/candidate-volume"
+              mkdir -p "$volume"
               hdiutil attach -nobrowse -readonly -mountpoint "$volume" "$INSTALLER" > /dev/null
               bundle=$(cd "$volume" && ls -d *.app)
               ditto "$volume/$bundle" "$target/$bundle"
@@ -161,13 +182,32 @@ jobs:
           echo "app=$app" >> "$GITHUB_OUTPUT"
       - name: Start from a fresh profile seeded only with the scenario's settings
         run: node scripts/qa/candidate-scenarios.mjs profile --scenario "$SCENARIO" --platform mac
+      # An unattended osascript gets -1743 or no UI elements without a TCC grant. The hosted image runs with
+      # SIP disabled, so this writes the grants the scenario's registry entry declares (guiScripting) for
+      # this job's process chain; a scenario that declares none is left untouched.
+      - name: Authorise System Events GUI scripting when the scenario drives native UI
+        run: node scripts/qa/candidate-scenarios.mjs grant-gui --scenario "$SCENARIO" --platform mac
+      - name: Set the soak deadline
+        id: soak-deadline
+        env:
+          JOB_STARTED_AT_MS: ${{ steps.job-start.outputs.epoch_ms }}
+          MAC_TIMEOUT_MINUTES: ${{ needs.guard.outputs.mac_timeout_minutes }}
+        run: >
+          node --input-type=module -e
+          "import { appendFileSync } from 'node:fs';
+          import { jobSafeDeadlineEpochMs } from './scripts/qa/soak/idle-soak.mjs';
+          appendFileSync(process.env.GITHUB_OUTPUT, 'epoch_ms=' + jobSafeDeadlineEpochMs({
+          jobStartedAtMs: Number(process.env.JOB_STARTED_AT_MS),
+          timeoutMinutes: Number(process.env.MAC_TIMEOUT_MINUTES)
+          }) + '\n');"
       - name: Run the scenario
         id: scenario
         continue-on-error: true
-        timeout-minutes: 40
+        timeout-minutes: ${{ fromJSON(needs.guard.outputs.mac_step_timeout_minutes) }}
         env:
           INSTALLER: ${{ steps.installer.outputs.path }}
           APP: ${{ steps.install.outputs.app }}
+          SOAK_DEADLINE_EPOCH_MS: ${{ steps.soak-deadline.outputs.epoch_ms }}
         run: >
           node scripts/qa/candidate-scenarios.mjs run
           --scenario "$SCENARIO" --platform mac
@@ -197,7 +237,7 @@ jobs:
     needs: guard
     if: github.event_name == 'workflow_dispatch' && needs.guard.outputs.win == 'true'
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: ${{ fromJSON(needs.guard.outputs.win_timeout_minutes) }}
     env:
       SCENARIO: ${{ inputs.scenario }}
       CANDIDATE_RUN: ${{ inputs.candidate_run }}
@@ -206,6 +246,9 @@ jobs:
       INSTALLER_SHA256: ${{ needs.guard.outputs.win_sha256 }}
       OUT: candidate-scenario
     steps:
+      - name: Record the job start time
+        id: job-start
+        run: echo "epoch_ms=$(($(date +%s) * 1000))" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
@@ -229,7 +272,8 @@ jobs:
             echo "::error::provenance.json belongs to another run than candidate_run $CANDIDATE_RUN."
             exit 1
           fi
-          installer=$(node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" win)
+          selector=$(node scripts/qa/candidate-scenarios.mjs installer-kind --scenario "$SCENARIO" --platform win)
+          installer=$(node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" "$selector")
           echo "path=$installer" >> "$GITHUB_OUTPUT"
       # Silent install into a fresh directory, as qa-candidate.yml smoke-win does (/S /D=<dir>).
       - name: Install the Setup silently into a fresh directory
@@ -249,13 +293,27 @@ jobs:
           Add-Content -Path $env:GITHUB_OUTPUT -Value "app=$app"
       - name: Start from a fresh profile seeded only with the scenario's settings
         run: node scripts/qa/candidate-scenarios.mjs profile --scenario "$SCENARIO" --platform win
+      - name: Set the soak deadline
+        id: soak-deadline
+        env:
+          JOB_STARTED_AT_MS: ${{ steps.job-start.outputs.epoch_ms }}
+          WIN_TIMEOUT_MINUTES: ${{ needs.guard.outputs.win_timeout_minutes }}
+        run: >
+          node --input-type=module -e
+          "import { appendFileSync } from 'node:fs';
+          import { jobSafeDeadlineEpochMs } from './scripts/qa/soak/idle-soak.mjs';
+          appendFileSync(process.env.GITHUB_OUTPUT, 'epoch_ms=' + jobSafeDeadlineEpochMs({
+          jobStartedAtMs: Number(process.env.JOB_STARTED_AT_MS),
+          timeoutMinutes: Number(process.env.WIN_TIMEOUT_MINUTES)
+          }) + '\n');"
       - name: Run the scenario
         id: scenario
         continue-on-error: true
-        timeout-minutes: 40
+        timeout-minutes: ${{ fromJSON(needs.guard.outputs.win_step_timeout_minutes) }}
         env:
           INSTALLER: ${{ steps.installer.outputs.path }}
           APP: ${{ steps.install.outputs.app }}
+          SOAK_DEADLINE_EPOCH_MS: ${{ steps.soak-deadline.outputs.epoch_ms }}
         run: >
           node scripts/qa/candidate-scenarios.mjs run
           --scenario "$SCENARIO" --platform win

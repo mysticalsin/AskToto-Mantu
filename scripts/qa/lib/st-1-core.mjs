@@ -13,6 +13,32 @@
 /** Where in-flight evaluations live inside the candidate, keyed per evaluation. */
 export const PENDING_GLOBAL = '__st1pending'
 
+/** History's degraded-view budget: a History open or search answers with a usable list within this. */
+export const HISTORY_BUDGET_MS = 2_000
+
+/** The History row's first-call budget: History's first recallList answers within this. */
+export const HISTORY_FIRST_LIST_MS = 250
+
+/** The History calls the probe times one by one, in the order the summary lists them. */
+export const HISTORY_CALLS = ['recallList', 'brainStatus', 'recallSearch']
+
+/** What admission.ts logs when every meetings-root permit is held by a stalled call and it starts refusing. */
+export const STORAGE_SATURATED_LOG = '[storage] every permit is held by a stalled call'
+
+/** Command-line flags as camelCase keys over `defaults`: `--cloud-dir x` becomes `cloudDir: 'x'`. A flag
+ *  with no value (last, or followed by another flag) is the string 'true'. */
+export function parseArgs(argv, defaults = {}) {
+  const args = { ...defaults }
+  for (let i = 0; i < argv.length; i++) {
+    const flag = argv[i]
+    if (!flag.startsWith('--')) continue
+    const key = flag.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())
+    const next = argv[i + 1]
+    args[key] = next === undefined || next.startsWith('--') ? 'true' : argv[++i]
+  }
+  return args
+}
+
 /** Resolves with `promise`'s outcome, or `{ ok: false, timedOut: true }` after `ms`. Never rejects; the
  *  timer is cleared as soon as either side settles. */
 export function withTimeout(promise, ms) {
@@ -82,18 +108,115 @@ export function recordSample(run, tMs, outcome, options) {
   run.errors.push(failureRecord('sample', tMs, outcome, boundMs))
 }
 
+/**
+ * An expression (for executeJavaScript in the renderer) that starts every call in `calls` (name → expression)
+ * at once and times each on its own, bounded by `boundMs`. It always fulfils with name → outcome:
+ *   { ms, value }        settled in time
+ *   { ms, error }        rejected (message string)
+ *   { ms, hung: true }   did not settle within boundMs
+ */
+export function timedCallsExpression(calls, boundMs) {
+  const entries = Object.entries(calls).map(([name, expression]) => `[${JSON.stringify(name)}, () => (${expression})]`)
+  return `(() => {
+  const timed = (call) => {
+    const started = performance.now()
+    let timer
+    return Promise.race([
+      Promise.resolve()
+        .then(call)
+        .then(
+          (value) => ({ ms: performance.now() - started, value }),
+          (error) => ({ ms: performance.now() - started, error: String(error?.message ?? error) })
+        ),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve({ ms: performance.now() - started, hung: true }), ${Number(boundMs)})
+      })
+    ]).finally(() => clearTimeout(timer))
+  }
+  return Promise.all([${entries.join(', ')}].map(([name, call]) => timed(call).then((outcome) => [name, outcome]))).then(Object.fromEntries)
+})()`
+}
+
+/** A timed call's report record: its time and how it failed, never its value. */
+function callRecord({ ms, error, hung }) {
+  return { ms, ...(hung ? { hung: true } : {}), ...(error !== undefined ? { error } : {}) }
+}
+
+/**
+ * A probe's per-call outcomes (`open`: recallList and brainStatus, `search`: recallSearch, each a
+ * timedCallsExpression outcome) as the report's record: `calls` holds each call's own time, and the combined
+ * fields stay as before. An open call that did not settle makes the open `hung`, one that failed makes it an
+ * `error`; a search that did not settle or failed is a `searchError`. A probe without per-call outcomes is kept
+ * as it is.
+ */
+function historyRecord({ open, search, ...probe }) {
+  if (!open) return probe
+  const { recallList, brainStatus } = open
+  const record = { ...probe, calls: { recallList: callRecord(recallList), brainStatus: callRecord(brainStatus) } }
+  if (recallList.value) Object.assign(record, recallList.value)
+  const failed = [recallList, brainStatus].find((call) => call.hung || call.error !== undefined)
+  if (failed?.hung) record.hung = true
+  else if (failed) record.error = failed.error
+  if (search) {
+    record.calls.recallSearch = callRecord(search)
+    if (search.hung) record.searchError = `no answer within ${Math.round(search.ms)} ms`
+    else if (search.error !== undefined) record.searchError = search.error
+    else record.hits = search.value
+  }
+  return record
+}
+
 /** One History round trip for the report. A round trip that never settled is `hung` with how long it was
  *  waited for — the signal that History itself stalls. */
 export function historyEntry(tMs, outcome) {
   const ms = Math.round(outcome.elapsedMs)
   if (outcome.timedOut) return { tMs, hung: true, ms }
   if (!outcome.ok) return { tMs, error: outcome.error, ms }
-  return { tMs, ...outcome.value }
+  return { tMs, ...historyRecord(outcome.value) }
+}
+
+/** How many times a main.log text says every meetings-root permit was held by a stalled call. */
+export function countStorageSaturations(mainLogText) {
+  return mainLogText.split('\n').filter((line) => line.includes(STORAGE_SATURATED_LOG)).length
+}
+
+/** Whether this sample should schedule the next History probe. Pure so the idle row can prove no probe is
+ *  scheduled while `--history off` keeps History untouched. */
+export function shouldProbeHistory({ historyOn, historyRunning, tMs, historyLastMs, fromMs, everyMs }) {
+  return historyOn && !historyRunning && tMs >= fromMs && tMs - historyLastMs >= everyMs
+}
+
+/** The representative profile of ARCHITECTURE 6.1: 59 meetings, 6 of them cloud-only, and a mostly
+ *  cloud-only `.brain`. */
+export const SYNTHETIC_LOCAL_MEETINGS = 53
+export const SYNTHETIC_FIFO_MEETINGS = 6
+export const SYNTHETIC_BRAIN_ENTITY_FIFOS = 4
+
+/**
+ * Where `--fixtures synthetic-dataless` places things, relative to the meetings root. Hosted runners have
+ * no cloud-file provider, so a kernel-blocking FIFO stands at every path a mostly-evicted cloud folder
+ * would present as unreadable: `local` are content-free placeholder meeting files, `fifos` the paths that
+ * block a reader. Pure: st-1.mjs materializes it.
+ */
+export function syntheticDatalessPlan() {
+  const pad = (n) => String(n).padStart(2, '0')
+  const meeting = (i, tag) => `2026-${pad(1 + Math.floor(i / 28))}-${pad((i % 28) + 1)}_090000-st1-${tag}.md`
+  const local = Array.from({ length: SYNTHETIC_LOCAL_MEETINGS }, (_, i) => meeting(i, 'local'))
+  const meetingFifos = Array.from({ length: SYNTHETIC_FIFO_MEETINGS }, (_, i) => meeting(SYNTHETIC_LOCAL_MEETINGS + i, 'cloud-only'))
+  const brainFifos = [
+    '.brain/index.json',
+    ...Array.from({ length: SYNTHETIC_BRAIN_ENTITY_FIFOS }, (_, i) => `.brain/entities/${i % 2 === 0 ? 'person' : 'org'}/st1-cloud-only-${i + 1}.json`)
+  ]
+  return {
+    local,
+    fifos: [...meetingFifos, ...brainFifos],
+    counts: { localMeetings: local.length, fifoMeetings: meetingFifos.length, brainFifos: brainFifos.length }
+  }
 }
 
 /** The boot window variants the QA-identity build can construct (src/main/infra/observability/projection.ts
  *  BOOT_WINDOW_VARIANTS, M2-0516). An ST-1 run always launches 'shipped'. */
-export const WINDOW_VARIANTS = ['shipped', 'spellcheck-off', 'paint-when-hidden', 'prewarm-spellchecker', 'prewarm-view']
+export const WINDOW_VARIANTS = ['shipped', 'spellcheck-off', 'paint-when-hidden', 'prewarm-spellchecker']
 
 /** The only purpose besides ST-1 itself: a short launch that measures the window constructor under one variant. */
 export const WINDOW_CONSTRUCTION = 'window-construction'
@@ -120,6 +243,48 @@ export function runPurpose({ purpose, windowVariant }) {
  *  inherited value can never reach an ST-1 run. */
 export function candidateEnv(env, profile, windowVariant) {
   return { ...env, ASKTOTO_USERDATA: profile, METIS_QA_WINDOW_VARIANT: windowVariant }
+}
+
+/** The window-construction gate's budget (M2-0519): every shipped createWindow.prewarm and createWindow.construct
+ *  stays under it, in both chromes. */
+export const WINDOW_STAGE_BUDGET_MS = 250
+
+/** The boot stages the window-construction gate holds to its budget. */
+export const GATED_WINDOW_STAGES = ['createWindow.prewarm', 'createWindow.construct']
+
+/**
+ * The window-construction gate (M2-0519) over a set of window-construction reports: `{ pass, rows, failures }`.
+ * Only the shipped variant is gated; the other variants stay report-only. It fails unless every shipped report
+ * carries each gated stage with a measured ms under WINDOW_STAGE_BUDGET_MS, and the shipped reports built both
+ * chromes (opaque and transparent). A shipped report without boot stages (a launch that never reached the window)
+ * fails as missing, never passes as absent. `rows` lists every shipped gated stage found, per report.
+ * @param {Array<{ name: string, report: any }>} reports
+ */
+export function windowConstructionGate(reports, budgetMs = WINDOW_STAGE_BUDGET_MS) {
+  const rows = []
+  const failures = []
+  const chromes = new Set()
+  const shipped = reports.filter(({ report }) => report?.purpose === WINDOW_CONSTRUCTION && report.windowVariant === 'shipped')
+  if (shipped.length === 0) failures.push('no shipped window-construction report')
+  for (const { name, report } of shipped) {
+    const stages = Array.isArray(report.bootStages?.stages) ? report.bootStages.stages : []
+    for (const stage of GATED_WINDOW_STAGES) {
+      const found = stages.filter((entry) => entry.stage === stage)
+      if (found.length === 0) failures.push(`${name}: ${stage} missing`)
+      for (const entry of found) {
+        const chrome = entry.transparent === true ? 'transparent' : entry.transparent === false ? 'opaque' : null
+        if (chrome) chromes.add(chrome)
+        rows.push({ report: name, stage, chrome, ms: entry.ms })
+        if (typeof entry.ms !== 'number') failures.push(`${name}: ${stage} has no measured ms`)
+        else if (entry.ms >= budgetMs) failures.push(`${name}: ${stage} ${entry.ms} ms >= ${budgetMs} ms`)
+        if (!chrome) failures.push(`${name}: ${stage} does not say which chrome it built`)
+      }
+    }
+  }
+  for (const chrome of ['opaque', 'transparent']) {
+    if (shipped.length > 0 && !chromes.has(chrome)) failures.push(`no shipped ${chrome} window was measured`)
+  }
+  return { pass: failures.length === 0, budgetMs, rows, failures }
 }
 
 /** The app's own native boot stage timings (tray stages, window construction, navigation and first show): every
@@ -182,8 +347,118 @@ export function witnessSummary(timeline, loop) {
   return { loop: loop ?? null, write: { maxMs: max('writeMs') }, cpuBusyMaxPct: max('cpuBusyPct') }
 }
 
-/** The pass/fail criteria. They read only the measurement, never the attribution evidence. */
-export function evaluateCriteria(row, measured, evidence) {
+/** The History probes that reached a window (`skipped` ones did not: no window bridged History yet). */
+function historyProbes(measured) {
+  return measured.history.filter((entry) => !entry.skipped)
+}
+
+/** Whether one History probe of `row` opened History (list + brain status) with a usable list, or searched
+ *  with results, within HISTORY_BUDGET_MS. A hung or failed probe did neither; a failed search
+ *  (`searchError`) did not search. A usable list lists at least one fixture row, so a fast empty list never
+ *  passes; on the dataless row at least one of them is a 'not downloaded' row (the degraded view). On the
+ *  FIFO row the search must hit at least one fixture (their file names carry the `st1` query); a dataless
+ *  row's fixtures are the QA folder's own files, whose names the query need not match. */
+function openedInBudget(row) {
+  return (entry) =>
+    !entry.hung &&
+    !entry.error &&
+    entry.rows >= 1 &&
+    (row !== 'dataless' || entry.notDownloaded >= 1) &&
+    entry.ms < HISTORY_BUDGET_MS
+}
+function searchedInBudget(row) {
+  return (entry) =>
+    !entry.hung &&
+    !entry.error &&
+    !entry.searchError &&
+    typeof entry.hits === 'number' &&
+    (row !== 'fifo' || entry.hits >= 1) &&
+    entry.searchMs < HISTORY_BUDGET_MS
+}
+
+/** Whether a timed call settled (neither hung nor failed) within `budgetMs`. */
+function settledWithin(call, budgetMs) {
+  return Boolean(call) && !call.hung && call.error === undefined && call.ms < budgetMs
+}
+
+/** One History call's times over the probes, by nearest rank: `firstMs` is the first probe's own call (null
+ *  when that probe has no per-call time), `unsettled` counts the calls that hung or failed. */
+function callStats(probes, name) {
+  const calls = probes.map((entry) => entry.calls?.[name]).filter(Boolean)
+  const times = calls.map((call) => call.ms).sort((a, b) => a - b)
+  const rank = (percent) => (times.length > 0 ? times[Math.ceil((percent / 100) * times.length) - 1] : null)
+  return {
+    calls: calls.length,
+    unsettled: calls.filter((call) => call.hung || call.error !== undefined).length,
+    firstMs: probes[0]?.calls?.[name]?.ms ?? null,
+    p50Ms: rank(50),
+    p95Ms: rank(95),
+    maxMs: times.at(-1) ?? null
+  }
+}
+
+/**
+ * The History row's checks, from each call's own time: History's first recallList answers within
+ * HISTORY_FIRST_LIST_MS; every recallList answers with a usable list (as openedInBudget) and every recallSearch
+ * with results (as searchedInBudget) within HISTORY_BUDGET_MS; the main loop's p99 stays under 50 ms. With no
+ * probe every check fails.
+ */
+function historyChecks(row, measured, probes) {
+  const listUsable = (entry) =>
+    settledWithin(entry.calls?.recallList, HISTORY_BUDGET_MS) && entry.rows >= 1 && (row !== 'dataless' || entry.notDownloaded >= 1)
+  const searchUsable = (entry) =>
+    settledWithin(entry.calls?.recallSearch, HISTORY_BUDGET_MS) && typeof entry.hits === 'number' && (row !== 'fifo' || entry.hits >= 1)
+  return [
+    { name: `first-list < ${HISTORY_FIRST_LIST_MS}`, pass: settledWithin(probes[0]?.calls?.recallList, HISTORY_FIRST_LIST_MS) },
+    { name: `list < ${HISTORY_BUDGET_MS}`, pass: probes.length > 0 && probes.every(listUsable) },
+    { name: `search < ${HISTORY_BUDGET_MS}`, pass: probes.length > 0 && probes.every(searchUsable) },
+    { name: 'loop-p99 < 50', pass: measured.loop?.p99Ms < 50 }
+  ]
+}
+
+/**
+ * The History row's summary: the first probe is History's first call, the one that paid any start-up wait.
+ * `calls` gives each call's own times and `verdict` comes from `checks` alone (INCOMPLETE while the run is
+ * not complete); neither changes the report's own criteria or verdict. `firstListCause`, report-only, says why a first recallList missed its budget:
+ * 'admission-saturated' when this launch's main.log says every meetings-root permit was held by a stalled call
+ * (`storageSaturations` > 0), 'unattributed' when it does not, 'main-log-unread' when it could not be read;
+ * null when the first recallList met its budget or no probe ran.
+ * @param {{ row?: string, complete?: boolean, storageSaturations?: number | null }} [options]
+ */
+export function historySummary(measured, options = {}) {
+  const { row, complete = true, storageSaturations = null } = options
+  const probes = historyProbes(measured)
+  const max = (key) => {
+    const values = probes.map((entry) => entry[key]).filter((value) => typeof value === 'number')
+    return values.length > 0 ? Math.max(...values) : null
+  }
+  const checks = historyChecks(row, measured, probes)
+  const firstListMissed = probes.length > 0 && !checks[0].pass
+  return {
+    probes: probes.length,
+    firstOpenMs: probes[0]?.ms ?? null,
+    maxOpenMs: max('ms'),
+    maxSearchMs: max('searchMs'),
+    maxRows: max('rows'),
+    maxNotDownloaded: max('notDownloaded'),
+    calls: Object.fromEntries(HISTORY_CALLS.map((name) => [name, callStats(probes, name)])),
+    checks,
+    verdict: !complete ? 'INCOMPLETE' : checks.every((check) => check.pass) ? 'PASS' : 'FAIL',
+    storageSaturations,
+    firstListCause: !firstListMissed
+      ? null
+      : storageSaturations > 0
+        ? 'admission-saturated'
+        : storageSaturations === 0
+          ? 'unattributed'
+          : 'main-log-unread'
+  }
+}
+
+/** The pass/fail criteria. They read only the measurement, never the attribution evidence. The History row
+ *  (`history`) adds History open and search: every probe, the first one included, answers with a usable
+ *  list of fixture rows (and, on the FIFO row, a search hit) within HISTORY_BUDGET_MS. */
+export function evaluateCriteria(row, measured, evidence, { history = false } = {}) {
   const criteria = [
     { name: 'inspector', pass: true }, // only reached once the candidate actually produced a working inspector
     { name: 'has-samples', pass: measured.samples.length > 0 },
@@ -194,6 +469,14 @@ export function evaluateCriteria(row, measured, evidence) {
     { name: 'dns-lookup < 250', pass: measured.samples.every((s) => s.lookupMs < 250) }
   ]
   if (row === 'dataless') criteria.push({ name: 'still-dataless', pass: evidence?.stillDataless === true })
+  if (history) {
+    const probes = historyProbes(measured)
+    criteria.push(
+      { name: 'history-probed', pass: probes.length > 0 },
+      { name: `history-open < ${HISTORY_BUDGET_MS}`, pass: probes.length > 0 && probes.every(openedInBudget(row)) },
+      { name: `history-search < ${HISTORY_BUDGET_MS}`, pass: probes.length > 0 && probes.every(searchedInBudget(row)) }
+    )
+  }
   return criteria
 }
 
@@ -210,8 +493,24 @@ export function emptyRun() {
  * witness and the boot stages are report-only. A window-construction run (`purpose`) says so, names its variant
  * and is never ST-1 evidence (`st1Evidence: false`), whatever its verdict.
  */
-export function buildReport({ row, installer, candidate, minutes, measured, evidence, fixtures, attribution, complete, harnessError, purpose = 'st-1', windowVariant = 'shipped' }) {
-  const criteria = evaluateCriteria(row, measured, evidence)
+export function buildReport({
+  row,
+  history = false,
+  installer,
+  candidate,
+  minutes,
+  measured,
+  evidence,
+  fixtures,
+  attribution,
+  complete,
+  harnessError,
+  historyMode = 'on',
+  fixtureCounts = null,
+  purpose = 'st-1',
+  windowVariant = 'shipped'
+}) {
+  const criteria = evaluateCriteria(row, measured, evidence, { history })
   // The control row has nothing to exercise: its verdict is the criteria alone.
   const exercised = row === 'none' || evidence?.exercised
   const verdict = !complete ? 'INCOMPLETE' : !exercised ? 'NOT_EXERCISED' : criteria.every((c) => c.pass) ? 'PASS' : 'FAIL'
@@ -220,6 +519,7 @@ export function buildReport({ row, installer, candidate, minutes, measured, evid
     harness: 'ST-1',
     ...(purpose === WINDOW_CONSTRUCTION ? { purpose, st1Evidence: false, windowVariant } : {}),
     row,
+    ...(history ? { historyRow: true } : {}),
     platform: process.platform,
     arch: process.arch,
     installer,
@@ -234,8 +534,12 @@ export function buildReport({ row, installer, candidate, minutes, measured, evid
     write: { maxMs: Math.max(0, ...measured.samples.map((s) => s.writeMs)) },
     lookup: { maxMs: Math.max(0, ...measured.samples.map((s) => s.lookupMs)) },
     exercised: evidence?.exercised ?? null,
-    ...(row === 'fifo' ? { fixturesOpened: evidence?.fixturesOpened ?? null } : {}),
+    ...(row === 'fifo' || row === 'synthetic-dataless' ? { fixturesOpened: evidence?.fixturesOpened ?? null } : {}),
+    ...(row === 'synthetic-dataless'
+      ? { fixtureKind: 'synthetic-dataless', fixtureCounts, sfDatalessSet: evidence?.sfDatalessSet ?? null }
+      : {}),
     ...(row === 'dataless' ? { stillDataless: evidence?.stillDataless ?? null } : {}),
+    ...(history ? { historySummary: historySummary(measured, { row, complete, storageSaturations: attribution.storageSaturations }) } : {}),
     criteria,
     verdict,
     complete,
@@ -244,6 +548,7 @@ export function buildReport({ row, installer, candidate, minutes, measured, evid
     errors: measured.errors,
     setupAtMs: measured.setupAtMs,
     timeline,
+    historyMode,
     witness: witnessSummary(timeline, measured.witnessLoop),
     history: measured.history,
     cpuProfile: measured.profiler,
