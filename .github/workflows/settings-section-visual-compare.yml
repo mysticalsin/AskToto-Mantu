@@ -153,19 +153,6 @@ jobs:
           npm --prefix before run dist:win
           npm --prefix after run dist:win
 
-      - name: Install packaged apps (Windows)
-        if: matrix.platform == 'windows'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\settings-visual\before", "$env:RUNNER_TEMP\settings-visual\after" | Out-Null
-          $before = Get-Item before\release\Metis-Setup-*.exe
-          $after = Get-Item after\release\Metis-Setup-*.exe
-          $install = Start-Process -FilePath $before.FullName -ArgumentList '/S', "/D=$env:RUNNER_TEMP\settings-visual\before" -Wait -PassThru
-          if ($install.ExitCode -ne 0) { throw "Before setup exited with $($install.ExitCode)." }
-          $install = Start-Process -FilePath $after.FullName -ArgumentList '/S', "/D=$env:RUNNER_TEMP\settings-visual\after" -Wait -PassThru
-          if ($install.ExitCode -ne 0) { throw "After setup exited with $($install.ExitCode)." }
-
       - name: Compare every Settings section (macOS)
         if: matrix.platform == 'mac'
         run: |
@@ -180,8 +167,8 @@ jobs:
         run: |
           mkdir -p settings-visual-report
           node after/scripts/qa/settings-section-visual-compare.mjs \
-            "$RUNNER_TEMP/settings-visual/before/Metis.exe" \
-            "$RUNNER_TEMP/settings-visual/after/Metis.exe" \
+            before/release/win-unpacked/Metis.exe \
+            after/release/win-unpacked/Metis.exe \
             settings-visual-report
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

@@ -2,7 +2,7 @@
 /**
  * Compare every Settings section screenshot between two packaged Métis apps.
  *
- * This is hosted-runner QA only (D-28). It launches each installed app with a fresh onboarded profile,
+ * This is hosted-runner QA only (D-28). It launches each packaged app with a fresh onboarded profile,
  * opens the real Settings surface, walks every Settings tab, screenshots every rendered <section>, and
  * writes a content-free JSON report plus PNG artifacts. No meeting content, account ids, secrets, or local
  * user paths are recorded.
@@ -26,6 +26,7 @@ const SETTINGS_TIMEOUT_MS = 30_000
 const POLL_MS = 250
 const VIEWPORT = Object.freeze({ width: 900, height: 820 })
 const FIT_TOLERANCE_PX = 1
+const PNG_SIGNATURE = '89504e470d0a1a0a'
 
 function usage() {
   console.error('Usage: node scripts/qa/settings-section-visual-compare.mjs <before executable> <after executable> <out dir>')
@@ -51,6 +52,22 @@ function fitsInside(inner, outer) {
     && inner.y >= outer.y - FIT_TOLERANCE_PX
     && inner.x + inner.width <= outer.x + outer.width + FIT_TOLERANCE_PX
     && inner.y + inner.height <= outer.y + outer.height + FIT_TOLERANCE_PX
+  )
+}
+
+function pngSize(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 24) return null
+  if (buffer.subarray(0, 8).toString('hex') !== PNG_SIGNATURE) return null
+  return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) }
+}
+
+function screenshotCoversBox(buffer, box) {
+  if (!box) return false
+  const size = pngSize(buffer)
+  if (!size) return false
+  return (
+    size.width + FIT_TOLERANCE_PX >= Math.round(box.width)
+    && size.height + FIT_TOLERANCE_PX >= Math.round(box.height)
   )
 }
 
@@ -169,7 +186,8 @@ async function captureSections(page, appOutDir) {
       const panelBox = await tabPanel.boundingBox()
       const box = await section.boundingBox()
       const buffer = await section.screenshot({ path: file, animations: 'disabled', caret: 'hide' })
-      const clipped = !fitsInside(box, panelBox)
+      const viewportClipped = !fitsInside(box, panelBox)
+      const clipped = !screenshotCoversBox(buffer, box)
       sections.push({
         key,
         tab,
@@ -177,7 +195,7 @@ async function captureSections(page, appOutDir) {
         title,
         width: box ? Math.round(box.width) : null,
         height: box ? Math.round(box.height) : null,
-        viewportClipped: clipped,
+        viewportClipped,
         clipped,
         sha256: sha256(buffer),
         bytes: buffer.length,
@@ -339,4 +357,4 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   })
 }
 
-export { compare, fitsInside, formatFailureSummary }
+export { compare, fitsInside, formatFailureSummary, pngSize, screenshotCoversBox }

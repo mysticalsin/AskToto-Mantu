@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { compare, fitsInside, formatFailureSummary } from './settings-section-visual-compare.mjs'
+import { compare, fitsInside, formatFailureSummary, pngSize, screenshotCoversBox } from './settings-section-visual-compare.mjs'
 
 type Section = {
   key: string
@@ -37,6 +37,14 @@ function capture(sections: Section[]) {
     sectionCount: sections.length,
     sections
   }
+}
+
+function png(width: number, height: number): Buffer {
+  const buffer = Buffer.alloc(24)
+  Buffer.from('89504e470d0a1a0a', 'hex').copy(buffer, 0)
+  buffer.writeUInt32BE(width, 16)
+  buffer.writeUInt32BE(height, 20)
+  return buffer
 }
 
 describe('settings-section-visual-compare compare', () => {
@@ -84,16 +92,24 @@ describe('settings-section-visual-compare compare', () => {
     expect(compared.rows[0]).toEqual(expect.objectContaining({ status: 'FAIL', failures: ['clipped'] }))
   })
 
-  it('fails a section taller than the tab panel as clipped', () => {
+  it('keeps viewport clipping diagnostic-only when the PNG covers the whole section', () => {
     const sectionBox = { x: 24, y: 40, width: 820, height: 900 }
     const panelBox = { x: 16, y: 32, width: 850, height: 640 }
-    const clipped = !fitsInside(sectionBox, panelBox)
 
-    expect(clipped).toBe(true)
-    expect(compare(capture([section({ clipped })]), capture([section()]))).toMatchObject({
-      status: 'FAIL',
-      rows: [{ key: 'brain-01-models', status: 'FAIL', failures: ['clipped'] }]
+    expect(fitsInside(sectionBox, panelBox)).toBe(false)
+    expect(screenshotCoversBox(png(820, 900), sectionBox)).toBe(true)
+    expect(compare(capture([section()]), capture([section()]))).toMatchObject({
+      status: 'PASS',
+      rows: [{ key: 'brain-01-models', status: 'PASS', failures: [] }]
     })
+  })
+
+  it('detects when the uploaded section PNG is smaller than the section box', () => {
+    const sectionBox = { x: 24, y: 40, width: 820, height: 900 }
+
+    expect(pngSize(png(819, 900))).toEqual({ width: 819, height: 900 })
+    expect(screenshotCoversBox(png(818, 900), sectionBox)).toBe(false)
+    expect(screenshotCoversBox(png(820, 898), sectionBox)).toBe(false)
   })
 
   it('prints failing rows so hosted CI logs name the section that changed', () => {
