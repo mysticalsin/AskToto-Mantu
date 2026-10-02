@@ -49,13 +49,13 @@ export default defineConfig({
           // Parakeet's sherpa/ONNX runtime is isolated from both the main event loop and Whisper's
           // transformers/ONNX runtime. Keeping it as a distinct entry is required on Windows too,
           // where the two native runtimes ship colliding DLL names.
-          'parakeet-asr-host': resolve(__dirname, 'src/main/features/parakeet/parakeet-asr-host.ts'),
+          'parakeet-asr-host': resolve(__dirname, 'src/main/infra/parakeet/parakeet-asr-host.ts'),
           // Speaker embeddings have their own sherpa/ONNX utility process so neither native constructor
           // nor compute can block Electron's main loop or share Whisper's native runtime on Windows.
           'speaker-embedding-host': resolve(__dirname, 'src/main/features/speaker/speaker-embedding-host.ts'),
           // Runtime recovery from a missing Windows Parakeet bundle must never shell out to tar.exe or
           // freeze the overlay while the safe in-process extractor is running.
-          'parakeet-extract-host': resolve(__dirname, 'src/main/features/parakeet/parakeet-extract-host.ts'),
+          'parakeet-extract-host': resolve(__dirname, 'src/main/infra/parakeet/parakeet-extract-host.ts'),
           // MQA-234: the whisper utilityProcess child. Its own entry so it never shares a chunk with
           // main — the whole point is that transformers/onnxruntime-node load ONLY in the child.
           'whisper-asr-host': resolve(__dirname, 'src/main/whisper-asr-host.ts')
