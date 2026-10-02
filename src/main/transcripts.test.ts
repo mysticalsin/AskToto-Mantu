@@ -1140,17 +1140,19 @@ describe('writeSaved', () => {
 describe('old-meeting Keychain recovery (T7): allowKeychainRecovery + self-healing rewrap', () => {
   let folder: string
   let tempDir: string
+  let userDataDir: string
   let settings: Settings
 
   beforeEach(() => {
     folder = mkdtempSync(join(tmpdir(), 'asktoto-recovery-test-'))
     tempDir = mkdtempSync(join(tmpdir(), 'asktoto-recovery-temp-'))
+    userDataDir = mkdtempSync(join(tmpdir(), 'asktoto-recovery-userdata-'))
     settings = { ...baseSettings(), meetingsFolder: folder }
     // The 'writeSaved' suite above leaves a permanent ENOENT mockImplementation on the shared
     // node:fs/promises.rename mock (vi.restoreAllMocks() doesn't undo .mockImplementation() on a
     // factory-vended vi.fn() — only on a real vi.spyOn) — re-establish the real-rename default so
     // saveMeeting below isn't sabotaged by a prior test's leftover override.
-    vi.mocked(renameAsync).mockImplementation(async (src: string, dest: string) => renameSync(src, dest))
+    vi.mocked(renameAsync).mockImplementation(async (src, dest) => renameSync(src, dest))
     // decryptToTemp writes its plaintext copy under app.getPath('temp') — route that to a real,
     // per-test directory instead of the shared default mock path, which nothing here creates on disk.
     // Sandboxed per-run (see __mocks__/electron.ts) rather than a hardcoded literal — only `temp` matters
@@ -1159,7 +1161,7 @@ describe('old-meeting Keychain recovery (T7): allowKeychainRecovery + self-heali
     const sandbox = process.env.ASKTOTO_TEST_SANDBOX_ROOT ?? '/tmp/asktoto-test-fallback'
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
       if (name === 'temp') return tempDir
-      if (name === 'userData') return join(sandbox, 'userdata')
+      if (name === 'userData') return userDataDir
       if (name === 'documents') return join(sandbox, 'documents')
       return join(sandbox, name)
     })
@@ -1167,8 +1169,10 @@ describe('old-meeting Keychain recovery (T7): allowKeychainRecovery + self-heali
 
   afterEach(() => {
     delete process.env.ASKTOTO_LOCAL_KEYSTORE
+    delete (app as unknown as { isPackaged?: boolean }).isPackaged
     rmSync(folder, { recursive: true, force: true })
     rmSync(tempDir, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
     vi.restoreAllMocks()
   })
 
@@ -1218,6 +1222,40 @@ describe('old-meeting Keychain recovery (T7): allowKeychainRecovery + self-heali
     expect(after.ct).toBe(before.ct)
     // Converged: a later BULK read (allowKeychainRecovery=false) now succeeds without touching the Keychain.
     expect(readSavedFile(file)).toContain('OLD-KEYCHAIN-SECRET')
+  })
+
+  it('a successful bytes-backed History Open recovery rewraps kLocal to "F:" in place', async () => {
+    const file = await writeOldKeychainMeeting()
+    const before = parseEnvelope(file)
+    process.env.ASKTOTO_LOCAL_KEYSTORE = '1'
+
+    const tmp = decryptToTemp(file, readFileSync(file))
+    const after = parseEnvelope(file)
+
+    expect(readFileSync(tmp, 'utf8')).toContain('OLD-KEYCHAIN-SECRET')
+    expect((before.kLocal as string).startsWith('S:')).toBe(true)
+    expect((after.kLocal as string).startsWith('F:')).toBe(true)
+    expect(after.iv).toBe(before.iv)
+    expect(after.tag).toBe(before.tag)
+    expect(after.ct).toBe(before.ct)
+    expect(readSavedFile(file)).toContain('OLD-KEYCHAIN-SECRET')
+  })
+
+  it('does not rewrap a recovered "S:" meeting while packaged safeStorage is the active backend', async () => {
+    const file = await writeOldKeychainMeeting()
+    const before = parseEnvelope(file)
+    ;(app as unknown as { isPackaged: boolean }).isPackaged = true
+
+    const tmp = decryptToTemp(file)
+    const after = parseEnvelope(file)
+
+    expect(readFileSync(tmp, 'utf8')).toContain('OLD-KEYCHAIN-SECRET')
+    expect((before.kLocal as string).startsWith('S:')).toBe(true)
+    expect(after.kLocal).toBe(before.kLocal)
+    expect(after.iv).toBe(before.iv)
+    expect(after.tag).toBe(before.tag)
+    expect(after.ct).toBe(before.ct)
+    expect(existsSync(join(app.getPath('userData'), 'secret-key.bin'))).toBe(false)
   })
 })
 
