@@ -23,6 +23,7 @@ import {
   STOP_CLICK,
   TRANSCRIPT_PRESENT,
   TRANSCRIPT_CLICK,
+  appSpawnOptions,
   auditHasEvent,
   countTokenMatches,
   distinctiveTokens,
@@ -31,7 +32,7 @@ import {
   meetingFiles,
   seedProfile
 } from './file-capture.mjs'
-import { buildReport, diagnosticLine, judge } from './file-capture-smoke.mjs'
+import { buildReport, diagnosticLine, judge, preconditionReason } from './file-capture-smoke.mjs'
 
 const dirs: string[] = []
 const tempDir = (): string => {
@@ -215,6 +216,21 @@ describe('profile seeding and launch', () => {
     expect(spec.env).toEqual({ PATH: '/bin', ASKTOTO_USERDATA: '/p', METIS_QA_CAPTURE_FILE: '/p/qa-capture.wav' })
   })
 
+  it('passes a synchronously opened stderr fd to the packaged app spawn options', () => {
+    const spec = launchSpec({ executable: '/x/Metis QA', profileDir: '/p', wavPath: '/p/qa-capture.wav', port: 9555, baseEnv: { PATH: '/bin' } })
+    expect(appSpawnOptions(spec, 19)).toEqual({
+      env: {
+        PATH: '/bin',
+        ASKTOTO_USERDATA: '/p',
+        METIS_QA_CAPTURE_FILE: '/p/qa-capture.wav',
+        ELECTRON_ENABLE_LOGGING: '1',
+        ASKTOTO_DEBUG_RENDERER: '1'
+      },
+      stdio: ['ignore', 'ignore', 19]
+    })
+    expect(appSpawnOptions(spec).stdio).toEqual(['ignore', 'ignore', 'ignore'])
+  })
+
   it('counts saved meetings without the index or the hidden brain', () => {
     const profile = tempDir()
     const { meetingsFolder } = seedProfile(profile)
@@ -350,7 +366,17 @@ describe('verdicts', () => {
   })
 
   it('PRECONDITION (exit 2) when the app never became ready', () => {
-    expect(judge({ ready: false })).toEqual({ verdict: 'PRECONDITION', exitCode: 2, checks: null })
+    expect(judge({ ready: false })).toEqual({ verdict: 'PRECONDITION', exitCode: 2, checks: null, reason: null })
+  })
+
+  it('PRECONDITION records a short content-free reason', () => {
+    const reason = preconditionReason(new Error('spawn failed before app readiness at /private/tmp/metis-profile: ' + 'x'.repeat(300)))
+    expect(reason).toHaveLength(200)
+    expect(reason).toContain('[path]')
+    expect(reason).not.toContain('/private/')
+    const outcome = judge({ ready: false, reason })
+    expect(outcome).toMatchObject({ verdict: 'PRECONDITION', exitCode: 2, checks: null, reason })
+    expect(buildReport({ ready: false, reason }, outcome)).toEqual({ verdict: 'PRECONDITION', reason })
   })
 })
 
@@ -383,7 +409,7 @@ describe('the report', () => {
 
   it.each([
     ['PASS report', buildReport(observed(), judge(observed()))],
-    ['PRECONDITION report', { verdict: judge({ ready: false }).verdict }]
+    ['PRECONDITION report', buildReport({ ready: false, reason: 'spawn failed before app readiness' }, judge({ ready: false, reason: 'spawn failed before app readiness' }))]
   ])('carries no fixture sentence, token or local path in the %s', (_name, report) => {
     const text = JSON.stringify(report).toLowerCase()
     for (const sentence of englishSentences()) expect(text).not.toContain(sentence.toLowerCase())

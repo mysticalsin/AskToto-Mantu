@@ -15,11 +15,18 @@ import { LINES_TIMEOUT_MS, LIVE_LINES_NEEDED, runFileCapture } from './file-capt
 
 export const DEADLINE_MS = 180_000
 export const TOKENS_NEEDED = 3
+export const PRECONDITION_REASON_MAX = 200
+
+export function preconditionReason(error) {
+  return String(error?.message ?? error ?? 'unknown precondition failure')
+    .replace(/(?:\/Users|\/private|\/tmp|[A-Za-z]:\\)[^\s'",)}]+/g, '[path]')
+    .slice(0, PRECONDITION_REASON_MAX)
+}
 
 /** The verdict and exit code for one run's observations. */
 export function judge(observed) {
   if (!observed.ready) {
-    return { verdict: 'PRECONDITION', exitCode: 2, checks: null }
+    return { verdict: 'PRECONDITION', exitCode: 2, checks: null, reason: observed.reason ?? null }
   }
   const checks = {
     auditEvent: observed.auditEvent === true,
@@ -35,6 +42,12 @@ export function judge(observed) {
 
 /** The content-free report: numbers, booleans and the engine name, never a line of the transcript. */
 export function buildReport(observed, { verdict, checks }) {
+  if (verdict === 'PRECONDITION') {
+    return {
+      verdict,
+      reason: observed.reason ?? null
+    }
+  }
   return {
     verdict,
     asrEngine: observed.asrEngine,
@@ -96,13 +109,14 @@ async function main() {
   try {
     observed = await runFileCapture({ installer: args.installer, reportDir: outDir })
   } catch (error) {
-    console.error(`file-capture precondition: ${error.message}`)
-    observed = { ready: false }
+    const reason = preconditionReason(error)
+    console.error(`file-capture precondition: ${reason}`)
+    observed = { ready: false, reason }
   }
   const outcome = judge(observed)
-  const report = outcome.checks ? buildReport(observed, outcome) : { verdict: outcome.verdict }
+  const report = buildReport(observed, outcome)
   writeFileSync(join(outDir, 'file-capture-report.json'), `${JSON.stringify(report, null, 2)}\n`)
-  console.log(`[file-capture-smoke] ${outcome.verdict} ${JSON.stringify(report.checks ?? {})}`)
+  console.log(`[file-capture-smoke] ${outcome.verdict} ${outcome.reason ? JSON.stringify({ reason: outcome.reason }) : JSON.stringify(report.checks ?? {})}`)
   if (outcome.verdict === 'FAIL') console.log(diagnosticLine(report))
   return outcome.exitCode
 }

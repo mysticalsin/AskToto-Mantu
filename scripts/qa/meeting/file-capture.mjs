@@ -9,7 +9,7 @@
  * meeting-history driver.
  */
 import { execFileSync, spawn } from 'node:child_process'
-import { cpSync, createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -82,6 +82,18 @@ export function launchSpec({ executable, profileDir, wavPath, port, baseEnv = pr
     command: executable,
     args: [`--remote-debugging-port=${port}`],
     env: { ...baseEnv, ASKTOTO_USERDATA: profileDir, METIS_QA_CAPTURE_FILE: wavPath }
+  }
+}
+
+/**
+ * Spawn options for the packaged app. stderrFd is opened synchronously so Node receives a real fd.
+ * @param {ReturnType<typeof launchSpec>} spec
+ * @param {number | null | undefined} stderrFd
+ */
+export function appSpawnOptions(spec, stderrFd = null) {
+  return {
+    env: { ...spec.env, ELECTRON_ENABLE_LOGGING: '1', ASKTOTO_DEBUG_RENDERER: '1' },
+    stdio: ['ignore', 'ignore', stderrFd ?? 'ignore']
   }
 }
 
@@ -408,11 +420,18 @@ export async function runFileCapture({ installer, workDir = mkdtempSync(join(tmp
   const since = () => Date.now() - launched
   const stderrPath = reportDir ? join(reportDir, 'app-stderr.log') : null
   if (reportDir) mkdirSync(reportDir, { recursive: true })
-  const stderr = stderrPath ? createWriteStream(stderrPath, { flags: 'a' }) : 'ignore'
-  const child = spawn(spec.command, spec.args, {
-    env: { ...spec.env, ELECTRON_ENABLE_LOGGING: '1', ASKTOTO_DEBUG_RENDERER: '1' },
-    stdio: ['ignore', 'ignore', stderr]
-  })
+  let stderrFd = stderrPath ? openSync(stderrPath, 'w') : null
+  let child
+  try {
+    child = spawn(spec.command, spec.args, appSpawnOptions(spec, stderrFd))
+  } catch (error) {
+    if (stderrFd !== null) {
+      closeSync(stderrFd)
+      stderrFd = null
+    }
+    throw error
+  }
+  const childExited = new Promise((resolve) => child.once('exit', resolve))
   const observed = {
     ready: false,
     asrEngine: null,
@@ -501,11 +520,12 @@ export async function runFileCapture({ installer, workDir = mkdtempSync(join(tmp
     page?.close()
     observed.totalMs = since()
     child.kill('SIGTERM')
-    await sleep(2000)
+    await Promise.race([childExited, sleep(2000)])
     child.kill('SIGKILL')
-    if (stderr && stderr !== 'ignore') {
-      stderr.end()
-      await new Promise((resolve) => stderr.once('finish', resolve))
+    await Promise.race([childExited, sleep(1000)])
+    if (stderrFd !== null) {
+      closeSync(stderrFd)
+      stderrFd = null
     }
     observed.diagnostics.engine = observed.diagnostics.asrLoadFailedMessages > 0
       ? 'load-failed'
