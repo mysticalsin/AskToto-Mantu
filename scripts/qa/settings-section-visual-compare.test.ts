@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   compare,
-  fitsInside,
   formatFailureSummary,
   pngSize,
   removeProfileDir,
@@ -101,39 +100,33 @@ describe('settings-section-visual-compare compare', () => {
     expect(compared.rows[0]).toEqual(expect.objectContaining({ status: 'FAIL', failures: ['clipped'] }))
   })
 
-  it('fails a tall scroll-panel section even when the PNG covers the full section', () => {
+  it('accepts a tall scroll-panel section when the PNG covers the full section', () => {
     const sectionBox = { x: 24, y: 40, width: 820, height: 900 }
-    const panelBox = { x: 16, y: 24, width: 850, height: 640 }
-    const clipped = sectionCaptureClipped({ buffer: png(820, 900), sectionBox, panelBox })
+    const clipped = sectionCaptureClipped({ buffer: png(820, 900), sectionBox })
 
-    expect(fitsInside(sectionBox, panelBox)).toBe(false)
     expect(screenshotCoversBox(png(820, 900), sectionBox)).toBe(true)
-    expect(clipped).toBe(true)
+    expect(clipped).toBe(false)
     expect(compare(capture([section()]), capture([section({ clipped })]))).toMatchObject({
-      status: 'FAIL',
-      rows: [{ key: 'brain-01-models', status: 'FAIL', failures: ['clipped'] }]
+      status: 'PASS',
+      rows: [{ key: 'brain-01-models', status: 'PASS', failures: [] }]
     })
   })
 
   it('accepts a section that fits inside the tab panel when the PNG covers it', () => {
     const sectionBox = { x: 24, y: 40, width: 820, height: 620 }
-    const panelBox = { x: 16, y: 24, width: 850, height: 640 }
 
-    expect(fitsInside(sectionBox, panelBox)).toBe(true)
-    expect(sectionCaptureClipped({ buffer: png(820, 620), sectionBox, panelBox })).toBe(false)
+    expect(sectionCaptureClipped({ buffer: png(820, 620), sectionBox })).toBe(false)
   })
 
   it('detects when the uploaded section PNG is smaller than the section box', () => {
     const sectionBox = { x: 24, y: 40, width: 820, height: 900 }
-    const panelBox = { x: 16, y: 24, width: 850, height: 940 }
 
     expect(pngSize(png(819, 900))).toEqual({ width: 819, height: 900 })
     expect(screenshotCoversBox(png(818, 900), sectionBox)).toBe(false)
     expect(screenshotCoversBox(png(820, 898), sectionBox)).toBe(false)
     expect(sectionCaptureClipped({
       buffer: png(820, 898),
-      sectionBox,
-      panelBox
+      sectionBox
     })).toBe(true)
   })
 

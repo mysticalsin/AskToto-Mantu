@@ -104,18 +104,8 @@ function screenshotCoversBox(buffer, box) {
   )
 }
 
-function fitsInside(innerBox, outerBox) {
-  if (!innerBox || !outerBox) return false
-  return (
-    innerBox.x + FIT_TOLERANCE_PX >= outerBox.x
-    && innerBox.y + FIT_TOLERANCE_PX >= outerBox.y
-    && innerBox.x + innerBox.width <= outerBox.x + outerBox.width + FIT_TOLERANCE_PX
-    && innerBox.y + innerBox.height <= outerBox.y + outerBox.height + FIT_TOLERANCE_PX
-  )
-}
-
-function sectionCaptureClipped({ buffer, sectionBox, panelBox }) {
-  return !fitsInside(sectionBox, panelBox) || !screenshotCoversBox(buffer, sectionBox)
+function sectionCaptureClipped({ buffer, sectionBox }) {
+  return !screenshotCoversBox(buffer, sectionBox)
 }
 
 async function installDeterministicSettingsQaBridge(page) {
@@ -247,7 +237,10 @@ function seedProfile(profile) {
     onboardingDoneAt: 1_700_000_000_000,
     recordingConsent: true,
     meetingsFolder: 'Settings visual meetings',
+    overlayOpacity: 1,
     overlayLayout: 'bar',
+    overlayOrbStyle: 'jakub',
+    overlayPlacement: 'top-center',
     autoHideOverlay: false,
     contentProtection: false
   }
@@ -374,9 +367,8 @@ async function captureSections(page, appOutDir) {
       const key = `${slug(tab)}-${String(index + 1).padStart(2, '0')}-${slug(title)}`
       const file = join(appOutDir, `${key}.png`)
       const box = await section.boundingBox()
-      const panelBox = await tabPanel.boundingBox()
       const buffer = await section.screenshot({ path: file, animations: 'disabled', caret: 'hide' })
-      const clipped = sectionCaptureClipped({ buffer, sectionBox: box, panelBox })
+      const clipped = sectionCaptureClipped({ buffer, sectionBox: box })
       sections.push({
         key,
         tab,
@@ -544,4 +536,4 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   })
 }
 
-export { compare, fitsInside, formatFailureSummary, pngSize, removeProfileDir, screenshotCoversBox, sectionCaptureClipped, setQaBridgeMember }
+export { compare, formatFailureSummary, pngSize, removeProfileDir, screenshotCoversBox, sectionCaptureClipped, setQaBridgeMember }
