@@ -764,6 +764,7 @@ function gateWindow(dir, out) {
     writeFileSync(out, `${JSON.stringify(gate, null, 2)}\n`)
   }
   console.log(JSON.stringify(gate, null, 2))
+  console.error(`[st-1] window gate skipped ${gate.skippedWarmups} warm-up launch${gate.skippedWarmups === 1 ? '' : 'es'}`)
   for (const failure of gate.failures) console.error(`[st-1] window gate FAIL — ${failure}`)
   return gate.pass ? 0 : 1
 }

@@ -12,7 +12,8 @@ import {
   parseMacHelperProcInfo,
   parseSidecarRegistry,
   registryHasSpawnedPid,
-  summarizeProof
+  summarizeProof,
+  topLevelFailureReport
 } from './sidecar-boot-reaper.mjs'
 
 function proof(kind: string, result: string, unblock: string | null = null) {
@@ -258,6 +259,21 @@ describe('sidecar boot reaper proof helpers', () => {
     })
     expect(() => parseCliArgs(['Metis.app'])).toThrow(/usage/)
     expect(() => parseCliArgs(['Metis.app', 'r.json', '--require-real'])).toThrow(/usage/)
+  })
+
+  it('turns an unexpected top-level harness exception into a content-free failure report', () => {
+    const error = Object.assign(new Error('sensitive cleanup details should not appear'), {
+      code: 'EPERM'
+    })
+    expect(topLevelFailureReport(error)).toEqual({
+      schema: 3,
+      ticket: 'M2-0233',
+      result: 'fail',
+      failures: ['unexpected-error:EPERM'],
+      proofs: {},
+      externalBlockers: []
+    })
+    expect(JSON.stringify(topLevelFailureReport(error))).not.toContain('sensitive cleanup details')
   })
 
   it('passes the legacy-orphan row only for a legacy-orphan reap of the seeded pid within 5 s while the control survives', () => {
