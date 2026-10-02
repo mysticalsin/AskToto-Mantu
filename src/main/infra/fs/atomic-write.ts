@@ -73,6 +73,22 @@ export function atomicWriteSync(path: string, data: string | Uint8Array, options
   }
 }
 
+/** Best-effort bootstrap helper: create a small sidecar file once, never replacing existing user content. */
+export async function writeFileIfMissing(path: string, data: string | Uint8Array, options: Pick<AtomicWriteOptions, 'mode'> = {}): Promise<boolean> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined
+  try {
+    handle = await open(path, 'wx', options.mode ?? 0o600)
+    await handle.writeFile(data)
+    await handle.sync()
+    return true
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'EEXIST') return false
+    throw e
+  } finally {
+    await handle?.close()
+  }
+}
+
 /** Async twin of atomicWriteSync: the same sequence, off the main-process event loop. */
 export async function atomicWrite(path: string, data: string | Uint8Array, options: AtomicWriteOptions = {}): Promise<void> {
   const tmp = options.tmp ?? `${path}.tmp`

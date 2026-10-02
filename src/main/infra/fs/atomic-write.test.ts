@@ -3,7 +3,7 @@ import * as fs from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { atomicWrite, atomicWriteSync, uniqueTmpPath } from './atomic-write'
+import { atomicWrite, atomicWriteSync, uniqueTmpPath, writeFileIfMissing } from './atomic-write'
 
 // Every real call stays real; the spies only observe and, per test, fail the syscall under audit.
 vi.mock('node:fs', async (importOriginal) => {
@@ -143,6 +143,16 @@ describe('atomicWrite', () => {
       await atomicWrite(target, 'after-retry')
       expect(calls).toBe(2)
       expect(fs.readFileSync(target, 'utf8')).toBe('after-retry')
+    })
+  })
+
+  describe('writeFileIfMissing', () => {
+    it('creates a sidecar file once without replacing existing bytes', async () => {
+      expect(await writeFileIfMissing(target, 'first')).toBe(true)
+      expect(fs.readFileSync(target, 'utf8')).toBe('first')
+
+      expect(await writeFileIfMissing(target, 'second')).toBe(false)
+      expect(fs.readFileSync(target, 'utf8')).toBe('first')
     })
   })
 

@@ -11,7 +11,7 @@ import { randomBytes, createCipheriv, createDecipheriv, publicEncrypt, constants
 import type { SaveMeeting, SaveNote, Settings, RecapExport, TranscriptLine } from '@shared/ipc'
 import { isSummaryOnlyProfile, resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
 import { encryptSecret, isKeychainAvailable, useFileBackend } from './secrets'
-import { atomicWrite, atomicWriteSync, uniqueTmpPath } from './infra/fs/atomic-write'
+import { atomicWrite, atomicWriteSync, uniqueTmpPath, writeFileIfMissing } from './infra/fs/atomic-write'
 import { removeFile, removeFilesBestEffort, sweepMatchingFilesBestEffort } from './infra/fs/temp-cleanup'
 import {
   MARKER_ATKENC1,
@@ -415,15 +415,13 @@ const INDEX_HEADER = `# Métis Meetings — Index
 |------|-------|------|----------|------|
 `
 
-/** Ensure the meetings folder exists and is self-documenting (README + index). Safe to call repeatedly. */
+/** Ensure the meetings folder exists and schedule non-blocking README/index bootstrap. */
 export function ensureMeetingsFolder(settings: Settings): string {
   const folder = resolveMeetingsFolder(settings)
   try {
-    if (!existsSync(folder)) mkdirSync(folder, { recursive: true })
-    const readme = join(folder, 'README.md')
-    if (!existsSync(readme)) writeFileSync(readme, README, 'utf8')
-    const index = join(folder, 'index.md')
-    if (!existsSync(index)) writeFileSync(index, INDEX_HEADER, 'utf8')
+    mkdirSync(folder, { recursive: true })
+    void writeFileIfMissing(join(folder, 'README.md'), README).catch(() => undefined)
+    void writeFileIfMissing(join(folder, 'index.md'), INDEX_HEADER).catch(() => undefined)
   } catch {
     /* fail-open: folder may be offline/unwritable */
   }
