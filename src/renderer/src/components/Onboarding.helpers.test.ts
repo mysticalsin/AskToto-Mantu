@@ -24,6 +24,9 @@ import {
   firstRunCanFinish,
   asrStatusIsReady,
   summarizeSetupRows,
+  setupRowsForSpeechPackPolicy,
+  speechPackAllowsEnsure,
+  speechPackSetupRowVisible,
   type SetupRow
 } from './OnboardingExperience'
 import { BUNDLE_GOT_LOGIN_HTML, BUNDLE_NOT_JS } from '@shared/bundle-response'
@@ -302,6 +305,23 @@ describe('Act 3 on-device model row', () => {
     expect(src).not.toMatch(/r\.progress > 0 && r\.progress < 1/)
     expect(src).toMatch(/state === 'checking' \|\| r\.state === 'loading'/)
     expect(src).toMatch(/InlineOrb kind="loading"/)
+  })
+})
+
+describe('Act 3 managed local speech pack policy', () => {
+  it('keeps the automatic onboarding download path for offered and required', () => {
+    expect(speechPackAllowsEnsure('offered')).toBe(true)
+    expect(speechPackAllowsEnsure('required')).toBe(true)
+    expect(speechPackSetupRowVisible('offered')).toBe(true)
+    expect(speechPackSetupRowVisible('required')).toBe(true)
+    expect(setupRowsForSpeechPackPolicy('offered').some((row) => row.key === 'asr')).toBe(true)
+    expect(setupRowsForSpeechPackPolicy('required').some((row) => row.key === 'asr')).toBe(true)
+  })
+
+  it('blocks both the setup card and automatic download path for blocked', () => {
+    expect(speechPackAllowsEnsure('blocked')).toBe(false)
+    expect(speechPackSetupRowVisible('blocked')).toBe(false)
+    expect(setupRowsForSpeechPackPolicy('blocked').some((row) => row.key === 'asr')).toBe(false)
   })
 })
 

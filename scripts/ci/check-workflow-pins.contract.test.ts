@@ -94,6 +94,25 @@ describe('findUnpinnedUses — classifies a single uses: reference', () => {
     ])
   })
 
+  it('flags program-repository reusable workflow callers when they are present in this public repository', () => {
+    const yaml = [
+      '  uses: mysticalsin/AskToto-Mantu/.github/workflows/ledger.yml@main',
+      '  uses: mysticalsin/AskToto-Mantu/.github/workflows/program-audit.yml@main'
+    ].join('\n')
+    expect(findUnpinnedUses(yaml)).toEqual([
+      {
+        line: 1,
+        ref: 'mysticalsin/AskToto-Mantu/.github/workflows/ledger.yml@main',
+        reason: 'not pinned to a full 40-character commit SHA'
+      },
+      {
+        line: 2,
+        ref: 'mysticalsin/AskToto-Mantu/.github/workflows/program-audit.yml@main',
+        reason: 'not pinned to a full 40-character commit SHA'
+      }
+    ])
+  })
+
   it('reports every violation with its own line number, across multiple lines', () => {
     const yaml = [
       'jobs:',

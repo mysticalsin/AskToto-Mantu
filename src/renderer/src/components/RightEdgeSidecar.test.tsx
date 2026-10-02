@@ -10,7 +10,11 @@ const sidecar = readFileSync(join(__dirname, './RightEdgeSidecar.tsx'), 'utf8')
 const answer = readFileSync(join(__dirname, './Answer.tsx'), 'utf8')
 const app = readFileSync(join(__dirname, '../App.tsx'), 'utf8')
 const css = readAppCss()
-const e2eSmoke = readFileSync(join(__dirname, '../../../../scripts/e2e-smoke.mjs'), 'utf8')
+const e2eSmoke = [
+  readFileSync(join(__dirname, '../../../../scripts/e2e-smoke.mjs'), 'utf8'),
+  readFileSync(join(__dirname, '../../../../scripts/qa/golden-flows/onboarding-flows.mjs'), 'utf8'),
+  readFileSync(join(__dirname, '../../../../scripts/qa/golden-flows/sidecar-flow.mjs'), 'utf8')
+].join('\n')
 
 function findElement(node: ReactNode, type: string): ReactElement<Record<string, unknown>> | null {
   if (!isValidElement(node)) return null
@@ -279,7 +283,9 @@ describe('right-edge dock', () => {
 
   it('receives the current app-owned paths rather than a duplicate chat or control route', () => {
     const rightEdgeCalls = app.match(/<RightEdgeSidecar[\s\S]*?\/>/g) ?? []
-    expect(rightEdgeCalls).toHaveLength(2)
+    // M2-0431: one dock element whose `open` follows the park, never a parked and a revealed copy.
+    expect(rightEdgeCalls).toHaveLength(1)
+    expect(rightEdgeCalls[0]).toContain('open={!overlayPeeked}')
     for (const call of rightEdgeCalls) {
       expect(call).toContain('value={input}')
       expect(call).toContain('onChange={setInput}')
