@@ -114,8 +114,8 @@ function screenshotCoversBox(buffer, box) {
   )
 }
 
-function sectionCaptureClipped({ buffer, sectionBox }) {
-  return !screenshotCoversBox(buffer, sectionBox)
+function sectionCaptureClipped({ buffer, sectionBox, panelBox }) {
+  return !fitsInside(sectionBox, panelBox) || !screenshotCoversBox(buffer, sectionBox)
 }
 
 async function installDeterministicSettingsQaBridge(page) {
@@ -361,8 +361,7 @@ async function captureSections(page, appOutDir) {
       const panelBox = await tabPanel.boundingBox()
       const box = await section.boundingBox()
       const buffer = await section.screenshot({ path: file, animations: 'disabled', caret: 'hide' })
-      const viewportClipped = !fitsInside(box, panelBox)
-      const clipped = sectionCaptureClipped({ buffer, sectionBox: box })
+      const clipped = sectionCaptureClipped({ buffer, sectionBox: box, panelBox })
       sections.push({
         key,
         tab,
@@ -370,7 +369,6 @@ async function captureSections(page, appOutDir) {
         title,
         width: box ? Math.round(box.width) : null,
         height: box ? Math.round(box.height) : null,
-        viewportClipped,
         clipped,
         sha256: sha256(buffer),
         bytes: buffer.length,

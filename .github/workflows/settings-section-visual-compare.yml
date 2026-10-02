@@ -18,6 +18,7 @@ on:
     paths:
       - .github/workflows/settings-section-visual-compare.yml
       - scripts/qa/settings-section-visual-compare.mjs
+      - scripts/qa/settings-section-visual-compare.test.ts
       - src/renderer/src/components/Settings.tsx
       - src/renderer/src/components/TapCalibration.tsx
       - src/renderer/src/features/settings/**
