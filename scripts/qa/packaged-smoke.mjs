@@ -607,7 +607,8 @@ async function refreshOpenHistoryAfterSeed(page) {
   await page.getByRole('button', { name: 'History' }).first().click({ timeout: 15_000 })
   await search.waitFor({ state: 'hidden', timeout: 15_000 })
   await page.waitForTimeout(450)
-  await clickHistory(page)
+  await page.getByRole('button', { name: 'History' }).first().click({ timeout: 15_000 })
+  await search.waitFor({ timeout: 15_000 })
 }
 
 export async function seedNavigationMeetings(page, label = '') {
