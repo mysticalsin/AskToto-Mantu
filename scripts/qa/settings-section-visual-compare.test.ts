@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { compare, formatFailureSummary, pngSize, removeProfileDir, screenshotCoversBox, sectionCaptureClipped } from './settings-section-visual-compare.mjs'
+import {
+  compare,
+  formatFailureSummary,
+  pngSize,
+  removeProfileDir,
+  screenshotCoversBox,
+  sectionCaptureClipped,
+  setQaBridgeMember
+} from './settings-section-visual-compare.mjs'
 
 type Section = {
   key: string
@@ -121,6 +129,20 @@ describe('settings-section-visual-compare compare', () => {
 
     expect(formatFailureSummary(report)).toContain('brain-01-models')
     expect(formatFailureSummary(report)).toContain('pixels_changed')
+  })
+
+  it('does not throw when packaged Electron exposes an immutable bridge member', () => {
+    const api: Record<string, unknown> = {}
+    const original = async () => ({ ok: true })
+    const replacement = async () => ({ ok: false })
+    Object.defineProperty(api, 'checkForUpdate', {
+      value: original,
+      configurable: false,
+      writable: false
+    })
+
+    expect(setQaBridgeMember(api, 'checkForUpdate', replacement)).toBe(false)
+    expect(api.checkForUpdate).toBe(original)
   })
 
   it('retries transient Windows profile cleanup locks without failing the visual comparison', async () => {

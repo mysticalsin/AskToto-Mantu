@@ -4,8 +4,8 @@
  *
  * This is hosted-runner QA only (D-28). It launches each packaged app with a fresh onboarded profile,
  * opens the real Settings surface, walks every Settings tab, screenshots every rendered <section>, and
- * writes a content-free JSON report plus PNG artifacts. No meeting content, account ids, secrets, or local
- * user paths are recorded.
+ * writes a content-free JSON report plus PNG artifacts. No sensitive identifiers, secrets, or local paths
+ * are recorded.
  *
  * Usage:
  *   node scripts/qa/settings-section-visual-compare.mjs <before executable> <after executable> <out dir>
@@ -116,11 +116,30 @@ function sectionCaptureClipped({ buffer, sectionBox, panelBox }) {
 }
 
 async function installDeterministicSettingsQaBridge(page) {
-  await page.evaluate(() => {
+  const skipped = await page.evaluate(() => {
     const api = window.toto
     if (!api || typeof api !== 'object') throw new Error('window.toto bridge not found')
+    const skippedNames = []
+    const setMember = (target, name, value) => {
+      try {
+        target[name] = value
+        if (target[name] === value) return true
+      } catch {
+        // contextBridge members can be immutable in packaged Electron builds.
+      }
+
+      const descriptor = Object.getOwnPropertyDescriptor(target, name)
+      if (descriptor && !descriptor.configurable) return false
+
+      try {
+        Object.defineProperty(target, name, { value, configurable: true, writable: true })
+        return target[name] === value
+      } catch {
+        return false
+      }
+    }
     const define = (name, value) => {
-      Object.defineProperty(api, name, { value, configurable: true, writable: true })
+      if (!setMember(api, name, value)) skippedNames.push(name)
     }
     define('checkForUpdate', async () => ({ ok: true, current: 'settings-visual', available: false }))
     define('localAppleEngineStatus', async () => 'unsupported')
@@ -155,7 +174,30 @@ async function installDeterministicSettingsQaBridge(page) {
     define('onUpdateProgress', () => () => undefined)
     define('onUpdateReady', () => () => undefined)
     define('onUpdateError', () => () => undefined)
+    return skippedNames
   })
+  if (skipped.length > 0) {
+    console.warn(`settings-section-visual-compare warning=bridge overrides skipped members=${skipped.join(',')}`)
+  }
+}
+
+function setQaBridgeMember(api, name, value) {
+  try {
+    api[name] = value
+    if (api[name] === value) return true
+  } catch {
+    // contextBridge members can be immutable in packaged Electron builds.
+  }
+
+  const descriptor = Object.getOwnPropertyDescriptor(api, name)
+  if (descriptor && !descriptor.configurable) return false
+
+  try {
+    Object.defineProperty(api, name, { value, configurable: true, writable: true })
+    return api[name] === value
+  } catch {
+    return false
+  }
 }
 
 function readAuditLog(profile) {
@@ -446,4 +488,4 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   })
 }
 
-export { compare, fitsInside, formatFailureSummary, pngSize, removeProfileDir, screenshotCoversBox, sectionCaptureClipped }
+export { compare, fitsInside, formatFailureSummary, pngSize, removeProfileDir, screenshotCoversBox, sectionCaptureClipped, setQaBridgeMember }
