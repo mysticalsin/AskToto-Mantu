@@ -54,7 +54,7 @@ function assertFreshBuild() {
     join(ROOT, 'src', 'renderer', 'src', 'components', 'OnboardingAppearance.tsx'),
     join(ROOT, 'src', 'renderer', 'src', 'components', 'OverlayChromePicker.tsx'),
     join(ROOT, 'src', 'renderer', 'src', 'components', 'OverlayPlacementPicker.tsx'),
-    join(ROOT, 'src', 'renderer', 'src', 'lib', 'onboarding-appearance.ts'),
+    join(ROOT, 'src', 'renderer', 'src', 'features', 'onboarding', 'onboarding-appearance.ts'),
     join(ROOT, 'src', 'renderer', 'src', 'lib', 'overlay-motion.ts'),
     join(ROOT, 'src', 'shared', 'overlay-chrome.ts'),
     join(ROOT, 'src', 'shared', 'overlay-placement.ts'),
