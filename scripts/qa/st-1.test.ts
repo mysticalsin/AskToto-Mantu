@@ -20,6 +20,7 @@ import {
   pinnedExpression,
   recordSample,
   releaseExpression,
+  sampleExpression,
   shouldProbeHistory,
   syntheticDatalessPlan,
   runPurpose,
@@ -74,6 +75,7 @@ function report(overrides: Record<string, unknown> = {}) {
 afterEach(() => {
   vi.useRealTimers()
   delete globals[PENDING_GLOBAL]
+  delete (globalThis as Record<string, unknown>).__st1since
 })
 
 describe('withTimeout', () => {
@@ -135,8 +137,118 @@ describe('pinnedExpression', () => {
     })
   })
 
+  it('still returns the expression value when the in-app timer cannot be started', async () => {
+    const originalSetTimeout = globalThis.setTimeout
+    globalThis.setTimeout = (() => {
+      throw new TypeError('testEnabled is not a function')
+    }) as unknown as typeof setTimeout
+    try {
+      await expect(evaluateGlobally(pinnedExpression('timer-6', '41 + 1', 1_000))).resolves.toEqual({ ok: true, value: 42 })
+    } finally {
+      globalThis.setTimeout = originalSetTimeout
+    }
+  })
+
   it('releasing a key that was never stored is harmless', () => {
     expect(() => evaluateGlobally(releaseExpression('never-stored'))).not.toThrow()
+  })
+})
+
+describe('sampleExpression', () => {
+  it('carries a pre-sample boot block into sample 0 through the whole-run max', async () => {
+    const originalGetBuiltinModule = (process as unknown as { getBuiltinModule?: (name: string) => unknown }).getBuiltinModule
+    const installSampleHarness = ({
+      sinceMaxNs = 0,
+      runMaxNs = 0,
+      write = () => {}
+    }: {
+      sinceMaxNs?: number
+      runMaxNs?: number
+      write?: (record: { since: (ns: number) => void; run: (ns: number) => void }) => void
+    }) => {
+      let sampleMaxNs = sinceMaxNs
+      let wholeRunMaxNs = runMaxNs
+      let dropNextSinceInterval = false
+      const reset = vi.fn(() => {
+        sampleMaxNs = 0
+        dropNextSinceInterval = true
+      })
+      const recordSince = (ns: number) => {
+        if (dropNextSinceInterval) {
+          dropNextSinceInterval = false
+          return
+        }
+        sampleMaxNs = Math.max(sampleMaxNs, ns)
+      }
+      const recordRun = (ns: number) => {
+        wholeRunMaxNs = Math.max(wholeRunMaxNs, ns)
+      }
+      ;(globalThis as Record<string, unknown>).__st1 = {
+        get max() {
+          return wholeRunMaxNs
+        }
+      }
+      ;(globalThis as Record<string, unknown>).__st1since = {
+        get max() {
+          return sampleMaxNs
+        },
+        reset
+      }
+      ;(process as unknown as { getBuiltinModule?: (name: string) => unknown }).getBuiltinModule = (name) => {
+        if (name === 'node:fs/promises') {
+          return {
+            writeFile: async () => {
+              write({ since: recordSince, run: recordRun })
+            }
+          }
+        }
+        if (name === 'node:dns/promises') return { lookup: async () => ({ address: '127.0.0.1', family: 4 }) }
+        throw new Error(`unexpected module ${name}`)
+      }
+      return reset
+    }
+    try {
+      const preSampleReset = installSampleHarness({ runMaxNs: 80_000_000 })
+      await expect(evaluateGlobally(sampleExpression('probe.txt'))).resolves.toMatchObject({
+        loopMaxSinceLastMs: 80,
+        loopMaxDuringWriteMs: 0,
+        runLoopMaxMs: 80,
+        writeMs: expect.any(Number),
+        lookupMs: expect.any(Number),
+        resources: expect.any(Object)
+      })
+      expect(preSampleReset).toHaveBeenCalledTimes(1)
+
+      delete (globalThis as Record<string, unknown>).__st1lastRunLoopMaxMs
+      const postResetReset = installSampleHarness({
+        write: ({ since, run }) => {
+          since(80_000_000)
+          run(80_000_000)
+        }
+      })
+      await expect(evaluateGlobally(sampleExpression('probe.txt'))).resolves.toMatchObject({
+        loopMaxSinceLastMs: 80,
+        loopMaxDuringWriteMs: 0,
+        runLoopMaxMs: 80,
+        writeMs: expect.any(Number),
+        lookupMs: expect.any(Number),
+        resources: expect.any(Object)
+      })
+      expect(postResetReset).toHaveBeenCalledTimes(1)
+
+      ;(globalThis as Record<string, unknown>).__st1lastRunLoopMaxMs = 80
+      const unchangedRunMaxReset = installSampleHarness({ sinceMaxNs: 12_000_000, runMaxNs: 80_000_000 })
+      await expect(evaluateGlobally(sampleExpression('probe.txt'))).resolves.toMatchObject({
+        loopMaxSinceLastMs: 12,
+        loopMaxDuringWriteMs: 0,
+        runLoopMaxMs: 80
+      })
+      expect(unchangedRunMaxReset).toHaveBeenCalledTimes(1)
+    } finally {
+      ;(process as unknown as { getBuiltinModule?: (name: string) => unknown }).getBuiltinModule = originalGetBuiltinModule
+      delete (globalThis as Record<string, unknown>).__st1
+      delete (globalThis as Record<string, unknown>).__st1lastRunLoopMaxMs
+    }
   })
 })
 
@@ -573,6 +685,31 @@ describe('buildReport', () => {
       exactLaunchOffset: false
     })
     expect(report({ attribution: { mainLog: { error: 'no require' }, appEvidence: null } }).mainLog).toEqual({ error: 'no require' })
+  })
+
+  it('reports when Profiler.start was requested and answered without changing the verdict', () => {
+    const plain = report()
+    const profiler = { requestedAtMs: 615, answeredAtMs: 694, startedAtMs: 694, stoppedAtMs: 300_000, file: 'st-1.cpuprofile' }
+    const withProfiler = report({ measured: { ...emptyRun(), samples: [goodSample(1_000), goodSample(2_000)], loop: { p99Ms: 12, maxMs: 40 }, profiler } })
+    expect(withProfiler.cpuProfile).toEqual(profiler)
+    expect(withProfiler.criteria).toEqual(plain.criteria)
+    expect(withProfiler.verdict).toBe(plain.verdict)
+  })
+
+  it('returns identical criteria and verdict with and without sample loop attribution fields', () => {
+    const plain = report()
+    const withLoopAttribution = report({
+      measured: {
+        ...emptyRun(),
+        samples: [
+          { ...goodSample(1_000), loopMaxDuringWriteMs: 0, runLoopMaxMs: 80 },
+          { ...goodSample(2_000), loopMaxDuringWriteMs: 4, runLoopMaxMs: 80 }
+        ],
+        loop: { p99Ms: 12, maxMs: 40 }
+      }
+    })
+    expect(withLoopAttribution.criteria).toEqual(plain.criteria)
+    expect(withLoopAttribution.verdict).toBe(plain.verdict)
   })
 
   it('returns identical criteria and verdict with and without witness data, and carries bootStages and witness (M2-0515)', () => {
