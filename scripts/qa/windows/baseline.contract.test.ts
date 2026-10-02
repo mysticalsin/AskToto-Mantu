@@ -106,8 +106,8 @@ function jobBlock(name: string): string {
 }
 
 describe('M2-0415 Windows baseline workflow lane', () => {
-  it('is manual-only and guarded to main on a hosted Windows runner', () => {
-    expect(workflowEvents()).toEqual(['workflow_dispatch'])
+  it('is dispatchable without pull_request and guarded to main on a hosted Windows runner', () => {
+    expect(workflowEvents()).toEqual(['workflow_call', 'workflow_dispatch'])
     const baseline = jobBlock('baseline')
     expect(baseline).toContain("runs-on: windows-latest")
     expect(baseline).toContain("if: github.ref == 'refs/heads/main'")

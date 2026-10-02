@@ -6,6 +6,18 @@ name: Windows 1.9.6 baseline
 # or a signed-in account are reported BLOCKED_EXTERNAL inside the uploaded content-free bundle. It never
 # builds, signs, publishes, tags, or changes release.yml. Runs only from main; there is no pull_request trigger.
 on:
+  workflow_call:
+    inputs:
+      release_repo:
+        description: Repository that publishes the packaged artifacts and SHA256SUMS
+        required: false
+        default: mysticalsin/Metis-Releases
+        type: string
+      release_tag:
+        description: Release tag to measure
+        required: false
+        default: v1.9.6-unsigned
+        type: string
   workflow_dispatch:
     inputs:
       release_repo:
