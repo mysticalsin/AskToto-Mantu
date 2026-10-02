@@ -129,8 +129,8 @@ import {
   preloadOnboardingHeroVideo,
   resolveOnboardingHeroVideoSrc
 } from '../lib/onboarding-hero-video'
-export { speechPackAllowsEnsure, speechPackSetupRowVisible } from '../lib/local-speech-engine-policy'
-import { speechPackAllowsEnsure, speechPackSetupRowVisible, type LocalSpeechPackSetting } from '../lib/local-speech-engine-policy'
+export { speechPackAllowsEnsure, speechPackSetupRowVisible } from '../lib/local-speech-pack-policy'
+import { speechPackAllowsEnsure, speechPackSetupRowVisible, type LocalSpeechPackSetting } from '../lib/local-speech-pack-policy'
 
 const PERSONA_ICONS: Record<OnboardingPersonaId, typeof MessageSquare> = {
   general: MessageSquare,
