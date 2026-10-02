@@ -155,16 +155,42 @@ describe('pinnedExpression', () => {
 })
 
 describe('sampleExpression', () => {
-  it('carries a pre-sample boot block into sample 0 and includes the interval after the reset', async () => {
+  it('carries a pre-sample boot block into sample 0 through the whole-run max', async () => {
     const originalGetBuiltinModule = (process as unknown as { getBuiltinModule?: (name: string) => unknown }).getBuiltinModule
-    const installSampleHarness = (startNs: number, writeNs: number) => {
-      let loopMaxNs = startNs
+    const installSampleHarness = ({
+      sinceMaxNs = 0,
+      runMaxNs = 0,
+      write = () => {}
+    }: {
+      sinceMaxNs?: number
+      runMaxNs?: number
+      write?: (record: { since: (ns: number) => void; run: (ns: number) => void }) => void
+    }) => {
+      let sampleMaxNs = sinceMaxNs
+      let wholeRunMaxNs = runMaxNs
+      let dropNextSinceInterval = false
       const reset = vi.fn(() => {
-        loopMaxNs = 0
+        sampleMaxNs = 0
+        dropNextSinceInterval = true
       })
+      const recordSince = (ns: number) => {
+        if (dropNextSinceInterval) {
+          dropNextSinceInterval = false
+          return
+        }
+        sampleMaxNs = Math.max(sampleMaxNs, ns)
+      }
+      const recordRun = (ns: number) => {
+        wholeRunMaxNs = Math.max(wholeRunMaxNs, ns)
+      }
+      ;(globalThis as Record<string, unknown>).__st1 = {
+        get max() {
+          return wholeRunMaxNs
+        }
+      }
       ;(globalThis as Record<string, unknown>).__st1since = {
         get max() {
-          return loopMaxNs
+          return sampleMaxNs
         },
         reset
       }
@@ -172,7 +198,7 @@ describe('sampleExpression', () => {
         if (name === 'node:fs/promises') {
           return {
             writeFile: async () => {
-              loopMaxNs = writeNs
+              write({ since: recordSince, run: recordRun })
             }
           }
         }
@@ -182,27 +208,46 @@ describe('sampleExpression', () => {
       return reset
     }
     try {
-      const preSampleReset = installSampleHarness(80_000_000, 35_000_000)
+      const preSampleReset = installSampleHarness({ runMaxNs: 80_000_000 })
       await expect(evaluateGlobally(sampleExpression('probe.txt'))).resolves.toMatchObject({
         loopMaxSinceLastMs: 80,
-        loopMaxDuringWriteMs: 35,
+        loopMaxDuringWriteMs: 0,
+        runLoopMaxMs: 80,
         writeMs: expect.any(Number),
         lookupMs: expect.any(Number),
         resources: expect.any(Object)
       })
-      expect(preSampleReset).toHaveBeenCalledTimes(2)
+      expect(preSampleReset).toHaveBeenCalledTimes(1)
 
-      const postResetReset = installSampleHarness(0, 80_000_000)
+      delete (globalThis as Record<string, unknown>).__st1lastRunLoopMaxMs
+      const postResetReset = installSampleHarness({
+        write: ({ since, run }) => {
+          since(80_000_000)
+          run(80_000_000)
+        }
+      })
       await expect(evaluateGlobally(sampleExpression('probe.txt'))).resolves.toMatchObject({
         loopMaxSinceLastMs: 80,
-        loopMaxDuringWriteMs: 80,
+        loopMaxDuringWriteMs: 0,
+        runLoopMaxMs: 80,
         writeMs: expect.any(Number),
         lookupMs: expect.any(Number),
         resources: expect.any(Object)
       })
-      expect(postResetReset).toHaveBeenCalledTimes(2)
+      expect(postResetReset).toHaveBeenCalledTimes(1)
+
+      ;(globalThis as Record<string, unknown>).__st1lastRunLoopMaxMs = 80
+      const unchangedRunMaxReset = installSampleHarness({ sinceMaxNs: 12_000_000, runMaxNs: 80_000_000 })
+      await expect(evaluateGlobally(sampleExpression('probe.txt'))).resolves.toMatchObject({
+        loopMaxSinceLastMs: 12,
+        loopMaxDuringWriteMs: 0,
+        runLoopMaxMs: 80
+      })
+      expect(unchangedRunMaxReset).toHaveBeenCalledTimes(1)
     } finally {
       ;(process as unknown as { getBuiltinModule?: (name: string) => unknown }).getBuiltinModule = originalGetBuiltinModule
+      delete (globalThis as Record<string, unknown>).__st1
+      delete (globalThis as Record<string, unknown>).__st1lastRunLoopMaxMs
     }
   })
 })
@@ -649,6 +694,22 @@ describe('buildReport', () => {
     expect(withProfiler.cpuProfile).toEqual(profiler)
     expect(withProfiler.criteria).toEqual(plain.criteria)
     expect(withProfiler.verdict).toBe(plain.verdict)
+  })
+
+  it('returns identical criteria and verdict with and without sample loop attribution fields', () => {
+    const plain = report()
+    const withLoopAttribution = report({
+      measured: {
+        ...emptyRun(),
+        samples: [
+          { ...goodSample(1_000), loopMaxDuringWriteMs: 0, runLoopMaxMs: 80 },
+          { ...goodSample(2_000), loopMaxDuringWriteMs: 4, runLoopMaxMs: 80 }
+        ],
+        loop: { p99Ms: 12, maxMs: 40 }
+      }
+    })
+    expect(withLoopAttribution.criteria).toEqual(plain.criteria)
+    expect(withLoopAttribution.verdict).toBe(plain.verdict)
   })
 
   it('returns identical criteria and verdict with and without witness data, and carries bootStages and witness (M2-0515)', () => {

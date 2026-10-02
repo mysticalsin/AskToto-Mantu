@@ -87,7 +87,8 @@ export function pinnedExpression(key, expression, ms) {
 }
 
 /** One app-side sample expression. The reported max covers the interval before the sample plus the probe
- *  write after the histogram reset, so a main-loop block that straddles the reset still reaches this sample. */
+ *  write after the histogram reset, and uses the never-reset run histogram only when it rose in this
+ *  interval, so a dropped post-reset block reaches one timeline sample without being replayed forever. */
 export function sampleExpression(probeFile) {
   return `(async () => {
   const loopMaxBeforeWriteMs = __st1since.max / 1e6
@@ -102,10 +103,20 @@ export function sampleExpression(probeFile) {
   await writeFile(${JSON.stringify(probeFile)}, String(started))
   const writeMs = performance.now() - started
   const loopMaxDuringWriteMs = __st1since.max / 1e6
-  __st1since.reset()
+  const runLoopMaxMs = __st1.max / 1e6
+  const previousRunLoopMaxMs = globalThis.__st1lastRunLoopMaxMs ?? 0
+  globalThis.__st1lastRunLoopMaxMs = Math.max(previousRunLoopMaxMs, runLoopMaxMs)
+  const sampleLoopMaxMs = Math.max(loopMaxBeforeWriteMs, loopMaxDuringWriteMs)
   started = performance.now()
   await lookup('localhost')
-  return { writeMs, loopMaxDuringWriteMs, lookupMs: performance.now() - started, loopMaxSinceLastMs: Math.max(loopMaxBeforeWriteMs, loopMaxDuringWriteMs), resources }
+  return {
+    writeMs,
+    loopMaxDuringWriteMs,
+    runLoopMaxMs,
+    lookupMs: performance.now() - started,
+    loopMaxSinceLastMs: runLoopMaxMs > previousRunLoopMaxMs ? Math.max(sampleLoopMaxMs, runLoopMaxMs) : sampleLoopMaxMs,
+    resources
+  }
 })()`
 }
 

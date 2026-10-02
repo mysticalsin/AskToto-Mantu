@@ -407,6 +407,7 @@ const SETUP = `(() => {
   const { monitorEventLoopDelay } = process.getBuiltinModule('node:perf_hooks')
   globalThis.__st1 = monitorEventLoopDelay({ resolution: ${LOOP_RESOLUTION_MS} })
   globalThis.__st1.enable()
+  globalThis.__st1lastRunLoopMaxMs = __st1.max / 1e6
   globalThis.__st1since = monitorEventLoopDelay({ resolution: ${LOOP_RESOLUTION_MS} })
   globalThis.__st1since.enable()
   return process.env.UV_THREADPOOL_SIZE ?? 'default'
