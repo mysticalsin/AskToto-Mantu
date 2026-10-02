@@ -1541,6 +1541,7 @@ export function useListen(
     if (engineRef.current === 'cloud') return
 
     if (engineRef.current !== 'parakeet' && engineRef.current !== 'apple') return // already switched
+    const epoch = sessionEpochRef.current
     const failedEngine = engineRef.current
     const gate = assertCloudOnlyAllowsEngine(resolveEnterpriseLiveProfile(enterpriseLiveRef.current ?? {}), 'whisper')
     if (!gate.ok) {
@@ -1554,18 +1555,17 @@ export function useListen(
     readyRef.current = false
     parakeetFailures.current = 0
     onFallbackRef.current?.(`${failedEngine === 'apple' ? 'Apple Speech' : 'Parakeet'} failed repeatedly`)
-    // loading only — no live `error` banner. The engine swap happens silently; onEngineFallback records
-    // it somewhere checkable (Settings) instead of interrupting the meeting.
+    // Keep fallback silent; onEngineFallback records its Settings footnote.
     setState((s) => ({ ...s, loading: true }))
     void getAsrBundled()
       .then((bundled) => {
+        if (sessionEpochRef.current !== epoch || engineRef.current !== 'whisper') return
         ensureWorker().postMessage({ type: 'init', quality: requestedQualityRef.current, bundled, language: asrLanguageRef.current })
       })
       .catch(() => {})
   }, [ensureWorker, getAsrBundled])
 
-  // Pending 'online' listener for a network-caused Whisper load failure, so a second failure (or a fresh
-  // session) can replace it instead of stacking listeners.
+  // Replace the pending 'online' retry listener on another load failure or fresh session; never stack them.
   const networkRetryCleanupRef = useRef<(() => void) | null>(null)
   const disarmNetworkRetry = useCallback((): void => {
     networkRetryCleanupRef.current?.()
