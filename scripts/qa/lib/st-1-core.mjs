@@ -180,10 +180,12 @@ export function countStorageSaturations(mainLogText) {
   return mainLogText.split('\n').filter((line) => line.includes(STORAGE_SATURATED_LOG)).length
 }
 
-/** Whether this sample should schedule the next History probe. Pure so the idle row can prove no probe is
- *  scheduled while `--history off` keeps History untouched. */
-export function shouldProbeHistory({ historyOn, historyRunning, tMs, historyLastMs, fromMs, everyMs }) {
-  return historyOn && !historyRunning && tMs >= fromMs && tMs - historyLastMs >= everyMs
+/** Whether this sample should schedule the next History probe. Pure so idle rows can prove when History is
+ *  untouched, including a delayed mode that opens it only after the idle measurement window. */
+export function shouldProbeHistory({ historyMode = 'on', historyRunning, historyAnswered = false, tMs, historyLastMs, fromMs, everyMs, retryUntilMs = Infinity }) {
+  if (historyMode === 'off' || historyRunning) return false
+  if (historyMode === 'after-idle' && historyAnswered) return false
+  return tMs >= fromMs && tMs <= retryUntilMs && tMs - historyLastMs >= everyMs
 }
 
 /** The representative profile of ARCHITECTURE 6.1: 59 meetings, 6 of them cloud-only, and a mostly
@@ -558,9 +560,10 @@ export function buildReport({
   // The control row has nothing to exercise: its verdict is the criteria alone.
   const exercised = refusalEvidence?.exercised ?? (row === 'none' || evidence?.exercised)
   const openedNonRegularFixture = criteria.some((criterion) => criterion.name === 'non-regular-fixtures-unopened' && !criterion.pass)
+  const delayedHistoryFailed = historyMode === 'after-idle' && refusalEvidence && !refusalEvidence.exercised && measured.history.length > 0
   const verdict = !complete
     ? 'INCOMPLETE'
-    : openedNonRegularFixture
+    : openedNonRegularFixture || delayedHistoryFailed
       ? 'FAIL'
       : !exercised
         ? 'NOT_EXERCISED'

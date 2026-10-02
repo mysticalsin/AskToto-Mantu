@@ -40,7 +40,7 @@
  * timings leave the renderer, never a row or a hit.
  *
  * Usage:
- *       --fixtures fifo|dataless|synthetic-dataless|none [--history [on|off]] [--count 6]
+ *       --fixtures fifo|dataless|synthetic-dataless|none [--history [on|off|after-idle]] [--count 6]
  *       [--cloud-dir <folder of evicted files>] [--main-log <main.log>] [--exe <installed executable>]
  *       [--profile-template <userData dir>] [--minutes 5] [--out <report.json>] [--report-dir <dir>]
  *       [--purpose window-construction --window-variant <variant> [--window-warmup]]
@@ -129,6 +129,8 @@ const PROFILE_STOP_TIMEOUT_MS = 30_000
 const HISTORY_FROM_MS = 20_000
 const HISTORY_EVERY_MS = 5_000
 const HISTORY_TIMEOUT_MS = 10_000
+/** Delayed History mode samples through the idle window, then retries History opens for this long. */
+const HISTORY_AFTER_IDLE_RETRY_MS = 60_000
 /** Each History call's own bound in the renderer: twice the 2 s budget, and the open plus the search still
  *  settle within HISTORY_TIMEOUT_MS, so every call of a probe keeps its own time even when one of them hangs. */
 const HISTORY_CALL_BOUND_MS = 4_000
@@ -576,7 +578,7 @@ async function probeHistory(cdp, tMs, search) {
 
 /** Fills `run` (lib/st-1-core.mjs emptyRun) in place, so a partial report can be written at any moment.
  *  Never throws on a probe that fails or hangs: each is recorded in `run.errors` and the run goes on. */
-async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, witnessFile, historyOn, history }) {
+async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, witnessFile, historyMode, history }) {
   const sinceSpawn = () => Math.round(performance.now() - spawnedAt)
   run.setupAtMs = sinceSpawn()
   const witness = startWitness(witnessFile)
@@ -588,14 +590,34 @@ async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, 
   const probeFile = join(profile, 'st1-probe.txt')
   let historyRunning = null
   let historyLastMs = -Infinity
+  let historyAnswered = false
   const deadline = Date.now() + minutes * 60_000
-  while (Date.now() < deadline) {
+  const historyFromMs = historyMode === 'after-idle' ? minutes * 60_000 : HISTORY_FROM_MS
+  const historyRetryUntilMs = historyMode === 'after-idle' ? historyFromMs + HISTORY_AFTER_IDLE_RETRY_MS : Infinity
+  const shouldKeepSampling = () => {
+    if (Date.now() < deadline) return true
+    if (historyMode !== 'after-idle' || historyAnswered) return Boolean(historyRunning)
+    return historyRunning || sinceSpawn() <= historyRetryUntilMs
+  }
+  while (shouldKeepSampling()) {
     const tMs = sinceSpawn()
     if (run.profiler.running && tMs >= PROFILE_UNTIL_MS) await stopProfiler(cdp, run.profiler, cpuProfilePath, tMs)
-    if (shouldProbeHistory({ historyOn, historyRunning, tMs, historyLastMs, fromMs: HISTORY_FROM_MS, everyMs: HISTORY_EVERY_MS })) {
+    if (
+      shouldProbeHistory({
+        historyMode,
+        historyRunning,
+        historyAnswered,
+        tMs,
+        historyLastMs,
+        fromMs: historyFromMs,
+        everyMs: HISTORY_EVERY_MS,
+        retryUntilMs: historyRetryUntilMs
+      })
+    ) {
       historyLastMs = tMs
       historyRunning = probeHistory(cdp, tMs, history).then((probe) => {
         run.history.push(probe)
+        if (!probe.skipped && !probe.hung && !probe.error) historyAnswered = true
         historyRunning = null
       })
     }
@@ -796,12 +818,12 @@ async function main() {
     console.error(`[st-1] FAIL — Windows has no FIFOs; --fixtures ${args.fixtures} is unavailable, use --fixtures dataless`)
     return 2
   }
-  if (args.history !== undefined && args.history !== 'true' && args.history !== 'on' && args.history !== 'off') {
-    console.error(`[st-1] FAIL — --history must be a bare flag, on or off, got ${JSON.stringify(args.history)}`)
+  if (args.history !== undefined && args.history !== 'true' && args.history !== 'on' && args.history !== 'off' && args.history !== 'after-idle') {
+    console.error(`[st-1] FAIL — --history must be a bare flag, on, off or after-idle, got ${JSON.stringify(args.history)}`)
     return 2
   }
   const history = args.history === 'true'
-  const historyMode = args.history === 'off' ? 'off' : 'on'
+  const historyMode = args.history === 'off' ? 'off' : args.history === 'after-idle' ? 'after-idle' : 'on'
   if (args.fixtures === 'dataless' && (!args.cloudDir || !args.mainLog)) {
     console.error('[st-1] FAIL — --fixtures dataless needs --cloud-dir and --main-log')
     return 2
@@ -929,7 +951,7 @@ async function main() {
       mainLogLocated = args.mainLog
         ? Promise.resolve({ path: args.mainLog, fromByte: mainLogOffset, exactLaunchOffset: true })
         : locateMainLog(cdp, spawnedWallMs)
-      await measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, witnessFile, historyOn: historyMode === 'on', history })
+      await measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, witnessFile, historyMode, history })
       mainLog = await mainLogLocated
       evidence = collectExercisedEvidence(args.fixtures, fixtures, args.mainLog, mainLogOffset, root)
       complete = true

@@ -34,9 +34,9 @@ describe('QA candidate job st1-mac-dataless-synthetic (M2-0505, OD-36)', () => {
     expect(job).toContain('provenance.mjs verify provenance/provenance.json assets-mac mac')
   })
 
-  it('measures the synthetic dataless row with History off for five minutes', () => {
+  it('measures the synthetic dataless row with History delayed until after five idle minutes', () => {
     expect(job).toContain('--fixtures synthetic-dataless')
-    expect(job).toContain('--history off')
+    expect(job).toContain('--history after-idle')
     expect(job).toContain('--minutes 5')
     expect(job).toContain('--out st1-report/st-1-macos-synthetic-dataless.json')
   })
