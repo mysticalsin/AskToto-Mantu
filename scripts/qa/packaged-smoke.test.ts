@@ -26,6 +26,7 @@ import {
   initialRvRows,
   initialNavigationGuardRows,
   initialRightEdgeHideRows,
+  navigationMeetingTitles,
   initialOverlayStabilityRows,
   OV_STABLE_PATH_MS,
   overlayStablePath,
@@ -36,6 +37,7 @@ import {
   rightEdgeStateMatches,
   rightEdgeStateMismatches,
   runRevealRow,
+  seedNavigationMeetings,
   seedOnboardedProfile,
   smokeReport,
   smokeVerdict
@@ -913,6 +915,131 @@ describe('initialNavigationGuardRows', () => {
   })
 })
 
+describe('navigationMeetingTitles', () => {
+  it('keeps the original seeded names for clean rows and gives dirty rows isolated meeting pairs', () => {
+    expect(navigationMeetingTitles()).toEqual({
+      alpha: 'Smoke navigation alpha',
+      beta: 'Smoke navigation beta'
+    })
+
+    expect(navigationMeetingTitles('HIST dirty save bar')).toEqual({
+      alpha: 'Smoke navigation alpha HIST dirty save bar',
+      beta: 'Smoke navigation beta HIST dirty save bar'
+    })
+  })
+})
+
+describe('seedNavigationMeetings', () => {
+  it('refreshes an already-open History view so freshly saved smoke meetings are visible', async () => {
+    const events: string[] = []
+    const search = {
+      first: () => search,
+      isVisible: async () => true,
+      waitFor: async (options: { state?: string }) => events.push(`search:${options.state ?? 'visible'}`)
+    }
+    const history = {
+      first: () => history,
+      click: async () => events.push('history:click'),
+      waitFor: async () => events.push('history:wait')
+    }
+    const page = {
+      evaluate: async (_fn: unknown, titles: ReturnType<typeof navigationMeetingTitles>) => {
+        events.push(`seed:${titles.alpha}`)
+        return { first: 'alpha.md', second: 'beta.md', titles }
+      },
+      getByLabel: () => search,
+      getByRole: () => history,
+      waitForTimeout: async (ms: number) => events.push(`wait:${ms}`)
+    }
+
+    const seeded = await seedNavigationMeetings(page, 'HIST dirty save bar')
+
+    expect(seeded.titles.alpha).toBe('Smoke navigation alpha HIST dirty save bar')
+    expect(events).toEqual([
+      'seed:Smoke navigation alpha HIST dirty save bar',
+      'wait:450',
+      'history:click',
+      'search:hidden',
+      'wait:450',
+      'history:click',
+      'search:visible'
+    ])
+  })
+
+  it('does not toggle History when the seeded meetings are created before History opens', async () => {
+    const events: string[] = []
+    const search = {
+      first: () => search,
+      isVisible: async () => false,
+      waitFor: async (options: { state?: string }) => events.push(`search:${options.state ?? 'visible'}`)
+    }
+    const history = {
+      first: () => history,
+      click: async () => events.push('history:click')
+    }
+    const page = {
+      evaluate: async (_fn: unknown, titles: ReturnType<typeof navigationMeetingTitles>) => {
+        events.push(`seed:${titles.alpha}`)
+        return { first: 'alpha.md', second: 'beta.md', titles }
+      },
+      getByLabel: () => search,
+      getByRole: () => history,
+      waitForTimeout: async (ms: number) => events.push(`wait:${ms}`)
+    }
+
+    await seedNavigationMeetings(page)
+
+    expect(events).toEqual(['seed:Smoke navigation alpha'])
+  })
+
+  it('paces through the save-transcript hot-path limiter instead of failing later rows', async () => {
+    const events: string[] = []
+    let saves = 0
+    const originalWindow = (globalThis as { window?: unknown }).window
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: {
+        toto: {
+          saveTranscript: async (payload: { title: string }) => {
+            saves += 1
+            events.push(`save:${payload.title}`)
+            if (saves === 1) throw new Error('Error invoking remote method \'transcript:save\': Error: Could not save the transcript.')
+            return { path: `/tmp/${payload.title}.md` }
+          }
+        }
+      }
+    })
+    const search = {
+      first: () => search,
+      isVisible: async () => false,
+      waitFor: async () => events.push('search:wait')
+    }
+    const history = {
+      first: () => history,
+      click: async () => events.push('history:click')
+    }
+    const page = {
+      evaluate: async (fn: (titles: ReturnType<typeof navigationMeetingTitles>) => Promise<unknown>, titles: ReturnType<typeof navigationMeetingTitles>) => fn(titles),
+      getByLabel: () => search,
+      getByRole: () => history,
+      waitForTimeout: async (ms: number) => events.push(`wait:${ms}`)
+    }
+
+    try {
+      const seeded = await seedNavigationMeetings(page, 'HIST dirty save recent')
+
+      expect(seeded.titles.beta).toBe('Smoke navigation beta HIST dirty save recent')
+      expect(events).toEqual([
+        'save:Smoke navigation alpha HIST dirty save recent',
+        'save:Smoke navigation alpha HIST dirty save recent',
+        'save:Smoke navigation beta HIST dirty save recent'
+      ])
+    } finally {
+      Object.defineProperty(globalThis, 'window', { configurable: true, value: originalWindow })
+    }
+  })
+})
+
 describe('seedOnboardedProfile', () => {
   it('writes a plain-JSON settings.json that skips onboarding and keeps a hover-parkable overlay layout', () => {
     const profile = mkdtempSync(join(tmpdir(), 'metis-smoke-test-'))
@@ -1136,7 +1263,7 @@ describe('pinnedBridgeCall (M2-0519)', () => {
   const scope = globalThis as unknown as { window?: unknown; __metisSmokeBridgePending?: Set<Promise<unknown>> }
 
   function bridgeWith(toggle: (...args: unknown[]) => Promise<unknown>): void {
-    scope.window = { toto: { toggle } }
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: { toto: { toggle } } })
     delete scope.__metisSmokeBridgePending
   }
 
@@ -1158,7 +1285,7 @@ describe('pinnedBridgeCall (M2-0519)', () => {
       await expect(call).resolves.toBeUndefined()
       expect(scope.__metisSmokeBridgePending?.size).toBe(0)
     } finally {
-      delete scope.window
+      Object.defineProperty(globalThis, 'window', { configurable: true, value: undefined })
       delete scope.__metisSmokeBridgePending
     }
   })
@@ -1169,7 +1296,7 @@ describe('pinnedBridgeCall (M2-0519)', () => {
       await expect(pinnedBridgeCall(['toggle', []])).rejects.toThrow('no window')
       expect(scope.__metisSmokeBridgePending?.size).toBe(0)
     } finally {
-      delete scope.window
+      Object.defineProperty(globalThis, 'window', { configurable: true, value: undefined })
       delete scope.__metisSmokeBridgePending
     }
   })
