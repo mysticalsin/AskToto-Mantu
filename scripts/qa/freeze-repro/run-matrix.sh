@@ -8,9 +8,10 @@ usage: bash scripts/qa/freeze-repro/run-matrix.sh --artifact <1.9.6 sha256> --bu
 
 Runs the M2-0008 freeze/no-reopen matrix on the QA macOS account against the unmodified packaged 1.9.6 app.
 Use --dry-run in CI to verify the fixture and report wiring without launching the app.
-Use --hosted-live on a macos-latest hosted runner: it builds its own synthetic, content-free profile, launches
-the app, drives rows 1-4 itself over DevTools and `open`, samples main and every renderer, never reads
-stdin, and writes rows that need a real cloud-file account as BLOCKED_EXTERNAL.
+Use --hosted-live on a hosted runner: macos-latest drives rows 1-4 over DevTools and `open`, samples main
+and every renderer, and records cloud-file rows as BLOCKED_EXTERNAL. windows-latest launches Metis.exe with
+a synthetic profile, drives row 1 over DevTools and row 4 by re-launching Metis.exe, and records rows that
+need FIFO fixtures, sampling or macOS activation as BLOCKED_EXTERNAL or not-applicable with exact reasons.
 
 Required for live QA:
   --artifact <sha256>          sha256 of the installed 1.9.6 artifact under test
@@ -192,8 +193,33 @@ record_blocked_row() {
   append_jsonl "$OUT/matrix.jsonl" "{\"row\":$(json_string "$row"),\"operator_result\":\"BLOCKED_EXTERNAL\",\"status\":\"BLOCKED_EXTERNAL\",\"unblock_step\":$(json_string "$CLOUD_ACCOUNT_UNBLOCK_STEP")$*}"
 }
 
+record_blocked_row_with_reason() {
+  local row=$1 reason=$2 unblock=$3
+  shift 3
+  append_jsonl "$OUT/matrix.jsonl" "{\"row\":$(json_string "$row"),\"operator_result\":\"BLOCKED_EXTERNAL\",\"status\":\"BLOCKED_EXTERNAL\",\"reason\":$(json_string "$reason"),\"unblock_step\":$(json_string "$unblock")$*}"
+}
+
+record_not_applicable_row() {
+  local row=$1 reason=$2
+  shift 2
+  append_jsonl "$OUT/matrix.jsonl" "{\"row\":$(json_string "$row"),\"operator_result\":\"not-applicable\",\"status\":\"not-applicable\",\"reason\":$(json_string "$reason")$*}"
+}
+
 record_blocked_interrupt() {
   append_jsonl "$OUT/interrupt-results.jsonl" "{\"interrupt\":$(json_string "$1"),\"result\":\"BLOCKED_EXTERNAL\",\"status\":\"BLOCKED_EXTERNAL\",\"unblock_step\":$(json_string "$CLOUD_ACCOUNT_UNBLOCK_STEP")}"
+}
+
+record_not_applicable_interrupt() {
+  append_jsonl "$OUT/interrupt-results.jsonl" "{\"interrupt\":$(json_string "$1"),\"result\":\"not-applicable\",\"status\":\"not-applicable\",\"reason\":$(json_string "$2")}"
+}
+
+app_profile_path() {
+  local profile=$1
+  if [[ "${HOSTED_WINDOWS:-0}" == 1 ]] && command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$profile"
+    return
+  fi
+  printf '%s' "$profile"
 }
 
 sample_pid() {
@@ -219,8 +245,10 @@ sample_pid() {
 
 launch_app() {
   local profile=$1
+  local app_profile
   write_launch_plan "$profile"
-  ASKTOTO_USERDATA="$profile" "$EXE" "--user-data-dir=$profile" "--remote-debugging-port=$CDP_PORT" >/dev/null 2>"$OUT/app.stderr.txt" &
+  app_profile=$(app_profile_path "$profile")
+  ASKTOTO_USERDATA="$app_profile" "$EXE" "--user-data-dir=$app_profile" "--remote-debugging-port=$CDP_PORT" >/dev/null 2>"$OUT/app.stderr.txt" &
   APP_PID=$!
   sleep "$LAUNCH_SETTLE_SECONDS"
 }
@@ -248,6 +276,10 @@ renderer_pids() {
 
 sample_app() {
   local row=$1
+  if [[ "${HOSTED_WINDOWS:-0}" == 1 ]]; then
+    append_jsonl "$OUT/matrix.jsonl" "{\"row\":$(json_string "$row"),\"sampled\":false,\"reason\":\"process sampling unavailable on windows-latest; /usr/bin/sample is macOS-only and pgrep is not used\"}"
+    return
+  fi
   if [[ "$DRY_RUN" == 1 || -z "${APP_PID:-}" ]]; then
     append_jsonl "$OUT/matrix.jsonl" "{\"row\":$(json_string "$row"),\"sampled\":false,\"reason\":\"dry-run-or-no-app\"}"
     return
@@ -277,8 +309,10 @@ sample_app() {
 
 write_launch_plan() {
   local profile=$1
+  local app_profile
+  app_profile=$(app_profile_path "$profile")
   cat > "$OUT/launch-plan.json" <<EOF_LAUNCH
-{"asktoto_userdata_env":true,"electron_user_data_dir_switch":true,"profile":$(json_string "$(redact_string "$profile")"),"argv":["--user-data-dir=<profile>","--remote-debugging-port=$CDP_PORT"]}
+{"asktoto_userdata_env":true,"electron_user_data_dir_switch":true,"profile":$(json_string "$(redact_string "$app_profile")"),"argv":["--user-data-dir=<profile>","--remote-debugging-port=$CDP_PORT"]}
 EOF_LAUNCH
 }
 
@@ -429,7 +463,11 @@ make_fifo_fixtures() {
   )
   local item
   for item in "${FIFO_FIXTURES[@]}"; do
-    make_fifo "$item"
+    if [[ "${HOSTED_WINDOWS:-0}" == 1 ]]; then
+      printf 'synthetic content-free placeholder for windows-latest hosted run\n' > "$item"
+    else
+      make_fifo "$item"
+    fi
   done
 }
 
@@ -464,6 +502,8 @@ write_environment() {
 host_os_version() {
   if command -v sw_vers >/dev/null 2>&1; then
     sw_vers -productVersion 2>/dev/null || uname -r
+  elif [[ "${HOSTED_WINDOWS:-0}" == 1 ]] && command -v powershell >/dev/null 2>&1; then
+    powershell -NoProfile -Command "(Get-CimInstance Win32_OperatingSystem).Version" 2>/dev/null | tr -d '\r' || uname -r
   else
     uname -r
   fi
@@ -475,12 +515,28 @@ host_memory_bytes() {
     bytes=$(sysctl -n hw.memsize 2>/dev/null || true)
   elif [[ -r /proc/meminfo ]]; then
     bytes=$(awk '/^MemTotal:/ {printf "%.0f", $2 * 1024}' /proc/meminfo)
+  elif command -v powershell >/dev/null 2>&1; then
+    bytes=$(powershell -NoProfile -Command "[int64](Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory" 2>/dev/null | tr -d '\r' || true)
   fi
   [[ "$bytes" =~ ^[0-9]+$ ]] && printf '%s' "$bytes" || printf 'null'
 }
 
 write_external_blockers() {
   if [[ "$HOSTED_LIVE" == 1 ]]; then
+    local windows_fifo_blocker=""
+    if [[ "${HOSTED_WINDOWS:-0}" == 1 ]]; then
+      windows_fifo_blocker=$(cat <<EOF_WINDOWS_FIFO_BLOCKER
+,
+    {
+      "status": "BLOCKED_EXTERNAL",
+      "rows": ["row-2-brain-status-blocked-brain"],
+      "interrupts": [],
+      "needs": "FIFO fixtures and macOS process sampling; GitHub windows-latest cannot provide mkfifo or /usr/bin/sample",
+      "unblock_step": $(json_string "$WINDOWS_FIFO_UNBLOCK_STEP")
+    }
+EOF_WINDOWS_FIFO_BLOCKER
+)
+    fi
     cat > "$OUT/external-blockers.json" <<EOF_HOSTED_BLOCKERS
 {
   "ticket": "$TICKET",
@@ -492,7 +548,7 @@ write_external_blockers() {
       "interrupts": ["network-off", "file-provider-cancel"],
       "needs": "a test cloud-file account with real hydrating (dataless) files; none exists after D-9",
       "unblock_step": $(json_string "$CLOUD_ACCOUNT_UNBLOCK_STEP")
-    }
+    }$windows_fifo_blocker
   ]
 }
 EOF_HOSTED_BLOCKERS
@@ -664,7 +720,7 @@ write_hosted_evidence_import() {
   "matrix_result_failures": $MATRIX_RESULT_FAILURES,
   "interrupt_result_failures": $INTERRUPT_RESULT_FAILURES,
   "reproduced": $([[ -n "$SYMPTOM_ROWS" ]] && printf true || printf false),
-  "blocked_external_rows": ["row-5-dataless-brain-idle", "row-9-network-off-flapping"],
+  "blocked_external_rows": $([[ "${HOSTED_WINDOWS:-0}" == 1 ]] && printf '["row-2-brain-status-blocked-brain", "row-5-dataless-brain-idle", "row-9-network-off-flapping"]' || printf '["row-5-dataless-brain-idle", "row-9-network-off-flapping"]'),
   "blocked_external_interrupts": ["network-off", "file-provider-cancel"],
   "baseline_chain_position": {
     "first": "M2-0008",
@@ -785,6 +841,11 @@ hosted_process_signal() {
 }
 
 run_hosted_live_matrix() {
+  if [[ "${HOSTED_WINDOWS:-0}" == 1 ]]; then
+    run_windows_hosted_live_matrix
+    return
+  fi
+
   local reopen_status
 
   hosted_row "row-1-history-open" history \
@@ -814,6 +875,45 @@ run_hosted_live_matrix() {
   hosted_process_signal
 }
 
+run_windows_hosted_live_matrix() {
+  local reopen_status=ok second_pid="" app_profile
+
+  hosted_row "row-1-history-open" history \
+    "cdp Runtime.evaluate window.toto.recallList() against the synthetic profile" ok
+
+  record_blocked_row_with_reason "row-2-brain-status-blocked-brain" \
+    "requires FIFO fixtures and macOS process sampling; windows-latest cannot provide mkfifo or /usr/bin/sample" \
+    "$WINDOWS_FIFO_UNBLOCK_STEP" \
+    ',"automatic":false'
+
+  record_not_applicable_row "row-3-macos-activate" \
+    "macOS-only activation row; windows-latest has no open(1) activation equivalent" \
+    ',"automatic":false'
+
+  app_profile=$(app_profile_path "$PROFILE")
+  ASKTOTO_USERDATA="$app_profile" "$EXE" "--user-data-dir=$app_profile" "--remote-debugging-port=$CDP_PORT" >/dev/null 2>>"$OUT/app.stderr.txt" &
+  second_pid=$!
+  sleep "$REOPEN_SETTLE_SECONDS"
+  if ! kill -0 "$second_pid" >/dev/null 2>&1; then
+    wait "$second_pid" >/dev/null 2>&1 || reopen_status="relaunch-failed"
+    second_pid=""
+  fi
+  hosted_row "row-4-second-instance-reopen" none \
+    "re-launch Metis.exe with ASKTOTO_USERDATA=<profile> and --user-data-dir=<profile>" "$reopen_status"
+  if [[ -n "$second_pid" ]]; then
+    kill "$second_pid" >/dev/null 2>&1 || true
+    wait "$second_pid" >/dev/null 2>&1 || true
+  fi
+
+  record_blocked_row "row-5-dataless-brain-idle" ',"automatic":false,"fixture":"dataless-brain-index"'
+  record_blocked_row "row-9-network-off-flapping" ',"automatic":false,"fixture":"dataless-meeting"'
+
+  record_blocked_interrupt "network-off"
+  record_blocked_interrupt "file-provider-cancel"
+  record_not_applicable_interrupt "process-signal" \
+    "Windows hosted-live does not run FIFO-blocked process-signal sampling; that check requires /usr/bin/sample and FIFO fixtures on macos-latest."
+}
+
 write_hosted_summary() {
   local reproduced=false conclusion
   [[ -z "$SYMPTOM_ROWS" ]] || reproduced=true
@@ -833,8 +933,9 @@ write_hosted_summary() {
 {
   "ticket": "M2-0008",
   "mode": "hosted-live",
-  "automatic_rows": ["row-1-history-open", "row-2-brain-status-blocked-brain", "row-3-macos-activate", "row-4-second-instance-reopen"],
-  "blocked_external_rows": ["row-5-dataless-brain-idle", "row-9-network-off-flapping"],
+  "automatic_rows": $([[ "${HOSTED_WINDOWS:-0}" == 1 ]] && printf '["row-1-history-open", "row-4-second-instance-reopen"]' || printf '["row-1-history-open", "row-2-brain-status-blocked-brain", "row-3-macos-activate", "row-4-second-instance-reopen"]'),
+  "blocked_external_rows": $([[ "${HOSTED_WINDOWS:-0}" == 1 ]] && printf '["row-2-brain-status-blocked-brain", "row-5-dataless-brain-idle", "row-9-network-off-flapping"]' || printf '["row-5-dataless-brain-idle", "row-9-network-off-flapping"]'),
+  "not_applicable_rows": $([[ "${HOSTED_WINDOWS:-0}" == 1 ]] && printf '["row-3-macos-activate"]' || printf '[]'),
   "symptom_rows": [$symptom_json],
   "reproduced": $reproduced,
   "conclusion": $(json_string "$conclusion")
@@ -939,6 +1040,7 @@ HOSTED_CONCLUSION=""
 FIFO_HOLDER_PID=""
 FIFO_HELD_STATES=()
 CLOUD_ACCOUNT_UNBLOCK_STEP="Provision a test cloud-file account (there is none after D-9) on a macOS host, evict a synthetic .brain/index.json and a synthetic meeting file to dataless, then run run-matrix.sh in QA-live mode with --dataless-brain-index and --dataless-meeting pointing at them."
+WINDOWS_FIFO_UNBLOCK_STEP="Run the FIFO-dependent row on macos-latest or a QA macOS host where mkfifo, /usr/bin/sample and role-selected renderer sampling are available."
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -993,11 +1095,13 @@ TICKET=M2-0008
 # Hosted-live builds its own synthetic, content-free profile and has no cloud-file fixtures.
 [[ "$HOSTED_LIVE" == 0 || -z "$PROFILE_TEMPLATE" ]] || fail "--hosted-live builds its own synthetic profile; --profile-template is not accepted"
 [[ "$HOSTED_LIVE" == 0 || ( -z "$DATALess_BRAIN_INDEX" && -z "$DATALess_MEETING" ) ]] || fail "--hosted-live has no dataless fixtures; rows 5 and 9 are BLOCKED_EXTERNAL"
-[[ "$DRY_RUN" == 1 || "$(uname -s)" == "Darwin" || "${M2_0008_CONTRACT_ALLOW_NON_DARWIN:-0}" == 1 ]] || fail "live M2-0008 sampling currently runs on macOS QA only"
 if [[ -z "$QA_HOST_LABEL" ]]; then
   if [[ "$HOSTED_LIVE" == 1 ]]; then QA_HOST_LABEL="macos-latest"; else QA_HOST_LABEL="qa-mac-1"; fi
 fi
 [[ "$HOSTED_LIVE" == 0 || "$QA_HOST_LABEL" == macos-latest || "$QA_HOST_LABEL" == windows-latest ]] || fail "--hosted-live host must be macos-latest or windows-latest"
+HOSTED_WINDOWS=0
+[[ "$HOSTED_LIVE" == 1 && "$QA_HOST_LABEL" == windows-latest ]] && HOSTED_WINDOWS=1
+[[ "$DRY_RUN" == 1 || "$(uname -s)" == "Darwin" || "$HOSTED_WINDOWS" == 1 || "${M2_0008_CONTRACT_ALLOW_NON_DARWIN:-0}" == 1 ]] || fail "live M2-0008 sampling currently runs on macOS QA only, except the windows-latest hosted-live branch"
 [[ -z "$IMPLEMENTER_SESSION_ID" || "$IMPLEMENTER_SESSION_ID" =~ ^[A-Za-z0-9._:-]+$ ]] || fail "--implementer-session-id has unsupported characters"
 [[ -z "$VALIDATOR_SESSION_ID" || "$VALIDATOR_SESSION_ID" =~ ^[A-Za-z0-9._:-]+$ ]] || fail "--validator-session-id has unsupported characters"
 [[ "$IMPLEMENTER_MODEL" =~ ^[a-z0-9][a-z0-9.-]{0,63}$ ]] || fail "--implementer-model has unsupported characters"
@@ -1098,6 +1202,13 @@ EOF_HOSTED_ATTRIBUTION_README
   write_hosted_summary
   write_evidence_records "$RESULT"
   write_lead_action
+  if [[ "${HOSTED_WINDOWS:-0}" == 1 ]]; then
+    hosted_matrix_summary="rows 1 and 4 automatic, row 3 not-applicable, rows 2, 5 and 9 BLOCKED_EXTERNAL"
+    hosted_sample_summary="process samples not collected on windows-latest; see per-row sampling records in matrix.jsonl"
+  else
+    hosted_matrix_summary="rows 1-4 automatic, rows 5 and 9 BLOCKED_EXTERNAL"
+    hosted_sample_summary="Main/renderer samples: \`samples/\`"
+  fi
   cat > "$OUT/README.md" <<EOF_HOSTED_README
 # M2-0008 Freeze Repro Bundle (hosted-live)
 
@@ -1106,13 +1217,13 @@ EOF_HOSTED_ATTRIBUTION_README
 - Conclusion: $HOSTED_CONCLUSION
 - Artifact sha256: \`$ARTIFACT\`
 - Build run id: \`$BUILD_RUN_ID\`
-- Matrix rows (rows 1-4 automatic, rows 5 and 9 BLOCKED_EXTERNAL): \`matrix.jsonl\`
+- Matrix rows ($hosted_matrix_summary): \`matrix.jsonl\`
 - Run summary: \`hosted-live-summary.json\`
 - FIFO fixture evidence: \`fifo-fixtures.json\`
 - NODE_OPTIONS fuse state: \`node-options-fuse.json\`
 - Interrupt checks for ADR-021/C10: \`interrupt-results.jsonl\`
 - Cloud-account blockers and their unblock step: \`external-blockers.json\`
-- Main/renderer samples: \`samples/\`
+- $hosted_sample_summary
 - DiagnosticReports .spin/.hang copies, if any: \`diagnostic-reports/\`
 - DiagnosticReports consent/filter manifest: \`diagnostic-reports.json\`
 - Evidence import manifest: \`M2-0008.evidence-import.json\`

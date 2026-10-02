@@ -59,6 +59,14 @@ function safeRamOk(modelId: string): boolean {
   }
 }
 
+/** Fleet-policy gate on the configured on-device model (M2-0412). Installed once by index.ts so this
+ *  module stays free of the Operator client (and its Electron/Operator imports); open until installed. */
+let localModelGate: (modelId: string) => boolean = () => true
+
+export function setLocalModelGate(gate: ((modelId: string) => boolean) | null): void {
+  localModelGate = gate ?? (() => true)
+}
+
 /**
  * Task-independent local readiness: enabled, the runtime binary is provisioned, the configured model is
  * present in the installer AND loadable on this machine's RAM, and the org allowlist (if any) permits
@@ -69,6 +77,8 @@ function safeRamOk(modelId: string): boolean {
 export function localBaseReady(s: Pick<Settings, 'localLlm'>, allowed: string[] | null): boolean {
   if (!s.localLlm.enabled) return false
   if (allowed && !allowed.includes('local')) return false
+  // M2-0412: a model the fleet policy does not allow is simply not ready — never downloaded or swapped.
+  if (!localModelGate(s.localLlm.modelId)) return false
   if (!localRuntimeBinaryPresent()) return false
   if (!safeIsDownloaded(s.localLlm.modelId)) return false
   if (!safeRamOk(s.localLlm.modelId)) return false
@@ -195,6 +205,7 @@ export function localPrewarmEligible(
 ): boolean {
   if (!s.localLlm.enabled) return false
   if (!orgAllowlistPermitsLocal(allowed)) return false
+  if (!localModelGate(s.localLlm.modelId)) return false
   if (!prewarmWanted(s, cloudReady, purpose)) return false
   // MQA-270 (B8): both unattended warms (boot, window-focus) route through here — one floor covers both.
   // Checked last so the QA host-floor gate (qa-hk-m.ts, M2-0482) is consulted, and audited, only when this floor
