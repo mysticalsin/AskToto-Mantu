@@ -19,9 +19,9 @@
  *
  * Attribution evidence, reported and never judged: every sample's time since spawn, the loop's max since
  * the previous sample, the loop's max during its write (a slow write close to it waited on a main-thread
- * block, not on the libuv pool) and the active libuv resources; a CPU profile of the first 90 s, with when
- * it was requested and when the profiler actually started; the profile's audit logs, stall bundles and this
- * launch's main.log; which FIFOs had a reader; from +20 s, History's own IPC round trip (recallList +
+ * block, not on the libuv pool) and the active libuv resources; a CPU profile from boot until after the loop
+ * summary, with when it was requested and when the profiler actually started; the profile's audit logs, stall
+ * bundles and this launch's main.log; which FIFOs had a reader; from +20 s, History's own IPC round trip (recallList +
  * brainStatus, with its row and not-downloaded row counts) measured in the main window (`--history off`
  * skips those probes, so History stays idle for the whole run); the app's own native boot stage timings
  * (`bootStages`, read from the profile's audit trail); and the runner witness (`witness`, on every timeline

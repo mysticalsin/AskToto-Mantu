@@ -156,29 +156,33 @@ describe('pinnedExpression', () => {
 
 describe('sampleExpression', () => {
   it('carries a pre-sample boot block into sample 0 and includes the interval after the reset', async () => {
-    let loopMaxNs = 80_000_000
-    const reset = vi.fn(() => {
-      loopMaxNs = 0
-    })
-    ;(globalThis as Record<string, unknown>).__st1since = {
-      get max() {
-        return loopMaxNs
-      },
-      reset
-    }
     const originalGetBuiltinModule = (process as unknown as { getBuiltinModule?: (name: string) => unknown }).getBuiltinModule
-    ;(process as unknown as { getBuiltinModule?: (name: string) => unknown }).getBuiltinModule = (name) => {
-      if (name === 'node:fs/promises') {
-        return {
-          writeFile: async () => {
-            loopMaxNs = 35_000_000
+    const installSampleHarness = (startNs: number, writeNs: number) => {
+      let loopMaxNs = startNs
+      const reset = vi.fn(() => {
+        loopMaxNs = 0
+      })
+      ;(globalThis as Record<string, unknown>).__st1since = {
+        get max() {
+          return loopMaxNs
+        },
+        reset
+      }
+      ;(process as unknown as { getBuiltinModule?: (name: string) => unknown }).getBuiltinModule = (name) => {
+        if (name === 'node:fs/promises') {
+          return {
+            writeFile: async () => {
+              loopMaxNs = writeNs
+            }
           }
         }
+        if (name === 'node:dns/promises') return { lookup: async () => ({ address: '127.0.0.1', family: 4 }) }
+        throw new Error(`unexpected module ${name}`)
       }
-      if (name === 'node:dns/promises') return { lookup: async () => ({ address: '127.0.0.1', family: 4 }) }
-      throw new Error(`unexpected module ${name}`)
+      return reset
     }
     try {
+      const preSampleReset = installSampleHarness(80_000_000, 35_000_000)
       await expect(evaluateGlobally(sampleExpression('probe.txt'))).resolves.toMatchObject({
         loopMaxSinceLastMs: 80,
         loopMaxDuringWriteMs: 35,
@@ -186,7 +190,17 @@ describe('sampleExpression', () => {
         lookupMs: expect.any(Number),
         resources: expect.any(Object)
       })
-      expect(reset).toHaveBeenCalledTimes(2)
+      expect(preSampleReset).toHaveBeenCalledTimes(2)
+
+      const postResetReset = installSampleHarness(0, 80_000_000)
+      await expect(evaluateGlobally(sampleExpression('probe.txt'))).resolves.toMatchObject({
+        loopMaxSinceLastMs: 80,
+        loopMaxDuringWriteMs: 80,
+        writeMs: expect.any(Number),
+        lookupMs: expect.any(Number),
+        resources: expect.any(Object)
+      })
+      expect(postResetReset).toHaveBeenCalledTimes(2)
     } finally {
       ;(process as unknown as { getBuiltinModule?: (name: string) => unknown }).getBuiltinModule = originalGetBuiltinModule
     }
