@@ -232,19 +232,10 @@ function decryptEnvelopeV2(buf: Buffer, allowKeychainRecovery = false, filePath?
     }
     const raw = env.kLocal.startsWith('S:') ? env.kLocal.slice(2) : env.kLocal
     contentKeyB64 = unwrapWithKeychain(Buffer.from(raw, 'base64'))
-    // Self-healing: this device's Keychain just proved it can still unwrap the SAME content key —
-    // rewrap it under the current file-backend key so every later read (bulk list/search included)
-    // converges to 'F:' without ever touching the Keychain again. iv/tag/ct are untouched; only kLocal
-    // changes. Atomic tmp+rename (mirrors writeSaved above), done synchronously like store.ts's own
-    // legacy-format migration since this runs inside an otherwise-synchronous read. Best-effort: a
-    // rewrap failure must never fail this read — the caller already has the decrypted content either way.
+    // Self-healing: this Keychain can unwrap the same content key, so rewrap it under the active
+    // file-backend key. Atomic and best-effort; iv/tag/ct stay untouched.
     //
-    // Only converge when the file backend is the ACTIVE write backend. On packaged Windows it is not:
-    // safeStorage (DPAPI) is the writer, so every new transcript is 'S:', and safeStorage.isEncryptionAvailable()
-    // is always true there — which made canRecover true and rewrapped every meeting to 'F:' the moment it was
-    // opened, silently materialising a secret-key.bin the profile never needed and moving the meeting off DPAPI.
-    // Gating on useFileBackend() keeps the convergence for the macOS forced-keystore case it was written for
-    // and makes it a no-op wherever safeStorage is the writer.
+    // Only converge when the file backend is the active writer; packaged safeStorage profiles stay on DPAPI.
     if (canRecover && filePath && useFileBackend()) {
       const tmp = `${filePath}.${randomBytes(6).toString('hex')}.tmp`
       try {
@@ -445,15 +436,7 @@ export function decryptToTemp(path: string, bytes?: Buffer): string {
   return tmp
 }
 
-/**
- * Startup sweep: removes orphaned `asktoto-<hex>-*.md` cleartext temp files left by a previous
- * session that was hard-killed (SIGKILL) before the will-quit cleanup hook could run.
- *
- * INTEGRATOR: call this from the main process immediately after `app.whenReady()` resolves,
- * before any transcript is opened, e.g.:
- *   import { sweepStaleTempFiles } from './transcripts'
- *   app.whenReady().then(() => { sweepStaleTempFiles(); … })
- */
+/** Startup sweep: removes orphaned `asktoto-<hex>-*.md` cleartext temp files left by a hard kill. */
 export function sweepStaleTempFiles(): void {
   try {
     const tmp = app.getPath('temp')
