@@ -1,28 +1,48 @@
 name: Resource census
+run-name: ${{ inputs.candidate_run != '' && format('Resource census candidate-{0}', inputs.candidate_run) || format('Resource census release {0}', inputs.release_tag) }}
 
-# Manual evidence lane for M2-0009. It downloads an existing packaged release artifact, verifies it against the
-# release's published SHA256SUMS (a mismatch fails the job before install), installs it on
-# hosted macOS and Windows runners, measures the reusable process census, and uploads only content-free
-# JSON/log artifacts. It never builds, signs, publishes, tags, or changes release.yml.
+# Manual evidence lane. It installs either a published release artifact or exact qa-candidate bytes selected
+# by sha256, then measures the same hosted resource census states on macOS and Windows.
 on:
   workflow_dispatch:
     inputs:
       release_repo:
-        description: Repository that publishes the packaged artifacts and SHA256SUMS
+        description: Repository that publishes the packaged release artifacts and SHA256SUMS
         required: true
         default: mysticalsin/Metis-Releases
         type: string
       release_tag:
-        description: Release tag to measure
+        description: Release tag to measure when candidate_run is empty
         required: true
         default: v1.9.6-unsigned
+        type: string
+      candidate_run:
+        description: qa-candidate.yml workflow_dispatch run id to measure instead of release_tag
+        required: false
+        default: ''
+        type: string
+      mac_sha256:
+        description: Expected sha256 of the candidate macOS DMG
+        required: false
+        default: ''
+        type: string
+      win_sha256:
+        description: Expected sha256 of the candidate Windows Setup
+        required: false
+        default: ''
+        type: string
+      baseline_run:
+        description: Optional resource-census.yml run id to compare against, report-only
+        required: false
+        default: ''
         type: string
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  group: resource-census-${{ github.ref }}-${{ inputs.release_tag }}
+  group: resource-census-${{ github.ref }}-${{ inputs.candidate_run != '' && format('candidate-{0}', inputs.candidate_run) || inputs.release_tag }}
   cancel-in-progress: false
 
 defaults:
@@ -44,7 +64,39 @@ jobs:
           node-version: 22.22.3
           cache: npm
       - run: npm ci
+      - name: Resolve artifact source
+        id: source
+        env:
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+          LEG_SHA256: ${{ inputs.mac_sha256 }}
+          MAC_SHA256: ${{ inputs.mac_sha256 }}
+          WIN_SHA256: ${{ inputs.win_sha256 }}
+          RELEASE_REPO: ${{ inputs.release_repo }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          sha_re='^[0-9a-f]{64}$'
+          if [ -n "$CANDIDATE_RUN" ] || [ -n "$MAC_SHA256" ] || [ -n "$WIN_SHA256" ]; then
+            if [ -z "$CANDIDATE_RUN" ]; then
+              echo "::error::candidate sha256 inputs require candidate_run."; exit 1
+            fi
+            if ! [[ "$CANDIDATE_RUN" =~ ^[0-9]+$ ]]; then
+              echo "::error::candidate_run must be a numeric workflow run id."; exit 1
+            fi
+            if ! [[ "$LEG_SHA256" =~ $sha_re ]]; then
+              echo "::error::mac_sha256 is required for candidate source and must be 64 lowercase hexadecimal characters."; exit 1
+            fi
+            echo "source=candidate" >> "$GITHUB_OUTPUT"
+            echo "label=candidate-$CANDIDATE_RUN" >> "$GITHUB_OUTPUT"
+          else
+            if [ -z "$RELEASE_REPO" ] || [ -z "$RELEASE_TAG" ]; then
+              echo "::error::release source requires release_repo and release_tag."; exit 1
+            fi
+            echo "source=release" >> "$GITHUB_OUTPUT"
+            echo "label=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          fi
       - name: Download the packaged release artifact
+        id: artifact
+        if: steps.source.outputs.source == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_REPO: ${{ inputs.release_repo }}
@@ -54,6 +106,36 @@ jobs:
           gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'Metis-*.dmg' --dir release-artifact --clobber
           gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'SHA256SUMS*' --dir release-sums --clobber
           node scripts/qa/verify-sha256sums.mjs release-artifact release-sums/SHA256SUMS* | tee census-output/SHA256SUMS.txt
+          artifact=$(find release-artifact -maxdepth 1 -name 'Metis-*.dmg' -print -quit)
+          echo "name=$(basename "$artifact")" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(node --input-type=module -e "import { sha256File } from './scripts/qa/provenance.mjs'; console.log(await sha256File(process.argv[1]))" "$artifact")" >> "$GITHUB_OUTPUT"
+          echo "commit=" >> "$GITHUB_OUTPUT"
+          echo "build_run_id=" >> "$GITHUB_OUTPUT"
+      - name: Download the candidate artifact
+        id: candidate
+        if: steps.source.outputs.source == 'candidate'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+          INSTALLER_SHA256: ${{ inputs.mac_sha256 }}
+        run: |
+          mkdir -p assets provenance release-artifact census-output
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN" > candidate-run.json
+          node scripts/qa/candidate-scenarios.mjs guard candidate-run.json "$CANDIDATE_RUN"
+          gh run download "$CANDIDATE_RUN" --repo "$GITHUB_REPOSITORY" --name candidate-provenance --dir provenance
+          gh run download "$CANDIDATE_RUN" --repo "$GITHUB_REPOSITORY" --name candidate-mac --dir assets
+          node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac
+          node -e "const p=require('./provenance/provenance.json'); if (String(p.run.id) !== process.env.CANDIDATE_RUN) { console.error('::error::provenance.json belongs to another run.'); process.exit(1) }"
+          installer=$(node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" mac)
+          case "$installer" in
+            *.dmg) ;;
+            *) echo "::error::resource-census macOS candidate source requires the DMG installer."; exit 1 ;;
+          esac
+          cp "$installer" "release-artifact/$(basename "$installer")"
+          echo "name=$(basename "$installer")" >> "$GITHUB_OUTPUT"
+          echo "sha256=$INSTALLER_SHA256" >> "$GITHUB_OUTPUT"
+          echo "commit=$(node -p "require('./provenance/provenance.json').commit")" >> "$GITHUB_OUTPUT"
+          echo "build_run_id=$(node -p "require('./provenance/provenance.json').run.id")" >> "$GITHUB_OUTPUT"
       - name: Install into runner temp
         run: |
           volume="$RUNNER_TEMP/resource-census-volume"
@@ -74,20 +156,20 @@ jobs:
             ' _ "$volume" "$target" release-artifact/Metis-*.dmg
       - name: Measure install footprint
         env:
-          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_LABEL: ${{ steps.source.outputs.label }}
         run: |
           node scripts/bench-asr-ttfc.mjs > census-output/bench-asr-ttfc.log 2>&1
           node scripts/qa/census/footprint.mjs \
             --artifact release-artifact/Metis-*.dmg \
             --install-root "$RUNNER_TEMP/resource-census-install/Metis.app" \
             --temp-peak census-output/darwin-temp-peak.json \
-            --release-tag "$RELEASE_TAG" \
+            --release-tag "$SOURCE_LABEL" \
             --ttfc-output census-output/bench-asr-ttfc.log \
             --output census-output/darwin-footprint.json
       - name: Build representative synthetic profile
         run: |
           # Read resource-census-profile.json from the path profile.mjs prints, so a Windows RUNNER_TEMP
-          # (D:\a\_temp) cannot diverge between where the script writes and where this step reads.
+          # cannot diverge between where the script writes and where this step reads.
           node scripts/qa/census/profile.mjs "$RUNNER_TEMP/metis-census-profile" | tee census-output/profile.log
           manifest=$(sed -n 's/^\[census-profile\] manifest //p' census-output/profile.log)
           test -n "$manifest"
@@ -136,20 +218,54 @@ jobs:
             --seconds 300 \
             --app "$RUNNER_TEMP/resource-census-install/Metis.app" \
             --output census-output/darwin-parked-idle.json
+      - name: Compare with baseline run
+        if: always() && inputs.baseline_run != '' && steps.source.outputs.source != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASELINE_RUN: ${{ inputs.baseline_run }}
+        run: |
+          mkdir -p baseline-run
+          gh run download "$BASELINE_RUN" --repo "$GITHUB_REPOSITORY" --dir baseline-run
+          baseline=$(find baseline-run -maxdepth 1 -type d -name 'resource-census-macos-*' -print -quit)
+          test -n "$baseline"
+          node scripts/qa/census/delta.mjs --baseline "$baseline" --candidate census-output --output census-output/resource-census-delta.json --summary census-output/resource-census-delta.md
+          cat census-output/resource-census-delta.md >> "$GITHUB_STEP_SUMMARY"
       - name: Record run identity and file digests
         if: always()
         env:
+          SOURCE: ${{ steps.source.outputs.source }}
+          SOURCE_LABEL: ${{ steps.source.outputs.label }}
           RELEASE_TAG: ${{ inputs.release_tag }}
+          ARTIFACT_NAME: ${{ steps.artifact.outputs.name || steps.candidate.outputs.name }}
+          ARTIFACT_SHA256: ${{ steps.artifact.outputs.sha256 || steps.candidate.outputs.sha256 }}
+          BUILD_RUN_ID: ${{ steps.artifact.outputs.build_run_id || steps.candidate.outputs.build_run_id }}
+          SOURCE_COMMIT: ${{ steps.artifact.outputs.commit || steps.candidate.outputs.commit }}
         run: |
-          printf '{"runId":"%s","runAttempt":"%s","commit":"%s","releaseTag":"%s"}\n' \
-            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_SHA" "$RELEASE_TAG" > census-output/run-identity.json
+          node --input-type=module -e "
+            import { totalmem } from 'node:os';
+            import { writeFileSync } from 'node:fs';
+            const record = {
+              runId: process.env.GITHUB_RUN_ID,
+              runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+              source: process.env.SOURCE,
+              sourceLabel: process.env.SOURCE_LABEL,
+              releaseTag: process.env.RELEASE_TAG,
+              build_run_id: process.env.BUILD_RUN_ID || null,
+              commit: process.env.SOURCE_COMMIT || null,
+              artifactFileName: process.env.ARTIFACT_NAME || null,
+              artifact_sha256: process.env.ARTIFACT_SHA256 || null,
+              hostFloorOverride: false,
+              hostMemoryBytes: totalmem()
+            };
+            writeFileSync('census-output/run-identity.json', JSON.stringify(record, null, 2) + '\n');
+          "
           (cd census-output && shasum -a 256 $(ls | grep -v '^FILES.sha256$') > FILES.sha256)
           cat census-output/run-identity.json census-output/FILES.sha256
-          echo "LEAD_ACTION: file resource-baseline.md in the program tracker from this run ID and the artifact sha256 above; the managed-laptop, NPU, audio-device and live capture-to-caption rows stay BLOCKED_EXTERNAL."
+          echo "LEAD_ACTION: file the hosted-runner measured records from this run ID and the artifact sha256 above; rows that need physical QA hardware or an outside account stay BLOCKED_EXTERNAL with their unblock step."
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: always()
+        if: always() && steps.source.outputs.source != ''
         with:
-          name: resource-census-macos-${{ inputs.release_tag }}
+          name: resource-census-macos-${{ steps.source.outputs.label }}
           path: census-output/
           if-no-files-found: error
           retention-days: 30
@@ -168,7 +284,39 @@ jobs:
           node-version: 22.22.3
           cache: npm
       - run: npm ci
+      - name: Resolve artifact source
+        id: source
+        env:
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+          LEG_SHA256: ${{ inputs.win_sha256 }}
+          MAC_SHA256: ${{ inputs.mac_sha256 }}
+          WIN_SHA256: ${{ inputs.win_sha256 }}
+          RELEASE_REPO: ${{ inputs.release_repo }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          sha_re='^[0-9a-f]{64}$'
+          if [ -n "$CANDIDATE_RUN" ] || [ -n "$MAC_SHA256" ] || [ -n "$WIN_SHA256" ]; then
+            if [ -z "$CANDIDATE_RUN" ]; then
+              echo "::error::candidate sha256 inputs require candidate_run."; exit 1
+            fi
+            if ! [[ "$CANDIDATE_RUN" =~ ^[0-9]+$ ]]; then
+              echo "::error::candidate_run must be a numeric workflow run id."; exit 1
+            fi
+            if ! [[ "$LEG_SHA256" =~ $sha_re ]]; then
+              echo "::error::win_sha256 is required for candidate source and must be 64 lowercase hexadecimal characters."; exit 1
+            fi
+            echo "source=candidate" >> "$GITHUB_OUTPUT"
+            echo "label=candidate-$CANDIDATE_RUN" >> "$GITHUB_OUTPUT"
+          else
+            if [ -z "$RELEASE_REPO" ] || [ -z "$RELEASE_TAG" ]; then
+              echo "::error::release source requires release_repo and release_tag."; exit 1
+            fi
+            echo "source=release" >> "$GITHUB_OUTPUT"
+            echo "label=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          fi
       - name: Download the packaged release artifact
+        id: artifact
+        if: steps.source.outputs.source == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_REPO: ${{ inputs.release_repo }}
@@ -178,6 +326,32 @@ jobs:
           gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'Metis-Setup-*.exe' --dir release-artifact --clobber
           gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'SHA256SUMS*' --dir release-sums --clobber
           node scripts/qa/verify-sha256sums.mjs release-artifact release-sums/SHA256SUMS* | tee census-output/SHA256SUMS.txt
+          artifact=$(find release-artifact -maxdepth 1 -name 'Metis-Setup-*.exe' -print -quit)
+          echo "name=$(basename "$artifact")" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(node --input-type=module -e "import { sha256File } from './scripts/qa/provenance.mjs'; console.log(await sha256File(process.argv[1]))" "$artifact")" >> "$GITHUB_OUTPUT"
+          echo "commit=" >> "$GITHUB_OUTPUT"
+          echo "build_run_id=" >> "$GITHUB_OUTPUT"
+      - name: Download the candidate artifact
+        id: candidate
+        if: steps.source.outputs.source == 'candidate'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+          INSTALLER_SHA256: ${{ inputs.win_sha256 }}
+        run: |
+          mkdir -p assets provenance release-artifact census-output
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN" > candidate-run.json
+          node scripts/qa/candidate-scenarios.mjs guard candidate-run.json "$CANDIDATE_RUN"
+          gh run download "$CANDIDATE_RUN" --repo "$GITHUB_REPOSITORY" --name candidate-provenance --dir provenance
+          gh run download "$CANDIDATE_RUN" --repo "$GITHUB_REPOSITORY" --name candidate-win --dir assets
+          node scripts/qa/provenance.mjs verify provenance/provenance.json assets win
+          node -e "const p=require('./provenance/provenance.json'); if (String(p.run.id) !== process.env.CANDIDATE_RUN) { console.error('::error::provenance.json belongs to another run.'); process.exit(1) }"
+          installer=$(node scripts/qa/candidate-installer.mjs assets "$INSTALLER_SHA256" win)
+          cp "$installer" "release-artifact/$(basename "$installer")"
+          echo "name=$(basename "$installer")" >> "$GITHUB_OUTPUT"
+          echo "sha256=$INSTALLER_SHA256" >> "$GITHUB_OUTPUT"
+          echo "commit=$(node -p "require('./provenance/provenance.json').commit")" >> "$GITHUB_OUTPUT"
+          echo "build_run_id=$(node -p "require('./provenance/provenance.json').run.id")" >> "$GITHUB_OUTPUT"
       - name: Install into runner temp
         shell: pwsh
         run: |
@@ -193,20 +367,20 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Setup exited with $LASTEXITCODE." }
       - name: Measure install footprint
         env:
-          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_LABEL: ${{ steps.source.outputs.label }}
         run: |
           node scripts/bench-asr-ttfc.mjs > census-output/bench-asr-ttfc.log 2>&1
           node scripts/qa/census/footprint.mjs \
             --artifact release-artifact/Metis-Setup-*.exe \
             --install-root "$RUNNER_TEMP/resource-census-install" \
             --temp-peak census-output/win32-temp-peak.json \
-            --release-tag "$RELEASE_TAG" \
+            --release-tag "$SOURCE_LABEL" \
             --ttfc-output census-output/bench-asr-ttfc.log \
             --output census-output/win32-footprint.json
       - name: Build representative synthetic profile
         run: |
-          # Read the manifest from the path profile.mjs prints, so a Windows RUNNER_TEMP (D:\a\_temp) cannot
-          # diverge between where the script writes and where this step reads.
+          # Read the manifest from the path profile.mjs prints, so a Windows RUNNER_TEMP cannot diverge
+          # between where the script writes and where this step reads.
           node scripts/qa/census/profile.mjs "$RUNNER_TEMP/metis-census-profile" | tee census-output/profile.log
           manifest=$(sed -n 's/^\[census-profile\] manifest //p' census-output/profile.log)
           test -n "$manifest"
@@ -233,20 +407,54 @@ jobs:
             --seconds 300 \
             --app "$RUNNER_TEMP/resource-census-install/Metis.exe" \
             --output census-output/win32-parked-idle.json
+      - name: Compare with baseline run
+        if: always() && inputs.baseline_run != '' && steps.source.outputs.source != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASELINE_RUN: ${{ inputs.baseline_run }}
+        run: |
+          mkdir -p baseline-run
+          gh run download "$BASELINE_RUN" --repo "$GITHUB_REPOSITORY" --dir baseline-run
+          baseline=$(find baseline-run -maxdepth 1 -type d -name 'resource-census-windows-*' -print -quit)
+          test -n "$baseline"
+          node scripts/qa/census/delta.mjs --baseline "$baseline" --candidate census-output --output census-output/resource-census-delta.json --summary census-output/resource-census-delta.md
+          cat census-output/resource-census-delta.md >> "$GITHUB_STEP_SUMMARY"
       - name: Record run identity and file digests
         if: always()
         env:
+          SOURCE: ${{ steps.source.outputs.source }}
+          SOURCE_LABEL: ${{ steps.source.outputs.label }}
           RELEASE_TAG: ${{ inputs.release_tag }}
+          ARTIFACT_NAME: ${{ steps.artifact.outputs.name || steps.candidate.outputs.name }}
+          ARTIFACT_SHA256: ${{ steps.artifact.outputs.sha256 || steps.candidate.outputs.sha256 }}
+          BUILD_RUN_ID: ${{ steps.artifact.outputs.build_run_id || steps.candidate.outputs.build_run_id }}
+          SOURCE_COMMIT: ${{ steps.artifact.outputs.commit || steps.candidate.outputs.commit }}
         run: |
-          printf '{"runId":"%s","runAttempt":"%s","commit":"%s","releaseTag":"%s"}\n' \
-            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_SHA" "$RELEASE_TAG" > census-output/run-identity.json
+          node --input-type=module -e "
+            import { totalmem } from 'node:os';
+            import { writeFileSync } from 'node:fs';
+            const record = {
+              runId: process.env.GITHUB_RUN_ID,
+              runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+              source: process.env.SOURCE,
+              sourceLabel: process.env.SOURCE_LABEL,
+              releaseTag: process.env.RELEASE_TAG,
+              build_run_id: process.env.BUILD_RUN_ID || null,
+              commit: process.env.SOURCE_COMMIT || null,
+              artifactFileName: process.env.ARTIFACT_NAME || null,
+              artifact_sha256: process.env.ARTIFACT_SHA256 || null,
+              hostFloorOverride: false,
+              hostMemoryBytes: totalmem()
+            };
+            writeFileSync('census-output/run-identity.json', JSON.stringify(record, null, 2) + '\n');
+          "
           (cd census-output && sha256sum $(ls | grep -v '^FILES.sha256$') > FILES.sha256)
           cat census-output/run-identity.json census-output/FILES.sha256
-          echo "LEAD_ACTION: file resource-baseline.md in the program tracker from this run ID and the artifact sha256 above; the managed-laptop, NPU, audio-device and live capture-to-caption rows stay BLOCKED_EXTERNAL."
+          echo "LEAD_ACTION: file the hosted-runner measured records from this run ID and the artifact sha256 above; rows that need physical QA hardware or an outside account stay BLOCKED_EXTERNAL with their unblock step."
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: always()
+        if: always() && steps.source.outputs.source != ''
         with:
-          name: resource-census-windows-${{ inputs.release_tag }}
+          name: resource-census-windows-${{ steps.source.outputs.label }}
           path: census-output/
           if-no-files-found: error
           retention-days: 30
