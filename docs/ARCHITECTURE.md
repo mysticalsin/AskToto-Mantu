@@ -15,9 +15,12 @@ Every production file over 800 lines under `src/`, `operator/src/`, `intelligenc
 | `operator/src/spa/css.ts` | 800 | 2027-03-31 | M2-0247 |
 | `operator/src/store.ts` | 800 | 2027-03-31 | M2-0247 |
 | `scripts/check-architecture.mjs` | 800 | 2027-03-31 | M2-0247 |
-| `scripts/e2e-smoke.mjs` | 800 | 2027-03-31 | M2-0247 |
-| `scripts/qa/e2e-workflows.mjs` | 800 | 2027-03-31 | M2-0247 |
-| `scripts/qa/packaged-smoke.mjs` | 800 | 2027-03-31 | M2-0247 |
+| `scripts/evidence/check.mjs` | 800 | 2027-03-31 | M2-0247 |
+| `scripts/qa/candidate-scenarios.mjs` | 800 | 2027-03-31 | M2-0247 |
+| `scripts/qa/census/lib.mjs` | 800 | 2027-03-31 | M2-0247 |
+| `scripts/qa/hk-m.mjs` | 800 | 2027-03-31 | M2-0247 |
+| `scripts/qa/sidecar-boot-reaper.mjs` | 800 | 2027-03-31 | M2-0247 |
+| `scripts/qa/st-1.mjs` | 800 | 2027-03-31 | M2-0247 |
 | `src/main/auth.ts` | 800 | 2027-03-31 | M2-0247 |
 | `src/main/brain/corrections.ts` | 800 | 2027-03-31 | M2-0247 |
 | `src/main/brain/ingest.ts` | 800 | 2027-03-31 | M2-0247 |
