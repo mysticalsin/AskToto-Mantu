@@ -486,13 +486,12 @@ jobs:
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 
-  # Report-only per owner decision OD-24; M2-0433 makes it blocking again once ST-1 passes strictly (OD-21).
+  # Blocking (OD-21, M2-0433)
   st1-mac-fifo:
     name: ST-1 fifo stall row (macOS)
     needs: provenance
     runs-on: macos-latest
     timeout-minutes: 20
-    continue-on-error: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -511,7 +510,6 @@ jobs:
       - name: Verify every byte against the provenance
         run: node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
       - name: Measure packaged stall resilience
-        continue-on-error: true
         run: |
           mkdir -p st1-report
           installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
@@ -538,9 +536,8 @@ jobs:
   # present, in the representative-profile shape, with History idle. That proves the main-thread and
   # threadpool guarantees on candidate bytes; SF_DATALESS detection on real evicted files is measured in the
   # owner's field soak (st-1-macos-real-dataless.json says so and never reads as PASS). The job also runs the
-  # promotable DMG's own metis-mac-helper stat-flags on the paths that need no cloud account. Its
-  # continue-on-error equals st1-mac-fifo's: report-only while that job is, blocking once M2-0433 makes the
-  # ST-1 jobs blocking.
+  # promotable DMG's own metis-mac-helper stat-flags on the paths that need no cloud account. Report-only:
+  # M2-0520 makes only the fifo and control rows blocking (OD-21); this row's verdict never fails the run.
   st1-mac-dataless-synthetic:
     name: ST-1 synthetic dataless row and stat-flags (macOS)
     needs: provenance
@@ -673,14 +670,14 @@ jobs:
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 
-  # Report-only: the same candidate and measurement with no fixture, so a block the fifo row shows can be
-  # told apart from a block that happens at every launch. Its verdict never fails the run.
+  # Blocking (OD-21, M2-0433)
+  # The same candidate and measurement with no fixture, so a block the fifo row shows can be told apart from a
+  # block that happens at every launch.
   st1-mac-control:
     name: ST-1 control (no fixtures)
     needs: provenance
     runs-on: macos-latest
     timeout-minutes: 20
-    continue-on-error: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -699,7 +696,6 @@ jobs:
       - name: Verify every byte against the provenance
         run: node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
       - name: Measure the packaged app with no fixture
-        continue-on-error: true
         run: |
           mkdir -p st1-report
           installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
@@ -724,7 +720,7 @@ jobs:
   # The History row (M2-0193): History open and search against the FIFO fixtures, each answering with a
   # usable degraded list within 2 s, the first call included, with main loop p99 < 50 ms; each History call
   # is also timed on its own and judged by historySummary (first recallList < 250 ms, M2-0512). Report-only per
-  # owner decision OD-24, like the fifo row. The real dataless half needs a cloud provider's evicted files,
+  # owner decision OD-24. The real dataless half needs a cloud provider's evicted files,
   # which a hosted runner has none of: it is recorded as BLOCKED_EXTERNAL with its unblock step.
   st1-mac-history:
     name: ST-1 History row (macOS)

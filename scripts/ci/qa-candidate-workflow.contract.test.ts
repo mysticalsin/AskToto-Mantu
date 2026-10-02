@@ -73,10 +73,10 @@ describe('QA candidate job st1-mac-dataless-synthetic (M2-0505, OD-36)', () => {
     }
   })
 
-  it('has the same continue-on-error as st1-mac-fifo, so it is blocking exactly when that job is', () => {
-    const fifo = jobContinueOnError(jobBlock('st1-mac-fifo'))
-    expect(fifo).toBeDefined()
-    expect(jobContinueOnError(job)).toBe(fifo)
+  it('stays report-only at job and measurement-step level: M2-0520 makes only the fifo and control rows block', () => {
+    expect(jobContinueOnError(job)).toBe('true')
+    const measure = steps('st1-mac-dataless-synthetic').find((step) => step.includes('--fixtures synthetic-dataless'))
+    expect(measure).toMatch(/^        continue-on-error: true$/m)
   })
 
   it('is part of the self-test trigger for its own files', () => {
@@ -220,6 +220,30 @@ describe('QA candidate workflow: which refs and versions may build (M2-0499)', (
 
   it('runs the self-test when the rule itself changes', () => {
     expect(workflow).toContain('      - scripts/qa/release-line.mjs\n')
+  })
+})
+
+describe('QA candidate workflow: ST-1 fifo and control rows block (OD-21, M2-0520)', () => {
+  it.each([
+    ['st1-mac-fifo', '--fixtures fifo'],
+    ['st1-mac-control', '--fixtures none']
+  ])('%s has no job- or step-level continue-on-error, so a FAIL verdict fails the run', (name, fixtures) => {
+    const block = jobBlocks.get(name) ?? ''
+    expect(block).toContain('runs-on: macos-latest')
+    expect(block).not.toMatch(/continue-on-error/)
+    const measure = steps(name).find((step) => step.includes('node scripts/qa/st-1.mjs'))
+    expect(measure).toContain(fixtures)
+    // The comment lines directly above the job's line.
+    const lines = workflow.split('\n')
+    const comments: string[] = []
+    for (let i = lines.indexOf(`  ${name}:`) - 1; i >= 0 && lines[i].startsWith('  #'); i--) comments.unshift(lines[i])
+    expect(comments[0]).toBe('  # Blocking (OD-21, M2-0433)')
+  })
+
+  it('keeps the History row and the window measurement report-only', () => {
+    expect(jobBlocks.get('st1-mac-history')).toMatch(/^    continue-on-error: true$/m)
+    const measure = steps('st1-mac-window').find((step) => step.includes('--purpose window-construction'))
+    expect(measure).toMatch(/^        continue-on-error: true$/m)
   })
 })
 
