@@ -58,17 +58,13 @@ export const SELF_TEST_FIXTURE = {
   sha256: '148b936b43ce7c546a866e64da059f0458aee2d65e617f16e9d94f06e8d99ed6'
 } as const
 
-/**
- * Commit of Xenova/whisper-base the pack is fetched from. Not recorded yet, so the pack cannot be fetched.
- * LEAD_ACTION: list the commits of Xenova/whisper-base through the Hugging Face API (tree endpoint per
- * revision), find the 40-hex commit whose LFS oids (sha256) and sizes match the 11 files pinned below, and set it here.
- */
-export const WHISPER_BASE_REVISION: string | null = null
+/** Commit of Xenova/whisper-base whose LFS oids and file sizes match the pins below. */
+export const WHISPER_BASE_REVISION = 'd33af214c6ab08c278d722454aaac60f04599f8e'
 
-/**
- * sherpa-onnx release archive for the Parakeet pack. Not recorded yet, so the pack cannot be fetched.
- * LEAD_ACTION: record the exact immutable upstream archive URL with its byte count and sha256.
- */
+/** Commit of csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8 matching the pins below. */
+export const PARAKEET_REVISION = '876ff91b4ab4b89c328afdb2b27ff879d3e42f87'
+
+/** Reserved for an archive-sourced Parakeet mirror; current upstream is commit-pinned per file. */
 export const PARAKEET_ARCHIVE_PIN: SpeechPackArchivePin | null = null
 
 const PARAKEET_DIR = 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8'
@@ -78,7 +74,7 @@ export const WHISPER_BASE_Q8: SpeechPackComponent = {
   version: '1',
   source: {
     kind: 'files',
-    baseUrl: WHISPER_BASE_REVISION ? `https://huggingface.co/Xenova/whisper-base/resolve/${WHISPER_BASE_REVISION}` : null
+    baseUrl: `https://huggingface.co/Xenova/whisper-base/resolve/${WHISPER_BASE_REVISION}`
   },
   files: [
     { path: 'config.json', bytes: 2248, sha256: 'd1d347fdb422e6347c2f843a90d375aa67ea3f4b3e20d2c3075f9a9f6243685b' },
@@ -98,7 +94,10 @@ export const WHISPER_BASE_Q8: SpeechPackComponent = {
 export const PARAKEET_TDT_V3_INT8: SpeechPackComponent = {
   id: 'asr.parakeet-tdt-0.6b-v3-int8',
   version: '1',
-  source: { kind: 'archive', archive: PARAKEET_ARCHIVE_PIN, entryPrefix: PARAKEET_DIR, extractCapBytes: 800_000_000 },
+  source: {
+    kind: 'files',
+    baseUrl: `https://huggingface.co/csukuangfj/${PARAKEET_DIR}/resolve/${PARAKEET_REVISION}`
+  },
   files: [
     { path: 'decoder.int8.onnx', bytes: 11845275, sha256: '179e50c43d1a9de79c8a24149a2f9bac6eb5981823f2a2ed88d655b24248db4e' },
     { path: 'encoder.int8.onnx', bytes: 652184281, sha256: 'acfc2b4456377e15d04f0243af540b7fe7c992f8d898d751cf134c3a55fd2247' },

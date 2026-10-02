@@ -3,9 +3,11 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   PARAKEET_TDT_V3_INT8,
+  PARAKEET_REVISION,
   SELF_TEST_FIXTURE,
   SPEECH_PACK_COMPONENTS,
   WHISPER_BASE_Q8,
+  WHISPER_BASE_REVISION,
   componentBytes,
   isImmutableUrl,
   speechPackFileUrl
@@ -65,13 +67,14 @@ describe('speech-pack sources are immutable', () => {
   })
 
   it('no declared source, and no URL built from one, names a branch', () => {
+    expect(WHISPER_BASE_REVISION).toMatch(/^[0-9a-f]{40}$/)
+    expect(PARAKEET_REVISION).toMatch(/^[0-9a-f]{40}$/)
     for (const component of SPEECH_PACK_COMPONENTS) {
       for (const file of component.files) {
         const url = speechPackFileUrl(component, file)
-        if (url !== null) {
-          expect(isImmutableUrl(url)).toBe(true)
-          expect(url).toMatch(/\/resolve\/[0-9a-f]{40}\//)
-        }
+        expect(url, `${component.id}/${file.path}`).not.toBeNull()
+        expect(isImmutableUrl(url as string)).toBe(true)
+        expect(url).toMatch(/\/resolve\/[0-9a-f]{40}\//)
       }
       if (component.source.kind === 'archive' && component.source.archive) {
         expect(isImmutableUrl(component.source.archive.url)).toBe(true)

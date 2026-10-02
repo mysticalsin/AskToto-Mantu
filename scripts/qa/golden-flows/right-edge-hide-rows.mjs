@@ -24,6 +24,8 @@ export const RIGHT_EDGE_HIDE_SCENARIOS = Object.freeze([
 const RIGHT_EDGE = Object.freeze({ margin: 12, tab: 52, drawerWidth: 360, drawerHeight: 560, band: 4, normalizedY: 0.2 })
 /** Right-edge only (src/main/island/cursor-watch.ts RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS). */
 const RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS = 3000
+/** Hold an off-band cursor long enough for main's polling watch to sample the leave on hosted runners. */
+export const RIGHT_EDGE_LATCH_RELEASE_SAMPLE_MS = 600
 // Hold the parked band long enough for a late native frame change to land inside RE-HIDE-3's assertion.
 export const LATE_NATIVE_FRAME_HOLD_MS = 500
 const MEETING_UNBLOCK =
@@ -422,14 +424,14 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     await hideControl().click({ timeout: 5_000 })
     const byControl = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', 'hide'), 3_000)
     await setCursor(awayPoint(byControl.observed.win))
-    await wait(100)
+    await wait(RIGHT_EDGE_LATCH_RELEASE_SAMPLE_MS)
     const reopened = await revealAtEdge()
     const keptAfterControl = reopened.page.draft === draft
     await composer().focus()
     await page.keyboard.press('Escape')
     const byEscape = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', 'hide'), 3_000)
     await setCursor(awayPoint(byEscape.observed.win))
-    await wait(100)
+    await wait(RIGHT_EDGE_LATCH_RELEASE_SAMPLE_MS)
     const reopenedAgain = await revealAtEdge()
     const keptAfterEscape = reopenedAgain.page.draft === draft
     await composer().fill('')
@@ -449,7 +451,7 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     const after600 = await observe()
     const latched = rightEdgeStateMatches(after600, 'parked', 'hide')
     await setCursor(awayPoint(revealed.win))
-    await wait(150)
+    await wait(RIGHT_EDGE_LATCH_RELEASE_SAMPLE_MS)
     await setCursor(edgePoint(revealed.win))
     const released = await waitUntil((o) => rightEdgeStateMatches(o, 'revealed'), 2_000)
     return {
