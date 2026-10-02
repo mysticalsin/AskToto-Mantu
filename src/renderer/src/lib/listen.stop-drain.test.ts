@@ -1635,6 +1635,33 @@ describe('M2-0535 Whisper initialization error ownership', () => {
     expect(render('whisper').error).toBeNull()
   })
 
+  it('keeps a replacement Apple session ready when an old Parakeet fallback lookup resolves', async () => {
+    let resolveBundled!: (bundled: boolean) => void
+    vi.mocked(window.toto.asrBundled).mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => { resolveBundled = resolve })
+    )
+    vi.mocked(window.toto.parakeetFeed).mockRejectedValue(new Error('Synthetic native rejection'))
+    await start('parakeet')
+    const oldWorklet = worklets.at(-1)!
+    for (let i = 0; i < 3; i++) {
+      oldWorklet.emit({ audio: Float32Array.from([0.2]), partial: false })
+      await settle()
+    }
+    expect(window.toto.asrBundled).toHaveBeenCalledOnce()
+    expect(workers).toHaveLength(0)
+
+    await render('apple').start('system', 'fast', 'apple', 'English')
+    await settle()
+    resolveBundled(true)
+    await settle()
+    worklets.at(-1)!.emit({ audio: Float32Array.from([0.3]), partial: false })
+    await settle()
+
+    expect(window.toto.appleSpeechFeed).toHaveBeenCalledOnce()
+    expect(workers).toHaveLength(0)
+    expect(render('apple')).toMatchObject({ error: null, loading: false, listening: true })
+  })
+
   it('does not inherit Parakeet readiness into a fresh Whisper worker after Stop', async () => {
     const first = await start('parakeet')
     first.stop()

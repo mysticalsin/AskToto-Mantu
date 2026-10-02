@@ -1416,9 +1416,8 @@ export function useListen(
         }))
         pump() // drain windows captured while the model loaded
       } else if (m.type === 'error') {
-        // armNetworkRetry is defined further down (after ensureWorker) and forward-referenced via closure
-        // — same pattern as pump → fallBackToWhisper above. It only runs later, once this handler actually
-        // fires, by which point it's fully initialized; deliberately omitted from this useCallback's deps.
+        // armNetworkRetry is initialized before this handler fires; its forward reference is omitted from deps.
+        // An unready worker's load error belongs to its current holder; ready-worker errors belong to a window.
         if (readyRef.current && pendingWhisperEpochRef.current !== sessionEpochRef.current) {
           return // replacement session owns the placeholder, embed slot, busy flag and queue
         }
