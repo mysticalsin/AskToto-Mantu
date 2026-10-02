@@ -1,43 +1,12 @@
-import {
-  closeSync,
-  constants,
-  copyFileSync,
-  cpSync,
-  existsSync,
-  fsyncSync,
-  mkdirSync,
-  openSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  renameSync,
-  statSync,
-  writeFileSync
-} from 'node:fs'
+import { closeSync, constants, copyFileSync, cpSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { join, basename, dirname } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import type { PreservedBrainIndexCopy, Settings } from '@shared/ipc'
 import { invalidateMatchKeyDir, resetMatchKeyCacheForTests } from './match-key-cache'
-import {
-  BrainIndexSchema,
-  BrainGraphSchema,
-  PersonEntitySchema,
-  AccountEntitySchema,
-  DealEntitySchema,
-  MeetingExtractionSchema,
-  BRAIN_SCHEMA_VERSION,
-  type BrainIndex,
-  type BrainGraph,
-  type PersonEntity,
-  type AccountEntity,
-  type DealEntity,
-  type MeetingExtraction,
-  type Confidence,
-  type ProvenantField,
-  type IndexUnavailableCause
-} from '@shared/brain'
+import { BrainIndexSchema, BrainGraphSchema, PersonEntitySchema, AccountEntitySchema, DealEntitySchema, MeetingExtractionSchema, BRAIN_SCHEMA_VERSION, type BrainIndex, type BrainGraph, type PersonEntity, type AccountEntity, type DealEntity, type MeetingExtraction, type Confidence, type ProvenantField, type IndexUnavailableCause } from '@shared/brain'
 import { resolveMeetingsFolder, readSavedFile, writeSaved, decodeSavedResult, envelopeKeyKind } from '../transcripts'
 import { classifyAll, storageAt } from '../infra/storage/meetings-storage'
+import { activeIngestLedgerPath, classifyIngestLedgerBytes, ingestLedgerMode, readUserDataIngestLedger, seedUserDataIngestLedgerFromLegacy, type IngestLedgerLoad, userDataIngestLedgerPath, writeIngestLedger } from '../infra/storage/ingest-ledger'
 import { mainLog, auditLog } from '../logger'
 import { fileKeyState, isKeychainAvailable } from '../secrets'
 
@@ -56,6 +25,26 @@ const WIN_RESERVED_NAMES = new Set([
   'com1', 'com2', 'com3', 'com4', 'com5', 'com6', 'com7', 'com8', 'com9',
   'lpt1', 'lpt2', 'lpt3', 'lpt4', 'lpt5', 'lpt6', 'lpt7', 'lpt8', 'lpt9'
 ])
+
+const removePathTreeSync = rmSync
+const readDirectoryEntriesSync = readdirSync
+
+function deleteCurrentUserDataIngestLedger(settings: Settings): void {
+  removePathTreeSync(userDataIngestLedgerPath(settings), { force: true })
+}
+
+function deleteAllUserDataIngestLedgers(settings: Settings): void {
+  const current = userDataIngestLedgerPath(settings)
+  deleteCurrentUserDataIngestLedger(settings)
+  let names: string[], dir = dirname(current)
+  try {
+    names = readDirectoryEntriesSync(dir)
+  } catch (e) {
+    if (errnoCode(e) === 'ENOENT') return
+    throw e
+  }
+  for (const name of names) if (/^index-[0-9a-f]{16}\.json$/i.test(name)) removePathTreeSync(join(dir, name), { force: true })
+}
 
 export function slugify(s: string): string {
   const full = s
@@ -486,11 +475,7 @@ export const INDEX_AUTO_SNAPSHOT_CAP = 5
  *  failure is not: retrying safeStorage on a timer risks Keychain prompts, and the bytes have not changed. */
 export const INDEX_IO_RETRY_MS = 30_000
 
-type IndexLoad =
-  | { kind: 'ready'; index: BrainIndex }
-  | { kind: 'absent' }
-  | { kind: 'corrupt' } // decoded, but not a valid index for this build
-  | { kind: 'unavailable'; cause: IndexUnavailableCause; detail?: string } // detail: log-only (errno / decode reason)
+type IndexLoad = IngestLedgerLoad
 type ResolvedIndex = Exclude<IndexLoad, { kind: 'corrupt' }>
 
 // Stable machine-readable refusal codes. Keep each string defined once here; both read-only and rebuild
@@ -537,20 +522,7 @@ export class BrainIndexRebuildError extends Error {
 
 /** Pure classification of index.json bytes. No filesystem writes. */
 export function classifyIndexBytes(buf: Buffer): IndexLoad {
-  if (buf.length === 0) return { kind: 'absent' } // torn to zero bytes: nothing to preserve (unchanged)
-  const decoded = decodeSavedResult(buf)
-  if (!decoded.ok) return { kind: 'unavailable', cause: 'undecryptable', detail: decoded.reason }
-  let raw: unknown
-  try {
-    raw = JSON.parse(decoded.text)
-  } catch {
-    return { kind: 'corrupt' }
-  }
-  const v = (raw as { schema_version?: unknown } | null)?.schema_version
-  if (typeof v === 'number' && v > BRAIN_SCHEMA_VERSION) return { kind: 'unavailable', cause: 'unsupported' }
-  const parsed = BrainIndexSchema.safeParse(raw)
-  if (parsed.success) return { kind: 'ready', index: parsed.data }
-  return { kind: 'corrupt' }
+  return classifyIngestLedgerBytes(buf)
 }
 
 // Stat-keyed memo, one entry per `.brain` dir's index.json. NOT session state: an entry is used only
@@ -623,11 +595,8 @@ function setAsideCorruptIndex(p: string): ResolvedIndex {
   auditLog('brain.index.quarantined', { kept: kept + 1, cap: INDEX_AUTO_SNAPSHOT_CAP })
   return { kind: 'absent' }
 }
-
-function loadIndex(s: Settings): ResolvedIndex {
-  const p = join(brainDir(s), INDEX_REL)
+function readIndexPathSync(p: string): { load: IndexLoad; mtimeMs: number; size: number; hit: IndexCacheEntry | undefined } {
   const hit = indexCache.get(p)
-
   let mtimeMs: number
   let size: number
   try {
@@ -635,42 +604,65 @@ function loadIndex(s: Settings): ResolvedIndex {
     mtimeMs = st.mtimeMs
     size = st.size
   } catch (e) {
-    if (errnoCode(e) === 'ENOENT') {
-      indexCache.delete(p)
-      return { kind: 'absent' }
-    }
-    return recordUnavailable(p, hit, -1, -1, { kind: 'unavailable', cause: 'io', detail: errnoCode(e) })
+    if (errnoCode(e) === 'ENOENT') { indexCache.delete(p); return { load: { kind: 'absent' }, mtimeMs: -1, size: -1, hit } }
+    const load = recordUnavailable(p, hit, -1, -1, { kind: 'unavailable', cause: 'io', detail: errnoCode(e) })
+    return { load, mtimeMs: -1, size: -1, hit }
   }
-
-  if (hit && hit.mtimeMs === mtimeMs && hit.size === size && !ioRetryDue(hit)) return hit.load
-
+  if (hit && hit.mtimeMs === mtimeMs && hit.size === size && !ioRetryDue(hit)) return { load: hit.load, mtimeMs, size, hit }
   let buf: Buffer
   try {
     buf = readFileSync(p)
   } catch (e) {
     const code = errnoCode(e)
-    if (code === 'ENOENT') {
-      indexCache.delete(p)
-      return { kind: 'absent' }
-    }
-    return recordUnavailable(p, hit, mtimeMs, size, { kind: 'unavailable', cause: 'io', detail: code })
+    if (code === 'ENOENT') { indexCache.delete(p); return { load: { kind: 'absent' }, mtimeMs: -1, size: -1, hit } }
+    const load = recordUnavailable(p, hit, mtimeMs, size, { kind: 'unavailable', cause: 'io', detail: code })
+    return { load, mtimeMs, size, hit }
   }
+  return { load: classifyIndexBytes(buf), mtimeMs, size, hit }
+}
 
-  const classified = classifyIndexBytes(buf)
+function finishIndexLoad(p: string, read: ReturnType<typeof readIndexPathSync>): ResolvedIndex {
+  const { load: classified, mtimeMs, size, hit } = read
   const load: ResolvedIndex = classified.kind === 'corrupt' ? setAsideCorruptIndex(p) : classified
-
   if (load.kind === 'absent') {
-    indexCache.delete(p)
-    return load
+    indexCache.delete(p); return load
   }
   if (load.kind === 'unavailable') return recordUnavailable(p, hit, mtimeMs, size, load)
-
   indexCache.set(p, { mtimeMs, size, at: Date.now(), load })
   return load
 }
 
+function finishReadOnlyIndexLoad(p: string, read: ReturnType<typeof readIndexPathSync>): ResolvedIndex {
+  const { load: classified, mtimeMs, size, hit } = read
+  const load: ResolvedIndex = classified.kind === 'corrupt' ? { kind: 'unavailable', cause: 'corrupt-kept' } : classified
+  if (load.kind === 'absent') {
+    indexCache.delete(p); return load
+  }
+  if (load.kind === 'unavailable') return recordUnavailable(p, hit, mtimeMs, size, load)
+  indexCache.set(p, { mtimeMs, size, at: Date.now(), load })
+  return load
+}
+
+function loadIndex(s: Settings): ResolvedIndex {
+  const legacyPath = join(brainDir(s), INDEX_REL)
+  const p = activeIngestLedgerPath(s, legacyPath)
+  const current = finishIndexLoad(p, readIndexPathSync(p))
+  if (current.kind !== 'absent' || ingestLedgerMode() !== 'switch') return current
+  return finishReadOnlyIndexLoad(legacyPath, readIndexPathSync(legacyPath))
+}
+
 async function loadIndexAsync(s: Settings): Promise<ResolvedIndex> {
-  const p = join(brainDir(s), INDEX_REL)
+  const legacyPath = join(brainDir(s), INDEX_REL), p = activeIngestLedgerPath(s, legacyPath)
+  if (ingestLedgerMode() === 'switch') {
+    const hit = indexCache.get(p)
+    const current = await readUserDataIngestLedger(s)
+    const resolved = current.load.kind === 'absent' ? await seedUserDataIngestLedgerFromLegacy(s, legacyPath) : current
+    const load: ResolvedIndex = resolved.load.kind === 'corrupt' ? setAsideCorruptIndex(p) : resolved.load
+    if (load.kind === 'absent') { indexCache.delete(p); return load }
+    if (load.kind === 'unavailable') return recordUnavailable(p, hit, resolved.mtimeMs, resolved.size, load)
+    indexCache.set(p, { mtimeMs: resolved.mtimeMs, size: resolved.size, at: Date.now(), load })
+    return load
+  }
   const hit = indexCache.get(p)
   const gateway = storageAt(resolveMeetingsFolder(s))
   const fileClass = (await classifyAll(gateway, [join('.brain', INDEX_REL)])).get(join('.brain', INDEX_REL))
@@ -772,10 +764,11 @@ export async function rebuildUnavailableError(s: Settings): Promise<string | nul
 
 /** Fail-closed write: never replaces bytes this process could not fully decode. */
 export async function writeIndex(s: Settings, v: BrainIndex): Promise<void> {
-  const blocked = indexUnavailable(s)
+  const blocked = await indexUnavailableAsync(s)
   if (blocked) throw new BrainIndexUnavailableError(blocked)
-  await writeJson(s, INDEX_REL, v)
-  indexCache.delete(join(brainDir(s), INDEX_REL))
+  const legacyPath = join(brainDir(s), INDEX_REL)
+  await writeIngestLedger(s, legacyPath, v)
+  indexCache.delete(activeIngestLedgerPath(s, legacyPath))
 }
 
 // ── Typed accessors ──────────────────────────────────────────────────────────
@@ -989,14 +982,14 @@ export function listPreservedBrainIndexes(settings: Settings): PreservedBrainInd
 
 export function currentBrainIndexIsReadable(settings: Settings): boolean {
   try {
-    return classifyIndexBytes(readFileSync(join(brainDir(settings), INDEX_REL))).kind === 'ready'
+    return classifyIndexBytes(readFileSync(activeIngestLedgerPath(settings, join(brainDir(settings), INDEX_REL)))).kind === 'ready'
   } catch {
     return false
   }
 }
 
 function preserveCurrentIndexBeforeRestore(settings: Settings): void {
-  const current = join(brainDir(settings), INDEX_REL)
+  const current = activeIngestLedgerPath(settings, join(brainDir(settings), INDEX_REL))
   if (!existsSync(current)) return
   const preserveDir = preservedIndexDir(settings)
   const preservePath = join(preserveDir, `index.before-restore-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomBytes(3).toString('hex')}.json`)
@@ -1026,8 +1019,8 @@ export function restorePreservedBrainIndex(
   if (classifyIndexBytes(sourceBytes).kind !== 'ready') return { ok: false, error: 'not-restorable' }
   if (!opts.allowReplaceReadable && currentBrainIndexIsReadable(settings)) return { ok: false, error: 'current-readable' }
 
-  const root = brainDir(settings)
-  const target = join(root, INDEX_REL)
+  const target = activeIngestLedgerPath(settings, join(brainDir(settings), INDEX_REL))
+  const root = dirname(target)
   const tmp = join(root, `index.restore-${randomBytes(6).toString('hex')}.tmp`)
   try {
     mkdirSync(root, { recursive: true })
@@ -1079,8 +1072,7 @@ function assertRebuildKeyContextAllowsPreserve(indexBytes: Buffer): void {
 }
 
 function preserveUnreadableIndexBeforeRebuild(settings: Settings): void {
-  const root = brainDir(settings)
-  const indexPath = join(root, INDEX_REL)
+  const indexPath = activeIngestLedgerPath(settings, join(brainDir(settings), INDEX_REL))
   let indexBytes: Buffer
   try {
     indexBytes = readFileSync(indexPath)
@@ -1148,12 +1140,16 @@ export function purgeBrain(settings: Settings, opts: { mode: 'rebuild'; preserve
   if (opts.mode === 'rebuild') preserveUnreadableIndexBeforeRebuild(settings)
   const journalPath = join(root, 'corrections.json')
   const preserveTo = `${root}.corrections-preserve.json`
+  const userDataLedger = userDataIngestLedgerPath(settings)
   let preserve = false
   try {
     preserve = opts.mode === 'rebuild' && opts.preserveCorrections && existsSync(journalPath)
     if (preserve) cpSync(journalPath, preserveTo)
     const preservedDir = preservedIndexDir(settings)
     if (existsSync(root)) rmSync(root, { recursive: true, force: true })
+    if (opts.mode === 'erase') deleteAllUserDataIngestLedgers(settings)
+    else deleteCurrentUserDataIngestLedger(settings)
+    indexCache.delete(userDataLedger)
     if (opts.mode === 'erase') rmSync(preservedDir, { recursive: true, force: true })
     resetMatchKeyCacheForTests() // Receipt Mode must not match against a wiped corpus
     if (preserve) {
