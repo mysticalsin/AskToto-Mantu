@@ -41,21 +41,13 @@ import { classifyAll, storageAt } from '../infra/storage/meetings-storage'
 import { mainLog, auditLog } from '../logger'
 import { fileKeyState, isKeychainAvailable } from '../secrets'
 
-/**
- * Brain store — plain JSON files under `<meetings folder>/.brain/`.
- *
- * Lives NEXT TO the transcripts on purpose: it inherits the user's folder choice, OneDrive sync (so
- * Dust agents can read it as vault context), and — critically — the same at-rest encryption setting.
- * When encryptTranscripts is on, every brain file is written through the same ATKENC envelope as the
- * transcripts themselves (writeSaved/readSavedFile handle both forms transparently).
- */
+/** Brain store — JSON under `<meetings folder>/.brain/`, beside transcripts and the same encryption policy. */
 
 export function brainDir(settings: Settings): string {
   return join(resolveMeetingsFolder(settings), '.brain')
 }
 
-// Windows reserved device names — a path whose basename (before the first '.') case-insensitively
-// matches one of these fails to open at all, even for a tmp file, regardless of extension.
+// Windows reserved device basenames fail to open even for tmp files, regardless of extension.
 const WIN_RESERVED_NAMES = new Set([
   'con',
   'prn',
@@ -72,20 +64,15 @@ export function slugify(s: string): string {
     .replace(/[̀-ͯ]/g, '') // strip diacritics so "L'Oréal" and "L'Oreal" share a slug
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
-  // Two distinct long names that share an identical 60-char prefix would otherwise collide onto the
-  // same slug and silently merge their entity files. Only truncate when needed, and disambiguate the
-  // truncation with a short content hash so different long names still map to different slugs.
+  // Disambiguate long shared prefixes with a short content hash.
   const base =
     full.length > 60
       ? `${full.slice(0, 51)}-${createHash('sha256').update(full).digest('hex').slice(0, 8)}`
       : full
-  // A slug that's a bare Windows reserved device name (CON, AUX, NUL, COM1-9, LPT1-9) can't be opened
-  // as a file on Windows — not even the intermediate .tmp writeSaved creates, since the reserved check
-  // is on the basename before the first '.'. Suffix deterministically so the slug stays stable.
+  // Bare Windows reserved names cannot be opened; suffix deterministically.
   if (base && WIN_RESERVED_NAMES.has(base)) return `${base}-x`
   if (base) return base
-  // A name written entirely in a non-Latin script (Chinese, Cyrillic, Arabic, pure emoji) or one
-  // that's blank/whitespace-only collapses the ASCII pass above to '' — falling back to a fixed
+  // A non-Latin or blank name collapses the ASCII pass to '' — falling back to a fixed
   // 'unknown' would silently merge every such distinct entity into one shared file (a real
   // cross-account confidentiality bug for a tool whose job is per-account isolation). Instead, hash
   // the NFKC-normalized original name: deterministic (same name → same slug every time) and
@@ -572,6 +559,19 @@ export function classifyIndexBytes(buf: Buffer): IndexLoad {
 // The (-1,-1) key stands for "stat itself failed (non-ENOENT)".
 type IndexCacheEntry = { mtimeMs: number; size: number; at: number; load: ResolvedIndex }
 const indexCache = new Map<string, IndexCacheEntry>()
+let pendingBrainLogWrites: Promise<void> = Promise.resolve()
+
+function enqueueBrainLogWrite(write: () => void): void {
+  pendingBrainLogWrites = pendingBrainLogWrites.catch(() => undefined).then(() => new Promise<void>((resolve) => {
+    setImmediate(() => {
+      try { write() } catch { /* best-effort */ } finally { resolve() }
+    })
+  }))
+}
+
+export function settleBrainLogWritesForTests(): Promise<void> {
+  return pendingBrainLogWrites.catch(() => undefined)
+}
 
 /** Node fs errors carry `.code` (ENOENT, ETIMEDOUT, …); anything else has none. */
 function errnoCode(e: unknown): string | undefined {
@@ -594,9 +594,9 @@ function recordUnavailable(
 ): ResolvedIndex {
   const alreadyLogged = hit?.load.kind === 'unavailable' && hit.load.cause === load.cause
   if (!alreadyLogged) {
-    mainLog.warn(
-      `[brain] index.json can't be used on this device (${load.cause}${load.detail ? `: ${load.detail}` : ''}) — left untouched; indexing is paused until it can be read`
-    )
+    enqueueBrainLogWrite(() => mainLog.warn(
+      `[brain] index.json can't be used on this device (${load.cause}${load.detail ? `: ${load.detail}` : ''}) - left untouched; indexing is paused until it can be read`
+    ))
     auditLog('brain.index.unavailable', { cause: load.cause })
   }
   indexCache.set(p, { mtimeMs, size, at: Date.now(), load })

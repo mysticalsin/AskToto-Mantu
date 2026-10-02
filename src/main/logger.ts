@@ -105,6 +105,23 @@ const sha256 = (line: string): string => createHash('sha256').update(line, 'utf8
 let chainSeq = 0
 let chainPrev = 'GENESIS'
 let chainLoaded = false
+let pendingAuditWrites: Promise<void> = Promise.resolve()
+
+function enqueueAuditWrite(line: string): void {
+  pendingAuditWrites = pendingAuditWrites
+    .catch(() => undefined)
+    .then(() => new Promise<void>((resolve) => {
+      setImmediate(() => {
+        try {
+          audit.info(line)
+        } catch {
+          /* never let auditing break the app */
+        } finally {
+          resolve()
+        }
+      })
+    }))
+}
 
 function lastAuditLine(p: string): string | null {
   try {
@@ -412,10 +429,15 @@ export function auditLog<E extends AuditEvent>(event: E, detail?: AuditDetail<E>
     // Advance the tip BEFORE handing the line to the transport: audit.info is synchronous here
     // (file transport sync:true), but the chain must stay correct even if a future transport buffers.
     chainPrev = sha256(line)
-    audit.info(line)
+    enqueueAuditWrite(line)
   } catch {
     /* never let auditing break the app */
   }
+}
+
+/** Test seam: wait until every audit line enqueued before this call has reached the transport. */
+export function settleAuditLogForTests(): Promise<void> {
+  return pendingAuditWrites.catch(() => undefined)
 }
 
 /** Test seam: the current chain tip, so a behavioral test can prove continuity without parsing files. */

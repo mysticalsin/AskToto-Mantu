@@ -548,6 +548,37 @@ describe('startRunObservability', () => {
     })
   })
 
+  it('can defer the stall sampler helper spawn until the boot-work gate opens', () => {
+    const startStallSampler = vi.fn(() => ({ stop: vi.fn() }))
+    let deferredStart!: () => void
+    startRunObservability({
+      userData: '/fake',
+      version: '1.9.7',
+      platform: 'darwin',
+      arch: 'arm64',
+      audit: vi.fn(),
+      powerMonitor: fakePowerMonitor(),
+      stallWatchCommand: '/x/metis-mac-helper',
+      deferStallSamplerStart: (start) => { deferredStart = start },
+      deps: {
+        beginRunWatch: () => ({ bootId: 'boot-1', prior: fakePrior() }),
+        startStallMonitor: vi.fn(() => fakeStallMonitor()),
+        startStallSampler,
+        setIntervalFn: vi.fn(() => 1 as unknown as ReturnType<typeof setInterval>),
+        clearIntervalFn: vi.fn()
+      }
+    })
+    expect(startStallSampler).not.toHaveBeenCalled()
+    deferredStart()
+    expect(startStallSampler).toHaveBeenCalledExactlyOnceWith({
+      command: '/x/metis-mac-helper',
+      userData: '/fake',
+      bootId: 'boot-1',
+      aliveIntervalMs: 10_000,
+      audit: expect.any(Function)
+    })
+  })
+
   it("shutdownClean stops the stall sampler before it clears the alive timer, and before app.shutdown.clean is audited", () => {
     const order: string[] = []
     const audit = vi.fn((event: string) => {
