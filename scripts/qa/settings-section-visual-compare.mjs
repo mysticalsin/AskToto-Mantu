@@ -72,8 +72,7 @@ function screenshotCoversBox(buffer, box) {
 }
 
 function sectionCaptureClipped({ buffer, sectionBox, panelBox }) {
-  void panelBox
-  return !screenshotCoversBox(buffer, sectionBox)
+  return !fitsInside(sectionBox, panelBox) || !screenshotCoversBox(buffer, sectionBox)
 }
 
 async function installDeterministicSettingsQaBridge(page) {
