@@ -73,12 +73,14 @@ describe('MQA-247 — the high-tier ASR manifest', () => {
 describe('MQA-247 — the fetch is reachable and explicit', () => {
   const REPO = join(__dirname, '..', '..')
   const read = (rel: string): string => readFileSync(join(REPO, rel), 'utf8')
+  const readSettings = (): string =>
+    read('src/renderer/src/features/settings/AiSection.tsx')
 
   it('is exposed end to end: channel, handler, preload, UI', () => {
     expect(read('src/shared/ipc.ts')).toMatch(/asrModelFetch: 'asrModel:fetch'/)
     expect(read('src/main/index.ts')).toMatch(/ipcMain\.handle\(IPC\.asrModelFetch/)
     expect(read('src/preload/index.ts')).toMatch(/asrModelFetch: \(\)/)
-    expect(read('src/renderer/src/components/Settings.tsx')).toMatch(
+    expect(read('src/renderer/src/features/settings/AudioTab.tsx')).toMatch(
       /<AsrModelRow engine=\{settings\.asrEngine\} \/>/
     )
   })
@@ -93,7 +95,7 @@ describe('MQA-247 — the fetch is reachable and explicit', () => {
   })
 
   it('shows the size BEFORE the button that spends it', () => {
-    const ui = read('src/renderer/src/components/Settings.tsx')
+    const ui = readSettings()
     expect(ui).toMatch(/Download \$\{gb\} GB/)
     expect(ui).toMatch(/\$\{gb\} GB download/)
   })

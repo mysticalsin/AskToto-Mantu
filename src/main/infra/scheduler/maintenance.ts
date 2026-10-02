@@ -124,8 +124,11 @@ export function whenMaintenanceWindowOpens(): Promise<void> {
   })
 }
 
-export function onMaintenanceMayBegin(listener: () => void): void {
+export function onMaintenanceMayBegin(listener: () => void): () => void {
   listeners.add(listener)
+  return () => {
+    listeners.delete(listener)
+  }
 }
 
 export function reportDeferred(kind: SchedulerJobKind, reason: DeferredReason): void {
@@ -135,7 +138,7 @@ export function reportDeferred(kind: SchedulerJobKind, reason: DeferredReason): 
   auditLog('scheduler.job', { kind, outcome: 'deferred', deferredReason: reason })
 }
 
-export function resetMaintenanceGateForTests(): void {
+export function resetMaintenanceGateForTests(options: { listeners?: boolean } = {}): void {
   started = false
   uptimeMs = processUptimeMs
   schedule = DEFAULT_SCHEDULE
@@ -147,6 +150,7 @@ export function resetMaintenanceGateForTests(): void {
   interactiveRecheckArmed = false
   windowWaiters.splice(0, windowWaiters.length)
   waiters.splice(0, waiters.length)
+  if (options.listeners) listeners.clear()
   reportedDeferrals.clear()
 }
 

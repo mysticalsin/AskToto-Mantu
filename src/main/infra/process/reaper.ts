@@ -1,4 +1,5 @@
 import { readdirSync, readFileSync, realpathSync } from 'node:fs'
+import { realpath } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { basename, join, posix, resolve, win32 } from 'node:path'
 import type * as childProcess from 'node:child_process'
@@ -8,7 +9,7 @@ import { app } from 'electron'
 import { auditLog, mainLog } from '../../logger'
 import { resolveBinaryPath } from '../../llm/local-runtime'
 import { WINDOWS_POWERSHELL } from '../../win-security'
-import { argsFingerprint, getProcessIdentity, type SidecarRecord } from './registry'
+import { activeSidecarRegistry, argsFingerprint, getProcessIdentity, type SidecarRecord } from './registry'
 
 const require = createRequire(import.meta.url)
 
@@ -39,6 +40,9 @@ export interface ReaperOptions {
   readonly userData: string
   readonly currentMain: ProcessIdentity
   readonly llamaServerRealpath: string
+  /** This launch's registry session. The reaper runs after the first show (M2-0518), when this launch may
+   *  already have spawned and registered sidecars; its own records are never reap candidates. */
+  readonly currentSessionId?: string
   readonly adapters?: Partial<ReaperAdapters>
 }
 
@@ -58,7 +62,7 @@ export async function reapBootSidecars(options: ReaperOptions): Promise<void> {
   const adapters = { ...defaultAdapters(), ...options.adapters }
   const runDir = join(options.userData, 'run')
   const records = adapters.readRegistryRecords(runDir)
-  await reapRegistryRecords(records, adapters)
+  await reapRegistryRecords(records.filter((record) => record.sessionId !== options.currentSessionId), adapters)
   await reapLegacyLlamaOrphans(options, adapters, registeredPids(records))
 }
 
@@ -273,7 +277,7 @@ export async function runBootSidecarReaper(userData = app.getPath('userData')): 
     const currentMain = await getProductionProcessInfo(process.pid)
     const llama = productionLlamaRealpath()
     if (!currentMain || !llama) return
-    await reapBootSidecars({ userData, currentMain, llamaServerRealpath: llama })
+    await reapBootSidecars({ userData, currentMain, llamaServerRealpath: llama, currentSessionId: activeSidecarRegistry()?.sessionId })
   } catch (error) {
     mainLog.warn('[sidecar.reaper] boot reaper failed', error)
   }
@@ -316,31 +320,61 @@ async function listPosixProcesses(pids?: readonly number[]): Promise<ProcessIden
     ? ['-o', 'pid=,ppid=,pgid=,lstart=,command=', '-p', pids.join(',')]
     : ['-axo', 'pid=,ppid=,pgid=,lstart=,command=']
   const { stdout } = await execFileAsync('/bin/ps', args, { encoding: 'utf8', timeout: 5_000 })
+  return parsePosixPsListing(stdout, psCandidateFilter(pids))
+}
+
+/** A lookup of explicit pids resolves every returned line; a full listing resolves only owned sidecar names. */
+function psCandidateFilter(pids?: readonly number[]): (exe: string) => boolean {
+  return pids?.length ? () => true : isOwnedProcessName
+}
+
+/** Executable names of the sidecars Métis spawns; a full `ps` listing resolves realpaths only for these. */
+const OWNED_PROCESS_NAMES = new Set(['llama-server', 'fm-serve', 'ffmpeg', 'metis-mac-helper'])
+/** Candidate lines resolved between yields, so a long listing never holds the main loop in one task. */
+const PS_YIELD_EVERY = 50
+
+function isOwnedProcessName(exe: string): boolean {
+  return OWNED_PROCESS_NAMES.has(posix.basename(exe))
+}
+
+/**
+ * Parses `ps` output. Only lines whose executable passes `isCandidate` are resolved, each with an async realpath,
+ * so a full listing costs no filesystem call for processes Métis does not own. Ownership is still decided by the
+ * caller on the resolved realpath, registry identity and args.
+ */
+async function parsePosixPsListing(
+  stdout: string,
+  isCandidate: (exe: string) => boolean,
+  resolveRealpath: (path: string) => Promise<string> = (path) => realpath(path)
+): Promise<ProcessIdentity[]> {
   const out: ProcessIdentity[] = []
+  let resolved = 0
   for (const line of stdout.split('\n')) {
     const parsed = parsePosixPsLine(line)
-    if (parsed) out.push(parsed)
+    if (!parsed || !isCandidate(parsed.exe)) continue
+    if (resolved > 0 && resolved % PS_YIELD_EVERY === 0) await new Promise<void>((done) => setImmediate(done))
+    resolved++
+    let exeRealpath: string
+    try {
+      exeRealpath = await resolveRealpath(parsed.exe)
+    } catch {
+      continue
+    }
+    out.push({ pid: parsed.pid, ppid: parsed.ppid, pgid: parsed.pgid, osStartTime: parsed.osStartTime, exeRealpath, args: parsed.args })
   }
   return out
 }
 
-function parsePosixPsLine(line: string): ProcessIdentity | null {
+function parsePosixPsLine(line: string): (Omit<ProcessIdentity, 'exeRealpath'> & { exe: string }) | null {
   const match = /^\s*(\d+)\s+(\d+)\s+(-?\d+)\s+(.{24})\s+(.+)$/.exec(line)
   if (!match) return null
   const command = match[5].trim()
-  const exe = command.split(/\s+/)[0]
-  let exeRealpath: string
-  try {
-    exeRealpath = realpathSync(exe)
-  } catch {
-    return null
-  }
   return {
     pid: Number(match[1]),
     ppid: Number(match[2]),
     pgid: Number(match[3]),
     osStartTime: new Date(match[4]).toISOString(),
-    exeRealpath,
+    exe: command.split(/\s+/)[0],
     args: splitCommand(command)
   }
 }
@@ -399,6 +433,9 @@ export const testOnly = {
   argsFingerprint,
   legacyArgsPointAtUserModel,
   liveArgsMatchFingerprint,
+  isOwnedProcessName,
   parsePosixPsLine,
+  parsePosixPsListing,
+  psCandidateFilter,
   startedBefore
 }

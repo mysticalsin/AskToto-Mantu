@@ -28,6 +28,8 @@ build/cloudflare-embed/*
 # Operator-local build inputs that may hold credentials are never tracked.
 build/*.local.json
 build/*.ps1
+# Pre-sized tray images, generated from build/icon.png by scripts/make-tray-icons.mjs in prebuild.
+build/tray/
 .vite/
 coverage/
 *.tsbuildinfo
@@ -57,6 +59,8 @@ issues_to_fix.md
 # Multi-agent handoff scratch (never commit — carries AI-tool session identifiers, not app source)
 Relay Baton/
 _agent_state/
+.forge/
+.scratch/
 
 # Windows packaging output dirs (electron-builder -c.directories.output overrides) — multi-GB, never commit
 release-win*/
@@ -137,3 +141,6 @@ native-app/**/*.xcodeproj/xcuserdata/
 # columns, hashed license keys, seat rows — never belongs in git history. See
 # docs/operator/RUNBOOKS.md for the backup/restore procedure.
 operator/backups/
+
+# wrangler dev bundle/state scratch (operator/.wrangler/), never source.
+.wrangler/

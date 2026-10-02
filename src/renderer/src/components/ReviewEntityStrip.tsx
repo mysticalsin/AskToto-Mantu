@@ -89,8 +89,8 @@ export function confidenceBadge(c: Confidence): { label: string; variant: 'hollo
 
 // ── The strip itself ─────────────────────────────────────────────────────────────────────────────────
 
-// Same 'mixed' amber BrainView uses for warning-tinted state (contrast-validated on the glass surface).
-const WARN_COLOR = '#e0af68'
+// Shared warning token — the same amber BrainView uses for warning-tinted state.
+const WARN_COLOR = 'var(--color-warn)'
 
 function Badge({ badge }: { badge: { label: string; variant: 'hollow' | 'warn' } }): JSX.Element {
   return (
@@ -98,7 +98,7 @@ function Badge({ badge }: { badge: { label: string; variant: 'hollow' | 'warn' }
       className="shrink-0 rounded-full px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide"
       style={
         badge.variant === 'warn'
-          ? { color: WARN_COLOR, background: 'rgba(224,175,104,0.12)' }
+          ? { color: WARN_COLOR, background: 'color-mix(in srgb, var(--color-warn) 12%, transparent)' }
           : { color: 'var(--color-ink-3)', border: '1px solid var(--color-hair-soft)' }
       }
     >

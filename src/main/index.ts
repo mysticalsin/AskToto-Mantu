@@ -23,13 +23,7 @@ import {
 import { join, basename, dirname, resolve } from 'node:path'
 import { readFileSync, existsSync, writeFileSync, readdirSync, unlinkSync, createReadStream, statSync, renameSync, rmdirSync, mkdirSync, copyFileSync } from 'node:fs'
 
-// Enterprise checkbox: DevTools stay reachable only where they are a development tool. No secret ever
-// reaches the renderer (publicSettings strips key material), but DevTools on a packaged build still
-// exposes in-memory renderer state (transcript text, screen-context strings) to anyone at the keyboard,
-// and every security questionnaire asks. Packaged builds ignore ASKTOTO_DEVTOOLS: devEnv() returns
-// undefined once isPackagedBuild() is true, so there is no env backdoor in a shipped DMG/EXE.
-// Shared with intelligence.ts so every window in src/main gates on ONE decision — see
-// dev-env.ts's devToolsEnabled() for why this moved out of this file.
+// DevTools stay reachable only where dev-env permits them; packaged builds ignore ASKTOTO_DEVTOOLS.
 const DEVTOOLS_ENABLED = devToolsEnabled()
 import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
@@ -92,6 +86,7 @@ import {
   type HotkeyAction,
   type ShortcutFailure,
   type PublicSettings,
+  type Settings,
   type CalendarEvent,
   type AskStart,
   type ImportJobView,
@@ -124,6 +119,7 @@ import {
   listDustAgents,
   dustSelectedAgentVision,
   recordMeetingSummarized,
+  getAdminLocalSpeechPackPolicy,
   getSonioxApiKey,
   setSonioxApiKey,
   clearSonioxApiKey
@@ -157,6 +153,7 @@ import {
   localFallbackEligibleFor,
   localAnswerFloorEligibleFor,
   localBaseReady,
+  setLocalModelGate,
   localPrewarmEligible,
   localVisionPrivacyRequired,
   localPrimaryEligibleFor,
@@ -166,6 +163,7 @@ import {
   localRuntimeBinaryPresent
 } from './llm/local-routing'
 import {
+  CLI_PROVIDER_IDS,
   isCliProviderId,
   isDustChatForbidden,
   nextAskRoute,
@@ -174,11 +172,19 @@ import {
   portalFundedCloudflareModel,
   workingCliOrder
 } from '@shared/ask-routing'
+import { getActiveModelPolicy, modelPolicyCapabilitiesForSettings, narrowAllowedForCapability, resolveLocalSpeechPackPolicy, resolveManagedModel } from './model-policy-client'
+import { localModelAllowedByPolicy } from '@shared/model-policy'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
+import { registerWriteupIpc } from './ipc/writeup'
 import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText, macStallWatchCommand } from './mac-helper'
+import * as screenPerm from './capture-permissions/screen-permission-runtime'
+import { isOrphanScreenSourcesRejection } from './capture-permissions/loopback-grant'
+import { registerScreenPermissionIpc } from './ipc/screen-permission-ipc'
+import { registerHistoryTraceIpc } from './ipc/history-trace-ipc'
 import { configureSidecarRegistry, createSidecarRegistry } from './infra/process/registry'
 import { runBootSidecarReaper } from './infra/process/reaper'
+import { startAvailableMemorySampler } from './infra/scheduler/memory-sampler'
 import {
   createSpeakerId,
   type SpeakerEnrollmentSnapshot,
@@ -206,6 +212,8 @@ import {
   normalizeRightEdgeY,
   overlayPlacementPosition,
   rightEdgeSidecarBounds,
+  rightEdgeParkLayout,
+  rightAnchoredParkPosition,
   resolveOverlayPlacement,
   parkAfterExclusiveOnboarding,
   parkedHoverReanchor,
@@ -216,6 +224,8 @@ import {
   topClamp
 } from './island/geometry'
 import { observeExclusiveBounds } from './island/exclusive-bounds-repair'
+import { applyRestChrome, fitSettingsSurface, openOverlaySettingsSurface, revealOverlaySurface, skipUnchangedChrome } from './island/overlay-surface'
+import { createOverlayRevealLog, type OverlayTransitionCause } from './island/overlay-reveal-log'
 import {
   OVERLAY_REST_BACKGROUND,
   SETTINGS_SURFACE_BACKGROUND,
@@ -224,9 +234,10 @@ import {
 } from '@shared/settings-bounds'
 import { ONBOARDING_AUDIO_LOCK_EVENT } from '@shared/onboarding-audio'
 import {
-  CURSOR_REVEAL_DWELL_MS,
   CURSOR_WATCH_INTERVAL_MS,
   OVERLAY_LEAVE_PARK_MS,
+  RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS,
+  cursorRevealDwellMs,
   decideCursorWatch,
   overlayWatchStep,
   pointInRect,
@@ -245,6 +256,7 @@ import {
   overlayAllowsMinimize,
   overlayHugNextWidth,
   overlayRevealedContentHeight,
+  overlaySurfaceSettingsChanged,
   overlayUsesHover,
   parseOverlayLayout,
   rememberBarContentHeight,
@@ -526,7 +538,8 @@ import { createScreenPreprocess, type ScreenPreprocess } from './screen-preproce
 import { startForegroundWatcher } from './foreground-watcher'
 import { createStopAll } from './infra/process/stop-all'
 import { installExitPaths } from './lifecycle/exit-paths'
-import { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-identity'
+import { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-hooks'
+import { installQaCaptureSource } from './qa-capture-source'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
 import {
   createKeyedSingleFlight,
@@ -561,6 +574,7 @@ import {
   readFieldProvenance,
   rejectCommitment,
   isJournalCorruptionBlocked,
+  isJournalCorruptionBlockedAsync,
   clearJournalCorruptionLock,
   readCorrectionsJournal,
   readAliasMap,
@@ -575,11 +589,11 @@ import {
   syncIntelContentProtection
 } from './intelligence'
 import {
-  readIndex as readBrainIndex,
+  loadIndexForStatus as loadBrainIndexForStatus,
   writeIndex as writeBrainIndex,
   indexUnavailable,
+  indexUnavailableAsync,
   indexUnavailableMessage,
-  readGraph as readBrainGraph,
   writeGraph as writeBrainGraph,
   readPerson as readBrainPerson,
   writePerson as writeBrainPerson,
@@ -588,8 +602,8 @@ import {
   readDeal as readBrainDeal,
   writeDeal as writeBrainDeal,
   listEntities as listBrainEntities,
-  listMeetingExtractions as listBrainMeetingExtractions,
-  readMeetingExtraction as readBrainMeetingExtraction,
+  loadEntityDisplayNames as loadBrainEntityDisplayNames,
+  loadMeetingExtraction as loadBrainMeetingExtraction,
   purgeBrain,
   listPreservedBrainIndexes,
   currentBrainIndexIsReadable,
@@ -599,6 +613,7 @@ import {
   slugify as brainSlugify,
   brainDir as brainStoreDir
 } from './brain/store'
+import { brainStatusCounts, readBrainDashboard } from './brain/dashboard-read'
 import { buildBrainContext } from './brain/context'
 import { buildSystem, buildSystemParts } from './personas'
 import { applyCaveman } from '@shared/caveman-ask'
@@ -639,7 +654,12 @@ import {
 import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
-import { startRunObservability, type RunObservability } from './infra/observability/run-observability'
+import { buildTrayInStages, createSingleFlight, formatTrayAccelerator, loadPresizedTrayIcon, scheduleTrayAfterFirstPaint, trayIconPaths, yieldToEventLoop } from './boot-tray'
+import { BOOT_WINDOW_OPTIONS, BOOT_WINDOW_VARIANT, takeBootWindowPrewarmMs, yieldBeforeBootWindow } from './boot-window-rendering'
+import { isBootFirstShowDeferred, navigateWindow, scheduleCurrentFirstShow, withBootFirstShowDeferred } from './lifecycle/first-show'
+import { createBootWork } from './lifecycle/boot-work'
+import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
+import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
 import { createResponsivenessTracker } from './infra/observability/responsiveness-tracker'
 import { crashDetail, type CrashKind } from './infra/observability/crash-taxonomy'
@@ -678,7 +698,7 @@ import {
 import { cloudSttRequestBelongsToOwner, replaceCloudSttSessionIfCurrent } from './cloud-stt/session-replacement'
 import { resolveCloudSttGatewayId } from './cloud-stt/credentials'
 import { resolveEnterpriseLiveProfile } from '../shared/enterprise-live-profile'
-import { effectiveCloudSttProvider } from '../shared/cloud-stt-provider'
+import { effectiveCloudSttProvider, enforceSttPolicy } from '../shared/cloud-stt-provider'
 import { shouldRecoverCompletedOnboardingExit } from './onboarding-exit-fallback'
 
 import {
@@ -708,8 +728,8 @@ import {
   catchUpIntelligenceIndexIfNeeded,
   runIntelligenceIndex,
   setIntelligenceIndexWork,
-  lastIndexedAt,
-  intelligenceIndexStatus,
+  lastIndexedAtAsync,
+  intelligenceIndexStatusAsync,
   SIGN_IN_INDEX_COPY
 } from './brain/intelligence-index'
 import { startIntelligenceWork } from './brain/intelligence-work'
@@ -735,11 +755,9 @@ import {
   recapMarkdownToHtml,
   resolveMeetingsFolder,
   ensureMeetingsFolder,
-  isEncryptedFile,
-  decryptToTemp,
-  sweepStaleTempFiles,
-  readSavedFile
+  sweepStaleTempFiles
 } from './transcripts'
+import { meetingOpenTarget, readSavedMeeting } from './history-actions'
 import { getPlatformPermissions, probeScreenCapture, noteScreenCaptureOutcome } from './platform-perms'
 import { collectVisionStream, runScreenCaptureCheck } from './screen-capture-check'
 import {
@@ -747,11 +765,11 @@ import {
   VISION_CHECK_SYSTEM,
   isApiVisionCandidate
 } from '@shared/screen-capture-check'
+import { listMeetings, searchMeetingsLatest } from './history-read'
 import {
-  listMeetings,
   listMeetingsNeedingRecap,
-  searchMeetings,
   recallRead,
+  openExplicitly,
   deleteMeeting,
   renameMeeting,
   updateMeetingRecap,
@@ -988,6 +1006,8 @@ crashReporter.start({ uploadToServer: false })
 // Belt-and-braces with the per-meeting powerSaveBlocker below: keep Chromium itself from ever
 // deprioritizing the (hidden) renderer that hosts the transcription worker. Must run before app ready.
 app.commandLine.appendSwitch('disable-renderer-backgrounding')
+// QA-identity builds only (compiled out of shipping bytes): a profile WAV may feed Chromium's fake mic. Before ready.
+if (QA_IDENTITY_BUILD) installQaCaptureSource(app, auditLog)
 
 const BAR_WIDTH = 880
 const BAR_HEIGHT = 84 // initial idle height of the slimmer two-row widget; useAutoResize grows it for answers
@@ -1170,6 +1190,9 @@ let settingsSurfaceOpen = false
 let overlayCursorWatchTimer: ReturnType<typeof setInterval> | null = null
 let overlayCursorWatchEnteredAt: number | null = null
 let overlayCursorWatchHovering = false
+let overlayCursorWatchHeldCursor: { x: number; y: number } | null = null // latched pointer on the last tick that kept the bar open
+let overlayParkLatched = false // explicit Hide: no reopen from the zone the pointer is in until it leaves
+let rightEdgeUnhoveredRevealAt: number | null = null // right-edge reveal the pointer has not visited yet
 // Electron can accept an onboarding setBounds request and then let the compositor clamp it into a
 // normal-window card. Keep this narrowly scoped to the opaque onboarding owner; normal overlay layouts
 // must remain free to resize and park themselves.
@@ -1197,27 +1220,6 @@ function speculativeLocalWorkAllowed(): boolean {
 // "Notified once" keys. Bounded: a session that runs for days imports many files, and an unbounded Set
 // here was one of the two module-level structures that only ever grew (RAM audit, 2026-09-05).
 const notifiedImportJobs = new BoundedSet<string>(500)
-
-type BrainStatusCounts = { people: number; accounts: number; deals: number; nodes: number; edges: number }
-let brainStatusCountsCache: { folder: string; revision: number; counts: BrainStatusCounts } | null = null
-
-/** Status is polled frequently by two windows. Re-scan graph/entity directories only after a revision change. */
-function brainStatusCounts(s: ReturnType<typeof getSettings>, revision: number): BrainStatusCounts {
-  const folder = resolveMeetingsFolder(s)
-  if (brainStatusCountsCache?.folder === folder && brainStatusCountsCache.revision === revision) {
-    return brainStatusCountsCache.counts
-  }
-  const graph = readBrainGraph(s)
-  const counts = {
-    people: listBrainEntities(s, 'person').length,
-    accounts: listBrainEntities(s, 'account').length,
-    deals: listBrainEntities(s, 'deal').length,
-    nodes: graph.nodes.length,
-    edges: graph.edges.length
-  }
-  brainStatusCountsCache = { folder, revision, counts }
-  return counts
-}
 
 function noteIpcDenied(reason: 'no_window' | 'sender' | 'frame'): void {
   if (!shouldSampleIpcDeny()) return
@@ -1522,6 +1524,7 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
   closingDecoderJobId = null
   decoderExpectedUrl = ''
   decoderWin = new BrowserWindow({
+    title: 'Métis',
     show: false,
     skipTaskbar: true,
     webPreferences: {
@@ -1602,7 +1605,7 @@ function detectImportLanguage(text: string): string | null {
  */
 async function runImportPolish(lines: TranscriptLine[]): Promise<TranscriptLine[]> {
   const settings = getSettings()
-  const allowed = getAllowedProviders()
+  const allowed = narrowAllowedForCapability(settings, getAllowedProviders(), 'recap', [...CLI_PROVIDER_IDS, 'local'])
   const localReady =
     localEligibleFor({ mode: 'summary' }, settings, 'base', allowed) ||
     localFallbackEligibleFor({ mode: 'summary' }, settings, 'base', allowed)
@@ -1652,13 +1655,14 @@ async function runImportPolish(lines: TranscriptLine[]): Promise<TranscriptLine[
     for (const provider of candidates) {
       const def = PROVIDERS[provider]
       const local = provider === 'local'
-      const model = local
+      const preManagedModel = local
         ? settings.localLlm.modelId
         : applyInteractiveGuardrail(
             provider,
             'base',
             resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'base', settings.providerModelsDeep) || def.defaultModel
           )
+      const model = !local && def.kind !== 'cli' ? resolveManagedModel(settings, 'recap', provider, preManagedModel) : preManagedModel
       try {
         const raw = await new Promise<string>((resolvePolish, rejectPolish) => {
           let text = ''
@@ -1886,12 +1890,22 @@ function initializeImportJobs(): void {
     newId: () => randomBytes(16).toString('hex'),
     concurrency: MAX_CONCURRENT_DECODES
   })
-  void ensureImportAsrAssets((pct) => {
-    publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
-  }).catch((err) => {
-    mainLog.warn('[asr-assets] background ensure failed:', err instanceof Error ? err.message : err)
-    publishAsrAssetsProgress()
-  })
+  const speechPackBlocked =
+    resolveLocalSpeechPackPolicy(getSettings(), getAdminLocalSpeechPackPolicy()) === 'blocked'
+  if (!speechPackBlocked) {
+    void ensureImportAsrAssets((pct) => {
+      publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
+    }).catch((err) => {
+      mainLog.warn('[asr-assets] background ensure failed:', err instanceof Error ? err.message : err)
+      publishAsrAssetsProgress()
+    })
+  }
+}
+
+function getImportJobs(): ImportJobManager {
+  initializeImportJobs()
+  if (!importJobs) throw new Error('Audio import service is unavailable.')
+  return importJobs
 }
 
 /** Minimal .env loader (no dep) — dev convenience; prod uses in-app key. */
@@ -1952,7 +1966,7 @@ async function verifyCliSessions(now = Date.now()): Promise<void> {
   // would spawn the probe twice for the same provider.
   if (cliSessionSweep) return cliSessionSweep
   cliSessionSweep = (async () => {
-    // Never reject. One caller is a bare `void verifyCliSessions()` at boot, and an async body with no
+    // Never reject. One caller is a bare `void verifyCliSessions()` in a boot job, and an async body with no
     // guard is precisely how a transient settings-read failure becomes an unhandledRejection — which
     // onFatal turns into a crash-*.log and an `app.crash` audit entry for something that crashed nothing.
     // Same guarded shape startMeetingPoller uses, and for the same reason.
@@ -1999,7 +2013,7 @@ function publicSettings(): PublicSettings {
   // at request time. Folding it in here keeps UI readiness from drifting out of sync with what's actually
   // allowed to answer (previously a blocked provider could show "ready" with no setup CTA, then reject
   // every ask).
-  const allowed = getAllowedProviders()
+  const allowed = narrowAllowedForCapability(s, getAllowedProviders(), 'askChat', [...CLI_PROVIDER_IDS, 'local'])
   const funded = operatorFundedProviders()
   const managedVisionReady = (p: ProviderId): boolean =>
     !hasApiKey(p) && funded.includes(p) && !!operatorVisionModel(p, resolveModelTier(p, s.providerModels, s.providerModelsThinking, 'base', s.providerModelsDeep))
@@ -2112,7 +2126,9 @@ function publicSettings(): PublicSettings {
     envKeys: getEnvKeyProviders(),
     loginItemOpenAtLogin,
     version: app.getVersion(),
-    allowedProviders: allowed // org allowlist (null = unrestricted); surfaced so the picker matches enforcement
+    allowedProviders: allowed, // org allowlist (null = unrestricted); surfaced so the picker matches enforcement
+    modelPolicyCapabilities: modelPolicyCapabilitiesForSettings(s),
+    localSpeechPack: resolveLocalSpeechPackPolicy(s, getAdminLocalSpeechPackPolicy())
   }
 }
 
@@ -2313,10 +2329,11 @@ function replaceTransparentOverlayWithExclusiveOnboarding(): void {
 /** Exclusive hero hold, Settings glass, or transparent rest. Hide park is opacity 0. */
 function applyOverlaySurfaceChrome(): void {
   if (!win || win.isDestroyed()) return
+  const chrome = skipUnchangedChrome(win) // runs on every reveal, park and surface change
   if (onboardingExclusiveLive()) {
     try {
-      win.setBackgroundColor(EXCLUSIVE_ONBOARDING_BACKGROUND)
-      win.setOpacity(1)
+      chrome.setBackgroundColor(EXCLUSIVE_ONBOARDING_BACKGROUND)
+      chrome.setOpacity(1)
     } catch {
       /* headless */
     }
@@ -2324,20 +2341,16 @@ function applyOverlaySurfaceChrome(): void {
   }
   if (settingsSurfaceOpen) {
     try {
-      win.setBackgroundColor(SETTINGS_SURFACE_BACKGROUND)
-      win.setOpacity(1)
+      chrome.setBackgroundColor(SETTINGS_SURFACE_BACKGROUND)
+      chrome.setOpacity(1)
     } catch {
       /* headless */
     }
     return
   }
   try {
-    win.setBackgroundColor(OVERLAY_REST_BACKGROUND)
-  } catch {
-    /* headless */
-  }
-  try {
-    win.setOpacity(hideParkWindowOpacity(liveOverlayLayout(), islandResting && !isMinimized))
+    const layout = parkLayoutForDisplay(liveOverlayLayout(), screen.getDisplayMatching(win.getBounds()))
+    applyRestChrome(chrome, OVERLAY_REST_BACKGROUND, hideParkWindowOpacity(layout, islandResting && !isMinimized))
   } catch {
     /* headless */
   }
@@ -2349,7 +2362,10 @@ function commitParkedOverlayBounds(park: { x: number; y: number; width: number; 
   win.setBounds(park, false)
   try {
     const after = win.getBounds()
-    if (after.x !== park.x || after.y !== park.y) win.setPosition(park.x, park.y, false)
+    // A right-edge park the OS widened (Windows minimum width) keeps its right edge at the work-area edge.
+    const rightEdge = resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(park)) === 'right-edge'
+    const target = rightEdge ? rightAnchoredParkPosition(park, after.width) : park
+    if (after.x !== target.x || after.y !== target.y) win.setPosition(target.x, target.y, false)
   } catch {
     /* headless */
   }
@@ -2530,7 +2546,7 @@ function exitExclusiveOnboardingStage(): void {
   const display = screen.getDisplayMatching(win.getBounds())
   const layout = liveOverlayLayout()
   const park = parkAfterExclusiveOnboarding(
-    layout,
+    parkLayoutForDisplay(layout, display),
     getDisplayMetrics(display),
     ISLAND_TOP_MARGIN,
     liveOverlayPlacement(),
@@ -2647,7 +2663,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
     onboardingDone: !onboardingLive,
     bounds: placementDisplay.bounds,
     workArea: placementDisplay.workArea,
-    layout,
+    layout: parkLayoutForDisplay(layout, placementDisplay),
     metrics: placementMetrics,
     topMargin: ISLAND_TOP_MARGIN,
     placement,
@@ -2664,7 +2680,10 @@ function createWindow(targetDisplay?: Electron.Display): void {
   }
   const chrome = overlayWindowChrome(onboardingLive)
   overlayWindowTransparent = chrome.transparent
+  const deferFirstShow = isBootFirstShowDeferred()
+  const constructStartedMs = performance.now()
   win = new BrowserWindow({
+    title: 'Métis', // Electron otherwise titles the window with the package name until the renderer's <title> loads
     width: firstPaint.width,
     height: firstPaint.height,
     x: firstPaint.x,
@@ -2690,7 +2709,8 @@ function createWindow(targetDisplay?: Electron.Display): void {
     // 185-Y hid exclusive until paint (ctor show gated off while onboarding live) and left
     // the window off-screen ~5s (WINDOW_AT≈5s) — Ultron stamp bar FAIL: Act1 ≤300ms from
     // PROCESS START. Shell (CSS poster + Métis + Next) is in first HTML parse; never wait.
-    show: true,
+    show: !deferFirstShow, // M2-0031: the boot window is built hidden and shown next task, never gated on 'ready-to-show'
+    paintWhenInitiallyHidden: false, // M2-0031: its first frame is painted in the show task, not the constructor's
     backgroundColor: chrome.backgroundColor,
     acceptFirstMouse: true, // macOS: first click activates + hits the target without needing a second click
     webPreferences: {
@@ -2700,9 +2720,14 @@ function createWindow(targetDisplay?: Electron.Display): void {
       nodeIntegration: false,
       devTools: DEVTOOLS_ENABLED,
       backgroundThrottling: false,
-      webSecurity: true
-    }
+      webSecurity: true,
+      ...BOOT_WINDOW_OPTIONS.webPreferences
+    },
+    ...BOOT_WINDOW_OPTIONS.window // M2-0516: a QA-identity-only variant's values; none in every shipping build
   })
+  observability?.recordBootStage('createWindow.construct', performance.now() - constructStartedMs, { transparent: chrome.transparent, windowVariant: BOOT_WINDOW_VARIANT })
+  const prewarmMs = takeBootWindowPrewarmMs() // M2-0519: the boot prewarm ran before observability started; recorded once
+  if (prewarmMs !== null) observability?.recordBootStage('createWindow.prewarm', prewarmMs, { transparent: chrome.transparent, windowVariant: BOOT_WINDOW_VARIANT })
   ensureMetisCommandRuntime({
     getSettings,
     commandControl,
@@ -2711,22 +2736,15 @@ function createWindow(targetDisplay?: Electron.Display): void {
 
   try {
   // Frameless transparent windows on darwin still inherit an OS min (~44). Hide park is 8×2.
-  try {
-    win.setMinimumSize(1, 1)
-  } catch {
-    /* headless */
-  }
+  try { win.setMinimumSize(1, 1) } catch { /* headless */ }
   if (onboardingLive) applyExclusiveOnboardingStage(win, placementDisplay)
   applyOverlayAlwaysOnTop(win)
   // FITO-185-Z: show exclusive NOW (ctor show:true + activating show). The no-JS Act1
   // shell (poster CSS + Métis + Next) is in index.html — never hide-for-seconds.
   // FITO-185-T: activating show (not showInactive) so Act 1 is not behind Finder.
-  if (onboardingLive) {
-    try {
-      showForExclusiveOnboarding(win)
-    } catch {
-      /* headless */
-    }
+  // M2-0031: a boot window built hidden takes this same show in the next task (scheduleCurrentFirstShow below).
+  if (onboardingLive && !deferFirstShow) {
+    try { showForExclusiveOnboarding(win) } catch { /* headless */ }
   }
   // Apply the same capture-protection decision during onboarding and normal overlay use.
   win.setContentProtection(contentProtectionOn())
@@ -2764,6 +2782,8 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // freshly-recreated one (render-process-gone recovery reassigns `win` before the old one's 'closed'
   // may fire). Only clear the module ref when it still points at the window that closed.
   const self = win
+  // M2-0518: App Nap must not throttle the shown overlay once the boot power-save hold ends.
+  holdAppSuspensionWhileVisible(self, powerSaveBlocker)
   // `closed` fires after BrowserWindow.destroy() has torn down WebContents. Cache the numeric owner
   // while it is valid; touching `self.webContents` from the callback throws and falsely crashes Métis.
   const selfWebContentsId = self.webContents.id
@@ -2931,19 +2951,26 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // The one-time onboarding destination belongs to this replacement only. Later renderer recovery
   // should preserve the user's current surface rather than repeatedly forcing Settings.
   postOnboardingDestination = 'answer'
-  // Bounded launch evidence only. Normal onboarding never serializes renderer state to disk.
-  if (process.env.ASKTOTO_MAC_LAUNCH_GATE === '1') {
-    bindAct1DomProbe(win.webContents, {
-      expectedUrl: rendererUrl,
-      outPath: join(app.getPath('userData'), 'logs', 'act1-dom.json'),
-      audit: (summary) => auditLog('app.act1.dom', summary)
+  // M2-0516: boot's window navigates in its own task, after the constructor's and before its first show's; every
+  // other caller navigates here (lifecycle/first-show.ts). `win` inside is the window being navigated.
+  navigateWindow(deferFirstShow, win, () => win, (win) => timeBootStage(observability, 'createWindow.navigate', () => {
+    // Bounded launch evidence only. Normal onboarding never serializes renderer state to disk.
+    if (process.env.ASKTOTO_MAC_LAUNCH_GATE === '1') {
+      bindAct1DomProbe(win.webContents, {
+        expectedUrl: rendererUrl,
+        outPath: join(app.getPath('userData'), 'logs', 'act1-dom.json'),
+        audit: (summary) => auditLog('app.act1.dom', summary)
+      })
+    }
+    // MQA-318 / M2-0006: unconditional — never gated on ASKTOTO_MAC_LAUNCH_GATE, unlike bindAct1DomProbe
+    // above. A session with app.started but no renderer.ready must always be visible in the audit log.
+    bindReadinessThenNavigate(win, rendererUrl, () => {
+      auditLog('app.renderer.ready', { version: app.getVersion(), platform: process.platform, arch: process.arch })
     })
-  }
-  // MQA-318 / M2-0006: unconditional — never gated on ASKTOTO_MAC_LAUNCH_GATE, unlike bindAct1DomProbe
-  // above. A session with app.started but no renderer.ready must always be visible in the audit log.
-  bindReadinessThenNavigate(win, rendererUrl, () => {
-    auditLog('app.renderer.ready', { version: app.getVersion(), platform: process.platform, arch: process.arch })
-  })
+  }), (e) => mainLog.error('[createWindow] boot navigation failed:', e))
+  // Both keep the ctor show:true activation (focus + front): exclusive via FITO-185-T, the overlay via show().
+  if (deferFirstShow) scheduleCurrentFirstShow(win, () => win, (firstShown) => timeBootStage(observability, 'createWindow.firstShow', () =>
+    onboardingLive ? showForExclusiveOnboarding(firstShown) : firstShown.isVisible() || firstShown.show()))
   const overlay = win
   let exclusiveRevealed = false
   const revealExclusiveWhenPainted = (): void => {
@@ -2986,7 +3013,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
   overlay.webContents.on('dom-ready', () => {
     pollAct1Paint()
   })
-  overlay.once('ready-to-show', pollAct1Paint)
+  overlay.once('ready-to-show', pollAct1Paint) // never fires under paintWhenInitiallyHidden:false; the other triggers reveal Act1
   overlay.webContents.once('did-finish-load', pollAct1Paint)
   // FITO-185-G-SHOW: hard reassert at 2s (already shown; belt-and-suspenders).
   if (onboardingLive) {
@@ -3016,12 +3043,12 @@ function resizeTo(height: number): void {
   // 880×1017 gray Settings sheet under the Ask bar.
   if (settingsSurfaceOpen && !isMinimized) {
     const display = screen.getDisplayMatching(win.getBounds())
-    const metrics = getDisplayMetrics(display)
-    const rect = settingsOpenRect(metrics, ISLAND_TOP_MARGIN)
-    const h = clampHeight(settingsContentHeight(height), display.workArea.height)
+    const open = settingsOpenRect(getDisplayMetrics(display), ISLAND_TOP_MARGIN)
+    const rect = fitSettingsSurface(open, display.workArea.height, BAR_MIN_HEIGHT, settingsContentHeight(height))
     currentWidth = SETTINGS_WINDOW_MIN.width
-    if (win.getBounds().width === rect.width && win.getBounds().height === h && win.getBounds().y === rect.y) return
-    win.setBounds({ x: rect.x, y: rect.y, width: rect.width, height: h }, false)
+    const b = win.getBounds()
+    if (b.width === rect.width && b.height === rect.height && b.y === rect.y) return
+    win.setBounds(rect, false)
     return
   }
   const display = screen.getDisplayMatching(win.getBounds())
@@ -3170,9 +3197,16 @@ function overlayPositionForDisplay(
   })
 }
 
+/** Parked chrome on `display`: Hide shows the Island rail where a display continues past the right edge. */
+function parkLayoutForDisplay(layout: OverlayLayout, display: Electron.Display): OverlayLayout {
+  if (layout !== 'hide' || resolvedOverlayPlacementForDisplay(display) !== 'right-edge') return layout
+  const others = screen.getAllDisplays().filter((other) => other.id !== display.id).map((other) => other.bounds)
+  return rightEdgeParkLayout(layout, getDisplayMetrics(display), others, rightEdgeYForDisplay(display))
+}
+
 function parkedOverlayBounds(layout: OverlayLayout, display: Electron.Display): Electron.Rectangle {
   return parkAfterExclusiveOnboarding(
-    layout,
+    parkLayoutForDisplay(layout, display),
     getDisplayMetrics(display),
     ISLAND_TOP_MARGIN,
     liveOverlayPlacement(),
@@ -3230,6 +3264,7 @@ function stopOverlayCursorWatch(): void {
     overlayCursorWatchTimer = null
   }
   overlayCursorWatchHovering = false
+  overlayCursorWatchHeldCursor = null
   overlayCursorWatchEnteredAt = null
   cancelOverlayLeavePark()
 }
@@ -3249,17 +3284,21 @@ function tickOverlayCursorWatch(): void {
   // A parked Settings-tall ghost heals here. If the heal was refused because the
   // pointer is in the top-edge strip, fall through: that pointer is a hover, so
   // reveal instead of stalling on the ghost until the mouse leaves.
-  if (healHideGhostSlab()) return
+  if (healHideGhostSlab()) return noteOverlay('cursor-watch')
   if (settingsSurfaceOpen) {
     overlayCursorWatchEnteredAt = null
     return
   }
   const display = screen.getDisplayMatching(win.getBounds())
   const layout = liveOverlayLayout()
+  const placement = resolvedOverlayPlacementForDisplay(display)
   const rest = overlayHoverRestRect(layout, display)
   const windowVisible = win.isVisible()
   const bounds = win.getBounds()
   const cursor = screen.getCursorScreenPoint()
+  // An explicit Hide parks under the pointer. Reopening from the zone it is still in would undo the Hide.
+  if (overlayParkLatched && islandResting && pointInRect(cursor, rest)) return
+  overlayParkLatched = false
   // overlayCursorWatchHovering is the OS-hover latch: main saw the cursor in the
   // strip or on the bar since the last park. Only a latched reveal parks on leave.
   const step = overlayWatchStep({
@@ -3269,15 +3308,18 @@ function tickOverlayCursorWatch(): void {
     islandResting,
     windowVisible,
     osHoverSeen: overlayCursorWatchHovering,
-    hugStub: isIncompleteAskReveal(bounds)
+    hugStub: isIncompleteAskReveal(bounds),
+    heldCursor: overlayCursorWatchHeldCursor,
+    placement
   })
+  if (islandResting || step.osHoverSeen) rightEdgeUnhoveredRevealAt = null
   // Polling previously bypassed the renderer's 150ms dwell and sent reveal-now on the first tick.
   // A quick menu-bar crossing therefore flashed the whole bar open. Measure continuous native
-  // hover before latching it; a leave resets this below. Already-visible reentry stays immediate.
+  // hover before latching it; a leave resets this below. Already-visible reentry stays immediate. OD-23 dwell.
   if (step.action === 'restore' && (islandResting || !windowVisible)) {
     const now = performance.now()
     overlayCursorWatchEnteredAt ??= now
-    if (now - overlayCursorWatchEnteredAt < CURSOR_REVEAL_DWELL_MS) return
+    if (now - overlayCursorWatchEnteredAt < cursorRevealDwellMs(placement)) return
   }
   overlayCursorWatchEnteredAt = null
   overlayCursorWatchHovering = step.osHoverSeen
@@ -3293,6 +3335,7 @@ function tickOverlayCursorWatch(): void {
         `[overlay-watch] reveal cursor=(${cursor.x},${cursor.y}) from=${bounds.width}x${bounds.height}@(${bounds.x},${bounds.y}) to=${after.width}x${after.height}@(${after.x},${after.y}) visible=${windowVisible}`
       )
     }
+    noteOverlay('cursor-watch')
   } else if (step.action === 'hover-enter') {
     cancelOverlayLeavePark()
     notifyOverlayCursorHover(true)
@@ -3304,14 +3347,21 @@ function tickOverlayCursorWatch(): void {
     mainLog.info(
       `[overlay-watch] leave cursor=(${cursor.x},${cursor.y}) bar=${bounds.width}x${bounds.height}@(${bounds.x},${bounds.y}) park in ${OVERLAY_LEAVE_PARK_MS}ms`
     )
+  } else if (step.action === 'leave-ignored' && rightEdgeUnhoveredRevealAt !== null &&
+    performance.now() - rightEdgeUnhoveredRevealAt >= RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS) {
+    // Revealed without the pointer, which stayed away: report a leave; the page's grace parks unless forced.
+    rightEdgeUnhoveredRevealAt = null
+    notifyOverlayCursorHover(false)
   }
+  overlayCursorWatchHeldCursor = overlayCursorWatchHovering && !islandResting ? cursor : null
   /* stay / leave-ignored: never setBounds on a stay tick — that was the 40fps hide/reveal stutter */
 }
 
-function notifyOverlayCursorHover(hovering: boolean, restoredFromParkedRail = false): void {
+/** `parked`: main already parked the window, so the page renders its rail, not a clipped open drawer. */
+function notifyOverlayCursorHover(hovering: boolean, restoredFromParkedRail = false, parked = false): void {
   if (!win || win.isDestroyed()) return
   try {
-    win.webContents.send(IPC.overlayCursorHover, { hovering, restoredFromParkedRail })
+    win.webContents.send(IPC.overlayCursorHover, { hovering, restoredFromParkedRail, parked })
   } catch {
     /* renderer gone */
   }
@@ -3330,6 +3380,7 @@ function scheduleOverlayLeavePark(): void {
     if (!win || win.isDestroyed() || islandResting || settingsSurfaceOpen) return
     if (pointerInIslandOrBar()) return
     parkOverlayAfterHideSpring()
+    noteOverlay('cursor-watch')
   }, OVERLAY_LEAVE_PARK_MS)
   overlayLeaveParkTimer.unref?.()
 }
@@ -3352,7 +3403,8 @@ function pointerInIslandOrBar(opts?: { ignoreWindow?: boolean }): boolean {
       cursor,
       restRect: rest,
       revealedRect: bounds,
-      revealed: true
+      revealed: true,
+      placement: resolvedOverlayPlacementForDisplay(display)
     }) === 'stay'
   )
 }
@@ -3405,6 +3457,10 @@ function parkOverlayAfterHideSpring(force = false): boolean {
   applyOverlaySurfaceChrome()
   commitParkedOverlayBounds(park)
   overlayCursorWatchHovering = false
+  rightEdgeUnhoveredRevealAt = null
+  // A forced park is an explicit Hide. It latches only while the pointer is in the reveal band: a pointer
+  // already elsewhere has left the band, so its next approach reveals at once.
+  overlayParkLatched = force && pointInRect(screen.getCursorScreenPoint(), overlayHoverRestRect(layout, display))
   applyHideClickThrough()
   // Hide rest is an always-on invisible hairline. Tray hide() must not leave
   // the LSUIElement window gone — hover still needs a live window + watch.
@@ -3413,6 +3469,7 @@ function parkOverlayAfterHideSpring(force = false): boolean {
   } catch {
     /* headless */
   }
+  if (resolvedOverlayPlacementForDisplay(display) === 'right-edge') notifyOverlayCursorHover(false, false, true)
   if (before.width !== park.width || before.height !== park.height || before.y !== park.y) {
     mainLog.info(
       `[overlay-watch] park ${layout} from=${before.width}x${before.height}@(${before.x},${before.y}) to=${park.width}x${park.height}@(${park.x},${park.y})`
@@ -3424,17 +3481,34 @@ function parkOverlayAfterHideSpring(force = false): boolean {
 /** Hide rest is click-through so the menu bar stays usable. Island peek and the bar must receive clicks. */
 function applyHideClickThrough(): void {
   if (!win || win.isDestroyed()) return
-  const clickThrough =
-    !settingsSurfaceOpen &&
-    islandResting &&
-    liveOverlayLayout() === 'hide' &&
-    !isMinimized &&
-    !onboardingExclusiveLive()
   try {
+    const clickThrough =
+      !settingsSurfaceOpen &&
+      islandResting &&
+      parkLayoutForDisplay(liveOverlayLayout(), screen.getDisplayMatching(win.getBounds())) === 'hide' &&
+      !isMinimized &&
+      !onboardingExclusiveLive()
     win.setIgnoreMouseEvents(clickThrough)
   } catch {
     /* headless */
   }
+}
+
+/**
+ * Re-park after a layout switch. It is not an explicit Hide, so it never carries an earlier Hide's park
+ * latch: a pointer that reaches the new park's reveal band before any watch tick sampled it away reveals.
+ */
+function parkOverlayForLayoutChange(): void {
+  if (!win || win.isDestroyed()) return
+  const display = screen.getDisplayMatching(win.getBounds())
+  const park = parkedOverlayBounds(liveOverlayLayout(), display)
+  overlayCursorWatchHovering = false
+  overlayParkLatched = false
+  currentWidth = park.width
+  islandResting = true
+  userAnchorY = park.y
+  commitParkedOverlayBounds(park)
+  notifyOverlayCursorHover(false, false, resolvedOverlayPlacementForDisplay(display) === 'right-edge')
 }
 
 /** Pin the overlay to its selected physical placement on its current display. The historic IPC name
@@ -3473,16 +3547,9 @@ function restoreBarWidth(): void {
   // false on a 880×1017 slab so mouse-away could not park 8×2.
   if (settingsSurfaceOpen) return
   cancelOverlayLeavePark()
+  overlayParkLatched = false
   islandResting = false
   applyHideClickThrough()
-  applyOverlaySurfaceChrome()
-  // LSUIElement / tray Show-Hide can leave the window hidden. Hover reveal must
-  // showInactive (never show+focus) so the top-edge path works without hunting the menu.
-  try {
-    if (!win.isVisible()) win.showInactive()
-  } catch {
-    /* headless */
-  }
   try {
     win.setAlwaysOnTop(true, 'screen-saver')
   } catch {
@@ -3492,32 +3559,24 @@ function restoreBarWidth(): void {
   const b = win.getBounds()
   const layout = liveOverlayLayout()
   const placement = resolvedOverlayPlacementForDisplay(display)
+  let next: Electron.Rectangle
   if (placement === 'right-edge') {
-    const sidecar = rightEdgeSidecarBounds(getDisplayMetrics(display), {
-      open: true,
-      normalizedY: rightEdgeYForDisplay(display)
-    })
-    currentWidth = sidecar.width
-    if (b.x === sidecar.x && b.y === sidecar.y && b.width === sidecar.width && b.height === sidecar.height) return
-    win.setBounds(sidecar, false)
-    return
+    next = rightEdgeSidecarBounds(getDisplayMetrics(display), { open: true, normalizedY: rightEdgeYForDisplay(display) })
+    currentWidth = next.width
+  } else {
+    // Hide/Island reveal keeps the 120 Ask floor. Never Math.max a leftover Settings 800+ slab
+    // (Ultron 880×1017 Expand Métis). Bar idle hugs the bar.
+    let revealedHeight = overlayUsesHover(layout)
+      ? askRevealHeight({ currentHeight: b.height, lastBarHeight, minReveal: ASK_REVEAL_MIN_HEIGHT_PX })
+      : rememberBarContentHeight(Math.max(lastBarHeight, BAR_HEIGHT), BAR_IDLE_HEIGHT_PX)
+    if (isSettingsTallHeight(revealedHeight)) revealedHeight = overlayUsesHover(layout) ? ASK_REVEAL_MIN_HEIGHT_PX : BAR_IDLE_HEIGHT_PX
+    const wasBarWidth = currentWidth === BAR_WIDTH
+    currentWidth = BAR_WIDTH
+    const y = topClamp(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
+    const x = wasBarWidth ? b.x : recenterXForWidth(b.x, b.width, BAR_WIDTH, display.workArea, 0)
+    next = { x, y, width: BAR_WIDTH, height: revealedHeight }
   }
-  // Hide/Island reveal keeps the 120 Ask floor. Never Math.max a leftover Settings 800+ slab
-  // (Ultron 880×1017 Expand Métis). Bar idle hugs the bar.
-  let revealedHeight = overlayUsesHover(layout)
-    ? askRevealHeight({ currentHeight: b.height, lastBarHeight, minReveal: ASK_REVEAL_MIN_HEIGHT_PX })
-    : rememberBarContentHeight(Math.max(lastBarHeight, BAR_HEIGHT), BAR_IDLE_HEIGHT_PX)
-  if (isSettingsTallHeight(revealedHeight)) {
-    revealedHeight = overlayUsesHover(layout) ? ASK_REVEAL_MIN_HEIGHT_PX : BAR_IDLE_HEIGHT_PX
-  }
-  const wasBarWidth = currentWidth === BAR_WIDTH
-  currentWidth = BAR_WIDTH
-  // Preserve the historic top-center path verbatim.
-  const y = topClamp(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
-  const x = wasBarWidth ? b.x : recenterXForWidth(b.x, b.width, BAR_WIDTH, display.workArea, 0)
-  // Already the below-notch bar — do not setBounds y=0 and fight the OS clamp.
-  if (b.x === x && b.y === y && b.width === BAR_WIDTH && b.height === revealedHeight) return
-  win.setBounds({ x, y, width: BAR_WIDTH, height: revealedHeight }, false)
+  revealOverlaySurface(win, next, applyOverlaySurfaceChrome)
 }
 
 function repairOverlayBoundsForReveal(): void {
@@ -3554,10 +3613,9 @@ function applySettingsSurface(): void {
   } catch {
     /* headless */
   }
-  applyOverlaySurfaceChrome()
   const display = screen.getDisplayMatching(win.getBounds())
-  const rect = settingsOpenRect(getDisplayMetrics(display), ISLAND_TOP_MARGIN)
-  win.setBounds(rect, false)
+  const rect = fitSettingsSurface(settingsOpenRect(getDisplayMetrics(display), ISLAND_TOP_MARGIN), display.workArea.height, BAR_MIN_HEIGHT)
+  openOverlaySettingsSurface(win, rect, applyOverlaySurfaceChrome)
   applyHideClickThrough()
 }
 
@@ -3643,6 +3701,21 @@ function ensureWindow(): BrowserWindow | null {
   })
 }
 
+const overlayRevealLog = createOverlayRevealLog({ now: () => performance.now(), log: (line) => mainLog.info(line), audit: auditLog })
+
+/** M2-0431: called after anything that may reveal or park the overlay. It reads the window's actual state, so
+ *  a refused or repeated action logs nothing; a transition is logged with its cause, and a reveal that parks
+ *  within 2 s with no click or keypress is audited as overlay.flash. */
+function noteOverlay(cause: OverlayTransitionCause): void {
+  if (!win || win.isDestroyed()) return
+  const b = win.getBounds()
+  const c = screen.getCursorScreenPoint()
+  const context = { placement: resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(b)), layout: liveOverlayLayout() }
+  const detail = `bounds=${b.width}x${b.height}@(${b.x},${b.y}) cursor=(${c.x},${c.y})`
+  if (islandResting || !win.isVisible()) overlayRevealLog.parked(cause, context, detail)
+  else overlayRevealLog.revealed(cause, context, detail)
+}
+
 /**
  * The ONE deliberate, user-initiated focus grab in this file (MQA-275 / Phase 1d of the island rebuild:
  * "never steals focus" except a deliberate ask). `show()` (unlike `showInactive()`) activates the window
@@ -3681,6 +3754,7 @@ function sendHotkey(action: HotkeyAction): void {
   if (action === 'settings') applySettingsSurface()
   if (action === 'settings') {
     if (!w.isVisible()) w.showInactive()
+    noteOverlay('settings')
     w.webContents.send(IPC.hotkey, action)
     return
   }
@@ -3752,6 +3826,25 @@ function legacyReveal(reason: RevealReason, options: { focus: boolean }): void {
   legacyRevealWindow(reason, options, w, (target) => showForAsk(target as BrowserWindow))
 }
 
+/** A keyboard/tray/relaunch reveal of the right-edge dock opens the page's drawer too (never a stretched
+ *  rail) and parks again once the pointer stays away. Top-center reveals are unchanged. */
+function revealRightEdgeDockInPage(): void {
+  if (!win || win.isDestroyed() || islandResting || settingsSurfaceOpen || !overlayUsesHover(liveOverlayLayout())) return
+  if (resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(win.getBounds())) !== 'right-edge') return
+  if (!overlayCursorWatchTimer) startOverlayCursorWatch()
+  overlayCursorWatchHovering = false
+  rightEdgeUnhoveredRevealAt = performance.now()
+  notifyOverlayCursorHover(true, true)
+}
+
+/** Keyboard/tray/relaunch reveal of top-center Hide/Island: the page paints it; main holds it until a pointer visits and leaves. */
+function revealTopCenterHoverInPage(): void {
+  if (!win || win.isDestroyed() || islandResting || settingsSurfaceOpen || !overlayUsesHover(liveOverlayLayout())) return
+  if (resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(win.getBounds())) === 'right-edge') return
+  if (!overlayCursorWatchTimer) startOverlayCursorWatch()
+  notifyOverlayCursorHover(true)
+}
+
 const revealController = createRevealController({
   ensureWindow,
   legacyRevealEnabled: revealLegacyEnabled,
@@ -3762,6 +3855,8 @@ const revealController = createRevealController({
     if (settingsSurfaceOpen) leaveSettingsSurface()
     isMinimized = false
     restoreBarWidth()
+    revealRightEdgeDockInPage()
+    revealTopCenterHoverInPage()
   },
   repairOffscreenBounds: repairOverlayBoundsForReveal,
   disableClickThrough: () => {
@@ -3777,6 +3872,7 @@ function reveal(reason: RevealReason, options: { focus?: boolean } = {}): void {
   reveals.trace(reason, () => {
     revealController.reveal(reason, options)
   })
+  noteOverlay(reason === 'hotkey' ? 'hotkey' : 'toggle') // tray, relaunch, activate, notification: a show request
 }
 
 function writeSmokeParkState(w: Electron.BrowserWindow): void {
@@ -3810,6 +3906,7 @@ function handleSmokeReopenProbe(commandLine: readonly string[]): boolean {
   if (settingsSurfaceOpen) leaveSettingsSurface()
   if (action === 'park-window' || action === 'hide-window') {
     if (!parkOverlayAfterHideSpring(true)) w.hide()
+    noteOverlay('toggle')
     // Hosted macOS keeps the pointer in the top-edge strip; cursor watch would otherwise
     // restore the bar before the reopen probe snapshots parked===true.
     stopOverlayCursorWatch()
@@ -3818,6 +3915,7 @@ function handleSmokeReopenProbe(commandLine: readonly string[]): boolean {
   }
 
   if (!parkOverlayAfterHideSpring(true)) w.hide()
+  noteOverlay('toggle')
   stopOverlayCursorWatch()
   writeSmokeParkState(w)
   toggleVisible('tray')
@@ -3830,6 +3928,10 @@ let fatalHandled = false
  * never kills the overlay. No crashReporter upload by design (zero telemetry).
  */
 function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown): void {
+  // M2-0429: a refused macOS capture, already audited as capture.failed by its caller — not a crash.
+  if (kind === 'unhandledRejection' && isOrphanScreenSourcesRejection(err, process.platform)) {
+    return void mainLog.warn('[capture] desktopCapturer rejected a screen-source request (Screen Recording not in effect)')
+  }
   const detail = err instanceof Error ? err.stack || err.message : String(err)
   persistCrash(kind, detail, err instanceof Error ? err.message : String(err))
   if (kind !== 'uncaughtException' || fatalHandled) return
@@ -3902,6 +4004,7 @@ async function captureScreenshotOnce(displayId: number): Promise<CapturedScreen>
   // MQA-110: this real capture just proved whether screen recording works right now — fold that back
   // into the readiness cache so a permission revoked after the boot probe stops reporting stale 'granted'.
   noteScreenCaptureOutcome(sources.length > 0)
+  screenPerm.screenPermission().noteOutcome(sources.length > 0)
   const matched = sources.find((s) => String(s.display_id) === String(disp.id))
   if (!matched && sources.length > 1) {
     auditLog('capture.display_mismatch', {
@@ -4044,7 +4147,7 @@ function visionCheckContextFromSettings(): import('@shared/screen-capture-check'
         : getApiKey(provider).length > 0 &&
           (provider !== 'dust' || !!s.dustWorkspaceId) &&
           (!requiresUserBaseUrl(provider) || !!providerBaseUrl(provider, s))
-  const allowed = getAllowedProviders()
+  const allowed = narrowAllowedForCapability(s, getAllowedProviders(), 'askChat', [...CLI_PROVIDER_IDS, 'local'])
   const orgOk = !allowed || allowed.includes(provider)
   return {
     localWeightsReady,
@@ -4055,10 +4158,7 @@ function visionCheckContextFromSettings(): import('@shared/screen-capture-check'
 }
 
 /** Isolated vision ask for the Settings self-check. Never askStart, never overlay chat, never a teammate push. */
-function askVisionForScreenCheck(
-  backend: 'local' | 'api',
-  image: string
-): Promise<{ text: string; label: string }> {
+function askVisionForScreenCheck(backend: 'local' | 'api', image: string): Promise<{ text: string; label: string }> {
   const s = getSettings()
   const req: AskStart = {
     id: `screen-check-${Date.now()}`,
@@ -4068,6 +4168,9 @@ function askVisionForScreenCheck(
     history: []
   }
   if (backend === 'local') {
+    if (!localModelAllowedByPolicy(getActiveModelPolicy(s), s.localLlm.modelId)) {
+      return Promise.reject(new Error('The selected provider is not allowed by the fleet model policy.'))
+    }
     return collectVisionStream((handlers) =>
       createStream({
         providerId: 'local',
@@ -4093,7 +4196,11 @@ function askVisionForScreenCheck(
   }
   const def = PROVIDERS[provider]
   const key = def.kind === 'cli' ? '' : getApiKey(provider)
-  const model =
+  const allowed = narrowAllowedForCapability(s, getAllowedProviders(), 'askChat', [...CLI_PROVIDER_IDS, 'local'])
+  if (allowed && !allowed.includes(provider)) {
+    return Promise.reject(new Error('The selected provider is not allowed by the fleet model policy.'))
+  }
+  const preManagedModel =
     provider === 'dust'
       ? (s.providerModels['dust'] || '').trim() || def.defaultModel
       : applyInteractiveGuardrail(
@@ -4107,6 +4214,7 @@ function askVisionForScreenCheck(
             s.providerModelsDeep
           ) || def.fastModel
         )
+  const model = def.kind === 'cli' ? preManagedModel : resolveManagedModel(s, 'askChat', provider, preManagedModel)
   return collectVisionStream((handlers) =>
     createStream({
       providerId: provider,
@@ -4163,11 +4271,8 @@ const screenPreprocess: ScreenPreprocess = createScreenPreprocess({
   // Windows keeps the VLM-only path (extractScreenText returns null without a helper anyway, but gating
   // here keeps the win32 wiring visibly identical to before).
   extractScreenText: process.platform === 'darwin' ? extractScreenText : undefined,
-  // macOS: never let this background loop be the thing that asks for Screen Recording. captureScreenshotOnce
-  // deliberately lets a `not-determined` status reach desktopCapturer because that is what registers the app
-  // with TCC and raises the system dialog — fine for a user-initiated capture, wrong for a loop armed at boot
-  // (MQA-178), which would pop an unexplained prompt seconds after launch (MQA-209). Undefined off darwin:
-  // Windows has no queryable screen grant and its capture prompts nothing.
+  // macOS: never let this background loop be the thing that asks for Screen Recording at boot.
+  // Undefined off darwin: Windows has no queryable screen grant and its capture prompts nothing.
   screenCaptureGranted:
     process.platform === 'darwin'
       ? () => systemPreferences.getMediaAccessStatus('screen') === 'granted'
@@ -4190,15 +4295,7 @@ function refreshScreenPreprocess(): void {
   screenPreprocess.refresh()
 }
 
-/**
- * Revoke everything privileged that outlives a single IPC call, the moment the session does. ONE place
- * on purpose: the sign-out handler used to tear down only what it remembered, so the background screen
- * pre-analysis engine kept capturing + describing (MQA-154) and the Intelligence dashboard kept
- * rendering the decrypted brain (MQA-169) for a signed-out user, with no in-app way to stop either.
- * Registered on auth's session-cleared hook rather than called from the handler, because a session also
- * ends with no user action at all — max-age eviction and the background re-validation sweep. Import
- * jobs stay at the handler: cancelAll() is async and this hook is not.
- */
+/** Revoke every privileged surface that outlives one IPC call when the session ends. */
 function revokePrivilegedSurface(): void {
   refreshScreenPreprocess() // stops the watcher child, the 6s tick and the cached description
   invalidateCloudSttOwner() // closes authenticated live-speech sockets and invalidates their callbacks
@@ -4275,6 +4372,8 @@ function moveBy(dx: number, dy: number): void {
     w.setBounds(next)
     return
   }
+  // Top-center Hide/Island stays anchored under the notch; a drag would move its park position (M2-0431).
+  if (!settingsSurfaceOpen && overlayUsesHover(liveOverlayLayout())) return
   const x = b.x + dx
   const y = b.y + dy
   // Free movement anywhere that keeps the window reachable on SOME display — covers dragging clean
@@ -4330,10 +4429,11 @@ function registerScreenListeners(): void {
       if (park) {
         overlayCursorWatchHovering = false
         if (placement === 'right-edge') {
-          currentWidth = park.width
-          userAnchorY = park.y
+          const rest = parkedOverlayBounds(layout, display) // honors a right edge shared with a new display
+          currentWidth = rest.width
+          userAnchorY = rest.y
           applyOverlaySurfaceChrome()
-          commitParkedOverlayBounds(park)
+          commitParkedOverlayBounds(rest)
           applyHideClickThrough()
         } else {
           parkOverlayAfterHideSpring()
@@ -4380,7 +4480,13 @@ function registerScreenListeners(): void {
   screen.on('display-metrics-changed', reanchor)
 }
 
+/** The show/hide toggle (hotkey, tray, the page's toggle). reveal() logs its reveal; this logs its park or hide. */
 function toggleVisible(reason: Extract<RevealReason, 'hotkey' | 'tray'> = 'hotkey'): void {
+  toggleOverlayVisibility(reason)
+  noteOverlay('toggle')
+}
+
+function toggleOverlayVisibility(reason: Extract<RevealReason, 'hotkey' | 'tray'>): void {
   // ensureWindow() silently CREATES a new window when `win` is null/destroyed (e.g. after a boot-time
   // createWindow() failure) — and a freshly created window starts visible. Without this check, the
   // isVisible() branch below would immediately re-hide the just-recovered window, so the first Ctrl+\
@@ -4389,6 +4495,10 @@ function toggleVisible(reason: Extract<RevealReason, 'hotkey' | 'tray'> = 'hotke
   const w = ensureWindow()
   if (!w) return
   if (!hadNoWindow && w.isVisible() && !islandResting) {
+    // A hidden right-edge window reopens from the band on the next dwell. Park it instead: the forced park
+    // latches until the pointer leaves the band.
+    const rightEdge = resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(w.getBounds())) === 'right-edge'
+    if (overlayUsesHover(liveOverlayLayout()) && rightEdge && parkOverlayAfterHideSpring(true)) return startOverlayCursorWatch()
     w.hide()
     // Tray Hide is not the rest sensor. Keep the top-edge watch armed so
     // mouse-at-top can showInactive without hunting Show Métis.
@@ -4640,13 +4750,8 @@ function startMeetingNotifier(): void {
  *  accelerator labels never go stale — see rebuildTrayMenu(). */
 function buildTrayMenu(): Menu {
   const user = getSettings().shortcuts ?? {}
-  const winKeys = process.platform === 'win32'
-  const fmtAccel = (a: string): string =>
-    !a ? '' : winKeys
-      ? a.replace(/CommandOrControl|CmdOrCtrl|Control/g, 'Ctrl').replace(/Command|Meta|Super/g, 'Win').replace(/Return/g, 'Enter')
-      : a.replace(/CommandOrControl|CmdOrCtrl|Command|Meta/g, '⌘').replace(/Shift/g, '⇧').replace(/Alt/g, '⌥').replace(/Control/g, 'Ctrl').replace(/Return/g, '↵').replace(/\+/g, '')
   const label = (base: string, action: HotkeyAction): string => {
-    const k = fmtAccel(resolveShortcut(action, user))
+    const k = formatTrayAccelerator(resolveShortcut(action, user), process.platform)
     return k ? `${base}  (${k})` : base
   }
   return Menu.buildFromTemplate([
@@ -4681,30 +4786,30 @@ function buildTrayMenu(): Menu {
   ])
 }
 
+const startTrayBuild = createSingleFlight()
 function createTray(): void {
-  // FITO-185-AB: idempotent, same contract as createWindow. The exclusive-onboarding hoist runs
-  // createTray before the boot awaits and boot's own runStep('createTray') runs it again — without
-  // this the second call adds a duplicate menu-bar item and orphans the first Tray.
+  // FITO-185-AB: idempotent, same contract as createWindow. The exclusive-onboarding hoist runs createTray before the
+  // boot awaits and boot's own runStep('createTray') runs it again — without this the second call adds a duplicate
+  // menu-bar item and orphans the first Tray. A build still in flight counts as created (startTrayBuild ignores it).
   if (tray && !tray.isDestroyed()) return
-  try {
-    const iconPath = app.isPackaged
-      ? join(process.resourcesPath, 'icon.png')
-      : join(__dirname, '../../build/icon.png')
-    let img = nativeImage.createFromPath(iconPath)
-    if (!img.isEmpty()) img = img.resize({ width: 18, height: 18 })
-    const emptyIcon = img.isEmpty()
-    tray = new Tray(emptyIcon ? nativeImage.createEmpty() : img)
-    // FITO-185-F: always give AXExtrasMenuBar a title on darwin (empty-icon fallback used to be the
-    // only path; hardprove saw kAXErrorCannotComplete with a title-less LSUIElement status item).
-    if (process.platform === 'darwin') tray.setTitle(' ◉ Métis')
-    tray.setToolTip('Métis')
-    tray.setContextMenu(buildTrayMenu())
-    // Menu-bar / tray logo click is the Settings entry Tony uses. applySettingsSurface runs inside sendHotkey.
-    tray.on('click', () => sendHotkey('settings'))
-    auditLog('tray.created', { emptyIcon })
-  } catch (e) {
-    auditLog('tray.failed', { message: e instanceof Error ? e.message : String(e) })
-  }
+  const iconPaths = trayIconPaths(app.isPackaged ? process.resourcesPath : join(__dirname, '../../build'))
+  startTrayBuild(() => buildTrayInStages<Electron.NativeImage, Menu>({
+    loadIcon: (time) => loadPresizedTrayIcon(nativeImage, iconPaths, process.platform, time),
+    create: (img) => { tray = new Tray(img) },
+    decorate(img) {
+      if (!tray) return
+      const emptyIcon = img.isEmpty()
+      // FITO-185-F: darwin always gets a title (a title-less LSUIElement item gave kAXErrorCannotComplete).
+      if (process.platform === 'darwin') tray.setTitle(' ◉ Métis')
+      tray.setToolTip('Métis')
+      // Menu-bar / tray logo click is the Settings entry Tony uses. applySettingsSurface runs inside sendHotkey.
+      tray.on('click', () => sendHotkey('settings'))
+      auditLog('tray.created', { emptyIcon })
+    },
+    buildMenu: buildTrayMenu, attachMenu: (menu) => tray?.setContextMenu(menu),
+    time: (label, fn) => timeBootStage(observability, label, fn),
+    fail: (e) => auditLog('tray.failed', { message: e instanceof Error ? e.message : String(e) })
+  }))
 }
 
 /** Rebuild the tray's context menu after a shortcut rebind. createTray() only builds the menu once at
@@ -4943,26 +5048,8 @@ function registerIpc(): void {
     if (!parsed.success) return { ok: false, reason: 'invalid_confirmation' }
     return commandControl.cancel({ ...parsed.data, webContentsId: e.sender.id })
   })
-  // Deep-link to the relevant macOS Privacy pane once a permission has been denied — getUserMedia never
-  // re-prompts after a Deny, so without this a denied user has no in-app path back to granting it. The
-  // x-apple.systempreferences scheme only exists on macOS; a no-op elsewhere.
-  ipcMain.handle(IPC.permissionsOpenSettings, (e, kind: unknown) => {
-    assertMainWindow(e)
-    if (process.platform === 'darwin') {
-      const pane = kind === 'screenRecording' ? 'Privacy_ScreenCapture' : 'Privacy_Microphone'
-      void shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${pane}`)
-      return
-    }
-    if (process.platform === 'win32') {
-      // Windows has no single TCC-style "Screen Recording" permission like macOS; the closest deep link
-      // is the App graphics capture privacy page (added in the Windows 10 2004 update). Picked over the
-      // generic 'ms-settings:privacy' page because it's the actual per-capability toggle; on Windows
-      // builds that predate it, an unrecognized ms-settings URI opens the Settings home instead of
-      // erroring, so no separate fallback URI is needed here.
-      const uri = kind === 'screenRecording' ? 'ms-settings:privacy-graphicscaptureprogrammatic' : 'ms-settings:privacy-microphone'
-      void shell.openExternal(uri)
-    }
-  })
+  // Open the Privacy pane, and the M2-0429 Screen Recording Repair / "It's already on" / Show in Finder.
+  registerScreenPermissionIpc(assertMainWindow)
   // Front-load the OS permission prompts during onboarding (macOS only) so the first real meeting
   // isn't interrupted by them. Serial, and only for permissions not yet granted: mic has a direct
   // prompt API; Screen Recording has none, but a 1px desktopCapturer probe registers the app with
@@ -4980,7 +5067,7 @@ function registerIpc(): void {
           await systemPreferences.askForMediaAccess('microphone').catch(() => false)
         }
         if (systemPreferences.getMediaAccessStatus('screen') !== 'granted') {
-          await probeScreenCapture()
+          await screenPerm.probeScreenWithHistory()
         }
       }
       if (process.platform === 'win32') {
@@ -5119,8 +5206,9 @@ function registerIpc(): void {
     // connection first: mcpSaveConnection, mcpClickupConnect and mcpDisconnect. The renderer's own
     // patch({ mcpConnections }) calls are redundant echoes of what main just persisted, and state.ts's
     // patch() re-seeds React state from this handler's return value, so dropping the key here costs the
-    // UI nothing. clickupClientId is main-owned too (written only by the DCR step).
-    for (const k of ['mcpConnections', 'clickupClientId', 'planeClientId']) {
+    // UI nothing. clickupClientId is main-owned too (written only by the DCR step), and so is the M2-0429
+    // Screen Recording history (permissionState): a renderer patch must not fake it to steer the diagnosis.
+    for (const k of ['mcpConnections', 'clickupClientId', 'planeClientId', 'permissionState']) {
       if (k in p) delete (p as Record<string, unknown>)[k]
     }
     // Operator entitlement state (PLAN.md P2.2b #2): only a successful heartbeat
@@ -5222,7 +5310,6 @@ function registerIpc(): void {
           // Switching to Hide/Island must park. A leftover Circle pill or Settings-tall
           // ghost was Ultron 880×1017 + Expand Métis. Keep a real Settings panel open.
           isMinimized = false
-          const display = screen.getDisplayMatching(win.getBounds())
           if (
             !settingsSurfaceOpen &&
             shouldParkHoverRestAfterLeavingSurface({
@@ -5230,15 +5317,11 @@ function registerIpc(): void {
               pointerInIslandOrBar: pointerInIslandOrBar({ ignoreWindow: true })
             })
           ) {
-            overlayCursorWatchHovering = false
-            const park = parkedOverlayBounds(layout, display)
-            currentWidth = park.width
-            islandResting = true
-            userAnchorY = park.y
-            commitParkedOverlayBounds(park)
-            applyHideClickThrough()
-            notifyOverlayCursorHover(false)
+            parkOverlayForLayoutChange()
           }
+          // Re-apply the new layout's opacity and click-through whether or not it parked here.
+          applyOverlaySurfaceChrome()
+          applyHideClickThrough()
         } else if (placementChanged && !settingsSurfaceOpen) {
           // Physical placement changes do not imply a chrome change. Preserve whether the overlay is
           // parked or revealed, but move it immediately to its valid position.
@@ -5248,6 +5331,7 @@ function registerIpc(): void {
             currentWidth = park.width
             userAnchorY = park.y
             overlayCursorWatchHovering = false
+            overlayParkLatched = false // the band moved: an earlier Hide's latch no longer applies
             applyOverlaySurfaceChrome()
             commitParkedOverlayBounds(park)
             applyHideClickThrough()
@@ -5262,6 +5346,7 @@ function registerIpc(): void {
         stopOverlayCursorWatch()
         restoreBarWidth()
       }
+      if (layoutChanged || placementChanged) noteOverlay('settings')
     }
     if (
       cur.onboardingDone === false &&
@@ -5332,7 +5417,7 @@ function registerIpc(): void {
       startOperatorRuntime(() => getSettings(), operatorRuntimeHooks())
       startOperatorOverlayPoll(() => getSettings())
       notifySettingsChanged()
-    }
+    } else if (overlaySurfaceSettingsChanged(cur, next)) notifySettingsChanged() // the window moved; the page follows
     return publicSettings()
   })
 
@@ -5938,7 +6023,7 @@ function registerIpc(): void {
   // failure, which is an acceptable (and honest — "reconnect ClickUp") outcome for a background retry.
   async function retryOutboundAction(action: OutboundAction): Promise<{ ok: boolean; error?: string }> {
     // Re-check disk on every retry tick — a meeting flagged confidential AFTER enqueue must never leave.
-    if (action.meetingFile && isMeetingConfidentialOnDisk(getSettings(), action.meetingFile)) {
+    if (action.meetingFile && (await isMeetingConfidentialOnDisk(getSettings(), action.meetingFile))) {
       // Dequeue without sending — returning ok:true removes the entry; a hard error would retry forever.
       auditLog('mcp.push.skipped_confidential', { kind: action.kind, action: action.action, source: 'disk' })
       return { ok: true }
@@ -6120,7 +6205,7 @@ function registerIpc(): void {
     const s = getSettings()
     // Wave 4 / QA defense-in-depth: never push confidential meetings. Prefer disk frontmatter over the
     // renderer flag — a buggy UI could omit args.confidential. Unreadable files fail closed.
-    const diskConfidential = meetingFile ? isMeetingConfidentialOnDisk(s, meetingFile) : false
+    const diskConfidential = meetingFile ? await isMeetingConfidentialOnDisk(s, meetingFile) : false
     const argConfidential = args && typeof args === 'object' && (args as { confidential?: unknown }).confidential === true
     if (diskConfidential || argConfidential) {
       auditLog('mcp.push.skipped_confidential', {
@@ -6423,7 +6508,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.recallRead, async (e, file: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    return recallRead(String(file ?? ''))
+    return openExplicitly(String(file ?? ''), (event) => e.sender.send(IPC.recallHydration, event), (options) => recallRead(String(file ?? ''), options))
   })
 
   // Recall export: a user-initiated DECRYPTED markdown copy of ONE saved meeting, so an external tool —
@@ -6439,9 +6524,9 @@ function registerIpc(): void {
       return { ok: false, error: 'Not a saved meeting file.' }
     }
     try {
-      const source = join(resolveMeetingsFolder(getSettings()), safeName)
-      const text = readSavedFile(source) // decodes the ATKENC2 envelope when the file is encrypted
-      // readSavedFile returns '' (never throws) when the envelope can't be decrypted on this device —
+      // Decodes the ATKENC2 envelope when the file is encrypted; read through the storage gateway.
+      const text = await readSavedMeeting(resolveMeetingsFolder(getSettings()), safeName)
+      // readSavedMeeting returns '' (never throws) when the envelope can't be decrypted on this device —
       // without this guard the export would "succeed" as a 0-byte file (adversarial review finding).
       if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
       const dialogOpts = {
@@ -6840,6 +6925,8 @@ function registerIpc(): void {
     return { text }
   })
 
+  // M2-0412: every on-device readiness decision consults the fleet policy's `localModel` entry.
+  setLocalModelGate((modelId) => localModelAllowedByPolicy(getActiveModelPolicy(getSettings()), modelId))
 
   // --- Cloud STT live WebSocket (Nova-3 / Soniox) ---
   // Main holds Operator/CF credentials; renderer only streams Float32 PCM + receives finals.
@@ -6858,7 +6945,11 @@ function registerIpc(): void {
     const profile = resolveEnterpriseLiveProfile(settings.enterpriseLive ?? {})
     // Provider authority is settings/profile only. The renderer may report its UI selection but cannot
     // redirect a live audio stream to another backend by supplying `payload.provider`.
-    const provider = effectiveCloudSttProvider(profile, settings.cloudSttProvider)
+    // M2-0412: the fleet policy's `stt` entry narrows this at session start only; live sessions are never rewritten.
+    const provider = enforceSttPolicy(
+      getActiveModelPolicy(settings),
+      effectiveCloudSttProvider(profile, settings.cloudSttProvider)
+    )
     // An opaque capture identity scopes delayed force-stops to the session that requested them.
     // Keep the bound modest because this comes from the renderer IPC boundary.
     const captureId =
@@ -7047,15 +7138,29 @@ function registerIpc(): void {
     const s = getSettings()
     // publicSettings().providerReady is the same "can a cloud/CLI provider actually answer" test the ask
     // path uses — when it is false, local is what will serve the next suggest, so it is worth warming.
-    if (!speculativeLocalWorkAllowed() || !localPrewarmEligible(s, getAllowedProviders(), publicSettings().providerReady)) return
+    const purpose = parsed.data.purpose ?? 'suggest'
+    if (
+      !speculativeLocalWorkAllowed() ||
+      !localPrewarmEligible(s, getAllowedProviders(), publicSettings().providerReady, undefined, purpose)
+    ) return
     // Warm the EXACT same [system, user] prefix a real suggest request sends (F4 hardening) — built by
     // the SAME helper (llm/prewarm.ts) a unit test cross-checks against buildSystem()/userText() directly,
     // so any future drift between the live suggest path and what prewarm warms fails a test.
     // prewarmLocal (llm/local.ts) is engine-aware: it warms whichever engine pickLocalEngine would give
     // the next real suggest — fm serve on macOS 27+ with Apple Intelligence live, llama-server otherwise.
+    const warmFailed = (err: unknown): void =>
+      mainLog.warn('[local-prewarm] failed', err instanceof Error ? err.message : String(err))
+    if (purpose === 'summary') {
+      // M2-0430: the Stop-time warm targets the summary slot with the recap's own prefix, so the recap
+      // that follows the drain starts on a loaded model instead of queueing behind a cold start.
+      const summaryMessages = buildPrewarmMessages(parsed.data.text, s, 'summary')
+      void prewarmLocal(s.localLlm.modelId, summaryMessages, speculativeLocalWorkAllowed, 'summary').catch(warmFailed)
+      return
+    }
     void prewarmLocal(s.localLlm.modelId, buildPrewarmMessages(parsed.data.text, s), speculativeLocalWorkAllowed)
-      .catch((err) => mainLog.warn('[local-prewarm] failed', err instanceof Error ? err.message : String(err)))
+      .catch(warmFailed)
   })
+  registerWriteupIpc(assertMainWindow)
 
   // --- Screen capture ---
   ipcMain.handle(IPC.captureScreen, async (event) => {
@@ -7223,7 +7328,9 @@ function registerIpc(): void {
     // the renderer keeps what run() set (a vision ask carries its own image).
     const screenGrounded =
       req.mode === 'answer' && req.wantsScreenContext ? !!req.screenContext : undefined
-    const allowed = getAllowedProviders() // org allowlist (null = unrestricted)
+    // M2-0412: the fleet model policy narrows the org allowlist for ask/chat; CLI providers and 'local'
+    // are governed by their own connect/routing toggles and never narrowed.
+    const allowed = narrowAllowedForCapability(s, getAllowedProviders(), 'askChat', [...CLI_PROVIDER_IDS, 'local'])
 
     // Screen-vision capability. Static per provider, EXCEPT Dust: its ability to read a screenshot depends
     // on the selected agent's underlying model (it uploads the shot as a content fragment), so consult the
@@ -7485,6 +7592,12 @@ function registerIpc(): void {
       // regardless of what routeTier or a user's providerModels override picked. Opus stays reachable only
       // through the Graph pipeline (brain/ingest.ts, graphify.ts), which never calls this function.
       model = applyInteractiveGuardrail(provider, tier, model)
+      // M2-0412: once the guardrail's own hard pins are applied, let the fleet policy pin the final
+      // model for a provider it governs (cloud API providers only — CLI kind and 'local' pass through
+      // unchanged, see narrowAllowedForCapability above for why).
+      if (def.kind !== 'cli' && provider !== 'local') {
+        model = resolveManagedModel(s, 'askChat', provider, model)
+      }
       // Dust interactive speed pin: think/deep Dust AGENTS run server-side orchestration before their
       // first token (measured 6.6-28.3s TTFT vs ~2.6s for the base agent) — unusable mid-conversation.
       // Interactive asks (chat/vision/suggest) always use the base agent; recaps, summaries, background
@@ -8195,7 +8308,7 @@ function registerIpc(): void {
       try {
         // Source versions, not only a count of successful filenames, decide whether Intelligence is
         // current. requestBackfill detects changed/deleted sources and schedules the clean rebuild.
-        const r = requestBackfill()
+        const r = await requestBackfill()
         auditLog('brain.backfill.start', { queued: r.queued, deferred: r.deferred, automatic: true })
       } catch (err) {
         mainLog.warn('[brain] automatic dashboard backfill check failed:', err)
@@ -8203,7 +8316,7 @@ function registerIpc(): void {
     })()
     return result
   })
-  ipcMain.handle(IPC.brainStatus, (e) => {
+  ipcMain.handle(IPC.brainStatus, async (e) => {
     assertBrainReader(e)
     if (!requireAuth()) {
       return {
@@ -8220,11 +8333,11 @@ function registerIpc(): void {
       }
     }
     const s = getSettings()
-    const idx = readBrainIndex(s)
+    const idx = await loadBrainIndexForStatus(s)
     // M2-0003: non-null while an existing index.json exists but cannot be used on this device — idx
     // above is then only the empty stand-in, so this must be read before deciding what "no data" means.
-    const unavailable = indexUnavailable(s)
-    const counts = brainStatusCounts(s, idx.revision)
+    const unavailable = await indexUnavailableAsync(s)
+    const counts = await brainStatusCounts(s, idx.revision)
     // T6 6c: durable failure counts read straight from the index — unlike backfill.failed below (an
     // ephemeral per-run counter), these stay visible for as long as a source has ok:false, independent
     // of whether a backfill run happens to be active right now.
@@ -8254,13 +8367,13 @@ function registerIpc(): void {
       ...(failure.topError ? { topError: failure.topError } : {}),
       // MI-2.5 review round 3: computed fresh from the on-disk sentinel each poll — lets BrainView offer
       // the in-app "Reset corrections lock" recovery instead of a hand-deleted hidden .brain file.
-      corruptionBlocked: isJournalCorruptionBlocked(s),
+      corruptionBlocked: await isJournalCorruptionBlockedAsync(s),
       // MQA-230: entity files can still hold items attributed to an already-deleted meeting until the
       // deferred source refresh runs (it needs a usable provider). Surfaced so the UI can say the
       // cleanup is pending instead of silently claiming the delete was complete.
       cleanupPending: idx.sourceRefreshRequested === true,
-      lastIndexedAt: lastIndexedAt(s),
-      intelligenceIndex: intelligenceIndexStatus(s),
+      lastIndexedAt: await lastIndexedAtAsync(s),
+      intelligenceIndex: await intelligenceIndexStatusAsync(s),
       // M2-0003: surfaces the degraded read-only state instead of silently reporting an empty brain.
       ...(unavailable ? { indexUnavailable: unavailable, error: indexUnavailableMessage(unavailable) } : {})
     }
@@ -8362,37 +8475,19 @@ function registerIpc(): void {
     return { ok: true, cleared }
   })
   // Full assembled dataset for the Mantu Intelligence dashboard (decrypted in main when needed).
-  ipcMain.handle(IPC.brainRead, (e) => {
+  ipcMain.handle(IPC.brainRead, async (e) => {
     assertBrainReader(e)
     if (!requireAuth()) throw new Error('Not signed in.')
-    const s = getSettings()
-    const index = readBrainIndex(s)
-    return {
-      index,
-      graph: readBrainGraph(s),
-      people: listBrainEntities(s, 'person').map((slug) => readBrainPerson(s, slug)).filter(Boolean),
-      accounts: listBrainEntities(s, 'account').map((slug) => readBrainAccount(s, slug)).filter(Boolean),
-      deals: listBrainEntities(s, 'deal').map((slug) => readBrainDeal(s, slug)).filter(Boolean),
-      meetings: listBrainMeetingExtractions(s)
-        .map((slug) => readBrainMeetingExtraction(s, slug))
-        .filter((meeting): meeting is NonNullable<typeof meeting> => !!meeting && !!index.ingested[meeting.source_file]?.ok)
-    }
+    return readBrainDashboard(getSettings())
   })
   // Canonical people/account NAMES ONLY (never quotes, roles, deals, or any other entity field) — feeds
   // the renderer's ASR entity-casing bias (lib/entity-casing.ts) so a live transcript can spell a known
   // name correctly. Read-only, best-effort: an unsigned-in/empty brain just yields no names, never throws,
   // since this runs opportunistically (mount + after a meeting saves), not in response to a user action.
-  ipcMain.handle(IPC.brainEntityNames, (e) => {
+  ipcMain.handle(IPC.brainEntityNames, async (e) => {
     assertMainWindow(e)
     if (!requireAuth()) return { names: [] }
-    const s = getSettings()
-    const people = listBrainEntities(s, 'person')
-      .map((slug) => readBrainPerson(s, slug)?.name)
-      .filter((n): n is string => !!n)
-    const accounts = listBrainEntities(s, 'account')
-      .map((slug) => readBrainAccount(s, slug)?.name)
-      .filter((n): n is string => !!n)
-    return { names: Array.from(new Set([...people, ...accounts])).slice(0, 500) }
+    return loadBrainEntityDisplayNames(getSettings())
   })
   // Deal outcome — the human closes the loop the LLM never may (see DealEntitySchema.outcome). Main-window
   // only: it's a brain WRITE, like brainCommitmentSettle. Same slug convention too: the renderer sends the
@@ -8558,12 +8653,12 @@ function registerIpc(): void {
 
   // Task MI-3: two read-only channels feeding the CRM record pages, the Review.tsx entity strip, and the
   // needs-attention queue. Same guard pattern as the other brain reads — no audit event (nothing mutates).
-  ipcMain.handle(IPC.brainMeetingExtraction, (e, raw) => {
+  ipcMain.handle(IPC.brainMeetingExtraction, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) return null
     const parsed = MeetingExtractionQuerySchema.safeParse(raw)
     if (!parsed.success) return null
-    return readBrainMeetingExtraction(getSettings(), brainSlugify(basename(parsed.data.file)))
+    return loadBrainMeetingExtraction(getSettings(), brainSlugify(basename(parsed.data.file)))
   })
   ipcMain.handle(IPC.brainAttention, (e) => {
     assertMainWindow(e)
@@ -8626,14 +8721,14 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const parsed = ImportAudioStartSchema.parse(raw)
-    if (!importJobs) throw new Error('Audio import service is unavailable.')
-    return importJobView(await importJobs.start(consumePickedAudio(parsed.token)))
+    const jobs = getImportJobs()
+    return importJobView(await jobs.start(consumePickedAudio(parsed.token)))
   })
   ipcMain.handle(IPC.importAudioStartBatch, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const parsed = ImportAudioStartBatchSchema.parse(raw)
-    if (!importJobs) throw new Error('Audio import service is unavailable.')
+    const jobs = getImportJobs()
     const sources = []
     const errors: string[] = []
     for (const token of parsed.tokens) {
@@ -8644,33 +8739,30 @@ function registerIpc(): void {
       }
     }
     if (!sources.length) throw new Error(errors[0] || 'Could not start the imports.')
-    return (await importJobs.startMany(sources)).map(importJobView)
+    return (await jobs.startMany(sources)).map(importJobView)
   })
   ipcMain.handle(IPC.importJobsList, (e) => {
     assertMainWindow(e)
-    if (!requireAuth() || !importJobs) return []
-    return importJobs.list().map(importJobView)
+    if (!requireAuth()) return []
+    return getImportJobs().list().map(importJobView)
   })
   ipcMain.handle(IPC.importJobCancel, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const parsed = ImportJobIdSchema.parse(raw)
-    if (!importJobs) throw new Error('Audio import service is unavailable.')
-    await importJobs.cancel(parsed.jobId)
+    await getImportJobs().cancel(parsed.jobId)
   })
   ipcMain.handle(IPC.importJobResume, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const parsed = ImportJobIdSchema.parse(raw)
-    if (!importJobs) throw new Error('Audio import service is unavailable.')
-    return importJobView(await importJobs.resume(parsed.jobId))
+    return importJobView(await getImportJobs().resume(parsed.jobId))
   })
   ipcMain.handle(IPC.importJobRemove, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const parsed = ImportJobIdSchema.parse(raw)
-    if (!importJobs) throw new Error('Audio import service is unavailable.')
-    await importJobs.remove(parsed.jobId)
+    await getImportJobs().remove(parsed.jobId)
   })
 
   ipcMain.on(IPC.importDecoderReady, (e) => {
@@ -8770,6 +8862,7 @@ function registerIpc(): void {
     if (r.canceled || !r.filePath) return { ok: false as const }
     const html = recapMarkdownToHtml(md, input?.title)
     const pdfWin = new BrowserWindow({
+      title: 'Métis',
       show: false,
       webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, devTools: DEVTOOLS_ENABLED, webSecurity: true }
     })
@@ -8868,9 +8961,9 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.recallSearch, (e, q: string) => {
     assertMainWindow(e)
-    return requireAuth() ? searchMeetings(String(q ?? '')) : []
+    return requireAuth() ? searchMeetingsLatest(String(q ?? '')) : []
   })
-  ipcMain.handle(IPC.recallOpen, (e, file: string) => {
+  ipcMain.handle(IPC.recallOpen, async (e, file: string) => {
     assertMainWindow(e)
     if (!requireAuth()) return ''
     const folder = resolveMeetingsFolder(getSettings())
@@ -8879,18 +8972,13 @@ function registerIpc(): void {
     // (could be Desktop/Downloads), and shell.openPath launches the OS handler for whatever it finds,
     // which would execute a .command/.app/.exe. Mirror deleteMeeting()/debriefSave()'s .md guard.
     if (!safeName) return ''
-    const path = join(folder, safeName)
-    const encrypted = isEncryptedFile(path)
-    auditLog('recall.open', { encrypted })
-    // Encrypted transcripts are unreadable in an editor — open a decrypted temp copy instead.
-    if (encrypted) return shell.openPath(decryptToTemp(path))
-    return shell.openPath(path)
+    // Encrypted transcripts are unreadable in an editor — the target is a decrypted temp copy instead.
+    const target = await openExplicitly(safeName, (event) => e.sender.send(IPC.recallHydration, event), (options) => meetingOpenTarget(folder, safeName, options))
+    if (!target.ok) return target.error
+    auditLog('recall.open', { encrypted: target.encrypted })
+    return shell.openPath(target.path)
   })
-  ipcMain.handle(IPC.historySettled, (e, report: unknown) => {
-    assertMainWindow(e)
-    if (!requireAuth()) return
-    history.settle(report)
-  })
+  registerHistoryTraceIpc(assertMainWindow, requireAuth, history)
 
   // "Open brain folder for Claude" (the handshake): reveal the published wiki — a plaintext, self-describing
   // mirror with a CLAUDE.md entry doc — so the user can point Claude at it (a Claude Project, Claude Desktop,
@@ -8992,23 +9080,28 @@ function registerIpc(): void {
       if (settingsSurfaceOpen) leaveSettingsSurface()
       setWindowMode()
     }
+    noteOverlay('settings')
   })
   ipcMain.handle(IPC.windowMinimize, (e, narrow: unknown) => {
     assertMainWindow(e)
     setMinimizedWidth(!!narrow)
+    noteOverlay('renderer')
   })
   ipcMain.handle(IPC.windowAnchorTop, (e) => {
     assertMainWindow(e)
     anchorTopCenter()
+    noteOverlay('renderer')
   })
   ipcMain.handle(IPC.windowRevealWidth, (e) => {
     assertMainWindow(e)
     restoreBarWidth()
+    noteOverlay('renderer')
   })
   ipcMain.handle(IPC.overlayParkAfterHide, (e, force?: unknown) => {
     if (isRecentlyRetiredOverlaySender(e)) return
     assertMainWindow(e)
     parkOverlayAfterHideSpring(force === true)
+    noteOverlay('renderer')
   })
   // Renderer ErrorBoundary catch: persist via the same sink as onFatal's main-process crashes, so a
   // caught render-throw survives to disk instead of only reaching console (gated behind
@@ -9040,6 +9133,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.windowHide, (e) => {
     assertMainWindow(e)
     win?.hide()
+    noteOverlay('renderer')
   })
   ipcMain.handle(IPC.windowToggle, (e) => {
     assertMainWindow(e)
@@ -9129,23 +9223,29 @@ if (!app.requestSingleInstanceLock()) {
   })
   app.whenReady().then(async () => {
   initLogging() // route main-process logs to a rotated file before anything else can fail
+  const bootWork = createBootWork() // M2-0031: non-first-paint fs work starts after the first show, under the pool cap
   configureSidecarRegistry(createSidecarRegistry(app.getPath('userData')))
-  await runBootSidecarReaper(app.getPath('userData'))
+  // M2-0518: child processes first paint does not need; the reaper spares this launch's own sidecars, the memory gate reads freemem() meanwhile.
+  bootWork.run('runBootSidecarReaper', () => runBootSidecarReaper(app.getPath('userData')))
+  bootWork.run('startAvailableMemorySampler', () => { startAvailableMemorySampler() }) // M2-0430: vm_stat reading for the local-model memory gate
   // M2-0033: unattended model work waits for the maintenance gate.
   startMaintenanceGate({ interactiveActive: () => localRuntime.activeStreams() + fmRuntime.activeStreams() > 0 })
   app.on('web-contents-created', (_event, contents) => {
-    contents.on('input-event', (_inputEvent, input) => noteUserInput(input.type))
+    contents.on('input-event', (_inputEvent, input) => {
+      noteUserInput(input.type)
+      // M2-0431: a click or keypress in the overlay makes its reveal deliberate, never an overlay.flash.
+      if (win && !win.isDestroyed() && contents === win.webContents) overlayRevealLog.input(input.type)
+    })
   })
   // FITO-185-Z / AA: exclusive Act1 must appear ≤300ms from process start. Do not await
-  // proxy/CLI/key seeding before first paint — hoist tray+IPC+window for wiped-profile exclusive.
-  // Call createTray/registerIpc/createWindow directly (runStep/clearBootWatchOnce are declared
-  // later in this whenReady callback — using them here fails CI typecheck "used before declaration").
+  // proxy/CLI/key seeding before first paint — hoist IPC+window for wiped-profile exclusive (tray: M2-0422).
+  // Call registerIpc/createWindow directly (runStep/clearBootWatchOnce are declared later in this whenReady callback — "used before declaration").
   // Later boot still runs createWindow idempotently (early return if win exists).
   if (onboardingExclusiveLive()) {
     try {
-      createTray()
       registerIpc()
-      createWindow()
+      await yieldBeforeBootWindow() // M2-0031: IPC registration, window construction and first show are separate tasks
+      withBootFirstShowDeferred(createWindow)
     } catch (e) {
       mainLog.warn('[boot] FITO-185-Z early exclusive window failed:', e)
     }
@@ -9161,7 +9261,8 @@ if (!app.requestSingleInstanceLock()) {
   }
   // Warm the CLI binary cache at boot when a CLI provider is connected, so the session's FIRST CLI ask
   // doesn't stall on the login-shell PATH lookup (it only ran on sign-in before — i.e. once ever).
-  try {
+  // M2-0518: both spawn child processes, so they start behind the first show.
+  bootWork.run('warmCliSessions', () => {
     const s0 = getSettings()
     if (s0.cliConnected['claude-cli'] || s0.cliConnected['codex-cli']) {
       prewarmCli()
@@ -9169,13 +9270,16 @@ if (!app.requestSingleInstanceLock()) {
       // runs otherwise leaves the app asserting a provider it cannot use until the first ask fails.
       void verifyCliSessions()
     }
-  } catch {
-    /* best-effort warm-up */
-  }
+  })
   // Seed an optional installer-embedded Cloudflare proxy key, once per profile, so a fresh install of
   // the default provider can answer with zero paste-a-key setup when the operator chose to embed one.
   // See embedded-cloudflare-key.ts — a no-op when no bundle was packaged.
-  importEmbeddedCloudflareKey()
+  // M2-0518: the first-launch seed decrypts the bundle and writes the keystore, so it starts behind the first show;
+  // the renderer then re-reads settings, so a seeded provider shows as ready without a relaunch.
+  bootWork.run('importEmbeddedCloudflareKey', () => {
+    importEmbeddedCloudflareKey()
+    notifySettingsChanged()
+  })
   {
     setModeSkillsOverlayRoot(join(app.getPath('userData'), 'skills-overrides'))
     const boot = getSettings()
@@ -9206,13 +9310,14 @@ if (!app.requestSingleInstanceLock()) {
       }
     }
     // The warm is unattended model work: it waits for the maintenance gate, so it never starts in the boot quiet period.
-    void provisionLocalModel(getSettings().localLlm, getAllowedProviders(), ensureLocalModel)
+    // M2-0518: provisioning stats, hashes and downloads model files, so it starts behind the first show.
+    bootWork.run('provisionLocalModel', () => provisionLocalModel(getSettings().localLlm, getAllowedProviders(), ensureLocalModel)
       .then((ready) => {
         if (!ready) return
         refreshScreenPreprocess()
         void runAsMaintenance(warmLocalIfReady)
       })
-      .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
+      .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e)))
     void runAsMaintenance(warmLocalIfReady)
   }
   // Windows toast attribution: a process's AppUserModelID must match the installed shortcut's AUMID
@@ -9299,13 +9404,14 @@ if (!app.requestSingleInstanceLock()) {
   sweepStaleTempFiles() // remove any decrypted-transcript temp copies orphaned by a previous hard-kill
   // Promote any orphaned crash-recovery drafts into real meetings BEFORE the retention sweep, so a
   // recovered meeting is visible in History and immediately subject to the same retention policy.
-  recoverOrphanDrafts(getSettings()).then((r) => {
+  // M2-0518: both read (and decrypt) the meetings root, so they start behind the first show, in this order.
+  bootWork.run('recoverOrphanDrafts', () => recoverOrphanDrafts(getSettings()).then((r) => {
     if (r.recovered > 0) auditLog('transcript.recovered', { recovered: r.recovered })
-  }).catch(() => { /* best-effort — never block startup */ })
+  }).catch(() => { /* best-effort — never block startup */ }))
   // Auto-delete meetings past the configured retention window (off by default — see transcriptRetentionDays).
   // Runs at launch AND every 6 hours after: this overlay realistically stays up for weeks, so a launch-only
   // sweep silently stopped enforcing retention the day after boot (storage-limitation promise broken).
-  const runRetentionSweep = (): void => {
+  const runRetentionSweep = (): Promise<void> =>
     sweepExpiredMeetings(getSettings().transcriptRetentionDays).then((r) => {
       if (r.deleted > 0) {
         auditLog('transcript.deleted', { bulk: true, expired: true, deleted: r.deleted })
@@ -9318,9 +9424,8 @@ if (!app.requestSingleInstanceLock()) {
         )
       }
     }).catch(() => { /* best-effort — never block startup or the interval */ })
-  }
-  runRetentionSweep()
-  trackTimer(setInterval(runRetentionSweep, 6 * 60 * 60 * 1000))
+  bootWork.run('runRetentionSweep', runRetentionSweep)
+  trackTimer(setInterval(() => void runRetentionSweep(), 6 * 60 * 60 * 1000))
   // Guarded like the neighboring dock.setIcon / crash-log pruning below — a throw here must never abort
   // createTray/registerShortcuts/createWindow further down the boot sequence.
   if (process.platform === 'darwin') {
@@ -9356,6 +9461,7 @@ if (!app.requestSingleInstanceLock()) {
   // System-audio loopback: when the renderer calls getDisplayMedia for audio,
   // hand back the system audio loopback device (the "Them" channel) only.
   // Screenshot capture uses desktopCapturer directly, so no video track is ever returned here.
+  runStep('initScreenPermission', screenPerm.initScreenPermission)
   runStep('setDisplayMediaHandler', () => {
   session.defaultSession.setDisplayMediaRequestHandler(
     async (request, callback) => {
@@ -9447,24 +9553,14 @@ if (!app.requestSingleInstanceLock()) {
       // saved, or sent. This is the only way to capture the "them" side of a call on macOS.
       //
       // getSources can BOTH return empty transiently (fresh grant) AND reject outright with "Failed to
-      // get sources." (a ScreenCaptureKit hiccup, often right after a content-protection toggle). This
-      // callback is async, so a reject escapes as a fatal unhandledRejection and crashes the app on
-      // Listen start. Guard every path: retry on empty OR throw, then deny gracefully — a callback({})
-      // makes the renderer's getDisplayMedia reject with AbortError, which listen.ts already catches and
-      // surfaces as "couldn't capture system audio" instead of taking the whole app down.
-      const sources: Electron.DesktopCapturerSource[] = await getScreenSourcesWithRetry(
-        () => desktopCapturer.getSources({ types: ['screen'] }),
-        isUsableScreenSource,
-        {
-          onError: (error, attempt) =>
-            mainLog.warn(`[display-media] getSources failed (attempt ${attempt}): ${error instanceof Error ? error.message : String(error)}`)
-        }
-      )
-      if (!sources.length) {
-        auditLog('capture.failed', { reason: 'loopback_no_screen_source', phase: 'listen' })
-      }
-      const screenSrc = sources[0]
-      callback(screenSrc ? { video: screenSrc, audio: 'loopback' } : {})
+      // get sources." (a ScreenCaptureKit hiccup, or a Screen Recording grant not in effect). M2-0429: a
+      // capture the diagnosis already knows macOS will refuse is denied before any getSources call, and
+      // every other path retries and never rejects (capture-permissions/loopback-grant.ts). A deny is
+      // callback(null), never callback({}): for a request that asked for video, Electron rejects {} with
+      // "Video was requested, but no video stream was provided". The renderer's getDisplayMedia then rejects
+      // and listen.ts falls back to the microphone with the diagnosis-backed note.
+      const screenSrc = await screenPerm.acquireListenScreenSource()
+      callback(screenSrc ? { video: screenSrc, audio: 'loopback' } : screenPerm.DENY_DISPLAY_MEDIA)
   }
   })
 
@@ -9514,6 +9610,7 @@ if (!app.requestSingleInstanceLock()) {
     })
     safeHandle(IPC.asrAssetsEnsure, async (e) => {
       assertMainWindow(e)
+      if (resolveLocalSpeechPackPolicy(getSettings(), getAdminLocalSpeechPackPolicy()) === 'blocked') return asrAssetsStatusSnapshot()
       try {
         await ensureImportAsrAssets((pct) => {
           publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
@@ -9618,10 +9715,8 @@ if (!app.requestSingleInstanceLock()) {
   // Catch the case where encryption was already on (managed-config or a previous run) with a stale
   // plaintext graph sitting on disk since before the first settingsGet poll from the renderer.
   runStep('purgeGraphIfEncryptedAndStale', () => purgeGraphIfEncryptedAndStale('encryption-active-boot'))
-  // createTray/registerShortcuts stay ahead of createWindow (see the boot-order comment above).
   // FITO-185-X: registerIpc also stays ahead of createWindow — handlers read win/tray lazily at
   // invocation time, and first paint must not race loadURL before settings/auth IPC exists.
-  runStep('createTray', createTray)
   runStep('registerShortcuts', registerShortcuts)
   // FITO-185-X: registerIpc BEFORE createWindow/loadURL so getSettings/authStatus/licenseGate
   // handlers exist before the renderer can invoke. FITO-185-H put IPC immediately after createWindow
@@ -9629,7 +9724,10 @@ if (!app.requestSingleInstanceLock()) {
   // "Loading" strip Tony still hits when exclusive exits or settings IPC is late.
   runStep('registerIpc', registerIpc)
   clearBootWatchOnce('registerIpc')
-  runStep('createWindow', createWindow)
+  await yieldBeforeBootWindow() // M2-0422: window construction is its own task
+  withBootFirstShowDeferred(() => runStep('createWindow', createWindow))
+  scheduleTrayAfterFirstPaint(win, () => runStep('createTray', createTray))
+  bootWork.releaseAfterFirstShow(win)
   revealController.markBootComplete()
   // FITO-185-G-SHOW: createWindow completed → past kill zone; clear sentinel (brain stays on 15s).
   clearBootWatchOnce('createWindow')
@@ -9641,6 +9739,7 @@ if (!app.requestSingleInstanceLock()) {
   } catch (e) {
     mainLog.warn('[boot] powerMonitor unlock-screen hook failed:', e)
   }
+  await yieldToEventLoop() // M2-0422: post-window boot steps are a separate task
   // screen-preprocess documents refresh() as "Call on startup and after settings change" — only the second
   // half was ever wired, so an opted-in user got a dead fast path (and a silent cloud image upload on every
   // screen ask) for the whole session after each relaunch (MQA-178). Deliberately AFTER createWindow+registerIpc:
@@ -9648,24 +9747,23 @@ if (!app.requestSingleInstanceLock()) {
   // IPC must be live first so the renderer's getSettings() is not blocked waiting on preprocess.
   // Silent on macOS by construction: eligibility now requires the Screen Recording grant to ALREADY exist
   // (screenCaptureGranted above), so this reconcile can never be what raises the TCC prompt (MQA-209).
-  runStep('refreshScreenPreprocess', refreshScreenPreprocess)
-  // Synchronous OneDrive filesystem work (mkdir + two writeFileSync calls on first run) — nothing
-  // before the window depends on the folder existing yet (saveMeeting/saveNote create it themselves on
-  // first use), so it no longer sits ahead of createWindow on the boot path.
-  runStep('ensureMeetingsFolder', () => ensureMeetingsFolder(getSettings()))
+  bootWork.run('refreshScreenPreprocess', () => runStep('refreshScreenPreprocess', refreshScreenPreprocess))
+  // Synchronous OneDrive fs work (mkdir + two writeFileSync on first run) that nothing needs before the first show:
+  // saveMeeting/saveNote create the folder themselves on first use.
+  bootWork.run('ensureMeetingsFolder', () => runStep('ensureMeetingsFolder', () => ensureMeetingsFolder(getSettings())))
   runStep('initializeImportJobs', initializeImportJobs)
   startOperatorRuntime(() => getSettings(), operatorRuntimeHooks())
   startOperatorOverlayPoll(() => getSettings())
   // Import checkpoints are encrypted and main-owned. Resume after IPC registration so the hidden decoder
   // can safely report chunks as soon as it starts, without delaying first paint.
-  const recoverImports = (): void => {
+  const recoverImports = (): Promise<unknown> | undefined => {
     if (!requireAuth()) {
       setTimeout(recoverImports, 1000)
-      return
+      return undefined
     }
-    void importJobs?.recover().catch((error) => mainLog.warn('[import-jobs] recovery failed:', error))
+    return importJobs?.recover().catch((error) => mainLog.warn('[import-jobs] recovery failed:', error))
   }
-  recoverImports()
+  bootWork.run('recoverImports', recoverImports)
   runStep('registerScreenListeners', registerScreenListeners)
   // Notch/menu-bar metrics for the island top clamp (MQA-275) — invalidate-on-topology-change, same
   // event set registerScreenListeners just subscribed to, plus powerMonitor resume (a notch MacBook can
@@ -9682,6 +9780,7 @@ if (!app.requestSingleInstanceLock()) {
       void probeScreenCapture().catch(() => false)
     })
   }
+  runStep('resumeScreenRepair', screenPerm.resumeScreenRepairOnBoot) // M2-0429: the boot half of a Repair
   runStep('startMeetingNotifier', startMeetingNotifier)
   runStep('initAutoUpdate', () => initAutoUpdate(() => win))
   // Resume durable live/backfill work and reconcile OneDrive-synced meeting files after first paint.
@@ -9703,18 +9802,20 @@ if (!app.requestSingleInstanceLock()) {
       } else {
         // Per-step isolation: one failing resume must not skip the remaining boot work or the finally clear.
         try {
-          resumeBackfillIfPending()
+          bootWork.run('resumeBackfillIfPending', () => resumeBackfillIfPending().catch((e) => mainLog.warn('[boot] resumeBackfillIfPending failed:', e)))
         } catch (e) {
           mainLog.warn('[boot] resumeBackfillIfPending failed:', e)
         }
         try {
-          reconcileMeetingsInBackground()
+          bootWork.run('reconcileMeetingsInBackground', () => reconcileMeetingsInBackground().catch((e) => mainLog.warn('[boot] reconcileMeetingsInBackground failed:', e)))
         } catch (e) {
           mainLog.warn('[boot] reconcileMeetingsInBackground failed:', e)
         }
         // Registered here rather than alongside the timer so safe start skips the recurring brain work too,
         // not just the single resume — the reconcile tick reads the same index.json.
-        trackTimer(setInterval(reconcileMeetingsInBackground, BRAIN_RECONCILE_MS))
+        trackTimer(setInterval(() => {
+          void reconcileMeetingsInBackground().catch((e) => mainLog.warn('[brain] reconcile tick failed:', e))
+        }, BRAIN_RECONCILE_MS))
         // Product cadence is three named slots (06:00, 12:00, 18:00 America/Toronto), not an hourly
         // consolidation poll. Catch up if Métis was closed across a slot; then arm the next timeout.
         try {
@@ -9723,9 +9824,7 @@ if (!app.requestSingleInstanceLock()) {
           mainLog.warn('[boot] wireIntelligenceIndexWork failed:', e)
         }
         try {
-          void catchUpIntelligenceIndexIfNeeded().catch((e) =>
-            mainLog.error('[intelligence-index] launch catch-up failed:', e)
-          )
+          bootWork.run('catchUpIntelligenceIndexIfNeeded', () => catchUpIntelligenceIndexIfNeeded().catch((e) => mainLog.error('[intelligence-index] launch catch-up failed:', e)))
         } catch (e) {
           mainLog.warn('[boot] catchUpIntelligenceIndexIfNeeded failed:', e)
         }
@@ -9736,7 +9835,7 @@ if (!app.requestSingleInstanceLock()) {
         }
         // Consolidation runs once per launch; the named slots own the recurring pass. Both are automatic triggers (infra/scheduler/policy.ts).
         try {
-          void runConsolidationIfDue().catch((e) => mainLog.warn('[brain] demoted consolidation check failed:', e))
+          bootWork.run('runConsolidationIfDue', () => runConsolidationIfDue().catch((e) => mainLog.warn('[brain] demoted consolidation check failed:', e)))
         } catch (e) {
           mainLog.warn('[boot] runConsolidationIfDue failed:', e)
         }

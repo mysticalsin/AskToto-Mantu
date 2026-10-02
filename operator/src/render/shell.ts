@@ -26,6 +26,7 @@ const NAV_ICON_BY_ID: Record<NavId, string> = {
   notifications: 'bell',
   keys: 'key-round',
   connectors: 'plug',
+  models: 'cpu',
   audit: 'scroll-text',
   settings: 'cog'
 }

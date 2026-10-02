@@ -952,9 +952,9 @@ export const Review = memo(function Review({
   const createOutlookDraft = async (): Promise<void> => {
     if (!followupText.trim()) return
     if (!outlook?.signedIn || !outlook.canDraft) {
-      setOutlookDraftLocalError(outlook?.signedIn
-        ? 'Outlook draft permission is not granted. Métis will not send mail. Use Open in Mail.'
-        : 'Connect Outlook in Settings → Calendar. Métis will not send mail.')
+      setOutlookDraftLocalError(
+        outlook?.signedIn ? 'Outlook draft permission is not granted. Métis will not send mail. Use Open in Mail.' : 'Connect Outlook in Settings → Calendar. Métis will not send mail.'
+      )
       return
     }
     const attempt = outlookDraftLifecycle.start(outlookDraftIntentSnapshot, (payload) =>
@@ -970,7 +970,7 @@ export const Review = memo(function Review({
     <div className="flex flex-col gap-3">
       {meetingMeta && (
         <div className="mb-0.5">
-          <div className="font-ui text-[15px] font-semibold text-[color:var(--color-ink)]">{meetingMeta.title}</div>
+          <div className="font-ui text-[15px] font-semibold text-[color:var(--color-ink)]" aria-label="Review meeting title">{meetingMeta.title}</div>
           <div className="mt-0.5 text-[12px] text-[color:var(--color-ink-3)]">{meetingMeta.date}</div>
         </div>
       )}
@@ -992,7 +992,7 @@ export const Review = memo(function Review({
               <span
                 className="rounded-full bg-white/[0.06] px-2 py-0.5"
                 title={`${s.youWords} of ${s.youWords + s.themWords} words · longest monologue ${formatDuration(s.longestMonologueSec)} · they asked ${s.themQuestions} question${s.themQuestions === 1 ? '' : 's'}`}
-                style={pct >= 70 ? { color: 'var(--color-warn, #fac775)' } : undefined}
+                style={pct >= 70 ? { color: 'var(--color-warn)' } : undefined}
               >
                 You spoke {pct}%
               </span>

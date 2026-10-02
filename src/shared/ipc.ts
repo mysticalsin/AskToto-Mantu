@@ -5,6 +5,9 @@ import { EntityKindSchema } from './brain'
 import { OPERATOR_LICENSE_MAX } from './operator-license'
 import { RECAP_STATUSES, recapStatusValidationError, type RecapStatus } from './recap-status'
 import { RENDERER_VIEWS } from './renderer-view'
+import { DEFAULT_PERMISSION_STATE, PermissionStateSchema } from './screen-permission'
+export type { PermissionStatus, PlatformPermissions, ScreenCaptureCheckResult } from './screen-permission'
+export { ScreenCaptureCheckPassSchema, ScreenCaptureCheckPayloadSchema, ScreenCaptureCheckResultSchema } from './screen-permission'
 
 /** The existing persisted meeting start is also its live audio owner. Never coerce or create a clock. */
 export const LiveMeetingStartedAtSchema = z.number().int().positive().max(8.64e15)
@@ -25,15 +28,8 @@ export type PreservedBrainIndexListResult = {
   copies: PreservedBrainIndexCopy[]
 }
 
-export const HistoryTraceSchema = z.object({ requestId: z.string().uuid(), sentAt: z.number().finite().positive() })
-export type HistoryTrace = z.infer<typeof HistoryTraceSchema>
-export const HistorySettledSchema = z.object({
-  requestId: z.string().uuid(),
-  outcome: z.enum(['ok', 'failed', 'discarded']),
-  ipcMs: z.number().finite().nonnegative(),
-  renderMs: z.number().finite().nonnegative().optional()
-})
-export type HistorySettled = z.infer<typeof HistorySettledSchema>
+export type { HistorySettled, HistoryTrace, HistoryTransition } from './history-trace'
+export { HistorySettledSchema, HistoryTraceSchema, HistoryTransitionSchema } from './history-trace'
 export const RendererCrashContextSchema = z.object({ view: z.enum(RENDERER_VIEWS), listening: z.boolean() })
 export type RendererCrashContext = z.infer<typeof RendererCrashContextSchema>
 export interface RendererCrashReport extends RendererCrashContext {
@@ -180,8 +176,10 @@ export const IPC = {
   recallList: 'recall:list',
   recallSearch: 'recall:search',
   historySettled: 'history:settled',
+  historyTransition: 'history:transition',
   recallOpen: 'recall:open',
   recallRead: 'recall:read',
+  recallHydration: 'recall:hydration', // main → renderer: an explicit open downloading one cloud-only meeting
   recallExportPlain: 'recall:export-plain', // user-initiated decrypted md copy of ONE meeting
   recallDelete: 'recall:delete',
   recallRename: 'recall:rename',
@@ -244,6 +242,10 @@ export const IPC = {
   permissionsGet: 'permissions:get',
   permissionsOpenSettings: 'permissions:openSettings',
   permissionsRequestUpfront: 'permissions:requestUpfront',
+  // M2-0429 (main/ipc/screen-permission-ipc.ts): Repair, "It's already on", Show a duplicate copy in Finder.
+  permissionsRepairScreen: 'permissions:repairScreen',
+  permissionsAttestScreen: 'permissions:attestScreen',
+  permissionsRevealCopy: 'permissions:revealCopy',
   // Settings / overlay self-check: first pass is the OS probe; second pass is a real vision ask.
   // Result stays on this device — never forwarded to a teammate, CRM, or askStart overlay chat.
   screenCaptureCheck: 'permissions:screenCaptureCheck',
@@ -266,6 +268,9 @@ export const IPC = {
   // Live-meeting pre-warm (PLAN.md §4.4): a debounced transcript tail, fire-and-forget, so the sidecar's
   // per-slot KV cache stays hot between real suggest requests. See LocalPrewarmPayloadSchema.
   localPrewarm: 'local:prewarm',
+  // M2-0430: Apple engine status for Settings, and the renderer's content-free post-meeting spans.
+  localAppleEngineStatus: 'local:appleEngineStatus',
+  writeupSpan: 'writeup:span',
   cliDetect: 'cli:detect',
   cliSetup: 'cli:setup',
   cliTest: 'cli:test',
@@ -1520,7 +1525,9 @@ export const BaseSettingsSchema = z.object({
   operatorIntegrationsVersion: z.number().default(0),
   /** Epoch ms of the last successful heartbeat that carried entitlements. 0 = never — grace window
    *  (operator-entitlements.ts) treats this the same as "no snapshot at all". */
-  operatorEntitlementsAt: z.number().default(0)
+  operatorEntitlementsAt: z.number().default(0),
+  /** Main-owned Screen Recording history (M2-0429); see shared/screen-permission.ts. */
+  permissionState: PermissionStateSchema.default(DEFAULT_PERMISSION_STATE)
 })
 
 export const SettingsSchema = BaseSettingsSchema.refine(
@@ -1628,7 +1635,9 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
    *  restriction. The renderer uses it to filter the provider picker to approved vendors and to badge a
    *  blocked provider "restricted by your organization" — the SAME source the main process enforces at
    *  request time, so the UI can't offer a provider that every ask would then reject. */
-  allowedProviders: z.array(z.string()).nullable().default(null)
+  allowedProviders: z.array(z.string()).nullable().default(null),
+  modelPolicyCapabilities: z.record(z.string(), z.object({ provider: z.string(), model: z.string() })).default({}),
+  localSpeechPack: z.enum(['required', 'offered', 'blocked']).default('offered')
 })
 export type PublicSettings = z.infer<typeof PublicSettingsSchema>
 
@@ -1651,6 +1660,7 @@ export type SettingsPatch = Partial<
     | 'envKeys'
     | 'loginItemOpenAtLogin'
     | 'lastFailover'
+    | 'localSpeechPack'
   >
 >
 
@@ -1789,7 +1799,8 @@ export const DEFAULT_SETTINGS: Settings = {
   operatorTier: null,
   operatorEntitlements: null,
   operatorIntegrationsVersion: 0,
-  operatorEntitlementsAt: 0
+  operatorEntitlementsAt: 0,
+  permissionState: DEFAULT_PERMISSION_STATE
 }
 
 export const HOTKEY_ACTIONS: HotkeyAction[] = [
@@ -1885,12 +1896,6 @@ export interface ShortcutFailure {
   accel: string
 }
 
-export type PermissionStatus = 'granted' | 'denied' | 'unknown' | 'not-required'
-export interface PlatformPermissions {
-  microphone: PermissionStatus
-  screenRecording: PermissionStatus
-}
-
 export interface MeetingSummary {
   file: string
   title: string
@@ -1902,9 +1907,10 @@ export interface MeetingSummary {
   /** Task MI-5: frontmatter `confidential: true` — excludes this meeting from every published wiki
    *  surface (note card, entity timelines/current-facts, indexes). Undefined/false = not confidential. */
   confidential?: boolean
-  /** True for a real encrypted meeting that failed to decrypt on this device — listed as a locked
-   *  stub (no preview) so it's visible with a lock affordance instead of silently vanishing. */
+  /** True for a real encrypted meeting this device can't decrypt: a locked stub (no preview), never silently dropped. */
   locked?: boolean
+  notDownloaded?: boolean // bytes not on this device: listed by name, never read; an explicit open downloads it
+  unavailable?: boolean // could not be read right now (a failed read or a non-regular entry): listed by name
 }
 export interface RecallHit extends MeetingSummary {
   snippet: string
@@ -1924,21 +1930,6 @@ export const TestApiKeyPayloadSchema = z.object({
   provider: ProviderIdSchema,
   key: z.string()
 })
-
-export const ScreenCaptureCheckPassSchema = z.enum(['probe', 'vision'])
-export const ScreenCaptureCheckPayloadSchema = z.object({
-  pass: ScreenCaptureCheckPassSchema
-})
-export const ScreenCaptureCheckResultSchema = z.object({
-  ok: z.boolean(),
-  pass: ScreenCaptureCheckPassSchema,
-  backend: z.enum(['probe', 'local', 'api']).optional(),
-  backendLabel: z.string().max(200).optional(),
-  failedOver: z.boolean().optional(),
-  message: z.string().max(2000),
-  preview: z.string().max(200).optional()
-})
-export type ScreenCaptureCheckResult = z.infer<typeof ScreenCaptureCheckResultSchema>
 
 export interface TestKeyResponse {
   ok: boolean
@@ -2333,10 +2324,26 @@ export type LocalModelSummary = z.infer<typeof LocalModelSummarySchema>
  *  sent fire-and-forget from the renderer's instant-suggestions effect so the sidecar's per-slot KV cache
  *  stays hot between real suggest requests. The renderer already clips this to the same ~6000-char tail
  *  the suggest mode itself sends (llm/shared.ts's `.slice(-6000)`) before it ever reaches IPC; the 24000
- *  cap here is defense-in-depth against a compromised/malfunctioning renderer, not the real bound. */
-export const LocalPrewarmPayloadSchema = z.object({ text: z.string().min(1).max(24_000) })
+ *  cap here is defense-in-depth against a compromised/malfunctioning renderer, not the real bound.
+ *  M2-0430: `purpose: 'summary'` is the Stop-time warm of the summary slot. It carries the whole meeting
+ *  so far (the recap's own prefix), bounded by the 80,000-char local summary transcript cap. */
+export const LocalPrewarmPayloadSchema = z.union([
+  z.object({ text: z.string().min(1).max(24_000), purpose: z.literal('suggest').optional() }),
+  z.object({ text: z.string().min(1).max(80_000), purpose: z.literal('summary') })
+])
 export type LocalPrewarmPayload = z.infer<typeof LocalPrewarmPayloadSchema>
 
+/** Content-free post-meeting latency spans (M2-0430), measured in the renderer from the Stop click. */
+export const WRITEUP_SPANS = ['stop_to_transcript_saved', 'stop_to_first_recap_token', 'stop_to_recap_done'] as const
+export type WriteupSpan = typeof WRITEUP_SPANS[number]
+export const WriteupSpanPayloadSchema = z
+  .object({ span: z.enum(WRITEUP_SPANS), ms: z.number().int().min(0).max(24 * 60 * 60_000) })
+  .strict()
+export type WriteupSpanPayload = z.infer<typeof WriteupSpanPayloadSchema>
+
+/** Settings' view of Apple's on-device engine. 'unlicensed' needs the owner to accept the CLI terms. */
+export const APPLE_ENGINE_STATUSES = ['unsupported', 'disabled', 'available', 'unlicensed', 'unavailable'] as const
+export type AppleEngineStatus = typeof APPLE_ENGINE_STATUSES[number]
 
 // ─── Licensing (phone-home activation against a self-hosted license server; see main/license.ts) ──────
 export const LicenseActivatePayloadSchema = z.object({

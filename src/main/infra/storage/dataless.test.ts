@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -421,6 +421,19 @@ describe('win32 wire protocol (stand-in helper)', () => {
 /** Generous enough to absorb a cold hosted-runner powershell.exe spawn (observed ~10.5 s) with margin,
  *  without weakening WIN_PROBE_TIMEOUT_MS, the production budget every real install runs under. */
 const WIN_COLD_RUNNER_PROBE_TIMEOUT_MS = 25_000
+/** Bounds the untimed warm-up below; far above any observed cold start (~25 s worst case). */
+const WIN_WARM_UP_TIMEOUT_MS = 120_000
+
+// The cold start is paid here, outside the timed assertion: one throwaway PowerShell run pays the
+// first-spawn cost so the probe below runs against a warm image. Not a retry — the assertion still
+// runs exactly once, and a warm-up failure fails the suite instead of being swallowed.
+beforeAll(() => {
+  if (process.platform !== 'win32') return
+  execFileSync(WINDOWS_POWERSHELL, ['-NoProfile', '-NonInteractive', '-Command', '$null'], {
+    timeout: WIN_WARM_UP_TIMEOUT_MS - 5_000,
+    windowsHide: true
+  })
+}, WIN_WARM_UP_TIMEOUT_MS)
 
 it.runIf(process.platform === 'win32')(
   'win32: one PowerShell query reports FILE_ATTRIBUTE_OFFLINE, keeps input order, decodes a non-ASCII path and answers unknown for a missing path (real PowerShell, cold-runner budget)',

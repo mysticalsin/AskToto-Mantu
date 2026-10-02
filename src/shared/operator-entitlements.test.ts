@@ -176,6 +176,29 @@ describe('parseOperatorIntegrationsResponse', () => {
     expect(parsed?.integrations).toHaveLength(2)
     expect(parsed?.integrations[0].kind).toBe('hubspot')
   })
+  it('reads a brokered row as its gateway endpoint and token', () => {
+    const parsed = parseOperatorIntegrationsResponse({
+      ok: true,
+      version: 2,
+      integrations: [
+        {
+          id: 'i3',
+          kind: 'custom-mcp',
+          label: 'Brokered MCP',
+          transport: 'mcp',
+          mode: 'brokered',
+          endpoint: '/v1/mcp/i3',
+          gatewayToken: 'payload.signature',
+          scopes: {}
+        }
+      ]
+    })
+    expect(parsed?.integrations[0]).toMatchObject({
+      id: 'i3',
+      baseUrl: '/v1/mcp/i3',
+      credential: 'payload.signature'
+    })
+  })
   it('drops a malformed entry but keeps the rest', () => {
     const parsed = parseOperatorIntegrationsResponse({
       ok: true,

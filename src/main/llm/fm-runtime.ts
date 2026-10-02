@@ -26,6 +26,8 @@ import { existsSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { auditLog, mainLog } from '../logger'
 import { observeSidecar } from '../infra/observability/sidecar-events'
+import { recordSidecarSupervisedSpawned } from '../infra/process/registry'
+import { markSidecarProcessUsable, spawnSidecarProcess, stopSidecarProcess } from '../infra/process/supervisor'
 import { errMsg } from './shared'
 
 export const FM_BINARY_PATH = '/usr/bin/fm'
@@ -33,6 +35,9 @@ export const FM_BINARY_PATH = '/usr/bin/fm'
 export const FM_SYSTEM_MODEL = 'system'
 
 export type FmRuntimeState = 'stopped' | 'starting' | 'running' | 'unavailable'
+
+/** Availability reason while the Foundation Models CLI licence has not been accepted on this Mac. */
+export const FM_UNLICENSED_REASON = 'cli-license-not-accepted'
 
 export interface FmAvailability {
   available: boolean
@@ -86,6 +91,11 @@ export function stripAnsi(text: string): string {
  */
 export function parseAvailability(output: string): FmAvailability {
   const text = stripAnsi(output)
+  // Until the owner accepts the CLI terms (`sudo fm license`), `fm available` prints only the legal notice.
+  // That is a known state with a known owner action, not an unrecognized format.
+  if (/have not agreed to the foundation models cli legal notice/i.test(text)) {
+    return { available: false, reason: FM_UNLICENSED_REASON }
+  }
   const unavailable = /system model unavailable:?\s*([\w.-]+)?/i.exec(text)
   if (unavailable) return { available: false, reason: unavailable[1] ?? 'unknown' }
   const systemLine = text
@@ -283,9 +293,16 @@ function registerCrash(): void {
 async function spawnAndWaitHealthy(generation: number): Promise<void> {
   const targetPort = await findFreePort()
   if (generation !== startGeneration) throw new Error('fm runtime start cancelled')
-  const proc = spawn(FM_BINARY_PATH, buildServeArgs(targetPort), {
+  const serveArgs = buildServeArgs(targetPort)
+  const launched = spawnSidecarProcess('fm-serve', FM_BINARY_PATH, serveArgs, {
     stdio: ['ignore', 'pipe', 'pipe']
-  })
+  }, auditLog)
+  const proc = launched.child
+  // A supervised launch registers the wrapper and the fm process it spawns so the reaper still covers them.
+  const { wrapperLaunch } = launched
+  const supervisedRecorded: Promise<void> = wrapperLaunch
+    ? recordSidecarSupervisedSpawned('fm-serve', proc, wrapperLaunch, { executable: FM_BINARY_PATH, args: serveArgs })
+    : Promise.resolve()
   child = proc
   observeSidecar('fm-serve', proc, auditLog)
   let exited = false
@@ -319,12 +336,14 @@ async function spawnAndWaitHealthy(generation: number): Promise<void> {
     await pollHealth(targetPort, generation, () => exited)
   } catch (err) {
     if (child === proc) {
-      if (!proc.killed) proc.kill('SIGKILL')
+      stopSidecarProcess(proc)
       child = null
     }
     throw exited ? new Error(`fm serve exited before becoming healthy (${exitDetail})`) : err
   }
+  await supervisedRecorded
   if (generation !== startGeneration || child !== proc) throw new Error('fm runtime start cancelled')
+  markSidecarProcessUsable(proc)
   port = targetPort
 }
 
@@ -373,7 +392,7 @@ export function stop(): void {
   clearIdleTimer()
   const wasUp = state === 'running' || state === 'starting'
   startGeneration++
-  if (child && !child.killed) child.kill('SIGKILL')
+  if (child && !child.killed) stopSidecarProcess(child)
   child = null
   port = null
   if (state !== 'unavailable') state = 'stopped'

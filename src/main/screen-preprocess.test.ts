@@ -38,8 +38,11 @@ function makeHarness(init?: {
     /** Display the capture actually came from, and the display the user is looking at right now. */
     dispId: 1,
     currentDisplayId: 1,
-    displayMismatch: false
+    displayMismatch: false,
+    /** When set, every capture rejects with this message (a permission that is not in effect). */
+    captureError: null as string | null
   }
+  const audits: { event: string; data?: Record<string, unknown> }[] = []
   let ocrCalls = 0
   let shots = 0
   let currentWin: ForegroundInfo | null = null
@@ -60,6 +63,7 @@ function makeHarness(init?: {
     // Recording grant is still `not-determined` is what registers the app with TCC (MQA-209).
     getScreenshot: async () => {
       shots++
+      if (state.captureError) throw new Error(state.captureError)
       return {
         image: state.image,
         width: 1280,
@@ -105,7 +109,11 @@ function makeHarness(init?: {
       init?.screenCaptureGranted === undefined ? undefined : () => state.screenCaptureGranted,
     fetchImpl,
     now: () => clock,
-    log: () => {}
+    log: () => {},
+    audit: (event: string, data?: Record<string, unknown>) => {
+      audits.push({ event, data })
+    },
+    platform: 'darwin'
   } as ScreenPreprocessDeps & { allowSpeculativeLocalWork?: () => boolean }
 
   const sp = createScreenPreprocess(deps)
@@ -125,6 +133,7 @@ function makeHarness(init?: {
     fetchCalls: () => fetchCalls,
     ocrCalls: () => ocrCalls,
     shots: () => shots,
+    audits,
     peek: () => sp._test.peekCache()
   }
 }
@@ -541,5 +550,84 @@ describe('createScreenPreprocess — the description is bound to the display it 
     await h.sp._test.describeForWindow('w1')
     expect(h.peek()).toBeNull()
     expect(h.fetchCalls()).toBe(0) // and no inference is spent describing it
+  })
+})
+
+/**
+ * M2-0429 — a background capture that keeps failing used to be retried on every 6 s tick, each one a fresh
+ * capture.failed audit line (thousands a day). It now backs off exponentially and latches after 5 permission
+ * failures, with one screen.preprocess.suspended audit per streak.
+ */
+describe('createScreenPreprocess — failing captures back off instead of storming (M2-0429)', () => {
+  const PERMISSION_OFF =
+    'Screen Recording permission is off for Métis. Enable it in System Settings → Privacy & Security → Screen Recording, then restart Métis.'
+
+  it('100 ticks of a denied capture make at most 5 attempts and one suspended audit', async () => {
+    const h = makeHarness()
+    h.sp.refresh()
+    h.setWindow('w1')
+    h.state.captureError = PERMISSION_OFF
+    for (let i = 0; i < 100; i++) {
+      await h.sp._test.describeForWindow('w1')
+      h.advance(6_000)
+    }
+    expect(h.shots()).toBe(5)
+    const suspended = h.audits.filter((a) => a.event === 'screen.preprocess.suspended')
+    expect(suspended).toEqual([
+      { event: 'screen.preprocess.suspended', data: { failures: 5, reason: 'permission', latched: true } }
+    ])
+  })
+
+  it('a success resets the streak, so the next failure is retried after 6 s again', async () => {
+    const h = makeHarness()
+    h.sp.refresh()
+    h.setWindow('w1')
+    h.state.captureError = PERMISSION_OFF
+    await h.sp._test.describeForWindow('w1')
+    h.advance(6_000)
+    h.state.captureError = null
+    await h.sp._test.describeForWindow('w1')
+    expect(h.shots()).toBe(2)
+    h.state.captureError = PERMISSION_OFF
+    h.advance(6_000)
+    await h.sp._test.describeForWindow('w1')
+    h.advance(6_000)
+    await h.sp._test.describeForWindow('w1')
+    expect(h.shots()).toBe(4)
+  })
+
+  it('a settings change clears the latch; a refresh that changes nothing it reads does not', async () => {
+    const h = makeHarness()
+    h.sp.refresh()
+    h.setWindow('w1')
+    h.state.captureError = PERMISSION_OFF
+    for (let i = 0; i < 20; i++) {
+      await h.sp._test.describeForWindow('w1')
+      h.advance(700_000)
+    }
+    expect(h.shots()).toBe(5)
+    h.sp.refresh() // e.g. an overlay-position write: nothing this engine reads changed
+    await h.sp._test.describeForWindow('w1')
+    expect(h.shots()).toBe(5)
+    h.state.backgroundScreenContext = false
+    h.sp.refresh()
+    h.state.backgroundScreenContext = true
+    h.sp.refresh()
+    h.setWindow('w1')
+    await h.sp._test.describeForWindow('w1')
+    expect(h.shots()).toBe(6)
+  })
+
+  it('Private View is a deliberate block, never counted as a failure', async () => {
+    const h = makeHarness()
+    h.sp.refresh()
+    h.setWindow('w1')
+    h.state.captureError = 'Private View is on — screen capture is blocked. Turn it off to let Métis see your screen.'
+    for (let i = 0; i < 10; i++) {
+      await h.sp._test.describeForWindow('w1')
+      h.advance(6_000)
+    }
+    expect(h.shots()).toBe(10)
+    expect(h.audits.some((a) => a.event === 'screen.preprocess.suspended')).toBe(false)
   })
 })

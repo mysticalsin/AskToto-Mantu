@@ -9,6 +9,9 @@ mac-show: Totos-Mac / PR 66
 
 # Onboarding Starfield Close bed
 
+> **Superseded.** The Starfield bed no longer mounts after Next; the onboarding bed is the KineticGrid. Read
+> [`ONBOARDING-KINETIC-GRID.md`](ONBOARDING-KINETIC-GRID.md) and the onboarding order in [`DESIGN.md`](DESIGN.md). Kept for lineage; do not implement.
+
 **Status:** Draft — implement-exactly, ready-to-merge: no until Devon Mac-shows again (see
 frontmatter). Superseded after the lady beat by `ONBOARDING-KINETIC-GRID.md` (see `DESIGN.md` §
 Starfield Close).

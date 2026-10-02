@@ -4,6 +4,10 @@ Everything a Mac needs to produce a Métis `.dmg`, in order, with nothing to fig
 Written 2026-08-18 against `v1.5.4` and verified command-by-command from the scripts themselves —
 every claim below was checked, not assumed.
 
+> **Historical as a version claim.** Its version-specific statements were last revalidated for `1.6.0`. Releases are now built in
+> CI by `release.yml`; how a build reaches users is in [`runbooks/update.md`](runbooks/update.md) and the release checklist is
+> [`ENTERPRISE_RELEASE.md`](ENTERPRISE_RELEASE.md). Tests and the app are not run on a developer Mac (see `AGENTS.md`).
+
 **Revalidated 2026-08-19 for `1.6.0` (`main` @ `f938aeb`).** What was re-checked, and how:
 
 - Every one of the 17 scripts the mac chains invoke (`predist`, `dist`, `dist:local`,
