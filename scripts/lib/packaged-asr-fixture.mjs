@@ -73,44 +73,76 @@ export function fixtureProblem(bytes) {
   return null
 }
 
+/** The fixture's size, format, duration and energy as plain numbers, or its size and why it is unreadable. */
+export function fixtureFacts(bytes) {
+  try {
+    const { fileBytes, sampleRate, channels, bitsPerSample, dataBytes, declaredDataBytes, durationMs, rms } = inspectWav(bytes)
+    return { fileBytes, sampleRate, channels, bitsPerSample, dataBytes, declaredDataBytes, durationMs, rms: Number(rms.toFixed(4)) }
+  } catch (error) {
+    return { fileBytes: Buffer.byteLength(bytes), error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+/** One line for fixtureFacts(): size, format, duration and energy. Content-free. */
+function formatFixture(facts) {
+  if (facts.error !== undefined) return `${facts.fileBytes} bytes, unreadable WAV (${facts.error})`
+  return `${facts.fileBytes} bytes, ${facts.sampleRate} Hz ${facts.bitsPerSample}-bit ${facts.channels}ch, ` +
+    `${facts.durationMs} ms, RMS ${facts.rms.toFixed(4)}`
+}
+
 /** One line describing the fixture: size, format, duration and energy. Content-free. */
 export function describeFixture(bytes) {
-  try {
-    const info = inspectWav(bytes)
-    return `${info.fileBytes} bytes, ${info.sampleRate} Hz ${info.bitsPerSample}-bit ${info.channels}ch, ` +
-      `${info.durationMs} ms, RMS ${info.rms.toFixed(4)}`
-  } catch (error) {
-    return `${Buffer.byteLength(bytes)} bytes, unreadable WAV (${error instanceof Error ? error.message : String(error)})`
-  }
+  return formatFixture(fixtureFacts(bytes))
 }
 
 /** Main-log tags that record the import pipeline, its ASR helpers and its storage reads. */
 const PIPELINE_LOG = /\[(?:import|import-jobs|import-decoder|whisper-host|whisper-import|parakeet|parakeet-host|asr-assets|asr-model|dataless|storage)\]/
 
 /**
- * What the gate saw of one import, for the failure report: the job's state and error, the recall read's
- * ok/error and line count, the fixture, every native ASR request and result after `afterSequence`, and the
- * pipeline's main-log lines. Transcript text is reported only as a character count.
+ * What the gate saw of one import, as a plain JSON-serializable record (the shape a content-free JSON
+ * report copies): the job's state and error, the recall read's ok/error and line count (null when it never
+ * ran), the fixture (fixtureFacts() or a one-line summary), every native ASR request and result after
+ * `afterSequence`, and the pipeline's main-log lines. Transcript text is reported only as a character count.
  */
-export function importDiagnostics({ engine, job, meeting, fixture, observed, afterSequence, mainLog }) {
-  const out = [
-    `${engine} job: state=${job?.state ?? 'missing'} error=${JSON.stringify(job?.error ?? null)} file=${job?.file ? 'yes' : 'no'}`,
-    `${engine} recallRead: ${meeting === undefined ? 'not called' : `ok=${meeting?.ok === true} error=${JSON.stringify(meeting?.error ?? null)} lines=${meeting?.lines?.length ?? 0}`}`,
-    `fixture: ${fixture}`
-  ]
-  const requests = (observed?.hosts ?? []).flatMap((host) =>
+export function importReport({ engine, job, meeting, fixture, observed, afterSequence, mainLog }) {
+  const asrRequests = (observed?.hosts ?? []).flatMap((host) =>
     (host.requests ?? [])
       .filter((request) => request.sequence > afterSequence)
-      .map((request) => ({ host, request }))
+      .map((request) => ({
+        host: host.serviceName ?? null,
+        pid: host.pid ?? null,
+        id: request.id,
+        sequence: request.sequence,
+        pcmBytes: request.pcmBytes ?? null,
+        ...(request.error ? { outcome: 'error', error: request.error }
+          : request.complete ? { outcome: 'result', resultChars: String(request.text ?? '').length } : { outcome: 'pending' })
+      }))
   )
-  if (!requests.length) out.push('asr requests: none observed')
-  for (const { host, request } of requests) {
-    const outcome = request.error ? `error=${JSON.stringify(request.error)}`
-      : request.complete ? `result chars=${String(request.text ?? '').length}` : 'pending'
-    out.push(`asr request: host=${host.serviceName ?? 'unknown'} pid=${host.pid ?? 'unknown'} id=${request.id} seq=${request.sequence} pcmBytes=${request.pcmBytes ?? 'none'} ${outcome}`)
+  return {
+    engine,
+    job: { state: job?.state ?? 'missing', error: job?.error ?? null, file: !!job?.file },
+    recallRead: meeting === undefined ? null : { ok: meeting?.ok === true, error: meeting?.error ?? null, lines: meeting?.lines?.length ?? 0 },
+    fixture,
+    asrRequests,
+    mainLog: String(mainLog ?? '').split(/\r?\n/).filter((line) => PIPELINE_LOG.test(line))
   }
-  const logLines = String(mainLog ?? '').split(/\r?\n/).filter((line) => PIPELINE_LOG.test(line))
-  if (!logLines.length) out.push('main log: no import/ASR/storage lines')
-  for (const line of logLines) out.push(`main log: ${line}`)
+}
+
+/** importReport() as the gate's failure lines, one fact per line. */
+export function importDiagnostics(input) {
+  const { engine, job, recallRead, fixture, asrRequests, mainLog } = importReport(input)
+  const out = [
+    `${engine} job: state=${job.state} error=${JSON.stringify(job.error)} file=${job.file ? 'yes' : 'no'}`,
+    `${engine} recallRead: ${recallRead === null ? 'not called' : `ok=${recallRead.ok} error=${JSON.stringify(recallRead.error)} lines=${recallRead.lines}`}`,
+    `fixture: ${typeof fixture === 'string' ? fixture : formatFixture(fixture)}`
+  ]
+  if (!asrRequests.length) out.push('asr requests: none observed')
+  for (const request of asrRequests) {
+    const outcome = request.outcome === 'error' ? `error=${JSON.stringify(request.error)}`
+      : request.outcome === 'result' ? `result chars=${request.resultChars}` : 'pending'
+    out.push(`asr request: host=${request.host ?? 'unknown'} pid=${request.pid ?? 'unknown'} id=${request.id} seq=${request.sequence} pcmBytes=${request.pcmBytes ?? 'none'} ${outcome}`)
+  }
+  if (!mainLog.length) out.push('main log: no import/ASR/storage lines')
+  for (const line of mainLog) out.push(`main log: ${line}`)
   return out
 }

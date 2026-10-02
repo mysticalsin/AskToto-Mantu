@@ -50,7 +50,7 @@ import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { assertPackagedAsrEvidence, installAsrObserver } from './lib/packaged-asr-evidence.mjs'
-import { describeFixture, fixtureProblem, importDiagnostics } from './lib/packaged-asr-fixture.mjs'
+import { describeFixture, fixtureFacts, fixtureProblem, importDiagnostics, importReport } from './lib/packaged-asr-fixture.mjs'
 
 const root = resolve(process.cwd())
 const argv = process.argv.slice(2)
@@ -120,7 +120,7 @@ if (fixtureFault) {
   console.error(`[check:packaged-asr] FAIL — harness fault: the SAPI fixture is unusable twice (${fixtureFault}).`)
   process.exit(1)
 }
-const fixtureSummary = describeFixture(readFileSync(wavPath))
+const fixture = fixtureFacts(readFileSync(wavPath))
 console.log(`[check:packaged-asr]   fixture: ${wavPath}`)
 
 // ── 2. Launch the packaged app under Playwright's Electron driver, isolated profile. ───────────────
@@ -216,13 +216,14 @@ for (const engine of ENGINES) {
   let job = started
   let meeting
   // Every failure after the import starts first prints what the gate saw of it (content-free), so a red
-  // run separates a product fault (job, read-back, native ASR) from a harness one (fixture) by itself.
+  // run separates a product fault (job, read-back, native ASR) from a harness one (fixture) by itself. The
+  // same facts follow as one JSON line, the record a content-free JSON report copies.
   const failImport = async (reason) => {
     const observed = await app.evaluate(() => globalThis.__metisPackagedAsrGate).catch(() => undefined)
     const mainLog = existsSync(mainLogPath) ? readFileSync(mainLogPath, 'utf8').slice(logOffset) : ''
-    for (const line of importDiagnostics({ engine, job, meeting, fixture: fixtureSummary, observed, afterSequence, mainLog })) {
-      console.error(`[check:packaged-asr]   ${line}`)
-    }
+    const seen = { engine, job, meeting, fixture, observed, afterSequence, mainLog }
+    for (const line of importDiagnostics(seen)) console.error(`[check:packaged-asr]   ${line}`)
+    console.error(`[check:packaged-asr]   report: ${JSON.stringify(importReport(seen))}`)
     return fail(reason)
   }
   while (Date.now() < jobDeadline) {

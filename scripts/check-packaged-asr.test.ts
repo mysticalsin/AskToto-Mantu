@@ -6,8 +6,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { assertPackagedAsrEvidence, installAsrObserver } from './lib/packaged-asr-evidence.mjs'
 import {
   describeFixture,
+  fixtureFacts,
   fixtureProblem,
   importDiagnostics,
+  importReport,
   inspectWav,
   MIN_FIXTURE_DURATION_MS,
   MIN_FIXTURE_RMS
@@ -312,5 +314,65 @@ describe('M2-0445 packaged-ASR failure report', () => {
     expect(loop).toMatch(/importDiagnostics\(/)
     expect(loop).not.toMatch(/return fail\(`/)
     expect(loop).toMatch(/catch \(error\) \{\s+return failImport\(/)
+  })
+})
+
+describe('M2-0445 packaged-ASR failure report as a JSON record', () => {
+  const fixtureBytes = wav(3_000, 0.2)
+  const seen = {
+    engine: 'whisper',
+    job: { state: 'done', file: 'meeting.md' },
+    meeting: { ok: true, lines: [] },
+    fixture: fixtureFacts(fixtureBytes),
+    observed: {
+      sequence: 2,
+      hosts: [{
+        serviceName: 'metis-whisper-import', pid: 42,
+        requests: [
+          { id: 1, sequence: 1, pcmBytes: 64, complete: true, text: 'earlier import' },
+          { id: 2, sequence: 2, pcmBytes: 128_000, complete: true, text: 'Synthetic decoded speech.' }
+        ]
+      }]
+    },
+    afterSequence: 1,
+    mainLog: '[info] [import] job started\n[info] [renderer] Synthetic decoded speech.'
+  }
+
+  it('measures the fixture as numbers: size, format, duration and energy', () => {
+    expect(fixtureFacts(fixtureBytes)).toEqual({
+      fileBytes: fixtureBytes.length, sampleRate: 22_050, channels: 1, bitsPerSample: 16,
+      dataBytes: 132_300, declaredDataBytes: 132_300, durationMs: 3_000, rms: expect.closeTo(0.1414, 3)
+    })
+    expect(fixtureFacts(Buffer.from('not a wave file'))).toEqual({ fileBytes: 15, error: 'not a RIFF/WAVE file' })
+  })
+
+  it('records job state, read-back ok and line count, fixture, this job\'s ASR requests and pipeline log', () => {
+    const report = importReport(seen)
+    expect(report).toEqual({
+      engine: 'whisper',
+      job: { state: 'done', error: null, file: true },
+      recallRead: { ok: true, error: null, lines: 0 },
+      fixture: seen.fixture,
+      asrRequests: [{ host: 'metis-whisper-import', pid: 42, id: 2, sequence: 2, pcmBytes: 128_000, outcome: 'result', resultChars: 25 }],
+      mainLog: ['[info] [import] job started']
+    })
+    expect(JSON.parse(JSON.stringify(report))).toEqual(report)
+    expect(JSON.stringify(report)).not.toContain('Synthetic')
+    expect(importReport({ ...seen, meeting: undefined }).recallRead).toBeNull()
+  })
+
+  it('the text lines render the same record, with the fixture facts on one line', () => {
+    expect(importDiagnostics(seen).slice(0, 4)).toEqual([
+      'whisper job: state=done error=null file=yes',
+      'whisper recallRead: ok=true error=null lines=0',
+      `fixture: ${describeFixture(fixtureBytes)}`,
+      'asr request: host=metis-whisper-import pid=42 id=2 seq=2 pcmBytes=128000 result chars=25'
+    ])
+  })
+
+  it('the gate prints the JSON record on every post-start failure', () => {
+    const failImport = source.slice(source.indexOf('const failImport'), source.indexOf('while (Date.now() < jobDeadline)'))
+    expect(failImport).toMatch(/report: \$\{JSON\.stringify\(importReport\(seen\)\)\}/)
+    expect(source).toMatch(/const fixture = fixtureFacts\(readFileSync\(wavPath\)\)/)
   })
 })
