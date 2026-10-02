@@ -75,7 +75,7 @@ describe('M2-0008 freeze repro workflow', () => {
       workflow.lastIndexOf('      - name: Run the M2-0194 attribution bundle check'),
       workflow.lastIndexOf('      - uses: actions/upload-artifact@')
     )
-    expect(workflow.match(/if \[\[ "\$\{\{ inputs\.mode \}\}" == hosted-live \]\]; then/g)).toHaveLength(2)
+    expect(workflow.match(/if \[\[ "\$\{\{ inputs\.mode \}\}" == hosted-live \]\]; then/g)).toHaveLength(4)
     expect(m2_0008Mac.match(/--hosted-live/g)).toHaveLength(1)
     expect(m2_0008Mac).toContain('--qa-host-label macos-latest')
     expect(m2_0008Mac.match(/--dry-run/g)).toHaveLength(1)
@@ -83,9 +83,12 @@ describe('M2-0008 freeze repro workflow', () => {
     expect(m2_0008Win).toContain('--qa-host-label windows-latest')
     expect(m2_0008Win.match(/--dry-run/g)).toHaveLength(1)
     expect(m2_0194Mac.match(/--hosted-live/g)).toHaveLength(1)
-    expect(m2_0194Win.match(/--hosted-live/g)).toBeNull()
+    expect(m2_0194Mac).toContain('--qa-host-label macos-latest')
+    expect(m2_0194Mac.match(/--dry-run/g)).toHaveLength(1)
+    expect(m2_0194Win.match(/--hosted-live/g)).toHaveLength(1)
+    expect(m2_0194Win).toContain('--qa-host-label windows-latest')
     expect(m2_0194Win.match(/--dry-run/g)).toHaveLength(1)
-    expect(workflow.match(/--hosted-live/g)).toHaveLength(3)
+    expect(workflow.match(/--hosted-live/g)).toHaveLength(4)
   })
 })
 
@@ -100,6 +103,19 @@ describe('M2-0194 QA candidate mode of the freeze repro workflow', () => {
     expect(workflow).not.toContain('secrets.')
   })
 
+  it('refuses candidate runs that are not successful workflow_dispatch qa-candidate.yml runs on main before download', () => {
+    expect(workflow.match(/gh api "repos\/\$GITHUB_REPOSITORY\/actions\/runs\/\$CANDIDATE_RUN"/g)).toHaveLength(2)
+    expect(workflow.match(/path: "\.github\/workflows\/qa-candidate\.yml"/g)).toHaveLength(2)
+    expect(workflow.match(/event: "workflow_dispatch"/g)).toHaveLength(2)
+    expect(workflow.match(/head_branch: "main"/g)).toHaveLength(2)
+    expect(workflow.match(/status: "completed"/g)).toHaveLength(2)
+    expect(workflow.match(/conclusion: "success"/g)).toHaveLength(2)
+    const mac = workflow.slice(workflow.indexOf('  macos:'), workflow.indexOf('  windows:'))
+    const win = workflow.slice(workflow.indexOf('  windows:'))
+    expect(mac.indexOf('Refuse non-main qa-candidate runs')).toBeLessThan(mac.indexOf('Download the QA candidate macOS installer'))
+    expect(win.indexOf('Refuse non-main qa-candidate runs')).toBeLessThan(win.indexOf('Download the QA candidate Windows installer'))
+  })
+
   it('checks the candidate hash before anything is installed, and fails the job on a mismatch', () => {
     const mac = workflow.slice(workflow.indexOf('  macos:'), workflow.indexOf('  windows:'))
     const win = workflow.slice(workflow.indexOf('  windows:'))
@@ -112,11 +128,12 @@ describe('M2-0194 QA candidate mode of the freeze repro workflow', () => {
 
   it('emits and checks the M2-0194 bundle only in candidate mode and keeps the main-only guard', () => {
     expect(workflow.match(/--candidate-run "\$CANDIDATE_RUN"/g)).toHaveLength(2)
+    expect(workflow.match(/--build-run-id "\$CANDIDATE_RUN"/g)).toHaveLength(2)
     expect(workflow.match(/node scripts\/evidence\/check\.mjs --ticket M2-0194 --bundle out\/m2-0194-freeze-repro/g)).toHaveLength(2)
     expect(workflow).toContain('name: m2-0194-freeze-repro-macos')
     expect(workflow).toContain('name: m2-0194-freeze-repro-windows')
     expect(workflow.match(/if: inputs\.candidate_run == ''/g)).toHaveLength(2)
-    expect(workflow.match(/if: inputs\.candidate_run != ''/g)).toHaveLength(4)
+    expect(workflow.match(/if: inputs\.candidate_run != ''/g)).toHaveLength(6)
     for (const use of workflow.match(/uses: [^\n]+/g) ?? []) expect(use).toMatch(/@[0-9a-f]{40} #/)
   })
 })

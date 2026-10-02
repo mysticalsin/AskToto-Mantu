@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { EXCERPT_FILES, excerptOf, excerptRows, stallBundleNames, writeAttributionBundle } from './attribution-bundle.mjs'
+import { EXCERPT_FILES, STALLS_FILE, excerptOf, excerptRows, stallBundleNames, writeAttributionBundle } from './attribution-bundle.mjs'
 
 const BOOT = '0f8fad5b-d9cb-469f-a165-70867728950e'
 const jsonl = (rows: object[]): string => rows.map((row) => `${JSON.stringify(row)}\n`).join('')
@@ -10,9 +10,9 @@ const jsonl = (rows: object[]): string => rows.map((row) => `${JSON.stringify(ro
 describe('M2-0194 attribution excerpts', () => {
   it('assigns each attribution event to exactly one excerpt and ignores the rest', () => {
     expect(excerptOf('app.stall')).toBe('stall')
-    expect(excerptOf('app.stall.summary')).toBe('stall')
+    expect(excerptOf('app.stall.summary')).toBeNull()
     expect(excerptOf('app.stall.sampled')).toBe('sampler')
-    expect(excerptOf('app.stall.sample_failed')).toBe('sampler')
+    expect(excerptOf('app.stall.sample_failed')).toBeNull()
     expect(excerptOf('reveal')).toBe('reveal')
     expect(excerptOf('sidecar.spawn')).toBe('sidecar')
     expect(excerptOf('sidecar.reaped')).toBe('sidecar')
@@ -45,18 +45,23 @@ describe('M2-0194 attribution excerpts', () => {
       writeFileSync(
         join(profile, 'logs', 'audit.log'),
         jsonl([
-          { event: 'app.stall.sampled', bootId: BOOT, stalledMs: 31000, bundle: name },
+          { event: 'app.stall.sampled', row: 'row-1-history-open', tMs: 10, bootId: BOOT, stalledMs: 31000, bundle: name },
           { event: 'reveal', reason: 'activate', outcome: 'shown' },
           { event: 'sidecar.spawn', name: 'asr', pid: 7 },
-          { event: 'app.stall.summary', count: 1 }
+          { event: 'app.stall', row: 'row-1-history-open', tMs: 9, stalledMs: 31000 }
         ])
       )
+      mkdirSync(join(out, 'samples'), { recursive: true })
+      writeFileSync(join(out, 'samples', 'row-1-history-open-main.sample.txt'), '    1 main + 0 (Metis)\n')
       writeAttributionBundle({ profiles: [profile], out })
       const read = (file: string): string => readFileSync(join(out, file), 'utf8')
       expect(read(EXCERPT_FILES.sampler)).toContain('app.stall.sampled')
+      expect(read(EXCERPT_FILES.sampler)).not.toContain('bootId')
+      expect(read(EXCERPT_FILES.sampler)).not.toContain(name)
       expect(read(EXCERPT_FILES.reveal)).toContain('"outcome":"shown"')
       expect(read(EXCERPT_FILES.sidecar)).toContain('sidecar.spawn')
-      expect(read(EXCERPT_FILES.stall)).toContain('app.stall.summary')
+      expect(read(EXCERPT_FILES.stall)).toContain('app.stall')
+      expect(read(STALLS_FILE)).toContain('"frames":[{"symbol":"main","image":"Metis"}]')
       expect(JSON.parse(read('stall-bundle-names.json'))).toEqual({ names: [name] })
       expect(read('stall-bundle-names.json')).not.toContain('secret-frame')
     } finally {
@@ -70,6 +75,7 @@ describe('M2-0194 attribution excerpts', () => {
     try {
       writeAttributionBundle({ profiles: [join(out, 'missing')], out })
       for (const file of Object.values(EXCERPT_FILES)) expect(readFileSync(join(out, file), 'utf8')).toBe('')
+      expect(readFileSync(join(out, STALLS_FILE), 'utf8')).toBe('')
       expect(JSON.parse(readFileSync(join(out, 'stall-bundle-names.json'), 'utf8'))).toEqual({ names: [] })
     } finally {
       rmSync(out, { recursive: true, force: true })

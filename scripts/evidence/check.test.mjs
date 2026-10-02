@@ -576,22 +576,52 @@ function writeM2_0194Bundle(root, { environment = {}, leadAction } = {}) {
   const writeRows = (name, rows) => writeFileSync(join(root, name), rows.map((row) => JSON.stringify(row)).join('\n') + '\n')
   writeFileSync(join(root, 'README.md'), '# M2-0194\n')
   writeFileSync(join(root, 'M2-0194.lead-action.md'), leadAction ?? 'LEAD_ACTION: File the M2-0194 LIVE_VERIFIED record from this bundle.\n')
-  writeJson('environment.json', { ticket: 'M2-0194', artifact_sha256: 'a'.repeat(64), candidate_run: '123456', ...environment })
+  writeJson('environment.json', {
+    ticket: 'M2-0194',
+    artifact_sha256: 'a'.repeat(64),
+    candidate_run: '123456',
+    mode: 'hosted-live',
+    installed_variant: 'macos-dmg',
+    host: { label: 'macos-latest' },
+    ...environment
+  })
   writeJson('external-blockers.json', { ticket: 'M2-0194', blockers: [{ status: 'BLOCKED_EXTERNAL', unblock_step: 'Run on QA account.' }] })
   writeJson('stall-bundle-names.json', { names: [STALL_BUNDLE] })
   writeRows('matrix.jsonl', [
-    { row: 'row-1-history-open' },
-    { row: 'row-2-brain-status-blocked-brain' },
-    { row: 'row-3-macos-activate' },
-    { row: 'row-4-second-instance-reopen' },
+    { row: 'row-1-history-open', operator_result: 'pass', automatic: true },
+    { row: 'row-1-history-open', sampled: true, main_sample: true, renderer_samples: 1, renderers_selected_by: '--type=renderer' },
+    { row: 'row-2-brain-status-blocked-brain', operator_result: 'pass', automatic: true },
+    { row: 'row-2-brain-status-blocked-brain', sampled: true, main_sample: true, renderer_samples: 1, renderers_selected_by: '--type=renderer' },
+    { row: 'row-3-macos-activate', operator_result: 'pass', automatic: true },
+    { row: 'row-3-macos-activate', sampled: true, main_sample: true, renderer_samples: 1, renderers_selected_by: '--type=renderer' },
+    { row: 'row-4-second-instance-reopen', operator_result: 'pass', automatic: true },
+    { row: 'row-4-second-instance-reopen', sampled: true, main_sample: true, renderer_samples: 1, renderers_selected_by: '--type=renderer' },
     { row: 'row-5-dataless-brain-idle', fixture: 'dataless-brain-index' },
     { row: 'row-9-network-off-flapping', fixture: 'dataless-meeting' }
   ])
   writeRows('interrupt-results.jsonl', ['network-off', 'file-provider-cancel', 'process-signal'].map((interrupt) => ({ interrupt })))
-  writeRows('stall-excerpt.jsonl', [{ event: 'app.stall.summary', count: 1 }])
-  writeRows('sampler-excerpt.jsonl', [{ event: 'app.stall.sampled', stalledMs: 31000, bundle: STALL_BUNDLE }])
+  writeRows('stall-excerpt.jsonl', [{ event: 'app.stall', tMs: 1700000000000, stalledMs: 31000 }])
+  writeRows('sampler-excerpt.jsonl', [{ event: 'app.stall.sampled', tMs: 1700000000010, stalledMs: 31000 }])
   writeRows('reveal-excerpt.jsonl', [{ event: 'reveal', outcome: 'shown' }])
   writeRows('sidecar-excerpt.jsonl', [{ event: 'sidecar.spawn', name: 'asr' }])
+  writeRows('stalls.jsonl', [
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000000,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [{ symbol: 'main', image: 'Metis' }],
+      attribution: null
+    },
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000010,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [{ symbol: 'main', image: 'Metis' }],
+      attribution: null
+    }
+  ])
 }
 
 test('C30 M2-0194 bundle check requires the matrix, the four excerpts and stall bundle names only', () => {

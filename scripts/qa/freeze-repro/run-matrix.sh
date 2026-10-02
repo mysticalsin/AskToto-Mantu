@@ -32,7 +32,7 @@ Options:
   --implementer-model <id>     implementer model label for the evidence record
   --validator-model <id>       validator model label for the evidence record
   --candidate-run <id>         qa-candidate.yml run id that built the app under test; switches the bundle to the
-                               M2-0194 attribution shape (adds audit excerpts and stall-bundle names)
+                               M2-0194 attribution shape (adds audit excerpts, stalls.jsonl and stall-bundle names)
   --collect-diagnostic-reports explicit consent to collect matching Metis/AskToto .spin/.hang reports
   --dry-run                    create fixtures and reports without launching or sampling; if --app is provided,
                                record the app executable hash and NODE_OPTIONS fuse state
@@ -478,6 +478,9 @@ write_environment() {
     printf '  "artifact_sha256": %s,\n' "$(json_string "$ARTIFACT")"
     printf '  "build_run_id": %s,\n' "$(json_string "$BUILD_RUN_ID")"
     [[ -z "$CANDIDATE_RUN" ]] || printf '  "candidate_run": %s,\n' "$(json_string "$CANDIDATE_RUN")"
+    if [[ -n "$CANDIDATE_RUN" ]]; then
+      printf '  "installed_variant": %s,\n' "$(json_string "$([[ "${HOSTED_WINDOWS:-0}" == 1 || "$QA_HOST_LABEL" == windows-latest || "$APP" == *.exe ]] && echo windows-setup || echo macos-dmg)")"
+    fi
     printf '  "qa_account_asserted": %s,\n' "$QA_ACCOUNT"
     printf '  "dry_run": %s,\n' "$DRY_RUN"
     printf '  "app_executable_sha256": %s,\n' "$(json_string "${APP_EXE_SHA:-not-recorded}")"
@@ -953,6 +956,9 @@ EOF_LEAD_ACTION
 write_attribution_bundle() {
   stop_app
   node "$SCRIPT_DIR/attribution-bundle.mjs" --out "$OUT" --profile "$PROFILE" --profile "$IDLE_PROFILE"
+  if [[ -s "$OUT/stalls.jsonl" ]]; then
+    STALL_ATTRIBUTION_FAILURES=$(grep -c '"status":"FAIL"' "$OUT/stalls.jsonl" || true)
+  fi
   if [[ "$DRY_RUN" == 1 ]]; then
     cat > "$OUT/M2-0194.lead-action.md" <<EOF_LEAD_ACTION_0194_DRY
 LEAD_ACTION: Import this public dry-run bundle into the controlled program evidence chain only as M2-0194 LOCALLY_TESTED support for qa-candidate run $CANDIDATE_RUN (artifact sha256 $ARTIFACT). Do not file a live evidence record from this dry run; dispatch freeze-repro from main on macos-latest with --hosted-live for the live attribution record.
@@ -960,7 +966,7 @@ EOF_LEAD_ACTION_0194_DRY
     return
   fi
   cat > "$OUT/M2-0194.lead-action.md" <<EOF_LEAD_ACTION_0194
-LEAD_ACTION: Import this public bundle into the controlled program evidence chain: file the M2-0194 LIVE_VERIFIED record for qa-candidate run $CANDIDATE_RUN (artifact sha256 $ARTIFACT) from matrix.jsonl, interrupt-results.jsonl, the stall, sampler, reveal and sidecar excerpts, and stall-bundle-names.json. Rows listed in external-blockers.json are BLOCKED_EXTERNAL until they are run on the QA account.
+LEAD_ACTION: Import this public bundle into the controlled program evidence chain: file the M2-0194 LIVE_VERIFIED record for qa-candidate run $CANDIDATE_RUN (artifact sha256 $ARTIFACT) from matrix.jsonl, interrupt-results.jsonl, stalls.jsonl, the stall, sampler, reveal and sidecar excerpts, and stall-bundle-names.json. Rows listed in external-blockers.json are BLOCKED_EXTERNAL until they are run on the QA account.
 EOF_LEAD_ACTION_0194
 }
 
@@ -969,7 +975,7 @@ live_result() {
     printf 'PASS'
     return
   }
-  if (( SAMPLE_FAILURES > 0 || MATRIX_RESULT_FAILURES > 0 || INTERRUPT_RESULT_FAILURES > 0 )); then
+  if (( SAMPLE_FAILURES > 0 || STALL_ATTRIBUTION_FAILURES > 0 || MATRIX_RESULT_FAILURES > 0 || INTERRUPT_RESULT_FAILURES > 0 )); then
     printf 'FAIL'
     return
   fi
@@ -979,6 +985,7 @@ live_result() {
 live_failure_summary() {
   local -a reasons=()
   (( SAMPLE_FAILURES == 0 )) || reasons+=("required main and renderer samples")
+  (( STALL_ATTRIBUTION_FAILURES == 0 )) || reasons+=("required stall attribution samples")
   (( MATRIX_RESULT_FAILURES == 0 )) || reasons+=("required matrix rows exercised")
   (( INTERRUPT_RESULT_FAILURES == 0 )) || reasons+=("required interrupt checks exercised")
   local joined=""
@@ -1009,6 +1016,7 @@ QA_HOST_LABEL=""
 COLLECT_DIAGNOSTIC_REPORTS=0
 HOSTED_LIVE=0
 SAMPLE_FAILURES=0
+STALL_ATTRIBUTION_FAILURES=0
 MATRIX_RESULT_FAILURES=0
 INTERRUPT_RESULT_FAILURES=0
 LAUNCH_SETTLE_SECONDS="${M2_0008_CONTRACT_LAUNCH_SETTLE_SECONDS:-10}"
@@ -1175,9 +1183,9 @@ if [[ "$HOSTED_LIVE" == 1 ]]; then
   run_hosted_live_matrix
   write_fixture_manifest
   copy_diagnostic_reports "$STAMP"
-  RESULT=$(live_result)
   if [[ -n "$CANDIDATE_RUN" ]]; then
     write_attribution_bundle
+    RESULT=$(live_result)
     cat > "$OUT/README.md" <<EOF_HOSTED_ATTRIBUTION_README
 # M2-0194 Freeze Repro Attribution Bundle (hosted-live)
 
@@ -1188,6 +1196,7 @@ if [[ "$HOSTED_LIVE" == 1 ]]; then
 - Build run id: \`$BUILD_RUN_ID\`
 - Matrix rows (rows 1-4 automatic, rows 5 and 9 BLOCKED_EXTERNAL): \`matrix.jsonl\`
 - Attribution excerpts: \`stall-excerpt.jsonl\`, \`sampler-excerpt.jsonl\`, \`reveal-excerpt.jsonl\`, \`sidecar-excerpt.jsonl\`
+- Stall attribution rows: \`stalls.jsonl\`
 - Stall bundle file names only: \`stall-bundle-names.json\`
 - Interrupt checks for ADR-021/C10: \`interrupt-results.jsonl\`
 - Cloud-account blockers and their unblock step: \`external-blockers.json\`
@@ -1199,6 +1208,7 @@ EOF_HOSTED_ATTRIBUTION_README
     [[ "$RESULT" == PASS ]] || fail "live run did not produce PASS evidence: $(live_failure_summary)"
     exit 0
   fi
+  RESULT=$(live_result)
   write_hosted_summary
   write_evidence_records "$RESULT"
   write_lead_action
@@ -1288,7 +1298,7 @@ fi
 cat > "$OUT/README.md" <<EOF_README
 # $TICKET Freeze Repro Bundle
 
-$([[ -z "$CANDIDATE_RUN" ]] || printf -- '- QA candidate run: `%s`\n- Attribution excerpts: `stall-excerpt.jsonl`, `sampler-excerpt.jsonl`, `reveal-excerpt.jsonl`, `sidecar-excerpt.jsonl`\n- Stall bundle file names only: `stall-bundle-names.json`\n- Lead filing handoff: `M2-0194.lead-action.md`\n' "$CANDIDATE_RUN")
+$([[ -z "$CANDIDATE_RUN" ]] || printf -- '- QA candidate run: `%s`\n- Attribution excerpts: `stall-excerpt.jsonl`, `sampler-excerpt.jsonl`, `reveal-excerpt.jsonl`, `sidecar-excerpt.jsonl`\n- Stall attribution rows: `stalls.jsonl`\n- Stall bundle file names only: `stall-bundle-names.json`\n- Lead filing handoff: `M2-0194.lead-action.md`\n' "$CANDIDATE_RUN")
 
 - Artifact sha256: \`$ARTIFACT\`
 - Build run id: \`$BUILD_RUN_ID\`
