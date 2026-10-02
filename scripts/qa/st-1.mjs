@@ -10,24 +10,56 @@
  * kinds stand in for a cloud-only meetings-root file that blocks the thread reading it:
  *   - `fifo`: real FIFOs (POSIX only) placed as meeting and `.brain` files.
  *   - `dataless`: real evicted (dataless) files, read from `--cloud-dir`.
+ *   - `synthetic-dataless` (macOS only): the hosted-runner stand-in for a mostly-evicted cloud folder, in
+ *     the representative-profile shape (53 local placeholder meetings, 6 FIFO meetings, a FIFO
+ *     `.brain/index.json` and FIFO `.brain` entity files). It proves the main-thread and threadpool
+ *     guarantees on candidate bytes; SF_DATALESS detection on real evicted files is not measured here.
+ *     Its verdict uses the fifo row's refused-without-opening exercise rule.
  * `none` places no fixture: the control row, which tells a boot-time block apart from a fixture reader.
  *
  * Attribution evidence, reported and never judged: every sample's time since spawn, the loop's max since
- * the previous sample and the active libuv resources; a CPU profile of the first 90 s; the profile's
- * audit logs, stall bundles and this launch's main.log; which FIFOs had a reader; and, from +20 s,
- * History's own IPC round trip (recallList + brainStatus) measured in the main window. All of it lands in
- * the report directory (`--report-dir`, else the `--out` file's directory, else out/st-1).
+ * the previous sample, the loop's max during its write (a slow write close to it waited on a main-thread
+ * block, not on the libuv pool) and the active libuv resources; a CPU profile of the first 90 s, with when
+ * it was requested and when the profiler actually started; the profile's audit logs, stall bundles and this
+ * launch's main.log; which FIFOs had a reader; from +20 s, History's own IPC round trip (recallList +
+ * brainStatus, with its row and not-downloaded row counts) measured in the main window (`--history off`
+ * skips those probes, so History stays idle for the whole run); the app's own native boot stage timings
+ * (`bootStages`, read from the profile's audit trail); and the runner witness (`witness`, on every timeline
+ * entry and summed up in the report): this harness's own event loop delay, a probe write on the temp volume
+ * the profile is on, started with each sample, and the machine's CPU busy share since the previous sample,
+ * which tell a machine-wide stall apart from the app's own. All of it lands in the report directory
+ * (`--report-dir`, else the `--out` file's directory, else out/st-1).
+ *
+ * `--history` makes it the History row: every History probe also runs a search (recallSearch) through the
+ * same bridge, and the criteria add History open and search, each answering with a usable (possibly
+ * degraded: not-downloaded rows) list within 2 s on every probe, the first call included. Every probe also
+ * times recallList, brainStatus and recallSearch on their own (`calls`), and the report's `historySummary`
+ * gives each call's first, p50, p95 and max time with the History row's own verdict (first recallList
+ * < 250 ms, every list and search within 2 s, main loop p99 < 50 ms) and, for a slow first recallList,
+ * whether this launch's main.log says every meetings-root permit was held by a stalled call. Only counts and
+ * timings leave the renderer, never a row or a hit.
  *
  * Usage:
- *   node scripts/qa/st-1.mjs --installer <Metis-QA-<v>.zip | Metis-Setup-<v>.exe> --provenance <provenance.json>
- *       --fixtures fifo|dataless|none [--count 6] [--cloud-dir <folder of evicted files>] [--main-log <main.log>]
- *       [--exe <installed executable>] [--profile-template <userData dir>] [--minutes 5] [--out <report.json>]
- *       [--report-dir <dir>]
+ *       --fixtures fifo|dataless|synthetic-dataless|none [--history [on|off]] [--count 6]
+ *       [--cloud-dir <folder of evicted files>] [--main-log <main.log>] [--exe <installed executable>]
+ *       [--profile-template <userData dir>] [--minutes 5] [--out <report.json>] [--report-dir <dir>]
+ *       [--purpose window-construction --window-variant <variant> [--window-warmup]]
+ *
+ * `--purpose window-construction` marks a short launch made only to measure the boot window's constructor under
+ * one QA-identity rendering variant (shipped, spellcheck-off, paint-when-hidden, prewarm-spellchecker), passed to
+ * the candidate as METIS_QA_WINDOW_VARIANT. Its report says `st1Evidence: false` and is never ST-1 evidence.
+ * A `--window-warmup` window-construction launch is also marked `warmup: true`; `--gate-window` skips those
+ * rows and reports how many it skipped. Every other run launches the shipped variant.
  *
  * Every in-app wait is bounded and every failure to answer is recorded in the report's `errors` (step, tMs,
  * message) while the run continues: only the criteria decide PASS or FAIL. The report is rewritten every
  * 30 s while the run lasts and once more however it ends, so the report directory always holds one; a run
  * that stopped early says INCOMPLETE.
+ *
+ * `--gate-window <dir> [--out <gate.json>]` launches nothing: it reads every window-construction report one folder
+ * below `<dir>` and applies the window-construction gate (M2-0519): every shipped createWindow.prewarm and
+ * createWindow.construct, in both chromes, present and under 250 ms. It prints and writes the gate, and exits 1
+ * when the gate fails.
  *
  * Exit codes: 0 PASS, 1 FAIL, NOT_EXERCISED or INCOMPLETE, 2 usage.
  */
@@ -45,22 +77,36 @@ import {
   unlinkSync,
   writeFileSync
 } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFile } from 'node:fs/promises'
+import { cpus, tmpdir } from 'node:os'
 import { basename, dirname, join, relative } from 'node:path'
+import { monitorEventLoopDelay } from 'node:perf_hooks'
 import { sha256File } from './provenance.mjs'
 import { createFifo, releaseFifo } from './fixtures/fifo.mjs'
 import {
+  bootStagesFromAudit,
   buildLaunchFailureReport,
   buildReport,
+  candidateEnv,
+  countStorageSaturations,
+  cpuBusyPct,
   emptyRun,
   failureRecord,
   historyEntry,
+  parseArgs,
   pinnedExpression,
   recordSample,
   releaseExpression,
-  withTimeout
+  syntheticDatalessPlan,
+  runPurpose,
+  shouldProbeHistory,
+  timedCallsExpression,
+  windowConstructionGate,
+  withTimeout,
+  writeJsonToStdout
 } from './lib/st-1-core.mjs'
 
+const FIXTURE_KINDS = ['fifo', 'dataless', 'synthetic-dataless', 'none']
 const MIN_FIFO_COUNT = 3
 const DEFAULT_FIFO_COUNT = 6
 const DEFAULT_MINUTES = 5
@@ -83,19 +129,12 @@ const PROFILE_STOP_TIMEOUT_MS = 30_000
 const HISTORY_FROM_MS = 20_000
 const HISTORY_EVERY_MS = 5_000
 const HISTORY_TIMEOUT_MS = 10_000
+/** Each History call's own bound in the renderer: twice the 2 s budget, and the open plus the search still
+ *  settle within HISTORY_TIMEOUT_MS, so every call of a probe keeps its own time even when one of them hangs. */
+const HISTORY_CALL_BOUND_MS = 4_000
 const MAIN_LOG_QUERY_TIMEOUT_MS = 10_000
-
-/** `--cloud-dir` etc. become `args.cloudDir`, matching every camelCase read below. */
-function parseArgs(argv) {
-  const args = { minutes: String(DEFAULT_MINUTES) }
-  for (let i = 0; i < argv.length; i++) {
-    const flag = argv[i]
-    if (!flag.startsWith('--')) continue
-    const key = flag.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())
-    args[key] = argv[++i]
-  }
-  return args
-}
+/** What the History row searches for: any query exercises the whole search path over every row. */
+const HISTORY_SEARCH_QUERY = 'st1'
 
 /** Binds the installer's bytes to the CI run that produced them (M2-0002). Throws on any mismatch. */
 async function verifyCandidate(installerPath, provenancePath) {
@@ -150,6 +189,21 @@ function placeFifoFixtures(root, count) {
     createFifo(target)
   }
   return targets
+}
+
+/** The synthetic-dataless profile shape (syntheticDatalessPlan): content-free local placeholder meetings
+ *  and a kernel-blocking FIFO at every path a mostly-evicted cloud folder would present. */
+function placeSyntheticDatalessFixtures(root) {
+  const plan = syntheticDatalessPlan()
+  mkdirSync(root, { recursive: true })
+  for (const name of plan.local) writeFileSync(join(root, name), '')
+  return plan.fifos.map((name) => {
+    const target = join(root, ...name.split('/'))
+    mkdirSync(dirname(target), { recursive: true })
+    rmSync(target, { force: true })
+    createFifo(target)
+    return target
+  })
 }
 
 /** SF_DATALESS, <sys/stat.h>. */
@@ -237,9 +291,9 @@ function placeDatalessFixtures(root, cloudDir) {
  *  surface later, as an 'error' event): the caller must take ownership of the returned child — and be
  *  ready to stop it — before calling inspectorUrl, so every way that wait can end still leaves the child
  *  killable by the caller's cleanup. */
-function spawnCandidate(exe, profile) {
+function spawnCandidate(exe, profile, windowVariant) {
   return spawn(exe, ['--inspect=127.0.0.1:0'], {
-    env: { ...process.env, ASKTOTO_USERDATA: profile },
+    env: candidateEnv(process.env, profile, windowVariant),
     stdio: ['ignore', 'ignore', 'pipe'],
     detached: process.platform !== 'win32'
   })
@@ -370,9 +424,11 @@ const sample = (probeFile) => `(async () => {
   let started = performance.now()
   await writeFile(${JSON.stringify(probeFile)}, String(started))
   const writeMs = performance.now() - started
+  // Read, not reset: the next sample's loopMaxSinceLastMs still covers this write.
+  const loopMaxDuringWriteMs = __st1since.max / 1e6
   started = performance.now()
   await lookup('localhost')
-  return { writeMs, lookupMs: performance.now() - started, loopMaxSinceLastMs, resources }
+  return { writeMs, loopMaxDuringWriteMs, lookupMs: performance.now() - started, loopMaxSinceLastMs, resources }
 })()`
 
 const SUMMARY = '({ p99Ms: __st1.percentile(99) / 1e6, maxMs: __st1.max / 1e6 })'
@@ -389,38 +445,110 @@ const MAIN_LOG_PATH = `(() => {
   }
 })()`
 
-/** One History round trip through the real preload bridge, timed inside the main process. The results
- *  stay in the renderer: only whether they settled comes back. */
-const HISTORY_PROBE = `(async () => {
+/** History's open: recallList and brainStatus started together, as History does, each timed on its own. */
+const HISTORY_OPEN_CALLS = timedCallsExpression(
+  {
+    recallList:
+      'window.toto.recallList().then((rows) => ({ rows: rows.length, notDownloaded: rows.filter((row) => row.notDownloaded).length, unavailable: rows.filter((row) => row.notDownloaded || row.locked).length }))',
+    brainStatus: 'window.toto.brainStatus().then(() => true)'
+  },
+  HISTORY_CALL_BOUND_MS
+)
+const HISTORY_SEARCH_CALL = timedCallsExpression(
+  { recallSearch: `window.toto.recallSearch(${JSON.stringify(HISTORY_SEARCH_QUERY)}).then((hits) => hits.length)` },
+  HISTORY_CALL_BOUND_MS
+)
+
+/** One History open (recallList + brainStatus) through the real preload bridge, timed inside the main
+ *  process (`ms`, `searchMs`) and per call inside the renderer (`open`, `search`), then (the History row,
+ *  `search`) one search. The results stay in the renderer: only counts come back — rows, not-downloaded rows
+ *  and hits. lib/st-1-core.mjs historyEntry turns the outcomes into the report's record. */
+const historyProbe = (search) => `(async () => {
   const load = process.mainModule?.require
   if (typeof load !== 'function') return { skipped: 'process.mainModule.require is unavailable in the compiled main' }
   const { BrowserWindow } = load('electron')
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue
     const bridged = await win.webContents.executeJavaScript(
-      "typeof window.toto?.recallList === 'function' && typeof window.toto?.brainStatus === 'function'"
+      "typeof window.toto?.recallList === 'function' && typeof window.toto?.brainStatus === 'function' && typeof window.toto?.recallSearch === 'function'"
     )
     if (!bridged) continue
-    const started = performance.now()
+    let started = performance.now()
+    let open
     try {
-      await win.webContents.executeJavaScript('Promise.all([window.toto.recallList(), window.toto.brainStatus()]).then(() => true)')
-      return { ms: performance.now() - started }
+      open = await win.webContents.executeJavaScript(${JSON.stringify(HISTORY_OPEN_CALLS)})
     } catch (error) {
       return { ms: performance.now() - started, error: String(error?.message ?? error) }
     }
+    const probe = { ms: performance.now() - started, open }
+    if (!${Boolean(search)}) return probe
+    started = performance.now()
+    try {
+      const { recallSearch } = await win.webContents.executeJavaScript(${JSON.stringify(HISTORY_SEARCH_CALL)})
+      return { ...probe, searchMs: performance.now() - started, search: recallSearch }
+    } catch (error) {
+      return { ...probe, searchMs: performance.now() - started, searchError: String(error?.message ?? error) }
+    }
   }
-  return { skipped: 'no window exposes window.toto.recallList and brainStatus' }
+  return { skipped: 'no window exposes window.toto.recallList, brainStatus and recallSearch' }
 })()`
 
-/** Starts the sampling CPU profiler; reports why when it cannot. */
-async function startProfiler(cdp) {
+/** Starts the sampling CPU profiler; reports why when it cannot. `startedAtMs` is stamped when Profiler.start
+ *  answers, so the profile's own clock can be lined up with the timeline; null when it never started. */
+async function startProfiler(cdp, sinceSpawn) {
   try {
     await cdp.send('Profiler.enable', {}, EVALUATE_TIMEOUT_MS)
     await cdp.send('Profiler.setSamplingInterval', { interval: PROFILE_SAMPLING_US }, EVALUATE_TIMEOUT_MS)
     const started = await cdp.send('Profiler.start', {}, EVALUATE_TIMEOUT_MS)
-    return started.late ? { running: false, error: 'Profiler.start did not answer' } : { running: true }
+    return started.late
+      ? { startedAtMs: null, running: false, error: 'Profiler.start did not answer' }
+      : { startedAtMs: sinceSpawn(), running: true }
   } catch (error) {
-    return { running: false, error: error.message }
+    return { startedAtMs: null, running: false, error: error.message }
+  }
+}
+
+/**
+ * The runner witness, report-only: this harness's own event loop delay (one histogram for the whole run, one
+ * read and reset at every sample, as `__st1` and `__st1since` are in the app), a small probe write to `file`
+ * and the machine's CPU busy share since the previous sample. A stall that shows here as well as in the app
+ * was the machine's, not the app's.
+ */
+function startWitness(file) {
+  const loop = monitorEventLoopDelay({ resolution: LOOP_RESOLUTION_MS })
+  loop.enable()
+  const since = monitorEventLoopDelay({ resolution: LOOP_RESOLUTION_MS })
+  since.enable()
+  let previousCpus = cpus()
+  const writes = new Set()
+  return {
+    /** The witness for one sample. The probe write is started here and never awaited: its `writeMs` is filled
+     *  in when it settles (null while pending or when it failed). */
+    sample() {
+      const loopMaxSinceLastMs = since.max / 1e6
+      since.reset()
+      const currentCpus = cpus()
+      const witness = { loopMaxSinceLastMs, writeMs: null, cpuBusyPct: cpuBusyPct(previousCpus, currentCpus) }
+      previousCpus = currentCpus
+      const started = performance.now()
+      const write = writeFile(file, String(started)).then(
+        () => {
+          witness.writeMs = performance.now() - started
+        },
+        () => {}
+      )
+      writes.add(write)
+      void write.then(() => writes.delete(write))
+      return witness
+    },
+    /** Waits (bounded) for the probe writes still in flight, stops both histograms and returns the whole
+     *  run's loop delay. */
+    async stop(timeoutMs) {
+      await withTimeout(Promise.all(writes), timeoutMs)
+      loop.disable()
+      since.disable()
+      return { p99Ms: loop.percentile(99) / 1e6, maxMs: loop.max / 1e6 }
+    }
   }
 }
 
@@ -441,20 +569,22 @@ async function stopProfiler(cdp, profiler, path, tMs) {
   }
 }
 
-/** One History probe; never throws. */
-async function probeHistory(cdp, tMs) {
-  return historyEntry(tMs, await evaluateBounded(cdp, 'history', HISTORY_PROBE, HISTORY_TIMEOUT_MS))
+/** One History probe (with a search on the History row); never throws. */
+async function probeHistory(cdp, tMs, search) {
+  return historyEntry(tMs, await evaluateBounded(cdp, 'history', historyProbe(search), HISTORY_TIMEOUT_MS))
 }
 
 /** Fills `run` (lib/st-1-core.mjs emptyRun) in place, so a partial report can be written at any moment.
  *  Never throws on a probe that fails or hangs: each is recorded in `run.errors` and the run goes on. */
-async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath }) {
+async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, witnessFile, historyOn, history }) {
   const sinceSpawn = () => Math.round(performance.now() - spawnedAt)
   run.setupAtMs = sinceSpawn()
+  const witness = startWitness(witnessFile)
   const setup = await evaluateBounded(cdp, 'setup', SETUP, SETUP_TIMEOUT_MS)
   if (setup.ok) run.poolSize = setup.value
   else run.errors.push(failureRecord('setup', run.setupAtMs, setup, SETUP_TIMEOUT_MS))
-  run.profiler = { startedAtMs: sinceSpawn(), ...(await startProfiler(cdp)) }
+  const requestedAtMs = sinceSpawn()
+  run.profiler = { requestedAtMs, ...(await startProfiler(cdp, sinceSpawn)) }
   const probeFile = join(profile, 'st1-probe.txt')
   let historyRunning = null
   let historyLastMs = -Infinity
@@ -462,15 +592,19 @@ async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath }
   while (Date.now() < deadline) {
     const tMs = sinceSpawn()
     if (run.profiler.running && tMs >= PROFILE_UNTIL_MS) await stopProfiler(cdp, run.profiler, cpuProfilePath, tMs)
-    if (!historyRunning && tMs >= HISTORY_FROM_MS && tMs - historyLastMs >= HISTORY_EVERY_MS) {
+    if (shouldProbeHistory({ historyOn, historyRunning, tMs, historyLastMs, fromMs: HISTORY_FROM_MS, everyMs: HISTORY_EVERY_MS })) {
       historyLastMs = tMs
-      historyRunning = probeHistory(cdp, tMs).then((probe) => {
+      historyRunning = probeHistory(cdp, tMs, history).then((probe) => {
         run.history.push(probe)
         historyRunning = null
       })
     }
-    const outcome = await evaluateBounded(cdp, 'sample', sample(probeFile), SAMPLE_TIMEOUT_MS)
-    recordSample(run, tMs, outcome, { lateAfterMs: EVALUATE_TIMEOUT_MS, boundMs: SAMPLE_TIMEOUT_MS })
+    const answer = evaluateBounded(cdp, 'sample', sample(probeFile), SAMPLE_TIMEOUT_MS)
+    // Queued behind the evaluation's own inspector send (already queued by the call above), so the witness
+    // is taken at the sample instant and never delays the app sample.
+    const sampleWitness = await Promise.resolve().then(() => witness.sample())
+    const outcome = await answer
+    recordSample(run, tMs, outcome, { lateAfterMs: EVALUATE_TIMEOUT_MS, boundMs: SAMPLE_TIMEOUT_MS, witness: sampleWitness })
     await new Promise((resolve) => setTimeout(resolve, SAMPLE_INTERVAL_MS))
   }
   if (run.profiler.running) await stopProfiler(cdp, run.profiler, cpuProfilePath, sinceSpawn())
@@ -479,6 +613,7 @@ async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath }
   const summary = await evaluateBounded(cdp, 'summary', SUMMARY, SETUP_TIMEOUT_MS)
   if (!summary.ok) run.errors.push(failureRecord('summary', summaryAtMs, summary, SETUP_TIMEOUT_MS))
   run.loop = summary.ok ? summary.value : { p99Ms: Infinity, maxMs: Infinity }
+  run.witnessLoop = await witness.stop(SAMPLE_TIMEOUT_MS)
 }
 
 /** Where this launch's main.log is, and the byte it starts at. The file's own birth time tells whether
@@ -534,12 +669,43 @@ function copyAppEvidence(profile, mainLog, dir) {
   return { dir: basename(dir), copied, errors }
 }
 
-/** Whether the run actually reached the fixtures, and (dataless only) whether they stayed unread. */
+/** The app's boot stage timings from the profile's audit logs (rotated generations first, the live audit.log
+ *  last), each with its record time since `spawnedWallMs`. Never throws: an unreadable trail is reported as
+ *  `{ error }`. */
+function readBootStages(profile, spawnedWallMs) {
+  try {
+    const logs = join(profile, 'logs')
+    const names = existsSync(logs) ? readdirSync(logs).filter((entry) => /^audit.*\.log$/.test(entry)) : []
+    names.sort((a, b) => (a === 'audit.log') - (b === 'audit.log') || a.localeCompare(b))
+    return { stages: names.flatMap((name) => bootStagesFromAudit(readFileSync(join(logs, name), 'utf8'), spawnedWallMs)) }
+  } catch (error) {
+    return { error: error.message }
+  }
+}
+
+/** How many times this launch's main.log says every meetings-root permit was held by a stalled call; null
+ *  when it could not be read. Never throws. */
+function readStorageSaturations(mainLog) {
+  try {
+    if (!mainLog?.path || !existsSync(mainLog.path)) return null
+    return countStorageSaturations(readFileSync(mainLog.path).subarray(mainLog.fromByte).toString('utf8'))
+  } catch {
+    return null
+  }
+}
+
+/** Fixture state after the run: FIFO-backed rows fail if anything opened them; dataless rows also prove
+ * they stayed unread. */
 function collectExercisedEvidence(kind, fixtures, mainLogPath, mainLogOffset, root) {
   if (kind === 'none') return { exercised: null }
-  if (kind === 'fifo') {
+  if (kind === 'fifo' || kind === 'synthetic-dataless') {
     const opened = fixtures.filter((fifo) => releaseFifo(fifo))
-    return { exercised: opened.length >= 1, fixturesOpened: opened.map((fifo) => relative(root, fifo)) }
+    const evidence = {
+      fixturesOpened: opened.map((fifo) => relative(root, fifo)),
+      fifoMeetingFixtures: fixtures.filter((fixture) => fixture.endsWith('.md')).length
+    }
+    // stat reads a FIFO's flags without opening it, so this records the fact without a reader.
+    return kind === 'fifo' ? evidence : { ...evidence, sfDatalessSet: datalessFlags(fixtures).some(Boolean) }
   }
   const stillDataless = datalessFlags(fixtures).every(Boolean)
   const mainLogTail = mainLogPath && existsSync(mainLogPath) ? readFileSync(mainLogPath, 'utf8').slice(mainLogOffset) : ''
@@ -558,7 +724,12 @@ function stopChild(child) {
 /** Tolerates partial state from a failure before everything was created: `root` may never have become a
  *  junction (a usage error can throw right after resolving --cloud-dir but before placing it), and
  *  `profile`/`unzipDir` may still be null if resolveExecutable/prepareProfile never ran. */
-function cleanup({ kind, root, profile, unzipDir }) {
+function cleanup({ kind, root, profile, unzipDir, witnessFile }) {
+  try {
+    rmSync(witnessFile, { force: true })
+  } catch {
+    /* a leftover witness file in the temp directory never fails the run */
+  }
   if (kind === 'dataless' && root) {
     try {
       unlinkSync(root) // ENOENT: never created, or already removed — nothing to do
@@ -573,22 +744,80 @@ function cleanup({ kind, root, profile, unzipDir }) {
   if (unzipDir) rmSync(unzipDir, { recursive: true, force: true })
 }
 
+/** Every report one folder below `dir` (`<dir>/<run>/<run>.json`), each named by its path relative to `dir`. A
+ *  file that does not parse is skipped; the gate then finds its stages missing. */
+function readWindowReports(dir) {
+  const reports = []
+  for (const run of readdirSync(dir, { withFileTypes: true })) {
+    if (!run.isDirectory()) continue
+    for (const file of readdirSync(join(dir, run.name))) {
+      if (!file.endsWith('.json')) continue
+      try {
+        reports.push({ name: join(run.name, file), report: JSON.parse(readFileSync(join(dir, run.name, file), 'utf8')) })
+      } catch {
+        /* not a report */
+      }
+    }
+  }
+  return reports
+}
+
+/** The window-construction gate over a report directory: 0 when it passes, 1 when it fails. */
+function gateWindow(dir, out) {
+  const gate = { harness: 'ST-1', gate: 'window-construction', ...windowConstructionGate(existsSync(dir) ? readWindowReports(dir) : []) }
+  if (out) {
+    mkdirSync(dirname(out), { recursive: true })
+    writeFileSync(out, `${JSON.stringify(gate, null, 2)}\n`)
+  }
+  console.log(JSON.stringify(gate, null, 2))
+  console.error(`[st-1] window gate skipped ${gate.skippedWarmups} warm-up launch${gate.skippedWarmups === 1 ? '' : 'es'}`)
+  for (const failure of gate.failures) console.error(`[st-1] window gate FAIL — ${failure}`)
+  return gate.pass ? 0 : 1
+}
+
 async function main() {
-  const args = parseArgs(process.argv.slice(2))
+  const args = parseArgs(process.argv.slice(2), { minutes: String(DEFAULT_MINUTES) })
+  if (args.gateWindow !== undefined) {
+    if (args.gateWindow === 'true') {
+      console.error('usage: node scripts/qa/st-1.mjs --gate-window <report dir> [--out <gate.json>]')
+      return 2
+    }
+    return gateWindow(args.gateWindow, args.out)
+  }
   if (!args.installer || !args.provenance || !args.fixtures) {
-    console.error('usage: node scripts/qa/st-1.mjs --installer <path> --provenance <path> --fixtures fifo|dataless|none [options]')
+    console.error('usage: node scripts/qa/st-1.mjs --installer <path> --provenance <path> --fixtures fifo|dataless|synthetic-dataless|none [options]')
     return 2
   }
-  if (args.fixtures !== 'fifo' && args.fixtures !== 'dataless' && args.fixtures !== 'none') {
-    console.error(`[st-1] FAIL — --fixtures must be fifo, dataless or none, got ${JSON.stringify(args.fixtures)}`)
+  if (!FIXTURE_KINDS.includes(args.fixtures)) {
+    console.error(`[st-1] FAIL — --fixtures must be fifo, dataless, synthetic-dataless or none, got ${JSON.stringify(args.fixtures)}`)
     return 2
   }
-  if (args.fixtures === 'fifo' && process.platform === 'win32') {
-    console.error('[st-1] FAIL — Windows has no FIFOs; use --fixtures dataless')
+  if ((args.fixtures === 'fifo' || args.fixtures === 'synthetic-dataless') && process.platform === 'win32') {
+    console.error(`[st-1] FAIL — Windows has no FIFOs; --fixtures ${args.fixtures} is unavailable, use --fixtures dataless`)
     return 2
   }
+  if (args.history !== undefined && args.history !== 'true' && args.history !== 'on' && args.history !== 'off') {
+    console.error(`[st-1] FAIL — --history must be a bare flag, on or off, got ${JSON.stringify(args.history)}`)
+    return 2
+  }
+  const history = args.history === 'true'
+  const historyMode = args.history === 'off' ? 'off' : 'on'
   if (args.fixtures === 'dataless' && (!args.cloudDir || !args.mainLog)) {
     console.error('[st-1] FAIL — --fixtures dataless needs --cloud-dir and --main-log')
+    return 2
+  }
+  const { purpose, windowVariant, error: purposeError } = runPurpose(args)
+  if (purposeError) {
+    console.error(`[st-1] FAIL — ${purposeError}`)
+    return 2
+  }
+  const windowWarmup = args.windowWarmup === 'true'
+  if (args.windowWarmup !== undefined && args.windowWarmup !== 'true') {
+    console.error(`[st-1] FAIL — --window-warmup is a bare flag, got ${JSON.stringify(args.windowWarmup)}`)
+    return 2
+  }
+  if (windowWarmup && purpose !== 'window-construction') {
+    console.error('[st-1] FAIL — --window-warmup needs --purpose window-construction')
     return 2
   }
   const minutes = Number(args.minutes)
@@ -607,7 +836,7 @@ async function main() {
   const candidate = await verifyCandidate(args.installer, args.provenance)
   const reportDir = args.reportDir ?? (args.out ? dirname(args.out) : join('out', 'st-1'))
   mkdirSync(reportDir, { recursive: true })
-  const reportBase = `st-1-${process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : process.platform}-${args.fixtures}`
+  const reportBase = `st-1-${process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : process.platform}-${args.fixtures}${history ? '-history' : ''}`
 
   // Everything that creates state to clean up — the unzip dir, the profile, the fixtures/junction and the
   // child process — lives inside this one try, so a failure anywhere here (a usage error placing
@@ -627,21 +856,29 @@ async function main() {
   let evidence = null
   let mainLog = null
   let appEvidence = null
+  let bootStages = null
+  let storageSaturations = null
+  let spawnedWallMs = null
+  // The runner witness's probe write, on the temp volume the profile is created on.
+  const witnessFile = join(tmpdir(), `st1-witness-${process.pid}.txt`)
   let complete = false
   let harnessError = null
   let cleanupError = null
   const reportPath = args.out ?? join(reportDir, `${reportBase}.json`)
   const currentReport = () => {
-    const common = { row: args.fixtures, installer: basename(args.installer), candidate, fixtures }
+    const common = { row: args.fixtures, installer: basename(args.installer), candidate, fixtures, purpose, windowVariant, windowWarmup }
     if (launchFailure) return buildLaunchFailureReport({ ...common, reason: launchFailure })
     return buildReport({
       ...common,
+      history,
       minutes,
       measured: run,
       evidence,
-      attribution: { mainLog, appEvidence },
+      attribution: { mainLog, appEvidence, bootStages, storageSaturations },
       complete,
-      harnessError
+      harnessError,
+      historyMode,
+      fixtureCounts: args.fixtures === 'synthetic-dataless' ? syntheticDatalessPlan().counts : null
     })
   }
   /** Never throws: a report that cannot be written must not end the measurement. */
@@ -662,15 +899,21 @@ async function main() {
     const count = args.fixtures === 'fifo' ? Number(args.count ?? DEFAULT_FIFO_COUNT) : undefined
     mainLogOffset = args.mainLog && existsSync(args.mainLog) ? statSync(args.mainLog).size : 0
     fixtures =
-      args.fixtures === 'fifo' ? placeFifoFixtures(root, count) : args.fixtures === 'dataless' ? placeDatalessFixtures(root, args.cloudDir) : []
+      args.fixtures === 'fifo'
+        ? placeFifoFixtures(root, count)
+        : args.fixtures === 'dataless'
+          ? placeDatalessFixtures(root, args.cloudDir)
+          : args.fixtures === 'synthetic-dataless'
+            ? placeSyntheticDatalessFixtures(root)
+            : []
 
     // `child` is assigned before anything can fail waiting for it, so the shared `finally` below always
     // owns a child to stop — including when the inspector never answers (fuse off), the exe is bad
     // ('error') or the candidate dies early ('exit'): every one of those becomes a launch-failure report
     // instead of a detached, unkillable process.
-    const spawnedWallMs = Date.now()
+    spawnedWallMs = Date.now()
     const spawnedAt = performance.now()
-    child = spawnCandidate(resolved.exe, profile)
+    child = spawnCandidate(resolved.exe, profile, windowVariant)
     let wsUrl
     try {
       wsUrl = await inspectorUrl(child)
@@ -686,7 +929,7 @@ async function main() {
       mainLogLocated = args.mainLog
         ? Promise.resolve({ path: args.mainLog, fromByte: mainLogOffset, exactLaunchOffset: true })
         : locateMainLog(cdp, spawnedWallMs)
-      await measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath })
+      await measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, witnessFile, historyOn: historyMode === 'on', history })
       mainLog = await mainLogLocated
       evidence = collectExercisedEvidence(args.fixtures, fixtures, args.mainLog, mainLogOffset, root)
       complete = true
@@ -710,11 +953,15 @@ async function main() {
     }
     cdp?.close()
     if (child) stopChild(child)
-    if (child && profile && !launchFailure) appEvidence = copyAppEvidence(profile, mainLog, join(reportDir, `${reportBase}-app`))
+    if (child && profile && !launchFailure) {
+      appEvidence = copyAppEvidence(profile, mainLog, join(reportDir, `${reportBase}-app`))
+      bootStages = readBootStages(profile, spawnedWallMs)
+      storageSaturations = readStorageSaturations(mainLog)
+    }
     // A cleanup failure is rethrown after this block, never from it: a throw inside `finally` would replace
     // the error that is already propagating.
     try {
-      cleanup({ kind: args.fixtures, root, profile, unzipDir })
+      cleanup({ kind: args.fixtures, root, profile, unzipDir, witnessFile })
     } catch (error) {
       cleanupError = error
       harnessError ??= error.message
@@ -725,7 +972,7 @@ async function main() {
   if (cleanupError) throw cleanupError
 
   const report = currentReport()
-  console.log(JSON.stringify(report, null, 2))
+  await writeJsonToStdout(report)
   return report.verdict === 'PASS' ? 0 : 1
 }
 

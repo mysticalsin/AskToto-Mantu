@@ -64,6 +64,10 @@ const PORT_LINE_RE = /listening on http:\/\/127\.0\.0\.1:(\d+)/
 const HEALTH_BUDGET_MS = 30_000
 const HEALTH_POLL_INTERVAL_MS = 250
 const WARM_TTFT_BUDGET_MS = 1500
+// The pre-warm is a cold prefill; CPU-only hosted runners need far longer than a laptop's few seconds.
+// A pre-warm that exceeds this is reported as a measured FAIL, never an unhandled exception.
+const PREWARM_TIMEOUT_MS = 240_000
+const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000
 
 function buildSpawnArgs({ gguf, mmproj }) {
   return [
@@ -246,6 +250,10 @@ function fetchStream(url) {
       }
       resolve(res)
     })
+    // Socket-idle limit: a stalled download ends with a logged FAILED line instead of the step timeout.
+    req.setTimeout(DOWNLOAD_IDLE_TIMEOUT_MS, () =>
+      req.destroy(new Error(`no data for ${DOWNLOAD_IDLE_TIMEOUT_MS}ms from ${url}`))
+    )
     req.on('error', reject)
   })
 }
@@ -416,25 +424,30 @@ function spawnAndWaitHealthy(binaryPath, args, apiKey) {
 /** The pre-warm call (PLAN.md §4.4): non-streamed, 1-token, id_slot 0, cache_prompt true. Doubles as the
  *  "cold" reference measurement — nothing has touched slot 0's cache before this call, so its latency is
  *  dominated by prompt PREFILL (mirrors spike2.py's SLOT0-COLD). */
-async function prewarmCall(baseUrl, apiKey, messages) {
+async function prewarmCall(baseUrl, apiKey, messages, timeoutMs = PREWARM_TIMEOUT_MS) {
   const t0 = performance.now()
-  const res = await fetch(`${baseUrl}/v1/chat/completions`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model: 'local',
-      messages,
-      max_tokens: 1,
-      id_slot: 0,
-      cache_prompt: true,
-      stream: false
-    }),
-    signal: AbortSignal.timeout(60_000)
-  })
-  const ms = performance.now() - t0
-  const body = await res.json()
-  if (!res.ok) throw new Error(`prewarm request failed: HTTP ${res.status} ${JSON.stringify(body)}`)
-  return { ms, timings: body.timings }
+  try {
+    const res = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: 'local',
+        messages,
+        max_tokens: 1,
+        id_slot: 0,
+        cache_prompt: true,
+        stream: false
+      }),
+      signal: AbortSignal.timeout(timeoutMs)
+    })
+    const body = await res.json()
+    const ms = performance.now() - t0
+    if (!res.ok) throw new Error(`prewarm request failed: HTTP ${res.status} ${JSON.stringify(body)}`)
+    return { ms, timings: body.timings }
+  } catch (err) {
+    if (err?.name !== 'TimeoutError') throw err
+    return { timedOut: true, ms: performance.now() - t0, timeoutMs }
+  }
 }
 
 /** The real, timed suggest turn: streamed, SAME prefix as the prewarm call (so cache_prompt actually
@@ -531,7 +544,15 @@ async function main() {
       { role: 'user', content: suggestUserText(transcriptTail) }
     ]
 
+    console.log(`[prove-local-ttft] prewarm timeout: ${PREWARM_TIMEOUT_MS} ms`)
     const prewarmResult = await prewarmCall(baseUrl, apiKey, messages)
+    if (prewarmResult.timedOut) {
+      console.error(
+        `[prove-local-ttft] FAIL — prewarm timed out after ${Math.round(prewarmResult.ms)}ms (limit ${prewarmResult.timeoutMs}ms).`
+      )
+      if (sidecarChild && !sidecarChild.killed) sidecarChild.kill('SIGKILL')
+      process.exit(1)
+    }
     console.log(
       `[prove-local-ttft] prewarm (cold prefill): ${Math.round(prewarmResult.ms)} ms` +
         (prewarmResult.timings
@@ -577,7 +598,7 @@ async function main() {
   process.exit(exitCode)
 }
 
-export { buildSuggestSystemPrompt, suggestUserText }
+export { buildSuggestSystemPrompt, prewarmCall, suggestUserText }
 
 // Only run main() when this file is executed directly (`node scripts/prove-local-ttft.mjs`) — NOT when
 // imported (e.g. by prove-local-ttft.systemPrompt.test.ts, which cross-checks buildSuggestSystemPrompt()
