@@ -2005,12 +2005,13 @@ function refreshLoginItemOpenAtLoginCache(): boolean | null {
 
 const publicLoginItemOpenAtLogin = (s: Settings): boolean => loginItemOpenAtLoginCache ?? s.launchAtLogin
 
-function reconcileLaunchAtLogin(): void {
+function reconcileLaunchAtLogin(): boolean {
   const want = getSettings().launchAtLogin
   const current = refreshLoginItemOpenAtLoginCache()
-  if (current === null || current === want) return
+  if (current === null || current === want) return false
   app.setLoginItemSettings({ openAtLogin: want })
   loginItemOpenAtLoginCache = want
+  return true
 }
 
 function publicSettings(): PublicSettings {
@@ -9339,9 +9340,7 @@ if (!app.requestSingleInstanceLock()) {
   }
   bootWork.run('reconcileLaunchAtLogin', () => {
     try {
-      const before = loginItemOpenAtLoginCache
-      reconcileLaunchAtLogin()
-      if (loginItemOpenAtLoginCache !== before) notifySettingsChanged()
+      if (reconcileLaunchAtLogin()) notifySettingsChanged()
     } catch { /* best-effort — never block startup */ }
   })
   // Unpackaged (dev/QA) runs show Electron's default icon in the Dock — brand them with the Mantu M so

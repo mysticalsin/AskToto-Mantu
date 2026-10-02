@@ -124,12 +124,12 @@ describe('the read/replace invariant — I/O faults, retry, and quarantine limit
     renameSyncSpy.mockClear()
   })
   afterEach(async () => {
+    vi.useRealTimers()
     await store.settleBrainLogWritesForTests()
     await settleBrainWritesForTests()
     failReadOnce = null
     failReadPersistent = null
     failRenameOnce = null
-    vi.useRealTimers()
     vi.restoreAllMocks()
     realFs.rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   })
