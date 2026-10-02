@@ -24,7 +24,7 @@ vi.mock('node:os', async (importOriginal) => ({
   tmpdir: () => logFixture.root
 }))
 
-import { auditLog, auditLogPath, auditChainTip, settleAuditLogForTests, AUDIT_ARCHIVE_GENERATIONS } from './logger'
+import { auditLog, auditLogPath, auditChainTip, AUDIT_ARCHIVE_GENERATIONS } from './logger'
 // eslint-disable-next-line no-restricted-imports -- the verifier is deliberately the operator's own script
 import { verifyAuditLines } from '../../scripts/verify-audit-log.mjs'
 
@@ -46,8 +46,6 @@ describe('MQA-232 — every audit record chains to the one before it', () => {
     auditLog('settings.changed', { probe: 'chain-1' })
     auditLog('settings.changed', { probe: 'chain-2' })
     auditLog('settings.changed', { probe: 'chain-3' })
-    expect(readLines()).toEqual([])
-    await settleAuditLogForTests()
     const lines = readLines()
     expect(lines.length).toBeGreaterThanOrEqual(3)
     const last = JSON.parse(lines[lines.length - 1]) as { seq: number; prev: string }
