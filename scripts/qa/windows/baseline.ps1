@@ -46,29 +46,29 @@ $managedRows = @(
   @{ id = 'managed-edr-interaction'; unblock = 'On the managed laptop, record any EDR prompt, quarantine, process block, slowdown or audit interaction observed while installing and running the 1.9.6 baseline.' }
 )
 
-if ($Artifact -and ($Artifact -cnotmatch '^[0-9a-f]{64}$')) { throw '-Artifact must be the lowercase 64-character sha256 of the 1.9.6 Windows installer.' }
-
 if (-not $PlanOnly) {
-  if (-not $Artifact) { throw '-Artifact is required unless -PlanOnly is set.' }
   if (-not $App) { throw '-App is required unless -PlanOnly is set.' }
   if (-not $QaProfile) { throw '-QaProfile or METIS_QA_PROFILE is required: a fresh profile is not representative.' }
   if (-not (Test-Path (Join-Path $QaProfile 'resource-census-profile.json'))) { throw "resource-census-profile.json is missing from ${QaProfile}: measure only a representative profile." }
+  if (-not $Artifact) { throw '-Artifact is required unless -PlanOnly is set.' }
 }
+
+if ($Artifact -and ($Artifact -cnotmatch '^[0-9a-f]{64}$')) { throw '-Artifact must be the lowercase 64-character sha256 of the 1.9.6 Windows installer.' }
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $rows = @()
 
 foreach ($state in $measuredStates) {
-  $artifact = "win32-$state.json"
+  $censusArtifact = "win32-$state.json"
   if ($PlanOnly) {
-    $rows += [ordered]@{ id = "census-$state"; state = $state; status = 'SUPPORTED_NOT_RUN'; artifact = $artifact }
+    $rows += [ordered]@{ id = "census-$state"; state = $state; status = 'SUPPORTED_NOT_RUN'; artifact = $censusArtifact }
     continue
   }
   $env:METIS_QA_PROFILE = $QaProfile
-  & node $census --state $state --seconds $Seconds --app $App --output (Join-Path $OutDir $artifact)
-  $ok = ($LASTEXITCODE -eq 0) -and (Test-Path (Join-Path $OutDir $artifact))
+  & node $census --state $state --seconds $Seconds --app $App --output (Join-Path $OutDir $censusArtifact)
+  $ok = ($LASTEXITCODE -eq 0) -and (Test-Path (Join-Path $OutDir $censusArtifact))
   $status = if ($ok) { 'MEASURED' } else { 'FAILED' }
-  $rows += [ordered]@{ id = "census-$state"; state = $state; status = $status; artifact = $artifact }
+  $rows += [ordered]@{ id = "census-$state"; state = $state; status = $status; artifact = $censusArtifact }
 }
 
 foreach ($state in $attachStates) {
