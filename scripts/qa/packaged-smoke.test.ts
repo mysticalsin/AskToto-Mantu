@@ -1163,9 +1163,22 @@ describe('seedNavigationMeetings', () => {
       waitFor: async () => events.push('history:wait')
     }
     const page = {
-      evaluate: async (_fn: unknown, titles: ReturnType<typeof navigationMeetingTitles>) => {
-        events.push(`seed:${titles.alpha}`)
-        return { first: 'alpha.md', second: 'beta.md', titles }
+      evaluate: async (_fn: unknown, payload: ReturnType<typeof navigationMeetingTitles> | { title: string }) => {
+        if ('title' in payload) {
+          events.push(`snapshot:${payload.title}`)
+          return {
+            searchVisible: true,
+            searchEnabled: true,
+            targetMeetingButtonVisible: true,
+            targetMeetingButtonEnabled: true,
+            backVisible: false,
+            backEnabled: false,
+            titleVisible: false,
+            guardVisible: false
+          }
+        }
+        events.push(`seed:${payload.alpha}`)
+        return { first: 'alpha.md', second: 'beta.md', titles: payload }
       },
       getByLabel: () => search,
       getByRole: () => history,
@@ -1182,7 +1195,7 @@ describe('seedNavigationMeetings', () => {
       'search:hidden',
       'wait:450',
       'history:click',
-      'search:visible'
+      'snapshot:Smoke navigation alpha HIST dirty save bar'
     ])
   })
 
