@@ -563,7 +563,7 @@ let pendingBrainLogWrites: Promise<void> = Promise.resolve()
 
 function enqueueBrainLogWrite(write: () => void): void {
   pendingBrainLogWrites = pendingBrainLogWrites.catch(() => undefined).then(() => new Promise<void>((resolve) => {
-    setImmediate(() => {
+    queueMicrotask(() => {
       try { write() } catch { /* best-effort */ } finally { resolve() }
     })
   }))

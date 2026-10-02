@@ -2000,11 +2000,7 @@ async function verifyCliSessions(now = Date.now()): Promise<void> {
 let loginItemOpenAtLoginCache: boolean | null = null
 
 function refreshLoginItemOpenAtLoginCache(): boolean | null {
-  try {
-    return (loginItemOpenAtLoginCache = app.getLoginItemSettings().openAtLogin)
-  } catch {
-    return null
-  }
+  try { return (loginItemOpenAtLoginCache = app.getLoginItemSettings().openAtLogin) } catch { return null }
 }
 
 const publicLoginItemOpenAtLogin = (s: Settings): boolean => loginItemOpenAtLoginCache ?? s.launchAtLogin
@@ -9588,9 +9584,7 @@ if (!app.requestSingleInstanceLock()) {
   // Register ASR IPC before protocol.handle/createWindow; the bundled-status probe is primed after first show.
   runStep('asrAssetsIpc', () => {
     const REPO_ROOT = join(__dirname, '..', '..')
-    const RES_BASE = app.isPackaged
-      ? process.resourcesPath
-      : join(REPO_ROOT, 'resources')
+    const RES_BASE = app.isPackaged ? process.resourcesPath : join(REPO_ROOT, 'resources')
     let asrBundledCache: boolean | null = null
     let readAsrBundledStatus = (): boolean => false
     const asrBundledReady = (): boolean => {
