@@ -1641,7 +1641,9 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
    *  restriction. The renderer uses it to filter the provider picker to approved vendors and to badge a
    *  blocked provider "restricted by your organization" — the SAME source the main process enforces at
    *  request time, so the UI can't offer a provider that every ask would then reject. */
-  allowedProviders: z.array(z.string()).nullable().default(null)
+  allowedProviders: z.array(z.string()).nullable().default(null),
+  modelPolicyCapabilities: z.record(z.string(), z.object({ provider: z.string(), model: z.string() })).default({}),
+  localSpeechPack: z.enum(['required', 'offered', 'blocked']).default('offered')
 })
 export type PublicSettings = z.infer<typeof PublicSettingsSchema>
 
@@ -1664,6 +1666,7 @@ export type SettingsPatch = Partial<
     | 'envKeys'
     | 'loginItemOpenAtLogin'
     | 'lastFailover'
+    | 'localSpeechPack'
   >
 >
 
