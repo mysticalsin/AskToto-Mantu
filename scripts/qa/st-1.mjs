@@ -448,7 +448,8 @@ const MAIN_LOG_PATH = `(() => {
 /** History's open: recallList and brainStatus started together, as History does, each timed on its own. */
 const HISTORY_OPEN_CALLS = timedCallsExpression(
   {
-    recallList: 'window.toto.recallList().then((rows) => ({ rows: rows.length, notDownloaded: rows.filter((row) => row.notDownloaded).length }))',
+    recallList:
+      'window.toto.recallList().then((rows) => ({ rows: rows.length, notDownloaded: rows.filter((row) => row.notDownloaded).length, unavailable: rows.filter((row) => row.notDownloaded || row.locked).length }))',
     brainStatus: 'window.toto.brainStatus().then(() => true)'
   },
   HISTORY_CALL_BOUND_MS

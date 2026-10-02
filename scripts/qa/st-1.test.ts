@@ -42,6 +42,7 @@ const refusedHistoryProbe = (tMs = 20_000, notDownloaded = 4) => ({
   ms: 33,
   rows: Math.max(6, notDownloaded),
   notDownloaded,
+  unavailable: notDownloaded,
   searchMs: 42,
   hits: 4,
   calls: { recallList: { ms: 30 }, brainStatus: { ms: 5 }, recallSearch: { ms: 40 } }
@@ -508,6 +509,32 @@ describe('buildReport', () => {
     expect(built.fixturesOpened).toEqual([])
   })
 
+  it('exercises a fifo row for locked Unavailable rows even when they are not marked not-downloaded', () => {
+    const built = report({
+      row: 'fifo',
+      fixtures: ['one.md', 'two.md'],
+      measured: {
+        ...refusedRun(0),
+        history: [
+          {
+            ...refusedHistoryProbe(20_000, 0),
+            rows: 2,
+            notDownloaded: 0,
+            unavailable: 2
+          }
+        ]
+      },
+      evidence: { fixturesOpened: [], fifoMeetingFixtures: 2 }
+    })
+    expect(built.verdict).toBe('PASS')
+    expect(built.exerciseEvidence).toMatchObject({
+      exercised: true,
+      unavailableRows: 2,
+      requiredUnavailableRows: 2,
+      brainStatusAnswered: true
+    })
+  })
+
   it('reports a fifo row History never answered as NOT_EXERCISED, naming the missing refusal evidence', () => {
     const built = report({
       row: 'fifo',
@@ -669,9 +696,17 @@ describe('the History row (M2-0193)', () => {
   })
 
   it('reports the first call apart from the rest, and fails the report on it', () => {
-    const measured = historyRun([{ tMs: 20_000, skipped: 'no window' }, open(25_000, 2_050), open(30_000, 30, { searchMs: 90, notDownloaded: 5 })])
-    // These probes predate the per-call split (M2-0512): no call has its own time, so the row's checks fail.
-    const untimed = { calls: 0, unsettled: 0, firstMs: null, p50Ms: null, p95Ms: null, maxMs: null }
+    const measured = historyRun([
+      { tMs: 20_000, skipped: 'no window' },
+      {
+        ...open(25_000, 2_050, { notDownloaded: 5, unavailable: 5 }),
+        calls: { recallList: { ms: 2_050 }, brainStatus: { ms: 5 }, recallSearch: { ms: 90 } }
+      },
+      {
+        ...open(30_000, 30, { searchMs: 90, notDownloaded: 5, unavailable: 5 }),
+        calls: { recallList: { ms: 30 }, brainStatus: { ms: 5 }, recallSearch: { ms: 90 } }
+      }
+    ])
     expect(historySummary(measured)).toEqual({
       probes: 2,
       firstOpenMs: 2_050,
@@ -679,20 +714,29 @@ describe('the History row (M2-0193)', () => {
       maxSearchMs: 90,
       maxRows: 6,
       maxNotDownloaded: 5,
-      calls: { recallList: untimed, brainStatus: untimed, recallSearch: untimed },
+      calls: {
+        recallList: { calls: 2, unsettled: 0, firstMs: 2_050, p50Ms: 30, p95Ms: 2_050, maxMs: 2_050 },
+        brainStatus: { calls: 2, unsettled: 0, firstMs: 5, p50Ms: 5, p95Ms: 5, maxMs: 5 },
+        recallSearch: { calls: 2, unsettled: 0, firstMs: 90, p50Ms: 90, p95Ms: 90, maxMs: 90 }
+      },
       checks: [
         { name: 'first-list < 250', pass: false },
         { name: 'list < 2000', pass: false },
-        { name: 'search < 2000', pass: false },
+        { name: 'search < 2000', pass: true },
         { name: 'loop-p99 < 50', pass: true }
       ],
       verdict: 'FAIL',
       storageSaturations: null,
       firstListCause: 'main-log-unread'
     })
-    const built = report({ row: 'fifo', history: true, measured, evidence: { fixturesOpened: ['x'] } })
+    const built = report({ row: 'fifo', history: true, measured, evidence: { fixturesOpened: [], fifoMeetingFixtures: 5 } })
     expect(built.historyRow).toBe(true)
     expect(built.historySummary?.firstOpenMs).toBe(2_050)
+    expect(built.exerciseEvidence).toMatchObject({ exercised: true, unavailableRows: 5, brainStatusAnswered: true })
+    expect(built.criteria.find((c: { name: string }) => c.name === 'non-regular-fixtures-unopened')).toEqual({
+      name: 'non-regular-fixtures-unopened',
+      pass: true
+    })
     expect(built.verdict).toBe('FAIL')
     expect(report({ row: 'fifo', history: true, measured: refusedRun(0), evidence: { fixturesOpened: [], fifoMeetingFixtures: 0 } }).verdict).toBe('PASS')
     expect(report().historySummary).toBeUndefined()

@@ -374,11 +374,11 @@ function fifoRefusalEvidence(row, measured, evidence, fixtures, fixtureCounts) {
   const requiredUnavailableRows = fifoMeetingFixtures(row, fixtures, fixtureCounts, evidence)
   const answered = probes.filter((entry) => !entry.hung && !entry.error)
   const brainStatusAnswered = answered.some((entry) => settledWithin(entry.calls?.brainStatus, Number.POSITIVE_INFINITY))
-  const unavailableRows = maxNumber(answered.map((entry) => entry.notDownloaded))
+  const unavailableRows = maxNumber(answered.map((entry) => entry.unavailable ?? entry.notDownloaded))
   const matchingProbe = answered.find(
     (entry) =>
-      typeof entry.notDownloaded === 'number' &&
-      entry.notDownloaded >= requiredUnavailableRows &&
+      typeof (entry.unavailable ?? entry.notDownloaded) === 'number' &&
+      (entry.unavailable ?? entry.notDownloaded) >= requiredUnavailableRows &&
       settledWithin(entry.calls?.brainStatus, Number.POSITIVE_INFINITY)
   )
   return {
