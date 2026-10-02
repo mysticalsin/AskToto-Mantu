@@ -3,6 +3,7 @@
 ## FF-04: files over 800 lines
 
 Every production file over 800 lines under `src/`, `operator/src/`, `intelligence/src/` and `scripts/` has a ceiling in `scripts/architecture-baseline.json` that may only fall, and a dated size target plus owner ticket or lead-action handoff below. `npm run check:architecture` fails when the block drifts from `scripts/architecture-size-schedule.json`.
+Rows marked `LEAD_ACTION` are placeholder targets until the lead assigns follow-up owner tickets.
 
 <!-- FF-04 size schedule: generated from scripts/architecture-size-schedule.json, do not edit -->
 | File | Target lines | By | Owner ticket / action |
