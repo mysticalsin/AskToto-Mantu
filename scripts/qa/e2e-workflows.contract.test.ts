@@ -2,7 +2,16 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-const SUITE = readFileSync(join(__dirname, 'e2e-workflows.mjs'), 'utf8')
+// The suite is the main file plus the group modules it imports (M2-0410). The main file comes first so the
+// ordering assertions about restoreSettingsSnapshot and the summary still read the main file's own order.
+const SUITE = [
+  join(__dirname, 'e2e-workflows.mjs'),
+  join(__dirname, 'golden-flows', 'provider-groups.mjs'),
+  join(__dirname, 'golden-flows', 'brain-groups.mjs'),
+  join(__dirname, 'golden-flows', 'intelligence-group.mjs')
+]
+  .map((file) => readFileSync(file, 'utf8'))
+  .join('\n')
 
 /**
  * MQA-255 — the physical QA suite has to measure the APP, not the machine it ran on.
