@@ -65,13 +65,31 @@ const observed = (over: Record<string, unknown> = {}) => ({
   ...over
 })
 
-function evalClickExpression(expression: string, element: { click: () => void } | null): { clicked: boolean; result: boolean; selector: string | null } {
-  let clicked = false
+function evalClickExpression(
+  expression: string,
+  elements: Array<{ label?: string; text?: string; matches?: string[] }> = [],
+  options: { transcriptVisible?: boolean } = {}
+): { clicked: string[]; result: boolean; selector: string | null } {
+  const clicked: string[] = []
   let selector: string | null = null
+  const buttonFor = (element: { label?: string; text?: string; matches?: string[] }) => ({
+    getAttribute: (name: string) => (name === 'aria-label' ? element.label ?? '' : null),
+    textContent: element.text ?? '',
+    click: () => { clicked.push(element.label ?? element.text ?? 'button') }
+  })
   const document = {
     querySelector: (value: string) => {
       selector = value
-      return element ? { click: () => { clicked = true } } : null
+      const element = elements.find((candidate) => candidate.matches?.includes(value))
+      return element ? buttonFor(element) : null
+    },
+    querySelectorAll: (value: string) => {
+      selector = value
+      if (value === 'section' && options.transcriptVisible) {
+        return [{ firstElementChild: { textContent: 'Transcript' } }]
+      }
+      if (value === 'section') return []
+      return value === 'button' ? elements.map(buttonFor) : []
     }
   }
   const result = Function('document', `return ${expression}`)(document) as boolean
@@ -202,14 +220,30 @@ describe('profile seeding and launch', () => {
 
 describe('Bar driver controls', () => {
   it.each([
-    ['Listen', LISTEN_CLICK, 'button[aria-label="Start listening"]'],
-    ['Transcript', TRANSCRIPT_CLICK, '[data-bar-transcript]'],
-    ['Stop', STOP_CLICK, 'button[aria-label="Stop and end meeting"]']
-  ])('clicks the real %s control and reports success', (_name, expression, expectedSelector) => {
-    expect(evalClickExpression(expression, { click: () => undefined })).toEqual({
-      clicked: true,
+    ['Listen', LISTEN_CLICK, { label: 'Start listening' }, 'Start listening'],
+    ['Transcript', TRANSCRIPT_CLICK, { text: 'View Transcript' }, 'View Transcript'],
+    ['Stop', STOP_CLICK, { label: 'End meeting' }, 'End meeting']
+  ])('clicks the real %s control and reports success', (_name, expression, button, clicked) => {
+    expect(evalClickExpression(expression, [button])).toMatchObject({
+      clicked: [clicked],
       result: true,
-      selector: expectedSelector
+      selector: 'button'
+    })
+  })
+
+  it('clicks the legacy data-bar transcript control when present', () => {
+    expect(evalClickExpression(TRANSCRIPT_CLICK, [{ text: 'legacy transcript', matches: ['[data-bar-transcript]'] }])).toMatchObject({
+      clicked: ['legacy transcript'],
+      result: true,
+      selector: '[data-bar-transcript]'
+    })
+  })
+
+  it('does not hide an already visible transcript panel', () => {
+    expect(evalClickExpression(TRANSCRIPT_CLICK, [{ label: 'Hide transcript', text: 'Transcript' }], { transcriptVisible: true })).toMatchObject({
+      clicked: [],
+      result: true,
+      selector: 'section'
     })
   })
 
@@ -218,7 +252,7 @@ describe('Bar driver controls', () => {
     ['Transcript', TRANSCRIPT_CLICK],
     ['Stop', STOP_CLICK]
   ])('reports false when the %s control is absent', (_name, expression) => {
-    expect(evalClickExpression(expression, null).result).toBe(false)
+    expect(evalClickExpression(expression).result).toBe(false)
   })
 })
 

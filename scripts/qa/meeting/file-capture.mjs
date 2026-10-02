@@ -187,11 +187,35 @@ async function cdpPage(port) {
   return { pages, connect }
 }
 
-const clickByLabel = (label) =>
-  `(() => { const b = document.querySelector('button[aria-label=${JSON.stringify(label)}]'); if (!b) return false; b.click(); return true })()`
-export const LISTEN_CLICK = clickByLabel('Start listening')
-export const STOP_CLICK = clickByLabel('Stop and end meeting')
-export const TRANSCRIPT_CLICK = `(() => { const b = document.querySelector('[data-bar-transcript]'); if (!b) return false; b.click(); return true })()`
+const clickByLabels = (labels) =>
+  `(() => {
+    const labels = ${JSON.stringify(labels)}
+    const buttons = [...document.querySelectorAll('button')]
+    const b = buttons.find((button) => labels.includes(button.getAttribute('aria-label') || ''))
+    if (!b) return false
+    b.click()
+    return true
+  })()`
+const clickTranscriptControl = () =>
+  `(() => {
+    const visible = [...document.querySelectorAll('section')]
+      .some((section) => section.firstElementChild?.textContent.trim() === 'Transcript')
+    if (visible) return true
+    const direct = document.querySelector('[data-bar-transcript]')
+    if (direct) { direct.click(); return true }
+    const buttons = [...document.querySelectorAll('button')]
+    const b = buttons.find((button) => {
+      const label = button.getAttribute('aria-label') || ''
+      const text = (button.textContent || '').trim()
+      return label === 'Show transcript' || text === 'View Transcript' || text === 'Transcript'
+    })
+    if (!b) return false
+    b.click()
+    return true
+  })()`
+export const LISTEN_CLICK = clickByLabels(['Start listening'])
+export const STOP_CLICK = clickByLabels(['Stop and end meeting', 'End meeting'])
+export const TRANSCRIPT_CLICK = clickTranscriptControl()
 /** The Bar's Listen control exists: the overlay has rendered and onboarding is done. */
 export const LISTEN_PRESENT = `!!document.querySelector('button[aria-label="Start listening"]')`
 /** The live transcript's line count; the waiting and empty placeholders are not lines. */
