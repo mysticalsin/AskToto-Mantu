@@ -26,6 +26,9 @@ const SETTINGS_TIMEOUT_MS = 30_000
 const POLL_MS = 250
 const VIEWPORT = Object.freeze({ width: 900, height: 820 })
 const FIT_TOLERANCE_PX = 1
+const SETTINGS_STABLE_TIMEOUT_MS = 12_000
+const SETTINGS_STABLE_SAMPLE_MS = 250
+const SETTINGS_STABLE_SAMPLES = 3
 const PNG_SIGNATURE = '89504e470d0a1a0a'
 const CHILD_EXIT_TIMEOUT_MS = 10_000
 const CHILD_KILL_TIMEOUT_MS = 5_000
@@ -111,8 +114,8 @@ function screenshotCoversBox(buffer, box) {
   )
 }
 
-function sectionCaptureClipped({ buffer, sectionBox, panelBox }) {
-  return !fitsInside(sectionBox, panelBox) || !screenshotCoversBox(buffer, sectionBox)
+function sectionCaptureClipped({ buffer, sectionBox }) {
+  return !screenshotCoversBox(buffer, sectionBox)
 }
 
 async function installDeterministicSettingsQaBridge(page) {
@@ -276,6 +279,45 @@ async function settle(page) {
   await sleep(150)
 }
 
+function stableSignatureFromSamples(samples) {
+  if (samples.length < SETTINGS_STABLE_SAMPLES) return null
+  const recent = samples.slice(-SETTINGS_STABLE_SAMPLES)
+  const first = recent[0]
+  return recent.every((sample) => sample === first) ? first : null
+}
+
+async function waitForStableSettingsPanel(page) {
+  const deadline = Date.now() + SETTINGS_STABLE_TIMEOUT_MS
+  const samples = []
+
+  while (Date.now() < deadline) {
+    await settle(page)
+    const sample = await page.getByRole('tabpanel').evaluate((panel) => {
+      const boxes = Array.from(panel.querySelectorAll('section')).map((section) => {
+        const rect = section.getBoundingClientRect()
+        return [
+          Math.round(rect.width),
+          Math.round(rect.height),
+          Math.round(section.scrollWidth),
+          Math.round(section.scrollHeight)
+        ].join('x')
+      })
+      return {
+        busyCount: panel.querySelectorAll('[aria-busy="true"], [data-agent-status]').length,
+        signature: JSON.stringify({
+          text: panel.textContent ?? '',
+          boxes
+        })
+      }
+    })
+    samples.push(sample.signature)
+    if (sample.busyCount === 0 && stableSignatureFromSamples(samples)) return true
+    await sleep(SETTINGS_STABLE_SAMPLE_MS)
+  }
+
+  return false
+}
+
 async function openSettings(page) {
   await page.setViewportSize(VIEWPORT)
   await page.waitForFunction(() => typeof window.toto?.getSettings === 'function', undefined, { timeout: SETTINGS_TIMEOUT_MS })
@@ -303,7 +345,8 @@ async function captureSections(page, appOutDir) {
   for (const tab of tabs) {
     await page.getByRole('tab', { name: tab, exact: true }).click()
     await page.getByRole('tabpanel').waitFor({ timeout: SETTINGS_TIMEOUT_MS })
-    await settle(page)
+    const stable = await waitForStableSettingsPanel(page)
+    if (!stable) console.warn(`settings-section-visual-compare warning=tab did not fully settle tab=${slug(tab)}`)
 
     const tabPanel = page.locator('main[role="tabpanel"]')
     const count = await tabPanel.locator('section').count()
@@ -319,7 +362,7 @@ async function captureSections(page, appOutDir) {
       const box = await section.boundingBox()
       const buffer = await section.screenshot({ path: file, animations: 'disabled', caret: 'hide' })
       const viewportClipped = !fitsInside(box, panelBox)
-      const clipped = sectionCaptureClipped({ buffer, sectionBox: box, panelBox })
+      const clipped = sectionCaptureClipped({ buffer, sectionBox: box })
       sections.push({
         key,
         tab,
