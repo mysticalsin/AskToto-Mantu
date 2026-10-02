@@ -1574,6 +1574,48 @@ describe('M2-0535 Whisper initialization error ownership', () => {
     expect(render('whisper')).toMatchObject({ error: BUNDLE_REPAIR, loading: false, listening: true })
   })
 
+  it.each([false, true])('keeps an early load failure through capture admission (degraded=%s)', async (degraded) => {
+    let resolveDisplay!: (stream: MediaStream) => void
+    getDisplayMediaImpl = () => new Promise((resolve) => { resolveDisplay = resolve })
+    if (degraded) getUserMediaImpl = async () => { throw new Error('Synthetic microphone unavailable') }
+    const starting = render('whisper').start(degraded ? 'both' : 'system', 'fast', 'whisper', 'English')
+    await settle()
+    const worker = workers.at(-1)!
+    expect(worker.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'init' }))
+    worker.emit({ type: 'error', message: BUNDLE_REPAIR })
+    await settle()
+    expect(render('whisper')).toMatchObject({ error: BUNDLE_REPAIR, loading: false })
+
+    resolveDisplay(makeStream('system'))
+    await starting
+    await settle()
+    const api = render('whisper')
+    expect(api).toMatchObject({ error: BUNDLE_REPAIR, loading: false, listening: true, capturing: true })
+    if (degraded) expect(api.captureDegraded).toMatchObject({ side: 'you', permission: false })
+    else expect(api.captureDegraded).toBeNull()
+  })
+
+  it('keeps a pending network retry through capture admission until the replacement is ready', async () => {
+    let resolveDisplay!: (stream: MediaStream) => void
+    getDisplayMediaImpl = () => new Promise((resolve) => { resolveDisplay = resolve })
+    const starting = render('whisper').start('system', 'fast', 'whisper', 'English')
+    await settle()
+    const retired = workers.at(-1)!
+    retired.emit({ type: 'error', message: 'Failed to fetch' })
+    await settle()
+    const retry = workers.at(-1)!
+    expect(retry).not.toBe(retired)
+    expect(render('whisper')).toMatchObject({ error: 'Back online. Restarting the speech model…', loading: true })
+
+    resolveDisplay(makeStream('system'))
+    await starting
+    await settle()
+    expect(render('whisper')).toMatchObject({ error: 'Back online. Restarting the speech model…', loading: true, capturing: true })
+    retry.emit({ type: 'ready', qualityDegraded: false })
+    await settle()
+    expect(render('whisper')).toMatchObject({ error: null, loading: false })
+  })
+
   it('surfaces a load failure with queued audio without dispatching an unready decode', async () => {
     const api = render('whisper')
     await settle()
@@ -1671,6 +1713,7 @@ describe('M2-0535 Whisper initialization error ownership', () => {
     await render('whisper').start('system', 'fast', 'whisper', 'English')
     await settle()
     const worker = workers.at(-1)!
+    expect(render('whisper').loading).toBe(true)
     worklets.at(-1)!.emit({ audio: Float32Array.from([0.2]), partial: false })
     expect(worker.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'audio' }), expect.anything())
     worker.emit({ type: 'error', message: BUNDLE_REPAIR })
