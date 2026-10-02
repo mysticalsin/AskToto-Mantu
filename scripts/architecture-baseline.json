@@ -44,7 +44,7 @@
     "src/main/brain/store.ts": 1197,
     "src/main/cli.ts": 1690,
     "src/main/import-jobs.ts": 1198,
-    "src/main/index.ts": 9947,
+    "src/main/index.ts": 9944,
     "src/main/store.ts": 1364,
     "src/main/transcripts.ts": 1210,
     "src/renderer/src/App.tsx": 4331,
@@ -53,14 +53,14 @@
     "src/renderer/src/components/BrainView.tsx": 1445,
     "src/renderer/src/components/Onboarding.tsx": 1000,
     "src/renderer/src/components/OnboardingExperience.tsx": 1909,
-    "src/renderer/src/components/RecallView.tsx": 1349,
+    "src/renderer/src/components/RecallView.tsx": 1279,
     "src/renderer/src/components/Review.tsx": 1950,
     "src/renderer/src/features/settings/AiSection.tsx": 2410,
     "src/renderer/src/features/settings/AudioTab.tsx": 911,
     "src/renderer/src/features/settings/DustSetup.tsx": 980,
     "src/renderer/src/features/settings/SettingsRoot.tsx": 1246,
     "src/renderer/src/lib/listen.ts": 3144,
-    "src/shared/ipc.ts": 2455
+    "src/shared/ipc.ts": 2450
   },
   "FF-05a": {
     "src/main/apple-speech.ts": 2,
@@ -272,8 +272,8 @@
     "src/renderer/src/components/TimeSavedView.test.ts": 1,
     "src/renderer/src/components/import-queue.test.ts": 2,
     "src/renderer/src/components/thinking-orb.package.test.tsx": 1,
-    "src/renderer/src/components/thinking-orb.surfaces.test.ts": 17,
-    "src/renderer/src/copy-no-em-dash.contract.test.ts": 18,
+    "src/renderer/src/components/thinking-orb.surfaces.test.ts": 18,
+    "src/renderer/src/copy-no-em-dash.contract.test.ts": 19,
     "src/renderer/src/lib/asr-decode-failure.mqa193.test.ts": 1,
     "src/renderer/src/lib/bar-toolbar.layout.test.ts": 1,
     "src/renderer/src/lib/intelligence-update.test.ts": 1,
@@ -317,7 +317,7 @@
     "src/shared/reset-time.test.ts": 2
   },
   "FF-09": {
-    "src/main/index.ts": 167
+    "src/main/index.ts": 166
   },
   "FF-10": {
     "src/main/apple-speech.ts": 1,

@@ -33,6 +33,18 @@ describe('History row status (rowStatus, RowStatusChip)', () => {
     expect(rowStatus(row, { state: 'failed', error: 'Offline.' })).toMatchObject({ label: 'Download failed', title: 'Offline.', tone: 'danger' })
   })
 
+  it('names a cloud-only row as in OneDrive and not downloaded, even though main also marks it locked', () => {
+    expect(rowStatus({ notDownloaded: true, locked: true }, undefined)).toMatchObject({
+      label: 'Not downloaded',
+      title: expect.stringContaining('In OneDrive, not downloaded'),
+      tone: 'muted'
+    })
+  })
+
+  it('shows an unreadable row as Unavailable, never as a Locked meeting', () => {
+    expect(rowStatus({ unavailable: true, locked: true }, undefined)).toMatchObject({ label: 'Unavailable', live: false })
+  })
+
   it('keeps the Locked chip for an undecryptable row and shows nothing on a plain row', () => {
     expect(rowStatus({ locked: true }, undefined)).toMatchObject({ label: 'Locked' })
     expect(rowStatus({}, undefined)).toBeNull()
@@ -43,6 +55,7 @@ describe('History row status (rowStatus, RowStatusChip)', () => {
       rowStatus({ notDownloaded: true }, undefined),
       rowStatus({ notDownloaded: true }, { state: 'hydrating' }),
       rowStatus({ notDownloaded: true }, { state: 'failed', error: 'Offline.' }),
+      rowStatus({ unavailable: true }, undefined),
       rowStatus({ locked: true }, undefined)
     ]
     for (const status of statuses) {
