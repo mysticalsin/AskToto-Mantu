@@ -13,7 +13,7 @@
  * transport) so Métis can call their tools the same way it calls a user's own pasted-key connection.
  */
 import { hashOperatorId, operatorHmacHeaders } from './operator-hmac-sign'
-import { getDurableMachineId } from '../license'
+import { getDurableMachineId } from '../license/license'
 import { inspectBundleResponse } from '@shared/bundle-response'
 import { resolveOperatorBaseUrl, resolveOperatorCredential } from '@shared/operator'
 import {

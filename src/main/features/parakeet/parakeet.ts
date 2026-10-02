@@ -13,7 +13,7 @@ import {
   ensureParakeetAssets,
   parakeetFilesReady,
   resolveParakeetDir
-} from '../asr'
+} from '../asr/asr-bundled-ensure'
 
 const SAMPLE_RATE = 16_000
 const MAX_SAMPLES = SAMPLE_RATE * 30

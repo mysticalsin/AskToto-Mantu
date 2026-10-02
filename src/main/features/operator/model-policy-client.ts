@@ -28,7 +28,7 @@ import {
   type ModelPolicyDocument,
   type LocalSpeechPackPolicy
 } from '@shared/model-policy'
-import { getDurableMachineId } from '../license'
+import { getDurableMachineId } from '../license/license'
 import { hashOperatorId, operatorHmacHeaders } from './operator-hmac-sign'
 import { auditLog, mainLog } from '../../logger'
 

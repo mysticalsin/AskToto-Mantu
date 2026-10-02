@@ -13,7 +13,7 @@ import {
 import { buildSeatMeta, type SeatMeta } from '@shared/operator-seat'
 import { classifyQuestionType, normalizeQuestionType, type QuestionType } from '@shared/question-type'
 import type { Settings } from '@shared/ipc'
-import { getDurableMachineId, memberLicenseStatus, licenseDisplayStatus } from '../license'
+import { getDurableMachineId, memberLicenseStatus, licenseDisplayStatus } from '../license/license'
 import { getSettings as getStoreSettings } from '../../store'
 import { authStatus } from '../../auth'
 import { lastIndexedAt } from '../../brain/intelligence-index'

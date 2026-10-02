@@ -22,7 +22,7 @@ import {
   looksLikeHtmlBytes
 } from '@shared/bundle-response'
 import { mainLog } from '../../logger'
-import { extractParakeetArchiveWindows } from '../parakeet'
+import { extractParakeetArchiveWindows } from '../parakeet/parakeet-extract'
 import { asrManifestComplete } from './asr-manifest'
 
 const execFileAsync = promisify(execFile)

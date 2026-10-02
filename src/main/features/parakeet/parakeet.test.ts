@@ -20,7 +20,11 @@ vi.mock('node:child_process', () => ({ execFile: network.execFile }))
 vi.mock('../../logger', () => ({ mainLog: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }))
 
 import { ensureParakeetModel, parakeetModelReady } from './parakeet'
-import { PARAKEET_REQUIRED_FILES, setAsrEnsureTestHooks, type AsrEnsureTestHooks } from '../asr'
+import {
+  PARAKEET_REQUIRED_FILES,
+  setAsrEnsureTestHooks,
+  type AsrEnsureTestHooks
+} from '../asr/asr-bundled-ensure'
 
 function withTestResources(hooks: Omit<AsrEnsureTestHooks, 'bundledResourceRoot'> = {}): AsrEnsureTestHooks {
   return { ...hooks, bundledResourceRoot: () => paths.resources }
