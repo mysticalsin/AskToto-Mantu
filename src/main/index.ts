@@ -2637,11 +2637,8 @@ function createWindow(targetDisplay?: Electron.Display): void {
       audit: auditLog,
       powerMonitor,
       stallWatchCommand: macStallWatchCommand(),
-      deferStallSamplerStart: (start) => {
-        const gate = bootWorkGate
-        if (gate) gate.run('startStallSampler', start)
-        else setImmediate(start)
-      }
+      deferStallSamplerStart: (start) => { bootWorkGate ? bootWorkGate.run('startStallSampler', start) : setImmediate(start) },
+      deps: { scheduleFlush: (flush) => { bootWorkGate ? bootWorkGate.run('flushBootStages', flush) : setImmediate(flush) } }
     })
     settlePriorExit(observability.priorShutdown)
     emittedAppStarted = true

@@ -125,7 +125,7 @@ describe('the read/replace invariant — I/O faults, retry, and quarantine limit
   })
   afterEach(async () => {
     vi.useRealTimers()
-    await store.settleBrainLogWritesForTests()
+    await new Promise<void>((resolve) => setImmediate(resolve))
     await settleBrainWritesForTests()
     failReadOnce = null
     failReadPersistent = null
@@ -203,7 +203,7 @@ describe('the read/replace invariant — I/O faults, retry, and quarantine limit
 
     store.readIndex(s)
     expect(warnSpy).not.toHaveBeenCalled()
-    await store.settleBrainLogWritesForTests()
+    await new Promise<void>((resolve) => setImmediate(resolve))
     expect(warnSpy).toHaveBeenCalledTimes(1)
   })
 

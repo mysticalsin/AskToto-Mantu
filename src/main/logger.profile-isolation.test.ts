@@ -18,7 +18,7 @@ vi.mock('node:os', async (importOriginal) => ({
 
 vi.mock('electron')
 
-import { auditLog, auditLogPath, mainLog, settleAuditLogForTests } from './logger'
+import { auditLog, auditLogPath, mainLog } from './logger'
 
 /**
  * MQA-177 — a test run must never write into the installed app's user profile.
@@ -59,12 +59,11 @@ describe('MQA-177 — logs written under test land nowhere near the real user pr
     expect(resolved.startsWith(installedAppLogDir())).toBe(false)
   })
 
-  it('writes audit records to the scratch dir, never userData/logs/audit.log', async () => {
+  it('writes audit records to the scratch dir, never userData/logs/audit.log', () => {
     const scratchAudit = join(scratchLogDir, 'audit.log')
     rmSync(scratchAudit, { force: true })
 
     auditLog('key.set', { mqa: 'MQA-177' })
-    await settleAuditLogForTests()
 
     expect(existsSync(scratchAudit)).toBe(true)
     expect(readFileSync(scratchAudit, 'utf8')).toContain('MQA-177')

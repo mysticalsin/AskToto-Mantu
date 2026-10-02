@@ -559,18 +559,11 @@ export function classifyIndexBytes(buf: Buffer): IndexLoad {
 // The (-1,-1) key stands for "stat itself failed (non-ENOENT)".
 type IndexCacheEntry = { mtimeMs: number; size: number; at: number; load: ResolvedIndex }
 const indexCache = new Map<string, IndexCacheEntry>()
-let pendingBrainLogWrites: Promise<void> = Promise.resolve()
 const deferBrainLogWrite = setImmediate
 function enqueueBrainLogWrite(write: () => void): void {
-  pendingBrainLogWrites = pendingBrainLogWrites.catch(() => undefined).then(() => new Promise<void>((resolve) => {
-    deferBrainLogWrite(() => {
-      try { write() } catch { /* best-effort */ } finally { resolve() }
-    })
-  }))
-}
-
-export function settleBrainLogWritesForTests(): Promise<void> {
-  return pendingBrainLogWrites.catch(() => undefined)
+  deferBrainLogWrite(() => {
+    try { write() } catch { /* best-effort */ }
+  })
 }
 
 /** Node fs errors carry `.code` (ENOENT, ETIMEDOUT, …); anything else has none. */

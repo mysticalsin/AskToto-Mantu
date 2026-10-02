@@ -418,11 +418,6 @@ export function auditLog<E extends AuditEvent>(event: E, detail?: AuditDetail<E>
   }
 }
 
-/** Test seam retained for callers that also run against deferred boot-stage flushes. */
-export function settleAuditLogForTests(): Promise<void> {
-  return Promise.resolve()
-}
-
 /** Test seam: the current chain tip, so a behavioral test can prove continuity without parsing files. */
 export function auditChainTip(): { seq: number; prev: string } {
   if (!chainLoaded) loadChainTip()

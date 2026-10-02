@@ -273,6 +273,15 @@ describe('startRunObservability', () => {
       expect(stageRecords().map((record) => record.stage)).toEqual(['createTray.loadIcon', 'createWindow.construct'])
     })
 
+    it('keeps app.boot.stage audit records behind the injected first-show gate until it opens', () => {
+      const { observability, stageRecords, scheduled, runScheduled } = bootStageHarness()
+      observability.recordBootStage('createWindow.firstShow', 511)
+      expect(scheduled).toHaveLength(1)
+      expect(stageRecords()).toEqual([])
+      runScheduled()
+      expect(stageRecords()).toEqual([{ bootId: 'boot-7', stage: 'createWindow.firstShow', ms: 511 }])
+    })
+
     it('recordBootStage carries whether the window it built is transparent', () => {
       const { observability, stageRecords, runScheduled } = bootStageHarness()
       observability.recordBootStage('createWindow.construct', 760, { transparent: true })
