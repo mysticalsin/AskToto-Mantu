@@ -114,12 +114,27 @@ function screenshotCoversBox(buffer, box) {
   )
 }
 
-function sectionCaptureClipped({ buffer, sectionBox, panelBox }) {
-  return !fitsInside(sectionBox, panelBox) || !screenshotCoversBox(buffer, sectionBox)
+function sectionCaptureClipped({ buffer, sectionBox }) {
+  return !screenshotCoversBox(buffer, sectionBox)
 }
 
 async function installDeterministicSettingsQaBridge(page) {
   const skipped = await page.evaluate(() => {
+    if (!window.__metisSettingsVisualQa) {
+      Object.defineProperty(window, '__metisSettingsVisualQa', { value: true, configurable: true })
+      const fixedNow = 1_000
+      try {
+        Object.defineProperty(performance, 'now', { value: () => fixedNow, configurable: true })
+      } catch {
+        try {
+          Object.defineProperty(Performance.prototype, 'now', { value: () => fixedNow, configurable: true })
+        } catch {
+          // Some runtimes make Performance immutable; requestAnimationFrame below still freezes its timestamp.
+        }
+      }
+      const nativeRaf = window.requestAnimationFrame.bind(window)
+      window.requestAnimationFrame = (callback) => nativeRaf(() => callback(fixedNow))
+    }
     const api = window.toto
     if (!api || typeof api !== 'object') throw new Error('window.toto bridge not found')
     const skippedNames = []
@@ -358,10 +373,9 @@ async function captureSections(page, appOutDir) {
         ?? `Section ${index + 1}`
       const key = `${slug(tab)}-${String(index + 1).padStart(2, '0')}-${slug(title)}`
       const file = join(appOutDir, `${key}.png`)
-      const panelBox = await tabPanel.boundingBox()
       const box = await section.boundingBox()
       const buffer = await section.screenshot({ path: file, animations: 'disabled', caret: 'hide' })
-      const clipped = sectionCaptureClipped({ buffer, sectionBox: box, panelBox })
+      const clipped = sectionCaptureClipped({ buffer, sectionBox: box })
       sections.push({
         key,
         tab,

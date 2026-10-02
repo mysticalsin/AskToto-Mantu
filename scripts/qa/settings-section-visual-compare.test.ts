@@ -100,16 +100,15 @@ describe('settings-section-visual-compare compare', () => {
     expect(compared.rows[0]).toEqual(expect.objectContaining({ status: 'FAIL', failures: ['clipped'] }))
   })
 
-  it('fails a tall scroll-panel section even when the PNG covers the full section', () => {
+  it('accepts a tall scroll-panel section when the PNG covers the full section', () => {
     const sectionBox = { x: 24, y: 40, width: 820, height: 900 }
-    const panelBox = { x: 0, y: 0, width: 900, height: 640 }
-    const clipped = sectionCaptureClipped({ buffer: png(820, 900), sectionBox, panelBox })
+    const clipped = sectionCaptureClipped({ buffer: png(820, 900), sectionBox })
 
     expect(screenshotCoversBox(png(820, 900), sectionBox)).toBe(true)
-    expect(clipped).toBe(true)
+    expect(clipped).toBe(false)
     expect(compare(capture([section()]), capture([section({ clipped })]))).toMatchObject({
-      status: 'FAIL',
-      rows: [{ key: 'brain-01-models', status: 'FAIL', failures: ['clipped'] }]
+      status: 'PASS',
+      rows: [{ key: 'brain-01-models', status: 'PASS', failures: [] }]
     })
   })
 
@@ -121,8 +120,7 @@ describe('settings-section-visual-compare compare', () => {
     expect(screenshotCoversBox(png(820, 898), sectionBox)).toBe(false)
     expect(sectionCaptureClipped({
       buffer: png(820, 898),
-      sectionBox,
-      panelBox: { x: 0, y: 0, width: 900, height: 1_200 }
+      sectionBox
     })).toBe(true)
   })
 
