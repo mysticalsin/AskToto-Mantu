@@ -181,6 +181,7 @@ import { extractScreenText, macStallWatchCommand } from './mac-helper'
 import * as screenPerm from './capture-permissions/screen-permission-runtime'
 import { isOrphanScreenSourcesRejection } from './capture-permissions/loopback-grant'
 import { registerScreenPermissionIpc } from './ipc/screen-permission-ipc'
+import { registerHistoryTraceIpc } from './ipc/history-trace-ipc'
 import { configureSidecarRegistry, createSidecarRegistry } from './infra/process/registry'
 import { runBootSidecarReaper } from './infra/process/reaper'
 import { startAvailableMemorySampler } from './infra/scheduler/memory-sampler'
@@ -8977,11 +8978,7 @@ function registerIpc(): void {
     auditLog('recall.open', { encrypted: target.encrypted })
     return shell.openPath(target.path)
   })
-  ipcMain.handle(IPC.historySettled, (e, report: unknown) => {
-    assertMainWindow(e)
-    if (!requireAuth()) return
-    history.settle(report)
-  })
+  registerHistoryTraceIpc(assertMainWindow, requireAuth, history)
 
   // "Open brain folder for Claude" (the handshake): reveal the published wiki — a plaintext, self-describing
   // mirror with a CLAUDE.md entry doc — so the user can point Claude at it (a Claude Project, Claude Desktop,
