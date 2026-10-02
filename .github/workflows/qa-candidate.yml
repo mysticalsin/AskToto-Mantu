@@ -26,6 +26,7 @@ on:
       - scripts/qa/release-line.mjs
       - scripts/qa/st-1.mjs
       - scripts/qa/lib/st-1-core.mjs
+      - scripts/qa/stat-flags-fixture.sh
       # The boot path ST-1 measures (M2-0433), so every fix slice on it gets a QA self-test.
       - src/main/boot-tray.ts
       - src/main/boot-window-rendering.ts
@@ -532,6 +533,146 @@ jobs:
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 
+  # OD-36: the candidate itself carries ST-1 with synthetic dataless fixtures. Hosted runners have no
+  # cloud-file provider, so a kernel-blocking FIFO stands at every path a mostly-evicted cloud folder would
+  # present, in the representative-profile shape, with History idle. That proves the main-thread and
+  # threadpool guarantees on candidate bytes; SF_DATALESS detection on real evicted files is measured in the
+  # owner's field soak (st-1-macos-real-dataless.json says so and never reads as PASS). The job also runs the
+  # promotable DMG's own metis-mac-helper stat-flags on the paths that need no cloud account. Its
+  # continue-on-error equals st1-mac-fifo's: report-only while that job is, blocking once M2-0433 makes the
+  # ST-1 jobs blocking.
+  st1-mac-dataless-synthetic:
+    name: ST-1 synthetic dataless row and stat-flags (macOS)
+    needs: provenance
+    runs-on: macos-latest
+    timeout-minutes: 25
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-provenance
+          path: provenance
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-mac-qa-identity
+          path: assets
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-mac
+          path: assets-mac
+      - name: Verify every byte against the provenance
+        run: |
+          node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
+          node scripts/qa/provenance.mjs verify provenance/provenance.json assets-mac mac
+      - name: Measure packaged stall resilience on the synthetic dataless profile
+        continue-on-error: true
+        run: |
+          mkdir -p st1-report
+          installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
+          if [ -z "$installer" ]; then
+            echo "::error::candidate-mac-qa-identity did not contain a zip installer for ST-1."
+            exit 1
+          fi
+          node scripts/qa/st-1.mjs \
+            --installer "$installer" \
+            --provenance provenance/provenance.json \
+            --fixtures synthetic-dataless \
+            --history off \
+            --minutes 5 \
+            --out st1-report/st-1-macos-synthetic-dataless.json
+      - name: Record the real-cloud dataless row as not run on hosted runners
+        if: always()
+        run: |
+          mkdir -p st1-report
+          scratch=$(mktemp "$RUNNER_TEMP/sf-dataless-probe.XXXXXX")
+          # SF_DATALESS (0x40000000) can only be set by the kernel for a file a cloud-file provider manages.
+          # This records whether even root can set it on a scratch file, so the row's reason is measured.
+          set +e
+          probe=$(sudo python3 -c 'import os, sys; os.chflags(sys.argv[1], 0x40000000)' "$scratch" 2>&1)
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            settable=true
+            errno=null
+          else
+            settable=false
+            errno=$(sed -n 's/.*Errno \([0-9]*\).*/\1/p' <<<"$probe" | head -n 1)
+            if ! [[ "$errno" =~ ^[0-9]+$ ]]; then errno=null; fi
+          fi
+          sudo chflags 0 "$scratch" 2>/dev/null || true
+          sudo rm -f "$scratch"
+          jq -n --argjson settable "$settable" --argjson errno "$errno" --arg probe "$probe" '{
+            harness: "ST-1",
+            row: "dataless-real-cloud",
+            verdict: "NOT_RUN_ON_HOSTED",
+            reason: "Hosted runners have no cloud-file provider account, so no file can be evicted to a real dataless placeholder.",
+            measuredBy: "post-release field soak diagnostics",
+            sfDatalessProbe: { settable: $settable, errno: $errno, output: $probe }
+          }' > st1-report/st-1-macos-real-dataless.json
+          cat st1-report/st-1-macos-real-dataless.json
+      - name: Check the DMG's own stat-flags helper on local paths
+        if: always()
+        run: |
+          mkdir -p stat-flags-report
+          dmg=$(find assets-mac -maxdepth 1 -name '*.dmg' -print -quit)
+          if [ -z "$dmg" ]; then
+            echo "::error::candidate-mac did not contain a dmg."
+            exit 1
+          fi
+          volume="$RUNNER_TEMP/dmg-volume"
+          hdiutil attach -nobrowse -readonly -mountpoint "$volume" "$dmg" > /dev/null
+          bundle=$(cd "$volume" && ls -d *.app)
+          ditto "$volume/$bundle" "$RUNNER_TEMP/dmg-app"
+          hdiutil detach "$volume" > /dev/null
+          helper="$RUNNER_TEMP/dmg-app/Contents/Resources/mac-helper/metis-mac-helper"
+          set +e
+          bash scripts/qa/stat-flags-fixture.sh "$helper" --local-only 2>&1 | tee stat-flags-report/stat-flags-output.txt
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -eq 0 ]; then verdict=PASS; else verdict=FAIL; fi
+          jq -n --arg verdict "$verdict" --rawfile output stat-flags-report/stat-flags-output.txt '{
+            harness: "stat-flags",
+            mode: "local-only",
+            helper: "candidate-mac DMG: Contents/Resources/mac-helper/metis-mac-helper",
+            verdict: $verdict,
+            rows: {
+              local: { matchesStat: ($output | test("local=[0-9]+")), sfDatalessSet: false },
+              apfsCompressed: { matchesStat: ($output | test("compressed=[0-9]+")), sfDatalessSet: false },
+              nonAscii: { matchesStat: ($output | test("unicode=[0-9]+")), sfDatalessSet: false },
+              unstatable: { value: null, matchesExpected: ($output | test("missing=null")) }
+            },
+            datalessFileCheck: "NOT_RUN_ON_HOSTED",
+            output: $output
+          }' > stat-flags-report/stat-flags-macos.json
+          exit "$status"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: st-1-macos-synthetic-dataless
+          path: st1-report/st-1-macos-synthetic-dataless.json
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: st-1-macos-real-dataless
+          path: st1-report/st-1-macos-real-dataless.json
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: stat-flags-macos
+          path: stat-flags-report/stat-flags-macos.json
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+
   # Report-only: the same candidate and measurement with no fixture, so a block the fifo row shows can be
   # told apart from a block that happens at every launch. Its verdict never fails the run.
   st1-mac-control:
@@ -581,7 +722,8 @@ jobs:
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 
   # The History row (M2-0193): History open and search against the FIFO fixtures, each answering with a
-  # usable degraded list within 2 s, the first call included, with main loop p99 < 50 ms. Report-only per
+  # usable degraded list within 2 s, the first call included, with main loop p99 < 50 ms; each History call
+  # is also timed on its own and judged by historySummary (first recallList < 250 ms, M2-0512). Report-only per
   # owner decision OD-24, like the fifo row. The real dataless half needs a cloud provider's evicted files,
   # which a hosted runner has none of: it is recorded as BLOCKED_EXTERNAL with its unblock step.
   st1-mac-history:
@@ -623,6 +765,23 @@ jobs:
             --history \
             --minutes 3 \
             --out st1-report/st-1-macos-fifo-history.json
+      # M2-0512: the History row's per-call split (recallList, brainStatus, recallSearch: first, p50, p95, max),
+      # its own verdict (first recallList < 250 ms, every list and search < 2 s, main loop p99 < 50 ms) and the
+      # cause of a slow first recallList, readable from the run page without downloading the artifact.
+      - name: Show the History row's per-call split
+        if: always()
+        run: |
+          report=st1-report/st-1-macos-fifo-history.json
+          if [ ! -f "$report" ]; then
+            echo "::warning::$report was not written; the History row has no per-call split."
+            exit 0
+          fi
+          {
+            echo '### ST-1 History row (macOS, fifo): historySummary'
+            echo '```json'
+            jq '.historySummary' "$report"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Record the dataless History row's unblock step
         if: always()
         run: |
@@ -638,6 +797,32 @@ jobs:
             "provenanceArtifact": "candidate-provenance"
           }
           EOF
+      # M2-0512: the lead's filing step travels with the artifact, pinned to the candidate zip's sha256.
+      - name: Record the lead action for the History row
+        if: always()
+        run: |
+          mkdir -p st1-report
+          installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
+          sha=""
+          if [ -n "$installer" ]; then
+            sha=$(shasum -a 256 "$installer" | cut -d' ' -f1)
+          fi
+          jq -n --arg sha "$sha" '{
+            harness: "ST-1",
+            historyRow: true,
+            candidateSha256: $sha,
+            provenanceArtifact: "candidate-provenance",
+            leadAction: "LEAD_ACTION: dispatch qa-candidate ST-1 on the lane candidate (sha256) with --fixtures fifo on macos-latest and --fixtures dataless, plus ST-1-W on windows-latest; file historySummary and the per-call split",
+            blockedExternal: [
+              "st-1-macos-dataless-history-blocked.json",
+              "st-1-windows-history-blocked.json (artifact st-1-windows-blocked)"
+            ]
+          }' > st1-report/st-1-history-lead-action.json
+          {
+            echo '### ST-1 History row: lead action'
+            echo "LEAD_ACTION: dispatch qa-candidate ST-1 on the lane candidate (sha256) with --fixtures fifo on macos-latest and --fixtures dataless, plus ST-1-W on windows-latest; file historySummary and the per-call split"
+            echo "Candidate zip sha256: ${sha:-unknown}"
+          } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
@@ -646,18 +831,20 @@ jobs:
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 
-  # Report-only measurement (M2-0516), never a gate and never ST-1 evidence: short launches (--purpose
+  # Window-construction measurement (M2-0516), never ST-1 evidence: short launches (--purpose
   # window-construction, st1Evidence: false) that build the boot window under each QA-identity rendering variant,
   # in both chromes, twice, interleaved, all on this one runner so the numbers compare. A first-run profile builds
   # the opaque exclusive onboarding window; an onboarded bar profile builds the transparent overlay. Each report's
-  # bootStages carries createWindow.construct (with the chrome and variant built), createWindow.navigate and
-  # createWindow.firstShow.
+  # bootStages carries createWindow.prewarm and createWindow.construct (with the chrome and variant built),
+  # createWindow.navigate and createWindow.firstShow. The other variants stay report-only; the shipped window is
+  # gated (M2-0519): the job fails unless every shipped createWindow.prewarm and createWindow.construct is present
+  # and under 250 ms in both chromes. OD-42: each chrome gets one marked warm-up launch before any measured
+  # repeat, and the gate skips those warm-up reports.
   st1-mac-window:
-    name: ST-1 window construction per variant and chrome (report-only)
+    name: ST-1 window construction per variant and chrome (shipped gated < 250 ms)
     needs: provenance
     runs-on: macos-latest
     timeout-minutes: 45
-    continue-on-error: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -686,8 +873,27 @@ jobs:
           fi
           # The durable settings of a user who finished onboarding with the bar layout (plain JSON is a supported read path).
           printf '{"onboardingDone":true,"onboardingDoneAt":%s000,"recordingConsent":true,"overlayLayout":"bar","autoHideOverlay":false}\n' "$(date +%s)" > onboarded-profile/settings.json
+          # The first launch on a fresh hosted runner can pay one-time Electron/macOS warm-up costs.
+          # Keep that launch explicit and marked so the strict shipped gate measures the steady boot path only.
+          for chrome in opaque transparent; do
+            template=()
+            if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi
+            run="window-warmup-shipped-$chrome"
+            node scripts/qa/st-1.mjs \
+              --installer "$installer" \
+              --provenance provenance/provenance.json \
+              --fixtures none \
+              "${template[@]}" \
+              --minutes 0.5 \
+              --purpose window-construction \
+              --window-variant shipped \
+              --window-warmup \
+              --report-dir "st1-report/$run" \
+              --out "st1-report/$run/$run.json" \
+              || echo "::warning::$run ended without PASS; its report says why."
+          done
           for repeat in 1 2; do
-            for variant in shipped spellcheck-off paint-when-hidden prewarm-spellchecker prewarm-view; do
+            for variant in spellcheck-off paint-when-hidden prewarm-spellchecker shipped; do
               for chrome in opaque transparent; do
                 template=()
                 if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi
@@ -706,6 +912,9 @@ jobs:
               done
             done
           done
+      - name: Gate the shipped window (createWindow.prewarm and createWindow.construct < 250 ms in both chromes)
+        if: always()
+        run: node scripts/qa/st-1.mjs --gate-window st1-report --out st1-report/window-gate.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:

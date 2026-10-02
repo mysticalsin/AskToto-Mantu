@@ -33,6 +33,7 @@ import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, join, normalize, relative, sep } from 'node:path'
 import { createAdmission, type Admission, type Lane } from './admission'
 import { createDatalessDetector, type ContentPresence, type DatalessDetector, type FileVersion } from './dataless'
+import { isLocalWrite } from './local-writes'
 
 /** Threads libuv starts when UV_THREADPOOL_SIZE is unset, and the most it accepts (libuv src/threadpool.c). */
 const DEFAULT_POOL_SIZE = 4
@@ -45,7 +46,11 @@ const METADATA_DEADLINE_MS = 2_000
 /** A local meeting or `.brain` file (a few MB at most) reads in milliseconds. */
 const CONTENT_DEADLINE_MS = 5_000
 /** An explicit open of one cloud-only file waits for the provider's download this long. */
-const HYDRATE_DEADLINE_MS = 60_000
+export const HYDRATE_DEADLINE_MS = 60_000
+/** How long a read of only versions this process wrote waits on the placeholder probe (a cold powershell.exe
+ *  on a slow Windows machine can outlive every deadline above) before it counts them local. Under
+ *  METADATA_DEADLINE_MS, so a classify of such files answers too. */
+const LOCAL_WRITE_PROBE_WAIT_MS = 1_000
 /** How long a read that returned no content is answered from memory, without touching the file. */
 const FAILURE_TTL_MS = 60_000
 /** Abort reason of a request's own deadline, which tells it apart from the caller's abort. */
@@ -83,14 +88,20 @@ export interface RequestOptions {
   signal?: AbortSignal
 }
 
-/** What an explicit open reports while one cloud-only file downloads. */
-export type HydrationProgress = { state: 'hydrating' } | { state: 'done'; bytes: number }
+/** What an explicit open reports while one cloud-only file downloads. A read that reported 'hydrating'
+ *  ends in exactly one 'done' or 'failed'. A 'failed' read (deadline, abort, provider error) can leave its
+ *  fs call running, holding its content permit: `settled` resolves (never rejects) once no fs call reads
+ *  the file any more. */
+export type HydrationProgress =
+  | { state: 'hydrating' }
+  | { state: 'done'; bytes: number }
+  | { state: 'failed'; status: Exclude<ReadResult['status'], 'ok'>; settled: Promise<void> }
 
 export interface ReadOptions extends RequestOptions {
   /** A user-initiated open of this one file: skips the dataless check and reads it under a content permit,
    *  waiting for the download for up to a minute. Never for a listing or a search. */
   hydrate?: boolean
-  /** Called (never throwing into the gateway) as a `hydrate` read starts and ends. */
+  /** Called (never throwing into the gateway) as a `hydrate` read starts and ends, ok or not. */
   onProgress?: (progress: HydrationProgress) => void
 }
 
@@ -322,10 +333,23 @@ export function createStorageGateway({
   }
 
   /** The detector's verdicts, or none (every file then counts as unknown) when the request ends first. The
-   *  probe runs on, and the detector caches its answer for the next call. */
+   *  probe runs on, and the detector caches its answer for the next call. A version this process wrote
+   *  itself (local-writes.ts) is still probed and the probe's answer wins, but where the probe cannot tell
+   *  ('unknown') it is local, and a batch of only such versions waits LOCAL_WRITE_PROBE_WAIT_MS at most. */
   async function presenceWithin(files: readonly FileVersion[], request: Request): Promise<Map<string, ContentPresence>> {
-    const verdicts = await untilEnded(presenceOf(files), request, 'waiting')
-    return verdicts instanceof Map ? verdicts : new Map<string, ContentPresence>()
+    const ours = files.filter(isLocalWrite)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const probed = presenceOf(files)
+    const pending =
+      ours.length > 0 && ours.length === files.length
+        ? Promise.race([probed, new Promise<Map<string, ContentPresence>>((resolve) => (timer = setTimeout(() => resolve(new Map()), LOCAL_WRITE_PROBE_WAIT_MS)))])
+        : probed
+    const verdicts = await untilEnded(pending, request, 'waiting')
+    clearTimeout(timer)
+    if (!(verdicts instanceof Map)) return new Map<string, ContentPresence>()
+    const presence = new Map(verdicts)
+    for (const file of ours) if ((presence.get(file.path) ?? 'unknown') === 'unknown') presence.set(file.path, 'local')
+    return presence
   }
 
   async function resolveRoot(base: string, request: Request): Promise<Settled<string>> {
@@ -344,9 +368,13 @@ export function createStorageGateway({
     return leavesBase(relative(realBase.value, real.value)) ? outsideRoot() : real
   }
 
+  function readKey(real: string, version: ContentVersion): string {
+    return [real, version.mtimeMs, version.ctimeMs, version.size].join('\0')
+  }
+
   /** Reads `real` once per version, however many callers ask while that read runs. */
   async function readShared(real: string, version: ContentVersion, request: Request): Promise<Settled<Buffer>> {
-    const key = [real, version.mtimeMs, version.ctimeMs, version.size].join('\0')
+    const key = readKey(real, version)
     const running = reads.get(key)
     if (running) return untilEnded(running, request, 'running')
     const refused = await admit('content', request)
@@ -380,6 +408,12 @@ export function createStorageGateway({
     if (hydrate) reportProgress(onProgress, { state: 'hydrating' })
     const bytes = await readShared(real.value, version, request)
     if (hydrate && bytes.status === 'ok') reportProgress(onProgress, { state: 'done', bytes: bytes.value.length })
+    if (hydrate && bytes.status !== 'ok') {
+      // A read still running past its deadline is in `reads` until its fs call settles.
+      const running = reads.get(readKey(real.value, version))
+      const settled = running ? running.then(() => undefined) : Promise.resolve()
+      reportProgress(onProgress, { state: 'failed', status: bytes.status, settled })
+    }
     return { result: bytes.status === 'ok' ? { status: 'ok', version, bytes: bytes.value } : bytes, rememberUnavailable: false }
   }
 

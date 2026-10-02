@@ -43,7 +43,7 @@ import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
 import { DEFAULT_OUT_DIR as SOAK_OUT_DIR, RECORD_FILE as SOAK_RECORD_FILE, soakRecordProblems } from '../qa/owner-soak/verdict.mjs'
-import { EXCERPT_FILES, STALL_BUNDLE_NAMES_FILE, STALL_BUNDLE_NAME, excerptOf } from '../qa/freeze-repro/attribution-bundle.mjs'
+import { EXCERPT_FILES, STALL_BUNDLE_NAMES_FILE, STALL_BUNDLE_NAME, STALLS_FILE, excerptOf } from '../qa/freeze-repro/attribution-bundle.mjs'
 import { VARIANTS, promotableAssets } from '../qa/provenance.mjs'
 import { EVIDENCE_LEVELS, latestByLevel, readRecordStore, recordsInPrBody, recordProblems, sha256Hex } from './record.mjs'
 // sample.mjs imports this module back; the cycle is safe because neither module calls the other at top level.
@@ -636,6 +636,7 @@ const M2_0008_BLOCKED_INTERRUPTS = Object.freeze(['network-off', 'file-provider-
 const M2_0008_EXERCISED = new Set(['observed', 'pass', 'fail'])
 const HOSTED_RUNNER_HOSTS = new Set(['macos-latest', 'windows-latest'])
 const nonEmptyString = (value) => typeof value === 'string' && value.trim() !== ''
+const stallKey = (row) => `${row.tMs ?? 'null'}:${row.stalledMs ?? 'null'}`
 
 /**
  * The extra shape a `run-matrix.sh --hosted-live` bundle must have (M2-0462): the mode and content-free
@@ -656,12 +657,20 @@ function m2_0008HostedLiveProblems(root, { environment, fuse, fifo, blockers, ro
       !(Number.isInteger(host.memory_bytes) && host.memory_bytes > 0)) {
     problems.push('environment.json: hosted-live must record host os_version, arch and memory_bytes')
   }
+  const hostedWindows = environment.host?.label === 'windows-latest'
+  const automaticRows = hostedWindows
+    ? ['row-1-history-open', 'row-4-second-instance-reopen']
+    : M2_0008_AUTOMATIC_ROWS
+  const blockedRows = hostedWindows
+    ? ['row-2-brain-status-blocked-brain', ...M2_0008_BLOCKED_ROWS]
+    : M2_0008_BLOCKED_ROWS
+
   if (fuse?.node_options_fuse === 'NOT_EXERCISED') problems.push('node-options-fuse.json: hosted-live must exercise the fuse probe')
-  if (Array.isArray(fifo?.fixtures) && !fifo.fixtures.every((fixture) => typeof fixture?.opened_by_1_9_6 === 'boolean')) {
+  if (!hostedWindows && Array.isArray(fifo?.fixtures) && !fifo.fixtures.every((fixture) => typeof fixture?.opened_by_1_9_6 === 'boolean')) {
     problems.push('fifo-fixtures.json: hosted-live must record opened_by_1_9_6 as true or false for every FIFO fixture')
   }
 
-  for (const row of M2_0008_AUTOMATIC_ROWS) {
+  for (const row of automaticRows) {
     const result = rows.find((entry) => entry.row === row && Object.hasOwn(entry, 'operator_result'))
     if (!result || result.automatic !== true || !M2_0008_EXERCISED.has(result.operator_result)) {
       problems.push(`matrix.jsonl: ${row} must be an automatic row that was exercised`)
@@ -676,18 +685,32 @@ function m2_0008HostedLiveProblems(root, { environment, fuse, fifo, blockers, ro
         problems.push(`matrix.jsonl: ${row} operator_result must be the one derived from its observation`)
       }
     }
-    const sample = rows.find((entry) => entry.row === row && Object.hasOwn(entry, 'sampled'))
-    if (!sample || sample.sampled !== true || sample.main_sample !== true || !(sample.renderer_samples >= 1) ||
-        sample.renderers_selected_by !== '--type=renderer') {
-      problems.push(`matrix.jsonl: ${row} must have main and role-selected renderer samples`)
-    } else if (!existsSync(join(root, 'samples', `${row}-main.sample.txt`))) {
-      problems.push(`samples/${row}-main.sample.txt: missing`)
+    if (hostedWindows) {
+      const sample = rows.find((entry) => entry.row === row && Object.hasOwn(entry, 'sampled'))
+      if (!sample || sample.sampled !== false || !/sampling unavailable/.test(sample.reason ?? '')) {
+        problems.push(`matrix.jsonl: ${row} must record why Windows hosted-live did not sample processes`)
+      }
+    } else {
+      const sample = rows.find((entry) => entry.row === row && Object.hasOwn(entry, 'sampled'))
+      if (!sample || sample.sampled !== true || sample.main_sample !== true || !(sample.renderer_samples >= 1) ||
+          sample.renderers_selected_by !== '--type=renderer') {
+        problems.push(`matrix.jsonl: ${row} must have main and role-selected renderer samples`)
+      } else if (!existsSync(join(root, 'samples', `${row}-main.sample.txt`))) {
+        problems.push(`samples/${row}-main.sample.txt: missing`)
+      }
+    }
+  }
+
+  if (hostedWindows) {
+    const macActivate = rows.find((entry) => entry.row === 'row-3-macos-activate' && Object.hasOwn(entry, 'operator_result'))
+    if (macActivate?.status !== 'not-applicable' || !/macOS-only/.test(macActivate.reason ?? '')) {
+      problems.push('matrix.jsonl: row-3-macos-activate must be not-applicable on windows-latest with an exact reason')
     }
   }
 
   const blocked = Array.isArray(blockers?.blockers) ? blockers.blockers : []
   const blockerListing = (key, id) => blocked.some((blocker) => Array.isArray(blocker[key]) && blocker[key].includes(id))
-  for (const row of M2_0008_BLOCKED_ROWS) {
+  for (const row of blockedRows) {
     const entry = rows.find((candidate) => candidate.row === row && Object.hasOwn(candidate, 'operator_result'))
     if (entry?.status !== 'BLOCKED_EXTERNAL' || !nonEmptyString(entry.unblock_step) || !blockerListing('rows', row)) {
       problems.push(`matrix.jsonl: ${row} must be BLOCKED_EXTERNAL with an unblock_step listed in external-blockers.json`)
@@ -700,13 +723,17 @@ function m2_0008HostedLiveProblems(root, { environment, fuse, fifo, blockers, ro
     }
   }
   const signal = interrupts.find((candidate) => candidate.interrupt === 'process-signal')
-  if (!signal || signal.automatic !== true || !M2_0008_EXERCISED.has(signal.result) || typeof signal.exited_within_10s !== 'boolean') {
+  if (hostedWindows) {
+    if (signal?.status !== 'not-applicable' || !/Windows hosted-live/.test(signal.reason ?? '')) {
+      problems.push('interrupt-results.jsonl: process-signal must be not-applicable on windows-latest with an exact reason')
+    }
+  } else if (!signal || signal.automatic !== true || !M2_0008_EXERCISED.has(signal.result) || typeof signal.exited_within_10s !== 'boolean') {
     problems.push('interrupt-results.jsonl: process-signal must run automatically and record exited_within_10s')
   }
 
   const summary = readJsonFile(join(root, 'hosted-live-summary.json'), problems, 'hosted-live-summary.json')
   if (summary) {
-    const symptomSeen = rows.some((entry) => M2_0008_AUTOMATIC_ROWS.includes(entry.row) && entry.operator_result === 'observed')
+    const symptomSeen = rows.some((entry) => automaticRows.includes(entry.row) && entry.operator_result === 'observed')
     if (summary.mode !== 'hosted-live' || typeof summary.reproduced !== 'boolean' || !nonEmptyString(summary.conclusion)) {
       problems.push('hosted-live-summary.json: must record mode, reproduced and conclusion')
     } else if (summary.reproduced !== symptomSeen) {
@@ -848,6 +875,7 @@ export function m2_0194BundleProblems(bundlePath) {
     'matrix.jsonl',
     'interrupt-results.jsonl',
     ...Object.values(EXCERPT_FILES),
+    STALLS_FILE,
     STALL_BUNDLE_NAMES_FILE,
     'M2-0194.lead-action.md'
   ]
@@ -861,6 +889,7 @@ export function m2_0194BundleProblems(bundlePath) {
   const names = readJsonFile(join(root, STALL_BUNDLE_NAMES_FILE), problems, STALL_BUNDLE_NAMES_FILE)
   const rows = jsonlRows(join(root, 'matrix.jsonl'), problems, 'matrix.jsonl')
   const interrupts = jsonlRows(join(root, 'interrupt-results.jsonl'), problems, 'interrupt-results.jsonl')
+  const stalls = jsonlRows(join(root, STALLS_FILE), problems, STALLS_FILE)
   const leadAction = readFileSync(join(root, 'M2-0194.lead-action.md'), 'utf8')
 
   if (environment?.ticket !== 'M2-0194') problems.push('environment.json: ticket must be M2-0194')
@@ -869,6 +898,14 @@ export function m2_0194BundleProblems(bundlePath) {
   }
   if (!/^[1-9]\d*$/.test(String(environment?.candidate_run ?? ''))) {
     problems.push('environment.json: candidate_run must be the qa-candidate run id')
+  }
+  if (environment?.mode !== 'hosted-live' && environment?.mode !== 'dry-run') {
+    problems.push('environment.json: mode must be hosted-live or dry-run')
+  }
+  const dryRun = environment?.dry_run === 1 || environment?.dry_run === true || environment?.mode === 'dry-run'
+  if (!dryRun && environment?.mode !== 'hosted-live') problems.push('environment.json: live M2-0194 bundles must record mode hosted-live')
+  if (!dryRun && !['macos-dmg', 'windows-setup'].includes(environment?.installed_variant)) {
+    problems.push('environment.json: installed_variant must be macos-dmg or windows-setup')
   }
   if (blockers?.ticket !== 'M2-0194') problems.push('external-blockers.json: ticket must be M2-0194')
   if (!Array.isArray(blockers?.blockers)) {
@@ -895,9 +932,87 @@ export function m2_0194BundleProblems(bundlePath) {
     if (!interruptIds.has(interrupt)) problems.push(`interrupt-results.jsonl: missing ${interrupt}`)
   }
 
+  if (!dryRun && environment?.mode === 'hosted-live') {
+    const hostedWindows = environment.host?.label === 'windows-latest'
+    const automaticRows = hostedWindows
+      ? ['row-1-history-open', 'row-4-second-instance-reopen']
+      : M2_0008_AUTOMATIC_ROWS
+    for (const row of automaticRows) {
+      const result = rows.find((entry) => entry.row === row && Object.hasOwn(entry, 'operator_result'))
+      if (!result || result.automatic !== true || !M2_0008_EXERCISED.has(result.operator_result)) {
+        problems.push(`matrix.jsonl: ${row} must be an automatic hosted-live row that was exercised`)
+      }
+      const sample = rows.find((entry) => entry.row === row && Object.hasOwn(entry, 'sampled'))
+      if (hostedWindows) {
+        if (!sample || sample.sampled !== false || !/sampling unavailable/.test(sample.reason ?? '')) {
+          problems.push(`matrix.jsonl: ${row} must record why Windows hosted-live did not sample processes`)
+        }
+      } else if (!sample || sample.sampled !== true || sample.main_sample !== true || !(sample.renderer_samples >= 1) ||
+          sample.renderers_selected_by !== '--type=renderer') {
+        problems.push(`matrix.jsonl: ${row} must have main and role-selected renderer samples`)
+      }
+    }
+    if (hostedWindows) {
+      const macActivate = rows.find((entry) => entry.row === 'row-3-macos-activate' && Object.hasOwn(entry, 'operator_result'))
+      if (macActivate?.status !== 'not-applicable' || !/macOS-only/.test(macActivate.reason ?? '')) {
+        problems.push('matrix.jsonl: row-3-macos-activate must be not-applicable on windows-latest with an exact reason')
+      }
+    }
+  }
+
+  const stallExcerptRows = []
   for (const [excerpt, file] of Object.entries(EXCERPT_FILES)) {
     for (const row of jsonlRows(join(root, file), problems, file)) {
       if (excerptOf(row.event) !== excerpt) problems.push(`${file}: event ${JSON.stringify(row.event)} does not belong in the ${excerpt} excerpt`)
+      if (row.event === 'app.stall' || row.event === 'app.stall.sampled') stallExcerptRows.push(row)
+      for (const [key, value] of Object.entries(row)) {
+        if (key === 'event') continue
+        if (typeof value === 'number' && Number.isFinite(value)) continue
+        if (typeof value === 'string' && /^(reason|status|result|outcome|sidecar|name|phase|source|kind)$/.test(key) &&
+            /^[A-Za-z0-9._:-]{1,96}$/.test(value)) continue
+        problems.push(`${file}: ${key} is not an allowed content-free attribution field`)
+      }
+    }
+  }
+  if (stalls.length !== stallExcerptRows.length) {
+    problems.push(`${STALLS_FILE}: must have one entry per app.stall or app.stall.sampled excerpt`)
+  }
+  const stallEntryCounts = new Map()
+  for (const stall of stalls) stallEntryCounts.set(stallKey(stall), (stallEntryCounts.get(stallKey(stall)) ?? 0) + 1)
+  for (const excerpt of stallExcerptRows) {
+    const key = stallKey(excerpt)
+    const count = stallEntryCounts.get(key) ?? 0
+    if (count <= 0) {
+      problems.push(`${STALLS_FILE}: missing entry for stall excerpt tMs=${excerpt.tMs ?? 'null'} stalledMs=${excerpt.stalledMs ?? 'null'}`)
+    } else {
+      stallEntryCounts.set(key, count - 1)
+    }
+  }
+  for (const stall of stalls) {
+    if (!nonEmptyString(stall.row)) problems.push(`${STALLS_FILE}: every stall needs a row`)
+    if (!(stall.tMs === null || typeof stall.tMs === 'number')) problems.push(`${STALLS_FILE}: tMs must be numeric or null`)
+    if (!(stall.stalledMs === null || typeof stall.stalledMs === 'number')) problems.push(`${STALLS_FILE}: stalledMs must be numeric or null`)
+    if (!(stall.bundle === null || (typeof stall.bundle === 'string' && STALL_BUNDLE_NAME.test(stall.bundle)))) {
+      problems.push(`${STALLS_FILE}: bundle must be null or a stall bundle file name`)
+    }
+    if (stall.attribution !== null) problems.push(`${STALLS_FILE}: attribution must be null for analyst attribution`)
+    if (!Array.isArray(stall.frames) || stall.frames.length > 12) {
+      problems.push(`${STALLS_FILE}: frames must contain at most 12 entries`)
+    } else {
+      for (const frame of stall.frames) {
+        if (!nonEmptyString(frame?.symbol) || !nonEmptyString(frame?.image) || /[\\/]/.test(frame.image)) {
+          problems.push(`${STALLS_FILE}: frames must include symbol and image basename only`)
+          break
+        }
+      }
+    }
+    if (stall.status === 'FAIL') {
+      if (!nonEmptyString(stall.error_class)) problems.push(`${STALLS_FILE}: FAIL entries need an error_class`)
+      if (!dryRun && environment?.host?.label !== 'windows-latest') problems.push(`${STALLS_FILE}: live macOS stall entries must have a nearest main-thread sample`)
+    }
+    if (stall.status === 'NOT_APPLICABLE') {
+      if (environment?.host?.label !== 'windows-latest') problems.push(`${STALLS_FILE}: NOT_APPLICABLE sampling is only valid on windows-latest`)
+      if (!nonEmptyString(stall.reason)) problems.push(`${STALLS_FILE}: NOT_APPLICABLE entries need a reason`)
     }
   }
   if (!Array.isArray(names?.names)) {
@@ -907,7 +1022,6 @@ export function m2_0194BundleProblems(bundlePath) {
   }
 
   if (!leadAction.includes('LEAD_ACTION:')) problems.push('M2-0194.lead-action.md: missing LEAD_ACTION handoff')
-  const dryRun = environment?.dry_run === 1 || environment?.dry_run === true || environment?.mode === 'dry-run'
   const liveHandoff = leadAction.includes('LIVE_VERIFIED')
   if (!leadAction.includes('M2-0194')) {
     problems.push('M2-0194.lead-action.md: must name M2-0194')
