@@ -254,17 +254,20 @@ export const GATED_WINDOW_STAGES = ['createWindow.prewarm', 'createWindow.constr
 
 /**
  * The window-construction gate (M2-0519) over a set of window-construction reports: `{ pass, rows, failures }`.
- * Only the shipped variant is gated; the other variants stay report-only. It fails unless every shipped report
- * carries each gated stage with a measured ms under WINDOW_STAGE_BUDGET_MS, and the shipped reports built both
- * chromes (opaque and transparent). A shipped report without boot stages (a launch that never reached the window)
- * fails as missing, never passes as absent. `rows` lists every shipped gated stage found, per report.
+ * Only the shipped variant is gated; marked warm-ups and the other variants stay report-only. It fails unless
+ * every measured shipped report carries each gated stage with a measured ms under WINDOW_STAGE_BUDGET_MS, and the
+ * measured shipped reports built both chromes (opaque and transparent). A measured shipped report without boot
+ * stages (a launch that never reached the window) fails as missing, never passes as absent. `rows` lists every
+ * measured shipped gated stage found, per report.
  * @param {Array<{ name: string, report: any }>} reports
  */
 export function windowConstructionGate(reports, budgetMs = WINDOW_STAGE_BUDGET_MS) {
   const rows = []
   const failures = []
   const chromes = new Set()
-  const shipped = reports.filter(({ report }) => report?.purpose === WINDOW_CONSTRUCTION && report.windowVariant === 'shipped')
+  const windowReports = reports.filter(({ report }) => report?.purpose === WINDOW_CONSTRUCTION)
+  const warmups = windowReports.filter(({ report }) => report.warmup === true)
+  const shipped = windowReports.filter(({ report }) => report.windowVariant === 'shipped' && report.warmup !== true)
   if (shipped.length === 0) failures.push('no shipped window-construction report')
   for (const { name, report } of shipped) {
     const stages = Array.isArray(report.bootStages?.stages) ? report.bootStages.stages : []
@@ -284,7 +287,7 @@ export function windowConstructionGate(reports, budgetMs = WINDOW_STAGE_BUDGET_M
   for (const chrome of ['opaque', 'transparent']) {
     if (shipped.length > 0 && !chromes.has(chrome)) failures.push(`no shipped ${chrome} window was measured`)
   }
-  return { pass: failures.length === 0, budgetMs, rows, failures }
+  return { pass: failures.length === 0, budgetMs, skippedWarmups: warmups.length, rows, failures }
 }
 
 /** The app's own native boot stage timings (tray stages, window construction, navigation and first show): every
@@ -508,7 +511,8 @@ export function buildReport({
   historyMode = 'on',
   fixtureCounts = null,
   purpose = 'st-1',
-  windowVariant = 'shipped'
+  windowVariant = 'shipped',
+  windowWarmup = false
 }) {
   const criteria = evaluateCriteria(row, measured, evidence, { history })
   // The control row has nothing to exercise: its verdict is the criteria alone.
@@ -518,6 +522,7 @@ export function buildReport({
   return {
     harness: 'ST-1',
     ...(purpose === WINDOW_CONSTRUCTION ? { purpose, st1Evidence: false, windowVariant } : {}),
+    ...(purpose === WINDOW_CONSTRUCTION && windowWarmup ? { warmup: true } : {}),
     row,
     ...(history ? { historyRow: true } : {}),
     platform: process.platform,
@@ -564,10 +569,11 @@ export function buildReport({
 
 /** The launch itself never reached a candidate to measure: a genuine FAIL (inspector: false), never a
  *  skipped row. A window-construction launch is marked as in buildReport. */
-export function buildLaunchFailureReport({ row, installer, candidate, fixtures, reason, purpose = 'st-1', windowVariant = 'shipped' }) {
+export function buildLaunchFailureReport({ row, installer, candidate, fixtures, reason, purpose = 'st-1', windowVariant = 'shipped', windowWarmup = false }) {
   return {
     harness: 'ST-1',
     ...(purpose === WINDOW_CONSTRUCTION ? { purpose, st1Evidence: false, windowVariant } : {}),
+    ...(purpose === WINDOW_CONSTRUCTION && windowWarmup ? { warmup: true } : {}),
     row,
     platform: process.platform,
     arch: process.arch,

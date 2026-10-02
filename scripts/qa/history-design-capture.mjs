@@ -31,16 +31,10 @@ import { spawn } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import {
-  NAVIGATION_GUARD_BOOTSTRAP_PATCH,
-  clickHistory,
-  ensureIdleBar,
-  findOverlayPage,
-  freeLoopbackPort,
-  isOverlayUrl,
-  mainInspector,
-  parseAuditLog
-} from './packaged-smoke.mjs'
+import { NAVIGATION_GUARD_BOOTSTRAP_PATCH, clickHistory, ensureIdleBar, findOverlayPage } from './golden-flows/navigation-guard-rows.mjs'
+import { mainInspector } from './golden-flows/right-edge-hide-rows.mjs'
+import { isOverlayUrl, parseAuditLog } from './golden-flows/smoke-support.mjs'
+import { freeLoopbackPort } from './lib/app-driver.mjs'
 import { assertAttachedAppIsSandboxed } from './lib/sandbox-guard.mjs'
 import {
   BACKDROPS,
