@@ -561,7 +561,6 @@ type IndexCacheEntry = { mtimeMs: number; size: number; at: number; load: Resolv
 const indexCache = new Map<string, IndexCacheEntry>()
 let pendingBrainLogWrites: Promise<void> = Promise.resolve()
 const deferBrainLogWrite = setImmediate
-
 function enqueueBrainLogWrite(write: () => void): void {
   pendingBrainLogWrites = pendingBrainLogWrites.catch(() => undefined).then(() => new Promise<void>((resolve) => {
     deferBrainLogWrite(() => {
