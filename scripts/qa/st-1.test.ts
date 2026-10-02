@@ -236,6 +236,8 @@ describe('window-construction runs (M2-0516)', () => {
   it('marks its report and launch failure as never ST-1 evidence, whatever the verdict; an ST-1 report carries no mark', () => {
     const built = report({ purpose: 'window-construction', windowVariant: 'spellcheck-off' })
     expect(built).toMatchObject({ purpose: 'window-construction', st1Evidence: false, windowVariant: 'spellcheck-off', verdict: 'PASS' })
+    const warmup = report({ purpose: 'window-construction', windowVariant: 'shipped', windowWarmup: true })
+    expect(warmup).toMatchObject({ purpose: 'window-construction', st1Evidence: false, windowVariant: 'shipped', warmup: true })
     const failed = buildLaunchFailureReport({
       row: 'none',
       installer: 'Metis-QA.zip',
@@ -327,6 +329,18 @@ describe('windowConstructionGate (M2-0519)', () => {
     expect(windowConstructionGate([]).failures).toEqual(['no shipped window-construction report'])
     const variantsOnly = windowConstructionGate([{ name: 'v.json', report: windowReport('prewarm-spellchecker', [stage('createWindow.construct', 100, false)]) }])
     expect(variantsOnly).toMatchObject({ pass: false, failures: ['no shipped window-construction report'] })
+  })
+
+  it('skips marked warm-up reports, counts them, and still fails a slow measured shipped run', () => {
+    const gate = windowConstructionGate([
+      { name: 'window-warmup-opaque/window-warmup-opaque.json', report: { ...shipped(false, 12, 900), warmup: true } },
+      ...passing,
+      { name: 'window-shipped-transparent-2/a.json', report: shipped(true, 9, 250) }
+    ])
+    expect(gate.skippedWarmups).toBe(1)
+    expect(gate.rows.map((row) => row.report)).not.toContain('window-warmup-opaque/window-warmup-opaque.json')
+    expect(gate.pass).toBe(false)
+    expect(gate.failures).toContain('window-shipped-transparent-2/a.json: createWindow.construct 250 ms >= 250 ms')
   })
 
   it('holds the gated stages to 250 ms', () => {
