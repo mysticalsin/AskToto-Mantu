@@ -657,7 +657,7 @@ import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentine
 import { buildTrayInStages, createSingleFlight, formatTrayAccelerator, loadPresizedTrayIcon, scheduleTrayAfterFirstPaint, trayIconPaths, yieldToEventLoop } from './boot-tray'
 import { BOOT_WINDOW_OPTIONS, BOOT_WINDOW_VARIANT, takeBootWindowPrewarmMs, yieldBeforeBootWindow } from './boot-window-rendering'
 import { isBootFirstShowDeferred, navigateWindow, scheduleCurrentFirstShow, withBootFirstShowDeferred } from './lifecycle/first-show'
-import { createBootWork } from './lifecycle/boot-work'
+import { createBootWork, type BootWork } from './lifecycle/boot-work'
 import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
 import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
@@ -1997,14 +1997,26 @@ async function verifyCliSessions(now = Date.now()): Promise<void> {
   return cliSessionSweep
 }
 
+let loginItemOpenAtLoginCache: boolean | null = null
+
+function refreshLoginItemOpenAtLoginCache(): boolean | null {
+  try { return (loginItemOpenAtLoginCache = app.getLoginItemSettings().openAtLogin) } catch { return null }
+}
+
+const publicLoginItemOpenAtLogin = (s: Settings): boolean => loginItemOpenAtLoginCache ?? s.launchAtLogin
+
+function reconcileLaunchAtLogin(): boolean {
+  const want = getSettings().launchAtLogin
+  const current = refreshLoginItemOpenAtLoginCache()
+  if (current === null || current === want) return false
+  app.setLoginItemSettings({ openAtLogin: want })
+  loginItemOpenAtLoginCache = want
+  return true
+}
+
 function publicSettings(): PublicSettings {
   const s = getSettings()
-  let loginItemOpenAtLogin = false
-  try {
-    loginItemOpenAtLogin = app.getLoginItemSettings().openAtLogin
-  } catch {
-    /* not supported on this platform */
-  }
+  const loginItemOpenAtLogin = publicLoginItemOpenAtLogin(s)
   // Active provider is usable: key present AND any provider-specific setup done (Dust needs a workspace +
   // a chosen base agent; custom needs an https base URL). Drives the add-key CTA so it only shows when the
   // app genuinely can't answer yet — not when a key for a DIFFERENT provider exists.
@@ -2175,6 +2187,7 @@ let emittedAppStarted = false
 // M2-0006: set once, at the same point app.started fires — will-quit calls observability.shutdownClean()
 // on it, and it is meaningless before that first createWindow() has run.
 let observability: RunObservability | null = null
+let bootWorkGate: BootWork | null = null
 /** Consumed by the next transparent window created when Act 6 finishes. Never persisted. */
 let postOnboardingDestination: 'answer' | 'settings' = 'answer'
 const ONBOARDING_EXIT_FALLBACK_MS = 5_000
@@ -2614,22 +2627,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // overwrite `win` with a second BrowserWindow and orphan the first one — still visible, still
   // always-on-top, unreferenced.
   if (win && !win.isDestroyed()) return
-  // MQA-249: the one unconditional "this build came up" signal, and the only portable one.
-  //
-  // check-packaged-launch.mjs proves a packaged app actually starts, but it is Win32-only: it asserts on
-  // the real top-level window via PowerShell + UI Automation, and the macOS equivalents all need a TCC
-  // Automation grant an unattended build cannot answer. Its own doc names the missing piece — "no
-  // unconditional audit event fires at startup — so today there is no portable positive signal to assert
-  // on". This is that signal. auditLog writes to userData/logs/audit.log, which ASKTOTO_USERDATA relocates
-  // (electron-log's main.log does NOT on macOS — it goes to ~/Library/Logs), so a gate can point a clean
-  // profile at a temp directory and read the answer out of it on either platform.
-  //
-  // Emitted here rather than at app-ready because reaching createWindow means the main process survived
-  // module load, bytecode load, and boot — which is exactly the class of failure that shipped DOA twice.
   if (!emittedAppStarted) {
-    // M2-0006: app.started/app.stall/app.shutdown.clean and the run/liveness/stall-monitor lifecycle
-    // behind them, and the out-of-process stall sampler (M2-0192) — see
-    // infra/observability/run-observability.ts for the invariant this enforces.
     observability = startRunObservability({
       userData: app.getPath('userData'),
       version: app.getVersion(),
@@ -2638,7 +2636,9 @@ function createWindow(targetDisplay?: Electron.Display): void {
       uvThreadpoolSize: process.env.UV_THREADPOOL_SIZE,
       audit: auditLog,
       powerMonitor,
-      stallWatchCommand: macStallWatchCommand()
+      stallWatchCommand: macStallWatchCommand(),
+      deferStallSamplerStart: (start) => { bootWorkGate ? bootWorkGate.run('startStallSampler', start) : setImmediate(start) },
+      deps: { scheduleFlush: (flush) => { bootWorkGate ? bootWorkGate.run('flushBootStages', flush) : setImmediate(flush) } }
     })
     settlePriorExit(observability.priorShutdown)
     emittedAppStarted = true
@@ -5405,6 +5405,7 @@ function registerIpc(): void {
     if ('launchAtLogin' in p) {
       try {
         app.setLoginItemSettings({ openAtLogin: next.launchAtLogin })
+        loginItemOpenAtLoginCache = next.launchAtLogin
       } catch {
         /* not supported on this platform */
       }
@@ -9224,6 +9225,7 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
   initLogging() // route main-process logs to a rotated file before anything else can fail
   const bootWork = createBootWork() // M2-0031: non-first-paint fs work starts after the first show, under the pool cap
+  bootWorkGate = bootWork
   configureSidecarRegistry(createSidecarRegistry(app.getPath('userData')))
   // M2-0518: child processes first paint does not need; the reaper spares this launch's own sidecars, the memory gate reads freemem() meanwhile.
   bootWork.run('runBootSidecarReaper', () => runBootSidecarReaper(app.getPath('userData')))
@@ -9333,14 +9335,11 @@ if (!app.requestSingleInstanceLock()) {
   if (process.platform === 'win32') {
     try { process.chdir(app.getPath('userData')) } catch { /* best-effort */ }
   }
-  // Reconcile the OS login item with the effective launchAtLogin setting once at boot. Covers two gaps:
-  // a managed-config/default launchAtLogin:true is never registered (setLoginItemSettings only ran on an
-  // explicit user patch), and OS-side drift (Task Manager Startup disable, AV cleanup, profile migration)
-  // silently diverges from the persisted preference. Idempotent — only writes when they actually differ.
-  try {
-    const want = getSettings().launchAtLogin
-    if (app.getLoginItemSettings().openAtLogin !== want) app.setLoginItemSettings({ openAtLogin: want })
-  } catch { /* best-effort — never block startup */ }
+  bootWork.run('reconcileLaunchAtLogin', () => {
+    try {
+      if (reconcileLaunchAtLogin()) notifySettingsChanged()
+    } catch { /* best-effort — never block startup */ }
+  })
   // Unpackaged (dev/QA) runs show Electron's default icon in the Dock — brand them with the Mantu M so
   // a dev window is never mistaken for "the Electron thing". Packaged builds get build/icon.png baked
   // in by electron-builder (mac .icns / win .ico) and don't need this.
@@ -9373,12 +9372,14 @@ if (!app.requestSingleInstanceLock()) {
   const clearBootWatchOnce = (reason: string): void => {
     if (bootWatchClosed) return
     bootWatchClosed = true
-    try {
-      endBootWatch(app.getPath('userData'))
-      auditLog('app.boot.watch_cleared', { earlyDeath: Boolean(earlyDeath), reason })
-    } catch (e) {
-      mainLog.warn('[boot] clearBootWatchOnce failed:', e)
-    }
+    bootWork.run('clearBootWatch', () => {
+      try {
+        endBootWatch(app.getPath('userData'))
+        auditLog('app.boot.watch_cleared', { earlyDeath: Boolean(earlyDeath), reason })
+      } catch (e) {
+        mainLog.warn('[boot] clearBootWatchOnce failed:', e)
+      }
+    })
   }
   if (earlyDeath) persistCrash('boot-early-death', describeEarlyDeath(earlyDeath), 'previous launch died before boot completed')
   // Never let an unhandled error crash the overlay silently — log to file, audit, write a crash dump, and
@@ -9401,7 +9402,9 @@ if (!app.requestSingleInstanceLock()) {
     return
   }
   if (!app.isPackaged) loadDotEnv() // dev convenience only; never read a stray .env in production
-  sweepStaleTempFiles() // remove any decrypted-transcript temp copies orphaned by a previous hard-kill
+  // Remove decrypted-transcript temp copies orphaned by a previous hard-kill after first show; the sweep
+  // can touch the profile filesystem and first paint does not depend on it.
+  bootWork.run('sweepStaleTempFiles', sweepStaleTempFiles)
   // Promote any orphaned crash-recovery drafts into real meetings BEFORE the retention sweep, so a
   // recovered meeting is visible in History and immediately subject to the same retention policy.
   // M2-0518: both read (and decrypt) the meetings root, so they start behind the first show, in this order.
@@ -9564,11 +9567,7 @@ if (!app.requestSingleInstanceLock()) {
   }
   })
 
-  // Deny every web permission by default; only the main window may use audio media (the Listen mic) or
-  // write to the system clipboard (Copy Summary / Export JSON / copy-code buttons all need this — it's a
-  // one-way, user-initiated write of text the app itself built, not a snooping vector). clipboard-READ
-  // (reading arbitrary external clipboard content) stays denied along with geolocation, notifications,
-  // camera, USB, MIDI, etc.
+  // Deny every web permission by default; only the main window may use media or write sanitized clipboard text.
   runStep('permissionHandlers', () => {
     const allowPermission = (wc: Electron.WebContents | null, permission: string): boolean =>
       (permission === 'media' || permission === 'clipboard-sanitized-write') && !!win && wc === win.webContents
@@ -9578,19 +9577,18 @@ if (!app.requestSingleInstanceLock()) {
     session.defaultSession.setPermissionCheckHandler((wc, permission) => allowPermission(wc, permission))
   })
 
-  // ─── asr-model:// protocol handler ───────────────────────────────────────
-  // Maps asr-model://<host>/<pathname> → RES_BASE/<host>/<pathname> on disk.
-  // This lets the Whisper worker (served over file://) use fetch() to load
-  // bundled ONNX model weights and WASM blobs with zero network access.
-  // Installed builds serve only their canonical resources; development may use its guarded userData root.
-  // FITO/Tony 2026-09-20: register ASR IPC BEFORE protocol.handle and BEFORE createWindow.
-  // A protocol throw must never leave asr:assets-ensure with "No handler registered" (Your setup Continue hang).
+  // Register ASR IPC before protocol.handle/createWindow; the bundled-status probe is primed after first show.
   runStep('asrAssetsIpc', () => {
     const REPO_ROOT = join(__dirname, '..', '..')
-    const RES_BASE = app.isPackaged
-      ? process.resourcesPath
-      : join(REPO_ROOT, 'resources')
-    const ASR_BUNDLED = app.isPackaged ? importAsrAssetsReady() : asrManifestComplete(RES_BASE)
+    const RES_BASE = app.isPackaged ? process.resourcesPath : join(REPO_ROOT, 'resources')
+    let asrBundledCache: boolean | null = null
+    let readAsrBundledStatus = (): boolean => false
+    const asrBundledReady = (): boolean => {
+      if (asrBundledCache === null) asrBundledCache = readAsrBundledStatus()
+      return asrBundledCache
+    }
+    bootWork.run('primeAsrBundledStatus', () => { asrBundledReady() })
+    readAsrBundledStatus = (): boolean => app.isPackaged ? importAsrAssetsReady() : asrManifestComplete(RES_BASE)
     const safeHandle = (channel: string, listener: (...args: any[]) => unknown): void => {
       try {
         ipcMain.removeHandler(channel)
@@ -9602,7 +9600,7 @@ if (!app.requestSingleInstanceLock()) {
     safeHandle(IPC.asrBundled, (e) => {
       if (isRecentlyRetiredOverlaySender(e)) return true
       assertMainWindow(e)
-      return ASR_BUNDLED
+      return asrBundledReady()
     })
     safeHandle(IPC.asrAssetsStatus, (e) => {
       assertMainWindow(e)
@@ -9769,16 +9767,11 @@ if (!app.requestSingleInstanceLock()) {
   // event set registerScreenListeners just subscribed to, plus powerMonitor resume (a notch MacBook can
   // wake docked to a different external display than it slept on). macOS-only signal; a no-op elsewhere.
   runStep('registerDisplayMetricsInvalidation', registerDisplayMetricsInvalidation)
-  // Establish real screen-capture readiness at boot on Windows, where the probe raises NO system prompt
-  // and there is no queryable permission to read instead — without it getPlatformPermissions() reports
-  // 'unknown' forever and the readiness checklist cannot tell the user whether screenshots will work
-  // until one fails mid-meeting. Deliberately NOT run at boot on macOS: there the same call raises the
-  // TCC prompt, which belongs in onboarding (permissionsRequestUpfront) where it is explained, not as an
-  // unattended pop-up seconds after launch. Fire-and-forget: readiness reporting must never delay boot.
+  // Windows-only and queued post-show: on macOS this probe raises TCC and belongs in onboarding.
   if (process.platform === 'win32') {
-    runStep('probeScreenCapture', () => {
+    bootWork.run('probeScreenCapture', () => runStep('probeScreenCapture', () => {
       void probeScreenCapture().catch(() => false)
-    })
+    }))
   }
   runStep('resumeScreenRepair', screenPerm.resumeScreenRepairOnBoot) // M2-0429: the boot half of a Repair
   runStep('startMeetingNotifier', startMeetingNotifier)

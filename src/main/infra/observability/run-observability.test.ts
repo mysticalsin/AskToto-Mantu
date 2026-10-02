@@ -273,6 +273,15 @@ describe('startRunObservability', () => {
       expect(stageRecords().map((record) => record.stage)).toEqual(['createTray.loadIcon', 'createWindow.construct'])
     })
 
+    it('keeps app.boot.stage audit records behind the injected first-show gate until it opens', () => {
+      const { observability, stageRecords, scheduled, runScheduled } = bootStageHarness()
+      observability.recordBootStage('createWindow.firstShow', 511)
+      expect(scheduled).toHaveLength(1)
+      expect(stageRecords()).toEqual([])
+      runScheduled()
+      expect(stageRecords()).toEqual([{ bootId: 'boot-7', stage: 'createWindow.firstShow', ms: 511 }])
+    })
+
     it('recordBootStage carries whether the window it built is transparent', () => {
       const { observability, stageRecords, runScheduled } = bootStageHarness()
       observability.recordBootStage('createWindow.construct', 760, { transparent: true })
@@ -539,6 +548,37 @@ describe('startRunObservability', () => {
         clearIntervalFn: vi.fn()
       }
     })
+    expect(startStallSampler).toHaveBeenCalledExactlyOnceWith({
+      command: '/x/metis-mac-helper',
+      userData: '/fake',
+      bootId: 'boot-1',
+      aliveIntervalMs: 10_000,
+      audit: expect.any(Function)
+    })
+  })
+
+  it('can defer the stall sampler helper spawn until the boot-work gate opens', () => {
+    const startStallSampler = vi.fn(() => ({ stop: vi.fn() }))
+    let deferredStart!: () => void
+    startRunObservability({
+      userData: '/fake',
+      version: '1.9.7',
+      platform: 'darwin',
+      arch: 'arm64',
+      audit: vi.fn(),
+      powerMonitor: fakePowerMonitor(),
+      stallWatchCommand: '/x/metis-mac-helper',
+      deferStallSamplerStart: (start) => { deferredStart = start },
+      deps: {
+        beginRunWatch: () => ({ bootId: 'boot-1', prior: fakePrior() }),
+        startStallMonitor: vi.fn(() => fakeStallMonitor()),
+        startStallSampler,
+        setIntervalFn: vi.fn(() => 1 as unknown as ReturnType<typeof setInterval>),
+        clearIntervalFn: vi.fn()
+      }
+    })
+    expect(startStallSampler).not.toHaveBeenCalled()
+    deferredStart()
     expect(startStallSampler).toHaveBeenCalledExactlyOnceWith({
       command: '/x/metis-mac-helper',
       userData: '/fake',

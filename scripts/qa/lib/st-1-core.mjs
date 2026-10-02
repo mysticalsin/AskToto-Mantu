@@ -65,17 +65,58 @@ export function pinnedExpression(key, expression, ms) {
   return `(() => {
   const pending = (globalThis.${PENDING_GLOBAL} ??= {})
   let timer
-  const bounded = Promise.race([
-    Promise.resolve()
-      .then(() => (${expression}))
-      .then((value) => ({ ok: true, value }), (error) => ({ ok: false, error: String(error?.message ?? error) })),
-    new Promise((resolve) => {
-      timer = setTimeout(() => resolve({ ok: false, timedOut: true }), ${Number(ms)})
-    })
-  ])
-  bounded.then(() => clearTimeout(timer))
+  const clearBound = () => {
+    try {
+      if (timer !== undefined) clearTimeout(timer)
+    } catch {}
+  }
+  const settled = Promise.resolve()
+    .then(() => (${expression}))
+    .then((value) => ({ ok: true, value }), (error) => ({ ok: false, error: String(error?.message ?? error) }))
+  let resolveTimeout
+  const timeout = new Promise((resolve) => {
+    resolveTimeout = resolve
+  })
+  try {
+    timer = setTimeout(() => resolveTimeout({ ok: false, timedOut: true }), ${Number(ms)})
+  } catch {}
+  const bounded = Promise.race([settled, timeout]).finally(clearBound)
   pending[${JSON.stringify(key)}] = bounded
   return bounded
+})()`
+}
+
+/** One app-side sample expression. The reported max covers the interval before the sample plus the probe
+ *  write after the histogram reset, and uses the never-reset run histogram only when it rose in this
+ *  interval, so a dropped post-reset block reaches one timeline sample without being replayed forever. */
+export function sampleExpression(probeFile) {
+  return `(async () => {
+  const loopMaxBeforeWriteMs = __st1since.max / 1e6
+  __st1since.reset()
+  const resources = {}
+  if (typeof process.getActiveResourcesInfo === 'function') {
+    for (const type of process.getActiveResourcesInfo()) resources[type] = (resources[type] ?? 0) + 1
+  }
+  const { writeFile } = process.getBuiltinModule('node:fs/promises')
+  const { lookup } = process.getBuiltinModule('node:dns/promises')
+  let started = performance.now()
+  await writeFile(${JSON.stringify(probeFile)}, String(started))
+  const writeMs = performance.now() - started
+  const loopMaxDuringWriteMs = __st1since.max / 1e6
+  const runLoopMaxMs = __st1.max / 1e6
+  const previousRunLoopMaxMs = globalThis.__st1lastRunLoopMaxMs ?? 0
+  globalThis.__st1lastRunLoopMaxMs = Math.max(previousRunLoopMaxMs, runLoopMaxMs)
+  const sampleLoopMaxMs = Math.max(loopMaxBeforeWriteMs, loopMaxDuringWriteMs)
+  started = performance.now()
+  await lookup('localhost')
+  return {
+    writeMs,
+    loopMaxDuringWriteMs,
+    runLoopMaxMs,
+    lookupMs: performance.now() - started,
+    loopMaxSinceLastMs: runLoopMaxMs > previousRunLoopMaxMs ? Math.max(sampleLoopMaxMs, runLoopMaxMs) : sampleLoopMaxMs,
+    resources
+  }
 })()`
 }
 

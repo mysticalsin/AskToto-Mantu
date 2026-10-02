@@ -345,7 +345,7 @@ async function captureState({ page, cdp, main, state, variant, realRows, out }) 
  * Waits, bounded, until the window holds the whole root, so a capture never judges a resize still in
  * flight; content that still overflows when the wait ends is left for the clipping check to fail.
  */
-async function settleWindow(page) {
+async function settleWindow(page, timeoutMs = SETTLE_TIMEOUT_MS) {
   await page
     .waitForFunction(
       () => {
@@ -353,7 +353,7 @@ async function settleWindow(page) {
         return Boolean(root) && root.scrollHeight <= root.clientHeight + 1
       },
       undefined,
-      { polling: 'raf', timeout: SETTLE_TIMEOUT_MS }
+      { polling: 'raf', timeout: timeoutMs }
     )
     .catch(() => undefined)
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
@@ -367,7 +367,7 @@ async function captureReachedState({ page, cdp, main, state, variant, realRows, 
   // applies at 2x (layout there can differ by a few pixels); only the device scale factor is emulated.
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 0, height: 0, deviceScaleFactor: variant.scale, mobile: false })
   try {
-    await settleWindow(page)
+    await settleWindow(page, state.id === 'loading' ? 250 : SETTLE_TIMEOUT_MS)
     await page.screenshot({ path: join(out, screenshot), scale: 'device' })
     drive.screenshotDoneAfterMs = Date.now() - drive.requestedAt
     drive.capturedAfterMs = drive.screenshotDoneAfterMs
