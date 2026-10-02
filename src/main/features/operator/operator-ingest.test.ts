@@ -57,7 +57,7 @@ vi.mock('electron', () => ({
   powerMonitor: electronMock.powerMonitor,
   net: electronMock.net
 }))
-vi.mock('../license/license', () => ({
+vi.mock('../../infra/license/license', () => ({
   getMachineId: () => 'machine-test-0001',
   getDurableMachineId: () => 'machine-test-0001'
 }))

@@ -86,7 +86,7 @@ function mainSources(): string[] {
 
 // Speech-engine `createStream()` calls (sherpa recognizer / extractor streams) are audio decoders, not model calls.
 const SPEECH_ENGINE_FILES = [
-  'src/main/features/parakeet/parakeet-asr-host.ts',
+  'src/main/infra/parakeet/parakeet-asr-host.ts',
   'src/main/features/speaker/speaker-embedding-host.ts'
 ]
 

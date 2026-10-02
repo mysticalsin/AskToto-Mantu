@@ -35,11 +35,11 @@ const highTierFiles = vi.hoisted(() => ({ ready: vi.fn(async () => true) }))
 vi.mock('electron', () => electron)
 vi.mock('node:os', () => ({ totalmem: hardware.totalmem, freemem: hardware.freemem }))
 vi.mock('./logger', () => logger)
-vi.mock('./features/asr/asr-model-download', () => ({
+vi.mock('./infra/asr/asr-model-download', () => ({
   asrModelRoot: () => '/tmp/metis-test-fetched-models',
   isHighTierAsrModelReady: highTierFiles.ready
 }))
-vi.mock('./features/asr/asr-bundled-ensure', () => ({
+vi.mock('./infra/asr/asr-bundled-ensure', () => ({
   ensureWhisperFloorAssets: vi.fn(async () => undefined),
   resolveWhisperModelsRoot: () => '/tmp/metis-test-models'
 }))

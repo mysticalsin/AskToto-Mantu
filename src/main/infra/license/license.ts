@@ -444,7 +444,7 @@ export async function fetchLicenseConfig(serverUrl: string): Promise<LicenseConf
 
 // Member-pass foundation (Phase 5). Extends this module; does not replace phone-home above.
 // LICENSE_ACTIVATION_OPEN=false — Activate is honest ActivationUnavailable. See
-// src/main/features/license/activate.ts and docs/design/IDENTITY-CARD.md.
+// src/main/infra/license/activate.ts and docs/design/IDENTITY-CARD.md.
 export {
   activate as activateMemberLicense,
   deactivate as deactivateMemberLicense,

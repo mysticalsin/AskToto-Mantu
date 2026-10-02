@@ -8,7 +8,7 @@ import { operatorHeartbeat, setOperatorFetchForTests, setOperatorQueueDirForTest
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp', getVersion: () => '1.8.0-test' }
 }))
-vi.mock('../license/license', () => ({
+vi.mock('../../infra/license/license', () => ({
   getMachineId: () => 'machine-test-default-url',
   getDurableMachineId: () => 'machine-test-default-url'
 }))

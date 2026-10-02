@@ -16,7 +16,7 @@ const TEST_FILE = '\\.(test|spec)\\.tsx?$'
 // `new Worker(new URL(...))` target in listen.ts.
 const ENTRY_POINTS = [
   '^src/main/(index|whisper-asr-host)\\.ts$',
-  '^src/main/features/parakeet/(parakeet-asr-host|parakeet-extract-host)\\.ts$',
+  '^src/main/infra/parakeet/(parakeet-asr-host|parakeet-extract-host)\\.ts$',
   '^src/main/features/speaker/speaker-embedding-host\\.ts$',
   '^src/preload/(index|intelligence|import-decoder)\\.ts$',
   '^src/renderer/src/(main\\.tsx|import-decoder\\.ts)$',

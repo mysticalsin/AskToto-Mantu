@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp', getVersion: () => '1.8.0-test' } }))
 const machineIdentity = vi.hoisted(() => ({ durableId: 'machine-test-0001' as string | null }))
-vi.mock('../license/license', () => ({
+vi.mock('../../infra/license/license', () => ({
   getMachineId: () => 'machine-test-0001',
   getDurableMachineId: () => machineIdentity.durableId
 }))

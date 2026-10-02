@@ -4,7 +4,7 @@ import {
   isHtmlContentType,
   looksLikeAccessRedirect
 } from '@shared/bundle-response'
-import { getDurableMachineId } from '../features/license/license'
+import { getDurableMachineId } from '../infra/license/license'
 import { hashOperatorId, operatorHmacHeaders } from '../features/operator/operator-hmac-sign'
 import { mainLog } from '../logger'
 import { operatorVisionModel, parseOperatorImage, type OperatorImage } from '@shared/operator-vision'

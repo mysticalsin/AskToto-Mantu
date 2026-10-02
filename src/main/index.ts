@@ -649,8 +649,8 @@ import {
   ensureHighTierAsrModel,
   isHighTierAsrModelReady,
   removeHighTierAsrModel
-} from './features/asr/asr-model-download'
-import { asrModelBytes } from './features/asr/asr-model-manifest'
+} from './infra/asr/asr-model-download'
+import { asrModelBytes } from './infra/asr/asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
 import { buildTrayInStages, createSingleFlight, formatTrayAccelerator, loadPresizedTrayIcon, scheduleTrayAfterFirstPaint, trayIconPaths, yieldToEventLoop } from './boot-tray'
@@ -685,7 +685,7 @@ import {
   parakeetRelease,
   parakeetAddonError,
   killParakeetHostForQuit
-} from './features/parakeet/parakeet'
+} from './infra/parakeet/parakeet'
 import { createListeningStateHandler } from './listening-state-ipc'
 import { appleSpeechLocale, appleSpeechTranscribe } from './apple-speech'
 import {
@@ -738,7 +738,7 @@ import {
   asrAssetsStatusSnapshot,
   importAsrAssetsReady,
   userDataAsrRoot
-} from './features/asr/asr-bundled-ensure'
+} from './infra/asr/asr-bundled-ensure'
 import { EncryptedImportJobStore } from './import-job-store'
 import { allowsSpeculativeLocalWork } from './import-memory-pressure'
 import { bundledFfmpegPath, startFfmpegDecode, type FfmpegDecoder } from './ffmpeg-decoder'
@@ -792,8 +792,8 @@ import {
   completeDustOAuthLogin,
   refreshDustOAuthSession
 } from './features/dust/dust-oauth'
-import { asrManifestComplete } from './features/asr/asr-manifest'
-import { createAsrModelProtocolHandler } from './features/asr/asr-model-protocol'
+import { asrManifestComplete } from './infra/asr/asr-manifest'
+import { createAsrModelProtocolHandler } from './infra/asr/asr-model-protocol'
 import { detectCli, setupCli, installCli, loginCli, prewarmCli, checkCliSession, connectCliSession } from './cli'
 import { connectMcp, pushToMcp } from './mcp/mcpClient'
 import { resolveWriteTargets } from './mcp/write-tools'
@@ -829,7 +829,7 @@ import {
   memberLicenseStatus,
   noteQualifyingUse,
   verifyCachedMemberLicense
-} from './features/license/license'
+} from './infra/license/license'
 import {
   setMcpApiKey,
   getMcpApiKey,

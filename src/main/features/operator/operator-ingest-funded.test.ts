@@ -6,7 +6,7 @@ import { enqueueOperatorItem, loadQueueState } from './operator-queue'
 
 vi.mock('electron', () => ({ app: { getVersion: () => '1.8.2', getPath: () => '/tmp' } }))
 const durableMachineId = vi.hoisted(() => vi.fn((): string | null => 'machine-test'))
-vi.mock('../license/license', () => ({ getMachineId: () => 'machine-test', getDurableMachineId: durableMachineId }))
+vi.mock('../../infra/license/license', () => ({ getMachineId: () => 'machine-test', getDurableMachineId: durableMachineId }))
 vi.mock('../../logger', () => ({
   mainLog: { warn: vi.fn() },
   // auth.ts registers an audit actor at module load — a real seatMeta() now imports it for ssoEmail.

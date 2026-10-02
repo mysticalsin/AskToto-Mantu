@@ -19,8 +19,8 @@ import { collapseRepeatedPhrase } from '@shared/transcript-filter'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { mainLog } from './logger'
 import { getSettings, setSettings } from './store'
-import { asrModelRoot, isHighTierAsrModelReady } from './features/asr/asr-model-download'
-import { ensureWhisperFloorAssets, resolveWhisperModelsRoot } from './features/asr/asr-bundled-ensure'
+import { asrModelRoot, isHighTierAsrModelReady } from './infra/asr/asr-model-download'
+import { ensureWhisperFloorAssets, resolveWhisperModelsRoot } from './infra/asr/asr-bundled-ensure'
 
 /** resources/models — or userData/asr-models when the floor was fetched after install. */
 function modelsDir(): string {

@@ -6,7 +6,7 @@ import { join } from 'node:path'
 
 vi.mock('electron', () => ({ app: { getPath: () => '/unused-in-tests' } }))
 const machineIdentity = vi.hoisted(() => ({ durableId: 'machine-test-0001' as string | null }))
-vi.mock('../license', () => ({ getDurableMachineId: () => machineIdentity.durableId }))
+vi.mock('../../infra/license/license', () => ({ getDurableMachineId: () => machineIdentity.durableId }))
 const auditLogMock = vi.fn()
 vi.mock('../../logger', () => ({
   mainLog: { warn: () => {}, info: () => {}, error: () => {} },

@@ -22,7 +22,7 @@ vi.mock('electron', () => ({
   app: { getPath: () => tmpdir(), getVersion: () => '1.8.0-test' }
 }))
 const machineIdentity = vi.hoisted(() => ({ durableId: 'machine-test' as string | null }))
-vi.mock('../license/license', () => ({
+vi.mock('../../infra/license/license', () => ({
   getMachineId: () => 'machine-test',
   getDurableMachineId: () => machineIdentity.durableId
 }))

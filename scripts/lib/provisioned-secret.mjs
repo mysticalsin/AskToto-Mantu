@@ -4,7 +4,7 @@
 // constant the app falls back to at runtime when that resource is absent. Used by
 // scripts/check-provisioned-secrets.mjs (ticket M2-0056) for the two credential families that share this
 // exact shape today — src/main/features/operator/operator-skill-key.ts's DEV_OPERATOR_PUBLIC_KEY and
-// src/main/features/license/license-lease-key.ts's DEV_LEASE_PUBLIC_KEY. Neither runtime module imports this file; each
+// src/main/infra/license/license-lease-key.ts's DEV_LEASE_PUBLIC_KEY. Neither runtime module imports this file; each
 // declares its own placeholder constant and reads its own resource, and this helper only checks, at build
 // time, that packaging provisioned something else in its place.
 import { existsSync, readFileSync } from 'node:fs'

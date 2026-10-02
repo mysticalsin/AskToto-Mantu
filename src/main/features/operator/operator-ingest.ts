@@ -13,7 +13,7 @@ import {
 import { buildSeatMeta, type SeatMeta } from '@shared/operator-seat'
 import { classifyQuestionType, normalizeQuestionType, type QuestionType } from '@shared/question-type'
 import type { Settings } from '@shared/ipc'
-import { getDurableMachineId, memberLicenseStatus, licenseDisplayStatus } from '../license/license'
+import { getDurableMachineId, memberLicenseStatus, licenseDisplayStatus } from '../../infra/license/license'
 import { getSettings as getStoreSettings } from '../../store'
 import { authStatus } from '../../auth'
 import { lastIndexedAt } from '../../brain/intelligence-index'
@@ -132,8 +132,8 @@ function safeSsoEmail(): string | undefined {
   }
 }
 
-/** Real license state from the member-pass subsystem (src/main/features/license/activate.ts), falling back to
- *  the local trial clock (src/main/features/license/license.ts) only when there is no real activation. Both are the
+/** Real license state from the member-pass subsystem (src/main/infra/license/activate.ts), falling back to
+ *  the local trial clock (src/main/infra/license/license.ts) only when there is no real activation. Both are the
  *  actual on-device state machines — never invented, and 'trial' only when the trial is genuinely
  *  active right now. */
 function safeLicenseState(): string | undefined {

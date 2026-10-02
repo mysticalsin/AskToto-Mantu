@@ -46,8 +46,8 @@ product with its own distribution.
 
 `src/main` (the trust boundary), `src/preload`, `src/renderer`, `src/shared`. Platform differences are
 runtime checks, never separate source trees. Main-process feature modules live under
-`src/main/features/` (`asr`, `dust`, `license`, `operator`, `parakeet`, `speaker`); shared main
-infrastructure stays under `src/main/infra/`. Renderer onboarding helpers live under
+`src/main/features/` (`dust`, `operator`, `speaker`); shared main infrastructure, including
+`asr`, `license`, and `parakeet`, lives under `src/main/infra/`. Renderer onboarding helpers live under
 `src/renderer/src/features/onboarding/`, while cross-feature renderer helpers stay under
 `src/renderer/src/lib/`. Orthogonal services that are **not** part of any app build:
 `intelligence/` (dashboard bundle), `cloudflare-proxy/` (the Worker), `license-server/` (standalone Node
@@ -83,7 +83,8 @@ Separate App Store submission from `native-app/`. Does not use the `Metis-Releas
 - Windows-only bug → `electron-builder.win.yml`, `src/main/win-security.ts`, win branches in `src/main/**`.
 - macOS(Electron)-only bug → `electron-builder.yml` mac section, `native/mac-helper/**`, darwin branches.
 - Cross-platform Electron bug → `src/main/**`, `src/renderer/**`, `src/shared/**`.
-- Main ASR, Dust, license, Operator, Parakeet, or speaker bug → `src/main/features/<feature>/`.
+- Main Dust, Operator, or speaker bug → `src/main/features/<feature>/`.
+- Main ASR, license, or Parakeet bug → `src/main/infra/<module>/`.
 - Onboarding helper bug → `src/renderer/src/features/onboarding/`.
 - Settings panel bug → section code in `src/renderer/src/features/settings/**`, shared primitives in
   `src/renderer/src/ui/**`, and the compatibility export at `src/renderer/src/components/Settings.tsx`.
