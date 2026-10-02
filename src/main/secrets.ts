@@ -38,7 +38,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 import { ENCRYPTED_PROFILE_RECOVERY_ERROR_PREFIX } from '@shared/encrypted-profile-recovery'
-import { atomicWriteSync, uniqueTmpPath } from './infra/fs/atomic-write'
+import { atomicWriteSync } from './infra/fs/atomic-write'
 import { isKeychainAvailable, keychainDecrypt, keychainEncrypt } from './infra/secrets/keychain'
 
 export { isKeychainAvailable }
@@ -124,7 +124,7 @@ export function useFileBackend(): boolean {
  * in-memory key still works for the session, and the migration simply retries on the next launch.
  */
 function persistKeyFileAtomically(p: string, key: Buffer): void {
-  atomicWriteSync(p, key, { tmp: uniqueTmpPath(p) })
+  atomicWriteSync(p, key, { tmp: `${p}.migrate.tmp` })
 }
 
 function loadKey({
