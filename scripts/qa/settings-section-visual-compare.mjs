@@ -71,6 +71,10 @@ function screenshotCoversBox(buffer, box) {
   )
 }
 
+function sectionCaptureClipped({ buffer, sectionBox, panelBox }) {
+  return !fitsInside(sectionBox, panelBox) || !screenshotCoversBox(buffer, sectionBox)
+}
+
 function readAuditLog(profile) {
   try {
     return readFileSync(join(profile, 'logs', 'audit.log'), 'utf8')
@@ -187,7 +191,7 @@ async function captureSections(page, appOutDir) {
       const box = await section.boundingBox()
       const buffer = await section.screenshot({ path: file, animations: 'disabled', caret: 'hide' })
       const viewportClipped = !fitsInside(box, panelBox)
-      const clipped = !screenshotCoversBox(buffer, box)
+      const clipped = sectionCaptureClipped({ buffer, sectionBox: box, panelBox })
       sections.push({
         key,
         tab,
@@ -357,4 +361,4 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   })
 }
 
-export { compare, fitsInside, formatFailureSummary, pngSize, screenshotCoversBox }
+export { compare, fitsInside, formatFailureSummary, pngSize, screenshotCoversBox, sectionCaptureClipped }

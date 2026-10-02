@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { compare, fitsInside, formatFailureSummary, pngSize, screenshotCoversBox } from './settings-section-visual-compare.mjs'
+import { compare, formatFailureSummary, pngSize, screenshotCoversBox, sectionCaptureClipped } from './settings-section-visual-compare.mjs'
 
 type Section = {
   key: string
@@ -92,15 +92,16 @@ describe('settings-section-visual-compare compare', () => {
     expect(compared.rows[0]).toEqual(expect.objectContaining({ status: 'FAIL', failures: ['clipped'] }))
   })
 
-  it('keeps viewport clipping diagnostic-only when the PNG covers the whole section', () => {
+  it('fails a section that does not fit in the tab panel even when the PNG covers the whole section', () => {
     const sectionBox = { x: 24, y: 40, width: 820, height: 900 }
     const panelBox = { x: 16, y: 32, width: 850, height: 640 }
+    const clipped = sectionCaptureClipped({ buffer: png(820, 900), sectionBox, panelBox })
 
-    expect(fitsInside(sectionBox, panelBox)).toBe(false)
     expect(screenshotCoversBox(png(820, 900), sectionBox)).toBe(true)
-    expect(compare(capture([section()]), capture([section()]))).toMatchObject({
-      status: 'PASS',
-      rows: [{ key: 'brain-01-models', status: 'PASS', failures: [] }]
+    expect(clipped).toBe(true)
+    expect(compare(capture([section()]), capture([section({ clipped })]))).toMatchObject({
+      status: 'FAIL',
+      rows: [{ key: 'brain-01-models', status: 'FAIL', failures: ['clipped'] }]
     })
   })
 

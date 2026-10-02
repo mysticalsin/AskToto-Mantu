@@ -182,4 +182,4 @@ jobs:
       - name: Record lead action
         if: always()
         run: |
-          echo "LEAD_ACTION: dispatch settings-section-visual-compare.yml with before_ref=<parent of the M2-0071.1 merge (#306)> and after_ref=<current m2/integration head>, have Opus review the uploaded PNGs and JSON on both platforms, and file the private evidence from the artifact"
+          echo "LEAD_ACTION: dispatch settings-section-visual-compare for ${{ steps.refs.outputs.before }}/${{ steps.refs.outputs.after }} on ${{ matrix.os }}, review the uploaded section PNGs, file the evidence" | tee -a "$GITHUB_STEP_SUMMARY"
