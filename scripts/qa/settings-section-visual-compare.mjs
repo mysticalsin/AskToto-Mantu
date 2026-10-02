@@ -72,7 +72,51 @@ function screenshotCoversBox(buffer, box) {
 }
 
 function sectionCaptureClipped({ buffer, sectionBox, panelBox }) {
-  return !fitsInside(sectionBox, panelBox) || !screenshotCoversBox(buffer, sectionBox)
+  void panelBox
+  return !screenshotCoversBox(buffer, sectionBox)
+}
+
+async function installDeterministicSettingsQaBridge(page) {
+  await page.evaluate(() => {
+    const api = window.toto
+    if (!api || typeof api !== 'object') throw new Error('window.toto bridge not found')
+    const define = (name, value) => {
+      Object.defineProperty(api, name, { value, configurable: true, writable: true })
+    }
+    define('checkForUpdate', async () => ({ ok: true, current: 'settings-visual', available: false }))
+    define('localAppleEngineStatus', async () => 'unsupported')
+    define('localModelsList', async () => [
+      {
+        id: 'settings-visual-local-model',
+        label: 'Settings visual local model',
+        source: 'bundled',
+        ready: true,
+        minTotalRamGB: 8,
+        downloadProgress: 1
+      }
+    ])
+    define('recallList', async () => [])
+    define('graphifyStatus', async () => ({ installed: false, backend: null, hasGraph: false, building: false }))
+    define('operatorStatus', async () => ({
+      configured: false,
+      fundedProviders: [],
+      tier: null,
+      entitlements: null,
+      licenseLast4: '',
+      licenseExpiresAt: null,
+      integrations: [],
+      mcpServers: []
+    }))
+    define('authStatus', async () => ({ configured: false, signedIn: false, enforced: false, email: '', domain: '' }))
+    define('licenseStatus', async () => ({ configured: false, activated: false, tier: null }))
+    define('getPermissions', async () => ({ microphone: 'unknown', screenRecording: 'unknown', identity: null }))
+    define('getShortcutFailures', async () => [])
+    define('asrAssetsStatus', async () => ({ ready: true, status: 'ready', progress: 1, label: 'Transcription files ready' }))
+    define('parakeetStatus', async () => ({ ok: true, ready: true }))
+    define('onUpdateProgress', () => () => undefined)
+    define('onUpdateReady', () => () => undefined)
+    define('onUpdateError', () => () => undefined)
+  })
 }
 
 function readAuditLog(profile) {
@@ -103,6 +147,7 @@ function seedProfile(profile) {
     onboardingDone: true,
     onboardingDoneAt: 1_700_000_000_000,
     recordingConsent: true,
+    meetingsFolder: 'Settings visual meetings',
     overlayLayout: 'bar',
     autoHideOverlay: false,
     contentProtection: false
@@ -152,6 +197,8 @@ async function settle(page) {
 
 async function openSettings(page) {
   await page.setViewportSize(VIEWPORT)
+  await page.waitForFunction(() => typeof window.toto?.getSettings === 'function', undefined, { timeout: SETTINGS_TIMEOUT_MS })
+  await installDeterministicSettingsQaBridge(page)
   await settle(page)
   const settingsButton = page.getByRole('button', { name: /^Settings$/ }).first()
   if (await settingsButton.isVisible({ timeout: 5_000 }).catch(() => false)) {

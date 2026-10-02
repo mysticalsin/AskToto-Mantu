@@ -14,7 +14,7 @@ on:
         required: true
         type: string
   pull_request:
-    types: [ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - .github/workflows/settings-section-visual-compare.yml
       - scripts/qa/settings-section-visual-compare.mjs
