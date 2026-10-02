@@ -247,26 +247,10 @@ jobs:
           retention-days: 14
       - name: Fail the job if the sidecar boot reaper proof itself failed (not a BLOCKED_EXTERNAL row)
         if: always() && steps.sidecar-reaper.outcome == 'failure'
-        run: |
-          result=$(node -e "try { console.log(JSON.parse(require('fs').readFileSync('smoke-report/sidecar-boot-reaper.json','utf8')).result || 'missing') } catch { console.log('missing') }")
-          if [ "$result" = "pass" ]; then
-            echo "::warning title=Sidecar boot reaper blocked::sidecar boot reaper exited non-zero but reported only BLOCKED_EXTERNAL rows; see smoke-report/sidecar-boot-reaper.json."
-            exit 0
-          fi
-          echo "::error::sidecar boot reaper failed; see smoke-report/sidecar-boot-reaper.json."
-          exit 1
-
+        run: exit 1
       - name: Fail the job if the POLICY-01 proof itself failed (not a BLOCKED_EXTERNAL row)
         if: always() && steps.policy-smoke.outcome == 'failure'
-        run: |
-          blocked=$(node -e "try { console.log(JSON.parse(require('fs').readFileSync('smoke-report/policy-smoke.json','utf8')).blockedExternal === true ? 'true' : 'false') } catch { console.log('false') }")
-          if [ "$blocked" = "true" ]; then
-            echo "::warning title=POLICY-01 blocked::POLICY-01 reported BLOCKED_EXTERNAL; see smoke-report/policy-smoke.json."
-            exit 0
-          fi
-          echo "::error::POLICY-01 proof failed; see smoke-report/policy-smoke.json."
-          exit 1
-
+        run: exit 1
       - name: Fail the job if the mac-helper supervise behaviour proof failed
         if: always() && steps.supervise-helper.outcome == 'failure'
         run: exit 1
@@ -367,22 +351,7 @@ jobs:
           retention-days: 14
       - name: Fail the job if the sidecar boot reaper proof itself failed (not a BLOCKED_EXTERNAL row)
         if: always() && steps.sidecar-reaper.outcome == 'failure'
-        run: |
-          result=$(node -e "try { console.log(JSON.parse(require('fs').readFileSync('smoke-report/sidecar-boot-reaper.json','utf8')).result || 'missing') } catch { console.log('missing') }")
-          if [ "$result" = "pass" ]; then
-            echo "::warning title=Sidecar boot reaper blocked::sidecar boot reaper exited non-zero but reported only BLOCKED_EXTERNAL rows; see smoke-report/sidecar-boot-reaper.json."
-            exit 0
-          fi
-          echo "::error::sidecar boot reaper failed; see smoke-report/sidecar-boot-reaper.json."
-          exit 1
-
+        run: exit 1
       - name: Fail the job if the POLICY-01 proof itself failed (not a BLOCKED_EXTERNAL row)
         if: always() && steps.policy-smoke.outcome == 'failure'
-        run: |
-          blocked=$(node -e "try { console.log(JSON.parse(require('fs').readFileSync('smoke-report/policy-smoke.json','utf8')).blockedExternal === true ? 'true' : 'false') } catch { console.log('false') }")
-          if [ "$blocked" = "true" ]; then
-            echo "::warning title=POLICY-01 blocked::POLICY-01 reported BLOCKED_EXTERNAL; see smoke-report/policy-smoke.json."
-            exit 0
-          fi
-          echo "::error::POLICY-01 proof failed; see smoke-report/policy-smoke.json."
-          exit 1
+        run: exit 1
