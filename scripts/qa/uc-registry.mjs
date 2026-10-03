@@ -24,7 +24,6 @@ import { EVIDENCE_LEVELS } from '../evidence/record.mjs'
 
 export const UC_COUNT = 112
 export const EXPECTED_IDS = Object.freeze(Array.from({ length: UC_COUNT }, (_, i) => `UC-${String(i + 1).padStart(3, '0')}`))
-export const DEFAULT_TEST_FILE = 'scripts/qa/uc-registry.test.ts'
 const UC_ID_RE = /^UC-\d{3}$/
 const TICKET_RE = /^M2-\d{4}$/
 const LEAD_ACTION_RE = /^LEAD_ACTION: \S/
@@ -35,21 +34,18 @@ export function loadRegistry(path) {
 }
 
 const isPlainObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value)
-export const rowTestId = (id) => `${id} registry row is mapped`
 const testNameMatches = (fullName, id) => fullName === id || fullName.endsWith(` ${id}`)
 
 export function normalizeRegistry(registry) {
-  const defaults = isPlainObject(registry?.defaults) ? registry.defaults : {}
   const rows = Array.isArray(registry?.rows)
     ? registry.rows.map((row) => {
         if (!isPlainObject(row)) return row
-        const id = row.id
         return {
           ...row,
-          tickets: row.tickets?.length ? row.tickets : defaults.tickets ?? [],
-          tests: row.tests?.length ? row.tests : typeof id === 'string' && defaults.tests === 'per-row' ? [{ id: rowTestId(id), file: DEFAULT_TEST_FILE }] : row.tests ?? [],
-          evidence: row.evidence ?? defaults.evidence ?? null,
-          externalBlocker: row.externalBlocker ?? defaults.externalBlocker ?? null
+          tickets: row.tickets ?? [],
+          tests: row.tests ?? [],
+          evidence: row.evidence ?? null,
+          externalBlocker: row.externalBlocker ?? null
         }
       })
     : registry?.rows

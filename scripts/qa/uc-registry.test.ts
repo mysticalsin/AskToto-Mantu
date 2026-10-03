@@ -12,7 +12,6 @@ import {
   registryShapeProblems,
   registryTestFiles,
   resultProblems,
-  rowTestId,
   resultsFromVitest
 } from './uc-registry.mjs'
 
@@ -36,21 +35,28 @@ const passAll = (registry: { rows: { id: string; tests: { id: string }[] }[] }) 
 const statusOf = (report: { rows: { id: string; status: string }[] }, id: string) => report.rows.find((r) => r.id === id)?.status
 
 describe('UC acceptance registry (M2-0441)', () => {
-  for (const id of EXPECTED_IDS) {
-    it(`${id} registry row is mapped`, () => {
-      const row = shippedRows.rows.find((r: { id: string }) => r.id === id)
-      expect(row).toBeDefined()
-      expect(row.tickets).toEqual(['M2-0441'])
-      expect(row.tests).toEqual([{ id: rowTestId(id), file: 'scripts/qa/uc-registry.test.ts' }])
-      expect(row.evidence).toBe('LOCALLY_TESTED')
-      expect(row.externalBlocker).toBeNull()
-    })
-  }
-
   it('ships exactly one well-formed row per UC-001..UC-112', () => {
     expect(shipped.rows).toHaveLength(112)
     expect(shipped.rows.map((r: { id: string }) => r.id)).toEqual(EXPECTED_IDS)
     expect(registryShapeProblems(shipped)).toEqual([])
+  })
+
+  it('does not use this registry test as shipped row evidence', () => {
+    const selfTests = shippedRows.rows.flatMap((row: { tests: { file: string }[] }) =>
+      row.tests.filter((test) => test.file === 'scripts/qa/uc-registry.test.ts')
+    )
+    expect(selfTests).toEqual([])
+  })
+
+  it('keeps every unmapped shipped row actionable for the lead', () => {
+    const unmapped = shippedRows.rows.filter(
+      (row: { tickets: string[]; tests: unknown[]; evidence: string | null }) =>
+        row.tickets.length === 0 || row.tests.length === 0 || row.evidence === null
+    )
+    expect(unmapped.length).toBeGreaterThan(0)
+    for (const row of unmapped as { note?: string }[]) {
+      expect(row.note).toMatch(/^LEAD_ACTION: \S/)
+    }
   })
 
   it('rejects a missing, duplicate or range row', () => {
@@ -139,13 +145,5 @@ describe('UC acceptance registry (M2-0441)', () => {
     const run = spawnSync(process.execPath, [join(__dirname, 'uc-registry.mjs'), '--results', join(tmpdir(), 'uc-missing-results.json'), '--out', mkdtempSync(join(tmpdir(), 'uc-'))], { encoding: 'utf8' })
     expect(run.status).toBe(2)
     expect(run.stderr).toMatch(/results file not found/)
-  })
-
-  it('ships a fully mapped registry', () => {
-    expect(registryMappingProblems(shipped)).toEqual([])
-    const report = regressionReport(shipped, passAll(shippedRows))
-    expect(report.rows).toHaveLength(112)
-    expect(report.rows.every((r: { status: string }) => r.status === 'PASS')).toBe(true)
-    expect(report.ok).toBe(true)
   })
 })
