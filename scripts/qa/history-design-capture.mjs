@@ -53,7 +53,7 @@ import {
 } from './lib/history-design.mjs'
 
 const READY_TIMEOUT_MS = 150_000
-const STATE_TIMEOUT_MS = 10_000
+export const STATE_TIMEOUT_MS = 10_000
 const SETTLE_TIMEOUT_MS = 1_000
 const QUIT_TIMEOUT_MS = 30_000
 const TAB_STOPS_MAX = 80
@@ -339,7 +339,7 @@ export async function driveState(page, main, state, realRows, deps = {}) {
     await page.getByLabel('Search past meetings').fill('planning')
     drive.requestedAt = await waitForRequest(main, beforeSearch, wait, 'search')
     const cue = historyDesignCueForState(state.id)
-    await visible(cue.text, cue.role, HISTORY_DEGRADED_MS + SETTLE_TIMEOUT_MS)
+    await visible(cue.text, cue.role)
     drive.bannerAfterMs = Date.now() - typedAt
   } else if (state.list !== 'pending') {
     await visible(state.list === 'rows+notDownloaded' ? 'Not downloaded' : SAMPLE_MEETINGS[0])

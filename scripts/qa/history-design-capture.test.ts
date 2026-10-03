@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { IPC } from '../../src/shared/ipc'
 import { HISTORY_DEGRADED_MS as RENDERER_DEGRADED_MS } from '../../src/renderer/src/components/history/list-status'
 import { NOT_DOWNLOADED_TEXT, UNAVAILABLE_TEXT } from '../../src/renderer/src/components/history/hydration'
-import { driveState } from './history-design-capture.mjs'
+import { driveState, STATE_TIMEOUT_MS } from './history-design-capture.mjs'
 import {
   BACKDROPS,
   BLOCKED_EXTERNAL_ROWS,
@@ -156,7 +156,7 @@ describe('History design matrix (M2-0032)', () => {
 
     expect(drive.requestedAt).toBe(2200)
     expect(wait).toHaveBeenCalled()
-    expect(calls).toContain(`role:status:OneDrive is slow to answer:${HISTORY_DEGRADED_MS + 1000}`)
+    expect(calls).toContain(`role:status:OneDrive is slow to answer:${STATE_TIMEOUT_MS}`)
   })
 })
 
