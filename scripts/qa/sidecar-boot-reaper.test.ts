@@ -13,7 +13,8 @@ import {
   parseSidecarRegistry,
   registryHasSpawnedPid,
   summarizeProof,
-  topLevelFailureReport
+  topLevelFailureReport,
+  waitForSpawnedRegistry
 } from './sidecar-boot-reaper.mjs'
 
 function proof(kind: string, result: string, unblock: string | null = null) {
@@ -51,6 +52,22 @@ describe('sidecar boot reaper proof helpers', () => {
     expect(registryHasSpawnedPid(records, 4242)).toBe(true)
     expect(registryHasSpawnedPid(records, 9001)).toBe(false)
     expect(registryHasSpawnedPid(records, 1111)).toBe(false)
+  })
+
+  it('keeps waiting for the spawned identity registry after the reaper bound when the real llama row is slow', async () => {
+    let elapsed = 0
+    const result = await waitForSpawnedRegistry({
+      pid: 4242,
+      timeoutMs: 120_000,
+      intervalMs: 1_000,
+      now: () => elapsed,
+      sleepFn: async (ms: number) => {
+        elapsed += ms
+      },
+      readRegistry: () => (elapsed >= 6_000 ? [{ kind: 'spawned', name: 'llama-server', pid: 4242 }] : [])
+    })
+
+    expect(result).toEqual({ found: true, waitedMs: 6_000 })
   })
 
   it('can accept an orphan already reaped before the second boot audit becomes observable', () => {
@@ -101,7 +118,7 @@ describe('sidecar boot reaper proof helpers', () => {
       result: 'pass',
       failures: [],
       unblock: null,
-      timingsMs: { firstReady: 1, sidecarStarted: 2, llamaStarted: 2, reaped: 3 },
+      timingsMs: { firstReady: 1, sidecarStarted: 2, llamaStarted: 2, registryWrite: 6, reaped: 3 },
       pids: { firstMain: 10, sidecar: 11, orphan: 11, secondMain: 12 },
       reapedReason: 'registry',
       events: { 'sidecar.reaped': 1 },
@@ -109,6 +126,7 @@ describe('sidecar boot reaper proof helpers', () => {
     })
 
     expect(realLlama.timingsMs).toMatchObject({ sidecarStarted: 2, llamaStarted: 2 })
+    expect(realLlama.timingsMs).toMatchObject({ registryWrite: 6 })
     expect(realLlama.pids).toMatchObject({ sidecar: 11, orphan: 11 })
   })
 
