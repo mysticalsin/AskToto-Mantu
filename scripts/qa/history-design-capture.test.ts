@@ -59,21 +59,6 @@ function exposedGc() {
   return g.gc!
 }
 
-async function collectUntilCleared(ref: WeakRef<object>) {
-  const gc = exposedGc()
-  for (let i = 0; i < 20 && ref.deref(); i++) {
-    gc()
-    await new Promise((resolve) => setTimeout(resolve, 0))
-  }
-}
-
-function unparkedPendingRef() {
-  let pending: Promise<never> | null = new Promise(() => {})
-  const ref = new WeakRef(pending)
-  pending = null
-  return ref
-}
-
 function withCollectGarbage<T extends (...args: never[]) => unknown>(main: T, collectGarbage: () => Promise<unknown> = vi.fn(async () => undefined)) {
   return Object.assign(main, { collectGarbage })
 }
@@ -165,19 +150,16 @@ describe('History design matrix (M2-0032)', () => {
       globalThis.__historyDesign.read = 'hydrating'
     })()`)
 
-    const unparked = unparkedPendingRef()
-    await collectUntilCleared(unparked)
-    expect(unparked.deref()).toBeUndefined()
-
     let listPending: object | null = handlers.get(IPC_CHANNELS.recallList)!()
     const listRef = new WeakRef(listPending)
-    listPending = null
     let searchPending: object | null = handlers.get(IPC_CHANNELS.recallSearch)!()
     const searchRef = new WeakRef(searchPending)
-    searchPending = null
     const sender = { send: vi.fn() }
     let readPending: object | null = handlers.get(IPC_CHANNELS.recallRead)!({ sender } as never, 'sample.md' as never)
     const readRef = new WeakRef(readPending)
+    expect(eval('globalThis.__historyDesign.parked')).toEqual([listPending, searchPending, readPending])
+    listPending = null
+    searchPending = null
     readPending = null
 
     exposedGc()
