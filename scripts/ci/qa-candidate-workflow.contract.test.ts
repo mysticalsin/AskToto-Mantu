@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
-import { windowConstructionPlan } from '../qa/lib/st-1-core.mjs'
+import { windowConstructionPlan, windowRemeasurePlan } from '../qa/lib/st-1-core.mjs'
 
 const root = join(__dirname, '..', '..')
 const workflow = readFileSync(join(root, '.github', 'workflows', 'qa-candidate.yml'), 'utf8').replace(/\r\n/g, '\n')
@@ -532,5 +532,43 @@ describe('QA candidate workflow: the shipped window gate (M2-0519)', () => {
     expect(measure).toContain('warmup=$(jq -r \'.warmup\' <<<"$launch")')
     expect(measure).toContain('variant=$(jq -r \'.variant\' <<<"$launch")')
     expect(measure).toContain('chrome=$(jq -r \'.chrome\' <<<"$launch")')
+  })
+
+  it('re-measures a single slow shipped launch per chrome after the measured plan and before the gate (OD-66)', () => {
+    const jobSteps = steps('st1-mac-window')
+    const measureIndex = jobSteps.findIndex((step) => step.includes('--print-window-plan'))
+    const remeasureIndex = jobSteps.findIndex((step) => step.includes('--print-window-remeasure-plan'))
+    const gateIndex = jobSteps.findIndex((step) => step.includes('scripts/qa/st-1.mjs --gate-window st1-report'))
+    expect(measureIndex).toBeGreaterThan(-1)
+    expect(remeasureIndex).toBeGreaterThan(measureIndex)
+    expect(gateIndex).toBeGreaterThan(remeasureIndex)
+    const remeasure = jobSteps[remeasureIndex]
+    expect(remeasure).toContain('node scripts/qa/st-1.mjs --print-window-remeasure-plan st1-report > st1-report/window-remeasure-plan.json')
+    expect(remeasure).toContain("jq -c '.[]' st1-report/window-remeasure-plan.json | while read -r launch; do")
+    expect(remeasure).toContain('remeasures=$(jq -r \'.remeasures\' <<<"$launch")')
+    expect(remeasure).toContain('--purpose window-construction')
+    expect(remeasure).toContain('--window-variant shipped')
+    expect(remeasure).toContain('--window-remeasures "$remeasures"')
+    expect(remeasure).toContain('if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi')
+    expect(remeasure).toContain('--report-dir "st1-report/$run"')
+    expect(remeasure).not.toContain('--window-warmup')
+    // A re-measure that cannot launch leaves the slow launch's failure standing; the gate step decides the job.
+    expect(remeasure).toMatch(/^        continue-on-error: true$/m)
+    expect(jobSteps[gateIndex]).toMatch(/^        if: always\(\)$/m)
+  })
+
+  it('adds no launch when no shipped launch reached 250 ms: the plan the workflow reads is []', () => {
+    const fast = (name: string, transparent: boolean) => ({
+      name: `${name}/${name}.json`,
+      report: {
+        purpose: 'window-construction',
+        windowVariant: 'shipped',
+        bootStages: {
+          stages: ['createWindow.prewarm', 'createWindow.construct'].map((stage) => ({ stage, ms: 249, ts: '2026-10-03T10:00:00.000Z', transparent }))
+        }
+      }
+    })
+    expect(windowRemeasurePlan([fast('window-shipped-opaque-1', false), fast('window-shipped-transparent-1', true)])).toEqual([])
+    expect(windowRemeasurePlan([])).toEqual([])
   })
 })
