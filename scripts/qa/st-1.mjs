@@ -39,6 +39,9 @@
  * whether this launch's main.log says every meetings-root permit was held by a stalled call. Only counts and
  * timings leave the renderer, never a row or a hit.
  *
+ * In `--history after-idle`, the idle window starts after setup finishes, so the first History probe is
+ * slightly later than `--minutes` from process launch.
+ *
  * Usage:
  *       --fixtures fifo|dataless|synthetic-dataless|none [--history [on|off|after-idle]] [--count 6]
  *       [--cloud-dir <folder of evicted files>] [--main-log <main.log>] [--exe <installed executable>]

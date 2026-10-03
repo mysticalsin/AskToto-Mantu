@@ -618,6 +618,7 @@ export function buildReport({
   // The control row has nothing to exercise: its verdict is the criteria alone.
   const exercised = refusalEvidence?.exercised ?? (row === 'none' || evidence?.exercised)
   const openedNonRegularFixture = criteria.some((criterion) => criterion.name === 'non-regular-fixtures-unopened' && !criterion.pass)
+  // OD-43/M2-0534: after-idle rows must resolve to PASS or FAIL; missing refusal proof is a row failure.
   const delayedHistoryFailed = historyMode === 'after-idle' && refusalEvidence && !refusalEvidence.exercised
   const verdict = !complete
     ? 'INCOMPLETE'

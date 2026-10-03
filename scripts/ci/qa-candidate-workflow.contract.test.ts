@@ -257,14 +257,12 @@ describe('QA candidate History design evidence (M2-0032)', () => {
   })
 })
 
-describe('QA candidate strict ST-1 hosted-runner rows', () => {
+describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
   const strictJobs = ['st1-mac-fifo', 'st1-mac-control']
 
-  it('keeps every macOS ST-1 row on hosted macOS, never on an owner Mac', () => {
+  it('moves only the strict fifo and control rows to the owner self-hosted Mac label', () => {
     for (const name of strictJobs) {
-      expect(job(name)).toMatch(/^    runs-on: macos-latest$/m)
-      expect(job(name)).not.toContain('self-hosted')
-      expect(job(name)).not.toContain('metis-owner-mac')
+      expect(job(name)).toMatch(/^    runs-on: \[self-hosted, macOS, ARM64, metis-owner-mac\]$/m)
     }
 
     expect(job('st1-mac-dataless-synthetic')).toMatch(/^    runs-on: macos-latest$/m)
@@ -272,18 +270,34 @@ describe('QA candidate strict ST-1 hosted-runner rows', () => {
     expect(job('st1-mac-window')).toMatch(/^    runs-on: macos-latest$/m)
   })
 
-  it('does not route public workflow self-tests through owner-account sandbox files', () => {
+  it('keeps dispatch and same-repository PRs, but refuses fork pull requests before code reaches the owner Mac', () => {
     for (const name of strictJobs) {
-      expect(job(name)).not.toContain('run-under-owner-sandbox.sh')
-      expect(job(name)).not.toContain('prove-owner-sandbox.sh')
+      expect(job(name)).toMatch(
+        /^    if: github\.event_name != 'pull_request' \|\| github\.event\.pull_request\.head\.repo\.full_name == github\.repository$/m
+      )
     }
-
-    expect(workflow).not.toContain('      - scripts/hermetic/prove-owner-sandbox.sh\n')
-    expect(workflow).not.toContain('      - scripts/hermetic/run-under-owner-sandbox.sh\n')
-    expect(workflow).not.toContain('      - scripts/hermetic/owner-account.sb\n')
   })
 
-  it('keeps the owner-account sandbox probe strict when that helper is used outside the public hosted workflow', () => {
+  it('proves the owner-account sandbox before Node setup or candidate artifact download', () => {
+    for (const name of strictJobs) {
+      const jobSteps = steps(name)
+      const checkout = jobSteps.findIndex((step) => step.includes('actions/checkout@'))
+      const probe = jobSteps.findIndex((step) => step.includes('name: Prove owner-account sandbox denies private state'))
+      const setup = jobSteps.findIndex((step) => step.includes('actions/setup-node@'))
+      const download = jobSteps.findIndex((step) => step.includes('actions/download-artifact@'))
+
+      expect(checkout).toBe(0)
+      expect(probe).toBe(1)
+      expect(probe).toBeLessThan(setup)
+      expect(probe).toBeLessThan(download)
+
+      const block = jobSteps[probe]
+      expect(block).toContain('bash scripts/hermetic/prove-owner-sandbox.sh')
+    }
+
+    expect(workflow).toContain('      - scripts/hermetic/prove-owner-sandbox.sh\n')
+    expect(workflow).toContain('      - scripts/hermetic/run-under-owner-sandbox.sh\n')
+    expect(workflow).toContain('      - scripts/hermetic/owner-account.sb\n')
     expect(ownerSandboxProbe).toContain('bash scripts/hermetic/run-under-owner-sandbox.sh /bin/ls "$target"')
     expect(ownerSandboxProbe).toContain('"$HOME/Library/CloudStorage"')
     expect(ownerSandboxProbe).toContain('"$HOME/Library/Application Support/Metis"')
@@ -291,12 +305,12 @@ describe('QA candidate strict ST-1 hosted-runner rows', () => {
     expect(ownerSandboxProbe).not.toContain('Operation not permitted|deny|sandbox')
   })
 
-  it('runs every strict candidate verification and launch directly on the hosted runner', () => {
+  it('runs every strict candidate verification and launch through the owner-account sandbox wrapper', () => {
     for (const name of strictJobs) {
       const block = job(name)
-      expect(block).toContain('run: node scripts/qa/provenance.mjs verify')
-      expect(block).toMatch(/(?:^|\n) {10}node scripts\/qa\/st-1\.mjs \\/)
-      expect(block).not.toContain('run-under-owner-sandbox.sh node')
+      expect(block).toContain('bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify')
+      expect(block).toContain('bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/st-1.mjs')
+      expect(block).not.toMatch(/(?:^|\n) {10}node scripts\/qa\/(?:provenance|st-1)\.mjs/)
     }
   })
 
