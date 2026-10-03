@@ -363,15 +363,7 @@ const NO_KEY_FLAGS: DashboardKeyFlags = {
   oauthBound: false
 }
 
-export async function buildDashboard(
-  store: OperatorStore,
-  email: string,
-  now: number,
-  keys: DashboardKeyFlags = NO_KEY_FLAGS,
-  cloudflare: CloudflareOverview = missingCloudflareOverview(),
-  valueSettings: DashboardValueSettings = NO_VALUE_SETTINGS,
-  modelPolicy: DashboardModelPolicyInput = NO_MODEL_POLICY
-): Promise<DashboardPayload> {
+async function readDashboardRows(store: OperatorStore, now: number) {
   const [seatsRaw, asksRaw, pulses, proposals, audit, crmRaw, packs, storedEventsRaw, vault, issued, sessionsPage] = await Promise.all([
     store.listSeats(),
     store.listAsks(2000),
@@ -385,11 +377,31 @@ export async function buildDashboard(
     store.listIssuedLicenses(200),
     store.listSessions({ since: now - 7 * DAY, limit: 1000 })
   ])
-  const asks = asksRaw.map(projectAskTelemetry)
-  const crm = crmRaw.map(normalizeCrmRow)
-  const storedEvents = storedEventsRaw.map(projectEventTelemetry)
-  const seats = seatsRaw.filter(isRealSeat)
-  const sessions = sessionsPage.rows
+  return {
+    seats: seatsRaw.filter(isRealSeat),
+    asks: asksRaw.map(projectAskTelemetry),
+    pulses,
+    proposals,
+    audit,
+    crm: crmRaw.map(normalizeCrmRow),
+    packs,
+    storedEvents: storedEventsRaw.map(projectEventTelemetry),
+    vault,
+    issued,
+    sessions: sessionsPage.rows
+  }
+}
+
+type DashboardRows = Awaited<ReturnType<typeof readDashboardRows>>
+
+function latestSeatIndexAt(seats: SeatRow[]): number | null {
+  return seats.reduce<number | null>((acc, s) => {
+    if (s.last_index_at == null) return acc
+    return acc == null ? s.last_index_at : Math.max(acc, s.last_index_at)
+  }, null)
+}
+
+function buildSeatAccess(issued: IssuedLicenseRow[], now: number) {
   const activeJti = new Set(issued.filter((l) => issuedLicenseActive(l, now)).map((l) => l.jti))
   const licenseLabel = (s: SeatRow): string | null => {
     const label = seatLicenseLabel(s, issued, now)
@@ -401,113 +413,167 @@ export async function buildDashboard(
     const jti = parseLicenseId(s.license_jti)
     return Boolean(jti && activeJti.has(jti))
   }
-  const seatsById = new Map(seats.map((s) => [s.device_id, s]))
+  return { licenseLabel, keysOn }
+}
 
-  const live = seats.filter((s) => now - s.last_seen < ONLINE_MS).length
-  const live30 = seats.filter((s) => now - s.last_seen < 30 * 60 * 1000).length
-  const dau = uniqueSeats(seats, now - DAY)
-  const wau = uniqueSeats(seats, now - 7 * DAY)
-  const versions = new Set(seats.map((s) => s.app_version).filter(Boolean)).size
-  const pendingDiffs = proposals.filter((p) => p.status === 'pending').length
-  const lastIndexAt = seats.reduce<number | null>((acc, s) => {
-    if (s.last_index_at == null) return acc
-    return acc == null ? s.last_index_at : Math.max(acc, s.last_index_at)
-  }, null)
-
+function buildDashboardMetrics(rows: DashboardRows, now: number) {
+  const live = rows.seats.filter((s) => now - s.last_seen < ONLINE_MS).length
+  const live30 = rows.seats.filter((s) => now - s.last_seen < 30 * 60 * 1000).length
   const hourStarts = buckets(now, 24, HOUR)
   const dayStarts = buckets(now, 7, DAY)
-  const { hours24, days7 } = buildSeries({ now, hourStarts, dayStarts, pulses })
+  const series = buildSeries({ now, hourStarts, dayStarts, pulses: rows.pulses })
+  const todayAsks = rows.asks.filter((a) => a.ts >= now - DAY)
+  const weekAsks = rows.asks.filter((a) => a.ts >= now - 7 * DAY)
+  const hitRate = aggregateCacheSlice(todayAsks.map(askLine)).hitRate
+  const tokens = buildTokenPoints(rows.asks, hourStarts)
+  return {
+    live,
+    live30,
+    dau: uniqueSeats(rows.seats, now - DAY),
+    wau: uniqueSeats(rows.seats, now - 7 * DAY),
+    versions: new Set(rows.seats.map((s) => s.app_version).filter(Boolean)).size,
+    pendingDiffs: rows.proposals.filter((p) => p.status === 'pending').length,
+    lastIndexAt: latestSeatIndexAt(rows.seats),
+    hourStarts,
+    dayStarts,
+    hours24: series.hours24,
+    days7: series.days7,
+    todayAsks,
+    weekAsks,
+    cacheHit: hitRate == null ? null : `${Math.round(hitRate * 100)}%`,
+    costToday: costForAsks(todayAsks),
+    cost7d: costForAsks(weekAsks),
+    tokens,
+    table: buildCostTable(weekAsks)
+  }
+}
 
-  const todayAsks = asks.filter((a) => a.ts >= now - DAY)
-  const weekAsks = asks.filter((a) => a.ts >= now - 7 * DAY)
-  const sliceToday = aggregateCacheSlice(todayAsks.map(askLine))
-  const cacheHit = sliceToday.hitRate == null ? null : `${Math.round(sliceToday.hitRate * 100)}%`
-  const costToday = costForAsks(todayAsks)
-  const cost7d = costForAsks(weekAsks)
-  const tokens = buildTokenPoints(asks, hourStarts)
-  const table = buildCostTable(weekAsks)
-  const map = buildMapSlice(seats)
-  const heatmap = buildHeatmap({ now, audit, packs, proposals })
-  const crmSlice = buildCrmSlice(crm, now)
+type DashboardMetrics = ReturnType<typeof buildDashboardMetrics>
+
+function buildDashboardKpis(metrics: DashboardMetrics, asks: AskRow[]): DashboardPayload['kpis'] {
+  return {
+    live: metrics.live,
+    dau: metrics.dau,
+    wau: metrics.wau,
+    versions: metrics.versions,
+    cacheHit: metrics.cacheHit,
+    costToday: metrics.costToday,
+    cost7d: metrics.cost7d,
+    pendingDiffs: metrics.pendingDiffs,
+    lastIndexAt: metrics.lastIndexAt,
+    liveSeries: metrics.hours24.map((p) => p.heartbeats),
+    dauSeries: metrics.days7.map((p) => p.heartbeats),
+    costSeries: metrics.tokens.map((p) => p.read + p.write + p.uncached),
+    hitSeries: hitSeries(asks, metrics.hourStarts)
+  }
+}
+
+function buildDashboardOpsSlice(now: number, metrics: DashboardMetrics, rows: DashboardRows, crmSlice: DashboardPayload['crm']): DashboardPayload['ops'] {
+  return buildOverviewOps({
+    now,
+    wau: metrics.wau,
+    dau: metrics.dau,
+    live: metrics.live,
+    live30: metrics.live30,
+    hourStarts: metrics.hourStarts,
+    dayStarts: metrics.dayStarts,
+    hours24: metrics.hours24,
+    pulses: rows.pulses,
+    weekAsks: metrics.weekAsks,
+    storedEvents: rows.storedEvents,
+    crmFailRate: crmSlice.landing.failRatePct,
+    vault: rows.vault
+  })
+}
+
+function buildDashboardScale(metrics: DashboardMetrics, seats: SeatRow[]): DashboardPayload['scale'] {
+  return {
+    hours24: metrics.hours24,
+    days7: metrics.days7,
+    versions: mix(seats.map((s) => s.app_version)),
+    os: mix(seats.map((s) => s.os))
+  }
+}
+
+function buildDashboardChange(rows: DashboardRows, heatmap: number[]): DashboardPayload['change'] {
+  return {
+    timeline: rows.audit.map((a) => ({ ts: a.ts, actor: a.actor, action: a.action, detail: a.detail })),
+    heatmap,
+    adoption: mix(rows.seats.map((s) => s.app_version))
+  }
+}
+
+function buildDashboardRoi(
+  metrics: DashboardMetrics,
+  rows: DashboardRows,
+  valueSettings: DashboardValueSettings,
+  licenseLabel: (seat: SeatRow) => string | null
+): DashboardPayload['roi'] {
+  return buildRoiSlice({
+    costToday: metrics.costToday,
+    cost7d: metrics.cost7d,
+    live: metrics.live,
+    live30: metrics.live30,
+    cacheHit: metrics.cacheHit,
+    todayAsks: metrics.todayAsks,
+    seats: rows.seats,
+    storedEvents: rows.storedEvents,
+    valueSettings,
+    weekAsks: metrics.weekAsks,
+    licenseLabel
+  })
+}
+
+function buildDashboardModelPolicy(modelPolicy: DashboardModelPolicyInput, rows: DashboardRows): DashboardPayload['modelPolicy'] {
+  return {
+    ...modelPolicy,
+    history: rows.audit
+      .filter((a) => a.action.startsWith('model-policy.'))
+      .map((a) => ({ ts: a.ts, actor: a.actor, action: a.action, detail: a.detail }))
+  }
+}
+
+export async function buildDashboard(
+  store: OperatorStore,
+  email: string,
+  now: number,
+  keys: DashboardKeyFlags = NO_KEY_FLAGS,
+  cloudflare: CloudflareOverview = missingCloudflareOverview(),
+  valueSettings: DashboardValueSettings = NO_VALUE_SETTINGS,
+  modelPolicy: DashboardModelPolicyInput = NO_MODEL_POLICY
+): Promise<DashboardPayload> {
+  const rows = await readDashboardRows(store, now)
+  const metrics = buildDashboardMetrics(rows, now)
+  const seatsById = new Map(rows.seats.map((s) => [s.device_id, s]))
+  const { licenseLabel, keysOn } = buildSeatAccess(rows.issued, now)
+  const map = buildMapSlice(rows.seats)
+  const heatmap = buildHeatmap({ now, audit: rows.audit, packs: rows.packs, proposals: rows.proposals })
+  const crmSlice = buildCrmSlice(rows.crm, now)
 
   return {
     email,
     now,
-    kpis: {
-      live,
-      dau,
-      wau,
-      versions,
-      cacheHit,
-      costToday,
-      cost7d,
-      pendingDiffs,
-      lastIndexAt,
-      liveSeries: hours24.map((p) => p.heartbeats),
-      dauSeries: days7.map((p) => p.heartbeats),
-      costSeries: tokens.map((p) => p.read + p.write + p.uncached),
-      hitSeries: hitSeries(asks, hourStarts)
-    },
-    ops: buildOverviewOps({
-      now,
-      wau,
-      dau,
-      live,
-      live30,
-      hourStarts,
-      dayStarts,
-      hours24,
-      pulses,
-      weekAsks,
-      storedEvents,
-      crmFailRate: crmSlice.landing.failRatePct,
-      vault
-    }),
-    scale: {
-      hours24,
-      days7,
-      versions: mix(seats.map((s) => s.app_version)),
-      os: mix(seats.map((s) => s.os))
-    },
-    cost: { tokens, table },
-    change: {
-      timeline: audit.map((a) => ({ ts: a.ts, actor: a.actor, action: a.action, detail: a.detail })),
-      heatmap,
-      adoption: mix(seats.map((s) => s.app_version))
-    },
+    kpis: buildDashboardKpis(metrics, rows.asks),
+    ops: buildDashboardOpsSlice(now, metrics, rows, crmSlice),
+    scale: buildDashboardScale(metrics, rows.seats),
+    cost: { tokens: metrics.tokens, table: metrics.table },
+    change: buildDashboardChange(rows, heatmap),
     map,
-    asks: buildAsksSlice(asks),
-    proposals: buildProposalsSlice(proposals),
+    asks: buildAsksSlice(rows.asks),
+    proposals: buildProposalsSlice(rows.proposals),
     crm: crmSlice,
-    events: buildEventsSlice({ storedEvents, asks, crm, seatsById }),
-    profiles: buildProfilesSlice({ seats, now, licenseLabel, onlineMs: ONLINE_MS }),
-    licenses: buildLicensesSlice({ seats, issued, licenseLabel, keysOn }),
-    roi: buildRoiSlice({
-      costToday,
-      cost7d,
-      live,
-      live30,
-      cacheHit,
-      todayAsks,
-      seats,
-      storedEvents,
-      valueSettings,
-      weekAsks,
-      licenseLabel
-    }),
-    gateway: buildGatewaySlice(weekAsks, vault),
-    notices: buildNotices(seats, crm, proposals),
-    keys: buildKeysSlice(keys, vault),
+    events: buildEventsSlice({ storedEvents: rows.storedEvents, asks: rows.asks, crm: rows.crm, seatsById }),
+    profiles: buildProfilesSlice({ seats: rows.seats, now, licenseLabel, onlineMs: ONLINE_MS }),
+    licenses: buildLicensesSlice({ seats: rows.seats, issued: rows.issued, licenseLabel, keysOn }),
+    roi: buildDashboardRoi(metrics, rows, valueSettings, licenseLabel),
+    gateway: buildGatewaySlice(metrics.weekAsks, rows.vault),
+    notices: buildNotices(rows.seats, rows.crm, rows.proposals),
+    keys: buildKeysSlice(keys, rows.vault),
     cloudflare: buildCloudflareSlice(cloudflare),
-    geo: realtimeGeoRows(seats, sessions),
-    geoRegions: geoRegionRows(seats),
-    questions: buildQuestionsPayload(weekAsks),
-    modelPolicy: {
-      ...modelPolicy,
-      history: audit
-        .filter((a) => a.action.startsWith('model-policy.'))
-        .map((a) => ({ ts: a.ts, actor: a.actor, action: a.action, detail: a.detail }))
-    }
+    geo: realtimeGeoRows(rows.seats, rows.sessions),
+    geoRegions: geoRegionRows(rows.seats),
+    questions: buildQuestionsPayload(metrics.weekAsks),
+    modelPolicy: buildDashboardModelPolicy(modelPolicy, rows)
   }
 }
 

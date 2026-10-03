@@ -1,7 +1,7 @@
 import { formatSavedTime, timeSavedFromMeetings } from '../../../src/shared/time-saved'
 import { approvalOf, isApprovedSeat } from '../fleet'
 import { looksLikeSecret } from '../redact'
-import type { AskRow, AuditRow, EventRow, PackRow, ProposalRow, SeatRow } from '../store'
+import type { AskRow, AuditRow, EventRow, PackMeta, ProposalRow, SeatRow } from '../store'
 import type { DashboardPayload, MapCountry, MapDot, ProfileRow } from '../dashboard'
 import { DAY, displayProfile, eventFromStored, mergeEvents, recapMeetings, seatContextChips } from './shared'
 
@@ -25,7 +25,7 @@ export function buildMapSlice(seats: SeatRow[]): DashboardPayload['map'] {
 export function buildHeatmap(args: {
   now: number
   audit: AuditRow[]
-  packs: PackRow[]
+  packs: PackMeta[]
   proposals: ProposalRow[]
 }): number[] {
   const { now, audit, packs, proposals } = args
