@@ -19,12 +19,9 @@ on:
       - .github/workflows/settings-section-visual-compare.yml
       - scripts/qa/settings-section-visual-compare.mjs
       - scripts/qa/settings-section-visual-compare.test.ts
-      - package-lock.json
-      - package.json
-      - src/renderer/src/components/**
+      - src/renderer/src/components/Settings.tsx
+      - src/renderer/src/components/TapCalibration.tsx
       - src/renderer/src/features/settings/**
-      - src/renderer/src/styles/**
-      - src/renderer/src/tokens.css
       - src/renderer/src/ui/**
 
 permissions:
