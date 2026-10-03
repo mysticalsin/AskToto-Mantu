@@ -3,6 +3,7 @@ import { join } from 'node:path'
 
 const preloadDir = join(process.cwd(), 'out', 'preload')
 const expectedEntries = ['index.js', 'intelligence.js', 'import-decoder.js']
+const expected = new Set(expectedEntries)
 
 function fail(message) {
   console.error(message)
@@ -33,6 +34,10 @@ if (!existsSync(preloadDir)) {
   for (const name of readdirSync(preloadDir)) {
     const file = join(preloadDir, name)
     if (!name.endsWith('.js') || !statSync(file).isFile()) continue
+    if (!expected.has(name)) {
+      fail(`Unexpected preload output: out/preload/${name}. Each preload entry must be standalone.`)
+      continue
+    }
     const source = readFileSync(file, 'utf8')
     if (/\brequire\s*\(\s*['"]\.\.?\//.test(source)) {
       fail(`Preload output contains a relative require(): out/preload/${name}`)
