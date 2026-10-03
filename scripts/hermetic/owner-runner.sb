@@ -13,8 +13,10 @@
   (subpath (string-append (param "HOME") "/.config/.wrangler"))
   (subpath (string-append (param "HOME") "/Library/Preferences/.wrangler"))
   (subpath (string-append (param "HOME") "/Library/Application Support/Metis"))
+  (subpath (string-append (param "HOME") "/Library/Application Support/Metis Light"))
   (subpath (string-append (param "HOME") "/Library/Application Support/Métis"))
   (subpath (string-append (param "HOME") "/Library/Application Support/AskToto"))
+  (subpath (string-append (param "HOME") "/Library/Application Support/TotoWhisper"))
   (subpath (string-append (param "HOME") "/Library/Application Support/asktoto-dev"))
   (subpath (string-append (param "HOME") "/Library/Application Support/asktoto")))
 

@@ -265,6 +265,8 @@ describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
   const ownerRunnerDenials = [
     '/Library/CloudStorage',
     '/Library/Application Support/Metis',
+    '/Library/Application Support/Metis Light',
+    '/Library/Application Support/TotoWhisper',
     '/.ssh',
     '/.aws',
     '/.gnupg',
@@ -324,7 +326,8 @@ describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
     expect(workflow).toContain('      - scripts/hermetic/run-under-owner-sandbox.sh\n')
     expect(workflow).toContain('      - scripts/hermetic/owner-account.sb\n')
     expect(workflow).toContain('      - scripts/hermetic/owner-runner.sb\n')
-    expect(ownerSandboxProbe).toContain('bash scripts/hermetic/run-under-owner-sandbox.sh /bin/ls "$target"')
+    expect(ownerSandboxProbe).toContain('probe=(/bin/ls "$target")')
+    expect(ownerSandboxProbe).toContain('probe=(/bin/mkdir -p "$target")')
     expect(ownerSandboxProbe).toContain('OWNER_SANDBOX_PROFILE=owner-runner.sb')
     for (const path of ownerRunnerDenials) {
       expect(ownerSandboxProbe).toContain(`"$HOME${path}"`)

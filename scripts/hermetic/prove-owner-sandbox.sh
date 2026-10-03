@@ -9,12 +9,20 @@ fi
 
 assert_denied() {
   target="$1"
+  if [ -e "$target" ]; then
+    probe=(/bin/ls "$target")
+    failure="reading"
+  else
+    probe=(/bin/mkdir -p "$target")
+    failure="creating"
+  fi
   set +e
-  OWNER_SANDBOX_PROFILE=owner-runner.sb bash scripts/hermetic/run-under-owner-sandbox.sh /bin/ls "$target" > "$RUNNER_TEMP/sandbox-probe.out" 2> "$RUNNER_TEMP/sandbox-probe.err"
+  OWNER_SANDBOX_PROFILE=owner-runner.sb bash scripts/hermetic/run-under-owner-sandbox.sh "${probe[@]}" > "$RUNNER_TEMP/sandbox-probe.out" 2> "$RUNNER_TEMP/sandbox-probe.err"
   status=$?
   set -e
   if [ "$status" -eq 0 ]; then
-    echo "::error::owner-runner sandbox allowed reading $target"
+    rmdir "$target" 2> /dev/null || true
+    echo "::error::owner-runner sandbox allowed $failure $target"
     exit 1
   fi
   if ! grep -Fqi 'Operation not permitted' "$RUNNER_TEMP/sandbox-probe.err"; then
@@ -35,6 +43,8 @@ assert_writable() {
 
 assert_denied "$HOME/Library/CloudStorage"
 assert_denied "$HOME/Library/Application Support/Metis"
+assert_denied "$HOME/Library/Application Support/Metis Light"
+assert_denied "$HOME/Library/Application Support/TotoWhisper"
 assert_denied "$HOME/.ssh"
 assert_denied "$HOME/.aws"
 assert_denied "$HOME/.gnupg"
