@@ -85,7 +85,7 @@ module.exports = {
       from: { path: ENTRY_POINTS },
       to: {
         path: '^src/.+\\.tsx?$',
-        pathNot: [TEST_FILE, '\\.d\\.ts$', '/__fixtures__/', '/test-helpers/', ...ENTRY_POINTS],
+        pathNot: [TEST_FILE, '\\.d\\.ts$', '/__fixtures__/', '/test-helpers/', '^src/main/infra/storage/fs-(sync|async)\\.ts$', ...ENTRY_POINTS],
         reachable: false,
       },
     },

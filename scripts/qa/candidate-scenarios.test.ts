@@ -158,7 +158,7 @@ describe('the scenario registry', () => {
     expect(Object.hasOwn(mac, 'settings')).toBe(false)
   })
 
-  it('declares st1-publish-graphify on macOS, using the hosted synthetic-dataless row', () => {
+  it('declares st1-publish-graphify on macOS, using the hosted FIFO row', () => {
     const entry = SCENARIOS['st1-publish-graphify']
     expect(entry.ticket).toBe('M2-0256')
     expect(entry.qaOnlyHook).toBe(false)
@@ -179,7 +179,7 @@ describe('the scenario registry', () => {
       '--exe',
       'candidate-install/Metis.app/Contents/MacOS/Metis',
       '--fixtures',
-      'synthetic-dataless',
+      'fifo',
       '--history',
       'off',
       '--publish-graphify',

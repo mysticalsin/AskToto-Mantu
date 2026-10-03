@@ -35,6 +35,7 @@ import {
   decryptToTemp
 } from './transcripts'
 import { useStorageForTests } from './infra/storage/meetings-storage'
+import { lockPathToCurrentUserWin32 } from './win-security'
 import type { SaveMeeting, Settings } from '@shared/ipc'
 
 const V2_MARKER = 'ATKENC2\n'
@@ -42,6 +43,14 @@ const parseEnvelope = (file: string): Record<string, unknown> =>
   JSON.parse(readFileSync(file).subarray(V2_MARKER.length).toString('utf8'))
 
 vi.mock('electron')
+
+vi.mock('./win-security', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./win-security')>()
+  return {
+    ...actual,
+    lockPathToCurrentUserWin32: vi.fn()
+  }
+})
 
 // node:fs/promises.rename is a vi.fn wrapping the real implementation by default (via renameSync,
 // which node:fs is NOT mocked for) so writeSaved's EPERM/EBUSY retry can be exercised deterministically.
@@ -1128,7 +1137,11 @@ describe('writeSaved', () => {
 
     await writeSaved(target, 'private', false)
 
-    expect(statSync(target).mode & 0o777).toBe(0o600)
+    if (process.platform === 'win32') {
+      expect(lockPathToCurrentUserWin32).toHaveBeenCalledWith(target)
+    } else {
+      expect(statSync(target).mode & 0o777).toBe(0o600)
+    }
   })
 
   it('does not retry and rethrows on a non-transient error', async () => {

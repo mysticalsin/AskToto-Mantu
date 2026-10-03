@@ -373,6 +373,7 @@ export async function writeSaved(file: string, content: string, encrypt: boolean
       const moved = await gateway.rename(relTmp, relFile, { deadlineMs: null })
       try {
         if (moved.status !== 'ok') throw storageWriteError('rename', moved)
+        lockPathToCurrentUserWin32(file)
         break
       } catch (e) {
         const code = (e as NodeJS.ErrnoException).code

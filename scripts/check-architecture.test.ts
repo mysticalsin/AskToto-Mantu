@@ -344,7 +344,7 @@ describe('architecture ratchet pure functions', () => {
       { rule: { name: 'ff08-some-rule' }, from: 'src/main/a.ts' },
     ])).toThrow()
     expect(() => countDependencyViolations([
-      { rule: { name: 'FF01-example' }, from: 'src/main/a.ts' },
+      { rule: { name: 'FF01-example' }, from: 'src/main/a' },
     ])).toThrow()
   })
 })
