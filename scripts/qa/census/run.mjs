@@ -13,10 +13,12 @@ import {
   defaultOutputPath,
   openNdjsonWriter,
   proveLocalTtftEvidenceFromArtifact,
+  rendererProbeFailureMessage,
   rendererScenarioProbeSource,
   resolveInstallTarget,
   resolveProductVersion,
   streamCensus,
+  validateTraceProfileCompatibility,
   validateState,
   validateStatePrecondition,
   windowsWorkingSetEvidenceFromArtifact,
@@ -126,6 +128,14 @@ function readProfileManifest(profile) {
     return JSON.parse(readFileSync(join(profile, 'resource-census-profile.json'), 'utf8'))
   } catch (error) {
     throw new ParkPreconditionError(`parked-idle requires a readable profile manifest: ${error?.message ?? error}`)
+  }
+}
+
+function readProfileSettings(profile) {
+  try {
+    return JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8'))
+  } catch (error) {
+    throw new Error(`trace scenarios require a readable profile settings.json: ${error?.message ?? error}`)
   }
 }
 
@@ -249,13 +259,13 @@ async function captureRendererTrace({ cdpUrl, scenarios, outputDir }) {
     for (const scenario of scenarios) {
       if (!REQUIRED_TRACE_SCENARIOS.includes(scenario)) throw new Error(`unknown trace scenario: ${scenario}`)
       const proof = await page.evaluate(rendererScenarioProbeSource(scenario))
-      if (!proof?.ok) throw new Error(`renderer trace scenario is not established: ${scenario}`)
       const proofPath = join(outputDir, `${scenario}.proof.json`)
       writeJson(proofPath, {
         scenario,
         observedAt: new Date().toISOString(),
         proof
       })
+      if (!proof?.ok) throw new Error(`${rendererProbeFailureMessage(scenario, proof)}; proof: ${proofPath}`)
       const session = await page.context().newCDPSession(page)
       await session.send('Tracing.start', {
         categories: 'devtools.timeline,disabled-by-default-devtools.timeline,blink.user_timing,gpu',
@@ -312,6 +322,12 @@ async function main() {
   if (args.auditCounts && !profile) throw new Error('--audit-counts requires --profile or METIS_QA_PROFILE')
   if (!(checkpointMinutes > 0)) throw new Error('--checkpoint-minutes must be positive')
   if (state === 'parked-idle') validateParkedIdleProfile(profile)
+  if (args.traceScenarios.length > 0 && profile) {
+    validateTraceProfileCompatibility({
+      profileSettings: readProfileSettings(profile),
+      scenarios: args.traceScenarios
+    })
+  }
 
   validateStatePrecondition({
     state,

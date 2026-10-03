@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   ATTRIBUTABLE_PROCESS_KINDS,
+  BAR_ORB_TRACE_SCENARIOS,
   REQUIRED_TRACE_SCENARIOS,
   STATES_REQUIRING_ATTACH_PRECONDITION,
   STATES,
@@ -20,6 +21,7 @@ import {
   parseProveLocalTtftOutput,
   proveLocalTtftEvidenceFromArtifact,
   rendererScenarioProbeSource,
+  rendererProbeFailureMessage,
   resolveProductVersion,
   sanitizeReport,
   defaultOutputPath,
@@ -27,6 +29,7 @@ import {
   stateRequiresAttachPrecondition,
   summarize,
   validateStatePrecondition,
+  validateTraceProfileCompatibility,
   validateState,
   windowsWorkingSetEvidenceFromArtifact
 } from './lib.mjs'
@@ -624,13 +627,68 @@ describe('resource census report boundary', () => {
 
   it('pins the renderer trace scenarios required by the ticket', () => {
     expect(REQUIRED_TRACE_SCENARIOS).toEqual(['parked-bar-orb', 'backdrop-filter', 'threejs-obsidian-orb'])
+    expect(BAR_ORB_TRACE_SCENARIOS).toEqual(['parked-bar-orb', 'threejs-obsidian-orb'])
   })
 
   it('emits renderer probes that check the actual requested UI state before tracing', () => {
     expect(rendererScenarioProbeSource('parked-bar-orb')).toContain('[data-bar-pill-orb]')
+    expect(rendererScenarioProbeSource('parked-bar-orb')).toContain('orbFound')
+    expect(rendererScenarioProbeSource('parked-bar-orb')).toContain('canvasFound')
     expect(rendererScenarioProbeSource('backdrop-filter')).toContain('backdropFilter')
     expect(rendererScenarioProbeSource('threejs-obsidian-orb')).toContain('[data-orb-style="obsidian"] canvas')
     expect(() => rendererScenarioProbeSource('caller-supplied-label')).toThrow(/unknown trace scenario/)
+  })
+
+  it('refuses bar-orb trace scenarios against a right-edge profile before launching the app', () => {
+    expect(() =>
+      validateTraceProfileCompatibility({
+        profileSettings: { overlayPlacement: 'right-edge' },
+        scenarios: ['parked-bar-orb']
+      })
+    ).toThrow(/parked-bar-orb requires an overlay profile with overlayPlacement "top-center"; observed "right-edge"/)
+    expect(() =>
+      validateTraceProfileCompatibility({
+        profileSettings: { overlayPlacement: 'right-edge' },
+        scenarios: ['threejs-obsidian-orb']
+      })
+    ).toThrow(/threejs-obsidian-orb requires/)
+    expect(
+      validateTraceProfileCompatibility({
+        profileSettings: { overlayPlacement: 'right-edge' },
+        scenarios: ['backdrop-filter']
+      })
+    ).toBeUndefined()
+    expect(
+      validateTraceProfileCompatibility({
+        profileSettings: { overlayPlacement: 'top-center' },
+        scenarios: ['parked-bar-orb', 'backdrop-filter', 'threejs-obsidian-orb']
+      })
+    ).toBeUndefined()
+    expect(() =>
+      validateTraceProfileCompatibility({
+        profileSettings: { overlayPlacement: 'top-center' },
+        scenarios: ['caller-supplied-label']
+      })
+    ).toThrow(/unknown trace scenario/)
+  })
+
+  it('includes the probe result in renderer trace setup failures', () => {
+    expect(
+      rendererProbeFailureMessage('parked-bar-orb', {
+        ok: false,
+        orbFound: true,
+        box: null,
+        canvasFound: false
+      })
+    ).toContain('renderer trace scenario is not established: parked-bar-orb; orb found: true; box: null; canvas found: false')
+    expect(
+      rendererProbeFailureMessage('threejs-obsidian-orb', {
+        ok: false,
+        canvasFound: true,
+        box: { width: 0, height: 0, tag: 'canvas', className: '' },
+        hostFound: true
+      })
+    ).toContain('canvas found: true')
   })
 
   it('keeps the reusable tool default output out of program-document paths', () => {
@@ -829,6 +887,12 @@ describe('resource census GitHub Actions lane', () => {
     expect(workflow).toContain('for state in cold-start settled-idle; do')
     expect(workflow).toContain('--state "$state"')
     expect(workflow).toContain('profile.mjs --layout hide "$RUNNER_TEMP/metis-census-parked-profile"')
+    expect(workflow).toContain('profile.mjs --layout bar --placement top-center "$RUNNER_TEMP/metis-census-trace-profile"')
+    expect(workflow).toContain('METIS_QA_PROFILE="$RUNNER_TEMP/metis-census-trace-profile" node scripts/qa/census/run.mjs')
+    expect(workflow).toContain('--output census-output/darwin-renderer-traces.json')
+    expect(workflow).toContain('--trace-scenario parked-bar-orb')
+    expect(workflow).toContain('--trace-scenario backdrop-filter')
+    expect(workflow).toContain('--trace-scenario threejs-obsidian-orb')
     expect(workflow).toContain('--state parked-idle')
     expect(workflow).toContain('darwin-$state.json')
     expect(workflow).toContain('win32-$state.json')
@@ -836,6 +900,7 @@ describe('resource census GitHub Actions lane', () => {
     expect(workflow).toContain('win32-parked-idle.json')
     expect(workflow).toContain('profile-manifest.json')
     expect(workflow).toContain('parked-profile-manifest.json')
+    expect(workflow).toContain('trace-profile-manifest.json')
     expect(workflow).toContain('resource-census-profile.json')
     expect(workflow).toContain('settled-idle')
     expect(workflow).toContain('--seconds 300')
@@ -844,8 +909,13 @@ describe('resource census GitHub Actions lane', () => {
   })
 
   it('reads the profile manifest from the path profile.mjs prints and never gates the census on the TTFT proof', () => {
-    expect(workflow.match(/sed -n 's\/\^\\\[census-profile\\\] manifest \/\/p'/g)).toHaveLength(4)
+    expect(workflow.match(/sed -n 's\/\^\\\[census-profile\\\] manifest \/\/p'/g)).toHaveLength(5)
     expect(workflow).not.toContain('cp "$RUNNER_TEMP/metis-census-profile/resource-census-profile.json"')
+    const representativeRun = workflow.slice(
+      workflow.indexOf('for state in cold-start settled-idle; do'),
+      workflow.indexOf('METIS_QA_PROFILE="$RUNNER_TEMP/metis-census-trace-profile"')
+    )
+    expect(representativeRun).not.toContain('--trace-scenario')
     const ttftStep = workflow.slice(workflow.indexOf('- name: Record local TTFT proof'), workflow.indexOf('- name: Measure hosted census states'))
     expect(ttftStep).toContain('continue-on-error: true')
     expect(workflow.slice(workflow.indexOf('- name: Measure hosted census states'))).not.toMatch(/^\s+if:\s.*(success|failure)/m)
