@@ -33,7 +33,7 @@ import {
   validateState,
   windowsWorkingSetEvidenceFromArtifact
 } from './lib.mjs'
-import { PARKED_BOUNDS, parkVerdict } from './park.mjs'
+import { PARKED_BOUNDS, PARK_BOUNDS_SIGNAL, parkVerdict } from './park.mjs'
 import { captureRendererTrace } from './run.mjs'
 import { isMainModule, representativeSettings, writeRepresentativeProfile } from './profile.mjs'
 
@@ -420,7 +420,7 @@ describe('resource census CPU formula', () => {
       mainPid: 100,
       productVersion: '1.9.6',
       parkedIdle: {
-        boundsSignal: 'Browser.getWindowForTarget/getWindowBounds',
+        boundsSignal: PARK_BOUNDS_SIGNAL,
         expectedBounds: { width: 8, height: 2 },
         checks: [{ observedAt: new Date(0).toISOString(), bounds: { width: 8, height: 2 }, parked: true }]
       },
@@ -478,7 +478,7 @@ describe('resource census CPU formula', () => {
       mainPid: 100,
       productVersion: '1.9.6',
       parkedIdle: {
-        boundsSignal: 'Browser.getWindowForTarget/getWindowBounds',
+        boundsSignal: PARK_BOUNDS_SIGNAL,
         expectedBounds: PARKED_BOUNDS,
         checks: [parkVerdict(PARKED_BOUNDS, 0)]
       },
