@@ -7,6 +7,7 @@ import {
   legacyTabCentreY,
   legacyTabRect,
   pointInRegion,
+  readerRect,
   restRect,
   type Rect
 } from '@shared/right-edge-geometry'
@@ -149,5 +150,15 @@ describe('right-edge anchor store (M2-0202 spec v3 §2)', () => {
     expect(s.edge.rect('tab', DISPLAY).y + 26).toBe(a)
     expect(s.edge.rect('open', DISPLAY).y).toBe(a - 36)
     expect(s.saves).toEqual([])
+  })
+
+  it('the Reader window is readerRect: the full work-area height at the same right edge, whatever the anchor', () => {
+    for (const f of [0, 0.15, 1]) {
+      const s = store({ anchors: { 'display:1': f } })
+      const reader = s.edge.rect('reader', DISPLAY)
+      expect(reader).toEqual(readerRect(DISPLAY.workArea))
+      expect(reader).toEqual({ x: 1440 - 12 - 720, y: 25 + 12, width: 720, height: 875 - 24 })
+      expect(right(reader)).toBe(right(s.edge.rect('open', DISPLAY)))
+    }
   })
 })
