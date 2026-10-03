@@ -130,27 +130,6 @@ function row(
   return { id, label, description, keywords, control }
 }
 
-const SPEECH_CONTROL: Readonly<Record<SpeechChoice, SettingsControl>> = {
-  'not-chosen': { kind: 'value', value: 'Not chosen yet', action: 'Choose' },
-  'cloud-ready': { kind: 'value', value: 'Cloud speech, ready', action: 'Change' },
-  'cloud-unavailable': { kind: 'value', value: 'Cloud speech, offline', action: 'Retry' }
-}
-
-const VOICE_STATUS: Readonly<Record<SpeechChoice, { readiness: string; summary: string }>> = {
-  'not-chosen': {
-    readiness: 'Needs a choice',
-    summary: 'Choose how speech is processed before your first meeting.'
-  },
-  'cloud-ready': {
-    readiness: 'Ready',
-    summary: 'Ready. Cloud speech is set up and the microphone is allowed.'
-  },
-  'cloud-unavailable': {
-    readiness: 'Speech unavailable',
-    summary: 'Cloud speech is unavailable while this computer is offline. Typing still works.'
-  }
-}
-
 /** The recommended pack's control at each stage of its lifecycle. */
 const RECOMMENDED_PACK_CONTROL: Readonly<Record<LocalSpeechStage, SettingsControl>> = {
   review: { kind: 'value', value: 'Compatible', action: 'Download' },
@@ -187,6 +166,7 @@ function localSpeechRows(stage: LocalSpeechStage): readonly SettingsRow[] {
 
 /** The four destinations as designed, before a policy or failed save is applied. */
 function baseDestinations(speech: SpeechChoice, localSpeech?: LocalSpeechStage): readonly SettingsDestination[] {
+  const speechReady = speech === 'cloud-ready'
   const speechUnavailable = speech === 'cloud-unavailable'
   return [
     {
@@ -236,7 +216,12 @@ function baseDestinations(speech: SpeechChoice, localSpeech?: LocalSpeechStage):
     {
       id: 'voice',
       label: 'Voice & meetings',
-      ...VOICE_STATUS[speech],
+      readiness: speechReady ? 'Ready' : speechUnavailable ? 'Speech unavailable' : 'Needs a choice',
+      summary: speechReady
+        ? 'Ready. Cloud speech is set up and the microphone is allowed.'
+        : speechUnavailable
+          ? 'Cloud speech is unavailable while this computer is offline. Typing still works.'
+          : 'Choose how speech is processed before your first meeting.',
       sections: [
         {
           title: 'Microphone',
@@ -271,7 +256,11 @@ function baseDestinations(speech: SpeechChoice, localSpeech?: LocalSpeechStage):
               'Speech processing',
               'Where your voice is turned into text.',
               ['transcription', 'cloud', 'on this device'],
-              SPEECH_CONTROL[speech]
+              speechReady
+                ? { kind: 'value', value: 'Cloud speech, ready', action: 'Change' }
+                : speechUnavailable
+                  ? { kind: 'value', value: 'Cloud speech, offline', action: 'Retry' }
+                  : { kind: 'value', value: 'Not chosen yet', action: 'Choose' }
             ),
             ...(speechUnavailable
               ? [

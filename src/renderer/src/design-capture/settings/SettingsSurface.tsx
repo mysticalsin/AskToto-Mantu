@@ -105,14 +105,25 @@ function Notice({ notice }: { notice: SettingsNotice }): JSX.Element {
   )
 }
 
-const UPGRADE_NOTICES: readonly SettingsNotice[] = [
-  {
-    title: 'Settings now live in four places',
-    body: 'Find each setting under General, Voice & meetings, Knowledge & skills, or Privacy & account.',
-    tone: 'info'
-  },
-  { title: 'Choose how speech is processed', body: 'Nothing changes until you choose.', tone: 'info', action: 'Choose' }
-]
+function UpgradeBanners(): JSX.Element {
+  return (
+    <div className="dc-banners">
+      <section className="dc-banner" role="status" aria-label="Settings now live in four places">
+        <strong>Settings now live in four places</strong>
+        <span>
+          Find each setting under General, Voice &amp; meetings, Knowledge &amp; skills, or Privacy &amp; account.
+        </span>
+      </section>
+      <section className="dc-banner" role="status" aria-label="Choose how speech is processed">
+        <strong>Choose how speech is processed</strong>
+        <span>Nothing changes until you choose.</span>
+        <button className="dc-button" type="button">
+          Choose
+        </button>
+      </section>
+    </div>
+  )
+}
 
 function Notices({ notices }: { notices: readonly SettingsNotice[] }): JSX.Element | null {
   if (notices.length === 0) return null
@@ -255,7 +266,8 @@ export function SettingsSurface({ scene }: { scene: SettingsScene }): JSX.Elemen
           <SearchResults query={query} scene={scene} />
         ) : (
           <>
-            <Notices notices={[...(scene.migrated ? UPGRADE_NOTICES : []), ...sceneNotices(scene)]} />
+            {scene.migrated ? <UpgradeBanners /> : null}
+            <Notices notices={sceneNotices(scene)} />
             <h2 className="dc-settings-heading">{current.label}</h2>
             <p className="dc-settings-summary">{current.summary}</p>
             {current.sections.map((s) => (
