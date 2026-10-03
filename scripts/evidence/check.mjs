@@ -618,6 +618,17 @@ function jsonlRows(path, problems, label) {
   }
 }
 
+function ledgerAtCommit(ledgerPath, commit) {
+  const ledgerDir = dirname(ledgerPath)
+  const repoRoot = execFileSync('git', ['-C', ledgerDir, 'rev-parse', '--show-toplevel'], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']
+  }).trim()
+  const ledgerTreePath = relative(repoRoot, ledgerPath).split(sep).join('/')
+  return JSON.parse(execFileSync('git', ['-C', repoRoot, 'show', `${commit}:${ledgerTreePath}`], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024
+  }))
+}
+
 function fixtureLabelProblem(row) {
   if (!Object.hasOwn(row, 'fixture')) return null
   if (row.row === 'row-5-dataless-brain-idle' && row.fixture === 'dataless-brain-index') return null
@@ -1177,9 +1188,7 @@ function releaseMain(values) {
     notesText,
     readSample: (path) => JSON.parse(readFileSync(join(program.programRoot, ...path.split('/')), 'utf8')),
     // The ledger's own repository history; ledger_commit is 40-hex (checked first), never an option.
-    ledgerAt: (commit) => JSON.parse(execFileSync('git', ['-C', dirname(ledgerPath), 'show', `${commit}:./${basename(ledgerPath)}`], {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024
-    }))
+    ledgerAt: (commit) => ledgerAtCommit(ledgerPath, commit)
   })
   for (const line of reports) console.log(line)
   if (problems.length > 0) {
