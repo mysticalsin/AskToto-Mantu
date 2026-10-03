@@ -41,6 +41,17 @@ function inputNames(): string[] {
     .map((line) => line.trim().replace(/:$/, ''))
 }
 
+function measuredCensusStates(name: string): string[] {
+  const all = steps(name)
+  const stateStep = all[stepIndex(all, 'Measure hosted census states')]
+  const firstInference = all[stepIndex(all, 'Measure first-inference census state')]
+  const loop = /for state in ([^;]+); do/.exec(stateStep)
+  const states = loop ? loop[1].trim().split(/\s+/) : []
+  if (stateStep.includes('--state parked-idle')) states.push('parked-idle')
+  if (firstInference.includes('scripts/qa/census/first-inference.mjs')) states.push('first-inference')
+  return states
+}
+
 describe('resource-census.yml', () => {
   it('stays dispatch-only with the main-ref guard on both measurement jobs', () => {
     const on = block(lines, 'on:', 0).filter((line) => /^ {2}\S/.test(line))
@@ -101,19 +112,31 @@ describe('resource-census.yml', () => {
     expect(win).toContain('--name candidate-win')
   })
 
-  it('runs the same census states for both sources with the same seconds and no host floor override', () => {
-    expect(workflow).not.toContain('METIS_QA_HOST_FLOOR_OVERRIDE')
+  it('runs the same census states for both sources with the same seconds and scopes the host floor override to first-inference', () => {
     for (const name of ['macos', 'windows']) {
-      const stateStep = steps(name)[stepIndex(steps(name), 'Measure hosted census states')]
+      const all = steps(name)
+      expect(measuredCensusStates(name)).toEqual(['cold-start', 'settled-idle', 'parked-idle', 'first-inference'])
+      const stateStep = all[stepIndex(all, 'Measure hosted census states')]
       expect(stateStep).toContain('for state in cold-start settled-idle; do')
       expect(stateStep.match(/--seconds 300/g)?.length).toBe(2)
       expect(stateStep).toContain('--state parked-idle')
+      expect(stateStep).not.toContain('METIS_QA_HOST_FLOOR_OVERRIDE')
       expect(stateStep).toContain('--output census-output/')
-      expect(stepIndex(steps(name), 'Measure hosted census states')).toBeGreaterThan(stepIndex(steps(name), 'Build parked hide synthetic profile'))
+      expect(stepIndex(all, 'Measure hosted census states')).toBeGreaterThan(stepIndex(all, 'Build parked hide synthetic profile'))
+
+      const firstInference = all[stepIndex(all, 'Measure first-inference census state')]
+      expect(stepIndex(all, 'Measure first-inference census state')).toBeGreaterThan(stepIndex(all, '--state parked-idle'))
+      expect(firstInference).toContain("METIS_QA_HOST_FLOOR_OVERRIDE: '1'")
+      expect(firstInference).toContain('node scripts/qa/census/first-inference.mjs')
+      expect(firstInference).toContain('--seconds 300')
+      expect(firstInference).toContain('--output census-output/')
     }
+    const overrideSteps = [...steps('macos'), ...steps('windows')].filter((step) => step.includes('METIS_QA_HOST_FLOOR_OVERRIDE'))
+    expect(overrideSteps).toHaveLength(2)
+    expect(overrideSteps.every((step) => step.includes('Measure first-inference census state'))).toBe(true)
   })
 
-  it('records run identity with source, build provenance, artifact sha256 and no floor override', () => {
+  it('records run identity with source, build provenance, artifact sha256 and per-state floor override', () => {
     for (const name of ['macos', 'windows']) {
       const identity = steps(name)[stepIndex(steps(name), 'Record run identity and file digests')]
       expect(identity).toContain('source: process.env.SOURCE')
@@ -121,7 +144,10 @@ describe('resource-census.yml', () => {
       expect(identity).toContain('commit: process.env.SOURCE_COMMIT || null')
       expect(identity).toContain('artifactFileName: process.env.ARTIFACT_NAME || null')
       expect(identity).toContain('artifact_sha256: process.env.ARTIFACT_SHA256 || null')
-      expect(identity).toContain('hostFloorOverride: false')
+      expect(identity).toContain("'cold-start': false")
+      expect(identity).toContain("'settled-idle': false")
+      expect(identity).toContain("'parked-idle': false")
+      expect(identity).toContain("'first-inference': true")
       expect(identity).toContain('hostMemoryBytes: totalmem()')
     }
   })

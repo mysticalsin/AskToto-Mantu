@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url'
 
 export const COMPARABLE = 'COMPARABLE'
 export const NOT_COMPARABLE = 'NOT_COMPARABLE'
-export const CENSUS_STATES = Object.freeze(['cold-start', 'settled-idle', 'parked-idle'])
+export const CENSUS_STATES = Object.freeze(['cold-start', 'settled-idle', 'parked-idle', 'first-inference'])
 
 function usage() {
   return `Usage:
