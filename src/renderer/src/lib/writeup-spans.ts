@@ -1,4 +1,9 @@
 import type { WriteupSpan, WriteupSpanPayload } from '@shared/ipc'
+import { authenticatedIpcResult } from './ipc-auth'
+
+export function reportWriteupSpan(payload: WriteupSpanPayload): void {
+  void window.toto.reportWriteupSpan(payload).then(authenticatedIpcResult)
+}
 
 /**
  * Post-meeting latency spans (M2-0430), measured from the Stop click: transcript saved, first recap token,

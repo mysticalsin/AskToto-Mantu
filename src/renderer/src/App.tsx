@@ -36,7 +36,6 @@ import { useAsk, useAutoResize, useSettings, useAuth, type AnswerState } from '.
 import { useWindowDrag } from './lib/window-drag'
 import { noteCrashContext } from './lib/crash-context'
 import { useTransitionView } from './lib/history-transition'
-import { authenticatedIpcResult } from './lib/ipc-auth'
 import { NavigationGuardService, type NavigationGuardRequest } from './lib/navigation-guard'
 import {
   AUTO_HIDE_GRACE_MS,
@@ -90,7 +89,7 @@ import { freshMeetingPauseClock, setMeetingPaused } from './lib/meeting-clock'
 import { shouldUseCloudSttEngine } from '@shared/cloud-stt-provider'
 import { resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
 import { transcriptToText, recapPersistAction, type RecapPersistTarget } from './lib/transcript'
-import { WriteupSpans } from './lib/writeup-spans'
+import { reportWriteupSpan, WriteupSpans } from './lib/writeup-spans'
 import {
   OwnedOperationGate,
   RecapWriteCoordinator,
@@ -633,7 +632,7 @@ export function App(): JSX.Element {
   const claimedSavesRef = useRef<Set<string>>(new Set())
   const [savedPath, setSavedPath] = useState<string | null>(null)
   // M2-0430: content-free Stop -> transcript saved / first recap token / recap done spans, audited by main.
-  const writeupSpansRef = useRef(new WriteupSpans((report) => void window.toto.reportWriteupSpan(report).then(authenticatedIpcResult)))
+  const writeupSpansRef = useRef(new WriteupSpans(reportWriteupSpan))
   const recapBaselineRef = useRef<{ runId: string; text: string } | null>(null)
   // Refresh the entity-casing name list once on mount, and again whenever a meeting finishes saving —
   // the best available "the brain might have new names" signal (extraction itself runs async in main
