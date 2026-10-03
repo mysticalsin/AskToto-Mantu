@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fixtureDashboard } from '../fixture'
+import { fixtureDashboard } from '../../../test/fixtures/dashboard'
 import { renderModels } from './models'
 import { MODEL_POLICY_CAPABILITIES, type ModelPolicyDocument } from '../../../../src/shared/model-policy'
 

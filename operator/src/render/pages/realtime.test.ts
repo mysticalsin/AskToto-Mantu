@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { resolveMapTheme } from '../../theme-preference'
-import { fixtureDashboard } from '../fixture'
+import { fixtureDashboard } from '../../../test/fixtures/dashboard'
 import { liveStripEvents, renderRealtime } from './realtime'
 
 const CTX = { now: 1_725_000_000_000, theme: 'light' as const }

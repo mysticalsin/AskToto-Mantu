@@ -60,7 +60,7 @@ async function bundleAndImport(virtualEntrySource, tag) {
 
 async function loadOperatorModule() {
   const uiPath = join(OPERATOR_ROOT, 'src/ui.ts').replace(/\\/g, '/')
-  const fixturePath = join(OPERATOR_ROOT, 'src/render/fixture.ts').replace(/\\/g, '/')
+  const fixturePath = join(OPERATOR_ROOT, 'test/fixtures/dashboard.ts').replace(/\\/g, '/')
   const navPath = join(OPERATOR_ROOT, 'src/nav.ts').replace(/\\/g, '/')
   const manifestPath = join(OPERATOR_ROOT, 'src/spa/manifest.ts').replace(/\\/g, '/')
   const entry = `

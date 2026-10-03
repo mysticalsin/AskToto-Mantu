@@ -14,11 +14,11 @@
  *    the way production derives it.
  *  - No em dashes in any string this file writes.
  *
- * This file is Worker-safe (operator/tsconfig.json, WebWorker lib, no Node builtins): only
- * `btoa`/`TextEncoder`, matching the rest of operator/src.
+ * This file is test/QA-only and must stay outside the Worker source tree. It keeps browser-safe
+ * primitives because preview and seed scripts bundle it directly.
  */
-import { buildDashboard, ONLINE_MS, type DashboardPayload } from '../dashboard'
-import { applyPulse, type PulseKind, type SessionRow as SessionState } from '../sessions'
+import { buildDashboard, ONLINE_MS, type DashboardPayload } from '../../src/dashboard'
+import { applyPulse, type PulseKind, type SessionRow as SessionState } from '../../src/sessions'
 import {
   memoryStore,
   type AskRow,
@@ -34,8 +34,8 @@ import {
   type PulseRow,
   type SeatRow,
   type TierRow
-} from '../store'
-import { type CrmSendRow } from '../crm'
+} from '../../src/store'
+import { type CrmSendRow } from '../../src/crm'
 import { QUESTION_TYPES, QUESTION_TYPE_LABELS, type QuestionType } from '../../../src/shared/question-type'
 
 export const FIXTURE_EMAIL = 'owner@example.test'

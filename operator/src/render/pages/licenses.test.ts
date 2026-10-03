@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fixtureDashboard } from '../fixture'
+import { fixtureDashboard } from '../../../test/fixtures/dashboard'
 import { renderLicenses } from './licenses'
 
 const CTX = { now: 1_725_000_000_000, theme: 'light' as const }

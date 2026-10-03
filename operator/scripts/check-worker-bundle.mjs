@@ -35,11 +35,20 @@ export function containsMemoryStore(bundleText) {
   return /\bmemoryStore\b/.test(bundleText)
 }
 
+/** True when the Worker bundle carries the QA dashboard fixture. */
+export function containsQaDashboardFixture(bundleText) {
+  return /\bfixtureRows\b|\bfixtureDashboard\b|\bFIXTURE_NOW\b/.test(bundleText)
+}
+
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === realpathSync(process.argv[1])
 if (isMain) {
   const text = await bundleEntry()
   if (containsMemoryStore(text)) {
     console.error('Operator Worker bundle contains memoryStore: the in-memory store must be reachable only from tests and seed/preview scripts.')
+    process.exit(1)
+  }
+  if (containsQaDashboardFixture(text)) {
+    console.error('Operator Worker bundle contains the QA dashboard fixture: fixtures must stay in operator/test/ only.')
     process.exit(1)
   }
   console.log('Operator Worker bundle does not contain memoryStore.')
