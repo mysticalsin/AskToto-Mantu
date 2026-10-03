@@ -1570,17 +1570,11 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
    *  where there is nothing to restore. */
   embeddedCloudflareKeyAvailable: z.boolean().default(false),
   providerReady: z.boolean(),
-  /** Active provider is usable AND vision-capable — gates screen-ask so screenshots never route to a
-   *  non-vision model. Derived in publicSettings() from providerReady && PROVIDERS[provider].vision. */
+  /** Active provider is usable and vision-capable; derived from providerReady plus provider metadata. */
   visionReady: z.boolean(),
-  /** SOME configured provider can read images (not necessarily the active one). A screen-ask / quick
-   *  action routes to capture when this is true even if the active provider is text-only (e.g. Dust) —
-   *  the main process fails over to the vision provider. Prevents the Dust-active screenshot dead-end. */
+  /** Some configured provider can read images, so screen asks can fail over from a text-only active provider. */
   visionAvailable: z.boolean().default(false),
-  /** Métis Local is enabled, the runtime binary and installer-owned model are present,
-   *  and the org allowlist (if any) permits 'local' — independent of any specific task. Derived by
-   *  main/llm/local-routing.ts's localBaseReady(), the single source of truth this mirrors (see also
-   *  localEligibleFor, which layers the per-request mode-scope check on top for live routing). */
+  /** Base Métis Local readiness, before per-task mode checks. Mirrors localBaseReady(). */
   localReady: z.boolean().default(false),
   /** localReady AND the user's "Live suggestions" use-for toggle is on. */
   localSuggestReady: z.boolean().default(false),
@@ -1588,17 +1582,9 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
   localSummaryReady: z.boolean().default(false),
   /** localReady AND the user's "Screenshots" use-for toggle is on. */
   localVisionReady: z.boolean().default(false),
-  /** localReady AND localLlm.fallback — "local as safety net" is live: with zero cloud/CLI providers
-   *  configured (or all of them down), in-scope asks and meeting indexing still run on-device. Lets
-   *  renderer readiness gates (index-meetings CTA, screen-ask) match what routing will actually do. */
+  /** localReady plus localLlm.fallback; lets renderer gates match backup routing. */
   localFallbackReady: z.boolean().default(false),
-  /** Providers currently DEMOTED because a recent ask failed in a way that will keep failing for a while —
-   *  a dead key (401/403), a rate limit (429), spent credit, or a subscription usage-cap — see
-   *  main/llm/provider-health.ts. `providerReady` above only means "a key string exists", so without this
-   *  the UI reports a provider ready forever while every ask silently degrades to the backup (MQA-004).
-   *  `reason` lets the UI distinguish "re-enter your key" from "you hit a limit, resets soon"; `until` is
-   *  the epoch-ms the cooldown expires so it can show "retry in 2m" / "resets ~3:40pm". Empty is the
-   *  healthy case. Session-scoped: never persisted, cleared the moment the key changes or it answers again. */
+  /** Session-scoped provider demotions from provider-health; empty means healthy. */
   unhealthyProviders: z
     .array(
       z.object({
@@ -1610,11 +1596,7 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
       })
     )
     .default([]),
-  /**
-   * Wave 2 / QA — last successful failover hop this session (primary → backup). Session-scoped, never
-   * persisted; the renderer shows a one-shot chip then clears via settings:dismissFailoverNotice.
-   * null when no failover has fired yet (or the user dismissed the chip).
-   */
+  /** Last successful failover hop this session; renderer shows it once, then clears it. */
   lastFailover: z
     .object({
       from: z.string(),
@@ -1624,18 +1606,11 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
     })
     .nullable()
     .default(null),
-  /** Background on-device screen pre-analysis can actually run RIGHT NOW, straight from the engine's own
-   *  gate (screen-preprocess.ts canRun(), never recomputed renderer-side): session valid, the
-   *  `backgroundScreenContext` setting on, an on-device reader available (local model OR the macOS Vision
-   *  OCR helper), and a live OS foreground-window signal. Lets Settings say "on" vs the right reason it
-   *  is not — pair it with `localReady` to tell "no on-device reader" from "no window signal". */
+  /** Live background screen-preanalysis gate from screen-preprocess, not recomputed renderer-side. */
   backgroundScreenReady: z.boolean().default(false),
-  /** Whether the llama-server sidecar process is running RIGHT NOW — distinct from `localReady` (which is
-   *  eligibility to route there, not live process state; the sidecar starts lazily on first local request
-   *  and idle-stops after 15 min, see local-runtime.ts). Drives the Local AI card's status line only. */
+  /** Current sidecar process state, distinct from localReady eligibility. */
   localRuntimeRunning: z.boolean().default(false),
-  /** Precise sidecar lifecycle state — lets the Local AI card distinguish a normal idle 'stopped' from a
-   *  session-long 'unavailable' lockout (restart-budget exhausted, cleared only by relaunch). */
+  /** Precise sidecar lifecycle state for the Local AI status line. */
   localRuntimeState: z.enum(['stopped', 'starting', 'running', 'unavailable']).default('stopped'),
   hasKeys: z.record(z.string(), z.boolean()),
   hasEncryption: z.boolean(),
@@ -1644,22 +1619,18 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
   /** Providers whose key is set via an environment variable — in-app Remove is a no-op for these. */
   envKeys: z.array(z.string()).default([]),
   loginItemOpenAtLogin: z.boolean().default(false),
-  /** App version (e.g. from package.json/app.getVersion()), populated by main for the About screen.
-   *  Optional — absent on older callers/tests that construct PublicSettings without it. */
+  /** App version for About; optional for older callers/tests. */
   version: z.string().optional(),
-  /** Org data-residency allowlist of provider ids (from managed-config `allowedProviders`). null = no
-   *  restriction. The renderer uses it to filter the provider picker to approved vendors and to badge a
-   *  blocked provider "restricted by your organization" — the SAME source the main process enforces at
-   *  request time, so the UI can't offer a provider that every ask would then reject. */
+  /** Org provider allowlist from managed-config; null means unrestricted. */
   allowedProviders: z.array(z.string()).nullable().default(null),
   modelPolicyCapabilities: z.record(z.string(), z.object({ provider: z.string(), model: z.string() })).default({}),
   localSpeechPack: z.enum(['required', 'offered', 'blocked']).default('offered'),
-  /** Main-process data health that is safe for the renderer: no paths, no raw errors, no setting values. */
+  /** Renderer-safe data health: no paths, raw errors, or setting values. */
   settingsHealth: SettingsHealthSchema.default({ settingsJson: null })
 })
 export type PublicSettings = z.infer<typeof PublicSettingsSchema>
 
-/** Patch type exposed to the renderer. Derived/computed fields are omitted because the main process ignores them. */
+/** Renderer patch type; derived/computed fields are omitted because main ignores them. */
 export type SettingsPatch = Partial<
   Omit<
     PublicSettings,
@@ -1683,10 +1654,7 @@ export type SettingsPatch = Partial<
   >
 >
 
-// Dust agent sIds. The BASE agent is a user-editable Settings picker (DustSetup) that DEFAULTS to
-// Métis — an empty value always falls back here, and the picker offers a one-click reset. Spotlight
-// Ref stays hard-locked (read-only in Settings); rotating IT without a release: hand-edit
-// userData/managed-config.json with {"providerModelsSpotlightRef":{"dust":"NEW_ID"}}.
+// Dust agent sIds. The base agent is user-editable; Spotlight Ref stays hard-locked/read-only.
 export const DUST_BASE_AGENT_ID = 'vJxYHvTRBT' // Dust agent "Métis" — default base agent (user-changeable in Settings → AI → Dust); also drafts meeting follow-ups (no separate follow-up agent)
 export const DUST_SPOTLIGHT_REF_AGENT_ID = 'GOr913Zr5V' // Dust agent "Spotlight Ref"
 

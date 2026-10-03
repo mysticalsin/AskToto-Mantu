@@ -4048,9 +4048,7 @@ export function App(): JSX.Element {
                   </button>
                 </div>
               )}
-              {/* Writing a generated recap back to its .md was refused. The text itself is still on screen
-                  (recapGenTarget stays set), but it exists nowhere else — say so while the user can still act
-                  on it, instead of letting them navigate away and lose it. */}
+              {/* Recap text is still on screen, but a failed write means it exists nowhere else. */}
               {recapSaveError && (
                 <div className="fade-up flex items-center justify-between gap-2 rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-1.5 text-[11px] leading-snug text-[var(--color-danger)]">
                   <span className="line-clamp-2">Couldn’t save this summary: {recapSaveError}</span>
@@ -4064,8 +4062,7 @@ export function App(): JSX.Element {
                   </button>
                 </div>
               )}
-              {/* Desk Tap Control is calibrated but won't arm on this microphone. Not dismissible: it isn't a
-                  one-off event, it's a standing state that lasts until the user recalibrates. */}
+              {/* Standing state until recalibrated on the current microphone. */}
               {tapMismatch && view !== 'settings' && (
                 <div className="fade-up rounded-xl border border-[var(--color-warn)]/30 bg-[var(--color-warn)]/10 px-3 py-1.5 text-[11px] leading-snug text-[color:var(--color-warn)]">
                   Desk Tap Control is paused. It was calibrated on a different microphone. Recalibrate it in
@@ -4080,17 +4077,7 @@ export function App(): JSX.Element {
                   onRecoverProfile={() => void recoverEncryptedProfile().then(() => refresh()).catch(() => {})}
                 />
               )}
-              {/* MQA-053 / MQA-059: the ACTIVE provider's credential stopped working and cross-provider
-                  failover absorbed it, so the ask still returned a normal-looking answer. providerReady is
-                  derived from "a key string exists", never from whether that key works, so the CTA below
-                  cannot fire — and Settings goes on showing this provider as active with a key saved. Without
-                  this the degradation is permanent and silent: every later ask runs on a different vendor,
-                  at a different cost, over a different data path, and the user is never given the one fact
-                  that would let them fix it. Scoped to reasons the user must ACT on (a rejected credential,
-                  spent credit); a 60s rate limit or a session cap that resets itself is what "Backups &
-                  limits" already promises to ride out automatically, and nagging about those would train the
-                  user to ignore this. Not dismissible — it is a standing state, not an event, and it clears
-                  itself the moment that provider answers again or its key is changed. */}
+              {/* Standing provider-health state: key/credit failures need action and clear only after recovery. */}
               {settings && view !== 'settings' && !showListeningChrome && (() => {
                 const dead = (settings.unhealthyProviders ?? []).find(
                   (u) => u.provider === settings.provider && (u.reason === 'auth' || u.reason === 'quota-exhausted')
@@ -4115,9 +4102,7 @@ export function App(): JSX.Element {
                   </button>
                 )
               })()}
-              {/* Wave 2 — one-shot failover chip (docs/PROVIDER-ROUTING-POLICY.md). Distinct from the standing
-                  dead-key banner above: this is an EVENT (primary hopped once), dismissible, and clears via
-                  dismissFailoverNotice so it never nags every poll. */}
+              {/* One-shot failover event chip, separate from the standing provider-health banner. */}
               {settings?.lastFailover &&
                 settings.lastFailover.at > failoverDismissedAt &&
                 view !== 'settings' &&
