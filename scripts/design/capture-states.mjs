@@ -20,7 +20,7 @@ import {
   captureMatrix,
   captureScreenshotRequest
 } from './capture-manifest.mjs'
-import { detectedFailureKinds } from './capture-audit.mjs'
+import { detectedFailureKinds, missingFailureKinds } from './capture-audit.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = resolve(here, '..', '..')
@@ -108,8 +108,9 @@ try {
       failures.push(`negative control (${theme}) collector failed: ${errorMessage(error)}`)
     }
     const kinds = detectedFailureKinds(audit)
-    if (!['clipping', 'nonText', 'text'].every((kind) => kinds.includes(kind))) {
-      failures.push(`negative control (${theme}) missed audit kinds: ${kinds.join(', ') || 'none'}`)
+    const missing = missingFailureKinds(audit)
+    if (missing.length > 0) {
+      failures.push(`negative control (${theme}) missed audit kinds: ${missing.join(', ')}`)
     }
     negativeControl.kinds = [...new Set([...negativeControl.kinds, ...kinds])].sort()
   }

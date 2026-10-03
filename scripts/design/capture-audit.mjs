@@ -441,6 +441,11 @@ export function detectedFailureKinds(audit) {
   return [...kinds].sort()
 }
 
+export function missingFailureKinds(audit, requiredKinds = ['clipping', 'nonText', 'text']) {
+  const detected = new Set(detectedFailureKinds(audit))
+  return requiredKinds.filter((kind) => !detected.has(kind))
+}
+
 if (typeof window !== 'undefined') {
   window.__DESIGN_CAPTURE_AUDIT__ = { collect: collectPageAudit }
 }

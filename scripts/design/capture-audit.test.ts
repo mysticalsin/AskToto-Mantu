@@ -6,6 +6,7 @@ import {
   detectedFailureKinds,
   hasClippedTextBox,
   isLargeText,
+  missingFailureKinds,
   pageHasHorizontalScroll,
   boxExtendsHorizontallyOutsideViewport,
   summarizeAudits,
@@ -138,5 +139,15 @@ describe('audit summaries', () => {
         clipping: { failures: [{ selector: 'span.clip' }] }
       })
     ).toEqual(['clipping', 'nonText', 'text'])
+  })
+
+  it('reports the negative-control kinds still missing from an audit', () => {
+    expect(
+      missingFailureKinds({
+        text: { failures: [{ selector: 'p.low' }] },
+        nonText: { failures: [] },
+        clipping: { failures: [] }
+      })
+    ).toEqual(['clipping', 'nonText'])
   })
 })
