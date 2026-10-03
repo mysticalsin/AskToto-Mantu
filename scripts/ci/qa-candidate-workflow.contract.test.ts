@@ -231,6 +231,58 @@ describe('QA candidate workflow: which refs and versions may build (M2-0499)', (
   })
 })
 
+describe('QA candidate workflow: the file-fed capture smoke (M2-0495)', () => {
+  const job = jobBlocks.get('capture-file-smoke-mac') ?? ''
+  const jobSteps = jobBlocks.has('capture-file-smoke-mac') ? steps('capture-file-smoke-mac') : []
+
+  it('waits for provenance and runs on macOS', () => {
+    expect(job).toMatch(/^    needs: provenance$/m)
+    expect(job).toMatch(/^    runs-on: macos-latest$/m)
+    expect(job).toMatch(/^    timeout-minutes: 5$/m)
+  })
+
+  it('is blocking: no continue-on-error on the job or any step', () => {
+    expect(job).not.toContain('continue-on-error')
+  })
+
+  it('downloads the QA-identity variant, verifies it against the provenance, then runs the smoke on it', () => {
+    const download = jobSteps.findIndex((step) => step.includes('name: candidate-mac-qa-identity'))
+    const verify = jobSteps.findIndex((step) => step.includes('provenance.mjs verify provenance/provenance.json assets mac-qa-identity'))
+    const smoke = jobSteps.findIndex((step) => step.includes('scripts/qa/meeting/file-capture-smoke.mjs --installer'))
+    expect(download).toBeGreaterThan(-1)
+    expect(verify).toBeGreaterThan(download)
+    expect(smoke).toBeGreaterThan(verify)
+  })
+
+  it('uploads the report even when the smoke fails', () => {
+    const upload = jobSteps.find((step) => step.includes('actions/upload-artifact@')) ?? ''
+    expect(upload).toContain('if: always()')
+    expect(upload).toContain('name: capture-file-smoke-mac')
+    expect(upload).toContain('path: capture-report/')
+    expect(upload).toContain('if-no-files-found: error')
+  })
+
+  it('runs the self-test when the capture scripts or the hook change', () => {
+    expect(workflow).toContain('      - scripts/qa/meeting/**\n')
+    expect(workflow).toContain('      - src/main/qa-capture-source.ts\n')
+  })
+})
+
+describe('QA candidate workflow: runtime asset cache keys', () => {
+  it('uses one bounded file per hashFiles call so Windows workflow template expansion cannot scan an ambiguous pattern', () => {
+    for (const name of ['build-mac', 'build-win']) {
+      const block = jobBlocks.get(name) ?? ''
+      const runtimeKey = block.split('\n').find((line) => line.includes('key: runtime-assets-')) ?? ''
+      expect(runtimeKey, name).toContain("hashFiles('scripts/fetch-models.mjs')")
+      expect(runtimeKey, name).toContain("hashFiles('resources/runtime-assets-manifest.json')")
+      expect(runtimeKey, name).toContain("hashFiles('scripts/fetch-local-model.mjs')")
+      expect(runtimeKey, name).toContain("hashFiles('scripts/local-model-assets.mjs')")
+      expect(runtimeKey, name).not.toContain("hashFiles('scripts/fetch-models.mjs',")
+      expect(runtimeKey, name).not.toContain("hashFiles('scripts/fetch-local-model.mjs',")
+    }
+  })
+})
+
 describe('QA candidate History design evidence (M2-0032)', () => {
   const block = jobBlocks.get('history-design-mac') ?? ''
 
@@ -505,5 +557,44 @@ describe('QA candidate workflow: the shipped window gate (M2-0519)', () => {
     const measure = steps('st1-mac-window').find((step) => step.includes('--purpose window-construction')) ?? ''
     expect(measure).toContain('for variant in spellcheck-off paint-when-hidden prewarm-spellchecker shipped; do')
     expect(measure.indexOf('prewarm-spellchecker shipped')).toBeLessThan(measure.indexOf('--window-variant "$variant"'))
+  })
+})
+
+describe('QA candidate Windows QA-identity build (M2-0524)', () => {
+  const job = jobBlock('build-win')
+  const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { scripts: Record<string, string> }
+  const config = readFileSync(join(root, 'build', 'qa-identity.win.electron-builder.yml'), 'utf8').replace(/\r\n/g, '\n')
+
+  it('builds the promotable win variant and the win-qa-identity variant, each staged and uploaded under its own name', () => {
+    expect(job).toContain('          - variant: win\n            script: dist:win\n')
+    expect(job).toContain('          - variant: win-qa-identity\n            script: dist:qa-identity:win\n')
+    expect(job).toContain('        run: npm run ${{ matrix.script }}')
+    expect(job).toContain('node scripts/qa/provenance.mjs stage ${{ matrix.variant }} release candidate')
+    expect(job).toContain('name: candidate-${{ matrix.variant }}')
+    expect(job).toContain('name: build-${{ matrix.variant }}')
+  })
+
+  it('compiles the QA-only hooks into the win-qa-identity bundle and no other', () => {
+    expect(job).toContain("            qa_identity: '1'")
+    expect(job).toContain("            qa_identity: ''")
+    expect(job).toContain('          METIS_QA_IDENTITY: ${{ matrix.qa_identity }}')
+  })
+
+  it('packages the Windows QA identity as its own app, checks it under its own executable name, and never publishes it', () => {
+    const script = pkg.scripts['dist:qa-identity:win']
+    expect(pkg.scripts['predist:qa-identity:win']).toBe('npm run predist:win')
+    expect(script).toContain('electron-builder --config build/qa-identity.win.electron-builder.yml --win nsis --x64 --publish never')
+    expect(script).toContain('check-packaged-runtime.mjs win --post-sign "--executable=Metis QA.exe"')
+    expect(script).toContain('check-packaged-launch.mjs "release/win-unpacked/Metis QA.exe"')
+    expect(config).toContain('extends: ./electron-builder.win.yml\n')
+    expect(config).toContain('appId: com.mantu.asktoto.qa\n')
+    expect(config).toContain('extraMetadata:\n  name: asktoto-qa\n')
+    expect(config).toMatch(/^ {2}executableName: Metis QA$/m)
+    expect(config).toMatch(/^ {2}artifactName: Metis-QA-Setup-\$\{version\}\.\$\{ext\}$/m)
+    expect(config).toContain('publish: null\n')
+  })
+
+  it('runs the self-test when the Windows QA-identity config changes', () => {
+    expect(workflow).toContain('      - build/qa-identity.win.electron-builder.yml\n')
   })
 })

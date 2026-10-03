@@ -1,0 +1,22 @@
+# Windows QA-identity variant of Métis (M2-0524), the Windows twin of build/qa-identity.electron-builder.yml:
+# the bytes the candidate-scenarios journey drives on Windows, since the QA-only hooks (the file-fed capture
+# source among them) are compiled only into a METIS_QA_IDENTITY=1 bundle. It shares nothing the live install
+# owns: its own app id (NSIS install key), its own runtime name (userData directory) and no update feed.
+# Built only by `npm run dist:qa-identity:win` in qa-candidate.yml, and never published.
+# electron-builder resolves `extends` against the project directory, not against this file; the Windows
+# config it extends in turn extends ./electron-builder.yml, so the Windows file allowlist applies unchanged.
+extends: ./electron-builder.win.yml
+appId: com.mantu.asktoto.qa
+productName: Metis QA
+# Electron takes the app name from the packaged package.json: userData becomes <appData>/asktoto-qa, never
+# the live install's asktoto.
+extraMetadata:
+  name: asktoto-qa
+win:
+  # scripts/qa/journey.mjs QA_WIN_EXECUTABLE: the installed QA identity is told apart by this name.
+  executableName: Metis QA
+nsis:
+  shortcutName: Métis QA
+  artifactName: Metis-QA-Setup-${version}.${ext}
+# No app-update.yml: a QA build never updates itself from, or into, the release feed.
+publish: null
