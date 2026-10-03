@@ -44,6 +44,7 @@ import {
   IPC_CHANNELS,
   KEYBOARD_VARIANT_ID,
   designVerdict,
+  deviceMetricsForVariant,
   historyTransitions,
   judgeCapture,
   listAnswer,
@@ -360,13 +361,14 @@ async function settleWindow(page) {
 }
 
 async function captureReachedState({ page, cdp, main, state, variant, realRows, out }) {
-  const drive = await driveState(page, main, state, realRows)
   const screenshot = join(state.id, `${variant.id}.png`)
+  let drive
   let collected
   // Width and height 0 leave the viewport the real window's, so the app's own content sizing still
   // applies at 2x (layout there can differ by a few pixels); only the device scale factor is emulated.
-  await cdp.send('Emulation.setDeviceMetricsOverride', { width: 0, height: 0, deviceScaleFactor: variant.scale, mobile: false })
+  await cdp.send('Emulation.setDeviceMetricsOverride', deviceMetricsForVariant(variant))
   try {
+    drive = await driveState(page, main, state, realRows)
     await settleWindow(page)
     await page.screenshot({ path: join(out, screenshot), scale: 'device' })
     drive.capturedAfterMs = Date.now() - drive.requestedAt

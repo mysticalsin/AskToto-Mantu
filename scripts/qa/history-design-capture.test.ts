@@ -13,6 +13,7 @@ import {
   composite,
   contrastRatio,
   designVerdict,
+  deviceMetricsForVariant,
   historyTransitions,
   judgeCapture,
   judgeClipping,
@@ -98,6 +99,15 @@ describe('History design matrix (M2-0032)', () => {
     expect(listAnswer('pending', real, 0)).toEqual({ kind: 'pending' })
     expect(listAnswer('failed', real, 0)).toEqual({ kind: 'failed' })
     expect(() => listAnswer('bogus', real, 0)).toThrow(/unknown list mode/)
+  })
+
+  it("uses the real window size with only the variant's device scale overridden", () => {
+    expect(deviceMetricsForVariant(DESIGN_VARIANTS.find((v) => v.id === 'dark-2x-motion')!)).toEqual({
+      width: 0,
+      height: 0,
+      deviceScaleFactor: 2,
+      mobile: false
+    })
   })
 })
 
