@@ -156,6 +156,13 @@ describe('QA candidate workflow: which refs and versions may build (M2-0499)', (
   const guardSteps = steps('guard')
   const dispatchRefStep = guardSteps.find((step) => step.includes('may not build a candidate')) ?? ''
 
+  it('uses event.number for PR display and concurrency fields that GitHub parses before jobs start', () => {
+    expect(workflow).toContain("format('QA candidate self-test (PR {0})', github.event.number)")
+    expect(workflow).toContain("format('pr-{0}', github.event.number)")
+    expect(workflow).not.toMatch(/^run-name:.*github\.event\.pull_request\.number/m)
+    expect(workflow).not.toMatch(/^  group:.*github\.event\.pull_request\.number/m)
+  })
+
   it('allows workflow_dispatch on refs/heads/main and refs/heads/release/1.9.x only, and names both when refusing', () => {
     expect(dispatchRefStep).toContain("if: github.event_name == 'workflow_dispatch'")
     expect(dispatchRefStep).toContain('refs/heads/main|refs/heads/release/1.9.x) ;;')
