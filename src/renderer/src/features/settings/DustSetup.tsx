@@ -11,7 +11,7 @@ import {
   Wand2,
   X
 } from 'lucide-react'
-import { DUST_BASE_AGENT_ID, type DustAgent, type ProfileRecoveryResult, type PublicSettings } from '@shared/ipc'
+import { type DustAgent, type ProfileRecoveryResult, type PublicSettings } from '@shared/ipc'
 import { dustStoredAgentMissing, parseDustUrl, type ProviderId } from '@shared/providers'
 import {
   DUST_EMPTY_AGENTS_ERROR,
@@ -184,14 +184,14 @@ export function DustSetup({
       delete nextThinking.dust
       await patch({
         provider: 'dust',
-        providerModels: { ...settings.providerModels, dust: DUST_BASE_AGENT_ID },
+        providerModels: { ...settings.providerModels, dust: '' },
         providerModelsThinking: nextThinking
       })
     } else {
       await patch({ provider: 'dust' })
     }
     setCli({ busy: false, ok: false, msg: 'Checking Dust connection…' })
-    await proveAfterConnect(r.workspaceId || settings.dustWorkspaceId, wsChanged ? DUST_BASE_AGENT_ID : agent)
+    await proveAfterConnect(r.workspaceId || settings.dustWorkspaceId, wsChanged ? '' : agent)
   }
 
   const oauthIdle = { phase: 'idle' as const, userCode: null, verificationUri: null, intervalSec: 5, expiresAt: 0, workspaces: null, error: null }
@@ -348,7 +348,7 @@ export function DustSetup({
     const next: Partial<PublicSettings> = {
       dustWorkspaceId: '',
       dustBaseUrl: 'https://dust.tt',
-      providerModels: { ...settings.providerModels, dust: DUST_BASE_AGENT_ID },
+      providerModels: { ...settings.providerModels, dust: '' },
       providerModelsThinking: nextThinking,
       // Reset to the "never CLI-connected" default (0) — otherwise a stale CLI-origin timestamp survives
       // into a later manual-API-key connect and wrongly gates the live-check effect into probing a real
@@ -851,10 +851,10 @@ export function DustSetup({
                 Base agent · answers everyday questions &amp; drafts follow-ups
                 <ManagedChip keys={settings.managedKeys} k="providerModels" />
               </span>
-              {agent && agent !== DUST_BASE_AGENT_ID && (
+              {agent && (
                 <button
                   type="button"
-                  onClick={() => setBaseAgent(DUST_BASE_AGENT_ID)}
+                  onClick={() => setBaseAgent('')}
                   disabled={agentsLocked}
                   className="no-drag cl-focus rounded px-1 text-[11px] text-[color:var(--cl-primary)] hover:underline disabled:opacity-50"
                 >
@@ -877,8 +877,8 @@ export function DustSetup({
               onSelect={setBaseAgent}
               placeholder="Base agent id (defaults to Métis)"
               disabled={agentsLocked}
-              defaultId={DUST_BASE_AGENT_ID}
-              onEmptyBlur={() => setBaseAgent(DUST_BASE_AGENT_ID)}
+              defaultId=""
+              onEmptyBlur={() => setBaseAgent('')}
             />
             {selectedAgent && (
               <div className={selectedAgentRunsSonnet ? 'text-[11px] text-[var(--cl-success)]' : 'text-[11px] text-[color:var(--cl-muted-foreground)]'}>

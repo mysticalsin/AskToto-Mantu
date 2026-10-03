@@ -13,7 +13,6 @@ import { join } from 'node:path'
 import { totalmem as physicalTotalMemory } from 'node:os'
 import {
   DEFAULT_SETTINGS,
-  DUST_BASE_AGENT_ID,
   BaseSettingsSchema,
   SettingsSchema,
   type Settings,
@@ -52,6 +51,7 @@ import { stripProxyFaultMarker } from './llm/retry'
 import { migrateOverlayLayout } from '@shared/overlay-chrome'
 import { preferredFreshAsrEngine, type FreshAsrEngine } from '@shared/asr-hardware-preference'
 import { LocalSpeechPackPolicySchema, type LocalSpeechPackPolicy } from '@shared/model-policy'
+import { DUST_BASE_AGENT_ID, MANAGED_CONFIG_DEFAULTS } from './managed-config-defaults'
 
 const dir = () => app.getPath('userData')
 const settingsPath = () => join(dir(), 'settings.json')
@@ -623,7 +623,7 @@ export function getSettings(): Settings {
 
   // Layering: DEFAULT < managed (org policy, live) < user overrides.
   const managed = validatedManaged()
-  const base = { ...DEFAULT_SETTINGS, ...managed }
+  const base = { ...DEFAULT_SETTINGS, ...MANAGED_CONFIG_DEFAULTS, ...managed }
   // null = settings.json is there but could not be read right now (see readUserRaw). Serve DEFAULT+managed
   // so the app still starts and every IPC handler still answers, but never memoise that snapshot below:
   // the live file's mtime is unchanged, so a cached "no overrides" would outlive the lock and keep showing

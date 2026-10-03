@@ -1,0 +1,9 @@
+{
+  "provider": "custom",
+  "customBaseUrl": "http://api.example.com/v1",
+  "systemPrompt": "Answer directly.",
+  "temperature": 0.4,
+  "contentProtection": true,
+  "privateView": false,
+  "audioSource": "both"
+}

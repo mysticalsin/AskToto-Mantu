@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { describe, it, expect, vi, afterEach } from 'vitest'
@@ -64,6 +64,32 @@ function sourceFilesInDir(relativeToSrc: string): string[] {
     .filter((name) => name.endsWith(`.${TS_EXT}`) && !name.endsWith(`.test.${TS_EXT}`))
     .sort()
     .map((name) => `${relativeToSrc}/${name}`)
+}
+
+function sourceFilesInTree(relativeToSrc: string): string[] {
+  const root = resolve(SRC_DIR, relativeToSrc)
+  const files: string[] = []
+  const visit = (directory: string, prefix: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name
+      const full = join(directory, entry.name)
+      if (entry.isDirectory()) {
+        visit(full, rel)
+      } else if (entry.isFile() && entry.name.endsWith(`.${TS_EXT}`)) {
+        files.push(`${relativeToSrc}/${rel}`)
+      }
+    }
+  }
+  visit(root, '')
+  return files.sort()
+}
+
+function loadJsonFixtures(relativeToSrc: string): Array<{ file: string; value: unknown }> {
+  const directory = resolve(SRC_DIR, relativeToSrc)
+  return readdirSync(directory)
+    .filter((file) => file.endsWith('.json'))
+    .sort()
+    .map((file) => ({ file, value: JSON.parse(readFileSync(join(directory, file), 'utf8')) }))
 }
 
 function firstIpcKey(argument: ts.Expression | undefined, byValue: Map<string, string>): string | null {
@@ -324,6 +350,39 @@ describe('AskStart screen fast-path fields (M13)', () => {
 })
 
 describe('SettingsSchema', () => {
+  const settingsGoldenFixtures = loadJsonFixtures('shared/contracts/settings/__fixtures__/golden')
+  const settingsNegativeFixtures = loadJsonFixtures('shared/contracts/settings/__fixtures__/negative')
+
+  it.each(settingsGoldenFixtures.map((fixture) => [fixture.file, fixture] as const))(
+    'BaseSettingsSchema golden fixture %s parses',
+    (_file, fixture) => {
+      const result = BaseSettingsSchema.safeParse(fixture.value)
+      expect(result.success, result.success ? '' : JSON.stringify(result.error.issues)).toBe(true)
+    }
+  )
+
+  it.each(settingsNegativeFixtures.map((fixture) => [fixture.file, fixture] as const))(
+    'BaseSettingsSchema negative fixture %s is rejected',
+    (_file, fixture) => {
+      expect(BaseSettingsSchema.safeParse(fixture.value).success).toBe(false)
+    }
+  )
+
+  it('keeps workspace-specific Dust agent identifiers out of shared contracts and defaults', () => {
+    expect(DEFAULT_SETTINGS.providerModels.dust).toBeUndefined()
+    expect(DEFAULT_SETTINGS.providerModelsSpotlightRef.dust).toBeUndefined()
+    const forbidden = [
+      ['vJx', 'YHv', 'TRBT'],
+      ['GOr', '913', 'Zr5V'],
+      ['DUST', '_BASE', '_AGENT', '_ID'],
+      ['DUST', '_SPOTLIGHT', '_REF', '_AGENT', '_ID']
+    ].map((parts) => parts.join(''))
+    for (const file of sourceFilesInTree('shared')) {
+      const source = readSource(file)
+      for (const value of forbidden) expect(source, file).not.toContain(value)
+    }
+  })
+
   it('marks every server-authoritative settings field covered by the shared constant', () => {
     const authoritativeFromSchema = Object.entries(BaseSettingsSchema.shape)
       .filter(([, field]) => field.description === SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION)

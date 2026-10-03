@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process'
 
 vi.mock('electron')
 
-import { DUST_SPOTLIGHT_REF_AGENT_ID } from '@shared/ipc'
+import { DUST_SPOTLIGHT_REF_AGENT_ID } from './managed-config-defaults'
 import {
   buildDustSpotlightChatArgv,
   classifyDustCliChatFailure,

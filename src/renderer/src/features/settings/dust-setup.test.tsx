@@ -6,12 +6,13 @@
  */
 import { isValidElement, type ReactElement, type ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { DEFAULT_SETTINGS, DUST_BASE_AGENT_ID, PublicSettingsSchema, type DustAgent, type PublicSettings } from '@shared/ipc'
+import { DEFAULT_SETTINGS, PublicSettingsSchema, type DustAgent, type PublicSettings } from '@shared/ipc'
 import { DUST_WORKSPACE_MISSING_SETUP_ERROR } from '@shared/dust-validate'
 import { AgentPicker } from './AgentPicker'
 import { DustSetup } from './DustSetup'
 
 const hooks = vi.hoisted(() => ({ slots: new Map<number, { current: unknown }>(), next: 0 }))
+const TEST_DUST_BASE_AGENT_ID = 'agentDefault'
 
 vi.mock('react', async (importOriginal) => {
   const react = await importOriginal<typeof import('react')>()
@@ -99,7 +100,7 @@ function makeSettings(overrides: Partial<PublicSettings> = {}): PublicSettings {
 
 const AGENTS: DustAgent[] = [
   { sId: 'agentA', name: 'Alpha', description: 'Answers sales questions' },
-  { sId: DUST_BASE_AGENT_ID, name: 'Métis', description: 'The default agent' }
+  { sId: TEST_DUST_BASE_AGENT_ID, name: 'Métis', description: 'The default agent' }
 ]
 
 type Toto = Record<string, ReturnType<typeof vi.fn>>
@@ -154,7 +155,7 @@ describe('AgentPicker', () => {
 
   it('opens a searchable list, tags the default agent and selects a row', () => {
     const onSelect = vi.fn()
-    const picker = mount(AgentPicker, { ...base, defaultId: DUST_BASE_AGENT_ID, onSelect })
+    const picker = mount(AgentPicker, { ...base, defaultId: TEST_DUST_BASE_AGENT_ID, onSelect })
     expect(picker.view().text).toBe('Pick an agent')
     picker.button(/Pick an agent/).props.onClick()
     const opened = picker.view()
@@ -175,7 +176,7 @@ describe('AgentPicker', () => {
     expect(picker.view().text).toContain('No matching agents.')
     typeInto(picker.input((p) => p.placeholder === 'Filter agents…'), 'default agent')
     picker.input((p) => p.placeholder === 'Filter agents…').props.onKeyDown({ key: 'Enter', stopPropagation: vi.fn() })
-    expect(onSelect).toHaveBeenCalledWith(DUST_BASE_AGENT_ID)
+    expect(onSelect).toHaveBeenCalledWith(TEST_DUST_BASE_AGENT_ID)
   })
 
   it('keeps a saved sId that left the workspace visible and selectable', () => {
@@ -303,7 +304,7 @@ describe('DustSetup', () => {
         dustWorkspaceId: '',
         dustBaseUrl: 'https://dust.tt',
         dustTokenMintedAt: 0,
-        providerModels: { ...settings.providerModels, dust: DUST_BASE_AGENT_ID }
+        providerModels: { ...settings.providerModels, dust: '' }
       })
     )
   })
@@ -335,8 +336,8 @@ describe('DustSetup', () => {
     const pickers = card.view().all.filter((e) => e.type === AgentPicker)
     expect(pickers.map((p) => p.props.label)).toEqual(['Base agent', 'Thinking agent'])
     expect(pickers[0].props.agents).toEqual(AGENTS)
-    pickers[0].props.onSelect(` ${DUST_BASE_AGENT_ID} `)
-    expect(patch).toHaveBeenCalledWith({ providerModels: { ...settings.providerModels, dust: DUST_BASE_AGENT_ID } })
+    pickers[0].props.onSelect(` ${TEST_DUST_BASE_AGENT_ID} `)
+    expect(patch).toHaveBeenCalledWith({ providerModels: { ...settings.providerModels, dust: TEST_DUST_BASE_AGENT_ID } })
     pickers[1].props.onSelect(' agentA ')
     expect(patch).toHaveBeenCalledWith({
       providerModelsThinking: { ...settings.providerModelsThinking, dust: 'agentA' }
@@ -347,9 +348,9 @@ describe('DustSetup', () => {
   it('offers a reset to the Métis default only once the base agent was changed', () => {
     const { card, patch, settings } = setup({ ...connected, providerModels: { dust: 'agentA' } })
     card.button(/Reset to Métis default/).props.onClick()
-    expect(patch).toHaveBeenCalledWith({ providerModels: { ...settings.providerModels, dust: DUST_BASE_AGENT_ID } })
+    expect(patch).toHaveBeenCalledWith({ providerModels: { ...settings.providerModels, dust: '' } })
 
-    const fresh = setup({ ...connected, providerModels: { dust: DUST_BASE_AGENT_ID } })
+    const fresh = setup({ ...connected, providerModels: {} })
     expect(fresh.card.view().text).not.toContain('Reset to Métis default')
   })
 })
