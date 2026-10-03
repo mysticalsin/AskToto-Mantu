@@ -265,6 +265,65 @@ stop_app() {
   fi
 }
 
+app_job_running() {
+  local pid=$1
+  [[ -n "$pid" ]] || return 1
+  jobs -r -p | grep -Fx "$pid" >/dev/null 2>&1
+}
+
+signal_name_for_status() {
+  local status=$1
+  local signal_number=$((status - 128))
+  case "$signal_number" in
+    1) printf 'HUP' ;;
+    2) printf 'INT' ;;
+    3) printf 'QUIT' ;;
+    6) printf 'ABRT' ;;
+    9) printf 'KILL' ;;
+    15) printf 'TERM' ;;
+    *) kill -l "$signal_number" 2>/dev/null || printf '%s' "$signal_number" ;;
+  esac
+}
+
+record_main_exit_observation() {
+  local row=$1
+  local pid=$2
+  local when=$3
+  local observed_ms status exit_code_json signal_json
+  PROCESS_OBSERVATION_JSON=""
+  [[ -n "$pid" ]] || return 1
+  app_job_running "$pid" && return 1
+  observed_ms=$(epoch_ms)
+  status=0
+  wait "$pid" >/dev/null 2>&1 || status=$?
+  exit_code_json=null
+  signal_json=null
+  if (( status >= 128 )); then
+    signal_json=$(json_string "$(signal_name_for_status "$status")")
+  else
+    exit_code_json=$status
+  fi
+  PROCESS_OBSERVATION_JSON="{\"row\":$(json_string "$row"),\"event\":\"main_exited\",\"main_pid\":$pid,\"observed_ms\":$observed_ms,\"when\":$(json_string "$when"),\"wait_status\":$status,\"exit_code\":$exit_code_json,\"signal\":$signal_json}"
+  append_jsonl "$OUT/matrix.jsonl" "$PROCESS_OBSERVATION_JSON"
+  if [[ "${APP_PID:-}" == "$pid" ]]; then
+    APP_PID=""
+  fi
+  return 0
+}
+
+ensure_app_for_row() {
+  local row=$1
+  local pid=${APP_PID:-}
+  if [[ -n "$pid" ]] && app_job_running "$pid"; then
+    return 0
+  fi
+  if [[ -n "$pid" ]]; then
+    record_main_exit_observation "$row" "$pid" "before-row" >/dev/null 2>&1 || true
+  fi
+  launch_app "$PROFILE"
+  append_jsonl "$OUT/matrix.jsonl" "{\"row\":$(json_string "$row"),\"event\":\"app_relaunched\",\"reason\":\"no-live-main-before-row\",\"main_pid\":$APP_PID}"
+}
+
 # Renderers are chosen by process role (Chromium's --type=renderer switch), never by child order: the
 # first children are usually the GPU and utility helpers. The command line is matched, never recorded.
 renderer_pids() {
@@ -288,11 +347,21 @@ sample_app() {
     append_jsonl "$OUT/matrix.jsonl" "{\"row\":$(json_string "$row"),\"sampled\":false,\"reason\":\"dry-run-or-no-app\"}"
     return
   fi
+  local sample_pid_value=$APP_PID
+  if ! app_job_running "$sample_pid_value"; then
+    record_main_exit_observation "$row" "$sample_pid_value" "before-sampling" >/dev/null 2>&1 || true
+    append_jsonl "$OUT/matrix.jsonl" "{\"row\":$(json_string "$row"),\"sampled\":false,\"main_pid\":$sample_pid_value,\"reason\":\"main-exited\",\"main_exited\":${PROCESS_OBSERVATION_JSON:-null}}"
+    return
+  fi
   local main_sampled=true
-  printf '%s\n' "$APP_PID" >> "$OUT/app-pids.txt"
+  printf '%s\n' "$sample_pid_value" >> "$OUT/app-pids.txt"
   local main_sample_start_ms
   main_sample_start_ms=$(epoch_ms)
-  if ! sample_pid "$APP_PID" "$row-main"; then
+  if ! sample_pid "$sample_pid_value" "$row-main"; then
+    if record_main_exit_observation "$row" "$sample_pid_value" "during-main-sample"; then
+      append_jsonl "$OUT/matrix.jsonl" "{\"row\":$(json_string "$row"),\"sampled\":false,\"main_pid\":$sample_pid_value,\"reason\":\"main-exited\",\"main_exited\":$PROCESS_OBSERVATION_JSON}"
+      return
+    fi
     main_sampled=false
     SAMPLE_FAILURES=$((SAMPLE_FAILURES + 1))
   else
@@ -308,11 +377,15 @@ sample_app() {
     else
       SAMPLE_FAILURES=$((SAMPLE_FAILURES + 1))
     fi
-  done < <(renderer_pids "$APP_PID")
+  done < <(renderer_pids "$sample_pid_value")
   if (( renderer_successes == 0 )); then
+    if record_main_exit_observation "$row" "$sample_pid_value" "during-renderer-sample"; then
+      append_jsonl "$OUT/matrix.jsonl" "{\"row\":$(json_string "$row"),\"sampled\":false,\"main_pid\":$sample_pid_value,\"reason\":\"main-exited\",\"main_sample\":$main_sampled,\"renderer_attempts\":$renderer_attempts,\"renderer_samples\":$renderer_successes,\"main_exited\":$PROCESS_OBSERVATION_JSON}"
+      return
+    fi
     SAMPLE_FAILURES=$((SAMPLE_FAILURES + 1))
   fi
-  append_jsonl "$OUT/matrix.jsonl" "{\"row\":$(json_string "$row"),\"sampled\":$([[ "$main_sampled" == true && "$renderer_successes" -gt 0 ]] && printf true || printf false),\"main_pid\":$APP_PID,\"main_sample\":$main_sampled,\"renderer_attempts\":$renderer_attempts,\"renderer_samples\":$renderer_successes,\"renderers_selected_by\":\"--type=renderer\"}"
+  append_jsonl "$OUT/matrix.jsonl" "{\"row\":$(json_string "$row"),\"sampled\":$([[ "$main_sampled" == true && "$renderer_successes" -gt 0 ]] && printf true || printf false),\"main_pid\":$sample_pid_value,\"main_sample\":$main_sampled,\"renderer_attempts\":$renderer_attempts,\"renderer_samples\":$renderer_successes,\"renderers_selected_by\":\"--type=renderer\"}"
 }
 
 write_launch_plan() {
@@ -825,9 +898,8 @@ release_fifo_writers() {
   fi
 }
 
-# Runs after every automatic row has been sampled: SIGTERM to main while the FIFO reads are held blocked,
-# then whether it exits within 10 s. Either outcome is an observation; only a signal that could not be sent
-# leaves the interrupt not exercised.
+# SIGTERM to main while the FIFO reads are held blocked, then whether it exits within 10 s. Either outcome
+# is an observation; only a signal that could not be sent leaves the interrupt not exercised.
 hosted_process_signal() {
   hold_fifo_writers
   local result="not-exercised" exited=false waited=0
@@ -870,6 +942,9 @@ run_hosted_live_matrix() {
     "blocked .brain/index.json left in place for ${BRAIN_POLL_WAIT_SECONDS}s (longer than one 2s brainStatus poll), then cdp Runtime.evaluate window.toto.brainStatus()" ok \
     ",\"brain_status_poll_wait_seconds\":$BRAIN_POLL_WAIT_SECONDS"
 
+  hosted_process_signal
+  ensure_app_for_row "row-3-macos-activate"
+
   reopen_status=ok
   ROW_WINDOW_STARTED_MS=$(epoch_ms)
   "$OPEN_BIN" "$APP" >/dev/null 2>&1 || reopen_status="open-failed"
@@ -877,18 +952,34 @@ run_hosted_live_matrix() {
   hosted_row "row-3-macos-activate" none "open <app>" "$reopen_status"
 
   reopen_status=ok
+  local first_pid=${APP_PID:-}
+  local first_state_before=not-running first_state_after=not-running second_launch_status=open-exited-zero relaunched_after_first_exit=false row4_extra
+  if [[ -n "$first_pid" ]] && app_job_running "$first_pid"; then
+    first_state_before=running
+  fi
   # The second instance gets the same profile, so the app's single-instance lock hands it to the first.
   ROW_WINDOW_STARTED_MS=$(epoch_ms)
-  "$OPEN_BIN" -n --env "ASKTOTO_USERDATA=$PROFILE" "$APP" --args "--user-data-dir=$PROFILE" >/dev/null 2>&1 || reopen_status="open-failed"
+  if ! "$OPEN_BIN" -n --env "ASKTOTO_USERDATA=$PROFILE" "$APP" --args "--user-data-dir=$PROFILE" >/dev/null 2>&1; then
+    reopen_status="open-failed"
+    second_launch_status=open-failed
+  fi
   sleep "$REOPEN_SETTLE_SECONDS"
-  hosted_row "row-4-second-instance-reopen" none "open -n --env ASKTOTO_USERDATA=<profile> <app> --args --user-data-dir=<profile>" "$reopen_status"
+  first_state_after=$first_state_before
+  if [[ -n "$first_pid" ]] && record_main_exit_observation "row-4-second-instance-reopen" "$first_pid" "after-second-instance-launch"; then
+    first_state_after=main-exited
+    ensure_app_for_row "row-4-second-instance-reopen"
+    relaunched_after_first_exit=true
+  elif [[ -n "${APP_PID:-}" ]] && app_job_running "$APP_PID"; then
+    first_state_after=running
+  fi
+  row4_extra=",\"first_instance\":{\"pid\":${first_pid:-null},\"state_before_second_launch\":$(json_string "$first_state_before"),\"state_after_second_launch\":$(json_string "$first_state_after")},\"second_instance\":{\"launch_status\":$(json_string "$second_launch_status"),\"method\":\"open -n\"},\"relaunched_after_first_exit\":$relaunched_after_first_exit"
+  hosted_row "row-4-second-instance-reopen" none "open -n --env ASKTOTO_USERDATA=<profile> <app> --args --user-data-dir=<profile>" "$reopen_status" "$row4_extra"
 
   record_blocked_row "row-5-dataless-brain-idle" ',"automatic":false,"fixture":"dataless-brain-index"'
   record_blocked_row "row-9-network-off-flapping" ',"automatic":false,"fixture":"dataless-meeting"'
 
   record_blocked_interrupt "network-off"
   record_blocked_interrupt "file-provider-cancel"
-  hosted_process_signal
 }
 
 run_windows_hosted_live_matrix() {
