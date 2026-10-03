@@ -23,7 +23,8 @@ const SESSION_MODEL_RE = /^[a-z0-9][a-z0-9.-]{0,63}$/
 const SESSION_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/
 const HOST_RE = /^[a-z0-9][a-z0-9._-]{0,62}$/
 const ENVIRONMENT_KINDS = Object.freeze(['ci', 'qa-mac', 'windows-laptop', 'windows-runner', 'owner-mac', 'hosted-runner'])
-// Runner records need a CI run id: hosted-runner on GitHub-hosted images, and owner-mac on metis-owner-mac.
+// Runner records need a CI run id: hosted-runner on GitHub-hosted images, owner-mac on
+// metis-owner-mac, and every other kind keeps the generic HOST_RE label rule.
 const HOSTED_RUNNER_HOSTS = Object.freeze(['macos-latest', 'windows-latest'])
 export const OWNER_MAC_RUNNER_HOST = 'metis-owner-mac'
 const RUNNER_CI_LEVELS = new Set(['HOST_CONFIGURED', 'LIVE_VERIFIED', 'MEASURED'])
@@ -227,14 +228,23 @@ function unsafePaths(record) {
 }
 
 /**
+ * @param {object} recordOrEnvironment
+ * @returns {string | null} runner label/kind that requires ci_run_id
+ */
+export function runnerLabel(recordOrEnvironment) {
+  const environment = recordOrEnvironment?.environment ?? recordOrEnvironment
+  if (environment?.kind === 'hosted-runner') return 'hosted-runner'
+  if (environment?.kind === 'owner-mac' && environment?.host === OWNER_MAC_RUNNER_HOST) return OWNER_MAC_RUNNER_HOST
+  return null
+}
+
+/**
  * @param {object} record
- * @returns {string | null} runner label/kind that requires ci_run_id but is missing it
+ * @returns {string | null} runner label/kind that requires ci_run_id at HOST_CONFIGURED, LIVE_VERIFIED or MEASURED but is missing it
  */
 export function missingRunnerCiRunIdLabel(record) {
   if (!isPlainObject(record) || record.ci_run_id != null || !RUNNER_CI_LEVELS.has(record.evidence_level)) return null
-  if (record.environment?.kind === 'hosted-runner') return 'hosted-runner'
-  if (record.environment?.kind === 'owner-mac' && record.environment?.host === OWNER_MAC_RUNNER_HOST) return OWNER_MAC_RUNNER_HOST
-  return null
+  return runnerLabel(record)
 }
 
 /**

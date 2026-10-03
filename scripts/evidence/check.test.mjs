@@ -1704,6 +1704,22 @@ test('R3b --release: a metis-owner-mac record without ci_run_id does not meet a 
   assertOnlyProblem(releaseOf(c).problems, 'census', OWNER_MAC_RUNNER_HOST, `${OWNER_MAC_RUNNER_HOST} record with no ci_run_id`)
 })
 
+test('R3c --release: runner records without ci_run_id fail rows at every level', () => {
+  const c = releaseCase()
+  c.gates.rows = [
+    { id: 'accepted-runner', ticket: 'M2-0046', level: 'ACCEPTED', bytes: 'promotable', hosts: ['macos-latest'], accept: 'PASS' },
+    ...c.gates.rows
+  ]
+  const withoutRun = {
+    ...acceptedRecord(),
+    environment: { kind: 'hosted-runner', host: 'macos-latest' },
+    build_run_id: CANDIDATE_RUN,
+    artifact_sha256: SHA_MAC
+  }
+  setRecords(c, 'M2-0046', [withoutRun])
+  assertOnlyProblem(releaseOf(c).problems, 'accepted-runner', 'hosted-runner record with no ci_run_id')
+})
+
 test('R4 --release: QA-identity bytes do not meet a row that requires promotable bytes', () => {
   const c = releaseCase()
   setRecords(c, 'M2-0187', [
