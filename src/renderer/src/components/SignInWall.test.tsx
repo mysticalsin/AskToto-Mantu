@@ -1,7 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { activateDialogFocusTrap } from '../lib/dialog-focus'
-import { SignInWall } from './SignInWall'
 import type { AuthStatus } from '@shared/ipc'
 
 const status: AuthStatus = {
@@ -14,7 +13,14 @@ const status: AuthStatus = {
 }
 
 describe('SignInWall dialog accessibility', () => {
-  it('renders as a labelled modal dialog', () => {
+  afterEach(() => {
+    vi.doUnmock('react')
+    vi.doUnmock('../lib/dialog-focus')
+    vi.resetModules()
+  })
+
+  it('renders as a labelled modal dialog', async () => {
+    const { SignInWall } = await import('./SignInWall')
     const html = renderToStaticMarkup(
       <SignInWall status={status} onSignIn={async () => ({ ok: false, error: 'cancelled' })} />
     )
@@ -27,7 +33,7 @@ describe('SignInWall dialog accessibility', () => {
     expect(html).toContain('tabindex="-1"')
   })
 
-  it('keeps Tab inside the dialog, consumes Escape, and restores focus on cleanup', () => {
+  it('keeps Tab inside the dialog, lets Escape bubble, and restores focus on cleanup', () => {
     const outside = element('outside')
     const first = element('first')
     const last = element('last')
@@ -56,11 +62,42 @@ describe('SignInWall dialog accessibility', () => {
 
     const escape = key('Escape')
     doc.dispatch(escape)
-    expect(escape.preventDefault).toHaveBeenCalledTimes(1)
-    expect(escape.stopPropagation).toHaveBeenCalledTimes(1)
+    expect(escape.preventDefault).not.toHaveBeenCalled()
+    expect(escape.stopPropagation).not.toHaveBeenCalled()
+
+    doc.activeElement = outside
+    const escapedFromOutside = key('Escape')
+    doc.dispatch(escapedFromOutside)
+    expect(escapedFromOutside.preventDefault).not.toHaveBeenCalled()
+    expect(escapedFromOutside.stopPropagation).not.toHaveBeenCalled()
+    expect(doc.activeElement).toBe(first)
 
     cleanup()
     expect(doc.activeElement).toBe(outside)
+  })
+
+  it('activates the focus trap when the wall mounts', async () => {
+    const root = element('dialog-root') as unknown as HTMLDivElement
+    const cleanup = vi.fn()
+    const trap = vi.fn(() => cleanup)
+
+    vi.resetModules()
+    vi.doMock('react', async (importOriginal) => {
+      const react = await importOriginal<typeof import('react')>()
+      return {
+        ...react,
+        useEffect: (effect: () => void | (() => void)) => effect(),
+        useId: () => 'signin-title',
+        useRef: () => ({ current: root }),
+        useState: <T,>(init: T) => [init, vi.fn()] as const
+      }
+    })
+    vi.doMock('../lib/dialog-focus', () => ({ activateDialogFocusTrap: trap }))
+
+    const { SignInWall } = await import('./SignInWall')
+    SignInWall({ status, onSignIn: async () => ({ ok: false, error: 'cancelled' }) })
+
+    expect(trap).toHaveBeenCalledWith(root)
   })
 })
 

@@ -1,23 +1,28 @@
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_SETTINGS, PublicSettingsSchema } from '@shared/ipc'
-import { LicenseGate } from './LicenseGate'
+
+const settings = PublicSettingsSchema.parse({
+  ...DEFAULT_SETTINGS,
+  hasApiKey: false,
+  providerReady: false,
+  visionReady: false,
+  hasKeys: {},
+  hasEncryption: true,
+  resolvedMeetingsFolder: ''
+})
 
 describe('LicenseGate dialog accessibility', () => {
-  it('renders as a labelled modal dialog with the activation controls inside it', () => {
+  afterEach(() => {
+    vi.doUnmock('react')
+    vi.doUnmock('../lib/dialog-focus')
+    vi.resetModules()
+  })
+
+  it('renders as a labelled modal dialog with the activation controls inside it', async () => {
+    const { LicenseGate } = await import('./LicenseGate')
     const html = renderToStaticMarkup(
-      <LicenseGate
-        settings={PublicSettingsSchema.parse({
-          ...DEFAULT_SETTINGS,
-          hasApiKey: false,
-          providerReady: false,
-          visionReady: false,
-          hasKeys: {},
-          hasEncryption: true,
-          resolvedMeetingsFolder: ''
-        })}
-        onRecheck={async () => {}}
-      />
+      <LicenseGate settings={settings} onRecheck={async () => {}} />
     )
 
     expect(html).toContain('role="dialog"')
@@ -31,5 +36,33 @@ describe('LicenseGate dialog accessibility', () => {
     expect(html).toContain('License key')
     expect(html).toContain('Activate')
     expect(html).toContain('Retry')
+  })
+
+  it('activates the focus trap when the gate mounts', async () => {
+    const root = { id: 'dialog-root' } as unknown as HTMLDivElement
+    const cleanup = vi.fn()
+    const trap = vi.fn(() => cleanup)
+    let refCount = 0
+
+    vi.resetModules()
+    vi.doMock('react', async (importOriginal) => {
+      const react = await importOriginal<typeof import('react')>()
+      return {
+        ...react,
+        useEffect: (effect: () => void | (() => void)) => effect(),
+        useId: () => `license-id-${refCount++}`,
+        useRef: (init: unknown) => {
+          if (init === true) return { current: true }
+          return { current: root }
+        },
+        useState: <T,>(init: T) => [init, vi.fn()] as const
+      }
+    })
+    vi.doMock('../lib/dialog-focus', () => ({ activateDialogFocusTrap: trap }))
+
+    const { LicenseGate } = await import('./LicenseGate')
+    LicenseGate({ settings, onRecheck: async () => {} })
+
+    expect(trap).toHaveBeenCalledWith(root)
   })
 })

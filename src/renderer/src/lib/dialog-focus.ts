@@ -33,8 +33,7 @@ export function activateDialogFocusTrap(root: HTMLElement): () => void {
 
   const onKeyDown = (event: KeyboardEvent): void => {
     if (event.key === 'Escape') {
-      event.preventDefault()
-      event.stopPropagation()
+      // Escape stays available to App's window-level collapse/hide handler; the dialog only repairs focus.
       if (!root.contains(doc.activeElement)) focusFirst()
       return
     }
