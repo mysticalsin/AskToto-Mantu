@@ -101,25 +101,27 @@ describe('History design matrix (M2-0032)', () => {
     expect(() => listAnswer('bogus', real, 0)).toThrow(/unknown list mode/)
   })
 
-  it('waits for slow visual cues by text, leaving role verification to the capture judge', async () => {
+  it('waits for cues with the caller-selected role and timeout budget', async () => {
     const textWaitFor = vi.fn(async () => undefined)
     const roleWaitFor = vi.fn(async () => undefined)
+    const filter = vi.fn(() => ({ first: () => ({ waitFor: roleWaitFor }) }))
     const page = {
       getByText: vi.fn(() => ({ first: () => ({ waitFor: textWaitFor }) })),
-      getByRole: vi.fn(() => ({ filter: () => ({ first: () => ({ waitFor: roleWaitFor }) }) }))
+      getByRole: vi.fn(() => ({ filter }))
     }
 
-    await waitForHistoryDesignCue(page as never, { text: 'OneDrive is slow to answer' })
+    await waitForHistoryDesignCue(page as never, { text: 'OneDrive is slow to answer', role: 'status', timeoutMs: 12_000 })
 
-    expect(page.getByText).toHaveBeenCalledWith('OneDrive is slow to answer')
-    expect(page.getByRole).not.toHaveBeenCalled()
-    expect(textWaitFor).toHaveBeenCalledWith({ timeout: 10_000 })
-    expect(roleWaitFor).not.toHaveBeenCalled()
+    expect(page.getByRole).toHaveBeenCalledWith('status')
+    expect(filter).toHaveBeenCalledWith({ hasText: 'OneDrive is slow to answer' })
+    expect(page.getByText).not.toHaveBeenCalled()
+    expect(roleWaitFor).toHaveBeenCalledWith({ timeout: 12_000 })
+    expect(textWaitFor).not.toHaveBeenCalled()
   })
 
-  it('drives slow degraded captures from the visual text cue, not a role-gated transition cue', () => {
-    expect(historyDesignCueForState('slow')).toEqual({ text: 'OneDrive is slow to answer', role: null })
-    expect(historyDesignCueForState('slow-with-rows')).toEqual({ text: 'OneDrive is slow to answer', role: null })
+  it('drives slow degraded captures with the renderer degraded threshold in the cue budget', () => {
+    expect(historyDesignCueForState('slow')).toEqual({ text: 'OneDrive is slow to answer', role: 'status', timeoutMs: 10_000 + HISTORY_DEGRADED_MS })
+    expect(historyDesignCueForState('slow-with-rows')).toEqual({ text: 'OneDrive is slow to answer', role: 'status', timeoutMs: 10_000 + HISTORY_DEGRADED_MS })
     expect(historyDesignCueForState('failed')).toEqual({ text: 'Could not load your meetings', role: 'alert' })
     expect(historyDesignCueForState('unavailable')).toEqual({ text: 'could not be read right now', role: 'status' })
   })

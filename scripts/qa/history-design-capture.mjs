@@ -42,6 +42,7 @@ import {
   BLOCKED_EXTERNAL_ROWS,
   DESIGN_VARIANTS,
   HISTORY_DESIGN_STATES,
+  HISTORY_DEGRADED_MS,
   IPC_CHANNELS,
   KEYBOARD_VARIANT_ID,
   designVerdict,
@@ -281,21 +282,21 @@ async function waitForRequest(main, before) {
 
 /**
  * Waits for the visual cue needed before capture. Accessibility roles are still checked afterwards by
- * rolesPresent/judgeCapture; the slow status cue must not depend on Playwright's role projection.
+ * rolesPresent/judgeCapture.
  * @param {import('playwright').Page} page
- * @param {{ text: string, role?: string | null }} cue
+ * @param {{ text: string, role?: string | null, timeoutMs?: number }} cue
  */
-export async function waitForHistoryDesignCue(page, { text, role = null }) {
+export async function waitForHistoryDesignCue(page, { text, role = null, timeoutMs = STATE_TIMEOUT_MS }) {
   const locator = role ? page.getByRole(role).filter({ hasText: text }) : page.getByText(text)
-  await locator.first().waitFor({ timeout: STATE_TIMEOUT_MS })
+  await locator.first().waitFor({ timeout: timeoutMs })
 }
 
-// Hosted evidence for M2-0540 showed slow/light-1x-reduced-motion timing out after STATE_TIMEOUT_MS
-// while driveState waited for the slow banner as a role-gated cue. The slow banner is still judged as
-// role=status after capture; reaching the slow visual state is synchronized on its text.
+// M2-0540 keeps the slow degraded-state clocks separate: a hosted runner can spend most of
+// STATE_TIMEOUT_MS getting the History request through click/open/main, then the renderer still needs
+// HISTORY_DEGRADED_MS to turn that pending request into the slow banner.
 export const HISTORY_DESIGN_CUE_BY_STATE = Object.freeze({
-  slow: Object.freeze({ text: 'OneDrive is slow to answer', role: null }),
-  'slow-with-rows': Object.freeze({ text: 'OneDrive is slow to answer', role: null }),
+  slow: Object.freeze({ text: 'OneDrive is slow to answer', role: 'status', timeoutMs: STATE_TIMEOUT_MS + HISTORY_DEGRADED_MS }),
+  'slow-with-rows': Object.freeze({ text: 'OneDrive is slow to answer', role: 'status', timeoutMs: STATE_TIMEOUT_MS + HISTORY_DEGRADED_MS }),
   failed: Object.freeze({ text: 'Could not load your meetings', role: 'alert' }),
   unavailable: Object.freeze({ text: 'could not be read right now', role: 'status' })
 })
@@ -325,18 +326,18 @@ async function driveState(page, main, state, realRows) {
   const clickedAt = Date.now()
   await clickHistory(page)
   const requestedAt = await waitForRequest(main, before)
-  const visible = (text, role = null) => waitForHistoryDesignCue(page, { text, role })
+  const visible = (text, role = null, timeoutMs = STATE_TIMEOUT_MS) => waitForHistoryDesignCue(page, { text, role, timeoutMs })
   const drive = { clickedAt, requestedAt }
   if (state.id === 'slow' || state.id === 'unavailable' || state.id === 'failed') {
     const cue = historyDesignCueForState(state.id)
-    await visible(cue.text, cue.role)
+    await visible(cue.text, cue.role, cue.timeoutMs)
     drive.bannerAfterMs = Date.now() - clickedAt
   } else if (state.id === 'slow-with-rows') {
     await visible(SAMPLE_MEETINGS[0])
     const typedAt = Date.now()
     await page.getByLabel('Search past meetings').fill('planning')
     const cue = historyDesignCueForState(state.id)
-    await visible(cue.text, cue.role)
+    await visible(cue.text, cue.role, cue.timeoutMs)
     drive.bannerAfterMs = Date.now() - typedAt
   } else if (state.list !== 'pending') {
     await visible(state.list === 'rows+notDownloaded' ? 'Not downloaded' : SAMPLE_MEETINGS[0])
