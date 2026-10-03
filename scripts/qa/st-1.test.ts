@@ -347,7 +347,7 @@ describe('window-construction runs (M2-0516)', () => {
     expect(WINDOW_VARIANTS).toEqual([...BOOT_WINDOW_VARIANTS])
   })
 
-  it('prints a balanced plan with a marked warm-up for every measured variant and chrome', () => {
+  it('prints the restored launch order with both warm-ups before a variant/chrome measured repeat', () => {
     const plan = windowConstructionPlan()
     const warmups = plan.filter((entry) => entry.warmup)
     const measured = plan.filter((entry) => !entry.warmup)
@@ -356,19 +356,23 @@ describe('window-construction runs (M2-0516)', () => {
     expect(warmups).toHaveLength(WINDOW_VARIANTS.length * WINDOW_CHROMES.length * WINDOW_MEASURED_REPEATS)
     expect(measured).toHaveLength(WINDOW_VARIANTS.length * WINDOW_CHROMES.length * WINDOW_MEASURED_REPEATS)
     expect(plan[0]).toEqual({ name: 'window-warmup-shipped-opaque-1', variant: 'shipped', chrome: 'opaque', repeat: 1, warmup: true })
-    expect(plan[1]).toEqual({ name: 'window-shipped-opaque-1', variant: 'shipped', chrome: 'opaque', repeat: 1, warmup: false })
-    for (const entry of measured) {
-      expect(warmups).toContainEqual({
-        name: `window-warmup-${entry.variant}-${entry.chrome}-${entry.repeat}`,
-        variant: entry.variant,
-        chrome: entry.chrome,
-        repeat: entry.repeat,
-        warmup: true
-      })
+    expect(plan[1]).toEqual({ name: 'window-warmup-shipped-opaque-2', variant: 'shipped', chrome: 'opaque', repeat: 2, warmup: true })
+    expect(plan[2]).toEqual({ name: 'window-shipped-opaque-1', variant: 'shipped', chrome: 'opaque', repeat: 1, warmup: false })
+    expect(plan[3]).toEqual({ name: 'window-shipped-opaque-2', variant: 'shipped', chrome: 'opaque', repeat: 2, warmup: false })
+    for (const variant of WINDOW_VARIANTS) {
+      for (const chrome of WINDOW_CHROMES) {
+        const group = plan.filter((entry) => entry.variant === variant && entry.chrome === chrome)
+        expect(group.map((entry) => entry.name)).toEqual([
+          `window-warmup-${variant}-${chrome}-1`,
+          `window-warmup-${variant}-${chrome}-2`,
+          `window-${variant}-${chrome}-1`,
+          `window-${variant}-${chrome}-2`
+        ])
+      }
     }
     expect(measured.map((entry) => entry.name)).toEqual(
-      Array.from({ length: WINDOW_MEASURED_REPEATS }, (_, i) => i + 1).flatMap((repeat) =>
-        WINDOW_VARIANTS.flatMap((variant) => WINDOW_CHROMES.map((chrome) => `window-${variant}-${chrome}-${repeat}`))
+      WINDOW_VARIANTS.flatMap((variant) =>
+        WINDOW_CHROMES.flatMap((chrome) => Array.from({ length: WINDOW_MEASURED_REPEATS }, (_, i) => `window-${variant}-${chrome}-${i + 1}`))
       )
     )
   })
@@ -379,7 +383,7 @@ describe('window-construction runs (M2-0516)', () => {
     expect(workflow).toContain("jq -c '.[]' st1-report/window-plan.json | while read -r launch; do")
     expect(workflow).toContain('run=$(jq -r \'.name\' <<<"$launch")')
     expect(workflow).toContain('if [ "$warmup" = true ]; then warmup_args=(--window-warmup); fi')
-    expect(workflow).toContain('Every measured launch has a matching marked warm-up')
+    expect(workflow).toContain('Both marked warm-up launches for a variant/chrome run before its measured repeats')
     expect(workflow).not.toContain('variants=(shipped spellcheck-off paint-when-hidden prewarm-spellchecker)')
     expect(workflow).not.toContain('for repeat in 1 2; do')
   })
@@ -472,6 +476,8 @@ describe('windowConstructionGate (M2-0519)', () => {
       ],
       leadAction: expect.stringContaining('st-1-macos-window/st1-report/window-gate.json')
     })
+    expect(gate.rootCause.leadAction).toContain('dispatch qa-candidate three times on m2/integration-equivalent bytes')
+    expect(gate.rootCause.leadAction).toContain('pass: true with budgetMs: 250 each time')
     expect(JSON.stringify(gate.rootCause)).not.toContain('harness-cold-first-measured-launch')
     expect(JSON.stringify(gate.rootCause)).not.toContain('"over 250"')
     expect(gate.rows).toEqual([
@@ -654,6 +660,24 @@ describe('windowConstructionGate (M2-0519)', () => {
       'no-ms.json: createWindow.prewarm has no measured ms',
       'no-chrome.json: createWindow.prewarm does not say which chrome it built'
     ])
+    expect(gate.launches).toContainEqual({
+      report: 'launch-failed.json',
+      launch: 'launch-failed.json',
+      variant: 'shipped',
+      warmup: false,
+      stage: null,
+      chrome: null,
+      ms: null
+    })
+    expect(gate.launchSummaries).toContainEqual({
+      launch: 'launch-failed.json',
+      variant: 'shipped',
+      chrome: null,
+      warmup: false,
+      stages: [{ stage: null, ms: null }],
+      gatedStages: [],
+      maxStageMs: null
+    })
   })
 
   it('fails when a chrome was never measured, and when there is no shipped report at all', () => {

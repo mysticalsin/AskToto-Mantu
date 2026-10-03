@@ -318,26 +318,23 @@ export const WINDOW_CONSTRUCTION_ROOT_CAUSE = {
   ],
   fix: 'unresolved until artifact-backed numbers identify a harness step or an app first-window cost; the 250 ms gate remains unchanged',
   leadAction:
-    'LEAD_ACTION: read qa-candidate runs 36999698235 and 37080909059, artifact st-1-macos-window/st1-report/window-gate.json plus st1-report/window-*/window-*.json; record every launch, variant, chrome, warmup flag, stage and numeric ms before classifying the cause'
+    'LEAD_ACTION: read qa-candidate runs 36999698235 and 37080909059, artifact st-1-macos-window/st1-report/window-gate.json plus st1-report/window-*/window-*.json; record every launch, variant, chrome, warmup flag, stage and numeric ms before classifying the cause; then dispatch qa-candidate three times on m2/integration-equivalent bytes and confirm st-1-macos-window/st1-report/window-gate.json has pass: true with budgetMs: 250 each time'
 }
 
-/**
- * The CI launch order for window construction. Every measured launch is immediately preceded by the same
- * variant/chrome warm-up, so the shipped gate never compares a cold first measured launch with warmed later
- * launches.
- */
+/** The CI launch order for window construction: both warm-up launches for a variant/chrome run before its
+ * measured repeats, and the shared workflow consumes this exact plan. */
 export function windowConstructionPlan({ variants = WINDOW_VARIANTS, chromes = WINDOW_CHROMES, repeats = WINDOW_MEASURED_REPEATS } = {}) {
-  return Array.from({ length: repeats }, (_, i) => i + 1).flatMap((repeat) =>
-    variants.flatMap((variant) =>
-      chromes.flatMap((chrome) => [
-        { name: `window-warmup-${variant}-${chrome}-${repeat}`, variant, chrome, repeat, warmup: true },
-        { name: `window-${variant}-${chrome}-${repeat}`, variant, chrome, repeat, warmup: false }
-      ])
-    )
+  const repeatNumbers = Array.from({ length: repeats }, (_, i) => i + 1)
+  return variants.flatMap((variant) =>
+    chromes.flatMap((chrome) => [
+      ...repeatNumbers.map((repeat) => ({ name: `window-warmup-${variant}-${chrome}-${repeat}`, variant, chrome, repeat, warmup: true })),
+      ...repeatNumbers.map((repeat) => ({ name: `window-${variant}-${chrome}-${repeat}`, variant, chrome, repeat, warmup: false }))
+    ])
   )
 }
 
 function launchNameFromReportPath(name) {
+  // The workflow writes one report below each launch directory, so the directory name is the launch key.
   const [head] = String(name).split(/[\\/]/)
   return head || String(name)
 }
@@ -347,6 +344,17 @@ function windowLaunchStageRows(reports) {
     if (report?.purpose !== WINDOW_CONSTRUCTION) return []
     const stages = Array.isArray(report.bootStages?.stages) ? report.bootStages.stages : []
     const launchVariant = report.windowVariant ?? stages.find((entry) => typeof entry.windowVariant === 'string')?.windowVariant ?? null
+    if (stages.length === 0) {
+      return [{
+        report: name,
+        launch: launchNameFromReportPath(name),
+        variant: launchVariant,
+        warmup: report.warmup === true,
+        stage: null,
+        chrome: null,
+        ms: null
+      }]
+    }
     return stages.map((entry) => {
       const chrome = entry.transparent === true ? 'transparent' : entry.transparent === false ? 'opaque' : null
       return {
