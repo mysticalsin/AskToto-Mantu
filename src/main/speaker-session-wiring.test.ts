@@ -641,6 +641,8 @@ describe('exact import attempt integration', () => {
       runIntelligenceIndex: noop,
       MAX_CONCURRENT_DECODES: 1,
       ensureImportAsrAssets: () => Promise.resolve(),
+      resolveLocalSpeechPackPolicy: () => 'offered',
+      getAdminLocalSpeechPackPolicy: () => null,
       runImportedRecap: noop,
       mainLog: { warn: noop, error: noop }
     })()

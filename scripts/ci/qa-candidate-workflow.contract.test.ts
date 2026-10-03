@@ -4,6 +4,86 @@ import { describe, expect, it } from 'vitest'
 
 const root = join(__dirname, '..', '..')
 const workflow = readFileSync(join(root, '.github', 'workflows', 'qa-candidate.yml'), 'utf8').replace(/\r\n/g, '\n')
+const ownerSandboxProbe = readFileSync(join(root, 'scripts', 'hermetic', 'prove-owner-sandbox.sh'), 'utf8').replace(/\r\n/g, '\n')
+
+/** A job's text: from its two-space key to the next two-space key. No YAML library is a dependency here. */
+function jobBlock(name: string): string {
+  const lines = workflow.split('\n')
+  const start = lines.findIndex((line) => line === `  ${name}:`)
+  expect(start, `job not found: ${name}`).toBeGreaterThan(-1)
+  const end = lines.findIndex((line, i) => i > start && /^  [A-Za-z0-9_-]+:/.test(line))
+  return lines.slice(start, end === -1 ? undefined : end).join('\n')
+}
+
+/** The job's own `continue-on-error`, at job level (four-space indent). */
+function jobContinueOnError(block: string): string | undefined {
+  return block.match(/^ {4}continue-on-error: (.+)$/m)?.[1]
+}
+
+describe('QA candidate job st1-mac-dataless-synthetic (M2-0505, OD-36)', () => {
+  const job = jobBlock('st1-mac-dataless-synthetic')
+
+  it('runs on macOS after provenance', () => {
+    expect(job).toContain('needs: provenance')
+    expect(job).toContain('runs-on: macos-latest')
+  })
+
+  it('verifies the QA-identity variant and the promotable DMG against the provenance', () => {
+    expect(job).toContain('name: candidate-mac-qa-identity')
+    expect(job).toContain('provenance.mjs verify provenance/provenance.json assets mac-qa-identity')
+    expect(job).toContain('name: candidate-mac\n')
+    expect(job).toContain('provenance.mjs verify provenance/provenance.json assets-mac mac')
+  })
+
+  it('measures the synthetic dataless row with History off for five minutes', () => {
+    expect(job).toContain('--fixtures synthetic-dataless')
+    expect(job).toContain('--history off')
+    expect(job).toContain('--minutes 5')
+    expect(job).toContain('--out st1-report/st-1-macos-synthetic-dataless.json')
+  })
+
+  it('records the real-cloud dataless row as not run, with the SF_DATALESS probe under sudo', () => {
+    expect(job).toContain('st-1-macos-real-dataless.json')
+    expect(job).toContain('row: "dataless-real-cloud"')
+    expect(job).toContain('verdict: "NOT_RUN_ON_HOSTED"')
+    expect(job).toContain('measuredBy: "post-release field soak diagnostics"')
+    expect(job).toContain('sudo python3')
+    expect(job).toContain('sfDatalessProbe: { settable: $settable, errno: $errno')
+    expect(job).toContain('sudo rm -f "$scratch"')
+    expect(job).not.toMatch(/dataless-real-cloud[\s\S]*verdict: "PASS"/)
+  })
+
+  it('runs the DMG helper through stat-flags-fixture.sh --local-only and keeps its result', () => {
+    expect(job).toContain('hdiutil attach')
+    expect(job).toContain('Contents/Resources/mac-helper/metis-mac-helper')
+    expect(job).toContain('scripts/qa/stat-flags-fixture.sh "$helper" --local-only')
+    expect(job).toContain('stat-flags-report/stat-flags-macos.json')
+    expect(job).toContain('datalessFileCheck: "NOT_RUN_ON_HOSTED"')
+    expect(job).toContain('local: { matchesStat:')
+    expect(job).toContain('apfsCompressed: { matchesStat:')
+    expect(job).toContain('nonAscii: { matchesStat:')
+    expect(job).toContain('unstatable: { value: null')
+  })
+
+  it('uploads the synthetic-dataless report, real-dataless hosted row and stat-flags result even when a step failed', () => {
+    for (const name of ['st-1-macos-synthetic-dataless', 'st-1-macos-real-dataless', 'stat-flags-macos']) {
+      const upload = job.split('- uses: actions/upload-artifact@').find((part) => part.includes(`name: ${name}\n`))
+      expect(upload, `upload of ${name}`).toBeDefined()
+      expect(upload).toContain('if: always()')
+      expect(upload).toContain('if-no-files-found: error')
+    }
+  })
+
+  it('has the same continue-on-error as st1-mac-fifo, so it is blocking exactly when that job is', () => {
+    const fifo = jobContinueOnError(jobBlock('st1-mac-fifo'))
+    expect(fifo).toBeDefined()
+    expect(jobContinueOnError(job)).toBe(fifo)
+  })
+
+  it('is part of the self-test trigger for its own files', () => {
+    expect(workflow).toContain('      - scripts/qa/stat-flags-fixture.sh')
+  })
+})
 
 /** The text of one top-level job, from its `  <name>:` line to the next job. */
 function job(name: string): string {
@@ -141,5 +221,152 @@ describe('QA candidate workflow: which refs and versions may build (M2-0499)', (
 
   it('runs the self-test when the rule itself changes', () => {
     expect(workflow).toContain('      - scripts/qa/release-line.mjs\n')
+  })
+})
+
+describe('QA candidate History design evidence (M2-0032)', () => {
+  const block = jobBlocks.get('history-design-mac') ?? ''
+
+  it('captures the promotable macOS DMG, verified against the provenance, after the candidate is recorded', () => {
+    expect(block).toMatch(/^    needs: provenance$/m)
+    expect(block).toMatch(/^    runs-on: macos-latest$/m)
+    expect(block).toContain('name: candidate-mac\n')
+    expect(block).toContain('node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac\n')
+    expect(block).toContain('hdiutil attach -nobrowse -readonly')
+    expect(block).toContain('node scripts/qa/history-design-capture.mjs "$APP" --out history-design')
+  })
+
+  it('uploads the captures and report even when a check fails', () => {
+    const [upload] = uploads(block)
+    expect(upload).toContain('if: always()')
+    expect(upload).toContain('name: history-design-macos')
+    expect(upload).toContain('path: history-design/')
+    expect(upload).toContain('if-no-files-found: error')
+    expect(upload).toContain("retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}")
+  })
+
+  // TypeScript source files are left out of the assertion: tests that read files never name them (FF-07).
+  it('self-tests when the capture or the History views it captures change', () => {
+    for (const path of [
+      'scripts/qa/history-design-capture.mjs',
+      'scripts/qa/lib/history-design.mjs',
+      'src/renderer/src/components/history/**'
+    ]) {
+      expect(workflow).toContain(`      - ${path}\n`)
+    }
+  })
+})
+
+describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
+  const strictJobs = ['st1-mac-fifo', 'st1-mac-control']
+
+  it('moves only the strict fifo and control rows to the owner self-hosted Mac label', () => {
+    for (const name of strictJobs) {
+      expect(job(name)).toMatch(/^    runs-on: \[self-hosted, macOS, ARM64, metis-owner-mac\]$/m)
+    }
+
+    expect(job('st1-mac-dataless-synthetic')).toMatch(/^    runs-on: macos-latest$/m)
+    expect(job('st1-mac-history')).toMatch(/^    runs-on: macos-latest$/m)
+    expect(job('st1-mac-window')).toMatch(/^    runs-on: macos-latest$/m)
+  })
+
+  it('keeps dispatch and same-repository PRs, but refuses fork pull requests before code reaches the owner Mac', () => {
+    for (const name of strictJobs) {
+      expect(job(name)).toMatch(
+        /^    if: github\.event_name != 'pull_request' \|\| github\.event\.pull_request\.head\.repo\.full_name == github\.repository$/m
+      )
+    }
+  })
+
+  it('proves the owner-account sandbox before Node setup or candidate artifact download', () => {
+    for (const name of strictJobs) {
+      const jobSteps = steps(name)
+      const checkout = jobSteps.findIndex((step) => step.includes('actions/checkout@'))
+      const probe = jobSteps.findIndex((step) => step.includes('name: Prove owner-account sandbox denies private state'))
+      const setup = jobSteps.findIndex((step) => step.includes('actions/setup-node@'))
+      const download = jobSteps.findIndex((step) => step.includes('actions/download-artifact@'))
+
+      expect(checkout).toBe(0)
+      expect(probe).toBe(1)
+      expect(probe).toBeLessThan(setup)
+      expect(probe).toBeLessThan(download)
+
+      const block = jobSteps[probe]
+      expect(block).toContain('bash scripts/hermetic/prove-owner-sandbox.sh')
+    }
+
+    expect(workflow).toContain('      - scripts/hermetic/prove-owner-sandbox.sh\n')
+    expect(workflow).toContain('      - scripts/hermetic/run-under-owner-sandbox.sh\n')
+    expect(workflow).toContain('      - scripts/hermetic/owner-account.sb\n')
+    expect(ownerSandboxProbe).toContain('bash scripts/hermetic/run-under-owner-sandbox.sh /bin/ls "$target"')
+    expect(ownerSandboxProbe).toContain('"$HOME/Library/CloudStorage"')
+    expect(ownerSandboxProbe).toContain('"$HOME/Library/Application Support/Metis"')
+    expect(ownerSandboxProbe).toContain("grep -Fqi 'Operation not permitted'")
+    expect(ownerSandboxProbe).not.toContain('Operation not permitted|deny|sandbox')
+  })
+
+  it('runs every strict candidate verification and launch through the owner-account sandbox wrapper', () => {
+    for (const name of strictJobs) {
+      const block = job(name)
+      expect(block).toContain('bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify')
+      expect(block).toContain('bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/st-1.mjs')
+      expect(block).not.toMatch(/(?:^|\n) {10}node scripts\/qa\/(?:provenance|st-1)\.mjs/)
+    }
+  })
+
+  it('keeps strict rows report-only and removes temp profiles and unzipped candidates on every outcome', () => {
+    for (const name of strictJobs) {
+      const block = job(name)
+      expect(jobContinueOnError(block)).toBe('true')
+      expect(block).toMatch(/^    env:\n      TMPDIR: \$\{\{ runner\.temp \}\}$/m)
+
+      const cleanup = steps(name).find((step) => step.includes('name: Remove ST-1 temporary state')) ?? ''
+      expect(cleanup).toMatch(/^        if: always\(\)$/m)
+      expect(cleanup).toContain('rm -rf')
+      expect(cleanup).toContain('"$RUNNER_TEMP"/metis-st1-*')
+      expect(cleanup).toContain('"$RUNNER_TEMP"/st1-unzip-*')
+      expect(cleanup).toContain('"$RUNNER_TEMP"/st1-witness-*')
+      expect(cleanup).toContain('"$HOME/Library/Logs/asktoto-qa"')
+      expect(cleanup).toContain('"$HOME/Library/Preferences/com.mantu.asktoto.qa.plist"')
+      expect(cleanup).toContain('"$HOME/Library/Saved Application State/com.mantu.asktoto.qa.savedState"')
+      expect(cleanup).toContain('"$HOME/Library/Caches/com.mantu.asktoto.qa"')
+      expect(cleanup).toContain('security delete-generic-password -s "asktoto-qa Safe Storage" || true')
+    }
+  })
+})
+
+describe('QA candidate workflow: the shipped window gate (M2-0519)', () => {
+  const block = jobBlocks.get('st1-mac-window') ?? ''
+
+  it('lets the window job fail: no job-level continue-on-error', () => {
+    expect(block).toContain('runs-on: macos-latest')
+    expect(block).not.toMatch(/^    continue-on-error:/m)
+  })
+
+  it('gates the window reports after every launch, enforcing, and uploads the gate with the reports', () => {
+    const jobSteps = steps('st1-mac-window')
+    const measure = jobSteps.findIndex((step) => step.includes('--purpose window-construction'))
+    const gateIndex = jobSteps.findIndex((step) => step.includes('scripts/qa/st-1.mjs --gate-window st1-report'))
+    expect(measure).toBeGreaterThan(-1)
+    expect(gateIndex).toBeGreaterThan(measure)
+    const gate = jobSteps[gateIndex]
+    expect(gate).toMatch(/^        if: always\(\)$/m)
+    expect(gate).not.toMatch(/continue-on-error/)
+    expect(gate).toContain('--out st1-report/window-gate.json')
+    expect(jobSteps.findIndex((step) => step.includes('name: st-1-macos-window'))).toBeGreaterThan(gateIndex)
+  })
+
+  it('runs one marked shipped warm-up per chrome before any measured repeats', () => {
+    const measure = steps('st1-mac-window').find((step) => step.includes('--purpose window-construction')) ?? ''
+    expect(measure.indexOf('run="window-warmup-shipped-$chrome"')).toBeLessThan(measure.indexOf('for repeat in 1 2; do'))
+    expect(measure).toContain('--window-warmup')
+    expect(measure).toContain('--window-variant shipped')
+    expect(measure).toContain('if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi')
+  })
+
+  it('keeps measured report-only window variants before measured shipped rows', () => {
+    const measure = steps('st1-mac-window').find((step) => step.includes('--purpose window-construction')) ?? ''
+    expect(measure).toContain('for variant in spellcheck-off paint-when-hidden prewarm-spellchecker shipped; do')
+    expect(measure.indexOf('prewarm-spellchecker shipped')).toBeLessThan(measure.indexOf('--window-variant "$variant"'))
   })
 })

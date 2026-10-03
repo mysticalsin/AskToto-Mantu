@@ -1,0 +1,61 @@
+import { describe, expect, it, vi } from 'vitest'
+import { createHistoryTransitionRecorder } from './history-transition'
+
+function recorder(at = 1_700_000_000_000) {
+  const report = vi.fn()
+  return { report, transitions: createHistoryTransitionRecorder({ report, wallClock: () => at }) }
+}
+
+describe('createHistoryTransitionRecorder', () => {
+  it('records an open and a close of History with the commit time', () => {
+    const { report, transitions } = recorder()
+
+    transitions.requested('answer', 'history')
+    transitions.committed('history')
+    transitions.requested('history', 'answer')
+    transitions.committed('answer')
+
+    expect(report.mock.calls).toEqual([
+      [{ from: 'answer', to: 'history', committedAtMs: 1_700_000_000_000 }],
+      [{ from: 'history', to: 'answer', committedAtMs: 1_700_000_000_000 }]
+    ])
+  })
+
+  it('records the toggle race (an open and a close batched into one render) as from === to', () => {
+    const { report, transitions } = recorder()
+
+    transitions.requested('answer', 'history')
+    transitions.requested('history', 'answer')
+
+    expect(transitions.committed('answer')).toEqual({ from: 'answer', to: 'answer', committedAtMs: 1_700_000_000_000 })
+    expect(report).toHaveBeenCalledTimes(1)
+  })
+
+  it('records nothing until the render commits, so a freeze leaves no transition', () => {
+    const { report, transitions } = recorder()
+
+    transitions.requested('answer', 'history')
+
+    expect(report).not.toHaveBeenCalled()
+  })
+
+  it('takes from the first request when React calls the updater again for the same render', () => {
+    const { transitions } = recorder()
+
+    transitions.requested('answer', 'history')
+    transitions.requested('answer', 'history')
+
+    expect(transitions.committed('history')).toMatchObject({ from: 'answer', to: 'history' })
+  })
+
+  it('ignores navigation that never touches History, and a commit with no request', () => {
+    const { report, transitions } = recorder()
+
+    transitions.requested('answer', 'settings')
+    expect(transitions.committed('settings')).toBeNull()
+    expect(transitions.committed('settings')).toBeNull()
+    transitions.requested('settings', 'history')
+    expect(transitions.committed('history')).toMatchObject({ from: 'settings', to: 'history' })
+    expect(report).toHaveBeenCalledTimes(1)
+  })
+})

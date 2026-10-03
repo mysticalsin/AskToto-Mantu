@@ -1379,6 +1379,7 @@ export function useListen(
   const ensureWorker = useCallback((): Worker => {
     if (workerRef.current) return workerRef.current
     const w = new Worker(new URL('./whisper.worker.ts', import.meta.url), { type: 'module' })
+    readyRef.current = false
     w.onmessage = (e: MessageEvent): void => {
       if (workerRef.current !== w) return // terminated/replaced worker from an earlier session
       const m = e.data as {
@@ -1415,10 +1416,9 @@ export function useListen(
         }))
         pump() // drain windows captured while the model loaded
       } else if (m.type === 'error') {
-        // armNetworkRetry is defined further down (after ensureWorker) and forward-referenced via closure
-        // — same pattern as pump → fallBackToWhisper above. It only runs later, once this handler actually
-        // fires, by which point it's fully initialized; deliberately omitted from this useCallback's deps.
-        if (pendingWhisperEpochRef.current !== sessionEpochRef.current) {
+        // armNetworkRetry is initialized before this handler fires; its forward reference is omitted from deps.
+        // An unready worker's load error belongs to its current holder; ready-worker errors belong to a window.
+        if (readyRef.current && pendingWhisperEpochRef.current !== sessionEpochRef.current) {
           return // replacement session owns the placeholder, embed slot, busy flag and queue
         }
         if (!armNetworkRetry(m.message ?? '')) {
@@ -1541,6 +1541,7 @@ export function useListen(
     if (engineRef.current === 'cloud') return
 
     if (engineRef.current !== 'parakeet' && engineRef.current !== 'apple') return // already switched
+    const epoch = sessionEpochRef.current
     const failedEngine = engineRef.current
     const gate = assertCloudOnlyAllowsEngine(resolveEnterpriseLiveProfile(enterpriseLiveRef.current ?? {}), 'whisper')
     if (!gate.ok) {
@@ -1554,18 +1555,17 @@ export function useListen(
     readyRef.current = false
     parakeetFailures.current = 0
     onFallbackRef.current?.(`${failedEngine === 'apple' ? 'Apple Speech' : 'Parakeet'} failed repeatedly`)
-    // loading only — no live `error` banner. The engine swap happens silently; onEngineFallback records
-    // it somewhere checkable (Settings) instead of interrupting the meeting.
+    // Keep fallback silent; onEngineFallback records its Settings footnote.
     setState((s) => ({ ...s, loading: true }))
     void getAsrBundled()
       .then((bundled) => {
+        if (sessionEpochRef.current !== epoch || engineRef.current !== 'whisper') return
         ensureWorker().postMessage({ type: 'init', quality: requestedQualityRef.current, bundled, language: asrLanguageRef.current })
       })
       .catch(() => {})
   }, [ensureWorker, getAsrBundled])
 
-  // Pending 'online' listener for a network-caused Whisper load failure, so a second failure (or a fresh
-  // session) can replace it instead of stacking listeners.
+  // Replace the pending 'online' retry listener on another load failure or fresh session; never stack them.
   const networkRetryCleanupRef = useRef<(() => void) | null>(null)
   const disarmNetworkRetry = useCallback((): void => {
     networkRetryCleanupRef.current?.()
@@ -2603,20 +2603,20 @@ export function useListen(
         } else if (source === 'both' && !micOk && sysOk) {
           note = 'Microphone unavailable. Listening to system audio only.'
         }
-        // Mirror the soft note into the structured captureDegraded state: `micOk` discriminates the side
-        // (note is only non-null on source==='both' with exactly one side up). The persistent chrome (Bar
-        // chip / minimized pill) reads this instead of `error`, which only renders inside the Copilot body
-        // and is invisible with the panel collapsed or the widget minimized — exactly how a whole meeting
-        // ran mic-only unnoticed on 2026-07-20.
+        // Keep the missing-side diagnosis in compact chrome, independently of the Copilot error banner.
+        // note is non-null only for both-source capture with exactly one side up; micOk identifies that side.
         const captureDegraded: CaptureDegraded | null = note
           ? { side: micOk ? 'them' : 'you', note, permission: micOk && isSysPermDenied }
           : null
         themDegradedRef.current = captureDegraded?.side === 'them' ? captureDegraded : null
-        // At least one channel (mic and/or system loopback) is confirmed open here — this is the point
-        // a consent/recording indicator should key off, not the optimistic `listening: true` set at the
-        // top of start() before any capture was actually acquired.
+        // Capture is confirmed now; consent/recording indicators must not use optimistic listening alone.
+        // Preserve Whisper failure/retry state reported while capture acquisition was pending.
         if (!captureAdmissionIsOpen(myEpoch)) return
-        setState((s) => ({ ...s, error: note, captureDegraded, listening: true, capturing: true, loading: !readyRef.current }))
+        setState((s) => ({
+          ...s, captureDegraded, listening: true, capturing: true,
+          error: engineRef.current === 'whisper' ? s.error ?? note : note,
+          loading: !readyRef.current && (engineRef.current !== 'whisper' || s.error === null || s.loading)
+        }))
       } finally {
         // Every exit path (the several early `return`s above, a thrown error, or the normal fall-through)
         // clears the guard so a later, legitimate start() is never permanently blocked.
