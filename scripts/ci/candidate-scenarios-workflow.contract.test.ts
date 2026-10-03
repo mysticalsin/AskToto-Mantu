@@ -267,6 +267,15 @@ describe('candidate-scenarios.yml', () => {
     )
   })
 
+  it('offers journey, which installs the Metis-QA zip on macOS and the Setup on Windows', () => {
+    const options = block(block(block(lines, '    inputs:', 4), '      scenario:', 6), '        options:', 8).map((line) => line.trim())
+    expect(options).toContain('- journey')
+    expect(Object.keys(SCENARIOS.journey.platforms)).toEqual(['mac', 'win'])
+    expect(SCENARIOS.journey.platforms.mac.artifact).toBe('candidate-mac-qa-identity')
+    expect(SCENARIOS.journey.platforms.win.artifact).toBe('candidate-win')
+    expect(workflow).toContain('-f scenario=journey \\\n#     -f mac_sha256=<Metis-QA zip sha256> -f win_sha256=<Metis Setup sha256>')
+  })
+
   it('offers packaged-lifecycle, which runs on both hosted platform jobs', () => {
     const options = block(block(block(lines, '    inputs:', 4), '      scenario:', 6), '        options:', 8).map((line) => line.trim())
     expect(options).toContain('- packaged-lifecycle')

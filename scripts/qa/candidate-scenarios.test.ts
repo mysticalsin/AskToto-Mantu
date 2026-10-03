@@ -84,7 +84,8 @@ describe('the scenario registry', () => {
       'idle-soak',
       'sidecar-boot-reaper',
       'packaged-lifecycle',
-      'renderer-kill'
+      'renderer-kill',
+      'journey'
     ])
     const mac = SCENARIOS['fault-fatal-relaunch'].platforms.mac
     expect(Object.keys(SCENARIOS['fault-fatal-relaunch'].platforms)).toEqual(['mac'])
@@ -216,9 +217,115 @@ describe('the scenario registry', () => {
         expect(variant, `${name} ${platform}`).toBeDefined()
         expect(variant.platform).toBe(platform)
         expect(target.artifact).toBe(`candidate-${target.variant}`)
-        expect(variant.promotable).toBe(!scenario.qaOnlyHook)
+        // A platform with no QA-identity build overrides the scenario's qaOnlyHook for itself only.
+        expect(variant.promotable).toBe(!((target as { qaOnlyHook?: boolean }).qaOnlyHook ?? scenario.qaOnlyHook))
       }
     }
+  })
+
+  it('declares journey on the Metis-QA zip (macOS) and the promotable Setup (Windows), with its budgets in the registry', () => {
+    const scenario = SCENARIOS.journey
+    expect(scenario.ticket).toBe('M2-0524')
+    expect(scenario.qaOnlyHook).toBe(true)
+    expect(scenario.exits).toEqual(SCENARIOS['fault-fatal-relaunch'].exits)
+    expect(Object.keys(scenario.platforms)).toEqual(['mac', 'win'])
+    const { mac, win } = scenario.platforms
+    expect(mac).toMatchObject({ variant: 'mac-qa-identity', artifact: 'candidate-mac-qa-identity', report: 'journey.json', isolatedProfiles: true })
+    expect(VARIANTS['mac-qa-identity'].assets('1.0.0')).toEqual(['Metis-QA-1.0.0.zip'])
+    expect(win).toMatchObject({ qaOnlyHook: false, variant: 'win', artifact: 'candidate-win', report: 'journey.json', isolatedProfiles: true })
+    for (const target of [mac, win]) {
+      expect(target.script).toBe('scripts/qa/journey.mjs')
+      expect(existsSync(join(root, target.script))).toBe(true)
+    }
+    expect('notCovered' in mac).toBe(false)
+    expect(win.notCovered.map(({ row }) => row)).toEqual(['meeting', 'transcript', 'write-up'])
+    for (const { reason } of win.notCovered) expect(reason).toMatch(/no Windows QA-identity variant/)
+    expect(scenario.budgets).toEqual({
+      onboardingMs: 240_000,
+      meetingMs: 90_000,
+      stopMs: 30_000,
+      minTranscriptLines: 3,
+      transcriptSaveMs: 60_000,
+      writeUpMs: 600_000
+    })
+    // The lane never writes the default profile for journey: the script makes its own fresh isolated one.
+    for (const platform of ['mac', 'win']) {
+      expect(prepareProfile({ scenario: 'journey', platform, appDataDir: '/nonexistent' })).toBeNull()
+    }
+  })
+
+  it('requires both installer sha256s for journey, and its step timeout covers every budget', () => {
+    expect(() => resolveScenario({ scenario: 'journey', sha256: { mac: MAC_SHA } })).toThrow(/win_sha256 is required/)
+    const plan = resolveScenario({ scenario: 'journey', sha256: { mac: MAC_SHA, win: WIN_SHA } })
+    expect(plan).toEqual({
+      mac: { variant: 'mac-qa-identity', artifact: 'candidate-mac-qa-identity', sha256: MAC_SHA, timeoutMinutes: 60, stepTimeoutMinutes: 40 },
+      win: { variant: 'win', artifact: 'candidate-win', sha256: WIN_SHA, timeoutMinutes: 60, stepTimeoutMinutes: 40 }
+    })
+    const budgets = SCENARIOS.journey.budgets
+    const worstCaseMs = budgets.onboardingMs + budgets.meetingMs + budgets.stopMs + budgets.transcriptSaveMs + budgets.writeUpMs
+    expect(plan.mac.stepTimeoutMinutes * 60_000).toBeGreaterThan(worstCaseMs + 5 * 60_000)
+    expect(outcomeForExit('journey', 0)).toBe('PASS')
+    expect(outcomeForExit('journey', 1)).toBe('FAIL')
+    expect(outcomeForExit('journey', 2)).toBe('PRECONDITION')
+    expect(outcomeForExit('journey', null)).toBe('FAIL')
+  })
+
+  it('runs journey on the installed app and the installer, every path relative to the checkout', () => {
+    const base = { scenario: 'journey', sha256: MAC_SHA, outDir: 'candidate-scenario' }
+    expect(scenarioCommand({ ...base, platform: 'mac', installer: 'assets/Metis-QA-1.0.0.zip', app: '../../_temp/candidate-install/Metis QA.app' })).toEqual([
+      'scripts/qa/journey.mjs',
+      '--app',
+      '../../_temp/candidate-install/Metis QA.app',
+      '--installer',
+      'assets/Metis-QA-1.0.0.zip',
+      '--sha256',
+      MAC_SHA,
+      '--out',
+      'candidate-scenario/journey.json'
+    ])
+    expect(
+      scenarioCommand({ ...base, sha256: WIN_SHA, platform: 'win', installer: 'assets/Metis-Setup-1.0.0.exe', app: '../../_temp/candidate-install/Metis.exe' })
+    ).toContain('../../_temp/candidate-install/Metis.exe')
+    expect(() => scenarioCommand({ ...base, platform: 'mac', installer: 'assets/Metis-QA-1.0.0.zip' })).toThrow(/needs the installed app/)
+    expect(() => scenarioCommand({ ...base, platform: 'mac', installer: 'assets/Metis-QA-1.0.0.zip', app: '/tmp/Metis QA.app' })).toThrow(/repository-relative/)
+    expect(installerKindForScenario('journey', 'mac')).toBe('mac')
+    expect(installerKindForScenario('journey', 'win')).toBe('win')
+  })
+
+  it('records the Windows journey meeting steps as not covered in lane.json, so a PASS never reads as covering them', () => {
+    const lane = laneRecord({
+      scenario: 'journey',
+      platform: 'win',
+      env: { GITHUB_RUN_ID: '77' },
+      provenance: { run: { id: 4242 }, commit: COMMIT },
+      candidateRun: '4242',
+      installer: 'assets/Metis-Setup-1.0.0.exe',
+      sha256: WIN_SHA,
+      argv: ['scripts/qa/journey.mjs'],
+      exitCode: 0,
+      detail: '',
+      reportWritten: true
+    })
+    expect(lane.outcome).toBe('PASS')
+    expect(lane.ticket).toBe('M2-0524')
+    expect(lane.variant).toBe('win')
+    expect(lane.not_covered?.map(({ row }) => row)).toEqual(['meeting', 'transcript', 'write-up'])
+    const mac = laneRecord({
+      scenario: 'journey',
+      platform: 'mac',
+      env: { GITHUB_RUN_ID: '77' },
+      provenance: { run: { id: 4242 }, commit: COMMIT },
+      candidateRun: '4242',
+      installer: 'assets/Metis-QA-1.0.0.zip',
+      sha256: MAC_SHA,
+      argv: ['scripts/qa/journey.mjs'],
+      exitCode: 2,
+      detail: 'installer-sha256-mismatch',
+      reportWritten: true
+    })
+    expect(mac.outcome).toBe('PRECONDITION')
+    expect(mac.variant).toBe('mac-qa-identity')
+    expect('not_covered' in mac).toBe(false)
   })
 
   it('declares idle-soak on macOS and Windows, installing promotable bytes with the hosted long-run timeout', () => {
