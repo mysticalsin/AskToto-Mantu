@@ -185,6 +185,43 @@ export const SCENARIOS = Object.freeze({
       })
     })
   }),
+  // M2-0497: 60 min file-fed meeting plus repeated History use, followed by the 10 min post-meeting
+  // census and MEETING-GROWTH-1 judgment. The History driver needs a QA-only hook, so the lane installs
+  // the QA-identity zip from the same candidate run and discloses that the measured bytes are not the
+  // promotable DMG.
+  'meeting-history': Object.freeze({
+    ticket: 'M2-0497',
+    qaOnlyHook: true,
+    exits: Object.freeze({ 0: 'PASS', 1: 'FAIL', 2: 'PRECONDITION' }),
+    platforms: Object.freeze({
+      mac: Object.freeze({
+        variant: 'mac-qa-identity',
+        artifact: 'candidate-mac-qa-identity',
+        script: 'scripts/qa/meeting/meeting-history.mjs',
+        args: ({ installer, sha256, report }) => [
+          '--zip',
+          installer,
+          '--sha256',
+          sha256,
+          '--profile',
+          'candidate-scenario/profile',
+          '--minutes',
+          '60',
+          '--post-minutes',
+          '10',
+          '--out',
+          report.slice(0, -'/meeting-history-report.json'.length)
+        ],
+        report: 'meeting-history-report.json',
+        profileLayout: 'bar',
+        timeoutMinutes: 110,
+        stepTimeoutMinutes: 95,
+        outcomeFromReportField: 'verdict',
+        growthRuleFromReport: true,
+        disclosure: 'qa-identity bytes of the same candidate run'
+      })
+    })
+  }),
   // M2-0027 acceptance[4] via M2-0468: SIGKILL main with a live sidecar, relaunch, orphan reaped within 5 s of
   // boot. The legacy rule is off in QA-identity bytes, so both platforms install promotable bytes. macOS
   // requires the real llama-server and legacy-orphan rows (a BLOCKED_EXTERNAL there is a PRECONDITION, not a PASS).
@@ -421,7 +458,7 @@ export function prepareProfile({ scenario, platform, appDataDir }) {
   if (target.isolatedProfiles) return null
   if (target.profileLayout) {
     const profile = join(process.cwd(), 'candidate-scenario', 'profile')
-    if (existsSync(profile)) throw new Error('The idle-soak profile directory already exists; the profile is not fresh.')
+    if (existsSync(profile)) throw new Error(`The ${scenario} profile directory already exists; the profile is not fresh.`)
     writeRepresentativeProfile(profile, undefined, { layout: target.profileLayout })
     return join(profile, 'resource-census-profile.json')
   }
@@ -546,6 +583,7 @@ export function assertCandidateProvenance(provenance, candidateRun) {
  *   exitCode: number | null,
  *   detail: string,
  *   reportWritten: boolean,
+ *   reportData?: any,
  *   reportAssessment?: any
  * }} input
  */
@@ -571,12 +609,23 @@ export function laneRecord({
     ...(scenarioEntry(scenario).reportAssessment && !reportWritten ? [`${target.report} was not written.`] : []),
     ...(reportAssessment?.problems ?? [])
   ]
-  const reportOutcome = target.outcomeFromReport && typeof reportData?.outcome === 'string' ? reportData.outcome : mappedOutcome
+  const reportOutcome =
+    target.outcomeFromReportField && typeof reportData?.[target.outcomeFromReportField] === 'string'
+      ? reportData[target.outcomeFromReportField]
+      : target.outcomeFromReport && typeof reportData?.outcome === 'string'
+        ? reportData.outcome
+        : mappedOutcome
   const outcome = reportOutcome === 'PASS' && assessmentProblems.length ? 'FAIL' : reportOutcome
   const host = RUNNER_LABELS[platform]
   const reportFields = target.laneReportFields
     ? Object.fromEntries(target.laneReportFields.filter((key) => reportData && Object.hasOwn(reportData, key)).map((key) => [key, reportData[key]]))
     : {}
+  if (target.growthRuleFromReport && reportData?.growth?.rule) {
+    reportFields.rule = {
+      id: reportData.growth.rule.id,
+      rulesSha256: reportData.growth.rule.rulesSha256
+    }
+  }
   const notCovered = [
     ...(target.notCovered ?? []).map(({ row, reason }) => ({ row, reason })),
     ...(reportAssessment?.notCovered ?? [])
@@ -592,6 +641,7 @@ export function laneRecord({
     variant: target.variant,
     installer: basename(installer),
     artifact_sha256: sha256,
+    ...(target.disclosure ? { disclosure: target.disclosure } : {}),
     ci_run_id: Number(env.GITHUB_RUN_ID),
     environment: { kind: 'hosted-runner', host },
     command: ['node', ...argv].join(' '),

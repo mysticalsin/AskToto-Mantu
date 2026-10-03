@@ -13,6 +13,8 @@ name: Candidate scenarios
 #     -f scenario=stall-sampler -f mac_sha256=<Metis dmg sha256 from SHA256SUMS.txt>
 #   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> \
 #     -f scenario=idle-soak -f mac_sha256=<Metis DMG sha256> -f win_sha256=<Metis Setup sha256>
+#   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> \
+#     -f scenario=meeting-history -f mac_sha256=<Metis-QA zip sha256 from SHA256SUMS.txt>
 #   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> -f scenario=sidecar-boot-reaper \
 #     -f mac_sha256=<Metis DMG sha256> -f win_sha256=<Metis Setup sha256>
 #   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> -f scenario=packaged-lifecycle \
@@ -42,6 +44,7 @@ on:
           - ex-suite
           - stall-sampler
           - idle-soak
+          - meeting-history
           - sidecar-boot-reaper
           - packaged-lifecycle
           - renderer-kill
