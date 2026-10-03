@@ -13,14 +13,15 @@ PROBE_ERR="$RUNNER_TEMP/sandbox-probe.err"
 existing_count=0
 
 if [ -n "${PROVE_OWNER_SANDBOX_HOME:-}" ]; then
+  probe_home="${PROVE_OWNER_SANDBOX_HOME//\\//}"
   protected_paths=(
-    "$PROVE_OWNER_SANDBOX_HOME/Library/CloudStorage"
-    "$PROVE_OWNER_SANDBOX_HOME/Library/Keychains"
-    "$PROVE_OWNER_SANDBOX_HOME/Library/Application Support/Metis"
-    "$PROVE_OWNER_SANDBOX_HOME/Library/Application Support/Métis"
-    "$PROVE_OWNER_SANDBOX_HOME/Library/Application Support/AskToto"
-    "$PROVE_OWNER_SANDBOX_HOME/Library/Application Support/asktoto"
-    "$PROVE_OWNER_SANDBOX_HOME/Library/Application Support/asktoto-dev"
+    "$probe_home/Library/CloudStorage"
+    "$probe_home/Library/Keychains"
+    "$probe_home/Library/Application Support/Metis"
+    "$probe_home/Library/Application Support/Métis"
+    "$probe_home/Library/Application Support/AskToto"
+    "$probe_home/Library/Application Support/asktoto"
+    "$probe_home/Library/Application Support/asktoto-dev"
   )
 else
   protected_paths=(
