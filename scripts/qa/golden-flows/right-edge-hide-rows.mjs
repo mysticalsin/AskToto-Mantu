@@ -290,17 +290,24 @@ async function rightEdgePageState(page) {
 
 /**
  * Runs inside the overlay page (page.evaluate(pinnedBridgeCall, [method, args])): awaits
- * window.toto[method](...args) while a global Set pins the bridged promise for Playwright.
+ * window.toto[method](...args) while a global Set pins both the bridge promise and the promise returned
+ * to the inspector. Pinning only the bridge promise can still let Chromium collect the awaited wrapper.
  */
-export async function pinnedBridgeCall([method, args]) {
+export function pinnedBridgeCall([method, args]) {
   const pending = (globalThis.__metisSmokeBridgePending ??= new Set())
-  const call = window.toto[method](...args)
-  pending.add(call)
+  let call
   try {
-    await call
-  } finally {
-    pending.delete(call)
+    call = window.toto[method](...args)
+  } catch (error) {
+    return Promise.reject(error)
   }
+  const awaited = Promise.resolve(call).then(() => undefined)
+  pending.add(call)
+  pending.add(awaited)
+  return awaited.finally(() => {
+    pending.delete(call)
+    pending.delete(awaited)
+  })
 }
 
 /** Content-free evidence: geometry kind and chrome flags only, never page text. */

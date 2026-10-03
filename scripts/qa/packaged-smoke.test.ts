@@ -1529,7 +1529,7 @@ describe('pinnedBridgeCall (M2-0519)', () => {
     delete scope.__metisSmokeBridgePending
   }
 
-  it('keeps the pending bridge call reachable from the page until it settles, and returns nothing', async () => {
+  it('keeps the bridge call and the inspector wrapper reachable until they settle, and returns nothing', async () => {
     let settle: (value: unknown) => void = () => undefined
     const bridged = new Promise((resolve) => {
       settle = resolve
@@ -1542,7 +1542,7 @@ describe('pinnedBridgeCall (M2-0519)', () => {
     try {
       const call = pinnedBridgeCall(['toggle', ['a', 1]])
       expect(seen).toEqual([['a', 1]])
-      expect([...(scope.__metisSmokeBridgePending ?? [])]).toEqual([bridged])
+      expect([...(scope.__metisSmokeBridgePending ?? [])]).toEqual([bridged, call])
       settle({ visible: true })
       await expect(call).resolves.toBeUndefined()
       expect(scope.__metisSmokeBridgePending?.size).toBe(0)
