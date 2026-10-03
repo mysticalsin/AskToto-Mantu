@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import vm from 'node:vm'
 import ts from 'typescript'
 import { describe, expect, it, vi } from 'vitest'
-import { IPC } from '@shared/ipc'
+import { IPC } from '@shared/contracts/channels'
 
 const source = ts.createSourceFile('index.ts', readFileSync(join(__dirname, 'index.ts'), 'utf8'), ts.ScriptTarget.Latest, true)
 function boundary(name: string, invoke: (...args: unknown[]) => Promise<unknown>): (...args: unknown[]) => Promise<unknown> {

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { IPC } from '../shared/contracts/channels'
 
 const main = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const preload = readFileSync(join(__dirname, '../preload/index.ts'), 'utf8')
@@ -23,9 +24,9 @@ describe('Cap2 command authority boundary', () => {
     expect(preload).toContain('onMetisCommandState')
     expect(preload).toContain('confirmMetisCommand')
     expect(preload).toContain('cancelMetisCommand')
-    expect(ipc).toContain('metisCommandState')
-    expect(ipc).toContain('metisCommandConfirm')
-    expect(ipc).toContain('metisCommandCancel')
+    expect(IPC.metisCommandState).toBe('metis-command:state')
+    expect(IPC.metisCommandConfirm).toBe('metis-command:confirm')
+    expect(IPC.metisCommandCancel).toBe('metis-command:cancel')
     expect(preload).not.toContain('executeDesktopAction')
   })
 
