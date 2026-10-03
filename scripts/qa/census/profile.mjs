@@ -8,6 +8,7 @@ const SYNTHETIC_MEETING_COUNT = 59
 const PROFILE_SCHEMA_VERSION = 2
 const BRAIN_SCHEMA_VERSION = 2
 const ALLOWED_LAYOUTS = new Set(['bar', 'hide'])
+const ALLOWED_PLACEMENTS = new Set(['top-center', 'right-edge'])
 const DATALESS_REASON = 'real dataless files need a cloud provider; measured in the owner soak (OD-36)'
 
 const SUBJECTS = [
@@ -54,6 +55,13 @@ function validateLayout(layout) {
   return layout
 }
 
+function validatePlacement(placement) {
+  if (!ALLOWED_PLACEMENTS.has(placement)) {
+    throw new Error(`placement must be one of: ${[...ALLOWED_PLACEMENTS].join(', ')}`)
+  }
+  return placement
+}
+
 function syntheticMeetings() {
   const random = seededRandom()
   const spanMs = 90 * 24 * 60 * 60_000
@@ -90,6 +98,7 @@ export function representativeSettings(profileDir, now = SYNTHETIC_STARTED_AT, o
   const root = resolve(profileDir)
   const meetingsFolder = join(root, 'meetings')
   const layout = validateLayout(options.layout ?? 'bar')
+  const placement = validatePlacement(options.placement ?? 'right-edge')
   return {
     onboardingDone: true,
     onboardingDoneAt: now,
@@ -100,7 +109,7 @@ export function representativeSettings(profileDir, now = SYNTHETIC_STARTED_AT, o
     showLiveTranscript: true,
     overlayLayout: layout,
     overlayOrbStyle: 'obsidian',
-    overlayPlacement: 'right-edge',
+    overlayPlacement: placement,
     instantSuggestions: true,
     backgroundScreenContext: true,
     asrEngine: 'whisper',
@@ -238,7 +247,7 @@ export function writeRepresentativeProfile(profileDir, now = SYNTHETIC_STARTED_A
 }
 
 function usage() {
-  return 'Usage: node scripts/qa/census/profile.mjs [--layout bar|hide] <profile-dir>'
+  return 'Usage: node scripts/qa/census/profile.mjs [--layout bar|hide] [--placement top-center|right-edge] <profile-dir>'
 }
 
 /** True when this module is the process entry point. `pathToFileURL` yields `file:///D:/...` for a Windows
@@ -247,14 +256,18 @@ export function isMainModule(metaUrl, argv1, pathOptions) {
   return Boolean(argv1) && metaUrl === pathToFileURL(argv1, pathOptions).href
 }
 
-function readArgs(argv) {
-  const args = { layout: 'bar', profileDir: '' }
+export function readArgs(argv) {
+  const args = { layout: 'bar', placement: 'right-edge', profileDir: '' }
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]
     if (arg === '--layout') {
       i += 1
       if (i >= argv.length) throw new Error('--layout requires a value')
       args.layout = validateLayout(argv[i])
+    } else if (arg === '--placement') {
+      i += 1
+      if (i >= argv.length) throw new Error('--placement requires a value')
+      args.placement = validatePlacement(argv[i])
     } else if (arg === '--help' || arg === '-h') {
       args.help = true
     } else if (!args.profileDir) {
@@ -272,7 +285,10 @@ if (isMainModule(import.meta.url, process.argv[1])) {
     console.error(usage())
     process.exit(args.help ? 0 : 2)
   }
-  const profile = writeRepresentativeProfile(args.profileDir, SYNTHETIC_STARTED_AT, { layout: args.layout })
+  const profile = writeRepresentativeProfile(args.profileDir, SYNTHETIC_STARTED_AT, {
+    layout: args.layout,
+    placement: args.placement
+  })
   console.log(`[census-profile] wrote ${profile.profileDir}`)
   console.log(`[census-profile] manifest ${join(profile.profileDir, 'resource-census-profile.json')}`)
 }
