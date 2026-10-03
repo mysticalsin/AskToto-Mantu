@@ -175,6 +175,50 @@ describe('overlay auto-hide state machine (MQA-274)', () => {
     expect(isRevealed(s)).toBe(true)
   })
 
+  it('M2-0431: a duplicate pointer-leave (main + page) does not cancel the grace; nothing parks before it ends', () => {
+    let s = revealViaHover(initialAutoHideState(true))
+    s = reduceAutoHide(s, { type: 'pointer-leave', native: true })
+    expect(s.graceArmed).toBe(true)
+    const armed = s
+    s = reduceAutoHide(s, { type: 'pointer-leave' })
+    expect(s).toBe(armed)
+    s = reduceAutoHide(s, { type: 'pointer-leave', native: true })
+    expect(s.graceArmed).toBe(true)
+    expect(isRevealed(s)).toBe(true)
+    // Only the grace timer ends it.
+    s = reduceAutoHide(s, { type: 'grace-elapsed' })
+    expect(isRevealed(s)).toBe(false)
+  })
+
+  it("M2-0431: a hover main reported is ended only by main's leave, not the page's mouseleave", () => {
+    let s = reduceAutoHide(initialAutoHideState(true), { type: 'reveal-now', native: true })
+    expect(s.nativeHold).toBe(true)
+    // The pointer went up into the notch zone (outside the window) or the bar shrank under it.
+    const held = s
+    s = reduceAutoHide(s, { type: 'pointer-leave' })
+    expect(s).toBe(held)
+    expect(isRevealed(s)).toBe(true)
+    expect(s.graceArmed).toBe(false)
+    s = reduceAutoHide(s, { type: 'pointer-leave', native: true })
+    expect(s.nativeHold).toBe(false)
+    expect(s.graceArmed).toBe(true)
+    // A later page-only hover is page-owned again.
+    s = reduceAutoHide(reduceAutoHide(s, { type: 'grace-elapsed' }), { type: 'pointer-enter' })
+    s = reduceAutoHide(s, { type: 'dwell-elapsed' })
+    s = reduceAutoHide(s, { type: 'pointer-leave' })
+    expect(s.graceArmed).toBe(true)
+  })
+
+  it('M2-0431: a keyboard reveal-now is not a native hold; collapse-now and disabling clear one', () => {
+    const keyboard = reduceAutoHide(initialAutoHideState(true), { type: 'reveal-now' })
+    expect(keyboard.nativeHold).toBe(false)
+    expect(reduceAutoHide(keyboard, { type: 'pointer-leave' }).graceArmed).toBe(true)
+    const held = reduceAutoHide(initialAutoHideState(true), { type: 'reveal-now', native: true })
+    expect(reduceAutoHide(held, { type: 'reveal-now', native: true })).toBe(held)
+    expect(reduceAutoHide(held, { type: 'collapse-now' }).nativeHold).toBe(false)
+    expect(reduceAutoHide(held, { type: 'set-enabled', enabled: false }).nativeHold).toBe(false)
+  })
+
   it('collapse-now parks immediately without arming grace (leave pill / Settings → Hide)', () => {
     let s = revealViaHover(initialAutoHideState(true))
     s = reduceAutoHide(s, { type: 'collapse-now' })

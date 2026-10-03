@@ -9,6 +9,7 @@ import { getSettings, setSettings } from '../store'
 import { mainLog } from '../logger'
 import { startBackfill, brainBackfillProgress, reconcileMeetingsInBackground } from './ingest'
 import { readAccount, readDeal, readIndex, slugify, writeIndex, writeMeetingExtraction } from './store'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 vi.mock('electron')
@@ -37,6 +38,7 @@ describe('startBackfill with no configured provider', () => {
   }
 
   beforeEach(() => {
+    useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-backfill-test-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-backfill-meetings-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
@@ -81,7 +83,7 @@ describe('startBackfill with no configured provider', () => {
   it('queues nothing and preserves backfillRequested for a later resume', async () => {
     const warnSpy = vi.spyOn(mainLog, 'warn').mockImplementation(() => undefined as unknown as void)
 
-    const result = startBackfill()
+    const result = await startBackfill()
 
     expect(result).toEqual({ queued: 0, deferred: 'no-provider' })
     // Never touched the queue/progress counters — nothing was actually started.
@@ -97,11 +99,11 @@ describe('startBackfill with no configured provider', () => {
     expect(brainWarnings.length).toBe(1)
   })
 
-  it('handles an unavailable meetings folder without queueing model work', () => {
+  it('handles an unavailable meetings folder without queueing model work', async () => {
     // OneDrive may temporarily make a configured folder unavailable. The scan must remain safe and
     // must not manufacture provider-backed jobs while the source is unavailable.
     setSettings({ meetingsFolder: join(meetingsFolder, 'does-not-exist') })
-    const result = startBackfill()
+    const result = await startBackfill()
     expect(result.queued).toBe(0)
   })
 
@@ -134,7 +136,7 @@ describe('startBackfill with no configured provider', () => {
     // locally and is the exact recovery path after a keychain/profile interruption.
     // The two baseline sources still need first-pass extraction, so the result makes that deferral
     // explicit while allowing this saved extraction to proceed locally now.
-    expect(startBackfill()).toEqual({ queued: 1, deferred: 'no-provider' })
+    expect(await startBackfill()).toEqual({ queued: 1, deferred: 'no-provider' })
     await vi.waitFor(() => {
       expect(readIndex(getSettings()).ingested[file]?.ok).toBe(true)
     }, { timeout: 10_000 })
@@ -182,7 +184,7 @@ describe('startBackfill with no configured provider', () => {
       }
     } as never)
 
-    expect(startBackfill().queued).toBe(0)
+    expect((await startBackfill()).queued).toBe(0)
     await vi.waitFor(() => {
       expect((readIndex(getSettings()) as unknown as { sourceRefreshRequested?: boolean }).sourceRefreshRequested).toBe(true)
     }, { timeout: 10_000 })
@@ -197,7 +199,7 @@ describe('startBackfill with no configured provider', () => {
       }
     } as never)
 
-    expect(startBackfill().queued).toBe(0)
+    expect((await startBackfill()).queued).toBe(0)
     await vi.waitFor(() => {
       expect((readIndex(getSettings()) as unknown as { sourceRefreshRequested?: boolean }).sourceRefreshRequested).toBe(true)
     }, { timeout: 10_000 })
@@ -215,6 +217,6 @@ describe('startBackfill with no configured provider', () => {
       }
     } as never)
 
-    expect(startBackfill().queued).toBe(0)
+    expect((await startBackfill()).queued).toBe(0)
   })
 })

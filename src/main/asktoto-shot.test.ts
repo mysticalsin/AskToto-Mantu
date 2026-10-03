@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readAppCss } from '../../scripts/lib/read-app-css.mjs'
 import { describe, expect, it } from 'vitest'
 import { isRealRendererShotUrl } from './asktoto-shot'
 
@@ -31,7 +32,7 @@ describe('MQA-338 — renderer diagnostics never capture or export private rende
   const shot = readFileSync(join(__dirname, './asktoto-shot.ts'), 'utf8')
   const main = readFileSync(join(__dirname, './index.ts'), 'utf8')
   const rendererMain = readFileSync(join(__dirname, '../renderer/src/main.tsx'), 'utf8')
-  const rendererStyles = readFileSync(join(__dirname, '../renderer/src/styles.css'), 'utf8')
+  const rendererStyles = readAppCss()
   const app = readFileSync(join(__dirname, '../renderer/src/App.tsx'), 'utf8')
 
   it('keeps the shared URL matcher but removes raw screenshot, DOM, and caller-selected file output', () => {

@@ -1,5 +1,9 @@
 # Métis (asktoto) — Product review & improvement roadmap (2026-08-29)
 
+> **Point-in-time review.** The roadmap here predates the Métis 2.0 program; the current product target is
+> [`../design/METIS-PLATFORM-NORTH-STAR.md`](../design/METIS-PLATFORM-NORTH-STAR.md) and open defects are in
+> [`BUG-LEDGER.md`](BUG-LEDGER.md).
+
 A full-application audit against the product vision: an on-device "second brain" meeting
 copilot that captures voice/screen accurately, answers in real time (local model or API with
 automatic background failover), produces a beautiful post-meeting summary with next steps, and

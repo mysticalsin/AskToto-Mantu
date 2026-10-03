@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { saveMeeting, saveNote } from './transcripts'
 import { enqueueIngest } from './brain/ingest'
 import { tagAsDemo } from '@shared/demo-guard'
+import { useStorageForTests } from './infra/storage/meetings-storage'
 import type { Settings, SaveMeeting, SaveNote } from '@shared/ipc'
 
 vi.mock('electron')
@@ -22,6 +23,7 @@ describe('MQA-278 — saveMeeting refuses onboarding-demo-tagged data', () => {
   let settings: Settings
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-demo-guard-meeting-'))
     settings = { meetingsFolder: folder, autoSaveTranscripts: true } as Settings
   })
@@ -68,6 +70,7 @@ describe('MQA-278 — saveNote refuses onboarding-demo-tagged data', () => {
   let settings: Settings
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-demo-guard-note-'))
     settings = { meetingsFolder: folder, autoSaveTranscripts: true } as Settings
   })

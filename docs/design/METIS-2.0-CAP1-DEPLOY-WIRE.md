@@ -5,7 +5,8 @@
 **NOT:** a second portal/Worker
 
 **Status:** Historical — point-in-time deploy snapshot (20 Sep 2026), superseded by current Operator
-deploy state; kept for lineage.
+deploy state; kept for lineage. The current procedure is [`../operator/RUNBOOKS.md`](../operator/RUNBOOKS.md) and
+[`../runbooks/staging.md`](../runbooks/staging.md).
 
 ## Status
 | Item | Value |

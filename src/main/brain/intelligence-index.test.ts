@@ -21,14 +21,17 @@ import {
   intelligenceIndexStatus,
   runIntelligenceIndex,
   setIntelligenceIndexWork,
+  settleIntelligenceIndexForTests,
   shouldCatchUp,
   triggerForReason,
   writeIntelligenceIndexState,
   zonedDateTimeToUtc,
   zonedParts,
+  zonedPartFormatterCacheSizeForTests,
   type IntelligenceIndexResult,
   type IntelligenceIndexCompletion
 } from './intelligence-index'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 
 const auditLogMock = vi.hoisted(() => vi.fn())
@@ -49,6 +52,7 @@ function completionGate() {
 let userData: string
 
 beforeEach(() => {
+  useStorageForTests()
   userData = mkdtempSync(join(tmpdir(), 'intel-idx-userdata-'))
   ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
     if (name === 'userData') return userData
@@ -111,6 +115,20 @@ describe('America/Toronto named slots', () => {
     expect(zonedParts(torontoMs(2026, 11, 1, 18, 0)).hour).toBe(18)
     expect(nextSlotAt(torontoMs(2026, 11, 1, 18, 0))).toBe(torontoMs(2026, 11, 2, 6, 0))
     expect(mostRecentlyElapsedSlot(torontoMs(2026, 11, 1, 12, 0))).toBe(torontoMs(2026, 11, 1, 12, 0))
+  })
+
+  it('reuses one Intl.DateTimeFormat per time zone without changing zonedParts output', () => {
+    const before = zonedPartFormatterCacheSizeForTests()
+    const first = zonedParts(torontoMs(2026, 8, 31, 12, 34))
+    const afterFirstToronto = zonedPartFormatterCacheSizeForTests()
+    const second = zonedParts(torontoMs(2026, 8, 31, 12, 34))
+    const afterSecondToronto = zonedPartFormatterCacheSizeForTests()
+    const utc = zonedParts(Date.UTC(2026, 7, 31, 12, 34, 0), 'UTC')
+    expect(second).toEqual(first)
+    expect(utc).toEqual({ year: 2026, month: 8, day: 31, hour: 12, minute: 34, second: 0 })
+    expect(afterSecondToronto).toBe(afterFirstToronto)
+    expect(zonedPartFormatterCacheSizeForTests()).toBe(afterFirstToronto + 1)
+    expect(afterFirstToronto - before).toBeLessThanOrEqual(1)
   })
 
   it('catches up when lastSuccessAt is before the elapsed slot', () => {
@@ -329,7 +347,7 @@ describe('runIntelligenceIndex coalesce and catch-up', () => {
   it('an automatic pass with an unavailable ledger runs no work and audits ledger_unavailable, while a click still runs', async () => {
     const folder = mkdtempSync(join(tmpdir(), 'intel-idx-'))
     const s = { ...DEFAULT_SETTINGS, meetingsFolder: folder, encryptTranscripts: false }
-    const indexUnavailableSpy = vi.spyOn(brainStore, 'indexUnavailable').mockReturnValue('undecryptable')
+    const indexUnavailableSpy = vi.spyOn(brainStore, 'indexUnavailableAsync').mockResolvedValue('undecryptable')
     const work = vi.fn(async () => completedRun({ ran: true, queued: 1 }))
     setIntelligenceIndexWork(work)
     const scheduled = await runIntelligenceIndex('schedule', s)
@@ -341,7 +359,7 @@ describe('runIntelligenceIndex coalesce and catch-up', () => {
       deferredReason: 'ledger_unavailable'
     })
 
-    indexUnavailableSpy.mockReturnValue(null)
+    indexUnavailableSpy.mockResolvedValue(null)
     const click = await runIntelligenceIndex('click', s)
     expect(click).toMatchObject({ ran: true, queued: 1 })
   })
@@ -401,7 +419,7 @@ describe('Intelligence completion, not dispatch, owns success', () => {
     }))
     const result = await runIntelligenceIndex('click', s)
     expect(result.error).toBe(NO_PROVIDER_INDEX_COPY)
-    await vi.waitFor(() => expect(intelligenceIndexStatus(s).running).toBe(false))
+    await settleIntelligenceIndexForTests()
     expect(readIntelligenceIndexState(s).lastSuccessAt).toBe(123)
     expect(intelligenceIndexStatus(s).lastError).toBe(NO_PROVIDER_INDEX_COPY)
   })

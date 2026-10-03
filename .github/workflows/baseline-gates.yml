@@ -1,0 +1,84 @@
+name: M2-0263 baseline gates
+
+# Manual run that measures the baseline gates on two refs — the pre-fix baseline and the ref carrying the
+# M2-0001 isolation fix — on every host OS, and uploads a content-free record per (ref, OS): run ID,
+# runner image, exit code and pass/fail/skip counts per gate, plus each failing test with its owning
+# ticket. Tests run here, in CI only. The tool comes from the branch this run is dispatched on; each
+# measured ref is checked out separately, because the baseline commit predates the tool and the
+# M2-0190 isolation wrappers (scripts/hermetic/), which the tool applies to license-server and swift test.
+# A gate absent at a ref is recorded NOT_PRESENT rather than dropped.
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_ref:
+        description: Baseline commit to measure.
+        required: true
+        default: 2bf21f1c
+      fix_ref:
+        description: Commit carrying the M2-0001 fix on top of the baseline.
+        required: true
+        default: 56677e7d
+      owners:
+        description: 'Optional JSON array of {"match": "<substring of file :: test title>", "ticket": "M2-####"}; unmatched failures are recorded UNOWNED.'
+        required: false
+        default: '[]'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: m2-0263-baseline-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  gates:
+    name: ${{ matrix.label }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    if: startsWith(github.ref, 'refs/heads/')
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        label: [baseline, fix]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: tool
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ matrix.label == 'baseline' && inputs.baseline_ref || inputs.fix_ref }}
+          path: target
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Install the measured ref
+        working-directory: target
+        run: npm ci
+      - name: Install Playwright Chromium
+        working-directory: target
+        run: npx playwright install ${{ runner.os == 'Linux' && '--with-deps' || '' }} chromium
+      - name: Run the baseline gates
+        env:
+          OWNERS_JSON: ${{ inputs.owners }}
+        run: |
+          printf '%s' "$OWNERS_JSON" > "$RUNNER_TEMP/owners.json"
+          export TARGET_SHA="$(git -C target rev-parse HEAD)"
+          node tool/scripts/ci/baseline-gates.mjs \
+            --target target \
+            --out "out/m2-0263/${{ matrix.label }}-${{ runner.os }}" \
+            --label "${{ matrix.label }}-${{ runner.os }}" \
+            --owners "$RUNNER_TEMP/owners.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() }}
+        with:
+          name: m2-0263-baseline-${{ matrix.label }}-${{ runner.os }}
+          path: out/m2-0263/
+          if-no-files-found: error
+          retention-days: 30

@@ -10,6 +10,10 @@ import type { EventEmitter } from 'node:events'
 vi.mock('electron', () => ({ app: { isPackaged: false, getPath: () => '/tmp' } }))
 vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLog: vi.fn() }))
 
+afterEach(() => {
+  vi.unstubAllEnvs()
+})
+
 import {
   buildSpawnArgs,
   parseBoundPort,
@@ -376,6 +380,10 @@ async function loadIsolatedRuntime(options: {
     return { ...actual, existsSync: () => true }
   })
   vi.doUnmock('../infra/process/supervisor')
+  // The real supervisor defaults to on for darwin; these tests assert the plain direct spawn, so ask for off.
+  if (options.supervisorMode === undefined || options.supervisorMode === 'real') {
+    vi.stubEnv('METIS_SUPERVISION', 'off')
+  }
   if (options.supervisorMode === 'async-fallback') {
     vi.doMock('../infra/process/supervisor', async () => {
       const childProcess = await import('node:child_process')

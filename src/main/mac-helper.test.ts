@@ -15,6 +15,12 @@ import {
   macStallWatchCommand,
   getMacScreenMetrics,
   extractScreenText,
+  macCodeIdentitySpawnSpec,
+  macBundleCopiesSpawnSpec,
+  getCodeIdentity,
+  getBundleCopies,
+  parseCodeIdentity,
+  parseBundleCopies,
   type OcrResult
 } from './mac-helper'
 import { formatCommand, releasePlans } from '../../scripts/release/orchestrate.mjs'
@@ -125,6 +131,50 @@ describe('macScreenMetricsSpawnSpec / getMacScreenMetrics (MQA-275 — island no
     } finally {
       Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true })
     }
+  })
+})
+
+describe('code-identity / bundle-copies (M2-0429 — Screen Recording diagnosis)', () => {
+  it('spawn specs pass the path or bundle id as one argument when the helper exists', () => {
+    const identity = macCodeIdentitySpawnSpec('/Applications/Metis.app')
+    const copies = macBundleCopiesSpawnSpec('com.mantu.asktoto')
+    if (existsSync(macHelperPath())) {
+      expect(identity).toEqual({ command: macHelperPath(), args: ['code-identity', '/Applications/Metis.app'] })
+      expect(copies).toEqual({ command: macHelperPath(), args: ['bundle-copies', 'com.mantu.asktoto'] })
+    } else {
+      expect(identity).toBeNull()
+      expect(copies).toBeNull()
+    }
+  })
+
+  it('degrade to null (never throw) where the helper cannot exist', async () => {
+    const originalPlatform = process.platform
+    try {
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+      expect(macCodeIdentitySpawnSpec('/x.app')).toBeNull()
+      expect(macBundleCopiesSpawnSpec('com.mantu.asktoto')).toBeNull()
+      await expect(getCodeIdentity('/x.app')).resolves.toBeNull()
+      await expect(getBundleCopies('com.mantu.asktoto')).resolves.toBeNull()
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true })
+    }
+  })
+
+  it('parse the documented JSON and reject anything else', () => {
+    const cdhash = '0123456789abcdef0123456789abcdef01234567'
+    expect(parseCodeIdentity(JSON.stringify({ identifier: 'com.mantu.asktoto', cdhash, teamId: '', adhoc: true }))).toEqual({
+      identifier: 'com.mantu.asktoto',
+      cdhash,
+      teamId: '',
+      adhoc: true
+    })
+    expect(parseCodeIdentity(JSON.stringify({ identifier: 'x', cdhash: '', teamId: '', adhoc: false }))?.cdhash).toBe('')
+    expect(parseCodeIdentity(JSON.stringify({ identifier: 'x', cdhash: 'not-hex', teamId: '', adhoc: true }))).toBeNull()
+    expect(parseCodeIdentity('garbage')).toBeNull()
+    expect(parseBundleCopies(JSON.stringify({ copies: [{ path: '/Applications/Metis.app', version: '1.9.7' }] }))).toEqual([
+      { path: '/Applications/Metis.app', version: '1.9.7' }
+    ])
+    expect(parseBundleCopies(JSON.stringify({ copies: [{ path: 1 }] }))).toBeNull()
   })
 })
 

@@ -17,6 +17,7 @@ import {
 import { writeDeal, writeAccount, writePerson, writeMeetingExtraction, writeIndex, slugify } from './store'
 import { readAliasMap } from './corrections'
 import { ingestExtraction } from './ingest'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 import {
   publishEntity,
@@ -160,6 +161,7 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
   let s: Settings
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-publish-test-'))
     s = settingsFor(folder)
     readFaults.throwOn.clear()
@@ -418,6 +420,32 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
       const set = readConfidentialMeetings(s)
       expect(set.has('b.md')).toBe(true)
       expect(set.has('a.md')).toBe(false)
+    })
+
+    it('readConfidentialMeetings excludes a CRLF meeting flagged confidential (a synced/edited file keeps its flag)', () => {
+      writeMeetingFile(folder, 'open.md', { date: '2026-01-01' })
+      writeFileSync(join(folder, 'crlf-secret.md'), meetingMd({ date: '2026-01-02', confidential: true }).replace(/\n/g, '\r\n'), 'utf8')
+      const set = readConfidentialMeetings(s)
+      expect(set.has('crlf-secret.md')).toBe(true)
+      expect(set.has('open.md')).toBe(false)
+    })
+
+    it('readConfidentialMeetings excludes a confidential meeting whose closing delimiter has trailing whitespace', () => {
+      writeFileSync(
+        join(folder, 'spaced-secret.md'),
+        meetingMd({ date: '2026-01-02', confidential: true }).replace(/\n---\n/, '\n--- \n'),
+        'utf8'
+      )
+      expect(readConfidentialMeetings(s).has('spaced-secret.md')).toBe(true)
+    })
+
+    it('readConfidentialMeetings excludes a meeting when any duplicated confidential line is true', () => {
+      writeFileSync(
+        join(folder, 'dup-secret.md'),
+        meetingMd({ date: '2026-01-02', confidential: true }).replace(/\n---\n/, '\nconfidential: false\n---\n'),
+        'utf8'
+      )
+      expect(readConfidentialMeetings(s).has('dup-secret.md')).toBe(true)
     })
   })
 

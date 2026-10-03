@@ -289,6 +289,13 @@ export function getActiveModelKey(): string | null {
   return lastModelPaths?.gguf ?? null
 }
 
+/** Tokens one slot of the running sidecar holds, or null when none is up. start() keeps a same-model
+ *  sidecar even when the machine's profile has since changed, so this, not the profile, bounds a request. */
+export function activeSlotTokens(): number | null {
+  if (state === 'stopped' || !lastModelPaths) return null
+  return Math.floor(lastModelPaths.ctxSize / lastModelPaths.parallel)
+}
+
 function clearIdleTimer(): void {
   if (idleTimer) {
     clearTimeout(idleTimer)
@@ -681,8 +688,9 @@ export function stop(): void {
  * Pins id_slot 0 (the same slot suggest/prewarm always use) and cache_prompt so the server's per-slot cache
  * actually reuses the prefix. Never throws — a failed prewarm just means the next real request pays full
  * cost, which is why it carries its own short timeout independent of any caller's budget.
+ * `slot` 1 is the summary slot: the Stop-time warm targets it so the recap reuses the meeting's prefix.
  */
-export function prewarm(messages: Array<{ role: string; content: string }>): void {
+export function prewarm(messages: Array<{ role: string; content: string }>, slot: 0 | 1 = 0): void {
   if (state !== 'running' || port === null) return
   markActivity()
   const url = `http://127.0.0.1:${port}/v1/chat/completions`
@@ -694,7 +702,7 @@ export function prewarm(messages: Array<{ role: string; content: string }>): voi
       model: 'local',
       messages,
       max_tokens: 1,
-      id_slot: 0,
+      id_slot: slot,
       cache_prompt: true,
       stream: false
     }),

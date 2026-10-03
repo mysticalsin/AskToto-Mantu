@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
 import { describe, expect, it } from 'vitest'
 import {
   hostCssSize,
@@ -29,7 +30,7 @@ import {
 const engine = readFileSync(join(__dirname, './jarvis-orb.ts'), 'utf8')
 const orb = readFileSync(join(__dirname, '../components/ObsidianOrb.tsx'), 'utf8')
 const picker = readFileSync(join(__dirname, '../components/OverlayOrbPicker.tsx'), 'utf8')
-const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
+const css = readAppCss()
 const pkg = readFileSync(join(__dirname, '../../../../package.json'), 'utf8')
 
 describe('Jarvis particle orb (Bar Circle / second pill)', () => {

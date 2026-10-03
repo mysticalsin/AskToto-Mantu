@@ -29,22 +29,38 @@ describe('right-edge placement main-process contract', () => {
     expect(cursorWatch).toMatch(/notifyOverlayCursorHover\(true, restoredFromParkedRail\)/)
     const reanchor = section(index, 'function registerScreenListeners()', 'function toggleVisible')
     expect(reanchor).toMatch(/resolvedOverlayPlacementForDisplay\(display\) === 'right-edge'/)
-    expect(reanchor).toMatch(/overlayPositionForDisplay\(/)
+    // M2-0202: the right-edge reanchor places through the geometry authority's one writer.
+    expect(reanchor).toMatch(/applyRightEdgeBounds\('open', display\)/)
+    expect(reanchor).toMatch(/applyRightEdgeBounds\('rest', display, layout\)/)
   })
 
-  it('keeps sidecar dragging explicitly vertical and persists its normalized local preference', () => {
+  it('keeps sidecar dragging explicitly vertical and persists its per-display anchor', () => {
     const move = section(index, 'function moveBy(', '/**\n * Keep the overlay reachable')
     expect(move).toMatch(/resolvedOverlayPlacementForDisplay\(display\) === 'right-edge'/)
     expect(move).toMatch(/screen\.getDisplayMatching\(b\)/)
-    expect(move).toMatch(/normalizeRightEdgeY\(b\.y \+ dy, height, getDisplayMetrics\(display\)\)/)
-    expect(move).toMatch(/queueRightEdgeYForDisplay\(display, normalizedY\)/)
+    // M2-0202: a drag changes only the anchor A (dy), and every rect follows it from the authority.
+    expect(move).toMatch(/rightEdgeAnchors\.drag\(display, rightEdgeAnchors\.y\(display\) \+ dy\)/)
+    expect(move).toMatch(/applyRightEdgeBounds\(islandResting \? 'rest' : 'open', display\)/)
     expect(move).not.toMatch(/x: b\.x \+ dx/)
     expect(move).not.toMatch(/display\.id !== fromDisplayId/)
-    const persist = section(index, 'function queueRightEdgeYForDisplay', 'function overlayCursorWatchWanted')
-    expect(persist).toMatch(/overlayRightEdgeYByDisplay/)
-    expect(persist).toMatch(/\}, 350\)/)
-    expect(persist).toMatch(/setSettings\(/)
-    expect(persist).toMatch(/if \(!key\) return/)
+    // The debounce, lock and display-key rules run in island/right-edge-anchor.test.ts; this pins main's wiring
+    // of the anchor store to the settings keys and the lock list.
+    const persist = section(index, 'const rightEdgeAnchors = createRightEdgeAnchors({', 'function overlayCursorWatchWanted')
+    expect(persist).toMatch(/legacy: getSettings\(\)\.overlayRightEdgeYByDisplay/)
+    expect(persist).toMatch(/setSettings\(\{ overlayRightEdgeAnchorByDisplay: \{ \.\.\.getSettings\(\)\.overlayRightEdgeAnchorByDisplay, \.\.\.anchors \} \}\)/)
+    expect(persist).toMatch(/lockedKeys: getLockedKeys/)
+    expect(persist).toMatch(/rightEdgeLive: \(\) => liveOverlayPlacement\(\) === 'right-edge'/)
+  })
+
+  it('RE-G10: every right-edge placement path goes through applyRightEdgeBounds, including a placement change', () => {
+    // Behavior is proven by the lifted paths in overlay-placement.contract.test.ts; the settings handler is
+    // too large to lift, so its revealed right-edge branch is pinned here.
+    const settings = section(index, 'const layoutChanged = cur.overlayLayout', '// Flipping follow-up memory')
+    expect(settings).toMatch(/=== 'right-edge'\) \{\s*applyRightEdgeBounds\('open', display\)/)
+    const writer = section(index, 'function applyRightEdgeBounds(', 'function overlayCursorWatchWanted')
+    expect(writer).toMatch(/const rect = rightEdgeBounds\(surface, display, layout\)/)
+    // No right-edge rect is computed from the legacy normalized-Y helpers any more.
+    expect(index).not.toMatch(/normalizeRightEdgeY|rightEdgeSidecarBounds|rightEdgeYForDisplay/)
   })
 
   it('keeps sidecar placement independent of chrome and notch/hardware state', () => {
@@ -61,6 +77,30 @@ describe('right-edge placement main-process contract', () => {
     expect(settings).toMatch(/const placementChanged = cur\.overlayPlacement !== next\.overlayPlacement/)
     expect(settings).toMatch(/else if \(placementChanged && !settingsSurfaceOpen\)/)
     expect(settings).toMatch(/overlayPositionForDisplay\(/)
+  })
+
+  it('wires right-edge Hide: toggle parks and latches, reveals tell the page, parks tell the page, layout changes re-apply chrome', () => {
+    // Behavior is proven live by the RE-HIDE rows in scripts/qa/packaged-smoke.mjs; these pin the wiring.
+    const toggle = section(index, 'function toggleVisible(', 'const shortcutActions')
+    expect(toggle).toMatch(/=== 'right-edge'\n[^\n]*rightEdge && parkOverlayAfterHideSpring\(true\)\) return startOverlayCursorWatch\(\)/)
+    expect(toggle.indexOf('parkOverlayAfterHideSpring(true)')).toBeLessThan(toggle.indexOf('w.hide()'))
+    const park = section(index, 'function parkOverlayAfterHideSpring', 'function applyHideClickThrough')
+    expect(park).toMatch(/overlayParkLatched = force/)
+    expect(park).toMatch(/=== 'right-edge'\) notifyOverlayCursorHover\(false, false, true\)/)
+    const tick = section(index, 'function tickOverlayCursorWatch()', 'function notifyOverlayCursorHover')
+    expect(tick).toMatch(/if \(overlayParkLatched && islandResting && pointInRect\(cursor, rest\)\)/)
+    expect(tick).toMatch(/placement\n\s*\}\)/)
+    const restore = section(index, 'function restoreBarWidth()', 'function repairOverlayBoundsForReveal')
+    expect(restore).toMatch(/overlayParkLatched = false/)
+    const controller = section(index, 'const revealController = createRevealController({', 'function reveal(')
+    expect(controller).toMatch(/restoreBarWidth\(\)\s*revealRightEdgeDockInPage\(\)/)
+    const pageReveal = section(index, 'function revealRightEdgeDockInPage()', 'const revealController')
+    expect(pageReveal).toMatch(/!== 'right-edge'\) return/)
+    expect(pageReveal).toMatch(/rightEdgeUnhoveredRevealAt = performance\.now\(\)/)
+    expect(pageReveal).toMatch(/notifyOverlayCursorHover\(true, true\)/)
+    const settings = section(index, 'const layoutChanged = cur.overlayLayout', '// Flipping follow-up memory')
+    const layoutSwitch = settings.slice(settings.indexOf('if (layoutChanged) {'), settings.indexOf('} else if (placementChanged'))
+    expect(layoutSwitch).toMatch(/applyOverlaySurfaceChrome\(\)\s*applyHideClickThrough\(\)/)
   })
 
   it('does not resize native sidecar bounds for streaming renderer content', () => {

@@ -37,24 +37,17 @@ import {
   type IndexUnavailableCause
 } from '@shared/brain'
 import { resolveMeetingsFolder, readSavedFile, writeSaved, decodeSavedResult, envelopeKeyKind } from '../transcripts'
+import { classifyAll, storageAt } from '../infra/storage/meetings-storage'
 import { mainLog, auditLog } from '../logger'
 import { fileKeyState, isKeychainAvailable } from '../secrets'
 
-/**
- * Brain store — plain JSON files under `<meetings folder>/.brain/`.
- *
- * Lives NEXT TO the transcripts on purpose: it inherits the user's folder choice, OneDrive sync (so
- * Dust agents can read it as vault context), and — critically — the same at-rest encryption setting.
- * When encryptTranscripts is on, every brain file is written through the same ATKENC envelope as the
- * transcripts themselves (writeSaved/readSavedFile handle both forms transparently).
- */
+/** Brain store — JSON under `<meetings folder>/.brain/`, beside transcripts and the same encryption policy. */
 
 export function brainDir(settings: Settings): string {
   return join(resolveMeetingsFolder(settings), '.brain')
 }
 
-// Windows reserved device names — a path whose basename (before the first '.') case-insensitively
-// matches one of these fails to open at all, even for a tmp file, regardless of extension.
+// Windows reserved device basenames fail to open even for tmp files, regardless of extension.
 const WIN_RESERVED_NAMES = new Set([
   'con',
   'prn',
@@ -71,20 +64,15 @@ export function slugify(s: string): string {
     .replace(/[̀-ͯ]/g, '') // strip diacritics so "L'Oréal" and "L'Oreal" share a slug
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
-  // Two distinct long names that share an identical 60-char prefix would otherwise collide onto the
-  // same slug and silently merge their entity files. Only truncate when needed, and disambiguate the
-  // truncation with a short content hash so different long names still map to different slugs.
+  // Disambiguate long shared prefixes with a short content hash.
   const base =
     full.length > 60
       ? `${full.slice(0, 51)}-${createHash('sha256').update(full).digest('hex').slice(0, 8)}`
       : full
-  // A slug that's a bare Windows reserved device name (CON, AUX, NUL, COM1-9, LPT1-9) can't be opened
-  // as a file on Windows — not even the intermediate .tmp writeSaved creates, since the reserved check
-  // is on the basename before the first '.'. Suffix deterministically so the slug stays stable.
+  // Bare Windows reserved names cannot be opened; suffix deterministically.
   if (base && WIN_RESERVED_NAMES.has(base)) return `${base}-x`
   if (base) return base
-  // A name written entirely in a non-Latin script (Chinese, Cyrillic, Arabic, pure emoji) or one
-  // that's blank/whitespace-only collapses the ASCII pass above to '' — falling back to a fixed
+  // A non-Latin or blank name collapses the ASCII pass to '' — falling back to a fixed
   // 'unknown' would silently merge every such distinct entity into one shared file (a real
   // cross-account confidentiality bug for a tool whose job is per-account isolation). Instead, hash
   // the NFKC-normalized original name: deterministic (same name → same slug every time) and
@@ -224,7 +212,7 @@ function ensureDirs(settings: Settings): string {
 // re-read + decrypted + JSON.parsed + zod-validated every file from scratch. A stat() replaces that full
 // round trip when the file is unchanged; any mtime/size change (including our own writes, see writeJson
 // below) re-reads. Corrupt/absent files cache `null` too, so they stop costing repeated reads.
-const jsonCache = new Map<string, { mtimeMs: number; size: number; value: unknown }>()
+const jsonCache = new Map<string, { mtimeMs: number; ctimeMs?: number; size: number; value: unknown }>()
 const JSON_CACHE_MAX = 2000 // safety valve — see recall.ts's identical guard
 
 /** Bumps on every writeJson. Receipt Mode's match-key cache must not rely on directory mtime alone:
@@ -263,6 +251,46 @@ export function readJson<T>(settings: Settings, rel: string, parse: (v: unknown)
   if (jsonCache.size >= JSON_CACHE_MAX) jsonCache.clear()
   jsonCache.set(p, { mtimeMs, size, value })
   return value
+}
+
+type BrainFileLoad<T> = { status: 'ok'; value: T | null } | { status: 'unavailable' }
+
+export async function loadJson<T>(settings: Settings, rel: string, parse: (v: unknown) => T): Promise<BrainFileLoad<T>> {
+  const p = join(brainDir(settings), rel)
+  const gateway = storageAt(resolveMeetingsFolder(settings))
+  const path = join('.brain', rel)
+  const fileClass = (await classifyAll(gateway, [path])).get(path)
+  if (!fileClass || fileClass.status === 'missing') {
+    jsonCache.delete(p)
+    return { status: 'ok', value: null }
+  }
+  if (!('version' in fileClass)) return { status: 'unavailable' }
+  const { mtimeMs, ctimeMs, size } = fileClass.version
+  const hit = jsonCache.get(p)
+  if (hit && hit.mtimeMs === mtimeMs && hit.ctimeMs === ctimeMs && hit.size === size) return { status: 'ok', value: hit.value as T | null }
+  if (fileClass.status !== 'ok') return { status: 'unavailable' }
+  const read = await gateway.read(path)
+  if (read.status === 'missing') {
+    jsonCache.delete(p)
+    return { status: 'ok', value: null }
+  }
+  if (read.status !== 'ok') return { status: 'unavailable' }
+  let value: T | null
+  try {
+    const decoded = decodeSavedResult(read.bytes)
+    value = decoded.ok ? parse(JSON.parse(decoded.text)) : null
+  } catch {
+    value = null
+  }
+  if (jsonCache.size >= JSON_CACHE_MAX) jsonCache.clear()
+  jsonCache.set(p, { mtimeMs, ctimeMs, size, value })
+  return { status: 'ok', value }
+}
+
+async function listBrainNames(settings: Settings, relDir: string): Promise<string[] | null> {
+  const listing = await storageAt(resolveMeetingsFolder(settings)).list(join('.brain', relDir))
+  if (listing.status === 'ok') return listing.names
+  return listing.status === 'missing' ? [] : null
 }
 
 export async function writeJson(settings: Settings, rel: string, value: unknown): Promise<void> {
@@ -531,6 +559,12 @@ export function classifyIndexBytes(buf: Buffer): IndexLoad {
 // The (-1,-1) key stands for "stat itself failed (non-ENOENT)".
 type IndexCacheEntry = { mtimeMs: number; size: number; at: number; load: ResolvedIndex }
 const indexCache = new Map<string, IndexCacheEntry>()
+const deferBrainLogWrite = setImmediate
+function enqueueBrainLogWrite(write: () => void): void {
+  deferBrainLogWrite(() => {
+    try { write() } catch { /* best-effort */ }
+  })
+}
 
 /** Node fs errors carry `.code` (ENOENT, ETIMEDOUT, …); anything else has none. */
 function errnoCode(e: unknown): string | undefined {
@@ -553,9 +587,9 @@ function recordUnavailable(
 ): ResolvedIndex {
   const alreadyLogged = hit?.load.kind === 'unavailable' && hit.load.cause === load.cause
   if (!alreadyLogged) {
-    mainLog.warn(
-      `[brain] index.json can't be used on this device (${load.cause}${load.detail ? `: ${load.detail}` : ''}) — left untouched; indexing is paused until it can be read`
-    )
+    enqueueBrainLogWrite(() => mainLog.warn(
+      `[brain] index.json can't be used on this device (${load.cause}${load.detail ? `: ${load.detail}` : ''}) - left untouched; indexing is paused until it can be read`
+    ))
     auditLog('brain.index.unavailable', { cause: load.cause })
   }
   indexCache.set(p, { mtimeMs, size, at: Date.now(), load })
@@ -635,6 +669,42 @@ function loadIndex(s: Settings): ResolvedIndex {
   return load
 }
 
+async function loadIndexAsync(s: Settings): Promise<ResolvedIndex> {
+  const p = join(brainDir(s), INDEX_REL)
+  const hit = indexCache.get(p)
+  const gateway = storageAt(resolveMeetingsFolder(s))
+  const fileClass = (await classifyAll(gateway, [join('.brain', INDEX_REL)])).get(join('.brain', INDEX_REL))
+  if (!fileClass || fileClass.status === 'missing') {
+    indexCache.delete(p)
+    return { kind: 'absent' }
+  }
+  if (!('version' in fileClass)) {
+    return recordUnavailable(p, hit, -1, -1, { kind: 'unavailable', cause: 'io', detail: fileClass.status })
+  }
+  const { mtimeMs, size } = fileClass.version
+  if (hit && hit.mtimeMs === mtimeMs && hit.size === size && !ioRetryDue(hit)) return hit.load
+  if (fileClass.status !== 'ok') {
+    return recordUnavailable(p, hit, mtimeMs, size, { kind: 'unavailable', cause: 'io', detail: fileClass.status })
+  }
+  const read = await gateway.read(join('.brain', INDEX_REL))
+  if (read.status === 'missing') {
+    indexCache.delete(p)
+    return { kind: 'absent' }
+  }
+  if (read.status !== 'ok') {
+    return recordUnavailable(p, hit, mtimeMs, size, { kind: 'unavailable', cause: 'io', detail: read.status })
+  }
+  const classified = classifyIndexBytes(read.bytes)
+  const load: ResolvedIndex = classified.kind === 'corrupt' ? setAsideCorruptIndex(p) : classified
+  if (load.kind === 'absent') {
+    indexCache.delete(p)
+    return load
+  }
+  if (load.kind === 'unavailable') return recordUnavailable(p, hit, mtimeMs, size, load)
+  indexCache.set(p, { mtimeMs, size, at: Date.now(), load })
+  return load
+}
+
 /** The index, or an empty stand-in when there is none or it is read-only (see indexUnavailable). The
  *  stand-in can never be persisted over unreadable bytes: writeIndex refuses. Callers still clone before
  *  mutating (see updateIndex) — an unchanged file serves the same cached object on every call. */
@@ -643,9 +713,24 @@ export const readIndex = (s: Settings): BrainIndex => {
   return load.kind === 'ready' ? load.index : BrainIndexSchema.parse({})
 }
 
+export const readIndexAsync = async (s: Settings): Promise<BrainIndex> => {
+  const load = await loadIndexAsync(s)
+  return load.kind === 'ready' ? load.index : BrainIndexSchema.parse({})
+}
+
+export const loadIndexForStatus = async (s: Settings): Promise<BrainIndex> => {
+  const load = await loadIndexAsync(s)
+  return load.kind === 'ready' ? load.index : BrainIndexSchema.parse({})
+}
+
 /** Non-null while an existing index.json cannot be used here: the index is read-only for the session. */
 export function indexUnavailable(s: Settings): IndexUnavailableCause | null {
   const load = loadIndex(s)
+  return load.kind === 'unavailable' ? load.cause : null
+}
+
+export async function indexUnavailableAsync(s: Settings): Promise<IndexUnavailableCause | null> {
+  const load = await loadIndexAsync(s)
   return load.kind === 'unavailable' ? load.cause : null
 }
 
@@ -669,8 +754,8 @@ export function indexUnavailableMessage(cause: IndexUnavailableCause): string {
 }
 
 /** Refusal copy for an explicit rebuild while the existing index is unavailable; null when it is usable. */
-export function rebuildUnavailableError(s: Settings): string | null {
-  const cause = indexUnavailable(s)
+export async function rebuildUnavailableError(s: Settings): Promise<string | null> {
+  const cause = await indexUnavailableAsync(s)
   if (!cause) return null
   const kept = 'The index was kept, so no data was lost.'
   switch (cause) {
@@ -696,15 +781,27 @@ export async function writeIndex(s: Settings, v: BrainIndex): Promise<void> {
 // ── Typed accessors ──────────────────────────────────────────────────────────
 export const readGraph = (s: Settings): BrainGraph =>
   readJson(s, 'graph.json', (v) => BrainGraphSchema.parse(v)) ?? BrainGraphSchema.parse({})
+export const loadGraph = async (s: Settings): Promise<BrainGraph> => {
+  const loaded = await loadJson(s, 'graph.json', (v) => BrainGraphSchema.parse(v))
+  return loaded.status === 'ok' && loaded.value ? loaded.value : BrainGraphSchema.parse({})
+}
 export const writeGraph = (s: Settings, v: BrainGraph): Promise<void> => writeJson(s, 'graph.json', v)
 
 export const readMeetingExtraction = (s: Settings, fileSlug: string): MeetingExtraction | null =>
   readJson(s, join('meetings', `${fileSlug}.json`), (v) => MeetingExtractionSchema.parse(v))
+export const loadMeetingExtraction = async (s: Settings, fileSlug: string): Promise<MeetingExtraction | null> => {
+  const loaded = await loadJson(s, join('meetings', `${fileSlug}.json`), (v) => MeetingExtractionSchema.parse(v))
+  return loaded.status === 'ok' ? loaded.value : null
+}
 export const writeMeetingExtraction = (s: Settings, fileSlug: string, v: MeetingExtraction): Promise<void> =>
   writeJson(s, join('meetings', `${fileSlug}.json`), v)
 
 export const readPerson = (s: Settings, slug: string): PersonEntity | null =>
   readJson(s, join('entities', 'person', `${slug}.json`), (v) => migratePerson(PersonEntitySchema.parse(v), slug))
+export const loadPerson = async (s: Settings, slug: string): Promise<PersonEntity | null> => {
+  const loaded = await loadJson(s, join('entities', 'person', `${slug}.json`), (v) => migratePerson(PersonEntitySchema.parse(v), slug))
+  return loaded.status === 'ok' ? loaded.value : null
+}
 export const writePerson = async (s: Settings, slug: string, v: PersonEntity): Promise<void> => {
   ensureV1Backup(s)
   await writeJson(s, join('entities', 'person', `${slug}.json`), v)
@@ -714,6 +811,10 @@ export const writePerson = async (s: Settings, slug: string, v: PersonEntity): P
 
 export const readAccount = (s: Settings, slug: string): AccountEntity | null =>
   readJson(s, join('entities', 'account', `${slug}.json`), (v) => migrateAccount(AccountEntitySchema.parse(v), slug))
+export const loadAccount = async (s: Settings, slug: string): Promise<AccountEntity | null> => {
+  const loaded = await loadJson(s, join('entities', 'account', `${slug}.json`), (v) => migrateAccount(AccountEntitySchema.parse(v), slug))
+  return loaded.status === 'ok' ? loaded.value : null
+}
 export const writeAccount = async (s: Settings, slug: string, v: AccountEntity): Promise<void> => {
   ensureV1Backup(s)
   await writeJson(s, join('entities', 'account', `${slug}.json`), v)
@@ -722,10 +823,30 @@ export const writeAccount = async (s: Settings, slug: string, v: AccountEntity):
 
 export const readDeal = (s: Settings, slug: string): DealEntity | null =>
   readJson(s, join('entities', 'deal', `${slug}.json`), (v) => migrateDeal(DealEntitySchema.parse(v), slug))
+export const loadDeal = async (s: Settings, slug: string): Promise<DealEntity | null> => {
+  const loaded = await loadJson(s, join('entities', 'deal', `${slug}.json`), (v) => migrateDeal(DealEntitySchema.parse(v), slug))
+  return loaded.status === 'ok' ? loaded.value : null
+}
 export const writeDeal = async (s: Settings, slug: string, v: DealEntity): Promise<void> => {
   ensureV1Backup(s)
   await writeJson(s, join('entities', 'deal', `${slug}.json`), v)
   invalidateMatchKeyDir(join(brainDir(s), 'entities', 'deal'))
+}
+
+/**
+ * Canonical people/account NAMES ONLY, merged and deduped — feeds the renderer's ASR entity-casing bias
+ * (brain:entityNames), which refreshes opportunistically on mount, not in response to a user action. That
+ * makes this gateway-backed (M2-0031): a cloud-only or kernel-blocked entity file must be classified and
+ * skipped, never opened on the main thread, or a mount racing a stuck sync device freezes the whole app.
+ */
+export async function loadEntityDisplayNames(s: Settings): Promise<{ names: string[] }> {
+  const [personSlugs, accountSlugs] = await Promise.all([loadEntitySlugs(s, 'person'), loadEntitySlugs(s, 'account')])
+  const [people, accounts] = await Promise.all([
+    Promise.all(personSlugs.map((slug) => loadPerson(s, slug))),
+    Promise.all(accountSlugs.map((slug) => loadAccount(s, slug)))
+  ])
+  const names = [...people, ...accounts].map((entity) => entity?.name).filter((n): n is string => !!n)
+  return { names: Array.from(new Set(names)).slice(0, 500) }
 }
 
 /**
@@ -767,12 +888,21 @@ export function listEntities(s: Settings, kind: 'person' | 'account' | 'deal'): 
     .sort()
 }
 
+export async function loadEntitySlugs(s: Settings, kind: 'person' | 'account' | 'deal'): Promise<string[]> {
+  return (await listBrainNames(s, join('entities', kind)))?.filter((f) => f.endsWith('.json')).map((f) => basename(f, '.json')).sort() ?? []
+}
+
 export function listMeetingExtractions(s: Settings): string[] {
   const dir = join(brainDir(s), 'meetings')
   if (!existsSync(dir)) return []
   return readdirSync(dir)
     .filter((f) => f.endsWith('.json'))
     .map((f) => basename(f, '.json'))
+}
+
+export async function loadMeetingExtractionSlugs(s: Settings): Promise<string[] | null> {
+  const names = await listBrainNames(s, 'meetings')
+  return names?.filter((f) => f.endsWith('.json')).map((f) => basename(f, '.json')) ?? null
 }
 
 /**

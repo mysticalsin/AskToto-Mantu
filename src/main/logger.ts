@@ -164,6 +164,7 @@ export type AuditEvent =
   | 'capture.failed'
   | 'capture.check'
   | 'transcript.saved'
+  | 'writeup.span'
   | 'transcript.deleted'
   | 'transcript.renamed'
   | 'transcript.recap_edited'
@@ -250,6 +251,10 @@ export type AuditEvent =
   | 'app.recovery'
   // FITO-185-E: 15s MQA-175 callback closed the boot watch (finally), whether brain resume ran or threw.
   | 'app.boot.watch_cleared'
+  // M2-0515: one native boot stage's own main-thread duration (tray stages, window construction and first show).
+  | 'app.boot.stage'
+  // M2-0518: the boot-work gate opened ({ reason: show | fallback | immediate, held }), so no held boot job is silent.
+  | 'app.boot.work.released'
   // FITO-185-F: menu-bar Tray create succeeded/failed — hardprove AXExtrasMenuBar needs a diagnosable trail.
   | 'tray.created'
   | 'tray.failed'
@@ -266,6 +271,8 @@ export type AuditEvent =
   | 'sidecar.unsupervised'
   // M2-0215: History list request timing across renderer and main.
   | 'history.request'
+  // M2-0032: a committed navigation a History request took part in (from === to is the toggle-race no-op).
+  | 'history.transition'
   // M2-0037 (B3-RC2): render-process-gone's reload budget was exhausted (>=3 reloads within 60s with no
   // recovered 30s-alive window) — auto-reload stops and a recovery dialog is shown instead.
   | 'app.render_loop_halted'
@@ -318,6 +325,19 @@ export type AuditEvent =
   | 'hk-m.active-inference'
   | 'hk-m.ffmpeg-import'
   | 'hk-m.registry-write'
+  // M2-0460: a row's setup threw ({ row, error: <Error class name> }, never the message), and the advertised-RAM
+  // floor was lifted during an HK-M row ({ modelId, advertisedGB, requiredGB, totalmemBytes }).
+  | 'hk-m.setup-failed'
+  | 'hk-m.ram-floor-override'
+  // M2-0431: an overlay reveal parked within 2 s with no click or keypress (island/overlay-reveal-log.ts).
+  // Projected to { visibleMs, zone, placement, layout } only (infra/observability/projection.ts).
+  | 'overlay.flash'
+  // M2-0494: the packaged QA build is feeding a WAV from its isolated profile as the microphone
+  // (main/qa-capture-source.ts). { active: true } only — never the path or file name.
+  | 'qa.capture.file_source'
+  // M2-0482: the packaged, isolated-profile QA gate (qa-hk-m.ts qaHostFloorOverride) first lifted a RAM floor in this
+  // process. Once per floor: { floor: "prewarm-available-ram" | "advertised-ram", hostTotalBytes, hostAvailableBytes }.
+  | 'local.host-floor-override'
   | 'local.model.checksum_fail'
   // First-run weight download (local-model-download.ts). The weights are no longer bundled, so these
   // are the audit trail for the only network fetch installed code makes for model files.
@@ -325,6 +345,10 @@ export type AuditEvent =
   | 'local.model.download_ok'
   | 'local.model.download_fail'
   | 'screen.preprocess.describe'
+  // M2-0429: the background screen reader stopped retrying a failing capture (one line per failure streak).
+  | 'screen.preprocess.suspended'
+  // M2-0429: the user ran Repair, which resets only this app's Screen Recording entry ({ ok, exitCode }).
+  | 'permission.repair'
   // Support diagnosability: the user exported the log trail to a folder (metadata only — file count).
   | 'diagnostics.export'
   | 'llm.call'
@@ -338,6 +362,11 @@ export type AuditEvent =
   | 'operator.license.activated'
   | 'operator.license.cleared'
   | 'operator.gate.blocked'
+  // M2-0412: a fleet model policy fetched from the Operator failed schema validation or signature
+  // verification (tampered in transit, or signed with a secret this device no longer holds) and was
+  // rejected outright — the device keeps using its last known-good cached policy (or today's
+  // defaults, if it never had one). Reason only, never the raw payload.
+  | 'operator.model_policy.rejected'
 
 /** What an event may carry: an observability event only its allowlisted fields. */
 export type AuditDetail<E extends AuditEvent> = E extends ObservabilityEvent ? ObservabilityDetail<E> : Record<string, unknown>
