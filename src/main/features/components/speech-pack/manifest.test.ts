@@ -64,7 +64,11 @@ describe('speech-pack sources are immutable', () => {
     expect(isImmutableUrl('https://huggingface.co/Xenova/whisper-base/resolve/master/config.json')).toBe(false)
     expect(isImmutableUrl('https://huggingface.co/Xenova/whisper-base/resolve/feature-branch/config.json')).toBe(false)
     expect(isImmutableUrl('https://example.test/repo/refs/heads/dev/file')).toBe(false)
+    expect(isImmutableUrl('https://raw.githubusercontent.com/org/repo/main/model.onnx')).toBe(false)
+    expect(isImmutableUrl('https://github.com/org/repo/raw/feature-branch/model.onnx')).toBe(false)
     expect(isImmutableUrl(`https://huggingface.co/Xenova/whisper-base/resolve/${'a'.repeat(40)}/config.json`)).toBe(true)
+    expect(isImmutableUrl(`https://raw.githubusercontent.com/org/repo/${'b'.repeat(40)}/model.onnx`)).toBe(true)
+    expect(isImmutableUrl(`https://github.com/org/repo/raw/${'c'.repeat(40)}/model.onnx`)).toBe(true)
   })
 
   it('no declared source, and no URL built from one, names a branch', () => {

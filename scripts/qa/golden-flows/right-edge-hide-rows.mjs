@@ -17,6 +17,10 @@ export const RIGHT_EDGE_HIDE_SCENARIOS = Object.freeze([
   { id: 'RE-HIDE-6-toggle-reveals-hide', layout: 'hide' },
   { id: 'RE-HIDE-6-toggle-reveals-island', layout: 'island' },
   { id: 'RE-HIDE-7-layout-change-chrome', layout: 'hide' },
+  // M2-0202 S2: the legacy D4 rows and the RE-P01 composer hold.
+  { id: 'RE-K01-D4-edge-reveal-keeps-focus', layout: 'hide' },
+  { id: 'RE-K01-D4-toggle-focuses-composer', layout: 'hide' },
+  { id: 'RE-P01-composer-click-holds-then-parks', layout: 'hide' },
   { id: 'RE-HIDE-3-meeting-hide', layout: 'hide' },
   { id: 'RE-HIDE-4-island-meeting-leave-parks', layout: 'island' }
 ])
@@ -39,6 +43,8 @@ const RIGHT_EDGE = Object.freeze({
 const RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS = 3000
 /** Hold an off-band cursor long enough for main's polling watch to sample the leave on hosted runners. */
 export const RIGHT_EDGE_LATCH_RELEASE_SAMPLE_MS = 600
+/** Mirrors src/shared/right-edge-timing.ts RE_TYPING_PIN_MS; a unit test holds the two equal. */
+export const RIGHT_EDGE_TYPING_PIN_MS = 8000
 // Hold the parked band long enough for a late native frame change to land inside RE-HIDE-3's assertion.
 export const LATE_NATIVE_FRAME_HOLD_MS = 500
 const MEETING_UNBLOCK =
@@ -267,27 +273,32 @@ export function rightEdgePageChromeState({ rootOpen, drawerAriaHidden, tabAriaEx
   return { drawer, rail: !drawer && tabAriaExpanded === 'false' }
 }
 
+/**
+ * Page chrome from the `data-re-surface` hook the right-edge root carries (M2-0202): the open drawer while it
+ * reads 'island' and the drawer is not aria-hidden, the rest (the rail tab, or under Hide the band) while it
+ * reads 'rest'. No surface means no right-edge root is mounted.
+ */
+export function rightEdgePageSurfaceState({ surface, drawerAriaHidden }) {
+  const drawer = surface === 'island' && drawerAriaHidden !== 'true'
+  return { drawer, rail: !drawer && surface === 'rest' }
+}
+
 async function rightEdgePageState(page) {
-  return page.evaluate(() => {
-    const input = document.querySelector('.right-edge-sidecar__chat-input')
-    const root = document.querySelector('.right-edge-sidecar')
-    const drawerElement = document.querySelector('.right-edge-sidecar__drawer')
-    const tab = document.querySelector('.right-edge-sidecar__tab')
-    const rootOpen = root?.classList.contains('right-edge-sidecar--open') === true
-    const drawerAriaHidden = drawerElement?.getAttribute('aria-hidden') ?? null
-    const tabAriaExpanded = tab?.getAttribute('aria-expanded') ?? null
-    const drawer = rootOpen === true && drawerAriaHidden !== 'true'
-    const rail = !drawer && tabAriaExpanded === 'false'
+  const raw = await page.evaluate(() => {
+    const root = document.querySelector('[data-re-surface]')
+    const input = root?.querySelector('input[aria-label="Ask Métis anything"]') ?? null
+    const drawerElement = root?.querySelector('[role="complementary"]') ?? null
     return {
-      dock: root !== null,
-      drawer,
-      rail: tab !== null && rail,
+      surface: root?.getAttribute('data-re-surface') ?? null,
+      drawerAriaHidden: drawerElement?.getAttribute('aria-hidden') ?? null,
       hideControl: document.querySelector('button[aria-label="Hide Métis"]') !== null,
       meetingLive: document.querySelector('[aria-label="Meeting controls"]') !== null,
       composerFocused: input !== null && document.activeElement === input,
       draft: input instanceof HTMLInputElement ? input.value : null
     }
   })
+  const { surface, drawerAriaHidden, ...rest } = raw
+  return { dock: surface !== null, ...rightEdgePageSurfaceState({ surface, drawerAriaHidden }), ...rest }
 }
 
 /**
@@ -562,6 +573,55 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     await setLayout('hide')
     const hide = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', 'hide'), 3_000)
     return { pass: island.ok && hide.ok, evidence: { island: summarize(island.observed), hide: summarize(hide.observed) } }
+  })
+
+  const blurPage = () => page.evaluate(() => document.activeElement?.blur?.())
+
+  // D4: a hover reveal is not an explicit open, so it never takes focus from what the user was typing in.
+  await step('RE-K01-D4-edge-reveal-keeps-focus', async () => {
+    await park('hide')
+    await blurPage()
+    const revealed = await revealAtEdge()
+    await wait(300)
+    const after = await observe()
+    return {
+      pass: revealed.page.composerFocused === false && after.page.composerFocused === false,
+      evidence: { revealed: summarize(revealed), composerFocusedAtReveal: revealed.page.composerFocused, composerFocusedAfter300ms: after.page.composerFocused }
+    }
+  })
+
+  // D4: the toggle is an explicit open: the composer has focus when the drawer is revealed.
+  await step('RE-K01-D4-toggle-focuses-composer', async () => {
+    await park('hide')
+    await blurPage()
+    await bridge('toggle')
+    const revealed = await waitUntil((o) => rightEdgeStateMatches(o, 'revealed') && o.page.composerFocused, 3_000)
+    return { pass: revealed.ok, evidence: { revealed: summarize(revealed.observed), composerFocused: revealed.observed.page.composerFocused, ms: revealed.ms } }
+  })
+
+  // RE-P01 (the D2 amendment): a click into an empty composer is a keystroke. The pointer then leaves: the
+  // typing pin holds the dock open RIGHT_EDGE_TYPING_PIN_MS, then it parks. Unpinned, the same leave parks
+  // within about 1.3 s (RE-HIDE-4).
+  await step('RE-P01-composer-click-holds-then-parks', async () => {
+    await park('hide')
+    const revealed = await revealAtEdge()
+    await composer().fill('')
+    await composer().click({ timeout: 5_000 })
+    const clickedAt = Date.now()
+    // Let the page report the pin to main before the pointer leaves.
+    await wait(150)
+    await leaveTo(awayPoint(revealed.win), 100)
+    await wait(2_000)
+    const held = await observe()
+    const heldOpen = rightEdgeStateMatches(held, 'revealed')
+    const parked = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', 'hide'), RIGHT_EDGE_TYPING_PIN_MS + 4_000)
+    const parkedAfterMs = Date.now() - clickedAt
+    // A 500 ms allowance below the pin covers the click's own round trip before clickedAt was read.
+    const heldForPin = parkedAfterMs >= RIGHT_EDGE_TYPING_PIN_MS - 500
+    return {
+      pass: heldOpen && parked.ok && heldForPin,
+      evidence: { heldOpenAfterLeave: heldOpen, held: summarize(held), parked: summarize(parked.observed), parkedAfterMs }
+    }
   })
 
   // Meeting rows run last: a started meeting changes the page for everything after it.

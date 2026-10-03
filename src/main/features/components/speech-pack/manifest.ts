@@ -114,9 +114,19 @@ export function componentBytes(component: SpeechPackComponent): number {
 
 /** A URL that names a branch can serve different bytes tomorrow; refuse it before the network is touched. */
 export function isImmutableUrl(url: string): boolean {
-  if (/refs\/heads\//i.test(url)) return false
-  const repositoryPath = /\/(resolve|blob|raw|tree)\/([^/?#]+)/i.exec(url)
-  return repositoryPath ? /^[0-9a-f]{40}$/i.test(repositoryPath[2]) : true
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return false
+  }
+  if (/\/refs\/heads\//i.test(parsed.pathname)) return false
+  const parts = parsed.pathname.split('/').filter(Boolean)
+  if (parsed.hostname === 'raw.githubusercontent.com') {
+    return parts.length >= 4 && /^[0-9a-f]{40}$/i.test(parts[2])
+  }
+  const repositoryToken = parts.findIndex((part) => /^(resolve|blob|raw|tree)$/i.test(part))
+  return repositoryToken >= 0 ? /^[0-9a-f]{40}$/i.test(parts[repositoryToken + 1] ?? '') : true
 }
 
 /** Where one pinned file is fetched from, or null when the source pin has not been recorded. */

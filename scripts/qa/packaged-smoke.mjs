@@ -46,7 +46,10 @@
  * (`runRightEdgeHideRows`). They drive main's cursor watch by stubbing `screen.getCursorScreenPoint` in the
  * main process, reached through the Node inspector the launch opens on a loopback port
  * (`--inspect=127.0.0.1:<port>`), and capture click-through by wrapping `setIgnoreMouseEvents`. Rows that
- * need a live meeting report BLOCKED_EXTERNAL when the hosted runner cannot start one.
+ * need a live meeting report BLOCKED_EXTERNAL when the hosted runner cannot start one. They read the page
+ * through its `data-re-surface` hook (M2-0202), never the sidecar's class names. The same run carries the
+ * legacy D4 rows (RE-K01-D4-*: an edge reveal never focuses the composer, the toggle does) and the RE-P01
+ * row (a click into the empty composer holds the dock 8 s after the pointer leaves, then it parks).
  *
  * Usage: node scripts/qa/packaged-smoke.mjs <installed app> <report.json>
  */
@@ -90,6 +93,7 @@ export {
   framesAboveWorkArea,
   initialRightEdgeHideRows,
   rightEdgePageChromeState,
+  rightEdgePageSurfaceState,
   rightEdgeExpectedRects,
   rightEdgeHideParkMatches,
   rightEdgeMeetingHideVerdict,

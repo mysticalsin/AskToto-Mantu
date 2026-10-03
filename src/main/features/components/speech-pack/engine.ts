@@ -241,8 +241,12 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
   // --- one install ---
   async function install(c: SpeechPackComponent, signal: AbortSignal): Promise<void> {
     if ((await hasMarker(c)) && (await exists(finalDir(c)))) {
-      set(c.id, { status: 'ready' })
-      return
+      if (await dirVerified(c, finalDir(c))) {
+        set(c.id, { status: 'ready' })
+        return
+      }
+      await rm(markerPath(c), { force: true })
+      await rm(finalDir(c), { recursive: true, force: true })
     }
     const staging = stagingDir(c)
     const work = workDir(c)

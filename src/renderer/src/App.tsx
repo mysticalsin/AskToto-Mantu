@@ -60,8 +60,9 @@ import {
   parseOverlayLayout,
   shouldForceParkOnBecameIdle
 } from '@shared/overlay-chrome'
-import { parseOverlayPlacement } from '@shared/overlay-placement'
 import { resolveOverlayPresentation } from '@shared/overlay-presentation'
+import type { RightEdgeSurfaceState } from '@shared/right-edge-state'
+import { createAttentionLatch, useRightEdgePins } from './lib/right-edge/pins'
 import type { RendererView } from '@shared/renderer-view'
 import {
   decideCircleRestMinimize,
@@ -666,12 +667,18 @@ export function App(): JSX.Element {
   // it, then reveals the full bar on hover or on an important event. Reveal/collapse are PURE content
   // resizes of the always-on-top window (never show()/focus()), so the user's foreground app keeps focus
   // — the non-activating notch contract. The pure state machine lives in lib/overlay-autohide.ts.
+  // D8b: the placement is main's (IPC.rightEdgeSurface), never the raw preference: a work area too small for
+  // the right edge (RE-G09) renders top-center here exactly as main places it.
+  const [rightEdgeSurface, setRightEdgeSurface] = useState<RightEdgeSurfaceState | null>(null)
+  useEffect(() => window.toto.onRightEdgeSurface?.(setRightEdgeSurface), [])
   const overlayPresentation = resolveOverlayPresentation({
-    placement: parseOverlayPlacement(settings?.overlayPlacement),
+    placement: rightEdgeSurface !== null && rightEdgeSurface.surface !== 'top-center' ? 'right-edge' : 'top-center',
     layout: parseOverlayLayout(settings?.overlayLayout)
   })
   const overlayLayout = overlayPresentation.layout
   const rightEdgePresentation = overlayPresentation.surface === 'edge-chat'
+  const rightEdge = useRightEdgePins({ approvalPending: rightEdgePresentation && commandState.proposalId !== null })
+  const rightEdgePins = rightEdgePresentation ? rightEdge.pins : []
   const overlayOrbStyle = parseOverlayOrbStyle(settings?.overlayOrbStyle)
   const canMinimize = overlayAllowsMinimize(overlayLayout)
   const showBarOrb = overlayShowsBarOrb(overlayLayout, minimized)
@@ -690,7 +697,7 @@ export function App(): JSX.Element {
     updateReady: updateReady.open,
     toast: newMeetingToast || consentReminderOpen || !!visibilityToast || !!openMeetingError || !!operatorGateNotice,
     typedInput: input.trim().length > 0
-  })
+  }) || rightEdgePins.length > 0
   const [autoHide, dispatchAutoHide] = useReducer(reduceAutoHide, autoHideSetting, initialAutoHideState)
   // The user may hand a right-edge session to the standalone Intelligence window while a draft or an
   // important notice keeps the generic auto-hide machine forced open. Keep that state and the draft
@@ -716,14 +723,16 @@ export function App(): JSX.Element {
     }
     parkOverlayAfterHide(force)
   }, [rightEdgePresentation])
+  const imeComposing = rightEdgePins.includes('ime')
   const closeRightEdgeDock = useCallback((): void => {
+    if (imeComposing) return // the IME owns the keyboard until it commits or cancels
     rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'explicit-close' })
     forceParkAfterHideRef.current = true
     setRightEdgeDockDismissed(true)
     dispatchAutoHide({ type: 'collapse-now' })
     // Auto-hide is off while a capture runs, so no exit spring will request this park: request it now.
     if (!overlayIdle) parkCurrentOverlayAfterHide()
-  }, [overlayIdle, parkCurrentOverlayAfterHide])
+  }, [imeComposing, overlayIdle, parkCurrentOverlayAfterHide])
   useEffect(() => {
     dispatchAutoHide({ type: 'set-enabled', enabled: overlayIdle })
   }, [overlayIdle])
@@ -910,6 +919,22 @@ export function App(): JSX.Element {
       }
     })
   }, [rightEdgePresentation])
+  // Main gates its parks on these pins and answers with its surface; a settings change re-reads it.
+  const reportedSurface = rightEdgePresentation ? (overlayPeeked ? 'rest' : 'island') : 'top-center'
+  const rightEdgePinsKey = rightEdgePins.join(',')
+  useEffect(() => {
+    const pins = rightEdgePinsKey ? (rightEdgePinsKey.split(',') as typeof rightEdgePins) : []
+    const contentHeight = rootElementRef.current?.scrollHeight ?? 0
+    void window.toto.reportRightEdgeState?.({ surface: reportedSurface, contentHeight, pins }).then(setRightEdgeSurface, () => undefined)
+  }, [reportedSurface, rightEdgePinsKey, settings?.overlayPlacement, settings?.overlayLayout])
+  // An attention item reveals the parked dock once per item, past an explicit Hide's dismissal lock.
+  const attentionDueRef = useRef(createAttentionLatch())
+  useEffect(() => {
+    if (!rightEdgePresentation || !attentionDueRef.current(commandState.proposalId)) return
+    rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'explicit-reveal' })
+    setRightEdgeDockDismissed(false)
+    dispatchAutoHide({ type: 'reveal-now' })
+  }, [commandState.proposalId, rightEdgePresentation])
 
   // Idempotence latch for endReview() re-entry — see endReview's own comment for the exact hazard it
   // guards against. Cleared at the start of every fresh session (startListen) so a later stop can fire.
@@ -3249,7 +3274,7 @@ export function App(): JSX.Element {
   }
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape' || e.isComposing) return // don't interrupt IME composition
+      if (e.key !== 'Escape' || e.isComposing || e.keyCode === 229) return // D11: the IME owns Escape mid-composition
       e.preventDefault()
       escapeRef.current()
     }
@@ -4072,6 +4097,8 @@ export function App(): JSX.Element {
               onChange={setInput}
               onSubmit={submit}
               onStop={onStop}
+              onComposerActivity={rightEdge.noteComposerActivity}
+              onComposingChange={rightEdge.setComposing}
               busy={capturing || ask.answer?.streaming === true || suggest.answer?.streaming === true}
               stoppable={ask.answer?.streaming === true || suggest.answer?.streaming === true}
               body={barBody}

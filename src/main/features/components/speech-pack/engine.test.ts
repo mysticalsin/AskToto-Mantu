@@ -413,6 +413,24 @@ describe('speech-pack engine', () => {
       expect(existsSync(marker(WHISPER))).toBe(false)
       expect(existsSync(join(root, WHISPER, '1'))).toBe(false)
     })
+
+    it('does not trust a corrupt active marker when enqueue is called before initialise', async () => {
+      server = await serveFiles()
+      const c = whisper(server.base)
+      const first = make([c])
+      first.enqueue([WHISPER])
+      await first.whenIdle()
+      writeFileSync(join(root, WHISPER, '1', 'a.bin'), randomBytes(30_000))
+      const before = server.requests.length
+
+      const next = make([c])
+      next.enqueue([WHISPER])
+      await next.whenIdle()
+      expect(next.getState(WHISPER)).toEqual({ status: 'ready' })
+      expect(packMatches(c, join(root, WHISPER, '1'))).toBe(true)
+      expect(existsSync(marker(WHISPER))).toBe(true)
+      expect(server.requests.length).toBeGreaterThan(before)
+    })
   })
 
   describe('events', () => {
