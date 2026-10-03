@@ -9,8 +9,8 @@
   ],
   "shots": [
     {
-      "id": "SH-01L",
-      "scene_id": "LF-01",
+      "id": "SH-03L",
+      "scene_id": "LF-03",
       "form": "live",
       "duration_seconds": 6,
       "framing": "Full-screen 3840x2160 capture, overlay docked at the top edge beside a synthetic meeting workspace.",
@@ -19,18 +19,18 @@
       "required_evidence_level": "LIVE_VERIFIED"
     },
     {
-      "id": "SH-01C",
-      "scene_id": "LF-01",
+      "id": "SH-03C",
+      "scene_id": "LF-03",
       "form": "concept",
       "duration_seconds": 6,
-      "framing": "Designed render at 3840x2160 with the same layout as SH-01L.",
-      "action": "Same motion as SH-01L, with the concept label held on screen throughout.",
+      "framing": "Designed render at 3840x2160 with the same layout as SH-03L.",
+      "action": "Same motion as SH-03L, with the concept label held on screen throughout.",
       "prerequisites": "Designed overlay frames; no product capture needed.",
       "required_evidence_level": "DESIGNED"
     },
     {
-      "id": "SH-02L",
-      "scene_id": "LF-02",
+      "id": "SH-04L",
+      "scene_id": "LF-04",
       "form": "live",
       "duration_seconds": 8,
       "framing": "Full-screen capture with the overlay and its notes panel in frame.",
@@ -39,18 +39,18 @@
       "required_evidence_level": "LIVE_VERIFIED"
     },
     {
-      "id": "SH-02C",
-      "scene_id": "LF-02",
+      "id": "SH-04C",
+      "scene_id": "LF-04",
       "form": "concept",
       "duration_seconds": 8,
       "framing": "Designed render with a synthetic dialogue strip beside a notes panel.",
-      "action": "Same beat as SH-02L, with the reconstruction label held on screen throughout.",
+      "action": "Same beat as SH-04L, with the reconstruction label held on screen throughout.",
       "prerequisites": "Designed frames and the synthetic dialogue script; no product capture needed.",
       "required_evidence_level": "DESIGNED"
     },
     {
-      "id": "SH-03L",
-      "scene_id": "LF-03",
+      "id": "SH-05L",
+      "scene_id": "LF-05",
       "form": "live",
       "duration_seconds": 8,
       "framing": "Full-screen capture with the Hindsight panel open over the synthetic workspace.",
@@ -59,13 +59,33 @@
       "required_evidence_level": "LIVE_VERIFIED"
     },
     {
-      "id": "SH-03C",
-      "scene_id": "LF-03",
+      "id": "SH-05C",
+      "scene_id": "LF-05",
       "form": "concept",
       "duration_seconds": 8,
-      "framing": "Designed render of the Hindsight panel with the same layout as SH-03L.",
-      "action": "Same question and bounded answer as SH-03L, with the concept memory label held on screen throughout.",
+      "framing": "Designed render of the Hindsight panel with the same layout as SH-05L.",
+      "action": "Same question and bounded answer as SH-05L, with the concept memory label held on screen throughout.",
       "prerequisites": "Designed frames and the synthetic question and answer text; no product capture needed.",
+      "required_evidence_level": "DESIGNED"
+    },
+    {
+      "id": "SH-06L",
+      "scene_id": "LF-06",
+      "form": "live",
+      "duration_seconds": 6,
+      "framing": "Full-screen capture with the overlay action panel open over the synthetic workspace.",
+      "action": "A synthetic follow-up question is answered inside the overlay.",
+      "prerequisites": "rc1 installed on a clean profile; synthetic workspace and approved prompt loaded.",
+      "required_evidence_level": "LIVE_VERIFIED"
+    },
+    {
+      "id": "SH-06C",
+      "scene_id": "LF-06",
+      "form": "concept",
+      "duration_seconds": 6,
+      "framing": "Designed render of the same follow-up answer in the overlay.",
+      "action": "Same beat as SH-06L, with the concept label held on screen throughout.",
+      "prerequisites": "Designed frames and synthetic prompt text; no product capture needed.",
       "required_evidence_level": "DESIGNED"
     }
   ]
