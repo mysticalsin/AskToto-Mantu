@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { IPC } from '../../src/shared/ipc'
 import { HISTORY_DEGRADED_MS as RENDERER_DEGRADED_MS } from '../../src/renderer/src/components/history/list-status'
 import { NOT_DOWNLOADED_TEXT, UNAVAILABLE_TEXT } from '../../src/renderer/src/components/history/hydration'
+import { driveState, STATE_TIMEOUT_MS } from './history-design-capture.mjs'
 import {
   BACKDROPS,
   BLOCKED_EXTERNAL_ROWS,
@@ -99,6 +100,64 @@ describe('History design matrix (M2-0032)', () => {
     expect(listAnswer('pending', real, 0)).toEqual({ kind: 'pending' })
     expect(listAnswer('failed', real, 0)).toEqual({ kind: 'failed' })
     expect(() => listAnswer('bogus', real, 0)).toThrow(/unknown list mode/)
+  })
+
+  it('anchors the slow search degraded cue to the search request, not the typed character', async () => {
+    const state = HISTORY_DESIGN_STATES.find((candidate) => candidate.id === 'slow-with-rows')!
+    const calls: string[] = []
+    const history = { requests: 0, requestedAt: 0 }
+    let searchFillPending = false
+    let searchRequestSeen = false
+
+    const main = vi.fn(async (expression: string) => {
+      if (expression === 'globalThis.__historyDesign.requests') return history.requests
+      if (expression.includes('requests, requestedAt')) return { ...history }
+      return true
+    })
+    const noteRequest = (requestedAt: number) => {
+      history.requests += 1
+      history.requestedAt = requestedAt
+    }
+    const wait = vi.fn(async () => {
+      if (searchFillPending && !searchRequestSeen) {
+        searchRequestSeen = true
+        noteRequest(2200)
+      }
+    })
+    const page = {
+      getByText: vi.fn((text: string) => ({
+        first: () => ({
+          waitFor: vi.fn(async () => {
+            calls.push(`text:${text}`)
+          })
+        })
+      })),
+      getByRole: vi.fn((role: string) => ({
+        filter: ({ hasText }: { hasText: string }) => ({
+          first: () => ({
+            waitFor: vi.fn(async ({ timeout }: { timeout: number }) => {
+              calls.push(`role:${role}:${hasText}:${timeout}`)
+              expect(searchRequestSeen).toBe(true)
+            })
+          })
+        })
+      })),
+      getByLabel: vi.fn(() => ({
+        fill: vi.fn(async () => {
+          searchFillPending = true
+        })
+      }))
+    }
+
+    const drive = await driveState(page as never, main as never, state, [{ title: 'Quarterly planning sample' }], {
+      wait,
+      ensureIdleBar: async () => undefined,
+      clickHistory: async () => noteRequest(1000)
+    })
+
+    expect(drive.requestedAt).toBe(2200)
+    expect(wait).toHaveBeenCalled()
+    expect(calls).toContain(`role:status:OneDrive is slow to answer:${STATE_TIMEOUT_MS}`)
   })
 
   it("uses the real window size with only the variant's device scale overridden", () => {
