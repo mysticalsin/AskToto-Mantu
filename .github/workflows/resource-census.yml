@@ -212,6 +212,11 @@ jobs:
             fi
             node "${args[@]}"
           done
+          METIS_QA_PROFILE="$RUNNER_TEMP/metis-census-parked-profile" node scripts/qa/census/run.mjs \
+            --state parked-idle \
+            --seconds 300 \
+            --app "$RUNNER_TEMP/resource-census-install/Metis.app" \
+            --output census-output/darwin-parked-idle.json
           METIS_QA_PROFILE="$RUNNER_TEMP/metis-census-trace-profile" node scripts/qa/census/run.mjs \
             --state settled-idle \
             --seconds 1 \
@@ -220,11 +225,6 @@ jobs:
             --trace-scenario parked-bar-orb \
             --trace-scenario backdrop-filter \
             --trace-scenario threejs-obsidian-orb
-          METIS_QA_PROFILE="$RUNNER_TEMP/metis-census-parked-profile" node scripts/qa/census/run.mjs \
-            --state parked-idle \
-            --seconds 300 \
-            --app "$RUNNER_TEMP/resource-census-install/Metis.app" \
-            --output census-output/darwin-parked-idle.json
       - name: Compare with baseline run
         if: always() && inputs.baseline_run != '' && steps.source.outputs.source != ''
         env:

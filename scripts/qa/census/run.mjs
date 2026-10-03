@@ -242,17 +242,30 @@ async function findOverlayPage(browser) {
   return null
 }
 
-async function captureRendererTrace({ cdpUrl, scenarios, outputDir }) {
+export async function captureRendererTrace({
+  cdpUrl,
+  scenarios,
+  outputDir,
+  connectOverCDP,
+  sleepFn = sleep,
+  now = () => new Date().toISOString()
+}) {
   if (!cdpUrl || scenarios.length === 0) return { captured: false, scenarios: [] }
-  const { chromium } = await import('playwright')
-  const browser = await chromium.connectOverCDP(cdpUrl, { timeout: 30_000 })
+  const connect =
+    connectOverCDP ??
+    (async (url, options) => {
+      const { chromium } = await import('playwright')
+      return chromium.connectOverCDP(url, options)
+    })
+  const browser = await connect(cdpUrl, { timeout: 30_000 })
   const captured = []
+  const failures = []
   try {
     let page = null
     const deadline = Date.now() + 30_000
     while (!page && Date.now() < deadline) {
       page = await findOverlayPage(browser)
-      if (!page) await sleep(500)
+      if (!page) await sleepFn(500)
     }
     if (!page) throw new Error('no overlay renderer exposing window.toto')
 
@@ -262,33 +275,40 @@ async function captureRendererTrace({ cdpUrl, scenarios, outputDir }) {
       const proofPath = join(outputDir, `${scenario}.proof.json`)
       writeJson(proofPath, {
         scenario,
-        observedAt: new Date().toISOString(),
+        observedAt: now(),
         proof
       })
-      if (!proof?.ok) throw new Error(`${rendererProbeFailureMessage(scenario, proof)}; proof: ${proofPath}`)
-      const session = await page.context().newCDPSession(page)
-      await session.send('Tracing.start', {
-        categories: 'devtools.timeline,disabled-by-default-devtools.timeline,blink.user_timing,gpu',
-        transferMode: 'ReturnAsStream'
-      })
-      await sleep(10_000)
-      const complete = new Promise((resolve) => {
-        session.once('Tracing.tracingComplete', resolve)
-      })
-      await session.send('Tracing.end')
-      const event = await complete
-      let trace = ''
-      let eof = false
-      while (!eof) {
-        const chunk = await session.send('IO.read', { handle: event.stream })
-        trace += chunk.data ?? ''
-        eof = Boolean(chunk.eof)
+      try {
+        if (!proof?.ok) throw new Error(rendererProbeFailureMessage(scenario, proof))
+        const session = await page.context().newCDPSession(page)
+        await session.send('Tracing.start', {
+          categories: 'devtools.timeline,disabled-by-default-devtools.timeline,blink.user_timing,gpu',
+          transferMode: 'ReturnAsStream'
+        })
+        await sleepFn(10_000)
+        const complete = new Promise((resolve) => {
+          session.once('Tracing.tracingComplete', resolve)
+        })
+        await session.send('Tracing.end')
+        const event = await complete
+        let trace = ''
+        let eof = false
+        while (!eof) {
+          const chunk = await session.send('IO.read', { handle: event.stream })
+          trace += chunk.data ?? ''
+          eof = Boolean(chunk.eof)
+        }
+        await session.send('IO.close', { handle: event.stream }).catch(() => {})
+        const path = join(outputDir, `${scenario}.trace.json`)
+        mkdirSync(dirname(path), { recursive: true })
+        writeJson(path, JSON.parse(trace))
+        captured.push({ scenario, path, proofPath })
+      } catch (error) {
+        failures.push(`${error?.message ?? error}; proof: ${proofPath}`)
       }
-      await session.send('IO.close', { handle: event.stream }).catch(() => {})
-      const path = join(outputDir, `${scenario}.trace.json`)
-      mkdirSync(dirname(path), { recursive: true })
-      writeJson(path, JSON.parse(trace))
-      captured.push({ scenario, path, proofPath })
+    }
+    if (failures.length > 0) {
+      throw new Error(`renderer trace capture failed for ${failures.length} scenario(s): ${failures.join(' | ')}`)
     }
   } finally {
     await browser.close().catch(() => {})
@@ -322,7 +342,8 @@ async function main() {
   if (args.auditCounts && !profile) throw new Error('--audit-counts requires --profile or METIS_QA_PROFILE')
   if (!(checkpointMinutes > 0)) throw new Error('--checkpoint-minutes must be positive')
   if (state === 'parked-idle') validateParkedIdleProfile(profile)
-  if (args.traceScenarios.length > 0 && profile) {
+  if (args.traceScenarios.length > 0) {
+    if (!profile) throw new Error('trace scenarios require --profile or METIS_QA_PROFILE')
     validateTraceProfileCompatibility({
       profileSettings: readProfileSettings(profile),
       scenarios: args.traceScenarios
