@@ -409,7 +409,7 @@ export function releaseNotes({ provenance, evidence, promotionRunUrl, residuals 
   const macSigning =
     macBuild.signing.mode === 'qa-identity'
       ? `The macOS app is signed with the program's self-signed QA certificate (SHA-1 \`${macBuild.signing.certificate_sha1}\`), not a Developer ID, and it is not notarized.`
-      : 'The macOS app is ad-hoc signed and not notarized. After installing, grant Screen Recording and Microphone again once in System Settings → Privacy & Security, because macOS treats an ad-hoc build as a new app (Métis Settings → Repair helps).'
+      : 'The macOS app is ad-hoc signed and not notarized. After installing, grant Screen Recording and Microphone again once in System Settings > Privacy & Security, because macOS treats an ad-hoc build as a new app (Métis Settings > Repair helps).'
 
   const residualsSection = residuals === undefined ? '' : `## Residual risks and known limits\n\n${residuals}\n\n`
 

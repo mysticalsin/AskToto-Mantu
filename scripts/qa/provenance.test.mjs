@@ -725,7 +725,8 @@ test('release notes state version, commit, candidate run, promotion run, not-Lat
     assert.ok(!notes.includes(qaAsset.name), 'the QA-identity asset is never promoted, so it must not appear')
 
     assert.ok(notes.includes('ad-hoc signed and not notarized'))
-    assert.ok(notes.includes('grant Screen Recording and Microphone again once in System Settings'))
+    assert.ok(notes.includes('grant Screen Recording and Microphone again once in System Settings > Privacy & Security'))
+    assert.ok(notes.includes('Métis Settings > Repair helps'))
     assert.ok(notes.includes('treats an ad-hoc build as a new app'))
 
     const qaSigned = JSON.parse(JSON.stringify(provenance))
