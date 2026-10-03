@@ -113,6 +113,7 @@ function hostedStubs(root: string, { sampleFails = false, secondLaunchKillsFirst
   const sampleLog = join(root, 'sampled-pids.txt')
   const openLog = join(root, 'open-calls.txt')
   const firstPid = join(root, 'first-app-pid.txt')
+  const secondPid = join(root, 'second-app-pid.txt')
   writeExecutable(app, `#!/usr/bin/env bash\nfor arg in "$@"; do [ "$arg" = "-e" ] && exit 0; done\nprintf '%s\\n' "$$" > '${bashPath(firstPid)}'\nexec sleep 120\n`)
   writeExecutable(join(root, 'sample'), sampleFails
     ? '#!/usr/bin/env bash\nexit 1\n'
@@ -120,23 +121,34 @@ function hostedStubs(root: string, { sampleFails = false, secondLaunchKillsFirst
   writeExecutable(join(root, 'open'), [
     '#!/usr/bin/env bash',
     `printf '%s\\n' "$*" >> '${bashPath(openLog)}'`,
+    'second=false',
+    'for arg in "$@"; do [ "$arg" = "-n" ] && second=true; done',
+    `if [ "$second" = true ]; then (exec -a '${bashPath(app)}' sleep 120) & printf '%s\\n' "$!" > '${bashPath(secondPid)}'; fi`,
     secondLaunchKillsFirst
       ? `case " $* " in *" -n "*) [ ! -s '${bashPath(firstPid)}' ] || kill -9 "$(cat '${bashPath(firstPid)}')" 2>/dev/null || true ;; esac`
       : ':',
     ''
   ].join('\n'))
-  writeExecutable(join(bin, 'pgrep'), `#!/usr/bin/env bash\nprintf '%s\\n' ${Object.keys(CHILD_ROLES).join(' ')}\n`)
+  writeExecutable(join(bin, 'pgrep'), [
+    '#!/usr/bin/env bash',
+    'case " $* " in',
+    `  *" -P "*) printf '%s\\n' ${Object.keys(CHILD_ROLES).join(' ')} ;;`,
+    `  *" -f "*) [ -s '${bashPath(secondPid)}' ] && kill -0 "$(cat '${bashPath(secondPid)}')" 2>/dev/null && cat '${bashPath(secondPid)}' ;;`,
+    'esac',
+    ''
+  ].join('\n'))
   writeExecutable(join(bin, 'ps'), [
     '#!/usr/bin/env bash',
     'pid=""',
     'while [ $# -gt 0 ]; do [ "$1" = "-p" ] && pid=$2; shift; done',
+    `if [ -s '${bashPath(secondPid)}' ] && [ "$pid" = "$(cat '${bashPath(secondPid)}')" ]; then printf '%s\\n' '${bashPath(app)}'; exit 0; fi`,
     'case "$pid" in',
     ...Object.entries(CHILD_ROLES).map(([pid, command]) => `  ${pid}) printf '%s\\n' '${command}' ;;`),
     '  *) exit 1 ;;',
     'esac',
     ''
   ].join('\n'))
-  return { app, bin, sampleLog, openLog }
+  return { app, bin, sampleLog, openLog, secondPid }
 }
 
 function hostedWindowsStubs(root: string, { secondLaunchFails = false } = {}) {
@@ -644,11 +656,25 @@ describe('M2-0462 hosted-live mode', () => {
         automatic: true,
         operator_result: 'pass',
         first_instance: { state_after_second_launch: 'main-exited' },
-        second_instance: { launch_status: 'open-exited-zero' },
+        second_instance: { launch_status: 'open-exited-zero', state: 'running', stop_status: 'stopped' },
         relaunched_after_first_exit: true
       })
+      const recordedSecondPid = Number(row4?.second_instance?.pid)
+      expect(recordedSecondPid).toBeGreaterThan(0)
+      let secondStillRunning = true
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        try {
+          process.kill(recordedSecondPid, 0)
+        } catch {
+          secondStillRunning = false
+          break
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+      if (secondStillRunning) process.kill(recordedSecondPid, 'SIGTERM')
+      expect(secondStillRunning).toBe(false)
       expect(matrix.find((entry) => entry.row === 'row-4-second-instance-reopen' && entry.event === 'main_exited'))
-        .toMatchObject({ signal: 'KILL', when: 'after-second-instance-launch' })
+        .toMatchObject({ signal: 'KILL', when: 'after-second-instance-launch', observed_exit_by_ms: expect.any(Number) })
       expect(matrix.find((entry) => entry.row === 'row-4-second-instance-reopen' && 'sampled' in entry))
         .toMatchObject({ sampled: true, main_sample: true, renderer_samples: 1 })
       expect(JSON.parse(readFileSync(join(out, 'M2-0008.evidence-import.json'), 'utf8')))

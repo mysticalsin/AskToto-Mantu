@@ -265,6 +265,14 @@ stop_app() {
   fi
 }
 
+stop_second_instance() {
+  if [[ -n "${SECOND_INSTANCE_PID:-}" ]]; then
+    kill "$SECOND_INSTANCE_PID" >/dev/null 2>&1 || true
+    wait "$SECOND_INSTANCE_PID" >/dev/null 2>&1 || true
+    SECOND_INSTANCE_PID=""
+  fi
+}
+
 app_job_running() {
   local pid=$1
   [[ -n "$pid" ]] || return 1
@@ -289,26 +297,45 @@ record_main_exit_observation() {
   local row=$1
   local pid=$2
   local when=$3
-  local observed_ms status exit_code_json signal_json
+  local observed_exit_by_ms status exit_code_json signal_json wait_status_unavailable_json
   PROCESS_OBSERVATION_JSON=""
   [[ -n "$pid" ]] || return 1
   app_job_running "$pid" && return 1
-  observed_ms=$(epoch_ms)
+  observed_exit_by_ms=$(epoch_ms)
   status=0
   wait "$pid" >/dev/null 2>&1 || status=$?
   exit_code_json=null
   signal_json=null
+  wait_status_unavailable_json=false
   if (( status >= 128 )); then
     signal_json=$(json_string "$(signal_name_for_status "$status")")
+  elif (( status == 127 )); then
+    wait_status_unavailable_json=true
   else
     exit_code_json=$status
   fi
-  PROCESS_OBSERVATION_JSON="{\"row\":$(json_string "$row"),\"event\":\"main_exited\",\"main_pid\":$pid,\"observed_ms\":$observed_ms,\"when\":$(json_string "$when"),\"wait_status\":$status,\"exit_code\":$exit_code_json,\"signal\":$signal_json}"
+  PROCESS_OBSERVATION_JSON="{\"row\":$(json_string "$row"),\"event\":\"main_exited\",\"main_pid\":$pid,\"observed_exit_by_ms\":$observed_exit_by_ms,\"observed_ms\":$observed_exit_by_ms,\"when\":$(json_string "$when"),\"wait_status\":$status,\"wait_status_unavailable\":$wait_status_unavailable_json,\"exit_code\":$exit_code_json,\"signal\":$signal_json}"
   append_jsonl "$OUT/matrix.jsonl" "$PROCESS_OBSERVATION_JSON"
   if [[ "${APP_PID:-}" == "$pid" ]]; then
     APP_PID=""
   fi
   return 0
+}
+
+find_second_instance_pid() {
+  local first_pid=$1
+  local pid command
+  local exe_base
+  exe_base=$(basename "$EXE")
+  for pid in $("$PGREP_BIN" -f "$exe_base" 2>/dev/null || true); do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    [[ "$pid" != "$first_pid" ]] || continue
+    command=$("$PS_BIN" -ww -o command= -p "$pid" 2>/dev/null || true)
+    [[ "$command" == *"$EXE"* || "$command" == "$exe_base"* || "$command" == *"/$exe_base"* ]] || continue
+    printf '%s\n' "$pid"
+    return 0
+  done
+  return 1
 }
 
 ensure_app_for_row() {
@@ -954,6 +981,7 @@ run_hosted_live_matrix() {
   reopen_status=ok
   local first_pid=${APP_PID:-}
   local first_state_before=not-running first_state_after=not-running second_launch_status=open-exited-zero relaunched_after_first_exit=false row4_extra
+  local second_state=not-found second_pid_json=null second_stop_status=not-needed
   if [[ -n "$first_pid" ]] && app_job_running "$first_pid"; then
     first_state_before=running
   fi
@@ -964,15 +992,29 @@ run_hosted_live_matrix() {
     second_launch_status=open-failed
   fi
   sleep "$REOPEN_SETTLE_SECONDS"
+  SECOND_INSTANCE_PID=$(find_second_instance_pid "$first_pid" || true)
+  if [[ -n "$SECOND_INSTANCE_PID" ]]; then
+    second_pid_json=$SECOND_INSTANCE_PID
+    if kill -0 "$SECOND_INSTANCE_PID" >/dev/null 2>&1; then
+      second_state=running
+      stop_second_instance
+      second_stop_status=stopped
+    else
+      second_state=exited
+      SECOND_INSTANCE_PID=""
+      second_stop_status=already-exited
+    fi
+  fi
   first_state_after=$first_state_before
   if [[ -n "$first_pid" ]] && record_main_exit_observation "row-4-second-instance-reopen" "$first_pid" "after-second-instance-launch"; then
     first_state_after=main-exited
+    stop_second_instance
     ensure_app_for_row "row-4-second-instance-reopen"
     relaunched_after_first_exit=true
   elif [[ -n "${APP_PID:-}" ]] && app_job_running "$APP_PID"; then
     first_state_after=running
   fi
-  row4_extra=",\"first_instance\":{\"pid\":${first_pid:-null},\"state_before_second_launch\":$(json_string "$first_state_before"),\"state_after_second_launch\":$(json_string "$first_state_after")},\"second_instance\":{\"launch_status\":$(json_string "$second_launch_status"),\"method\":\"open -n\"},\"relaunched_after_first_exit\":$relaunched_after_first_exit"
+  row4_extra=",\"first_instance\":{\"pid\":${first_pid:-null},\"state_before_second_launch\":$(json_string "$first_state_before"),\"state_after_second_launch\":$(json_string "$first_state_after")},\"second_instance\":{\"launch_status\":$(json_string "$second_launch_status"),\"method\":\"open -n\",\"pid\":$second_pid_json,\"state\":$(json_string "$second_state"),\"stop_status\":$(json_string "$second_stop_status")},\"relaunched_after_first_exit\":$relaunched_after_first_exit"
   hosted_row "row-4-second-instance-reopen" none "open -n --env ASKTOTO_USERDATA=<profile> <app> --args --user-data-dir=<profile>" "$reopen_status" "$row4_extra"
 
   record_blocked_row "row-5-dataless-brain-idle" ',"automatic":false,"fixture":"dataless-brain-index"'
@@ -1244,6 +1286,7 @@ PROFILE=$(mktemp -d "${TMPDIR:-/tmp}/metis-m2-0008-profile-XXXXXX")
 IDLE_PROFILE=$(mktemp -d "${TMPDIR:-/tmp}/metis-m2-0008-idle-profile-XXXXXX")
 FIFO_HOLD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/metis-m2-0008-fifo-hold-XXXXXX")
 cleanup() {
+  stop_second_instance
   stop_app
   release_fifo_writers
   local item
