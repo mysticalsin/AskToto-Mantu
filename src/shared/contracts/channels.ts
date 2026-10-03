@@ -3,7 +3,11 @@ export const IPC = {
   settingsGet: 'settings:get',
   settingsChanged: 'settings:changed',
   settingsSet: 'settings:set',
+  // One-way only: sent after settings:set has replied, so replaying onboarding cannot sever the
+  // renderer's durable-save response by replacing its transparent BrowserWindow mid-invoke.
   onboardingEnter: 'onboarding:enter',
+  // One-way only: sent after settings:set has replied, so exiting opaque onboarding cannot sever the
+  // renderer's durable-save response by destroying its BrowserWindow mid-invoke.
   onboardingExit: 'onboarding:exit',
   settingsRecoverProfile: 'settings:recoverProfile',
   setApiKey: 'settings:setApiKey',
@@ -76,6 +80,8 @@ export const IPC = {
   importJobRemove: 'import-audio:job:remove',
   importAudioProgress: 'import-audio:progress',
   importAssetsProgress: 'import-assets:progress',
+  // Private channels used only by the sandboxed hidden decoder window. They are never bridged to the
+  // interactive overlay preload.
   importDecoderSourceStart: 'import-decoder:source-start',
   importDecoderSourceChunk: 'import-decoder:source-chunk',
   importDecoderChunk: 'import-decoder:chunk',
@@ -101,6 +107,8 @@ export const IPC = {
   recallRename: 'recall:rename',
   recallUpdateRecap: 'recall:update-recap',
   recallSetConfidential: 'recall:set-confidential',
+  // MQA-092: durable "this recap already reached the CRM" marker, so a relaunch cannot re-arm the push
+  // and file a byte-identical duplicate record. See recall.ts's setMeetingCrmPushed.
   recallSetCrmPushed: 'recall:set-crm-pushed',
   recallBackfillSpeakers: 'recall:backfillSpeakers',
   recallDeleteAll: 'recall:deleteAll',
@@ -147,6 +155,9 @@ export const IPC = {
   asrAssetsEnsure: 'asr:assets-ensure',
   localModelsList: 'localModels:list',
   localModelsEnsure: 'localModels:ensure',
+  // MQA-247: the high-accuracy transcription model. Its own pair rather than folded into the LLM
+  // channel above: different asset, different size, different consent, and a user may want one
+  // and not the other.
   asrModelState: 'asrModel:state',
   asrModelFetch: 'asrModel:fetch',
   asrModelRemove: 'asrModel:remove',
@@ -159,6 +170,8 @@ export const IPC = {
   cliInstall: 'cli:install',
   cliInstallProgress: 'cli:install:progress',
   cliLogin: 'cli:login',
+  // MQA-062: re-verify the real CLI session behind every `cliConnected` flag. Zero-token status probe,
+  // throttled in main; returns the refreshed settings snapshot so the caller sees retired flags.
   cliVerifySessions: 'cli:verify-sessions',
   answerFeedback: 'answer:feedback',
   metricsRead: 'metrics:read',

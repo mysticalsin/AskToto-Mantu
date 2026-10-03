@@ -70,6 +70,7 @@ export default defineConfig({
     // Bundle zod into the preload (a sandboxed preload cannot require() externalized deps).
     build: {
       externalizeDeps: { exclude: ['zod'] },
+      isolatedEntries: true,
       minify: 'esbuild', // preload parses before first paint — same unminified-default fix as renderer
       rollupOptions: {
         input: {

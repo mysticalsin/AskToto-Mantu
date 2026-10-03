@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
@@ -49,6 +49,13 @@ function sourceFile(relativeToSrc: string): ts.SourceFile {
   return ts.createSourceFile(relativeToSrc, readSource(relativeToSrc), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
 }
 
+function sourceFilesInDir(relativeToSrc: string): string[] {
+  return readdirSync(resolve(SRC_DIR, relativeToSrc))
+    .filter((name) => name.endsWith(`.${TS_EXT}`) && !name.endsWith(`.test.${TS_EXT}`))
+    .sort()
+    .map((name) => `${relativeToSrc}/${name}`)
+}
+
 function firstIpcKey(argument: ts.Expression | undefined, byValue: Map<string, string>): string | null {
   if (argument && ts.isPropertyAccessExpression(argument) && argument.expression.getText() === 'IPC') {
     return argument.name.text
@@ -57,16 +64,26 @@ function firstIpcKey(argument: ts.Expression | undefined, byValue: Map<string, s
   return null
 }
 
+function ipcSendExpressionName(file: ts.SourceFile, expression: ts.Expression): string {
+  return expression.getText(file).replace(/[?!]/g, '')
+}
+
+function isMainSendExpression(file: ts.SourceFile, expression: ts.Expression): boolean {
+  const name = ipcSendExpressionName(file, expression)
+  return name.endsWith('.webContents.send') || name.endsWith('.sender.send')
+}
+
 function collectIpcCalls(
   file: ts.SourceFile,
   names: ReadonlySet<string>,
-  byValue: Map<string, string>
+  byValue: Map<string, string>,
+  matches: (file: ts.SourceFile, expression: ts.Expression) => boolean = (source, expression) =>
+    names.has(expression.getText(source))
 ): Set<string> {
   const keys = new Set<string>()
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node)) {
-      const name = node.expression.getText(file)
-      if (names.has(name)) {
+      if (matches(file, node.expression)) {
         const key = firstIpcKey(node.arguments[0], byValue)
         if (key) keys.add(key)
       }
@@ -87,6 +104,16 @@ function collectIpcImports(file: ts.SourceFile, moduleSpecifier: string): string
     bindings.elements.forEach((element) => names.push((element.propertyName ?? element.name).text))
   })
   return names
+}
+
+function collectIpcChannelStringLiterals(file: ts.SourceFile, channels: ReadonlySet<string>): string[] {
+  const values: string[] = []
+  const visit = (node: ts.Node): void => {
+    if (ts.isStringLiteral(node) && channels.has(node.text)) values.push(node.text)
+    ts.forEachChild(node, visit)
+  }
+  visit(file)
+  return values.sort()
 }
 
 /** process.platform is configurable in Node — flip it for the duration of a platform-specific test. */
@@ -1048,7 +1075,9 @@ describe('IPC channel contract', () => {
       tsPath('preload', 'import-decoder')
     ]
     for (const file of preloadFiles) {
-      expect(collectIpcImports(sourceFile(file), '@shared/contracts/channels')).toContain('IPC')
+      const source = sourceFile(file)
+      expect(collectIpcImports(source, '@shared/contracts/channels')).toContain('IPC')
+      expect(collectIpcChannelStringLiterals(source, new Set(Object.values(IPC)))).toEqual([])
     }
   })
 
@@ -1061,10 +1090,8 @@ describe('IPC channel contract', () => {
 
     const mainFiles = [
       tsPath('main', 'index'),
-      tsPath('main', 'ipc', 'screen-permission-ipc'),
-      tsPath('main', 'ipc', 'writeup'),
-      tsPath('main', 'ipc', 'history-trace-ipc'),
-      tsPath('main', 'updater')
+      tsPath('main', 'updater'),
+      ...sourceFilesInDir('main/ipc')
     ].map(sourceFile)
     const preloadFiles = [
       tsPath('preload', 'index'),
@@ -1077,7 +1104,7 @@ describe('IPC channel contract', () => {
     for (const file of mainFiles) {
       collectIpcCalls(file, new Set(['ipcMain.handle', 'ipcMain.on', 'safeHandle']), byValue)
         .forEach((key) => mainRegistrations.add(key))
-      collectIpcCalls(file, new Set(['win.webContents.send', 'win?.webContents.send', 'w.webContents.send', 'getWin()?.webContents.send', 'e.sender.send', 'event.sender.send', 'decoderWin!.webContents.send', 'active.webContents.send']), byValue)
+      collectIpcCalls(file, new Set(), byValue, isMainSendExpression)
         .forEach((key) => mainSends.add(key))
     }
 
