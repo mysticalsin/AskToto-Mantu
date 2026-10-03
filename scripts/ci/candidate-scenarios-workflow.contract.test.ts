@@ -98,7 +98,7 @@ describe('candidate-scenarios.yml', () => {
     const runGuard = guardSteps[stepIndex(guardSteps, 'candidate-scenarios.mjs guard')]
     expect(runGuard).toContain('gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN"')
     expect(runGuard).toContain('node scripts/qa/candidate-scenarios.mjs guard candidate-run.json "$CANDIDATE_RUN"')
-    expect(guard).toContain('qa-candidate.yml dispatch on main or release/1.9.x')
+    expect(guard.join('\n')).toContain('qa-candidate.yml dispatch on main or release/1.9.x')
   })
 
   it('has one job per registry platform, on its hosted runner, gated by the guard', () => {
