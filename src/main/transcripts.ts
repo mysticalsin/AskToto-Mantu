@@ -163,9 +163,9 @@ function unwrapWithKeychain(blob: Buffer): string {
  *   '<bare base64>' — legacy: written before this change; treated as safeStorage on read.
  *
  * The content key is always encrypted at rest. This function never falls through to cleartext —
- * callers should let any error propagate (fail-closed).
+ * callers should let any error propagate (fail-closed). The local journal seals records with it.
  */
-function encryptEnvelopeV2(content: string): Buffer {
+export function encryptEnvelopeV2(content: string): Buffer {
   const contentKey = randomBytes(32)
   const iv = randomBytes(12)
   const cipher = createCipheriv('aes-256-gcm', contentKey, iv)

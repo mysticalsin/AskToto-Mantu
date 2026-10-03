@@ -576,7 +576,6 @@ import {
   updateEntityField,
   readFieldProvenance,
   rejectCommitment,
-  isJournalCorruptionBlocked,
   isJournalCorruptionBlockedAsync,
   clearJournalCorruptionLock,
   readCorrectionsJournal,
@@ -593,17 +592,12 @@ import {
 } from './intelligence'
 import {
   loadIndexForStatus as loadBrainIndexForStatus,
-  writeIndex as writeBrainIndex,
   indexUnavailable,
   indexUnavailableAsync,
   indexUnavailableMessage,
-  writeGraph as writeBrainGraph,
   readPerson as readBrainPerson,
-  writePerson as writeBrainPerson,
   readAccount as readBrainAccount,
-  writeAccount as writeBrainAccount,
   readDeal as readBrainDeal,
-  writeDeal as writeBrainDeal,
   listEntities as listBrainEntities,
   loadEntityDisplayNames as loadBrainEntityDisplayNames,
   loadMeetingExtraction as loadBrainMeetingExtraction,
@@ -613,8 +607,7 @@ import {
   restorePreservedBrainIndex,
   deletePreservedBrainIndex,
   setDealOutcome,
-  slugify as brainSlugify,
-  brainDir as brainStoreDir
+  slugify as brainSlugify
 } from './brain/store'
 import { brainStatusCounts, readBrainDashboard } from './brain/dashboard-read'
 import { buildBrainContext } from './brain/context'
@@ -664,6 +657,8 @@ import { createBootWork, type BootWork } from './lifecycle/boot-work'
 import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
 import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
+import { storageAt } from './infra/storage/meetings-storage'
+import { createAppContext } from './app/context'
 import { createResponsivenessTracker } from './infra/observability/responsiveness-tracker'
 import { crashDetail, type CrashKind } from './infra/observability/crash-taxonomy'
 import { createRevealTrace } from './infra/observability/reveal-trace'
@@ -703,7 +698,6 @@ import { resolveCloudSttGatewayId } from './cloud-stt/credentials'
 import { resolveEnterpriseLiveProfile } from '../shared/enterprise-live-profile'
 import { effectiveCloudSttProvider, enforceSttPolicy } from '../shared/cloud-stt-provider'
 import { shouldRecoverCompletedOnboardingExit } from './onboarding-exit-fallback'
-
 import {
   resetLanguageFollow as resetImportLanguageFollow,
   setWhisperImportTierAdmission,
@@ -712,7 +706,6 @@ import {
 } from './whisper-import'
 import { buildPolishPrompt, parsePolishResponse, polishBatches, type PolishLine } from './polish'
 import { detectLanguage as detectTextLanguage } from '@shared/lang-id'
-import type { TranscriptLine } from '@shared/ipc'
 import { pickAudioFile, consumePickedAudio, offerAudioPaths } from './import-audio'
 import {
   ImportJobManager,
@@ -815,7 +808,6 @@ import {
   estimateEmailSummaryMinutes,
   estimateMcpPushMinutes,
   estimateNoteTakingMinutes,
-  estimateSecondBrainMinutes,
   wordsFromTexts
 } from '@shared/time-saved-events'
 import { createOutlookDraft, createOutlookEvent, outlookWriteStatus } from './outlook-write'
@@ -867,7 +859,7 @@ import {
   scheduleRebuild,
   purgeGraphArtifacts
 } from './graphify'
-import { SaveMeetingSchema, SaveNoteSchema, stripProvisionalLines } from '@shared/ipc'
+import { SaveMeetingSchema, SaveNoteSchema, stripProvisionalLines, type TranscriptLine } from '@shared/ipc'
 import {
   PROVIDERS,
   PROVIDER_IDS,
@@ -4586,6 +4578,14 @@ const { forceQuit: forceQuitMétis, exitAndRelaunch } = installExitPaths(app, {
     endBootWatch(app.getPath('userData'))
   },
   warn: (...args) => mainLog.warn(...args)
+})
+
+// Built once, after `win`, the settings store and sidecar teardown exist; mainWindow reads `win` per call (INV-LAZY).
+const appContext = createAppContext({
+  mainWindow: () => win,
+  settings: { get: getSettings, set: setSettingsWithSpeakerPolicy },
+  audit: auditLog, supervisor: { stopAll: stopAllSidecars }, scheduler: { runAsMaintenance },
+  gateway: () => storageAt(resolveMeetingsFolder(getSettings())), clock: { now: () => Date.now() }
 })
 
 function registerEmergencyForceQuitShortcut(): boolean {
