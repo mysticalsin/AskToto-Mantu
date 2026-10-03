@@ -488,7 +488,8 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
         'require_path=${NODE_OPTIONS#--require \\"}',
         'require_path=${require_path%\\"}',
         `printf '%s\\n' "$require_path" > '${bashPath(requirePathLog)}'`,
-        '[ -f "$require_path" ] || exit 42',
+        'probe_file=${require_path//\\\\\\\\/\\\\}',
+        '[ -f "$probe_file" ] || exit 42',
         'printf loaded > "$M2_0008_NODE_OPTIONS_MARKER"',
         ''
       ].join('\n'))
@@ -503,10 +504,10 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
       expect(nodeOptions).not.toContain(`--require ${outArg}`)
       const requirePath = readFileSync(requirePathLog, 'utf8').trim()
       if (process.platform === 'win32') {
-        expect(nodeOptions).toMatch(/^--require "[A-Z]:\\/)
-        expect(nodeOptions).toContain('\\fuse-probe\\node-options-probe.cjs"')
-        expect(requirePath).toMatch(/^[A-Z]:\\/)
-        expect(requirePath).toContain('\\fuse-probe\\node-options-probe.cjs')
+        expect(nodeOptions).toMatch(/^--require "[A-Z]:\\\\/)
+        expect(nodeOptions).toContain('\\\\fuse-probe\\\\node-options-probe.cjs"')
+        expect(requirePath).toMatch(/^[A-Z]:\\\\/)
+        expect(requirePath).toContain('\\\\fuse-probe\\\\node-options-probe.cjs')
       } else {
         expect(nodeOptions).toMatch(/^--require "\//)
         expect(nodeOptions).toContain('/fuse-probe/node-options-probe.cjs"')
@@ -809,8 +810,8 @@ describe('M2-0463 Windows hosted-live mode', () => {
       const environment = JSON.parse(readFileSync(join(out, 'environment.json'), 'utf8'))
       expect(environment).toMatchObject({ mode: 'hosted-live', host: { label: 'windows-latest' } })
       const nodeOptions = readFileSync(stubs.nodeOptionsLog, 'utf8').trim()
-      expect(nodeOptions).toMatch(/^--require "C:\\hosted\\/)
-      expect(nodeOptions).toContain('\\fuse-probe\\node-options-probe.cjs"')
+      expect(nodeOptions).toMatch(/^--require "C:\\\\hosted\\\\/)
+      expect(nodeOptions).toContain('\\\\fuse-probe\\\\node-options-probe.cjs"')
       const evidenceImport = JSON.parse(readFileSync(join(out, 'M2-0008.evidence-import.json'), 'utf8'))
       expect(evidenceImport).toMatchObject({
         mode: 'hosted-live',

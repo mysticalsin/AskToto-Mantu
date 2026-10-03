@@ -235,7 +235,9 @@ node_options_require_path() {
   absolute="$dir/$base"
   local cygpath_bin="${M2_0008_CONTRACT_CYGPATH_BIN:-cygpath}"
   if [[ ("${HOSTED_WINDOWS:-0}" == 1 || "$(uname -s)" =~ ^(MINGW|MSYS|CYGWIN)) ]] && command -v "$cygpath_bin" >/dev/null 2>&1; then
-    "$cygpath_bin" -w "$absolute"
+    local win
+    win=$("$cygpath_bin" -w "$absolute")
+    printf '%s' "${win//\\/\\\\}"
     return
   fi
   printf '%s' "$absolute"
