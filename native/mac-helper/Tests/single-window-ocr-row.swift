@@ -1,7 +1,8 @@
 import AppKit
-import CoreGraphics
+import Dispatch
 import Foundation
 import ImageIO
+import ScreenCaptureKit
 import UniformTypeIdentifiers
 
 func fail(_ message: String, code: Int32 = 1) -> Never {
@@ -40,30 +41,7 @@ func runWindow(title: String, text: String, x: Double, y: Double, level: String)
     exit(0)
 }
 
-func windowId(title: String) -> CGWindowID? {
-    guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else {
-        return nil
-    }
-    for window in windows {
-        guard (window[kCGWindowName as String] as? String) == title,
-              let number = window[kCGWindowNumber as String] as? NSNumber else { continue }
-        return CGWindowID(number.uint32Value)
-    }
-    return nil
-}
-
-func capture(title: String, output: String) -> Never {
-    guard let id = windowId(title: title) else {
-        fail("single-window row: target window not found: \(title)")
-    }
-    guard let image = CGWindowListCreateImage(
-        .null,
-        .optionIncludingWindow,
-        id,
-        [.boundsIgnoreFraming, .bestResolution]
-    ) else {
-        fail("BLOCKED_EXTERNAL: Screen Recording granted to the test host on the runner image.", code: 75)
-    }
+func writePng(_ image: CGImage, output: String) {
     let url = URL(fileURLWithPath: output)
     guard let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else {
         fail("single-window row: could not create PNG destination")
@@ -72,7 +50,36 @@ func capture(title: String, output: String) -> Never {
     guard CGImageDestinationFinalize(destination) else {
         fail("single-window row: could not write PNG")
     }
+}
+
+@available(macOS 14.0, *)
+func captureWithScreenCaptureKit(title: String, output: String) async -> Never {
+    do {
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        guard let window = content.windows.first(where: { ($0.title ?? "") == title }) else {
+            fail("single-window row: target window not found: \(title)")
+        }
+        let configuration = SCStreamConfiguration()
+        configuration.width = max(1, Int(window.frame.width.rounded()))
+        configuration.height = max(1, Int(window.frame.height.rounded()))
+        configuration.showsCursor = false
+        let filter = SCContentFilter(desktopIndependentWindow: window)
+        let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+        writePng(image, output: output)
+    } catch {
+        fail("BLOCKED_EXTERNAL: Screen Recording granted to the test host on the runner image.", code: 75)
+    }
     exit(0)
+}
+
+func capture(title: String, output: String) -> Never {
+    guard #available(macOS 14.0, *) else {
+        fail("single-window row: ScreenCaptureKit screenshot capture requires macOS 14 or newer")
+    }
+    Task {
+        await captureWithScreenCaptureKit(title: title, output: output)
+    }
+    dispatchMain()
 }
 
 let args = CommandLine.arguments
