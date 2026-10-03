@@ -30,6 +30,7 @@ import { RowDownloadButton, RowIcon, RowStatusChip, useRecallHydration } from '.
 import { openOnRow, type RowHydration } from './history/hydration'
 import { DegradedBanner } from './history/DegradedBanner'
 import { armSlowNotice, degradedBanner, listBody, nextListPhase, type ListPhase } from './history/list-status'
+import { VirtualList } from '../ui/VirtualList'
 import type {
   MeetingSummary,
   RecallHit,
@@ -359,12 +360,6 @@ function Related({
   )
 }
 
-// Cap the first paint of the meeting list to the most recent N — a daily user can accumulate hundreds of
-// saved meetings, and rendering all of them (grouped, per-row) on every keystroke in the search box (which
-// re-renders before the debounced IPC search even replaces `items`) visibly stutters. The "Show all"
-// button below opts into the full list once the user actually wants it.
-const INITIAL_RENDER_CAP = 100
-
 // ---------------------------------------------------------------------------
 // One meeting row — memoized so re-renders of RecallView (e.g. a keystroke in the search box before the
 // debounced search resolves) don't re-render every already-rendered row, only ones whose props changed.
@@ -624,6 +619,10 @@ export const MeetingRow = memo(function MeetingRow({
   )
 })
 
+type HistoryListItem =
+  | { kind: 'date'; date: string }
+  | { kind: 'meeting'; meeting: MeetingSummary | RecallHit }
+
 // ---------------------------------------------------------------------------
 // Main export
 // ---------------------------------------------------------------------------
@@ -702,8 +701,6 @@ export function RecallView({
   /** Most recent rename/delete failure PER FILE, shown as an inline error under that row. Keyed by file
    *  (not a single {file,message}) so two rows failing close together don't clobber each other's error. */
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
-  /** Opt-in past the INITIAL_RENDER_CAP — set once the user clicks "Show all N meetings". */
-  const [showAll, setShowAll] = useState(false)
   /** The scrollable meeting-list container — focused before a row unmounts (e.g. on delete) so a
    *  keyboard user's focus doesn't fall through to <body> when the focused Delete button is removed. */
   const listRef = useRef<HTMLDivElement>(null)
@@ -1098,21 +1095,15 @@ export function RecallView({
   // not because grouping itself reads it.
   const allGroups = useMemo(() => groupByLocalDate(items), [items, debouncedQ])
 
-  // Cap the first paint to the most recent INITIAL_RENDER_CAP meetings (across groups, in existing order —
-  // recallList/recallSearch already return newest-first) unless the user opted into "Show all".
   const totalCount = items.length
-  const groups = useMemo(() => {
-    if (showAll || totalCount <= INITIAL_RENDER_CAP) return allGroups
-    let remaining = INITIAL_RENDER_CAP
-    const capped: [string, (MeetingSummary | RecallHit)[]][] = []
+  const virtualItems = useMemo<HistoryListItem[]>(() => {
+    const rows: HistoryListItem[] = []
     for (const [date, meetingsForDate] of allGroups) {
-      if (remaining <= 0) break
-      const slice = meetingsForDate.slice(0, remaining)
-      capped.push([date, slice])
-      remaining -= slice.length
+      rows.push({ kind: 'date', date })
+      for (const meeting of meetingsForDate) rows.push({ kind: 'meeting', meeting })
     }
-    return capped
-  }, [allGroups, showAll, totalCount])
+    return rows
+  }, [allGroups])
 
   const body = listBody(phase, totalCount)
   const banner = useMemo(() => degradedBanner(phase, items), [phase, items])
@@ -1185,7 +1176,7 @@ export function RecallView({
       {banner && <DegradedBanner banner={banner} onRetry={retryList} />}
 
       {/* ── DATE-GROUPED MEETING LIST ───────────────────────────────────── */}
-      <div ref={listRef} tabIndex={-1} className="scroll-thin min-h-0 flex-1 overflow-y-auto pr-1">
+      <div ref={listRef} tabIndex={-1} className="min-h-0 flex-1">
         {body === 'spinner' ? (
           <div className="py-2">
             <AgentStatus kind="searching" size="inline" caption />
@@ -1197,29 +1188,38 @@ export function RecallView({
               : 'No meetings saved yet. Finish one with End & review.'}
           </div>
         ) : (
-          <>
-            {groups.map(([date, meetingsForDate]) => (
-              <div key={date}>
-                {/* Date group header */}
-                <div className="cl-eyebrow px-1 pb-1 pt-2 text-[color:var(--color-ink-3)]">
-                  {friendlyDate(date)}
-                </div>
-
-                {meetingsForDate.map((m) => (
+          <VirtualList
+            items={virtualItems}
+            getKey={(item) => (item.kind === 'date' ? `date:${item.date}` : `meeting:${item.meeting.file}`)}
+            estimateSize={(item) =>
+              item.kind === 'date' ? 28 : open === item.meeting.file ? 150 : item.meeting.topics?.length ? 72 : 48
+            }
+            className="scroll-thin h-full overflow-y-auto pr-1"
+            ariaLabel="Past meetings"
+            renderItem={({ item, style, measureRef }) => (
+              <div
+                key={item.kind === 'date' ? `date:${item.date}` : item.meeting.file}
+                ref={measureRef}
+                style={style}
+              >
+                {item.kind === 'date' ? (
+                  <div className="cl-eyebrow px-1 pb-1 pt-2 text-[color:var(--color-ink-3)]">
+                    {friendlyDate(item.date)}
+                  </div>
+                ) : (
                   <MeetingRow
-                    key={m.file}
-                    meeting={m}
-                    isSelected={selectedFile === m.file}
-                    isActive={activeFile === m.file}
-                    isDeleting={deletingFiles.has(m.file)}
-                    isEditing={editingFile === m.file}
-                    editingValue={editingFile === m.file ? editingValue : ''}
-                    isRenaming={renaming === m.file}
-                    isOpen={open === m.file}
-                    error={rowErrors[m.file] ?? null}
-                    indexStatus={meetingIndexStatus(m.file, ingestStatus)}
-                    indexError={ingestStatus?.errors.get(m.file) ?? null}
-                    hydration={hydrations[m.file]}
+                    meeting={item.meeting}
+                    isSelected={selectedFile === item.meeting.file}
+                    isActive={activeFile === item.meeting.file}
+                    isDeleting={deletingFiles.has(item.meeting.file)}
+                    isEditing={editingFile === item.meeting.file}
+                    editingValue={editingFile === item.meeting.file ? editingValue : ''}
+                    isRenaming={renaming === item.meeting.file}
+                    isOpen={open === item.meeting.file}
+                    error={rowErrors[item.meeting.file] ?? null}
+                    indexStatus={meetingIndexStatus(item.meeting.file, ingestStatus)}
+                    indexError={ingestStatus?.errors.get(item.meeting.file) ?? null}
+                    hydration={hydrations[item.meeting.file]}
                     onSelect={selectFile}
                     onOpen={openMeeting}
                     onDownload={downloadMeeting}
@@ -1231,19 +1231,10 @@ export function RecallView({
                     onCommitEdit={commitEdit}
                     onCancelEdit={cancelEdit}
                   />
-                ))}
+                )}
               </div>
-            ))}
-            {!showAll && totalCount > INITIAL_RENDER_CAP && (
-              <button
-                type="button"
-                onClick={() => setShowAll(true)}
-                className="no-drag focus-ring mt-1 w-full rounded-lg px-2 py-1.5 text-center text-[11px] font-medium text-[color:var(--color-ink-3)] hover:bg-white/[0.06] hover:text-[color:var(--color-ink-2)]"
-              >
-                Show all {totalCount} meetings
-              </button>
             )}
-          </>
+          />
         )}
       </div>
 

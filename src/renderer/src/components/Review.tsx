@@ -18,6 +18,7 @@ import { ReviewEntityStrip } from './ReviewEntityStrip'
 import { useFlash } from '../lib/useFlash'
 import { accelLabel } from '../lib/keys'
 import { OutlookDraftLifecycle, outlookDraftIntent } from './outlook-draft-lifecycle'
+import { VirtualList } from '../ui/VirtualList'
 
 export const INCOMPLETE_RECAP_COPY = 'This summary may be incomplete. Review it before using it, or retry.'
 
@@ -113,6 +114,27 @@ function RecapBody({ text, mode }: { text: string; mode: string }): JSX.Element 
   if (sections.length >= 2) return <ModeRecapView mode={mode} sections={sections} />
   return <Markdown>{text}</Markdown>
 }
+
+const TranscriptRow = memo(function TranscriptRow({ line }: { line: TranscriptLine }): JSX.Element {
+  return (
+    <div className="flex gap-2 text-[13px] leading-snug">
+      <span className="shrink-0 font-mono text-[10px] text-[color:var(--color-ink-3)]">
+        {clock(line.t)}
+      </span>
+      <span
+        className={
+          'shrink-0 text-[10px] font-semibold uppercase ' +
+          (line.speaker === 'them'
+            ? 'text-[color:var(--color-ink-2)]'
+            : 'text-[color:var(--color-ink-3)]')
+        }
+      >
+        {speakerDisplay(line)}
+      </span>
+      <span className="min-w-0 flex-1 break-words text-[color:var(--color-ink)]">{line.text}</span>
+    </div>
+  )
+})
 
 /** The line under a save-failure banner. It used to be an unconditional present-tense "Retrying… attempt
  *  N / M" gated on nothing but `attempts > 0`, so once App's backoff ladder stopped scheduling attempts
@@ -1877,30 +1899,23 @@ export const Review = memo(function Review({
             {copyError}
           </div>
         )}
-        {/* No inner scroll: the transcript flows in full and the single review panel scrolls as one, so the
-            whole Overview + transcript is visible without fighting a nested 300px scroll box. */}
-        <div className="flex flex-col gap-2 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-3">
+        <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-3">
           {speechLines.length === 0 ? (
             <div className="text-[13px] text-[color:var(--color-ink-2)]">No transcript captured.</div>
           ) : (
-            speechLines.map((l, i) => (
-              <div key={i} className="flex gap-2 text-[13px] leading-snug">
-                <span className="shrink-0 font-mono text-[10px] text-[color:var(--color-ink-3)]">
-                  {clock(l.t)}
-                </span>
-                <span
-                  className={
-                    'shrink-0 text-[10px] font-semibold uppercase ' +
-                    (l.speaker === 'them'
-                      ? 'text-[color:var(--color-ink-2)]'
-                      : 'text-[color:var(--color-ink-3)]')
-                  }
-                >
-                  {speakerDisplay(l)}
-                </span>
-                <span className="min-w-0 flex-1 break-words text-[color:var(--color-ink)]">{l.text}</span>
-              </div>
-            ))
+            <VirtualList
+              items={speechLines}
+              getKey={(line, index) => `${line.t}:${line.speaker}:${index}`}
+              estimateSize={(line) => Math.max(28, 18 + Math.ceil(line.text.length / 72) * 18)}
+              className="scroll-thin h-[min(560px,65vh)] overflow-y-auto"
+              contentClassName="pr-1"
+              ariaLabel="Full transcript"
+              renderItem={({ item, style, measureRef }) => (
+                <div key={`${item.t}:${item.speaker}:${item.text}`} ref={measureRef} style={style} className="pb-2">
+                  <TranscriptRow line={item} />
+                </div>
+              )}
+            />
           )}
         </div>
       </section>
