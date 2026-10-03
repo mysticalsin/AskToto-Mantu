@@ -20,6 +20,38 @@ interface Counts {
   events: Record<string, number>
 }
 
+type HistoryOutcome = 'ok' | 'failed' | 'discarded'
+type HistoryMetric = 'queueMs' | 'mainMs' | 'ipcMs' | 'renderMs' | 'totalMs'
+type HistorySummaryStatus = 'empty' | 'present'
+
+export interface HistoryTimingStats {
+  count: number
+  p50: number | null
+  p95: number | null
+  max: number | null
+}
+
+export interface HistoryTimingSummary {
+  queueMs: HistoryTimingStats
+  mainMs: HistoryTimingStats
+  ipcMs: HistoryTimingStats
+  renderMs: HistoryTimingStats
+  totalMs: HistoryTimingStats
+}
+
+export interface HistoryRequestAggregate {
+  status: HistorySummaryStatus
+  requests: number
+  served: number
+  outcomes: Record<HistoryOutcome, number>
+  timings: HistoryTimingSummary
+}
+
+export interface HistoryRequestSummary extends HistoryRequestAggregate {
+  notDownloaded: HistoryRequestAggregate
+  unsettledServed: { count: number; share: number | null }
+}
+
 /** One UTC day of in-scope activity; the soak counts are the same measures as `SoakCounts`. */
 export interface DayBucket {
   records: number
@@ -29,6 +61,7 @@ export interface DayBucket {
   orphanReaps: number
   revealNoOps: number
   brainIndexQuarantined: number
+  history: HistoryRequestSummary
 }
 
 /** The five M2-0198 soak measures, counted over the version scope. */
@@ -66,6 +99,7 @@ export interface DiagnosticsSummary {
     idleDays: number
     days: Record<string, DayBucket>
     soak: SoakCounts
+    history: HistoryRequestSummary
   }
 }
 
@@ -213,6 +247,25 @@ interface Scope {
   to: string | null
   days: Map<string, DayBucket>
   soak: SoakCounts
+  history: HistoryCollector
+}
+
+interface HistoryCollector {
+  requests: Map<string, HistoryRequest>
+  days: Map<string, Set<string>>
+}
+
+interface HistoryRequest {
+  day: string | null
+  received: boolean
+  served: boolean
+  settled: boolean
+  outcome: HistoryOutcome | null
+  notDownloaded: boolean
+  queueMs: number | null
+  mainMs: number | null
+  ipcMs: number | null
+  renderMs: number | null
 }
 
 /**
@@ -279,6 +332,7 @@ function createSummarizer(identity: DiagnosticsIdentity, generatedAt: Date) {
         soak.brainIndexQuarantined += 1
         if (day) day.brainIndexQuarantined += 1
       }
+      if (record.event === 'history.request') recordHistoryRequest(scope.history, record, ts)
     },
 
     finish(generations: number, truncated: boolean): DiagnosticsSummary {
@@ -290,7 +344,11 @@ function createSummarizer(identity: DiagnosticsIdentity, generatedAt: Date) {
         ? Math.round((Date.parse(dayKeys[dayKeys.length - 1]) - Date.parse(dayKeys[0])) / DAY_MS) + 1
         : 0
       const days = Object.create(null) as Record<string, DayBucket>
-      for (const key of dayKeys) days[key] = s.days.get(key) as DayBucket
+      for (const key of dayKeys) {
+        const bucket = s.days.get(key) as DayBucket
+        bucket.history = summarizeHistory(s.history, key)
+        days[key] = bucket
+      }
       return {
         kind: 'metis-diagnostics-summary',
         schema: 2,
@@ -310,7 +368,8 @@ function createSummarizer(identity: DiagnosticsIdentity, generatedAt: Date) {
           daySpan,
           idleDays: daySpan - dayKeys.length,
           days,
-          soak: s.soak
+          soak: s.soak,
+          history: summarizeHistory(s.history)
         }
       }
     }
@@ -334,6 +393,7 @@ function zeroScope(): Scope {
     from: null,
     to: null,
     days: new Map(),
+    history: { requests: new Map(), days: new Map() },
     soak: {
       stallsOver5s: 0,
       uncleanShutdowns: 0,
@@ -354,11 +414,148 @@ function dayBucket(scope: Scope, day: string): DayBucket {
       stallsOver5s: 0,
       orphanReaps: 0,
       revealNoOps: 0,
-      brainIndexQuarantined: 0
+      brainIndexQuarantined: 0,
+      history: zeroHistorySummary()
     }
     scope.days.set(day, bucket)
   }
   return bucket
+}
+
+function recordHistoryRequest(history: HistoryCollector, record: AuditRecord, ts: string | null): void {
+  if (typeof record.requestId !== 'string') return
+  const day = ts ? ts.slice(0, 10) : null
+  let request = history.requests.get(record.requestId)
+  if (!request) {
+    request = {
+      day,
+      received: false,
+      served: false,
+      settled: false,
+      outcome: null,
+      notDownloaded: false,
+      queueMs: null,
+      mainMs: null,
+      ipcMs: null,
+      renderMs: null
+    }
+    history.requests.set(record.requestId, request)
+    if (day) addHistoryDayRequest(history, day, record.requestId)
+  } else if (!request.day && day) {
+    request.day = day
+    addHistoryDayRequest(history, day, record.requestId)
+  }
+
+  if (record.stage === 'received') {
+    request.received = true
+    request.queueMs = msValue(record.queueMs)
+  } else if (record.stage === 'served') {
+    request.served = true
+    if (isHistoryOutcome(record.outcome)) request.outcome = record.outcome
+    request.mainMs = msValue(record.mainMs)
+    if (typeof record.notDownloadedCount === 'number' && Number.isInteger(record.notDownloadedCount) && record.notDownloadedCount > 0) {
+      request.notDownloaded = true
+    }
+  } else if (record.stage === 'settled') {
+    request.settled = true
+    request.ipcMs = msValue(record.ipcMs)
+    request.renderMs = msValue(record.renderMs)
+  }
+}
+
+function addHistoryDayRequest(history: HistoryCollector, day: string, requestId: string): void {
+  let ids = history.days.get(day)
+  if (!ids) {
+    ids = new Set()
+    history.days.set(day, ids)
+  }
+  ids.add(requestId)
+}
+
+function summarizeHistory(history: HistoryCollector, day?: string): HistoryRequestSummary {
+  const ids = day ? history.days.get(day) : undefined
+  const requests = [...history.requests.entries()]
+    .filter(([id, request]) => !day || ids?.has(id) || request.day === day)
+    .map(([, request]) => request)
+  const aggregate = aggregateHistory(requests)
+  const notDownloaded = aggregateHistory(requests.filter((request) => request.notDownloaded))
+  const served = requests.filter((request) => request.served)
+  const unsettledCount = served.filter((request) => !request.settled).length
+  return {
+    ...aggregate,
+    notDownloaded,
+    unsettledServed: {
+      count: unsettledCount,
+      share: served.length > 0 ? roundRatio(unsettledCount / served.length) : null
+    }
+  }
+}
+
+function aggregateHistory(requests: readonly HistoryRequest[]): HistoryRequestAggregate {
+  const timings: Record<HistoryMetric, number[]> = {
+    queueMs: [],
+    mainMs: [],
+    ipcMs: [],
+    renderMs: [],
+    totalMs: []
+  }
+  const outcomes: Record<HistoryOutcome, number> = { ok: 0, failed: 0, discarded: 0 }
+  let served = 0
+  for (const request of requests) {
+    if (request.queueMs !== null) timings.queueMs.push(request.queueMs)
+    if (request.mainMs !== null) timings.mainMs.push(request.mainMs)
+    if (request.ipcMs !== null) timings.ipcMs.push(request.ipcMs)
+    if (request.renderMs !== null) timings.renderMs.push(request.renderMs)
+    if (request.queueMs !== null && request.mainMs !== null && request.ipcMs !== null && request.renderMs !== null) {
+      timings.totalMs.push(request.queueMs + request.mainMs + request.ipcMs + request.renderMs)
+    }
+    if (request.served) served += 1
+    if (request.outcome) outcomes[request.outcome] += 1
+  }
+  return {
+    status: requests.length > 0 ? 'present' : 'empty',
+    requests: requests.length,
+    served,
+    outcomes,
+    timings: {
+      queueMs: timingStats(timings.queueMs),
+      mainMs: timingStats(timings.mainMs),
+      ipcMs: timingStats(timings.ipcMs),
+      renderMs: timingStats(timings.renderMs),
+      totalMs: timingStats(timings.totalMs)
+    }
+  }
+}
+
+function zeroHistorySummary(): HistoryRequestSummary {
+  return {
+    ...aggregateHistory([]),
+    notDownloaded: aggregateHistory([]),
+    unsettledServed: { count: 0, share: null }
+  }
+}
+
+function timingStats(values: readonly number[]): HistoryTimingStats {
+  if (values.length === 0) return { count: 0, p50: null, p95: null, max: null }
+  const sorted = [...values].sort((a, b) => a - b)
+  return {
+    count: sorted.length,
+    p50: percentile(sorted, 50),
+    p95: percentile(sorted, 95),
+    max: sorted[sorted.length - 1]
+  }
+}
+
+function percentile(sorted: readonly number[], p: number): number {
+  return sorted[Math.max(0, Math.ceil((p / 100) * sorted.length) - 1)]
+}
+
+function roundRatio(value: number): number {
+  return Math.round(value * 1000) / 1000
+}
+
+function msValue(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
 }
 
 function extendWindow(window: { from: string | null; to: string | null }, ts: string | null): void {
@@ -413,4 +610,8 @@ function isRevealOutcome(value: string): value is RevealOutcome {
 
 function isReapReason(value: unknown): value is SidecarReapReason {
   return typeof value === 'string' && (SIDECAR_REAP_REASONS as readonly string[]).includes(value)
+}
+
+function isHistoryOutcome(value: unknown): value is HistoryOutcome {
+  return value === 'ok' || value === 'failed' || value === 'discarded'
 }

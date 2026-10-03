@@ -52,7 +52,8 @@ export function createHistoryTracer(opts: HistoryTracerOptions): HistoryTracer {
           stage: 'served',
           outcome: 'ok',
           mainMs: Math.max(0, clock() - startedAt),
-          resultCount: result.length
+          resultCount: result.length,
+          notDownloadedCount: countNotDownloaded(result)
         })
         return result
       } catch (error) {
@@ -85,4 +86,12 @@ export function createHistoryTracer(opts: HistoryTracerOptions): HistoryTracer {
       opts.audit('history.transition', { from, to, committedAtMs })
     }
   }
+}
+
+function countNotDownloaded(rows: readonly unknown[]): number {
+  let count = 0
+  for (const row of rows) {
+    if (row && typeof row === 'object' && (row as { notDownloaded?: unknown }).notDownloaded === true) count += 1
+  }
+  return count
 }

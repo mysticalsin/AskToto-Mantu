@@ -15,6 +15,17 @@ on:
       summary_json:
         description: Pasted schema-2 diagnostics summary JSON.
         required: true
+      mode:
+        description: Evaluator mode: soak or history.
+        required: false
+        default: soak
+      build_sha256:
+        description: Required for mode=history; sha256 of the owner-channel build.
+        required: false
+      min_history_requests:
+        description: Required not-downloaded served History requests for mode=history.
+        required: false
+        default: "3"
 
 permissions:
   contents: read
@@ -41,12 +52,32 @@ jobs:
         with:
           node-version: 22.22.3
       - name: Evaluate and validate the M2-0198 soak record
+        if: ${{ inputs.mode == 'soak' || inputs.mode == '' }}
         env:
           SUMMARY_JSON: ${{ inputs.summary_json }}
         run: |
           node -e "require('node:fs').writeFileSync(process.argv[1], process.env.SUMMARY_JSON)" "$RUNNER_TEMP/summary.json"
           node scripts/qa/owner-soak/verdict.mjs --summary "$RUNNER_TEMP/summary.json" --out out/owner-soak
           node scripts/evidence/check.mjs --ticket M2-0198 --record out/owner-soak/soak-5d.md
+      - name: Evaluate the M2-0067 History timing record
+        if: ${{ inputs.mode == 'history' }}
+        env:
+          SUMMARY_JSON: ${{ inputs.summary_json }}
+          BUILD_SHA256: ${{ inputs.build_sha256 }}
+          MIN_HISTORY_REQUESTS: ${{ inputs.min_history_requests }}
+        run: |
+          node -e "require('node:fs').writeFileSync(process.argv[1], process.env.SUMMARY_JSON)" "$RUNNER_TEMP/summary.json"
+          node scripts/qa/owner-soak/verdict.mjs \
+            --mode history \
+            --summary "$RUNNER_TEMP/summary.json" \
+            --out out/owner-soak \
+            --build-sha256 "$BUILD_SHA256" \
+            --min-history-requests "$MIN_HISTORY_REQUESTS"
+      - name: Reject unknown owner-soak mode
+        if: ${{ inputs.mode != 'soak' && inputs.mode != 'history' && inputs.mode != '' }}
+        run: |
+          echo "mode must be soak or history" >&2
+          exit 2
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: ${{ !cancelled() }}
         with:
