@@ -345,6 +345,7 @@ exit 1
         cwd: root,
         env: {
           ...process.env,
+          GITHUB_ACTIONS: '',
           PROVE_OWNER_SANDBOX_HOME: home,
           PROVE_OWNER_SANDBOX_WRAPPER: wrapper,
           PROBE_WRAPPER_LOG: log,
@@ -396,6 +397,7 @@ exit 1
         cwd: root,
         env: {
           ...process.env,
+          GITHUB_ACTIONS: '',
           PROVE_OWNER_SANDBOX_HOME: home,
           PROVE_OWNER_SANDBOX_WRAPPER: wrapper,
           RUNNER_TEMP: runnerTemp
