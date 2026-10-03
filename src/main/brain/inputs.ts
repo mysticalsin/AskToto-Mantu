@@ -65,14 +65,13 @@ async function scanFolder(root: string, source: 'meetings' | 'team', label?: str
     if (!fileClass || fileClass.status === 'missing') continue
     const key = source === 'meetings' ? name : `team/${label ?? 'team'}/${name}`
     const observation = 'version' in fileClass ? observationOf(fileClass.version) : {}
-    const nonRegularLocal = 'isRegular' in fileClass && fileClass.isRegular === false
     sources.push({
       key,
       file: join(root, name),
       source,
       ...(label ? { label } : {}),
       ...observation,
-      local: fileClass.status === 'ok' || nonRegularLocal
+      local: fileClass.status === 'ok'
     })
   }
   return { root, source, label, status: 'ok', sources }

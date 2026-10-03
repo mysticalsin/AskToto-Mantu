@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { app } from 'electron'
@@ -53,6 +53,11 @@ function slotModel(opts: StreamOptions & { handlers: StreamHandlers }): StreamHa
 }
 const createStreamMock = vi.hoisted(() => vi.fn())
 vi.mock('../llm', () => ({ createStream: createStreamMock }))
+const readSourceTextMock = vi.hoisted(() => vi.fn())
+vi.mock('./inputs', async (orig) => {
+  const actual = await orig<typeof import('./inputs')>()
+  return { ...actual, readSourceText: readSourceTextMock }
+})
 
 const failedIngests = (): number =>
   auditLogMock.mock.calls.filter(([event, detail]) => event === 'brain.ingest' && detail?.ok === false).length
@@ -90,6 +95,10 @@ describe('M2-0034: background extraction fits a 4,096-token local slot and class
     vi.clearAllMocks()
     localBaseReadyMock.mockReturnValue(true)
     createStreamMock.mockImplementation(slotModel)
+    readSourceTextMock.mockImplementation(async (file: string) => {
+      const actual = await vi.importActual<typeof import('./inputs')>('./inputs')
+      return actual.readSourceText(file)
+    })
   })
 
   afterEach(async () => {
@@ -169,7 +178,12 @@ describe('M2-0034: background extraction fits a 4,096-token local slot and class
   })
 
   it('classifies an unavailable extraction path before any model call', async () => {
-    mkdirSync(join(meetingsFolder, 'unavailable.md'))
+    writeFileSync(join(meetingsFolder, 'unavailable.md'), '---\ndate: 2026-09-29\n---\nTHEM: Short synthetic meeting.', 'utf8')
+    readSourceTextMock.mockResolvedValueOnce({
+      status: 'unreadable',
+      error: new Error('source unavailable'),
+      observation: {}
+    })
 
     expect(await startBackfill()).toEqual({ queued: 1 })
     await drain()

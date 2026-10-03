@@ -21,6 +21,8 @@ import { observeSidecar } from '../infra/observability/sidecar-events'
 import { errMsg } from './shared'
 import { recordSidecarIntent, recordSidecarSpawned, recordSidecarSupervisedSpawned } from '../infra/process/registry'
 import { markSidecarProcessUsable, spawnSidecarProcess, stopSidecarProcess } from '../infra/process/supervisor'
+import { LOCAL_CHARS_PER_TOKEN } from './local-constants'
+export { LOCAL_CHARS_PER_TOKEN } from './local-constants'
 
 export type LlamaPlatform = 'mac' | 'win'
 export type WinVariant = 'vulkan' | 'cpu'
@@ -159,9 +161,6 @@ export interface SpawnArgsInput {
  */
 export const LOCAL_PARALLEL_SLOTS = 2
 
-// Conservative characters per token for sizing local requests. English transcripts run about four;
-// three leaves room for names, numbers and accented text.
-export const LOCAL_CHARS_PER_TOKEN = 3
 export const LOCAL_EXTRACTION_OUTPUT_TOKENS = 1536
 const EXTRACTION_USER_OVERHEAD_CHARS = 512
 const CONTEXT_MARGIN_TOKENS = 256
@@ -329,12 +328,6 @@ export function getActiveModelKey(): string | null {
 export function activeSlotTokens(): number | null {
   if (state === 'stopped' || !lastModelPaths) return null
   return Math.floor(lastModelPaths.ctxSize / lastModelPaths.parallel)
-}
-
-/** The live llama-server context per request slot. Named for callers that size work to the running
- *  runtime rather than to a model's ideal profile. */
-export function activeContextPerSlotTokens(): number | null {
-  return activeSlotTokens()
 }
 
 function clearIdleTimer(): void {
