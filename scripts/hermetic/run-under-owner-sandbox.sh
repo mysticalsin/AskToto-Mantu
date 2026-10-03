@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# W0-HERMETIC (M2-0190) §2 — runs one command under the owner-account OS sandbox profile
-# (scripts/hermetic/owner-account.sb). `-D HOME=$HOME` is what makes `(param "HOME")` inside that
-# profile resolve to this machine's real home directory, so the profile file itself stays
-# machine-independent.
+# W0-HERMETIC (M2-0190) §2 — runs one command under a reviewed owner-account OS sandbox profile.
+# `-D HOME=$HOME` is what makes `(param "HOME")` inside the profile resolve to this machine's
+# real home directory, so the profile file itself stays machine-independent.
 set -euo pipefail
 
 if [ "$#" -lt 1 ]; then
@@ -11,4 +10,17 @@ if [ "$#" -lt 1 ]; then
 fi
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec sandbox-exec -f "$HERE/owner-account.sb" -D HOME="$HOME" "$@"
+profile="${OWNER_SANDBOX_PROFILE:-owner-account.sb}"
+case "$profile" in
+  owner-account.sb|owner-runner.sb) ;;
+  *)
+    echo "unsupported owner sandbox profile: $profile" >&2
+    exit 2 ;;
+esac
+
+exec sandbox-exec \
+  -f "$HERE/$profile" \
+  -D HOME="$HOME" \
+  -D RUNNER_TEMP="${RUNNER_TEMP:-/var/empty}" \
+  -D WORKSPACE="${GITHUB_WORKSPACE:-$PWD}" \
+  "$@"

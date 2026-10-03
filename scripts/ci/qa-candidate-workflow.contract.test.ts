@@ -5,6 +5,8 @@ import { describe, expect, it } from 'vitest'
 const root = join(__dirname, '..', '..')
 const workflow = readFileSync(join(root, '.github', 'workflows', 'qa-candidate.yml'), 'utf8').replace(/\r\n/g, '\n')
 const ownerSandboxProbe = readFileSync(join(root, 'scripts', 'hermetic', 'prove-owner-sandbox.sh'), 'utf8').replace(/\r\n/g, '\n')
+const ownerRunnerProfile = readFileSync(join(root, 'scripts', 'hermetic', 'owner-runner.sb'), 'utf8').replace(/\r\n/g, '\n')
+const ownerAccountProfile = readFileSync(join(root, 'scripts', 'hermetic', 'owner-account.sb'), 'utf8').replace(/\r\n/g, '\n')
 
 /** A job's text: from its two-space key to the next two-space key. No YAML library is a dependency here. */
 function jobBlock(name: string): string {
@@ -259,6 +261,28 @@ describe('QA candidate History design evidence (M2-0032)', () => {
 
 describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
   const strictJobs = ['st1-mac-fifo', 'st1-mac-control']
+  const ownerRunnerDenials = [
+    '/Library/CloudStorage',
+    '/Library/Application Support/Metis',
+    '/.ssh',
+    '/.aws',
+    '/.gnupg',
+    '/.config',
+    '/.netrc',
+    '/.claude',
+    '/.codex',
+    '/Documents',
+    '/Desktop',
+    '/Downloads',
+    '/Pictures',
+    '/Movies',
+    '/Music',
+    '/Library/Mail',
+    '/Library/Messages',
+    '/Library/Safari',
+    '/Library/Cookies',
+    '/AI-Brain-build'
+  ]
 
   it('moves only the strict fifo and control rows to the owner self-hosted Mac label', () => {
     for (const name of strictJobs) {
@@ -278,11 +302,11 @@ describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
     }
   })
 
-  it('proves the owner-account sandbox before Node setup or candidate artifact download', () => {
+  it('proves the owner-runner sandbox before Node setup or candidate artifact download', () => {
     for (const name of strictJobs) {
       const jobSteps = steps(name)
       const checkout = jobSteps.findIndex((step) => step.includes('actions/checkout@'))
-      const probe = jobSteps.findIndex((step) => step.includes('name: Prove owner-account sandbox denies private state'))
+      const probe = jobSteps.findIndex((step) => step.includes('name: Prove owner-runner sandbox denies private state'))
       const setup = jobSteps.findIndex((step) => step.includes('actions/setup-node@'))
       const download = jobSteps.findIndex((step) => step.includes('actions/download-artifact@'))
 
@@ -298,16 +322,21 @@ describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
     expect(workflow).toContain('      - scripts/hermetic/prove-owner-sandbox.sh\n')
     expect(workflow).toContain('      - scripts/hermetic/run-under-owner-sandbox.sh\n')
     expect(workflow).toContain('      - scripts/hermetic/owner-account.sb\n')
+    expect(workflow).toContain('      - scripts/hermetic/owner-runner.sb\n')
     expect(ownerSandboxProbe).toContain('bash scripts/hermetic/run-under-owner-sandbox.sh /bin/ls "$target"')
-    expect(ownerSandboxProbe).toContain('"$HOME/Library/CloudStorage"')
-    expect(ownerSandboxProbe).toContain('"$HOME/Library/Application Support/Metis"')
+    expect(ownerSandboxProbe).toContain('OWNER_SANDBOX_PROFILE=owner-runner.sb')
+    for (const path of ownerRunnerDenials) {
+      expect(ownerSandboxProbe).toContain(`"$HOME${path}"`)
+    }
     expect(ownerSandboxProbe).toContain("grep -Fqi 'Operation not permitted'")
     expect(ownerSandboxProbe).not.toContain('Operation not permitted|deny|sandbox')
   })
 
-  it('runs every strict candidate verification and launch through the owner-account sandbox wrapper', () => {
+  it('runs every strict candidate verification and launch through the owner-runner sandbox wrapper', () => {
     for (const name of strictJobs) {
       const block = job(name)
+      expect(block).toContain('OWNER_SANDBOX_PROFILE: owner-runner.sb')
+      expect(block).toContain('ASKTOTO_LOCAL_KEYSTORE: 1')
       expect(block).toContain('bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify')
       expect(block).toContain('bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/st-1.mjs')
       expect(block).not.toMatch(/(?:^|\n) {10}node scripts\/qa\/(?:provenance|st-1)\.mjs/)
@@ -333,8 +362,24 @@ describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
       expect(cleanup).toContain('"$HOME/Library/Preferences/com.mantu.asktoto.qa.plist"')
       expect(cleanup).toContain('"$HOME/Library/Saved Application State/com.mantu.asktoto.qa.savedState"')
       expect(cleanup).toContain('"$HOME/Library/Caches/com.mantu.asktoto.qa"')
-      expect(cleanup).toContain('security delete-generic-password -s "asktoto-qa Safe Storage" || true')
+      expect(cleanup).not.toContain('security delete-generic-password')
+
+      const keychainProbe = steps(name).find((step) => step.includes('name: Prove QA identity did not touch the login keychain')) ?? ''
+      expect(keychainProbe).toMatch(/^        if: always\(\)$/m)
+      expect(keychainProbe).toContain('security find-generic-password -s "asktoto-qa Safe Storage"')
+      expect(keychainProbe).not.toContain('delete-generic-password')
     }
+  })
+
+  it('pins the owner-runner denial profile without changing owner-account.sb', () => {
+    expect(ownerAccountProfile).not.toContain('/AI-Brain-build')
+    for (const path of ownerRunnerDenials) {
+      expect(ownerRunnerProfile).toContain(path)
+    }
+    expect(ownerRunnerProfile).toContain('(param "WORKSPACE")')
+    expect(ownerRunnerProfile).toContain('(require-all')
+    expect(ownerRunnerProfile).toContain('(require-not (subpath (param "WORKSPACE")))')
+    expect(ownerRunnerProfile).not.toContain('delete-generic-password')
   })
 })
 
