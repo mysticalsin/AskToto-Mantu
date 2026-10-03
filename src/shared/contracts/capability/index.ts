@@ -78,28 +78,42 @@ function checkEngineSelection(
   }
 }
 
-export const SpeechCapabilitySchema = z
-  .object({
-    capability: z.literal('speech'),
-    selected: SpeechEngineIdSchema,
-    allowed: z.array(SpeechEngineIdSchema).min(1),
-    ready: z.array(SpeechEngineIdSchema),
-    status: EngineStatusSchema
-  })
-  .strict()
-  .superRefine(checkEngineSelection)
+/**
+ * Checks the `capability` label before anything else: a value labelled for the other capability is rejected
+ * once, at `capability`, and its engines are not checked against an engine set it never claimed.
+ */
+function labelled<Schema extends z.ZodTypeAny>(capability: 'speech' | 'generation', schema: Schema) {
+  return z.object({ capability: z.literal(capability) }).passthrough().pipe(schema)
+}
+
+export const SpeechCapabilitySchema = labelled(
+  'speech',
+  z
+    .object({
+      capability: z.literal('speech'),
+      selected: SpeechEngineIdSchema,
+      allowed: z.array(SpeechEngineIdSchema).min(1),
+      ready: z.array(SpeechEngineIdSchema),
+      status: EngineStatusSchema
+    })
+    .strict()
+    .superRefine(checkEngineSelection)
+)
 export type SpeechCapability = z.infer<typeof SpeechCapabilitySchema>
 
-export const GenerationCapabilitySchema = z
-  .object({
-    capability: z.literal('generation'),
-    selected: GenerationEngineIdSchema,
-    allowed: z.array(GenerationEngineIdSchema).min(1),
-    ready: z.array(GenerationEngineIdSchema),
-    status: EngineStatusSchema
-  })
-  .strict()
-  .superRefine(checkEngineSelection)
+export const GenerationCapabilitySchema = labelled(
+  'generation',
+  z
+    .object({
+      capability: z.literal('generation'),
+      selected: GenerationEngineIdSchema,
+      allowed: z.array(GenerationEngineIdSchema).min(1),
+      ready: z.array(GenerationEngineIdSchema),
+      status: EngineStatusSchema
+    })
+    .strict()
+    .superRefine(checkEngineSelection)
+)
 export type GenerationCapability = z.infer<typeof GenerationCapabilitySchema>
 
 /** Both capabilities of this app, each in its own slot: one never stands in for the other. */
