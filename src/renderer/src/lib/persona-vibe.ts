@@ -70,7 +70,3 @@ export const ONBOARDING_PERSONAS: readonly PersonaVibe[] = [
     changes: 'Earn the next 10 seconds, handle the objection, ask for a booked meeting.'
   }
 ] as const
-
-export function personaVibe(id: OnboardingPersonaId): PersonaVibe {
-  return ONBOARDING_PERSONAS.find((p) => p.id === id) ?? ONBOARDING_PERSONAS[0]
-}
