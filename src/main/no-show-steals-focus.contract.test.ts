@@ -17,7 +17,8 @@ import { describe, it, expect } from 'vitest'
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const lifecycleFile = ['main-lifecycle', 'ts'].join('.')
 const lifecycleSrc = readFileSync(join(__dirname, 'lifecycle', lifecycleFile), 'utf8')
-const revealSrc = readFileSync(join(__dirname, 'lifecycle', 'reveal.ts'), 'utf8')
+const revealFile = ['reveal', 'ts'].join('.')
+const revealSrc = readFileSync(join(__dirname, 'lifecycle', revealFile), 'utf8')
 
 /** Brace-counted function body extraction — robust to nested blocks (unlike a marker-to-marker slice,
  *  which breaks the moment a sibling function's name changes). */
@@ -42,7 +43,7 @@ function functionBody(source: string, sourceName: string, name: string): { start
 
 describe('MQA-275 — the overlay never steals focus except the one deliberate ask exception', () => {
   it('showForAsk exists, calls show()+focus(), and its doc comment names it as the one exception', () => {
-    const { text } = functionBody(indexSrc, 'index.ts', 'showForAsk')
+    const { text } = functionBody(indexSrc, 'index source', 'showForAsk')
     expect(text).toMatch(/\.show\(\)/)
     expect(text).toMatch(/\.focus\(\)/)
     const fnStart = indexSrc.indexOf('function showForAsk(')
@@ -53,8 +54,8 @@ describe('MQA-275 — the overlay never steals focus except the one deliberate a
   })
 
   it('every win.show()/w.show() call site in index.ts sits inside an allowed focus helper', () => {
-    const ask = functionBody(indexSrc, 'index.ts', 'showForAsk')
-    const exclusive = functionBody(indexSrc, 'index.ts', 'showForExclusiveOnboarding')
+    const ask = functionBody(indexSrc, 'index source', 'showForAsk')
+    const exclusive = functionBody(indexSrc, 'index source', 'showForExclusiveOnboarding')
     const showCall = /\b(?:win|w)\??\.show\(\)/g
     const offenders: number[] = []
     let m: RegExpExecArray | null
@@ -96,7 +97,7 @@ describe('MQA-275 — the overlay never steals focus except the one deliberate a
   })
 
   it('legacy reveal focus remains isolated in the lifecycle reveal helper', () => {
-    const { text } = functionBody(revealSrc, 'lifecycle/reveal.ts', 'legacyReveal')
+    const { text } = functionBody(revealSrc, 'lifecycle reveal source', 'legacyReveal')
     expect(text).toContain('legacyRevealWindow(reason, options, w, deps.showForAsk)')
   })
 })

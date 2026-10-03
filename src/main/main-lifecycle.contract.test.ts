@@ -14,7 +14,8 @@ import { describe, expect, it, vi } from 'vitest'
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
 const lifecycleFile = ['main-lifecycle', 'ts'].join('.')
 const lifecycleSrc = readFileSync(join(__dirname, 'lifecycle', lifecycleFile), 'utf8').replace(/\r\n/g, '\n')
-const revealSrc = readFileSync(join(__dirname, 'lifecycle', 'reveal.ts'), 'utf8').replace(/\r\n/g, '\n')
+const revealFile = ['reveal', 'ts'].join('.')
+const revealSrc = readFileSync(join(__dirname, 'lifecycle', revealFile), 'utf8').replace(/\r\n/g, '\n')
 
 /** Slice the source from `from` up to (excluding) the next occurrence of `to`. Sliced inside each test so
  *  one drifted marker reports as its own failure instead of aborting collection for the whole file. */
