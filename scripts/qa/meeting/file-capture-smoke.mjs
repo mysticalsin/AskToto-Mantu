@@ -74,6 +74,7 @@ export function buildReport(observed, { verdict, checks }) {
           peakRms: Number(observed.diagnostics.peakRms ?? 0),
           firstLineMs: observed.diagnostics.firstLineMs,
           stderrFakeDeviceInput: observed.diagnostics.stderrFakeDeviceInput === true,
+          fakeMicPinned: observed.diagnostics.fakeMicPinned === true,
           whisperEngineMessages: Number(observed.diagnostics.whisperEngineMessages ?? 0),
           asrLoadFailedMessages: Number(observed.diagnostics.asrLoadFailedMessages ?? 0),
           microphoneCaptureFailedMessages: Number(observed.diagnostics.microphoneCaptureFailedMessages ?? 0),

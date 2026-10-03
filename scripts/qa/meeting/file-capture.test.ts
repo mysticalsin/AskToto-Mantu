@@ -20,6 +20,7 @@ import {
 import {
   EXPAND_CLICK,
   LISTEN_CLICK,
+  PIN_FAKE_MIC_DEVICE,
   STOP_PRESENT,
   STOP_CLICK,
   TRANSCRIPT_PRESENT,
@@ -79,6 +80,7 @@ const observed = (over: Record<string, unknown> = {}) => ({
     peakRms: 0.12,
     firstLineMs: 20_000,
     stderrFakeDeviceInput: true,
+    fakeMicPinned: true,
     whisperEngineMessages: 1,
     asrLoadFailedMessages: 0,
     microphoneCaptureFailedMessages: 0,
@@ -355,6 +357,35 @@ describe('Bar driver controls', () => {
 })
 
 describe('CDP overlay discovery diagnostics', () => {
+  it("pins the isolated profile to Chromium's fake microphone before Listen starts", async () => {
+    const settings = { micDeviceId: '' }
+    const calls: Array<Record<string, unknown>> = []
+    const navigator = {
+      mediaDevices: {
+        enumerateDevices: async () => [
+          { kind: 'audioinput', label: 'MacBook Microphone', deviceId: 'real-input' },
+          { kind: 'audioinput', label: 'Fake Audio Input', deviceId: 'fake-input' }
+        ]
+      }
+    }
+    const window = {
+      toto: {
+        setSettings: async (patch: Record<string, unknown>) => {
+          calls.push(patch)
+          Object.assign(settings, patch)
+          return settings
+        },
+        getSettings: async () => settings
+      }
+    }
+
+    await expect(Function('navigator', 'window', `return ${PIN_FAKE_MIC_DEVICE}`)(navigator, window)).resolves.toEqual({
+      fakeDevice: true,
+      pinned: true
+    })
+    expect(calls).toEqual([{ micDeviceId: 'fake-input' }])
+  })
+
   it('expands a parked Bar shell before declaring the Listen control absent', async () => {
     let expanded = false
     const evaluations: string[] = []

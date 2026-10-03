@@ -344,6 +344,24 @@ export const LINE_COUNT = `(() => {
   return [...rows.children].filter((row) => !/^(Waiting for speech…|No audio yet\\.)$/.test(row.textContent.trim())).length
 })()`
 export const ASR_ENGINE = `window.toto.getSettings().then((s) => String(s.asrEngine))`
+export const PIN_FAKE_MIC_DEVICE = `(async () => {
+  const result = { fakeDevice: false, pinned: false }
+  const devices = await navigator.mediaDevices.enumerateDevices()
+  const fake = devices.find((device) => device.kind === 'audioinput' && /^Fake/i.test(device.label || ''))
+  if (!fake?.deviceId) return result
+  result.fakeDevice = true
+  await window.toto.setSettings({ micDeviceId: fake.deviceId })
+  const deadline = Date.now() + 5000
+  while (Date.now() < deadline) {
+    const settings = await window.toto.getSettings()
+    if (settings.micDeviceId === fake.deviceId) {
+      result.pinned = true
+      return result
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  return result
+})()`
 export const MAIN_LOG_PATH = `(() => {
   const load = process.mainModule?.require
   if (typeof load !== 'function') return { error: 'process.mainModule.require unavailable' }
@@ -361,9 +379,12 @@ export const CAPTURE_DIAGNOSTIC_PROBE = `(async () => {
     peakRms: 0,
     loadingModel: false
   }
+  let fakeDeviceId = ''
   try {
     const devices = await navigator.mediaDevices.enumerateDevices()
-    result.fakeDevice = devices.some((device) => /^Fake/i.test(device.label || ''))
+    const fake = devices.find((device) => device.kind === 'audioinput' && /^Fake/i.test(device.label || ''))
+    result.fakeDevice = !!fake
+    fakeDeviceId = fake?.deviceId || ''
   } catch {
     result.getUserMediaFailed = true
   }
@@ -374,7 +395,10 @@ export const CAPTURE_DIAGNOSTIC_PROBE = `(async () => {
   let stream = null
   let ctx = null
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    const base = { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: fakeDeviceId ? { ...base, deviceId: { exact: fakeDeviceId } } : base
+    })
     ctx = new AudioContext()
     const source = ctx.createMediaStreamSource(stream)
     const analyser = ctx.createAnalyser()
@@ -544,6 +568,7 @@ export async function runFileCapture({ installer, workDir = mkdtempSync(join(tmp
       peakRms: 0,
       firstLineMs: null,
       stderrFakeDeviceInput: false,
+      fakeMicPinned: false,
       whisperEngineMessages: 0,
       asrLoadFailedMessages: 0,
       microphoneCaptureFailedMessages: 0,
@@ -565,8 +590,11 @@ export async function runFileCapture({ installer, workDir = mkdtempSync(join(tmp
     mainLog = await locateMainLog(page)
     observed.ready = true
     observed.asrEngine = (await page.evaluate(ASR_ENGINE).catch(() => null)) ?? null
-    if (!(await page.evaluate(LISTEN_CLICK))) throw new Error('Listen control vanished before the click')
-    if (!(await waitFor(() => page.evaluate(STOP_PRESENT), 10_000, 250))) throw new Error('Listen did not enter active capture')
+    const fakeMic = await page.evaluate(PIN_FAKE_MIC_DEVICE).catch(() => null)
+    if (fakeMic) {
+      observed.diagnostics.fakeDevice = fakeMic.fakeDevice === true
+      observed.diagnostics.fakeMicPinned = fakeMic.pinned === true
+    }
     const probe = await page.evaluate(CAPTURE_DIAGNOSTIC_PROBE).catch(() => null)
     if (probe) {
       observed.diagnostics.fakeDevice = probe.fakeDevice === true
@@ -575,6 +603,8 @@ export async function runFileCapture({ installer, workDir = mkdtempSync(join(tmp
       observed.diagnostics.peakRms = Number(probe.peakRms ?? 0)
       observed.diagnostics.loadingModel = probe.loadingModel === true
     }
+    if (!(await page.evaluate(LISTEN_CLICK))) throw new Error('Listen control vanished before the click')
+    if (!(await waitFor(() => page.evaluate(STOP_PRESENT), 10_000, 250))) throw new Error('Listen did not enter active capture')
     const transcriptVisible = await waitFor(async () => {
       if (await page.evaluate(TRANSCRIPT_PRESENT).catch(() => false)) return true
       await page.evaluate(TRANSCRIPT_CLICK).catch(() => false)
