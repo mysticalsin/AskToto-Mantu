@@ -102,6 +102,7 @@ import {
 } from '@shared/ipc'
 import {
   getSettings,
+  getSettingsHealth,
   setSettings,
   getLockedKeys,
   getAllowedProviders,
@@ -957,11 +958,7 @@ if (!app.isPackaged && !process.env.ASKTOTO_USERDATA) {
   app.setPath('userData', `${app.getPath('userData')}-dev`)
 }
 
-// Unpackaged Electron.app still ships CFBundleName "Electron". setName changes
-// app.getName() / About / some menus to Métis. The macOS menu-bar process name
-// stays Electron unless a wrapper .app overrides Info.plist — do not invent
-// a second product name for unpackaged builds. Packaged Metis.app already
-// uses CFBundleDisplayName Métis.
+// Unpackaged Electron.app still ships CFBundleName "Electron"; app.setName only fixes app UI labels.
 if (!app.isPackaged) {
   try {
     app.setName('Métis')
@@ -2136,7 +2133,8 @@ function publicSettings(): PublicSettings {
     version: app.getVersion(),
     allowedProviders: allowed, // org allowlist (null = unrestricted); surfaced so the picker matches enforcement
     modelPolicyCapabilities: modelPolicyCapabilitiesForSettings(s),
-    localSpeechPack: resolveLocalSpeechPackPolicy(s, getAdminLocalSpeechPackPolicy())
+    localSpeechPack: resolveLocalSpeechPackPolicy(s, getAdminLocalSpeechPackPolicy()),
+    settingsHealth: getSettingsHealth()
   }
 }
 
@@ -5418,9 +5416,7 @@ function registerIpc(): void {
     return publicSettings()
   })
 
-  // Explicit recovery for an existing file-backend profile whose key is still wrapped by a Keychain
-  // this build cannot unlock. The native confirmation is deliberately before any filesystem mutation;
-  // archiveEncryptedProfile() moves the encrypted files into a hidden, reversible recovery folder.
+  // Native confirmation comes before moving encrypted profile files into a reversible archive.
   ipcMain.handle(IPC.settingsRecoverProfile, async (e) => {
     assertMainWindow(e)
     const dialogOpts = {

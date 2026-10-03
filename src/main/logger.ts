@@ -210,6 +210,7 @@ export type AuditEvent =
   // per host per session, hostname only).
   | 'net.egress.policy'
   | 'net.egress.blocked'
+  | 'settings.unreadable'
   | 'settings.changed'
   | 'settings.profile_recovered'
   | 'graph.purged'

@@ -10,9 +10,14 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { describe, it, expect } from 'vitest'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { pickReadyProvider, detectHint, licenseErrorMessage, SETTINGS_CONTENT_SCROLL_CLASS, settingsScrollClipsOverflowX } from './Settings'
+import { StatusBanner } from './StatusBanner'
+import { brainIndexHealthView, settingsFileHealthView } from '../features/settings/IntelligenceTab'
 import { licenseErrorMessage as onboardingLicenseErrorMessage } from './OnboardingExperience'
 import { licenseErrorMessage as gateLicenseErrorMessage } from './LicenseGate'
+import { DEFAULT_SETTINGS, PublicSettingsSchema, type PublicSettings } from '@shared/ipc'
 
 // Normalize CRLF → LF: on a Windows checkout Settings.tsx has \r\n line endings, and a marker whose
 // newline sits mid-string (e.g. finding 5's '))}\n          </div>') would never match '))}\r\n...'.
@@ -53,6 +58,64 @@ describe('legacy licence activation errors', () => {
       expect(copy('insecure_url')).toMatch(/HTTPS.*localhost.*HTTP/i)
       expect(copy('device_identity_unavailable')).toMatch(/data folder.*writable/i)
     }
+  })
+})
+
+describe('M2-0076 fail-closed state visibility', () => {
+  const publicSettings = (overrides: Partial<PublicSettings> = {}): PublicSettings =>
+    PublicSettingsSchema.parse({
+      ...DEFAULT_SETTINGS,
+      hasApiKey: false,
+      providerReady: false,
+      visionReady: false,
+      hasKeys: {},
+      hasEncryption: true,
+      resolvedMeetingsFolder: '/tmp/metis-test',
+      ...overrides
+    })
+
+  it('renders the unreadable settings recovery banner with user actions', () => {
+    const settings = publicSettings({
+      settingsHealth: {
+        settingsJson: {
+          status: 'unreadable',
+          reason: 'undecryptable',
+          recovered: false,
+          lastSeenAt: 1
+        }
+      }
+    })
+    const html = renderToStaticMarkup(
+      createElement(StatusBanner, {
+        settings,
+        onOpenSettings: () => {},
+        onRetry: () => {},
+        onRecoverProfile: () => {}
+      })
+    )
+    expect(html).toContain("Métis can&#x27;t decrypt its settings file")
+    expect(html).toContain('Retry')
+    expect(html).toContain('Data health')
+    expect(html).toContain('New local profile')
+  })
+
+  it('shows settings and degraded Intelligence index states in Settings data health', () => {
+    expect(settingsFileHealthView(publicSettings()).label).toBe('Healthy')
+    expect(settingsFileHealthView(publicSettings({
+      settingsHealth: {
+        settingsJson: {
+          status: 'unreadable',
+          reason: 'invalid-json',
+          recovered: false,
+          lastSeenAt: 1
+        }
+      }
+    }))).toMatchObject({ degraded: true, label: 'Needs repair' })
+    expect(brainIndexHealthView({ indexUnavailable: 'undecryptable', error: 'Indexing is paused.' })).toEqual({
+      degraded: true,
+      label: 'Degraded',
+      message: 'Indexing is paused.'
+    })
   })
 })
 

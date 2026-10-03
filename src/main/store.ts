@@ -8,7 +8,9 @@ import {
   renameSync,
   statSync,
   readdirSync,
-  mkdtempSync, unlinkSync } from 'node:fs'
+  mkdtempSync,
+  unlinkSync
+} from 'node:fs'
 import { join } from 'node:path'
 import { totalmem as physicalTotalMemory } from 'node:os'
 import {
@@ -16,7 +18,10 @@ import {
   DUST_BASE_AGENT_ID,
   BaseSettingsSchema,
   SettingsSchema,
+  SettingsHealthSchema,
   type Settings,
+  type SettingsHealth,
+  type SettingsHealthIssue,
   type DustAgentsResponse,
   type DustAgent
 } from '@shared/ipc'
@@ -31,7 +36,7 @@ import {
   type ProviderId
 } from '@shared/providers'
 import { DUST_EMPTY_AGENTS_ERROR } from '@shared/dust-validate'
-import { mainLog } from './logger'
+import { mainLog, auditLog } from './logger'
 import {
   KeychainKeyRecoveryError,
   decryptSecret,
@@ -318,29 +323,41 @@ export function getEnvKeyProviders(): string[] {
   return ids
 }
 
-// Sensitive user data (context docs = pasted reference material, profile = resume/JD/notes) lives in
-// settings.json. Encrypt the whole user-overrides file at rest so it isn't readable as plaintext on disk.
-//
-// Two on-disk formats:
-//   ATKENC2\n + AES-GCM blob  — written by the file backend (dev / ASKTOTO_LOCAL_KEYSTORE / no keychain)
-//   ATKENC1\n + safeStorage   — legacy prod format; migrated to ATKENC2 on next read/write in file-backend
-//   raw JSON                  — legacy plaintext; migrated to ATKENC2 on next write
-//
-// settings.json.recovered — NOT a format, a last-resort backup. Whenever settings.json exists but can't
-// be decoded in any of the three formats above, its original bytes are copied here (preserveUnreadableSettings)
-// before the caller returns fail-closed null and serves conservative defaults, so subsequent settings writes
-// are refused rather than destroying the only copy. See readUserRaw() and tryRecoveredSettings().
+// User overrides live in settings.json and are encrypted at rest. Supported formats:
+// ATKENC2 + AES-GCM, legacy ATKENC1 + safeStorage, and legacy plaintext JSON.
+// settings.json.recovered is a last-resort verbatim backup before fail-closed defaults are served.
 const ENC_MARKER_V1 = Buffer.from('ATKENC1\n') // legacy: safeStorage (prod)
 const ENC_MARKER_V2 = Buffer.from('ATKENC2\n') // new: AES-GCM file backend
 
-/**
- * Decode a settings buffer through the three known on-disk formats (V2 AES-GCM → legacy V1 safeStorage →
- * legacy plaintext JSON), auto-detecting by marker. Returns the parsed object, or null if none of them can
- * read it under the CURRENT backend (undecryptable ciphertext, safeStorage forced off or unavailable, or
- * malformed JSON). Pure — no disk writes, no logging — so it's safe to call speculatively (e.g. against a
- * `.recovered` file that may itself turn out to be unreadable). Shared by readUserRaw's live-file path and
- * tryRecoveredSettings' `.recovered` path so both decode through exactly one cascade.
- */
+type UnreadableSettingsReason = SettingsHealthIssue['reason']
+let _settingsHealth: SettingsHealth = SettingsHealthSchema.parse({ settingsJson: null })
+let _lastUnreadableAuditKey: string | null = null
+
+function markSettingsReadable(): void {
+  _settingsHealth = { settingsJson: null }
+  _lastUnreadableAuditKey = null
+}
+
+function markSettingsUnreadable(reason: UnreadableSettingsReason, recovered: boolean): void {
+  _settingsHealth = {
+    settingsJson: {
+      status: 'unreadable',
+      reason,
+      recovered,
+      lastSeenAt: Date.now()
+    }
+  }
+  const key = `${reason}:${recovered}`
+  if (_lastUnreadableAuditKey === key) return
+  _lastUnreadableAuditKey = key
+  auditLog('settings.unreadable', { reason, recovered })
+}
+
+export function getSettingsHealth(): SettingsHealth {
+  return SettingsHealthSchema.parse(_settingsHealth)
+}
+
+/** Decode a settings buffer through every known on-disk format. Pure: no disk writes, no logging. */
 function tryParseSettingsBuffer(buf: Buffer): Record<string, unknown> | null {
   if (buf.length >= ENC_MARKER_V2.length && buf.subarray(0, ENC_MARKER_V2.length).equals(ENC_MARKER_V2)) {
     try {
@@ -366,13 +383,7 @@ function tryParseSettingsBuffer(buf: Buffer): Record<string, unknown> | null {
   }
 }
 
-/**
- * Last-resort backup: preserve the original UNREADABLE settings buffer verbatim to a single, stable
- * `.recovered` sibling (always overwritten, never timestamped, so repeated failures can't accumulate
- * unbounded files) before the caller serves defaults in fail-closed mode. This is the one chance to save
- * the original bytes for repair. Best-effort: wrapped in try/catch so a write failure here (e.g. disk
- * full) can never block the fail-closed fallback path.
- */
+/** Best-effort verbatim backup before fail-closed defaults; failure here must never block startup. */
 function preserveUnreadableSettings(buf: Buffer, reason: string): void {
   const recoveredPath = `${settingsPath()}.recovered`
   try {
@@ -383,15 +394,7 @@ function preserveUnreadableSettings(buf: Buffer, reason: string): void {
   mainLog.warn(`[store] ${reason}; preserved the unreadable settings file to ${recoveredPath}`)
 }
 
-/**
- * Try a `.recovered` sibling left behind by a previous preserveUnreadableSettings() call. Only consulted
- * when the live settings.json is missing or unreadable — a readable live file always wins and this is
- * never even looked at. Returns null when there's nothing usable there (absent, or itself unreadable
- * under the current backend), so callers can tell "recovered {}" apart from "no recovery available" and
- * decide whether to fall through to preserving the CURRENT unreadable buffer. Never deletes `.recovered`
- * on success: the next successful setSettings() write replaces settings.json with fresh data and makes
- * the backup moot on its own.
- */
+/** Consult a prior `.recovered` only when the live settings.json is missing or unreadable. */
 function tryRecoveredSettings(): Record<string, unknown> | null {
   let buf: Buffer
   try {
@@ -401,42 +404,39 @@ function tryRecoveredSettings(): Record<string, unknown> | null {
   }
   const recovered = tryParseSettingsBuffer(buf)
   if (!recovered) return null
+  markSettingsUnreadable('recovered', true)
   mainLog.warn(`[store] settings.json was unreadable; using previously recovered settings from ${settingsPath()}.recovered`)
   return recovered
 }
 
-/**
- * Sparse user overrides (only keys the user actually changed). Decrypts at-rest encryption.
- *
- * Returns `null` — NOT `{}` — when settings.json exists but cannot be read or decoded. An inaccessible,
- * corrupt, or undecryptable profile is not "the user has no settings": collapsing the two lets
- * setSettings merge a one-key patch onto {} and rename it over the only copy of the profile, wiping
- * meetingsFolder, contextDocs, mcpConnections and everything else. Only ENOENT — the file genuinely is
- * not there — means "no overrides". Callers must handle `null` explicitly: getSettings degrades to
- * DEFAULT+managed without memoising a fresh-profile snapshot, and setSettings refuses to write.
- */
+/** Sparse user overrides. Null means an existing settings.json is unreadable and must not be overwritten. */
 function readUserRaw(): Record<string, unknown> | null {
   let buf: Buffer
   try {
     buf = readFileSync(settingsPath())
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') return null
-    // No live file — nothing to preserve, but a previous unreadable-settings event may have already left
-    // a `.recovered` sibling behind (e.g. an update wiped settings.json outright). Try it before giving up.
-    // Deliberately NOT reached for an unreadable-but-present file: merging a stale `.recovered` over a
-    // live settings.json we simply could not open is the same data loss with extra steps.
-    return tryRecoveredSettings() ?? {}
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+      markSettingsUnreadable('io', false)
+      return null
+    }
+    // For an absent live file only, a prior recovery copy can seed the safe fallback.
+    const recovered = tryRecoveredSettings()
+    if (recovered) return recovered
+    markSettingsReadable()
+    return {}
   }
 
   // ── New AES-GCM format (file backend) ────────────────────────────────────────
   if (buf.length >= ENC_MARKER_V2.length && buf.subarray(0, ENC_MARKER_V2.length).equals(ENC_MARKER_V2)) {
     const parsed = tryParseSettingsBuffer(buf)
-    if (parsed) return parsed
-    // Corrupt or key rotated — don't brick the app. Try `.recovered` BEFORE overwriting it: a `.recovered`
-    // file from an earlier, unrelated incident may still be readable, and clobbering it with today's dead
-    // bytes first would destroy that chance before we ever look at it.
+    if (parsed) {
+      markSettingsReadable()
+      return parsed
+    }
+    // Try `.recovered` before overwriting it with today's unreadable bytes.
     const recovered = tryRecoveredSettings()
     if (recovered) return recovered
+    markSettingsUnreadable('undecryptable', false)
     preserveUnreadableSettings(buf, 'settings.json (V2 AES-GCM) is undecryptable')
     return null
   }
@@ -449,17 +449,20 @@ function readUserRaw(): Record<string, unknown> | null {
     if (useFileBackend()) {
       const recovered = tryRecoveredSettings()
       if (recovered) return recovered
+      markSettingsUnreadable('legacy-keychain-unavailable', false)
       preserveUnreadableSettings(buf, 'settings.json (legacy V1) is unreadable — file backend is forced, so the Keychain is not probed')
       return null
     }
     if (!safeStorage.isEncryptionAvailable()) {
       const recovered = tryRecoveredSettings()
       if (recovered) return recovered
+      markSettingsUnreadable('legacy-keychain-unavailable', false)
       preserveUnreadableSettings(buf, 'settings.json (legacy V1) is unreadable — safeStorage is unavailable on this machine')
       return null
     }
     const parsed = tryParseSettingsBuffer(buf)
     if (parsed) {
+      markSettingsReadable()
       // Best-effort migration: write the current backend format so subsequent reads don't need safeStorage.
       if (useFileBackend()) {
         try {
@@ -474,15 +477,20 @@ function readUserRaw(): Record<string, unknown> | null {
     // Undecryptable (keychain/OS user changed) — fall back to defaults, but try `.recovered` first.
     const recoveredV1 = tryRecoveredSettings()
     if (recoveredV1) return recoveredV1
+    markSettingsUnreadable('undecryptable', false)
     preserveUnreadableSettings(buf, 'settings.json (legacy V1) is undecryptable — Keychain access lost or the OS user changed')
     return null
   }
 
   // ── Legacy plaintext ─────────────────────────────────────────────────────────
   const parsed = tryParseSettingsBuffer(buf)
-  if (parsed) return parsed
+  if (parsed) {
+    markSettingsReadable()
+    return parsed
+  }
   const recoveredPlain = tryRecoveredSettings()
   if (recoveredPlain) return recoveredPlain
+  markSettingsUnreadable('invalid-json', false)
   preserveUnreadableSettings(buf, 'settings.json is present but not valid JSON')
   return null
 }
@@ -584,12 +592,10 @@ function setupIsComplete(user: Record<string, unknown>, managed: Record<string, 
   )
 }
 
-/** Test-only: drop the settings cache between cases that swap `app.getPath('userData')`. Redundant now
- *  that the cache key includes the settings path (see `userPath` below), but kept because existing suites
- *  call it in beforeEach and an explicit reset is a harmless belt-and-braces. Production never swaps
- *  userData. */
+/** Test-only: drop the settings cache between cases that swap `app.getPath('userData')`. */
 export function resetSettingsCacheForTests(): void {
   _settingsCache = null
+  markSettingsReadable()
 }
 
 function currentSettingsMtimes(): Pick<
@@ -597,10 +603,7 @@ function currentSettingsMtimes(): Pick<
   'userPath' | 'userMtime' | 'managedMtime' | 'adminMtime'
 > {
   return {
-    // settings.json path is part of the key so a change of profile directory always misses the cache.
-    // In production `settingsPath()` is constant; test suites point app.getPath('userData') at a fresh
-    // temp dir per case and would otherwise get a prior case's cached Settings when the fresh profile
-    // has no settings.json (all mtimes 0), causing order-dependent flakes.
+    // Path is part of the key so test profile swaps cannot reuse a prior profile's cached settings.
     userPath: settingsPath(),
     userMtime: safeMtime(settingsPath()),
 
@@ -624,24 +627,12 @@ export function getSettings(): Settings {
   // Layering: DEFAULT < managed (org policy, live) < user overrides.
   const managed = validatedManaged()
   const base = { ...DEFAULT_SETTINGS, ...managed }
-  // null = settings.json is there but could not be read right now (see readUserRaw). Serve DEFAULT+managed
-  // so the app still starts and every IPC handler still answers, but never memoise that snapshot below:
-  // the live file's mtime is unchanged, so a cached "no overrides" would outlive the lock and keep showing
-  // a fresh-install-shaped profile until something happened to touch the file.
+  // Null means an existing settings.json is unreadable: serve defaults, but never memoise them.
   const stored = readUserRaw()
   const raw = stored ?? {}
-  // Migration: 'together' and 'fireworks' were removed as LLM providers. A settings.json written before
-  // the removal may still name one as the active provider — coerce it back to the default so a stale
-  // value never resurfaces a provider the UI no longer offers. (managed-config is already filtered
-  // through validKeysOnly() above, via validatedManaged(), so it can't carry a stale provider through.)
-  // Any saved key file for that provider is left untouched on disk; it's simply never surfaced again.
+  // Removed providers are coerced on read so stale settings never resurface hidden provider choices.
   if (raw.provider === 'together' || raw.provider === 'fireworks') raw.provider = DEFAULT_SETTINGS.provider
-  // Migration: model ids the PROVIDER itself retired (see providers.ts RETIRED_MODEL_IDS — currently
-  // DeepSeek's 'deepseek-chat'/'deepseek-reasoner', discontinued 2026-07-24). A persisted per-provider
-  // model override beats every registry default in resolveModelTier, so without this a user who once
-  // picked a now-dead id keeps sending it forever and every request 400s — a failure no amount of
-  // re-entering their (perfectly valid) API key can fix, and one that reads to the user as "the key
-  // stopped working". Applied on READ so it heals existing profiles without waiting for a settings save.
+  // Retired provider model ids are healed on read so old overrides stop sending permanently-dead ids.
   for (const field of ['providerModels', 'providerModelsThinking', 'providerModelsDeep'] as const) {
     const persisted = raw[field]
     if (!persisted || typeof persisted !== 'object') continue
@@ -829,6 +820,7 @@ export function setSettings(patch: Partial<Settings>): Settings {
     )
   }
   _settingsCache = null // invalidate so getSettings re-reads the just-written file
+  markSettingsReadable()
   return getSettings()
 }
 
