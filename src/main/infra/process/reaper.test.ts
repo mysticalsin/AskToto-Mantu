@@ -327,6 +327,19 @@ describe('boot sidecar reaper', () => {
     })
   })
 
+  it('never reaps a sidecar this launch registered before the reaper ran behind the first show (M2-0518)', async () => {
+    const ad = adapters({
+      records: [spawned({ sessionId: 'current', pid: 42 }), spawned({ sessionId: 'previous', pid: 43 })],
+      live: proc()
+    })
+    vi.mocked(ad.processInfo).mockImplementation(async (pid) => proc({ pid }))
+
+    await reapBootSidecars({ userData: USER_DATA, currentMain: MAIN, llamaServerRealpath: LLAMA, currentSessionId: 'current', adapters: ad })
+
+    expect(ad.killed).toEqual([43])
+    expect(ad.processInfo).not.toHaveBeenCalledWith(42)
+  })
+
   it('reads append-only registries in order, preserving the before-spawn intent and complete spawned identity', () => {
     const root = mkdtempSync(join(tmpdir(), 'metis-reaper-'))
     try {

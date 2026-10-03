@@ -35,8 +35,9 @@ describe('MQA-155 — a failed post-sweep source refresh is observed, never fabr
   /** Lift the real runRetentionSweep closure and run it — the defect is a MISSING rejection handler, which
    *  only shows up when the refresh actually rejects. */
   const liftSweep = (deps: Deps): (() => void) => {
-    const body = sliceBetween('const runRetentionSweep = (): void => {', 'runRetentionSweep()').replace(
-      '(): void =>',
+    // M2-0518: the sweep returns its promise so the boot-work queue holds its slot until it settles.
+    const body = sliceBetween('const runRetentionSweep = (): Promise<void> =>', "bootWork.run('runRetentionSweep'").replace(
+      '(): Promise<void> =>',
       '() =>'
     )
     const build = new Function(

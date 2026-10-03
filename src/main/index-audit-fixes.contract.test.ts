@@ -222,6 +222,25 @@ describe('MQA-062 — a dead CLI session stops reporting itself as connected', (
   })
 })
 
+describe('M2-0533 — login item status is cached and refreshed off the boot path', () => {
+  it('publicSettings reads the cache/persisted setting, never the OS login-item API', () => {
+    const body = sliceBetween('function publicSettings(): PublicSettings {', '  // Active provider is usable:')
+    expect(body).toMatch(/const loginItemOpenAtLogin = publicLoginItemOpenAtLogin\(s\)/)
+    expect(body).not.toMatch(/getLoginItemSettings/)
+  })
+
+  it('boot reconciles launch-at-login through bootWork after first show', () => {
+    const boot = sliceBetween('app.whenReady().then(async () => {', '  // Unpackaged (dev/QA) runs show Electron')
+    expect(boot).toMatch(/bootWork\.run\('reconcileLaunchAtLogin'/)
+    expect(boot).not.toMatch(/getLoginItemSettings/)
+  })
+
+  it('the OS refresh is isolated in the cache refresh helper', () => {
+    const helper = sliceBetween('function refreshLoginItemOpenAtLoginCache(): boolean | null {', 'const publicLoginItemOpenAtLogin')
+    expect(helper).toMatch(/app\.getLoginItemSettings\(\)\.openAtLogin/)
+  })
+})
+
 describe('MQA-066 — the enforced-but-unconfigured wall has exactly one way out', () => {
   const carveOut = (): string => sliceBetween('if (!requireAuth()) {', 'const p = patch ?? {}')
 
