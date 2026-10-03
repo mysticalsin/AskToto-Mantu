@@ -123,9 +123,8 @@ const SAMPLE_TIMEOUT_MS = 5_000
 /** The harness's own wait beyond an in-app bound, for a main loop too blocked to fire the in-app timer. */
 const EVALUATE_MARGIN_MS = 2_000
 const PARTIAL_REPORT_EVERY_MS = 30_000
-/** The CPU profile covers boot through the final loop summary; its own start/stop timing is report-only. */
+/** CPU profiles start at boot; their per-run stop point is report-only and follows the sampled window. */
 const PROFILE_SAMPLING_US = 1_000
-const PROFILE_UNTIL_MS = 300_000
 const PROFILE_STOP_TIMEOUT_MS = 30_000
 /** History's IPC round trip is measured from this long after spawn, this often. */
 const HISTORY_FROM_MS = 20_000
@@ -585,6 +584,7 @@ async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, 
     defaultFromMs: HISTORY_FROM_MS,
     retryMs: HISTORY_AFTER_IDLE_RETRY_MS
   })
+  const profileUntilMs = historyMode === 'after-idle' ? historyRetryUntilMs : minutes * 60_000
   const shouldKeepSampling = () => {
     if (Date.now() < deadline) return true
     if (historyMode !== 'after-idle' || historyAnswered) return Boolean(historyRunning)
@@ -592,7 +592,7 @@ async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, 
   }
   while (shouldKeepSampling()) {
     const tMs = sinceSpawn()
-    if (run.profiler.running && tMs >= PROFILE_UNTIL_MS) await stopProfiler(cdp, run.profiler, cpuProfilePath, tMs)
+    if (run.profiler.running && tMs >= profileUntilMs) await stopProfiler(cdp, run.profiler, cpuProfilePath, tMs)
     if (
       shouldProbeHistory({
         historyMode,
