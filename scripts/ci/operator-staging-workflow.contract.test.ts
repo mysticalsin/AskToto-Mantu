@@ -10,7 +10,7 @@ const workflow = read('operator-staging.yml')
 const lines = workflow.split('\n')
 const DISPATCH_CLAUSE = "github.event_name == 'workflow_dispatch'"
 
-/** The lines of a block that starts at `header` and ends at the next line indented `indent` or less. */
+/** The lines of a block that starts at `header` and ends at the next line indented `indent` or less, trailing blanks dropped. */
 function block(from: string[], header: string, indent: number): string[] {
   const start = from.findIndex((line) => line === header)
   expect(start, `block not found: ${header.trim()}`).toBeGreaterThan(-1)
@@ -19,6 +19,7 @@ function block(from: string[], header: string, indent: number): string[] {
     if (line.trim() !== '' && line.length - line.trimStart().length <= indent) break
     body.push(line)
   }
+  while (body.length && body[body.length - 1].trim() === '') body.pop()
   return body
 }
 
