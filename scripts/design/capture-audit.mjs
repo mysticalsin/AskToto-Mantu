@@ -322,8 +322,8 @@ function collectNonTextContrast(result, elements) {
       ...borderColors(style).map((color) => contrastCandidate(color, background.color, 'border')),
       contrastCandidate(style.backgroundColor, background.color, 'fill')
     ]
-    const contrastCandidates = candidates.filter(Boolean)
-    for (const candidate of contrastCandidates) {
+    const candidate = bestNonTextContrastCandidate(candidates)
+    if (candidate) {
       result.nonText.checked++
       if (candidate.ratio + EPSILON < NON_TEXT_REQUIRED) {
         result.nonText.failures.push({

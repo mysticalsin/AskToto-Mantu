@@ -108,26 +108,30 @@ body {
   color: rgb(119 119 119);
 }
 .dc-audit-negative-control {
+  appearance: none;
   padding: 8px 16px;
-  border: 2px solid rgb(246 246 246);
+  border: 2px solid rgb(255 255 255);
   border-radius: 10px;
-  background: rgb(250 250 250);
+  background: rgb(255 255 255);
   color: rgb(27 21 36);
   font: inherit;
 }
 .dc-audit-negative-control:focus {
-  outline: 2px solid rgb(246 246 246);
+  outline: 2px solid rgb(255 255 255);
   outline-offset: 2px;
 }
 .dc-audit-negative-clipped {
   display: block;
-  width: 24px;
-  max-width: 24px;
-  height: 12px;
+  width: 32px;
+  max-width: 32px;
   overflow: hidden;
   color: rgb(27 21 36);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.dc-audit-negative-clipped span {
+  display: block;
+  width: 240px;
 }
 
 @keyframes dc-pulse {
