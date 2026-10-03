@@ -19,8 +19,13 @@ import {
   revealBand,
   revealCorridor,
   rightEdgeAnchorLocked,
+  RIGHT_EDGE_ISLAND_CHROME_PX,
+  RIGHT_EDGE_MIN_WORK_AREA,
+  islandSlotMax,
+  rightEdgeFits,
   type Rect
 } from './right-edge-geometry'
+import { RE_TYPING_PIN_MS, RIGHT_EDGE_TIMINGS, RIGHT_EDGE_TIMING_RANGES } from './right-edge-timing'
 
 const wa = (width: number, height: number, x = 0, y = 0): Rect => ({ x, y, width, height })
 /** The three floor sizes (spec v3 §7) plus the macOS row and two common desktops. */
@@ -243,5 +248,36 @@ describe('right-edge geometry authority (spec v3 §2)', () => {
     expect(readerRect(wa(853, 432))).toEqual({ x: 853 - 12 - 720, y: 12, width: 720, height: 408 })
     expect(readerRect(wa(1440, 875, 0, 25))).toEqual({ x: 1440 - 12 - 720, y: 37, width: 720, height: 851 })
     expect(readerRect(wa(600, 700))).toEqual({ x: 12, y: 12, width: 576, height: 676 })
+  })
+})
+
+describe('right-edge fit and timing (M2-0202 S2)', () => {
+  it('RE-G09: a work area under 432 tall or 384 wide does not fit the right edge; 853x432 does', () => {
+    expect(RIGHT_EDGE_MIN_WORK_AREA).toEqual({ width: 384, height: 432 })
+    for (const area of SIZES) expect(rightEdgeFits(area), `${area.width}x${area.height}`).toBe(true)
+    expect(rightEdgeFits(wa(853, 432))).toBe(true)
+    expect(rightEdgeFits(wa(384, 432))).toBe(true)
+    expect(rightEdgeFits(wa(853, 431))).toBe(false)
+    expect(rightEdgeFits(wa(383, 900))).toBe(false)
+    expect(rightEdgeFits(wa(360, 864))).toBe(false)
+  })
+
+  it('the content slot is H_max less the island chrome at every floor size', () => {
+    expect(islandSlotMax(wa(853, 432))).toBe(392 - RIGHT_EDGE_ISLAND_CHROME_PX)
+    expect(islandSlotMax(wa(853, 440))).toBe(400 - RIGHT_EDGE_ISLAND_CHROME_PX)
+    expect(islandSlotMax(wa(1024, 528))).toBe(488 - RIGHT_EDGE_ISLAND_CHROME_PX)
+    for (const area of SIZES) expect(islandSlotMax(area)).toBeGreaterThan(0)
+  })
+
+  it('RE-T01: every right-edge timing constant lies inside its kit §5.4 range', () => {
+    const names = Object.keys(RIGHT_EDGE_TIMING_RANGES) as Array<keyof typeof RIGHT_EDGE_TIMING_RANGES>
+    expect(Object.keys(RIGHT_EDGE_TIMINGS).sort()).toEqual([...names].sort())
+    for (const name of names) {
+      const [min, max] = RIGHT_EDGE_TIMING_RANGES[name]
+      expect(RIGHT_EDGE_TIMINGS[name], name).toBeGreaterThanOrEqual(min)
+      expect(RIGHT_EDGE_TIMINGS[name], name).toBeLessThanOrEqual(max)
+    }
+    // The click-into-an-empty-composer hold of RE-P01.
+    expect(RE_TYPING_PIN_MS).toBe(8000)
   })
 })

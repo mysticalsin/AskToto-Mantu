@@ -23,6 +23,8 @@ import {
   rememberBarContentHeight
 } from '@shared/overlay-chrome'
 import { createRightEdgeAnchors } from './island/right-edge-anchor'
+import { createRightEdgeSession } from './island/right-edge-session'
+import { RIGHT_EDGE_PINS, type RightEdgePin } from '@shared/right-edge-state'
 
 const source = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
 
@@ -126,6 +128,12 @@ function nativeHover(options: {
       rightEdgeLive: () => true,
       warn: () => {},
       later: () => {}
+    }),
+    // The park gate (M2-0202) is the real session; a refused leave-park retries through the real schedule.
+    rightEdgeSession: createRightEdgeSession({
+      surface: () => ({ surface: 'island', restKind: 'none', edgeClass: 'W', cardMaxHeight: 0, slotMax: 0 }),
+      send: () => {},
+      onPinsCleared: () => { parkPending = true }
     })
   }
   // Lifts one shipped function, dropping only its TypeScript parameter and return annotations.
@@ -190,6 +198,16 @@ function nativeHover(options: {
       now = at
       cursor = point
       expect(park(true)).toBe(true)
+    },
+    /** A park request: `force` is an explicit Hide, otherwise the page's park after its exit spring. */
+    parkAt(at: number, point: { x: number; y: number }, force: boolean): boolean {
+      now = at
+      cursor = point
+      return park(force)
+    },
+    /** The page's IPC.rightEdgeState report with these pins. */
+    pin(pins: RightEdgePin[]): void {
+      deps.rightEdgeSession.report({ surface: 'island', contentHeight: 0, pins })
     },
     /** The settings-driven re-park after a layout switch (Hide ↔ Island), with the pointer at `point`. */
     layoutChangeAt(at: number, point: { x: number; y: number }): void {
@@ -491,6 +509,49 @@ describe('right-edge Hide native watch', () => {
     hover.tickAt(RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS + 24, away)
     expect(hover.state().notifications).toEqual([false])
     expect(hover.state().parkPending).toBe(false)
+  })
+
+  it('RE-P01: while a pin holds the dock, the pointer leaving is reported but never parks it; clearing the pins parks', () => {
+    // The owner's D2 path: click into an empty composer (the typing pin), then move the pointer away.
+    const hover = nativeHover({ rightEdge: { resting: true } })
+    const inBand = { x: edge, y: hover.band.y + Math.round(hover.band.height / 2) }
+    const away = { x: 400, y: 500 }
+    let at = 0
+    for (; at <= 400 && hover.state().restoreCount === 0; at += 24) hover.tickAt(at, inBand)
+    expect(hover.state().restoreCount).toBe(1)
+    hover.pin(['typing'])
+    hover.tickAt(at, away)
+    expect(hover.state().notifications).toEqual([true, false])
+    expect(hover.state().parkPending).toBe(false)
+    // The page's own park after its exit spring is refused as well, and the window stays open.
+    expect(hover.parkAt(at + 24, away, false)).toBe(false)
+    for (let t = at + 48; t <= at + 8_000; t += 24) hover.tickAt(t, away)
+    expect(hover.state().parkPending).toBe(false)
+    expect(hover.state().bounds).toEqual(hover.revealed)
+    // The pin expires (the page reports no pins): the refused leave-park runs.
+    hover.pin([])
+    expect(hover.state().parkPending).toBe(true)
+  })
+
+  it('RE-P01: the unhovered auto-park waits while a pin is set and fires once the pins clear', () => {
+    const hover = nativeHover({ rightEdge: { resting: false, unhoveredRevealAt: 0 } })
+    const away = { x: 400, y: 500 }
+    hover.pin(['approval'])
+    let at = 0
+    for (; at <= RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS + 2_000; at += 24) hover.tickAt(at, away)
+    expect(hover.state().notifications).toEqual([])
+    hover.pin([])
+    hover.tickAt(at, away)
+    expect(hover.state().notifications).toEqual([false])
+  })
+
+  it('RE-P01: an explicit Hide parks under every pin except an IME composition', () => {
+    for (const pin of RIGHT_EDGE_PINS) {
+      const hover = nativeHover({ rightEdge: { resting: false } })
+      hover.pin([pin])
+      expect(hover.parkAt(0, { x: 400, y: 500 }, true), pin).toBe(pin !== 'ime')
+      expect(hover.state().bounds, pin).toEqual(pin === 'ime' ? hover.revealed : hover.band)
+    }
   })
 
   it('a pointer that visits the unhovered reveal hands it to the ordinary leave → park rule', () => {

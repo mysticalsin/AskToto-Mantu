@@ -31,6 +31,7 @@ export const ATTRIBUTABLE_PROCESS_KINDS = [
 ]
 
 export const REQUIRED_TRACE_SCENARIOS = ['parked-bar-orb', 'backdrop-filter', 'threejs-obsidian-orb']
+export const BAR_ORB_TRACE_SCENARIOS = ['parked-bar-orb', 'threejs-obsidian-orb']
 export const STATES_REQUIRING_ATTACH_PRECONDITION = [
   'first-inference',
   'active-transcription',
@@ -258,6 +259,22 @@ export function validateStatePrecondition({ state, attachMode, evidence }) {
   }
 }
 
+export function validateTraceProfileCompatibility({ profileSettings, scenarios }) {
+  const requested = scenarios ?? []
+  if (requested.length === 0) return
+  for (const scenario of requested) {
+    if (!REQUIRED_TRACE_SCENARIOS.includes(scenario)) throw new Error(`unknown trace scenario: ${scenario}`)
+  }
+  const placement = profileSettings?.overlayPlacement
+  if (placement !== 'right-edge') return
+  const refused = requested.find((scenario) => BAR_ORB_TRACE_SCENARIOS.includes(scenario))
+  if (refused) {
+    throw new Error(
+      `trace scenario ${refused} requires an overlay profile with overlayPlacement "top-center"; observed "right-edge"`
+    )
+  }
+}
+
 export function missingStates(observedStates) {
   const observed = new Set(observedStates)
   return STATES.filter((state) => !observed.has(state))
@@ -326,7 +343,7 @@ export function rendererScenarioProbeSource(scenario) {
       const orb = document.querySelector('[data-bar-pill-orb]');
       const box = visibleBox(orb);
       const canvas = orb?.querySelector('canvas');
-      return { ok: Boolean(box && canvas), box, attributes: orb ? { state: orb.getAttribute('data-orb-state'), visible: orb.getAttribute('data-orb-visible'), backing: orb.getAttribute('data-orb-backing') } : null };
+      return { ok: Boolean(box && canvas), orbFound: Boolean(orb), box, canvasFound: Boolean(canvas), attributes: orb ? { state: orb.getAttribute('data-orb-state'), visible: orb.getAttribute('data-orb-visible'), backing: orb.getAttribute('data-orb-backing') } : null };
     }
     if (${JSON.stringify(scenario)} === 'backdrop-filter') {
       for (const el of document.querySelectorAll('body *')) {
@@ -341,8 +358,19 @@ export function rendererScenarioProbeSource(scenario) {
     const canvas = document.querySelector('[data-orb-style="obsidian"] canvas, .obsidian-orb canvas, .obsidian-orb__canvas');
     const box = visibleBox(canvas);
     const host = canvas?.closest('[data-orb-style="obsidian"], .obsidian-orb');
-    return { ok: Boolean(box && host), box, hostClassName: host ? String(host.className || '') : null };
+    return { ok: Boolean(box && host), canvasFound: Boolean(canvas), box, hostFound: Boolean(host), hostClassName: host ? String(host.className || '') : null };
   })()`
+}
+
+export function rendererProbeFailureMessage(scenario, proof) {
+  const parts = [`renderer trace scenario is not established: ${scenario}`]
+  if (proof && typeof proof === 'object') {
+    if ('orbFound' in proof) parts.push(`orb found: ${Boolean(proof.orbFound)}`)
+    if ('box' in proof) parts.push(`box: ${JSON.stringify(proof.box ?? null)}`)
+    if ('canvasFound' in proof) parts.push(`canvas found: ${Boolean(proof.canvasFound)}`)
+    if (!('orbFound' in proof) && 'hostFound' in proof) parts.push(`host found: ${Boolean(proof.hostFound)}`)
+  }
+  return parts.join('; ')
 }
 
 export function summarize(samples, wallSeconds) {

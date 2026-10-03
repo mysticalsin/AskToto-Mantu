@@ -40,11 +40,23 @@ import {
   parkedHoverReanchor,
   firstPaintOverlayBounds,
   ISLAND_NOTCH_STRUT_PX,
+  resolveOverlayPlacement,
+  rightEdgeClass,
+  rightEdgePlacementFits,
+  rightEdgeSurfaceState,
   type DisplayMetrics,
   type Rect
 } from './geometry'
+import {
+  CURSOR_REVEAL_DWELL_MS,
+  OVERLAY_LEAVE_PARK_MS,
+  RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS,
+  TOP_CENTER_REVEAL_DWELL_MS,
+  cursorRevealDwellMs
+} from './cursor-watch'
 import { resolveOverlayPresentation } from '@shared/overlay-presentation'
-import { anchorY, legacyTabRect, revealBand } from '@shared/right-edge-geometry'
+import { anchorY, islandMaxHeight, islandSlotMax, legacyTabRect, revealBand } from '@shared/right-edge-geometry'
+import { RE_REVEAL_DWELL_MS, RE_UNHOVERED_REVEAL_GRACE_MS } from '@shared/right-edge-timing'
 
 /**
  * geometry.test.ts — MQA-275. Pins the pure positioning math extracted from src/main/index.ts (the
@@ -904,5 +916,77 @@ describe('M2-0202 park invariant', () => {
         ).toEqual(island)
       }
     }
+  })
+})
+
+describe('M2-0202 S2 — the IPC.rightEdgeSurface main resolves', () => {
+  const display = (width: number, height: number, x = 0, y = 0): DisplayMetrics => ({
+    bounds: { x, y: 0, width, height: height + y },
+    workArea: { x, y, width, height },
+    hasNotch: false,
+    notchWidth: 0,
+    menuBarHeight: y,
+    source: 'heuristic'
+  })
+  const surface = (m: DisplayMetrics, input: { layout?: 'hide' | 'island'; resting?: boolean; others?: Rect[]; placement?: 'right-edge' | 'top-center' } = {}) =>
+    rightEdgeSurfaceState({
+      placement: input.placement ?? 'right-edge',
+      layout: input.layout ?? 'hide',
+      resting: input.resting ?? true,
+      metrics: m,
+      otherDisplays: input.others ?? []
+    })
+
+  it('RE-G09: under 432 tall or 384 wide resolves to top-center in main; 853x432 stays right-edge', () => {
+    // 1280x720 at Windows 150% with a 48 px taskbar leaves 853x432.
+    for (const [width, height] of [[853, 432], [853, 440], [1024, 528], [384, 432]] as const) {
+      const m = display(width, height)
+      expect(rightEdgePlacementFits(m), `${width}x${height}`).toBe(true)
+      expect(resolveOverlayPlacement('right-edge', m)).toBe('right-edge')
+      expect(surface(m).surface).toBe('rest')
+    }
+    for (const [width, height] of [[853, 431], [383, 900], [1280, 400]] as const) {
+      const m = display(width, height)
+      expect(rightEdgePlacementFits(m), `${width}x${height}`).toBe(false)
+      expect(resolveOverlayPlacement('right-edge', m)).toBe('top-center')
+      // The renderer renders only what this payload says, so it falls back exactly where main does.
+      expect(surface(m)).toEqual({ surface: 'top-center', restKind: 'none', edgeClass: 'W', cardMaxHeight: 0, slotMax: 0 })
+      expect(hoverWatchRestRect('hide', m, 'right-edge')).toEqual(hoverWatchRestRect('hide', m, 'top-center'))
+    }
+  })
+
+  it('reports the rest while parked and the island while revealed, with H_max and the slot from the authority', () => {
+    const m = display(853, 432)
+    expect(surface(m, { resting: true })).toEqual({
+      surface: 'rest',
+      restKind: 'none',
+      edgeClass: 'W',
+      cardMaxHeight: islandMaxHeight(m.workArea),
+      slotMax: islandSlotMax(m.workArea)
+    })
+    expect(surface(m).cardMaxHeight).toBe(392)
+    expect(surface(m, { resting: false }).surface).toBe('island')
+    expect(surface(m, { layout: 'island' }).restKind).toBe('tab')
+    expect(surface(m, { placement: 'top-center' }).surface).toBe('top-center')
+  })
+
+  it('classifies the edge: W at the display edge, D with a Dock or taskbar on it, S where a display continues', () => {
+    const plain = display(1440, 875, 0, 25)
+    expect(rightEdgeClass(plain, [])).toBe('W')
+    const dock: DisplayMetrics = { ...plain, workArea: { ...plain.workArea, width: plain.workArea.width - 70 } }
+    expect(rightEdgeClass(dock, [])).toBe('D')
+    const neighbour: Rect = { x: plain.bounds.x + plain.bounds.width, y: 0, width: 1920, height: 1080 }
+    expect(rightEdgeClass(plain, [neighbour])).toBe('S')
+    // Where a display continues, Hide parks as the Island rail (rightEdgeParkLayout), so the rest is the tab.
+    expect(surface(plain, { others: [neighbour] })).toMatchObject({ edgeClass: 'S', restKind: 'tab' })
+  })
+
+  it('RE-T01: the right-edge watch timings come from the timing module; the top-center ones are unchanged', () => {
+    expect(CURSOR_REVEAL_DWELL_MS).toBe(RE_REVEAL_DWELL_MS)
+    expect(RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS).toBe(RE_UNHOVERED_REVEAL_GRACE_MS)
+    expect(cursorRevealDwellMs('right-edge')).toBe(RE_REVEAL_DWELL_MS)
+    expect(TOP_CENTER_REVEAL_DWELL_MS).toBe(250)
+    expect(cursorRevealDwellMs('top-center')).toBe(250)
+    expect(OVERLAY_LEAVE_PARK_MS).toBe(800)
   })
 })

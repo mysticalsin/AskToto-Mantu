@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react'
+import { useLayoutEffect, useRef, useState, type ReactNode, type Ref } from 'react'
 import { AudioLines, Brain, ChevronRight, CornerDownLeft, FileSearch, Image, LoaderCircle, Pause, Play, Settings, Square, X } from 'lucide-react'
 import type { MetisCommandState } from '@shared/ipc'
 import { RIGHT_EDGE_DRAWER_WIDTH, RIGHT_EDGE_TAB_WIDTH } from '@shared/right-edge-geometry'
@@ -18,6 +18,10 @@ export interface SidecarChatProps {
   /** Existing answer content, supplied by App rather than recreated in the dock. */
   body?: ReactNode
   inputRef?: Ref<HTMLInputElement>
+  /** A keystroke or a pointerdown in the composer: the typing pin (lib/right-edge/pins.ts). */
+  onComposerActivity?: () => void
+  /** An IME composition started or ended in the composer: the ime pin. */
+  onComposingChange?: (composing: boolean) => void
 }
 
 /**
@@ -31,7 +35,9 @@ export function SidecarChat({
   onStop,
   busy = false,
   stoppable = false,
-  inputRef
+  inputRef,
+  onComposerActivity,
+  onComposingChange
 }: SidecarChatProps): JSX.Element {
   const available = typeof onChange === 'function' && typeof onSubmit === 'function'
   const submit = (): void => {
@@ -54,9 +60,14 @@ export function SidecarChat({
         className="right-edge-sidecar__chat-input no-drag"
         disabled={!available || busy}
         onChange={(event) => onChange?.(event.target.value)}
+        onPointerDown={onComposerActivity}
+        onCompositionStart={() => onComposingChange?.(true)}
+        onCompositionEnd={() => onComposingChange?.(false)}
         onKeyDown={(event) => {
-          // IME uses Enter to commit a composition. Sending then would discard the user's in-progress text.
-          if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+          onComposerActivity?.()
+          // D10: IME uses Enter to commit a composition (isComposing, or keyCode 229 on the keydown it consumes).
+          // Sending then would discard the user's in-progress text.
+          if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) {
             event.preventDefault()
             submit()
           }
@@ -187,7 +198,9 @@ export function RightEdgeSidecar({
   spotlightReady = false,
   onHistory,
   liveNotice,
-  onSettings
+  onSettings,
+  onComposerActivity,
+  onComposingChange
 }: {
   open: boolean
   onOpen: () => void
@@ -205,11 +218,15 @@ export function RightEdgeSidecar({
   }>({ proposalId: null, status: 'idle' })
   const [intelligence, setIntelligence] = useState<{ status: 'idle' | 'opening' | 'error'; error?: string }>({ status: 'idle' })
   const composerRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    if (!open) return
-    const frame = window.requestAnimationFrame(() => composerRef.current?.focus())
-    return () => window.cancelAnimationFrame(frame)
+  // D4: an explicit open (a summon bumps focusSignal; a click on the rail tab) focuses the composer in the
+  // commit that opens the drawer, never a frame later. A hover reveal opens it without moving focus.
+  const focusedSignalRef = useRef(focusSignal)
+  const tabOpenRef = useRef(false)
+  useLayoutEffect(() => {
+    if (!open || (focusedSignalRef.current === focusSignal && !tabOpenRef.current)) return
+    focusedSignalRef.current = focusSignal
+    tabOpenRef.current = false
+    composerRef.current?.focus()
   }, [open, focusSignal])
 
   const cancelPendingCommand = (): void => {
@@ -243,14 +260,17 @@ export function RightEdgeSidecar({
   const status = capturing ? 'Capturing screen' : listening ? (paused ? 'Paused' : 'Listening') : busy ? 'Thinking' : 'Ready'
 
   return (
-    <div className={'right-edge-sidecar' + (open ? ' right-edge-sidecar--open' : '')}>
+    <div className={'right-edge-sidecar' + (open ? ' right-edge-sidecar--open' : '')} data-re-surface={open ? 'island' : 'rest'}>
       <button
         type="button"
         aria-label="Open Métis"
         aria-expanded={open}
         aria-hidden={open || undefined}
         tabIndex={open ? -1 : 0}
-        onClick={onOpen}
+        onClick={() => {
+          tabOpenRef.current = true
+          onOpen()
+        }}
         className="right-edge-sidecar__tab no-drag focus-ring"
         style={{ width: RIGHT_EDGE_TAB_WIDTH }}
       >
@@ -265,7 +285,9 @@ export function RightEdgeSidecar({
         className="right-edge-sidecar__drawer"
         style={{ maxWidth: RIGHT_EDGE_DRAWER_WIDTH }}
         onKeyDown={(event) => {
-          if (dockEscapeHides({ key: event.key, isComposing: event.nativeEvent.isComposing }, canClose)) {
+          // D11: Escape during an IME composition cancels the composition; the IME keeps it.
+          const isComposing = event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229
+          if (dockEscapeHides({ key: event.key, isComposing }, canClose)) {
             event.preventDefault()
             event.stopPropagation()
             close()
@@ -429,6 +451,8 @@ export function RightEdgeSidecar({
               busy={busy}
               stoppable={stoppable}
               inputRef={composerRef}
+              onComposerActivity={onComposerActivity}
+              onComposingChange={onComposingChange}
             />
           </div>
         </div>
