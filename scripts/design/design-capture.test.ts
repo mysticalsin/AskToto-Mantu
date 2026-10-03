@@ -10,7 +10,7 @@ import {
   captureDeviceMetrics,
   captureFileName,
   captureMatrix,
-  captureScreenshotOptions,
+  captureScreenshotRequest,
   assertPngSize,
   pngSize,
   sha256Hex
@@ -225,8 +225,18 @@ describe('png size check', () => {
     expect(() => assertPngSize(png(960, 640), viewport, 2, 'a.png')).toThrow(/expected 1920x1280, got 960x640/)
   })
 
-  it('requests device-scale screenshots so Windows 2x captures are physical pixels', () => {
-    expect(captureScreenshotOptions('a.png')).toEqual({ path: 'a.png', scale: 'device' })
+  it('requests a CDP screenshot clip scaled to the expected output pixels', () => {
+    expect(captureScreenshotRequest(viewport, 2)).toEqual({
+      format: 'png',
+      fromSurface: true,
+      clip: {
+        x: 0,
+        y: 0,
+        width: 960,
+        height: 640,
+        scale: 2
+      }
+    })
   })
 
   it('pins CDP device metrics to the capture viewport instead of inheriting Windows chrome height', () => {

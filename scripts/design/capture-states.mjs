@@ -18,7 +18,7 @@ import {
   captureDeviceMetrics,
   captureFileName,
   captureMatrix,
-  captureScreenshotOptions
+  captureScreenshotRequest
 } from './capture-manifest.mjs'
 import { detectedFailureKinds } from './capture-audit.mjs'
 
@@ -131,7 +131,8 @@ try {
           audit = auditErrorResult('collector', errorMessage(error))
           failures.push(`${file}: collector failed: ${errorMessage(error)}`)
         }
-        await page.screenshot(captureScreenshotOptions(path))
+        const screenshot = await cdp.send('Page.captureScreenshot', captureScreenshotRequest(VIEWPORT, row.scale))
+        writeFileSync(path, Buffer.from(screenshot.data, 'base64'))
         const bytes = readFileSync(path)
         assertPngSize(bytes, VIEWPORT, row.scale, file)
         shots.push({ state, ...row, file, bytes, audit })

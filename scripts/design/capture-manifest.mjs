@@ -39,9 +39,19 @@ export function assertPngSize(bytes, viewport, scale, label) {
   }
 }
 
-/** Electron on Windows needs an explicit device-scale screenshot request for 2x PNGs. */
-export function captureScreenshotOptions(path) {
-  return { path, scale: 'device' }
+/** CDP clips are in CSS pixels and `clip.scale` is the requested output pixel multiplier. */
+export function captureScreenshotRequest(viewport, scale) {
+  return {
+    format: 'png',
+    fromSurface: true,
+    clip: {
+      x: 0,
+      y: 0,
+      width: viewport.width,
+      height: viewport.height,
+      scale
+    }
+  }
 }
 
 /** Keep the renderer viewport fixed instead of inheriting OS chrome or host display size. */
