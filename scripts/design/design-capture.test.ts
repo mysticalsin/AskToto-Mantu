@@ -13,7 +13,14 @@ import {
   pngSize,
   sha256Hex
 } from './capture-manifest.mjs'
-import { DESIGN_STATES, DESIGN_STATE_IDS, resolveDesignState } from '../../src/renderer/src/design-capture/states'
+import { AUDIT_STANDARD } from './capture-audit.mjs'
+import {
+  AUDIT_NEGATIVE_CONTROL_STATE,
+  DESIGN_STATES,
+  DESIGN_STATE_IDS,
+  resolveDesignState,
+  resolveDesignStateIncludingQa
+} from '../../src/renderer/src/design-capture/states'
 
 const root = resolve(__dirname, '..', '..')
 const read = (...parts: string[]): string =>
@@ -96,9 +103,25 @@ describe('design states', () => {
     expect(resolveDesignState('')).toBeUndefined()
     expect(resolveDesignState('?state=nope')).toBeUndefined()
   })
+
+  it('keeps the QA audit negative control out of evidence state ids', () => {
+    expect(DESIGN_STATE_IDS).not.toContain(AUDIT_NEGATIVE_CONTROL_STATE.id)
+    expect(resolveDesignState(`?state=${AUDIT_NEGATIVE_CONTROL_STATE.id}`)).toBeUndefined()
+    expect(resolveDesignStateIncludingQa(`?state=${AUDIT_NEGATIVE_CONTROL_STATE.id}`)).toBe(
+      AUDIT_NEGATIVE_CONTROL_STATE
+    )
+  })
 })
 
 describe('capture matrix and manifest', () => {
+  const cleanAudit = {
+    pass: true,
+    text: { checked: 1, failures: [] },
+    nonText: { checked: 1, failures: [] },
+    clipping: { checked: 1, failures: [] },
+    unverifiable: []
+  }
+
   it('covers light/dark x 1x/2x x reduced motion exactly once each', () => {
     const rows = captureMatrix()
     expect(rows).toHaveLength(THEMES.length * SCALES.length * MOTIONS.length)
@@ -121,7 +144,10 @@ describe('capture matrix and manifest', () => {
     const manifest = buildManifest({
       commit: 'abc123',
       platform: 'darwin',
-      shots: [{ state: 'bar-idle', theme: 'light', scale: 1, motion: 'no-preference', file: 'a.png', bytes }]
+      shots: [
+        { state: 'bar-idle', theme: 'light', scale: 1, motion: 'no-preference', file: 'a.png', bytes, audit: cleanAudit }
+      ],
+      negativeControl: { detected: true, kinds: ['clipping', 'nonText', 'text'] }
     })
     expect(manifest.commit).toBe('abc123')
     expect(manifest.entries).toEqual([
@@ -131,14 +157,50 @@ describe('capture matrix and manifest', () => {
         scale: 1,
         motion: 'no-preference',
         file: 'a.png',
-        sha256: sha256Hex(bytes)
+        sha256: sha256Hex(bytes),
+        audit: cleanAudit
       }
     ])
     expect(manifest.entries[0].sha256).toMatch(/^[0-9a-f]{64}$/)
+    expect(manifest.audit).toMatchObject({
+      standard: AUDIT_STANDARD,
+      failures: 0,
+      text: { checked: 1, failures: 0 },
+      nonText: { checked: 1, failures: 0 },
+      clipping: { checked: 1, failures: 0 },
+      unverifiable: 0,
+      negativeControl: { detected: true, kinds: ['clipping', 'nonText', 'text'] }
+    })
   })
 
   it('marks only reduced-motion shots as reproducible', () => {
-    expect(buildManifest({ commit: 'abc123', platform: 'darwin', shots: [] }).reproducibleMotions).toEqual(['reduce'])
+    expect(
+      buildManifest({
+        commit: 'abc123',
+        platform: 'darwin',
+        shots: [],
+        negativeControl: { detected: true, kinds: ['clipping', 'nonText', 'text'] }
+      }).reproducibleMotions
+    ).toEqual(['reduce'])
+  })
+})
+
+describe('design-capture workflow', () => {
+  const workflow = read('.github/workflows/design-capture.yml')
+
+  it('runs on pull requests to integration when design-capture paths change and keeps dispatch support', () => {
+    expect(workflow).toContain('  pull_request:\n    branches: [m2/integration]\n    paths:')
+    expect(workflow).toContain('      - src/renderer/src/design-capture/**')
+    expect(workflow).toContain('      - scripts/design/**')
+    expect(workflow).toContain('      - .github/workflows/design-capture.yml')
+    expect(workflow).toContain('  workflow_dispatch:')
+    expect(workflow).not.toMatch(/\n  push:/)
+  })
+
+  it('captures on pull_request and always uploads the manifest artifact', () => {
+    expect(workflow).not.toContain("if: github.event_name == 'workflow_dispatch'")
+    expect(workflow).toContain('if: always()')
+    expect(workflow).toContain('node scripts/design/capture-states.mjs out-design-capture')
   })
 })
 

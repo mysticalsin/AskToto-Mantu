@@ -1,6 +1,7 @@
 // Pure helpers of the design-capture job (scripts/design/capture-states.mjs): the capture matrix, the file
 // name of each shot and the manifest that ties every image to its state id, sha256 and source commit.
 import { createHash } from 'node:crypto'
+import { summarizeAudits } from './capture-audit.mjs'
 
 export const THEMES = ['light', 'dark']
 export const SCALES = [1, 2]
@@ -43,21 +44,24 @@ export function sha256Hex(bytes) {
 }
 
 /**
- * @param {{ commit: string, platform: string, shots: Array<{ state: string, theme: string, scale: number, motion: string, file: string, bytes: Uint8Array }> }} input
+ * @param {{ commit: string, platform: string, shots: Array<{ state: string, theme: string, scale: number, motion: string, file: string, bytes: Uint8Array, audit: object }>, negativeControl?: { detected: boolean, kinds: string[] } }} input
  */
-export function buildManifest({ commit, platform, shots }) {
+export function buildManifest({ commit, platform, shots, negativeControl }) {
+  const entries = shots.map(({ state, theme, scale, motion, file, bytes, audit }) => ({
+    state,
+    theme,
+    scale,
+    motion,
+    file,
+    sha256: sha256Hex(bytes),
+    audit
+  }))
   return {
     commit,
     platform,
     // Pulse and caret animations are caught mid-cycle: only reduced-motion shots are byte-reproducible.
     reproducibleMotions: ['reduce'],
-    entries: shots.map(({ state, theme, scale, motion, file, bytes }) => ({
-      state,
-      theme,
-      scale,
-      motion,
-      file,
-      sha256: sha256Hex(bytes)
-    }))
+    entries,
+    audit: summarizeAudits(entries, negativeControl)
   }
 }

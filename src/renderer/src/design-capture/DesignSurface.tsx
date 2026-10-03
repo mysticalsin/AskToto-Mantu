@@ -58,6 +58,18 @@ function ErrorBanner(): JSX.Element {
   )
 }
 
+function AuditNegativeControl(): JSX.Element {
+  return (
+    <div className="dc-card dc-audit-negative" aria-label="Audit negative control">
+      <p className="dc-audit-negative-text">Contrast guard sample</p>
+      <button className="dc-audit-negative-control" type="button">
+        Control
+      </button>
+      <span className="dc-audit-negative-clipped">Clipped label for audit control</span>
+    </div>
+  )
+}
+
 export function DesignSurface({ state }: { state: DesignState }): JSX.Element {
   switch (state.kind) {
     case 'bar':
@@ -68,6 +80,8 @@ export function DesignSurface({ state }: { state: DesignState }): JSX.Element {
       return <Review />
     case 'error':
       return <ErrorBanner />
+    case 'audit-negative-control':
+      return <AuditNegativeControl />
   }
 }
 

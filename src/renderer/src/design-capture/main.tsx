@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import '../tokens.css'
 import './capture.css'
 import { DesignIndex, DesignSurface } from './DesignSurface'
-import { DESIGN_STATE_IDS, resolveDesignState } from './states'
+import { DESIGN_STATE_IDS, resolveDesignStateIncludingQa } from './states'
 
 declare global {
   interface Window {
@@ -13,7 +13,7 @@ declare global {
 }
 
 const requested = new URLSearchParams(window.location.search).get('state')
-const state = resolveDesignState(window.location.search)
+const state = resolveDesignStateIncludingQa(window.location.search)
 
 window.__DESIGN_CAPTURE__ = { states: DESIGN_STATE_IDS }
 
