@@ -119,13 +119,14 @@ function element(id: string): FakeElement {
 }
 
 function dialog(children: FakeElement[]): FakeRoot {
-  return {
+  const root: FakeRoot = {
     ...element('root'),
     tabIndex: -1,
     children,
     querySelectorAll: () => children,
     contains: (el) => el === root || children.includes(el as FakeElement)
   }
+  return root
 }
 
 function key(value: string, shiftKey = false): KeyboardEvent {
