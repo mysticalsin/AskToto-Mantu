@@ -403,7 +403,6 @@ function storageWriteError(op: string, result: { status: string; code?: string }
   if (code) error.code = code
   return error
 }
-
 // Decrypted temp copies are tracked and deleted on quit so an encrypted transcript never leaves a
 // permanent cleartext file behind (the name is randomized so it isn't a predictable target either).
 const decryptedTemps = new Set<string>()
