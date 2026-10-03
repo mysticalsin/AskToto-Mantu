@@ -127,6 +127,7 @@ import {
 import { createStream } from './llm'
 import { isProxyOperatorFault, isTransient, nextBackoff, stripProxyFaultMarker } from './llm/retry'
 import { classifyExhaustion, type ExhaustionSignal } from './llm/exhaustion'
+import { stripServerAuthoritativeSettingsPatch } from './settings-strip'
 import { isBudgetExhausted, resetHeadroom } from './llm/usage-headroom'
 import {
   isAuthFailure,
@@ -5171,56 +5172,9 @@ function registerIpc(): void {
       auditLog('settings.changed', { keys: Object.keys(bootstrap), reason: 'sso_bootstrap' })
       return publicSettings()
     }
-    const p = patch ?? {}
-    // License STATE is server-authoritative: only main's activateLicense/heartbeat (license.ts) may
-    // write it. Without this strip, any renderer code could self-issue an unlimited license with a
-    // plain settings patch ({licenseValid:true, licenseSeatCap:999999}) and defeat the gate once it's
-    // wired. licenseServerUrl + licenseGateEnabled stay writable — those are genuine user inputs.
-    // licenseLease (MQA-282) and trialStartedAt (MQA-281) are the same class of field: only
-    // activateLicense/heartbeat may set the former, only noteQualifyingUse the latter — a renderer patch
-    // must not be able to self-issue a signed-looking lease string or grant itself a fresh trial.
-    for (const k of [
-      'licenseKey',
-      'licenseCompanyName',
-      'licenseSeatCap',
-      'licenseExpiresAt',
-      'licenseValid',
-      'licenseLastValidatedAt',
-      'licenseLease',
-      'trialStartedAt'
-    ]) {
-      if (k in p) delete (p as Record<string, unknown>)[k]
-    }
-    // MCP connection STATE is main-owned for the same reason. IPC.mcpPush deliberately reads the endpoint
-    // from saved settings rather than the payload so "a compromised renderer can't redirect the push to an
-    // attacker-controlled MCP endpoint" (see that handler's own comment) — but a generic settings patch
-    // could rewrite mcpConnections[].endpointUrl and defeat exactly that pin, sending the stored bearer
-    // token (a BidStack/Plane key, or a ClickUp OAuth access token) to any host that passes the SSRF
-    // guard. Every legitimate write already happens in main, inside a handler that re-verifies the
-    // connection first: mcpSaveConnection, mcpClickupConnect and mcpDisconnect. The renderer's own
-    // patch({ mcpConnections }) calls are redundant echoes of what main just persisted, and state.ts's
-    // patch() re-seeds React state from this handler's return value, so dropping the key here costs the
-    // UI nothing. clickupClientId is main-owned too (written only by the DCR step), and so is the M2-0429
-    // Screen Recording history (permissionState): a renderer patch must not fake it to steer the diagnosis.
-    for (const k of ['mcpConnections', 'clickupClientId', 'planeClientId', 'permissionState']) {
-      if (k in p) delete (p as Record<string, unknown>)[k]
-    }
-    // Operator entitlement state (PLAN.md P2.2b #2): only a successful heartbeat
-    // (operator-entitlements-state.ts) may write these — a renderer patch must not self-grant a gated
-    // feature. The license token/jti/last4/exp are main-owned for the same reason mcpConnections is
-    // above: only IPC.operatorLicenseActivate's own parse may set them.
-    for (const k of [
-      'operatorTier',
-      'operatorEntitlements',
-      'operatorIntegrationsVersion',
-      'operatorEntitlementsAt',
-      'operatorLicenseToken',
-      'operatorLicenseJti',
-      'operatorLicenseLast4',
-      'operatorLicenseExpiresAt'
-    ]) {
-      if (k in p) delete (p as Record<string, unknown>)[k]
-    }
+    // Renderer patches lose authoritative fields in one shared helper before this handler adds any
+    // deliberate main-owned resets, such as clearing Operator credentials after an endpoint change.
+    const p = stripServerAuthoritativeSettingsPatch(patch ?? {})
     const cur = getSettings()
     const wasEncrypted = cur.encryptTranscripts
     // Task MI-5 consent gate: turning publishBrainPages ON while transcripts stay encrypted writes
