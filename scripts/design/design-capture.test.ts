@@ -24,7 +24,7 @@ import {
   resolveDesignState,
   resolveDesignStateIncludingQa
 } from '../../src/renderer/src/design-capture/states'
-import { searchSettings } from '../../src/renderer/src/design-capture/settings/data'
+import { hiddenSearchMatches, searchSettings } from '../../src/renderer/src/design-capture/settings/data'
 import { SETTINGS_WINDOW_MIN } from '@shared/settings-bounds'
 
 const root = resolve(__dirname, '..', '..')
@@ -117,7 +117,7 @@ describe('design states', () => {
     )
   })
 
-  it('keeps the six placeholder states and adds exactly the eight Settings baseline states', () => {
+  it('keeps the six placeholder states and adds exactly the seventeen Settings states', () => {
     expect(DESIGN_STATES.map((s) => [s.id, s.title])).toEqual([
       ['bar-idle', 'Bar, idle'],
       ['bar-listening', 'Bar, listening'],
@@ -127,13 +127,27 @@ describe('design states', () => {
       ['error-recoverable', 'Error, recoverable'],
       ['S01-general', 'General, fresh install'],
       ['S02-voice-ready', 'Voice & meetings, cloud speech ready'],
+      ['S03-voice-unavailable', 'Cloud speech unavailable, no silent switch'],
+      ['S04-local-speech-review', 'Optional local speech, review before download'],
+      ['S05-local-speech-downloading', 'Optional local speech, downloading'],
+      ['S06-local-speech-installed', 'Optional local speech, installed but not selected'],
       ['S07-knowledge', 'Knowledge & skills'],
+      ['S08-privacy-managed', 'Privacy & account with organization locks'],
+      ['S09-policy-sheet', 'Effective policy'],
       ['S10-advanced', 'Advanced drawer'],
       ['S11-search', 'Search with synonyms'],
+      ['S12-search-empty', 'Search for a control hidden by policy'],
+      ['S13-save-failed', 'Save failed, value reverted'],
+      ['S14-policy-changed', 'Policy changed during a meeting'],
       ['S15-narrow', 'Narrow window'],
       ['S16-migrated', 'First open after upgrading'],
       ['S17-connected-apps', 'Privacy & account, connected apps']
     ])
+  })
+
+  it('numbers the Settings states S01 to S17 in order, one each', () => {
+    const numbers = DESIGN_STATES.filter((s) => s.kind === 'settings').map((s) => s.id.slice(0, 3))
+    expect(numbers).toEqual(Array.from({ length: 17 }, (_, i) => `S${String(i + 1).padStart(2, '0')}`))
   })
 })
 
@@ -149,7 +163,7 @@ describe('per-state viewport', () => {
 
   it('opens a Settings state at SETTINGS_WINDOW_MIN, the shared constant itself rather than a copy', () => {
     expect(SETTINGS_WINDOW_MIN).toEqual({ width: 880, height: 800 })
-    expect(settings).toHaveLength(8)
+    expect(settings).toHaveLength(17)
     for (const s of settings.filter((s) => s.id !== 'S15-narrow')) {
       expect(designStateViewport(s), s.id).toBe(SETTINGS_WINDOW_MIN)
     }
@@ -190,6 +204,20 @@ describe('Settings search', () => {
   it('matches nothing for an empty or unrelated query', () => {
     expect(searchSettings('  ', 'cloud-ready')).toEqual([])
     expect(searchSettings('zzz', 'cloud-ready')).toEqual([])
+  })
+
+  it('finds the diagnostics controls without a policy and nothing but their hidden count under the managed policy', () => {
+    expect(searchSettings('diagnostic', 'cloud-ready').flatMap((g) => g.rows.map((r) => r.id))).toEqual([
+      'diagnostic-logging',
+      'export-diagnostics'
+    ])
+    expect(hiddenSearchMatches('diagnostic', 'cloud-ready')).toEqual([])
+    const managed = { policy: 'managed' } as const
+    expect(searchSettings('diagnostic', 'cloud-ready', managed)).toEqual([])
+    expect(hiddenSearchMatches('diagnostic', 'cloud-ready', managed).map((r) => r.id)).toEqual([
+      'diagnostic-logging',
+      'export-diagnostics'
+    ])
   })
 })
 

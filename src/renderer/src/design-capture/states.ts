@@ -3,7 +3,7 @@
  * `DESIGN_CAPTURE_STATES` (id and viewport) from the running page, so this list is the single source of what
  * gets screenshotted and at which size.
  * The first six are placeholder states for the capture pipeline, not the M2-0201 prototype state list; the
- * `S..` states are the Settings 2.0 baseline states (M2-0450), rendered by settings/SettingsSurface.tsx.
+ * `S..` states are the Settings 2.0 states S01-S17 (M2-0450 and M2-0451), rendered by settings/SettingsSurface.tsx.
  *
  * BLOCKED_EXTERNAL: the lead supplies the M2-0201 prototype manifest state ids from the program tracker; they
  * replace `DESIGN_STATES` in this file one to one before the capture job's artifact is filed as M2-0201 evidence.
@@ -21,9 +21,18 @@ export interface DesignViewport {
 export type SettingsStateId =
   | 'S01-general'
   | 'S02-voice-ready'
+  | 'S03-voice-unavailable'
+  | 'S04-local-speech-review'
+  | 'S05-local-speech-downloading'
+  | 'S06-local-speech-installed'
   | 'S07-knowledge'
+  | 'S08-privacy-managed'
+  | 'S09-policy-sheet'
   | 'S10-advanced'
   | 'S11-search'
+  | 'S12-search-empty'
+  | 'S13-save-failed'
+  | 'S14-policy-changed'
   | 'S15-narrow'
   | 'S16-migrated'
   | 'S17-connected-apps'
@@ -64,10 +73,46 @@ export const DESIGN_STATES: readonly DesignState[] = [
     scene: { destination: 'voice', speech: 'cloud-ready' }
   },
   {
+    id: 'S03-voice-unavailable',
+    kind: 'settings',
+    title: 'Cloud speech unavailable, no silent switch',
+    scene: { destination: 'voice', speech: 'cloud-unavailable' }
+  },
+  {
+    id: 'S04-local-speech-review',
+    kind: 'settings',
+    title: 'Optional local speech, review before download',
+    scene: { destination: 'voice', speech: 'cloud-ready', localSpeech: 'review' }
+  },
+  {
+    id: 'S05-local-speech-downloading',
+    kind: 'settings',
+    title: 'Optional local speech, downloading',
+    scene: { destination: 'voice', speech: 'cloud-ready', localSpeech: 'downloading' }
+  },
+  {
+    id: 'S06-local-speech-installed',
+    kind: 'settings',
+    title: 'Optional local speech, installed but not selected',
+    scene: { destination: 'voice', speech: 'cloud-ready', localSpeech: 'installed' }
+  },
+  {
     id: 'S07-knowledge',
     kind: 'settings',
     title: 'Knowledge & skills',
     scene: { destination: 'knowledge', speech: 'cloud-ready' }
+  },
+  {
+    id: 'S08-privacy-managed',
+    kind: 'settings',
+    title: 'Privacy & account with organization locks',
+    scene: { destination: 'privacy', speech: 'cloud-ready', policy: 'managed' }
+  },
+  {
+    id: 'S09-policy-sheet',
+    kind: 'settings',
+    title: 'Effective policy',
+    scene: { destination: 'privacy', speech: 'cloud-ready', policy: 'managed', policySheet: true }
   },
   {
     id: 'S10-advanced',
@@ -80,6 +125,30 @@ export const DESIGN_STATES: readonly DesignState[] = [
     kind: 'settings',
     title: 'Search with synonyms',
     scene: { destination: 'voice', speech: 'cloud-ready', search: 'mic' }
+  },
+  {
+    id: 'S12-search-empty',
+    kind: 'settings',
+    title: 'Search for a control hidden by policy',
+    scene: { destination: 'privacy', speech: 'cloud-ready', policy: 'managed', search: 'diagnostic' }
+  },
+  {
+    id: 'S13-save-failed',
+    kind: 'settings',
+    title: 'Save failed, value reverted',
+    scene: { destination: 'general', speech: 'cloud-ready', saveFailed: { rowId: 'theme', attempted: 'Dark' } }
+  },
+  {
+    id: 'S14-policy-changed',
+    kind: 'settings',
+    title: 'Policy changed during a meeting',
+    scene: {
+      destination: 'voice',
+      speech: 'cloud-ready',
+      localSpeech: 'installed',
+      policy: 'changed-in-meeting',
+      recording: true
+    }
   },
   {
     id: 'S15-narrow',

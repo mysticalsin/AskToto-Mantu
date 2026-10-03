@@ -220,6 +220,86 @@
 .dc-banner .dc-button {
   margin-top: 6px;
 }
+.dc-banner[data-tone='warning'] {
+  border-left-color: var(--dc-danger);
+}
+
+/* Policy lock, failed save, download progress and recording indicator. */
+.dc-row-lock {
+  margin-top: 4px;
+  padding-left: 8px;
+  border-left: 3px solid var(--dc-ink-2);
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--dc-ink-2);
+}
+.dc-row-lock strong {
+  color: var(--dc-ink);
+}
+.dc-row-lock[data-lock='pending'] {
+  border-left-color: var(--dc-danger);
+}
+.dc-row-error {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--dc-danger);
+}
+.dc-row-value[data-reverted='true'] {
+  color: var(--dc-ink);
+  font-weight: 600;
+}
+.dc-progress {
+  box-sizing: border-box;
+  width: 160px;
+  max-width: 100%;
+  height: 10px;
+  padding: 1px;
+  border: 1px solid var(--dc-ink-2);
+  border-radius: 999px;
+}
+.dc-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--dc-accent);
+}
+.dc-recording {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.dc-recording-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--dc-danger);
+}
+.dc-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  margin-bottom: 20px;
+  padding: 16px;
+  border: 1px dashed var(--dc-ink-2);
+  border-radius: 12px;
+  background: var(--dc-card);
+}
+.dc-empty span {
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--dc-ink-2);
+}
+.dc-empty .dc-button {
+  margin-top: 6px;
+}
 
 .dc-drawer {
   position: absolute;
@@ -239,6 +319,32 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+.dc-sheet {
+  width: min(600px, 100%);
+}
+.dc-policy-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  line-height: 1.4;
+}
+.dc-policy-table th,
+.dc-policy-table td {
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--dc-hair);
+  text-align: left;
+  vertical-align: top;
+}
+.dc-policy-table thead th {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--dc-ink-2);
+}
+.dc-policy-table td {
+  color: var(--dc-ink-2);
 }
 
 /* Narrow window: the sidebar becomes a header and the destinations wrap (never scroll sideways). */
