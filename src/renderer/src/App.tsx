@@ -320,6 +320,10 @@ export function App(): JSX.Element {
   const stealthLocked = settings?.managedKeys?.includes('contentProtection') ?? false
 
   const ask = useAsk() // answer view + recap
+  const settingsRef = useRef(settings)
+  settingsRef.current = settings
+  const askAnswerRef = useRef(ask.answer)
+  askAnswerRef.current = ask.answer
   const suggest = useAsk() // live copilot card
   // MQA-269 (retires the MQA-053/MQA-059 force-refetch that lived here): provider health used to be
   // re-fetched the instant a visible ask stopped streaming, purely so the dead-key notice could appear
@@ -1399,10 +1403,12 @@ export function App(): JSX.Element {
         // current window, answer from it WITHOUT capturing or uploading an image — main injects the cached
         // description (+ recent audio) into a mode:'answer' ask. Needs an answer-capable provider, since
         // mode:'answer' isn't local-scoped; a local-only setup falls through to the live vision path below.
+        const settings = settingsRef.current
+        const answer = askAnswerRef.current
         const memoryLive =
           (settings?.askFollowUpMemory ?? false) &&
           Date.now() - lastTurnAtRef.current <= ASK_MEMORY_IDLE_MS
-        const priorAnswerOk = !!ask.answer?.text && !ask.answer.error && memoryLive
+        const priorAnswerOk = !!answer?.text && !answer.error && memoryLive
         if ((settings?.backgroundScreenContext ?? false) && settings?.providerReady && priorAnswerOk) {
           try {
             const ctx = await window.toto.screenContext()
@@ -1481,16 +1487,7 @@ export function App(): JSX.Element {
         setCapturing(false)
       }
     },
-    [
-      ask.run,
-      requireProvider,
-      settings?.backgroundScreenContext,
-      settings?.providerReady,
-      settings?.askFollowUpMemory,
-      ask.answer?.text,
-      ask.answer?.error,
-      listen
-    ]
+    [ask.run, requireProvider, settings?.backgroundScreenContext, settings?.providerReady, listen]
   )
 
   const assist = useCallback(async (): Promise<void> => {
