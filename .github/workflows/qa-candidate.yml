@@ -502,29 +502,41 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, metis-owner-mac]
     timeout-minutes: 20
     continue-on-error: true
-    env:
-      TMPDIR: ${{ runner.temp }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        env:
+          TMPDIR: ${{ runner.temp }}
         with:
           persist-credentials: false
       - name: Prove owner-account sandbox denies private state
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: bash scripts/hermetic/prove-owner-sandbox.sh
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        env:
+          TMPDIR: ${{ runner.temp }}
         with:
           node-version: 22.22.3
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        env:
+          TMPDIR: ${{ runner.temp }}
         with:
           name: candidate-provenance
           path: provenance
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        env:
+          TMPDIR: ${{ runner.temp }}
         with:
           name: candidate-mac-qa-identity
           path: assets
       - name: Verify every byte against the provenance
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
       - name: Measure packaged stall resilience
         continue-on-error: true
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: |
           mkdir -p st1-report
           installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
@@ -540,6 +552,8 @@ jobs:
             --out st1-report/st-1-macos-fifo.json
       - name: Remove ST-1 temporary state
         if: always()
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: |
           rm -rf \
             "$RUNNER_TEMP"/metis-st1-* \
@@ -552,6 +566,8 @@ jobs:
           security delete-generic-password -s "asktoto-qa Safe Storage" || true
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
+        env:
+          TMPDIR: ${{ runner.temp }}
         with:
           name: st-1-macos-fifo
           path: st1-report/
@@ -708,29 +724,41 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, metis-owner-mac]
     timeout-minutes: 20
     continue-on-error: true
-    env:
-      TMPDIR: ${{ runner.temp }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        env:
+          TMPDIR: ${{ runner.temp }}
         with:
           persist-credentials: false
       - name: Prove owner-account sandbox denies private state
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: bash scripts/hermetic/prove-owner-sandbox.sh
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        env:
+          TMPDIR: ${{ runner.temp }}
         with:
           node-version: 22.22.3
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        env:
+          TMPDIR: ${{ runner.temp }}
         with:
           name: candidate-provenance
           path: provenance
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        env:
+          TMPDIR: ${{ runner.temp }}
         with:
           name: candidate-mac-qa-identity
           path: assets
       - name: Verify every byte against the provenance
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
       - name: Measure the packaged app with no fixture
         continue-on-error: true
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: |
           mkdir -p st1-report
           installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
@@ -746,6 +774,8 @@ jobs:
             --out st1-report/st-1-macos-none.json
       - name: Remove ST-1 temporary state
         if: always()
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: |
           rm -rf \
             "$RUNNER_TEMP"/metis-st1-* \
@@ -758,6 +788,8 @@ jobs:
           security delete-generic-password -s "asktoto-qa Safe Storage" || true
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
+        env:
+          TMPDIR: ${{ runner.temp }}
         with:
           name: st-1-macos-control
           path: st1-report/
