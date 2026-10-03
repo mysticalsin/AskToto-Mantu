@@ -84,6 +84,22 @@ export function islandMaxHeight(wa: Rect): number {
   return wa.height - RIGHT_EDGE_CARD_HEIGHT_RESERVE_PX
 }
 
+/** The smallest work area the right edge serves (RE-G09); 853x432 (1280x720 at Windows 150%) still fits. */
+export const RIGHT_EDGE_MIN_WORK_AREA = { width: 384, height: 432 } as const
+
+export function rightEdgeFits(wa: Rect): boolean {
+  return wa.width >= RIGHT_EDGE_MIN_WORK_AREA.width && wa.height >= RIGHT_EDGE_MIN_WORK_AREA.height
+}
+
+/** The island card's fixed chrome around its content slot: header 44, composer 52, action rail 44 and the
+ *  card's 8 px top and bottom padding. */
+export const RIGHT_EDGE_ISLAND_CHROME_PX = 156
+
+/** The tallest content slot the tallest card holds. */
+export function islandSlotMax(wa: Rect): number {
+  return Math.max(0, islandMaxHeight(wa) - RIGHT_EDGE_ISLAND_CHROME_PX)
+}
+
 /** H = clamp(ceil8(contentHeight), 200, H_max). */
 export function islandHeight(wa: Rect, contentHeight: number): number {
   const content = Number.isFinite(contentHeight) ? contentHeight : RIGHT_EDGE_CARD_MIN_HEIGHT

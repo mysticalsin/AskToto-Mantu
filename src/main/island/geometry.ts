@@ -25,10 +25,14 @@ import {
   RIGHT_EDGE_TAB_HEIGHT,
   RIGHT_EDGE_TAB_WIDTH,
   anchorY,
+  islandMaxHeight,
+  islandSlotMax,
   legacyDrawerRect,
   legacyTabRect,
-  revealBand
+  revealBand,
+  rightEdgeFits
 } from '@shared/right-edge-geometry'
+import type { RightEdgeEdgeClass, RightEdgeSurfaceState } from '@shared/right-edge-state'
 
 export type { OverlayLayout }
 
@@ -248,12 +252,12 @@ export const RIGHT_EDGE_DEFAULT_NORMALIZED_Y = 0.2
 export const RIGHT_EDGE_HOVER_TARGET = { width: 24, height: HOVER_ISLAND_HEIGHT_MAX_PX } as const
 
 /**
- * A sidecar must leave its edge breathing room while still fitting the full revealed Bar. The compact
- * hide/island rest fits on much narrower displays, but using it there would reveal an inaccessible 880px
- * bar. Those displays deliberately fall back to the established top-center path instead.
+ * The right edge needs a work area at least RIGHT_EDGE_MIN_WORK_AREA (384x432, RE-G09): the island card and
+ * its margins. A smaller work area (853x432 at Windows 150% on 1280x720 still fits) falls back to the
+ * established top-center path, in main and, through IPC.rightEdgeSurface, in the renderer.
  */
-export function rightEdgePlacementFits(m: DisplayMetrics, margin = RIGHT_EDGE_MARGIN_PX): boolean {
-  return m.workArea.width >= RIGHT_EDGE_DRAWER_WIDTH + margin * 2
+export function rightEdgePlacementFits(m: DisplayMetrics): boolean {
+  return rightEdgeFits(m.workArea)
 }
 
 /** The selected preference can safely differ from the effective placement on a constrained display. */
@@ -352,12 +356,48 @@ export function rightEdgeParkLayout(
   anchor?: number
 ): OverlayLayout {
   if (layout !== 'hide') return layout
+  return rightEdgeContinuesPastEdge(m, otherDisplays, anchor) ? 'island' : layout
+}
+
+/** Another display continues past this display's right edge beside the reveal band. */
+function rightEdgeContinuesPastEdge(m: DisplayMetrics, otherDisplays: readonly Rect[], anchor?: number): boolean {
   const band = rightEdgeHoverRestRect(anchor, m)
   const edge = m.bounds.x + m.bounds.width
-  const continues = otherDisplays.some(
+  return otherDisplays.some(
     (other) => other.x === edge && Math.min(band.y + band.height, other.y + other.height) > Math.max(band.y, other.y)
   )
-  return continues ? 'island' : layout
+}
+
+export function rightEdgeClass(m: DisplayMetrics, otherDisplays: readonly Rect[], anchor?: number): RightEdgeEdgeClass {
+  if (rightEdgeContinuesPastEdge(m, otherDisplays, anchor)) return 'S'
+  return m.workArea.x + m.workArea.width < m.bounds.x + m.bounds.width ? 'D' : 'W'
+}
+
+/**
+ * The IPC.rightEdgeSurface payload: what the renderer must render. Top-center whenever the right edge does
+ * not apply (the preference, or a work area under RIGHT_EDGE_MIN_WORK_AREA); otherwise the rest while
+ * parked (the Hide band, or the Island rail tab) and the island while revealed.
+ */
+export function rightEdgeSurfaceState(input: {
+  placement: OverlayPlacement
+  layout: OverlayLayout
+  resting: boolean
+  metrics: DisplayMetrics
+  otherDisplays: readonly Rect[]
+  anchor?: number
+}): RightEdgeSurfaceState {
+  const m = input.metrics
+  if (resolveOverlayPlacement(input.placement, m) !== 'right-edge') {
+    return { surface: 'top-center', restKind: 'none', edgeClass: 'W', cardMaxHeight: 0, slotMax: 0 }
+  }
+  const parked = rightEdgeParkLayout(input.layout, m, input.otherDisplays, input.anchor)
+  return {
+    surface: input.resting ? 'rest' : 'island',
+    restKind: parked === 'hide' ? 'none' : 'tab',
+    edgeClass: rightEdgeClass(m, input.otherDisplays, input.anchor),
+    cardMaxHeight: islandMaxHeight(m.workArea),
+    slotMax: islandSlotMax(m.workArea)
+  }
 }
 
 /** One placement-aware bounds resolver. Top-center remains on its established path. */

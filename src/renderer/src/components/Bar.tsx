@@ -547,7 +547,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
             // real frame ('prewarm' capture in main). The warm now rides hovering the Capture button,
             // the one place screen intent is actually signalled before the click.
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
+              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.nativeEvent.keyCode !== 229) {
                 e.preventDefault()
                 props.onSubmit()
               }

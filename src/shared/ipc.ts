@@ -228,6 +228,9 @@ export const IPC = {
   // Main-process cursor watch (darwin / Windows top-edge): menu-bar / Dynamic Island
   // often does not deliver mouseenter. Payload: { hovering: boolean }.
   overlayCursorHover: 'overlay:cursorHover',
+  // Right edge (M2-0202, shared/right-edge-state.ts): the page's surface and pins in; main's surface out.
+  rightEdgeState: 'right-edge:state',
+  rightEdgeSurface: 'right-edge:surface',
   // Renderer finished the hide spring (or 400ms fallback) — now park the rest rect.
   overlayParkAfterHide: 'overlay:parkAfterHide',
   // Renderer ErrorBoundary catch (React render-throw) → persisted crash-*.log, same sink as onFatal's

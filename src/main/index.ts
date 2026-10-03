@@ -211,6 +211,7 @@ import {
   overlayRestSize,
   overlayPlacementPosition,
   rightEdgeParkLayout,
+  rightEdgeSurfaceState,
   rightAnchoredParkPosition,
   resolveOverlayPlacement,
   parkAfterExclusiveOnboarding,
@@ -232,6 +233,9 @@ import {
 } from '@shared/settings-bounds'
 import { ONBOARDING_AUDIO_LOCK_EVENT } from '@shared/onboarding-audio'
 import { createRightEdgeAnchors } from './island/right-edge-anchor'
+import { createRightEdgeSession } from './island/right-edge-session'
+import type { RightEdgeSurfaceState } from '@shared/right-edge-state'
+import { registerRightEdgeIpc } from './ipc/right-edge-ipc'
 import {
   CURSOR_WATCH_INTERVAL_MS,
   OVERLAY_LEAVE_PARK_MS,
@@ -3352,12 +3356,12 @@ function tickOverlayCursorWatch(): void {
     // Renderer spring may park first. Main parks at OVERLAY_LEAVE_PARK_MS so a
     // missed overlayParkAfterHide cannot leave 880×120 up (Ultron c74e389).
     notifyOverlayCursorHover(false)
-    scheduleOverlayLeavePark()
+    if (placement !== 'right-edge' || rightEdgeSession.parkAllowed('pointer-leave')) scheduleOverlayLeavePark()
     mainLog.info(
       `[overlay-watch] leave cursor=(${cursor.x},${cursor.y}) bar=${bounds.width}x${bounds.height}@(${bounds.x},${bounds.y}) park in ${OVERLAY_LEAVE_PARK_MS}ms`
     )
   } else if (step.action === 'leave-ignored' && rightEdgeUnhoveredRevealAt !== null &&
-    performance.now() - rightEdgeUnhoveredRevealAt >= RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS) {
+    performance.now() - rightEdgeUnhoveredRevealAt >= RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS && rightEdgeSession.parkAllowed('auto-park')) {
     // Revealed without the pointer, which stayed away: report a leave; the page's grace parks unless forced.
     rightEdgeUnhoveredRevealAt = null
     notifyOverlayCursorHover(false)
@@ -3451,6 +3455,8 @@ function parkOverlayAfterHideSpring(force = false): boolean {
   // remains inside the disappearing drawer until after the exit spring, so refusing to park would leave
   // a 360px transparent hit target on screen despite the renderer showing only the 52px rail.
   if (!force && pointerInIslandOrBar()) return false
+  if (!islandResting && resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(win.getBounds())) === 'right-edge' &&
+    !rightEdgeSession.parkAllowed(force ? 'explicit' : 'pointer-leave')) return false
   cancelOverlayLeavePark()
   const layout = liveOverlayLayout()
   if (!overlayUsesHover(layout)) return false
@@ -3722,6 +3728,24 @@ function ensureWindow(): BrowserWindow | null {
   })
 }
 
+/** The page's right-edge surface and pins (right-edge-session.ts); a leave-park the pins refused retries once they clear. */
+const rightEdgeSession = createRightEdgeSession({
+  surface: currentRightEdgeSurface,
+  send: (surface) => {
+    if (win && !win.isDestroyed()) win.webContents.send(IPC.rightEdgeSurface, surface)
+  },
+  onPinsCleared: scheduleOverlayLeavePark,
+  log: (line) => mainLog.info(line)
+})
+
+function currentRightEdgeSurface(): RightEdgeSurfaceState {
+  const display = win && !win.isDestroyed() ? screen.getDisplayMatching(win.getBounds()) : screen.getPrimaryDisplay()
+  const others = screen.getAllDisplays().filter((other) => other.id !== display.id).map((other) => other.bounds)
+  const metrics = getDisplayMetrics(display)
+  const anchor = rightEdgeAnchors.fraction(display)
+  return rightEdgeSurfaceState({ placement: liveOverlayPlacement(), layout: liveOverlayLayout(), resting: islandResting, metrics, otherDisplays: others, anchor })
+}
+
 const overlayRevealLog = createOverlayRevealLog({ now: () => performance.now(), log: (line) => mainLog.info(line), audit: auditLog })
 
 /** M2-0431: called after anything that may reveal or park the overlay. It reads the window's actual state, so
@@ -3729,6 +3753,7 @@ const overlayRevealLog = createOverlayRevealLog({ now: () => performance.now(), 
  *  within 2 s with no click or keypress is audited as overlay.flash. */
 function noteOverlay(cause: OverlayTransitionCause): void {
   if (!win || win.isDestroyed()) return
+  rightEdgeSession.push()
   const b = win.getBounds()
   const c = screen.getCursorScreenPoint()
   const context = { placement: resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(b)), layout: liveOverlayLayout() }
@@ -4490,9 +4515,10 @@ function toggleOverlayVisibility(reason: Extract<RevealReason, 'hotkey' | 'tray'
   if (!w) return
   if (!hadNoWindow && w.isVisible() && !islandResting) {
     // A hidden right-edge window reopens from the band on the next dwell. Park it instead: the forced park
-    // latches until the pointer leaves the band.
+    // latches until the pointer leaves the band. An IME composition refuses it and the window stays.
     const rightEdge = resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(w.getBounds())) === 'right-edge'
     if (overlayUsesHover(liveOverlayLayout()) && rightEdge && parkOverlayAfterHideSpring(true)) return startOverlayCursorWatch()
+    if (overlayUsesHover(liveOverlayLayout()) && rightEdge && !rightEdgeSession.parkAllowed('explicit')) return
     w.hide()
     // Tray Hide is not the rest sensor. Keep the top-edge watch armed so
     // mouse-at-top can showInactive without hunting Show Métis.
@@ -5044,6 +5070,7 @@ function registerIpc(): void {
   })
   // Open the Privacy pane, and the M2-0429 Screen Recording Repair / "It's already on" / Show in Finder.
   registerScreenPermissionIpc(assertMainWindow)
+  registerRightEdgeIpc(assertMainWindow, rightEdgeSession, currentRightEdgeSurface)
   // Front-load the OS permission prompts during onboarding (macOS only) so the first real meeting
   // isn't interrupted by them. Serial, and only for permissions not yet granted: mic has a direct
   // prompt API; Screen Recording has none, but a 1px desktopCapturer probe registers the app with

@@ -2,7 +2,15 @@ import { describe, expect, it } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { PARKED_BOUNDS, ParkPreconditionError, isParkedBounds, monitorParkedIdle, parkVerdict } from './park.mjs'
+import {
+  PARKED_BOUNDS,
+  PARK_BOUNDS_SIGNAL,
+  ParkPreconditionError,
+  evaluatedOverlayBounds,
+  isParkedBounds,
+  monitorParkedIdle,
+  parkVerdict
+} from './park.mjs'
 import { launchOptions, parkedIdlePreconditionFailureReport, pointerMoveCommand, validateParkedIdleProfile } from './run.mjs'
 
 function fakeSleep(advance: (ms: number) => void) {
@@ -22,6 +30,32 @@ describe('parked-idle window-bounds proof', () => {
     })
     expect(isParkedBounds({ width: 880, height: 120, left: 0, top: 0 })).toBe(false)
     expect(parkVerdict({ width: 880, height: 120, left: 0, top: 0 }, 0).parked).toBe(false)
+  })
+
+  it('maps renderer-evaluated window geometry and reports 8x2 as parked', async () => {
+    const page = {
+      evaluate: async (probe: () => { left: number; top: number; width: number; height: number }) => {
+        const globalObject = globalThis as unknown as {
+          window?: { screenX: number; screenY: number; outerWidth: number; outerHeight: number }
+        }
+        const previousWindow = globalObject.window
+        globalObject.window = { screenX: 1272, screenY: 0, outerWidth: 8, outerHeight: 2 }
+        try {
+          return probe()
+        } finally {
+          globalObject.window = previousWindow
+        }
+      }
+    }
+
+    const bounds = await evaluatedOverlayBounds(page)
+
+    expect(bounds).toEqual({ left: 1272, top: 0, width: 8, height: 2 })
+    expect(parkVerdict(bounds, 0)).toEqual({
+      observedAt: new Date(0).toISOString(),
+      bounds: { left: 1272, top: 0, width: 8, height: 2 },
+      parked: true
+    })
   })
 
   it('treats a failed first park check as a PRECONDITION failure with observed bounds', async () => {
@@ -69,7 +103,7 @@ describe('parked-idle window-bounds proof', () => {
       },
       parkedIdle: {
         pointerMovedOffTopEdge: { x: 32, y: 200, method: 'CGWarpMouseCursorPosition' },
-        boundsSignal: 'Browser.getWindowForTarget/getWindowBounds',
+        boundsSignal: PARK_BOUNDS_SIGNAL,
         expectedBounds: PARKED_BOUNDS,
         checks: [firstCheck],
         summary: { checks: 1, parked: 0, notParked: 1, parkedCoverage: 0 }
