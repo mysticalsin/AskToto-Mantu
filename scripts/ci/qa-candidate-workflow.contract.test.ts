@@ -356,17 +356,21 @@ describe('QA candidate workflow: the shipped window gate (M2-0519)', () => {
     expect(jobSteps.findIndex((step) => step.includes('name: st-1-macos-window'))).toBeGreaterThan(gateIndex)
   })
 
-  it('runs one marked shipped warm-up per chrome before any measured repeats', () => {
+  it('runs one marked warm-up per variant and chrome before any measured repeats', () => {
     const measure = steps('st1-mac-window').find((step) => step.includes('--purpose window-construction')) ?? ''
-    expect(measure.indexOf('run="window-warmup-shipped-$chrome"')).toBeLessThan(measure.indexOf('for repeat in 1 2; do'))
+    expect(measure.indexOf('run="window-warmup-$variant-$chrome"')).toBeLessThan(measure.indexOf('for repeat in 1 2; do'))
     expect(measure).toContain('--window-warmup')
-    expect(measure).toContain('--window-variant shipped')
+    expect(measure).toContain('variants=(shipped spellcheck-off paint-when-hidden prewarm-spellchecker)')
+    expect(measure).toContain('chromes=(opaque transparent)')
+    expect(measure).toContain('--window-variant "$variant"')
     expect(measure).toContain('if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi')
   })
 
-  it('keeps measured report-only window variants before measured shipped rows', () => {
+  it('measures repeats in the same variant and chrome order after warm-up', () => {
     const measure = steps('st1-mac-window').find((step) => step.includes('--purpose window-construction')) ?? ''
-    expect(measure).toContain('for variant in spellcheck-off paint-when-hidden prewarm-spellchecker shipped; do')
-    expect(measure.indexOf('prewarm-spellchecker shipped')).toBeLessThan(measure.indexOf('--window-variant "$variant"'))
+    expect(measure).toContain('for repeat in 1 2; do')
+    expect(measure).toContain('for variant in "${variants[@]}"; do')
+    expect(measure).toContain('for chrome in "${chromes[@]}"; do')
+    expect(measure.indexOf('for repeat in 1 2; do')).toBeGreaterThan(measure.indexOf('run="window-warmup-$variant-$chrome"'))
   })
 })

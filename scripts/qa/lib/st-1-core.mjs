@@ -262,6 +262,12 @@ export const WINDOW_VARIANTS = ['shipped', 'spellcheck-off', 'paint-when-hidden'
 /** The only purpose besides ST-1 itself: a short launch that measures the window constructor under one variant. */
 export const WINDOW_CONSTRUCTION = 'window-construction'
 
+/** The two boot-window chromes ST-1 measures: first-run onboarding and onboarded transparent overlay. */
+export const WINDOW_CHROMES = ['opaque', 'transparent']
+
+/** The window-construction gate's measured repeats per variant/chrome after warm-up. */
+export const WINDOW_MEASURED_REPEATS = 2
+
 /**
  * `--purpose` and `--window-variant`, checked: `{ purpose, windowVariant }` or `{ error }`. Without a purpose the
  * run is ST-1 and builds the shipped window, so a variant is refused there; a window-construction run names
@@ -294,6 +300,47 @@ export const WINDOW_STAGE_BUDGET_MS = 250
 export const GATED_WINDOW_STAGES = ['createWindow.prewarm', 'createWindow.construct']
 
 /**
+ * The CI launch order for window construction. Every variant/chrome pair gets the same explicit warm-up
+ * before any measured launch, so the shipped gate never compares a cold first measured launch with warmed
+ * later launches.
+ */
+export function windowConstructionPlan({ variants = WINDOW_VARIANTS, chromes = WINDOW_CHROMES, repeats = WINDOW_MEASURED_REPEATS } = {}) {
+  const warmups = variants.flatMap((variant) =>
+    chromes.map((chrome) => ({ name: `window-warmup-${variant}-${chrome}`, variant, chrome, warmup: true }))
+  )
+  const measured = Array.from({ length: repeats }, (_, i) => i + 1).flatMap((repeat) =>
+    variants.flatMap((variant) => chromes.map((chrome) => ({ name: `window-${variant}-${chrome}-${repeat}`, variant, chrome, repeat, warmup: false })))
+  )
+  return [...warmups, ...measured]
+}
+
+function launchNameFromReportPath(name) {
+  const [head] = String(name).split(/[\\/]/)
+  return head || String(name)
+}
+
+function windowStageRows(reports) {
+  return reports.flatMap(({ name, report }) => {
+    if (report?.purpose !== WINDOW_CONSTRUCTION) return []
+    const stages = Array.isArray(report.bootStages?.stages) ? report.bootStages.stages : []
+    return stages
+      .filter((entry) => GATED_WINDOW_STAGES.includes(entry.stage))
+      .map((entry) => {
+        const chrome = entry.transparent === true ? 'transparent' : entry.transparent === false ? 'opaque' : null
+        return {
+          report: name,
+          launch: launchNameFromReportPath(name),
+          variant: report.windowVariant ?? null,
+          warmup: report.warmup === true,
+          stage: entry.stage,
+          chrome,
+          ms: entry.ms
+        }
+      })
+  })
+}
+
+/**
  * The window-construction gate (M2-0519) over a set of window-construction reports: `{ pass, rows, failures }`.
  * Only the shipped variant is gated; marked warm-ups and the other variants stay report-only. It fails unless
  * every measured shipped report carries each gated stage with a measured ms under WINDOW_STAGE_BUDGET_MS, and the
@@ -303,6 +350,7 @@ export const GATED_WINDOW_STAGES = ['createWindow.prewarm', 'createWindow.constr
  * @param {Array<{ name: string, report: any }>} reports
  */
 export function windowConstructionGate(reports, budgetMs = WINDOW_STAGE_BUDGET_MS) {
+  const launches = windowStageRows(reports)
   const rows = []
   const failures = []
   const chromes = new Set()
@@ -318,7 +366,7 @@ export function windowConstructionGate(reports, budgetMs = WINDOW_STAGE_BUDGET_M
       for (const entry of found) {
         const chrome = entry.transparent === true ? 'transparent' : entry.transparent === false ? 'opaque' : null
         if (chrome) chromes.add(chrome)
-        rows.push({ report: name, stage, chrome, ms: entry.ms })
+        rows.push({ report: name, launch: launchNameFromReportPath(name), variant: report.windowVariant ?? null, stage, chrome, ms: entry.ms })
         if (typeof entry.ms !== 'number') failures.push(`${name}: ${stage} has no measured ms`)
         else if (entry.ms >= budgetMs) failures.push(`${name}: ${stage} ${entry.ms} ms >= ${budgetMs} ms`)
         if (!chrome) failures.push(`${name}: ${stage} does not say which chrome it built`)
@@ -328,7 +376,7 @@ export function windowConstructionGate(reports, budgetMs = WINDOW_STAGE_BUDGET_M
   for (const chrome of ['opaque', 'transparent']) {
     if (shipped.length > 0 && !chromes.has(chrome)) failures.push(`no shipped ${chrome} window was measured`)
   }
-  return { pass: failures.length === 0, budgetMs, skippedWarmups: warmups.length, rows, failures }
+  return { pass: failures.length === 0, budgetMs, skippedWarmups: warmups.length, launches, rows, failures }
 }
 
 /** The app's own native boot stage timings (tray stages, window construction, navigation and first show): every

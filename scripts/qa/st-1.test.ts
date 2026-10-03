@@ -4,6 +4,8 @@ import {
   GATED_WINDOW_STAGES,
   PENDING_GLOBAL,
   STORAGE_SATURATED_LOG,
+  WINDOW_CHROMES,
+  WINDOW_MEASURED_REPEATS,
   WINDOW_STAGE_BUDGET_MS,
   WINDOW_VARIANTS,
   bootStagesFromAudit,
@@ -25,6 +27,7 @@ import {
   syntheticDatalessPlan,
   runPurpose,
   timedCallsExpression,
+  windowConstructionPlan,
   windowConstructionGate,
   withTimeout,
   writeJsonToStdout,
@@ -340,6 +343,23 @@ describe('window-construction runs (M2-0516)', () => {
     expect(WINDOW_VARIANTS).toEqual([...BOOT_WINDOW_VARIANTS])
   })
 
+  it('warms every variant and chrome before measured launches start', () => {
+    const plan = windowConstructionPlan()
+    const warmups = plan.filter((entry) => entry.warmup)
+    const measured = plan.filter((entry) => !entry.warmup)
+    expect(WINDOW_CHROMES).toEqual(['opaque', 'transparent'])
+    expect(WINDOW_MEASURED_REPEATS).toBe(2)
+    expect(warmups).toHaveLength(WINDOW_VARIANTS.length * WINDOW_CHROMES.length)
+    expect(measured).toHaveLength(WINDOW_VARIANTS.length * WINDOW_CHROMES.length * WINDOW_MEASURED_REPEATS)
+    expect(plan.findIndex((entry) => !entry.warmup)).toBe(warmups.length)
+    expect(new Set(warmups.map((entry) => `${entry.variant}/${entry.chrome}`))).toEqual(
+      new Set(WINDOW_VARIANTS.flatMap((variant) => WINDOW_CHROMES.map((chrome) => `${variant}/${chrome}`)))
+    )
+    expect(measured.slice(0, WINDOW_VARIANTS.length * WINDOW_CHROMES.length).map((entry) => entry.name)).toEqual(
+      WINDOW_VARIANTS.flatMap((variant) => WINDOW_CHROMES.map((chrome) => `window-${variant}-${chrome}-1`))
+    )
+  })
+
   it('makes a run without a purpose an ST-1 run on the shipped window, and refuses a variant there', () => {
     expect(runPurpose({})).toEqual({ purpose: 'st-1', windowVariant: 'shipped' })
     expect(runPurpose({ windowVariant: 'paint-when-hidden' }).error).toMatch(/--window-variant needs --purpose window-construction/)
@@ -419,10 +439,71 @@ describe('windowConstructionGate (M2-0519)', () => {
     ])
     expect(gate).toMatchObject({ pass: true, budgetMs: 250, failures: [] })
     expect(gate.rows).toEqual([
-      { report: 'window-shipped-opaque-1/a.json', stage: 'createWindow.prewarm', chrome: 'opaque', ms: 12 },
-      { report: 'window-shipped-opaque-1/a.json', stage: 'createWindow.construct', chrome: 'opaque', ms: 111 },
-      { report: 'window-shipped-transparent-1/a.json', stage: 'createWindow.prewarm', chrome: 'transparent', ms: 9 },
-      { report: 'window-shipped-transparent-1/a.json', stage: 'createWindow.construct', chrome: 'transparent', ms: 93 }
+      { report: 'window-shipped-opaque-1/a.json', launch: 'window-shipped-opaque-1', variant: 'shipped', stage: 'createWindow.prewarm', chrome: 'opaque', ms: 12 },
+      { report: 'window-shipped-opaque-1/a.json', launch: 'window-shipped-opaque-1', variant: 'shipped', stage: 'createWindow.construct', chrome: 'opaque', ms: 111 },
+      {
+        report: 'window-shipped-transparent-1/a.json',
+        launch: 'window-shipped-transparent-1',
+        variant: 'shipped',
+        stage: 'createWindow.prewarm',
+        chrome: 'transparent',
+        ms: 9
+      },
+      {
+        report: 'window-shipped-transparent-1/a.json',
+        launch: 'window-shipped-transparent-1',
+        variant: 'shipped',
+        stage: 'createWindow.construct',
+        chrome: 'transparent',
+        ms: 93
+      }
+    ])
+    expect(gate.launches).toEqual([
+      {
+        report: 'window-shipped-opaque-1/a.json',
+        launch: 'window-shipped-opaque-1',
+        variant: 'shipped',
+        warmup: false,
+        stage: 'createWindow.prewarm',
+        chrome: 'opaque',
+        ms: 12
+      },
+      {
+        report: 'window-shipped-opaque-1/a.json',
+        launch: 'window-shipped-opaque-1',
+        variant: 'shipped',
+        warmup: false,
+        stage: 'createWindow.construct',
+        chrome: 'opaque',
+        ms: 111
+      },
+      {
+        report: 'window-shipped-transparent-1/a.json',
+        launch: 'window-shipped-transparent-1',
+        variant: 'shipped',
+        warmup: false,
+        stage: 'createWindow.prewarm',
+        chrome: 'transparent',
+        ms: 9
+      },
+      {
+        report: 'window-shipped-transparent-1/a.json',
+        launch: 'window-shipped-transparent-1',
+        variant: 'shipped',
+        warmup: false,
+        stage: 'createWindow.construct',
+        chrome: 'transparent',
+        ms: 93
+      },
+      {
+        report: 'window-spellcheck-off-opaque-1/a.json',
+        launch: 'window-spellcheck-off-opaque-1',
+        variant: 'spellcheck-off',
+        warmup: false,
+        stage: 'createWindow.construct',
+        chrome: 'opaque',
+        ms: 900
+      }
     ])
   })
 
