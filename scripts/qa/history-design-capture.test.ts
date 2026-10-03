@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { IPC } from '../../src/shared/ipc'
 import { HISTORY_DEGRADED_MS as RENDERER_DEGRADED_MS } from '../../src/renderer/src/components/history/list-status'
 import { NOT_DOWNLOADED_TEXT, UNAVAILABLE_TEXT } from '../../src/renderer/src/components/history/hydration'
-import { driveState, STATE_TIMEOUT_MS, warmUp } from './history-design-capture.mjs'
+import { driveState, fixtureAnswersForState, STATE_TIMEOUT_MS, waitForRequest, warmUp } from './history-design-capture.mjs'
 import {
   BACKDROPS,
   BLOCKED_EXTERNAL_ROWS,
@@ -106,29 +106,62 @@ describe('History design matrix (M2-0032)', () => {
     expect(() => listAnswer('bogus', real, 0)).toThrow(/unknown list mode/)
   })
 
+  it("uses a state's list answer for its default search answer", () => {
+    const slow = HISTORY_DESIGN_STATES.find((candidate) => candidate.id === 'slow')!
+    const real = [{ file: 'a.md', title: 'A', date: '', mode: 'general', durationMin: 1, participants: [] }]
+
+    expect(fixtureAnswersForState(slow, real, 0)).toMatchObject({
+      list: { kind: 'pending' },
+      search: { kind: 'pending' },
+      read: 'hydrating'
+    })
+  })
+
+  it('waits for the expected request channel and ignores the other one', async () => {
+    let now = 0
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const history = { requests: { list: 0, search: 0 }, requestedAt: { list: 0, search: 0 } }
+    const main = vi.fn(async () => ({ requests: { ...history.requests }, requestedAt: { ...history.requestedAt } }))
+    const wait = vi.fn(async (ms: number) => {
+      now += ms
+      if (history.requests.search === 0) {
+        history.requests.search += 1
+        history.requestedAt.search = now
+      } else if (history.requests.list === 0) {
+        history.requests.list += 1
+        history.requestedAt.list = now
+      }
+    })
+
+    await expect(waitForRequest(main as never, 'list', 0, wait)).resolves.toBe(100)
+    expect(history.requests).toEqual({ list: 1, search: 1 })
+    expect(wait).toHaveBeenCalledTimes(2)
+  })
+
   it('anchors the slow search degraded cue to the search request, not the typed character', async () => {
     const state = HISTORY_DESIGN_STATES.find((candidate) => candidate.id === 'slow-with-rows')!
     const calls: string[] = []
-    const history = { requests: 0, requestedAt: 0 }
+    const history = { requests: { list: 0, search: 0 }, requestedAt: { list: 0, search: 0 } }
     let searchFillPending = false
     let searchRequestSeen = false
     let now = 0
     vi.spyOn(Date, 'now').mockImplementation(() => now)
 
     const main = vi.fn(async (expression: string) => {
-      if (expression === 'globalThis.__historyDesign.requests') return history.requests
-      if (expression.includes('requests, requestedAt')) return { ...history }
+      if (expression === 'globalThis.__historyDesign.requests.list') return history.requests.list
+      if (expression === 'globalThis.__historyDesign.requests.search') return history.requests.search
+      if (expression.includes('requests, requestedAt')) return { requests: { ...history.requests }, requestedAt: { ...history.requestedAt } }
       return true
     })
-    const noteRequest = (requestedAt: number) => {
-      history.requests += 1
-      history.requestedAt = requestedAt
+    const noteRequest = (channel: 'list' | 'search', requestedAt: number) => {
+      history.requests[channel] += 1
+      history.requestedAt[channel] = requestedAt
     }
     const wait = vi.fn(async (ms: number) => {
       now += ms
       if (searchFillPending && !searchRequestSeen) {
         searchRequestSeen = true
-        noteRequest(now)
+        noteRequest('search', now)
       }
     })
     const page = {
@@ -151,6 +184,7 @@ describe('History design matrix (M2-0032)', () => {
         })
       })),
       getByLabel: vi.fn(() => ({
+        inputValue: vi.fn(async () => ''),
         fill: vi.fn(async () => {
           searchFillPending = true
         })
@@ -160,7 +194,7 @@ describe('History design matrix (M2-0032)', () => {
     const drive = await driveState(page as never, main as never, state, [{ title: 'Quarterly planning sample' }], {
       wait,
       ensureIdleBar: async () => undefined,
-      clickHistory: async () => noteRequest(now)
+      clickHistory: async () => noteRequest('list', now)
     })
 
     expect(drive.requestedAt).toBe(500)
@@ -213,10 +247,11 @@ describe('History design matrix (M2-0032)', () => {
       }),
       evaluate: vi.fn(async () => undefined)
     }
-    let requests = 0
+    const requests = { list: 0, search: 0 }
     const main = vi.fn(async (expression: string) => {
-      if (expression === 'globalThis.__historyDesign.requests') return requests
-      if (expression.includes('requests, requestedAt')) return { requests, requestedAt: 100 }
+      if (expression === 'globalThis.__historyDesign.requests.list') return requests.list
+      if (expression === 'globalThis.__historyDesign.requests.search') return requests.search
+      if (expression.includes('requests, requestedAt')) return { requests: { ...requests }, requestedAt: { list: 100, search: 0 } }
       events.push('apply-or-arm')
       return true
     })
@@ -231,7 +266,7 @@ describe('History design matrix (M2-0032)', () => {
         ensureIdleBar: async () => events.push('idle'),
         clickHistory: async () => {
           events.push('open-history')
-          requests += 1
+          requests.list += 1
         }
       }
     })
@@ -253,35 +288,40 @@ describe('History design matrix (M2-0032)', () => {
   it('starts each capture from a closed History view before arming fixtures and reopening it', async () => {
     const state = HISTORY_DESIGN_STATES.find((candidate) => candidate.id === 'slow-with-rows')!
     const events: string[] = []
-    const history = { requests: 0, requestedAt: 0 }
+    const history = { requests: { list: 0, search: 0 }, requestedAt: { list: 0, search: 0 } }
     let historyOpen = true
     let searchFillPending = false
     let searchRequestSeen = false
 
     const main = vi.fn(async (expression: string) => {
-      if (expression === 'globalThis.__historyDesign.requests') {
+      if (expression === 'globalThis.__historyDesign.requests.list') {
         events.push('read-requests')
-        return history.requests
+        return history.requests.list
       }
-      if (expression.includes('requests, requestedAt')) return { ...history }
+      if (expression === 'globalThis.__historyDesign.requests.search') {
+        events.push('read-requests')
+        return history.requests.search
+      }
+      if (expression.includes('requests, requestedAt')) return { requests: { ...history.requests }, requestedAt: { ...history.requestedAt } }
       events.push('arm-fixture')
       return true
     })
-    const noteRequest = (requestedAt: number) => {
-      history.requests += 1
-      history.requestedAt = requestedAt
+    const noteRequest = (channel: 'list' | 'search', requestedAt: number) => {
+      history.requests[channel] += 1
+      history.requestedAt[channel] = requestedAt
     }
     const wait = vi.fn(async () => {
       if (searchFillPending && !searchRequestSeen) {
         searchRequestSeen = true
         events.push('search-request')
-        noteRequest(3_000)
+        noteRequest('search', 3_000)
       }
     })
     const searchLocator = {
       first: () => ({
         isVisible: vi.fn(async () => historyOpen)
       }),
+      inputValue: vi.fn(async () => ''),
       fill: vi.fn(async () => {
         events.push('fill-search')
         searchFillPending = true
@@ -331,7 +371,7 @@ describe('History design matrix (M2-0032)', () => {
       clickHistory: async () => {
         events.push('open-history')
         historyOpen = true
-        noteRequest(2_000)
+        noteRequest('list', 2_000)
       }
     })
 
@@ -360,7 +400,40 @@ describe('History design matrix (M2-0032)', () => {
         searchRequestToCue: expect.any(Number)
       })
     )
-    expect(history.requests).toBe(2)
+    expect(history.requests).toEqual({ list: 1, search: 1 })
+  })
+
+  it('fails a capture explicitly when History reopens with a non-empty search query', async () => {
+    const state = HISTORY_DESIGN_STATES.find((candidate) => candidate.id === 'slow')!
+    const history = { requests: { list: 0, search: 0 }, requestedAt: { list: 0, search: 0 } }
+    let historyOpen = false
+    const main = vi.fn(async (expression: string) => {
+      if (expression === 'globalThis.__historyDesign.requests.list') return history.requests.list
+      if (expression.includes('requests, requestedAt')) return { requests: { ...history.requests }, requestedAt: { ...history.requestedAt } }
+      return true
+    })
+    const searchLocator = {
+      first: () => ({
+        isVisible: vi.fn(async () => historyOpen)
+      }),
+      inputValue: vi.fn(async () => (historyOpen ? 'planning' : '')),
+      fill: vi.fn()
+    }
+    const page = {
+      getByLabel: vi.fn(() => searchLocator)
+    }
+
+    await expect(
+      driveState(page as never, main as never, state, [{ title: 'Quarterly planning sample' }], {
+        wait: async () => undefined,
+        ensureIdleBar: async () => undefined,
+        clickHistory: async () => {
+          historyOpen = true
+          history.requests.list += 1
+          history.requestedAt.list = 10
+        }
+      })
+    ).rejects.toThrow('History reopened with a non-empty search query')
   })
 
   it('fails fast instead of arming fixtures while History is still open', async () => {
