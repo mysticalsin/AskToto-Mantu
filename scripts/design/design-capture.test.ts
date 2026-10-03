@@ -9,6 +9,7 @@ import {
   buildManifest,
   captureFileName,
   captureMatrix,
+  captureScreenshotOptions,
   assertPngSize,
   pngSize,
   sha256Hex
@@ -221,6 +222,10 @@ describe('png size check', () => {
   it('accepts a shot at scale x viewport and rejects a silent 1x capture as 2x', () => {
     expect(() => assertPngSize(png(1920, 1280), viewport, 2, 'a.png')).not.toThrow()
     expect(() => assertPngSize(png(960, 640), viewport, 2, 'a.png')).toThrow(/expected 1920x1280, got 960x640/)
+  })
+
+  it('requests device-scale screenshots so Windows 2x captures are physical pixels', () => {
+    expect(captureScreenshotOptions('a.png')).toEqual({ path: 'a.png', scale: 'device' })
   })
 
   it('rejects bytes that are not a PNG', () => {

@@ -109,15 +109,20 @@ body {
 }
 .dc-audit-negative-control {
   padding: 8px 16px;
-  border: 1px solid rgb(221 221 221);
+  border: 2px solid rgb(221 221 221);
   border-radius: 10px;
   background: rgb(255 255 255);
   color: rgb(27 21 36);
   font: inherit;
 }
+.dc-audit-negative-control:focus {
+  outline: 2px solid rgb(221 221 221);
+  outline-offset: 2px;
+}
 .dc-audit-negative-clipped {
-  display: block;
-  width: 72px;
+  display: inline-block;
+  width: 24px;
+  max-width: 24px;
   overflow: hidden;
   color: rgb(27 21 36);
   text-overflow: ellipsis;

@@ -39,6 +39,11 @@ export function assertPngSize(bytes, viewport, scale, label) {
   }
 }
 
+/** Electron on Windows needs an explicit device-scale screenshot request for 2x PNGs. */
+export function captureScreenshotOptions(path) {
+  return { path, scale: 'device' }
+}
+
 export function sha256Hex(bytes) {
   return createHash('sha256').update(bytes).digest('hex')
 }
