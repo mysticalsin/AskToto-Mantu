@@ -130,10 +130,15 @@ describe('settings-section-visual-compare compare', () => {
       820
     )).toBe(820)
     expect(sectionViewportHeight(
-      { x: 24, y: 40, width: 820, height: 891 },
+      { x: 24, y: 0, width: 820, height: 891 },
       { x: 0, y: 0, width: 900, height: 700 },
       820
     )).toBe(1_107)
+    expect(sectionViewportHeight(
+      { x: 24, y: 40, width: 820, height: 891 },
+      { x: 0, y: 0, width: 900, height: 700 },
+      820
+    )).toBe(1_147)
     expect(sectionViewportHeight(
       { x: 24, y: 40, width: 820, height: 2_000 },
       { x: 0, y: 0, width: 900, height: 700 },
