@@ -1,7 +1,7 @@
 name: verification-baseline
 
-# M2-0425 — measures the verification baseline of commit 2bf21f1c under the hermetic harness. Dispatch only:
-# nothing here runs on push or pull_request, and nothing here gates a merge.
+# M2-0425 — measures the verification baseline of commit 2bf21f1c under the hermetic harness. The pull_request
+# trigger only registers the dispatchable workflow with GitHub; the baseline job still runs only when dispatched.
 #
 # The baseline predates the hermetic harness (M2-0001 sandboxed vitest; M2-0190 extended it to swift test,
 # license-server and the honeypot check), and a run of the raw baseline resolved the developer's real
@@ -18,7 +18,12 @@ name: verification-baseline
 #
 # The lead dispatches this after merge and files the artifact into the baseline document; the run itself
 # is LOCALLY_TESTED evidence at most.
+run-name: ${{ github.event_name == 'pull_request' && 'verification-baseline (registration)' || format('verification-baseline {0}', inputs.baseline_ref) }}
+
 on:
+  pull_request:
+    paths:
+      - .github/workflows/verification-baseline.yml
   workflow_dispatch:
     inputs:
       baseline_ref:
@@ -42,6 +47,7 @@ env:
 jobs:
   baseline:
     name: Baseline gates (${{ matrix.os }})
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -174,7 +180,7 @@ jobs:
           source baseline-out/gate.sh
           gate check-skips baseline bash -c '[ -f ../baseline-out/vitest-root.json ] || { echo "no root Vitest report: tests-root produced none"; exit 1; }; npm run check:skips -- ../baseline-out/vitest-root.json'
       - name: Gate — license-server node --test
-        run: source baseline-out/gate.sh && gate license-server baseline/license-server npm test
+        run: source baseline-out/gate.sh && gate license-server baseline/license-server node ../scripts/hermetic/run-with-sandbox.mjs -- node --test
       # Never bare `swift test`: the wrapper provides the sandboxed HOME that HermeticHomeTests asserts.
       - name: Gate — MetisKit swift test
         if: runner.os == 'macOS'
