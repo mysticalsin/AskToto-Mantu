@@ -126,6 +126,10 @@ jobs:
           : > "$review/list.txt"
           # Each line: shot id, source (a rendered scene id, or a concept shot id), length in seconds.
           while read -r shot source length; do
+            if [ -z "$shot" ] || [ -z "$source" ] || [ -z "$length" ]; then
+              echo "Bad review shot row: shot='$shot' source='$source' length='$length'" >&2
+              exit 1
+            fi
             segment="$review/$shot.mp4"
             if [ -f "$SCENES_DIR/$source.mp4" ]; then
               ffmpeg -v error -y -i "$SCENES_DIR/$source.mp4" \
@@ -133,7 +137,7 @@ jobs:
                 -t "$length" -an -c:v libx264 -pix_fmt yuv420p "$segment"
             else
               ffmpeg -v error -y -f lavfi -i "color=c=0x1c1c22:s=960x540:r=30:d=$length" \
-                -vf "drawtext=fontfile=$font:text='$shot $source (slate, no render yet)':fontcolor=white:fontsize=32:x=(w-text_w)/2:y=(h-text_h)/2" \
+                -vf "drawtext=fontfile=$font:text='$shot $source slate no render yet':fontcolor=white:fontsize=32:x=(w-text_w)/2:y=(h-text_h)/2" \
                 -c:v libx264 -pix_fmt yuv420p "$segment"
             fi
             ffmpeg -v error -y -ss 1.5 -i "$segment" -frames:v 1 "$review/$shot.png"

@@ -60,11 +60,13 @@ test('the committed storyboard package passes against the claim register', () =>
 
 test("the resolved scratch edit skips cut scenes and follows each scene's active variant", () => {
   const { timeline, duration_seconds: total } = validate()
-  assert.ok(!timeline.some((entry) => entry.scene_id === 'LF-04' || entry.scene_id === 'LF-05'))
+  assert.ok(!timeline.some((entry) => entry.scene_id === 'LF-07'))
   assert.ok(
     timeline.some((entry) => entry.scene_id === 'LF-03' && entry.source === 'SH-03C'),
-    'the hindsight beat plays its concept form while the register says concept'
+    'the overlay beat plays its concept form while the register says concept'
   )
+  assert.ok(timeline.some((entry) => entry.scene_id === 'LF-04'), 'LF-04 plays while the register says concept')
+  assert.ok(timeline.some((entry) => entry.scene_id === 'LF-05'), 'LF-05 plays while the register says concept')
   assert.equal(total, timeline.at(-1).end)
   assert.equal(timeline[0].start, 0)
   for (let index = 1; index < timeline.length; index += 1) assert.equal(timeline[index].start, timeline[index - 1].end)
