@@ -9,7 +9,7 @@ name: QA candidate
 #
 # A pull request that changes the lane's own files runs it as a self-test. Such a run builds the PR's
 # merge commit and can never be promoted.
-run-name: ${{ github.event_name == 'pull_request' && format('QA candidate self-test (PR {0})', github.event.pull_request.number) || format('QA candidate {0}', inputs.commit) }}
+run-name: ${{ github.event_name == 'pull_request' && format('QA candidate self-test (PR {0})', github.event.pull_request.number) || format('QA candidate {0}', github.event.inputs.commit) }}
 
 on:
   workflow_dispatch:
@@ -76,7 +76,7 @@ jobs:
       - name: The named commit is the dispatched ref's head
         if: github.event_name == 'workflow_dispatch'
         env:
-          COMMIT: ${{ inputs.commit }}
+          COMMIT: ${{ github.event.inputs.commit }}
         run: |
           if [ "$COMMIT" != "$GITHUB_SHA" ]; then
             echo "::error::$GITHUB_REF is at $GITHUB_SHA and the named commit differs. Dispatch again naming the current head of $GITHUB_REF."
