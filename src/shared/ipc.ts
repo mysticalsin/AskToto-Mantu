@@ -900,11 +900,10 @@ export const BaseSettingsSchema = z.object({
   overlayOrbStyle: z.enum(['bar', 'jakub', 'obsidian']).default('jakub'),
   /** Physical location is separate from the overlay chrome. Legacy profiles stay top-center. */
   overlayPlacement: z.enum(['top-center', 'right-edge']).default('top-center'),
-  /**
-   * Per-display sidecar position, stored as a normalized Y (0..1), never a raw desktop coordinate.
-   * It remains in the encrypted local profile and is never sent to Operator or a meeting.
-   */
-  overlayRightEdgeYByDisplay: z.record(z.string(), z.number().finite().min(0).max(1)).default({}),
+  // Per-display right-edge position, normalized (0..1) to the work area, never a raw desktop coordinate. It
+  // remains in the encrypted local profile and is never sent to Operator or a meeting (right-edge-geometry.ts).
+  overlayRightEdgeYByDisplay: z.record(z.string(), z.number().finite().min(0).max(1)).default({}), // legacy sidecar Y: migrated once per display, then read-only
+  overlayRightEdgeAnchorByDisplay: z.record(z.string(), z.number().finite().min(0).max(1)).default({}), // handle centre (default 0.15); a lock on either key locks it
   showFullTranscriptInReview: z.boolean().default(false), // review = summary-first; transcript opt-in
   asrQuality: z.enum(['best', 'fast']).default('best'), // Best is default; Fast is a Settings power option (docs/asr/QUALITY.md)
   // parakeet = conservative schema/legacy fallback. Fresh incomplete profiles with >8 GiB physical RAM
@@ -1469,6 +1468,7 @@ export const DEFAULT_SETTINGS: Settings = {
   overlayOrbStyle: 'jakub',
   overlayPlacement: 'top-center',
   overlayRightEdgeYByDisplay: {},
+  overlayRightEdgeAnchorByDisplay: {},
   showFullTranscriptInReview: false,
   asrQuality: 'best',
   asrEngine: 'parakeet',
