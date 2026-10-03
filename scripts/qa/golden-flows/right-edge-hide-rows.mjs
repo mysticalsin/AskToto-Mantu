@@ -3,8 +3,8 @@
  * the right-edge placement and prove Hide/Island park and reveal from the screen edge. The rows drive main's
  * cursor watch by stubbing `screen.getCursorScreenPoint` inside the main process, and read the click-through
  * flag by wrapping `win.setIgnoreMouseEvents` (Electron has no getter). Hosted runners have no pointer to
- * move, and moving the real one would not be deterministic. Geometry mirrors src/main/island/geometry.ts for
- * a fresh profile (normalized sidecar Y 0.2). See the header of ../packaged-smoke.mjs.
+ * move, and moving the real one would not be deterministic. Geometry mirrors src/shared/right-edge-geometry.ts
+ * for a fresh profile (anchor f = 0.15). See the header of ../packaged-smoke.mjs.
  */
 import { sleep } from '../lib/app-driver.mjs'
 import { withOverlayPage } from './navigation-guard-rows.mjs'
@@ -21,7 +21,20 @@ export const RIGHT_EDGE_HIDE_SCENARIOS = Object.freeze([
   { id: 'RE-HIDE-4-island-meeting-leave-parks', layout: 'island' }
 ])
 
-const RIGHT_EDGE = Object.freeze({ margin: 12, tab: 52, drawerWidth: 360, drawerHeight: 560, band: 4, normalizedY: 0.2 })
+/** Mirrors src/shared/right-edge-geometry.ts for a fresh profile (anchor f = 0.15); a unit test holds the two equal. */
+const RIGHT_EDGE = Object.freeze({
+  margin: 12,
+  tab: 52,
+  drawerWidth: 360,
+  drawerHeight: 560,
+  band: 4,
+  bandCorner: 48,
+  // The stored anchor f: the handle centre normalized to the work-area height.
+  normalizedY: 0.15,
+  anchorInset: 84,
+  drawerAboveAnchor: 36,
+  tabAboveAnchor: 26
+})
 /** Right-edge only (src/main/island/cursor-watch.ts RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS). */
 const RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS = 3000
 // Hold the parked band long enough for a late native frame change to land inside RE-HIDE-3's assertion.
@@ -40,21 +53,44 @@ export function initialRightEdgeHideRows() {
   }))
 }
 
-function rightEdgeY(height, workArea) {
-  const min = workArea.y + RIGHT_EDGE.margin
-  const max = workArea.y + workArea.height - height - RIGHT_EDGE.margin
-  return Math.round(min + (max - min) * RIGHT_EDGE.normalizedY)
+const clampTo = (value, min, max) => Math.min(Math.max(value, min), max)
+
+/** Top of a `height`-tall right-edge rect placed `aboveAnchor` above the anchor A, inside the work-area margins. */
+function rightEdgeY(height, aboveAnchor, workArea) {
+  const bottom = workArea.y + workArea.height
+  const anchor = clampTo(
+    Math.round(workArea.y + RIGHT_EDGE.normalizedY * workArea.height),
+    workArea.y + RIGHT_EDGE.anchorInset,
+    bottom - RIGHT_EDGE.anchorInset
+  )
+  return clampTo(anchor - aboveAnchor, workArea.y + RIGHT_EDGE.margin, bottom - RIGHT_EDGE.margin - height)
 }
 
-/** Expected native bounds on `workArea`: the open drawer, the Island rail tab and the Hide reveal band. */
+/** Expected native bounds on `workArea`: the open drawer, the Island rail tab and the Hide reveal band, all
+ *  from the one anchor A (the handle centre). */
 export function rightEdgeExpectedRects(workArea) {
   const right = workArea.x + workArea.width
-  const drawerHeight = Math.min(RIGHT_EDGE.drawerHeight, Math.max(RIGHT_EDGE.tab, workArea.height - RIGHT_EDGE.margin * 2))
-  const drawerY = rightEdgeY(drawerHeight, workArea)
+  const drawerHeight = Math.min(RIGHT_EDGE.drawerHeight, workArea.height - RIGHT_EDGE.margin * 2)
+  const drawerY = rightEdgeY(drawerHeight, RIGHT_EDGE.drawerAboveAnchor, workArea)
   return {
-    drawer: { x: right - RIGHT_EDGE.margin - RIGHT_EDGE.drawerWidth, y: drawerY, width: RIGHT_EDGE.drawerWidth, height: drawerHeight },
-    tab: { x: right - RIGHT_EDGE.margin - RIGHT_EDGE.tab, y: rightEdgeY(RIGHT_EDGE.tab, workArea), width: RIGHT_EDGE.tab, height: RIGHT_EDGE.tab },
-    band: { x: right - RIGHT_EDGE.band, y: drawerY, width: RIGHT_EDGE.band, height: drawerHeight }
+    drawer: {
+      x: right - RIGHT_EDGE.margin - RIGHT_EDGE.drawerWidth,
+      y: drawerY,
+      width: RIGHT_EDGE.drawerWidth,
+      height: drawerHeight
+    },
+    tab: {
+      x: right - RIGHT_EDGE.margin - RIGHT_EDGE.tab,
+      y: rightEdgeY(RIGHT_EDGE.tab, RIGHT_EDGE.tabAboveAnchor, workArea),
+      width: RIGHT_EDGE.tab,
+      height: RIGHT_EDGE.tab
+    },
+    band: {
+      x: right - RIGHT_EDGE.band,
+      y: workArea.y + RIGHT_EDGE.bandCorner,
+      width: RIGHT_EDGE.band,
+      height: workArea.height - RIGHT_EDGE.bandCorner * 2
+    }
   }
 }
 
@@ -117,10 +153,13 @@ export function rightEdgeStateMismatches(observation, state, layout) {
  */
 export const MAIN_RE_HIDE_SHIM = `(() => {
   const { screen, BrowserWindow } = globalThis.__metisReHideElectron
-  const state = (globalThis.__metisReHide ??= { cursor: null, clickThrough: new WeakMap(), geometry: [] })
+  const state = (globalThis.__metisReHide ??= { cursor: null, cursorReads: 0, clickThrough: new WeakMap(), geometry: [] })
   if (!state.realCursor) {
     state.realCursor = screen.getCursorScreenPoint.bind(screen)
-    screen.getCursorScreenPoint = () => state.cursor ?? state.realCursor()
+    screen.getCursorScreenPoint = () => {
+      if (state.cursor) state.cursorReads += 1
+      return state.cursor ?? state.realCursor()
+    }
   }
   const trace = (w, kind, bounds, call) => {
     try {
@@ -213,7 +252,13 @@ export const MAIN_RE_HIDE_SNAPSHOT = `(() => {
 })()`
 
 export const setMainCursor = (point) =>
-  `(() => { globalThis.__metisReHide.cursor = ${point ? JSON.stringify({ x: Math.round(point.x), y: Math.round(point.y) }) : 'null'}; return true })()`
+  `(() => { globalThis.__metisReHide.cursor = ${point ? JSON.stringify({ x: Math.round(point.x), y: Math.round(point.y) }) : 'null'}; globalThis.__metisReHide.cursorReads = 0; return true })()`
+
+/** How many times main has read the stubbed pointer since the last setMainCursor. */
+export const MAIN_CURSOR_READS = '(() => globalThis.__metisReHide.cursorReads)()'
+
+/** Main reads the pointer once per cursor-watch tick, so two reads prove at least one tick sampled it. */
+export const CURSOR_SAMPLED_READS = 2
 
 export function rightEdgePageChromeState({ rootOpen, drawerAriaHidden, tabAriaExpanded }) {
   const drawer = rootOpen === true && drawerAriaHidden !== 'true'
@@ -328,6 +373,20 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     return { ok: predicate(observed), observed, ms: Date.now() - started }
   }
   const setCursor = (point) => main(setMainCursor(point))
+  // An explicit Hide latches until main samples the pointer outside the band. A fixed sleep can pass with no
+  // cursor-watch tick on a slow runner, so main would never see the pointer leave: hold it away for at least
+  // `minMs` and until main has read it there. Returns the reads seen, as evidence.
+  const leaveTo = async (point, minMs) => {
+    await setCursor(point)
+    const started = Date.now()
+    await wait(minMs)
+    let reads = await main(MAIN_CURSOR_READS)
+    while (reads < CURSOR_SAMPLED_READS && Date.now() - started < 3_000) {
+      await wait(25)
+      reads = await main(MAIN_CURSOR_READS)
+    }
+    return reads
+  }
   const awayPoint = (win) => ({ x: win.workArea.x + 40, y: win.workArea.y + Math.round(win.workArea.height / 2) })
   const edgePoint = (win) => {
     const { drawer } = rightEdgeExpectedRects(win.workArea)
@@ -421,15 +480,13 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     const hideVisible = await hideControl().isVisible()
     await hideControl().click({ timeout: 5_000 })
     const byControl = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', 'hide'), 3_000)
-    await setCursor(awayPoint(byControl.observed.win))
-    await wait(100)
+    await leaveTo(awayPoint(byControl.observed.win), 100)
     const reopened = await revealAtEdge()
     const keptAfterControl = reopened.page.draft === draft
     await composer().focus()
     await page.keyboard.press('Escape')
     const byEscape = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', 'hide'), 3_000)
-    await setCursor(awayPoint(byEscape.observed.win))
-    await wait(100)
+    await leaveTo(awayPoint(byEscape.observed.win), 100)
     const reopenedAgain = await revealAtEdge()
     const keptAfterEscape = reopenedAgain.page.draft === draft
     await composer().fill('')
@@ -448,13 +505,18 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     await wait(600)
     const after600 = await observe()
     const latched = rightEdgeStateMatches(after600, 'parked', 'hide')
-    await setCursor(awayPoint(revealed.win))
-    await wait(150)
+    const awayReads = await leaveTo(awayPoint(revealed.win), 150)
     await setCursor(edgePoint(revealed.win))
     const released = await waitUntil((o) => rightEdgeStateMatches(o, 'revealed'), 2_000)
     return {
       pass: hidden.ok && latched && released.ok,
-      evidence: { hidden: summarize(hidden.observed), after600ms: summarize(after600), bandWorksAfterLeaving: released.ok }
+      evidence: {
+        hidden: summarize(hidden.observed),
+        after600ms: summarize(after600),
+        awayCursorReads: awayReads,
+        bandWorksAfterLeaving: released.ok,
+        released: summarize(released.observed)
+      }
     }
   })
 
