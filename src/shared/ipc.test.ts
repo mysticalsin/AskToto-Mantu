@@ -1,3 +1,7 @@
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import ts from 'typescript'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
   AskStartSchema,
@@ -34,6 +38,54 @@ import {
   modeLabel
 } from './ipc'
 import type { TranscriptLine } from './ipc'
+
+const SHARED_DIR = dirname(fileURLToPath(import.meta.url))
+const SRC_DIR = resolve(SHARED_DIR, '..')
+const readSource = (relativeToSrc: string): string => readFileSync(resolve(SRC_DIR, relativeToSrc), 'utf8')
+
+function sourceFile(relativeToSrc: string): ts.SourceFile {
+  return ts.createSourceFile(relativeToSrc, readSource(relativeToSrc), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+}
+
+function firstIpcKey(argument: ts.Expression | undefined, byValue: Map<string, string>): string | null {
+  if (argument && ts.isPropertyAccessExpression(argument) && argument.expression.getText() === 'IPC') {
+    return argument.name.text
+  }
+  if (argument && ts.isStringLiteral(argument)) return byValue.get(argument.text) ?? null
+  return null
+}
+
+function collectIpcCalls(
+  file: ts.SourceFile,
+  names: ReadonlySet<string>,
+  byValue: Map<string, string>
+): Set<string> {
+  const keys = new Set<string>()
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      const name = node.expression.getText(file)
+      if (names.has(name)) {
+        const key = firstIpcKey(node.arguments[0], byValue)
+        if (key) keys.add(key)
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(file)
+  return keys
+}
+
+function collectIpcImports(file: ts.SourceFile, moduleSpecifier: string): string[] {
+  const names: string[] = []
+  file.statements.forEach((statement) => {
+    if (!ts.isImportDeclaration(statement)) return
+    if (!ts.isStringLiteral(statement.moduleSpecifier) || statement.moduleSpecifier.text !== moduleSpecifier) return
+    const bindings = statement.importClause?.namedBindings
+    if (!bindings || !ts.isNamedImports(bindings)) return
+    bindings.elements.forEach((element) => names.push((element.propertyName ?? element.name).text))
+  })
+  return names
+}
 
 /** process.platform is configurable in Node — flip it for the duration of a platform-specific test. */
 function setPlatform(p: NodeJS.Platform): void {
@@ -983,15 +1035,60 @@ describe('DEFAULT_SHORTCUTS scroll defaults', () => {
   })
 })
 
-describe('local AI IPC channel constants', () => {
-  it('defines the five exact on-device local-AI channel names without collisions', () => {
-    expect(IPC.localAiStatus).toBe('local-ai:status')
-    expect(IPC.localTranscriptBegin).toBe('local-ai:transcript:begin')
-    expect(IPC.localTranscriptAppend).toBe('local-ai:transcript:append')
-    expect(IPC.localTranscriptResync).toBe('local-ai:transcript:resync')
-    expect(IPC.localTranscriptEnd).toBe('local-ai:transcript:end')
+describe('IPC channel contract', () => {
+  it('keeps the channel map zod-free and exposes it through every preload', () => {
+    const channels = sourceFile('shared/contracts/channels.ts')
+    expect(collectIpcImports(channels, 'zod')).toEqual([])
+
+    const preloadFiles = ['preload/index.ts', 'preload/intelligence.ts', 'preload/import-decoder.ts']
+    for (const file of preloadFiles) {
+      expect(collectIpcImports(sourceFile(file), '@shared/contracts/channels')).toContain('IPC')
+    }
+  })
+
+  it('has no duplicate, dead, or unhandled IPC channels', () => {
+    const declaredKeys = new Set(Object.keys(IPC))
+    const byValue = new Map(Object.entries(IPC).map(([key, value]) => [value, key]))
     const values = Object.values(IPC)
     expect(new Set(values).size).toBe(values.length)
+    expect(values.filter((value) => value.startsWith('local-ai:'))).toEqual([])
+
+    const mainFiles = [
+      'main/index.ts',
+      'main/ipc/screen-permission-ipc.ts',
+      'main/ipc/writeup.ts',
+      'main/ipc/history-trace-ipc.ts',
+      'main/updater.ts'
+    ].map(sourceFile)
+    const preloadFiles = ['preload/index.ts', 'preload/intelligence.ts', 'preload/import-decoder.ts'].map(sourceFile)
+
+    const mainRegistrations = new Set<string>()
+    const mainSends = new Set<string>()
+    for (const file of mainFiles) {
+      collectIpcCalls(file, new Set(['ipcMain.handle', 'ipcMain.on', 'safeHandle']), byValue)
+        .forEach((key) => mainRegistrations.add(key))
+      collectIpcCalls(file, new Set(['win.webContents.send', 'win?.webContents.send', 'w.webContents.send', 'getWin()?.webContents.send', 'e.sender.send', 'event.sender.send', 'decoderWin!.webContents.send', 'active.webContents.send']), byValue)
+        .forEach((key) => mainSends.add(key))
+    }
+
+    const preloadRequests = new Set<string>()
+    const preloadListeners = new Set<string>()
+    for (const file of preloadFiles) {
+      collectIpcCalls(file, new Set(['ipcRenderer.invoke', 'ipcRenderer.send']), byValue)
+        .forEach((key) => preloadRequests.add(key))
+      collectIpcCalls(file, new Set(['ipcRenderer.on', 'sub']), byValue)
+        .forEach((key) => preloadListeners.add(key))
+    }
+
+    const missingHandlers = [...preloadRequests].filter((key) => !mainRegistrations.has(key)).sort()
+    const missingMainSends = [...preloadListeners].filter((key) => !mainSends.has(key)).sort()
+    const deadChannels = [...declaredKeys]
+      .filter((key) => !mainRegistrations.has(key) && !mainSends.has(key) && !preloadRequests.has(key) && !preloadListeners.has(key))
+      .sort()
+
+    expect(missingHandlers).toEqual([])
+    expect(missingMainSends).toEqual([])
+    expect(deadChannels).toEqual([])
   })
 })
 

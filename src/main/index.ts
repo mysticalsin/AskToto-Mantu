@@ -1430,7 +1430,7 @@ async function sendSourceChunk(jobId: string, bytes: Uint8Array, done: boolean):
       rejectAck(new Error('Import decoder did not acknowledge source audio.'))
     }, 30_000)
     sourceAck = { jobId, resolve: resolveAck, reject: rejectAck, timer }
-    decoderWin!.webContents.send('import-decoder:source-chunk', { jobId, bytes, done })
+    decoderWin!.webContents.send(IPC.importDecoderSourceChunk, { jobId, bytes, done })
   })
 }
 
@@ -1567,7 +1567,7 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
     else await active.loadFile(join(__dirname, '../renderer/decoder.html'))
     if (active.isDestroyed() || decoderWin !== active) throw new Error('Import decoder closed before it started.')
     await ready
-    active.webContents.send('import-decoder:source-start', { jobId: job.jobId, skipThrough })
+    active.webContents.send(IPC.importDecoderSourceStart, { jobId: job.jobId, skipThrough })
     await streamSourceToDecoder(job)
   } catch (error) {
     closeImportDecoder(job.jobId)

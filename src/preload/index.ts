@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import { IPC } from '@shared/contracts/channels'
 import {
-  IPC,
   type AskStart,
   type PublicSettings,
   type Settings,
