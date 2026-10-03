@@ -551,6 +551,33 @@ describe('windowConstructionGate (M2-0519)', () => {
     ]))
   })
 
+  it('uses the launch report variant for per-launch diagnostics when a stage payload disagrees', () => {
+    const gate = windowConstructionGate([
+      ...passing,
+      {
+        name: 'window-spellcheck-off-opaque-1/a.json',
+        report: windowReport('spellcheck-off', [{ ...stage('createWindow.construct', 900, false), windowVariant: 'shipped' }])
+      }
+    ])
+
+    expect(gate.pass).toBe(true)
+    expect(gate.rows.map((row) => row.report)).toEqual([
+      'window-shipped-opaque-1/a.json',
+      'window-shipped-opaque-1/a.json',
+      'window-shipped-transparent-1/a.json',
+      'window-shipped-transparent-1/a.json'
+    ])
+    expect(gate.launches).toContainEqual({
+      report: 'window-spellcheck-off-opaque-1/a.json',
+      launch: 'window-spellcheck-off-opaque-1',
+      variant: 'spellcheck-off',
+      warmup: false,
+      stage: 'createWindow.construct',
+      chrome: 'opaque',
+      ms: 900
+    })
+  })
+
   it('fails a shipped prewarm or construct at or over 250 ms, in either chrome', () => {
     const gate = windowConstructionGate([
       { name: 'o.json', report: shipped(false, 250, 111) },

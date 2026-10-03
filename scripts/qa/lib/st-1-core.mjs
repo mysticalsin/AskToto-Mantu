@@ -335,12 +335,13 @@ function windowLaunchStageRows(reports) {
   return reports.flatMap(({ name, report }) => {
     if (report?.purpose !== WINDOW_CONSTRUCTION) return []
     const stages = Array.isArray(report.bootStages?.stages) ? report.bootStages.stages : []
+    const launchVariant = report.windowVariant ?? stages.find((entry) => typeof entry.windowVariant === 'string')?.windowVariant ?? null
     return stages.map((entry) => {
       const chrome = entry.transparent === true ? 'transparent' : entry.transparent === false ? 'opaque' : null
       return {
         report: name,
         launch: launchNameFromReportPath(name),
-        variant: entry.windowVariant ?? report.windowVariant ?? null,
+        variant: launchVariant,
         warmup: report.warmup === true,
         stage: entry.stage,
         chrome,
