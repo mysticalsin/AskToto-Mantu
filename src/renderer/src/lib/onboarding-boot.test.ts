@@ -114,7 +114,11 @@ describe('FITO-185-I App boot gate (source contract)', () => {
 describe('FITO-185-Z instant Act1 show (no hide-for-seconds)', () => {
   const indexHtml = readFileSync(join(__dirname, '../../index.html'), 'utf8')
   const bootJs = readFileSync(join(__dirname, '../../public/act1-boot.js'), 'utf8')
-  const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
+  const experience = [
+    '../features/onboarding-experience/OnboardingExperience.tsx',
+    '../features/onboarding-experience/OnboardingExperienceLayout.tsx',
+    '../features/onboarding-experience/onboarding-scenes.tsx'
+  ].map((file) => readFileSync(join(__dirname, file), 'utf8')).join('\n')
   const main = readFileSync(join(__dirname, '../../../main/index.ts'), 'utf8')
 
   it('no-JS shell is poster + Métis wordmark + Next (never waits on video)', () => {
@@ -209,7 +213,7 @@ describe('FITO-185-N exclusiveOnboarding flag', () => {
 describe('FITO-185-T exclusive Act 1 music after interactive', () => {
   it('OnboardingExperience gates Goldberg start on window focus (not mount-only)', () => {
     const experience = readFileSync(
-      join(__dirname, '../components/OnboardingExperience.tsx'),
+      join(__dirname, '../features/onboarding-experience/OnboardingExperience.tsx'),
       'utf8'
     )
     expect(experience).toMatch(/FITO-185-T: do not start Goldberg until Act 1 is interactive/)

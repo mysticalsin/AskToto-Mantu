@@ -86,7 +86,7 @@ describe('screen-capture permission recovery', () => {
 
 describe('MQA-236 (part 2) - nothing captures a frame without a screen gesture', () => {
   const CRLF = new RegExp(String.fromCharCode(13) + String.fromCharCode(10), 'g')
-  const bar = readFileSync(join(__dirname, 'components', 'Bar.tsx'), 'utf8').replace(CRLF, String.fromCharCode(10))
+  const bar = readFileSync(join(__dirname, 'features', 'bar', 'Bar.tsx'), 'utf8').replace(CRLF, String.fromCharCode(10))
   const mainSrc = readFileSync(join(__dirname, '..', '..', 'main', 'index.ts'), 'utf8').replace(CRLF, String.fromCharCode(10))
 
   it('focusing the ask input never pre-warms capture (prewarmCapture takes a REAL frame)', () => {

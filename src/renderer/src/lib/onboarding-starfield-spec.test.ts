@@ -21,7 +21,10 @@ import {
 const specSrc = readFileSync(join(__dirname, './onboarding-starfield-spec.ts'), 'utf8')
 const engineSrc = readFileSync(join(__dirname, './onboarding-starfield-engine.ts'), 'utf8')
 const componentSrc = readFileSync(join(__dirname, '../components/OnboardingStarfield.tsx'), 'utf8')
-const experienceSrc = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
+const experienceSrc = [
+  '../features/onboarding-experience/OnboardingExperience.tsx',
+  '../features/onboarding-experience/OnboardingExperienceLayout.tsx'
+].map((file) => readFileSync(join(__dirname, file), 'utf8')).join('\n')
 const css = readAppCss()
 const html = readFileSync(join(__dirname, '../../index.html'), 'utf8')
 const pkg = readFileSync(join(__dirname, '../../../../package.json'), 'utf8')

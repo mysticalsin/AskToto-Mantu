@@ -10,7 +10,11 @@ import {
 import { shouldMountKineticGrid } from './onboarding-kinetic-grid'
 import { shouldMountStarfield } from './onboarding-starfield-spec'
 
-const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
+const experience = [
+  '../features/onboarding-experience/OnboardingExperience.tsx',
+  '../features/onboarding-experience/OnboardingExperienceLayout.tsx',
+  '../features/onboarding-experience/onboarding-scenes.tsx'
+].map((file) => readFileSync(join(__dirname, file), 'utf8')).join('\n')
 const demo = readFileSync(join(__dirname, '../components/OnboardingDemoScene.tsx'), 'utf8')
 const css = readAppCss()
 const portal = readFileSync(join(__dirname, './onboarding-portal.ts'), 'utf8')

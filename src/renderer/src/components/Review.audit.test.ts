@@ -13,6 +13,15 @@ import {
   type NextStepArgs
 } from './Review'
 
+function reviewSource(): string {
+  return [
+    '../features/review/Review.tsx',
+    '../features/review/ReviewActions.tsx',
+    '../features/review/ReviewLayout.tsx',
+    '../features/review/review-helpers.tsx'
+  ].map((file) => readFileSync(join(__dirname, file), 'utf8')).join('\n')
+}
+
 // MQA-073 — after editing a past meeting's notes, Regenerate rewrote the file on disk while the screen
 // (and Copy Summary / Export JSON / Export PDF / the CRM payload) kept showing the old edited text.
 describe('displayedRecapText — a saved recap edit yields to a regeneration (MQA-073)', () => {
@@ -128,7 +137,7 @@ describe('nextStepPushed — an already-pushed (item, connection) pair stays pus
  * rationale), so these three user-facing fixes are pinned against the actual source.
  */
 describe('Review.tsx — next steps and cold-call coaching cannot strand or duplicate work', () => {
-  const src = readFileSync(join(__dirname, 'Review.tsx'), 'utf8')
+  const src = reviewSource()
 
   it('MQA-312 shows a truthful speaker-evidence label, not the number of audio channels', () => {
     expect(src.includes('new Set(lines.map((l) => l.speaker)).size')).toBe(false)
@@ -239,7 +248,7 @@ describe('crmPushKey / seedCrmPushed — a push survives a relaunch (MQA-092)', 
 // marker has to be parked and written when the path finally arrives, guarded so it can never land on a
 // different meeting's file.
 describe('the deferred CRM marker — a push that beat its own autosave (MQA-092)', () => {
-  const source = readFileSync(join(__dirname, 'Review.tsx'), 'utf8').replace(/\r\n/g, '\n')
+  const source = reviewSource().replace(/\r\n/g, '\n')
   const between = (start: string, end: string): string => {
     const from = source.indexOf(start)
     expect(from, `anchor moved: ${start}`).toBeGreaterThan(-1)
@@ -270,7 +279,7 @@ describe('the deferred CRM marker — a push that beat its own autosave (MQA-092
 })
 
 describe('Review.tsx — ClickUp create-task destination (CLICKUP-PUSH.md)', () => {
-  const src = readFileSync(join(__dirname, 'Review.tsx'), 'utf8')
+  const src = reviewSource()
 
   it('shows Push to ClickUp and Task in, never attach_task_file or a ClickUp project-ID paste', () => {
     expect(src).toMatch(/Push to ClickUp/)

@@ -11,7 +11,11 @@ import {
   resolveOnboardingHeroVideoSrc
 } from './onboarding-hero-video'
 
-const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
+const experience = [
+  '../features/onboarding-experience/OnboardingExperience.tsx',
+  '../features/onboarding-experience/OnboardingExperienceLayout.tsx',
+  '../features/onboarding-experience/onboarding-scenes.tsx'
+].map((file) => readFileSync(join(__dirname, file), 'utf8')).join('\n')
 const css = readAppCss()
 const html = readFileSync(join(__dirname, '../../index.html'), 'utf8')
 

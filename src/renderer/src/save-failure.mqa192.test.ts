@@ -25,7 +25,10 @@ import { saveStatusLine } from './components/Review'
 
 // Windows checkout — normalize CRLF so multi-line anchors match.
 const appSource = readFileSync(join(__dirname, 'App.tsx'), 'utf8').replace(/\r\n/g, '\n')
-const reviewSource = readFileSync(join(__dirname, 'components', 'Review.tsx'), 'utf8').replace(/\r\n/g, '\n')
+const reviewSource = [
+  'features/review/Review.tsx',
+  'features/review/ReviewLayout.tsx'
+].map((file) => readFileSync(join(__dirname, file), 'utf8')).join('\n').replace(/\r\n/g, '\n')
 
 function blockBetween(source: string, start: string, end: string): string {
   const from = source.indexOf(start)

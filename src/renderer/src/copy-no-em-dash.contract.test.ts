@@ -18,10 +18,13 @@ const DIRECTORIES = [
 ]
 const FILES = [
   'src/renderer/src/App.tsx',
-  'src/renderer/src/components/Bar.tsx',
+  'src/renderer/src/features/bar/Bar.tsx',
   'src/renderer/src/components/Settings.tsx',
-  'src/renderer/src/components/Review.tsx',
-  'src/renderer/src/components/RecallView.tsx',
+  'src/renderer/src/features/review/Review.tsx',
+  'src/renderer/src/features/review/ReviewActions.tsx',
+  'src/renderer/src/features/review/ReviewLayout.tsx',
+  'src/renderer/src/features/recall-view/RecallView.tsx',
+  'src/renderer/src/features/recall-view/recall-components.tsx',
   'src/renderer/src/components/UpcomingSection.tsx',
   'src/renderer/src/components/QuickActions.tsx',
   'src/renderer/src/components/Answer.tsx',

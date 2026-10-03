@@ -9,7 +9,7 @@ const settings = readFileSync(join(__dirname, '../features/settings/SettingsRoot
 const css = readAppCss()
 const thinking = readFileSync(join(__dirname, './JarvisOrbButton.tsx'), 'utf8')
 const orb = readFileSync(join(__dirname, './ObsidianOrb.tsx'), 'utf8')
-const bar = readFileSync(join(__dirname, './Bar.tsx'), 'utf8')
+const bar = readFileSync(join(__dirname, '../features/bar/Bar.tsx'), 'utf8')
 const pill = readFileSync(join(__dirname, './ControlPill.tsx'), 'utf8')
 const design = readFileSync(join(__dirname, '../../../../docs/design/ORB-SELECTION.md'), 'utf8')
 

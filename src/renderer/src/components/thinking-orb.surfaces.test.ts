@@ -5,21 +5,21 @@ import { describe, expect, it } from 'vitest'
 const SURFACES = [
   'Answer.tsx',
   'Copilot.tsx',
-  'Review.tsx',
-  'BrainView.tsx',
+  '../features/review/Review.tsx',
+  '../features/brain-view/BrainView.tsx',
   'IntelligenceUpdateButton.tsx',
-  'BrainRecordPage.tsx',
-  'Bar.tsx',
+  '../features/brain-record-page/BrainRecordPage.tsx',
+  '../features/bar/Bar.tsx',
   'ControlBar.tsx',
   'AgendaView.tsx',
   'SignInWall.tsx',
   'LicenseGate.tsx',
   '../features/settings/SettingsRoot.tsx',
-  'RecallView.tsx',
+  '../features/recall-view/RecallView.tsx',
   'UpcomingSection.tsx',
   'ReviewEntityStrip.tsx',
   'Onboarding.tsx',
-  'OnboardingExperience.tsx',
+  '../features/onboarding-experience/OnboardingExperience.tsx',
   'ui.tsx'
 ]
 
