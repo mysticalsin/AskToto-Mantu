@@ -45,6 +45,12 @@ export const DESIGN_VARIANTS = Object.freeze(
 /** The variant whose captures also walk the keyboard Tab order (keyboard reach does not depend on colour). */
 export const KEYBOARD_VARIANT_ID = 'dark-1x-motion'
 
+/** CDP device metrics for one design variant. Applied before a state is requested, so harness relayout
+ *  work is outside the renderer's loading/degraded clock. */
+export function deviceMetricsForVariant(variant) {
+  return { width: 0, height: 0, deviceScaleFactor: variant.scale, mobile: false }
+}
+
 const DOWNLOAD_ACTION = /^Download and open /
 const RETRY_DOWNLOAD_ACTION = /^Retry downloading /
 const RETRY_LIST_ACTION = 'Retry loading meetings'

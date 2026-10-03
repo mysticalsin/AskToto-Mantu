@@ -578,7 +578,8 @@ jobs:
 
   # OD-36: the candidate itself carries ST-1 with synthetic dataless fixtures. Hosted runners have no
   # cloud-file provider, so a kernel-blocking FIFO stands at every path a mostly-evicted cloud folder would
-  # present, in the representative-profile shape, with History idle. That proves the main-thread and
+  # present, in the representative-profile shape. History stays idle for the five-minute measurement window,
+  # then opens with bounded retries so OD-43 refusal evidence can hold. That proves the main-thread and
   # threadpool guarantees on candidate bytes; SF_DATALESS detection on real evicted files is measured in the
   # owner's field soak (st-1-macos-real-dataless.json says so and never reads as PASS). The job also runs the
   # promotable DMG's own metis-mac-helper stat-flags on the paths that need no cloud account. Its
@@ -626,7 +627,7 @@ jobs:
             --installer "$installer" \
             --provenance provenance/provenance.json \
             --fixtures synthetic-dataless \
-            --history off \
+            --history after-idle \
             --minutes 5 \
             --out st1-report/st-1-macos-synthetic-dataless.json
       - name: Record the real-cloud dataless row as not run on hosted runners
