@@ -50,7 +50,15 @@ import {
   smokeVerdict,
   waitForNavigationView
 } from './packaged-smoke.mjs'
-import { CURSOR_SAMPLED_READS, MAIN_CURSOR_READS, MAIN_RE_HIDE_SHIM, setMainCursor } from './golden-flows/right-edge-hide-rows.mjs'
+import {
+  CURSOR_SAMPLED_READS,
+  MAIN_CURSOR_READS,
+  MAIN_RE_HIDE_SHIM,
+  RIGHT_EDGE_TYPING_PIN_MS,
+  rightEdgePageSurfaceState,
+  setMainCursor
+} from './golden-flows/right-edge-hide-rows.mjs'
+import { RE_TYPING_PIN_MS } from '../../src/shared/right-edge-timing'
 
 interface ProcessEntry {
   pid: number
@@ -688,6 +696,9 @@ describe('right-edge Hide rows (RE-HIDE)', () => {
       'RE-HIDE-6-toggle-reveals-hide',
       'RE-HIDE-6-toggle-reveals-island',
       'RE-HIDE-7-layout-change-chrome',
+      'RE-K01-D4-edge-reveal-keeps-focus',
+      'RE-K01-D4-toggle-focuses-composer',
+      'RE-P01-composer-click-holds-then-parks',
       'RE-HIDE-3-meeting-hide',
       'RE-HIDE-4-island-meeting-leave-parks'
     ])
@@ -811,6 +822,19 @@ describe('right-edge Hide rows (RE-HIDE)', () => {
       delete g.__metisReHideElectron
       delete g.__metisReHide
     }
+  })
+
+  it('M2-0202: reads the page through its data-re-surface hook, never the sidecar class names', () => {
+    expect(rightEdgePageSurfaceState({ surface: 'rest', drawerAriaHidden: 'true' })).toEqual({ drawer: false, rail: true })
+    expect(rightEdgePageSurfaceState({ surface: 'island', drawerAriaHidden: null })).toEqual({ drawer: true, rail: false })
+    // A drawer still aria-hidden mid-reveal is not an open drawer, and no surface is no right-edge root at all.
+    expect(rightEdgePageSurfaceState({ surface: 'island', drawerAriaHidden: 'true' })).toEqual({ drawer: false, rail: false })
+    expect(rightEdgePageSurfaceState({ surface: null, drawerAriaHidden: null })).toEqual({ drawer: false, rail: false })
+    const rows = readFileSync(fileURLToPath(new URL('./golden-flows/right-edge-hide-rows.mjs', import.meta.url)), 'utf8')
+    expect(rows).toContain("document.querySelector('[data-re-surface]')")
+    expect(rows).not.toMatch(/querySelector\('\.right-edge-sidecar/)
+    // The RE-P01 row holds for the renderer's typing pin.
+    expect(RIGHT_EDGE_TYPING_PIN_MS).toBe(RE_TYPING_PIN_MS)
   })
 
   it('treats a mounted but aria-hidden right-edge drawer as parked rail chrome', () => {
