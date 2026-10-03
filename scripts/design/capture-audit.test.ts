@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  bestNonTextContrastCandidate,
   compositeColors,
   contrastRatio,
   detectedFailureKinds,
@@ -34,6 +35,15 @@ describe('WCAG contrast helpers', () => {
     expect(isLargeText({ fontSizePx: 18.66, fontWeight: 700 })).toBe(true)
     expect(textContrastRequirement({ fontSizePx: 18.66, fontWeight: 700 })).toBe(3)
     expect(textContrastRequirement({ fontSizePx: 18.65, fontWeight: 700 })).toBe(4.5)
+  })
+
+  it('uses the strongest border-or-fill candidate for non-text control contrast', () => {
+    expect(
+      bestNonTextContrastCandidate([
+        { source: 'fill', ratio: 1.15 },
+        { source: 'border', ratio: 4.2 }
+      ])
+    ).toEqual({ source: 'border', ratio: 4.2 })
   })
 })
 

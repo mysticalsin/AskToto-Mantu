@@ -294,6 +294,20 @@ function borderColors(style) {
     .filter(Boolean)
 }
 
+function contrastCandidate(color, background, source) {
+  const parsed = parseCssColor(color)
+  if (!parsed || parsed.a <= 0) return undefined
+  const foreground = compositeColors(parsed, background)
+  const ratio = contrastRatio(foreground, background)
+  return { source, foreground: foreground ?? parsed, ratio: ratio ?? 0 }
+}
+
+export function bestNonTextContrastCandidate(candidates) {
+  return candidates
+    .filter(Boolean)
+    .reduce((best, candidate) => (best && best.ratio >= candidate.ratio ? best : candidate), undefined)
+}
+
 function collectNonTextContrast(result, elements) {
   for (const element of elements) {
     const style = getComputedStyle(element)
@@ -303,33 +317,32 @@ function collectNonTextContrast(result, elements) {
       result.unverifiable.push(unresolvedRow(element, 'nonText', background.reason))
       continue
     }
-    const candidates = []
-    for (const color of borderColors(style)) {
-      const parsed = parseCssColor(color)
-      if (parsed && parsed.a > 0) candidates.push({ color: parsed, source: 'border' })
-    }
-    const fill = parseCssColor(style.backgroundColor)
-    if (fill && fill.a > 0) candidates.push({ color: fill, source: 'fill' })
-    for (const candidate of candidates) {
-      const color = compositeColors(candidate.color, background.color)
-      const ratio = contrastRatio(color, background.color)
+    const candidates = [
+      ...borderColors(style).map((color) => contrastCandidate(color, background.color, 'border')),
+      contrastCandidate(style.backgroundColor, background.color, 'fill')
+    ]
+    const best = bestNonTextContrastCandidate(candidates)
+    if (best) {
       result.nonText.checked++
-      if (ratio === undefined || ratio + EPSILON < NON_TEXT_REQUIRED) {
+      if (best.ratio + EPSILON < NON_TEXT_REQUIRED) {
         result.nonText.failures.push({
           ...elementLabel(element),
           kind: 'control',
-          source: candidate.source,
-          measured: round(ratio ?? 0),
+          source: best.source,
+          measured: round(best.ratio),
           required: NON_TEXT_REQUIRED,
-          foreground: formatColor(color ?? candidate.color),
+          foreground: formatColor(best.foreground),
           background: formatColor(background.color)
         })
       }
     }
 
-    const outline = parseCssColor(style.outlineColor)
-    const outlineWidth = Number.parseFloat(style.outlineWidth || '0')
-    if (outline && outline.a > 0 && outlineWidth > 0 && style.outlineStyle !== 'none') {
+    const previousActive = document.activeElement
+    if (typeof element.focus === 'function') element.focus({ preventScroll: true })
+    const focusStyle = getComputedStyle(element)
+    const outline = parseCssColor(focusStyle.outlineColor)
+    const outlineWidth = Number.parseFloat(focusStyle.outlineWidth || '0')
+    if (outline && outline.a > 0 && outlineWidth > 0 && focusStyle.outlineStyle !== 'none') {
       const color = compositeColors(outline, background.color)
       const ratio = contrastRatio(color, background.color)
       result.nonText.checked++
@@ -343,6 +356,11 @@ function collectNonTextContrast(result, elements) {
           background: formatColor(background.color)
         })
       }
+    }
+    if (previousActive && previousActive !== element && typeof previousActive.focus === 'function') {
+      previousActive.focus({ preventScroll: true })
+    } else if (document.activeElement === element && typeof element.blur === 'function') {
+      element.blur()
     }
   }
 }

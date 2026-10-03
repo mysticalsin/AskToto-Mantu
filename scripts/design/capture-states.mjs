@@ -32,8 +32,46 @@ if (!existsSync(html)) {
 mkdirSync(outDir, { recursive: true })
 
 const pageUrl = pathToFileURL(html).href
-const app = await electron.launch({
+const shots = []
+const failures = []
+const negativeControl = { detected: false, kinds: [] }
+let manifest
+let app
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function auditErrorResult(kind, reason) {
+  return {
+    pass: false,
+    text: { checked: 0, failures: [] },
+    nonText: { checked: 0, failures: [] },
+    clipping: { checked: 0, failures: [] },
+    unverifiable: [{ kind, reason }]
+  }
+}
+
+async function installAuditCollector(page) {
+  await page.addScriptTag({ path: auditScript, type: 'module' })
+  const installed = await page.evaluate(() => typeof window.__DESIGN_CAPTURE_AUDIT__?.collect === 'function')
+  if (!installed) throw new Error('design capture audit collector was not installed')
+}
+
+async function collectAudit(page) {
+  await installAuditCollector(page)
+  return page.evaluate(() => window.__DESIGN_CAPTURE_AUDIT__.collect())
+}
+
+function writeManifest() {
+  manifest = buildManifest({ commit, platform: process.platform, shots, negativeControl })
+  writeFileSync(join(outDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
+  console.log(`wrote manifest.json (${manifest.entries.length} entries, commit ${commit})`)
+}
+
+app = await electron.launch({
   args: [join(here, 'capture-main.cjs')],
+  bypassCSP: true,
   env: { ...process.env, METIS_DESIGN_CAPTURE_URL: pageUrl }
 })
 
@@ -50,22 +88,25 @@ try {
     mobile: false
   })
 
-  const negativeControl = { detected: false, kinds: [] }
   for (const theme of ['light', 'dark']) {
     await page.emulateMedia({ colorScheme: theme, reducedMotion: NEGATIVE_CONTROL_ROW.motion })
     await page.goto(`${pageUrl}?state=${encodeURIComponent(NEGATIVE_CONTROL_STATE)}`)
     await page.waitForSelector('html[data-capture-ready="1"]', { timeout: READY_TIMEOUT_MS })
-    await page.addScriptTag({ path: auditScript, type: 'module' })
-    const audit = await page.evaluate(() => window.__DESIGN_CAPTURE_AUDIT__.collect())
+    let audit
+    try {
+      audit = await collectAudit(page)
+    } catch (error) {
+      audit = auditErrorResult('negative-control-collector', errorMessage(error))
+      failures.push(`negative control (${theme}) collector failed: ${errorMessage(error)}`)
+    }
     const kinds = detectedFailureKinds(audit)
     if (!['clipping', 'nonText', 'text'].every((kind) => kinds.includes(kind))) {
-      throw new Error(`negative control (${theme}) missed audit kinds: ${kinds.join(', ') || 'none'}`)
+      failures.push(`negative control (${theme}) missed audit kinds: ${kinds.join(', ') || 'none'}`)
     }
     negativeControl.kinds = [...new Set([...negativeControl.kinds, ...kinds])].sort()
   }
   negativeControl.detected = ['clipping', 'nonText', 'text'].every((kind) => negativeControl.kinds.includes(kind))
 
-  const shots = []
   for (const row of captureMatrix()) {
     await page.emulateMedia({ colorScheme: row.theme, reducedMotion: row.motion })
     await cdp.send('Emulation.setDeviceMetricsOverride', {
@@ -74,28 +115,38 @@ try {
       mobile: false
     })
     for (const state of states) {
-      await page.goto(`${pageUrl}?state=${encodeURIComponent(state)}`)
-      await page.waitForSelector('html[data-capture-ready="1"]', { timeout: READY_TIMEOUT_MS })
-      await page.addScriptTag({ path: auditScript, type: 'module' })
-      const audit = await page.evaluate(() => window.__DESIGN_CAPTURE_AUDIT__.collect())
       const file = captureFileName(state, row)
       const path = join(outDir, file)
-      await page.screenshot({ path })
-      const bytes = readFileSync(path)
-      assertPngSize(bytes, VIEWPORT, row.scale, file)
-      shots.push({ state, ...row, file, bytes, audit })
-      console.log(`wrote ${file}`)
+      try {
+        await page.goto(`${pageUrl}?state=${encodeURIComponent(state)}`)
+        await page.waitForSelector('html[data-capture-ready="1"]', { timeout: READY_TIMEOUT_MS })
+        let audit
+        try {
+          audit = await collectAudit(page)
+        } catch (error) {
+          audit = auditErrorResult('collector', errorMessage(error))
+          failures.push(`${file}: collector failed: ${errorMessage(error)}`)
+        }
+        await page.screenshot({ path })
+        const bytes = readFileSync(path)
+        assertPngSize(bytes, VIEWPORT, row.scale, file)
+        shots.push({ state, ...row, file, bytes, audit })
+        console.log(`wrote ${file}`)
+      } catch (error) {
+        failures.push(`${file}: ${errorMessage(error)}`)
+      }
     }
   }
-
-  const manifest = buildManifest({ commit, platform: process.platform, shots, negativeControl })
-  writeFileSync(join(outDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
-  console.log(`wrote manifest.json (${manifest.entries.length} entries, commit ${commit})`)
-  if (manifest.entries.some((entry) => !entry.audit.pass)) {
-    throw new Error(
-      `design capture audit failed with ${manifest.audit.failures} failure(s) and ${manifest.audit.unverifiable} unverifiable row(s)`
-    )
-  }
+} catch (error) {
+  failures.push(errorMessage(error))
 } finally {
+  writeManifest()
   await app.close()
 }
+
+if (manifest.entries.some((entry) => !entry.audit.pass)) {
+  failures.push(
+    `design capture audit failed with ${manifest.audit.failures} failure(s) and ${manifest.audit.unverifiable} unverifiable row(s)`
+  )
+}
+if (failures.length > 0) throw new Error(failures.join('\n'))
