@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron'
-import { UNAUTHENTICATED_RESULT, type UnauthenticatedResult } from '@shared/ipc'
+import { UNAUTHENTICATED_RESULT, type UnauthenticatedResult } from '@shared/ipc-auth'
 import type { z } from 'zod'
 import { assertReviewedPublicHandler, type IpcAuthPolicy, type IpcChannel } from './security'
 

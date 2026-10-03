@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ipcMain } from 'electron'
 import { z } from 'zod'
-import { IPC, UNAUTHENTICATED_RESULT } from '@shared/ipc'
+import { IPC } from '@shared/ipc'
+import { UNAUTHENTICATED_RESULT } from '@shared/ipc-auth'
 import { PUBLIC_IPC_HANDLERS } from './security'
 import { registerHandler } from './register'
 

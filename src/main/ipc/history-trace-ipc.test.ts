@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ipcMain } from 'electron'
-import { IPC, UNAUTHENTICATED_RESULT } from '@shared/ipc'
+import { IPC } from '@shared/ipc'
+import { UNAUTHENTICATED_RESULT } from '@shared/ipc-auth'
 import { registerHistoryTraceIpc } from './history-trace-ipc'
 
 vi.mock('electron')

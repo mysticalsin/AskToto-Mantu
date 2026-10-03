@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { UNAUTHENTICATED_RESULT } from '@shared/ipc'
+import { UNAUTHENTICATED_RESULT } from '@shared/ipc-auth'
 import { authenticatedIpcResult, isUnauthenticatedResult } from './ipc-auth'
 
 describe('M2-0249 renderer IPC auth helper', () => {
@@ -9,4 +9,3 @@ describe('M2-0249 renderer IPC auth helper', () => {
     expect(authenticatedIpcResult({ status: 'unlicensed' })).toEqual({ status: 'unlicensed' })
   })
 })
-

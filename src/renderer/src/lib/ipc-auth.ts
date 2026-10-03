@@ -1,4 +1,4 @@
-import { UNAUTHENTICATED_RESULT, type UnauthenticatedResult } from '@shared/ipc'
+import { UNAUTHENTICATED_RESULT, type UnauthenticatedResult } from '@shared/ipc-auth'
 
 export function isUnauthenticatedResult(value: unknown): value is UnauthenticatedResult {
   return !!value &&
@@ -10,4 +10,3 @@ export function isUnauthenticatedResult(value: unknown): value is Unauthenticate
 export function authenticatedIpcResult<T>(value: T | UnauthenticatedResult): T | undefined {
   return isUnauthenticatedResult(value) ? undefined : value
 }
-

@@ -24,6 +24,7 @@ import {
 } from 'react'
 import type { HistoryTransition } from '@shared/ipc'
 import type { RendererView } from '@shared/renderer-view'
+import { authenticatedIpcResult } from './ipc-auth'
 
 /**
  * App's view state. `setView` switches views as a transition (App explains the #426 hazard this avoids) and
@@ -96,7 +97,7 @@ export function createHistoryTransitionRecorder(deps: HistoryTransitionDeps = de
 function defaultDeps(): HistoryTransitionDeps {
   return {
     report: (transition) => {
-      void window.toto.reportHistoryTransition(transition).catch(() => {})
+      void window.toto.reportHistoryTransition(transition).then(authenticatedIpcResult).catch(() => {})
     },
     wallClock: Date.now
   }

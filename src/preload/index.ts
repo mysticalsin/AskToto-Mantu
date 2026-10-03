@@ -80,6 +80,7 @@ import type { ScreenRepairResult } from '@shared/screen-permission'
 import type { ProviderId } from '@shared/providers'
 import type { RecapStatus } from '@shared/recap-status'
 import type { RecallHydration } from '@shared/recall-hydration'
+import type { UnauthenticatedResult } from '@shared/ipc-auth'
 
 type Unsub = () => void
 function sub<T>(channel: string, cb: (payload: T) => void): Unsub {
@@ -451,7 +452,8 @@ const api = {
     ipcRenderer.invoke(IPC.localPrewarm, purpose ? { text, purpose } : { text }),
   localAppleEngineStatus: (): Promise<AppleEngineStatus> => ipcRenderer.invoke(IPC.localAppleEngineStatus),
   // Content-free post-meeting latency span (M2-0430): a span name and a millisecond count, nothing else.
-  reportWriteupSpan: (report: WriteupSpanPayload): Promise<void> => ipcRenderer.invoke(IPC.writeupSpan, report),
+  reportWriteupSpan: (report: WriteupSpanPayload): Promise<void | UnauthenticatedResult> =>
+    ipcRenderer.invoke(IPC.writeupSpan, report),
 
   resize: (height: number, width?: number): Promise<void> =>
     ipcRenderer.invoke(IPC.windowResize, { height, width }),
@@ -473,8 +475,10 @@ const api = {
   parkAfterHide: (force = false): Promise<void> => ipcRenderer.invoke(IPC.overlayParkAfterHide, force === true),
   // A caught render-throw (ErrorBoundary) — fire-and-forget, best-effort. Main persists it to disk (same
   // sink as a main-process crash) so a field report survives without ASKTOTO_DEBUG_RENDERER devtools.
-  reportHistorySettled: (settled: HistorySettled): Promise<void> => ipcRenderer.invoke(IPC.historySettled, settled),
-  reportHistoryTransition: (transition: HistoryTransition): Promise<void> => ipcRenderer.invoke(IPC.historyTransition, transition),
+  reportHistorySettled: (settled: HistorySettled): Promise<void | UnauthenticatedResult> =>
+    ipcRenderer.invoke(IPC.historySettled, settled),
+  reportHistoryTransition: (transition: HistoryTransition): Promise<void | UnauthenticatedResult> =>
+    ipcRenderer.invoke(IPC.historyTransition, transition),
   reportCrash: (report: RendererCrashReport): Promise<void> => ipcRenderer.invoke(IPC.rendererCrash, report),
   hide: (): Promise<void> => ipcRenderer.invoke(IPC.windowHide),
   toggle: (): Promise<void> => ipcRenderer.invoke(IPC.windowToggle),

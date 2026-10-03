@@ -1,4 +1,5 @@
 import type { HistorySettled, HistoryTrace } from '@shared/ipc'
+import { authenticatedIpcResult } from './ipc-auth'
 
 export interface HistoryRequest {
   /** Sent with recallList so main can time the queue and work stages. */
@@ -62,7 +63,7 @@ export function beginHistoryRequest(deps: HistoryRequestDeps = defaultDeps()): H
 function defaultDeps(): HistoryRequestDeps {
   return {
     report: (settled) => {
-      void window.toto.reportHistorySettled(settled).catch(() => {})
+      void window.toto.reportHistorySettled(settled).then(authenticatedIpcResult).catch(() => {})
     },
     newId: () => crypto.randomUUID(),
     wallClock: Date.now,
