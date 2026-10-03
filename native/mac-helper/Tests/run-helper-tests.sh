@@ -33,7 +33,8 @@ run_denied_network() {
   if command -v sandbox-exec >/dev/null 2>&1; then
     sandbox-exec -f "$sandbox_profile" "$@"
   else
-    "$@"
+    echo "sandbox-exec is required for deny-network helper tests" >&2
+    return 127
   fi
 }
 
@@ -196,6 +197,25 @@ for item in d["lines"] + d["words"]:
 line_ids = {l["id"] for l in d["lines"]}
 assert all(w["lineId"] in line_ids for w in d["words"]), d
 assert [l["text"].strip().upper() for l in d["lines"]][:2] == ["TOP LINE", "BOTTOM LINE"], d["lines"]
+by_line = {}
+for word in d["words"]:
+    by_line.setdefault(word["lineId"], []).append(word)
+top_line, bottom_line = d["lines"][:2]
+top_words = by_line[top_line["id"]]
+bottom_words = by_line[bottom_line["id"]]
+assert [w["text"].strip().upper() for w in top_words[:2]] == ["TOP", "LINE"], top_words
+assert [w["text"].strip().upper() for w in bottom_words[:2]] == ["BOTTOM", "LINE"], bottom_words
+for row in (top_words, bottom_words):
+    assert row[0]["box"]["x"] < row[1]["box"]["x"], row
+# make-ocr-fixture.swift draws both rows at x=60 on a 900px image; Vision boxes can be a little tighter
+# than the glyph origin, but the first word of each line should stay near that left band.
+for word in (top_words[0], bottom_words[0]):
+    assert 0.04 <= word["box"]["x"] <= 0.12, word
+# The fixture draws one line in the upper band and one in the lower band. Contract boxes use top-left y.
+for word in top_words[:2]:
+    assert 0.10 <= word["box"]["y"] <= 0.35, word
+for word in bottom_words[:2]:
+    assert 0.68 <= word["box"]["y"] <= 0.92, word
 '; then pass "ocr-words English output has contract shape, word links, boxes and reading order"; else fail "ocr-words English JSON: $out"; fi
 
   out="$(run_denied_network "$helper" ocr-words "$work/french.png")"; code=$?
@@ -203,12 +223,91 @@ assert [l["text"].strip().upper() for l in d["lines"]][:2] == ["TOP LINE", "BOTT
   if printf '%s' "$out" | py '
 import json, sys
 d = json.load(sys.stdin)
+assert d["image"] == {"width": 900, "height": 500}, d
+assert d["coverage"] == "VISIBLE_ONLY", d
+assert d["untrustedContent"] is True, d
+assert d["truncated"] == {"lines": False, "words": False}, d
 words = [w["text"].strip().upper() for w in d["words"]]
 assert words[:4] == ["BONJOUR", "EQUIPE", "MERCI", "METIS"], words
-'; then pass "ocr-words French output recognizes expected words in order"; else fail "ocr-words French JSON: $out"; fi
+for item in d["lines"] + d["words"]:
+    b = item["box"]
+    assert set(b) == {"x", "y", "width", "height"}, b
+    assert 0 <= b["x"] and 0 <= b["y"] and b["width"] > 0 and b["height"] > 0, item
+    assert b["x"] + b["width"] <= 1 and b["y"] + b["height"] <= 1, item
+line_ids = {l["id"] for l in d["lines"]}
+assert all(w["lineId"] in line_ids for w in d["words"]), d
+by_line = {}
+for word in d["words"]:
+    by_line.setdefault(word["lineId"], []).append(word)
+top_line, bottom_line = d["lines"][:2]
+top_words = by_line[top_line["id"]]
+bottom_words = by_line[bottom_line["id"]]
+assert [w["text"].strip().upper() for w in top_words[:2]] == ["BONJOUR", "EQUIPE"], top_words
+assert [w["text"].strip().upper() for w in bottom_words[:2]] == ["MERCI", "METIS"], bottom_words
+for row in (top_words, bottom_words):
+    assert row[0]["box"]["x"] < row[1]["box"]["x"], row
+for word in (top_words[0], bottom_words[0]):
+    assert 0.04 <= word["box"]["x"] <= 0.12, word
+for word in top_words[:2]:
+    assert 0.10 <= word["box"]["y"] <= 0.35, word
+for word in bottom_words[:2]:
+    assert 0.68 <= word["box"]["y"] <= 0.92, word
+'; then pass "ocr-words French output has contract shape, word links, boxes and reading order"; else fail "ocr-words French JSON: $out"; fi
 else
   fail "render ocr-words fixtures"
 fi
+
+target_title="Metis OCR Target $$"
+overlap_title="Metis OCR Overlap $$"
+banner_title="Metis OCR Banner $$"
+target_ready="$work/target.ready"
+overlap_ready="$work/overlap.ready"
+banner_ready="$work/banner.ready"
+swift "$here/single-window-ocr-row.swift" window "$target_title" "TARGET ONLY" 80 420 normal >"$target_ready" 2>"$work/target.err" &
+target_pid=$!
+swift "$here/single-window-ocr-row.swift" window "$overlap_title" "OVERLAP NOISE" 120 430 normal >"$overlap_ready" 2>"$work/overlap.err" &
+overlap_pid=$!
+swift "$here/single-window-ocr-row.swift" window "$banner_title" "BANNER NOISE" 60 600 floating >"$banner_ready" 2>"$work/banner.err" &
+banner_pid=$!
+cleanup_single_window_row() {
+  kill "$target_pid" "$overlap_pid" "$banner_pid" 2>/dev/null || true
+  wait "$target_pid" "$overlap_pid" "$banner_pid" 2>/dev/null || true
+}
+for _ in $(seq 1 120); do
+  if grep -q ready "$target_ready" 2>/dev/null &&
+     grep -q ready "$overlap_ready" 2>/dev/null &&
+     grep -q ready "$banner_ready" 2>/dev/null; then
+    break
+  fi
+  sleep 0.25
+done
+if grep -q ready "$target_ready" 2>/dev/null &&
+   grep -q ready "$overlap_ready" 2>/dev/null &&
+   grep -q ready "$banner_ready" 2>/dev/null; then
+  capture_err="$work/single-window-capture.err"
+  swift "$here/single-window-ocr-row.swift" capture "$target_title" "$work/single-window-target.png" 2>"$capture_err"; capture_code=$?
+  if [ "$capture_code" = 75 ]; then
+    cat "$capture_err"
+    pass "single-window OCR row reports BLOCKED_EXTERNAL when Screen Recording is unavailable"
+  else
+    expect_exit "single-window target capture exits 0" 0 "$capture_code"
+    if [ "$capture_code" = 0 ]; then
+      out="$(run_denied_network "$helper" ocr-words "$work/single-window-target.png")"; code=$?
+      expect_exit "single-window target capture feeds ocr-words under deny-network sandbox" 0 "$code"
+      if printf '%s' "$out" | py '
+import json, sys
+d = json.load(sys.stdin)
+text = " ".join(w["text"].strip().upper() for w in d["words"])
+assert "TARGET" in text and "ONLY" in text, text
+for forbidden in ("OVERLAP", "BANNER", "NOISE"):
+    assert forbidden not in text, text
+'; then pass "single-window OCR excludes overlapping and banner window text"; else fail "single-window OCR JSON: $out"; fi
+    fi
+  fi
+else
+  fail "single-window OCR row windows became ready"
+fi
+cleanup_single_window_row
 
 # --- code-identity (read-only; M2-0429) ------------------------------------------------------------
 "$helper" code-identity >/dev/null 2>&1; code=$?

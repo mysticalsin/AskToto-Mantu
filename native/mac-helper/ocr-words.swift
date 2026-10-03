@@ -48,11 +48,15 @@ private let ocrWordsMaxWords = 2_000
 private let ocrWordsRowTolerance = 0.025
 
 private func topLeftBox(_ box: CGRect) -> OcrWordsBox {
+    let x0 = max(0, min(1, box.origin.x))
+    let y0 = max(0, min(1, 1 - box.origin.y - box.size.height))
+    let x1 = max(0, min(1, box.origin.x + box.size.width))
+    let y1 = max(0, min(1, 1 - box.origin.y))
     OcrWordsBox(
-        x: max(0, min(1, box.origin.x)),
-        y: max(0, min(1, 1 - box.origin.y - box.size.height)),
-        width: max(0, min(1, box.size.width)),
-        height: max(0, min(1, box.size.height))
+        x: x0,
+        y: y0,
+        width: max(0, x1 - x0),
+        height: max(0, y1 - y0)
     )
 }
 
@@ -141,13 +145,20 @@ func runOcrWords(inputPath: String) -> Never {
     }
 
     let orderedLines = readingOrdered(lines) { $0.box }
-    let orderedWords = readingOrdered(words) { $0.box }
+    let keptLines = Array(orderedLines.prefix(ocrWordsMaxLines))
+    let keptLineIds = Set(keptLines.map { $0.id })
+    let lineFilteredWords = words.filter { keptLineIds.contains($0.lineId) }
+    let orderedWords = readingOrdered(lineFilteredWords) { $0.box }
+    let droppedWordsForRemovedLines = lineFilteredWords.count != words.count
     let result = OcrWordsResult(
         image: OcrWordsImage(width: image.width, height: image.height),
         coverage: "VISIBLE_ONLY",
         untrustedContent: true,
-        truncated: OcrWordsTruncated(lines: orderedLines.count > ocrWordsMaxLines, words: orderedWords.count > ocrWordsMaxWords),
-        lines: Array(orderedLines.prefix(ocrWordsMaxLines)),
+        truncated: OcrWordsTruncated(
+            lines: orderedLines.count > ocrWordsMaxLines,
+            words: droppedWordsForRemovedLines || orderedWords.count > ocrWordsMaxWords
+        ),
+        lines: keptLines,
         words: Array(orderedWords.prefix(ocrWordsMaxWords))
     )
     do {

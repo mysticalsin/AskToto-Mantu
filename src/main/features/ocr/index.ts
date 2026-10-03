@@ -52,17 +52,21 @@ export async function runWindowOcr(request: OcrRequest, deps: OcrFeatureDeps): P
     setTimeout: deps.setTimeout ?? setTimeout,
     clearTimeout: deps.clearTimeout ?? clearTimeout
   }
-  const captured = await deps.capture.capture(request.target)
-  const helper = deps.helper.recognize(Buffer.from(captured.image, 'base64'), {
-    languages: request.languages?.length ? request.languages : DEFAULT_LANGUAGES
-  })
   let timer: ReturnType<typeof setTimeout> | undefined
+  let kill: (() => void) | undefined
   try {
     const output = await Promise.race([
-      helper.result,
+      Promise.resolve().then(async () => {
+        const captured = await deps.capture.capture(request.target)
+        const helper = deps.helper.recognize(Buffer.from(captured.image, 'base64'), {
+          languages: request.languages?.length ? request.languages : DEFAULT_LANGUAGES
+        })
+        kill = helper.kill
+        return helper.result
+      }),
       new Promise<never>((_, reject) => {
         timer = timers.setTimeout(() => {
-          helper.kill()
+          kill?.()
           reject(new Error('ocr-deadline'))
         }, deadlineMs)
       })

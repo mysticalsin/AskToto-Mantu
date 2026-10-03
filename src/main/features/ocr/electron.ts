@@ -3,7 +3,11 @@ import { extractScreenOcrWords } from '../../mac-helper'
 import { captureSingleWindowSource } from '../../screen-capture'
 import { runWindowOcr, type OcrRequest, type OcrRunResult, type OcrSessionPort } from './index'
 
-export function runInteractionWindowOcr(request: OcrRequest, sessions: OcrSessionPort): Promise<OcrRunResult> {
+export function runInteractionWindowOcr(
+  request: OcrRequest,
+  sessions: OcrSessionPort,
+  platform: NodeJS.Platform | string = process.platform
+): Promise<OcrRunResult> {
   return runWindowOcr(request, {
     sessions,
     capture: {
@@ -11,7 +15,7 @@ export function runInteractionWindowOcr(request: OcrRequest, sessions: OcrSessio
     },
     helper: {
       recognize: (image) => {
-        const invocation = process.platform === 'darwin' ? extractScreenOcrWords(image) : null
+        const invocation = platform === 'darwin' ? extractScreenOcrWords(image) : null
         if (invocation) return invocation
         return {
           result: Promise.reject(new Error('On-device window OCR is unavailable on this platform.')),

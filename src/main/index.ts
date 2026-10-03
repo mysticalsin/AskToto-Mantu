@@ -546,7 +546,6 @@ import {
   isUsableScreenSource,
   screenCaptureUnavailableMessage
 } from './screen-capture'
-import { runInteractionWindowOcr } from './features/ocr/electron'
 import {
   enqueueIngest,
   exciseDeletedMeeting,

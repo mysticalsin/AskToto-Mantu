@@ -1,10 +1,23 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { app, desktopCapturer } from 'electron'
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { OcrResult } from '@shared/contracts/ocr'
+import { extractScreenOcrWords } from '../../mac-helper'
 import { runWindowOcr, type OcrFeatureDeps } from './index'
+import { runInteractionWindowOcr } from './electron'
 
-const result = {
+vi.mock('electron', () => ({
+  app: { isPackaged: false, getPath: vi.fn() },
+  desktopCapturer: { getSources: vi.fn() }
+}))
+
+vi.mock('../../mac-helper', () => ({
+  extractScreenOcrWords: vi.fn()
+}))
+
+const result: OcrResult = {
   image: { width: 640, height: 360 },
   coverage: 'VISIBLE_ONLY',
   untrustedContent: true,
@@ -39,6 +52,7 @@ function harness(activeToken: string | null = 'session-1') {
 describe('runWindowOcr', () => {
   afterEach(() => {
     vi.useRealTimers()
+    vi.restoreAllMocks()
   })
 
   it('requires an active interaction-session token before capture or OCR can run', async () => {
@@ -55,16 +69,36 @@ describe('runWindowOcr', () => {
   it('keeps the captured image and OCR result in memory without writing profile or temp files', async () => {
     const profile = mkdtempSync(join(tmpdir(), 'metis-ocr-profile-'))
     const temp = mkdtempSync(join(tmpdir(), 'metis-ocr-temp-'))
+    const previousTmpdir = process.env.TMPDIR
     try {
-      const h = harness()
-      await expect(runWindowOcr({
+      process.env.TMPDIR = temp
+      vi.mocked(app.getPath).mockImplementation((name: string) => {
+        if (name === 'userData') return profile
+        if (name === 'temp') return temp
+        return join(profile, name)
+      })
+      vi.mocked(desktopCapturer.getSources).mockResolvedValue([{
+        id: 'window:target',
+        thumbnail: {
+          getSize: () => ({ width: 640, height: 360 }),
+          toPNG: () => Buffer.from('image-bytes')
+        }
+      }] as never)
+      vi.mocked(extractScreenOcrWords).mockReturnValue({
+        result: Promise.resolve(result),
+        kill: vi.fn()
+      })
+
+      await expect(runInteractionWindowOcr({
         sessionToken: 'session-1',
         target: { kind: 'window', id: 'window:target' },
         deadlineMs: 1000
-      }, h.deps)).resolves.toMatchObject({ status: 'COMPLETE' })
-      expect(readdirSync(profile)).toEqual([])
-      expect(readdirSync(temp)).toEqual([])
+      }, { activeToken: () => 'session-1' }, 'darwin')).resolves.toMatchObject({ status: 'COMPLETE' })
+      expect(listFiles(profile)).toEqual([])
+      expect(listFiles(temp)).toEqual([])
     } finally {
+      if (previousTmpdir === undefined) delete process.env.TMPDIR
+      else process.env.TMPDIR = previousTmpdir
       rmSync(profile, { recursive: true, force: true })
       rmSync(temp, { recursive: true, force: true })
     }
@@ -78,6 +112,17 @@ describe('runWindowOcr', () => {
       deadlineMs: 1000
     }, h.deps)
     expect(h.recognize).toHaveBeenCalledWith(Buffer.from('image-bytes'), { languages: ['en-US', 'fr-FR'] })
+  })
+
+  it('returns PARTIAL instead of throwing when capture fails', async () => {
+    const h = harness()
+    h.deps.capture = { capture: vi.fn(async () => { throw new Error('capture unavailable') }) }
+    await expect(runWindowOcr({
+      sessionToken: 'session-1',
+      target: { kind: 'window', id: 'window:target' },
+      deadlineMs: 1000
+    }, h.deps)).resolves.toMatchObject({ status: 'PARTIAL', gap: 'capture unavailable' })
+    expect(h.recognize).not.toHaveBeenCalled()
   })
 
   it('kills the helper and returns PARTIAL when the per-call deadline wins', async () => {
@@ -104,3 +149,16 @@ describe('runWindowOcr', () => {
     resolveHelper(result)
   })
 })
+
+function listFiles(root: string): string[] {
+  const files: string[] = []
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const full = join(root, entry.name)
+    if (entry.isDirectory()) {
+      files.push(...listFiles(full).map((child) => join(entry.name, child)))
+    } else {
+      files.push(entry.name)
+    }
+  }
+  return files.sort()
+}
