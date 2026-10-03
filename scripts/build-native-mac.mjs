@@ -91,7 +91,14 @@ export function xcodebuildSigningArgs(signingIdentity = process.env.ASKTOTO_MAC_
   if (/Developer ID/i.test(signingIdentity)) {
     throw new Error('Developer ID signing is not allowed for native QA candidates')
   }
-  return [`CODE_SIGN_IDENTITY=${signingIdentity}`, 'CODE_SIGNING_ALLOWED=YES', 'CODE_SIGNING_REQUIRED=YES']
+  return [
+    `CODE_SIGN_IDENTITY=${signingIdentity}`,
+    'CODE_SIGN_STYLE=Manual',
+    'DEVELOPMENT_TEAM=',
+    'PROVISIONING_PROFILE_SPECIFIER=',
+    'CODE_SIGNING_ALLOWED=YES',
+    'CODE_SIGNING_REQUIRED=YES'
+  ]
 }
 
 function findBuiltAppSync(derivedData) {

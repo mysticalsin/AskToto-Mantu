@@ -34,6 +34,9 @@ describe('xcodebuildSigningArgs', () => {
   it('uses the QA identity without allowing Developer ID signing', () => {
     expect(xcodebuildSigningArgs('A'.repeat(40))).toEqual([
       `CODE_SIGN_IDENTITY=${'A'.repeat(40)}`,
+      'CODE_SIGN_STYLE=Manual',
+      'DEVELOPMENT_TEAM=',
+      'PROVISIONING_PROFILE_SPECIFIER=',
       'CODE_SIGNING_ALLOWED=YES',
       'CODE_SIGNING_REQUIRED=YES'
     ])
