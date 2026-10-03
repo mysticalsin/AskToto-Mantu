@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { RECORD_SCHEMA, recordProblems } from './record.mjs'
 import {
   TEST_WORKFLOW, ledgerProblems, loadProgram, outputProblems, prProblems, githubApi, m2_0008BundleProblems,
-  m2_0194BundleProblems, releaseInputProblems, releaseProblems
+  m2_0194BundleProblems, m2_0195BundleProblems, releaseInputProblems, releaseProblems
 } from './check.mjs'
 import { drawSample, populationOf } from './sample.mjs'
 
@@ -957,6 +957,85 @@ test('C31 CLI --ticket M2-0194 validates a bundle and rejects an incomplete one;
   rmSync(join(root, 'stall-bundle-names.json'))
   assert.throws(() => execFileSync(process.execPath, [cliPath, '--ticket', 'M2-0194', '--bundle', root], { stdio: 'pipe' }), (error) => error.status === 1)
   assert.throws(() => execFileSync(process.execPath, [cliPath, '--ticket', 'M2-0001', '--bundle', root], { stdio: 'pipe' }), (error) => error.status === 2)
+})
+
+function writeM2_0195Bundle(root, { environment = {}, rows = [], leadAction } = {}) {
+  const writeJson = (name, value) => writeFileSync(join(root, name), `${JSON.stringify(value, null, 2)}\n`)
+  writeFileSync(join(root, 'README.md'), '# M2-0195\n')
+  writeFileSync(
+    join(root, 'M2-0195.lead-action.md'),
+    leadAction ?? 'LEAD_ACTION: File the M2-0195 LIVE_VERIFIED/MEASURED record, then ensure every finding is a ticket or explicit residual in the 1.9.7 release notes.\n'
+  )
+  writeJson('environment.json', {
+    ticket: 'M2-0195',
+    version: '1.9.6',
+    platform: 'win32',
+    artifact_sha256: 'b'.repeat(64),
+    mode: 'hosted-live',
+    host: { label: 'windows-latest' },
+    ...environment
+  })
+  writeJson('baseline.json', {
+    ticket: 'M2-0195',
+    version: '1.9.6',
+    platform: 'win32',
+    rows: rows.length > 0
+      ? rows
+      : [
+          { id: 'census-cold-start', status: 'MEASURED', artifact: 'win32-cold-start.json' },
+          { id: 'census-settled-idle', status: 'MEASURED', artifact: 'win32-settled-idle.json' },
+          { id: 'st-1-w-onedrive-placeholders-network-off', status: 'BLOCKED_EXTERNAL', unblock: 'Run ST-1-W on the managed laptop with OneDrive placeholders and network disabled.' },
+          { id: 'hk-w-end-task-owned-sidecars', status: 'BLOCKED_EXTERNAL', unblock: 'Run HK-W on the managed laptop and record owned sidecars plus utilityProcess hosts after End task on main.' },
+          { id: 'managed-resource-census-representative', status: 'BLOCKED_EXTERNAL', unblock: 'Run the resource census on the managed laptop with EDR and OneDrive Files On-Demand enabled.' },
+          { id: 'managed-foreground-watcher-cost', status: 'BLOCKED_EXTERNAL', unblock: 'Measure PowerShell foreground-watcher working set, private bytes and CPU-time deltas on the managed laptop.' },
+          { id: 'managed-edr-interaction', status: 'BLOCKED_EXTERNAL', unblock: 'Record EDR prompts, quarantines or process blocks on the managed laptop while running the baseline.' }
+        ]
+  })
+  writeJson('external-blockers.json', {
+    ticket: 'M2-0195',
+    blockers: [
+      {
+        status: 'BLOCKED_EXTERNAL',
+        unblock_step: 'Provide one managed Windows 11 x64 laptop on the standard enterprise image with EDR as deployed and OneDrive Files On-Demand.'
+      }
+    ]
+  })
+  writeJson('findings-handoff.json', {
+    ticket: 'M2-0195',
+    release: '1.9.7',
+    rule: 'Every finding becomes a ticket or an explicit residual in the 1.9.7 release notes.',
+    rows: [
+      { row: 'st-1-w-onedrive-placeholders-network-off', disposition: 'release-residual' },
+      { row: 'hk-w-end-task-owned-sidecars', disposition: 'release-residual' }
+    ]
+  })
+  writeJson('SHA256SUMS.txt', { verified: ['Metis-Setup-1.9.6.exe'] })
+}
+
+test('C31b M2-0195 bundle check validates Windows baseline rows and release-note handoff', () => {
+  const root = mkdtempSync(join(tmpdir(), 'm2-0195-bundle-'))
+  writeM2_0195Bundle(root)
+  assert.deepEqual(m2_0195BundleProblems(root), [])
+
+  writeM2_0195Bundle(root, { environment: { artifact_sha256: 'not-sha' } })
+  assertProblem(m2_0195BundleProblems(root), 'artifact_sha256')
+
+  writeM2_0195Bundle(root, { rows: [{ id: 'census-cold-start', status: 'MEASURED', artifact: 'win32-cold-start.json' }] })
+  assertProblem(m2_0195BundleProblems(root), 'missing required row', 'hk-w-end-task-owned-sidecars')
+
+  writeM2_0195Bundle(root, { leadAction: 'LEAD_ACTION: File evidence only.\n' })
+  assertProblem(m2_0195BundleProblems(root), '1.9.7 release notes')
+})
+
+test('C31c CLI --ticket M2-0195 validates a bundle', () => {
+  const root = mkdtempSync(join(tmpdir(), 'm2-0195-bundle-cli-'))
+  writeM2_0195Bundle(root)
+  const cliPath = fileURLToPath(new URL('./check.mjs', import.meta.url))
+  const output = execFileSync(process.execPath, [cliPath, '--ticket', 'M2-0195', '--bundle', root], { encoding: 'utf8' })
+  assert.match(output, /M2-0195 bundle: OK/)
+
+  rmSync(join(root, 'findings-handoff.json'))
+  assert.throws(() => execFileSync(process.execPath, [cliPath, '--ticket', 'M2-0195', '--bundle', root], { stdio: 'pipe' }), (error) => error.status === 1)
 })
 
 const HOSTED_AUTOMATIC_ROWS = ['row-1-history-open', 'row-2-brain-status-blocked-brain', 'row-3-macos-activate', 'row-4-second-instance-reopen']
