@@ -399,9 +399,15 @@ async function captureReachedState({ page, cdp, main, state, variant, realRows, 
   try {
     drive = await driveState(page, main, state, realRows)
     await settleWindow(page)
-    await page.screenshot({ path: join(out, screenshot), scale: 'device' })
-    drive.capturedAfterMs = Date.now() - drive.requestedAt
-    collected = await page.evaluate(`(${collectHistoryView})(${solidGradientLayers})`)
+    // The loading-state budget is about when the renderer is captured, not how long PNG encoding or
+    // filesystem writes take after the screenshot request starts.
+    const captureRequestedAt = Date.now()
+    const screenshotWrite = page.screenshot({ path: join(out, screenshot), scale: 'device' })
+    const view = await page.evaluate(`(${collectHistoryView})(${solidGradientLayers})`)
+    await screenshotWrite
+    drive.capturedAfterMs = captureRequestedAt - drive.requestedAt
+    drive.screenshotResolvedAfterMs = Date.now() - drive.requestedAt
+    collected = view
   } finally {
     await cdp.send('Emulation.clearDeviceMetricsOverride')
   }
@@ -416,7 +422,17 @@ async function captureReachedState({ page, cdp, main, state, variant, realRows, 
     tabOrder = await walkTabOrder(page)
   }
   const judged = judgeCapture({ state, variant, collected, roles, tabOrder, drive })
-  return { judged: { ...judged, scope: collected.scope, bannerAfterMs: drive.bannerAfterMs ?? null, capturedAfterMs: drive.capturedAfterMs, tabOrder }, screenshot }
+  return {
+    judged: {
+      ...judged,
+      scope: collected.scope,
+      bannerAfterMs: drive.bannerAfterMs ?? null,
+      capturedAfterMs: drive.capturedAfterMs,
+      screenshotResolvedAfterMs: drive.screenshotResolvedAfterMs,
+      tabOrder
+    },
+    screenshot
+  }
 }
 
 /**

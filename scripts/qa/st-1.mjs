@@ -691,6 +691,8 @@ async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, 
   if (beforeSummaryInvalid) return stopForInvalid(beforeSummaryInvalid)
   const summaryAtMs = sinceSpawn()
   const summary = await evaluateBounded(cdp, 'summary', SUMMARY, SETUP_TIMEOUT_MS)
+  const summaryInvalid = lifecycle.invalidDetails()
+  if (summaryInvalid) return stopForInvalid(summaryInvalid)
   if (!summary.ok) run.errors.push(failureRecord('summary', summaryAtMs, summary, SETUP_TIMEOUT_MS))
   run.loop = summary.ok ? summary.value : { p99Ms: Infinity, maxMs: Infinity }
   if (run.profiler.running) await stopProfiler(cdp, run.profiler, cpuProfilePath, sinceSpawn())
