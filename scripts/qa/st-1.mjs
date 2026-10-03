@@ -93,14 +93,17 @@ import {
   candidateEnv,
   countStorageSaturations,
   cpuBusyPct,
+  createCandidateLifecycle,
   emptyRun,
   failureRecord,
   historyEntry,
   historyProbeWindow,
   parseArgs,
   pinnedExpression,
+  quietHostInvalidReason,
   recordSample,
   releaseExpression,
+  rendererPreflightStatus,
   sampleExpression,
   syntheticDatalessPlan,
   runPurpose,
@@ -117,6 +120,8 @@ const DEFAULT_FIFO_COUNT = 6
 const DEFAULT_MINUTES = 5
 const LOOP_RESOLUTION_MS = 10
 const INSPECTOR_WAIT_MS = 60_000
+const RENDERER_READY_WAIT_MS = 60_000
+const PREFLIGHT_POLL_MS = 250
 const SAMPLE_INTERVAL_MS = 1_000
 /** A sample answered later than this is late (the no-late-samples criterion). */
 const EVALUATE_TIMEOUT_MS = 1_000
@@ -384,7 +389,7 @@ function cdpClient(wsUrl) {
     if (answer.result.exceptionDetails) throw new Error(answer.result.exceptionDetails.text)
     return { late: false, value: answer.result.result?.value }
   }
-  return { send, evaluate, close: () => socket.close() }
+  return { send, evaluate, socket, close: () => socket.close() }
 }
 
 let nextEvaluationKey = 0
@@ -420,6 +425,51 @@ const SETUP = `(() => {
 })()`
 
 const SUMMARY = '({ p99Ms: __st1.percentile(99) / 1e6, maxMs: __st1.max / 1e6 })'
+
+function readAuditRecordsSince(profile, spawnedWallMs) {
+  const records = []
+  try {
+    const logs = join(profile, 'logs')
+    const names = existsSync(logs) ? readdirSync(logs).filter((entry) => /^audit.*\.log$/.test(entry)) : []
+    names.sort((a, b) => (a === 'audit.log') - (b === 'audit.log') || a.localeCompare(b))
+    for (const name of names) {
+      let text = ''
+      try {
+        text = readFileSync(join(logs, name), 'utf8')
+      } catch {
+        continue
+      }
+      for (const line of text.split('\n')) {
+        if (!line.trim()) continue
+        try {
+          const record = JSON.parse(line)
+          const ts = Date.parse(record.ts)
+          if (!Number.isFinite(ts) || ts < spawnedWallMs) continue
+          records.push(record)
+        } catch {
+          /* incomplete audit lines are ignored */
+        }
+      }
+    }
+  } catch {
+    /* absence or rotation of audit logs during preflight means "not ready yet" */
+  }
+  return records
+}
+
+async function waitForRendererReadyPreflight(profile, spawnedWallMs, lifecycle) {
+  const deadline = Date.now() + RENDERER_READY_WAIT_MS
+  while (Date.now() < deadline) {
+    const lifecycleReason = lifecycle.invalidReason()
+    if (lifecycleReason) return lifecycle.invalidDetails()
+    const status = rendererPreflightStatus(readAuditRecordsSince(profile, spawnedWallMs))
+    if (status.ok) return null
+    if (status.renderProcessGone) return { reason: status.reason, stderrTail: lifecycle.stderrTail() }
+    if (Date.now() >= deadline) break
+    await new Promise((resolve) => setTimeout(resolve, PREFLIGHT_POLL_MS))
+  }
+  return { reason: 'renderer-not-ready', stderrTail: lifecycle.stderrTail() }
+}
 
 /** Where the candidate's electron-log main.log lives: app.getPath('logs'), which ASKTOTO_USERDATA does
  *  not relocate on macOS. */
@@ -567,11 +617,18 @@ async function probeHistory(cdp, tMs, search) {
 
 /** Fills `run` (lib/st-1-core.mjs emptyRun) in place, so a partial report can be written at any moment.
  *  Never throws on a probe that fails or hangs: each is recorded in `run.errors` and the run goes on. */
-async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, witnessFile, historyMode, history }) {
+async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, witnessFile, historyMode, history, lifecycle }) {
   const sinceSpawn = () => Math.round(performance.now() - spawnedAt)
   run.setupAtMs = sinceSpawn()
   const witness = startWitness(witnessFile)
+  const stopForInvalid = async (details) => {
+    if (run.profiler?.running) await stopProfiler(cdp, run.profiler, cpuProfilePath, sinceSpawn())
+    run.witnessLoop = await witness.stop(SAMPLE_TIMEOUT_MS)
+    return details
+  }
   const setup = await evaluateBounded(cdp, 'setup', SETUP, SETUP_TIMEOUT_MS)
+  const setupInvalid = lifecycle.invalidDetails()
+  if (setupInvalid) return stopForInvalid(setupInvalid)
   if (setup.ok) run.poolSize = setup.value
   else run.errors.push(failureRecord('setup', run.setupAtMs, setup, SETUP_TIMEOUT_MS))
   run.profiler = await startProfiler(cdp, sinceSpawn)
@@ -594,6 +651,8 @@ async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, 
     return historyRunning || sinceSpawn() <= historyRetryUntilMs
   }
   while (shouldKeepSampling()) {
+    const lifecycleInvalid = lifecycle.invalidDetails()
+    if (lifecycleInvalid) return stopForInvalid(lifecycleInvalid)
     const tMs = sinceSpawn()
     if (run.profiler.running && tMs >= profileUntilMs) await stopProfiler(cdp, run.profiler, cpuProfilePath, tMs)
     if (
@@ -621,15 +680,22 @@ async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, 
     const sampleWitness = await Promise.resolve().then(() => witness.sample())
     const outcome = await answer
     recordSample(run, tMs, outcome, { lateAfterMs: EVALUATE_TIMEOUT_MS, boundMs: SAMPLE_TIMEOUT_MS, witness: sampleWitness })
+    const hostReason = quietHostInvalidReason([...run.samples, ...run.late])
+    if (hostReason) return stopForInvalid({ reason: hostReason, stderrTail: lifecycle.stderrTail() })
+    const postSampleInvalid = lifecycle.invalidDetails()
+    if (postSampleInvalid) return stopForInvalid(postSampleInvalid)
     await new Promise((resolve) => setTimeout(resolve, SAMPLE_INTERVAL_MS))
   }
   await historyRunning
+  const beforeSummaryInvalid = lifecycle.invalidDetails()
+  if (beforeSummaryInvalid) return stopForInvalid(beforeSummaryInvalid)
   const summaryAtMs = sinceSpawn()
   const summary = await evaluateBounded(cdp, 'summary', SUMMARY, SETUP_TIMEOUT_MS)
   if (!summary.ok) run.errors.push(failureRecord('summary', summaryAtMs, summary, SETUP_TIMEOUT_MS))
   run.loop = summary.ok ? summary.value : { p99Ms: Infinity, maxMs: Infinity }
   if (run.profiler.running) await stopProfiler(cdp, run.profiler, cpuProfilePath, sinceSpawn())
   run.witnessLoop = await witness.stop(SAMPLE_TIMEOUT_MS)
+  return null
 }
 
 /** Where this launch's main.log is, and the byte it starts at. The file's own birth time tells whether
@@ -863,6 +929,7 @@ async function main() {
   let root = null
   let child = null
   let cdp = null
+  let lifecycle = createCandidateLifecycle()
   let fixtures = []
   let mainLogOffset = 0
   let mainLogLocated = null
@@ -874,6 +941,7 @@ async function main() {
   let appEvidence = null
   let bootStages = null
   let storageSaturations = null
+  let invalidDetails = null
   let spawnedWallMs = null
   // The runner witness's probe write, on the temp volume the profile is created on.
   const witnessFile = join(tmpdir(), `st1-witness-${process.pid}.txt`)
@@ -894,7 +962,9 @@ async function main() {
       complete,
       harnessError,
       historyMode,
-      fixtureCounts: args.fixtures === 'synthetic-dataless' ? syntheticDatalessPlan().counts : null
+      fixtureCounts: args.fixtures === 'synthetic-dataless' ? syntheticDatalessPlan().counts : null,
+      invalidReason: invalidDetails?.reason ?? null,
+      invalidDetails
     })
   }
   /** Never throws: a report that cannot be written must not end the measurement. */
@@ -929,7 +999,9 @@ async function main() {
     // instead of a detached, unkillable process.
     spawnedWallMs = Date.now()
     const spawnedAt = performance.now()
+    lifecycle = createCandidateLifecycle({ now: () => performance.now() - spawnedAt })
     child = spawnCandidate(resolved.exe, profile, windowVariant)
+    lifecycle.attachChild(child)
     let wsUrl
     try {
       wsUrl = await inspectorUrl(child)
@@ -939,16 +1011,18 @@ async function main() {
 
     if (wsUrl) {
       cdp = cdpClient(wsUrl)
+      lifecycle.attachInspector(cdp.socket)
       const cpuProfilePath = join(reportDir, `${reportBase}.cpuprofile`)
       // Asked alongside SETUP, not after the run: when this launch did not create main.log, the size now
       // is the offset.
       mainLogLocated = args.mainLog
         ? Promise.resolve({ path: args.mainLog, fromByte: mainLogOffset, exactLaunchOffset: true })
         : locateMainLog(cdp, spawnedWallMs)
-      await measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, witnessFile, historyMode, history })
+      invalidDetails = await waitForRendererReadyPreflight(profile, spawnedWallMs, lifecycle)
+      if (!invalidDetails) invalidDetails = await measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, witnessFile, historyMode, history, lifecycle })
       mainLog = await mainLogLocated
       evidence = collectExercisedEvidence(args.fixtures, fixtures, args.mainLog, mainLogOffset, root)
-      complete = true
+      complete = !invalidDetails
     }
   } catch (error) {
     harnessError = error.message
@@ -967,6 +1041,7 @@ async function main() {
         /* evidence stays unknown */
       }
     }
+    lifecycle.finish()
     cdp?.close()
     if (child) stopChild(child)
     if (child && profile && !launchFailure) {
