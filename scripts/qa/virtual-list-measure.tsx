@@ -1,14 +1,14 @@
 import React, { memo } from 'react'
 import { createRoot } from 'react-dom/client'
-import './styles.css'
-import { VirtualList } from './ui/VirtualList'
-import { MeetingRow } from './components/RecallView'
-import { TranscriptRow } from './components/Review'
-import { DealRow } from './components/BrainView'
-import { GoingColdRow } from '../../../intelligence/src/views/GraphRows'
+import '../../src/renderer/src/styles.css'
+import { VirtualList } from '../../src/renderer/src/ui/VirtualList'
+import { MeetingRow } from '../../src/renderer/src/components/RecallView'
+import { TranscriptRow } from '../../src/renderer/src/components/Review'
+import { DealRow } from '../../src/renderer/src/components/BrainView'
+import { GoingColdRow } from '../../intelligence/src/views/GraphRows'
 import type { DealEntity } from '@shared/brain'
 import type { MeetingSummary, TranscriptLine } from '@shared/ipc'
-import type { GoingColdRow as GoingColdItem } from '../../../intelligence/src/types/data'
+import type { GoingColdRow as GoingColdItem } from '../../intelligence/src/types/data'
 
 type Surface = 'history' | 'review' | 'brain' | 'relationships'
 type SurfaceItem =
@@ -194,7 +194,7 @@ function App(): JSX.Element {
 }
 
 function animationFrame(): Promise<number> {
-  return new Promise((resolve) => requestAnimationFrame(resolve))
+  return new Promise((resolveFrame) => requestAnimationFrame(resolveFrame))
 }
 
 async function measureScroller(scroller: HTMLElement, surface: Surface): Promise<SurfaceResult> {

@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
-  root: 'src/renderer',
+  root: 'scripts/qa',
   resolve: {
     alias: {
       '@': resolve(__dirname, '../../src/renderer/src'),
@@ -18,7 +18,7 @@ export default defineConfig({
     minify: 'esbuild',
     rollupOptions: {
       input: {
-        measure: resolve(__dirname, '../../src/renderer/virtual-list-measure.html')
+        measure: resolve(__dirname, 'virtual-list-measure.html')
       }
     }
   }
