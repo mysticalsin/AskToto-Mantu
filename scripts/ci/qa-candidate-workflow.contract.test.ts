@@ -262,7 +262,39 @@ describe('QA candidate History design evidence (M2-0032)', () => {
 
 describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
   const strictJobs = ['st1-mac-fifo', 'st1-mac-control']
-  const ownerRunnerDenials = [
+  const ownerRunnerProfileDenials = [
+    '/Library/CloudStorage',
+    '/Library/Keychains',
+    '/.wrangler',
+    '/.config/.wrangler',
+    '/Library/Preferences/.wrangler',
+    '/Library/Application Support/Metis',
+    '/Library/Application Support/Metis Light',
+    '/Library/Application Support/Métis',
+    '/Library/Application Support/AskToto',
+    '/Library/Application Support/TotoWhisper',
+    '/Library/Application Support/asktoto-dev',
+    '/Library/Application Support/asktoto',
+    '/.ssh',
+    '/.aws',
+    '/.gnupg',
+    '/.config',
+    '/.netrc',
+    '/.claude',
+    '/.codex',
+    '/Documents',
+    '/Desktop',
+    '/Downloads',
+    '/Pictures',
+    '/Movies',
+    '/Music',
+    '/Library/Mail',
+    '/Library/Messages',
+    '/Library/Safari',
+    '/Library/Cookies',
+    '/AI-Brain-build'
+  ]
+  const ownerRunnerProbeDenials = [
     '/Library/CloudStorage',
     '/Library/Application Support/Metis',
     '/Library/Application Support/Metis Light',
@@ -329,9 +361,11 @@ describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
     expect(ownerSandboxProbe).toContain('probe=(/bin/ls "$target")')
     expect(ownerSandboxProbe).toContain('probe=(/bin/mkdir -p "$target")')
     expect(ownerSandboxProbe).toContain('OWNER_SANDBOX_PROFILE=owner-runner.sb')
-    for (const path of ownerRunnerDenials) {
+    for (const path of ownerRunnerProbeDenials) {
       expect(ownerSandboxProbe).toContain(`"$HOME${path}"`)
     }
+    expect(ownerSandboxProbe).toContain('assert_writable "$RUNNER_TEMP/owner-runner-sandbox-probe"')
+    expect(ownerSandboxProbe).toContain('assert_writable "${GITHUB_WORKSPACE:-$PWD}/.owner-runner-sandbox-probe"')
     expect(ownerSandboxProbe).toContain("grep -Fqi 'Operation not permitted'")
     expect(ownerSandboxProbe).not.toContain('Operation not permitted|deny|sandbox')
   })
@@ -355,6 +389,7 @@ describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
       expect(jobContinueOnError(block)).toBe('true')
       expect(block).not.toMatch(/^    env:/m)
       for (const step of steps(name)) {
+        expect(step).toContain('RUNNER_TEMP: ${{ runner.temp }}')
         expect(step).toContain('TMPDIR: ${{ runner.temp }}')
       }
 
@@ -379,7 +414,7 @@ describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
 
   it('pins the owner-runner denial profile without changing owner-account.sb', () => {
     expect(ownerAccountProfile).not.toContain('/AI-Brain-build')
-    for (const path of ownerRunnerDenials) {
+    for (const path of ownerRunnerProfileDenials) {
       expect(ownerRunnerProfile).toContain(path)
     }
     expect(ownerRunnerProfile).toContain('(param "WORKSPACE")')
