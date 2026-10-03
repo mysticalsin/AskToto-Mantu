@@ -30,6 +30,7 @@ import { VisibilityToast, type VisibilityToastState } from './components/Visibil
 import { RecordingConsentReminder } from './components/RecordingConsentReminder'
 import { MeetingOpenErrorToast } from './components/MeetingOpenErrorToast'
 import { OperatorGateToast } from './components/OperatorGateToast'
+import { StatusBanner } from './components/StatusBanner'
 import { QuickActions, type QuickKind } from './components/QuickActions'
 import { ConfirmSheet } from './ui/ConfirmSheet'
 import { useAsk, useAutoResize, type AnswerState } from './state'
@@ -4070,6 +4071,14 @@ export function App(): JSX.Element {
                   Desk Tap Control is paused. It was calibrated on a different microphone. Recalibrate it in
                   Settings → Audio.
                 </div>
+              )}
+              {settings && view !== 'settings' && !showListeningChrome && (
+                <StatusBanner
+                  settings={settings}
+                  onRetry={() => void refresh()}
+                  onOpenSettings={() => openSettings('intelligence', 'Settings file health needs attention.')}
+                  onRecoverProfile={() => void recoverEncryptedProfile().then(() => refresh()).catch(() => {})}
+                />
               )}
               {/* MQA-053 / MQA-059: the ACTIVE provider's credential stopped working and cross-provider
                   failover absorbed it, so the ask still returned a normal-looking answer. providerReady is

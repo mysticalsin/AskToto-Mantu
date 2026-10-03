@@ -16,7 +16,10 @@ import {
   DUST_BASE_AGENT_ID,
   BaseSettingsSchema,
   SettingsSchema,
+  SettingsHealthSchema,
   type Settings,
+  type SettingsHealth,
+  type SettingsHealthIssue,
   type DustAgentsResponse,
   type DustAgent
 } from '@shared/ipc'
@@ -31,7 +34,7 @@ import {
   type ProviderId
 } from '@shared/providers'
 import { DUST_EMPTY_AGENTS_ERROR } from '@shared/dust-validate'
-import { mainLog } from './logger'
+import { mainLog, auditLog } from './logger'
 import {
   KeychainKeyRecoveryError,
   decryptSecret,
@@ -333,6 +336,43 @@ export function getEnvKeyProviders(): string[] {
 const ENC_MARKER_V1 = Buffer.from('ATKENC1\n') // legacy: safeStorage (prod)
 const ENC_MARKER_V2 = Buffer.from('ATKENC2\n') // new: AES-GCM file backend
 
+type UnreadableSettingsReason = SettingsHealthIssue['reason']
+let _settingsHealth: SettingsHealth = SettingsHealthSchema.parse({ settingsJson: null })
+let _lastUnreadableAuditKey: string | null = null
+
+function markSettingsReadable(): void {
+  _settingsHealth = { settingsJson: null }
+  _lastUnreadableAuditKey = null
+}
+
+function settingsAuditKey(reason: UnreadableSettingsReason): string {
+  try {
+    const st = statSync(settingsPath())
+    return `${reason}:${st.mtimeMs}:${st.size}`
+  } catch {
+    return `${reason}:unknown`
+  }
+}
+
+function markSettingsUnreadable(reason: UnreadableSettingsReason, recovered: boolean): void {
+  _settingsHealth = {
+    settingsJson: {
+      status: 'unreadable',
+      reason,
+      recovered,
+      lastSeenAt: Date.now()
+    }
+  }
+  const key = settingsAuditKey(reason)
+  if (_lastUnreadableAuditKey === key) return
+  _lastUnreadableAuditKey = key
+  auditLog('settings.unreadable', { reason, recovered })
+}
+
+export function getSettingsHealth(): SettingsHealth {
+  return SettingsHealthSchema.parse(_settingsHealth)
+}
+
 /**
  * Decode a settings buffer through the three known on-disk formats (V2 AES-GCM → legacy V1 safeStorage →
  * legacy plaintext JSON), auto-detecting by marker. Returns the parsed object, or null if none of them can
@@ -401,6 +441,7 @@ function tryRecoveredSettings(): Record<string, unknown> | null {
   }
   const recovered = tryParseSettingsBuffer(buf)
   if (!recovered) return null
+  markSettingsUnreadable('recovered', true)
   mainLog.warn(`[store] settings.json was unreadable; using previously recovered settings from ${settingsPath()}.recovered`)
   return recovered
 }
@@ -420,23 +461,33 @@ function readUserRaw(): Record<string, unknown> | null {
   try {
     buf = readFileSync(settingsPath())
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') return null
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+      markSettingsUnreadable('io', false)
+      return null
+    }
     // No live file — nothing to preserve, but a previous unreadable-settings event may have already left
     // a `.recovered` sibling behind (e.g. an update wiped settings.json outright). Try it before giving up.
     // Deliberately NOT reached for an unreadable-but-present file: merging a stale `.recovered` over a
     // live settings.json we simply could not open is the same data loss with extra steps.
-    return tryRecoveredSettings() ?? {}
+    const recovered = tryRecoveredSettings()
+    if (recovered) return recovered
+    markSettingsReadable()
+    return {}
   }
 
   // ── New AES-GCM format (file backend) ────────────────────────────────────────
   if (buf.length >= ENC_MARKER_V2.length && buf.subarray(0, ENC_MARKER_V2.length).equals(ENC_MARKER_V2)) {
     const parsed = tryParseSettingsBuffer(buf)
-    if (parsed) return parsed
+    if (parsed) {
+      markSettingsReadable()
+      return parsed
+    }
     // Corrupt or key rotated — don't brick the app. Try `.recovered` BEFORE overwriting it: a `.recovered`
     // file from an earlier, unrelated incident may still be readable, and clobbering it with today's dead
     // bytes first would destroy that chance before we ever look at it.
     const recovered = tryRecoveredSettings()
     if (recovered) return recovered
+    markSettingsUnreadable('undecryptable', false)
     preserveUnreadableSettings(buf, 'settings.json (V2 AES-GCM) is undecryptable')
     return null
   }
@@ -449,17 +500,20 @@ function readUserRaw(): Record<string, unknown> | null {
     if (useFileBackend()) {
       const recovered = tryRecoveredSettings()
       if (recovered) return recovered
+      markSettingsUnreadable('legacy-keychain-unavailable', false)
       preserveUnreadableSettings(buf, 'settings.json (legacy V1) is unreadable — file backend is forced, so the Keychain is not probed')
       return null
     }
     if (!safeStorage.isEncryptionAvailable()) {
       const recovered = tryRecoveredSettings()
       if (recovered) return recovered
+      markSettingsUnreadable('legacy-keychain-unavailable', false)
       preserveUnreadableSettings(buf, 'settings.json (legacy V1) is unreadable — safeStorage is unavailable on this machine')
       return null
     }
     const parsed = tryParseSettingsBuffer(buf)
     if (parsed) {
+      markSettingsReadable()
       // Best-effort migration: write the current backend format so subsequent reads don't need safeStorage.
       if (useFileBackend()) {
         try {
@@ -474,15 +528,20 @@ function readUserRaw(): Record<string, unknown> | null {
     // Undecryptable (keychain/OS user changed) — fall back to defaults, but try `.recovered` first.
     const recoveredV1 = tryRecoveredSettings()
     if (recoveredV1) return recoveredV1
+    markSettingsUnreadable('undecryptable', false)
     preserveUnreadableSettings(buf, 'settings.json (legacy V1) is undecryptable — Keychain access lost or the OS user changed')
     return null
   }
 
   // ── Legacy plaintext ─────────────────────────────────────────────────────────
   const parsed = tryParseSettingsBuffer(buf)
-  if (parsed) return parsed
+  if (parsed) {
+    markSettingsReadable()
+    return parsed
+  }
   const recoveredPlain = tryRecoveredSettings()
   if (recoveredPlain) return recoveredPlain
+  markSettingsUnreadable('invalid-json', false)
   preserveUnreadableSettings(buf, 'settings.json is present but not valid JSON')
   return null
 }
@@ -590,6 +649,7 @@ function setupIsComplete(user: Record<string, unknown>, managed: Record<string, 
  *  userData. */
 export function resetSettingsCacheForTests(): void {
   _settingsCache = null
+  markSettingsReadable()
 }
 
 function currentSettingsMtimes(): Pick<
@@ -829,6 +889,7 @@ export function setSettings(patch: Partial<Settings>): Settings {
     )
   }
   _settingsCache = null // invalidate so getSettings re-reads the just-written file
+  markSettingsReadable()
   return getSettings()
 }
 

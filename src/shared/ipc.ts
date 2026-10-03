@@ -28,6 +28,23 @@ export type PreservedBrainIndexListResult = {
   copies: PreservedBrainIndexCopy[]
 }
 
+export const SettingsHealthIssueSchema = z
+  .object({
+    status: z.enum(['ok', 'unreadable']),
+    reason: z.enum(['io', 'undecryptable', 'invalid-json', 'legacy-keychain-unavailable', 'recovered']),
+    recovered: z.boolean().default(false),
+    lastSeenAt: z.number()
+  })
+  .strict()
+export type SettingsHealthIssue = z.infer<typeof SettingsHealthIssueSchema>
+
+export const SettingsHealthSchema = z
+  .object({
+    settingsJson: SettingsHealthIssueSchema.nullable().default(null)
+  })
+  .strict()
+export type SettingsHealth = z.infer<typeof SettingsHealthSchema>
+
 export type { HistorySettled, HistoryTrace, HistoryTransition } from './history-trace'
 export { HistorySettledSchema, HistoryTraceSchema, HistoryTransitionSchema } from './history-trace'
 export const RendererCrashContextSchema = z.object({ view: z.enum(RENDERER_VIEWS), listening: z.boolean() })
@@ -1636,7 +1653,9 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
    *  request time, so the UI can't offer a provider that every ask would then reject. */
   allowedProviders: z.array(z.string()).nullable().default(null),
   modelPolicyCapabilities: z.record(z.string(), z.object({ provider: z.string(), model: z.string() })).default({}),
-  localSpeechPack: z.enum(['required', 'offered', 'blocked']).default('offered')
+  localSpeechPack: z.enum(['required', 'offered', 'blocked']).default('offered'),
+  /** Main-process data health that is safe for the renderer: no paths, no raw errors, no setting values. */
+  settingsHealth: SettingsHealthSchema.default({ settingsJson: null })
 })
 export type PublicSettings = z.infer<typeof PublicSettingsSchema>
 
@@ -1660,6 +1679,7 @@ export type SettingsPatch = Partial<
     | 'loginItemOpenAtLogin'
     | 'lastFailover'
     | 'localSpeechPack'
+    | 'settingsHealth'
   >
 >
 

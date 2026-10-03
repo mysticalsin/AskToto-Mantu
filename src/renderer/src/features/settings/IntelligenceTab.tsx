@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { AlertCircle, CircleCheck, Cpu, ExternalLink, FileText, FolderOpen, Link2, Lock, MessageSquare, Network, RefreshCw, Timer } from 'lucide-react'
+import { AlertCircle, CircleCheck, Cpu, Database, ExternalLink, FileText, FolderOpen, Link2, Lock, MessageSquare, Network, RefreshCw, Timer } from 'lucide-react'
 import type { GraphStatus, MeetingSummary, PublicSettings } from '@shared/ipc'
 import { timeSavedFromTotals } from '@shared/time-saved'
 import { MantuMark } from '../../components/MantuMark'
@@ -163,6 +163,7 @@ export function IntelligenceTab({
     const d = new Date(iso)
     return isNaN(d.getTime()) ? iso : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
   }
+  const settingsHealthView = settingsFileHealthView(settings)
 
   return (
     <div className="flex flex-col gap-6">
@@ -190,6 +191,23 @@ export function IntelligenceTab({
       </Section>
 
       <TimeSavedSettings settings={settings} patch={patch} />
+
+      <Section title="Data health" desc="Local settings and Intelligence index status." icon={Database}>
+        <div className="flex flex-col gap-2">
+          <div className="cl-card flex items-center justify-between gap-3 px-3 py-2.5">
+            <div className="min-w-0">
+              <div className="text-[12px] font-medium text-[color:var(--cl-foreground)]">Settings file</div>
+              <div className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                {settingsHealthView.message}
+              </div>
+            </div>
+            <span className={settingsHealthView.degraded ? 'shrink-0 rounded-full bg-[var(--color-warn)]/10 px-2 py-0.5 text-[10px] font-medium text-[color:var(--color-warn)]' : activePillStyle}>
+              {settingsHealthView.degraded ? settingsHealthView.label : <><CircleCheck size={12} /> {settingsHealthView.label}</>}
+            </span>
+          </div>
+          <BrainIndexHealthRow />
+        </div>
+      </Section>
 
       <Section
         title="Meetings & follow-up"
@@ -426,6 +444,57 @@ export function OperatorMcpServersSection(): JSX.Element | null {
   )
 }
 
+export function settingsFileHealthView(settings: PublicSettings): { degraded: boolean; label: string; message: string } {
+  const issue = settings.settingsHealth.settingsJson
+  if (issue?.status !== 'unreadable') return { degraded: false, label: 'Healthy', message: 'Healthy' }
+  return {
+    degraded: true,
+    label: 'Needs repair',
+    message: issue.recovered
+      ? 'Recovered from backup. Repair the main settings file when you can.'
+      : 'Unreadable. Métis is using safe defaults and will not overwrite the saved file.'
+  }
+}
+
+export function brainIndexHealthView(status: { indexUnavailable?: string; error?: string } | null): {
+  degraded: boolean
+  label: string
+  message: string
+} {
+  if (!status) return { degraded: false, label: 'Healthy', message: 'Checking...' }
+  if (status.indexUnavailable) return { degraded: true, label: 'Degraded', message: status.error || 'Indexing is paused on this device.' }
+  return { degraded: false, label: 'Healthy', message: 'Healthy' }
+}
+
+function BrainIndexHealthRow(): JSX.Element {
+  const [status, setStatus] = useState<{ indexUnavailable?: string; error?: string } | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    void window.toto.brainStatus().then((next) => {
+      if (!cancelled) setStatus(next)
+    }).catch(() => {
+      if (!cancelled) setStatus({ error: 'Could not read Intelligence status.' })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  const view = brainIndexHealthView(status)
+  return (
+    <div className="cl-card flex items-center justify-between gap-3 px-3 py-2.5">
+      <div className="min-w-0">
+        <div className="text-[12px] font-medium text-[color:var(--cl-foreground)]">Intelligence index</div>
+        <div className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+          {view.message}
+        </div>
+      </div>
+      <span className={view.degraded ? 'shrink-0 rounded-full bg-[var(--color-warn)]/10 px-2 py-0.5 text-[10px] font-medium text-[color:var(--color-warn)]' : activePillStyle}>
+        {view.degraded ? view.label : <><CircleCheck size={12} /> {view.label}</>}
+      </span>
+    </div>
+  )
+}
+
 export function GraphSection({
   settings,
   patch
@@ -542,5 +611,3 @@ export function GraphSection({
     </Section>
   )
 }
-
-

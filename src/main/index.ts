@@ -102,6 +102,7 @@ import {
 } from '@shared/ipc'
 import {
   getSettings,
+  getSettingsHealth,
   setSettings,
   getLockedKeys,
   getAllowedProviders,
@@ -2136,7 +2137,8 @@ function publicSettings(): PublicSettings {
     version: app.getVersion(),
     allowedProviders: allowed, // org allowlist (null = unrestricted); surfaced so the picker matches enforcement
     modelPolicyCapabilities: modelPolicyCapabilitiesForSettings(s),
-    localSpeechPack: resolveLocalSpeechPackPolicy(s, getAdminLocalSpeechPackPolicy())
+    localSpeechPack: resolveLocalSpeechPackPolicy(s, getAdminLocalSpeechPackPolicy()),
+    settingsHealth: getSettingsHealth()
   }
 }
 

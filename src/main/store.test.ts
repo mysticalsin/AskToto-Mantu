@@ -21,6 +21,7 @@ import {
 } from '@shared/model-policy'
 import {
   getSettings,
+  getSettingsHealth,
   setSettings,
   recordMeetingSummarized,
   getApiKey,
@@ -33,6 +34,7 @@ import {
   resetAsrHardwarePreferenceForTests,
   resetSettingsCacheForTests
 } from './store'
+import * as logger from './logger'
 import { decryptSecret } from './secrets'
 
 const hardware = vi.hoisted(() => ({ totalmem: vi.fn(() => 16 * 1024 ** 3) }))
@@ -491,6 +493,7 @@ describe('store', () => {
 
   describe('settings.json.recovered (survive an unreadable settings.json)', () => {
     it('preserves an undecryptable V2 settings file to .recovered and falls back to defaults', () => {
+      const auditSpy = vi.spyOn(logger, 'auditLog').mockImplementation(() => {})
       const settingsFile = join(userData, 'settings.json')
       // A well-formed V2 marker followed by bytes that are not a valid AES-GCM envelope for this
       // install's key — decryptSecret must throw, exactly like a corrupted file or a rotated key.
@@ -505,6 +508,12 @@ describe('store', () => {
       const recoveredPath = `${settingsFile}.recovered`
       expect(existsSync(recoveredPath)).toBe(true)
       expect(readFileSync(recoveredPath)).toEqual(garbage)
+      expect(getSettingsHealth().settingsJson).toMatchObject({
+        status: 'unreadable',
+        reason: 'undecryptable',
+        recovered: false
+      })
+      expect(auditSpy).toHaveBeenCalledWith('settings.unreadable', { reason: 'undecryptable', recovered: false })
     })
 
     it('returns a readable .recovered file\'s content when the main settings.json is corrupt', () => {
@@ -518,6 +527,11 @@ describe('store', () => {
       const s = getSettings()
       expect(s.provider).toBe('openai')
       expect(s.temperature).toBe(0.42)
+      expect(getSettingsHealth().settingsJson).toMatchObject({
+        status: 'unreadable',
+        reason: 'recovered',
+        recovered: true
+      })
     })
 
     it('preserves nothing and creates no .recovered file when settings.json has never existed', () => {
@@ -526,6 +540,7 @@ describe('store', () => {
       const s = getSettings()
       expect(s.provider).toBe(DEFAULT_SETTINGS.provider)
       expect(existsSync(`${settingsFile}.recovered`)).toBe(false)
+      expect(getSettingsHealth().settingsJson).toBeNull()
     })
   })
 

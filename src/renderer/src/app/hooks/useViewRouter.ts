@@ -4,7 +4,7 @@ import { useTransitionView } from '../../lib/history-transition'
 import { NavigationGuardService, type NavigationGuardRequest } from '../../lib/navigation-guard'
 import { onboardingLaunchFromSearch } from '../../lib/onboarding-launch'
 
-type SettingsInitialTab = 'personalize' | 'calendar' | 'ai' | undefined
+type SettingsInitialTab = 'personalize' | 'calendar' | 'ai' | 'intelligence' | undefined
 
 type UseViewRouterOptions = {
   setCollapsed: (collapsed: boolean) => void
