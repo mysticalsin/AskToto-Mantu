@@ -730,6 +730,14 @@ test('release notes state version, commit, candidate run, promotion run, not-Lat
     const qaNotes = releaseNotes({ provenance: qaSigned, evidence, promotionRunUrl })
     assert.ok(qaNotes.includes('self-signed QA certificate'))
     assert.ok(qaNotes.includes('a'.repeat(40)))
+
+    // Only a release/1.9.x candidate is named a hotfix; main (the default) and any other branch add no line.
+    const hotfixLine = `a hotfix of 1.9.7 built from release/1.9.x at commit \`${provenance.commit}\``
+    assert.ok(!notes.includes('hotfix of 1.9.7'))
+    assert.ok(!releaseNotes({ provenance, evidence, promotionRunUrl, candidateBranch: 'main' }).includes('hotfix of 1.9.7'))
+    const hotfixNotes = releaseNotes({ provenance, evidence, promotionRunUrl, candidateBranch: 'release/1.9.x' })
+    assert.ok(hotfixNotes.includes(hotfixLine))
+    assert.equal(hotfixNotes.split('hotfix of 1.9.7').length - 1, 1)
   } finally {
     cleanup(root)
   }

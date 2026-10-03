@@ -54,11 +54,16 @@ describe('candidateRunProblems (the run guard)', () => {
     expect(candidateRunProblems({ ...successfulDispatch, path: '.github/workflows/qa-candidate.yml@refs/heads/main' }, 4242)).toEqual([])
   })
 
+  it('accepts a completed, successful workflow_dispatch run of qa-candidate.yml on release/1.9.x', () => {
+    expect(candidateRunProblems({ ...successfulDispatch, head_branch: 'release/1.9.x' }, '4242')).toEqual([])
+    expect(candidateRunProblems({ ...successfulDispatch, path: '.github/workflows/qa-candidate.yml@refs/heads/release/1.9.x', head_branch: 'release/1.9.x' }, 4242)).toEqual([])
+  })
+
   it('refuses a pull-request self-test candidate', () => {
     const selfTest = { ...successfulDispatch, event: 'pull_request', head_branch: 'm2/M2-0467-add-shared-main-only' }
     const problems = candidateRunProblems(selfTest, 4242)
     expect(problems.join('\n')).toMatch(/pull_request, not workflow_dispatch/)
-    expect(problems.join('\n')).toMatch(/not main/)
+    expect(problems.join('\n')).toMatch(/not main or release\/1\.9\.x/)
   })
 
   it('refuses another workflow, another branch, an unfinished or failed run, and a different run id', () => {

@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       candidate_run_id:
-        description: Run ID of a successful qa-candidate run on main
+        description: Run ID of a successful qa-candidate run on main or release/1.9.x
         required: true
         type: string
       evidence:
@@ -59,7 +59,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.22.3
-      - name: Require a fully successful qa-candidate run on main
+      - name: Require a fully successful qa-candidate run on main or release/1.9.x
         id: candidate
         env:
           GH_TOKEN: ${{ github.token }}
@@ -69,18 +69,31 @@ jobs:
             echo "::error::candidate_run_id must be a workflow run ID."; exit 1
           fi
           run=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID")
-          jq -e '.path == ".github/workflows/qa-candidate.yml" and .event == "workflow_dispatch" and .head_branch == "main" and .status == "completed" and .conclusion == "success"' <<<"$run" > /dev/null \
-            || { echo "::error::Run $RUN_ID is not a completed, successful qa-candidate dispatch on main."; exit 1; }
+          jq -e '.path == ".github/workflows/qa-candidate.yml" and .event == "workflow_dispatch" and (.head_branch == "main" or .head_branch == "release/1.9.x") and .status == "completed" and .conclusion == "success"' <<<"$run" > /dev/null \
+            || { echo "::error::Run $RUN_ID is not a completed, successful qa-candidate dispatch on main or release/1.9.x."; exit 1; }
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?filter=latest&per_page=100" \
             | jq -e '.total_count > 0 and all(.jobs[]; .conclusion == "success")' > /dev/null \
             || { echo "::error::Every job of run $RUN_ID must have succeeded; a skipped gate is not a pass."; exit 1; }
           echo "commit=$(jq -r .head_sha <<<"$run")" >> "$GITHUB_OUTPUT"
+          echo "branch=$(jq -r .head_branch <<<"$run")" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: candidate-provenance
           path: provenance
           run-id: ${{ inputs.candidate_run_id }}
           github-token: ${{ github.token }}
+      # A release/1.9.x candidate is promoted under the rule it was built under: 1.9.7-hotfix.N, never 1.9.7.
+      - name: Check the candidate branch and version
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          BRANCH: ${{ steps.candidate.outputs.branch }}
+        run: |
+          feed_dir="$RUNNER_TEMP/feed"
+          mkdir -p "$feed_dir"
+          gh api "repos/$FEED/git/matching-refs/tags" --paginate --jq '.[].ref | sub("^refs/tags/"; "")' > "$feed_dir/tags.txt"
+          gh api "repos/$FEED/releases?per_page=100" --paginate --jq '.[] | select(.draft | not) | .tag_name' > "$feed_dir/releases.txt"
+          node scripts/qa/release-line.mjs candidate --branch "$BRANCH" --package provenance/provenance.json \
+            --tags "$feed_dir/tags.txt" --releases "$feed_dir/releases.txt"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: candidate-mac
@@ -99,10 +112,11 @@ jobs:
           EVIDENCE: ${{ inputs.evidence }}
           CANDIDATE_RUN: ${{ inputs.candidate_run_id }}
           CANDIDATE_COMMIT: ${{ steps.candidate.outputs.commit }}
+          CANDIDATE_BRANCH: ${{ steps.candidate.outputs.branch }}
         run: |
           printf '%s' "$EVIDENCE" > "$RUNNER_TEMP/evidence.jsonl"
           node scripts/qa/provenance.mjs prepare-release provenance/provenance.json "$RUNNER_TEMP/evidence.jsonl" downloads "$RUNNER_TEMP/promotion" \
-            --candidate-run "$CANDIDATE_RUN" --candidate-commit "$CANDIDATE_COMMIT"
+            --candidate-run "$CANDIDATE_RUN" --candidate-commit "$CANDIDATE_COMMIT" --candidate-branch "$CANDIDATE_BRANCH"
           echo "version=$(jq -r .version provenance/provenance.json)" >> "$GITHUB_OUTPUT"
       - name: Choose the release tag
         id: tag

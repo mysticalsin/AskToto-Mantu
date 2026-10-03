@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { versionForRefProblems, MAIN_REF, HOTFIX_REF } from './release-line.mjs'
+import { candidateBranchProblems, versionForRefProblems, MAIN_REF, HOTFIX_REF } from './release-line.mjs'
 
 const MODULE_PATH = fileURLToPath(new URL('./release-line.mjs', import.meta.url))
 
@@ -108,6 +108,47 @@ test('--report-only turns every problem into a ::warning:: and never fails', () 
   assert.equal(result.status, 0)
   assert.match(result.stdout, /^::warning::.*retired/m)
   assert.doesNotMatch(result.stdout, /::error::/)
+})
+
+test('promotion accepts a main candidate, and release/1.9.x only with a version legal for that ref', () => {
+  assert.deepEqual(candidateBranchProblems({ branch: 'main', version: '1.9.7', ...BEFORE }), [])
+  assert.deepEqual(candidateBranchProblems({ branch: 'release/1.9.x', version: '1.9.7-hotfix.1', ...AFTER }), [])
+  const promoted = candidateBranchProblems({ branch: 'release/1.9.x', version: '1.9.7', ...AFTER })
+  assert.ok(promoted.some((p) => p.includes('already promoted')), promoted.join('|'))
+  assert.notDeepEqual(candidateBranchProblems({ branch: 'release/1.9.x', version: '1.9.7-hotfix.1', ...BEFORE }), [])
+})
+
+test('promotion refuses every other candidate branch, naming the allowed ones', () => {
+  for (const branch of ['feature/x', 'release/1.8.x', 'main2', 'refs/heads/main', '']) {
+    const problems = candidateBranchProblems({ branch, version: '1.9.7-hotfix.1', ...AFTER })
+    assert.equal(problems.length, 1, branch)
+    assert.ok(problems[0].includes('main') && problems[0].includes('release/1.9.x'), problems[0])
+  }
+})
+
+function runCandidateCli({ branch, version }) {
+  const dir = mkdtempSync(join(tmpdir(), 'release-line-'))
+  try {
+    writeFileSync(join(dir, 'provenance.json'), JSON.stringify({ version }))
+    writeFileSync(join(dir, 'tags.txt'), AFTER.feedTags.join('\n'))
+    writeFileSync(join(dir, 'releases.txt'), AFTER.publishedReleases.join('\n'))
+    return spawnSync(
+      process.execPath,
+      [MODULE_PATH, 'candidate', '--branch', branch, '--package', join(dir, 'provenance.json'), '--tags', join(dir, 'tags.txt'), '--releases', join(dir, 'releases.txt')],
+      { encoding: 'utf8' }
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+test('the candidate CLI passes a legal hotfix and fails 1.9.7 on release/1.9.x and any other branch', () => {
+  assert.equal(runCandidateCli({ branch: 'release/1.9.x', version: '1.9.7-hotfix.1' }).status, 0)
+  assert.equal(runCandidateCli({ branch: 'main', version: '2.0.0-beta.1' }).status, 0)
+  const promoted = runCandidateCli({ branch: 'release/1.9.x', version: '1.9.7' })
+  assert.equal(promoted.status, 1)
+  assert.match(promoted.stdout, /^::error::.*already promoted/m)
+  assert.equal(runCandidateCli({ branch: 'feature/x', version: '1.9.7-hotfix.1' }).status, 1)
 })
 
 test('the CLI fails on unreadable inputs unless report-only, and rejects a bad command', () => {

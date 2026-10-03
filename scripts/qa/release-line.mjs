@@ -55,6 +55,18 @@ export function versionForRefProblems({ ref, version, feedTags, publishedRelease
   return problems
 }
 
+/**
+ * Promotion (M2-0500): which qa-candidate run branches may be published. A main candidate is unchanged; a
+ * release/1.9.x candidate must carry a version versionForRefProblems accepts for that ref; any other branch is refused.
+ * @param {{branch: string, version: string, feedTags: string[], publishedReleases: string[]}} input  branch: the run's head_branch.
+ */
+export function candidateBranchProblems({ branch, version, feedTags, publishedReleases }) {
+  const ref = `refs/heads/${branch}`
+  if (ref === MAIN_REF) return []
+  if (ref !== HOTFIX_REF) return [`candidate branch ${branch} may not be promoted: only main and ${HOTFIX_REF.slice('refs/heads/'.length)} may.`]
+  return versionForRefProblems({ ref, version, feedTags, publishedReleases })
+}
+
 function lines(path) {
   return readFileSync(path, 'utf8').split('\n').map((line) => line.trim()).filter(Boolean)
 }
@@ -67,6 +79,7 @@ function flagValue(args, name) {
 function usage() {
   console.error(
     'usage: release-line.mjs check --ref <ref> --package <package.json> --tags <file> --releases <file> [--report-only]\n' +
+      '       release-line.mjs candidate --branch <head_branch> --package <provenance.json> --tags <file> --releases <file>\n' +
       '  --tags and --releases hold one feed tag name per line; --report-only prints a ::warning:: and exits 0.'
   )
   process.exitCode = 2
@@ -74,8 +87,8 @@ function usage() {
 
 function main(argv) {
   const [command, ...rest] = argv
-  if (command !== 'check') return usage()
-  const ref = flagValue(rest, '--ref')
+  if (command !== 'check' && command !== 'candidate') return usage()
+  const ref = flagValue(rest, command === 'check' ? '--ref' : '--branch')
   const packagePath = flagValue(rest, '--package')
   const tagsPath = flagValue(rest, '--tags')
   const releasesPath = flagValue(rest, '--releases')
@@ -84,7 +97,8 @@ function main(argv) {
   let problems
   try {
     const { version } = JSON.parse(readFileSync(packagePath, 'utf8'))
-    problems = versionForRefProblems({ ref, version, feedTags: lines(tagsPath), publishedReleases: lines(releasesPath) })
+    const input = { version, feedTags: lines(tagsPath), publishedReleases: lines(releasesPath) }
+    problems = command === 'check' ? versionForRefProblems({ ref, ...input }) : candidateBranchProblems({ branch: ref, ...input })
   } catch (error) {
     problems = [`could not read the check's inputs: ${error.message}`]
   }
