@@ -223,7 +223,7 @@ describe('the scenario registry', () => {
     }
   })
 
-  it('declares journey on the Metis-QA zip (macOS) and the promotable Setup (Windows), with its budgets in the registry', () => {
+  it('declares journey on the Metis-QA zip (macOS) and the only Windows candidate bytes, excusing no step on either, with its budgets in the registry', () => {
     const scenario = SCENARIOS.journey
     expect(scenario.ticket).toBe('M2-0524')
     expect(scenario.qaOnlyHook).toBe(true)
@@ -237,9 +237,11 @@ describe('the scenario registry', () => {
       expect(target.script).toBe('scripts/qa/journey.mjs')
       expect(existsSync(join(root, target.script))).toBe(true)
     }
+    // No platform may excuse a step: a Windows run proves the file-fed meeting, transcript and write-up or does not pass.
     expect('notCovered' in mac).toBe(false)
-    expect(win.notCovered.map(({ row }) => row)).toEqual(['meeting', 'transcript', 'write-up'])
-    for (const { reason } of win.notCovered) expect(reason).toMatch(/no Windows QA-identity variant/)
+    expect('notCovered' in win).toBe(false)
+    // qa-candidate.yml builds no Windows QA-identity variant, so the win entry can name no QA-identity artifact yet.
+    expect(Object.keys(VARIANTS).filter((variant) => VARIANTS[variant as keyof typeof VARIANTS].platform === 'win')).toEqual(['win'])
     expect(scenario.budgets).toEqual({
       onboardingMs: 240_000,
       meetingMs: 90_000,
@@ -292,24 +294,32 @@ describe('the scenario registry', () => {
     expect(installerKindForScenario('journey', 'win')).toBe('win')
   })
 
-  it('records the Windows journey meeting steps as not covered in lane.json, so a PASS never reads as covering them', () => {
-    const lane = laneRecord({
-      scenario: 'journey',
-      platform: 'win',
-      env: { GITHUB_RUN_ID: '77' },
-      provenance: { run: { id: 4242 }, commit: COMMIT },
-      candidateRun: '4242',
-      installer: 'assets/Metis-Setup-1.0.0.exe',
-      sha256: WIN_SHA,
-      argv: ['scripts/qa/journey.mjs'],
-      exitCode: 0,
-      detail: '',
-      reportWritten: true
-    })
+  it('excuses no Windows journey step in lane.json: refused promotable bytes are a PRECONDITION, never a partial PASS', () => {
+    const winLane = (exitCode: number, detail: string) =>
+      laneRecord({
+        scenario: 'journey',
+        platform: 'win',
+        env: { GITHUB_RUN_ID: '77' },
+        provenance: { run: { id: 4242 }, commit: COMMIT },
+        candidateRun: '4242',
+        installer: 'assets/Metis-Setup-1.0.0.exe',
+        sha256: WIN_SHA,
+        argv: ['scripts/qa/journey.mjs'],
+        exitCode,
+        detail,
+        reportWritten: true
+      })
+    const refused = winLane(2, 'not-qa-identity')
+    expect(refused.outcome).toBe('PRECONDITION')
+    expect(refused.detail).toBe('not-qa-identity')
+    expect(laneAnnotation(refused)).toMatch(/PRECONDITION \(not PASS\)/)
+    expect('not_covered' in refused).toBe(false)
+    // journey.mjs exits 0 only when every step, the file-fed meeting included, passed; the lane adds no residual.
+    const lane = winLane(0, '')
     expect(lane.outcome).toBe('PASS')
     expect(lane.ticket).toBe('M2-0524')
     expect(lane.variant).toBe('win')
-    expect(lane.not_covered?.map(({ row }) => row)).toEqual(['meeting', 'transcript', 'write-up'])
+    expect('not_covered' in lane).toBe(false)
     const mac = laneRecord({
       scenario: 'journey',
       platform: 'mac',

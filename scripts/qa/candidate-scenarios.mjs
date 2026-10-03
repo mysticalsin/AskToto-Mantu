@@ -271,8 +271,11 @@ export const SCENARIOS = Object.freeze({
   }),
   // M2-0524: the whole user path on the installed candidate, on a fresh isolated profile: onboarding with the
   // speech-engine step, then a meeting fed by the QA-identity file source (M2-0494), its saved transcript and
-  // its write-up. The file source is compiled only into the macOS QA-identity build, so Windows installs the
-  // promotable Setup and reports the meeting steps as not covered. scripts/qa/journey.mjs reads budgets.
+  // its write-up. Every step runs on every platform and none may be skipped. The file source is compiled only
+  // into QA-identity bytes, and qa-candidate.yml builds no Windows QA-identity variant yet, so Windows installs
+  // the only Windows candidate bytes, the promotable Setup, and journey.mjs refuses them as a PRECONDITION
+  // (not-qa-identity), never a PASS; the win entry points at candidate-win-qa-identity once that build exists.
+  // scripts/qa/journey.mjs reads budgets.
   journey: Object.freeze({
     ticket: 'M2-0524',
     qaOnlyHook: true,
@@ -307,17 +310,7 @@ export const SCENARIOS = Object.freeze({
           return ['--app', app, '--installer', installer, '--sha256', sha256, '--out', report]
         },
         report: 'journey.json',
-        isolatedProfiles: true,
-        notCovered: Object.freeze(
-          ['meeting', 'transcript', 'write-up'].map((row) =>
-            Object.freeze({
-              row,
-              reason:
-                'qa-candidate.yml builds no Windows QA-identity variant, so the file-fed capture source (M2-0494) is ' +
-                'absent from Windows candidate bytes; add a win-qa-identity build and point the journey win entry at it.'
-            })
-          )
-        )
+        isolatedProfiles: true
       })
     })
   })

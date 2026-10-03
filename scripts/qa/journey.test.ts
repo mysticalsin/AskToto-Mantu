@@ -11,10 +11,13 @@ import {
   JOURNEY_PROFILE_SETTINGS,
   JOURNEY_STEPS,
   JourneyPrecondition,
+  QA_BUNDLE_ID,
+  QA_WIN_EXECUTABLE,
   SAVED_MEETING,
   StepFailure,
   buildReport,
   contentFreeReport,
+  isQaIdentity,
   journeyLaunchEnv,
   journeyPlan,
   judgeJourney,
@@ -27,7 +30,7 @@ import {
 } from './journey.mjs'
 import { englishSentences } from './meeting/capture-wav.mjs'
 
-type Result = { id: string; outcome: string; ms: number; reason?: string; unblock?: string; facts?: object }
+type Result = { id: string; outcome: string; ms: number; reason?: string; facts?: object }
 
 /** A clock that advances by `step` ms on every read, so each step's ms is deterministic. */
 function fakeClock(step = 10) {
@@ -100,21 +103,40 @@ describe('journey steps and order', () => {
     const runners = { ...passingRunners(), onboarding: async () => Promise.reject(new JourneyPrecondition('unsupported-host')) }
     const results = (await runSteps(journeyPlan('mac', runners))) as Result[]
     expect(results.map((result) => result.outcome)).toEqual(['PRECONDITION', 'NOT_RUN', 'NOT_RUN', 'NOT_RUN'])
-    expect(judgeJourney(results, { platform: 'mac' })).toBe('PRECONDITION')
+    expect(judgeJourney(results)).toBe('PRECONDITION')
   })
 
-  it('never runs a step the platform lists as notCovered: on Windows the meeting steps are BLOCKED_EXTERNAL', async () => {
+  it('runs every step on Windows too, the file-fed meeting, transcript and write-up included, with none skipped', async () => {
+    for (const platform of ['mac', 'win']) {
+      expect('notCovered' in SCENARIOS.journey.platforms[platform as 'mac' | 'win']).toBe(false)
+      const calls: string[] = []
+      const results = (await runSteps(journeyPlan(platform, passingRunners(calls)), { now: fakeClock(10) })) as Result[]
+      expect(calls).toEqual(['onboarding', 'meeting', 'transcript', 'write-up'])
+      expect(results.map((result) => [result.id, result.outcome])).toEqual(JOURNEY_STEPS.map((id: string) => [id, 'PASS']))
+      expect(judgeJourney(results)).toBe('PASS')
+    }
     const calls: string[] = []
-    const results = (await runSteps(journeyPlan('win', passingRunners(calls)))) as Result[]
-    expect(calls).toEqual(['onboarding'])
-    expect(results.map((result) => [result.id, result.outcome])).toEqual([
-      ['onboarding', 'PASS'],
-      ['meeting', 'BLOCKED_EXTERNAL'],
-      ['transcript', 'BLOCKED_EXTERNAL'],
-      ['write-up', 'BLOCKED_EXTERNAL']
-    ])
-    const reasons = SCENARIOS.journey.platforms.win.notCovered.map(({ reason }: { reason: string }) => reason)
-    expect(results.slice(1).map((result) => result.unblock)).toEqual(reasons)
+    const runners = {
+      ...passingRunners(calls),
+      meeting: async () => {
+        calls.push('meeting')
+        throw new StepFailure('file-source-inactive', { fileSource: false })
+      }
+    }
+    const results = (await runSteps(journeyPlan('win', runners))) as Result[]
+    expect(calls).toEqual(['onboarding', 'meeting'])
+    expect(results.map((result) => result.outcome)).toEqual(['PASS', 'FAIL', 'NOT_RUN', 'NOT_RUN'])
+    expect(judgeJourney(results)).toBe('FAIL')
+  })
+
+  it('drives only QA-identity bytes on both platforms: the promotable install is refused', () => {
+    expect(isQaIdentity('mac', { executable: 'Metis QA.app/Contents/MacOS/Metis QA', bundleId: QA_BUNDLE_ID })).toBe(true)
+    expect(isQaIdentity('mac', { executable: 'Metis.app/Contents/MacOS/Metis', bundleId: 'com.mantu.asktoto' })).toBe(false)
+    expect(isQaIdentity('win', { executable: 'C:\\a\\_temp\\candidate-install\\Metis QA.exe' })).toBe(true)
+    // The promotable Setup installs Metis.exe, which holds no file source.
+    expect(isQaIdentity('win', { executable: 'C:\\a\\_temp\\candidate-install\\Metis.exe' })).toBe(false)
+    expect(QA_WIN_EXECUTABLE).toBe('Metis QA.exe')
+    expect(isQaIdentity('linux', { executable: 'Metis QA', bundleId: QA_BUNDLE_ID })).toBe(false)
   })
 
   it('refuses a platform the registry does not declare', () => {
@@ -135,29 +157,42 @@ describe('journey verdict and exit mapping', () => {
   })
 
   it('passes only when every step passed, in order', () => {
-    expect(judgeJourney(JOURNEY_STEPS.map(pass), { platform: 'mac' })).toBe('PASS')
+    expect(judgeJourney(JOURNEY_STEPS.map(pass))).toBe('PASS')
     const failed = JOURNEY_STEPS.map(pass)
     failed[3] = { id: 'write-up', outcome: 'FAIL', ms: 600_000 }
-    expect(judgeJourney(failed, { platform: 'mac' })).toBe('FAIL')
+    expect(judgeJourney(failed)).toBe('FAIL')
     const notRun = JOURNEY_STEPS.map(pass)
     notRun[2] = { id: 'transcript', outcome: 'NOT_RUN', ms: 0 }
-    expect(judgeJourney(notRun, { platform: 'mac' })).toBe('FAIL')
-    expect(judgeJourney([...JOURNEY_STEPS].reverse().map(pass), { platform: 'mac' })).toBe('FAIL')
-    expect(judgeJourney(JOURNEY_STEPS.slice(0, 3).map(pass), { platform: 'mac' })).toBe('FAIL')
+    expect(judgeJourney(notRun)).toBe('FAIL')
+    expect(judgeJourney([...JOURNEY_STEPS].reverse().map(pass))).toBe('FAIL')
+    expect(judgeJourney(JOURNEY_STEPS.slice(0, 3).map(pass))).toBe('FAIL')
     expect(stepOrderProblems(JOURNEY_STEPS.slice(0, 3).map(pass))).toHaveLength(1)
   })
 
-  it('accepts BLOCKED_EXTERNAL only for the rows the platform declares', () => {
-    const windows: Result[] = [pass('onboarding'), ...['meeting', 'transcript', 'write-up'].map((id) => ({ id, outcome: 'BLOCKED_EXTERNAL', ms: 0 }))]
-    expect(judgeJourney(windows, { platform: 'win' })).toBe('PASS')
-    expect(judgeJourney(windows, { platform: 'mac' })).toBe('FAIL')
+  it('never passes a partial run: a skipped or blocked meeting step is a FAIL on Windows as on macOS', () => {
+    const partial: Result[] = [pass('onboarding'), ...['meeting', 'transcript', 'write-up'].map((id) => ({ id, outcome: 'BLOCKED_EXTERNAL', ms: 0 }))]
+    expect(judgeJourney(partial)).toBe('FAIL')
+    expect(buildReport({ platform: 'win', results: partial })).toMatchObject({ verdict: 'FAIL', exitCode: 1 })
+    expect(buildReport({ platform: 'mac', results: partial })).toMatchObject({ verdict: 'FAIL', exitCode: 1 })
     const nothingPassed = JOURNEY_STEPS.map((id: string) => ({ id, outcome: 'BLOCKED_EXTERNAL', ms: 0 }))
-    expect(judgeJourney(nothingPassed, { platform: 'win' })).toBe('FAIL')
+    expect(judgeJourney(nothingPassed)).toBe('FAIL')
+    expect(buildReport({ platform: 'win', results: JOURNEY_STEPS.map(pass) })).toMatchObject({ verdict: 'PASS', exitCode: 0 })
+  })
+
+  it('is PRECONDITION, never PASS, when the installed bytes are not the QA identity', () => {
+    const notRun = JOURNEY_STEPS.map((id: string) => ({ id, outcome: 'NOT_RUN', ms: 0 }))
+    for (const platform of ['mac', 'win']) {
+      expect(buildReport({ platform, results: notRun, precondition: 'not-qa-identity' })).toMatchObject({
+        verdict: 'PRECONDITION',
+        exitCode: 2,
+        precondition: 'not-qa-identity'
+      })
+    }
   })
 
   it('is PRECONDITION when the journey could not start', () => {
     const notRun = JOURNEY_STEPS.map((id: string) => ({ id, outcome: 'NOT_RUN', ms: 0 }))
-    expect(judgeJourney(notRun, { precondition: 'installer-sha256-mismatch', platform: 'mac' })).toBe('PRECONDITION')
+    expect(judgeJourney(notRun, { precondition: 'installer-sha256-mismatch' })).toBe('PRECONDITION')
     expect(buildReport({ platform: 'mac', results: notRun, precondition: 'installer-sha256-mismatch' })).toMatchObject({
       verdict: 'PRECONDITION',
       exitCode: 2,
@@ -193,10 +228,8 @@ describe('journey report', () => {
     const scan = { account: 'runneradmin', forbidden: ['/private/var/folders/xy/T/metis-journey-abc', ...englishSentences()] }
     expect(reportContentProblems(JSON.stringify(report), scan)).toEqual([])
     expect(contentFreeReport(report, scan)).toBe(report)
-    const windows = buildReport({
-      platform: 'win',
-      results: [pass('onboarding'), ...(['meeting', 'transcript', 'write-up'] as const).map((id) => ({ id, outcome: 'BLOCKED_EXTERNAL', ms: 0, unblock: 'reason' }))]
-    })
+    const windows = buildReport({ platform: 'win', results: results.map((result) => ({ ...result })) })
+    expect(windows.steps.map((step: Result) => step.id)).toEqual(JOURNEY_STEPS)
     expect(reportContentProblems(JSON.stringify(windows), scan)).toEqual([])
   })
 

@@ -10,8 +10,9 @@
  *               registry's fixed duration, then Stop
  *   transcript  the meeting is saved with at least the registry's minimum line count
  *   write-up    the saved meeting's write-up is complete within the registry's budget
- * A step that fails stops the journey; the steps after it are NOT_RUN. A step the platform's registry entry
- * lists as notCovered is BLOCKED_EXTERNAL with its reason and is never run.
+ * Every step runs on every platform; none is skipped or excused. A step that fails stops the journey; the steps
+ * after it are NOT_RUN. The installed app must be the QA identity on every platform (the file source exists only
+ * in QA-identity bytes), and the host must make the capture WAV, before the app is driven.
  *
  * Exit 0 PASS · 1 FAIL · 2 PRECONDITION (not run: wrong host, bytes or identity), as fault-fatal-relaunch.
  *
@@ -25,7 +26,7 @@
 import { execFileSync, spawn } from 'node:child_process'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir, userInfo } from 'node:os'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, join, win32 } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { SCENARIOS, contentProblems } from './candidate-scenarios.mjs'
 import { isOverlayUrl } from './golden-flows/smoke-support.mjs'
@@ -54,6 +55,8 @@ export const JOURNEY_STEPS = Object.freeze(['onboarding', 'meeting', 'transcript
 /** The exit code of each verdict: the inverse of the registry's exits, which match fault-fatal-relaunch. */
 export const EXIT_CODES = Object.freeze({ PASS: 0, FAIL: 1, PRECONDITION: 2 })
 export const QA_BUNDLE_ID = 'com.mantu.asktoto.qa'
+/** The QA identity's Windows executable: build/qa-identity.electron-builder.yml's productName, Metis QA. */
+export const QA_WIN_EXECUTABLE = 'Metis QA.exe'
 
 const READY_TIMEOUT_MS = 60_000
 const EVALUATE_TIMEOUT_MS = 5_000
@@ -84,23 +87,32 @@ export function platformKey(platform = process.platform) {
 }
 
 /**
- * The steps to run on `platform`, in JOURNEY_STEPS order: a step the registry lists as notCovered for that
- * platform carries its reason as `blocked` and is never run.
+ * The steps to run on `platform`, in JOURNEY_STEPS order. Every step runs on every registry platform.
  * @param {string} platform  a registry platform key
  * @param {Record<string, () => Promise<object | void>>} runners  one per step id
  */
 export function journeyPlan(platform, runners) {
-  const target = JOURNEY.platforms[platform]
-  if (!target) throw new JourneyPrecondition('platform-not-in-registry')
-  const blocked = new Map((target.notCovered ?? []).map(({ row, reason }) => [row, reason]))
-  return JOURNEY_STEPS.map((id) => (blocked.has(id) ? { id, blocked: blocked.get(id) } : { id, run: runners[id] }))
+  if (!JOURNEY.platforms[platform]) throw new JourneyPrecondition('platform-not-in-registry')
+  return JOURNEY_STEPS.map((id) => ({ id, run: runners[id] }))
+}
+
+/**
+ * Whether the installed app is the QA identity, the only bytes holding the file source: on macOS its bundle
+ * id, on Windows its executable name. Promotable bytes are never driven.
+ * @param {string} platform  a registry platform key
+ * @param {{ executable: string, bundleId?: string | null }} installed
+ */
+export function isQaIdentity(platform, { executable, bundleId = null }) {
+  if (platform === 'mac') return bundleId === QA_BUNDLE_ID
+  if (platform === 'win') return win32.basename(String(executable ?? '')) === QA_WIN_EXECUTABLE
+  return false
 }
 
 const safeErrorName = (error) => (/^[A-Za-z]{1,40}$/.test(String(error?.name ?? '')) ? error.name : 'Error')
 
 /**
- * Runs the plan in order and returns one result per step: PASS, FAIL, PRECONDITION, BLOCKED_EXTERNAL or,
- * after the first step that did not pass, NOT_RUN. `ms` is the step's own wall time.
+ * Runs the plan in order and returns one result per step: PASS, FAIL, PRECONDITION or, after the first step
+ * that did not pass, NOT_RUN. `ms` is the step's own wall time.
  */
 export async function runSteps(plan, { now = Date.now } = {}) {
   const results = []
@@ -108,10 +120,6 @@ export async function runSteps(plan, { now = Date.now } = {}) {
   for (const step of plan) {
     if (halted) {
       results.push({ id: step.id, outcome: 'NOT_RUN', ms: 0 })
-      continue
-    }
-    if (step.blocked) {
-      results.push({ id: step.id, outcome: 'BLOCKED_EXTERNAL', ms: 0, unblock: step.blocked })
       continue
     }
     const started = now()
@@ -139,24 +147,22 @@ export function stepOrderProblems(results) {
 
 /**
  * The verdict of a run. PRECONDITION when the journey could not start or a step met one; PASS only when every
- * step is reported in order and each one passed or is a platform's declared notCovered row; otherwise FAIL.
+ * step is reported in order and each one passed, on every platform; otherwise FAIL.
  * @param {{ id: string, outcome: string }[]} results
- * @param {{ precondition?: string | null, platform?: string | null }} [options]
+ * @param {{ precondition?: string | null }} [options]
  */
-export function judgeJourney(results, { precondition = null, platform = null } = {}) {
+export function judgeJourney(results, { precondition = null } = {}) {
   if (precondition || results.some((result) => result.outcome === 'PRECONDITION')) return 'PRECONDITION'
   if (stepOrderProblems(results).length) return 'FAIL'
-  const declared = new Set((JOURNEY.platforms[platform]?.notCovered ?? []).map(({ row }) => row))
-  const ok = results.every((result) => result.outcome === 'PASS' || (result.outcome === 'BLOCKED_EXTERNAL' && declared.has(result.id)))
-  return ok && results.some((result) => result.outcome === 'PASS') ? 'PASS' : 'FAIL'
+  return results.every((result) => result.outcome === 'PASS') ? 'PASS' : 'FAIL'
 }
 
 /**
  * The report: verdict, exit code, budgets and one entry per step. Built only from step results and codes.
- * @param {{ platform: string | null, results: { id: string, outcome: string, ms: number, reason?: string, unblock?: string, facts?: object }[], precondition?: string | null }} input
+ * @param {{ platform: string | null, results: { id: string, outcome: string, ms: number, reason?: string, facts?: object }[], precondition?: string | null }} input
  */
 export function buildReport({ platform, results, precondition = null }) {
-  const verdict = judgeJourney(results, { precondition, platform })
+  const verdict = judgeJourney(results, { precondition })
   return {
     schema: REPORT_SCHEMA,
     scenario: SCENARIO,
@@ -166,12 +172,11 @@ export function buildReport({ platform, results, precondition = null }) {
     exitCode: EXIT_CODES[verdict],
     ...(precondition ? { precondition } : {}),
     budgets: { ...BUDGETS },
-    steps: results.map(({ id, outcome, ms, reason, unblock, facts }) => ({
+    steps: results.map(({ id, outcome, ms, reason, facts }) => ({
       id,
       outcome,
       ms: Math.max(0, Math.round(Number(ms) || 0)),
       ...(reason ? { reason } : {}),
-      ...(unblock ? { unblock } : {}),
       ...(facts ? { facts } : {})
     }))
   }
@@ -233,7 +238,7 @@ export function seedJourneyProfile(profile) {
 }
 
 /**
- * The launch environment: the isolated profile, the file source on macOS only, no provider keys, no Apple
+ * The launch environment: the isolated profile, the file source when given, no provider keys, no Apple
  * Foundation Models, and the QA host-floor override the bundled model needs on a hosted runner (honoured
  * only on an isolated profile).
  * @param {Record<string, string | undefined>} baseEnv
@@ -308,7 +313,7 @@ async function visible(locator) {
 }
 
 function createRunners(ctx) {
-  const { browser, profile, platform } = ctx
+  const { browser, profile } = ctx
   const asr = { downloadingSeen: false, ready: false }
   const sampleAsr = async (page) => {
     const state = await evaluate(page, ASR_STATE).catch(() => null)
@@ -405,7 +410,7 @@ function createRunners(ctx) {
     const stopped = await waitUntil(async () => !(await evaluate(page, STOP_PRESENT)), BUDGETS.stopMs, 250)
     const facts = { listenMs, maxLiveLines, stopped: Boolean(stopped), fileSource: auditHasEvent(profile), summarizer: ctx.summarizer }
     if (!facts.stopped) throw new StepFailure('meeting-did-not-stop', facts)
-    if (platform === 'mac' && !facts.fileSource) throw new StepFailure('file-source-inactive', facts)
+    if (!facts.fileSource) throw new StepFailure('file-source-inactive', facts)
     return facts
   }
 
@@ -494,7 +499,9 @@ async function main() {
     if (!platform) throw new JourneyPrecondition('unsupported-host')
     if ((await sha256File(args.installer)) !== args.sha256.trim().toLowerCase()) throw new JourneyPrecondition('installer-sha256-mismatch')
     const { installRoot, executable } = resolveInstalled(args.app, platform)
-    if (platform === 'mac' && bundleId(installRoot) !== QA_BUNDLE_ID) throw new JourneyPrecondition('not-qa-identity')
+    if (!isQaIdentity(platform, { executable, bundleId: platform === 'mac' ? bundleId(installRoot) : null })) {
+      throw new JourneyPrecondition('not-qa-identity')
+    }
     if (ownedProcesses(listProcesses(process.platform), { mainPid: null, installRoot, platform: process.platform }).length) {
       throw new JourneyPrecondition('install-root-busy')
     }
@@ -503,11 +510,13 @@ async function main() {
     profile = mkdtempSync(join(tmpdir(), 'metis-journey-'))
     forbidden.push(profile, realpathSync.native(profile))
     seedJourneyProfile(profile)
-    // The file source exists only in macOS QA-identity bytes, and the WAV is spoken by macOS `say`.
-    let captureFile = null
-    if (platform === 'mac') {
+    // The file source feeds the meeting on every platform; a host that cannot make the WAV is a precondition.
+    forbidden.push(...englishSentences())
+    let captureFile
+    try {
       captureFile = writeCaptureWav(profile).path
-      forbidden.push(...englishSentences())
+    } catch {
+      throw new JourneyPrecondition('capture-wav-unavailable')
     }
 
     const port = await freeLoopbackPort()
