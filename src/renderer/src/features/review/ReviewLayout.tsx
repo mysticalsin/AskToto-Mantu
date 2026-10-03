@@ -6,6 +6,7 @@ import { Markdown } from '../../components/Markdown'
 import { Chip, TextButton, Spinner } from '../../components/ui'
 import { AgentStatus, InlineOrb } from '../../components/AgentStatus'
 import { ReviewEntityStrip } from '../../components/ReviewEntityStrip'
+import { outlookDraftIntent } from '../../components/outlook-draft-lifecycle'
 import { VirtualList } from '../../ui/VirtualList'
 import { accelLabel } from '../../lib/keys'
 import {

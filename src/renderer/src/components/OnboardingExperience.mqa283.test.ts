@@ -50,7 +50,7 @@ describe('MQA-283 — the narrative experience now ends at Ready, not a legacy p
   })
 
   it('loads the demo with onboarding so Continue never waits on its own chunk', () => {
-    expect(experienceSrc).toMatch(/import \{ OnboardingDemoScene \} from ['"].*OnboardingDemoScene['"]/)
+    expect(experienceSrc).toMatch(/import \{ OnboardingDemoScene \} from ['"]\.\.\/\.\.\/components\/OnboardingDemoScene['"]/)
     expect(experienceSrc).not.toMatch(/const OnboardingDemoScene = lazy\(/)
     const reveal = experienceSrc.slice(experienceSrc.indexOf("{scene === 'reveal'"), experienceSrc.indexOf("{scene === 'setup'"))
     expect(reveal).toMatch(/<Suspense/)

@@ -1,24 +1,9 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { memo } from 'react'
 import { transcriptDisplayName } from '@shared/speaker-names'
-import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, ChevronDown, Download, Clock, Mail, Send, AlertCircle, EarOff, ArrowLeft, Pencil, X, Sparkles, Trash2, Lock, PhoneCall } from 'lucide-react'
-import type { TranscriptLine, MeetingSummary, McpConnection, RecapExport } from '@shared/ipc'
-import type { RecapStatus } from '@shared/recap-status'
-import type { AnswerState } from '../../state'
-import type { NavigationGuardService } from '../../lib/navigation-guard'
-import { isNonSpeechLine } from '@shared/transcript-filter'
-import { reviewDurationSeconds } from '@shared/meeting-duration'
-import { reviewSpeakerLabel } from '@shared/speaker-summary'
-import { talkStats } from '@shared/talkstats'
+import type { TranscriptLine } from '@shared/ipc'
 import { fnv1a } from '@shared/hash'
 import { Markdown } from '../../components/Markdown'
 import { ModeRecapView, modeRecapSections } from '../../components/ModeRecap'
-import { Chip, TextButton, Spinner } from '../../components/ui'
-import { AgentStatus, InlineOrb } from '../../components/AgentStatus'
-import { ReviewEntityStrip } from '../../components/ReviewEntityStrip'
-import { useFlash } from '../../lib/useFlash'
-import { accelLabel } from '../../lib/keys'
-import { OutlookDraftLifecycle, outlookDraftIntent } from '../../components/outlook-draft-lifecycle'
-import { VirtualList } from '../../ui/VirtualList'
 
 export const INCOMPLETE_RECAP_COPY = 'This summary may be incomplete. Review it before using it, or retry.'
 
@@ -179,21 +164,6 @@ export function seedCrmPushed(key: string | undefined): void {
   if (key) pushedCrmPayloads.add(key)
 }
 
-/**
- * MQA-092 — a push that landed before the meeting had a file yet.
- *
- * The push panel needs only `recapText`, not a saved path, and a LIVE meeting's `savedPath` stays null
- * until autosave lands — which can be deferred behind up to 5 retries with backoff. A push in that
- * window has nothing to stamp the marker onto, so without this it is remembered for the session and
- * forgotten at quit: the one case where the durable half would silently not apply.
- *
- * One slot, because only the live meeting can have a null savedPath and there is only ever one of those.
- * The flush below is guarded on the fingerprint matching the CURRENT payload, which makes writing it to
- * the wrong file impossible by construction: navigate to a different meeting and its payload hashes
- * differently, so nothing is written.
- */
-export let pendingCrmMarker: string | null = null
-
 /** Whether THIS payload already reached the CRM — drives both the "Pushed to Polo Pre-Sales." line and
  *  the hiding of the "Push to CRM" chip, so neither depends on Review still being mounted. A changed
  *  recap is a different payload and re-arms the chip, which is correct: it is no longer the same record. */
@@ -224,4 +194,3 @@ export function markNextStepPushed(connectionId: string, args: NextStepArgs): vo
 export function nextStepPushed(phase: NextStepPhase, connectionId: string, args: NextStepArgs): boolean {
   return phase === 'sent' || pushedNextSteps.has(nextStepKey(connectionId, args))
 }
-

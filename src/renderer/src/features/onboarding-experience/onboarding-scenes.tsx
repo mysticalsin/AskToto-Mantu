@@ -421,7 +421,7 @@ export function ActLicense({
       </div>
 
       {error && (
-        <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--color-danger)]">
+        <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--color-destructive,#ff8080)]">
           <AlertCircle size={13} className="mt-px shrink-0" />
           <span>{error}</span>
         </div>
@@ -438,7 +438,7 @@ export function ActLicense({
           type="button"
           onClick={() => void activate()}
           disabled={!serverUrl.trim() || !licenseKey.trim() || activating}
-          className="no-drag focus-ring flex items-center gap-1.5 rounded-full bg-[var(--color-accent)]/15 px-4 py-2 text-[12px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25 disabled:opacity-50"
+          className="no-drag focus-ring flex items-center gap-1.5 rounded-full bg-[#9A2BF0] px-4 py-2 text-[12px] font-semibold text-white hover:brightness-110 disabled:opacity-50"
         >
           {activating ? <InlineOrb kind="connecting" /> : <KeyRound size={13} />}
           Activate
@@ -648,7 +648,7 @@ export function ActReady({
           <button
             type="button"
             onClick={() => void window.toto.relaunch().catch(() => {})}
-            className="no-drag focus-ring rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-[11px] font-medium text-white hover:brightness-110"
+            className="no-drag focus-ring rounded-lg bg-[#9A2BF0] px-3 py-1.5 text-[11px] font-medium text-white hover:brightness-110"
           >
             Restart Métis
           </button>
@@ -740,4 +740,3 @@ export function useOnboardingMusic(): {
     retryIfNeeded
   }
 }
-
