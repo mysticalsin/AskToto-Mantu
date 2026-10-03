@@ -301,6 +301,7 @@ export function App(): JSX.Element {
     recheckLicenseGate,
     entityNames
   } = useAppBoot({ demo: DEMO, savedPath, licenseEnforcement: LICENSE_ENFORCEMENT })
+  // FITO-185-X: bound license:gate lives in useAppBoot; its failOpen timeout keeps post-boot Loading finite.
   // This is deliberately an opaque main-owned capability. Until main provides a verified allowlisted
   // consequence, the right edge lets the user cancel it but will never invite confirmation blind.
   const [commandState, setCommandState] = useState<MetisCommandState>({ proposalId: null })
