@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  captureSingleWindowSource,
   createKeyedSingleFlight,
   getScreenSourcesWithRetry,
+  assertSingleWindowCaptureTarget,
   isScreenCapturePermissionError,
   isUsableScreenSource,
   needsAppRelaunchForScreenCapture,
@@ -79,5 +81,40 @@ describe('screen capture source recovery', () => {
 
     expect(isScreenCapturePermissionError(off)).toBe(true)
     expect(needsAppRelaunchForScreenCapture(off)).toBe(false)
+  })
+
+  it('OCR single-window capture rejects display and region targets before asking the OS for sources', async () => {
+    const getSources = vi.fn(async () => [])
+    expect(() => assertSingleWindowCaptureTarget({ kind: 'display', id: 'screen:1' })).toThrow(/requires one target window/i)
+    await expect(captureSingleWindowSource({ kind: 'region', id: 'r1' }, getSources)).rejects.toThrow(/requires one target window/i)
+    expect(getSources).not.toHaveBeenCalled()
+  })
+
+  it('OCR single-window capture requests only window sources and captures only the selected target', async () => {
+    const png = Buffer.from('png')
+    const makeWindow = (id: string, text: string) => ({
+      id,
+      name: text,
+      thumbnail: {
+        getSize: () => ({ width: 640, height: 360 }),
+        toPNG: () => Buffer.from(`${text}:${png.toString('utf8')}`)
+      }
+    })
+    const getSources = vi.fn(async () => [
+      makeWindow('window:overlap', 'overlap'),
+      makeWindow('window:target', 'target'),
+      makeWindow('window:banner', 'banner')
+    ])
+
+    const capture = await captureSingleWindowSource({ kind: 'window', id: 'window:target' }, getSources, () => 123)
+
+    expect(getSources).toHaveBeenCalledWith({ types: ['window'], thumbnailSize: { width: 1280, height: 1280 } })
+    expect(capture).toEqual({
+      image: Buffer.from('target:png').toString('base64'),
+      width: 640,
+      height: 360,
+      capturedAt: 123,
+      targetWindowId: 'window:target'
+    })
   })
 })

@@ -38,6 +38,7 @@ import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { app } from 'electron'
 import { z } from 'zod'
+import { OcrResultSchema, type OcrResult as OcrWordsResult } from '@shared/contracts/ocr'
 import { mainLog } from './logger'
 
 const OCR_TIMEOUT_MS = 8_000
@@ -68,6 +69,8 @@ export interface OcrResult {
   height: number
   lines: OcrLine[]
 }
+
+export type MacOcrWordsResult = OcrWordsResult
 
 export interface ProcessIdentity {
   pid: number
@@ -137,6 +140,11 @@ export function macCodeIdentitySpawnSpec(path: string): { command: string; args:
 export function macBundleCopiesSpawnSpec(bundleId: string): { command: string; args: string[] } | null {
   if (!macHelperPresent()) return null
   return { command: macHelperPath(), args: ['bundle-copies', bundleId] }
+}
+
+export function macOcrWordsSpawnSpec(): { command: string; args: string[] } | null {
+  if (!macHelperPresent()) return null
+  return { command: macHelperPath(), args: ['ocr-words', '-'] }
 }
 
 /** Flag `diagnostics.stall_sampler` (ARCHITECTURE C15). false restores the pre-M2-0192 boot exactly: no
@@ -457,4 +465,59 @@ export function extractScreenText(imageB64: string): Promise<string | null> {
     })
     proc.stdin?.end(Buffer.from(imageB64, 'base64'))
   })
+}
+
+export function extractScreenOcrWords(image: Buffer, timeoutMs = OCR_TIMEOUT_MS): {
+  result: Promise<MacOcrWordsResult>
+  kill: () => void
+} | null {
+  const spec = macOcrWordsSpawnSpec()
+  if (!spec) return null
+  let proc: ReturnType<typeof spawn>
+  try {
+    proc = spawn(spec.command, spec.args, { stdio: ['pipe', 'pipe', 'pipe'] })
+  } catch (e) {
+    mainLog.warn('[mac-helper] ocr-words spawn failed', e instanceof Error ? e.message : String(e))
+    return null
+  }
+  let killed = false
+  const result = new Promise<MacOcrWordsResult>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      killed = true
+      proc.kill('SIGKILL')
+      reject(new Error('ocr-words deadline'))
+    }, timeoutMs)
+    let stdout = ''
+    let stderr = ''
+    proc.stdout?.on('data', (chunk: Buffer) => (stdout += chunk.toString('utf8')))
+    proc.stderr?.on('data', (chunk: Buffer) => (stderr += chunk.toString('utf8')))
+    proc.once('error', (e) => {
+      clearTimeout(timer)
+      reject(e)
+    })
+    proc.once('close', (code) => {
+      clearTimeout(timer)
+      if (killed) return
+      if (code !== 0) {
+        reject(new Error(stderr.trim() || `ocr-words exited ${code}`))
+        return
+      }
+      try {
+        resolve(OcrResultSchema.parse(JSON.parse(stdout)))
+      } catch (e) {
+        reject(e)
+      }
+    })
+    proc.stdin?.on('error', () => {
+      /* helper died before reading all input — close/error settles */
+    })
+    proc.stdin?.end(image)
+  })
+  return {
+    result,
+    kill: () => {
+      killed = true
+      proc.kill('SIGKILL')
+    }
+  }
 }

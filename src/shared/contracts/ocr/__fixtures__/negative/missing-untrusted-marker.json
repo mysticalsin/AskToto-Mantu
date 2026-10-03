@@ -1,0 +1,7 @@
+{
+  "image": { "width": 900, "height": 500 },
+  "coverage": "VISIBLE_ONLY",
+  "truncated": { "lines": false, "words": false },
+  "lines": [],
+  "words": []
+}

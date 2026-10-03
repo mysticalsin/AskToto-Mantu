@@ -758,6 +758,7 @@ case "watch-frontmost":
     watchFrontmost()
 case "ocr":
     runOcr(inputPath: arguments.count >= 3 ? arguments[2] : "-")
+case "ocr-words": runOcrWords(inputPath: arguments.count >= 3 ? arguments[2] : "-")
 case "transcribe":
     guard arguments.count >= 3 else {
         fail("usage: metis-mac-helper transcribe <wav-path> [locale]")

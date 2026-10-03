@@ -11,6 +11,30 @@ export type ScreenSourceLike = {
   thumbnail: { getSize(): { width: number; height: number } }
 }
 
+export type CaptureSourceKind = 'window' | 'display' | 'region'
+
+export type SingleWindowCaptureTarget = {
+  kind: CaptureSourceKind
+  id: string
+}
+
+export type SingleWindowCaptureSource = ScreenSourceLike & {
+  id: string
+  name?: string
+  thumbnail: ScreenSourceLike['thumbnail'] & {
+    resize?(size: { width: number; height: number }): SingleWindowCaptureSource['thumbnail']
+    toPNG(): Buffer
+  }
+}
+
+export type CapturedWindowImage = {
+  image: string
+  width: number
+  height: number
+  capturedAt: number
+  targetWindowId: string
+}
+
 type RetryOptions = {
   attempts?: number
   wait?: (ms: number) => Promise<void>
@@ -23,6 +47,49 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 export function isUsableScreenSource(source: ScreenSourceLike): boolean {
   const { width, height } = source.thumbnail.getSize()
   return width > 0 && height > 0
+}
+
+export function assertSingleWindowCaptureTarget(target: SingleWindowCaptureTarget): void {
+  if (target.kind !== 'window') {
+    throw new Error('OCR capture requires one target window; display and region sources are not accepted.')
+  }
+  if (!target.id.trim()) throw new Error('OCR capture requires a target window id.')
+}
+
+export async function captureSingleWindowSource(
+  target: SingleWindowCaptureTarget,
+  getSources: (options: {
+    types: ['window']
+    thumbnailSize: { width: number; height: number }
+  }) => Promise<SingleWindowCaptureSource[]>,
+  now: () => number = Date.now
+): Promise<CapturedWindowImage> {
+  assertSingleWindowCaptureTarget(target)
+  const sources = await getScreenSourcesWithRetry(
+    () => getSources({ types: ['window'], thumbnailSize: { width: 1280, height: 1280 } }),
+    isUsableScreenSource
+  )
+  const source = sources.find((candidate) => candidate.id === target.id)
+  if (!source) throw new Error('The selected window changed before Métis could capture it. Try again.')
+  let image = source.thumbnail
+  const size = image.getSize()
+  const maxEdge = Math.max(size.width, size.height)
+  if (maxEdge > 1280 && image.resize) {
+    const scale = 1280 / maxEdge
+    image = image.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)) })
+  }
+  const finalSize = image.getSize()
+  const png = image.toPNG()
+  if (finalSize.width < 1 || finalSize.height < 1 || png.length < 1) {
+    throw new Error('Window capture returned an empty image. Try again in a moment.')
+  }
+  return {
+    image: png.toString('base64'),
+    width: finalSize.width,
+    height: finalSize.height,
+    capturedAt: now(),
+    targetWindowId: target.id
+  }
 }
 
 /**

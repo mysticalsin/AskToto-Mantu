@@ -125,8 +125,21 @@ jobs:
       # Never bare `swift test` (M2-0190): the wrapper provides the sandboxed HOME that HermeticHomeTests asserts.
       - name: MetisKit swift test
         run: bash scripts/hermetic/run-swift-tests.sh native-app/MetisKit
-      - name: mac-helper behavioural tests
+      - name: mac-helper behavioural tests (all helper sources)
         run: bash native/mac-helper/Tests/run-helper-tests.sh
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - name: macOS OCR single-window capture row
+        shell: bash
+        run: |
+          helper="$RUNNER_TEMP/metis-mac-helper"
+          swift_sources=()
+          while IFS= read -r path; do swift_sources+=("$path"); done < <(find native/mac-helper -maxdepth 1 -name '*.swift' -print | sort)
+          swiftc -O -o "$helper" "${swift_sources[@]}"
+          npx electron native/mac-helper/Tests/electron-single-window-ocr-row.cjs "$helper"
       - name: Install xcodegen
         run: brew install xcodegen
       - name: Generate the Xcode project

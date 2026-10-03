@@ -138,7 +138,6 @@ import {
   resetProviderHealth,
   unhealthyProviders
 } from './llm/provider-health'
-
 /** Wave 2 — session-scoped last successful failover hop for the one-shot UI chip. Never persisted. */
 let lastFailoverNotice: { from: string; to: string; at: number; reason: string } | null = null
 export function peekLastFailoverNotice(): typeof lastFailoverNotice {
@@ -178,6 +177,7 @@ import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import { registerWriteupIpc } from './ipc/writeup'
 import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText, macStallWatchCommand } from './mac-helper'
+import type { runInteractionWindowOcr as runInteractionWindowOcrEntrypoint } from './features/ocr/electron'
 import * as screenPerm from './capture-permissions/screen-permission-runtime'
 import { isOrphanScreenSourcesRejection } from './capture-permissions/loopback-grant'
 import { registerScreenPermissionIpc } from './ipc/screen-permission-ipc'
@@ -4097,7 +4097,6 @@ async function captureScreenshotOnce(displayId: number): Promise<CapturedScreen>
 
 /** Share a native capture only between pre-warm and click requests for the same display. */
 const captureScreenshot = createKeyedSingleFlight<number, CapturedScreen>(captureScreenshotOnce)
-
 /** The one wording for the one promise. getScreenshot() throws it when Private View blocks a LIVE capture;
  *  IPC.askStart sends it verbatim when it refuses an already-captured frame (MQA-182). Keeping both on the
  *  same string is what lets the renderer's /private view/i copy paths recognise either one. */
