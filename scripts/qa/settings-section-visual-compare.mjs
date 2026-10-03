@@ -32,6 +32,7 @@ const SETTINGS_STABLE_TIMEOUT_MS = 12_000
 const SETTINGS_STABLE_SAMPLE_MS = 250
 const SETTINGS_STABLE_SAMPLES = 3
 const SECTION_SCREENSHOT_ATTEMPTS = 3
+const SETTINGS_VISUAL_RANDOM_SEED = 0x5e77195
 const PNG_SIGNATURE = '89504e470d0a1a0a'
 const CHILD_EXIT_TIMEOUT_MS = 10_000
 const CHILD_KILL_TIMEOUT_MS = 5_000
@@ -62,6 +63,14 @@ function slug(value) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function createSeededRandom(seed) {
+  let state = seed >>> 0
+  return () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0
+    return state / 0x100000000
+  }
 }
 
 async function waitForChildExit(child, timeoutMs) {
@@ -178,10 +187,29 @@ async function captureStableSectionScreenshot(page, section, tabPanel, file) {
 }
 
 async function installDeterministicSettingsQaBridge(page) {
-  const skipped = await page.evaluate((stabilizerCss) => {
+  const skipped = await page.evaluate(({ randomSeed, stabilizerCss }) => {
     if (!window.__metisSettingsVisualQa) {
       Object.defineProperty(window, '__metisSettingsVisualQa', { value: true, configurable: true })
       const fixedNow = 1_000
+      const makeRandom = () => {
+        let state = randomSeed >>> 0
+        return () => {
+          state = (Math.imul(state, 1664525) + 1013904223) >>> 0
+          return state / 0x100000000
+        }
+      }
+      Object.defineProperty(window, '__metisSettingsVisualQaResetRandom', {
+        value: () => {
+          const seededRandom = makeRandom()
+          try {
+            Object.defineProperty(Math, 'random', { value: seededRandom, configurable: true })
+          } catch {
+            Math.random = seededRandom
+          }
+        },
+        configurable: true
+      })
+      window.__metisSettingsVisualQaResetRandom()
       try {
         Object.defineProperty(performance, 'now', { value: () => fixedNow, configurable: true })
       } catch {
@@ -258,10 +286,16 @@ async function installDeterministicSettingsQaBridge(page) {
     define('onUpdateReady', () => () => undefined)
     define('onUpdateError', () => () => undefined)
     return skippedNames
-  }, SETTINGS_VISUAL_STABILIZER_CSS)
+  }, { randomSeed: SETTINGS_VISUAL_RANDOM_SEED, stabilizerCss: SETTINGS_VISUAL_STABILIZER_CSS })
   if (skipped.length > 0) {
     console.warn(`settings-section-visual-compare warning=bridge overrides skipped members=${skipped.join(',')}`)
   }
+}
+
+async function resetDeterministicSettingsQaRandom(page) {
+  await page.evaluate(() => {
+    window.__metisSettingsVisualQaResetRandom?.()
+  })
 }
 
 function setQaBridgeMember(api, name, value) {
@@ -426,6 +460,7 @@ async function captureSections(page, appOutDir) {
   const sections = []
 
   for (const tab of tabs) {
+    await resetDeterministicSettingsQaRandom(page)
     await page.getByRole('tab', { name: tab, exact: true }).click()
     await page.getByRole('tabpanel').waitFor({ timeout: SETTINGS_TIMEOUT_MS })
     const stable = await waitForStableSettingsPanel(page)
@@ -624,4 +659,4 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   })
 }
 
-export { compare, fitsInside, formatFailureSummary, pngSize, removeProfileDir, screenshotCoversBox, sectionCaptureClipped, sectionViewportHeight, setQaBridgeMember }
+export { compare, createSeededRandom, fitsInside, formatFailureSummary, pngSize, removeProfileDir, screenshotCoversBox, sectionCaptureClipped, sectionViewportHeight, setQaBridgeMember }

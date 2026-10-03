@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   compare,
+  createSeededRandom,
   fitsInside,
   formatFailureSummary,
   pngSize,
@@ -181,6 +182,17 @@ describe('settings-section-visual-compare compare', () => {
 
     expect(setQaBridgeMember(api, 'checkForUpdate', replacement)).toBe(false)
     expect(api.checkForUpdate).toBe(original)
+  })
+
+  it('uses repeatable seeded randomness for canvas-backed Settings previews', () => {
+    const first = createSeededRandom(0x5e77195)
+    const second = createSeededRandom(0x5e77195)
+    const different = createSeededRandom(0x5e77196)
+
+    const firstSamples = [first(), first(), first(), first()]
+    expect(firstSamples).toEqual([second(), second(), second(), second()])
+    expect(firstSamples).not.toEqual([different(), different(), different(), different()])
+    expect(firstSamples.every((sample) => sample >= 0 && sample < 1)).toBe(true)
   })
 
   it('retries transient Windows profile cleanup locks without failing the visual comparison', async () => {
