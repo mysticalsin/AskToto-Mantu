@@ -27,6 +27,9 @@ on:
       - scripts/qa/st-1.mjs
       - scripts/qa/lib/st-1-core.mjs
       - scripts/qa/stat-flags-fixture.sh
+      - scripts/hermetic/prove-owner-sandbox.sh
+      - scripts/hermetic/run-under-owner-sandbox.sh
+      - scripts/hermetic/owner-account.sb
       # The boot path ST-1 measures (M2-0433), so every fix slice on it gets a QA self-test.
       - src/main/boot-tray.ts
       - src/main/boot-window-rendering.ts
@@ -495,13 +498,18 @@ jobs:
   st1-mac-fifo:
     name: ST-1 fifo stall row (macOS)
     needs: provenance
-    runs-on: macos-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, macOS, ARM64, metis-owner-mac]
     timeout-minutes: 20
     continue-on-error: true
+    env:
+      TMPDIR: ${{ runner.temp }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+      - name: Prove owner-account sandbox denies private state
+        run: bash scripts/hermetic/prove-owner-sandbox.sh
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.22.3
@@ -514,7 +522,7 @@ jobs:
           name: candidate-mac-qa-identity
           path: assets
       - name: Verify every byte against the provenance
-        run: node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
+        run: bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
       - name: Measure packaged stall resilience
         continue-on-error: true
         run: |
@@ -524,12 +532,24 @@ jobs:
             echo "::error::candidate-mac-qa-identity did not contain a zip installer for ST-1."
             exit 1
           fi
-          node scripts/qa/st-1.mjs \
+          bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/st-1.mjs \
             --installer "$installer" \
             --provenance provenance/provenance.json \
             --fixtures fifo \
             --minutes 5 \
             --out st1-report/st-1-macos-fifo.json
+      - name: Remove ST-1 temporary state
+        if: always()
+        run: |
+          rm -rf \
+            "$RUNNER_TEMP"/metis-st1-* \
+            "$RUNNER_TEMP"/st1-unzip-* \
+            "$RUNNER_TEMP"/st1-witness-* \
+            "$HOME/Library/Logs/asktoto-qa" \
+            "$HOME/Library/Preferences/com.mantu.asktoto.qa.plist" \
+            "$HOME/Library/Saved Application State/com.mantu.asktoto.qa.savedState" \
+            "$HOME/Library/Caches/com.mantu.asktoto.qa"
+          security delete-generic-password -s "asktoto-qa Safe Storage" || true
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
@@ -683,13 +703,18 @@ jobs:
   st1-mac-control:
     name: ST-1 control (no fixtures)
     needs: provenance
-    runs-on: macos-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, macOS, ARM64, metis-owner-mac]
     timeout-minutes: 20
     continue-on-error: true
+    env:
+      TMPDIR: ${{ runner.temp }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+      - name: Prove owner-account sandbox denies private state
+        run: bash scripts/hermetic/prove-owner-sandbox.sh
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.22.3
@@ -702,7 +727,7 @@ jobs:
           name: candidate-mac-qa-identity
           path: assets
       - name: Verify every byte against the provenance
-        run: node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
+        run: bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
       - name: Measure the packaged app with no fixture
         continue-on-error: true
         run: |
@@ -712,12 +737,24 @@ jobs:
             echo "::error::candidate-mac-qa-identity did not contain a zip installer for ST-1."
             exit 1
           fi
-          node scripts/qa/st-1.mjs \
+          bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/st-1.mjs \
             --installer "$installer" \
             --provenance provenance/provenance.json \
             --fixtures none \
             --minutes 5 \
             --out st1-report/st-1-macos-none.json
+      - name: Remove ST-1 temporary state
+        if: always()
+        run: |
+          rm -rf \
+            "$RUNNER_TEMP"/metis-st1-* \
+            "$RUNNER_TEMP"/st1-unzip-* \
+            "$RUNNER_TEMP"/st1-witness-* \
+            "$HOME/Library/Logs/asktoto-qa" \
+            "$HOME/Library/Preferences/com.mantu.asktoto.qa.plist" \
+            "$HOME/Library/Saved Application State/com.mantu.asktoto.qa.savedState" \
+            "$HOME/Library/Caches/com.mantu.asktoto.qa"
+          security delete-generic-password -s "asktoto-qa Safe Storage" || true
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
