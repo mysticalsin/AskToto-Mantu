@@ -157,8 +157,7 @@ Before upload, make sure `electron-builder.yml` `appx.identityName`, `appx.publi
 Use `build/managed-config.enterprise.example.json` as the operator-owned policy base. It enables and locks:
 
 - Azure SSO.
-- Hosted license server.
-- License gate.
+- Hosted license server URL.
 - Provider policy.
 - Transcript encryption.
 - Redaction.
@@ -166,10 +165,12 @@ Use `build/managed-config.enterprise.example.json` as the operator-owned policy 
 - Consent indicator.
 - Retention window.
 
+The license gate is not part of this list. Device licensing is compiled off until the licensing tickets re-enable and verify it end to end, so `licenseGateEnabled` is omitted from the example and activates nothing.
+
 Deploy the filled file as `managed-config.json` to:
 
 - macOS: `/Library/Application Support/Métis/managed-config.json`
-- Windows: `%ProgramData%\Métis\managed-config.json`
+- Windows: `%ProgramData%\Métis\managed-config.json` (the only Windows path the app reads, `adminManagedConfigPath`)
 
 Machine-wide policy wins over per-user config.
 

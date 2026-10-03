@@ -62,6 +62,7 @@ import {
   type ImportAudioProgress,
   type ImportAssetsProgress,
   type HistorySettled,
+  type HistoryTransition,
   type AppleEngineStatus,
   type WriteupSpanPayload,
   type HistoryTrace,
@@ -78,6 +79,7 @@ import {
 import type { ScreenRepairResult } from '@shared/screen-permission'
 import type { ProviderId } from '@shared/providers'
 import type { RecapStatus } from '@shared/recap-status'
+import type { RecallHydration } from '@shared/recall-hydration'
 
 type Unsub = () => void
 function sub<T>(channel: string, cb: (payload: T) => void): Unsub {
@@ -335,6 +337,9 @@ const api = {
   recallSearch: (q: string): Promise<RecallHit[]> => ipcRenderer.invoke(IPC.recallSearch, q),
   recallOpen: (file: string): Promise<string> => ipcRenderer.invoke(IPC.recallOpen, file),
   recallRead: (file: string): Promise<RecallReadResult> => ipcRenderer.invoke(IPC.recallRead, file),
+  // An explicit recallRead/recallOpen downloading one cloud-only meeting: hydrating, then done or failed.
+  // LEAD_ACTION: M2-0032 consumes the hydration progress event and MeetingSummary.notDownloaded
+  onRecallHydration: (cb: (d: RecallHydration) => void): Unsub => sub(IPC.recallHydration, cb),
   // User-initiated decrypted markdown copy of ONE saved meeting (native save dialog in main). Exists so
   // external tools (e.g. Claude local ingesting into the second brain) can read a meeting even when
   // at-rest encryption is on.
@@ -469,6 +474,7 @@ const api = {
   // A caught render-throw (ErrorBoundary) — fire-and-forget, best-effort. Main persists it to disk (same
   // sink as a main-process crash) so a field report survives without ASKTOTO_DEBUG_RENDERER devtools.
   reportHistorySettled: (settled: HistorySettled): Promise<void> => ipcRenderer.invoke(IPC.historySettled, settled),
+  reportHistoryTransition: (transition: HistoryTransition): Promise<void> => ipcRenderer.invoke(IPC.historyTransition, transition),
   reportCrash: (report: RendererCrashReport): Promise<void> => ipcRenderer.invoke(IPC.rendererCrash, report),
   hide: (): Promise<void> => ipcRenderer.invoke(IPC.windowHide),
   toggle: (): Promise<void> => ipcRenderer.invoke(IPC.windowToggle),
