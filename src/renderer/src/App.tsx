@@ -98,7 +98,7 @@ import {
   retireRecapWriteKeys
 } from './lib/recap-write-coordinator'
 import { playCue, playClick, setSoundsEnabled } from './lib/sound'
-import { DEFAULT_SHORTCUTS } from '@shared/ipc'
+import { DEFAULT_SHORTCUTS, ASK_MEMORY_IDLE_MS } from '@shared/ipc'
 import { applyCaveman, DEFAULT_ASK_CAVEMAN } from '@shared/caveman-ask'
 import type { HotkeyAction, TranscriptLine, ConversationMode, ChatTurn, MetisCommandState } from '@shared/ipc'
 import type { RecapStatus } from '@shared/recap-status'
@@ -1399,7 +1399,11 @@ export function App(): JSX.Element {
         // current window, answer from it WITHOUT capturing or uploading an image — main injects the cached
         // description (+ recent audio) into a mode:'answer' ask. Needs an answer-capable provider, since
         // mode:'answer' isn't local-scoped; a local-only setup falls through to the live vision path below.
-        if ((settings?.backgroundScreenContext ?? false) && settings?.providerReady) {
+        const memoryLive =
+          (settings?.askFollowUpMemory ?? false) &&
+          Date.now() - lastTurnAtRef.current <= ASK_MEMORY_IDLE_MS
+        const priorAnswerOk = !!ask.answer?.text && !ask.answer.error && memoryLive
+        if ((settings?.backgroundScreenContext ?? false) && settings?.providerReady && priorAnswerOk) {
           try {
             const ctx = await window.toto.screenContext()
             if (ctx) {
@@ -1477,7 +1481,16 @@ export function App(): JSX.Element {
         setCapturing(false)
       }
     },
-    [ask.run, requireProvider, settings?.backgroundScreenContext, settings?.providerReady, listen]
+    [
+      ask.run,
+      requireProvider,
+      settings?.backgroundScreenContext,
+      settings?.providerReady,
+      settings?.askFollowUpMemory,
+      ask.answer?.text,
+      ask.answer?.error,
+      listen
+    ]
   )
 
   const assist = useCallback(async (): Promise<void> => {
