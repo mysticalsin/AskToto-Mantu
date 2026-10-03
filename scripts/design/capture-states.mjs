@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Screenshot every design-capture state in the real Electron renderer, in light/dark, 1x/2x and reduced
- * motion, and write manifest.json (state id, sha256, commit) beside the images.
+ * motion, and write manifest.json (state id, sha256, commit and audit results) beside the images.
  *
  * Needs a renderer built with METIS_DESIGN_CAPTURE=1 (out/renderer/design-capture.html). CI-only: the
  * design-capture workflow runs it and uploads the output directory as an artifact.
@@ -24,7 +24,6 @@ const VIEWPORT = { width: 960, height: 640 }
 const READY_TIMEOUT_MS = 15_000
 const auditScript = join(here, 'capture-audit.mjs')
 const NEGATIVE_CONTROL_STATE = 'audit-negative-control'
-const NEGATIVE_CONTROL_ROW = { theme: 'light', scale: 1, motion: 'reduce' }
 
 if (!existsSync(html)) {
   throw new Error(`Missing ${html}: build the renderer with METIS_DESIGN_CAPTURE=1 first`)
@@ -89,7 +88,7 @@ try {
   })
 
   for (const theme of ['light', 'dark']) {
-    await page.emulateMedia({ colorScheme: theme, reducedMotion: NEGATIVE_CONTROL_ROW.motion })
+    await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' })
     await page.goto(`${pageUrl}?state=${encodeURIComponent(NEGATIVE_CONTROL_STATE)}`)
     await page.waitForSelector('html[data-capture-ready="1"]', { timeout: READY_TIMEOUT_MS })
     let audit
