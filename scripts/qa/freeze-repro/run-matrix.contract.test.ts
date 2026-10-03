@@ -106,17 +106,25 @@ function runClosedStdin(args: string[], env: NodeJS.ProcessEnv): Promise<{ statu
 }
 
 /** Stub app, macOS tools and process table for a hosted-live run on any CI host. */
-function hostedStubs(root: string, { sampleFails = false } = {}) {
+function hostedStubs(root: string, { sampleFails = false, secondLaunchKillsFirst = false } = {}) {
   const bin = join(root, 'bin')
   mkdirSync(bin, { recursive: true })
   const app = join(root, 'Metis')
   const sampleLog = join(root, 'sampled-pids.txt')
   const openLog = join(root, 'open-calls.txt')
-  writeExecutable(app, '#!/usr/bin/env bash\nfor arg in "$@"; do [ "$arg" = "-e" ] && exit 0; done\nexec sleep 120\n')
+  const firstPid = join(root, 'first-app-pid.txt')
+  writeExecutable(app, `#!/usr/bin/env bash\nfor arg in "$@"; do [ "$arg" = "-e" ] && exit 0; done\nprintf '%s\\n' "$$" > '${bashPath(firstPid)}'\nexec sleep 120\n`)
   writeExecutable(join(root, 'sample'), sampleFails
     ? '#!/usr/bin/env bash\nexit 1\n'
     : `#!/usr/bin/env bash\nprintf '%s\\n' "$1" >> '${bashPath(sampleLog)}'\nprintf 'Sampling process %s for 10 seconds\\nBinary: %s/Applications/Metis.app\\n' "$1" "$HOME" > "$4"\n`)
-  writeExecutable(join(root, 'open'), `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> '${bashPath(openLog)}'\n`)
+  writeExecutable(join(root, 'open'), [
+    '#!/usr/bin/env bash',
+    `printf '%s\\n' "$*" >> '${bashPath(openLog)}'`,
+    secondLaunchKillsFirst
+      ? `case " $* " in *" -n "*) [ ! -s '${bashPath(firstPid)}' ] || kill -9 "$(cat '${bashPath(firstPid)}')" 2>/dev/null || true ;; esac`
+      : ':',
+    ''
+  ].join('\n'))
   writeExecutable(join(bin, 'pgrep'), `#!/usr/bin/env bash\nprintf '%s\\n' ${Object.keys(CHILD_ROLES).join(' ')}\n`)
   writeExecutable(join(bin, 'ps'), [
     '#!/usr/bin/env bash',
@@ -609,6 +617,42 @@ describe('M2-0462 hosted-live mode', () => {
       const summary = JSON.parse(readFileSync(join(out, 'hosted-live-summary.json'), 'utf8'))
       expect(summary).toMatchObject({ reproduced: true, symptom_rows: ['row-1-history-open'] })
       expect(summary.conclusion).toMatch(/^reproduced:/)
+      expect(m2_0008BundleProblems(out)).toEqual([])
+    } finally {
+      await devtools.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  it('runs process-signal before row 4 and relaunches when the second instance kills the first main process', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'm2-0556-hosted-'))
+    const out = join(root, 'bundle')
+    const devtools = await fakeDevTools()
+    try {
+      const stubs = hostedStubs(root, { secondLaunchKillsFirst: true })
+      const result = await runClosedStdin(hostedArgs(out, stubs.app), hostedEnv(root, stubs, devtools.port))
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)
+
+      const interrupts = jsonl(join(out, 'interrupt-results.jsonl'))
+      expect(interrupts.find((entry) => entry.interrupt === 'process-signal'))
+        .toMatchObject({ automatic: true, result: 'pass', signal: 'TERM', exited_within_10s: true })
+
+      const matrix = jsonl(join(out, 'matrix.jsonl'))
+      const row4 = matrix.find((entry) => entry.row === 'row-4-second-instance-reopen' && 'operator_result' in entry)
+      expect(row4).toMatchObject({
+        automatic: true,
+        operator_result: 'pass',
+        first_instance: { state_after_second_launch: 'main-exited' },
+        second_instance: { launch_status: 'open-exited-zero' },
+        relaunched_after_first_exit: true
+      })
+      expect(matrix.find((entry) => entry.row === 'row-4-second-instance-reopen' && entry.event === 'main_exited'))
+        .toMatchObject({ signal: 'KILL', when: 'after-second-instance-launch' })
+      expect(matrix.find((entry) => entry.row === 'row-4-second-instance-reopen' && 'sampled' in entry))
+        .toMatchObject({ sampled: true, main_sample: true, renderer_samples: 1 })
+      expect(JSON.parse(readFileSync(join(out, 'M2-0008.evidence-import.json'), 'utf8')))
+        .toMatchObject({ result: 'PASS', sample_failures: 0, matrix_result_failures: 0, interrupt_result_failures: 0 })
       expect(m2_0008BundleProblems(out)).toEqual([])
     } finally {
       await devtools.close()
