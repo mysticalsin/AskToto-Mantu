@@ -271,6 +271,8 @@ export function syntheticDatalessPlan() {
  *  BOOT_WINDOW_VARIANTS, M2-0516). An ST-1 run always launches 'shipped'. */
 export const WINDOW_VARIANTS = ['shipped', 'spellcheck-off', 'paint-when-hidden', 'prewarm-spellchecker']
 
+export const WINDOW_MEASURED_VARIANT_ORDER = ['spellcheck-off', 'paint-when-hidden', 'prewarm-spellchecker', 'shipped']
+
 /** The only purpose besides ST-1 itself: a short launch that measures the window constructor under one variant. */
 export const WINDOW_CONSTRUCTION = 'window-construction'
 
@@ -334,8 +336,9 @@ export const WINDOW_CONSTRUCTION_ROOT_CAUSE = {
 }
 
 /** The CI launch order for window construction. The shipped warm-up launches keep the original first-run
- * profile setup ahead of the measured rotation; measured repeats stay interleaved by repeat, variant and chrome. */
-export function windowConstructionPlan({ variants = WINDOW_VARIANTS, chromes = WINDOW_CHROMES, repeats = WINDOW_MEASURED_REPEATS } = {}) {
+ * profile setup ahead of the measured rotation; measured repeats stay interleaved by repeat, variant and chrome,
+ * with shipped measured last in each repeat. */
+export function windowConstructionPlan({ variants = WINDOW_MEASURED_VARIANT_ORDER, chromes = WINDOW_CHROMES, repeats = WINDOW_MEASURED_REPEATS } = {}) {
   const repeatNumbers = Array.from({ length: repeats }, (_, i) => i + 1)
   return [
     ...chromes.map((chrome) => ({ name: `window-warmup-shipped-${chrome}`, variant: 'shipped', chrome, warmup: true })),

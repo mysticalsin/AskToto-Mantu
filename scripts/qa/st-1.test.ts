@@ -7,6 +7,7 @@ import {
   PENDING_GLOBAL,
   STORAGE_SATURATED_LOG,
   WINDOW_CHROMES,
+  WINDOW_MEASURED_VARIANT_ORDER,
   WINDOW_MEASURED_REPEATS,
   WINDOW_STAGE_BUDGET_MS,
   WINDOW_VARIANTS,
@@ -360,15 +361,37 @@ describe('window-construction runs (M2-0516)', () => {
     expect(plan[0]).toEqual({ name: 'window-warmup-shipped-opaque', variant: 'shipped', chrome: 'opaque', warmup: true })
     expect(plan[1]).toEqual({ name: 'window-warmup-shipped-transparent', variant: 'shipped', chrome: 'transparent', warmup: true })
     expect(warmups.every((warmup) => plan.indexOf(warmup) < plan.findIndex((entry) => !entry.warmup))).toBe(true)
+    expect([...WINDOW_MEASURED_VARIANT_ORDER].sort()).toEqual([...WINDOW_VARIANTS].sort())
     for (const warmup of warmups) {
       const firstMeasured = plan.findIndex((entry) => !entry.warmup && entry.variant === warmup.variant && entry.chrome === warmup.chrome)
       expect(firstMeasured).toBeGreaterThan(plan.indexOf(warmup))
     }
-    expect(measured.map((entry) => entry.name)).toEqual(
-      Array.from({ length: WINDOW_MEASURED_REPEATS }, (_, repeat) => repeat + 1).flatMap((repeat) =>
-        WINDOW_VARIANTS.flatMap((variant) => WINDOW_CHROMES.map((chrome) => `window-${variant}-${chrome}-${repeat}`))
-      )
-    )
+    expect(windowConstructionPlan().map((entry) => entry.name)).toEqual([
+      'window-warmup-shipped-opaque',
+      'window-warmup-shipped-transparent',
+      'window-spellcheck-off-opaque-1',
+      'window-spellcheck-off-transparent-1',
+      'window-paint-when-hidden-opaque-1',
+      'window-paint-when-hidden-transparent-1',
+      'window-prewarm-spellchecker-opaque-1',
+      'window-prewarm-spellchecker-transparent-1',
+      'window-shipped-opaque-1',
+      'window-shipped-transparent-1',
+      'window-spellcheck-off-opaque-2',
+      'window-spellcheck-off-transparent-2',
+      'window-paint-when-hidden-opaque-2',
+      'window-paint-when-hidden-transparent-2',
+      'window-prewarm-spellchecker-opaque-2',
+      'window-prewarm-spellchecker-transparent-2',
+      'window-shipped-opaque-2',
+      'window-shipped-transparent-2'
+    ])
+    for (const repeat of [1, 2]) {
+      expect(measured.filter((entry) => entry.name.endsWith(`-${repeat}`)).slice(-2).map((entry) => entry.name)).toEqual([
+        `window-shipped-opaque-${repeat}`,
+        `window-shipped-transparent-${repeat}`
+      ])
+    }
   })
 
   it('is the launch order the qa-candidate workflow runs', () => {
