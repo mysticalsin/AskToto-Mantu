@@ -169,3 +169,26 @@
   --pass-glass: #1a0033;
   --pass-glass-lift: #291050;
 }
+
+/* QA-only design-capture surface (design-capture.html): light by default and dark under
+   prefers-color-scheme, so the capture job's colour-scheme emulation decides the theme. */
+.design-capture {
+  --dc-bg: #f4f2f8;
+  --dc-card: #ffffff;
+  --dc-ink: #1b1524;
+  --dc-ink-2: #4c4358;
+  --dc-hair: rgba(27, 21, 36, 0.14);
+  --dc-accent: #7f00da;
+  --dc-danger: #b3261e;
+}
+@media (prefers-color-scheme: dark) {
+  .design-capture {
+    --dc-bg: #0e0b14;
+    --dc-card: #1c1726;
+    --dc-ink: #f6f3fa;
+    --dc-ink-2: #c5bdd2;
+    --dc-hair: rgba(255, 255, 255, 0.16);
+    --dc-accent: #b388f0;
+    --dc-danger: #f0717a;
+  }
+}

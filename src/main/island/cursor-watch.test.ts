@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { anchorY, holdRegion, revealBand } from '@shared/right-edge-geometry'
 import {
   CURSOR_LEAVE_GRACE_PX,
   CURSOR_REVEAL_DWELL_MS,
@@ -401,6 +402,21 @@ describe('right-edge reveal band (owner report: right-edge Hide never revealed f
     expect(run({ x: drawer.x - 200, y: drawer.y + 10 }, true).action).toBe('park')
     // A reveal the pointer never visited (keyboard, tray) is not parked by the OS-hover latch.
     expect(run(AWAY, false).action).toBe('leave-ignored')
+  })
+
+  it('M2-0202: while revealed, the authority hold region decides the leave: band and drawer hold, elsewhere parks', () => {
+    const area = display.workArea
+    const a = anchorY(area)
+    expect(band).toEqual(revealBand(area, a))
+    const region = holdRegion(area, drawer, a, { gracePx: CURSOR_LEAVE_GRACE_PX })
+    const run = (cursor: { x: number; y: number }): ReturnType<typeof overlayWatchStep> =>
+      overlayWatchStep({ cursor, restRect: band, revealedRect: drawer, islandResting: false, windowVisible: true, osHoverSeen: true, placement: 'right-edge', holdRegion: region })
+    // Anywhere on the band, even far below the drawer, keeps the edge-revealed drawer open (no park/re-reveal loop).
+    expect(run({ x: area.x + area.width - 1, y: band.y + band.height - 1 }).action).toBe('stay')
+    expect(run({ x: drawer.x + 10, y: drawer.y + 10 }).action).toBe('stay')
+    expect(run({ x: drawer.x - 4, y: drawer.y + 10 }).action).toBe('stay')
+    expect(run({ x: drawer.x - 200, y: drawer.y + 10 }).action).toBe('park')
+    expect(run({ x: drawer.x + 40, y: drawer.y + drawer.height + 200 }).action).toBe('park')
   })
 
   it('scopes right-edge timing to the right edge and leaves the top-center constants unchanged', () => {
