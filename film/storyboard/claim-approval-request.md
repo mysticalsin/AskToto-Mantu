@@ -11,10 +11,10 @@ Approval to publish the launch film with the claims below. The register keeps `r
 
 | Claim | Scene | Appears as today | Evidence | Label on screen |
 |---|---|---|---|---|
-| CL-01 | LF-01 Cold open desktop overlay | Concept | Register design record | Concept UI sequence |
-| CL-02 | LF-02 Live meeting capture | Reconstruction | Register design record | Reconstruction |
+| CL-01 | LF-01 Overlay appears | Concept | Register design record | Concept UI sequence |
+| CL-02 | LF-02 Live capture and notes | Reconstruction | Register design record | Reconstruction |
 | CL-03 | LF-03 Hindsight memory recall | Concept | Register design record | Concept memory sequence |
-| CL-06 | LF-06 Toolchain proof card | Live, as render-path proof only | Toolchain spike record | None needed |
+| CL-06 | NP-05 Toolchain proof card | Live, as render-path proof only | Toolchain spike record | None needed |
 
 LF-04 (privacy assurance) and LF-05 (comparison montage) are cut. They return only with the exact verified privacy sentence, or with competitive qualification receipts, respectively.
 
