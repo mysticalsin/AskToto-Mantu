@@ -71,6 +71,10 @@ jobs:
           node-version: 22.22.3
           cache: npm
       - run: npm ci
+      - name: Contract fixture drift
+        run: |
+          node scripts/sync-contract-fixtures.mjs
+          git diff --exit-code
       - run: npm run typecheck
       # Anti-regression gate: every bug in docs/qa/BUG-LEDGER.md marked FIXED must be pinned by a
       # regression test that cites its MQA id, so a re-broken bug fails a named test instead of
