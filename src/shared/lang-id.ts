@@ -330,7 +330,3 @@ export function detectLanguages(text: string): DetectedLanguages {
   const mixed = langs.length >= 2
   return { primary, langs, mixed }
 }
-
-export function isWhisperLanguageName(name: string): name is LanguageName {
-  return (LANGUAGE_NAMES as readonly string[]).includes(name)
-}

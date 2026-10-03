@@ -79,10 +79,3 @@ export class NavigationGuardService {
     for (const listener of this.listeners) listener()
   }
 }
-
-export async function confirmNavigation(
-  service: NavigationGuardService,
-  input: Omit<NavigationGuardRequest, 'id'>
-): Promise<NavigationGuardChoice> {
-  return service.request(input)
-}

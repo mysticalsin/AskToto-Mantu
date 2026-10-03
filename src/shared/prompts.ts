@@ -176,7 +176,7 @@ Never invent facts, timelines, or numbers the transcript or background below doe
  * baked in at generation time). Style bans only — numbers, prices, dates, and names stay verbatim
  * from the transcript; recap fidelity always beats polish.
  */
-export const HUMAN_STYLE = `
+const HUMAN_STYLE = `
 
 WRITING STYLE: busy managers read this; it must read like a sharp colleague wrote it, not an AI:
 - Never use: delve, dive into, leverage, robust, comprehensive, seamless, scalable, cutting-edge, best-in-class, world-class, innovative, synergy, ecosystem, paradigm, learnings, furthermore, moreover, additionally, "it's worth noting", "it's important to note", "in conclusion", "at the end of the day", "moving forward", "going forward", "in terms of", "when it comes to", "at its core", "plays a crucial role", "is a testament to", "paves the way".
