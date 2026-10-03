@@ -325,6 +325,7 @@ const clickTranscriptControl = () =>
     return true
   })()`
 export const LISTEN_CLICK = clickByLabels(['Start listening'])
+export const EXPAND_CLICK = clickByLabels(['Expand Métis'])
 export const STOP_CLICK = clickByLabels(['Stop and end meeting', 'Stop meeting', 'End meeting'])
 export const TRANSCRIPT_CLICK = clickTranscriptControl()
 /** The Bar's Listen control exists: the overlay has rendered and onboarding is done. */
@@ -415,6 +416,12 @@ export async function waitFor(probe, timeoutMs, intervalMs = 1000) {
   }
 }
 
+export async function revealCollapsedOverlay(page) {
+  const expanded = await page.evaluate(EXPAND_CLICK).catch(() => false)
+  if (!expanded) return false
+  return (await waitFor(() => page.evaluate(LISTEN_PRESENT).catch(() => false), CDP_STEP_TIMEOUT_MS, 250)) === true
+}
+
 async function overlayPage(port, timeoutMs) {
   let lastTargets = []
   let lastResults = []
@@ -430,8 +437,12 @@ async function overlayPage(port, timeoutMs) {
       let page = null
       try {
         page = await connect(target.webSocketDebuggerUrl)
-        const present = await page.evaluate(LISTEN_PRESENT)
         const buttons = await page.evaluate(BUTTON_LABELS).catch(() => [])
+        const present = await page.evaluate(LISTEN_PRESENT)
+        if (!present && buttons.includes('Expand Métis') && await revealCollapsedOverlay(page)) {
+          lastResults.push({ status: 'present', buttons })
+          return page
+        }
         lastResults.push({ status: present ? 'present' : 'absent', buttons })
         if (present) return page
       } catch (error) {

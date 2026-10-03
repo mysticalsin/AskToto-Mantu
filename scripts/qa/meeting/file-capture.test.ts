@@ -18,6 +18,7 @@ import {
   writeCaptureWav
 } from './capture-wav.mjs'
 import {
+  EXPAND_CLICK,
   LISTEN_CLICK,
   STOP_PRESENT,
   STOP_CLICK,
@@ -32,6 +33,7 @@ import {
   launchSpec,
   meetingFiles,
   reduceCdpTarget,
+  revealCollapsedOverlay,
   withTimeout,
   seedProfile
 } from './file-capture.mjs'
@@ -282,6 +284,7 @@ describe('profile seeding and launch', () => {
 describe('Bar driver controls', () => {
   it.each([
     ['Listen', LISTEN_CLICK, { label: 'Start listening' }, 'Start listening'],
+    ['collapsed Expand', EXPAND_CLICK, { label: 'Expand Métis' }, 'Expand Métis'],
     ['Transcript', TRANSCRIPT_CLICK, { text: 'View Transcript' }, 'View Transcript'],
     ['Right edge Stop', STOP_CLICK, { label: 'Stop meeting' }, 'Stop meeting'],
     ['Stop', STOP_CLICK, { label: 'End meeting' }, 'End meeting']
@@ -329,6 +332,7 @@ describe('Bar driver controls', () => {
 
   it.each([
     ['Listen', LISTEN_CLICK],
+    ['Expand', EXPAND_CLICK],
     ['Transcript', TRANSCRIPT_CLICK],
     ['Stop', STOP_CLICK]
   ])('reports false when the %s control is absent', (_name, expression) => {
@@ -337,6 +341,26 @@ describe('Bar driver controls', () => {
 })
 
 describe('CDP overlay discovery diagnostics', () => {
+  it('expands a parked Bar shell before declaring the Listen control absent', async () => {
+    let expanded = false
+    const evaluations: string[] = []
+    const page = {
+      evaluate: async (expression: string) => {
+        evaluations.push(expression)
+        if (expression === EXPAND_CLICK) {
+          expanded = true
+          return true
+        }
+        if (expression.includes('button[aria-label="Start listening"]')) return expanded
+        return false
+      }
+    }
+
+    await expect(revealCollapsedOverlay(page)).resolves.toBe(true)
+    expect(evaluations[0]).toBe(EXPAND_CLICK)
+    expect(evaluations.some((expression) => expression.includes('button[aria-label="Start listening"]'))).toBe(true)
+  })
+
   it('reduces target URLs to scheme, basename and hash only', () => {
     expect(reduceCdpTarget({ type: 'page', url: 'file:///private/tmp/App.app/Contents/Resources/index.html#/bar' })).toEqual({
       type: 'page',
