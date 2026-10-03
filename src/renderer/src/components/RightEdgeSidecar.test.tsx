@@ -4,13 +4,18 @@ import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
 import { Children, isValidElement, type ReactElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { RightEdgeSidecar, SidecarChat } from './RightEdgeSidecar'
+import { RIGHT_EDGE_DRAWER_WIDTH, RIGHT_EDGE_TAB_WIDTH } from '@shared/right-edge-geometry'
+import { RightEdgeSidecar, SidecarChat, dockEscapeHides } from './RightEdgeSidecar'
 
 const sidecar = readFileSync(join(__dirname, './RightEdgeSidecar.tsx'), 'utf8')
 const answer = readFileSync(join(__dirname, './Answer.tsx'), 'utf8')
 const app = readFileSync(join(__dirname, '../App.tsx'), 'utf8')
 const css = readAppCss()
-const e2eSmoke = readFileSync(join(__dirname, '../../../../scripts/e2e-smoke.mjs'), 'utf8')
+const e2eSmoke = [
+  readFileSync(join(__dirname, '../../../../scripts/e2e-smoke.mjs'), 'utf8'),
+  readFileSync(join(__dirname, '../../../../scripts/qa/golden-flows/onboarding-flows.mjs'), 'utf8'),
+  readFileSync(join(__dirname, '../../../../scripts/qa/golden-flows/sidecar-flow.mjs'), 'utf8')
+].join('\n')
 
 function findElement(node: ReactNode, type: string): ReactElement<Record<string, unknown>> | null {
   if (!isValidElement(node)) return null
@@ -237,8 +242,29 @@ describe('right-edge dock', () => {
     )
 
     expect(markup).not.toContain('aria-label="Close Métis"')
+    expect(markup).not.toContain('aria-label="Hide Métis"')
     expect(markup).toContain('tabindex="-1"')
     expect(markup).toContain('aria-hidden="true"')
+  })
+
+  it('offers a visible Hide toward the edge with a draft and during a meeting, and Escape hides except mid-composition', () => {
+    // Owner report: with a draft, a live meeting, a toast or a capture the dock had no Close and no Escape.
+    for (const props of [{ value: 'Draft kept on Hide' }, { listening: true, onToggleListen: () => undefined }]) {
+      const markup = renderToStaticMarkup(
+        <RightEdgeSidecar open canClose onOpen={() => undefined} onClose={() => undefined} onChange={() => undefined} onSubmit={() => undefined} {...props} />
+      )
+      expect(markup).toContain('aria-label="Hide Métis"')
+      expect(markup).toContain('title="Hide"')
+    }
+    expect(sidecar).toContain('<ChevronRight')
+    expect(sidecar).not.toContain('<ChevronLeft')
+    expect(dockEscapeHides({ key: 'Escape', isComposing: false }, true)).toBe(true)
+    expect(dockEscapeHides({ key: 'Escape', isComposing: true }, true)).toBe(false)
+    expect(dockEscapeHides({ key: 'Escape', isComposing: false }, false)).toBe(false)
+    expect(dockEscapeHides({ key: 'Enter', isComposing: false }, true)).toBe(false)
+    // The dock is always able to park while it is shown; closeRightEdgeDock keeps the draft.
+    expect(app).toMatch(/const closeRightEdgeDock = useCallback\(\(\): void => \{[\s\S]*?if \(!overlayIdle\) parkCurrentOverlayAfterHide\(\)/)
+    expect(e2eSmoke).toContain('right-edge Hide control parks the dock and keeps the draft')
   })
 
   it('keeps Spotlight Ref discoverable without claiming Dust is connected', () => {
@@ -258,14 +284,17 @@ describe('right-edge dock', () => {
 
   it('receives the current app-owned paths rather than a duplicate chat or control route', () => {
     const rightEdgeCalls = app.match(/<RightEdgeSidecar[\s\S]*?\/>/g) ?? []
-    expect(rightEdgeCalls).toHaveLength(2)
+    // M2-0431: one dock element whose `open` follows the park, never a parked and a revealed copy.
+    expect(rightEdgeCalls).toHaveLength(1)
+    expect(rightEdgeCalls[0]).toContain('open={!overlayPeeked}')
     for (const call of rightEdgeCalls) {
       expect(call).toContain('value={input}')
       expect(call).toContain('onChange={setInput}')
       expect(call).toContain('onSubmit={submit}')
       expect(call).toContain('onStop={onStop}')
       expect(call).toContain('onClose={closeRightEdgeDock}')
-      expect(call).toContain('canClose={overlayIdle && !autoHideForced}')
+      expect(call).toContain('canClose={rightEdgeDockVisible}')
+      expect(call).toContain('focusSignal={focusSignal}')
       expect(call).toContain('body={barBody}')
       expect(call).toContain('onToggleListen={toggleListen}')
       expect(call).toContain('paused={listen.paused}')
@@ -292,8 +321,13 @@ describe('right-edge dock', () => {
   })
 
   it('keeps a narrow accessible rail and a single fixed-composer body scroller without mounting Bar', () => {
-    expect(sidecar).toMatch(/RIGHT_EDGE_TAB_WIDTH = 52/)
-    expect(sidecar).toMatch(/RIGHT_EDGE_DRAWER_WIDTH = 360/)
+    // D8a (M2-0202): the rail and drawer widths are the main process's, from the shared geometry authority.
+    expect(RIGHT_EDGE_TAB_WIDTH).toBe(52)
+    expect(RIGHT_EDGE_DRAWER_WIDTH).toBe(360)
+    const rendered = renderToStaticMarkup(<RightEdgeSidecar open onOpen={() => undefined} onClose={() => undefined} />)
+    expect(rendered).toContain(`width:${RIGHT_EDGE_TAB_WIDTH}px`)
+    expect(rendered).toContain(`max-width:${RIGHT_EDGE_DRAWER_WIDTH}px`)
+    expect(sidecar).not.toMatch(/const RIGHT_EDGE_(TAB|DRAWER)_WIDTH/)
     expect(sidecar).toMatch(/aria-label="Open Métis"/)
     expect(sidecar).toMatch(/aria-expanded=\{open\}/)
     expect(sidecar).toMatch(/role="complementary"/)
@@ -417,6 +451,23 @@ describe('right-edge dock', () => {
     expect(cursorHover).toContain("{ type: 'native-hover-restored' }")
     expect(cursorHover).toContain('setRightEdgeDockDismissed(false)')
     expect(cursorHover).toContain("dispatchAutoHide({ type: 'reveal-now' })")
+  })
+
+  it('renders the rail when main parks the dock itself, and a summon reopens it with the composer focused', () => {
+    // Needs the Electron page, so the RE-HIDE rows in scripts/qa/packaged-smoke.mjs prove the behavior;
+    // this pins the wiring those rows depend on.
+    const cursorHoverAt = app.indexOf('window.toto.onOverlayCursorHover?.((d) => {')
+    const cursorHover = app.slice(cursorHoverAt, cursorHoverAt + 2400)
+    // Hide keeps its drawer mounted while the page is collapsed: a main park must render the rail even when
+    // the page had already collapsed, or the parked window holds an open drawer.
+    expect(cursorHover).toMatch(/if \(d\.parked && rightEdgePresentation\) \{\s*wasRevealedRef\.current = false\s*setRightEdgeDockDismissed\(true\)\s*setOverlaySpring\('rest'\)/)
+    expect(cursorHover).not.toContain('d.parked && rightEdgePresentation && overlayRevealedRef.current')
+    const askAt = app.indexOf("if (a === 'ask') {")
+    const ask = app.slice(askAt, askAt + 800)
+    expect(ask).toContain('setFocusSignal((x) => x + 1)')
+    expect(ask).toMatch(/if \(rightEdgePresentation\) \{[\s\S]*?\{ type: 'explicit-reveal' \}[\s\S]*?setRightEdgeDockDismissed\(false\)[\s\S]*?dispatchAutoHide\(\{ type: 'reveal-now' \}\)/)
+    expect(sidecar).toContain('}, [open, focusSignal])')
+    expect(app).toMatch(/\} else if \(rightEdgePresentation\) \{\s*\/\/[^\n]*\n\s*closeRightEdgeDock\(\)\s*\} else \{\s*void window\.toto\.hide\(\)/)
   })
 
   it('guards a dirty recap before it launches and collapses for the standalone Intelligence dashboard', () => {

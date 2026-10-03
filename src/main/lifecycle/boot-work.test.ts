@@ -1,10 +1,13 @@
 import { EventEmitter } from 'node:events'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import ts from 'typescript'
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLog: vi.fn() }))
 vi.mock('../mac-helper', () => ({ macStatFlagsSpawnSpec: vi.fn(() => null) }))
 
-import { mainLog } from '../logger'
+import { auditLog, mainLog } from '../logger'
 import { createBootWork, type BootWorkWindow } from './boot-work'
 
 function fakeWindow(opts: { visible?: boolean; destroyed?: boolean } = {}): EventEmitter & BootWorkWindow & { show(): void } {
@@ -141,6 +144,50 @@ describe('createBootWork (M2-0031)', () => {
     }
   })
 
+  it('audits the gate opening on the first show with the jobs it held, outside the show task (M2-0518)', async () => {
+    vi.mocked(auditLog).mockClear()
+    const work = createBootWork({ limit: 1, fallbackMs: 60_000 })
+    const win = fakeWindow()
+    work.run('runBootSidecarReaper', () => new Promise<void>(() => {}))
+    work.run('startAvailableMemorySampler', vi.fn())
+    work.releaseAfterFirstShow(win)
+    await settle()
+    expect(auditLog).not.toHaveBeenCalled()
+
+    win.show()
+    expect(auditLog).not.toHaveBeenCalled()
+    await nextTask()
+    expect(auditLog).toHaveBeenCalledTimes(1)
+    expect(auditLog).toHaveBeenCalledWith('app.boot.work.released', { reason: 'show', held: 2 })
+  })
+
+  it('audits a fallback opening, so work held for a window that never showed is on record (M2-0518)', async () => {
+    vi.mocked(auditLog).mockClear()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const work = createBootWork({ fallbackMs: 5_000 })
+      const job = vi.fn()
+      work.run('recoverOrphanDrafts', job)
+      work.releaseAfterFirstShow(fakeWindow())
+      vi.advanceTimersByTime(5_000)
+      await settle()
+      expect(job).toHaveBeenCalledTimes(1)
+      expect(auditLog).toHaveBeenCalledWith('app.boot.work.released', { reason: 'fallback', held: 1 })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('audits an immediate opening once, and never again for a later show (M2-0518)', async () => {
+    vi.mocked(auditLog).mockClear()
+    const work = createBootWork()
+    work.releaseAfterFirstShow(null)
+    work.releaseAfterFirstShow(fakeWindow({ visible: true }))
+    await settle()
+    expect(auditLog).toHaveBeenCalledTimes(1)
+    expect(auditLog).toHaveBeenCalledWith('app.boot.work.released', { reason: 'immediate', held: 0 })
+  })
+
   it('opens at once for a destroyed window, and logs a failing job without stopping the queue', async () => {
     const work = createBootWork({ limit: 1 })
     const after = vi.fn()
@@ -154,5 +201,87 @@ describe('createBootWork (M2-0031)', () => {
     expect(after).toHaveBeenCalledTimes(1)
     expect(vi.mocked(mainLog.warn)).toHaveBeenCalledWith('[boot] throws failed:', expect.any(Error))
     expect(vi.mocked(mainLog.warn)).toHaveBeenCalledWith('[boot] rejects failed:', expect.any(Error))
+  })
+})
+
+describe('boot wiring in index.ts (M2-0518)', () => {
+  // index.ts boots Electron at import, so the wiring is read from its syntax tree: every launch reference to a
+  // boot child process or fs/crypto job must sit inside a job handed to bootWork.run.
+  const indexPath = join(__dirname, '..', 'index.ts')
+  const indexSource = ts.createSourceFile(indexPath, readFileSync(indexPath, 'utf8'), ts.ScriptTarget.Latest, true)
+
+  const findAll = (root: ts.Node, match: (node: ts.Node) => boolean): ts.Node[] => {
+    const found: ts.Node[] = []
+    const visit = (node: ts.Node): void => {
+      if (match(node)) found.push(node)
+      ts.forEachChild(node, visit)
+    }
+    visit(root)
+    return found
+  }
+  const isCallTo = (node: ts.Node, callee: string): node is ts.CallExpression =>
+    ts.isCallExpression(node) && node.expression.getText(indexSource) === callee
+
+  const whenReady = findAll(indexSource, (node) => isCallTo(node, 'app.whenReady().then')) as ts.CallExpression[]
+  const bootCallback = whenReady[0]?.arguments[0]
+
+  /** True when `node` is, or sits inside, the job argument of a bootWork.run call (or a periodic setInterval re-run). */
+  const insideBootJob = (node: ts.Node): boolean => {
+    for (let current: ts.Node = node; current !== bootCallback && current.parent; current = current.parent) {
+      const parent = current.parent
+      if (isCallTo(parent, 'bootWork.run') && parent.arguments[1] === current) return true
+      if (isCallTo(parent, 'setInterval')) return true
+    }
+    return false
+  }
+
+  it.each([
+    'runBootSidecarReaper',
+    'startAvailableMemorySampler',
+    'prewarmCli',
+    'verifyCliSessions',
+    'importEmbeddedCloudflareKey',
+    'reconcileLaunchAtLogin',
+    'provisionLocalModel',
+    'sweepStaleTempFiles',
+    'recoverOrphanDrafts',
+    'runRetentionSweep',
+    'endBootWatch',
+    'probeScreenCapture'
+  ])('starts %s at launch only through the boot-work queue', (name) => {
+    expect(whenReady).toHaveLength(1)
+    expect(bootCallback).toBeDefined()
+    const references = findAll(bootCallback!, (node) =>
+      ts.isIdentifier(node) &&
+      node.text === name &&
+      !(ts.isVariableDeclaration(node.parent) && node.parent.name === node) &&
+      !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node)
+    )
+    expect(references.length, `${name} is never started at launch`).toBeGreaterThan(0)
+    for (const reference of references) {
+      const { line } = indexSource.getLineAndCharacterOfPosition(reference.getStart(indexSource))
+      expect(insideBootJob(reference), `index.ts:${line + 1} starts ${name} outside bootWork.run`).toBe(true)
+    }
+  })
+
+  it('primes the ASR bundled-status probe only through the boot-work queue', () => {
+    expect(bootCallback).toBeDefined()
+    const bootText = bootCallback!.getText(indexSource)
+    expect(bootText).toMatch(/bootWork\.run\('primeAsrBundledStatus', \(\) => \{ asrBundledReady\(\) \}\)/)
+    const asrIpcBeforePrime = bootText.slice(0, bootText.indexOf("bootWork.run('primeAsrBundledStatus'"))
+    expect(asrIpcBeforePrime).not.toMatch(/\basrManifestComplete\(/)
+    expect(asrIpcBeforePrime).not.toMatch(/\bimportAsrAssetsReady\(/)
+  })
+
+  it('opens the gate on the boot window, and holds app suspension off for every overlay window', () => {
+    expect(bootCallback).toBeDefined()
+    expect(findAll(bootCallback!, (node) => isCallTo(node, 'bootWork.releaseAfterFirstShow'))).toHaveLength(1)
+    const createWindow = indexSource.statements.find(
+      (node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'createWindow'
+    )
+    expect(createWindow).toBeDefined()
+    const holds = findAll(createWindow!, (node) => isCallTo(node, 'holdAppSuspensionWhileVisible')) as ts.CallExpression[]
+    expect(holds).toHaveLength(1)
+    expect(holds[0].arguments[1].getText(indexSource)).toBe('powerSaveBlocker')
   })
 })

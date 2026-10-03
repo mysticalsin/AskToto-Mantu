@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { RECORD_SCHEMA } from './record.mjs'
-import { closedSince, drawSample } from './sample.mjs'
+import { closedSince, drawSample, populationOf } from './sample.mjs'
 
 const session = (id, model = 'claude-sonnet-5') => ({ model, id })
 
@@ -104,4 +104,57 @@ test('S4 CLI prints population and sample and exits 0; a missing --seed or an un
     ),
     { status: 2 }
   )
+})
+
+test('S5 --population-of takes the ticket dependencies that are closed by status, ignoring recorded_at, and draws reproducibly', () => {
+  const root = mkdtempSync(join(tmpdir(), 'evidence-sample-of-'))
+  mkdirSync(join(root, 'ledger'), { recursive: true })
+  mkdirSync(join(root, 'evidence', 'records'), { recursive: true })
+  const ledgerPath = join(root, 'ledger', 'tickets.json')
+  const tickets = [
+    ticket({ id: 'M2-0001', status: 'DONE' }),
+    ticket({ id: 'M2-0002', status: 'ENGINEERING_COMPLETE' }),
+    ticket({ id: 'M2-0003', status: 'TODO' }),
+    ticket({ id: 'M2-0004', status: 'CANCELLED' }),
+    ticket({ id: 'M2-0005', status: 'DONE' }), // closed but not a dependency
+    ticket({ id: 'M2-0046', status: 'TODO', depends_on: ['M2-0001', 'M2-0002', 'M2-0003', 'M2-0004'] })
+  ]
+  writeFileSync(ledgerPath, JSON.stringify({ tickets }))
+  // M2-0001's only record is old: --since would drop it, --population-of must not.
+  writeFileSync(
+    join(root, 'evidence', 'records', 'M2-0001.jsonl'),
+    `${JSON.stringify(record({ ticket: 'M2-0001', recorded_at: '2020-01-01T00:00:00Z' }))}\n`
+  )
+
+  assert.deepEqual(populationOf({ tickets }, 'M2-0046'), ['M2-0001', 'M2-0002'])
+  assert.equal(populationOf({ tickets }, 'M2-9999'), null)
+
+  const cliPath = fileURLToPath(new URL('./sample.mjs', import.meta.url))
+  const seed = 'a'.repeat(40)
+  const run = () => JSON.parse(execFileSync(
+    process.execPath,
+    [cliPath, '--ledger', ledgerPath, '--population-of', 'M2-0046', '--seed', seed],
+    { encoding: 'utf8' }
+  ))
+  const first = run()
+  assert.deepEqual(first.population, ['M2-0001', 'M2-0002'])
+  assert.equal(first.populationRule, 'depends-on-closed')
+  assert.equal(first.of, 'M2-0046')
+  assert.deepEqual(first.sample, drawSample(['M2-0001', 'M2-0002'], seed))
+  assert.deepEqual(run(), first)
+})
+
+test('S6 --population-of usage errors exit 2: both selectors, neither, and an unknown ticket', () => {
+  const root = mkdtempSync(join(tmpdir(), 'evidence-sample-usage-'))
+  mkdirSync(join(root, 'ledger'), { recursive: true })
+  const ledgerPath = join(root, 'ledger', 'tickets.json')
+  writeFileSync(ledgerPath, JSON.stringify({ tickets: [ticket({ id: 'M2-0001', status: 'DONE' })] }))
+  const cliPath = fileURLToPath(new URL('./sample.mjs', import.meta.url))
+  const exits = (...args) => assert.throws(
+    () => execFileSync(process.execPath, [cliPath, '--ledger', ledgerPath, '--seed', 'gate-sha', ...args], { encoding: 'utf8', stdio: 'pipe' }),
+    { status: 2 }
+  )
+  exits('--population-of', 'M2-0001', '--since', '2026-09-01')
+  exits()
+  exits('--population-of', 'M2-9999')
 })

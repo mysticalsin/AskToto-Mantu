@@ -1,10 +1,18 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { LOCAL_MODELS } from '../../src/main/llm/local-models'
+import { PREWARM_MIN_FREE_RAM_GB as APP_PREWARM_MIN_FREE_RAM_GB } from '../../src/main/llm/local-routing'
+import { HK_M_MODEL_ID } from '../../src/main/qa-hk-m'
 import { parseVmStatAvailableBytes } from '../../src/main/llm/available-memory'
 import {
   advertisedRamFloorRefuses,
   availableBytesFromVmStat,
+  createProfilePlan,
+  ensureSharedFinalSigtermRow,
   exitCodeForReportResult,
+  HK_M_MODEL_MIN_TOTAL_RAM_GB,
+  finalSigtermVerdict,
   keepWaitingForScenario,
+  launchEnv,
   PREWARM_MIN_FREE_RAM_GB,
   prewarmFreeRamFloorPasses,
   removeTempDir,
@@ -12,11 +20,15 @@ import {
   runMemorySummary,
   runtimeRoleVerdict,
   scenarioEvidence,
+  sharedProfileRelaunchVerdict,
   scenarioStillStarting,
   setupFailure,
   supervisedColdStartVerdict,
+  unreapedDeadRegistryCount,
   UNRELATED_FIXTURE_LIFETIME_MS
 } from './hk-m.mjs'
+
+vi.mock('electron')
 
 describe('HK-M temp directory cleanup', () => {
   it('requests retries and does not turn a one-off ENOTEMPTY into a failure', () => {
@@ -41,6 +53,47 @@ describe('HK-M temp directory cleanup', () => {
   it('still reports a real survivor as a failure', () => {
     const rows = [{ scenario: 'idle', cycle: 1, status: 'FAIL', failure: 'owned_processes_survived' }]
     expect(reportResultForRows(rows)).toBe('fail')
+  })
+})
+
+describe('HK-M profile modes', () => {
+  it('keeps fresh mode on a per-row profile marked for immediate cleanup', () => {
+    const removed: string[] = []
+    let next = 0
+    const plan = createProfilePlan({
+      profileMode: 'fresh',
+      makeProfile: () => `/tmp/profile-${++next}`,
+      remove: (dir: string) => {
+        removed.push(dir)
+        return true
+      }
+    })
+
+    const first = plan.profileForRow()
+    expect(first).toEqual({ profile: '/tmp/profile-1', removeAfterRow: true })
+    expect(plan.profileForRow()).toEqual({ profile: '/tmp/profile-2', removeAfterRow: true })
+    expect(plan.cleanup()).toBe(false)
+    expect(removed).toEqual([])
+  })
+
+  it('reuses one shared profile across rows and removes it only at the end', () => {
+    const removed: string[] = []
+    let next = 0
+    const plan = createProfilePlan({
+      profileMode: 'shared',
+      makeProfile: () => `/tmp/shared-${++next}`,
+      remove: (dir: string) => {
+        removed.push(dir)
+        return true
+      }
+    })
+
+    expect(plan.profileForRow()).toEqual({ profile: '/tmp/shared-1', removeAfterRow: false })
+    expect(plan.profileForRow()).toEqual({ profile: '/tmp/shared-1', removeAfterRow: false })
+    expect(removed).toEqual([])
+    expect(plan.cleanup()).toBe(true)
+    expect(removed).toEqual(['/tmp/shared-1'])
+    expect(plan.cleanup()).toBe(false)
   })
 })
 
@@ -176,6 +229,165 @@ describe('HK-M relaunch runtime counts', () => {
   })
 })
 
+describe('HK-M shared-profile relaunch checks', () => {
+  const main = { pid: 100, ppid: 50, startedMs: 1000, exe: '/tmp/Metis', role: 'Metis' }
+  const orphan = { ...modelSidecar, pid: 404, ppid: 1 }
+
+  it('fails a shared-profile row when an owned process is orphaned after relaunch', () => {
+    expect(
+      sharedProfileRelaunchVerdict({
+        owned: [main, orphan],
+        registry: [],
+        records: [],
+        table: [main, orphan],
+        previousDeadRegistryCount: 0
+      })
+    ).toMatchObject({
+      ok: false,
+      failure: 'shared_profile_orphan_after_relaunch',
+      evidence: { orphans: { 'llama-server': 1 } }
+    })
+  })
+
+  it('fails when more than one local runtime role is alive after relaunch', () => {
+    const fm = { pid: 105, ppid: 100, startedMs: 1005, exe: '/tmp/fm', role: 'fm' }
+    expect(
+      sharedProfileRelaunchVerdict({
+        owned: [main, modelSidecar, fm],
+        registry: [],
+        records: [],
+        table: [main, modelSidecar, fm],
+        previousDeadRegistryCount: 0
+      })
+    ).toMatchObject({
+      ok: false,
+      failure: 'shared_profile_multiple_runtimes_after_relaunch',
+      evidence: { runtimeTotal: 2 }
+    })
+  })
+
+  it('keeps the dead registry count flat when boot reaper accounts for killed pids', () => {
+    const registry = [
+      { kind: 'spawned', name: 'llama-server', pid: 201 },
+      { kind: 'spawned', name: 'llama-server', pid: 202 },
+      { kind: 'spawned', name: 'llama-server', pid: 203 }
+    ]
+    const records = [
+      { event: 'sidecar.reaped', pid: 201, reason: 'registry' },
+      { event: 'sidecar.reap.skipped', pid: 202, reason: 'pid-not-alive' }
+    ]
+    const table = [{ pid: 203, ppid: 100, startedMs: 1003, exe: '/tmp/llama-server', role: 'llama-server' }]
+
+    expect(unreapedDeadRegistryCount({ registry, records, table })).toBe(0)
+    expect(
+      sharedProfileRelaunchVerdict({
+        owned: [main],
+        registry,
+        records,
+        table,
+        previousDeadRegistryCount: 0
+      })
+    ).toMatchObject({ ok: true, deadRegistry: 0, evidence: { deadRegistry: 0 } })
+  })
+
+  it('counts only dead registry entries no boot has accounted for and fails when they rise', () => {
+    const registry = [
+      { kind: 'spawned', name: 'llama-server', pid: 201 },
+      { kind: 'spawned', name: 'llama-server', pid: 202 },
+      { kind: 'spawned', name: 'llama-server', pid: 203 }
+    ]
+    const records = [
+      { event: 'sidecar.reaped', pid: 201, reason: 'registry' },
+      { event: 'sidecar.reap.skipped', pid: 202, reason: 'permission-denied' }
+    ]
+    const table = [{ pid: 203, ppid: 100, startedMs: 1003, exe: '/tmp/llama-server', role: 'llama-server' }]
+
+    expect(unreapedDeadRegistryCount({ registry, records, table })).toBe(1)
+    expect(
+      sharedProfileRelaunchVerdict({
+        owned: [main],
+        registry,
+        records,
+        table,
+        previousDeadRegistryCount: 0
+      })
+    ).toMatchObject({
+      ok: false,
+      failure: 'shared_profile_unreaped_dead_registry_entries_grew',
+      evidence: { deadRegistry: 1 }
+    })
+  })
+
+  it('records the dead registry count when the shared-profile relaunch is clean', () => {
+    expect(
+      sharedProfileRelaunchVerdict({
+        owned: [main],
+        registry: [{ kind: 'spawned', name: 'llama-server', pid: 201 }],
+        records: [],
+        table: [main],
+        previousDeadRegistryCount: null
+      })
+    ).toMatchObject({ ok: true, deadRegistry: 1, evidence: { deadRegistry: 1, runtimeTotal: 0 } })
+  })
+})
+
+describe('HK-M shared-profile final SIGTERM check', () => {
+  it('passes only when the final SIGTERM launch leaves no owned survivors', () => {
+    expect(finalSigtermVerdict([])).toEqual({ ok: true, survivors: {} })
+    expect(finalSigtermVerdict([modelSidecar])).toEqual({
+      ok: false,
+      failure: 'final_sigterm_owned_processes_survived',
+      survivors: { 'llama-server': 1 }
+    })
+  })
+
+  it('records NOT_RUN during finalize when shared mode ends before the final SIGTERM row', () => {
+    const rows = [{ scenario: 'idle', cycle: 1, status: 'PASS' }]
+
+    expect(ensureSharedFinalSigtermRow(rows, 'shared', 'budget_exhausted')).toEqual([
+      { scenario: 'idle', cycle: 1, status: 'PASS' },
+      { scenario: 'final-sigterm', cycle: 0, status: 'NOT_RUN', failure: 'budget_exhausted' }
+    ])
+    expect(reportResultForRows(rows)).toBe('fail')
+  })
+
+  it('does not duplicate an existing final SIGTERM row or affect fresh mode', () => {
+    const sharedRows = [{ scenario: 'final-sigterm', cycle: 0, status: 'FAIL', failure: 'final_sigterm_not_ready' }]
+    const freshRows = [{ scenario: 'idle', cycle: 1, status: 'PASS' }]
+
+    expect(ensureSharedFinalSigtermRow(sharedRows, 'shared', 'aborted')).toEqual(sharedRows)
+    expect(ensureSharedFinalSigtermRow(freshRows, 'fresh', 'aborted')).toEqual(freshRows)
+  })
+})
+
+describe('HK-M launch environment', () => {
+  const baseEnv = {
+    PATH: '/usr/bin',
+    METIS_SUPERVISION: 'off',
+    METIS_SIDECAR_SUPERVISION: '0',
+    OPENAI_API_KEY: 'k'
+  }
+
+  it('shipped mode strips both supervision variables so the build default decides', () => {
+    const env = launchEnv({ baseEnv, profile: '/tmp/p', scenario: 'idle', supervisionMode: 'shipped' })
+    expect('METIS_SUPERVISION' in env).toBe(false)
+    expect('METIS_SIDECAR_SUPERVISION' in env).toBe(false)
+    expect(env).toMatchObject({
+      PATH: '/usr/bin',
+      ASKTOTO_USERDATA: '/tmp/p',
+      METIS_DISABLE_APPLE_FM: '1',
+      METIS_HK_M_SCENARIO: 'idle'
+    })
+    expect('OPENAI_API_KEY' in env).toBe(false)
+  })
+
+  it('forced-on mode sets METIS_SUPERVISION=on and drops the legacy variable', () => {
+    const env = launchEnv({ baseEnv, profile: '/tmp/p', scenario: 'idle', supervisionMode: 'forced-on' })
+    expect(env.METIS_SUPERVISION).toBe('on')
+    expect('METIS_SIDECAR_SUPERVISION' in env).toBe(false)
+  })
+})
+
 describe('HK-M supervised cold start', () => {
   const healthy = [{ event: 'local.runtime.start' }]
 
@@ -193,6 +405,21 @@ describe('HK-M supervised cold start', () => {
   it('fails a llama-server that was spawned directly by main', () => {
     const main = { pid: 50, ppid: 1, startedMs: 900, exe: '/tmp/Metis', role: 'Metis' }
     const direct = { ...supervisedModel, ppid: 50 }
+    expect(
+      supervisedColdStartVerdict({ records: healthy, sidecars: [direct], table: [main, direct], requireHealthy: true })
+    ).toEqual({ ok: false, failure: 'runtime_not_supervised' })
+  })
+
+  it('fails a default-off build in shipped mode with runtime_not_supervised', () => {
+    const main = { pid: 50, ppid: 1, startedMs: 900, exe: '/tmp/Metis', role: 'Metis' }
+    const direct = { ...supervisedModel, ppid: 50 }
+    const env = launchEnv({
+      baseEnv: { METIS_SUPERVISION: 'on' },
+      profile: '/tmp/p',
+      scenario: 'idle',
+      supervisionMode: 'shipped'
+    })
+    expect(env.METIS_SUPERVISION).toBeUndefined()
     expect(
       supervisedColdStartVerdict({ records: healthy, sidecars: [direct], table: [main, direct], requireHealthy: true })
     ).toEqual({ ok: false, failure: 'runtime_not_supervised' })
@@ -292,6 +519,16 @@ describe('HK-M host memory evidence', () => {
     expect(advertisedRamFloorRefuses(7 * GIB)).toBe(true)
     expect(advertisedRamFloorRefuses(8e9)).toBe(false)
     expect(advertisedRamFloorRefuses(8 * GIB)).toBe(false)
+  })
+
+  it('uses the total-RAM floor of the model HK-M loads', () => {
+    const model = LOCAL_MODELS.find((entry) => entry.id === HK_M_MODEL_ID)
+    expect(model).toBeDefined()
+    expect(HK_M_MODEL_MIN_TOTAL_RAM_GB).toBe(model?.minTotalRamGB)
+  })
+
+  it('uses the free-RAM floor of the app prewarm gate', () => {
+    expect(PREWARM_MIN_FREE_RAM_GB).toBe(APP_PREWARM_MIN_FREE_RAM_GB)
   })
 
   it('applies the localPrewarm free-memory floor', () => {

@@ -34,14 +34,16 @@ export interface SupervisedSpawnHooks {
 }
 
 // The named `supervision` flag: `--supervision=on|off` on argv or METIS_SUPERVISION=on|off in the environment
-// (argv wins). METIS_SIDECAR_SUPERVISION=1 is the older spelling of `on`. Default is off until HK-M passes 20/20
-// on the release candidate; `off` always restores the plain direct spawn.
+// (argv wins). METIS_SIDECAR_SUPERVISION=1 is the older spelling of `on` and =0 of `off`. Default is on (macOS
+// only); `off` always restores the plain direct spawn.
 function supervisionFlag(env: NodeJS.ProcessEnv, argv: readonly string[]): 'on' | 'off' {
   for (const value of ['on', 'off'] as const) {
     if (argv.includes(`--supervision=${value}`) || argv.includes(`supervision=${value}`)) return value
   }
   if (env.METIS_SUPERVISION === 'on' || env.METIS_SUPERVISION === 'off') return env.METIS_SUPERVISION
-  return env.METIS_SIDECAR_SUPERVISION === '1' ? 'on' : 'off'
+  if (env.METIS_SIDECAR_SUPERVISION === '1') return 'on'
+  if (env.METIS_SIDECAR_SUPERVISION === '0') return 'off'
+  return 'on'
 }
 
 export function sidecarSupervisionEnabled(

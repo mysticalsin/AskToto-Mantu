@@ -6,6 +6,7 @@ import { renderEvents } from './render/pages/events'
 import { renderGroups } from './render/pages/groups'
 import { renderKeys } from './render/pages/keys'
 import { renderLicenses } from './render/pages/licenses'
+import { renderModels } from './render/pages/models'
 import { renderNotifications } from './render/pages/notifications'
 import { renderOverview } from './render/pages/overview'
 import { renderRealtime } from './render/pages/realtime'
@@ -33,7 +34,7 @@ export function renderConsole(
   opts: { nonce?: string; theme?: 'light' | 'dark' | 'system' } = {}
 ): string {
   const theme = opts.theme ?? 'system'
-  const ctx: RenderCtx = { now: data.now, theme }
+  const ctx: RenderCtx = { now: data.now, theme, nonce: opts.nonce }
   const nonceAttr = opts.nonce ? ` nonce="${esc(opts.nonce)}"` : ''
   const htmlThemeAttr = theme === 'system' ? '' : ` data-theme="${theme}"`
   const pendingApprovals = data.licenses.rows.filter((r) => r.approval !== 'approved').length
@@ -49,6 +50,7 @@ export function renderConsole(
     <section class="page wrap" data-page="notifications" hidden>${renderNotifications(data, ctx)}</section>
     <section class="page wrap" data-page="keys" hidden>${renderKeys(data, ctx)}</section>
     <section class="page wrap" data-page="connectors" hidden>${renderConnectors(data, ctx)}</section>
+    <section class="page wrap" data-page="models" hidden>${renderModels(data, ctx)}</section>
     <section class="page wrap" data-page="audit" hidden>${renderAudit(data, ctx)}</section>
     <section class="page wrap" data-page="settings" hidden>${renderSettings(data, ctx)}</section>
   `

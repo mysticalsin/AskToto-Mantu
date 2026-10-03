@@ -85,7 +85,21 @@ if [ -z "$out" ]; then pass "proc-info dead pid prints nothing"; else fail "proc
 
 sleep 30 &
 child=$!
-out="$("$helper" proc-info "$child")"
+out=""
+for _ in $(seq 1 100); do
+  out="$("$helper" proc-info "$child")"
+  if printf '%s' "$out" | py '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+sys.exit(0 if d.get("exeRealpath", "").endswith("/sleep") else 1)
+' >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.05
+done
 kill "$child" 2>/dev/null; wait "$child" 2>/dev/null
 if printf '%s' "$out" | CHILD="$child" PARENT="$$" py '
 import json, os, re, sys
