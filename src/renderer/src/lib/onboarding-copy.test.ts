@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
@@ -6,18 +6,23 @@ function stripComments(src: string): string {
   return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 }
 
-const files = [
+const onboardingFeatureDir = join(__dirname, '../features/onboarding-experience')
+const onboardingFeatureFiles = readdirSync(onboardingFeatureDir)
+  .filter((name) => /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name))
+  .map((name) => join(onboardingFeatureDir, name))
+  .sort()
+
+const files = [...new Set([
   join(__dirname, '../features/onboarding-experience/OnboardingExperience.tsx'),
   join(__dirname, '../features/onboarding-experience/OnboardingExperienceLayout.tsx'),
-  join(__dirname, '../features/onboarding-experience/onboarding-scenes.tsx'),
-  join(__dirname, '../features/onboarding-experience/onboarding-setup.tsx'),
+  ...onboardingFeatureFiles,
   join(__dirname, './onboarding-demo.ts'),
   join(__dirname, './persona-vibe.ts'),
   join(__dirname, './onboarding-tell-the-room.ts'),
   join(__dirname, './onboarding-portal.ts'),
   join(__dirname, './onboarding-appearance.ts'),
   join(__dirname, '../components/OnboardingAppearance.tsx')
-]
+])]
 
 describe('onboarding user-facing copy — no em dash (U+2014)', () => {
   it('strips U+2014 from OnboardingExperience, onboarding-demo, and helper pins', () => {
