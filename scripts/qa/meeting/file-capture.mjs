@@ -78,11 +78,16 @@ export function seedProfile(profileDir) {
 }
 
 /** The environment and arguments of the launch; the profile is the only place the hook reads the WAV from. */
-export function launchSpec({ executable, profileDir, wavPath, port, baseEnv = process.env }) {
+export function launchSpec({ executable, profileDir, wavPath, port, inspect = null, hostFloorOverride = false, baseEnv = process.env }) {
   return {
     command: executable,
-    args: [`--remote-debugging-port=${port}`],
-    env: { ...baseEnv, ASKTOTO_USERDATA: profileDir, METIS_QA_CAPTURE_FILE: wavPath }
+    args: [`--remote-debugging-port=${port}`, ...(inspect ? [`--inspect=${inspect}`] : [])],
+    env: {
+      ...baseEnv,
+      ASKTOTO_USERDATA: profileDir,
+      METIS_QA_CAPTURE_FILE: wavPath,
+      ...(hostFloorOverride ? { METIS_QA_HOST_FLOOR_OVERRIDE: '1' } : {})
+    }
   }
 }
 
@@ -151,14 +156,19 @@ export function harvestCaptureArtifacts(observed, { profileDir, meetingsFolder, 
 }
 
 /** Extracts the QA zip into `dir` and returns the app's executable. */
-export function installQaZip(zipPath, dir) {
+export function installQaZipDetails(zipPath, dir) {
   execFileSync('ditto', ['-x', '-k', zipPath, dir])
   const app = readdirSync(dir).find((name) => name.endsWith('.app'))
   if (!app) throw new Error(`no .app in ${basename(zipPath)}`)
-  return join(dir, app, 'Contents', 'MacOS', basename(app, '.app'))
+  const installRoot = join(dir, app)
+  return { installRoot, executable: join(installRoot, 'Contents', 'MacOS', basename(app, '.app')) }
 }
 
-async function freePort() {
+export function installQaZip(zipPath, dir) {
+  return installQaZipDetails(zipPath, dir).executable
+}
+
+export async function freePort() {
   return new Promise((resolve, reject) => {
     const server = createServer()
     server.once('error', reject)
@@ -344,6 +354,16 @@ export const LINE_COUNT = `(() => {
   return [...rows.children].filter((row) => !/^(Waiting for speech…|No audio yet\\.)$/.test(row.textContent.trim())).length
 })()`
 export const ASR_ENGINE = `window.toto.getSettings().then((s) => String(s.asrEngine))`
+export const HOST_MEMORY = `(() => {
+  try {
+    const load = process.mainModule?.require
+    if (typeof load !== 'function') return null
+    const os = load('node:os')
+    return { totalBytes: os.totalmem(), freeBytes: os.freemem() }
+  } catch {
+    return null
+  }
+})()`
 export const MAIN_LOG_PATH = `(() => {
   const load = process.mainModule?.require
   if (typeof load !== 'function') return { error: 'process.mainModule.require unavailable' }
@@ -416,7 +436,7 @@ export async function waitFor(probe, timeoutMs, intervalMs = 1000) {
   }
 }
 
-async function overlayPage(port, timeoutMs) {
+export async function overlayPage(port, timeoutMs) {
   let lastTargets = []
   let lastResults = []
   const page = await waitFor(async () => {
@@ -486,7 +506,7 @@ export async function runFileCapture({ installer, workDir = mkdtempSync(join(tmp
   const profileDir = join(workDir, 'profile')
   mkdirSync(installDir, { recursive: true })
   mkdirSync(profileDir, { recursive: true })
-  const executable = installQaZip(installer, installDir)
+  const { executable } = installQaZipDetails(installer, installDir)
   const { meetingsFolder } = seedProfile(profileDir)
   const { path: wavPath } = writeCaptureWav(profileDir)
   const before = meetingFiles(meetingsFolder)

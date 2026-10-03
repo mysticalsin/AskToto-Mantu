@@ -261,6 +261,45 @@ describe('QA candidate workflow: the file-fed capture smoke (M2-0495)', () => {
   })
 })
 
+describe('QA candidate workflow: the meeting plus History long run (M2-0496)', () => {
+  const job = jobBlocks.get('meeting-history-mac') ?? ''
+  const jobSteps = jobBlocks.has('meeting-history-mac') ? steps('meeting-history-mac') : []
+
+  it('runs as a blocking macOS QA-identity candidate job after provenance', () => {
+    expect(job).toMatch(/^    needs: provenance$/m)
+    expect(job).toMatch(/^    runs-on: macos-latest$/m)
+    expect(job).toMatch(/^    timeout-minutes: 85$/m)
+    expect(job).not.toContain('continue-on-error')
+  })
+
+  it('downloads the QA-identity zip, verifies provenance, computes sha256 and runs the 60 plus 10 minute driver', () => {
+    const download = jobSteps.findIndex((step) => step.includes('name: candidate-mac-qa-identity'))
+    const verify = jobSteps.findIndex((step) => step.includes('provenance.mjs verify provenance/provenance.json assets mac-qa-identity'))
+    const driver = jobSteps.findIndex((step) => step.includes('scripts/qa/meeting/meeting-history.mjs'))
+    expect(download).toBeGreaterThan(-1)
+    expect(verify).toBeGreaterThan(download)
+    expect(driver).toBeGreaterThan(verify)
+    expect(jobSteps[driver]).toContain('sha=$(shasum -a 256 "$installer"')
+    expect(jobSteps[driver]).toContain('--zip "$installer"')
+    expect(jobSteps[driver]).toContain('--sha256 "$sha"')
+    expect(jobSteps[driver]).toContain('--minutes 60')
+    expect(jobSteps[driver]).toContain('--post-minutes 10')
+  })
+
+  it('uploads the long-run report even when the driver fails', () => {
+    const upload = jobSteps.find((step) => step.includes('actions/upload-artifact@')) ?? ''
+    expect(upload).toContain('if: always()')
+    expect(upload).toContain('name: meeting-history-mac')
+    expect(upload).toContain('path: meeting-history-report/')
+    expect(upload).toContain('if-no-files-found: error')
+  })
+
+  it('runs the self-test when the meeting driver or main inspector helper changes', () => {
+    expect(workflow).toContain('      - scripts/qa/meeting/**\n')
+    expect(workflow).toContain('      - scripts/qa/lib/main-inspector.mjs\n')
+  })
+})
+
 describe('QA candidate workflow: runtime asset cache keys', () => {
   it('uses one bounded file per hashFiles call so Windows workflow template expansion cannot scan an ambiguous pattern', () => {
     for (const name of ['build-mac', 'build-win']) {

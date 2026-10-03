@@ -26,6 +26,7 @@ on:
       - scripts/qa/release-line.mjs
       - scripts/qa/st-1.mjs
       - scripts/qa/lib/st-1-core.mjs
+      - scripts/qa/lib/main-inspector.mjs
       - scripts/qa/meeting/**
       - src/main/qa-capture-source.ts
       - scripts/qa/stat-flags-fixture.sh
@@ -802,6 +803,52 @@ jobs:
         with:
           name: capture-file-smoke-mac
           path: capture-report/
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+
+  # Blocking: a 60 min file-fed meeting keeps recording while History is opened,
+  # searched and row-opened throughout; the app's main loop is measured through the Node inspector.
+  meeting-history-mac:
+    name: Meeting plus History long run (macOS QA identity)
+    needs: provenance
+    runs-on: macos-latest
+    timeout-minutes: 85
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-provenance
+          path: provenance
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-mac-qa-identity
+          path: assets
+      - name: Verify every byte against the provenance
+        run: node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
+      - name: Run the meeting plus History driver
+        run: |
+          installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
+          if [ -z "$installer" ]; then
+            echo "::error::candidate-mac-qa-identity did not contain a zip installer."
+            exit 1
+          fi
+          sha=$(shasum -a 256 "$installer" | cut -d' ' -f1)
+          node scripts/qa/meeting/meeting-history.mjs \
+            --zip "$installer" \
+            --sha256 "$sha" \
+            --minutes 60 \
+            --post-minutes 10 \
+            --out meeting-history-report
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: meeting-history-mac
+          path: meeting-history-report/
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 
