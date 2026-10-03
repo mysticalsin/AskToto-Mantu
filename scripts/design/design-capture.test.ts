@@ -239,11 +239,11 @@ describe('png size check', () => {
     })
   })
 
-  it('pins CDP device metrics to the capture viewport instead of inheriting Windows chrome height', () => {
-    expect(captureDeviceMetrics(viewport, 2)).toEqual({
+  it('pins CDP device metrics to the capture viewport and leaves output scaling to the screenshot clip', () => {
+    expect(captureDeviceMetrics(viewport)).toEqual({
       width: 960,
       height: 640,
-      deviceScaleFactor: 2,
+      deviceScaleFactor: 1,
       mobile: false
     })
   })

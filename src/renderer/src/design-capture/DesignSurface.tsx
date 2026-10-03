@@ -65,9 +65,7 @@ function AuditNegativeControl(): JSX.Element {
       <button className="dc-audit-negative-control" type="button">
         Control
       </button>
-      <span className="dc-audit-negative-clipped">
-        <span>Clipped label for audit control</span>
-      </span>
+      <span className="dc-audit-negative-clipped">Clipped label for audit control</span>
     </div>
   )
 }

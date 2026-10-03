@@ -292,6 +292,7 @@ function borderColors(style) {
     .filter(([, , width, borderStyle]) => Number.parseFloat(width || '0') > 0 && borderStyle !== 'none')
     .map(([, color]) => color)
     .filter(Boolean)
+    .filter((color, index, colors) => colors.indexOf(color) === index)
 }
 
 function contrastCandidate(color, background, source) {
@@ -321,17 +322,17 @@ function collectNonTextContrast(result, elements) {
       ...borderColors(style).map((color) => contrastCandidate(color, background.color, 'border')),
       contrastCandidate(style.backgroundColor, background.color, 'fill')
     ]
-    const best = bestNonTextContrastCandidate(candidates)
-    if (best) {
+    const contrastCandidates = candidates.filter(Boolean)
+    for (const candidate of contrastCandidates) {
       result.nonText.checked++
-      if (best.ratio + EPSILON < NON_TEXT_REQUIRED) {
+      if (candidate.ratio + EPSILON < NON_TEXT_REQUIRED) {
         result.nonText.failures.push({
           ...elementLabel(element),
           kind: 'control',
-          source: best.source,
-          measured: round(best.ratio),
+          source: candidate.source,
+          measured: round(candidate.ratio),
           required: NON_TEXT_REQUIRED,
-          foreground: formatColor(best.foreground),
+          foreground: formatColor(candidate.foreground),
           background: formatColor(background.color)
         })
       }

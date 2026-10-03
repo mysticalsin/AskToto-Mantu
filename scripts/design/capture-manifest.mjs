@@ -54,12 +54,12 @@ export function captureScreenshotRequest(viewport, scale) {
   }
 }
 
-/** Keep the renderer viewport fixed instead of inheriting OS chrome or host display size. */
-export function captureDeviceMetrics(viewport, scale) {
+/** Keep the renderer viewport fixed; Page.captureScreenshot clip.scale is the only output multiplier. */
+export function captureDeviceMetrics(viewport) {
   return {
     width: viewport.width,
     height: viewport.height,
-    deviceScaleFactor: scale,
+    deviceScaleFactor: 1,
     mobile: false
   }
 }
