@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
+import { UNAUTHENTICATED_RESULT } from '@shared/ipc-auth'
+import { IPC_UNAUTHENTICATED_EVENT } from './ipc-auth'
 import { createHistoryTransitionRecorder } from './history-transition'
 
 function recorder(at = 1_700_000_000_000) {
@@ -57,5 +59,20 @@ describe('createHistoryTransitionRecorder', () => {
     transitions.requested('settings', 'history')
     expect(transitions.committed('history')).toMatchObject({ from: 'settings', to: 'history' })
     expect(report).toHaveBeenCalledTimes(1)
+  })
+
+  it('routes the default History transition reporter through the shared unauthenticated handler', async () => {
+    const events: Event[] = []
+    window.addEventListener(IPC_UNAUTHENTICATED_EVENT, (event) => events.push(event))
+    const reportHistoryTransition = vi.fn().mockResolvedValue(UNAUTHENTICATED_RESULT)
+    window.toto = { ...window.toto, reportHistoryTransition }
+
+    const transitions = createHistoryTransitionRecorder()
+    transitions.requested('answer', 'history')
+    transitions.committed('history')
+    await Promise.resolve()
+
+    expect(reportHistoryTransition).toHaveBeenCalledWith({ from: 'answer', to: 'history', committedAtMs: expect.any(Number) })
+    expect((events[0] as CustomEvent).detail).toEqual(UNAUTHENTICATED_RESULT)
   })
 })

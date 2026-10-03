@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
+import { UNAUTHENTICATED_RESULT } from '@shared/ipc-auth'
+import { IPC_UNAUTHENTICATED_EVENT } from './ipc-auth'
 import { beginHistoryRequest } from './history-trace'
 
 const requestId = '123e4567-e89b-12d3-a456-426614174000'
@@ -76,5 +78,20 @@ describe('beginHistoryRequest', () => {
 
     expect(report).toHaveBeenCalledTimes(1)
     expect(report.mock.calls[0][0].outcome).toBe('discarded')
+  })
+
+  it('routes the default History settled reporter through the shared unauthenticated handler', async () => {
+    const events: Event[] = []
+    window.addEventListener(IPC_UNAUTHENTICATED_EVENT, (event) => events.push(event))
+    vi.spyOn(crypto, 'randomUUID').mockReturnValue(requestId as `${string}-${string}-${string}-${string}-${string}`)
+    vi.spyOn(performance, 'now').mockReturnValue(10)
+    const reportHistorySettled = vi.fn().mockResolvedValue(UNAUTHENTICATED_RESULT)
+    window.toto = { ...window.toto, reportHistorySettled }
+
+    beginHistoryRequest().discarded()
+    await Promise.resolve()
+
+    expect(reportHistorySettled).toHaveBeenCalledWith({ requestId, outcome: 'discarded', ipcMs: 0 })
+    expect((events[0] as CustomEvent).detail).toEqual(UNAUTHENTICATED_RESULT)
   })
 })

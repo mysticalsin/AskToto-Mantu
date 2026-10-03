@@ -1,6 +1,9 @@
+import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ipcMain } from 'electron'
 import { z } from 'zod'
+import ts from 'typescript'
 import { IPC } from '@shared/ipc'
 import { UNAUTHENTICATED_RESULT } from '@shared/ipc-auth'
 import { PUBLIC_IPC_HANDLERS } from './security'
@@ -17,6 +20,60 @@ function handlers(): Map<string, Handler> {
     registered.set(channel, fn)
   })
   return registered
+}
+
+function sourceFiles(dir: string): string[] {
+  const files: string[] = []
+  for (const name of readdirSync(dir)) {
+    const path = join(dir, name)
+    if (statSync(path).isDirectory()) {
+      files.push(...sourceFiles(path))
+      continue
+    }
+    if (!name.endsWith('.ts') || name.endsWith('.test.ts') || name.endsWith('.contract.test.ts')) continue
+    files.push(path)
+  }
+  return files
+}
+
+function property(node: ts.ObjectLiteralExpression, name: string): ts.Expression | undefined {
+  const prop = node.properties.find((entry): entry is ts.PropertyAssignment =>
+    ts.isPropertyAssignment(entry) && ts.isIdentifier(entry.name) && entry.name.text === name
+  )
+  return prop?.initializer
+}
+
+function ipcChannelFrom(expression: ts.Expression): string | null {
+  if (ts.isPropertyAccessExpression(expression) && expression.expression.getText() === 'IPC') {
+    const value = IPC[expression.name.text as keyof typeof IPC]
+    return typeof value === 'string' ? value : null
+  }
+  if (ts.isStringLiteral(expression)) return expression.text
+  return null
+}
+
+function registeredPublicHandlers(): string[] {
+  const publicHandlers = new Set<string>()
+  for (const path of sourceFiles(join(__dirname, '..'))) {
+    const file = ts.createSourceFile(path, readFileSync(path, 'utf8'), ts.ScriptTarget.Latest, true)
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node) && node.expression.getText(file) === 'registerHandler') {
+        const [first] = node.arguments
+        if (first && ts.isObjectLiteralExpression(first)) {
+          const auth = property(first, 'auth')
+          const channel = property(first, 'channel')
+          if (auth && ts.isStringLiteral(auth) && auth.text === 'public' && channel) {
+            const resolved = ipcChannelFrom(channel)
+            if (!resolved) throw new Error(`Could not resolve public IPC channel in ${path}: ${channel.getText(file)}`)
+            publicHandlers.add(resolved)
+          }
+        }
+      }
+      ts.forEachChild(node, visit)
+    }
+    visit(file)
+  }
+  return [...publicHandlers].sort()
 }
 
 describe('M2-0249 registerHandler authentication policy', () => {
@@ -89,6 +146,16 @@ describe('M2-0249 registerHandler authentication policy', () => {
     }, () => undefined)).toThrow(/allowlist/)
   })
 
+  it('fails closed when JavaScript or a cast passes an unknown auth policy', () => {
+    expect(() => registerHandler({
+      channel: IPC.localAppleEngineStatus,
+      auth: 'unknown',
+      args: z.tuple([]),
+      assertSender: () => undefined
+    } as never, () => undefined)).toThrow(/Unknown IPC auth policy/)
+    expect(ipcMain.handle).not.toHaveBeenCalled()
+  })
+
   it('keeps the reviewed public handler list explicit', () => {
     expect(PUBLIC_IPC_HANDLERS).toEqual([
       IPC.localAppleEngineStatus,
@@ -97,5 +164,9 @@ describe('M2-0249 registerHandler authentication policy', () => {
       IPC.permissionsAttestScreen,
       IPC.permissionsRevealCopy
     ])
+  })
+
+  it('lists every handler actually registered as public in the reviewed allowlist', () => {
+    expect(registeredPublicHandlers()).toEqual([...PUBLIC_IPC_HANDLERS].sort())
   })
 })

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ipcMain } from 'electron'
 import { IPC } from '@shared/ipc'
+import { UNAUTHENTICATED_RESULT } from '@shared/ipc-auth'
 import { registerWriteupIpc } from './writeup'
 
 vi.mock('electron')
@@ -40,7 +41,7 @@ describe('M2-0430: write-up IPC', () => {
     await span(event, { span: 'stop_to_recap_done', ms: 10, text: 'Synthetic meeting line.' })
     await span(event, { span: 'stop_to_lunch', ms: 10 })
     auth.signedIn = false
-    await span(event, { span: 'stop_to_recap_done', ms: 10 })
+    await expect(span(event, { span: 'stop_to_recap_done', ms: 10 })).resolves.toEqual(UNAUTHENTICATED_RESULT)
     expect(auditLogMock).not.toHaveBeenCalled()
   })
 

@@ -1,7 +1,7 @@
 import { ipcMain } from 'electron'
 import { UNAUTHENTICATED_RESULT, type UnauthenticatedResult } from '@shared/ipc-auth'
 import type { z } from 'zod'
-import { assertReviewedPublicHandler, type IpcAuthPolicy, type IpcChannel } from './security'
+import { assertReviewedPublicHandler, type IpcChannel } from './security'
 
 type InvokeEvent = Electron.IpcMainInvokeEvent
 type AssertSender = (event: InvokeEvent) => void
@@ -34,7 +34,11 @@ export function registerHandler<Schema extends AnyArgsSchema, Result>(
   options: RegisterHandlerOptions<Schema>,
   handler: (event: InvokeEvent, ...args: ParsedArgs<Schema>) => Result | Promise<Result>
 ): void {
-  if (options.auth === 'public') assertReviewedPublicHandler(options.channel)
+  const auth = (options as { auth?: unknown }).auth
+  if (auth !== 'public' && auth !== 'required') {
+    throw new Error(`Unknown IPC auth policy for ${options.channel}: ${String(auth)}`)
+  }
+  if (auth === 'public') assertReviewedPublicHandler(options.channel)
 
   ipcMain.handle(options.channel, async (event, ...rawArgs: unknown[]): Promise<RegisteredHandlerResult<Awaited<Result>>> => {
     options.assertSender(event)
