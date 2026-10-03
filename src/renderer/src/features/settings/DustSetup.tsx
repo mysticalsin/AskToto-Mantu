@@ -103,6 +103,8 @@ export function DustSetup({
   // separate follow-up agent.
   const agentsLocked = settings.managedKeys.includes('providerModels')
   const agent = settings.providerModels['dust'] ?? ''
+  const defaultBaseAgentId = settings.managedConfigDefaults.providerModels['dust']?.trim() ?? ''
+  const baseAgentChanged = !!agent && !!defaultBaseAgentId && agent !== defaultBaseAgentId
   const thinkAgent = settings.providerModelsThinking['dust'] ?? ''
   const spotlightAgent = settings.providerModelsSpotlightRef['dust'] ?? ''
   const keySaved = !!settings.hasKeys['dust']
@@ -191,7 +193,7 @@ export function DustSetup({
       await patch({ provider: 'dust' })
     }
     setCli({ busy: false, ok: false, msg: 'Checking Dust connection…' })
-    await proveAfterConnect(r.workspaceId || settings.dustWorkspaceId, wsChanged ? '' : agent)
+    await proveAfterConnect(r.workspaceId || settings.dustWorkspaceId, wsChanged ? defaultBaseAgentId : agent)
   }
 
   const oauthIdle = { phase: 'idle' as const, userCode: null, verificationUri: null, intervalSec: 5, expiresAt: 0, workspaces: null, error: null }
@@ -851,7 +853,7 @@ export function DustSetup({
                 Base agent · answers everyday questions &amp; drafts follow-ups
                 <ManagedChip keys={settings.managedKeys} k="providerModels" />
               </span>
-              {agent && (
+              {baseAgentChanged && (
                 <button
                   type="button"
                   onClick={() => setBaseAgent('')}
@@ -877,7 +879,7 @@ export function DustSetup({
               onSelect={setBaseAgent}
               placeholder="Base agent id (defaults to Métis)"
               disabled={agentsLocked}
-              defaultId=""
+              defaultId={defaultBaseAgentId}
               onEmptyBlur={() => setBaseAgent('')}
             />
             {selectedAgent && (

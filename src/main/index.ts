@@ -127,6 +127,7 @@ import {
 import { createStream } from './llm'
 import { isProxyOperatorFault, isTransient, nextBackoff, stripProxyFaultMarker } from './llm/retry'
 import { classifyExhaustion, type ExhaustionSignal } from './llm/exhaustion'
+import { MANAGED_CONFIG_DEFAULTS } from './managed-config-defaults'
 import { stripServerAuthoritativeSettingsPatch } from './settings-strip'
 import { isBudgetExhausted, resetHeadroom } from './llm/usage-headroom'
 import {
@@ -2129,6 +2130,10 @@ function publicSettings(): PublicSettings {
     version: app.getVersion(),
     allowedProviders: allowed, // org allowlist (null = unrestricted); surfaced so the picker matches enforcement
     modelPolicyCapabilities: modelPolicyCapabilitiesForSettings(s),
+    managedConfigDefaults: {
+      providerModels: MANAGED_CONFIG_DEFAULTS.providerModels ?? {},
+      providerModelsSpotlightRef: MANAGED_CONFIG_DEFAULTS.providerModelsSpotlightRef ?? {}
+    },
     localSpeechPack: resolveLocalSpeechPackPolicy(s, getAdminLocalSpeechPackPolicy())
   }
 }

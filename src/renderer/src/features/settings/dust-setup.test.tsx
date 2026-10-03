@@ -330,12 +330,17 @@ describe('DustSetup', () => {
   })
 
   it('loaded agents feed both pickers, and picking patches the trimmed agent ids', async () => {
-    const { card, patch, settings } = setup({ ...connected, providerModels: { dust: 'agentA' } })
+    const { card, patch, settings } = setup({
+      ...connected,
+      providerModels: { dust: 'agentA' },
+      managedConfigDefaults: { providerModels: { dust: TEST_DUST_BASE_AGENT_ID }, providerModelsSpotlightRef: {} }
+    })
     card.button(/Load my agents/).props.onClick()
     await flush()
     const pickers = card.view().all.filter((e) => e.type === AgentPicker)
     expect(pickers.map((p) => p.props.label)).toEqual(['Base agent', 'Thinking agent'])
     expect(pickers[0].props.agents).toEqual(AGENTS)
+    expect(pickers[0].props.defaultId).toBe(TEST_DUST_BASE_AGENT_ID)
     pickers[0].props.onSelect(` ${TEST_DUST_BASE_AGENT_ID} `)
     expect(patch).toHaveBeenCalledWith({ providerModels: { ...settings.providerModels, dust: TEST_DUST_BASE_AGENT_ID } })
     pickers[1].props.onSelect(' agentA ')
@@ -346,11 +351,12 @@ describe('DustSetup', () => {
   })
 
   it('offers a reset to the Métis default only once the base agent was changed', () => {
-    const { card, patch, settings } = setup({ ...connected, providerModels: { dust: 'agentA' } })
+    const managedConfigDefaults = { providerModels: { dust: TEST_DUST_BASE_AGENT_ID }, providerModelsSpotlightRef: {} }
+    const { card, patch, settings } = setup({ ...connected, providerModels: { dust: 'agentA' }, managedConfigDefaults })
     card.button(/Reset to Métis default/).props.onClick()
     expect(patch).toHaveBeenCalledWith({ providerModels: { ...settings.providerModels, dust: '' } })
 
-    const fresh = setup({ ...connected, providerModels: {} })
+    const fresh = setup({ ...connected, providerModels: { dust: TEST_DUST_BASE_AGENT_ID }, managedConfigDefaults })
     expect(fresh.card.view().text).not.toContain('Reset to Métis default')
   })
 })

@@ -1,12 +1,22 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { HOTKEY_ACTIONS, IPC } from '../shared/ipc'
 
 const main = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const preload = readFileSync(join(__dirname, '../preload/index.ts'), 'utf8')
-const channels = readFileSync(join(__dirname, '../shared/contracts/channels.ts'), 'utf8')
+const contractsDir = join(__dirname, '../shared/contracts')
 const app = readFileSync(join(__dirname, '../renderer/src/App.tsx'), 'utf8')
+
+function readContractsTree(dir = contractsDir): string {
+  return readdirSync(dir, { withFileTypes: true })
+    .map((entry) => {
+      const path = join(dir, entry.name)
+      if (entry.isDirectory()) return readContractsTree(path)
+      return entry.isFile() && /\.(ts|tsx)$/.test(entry.name) ? readFileSync(path, 'utf8') : ''
+    })
+    .join('\n')
+}
 
 function between(source: string, start: string, end: string): string {
   const from = source.indexOf(start)
@@ -19,7 +29,7 @@ function between(source: string, start: string, end: string): string {
 describe('Cap2 command authority boundary', () => {
   it('exposes only sanitized command state plus id-and-nonce confirmation controls', () => {
     expect(preload).not.toContain('metisCommandIngest')
-    expect(channels).not.toContain('metisCommandIngest')
+    expect(readContractsTree()).not.toContain('metisCommandIngest')
     expect(preload).not.toContain('metisCommandStop')
     expect(preload).toContain('onMetisCommandState')
     expect(preload).toContain('confirmMetisCommand')

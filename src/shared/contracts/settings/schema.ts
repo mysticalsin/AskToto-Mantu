@@ -708,6 +708,14 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
    *  request time, so the UI can't offer a provider that every ask would then reject. */
   allowedProviders: z.array(z.string()).nullable().default(null),
   modelPolicyCapabilities: z.record(z.string(), z.object({ provider: z.string(), model: z.string() })).default({}),
+  /** Non-secret managed defaults after main applies its deployment policy. Lets renderer controls compare
+   *  against effective defaults without embedding workspace-specific identifiers in shared code. */
+  managedConfigDefaults: z
+    .object({
+      providerModels: z.record(z.string(), z.string()).default({}),
+      providerModelsSpotlightRef: z.record(z.string(), z.string()).default({})
+    })
+    .default({ providerModels: {}, providerModelsSpotlightRef: {} }),
   localSpeechPack: z.enum(['required', 'offered', 'blocked']).default('offered')
 })
 export type PublicSettings = z.infer<typeof PublicSettingsSchema>
@@ -719,7 +727,7 @@ export type SettingsPatch = Partial<
     | 'hasApiKey' | 'providerReady' | 'localReady' | 'localSuggestReady' | 'localSummaryReady'
     | 'localVisionReady' | 'localRuntimeRunning' | 'localRuntimeState' | 'hasKeys'
     | 'hasEncryption' | 'resolvedMeetingsFolder' | 'managedKeys' | 'envKeys'
-    | 'loginItemOpenAtLogin' | 'lastFailover' | 'localSpeechPack'
+    | 'loginItemOpenAtLogin' | 'lastFailover' | 'managedConfigDefaults' | 'localSpeechPack'
     | ServerAuthoritativeSettingsKey
   >
 >
