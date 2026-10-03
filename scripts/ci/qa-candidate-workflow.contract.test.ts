@@ -156,6 +156,13 @@ describe('QA candidate workflow: which refs and versions may build (M2-0499)', (
   const guardSteps = steps('guard')
   const dispatchRefStep = guardSteps.find((step) => step.includes('may not build a candidate')) ?? ''
 
+  it('does not dereference pull_request fields on dispatch-only contexts', () => {
+    expect(workflow).toContain(
+      "group: qa-candidate-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}"
+    )
+    expect(workflow).not.toContain('group: qa-candidate-${{ github.event.pull_request.number || github.run_id }}')
+  })
+
   it('allows workflow_dispatch on refs/heads/main and refs/heads/release/1.9.x only, and names both when refusing', () => {
     expect(dispatchRefStep).toContain("if: github.event_name == 'workflow_dispatch'")
     expect(dispatchRefStep).toContain('refs/heads/main|refs/heads/release/1.9.x) ;;')
