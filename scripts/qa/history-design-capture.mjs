@@ -269,15 +269,15 @@ async function rolesPresent(page, state) {
   return results
 }
 
-/** Waits for History's next list request; returns when main received it (the same wall clock as this process). */
-async function waitForRequest(main, before) {
+/** Waits for History's next fixture-backed request; returns when main received it. */
+async function waitForRequest(main, before, wait = sleep, label = 'list') {
   const deadline = Date.now() + STATE_TIMEOUT_MS
   while (Date.now() < deadline) {
     const { requests, requestedAt } = await main('(({ requests, requestedAt }) => ({ requests, requestedAt }))(globalThis.__historyDesign)')
     if (requests > before) return requestedAt
-    await sleep(50)
+    await wait(50)
   }
-  throw new Error('History did not request its list')
+  throw new Error(`History did not request its ${label}`)
 }
 
 /**
@@ -291,29 +291,29 @@ export async function waitForHistoryDesignCue(page, { text, role = null, timeout
   await locator.first().waitFor({ timeout: timeoutMs })
 }
 
-// M2-0540 keeps the slow degraded-state clocks separate: a hosted runner can spend most of
-// STATE_TIMEOUT_MS getting the History request through click/open/main, then the renderer still needs
-// HISTORY_DEGRADED_MS to turn that pending request into the slow banner.
-export const HISTORY_DESIGN_CUE_BY_STATE = Object.freeze({
-  slow: Object.freeze({ text: 'OneDrive is slow to answer', role: 'status', timeoutMs: STATE_TIMEOUT_MS + HISTORY_DEGRADED_MS }),
-  'slow-with-rows': Object.freeze({ text: 'OneDrive is slow to answer', role: 'status', timeoutMs: STATE_TIMEOUT_MS + HISTORY_DEGRADED_MS }),
+const HISTORY_DESIGN_CUE_BY_STATE = Object.freeze({
+  slow: Object.freeze({ text: 'OneDrive is slow to answer', role: 'status' }),
+  'slow-with-rows': Object.freeze({ text: 'OneDrive is slow to answer', role: 'status' }),
   failed: Object.freeze({ text: 'Could not load your meetings', role: 'alert' }),
   unavailable: Object.freeze({ text: 'could not be read right now', role: 'status' })
 })
 
-export function historyDesignCueForState(stateId) {
+function historyDesignCueForState(stateId) {
   return HISTORY_DESIGN_CUE_BY_STATE[stateId] ?? null
 }
 
 /**
  * Puts History into `state` from a fresh open; returns when the open was clicked, when History's list
- * request reached main, and how it went. The renderer arms its HISTORY_DEGRADED_MS notice when it sends
- * that request, so the loading capture's budget starts there, not at the harness's click.
+ * or search request reached main, and how it went. Slow degraded waits are anchored to the request that
+ * arms the renderer's HISTORY_DEGRADED_MS notice, so hosted-runner click/type latency cannot consume it.
  */
-async function driveState(page, main, state, realRows) {
+export async function driveState(page, main, state, realRows, deps = {}) {
+  const wait = deps.wait ?? sleep
+  const ensureIdle = deps.ensureIdleBar ?? ensureIdleBar
+  const openHistory = deps.clickHistory ?? clickHistory
   // Bar History ignores a toggle within 400 ms of the last one; a fast capture can end inside that window.
-  await sleep(450)
-  await ensureIdleBar(page)
+  await wait(450)
+  await ensureIdle(page)
   const now = Date.now()
   await main(`(() => {
     const s = globalThis.__historyDesign
@@ -324,20 +324,22 @@ async function driveState(page, main, state, realRows) {
   })()`)
   const before = await main('globalThis.__historyDesign.requests')
   const clickedAt = Date.now()
-  await clickHistory(page)
-  const requestedAt = await waitForRequest(main, before)
+  await openHistory(page)
+  const requestedAt = await waitForRequest(main, before, wait, 'list')
   const visible = (text, role = null, timeoutMs = STATE_TIMEOUT_MS) => waitForHistoryDesignCue(page, { text, role, timeoutMs })
   const drive = { clickedAt, requestedAt }
   if (state.id === 'slow' || state.id === 'unavailable' || state.id === 'failed') {
     const cue = historyDesignCueForState(state.id)
-    await visible(cue.text, cue.role, cue.timeoutMs)
+    await visible(cue.text, cue.role)
     drive.bannerAfterMs = Date.now() - clickedAt
   } else if (state.id === 'slow-with-rows') {
     await visible(SAMPLE_MEETINGS[0])
+    const beforeSearch = await main('globalThis.__historyDesign.requests')
     const typedAt = Date.now()
     await page.getByLabel('Search past meetings').fill('planning')
+    drive.requestedAt = await waitForRequest(main, beforeSearch, wait, 'search')
     const cue = historyDesignCueForState(state.id)
-    await visible(cue.text, cue.role, cue.timeoutMs)
+    await visible(cue.text, cue.role, HISTORY_DEGRADED_MS + SETTLE_TIMEOUT_MS)
     drive.bannerAfterMs = Date.now() - typedAt
   } else if (state.list !== 'pending') {
     await visible(state.list === 'rows+notDownloaded' ? 'Not downloaded' : SAMPLE_MEETINGS[0])

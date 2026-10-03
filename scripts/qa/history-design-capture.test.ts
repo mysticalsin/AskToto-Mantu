@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { IPC } from '../../src/shared/ipc'
 import { HISTORY_DEGRADED_MS as RENDERER_DEGRADED_MS } from '../../src/renderer/src/components/history/list-status'
 import { NOT_DOWNLOADED_TEXT, UNAVAILABLE_TEXT } from '../../src/renderer/src/components/history/hydration'
-import { historyDesignCueForState, waitForHistoryDesignCue } from './history-design-capture.mjs'
+import { driveState } from './history-design-capture.mjs'
 import {
   BACKDROPS,
   BLOCKED_EXTERNAL_ROWS,
@@ -101,45 +101,62 @@ describe('History design matrix (M2-0032)', () => {
     expect(() => listAnswer('bogus', real, 0)).toThrow(/unknown list mode/)
   })
 
-  it('waits for cues with the caller-selected role and timeout budget', async () => {
-    const textWaitFor = vi.fn(async () => undefined)
-    const roleWaitFor = vi.fn(async () => undefined)
-    const filter = vi.fn(() => ({ first: () => ({ waitFor: roleWaitFor }) }))
+  it('anchors the slow search degraded cue to the search request, not the typed character', async () => {
+    const state = HISTORY_DESIGN_STATES.find((candidate) => candidate.id === 'slow-with-rows')!
+    const calls: string[] = []
+    const history = { requests: 0, requestedAt: 0 }
+    let searchFillPending = false
+    let searchRequestSeen = false
+
+    const main = vi.fn(async (expression: string) => {
+      if (expression === 'globalThis.__historyDesign.requests') return history.requests
+      if (expression.includes('requests, requestedAt')) return { ...history }
+      return true
+    })
+    const noteRequest = (requestedAt: number) => {
+      history.requests += 1
+      history.requestedAt = requestedAt
+    }
+    const wait = vi.fn(async () => {
+      if (searchFillPending && !searchRequestSeen) {
+        searchRequestSeen = true
+        noteRequest(2200)
+      }
+    })
     const page = {
-      getByText: vi.fn(() => ({ first: () => ({ waitFor: textWaitFor }) })),
-      getByRole: vi.fn(() => ({ filter }))
+      getByText: vi.fn((text: string) => ({
+        first: () => ({
+          waitFor: vi.fn(async () => {
+            calls.push(`text:${text}`)
+          })
+        })
+      })),
+      getByRole: vi.fn((role: string) => ({
+        filter: ({ hasText }: { hasText: string }) => ({
+          first: () => ({
+            waitFor: vi.fn(async ({ timeout }: { timeout: number }) => {
+              calls.push(`role:${role}:${hasText}:${timeout}`)
+              expect(searchRequestSeen).toBe(true)
+            })
+          })
+        })
+      })),
+      getByLabel: vi.fn(() => ({
+        fill: vi.fn(async () => {
+          searchFillPending = true
+        })
+      }))
     }
 
-    await waitForHistoryDesignCue(page as never, { text: 'OneDrive is slow to answer', role: 'status', timeoutMs: 12_000 })
+    const drive = await driveState(page as never, main as never, state, [{ title: 'Quarterly planning sample' }], {
+      wait,
+      ensureIdleBar: async () => undefined,
+      clickHistory: async () => noteRequest(1000)
+    })
 
-    expect(page.getByRole).toHaveBeenCalledWith('status')
-    expect(filter).toHaveBeenCalledWith({ hasText: 'OneDrive is slow to answer' })
-    expect(page.getByText).not.toHaveBeenCalled()
-    expect(roleWaitFor).toHaveBeenCalledWith({ timeout: 12_000 })
-    expect(textWaitFor).not.toHaveBeenCalled()
-  })
-
-  it('drives slow degraded captures with the renderer degraded threshold in the cue budget', () => {
-    expect(historyDesignCueForState('slow')).toEqual({ text: 'OneDrive is slow to answer', role: 'status', timeoutMs: 10_000 + HISTORY_DEGRADED_MS })
-    expect(historyDesignCueForState('slow-with-rows')).toEqual({ text: 'OneDrive is slow to answer', role: 'status', timeoutMs: 10_000 + HISTORY_DEGRADED_MS })
-    expect(historyDesignCueForState('failed')).toEqual({ text: 'Could not load your meetings', role: 'alert' })
-    expect(historyDesignCueForState('unavailable')).toEqual({ text: 'could not be read right now', role: 'status' })
-  })
-
-  it('still supports role-gated waits for cues whose role is the state transition signal', async () => {
-    const waitFor = vi.fn(async () => undefined)
-    const filter = vi.fn(() => ({ first: () => ({ waitFor }) }))
-    const page = {
-      getByText: vi.fn(),
-      getByRole: vi.fn(() => ({ filter }))
-    }
-
-    await waitForHistoryDesignCue(page as never, { text: 'Could not load your meetings', role: 'alert' })
-
-    expect(page.getByRole).toHaveBeenCalledWith('alert')
-    expect(filter).toHaveBeenCalledWith({ hasText: 'Could not load your meetings' })
-    expect(page.getByText).not.toHaveBeenCalled()
-    expect(waitFor).toHaveBeenCalledWith({ timeout: 10_000 })
+    expect(drive.requestedAt).toBe(2200)
+    expect(wait).toHaveBeenCalled()
+    expect(calls).toContain(`role:status:OneDrive is slow to answer:${HISTORY_DEGRADED_MS + 1000}`)
   })
 })
 
