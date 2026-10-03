@@ -393,12 +393,30 @@ pid_in_list() {
 }
 
 descendant_pids() {
-  local parent=$1 child
+  local parent=$1
   [[ -n "$parent" ]] || return 0
-  for child in $("$PGREP_BIN" -P "$parent" 2>/dev/null || true); do
-    [[ "$child" =~ ^[0-9]+$ ]] || continue
-    printf '%s\n' "$child"
-    descendant_pids "$child"
+  local max_depth=${M2_0008_DESCENDANT_MAX_DEPTH:-32}
+  [[ "$max_depth" =~ ^[0-9]+$ ]] || max_depth=32
+  local -a queue=("$parent")
+  local -a depths=(0)
+  local visited=$'\n'"$parent"$'\n'
+  local index=0 current depth child
+  while (( index < ${#queue[@]} )); do
+    current=${queue[$index]}
+    depth=${depths[$index]}
+    index=$((index + 1))
+    (( depth < max_depth )) || continue
+    for child in $("$PGREP_BIN" -P "$current" 2>/dev/null || true); do
+      [[ "$child" =~ ^[0-9]+$ ]] || continue
+      [[ "$child" != "$current" ]] || continue
+      case "$visited" in
+        *$'\n'"$child"$'\n'*) continue ;;
+      esac
+      visited+="$child"$'\n'
+      printf '%s\n' "$child"
+      queue+=("$child")
+      depths+=($((depth + 1)))
+    done
   done
 }
 
