@@ -25,6 +25,8 @@ const CONNECT_TIMEOUT_MS = 30_000
 const SETTINGS_TIMEOUT_MS = 30_000
 const POLL_MS = 250
 const VIEWPORT = Object.freeze({ width: 900, height: 820 })
+const SECTION_VIEWPORT_PADDING_PX = 96
+const MAX_SECTION_VIEWPORT_HEIGHT = 1_600
 const FIT_TOLERANCE_PX = 1
 const SETTINGS_STABLE_TIMEOUT_MS = 12_000
 const SETTINGS_STABLE_SAMPLE_MS = 250
@@ -126,6 +128,16 @@ function fitsInside(innerBox, outerBox) {
 
 function sectionCaptureClipped({ buffer, sectionBox, panelBox }) {
   return !fitsInside(sectionBox, panelBox) || !screenshotCoversBox(buffer, sectionBox)
+}
+
+function sectionViewportHeight(sectionBox, panelBox, currentHeight = VIEWPORT.height) {
+  if (!sectionBox) return currentHeight
+  if (!panelBox) return Math.min(MAX_SECTION_VIEWPORT_HEIGHT, Math.max(currentHeight, Math.ceil(sectionBox.height + SECTION_VIEWPORT_PADDING_PX)))
+  const verticalDeficit = Math.max(0, (sectionBox.y + sectionBox.height) - (panelBox.y + panelBox.height))
+  const heightDeficit = Math.max(0, sectionBox.height - panelBox.height)
+  const deficit = Math.max(verticalDeficit, heightDeficit)
+  const needed = deficit > 0 ? Math.ceil(currentHeight + deficit + SECTION_VIEWPORT_PADDING_PX) : currentHeight
+  return Math.min(MAX_SECTION_VIEWPORT_HEIGHT, Math.max(currentHeight, needed))
 }
 
 async function installDeterministicSettingsQaBridge(page) {
@@ -388,6 +400,14 @@ async function captureSections(page, appOutDir) {
       const section = tabPanel.locator('section').nth(index)
       await section.scrollIntoViewIfNeeded()
       await settle(page)
+      const initialBox = await section.boundingBox()
+      const initialPanelBox = await tabPanel.boundingBox()
+      const height = sectionViewportHeight(initialBox, initialPanelBox, VIEWPORT.height)
+      if (height !== page.viewportSize()?.height) {
+        await page.setViewportSize({ width: VIEWPORT.width, height })
+        await section.scrollIntoViewIfNeeded()
+        await settle(page)
+      }
       const title = (await section.locator('xpath=.//div[contains(concat(" ", normalize-space(@class), " "), " font-semibold ")]').first().textContent({ timeout: 2_000 }).catch(() => null))?.trim()
         ?? `Section ${index + 1}`
       const key = `${slug(tab)}-${String(index + 1).padStart(2, '0')}-${slug(title)}`
@@ -564,4 +584,4 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   })
 }
 
-export { compare, fitsInside, formatFailureSummary, pngSize, removeProfileDir, screenshotCoversBox, sectionCaptureClipped, setQaBridgeMember }
+export { compare, fitsInside, formatFailureSummary, pngSize, removeProfileDir, screenshotCoversBox, sectionCaptureClipped, sectionViewportHeight, setQaBridgeMember }

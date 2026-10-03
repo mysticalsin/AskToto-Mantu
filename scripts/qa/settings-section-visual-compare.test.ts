@@ -7,6 +7,7 @@ import {
   removeProfileDir,
   screenshotCoversBox,
   sectionCaptureClipped,
+  sectionViewportHeight,
   setQaBridgeMember
 } from './settings-section-visual-compare.mjs'
 
@@ -120,6 +121,24 @@ describe('settings-section-visual-compare compare', () => {
     const panelBox = { x: 0, y: 0, width: 900, height: 700 }
 
     expect(sectionCaptureClipped({ buffer: png(820, 620), sectionBox, panelBox })).toBe(false)
+  })
+
+  it('grows the capture viewport for tall Settings sections without unbounded runner sizes', () => {
+    expect(sectionViewportHeight(
+      { x: 24, y: 40, width: 820, height: 620 },
+      { x: 0, y: 0, width: 900, height: 700 },
+      820
+    )).toBe(820)
+    expect(sectionViewportHeight(
+      { x: 24, y: 40, width: 820, height: 891 },
+      { x: 0, y: 0, width: 900, height: 700 },
+      820
+    )).toBe(1_107)
+    expect(sectionViewportHeight(
+      { x: 24, y: 40, width: 820, height: 2_000 },
+      { x: 0, y: 0, width: 900, height: 700 },
+      820
+    )).toBe(1_600)
   })
 
   it('detects when the uploaded section PNG is smaller than the section box', () => {
