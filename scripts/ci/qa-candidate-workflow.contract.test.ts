@@ -9,6 +9,10 @@ const workflow = readFileSync(join(root, '.github', 'workflows', 'qa-candidate.y
 const ownerSandboxProbePath = join(root, 'scripts', 'hermetic', 'prove-owner-sandbox.sh')
 const ownerSandboxProbe = readFileSync(ownerSandboxProbePath, 'utf8').replace(/\r\n/g, '\n')
 
+function bashPath(path: string): string {
+  return path.replace(/\\/g, '/')
+}
+
 /** A job's text: from its two-space key to the next two-space key. No YAML library is a dependency here. */
 function jobBlock(name: string): string {
   const lines = workflow.split('\n')
@@ -351,13 +355,13 @@ exit 1
 
       expect(result.stderr).toBe('')
       expect(result.status).toBe(0)
-      expect(result.stdout).toContain(`${join(home, 'Library', 'CloudStorage')} exists -> denied`)
-      expect(result.stdout).toContain(`${join(home, 'Library', 'Keychains')} exists -> denied`)
-      expect(result.stdout).toContain(`${join(home, 'Library', 'Application Support', 'Metis')} absent -> denied`)
+      expect(result.stdout).toContain(`${bashPath(join(home, 'Library', 'CloudStorage'))} exists -> denied`)
+      expect(result.stdout).toContain(`${bashPath(join(home, 'Library', 'Keychains'))} exists -> denied`)
+      expect(result.stdout).toContain(`${bashPath(join(home, 'Library', 'Application Support', 'Metis'))} absent -> denied`)
       const wrapperLog = readFileSync(log, 'utf8')
-      expect(wrapperLog).toContain(`/bin/ls -ld ${join(home, 'Library', 'CloudStorage')}`)
-      expect(wrapperLog).toContain(`/bin/ls -ld ${join(home, 'Library', 'Keychains')}`)
-      expect(wrapperLog).toContain(`/bin/mkdir ${join(home, 'Library', 'Application Support', 'Metis')}`)
+      expect(wrapperLog).toContain(`/bin/ls -ld ${bashPath(join(home, 'Library', 'CloudStorage'))}`)
+      expect(wrapperLog).toContain(`/bin/ls -ld ${bashPath(join(home, 'Library', 'Keychains'))}`)
+      expect(wrapperLog).toContain(`/bin/mkdir ${bashPath(join(home, 'Library', 'Application Support', 'Metis'))}`)
     } finally {
       rmSync(sandbox, { recursive: true, force: true })
     }
@@ -400,7 +404,7 @@ exit 1
       })
 
       expect(result.status).toBe(1)
-      expect(result.stdout).toContain(`::error::owner-account sandbox allowed creating absent protected path ${allowedPath}`)
+      expect(result.stdout).toContain(`::error::owner-account sandbox allowed creating absent protected path ${bashPath(allowedPath)}`)
       expect(existsSync(allowedPath)).toBe(false)
     } finally {
       rmSync(sandbox, { recursive: true, force: true })

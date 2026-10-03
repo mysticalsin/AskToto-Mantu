@@ -7,21 +7,32 @@ if [ -z "${RUNNER_TEMP:-}" ]; then
   exit 1
 fi
 
-OWNER_HOME="${PROVE_OWNER_SANDBOX_HOME:-$HOME}"
 SANDBOX_WRAPPER="${PROVE_OWNER_SANDBOX_WRAPPER:-scripts/hermetic/run-under-owner-sandbox.sh}"
 PROBE_OUT="$RUNNER_TEMP/sandbox-probe.out"
 PROBE_ERR="$RUNNER_TEMP/sandbox-probe.err"
 existing_count=0
 
-protected_paths=(
-  "$OWNER_HOME/Library/CloudStorage"
-  "$OWNER_HOME/Library/Keychains"
-  "$OWNER_HOME/Library/Application Support/Metis"
-  "$OWNER_HOME/Library/Application Support/Métis"
-  "$OWNER_HOME/Library/Application Support/AskToto"
-  "$OWNER_HOME/Library/Application Support/asktoto"
-  "$OWNER_HOME/Library/Application Support/asktoto-dev"
-)
+if [ -n "${PROVE_OWNER_SANDBOX_HOME:-}" ]; then
+  protected_paths=(
+    "$PROVE_OWNER_SANDBOX_HOME/Library/CloudStorage"
+    "$PROVE_OWNER_SANDBOX_HOME/Library/Keychains"
+    "$PROVE_OWNER_SANDBOX_HOME/Library/Application Support/Metis"
+    "$PROVE_OWNER_SANDBOX_HOME/Library/Application Support/Métis"
+    "$PROVE_OWNER_SANDBOX_HOME/Library/Application Support/AskToto"
+    "$PROVE_OWNER_SANDBOX_HOME/Library/Application Support/asktoto"
+    "$PROVE_OWNER_SANDBOX_HOME/Library/Application Support/asktoto-dev"
+  )
+else
+  protected_paths=(
+    "$HOME/Library/CloudStorage"
+    "$HOME/Library/Keychains"
+    "$HOME/Library/Application Support/Metis"
+    "$HOME/Library/Application Support/Métis"
+    "$HOME/Library/Application Support/AskToto"
+    "$HOME/Library/Application Support/asktoto"
+    "$HOME/Library/Application Support/asktoto-dev"
+  )
+fi
 
 run_denial_probe() {
   set +e
