@@ -20,7 +20,8 @@ import {
   type MeetingExtraction,
   type ProvenantField
 } from '@shared/brain'
-import { readSavedFile, decodeSaved } from '../transcripts'
+import { readSavedFile, decodeSaved, resolveMeetingsFolder } from '../transcripts'
+import { classifyAll, storageAt } from '../infra/storage/meetings-storage'
 import { mainLog } from '../logger'
 import {
   brainDir,
@@ -92,6 +93,13 @@ function corruptionLockPath(s: Settings): string {
 /** True while corrections are blocked by a previously-detected, not-yet-resolved journal corruption. */
 export function isJournalCorruptionBlocked(s: Settings): boolean {
   return existsSync(corruptionLockPath(s))
+}
+
+/** Gateway-backed status check for frequent IPC pollers; existence is metadata-only. */
+export async function isJournalCorruptionBlockedAsync(s: Settings): Promise<boolean> {
+  const rel = join('.brain', CORRUPTION_LOCK_REL)
+  const fileClass = (await classifyAll(storageAt(resolveMeetingsFolder(s)), [rel])).get(rel)
+  return !!fileClass && fileClass.status !== 'missing' && 'version' in fileClass
 }
 
 /** Explicit resolution of a corruption block (Fix 1): removes the sentinel so corrections resume. The

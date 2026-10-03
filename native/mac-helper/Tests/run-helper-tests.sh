@@ -48,6 +48,29 @@ expect_exit "stall-watch non-numeric --pid exits 1" 1 "$code"
 expect_exit "stall-watch refuses a --pid that is not its parent" 1 "$code"
 if grep -q "is not this helper's parent" "$work/err"; then pass "stall-watch names the parent mismatch"; else fail "stall-watch parent-mismatch message"; fi
 
+# --- supervise argument parsing (setup failures exit 125, never the child's status) ----------------
+err="$("$helper" supervise 2>&1 >/dev/null)"; code=$?
+expect_exit "supervise with no options exits 125" 125 "$code"
+case "$err" in *"usage: metis-mac-helper supervise --parent"*) pass "supervise prints its usage" ;; *) fail "supervise usage: $err" ;; esac
+
+"$helper" supervise --parent notanumber -- /usr/bin/true >/dev/null 2>&1; code=$?
+expect_exit "supervise non-numeric --parent exits 125" 125 "$code"
+
+"$helper" supervise --parent $$ >/dev/null 2>&1; code=$?
+expect_exit "supervise without '-- <cmd>' exits 125" 125 "$code"
+
+"$helper" supervise --parent $$ -- >/dev/null 2>&1; code=$?
+expect_exit "supervise with an empty command exits 125" 125 "$code"
+
+"$helper" supervise --parent 1 -- /usr/bin/true >/dev/null 2>"$work/err"; code=$?
+expect_exit "supervise refuses a --parent that is not its parent" 125 "$code"
+if grep -q "is not this helper's parent" "$work/err"; then pass "supervise names the parent mismatch"; else fail "supervise parent-mismatch message"; fi
+
+# A valid invocation reaches supervision: the child runs and its exit status is passed through.
+# The wrapper shell passes its own pid as --parent; the trailing exit keeps it from exec-ing the helper away.
+sh -c '"$0" supervise --parent $$ -- /bin/sh -c "exit 7"; exit $?' "$helper" >/dev/null 2>&1; code=$?
+expect_exit "supervise exits with the child's status" 7 "$code"
+
 # --- proc-info -------------------------------------------------------------------------------------
 "$helper" proc-info >/dev/null 2>&1; code=$?
 expect_exit "proc-info without a pid exits 1" 1 "$code"
@@ -62,7 +85,21 @@ if [ -z "$out" ]; then pass "proc-info dead pid prints nothing"; else fail "proc
 
 sleep 30 &
 child=$!
-out="$("$helper" proc-info "$child")"
+out=""
+for _ in $(seq 1 100); do
+  out="$("$helper" proc-info "$child")"
+  if printf '%s' "$out" | py '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+sys.exit(0 if d.get("exeRealpath", "").endswith("/sleep") else 1)
+' >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.05
+done
 kill "$child" 2>/dev/null; wait "$child" 2>/dev/null
 if printf '%s' "$out" | CHILD="$child" PARENT="$$" py '
 import json, os, re, sys
@@ -120,6 +157,54 @@ assert [l["text"].strip().upper() for l in ordered][:2] == ["TOP LINE", "BOTTOM 
 else
   fail "render ocr fixture"
 fi
+
+# --- code-identity (read-only; M2-0429) ------------------------------------------------------------
+"$helper" code-identity >/dev/null 2>&1; code=$?
+expect_exit "code-identity without a path exits 1" 1 "$code"
+"$helper" code-identity "$work/missing.app" >/dev/null 2>&1; code=$?
+expect_exit "code-identity on a missing path exits 1" 1 "$code"
+
+# An explicitly ad-hoc-signed copy, so the result does not depend on the runner's linker defaults.
+cp "$helper" "$work/adhoc-bin"
+if codesign --force --sign - "$work/adhoc-bin" >/dev/null 2>&1; then
+  out="$("$helper" code-identity "$work/adhoc-bin")"; code=$?
+  expect_exit "code-identity exits 0 on ad-hoc code" 0 "$code"
+  expected="$(codesign -dvvv "$work/adhoc-bin" 2>&1 | sed -n 's/^CDHash=//p')"
+  if printf '%s' "$out" | EXPECTED="$expected" py '
+import json, os, re, sys
+d = json.load(sys.stdin)
+assert set(d) == {"identifier", "cdhash", "teamId", "adhoc"}, sorted(d)
+assert d["adhoc"] is True, d
+assert re.fullmatch(r"[0-9a-f]{40}", d["cdhash"]), d["cdhash"]
+assert d["cdhash"] == os.environ["EXPECTED"].lower(), (d["cdhash"], os.environ["EXPECTED"])
+assert d["teamId"] == "", d
+'; then pass "code-identity reports adhoc and the same 40-hex cdhash codesign shows"; else fail "code-identity JSON: $out"; fi
+else
+  fail "ad-hoc sign the code-identity fixture"
+fi
+
+# --- bundle-copies (read-only; M2-0429) ------------------------------------------------------------
+"$helper" bundle-copies >/dev/null 2>&1; code=$?
+expect_exit "bundle-copies without a bundle id exits 1" 1 "$code"
+
+out="$("$helper" bundle-copies com.mantu.asktoto.helper-test-missing)"; code=$?
+expect_exit "bundle-copies exits 0 for an unknown bundle id" 0 "$code"
+if printf '%s' "$out" | py '
+import json, sys
+assert json.load(sys.stdin) == {"copies": []}
+'; then pass "bundle-copies reports no copies for an unknown bundle id"; else fail "bundle-copies unknown id JSON: $out"; fi
+
+out="$("$helper" bundle-copies com.apple.finder)"; code=$?
+expect_exit "bundle-copies exits 0 for Finder" 0 "$code"
+if printf '%s' "$out" | py '
+import json, sys
+d = json.load(sys.stdin)
+assert list(d) == ["copies"], list(d)
+assert d["copies"], d
+for c in d["copies"]:
+    assert set(c) == {"path", "version"}, c
+assert any(c["path"].endswith("/Finder.app") for c in d["copies"]), d
+'; then pass "bundle-copies lists path + version for every copy LaunchServices knows"; else fail "bundle-copies Finder JSON: $out"; fi
 
 if [ "$failures" -eq 0 ]; then echo "all helper tests passed"; exit 0; fi
 echo "$failures helper test(s) failed"

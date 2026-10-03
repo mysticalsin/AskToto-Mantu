@@ -1,5 +1,8 @@
 # Métis — Enterprise Security & Reliability Hardening Backlog
 
+> **Historical record.** Not a live to-do list. Open defects are rows in [`qa/BUG-LEDGER.md`](qa/BUG-LEDGER.md); the gates that
+> hold the line today are described in [`runbooks/qa.md`](runbooks/qa.md).
+
 **Status (2026-07-10): largely shipped.** All P0/P1 items and all but one P2 item below are
 checked off `[x]` — done, verified in code. The remaining open item is the single `[ ]` P2 entry
 (1 fps ScreenCaptureKit stream) plus the three explicitly deferred items at the bottom of this

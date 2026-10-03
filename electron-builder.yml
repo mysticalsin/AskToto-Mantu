@@ -81,6 +81,10 @@ extraResources:
     to: managed-config.enterprise.example.json
   - from: build/icon.png
     to: icon.png
+  # Pre-sized tray images (tray.png 18 px, tray@2x.png 36 px) written by scripts/make-tray-icons.mjs in prebuild;
+  # createTray loads them as-is so the main thread never resizes the full-size icon. Mac and Windows both ship them.
+  - from: build/tray
+    to: tray
   - from: resources/graphify_runner.py
     to: graphify_runner.py
   - from: THIRD_PARTY_NOTICES.md

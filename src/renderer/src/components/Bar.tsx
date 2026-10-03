@@ -20,11 +20,11 @@ import {
 import { MantuMark } from './MantuMark'
 import { ModePicker } from './ModePicker'
 import { InlineOrb } from './AgentStatus'
-import { modeLabel } from '@shared/ipc'
-import type { ConversationMode, CustomMode } from '@shared/ipc'
+import { modeLabel, type ConversationMode, type CustomMode } from '@shared/ipc'
 import { formatScreenFreshness } from '@shared/perception'
 import { accelLabel } from '../lib/keys'
 import type { CaptureDegraded, CaptureHealth, RecognizerStatus } from '../lib/listen'
+import { ScreenRepairButton } from './ScreenPermissionRow'
 import { ObsidianOrb } from './ObsidianOrb'
 import { JarvisOrbButton } from './JarvisOrbButton'
 import { BAR_MARK_SIZE_PX, type OrbMood } from '../lib/bar-pill-orb'
@@ -509,7 +509,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
                 <>
                   <span className="h-[6px] w-[6px] rounded-full bg-[color:var(--color-warn)]" />
                   <AudioLines size={11} strokeWidth={ICON_STROKE} />
-                  {props.captureDegraded.side === 'them' ? 'Mic only' : 'No mic'}
+                  {props.captureDegraded.side === 'them' ? 'Mic only' : 'No mic'}{props.captureDegraded.repair && <ScreenRepairButton />}
                 </>
               ) : props.captureHealth?.selectionOutcome === 'unavailable' ? (
                 <>

@@ -11,6 +11,12 @@ import { describe, expect, it } from 'vitest'
  * (BrainEntityNamesResult in shared/ipc.ts), because its only consumer, the ASR casing-bias feature,
  * wants one deduped name list. This pins that flat shape so a future refactor can't split it back into
  * { people, accounts } and silently break every reader again.
+ *
+ * M2-0031: the merge itself moved into store.ts's loadEntityDisplayNames (gateway-backed, so a mount
+ * racing a cloud-only/kernel-blocked entity file can't freeze the main thread — see
+ * store.test.ts's "loadEntityDisplayNames" suite for the behavioral coverage). The IPC handler is now a
+ * thin call-site delegate; this file only pins that it stays one, so the merge logic can't drift back
+ * into index.ts (and out of the gateway) unnoticed.
  */
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const ipcSrc = readFileSync(join(__dirname, '..', 'shared', 'ipc.ts'), 'utf8')
@@ -22,16 +28,14 @@ describe('MQA-115 — brainEntityNames returns a flat { names }, not { people, a
     expect(ipcSrc).not.toMatch(/BrainEntityNamesResult \{[\s\S]*?\baccounts:/)
   })
 
-  it('the handler merges people + accounts into one deduped names array', () => {
+  it('the handler is a thin gateway-backed delegate, not an inline sync directory scan', () => {
     const handler = indexSrc.slice(
       indexSrc.indexOf('ipcMain.handle(IPC.brainEntityNames'),
       indexSrc.indexOf('ipcMain.handle(IPC.brainSetDealOutcome')
     )
-    // Both sources feed the one array…
-    expect(handler).toMatch(/const people = listBrainEntities\(s, 'person'\)/)
-    expect(handler).toMatch(/const accounts = listBrainEntities\(s, 'account'\)/)
-    // …merged + deduped into a single { names } return, never a { people, accounts } object.
-    expect(handler).toMatch(/return \{ names: Array\.from\(new Set\(\[\.\.\.people, \.\.\.accounts\]\)\)/)
+    // Delegates the merge to the gateway-backed store function — never reads entities inline here.
+    expect(handler).toMatch(/return loadBrainEntityDisplayNames\(getSettings\(\)\)/)
+    expect(handler).not.toMatch(/readBrainPerson|readBrainAccount|listBrainEntities/)
     expect(handler).not.toMatch(/return \{\s*people,\s*accounts\s*\}/)
   })
 })

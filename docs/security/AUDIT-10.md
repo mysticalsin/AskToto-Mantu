@@ -1,5 +1,8 @@
 # Métis 1.8.1 security gate — 10-control audit
 
+> **Point-in-time verdict (1.8.1, 2026-08-31).** Later releases are not covered. The guardrails that bind current work are in
+> [`AGENTS.md`](../../AGENTS.md) section 6; the operating procedures are in [`../runbooks/operations.md`](../runbooks/operations.md).
+
 **Product:** Métis (AskToto-Mantu), Electron desktop note-taking / second-brain app plus Fly license server and Cloudflare AI proxy.
 **Scope:** desktop main + renderer IPC, local data, license-server HTTP, Cloudflare Worker, Graph/Outlook, MCP. Overlay chrome, island geometry, onboarding, PR 58, identity card, Intelligence dashboards, and latency/time-saved work are frozen and were not used as evidence or as a place to hide findings.
 **Method:** static review of current `main` (`ebb909d`). This document is the Phase 1 verdict. It was written before the Phase 2 patches in this PR.

@@ -4,6 +4,7 @@ import worker, {
   setProxyRateLimitCache,
   PROXY_RL_AUTH_MAX,
   PROXY_RL_UNAUTH_MAX,
+  PROXY_MAX_BODY_BYTES,
   type Env,
   type ProxyRateCache
 } from './index'
@@ -291,6 +292,28 @@ describe('forwarding to the Cloudflare AI REST API', () => {
     expect(res.headers.get('x-content-type-options')).toBe('nosniff')
     expect(res.headers.get('x-frame-options')).toBe('DENY')
     expect(res.headers.get('strict-transport-security')).toBe('max-age=31536000; includeSubDomains')
+  })
+})
+
+describe('request body cap', () => {
+  it('rejects an oversized body with 413 and never calls Cloudflare', async () => {
+    const calls = stubUpstream(new Response('{"ok":true}', { status: 200 }))
+    const big = JSON.stringify({ messages: [{ role: 'user', content: 'x'.repeat(PROXY_MAX_BODY_BYTES + 1) }] })
+
+    const res = await worker.fetch(chatRequest(PROXY_KEY, big), env())
+
+    expect(res.status).toBe(413)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('still forwards a body at the limit', async () => {
+    const calls = stubUpstream(new Response('{"ok":true}', { status: 200 }))
+    const atLimit = 'x'.repeat(PROXY_MAX_BODY_BYTES)
+
+    const res = await worker.fetch(chatRequest(PROXY_KEY, atLimit), env())
+
+    expect(res.status).toBe(200)
+    expect(calls[0][1].body).toBe(atLimit)
   })
 })
 

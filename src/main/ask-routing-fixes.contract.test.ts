@@ -8,6 +8,7 @@ import { userText } from './llm/shared'
 import { readDeal, writeDeal, setDealOutcome, slugify } from './brain/store'
 import { renameEntity, readAliasMap, resolveEntitySlug } from './brain/corrections'
 import { settleCommitment } from './brain/ingest'
+import { useStorageForTests } from './infra/storage/meetings-storage'
 
 vi.mock('electron')
 
@@ -88,6 +89,7 @@ describe('MQA-013 — settle/outcome resolve a renamed deal by its stable id', (
   let s: Settings
 
   beforeEach(() => {
+    useStorageForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-ask-routing-test-'))
     s = { meetingsFolder: folder, encryptTranscripts: false } as Settings
   })

@@ -51,8 +51,8 @@ export interface RetentionResult {
 
 export interface RetentionDeps {
   /** Raw D1 handle for the two tables `OperatorStore#pruneTable` does not cover. Omit (tests using
-   *  `memoryStore()` with no D1, or a Worker with `env.DB` unbound) to skip those two prunes -
-   *  they return 0 rather than throwing. */
+   *  `memoryStore()` with no D1) to skip those two prunes - they return 0 rather than throwing.
+   *  The Worker's cron never runs without `env.DB` (see `scheduled` in `index.ts`). */
   db?: D1DatabaseLike
 }
 

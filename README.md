@@ -62,7 +62,11 @@ Full install instructions: [`docs/INSTALL.md`](docs/INSTALL.md).
 
 Requires **Node 22.22.3 LTS**, pinned consistently in `.nvmrc`, `.node-version`, `package.json`, and CI.
 
-```bash
+Repository tests and the app itself run in CI, not on the maintainer's Mac (see [`AGENTS.md`](AGENTS.md) section 3); the
+commands below are the ones CI and contributors' own machines use. `scripts/docs/verify-commands.mjs` resolves every one of them
+against the release commit, so a script named here exists there.
+
+```bash verify-dry
 npm install
 npm run dev          # launch the overlay (dev)
 npm run typecheck    # tsc, both projects (main + web)
@@ -161,6 +165,10 @@ AskToto/
 │       ├── providers.ts      17-provider + custom-endpoint registry + model-tier routing
 │       ├── routing.ts        thinking-mode router (base / think / deep tiers)
 │       └── prompts.ts        default mode prompts
+├── operator/                 Operator: Cloudflare Worker + D1 fleet control plane (docs/operator/RUNBOOKS.md)
+├── cloudflare-proxy/         Worker proxy for provider traffic (docs/CLOUDFLARE.md)
+├── native-app/, native/      Swift MetisKit and native macOS helper (docs/PLATFORM-MAP.md)
+├── scripts/                  build, packaging, release, QA and gate scripts
 ├── intelligence/             Mantu Intelligence dashboard — separate Vite/React app (its own
 │                             package.json/deps), packaged via electron-builder extraResources,
 │                             opened by src/main/intelligence.ts. Build with `npm run build:intelligence`.
@@ -239,7 +247,7 @@ native-binary provisioning (sherpa-onnx, ffmpeg), and the roadmap: **[`docs/askt
 
 ## Test / verify
 
-```bash
+```bash verify-dry
 npm test              # vitest run — src/shared, src/main, src/renderer/src/lib, intelligence/src —
                       # then test:proxy, the Cloudflare Worker's own suite (separate root + config,
                       # so the main run's globs can never reach it)
@@ -261,6 +269,10 @@ Every defect it finds becomes a row in [`docs/qa/BUG-LEDGER.md`](docs/qa/BUG-LED
 fails the build if a row marked `FIXED` has no regression test naming its id.
 
 ## Docs
+
+Start at the docs map, [`docs/README.md`](docs/README.md): it lists what describes the shipped 2.0 app and which documents are
+superseded. The operating procedures are the runbooks — [QA](docs/runbooks/qa.md), [staging](docs/runbooks/staging.md),
+[operations](docs/runbooks/operations.md), [update](docs/runbooks/update.md) and [diagnostics](docs/runbooks/diagnostics.md).
 
 - [`docs/qa/QUALITY-SCORECARD.md`](docs/qa/QUALITY-SCORECARD.md) — live quality targets (WER, failover, brain tokens/day, MCP)
 - [`docs/PROVIDER-ROUTING-POLICY.md`](docs/PROVIDER-ROUTING-POLICY.md) — Local / API / Auto routing precedence
