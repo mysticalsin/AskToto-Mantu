@@ -46,14 +46,15 @@
       "active_variant": "concept",
       "variants": {
         "live": {
-          "available": false,
-          "reason": "Opening footage is represented by original title artwork until a verified cold-open capture exists."
+          "available": true,
+          "treatment": "Rc1 capture of the slim overlay beside a synthetic meeting workspace; used only after a packaged-app QA receipt proves the exact captured state.",
+          "source": { "kind": "shot", "ref": "SH-01L" }
         },
         "concept": {
           "available": true,
-          "treatment": "Abstract title footage opens the film, carrying the visible concept label for the whole scene.",
+          "treatment": "Designed overlay sequence beside a synthetic meeting workspace, carrying the visible concept label for the whole scene.",
           "label": "Concept UI sequence",
-          "source": { "kind": "scene", "ref": "NP-02" }
+          "source": { "kind": "shot", "ref": "SH-01C" }
         },
         "cut": {
           "available": true,
@@ -64,49 +65,6 @@
     },
     {
       "scene_id": "LF-02",
-      "active_variant": "concept",
-      "variants": {
-        "live": {
-          "available": false,
-          "reason": "The setup beat stays reconstructed until a verified meeting-problem capture exists."
-        },
-        "concept": {
-          "available": true,
-          "treatment": "Reconstructed meeting-problem setup, carrying the visible reconstruction label.",
-          "label": "Reconstruction",
-          "source": { "kind": "scene", "ref": "NP-03" }
-        },
-        "cut": {
-          "available": true,
-          "treatment": "Replace the scene with a neutral title card.",
-          "bridge": "NP-03"
-        }
-      }
-    },
-    {
-      "scene_id": "LF-03",
-      "active_variant": "concept",
-      "variants": {
-        "live": {
-          "available": true,
-          "treatment": "Rc1 capture of the slim overlay beside a synthetic meeting workspace; used only after a packaged-app QA receipt proves the exact captured state.",
-          "source": { "kind": "shot", "ref": "SH-03L" }
-        },
-        "concept": {
-          "available": true,
-          "treatment": "Designed overlay sequence beside a synthetic meeting workspace, carrying the visible concept label for the whole scene.",
-          "label": "Concept UI sequence",
-          "source": { "kind": "shot", "ref": "SH-03C" }
-        },
-        "cut": {
-          "available": true,
-          "treatment": "Remove the scene and bridge with abstract title footage.",
-          "bridge": "NP-02"
-        }
-      }
-    },
-    {
-      "scene_id": "LF-04",
       "active_variant": "concept",
       "variants": {
         "live": {
@@ -128,18 +86,19 @@
       }
     },
     {
-      "scene_id": "LF-05",
+      "scene_id": "LF-03",
       "active_variant": "concept",
       "variants": {
         "live": {
-          "available": false,
-          "reason": "The memory beat needs a LIVE_VERIFIED memory proof receipt before it can be live."
+          "available": true,
+          "treatment": "Rc1 capture of the user asking for prior context and receiving a bounded answer; used only if the memory proof evidence record is LIVE_VERIFIED.",
+          "source": { "kind": "shot", "ref": "SH-03L" }
         },
         "concept": {
           "available": true,
           "treatment": "Designed sequence of the same question and a bounded answer, carrying the visible concept memory label.",
           "label": "Concept memory sequence",
-          "source": { "kind": "scene", "ref": "NP-05" }
+          "source": { "kind": "shot", "ref": "SH-03C" }
         },
         "cut": {
           "available": true,
@@ -149,62 +108,59 @@
       }
     },
     {
-      "scene_id": "LF-06",
-      "active_variant": "concept",
-      "variants": {
-        "live": {
-          "available": false,
-          "reason": "The follow-up question beat needs a verified app capture before it can be live."
-        },
-        "concept": {
-          "available": true,
-          "treatment": "Process diagram of the pinned render path, used as the concept placeholder for the follow-up question beat until a designed UI sequence exists.",
-          "label": "Concept UI sequence",
-          "source": { "kind": "scene", "ref": "NP-05" }
-        },
-        "cut": {
-          "available": true,
-          "treatment": "Remove the card; the edit closes the gap with no bridge.",
-          "bridge": null
-        }
-      }
-    },
-    {
-      "scene_id": "LF-07",
+      "scene_id": "LF-04",
       "active_variant": "cut",
       "variants": {
         "live": {
           "available": false,
-          "reason": "Platform availability appears only after signed release evidence exists for each named platform."
+          "reason": "The exact verified privacy sentence and its evidence do not exist yet; the live form is written only after they do."
         },
         "concept": {
           "available": false,
-          "reason": "No concept platform availability line is allowed."
+          "reason": "No concept privacy line is allowed."
         },
         "cut": {
           "available": true,
-          "treatment": "Cut the platform beat until release evidence exists for each platform.",
+          "treatment": "Cut the privacy line; the edit closes the gap with no bridge.",
           "bridge": null
         }
       }
     },
     {
-      "scene_id": "LF-08",
-      "active_variant": "concept",
+      "scene_id": "LF-05",
+      "active_variant": "cut",
       "variants": {
         "live": {
           "available": false,
-          "reason": "The close uses only neutral title-card copy until a verified product close is approved."
+          "reason": "Comparative slices need M2-0185 qualification with final signed Windows and native Mac QA receipts, which are absent."
         },
         "concept": {
-          "available": true,
-          "treatment": "Neutral title card closing the film with the visible concept title-card label.",
-          "label": "Concept title card",
-          "source": { "kind": "scene", "ref": "NP-04" }
+          "available": false,
+          "reason": "No comparative concept line is allowed."
         },
         "cut": {
           "available": true,
-          "treatment": "Remove the closing card.",
+          "treatment": "Cut the comparative beat; the edit closes the gap with no bridge.",
+          "bridge": null
+        }
+      }
+    },
+    {
+      "scene_id": "LF-06",
+      "active_variant": "live",
+      "variants": {
+        "live": {
+          "available": true,
+          "treatment": "Process diagram of the pinned render path, shown as render-path proof only.",
+          "source": { "kind": "scene", "ref": "NP-05" }
+        },
+        "concept": {
+          "available": false,
+          "reason": "The card is already a process diagram and makes no product claim, so a concept form would add nothing."
+        },
+        "cut": {
+          "available": true,
+          "treatment": "Remove the card; the edit closes the gap with no bridge.",
           "bridge": null
         }
       }
