@@ -60,6 +60,21 @@ files:
   - '!out/renderer/assets/ort-wasm-*.wasm'
   - '!**/*.d.ts'
 asar: true
+# Electron fuses of every shipped DMG/ZIP and Setup/portable EXE (M2-0558). Without them any local process
+# can run code as Metis through NODE_OPTIONS or --inspect and inherit its Screen Recording and Microphone
+# grants. No product path uses either (docs/security/ELECTRON-FUSES.md has the inventory).
+# scripts/build/electron-fuses.mjs reads this block and fails CI when a packaged app differs from it. electron-builder
+# flips these after afterPack, so the self-signing mac chains (ASKTOTO_ADHOC_SIGN) apply them in after-pack.mjs first.
+electronFuses:
+  # Stays on until the owner decides (docs/security/ELECTRON-FUSES.md): the managed Claude/Codex CLIs and the
+  # Dust fallback run on Electron's own binary with ELECTRON_RUN_AS_NODE=1.
+  runAsNode: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  # electron-builder writes the app.asar header hash into Info.plist (the universal merge recomputes it) and
+  # into the Windows executable's resources; these two make Electron refuse any other or altered app code.
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
 # Native addons (.node) must live outside the asar to be loadable at runtime. sherpa-onnx-node (Parakeet
 # engine) + its per-platform binary packages are unpacked here so they ship + load in the installed app.
 # onnxruntime-node + sharp are @huggingface/transformers' own Node-backend native deps (main/whisper-import.ts,

@@ -8,6 +8,11 @@ vi.mock('node:child_process', () => childProcess)
 
 import afterPack from './after-pack.mjs'
 
+/** The packager surface afterPack's fuse step uses: the merged config and electron-builder's public flip. */
+function fusingPackager(electronFuses: Record<string, boolean>, addElectronFuses: () => Promise<number>) {
+  return { appInfo: { productFilename: 'Metis' }, config: { electronFuses }, addElectronFuses }
+}
+
 describe('afterPack Windows runtime verification', () => {
   const temporaryDirectories: string[] = []
 
@@ -138,5 +143,73 @@ describe('afterPack macOS signature', () => {
     expect(signCall).toBeDefined()
     const signIndex = signCall![1].indexOf('--sign')
     expect(signCall![1][signIndex + 1]).toBe(identity)
+  })
+
+  // Invariant (M2-0558): the seal covers the fused framework. electron-builder flips fuses after this hook,
+  // so a hook that signed first would ship a broken signature or unfused bytes.
+  it('flips the declared fuses before it signs the bundle', async () => {
+    const appOutDir = macFixture()
+    vi.stubEnv('ASKTOTO_ADHOC_SIGN', '1')
+    vi.stubEnv('ASKTOTO_MAC_ARCHES', '')
+    const order: string[] = []
+    childProcess.execFileSync.mockImplementation((command: string) => {
+      order.push(command)
+    })
+    const addElectronFuses = vi.fn(async () => {
+      order.push('fuses')
+      return 1
+    })
+    const declared = {
+      runAsNode: true,
+      enableNodeOptionsEnvironmentVariable: false,
+      enableNodeCliInspectArguments: false
+    }
+    const packager = fusingPackager(declared, addElectronFuses)
+    const context = { arch: 3, electronPlatformName: 'darwin', appOutDir, packager }
+
+    await afterPack(context)
+
+    expect(addElectronFuses).toHaveBeenCalledWith(context, { version: '1', 0: true, 2: false, 3: false })
+    expect(order.indexOf('fuses')).toBeGreaterThan(-1)
+    expect(order.indexOf('fuses')).toBeLessThan(order.indexOf('codesign'))
+  })
+
+  it('leaves fuses to electron-builder on a universal sub-build, which it never fuses or signs', async () => {
+    const appOutDir = macFixture()
+    mkdirSync(join(appOutDir, 'Metis.app', 'Contents', 'Resources', 'ffmpeg', 'darwin-x64'), { recursive: true })
+    writeFileSync(join(appOutDir, 'Metis.app', 'Contents', 'Resources', 'ffmpeg', 'darwin-x64', 'ffmpeg'), 'test')
+    vi.stubEnv('ASKTOTO_ADHOC_SIGN', '1')
+    vi.stubEnv('ASKTOTO_MAC_ARCHES', 'arm64,x64')
+    const addElectronFuses = vi.fn(async () => 1)
+    const packager = fusingPackager({ runAsNode: true }, addElectronFuses)
+
+    await afterPack({ arch: 3, electronPlatformName: 'darwin', appOutDir, packager })
+
+    expect(addElectronFuses).not.toHaveBeenCalled()
+    expect(codesignCall(['--sign'])).toBeUndefined()
+  })
+})
+
+describe('afterPack Windows fuses', () => {
+  afterEach(() => {
+    childProcess.execFileSync.mockReset()
+  })
+
+  // electron-builder flips them after this hook and before it signs Metis.exe itself.
+  it('does not flip fuses on Windows', async () => {
+    const appOutDir = mkdtempSync(join(tmpdir(), 'metis-after-pack-win-fuses-'))
+    try {
+      const resources = join(appOutDir, 'resources')
+      mkdirSync(join(resources, 'ffmpeg', 'win32-x64'), { recursive: true })
+      writeFileSync(join(resources, 'ffmpeg', 'win32-x64', 'ffmpeg.exe'), 'test')
+      const addElectronFuses = vi.fn(async () => 1)
+      const packager = fusingPackager({ runAsNode: true }, addElectronFuses)
+
+      await afterPack({ arch: 1, electronPlatformName: 'win32', appOutDir, packager })
+
+      expect(addElectronFuses).not.toHaveBeenCalled()
+    } finally {
+      rmSync(appOutDir, { recursive: true, force: true })
+    }
   })
 })
