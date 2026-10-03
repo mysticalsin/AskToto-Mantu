@@ -47,7 +47,7 @@
     "scripts/qa/census/lib.mjs": 842,
     "scripts/qa/hk-m.mjs": 972,
     "scripts/qa/sidecar-boot-reaper.mjs": 1012,
-    "scripts/qa/st-1.mjs": 984,
+    "scripts/qa/st-1.mjs": 967,
     "src/main/auth.ts": 999,
     "src/main/brain/corrections.ts": 1637,
     "src/main/brain/ingest.ts": 3083,

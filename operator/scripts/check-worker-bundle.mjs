@@ -19,6 +19,7 @@ import { build } from 'esbuild'
 const OPERATOR_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const execFileAsync = promisify(execFile)
 const require = createRequire(import.meta.url)
+const RUNTIME_WORKER_EXTENSIONS = new Set(['.js', '.mjs'])
 
 /** Bundle `entry` (a path under operator/) to a string. Node built-ins stay external: the Worker runtime
  *  provides them and they are irrelevant to what this gate looks for. */
@@ -47,14 +48,18 @@ export function containsQaDashboardFixture(bundleText) {
   return /\bfixtureRows\b|\bfixtureDashboard\b|\bFIXTURE_NOW\b/.test(bundleText)
 }
 
-async function readOutputFiles(dir) {
+export function isRuntimeWorkerArtifact(fileName) {
+  return RUNTIME_WORKER_EXTENSIONS.has(extname(fileName))
+}
+
+async function readRuntimeWorkerFiles(dir) {
   const entries = await readdir(dir, { withFileTypes: true })
   const chunks = []
   for (const entry of entries) {
     const path = join(dir, entry.name)
     if (entry.isDirectory()) {
-      chunks.push(await readOutputFiles(path))
-    } else if (entry.isFile() && ['.js', '.mjs', '.json', '.map', '.txt'].includes(extname(entry.name))) {
+      chunks.push(await readRuntimeWorkerFiles(path))
+    } else if (entry.isFile() && isRuntimeWorkerArtifact(entry.name)) {
       chunks.push(await readFile(path, 'utf8'))
     }
   }
@@ -71,7 +76,7 @@ export async function wranglerDryRunOutput() {
       env: { ...process.env, NO_COLOR: '1' },
       maxBuffer: 10 * 1024 * 1024
     })
-    return await readOutputFiles(outdir)
+    return await readRuntimeWorkerFiles(outdir)
   } finally {
     await rm(outdir, { recursive: true, force: true })
   }

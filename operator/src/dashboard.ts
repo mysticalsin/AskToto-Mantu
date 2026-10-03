@@ -679,60 +679,17 @@ function isExpiringSoon(row: IssuedLicenseRow, now: number): boolean {
  * secrets: only the fields the Realtime/Overview live strip needs.
  */
 export async function buildLiveSnapshot(store: OperatorStore, now: number, opts: LiveSnapshotOpts = {}): Promise<LiveSnapshot> {
-  const [seatsRaw, sessionsPage, eventsRaw, todayAsksRaw, crmRaw, proposals, integrations, issuedLicenses] = await Promise.all([
-    store.listSeats(),
-    store.listSessions({ since: now - DAY, limit: 500 }),
-    store.listEvents(40),
-    store.listAsks(500, now - DAY),
-    store.listCrm(50),
-    store.listProposals(50),
-    store.listIntegrationRows(),
-    store.listIssuedLicenses()
-  ])
-  const events = eventsRaw.map(projectEventTelemetry)
-  const todayAsks = todayAsksRaw.map(projectAskTelemetry)
-  const crm = crmRaw.map(normalizeCrmRow)
-  const seats = seatsRaw.filter(isRealSeat)
+  const rows = await readLiveSnapshotRows(store, now)
+  const { seats, sessions, events, todayAsks, crm, proposals, integrations, issuedLicenses } = rows
   const seatsById = new Map(seats.map((s) => [s.device_id, s]))
   const liveSeats = seats.filter((s) => now - s.last_seen < ONLINE_MS)
   const live30 = seats.filter((s) => now - s.last_seen < 30 * 60 * 1000).length
   const dau = uniqueSeats(seats, now - DAY)
   const sliceToday = aggregateCacheSlice(todayAsks.map(askLine))
   const costToday = costForAsks(todayAsks)
-
-  const openSessionByDevice = new Map<string, SessionRow>()
-  for (const s of sessionsPage.rows) {
-    if (s.ended_at != null) continue
-    const cur = openSessionByDevice.get(s.device_id)
-    if (!cur || s.started_at > cur.started_at) openSessionByDevice.set(s.device_id, s)
-  }
-
-  const liveSeatsTable: LiveSeatRow[] = liveSeats
-    .slice()
-    .sort((a, b) => b.last_seen - a.last_seen)
-    .map((s) => {
-      const session = openSessionByDevice.get(s.device_id) ?? null
-      const who = displayProfile(s)
-      return {
-        deviceId: s.device_id,
-        hostname: who.hostname,
-        email: who.email,
-        city: s.city && !looksLikeSecret(s.city) ? s.city : null,
-        country: s.country,
-        os: s.os,
-        appVersion: s.app_version,
-        licenseTier: s.license && !looksLikeSecret(s.license) ? s.license : null,
-        sessionStarted: session?.started_at ?? null,
-        durationMs: session ? Math.max(0, now - session.started_at) : null,
-        eventsThisSession: session?.pulses ?? null,
-        asksThisSession: session?.asks ?? null,
-        live: true
-      }
-    })
-
   const notices = buildNotices(seats, crm, proposals)
   const eventsOut = events.map((e) => eventFromStored(e, seatsById))
-  const geo = realtimeGeoRows(seats, sessionsPage.rows)
+  const geo = realtimeGeoRows(seats, sessions)
 
   const pendingApprovals = seats.filter((s) => approvalOf(s) === 'pending').length
   const unseenNotices = opts.since == null ? notices.length : notices.filter((n) => n.ts > opts.since!).length
@@ -754,7 +711,7 @@ export async function buildLiveSnapshot(store: OperatorStore, now: number, opts:
       cacheHit: sliceToday.hitRate == null ? null : `${Math.round(sliceToday.hitRate * 100)}%`
     },
     geo,
-    liveSeatsTable,
+    liveSeatsTable: liveSeatRows(seats, sessions, now),
     pendingApprovals,
     unseenNotices,
     failingConnectors,
@@ -762,4 +719,75 @@ export async function buildLiveSnapshot(store: OperatorStore, now: number, opts:
     settingsVersion
   }
   return { ...snapshot, generation: hashSnapshot(snapshot) }
+}
+
+interface LiveSnapshotRows {
+  seats: SeatRow[]
+  sessions: SessionRow[]
+  events: EventRow[]
+  todayAsks: AskRow[]
+  crm: ReturnType<typeof normalizeCrmRow>[]
+  proposals: ProposalRow[]
+  integrations: IntegrationRow[]
+  issuedLicenses: IssuedLicenseRow[]
+}
+
+async function readLiveSnapshotRows(store: OperatorStore, now: number): Promise<LiveSnapshotRows> {
+  const [seatsRaw, sessionsPage, eventsRaw, todayAsksRaw, crmRaw, proposals, integrations, issuedLicenses] = await Promise.all([
+    store.listSeats(),
+    store.listSessions({ since: now - DAY, limit: 500 }),
+    store.listEvents(40),
+    store.listAsks(500, now - DAY),
+    store.listCrm(50),
+    store.listProposals(50),
+    store.listIntegrationRows(),
+    store.listIssuedLicenses()
+  ])
+  return {
+    seats: seatsRaw.filter(isRealSeat),
+    sessions: sessionsPage.rows,
+    events: eventsRaw.map(projectEventTelemetry),
+    todayAsks: todayAsksRaw.map(projectAskTelemetry),
+    crm: crmRaw.map(normalizeCrmRow),
+    proposals,
+    integrations,
+    issuedLicenses
+  }
+}
+
+function openSessionsByDevice(sessions: SessionRow[]): Map<string, SessionRow> {
+  const openSessionByDevice = new Map<string, SessionRow>()
+  for (const s of sessions) {
+    if (s.ended_at != null) continue
+    const cur = openSessionByDevice.get(s.device_id)
+    if (!cur || s.started_at > cur.started_at) openSessionByDevice.set(s.device_id, s)
+  }
+  return openSessionByDevice
+}
+
+function liveSeatRows(seats: SeatRow[], sessions: SessionRow[], now: number): LiveSeatRow[] {
+  const openSessionByDevice = openSessionsByDevice(sessions)
+  return seats
+    .filter((s) => now - s.last_seen < ONLINE_MS)
+    .slice()
+    .sort((a, b) => b.last_seen - a.last_seen)
+    .map((s) => {
+      const session = openSessionByDevice.get(s.device_id) ?? null
+      const who = displayProfile(s)
+      return {
+        deviceId: s.device_id,
+        hostname: who.hostname,
+        email: who.email,
+        city: s.city && !looksLikeSecret(s.city) ? s.city : null,
+        country: s.country,
+        os: s.os,
+        appVersion: s.app_version,
+        licenseTier: s.license && !looksLikeSecret(s.license) ? s.license : null,
+        sessionStarted: session?.started_at ?? null,
+        durationMs: session ? Math.max(0, now - session.started_at) : null,
+        eventsThisSession: session?.pulses ?? null,
+        asksThisSession: session?.asks ?? null,
+        live: true
+      }
+    })
 }
