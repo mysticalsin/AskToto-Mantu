@@ -34,6 +34,19 @@ export function readerKindForView(view: string): RightEdgeReaderKind | null {
 /** The Reader header's status: 'attention' while an action waits for the user. */
 export type RightEdgeReaderTone = 'ready' | 'thinking' | 'listening' | 'paused' | 'attention'
 
+/** A waiting action outranks work in progress, which outranks a live meeting. */
+export function rightEdgeReaderTone(state: { attention: boolean; thinking: boolean; listening: boolean; paused: boolean }): RightEdgeReaderTone {
+  if (state.attention) return 'attention'
+  if (state.thinking) return 'thinking'
+  if (state.listening) return state.paused ? 'paused' : 'listening'
+  return 'ready'
+}
+
+/** The Details' error list: every current non-empty error. */
+export function rightEdgeDetailErrors(...errors: ReadonlyArray<string | null | undefined>): string[] {
+  return errors.filter((error): error is string => typeof error === 'string' && error.length > 0)
+}
+
 export interface RightEdgeReaderMeeting {
   startedAt: number
   paused: boolean

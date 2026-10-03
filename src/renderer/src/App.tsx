@@ -5,15 +5,8 @@ import { OnboardingV2 } from './components/OnboardingExperience'
 import { ControlPill } from './components/ControlPill'
 import { OverlayPeek } from './components/OverlayPeek'
 import { RightEdgeAnswerSummary, RightEdgeSidecar, type SidecarReaderTarget } from './components/RightEdgeSidecar'
-import {
-  RightEdgeReader,
-  RightEdgeReaderDetails,
-  RightEdgeReaderTranscript,
-  readerKindForView,
-  type RightEdgeReaderKind,
-  type RightEdgeReaderScrollMemory,
-  type RightEdgeReaderTone
-} from './components/right-edge/RightEdgeReader'
+import { RightEdgeReader, RightEdgeReaderDetails, RightEdgeReaderTranscript, readerKindForView, rightEdgeDetailErrors, rightEdgeReaderTone } from './components/right-edge/RightEdgeReader'
+import type { RightEdgeReaderKind, RightEdgeReaderScrollMemory } from './components/right-edge/RightEdgeReader'
 import { rightEdgeStrings } from './lib/right-edge/strings'
 import { Panel } from './components/Panel'
 import {
@@ -4057,20 +4050,12 @@ export function App(): JSX.Element {
   // across the user's desktop. The dock receives its live notice through its own bounded, scrollable body.
   const showWideMeetingChrome = showListeningChrome && !rightEdgeDockVisible
   // The Reader's approval and error Details, and its header status (the attention tone while an action waits).
-  const rightEdgeDetailErrors = [ask.answer?.error, captureError, listen.error, openMeetingError].filter(
-    (error): error is string => typeof error === 'string' && error.length > 0
-  )
-  const rightEdgeReaderTone: RightEdgeReaderTone = commandState.proposalId
-    ? 'attention'
-    : capturing || ask.answer?.streaming || suggest.answer?.streaming
-      ? 'thinking'
-      : showListeningChrome
-        ? listen.paused ? 'paused' : 'listening'
-        : 'ready'
+  const readerDetailErrors = rightEdgeDetailErrors(ask.answer?.error, captureError, listen.error, openMeetingError)
+  const readerTone = rightEdgeReaderTone({ attention: !!commandState.proposalId, thinking: !!(capturing || ask.answer?.streaming || suggest.answer?.streaming), listening: showListeningChrome, paused: listen.paused })
   const rightEdgeReaderBody =
     rightEdgeReaderKind === 'answer' ? (answerView ? body : answerBody)
     : rightEdgeReaderKind === 'transcript' ? <RightEdgeReaderTranscript lines={listen.lines} strings={rightEdgeCopy} youLabel={micSpeakerLabel(settings?.profile)} />
-    : rightEdgeReaderKind === 'details' ? <RightEdgeReaderDetails commandState={commandState} errors={rightEdgeDetailErrors} strings={rightEdgeCopy} />
+    : rightEdgeReaderKind === 'details' ? <RightEdgeReaderDetails commandState={commandState} errors={readerDetailErrors} strings={rightEdgeCopy} />
     : rightEdgeReaderKind === 'history' ? historyBody
     : rightEdgeReaderKind === 'review' ? reviewBody
     : rightEdgeReaderKind === 'agenda' ? agendaBody
@@ -4243,7 +4228,7 @@ export function App(): JSX.Element {
               liveNotice={listen.error}
               onSettings={onBarSettings}
               onOpenReader={openRightEdgeReader}
-              detailsAvailable={commandState.proposalId !== null || rightEdgeDetailErrors.length > 0}
+              detailsAvailable={commandState.proposalId !== null || readerDetailErrors.length > 0}
               readerStrings={rightEdgeCopy}
             />
           ) : rightEdgePresentation ? null : <Bar
@@ -4309,7 +4294,7 @@ export function App(): JSX.Element {
             <RightEdgeReader
               kind={rightEdgeReaderKind}
               strings={rightEdgeCopy}
-              tone={rightEdgeReaderTone}
+              tone={readerTone}
               onAttention={() => openRightEdgeReader('details')}
               meeting={showListeningChrome && meetingStartRef.current > 0
                 ? { startedAt: meetingStartRef.current, paused: listen.paused, pausedMs: meetingPauseRef.current.pausedMs, pausedAt: meetingPauseRef.current.pausedAt }
