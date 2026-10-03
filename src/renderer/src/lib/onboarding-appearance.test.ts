@@ -40,7 +40,11 @@ import {
 } from './onboarding-flow'
 
 const appearanceLib = readFileSync(join(__dirname, './onboarding-appearance.ts'), 'utf8')
-const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
+const experience = [
+  '../features/onboarding-experience/OnboardingExperience.tsx',
+  '../features/onboarding-experience/OnboardingExperienceLayout.tsx',
+  '../features/onboarding-experience/onboarding-scenes.tsx'
+].map((file) => readFileSync(join(__dirname, file), 'utf8')).join('\n')
 const component = readFileSync(join(__dirname, '../components/OnboardingAppearance.tsx'), 'utf8')
 const css = readAppCss()
 const design = readFileSync(join(__dirname, '../../../../DESIGN.md'), 'utf8')

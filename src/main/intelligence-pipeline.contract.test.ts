@@ -3,7 +3,10 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
-const brainView = readFileSync(join(__dirname, '../renderer/src/components/BrainView.tsx'), 'utf8')
+const brainView = [
+  '../renderer/src/features/brain-view/BrainView.tsx',
+  '../renderer/src/features/brain-view/BrainViewLayout.tsx'
+].map((file) => readFileSync(join(__dirname, file), 'utf8')).join('\n')
 
 describe('hidden-window decoder stays a live singleton', () => {
   it('throws already-active when Listen is live or another decoder window exists', () => {

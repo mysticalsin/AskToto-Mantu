@@ -31,6 +31,15 @@ import {
 } from './OnboardingExperience'
 import { BUNDLE_GOT_LOGIN_HTML, BUNDLE_NOT_JS } from '@shared/bundle-response'
 
+function onboardingExperienceSource(): string {
+  return [
+    '../features/onboarding-experience/OnboardingExperience.tsx',
+    '../features/onboarding-experience/OnboardingExperienceLayout.tsx',
+    '../features/onboarding-experience/onboarding-scenes.tsx',
+    '../features/onboarding-experience/onboarding-setup.tsx'
+  ].map((file) => readFileSync(join(__dirname, file), 'utf8')).join('\n')
+}
+
 describe('providerTileDisabledReason — step-5 provider tiles must not misreport why they are disabled', () => {
   it('is null (tappable) when nothing blocks the tile', () => {
     expect(providerTileDisabledReason({ providerLocked: false, pathAllowed: true })).toBeNull()
@@ -291,12 +300,12 @@ describe('Act 3 on-device model row', () => {
     expect(row.progress).toBeUndefined()
     expect(row.detail).toMatch(/Retry/)
     expect(row.detail).not.toMatch(/starting|downloading/i)
-    const src = readFileSync(join(__dirname, 'OnboardingExperience.tsx'), 'utf8')
+    const src = onboardingExperienceSource()
     expect(src).toMatch(/r\.key === 'local' && r\.state === 'action' && r\.progress == null/)
   })
 
   it('never starts an optional download from setup mount or polling; only the explicit retry does', () => {
-    const src = readFileSync(join(__dirname, 'OnboardingExperience.tsx'), 'utf8')
+    const src = onboardingExperienceSource()
     expect(src.match(/window\.toto\.localModelsEnsure\(\)/g)).toHaveLength(1)
     expect(src).toMatch(/onClick=\{\(\) => void window\.toto\.localModelsEnsure\(\)/)
     expect(src).toMatch(/unavailableReason === 'not-downloaded'/)
@@ -424,14 +433,14 @@ describe('Act 3 — transcription files never skip', () => {
     expect(asrRowNeedsRepair(row)).toBe(true)
     expect(asrRowNeedsRetry(row)).toBe(false)
 
-    const src = readFileSync(join(__dirname, 'OnboardingExperience.tsx'), 'utf8')
+    const src = onboardingExperienceSource()
     expect(src).toMatch(/Reinstall Métis with the official installer, then reopen it\./)
     expect(src).toMatch(/window\.toto\.quit\(\)/)
     expect(src).not.toMatch(/Repair Métis with the official installer, then check again\./)
   })
 
   it('onboarding never swallows an ensure failure into a silent idle', () => {
-    const src = readFileSync(join(__dirname, 'OnboardingExperience.tsx'), 'utf8')
+    const src = onboardingExperienceSource()
     expect(src).toMatch(/asrEnsureFailureStatus/)
     expect(src).not.toMatch(/asrAssetsEnsure\(\)[\s\S]{0,80}IDLE_ASR_STATUS/)
     expect(src).not.toMatch(/catch\(\(\) => apply\(IDLE_ASR_STATUS\)\)/)
@@ -480,7 +489,7 @@ describe('Act 3 — transcription files never skip', () => {
     expect(setupContinueLabel(false)).toBe('Continue')
     expect(setupContinueLabel(true)).toBe('Continue anyway')
 
-    const src = readFileSync(join(__dirname, 'OnboardingExperience.tsx'), 'utf8')
+    const src = onboardingExperienceSource()
     const setupScene = src.slice(src.indexOf("{scene === 'setup'"), src.indexOf("{scene === 'personalize'"))
     expect(setupScene).toMatch(/setupContinueLabel\(needsPerms\)/)
     expect(setupScene).not.toMatch(/needsPerms\s*\?\s*'onboard-cta--muted'/)
@@ -518,7 +527,7 @@ describe('Act 3 — transcription files never skip', () => {
   })
 
   it('renders the loading orb for in-progress rows, never the needed span', () => {
-    const src = readFileSync(join(__dirname, 'OnboardingExperience.tsx'), 'utf8')
+    const src = onboardingExperienceSource()
     expect(src).toMatch(/state === 'checking' \|\| r\.state === 'loading'/)
     expect(src).toMatch(/InlineOrb kind="loading"/)
     expect(src).toMatch(/setupRowLoadingPercent\(r\.progress\)/)
@@ -549,7 +558,7 @@ describe('MQA-201 — scene 4 never fakes a check', () => {
   // shipped platforms: the mac target is universal (electron-builder.yml, built with --universal and
   // gate-verified for x64 Mach-O slices) and Windows ships x64 only. It also fed allReady, so a
   // fabricated row is what let the "Everything's ready" headline render.
-  const src = readFileSync(join(__dirname, 'OnboardingExperience.tsx'), 'utf8')
+  const src = onboardingExperienceSource()
 
   it('does not assert hardware acceleration it never checked', () => {
     expect(src).not.toMatch(/set\('silicon'/)

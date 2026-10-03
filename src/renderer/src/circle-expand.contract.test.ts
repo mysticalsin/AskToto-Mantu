@@ -130,6 +130,6 @@ describe('Settings chevron collapse clears gray slab', () => {
     expect(app).toMatch(/if \(!collapsed && view === 'settings'\)/)
     expect(app).toMatch(/setViewRaw\('answer'\)/)
     expect(app).toMatch(/window\.toto\.windowMode\('bar'\)/)
-    expect(readFileSync(join(__dirname, './components/Bar.tsx'), 'utf8')).toMatch(/data-bar-chevron/)
+    expect(readFileSync(join(__dirname, './features/bar/Bar.tsx'), 'utf8')).toMatch(/data-bar-chevron/)
   })
 })

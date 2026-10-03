@@ -1,0 +1,91 @@
+name: M2-0408 Renderer Parity
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: Ref to capture before the split
+        required: false
+        default: refs/stack/M2-0408
+      after_ref:
+        description: Ref to capture after the split
+        required: false
+        default: ''
+  pull_request:
+    paths:
+      - .github/workflows/m2-0408-renderer-parity.yml
+      - scripts/qa/m2-0408-renderer-parity.mjs
+      - src/renderer/src/components/Review.tsx
+      - src/renderer/src/components/OnboardingExperience.tsx
+      - src/renderer/src/components/BrainView.tsx
+      - src/renderer/src/components/RecallView.tsx
+      - src/renderer/src/components/Bar.tsx
+      - src/renderer/src/components/BrainRecordPage.tsx
+      - src/renderer/src/features/review/**
+      - src/renderer/src/features/onboarding-experience/**
+      - src/renderer/src/features/brain-view/**
+      - src/renderer/src/features/recall-view/**
+      - src/renderer/src/features/bar/**
+      - src/renderer/src/features/brain-record-page/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: m2-0408-renderer-parity-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  screenshots:
+    name: Before/after light and dark renderer screenshots
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out after ref
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: after
+          ref: ${{ github.event.inputs.after_ref || github.head_ref || github.ref }}
+          persist-credentials: false
+      - name: Check out before ref
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: before
+          ref: ${{ github.event.inputs.base_ref || 'refs/stack/M2-0408' }}
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: after/package-lock.json
+      - name: Install after dependencies
+        working-directory: after
+        run: npm ci
+      - name: Install before dependencies
+        working-directory: before
+        run: npm ci
+      - name: Install Playwright Chromium
+        working-directory: after
+        run: npx playwright install chromium
+      - name: Capture after screenshots
+        working-directory: after
+        run: node scripts/qa/m2-0408-renderer-parity.mjs --repo . --out ../m2-0408-renderer-parity/after --label after
+      - name: Capture before screenshots
+        working-directory: after
+        run: node scripts/qa/m2-0408-renderer-parity.mjs --repo ../before --out ../m2-0408-renderer-parity/before --label before
+      - name: Write lead action
+        run: |
+          {
+            echo 'LEAD_ACTION: gh workflow run m2-0408-renderer-parity.yml -f base_ref=refs/stack/M2-0408 -f after_ref=<branch-or-sha>; artifact m2-0408-renderer-parity contains before/after light+dark screenshots for Review, OnboardingExperience, BrainView, RecallView, Bar and BrainRecordPage.'
+            echo
+            echo 'Artifact: m2-0408-renderer-parity'
+          } | tee m2-0408-renderer-parity/LEAD_ACTION.txt >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload renderer parity artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: m2-0408-renderer-parity
+          path: m2-0408-renderer-parity/
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}

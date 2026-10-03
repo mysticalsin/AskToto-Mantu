@@ -91,7 +91,10 @@ describe('MQA-291 — summary / recap Panel fits or scrolls, never clips', () =>
 
   it('MQA-291 — Review and sibling recap bodies share this one Panel scroller (no nested trap)', () => {
     const app = read('..', 'App.tsx')
-    const review = read('Review.tsx')
+    const review = [
+      read('..', 'features', 'review', 'Review.tsx'),
+      read('..', 'features', 'review', 'ReviewLayout.tsx')
+    ].join('\n')
     const panel = read('Panel.tsx')
     // Review is the post-meeting Summary Tony opens. It must render inside <Panel>, not a second
     // overflow:hidden shell of its own.

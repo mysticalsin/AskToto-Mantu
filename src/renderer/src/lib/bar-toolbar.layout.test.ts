@@ -18,7 +18,7 @@ import {
   type ToolbarRect
 } from './bar-toolbar-layout'
 
-const barSrc = readFileSync(join(__dirname, '../components/Bar.tsx'), 'utf8').replace(/\r\n/g, '\n')
+const barSrc = readFileSync(join(__dirname, '../features/bar/Bar.tsx'), 'utf8').replace(/\r\n/g, '\n')
 const css = readAppCss().replace(/\r\n/g, '\n')
 const design = readFileSync(join(__dirname, '../../../../DESIGN.md'), 'utf8')
 const contract = readFileSync(join(__dirname, '../../../../docs/design/BAR-PILL.md'), 'utf8')

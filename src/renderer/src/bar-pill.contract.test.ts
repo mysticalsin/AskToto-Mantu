@@ -21,7 +21,10 @@ const pill = readFileSync(join(root, 'components', 'ControlPill.tsx'), 'utf8').r
 const orbBtn = readFileSync(join(root, 'components', 'JarvisOrbButton.tsx'), 'utf8').replace(/\r\n/g, '\n')
 const brandOrb = readFileSync(join(root, 'components', 'BrandThinkingOrb.tsx'), 'utf8').replace(/\r\n/g, '\n')
 const jarvisCircle = readFileSync(join(root, 'components', 'ObsidianOrb.tsx'), 'utf8').replace(/\r\n/g, '\n')
-const bar = readFileSync(join(root, 'components', 'Bar.tsx'), 'utf8').replace(/\r\n/g, '\n')
+const bar = [
+  readFileSync(join(root, 'features', 'bar', 'Bar.tsx'), 'utf8'),
+  readFileSync(join(root, 'features', 'bar', 'bar-chrome.' + 'tsx'), 'utf8')
+].join('\n').replace(/\r\n/g, '\n')
 const css = readAppCss().replace(/\r\n/g, '\n')
 const peek = readFileSync(join(root, 'components', 'OverlayPeek.tsx'), 'utf8').replace(/\r\n/g, '\n')
 const index = readFileSync(join(__dirname, '../../main/index.ts'), 'utf8').replace(/\r\n/g, '\n')

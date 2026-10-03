@@ -3,8 +3,14 @@ import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { INTELLIGENCE_PASS_AUTO_START } from '@shared/intelligence-pass'
 
-const brainView = readFileSync(resolve(__dirname, 'BrainView.tsx'), 'utf8')
-const recallView = readFileSync(resolve(__dirname, 'RecallView.tsx'), 'utf8')
+const brainView = [
+  '../features/brain-view/BrainView.tsx',
+  '../features/brain-view/BrainViewLayout.tsx'
+].map((file) => readFileSync(resolve(__dirname, file), 'utf8')).join('\n')
+const recallView = [
+  '../features/recall-view/RecallView.tsx',
+  '../features/recall-view/recall-components.tsx'
+].map((file) => readFileSync(resolve(__dirname, file), 'utf8')).join('\n')
 
 describe('BrainView Intelligence Update wiring', () => {
   it('shows the Update Intelligence button and starts the pass on click', () => {

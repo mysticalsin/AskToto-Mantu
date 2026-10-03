@@ -264,7 +264,7 @@ describe('overlay chrome modes', () => {
       })
     ).toBe(false)
     const app = readFileSync(join(__dirname, '../renderer/src/App.tsx'), 'utf8')
-    const bar = readFileSync(join(__dirname, '../renderer/src/components/Bar.tsx'), 'utf8')
+    const bar = readFileSync(join(__dirname, '../renderer/src/features/bar/Bar.tsx'), 'utf8')
     expect(app).toMatch(/reveal-now/)
     expect(app).toMatch(/overlayRestsHidden\(overlayLayout\)/)
     expect(bar).toMatch(/aria-label="Ask Métis anything"/)

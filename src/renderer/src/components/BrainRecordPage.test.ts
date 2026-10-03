@@ -13,7 +13,7 @@ import {
   recordKey,
   type BrainRecordRef,
   type RecentMerge
-} from './BrainRecordPage'
+} from '../features/brain-record-page/BrainRecordPage'
 import { AccountEntitySchema, PersonEntitySchema, type BrainRead } from '@shared/brain'
 import type { AttentionItem } from '@shared/ipc'
 

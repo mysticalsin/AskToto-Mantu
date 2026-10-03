@@ -6,7 +6,7 @@ import { overlayAllowsMinimize } from '@shared/overlay-chrome'
 import { orbHostPaintsText } from '../lib/bar-pill-orb'
 import { Bar, type BarProps } from './Bar'
 
-const barSrc = readFileSync(join(__dirname, 'Bar.tsx'), 'utf8').replace(/\r\n/g, '\n')
+const barSrc = readFileSync(join(__dirname, '../features/bar/Bar.tsx'), 'utf8').replace(/\r\n/g, '\n')
 
 function props(overrides: Partial<BarProps> = {}): BarProps {
   return {

@@ -97,7 +97,7 @@ describe('import queue helpers', () => {
 
 describe('import queue layout', () => {
   const queue = readFileSync(join(__dirname, 'ImportQueue.tsx'), 'utf8')
-  const recall = readFileSync(join(__dirname, 'RecallView.tsx'), 'utf8')
+  const recall = readFileSync(join(__dirname, '../features/recall-view/RecallView.tsx'), 'utf8')
 
   it('queue cards name the meeting and expose resume, cancel, and done', () => {
     expect(queue).toMatch(/job\.title/)

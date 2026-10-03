@@ -22,7 +22,11 @@ describe('ASR engine fallback and fresh-setup contracts', () => {
   })
 
   it('onboarding provisions ASR and exposes a safe recovery for a damaged immutable bundle', () => {
-    const onboard = read('src/renderer/src/components/OnboardingExperience.tsx')
+    const onboard = [
+      read('src/renderer/src/features/onboarding-experience/OnboardingExperience.tsx'),
+      read('src/renderer/src/features/onboarding-experience/OnboardingExperienceLayout.tsx'),
+      read('src/renderer/src/features/onboarding-experience/onboarding-setup.tsx')
+    ].join('\n')
     expect(onboard).toMatch(/asrAssetsEnsure/)
     expect(onboard).toMatch(/asrAssetsStatus/)
     expect(onboard).toMatch(/setupAsrBlocksContinue/)

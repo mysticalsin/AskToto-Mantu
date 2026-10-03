@@ -4,7 +4,10 @@ import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
 import { describe, expect, it } from 'vitest'
 
 const demo = readFileSync(join(__dirname, '../components/OnboardingDemoScene.tsx'), 'utf8')
-const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
+const experience = [
+  '../features/onboarding-experience/OnboardingExperience.tsx',
+  '../features/onboarding-experience/OnboardingExperienceLayout.tsx'
+].map((file) => readFileSync(join(__dirname, file), 'utf8')).join('\n')
 const css = readAppCss()
 
 describe('Act 2 demo clock — DOM cursor, not setState every rAF', () => {

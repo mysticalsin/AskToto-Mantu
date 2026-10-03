@@ -16,7 +16,11 @@ const musicDir = join(__dirname, '../assets/music')
 const oggPath = join(musicDir, ONBOARDING_MUSIC_FILE)
 const licensePath = join(musicDir, 'LICENSE.OPEN-GOLDBERG.txt')
 const production = readFileSync(join(__dirname, './onboarding-music.ts'), 'utf8')
-const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
+const experience = [
+  '../features/onboarding-experience/OnboardingExperience.tsx',
+  '../features/onboarding-experience/OnboardingExperienceLayout.tsx',
+  '../features/onboarding-experience/onboarding-scenes.tsx'
+].map((file) => readFileSync(join(__dirname, file), 'utf8')).join('\n')
 
 describe('onboarding music — CC0 Goldberg Aria, HTML audio, no choir synth', () => {
   it('bundles a real piano recording ≤ 4MB with a LICENSE note', () => {

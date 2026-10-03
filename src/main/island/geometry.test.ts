@@ -697,7 +697,11 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
     expect(index.indexOf('exclusiveOsFullscreenAllowed(')).toBeLessThan(index.indexOf('setSimpleFullScreen(true)'))
     const completionEvent = index.slice(index.indexOf('ipcMain.on(IPC.onboardingExit'), index.indexOf('ipcMain.handle(IPC.settingsSet'))
     expect(completionEvent).toMatch(/exitExclusiveOnboardingStage\(\)/)
-    const experience = readFileSync(join(__dirname, '../../renderer/src/components/OnboardingExperience.tsx'), 'utf8')
+    const experience = [
+      '../../renderer/src/features/onboarding-experience/OnboardingExperience.tsx',
+      '../../renderer/src/features/onboarding-experience/OnboardingExperienceLayout.tsx',
+      '../../renderer/src/features/onboarding-experience/onboarding-scenes.tsx'
+    ].map((file) => readFileSync(join(__dirname, file), 'utf8')).join('\n')
     const finish = experience.slice(experience.indexOf('const finish = async'))
     expect(finish.indexOf('closeOnboardingPortal')).toBeGreaterThan(-1)
     expect(finish.indexOf('closeOnboardingPortal')).toBeLessThan(finish.indexOf('onDone({ mode, recordingConsent: true, destination })'))
@@ -738,7 +742,11 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
   })
 
   it('primary onboarding CTAs use onboard-cta (min 52×220) and Act 2 is full-bar Métis + Intelligence', () => {
-    const experience = readFileSync(join(__dirname, '../../renderer/src/components/OnboardingExperience.tsx'), 'utf8')
+    const experience = [
+      '../../renderer/src/features/onboarding-experience/OnboardingExperience.tsx',
+      '../../renderer/src/features/onboarding-experience/OnboardingExperienceLayout.tsx',
+      '../../renderer/src/features/onboarding-experience/onboarding-scenes.tsx'
+    ].map((file) => readFileSync(join(__dirname, file), 'utf8')).join('\n')
     const demo = readFileSync(join(__dirname, '../../renderer/src/components/OnboardingDemoScene.tsx'), 'utf8')
     const css = readAppCss()
     const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')

@@ -14,7 +14,11 @@ import {
 } from './onboarding-music'
 import { ONBOARDING_AUDIO_LOCK_EVENT } from '@shared/onboarding-audio'
 
-const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
+const experience = [
+  '../features/onboarding-experience/OnboardingExperience.tsx',
+  '../features/onboarding-experience/OnboardingExperienceLayout.tsx',
+  '../features/onboarding-experience/onboarding-scenes.tsx'
+].map((file) => readFileSync(join(__dirname, file), 'utf8')).join('\n')
 const settings = readFileSync(join(__dirname, '../features/settings/SettingsRoot.tsx'), 'utf8')
 const css = readAppCss().replace(/\r\n/g, '\n')
 const production = readFileSync(join(__dirname, './onboarding-music.ts'), 'utf8')

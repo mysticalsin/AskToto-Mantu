@@ -21,7 +21,12 @@ import { shouldMountStarfield } from './onboarding-starfield-spec'
 const root = join(__dirname, '..')
 const kineticLib = readFileSync(join(__dirname, './onboarding-kinetic-grid.ts'), 'utf8')
 const kineticHost = readFileSync(join(root, 'components/onboarding/KineticGrid.tsx'), 'utf8')
-const experience = readFileSync(join(root, 'components/OnboardingExperience.tsx'), 'utf8')
+const experience = [
+  'features/onboarding-experience/OnboardingExperience.tsx',
+  'features/onboarding-experience/OnboardingExperienceLayout.tsx',
+  'features/onboarding-experience/onboarding-scenes.tsx',
+  'features/onboarding-experience/onboarding-setup.' + 'tsx'
+].map((file) => readFileSync(join(root, file), 'utf8')).join('\n')
 const demo = readFileSync(join(root, 'components/OnboardingDemoScene.tsx'), 'utf8')
 const settings = readFileSync(join(root, 'features/settings/SettingsRoot.tsx'), 'utf8')
 const css = readAppCss()

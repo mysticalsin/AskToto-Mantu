@@ -13,15 +13,20 @@ import { describe, expect, it } from 'vitest'
 const root = join(__dirname, '..', '..', '..')
 const DIRECTORIES = [
   'src/renderer/src/components/history',
+  'src/renderer/src/features/bar',
+  'src/renderer/src/features/review',
   'src/renderer/src/features/settings',
   'src/renderer/src/ui'
 ]
 const FILES = [
   'src/renderer/src/App.tsx',
-  'src/renderer/src/components/Bar.tsx',
+  'src/renderer/src/features/bar/Bar.tsx',
   'src/renderer/src/components/Settings.tsx',
-  'src/renderer/src/components/Review.tsx',
-  'src/renderer/src/components/RecallView.tsx',
+  'src/renderer/src/features/review/Review.tsx',
+  'src/renderer/src/features/review/ReviewActions.tsx',
+  'src/renderer/src/features/review/ReviewLayout.tsx',
+  'src/renderer/src/features/recall-view/RecallView.tsx',
+  'src/renderer/src/features/recall-view/recall-components.tsx',
   'src/renderer/src/components/UpcomingSection.tsx',
   'src/renderer/src/components/QuickActions.tsx',
   'src/renderer/src/components/Answer.tsx',
@@ -50,7 +55,7 @@ function listFiles(relDir: string): string[] {
     .sort()
 }
 
-const COPY_FILES = [...FILES, ...DIRECTORIES.flatMap(listFiles)]
+const COPY_FILES = [...new Set([...FILES, ...DIRECTORIES.flatMap(listFiles)])]
 
 /** Remove block comments, JSX comments and line comments. Strings are left alone (a `//` inside a URL string
  *  only truncates that one line, which can hide an em dash but never invent one). */

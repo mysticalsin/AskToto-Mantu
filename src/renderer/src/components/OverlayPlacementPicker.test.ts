@@ -7,7 +7,10 @@ import { resolveOverlayPresentation } from '@shared/overlay-presentation'
 const picker = readFileSync(join(__dirname, './OverlayPlacementPicker.tsx'), 'utf8')
 const settings = readFileSync(join(__dirname, '../features/settings/SettingsRoot.tsx'), 'utf8')
 const onboarding = readFileSync(join(__dirname, './OnboardingAppearance.tsx'), 'utf8')
-const experience = readFileSync(join(__dirname, './OnboardingExperience.tsx'), 'utf8')
+const experience = [
+  '../features/onboarding-experience/OnboardingExperience.tsx',
+  '../features/onboarding-experience/OnboardingExperienceLayout.tsx'
+].map((file) => readFileSync(join(__dirname, file), 'utf8')).join('\n')
 
 describe('overlay physical placement controls', () => {
   it('keeps physical placement separate from chrome and exposes exactly the supported positions', () => {
