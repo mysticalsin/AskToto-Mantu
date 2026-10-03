@@ -31,6 +31,7 @@ import { spawn } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { NAVIGATION_GUARD_BOOTSTRAP_PATCH, clickHistory, ensureIdleBar, findOverlayPage } from './golden-flows/navigation-guard-rows.mjs'
 import { mainInspector } from './golden-flows/right-edge-hide-rows.mjs'
 import { isOverlayUrl, parseAuditLog } from './golden-flows/smoke-support.mjs'
@@ -41,9 +42,11 @@ import {
   BLOCKED_EXTERNAL_ROWS,
   DESIGN_VARIANTS,
   HISTORY_DESIGN_STATES,
+  HISTORY_DEGRADED_MS,
   IPC_CHANNELS,
   KEYBOARD_VARIANT_ID,
   designVerdict,
+  deviceMetricsForVariant,
   historyTransitions,
   judgeCapture,
   listAnswer,
@@ -51,7 +54,7 @@ import {
 } from './lib/history-design.mjs'
 
 const READY_TIMEOUT_MS = 150_000
-const STATE_TIMEOUT_MS = 10_000
+export const STATE_TIMEOUT_MS = 10_000
 const SETTLE_TIMEOUT_MS = 1_000
 const QUIT_TIMEOUT_MS = 30_000
 const TAB_STOPS_MAX = 80
@@ -267,26 +270,51 @@ async function rolesPresent(page, state) {
   return results
 }
 
-/** Waits for History's next list request; returns when main received it (the same wall clock as this process). */
-async function waitForRequest(main, before) {
+/** Waits for History's next fixture-backed request; returns when main received it. */
+async function waitForRequest(main, before, wait = sleep, label = 'list') {
   const deadline = Date.now() + STATE_TIMEOUT_MS
   while (Date.now() < deadline) {
     const { requests, requestedAt } = await main('(({ requests, requestedAt }) => ({ requests, requestedAt }))(globalThis.__historyDesign)')
     if (requests > before) return requestedAt
-    await sleep(50)
+    await wait(50)
   }
-  throw new Error('History did not request its list')
+  throw new Error(`History did not request its ${label}`)
+}
+
+/**
+ * Waits for the visual cue needed before capture. Accessibility roles are still checked afterwards by
+ * rolesPresent/judgeCapture.
+ * @param {import('playwright').Page} page
+ * @param {{ text: string, role?: string | null, timeoutMs?: number }} cue
+ */
+export async function waitForHistoryDesignCue(page, { text, role = null, timeoutMs = STATE_TIMEOUT_MS }) {
+  const locator = role ? page.getByRole(role).filter({ hasText: text }) : page.getByText(text)
+  await locator.first().waitFor({ timeout: timeoutMs })
+}
+
+const HISTORY_DESIGN_CUE_BY_STATE = Object.freeze({
+  slow: Object.freeze({ text: 'OneDrive is slow to answer', role: 'status' }),
+  'slow-with-rows': Object.freeze({ text: 'OneDrive is slow to answer', role: 'status' }),
+  failed: Object.freeze({ text: 'Could not load your meetings', role: 'alert' }),
+  unavailable: Object.freeze({ text: 'could not be read right now', role: 'status' })
+})
+
+function historyDesignCueForState(stateId) {
+  return HISTORY_DESIGN_CUE_BY_STATE[stateId] ?? null
 }
 
 /**
  * Puts History into `state` from a fresh open; returns when the open was clicked, when History's list
- * request reached main, and how it went. The renderer arms its HISTORY_DEGRADED_MS notice when it sends
- * that request, so the loading capture's budget starts there, not at the harness's click.
+ * or search request reached main, and how it went. Slow degraded waits are anchored to the request that
+ * arms the renderer's HISTORY_DEGRADED_MS notice, so hosted-runner click/type latency cannot consume it.
  */
-async function driveState(page, main, state, realRows) {
+export async function driveState(page, main, state, realRows, deps = {}) {
+  const wait = deps.wait ?? sleep
+  const ensureIdle = deps.ensureIdleBar ?? ensureIdleBar
+  const openHistory = deps.clickHistory ?? clickHistory
   // Bar History ignores a toggle within 400 ms of the last one; a fast capture can end inside that window.
-  await sleep(450)
-  await ensureIdleBar(page)
+  await wait(450)
+  await ensureIdle(page)
   const now = Date.now()
   await main(`(() => {
     const s = globalThis.__historyDesign
@@ -297,20 +325,22 @@ async function driveState(page, main, state, realRows) {
   })()`)
   const before = await main('globalThis.__historyDesign.requests')
   const clickedAt = Date.now()
-  await clickHistory(page)
-  const requestedAt = await waitForRequest(main, before)
-  const visible = (text, role) => (role ? page.getByRole(role).filter({ hasText: text }) : page.getByText(text)).first().waitFor({ timeout: STATE_TIMEOUT_MS })
+  await openHistory(page)
+  const requestedAt = await waitForRequest(main, before, wait, 'list')
+  const visible = (text, role = null, timeoutMs = STATE_TIMEOUT_MS) => waitForHistoryDesignCue(page, { text, role, timeoutMs })
   const drive = { clickedAt, requestedAt }
   if (state.id === 'slow' || state.id === 'unavailable' || state.id === 'failed') {
-    const [text, role] =
-      state.id === 'slow' ? ['OneDrive is slow to answer', 'status'] : state.id === 'failed' ? ['Could not load your meetings', 'alert'] : ['could not be read right now', 'status']
-    await visible(text, role)
+    const cue = historyDesignCueForState(state.id)
+    await visible(cue.text, cue.role)
     drive.bannerAfterMs = Date.now() - clickedAt
   } else if (state.id === 'slow-with-rows') {
     await visible(SAMPLE_MEETINGS[0])
+    const beforeSearch = await main('globalThis.__historyDesign.requests')
     const typedAt = Date.now()
     await page.getByLabel('Search past meetings').fill('planning')
-    await visible('OneDrive is slow to answer', 'status')
+    drive.requestedAt = await waitForRequest(main, beforeSearch, wait, 'search')
+    const cue = historyDesignCueForState(state.id)
+    await visible(cue.text, cue.role)
     drive.bannerAfterMs = Date.now() - typedAt
   } else if (state.list !== 'pending') {
     await visible(state.list === 'rows+notDownloaded' ? 'Not downloaded' : SAMPLE_MEETINGS[0])
@@ -360,13 +390,14 @@ async function settleWindow(page) {
 }
 
 async function captureReachedState({ page, cdp, main, state, variant, realRows, out }) {
-  const drive = await driveState(page, main, state, realRows)
   const screenshot = join(state.id, `${variant.id}.png`)
+  let drive
   let collected
   // Width and height 0 leave the viewport the real window's, so the app's own content sizing still
   // applies at 2x (layout there can differ by a few pixels); only the device scale factor is emulated.
-  await cdp.send('Emulation.setDeviceMetricsOverride', { width: 0, height: 0, deviceScaleFactor: variant.scale, mobile: false })
+  await cdp.send('Emulation.setDeviceMetricsOverride', deviceMetricsForVariant(variant))
   try {
+    drive = await driveState(page, main, state, realRows)
     await settleWindow(page)
     await page.screenshot({ path: join(out, screenshot), scale: 'device' })
     drive.capturedAfterMs = Date.now() - drive.requestedAt
@@ -543,10 +574,12 @@ async function main() {
   return report.verdict === 'PASS' ? 0 : 1
 }
 
-main().then(
-  (code) => process.exit(code),
-  (error) => {
-    console.error(`[history-design] ${error.stack ?? error.message}`)
-    process.exit(1)
-  }
-)
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().then(
+    (code) => process.exit(code),
+    (error) => {
+      console.error(`[history-design] ${error.stack ?? error.message}`)
+      process.exit(1)
+    }
+  )
+}

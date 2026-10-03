@@ -1,11 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react'
 import { AudioLines, Brain, ChevronRight, CornerDownLeft, FileSearch, Image, LoaderCircle, Pause, Play, Settings, Square, X } from 'lucide-react'
 import type { MetisCommandState } from '@shared/ipc'
+import { RIGHT_EDGE_DRAWER_WIDTH, RIGHT_EDGE_TAB_WIDTH } from '@shared/right-edge-geometry'
 import { ElapsedClock } from './Bar'
 import { MantuMark } from './MantuMark'
-
-export const RIGHT_EDGE_TAB_WIDTH = 52
-export const RIGHT_EDGE_DRAWER_WIDTH = 360
 
 export interface SidecarChatProps {
   /** Controlled by App so the dock uses the existing conversation state and submission route. */

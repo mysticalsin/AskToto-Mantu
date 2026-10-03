@@ -1,10 +1,39 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { transformWithEsbuild } from 'vite'
-import { describe, expect, it, vi } from 'vitest'
-import { clampAxis, clampAxisMargin, clampHeight as islandClampHeight, isReachable as islandIsReachable, recenterXForWidth, refitToDisplay as islandRefitToDisplay } from './island/geometry'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  clampAxis,
+  clampAxisMargin,
+  clampHeight as islandClampHeight,
+  hideParkWindowOpacity,
+  hoverWatchRestRect,
+  isReachable as islandIsReachable,
+  overlayPlacementPosition,
+  parkAfterExclusiveOnboarding,
+  parkedHoverReanchor,
+  recenterXForWidth,
+  refitToDisplay as islandRefitToDisplay,
+  resolveOverlayPlacement,
+  rightAnchoredParkPosition,
+  rightEdgeParkLayout,
+  type DisplayMetrics
+} from './island/geometry'
+import { pointInRect } from './island/cursor-watch'
+import { revealOverlaySurface } from './island/overlay-surface'
+import { createRightEdgeAnchors } from './island/right-edge-anchor'
 import { crashDetail } from './infra/observability/crash-taxonomy'
 import { overlayUsesHover } from '@shared/overlay-chrome'
+import { overlayDisplayKey } from '@shared/overlay-placement'
+import {
+  anchorFraction,
+  anchorY,
+  legacyDrawerRect,
+  legacyTabCentreY,
+  legacyTabRect,
+  revealBand,
+  type Rect as EdgeRect
+} from '@shared/right-edge-geometry'
 
 /**
  * Source-contract tests for the overlay-placement findings (MQA-196, MQA-197). src/main/index.ts boots
@@ -305,5 +334,274 @@ describe('MQA-197 — the overlay height is re-clamped whenever it changes displ
       rememberBarContentHeight: (h: number) => h
     }).height
     expect(height).toBeLessThanOrEqual(LAPTOP_ALONE.workArea.height - 48)
+  })
+})
+
+/**
+ * M2-0202 RE-G10: every right-edge setBounds goes through applyRightEdgeBounds, and windowResize never changes
+ * right-edge bounds. The shipped right-edge paths are lifted out of index.ts and run over a fake window and
+ * screen with the real geometry and anchor modules; applyRightEdgeBounds is wrapped after lifting, so every
+ * native write records whether it ran inside it.
+ */
+describe('M2-0202 RE-G10 — right-edge window bounds have one writer', () => {
+  const wa = (width: number, height: number, x = 0, y = 0): EdgeRect => ({ x, y, width, height })
+  const right = (r: EdgeRect): number => r.x + r.width
+  const bottom = (r: EdgeRect): number => r.y + r.height
+
+  interface Display {
+    id: number
+    bounds: EdgeRect
+    workArea: EdgeRect
+  }
+  interface Write {
+    kind: 'setBounds' | 'setPosition'
+    rect: EdgeRect
+    insideApply: boolean
+  }
+  interface Harness {
+    bounds: () => EdgeRect
+    writes: Write[]
+    settings: Record<string, unknown>
+    settingsWrites: Array<Record<string, unknown>>
+    setDisplays: (next: Display[]) => void
+    fire: (event: string) => void
+    run: Record<string, (...args: unknown[]) => unknown>
+    setResting: (resting: boolean) => void
+  }
+
+  afterEach(() => vi.useRealTimers())
+
+  async function harness(options: {
+    displays: Display[]
+    layout?: 'hide' | 'island'
+    resting?: boolean
+    settings?: Record<string, unknown>
+    lockedKeys?: string[]
+    start?: EdgeRect
+  }): Promise<Harness> {
+    const lifted = await toJs(
+      [
+        sliceBetween('function commitParkedOverlayBounds(', 'function stopExclusiveBoundsWatch'),
+        sliceBetween('const rightEdgeAnchors = createRightEdgeAnchors({', 'function overlayCursorWatchWanted'),
+        sliceBetween('function anchorTopCenter(): void {', 'function applySettingsSurface('),
+        sliceBetween('function setWindowMode(): void {', 'const reveals = createRevealTrace'),
+        sliceBetween('function moveBy(dx: number, dy: number): void {', 'function toggleVisible('),
+        sliceBetween('function resizeTo(height: number): void {', '/** Collapse to / expand'),
+        sliceBetween('ipcMain.handle(IPC.windowResize,', 'ipcMain.handle(IPC.windowMode')
+      ].join('\n')
+    )
+    let displays = options.displays
+    let current: EdgeRect = options.start ?? { x: 0, y: 0, width: 4, height: 4 }
+    let depth = 0
+    const writes: Write[] = []
+    const listeners: Record<string, () => void> = {}
+    const handlers: Record<string, (...args: unknown[]) => unknown> = {}
+    const settings: Record<string, unknown> = {
+      overlayRightEdgeAnchorByDisplay: {},
+      overlayRightEdgeYByDisplay: {},
+      ...options.settings
+    }
+    const settingsWrites: Array<Record<string, unknown>> = []
+    const overlap = (a: EdgeRect, b: EdgeRect): number =>
+      Math.max(0, Math.min(right(a), right(b)) - Math.max(a.x, b.x)) * Math.max(0, Math.min(bottom(a), bottom(b)) - Math.max(a.y, b.y))
+    const metrics = (d: Display): DisplayMetrics => ({ bounds: d.bounds, workArea: d.workArea, hasNotch: false, notchWidth: 0, menuBarHeight: 0, source: 'heuristic' })
+    const win = {
+      isDestroyed: () => false,
+      isVisible: () => true,
+      showInactive: () => {},
+      getBounds: () => ({ ...current }),
+      setBounds: (rect: EdgeRect) => {
+        current = { ...rect }
+        writes.push({ kind: 'setBounds', rect: { ...rect }, insideApply: depth > 0 })
+      },
+      setPosition: (x: number, y: number) => {
+        current = { ...current, x, y }
+        writes.push({ kind: 'setPosition', rect: { ...current }, insideApply: depth > 0 })
+      },
+      setAlwaysOnTop: () => {},
+      setBackgroundColor: () => {},
+      getBackgroundColor: () => '#000000',
+      setOpacity: () => {},
+      getOpacity: () => 1,
+      setIgnoreMouseEvents: () => {}
+    }
+    const stubs = {
+      win,
+      screen: {
+        getDisplayMatching: (rect: EdgeRect) => displays.reduce((best, d) => (overlap(rect, d.workArea) > overlap(rect, best.workArea) ? d : best), displays[0]),
+        getAllDisplays: () => displays,
+        getCursorScreenPoint: () => ({ x: 0, y: 0 }),
+        on: (event: string, fn: () => void) => {
+          listeners[event] = fn
+        }
+      },
+      ipcMain: { handle: (channel: string, fn: (...args: unknown[]) => unknown) => { handlers[channel] = fn } },
+      IPC: { windowResize: 'window:resize' },
+      assertMainWindow: () => {},
+      getSettings: () => settings,
+      setSettings: (patch: Record<string, unknown>) => {
+        settingsWrites.push(patch)
+        Object.assign(settings, patch)
+      },
+      getLockedKeys: () => options.lockedKeys ?? [],
+      createRightEdgeAnchors,
+      mainLog: { warn: () => {}, info: () => {} },
+      liveOverlayPlacement: () => 'right-edge',
+      liveOverlayLayout: () => options.layout ?? 'hide',
+      resolvedOverlayPlacementForDisplay: (d: Display) => resolveOverlayPlacement('right-edge', metrics(d)),
+      getDisplayMetrics: metrics,
+      onboardingExclusiveLive: () => false,
+      overlayUsesHover,
+      overlayPlacementPosition,
+      parkAfterExclusiveOnboarding,
+      parkedHoverReanchor,
+      hoverWatchRestRect,
+      rightEdgeParkLayout,
+      rightAnchoredParkPosition,
+      hideParkWindowOpacity,
+      revealOverlaySurface,
+      pointInRect,
+      ensureWindow: () => win,
+      cancelOverlayLeavePark: () => {},
+      applyHideClickThrough: () => {},
+      applyOverlaySurfaceChrome: () => {},
+      parkOverlayAfterHideSpring: () => {},
+      rememberBarContentHeight: (h: number) => h,
+      ISLAND_TOP_MARGIN: 8,
+      BAR_IDLE_HEIGHT_PX: 84,
+      BAR_HEIGHT: 120,
+      OVERLAY_REST_BACKGROUND: '#00000000',
+      enterDepth: () => { depth += 1 },
+      leaveDepth: () => { depth -= 1 }
+    }
+    const body = [
+      `const { ${Object.keys(stubs).join(', ')} } = stubs`,
+      `let islandResting = ${options.resting ?? false}`,
+      'let settingsSurfaceOpen = false',
+      'let isMinimized = false',
+      'let currentWidth = 0',
+      'let userAnchorY = null',
+      'let lastBarHeight = 120',
+      'let overlayCursorWatchHovering = false',
+      'let overlayParkLatched = false',
+      lifted,
+      'const shippedApply = applyRightEdgeBounds',
+      'applyRightEdgeBounds = function (...args) { enterDepth(); try { return shippedApply(...args) } finally { leaveDepth() } }',
+      'registerScreenListeners()',
+      'return {',
+      '  run: { commitParkedOverlayBounds, parkedOverlayBounds, restoreBarWidth, repairOverlayBoundsForReveal, setWindowMode, anchorTopCenter, moveBy, resizeTo, rightEdgeAnchorY: (d) => rightEdgeAnchors.y(d) },',
+      '  setResting: (resting) => { islandResting = resting }',
+      '}'
+    ].join('\n')
+    const built = new Function('stubs', body)(stubs) as Pick<Harness, 'run' | 'setResting'>
+    return {
+      ...built,
+      run: { ...built.run, windowResize: (payload: unknown) => handlers['window:resize']({}, payload) },
+      bounds: () => ({ ...current }),
+      writes,
+      settings,
+      settingsWrites,
+      setDisplays: (next) => {
+        displays = next
+      },
+      fire: (event) => listeners[event]()
+    }
+  }
+
+  const DISPLAY: Display = { id: 1, bounds: wa(1440, 900), workArea: wa(1440, 875, 0, 25) }
+
+  it('parks, reveals, drags, re-anchors and re-modes only through applyRightEdgeBounds, at the authority rects', async () => {
+    const h = await harness({ displays: [DISPLAY], layout: 'island', resting: true })
+    vi.useFakeTimers()
+    const area = DISPLAY.workArea
+    const a = anchorY(area)
+    h.run.commitParkedOverlayBounds(h.run.parkedOverlayBounds('island', DISPLAY))
+    expect(h.bounds()).toEqual(legacyTabRect(area, a))
+    h.setResting(false)
+    h.run.restoreBarWidth()
+    expect(h.bounds()).toEqual(legacyDrawerRect(area, a))
+    h.run.repairOverlayBoundsForReveal()
+    h.run.setWindowMode()
+    h.run.anchorTopCenter()
+    expect(h.bounds()).toEqual(legacyDrawerRect(area, a))
+    // A header drag changes only A: the drawer moves, and the parked tab follows the same anchor.
+    h.run.moveBy(0, 40)
+    expect(h.bounds()).toEqual(legacyDrawerRect(area, a + 40))
+    expect(h.run.rightEdgeAnchorY(DISPLAY)).toBe(a + 40)
+    h.setResting(true)
+    h.run.commitParkedOverlayBounds(h.run.parkedOverlayBounds('island', DISPLAY))
+    expect(h.bounds()).toEqual(legacyTabRect(area, a + 40))
+    // A drag of the parked tab moves the tab (spec v3 §2: through legacyTabRect(A), not the old normalized Y).
+    h.run.moveBy(0, 30)
+    expect(h.bounds()).toEqual(legacyTabRect(area, a + 70))
+    // Persisted once, after the drag settles, as the anchor fraction; the legacy key is untouched.
+    expect(h.settingsWrites).toEqual([])
+    vi.advanceTimersByTime(350)
+    expect(h.settingsWrites).toEqual([{ overlayRightEdgeAnchorByDisplay: { [overlayDisplayKey(1) as string]: anchorFraction(area, a + 70) } }])
+    expect(h.settings.overlayRightEdgeYByDisplay).toEqual({})
+    // A display change re-anchors the rest, then the open drawer, at the stored anchor on the new work area.
+    const smaller: Display = { id: 1, bounds: wa(1024, 576), workArea: wa(1024, 528) }
+    h.setDisplays([smaller])
+    h.fire('display-metrics-changed')
+    const f = anchorFraction(area, a + 70)
+    expect(h.bounds()).toEqual(legacyTabRect(smaller.workArea, anchorY(smaller.workArea, f)))
+    h.setResting(false)
+    h.fire('display-removed')
+    expect(h.bounds()).toEqual(legacyDrawerRect(smaller.workArea, anchorY(smaller.workArea, f)))
+    expect(h.writes.length).toBeGreaterThan(0)
+    expect(h.writes.filter((write) => !write.insideApply)).toEqual([])
+  })
+
+  it('parks Hide on the reveal band through the same writer', async () => {
+    const h = await harness({ displays: [DISPLAY], layout: 'hide', resting: true })
+    h.run.commitParkedOverlayBounds(h.run.parkedOverlayBounds('hide', DISPLAY))
+    expect(h.bounds()).toEqual(revealBand(DISPLAY.workArea, anchorY(DISPLAY.workArea)))
+    expect(h.writes.every((write) => write.insideApply)).toBe(true)
+  })
+
+  it('windowResize and resizeTo never change right-edge bounds', async () => {
+    const h = await harness({ displays: [DISPLAY], layout: 'island' })
+    h.run.restoreBarWidth()
+    const open = h.bounds()
+    const before = h.writes.length
+    for (const payload of [{ height: 900 }, { height: 40, width: 220 }, { height: Number.NaN }]) h.run.windowResize(payload)
+    h.run.resizeTo(900)
+    expect(h.writes.length).toBe(before)
+    expect(h.bounds()).toEqual(open)
+  })
+
+  it('RE-G04: a legacy-only display converts on its first resolve, and a display absent at upgrade on first attach', async () => {
+    const legacy = { 'display:1': 0.5, 'display:2': 0.25 }
+    const h = await harness({ displays: [DISPLAY], layout: 'island', resting: true, settings: { overlayRightEdgeYByDisplay: legacy } })
+    h.run.commitParkedOverlayBounds(h.run.parkedOverlayBounds('island', DISPLAY))
+    const tab = h.bounds()
+    expect(Math.abs(tab.y + tab.height / 2 - legacyTabCentreY(DISPLAY.workArea, 0.5))).toBeLessThanOrEqual(1)
+    expect(Object.keys(h.settings.overlayRightEdgeAnchorByDisplay as object)).toEqual(['display:1'])
+    // Display 2 was not attached at upgrade: it converts when the window first lands on it.
+    const second: Display = { id: 2, bounds: wa(1920, 1080, 1440, 0), workArea: wa(1920, 1040, 1440, 0) }
+    h.setDisplays([second])
+    h.fire('display-removed')
+    expect(Object.keys(h.settings.overlayRightEdgeAnchorByDisplay as object).sort()).toEqual(['display:1', 'display:2'])
+    const secondTab = h.bounds()
+    expect(Math.abs(secondTab.y + secondTab.height / 2 - legacyTabCentreY(second.workArea, 0.25))).toBeLessThanOrEqual(1)
+    // Each display migrated exactly once; the legacy key stays read-only.
+    expect(h.settingsWrites).toHaveLength(2)
+    expect(h.settings.overlayRightEdgeYByDisplay).toEqual(legacy)
+  })
+
+  it('RE-G04: a lock on the old key locks the new one: no migration write, no persisted drag', async () => {
+    const h = await harness({
+      displays: [DISPLAY],
+      layout: 'island',
+      settings: { overlayRightEdgeYByDisplay: { 'display:1': 0.5 } },
+      lockedKeys: ['overlayRightEdgeYByDisplay']
+    })
+    vi.useFakeTimers()
+    h.run.restoreBarWidth()
+    const open = h.bounds()
+    h.run.moveBy(0, 60)
+    vi.advanceTimersByTime(1000)
+    expect(h.settingsWrites).toEqual([])
+    expect(h.bounds()).toEqual(open)
   })
 })
