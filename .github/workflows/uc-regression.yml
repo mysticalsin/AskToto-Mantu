@@ -1,7 +1,11 @@
 name: UC catalogue regression
+run-name: ${{ github.event_name == 'pull_request' && 'UC catalogue regression (registration)' || 'UC catalogue regression' }}
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/uc-regression.yml
 
 permissions:
   contents: read
@@ -12,6 +16,7 @@ concurrency:
 
 jobs:
   uc-regression:
+    if: github.event_name == 'workflow_dispatch'
     name: UC-001..UC-112 per-row report
     runs-on: ubuntu-latest
     timeout-minutes: 20
