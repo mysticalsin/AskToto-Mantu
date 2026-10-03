@@ -26,6 +26,8 @@ on:
       - scripts/qa/release-line.mjs
       - scripts/qa/st-1.mjs
       - scripts/qa/lib/st-1-core.mjs
+      - scripts/qa/meeting/**
+      - src/main/qa-capture-source.ts
       - scripts/qa/stat-flags-fixture.sh
       - scripts/hermetic/prove-owner-sandbox.sh
       - scripts/hermetic/run-under-owner-sandbox.sh
@@ -179,7 +181,7 @@ jobs:
             resources/ort
             resources/llama
             resources/local-llm
-          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}
+          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs') }}-${{ hashFiles('resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs') }}-${{ hashFiles('scripts/local-model-assets.mjs') }}
       # A stable identity keeps one designated requirement across candidates, so TCC grants persist.
       # Without the secret the candidate is ad-hoc signed, and provenance says so.
       - name: Import the stable QA signing identity
@@ -278,7 +280,7 @@ jobs:
             resources/ort
             resources/llama
             resources/local-llm
-          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}
+          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs') }}-${{ hashFiles('resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs') }}-${{ hashFiles('scripts/local-model-assets.mjs') }}
       # No signing secret reaches this job, so electron-builder leaves both installers unsigned.
       - name: Build the win installers
         run: npm run dist:win
@@ -761,6 +763,46 @@ jobs:
           name: st-1-macos-control
           path: st1-report/
           if-no-files-found: warn
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+
+  # Blocking: a candidate whose QA capture source does not engage cannot satisfy the 1 h meeting scenario's
+  # acceptance evidence. Runs this run's QA-identity bytes on a fresh profile with a WAV as the microphone.
+  capture-file-smoke-mac:
+    name: File-fed capture smoke (macOS QA identity)
+    needs: provenance
+    runs-on: macos-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-provenance
+          path: provenance
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-mac-qa-identity
+          path: assets
+      - name: Verify every byte against the provenance
+        run: node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
+      - name: Feed a WAV as the microphone, Listen, Stop, read the saved meeting
+        run: |
+          installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
+          if [ -z "$installer" ]; then
+            echo "::error::candidate-mac-qa-identity did not contain a zip installer."
+            exit 1
+          fi
+          node scripts/qa/meeting/file-capture-smoke.mjs --installer "$installer" --out capture-report
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: capture-file-smoke-mac
+          path: capture-report/
+          if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 
   # The History row (M2-0193): History open and search against the FIFO fixtures, each answering with a
