@@ -125,7 +125,8 @@ describe('right-edge session: the Reader (M2-0202 S3, RE-P01 Reader rows)', () =
     h.report('reader')
     h.s.reset()
     expect(h.s.readerPending()).toBe(false)
-    expect(h.changes).toEqual([true, false, true, false])
+    // Every change of the pending Reader is reported once: open, the island reveal, open, top-center, open, reload.
+    expect(h.changes).toEqual([true, false, true, false, true, false])
   })
 
   it('while the Reader is open only an explicit park applies; clearing the pins never parks it', () => {

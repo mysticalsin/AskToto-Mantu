@@ -839,8 +839,7 @@ export function App(): JSX.Element {
     overlaySpring,
     overlayRestsHidden(overlayLayout)
   )
-  // Set by a page pointer-enter on the parked rest (the Island tab), cleared by the reveal it leads to or an
-  // explicit open.
+  // Set by a page pointer-enter on the parked rest (the Island tab); cleared by its reveal or an explicit open.
   const rightEdgePointerRevealRef = useRef(false)
   const rightEdgePinsRef = useRef(rightEdgePins)
   rightEdgePinsRef.current = rightEdgePins
@@ -922,8 +921,8 @@ export function App(): JSX.Element {
       const nextLock = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'renderer-pointer-enter' })
       rightEdgeDismissalLockRef.current = nextLock
       if (nextLock !== 'open') return
-      if (overlayPeekedRef.current) rightEdgePointerRevealRef.current = true
       setRightEdgeDockDismissed(false)
+      if (overlayPeekedRef.current) rightEdgePointerRevealRef.current = true
     }
     dispatchAutoHide({ type: 'pointer-enter' })
   }, [rightEdgePresentation])

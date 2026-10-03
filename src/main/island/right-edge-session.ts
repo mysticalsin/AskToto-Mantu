@@ -65,7 +65,9 @@ export function createRightEdgeSession(deps: {
     pageSurface: () => state.surface,
     readerPending: () => reader,
     noteIslandReveal() {
+      if (!reader) return
       reader = false
+      deps.onReaderChange?.(false)
     },
     noteBlurPark(now) {
       blurParkedAt = now
