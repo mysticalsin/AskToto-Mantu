@@ -229,9 +229,9 @@ function unsafePaths(record) {
 
 /**
  * @param {object} recordOrEnvironment
- * @returns {string | null} runner label/kind that requires ci_run_id
+ * @returns {string | null} runner label/kind that requires ci_run_id when bound to a runner row
  */
-export function runnerLabel(recordOrEnvironment) {
+export function runnerCiRunIdLabel(recordOrEnvironment) {
   const environment = recordOrEnvironment?.environment ?? recordOrEnvironment
   if (environment?.kind === 'hosted-runner') return 'hosted-runner'
   if (environment?.kind === 'owner-mac' && environment?.host === OWNER_MAC_RUNNER_HOST) return OWNER_MAC_RUNNER_HOST
@@ -244,7 +244,7 @@ export function runnerLabel(recordOrEnvironment) {
  */
 export function missingRunnerCiRunIdLabel(record) {
   if (!isPlainObject(record) || record.ci_run_id != null || !RUNNER_CI_LEVELS.has(record.evidence_level)) return null
-  return runnerLabel(record)
+  return runnerCiRunIdLabel(record)
 }
 
 /**
