@@ -428,10 +428,11 @@ command_is_exe_invocation() {
 
 matching_second_instance_candidates() {
   local first_pid=$1
-  local pid descendants
+  local descendants=${2:-}
+  local pid
   local exe_base
   exe_base=$(basename "$EXE")
-  descendants=$(descendant_pids "$first_pid")
+  [[ -n "$descendants" ]] || descendants=$(descendant_pids "$first_pid")
   for pid in $("$PGREP_BIN" -f "$exe_base" 2>/dev/null || true); do
     [[ "$pid" =~ ^[0-9]+$ ]] || continue
     [[ "$pid" != "$$" ]] || continue
@@ -446,13 +447,33 @@ matching_second_instance_candidates() {
 find_second_instance_pid() {
   local first_pid=$1
   local before_pids=${2:-}
+  local descendants=${3:-}
   local pid
   while IFS= read -r pid; do
     [[ -n "$pid" ]] || continue
     ! printf '%s\n' "$before_pids" | pid_in_list "$pid" || continue
     printf '%s\n' "$pid"
     return 0
-  done < <(matching_second_instance_candidates "$first_pid")
+  done < <(matching_second_instance_candidates "$first_pid" "$descendants")
+  return 1
+}
+
+find_second_instance_pid_during_settle() {
+  local first_pid=$1
+  local before_pids=${2:-}
+  local descendants=${3:-}
+  local max_loops=$((REOPEN_SETTLE_SECONDS * 5))
+  local waited=0 found=""
+  (( max_loops > 0 )) || max_loops=1
+  while (( waited < max_loops )); do
+    found=$(find_second_instance_pid "$first_pid" "$before_pids" "$descendants" || true)
+    if [[ -n "$found" ]]; then
+      printf '%s' "$found"
+      return 0
+    fi
+    sleep 0.2
+    waited=$((waited + 1))
+  done
   return 1
 }
 
@@ -1118,18 +1139,19 @@ run_hosted_live_matrix() {
   local first_pid=${APP_PID:-}
   local first_state_before=not-running first_state_after=not-running second_launch_status=open-exited-zero relaunched_after_first_exit=false row4_extra
   local second_instance_pids_before=""
+  local first_descendant_pids=""
   local second_state=not-found second_pid_json=null second_stop_status=not-needed
   local second_launcher_pid=""
   if [[ -n "$first_pid" ]] && app_job_running "$first_pid"; then
     first_state_before=running
   fi
   # The second instance gets the same profile, so the app's single-instance lock hands it to the first.
-  second_instance_pids_before=$(matching_second_instance_candidates "$first_pid")
+  first_descendant_pids=$(descendant_pids "$first_pid")
+  second_instance_pids_before=$(matching_second_instance_candidates "$first_pid" "$first_descendant_pids")
   ROW_WINDOW_STARTED_MS=$(epoch_ms)
   "$OPEN_BIN" -n --env "ASKTOTO_USERDATA=$PROFILE" "$APP" --args "--user-data-dir=$PROFILE" >/dev/null 2>&1 &
   second_launcher_pid=$!
-  sleep "$REOPEN_SETTLE_SECONDS"
-  SECOND_INSTANCE_PID=$(find_second_instance_pid "$first_pid" "$second_instance_pids_before" || true)
+  SECOND_INSTANCE_PID=$(find_second_instance_pid_during_settle "$first_pid" "$second_instance_pids_before" "$first_descendant_pids" || true)
   if [[ -n "$SECOND_INSTANCE_PID" ]]; then
     second_pid_json=$SECOND_INSTANCE_PID
     if kill -0 "$SECOND_INSTANCE_PID" >/dev/null 2>&1; then
