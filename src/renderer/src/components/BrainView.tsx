@@ -44,18 +44,6 @@ import { IntelligenceUpdateButton } from './IntelligenceUpdateButton'
 import { NO_PROVIDER_INDEX_COPY, runIntelligenceUpdateClick } from '../lib/intelligence-update'
 import { VirtualList } from '../ui/VirtualList'
 
-/**
- * Mantu Intelligence — the second-brain dashboard over the meeting knowledge store (.brain/).
- * Two layers, mirroring the store's own epistemics:
- *   FACTUAL — meetings volume, people, accounts by sector, everything traceable to a transcript.
- *   PREDICTIVE — deal win-likelihood bands + velocity signals, always qualitative (never invented
- *   percentages) and always carrying the evidence line the judgement was grounded in.
- * Charts follow the dataviz discipline: single-hue bars for magnitude, status colors only for state
- * (with icon + label, never color alone), thin marks, text in ink tokens.
- */
-
-// 'mixed' status amber reuses the shared warning token; success/danger reuse the app's semantic
-// tokens so the dashboard stays inside the frozen visual language.
 const MIXED_COLOR = 'var(--color-warn)'
 
 const BAND_META: Record<Band, { label: string; color: string; Icon: typeof TrendingUp }> = {
@@ -321,9 +309,6 @@ const DealRow = memo(function DealRow({
   const vel = VELOCITY_META[deal.velocity.signal]
   const last = deal.meetings[deal.meetings.length - 1]
   const closed = deal.outcome !== 'open'
-  // Won/Lost unmounts those buttons in favor of a Chip + "Reopen" — hand keyboard focus to Reopen
-  // on that transition so it doesn't fall through to <body>. Guarded so it only fires on the actual
-  // open→closed transition, not on initial mount of an already-closed deal.
   const reopenRef = useRef<HTMLButtonElement>(null)
   const wasClosedRef = useRef(closed)
   useEffect(() => {
@@ -364,7 +349,6 @@ const DealRow = memo(function DealRow({
               color={deal.outcome === 'won' ? 'var(--color-success)' : 'var(--color-danger)'}
               Icon={deal.outcome === 'won' ? TrendingUp : AlertTriangle}
             />
-            {/* Human closes the loop, human can reopen it — mirrors the ledger's kept/broken flow. */}
             <button
               type="button"
               ref={reopenRef}
@@ -382,7 +366,6 @@ const DealRow = memo(function DealRow({
               <Chip label="No read" color="var(--color-ink-3)" Icon={HelpCircle} />
             )}
             <Chip label={vel.label} color={vel.color} Icon={vel.Icon} title={deal.velocity.evidence || undefined} />
-            {/* Outcome — never set by the LLM. A human marking a deal won/lost is the only writer. */}
             <span className="flex shrink-0 items-center gap-0.5">
               <button
                 type="button"
@@ -1388,12 +1371,6 @@ export function BrainView({
             </div>
           )}
 
-          {/* MI-2.5 review round 3: "Corrections paused" — always shown ABOVE the lint list (which is
-              sliced to 5 and could otherwise push this off-screen). Covers a durable corruption lock
-              (status.corruptionBlocked → offer the in-app "Reset corrections lock" recovery) and/or a
-              failed rebuild replay (index.replayError, surfaced distinctly here rather than lost in the
-              lint slice). The replay-failure warning string is filtered out of the lint list below to
-              avoid duplication. */}
           {(status?.corruptionBlocked || data?.index.replayError) && (
             <div className="rounded-xl border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 px-3 py-2.5">
               <SectionTitle>

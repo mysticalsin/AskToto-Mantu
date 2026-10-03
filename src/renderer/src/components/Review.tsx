@@ -49,11 +49,7 @@ function formatDurationMin(min: number): string {
   return m === 0 ? `${h}h` : `${h}h ${m}m`
 }
 
-// Local (not UTC) calendar-day key for a timestamp, as "YYYY-MM-DD" — see the identical helper (and its
-// full rationale) in RecallView.tsx, which owns this logic. Truncating the raw ISO instant to its first
-// 10 characters grabs the UTC date, which is a different calendar day from the local one for roughly
-// half of every 24h cycle in any timezone west of UTC, so a meeting saved moments ago could key under
-// "yesterday". `toLocaleDateString('en-CA')` formats as plain YYYY-MM-DD using the LOCAL timezone.
+// Local, not UTC, calendar-day key for a timestamp as "YYYY-MM-DD".
 function localDateKey(dateStr: string): string {
   const d = new Date(dateStr)
   if (isNaN(d.getTime())) return dateStr.slice(0, 10)
@@ -71,10 +67,7 @@ function groupByDate(meetings: import('@shared/ipc').MeetingSummary[]): [string,
   return Array.from(map.entries())
 }
 
-// `dateKey` is a LOCAL "YYYY-MM-DD" string from localDateKey/groupByDate — compared as a plain string
-// against today's/yesterday's own local keys (computed the same way), so the comparison never re-enters
-// ISO/UTC date parsing. The fallback display date is built from the key's numeric y/m/d via the
-// `Date(y, m, d)` constructor, which — unlike `new Date("YYYY-MM-DD")` — constructs local midnight.
+// Compare LOCAL date keys as strings; construct fallback display dates at local midnight.
 function friendlyDate(dateKey: string): string {
   const [y, m, d] = dateKey.split('-').map(Number)
   if (!y || !m || !d) return dateKey
@@ -97,13 +90,7 @@ function meetingTime(dateStr: string): string {
 /** An in-place recap edit that was saved, paired with the recap text it replaced. */
 export type EditedRecap = { base: string; text: string }
 
-/** The recap markdown every consumer reads (Markdown render, Copy Summary, Export JSON/PDF, CRM payload),
- *  so an edit reflects everywhere at once. The in-place copy of a saved edit stands only while App is
- *  still handing back the text that edit was made against: Regenerate re-runs the recap and OVERWRITES
- *  this meeting on disk, and a copy that outlived that write kept the old edited text on screen — and in
- *  every export and the CRM payload — while the file said something else, with no recovery short of
- *  leaving the screen and reopening. Comparing against `base` makes the override yield to the streaming
- *  regeneration and then to the regenerated recap the moment either arrives. */
+/** A saved recap edit applies only while App is still passing back the same base text. */
 export function displayedRecapText(edited: EditedRecap | null, incoming: string | undefined): string {
   const text = incoming ?? ''
   return edited && edited.base === text ? edited.text : text
@@ -136,11 +123,7 @@ const TranscriptRow = memo(function TranscriptRow({ line }: { line: TranscriptLi
   )
 })
 
-/** The line under a save-failure banner. It used to be an unconditional present-tense "Retrying… attempt
- *  N / M" gated on nothing but `attempts > 0`, so once App's backoff ladder stopped scheduling attempts
- *  the screen went on promising a retry that would never come — the user's only cue said "in progress"
- *  while the meeting sat unwritten. A status line may only claim work that is actually pending; when the
- *  ladder has given up it names the Save chip instead, which is armed in exactly this state. */
+/** A save-failure status line may only claim a retry while a retry is still pending. */
 export function saveStatusLine(attempts: number, max: number, gaveUp: boolean): string | null {
   if (gaveUp) return 'Automatic retries have stopped. Press Save to try again.'
   if (attempts > 0) return `Retrying… attempt ${Math.min(attempts, max)} / ${max}`

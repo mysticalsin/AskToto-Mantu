@@ -12,12 +12,12 @@
 const TEST_FILE = '\\.(test|spec)\\.tsx?$'
 
 // Modules the app loads by file path rather than by import: the electron-vite inputs in
-// electron.vite.config.ts, the scripts of src/renderer/{index,decoder}.html, and the
+// electron.vite.config.ts, the scripts of src/renderer/{index,decoder,virtual-list-measure}.html, and the
 // `new Worker(new URL(...))` target in listen.ts.
 const ENTRY_POINTS = [
   '^src/main/(index|parakeet-asr-host|parakeet-extract-host|speaker-embedding-host|whisper-asr-host)\\.ts$',
   '^src/preload/(index|intelligence|import-decoder)\\.ts$',
-  '^src/renderer/src/(main\\.tsx|import-decoder\\.ts)$',
+  '^src/renderer/src/(main\\.tsx|import-decoder\\.ts|virtual-list-measure\\.tsx)$',
   '^src/renderer/src/lib/whisper\\.worker\\.ts$',
 ]
 
