@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { IPC } from '../shared/contracts/channels'
 import { HIGH_TIER_ASR_MODEL, asrModelBytes, asrModelFileUrl } from './asr-model-manifest'
 
 /**
@@ -77,7 +78,7 @@ describe('MQA-247 — the fetch is reachable and explicit', () => {
     read('src/renderer/src/features/settings/AiSection.tsx')
 
   it('is exposed end to end: channel, handler, preload, UI', () => {
-    expect(read('src/shared/ipc.ts')).toMatch(/asrModelFetch: 'asrModel:fetch'/)
+    expect(IPC.asrModelFetch).toBe('asrModel:fetch')
     expect(read('src/main/index.ts')).toMatch(/ipcMain\.handle\(IPC\.asrModelFetch/)
     expect(read('src/preload/index.ts')).toMatch(/asrModelFetch: \(\)/)
     expect(read('src/renderer/src/features/settings/AudioTab.tsx')).toMatch(
