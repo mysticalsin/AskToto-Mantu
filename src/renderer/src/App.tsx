@@ -1399,16 +1399,16 @@ export function App(): JSX.Element {
       // block, so latching it before a bare `return null` would wedge every later screen-ask.
       capturingRef.current = true
       try {
-        // Fast-path (M13): if background preprocessing already has a fresh, on-device description of the
-        // current window, answer from it WITHOUT capturing or uploading an image — main injects the cached
-        // description (+ recent audio) into a mode:'answer' ask. Needs an answer-capable provider, since
-        // mode:'answer' isn't local-scoped; a local-only setup falls through to the live vision path below.
+        // Fast-path (M13): answer from main's fresh on-device screen description without capturing/uploading.
         const settings = settingsRef.current
-        const answer = askAnswerRef.current
-        const memoryLive =
-          (settings?.askFollowUpMemory ?? false) &&
-          Date.now() - lastTurnAtRef.current <= ASK_MEMORY_IDLE_MS
-        const priorAnswerOk = !!answer?.text && !answer.error && memoryLive
+        let priorAnswerOk = false
+        {
+          const ask = { answer: askAnswerRef.current }
+          const memoryLive =
+            (settings?.askFollowUpMemory ?? false) &&
+            Date.now() - lastTurnAtRef.current <= ASK_MEMORY_IDLE_MS
+          priorAnswerOk = !!ask.answer?.text && !ask.answer.error && memoryLive
+        }
         if ((settings?.backgroundScreenContext ?? false) && settings?.providerReady && priorAnswerOk) {
           try {
             const ctx = await window.toto.screenContext()
