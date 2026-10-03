@@ -369,6 +369,11 @@ describe('window-construction runs (M2-0516)', () => {
     expect(candidateArgv({ ASKTOTO_QA_MOCK_KEYCHAIN: '1' })).toEqual(['--inspect=127.0.0.1:0', '--use-mock-keychain'])
   })
 
+  it('adds Chromium no-sandbox only when the owner-runner job opts out of the nested Chromium sandbox', () => {
+    expect(candidateArgv({ ST1_CHROMIUM_SANDBOX: 'off' })).toEqual(['--inspect=127.0.0.1:0', '--no-sandbox'])
+    expect(candidateArgv({})).not.toContain('--no-sandbox')
+  })
+
   it('marks its report and launch failure as never ST-1 evidence, whatever the verdict; an ST-1 report carries no mark', () => {
     const built = report({ purpose: 'window-construction', windowVariant: 'spellcheck-off' })
     expect(built).toMatchObject({ purpose: 'window-construction', st1Evidence: false, windowVariant: 'spellcheck-off', verdict: 'PASS' })
@@ -595,6 +600,11 @@ describe('evaluateCriteria', () => {
 })
 
 describe('buildReport', () => {
+  it('reports the Chromium sandbox mode from the launch environment', () => {
+    expect(report({ env: { ST1_CHROMIUM_SANDBOX: 'off' } }).chromiumSandbox).toBe('off-under-owner-account.sb')
+    expect(report({ env: {} }).chromiumSandbox).toBe('on')
+  })
+
   it('passes a complete run whose criteria all pass, and keeps recorded errors report-only', () => {
     const measured = {
       ...emptyRun(),
@@ -1086,6 +1096,20 @@ describe('buildLaunchFailureReport', () => {
     expect(built.verdict).toBe('FAIL')
     expect(built.criteria).toEqual([{ name: 'inspector', pass: false }])
     expect(built.fixtures).toBe(3)
+  })
+
+  it('reports the Chromium sandbox mode when launch fails before measurement', () => {
+    const off = buildLaunchFailureReport({
+      row: 'fifo',
+      installer: 'Metis-QA.zip',
+      candidate,
+      fixtures: [],
+      reason: 'no inspector',
+      env: { ST1_CHROMIUM_SANDBOX: 'off' }
+    })
+    const on = buildLaunchFailureReport({ row: 'fifo', installer: 'Metis-QA.zip', candidate, fixtures: [], reason: 'no inspector', env: {} })
+    expect(off.chromiumSandbox).toBe('off-under-owner-account.sb')
+    expect(on.chromiumSandbox).toBe('on')
   })
 })
 

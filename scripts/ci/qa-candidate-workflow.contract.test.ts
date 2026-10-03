@@ -504,6 +504,10 @@ exit 1
   })
 
   it('runs every strict candidate verification and launch through the owner-runner sandbox wrapper', () => {
+    const measureSteps = new Map([
+      ['st1-mac-fifo', 'name: Measure packaged stall resilience'],
+      ['st1-mac-control', 'name: Measure the packaged app with no fixture']
+    ])
     for (const name of strictJobs) {
       const block = job(name)
       expect(block).toContain('OWNER_SANDBOX_PROFILE: owner-runner.sb')
@@ -512,8 +516,13 @@ exit 1
       expect(block).toContain('bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify')
       expect(block).toContain('bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/st-1.mjs')
       expect(block).not.toMatch(/(?:^|\n) {10}node scripts\/qa\/(?:provenance|st-1)\.mjs/)
+
+      const measure = steps(name).find((step) => step.includes(measureSteps.get(name)!)) ?? ''
+      expect(measure).toContain('ST1_CHROMIUM_SANDBOX: off')
     }
     expect(candidateArgv({ ASKTOTO_QA_MOCK_KEYCHAIN: '1' })).toEqual(['--inspect=127.0.0.1:0', '--use-mock-keychain'])
+    expect(candidateArgv({ ST1_CHROMIUM_SANDBOX: 'off' })).toEqual(['--inspect=127.0.0.1:0', '--no-sandbox'])
+    expect(candidateArgv({})).not.toContain('--no-sandbox')
   })
 
   it('keeps strict rows report-only and removes temp profiles and unzipped candidates on every outcome', () => {

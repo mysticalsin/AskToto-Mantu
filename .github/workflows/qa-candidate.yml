@@ -541,6 +541,7 @@ jobs:
           TMPDIR: ${{ runner.temp }}
           ASKTOTO_LOCAL_KEYSTORE: 1
           ASKTOTO_QA_MOCK_KEYCHAIN: 1
+          ST1_CHROMIUM_SANDBOX: off
           OWNER_SANDBOX_PROFILE: owner-runner.sb
         run: |
           mkdir -p st1-report
@@ -776,6 +777,7 @@ jobs:
           TMPDIR: ${{ runner.temp }}
           ASKTOTO_LOCAL_KEYSTORE: 1
           ASKTOTO_QA_MOCK_KEYCHAIN: 1
+          ST1_CHROMIUM_SANDBOX: off
           OWNER_SANDBOX_PROFILE: owner-runner.sb
         run: |
           mkdir -p st1-report
