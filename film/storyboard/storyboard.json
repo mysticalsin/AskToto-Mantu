@@ -164,6 +164,46 @@
           "bridge": null
         }
       }
+    },
+    {
+      "scene_id": "LF-07",
+      "active_variant": "cut",
+      "variants": {
+        "live": {
+          "available": false,
+          "reason": "Platform availability appears only after signed release evidence exists for each named platform."
+        },
+        "concept": {
+          "available": false,
+          "reason": "No concept platform availability line is allowed."
+        },
+        "cut": {
+          "available": true,
+          "treatment": "Cut the platform beat until release evidence exists for each platform.",
+          "bridge": null
+        }
+      }
+    },
+    {
+      "scene_id": "LF-08",
+      "active_variant": "concept",
+      "variants": {
+        "live": {
+          "available": false,
+          "reason": "The close uses only neutral title-card copy until a verified product close is approved."
+        },
+        "concept": {
+          "available": true,
+          "treatment": "Neutral title card closing the film with the visible concept title-card label.",
+          "label": "Concept title card",
+          "source": { "kind": "scene", "ref": "NP-04" }
+        },
+        "cut": {
+          "available": true,
+          "treatment": "Remove the closing card.",
+          "bridge": null
+        }
+      }
     }
   ]
 }
