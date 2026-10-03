@@ -95,7 +95,8 @@ function collectSyncFsCalls(file: string, text: string): SyncFsCall[] {
 
   const isNodeFsImport = (node: ts.ImportDeclaration): boolean =>
     ts.isStringLiteral(node.moduleSpecifier) &&
-    (node.moduleSpecifier.text === 'node:fs' || /(?:^|\/)infra\/storage\/fs-sync$/.test(node.moduleSpecifier.text))
+    (node.moduleSpecifier.text === 'node:fs' ||
+      /(?:^|\/)infra\/storage\/(?:fs|legacy)-sync(?:-io)?$/.test(node.moduleSpecifier.text))
 
   const declareShadow = (name: string): void => {
     if (importedSyncNames.has(name) || namespaceImports.has(name)) scopeStack[scopeStack.length - 1].add(name)
@@ -196,6 +197,7 @@ describe('meetings-root readers — synchronous node:fs structural ratchet', () 
       import { readFileSync, statSync as statNow } from 'node:fs'
       import * as fs from 'node:fs'
       import { writeFileSync as writeViaShim } from './infra/storage/fs-sync'
+      import { existsSync as existsViaLegacyShim } from './infra/storage/legacy-sync-io'
       import { readFileSync as readPromiseNamedSame } from 'node:fs/promises'
 
       const readFileSync = () => undefined
@@ -205,10 +207,11 @@ describe('meetings-root readers — synchronous node:fs structural ratchet', () 
       statNow('/tmp/a')
       fs.readdirSync('/tmp')
       writeViaShim('/tmp/c', 'x')
+      existsViaLegacyShim('/tmp/d')
       readPromiseNamedSame('/tmp/b')
     `)
 
-    expect(calls.map((call) => call.importedName)).toEqual(['statSync', 'readdirSync', 'writeFileSync'])
+    expect(calls.map((call) => call.importedName)).toEqual(['statSync', 'readdirSync', 'writeFileSync', 'existsSync'])
   })
 
   it('matches the checked-in per-file sync node:fs baseline exactly', () => {

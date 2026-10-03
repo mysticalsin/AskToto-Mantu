@@ -32,7 +32,7 @@ const D_TS_FILE = /\.d\.ts$/
 const PATH_LIKE_TS = /^[^\s]*\.tsx?$/
 const DIALOG_NAMES = new Set(['confirm', 'alert', 'prompt'])
 const FS_MODULES = new Set(['fs', 'node:fs', 'fs/promises', 'node:fs/promises'])
-const FS_SHIM_MODULE = /(?:^|\/)infra\/storage\/fs-(?:sync|async)$/
+const FS_SHIM_MODULE = /(?:^|\/)infra\/storage\/(?:fs|legacy)-(?:sync|async)(?:-io)?$/
 const CHILD_PROCESS_MODULES = new Set(['child_process', 'node:child_process'])
 const MEETING_DOCUMENT_CODEC = 'src/main/features/meetings/meeting-document.ts'
 // A regex literal that anchors on a `---` line at the start of the text, or on a newline followed by `---`.

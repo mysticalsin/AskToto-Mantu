@@ -430,11 +430,15 @@ describe('architecture source detectors', () => {
       const text = [
         "import { readFileSync } from './infra/storage/fs-sync'",
         "import { writeFile } from './infra/storage/fs-async'",
+        "import { existsSync } from './infra/storage/legacy-sync-io'",
+        "import { unlink } from './infra/storage/legacy-async-io'",
         'readFileSync("a")',
         'writeFile("b", Buffer.from("c"))',
+        'existsSync("d")',
+        'unlink("e")',
       ].join('\n')
 
-      expect(countSourceFile('src/main/transcripts.ts', text)).toEqual({ 'FF-05a': 1, 'FF-05b': 2 })
+      expect(countSourceFile('src/main/transcripts.ts', text)).toEqual({ 'FF-05a': 2, 'FF-05b': 4 })
     })
   })
 
