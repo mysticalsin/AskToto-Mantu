@@ -31,6 +31,7 @@ const FIT_TOLERANCE_PX = 1
 const SETTINGS_STABLE_TIMEOUT_MS = 12_000
 const SETTINGS_STABLE_SAMPLE_MS = 250
 const SETTINGS_STABLE_SAMPLES = 3
+const SECTION_SCREENSHOT_ATTEMPTS = 3
 const PNG_SIGNATURE = '89504e470d0a1a0a'
 const CHILD_EXIT_TIMEOUT_MS = 10_000
 const CHILD_KILL_TIMEOUT_MS = 5_000
@@ -138,6 +139,42 @@ function sectionViewportHeight(sectionBox, panelBox, currentHeight = VIEWPORT.he
   const deficit = Math.max(verticalDeficit, heightDeficit)
   const needed = deficit > 0 ? Math.ceil(currentHeight + deficit + SECTION_VIEWPORT_PADDING_PX) : currentHeight
   return Math.min(MAX_SECTION_VIEWPORT_HEIGHT, Math.max(currentHeight, needed))
+}
+
+async function alignSectionToPanelTop(section, tabPanel) {
+  const panel = await tabPanel.elementHandle()
+  if (!panel) return
+  try {
+    await section.evaluate((node, panelNode) => {
+      if (!(node instanceof HTMLElement) || !(panelNode instanceof HTMLElement)) return
+      const sectionRect = node.getBoundingClientRect()
+      const panelRect = panelNode.getBoundingClientRect()
+      panelNode.scrollTop += sectionRect.top - panelRect.top
+    }, panel)
+  } finally {
+    await panel.dispose()
+  }
+}
+
+async function captureStableSectionScreenshot(page, section, tabPanel, file) {
+  let previousHash = null
+  let last = null
+
+  for (let attempt = 0; attempt < SECTION_SCREENSHOT_ATTEMPTS; attempt += 1) {
+    await alignSectionToPanelTop(section, tabPanel)
+    await settle(page)
+    const box = await section.boundingBox()
+    const panelBox = await tabPanel.boundingBox()
+    const buffer = await section.screenshot({ path: file, animations: 'disabled', caret: 'hide' })
+    const hash = sha256(buffer)
+    const clipped = sectionCaptureClipped({ buffer, sectionBox: box, panelBox })
+    last = { box, buffer, clipped, hash }
+
+    if (!clipped && hash === previousHash) return last
+    previousHash = hash
+  }
+
+  return last
 }
 
 async function installDeterministicSettingsQaBridge(page) {
@@ -397,8 +434,13 @@ async function captureSections(page, appOutDir) {
     const tabPanel = page.locator('main[role="tabpanel"]')
     const count = await tabPanel.locator('section').count()
     for (let index = 0; index < count; index += 1) {
+      if (page.viewportSize()?.height !== VIEWPORT.height) {
+        await page.setViewportSize(VIEWPORT)
+        await settle(page)
+      }
       const section = tabPanel.locator('section').nth(index)
       await section.scrollIntoViewIfNeeded()
+      await alignSectionToPanelTop(section, tabPanel)
       await settle(page)
       const initialBox = await section.boundingBox()
       const initialPanelBox = await tabPanel.boundingBox()
@@ -406,26 +448,24 @@ async function captureSections(page, appOutDir) {
       if (height !== page.viewportSize()?.height) {
         await page.setViewportSize({ width: VIEWPORT.width, height })
         await section.scrollIntoViewIfNeeded()
+        await alignSectionToPanelTop(section, tabPanel)
         await settle(page)
       }
       const title = (await section.locator('xpath=.//div[contains(concat(" ", normalize-space(@class), " "), " font-semibold ")]').first().textContent({ timeout: 2_000 }).catch(() => null))?.trim()
         ?? `Section ${index + 1}`
       const key = `${slug(tab)}-${String(index + 1).padStart(2, '0')}-${slug(title)}`
       const file = join(appOutDir, `${key}.png`)
-      const box = await section.boundingBox()
-      const panelBox = await tabPanel.boundingBox()
-      const buffer = await section.screenshot({ path: file, animations: 'disabled', caret: 'hide' })
-      const clipped = sectionCaptureClipped({ buffer, sectionBox: box, panelBox })
+      const capture = await captureStableSectionScreenshot(page, section, tabPanel, file)
       sections.push({
         key,
         tab,
         index,
         title,
-        width: box ? Math.round(box.width) : null,
-        height: box ? Math.round(box.height) : null,
-        clipped,
-        sha256: sha256(buffer),
-        bytes: buffer.length,
+        width: capture?.box ? Math.round(capture.box.width) : null,
+        height: capture?.box ? Math.round(capture.box.height) : null,
+        clipped: capture?.clipped ?? true,
+        sha256: capture?.hash ?? '',
+        bytes: capture?.buffer.length ?? 0,
         file: `${basename(appOutDir)}/${basename(file)}`
       })
     }
