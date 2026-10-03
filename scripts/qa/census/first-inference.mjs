@@ -193,17 +193,19 @@ function llamaRunning({ mainPid, installRoot, platform }) {
   })
 }
 
-async function overlayPage(port, timeoutMs, connectOverCDP) {
+async function overlayPage(port, timeoutMs, connectOverCDP, intervalMs = 500, sleepFn = sleep) {
   const connect =
     connectOverCDP ??
     (async (url, options) => {
       const { chromium } = await import('playwright')
       return chromium.connectOverCDP(url, options)
     })
-  const browser = await connect(`http://127.0.0.1:${port}`, { timeout: timeoutMs })
-  try {
-    const deadline = Date.now() + timeoutMs
-    while (Date.now() < deadline) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    let browser
+    try {
+      const remainingMs = Math.max(1, deadline - Date.now())
+      browser = await connect(`http://127.0.0.1:${port}`, { timeout: remainingMs })
       for (const context of browser.contexts()) {
         for (const page of context.pages()) {
           try {
@@ -213,19 +215,29 @@ async function overlayPage(port, timeoutMs, connectOverCDP) {
           }
         }
       }
-      await sleep(500)
+      await browser.close().catch(() => {})
+    } catch {
+      if (browser) await browser.close().catch(() => {})
     }
-    await browser.close().catch(() => {})
-    return { browser: null, page: null }
-  } catch (error) {
-    await browser.close().catch(() => {})
-    throw error
+    await sleepFn(intervalMs)
   }
+  return { browser: null, page: null }
 }
 
-export async function startFirstInference({ port, mainPid, installRoot, platform, connectOverCDP, now = Date.now }) {
+export async function startFirstInference({
+  port,
+  mainPid,
+  installRoot,
+  platform,
+  connectOverCDP,
+  now = Date.now,
+  cdpTimeoutMs = 30_000,
+  retryIntervalMs = 500,
+  sleepFn = sleep,
+  observeLlama = llamaRunning
+}) {
   const refused = []
-  const found = await overlayPage(port, 30_000, connectOverCDP)
+  const found = await overlayPage(port, cdpTimeoutMs, connectOverCDP, retryIntervalMs, sleepFn)
   if (!found.page) return { status: 'PRECONDITION', reason: 'renderer bridge unreachable', refused }
   try {
     for (const path of START_PATHS) {
@@ -239,7 +251,7 @@ export async function startFirstInference({ port, mainPid, installRoot, platform
       }
       const deadline = now() + path.timeoutMs
       while (now() < deadline) {
-        if (llamaRunning({ mainPid, installRoot, platform })) {
+        if (observeLlama({ mainPid, installRoot, platform })) {
           return {
             status: 'PASS',
             path: path.name,
@@ -248,7 +260,7 @@ export async function startFirstInference({ port, mainPid, installRoot, platform
             llamaObservedMs: now() - startedAt
           }
         }
-        await sleep(500)
+        await sleepFn(500)
       }
       refused.push(path.name)
     }
@@ -317,7 +329,26 @@ async function main() {
   if (!mainPid) throw new Error('launched app did not expose a pid')
 
   try {
-    const control = await startFirstInference({ port, mainPid, installRoot: target.installRoot, platform })
+    let control
+    try {
+      control = await startFirstInference({ port, mainPid, installRoot: target.installRoot, platform })
+    } catch (error) {
+      const reason = contentFreeErrorMessage(error)
+      writeJson(
+        args.output,
+        preconditionReport({
+          platform,
+          productVersion,
+          seconds: args.seconds,
+          mainPid,
+          reason,
+          refused: [refusedStartPathEvidence('first-inference start', error)],
+          hostFloorOverride: true
+        })
+      )
+      console.log(`[first-inference] PRECONDITION: ${reason}`)
+      return
+    }
     if (control.status !== 'PASS') {
       writeJson(
         args.output,

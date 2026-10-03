@@ -6,10 +6,13 @@ import {
   launchEnv,
   preconditionReport,
   refusedStartPathEvidence,
-  runPreconditionEvidence
+  runPreconditionEvidence,
+  startFirstInference
 } from './first-inference.mjs'
 
 describe('first-inference census helper', () => {
+  const immediateSleep = async <T,>(_delay?: number, value?: T): Promise<T> => value as T
+
   it('selects app-owned start paths in the same order as the positive control', () => {
     expect(START_PATHS.map((path) => path.name)).toEqual([
       'window.toto.localPrewarm',
@@ -103,5 +106,72 @@ describe('first-inference census helper', () => {
       METIS_QA_HOST_FLOOR_OVERRIDE: '1'
     })
     expect(env).not.toHaveProperty('OPENAI_API_KEY')
+  })
+
+  it('retries CDP attachment until the renderer bridge is reachable', async () => {
+    const calls: string[] = []
+    const browser = {
+      contexts: () => [
+        {
+          pages: () => [
+            {
+              evaluate: async (expression: unknown) => {
+                if (typeof expression === 'function') return true
+                expect(String(expression)).toContain('window.toto.localPrewarm')
+                return { firstTokenSeen: true }
+              }
+            }
+          ]
+        }
+      ],
+      close: async () => {
+        calls.push('close')
+      }
+    }
+    const control = await startFirstInference({
+      port: 19222,
+      mainPid: 123,
+      installRoot: '/tmp/metis-install',
+      platform: 'darwin',
+      cdpTimeoutMs: 100,
+      retryIntervalMs: 1,
+      sleepFn: immediateSleep,
+      connectOverCDP: async () => {
+        calls.push('connect')
+        if (calls.filter((call) => call === 'connect').length === 1) throw new Error('cdp not ready')
+        return browser
+      },
+      observeLlama: () => true
+    })
+
+    expect(control).toMatchObject({
+      status: 'PASS',
+      path: 'window.toto.localPrewarm',
+      firstTokenSeen: true
+    })
+    expect(calls.filter((call) => call === 'connect')).toHaveLength(2)
+    expect(calls).toContain('close')
+  })
+
+  it('maps persistent CDP refusal to a PRECONDITION result instead of throwing', async () => {
+    await expect(
+      startFirstInference({
+        port: 19222,
+        mainPid: 123,
+        installRoot: '/tmp/metis-install',
+        platform: 'darwin',
+        cdpTimeoutMs: 5,
+        retryIntervalMs: 1,
+        sleepFn: immediateSleep,
+        connectOverCDP: async () => {
+          throw new Error('cdp refused /private/tmp/profile')
+        },
+        observeLlama: () => true
+      })
+    ).resolves.toMatchObject({
+      status: 'PRECONDITION',
+      reason: 'renderer bridge unreachable',
+      refused: []
+    })
   })
 })
