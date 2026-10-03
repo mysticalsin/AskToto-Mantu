@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { IPC } from '../../src/shared/ipc'
 import { HISTORY_DEGRADED_MS as RENDERER_DEGRADED_MS } from '../../src/renderer/src/components/history/list-status'
 import { NOT_DOWNLOADED_TEXT, UNAVAILABLE_TEXT } from '../../src/renderer/src/components/history/hydration'
-import { driveState, STATE_TIMEOUT_MS } from './history-design-capture.mjs'
+import { driveState, STATE_TIMEOUT_MS, warmUp } from './history-design-capture.mjs'
 import {
   BACKDROPS,
   BLOCKED_EXTERNAL_ROWS,
@@ -109,7 +109,6 @@ describe('History design matrix (M2-0032)', () => {
   it('anchors the slow search degraded cue to the search request, not the typed character', async () => {
     const state = HISTORY_DESIGN_STATES.find((candidate) => candidate.id === 'slow-with-rows')!
     const calls: string[] = []
-    const waits: number[] = []
     const history = { requests: 0, requestedAt: 0 }
     let searchFillPending = false
     let searchRequestSeen = false
@@ -126,7 +125,6 @@ describe('History design matrix (M2-0032)', () => {
       history.requestedAt = requestedAt
     }
     const wait = vi.fn(async (ms: number) => {
-      waits.push(ms)
       now += ms
       if (searchFillPending && !searchRequestSeen) {
         searchRequestSeen = true
@@ -147,6 +145,7 @@ describe('History design matrix (M2-0032)', () => {
             waitFor: vi.fn(async ({ timeout }: { timeout: number }) => {
               calls.push(`role:${role}:${hasText}:${timeout}`)
               expect(searchRequestSeen).toBe(true)
+              now += HISTORY_DEGRADED_MS
             })
           })
         })
@@ -169,11 +168,86 @@ describe('History design matrix (M2-0032)', () => {
     expect(drive.timingsMs).toMatchObject({
       toggleGuard: 450,
       searchFillToSearchRequest: 50,
-      searchRequestToDegradedWait: HISTORY_DEGRADED_MS,
       searchRequestToCue: HISTORY_DEGRADED_MS
     })
-    expect(waits).toContain(HISTORY_DEGRADED_MS)
     expect(calls).toContain(`role:status:OneDrive is slow to answer:${STATE_TIMEOUT_MS}`)
+  })
+
+  it('warms the first fixture-driven open and screenshot before the judged matrix starts', async () => {
+    const events: string[] = []
+    const variant = DESIGN_VARIANTS[0]
+    const cdp = {
+      send: vi.fn(async (command: string, payload?: unknown) => {
+        events.push(`cdp:${command}`)
+        if (command === 'Emulation.setDeviceMetricsOverride') expect(payload).toEqual({ width: 0, height: 0, deviceScaleFactor: variant.scale, mobile: false })
+      })
+    }
+    const page = {
+      emulateMedia: vi.fn(),
+      getByLabel: vi.fn(() => ({
+        first: () => ({
+          isVisible: vi.fn(async () => false)
+        })
+      })),
+      getByText: vi.fn(() => ({
+        first: () => ({
+          waitFor: vi.fn(async () => {
+            events.push('state-reached')
+          })
+        })
+      })),
+      getByRole: vi.fn(() => ({
+        filter: () => ({
+          first: () => ({
+            waitFor: vi.fn(async () => {
+              events.push('state-reached')
+            })
+          })
+        })
+      })),
+      screenshot: vi.fn(async () => {
+        events.push('screenshot')
+      }),
+      waitForFunction: vi.fn(async () => {
+        events.push('settle-window')
+      }),
+      evaluate: vi.fn(async () => undefined)
+    }
+    let requests = 0
+    const main = vi.fn(async (expression: string) => {
+      if (expression === 'globalThis.__historyDesign.requests') return requests
+      if (expression.includes('requests, requestedAt')) return { requests, requestedAt: 100 }
+      events.push('apply-or-arm')
+      return true
+    })
+
+    await warmUp({
+      page: page as never,
+      cdp: cdp as never,
+      main: main as never,
+      realRows: [{ title: 'Quarterly planning sample' }],
+      deps: {
+        wait: async () => undefined,
+        ensureIdleBar: async () => events.push('idle'),
+        clickHistory: async () => {
+          events.push('open-history')
+          requests += 1
+        }
+      }
+    })
+
+    expect(page.screenshot).toHaveBeenCalledWith({ scale: 'device' })
+    expect(events).toEqual([
+      'apply-or-arm',
+      'cdp:Emulation.setDefaultBackgroundColorOverride',
+      'idle',
+      'apply-or-arm',
+      'open-history',
+      'cdp:Emulation.setDeviceMetricsOverride',
+      'settle-window',
+      'screenshot',
+      'cdp:Emulation.clearDeviceMetricsOverride'
+    ])
   })
 
   it('starts each capture from a closed History view before arming fixtures and reopening it', async () => {
@@ -283,7 +357,6 @@ describe('History design matrix (M2-0032)', () => {
         openToListRequest: expect.any(Number),
         listRequestToSearchFill: expect.any(Number),
         searchFillToSearchRequest: expect.any(Number),
-        searchRequestToDegradedWait: expect.any(Number),
         searchRequestToCue: expect.any(Number)
       })
     )

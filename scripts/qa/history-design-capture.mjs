@@ -42,7 +42,6 @@ import {
   BLOCKED_EXTERNAL_ROWS,
   DESIGN_VARIANTS,
   HISTORY_DESIGN_STATES,
-  HISTORY_DEGRADED_MS,
   IPC_CHANNELS,
   KEYBOARD_VARIANT_ID,
   designVerdict,
@@ -60,8 +59,6 @@ const QUIT_TIMEOUT_MS = 30_000
 const TAB_STOPS_MAX = 80
 const DOWNLOAD_ERROR = 'OneDrive is offline. Connect, then retry.'
 const SAMPLE_MEETINGS = ['Quarterly planning sample', 'Design review sample']
-const M2_0550_ROOT_CAUSE =
-  'CI run 37128364535 timed out on the first slow-with-rows / light-1x-reduced-motion degraded cue after the harness drove the debounced search. The harness was waiting for the cue immediately after the observed search request, but RecallView only exposes that cue after HISTORY_DEGRADED_MS from the request.'
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -291,11 +288,6 @@ async function locatorVisible(locator) {
   }
 }
 
-async function waitForRendererDegradedNotice(requestedAt, wait) {
-  const remaining = requestedAt + HISTORY_DEGRADED_MS - Date.now()
-  if (remaining > 0) await wait(remaining)
-}
-
 function throwWithDrive(error, drive) {
   if (error && typeof error === 'object') error.drive = drive
   throw error
@@ -325,8 +317,8 @@ function historyDesignCueForState(stateId) {
 
 /**
  * Puts History into `state` from a fresh open; returns when the open was clicked, when History's list
- * or search request reached main, and how it went. Slow degraded waits are anchored to the request that
- * arms the renderer's HISTORY_DEGRADED_MS notice, so hosted-runner click/type latency cannot consume it.
+ * or search request reached main, and how it went. The cue wait stays bounded by STATE_TIMEOUT_MS; drive
+ * timings are emitted so CI artifacts can explain any first-capture miss without extending that wait.
  */
 export async function driveState(page, main, state, realRows, deps = {}) {
   const wait = deps.wait ?? sleep
@@ -382,11 +374,6 @@ export async function driveState(page, main, state, realRows, deps = {}) {
   }
   if (state.id === 'slow' || state.id === 'unavailable' || state.id === 'failed') {
     const cue = historyDesignCueForState(state.id)
-    if (state.id === 'slow') {
-      await waitForRendererDegradedNotice(requestedAt, wait)
-      const degradedWaitedAt = Date.now()
-      drive.timingsMs.listRequestToDegradedWait = degradedWaitedAt - requestedAt
-    }
     await visible(cue.text, cue.role)
     const cueAt = Date.now()
     drive.bannerAfterMs = cueAt - clickedAt
@@ -400,12 +387,6 @@ export async function driveState(page, main, state, realRows, deps = {}) {
     drive.timingsMs.listRequestToSearchFill = typedAt - requestedAt
     drive.timingsMs.searchFillToSearchRequest = drive.requestedAt - typedAt
     const cue = historyDesignCueForState(state.id)
-    // Run 37128364535 showed the first light-1x-reduced-motion slow-with-rows row timing out while
-    // waiting for the slow cue: the harness had observed the debounced search request, then immediately
-    // asked Playwright for a cue that the renderer only arms after HISTORY_DEGRADED_MS.
-    await waitForRendererDegradedNotice(drive.requestedAt, wait)
-    const degradedWaitedAt = Date.now()
-    drive.timingsMs.searchRequestToDegradedWait = degradedWaitedAt - drive.requestedAt
     try {
       await visible(cue.text, cue.role)
     } catch (error) {
@@ -505,16 +486,15 @@ async function captureReachedState({ page, cdp, main, state, variant, realRows, 
 }
 
 /**
- * One unjudged pass of the run's first capture. The first fixture-driven History open, device-metrics
- * override and screenshot pay one-time costs (window resize, screenshot pipeline start-up) that would
- * otherwise land inside the loading capture's HISTORY_DEGRADED_MS budget; nothing from this pass is
- * written or judged, and a failure here is left for the real capture to report.
+ * One unjudged pass through the first fixture-driven History open, device-metrics override and screenshot.
+ * It pays cold renderer costs before the judged matrix; nothing from this pass is written or judged, and a
+ * failure here is left for the real capture to report.
  */
-async function warmUp({ page, cdp, main, realRows }) {
+export async function warmUp({ page, cdp, main, realRows, deps = {} }) {
   const [variant] = DESIGN_VARIANTS
   try {
     await applyVariant(page, cdp, main, variant)
-    await driveState(page, main, HISTORY_DESIGN_STATES[0], realRows)
+    await driveState(page, main, HISTORY_DESIGN_STATES[0], realRows, deps)
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 0, height: 0, deviceScaleFactor: variant.scale, mobile: false })
     await settleWindow(page)
     await page.screenshot({ scale: 'device' })
@@ -643,12 +623,6 @@ async function main() {
     states: HISTORY_DESIGN_STATES.map(({ id, title, list, search, read }) => ({ id, title, list, search: search ?? null, read: read ?? null })),
     variants: DESIGN_VARIANTS,
     backdrops: BACKDROPS,
-    rootCause: {
-      ticket: 'M2-0550',
-      source: 'CI run 37128364535',
-      summary: M2_0550_ROOT_CAUSE,
-      evidenceFields: ['closedBeforeArm', 'driveTimingsMs.searchFillToSearchRequest', 'driveTimingsMs.searchRequestToDegradedWait', 'driveTimingsMs.searchRequestToCue']
-    },
     sources: {
       rows: 'real meetings saved through window.toto.saveTranscript and listed by the real recallList',
       fixtures: "slow, failed, cloud-only and unreadable answers served by History's own IPC channels, replaced in main through the inspector"
@@ -658,7 +632,8 @@ async function main() {
     transitions,
     blockedExternal: BLOCKED_EXTERNAL_ROWS,
     validation: 'Pending: an Opus session other than the implementer checks these captures against the design spec.',
-    leadAction: 'Dispatch three QA candidate runs and confirm History design evidence reports 72/72 in each run.'
+    leadAction:
+      'LEAD_ACTION: dispatch a QA candidate run and file the slow-with-rows / light-1x-reduced-motion driveTimingsMs (openToListRequest, listRequestToSearchFill, searchFillToSearchRequest, searchRequestToCue)'
   }
   writeFileSync(join(args.out, 'history-design-report.json'), `${JSON.stringify(report, null, 2)}\n`)
   writeFileSync(join(args.out, 'SUMMARY.md'), summaryMarkdown(report))
