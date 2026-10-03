@@ -100,20 +100,35 @@ interface ZonedParts {
   second: number
 }
 
+const zonedPartFormatters = new Map<string, Intl.DateTimeFormat>()
+
+function zonedPartFormatter(timeZone: string): Intl.DateTimeFormat {
+  let fmt = zonedPartFormatters.get(timeZone)
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    })
+    zonedPartFormatters.set(timeZone, fmt)
+  }
+  return fmt
+}
+
+/** Test seam: proves one formatter per time zone without exposing the cache to production callers. */
+export function zonedPartFormatterCacheSizeForTests(): number {
+  return zonedPartFormatters.size
+}
+
 /** Wall-clock parts of `ms` in `timeZone`. hour 24 from Intl is normalized to 0. */
 export function zonedParts(ms: number, timeZone = INTELLIGENCE_INDEX_TZ): ZonedParts {
-  const fmt = new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    hourCycle: 'h23',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
-  })
   const bag: Record<string, string> = {}
-  for (const part of fmt.formatToParts(new Date(ms))) {
+  for (const part of zonedPartFormatter(timeZone).formatToParts(new Date(ms))) {
     if (part.type !== 'literal') bag[part.type] = part.value
   }
   let hour = Number(bag.hour)
