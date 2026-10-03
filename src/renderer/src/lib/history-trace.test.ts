@@ -2,9 +2,24 @@ import { describe, expect, it, vi } from 'vitest'
 import { UNAUTHENTICATED_RESULT } from '@shared/ipc-auth'
 import { IPC_UNAUTHENTICATED_EVENT } from './ipc-auth'
 import { beginHistoryRequest } from './history-trace'
-import { installIpcAuthTestWindow } from './ipc-auth-test-window'
 
 const requestId = '123e4567-e89b-12d3-a456-426614174000'
+
+function installTestWindow(toto: Partial<Window['toto']> = {}): Event[] {
+  const events: Event[] = []
+  const target = new EventTarget()
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    writable: true,
+    value: {
+      toto,
+      addEventListener: target.addEventListener.bind(target),
+      removeEventListener: target.removeEventListener.bind(target),
+      dispatchEvent: target.dispatchEvent.bind(target)
+    }
+  })
+  return events
+}
 
 describe('beginHistoryRequest', () => {
   it('creates a trace with uuid requestId and sentAt wall time', () => {
@@ -82,7 +97,7 @@ describe('beginHistoryRequest', () => {
   })
 
   it('routes the default History settled reporter through the shared unauthenticated handler', async () => {
-    const events = installIpcAuthTestWindow()
+    const events = installTestWindow()
     window.addEventListener(IPC_UNAUTHENTICATED_EVENT, (event) => events.push(event))
     vi.spyOn(crypto, 'randomUUID').mockReturnValue(requestId as `${string}-${string}-${string}-${string}-${string}`)
     vi.spyOn(performance, 'now').mockReturnValue(10)
