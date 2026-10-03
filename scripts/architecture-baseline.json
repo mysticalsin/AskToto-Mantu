@@ -4,7 +4,7 @@
     "src/shared/hash.test.ts": 1
   },
   "FF-02": {
-    "src/main/brain/ingest.ts": 2,
+    "src/main/brain/ingest.ts": 1,
     "src/main/infra/observability/crash-taxonomy.ts": 1,
     "src/main/infra/observability/projection.ts": 1
   },

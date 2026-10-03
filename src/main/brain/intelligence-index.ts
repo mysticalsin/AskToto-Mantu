@@ -4,27 +4,32 @@
  * pass finished after the last slot.
  * Never a 60-minute poll. Never auto-send to CRM / Outlook / MCP.
  */
-import { z } from 'zod'
 import type { Settings } from '@shared/ipc'
 import { intelligenceNoProviderMessage, LOCAL_ONLY_INTELLIGENCE_UNAVAILABLE } from '@shared/intelligence-pass'
 import { getSettings } from '../store'
-import { indexUnavailableAsync as indexUnavailable, loadJson, readJson, writeJson } from './store'
+import { indexUnavailableAsync as indexUnavailable } from './store'
 import { requestBackfillRun, type BackfillStartResult, type BackfillCompletion } from './ingest'
 import { auditLog, mainLog } from '../logger'
 import { reportDeferred, whenMaintenanceWindowOpens } from '../infra/scheduler/maintenance'
 import type { WorkTrigger } from '../infra/scheduler/policy'
+import {
+  lastIndexedAtAsync,
+  loadIntelligenceIndexState,
+  readIntelligenceIndexState,
+  writeIntelligenceIndexState
+} from './intelligence-index-state'
+export {
+  INTELLIGENCE_INDEX_STATE_FILE,
+  lastIndexedAt,
+  lastIndexedAtAsync,
+  loadIntelligenceIndexState,
+  readIntelligenceIndexState,
+  writeIntelligenceIndexState,
+  type IntelligenceIndexState
+} from './intelligence-index-state'
 
 export const INTELLIGENCE_INDEX_TZ = 'America/Toronto'
 export const INTELLIGENCE_INDEX_HOURS = [6, 12, 18] as const
-export const INTELLIGENCE_INDEX_STATE_FILE = 'intelligence-index.json'
-
-const StateSchema = z.object({
-  lastSuccessAt: z.number().nonnegative(),
-  /** When the last pass ended, success or failure. */
-  lastFinishedAt: z.number().nonnegative().optional(),
-  lastError: z.string().optional()
-})
-export type IntelligenceIndexState = z.infer<typeof StateSchema>
 
 export type IntelligenceIndexReason = 'click' | 'schedule' | 'catch-up' | 'import-idle'
 
@@ -209,33 +214,6 @@ export function nextSlotAt(now: number, timeZone = INTELLIGENCE_INDEX_TZ): numbe
 export function shouldCatchUp(lastPassAt: number | null | undefined, now: number, timeZone = INTELLIGENCE_INDEX_TZ): boolean {
   const last = lastPassAt && lastPassAt > 0 ? lastPassAt : 0
   return last < mostRecentlyElapsedSlot(now, timeZone)
-}
-
-export function readIntelligenceIndexState(s: Settings = getSettings()): IntelligenceIndexState {
-  const v = readJson<IntelligenceIndexState>(s, INTELLIGENCE_INDEX_STATE_FILE, (raw) => StateSchema.parse(raw))
-  return v ?? { lastSuccessAt: 0 }
-}
-
-export async function loadIntelligenceIndexState(s: Settings = getSettings()): Promise<IntelligenceIndexState> {
-  const loaded = await loadJson<IntelligenceIndexState>(s, INTELLIGENCE_INDEX_STATE_FILE, (raw) => StateSchema.parse(raw))
-  return loaded.status === 'ok' && loaded.value ? loaded.value : { lastSuccessAt: 0 }
-}
-
-export async function writeIntelligenceIndexState(
-  next: IntelligenceIndexState,
-  s: Settings = getSettings()
-): Promise<void> {
-  await writeJson(s, INTELLIGENCE_INDEX_STATE_FILE, next)
-}
-
-export function lastIndexedAt(s: Settings = getSettings()): number | undefined {
-  const at = readIntelligenceIndexState(s).lastSuccessAt
-  return at > 0 ? at : undefined
-}
-
-export async function lastIndexedAtAsync(s: Settings = getSettings()): Promise<number | undefined> {
-  const at = (await loadIntelligenceIndexState(s)).lastSuccessAt
-  return at > 0 ? at : undefined
 }
 
 let activeRun: object | null = null

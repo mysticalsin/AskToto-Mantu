@@ -16,7 +16,7 @@ import type { Settings } from '@shared/ipc'
 import { getDurableMachineId, memberLicenseStatus, licenseDisplayStatus } from './license'
 import { getSettings as getStoreSettings } from './store'
 import { authStatus } from './auth'
-import { lastIndexedAt } from './brain/intelligence-index'
+import { lastIndexedAt } from './brain/intelligence-index-state'
 import { hashOperatorId, operatorHmacHeaders } from './operator-hmac-sign'
 import { mainLog } from './logger'
 import type { OperatorCrmEvent } from './operator-crm'
@@ -147,7 +147,7 @@ function safeLicenseState(): string | undefined {
   }
 }
 
-/** Last successful Solid Intelligence index run (src/main/brain/intelligence-index.ts). */
+/** Last successful Solid Intelligence index run, read from the leaf state module to avoid import cycles. */
 function safeLastIndexAt(): number | undefined {
   try {
     return lastIndexedAt(getStoreSettings())
