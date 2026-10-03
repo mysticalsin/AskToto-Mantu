@@ -224,7 +224,6 @@ export function describeOverlayPoll(targets, targetResults = []) {
 
 async function cdpPage(port) {
   const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()
-  const pages = targets.filter((target) => target.type === 'page' && target.webSocketDebuggerUrl)
   const connect = async (wsUrl) => {
     const socket = new WebSocket(wsUrl)
     try {
@@ -290,7 +289,7 @@ async function cdpPage(port) {
       close: () => socket.close()
     }
   }
-  return { pages, connect }
+  return { targets, connect }
 }
 
 export const BUTTON_LABELS = `(() => [...document.querySelectorAll('button')]
@@ -420,10 +419,14 @@ async function overlayPage(port, timeoutMs) {
   let lastTargets = []
   let lastResults = []
   const page = await waitFor(async () => {
-    const { pages, connect } = await withTimeout(cdpPage(port), CDP_STEP_TIMEOUT_MS, 'CDP target list')
-    lastTargets = pages
+    const { targets, connect } = await withTimeout(cdpPage(port), CDP_STEP_TIMEOUT_MS, 'CDP target list')
+    lastTargets = targets
     lastResults = []
-    for (const target of pages) {
+    for (const target of targets) {
+      if (target.type !== 'page' || !target.webSocketDebuggerUrl) {
+        lastResults.push({ status: 'not-checked', buttons: [] })
+        continue
+      }
       let page = null
       try {
         page = await connect(target.webSocketDebuggerUrl)

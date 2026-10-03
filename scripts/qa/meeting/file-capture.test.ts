@@ -352,14 +352,16 @@ describe('CDP overlay discovery diagnostics', () => {
     const reason = describeOverlayPoll(
       [
         { type: 'page', url: 'file:///private/tmp/App.app/Contents/Resources/index.html#/bar' },
+        { type: 'background_page', url: 'devtools://devtools/bundled/inspector.html' },
         { type: 'page', url: 'about:blank' }
       ],
       [
         { status: 'absent', buttons: ['Settings', 'Stop meeting'] },
+        { status: 'not-checked', buttons: [] },
         { status: 'timeout', buttons: [] }
       ]
     )
-    expect(reason).toBe('no overlay page; targets=2; page file:index.html#/bar listen=false buttons=Settings|Stop meeting; page about:blank listen=timed-out buttons=')
+    expect(reason).toBe('no overlay page; targets=3; page file:index.html#/bar listen=false buttons=Settings|Stop meeting; background_page devtools:inspector.html listen=not-checked buttons=; page about:blank listen=timed-out buttons=')
     expect(reason).not.toContain('/private/')
   })
 
