@@ -152,6 +152,7 @@ describe('History design matrix (M2-0032)', () => {
     const drive = await driveState(page as never, main as never, state, [{ title: 'Quarterly planning sample' }], {
       wait,
       ensureIdleBar: async () => undefined,
+      ensureHistoryClosed: async () => false,
       clickHistory: async () => noteRequest(1000)
     })
 
