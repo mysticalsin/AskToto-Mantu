@@ -167,6 +167,11 @@ describe('QA candidate mac-native variant (M2-0569)', () => {
     expect(block).toContain('name: candidate-mac-native')
     expect(block).toContain('node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-native')
     expect(block).toContain("printf '%s  %s\\n' \"$sha\" \"$zip\" | shasum -a 256 -c -")
+    expect(block).toContain('.signing.certificate_sha1 // "ad-hoc"')
+    expect(block).toContain('Signature=adhoc')
+    expect(block).toContain('codesign -d --extract-certificates=')
+    expect(block).toContain('"signature": os.environ["SIGNATURE"]')
+    expect(block).toContain('.signature == $s')
     expect(block).toContain('target=$(mktemp -d "$RUNNER_TEMP/mac-native-unzip.XXXXXX")')
     expect(block).toContain('native_home=$(mktemp -d "$RUNNER_TEMP/mac-native-home.XXXXXX")')
     expect(block).toContain('HOME="$native_home" bash scripts/hermetic/run-under-owner-sandbox.sh "$exe"')
@@ -175,6 +180,7 @@ describe('QA candidate mac-native variant (M2-0569)', () => {
     expect(block).toContain('tell application id "com.mantu.metis.native" to quit')
     expect(block).toContain('survivor_processes == false')
     expect(block).toContain('name: candidate-launch-mac-native')
+    expect(block).toContain("retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}")
   })
 
   it('keeps mac-native out of promotion and self-tests its lane files', () => {

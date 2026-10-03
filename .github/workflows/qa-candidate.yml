@@ -536,6 +536,7 @@ jobs:
           variant=mac-native
           name=$(jq -r --arg v "$variant" '.builds[] | select(.variant == $v) | .assets[0].name' provenance/provenance.json)
           sha=$(jq -r --arg v "$variant" '.builds[] | select(.variant == $v) | .assets[0].sha256' provenance/provenance.json)
+          expected=$(jq -r --arg v "$variant" '.builds[] | select(.variant == $v) | .signing.certificate_sha1 // "ad-hoc"' provenance/provenance.json)
           run_id=$(jq -r '.run.id' provenance/provenance.json)
           zip="assets/$name"
           report="launch-reports/$name.launch.json"
@@ -544,13 +545,14 @@ jobs:
           survivor_processes=false
           write_report() {
             VERDICT="$1" ALIVE_AFTER_30S="$alive_after_30s" QUIT_CLEANLY="$quit_cleanly" SURVIVOR_PROCESSES="$survivor_processes" \
-            INSTALLER="$name" ARTIFACT_SHA256="$sha" CANDIDATE_RUN="$run_id" REPORT="$report" python3 - <<'PY'
+            INSTALLER="$name" ARTIFACT_SHA256="$sha" CANDIDATE_RUN="$run_id" SIGNATURE="$expected" REPORT="$report" python3 - <<'PY'
 import json, os
 report = {
   "variant": "mac-native",
   "installer": os.environ["INSTALLER"],
   "artifact_sha256": os.environ["ARTIFACT_SHA256"],
   "candidate_run": int(os.environ["CANDIDATE_RUN"]),
+  "signature": os.environ["SIGNATURE"],
   "verdict": os.environ["VERDICT"],
   "alive_after_30s": os.environ["ALIVE_AFTER_30S"] == "true",
   "quit_cleanly": os.environ["QUIT_CLEANLY"] == "true",
@@ -572,6 +574,16 @@ PY
           ditto -x -k "$zip" "$target"
           app=$(find "$target" -maxdepth 1 -name '*.app' -print -quit)
           [ -n "$app" ] || fail "$name did not unpack to a top-level app bundle."
+          if [ "$expected" = ad-hoc ]; then
+            details=$(codesign -dv "$app" 2>&1)
+            grep -qx 'Signature=adhoc' <<<"$details" \
+              || fail "$name is not ad-hoc signed, but its provenance says it is."
+          else
+            rm -rf "$RUNNER_TEMP/native-certificate" && mkdir "$RUNNER_TEMP/native-certificate"
+            codesign -d --extract-certificates="$RUNNER_TEMP/native-certificate/c" "$app"
+            [ "$(shasum -a 1 "$RUNNER_TEMP/native-certificate/c0" | cut -d' ' -f1)" = "$expected" ] \
+              || fail "$name is not signed with the QA certificate its provenance records."
+          fi
           exe="$app/Contents/MacOS/Metis"
           [ -x "$exe" ] || fail "$app has no executable Metis binary."
           HOME="$native_home" bash scripts/hermetic/run-under-owner-sandbox.sh "$exe" > "$RUNNER_TEMP/mac-native-launch.out" 2> "$RUNNER_TEMP/mac-native-launch.err" &
@@ -609,8 +621,9 @@ PY
         run: |
           name=$(jq -r '.builds[] | select(.variant == "mac-native") | .assets[0].name' provenance/provenance.json)
           sha=$(jq -r '.builds[] | select(.variant == "mac-native") | .assets[0].sha256' provenance/provenance.json)
-          jq -e --arg n "$name" --arg h "$sha" \
-            '.variant == "mac-native" and .installer == $n and .verdict == "PASS" and .artifact_sha256 == $h and .alive_after_30s == true and .quit_cleanly == true and .survivor_processes == false' \
+          expected=$(jq -r '.builds[] | select(.variant == "mac-native") | .signing.certificate_sha1 // "ad-hoc"' provenance/provenance.json)
+          jq -e --arg n "$name" --arg h "$sha" --arg s "$expected" \
+            '.variant == "mac-native" and .installer == $n and .verdict == "PASS" and .artifact_sha256 == $h and .signature == $s and .alive_after_30s == true and .quit_cleanly == true and .survivor_processes == false' \
             "launch-reports/$name.launch.json" > /dev/null
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()

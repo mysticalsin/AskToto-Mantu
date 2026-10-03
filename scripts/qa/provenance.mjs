@@ -34,6 +34,7 @@ export const VARIANTS = Object.freeze({
   'mac-native': {
     promotable: false,
     platform: 'mac',
+    electronMetadata: false,
     configs: ['native-app/project.yml'],
     assets: (version) => [`Metis-Native-${version}.zip`]
   },
@@ -161,8 +162,9 @@ export async function stageBuild({ variant, repoRoot, releaseDir, outDir, env, n
   }
 
   const builderConfig = config.configs.map((path) => ({ path, sha256: readAndHash(repoRoot, path, problems) }))
-  const electron = readDependencyVersion(repoRoot, 'electron', problems)
-  const electronBuilder = readDependencyVersion(repoRoot, 'electron-builder', problems)
+  const readsElectronMetadata = config.electronMetadata !== false
+  const electron = readsElectronMetadata ? readDependencyVersion(repoRoot, 'electron', problems) : undefined
+  const electronBuilder = readsElectronMetadata ? readDependencyVersion(repoRoot, 'electron-builder', problems) : undefined
 
   if (problems.length) throw new Error(problems.join('\n'))
 
@@ -184,11 +186,13 @@ export async function stageBuild({ variant, repoRoot, releaseDir, outDir, env, n
     version,
     runner,
     node: nodeVersion,
-    electron,
-    electron_builder: electronBuilder,
     builder_config: builderConfig,
     signing,
     assets
+  }
+  if (readsElectronMetadata) {
+    record.electron = electron
+    record.electron_builder = electronBuilder
   }
 
   writeFileSync(join(outDir, `build-${variant}.json`), `${JSON.stringify(record, null, 2)}\n`)
@@ -410,7 +414,7 @@ export function releaseNotes({ provenance, evidence, promotionRunUrl }) {
 |---|---|
 ${rows}
 
-\`provenance.json\` records the commit, the candidate run, the runner images and the Node, Electron and electron-builder versions and builder configuration hashes of every build. Check a download with \`shasum -a 256 -c SHA256SUMS.txt\` on macOS or \`Get-FileHash\` on Windows.
+\`provenance.json\` records the commit, the candidate run, the runner images, Node versions, builder configuration hashes and, for Electron builds, the Electron and electron-builder versions. Check a download with \`shasum -a 256 -c SHA256SUMS.txt\` on macOS or \`Get-FileHash\` on Windows.
 `
 }
 

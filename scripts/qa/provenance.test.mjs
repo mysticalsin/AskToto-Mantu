@@ -162,18 +162,41 @@ test('a D-34 hotfix version stages the same asset names under the hotfix version
   }
 })
 
-test('stage records the runner image, Node, Electron, electron-builder and per-file builder config hashes', async () => {
+test('stage records the runner image, Node, Electron metadata where applicable and per-file builder config hashes', async () => {
   const { root, releaseDir } = fixture()
   try {
-    const outDir = join(root, 'out')
     const e = env()
-    const record = await stageBuild({ variant: 'mac-native', repoRoot: root, releaseDir, outDir, env: e, nodeVersion: NODE_VERSION })
-    assert.deepEqual(record.runner, { os: e.RUNNER_OS, arch: e.RUNNER_ARCH, image: e.ImageOS, image_version: e.ImageVersion })
-    assert.equal(record.node, NODE_VERSION)
-    assert.equal(record.electron, '43.6.0')
-    assert.equal(record.electron_builder, '26.15.3')
-    assert.deepEqual(record.builder_config.map((c) => c.path), VARIANTS['mac-native'].configs)
-    for (const config of record.builder_config) {
+    const qaRecord = await stageBuild({
+      variant: 'mac-qa-identity',
+      repoRoot: root,
+      releaseDir,
+      outDir: join(root, 'out-qa'),
+      env: e,
+      nodeVersion: NODE_VERSION
+    })
+    assert.deepEqual(qaRecord.runner, { os: e.RUNNER_OS, arch: e.RUNNER_ARCH, image: e.ImageOS, image_version: e.ImageVersion })
+    assert.equal(qaRecord.node, NODE_VERSION)
+    assert.equal(qaRecord.electron, '43.6.0')
+    assert.equal(qaRecord.electron_builder, '26.15.3')
+    assert.deepEqual(qaRecord.builder_config.map((c) => c.path), VARIANTS['mac-qa-identity'].configs)
+    for (const config of qaRecord.builder_config) {
+      assert.equal(config.sha256, sha256(readFileSync(join(root, config.path))))
+    }
+
+    const nativeRecord = await stageBuild({
+      variant: 'mac-native',
+      repoRoot: root,
+      releaseDir,
+      outDir: join(root, 'out-native'),
+      env: e,
+      nodeVersion: NODE_VERSION
+    })
+    assert.deepEqual(nativeRecord.runner, { os: e.RUNNER_OS, arch: e.RUNNER_ARCH, image: e.ImageOS, image_version: e.ImageVersion })
+    assert.equal(nativeRecord.node, NODE_VERSION)
+    assert.equal(Object.hasOwn(nativeRecord, 'electron'), false)
+    assert.equal(Object.hasOwn(nativeRecord, 'electron_builder'), false)
+    assert.deepEqual(nativeRecord.builder_config.map((c) => c.path), VARIANTS['mac-native'].configs)
+    for (const config of nativeRecord.builder_config) {
       assert.equal(config.sha256, sha256(readFileSync(join(root, config.path))))
     }
   } finally {
@@ -250,15 +273,25 @@ test('stage records the mac identity from the environment, ad-hoc without it, an
     })
     assert.deepEqual(withIdentity.signing, { mode: 'qa-identity', certificate_sha1: fingerprint.toLowerCase() })
 
-    const withoutIdentity = await stageBuild({
-      variant: 'mac-native',
+    const qaWithoutIdentity = await stageBuild({
+      variant: 'mac-qa-identity',
       repoRoot: root,
       releaseDir,
       outDir: join(root, 'out-mac-qa'),
       env: env(),
       nodeVersion: NODE_VERSION
     })
-    assert.deepEqual(withoutIdentity.signing, { mode: 'ad-hoc' })
+    assert.deepEqual(qaWithoutIdentity.signing, { mode: 'ad-hoc' })
+
+    const nativeWithIdentity = await stageBuild({
+      variant: 'mac-native',
+      repoRoot: root,
+      releaseDir,
+      outDir: join(root, 'out-mac-native'),
+      env: env({ ASKTOTO_MAC_SIGN_IDENTITY: fingerprint }),
+      nodeVersion: NODE_VERSION
+    })
+    assert.deepEqual(nativeWithIdentity.signing, { mode: 'qa-identity', certificate_sha1: fingerprint.toLowerCase() })
 
     const win = await stageBuild({
       variant: 'win',
@@ -269,6 +302,23 @@ test('stage records the mac identity from the environment, ad-hoc without it, an
       nodeVersion: NODE_VERSION
     })
     assert.deepEqual(win.signing, { mode: 'unsigned' })
+  } finally {
+    cleanup(root)
+  }
+})
+
+test('stage records mac-native as ad-hoc without a QA identity', async () => {
+  const { root, releaseDir } = fixture()
+  try {
+    const nativeWithoutIdentity = await stageBuild({
+      variant: 'mac-native',
+      repoRoot: root,
+      releaseDir,
+      outDir: join(root, 'out-mac-native'),
+      env: env(),
+      nodeVersion: NODE_VERSION
+    })
+    assert.deepEqual(nativeWithoutIdentity.signing, { mode: 'ad-hoc' })
   } finally {
     cleanup(root)
   }
