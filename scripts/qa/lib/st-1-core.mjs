@@ -299,29 +299,26 @@ export const WINDOW_STAGE_BUDGET_MS = 250
 /** The boot stages the window-construction gate holds to its budget. */
 export const GATED_WINDOW_STAGES = ['createWindow.prewarm', 'createWindow.construct']
 
-/** The diagnosis behind the launch plan and gate report. CI evidence from 36999698235 and 37080909059 showed
- *  the over-budget shipped row on the first measured launch of the run. The lead diagnosis recorded
- *  window-shipped-opaque-1 at 351.9 ms after the OD-42 warm-up launches in 36999698235, with unrelated-PR
- *  failures in the 335-535 ms range; the same row failed again in 37080909059. That points at harness order:
- *  the failing launch was still the first measured launch instead of a launch immediately following the same
- *  variant/chrome warm-up. */
+/** The window gate carries the CI run IDs that triggered this ticket, but not a cause until the artifacts give
+ *  per-launch, per-stage numbers. A summary like "over 250" is not a measurement and must not become evidence. */
 export const WINDOW_CONSTRUCTION_ROOT_CAUSE = {
-  classification: 'harness-cold-first-measured-launch',
+  classification: 'UNKNOWN',
   evidenceRuns: ['36999698235', '37080909059'],
   evidence: [
     {
       run: '36999698235',
-      measured: [{ launch: 'window-shipped-opaque-1', stage: 'createWindow.construct', ms: 351.9 }],
-      summary: 'first measured shipped opaque launch exceeded 250 ms after the prior all-warmups-first order'
+      measured: [],
+      summary: 'no artifact-backed per-launch stage timings are recorded in this source revision'
     },
     {
       run: '37080909059',
-      measured: [{ launch: 'window-shipped-opaque-1', stage: 'createWindow.construct', ms: 'over 250' }],
-      summary: 'same first measured shipped opaque launch failed while later launches were not identified as the recurring lane blocker'
+      measured: [],
+      summary: 'the cited threshold result is not a numeric per-launch stage measurement'
     }
   ],
-  fix: 'place the matching marked warm-up immediately before each measured variant/chrome launch; measured launches still include createWindow.prewarm and createWindow.construct under the unchanged 250 ms budget',
-  leadAction: 'LEAD_ACTION: dispatch qa-candidate three consecutive times on the PR and attach the st1-report gate.json artifacts'
+  fix: 'unresolved until artifact-backed numbers identify a harness step or an app first-window cost; the 250 ms gate remains unchanged',
+  leadAction:
+    'LEAD_ACTION: read qa-candidate runs 36999698235 and 37080909059, artifact st-1-macos-window/st1-report/window-gate.json plus st1-report/window-*/window-*.json; record every launch, variant, chrome, warmup flag, stage and numeric ms before classifying the cause'
 }
 
 /**
@@ -365,6 +362,34 @@ function windowLaunchStageRows(reports) {
   })
 }
 
+function windowLaunchSummaries(rows) {
+  const launches = new Map()
+  for (const row of rows) {
+    const key = row.launch
+    const launch =
+      launches.get(key) ??
+      {
+        launch: row.launch,
+        variant: row.variant,
+        chrome: row.chrome,
+        warmup: row.warmup,
+        stages: [],
+        gatedStages: [],
+        maxStageMs: null
+      }
+    if (launch.chrome === null && row.chrome !== null) launch.chrome = row.chrome
+    const stage = { stage: row.stage, ms: row.ms }
+    launch.stages.push(stage)
+    if (GATED_WINDOW_STAGES.includes(row.stage)) launch.gatedStages.push(stage)
+    if (typeof row.ms === 'number') launch.maxStageMs = Math.max(launch.maxStageMs ?? Number.NEGATIVE_INFINITY, row.ms)
+    launches.set(key, launch)
+  }
+  return Array.from(launches.values()).map((launch) => ({
+    ...launch,
+    maxStageMs: launch.maxStageMs === Number.NEGATIVE_INFINITY ? null : launch.maxStageMs
+  }))
+}
+
 /**
  * The window-construction gate (M2-0519) over a set of window-construction reports: `{ pass, rows, failures }`.
  * Only the shipped variant is gated; marked warm-ups and the other variants stay report-only. It fails unless
@@ -401,7 +426,16 @@ export function windowConstructionGate(reports, budgetMs = WINDOW_STAGE_BUDGET_M
   for (const chrome of ['opaque', 'transparent']) {
     if (shipped.length > 0 && !chromes.has(chrome)) failures.push(`no shipped ${chrome} window was measured`)
   }
-  return { pass: failures.length === 0, budgetMs, skippedWarmups: warmups.length, rootCause: WINDOW_CONSTRUCTION_ROOT_CAUSE, launches, rows, failures }
+  return {
+    pass: failures.length === 0,
+    budgetMs,
+    skippedWarmups: warmups.length,
+    rootCause: WINDOW_CONSTRUCTION_ROOT_CAUSE,
+    launches,
+    launchSummaries: windowLaunchSummaries(launches),
+    rows,
+    failures
+  }
 }
 
 /** The app's own native boot stage timings (tray stages, window construction, navigation and first show): every

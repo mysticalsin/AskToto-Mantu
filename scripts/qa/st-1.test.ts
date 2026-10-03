@@ -347,7 +347,7 @@ describe('window-construction runs (M2-0516)', () => {
     expect(WINDOW_VARIANTS).toEqual([...BOOT_WINDOW_VARIANTS])
   })
 
-  it('warms the same variant and chrome immediately before each measured launch', () => {
+  it('prints a balanced plan with a marked warm-up for every measured variant and chrome', () => {
     const plan = windowConstructionPlan()
     const warmups = plan.filter((entry) => entry.warmup)
     const measured = plan.filter((entry) => !entry.warmup)
@@ -357,10 +357,8 @@ describe('window-construction runs (M2-0516)', () => {
     expect(measured).toHaveLength(WINDOW_VARIANTS.length * WINDOW_CHROMES.length * WINDOW_MEASURED_REPEATS)
     expect(plan[0]).toEqual({ name: 'window-warmup-shipped-opaque-1', variant: 'shipped', chrome: 'opaque', repeat: 1, warmup: true })
     expect(plan[1]).toEqual({ name: 'window-shipped-opaque-1', variant: 'shipped', chrome: 'opaque', repeat: 1, warmup: false })
-    for (const [index, entry] of plan.entries()) {
-      if (entry.warmup) continue
-      expect(index).toBeGreaterThan(0)
-      expect(plan[index - 1]).toEqual({
+    for (const entry of measured) {
+      expect(warmups).toContainEqual({
         name: `window-warmup-${entry.variant}-${entry.chrome}-${entry.repeat}`,
         variant: entry.variant,
         chrome: entry.chrome,
@@ -381,6 +379,7 @@ describe('window-construction runs (M2-0516)', () => {
     expect(workflow).toContain("jq -c '.[]' st1-report/window-plan.json | while read -r launch; do")
     expect(workflow).toContain('run=$(jq -r \'.name\' <<<"$launch")')
     expect(workflow).toContain('if [ "$warmup" = true ]; then warmup_args=(--window-warmup); fi')
+    expect(workflow).toContain('Every measured launch has a matching marked warm-up')
     expect(workflow).not.toContain('variants=(shipped spellcheck-off paint-when-hidden prewarm-spellchecker)')
     expect(workflow).not.toContain('for repeat in 1 2; do')
   })
@@ -466,12 +465,15 @@ describe('windowConstructionGate (M2-0519)', () => {
     expect(gate).toMatchObject({ pass: true, budgetMs: 250, failures: [] })
     expect(gate.rootCause).toEqual(WINDOW_CONSTRUCTION_ROOT_CAUSE)
     expect(gate.rootCause).toMatchObject({
-      classification: 'harness-cold-first-measured-launch',
+      classification: 'UNKNOWN',
       evidence: [
-        { run: '36999698235', measured: [{ launch: 'window-shipped-opaque-1', stage: 'createWindow.construct', ms: 351.9 }] },
-        { run: '37080909059', measured: [{ launch: 'window-shipped-opaque-1', stage: 'createWindow.construct' }] }
-      ]
+        { run: '36999698235', measured: [] },
+        { run: '37080909059', measured: [] }
+      ],
+      leadAction: expect.stringContaining('st-1-macos-window/st1-report/window-gate.json')
     })
+    expect(JSON.stringify(gate.rootCause)).not.toContain('harness-cold-first-measured-launch')
+    expect(JSON.stringify(gate.rootCause)).not.toContain('"over 250"')
     expect(gate.rows).toEqual([
       { report: 'window-shipped-opaque-1/a.json', launch: 'window-shipped-opaque-1', variant: 'shipped', stage: 'createWindow.prewarm', chrome: 'opaque', ms: 12 },
       { report: 'window-shipped-opaque-1/a.json', launch: 'window-shipped-opaque-1', variant: 'shipped', stage: 'createWindow.construct', chrome: 'opaque', ms: 111 },
@@ -493,6 +495,37 @@ describe('windowConstructionGate (M2-0519)', () => {
       }
     ])
     expect(gate.launches).toHaveLength(11)
+    expect(gate.launchSummaries).toEqual(
+      expect.arrayContaining([
+        {
+          launch: 'window-shipped-opaque-1',
+          variant: 'shipped',
+          chrome: 'opaque',
+          warmup: false,
+          stages: [
+            { stage: 'createWindow.prewarm', ms: 12 },
+            { stage: 'createWindow.construct', ms: 111 },
+            { stage: 'createWindow.navigate', ms: 400 },
+            { stage: 'createWindow.firstShow', ms: 30 },
+            { stage: 'createTray.newTray', ms: 900 }
+          ],
+          gatedStages: [
+            { stage: 'createWindow.prewarm', ms: 12 },
+            { stage: 'createWindow.construct', ms: 111 }
+          ],
+          maxStageMs: 900
+        },
+        {
+          launch: 'window-spellcheck-off-opaque-1',
+          variant: 'spellcheck-off',
+          chrome: 'opaque',
+          warmup: false,
+          stages: [{ stage: 'createWindow.construct', ms: 900 }],
+          gatedStages: [{ stage: 'createWindow.construct', ms: 900 }],
+          maxStageMs: 900
+        }
+      ])
+    )
     expect(gate.launches).toEqual(expect.arrayContaining([
       {
         report: 'window-shipped-opaque-1/a.json',

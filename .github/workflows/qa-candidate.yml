@@ -946,8 +946,8 @@ jobs:
   # bootStages carries createWindow.prewarm and createWindow.construct (with the chrome and variant built),
   # createWindow.navigate and createWindow.firstShow. The other variants stay report-only; the shipped window is
   # gated (M2-0519): the job fails unless every shipped createWindow.prewarm and createWindow.construct is present
-  # and under 250 ms in both chromes. Every measured launch is immediately preceded by the same
-  # variant/chrome marked warm-up, and the gate skips those warm-up reports.
+  # and under 250 ms in both chromes. Every measured launch has a matching marked warm-up, and the gate skips
+  # those warm-up reports while keeping per-launch, per-stage timings in the uploaded st1-report artifact.
   st1-mac-window:
     name: ST-1 window construction per variant and chrome (shipped gated < 250 ms)
     needs: provenance
@@ -981,8 +981,7 @@ jobs:
           fi
           # The durable settings of a user who finished onboarding with the bar layout (plain JSON is a supported read path).
           printf '{"onboardingDone":true,"onboardingDoneAt":%s000,"recordingConsent":true,"overlayLayout":"bar","autoHideOverlay":false}\n' "$(date +%s)" > onboarded-profile/settings.json
-          # The first launch on a fresh hosted runner can pay one-time Electron/macOS warm-up costs. The
-          # shared ST-1 plan warms every variant/chrome pair before measurement so CI cannot drift from the gate.
+          # The shared ST-1 plan emits every launch so the gate artifact records per-launch, per-stage timings.
           node scripts/qa/st-1.mjs --print-window-plan > st1-report/window-plan.json
           jq -c '.[]' st1-report/window-plan.json | while read -r launch; do
             variant=$(jq -r '.variant' <<<"$launch")
