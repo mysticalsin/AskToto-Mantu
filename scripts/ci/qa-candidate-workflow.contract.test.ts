@@ -252,6 +252,15 @@ describe('QA candidate History design evidence (M2-0032)', () => {
     expect(upload).toContain("retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}")
   })
 
+  it('keeps the capture evidence report-only while preserving its failure summary', () => {
+    const capture = steps('history-design-mac').find((step) => step.includes('history-design-capture.mjs')) ?? ''
+    expect(capture).toContain('id: history_design_capture')
+    expect(capture).toContain('continue-on-error: true')
+    const summary = steps('history-design-mac').find((step) => step.includes('Summarize a capture that did not pass')) ?? ''
+    expect(summary).toContain("if: steps.history_design_capture.outcome == 'failure'")
+    expect(summary).toContain('cat history-design/SUMMARY.md')
+  })
+
   // TypeScript source files are left out of the assertion: tests that read files never name them (FF-07).
   it('self-tests when the capture or the History views it captures change', () => {
     for (const path of [

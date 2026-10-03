@@ -216,6 +216,12 @@ describe('direct release signing gates', () => {
     expect(releaseCommands('win').join('\n')).toContain('scripts/verify-signing.mjs')
   })
 
+  it('Windows public release packaging requests only the updating NSIS installer', () => {
+    const commands = releaseCommands('win').join('\n')
+    expect(commands).toContain('electron-builder --config electron-builder.win.yml --win nsis --x64 --publish never')
+    expect(commands).not.toContain('electron-builder --config electron-builder.win.yml --win --x64')
+  })
+
   it('refuses macOS release when Developer ID or notarization inputs are missing, including in CI', () => {
     for (const env of [
       { GH_TOKEN: 'test-token' },

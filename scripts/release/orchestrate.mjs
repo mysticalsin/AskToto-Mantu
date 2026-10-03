@@ -104,7 +104,7 @@ const releasePlans = {
   win: [
     ...releasePrerequisites('win'),
     npmRun('build', { name: 'Build desktop app' }),
-    buildTool(['--config', 'electron-builder.win.yml', '--win', '--x64', '--publish', 'never'], { name: 'Package Windows app' }),
+    buildTool(['--config', 'electron-builder.win.yml', '--win', 'nsis', '--x64', '--publish', 'never'], { name: 'Package Windows app' }),
     nodeScript('scripts/check-packaged-runtime.mjs', ['win', '--post-sign'], { name: 'Check Windows packaged runtime' }),
     nodeScript('scripts/check-update-metadata.mjs', ['release/latest.yml'], { name: 'Check Windows update metadata' }),
     nodeScript('scripts/verify-signing.mjs', [], { name: 'Verify Windows signing' }),
