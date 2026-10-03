@@ -19,6 +19,11 @@ name: Candidate scenarios
 #     -f mac_sha256=<Metis DMG sha256> -f win_sha256=<Metis Setup sha256>
 #   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> \
 #     -f scenario=renderer-kill -f mac_sha256=<Metis DMG sha256 from SHA256SUMS.txt>
+#   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> \
+#     -f scenario=capture-gate -f win_sha256=<Metis Setup sha256 from SHA256SUMS.txt>
+# LEAD_ACTION M2-0559: after merge, dispatch capture-gate on the T1 Setup. On PASS, file M2-0044
+# LIVE_VERIFIED with ci_run_id, build_run_id and artifact_sha256 from lane.json; on PRECONDITION, record the
+# stated hosted-runner residual.
 # The pull_request trigger on this file's own path only registers the workflow with GitHub (M2-0501): the
 # run it creates skips every job, uses no runner minutes and reaches no secret.
 run-name: ${{ github.event_name == 'pull_request' && 'Candidate scenarios (registration)' || format('Candidate scenario {0} on {1}', inputs.scenario, inputs.candidate_run) }}
@@ -45,6 +50,7 @@ on:
           - sidecar-boot-reaper
           - packaged-lifecycle
           - renderer-kill
+          - capture-gate
       mac_sha256:
         description: sha256 of the macOS installer the scenario installs (empty when it does not run on macOS)
         required: false

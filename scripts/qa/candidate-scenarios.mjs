@@ -266,6 +266,36 @@ export const SCENARIOS = Object.freeze({
         guiScripting: true
       })
     })
+  }),
+  // M2-0559: Windows hosted runner proof for the background screen capture backoff. The script seeds and
+  // owns its throwaway ASKTOTO_USERDATA profile, locks the Windows workstation as the OS-level induction,
+  // then judges only bg-screen capture.failed audit rows from that profile.
+  'capture-gate': Object.freeze({
+    ticket: 'M2-0559',
+    qaOnlyHook: false,
+    exits: Object.freeze({ 0: 'PASS', 1: 'FAIL', 2: 'PRECONDITION' }),
+    platforms: Object.freeze({
+      win: Object.freeze({
+        variant: 'win',
+        artifact: 'candidate-win',
+        script: 'scripts/qa/capture-gate.mjs',
+        args: ({ app, report }) => [app, report, '--max-bg-failures', '6'],
+        report: 'capture-gate.json',
+        isolatedProfiles: true,
+        timeoutMinutes: 75,
+        stepTimeoutMinutes: 60,
+        bgScreenCaptureFailedMax: 6,
+        laneReportFields: Object.freeze([
+          'inductionMethod',
+          'readinessProof',
+          'failingStateProof',
+          'bgScreenCaptureFailedTotal',
+          'bgScreenCaptureFailedFinal15Minutes',
+          'screenPreprocessSuspended',
+          'backgroundScreenReadyAfterPark'
+        ])
+      })
+    })
   })
 })
 
