@@ -8,9 +8,9 @@ import {
   appendFileSync,
   unlinkSync,
   renameSync
-} from 'node:fs'
-import { writeFile, rename, unlink } from 'node:fs/promises'
-import { join, basename } from 'node:path'
+} from './infra/storage/fs-sync'
+import { rename, unlink, writeFile } from './infra/storage/fs-async'
+import { join, basename, dirname, relative } from 'node:path'
 import { randomBytes, createCipheriv, createDecipheriv, publicEncrypt, constants } from 'node:crypto'
 import type { SaveMeeting, SaveNote, Settings, RecapExport, TranscriptLine } from '@shared/ipc'
 import { isSummaryOnlyProfile, resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
@@ -363,15 +363,21 @@ export async function writeSaved(file: string, content: string, encrypt: boolean
   // ingest and an IPC-driven edit both updating one entity file) would otherwise share `${file}.tmp` —
   // the first rename steals the second writer's bytes and the second rename throws ENOENT.
   const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`
+  const root = inferredMeetingsRoot(file)
+  const gateway = storageAt(root)
+  const relTmp = relative(root, tmp)
+  const relFile = relative(root, file)
   try {
-    await writeFile(tmp, data, { mode: 0o600 }) // async: off the main-process event loop
+    const written = await gateway.write(relTmp, data)
+    if (written.status !== 'ok') throw storageWriteError('write', written)
     // The default meetings folder lives under OneDrive, which routinely holds a just-written file
     // open (upload hashing) or gets grabbed by AV/EDR real-time scanning — rename() then throws
     // EPERM/EBUSY on Windows even though nothing is actually wrong. Bounded retry rides out that
     // transient lock instead of losing the save; any other error (or exhausted retries) still throws.
     for (let attempt = 0; ; attempt++) {
+      const moved = await gateway.rename(relTmp, relFile)
       try {
-        await rename(tmp, file)
+        if (moved.status !== 'ok') throw storageWriteError('rename', moved)
         break
       } catch (e) {
         const code = (e as NodeJS.ErrnoException).code
@@ -382,9 +388,22 @@ export async function writeSaved(file: string, content: string, encrypt: boolean
     // These bytes are on this device: reading them back must not wait on a placeholder probe.
     await recordLocalWrite(file)
   } catch (e) {
-    if (existsSync(tmp)) await unlink(tmp).catch(() => {}) // don't leave an orphaned .tmp on failure
+    await gateway.unlink(relTmp).catch(() => {}) // don't leave an orphaned .tmp on failure
     throw e
   }
+}
+
+function inferredMeetingsRoot(file: string): string {
+  const parts = file.split(/[/\\]/)
+  const marker = parts.findIndex((part) => part === '.brain' || part === 'wiki')
+  if (marker > 0) return parts.slice(0, marker).join(file.includes('\\') ? '\\' : '/') || dirname(file)
+  return dirname(file)
+}
+
+function storageWriteError(op: string, result: { status: string; code?: string }): NodeJS.ErrnoException {
+  const error = new Error(`${op} failed: ${result.status}`) as NodeJS.ErrnoException
+  if (result.status === 'unavailable' && result.code) error.code = result.code
+  return error
 }
 
 // Decrypted temp copies are tracked and deleted on quit so an encrypted transcript never leaves a

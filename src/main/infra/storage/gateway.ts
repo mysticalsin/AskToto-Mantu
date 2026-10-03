@@ -29,11 +29,11 @@
  *   - Only ENOENT and ENOTDIR are 'missing'. 'unavailable', 'timeout' and 'degraded' say nothing about
  *     whether a file exists; callers must never treat them as a deletion.
  */
-import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises'
+import { lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, normalize, relative, sep } from 'node:path'
 import { createAdmission, type Admission, type Lane } from './admission'
 import { createDatalessDetector, type ContentPresence, type DatalessDetector, type FileVersion } from './dataless'
-import { isLocalWrite } from './local-writes'
+import { isLocalWrite, recordLocalWrite } from './local-writes'
 
 /** Threads libuv starts when UV_THREADPOOL_SIZE is unset, and the most it accepts (libuv src/threadpool.c). */
 const DEFAULT_POOL_SIZE = 4
@@ -82,6 +82,7 @@ export type ReadResult =
   | StorageFailure
 
 export type ListResult = { status: 'ok'; names: string[] } | StorageFailure
+export type WriteResult = { status: 'ok' } | StorageFailure
 
 export interface RequestOptions {
   /** Aborting answers 'aborted' at once; work still waiting for a permit never starts. */
@@ -114,6 +115,14 @@ export interface StorageGateway {
   /** A file's bytes, read only when they are on this device. Concurrent reads of one version share one fs
    *  call and one buffer: treat it as read-only. */
   read(relPath: string, options?: ReadOptions): Promise<ReadResult>
+  /** Write bytes under the root, through the same admission cap as reads. */
+  write(relPath: string, bytes: Buffer, options?: RequestOptions): Promise<WriteResult>
+  /** Atomically move an entry within the root. Both paths must stay under the root. */
+  rename(fromRelPath: string, toRelPath: string, options?: RequestOptions): Promise<WriteResult>
+  /** Remove a file or, with `recursive`, a directory tree under the root. Missing entries are ok. */
+  unlink(relPath: string, options?: RequestOptions & { recursive?: boolean }): Promise<WriteResult>
+  /** Create a directory under the root. */
+  mkdir(relDir: string, options?: RequestOptions): Promise<WriteResult>
 }
 
 /** The fs calls the gateway makes; each is one libuv pool request. Injectable so tests can hold a call
@@ -121,6 +130,11 @@ export interface StorageGateway {
 export interface StorageFs {
   readdir(path: string): Promise<string[]>
   readFile(path: string): Promise<Buffer>
+  writeFile(path: string, bytes: Buffer): Promise<void>
+  rename(from: string, to: string): Promise<void>
+  unlink(path: string): Promise<void>
+  rm(path: string, options: { recursive: boolean; force: boolean }): Promise<void>
+  mkdir(path: string, options: { recursive: boolean; mode?: number }): Promise<void>
   realpath(path: string): Promise<string>
   stat(path: string): Promise<{ mtimeMs: number; ctimeMs: number; size: number; isFile?: () => boolean }>
   /** Unlike `stat`, never follows the final path component: the only way to tell a plain file apart
@@ -136,7 +150,7 @@ export interface StorageGatewayOptions {
    *  breaking the never-rejects invariant. */
   root: () => string
   detector?: DatalessDetector
-  fs?: StorageFs
+  fs?: Partial<StorageFs>
   /** The libuv pool size; this process's by default. */
   poolSize?: number
   /** The cap this gateway's fs calls run under; its own `poolAdmission(poolSize)` by default. Pass one
@@ -282,10 +296,23 @@ function createPresenceQueue(detector: DatalessDetector): PresenceOf {
 export function createStorageGateway({
   root,
   detector = createDatalessDetector(),
-  fs = { readdir, readFile, realpath, stat, lstat: (path) => lstat(path).then((s) => ({ isSymbolicLink: s.isSymbolicLink() })) },
+  fs: injectedFs,
   poolSize = threadpoolSize(process.env.UV_THREADPOOL_SIZE),
   admission = poolAdmission(poolSize)
 }: StorageGatewayOptions): StorageGateway {
+  const fs: StorageFs = {
+    readdir,
+    readFile,
+    writeFile,
+    rename,
+    unlink,
+    rm,
+    mkdir: (path, options) => mkdir(path, { recursive: true, mode: options.mode }).then(() => undefined),
+    realpath,
+    stat,
+    lstat: (path) => lstat(path).then((s) => ({ isSymbolicLink: s.isSymbolicLink() })),
+    ...injectedFs
+  }
   const presenceOf = createPresenceQueue(detector)
   /** Running content reads, by resolved path and version. */
   const reads = new Map<string, Promise<Settled<Buffer>>>()
@@ -389,6 +416,33 @@ export function createStorageGateway({
     return untilEnded(reading, request, 'running')
   }
 
+  async function writeLocal(path: string, bytes: Buffer, request: Request): Promise<WriteResult> {
+    const written = await call('content', request, () => fs.writeFile(path, bytes))
+    if (written.status !== 'ok') return written
+    await recordLocalWrite(path)
+    return { status: 'ok' }
+  }
+
+  async function mkdirLocal(path: string, request: Request): Promise<WriteResult> {
+    const made = await call('metadata', request, () => fs.mkdir(path, { recursive: true, mode: 0o700 }))
+    return made.status === 'ok' ? { status: 'ok' } : made
+  }
+
+  async function renameLocal(from: string, to: string, request: Request): Promise<WriteResult> {
+    const moved = await call('content', request, () => fs.rename(from, to))
+    if (moved.status !== 'ok') return moved
+    await recordLocalWrite(to)
+    return { status: 'ok' }
+  }
+
+  async function unlinkLocal(path: string, request: Request, recursive: boolean): Promise<WriteResult> {
+    const removed = await call('metadata', request, () =>
+      recursive ? fs.rm(path, { recursive: true, force: true }) : fs.unlink(path)
+    )
+    if (removed.status === 'missing') return { status: 'ok' }
+    return removed.status === 'ok' ? { status: 'ok' } : removed
+  }
+
   async function readLocal(base: string, path: string, request: Request, { hydrate, onProgress }: ReadOptions): Promise<LocalRead> {
     const stated = await statFile(path, request)
     if (stated.status !== 'ok') return { result: stated, rememberUnavailable: stated.status === 'unavailable' }
@@ -489,6 +543,59 @@ export function createStorageGateway({
         if (hydrate && result.status === 'ok') failures.delete(path)
         if (!hydrate && result.status !== 'ok' && (REMEMBERED.has(result.status) || (rememberUnavailable && result.status === 'unavailable'))) remember(path, result)
         return result
+      } finally {
+        request.close()
+      }
+    },
+
+    async write(relPath, bytes, { signal } = {}) {
+      const current = currentRoot()
+      if (current.status !== 'ok') return current
+      const path = underRoot(current.root, relPath)
+      if (!path) return outsideRoot()
+      const request = openRequest(CONTENT_DEADLINE_MS, signal)
+      try {
+        return await writeLocal(path, bytes, request)
+      } finally {
+        request.close()
+      }
+    },
+
+    async rename(fromRelPath, toRelPath, { signal } = {}) {
+      const current = currentRoot()
+      if (current.status !== 'ok') return current
+      const from = underRoot(current.root, fromRelPath)
+      const to = underRoot(current.root, toRelPath)
+      if (!from || !to) return outsideRoot()
+      const request = openRequest(CONTENT_DEADLINE_MS, signal)
+      try {
+        return await renameLocal(from, to, request)
+      } finally {
+        request.close()
+      }
+    },
+
+    async unlink(relPath, { signal, recursive = false } = {}) {
+      const current = currentRoot()
+      if (current.status !== 'ok') return current
+      const path = underRoot(current.root, relPath)
+      if (!path) return outsideRoot()
+      const request = openRequest(METADATA_DEADLINE_MS, signal)
+      try {
+        return await unlinkLocal(path, request, recursive)
+      } finally {
+        request.close()
+      }
+    },
+
+    async mkdir(relDir, { signal } = {}) {
+      const current = currentRoot()
+      if (current.status !== 'ok') return current
+      const dir = underRoot(current.root, relDir)
+      if (!dir) return outsideRoot()
+      const request = openRequest(METADATA_DEADLINE_MS, signal)
+      try {
+        return await mkdirLocal(dir, request)
       } finally {
         request.close()
       }

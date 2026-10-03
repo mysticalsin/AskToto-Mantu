@@ -137,7 +137,7 @@ export function countDependencyViolations(violations) {
     const match = violation.rule.name.match(/^ff(\d{2}[ab]?)-/)
     if (!match) throw new Error(`Dependency-cruiser rule lacks ffNN prefix: ${violation.rule.name}`)
     const rule = `FF-${match[1]}`
-    if (!['FF-01', 'FF-02', 'FF-03'].includes(rule)) {
+    if (!['FF-01', 'FF-02', 'FF-03', 'FF-05b'].includes(rule)) {
       throw new Error(`Dependency-cruiser rule reports non-module fitness function ${rule}: ${violation.rule.name}`)
     }
     counts[rule] ??= {}

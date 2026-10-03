@@ -43,6 +43,7 @@
  *       --fixtures fifo|dataless|synthetic-dataless|none [--history [on|off]] [--count 6]
  *       [--cloud-dir <folder of evicted files>] [--main-log <main.log>] [--exe <installed executable>]
  *       [--profile-template <userData dir>] [--minutes 5] [--out <report.json>] [--report-dir <dir>]
+ *       [--publish-graphify]
  *       [--purpose window-construction --window-variant <variant> [--window-warmup]]
  *
  * `--purpose window-construction` marks a short launch made only to measure the boot window's constructor under
@@ -475,6 +476,25 @@ const historyProbe = (search) => `(async () => {
   return { skipped: 'no window exposes window.toto.recallList, brainStatus and recallSearch' }
 })()`
 
+const PUBLISH_GRAPHIFY_PROBE = `(async () => {
+  const api = window.toto
+  if (!api) throw new Error('window.toto unavailable')
+  const publishStarted = performance.now()
+  await api.setSettings({ publishBrainPages: true, graphifyEnabled: true, graphifyAutoRebuild: false })
+  const publishMs = performance.now() - publishStarted
+  const graphifyStarted = performance.now()
+  const status = await api.graphifyRebuild()
+  const graphifyMs = performance.now() - graphifyStarted
+  return {
+    publishMs,
+    graphifyMs,
+    graphifyInstalled: !!status.installed,
+    graphifyBackend: status.backend || null,
+    graphifyHasGraph: !!status.hasGraph,
+    graphifyError: status.error ? 'present' : null
+  }
+})()`
+
 /** Starts the sampling CPU profiler; reports when Profiler.start was requested and when it answered, so
  *  the profile's own cost can be lined up with the timeline. */
 async function startProfiler(cdp, sinceSpawn) {
@@ -561,13 +581,18 @@ async function probeHistory(cdp, tMs, search) {
 
 /** Fills `run` (lib/st-1-core.mjs emptyRun) in place, so a partial report can be written at any moment.
  *  Never throws on a probe that fails or hangs: each is recorded in `run.errors` and the run goes on. */
-async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, witnessFile, historyOn, history }) {
+async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, witnessFile, historyOn, history, publishGraphify }) {
   const sinceSpawn = () => Math.round(performance.now() - spawnedAt)
   run.setupAtMs = sinceSpawn()
   const witness = startWitness(witnessFile)
   const setup = await evaluateBounded(cdp, 'setup', SETUP, SETUP_TIMEOUT_MS)
   if (setup.ok) run.poolSize = setup.value
   else run.errors.push(failureRecord('setup', run.setupAtMs, setup, SETUP_TIMEOUT_MS))
+  if (publishGraphify) {
+    const probe = await evaluateBounded(cdp, 'publish-graphify', PUBLISH_GRAPHIFY_PROBE, HISTORY_TIMEOUT_MS)
+    run.publishGraphify = probe.ok ? probe.value : { error: probe.timedOut ? `no answer within ${HISTORY_TIMEOUT_MS} ms` : probe.error }
+    if (!probe.ok) run.errors.push(failureRecord('publish-graphify', sinceSpawn(), probe, HISTORY_TIMEOUT_MS))
+  }
   run.profiler = await startProfiler(cdp, sinceSpawn)
   const probeFile = join(profile, 'st1-probe.txt')
   let historyRunning = null
@@ -785,6 +810,11 @@ async function main() {
   }
   const history = args.history === 'true'
   const historyMode = args.history === 'off' ? 'off' : 'on'
+  const publishGraphify = args.publishGraphify === 'true'
+  if (args.publishGraphify !== undefined && args.publishGraphify !== 'true') {
+    console.error(`[st-1] FAIL — --publish-graphify is a bare flag, got ${JSON.stringify(args.publishGraphify)}`)
+    return 2
+  }
   if (args.fixtures === 'dataless' && (!args.cloudDir || !args.mainLog)) {
     console.error('[st-1] FAIL — --fixtures dataless needs --cloud-dir and --main-log')
     return 2
@@ -854,6 +884,7 @@ async function main() {
     return buildReport({
       ...common,
       history,
+      publishGraphify,
       minutes,
       measured: run,
       evidence,

@@ -123,12 +123,7 @@
     "src/main/whisper-asr-host.ts": 1,
     "src/main/win-security.ts": 7
   },
-  "FF-05b": {
-    "src/main/brain/publish.ts": 20,
-    "src/main/brain/store.ts": 63,
-    "src/main/graphify.ts": 17,
-    "src/main/transcripts.ts": 33
-  },
+  "FF-05b": {},
   "FF-06": {},
   "FF-07": {
     "intelligence/src/lib/dashboard-state.contract.test.ts": 8,

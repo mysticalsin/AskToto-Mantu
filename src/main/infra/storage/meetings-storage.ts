@@ -6,7 +6,7 @@ const CLASSIFY_BATCH = 1_000
 
 /** One gateway per resolved root, so two spellings of one folder share its caches. */
 let gateways = new Map<string, StorageGateway>()
-let testStorageOptions: { detector?: DatalessDetector; fs?: StorageFs; poolSize?: number } | undefined
+let testStorageOptions: { detector?: DatalessDetector; fs?: Partial<StorageFs>; poolSize?: number } | undefined
 /** Every gateway's fs calls run under this one cap: the roots share the process's libuv pool. */
 let admission = poolAdmission()
 
@@ -36,7 +36,7 @@ const EVERY_FILE_LOCAL: DatalessDetector = {
   classify: async (files) => new Map(files.map((file): [string, ContentPresence] => [file.path, 'local']))
 }
 
-export function useStorageForTests(options: { detector?: DatalessDetector; fs?: StorageFs; poolSize?: number } = {}): void {
+export function useStorageForTests(options: { detector?: DatalessDetector; fs?: Partial<StorageFs>; poolSize?: number } = {}): void {
   testStorageOptions = {
     detector: options.detector ?? EVERY_FILE_LOCAL,
     ...(options.fs ? { fs: options.fs } : {}),

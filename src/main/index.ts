@@ -4955,11 +4955,13 @@ function managedEffectsSnapshot(): string {
  *  never goes through settingsSet (it's picked up live by getSettings()'s mtime cache, and a locked key
  *  is dropped from every settingsSet patch besides), so the settingsSet-time purge below never fires for
  *  it — graph.json/graph.html/graphify-out would otherwise linger forever, undeletable in-app, defeating
- *  the org encryption guarantee. Safe to call on every settingsGet poll and at boot: purgeGraphArtifacts()
- *  is three existsSync calls once the artifacts are gone, and it reports whether it actually removed
- *  anything — which is what keeps the audit line from being written on every poll forever. */
+ *  the org encryption guarantee. Safe to call on every settingsGet poll and at boot: once the artifacts
+ *  are gone, the gateway reports no removals, which keeps the audit line from being written on every poll. */
 function purgeGraphIfEncryptedAndStale(reason: string): void {
-  if (getSettings().encryptTranscripts && purgeGraphArtifacts()) auditLog('graph.purged', { reason })
+  if (!getSettings().encryptTranscripts) return
+  void purgeGraphArtifacts().then((removed) => {
+    if (removed) auditLog('graph.purged', { reason })
+  })
 }
 let lastAppliedManagedSnapshot: string | null = null
 
@@ -5375,13 +5377,14 @@ function registerIpc(): void {
     // At-rest encryption just turned on → purge any previously-built CLEARTEXT knowledge graph so it
     // can't leak meeting topics/entities the encryption is meant to protect. (Builds are already
     // blocked while encryption is on, so no graph will be regenerated until it's turned back off.)
-    if (!wasEncrypted && next.encryptTranscripts && purgeGraphArtifacts()) {
-      auditLog('graph.purged', { reason: 'encryption-enabled' })
+    if (!wasEncrypted && next.encryptTranscripts) {
+      const purged = await purgeGraphArtifacts()
+      if (purged) auditLog('graph.purged', { reason: 'encryption-enabled' })
     }
     // publishBrainPages turned off → the wiki mirror is derived-never-canonical, so delete it outright
     // (audit-logged). Turned on → materialize it right away instead of waiting for the next meeting/merge.
     if (cur.publishBrainPages && !next.publishBrainPages) {
-      const r = removeWiki(next)
+      const r = await removeWiki(next)
       auditLog('brain.publish.disabled', { ok: r.ok })
     } else if ('publishBrainPages' in p && next.publishBrainPages && !cur.publishBrainPages) {
       // Materialize the wiki ONLY when the user EXPLICITLY turned publishing on in THIS patch (it has
@@ -6816,7 +6819,7 @@ function registerIpc(): void {
     const { response } = win ? await dialog.showMessageBox(win, dialogOpts) : await dialog.showMessageBox(dialogOpts)
     if (response !== 0) return { ok: false, error: 'cancelled' }
     const result = await deleteAllMeetings()
-    purgeGraphArtifacts() // legacy userData/graph artifacts + the runner's graphify-out/ manifest
+    await purgeGraphArtifacts() // legacy userData/graph artifacts + the runner's graphify-out/ manifest
     const settings = getSettings()
     const brainPurge = purgeBrain(settings, { mode: 'erase' }) // the `.brain/` knowledge store — entities, quotes, graph
     // The wiki mirror is that same derived knowledge in CLEARTEXT (publish.ts writes it with
@@ -6824,7 +6827,7 @@ function registerIpc(): void {
     // meeting, person and open commitment behind — and, with the brain gone, one nothing can ever prune.
     // Unconditional, not gated on publishBrainPages: a mirror survives the publish OFF edge whenever that
     // removal failed, and this promise is "everything", not "everything currently enabled".
-    const wiki = removeWiki(getSettings())
+    const wiki = await removeWiki(getSettings())
     auditLog('transcript.deleted', {
       bulk: true,
       deleted: result.deleted,
@@ -8895,7 +8898,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.graphifyOpenGraph, async (e) => {
     assertMainWindow(e)
     if (!requireAuth()) return ''
-    const html = graphHtml()
+    const html = await graphHtml()
     if (!html) return ''
     await shell.openPath(html)
     return html
