@@ -19,7 +19,8 @@ const lock = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8')) a
 const experience = [
   'src/renderer/src/features/onboarding-experience/OnboardingExperience.tsx',
   'src/renderer/src/features/onboarding-experience/OnboardingExperienceLayout.tsx',
-  'src/renderer/src/features/onboarding-experience/onboarding-scenes.tsx'
+  'src/renderer/src/features/onboarding-experience/onboarding-scenes.tsx',
+  'src/renderer/src/features/onboarding-experience/onboarding-setup.' + 'tsx'
 ].map((file) => readFileSync(join(root, file), 'utf8')).join('\n')
 const app = readFileSync(join(root, 'src/renderer/src/App.tsx'), 'utf8')
 const index = readFileSync(join(root, 'src/main/index.ts'), 'utf8')

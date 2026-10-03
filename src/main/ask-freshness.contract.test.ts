@@ -15,7 +15,7 @@ import { createListeningStateHandler } from './listening-state-ipc'
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const appSrc = readFileSync(join(__dirname, '..', 'renderer', 'src', 'App.tsx'), 'utf8')
 const onboardingSrc = readFileSync(
-  join(__dirname, '..', 'renderer', 'src', 'components', 'OnboardingExperience.tsx'),
+  join(__dirname, '..', 'renderer', 'src', 'features', 'onboarding-experience', 'OnboardingExperience.tsx'),
   'utf8'
 )
 

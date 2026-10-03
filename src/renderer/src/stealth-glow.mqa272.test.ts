@@ -26,7 +26,7 @@ const read = (...p: string[]): string =>
   readFileSync(join(__dirname, ...p), 'utf8').replace(/\r\n/g, '\n')
 
 const css = readAppCss()
-const barSrc = read('components', 'Bar.tsx')
+const barSrc = read('features', 'bar', 'Bar.tsx')
 const appSrc = read('App.tsx')
 
 describe('MQA-272 — the invisible-state overlay shows a multi-colour glow, not a bare hairline', () => {

@@ -284,7 +284,7 @@
     "src/renderer/src/lib/onboarding-demo-clock.test.ts": 3,
     "src/renderer/src/lib/onboarding-demo.mqa277.test.ts": 1,
     "src/renderer/src/lib/onboarding-hero-video.test.ts": 8,
-    "src/renderer/src/lib/onboarding-kinetic-grid.test.ts": 11,
+    "src/renderer/src/lib/onboarding-kinetic-grid.test.ts": 10,
     "src/renderer/src/lib/onboarding-music.test.ts": 4,
     "src/renderer/src/lib/onboarding-portal.test.ts": 6,
     "src/renderer/src/lib/onboarding-quality-bar.test.ts": 5,

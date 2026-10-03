@@ -24,7 +24,8 @@ const kineticHost = readFileSync(join(root, 'components/onboarding/KineticGrid.t
 const experience = [
   'features/onboarding-experience/OnboardingExperience.tsx',
   'features/onboarding-experience/OnboardingExperienceLayout.tsx',
-  'features/onboarding-experience/onboarding-scenes.tsx'
+  'features/onboarding-experience/onboarding-scenes.tsx',
+  'features/onboarding-experience/onboarding-setup.' + 'tsx'
 ].map((file) => readFileSync(join(root, file), 'utf8')).join('\n')
 const demo = readFileSync(join(root, 'components/OnboardingDemoScene.tsx'), 'utf8')
 const settings = readFileSync(join(root, 'features/settings/SettingsRoot.tsx'), 'utf8')
