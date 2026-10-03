@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { representativeSettings, writeRepresentativeProfile } from './profile.mjs'
+import { readArgs, representativeSettings, writeRepresentativeProfile } from './profile.mjs'
 
 function withProfile<T>(fn: (root: string) => T): T {
   const root = mkdtempSync(join(tmpdir(), 'metis-census-profile-'))
@@ -59,6 +59,7 @@ describe('resource census representative profile generator', () => {
 
     expect(settings).toMatchObject({
       overlayLayout: 'bar',
+      overlayPlacement: 'right-edge',
       asrEngine: 'whisper',
       speakerId: { enabled: true },
       localLlm: {
@@ -83,6 +84,45 @@ describe('resource census representative profile generator', () => {
       expect(profile.manifest.layout).toBe('hide')
       expect(persisted.overlayLayout).toBe('hide')
     })
+  })
+
+  it('accepts a trace placement while keeping the representative default right-edge', () => {
+    expect(representativeSettings('/tmp/metis-census-profile').overlayPlacement).toBe('right-edge')
+    expect(representativeSettings('/tmp/metis-census-profile', 1, { placement: 'top-center' }).overlayPlacement).toBe(
+      'top-center'
+    )
+    expect(() => representativeSettings('/tmp/metis-census-profile', 1, { placement: 'bottom-left' })).toThrow(
+      /top-center, right-edge/
+    )
+
+    withProfile((root) => {
+      const profile = writeRepresentativeProfile(root, undefined, { placement: 'top-center' })
+      const persisted = readJson(join(root, 'settings.json'))
+      expect(profile.settings.overlayPlacement).toBe('top-center')
+      expect(persisted.overlayPlacement).toBe('top-center')
+    })
+  })
+
+  it('parses the placement flag without changing default manifest sha256 values', () => {
+    const defaultSettings = representativeSettings('/tmp/metis-census-profile')
+    const explicitDefaultSettings = representativeSettings('/tmp/metis-census-profile', undefined, {
+      placement: 'right-edge'
+    })
+    const defaultSha = withProfile((root) => writeRepresentativeProfile(root).manifest.sha256)
+    const explicitDefaultSha = withProfile((root) =>
+      writeRepresentativeProfile(root, undefined, { placement: 'right-edge' }).manifest.sha256
+    )
+
+    expect(readArgs(['/tmp/profile'])).toEqual({ layout: 'bar', placement: 'right-edge', profileDir: '/tmp/profile' })
+    expect(readArgs(['--placement', 'top-center', '--layout', 'bar', '/tmp/profile'])).toEqual({
+      layout: 'bar',
+      placement: 'top-center',
+      profileDir: '/tmp/profile'
+    })
+    expect(() => readArgs(['--placement'])).toThrow(/--placement requires a value/)
+    expect(defaultSettings).toEqual(explicitDefaultSettings)
+    expect(defaultSha).toBe(explicitDefaultSha)
+    expect(defaultSha).toMatch(/^[a-f0-9]{64}$/)
   })
 
   it('writes a content-free manifest with the approved field allowlist', () => {

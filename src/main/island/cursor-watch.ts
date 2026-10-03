@@ -10,6 +10,7 @@ import type { OverlayLayout } from '@shared/overlay-chrome'
 import { overlayUsesHover } from '@shared/overlay-chrome'
 import type { OverlayPlacement } from '@shared/overlay-placement'
 import { pointInRegion } from '@shared/right-edge-geometry'
+import { RE_REVEAL_DWELL_MS, RE_UNHOVERED_REVEAL_GRACE_MS } from '@shared/right-edge-timing'
 import { HOVER_ISLAND_HEIGHT_MAX_PX, type Rect } from './geometry'
 
 /** Cap leftover 44px slabs so Teams mute at Y=40 still misses. Top edge only: the right-edge reveal band
@@ -48,7 +49,7 @@ export function overlayWatchNeedsRestore(input: {
 /** Poll while hide/island is resting. 16–32ms — one frame-ish, no Accessibility tap. */
 export const CURSOR_WATCH_INTERVAL_MS = 24
 /** Same 150ms intentional-hover threshold as the renderer peek. Native polling must dwell too. Right-edge band. */
-export const CURSOR_REVEAL_DWELL_MS = 150
+export const CURSOR_REVEAL_DWELL_MS = RE_REVEAL_DWELL_MS
 /** OD-23: the top-center notch zone sits under the menu bar the pointer crosses all day, so it needs a
  *  longer rest than the right-edge band before it opens the bar. */
 export const TOP_CENTER_REVEAL_DWELL_MS = 250
@@ -71,7 +72,7 @@ export const OVERLAY_LEAVE_PARK_MS = 800
  * the band and the drawer this long, main reports a leave; the page then applies its own grace and keeps
  * the dock open while a draft or notice forces it.
  */
-export const RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS = 3000
+export const RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS = RE_UNHOVERED_REVEAL_GRACE_MS
 
 /**
  * Revealed Hide/Island + cursor outside the bar and the top-edge strip → park,
