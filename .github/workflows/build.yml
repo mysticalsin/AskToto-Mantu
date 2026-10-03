@@ -74,6 +74,7 @@ jobs:
       - name: Contract fixture drift
         run: |
           node scripts/sync-contract-fixtures.mjs
+          git add -N native-app/MetisKit/Tests/MetisKitTests/Fixtures/contracts
           git diff --exit-code
       - run: npm run typecheck
       # Anti-regression gate: every bug in docs/qa/BUG-LEDGER.md marked FIXED must be pinned by a
