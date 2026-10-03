@@ -127,6 +127,7 @@ import {
 import { createStream } from './llm'
 import { isProxyOperatorFault, isTransient, nextBackoff, stripProxyFaultMarker } from './llm/retry'
 import { classifyExhaustion, type ExhaustionSignal } from './llm/exhaustion'
+import { stripServerAuthoritativeSettingsPatch } from './settings-strip'
 import { isBudgetExhausted, resetHeadroom } from './llm/usage-headroom'
 import {
   isAuthFailure,
@@ -572,7 +573,6 @@ import {
   updateEntityField,
   readFieldProvenance,
   rejectCommitment,
-  isJournalCorruptionBlocked,
   isJournalCorruptionBlockedAsync,
   clearJournalCorruptionLock,
   readCorrectionsJournal,
@@ -589,17 +589,12 @@ import {
 } from './intelligence'
 import {
   loadIndexForStatus as loadBrainIndexForStatus,
-  writeIndex as writeBrainIndex,
   indexUnavailable,
   indexUnavailableAsync,
   indexUnavailableMessage,
-  writeGraph as writeBrainGraph,
   readPerson as readBrainPerson,
-  writePerson as writeBrainPerson,
   readAccount as readBrainAccount,
-  writeAccount as writeBrainAccount,
   readDeal as readBrainDeal,
-  writeDeal as writeBrainDeal,
   listEntities as listBrainEntities,
   loadEntityDisplayNames as loadBrainEntityDisplayNames,
   loadMeetingExtraction as loadBrainMeetingExtraction,
@@ -609,8 +604,7 @@ import {
   restorePreservedBrainIndex,
   deletePreservedBrainIndex,
   setDealOutcome,
-  slugify as brainSlugify,
-  brainDir as brainStoreDir
+  slugify as brainSlugify
 } from './brain/store'
 import { brainStatusCounts, readBrainDashboard } from './brain/dashboard-read'
 import { buildBrainContext } from './brain/context'
@@ -660,6 +654,8 @@ import { createBootWork, type BootWork } from './lifecycle/boot-work'
 import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
 import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
+import { storageAt } from './infra/storage/meetings-storage'
+import { createAppContext } from './app/context'
 import { createResponsivenessTracker } from './infra/observability/responsiveness-tracker'
 import { crashDetail, type CrashKind } from './infra/observability/crash-taxonomy'
 import { createRevealTrace } from './infra/observability/reveal-trace'
@@ -699,7 +695,6 @@ import { resolveCloudSttGatewayId } from './cloud-stt/credentials'
 import { resolveEnterpriseLiveProfile } from '../shared/enterprise-live-profile'
 import { effectiveCloudSttProvider, enforceSttPolicy } from '../shared/cloud-stt-provider'
 import { shouldRecoverCompletedOnboardingExit } from './onboarding-exit-fallback'
-
 import {
   resetLanguageFollow as resetImportLanguageFollow,
   setWhisperImportTierAdmission,
@@ -708,7 +703,6 @@ import {
 } from './whisper-import'
 import { buildPolishPrompt, parsePolishResponse, polishBatches, type PolishLine } from './polish'
 import { detectLanguage as detectTextLanguage } from '@shared/lang-id'
-import type { TranscriptLine } from '@shared/ipc'
 import { pickAudioFile, consumePickedAudio, offerAudioPaths } from './import-audio'
 import {
   ImportJobManager,
@@ -811,7 +805,6 @@ import {
   estimateEmailSummaryMinutes,
   estimateMcpPushMinutes,
   estimateNoteTakingMinutes,
-  estimateSecondBrainMinutes,
   wordsFromTexts
 } from '@shared/time-saved-events'
 import { createOutlookDraft, createOutlookEvent, outlookWriteStatus } from './outlook-write'
@@ -863,7 +856,7 @@ import {
   scheduleRebuild,
   purgeGraphArtifacts
 } from './graphify'
-import { SaveMeetingSchema, SaveNoteSchema, stripProvisionalLines } from '@shared/ipc'
+import { SaveMeetingSchema, SaveNoteSchema, stripProvisionalLines, type TranscriptLine } from '@shared/ipc'
 import {
   PROVIDERS,
   PROVIDER_IDS,
@@ -1434,7 +1427,7 @@ async function sendSourceChunk(jobId: string, bytes: Uint8Array, done: boolean):
       rejectAck(new Error('Import decoder did not acknowledge source audio.'))
     }, 30_000)
     sourceAck = { jobId, resolve: resolveAck, reject: rejectAck, timer }
-    decoderWin!.webContents.send('import-decoder:source-chunk', { jobId, bytes, done })
+    decoderWin!.webContents.send(IPC.importDecoderSourceChunk, { jobId, bytes, done })
   })
 }
 
@@ -1571,7 +1564,7 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
     else await active.loadFile(join(__dirname, '../renderer/decoder.html'))
     if (active.isDestroyed() || decoderWin !== active) throw new Error('Import decoder closed before it started.')
     await ready
-    active.webContents.send('import-decoder:source-start', { jobId: job.jobId, skipThrough })
+    active.webContents.send(IPC.importDecoderSourceStart, { jobId: job.jobId, skipThrough })
     await streamSourceToDecoder(job)
   } catch (error) {
     closeImportDecoder(job.jobId)
@@ -4562,6 +4555,14 @@ const { forceQuit: forceQuitMétis, exitAndRelaunch } = installExitPaths(app, {
   warn: (...args) => mainLog.warn(...args)
 })
 
+// Built once, after `win`, the settings store and sidecar teardown exist; mainWindow reads `win` per call (INV-LAZY).
+const appContext = createAppContext({
+  mainWindow: () => win,
+  settings: { get: getSettings, set: setSettingsWithSpeakerPolicy },
+  audit: auditLog, supervisor: { stopAll: stopAllSidecars }, scheduler: { runAsMaintenance },
+  gateway: () => storageAt(resolveMeetingsFolder(getSettings())), clock: { now: () => Date.now() }
+})
+
 function registerEmergencyForceQuitShortcut(): boolean {
   if (process.platform !== 'darwin') return false
   try {
@@ -5171,56 +5172,9 @@ function registerIpc(): void {
       auditLog('settings.changed', { keys: Object.keys(bootstrap), reason: 'sso_bootstrap' })
       return publicSettings()
     }
-    const p = patch ?? {}
-    // License STATE is server-authoritative: only main's activateLicense/heartbeat (license.ts) may
-    // write it. Without this strip, any renderer code could self-issue an unlimited license with a
-    // plain settings patch ({licenseValid:true, licenseSeatCap:999999}) and defeat the gate once it's
-    // wired. licenseServerUrl + licenseGateEnabled stay writable — those are genuine user inputs.
-    // licenseLease (MQA-282) and trialStartedAt (MQA-281) are the same class of field: only
-    // activateLicense/heartbeat may set the former, only noteQualifyingUse the latter — a renderer patch
-    // must not be able to self-issue a signed-looking lease string or grant itself a fresh trial.
-    for (const k of [
-      'licenseKey',
-      'licenseCompanyName',
-      'licenseSeatCap',
-      'licenseExpiresAt',
-      'licenseValid',
-      'licenseLastValidatedAt',
-      'licenseLease',
-      'trialStartedAt'
-    ]) {
-      if (k in p) delete (p as Record<string, unknown>)[k]
-    }
-    // MCP connection STATE is main-owned for the same reason. IPC.mcpPush deliberately reads the endpoint
-    // from saved settings rather than the payload so "a compromised renderer can't redirect the push to an
-    // attacker-controlled MCP endpoint" (see that handler's own comment) — but a generic settings patch
-    // could rewrite mcpConnections[].endpointUrl and defeat exactly that pin, sending the stored bearer
-    // token (a BidStack/Plane key, or a ClickUp OAuth access token) to any host that passes the SSRF
-    // guard. Every legitimate write already happens in main, inside a handler that re-verifies the
-    // connection first: mcpSaveConnection, mcpClickupConnect and mcpDisconnect. The renderer's own
-    // patch({ mcpConnections }) calls are redundant echoes of what main just persisted, and state.ts's
-    // patch() re-seeds React state from this handler's return value, so dropping the key here costs the
-    // UI nothing. clickupClientId is main-owned too (written only by the DCR step), and so is the M2-0429
-    // Screen Recording history (permissionState): a renderer patch must not fake it to steer the diagnosis.
-    for (const k of ['mcpConnections', 'clickupClientId', 'planeClientId', 'permissionState']) {
-      if (k in p) delete (p as Record<string, unknown>)[k]
-    }
-    // Operator entitlement state (PLAN.md P2.2b #2): only a successful heartbeat
-    // (operator-entitlements-state.ts) may write these — a renderer patch must not self-grant a gated
-    // feature. The license token/jti/last4/exp are main-owned for the same reason mcpConnections is
-    // above: only IPC.operatorLicenseActivate's own parse may set them.
-    for (const k of [
-      'operatorTier',
-      'operatorEntitlements',
-      'operatorIntegrationsVersion',
-      'operatorEntitlementsAt',
-      'operatorLicenseToken',
-      'operatorLicenseJti',
-      'operatorLicenseLast4',
-      'operatorLicenseExpiresAt'
-    ]) {
-      if (k in p) delete (p as Record<string, unknown>)[k]
-    }
+    // Renderer patches lose authoritative fields in one shared helper before this handler adds any
+    // deliberate main-owned resets, such as clearing Operator credentials after an endpoint change.
+    const p = stripServerAuthoritativeSettingsPatch(patch ?? {})
     const cur = getSettings()
     const wasEncrypted = cur.encryptTranscripts
     // Task MI-5 consent gate: turning publishBrainPages ON while transcripts stay encrypted writes
