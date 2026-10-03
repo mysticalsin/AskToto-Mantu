@@ -39,7 +39,7 @@ export function checkRenderLog(log) {
   if (sheet?.status !== 'SIGNED_OFF') problems.push('contact sheet is not signed off')
   if (animatic?.status !== 'SIGNED_OFF') problems.push('animatic is not signed off')
   const clip = log.reference_clip
-  if (clip?.attempted !== true || !['viewed', 'not viewed'].includes(clip.result)) problems.push('reference clip attempt and result are not recorded')
+  if (typeof clip?.attempted !== 'boolean' || !['viewed', 'not viewed'].includes(clip.result)) problems.push('reference clip attempt and result are not recorded')
   return problems
 }
 

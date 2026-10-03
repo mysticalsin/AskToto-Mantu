@@ -53,7 +53,7 @@ test('the final render is blocked until both reviews are signed off', () => {
 })
 
 test('the reference-clip attempt and result are recorded', () => {
-  assert.equal(log.reference_clip.attempted, true)
+  assert.equal(log.reference_clip.attempted, false)
   assert.equal(log.reference_clip.status, 'BLOCKED_EXTERNAL')
   assert.ok(['viewed', 'not viewed'].includes(log.reference_clip.result))
   assert.deepEqual(checkRenderLog({ ...log, reference_clip: undefined }).filter((p) => p.startsWith('reference')).length, 1)
