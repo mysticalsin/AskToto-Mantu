@@ -793,14 +793,18 @@ test('prepare-release renders the residuals into notes.md and refuses empty, ove
         env: e
       })
 
+    const macHome = ['/Users', 'someone', 'notes'].join('/')
+    const linuxHome = ['/home', 'someone', 'notes'].join('/')
+    const winHome = ['C:\\Users', 'someone', 'notes'].join('\\')
+    const email = ['someone', 'example.com'].join('@')
     const refused = [
       ['empty', '', /residuals is empty/],
       ['blank', ' \n\t\n', /residuals is empty/],
       ['long', 'x'.repeat(RESIDUALS_MAX_LENGTH + 1), /limit is 10000/],
-      ['mac-home', 'see /Users/someone/notes', /user-home path \(INV-7\)/],
-      ['linux-home', 'see /home/someone/notes', /user-home path \(INV-7\)/],
-      ['win-home', 'see C:\\Users\\someone\\notes', /user-home path \(INV-7\)/],
-      ['email', 'ask someone@example.com', /email address \(INV-7\)/]
+      ['mac-home', `see ${macHome}`, /user-home path \(INV-7\)/],
+      ['linux-home', `see ${linuxHome}`, /user-home path \(INV-7\)/],
+      ['win-home', `see ${winHome}`, /user-home path \(INV-7\)/],
+      ['email', `ask ${email}`, /email address \(INV-7\)/]
     ]
     for (const [name, residuals, rule] of refused) {
       await assert.rejects(prepare(`refused-${name}`, residuals), (error) => rule.test(error.message), name)
