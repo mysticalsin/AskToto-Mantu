@@ -67,6 +67,7 @@ const WARM_TTFT_BUDGET_MS = 1500
 // The pre-warm is a cold prefill; CPU-only hosted runners need far longer than a laptop's few seconds.
 // A pre-warm that exceeds this is reported as a measured FAIL, never an unhandled exception.
 const PREWARM_TIMEOUT_MS = 240_000
+const SUGGEST_TIMEOUT_MS = 180_000
 const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000
 
 function buildSpawnArgs({ gguf, mmproj }) {
@@ -453,58 +454,71 @@ async function prewarmCall(baseUrl, apiKey, messages, timeoutMs = PREWARM_TIMEOU
 /** The real, timed suggest turn: streamed, SAME prefix as the prewarm call (so cache_prompt actually
  *  reuses slot 0's now-warm KV — mirrors spike2.py's SLOT0-WARM), unsloth-documented sampling defaults
  *  (PLAN.md §3). TTFT = time from request send to the first non-empty content delta. */
-async function streamedSuggestCall(baseUrl, apiKey, messages) {
+async function streamedSuggestCall(baseUrl, apiKey, messages, timeoutMs = SUGGEST_TIMEOUT_MS) {
   const t0 = performance.now()
-  const res = await fetch(`${baseUrl}/v1/chat/completions`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model: 'local',
-      messages,
-      max_tokens: 96,
-      temperature: 0.7,
-      top_p: 0.8,
-      top_k: 20,
-      min_p: 0,
-      id_slot: 0,
-      cache_prompt: true,
-      stream: true
-    }),
-    signal: AbortSignal.timeout(60_000)
-  })
-  if (!res.ok || !res.body) throw new Error(`suggest request failed: HTTP ${res.status}`)
-
   let ttftMs = null
   let finalTimings = null
   let outputChars = 0
-  const reader = res.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  for (;;) {
-    const { value, done } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    let idx
-    while ((idx = buffer.indexOf('\n\n')) !== -1) {
-      const rawEvent = buffer.slice(0, idx)
-      buffer = buffer.slice(idx + 2)
-      for (const line of rawEvent.split('\n')) {
-        if (!line.startsWith('data:')) continue
-        const data = line.slice(5).trim()
-        if (!data || data === '[DONE]') continue
-        let parsed
-        try {
-          parsed = JSON.parse(data)
-        } catch {
-          continue
+  try {
+    const res = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: 'local',
+        messages,
+        max_tokens: 96,
+        temperature: 0.7,
+        top_p: 0.8,
+        top_k: 20,
+        min_p: 0,
+        id_slot: 0,
+        cache_prompt: true,
+        stream: true
+      }),
+      signal: AbortSignal.timeout(timeoutMs)
+    })
+    if (!res.ok || !res.body) throw new Error(`suggest request failed: HTTP ${res.status}`)
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let idx
+      while ((idx = buffer.indexOf('\n\n')) !== -1) {
+        const rawEvent = buffer.slice(0, idx)
+        buffer = buffer.slice(idx + 2)
+        for (const line of rawEvent.split('\n')) {
+          if (!line.startsWith('data:')) continue
+          const data = line.slice(5).trim()
+          if (!data || data === '[DONE]') continue
+          let parsed
+          try {
+            parsed = JSON.parse(data)
+          } catch {
+            continue
+          }
+          const delta = parsed.choices?.[0]?.delta
+          if (delta?.content) {
+            if (ttftMs === null) ttftMs = performance.now() - t0
+            outputChars += delta.content.length
+          }
+          if (parsed.timings) finalTimings = parsed.timings
         }
-        const delta = parsed.choices?.[0]?.delta
-        if (delta?.content) {
-          if (ttftMs === null) ttftMs = performance.now() - t0
-          outputChars += delta.content.length
-        }
-        if (parsed.timings) finalTimings = parsed.timings
       }
+    }
+  } catch (err) {
+    if (err?.name !== 'TimeoutError') throw err
+    return {
+      timedOut: true,
+      reason: 'suggest-timeout',
+      ms: performance.now() - t0,
+      timeoutMs,
+      ...(ttftMs === null ? {} : { ttftMs }),
+      timings: finalTimings,
+      outputChars
     }
   }
   if (ttftMs === null) throw new Error('suggest stream produced no content delta — cannot measure TTFT.')
@@ -564,7 +578,13 @@ async function main() {
     // request arrives — mirrors the realistic gap between a pre-warm ping and the user's actual click.
     await sleep(300)
 
+    console.log(`[prove-local-ttft] suggest timeout: ${SUGGEST_TIMEOUT_MS} ms`)
     const suggestResult = await streamedSuggestCall(baseUrl, apiKey, messages)
+    if (suggestResult.timedOut && suggestResult.ttftMs == null) {
+      console.error(`[prove-local-ttft] FAIL — warm suggest produced no first token within ${suggestResult.timeoutMs} ms.`)
+      if (sidecarChild && !sidecarChild.killed) sidecarChild.kill('SIGKILL')
+      process.exit(1)
+    }
     console.log(
       `[prove-local-ttft] warm suggest stream: ${suggestResult.outputChars} content chars received` +
         (suggestResult.timings
@@ -588,9 +608,17 @@ async function main() {
     // The rock's exact proof line — printed verbatim, on its own line.
     console.log(`warm TTFT: ${Math.round(suggestResult.ttftMs)} ms`)
 
-    exitCode = suggestResult.ttftMs <= WARM_TTFT_BUDGET_MS ? 0 : 1
-    if (exitCode !== 0) {
+    if (suggestResult.timedOut) {
+      exitCode = 1
+      console.error(
+        `[prove-local-ttft] FAIL — warm suggest stream timed out after ${suggestResult.timeoutMs} ms after first token; preserving measured TTFT.`
+      )
+    } else if (suggestResult.ttftMs > WARM_TTFT_BUDGET_MS) {
+      exitCode = 1
       console.error(`[prove-local-ttft] FAIL — warm TTFT ${Math.round(suggestResult.ttftMs)}ms exceeds the ${WARM_TTFT_BUDGET_MS}ms budget.`)
+    } else {
+      exitCode = 0
+      console.log(`[prove-local-ttft] PASS — warm TTFT ${Math.round(suggestResult.ttftMs)}ms is within the ${WARM_TTFT_BUDGET_MS}ms budget.`)
     }
   } finally {
     if (sidecarChild && !sidecarChild.killed) sidecarChild.kill('SIGKILL')
@@ -598,7 +626,7 @@ async function main() {
   process.exit(exitCode)
 }
 
-export { buildSuggestSystemPrompt, prewarmCall, suggestUserText }
+export { buildSuggestSystemPrompt, prewarmCall, streamedSuggestCall, suggestUserText }
 
 // Only run main() when this file is executed directly (`node scripts/prove-local-ttft.mjs`) — NOT when
 // imported (e.g. by prove-local-ttft.systemPrompt.test.ts, which cross-checks buildSuggestSystemPrompt()
