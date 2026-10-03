@@ -36,7 +36,6 @@ export const PLATFORMS = Object.freeze({
     artifacts: (version) => [
       `Metis-Setup-${version}.exe`,
       `Metis-Setup-${version}.exe.blockmap`,
-      `Metis-Portable-${version}.exe`,
       'latest.yml'
     ]
   })

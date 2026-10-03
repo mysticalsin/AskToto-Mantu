@@ -500,6 +500,14 @@ describe('publish-release platform rules (M2-0053)', () => {
     }
   })
 
+  it('refuses a Windows release bundle containing the QA-only Portable exe', async () => {
+    const feed = new FakeFeed()
+    const bundleDir = makeBundle('win', { extra: `Metis-Portable-${VERSION}.exe` })
+
+    await expect(publishPlatform({ platform: 'win', tag: TAG, bundleDir, feed })).rejects.toThrow(/unexpected Windows release asset/)
+    expect(feed.mutations).toEqual([])
+  })
+
   it('maps GitHub release JSON', () => {
     expect(
       toRelease({
