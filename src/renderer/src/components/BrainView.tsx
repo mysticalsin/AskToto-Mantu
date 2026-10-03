@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   ArrowLeft,
@@ -42,19 +42,8 @@ import { INTELLIGENCE_STATUS_UNAVAILABLE, startIntelligenceUpdateFromClick } fro
 import { describeMeetingIndexProgress } from './work-progress'
 import { IntelligenceUpdateButton } from './IntelligenceUpdateButton'
 import { NO_PROVIDER_INDEX_COPY, runIntelligenceUpdateClick } from '../lib/intelligence-update'
+import { VirtualList } from '../ui/VirtualList'
 
-/**
- * Mantu Intelligence — the second-brain dashboard over the meeting knowledge store (.brain/).
- * Two layers, mirroring the store's own epistemics:
- *   FACTUAL — meetings volume, people, accounts by sector, everything traceable to a transcript.
- *   PREDICTIVE — deal win-likelihood bands + velocity signals, always qualitative (never invented
- *   percentages) and always carrying the evidence line the judgement was grounded in.
- * Charts follow the dataviz discipline: single-hue bars for magnitude, status colors only for state
- * (with icon + label, never color alone), thin marks, text in ink tokens.
- */
-
-// 'mixed' status amber reuses the shared warning token; success/danger reuse the app's semantic
-// tokens so the dashboard stays inside the frozen visual language.
 const MIXED_COLOR = 'var(--color-warn)'
 
 const BAND_META: Record<Band, { label: string; color: string; Icon: typeof TrendingUp }> = {
@@ -305,7 +294,7 @@ function SectorBars({ sectors }: { sectors: { sector: string; n: number }[] }): 
   )
 }
 
-function DealRow({
+export const DealRow = memo(function DealRow({
   deal,
   onSetOutcome,
   onOpenRecord,
@@ -320,9 +309,6 @@ function DealRow({
   const vel = VELOCITY_META[deal.velocity.signal]
   const last = deal.meetings[deal.meetings.length - 1]
   const closed = deal.outcome !== 'open'
-  // Won/Lost unmounts those buttons in favor of a Chip + "Reopen" — hand keyboard focus to Reopen
-  // on that transition so it doesn't fall through to <body>. Guarded so it only fires on the actual
-  // open→closed transition, not on initial mount of an already-closed deal.
   const reopenRef = useRef<HTMLButtonElement>(null)
   const wasClosedRef = useRef(closed)
   useEffect(() => {
@@ -363,7 +349,6 @@ function DealRow({
               color={deal.outcome === 'won' ? 'var(--color-success)' : 'var(--color-danger)'}
               Icon={deal.outcome === 'won' ? TrendingUp : AlertTriangle}
             />
-            {/* Human closes the loop, human can reopen it — mirrors the ledger's kept/broken flow. */}
             <button
               type="button"
               ref={reopenRef}
@@ -381,7 +366,6 @@ function DealRow({
               <Chip label="No read" color="var(--color-ink-3)" Icon={HelpCircle} />
             )}
             <Chip label={vel.label} color={vel.color} Icon={vel.Icon} title={deal.velocity.evidence || undefined} />
-            {/* Outcome — never set by the LLM. A human marking a deal won/lost is the only writer. */}
             <span className="flex shrink-0 items-center gap-0.5">
               <button
                 type="button"
@@ -415,7 +399,52 @@ function DealRow({
       )}
     </div>
   )
-}
+})
+
+const PersonRow = memo(function PersonRow({
+  person,
+  onOpenRecord
+}: {
+  person: BrainRead['people'][number]
+  onOpenRecord: (kind: EntityKind, id: string) => void
+}): JSX.Element {
+  const kept = (person.commitments ?? []).filter((c) => c.status === 'kept').length
+  const broken = (person.commitments ?? []).filter((c) => c.status === 'broken').length
+  return (
+    <div className="flex items-center gap-2 text-[12px]">
+      <span className="min-w-0 flex-1 truncate text-[color:var(--color-ink-2)]">
+        <button
+          type="button"
+          onClick={() => onOpenRecord('person', person.id)}
+          className="no-drag focus-ring rounded font-semibold text-[color:var(--color-ink)] hover:underline"
+        >
+          {person.name}
+        </button>
+        {(person.role || person.account) && (
+          <span className="text-[color:var(--color-ink-3)]">
+            {' '}
+            {[person.role, person.account].filter(Boolean).join(' @ ')}
+          </span>
+        )}
+      </span>
+      {kept + broken > 0 && (
+        <span
+          className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold"
+          title={`${kept} kept, ${broken} broken (settled promises only)`}
+          style={{
+            color: broken > kept ? 'var(--color-danger)' : 'var(--color-success)',
+            background: 'rgba(255,255,255,0.05)'
+          }}
+        >
+          kept {kept}/{kept + broken}
+        </span>
+      )}
+      <span className="shrink-0 rounded-full bg-white/[0.05] px-2 py-0.5 text-[10px] font-semibold text-[color:var(--color-ink-3)]">
+        {person.meetings.length}×
+      </span>
+    </div>
+  )
+})
 
 const BAND_ORDER: Record<string, number> = { concerning: 0, mixed: 1, good: 2 }
 
@@ -678,7 +707,7 @@ export function BrainView({
   }, [data])
 
   const people = useMemo(
-    () => [...(data?.people ?? [])].sort((a, b) => b.meetings.length - a.meetings.length).slice(0, 6),
+    () => [...(data?.people ?? [])].sort((a, b) => b.meetings.length - a.meetings.length),
     [data]
   )
 
@@ -1298,17 +1327,24 @@ export function BrainView({
           {deals.length > 0 && (
             <div>
               <SectionTitle>Opportunities: win read &amp; momentum</SectionTitle>
-              <div className="flex flex-col gap-1.5">
-                {deals.map((d) => (
-                  <DealRow
-                    key={d.name + d.account}
-                    deal={d}
-                    onSetOutcome={handleSetDealOutcome}
-                    onOpenRecord={openRecord}
-                    accountIdByName={accountIdByName}
-                  />
-                ))}
-              </div>
+              <VirtualList
+                items={deals}
+                getKey={(deal) => `deal:${deal.id}`}
+                estimateSize={(deal) => (deal.band_evidence && deal.outcome === 'open' ? 94 : 70)}
+                className="scroll-thin h-[min(520px,60vh)] overflow-y-auto"
+                contentClassName="pr-1"
+                ariaLabel="Opportunities"
+                renderItem={({ item, style, measureRef }) => (
+                  <div key={item.id} ref={measureRef} style={style} className="pb-1.5">
+                    <DealRow
+                      deal={item}
+                      onSetOutcome={handleSetDealOutcome}
+                      onOpenRecord={openRecord}
+                      accountIdByName={accountIdByName}
+                    />
+                  </div>
+                )}
+              />
             </div>
           )}
 
@@ -1319,58 +1355,22 @@ export function BrainView({
                 <Users size={11} className="mr-1 inline" />
                 People you meet
               </SectionTitle>
-              <div className="flex flex-col gap-1">
-                {people.map((p) => (
-                  <div key={p.name} className="flex items-center gap-2 text-[12px]">
-                    <span className="min-w-0 flex-1 truncate text-[color:var(--color-ink-2)]">
-                      <button
-                        type="button"
-                        onClick={() => openRecord('person', p.id)}
-                        className="no-drag focus-ring rounded font-semibold text-[color:var(--color-ink)] hover:underline"
-                      >
-                        {p.name}
-                      </button>
-                      {(p.role || p.account) && (
-                        <span className="text-[color:var(--color-ink-3)]">
-                          {' '}
-                          {[p.role, p.account].filter(Boolean).join(' @ ')}
-                        </span>
-                      )}
-                    </span>
-                    {/* Kept-promise reliability — only settled promises count (kept vs broken);
-                        open ones prove nothing yet. Shown only once at least one is settled. */}
-                    {(() => {
-                      const kept = (p.commitments ?? []).filter((c) => c.status === 'kept').length
-                      const broken = (p.commitments ?? []).filter((c) => c.status === 'broken').length
-                      if (kept + broken === 0) return null
-                      return (
-                        <span
-                          className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold"
-                          title={`${kept} kept, ${broken} broken (settled promises only)`}
-                          style={{
-                            color: broken > kept ? 'var(--color-danger)' : 'var(--color-success)',
-                            background: 'rgba(255,255,255,0.05)'
-                          }}
-                        >
-                          kept {kept}/{kept + broken}
-                        </span>
-                      )
-                    })()}
-                    <span className="shrink-0 rounded-full bg-white/[0.05] px-2 py-0.5 text-[10px] font-semibold text-[color:var(--color-ink-3)]">
-                      {p.meetings.length}×
-                    </span>
+              <VirtualList
+                items={people}
+                getKey={(person) => `person:${person.id}`}
+                estimateSize={() => 34}
+                className="scroll-thin h-[min(320px,45vh)] overflow-y-auto"
+                contentClassName="pr-1"
+                ariaLabel="People you meet"
+                renderItem={({ item, style, measureRef }) => (
+                  <div key={item.id} ref={measureRef} style={style} className="pb-1">
+                    <PersonRow person={item} onOpenRecord={openRecord} />
                   </div>
-                ))}
-              </div>
+                )}
+              />
             </div>
           )}
 
-          {/* MI-2.5 review round 3: "Corrections paused" — always shown ABOVE the lint list (which is
-              sliced to 5 and could otherwise push this off-screen). Covers a durable corruption lock
-              (status.corruptionBlocked → offer the in-app "Reset corrections lock" recovery) and/or a
-              failed rebuild replay (index.replayError, surfaced distinctly here rather than lost in the
-              lint slice). The replay-failure warning string is filtered out of the lint list below to
-              avoid duplication. */}
           {(status?.corruptionBlocked || data?.index.replayError) && (
             <div className="rounded-xl border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 px-3 py-2.5">
               <SectionTitle>
