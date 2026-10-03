@@ -16,7 +16,8 @@ import {
 } from '@shared/providers'
 import type { TranscriptLine } from '@shared/ipc'
 import { localFallbackEligibleFor, localPrimaryEligibleFor, resolveRoutingMode } from './llm/local-routing'
-import { resolvePortalCloudflareModel } from '@shared/ask-routing'
+import { CLI_PROVIDER_IDS, resolvePortalCloudflareModel } from '@shared/ask-routing'
+import { narrowAllowedForCapability, resolveManagedModel } from './model-policy-client'
 import { createStream } from './llm'
 import type { ImportJob } from './import-jobs'
 import { localImportRecapProblem } from './import-recap-validation'
@@ -103,7 +104,7 @@ export function pickImportRecapCandidates(
   settings: Settings,
   gate: ImportRecapProviderGate
 ): ProviderId[] {
-  const allowed = gate.getAllowedProviders()
+  const allowed = narrowAllowedForCapability(settings, gate.getAllowedProviders(), 'recap', [...CLI_PROVIDER_IDS, 'local'])
   const localSummaryReady = localPrimaryEligibleFor({ mode: 'summary' }, settings, IMPORT_RECAP_TIER, allowed)
   const localFallbackReady =
     !localSummaryReady && localFallbackEligibleFor({ mode: 'summary' }, settings, IMPORT_RECAP_TIER, allowed)
@@ -210,9 +211,12 @@ export async function runImportedRecap(
       history: []
     }
     const rawModel = importRecapModel(provider, settings)
-    const model = viaOperator && provider === 'cloudflare'
+    const preManagedModel = viaOperator && provider === 'cloudflare'
       ? resolvePortalCloudflareModel(rawModel, IMPORT_RECAP_TIER)
       : rawModel
+    // M2-0412: fleet policy pins the final model for a provider it governs, same as the ask/ingest
+    // paths — applied last so it can override the legacy hardcoded Cloudflare pin above.
+    const model = !local && def.kind !== 'cli' ? resolveManagedModel(settings, 'recap', provider, preManagedModel) : preManagedModel
     try {
       const recap = await new Promise<string>((resolveRecap, rejectRecap) => {
         let text = ''

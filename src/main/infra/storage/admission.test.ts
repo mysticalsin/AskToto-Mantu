@@ -11,9 +11,29 @@ afterEach(() => {
   // test unless cleared explicitly here too.
   vi.restoreAllMocks()
   vi.clearAllMocks()
+  vi.useRealTimers()
 })
 
-/** admission.ts has no timers of its own: acquire()/run() settle on plain microtasks. Races `pending`
+/** Fake timers whose clock also drives performance.now(), the clock admission.ts ages calls by. */
+function fakeClock(): void {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+}
+
+/** A call run under a held permit that settles only when the test says so. */
+function hold(admission: ReturnType<typeof createAdmission>): { running: Promise<string>; settle: () => Promise<void> } {
+  let resolve: (value: string) => void = () => {}
+  const running = admission.run(() => new Promise<string>((r) => (resolve = r)))
+  return {
+    running,
+    settle: async () => {
+      resolve('done')
+      await running
+    }
+  }
+}
+
+/** acquire()/run() settle on plain microtasks; admission.ts's only timer refuses queued waiters once every
+ *  permit turns stuck, which the tests that need it drive with fakeClock(). Races `pending`
  *  against an already-resolved sentinel so a genuinely pending promise reports 'pending' without ever
  *  hanging the test. */
 async function peek<T>(pending: Promise<T>): Promise<T | 'pending'> {
@@ -152,6 +172,81 @@ describe('createAdmission', () => {
     resolveB('done')
     await runningB
     expect(mainLog.info).toHaveBeenCalledTimes(1) // the episode was already closed; settling B logs nothing more
+  })
+
+  it('refuses the metadata waiters already queued the moment every permit turns stuck, not at their own deadline (M2-0193)', async () => {
+    fakeClock()
+    const admission = createAdmission(2)
+    await expect(admission.acquire('content', signal())).resolves.toBe('admitted')
+    await expect(admission.acquire('content', signal())).resolves.toBe('admitted')
+    const a = hold(admission) // starts at 0
+    await vi.advanceTimersByTimeAsync(500)
+    const b = hold(admission) // starts at 500: every permit is stuck from 2 500
+
+    const metadata = admission.acquire('metadata', signal())
+    const content = admission.acquire('content', signal())
+    await vi.advanceTimersByTimeAsync(1_999) // 2 499: b has run 1 999 ms
+    expect(await peek(metadata)).toBe('pending')
+    expect(await peek(content)).toBe('pending')
+    expect(mainLog.warn).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(1) // 2 500
+    await expect(metadata).resolves.toBe('refused')
+    expect(await peek(content)).toBe('pending') // a content waiter waits on to its own deadline
+    expect(mainLog.warn).toHaveBeenCalledTimes(1)
+    expect(mainLog.warn).toHaveBeenCalledWith(expect.any(String), { capacity: 2 })
+
+    // The refused waiter holds nothing: a's permit goes to the content waiter, b's back to the free count.
+    await a.settle()
+    await expect(content).resolves.toBe('admitted')
+    await b.settle()
+    admission.release() // the content waiter's permit
+    expect(mainLog.info).toHaveBeenCalledTimes(1)
+    await expect(admission.acquire('content', signal())).resolves.toBe('admitted')
+    await expect(admission.acquire('content', signal())).resolves.toBe('admitted')
+    expect(await peek(admission.acquire('content', signal()))).toBe('pending')
+  })
+
+  it('hands a slow call\'s permit to a content waiter queued before every permit turned stuck (M2-0193)', async () => {
+    fakeClock()
+    const admission = createAdmission(2)
+    await expect(admission.acquire('content', signal())).resolves.toBe('admitted')
+    await expect(admission.acquire('content', signal())).resolves.toBe('admitted')
+    const a = hold(admission) // a read slowed by a scan of a fresh save
+    hold(admission) // never settles
+
+    const content = admission.acquire('content', signal())
+    await vi.advanceTimersByTimeAsync(2_000) // every permit is stuck; nothing is refused yet
+    expect(await peek(content)).toBe('pending')
+    await expect(admission.acquire('content', signal())).resolves.toBe('refused') // a new request is
+
+    await vi.advanceTimersByTimeAsync(500)
+    await a.settle() // the slow read settles within the waiter's own deadline
+    await expect(content).resolves.toBe('admitted')
+  })
+
+  it('keeps a waiter queued while a permit changes hands before turning stuck, and refuses it once the new call does (M2-0193)', async () => {
+    fakeClock()
+    const admission = createAdmission(2)
+    await expect(admission.acquire('content', signal())).resolves.toBe('admitted')
+    await expect(admission.acquire('content', signal())).resolves.toBe('admitted')
+    const a = hold(admission) // starts at 0
+    hold(admission) // starts at 0 and never settles
+
+    const first = admission.acquire('metadata', signal())
+    await vi.advanceTimersByTimeAsync(1_000)
+    await a.settle() // at 1 000 the permit goes to the waiter, which runs a call that never settles
+    await expect(first).resolves.toBe('admitted')
+    hold(admission) // starts at 1 000
+
+    const second = admission.acquire('metadata', signal())
+    await vi.advanceTimersByTimeAsync(1_999) // 2 999: the first call is stuck, the newest has run 1 999 ms
+    expect(await peek(second)).toBe('pending')
+    expect(mainLog.warn).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(1) // 3 000
+    await expect(second).resolves.toBe('refused')
+    expect(mainLog.warn).toHaveBeenCalledTimes(1)
   })
 
   it('refuses at once when MAX_QUEUED requests already wait', async () => {
