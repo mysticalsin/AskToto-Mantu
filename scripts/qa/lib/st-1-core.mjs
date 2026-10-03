@@ -271,8 +271,16 @@ export function syntheticDatalessPlan() {
  *  BOOT_WINDOW_VARIANTS, M2-0516). An ST-1 run always launches 'shipped'. */
 export const WINDOW_VARIANTS = ['shipped', 'spellcheck-off', 'paint-when-hidden', 'prewarm-spellchecker']
 
+export const WINDOW_MEASURED_VARIANT_ORDER = ['spellcheck-off', 'paint-when-hidden', 'prewarm-spellchecker', 'shipped']
+
 /** The only purpose besides ST-1 itself: a short launch that measures the window constructor under one variant. */
 export const WINDOW_CONSTRUCTION = 'window-construction'
+
+/** The two boot-window chromes ST-1 measures: first-run onboarding and onboarded transparent overlay. */
+export const WINDOW_CHROMES = ['opaque', 'transparent']
+
+/** The window-construction gate's measured repeats per variant/chrome after warm-up. */
+export const WINDOW_MEASURED_REPEATS = 2
 
 /**
  * `--purpose` and `--window-variant`, checked: `{ purpose, windowVariant }` or `{ error }`. Without a purpose the
@@ -305,6 +313,106 @@ export const WINDOW_STAGE_BUDGET_MS = 250
 /** The boot stages the window-construction gate holds to its budget. */
 export const GATED_WINDOW_STAGES = ['createWindow.prewarm', 'createWindow.construct']
 
+/** The window gate carries the CI run IDs that triggered this ticket, but not a cause until the artifacts give
+ *  per-launch, per-stage numbers. A summary like "over 250" is not a measurement and must not become evidence. */
+export const WINDOW_CONSTRUCTION_ROOT_CAUSE = {
+  classification: 'UNKNOWN',
+  evidenceRuns: ['36999698235', '37080909059'],
+  evidence: [
+    {
+      run: '36999698235',
+      measured: [],
+      summary: 'no artifact-backed per-launch stage timings are recorded in this source revision'
+    },
+    {
+      run: '37080909059',
+      measured: [],
+      summary: 'the cited threshold result is not a numeric per-launch stage measurement'
+    }
+  ],
+  fix: 'unresolved until artifact-backed numbers identify a harness step or an app first-window cost; the 250 ms gate remains unchanged',
+  leadAction:
+    'LEAD_ACTION: read qa-candidate runs 36999698235 and 37080909059, artifact st-1-macos-window/st1-report/window-gate.json plus st1-report/window-*/window-*.json; record every launch, variant, chrome, warmup flag, stage and numeric ms before classifying the cause; then dispatch qa-candidate three times on m2/integration-equivalent bytes and confirm st-1-macos-window/st1-report/window-gate.json has pass: true with budgetMs: 250 each time'
+}
+
+/** The CI launch order for window construction. The shipped warm-up launches keep the original first-run
+ * profile setup ahead of the measured rotation; measured repeats stay interleaved by repeat, variant and chrome,
+ * with shipped measured last in each repeat. */
+export function windowConstructionPlan({ variants = WINDOW_MEASURED_VARIANT_ORDER, chromes = WINDOW_CHROMES, repeats = WINDOW_MEASURED_REPEATS } = {}) {
+  const repeatNumbers = Array.from({ length: repeats }, (_, i) => i + 1)
+  return [
+    ...chromes.map((chrome) => ({ name: `window-warmup-shipped-${chrome}`, variant: 'shipped', chrome, warmup: true })),
+    ...repeatNumbers.flatMap((repeat) =>
+      variants.flatMap((variant) => chromes.map((chrome) => ({ name: `window-${variant}-${chrome}-${repeat}`, variant, chrome, repeat, warmup: false })))
+    )
+  ]
+}
+
+function launchNameFromReportPath(name) {
+  // The workflow writes one report below each launch directory, so the directory name is the launch key.
+  const [head] = String(name).split(/[\\/]/)
+  return head || String(name)
+}
+
+function windowLaunchStageRows(reports) {
+  return reports.flatMap(({ name, report }) => {
+    if (report?.purpose !== WINDOW_CONSTRUCTION) return []
+    const stages = Array.isArray(report.bootStages?.stages) ? report.bootStages.stages : []
+    const launchVariant = report.windowVariant ?? stages.find((entry) => typeof entry.windowVariant === 'string')?.windowVariant ?? null
+    if (stages.length === 0) {
+      return [{
+        report: name,
+        launch: launchNameFromReportPath(name),
+        variant: launchVariant,
+        warmup: report.warmup === true,
+        stage: null,
+        chrome: null,
+        ms: null
+      }]
+    }
+    return stages.map((entry) => {
+      const chrome = entry.transparent === true ? 'transparent' : entry.transparent === false ? 'opaque' : null
+      return {
+        report: name,
+        launch: launchNameFromReportPath(name),
+        variant: launchVariant,
+        warmup: report.warmup === true,
+        stage: entry.stage,
+        chrome,
+        ms: entry.ms
+      }
+    })
+  })
+}
+
+function windowLaunchSummaries(rows) {
+  const launches = new Map()
+  for (const row of rows) {
+    const key = row.launch
+    const launch =
+      launches.get(key) ??
+      {
+        launch: row.launch,
+        variant: row.variant,
+        chrome: row.chrome,
+        warmup: row.warmup,
+        stages: [],
+        gatedStages: [],
+        maxStageMs: null
+      }
+    if (launch.chrome === null && row.chrome !== null) launch.chrome = row.chrome
+    const stage = { stage: row.stage, ms: row.ms }
+    launch.stages.push(stage)
+    if (GATED_WINDOW_STAGES.includes(row.stage)) launch.gatedStages.push(stage)
+    if (typeof row.ms === 'number') launch.maxStageMs = Math.max(launch.maxStageMs ?? Number.NEGATIVE_INFINITY, row.ms)
+    launches.set(key, launch)
+  }
+  return Array.from(launches.values()).map((launch) => ({
+    ...launch,
+    maxStageMs: launch.maxStageMs === Number.NEGATIVE_INFINITY ? null : launch.maxStageMs
+  }))
+}
+
 /**
  * The window-construction gate (M2-0519) over a set of window-construction reports: `{ pass, rows, failures }`.
  * Only the shipped variant is gated; marked warm-ups and the other variants stay report-only. It fails unless
@@ -315,6 +423,7 @@ export const GATED_WINDOW_STAGES = ['createWindow.prewarm', 'createWindow.constr
  * @param {Array<{ name: string, report: any }>} reports
  */
 export function windowConstructionGate(reports, budgetMs = WINDOW_STAGE_BUDGET_MS) {
+  const launches = windowLaunchStageRows(reports)
   const rows = []
   const failures = []
   const chromes = new Set()
@@ -330,7 +439,7 @@ export function windowConstructionGate(reports, budgetMs = WINDOW_STAGE_BUDGET_M
       for (const entry of found) {
         const chrome = entry.transparent === true ? 'transparent' : entry.transparent === false ? 'opaque' : null
         if (chrome) chromes.add(chrome)
-        rows.push({ report: name, stage, chrome, ms: entry.ms })
+        rows.push({ report: name, launch: launchNameFromReportPath(name), variant: report.windowVariant ?? null, stage, chrome, ms: entry.ms })
         if (typeof entry.ms !== 'number') failures.push(`${name}: ${stage} has no measured ms`)
         else if (entry.ms >= budgetMs) failures.push(`${name}: ${stage} ${entry.ms} ms >= ${budgetMs} ms`)
         if (!chrome) failures.push(`${name}: ${stage} does not say which chrome it built`)
@@ -340,7 +449,16 @@ export function windowConstructionGate(reports, budgetMs = WINDOW_STAGE_BUDGET_M
   for (const chrome of ['opaque', 'transparent']) {
     if (shipped.length > 0 && !chromes.has(chrome)) failures.push(`no shipped ${chrome} window was measured`)
   }
-  return { pass: failures.length === 0, budgetMs, skippedWarmups: warmups.length, rows, failures }
+  return {
+    pass: failures.length === 0,
+    budgetMs,
+    skippedWarmups: warmups.length,
+    rootCause: WINDOW_CONSTRUCTION_ROOT_CAUSE,
+    launches,
+    launchSummaries: windowLaunchSummaries(launches),
+    rows,
+    failures
+  }
 }
 
 /** The app's own native boot stage timings (tray stages, window construction, navigation and first show): every
