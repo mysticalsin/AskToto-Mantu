@@ -41,6 +41,8 @@ const RIGHT_EDGE = Object.freeze({
 })
 /** Right-edge only (src/main/island/cursor-watch.ts RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS). */
 const RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS = 3000
+/** Hold an off-band cursor long enough for main's polling watch to sample the leave on hosted runners. */
+export const RIGHT_EDGE_LATCH_RELEASE_SAMPLE_MS = 600
 /** Mirrors src/shared/right-edge-timing.ts RE_TYPING_PIN_MS; a unit test holds the two equal. */
 export const RIGHT_EDGE_TYPING_PIN_MS = 8000
 // Hold the parked band long enough for a late native frame change to land inside RE-HIDE-3's assertion.
@@ -491,19 +493,27 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     const hideVisible = await hideControl().isVisible()
     await hideControl().click({ timeout: 5_000 })
     const byControl = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', 'hide'), 3_000)
-    await leaveTo(awayPoint(byControl.observed.win), 100)
+    const controlAwayReads = await leaveTo(awayPoint(byControl.observed.win), RIGHT_EDGE_LATCH_RELEASE_SAMPLE_MS)
     const reopened = await revealAtEdge()
     const keptAfterControl = reopened.page.draft === draft
     await composer().focus()
     await page.keyboard.press('Escape')
     const byEscape = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', 'hide'), 3_000)
-    await leaveTo(awayPoint(byEscape.observed.win), 100)
+    const escapeAwayReads = await leaveTo(awayPoint(byEscape.observed.win), RIGHT_EDGE_LATCH_RELEASE_SAMPLE_MS)
     const reopenedAgain = await revealAtEdge()
     const keptAfterEscape = reopenedAgain.page.draft === draft
     await composer().fill('')
     return {
       pass: hideVisible && byControl.ok && keptAfterControl && byEscape.ok && keptAfterEscape,
-      evidence: { hideVisibleWithDraft: hideVisible, parkedByControl: byControl.ok, draftKeptAfterControl: keptAfterControl, parkedByEscape: byEscape.ok, draftKeptAfterEscape: keptAfterEscape }
+      evidence: {
+        hideVisibleWithDraft: hideVisible,
+        parkedByControl: byControl.ok,
+        controlAwayCursorReads: controlAwayReads,
+        draftKeptAfterControl: keptAfterControl,
+        parkedByEscape: byEscape.ok,
+        escapeAwayCursorReads: escapeAwayReads,
+        draftKeptAfterEscape: keptAfterEscape
+      }
     }
   })
 
@@ -516,7 +526,7 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     await wait(600)
     const after600 = await observe()
     const latched = rightEdgeStateMatches(after600, 'parked', 'hide')
-    const awayReads = await leaveTo(awayPoint(revealed.win), 150)
+    const awayReads = await leaveTo(awayPoint(revealed.win), RIGHT_EDGE_LATCH_RELEASE_SAMPLE_MS)
     await setCursor(edgePoint(revealed.win))
     const released = await waitUntil((o) => rightEdgeStateMatches(o, 'revealed'), 2_000)
     return {
