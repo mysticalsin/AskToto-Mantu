@@ -64,6 +64,7 @@ function host(settings: Record<string, unknown>) {
       run: vi.fn((req: { mode: string }) => { events.push(`recap:${req.mode}`); return 'run-1' }),
       clear: vi.fn(() => events.push('clear'))
     },
+    MEETING_SUMMARY_REPLAY_PROMPT: 'Summarize this meeting.',
     settings,
     mode: 'meeting',
     isDustReady: () => false,

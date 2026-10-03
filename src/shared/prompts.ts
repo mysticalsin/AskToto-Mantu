@@ -354,6 +354,13 @@ ${transcript.slice(-4000)}
 """`
 }
 
+export function buildNoDecisionPromptForTranscript(): string {
+  return `You are Métis. This meeting sounds like it is about to end with no decision and no owned next step. Give me exactly two short lines, nothing else:
+NUDGE: one blunt sentence naming the risk (we end with nothing owned), tied to what this meeting was actually about.
+SAY THIS: one natural line I can say out loud right now that locks one concrete next step with a named owner and a specific date, built from something actually discussed. Name the deliverable. If no one else fits, make me the owner. Give a real day, not "soon". Keep it under 25 words so I can say it in one breath.
+Ground both lines in the live transcript; invent nothing. No preamble, no labels beyond NUDGE and SAY THIS, no third line.`
+}
+
 /**
  * Proactive "read the room" prompt for the Assist button.
  * The model should output two short sentences: (a) what is being discussed right now,

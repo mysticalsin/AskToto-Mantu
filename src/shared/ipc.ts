@@ -808,7 +808,7 @@ const AskStartBaseSchema = z.object({
   localSessionId: z.string().uuid().optional(),
   /** Bounded evidence from the packaged local vision worker. */
   visionEvidence: LocalVisionEvidenceSchema.optional(),
-  /** raw transcript text for suggest mode */
+  /** Raw transcript/context text. Main owns prompt assembly and wraps it as untrusted context. */
   transcript: z.string().optional(),
   /** 'deeper' = the user tapped "Go deeper" → re-ask for a fuller answer (injected per-turn, never cached) */
   depth: z.enum(['deeper']).optional(),
