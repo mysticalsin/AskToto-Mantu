@@ -8281,7 +8281,6 @@ function registerIpc(): void {
     return r
   })
 
-  // --- Mantu Intelligence brain (see src/main/brain/) ---
   ipcMain.handle(IPC.brainOpenDashboard, (e) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
@@ -8385,7 +8384,6 @@ function registerIpc(): void {
     auditLog('brain.backfill.start', { queued: r.queued, recapped: r.recapped, reason: 'click' })
     return r
   })
-  // Update Intelligence: explicit click only. Local first, configured API once. Never auto-send.
   ipcMain.handle(IPC.brainIntelligencePass, (e) => {
     assertBrainReader(e)
     if (!requireAuth()) throw new Error('Not signed in.')
@@ -8474,7 +8472,6 @@ function registerIpc(): void {
     auditLog('brain.corrections.lock_cleared', { cleared })
     return { ok: true, cleared }
   })
-  // Full assembled dataset for the Mantu Intelligence dashboard (decrypted in main when needed).
   ipcMain.handle(IPC.brainRead, async (e) => {
     assertBrainReader(e)
     if (!requireAuth()) throw new Error('Not signed in.')

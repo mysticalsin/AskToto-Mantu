@@ -78,18 +78,7 @@ type TargetFile = keyof typeof BASELINE
 
 const FILES = Object.keys(BASELINE) as TargetFile[]
 
-const GATEWAY_MIGRATED_ZERO_FILES = [
-  'transcripts.ts',
-  'brain/ingest.ts',
-  'brain/inputs.ts',
-  'brain/consolidate.ts',
-  'brain/intelligence-index.ts',
-  'brain/intelligence-work.ts',
-  'brain/intelligence-pass.ts',
-  'brain/store.ts',
-  'recall.ts',
-  'history-actions.ts'
-] as const satisfies readonly TargetFile[]
+const GATEWAY_MIGRATED_ZERO_FILES = FILES.filter((file) => BASELINE[file] === 0)
 
 interface SyncFsCall {
   importedName: string

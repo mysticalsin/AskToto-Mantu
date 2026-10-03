@@ -359,9 +359,7 @@ export async function writeSaved(file: string, content: string, encrypt: boolean
     // to the caller (fail-closed): plaintext is never silently written when encryption is on.
     data = encryptEnvelopeV2(content)
   }
-  // Unique per-call tmp name: two concurrent writers to the SAME target (e.g. a background brain
-  // ingest and an IPC-driven edit both updating one entity file) would otherwise share `${file}.tmp` —
-  // the first rename steals the second writer's bytes and the second rename throws ENOENT.
+  // Unique per-call tmp name: concurrent writers to one target must not share `${file}.tmp`.
   const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`
   const root = inferredMeetingsRoot(file)
   const gateway = storageAt(root)
@@ -370,10 +368,7 @@ export async function writeSaved(file: string, content: string, encrypt: boolean
   try {
     const written = await gateway.write(relTmp, data)
     if (written.status !== 'ok') throw storageWriteError('write', written)
-    // The default meetings folder lives under OneDrive, which routinely holds a just-written file
-    // open (upload hashing) or gets grabbed by AV/EDR real-time scanning — rename() then throws
-    // EPERM/EBUSY on Windows even though nothing is actually wrong. Bounded retry rides out that
-    // transient lock instead of losing the save; any other error (or exhausted retries) still throws.
+    // OneDrive/AV can briefly hold a just-written file; retry only those transient Windows locks.
     for (let attempt = 0; ; attempt++) {
       const moved = await gateway.rename(relTmp, relFile)
       try {
@@ -802,22 +797,13 @@ export async function appendDebrief(
       updated = md.slice(0, start) + section + (next >= 0 ? md.slice(next + 1) : '')
     }
   }
-  // Preserve the file's ORIGINAL at-rest encryption exactly as found (mirrors updateMeetingRecap /
-  // renameMeeting), NOT the live encryptTranscripts toggle. Otherwise appending a debrief to a file
-  // that was saved while encryption was on would rewrite the whole transcript as plaintext once the
-  // toggle is later turned off — a silent at-rest downgrade of already-recorded third-party speech.
+  // Preserve the file's original at-rest encryption, never the live toggle.
   const wasEncrypted = isEncryptedBytes(read.bytes)
   await writeSaved(path, updated, wasEncrypted)
   return { ok: true }
 }
 
-// Keyed by the meeting's OWN startedAt (like saveMeeting's real filename), not a single fixed name.
-// A fixed name would let the NEXT meeting's very first autosave tick silently overwrite a PREVIOUS
-// meeting's crash-recovery copy before anyone had a chance to notice it — defeating the whole point.
-// stamp() alone only has 1-second (HHMMSS) resolution, so two meetings starting in the same wall-clock
-// second would still collide on it — the millisecond suffix (kept behind its own "-", so it still reads
-// as "<HHMMSS>-<ms>" for recall.ts's FILENAME_TIMESTAMP retention regex, which only requires a literal
-// "-" right after the 6-digit time) closes that gap down to true per-meeting uniqueness.
+// Keyed by the meeting's own startedAt, with milliseconds to avoid same-second autosave collisions.
 const draftFilename = (started: number): string =>
   `.autosave-draft-${stamp(started)}-${String(started % 1000).padStart(3, '0')}.md`
 
@@ -840,7 +826,7 @@ export async function saveDraftTranscript(settings: Settings, m: SaveMeeting): P
     const started = m.startedAt || Date.now()
     const file = join(folder, draftFilename(started))
     const title = cleanTitle(m.title) || `${m.mode} meeting`
-const transcript = formatTranscript(m.lines)
+    const transcript = formatTranscript(m.lines)
     // Same duration_min/participants calc as saveMeeting above — without these, a draft promoted by
     // recoverOrphanDrafts (which only swaps the type:/status: lines, never adds fields) reads back with
     // durationMin 0 and an empty participants list forever, silently losing that badge on recovery.
@@ -875,13 +861,8 @@ const transcript = formatTranscript(m.lines)
 /**
  * Remove one meeting's autosave draft once it ends normally (its real saveMeeting() already succeeded).
  *
- * The unlink gets the same bounded retry writeSaved() uses for rename: the default meetings folder is
- * OneDrive-synced, which routinely holds a just-written file open for upload hashing, and AV/EDR
- * real-time scanning grabs it too — unlink then throws EPERM/EBUSY on Windows even though nothing is
- * wrong. A single best-effort attempt leaves the draft on disk, and recoverOrphanDrafts() promotes it
- * on the next launch, so the user sees their meeting twice with the second copy labelled
- * "(recovered)". Retrying rides out the transient lock; a genuinely stuck file still degrades to the
- * old behaviour rather than failing the meeting end.
+ * The unlink gets the same bounded retry writeSaved() uses for rename: OneDrive/AV may briefly hold the
+ * draft, and a missed cleanup would otherwise show a duplicate recovered meeting on next launch.
  */
 export async function clearDraftTranscript(settings: Settings, startedAt: number): Promise<void> {
   try {
@@ -905,9 +886,7 @@ export async function clearDraftTranscript(settings: Settings, startedAt: number
 
 const IN_PROGRESS_SUFFIX = ' (in progress — autosaved draft)'
 
-// Never follow a symlink planted with a draft-shaped name: `FileClass.isSymlink` is the directory
-// entry's own type (from lstat), not the target's, so a symlink to another meeting already inside the
-// folder is rejected here even though the gateway's `read()` would otherwise follow it.
+// Never promote a symlink planted with a draft-shaped name.
 function isFile(fileClass: FileClass | undefined): boolean {
   return !!fileClass && 'isSymlink' in fileClass && !fileClass.isSymlink
 }
@@ -952,11 +931,7 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
           })
           continue
         }
-        // Preserve the DRAFT's own at-rest encryption exactly as found (mirrors appendDebrief /
-        // renameMeeting), NOT the live encryptTranscripts toggle. A draft written while encryption was
-        // on holds recorded third-party speech; promoting it under a since-disabled toggle would rewrite
-        // it as unmarked cleartext into the (OneDrive-synced) meetings folder — a silent at-rest
-        // downgrade, with no prompt and no way back.
+        // Preserve the draft's own at-rest encryption, never the live toggle.
         const read = await gateway.read(f)
         if (read.status !== 'ok') continue
         const wasEncrypted = isEncryptedBytes(read.bytes)
@@ -978,10 +953,7 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
         }
         recovered++
 
-        // Mirror saveMeeting's exact plaintext-mode index.md bookkeeping (same row shape) — a recovered
-        // meeting should be just as discoverable from index.md as a normal one. Keyed on the file we
-        // just wrote, not the live toggle: index.md is always cleartext, so a preserved-encrypted
-        // recovery would otherwise leak the meeting's title and date beside the ciphertext.
+        // Mirror saveMeeting's plaintext index row only for plaintext recovered files.
         if (!wasEncrypted) {
           const lines = text.split('\n')
           const dateLine = lines.find((l) => l.startsWith('date: '))
