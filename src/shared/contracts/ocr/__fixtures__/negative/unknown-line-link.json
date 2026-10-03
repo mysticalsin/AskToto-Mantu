@@ -1,0 +1,12 @@
+{
+  "image": { "width": 900, "height": 500 },
+  "coverage": "VISIBLE_ONLY",
+  "untrustedContent": true,
+  "truncated": { "lines": false, "words": false },
+  "lines": [
+    { "id": "line-1", "text": "Hello", "confidence": 0.9, "box": { "x": 0.1, "y": 0.1, "width": 0.2, "height": 0.1 } }
+  ],
+  "words": [
+    { "text": "Hello", "confidence": null, "box": { "x": 0.1, "y": 0.1, "width": 0.2, "height": 0.1 }, "lineId": "line-2" }
+  ]
+}

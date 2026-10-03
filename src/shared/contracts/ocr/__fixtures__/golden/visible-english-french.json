@@ -1,0 +1,82 @@
+{
+  "image": {
+    "width": 900,
+    "height": 500
+  },
+  "coverage": "VISIBLE_ONLY",
+  "untrustedContent": true,
+  "truncated": {
+    "lines": false,
+    "words": false
+  },
+  "lines": [
+    {
+      "id": "line-1",
+      "text": "Hello world",
+      "confidence": 0.98,
+      "box": {
+        "x": 0.05,
+        "y": 0.12,
+        "width": 0.42,
+        "height": 0.08
+      }
+    },
+    {
+      "id": "line-2",
+      "text": "Bonjour equipe",
+      "confidence": null,
+      "box": {
+        "x": 0.05,
+        "y": 0.32,
+        "width": 0.5,
+        "height": 0.08
+      }
+    }
+  ],
+  "words": [
+    {
+      "text": "Hello",
+      "confidence": null,
+      "box": {
+        "x": 0.05,
+        "y": 0.12,
+        "width": 0.18,
+        "height": 0.08
+      },
+      "lineId": "line-1"
+    },
+    {
+      "text": "world",
+      "confidence": null,
+      "box": {
+        "x": 0.26,
+        "y": 0.12,
+        "width": 0.21,
+        "height": 0.08
+      },
+      "lineId": "line-1"
+    },
+    {
+      "text": "Bonjour",
+      "confidence": null,
+      "box": {
+        "x": 0.05,
+        "y": 0.32,
+        "width": 0.25,
+        "height": 0.08
+      },
+      "lineId": "line-2"
+    },
+    {
+      "text": "equipe",
+      "confidence": null,
+      "box": {
+        "x": 0.33,
+        "y": 0.32,
+        "width": 0.22,
+        "height": 0.08
+      },
+      "lineId": "line-2"
+    }
+  ]
+}

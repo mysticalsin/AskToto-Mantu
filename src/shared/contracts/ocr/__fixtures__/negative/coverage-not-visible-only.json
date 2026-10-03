@@ -1,0 +1,8 @@
+{
+  "image": { "width": 900, "height": 500 },
+  "coverage": "FULL_IMAGE",
+  "untrustedContent": true,
+  "truncated": { "lines": false, "words": false },
+  "lines": [],
+  "words": []
+}

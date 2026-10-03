@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Behavioural tests for the metis-mac-helper sidecar: compiles native/mac-helper/main.swift for the host
+# Behavioural tests for the metis-mac-helper sidecar: compiles every native/mac-helper/*.swift file for the host
 # architecture and drives the real binary through its argument parsing, proc-info, screen-metrics and ocr
 # subcommands. Black-box on purpose: main.swift is top-level script code, so the contract worth pinning is
 # the stdout/stderr/exit-code protocol the TypeScript consumers parse. macOS only.
@@ -19,7 +19,23 @@ fail() { echo "FAIL - $1"; failures=$((failures + 1)); }
 expect_exit() { if [ "$2" = "$3" ]; then pass "$1"; else fail "$1 (exit $3, wanted $2)"; fi; }
 py() { /usr/bin/python3 -c "$1"; }
 
-swiftc -O -o "$helper" "$here/../main.swift" || { echo "FAIL - compile main.swift"; exit 1; }
+swift_sources=()
+while IFS= read -r path; do swift_sources+=("$path"); done < <(find "$here/.." -maxdepth 1 -name '*.swift' -print | sort)
+swiftc -O -o "$helper" "${swift_sources[@]}" || { echo "FAIL - compile mac-helper sources"; exit 1; }
+
+sandbox_profile="$work/deny-network.sb"
+cat >"$sandbox_profile" <<'SB'
+(version 1)
+(allow default)
+(deny network*)
+SB
+run_denied_network() {
+  if command -v sandbox-exec >/dev/null 2>&1; then
+    sandbox-exec -f "$sandbox_profile" "$@"
+  else
+    "$@"
+  fi
+}
 
 # --- entry-point argument parsing ------------------------------------------------------------------
 err="$("$helper" 2>&1 >/dev/null)"; code=$?
@@ -156,6 +172,42 @@ assert [l["text"].strip().upper() for l in ordered][:2] == ["TOP LINE", "BOTTOM 
 '; then pass "ocr boxes are normalized bottom-left and sort top-to-bottom by descending y"; else fail "ocr box order: $out"; fi
 else
   fail "render ocr fixture"
+fi
+
+if swift "$here/make-ocr-fixture.swift" "$work/english.png" english &&
+   swift "$here/make-ocr-fixture.swift" "$work/french.png" french; then
+  out="$(run_denied_network "$helper" ocr-words "$work/english.png")"; code=$?
+  expect_exit "ocr-words exits 0 on an English rendered image under deny-network sandbox" 0 "$code"
+  if printf '%s' "$out" | py '
+import json, sys
+d = json.load(sys.stdin)
+assert d["image"] == {"width": 900, "height": 500}, d
+assert d["coverage"] == "VISIBLE_ONLY", d
+assert d["untrustedContent"] is True, d
+assert set(d["truncated"]) == {"lines", "words"}, d
+assert d["truncated"] == {"lines": False, "words": False}, d
+words = [w["text"].strip().upper() for w in d["words"]]
+assert words[:4] == ["TOP", "LINE", "BOTTOM", "LINE"], words
+for item in d["lines"] + d["words"]:
+    b = item["box"]
+    assert set(b) == {"x", "y", "width", "height"}, b
+    assert 0 <= b["x"] and 0 <= b["y"] and b["width"] > 0 and b["height"] > 0, item
+    assert b["x"] + b["width"] <= 1 and b["y"] + b["height"] <= 1, item
+line_ids = {l["id"] for l in d["lines"]}
+assert all(w["lineId"] in line_ids for w in d["words"]), d
+assert [l["text"].strip().upper() for l in d["lines"]][:2] == ["TOP LINE", "BOTTOM LINE"], d["lines"]
+'; then pass "ocr-words English output has contract shape, word links, boxes and reading order"; else fail "ocr-words English JSON: $out"; fi
+
+  out="$(run_denied_network "$helper" ocr-words "$work/french.png")"; code=$?
+  expect_exit "ocr-words exits 0 on a French rendered image under deny-network sandbox" 0 "$code"
+  if printf '%s' "$out" | py '
+import json, sys
+d = json.load(sys.stdin)
+words = [w["text"].strip().upper() for w in d["words"]]
+assert words[:4] == ["BONJOUR", "EQUIPE", "MERCI", "METIS"], words
+'; then pass "ocr-words French output recognizes expected words in order"; else fail "ocr-words French JSON: $out"; fi
+else
+  fail "render ocr-words fixtures"
 fi
 
 # --- code-identity (read-only; M2-0429) ------------------------------------------------------------

@@ -17,6 +17,7 @@ import {
   extractScreenText,
   macCodeIdentitySpawnSpec,
   macBundleCopiesSpawnSpec,
+  macOcrWordsSpawnSpec,
   getCodeIdentity,
   getBundleCopies,
   parseCodeIdentity,
@@ -175,6 +176,17 @@ describe('code-identity / bundle-copies (M2-0429 — Screen Recording diagnosis)
       { path: '/Applications/Metis.app', version: '1.9.7' }
     ])
     expect(parseBundleCopies(JSON.stringify({ copies: [{ path: 1 }] }))).toBeNull()
+  })
+})
+
+describe('ocr-words helper command', () => {
+  it('uses the new subcommand without changing the existing line-only ocr command', () => {
+    const spec = macOcrWordsSpawnSpec()
+    if (existsSync(macHelperPath())) {
+      expect(spec).toEqual({ command: macHelperPath(), args: ['ocr-words', '-'] })
+    } else {
+      expect(spec).toBeNull()
+    }
   })
 })
 

@@ -10,13 +10,18 @@
 // hardenedRuntime pass signs every executable found inside the packed .app (same mechanism as the
 // llama-server and ffmpeg sidecars).
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { assertMacHelperSpeechUsage } from './lib/mac-helper-privacy.mjs'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
-const source = join(repoRoot, 'native', 'mac-helper', 'main.swift')
+const sourceDir = join(repoRoot, 'native', 'mac-helper')
+const source = join(sourceDir, 'main.swift')
+const sources = readdirSync(sourceDir)
+  .filter((file) => file.endsWith('.swift'))
+  .sort((a, b) => (a === 'main.swift' ? 1 : b === 'main.swift' ? -1 : a.localeCompare(b)))
+  .map((file) => join(sourceDir, file))
 const privacyPlist = join(repoRoot, 'native', 'mac-helper', 'Info.plist')
 const outDir = join(repoRoot, 'resources', 'mac-helper')
 const outBinary = join(outDir, 'metis-mac-helper')
@@ -55,7 +60,8 @@ execFileSync('plutil', ['-lint', privacyPlist], { stdio: 'pipe' })
 const wanted = TARGETS.map((t) => t.arch)
 const existing = existsSync(outBinary) ? archesOf(outBinary) : []
 const hasAllSlices = wanted.every((a) => existing.includes(a))
-if (hasAllSlices && statSync(outBinary).mtimeMs >= Math.max(statSync(source).mtimeMs, statSync(privacyPlist).mtimeMs)) {
+const newestInput = Math.max(...sources.map((file) => statSync(file).mtimeMs), statSync(privacyPlist).mtimeMs)
+if (hasAllSlices && statSync(outBinary).mtimeMs >= newestInput) {
   try {
     assertMacHelperSpeechUsage(outBinary, wanted)
     console.log(`[build-mac-helper] universal binary is up to date (${existing.join(', ')}) — skipped`)
@@ -80,7 +86,7 @@ try {
     execFileSync('xcrun', [
       'swiftc', '-O', '-target', target.triple,
       '-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist', '-Xlinker', privacyPlist,
-      '-o', slicePaths[i], source
+      '-o', slicePaths[i], ...sources
     ], {
       stdio: 'inherit'
     })

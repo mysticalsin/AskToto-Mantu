@@ -125,7 +125,7 @@ jobs:
       # Never bare `swift test` (M2-0190): the wrapper provides the sandboxed HOME that HermeticHomeTests asserts.
       - name: MetisKit swift test
         run: bash scripts/hermetic/run-swift-tests.sh native-app/MetisKit
-      - name: mac-helper behavioural tests
+      - name: mac-helper behavioural tests (all helper sources)
         run: bash native/mac-helper/Tests/run-helper-tests.sh
       - name: Install xcodegen
         run: brew install xcodegen
