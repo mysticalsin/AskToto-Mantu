@@ -30,7 +30,7 @@ afterEach(() => {
 // Test harness
 // ---------------------------------------------------------------------------------------------------
 
-type FsMethod = 'readdir' | 'readFile' | 'realpath' | 'stat' | 'lstat'
+type FsMethod = 'readdir' | 'readFile' | 'writeFile' | 'rename' | 'unlink' | 'mkdir' | 'realpath' | 'stat' | 'lstat'
 
 interface HeldCall {
   release(): void
@@ -39,6 +39,7 @@ interface HeldCall {
 
 interface TestFs extends StorageFs {
   calls: string[]
+  writes: Array<{ path: string; mode?: number }>
   /** Every call's exact full path, in order — lets a test tell two roots apart even when `calls` (kept
    *  basename-only for the other tests' assertions) cannot. */
   paths: string[]
@@ -70,6 +71,7 @@ function memoryFs(files: Record<string, string>): TestFs {
 
   const calls: string[] = []
   const paths: string[] = []
+  const writes: Array<{ path: string; mode?: number }> = []
   let inflight = 0
   const gates = new Map<string, Array<() => Promise<void>>>()
 
@@ -97,6 +99,7 @@ function memoryFs(files: Record<string, string>): TestFs {
   return {
     calls,
     paths,
+    writes,
     inFlight: () => inflight,
     hold(method, name) {
       let resolveFn!: () => void
@@ -137,6 +140,40 @@ function memoryFs(files: Record<string, string>): TestFs {
         if (!entry) throw errnoError('ENOENT')
         return Buffer.from(entry.content)
       })
+    },
+    async writeFile(path, bytes, options) {
+      return invoke('writeFile', path, () => {
+        writes.push({ path, mode: options?.mode })
+        entries.set(path, { content: bytes.toString('utf8'), mtimeMs: 1_001, ctimeMs: 1_001 })
+      })
+    },
+    async rename(from, to) {
+      return invoke('rename', from, () => {
+        const entry = entries.get(from)
+        if (!entry) throw errnoError('ENOENT')
+        entries.set(to, { ...entry, mtimeMs: entry.mtimeMs + 1, ctimeMs: entry.ctimeMs + 1 })
+        entries.delete(from)
+      })
+    },
+    async unlink(path) {
+      return invoke('unlink', path, () => {
+        if (!entries.delete(path)) throw errnoError('ENOENT')
+      })
+    },
+    async rm(path) {
+      return invoke('unlink', path, () => {
+        let removed = false
+        for (const key of [...entries.keys()]) {
+          if (key === path || key.startsWith(`${path}${sep}`)) {
+            entries.delete(key)
+            removed = true
+          }
+        }
+        if (!removed) throw errnoError('ENOENT')
+      })
+    },
+    async mkdir(path) {
+      return invoke('mkdir', path, () => undefined)
     },
     async realpath(path) {
       return invoke('realpath', path, () => path)
@@ -1000,5 +1037,73 @@ describe.skipIf(process.platform === 'win32')('kernel-blocking pool protection (
 
     expect(result).toMatchObject({ status: 'dataless' })
     expect(releaseFifo(fifo)).toBe(false) // nobody was ever waiting to open it
+  })
+})
+
+describe('gateway writes', () => {
+  it('write, rename, unlink and mkdir share the admission FIFO', async () => {
+    const fs = memoryFs({})
+    const firstHold = fs.hold('writeFile', 'a.tmp')
+    const gateway = createStorageGateway({ root: () => ROOT, detector: fakeDetector(), fs, poolSize: 3 }) // cap = 1
+
+    const first = gateway.write('a.tmp', Buffer.from('a'))
+    await flush()
+    const second = gateway.mkdir('wiki')
+    const third = gateway.write('b.tmp', Buffer.from('b'))
+    await flush()
+
+    expect(fs.inFlight()).toBe(1)
+    expect(fs.calls).toEqual(['writeFile a.tmp'])
+
+    const secondHold = fs.hold('mkdir', 'wiki')
+    const thirdHold = fs.hold('writeFile', 'b.tmp')
+    firstHold.release()
+    await flush()
+    secondHold.release()
+    await flush()
+    thirdHold.release()
+    await expect(first).resolves.toEqual({ status: 'ok' })
+    await expect(second).resolves.toEqual({ status: 'ok' })
+    await expect(third).resolves.toEqual({ status: 'ok' })
+
+    await expect(gateway.rename('a.tmp', 'a.md')).resolves.toEqual({ status: 'ok' })
+    await expect(gateway.unlink('a.md')).resolves.toEqual({ status: 'ok' })
+  })
+
+  it('write-side operations never ask the dataless detector to classify bytes', async () => {
+    const fs = memoryFs({ 'old.tmp': 'old' })
+    const detector = fakeDetector()
+    const gateway = createStorageGateway({ root: () => ROOT, detector, fs, poolSize: 4 })
+
+    await expect(gateway.write('cloud.md', Buffer.from('local'))).resolves.toEqual({ status: 'ok' })
+    await expect(gateway.mkdir('wiki')).resolves.toEqual({ status: 'ok' })
+    await expect(gateway.rename('old.tmp', 'old.md')).resolves.toEqual({ status: 'ok' })
+    await expect(gateway.unlink('old.md')).resolves.toEqual({ status: 'ok' })
+
+    expect(detector.classify).not.toHaveBeenCalled()
+  })
+
+  it('passes the requested creation mode to the filesystem write', async () => {
+    const fs = memoryFs({})
+    const gateway = createStorageGateway({ root: () => ROOT, detector: fakeDetector(), fs, poolSize: 4 })
+
+    await expect(gateway.write('secret.tmp', Buffer.from('private'), { mode: 0o600 })).resolves.toEqual({ status: 'ok' })
+
+    expect(fs.writes).toEqual([{ path: join(ROOT, 'secret.tmp'), mode: 0o600 }])
+  })
+
+  it('can wait for a held write longer than the normal content deadline', async () => {
+    const fs = memoryFs({})
+    const held = fs.hold('writeFile', 'slow.tmp')
+    const gateway = createStorageGateway({ root: () => ROOT, detector: fakeDetector(), fs, poolSize: 3 }) // cap = 1
+
+    const write = gateway.write('slow.tmp', Buffer.from('slow'), { deadlineMs: null })
+    await flush()
+    vi.advanceTimersByTime(60_000)
+    await flush()
+
+    expect(fs.inFlight()).toBe(1)
+    held.release()
+    await expect(write).resolves.toEqual({ status: 'ok' })
   })
 })

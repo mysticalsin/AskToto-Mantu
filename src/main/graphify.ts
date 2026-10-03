@@ -1,13 +1,14 @@
 import { app } from 'electron'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { readFileSync, readdirSync, existsSync, statSync, rmSync } from 'node:fs'
 import { join, basename, delimiter } from 'node:path'
 import { homedir } from 'node:os'
 import { getSettings, getApiKey, hasApiKey, getAllowedProviders } from './store'
 import { resolveMeetingsFolder } from './transcripts'
 import { readConfidentialMeetings } from './brain/publish'
 import type { GraphStatus, GraphRelated, Settings } from '@shared/ipc'
+import { existsSync, readdirSync, readFileSync } from './infra/storage/legacy-sync-io'
+import { storageAt } from './infra/storage/meetings-storage'
 
 const exec = promisify(execFile)
 
@@ -101,6 +102,9 @@ function graphHtmlPath(): string {
  *  (and any cache) to `graphify-out/` relative to that cwd — see resources/graphify_runner.py. */
 function runnerOutDir(): string {
   return join(outDir(), 'graphify-out')
+}
+function graphGateway() {
+  return storageAt(outDir())
 }
 
 // --- Python interpreter resolution (cached) -------------------------------------------------------
@@ -221,11 +225,13 @@ export async function graphifyStatus(): Promise<GraphStatus> {
   let lastBuiltAt: number | undefined
   let nodes: number | undefined
   let edges: number | undefined
+  let hasGraph = false
   try {
-    const gp = graphJsonPath()
-    if (existsSync(gp)) {
-      lastBuiltAt = statSync(gp).mtimeMs
-      const g = JSON.parse(readFileSync(gp, 'utf8'))
+    const read = await graphGateway().read('graph.json')
+    if (read.status === 'ok') {
+      hasGraph = true
+      lastBuiltAt = read.version.mtimeMs
+      const g = JSON.parse(read.bytes.toString('utf8'))
       nodes = Array.isArray(g.nodes) ? g.nodes.length : undefined
       edges = Array.isArray(g.links) ? g.links.length : undefined
     }
@@ -237,7 +243,7 @@ export async function graphifyStatus(): Promise<GraphStatus> {
     installed: !!python,
     backend: backend?.backend ?? null,
     building,
-    hasGraph: existsSync(graphJsonPath()),
+    hasGraph,
     lastBuiltAt,
     nodes,
     edges,
@@ -278,9 +284,9 @@ export function graphifySourceDir(s: Settings): string {
  *  (source = raw folder) and any meeting is flagged confidential, a build would extract that confidential
  *  content into the Dust-readable knowledge graph. Refuse until the user turns publishing on (which builds
  *  from the confidential-free mirror instead). (QA #10) */
-function confidentialGraphRefusal(s: Settings): string | null {
+async function confidentialGraphRefusal(s: Settings): Promise<string | null> {
   if (s.publishBrainPages) return null // source is the wiki mirror, which already excludes confidential
-  if (readConfidentialMeetings(s).size === 0) return null
+  if ((await readConfidentialMeetings(s)).size === 0) return null
   return 'Some meetings are marked confidential, but the knowledge graph is built from your meetings folder, which still includes them. Turn on "Publish meeting intelligence" in Settings so the graph is built from the confidential-free published mirror instead.'
 }
 
@@ -296,7 +302,7 @@ export async function buildGraph(incremental = false): Promise<GraphStatus> {
     return graphifyStatus()
   }
   // Confidentiality fail-closed: never feed a confidential meeting into the graph (QA #10).
-  const confidentialRefusal = confidentialGraphRefusal(getSettings())
+  const confidentialRefusal = await confidentialGraphRefusal(getSettings())
   if (confidentialRefusal) {
     lastError = confidentialRefusal
     return graphifyStatus()
@@ -358,18 +364,20 @@ export function scheduleRebuild(): void {
   // Encrypted transcripts are unreadable by the graphify runner UNLESS publishBrainPages routes the
   // build at the plaintext wiki/ mirror instead — see graphifyRefusalReason/graphifySourceDir above.
   if (graphifyRefusalReason(s)) return
-  if (confidentialGraphRefusal(s)) return // don't auto-build a graph that would include a confidential meeting (QA #10)
-  if (rebuildTimer) clearTimeout(rebuildTimer)
-  const fire = (): void => {
-    rebuildTimer = null
-    // A build is already running — retry shortly instead of dropping this note's update.
-    if (building) {
-      rebuildTimer = setTimeout(fire, 5_000)
-      return
+  void confidentialGraphRefusal(s).then((refusal) => {
+    if (refusal) return // don't auto-build a graph that would include a confidential meeting (QA #10)
+    if (rebuildTimer) clearTimeout(rebuildTimer)
+    const fire = (): void => {
+      rebuildTimer = null
+      // A build is already running — retry shortly instead of dropping this note's update.
+      if (building) {
+        rebuildTimer = setTimeout(fire, 5_000)
+        return
+      }
+      void buildGraph(true)
     }
-    void buildGraph(true)
-  }
-  rebuildTimer = setTimeout(fire, REBUILD_DEBOUNCE_MS)
+    rebuildTimer = setTimeout(fire, REBUILD_DEBOUNCE_MS)
+  })
 }
 
 // --- Related notes (read graph.json neighbours) --------------------------------------------------
@@ -453,18 +461,20 @@ export function computeRelated(
   }
 }
 
-export function relatedNotes(noteFile: string): GraphRelated {
-  const gp = graphJsonPath()
-  if (!existsSync(gp)) return { ok: false, error: 'No graph yet — build it first.', topics: [], notes: [] }
+export async function relatedNotes(noteFile: string): Promise<GraphRelated> {
+  const read = await graphGateway().read('graph.json')
+  if (read.status === 'missing') return { ok: false, error: 'No graph yet — build it first.', topics: [], notes: [] }
+  if (read.status !== 'ok') return { ok: false, error: 'Graph file unreadable.', topics: [], notes: [] }
   try {
-    return computeRelated(JSON.parse(readFileSync(gp, 'utf8')), noteFile)
+    return computeRelated(JSON.parse(read.bytes.toString('utf8')), noteFile)
   } catch {
     return { ok: false, error: 'Graph file unreadable.', topics: [], notes: [] }
   }
 }
 
-export function graphHtml(): string | null {
-  return existsSync(graphHtmlPath()) ? graphHtmlPath() : null
+export async function graphHtml(): Promise<string | null> {
+  const cls = (await graphGateway().classify(['graph.html'])).get('graph.html')
+  return cls?.status === 'ok' ? graphHtmlPath() : null
 }
 
 /**
@@ -481,15 +491,16 @@ export function graphHtml(): string | null {
  * settings write that triggered it). Returns whether anything was actually removed, so a caller only
  * audit-logs `graph.purged` for a purge that really happened.
  */
-export function purgeGraphArtifacts(): boolean {
+export async function purgeGraphArtifacts(): Promise<boolean> {
   let removed = false
-  for (const p of [graphJsonPath(), graphHtmlPath(), runnerOutDir()]) {
+  for (const rel of ['graph.json', 'graph.html', 'graphify-out']) {
     try {
-      if (!existsSync(p)) continue
-      rmSync(p, { recursive: true, force: true })
-      removed = true
+      const before = (await graphGateway().classify([rel])).get(rel)
+      if (before?.status === 'missing') continue
+      const result = await graphGateway().unlink(rel, { recursive: true })
+      if (result.status === 'ok') removed = true
     } catch (e) {
-      console.warn('[graphify] purgeGraphArtifacts: could not remove', p, e)
+      console.warn('[graphify] purgeGraphArtifacts: could not remove', rel, e)
     }
   }
   return removed

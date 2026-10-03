@@ -4,8 +4,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Settings } from '@shared/ipc'
 import { app } from 'electron'
+import { useStorageForTests } from './infra/storage/meetings-storage'
 
 vi.mock('electron')
+
+beforeEach(() => {
+  useStorageForTests()
+})
 
 // pickBackend reads the store directly (the engine pin, the stored keys, the org allowlist). Stub the
 // whole module — the real one opens the keychain and the userData dir, neither of which the test sandbox
@@ -226,10 +231,10 @@ describe('purgeGraphArtifacts — the whole graph directory Metis owns (MQA-170)
     return { json, html, manifest }
   }
 
-  it('MQA-170 — removes the runner manifest that lists every meeting by its plaintext title, not just graph.json/graph.html', () => {
+  it('MQA-170 — removes the runner manifest that lists every meeting by its plaintext title, not just graph.json/graph.html', async () => {
     const { json, html, manifest } = seedBuiltGraph()
 
-    const purged = purgeGraphArtifacts()
+    const purged = await purgeGraphArtifacts()
 
     expect(existsSync(manifest)).toBe(false)
     expect(existsSync(join(userData, 'graph', 'graphify-out'))).toBe(false)
@@ -238,10 +243,10 @@ describe('purgeGraphArtifacts — the whole graph directory Metis owns (MQA-170)
     expect(purged).toBe(true)
   })
 
-  it('MQA-170 — reports whether anything was actually purged, so a caller cannot audit-log a purge that never happened', () => {
-    expect(purgeGraphArtifacts()).toBe(false)
+  it('MQA-170 — reports whether anything was actually purged, so a caller cannot audit-log a purge that never happened', async () => {
+    expect(await purgeGraphArtifacts()).toBe(false)
     seedBuiltGraph()
-    expect(purgeGraphArtifacts()).toBe(true)
-    expect(purgeGraphArtifacts()).toBe(false)
+    expect(await purgeGraphArtifacts()).toBe(true)
+    expect(await purgeGraphArtifacts()).toBe(false)
   })
 })

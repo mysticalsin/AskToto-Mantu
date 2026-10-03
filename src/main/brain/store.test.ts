@@ -284,7 +284,7 @@ describe('loadEntityDisplayNames — gateway-backed (M2-0031)', () => {
     // settle through the actual libuv poll phase, which a bulk vi.advanceTimersByTimeAsync (below) is not
     // guaranteed to turn — the healthy account read must resolve on its own microtask tick, independent of
     // how the fake clock schedules its yields, or this test would race the very stall it proves is fixed.
-    const fs: StorageFs = {
+    const fs: Partial<StorageFs> = {
       readdir: (p) => Promise.resolve(realFs.readdirSync(p)),
       realpath: (p) => Promise.resolve(realFs.realpathSync(p)),
       stat: (p) => Promise.resolve(realFs.statSync(p)),

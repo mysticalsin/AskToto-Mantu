@@ -344,7 +344,7 @@ describe('architecture ratchet pure functions', () => {
       { rule: { name: 'ff08-some-rule' }, from: 'src/main/a.ts' },
     ])).toThrow()
     expect(() => countDependencyViolations([
-      { rule: { name: 'FF01-example' }, from: 'src/main/a.ts' },
+      { rule: { name: 'FF01-example' }, from: 'src/main/a' },
     ])).toThrow()
   })
 })
@@ -424,6 +424,21 @@ describe('architecture source detectors', () => {
       ].join('\n')
       expect(countSourceFile('src/main/transcripts.ts', text)).toEqual({ 'FF-05a': 1, 'FF-05b': 4 })
       expect(countSourceFile('src/main/other.ts', text)).toEqual({ 'FF-05a': 1 })
+    })
+
+    it('counts storage fs shim calls as filesystem calls in meetings-root files', () => {
+      const text = [
+        "import { readFileSync } from './infra/storage/fs-sync'",
+        "import { writeFile } from './infra/storage/fs-async'",
+        "import { existsSync } from './infra/storage/legacy-sync-io'",
+        "import { unlink } from './infra/storage/legacy-async-io'",
+        'readFileSync("a")',
+        'writeFile("b", Buffer.from("c"))',
+        'existsSync("d")',
+        'unlink("e")',
+      ].join('\n')
+
+      expect(countSourceFile('src/main/transcripts.ts', text)).toEqual({ 'FF-05a': 2, 'FF-05b': 4 })
     })
   })
 

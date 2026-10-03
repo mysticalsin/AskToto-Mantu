@@ -81,6 +81,7 @@ describe('the scenario registry', () => {
       'fault-fatal-relaunch',
       'ex-suite',
       'stall-sampler',
+      'st1-publish-graphify',
       'idle-soak',
       'sidecar-boot-reaper',
       'packaged-lifecycle',
@@ -155,6 +156,61 @@ describe('the scenario registry', () => {
     ])
     expect(mac.report).toBe('stall-sampler.json')
     expect(Object.hasOwn(mac, 'settings')).toBe(false)
+  })
+
+  it('declares st1-publish-graphify on macOS, using the hosted FIFO row', () => {
+    const entry = SCENARIOS['st1-publish-graphify']
+    expect(entry.ticket).toBe('M2-0256')
+    expect(entry.qaOnlyHook).toBe(false)
+    expect(entry.exits).toEqual({ 0: 'PASS', 1: 'FAIL_OR_INCOMPLETE', 2: 'PRECONDITION' })
+    expect(Object.keys(entry.platforms)).toEqual(['mac', 'win'])
+    const mac = entry.platforms.mac
+    const win = entry.platforms.win
+    expect(mac.variant).toBe('mac')
+    expect(mac.artifact).toBe('candidate-mac')
+    expect(mac.installerSuffix).toBe('.dmg')
+    expect(mac.script).toBe('scripts/qa/st-1.mjs')
+    expect(existsSync(join(root, mac.script))).toBe(true)
+    expect(mac.args({ installer: 'assets/Metis-1.0.0.dmg', app: 'candidate-install/Metis.app', report: 'candidate-scenario/st1-publish-graphify.json' })).toEqual([
+      '--installer',
+      'assets/Metis-1.0.0.dmg',
+      '--provenance',
+      'provenance/provenance.json',
+      '--exe',
+      'candidate-install/Metis.app/Contents/MacOS/Metis',
+      '--fixtures',
+      'fifo',
+      '--history',
+      'off',
+      '--publish-graphify',
+      '--minutes',
+      '1',
+      '--out',
+      'candidate-scenario/st1-publish-graphify.json'
+    ])
+    expect(mac.report).toBe('st1-publish-graphify.json')
+    expect(mac.timeoutMinutes).toBe(45)
+    expect(mac.stepTimeoutMinutes).toBe(30)
+    expect(win.variant).toBe('win')
+    expect(win.artifact).toBe('candidate-win')
+    expect(win.installerSuffix).toBe('.exe')
+    expect(win.args({ installer: 'assets/Metis-Setup-1.0.0.exe', app: 'candidate-install/Metis.exe', report: 'candidate-scenario/st1-publish-graphify.json' })).toEqual([
+      '--installer',
+      'assets/Metis-Setup-1.0.0.exe',
+      '--provenance',
+      'provenance/provenance.json',
+      '--exe',
+      'candidate-install/Metis.exe',
+      '--fixtures',
+      'none',
+      '--history',
+      'off',
+      '--publish-graphify',
+      '--minutes',
+      '1',
+      '--out',
+      'candidate-scenario/st1-publish-graphify.json'
+    ])
   })
 
   it('declares renderer-kill on macOS, installing the promotable DMG with no lane-seeded settings', () => {

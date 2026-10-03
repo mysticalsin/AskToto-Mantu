@@ -560,13 +560,23 @@ export function evaluateCriteria(row, measured, evidence, { history = false } = 
       { name: `history-search < ${HISTORY_BUDGET_MS}`, pass: probes.length > 0 && probes.every(searchedInBudget(row)) }
     )
   }
+  if (measured.publishGraphify) {
+    criteria.push({
+      name: 'publish-graphify-probed',
+      pass:
+        !measured.publishGraphify.error &&
+        measured.publishGraphify.graphifyBuildRan === true &&
+        measured.publishGraphify.publishMs < HISTORY_BUDGET_MS &&
+        measured.publishGraphify.graphifyMs < HISTORY_BUDGET_MS
+    })
+  }
   return criteria
 }
 
 /** A report with an empty measurement; `measure` fills it in place, so a partial report can be written at
  *  any moment. */
 export function emptyRun() {
-  return { poolSize: null, setupAtMs: null, samples: [], late: [], history: [], errors: [], profiler: null, loop: null, witnessLoop: null }
+  return { poolSize: null, setupAtMs: null, samples: [], late: [], history: [], errors: [], profiler: null, loop: null, witnessLoop: null, publishGraphify: null }
 }
 
 /**
@@ -615,6 +625,7 @@ export function buildReport({
     ...(purpose === WINDOW_CONSTRUCTION && windowWarmup ? { warmup: true } : {}),
     row,
     ...(history ? { historyRow: true } : {}),
+    ...(measured.publishGraphify ? { evidenceLevel: 'LEAD_ACTION' } : {}),
     platform: process.platform,
     arch: process.arch,
     installer,
@@ -644,6 +655,7 @@ export function buildReport({
     errors: measured.errors,
     setupAtMs: measured.setupAtMs,
     timeline,
+    ...(measured.publishGraphify ? { publishGraphify: measured.publishGraphify } : {}),
     historyMode,
     witness: witnessSummary(timeline, measured.witnessLoop),
     history: measured.history,

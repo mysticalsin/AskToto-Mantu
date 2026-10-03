@@ -41,6 +41,7 @@ on:
           - fault-fatal-relaunch
           - ex-suite
           - stall-sampler
+          - st1-publish-graphify
           - idle-soak
           - sidecar-boot-reaper
           - packaged-lifecycle

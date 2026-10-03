@@ -60,7 +60,7 @@ const syncNameSet = new Set<string>(syncNames)
  * Only ever revise an entry DOWNWARD when that file is migrated further; never raise it.
  */
 const BASELINE = {
-  'transcripts.ts': 27,
+  'transcripts.ts': 0,
   'brain/ingest.ts': 0,
   'brain/inputs.ts': 0,
   'brain/consolidate.ts': 0,
@@ -68,7 +68,7 @@ const BASELINE = {
   'brain/intelligence-work.ts': 0,
   'brain/intelligence-pass.ts': 0,
   'brain/corrections.ts': 10,
-  'brain/store.ts': 63,
+  'brain/store.ts': 0,
   'brain/match-key-cache.ts': 4,
   'recall.ts': 0,
   'history-actions.ts': 0
@@ -78,16 +78,7 @@ type TargetFile = keyof typeof BASELINE
 
 const FILES = Object.keys(BASELINE) as TargetFile[]
 
-const GATEWAY_MIGRATED_ZERO_FILES = [
-  'brain/ingest.ts',
-  'brain/inputs.ts',
-  'brain/consolidate.ts',
-  'brain/intelligence-index.ts',
-  'brain/intelligence-work.ts',
-  'brain/intelligence-pass.ts',
-  'recall.ts',
-  'history-actions.ts'
-] as const satisfies readonly TargetFile[]
+const GATEWAY_MIGRATED_ZERO_FILES = FILES.filter((file) => BASELINE[file] === 0)
 
 interface SyncFsCall {
   importedName: string
@@ -103,7 +94,9 @@ function collectSyncFsCalls(file: string, text: string): SyncFsCall[] {
   const scopeStack: Array<Set<string>> = [new Set()]
 
   const isNodeFsImport = (node: ts.ImportDeclaration): boolean =>
-    ts.isStringLiteral(node.moduleSpecifier) && node.moduleSpecifier.text === 'node:fs'
+    ts.isStringLiteral(node.moduleSpecifier) &&
+    (node.moduleSpecifier.text === 'node:fs' ||
+      /(?:^|\/)infra\/storage\/(?:fs|legacy)-sync(?:-io)?$/.test(node.moduleSpecifier.text))
 
   const declareShadow = (name: string): void => {
     if (importedSyncNames.has(name) || namespaceImports.has(name)) scopeStack[scopeStack.length - 1].add(name)
@@ -203,6 +196,8 @@ describe('meetings-root readers — synchronous node:fs structural ratchet', () 
     const calls = collectSyncFsCalls('synthetic.ts', `
       import { readFileSync, statSync as statNow } from 'node:fs'
       import * as fs from 'node:fs'
+      import { writeFileSync as writeViaShim } from './infra/storage/fs-sync'
+      import { existsSync as existsViaLegacyShim } from './infra/storage/legacy-sync-io'
       import { readFileSync as readPromiseNamedSame } from 'node:fs/promises'
 
       const readFileSync = () => undefined
@@ -211,10 +206,12 @@ describe('meetings-root readers — synchronous node:fs structural ratchet', () 
       readFileSync()
       statNow('/tmp/a')
       fs.readdirSync('/tmp')
+      writeViaShim('/tmp/c', 'x')
+      existsViaLegacyShim('/tmp/d')
       readPromiseNamedSame('/tmp/b')
     `)
 
-    expect(calls.map((call) => call.importedName)).toEqual(['statSync', 'readdirSync'])
+    expect(calls.map((call) => call.importedName)).toEqual(['statSync', 'readdirSync', 'writeFileSync', 'existsSync'])
   })
 
   it('matches the checked-in per-file sync node:fs baseline exactly', () => {

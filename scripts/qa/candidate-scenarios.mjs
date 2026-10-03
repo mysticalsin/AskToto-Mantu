@@ -121,6 +121,62 @@ export const SCENARIOS = Object.freeze({
       })
     })
   }),
+  // M2-0256: hosted ST-1 row for publish/wiki and graphify IPC while the meetings root has blocked FIFO
+  // fixtures. The report is content-free: timings and coarse graphify status only.
+  'st1-publish-graphify': Object.freeze({
+    ticket: 'M2-0256',
+    qaOnlyHook: false,
+    exits: Object.freeze({ 0: 'PASS', 1: 'FAIL_OR_INCOMPLETE', 2: 'PRECONDITION' }),
+    platforms: Object.freeze({
+      mac: Object.freeze({
+        variant: 'mac',
+        artifact: 'candidate-mac',
+        installerSuffix: '.dmg',
+        script: 'scripts/qa/st-1.mjs',
+        args: ({ installer, report, app }) => {
+          if (!app) throw new Error('st1-publish-graphify needs the installed app (--app).')
+          return [
+            '--installer', installer,
+            '--provenance', 'provenance/provenance.json',
+            '--exe', `${app}/Contents/MacOS/Metis`,
+            '--fixtures', 'fifo',
+            '--history', 'off',
+            '--publish-graphify',
+            '--minutes', '1',
+            '--out', report
+          ]
+        },
+        report: 'st1-publish-graphify.json',
+        timeoutMinutes: 45,
+        stepTimeoutMinutes: 30
+      }),
+      win: Object.freeze({
+        variant: 'win',
+        artifact: 'candidate-win',
+        installerSuffix: '.exe',
+        script: 'scripts/qa/st-1.mjs',
+        args: ({ installer, report, app }) => {
+          if (!app) throw new Error('st1-publish-graphify needs the installed app (--app).')
+          return [
+            '--installer', installer,
+            '--provenance', 'provenance/provenance.json',
+            '--exe', app,
+            '--fixtures', 'none',
+            '--history', 'off',
+            '--publish-graphify',
+            '--minutes', '1',
+            '--out', report
+          ]
+        },
+        report: 'st1-publish-graphify.json',
+        notCovered: Object.freeze([
+          Object.freeze({ row: 'fifo', reason: 'Windows hosted runners do not provide POSIX FIFO fixtures; macOS carries the blocked FIFO coverage.' })
+        ]),
+        timeoutMinutes: 45,
+        stepTimeoutMinutes: 30
+      })
+    })
+  }),
   // M2-0492: hosted macOS idle soak on promotable DMG bytes. The tool launches the installed app on the
   // representative Hide profile, streams the 5.5 h parked-idle census, and judges IDLE-GROWTH-1.
   'idle-soak': Object.freeze({

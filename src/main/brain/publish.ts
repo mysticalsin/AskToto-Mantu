@@ -1,5 +1,4 @@
 import { app } from 'electron'
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, unlinkSync, rmSync } from 'node:fs'
 import { join, basename } from 'node:path'
 import type { Settings } from '@shared/ipc'
 import {
@@ -16,9 +15,10 @@ import {
   type LedgerCommitment
 } from '@shared/brain'
 import { hasMeetingFlag, parse, readMeetingFields } from '../features/meetings/meeting-document'
-import { resolveMeetingsFolder, readSavedFile, writeSaved, parseRecapMarkdown } from '../transcripts'
+import { decodeSaved, resolveMeetingsFolder, writeSaved, parseRecapMarkdown } from '../transcripts'
 import { listEntities, readPerson, readAccount, readDeal, readIndex, readMeetingExtraction, listMeetingExtractions, slugify } from './store'
 import { readAliasMap, resolveEntitySlug, type AliasMap } from './corrections'
+import { storageAt } from '../infra/storage/meetings-storage'
 
 /**
  * Task MI-5 — the Dust-readable markdown mirror. Renders the CRM-corrected brain (entities +
@@ -66,10 +66,12 @@ function meetingCardPath(s: Settings, file: string): string {
   return join(wikiDir(s), 'meetings', `${meetingSlug(file)}.md`)
 }
 
-function ensureWikiDirs(s: Settings): void {
+async function ensureWikiDirs(s: Settings): Promise<void> {
   const root = wikiDir(s)
+  const gateway = storageAt(resolveMeetingsFolder(s))
   for (const d of [root, ...WIKI_DIRS.map((name) => join(root, name))]) {
-    if (!existsSync(d)) mkdirSync(d, { recursive: true })
+    const result = await gateway.mkdir(relativeToMeetingsRoot(s, d))
+    if (result.status !== 'ok') throw new Error(`could not create wiki directory: ${result.status}`)
   }
 }
 
@@ -78,6 +80,22 @@ function ensureWikiDirs(s: Settings): void {
  *  read-modify-write). */
 async function writeWikiFile(path: string, content: string): Promise<void> {
   await writeSaved(path, content, false)
+}
+
+function relativeToMeetingsRoot(s: Settings, path: string): string {
+  const root = resolveMeetingsFolder(s)
+  return path.startsWith(root) ? path.slice(root.length).replace(/^[/\\]/, '') || '.' : path
+}
+
+async function pathExists(s: Settings, path: string): Promise<boolean> {
+  const rel = relativeToMeetingsRoot(s, path)
+  const result = (await storageAt(resolveMeetingsFolder(s)).classify([rel])).get(rel)
+  return !!result && result.status !== 'missing'
+}
+
+async function readSavedRel(s: Settings, rel: string): Promise<string | null> {
+  const result = await storageAt(resolveMeetingsFolder(s)).read(rel)
+  return result.status === 'ok' ? decodeSaved(result.bytes) : null
 }
 
 function appVersion(): string {
@@ -120,10 +138,9 @@ function isMeetingFileName(f: string): boolean {
   return f.endsWith('.md') && !f.startsWith('.') && f !== 'index.md' && f !== 'README.md'
 }
 
-function listSavedMeetingFiles(s: Settings): string[] {
-  const folder = resolveMeetingsFolder(s)
-  if (!existsSync(folder)) return []
-  return readdirSync(folder).filter(isMeetingFileName)
+async function listSavedMeetingFiles(s: Settings): Promise<string[]> {
+  const listing = await storageAt(resolveMeetingsFolder(s)).list('.')
+  return listing.status === 'ok' ? listing.names.filter(isMeetingFileName) : []
 }
 
 /** The namespace ingest.ts files a shared-folder transcript under: `team/<owner>/<file>`, owner being
@@ -160,22 +177,10 @@ const FRONTMATTER_HEAD_BYTES = 8192
  *  anything this device cannot read as plaintext frontmatter, including an ATKENC envelope wrapped under
  *  the teammate's own key (which readSavedFile could not decrypt here either), so the caller fails closed
  *  on it. */
-function readTeamFrontmatterHead(path: string): string | null {
-  let fd: number | null = null
-  try {
-    fd = openSync(path, 'r')
-    const buf = Buffer.alloc(FRONTMATTER_HEAD_BYTES)
-    const read = readSync(fd, buf, 0, FRONTMATTER_HEAD_BYTES, 0)
-    return buf.subarray(0, read).toString('utf8')
-  } catch {
-    return null
-  } finally {
-    try {
-      if (fd !== null) closeSync(fd)
-    } catch {
-      /* best-effort */
-    }
-  }
+async function readTeamFrontmatterHead(teamFolder: string, file: string): Promise<string | null> {
+  const result = await storageAt(teamFolder).read(file)
+  if (result.status !== 'ok') return null
+  return result.bytes.subarray(0, FRONTMATTER_HEAD_BYTES).toString('utf8')
 }
 
 /** The team-folder half of the exclusion set.
@@ -189,21 +194,18 @@ function readTeamFrontmatterHead(path: string): string | null {
  *  a key we only know from the ingest index all stay excluded. The ingest index is what makes an
  *  unreachable share fail closed — it remembers every team key ever ingested when the folder is no longer
  *  there to enumerate. */
-function addConfidentialTeamMeetings(s: Settings, out: Set<string>): void {
+async function addConfidentialTeamMeetings(s: Settings, out: Set<string>): Promise<void> {
   const known = new Set<string>()
   const cleared = new Set<string>()
   for (const teamFolder of s.teamTranscriptFolders ?? []) {
     if (!teamFolder) continue
-    let files: string[] = []
-    try {
-      if (existsSync(teamFolder)) files = readdirSync(teamFolder).filter(isMeetingFileName)
-    } catch {
-      continue // unreachable share — its keys stay excluded via the ingest-index seed below
-    }
+    const listing = await storageAt(teamFolder).list('.')
+    if (listing.status !== 'ok') continue // unreachable share — its keys stay excluded via the ingest-index seed below
+    const files = listing.names.filter(isMeetingFileName)
     for (const f of files) {
       const key = teamMeetingKey(teamFolder, f)
       known.add(key)
-      const head = readTeamFrontmatterHead(join(teamFolder, f))
+      const head = await readTeamFrontmatterHead(teamFolder, f)
       if (head && hasFrontmatterBlock(head) && !readFrontmatterFlag(head, 'confidential')) cleared.add(key)
     }
   }
@@ -233,20 +235,17 @@ function addConfidentialTeamMeetings(s: Settings, out: Set<string>): void {
  *  full readdir + synchronous read+decrypt of EVERY saved meeting, so letting publishAll/publishForExtraction
  *  re-scan per page turns one toggle into O(pages × meetings) blocking main-process reads. They read it once
  *  and thread the result through `knownConfidential`. */
-export function readConfidentialMeetings(s: Settings): Set<string> {
-  const folder = resolveMeetingsFolder(s)
+export async function readConfidentialMeetings(s: Settings): Promise<Set<string>> {
   const out = new Set<string>()
-  for (const f of listSavedMeetingFiles(s)) {
-    let md: string
-    try {
-      md = readSavedFile(join(folder, f))
-    } catch {
+  for (const f of await listSavedMeetingFiles(s)) {
+    const md = await readSavedRel(s, f)
+    if (md === null) {
       out.add(f)
       continue
     }
     if (!md || readFrontmatterFlag(md, 'confidential')) out.add(f)
   }
-  addConfidentialTeamMeetings(s, out)
+  await addConfidentialTeamMeetings(s, out)
   return out
 }
 
@@ -522,8 +521,8 @@ export async function publishEntity(
   knownConfidential?: Set<string>
 ): Promise<void> {
   if (!s.publishBrainPages || !id) return
-  ensureWikiDirs(s)
-  const confidential = knownConfidential ?? readConfidentialMeetings(s)
+  await ensureWikiDirs(s)
+  const confidential = knownConfidential ?? (await readConfidentialMeetings(s))
   let md: string | null = null
   let meetings: MeetingRef[] = []
   if (kind === 'person') {
@@ -554,7 +553,7 @@ export async function publishEntity(
 export async function removeFromWiki(s: Settings, kind: EntityKind, id: string): Promise<void> {
   const p = entityPagePath(s, kind, id)
   try {
-    if (existsSync(p)) unlinkSync(p)
+    await storageAt(resolveMeetingsFolder(s)).unlink(relativeToMeetingsRoot(s, p))
   } catch {
     /* best-effort */
   }
@@ -563,7 +562,7 @@ export async function removeFromWiki(s: Settings, kind: EntityKind, id: string):
 async function removeMeetingCard(s: Settings, file: string): Promise<void> {
   const p = meetingCardPath(s, file)
   try {
-    if (existsSync(p)) unlinkSync(p)
+    await storageAt(resolveMeetingsFolder(s)).unlink(relativeToMeetingsRoot(s, p))
   } catch {
     /* best-effort */
   }
@@ -611,24 +610,18 @@ export async function publishMeetingCard(
   if (meetingFile.startsWith(TEAM_KEY_PREFIX)) return
   const base = basename(meetingFile)
   if (!base.endsWith('.md')) return
-  ensureWikiDirs(s)
-  const confidential = knownConfidential ?? readConfidentialMeetings(s)
+  await ensureWikiDirs(s)
+  const confidential = knownConfidential ?? (await readConfidentialMeetings(s))
   if (confidential.has(base)) {
     await removeMeetingCard(s, base)
     return
   }
-  const folder = resolveMeetingsFolder(s)
-  const path = join(folder, base)
-  if (!existsSync(path)) {
+  if (!(await pathExists(s, join(resolveMeetingsFolder(s), base)))) {
     await removeMeetingCard(s, base)
     return
   }
-  let raw: string
-  try {
-    raw = readSavedFile(path)
-  } catch {
-    return
-  }
+  const raw = await readSavedRel(s, base)
+  if (raw === null) return
   if (!raw) return // undecryptable on this device — leave any existing card alone rather than guess
 
   const fm = readMeetingFields(raw)
@@ -834,8 +827,8 @@ function readAllMeetingRefs(s: Settings): MeetingRef[] {
  *  `knownConfidential` carries the batch callers' already-read set, exactly as in publishEntity. */
 export async function publishIndexes(s: Settings, knownConfidential?: Set<string>): Promise<void> {
   if (!s.publishBrainPages) return
-  ensureWikiDirs(s)
-  const confidential = knownConfidential ?? readConfidentialMeetings(s)
+  await ensureWikiDirs(s)
+  const confidential = knownConfidential ?? (await readConfidentialMeetings(s))
 
   const accounts = listEntities(s, 'account').map((id) => readAccount(s, id)).filter((a): a is AccountEntity => !!a)
   const people = listEntities(s, 'person').map((id) => readPerson(s, id)).filter((p): p is PersonEntity => !!p)
@@ -908,7 +901,7 @@ export async function publishForExtraction(
   if (!s.publishBrainPages) return
   // One scan for the whole merge: this runs on EVERY ingested meeting (live and backfill), so re-reading
   // the confidential flags per page would re-decrypt the entire meetings folder ~5-10x per meeting.
-  const confidential = readConfidentialMeetings(s)
+  const confidential = await readConfidentialMeetings(s)
   const accountSlug = x.account && x.account.name.trim() ? resolveEntitySlug(aliasMap, 'account', x.account.name) : null
   if (accountSlug) await publishEntity(s, 'account', accountSlug, confidential)
   for (const p of x.people) {
@@ -930,10 +923,10 @@ export async function publishForExtraction(
  *  twice over the same brain state produces byte-identical files. No-op when publishing is off. */
 export async function publishAll(s: Settings): Promise<void> {
   if (!s.publishBrainPages) return
-  ensureWikiDirs(s)
+  await ensureWikiDirs(s)
   // One scan for the whole regeneration: a full-corpus rescan per page is O(pages × meetings) synchronous
   // read+decrypts on the main process, which is what froze the app for minutes on one Confidential toggle.
-  const confidential = readConfidentialMeetings(s)
+  const confidential = await readConfidentialMeetings(s)
   // Same "once for the whole regeneration" rule for the alias map (QA MQA-152): it is the other
   // full-corpus read+decrypt a card needs, and no page written below mutates an entity, so one map
   // serves every card.
@@ -955,20 +948,23 @@ export async function publishAll(s: Settings): Promise<void> {
  *  they keep there — the same unowned-data hazard isOwnedMeetingFile guards in recall.ts's delete-all.
  *  Best-effort, mirrors purgeBrain's own "never throw out of a wipe" convention; `ok` reports that no
  *  published page survived. */
-export function removeWiki(s: Settings): { ok: boolean } {
+export async function removeWiki(s: Settings): Promise<{ ok: boolean }> {
   const root = wikiDir(s)
   const owned = [...WIKI_DIRS, ...WIKI_ROOT_DOCS].map((name) => join(root, name))
+  const gateway = storageAt(resolveMeetingsFolder(s))
   for (const p of owned) {
     try {
-      if (existsSync(p)) rmSync(p, { recursive: true, force: true })
+      await gateway.unlink(relativeToMeetingsRoot(s, p), { recursive: true })
     } catch {
       /* best-effort — a survivor is reported through `ok` below */
     }
   }
   try {
-    if (existsSync(root) && readdirSync(root).length === 0) rmSync(root, { recursive: true, force: true })
+    const listed = await gateway.list(relativeToMeetingsRoot(s, root))
+    if (listed.status === 'ok' && listed.names.length === 0) await gateway.unlink(relativeToMeetingsRoot(s, root), { recursive: true })
   } catch {
     /* best-effort */
   }
-  return { ok: !owned.some((p) => existsSync(p)) }
+  const survivors = await Promise.all(owned.map((p) => pathExists(s, p)))
+  return { ok: !survivors.some(Boolean) }
 }

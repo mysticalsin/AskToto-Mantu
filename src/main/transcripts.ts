@@ -8,9 +8,9 @@ import {
   appendFileSync,
   unlinkSync,
   renameSync
-} from 'node:fs'
-import { writeFile, rename, unlink } from 'node:fs/promises'
-import { join, basename } from 'node:path'
+} from './infra/storage/legacy-sync-io'
+import { rename, unlink, writeFile } from './infra/storage/legacy-async-io'
+import { join, basename, dirname, relative } from 'node:path'
 import { randomBytes, createCipheriv, createDecipheriv, publicEncrypt, constants } from 'node:crypto'
 import type { SaveMeeting, SaveNote, Settings, RecapExport, TranscriptLine } from '@shared/ipc'
 import { isSummaryOnlyProfile, resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
@@ -233,19 +233,10 @@ function decryptEnvelopeV2(buf: Buffer, allowKeychainRecovery = false, filePath?
     }
     const raw = env.kLocal.startsWith('S:') ? env.kLocal.slice(2) : env.kLocal
     contentKeyB64 = unwrapWithKeychain(Buffer.from(raw, 'base64'))
-    // Self-healing: this device's Keychain just proved it can still unwrap the SAME content key —
-    // rewrap it under the current file-backend key so every later read (bulk list/search included)
-    // converges to 'F:' without ever touching the Keychain again. iv/tag/ct are untouched; only kLocal
-    // changes. Atomic tmp+rename (mirrors writeSaved above), done synchronously like store.ts's own
-    // legacy-format migration since this runs inside an otherwise-synchronous read. Best-effort: a
-    // rewrap failure must never fail this read — the caller already has the decrypted content either way.
+    // Self-healing: this Keychain can unwrap the same content key, so rewrap it under the active
+    // file-backend key. Atomic and best-effort; iv/tag/ct stay untouched.
     //
-    // Only converge when the file backend is the ACTIVE write backend. On packaged Windows it is not:
-    // safeStorage (DPAPI) is the writer, so every new transcript is 'S:', and safeStorage.isEncryptionAvailable()
-    // is always true there — which made canRecover true and rewrapped every meeting to 'F:' the moment it was
-    // opened, silently materialising a secret-key.bin the profile never needed and moving the meeting off DPAPI.
-    // Gating on useFileBackend() keeps the convergence for the macOS forced-keystore case it was written for
-    // and makes it a no-op wherever safeStorage is the writer.
+    // Only converge when the file backend is the active writer; packaged safeStorage profiles stay on DPAPI.
     if (canRecover && filePath && useFileBackend()) {
       const tmp = `${filePath}.${randomBytes(6).toString('hex')}.tmp`
       try {
@@ -368,19 +359,21 @@ export async function writeSaved(file: string, content: string, encrypt: boolean
     // to the caller (fail-closed): plaintext is never silently written when encryption is on.
     data = encryptEnvelopeV2(content)
   }
-  // Unique per-call tmp name: two concurrent writers to the SAME target (e.g. a background brain
-  // ingest and an IPC-driven edit both updating one entity file) would otherwise share `${file}.tmp` —
-  // the first rename steals the second writer's bytes and the second rename throws ENOENT.
+  // Unique per-call tmp name: concurrent writers to one target must not share `${file}.tmp`.
   const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`
+  const root = inferredMeetingsRoot(file)
+  const gateway = storageAt(root)
+  const relTmp = relative(root, tmp)
+  const relFile = relative(root, file)
   try {
-    await writeFile(tmp, data, { mode: 0o600 }) // async: off the main-process event loop
-    // The default meetings folder lives under OneDrive, which routinely holds a just-written file
-    // open (upload hashing) or gets grabbed by AV/EDR real-time scanning — rename() then throws
-    // EPERM/EBUSY on Windows even though nothing is actually wrong. Bounded retry rides out that
-    // transient lock instead of losing the save; any other error (or exhausted retries) still throws.
+    const written = await gateway.write(relTmp, data, { mode: 0o600, deadlineMs: null })
+    if (written.status !== 'ok') throw storageWriteError('write', written)
+    // OneDrive/AV can briefly hold a just-written file; retry only those transient Windows locks.
     for (let attempt = 0; ; attempt++) {
+      const moved = await gateway.rename(relTmp, relFile, { deadlineMs: null })
       try {
-        await rename(tmp, file)
+        if (moved.status !== 'ok') throw storageWriteError('rename', moved)
+        lockPathToCurrentUserWin32(file)
         break
       } catch (e) {
         const code = (e as NodeJS.ErrnoException).code
@@ -391,11 +384,25 @@ export async function writeSaved(file: string, content: string, encrypt: boolean
     // These bytes are on this device: reading them back must not wait on a placeholder probe.
     await recordLocalWrite(file)
   } catch (e) {
-    if (existsSync(tmp)) await unlink(tmp).catch(() => {}) // don't leave an orphaned .tmp on failure
+    await gateway.unlink(relTmp).catch(() => {}) // don't leave an orphaned .tmp on failure
     throw e
   }
 }
 
+function inferredMeetingsRoot(file: string): string {
+  const parts = file.split(/[/\\]/)
+  const marker = parts.findIndex((part) => part === '.brain' || part === 'wiki')
+  if (marker > 0) return parts.slice(0, marker).join(file.includes('\\') ? '\\' : '/') || dirname(file)
+  return dirname(file)
+}
+
+function storageWriteError(op: string, result: { status: string; code?: string }): NodeJS.ErrnoException {
+  const code = result.status === 'missing' ? 'ENOENT' : result.status === 'unavailable' ? result.code : undefined
+  const suffix = code ? `: ${code}` : ''
+  const error = new Error(`${op} failed: ${result.status}${suffix}`) as NodeJS.ErrnoException
+  if (code) error.code = code
+  return error
+}
 // Decrypted temp copies are tracked and deleted on quit so an encrypted transcript never leaves a
 // permanent cleartext file behind (the name is randomized so it isn't a predictable target either).
 const decryptedTemps = new Set<string>()
@@ -444,15 +451,7 @@ export function decryptToTemp(path: string, bytes?: Buffer): string {
   return tmp
 }
 
-/**
- * Startup sweep: removes orphaned `asktoto-<hex>-*.md` cleartext temp files left by a previous
- * session that was hard-killed (SIGKILL) before the will-quit cleanup hook could run.
- *
- * INTEGRATOR: call this from the main process immediately after `app.whenReady()` resolves,
- * before any transcript is opened, e.g.:
- *   import { sweepStaleTempFiles } from './transcripts'
- *   app.whenReady().then(() => { sweepStaleTempFiles(); … })
- */
+/** Startup sweep: removes orphaned `asktoto-<hex>-*.md` cleartext temp files left by a hard kill. */
 export function sweepStaleTempFiles(): void {
   try {
     const tmp = app.getPath('temp')
@@ -798,22 +797,13 @@ export async function appendDebrief(
       updated = md.slice(0, start) + section + (next >= 0 ? md.slice(next + 1) : '')
     }
   }
-  // Preserve the file's ORIGINAL at-rest encryption exactly as found (mirrors updateMeetingRecap /
-  // renameMeeting), NOT the live encryptTranscripts toggle. Otherwise appending a debrief to a file
-  // that was saved while encryption was on would rewrite the whole transcript as plaintext once the
-  // toggle is later turned off — a silent at-rest downgrade of already-recorded third-party speech.
+  // Preserve the file's original at-rest encryption, never the live toggle.
   const wasEncrypted = isEncryptedBytes(read.bytes)
   await writeSaved(path, updated, wasEncrypted)
   return { ok: true }
 }
 
-// Keyed by the meeting's OWN startedAt (like saveMeeting's real filename), not a single fixed name.
-// A fixed name would let the NEXT meeting's very first autosave tick silently overwrite a PREVIOUS
-// meeting's crash-recovery copy before anyone had a chance to notice it — defeating the whole point.
-// stamp() alone only has 1-second (HHMMSS) resolution, so two meetings starting in the same wall-clock
-// second would still collide on it — the millisecond suffix (kept behind its own "-", so it still reads
-// as "<HHMMSS>-<ms>" for recall.ts's FILENAME_TIMESTAMP retention regex, which only requires a literal
-// "-" right after the 6-digit time) closes that gap down to true per-meeting uniqueness.
+// Keyed by the meeting's own startedAt, with milliseconds to avoid same-second autosave collisions.
 const draftFilename = (started: number): string =>
   `.autosave-draft-${stamp(started)}-${String(started % 1000).padStart(3, '0')}.md`
 
@@ -836,7 +826,7 @@ export async function saveDraftTranscript(settings: Settings, m: SaveMeeting): P
     const started = m.startedAt || Date.now()
     const file = join(folder, draftFilename(started))
     const title = cleanTitle(m.title) || `${m.mode} meeting`
-const transcript = formatTranscript(m.lines)
+    const transcript = formatTranscript(m.lines)
     // Same duration_min/participants calc as saveMeeting above — without these, a draft promoted by
     // recoverOrphanDrafts (which only swaps the type:/status: lines, never adds fields) reads back with
     // durationMin 0 and an empty participants list forever, silently losing that badge on recovery.
@@ -871,13 +861,8 @@ const transcript = formatTranscript(m.lines)
 /**
  * Remove one meeting's autosave draft once it ends normally (its real saveMeeting() already succeeded).
  *
- * The unlink gets the same bounded retry writeSaved() uses for rename: the default meetings folder is
- * OneDrive-synced, which routinely holds a just-written file open for upload hashing, and AV/EDR
- * real-time scanning grabs it too — unlink then throws EPERM/EBUSY on Windows even though nothing is
- * wrong. A single best-effort attempt leaves the draft on disk, and recoverOrphanDrafts() promotes it
- * on the next launch, so the user sees their meeting twice with the second copy labelled
- * "(recovered)". Retrying rides out the transient lock; a genuinely stuck file still degrades to the
- * old behaviour rather than failing the meeting end.
+ * The unlink gets the same bounded retry writeSaved() uses for rename: OneDrive/AV may briefly hold the
+ * draft, and a missed cleanup would otherwise show a duplicate recovered meeting on next launch.
  */
 export async function clearDraftTranscript(settings: Settings, startedAt: number): Promise<void> {
   try {
@@ -901,9 +886,7 @@ export async function clearDraftTranscript(settings: Settings, startedAt: number
 
 const IN_PROGRESS_SUFFIX = ' (in progress — autosaved draft)'
 
-// Never follow a symlink planted with a draft-shaped name: `FileClass.isSymlink` is the directory
-// entry's own type (from lstat), not the target's, so a symlink to another meeting already inside the
-// folder is rejected here even though the gateway's `read()` would otherwise follow it.
+// Never promote a symlink planted with a draft-shaped name.
 function isFile(fileClass: FileClass | undefined): boolean {
   return !!fileClass && 'isSymlink' in fileClass && !fileClass.isSymlink
 }
@@ -948,11 +931,7 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
           })
           continue
         }
-        // Preserve the DRAFT's own at-rest encryption exactly as found (mirrors appendDebrief /
-        // renameMeeting), NOT the live encryptTranscripts toggle. A draft written while encryption was
-        // on holds recorded third-party speech; promoting it under a since-disabled toggle would rewrite
-        // it as unmarked cleartext into the (OneDrive-synced) meetings folder — a silent at-rest
-        // downgrade, with no prompt and no way back.
+        // Preserve the draft's own at-rest encryption, never the live toggle.
         const read = await gateway.read(f)
         if (read.status !== 'ok') continue
         const wasEncrypted = isEncryptedBytes(read.bytes)
@@ -974,10 +953,7 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
         }
         recovered++
 
-        // Mirror saveMeeting's exact plaintext-mode index.md bookkeeping (same row shape) — a recovered
-        // meeting should be just as discoverable from index.md as a normal one. Keyed on the file we
-        // just wrote, not the live toggle: index.md is always cleartext, so a preserved-encrypted
-        // recovery would otherwise leak the meeting's title and date beside the ciphertext.
+        // Mirror saveMeeting's plaintext index row only for plaintext recovered files.
         if (!wasEncrypted) {
           const lines = text.split('\n')
           const dateLine = lines.find((l) => l.startsWith('date: '))

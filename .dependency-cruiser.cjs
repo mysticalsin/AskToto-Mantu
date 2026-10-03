@@ -20,6 +20,14 @@ const ENTRY_POINTS = [
   '^src/renderer/src/(main\\.tsx|import-decoder\\.ts)$',
   '^src/renderer/src/lib/whisper\\.worker\\.ts$',
 ]
+const MEETINGS_ROOT_READERS = [
+  '^src/main/brain/ingest\\.ts$',
+  '^src/main/brain/publish\\.ts$',
+  '^src/main/brain/store\\.ts$',
+  '^src/main/graphify\\.ts$',
+  '^src/main/recall\\.ts$',
+  '^src/main/transcripts\\.ts$',
+]
 
 /**
  * One layer boundary, as two rules: production code must never cross it (error), and a test that
@@ -77,9 +85,16 @@ module.exports = {
       from: { path: ENTRY_POINTS },
       to: {
         path: '^src/.+\\.tsx?$',
-        pathNot: [TEST_FILE, '\\.d\\.ts$', '/__fixtures__/', '/test-helpers/', ...ENTRY_POINTS],
+        pathNot: [TEST_FILE, '\\.d\\.ts$', '/__fixtures__/', '/test-helpers/', '^src/main/infra/storage/fs-(sync|async)\\.ts$', ...ENTRY_POINTS],
         reachable: false,
       },
+    },
+    {
+      name: 'ff05b-meetings-root-readers-no-node-fs',
+      comment: 'Meetings-root readers reach filesystem I/O through the storage gateway, never direct node:fs imports or storage fs shims.',
+      severity: 'error',
+      from: { path: MEETINGS_ROOT_READERS },
+      to: { path: '^((node:)?fs(/promises)?|src/main/infra/storage/(fs|legacy)-(sync|async)(-io)?\\.ts)$' },
     },
   ],
   options: {

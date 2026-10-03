@@ -30,6 +30,7 @@ import { setSettings } from '../store'
 import { envelopeKeyKind, writeSaved } from '../transcripts'
 import { startBackfill } from './ingest'
 import { useStorageForTests } from '../infra/storage/meetings-storage'
+import { userDataIngestLedgerPath } from '../infra/storage/ingest-ledger'
 import {
   brainDir,
   BrainIndexRebuildError,
@@ -118,6 +119,7 @@ describe('rebuild preserves unreadable indexes', () => {
 
   beforeEach(() => {
     restoreFsMocks()
+    delete process.env.ASKTOTO_LEDGER_USERDATA
     useStorageForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-rebuild-preserve-ud-'))
     meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-rebuild-preserve-meetings-'))
@@ -133,6 +135,7 @@ describe('rebuild preserves unreadable indexes', () => {
     // Tests may leave fs spies throwing; cleanup must run through the real implementations first.
     restoreFsMocks()
     await settleBrainWritesForTests()
+    delete process.env.ASKTOTO_LEDGER_USERDATA
     delete process.env.ASKTOTO_LOCAL_KEYSTORE
     resetSecretKeyCache()
     restoreElectronMocks(userData)
@@ -454,6 +457,30 @@ describe('rebuild preserves unreadable indexes', () => {
 
     expectBytesUnchanged(primary, verifiedBytes)
     expect(sha256(readFileSync(primary))).not.toBe(changedSha)
+  })
+
+  it('restores into the active userData ledger in switch mode without rewriting the legacy rollback ledger', async () => {
+    process.env.ASKTOTO_LEDGER_USERDATA = 'switch'
+    writeFileSync(primary, JSON.stringify(BrainIndexSchema.parse({ ingested: { 'rollback.md': { at: 1, ok: true } } })))
+    const legacyBefore = sha256(readFileSync(primary))
+    const active = userDataIngestLedgerPath(settings)
+    mkdirSync(join(userData, 'brain'), { recursive: true })
+    await writeSaved(active, JSON.stringify(BrainIndexSchema.parse({ ingested: { 'active.md': { at: 2, ok: true } } })), false)
+    const activeBefore = sha256(readFileSync(active))
+    const preserved = join(meetingsFolder, '.brain-preserved')
+    mkdirSync(preserved, { recursive: true })
+    const copy = join(preserved, 'index.unreadable-readable.json')
+    await writeSaved(copy, JSON.stringify(BrainIndexSchema.parse({ ingested: { 'restored-switch.md': { at: 3, ok: true } } })), true)
+    const restoredBytes = sha256(readFileSync(copy))
+
+    expect(currentBrainIndexIsReadable(settings)).toBe(true)
+    expect(restorePreservedBrainIndex(settings, 'index.unreadable-readable.json', { allowReplaceReadable: true })).toEqual({ ok: true })
+
+    expectBytesUnchanged(primary, legacyBefore)
+    expectBytesUnchanged(active, restoredBytes)
+    const beforeRestore = fs.readdirSync(preserved).filter((f) => f.startsWith('index.before-restore-'))
+    expect(beforeRestore).toHaveLength(1)
+    expectBytesUnchanged(join(preserved, beforeRestore[0]), activeBefore)
   })
 
   it('refuses to restore a preserved index that still cannot decrypt', () => {
