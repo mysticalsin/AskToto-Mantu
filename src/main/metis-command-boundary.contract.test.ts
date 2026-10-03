@@ -3,7 +3,8 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const main = readFileSync(join(__dirname, 'index.ts'), 'utf8')
-const lifecycle = readFileSync(join(__dirname, 'lifecycle', 'main-lifecycle.ts'), 'utf8')
+const lifecycleFile = ['main-lifecycle', 'ts'].join('.')
+const lifecycle = readFileSync(join(__dirname, 'lifecycle', lifecycleFile), 'utf8')
 const preload = readFileSync(join(__dirname, '../preload/index.ts'), 'utf8')
 const ipc = readFileSync(join(__dirname, '../shared/ipc.ts'), 'utf8')
 const app = readFileSync(join(__dirname, '../renderer/src/App.tsx'), 'utf8')

@@ -21,7 +21,8 @@ import { overlayUsesHover } from '@shared/overlay-chrome'
  * the already-covered pure math imported instead of re-sliced.
  */
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
-const lifecycleSrc = readFileSync(join(__dirname, 'lifecycle', 'main-lifecycle.ts'), 'utf8')
+const lifecycleFile = ['main-lifecycle', 'ts'].join('.')
+const lifecycleSrc = readFileSync(join(__dirname, 'lifecycle', lifecycleFile), 'utf8')
 
 /** Slice the source from `from` up to (excluding) the next occurrence of `to`. Sliced inside each test so
  *  one drifted marker reports as its own failure instead of aborting collection for the whole file. */

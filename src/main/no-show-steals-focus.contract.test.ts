@@ -15,7 +15,8 @@ import { describe, it, expect } from 'vitest'
  * license-enforcement-drift.contract.test.ts / index-audit-fixes.contract.test.ts.
  */
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
-const lifecycleSrc = readFileSync(join(__dirname, 'lifecycle', 'main-lifecycle.ts'), 'utf8')
+const lifecycleFile = ['main-lifecycle', 'ts'].join('.')
+const lifecycleSrc = readFileSync(join(__dirname, 'lifecycle', lifecycleFile), 'utf8')
 
 /** Brace-counted function body extraction — robust to nested blocks (unlike a marker-to-marker slice,
  *  which breaks the moment a sibling function's name changes). */

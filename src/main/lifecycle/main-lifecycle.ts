@@ -22,8 +22,8 @@ export function installSecondInstanceLifecycle(
   deps: SecondInstanceLifecycleDeps
 ): void {
   app.on('second-instance', (_event, commandLine) => {
+    if (deps.handleSmokeReopenProbe(commandLine)) return
     deps.reveal('second-instance', { focus: true })
-    if (typeof deps.handleSmokeReopenProbe === 'function') deps.handleSmokeReopenProbe(commandLine)
   })
 }
 

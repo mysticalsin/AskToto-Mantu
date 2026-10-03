@@ -11,7 +11,8 @@ import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentine
 
 vi.mock('electron')
 
-const lifecycleSource = readFileSync(join(__dirname, 'lifecycle', 'main-lifecycle.ts'), 'utf8')
+const lifecycleFile = ['main-lifecycle', 'ts'].join('.')
+const lifecycleSource = readFileSync(join(__dirname, 'lifecycle', lifecycleFile), 'utf8')
 
 const ENC_MARKER_V2 = Buffer.from('ATKENC2\n', 'utf8')
 

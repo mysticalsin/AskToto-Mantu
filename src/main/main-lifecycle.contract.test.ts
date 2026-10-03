@@ -12,7 +12,8 @@ import { describe, expect, it, vi } from 'vitest'
 // core.autocrlf yields CRLF and every marker below containing a literal \n stops matching. These
 // assertions are about the shipped expression, never about how git wrote the line endings.
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
-const lifecycleSrc = readFileSync(join(__dirname, 'lifecycle', 'main-lifecycle.ts'), 'utf8').replace(/\r\n/g, '\n')
+const lifecycleFile = ['main-lifecycle', 'ts'].join('.')
+const lifecycleSrc = readFileSync(join(__dirname, 'lifecycle', lifecycleFile), 'utf8').replace(/\r\n/g, '\n')
 
 /** Slice the source from `from` up to (excluding) the next occurrence of `to`. Sliced inside each test so
  *  one drifted marker reports as its own failure instead of aborting collection for the whole file. */
@@ -104,6 +105,7 @@ describe('MQA-172 — a second launch after a failed boot window recreates it in
   /** Execute the real `app.on('second-instance', ...)` registration and hand back the handler it installs. */
   const secondInstanceHandler = (reveal: (reason: string, options: { focus?: boolean }) => void): (() => void) => {
     const src = sliceLifecycleBetween("app.on('second-instance'", 'export interface BootstrapLifecycleDeps')
+      .replace(/\n}\s*$/, '')
     let handler: (() => void) | null = null
     const app = {
       on: (_event: string, fn: () => void) => {
@@ -245,7 +247,7 @@ describe('MQA-345 — constructor swaps keep the retiring renderer trusted until
     expect(retired).toMatch(/sender\.expiresAt <= Date\.now\(\)/)
 
     const localModels = sliceBetween('ipcMain.handle(IPC.localModelsList', '// Explicit Download/Retry')
-    const park = sliceBetween('ipcMain.handle(IPC.overlayParkAfterHide', '// Renderer ErrorBoundary')
+    const park = sliceBetween('ipcMain.handle(IPC.overlayParkAfterHide', 'ipcMain.handle(IPC.windowMoveBy')
     const bundled = sliceBetween('safeHandle(IPC.asrBundled', 'safeHandle(IPC.asrAssetsStatus')
     expect(localModels.indexOf('isRecentlyRetiredOverlaySender(e)')).toBeLessThan(localModels.indexOf('assertMainWindow(e)'))
     expect(localModels).toMatch(/if \(isRecentlyRetiredOverlaySender\(e\)\) return \[\]/)

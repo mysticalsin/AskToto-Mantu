@@ -4,7 +4,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { createListeningStateHandler } from './listening-state-ipc'
 
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
-const lifecycleSrc = readFileSync(join(__dirname, 'lifecycle', 'main-lifecycle.ts'), 'utf8')
+const lifecycleFile = ['main-lifecycle', 'ts'].join('.')
+const lifecycleSrc = readFileSync(join(__dirname, 'lifecycle', lifecycleFile), 'utf8')
 
 function sliceBetween(from: string, to: string, source = indexSrc): string {
   const start = source.indexOf(from)

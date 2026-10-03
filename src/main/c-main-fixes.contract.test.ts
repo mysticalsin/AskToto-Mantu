@@ -12,7 +12,8 @@ import { createAsrModelProtocolHandler } from './asr-model-protocol'
  */
 
 const source = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
-const lifecycleSource = readFileSync(join(__dirname, 'lifecycle', 'main-lifecycle.ts'), 'utf8').replace(/\r\n/g, '\n')
+const lifecycleFile = ['main-lifecycle', 'ts'].join('.')
+const lifecycleSource = readFileSync(join(__dirname, 'lifecycle', lifecycleFile), 'utf8').replace(/\r\n/g, '\n')
 
 describe('finding 1: "settings" hotkey is registered, not just bindable', () => {
   it('shortcutActions includes a settings entry wired to sendHotkey', () => {

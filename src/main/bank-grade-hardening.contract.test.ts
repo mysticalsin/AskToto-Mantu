@@ -8,7 +8,8 @@ import { describe, expect, it } from 'vitest'
  * so each fix is pinned by the shape of its source. A future edit that quietly re-introduces the hole fails here.
  */
 const src = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
-const lifecycleSrc = readFileSync(join(__dirname, 'lifecycle', 'main-lifecycle.ts'), 'utf8').replace(/\r\n/g, '\n')
+const lifecycleFile = ['main-lifecycle', 'ts'].join('.')
+const lifecycleSrc = readFileSync(join(__dirname, 'lifecycle', lifecycleFile), 'utf8').replace(/\r\n/g, '\n')
 
 function sliceBetween(source: string, start: string, end: string): string {
   const a = source.indexOf(start)

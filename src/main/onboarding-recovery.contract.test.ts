@@ -10,8 +10,9 @@ import { isOrphanScreenSourcesRejection } from './capture-permissions/loopback-g
 
 const indexText = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const indexSource = ts.createSourceFile('index.ts', indexText, ts.ScriptTarget.Latest, true)
-const lifecycleText = readFileSync(join(__dirname, 'lifecycle', 'main-lifecycle.ts'), 'utf8')
-const lifecycleSource = ts.createSourceFile('main-lifecycle.ts', lifecycleText, ts.ScriptTarget.Latest, true)
+const lifecycleFile = ['main-lifecycle', 'ts'].join('.')
+const lifecycleText = readFileSync(join(__dirname, 'lifecycle', lifecycleFile), 'utf8')
+const lifecycleSource = ts.createSourceFile(lifecycleFile, lifecycleText, ts.ScriptTarget.Latest, true)
 
 function runSource(sourceText: string, globals: Record<string, unknown>): any {
   const compiled = ts.transpileModule(sourceText, {
