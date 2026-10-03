@@ -71,6 +71,7 @@ describe('candidate-scenarios.yml', () => {
     const options = block(scenario, '        options:', 8).map((line) => line.trim().replace(/^- /, ''))
     expect(options).toEqual(Object.keys(SCENARIOS))
     expect(options).toContain('renderer-kill')
+    expect(options).toContain('meeting-history')
   })
 
   it('reads contents and actions only, uses no secrets, and pins every action by full SHA', () => {
@@ -168,6 +169,7 @@ describe('candidate-scenarios.yml', () => {
     expect(dmgArm.indexOf('mkdir -p "$volume"')).toBeLessThan(dmgArm.indexOf('hdiutil attach'))
     expect(dmgArm).toContain('-mountpoint "$volume"')
     expect(workflow).toContain('-f scenario=renderer-kill -f mac_sha256=<Metis DMG sha256 from SHA256SUMS.txt>')
+    expect(workflow).toContain('-f scenario=meeting-history -f mac_sha256=<Metis-QA zip sha256 from SHA256SUMS.txt>')
   })
 
   it('authorises System Events GUI scripting from the registry after the install and before the scenario', () => {
@@ -253,6 +255,23 @@ describe('candidate-scenarios.yml', () => {
     expect(Object.keys(SCENARIOS['idle-soak'].platforms)).toEqual(['mac', 'win'])
     expect(Object.keys(SCENARIOS['sidecar-boot-reaper'].platforms)).toEqual(['mac', 'win'])
     expect(job('win')).toContain('    runs-on: windows-latest')
+  })
+
+  it('offers meeting-history from the registry as a macOS QA-identity scenario with the hosted long-run timeout', () => {
+    const options = block(block(block(lines, '    inputs:', 4), '      scenario:', 6), '        options:', 8).map((line) => line.trim())
+    expect(options).toContain('- meeting-history')
+    expect(Object.keys(SCENARIOS['meeting-history'].platforms)).toEqual(['mac'])
+    expect(SCENARIOS['meeting-history'].platforms.mac).toMatchObject({
+      variant: 'mac-qa-identity',
+      artifact: 'candidate-mac-qa-identity',
+      timeoutMinutes: 110,
+      stepTimeoutMinutes: 95
+    })
+    expect(resolveScenario({ scenario: 'meeting-history', sha256: { mac: 'a'.repeat(64) } }).mac).toMatchObject({
+      timeoutMinutes: 110,
+      stepTimeoutMinutes: 95
+    })
+    expect(job('mac')).toContain('    runs-on: macos-latest')
   })
 
   it('keeps per-scenario timeouts in the registry and gives idle-soak long hosted jobs', () => {
