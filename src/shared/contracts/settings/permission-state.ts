@@ -5,7 +5,7 @@ import { z } from 'zod'
 export const AppIdentitySchema = z.object({
   version: z.string().max(64),
   cdhash: z.string().max(128)
-})
+}).strict()
 export type AppIdentity = z.infer<typeof AppIdentitySchema>
 
 /** Main-owned (settings:set strips it from renderer patches). */
@@ -22,7 +22,7 @@ export const PermissionStateSchema = z.object({
   repairStartedAt: z.number().default(0),
   /** The last Repair's tccutil call failed, so the copy guides the manual remove-then-add instead. */
   repairFailed: z.boolean().default(false)
-})
+}).strict()
 export type PermissionState = z.infer<typeof PermissionStateSchema>
 export const DEFAULT_PERMISSION_STATE: PermissionState = {
   screenAskedFor: null,
