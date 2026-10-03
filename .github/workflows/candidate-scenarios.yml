@@ -4,7 +4,8 @@ name: Candidate scenarios
 # qa-candidate.yml run, selected by the sha256 the lead names, into a fresh directory on a fresh hosted
 # profile, runs one scenario from the registry in scripts/qa/candidate-scenarios.mjs, and uploads a
 # content-free report plus lane.json, whose fields the lead copies into an evidence record. It never builds
-# the app, signs, publishes, or pushes a tag. Runs only from main, on a qa-candidate.yml dispatch on main.
+# the app, signs, publishes, or pushes a tag. Runs only from main, on a qa-candidate.yml dispatch on main
+# or release/1.9.x.
 #   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> \
 #     -f scenario=fault-fatal-relaunch -f mac_sha256=<Metis-QA zip sha256 from SHA256SUMS.txt>
 #   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> \
@@ -30,7 +31,7 @@ on:
   workflow_dispatch:
     inputs:
       candidate_run:
-        description: Run id of the qa-candidate.yml dispatch on main that built the installers
+        description: Run id of the qa-candidate.yml dispatch on main or release/1.9.x that built the installers
         required: true
         type: string
       scenario:
@@ -101,7 +102,7 @@ jobs:
           MAC_SHA256: ${{ inputs.mac_sha256 }}
           WIN_SHA256: ${{ inputs.win_sha256 }}
         run: node scripts/qa/candidate-scenarios.mjs resolve --scenario "$SCENARIO" --mac-sha256 "$MAC_SHA256" --win-sha256 "$WIN_SHA256" >> "$GITHUB_OUTPUT"
-      - name: The candidate is a successful qa-candidate.yml dispatch on main
+      - name: The candidate is a successful qa-candidate.yml dispatch on main or release/1.9.x
         env:
           GH_TOKEN: ${{ github.token }}
           CANDIDATE_RUN: ${{ inputs.candidate_run }}

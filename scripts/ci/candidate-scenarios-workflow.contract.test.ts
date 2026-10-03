@@ -81,12 +81,12 @@ describe('candidate-scenarios.yml', () => {
     expect(workflow).not.toMatch(/npm run (dist|build|release)/)
   })
 
-  it('guards on this repository and main, and refuses any run that is not a qa-candidate.yml dispatch on main', () => {
+  it('guards dispatch to this repository and main, and accepts qa-candidate.yml dispatches on main or release/1.9.x', () => {
     const guard = job('guard')
     const repositoryGuard = "if: github.event_name == 'workflow_dispatch' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'"
     expect(guard).toContain(`    ${repositoryGuard}`)
     expect(read('qa-candidate.yml')).toContain("github.repository == 'mysticalsin/AskToto-Mantu'")
-    // qa-candidate.yml builds on main and release/1.9.x only; this lane stays narrower and takes main candidates only.
+    // qa-candidate.yml builds on main and release/1.9.x only; this lane measures candidates from both branches.
     const qaCandidate = read('qa-candidate.yml')
     const refGuard = qaCandidate.slice(qaCandidate.indexOf('case "$GITHUB_REF" in'), qaCandidate.indexOf('esac'))
     const refArms = refGuard.split('\n').map((line) => line.trim()).filter((line) => /^[^\s]+\)/.test(line))
@@ -98,6 +98,7 @@ describe('candidate-scenarios.yml', () => {
     const runGuard = guardSteps[stepIndex(guardSteps, 'candidate-scenarios.mjs guard')]
     expect(runGuard).toContain('gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN"')
     expect(runGuard).toContain('node scripts/qa/candidate-scenarios.mjs guard candidate-run.json "$CANDIDATE_RUN"')
+    expect(guard).toContain('qa-candidate.yml dispatch on main or release/1.9.x')
   })
 
   it('has one job per registry platform, on its hosted runner, gated by the guard', () => {

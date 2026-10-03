@@ -391,10 +391,12 @@ export function resolveOutputs(plan) {
 
 /**
  * Decides from the Actions API run JSON (GET repos/{repo}/actions/runs/{id}) whether a run may be measured:
- * only a completed, successful workflow_dispatch run of qa-candidate.yml on main. A pull-request self-test
- * candidate is refused, since its bytes are a PR merge commit and can never be promoted.
+ * only a completed, successful workflow_dispatch run of qa-candidate.yml on main or release/1.9.x. A
+ * pull-request self-test candidate is refused, since its bytes are a PR merge commit and can never be promoted.
  * Returns the problems; empty means the run is a candidate.
  */
+export const CANDIDATE_RUN_BRANCHES = Object.freeze(['main', 'release/1.9.x'])
+
 export function candidateRunProblems(run, candidateRun) {
   if (typeof run !== 'object' || run === null) return ['The run JSON is not an object.']
   const problems = []
@@ -404,7 +406,9 @@ export function candidateRunProblems(run, candidateRun) {
   if (run.event !== 'workflow_dispatch') {
     problems.push(`Run ${candidateRun} was triggered by ${run.event}, not workflow_dispatch; a pull-request self-test is never a candidate.`)
   }
-  if (run.head_branch !== 'main') problems.push(`Run ${candidateRun} ran on ${run.head_branch}, not main.`)
+  if (!CANDIDATE_RUN_BRANCHES.includes(run.head_branch)) {
+    problems.push(`Run ${candidateRun} ran on ${run.head_branch}, not ${CANDIDATE_RUN_BRANCHES.join(' or ')}.`)
+  }
   if (run.status !== 'completed') problems.push(`Run ${candidateRun} is ${run.status}, not completed.`)
   if (run.conclusion !== 'success') problems.push(`Run ${candidateRun} concluded ${run.conclusion}, not success.`)
   return problems
@@ -805,7 +809,7 @@ function main(argv) {
       if (!runJson || !candidateRun) throw new Error('usage: guard <run.json> <candidate_run>')
       const problems = candidateRunProblems(JSON.parse(readFileSync(runJson, 'utf8')), candidateRun)
       if (problems.length) throw new Error(problems.join('\n'))
-      console.log(`Run ${candidateRun} is a successful ${QA_CANDIDATE_WORKFLOW} dispatch on main.`)
+      console.log(`Run ${candidateRun} is a successful ${QA_CANDIDATE_WORKFLOW} dispatch on ${CANDIDATE_RUN_BRANCHES.join(' or ')}.`)
       return 0
     }
     case 'profile': {
