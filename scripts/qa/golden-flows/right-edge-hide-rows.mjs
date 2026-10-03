@@ -303,15 +303,19 @@ async function rightEdgePageState(page) {
  * Runs inside the overlay page (page.evaluate(pinnedBridgeCall, [method, args])): awaits
  * window.toto[method](...args) while a global Set pins the bridged promise for Playwright.
  */
-export async function pinnedBridgeCall([method, args]) {
+export function pinnedBridgeCall([method, args]) {
   const pending = (globalThis.__metisSmokeBridgePending ??= new Set())
   const call = window.toto[method](...args)
+  let returned
+  returned = Promise.resolve(call)
+    .then(() => undefined)
+    .finally(() => {
+      pending.delete(call)
+      pending.delete(returned)
+    })
   pending.add(call)
-  try {
-    await call
-  } finally {
-    pending.delete(call)
-  }
+  pending.add(returned)
+  return returned
 }
 
 /** Content-free evidence: geometry kind and chrome flags only, never page text. */
