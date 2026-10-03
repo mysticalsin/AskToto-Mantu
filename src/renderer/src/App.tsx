@@ -1462,8 +1462,7 @@ export function App(): JSX.Element {
         // The fallback never saw a screen — a screen-asserting label ("Viewed screen") would contradict
         // the banner above and claim a capture that didn't happen.
         const fallbackLabel = opts?.label && /screen/i.test(opts.label) ? undefined : opts?.label
-        const id = ask.run({
-          mode: 'answer',
+        const id = ask.run({ mode: 'answer',
           prompt,
           label: fallbackLabel,
           kind: opts?.kind,
