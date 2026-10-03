@@ -9,6 +9,7 @@ import {
   bootStagesFromAudit,
   buildLaunchFailureReport,
   buildReport,
+  candidateArgv,
   candidateEnv,
   countStorageSaturations,
   cpuBusyPct,
@@ -360,6 +361,11 @@ describe('window-construction runs (M2-0516)', () => {
   it('always sets the variant for the candidate, so an inherited value never reaches an ST-1 run', () => {
     const env = candidateEnv({ PATH: '/bin', METIS_QA_WINDOW_VARIANT: 'prewarm-view' }, '/tmp/profile', 'shipped')
     expect(env).toEqual({ PATH: '/bin', ASKTOTO_USERDATA: '/tmp/profile', METIS_QA_WINDOW_VARIANT: 'shipped' })
+  })
+
+  it('adds Chromium mock-keychain only when the strict owner-runner job opts in', () => {
+    expect(candidateArgv({})).toEqual(['--inspect=127.0.0.1:0'])
+    expect(candidateArgv({ ASKTOTO_QA_MOCK_KEYCHAIN: '1' })).toEqual(['--inspect=127.0.0.1:0', '--use-mock-keychain'])
   })
 
   it('marks its report and launch failure as never ST-1 evidence, whatever the verdict; an ST-1 report carries no mark', () => {

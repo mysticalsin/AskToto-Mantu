@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { candidateArgv } from '../qa/lib/st-1-core.mjs'
 
 const root = join(__dirname, '..', '..')
 const workflow = readFileSync(join(root, '.github', 'workflows', 'qa-candidate.yml'), 'utf8').replace(/\r\n/g, '\n')
@@ -337,10 +338,12 @@ describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
       const block = job(name)
       expect(block).toContain('OWNER_SANDBOX_PROFILE: owner-runner.sb')
       expect(block).toContain('ASKTOTO_LOCAL_KEYSTORE: 1')
+      expect(block).toContain('ASKTOTO_QA_MOCK_KEYCHAIN: 1')
       expect(block).toContain('bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify')
       expect(block).toContain('bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/st-1.mjs')
       expect(block).not.toMatch(/(?:^|\n) {10}node scripts\/qa\/(?:provenance|st-1)\.mjs/)
     }
+    expect(candidateArgv({ ASKTOTO_QA_MOCK_KEYCHAIN: '1' })).toEqual(['--inspect=127.0.0.1:0', '--use-mock-keychain'])
   })
 
   it('keeps strict rows report-only and removes temp profiles and unzipped candidates on every outcome', () => {
@@ -377,8 +380,10 @@ describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
       expect(ownerRunnerProfile).toContain(path)
     }
     expect(ownerRunnerProfile).toContain('(param "WORKSPACE")')
+    expect(ownerRunnerProfile).toContain('(param "RUNNER_TEMP")')
     expect(ownerRunnerProfile).toContain('(require-all')
     expect(ownerRunnerProfile).toContain('(require-not (subpath (param "WORKSPACE")))')
+    expect(ownerRunnerProfile).toContain('(require-not (subpath (param "RUNNER_TEMP")))')
     expect(ownerRunnerProfile).not.toContain('delete-generic-password')
   })
 })

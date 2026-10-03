@@ -286,6 +286,14 @@ export function candidateEnv(env, profile, windowVariant) {
   return { ...env, ASKTOTO_USERDATA: profile, METIS_QA_WINDOW_VARIANT: windowVariant }
 }
 
+/** The candidate's launch argv. Strict owner-runner jobs opt into Chromium's mock keychain so a QA identity
+ *  launch cannot create a Safe Storage item in the owner's login keychain. */
+export function candidateArgv(env) {
+  const argv = ['--inspect=127.0.0.1:0']
+  if (env.ASKTOTO_QA_MOCK_KEYCHAIN === '1') argv.push('--use-mock-keychain')
+  return argv
+}
+
 /** The window-construction gate's budget (M2-0519): every shipped createWindow.prewarm and createWindow.construct
  *  stays under it, in both chromes. */
 export const WINDOW_STAGE_BUDGET_MS = 250

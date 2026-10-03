@@ -37,9 +37,10 @@
   (subpath (string-append (param "HOME") "/Library/Safari"))
   (subpath (string-append (param "HOME") "/Library/Cookies")))
 
-;; The queue workspace is denied, except for this job's checked-out repository if the runner keeps it
-;; under that parent. RUNNER_TEMP remains outside the deny list and writable for probes and ST-1 output.
+;; The queue workspace is denied, except for this job's checked-out repository and temp directory if the
+;; runner keeps either under that parent.
 (deny file-read* file-write*
   (require-all
     (subpath (string-append (param "HOME") "/AI-Brain-build"))
-    (require-not (subpath (param "WORKSPACE")))))
+    (require-not (subpath (param "WORKSPACE")))
+    (require-not (subpath (param "RUNNER_TEMP")))))

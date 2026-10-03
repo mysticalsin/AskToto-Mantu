@@ -540,6 +540,7 @@ jobs:
         env:
           TMPDIR: ${{ runner.temp }}
           ASKTOTO_LOCAL_KEYSTORE: 1
+          ASKTOTO_QA_MOCK_KEYCHAIN: 1
           OWNER_SANDBOX_PROFILE: owner-runner.sb
         run: |
           mkdir -p st1-report
@@ -772,6 +773,7 @@ jobs:
         env:
           TMPDIR: ${{ runner.temp }}
           ASKTOTO_LOCAL_KEYSTORE: 1
+          ASKTOTO_QA_MOCK_KEYCHAIN: 1
           OWNER_SANDBOX_PROFILE: owner-runner.sb
         run: |
           mkdir -p st1-report
