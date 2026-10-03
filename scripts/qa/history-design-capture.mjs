@@ -110,7 +110,11 @@ export const INSTALL_FIXTURE_HANDLERS = `(() => {
     requests: { list: 0, search: 0 },
     requestedAt: { list: 0, search: 0 }
   })
-  const park = () => new Promise((resolve) => { state.parked.push(resolve) })
+  const park = () => {
+    const pending = new Promise(() => {})
+    state.parked.push(pending)
+    return pending
+  }
   const answer = (channel, spec) => {
     state.requests[channel]++
     state.requestedAt[channel] = Date.now()
