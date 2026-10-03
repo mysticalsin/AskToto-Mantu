@@ -6,6 +6,8 @@
  * transcript, error, and subscriber behavior are the real useListen code.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { BUNDLE_REPAIR } from '@shared/bundle-response'
+import type { ScreenDiagnosis } from '@shared/screen-permission'
 import { WHISPER_WORKLET_SRC } from './whisper-worklet-src'
 
 // keys.ts freezes navigator.platform at import time, before beforeEach can stub the browser. Keep
@@ -97,7 +99,7 @@ let streams: Array<{ kind: 'mic' | 'system'; stream: MediaStream; track: FakeTra
 let addModuleImpl: () => Promise<void>
 let getUserMediaImpl: () => Promise<MediaStream>
 let getDisplayMediaImpl: () => Promise<MediaStream>
-let getPermissionsImpl: () => Promise<{ screenRecording?: string }>
+let getPermissionsImpl: () => Promise<{ screenRecording?: string; screenDiagnosis?: ScreenDiagnosis }>
 let mediaDeviceListeners: Partial<Record<string, () => void>> = {}
 
 type FakeTrack = {
@@ -1377,6 +1379,41 @@ describe('useListen Stop flush ownership', () => {
     expect(streams.filter((entry) => entry.kind === 'system')).toHaveLength(0)
   })
 
+  it('M2-0429: the permission watcher replaces the mic-only note with the diagnosis and offers Repair', async () => {
+    getDisplayMediaImpl = async () => {
+      throw Object.assign(new Error('screen capture denied'), { name: 'NotAllowedError' })
+    }
+    getPermissionsImpl = async () => ({
+      screenRecording: 'denied',
+      screenDiagnosis: {
+        state: 'not-effective',
+        reasons: ['identity-changed'],
+        action: 'repair',
+        duplicates: [],
+        grantedFor: { version: '1.9.6', cdhash: 'b'.repeat(40) },
+        repairFailed: false
+      }
+    })
+
+    let api = render()
+    await api.start('both', 'fast', 'parakeet', 'English')
+    api = render() // refresh the registered permission effect with listening=true
+    expect(api.captureDegraded).toMatchObject({ side: 'them', permission: true })
+    expect(api.captureDegraded?.repair).toBeFalsy()
+    host.rerunEffect(1)
+    await vi.advanceTimersByTimeAsync(3_000)
+    await settle()
+
+    api = render()
+    expect(window.toto.getPermissions).toHaveBeenCalledTimes(1)
+    expect(api.captureDegraded).toMatchObject({ side: 'them', permission: true, repair: true })
+    expect(api.captureDegraded?.note).toContain('belongs to Métis 1.9.6')
+    expect(api.error).toBe(api.captureDegraded?.note)
+    expect(streams.filter((entry) => entry.kind === 'system')).toHaveLength(0)
+    api.stop()
+    await vi.advanceTimersByTimeAsync(1)
+  })
+
   it('retries Windows loopback in place without polling macOS Screen Recording permissions', async () => {
     platform.isWindows = true
     vi.stubGlobal('navigator', { ...navigator, platform: 'Win32' })
@@ -1517,5 +1554,170 @@ describe('useListen Stop flush ownership', () => {
     await vi.advanceTimersByTimeAsync(5_000)
     expect(first).toHaveBeenCalledTimes(1)
     expect(second).toHaveBeenCalledTimes(1)
+  })
+})
+
+
+describe('M2-0535 Whisper initialization error ownership', () => {
+  it.each([false, true])('surfaces a first-Listen load failure with prewarm=%s', async (prewarm) => {
+    const api = render('whisper')
+    if (prewarm) await settle()
+    const warmWorker = workers[0]
+    await api.start('system', 'fast', 'whisper', 'English')
+    await settle()
+    const worker = workers.at(-1)!
+    if (prewarm) expect(worker).toBe(warmWorker)
+    expect(worker.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'init' }))
+
+    worker.emit({ type: 'error', message: BUNDLE_REPAIR })
+    await settle()
+    expect(render('whisper')).toMatchObject({ error: BUNDLE_REPAIR, loading: false, listening: true })
+  })
+
+  it.each([false, true])('keeps an early load failure through capture admission (degraded=%s)', async (degraded) => {
+    let resolveDisplay!: (stream: MediaStream) => void
+    getDisplayMediaImpl = () => new Promise((resolve) => { resolveDisplay = resolve })
+    if (degraded) getUserMediaImpl = async () => { throw new Error('Synthetic microphone unavailable') }
+    const starting = render('whisper').start(degraded ? 'both' : 'system', 'fast', 'whisper', 'English')
+    await settle()
+    const worker = workers.at(-1)!
+    expect(worker.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'init' }))
+    worker.emit({ type: 'error', message: BUNDLE_REPAIR })
+    await settle()
+    expect(render('whisper')).toMatchObject({ error: BUNDLE_REPAIR, loading: false })
+
+    resolveDisplay(makeStream('system'))
+    await starting
+    await settle()
+    const api = render('whisper')
+    expect(api).toMatchObject({ error: BUNDLE_REPAIR, loading: false, listening: true, capturing: true })
+    if (degraded) expect(api.captureDegraded).toMatchObject({ side: 'you', permission: false })
+    else expect(api.captureDegraded).toBeNull()
+  })
+
+  it('keeps a pending network retry through capture admission until the replacement is ready', async () => {
+    let resolveDisplay!: (stream: MediaStream) => void
+    getDisplayMediaImpl = () => new Promise((resolve) => { resolveDisplay = resolve })
+    const starting = render('whisper').start('system', 'fast', 'whisper', 'English')
+    await settle()
+    const retired = workers.at(-1)!
+    retired.emit({ type: 'error', message: 'Failed to fetch' })
+    await settle()
+    const retry = workers.at(-1)!
+    expect(retry).not.toBe(retired)
+    expect(render('whisper')).toMatchObject({ error: 'Back online. Restarting the speech model…', loading: true })
+
+    resolveDisplay(makeStream('system'))
+    await starting
+    await settle()
+    expect(render('whisper')).toMatchObject({ error: 'Back online. Restarting the speech model…', loading: true, capturing: true })
+    retry.emit({ type: 'ready', qualityDegraded: false })
+    await settle()
+    expect(render('whisper')).toMatchObject({ error: null, loading: false })
+  })
+
+  it('surfaces a load failure with queued audio without dispatching an unready decode', async () => {
+    const api = render('whisper')
+    await settle()
+    await api.start('system', 'fast', 'whisper', 'English')
+    await settle()
+    worklets.at(-1)!.emit({ audio: Float32Array.from([0.2]), partial: false })
+    const worker = workers.at(-1)!
+    worker.emit({ type: 'error', message: BUNDLE_REPAIR })
+    await settle()
+
+    expect(render('whisper')).toMatchObject({ error: BUNDLE_REPAIR, loading: false, listening: true })
+    expect(worker.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'audio' }), expect.anything())
+  })
+
+  it('retries a first-Listen network load failure and surfaces a repair failure from the replacement', async () => {
+    await render('whisper').start('system', 'fast', 'whisper', 'English')
+    await settle()
+    const retired = workers.at(-1)!
+    retired.emit({ type: 'error', message: 'Failed to fetch' })
+    await settle()
+    const retry = workers.at(-1)!
+    expect(retry).not.toBe(retired)
+    expect(retired.terminate).toHaveBeenCalledOnce()
+    expect(retry.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'init' }))
+    expect(render('whisper').error).toBe('Back online. Restarting the speech model…')
+
+    retired.emit({ type: 'error', message: 'Retired worker error' })
+    expect(render('whisper').error).toBe('Back online. Restarting the speech model…')
+    retry.emit({ type: 'error', message: BUNDLE_REPAIR })
+    await settle()
+    expect(render('whisper')).toMatchObject({ error: BUNDLE_REPAIR, loading: false })
+  })
+
+  it('surfaces a Whisper initialization failure after Parakeet startup rejects', async () => {
+    vi.mocked(window.toto.parakeetStatus).mockRejectedValueOnce(new Error('Synthetic unavailable Parakeet'))
+    await render('parakeet').start('system', 'fast', 'parakeet', 'English')
+    await settle()
+    const worker = workers.at(-1)!
+    expect(worker.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'init' }))
+    worker.emit({ type: 'error', message: BUNDLE_REPAIR })
+    await settle()
+    expect(render('parakeet')).toMatchObject({ error: BUNDLE_REPAIR, loading: false, listening: true })
+  })
+
+  it('still ignores a stale decode error when session two reuses a ready worker before its first window', async () => {
+    const first = await start('whisper')
+    const worker = workers.at(-1)!
+    worklets.at(-1)!.emit({ audio: Float32Array.from([0.2]), partial: false })
+    worker.emit({ type: 'text', text: 'Synthetic first meeting.', speaker: 'them' })
+    await settle()
+    first.stop()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(render('whisper').listening).toBe(false)
+
+    await render('whisper').start('system', 'fast', 'whisper', 'English')
+    await settle()
+    expect(workers.at(-1)).toBe(worker)
+    worker.emit({ type: 'error', message: 'Late previous-session decode error' })
+    expect(render('whisper').error).toBeNull()
+  })
+
+  it('keeps a replacement Apple session ready when an old Parakeet fallback lookup resolves', async () => {
+    let resolveBundled!: (bundled: boolean) => void
+    vi.mocked(window.toto.asrBundled).mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => { resolveBundled = resolve })
+    )
+    vi.mocked(window.toto.parakeetFeed).mockRejectedValue(new Error('Synthetic native rejection'))
+    await start('parakeet')
+    const oldWorklet = worklets.at(-1)!
+    for (let i = 0; i < 3; i++) {
+      oldWorklet.emit({ audio: Float32Array.from([0.2]), partial: false })
+      await settle()
+    }
+    expect(window.toto.asrBundled).toHaveBeenCalledOnce()
+    expect(workers).toHaveLength(0)
+
+    await render('apple').start('system', 'fast', 'apple', 'English')
+    await settle()
+    resolveBundled(true)
+    await settle()
+    worklets.at(-1)!.emit({ audio: Float32Array.from([0.3]), partial: false })
+    await settle()
+
+    expect(window.toto.appleSpeechFeed).toHaveBeenCalledOnce()
+    expect(workers).toHaveLength(0)
+    expect(render('apple')).toMatchObject({ error: null, loading: false, listening: true })
+  })
+
+  it('does not inherit Parakeet readiness into a fresh Whisper worker after Stop', async () => {
+    const first = await start('parakeet')
+    first.stop()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(render('parakeet').listening).toBe(false)
+
+    await render('whisper').start('system', 'fast', 'whisper', 'English')
+    await settle()
+    const worker = workers.at(-1)!
+    expect(render('whisper').loading).toBe(true)
+    worklets.at(-1)!.emit({ audio: Float32Array.from([0.2]), partial: false })
+    expect(worker.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'audio' }), expect.anything())
+    worker.emit({ type: 'error', message: BUNDLE_REPAIR })
+    await settle()
+    expect(render('whisper')).toMatchObject({ error: BUNDLE_REPAIR, loading: false, listening: true })
   })
 })

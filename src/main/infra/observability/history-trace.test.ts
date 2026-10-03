@@ -82,4 +82,29 @@ describe('createHistoryTracer', () => {
       ['history.request', { requestId: id(33), stage: 'settled', outcome: 'ok', ipcMs: 2 }]
     ])
   })
+
+  it('audits a History transition, including the from === to toggle-race no-op', () => {
+    const audit = vi.fn()
+    const tracer = createHistoryTracer({ audit })
+
+    tracer.transition({ from: 'answer', to: 'history', committedAtMs: 1_700_000_000_000 })
+    tracer.transition({ from: 'answer', to: 'answer', committedAtMs: 1_700_000_000_400 })
+
+    expect(audit.mock.calls).toEqual([
+      ['history.transition', { from: 'answer', to: 'history', committedAtMs: 1_700_000_000_000 }],
+      ['history.transition', { from: 'answer', to: 'answer', committedAtMs: 1_700_000_000_400 }]
+    ])
+  })
+
+  it('ignores a malformed transition report', () => {
+    const audit = vi.fn()
+    const tracer = createHistoryTracer({ audit })
+
+    tracer.transition(undefined)
+    tracer.transition({ from: 'nowhere', to: 'history', committedAtMs: 1 })
+    tracer.transition({ from: 'answer', to: 'history', committedAtMs: -1 })
+    tracer.transition({ from: 'answer', to: 'history' })
+
+    expect(audit).not.toHaveBeenCalled()
+  })
 })

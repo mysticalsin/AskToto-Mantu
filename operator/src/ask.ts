@@ -2,12 +2,13 @@
  * POST /v1/ask — streaming Operator proxy (FRAME G5/G7/G10).
  * Same seat + vault rules as /v1/use. SSE to the seat. Never returns a vault secret.
  */
-import { PROVIDERS, type ProviderId } from '../../src/shared/providers'
+import { operatorCallableProvider } from './provider-guard'
 import { PORTAL_CF_DEEPSEEK_PRO, resolvePortalCloudflareModel } from '../../src/shared/ask-routing'
 import { persistProxyAsk } from './ask-meter'
-import { GatewayPrivacyError, verifyDefaultGatewayPrivacy } from './ai-gateway'
+import { GatewayPrivacyError, readinessForError, verifyDefaultGatewayPrivacy } from './ai-gateway'
 import { seatAuthorizedForKeys, SEAT_NOT_APPROVED } from './fleet'
 import { json } from './http'
+import { enforceModelPolicy } from './model-policy'
 import { providerRefusedPayload } from './redact'
 import type { OperatorStore } from './store'
 import { seatHasEntitlement } from './tiers'
@@ -32,6 +33,10 @@ const SSE_HEADERS = {
 
 function fail(error: string, status: number, extra?: Record<string, unknown>): Response {
   return json({ ok: false, error, ...extra }, status)
+}
+
+function policyCapabilityForAsk(req: UseRequest): 'askChat' | 'recap' {
+  return req.mode === 'recap' ? 'recap' : 'askChat'
 }
 
 async function providerRefusedResponse(upstream: Response, secrets: readonly string[], screenshot = false): Promise<Response> {
@@ -490,7 +495,7 @@ function sseResponse(
 
 export async function handleAsk(
   store: OperatorStore,
-  env: { OPERATOR_VAULT_KEY?: string },
+  env: { OPERATOR_VAULT_KEY?: string; DB?: import('./d1').D1DatabaseLike },
   deviceId: string,
   bodyText: string,
   now: number,
@@ -523,12 +528,15 @@ export async function handleAsk(
       }
     }
   }
+  const refusal = await enforceModelPolicy(env.DB, policyCapabilityForAsk(req), req.provider, req.model)
+  if (refusal) {
+    await store.audit(crypto.randomUUID(), now, deviceId, 'model-policy.blocked', null, `${req.provider}/${req.model}`)
+    return fail(refusal.error, refusal.status, { code: refusal.code })
+  }
   const unlocked = await decryptActiveLlmSecret(store, env.OPERATOR_VAULT_KEY, req.provider)
   if (!unlocked) return fail('Operator cannot issue a use', 503)
-  const def = req.provider in PROVIDERS ? PROVIDERS[req.provider as ProviderId] : null
-  if (!def || def.kind === 'cli' || def.kind === 'dust' || def.kind === 'local') {
-    return fail('provider not allowed', 400)
-  }
+  const def = operatorCallableProvider(req.provider)
+  if (!def) return fail('provider not allowed', 400)
   const dest = upstreamUrl(req.provider, unlocked.accountId, def.baseUrl)
   if (typeof dest !== 'string') return fail(dest.error, dest.status)
   const init = upstreamInit(req.provider, unlocked.secret, req)
@@ -545,7 +553,7 @@ export async function handleAsk(
     })
   } catch (error) {
     if (error instanceof GatewayPrivacyError) {
-      return fail('Cloudflare gateway privacy is not verified.', 503, { code: error.code })
+      return fail('Cloudflare gateway privacy is not verified.', 503, { code: error.code, readiness: readinessForError(error) })
     }
     return fail('Operator cannot issue a use', 503)
   }

@@ -108,6 +108,16 @@ describe('retryStateAfterFailure', () => {
     )).toEqual({ attempts: 3, unreadable: { changedAtMs: 77 } })
   })
 
+  it('M2-0430: a permanent failure (does not fit the context) is exhausted on its first attempt, with no retryAfter', () => {
+    const next = retryStateAfterFailure(undefined, { unreadable: false, permanent: true, source: { changedAtMs: 5 } }, 100)
+    expect(next).toEqual({ attempts: 1, exhausted: true })
+    // Exhausted means every automatic trigger holds it: no tight retry loop, only an explicit Retry revives it.
+    expect(admitSource({ ...next, sourceVersion: 'v1' }, { version: 'v1', changedAtMs: 5 }, 'automatic', 200))
+      .toEqual({ action: 'hold', reason: 'exhausted' })
+    expect(admitSource({ ...next, sourceVersion: 'v1' }, { version: 'v1', changedAtMs: 5 }, 'user', 200))
+      .toEqual({ action: 'revive' })
+  })
+
   it('a genuine failure after an unreadable one clears unreadable', () => {
     const next = retryStateAfterFailure({ attempts: 2, unreadable: { changedAtMs: 77 } }, { unreadable: false, source: { changedAtMs: 77 } }, 100)
     expect(next).toEqual({ attempts: 3, retryAfter: 100 + 4 * 60_000 })

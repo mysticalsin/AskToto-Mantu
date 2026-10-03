@@ -32,10 +32,12 @@
   // from the top level, so both are restated here rather than left to fall through. OPERATOR_ENV
   // lets the Worker (and Settings -> Platform health) tell the two apart at runtime.
   //
-  // database_id is a placeholder: run `cd operator && npx wrangler@4 d1 create
-  // metis-operator-staging` once Cloudflare auth exists on this machine, then paste the printed id
-  // over REPLACE_AFTER_D1_CREATE below. Deploy with `node operator/scripts/deploy.mjs --env
-  // staging` (or `npx wrangler@4 deploy --env staging` from operator/ directly).
+  // database_id is a placeholder until the Cloudflare account owner creates the staging D1 (M2-0103,
+  // BLOCKED_EXTERNAL): the owner runs `wrangler d1 create metis-operator-staging` and the printed id
+  // replaces REPLACE_AFTER_D1_CREATE below. Until then remote staging migrate/deploy cannot run, and
+  // the local lane (`migrate.mjs --local --env staging`, `wrangler dev --local --env staging`) is the
+  // only staging contract. Deploy with `node operator/scripts/deploy.mjs --env staging`; production
+  // (no --env) is owner-only, see deploy.mjs.
   "env": {
     "staging": {
       "name": "metis-operator-staging",

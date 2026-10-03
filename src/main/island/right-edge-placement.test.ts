@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest'
+import { anchorY, revealBand } from '@shared/right-edge-geometry'
+import { pointInRect } from './cursor-watch'
 import {
+  RIGHT_EDGE_MARGIN_PX,
+  hideParkWindowOpacity,
   normalizeRightEdgeY,
   overlayPlacementPosition,
   parkAfterExclusiveOnboarding,
   resolveOverlayPlacement,
   rightEdgePlacementFits,
+  rightAnchoredParkPosition,
   rightEdgeHoverRestRect,
+  rightEdgeParkLayout,
   rightEdgeSidecarBounds,
   rightEdgePosition,
   hoverWatchRestRect,
@@ -25,8 +31,8 @@ const METRICS: DisplayMetrics = {
 
 describe('right-edge overlay placement', () => {
   it('keeps the tab and opened drawer on one shared right boundary', () => {
-    const tab = rightEdgeSidecarBounds(METRICS, { open: false, normalizedY: 0.5 })
-    const drawer = rightEdgeSidecarBounds(METRICS, { open: true, normalizedY: 0.5 })
+    const tab = rightEdgeSidecarBounds(METRICS, { open: false, anchor: 0.5 })
+    const drawer = rightEdgeSidecarBounds(METRICS, { open: true, anchor: 0.5 })
     expect(tab.x + tab.width).toBe(drawer.x + drawer.width)
     expect(tab.width).toBeGreaterThanOrEqual(48)
     expect(drawer.width).toBeGreaterThanOrEqual(336)
@@ -53,12 +59,64 @@ describe('right-edge overlay placement', () => {
     expect(overlayPlacementPosition({ placement: 'top-center', width: 880, height: 140, layout: 'bar', metrics: METRICS, topMargin: 8 })).toEqual({ x: 2200, y: 44 })
   })
 
-  it('uses a narrow local right-edge hover target so existing dwell/hysteresis can be reused', () => {
-    const rect = rightEdgeHoverRestRect(0.5, METRICS)
-    expect(rect.x + rect.width).toBe(WORK_AREA.x + WORK_AREA.width - 12)
-    expect(rect.width).toBe(52)
-    expect(rect.height).toBe(52)
-    expect(rect.y).toBeGreaterThanOrEqual(WORK_AREA.y)
+  it('reveals from a band flush with the physical right edge that is the authority revealBand(A), never an inset square', () => {
+    // Owner report on 1.9.6: the hover target was the 52x52 tab, 12 px inside the work area, so pushing the
+    // pointer to the screen edge never revealed the dock.
+    const drawer = rightEdgeSidecarBounds(METRICS, { open: true, anchor: 0.5 })
+    const rect = hoverWatchRestRect('hide', METRICS, 'right-edge', 0.5)
+    expect(rightEdgeHoverRestRect(0.5, METRICS)).toEqual(rect)
+    expect(rect.x + rect.width).toBe(METRICS.bounds.x + METRICS.bounds.width)
+    expect(rect.width).toBeLessThan(RIGHT_EDGE_MARGIN_PX)
+    // M2-0202 (spec v3 §2, LD1): band = authority.revealBand(A), [wa.y+48, wa.bottom−48] for every A.
+    expect(rect).toEqual(revealBand(WORK_AREA, anchorY(WORK_AREA, 0.5)))
+    expect(rect.y).toBe(WORK_AREA.y + 48)
+    expect(rect.height).toBe(WORK_AREA.height - 96)
+    // The pointer stopped by the screen edge, level with the middle of the drawer.
+    expect(pointInRect({ x: METRICS.bounds.x + METRICS.bounds.width - 1, y: drawer.y + drawer.height / 2 }, rect)).toBe(true)
+    // The old tab position, 40 px inside the work area, is no longer a reveal target.
+    const tab = rightEdgeSidecarBounds(METRICS, { open: false, anchor: 0.5 })
+    expect(pointInRect({ x: WORK_AREA.x + WORK_AREA.width - 40, y: tab.y + 20 }, rect)).toBe(false)
+    expect(hoverWatchRestRect('island', METRICS, 'right-edge', 0.5)).toEqual(rect)
+  })
+
+  it('reveals from the work-area edge when the Dock or taskbar sits on the right', () => {
+    const dockRight: DisplayMetrics = { ...METRICS, workArea: { ...WORK_AREA, width: WORK_AREA.width - 70 } }
+    const rect = hoverWatchRestRect('hide', dockRight, 'right-edge', 0.5)
+    const drawer = rightEdgeSidecarBounds(dockRight, { open: true, anchor: 0.5 })
+    expect(rect.x + rect.width).toBe(dockRight.workArea.x + dockRight.workArea.width)
+    expect(rect).toEqual(revealBand(dockRight.workArea, anchorY(dockRight.workArea, 0.5)))
+    expect(pointInRect({ x: dockRight.workArea.x + dockRight.workArea.width - 1, y: drawer.y + 1 }, rect)).toBe(true)
+  })
+
+  it('parks Hide as the invisible reveal band and Island as its visible rail', () => {
+    expect(parkAfterExclusiveOnboarding('hide', METRICS, 8, 'right-edge', 0.5)).toEqual(rightEdgeHoverRestRect(0.5, METRICS))
+    expect(parkAfterExclusiveOnboarding('island', METRICS, 8, 'right-edge', 0.5)).toEqual(
+      rightEdgeSidecarBounds(METRICS, { open: false, anchor: 0.5 })
+    )
+    expect(hideParkWindowOpacity('hide', true)).toBe(0)
+    expect(hideParkWindowOpacity('island', true)).toBe(1)
+  })
+
+  it('keeps a widened Hide park flush with the work-area edge (Windows minimum window width)', () => {
+    // Windows packaged smoke: the 4 px band read back 32 px wide at the requested x, crossing the edge.
+    const band = rightEdgeHoverRestRect(0.5, METRICS)
+    const edge = WORK_AREA.x + WORK_AREA.width
+    const widened = rightAnchoredParkPosition(band, 32)
+    expect(widened).toEqual({ x: edge - 32, y: band.y })
+    expect(widened.x + 32).toBe(edge)
+    // A park the OS kept at the requested width is placed as requested.
+    expect(rightAnchoredParkPosition(band, band.width)).toEqual({ x: band.x, y: band.y })
+  })
+
+  it('parks Hide as the visible rail where another display continues past the right edge', () => {
+    const neighbour: Rect = { x: METRICS.bounds.x + METRICS.bounds.width, y: 0, width: 1920, height: 1080 }
+    expect(rightEdgeParkLayout('hide', METRICS, [neighbour], 0.5)).toBe('island')
+    expect(rightEdgeParkLayout('island', METRICS, [neighbour], 0.5)).toBe('island')
+    // A display on the left, or one to the right that does not reach the drawer's height, leaves the edge free.
+    const left: Rect = { x: 0, y: 0, width: 1920, height: 1080 }
+    const below: Rect = { ...neighbour, y: METRICS.bounds.y + METRICS.bounds.height }
+    expect(rightEdgeParkLayout('hide', METRICS, [left, below], 0.5)).toBe('hide')
+    expect(rightEdgeParkLayout('hide', METRICS, [], 0.5)).toBe('hide')
   })
 
   it('falls back to the established top-center geometry when a full sidecar cannot fit', () => {

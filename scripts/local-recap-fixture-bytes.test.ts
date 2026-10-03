@@ -9,8 +9,10 @@ const repo = resolve(__dirname, '..')
 const scratch: string[] = []
 const digest = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex')
 
+// Windows keeps a just-exited git's handles on the scratch checkout briefly; retry the removal as the
+// other scratch-directory tests do.
 afterEach(() => {
-  for (const path of scratch.splice(0)) rmSync(path, { recursive: true, force: true })
+  for (const path of scratch.splice(0)) rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
 })
 
 describe('MQA-326 frozen recap fixture checkout bytes', () => {
@@ -32,9 +34,11 @@ describe('MQA-326 frozen recap fixture checkout bytes', () => {
       mkdirSync(dirname(join(root, path)), { recursive: true })
       writeFileSync(join(root, path), readFileSync(join(repo, path)))
     }
+    // A Windows runner sharing its CPU with the whole parallel suite has taken over 10 s for this small
+    // `git add`; the bound only stops a genuinely hung git, so it sits well inside the test's own timeout.
     const git = (...args: string[]): Buffer => execFileSync(
       'git', ['-c', 'core.autocrlf=true', '-c', 'core.safecrlf=false', ...args],
-      { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], timeout: 10_000 }
+      { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 }
     )
     git('init', '--quiet')
     git('add', '--', '.gitattributes', ...files)
@@ -49,5 +53,5 @@ describe('MQA-326 frozen recap fixture checkout bytes', () => {
       const attrs = git('check-attr', 'eol', '--', fixture.path).toString('utf8')
       expect(attrs).toContain(': eol: lf')
     }
-  })
+  }, 180_000)
 })

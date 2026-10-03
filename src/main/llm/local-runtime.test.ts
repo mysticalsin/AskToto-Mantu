@@ -10,6 +10,10 @@ import type { EventEmitter } from 'node:events'
 vi.mock('electron', () => ({ app: { isPackaged: false, getPath: () => '/tmp' } }))
 vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLog: vi.fn() }))
 
+afterEach(() => {
+  vi.unstubAllEnvs()
+})
+
 import {
   buildSpawnArgs,
   parseBoundPort,
@@ -333,16 +337,21 @@ interface Harness {
   registry: {
     recordSidecarIntent: ReturnType<typeof vi.fn>
     recordSidecarSpawned: ReturnType<typeof vi.fn>
+    recordSidecarSupervisedSpawned: ReturnType<typeof vi.fn>
   }
 }
 
-async function loadIsolatedRuntime(options: { spawnedRegistryWrite?: Promise<void> } = {}): Promise<Harness> {
+async function loadIsolatedRuntime(options: {
+  spawnedRegistryWrite?: Promise<void>
+  supervisorMode?: 'real' | 'async-fallback' | 'supervised'
+} = {}): Promise<Harness> {
   vi.resetModules()
   const procs: FakeProc[] = []
   const calls: Array<{ path: string; args: string[] }> = []
   const registry = {
     recordSidecarIntent: vi.fn(),
-    recordSidecarSpawned: vi.fn(() => options.spawnedRegistryWrite ?? Promise.resolve())
+    recordSidecarSpawned: vi.fn(() => options.spawnedRegistryWrite ?? Promise.resolve()),
+    recordSidecarSupervisedSpawned: vi.fn(() => options.spawnedRegistryWrite ?? Promise.resolve())
   }
   vi.doMock('../infra/process/registry', () => registry)
   vi.doMock('node:child_process', async () => {
@@ -370,6 +379,71 @@ async function loadIsolatedRuntime(options: { spawnedRegistryWrite?: Promise<voi
     const actual = await importOriginal<typeof import('node:fs')>()
     return { ...actual, existsSync: () => true }
   })
+  vi.doUnmock('../infra/process/supervisor')
+  // The real supervisor defaults to on for darwin; these tests assert the plain direct spawn, so ask for off.
+  if (options.supervisorMode === undefined || options.supervisorMode === 'real') {
+    vi.stubEnv('METIS_SUPERVISION', 'off')
+  }
+  if (options.supervisorMode === 'async-fallback') {
+    vi.doMock('../infra/process/supervisor', async () => {
+      const childProcess = await import('node:child_process')
+      return {
+        spawnSidecarProcess: vi.fn(
+          (
+            name: 'llama-server',
+            command: string,
+            args: readonly string[],
+            spawnOptions: import('node:child_process').SpawnOptions,
+            audit: (event: string, fields: Record<string, unknown>) => void,
+            _env?: NodeJS.ProcessEnv,
+            _platform?: NodeJS.Platform,
+            hooks?: { onUnsupervisedFallbackSpawned?: (child: import('node:child_process').ChildProcess) => Promise<void> | void }
+          ) => {
+            const child = childProcess.spawn(command, [...args], spawnOptions)
+            const fallbackRecorded = Promise.resolve(hooks?.onUnsupervisedFallbackSpawned?.(child))
+            audit('sidecar.unsupervised', {
+              name,
+              reason: 'wrapper-setup-failed',
+              error: 'code=125, signal=null'
+            })
+            return {
+              child,
+              supervised: true,
+              waitForUnsupervisedFallback: () => fallbackRecorded
+            }
+          }
+        ),
+        stopSidecarProcess: vi.fn((child: import('node:child_process').ChildProcess) => {
+          child.kill('SIGKILL')
+        }),
+        markSidecarProcessUsable: vi.fn()
+      }
+    })
+  }
+  if (options.supervisorMode === 'supervised') {
+    vi.doMock('../infra/process/supervisor', async () => {
+      const childProcess = await import('node:child_process')
+      return {
+        spawnSidecarProcess: vi.fn(
+          (
+            _name: string,
+            command: string,
+            args: readonly string[],
+            spawnOptions: import('node:child_process').SpawnOptions
+          ) => ({
+            child: childProcess.spawn(command, [...args], spawnOptions),
+            supervised: true,
+            waitForUnsupervisedFallback: () => Promise.resolve(),
+            wrapperLaunch: { executable: '/helper/metis-mac-helper', args: ['supervise', '--', command, ...args] }
+          })
+        ),
+        stopSidecarProcess: vi.fn((child: import('node:child_process').ChildProcess) => {
+          child.kill('SIGKILL')
+        }),
+        markSidecarProcessUsable: vi.fn()
+      }
+    })
+  }
   // Imported from the freshly-reset registry so both objects are the ones the isolated runtime actually
   // holds — the module-level vi.mock factories re-run on reset and hand out new vi.fn()s.
   const runtime = await import('./local-runtime')
@@ -465,6 +539,72 @@ describe('sidecar registry ordering', () => {
     await waitUntil(() => h.registry.recordSidecarSpawned.mock.calls.length === 1)
     await Promise.resolve()
 
+    expect(resolved).toBe(false)
+
+    releaseRegistryWrite()
+    await started
+
+    expect(resolved).toBe(true)
+  })
+
+  it('records an async supervised-fallback direct child before reporting the sidecar as started', async () => {
+    let releaseRegistryWrite!: () => void
+    const registryWrite = new Promise<void>((resolve) => {
+      releaseRegistryWrite = resolve
+    })
+    const h = await loadIsolatedRuntime({ spawnedRegistryWrite: registryWrite, supervisorMode: 'async-fallback' })
+    vi.stubGlobal('fetch', async () => ({ status: 200 }))
+
+    let resolved = false
+    const started = h.runtime.start({ gguf: '/m/a.gguf', vision: false, mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac').then(() => {
+      resolved = true
+    })
+    emitListening(h, 0, 55902)
+    await waitUntil(() => h.registry.recordSidecarSpawned.mock.calls.length === 1)
+    await Promise.resolve()
+
+    expect(h.registry.recordSidecarSpawned.mock.calls[0][0]).toBe('llama-server')
+    expect(h.registry.recordSidecarSpawned.mock.calls[0][1]).toBe(h.procs[0])
+    expect(resolved).toBe(false)
+
+    releaseRegistryWrite()
+    await started
+
+    expect(resolved).toBe(true)
+    expect(h.logger.auditLog).toHaveBeenCalledWith(
+      'sidecar.unsupervised',
+      expect.objectContaining({ name: 'llama-server', reason: 'wrapper-setup-failed' })
+    )
+  })
+})
+
+describe('supervised launch registry coverage', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('records both the wrapper and the real sidecar, and holds the start until that write lands', async () => {
+    let releaseRegistryWrite!: () => void
+    const registryWrite = new Promise<void>((resolve) => {
+      releaseRegistryWrite = resolve
+    })
+    const h = await loadIsolatedRuntime({ spawnedRegistryWrite: registryWrite, supervisorMode: 'supervised' })
+    vi.stubGlobal('fetch', async () => ({ status: 200 }))
+
+    let resolved = false
+    const started = h.runtime.start({ gguf: '/m/a.gguf', vision: false, mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac').then(() => {
+      resolved = true
+    })
+    emitListening(h, 0, 55903)
+    await waitUntil(() => h.registry.recordSidecarSupervisedSpawned.mock.calls.length === 1)
+    await Promise.resolve()
+
+    const [name, wrapper, wrapperLaunch, sidecarLaunch] = h.registry.recordSidecarSupervisedSpawned.mock.calls[0]
+    expect(name).toBe('llama-server')
+    expect(wrapper).toBe(h.procs[0])
+    expect(wrapperLaunch.executable).toBe('/helper/metis-mac-helper')
+    expect(sidecarLaunch).toEqual({ executable: h.calls[0].path, args: h.calls[0].args })
+    expect(h.registry.recordSidecarSpawned).not.toHaveBeenCalled()
     expect(resolved).toBe(false)
 
     releaseRegistryWrite()

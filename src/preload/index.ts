@@ -62,6 +62,9 @@ import {
   type ImportAudioProgress,
   type ImportAssetsProgress,
   type HistorySettled,
+  type HistoryTransition,
+  type AppleEngineStatus,
+  type WriteupSpanPayload,
   type HistoryTrace,
   type RendererCrashReport,
   type AsrAssetsStatus,
@@ -73,8 +76,10 @@ import {
   type MetisCommandConfirmation,
   type PreservedBrainIndexListResult
 } from '@shared/ipc'
+import type { ScreenRepairResult } from '@shared/screen-permission'
 import type { ProviderId } from '@shared/providers'
 import type { RecapStatus } from '@shared/recap-status'
+import type { RecallHydration } from '@shared/recall-hydration'
 
 type Unsub = () => void
 function sub<T>(channel: string, cb: (payload: T) => void): Unsub {
@@ -94,6 +99,12 @@ const api = {
     ipcRenderer.invoke(IPC.permissionsOpenSettings, kind),
   requestPermissionsUpfront: (): Promise<PlatformPermissions> =>
     ipcRenderer.invoke(IPC.permissionsRequestUpfront),
+  /** M2-0429: reset only Métis's own Screen Recording entry, then relaunch (macOS). */
+  repairScreenPermission: (): Promise<ScreenRepairResult> => ipcRenderer.invoke(IPC.permissionsRepairScreen),
+  /** M2-0429: "It's already on" — record it and relaunch (macOS). */
+  attestScreenPermission: (): Promise<void> => ipcRenderer.invoke(IPC.permissionsAttestScreen),
+  /** M2-0429: show a duplicate copy listed by the diagnosis in Finder. */
+  revealAppCopy: (path: string): Promise<void> => ipcRenderer.invoke(IPC.permissionsRevealCopy, path),
   screenCaptureCheck: (pass: 'probe' | 'vision'): Promise<ScreenCaptureCheckResult> =>
     ipcRenderer.invoke(IPC.screenCaptureCheck, { pass }),
   setSettings: (patch: Partial<Settings> | import('@shared/ipc').SettingsPatch): Promise<PublicSettings> =>
@@ -326,6 +337,9 @@ const api = {
   recallSearch: (q: string): Promise<RecallHit[]> => ipcRenderer.invoke(IPC.recallSearch, q),
   recallOpen: (file: string): Promise<string> => ipcRenderer.invoke(IPC.recallOpen, file),
   recallRead: (file: string): Promise<RecallReadResult> => ipcRenderer.invoke(IPC.recallRead, file),
+  // An explicit recallRead/recallOpen downloading one cloud-only meeting: hydrating, then done or failed.
+  // LEAD_ACTION: M2-0032 consumes the hydration progress event and MeetingSummary.notDownloaded
+  onRecallHydration: (cb: (d: RecallHydration) => void): Unsub => sub(IPC.recallHydration, cb),
   // User-initiated decrypted markdown copy of ONE saved meeting (native save dialog in main). Exists so
   // external tools (e.g. Claude local ingesting into the second brain) can read a meeting even when
   // at-rest encryption is on.
@@ -433,7 +447,11 @@ const api = {
   // Fire-and-forget: keep the local sidecar's per-slot KV cache hot while a meeting is live (PLAN.md
   // §4.4's pre-warm path). The renderer never learns the sidecar's port/key — this only ever sends
   // transcript text; main resolves the runtime/model/session key on its own.
-  localPrewarm: (text: string): Promise<void> => ipcRenderer.invoke(IPC.localPrewarm, { text }),
+  localPrewarm: (text: string, purpose?: 'summary'): Promise<void> =>
+    ipcRenderer.invoke(IPC.localPrewarm, purpose ? { text, purpose } : { text }),
+  localAppleEngineStatus: (): Promise<AppleEngineStatus> => ipcRenderer.invoke(IPC.localAppleEngineStatus),
+  // Content-free post-meeting latency span (M2-0430): a span name and a millisecond count, nothing else.
+  reportWriteupSpan: (report: WriteupSpanPayload): Promise<void> => ipcRenderer.invoke(IPC.writeupSpan, report),
 
   resize: (height: number, width?: number): Promise<void> =>
     ipcRenderer.invoke(IPC.windowResize, { height, width }),
@@ -447,7 +465,8 @@ const api = {
   anchorTop: (): Promise<void> => ipcRenderer.invoke(IPC.windowAnchorTop),
   // Auto-hide reveal: widen the window back to the full bar width after the peek narrowed it.
   revealWidth: (): Promise<void> => ipcRenderer.invoke(IPC.windowRevealWidth),
-  onOverlayCursorHover: (cb: (d: { hovering: boolean; restoredFromParkedRail?: boolean }) => void): Unsub =>
+  // `parked`: main already parked the window itself, so the page must render its rest surface.
+  onOverlayCursorHover: (cb: (d: { hovering: boolean; restoredFromParkedRail?: boolean; parked?: boolean }) => void): Unsub =>
     sub(IPC.overlayCursorHover, cb),
   // `force` is limited to a user-initiated edge-dock dismissal. It only bypasses the main process's
   // cursor-in-drawer deferment after the renderer has completed its exit spring.
@@ -455,6 +474,7 @@ const api = {
   // A caught render-throw (ErrorBoundary) — fire-and-forget, best-effort. Main persists it to disk (same
   // sink as a main-process crash) so a field report survives without ASKTOTO_DEBUG_RENDERER devtools.
   reportHistorySettled: (settled: HistorySettled): Promise<void> => ipcRenderer.invoke(IPC.historySettled, settled),
+  reportHistoryTransition: (transition: HistoryTransition): Promise<void> => ipcRenderer.invoke(IPC.historyTransition, transition),
   reportCrash: (report: RendererCrashReport): Promise<void> => ipcRenderer.invoke(IPC.rendererCrash, report),
   hide: (): Promise<void> => ipcRenderer.invoke(IPC.windowHide),
   toggle: (): Promise<void> => ipcRenderer.invoke(IPC.windowToggle),

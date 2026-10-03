@@ -39,12 +39,14 @@ export function buildPrewarmMessages(
     | 'summaryLanguage'
     | 'systemPrompt'
     | 'redactSensitive'
-  >
+  >,
+  // 'summary' builds the post-meeting recap's [system, user] prefix for the Stop-time warm of slot 1.
+  mode: 'suggest' | 'summary' = 'suggest'
 ): Array<{ role: 'system' | 'user'; content: string }> {
   // Mirrors index.ts's askStart handler exactly: redact the transcript BEFORE it ever reaches
   // buildSystem/userText, same as a real request does when settings.redactSensitive is on.
   const transcript = s.redactSensitive && text ? redactSecrets(text) : text
-  const req: AskStart = { id: 'prewarm', mode: 'suggest', prompt: '', transcript, history: [] }
+  const req: AskStart = { id: 'prewarm', mode, prompt: '', transcript, history: [] }
   const system = buildSystem(
     req,
     s.mode,

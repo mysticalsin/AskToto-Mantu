@@ -100,7 +100,7 @@ describe('maintenance gate', () => {
   it('release is idempotent and listeners fire in a microtask after a release', async () => {
     startOpen()
     const listener = vi.fn()
-    onMaintenanceMayBegin(listener)
+    const unsubscribe = onMaintenanceMayBegin(listener)
     const release = beginMaintenance()
     expect(maintenanceDeferral()).toBe('maintenance_running')
     release()
@@ -109,6 +109,29 @@ describe('maintenance gate', () => {
     await Promise.resolve()
     expect(listener).toHaveBeenCalled()
     expect(maintenanceDeferral()).toBeNull()
+    unsubscribe()
+  })
+
+  it('unsubscribed listeners do not fire when a queued window-open microtask runs', async () => {
+    startOpen()
+    const listener = vi.fn()
+    const unsubscribe = onMaintenanceMayBegin(listener)
+
+    unsubscribe()
+    await Promise.resolve()
+
+    expect(listener).not.toHaveBeenCalled()
+  })
+
+  it('can clear listeners during isolated test teardown without changing the default reset', async () => {
+    const listener = vi.fn()
+    onMaintenanceMayBegin(listener)
+
+    resetMaintenanceGateForTests({ listeners: true })
+    startOpen()
+    await Promise.resolve()
+
+    expect(listener).not.toHaveBeenCalled()
   })
 
   it('maintenance listeners can be explicitly removed between isolated tests', async () => {

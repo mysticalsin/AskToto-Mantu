@@ -46,6 +46,7 @@ describe('enterprise-live F05 gateway privacy', () => {
       maxTokens: 100
     }
     expect(screenshotGatewayHeaders(textReq)).toEqual({
+      'cf-aig-collect-log': 'true',
       'cf-aig-collect-log-payload': 'false',
       'cf-aig-skip-cache': 'true'
     })
