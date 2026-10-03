@@ -19,9 +19,9 @@ H1 Overlay first, from `hook-concepts.md`.
 | Beat | Shot | Scene | Seconds | Claim | State today |
 |---|---|---|---|---|---|
 | 1 | S01 | NP-01 Opening title | 4 | none | non-product |
-| 2 | S02 | LF-03 Overlay appears | 6 | CL-01 | concept, label held |
-| 3 | S03 | LF-04 Live capture and notes | 8 | CL-02 | reconstruction, label held |
-| 4 | S04 | LF-05 Hindsight recall | 8 | CL-03 | concept, label held |
+| 2 | S02 | LF-01 Overlay appears | 6 | CL-01 | concept, label held |
+| 3 | S03 | LF-02 Live capture and notes | 8 | CL-02 | reconstruction, label held |
+| 4 | S04 | LF-03 Hindsight recall | 8 | CL-03 | concept, label held |
 | 5 | S05 | NP-05 Render-path proof card | 4 | CL-06 | render-path proof only |
 | 6 | S06 | NP-04 Closing card | 4 | none | non-product |
 
