@@ -21,7 +21,7 @@ const GOVERNANCE_KEYS: Record<string, { file: string; symbol: string }> = {
   locked: { file: 'src/main/store.ts', symbol: 'obj.locked ?? obj.lockedKeys' },
   requireAuth: { file: 'src/main/auth.ts', symbol: 'authEnforced' },
   allowedProviders: { file: 'src/main/store.ts', symbol: 'parseAllowedContent' },
-  escrowPubKey: { file: 'src/main/transcripts.ts', symbol: 'escrowPubKey' },
+  escrowPubKey: { file: 'src/main/infra/storage/saved-file.ts', symbol: 'escrowPubKey' },
   disableAutoUpdate: { file: 'src/main/updater.ts', symbol: 'disableAutoUpdate' },
   updateFeedUrl: { file: 'src/main/updater.ts', symbol: 'updateFeedUrl' },
   egressAllowlist: { file: 'src/main/net/egress-policy.ts', symbol: 'egressAllowlist' }

@@ -5,6 +5,7 @@ import { auditLog, mainLog } from '../../logger'
 import { decryptSecret, encryptSecret, useFileBackend } from '../../secrets'
 import { devEnv, isPackagedBuild } from '../../dev-env'
 import { readTrustedAdminManaged } from '../../win-security'
+import { recordLocalWrite } from './local-writes'
 
 // Optional at-rest encryption for transcripts/notes. Two on-disk formats share one fixed-length
 // `ATKENC<n>\n` magic prefix so detection stays a simple prefix check:
@@ -335,6 +336,7 @@ export async function writeSaved(file: string, content: string, encrypt: boolean
     for (let attempt = 0; ; attempt++) {
       try {
         await rename(tmp, file)
+        await recordLocalWrite(file)
         break
       } catch (e) {
         const code = (e as NodeJS.ErrnoException).code
