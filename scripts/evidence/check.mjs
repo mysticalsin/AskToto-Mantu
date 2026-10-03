@@ -53,6 +53,7 @@ import {
   readRecordStore,
   recordsInPrBody,
   recordProblems,
+  runnerCiRunIdLabel,
   sha256Hex
 } from './record.mjs'
 // sample.mjs imports this module back; the cycle is safe because neither module calls the other at top level.
@@ -1277,8 +1278,8 @@ function selectsRecord(row, host, record) {
 
 /** Why `record` does not bind to the bytes `row` requires, or null when it does. */
 function bindingProblem(record, row, candidate) {
-  const missingRunnerLabel = missingRunnerCiRunIdLabel(record)
-  if (missingRunnerLabel) return `is a ${missingRunnerLabel} record with no ci_run_id`
+  const runnerLabel = record.ci_run_id == null ? runnerCiRunIdLabel(record) : null
+  if (runnerLabel) return `is a ${runnerLabel} record with no ci_run_id`
   if (row.bytes === 'baseline') {
     if (record.artifact_sha256 == null) return 'has no artifact_sha256'
     return row.sha256.includes(record.artifact_sha256) ? null : `names sha256 ${record.artifact_sha256}, not one of the baseline sha256s`

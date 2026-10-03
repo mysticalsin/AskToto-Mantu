@@ -1721,6 +1721,25 @@ test('R3c --release: runner records without ci_run_id fail rows at runner levels
   }
 })
 
+test('R3d --release: a metis-owner-mac ACCEPTED row still needs ci_run_id', () => {
+  const c = releaseCase()
+  c.gates.rows = [{
+    id: 'owner-accepted',
+    ticket: 'M2-0187',
+    level: 'ACCEPTED',
+    bytes: 'promotable',
+    hosts: [OWNER_MAC_RUNNER_HOST],
+    accept: 'PASS'
+  }]
+  const { ci_run_id: _dropped, ...withoutRun } = boundRecord('M2-0187', OWNER_MAC_RUNNER_HOST, SHA_MAC, {
+    evidence_level: 'ACCEPTED',
+    environment: { kind: 'owner-mac', host: OWNER_MAC_RUNNER_HOST },
+    owner_statement: { date: '2026-10-01', text: 'Accepted for release gate evidence.' }
+  })
+  setRecords(c, 'M2-0187', [withoutRun])
+  assertOnlyProblem(releaseOf(c).problems, 'owner-accepted', OWNER_MAC_RUNNER_HOST, `${OWNER_MAC_RUNNER_HOST} record with no ci_run_id`)
+})
+
 test('R4 --release: QA-identity bytes do not meet a row that requires promotable bytes', () => {
   const c = releaseCase()
   setRecords(c, 'M2-0187', [
