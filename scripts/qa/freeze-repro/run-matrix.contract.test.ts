@@ -177,9 +177,10 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
   it('dry-run creates the content-free matrix bundle and all required OS-fixture evidence files', () => {
     const out = mkdtempSync(join(tmpdir(), 'm2-0008-freeze-contract-'))
     try {
+      // Git Bash on windows-latest forks slowly: the script's budget stays under the test's own.
       const result = spawnSync('bash', [SCRIPT, '--artifact', SHA, '--build-run-id', '123', '--out', out, '--dry-run'], {
         encoding: 'utf8',
-        timeout: 30_000
+        timeout: 90_000
       })
 
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)
@@ -224,7 +225,7 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
     } finally {
       rmSync(out, { recursive: true, force: true })
     }
-  })
+  }, 120_000)
 
   it('refuses a live run unless the operator asserts the QA account boundary', () => {
     const out = mkdtempSync(join(tmpdir(), 'm2-0008-freeze-contract-'))
@@ -309,7 +310,7 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
           M2_0008_CONTRACT_IDLE_SECONDS: '1',
           M2_0008_CONTRACT_LAUNCH_SETTLE_SECONDS: '1'
         },
-        timeout: 45_000
+        timeout: 90_000
       })
 
       expect(result.status).toBe(2)
@@ -333,7 +334,7 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
       rmSync(fixtureRoot, { recursive: true, force: true })
       rmSync(pathRoot, { recursive: true, force: true })
     }
-  })
+  }, 120_000)
 
   it('refuses PASS evidence when required live rows and interrupt checks are not exercised', () => {
     const out = mkdtempSync(join(tmpdir(), 'm2-0008-freeze-contract-'))
