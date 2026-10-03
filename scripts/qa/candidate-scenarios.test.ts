@@ -29,6 +29,7 @@ import {
   scenarioCommand
 } from './candidate-scenarios.mjs'
 import { LOCAL_LLM_SETTINGS } from './lib/local-llm-settings.mjs'
+import { MAX_BG_FAILURES } from './lib/capture-backoff-constants.mjs'
 import { VARIANTS } from './provenance.mjs'
 
 const root = join(__dirname, '..', '..')
@@ -200,7 +201,7 @@ describe('the scenario registry', () => {
       isolatedProfiles: true,
       timeoutMinutes: 75,
       stepTimeoutMinutes: 60,
-      bgScreenCaptureFailedMax: 6
+      bgScreenCaptureFailedMax: MAX_BG_FAILURES
     })
     expect(existsSync(join(root, win.script))).toBe(true)
     expect(VARIANTS.win.promotable).toBe(true)
@@ -237,7 +238,7 @@ describe('the scenario registry', () => {
       '../../_temp/candidate-install/Metis.exe',
       'candidate-scenario/capture-gate.json',
       '--max-bg-failures',
-      '6'
+      String(MAX_BG_FAILURES)
     ])
     expect(() =>
       scenarioCommand({

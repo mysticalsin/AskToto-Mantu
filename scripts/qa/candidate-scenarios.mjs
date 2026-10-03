@@ -22,6 +22,7 @@ import { homedir } from 'node:os'
 import { basename, isAbsolute, join, relative } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { writeRepresentativeProfile } from './census/profile.mjs'
+import { MAX_BG_FAILURES } from './lib/capture-backoff-constants.mjs'
 import { LOCAL_LLM_SETTINGS } from './lib/local-llm-settings.mjs'
 import { VARIANTS } from './provenance.mjs'
 
@@ -279,12 +280,12 @@ export const SCENARIOS = Object.freeze({
         variant: 'win',
         artifact: 'candidate-win',
         script: 'scripts/qa/capture-gate.mjs',
-        args: ({ app, report }) => [app, report, '--max-bg-failures', '6'],
+        args: ({ app, report }) => [app, report, '--max-bg-failures', String(MAX_BG_FAILURES)],
         report: 'capture-gate.json',
         isolatedProfiles: true,
         timeoutMinutes: 75,
         stepTimeoutMinutes: 60,
-        bgScreenCaptureFailedMax: 6,
+        bgScreenCaptureFailedMax: MAX_BG_FAILURES,
         laneReportFields: Object.freeze([
           'inductionMethod',
           'readinessProof',

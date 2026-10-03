@@ -9,20 +9,23 @@
  * never writes or uploads a frame.
  *
  * Usage:
- *   node scripts/qa/capture-gate.mjs <installed Metis.exe> <report.json> --max-bg-failures 6
+ *   node scripts/qa/capture-gate.mjs <installed Metis.exe> <report.json> --max-bg-failures <n>
  *
  * Exit 0 PASS · 1 FAIL · 2 PRECONDITION.
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { pathToFileURL } from 'node:url'
+import { CAPTURE_BACKOFF_CONSTANTS, MAX_BG_FAILURES, readCaptureBackoffConstants } from './lib/capture-backoff-constants.mjs'
 import { LOCAL_LLM_SETTINGS } from './lib/local-llm-settings.mjs'
 import { attach, findPage, freeLoopbackPort, waitForChildExit } from './lib/app-driver.mjs'
 import { parseAuditLog, readAuditLog } from './golden-flows/smoke-support.mjs'
 import { launchEnv } from './sidecar-boot-reaper.mjs'
+
+export { CAPTURE_BACKOFF_CONSTANTS, MAX_BG_FAILURES, readCaptureBackoffConstants }
 
 export const INDUCTION_METHOD = 'windows-lock-workstation'
 export const PARK_MS = 30 * 60_000
@@ -59,21 +62,6 @@ function parseArgs(argv) {
   args.app = positional[0]
   args.report = positional[1]
   return args
-}
-
-function readNumericExport(source, name) {
-  const match = new RegExp(`export const ${name}\\s*=\\s*([^\\n]+)`).exec(source)
-  if (!match) throw new Error(`${name} was not found in capture-backoff.ts`)
-  const value = Function(`"use strict"; return (${match[1].replace(/;.*/, '')});`)()
-  if (!Number.isFinite(value)) throw new Error(`${name} did not resolve to a finite number`)
-  return value
-}
-
-export function readCaptureBackoffConstants(source) {
-  return {
-    BACKOFF_MAX_MS: readNumericExport(source, 'BACKOFF_MAX_MS'),
-    BACKOFF_LATCH_AFTER: readNumericExport(source, 'BACKOFF_LATCH_AFTER')
-  }
 }
 
 function iso(ms) {

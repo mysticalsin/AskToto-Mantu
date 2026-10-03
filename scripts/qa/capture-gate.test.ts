@@ -1,21 +1,16 @@
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
+  CAPTURE_BACKOFF_CONSTANTS,
   FINAL_TAIL_MS,
   INDUCTION_METHOD,
+  MAX_BG_FAILURES,
   PARK_MS,
   bgScreenCaptureFailed,
   buildReport,
   captureGateVerdict,
-  exitCodeForOutcome,
-  readCaptureBackoffConstants
+  exitCodeForOutcome
 } from './capture-gate.mjs'
 
-const root = join(__dirname, '..', '..')
-const source = readFileSync(join(root, 'src', 'main', 'capture-backoff.ts'), 'utf8')
-const constants = readCaptureBackoffConstants(source)
-const MAX_BG_FAILURES = constants.BACKOFF_LATCH_AFTER + 1
 const INDUCTION_AT = Date.parse('2026-10-03T12:00:00.000Z')
 const reportFor = buildReport as unknown as (input: Record<string, unknown>) => Record<string, unknown>
 
@@ -32,7 +27,7 @@ function failedAt(ms: number) {
   return { ts: new Date(INDUCTION_AT + ms).toISOString(), event: 'capture.failed', phase: 'bg-screen', reason: 'fixed-test-category' }
 }
 
-function suspendedAt(ms: number, failures = constants.BACKOFF_LATCH_AFTER) {
+function suspendedAt(ms: number, failures = CAPTURE_BACKOFF_CONSTANTS.BACKOFF_LATCH_AFTER) {
   return {
     ts: new Date(INDUCTION_AT + ms).toISOString(),
     event: 'screen.preprocess.suspended',
@@ -54,8 +49,8 @@ function verdict(records: unknown[]) {
 
 describe('capture-gate oracle', () => {
   it('pins the hosted park tail and total ceiling to the production backoff constants', () => {
-    expect(FINAL_TAIL_MS).toBeGreaterThanOrEqual(1.5 * constants.BACKOFF_MAX_MS)
-    expect(MAX_BG_FAILURES).toBe(constants.BACKOFF_LATCH_AFTER + 1)
+    expect(FINAL_TAIL_MS).toBeGreaterThanOrEqual(1.5 * CAPTURE_BACKOFF_CONSTANTS.BACKOFF_MAX_MS)
+    expect(MAX_BG_FAILURES).toBe(CAPTURE_BACKOFF_CONSTANTS.BACKOFF_LATCH_AFTER + 1)
   })
 
   it('counts only bg-screen capture.failed events', () => {
@@ -78,7 +73,7 @@ describe('capture-gate oracle', () => {
   })
 
   it('FAILs a ceiling-only 600-606 s period at every phase offset', () => {
-    for (const period of [constants.BACKOFF_MAX_MS, constants.BACKOFF_MAX_MS + 6_000]) {
+    for (const period of [CAPTURE_BACKOFF_CONSTANTS.BACKOFF_MAX_MS, CAPTURE_BACKOFF_CONSTANTS.BACKOFF_MAX_MS + 6_000]) {
       for (const offset of [0, Math.floor(period / 3), period - 1]) {
         const records: unknown[] = []
         for (let t = offset; t <= PARK_MS; t += period) records.push(failedAt(t))
@@ -95,7 +90,7 @@ describe('capture-gate oracle', () => {
     records.push(suspendedAt(90_000))
     expect(verdict(records)).toMatchObject({
       outcome: 'PASS',
-      bgScreenCaptureFailedTotal: constants.BACKOFF_LATCH_AFTER,
+      bgScreenCaptureFailedTotal: CAPTURE_BACKOFF_CONSTANTS.BACKOFF_LATCH_AFTER,
       bgScreenCaptureFailedFinal15Minutes: 0,
       screenPreprocessSuspended: { count: 1, latched: true, reasons: ['permission'] }
     })
