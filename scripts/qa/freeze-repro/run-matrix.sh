@@ -128,7 +128,7 @@ run_with_timeout() {
   "$@" &
   local pid=$!
   local elapsed=0
-  while kill -0 "$pid" >/dev/null 2>&1; do
+  while jobs -r -p | grep -Fx "$pid" >/dev/null 2>&1; do
     if (( elapsed >= seconds )); then
       kill "$pid" >/dev/null 2>&1 || true
       wait "$pid" >/dev/null 2>&1 || true
@@ -996,7 +996,7 @@ hosted_process_signal() {
   local result="not-exercised" exited=false waited=0
   if [[ -n "${APP_PID:-}" ]] && kill -TERM "$APP_PID" >/dev/null 2>&1; then
     while (( waited < 10 )); do
-      if ! kill -0 "$APP_PID" >/dev/null 2>&1; then
+      if ! app_job_running "$APP_PID"; then
         exited=true
         break
       fi
