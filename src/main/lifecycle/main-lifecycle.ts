@@ -22,8 +22,8 @@ export function installSecondInstanceLifecycle(
   deps: SecondInstanceLifecycleDeps
 ): void {
   app.on('second-instance', (_event, commandLine) => {
-    if (deps.handleSmokeReopenProbe(commandLine)) return
     deps.reveal('second-instance', { focus: true })
+    deps.handleSmokeReopenProbe(commandLine)
   })
 }
 
@@ -138,9 +138,6 @@ export function installQuitFlowLifecycle(
 }
 
 export interface RendererHealthLifecycleDeps {
-  ipcMain: Pick<IpcMain, 'handle'>
-  rendererCrashChannel: string
-  assertMainWindow: (event: Electron.IpcMainInvokeEvent) => void
   commandControl: { revokeForLifecycleEvent: (reason: string) => void }
   log: LifecycleLog & { info: (...args: unknown[]) => void }
   auditLog: AuditSink
@@ -194,6 +191,13 @@ export interface RendererHealthLifecycleDeps {
     at: string
   }) => void
   appInfo: () => { version: string; platform: string; arch: string; packaged: boolean }
+}
+
+export interface RendererCrashIpcLifecycleDeps {
+  ipcMain: Pick<IpcMain, 'handle'>
+  rendererCrashChannel: string
+  assertMainWindow: (event: Electron.IpcMainInvokeEvent) => void
+  requireAuth: () => boolean
   redactRendererError: (raw: unknown) => { message: string; stack: string; componentStack: string; context?: unknown }
   persistRendererCrash: (message: string, detail: string, context?: unknown) => void
 }
@@ -226,7 +230,7 @@ export function installRendererHealthLifecycle(
     if (context.mainWindow() !== self) return
     deps.commandControl.revokeForLifecycleEvent('renderer_replaced')
     deps.log.error(`[renderer-gone] reason=${details.reason} exitCode=${details.exitCode}`)
-      deps.auditLog('app.crash', deps.crashDetail('render-process-gone', { reason: details.reason, exitCode: details.exitCode }))
+    deps.auditLog('app.crash', deps.crashDetail('render-process-gone', { reason: details.reason, exitCode: details.exitCode }))
     responsiveness.markGone()
     deps.invalidateCloudSttOwner(selfWebContentsId)
     deps.resetDustConversation()
@@ -247,8 +251,6 @@ export function installRendererHealthLifecycle(
           /* headless */
         }
       }
-    } else {
-      deps.resetRecoveredOverlayGeometry()
     }
     if (context.mainWindow() !== self || self.isDestroyed()) return
     const reloadDecision = reloadBudget.onRenderProcessGone(details.reason)
@@ -287,7 +289,9 @@ export function installRendererHealthLifecycle(
     }
     deps.reloadOverlay(self)
   })
+}
 
+export function installRendererCrashIpcLifecycle(deps: RendererCrashIpcLifecycleDeps): void {
   deps.ipcMain.handle(deps.rendererCrashChannel, (e, raw: unknown) => {
     deps.assertMainWindow(e)
     if (!deps.requireAuth()) return

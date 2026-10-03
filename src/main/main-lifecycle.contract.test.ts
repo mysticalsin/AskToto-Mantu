@@ -112,7 +112,7 @@ describe('MQA-172 — a second launch after a failed boot window recreates it in
         handler = fn
       }
     }
-    ;(new Function('app', 'deps', src) as (...args: unknown[]) => void)(app, { reveal, handleSmokeReopenProbe: vi.fn() })
+    ;(new Function('app', 'deps', src) as (...args: unknown[]) => void)(app, { reveal, handleSmokeReopenProbe: vi.fn(() => true) })
     expect(handler, 'second-instance handler was never registered').not.toBeNull()
     return handler as unknown as () => void
   }

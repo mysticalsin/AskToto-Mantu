@@ -667,6 +667,7 @@ import {
   createProcessFatalLifecycle,
   installQuitFlowLifecycle,
   installReadyBootstrapLifecycle,
+  installRendererCrashIpcLifecycle,
   installRendererHealthLifecycle,
   installSecondInstanceLifecycle
 } from './lifecycle/main-lifecycle'
@@ -2823,9 +2824,6 @@ function createWindow(targetDisplay?: Electron.Display): void {
     })
   }
   installRendererHealthLifecycle(appContext, self, {
-    ipcMain,
-    rendererCrashChannel: IPC.rendererCrash,
-    assertMainWindow,
     commandControl,
     log: mainLog,
     auditLog,
@@ -2860,19 +2858,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
       platform: process.platform,
       arch: process.arch,
       packaged: app.isPackaged
-    }),
-    redactRendererError: (raw) => {
-      const r = raw as { message?: unknown; stack?: unknown; componentStack?: unknown } | null
-      const context = RendererCrashContextSchema.safeParse(raw)
-      return {
-        message: typeof r?.message === 'string' ? r.message : 'unknown renderer error',
-        stack: typeof r?.stack === 'string' ? r.stack : '',
-        componentStack: typeof r?.componentStack === 'string' ? r.componentStack : '',
-        context: context.success ? context.data : undefined
-      }
-    },
-    persistRendererCrash: (message, detail, context) =>
-      persistCrash('renderer-error-boundary', detail, message, context as RendererCrashContext | undefined)
+    })
   })
   // FITO-185-N: stamp exclusiveOnboarding on BOTH packaged file:// and dev ELECTRON_RENDERER_URL.
   // The same helper is used by crash recovery, so the parser-time Act 1 shell cannot disappear there.
@@ -4918,6 +4904,24 @@ let ipcRegistered = false
 function registerIpc(): void {
   if (ipcRegistered) return
   ipcRegistered = true
+  installRendererCrashIpcLifecycle({
+    ipcMain,
+    rendererCrashChannel: IPC.rendererCrash,
+    assertMainWindow,
+    requireAuth,
+    redactRendererError: (raw) => {
+      const r = raw as { message?: unknown; stack?: unknown; componentStack?: unknown } | null
+      const context = RendererCrashContextSchema.safeParse(raw)
+      return {
+        message: typeof r?.message === 'string' ? r.message : 'unknown renderer error',
+        stack: typeof r?.stack === 'string' ? r.stack : '',
+        componentStack: typeof r?.componentStack === 'string' ? r.componentStack : '',
+        context: context.success ? context.data : undefined
+      }
+    },
+    persistRendererCrash: (message, detail, context) =>
+      persistCrash('renderer-error-boundary', detail, message, context as RendererCrashContext | undefined)
+  })
   // --- Settings & permissions ---
   ipcMain.handle(IPC.settingsGet, (e) => {
     assertMainWindow(e)
