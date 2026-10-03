@@ -1,9 +1,29 @@
 import { describe, expect, it } from 'vitest'
-import { JournalAckSchema, JournalEntrySchema, JournalSessionIdSchema, parseJournalRecord } from './index'
+import type { z } from 'zod'
+import { TranscriptLineSchema, type TranscriptLine } from '../../ipc'
+import {
+  JournalAckSchema,
+  JournalEntrySchema,
+  JournalLineSchema,
+  JournalSessionIdSchema,
+  parseJournalRecord
+} from './index'
 
 const line = { speaker: 'them' as const, text: 'Ship it on Friday.', t: 1200 }
 
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
+const lineShapesMatch: Same<z.infer<typeof JournalLineSchema>, TranscriptLine> = true
+
 describe('journal record contract', () => {
+  it('keeps the journal line shape identical to the IPC transcript line', () => {
+    expect(lineShapesMatch).toBe(true)
+    expect(Object.keys(JournalLineSchema.shape).sort()).toEqual(Object.keys(TranscriptLineSchema.shape).sort())
+    const full = { ...line, name: 'Ana', lang: 'Portuguese', provisional: false }
+    for (const value of [line, full, { ...line, speaker: 'unknown' }, { ...line, speaker: 'host' }, { text: 'x', t: 1 }]) {
+      expect(JournalLineSchema.safeParse(value).success).toBe(TranscriptLineSchema.safeParse(value).success)
+    }
+  })
+
   it('accepts a finals batch and a recap or note revision with their record metadata', () => {
     const finals = { kind: 'finals', lines: [line], v: 1, seq: 1, at: 10 }
     const recap = { kind: 'revision', doc: 'recap', text: '## Decisions', v: 1, seq: 2, at: 11 }

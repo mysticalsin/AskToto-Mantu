@@ -1,5 +1,4 @@
 import { z } from 'zod'
-import { TranscriptLineSchema } from '../../ipc'
 
 /**
  * The durable local journal's record contract (M2-0066). Main appends records to
@@ -13,8 +12,19 @@ export type JournalSessionId = z.infer<typeof JournalSessionIdSchema>
 
 export const JOURNAL_RECORD_VERSION = 1
 
+/** The journal's copy of the transcript line shape (TranscriptLineSchema in shared/ipc.ts): contracts import
+ *  only zod, and the contract test pins this copy to the IPC schema so the two cannot drift apart. */
+export const JournalLineSchema = z.object({
+  speaker: z.enum(['them', 'you', 'unknown']),
+  text: z.string(),
+  t: z.number(),
+  name: z.string().optional(),
+  lang: z.string().optional(),
+  provisional: z.boolean().optional()
+})
+
 /** Live-caption placeholders are never persisted, so a finals batch carries committed lines only. */
-const FinalLineSchema = TranscriptLineSchema.refine((line) => line.provisional !== true, {
+const FinalLineSchema = JournalLineSchema.refine((line) => line.provisional !== true, {
   message: 'A provisional caption is not a final transcript line.'
 })
 
