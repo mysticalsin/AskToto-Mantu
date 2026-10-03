@@ -109,8 +109,14 @@ jobs:
             license-server/hermetic-home.test.mjs \
             license-server/package.json \
             native-app/MetisKit/Tests/MetisKitTests/HermeticHomeTests.swift \
-            scripts/hermetic \
-            scripts/qa/lib \
+            scripts/hermetic/deny-non-loopback.cjs \
+            scripts/hermetic/honeypot.sh \
+            scripts/hermetic/owner-account.sb \
+            scripts/hermetic/run-swift-tests.sh \
+            scripts/hermetic/run-under-owner-sandbox.sh \
+            scripts/hermetic/run-with-sandbox.mjs \
+            scripts/hermetic/sandbox-env.mjs \
+            scripts/qa/lib/sandbox-guard.mjs \
             vitest.config.ts
           git -C baseline status --short | tee baseline-out/overlay-files.txt
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -164,15 +170,15 @@ jobs:
       - name: Gate — root tests
         run: |
           source baseline-out/gate.sh
-          gate tests-root baseline npx vitest run --reporter=default --reporter=json --outputFile.json=../baseline-out/vitest-root.json
+          gate tests-root baseline npx vitest run --reporter=default --reporter=json --outputFile.json="$GITHUB_WORKSPACE/baseline-out/vitest-root.json"
       - name: Gate — proxy tests
         run: |
           source baseline-out/gate.sh
-          gate tests-proxy baseline npx vitest run --config cloudflare-proxy/vitest.config.ts --reporter=default --reporter=json --outputFile.json=../baseline-out/vitest-proxy.json
+          gate tests-proxy baseline npx vitest run --config cloudflare-proxy/vitest.config.ts --reporter=default --reporter=json --outputFile.json="$GITHUB_WORKSPACE/baseline-out/vitest-proxy.json"
       - name: Gate — operator tests
         run: |
           source baseline-out/gate.sh
-          gate tests-operator baseline npx vitest run --config operator/vitest.config.ts --reporter=default --reporter=json --outputFile.json=../baseline-out/vitest-operator.json
+          gate tests-operator baseline npx vitest run --config operator/vitest.config.ts --reporter=default --reporter=json --outputFile.json="$GITHUB_WORKSPACE/baseline-out/vitest-operator.json"
       # Reads the root report above. check:skips re-runs the whole suite when handed a missing report, so a
       # missing report is a failure here rather than a silent second run.
       - name: Gate — check:skips
@@ -211,7 +217,8 @@ jobs:
                 missing="$missing $g"
               fi
             done
-          } | tee baseline-out/summary.md >> "$GITHUB_STEP_SUMMARY"
+          } > baseline-out/summary.md
+          cat baseline-out/summary.md >> "$GITHUB_STEP_SUMMARY"
 
           if [ -n "$missing" ]; then
             echo "::error::gates that never recorded an exit code:$missing"; exit 1
