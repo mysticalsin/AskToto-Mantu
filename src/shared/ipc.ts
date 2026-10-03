@@ -6,15 +6,14 @@ import { OPERATOR_LICENSE_MAX } from './operator-license'
 import { RECAP_STATUSES, recapStatusValidationError, type RecapStatus } from './recap-status'
 import { RENDERER_VIEWS } from './renderer-view'
 import { DEFAULT_PERMISSION_STATE, PermissionStateSchema } from './screen-permission'
-import { SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION } from './contracts/settings/server-authoritative'
-import type { ServerAuthoritativeSettingsKey } from './contracts/settings/server-authoritative'
+import {
+  SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION,
+  type ServerAuthoritativeSettingsKey
+} from './contracts/settings/server-authoritative'
 export { IPC } from './contracts/channels'
 export type { PermissionStatus, PlatformPermissions, ScreenCaptureCheckResult } from './screen-permission'
 export { ScreenCaptureCheckPassSchema, ScreenCaptureCheckPayloadSchema, ScreenCaptureCheckResultSchema } from './screen-permission'
-export {
-  SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION,
-  SERVER_AUTHORITATIVE_SETTINGS_KEYS
-} from './contracts/settings/server-authoritative'
+export { SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION, SERVER_AUTHORITATIVE_SETTINGS_KEYS } from './contracts/settings/server-authoritative'
 export type { ServerAuthoritativeSettingsKey } from './contracts/settings/server-authoritative'
 
 /** The existing persisted meeting start is also its live audio owner. Never coerce or create a clock. */
@@ -1382,22 +1381,10 @@ export type PublicSettings = z.infer<typeof PublicSettingsSchema>
 export type SettingsPatch = Partial<
   Omit<
     PublicSettings,
-    | 'hasApiKey'
-    | 'providerReady'
-    | 'localReady'
-    | 'localSuggestReady'
-    | 'localSummaryReady'
-    | 'localVisionReady'
-    | 'localRuntimeRunning'
-    | 'localRuntimeState'
-    | 'hasKeys'
-    | 'hasEncryption'
-    | 'resolvedMeetingsFolder'
-    | 'managedKeys'
-    | 'envKeys'
-    | 'loginItemOpenAtLogin'
-    | 'lastFailover'
-    | 'localSpeechPack'
+    | 'hasApiKey' | 'providerReady' | 'localReady' | 'localSuggestReady' | 'localSummaryReady'
+    | 'localVisionReady' | 'localRuntimeRunning' | 'localRuntimeState' | 'hasKeys'
+    | 'hasEncryption' | 'resolvedMeetingsFolder' | 'managedKeys' | 'envKeys'
+    | 'loginItemOpenAtLogin' | 'lastFailover' | 'localSpeechPack'
     | ServerAuthoritativeSettingsKey
   >
 >
