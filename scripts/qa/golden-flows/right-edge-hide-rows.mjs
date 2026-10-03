@@ -285,9 +285,10 @@ async function rightEdgePageState(page) {
   const raw = await page.evaluate(() => {
     const root = document.querySelector('[data-re-surface]')
     const input = root?.querySelector('input[aria-label="Ask Métis anything"]') ?? null
+    const drawerElement = root?.querySelector('[role="complementary"]') ?? null
     return {
       surface: root?.getAttribute('data-re-surface') ?? null,
-      drawerAriaHidden: root?.querySelector('[role="complementary"]')?.getAttribute('aria-hidden') ?? null,
+      drawerAriaHidden: drawerElement?.getAttribute('aria-hidden') ?? null,
       hideControl: document.querySelector('button[aria-label="Hide Métis"]') !== null,
       meetingLive: document.querySelector('[aria-label="Meeting controls"]') !== null,
       composerFocused: input !== null && document.activeElement === input,
