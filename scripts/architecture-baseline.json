@@ -59,7 +59,7 @@
     "src/renderer/src/features/settings/AudioTab.tsx": 911,
     "src/renderer/src/features/settings/DustSetup.tsx": 980,
     "src/renderer/src/features/settings/SettingsRoot.tsx": 1246,
-    "src/renderer/src/lib/listen.ts": 3144,
+    "src/renderer/src/lib/listen.ts": 3140,
     "src/shared/ipc.ts": 2450
   },
   "FF-05a": {
