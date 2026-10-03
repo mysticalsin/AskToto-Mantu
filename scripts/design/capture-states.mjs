@@ -15,6 +15,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   assertPngSize,
   buildManifest,
+  captureDeviceMetrics,
   captureFileName,
   captureMatrix,
   captureScreenshotOptions
@@ -93,12 +94,7 @@ try {
   if (!Array.isArray(states) || states.length === 0) throw new Error('The page listed no design states')
 
   const cdp = await page.context().newCDPSession(page)
-  await cdp.send('Emulation.setDeviceMetricsOverride', {
-    width: 0,
-    height: 0,
-    deviceScaleFactor: 1,
-    mobile: false
-  })
+  await cdp.send('Emulation.setDeviceMetricsOverride', captureDeviceMetrics(VIEWPORT, 1))
 
   for (const theme of ['light', 'dark']) {
     await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' })
@@ -121,12 +117,7 @@ try {
 
   for (const row of captureMatrix()) {
     await page.emulateMedia({ colorScheme: row.theme, reducedMotion: row.motion })
-    await cdp.send('Emulation.setDeviceMetricsOverride', {
-      width: 0,
-      height: 0,
-      deviceScaleFactor: row.scale,
-      mobile: false
-    })
+    await cdp.send('Emulation.setDeviceMetricsOverride', captureDeviceMetrics(VIEWPORT, row.scale))
     for (const state of states) {
       const file = captureFileName(state, row)
       const path = join(outDir, file)

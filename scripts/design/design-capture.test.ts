@@ -7,6 +7,7 @@ import {
   SCALES,
   THEMES,
   buildManifest,
+  captureDeviceMetrics,
   captureFileName,
   captureMatrix,
   captureScreenshotOptions,
@@ -226,6 +227,15 @@ describe('png size check', () => {
 
   it('requests device-scale screenshots so Windows 2x captures are physical pixels', () => {
     expect(captureScreenshotOptions('a.png')).toEqual({ path: 'a.png', scale: 'device' })
+  })
+
+  it('pins CDP device metrics to the capture viewport instead of inheriting Windows chrome height', () => {
+    expect(captureDeviceMetrics(viewport, 2)).toEqual({
+      width: 960,
+      height: 640,
+      deviceScaleFactor: 2,
+      mobile: false
+    })
   })
 
   it('rejects bytes that are not a PNG', () => {

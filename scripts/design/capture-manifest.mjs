@@ -44,6 +44,16 @@ export function captureScreenshotOptions(path) {
   return { path, scale: 'device' }
 }
 
+/** Keep the renderer viewport fixed instead of inheriting OS chrome or host display size. */
+export function captureDeviceMetrics(viewport, scale) {
+  return {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: scale,
+    mobile: false
+  }
+}
+
 export function sha256Hex(bytes) {
   return createHash('sha256').update(bytes).digest('hex')
 }
