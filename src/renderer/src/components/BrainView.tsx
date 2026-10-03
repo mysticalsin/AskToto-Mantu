@@ -294,7 +294,7 @@ function SectorBars({ sectors }: { sectors: { sector: string; n: number }[] }): 
   )
 }
 
-const DealRow = memo(function DealRow({
+export const DealRow = memo(function DealRow({
   deal,
   onSetOutcome,
   onOpenRecord,

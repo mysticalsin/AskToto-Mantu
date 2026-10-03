@@ -69,6 +69,52 @@ export function virtualWindow(
   return { start, end, offsetTop, totalSize }
 }
 
+function VirtualRow<T>({
+  item,
+  index,
+  itemKey,
+  style,
+  renderItem,
+  rememberSize
+}: {
+  item: T
+  index: number
+  itemKey: string
+  style: CSSProperties
+  renderItem: (arg: VirtualListRenderArg<T>) => ReactNode
+  rememberSize: (key: string, size: number) => void
+}): JSX.Element {
+  const nodeRef = useRef<HTMLDivElement | null>(null)
+  const measureRef = useCallback(
+    (node: HTMLDivElement | null): void => {
+      nodeRef.current = node
+      if (node) rememberSize(itemKey, Math.ceil(node.getBoundingClientRect().height))
+    },
+    [itemKey, rememberSize]
+  )
+
+  useEffect(() => {
+    const node = nodeRef.current
+    if (!node || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(([entry]) => {
+      rememberSize(itemKey, Math.ceil(entry.contentRect.height))
+    })
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [itemKey, rememberSize])
+
+  return (
+    <Fragment key={itemKey}>
+      {renderItem({
+        item,
+        index,
+        measureRef,
+        style
+      })}
+    </Fragment>
+  )
+}
+
 function VirtualListInner<T>({
   items,
   getKey,
@@ -90,6 +136,12 @@ function VirtualListInner<T>({
     () => items.map((item, index) => measuredSizes.get(getKey(item, index)) ?? estimateSize(item, index)),
     [estimateSize, getKey, items, measuredSizes]
   )
+  const offsets = useMemo(() => {
+    const next: number[] = new Array(sizes.length + 1)
+    next[0] = 0
+    for (let i = 0; i < sizes.length; i++) next[i + 1] = next[i] + sizes[i]
+    return next
+  }, [sizes])
   const windowed = useMemo(
     () => virtualWindow(sizes, scrollTop, viewportHeight, overscan),
     [overscan, scrollTop, sizes, viewportHeight]
@@ -134,19 +186,17 @@ function VirtualListInner<T>({
         {visible.map((item, visibleIndex) => {
           const index = windowed.start + visibleIndex
           const key = getKey(item, index)
-          const top = windowed.offsetTop + sizes.slice(windowed.start, index).reduce((sum, n) => sum + n, 0)
-          const measureRef = (node: HTMLDivElement | null): void => {
-            if (node) rememberSize(key, Math.ceil(node.getBoundingClientRect().height))
-          }
+          const top = offsets[index] ?? windowed.offsetTop
           return (
-            <Fragment key={key}>
-              {renderItem({
-                item,
-                index,
-                measureRef,
-                style: { position: 'absolute', top, left: 0, right: 0 }
-              })}
-            </Fragment>
+            <VirtualRow
+              key={key}
+              item={item}
+              index={index}
+              itemKey={key}
+              style={{ position: 'absolute', top, left: 0, right: 0 }}
+              renderItem={renderItem}
+              rememberSize={rememberSize}
+            />
           )
         })}
       </div>

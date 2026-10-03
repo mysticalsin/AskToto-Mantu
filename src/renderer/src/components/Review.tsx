@@ -102,7 +102,7 @@ function RecapBody({ text, mode }: { text: string; mode: string }): JSX.Element 
   return <Markdown>{text}</Markdown>
 }
 
-const TranscriptRow = memo(function TranscriptRow({ line }: { line: TranscriptLine }): JSX.Element {
+export const TranscriptRow = memo(function TranscriptRow({ line }: { line: TranscriptLine }): JSX.Element {
   return (
     <div className="flex gap-2 text-[13px] leading-snug">
       <span className="shrink-0 font-mono text-[10px] text-[color:var(--color-ink-3)]">

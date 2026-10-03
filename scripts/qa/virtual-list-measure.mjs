@@ -9,7 +9,7 @@ function arg(name, fallback) {
 }
 
 const outDir = resolve(arg('--out', 'out/m2-0075-virtual-list'))
-const entry = resolve(arg('--entry', 'out/renderer/virtual-list-measure.html'))
+const entry = resolve(arg('--entry', 'out/virtual-list-measure/virtual-list-measure.html'))
 
 await mkdir(outDir, { recursive: true })
 
@@ -23,12 +23,12 @@ try {
   const lines = [
     `# M2-0075 virtual-list measurement: ${report.verdict}`,
     '',
-    `Budget: ${report.budgetMs} ms of main-thread work per animation frame.`,
+    `Budget: ${report.budgetMs} ms per measured animation frame.`,
     '',
-    '| Surface | Rows | Rendered rows | Frames | Max frame work | Avg frame work |',
-    '|---|---:|---:|---:|---:|---:|',
+    '| Surface | Rows | Rendered rows | Frames | Max frame | Avg frame | Max long task |',
+    '|---|---:|---:|---:|---:|---:|---:|',
     ...report.results.map((r) =>
-      `| ${r.surface} | ${r.rows} | ${r.renderedRows} | ${r.frames} | ${r.maxFrameWorkMs.toFixed(3)} ms | ${r.avgFrameWorkMs.toFixed(3)} ms |`
+      `| ${r.surface} | ${r.rows} | ${r.renderedRows} | ${r.frames} | ${r.maxFrameMs.toFixed(3)} ms | ${r.avgFrameMs.toFixed(3)} ms | ${r.maxLongTaskMs.toFixed(3)} ms |`
     ),
     ''
   ]

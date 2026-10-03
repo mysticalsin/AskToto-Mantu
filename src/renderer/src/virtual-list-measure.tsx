@@ -2,18 +2,30 @@ import React, { memo } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 import { VirtualList } from './ui/VirtualList'
+import { MeetingRow } from './components/RecallView'
+import { TranscriptRow } from './components/Review'
+import { DealRow } from './components/BrainView'
+import { GoingColdRow } from '../../../intelligence/src/views/GraphRows'
+import type { DealEntity } from '@shared/brain'
+import type { MeetingSummary, TranscriptLine } from '@shared/ipc'
+import type { GoingColdRow as GoingColdItem } from '../../../intelligence/src/types/data'
 
-type FixtureRow = { id: string; title: string; detail: string; tone: string }
 type Surface = 'history' | 'review' | 'brain' | 'relationships'
-type SurfaceSpec = { surface: Surface; rows: FixtureRow[]; rowHeight: number }
+type SurfaceItem =
+  | { surface: 'history'; key: string; row: MeetingSummary }
+  | { surface: 'review'; key: string; row: TranscriptLine }
+  | { surface: 'brain'; key: string; row: DealEntity }
+  | { surface: 'relationships'; key: string; row: GoingColdItem }
+type SurfaceSpec = { surface: Surface; rows: SurfaceItem[]; rowHeight: number }
 
 type SurfaceResult = {
   surface: Surface
   rows: number
   renderedRows: number
   frames: number
-  maxFrameWorkMs: number
-  avgFrameWorkMs: number
+  maxFrameMs: number
+  avgFrameMs: number
+  maxLongTaskMs: number
 }
 
 type MeasureReport = {
@@ -31,34 +43,121 @@ declare global {
 const ROWS = 5000
 const BUDGET_MS = 16
 
-function fixture(surface: Surface): FixtureRow[] {
+function historyFixture(): SurfaceItem[] {
   return Array.from({ length: ROWS }, (_, i) => ({
-    id: `${surface}-${i}`,
-    title: `${surface} row ${i}`,
-    detail: `Fixture detail ${i % 37} for the ${surface} virtual-list measurement.`,
-    tone: i % 3 === 0 ? 'good' : i % 3 === 1 ? 'mixed' : 'risk'
+    surface: 'history',
+    key: `meeting-${i}.md`,
+    row: {
+      file: `meeting-${i}.md`,
+      title: `Customer review ${i}`,
+      date: new Date(Date.UTC(2026, 0, 1 + (i % 28), 14, i % 60)).toISOString(),
+      mode: 'standard',
+      durationMin: 25 + (i % 50),
+      participants: [`Speaker ${i % 9}`, `Contact ${i % 17}`],
+      topics: [`topic ${i % 13}`, `topic ${(i + 4) % 13}`]
+    }
+  }))
+}
+
+function reviewFixture(): SurfaceItem[] {
+  return Array.from({ length: ROWS }, (_, i) => ({
+    surface: 'review',
+    key: `transcript-${i}`,
+    row: {
+      speaker: i % 4 === 0 ? 'you' : i % 4 === 1 ? 'them' : 'unknown',
+      text: `Transcript line ${i}: this fixture uses the same transcript row as Review so wrapping, speaker labels and timestamps are measured.`,
+      t: i * 1200
+    }
+  }))
+}
+
+function brainFixture(): SurfaceItem[] {
+  return Array.from({ length: ROWS }, (_, i) => ({
+    surface: 'brain',
+    key: `deal-${i}`,
+    row: {
+      schema_version: 2,
+      id: `deal-${i}`,
+      aliases: [],
+      name: `Opportunity ${i}`,
+      account: `Account ${i % 23}`,
+      stage: i % 3 === 0 ? 'Proposal' : 'Discovery',
+      outcome: 'open',
+      win_likelihood_band: i % 3 === 0 ? 'good' : i % 3 === 1 ? 'mixed' : 'concerning',
+      band_evidence: `Recent signal ${i % 31} from the customer conversation.`,
+      velocity: { signal: i % 2 === 0 ? 'hard-calendar-gate' : 'no-hard-date-found', evidence: 'Measured fixture' },
+      meetings: [{ file: `meeting-${i}.md`, title: `Meeting ${i}`, date: new Date(2026, 0, 1 + (i % 28)).toISOString() }],
+      signals: [],
+      missed_signals: [],
+      commitments: [],
+      feedback: []
+    } as DealEntity
+  }))
+}
+
+function relationshipFixture(): SurfaceItem[] {
+  return Array.from({ length: ROWS }, (_, i) => ({
+    surface: 'relationships',
+    key: `person-${i}`,
+    row: {
+      nodeId: `person-${i}`,
+      label: `Relationship ${i}`,
+      type: i % 2 === 0 ? 'person' : 'account',
+      account: `Account ${i % 23}`,
+      daysQuiet: 14 + (i % 90),
+      hook: `Follow up on the last discussed topic ${i % 19}.`
+    }
   }))
 }
 
 const specs: SurfaceSpec[] = [
-  { surface: 'history', rows: fixture('history'), rowHeight: 56 },
-  { surface: 'review', rows: fixture('review'), rowHeight: 44 },
-  { surface: 'brain', rows: fixture('brain'), rowHeight: 68 },
-  { surface: 'relationships', rows: fixture('relationships'), rowHeight: 52 }
+  { surface: 'history', rows: historyFixture(), rowHeight: 78 },
+  { surface: 'review', rows: reviewFixture(), rowHeight: 46 },
+  { surface: 'brain', rows: brainFixture(), rowHeight: 92 },
+  { surface: 'relationships', rows: relationshipFixture(), rowHeight: 64 }
 ]
 
-const MeasureRow = memo(function MeasureRow({ row, surface }: { row: FixtureRow; surface: Surface }): JSX.Element {
-  return (
-    <div className="rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2 text-[12px]">
-      <div className="flex items-center gap-2">
-        <span className="min-w-0 flex-1 truncate font-semibold text-[color:var(--color-ink)]">{row.title}</span>
-        <span className="shrink-0 rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] text-[color:var(--color-ink-3)]">
-          {surface}
-        </span>
-      </div>
-      <div className="mt-0.5 truncate text-[color:var(--color-ink-3)]">{row.detail}</div>
-    </div>
-  )
+const SurfaceRow = memo(function SurfaceRow({ item }: { item: SurfaceItem }): JSX.Element {
+  if (item.surface === 'history') {
+    return (
+      <MeetingRow
+        meeting={item.row}
+        isSelected={false}
+        isActive={false}
+        isDeleting={false}
+        isEditing={false}
+        editingValue=""
+        isRenaming={false}
+        isOpen={false}
+        error={null}
+        indexStatus={null}
+        indexError={null}
+        hydration={undefined}
+        onSelect={() => undefined}
+        onOpen={() => undefined}
+        onDownload={() => undefined}
+        onToggleConnections={() => undefined}
+        onTrash={() => undefined}
+        onExport={() => undefined}
+        onStartEdit={() => undefined}
+        onEditingChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+      />
+    )
+  }
+  if (item.surface === 'review') return <TranscriptRow line={item.row} />
+  if (item.surface === 'brain') {
+    return (
+      <DealRow
+        deal={item.row}
+        onSetOutcome={() => undefined}
+        onOpenRecord={() => undefined}
+        accountIdByName={new Map()}
+      />
+    )
+  }
+  return <GoingColdRow item={item.row} onFocus={() => undefined} />
 })
 
 function SurfaceList({ spec }: { spec: SurfaceSpec }): JSX.Element {
@@ -69,14 +168,14 @@ function SurfaceList({ spec }: { spec: SurfaceSpec }): JSX.Element {
       </h2>
       <VirtualList
         items={spec.rows}
-        getKey={(row) => row.id}
+        getKey={(item) => `${item.surface}:${item.key}`}
         estimateSize={() => spec.rowHeight}
         className="measure-scroller scroll-thin h-[420px] overflow-y-auto rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-2"
         ariaLabel={`${spec.surface} 5000-row fixture`}
         overscan={8}
         renderItem={({ item, style, measureRef }) => (
-          <div key={item.id} ref={measureRef} style={style} data-row={item.id} className="pb-1.5">
-            <MeasureRow row={item} surface={spec.surface} />
+          <div ref={measureRef} style={style} data-row={spec.surface} className="pb-1.5">
+            <SurfaceRow item={item} />
           </div>
         )}
       />
@@ -100,26 +199,45 @@ function animationFrame(): Promise<number> {
 
 async function measureScroller(scroller: HTMLElement, surface: Surface): Promise<SurfaceResult> {
   const frames = 120
-  const work: number[] = []
+  const frameDurations: number[] = []
+  const longTaskDurations: number[] = []
+  const observers: PerformanceObserver[] = []
+  if (typeof PerformanceObserver !== 'undefined') {
+    for (const type of ['long-animation-frame', 'longtask']) {
+      try {
+        const observer = new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) longTaskDurations.push(entry.duration)
+        })
+        observer.observe({ type, buffered: true })
+        observers.push(observer)
+      } catch {
+        // Chromium versions differ on long-animation-frame support; rAF gaps remain the gate.
+      }
+    }
+  }
   const maxTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight)
+  let previousFrame = await animationFrame()
   for (let i = 0; i < frames; i++) {
-    await animationFrame()
-    const start = performance.now()
     scroller.scrollTop = (maxTop * i) / Math.max(1, frames - 1)
+    const afterFrame = await animationFrame()
+    frameDurations.push(afterFrame - previousFrame)
+    previousFrame = afterFrame
     const renderedRows = scroller.querySelectorAll('[data-row]').length
-    work.push(performance.now() - start)
     if (renderedRows > 180) throw new Error(`${surface} rendered ${renderedRows} rows in one frame`)
   }
+  for (const observer of observers) observer.disconnect()
   const renderedRows = scroller.querySelectorAll('[data-row]').length
-  const maxFrameWorkMs = Math.max(...work)
-  const avgFrameWorkMs = work.reduce((sum, n) => sum + n, 0) / work.length
+  const maxFrameMs = Math.max(...frameDurations)
+  const avgFrameMs = frameDurations.reduce((sum, n) => sum + n, 0) / frameDurations.length
+  const maxLongTaskMs = longTaskDurations.length > 0 ? Math.max(...longTaskDurations) : 0
   return {
     surface,
     rows: ROWS,
     renderedRows,
     frames,
-    maxFrameWorkMs,
-    avgFrameWorkMs
+    maxFrameMs,
+    avgFrameMs,
+    maxLongTaskMs
   }
 }
 
@@ -129,7 +247,7 @@ window.__virtualListMeasure = async (): Promise<MeasureReport> => {
   const results: SurfaceResult[] = []
   for (let i = 0; i < scrollers.length; i++) results.push(await measureScroller(scrollers[i], specs[i].surface))
   return {
-    verdict: results.every((r) => r.maxFrameWorkMs <= BUDGET_MS) ? 'PASS' : 'FAIL',
+    verdict: results.every((r) => r.maxFrameMs <= BUDGET_MS && r.maxLongTaskMs <= BUDGET_MS) ? 'PASS' : 'FAIL',
     budgetMs: BUDGET_MS,
     results
   }

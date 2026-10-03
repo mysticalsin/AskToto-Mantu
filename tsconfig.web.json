@@ -15,6 +15,12 @@
     "baseUrl": ".",
     "paths": { "@/*": ["src/renderer/src/*"], "@shared/*": ["src/shared/*"] }
   },
-  "include": ["src/renderer/src/**/*", "src/shared/**/*", "src/preload/index.d.ts"],
+  "include": [
+    "src/renderer/src/**/*",
+    "src/shared/**/*",
+    "src/preload/index.d.ts",
+    "intelligence/src/views/GraphRows.tsx",
+    "intelligence/src/types/data.ts"
+  ],
   "exclude": ["**/*.test.ts", "**/*.spec.ts", "**/*.test.tsx", "**/*.spec.tsx"]
 }

@@ -30,8 +30,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium
-      - name: Build the renderer
-        run: npm run build
+      - name: Build the virtual-list measurement page
+        run: npx vite build --config scripts/qa/virtual-list-measure.vite.config.ts
       - name: Measure 5,000-row virtual-list fixtures
         run: node scripts/qa/virtual-list-measure.mjs --out out/m2-0075-virtual-list
       - name: Upload measurement report

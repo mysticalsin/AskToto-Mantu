@@ -104,8 +104,7 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'src/renderer/index.html'),
-          decoder: resolve(__dirname, 'src/renderer/decoder.html'),
-          'virtual-list-measure': resolve(__dirname, 'src/renderer/virtual-list-measure.html')
+          decoder: resolve(__dirname, 'src/renderer/decoder.html')
         }
       }
     },
