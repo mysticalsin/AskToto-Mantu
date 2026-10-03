@@ -1704,20 +1704,21 @@ test('R3b --release: a metis-owner-mac record without ci_run_id does not meet a 
   assertOnlyProblem(releaseOf(c).problems, 'census', OWNER_MAC_RUNNER_HOST, `${OWNER_MAC_RUNNER_HOST} record with no ci_run_id`)
 })
 
-test('R3c --release: runner records without ci_run_id fail rows at every level', () => {
-  const c = releaseCase()
-  c.gates.rows = [
-    { id: 'accepted-runner', ticket: 'M2-0046', level: 'ACCEPTED', bytes: 'promotable', hosts: ['macos-latest'], accept: 'PASS' },
-    ...c.gates.rows
-  ]
-  const withoutRun = {
-    ...acceptedRecord(),
-    environment: { kind: 'hosted-runner', host: 'macos-latest' },
-    build_run_id: CANDIDATE_RUN,
-    artifact_sha256: SHA_MAC
+test('R3c --release: runner records without ci_run_id fail rows at runner levels', () => {
+  for (const [level, ticketId] of [['HOST_CONFIGURED', 'M2-0187'], ['LIVE_VERIFIED', 'M2-0433'], ['MEASURED', 'M2-0489']]) {
+    const c = releaseCase()
+    c.gates.rows = [{
+      id: `runner-${level.toLowerCase().replace('_', '-')}`,
+      ticket: ticketId,
+      level,
+      bytes: 'promotable',
+      hosts: ['macos-latest'],
+      accept: 'PASS'
+    }]
+    const { ci_run_id: _dropped, ...withoutRun } = boundRecord(ticketId, 'macos-latest', SHA_MAC, { evidence_level: level })
+    setRecords(c, ticketId, [withoutRun])
+    assertOnlyProblem(releaseOf(c).problems, ticketId, level, 'hosted-runner record with no ci_run_id')
   }
-  setRecords(c, 'M2-0046', [withoutRun])
-  assertOnlyProblem(releaseOf(c).problems, 'accepted-runner', 'hosted-runner record with no ci_run_id')
 })
 
 test('R4 --release: QA-identity bytes do not meet a row that requires promotable bytes', () => {
