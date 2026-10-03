@@ -24,6 +24,11 @@ on:
         required: true
         type: boolean
         default: false
+      residuals:
+        description: Residual risks and known limits (Markdown), rendered verbatim into the release body; pass it with -F residuals=@file. Required to publish and refused when empty; optional for a dry run. At most 10,000 characters, with no user-home path or email address.
+        required: false
+        type: string
+        default: ''
       confirm_version:
         description: Required to publish; the candidate's version, exactly
         required: false
@@ -59,6 +64,14 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.22.3
+      - name: Require the residual risks to publish
+        env:
+          PUBLISH: ${{ inputs.publish }}
+          RESIDUALS: ${{ inputs.residuals }}
+        run: |
+          if [ "$PUBLISH" = true ] && [ -z "${RESIDUALS//[[:space:]]/}" ]; then
+            echo "::error::To publish, pass the residuals input (-F residuals=@file); the release body must state the residual risks."; exit 1
+          fi
       - name: Require a fully successful qa-candidate run on main
         id: candidate
         env:
@@ -97,12 +110,18 @@ jobs:
         id: stage
         env:
           EVIDENCE: ${{ inputs.evidence }}
+          RESIDUALS: ${{ inputs.residuals }}
           CANDIDATE_RUN: ${{ inputs.candidate_run_id }}
           CANDIDATE_COMMIT: ${{ steps.candidate.outputs.commit }}
         run: |
           printf '%s' "$EVIDENCE" > "$RUNNER_TEMP/evidence.jsonl"
+          residuals_flag=()
+          if [ -n "$RESIDUALS" ]; then
+            printf '%s' "$RESIDUALS" > "$RUNNER_TEMP/residuals.md"
+            residuals_flag=(--residuals-file "$RUNNER_TEMP/residuals.md")
+          fi
           node scripts/qa/provenance.mjs prepare-release provenance/provenance.json "$RUNNER_TEMP/evidence.jsonl" downloads "$RUNNER_TEMP/promotion" \
-            --candidate-run "$CANDIDATE_RUN" --candidate-commit "$CANDIDATE_COMMIT"
+            --candidate-run "$CANDIDATE_RUN" --candidate-commit "$CANDIDATE_COMMIT" "${residuals_flag[@]}"
           echo "version=$(jq -r .version provenance/provenance.json)" >> "$GITHUB_OUTPUT"
       - name: Choose the release tag
         id: tag
