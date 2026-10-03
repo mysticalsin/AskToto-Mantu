@@ -13,6 +13,7 @@ import {
   englishSentences,
   normalizePcmPeak,
   pcmOf,
+  sapiArgs,
   sayArgs,
   wavFromPcm,
   writeCaptureWav
@@ -47,12 +48,22 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
-/** A stand-in for say + afconvert: records each call and writes a 3 s tone-free WAV where afconvert would. */
+/** The WAV path a SAPI script writes to: its single-quoted SetOutputToWaveFile literal. */
+const sapiWavPath = (script: string): string => {
+  const match = /SetOutputToWaveFile\('((?:[^']|'')*)'/.exec(script)
+  if (!match) throw new Error('the SAPI script names no WAV file')
+  return match[1].replaceAll("''", "'")
+}
+
+/** A stand-in for say + afconvert and for SAPI: records each call and writes a 3 s tone-free WAV where
+ *  afconvert or SAPI would. */
 function fakeTools() {
   const calls: Array<{ command: string; args: string[] }> = []
   const run = (command: string, args: string[]): void => {
     calls.push({ command, args })
-    if (command === '/usr/bin/afconvert') writeFileSync(args[args.length - 1], wavFromPcm(Buffer.alloc(3 * CAPTURE_SAMPLE_RATE * 2)))
+    const silence = wavFromPcm(Buffer.alloc(3 * CAPTURE_SAMPLE_RATE * 2))
+    if (command === '/usr/bin/afconvert') writeFileSync(args[args.length - 1], silence)
+    if (command === 'powershell.exe') writeFileSync(sapiWavPath(args[args.length - 1]), silence)
   }
   return { calls, run }
 }
@@ -133,9 +144,32 @@ describe('capture WAV: command construction', () => {
     const sentences = englishSentences()
     expect(sentences.length).toBeGreaterThan(0)
     const { calls, run } = fakeTools()
-    buildCaptureWav({ sentences, run })
+    buildCaptureWav({ sentences, run, platform: 'darwin' })
     expect(calls.filter((c) => c.command === '/usr/bin/say').map((c) => c.args[3])).toEqual(sentences)
     expect(calls.filter((c) => c.command === '/usr/bin/afconvert')).toHaveLength(sentences.length)
+  })
+
+  it('speaks with Windows SAPI straight into a 16-bit PCM mono WAV at the capture rate, quoting text and path as literals', () => {
+    const [, , command, script] = sapiArgs("It's ten o'clock", "C:\\t\\o'brien\\a.wav")
+    expect(sapiArgs('x', 'y').slice(0, 3)).toEqual(['-NoProfile', '-NonInteractive', '-Command'])
+    expect(command).toBe('-Command')
+    expect(script).toContain('Add-Type -AssemblyName System.Speech')
+    expect(script).toContain(`SpeechAudioFormatInfo(${CAPTURE_SAMPLE_RATE}, [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen, [System.Speech.AudioFormat.AudioChannel]::Mono)`)
+    expect(script).toContain("$s.Speak('It''s ten o''clock')")
+    expect(sapiWavPath(script)).toBe("C:\\t\\o'brien\\a.wav")
+  })
+
+  it('on Windows makes one SAPI call per English sentence and no say or afconvert call, into the same WAV shape', () => {
+    const sentences = englishSentences()
+    const { calls, run } = fakeTools()
+    const { wav, durationSeconds } = buildCaptureWav({ sentences, run, platform: 'win32' })
+    expect(calls.map((c) => c.command)).toEqual(sentences.map(() => 'powershell.exe'))
+    expect(calls.map((c) => c.args[3])).toEqual(sentences.map((text: string) => expect.stringContaining(`$s.Speak('${text.replaceAll("'", "''")}')`)))
+    expect(durationSeconds).toBeGreaterThanOrEqual(MIN_SECONDS)
+    expect(durationSeconds).toBeLessThanOrEqual(MAX_SECONDS)
+    expect(wav.readUInt16LE(22)).toBe(1)
+    expect(wav.readUInt32LE(24)).toBe(CAPTURE_SAMPLE_RATE)
+    expect(wav.readUInt16LE(34)).toBe(16)
   })
 
   it('builds a 16-bit PCM mono WAV of 60-180 s with pauses', () => {

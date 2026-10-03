@@ -20,9 +20,8 @@ name: Candidate scenarios
 #   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> \
 #     -f scenario=renderer-kill -f mac_sha256=<Metis DMG sha256 from SHA256SUMS.txt>
 #   gh workflow run candidate-scenarios.yml --ref main -f candidate_run=<run id> -f scenario=journey \
-#     -f mac_sha256=<Metis-QA zip sha256> -f win_sha256=<Metis Setup sha256>
-#   (journey drives only QA-identity bytes and excuses no step: until qa-candidate.yml builds a Windows
-#   QA-identity variant, its Windows job ends PRECONDITION not-qa-identity, never PASS.)
+#     -f mac_sha256=<Metis-QA zip sha256> -f win_sha256=<Metis-QA Setup sha256>
+#   (journey drives only QA-identity bytes on both platforms and excuses no step.)
 # The pull_request trigger on this file's own path only registers the workflow with GitHub (M2-0501): the
 # run it creates skips every job, uses no runner minutes and reaches no secret.
 run-name: ${{ github.event_name == 'pull_request' && 'Candidate scenarios (registration)' || format('Candidate scenario {0} on {1}', inputs.scenario, inputs.candidate_run) }}
@@ -294,7 +293,9 @@ jobs:
           $install = Start-Process -FilePath $setup -ArgumentList '/S', "/D=$target" -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw "Setup exited with $($install.ExitCode)." }
           $app = Join-Path $target 'Metis.exe'
-          if (-not (Test-Path $app)) { throw 'The Setup installed no Metis.exe.' }
+          # The QA-identity Setup (build/qa-identity.win.electron-builder.yml) installs its own executable.
+          if ($env:VARIANT -eq 'win-qa-identity') { $app = Join-Path $target 'Metis QA.exe' }
+          if (-not (Test-Path $app)) { throw "The Setup installed no $(Split-Path $app -Leaf)." }
           Add-Content -Path $env:GITHUB_OUTPUT -Value "app=$app"
       - name: Start from a fresh profile seeded only with the scenario's settings
         run: node scripts/qa/candidate-scenarios.mjs profile --scenario "$SCENARIO" --platform win

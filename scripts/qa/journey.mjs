@@ -55,7 +55,7 @@ export const JOURNEY_STEPS = Object.freeze(['onboarding', 'meeting', 'transcript
 /** The exit code of each verdict: the inverse of the registry's exits, which match fault-fatal-relaunch. */
 export const EXIT_CODES = Object.freeze({ PASS: 0, FAIL: 1, PRECONDITION: 2 })
 export const QA_BUNDLE_ID = 'com.mantu.asktoto.qa'
-/** The QA identity's Windows executable: build/qa-identity.electron-builder.yml's productName, Metis QA. */
+/** The QA identity's Windows executable: build/qa-identity.win.electron-builder.yml's win.executableName, Metis QA. */
 export const QA_WIN_EXECUTABLE = 'Metis QA.exe'
 
 const READY_TIMEOUT_MS = 60_000

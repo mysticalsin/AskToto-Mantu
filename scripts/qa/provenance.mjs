@@ -17,7 +17,7 @@ import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, ren
 import { basename, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-/** Every shipped target, plus the macOS QA-identity variant, which is built but never promoted. */
+/** Every shipped target, plus the macOS and Windows QA-identity variants, which are built but never promoted. */
 export const VARIANTS = Object.freeze({
   mac: {
     promotable: true,
@@ -36,6 +36,12 @@ export const VARIANTS = Object.freeze({
     platform: 'win',
     configs: ['electron-builder.win.yml', 'electron-builder.yml'],
     assets: (version) => [`Metis-Setup-${version}.exe`, `Metis-Portable-${version}.exe`]
+  },
+  'win-qa-identity': {
+    promotable: false,
+    platform: 'win',
+    configs: ['build/qa-identity.win.electron-builder.yml', 'electron-builder.win.yml', 'electron-builder.yml'],
+    assets: (version) => [`Metis-QA-Setup-${version}.exe`]
   }
 })
 

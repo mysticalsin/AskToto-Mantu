@@ -1,7 +1,7 @@
 name: QA candidate
 
-# Builds one candidate once (M2-0187): every shipped macOS and Windows installer plus the macOS
-# QA-identity variant, from one named commit of main or release/1.9.x, in one run. It records provenance (sha256 per
+# Builds one candidate once (M2-0187): every shipped macOS and Windows installer plus the macOS and
+# Windows QA-identity variants, from one named commit of main or release/1.9.x, in one run. It records provenance (sha256 per
 # installer, commit, run, runner image, Node, Electron and electron-builder versions, builder config
 # hashes), then verifies, installs and launches every installer by sha256. Packaged gates elsewhere
 # consume these bytes by sha256, and promote-candidate.yml publishes the same bytes. This workflow never
@@ -22,6 +22,7 @@ on:
     paths:
       - .github/workflows/qa-candidate.yml
       - build/qa-identity.electron-builder.yml
+      - build/qa-identity.win.electron-builder.yml
       - scripts/qa/provenance.mjs
       - scripts/qa/release-line.mjs
       - scripts/qa/st-1.mjs
@@ -246,10 +247,21 @@ jobs:
         run: security delete-keychain "$KEYCHAIN"
 
   build-win:
-    name: Build win
+    name: Build ${{ matrix.variant }}
     needs: guard
     runs-on: windows-latest
     timeout-minutes: 90
+    strategy:
+      matrix:
+        include:
+          - variant: win
+            script: dist:win
+            qa_identity: ''
+          # npm runs scripts through cmd.exe on Windows, so the QA-identity switch comes from the step env, not
+          # the script; dist:qa-identity:win's check-packaged-runtime refuses an asktoto-qa package built without it.
+          - variant: win-qa-identity
+            script: dist:qa-identity:win
+            qa_identity: '1'
     steps:
       - name: Build once
         run: |
@@ -281,26 +293,28 @@ jobs:
             resources/llama
             resources/local-llm
           key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs') }}-${{ hashFiles('resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs') }}-${{ hashFiles('scripts/local-model-assets.mjs') }}
-      # No signing secret reaches this job, so electron-builder leaves both installers unsigned.
-      - name: Build the win installers
-        run: npm run dist:win
+      # No signing secret reaches this job, so electron-builder leaves every installer unsigned.
+      - name: Build the ${{ matrix.variant }} installers
+        env:
+          METIS_QA_IDENTITY: ${{ matrix.qa_identity }}
+        run: npm run ${{ matrix.script }}
       - name: Refuse any installer over GitHub's per-asset limit
         run: npm run check:release
         env:
           ASKTOTO_ARTIFACTS_DIR: release
       - name: Stage and hash the installers
-        run: node scripts/qa/provenance.mjs stage win release candidate
+        run: node scripts/qa/provenance.mjs stage ${{ matrix.variant }} release candidate
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: candidate-win
+          name: candidate-${{ matrix.variant }}
           path: candidate/assets/
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
           compression-level: 0
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: build-win
-          path: candidate/build-win.json
+          name: build-${{ matrix.variant }}
+          path: candidate/build-${{ matrix.variant }}.json
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 

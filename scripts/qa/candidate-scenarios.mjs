@@ -60,8 +60,7 @@ export const PACKAGED_LIFECYCLE_RV_ROWS = Object.freeze({
  * throwaway ASKTOTO_USERDATA profiles, so the default profile is never touched. notCovered lists report rows
  * the platform cannot prove, each with the reason; lane.json carries them as a residual. qaOnlyHook marks a
  * scenario that needs a hook compiled only into QA-identity bytes; every other scenario installs a
- * promotable variant so its records bind to bytes that can ship; a platform entry may override it when that
- * platform has no QA-identity build. installerSuffix, when set, is the only
+ * promotable variant so its records bind to bytes that can ship. installerSuffix, when set, is the only
  * installer kind the scenario accepts; installerKind, when set, is the candidate-installer.mjs selector the
  * install step uses instead of the platform. guiScripting marks a platform entry that drives the app's native UI
  * through System Events. budgets, when set, are the scenario's own durations, counts and time limits; the
@@ -272,10 +271,8 @@ export const SCENARIOS = Object.freeze({
   // M2-0524: the whole user path on the installed candidate, on a fresh isolated profile: onboarding with the
   // speech-engine step, then a meeting fed by the QA-identity file source (M2-0494), its saved transcript and
   // its write-up. Every step runs on every platform and none may be skipped. The file source is compiled only
-  // into QA-identity bytes, and qa-candidate.yml builds no Windows QA-identity variant yet, so Windows installs
-  // the only Windows candidate bytes, the promotable Setup, and journey.mjs refuses them as a PRECONDITION
-  // (not-qa-identity), never a PASS; the win entry points at candidate-win-qa-identity once that build exists.
-  // scripts/qa/journey.mjs reads budgets.
+  // into QA-identity bytes, so both platforms install the QA identity: the Metis-QA zip on macOS and the
+  // Metis-QA Setup on Windows (build/qa-identity.win.electron-builder.yml). scripts/qa/journey.mjs reads budgets.
   journey: Object.freeze({
     ticket: 'M2-0524',
     qaOnlyHook: true,
@@ -301,9 +298,9 @@ export const SCENARIOS = Object.freeze({
         isolatedProfiles: true
       }),
       win: Object.freeze({
-        qaOnlyHook: false,
-        variant: 'win',
-        artifact: 'candidate-win',
+        variant: 'win-qa-identity',
+        artifact: 'candidate-win-qa-identity',
+        installerKind: 'win-qa',
         script: 'scripts/qa/journey.mjs',
         args: ({ app, installer, sha256, report }) => {
           if (!app) throw new Error('journey needs the installed app (--app).')

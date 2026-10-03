@@ -422,3 +422,42 @@ describe('QA candidate workflow: the shipped window gate (M2-0519)', () => {
     expect(measure.indexOf('prewarm-spellchecker shipped')).toBeLessThan(measure.indexOf('--window-variant "$variant"'))
   })
 })
+
+describe('QA candidate Windows QA-identity build (M2-0524)', () => {
+  const job = jobBlock('build-win')
+  const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { scripts: Record<string, string> }
+  const config = readFileSync(join(root, 'build', 'qa-identity.win.electron-builder.yml'), 'utf8').replace(/\r\n/g, '\n')
+
+  it('builds the promotable win variant and the win-qa-identity variant, each staged and uploaded under its own name', () => {
+    expect(job).toContain('          - variant: win\n            script: dist:win\n')
+    expect(job).toContain('          - variant: win-qa-identity\n            script: dist:qa-identity:win\n')
+    expect(job).toContain('        run: npm run ${{ matrix.script }}')
+    expect(job).toContain('node scripts/qa/provenance.mjs stage ${{ matrix.variant }} release candidate')
+    expect(job).toContain('name: candidate-${{ matrix.variant }}')
+    expect(job).toContain('name: build-${{ matrix.variant }}')
+  })
+
+  it('compiles the QA-only hooks into the win-qa-identity bundle and no other', () => {
+    expect(job).toContain("            qa_identity: '1'")
+    expect(job).toContain("            qa_identity: ''")
+    expect(job).toContain('          METIS_QA_IDENTITY: ${{ matrix.qa_identity }}')
+  })
+
+  it('packages the Windows QA identity as its own app, checks it under its own executable name, and never publishes it', () => {
+    const script = pkg.scripts['dist:qa-identity:win']
+    expect(pkg.scripts['predist:qa-identity:win']).toBe('npm run predist:win')
+    expect(script).toContain('electron-builder --config build/qa-identity.win.electron-builder.yml --win nsis --x64 --publish never')
+    expect(script).toContain('check-packaged-runtime.mjs win --post-sign "--executable=Metis QA.exe"')
+    expect(script).toContain('check-packaged-launch.mjs "release/win-unpacked/Metis QA.exe"')
+    expect(config).toContain('extends: ./electron-builder.win.yml\n')
+    expect(config).toContain('appId: com.mantu.asktoto.qa\n')
+    expect(config).toContain('extraMetadata:\n  name: asktoto-qa\n')
+    expect(config).toMatch(/^ {2}executableName: Metis QA$/m)
+    expect(config).toMatch(/^ {2}artifactName: Metis-QA-Setup-\$\{version\}\.\$\{ext\}$/m)
+    expect(config).toContain('publish: null\n')
+  })
+
+  it('runs the self-test when the Windows QA-identity config changes', () => {
+    expect(workflow).toContain('      - build/qa-identity.win.electron-builder.yml\n')
+  })
+})

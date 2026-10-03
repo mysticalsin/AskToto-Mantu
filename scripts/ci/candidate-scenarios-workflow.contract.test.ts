@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { RUNNER_LABELS, SCENARIOS, resolveScenario } from '../qa/candidate-scenarios.mjs'
 import { LAUNCH_MIN_MS, worstCaseRunMs } from '../qa/ex-suite.mjs'
+import { QA_WIN_EXECUTABLE } from '../qa/journey.mjs'
 import { VARIANTS } from '../qa/provenance.mjs'
 import { findUnpinnedUses } from './check-workflow-pins.mjs'
 
@@ -267,15 +268,24 @@ describe('candidate-scenarios.yml', () => {
     )
   })
 
-  it('offers journey, which installs the Metis-QA zip on macOS and the Setup on Windows, and excuses no step on either', () => {
+  it('offers journey, which installs the QA-identity bytes on both platforms, the Metis-QA zip and the Metis-QA Setup, and excuses no step on either', () => {
     const options = block(block(block(lines, '    inputs:', 4), '      scenario:', 6), '        options:', 8).map((line) => line.trim())
     expect(options).toContain('- journey')
     expect(Object.keys(SCENARIOS.journey.platforms)).toEqual(['mac', 'win'])
     expect(SCENARIOS.journey.platforms.mac.artifact).toBe('candidate-mac-qa-identity')
-    expect(SCENARIOS.journey.platforms.win.artifact).toBe('candidate-win')
-    for (const target of Object.values(SCENARIOS.journey.platforms)) expect('notCovered' in target).toBe(false)
-    expect(workflow).toContain('-f scenario=journey \\\n#     -f mac_sha256=<Metis-QA zip sha256> -f win_sha256=<Metis Setup sha256>')
-    expect(workflow).toContain('its Windows job ends PRECONDITION not-qa-identity, never PASS.')
+    expect(SCENARIOS.journey.platforms.win.artifact).toBe('candidate-win-qa-identity')
+    for (const target of Object.values(SCENARIOS.journey.platforms)) {
+      expect('notCovered' in target).toBe(false)
+      expect(VARIANTS[target.variant as keyof typeof VARIANTS].promotable).toBe(false)
+    }
+    expect(workflow).toContain('-f scenario=journey \\\n#     -f mac_sha256=<Metis-QA zip sha256> -f win_sha256=<Metis-QA Setup sha256>')
+    expect(workflow).not.toContain('not-qa-identity')
+    // The Windows install hands journey the QA identity's own executable, the one journey.mjs accepts.
+    const install = steps('win')[stepIndex(steps('win'), "'/S', \"/D=$target\"")]
+    expect(install).toContain("if ($env:VARIANT -eq 'win-qa-identity') { $app = Join-Path $target 'Metis QA.exe' }")
+    expect(install.indexOf("'Metis QA.exe'")).toBeLessThan(install.indexOf('Test-Path $app'))
+    expect(job('win')).toContain('      VARIANT: ${{ needs.guard.outputs.win_variant }}')
+    expect(QA_WIN_EXECUTABLE).toBe('Metis QA.exe')
   })
 
   it('offers packaged-lifecycle, which runs on both hosted platform jobs', () => {

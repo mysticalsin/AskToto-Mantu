@@ -2,7 +2,7 @@
 /**
  * Writes the WAV the QA-identity file-fed capture source plays as the microphone (src/main/qa-capture-source.ts):
  * the synthetic English sentences of scripts/qa/asr-fixtures/manifest.json, spoken by /usr/bin/say and
- * converted by /usr/bin/afconvert, with silent pauses between them. macOS only.
+ * converted by /usr/bin/afconvert on macOS, or spoken by Windows SAPI on Windows, with silent pauses between them.
  *
  * The file is 16-bit PCM mono at CAPTURE_SAMPLE_RATE (Chromium's fake capture device resamples whatever it
  * is given; 48 kHz is the rate its own capture pipeline runs at; ASSUMED, as src/main/qa-capture-source.ts
@@ -35,6 +35,26 @@ export function englishSentences(manifestPath = MANIFEST) {
 
 /** `say` writes AIFF; the text follows `--` so a sentence can never be read as an option. */
 export const sayArgs = (text, aiffPath) => ['-o', aiffPath, '--', text]
+
+const psQuote = (text) => `'${String(text).replaceAll("'", "''")}'`
+
+/**
+ * Windows speaks through SAPI (System.Speech, as scripts/check-packaged-asr.mjs does on the hosted Windows image)
+ * straight into a 16-bit PCM mono WAV at the capture rate. The text and path are PowerShell single-quoted
+ * literals, so neither is ever evaluated.
+ */
+export const sapiArgs = (text, wavPath) => [
+  '-NoProfile',
+  '-NonInteractive',
+  '-Command',
+  'Add-Type -AssemblyName System.Speech; ' +
+    `$f = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(${CAPTURE_SAMPLE_RATE}, ` +
+    '[System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen, [System.Speech.AudioFormat.AudioChannel]::Mono); ' +
+    '$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; ' +
+    `$s.SetOutputToWaveFile(${psQuote(wavPath)}, $f); ` +
+    `$s.Speak(${psQuote(text)}); ` +
+    '$s.Dispose()'
+]
 
 /** `afconvert` turns the AIFF into little-endian 16-bit PCM mono WAV at the capture rate. */
 export const afconvertArgs = (aiffPath, wavPath) => [
@@ -106,20 +126,25 @@ function defaultRun(command, args) {
 const secondsOf = (pcm) => pcm.length / 2 / CAPTURE_SAMPLE_RATE
 
 /**
- * Speaks every sentence once, then repeats the round until the clip is at least MIN_SECONDS long.
- * `run(command, args)` executes a system tool; injected so tests need no macOS.
- * @param {{ sentences?: string[], run?: (command: string, args: string[]) => void }} [options]
+ * Speaks every sentence once, then repeats the round until the clip is at least MIN_SECONDS long: with SAPI
+ * through PowerShell on Windows, with say and afconvert everywhere else (only macOS has them).
+ * `run(command, args)` executes a system tool; injected so tests need neither host.
+ * @param {{ sentences?: string[], run?: (command: string, args: string[]) => void, platform?: string }} [options]
  */
-export function buildCaptureWav({ sentences = englishSentences(), run = defaultRun } = {}) {
+export function buildCaptureWav({ sentences = englishSentences(), run = defaultRun, platform = process.platform } = {}) {
   if (sentences.length === 0) throw new Error('no English sentences in the fixture manifest')
   const scratch = mkdtempSync(join(tmpdir(), 'metis-capture-wav-'))
   try {
     const silence = Buffer.alloc(PAUSE_SECONDS * CAPTURE_SAMPLE_RATE * 2)
     const spoken = sentences.map((text, index) => {
-      const aiff = join(scratch, `s${index}.aiff`)
       const wav = join(scratch, `s${index}.wav`)
-      run('/usr/bin/say', sayArgs(text, aiff))
-      run('/usr/bin/afconvert', afconvertArgs(aiff, wav))
+      if (platform === 'win32') {
+        run('powershell.exe', sapiArgs(text, wav))
+      } else {
+        const aiff = join(scratch, `s${index}.aiff`)
+        run('/usr/bin/say', sayArgs(text, aiff))
+        run('/usr/bin/afconvert', afconvertArgs(aiff, wav))
+      }
       return normalizePcmPeak(pcmOf(readFileSync(wav)))
     })
     const round = Buffer.concat(spoken.flatMap((pcm) => [pcm, silence]))
@@ -160,8 +185,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     console.error('Usage: node scripts/qa/meeting/capture-wav.mjs <profile-dir>')
     process.exit(2)
   }
-  if (process.platform !== 'darwin') {
-    console.error('capture-wav.mjs needs macOS (/usr/bin/say, /usr/bin/afconvert)')
+  if (process.platform !== 'darwin' && process.platform !== 'win32') {
+    console.error('capture-wav.mjs needs macOS (/usr/bin/say, /usr/bin/afconvert) or Windows (SAPI)')
     process.exit(2)
   }
   const { sha256, durationSeconds } = writeCaptureWav(profileDir)

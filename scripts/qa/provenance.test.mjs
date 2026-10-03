@@ -48,6 +48,7 @@ function fixture() {
   writeFileSync(join(root, 'electron-builder.win.yml'), 'windows config for the fixture\n')
   mkdirSync(join(root, 'build'), { recursive: true })
   writeFileSync(join(root, 'build', 'qa-identity.electron-builder.yml'), 'qa identity config for the fixture\n')
+  writeFileSync(join(root, 'build', 'qa-identity.win.electron-builder.yml'), 'windows qa identity config for the fixture\n')
   const releaseDir = join(root, 'release')
   mkdirSync(releaseDir, { recursive: true })
   for (const config of Object.values(VARIANTS)) {
@@ -143,6 +144,7 @@ test('a D-34 hotfix version stages the same asset names under the hotfix version
   assert.deepEqual(VARIANTS.mac.assets(hotfix), ['Metis-1.9.7-hotfix.1.dmg', 'Metis-1.9.7-hotfix.1.zip'])
   assert.deepEqual(VARIANTS['mac-qa-identity'].assets(hotfix), ['Metis-QA-1.9.7-hotfix.1.zip'])
   assert.deepEqual(VARIANTS.win.assets(hotfix), ['Metis-Setup-1.9.7-hotfix.1.exe', 'Metis-Portable-1.9.7-hotfix.1.exe'])
+  assert.deepEqual(VARIANTS['win-qa-identity'].assets(hotfix), ['Metis-QA-Setup-1.9.7-hotfix.1.exe'])
 
   const { root, releaseDir } = fixture()
   try {
@@ -268,6 +270,34 @@ test('stage records the mac identity from the environment, ad-hoc without it, an
   }
 })
 
+test('the Windows QA-identity variant stages only its Setup, from its own config over the Windows one, unsigned and never promotable', async () => {
+  const { root, releaseDir } = fixture()
+  try {
+    const outDir = join(root, 'out-win-qa')
+    const record = await stageBuild({
+      variant: 'win-qa-identity',
+      repoRoot: root,
+      releaseDir,
+      outDir,
+      env: env({ ASKTOTO_MAC_SIGN_IDENTITY: 'A'.repeat(40) }),
+      nodeVersion: NODE_VERSION
+    })
+    assert.deepEqual(readdirSync(join(outDir, 'assets')), [`Metis-QA-Setup-${VERSION}.exe`])
+    assert.deepEqual(record.builder_config.map((c) => c.path), [
+      'build/qa-identity.win.electron-builder.yml',
+      'electron-builder.win.yml',
+      'electron-builder.yml'
+    ])
+    assert.deepEqual(record.signing, { mode: 'unsigned' })
+    assert.equal(PROMOTABLE_VARIANTS.includes('win-qa-identity'), false)
+    for (const name of VARIANTS.win.assets(VERSION)) {
+      assert.ok(existsSync(join(releaseDir, name)), `${name} should remain in release/ untouched`)
+    }
+  } finally {
+    cleanup(root)
+  }
+})
+
 test('stage refuses a malformed signing identity', async () => {
   const { root, releaseDir } = fixture()
   try {
@@ -297,7 +327,7 @@ test('assemble binds every build to one commit and run and lists every asset in 
     assert.equal(provenance.version, VERSION)
     assert.equal(provenance.run.id, Number(e.GITHUB_RUN_ID))
     assert.equal(provenance.run.url, `${e.GITHUB_SERVER_URL}/${e.GITHUB_REPOSITORY}/actions/runs/${e.GITHUB_RUN_ID}`)
-    assert.deepEqual(provenance.builds.map((b) => b.variant), ['mac', 'mac-qa-identity', 'win'])
+    assert.deepEqual(provenance.builds.map((b) => b.variant), ['mac', 'mac-qa-identity', 'win', 'win-qa-identity'])
     for (const build of provenance.builds) {
       assert.equal(Object.hasOwn(build, 'commit'), false)
       assert.equal(Object.hasOwn(build, 'version'), false)
