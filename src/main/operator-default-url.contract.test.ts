@@ -34,7 +34,7 @@ const metadata = vi.hoisted(() => {
 })
 vi.mock('./store', () => ({ getSettings: metadata.getSettings, setSettings: metadata.setSettings }))
 vi.mock('./auth', () => ({ authStatus: metadata.authStatus }))
-vi.mock('./brain/intelligence-index', () => ({ lastIndexedAt: metadata.lastIndexedAt }))
+vi.mock('./brain/intelligence-index-state', () => ({ lastIndexedAt: metadata.lastIndexedAt }))
 
 let queueDir: string
 beforeEach(() => {
