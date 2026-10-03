@@ -354,16 +354,7 @@ export const LINE_COUNT = `(() => {
   return [...rows.children].filter((row) => !/^(Waiting for speech…|No audio yet\\.)$/.test(row.textContent.trim())).length
 })()`
 export const ASR_ENGINE = `window.toto.getSettings().then((s) => String(s.asrEngine))`
-export const HOST_MEMORY = `(() => {
-  try {
-    const load = process.mainModule?.require
-    if (typeof load !== 'function') return null
-    const os = load('node:os')
-    return { totalBytes: os.totalmem(), freeBytes: os.freemem() }
-  } catch {
-    return null
-  }
-})()`
+export const HOST_MEMORY = 'null'
 export const MAIN_LOG_PATH = `(() => {
   const load = process.mainModule?.require
   if (typeof load !== 'function') return { error: 'process.mainModule.require unavailable' }

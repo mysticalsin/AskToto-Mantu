@@ -838,9 +838,12 @@ jobs:
             exit 1
           fi
           sha=$(shasum -a 256 "$installer" | cut -d' ' -f1)
+          profile="$(mktemp -d)"
+          node scripts/qa/census/profile.mjs --layout bar "$profile"
           node scripts/qa/meeting/meeting-history.mjs \
             --zip "$installer" \
             --sha256 "$sha" \
+            --profile "$profile" \
             --minutes 60 \
             --post-minutes 10 \
             --out meeting-history-report

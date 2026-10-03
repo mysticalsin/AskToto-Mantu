@@ -5,9 +5,17 @@ import {
   assertContentFreeReport,
   activeKindsFromNdjson,
   buildMeetingHistoryReport,
+  classifyDriverError,
+  evaluateMeetingGrowth,
+  hostMemorySnapshot,
   judgeMeetingHistory,
+  mergeCensusStreams,
   scheduleHistoryCycles
 } from './meeting-history.mjs'
+
+const MIB = 1024 * 1024
+const MINUTE_MS = 60_000
+const START = '2026-10-01T08:00:00.000Z'
 
 const cleanObserved = (overrides: Record<string, unknown> = {}) => ({
   hostFloorOverride: true,
@@ -41,10 +49,70 @@ const cleanObserved = (overrides: Record<string, unknown> = {}) => ({
     }
   ],
   sidecars: { 'whisper-utility': true, 'speaker-utility': false, 'llama-server': false, 'sidecar-supervisor': true },
+  sidecarCauses: { 'llama-server': 'floor-refused-despite-override' },
+  themChannel: { active: false, cause: 'no-screen-recording-grant' },
+  profile: { kind: 'representative-synthetic', meetingCount: 59, layout: 'bar' },
   census: { active: { code: 0 }, post: { code: 0 } },
   growth: { outcome: 'PASS' },
   ...overrides
 })
+
+type Proc = { pid: number; kind: string; mib: number; cpuSeconds?: number; startedMs?: number }
+
+const steady = (rate: number, tMin: number) => rate * tMin * 60
+
+function base(tMin: number): Proc[] {
+  return [
+    { pid: 100, kind: 'main', mib: 400, cpuSeconds: steady(0.02, tMin) },
+    { pid: 101, kind: 'renderer', mib: 250 + Math.max(0, Math.min(tMin, 60) - 5), cpuSeconds: steady(0.005, tMin) },
+    { pid: 102, kind: 'gpu', mib: 120, cpuSeconds: steady(0.003, tMin) },
+    { pid: 103, kind: 'utility', mib: 40, cpuSeconds: steady(0.001, tMin) },
+    ...(tMin < 60
+      ? [
+          { pid: 400, kind: 'parakeet-utility', mib: 150 },
+          { pid: 401, kind: 'speaker-utility', mib: 80 }
+        ]
+      : [])
+  ]
+}
+
+function stream({ minutes, offsetMinutes = 0 }: { minutes: number; offsetMinutes?: number }): string {
+  const lines: object[] = [
+    { record: 'header', schema: 'census-stream/1', state: 'active-transcription', platform: 'darwin', productVersion: '1.9.7', mainPid: 100, intervalMs: 30_000, startedAt: START, profileKind: 'representative-synthetic' }
+  ]
+  let count = 0
+  for (let index = 0, tMs = 0; tMs < minutes * MINUTE_MS; index += 1, tMs += 30_000) {
+    const tMin = offsetMinutes + tMs / MINUTE_MS
+    const bytes = (proc: Proc) => Math.round(proc.mib * MIB)
+    lines.push({
+      record: 'sample',
+      tMs,
+      processes: base(tMin).map((proc) => ({
+        pid: proc.pid,
+        startedMs: proc.startedMs ?? 1_000 + proc.pid,
+        kind: proc.kind,
+        rssBytes: bytes(proc),
+        physFootprintBytes: bytes(proc),
+        cpuSeconds: proc.cpuSeconds ?? 0
+      })),
+      mainAlive: true,
+      sampleDurationMs: 40
+    })
+    count += 1
+  }
+  lines.push({ record: 'trailer', outcome: 'completed', samples: count, endedAt: START })
+  return lines.map((line) => JSON.stringify(line)).join('\n') + '\n'
+}
+
+function auditCounts(minutes: number): string {
+  const buckets = Array.from({ length: Math.ceil(minutes / 10) }, (_, index) => ({
+    index,
+    startsAt: new Date(Date.parse(START) + index * 10 * MINUTE_MS).toISOString(),
+    counts: { 'scheduler.job:window-open': 1 },
+    other: 3
+  }))
+  return JSON.stringify({ schema: 'audit-counts/1', from: START, bucketMinutes: 10, unparseableLines: 0, buckets })
+}
 
 describe('meeting-history cycle scheduler', () => {
   it('schedules every 30 s with deterministic +/- 5 s jitter', () => {
@@ -91,6 +159,14 @@ describe('meeting-history verdict clauses', () => {
     expect(outcome.verdict).toBe('FAIL')
     expect(outcome.failures.some((failure) => failure.startsWith(`History completion 0.5 < ${HISTORY_COMPLETION_FRACTION}`))).toBe(true)
   })
+
+  it('reports a post-precondition driver error as FAIL, not PRECONDITION', () => {
+    const observed = cleanObserved()
+    classifyDriverError(observed, new Error('Stop control unavailable'), { preconditionCleared: true })
+    const outcome = judgeMeetingHistory(observed)
+    expect(outcome).toMatchObject({ verdict: 'FAIL', exitCode: 1 })
+    expect(outcome.failures).toContain('driver failure after precondition: Stop control unavailable')
+  })
 })
 
 describe('meeting-history report', () => {
@@ -120,7 +196,35 @@ describe('meeting-history report', () => {
       verdict: 'PASS',
       hostFloorOverride: true,
       counts: { meetingFilesBefore: 2, meetingFilesAfter: 3, savedBytes: 800 },
+      themChannel: { active: false, cause: 'no-screen-recording-grant' },
+      sidecarCauses: { 'llama-server': 'floor-refused-despite-override' },
+      profile: { kind: 'representative-synthetic', meetingCount: 59, layout: 'bar' },
       growth: { outcome: 'PASS' }
     })
+  })
+
+  it('gets host memory from the driver process', () => {
+    expect(hostMemorySnapshot()).toEqual({
+      totalBytes: expect.any(Number),
+      freeBytes: expect.any(Number)
+    })
+  })
+})
+
+describe('meeting-history growth wiring', () => {
+  it('feeds MEETING-GROWTH-1 active and post samples with post samples after measured Stop', () => {
+    const active = stream({ minutes: 60 })
+    const post = stream({ minutes: 10, offsetMinutes: 60 })
+    const merged = mergeCensusStreams({ active, post, stopMs: 60 * MINUTE_MS })
+    const verdict = evaluateMeetingGrowth({
+      active,
+      post,
+      auditCounts: auditCounts(70),
+      captureStartMs: 0,
+      stopMs: 60 * MINUTE_MS
+    })
+    expect(merged).toContain('"tMs":3600000')
+    expect(verdict.outcome).toBe('PASS')
+    expect(verdict.validity.find((entry: { id: string }) => entry.id === 'V-POST')).toMatchObject({ pass: true })
   })
 })

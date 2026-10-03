@@ -6,16 +6,16 @@
  */
 import { spawn } from 'node:child_process'
 import { closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { freemem, tmpdir, totalmem } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { pathToFileURL } from 'node:url'
 import { sha256File } from '../provenance.mjs'
 import { writeAuditCounts } from '../census/audit-counts.mjs'
 import { evaluateGrowth } from '../soak/growth.mjs'
 import {
   ASR_ENGINE,
   AUDIT_EVENT,
-  HOST_MEMORY,
   LINE_COUNT,
   LINES_TIMEOUT_MS,
   LISTEN_CLICK,
@@ -71,7 +71,20 @@ export function scheduleHistoryCycles({ durationMs, everyMs = HISTORY_EVERY_MS, 
 }
 
 const safeNumber = (value) => (Number.isFinite(value) ? value : null)
-const max = (values) => values.filter(Number.isFinite).reduce((a, b) => Math.max(a, b), Number.NEGATIVE_INFINITY)
+
+export function hostMemorySnapshot() {
+  return { totalBytes: totalmem(), freeBytes: freemem() }
+}
+
+export function sanitizeFailure(error) {
+  return String(error?.message ?? error).replace(/(?:\/Users|\/private|\/tmp|[A-Za-z]:\\)[^\s'",)}]+/g, '[path]').slice(0, 200)
+}
+
+export function classifyDriverError(observed, error, { preconditionCleared }) {
+  const message = sanitizeFailure(error)
+  if (preconditionCleared) observed.runtimeFailure = message
+  else observed.precondition = message
+}
 
 export function judgeMeetingHistory(observed) {
   if (observed.precondition) return { verdict: 'PRECONDITION', exitCode: 2, failures: [observed.precondition] }
@@ -83,6 +96,7 @@ export function judgeMeetingHistory(observed) {
   const saved = observed.meetingFilesAfter > observed.meetingFilesBefore && observed.savedBytes > 0
   const historyRows = observed.historyRowsAfter > observed.historyRowsBefore
 
+  if (observed.runtimeFailure) failures.push(`driver failure after precondition: ${observed.runtimeFailure}`)
   if (!(observed.mainLoop?.p99Ms < LOOP_P99_BUDGET_MS)) failures.push(`whole-capture main p99 ${observed.mainLoop?.p99Ms ?? 'missing'} ms >= ${LOOP_P99_BUDGET_MS} ms`)
   if (!(observed.mainLoop?.maxMs < STRICT_BUDGET_MS)) failures.push(`whole-capture main max ${observed.mainLoop?.maxMs ?? 'missing'} ms >= ${STRICT_BUDGET_MS} ms`)
   for (const action of actions) {
@@ -121,6 +135,42 @@ export function activeKindsFromNdjson(text) {
   return Object.fromEntries(['parakeet-utility', 'whisper-utility', 'speaker-utility', 'llama-server', 'sidecar-supervisor'].map((kind) => [kind, kinds.has(kind)]))
 }
 
+function parseNdjsonRecords(text) {
+  return String(text)
+    .split('\n')
+    .filter((line) => line.trim())
+    .map((line) => {
+      try {
+        return JSON.parse(line)
+      } catch {
+        return null
+      }
+    })
+    .filter(Boolean)
+}
+
+export function mergeCensusStreams({ active, post, stopMs }) {
+  const activeRecords = parseNdjsonRecords(active)
+  const postRecords = parseNdjsonRecords(post)
+  const header = activeRecords.find((record) => record.record === 'header') ?? null
+  const activeSamples = activeRecords.filter((record) => record.record === 'sample')
+  const postSamples = postRecords
+    .filter((record) => record.record === 'sample')
+    .map((record) => ({ ...record, tMs: stopMs + record.tMs }))
+  const trailer = { record: 'trailer', outcome: 'completed', samples: activeSamples.length + postSamples.length }
+  return [header, ...activeSamples, ...postSamples, trailer].filter(Boolean).map((record) => JSON.stringify(record)).join('\n') + '\n'
+}
+
+export function evaluateMeetingGrowth({ active, post, auditCounts, captureStartMs, stopMs }) {
+  return evaluateGrowth({
+    samples: mergeCensusStreams({ active, post, stopMs }),
+    auditCounts,
+    ruleId: 'MEETING-GROWTH-1',
+    captureStartMs,
+    stopMs
+  })
+}
+
 export function buildMeetingHistoryReport(observed, outcome) {
   if (outcome.verdict === 'PRECONDITION') {
     return { verdict: 'PRECONDITION', failures: outcome.failures }
@@ -138,7 +188,12 @@ export function buildMeetingHistoryReport(observed, outcome) {
     hostMemory: observed.hostMemory ?? null,
     asrEngine: observed.asrEngine ?? null,
     sidecars: observed.sidecars ?? {},
+    sidecarCauses: observed.sidecarCauses ?? {},
     themChannel: observed.themChannel ?? { active: false, cause: 'not-probed' },
+    profile: observed.profile ?? { kind: 'unknown' },
+    timingNotes: {
+      historyLoopMaxWindow: 'measured from the preceding main-loop sample through the History cycle'
+    },
     counts: {
       meetingFilesBefore: observed.meetingFilesBefore,
       meetingFilesAfter: observed.meetingFilesAfter,
@@ -181,13 +236,17 @@ export function assertContentFreeReport(report) {
 }
 
 function prepareProfile({ sourceProfile, profileDir }) {
-  if (!sourceProfile) return seedProfile(profileDir)
+  if (!sourceProfile) {
+    const seeded = seedProfile(profileDir)
+    return { ...seeded, profile: { kind: 'representative-synthetic', source: 'generated' } }
+  }
   cpSync(sourceProfile, profileDir, { recursive: true })
   let settings
   try {
     settings = JSON.parse(readFileSync(join(profileDir, 'settings.json'), 'utf8'))
   } catch {
-    return seedProfile(profileDir)
+    const seeded = seedProfile(profileDir)
+    return { ...seeded, profile: { kind: 'representative-synthetic', source: 'generated-fallback' } }
   }
   const sourceMeetings = typeof settings.meetingsFolder === 'string' ? settings.meetingsFolder : ''
   const meetingsFolder = sourceMeetings.startsWith(sourceProfile)
@@ -202,16 +261,33 @@ function prepareProfile({ sourceProfile, profileDir }) {
     asrQuality: 'fast',
     asrLanguage: 'English',
     overlayLayout: 'bar',
-    localLlm: { ...(settings.localLlm ?? {}), enabled: false },
+    localLlm: {
+      ...(settings.localLlm ?? {}),
+      enabled: true,
+      useFor: { ...(settings.localLlm?.useFor ?? {}), summary: true }
+    },
     backgroundScreenContext: false,
     instantSuggestions: false,
+    speakerId: { ...(settings.speakerId ?? {}), enabled: true, saveVoiceprints: false },
     audioSource: 'mic',
     showLiveTranscript: true,
     autoSaveTranscripts: true,
     encryptTranscripts: false
   }
   writeFileSync(join(profileDir, 'settings.json'), `${JSON.stringify(patched, null, 2)}\n`, { mode: 0o600 })
-  return { settings: patched, meetingsFolder }
+  let manifest = null
+  try {
+    manifest = JSON.parse(readFileSync(join(profileDir, 'resource-census-profile.json'), 'utf8'))
+  } catch {}
+  return {
+    settings: patched,
+    meetingsFolder,
+    profile: {
+      kind: manifest?.profileKind ?? 'provided',
+      meetingCount: Number.isFinite(manifest?.meetingCount) ? manifest.meetingCount : null,
+      layout: patched.overlayLayout
+    }
+  }
 }
 
 const HISTORY_OPEN = `(() => {
@@ -221,25 +297,50 @@ const HISTORY_OPEN = `(() => {
   return true
 })()`
 
+const HISTORY_ROWS = `(() => {
+  const buttons = [...document.querySelectorAll('button')]
+  return buttons.filter((button) => {
+    const label = button.getAttribute('aria-label') || ''
+    const text = (button.textContent || '').trim()
+    return !label && text && !/^(import meetings|back|rename meeting|show connections|export meeting copy|delete meeting|show all \\d+ meetings)$/i.test(text)
+  }).length
+})()`
+
 const HISTORY_SEARCH = (term) => `(() => {
   const input = document.querySelector('input[aria-label="Search past meetings"]')
   if (!input) return { ok: false, rows: 0 }
   input.focus()
   input.value = ${JSON.stringify(term)}
   input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ${JSON.stringify(term)} }))
-  return { ok: true, rows: document.querySelectorAll('button').length }
+  return { ok: true }
 })()`
 
-const HISTORY_OPEN_ROW = `(() => {
+const HISTORY_RESULT_ROWS = (term) => `(() => {
+  const term = ${JSON.stringify(term)}.toLowerCase()
+  const buttons = [...document.querySelectorAll('button')]
+  return buttons.filter((button) => {
+    const label = button.getAttribute('aria-label') || ''
+    const text = (button.textContent || '').trim()
+    return !label && text.toLowerCase().includes(term) && !/^(import meetings|back|rename meeting|export meeting copy|delete meeting)$/i.test(text)
+  }).length
+})()`
+
+const HISTORY_OPEN_ROW = (term) => `(() => {
+  const term = ${JSON.stringify(term)}.toLowerCase()
   const buttons = [...document.querySelectorAll('button')]
   const row = buttons.find((button) => {
     const label = button.getAttribute('aria-label') || ''
     const text = (button.textContent || '').trim()
-    return !label && text && !/^(import meetings|back|rename meeting|export meeting copy|delete meeting)$/i.test(text)
+    return !label && text.toLowerCase().includes(term) && !/^(import meetings|back|rename meeting|export meeting copy|delete meeting)$/i.test(text)
   })
   if (!row) return false
   row.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
   return true
+})()`
+
+const HISTORY_DETAIL_PRESENT = `(() => {
+  return !!document.querySelector('[aria-label="Review meeting title"]')
+    || document.body.innerText.includes('Resume session')
 })()`
 
 const BACK_OR_TRANSCRIPT = `(() => {
@@ -247,8 +348,20 @@ const BACK_OR_TRANSCRIPT = `(() => {
   if (back) { back.click(); return 'back' }
   const transcript = document.querySelector('[data-bar-transcript], button[aria-label="Show transcript"]')
   if (transcript) { transcript.click(); return 'transcript' }
+  const history = document.querySelector('[data-bar-history], button[aria-label="Open History"]')
+  if (history) { history.click(); return 'history' }
   return 'none'
 })()`
+
+async function historyRowCount(page) {
+  if (!(await page.evaluate(HISTORY_OPEN).catch(() => false))) return null
+  const ready = await waitFor(() => page.evaluate("!!document.querySelector('input[aria-label=\"Search past meetings\"]')"), 5_000, 250)
+  if (!ready) return null
+  const rows = await page.evaluate(HISTORY_ROWS).catch(() => null)
+  await page.evaluate(BACK_OR_TRANSCRIPT).catch(() => null)
+  await sleep(250)
+  return Number.isFinite(rows) ? rows : null
+}
 
 async function historyCycle(page, { index, tMs, term }) {
   const started = performance.now()
@@ -261,8 +374,9 @@ async function historyCycle(page, { index, tMs, term }) {
     await page.evaluate(HISTORY_OPEN)
     listRendered = Boolean(await waitFor(() => page.evaluate("!!document.querySelector('input[aria-label=\"Search past meetings\"]')"), 5_000, 250))
     const search = await page.evaluate(HISTORY_SEARCH(term)).catch(() => null)
-    searchRendered = Boolean(search?.ok && await waitFor(() => page.evaluate("document.body.innerText.includes('No matching meetings.') || document.querySelectorAll('button').length > 0"), 5_000, 250))
-    rowOpened = Boolean(await page.evaluate(HISTORY_OPEN_ROW).catch(() => false))
+    searchRendered = Boolean(search?.ok && await waitFor(() => page.evaluate(HISTORY_RESULT_ROWS(term)), 5_000, 250))
+    rowOpened = searchRendered && Boolean(await page.evaluate(HISTORY_OPEN_ROW(term)).catch(() => false))
+    rowOpened = rowOpened && Boolean(await waitFor(() => page.evaluate(HISTORY_DETAIL_PRESENT), 5_000, 250))
     await sleep(250)
     await page.evaluate(BACK_OR_TRANSCRIPT).catch(() => null)
     await sleep(250)
@@ -336,6 +450,7 @@ async function main() {
   let inspector = null
   const observed = {
     hostFloorOverride: true,
+    hostMemory: hostMemorySnapshot(),
     samples: [],
     historyActions: [],
     meetingFilesBefore: 0,
@@ -347,14 +462,17 @@ async function main() {
     linesReachedMs: null,
     auditEvent: false,
     sidecars: {},
+    sidecarCauses: {},
     themChannel: { active: false, cause: 'no-screen-recording-grant' },
     census: {}
   }
   let activeCensus = null
+  let preconditionCleared = false
 
   try {
     const { installRoot, executable } = installQaZipDetails(args.zip, installDir)
-    const { meetingsFolder } = prepareProfile({ sourceProfile: args.profile, profileDir })
+    const { meetingsFolder, profile } = prepareProfile({ sourceProfile: args.profile, profileDir })
+    observed.profile = profile
     const { path: wavPath } = writeCaptureWav(profileDir)
     const before = meetingFiles(meetingsFolder)
     observed.meetingFilesBefore = before.length
@@ -376,7 +494,7 @@ async function main() {
     if (!page) throw new Error(overlay.reason ?? 'overlay page not ready')
     await page.enableDiagnostics()
     observed.asrEngine = (await page.evaluate(ASR_ENGINE).catch(() => null)) ?? null
-    observed.hostMemory = (await page.evaluate(HOST_MEMORY).catch(() => null)) ?? null
+    observed.historyRowsBefore = await historyRowCount(page)
     if (!(await page.evaluate(LISTEN_CLICK))) throw new Error('Listen control unavailable')
     if (!(await waitFor(() => page.evaluate(STOP_PRESENT), 10_000, 250))) throw new Error('Listen did not enter active capture')
     if (!(await waitFor(async () => {
@@ -409,6 +527,7 @@ async function main() {
       observed.maxLines = Math.max(observed.maxLines, lines)
       if (lines >= LIVE_LINES_NEEDED && observed.linesReachedMs === null) observed.linesReachedMs = tMs
       observed.auditEvent = auditHasEvent(profileDir)
+      if (observed.auditEvent && observed.linesReachedMs !== null) preconditionCleared = true
       if (tMs > LINES_TIMEOUT_MS && (!observed.auditEvent || observed.linesReachedMs === null)) {
         observed.precondition = 'file-source audit event or live transcript lines missing within 120 s'
         break
@@ -428,13 +547,14 @@ async function main() {
 
     if (!observed.precondition) {
       if (!(await page.evaluate(STOP_CLICK))) throw new Error('Stop control unavailable')
+      const stopMs = Date.now() - captureStart
       const saved = await waitFor(() => {
         const now = meetingFiles(meetingsFolder).filter((file) => !before.includes(file))
         return now.length > 0 ? now : null
       }, SAVE_TIMEOUT_MS)
       const after = meetingFiles(meetingsFolder)
       observed.meetingFilesAfter = after.length
-      observed.historyRowsAfter = after.length
+      observed.historyRowsAfter = await historyRowCount(page)
       observed.savedBytes = saved?.[0] && existsSync(saved[0]) ? statSync(saved[0]).size : 0
       observed.census.active = await activeCensus.done
       activeCensus = null
@@ -453,17 +573,22 @@ async function main() {
       const summary = await summarizeMainLoop(inspector)
       observed.mainLoop = summary.ok ? summary.value : { p99Ms: Infinity, maxMs: Infinity }
       writeAuditCounts(auditCounts, { userData: profileDir, from: new Date(captureStart).toISOString(), bucketMinutes: 10 })
-      observed.sidecars = activeKindsFromNdjson(existsSync(activeNdjson) ? readFileSync(activeNdjson, 'utf8') : '')
-      observed.growth = evaluateGrowth({
-        samples: existsSync(activeNdjson) ? readFileSync(activeNdjson) : '',
+      const activeText = existsSync(activeNdjson) ? readFileSync(activeNdjson, 'utf8') : ''
+      const postText = existsSync(postNdjson) ? readFileSync(postNdjson, 'utf8') : ''
+      observed.sidecars = activeKindsFromNdjson(`${activeText}\n${postText}`)
+      observed.sidecarCauses = {
+        'llama-server': observed.sidecars['llama-server'] ? null : 'floor-refused-despite-override'
+      }
+      observed.growth = evaluateMeetingGrowth({
+        active: activeText,
+        post: postText,
         auditCounts: existsSync(auditCounts) ? readFileSync(auditCounts) : '',
-        ruleId: 'MEETING-GROWTH-1',
         captureStartMs: 0,
-        stopMs: args.minutes * 60_000
+        stopMs
       })
     }
   } catch (error) {
-    observed.precondition = String(error?.message ?? error).replace(/(?:\/Users|\/private|\/tmp|[A-Za-z]:\\)[^\s'",)}]+/g, '[path]').slice(0, 200)
+    classifyDriverError(observed, error, { preconditionCleared })
   } finally {
     activeCensus?.stop()
     page?.close()
@@ -486,4 +611,4 @@ async function main() {
   return report.verdict === 'PASS' ? 0 : report.verdict === 'PRECONDITION' ? 2 : 1
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) process.exit(await main())
+if (import.meta.url === pathToFileURL(process.argv[1]).href) process.exit(await main())
