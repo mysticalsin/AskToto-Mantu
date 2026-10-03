@@ -135,6 +135,13 @@ jobs:
           HK_M_BUDGET_MS: ${{ inputs.hk_m_cycles == '20' && '8100000' || '1200000' }}
           HK_M_PROFILE: ${{ inputs.hk_m_profile || 'fresh' }}
         run: node scripts/qa/hk-m.mjs "$RUNNER_TEMP/smoke/Metis.app" smoke-report/hk-m.json --cycles "$HK_M_CYCLES" --profile "$HK_M_PROFILE" --budget-ms "$HK_M_BUDGET_MS"
+      # The shipped build has the EnableNodeCliInspectArguments fuse off (M2-0558), and the OV-STABLE and RE-HIDE
+      # rows drive main through --inspect. Turn it on in this installed harness copy only, after the shipped
+      # signature was verified above, and re-seal the copy ad hoc so it still launches.
+      - name: Turn the inspect fuse on in the installed harness copy
+        run: |
+          node scripts/build/electron-fuses.mjs set "$RUNNER_TEMP/smoke/Metis.app" enableNodeCliInspectArguments=true
+          codesign --force --deep --sign - --preserve-metadata=entitlements,flags,runtime "$RUNNER_TEMP/smoke/Metis.app"
       - name: Launch, exercise RV reopen routes, quit cleanly, and check that nothing survives
         id: smoke
         # The OV-STABLE row (M2-0431) walks a scripted 3-minute cursor path on top of the other rows.
@@ -330,6 +337,10 @@ jobs:
         continue-on-error: true
         timeout-minutes: 10
         run: node scripts/qa/sidecar-boot-reaper.mjs "$RUNNER_TEMP/smoke/Metis.exe" smoke-report/sidecar-boot-reaper.json
+      # Same harness-only change as the macOS job: the smoke rows drive main through --inspect, which the
+      # shipped fuses turn off (M2-0558). This Metis.exe is unsigned, so nothing needs re-sealing.
+      - name: Turn the inspect fuse on in the installed harness copy
+        run: node scripts/build/electron-fuses.mjs set "$RUNNER_TEMP/smoke/Metis.exe" enableNodeCliInspectArguments=true
       - name: Launch, exercise RV reopen routes, quit cleanly, and check that nothing survives
         id: smoke
         # The OV-STABLE row (M2-0431) walks a scripted 3-minute cursor path on top of the other rows.

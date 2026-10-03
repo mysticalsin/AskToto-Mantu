@@ -49,6 +49,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { harnessCopy } from './build/electron-fuses.mjs'
 import { assertPackagedAsrEvidence, installAsrObserver } from './lib/packaged-asr-evidence.mjs'
 import { describeFixture, fixtureFacts, fixtureProblem, importDiagnostics, importReport } from './lib/packaged-asr-fixture.mjs'
 
@@ -129,7 +130,12 @@ const meetingsFolder = join(userData, 'meetings')
 const env = { ...process.env, ASKTOTO_USERDATA: userData, ASKTOTO_LOCAL_KEYSTORE: '1', ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' }
 for (const key of Object.keys(env)) if (/_API_KEY$/i.test(key)) delete env[key]
 
-console.log(`[check:packaged-asr] launching ${target}`)
+// M2-0558: the shipped Metis.exe has the EnableNodeCliInspectArguments fuse off, and Playwright's Electron driver
+// attaches to main through --inspect. Launch a copy beside it with only that fuse on: same resources, same
+// app.asar and integrity resource, same native addons and models. The shipped executable, and the installers
+// already built from it, are never modified.
+const launchTarget = harnessCopy(target, 'enableNodeCliInspectArguments', true, '-asr-gate')
+console.log(`[check:packaged-asr] launching ${launchTarget} (copy of ${target} with the inspect fuse on)`)
 console.log(`[check:packaged-asr]   isolated profile: ${userData}`)
 
 let app
@@ -158,12 +164,13 @@ async function fail(reason) {
   await sleep(500)
   safeRmSync(userData)
   safeRmSync(workDir)
+  safeRmSync(launchTarget)
   process.exit(1)
 }
 
 async function main() {
 try {
-  app = await electron.launch({ executablePath: target, env })
+  app = await electron.launch({ executablePath: launchTarget, env })
   await app.evaluate(installAsrObserver)
 } catch (error) {
   return fail(`the packaged app failed to launch under Playwright: ${error instanceof Error ? error.message : String(error)}`)
@@ -271,6 +278,7 @@ killApp()
 await sleep(500)
 safeRmSync(userData)
 safeRmSync(workDir)
+safeRmSync(launchTarget)
 process.exit(0)
 }
 
