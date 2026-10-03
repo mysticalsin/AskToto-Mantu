@@ -3,6 +3,7 @@ import { AlertCircle, Check, RefreshCw } from 'lucide-react'
 import { InlineOrb } from './AgentStatus'
 import { MantuLogo } from './MantuLogo'
 import type { PublicSettings } from '@shared/ipc'
+import { activateDialogFocusTrap } from '../lib/dialog-focus'
 
 // Styling duplicated from Settings.tsx's LicenseSection on purpose, not imported: Settings is a
 // lazy-loaded chunk (see App.tsx), and this gate has to render before that chunk would even be
@@ -66,6 +67,8 @@ export function LicenseGate({
   const [error, setError] = useState<string | null>(null)
   const serverId = useId()
   const keyId = useId()
+  const titleId = useId()
+  const dialogRef = useRef<HTMLDivElement | null>(null)
   // Guards state writes after unmount — both activate and retry are real network round trips (retry's
   // own heartbeat happens in main, but onRecheck still awaits an IPC round trip either way).
   const mountedRef = useRef(true)
@@ -73,6 +76,10 @@ export function LicenseGate({
     return () => {
       mountedRef.current = false
     }
+  }, [])
+  useEffect(() => {
+    if (!dialogRef.current) return undefined
+    return activateDialogFocusTrap(dialogRef.current)
   }, [])
 
   const activate = async (): Promise<void> => {
@@ -102,11 +109,18 @@ export function LicenseGate({
   }
 
   return (
-    <div className="fade-up flex min-h-[300px] w-full flex-col items-center justify-center gap-6 px-4 py-8 text-center">
+    <div
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+      tabIndex={-1}
+      className="fade-up flex min-h-[300px] w-full flex-col items-center justify-center gap-6 px-4 py-8 text-center"
+    >
       <MantuLogo size={140} />
 
       <div className="flex flex-col gap-2">
-        <div className="font-ui text-[20px] font-semibold tracking-tight text-[color:var(--color-ink)]">
+        <div id={titleId} className="font-ui text-[20px] font-semibold tracking-tight text-[color:var(--color-ink)]">
           This copy of Métis needs an active license
         </div>
         {reason === 'expired_grace' ? (
