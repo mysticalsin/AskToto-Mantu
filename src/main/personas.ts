@@ -97,7 +97,14 @@ export function buildSystemParts(
   askCaveman?: AskCavemanLevel
 ): SystemParts {
   const untrusted =
-    req.mode === 'suggest' || req.mode === 'summary' || req.mode === 'recap' || req.mode === 'vision'
+    req.mode === 'suggest' ||
+    req.mode === 'summary' ||
+    req.mode === 'recap' ||
+    req.mode === 'vision' ||
+    !!req.transcript ||
+    !!req.screenContext ||
+    !!req.image ||
+    !!req.visionEvidence
   const guard = untrusted ? INJECTION_GUARD : ''
   // Lead with the injection guard so the security boundary is the FIRST thing the model reads — before any
   // untrusted transcript/screen text further down (the model otherwise reads the hostile text first, then

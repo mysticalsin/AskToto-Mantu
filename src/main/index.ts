@@ -7263,9 +7263,8 @@ function registerIpc(): void {
     // it unconditionally after parse, then set it below strictly from main's own on-device screen cache.
     req.screenContext = undefined
     // req.redactPrompt is set by callers whose "prompt" is itself transcript-derived rather than user-typed
-    // (e.g. fact-check's transcript-fallback ask, which stuffs the transcript tail into prompt when there's
-    // no typed claim) — redact it the same way so a secret-shaped pattern in that fallback text isn't sent
-    // to the provider. Typed-claim fact-check asks never set this flag, so normal prompts are untouched.
+    // (for example post-meeting coaching prompts). Redact it the same way so a secret-shaped pattern in
+    // generated prompt text isn't sent to the provider. Typed questions never set this flag.
     if (s.redactSensitive && req.redactPrompt) req.prompt = redactSecrets(req.prompt)
     // Overlap local sidecar start with the sync brain stamp below — when local will serve (or hedge),
     // kicking ensure NOW hides cold-load behind Receipt Mode work instead of serializing after it. This
@@ -7276,8 +7275,8 @@ function registerIpc(): void {
       )
     }
     // Receipt Mode: ground a typed answer in the user's own past meetings. Match the brain against the
-    // question (which already carries the live transcript tail via the renderer's withContext) and inject
-    // the relevant, meeting-cited slice per-turn. Answer mode only — never the latency-critical spoken
+    // question plus any raw transcript context, then inject the relevant, meeting-cited slice per-turn.
+    // Answer mode only — never the latency-critical spoken
     // suggest line or the screen-only vision turn. Best-effort: a brain read must never block an answer.
     // Excludes fact-check (mode:'answer', kind:'factcheck'): personas.ts strips GROUNDING_RAIL for it
     // (its contract is a VERDICT-only response), so injecting brainContext here would add citable

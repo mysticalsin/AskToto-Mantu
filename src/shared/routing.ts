@@ -13,12 +13,9 @@ export type ThinkingMode = 'auto' | 'always' | 'never'
 /** Ask modes the router cares about (AskMode: 'answer' is the normal chat turn). */
 export type RoutableMode = 'answer' | 'vision' | 'suggest' | 'summary' | 'recap' | string
 
-// The renderer's own prompt-builders (withContext/buildWhatNextPrompt/buildExplainPrompt/
-// buildSpotlightRefPrompt in shared/quick-actions.ts + App.tsx) all wrap INJECTED grounding material —
-// the live meeting transcript or on-screen text, up to ~3000 chars — in a `"""..."""` fence. That
-// convention is specific to this app (a bare human question essentially never contains literal `"""`),
-// so stripping it before measuring length lets the length heuristic judge the user's own question
-// instead of whatever context was bolted on for grounding.
+// Older ask payloads could include app-injected grounding material in a `"""..."""` fence. Keep stripping
+// that shape before measuring length so replays or persisted prompts are judged by the user's question
+// instead of context that was bolted on for grounding.
 const stripInjectedContext = (t: string): string => t.replace(/"""[\s\S]*?"""/g, ' ').trim()
 
 /**
@@ -69,7 +66,7 @@ export function isHeavyQuestion(text: string): boolean {
   if (!t) return false
   // Strip injected context first (mirrors isHardQuestion above) — the length, analytical-verb, and
   // sentence-count checks below must judge the user's own question, not an injected transcript/
-  // screen-context block (e.g. withContext's ~214-char boilerplate + a long meeting transcript) riding
+  // screen-context block (for example older fenced transcript boilerplate) riding
   // along with it. Otherwise even a trivial question sent with grounding context exceeds every threshold.
   const stripped = stripInjectedContext(t)
   if (stripped.length > 220) return true // a long-ish prose question deserves more than the fast model
