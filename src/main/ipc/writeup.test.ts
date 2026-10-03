@@ -28,19 +28,19 @@ describe('M2-0430: write-up IPC', () => {
     auth.signedIn = true
   })
 
-  it('audits a known span as its name and millisecond count only', () => {
+  it('audits a known span as its name and millisecond count only', async () => {
     const handlers = register()
-    handlers.get(IPC.writeupSpan)!(event, { span: 'stop_to_first_recap_token', ms: 4_200 })
+    await handlers.get(IPC.writeupSpan)!(event, { span: 'stop_to_first_recap_token', ms: 4_200 })
     expect(auditLogMock).toHaveBeenCalledWith('writeup.span', { span: 'stop_to_first_recap_token', ms: 4_200 })
   })
 
-  it('drops a span carrying anything else, an unknown span, or any span when signed out', () => {
+  it('drops a span carrying anything else, an unknown span, or any span when signed out', async () => {
     const handlers = register()
     const span = handlers.get(IPC.writeupSpan)!
-    span(event, { span: 'stop_to_recap_done', ms: 10, text: 'Synthetic meeting line.' })
-    span(event, { span: 'stop_to_lunch', ms: 10 })
+    await span(event, { span: 'stop_to_recap_done', ms: 10, text: 'Synthetic meeting line.' })
+    await span(event, { span: 'stop_to_lunch', ms: 10 })
     auth.signedIn = false
-    span(event, { span: 'stop_to_recap_done', ms: 10 })
+    await span(event, { span: 'stop_to_recap_done', ms: 10 })
     expect(auditLogMock).not.toHaveBeenCalled()
   })
 

@@ -6,12 +6,14 @@
  * relaunches; the next boot re-probes once and opens the pane (resumeScreenRepairOnBoot). On failure the
  * renderer shows the manual remove-then-add guidance.
  */
-import { app, ipcMain, shell } from 'electron'
+import { z } from 'zod'
+import { app, shell } from 'electron'
 import { IPC } from '@shared/ipc'
 import { auditLog } from '../logger'
 import { repairScreenPermission } from '../permission-repair'
 import { execFileNoShell } from '../infra/process/exec-file'
 import { APP_BUNDLE_ID, screenPermission } from '../capture-permissions/screen-permission-runtime'
+import { registerHandler } from './register'
 
 type AssertMainWindow = (event: Electron.IpcMainInvokeEvent) => void
 
@@ -24,8 +26,12 @@ export function registerScreenPermissionIpc(assertMainWindow: AssertMainWindow):
   // Deep-link to the relevant macOS Privacy pane once a permission has been denied — getUserMedia never
   // re-prompts after a Deny, so without this a denied user has no in-app path back to granting it. The
   // x-apple.systempreferences scheme only exists on macOS; a no-op elsewhere.
-  ipcMain.handle(IPC.permissionsOpenSettings, (e, kind: unknown) => {
-    assertMainWindow(e)
+  registerHandler({
+    channel: IPC.permissionsOpenSettings,
+    auth: 'public',
+    args: z.tuple([z.unknown()]),
+    assertSender: assertMainWindow
+  }, (_e, kind) => {
     if (process.platform === 'darwin') {
       const pane = kind === 'screenRecording' ? 'Privacy_ScreenCapture' : 'Privacy_Microphone'
       void shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${pane}`)
@@ -41,8 +47,12 @@ export function registerScreenPermissionIpc(assertMainWindow: AssertMainWindow):
       void shell.openExternal(uri)
     }
   })
-  ipcMain.handle(IPC.permissionsRepairScreen, async (e) => {
-    assertMainWindow(e)
+  registerHandler({
+    channel: IPC.permissionsRepairScreen,
+    auth: 'public',
+    args: z.tuple([]),
+    assertSender: assertMainWindow
+  }, async () => {
     return await repairScreenPermission({
       platform: process.platform,
       bundleId: APP_BUNDLE_ID,
@@ -55,16 +65,24 @@ export function registerScreenPermissionIpc(assertMainWindow: AssertMainWindow):
   })
   // "It's already on": the user sees Métis switched on in System Settings. Record it and relaunch; if this
   // build still cannot capture after that, the diagnosis says the switch belongs to another copy or build.
-  ipcMain.handle(IPC.permissionsAttestScreen, (e) => {
-    assertMainWindow(e)
+  registerHandler({
+    channel: IPC.permissionsAttestScreen,
+    auth: 'public',
+    args: z.tuple([]),
+    assertSender: assertMainWindow
+  }, () => {
     if (process.platform !== 'darwin') return
     screenPermission().attest()
     relaunch()
   })
   // Show a duplicate copy in Finder. Only a path the diagnosis itself listed is accepted, never an arbitrary
   // renderer-supplied one.
-  ipcMain.handle(IPC.permissionsRevealCopy, (e, path: unknown) => {
-    assertMainWindow(e)
+  registerHandler({
+    channel: IPC.permissionsRevealCopy,
+    auth: 'public',
+    args: z.tuple([z.unknown()]),
+    assertSender: assertMainWindow
+  }, (_e, path) => {
     if (typeof path !== 'string') return
     if (!screenPermission().diagnose().duplicates.some((copy) => copy.path === path)) return
     shell.showItemInFolder(path)

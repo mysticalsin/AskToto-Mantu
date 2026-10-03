@@ -59,6 +59,7 @@ const RULES = [
   ['FF-11', 'BrowserWindow construction outside src/main/windows/'],
   ['FF-14', 'Background timers outside src/main/infra/scheduler/'],
   ['FF-15', 'Frontmatter-delimiter regexes outside the meeting-document codec'],
+  ['FF-16', 'Manual requireAuth calls in migrated IPC and feature modules'],
 ]
 
 const RULE_IDS = RULES.map(([id]) => id)
@@ -120,6 +121,9 @@ export function countSourceFile(file, text) {
   }
   if (isProductionFile(file) && file.startsWith('src/main/') && file !== MEETING_DOCUMENT_CODEC) {
     add('FF-15', countFrontmatterDelimiterRegexes(sourceFile))
+  }
+  if (isProductionFile(file) && (file.startsWith('src/main/ipc/') || file.startsWith('src/main/features/'))) {
+    add('FF-16', countManualRequireAuthCalls(sourceFile))
   }
 
   return counts
@@ -607,6 +611,22 @@ function countFrontmatterDelimiterRegexes(sourceFile) {
   let count = 0
   const visit = (node) => {
     if (ts.isRegularExpressionLiteral(node) && FRONTMATTER_DELIMITER_REGEX.test(node.text)) count += 1
+    ts.forEachChild(node, visit)
+  }
+  ts.forEachChild(sourceFile, visit)
+  return count
+}
+
+/**
+ * @param {ts.SourceFile} sourceFile Parsed source file.
+ * @returns {number} Direct requireAuth() calls.
+ */
+function countManualRequireAuthCalls(sourceFile) {
+  let count = 0
+  const visit = (node) => {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'requireAuth') {
+      count += 1
+    }
     ts.forEachChild(node, visit)
   }
   ts.forEachChild(sourceFile, visit)

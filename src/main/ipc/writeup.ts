@@ -1,8 +1,9 @@
-import { ipcMain } from 'electron'
+import { z } from 'zod'
 import { IPC, WriteupSpanPayloadSchema } from '@shared/ipc'
 import { requireAuth } from '../auth'
 import { appleEngineStatus } from '../llm/local'
 import { auditLog } from '../logger'
+import { registerHandler } from './register'
 
 type SenderCheck = (event: Electron.IpcMainInvokeEvent) => void
 
@@ -13,13 +14,21 @@ type SenderCheck = (event: Electron.IpcMainInvokeEvent) => void
  * is dropped, so no meeting content can reach the audit log through this channel.
  */
 export function registerWriteupIpc(assertMainWindow: SenderCheck): void {
-  ipcMain.handle(IPC.localAppleEngineStatus, (e) => {
-    assertMainWindow(e)
+  registerHandler({
+    channel: IPC.localAppleEngineStatus,
+    auth: 'public',
+    args: z.tuple([]),
+    assertSender: assertMainWindow
+  }, () => {
     return appleEngineStatus()
   })
-  ipcMain.handle(IPC.writeupSpan, (e, report: unknown) => {
-    assertMainWindow(e)
-    if (!requireAuth()) return
+  registerHandler({
+    channel: IPC.writeupSpan,
+    auth: 'required',
+    isAuthenticated: requireAuth,
+    args: z.tuple([z.unknown()]),
+    assertSender: assertMainWindow
+  }, (_e, report) => {
     const parsed = WriteupSpanPayloadSchema.safeParse(report)
     if (parsed.success) auditLog('writeup.span', { span: parsed.data.span, ms: parsed.data.ms })
   })
