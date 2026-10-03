@@ -5,6 +5,7 @@
   "contentProtection": true,
   "privateView": false,
   "audioSource": "both",
+  "suggestEverySec": 8,
   "permissionState": {
     "screen": {
       "status": "impossible"

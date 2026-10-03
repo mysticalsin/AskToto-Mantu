@@ -10,5 +10,6 @@
   "temperature": 0.4,
   "contentProtection": true,
   "privateView": false,
-  "audioSource": "both"
+  "audioSource": "both",
+  "suggestEverySec": 8
 }

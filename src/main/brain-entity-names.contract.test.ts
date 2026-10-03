@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest'
  * The bug was a consumer (the physical QA harness) reading a non-existent { people, accounts } shape
  * off this handler and therefore always seeing 0 names — masking whether entity extraction worked at
  * all. The handler in fact returns a FLAT { names: string[] } that MERGES people and account names
- * (BrainEntityNamesResult in shared/ipc.ts), because its only consumer, the ASR casing-bias feature,
+ * (BrainEntityNamesResult in shared/contracts/brain/ipc.ts), because its only consumer, the ASR casing-bias feature,
  * wants one deduped name list. This pins that flat shape so a future refactor can't split it back into
  * { people, accounts } and silently break every reader again.
  *

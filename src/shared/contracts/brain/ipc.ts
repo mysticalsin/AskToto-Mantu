@@ -90,6 +90,13 @@ export type AttentionItem = z.infer<typeof AttentionItemSchema>
 export const BrainAttentionResultSchema = z.object({ items: z.array(AttentionItemSchema) })
 export type BrainAttentionResult = z.infer<typeof BrainAttentionResultSchema>
 
+/** Result of brain:entityNames — canonical people/account names ONLY (never quotes, roles, deal data,
+ *  or anything else from the entity files), for the ASR entity-casing bias feature. See
+ *  lib/entity-casing.ts and the brainEntityNames handler in main/index.ts. */
+export interface BrainEntityNamesResult {
+  names: string[]
+}
+
 /** One settings.asrCorrections entry — the exact shape commitLine's consumer (lib/listen.ts
  *  correctionsRef) compiles into word-boundary regexes. Extracted from SettingsSchema (which arrays it,
  *  capped at 100) so a single pair can be validated on its own BEFORE it joins the array: store.ts's

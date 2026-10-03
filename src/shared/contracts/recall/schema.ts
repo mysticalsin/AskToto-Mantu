@@ -318,13 +318,6 @@ export interface GraphRelated {
   notes: { file: string; title: string; via: string[] }[]
 }
 
-/** Result of brain:entityNames — canonical people/account names ONLY (never quotes, roles, deal data,
- *  or anything else from the entity files), for the ASR entity-casing bias feature. See
- *  lib/entity-casing.ts and the brainEntityNames handler in main/index.ts. */
-export interface BrainEntityNamesResult {
-  names: string[]
-}
-
 // ─── MCP connections (CRM push + "Book next steps") ────────────────────────
 // Generalized from the single BidStack-only mcpCrm:* IPC channels. `connectionId` identifies WHICH
 // mcpConnections entry a call targets (id === kind in v1 — see McpConnectionSchema); main looks the

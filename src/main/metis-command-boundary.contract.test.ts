@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { IPC } from '../shared/contracts/channels'
+import { HOTKEY_ACTIONS, IPC } from '../shared/ipc'
 
 const main = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const preload = readFileSync(join(__dirname, '../preload/index.ts'), 'utf8')
@@ -72,7 +72,7 @@ describe('Cap2 command authority boundary', () => {
   })
 
   it('keeps the Metis command hotkey separate from meeting Listen', () => {
-    expect(channels).toContain("'metis-command'")
+    expect(HOTKEY_ACTIONS).toContain('metis-command')
     expect(main).toContain("'metis-command': () => sendHotkey('metis-command')")
     expect(app).toContain("a === 'metis-command'")
     expect(app).toMatch(/else if \(a === 'toggle-listen'\) toggleListen\(\)/)
