@@ -1,8 +1,10 @@
+import v8 from 'node:v8'
+import vm from 'node:vm'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { IPC } from '../../src/shared/ipc'
 import { HISTORY_DEGRADED_MS as RENDERER_DEGRADED_MS } from '../../src/renderer/src/components/history/list-status'
 import { NOT_DOWNLOADED_TEXT, UNAVAILABLE_TEXT } from '../../src/renderer/src/components/history/hydration'
-import { driveState, fixtureAnswersForState, STATE_TIMEOUT_MS, waitForRequest, warmUp } from './history-design-capture.mjs'
+import { driveState, fixtureAnswersForState, INSTALL_FIXTURE_HANDLERS, STATE_TIMEOUT_MS, waitForRequest, warmUp } from './history-design-capture.mjs'
 import {
   BACKDROPS,
   BLOCKED_EXTERNAL_ROWS,
@@ -47,8 +49,39 @@ function textSample(overrides: Record<string, unknown> = {}) {
 const viewport = { width: 400, height: 600 }
 const dark = DESIGN_VARIANTS.find((variant) => variant.id === KEYBOARD_VARIANT_ID)!
 
+function exposedGc() {
+  const g = globalThis as unknown as { gc?: () => void }
+  if (typeof g.gc !== 'function') {
+    v8.setFlagsFromString('--expose_gc')
+    g.gc = vm.runInNewContext('gc') as () => void
+  }
+  expect(typeof g.gc).toBe('function')
+  return g.gc!
+}
+
+async function collectUntilCleared(ref: WeakRef<object>) {
+  const gc = exposedGc()
+  for (let i = 0; i < 20 && ref.deref(); i++) {
+    gc()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+}
+
+function unparkedPendingRef() {
+  let pending: Promise<never> | null = new Promise(() => {})
+  const ref = new WeakRef(pending)
+  pending = null
+  return ref
+}
+
+function withCollectGarbage<T extends (...args: never[]) => unknown>(main: T, collectGarbage: () => Promise<unknown> = vi.fn(async () => undefined)) {
+  return Object.assign(main, { collectGarbage })
+}
+
 afterEach(() => {
   vi.restoreAllMocks()
+  delete (globalThis as typeof globalThis & { __metisReHideElectron?: unknown }).__metisReHideElectron
+  delete (globalThis as typeof globalThis & { __historyDesign?: unknown }).__historyDesign
 })
 
 describe('History design matrix (M2-0032)', () => {
@@ -117,6 +150,89 @@ describe('History design matrix (M2-0032)', () => {
     })
   })
 
+  it('parks pending fixture promises so Electron IPC replies cannot be collected while pending', async () => {
+    const handlers = new Map<string, (...args: never[]) => Promise<unknown>>()
+    ;(globalThis as typeof globalThis & { __metisReHideElectron?: unknown }).__metisReHideElectron = {
+      ipcMain: {
+        removeHandler: vi.fn((name: string) => handlers.delete(name)),
+        handle: vi.fn((name: string, handler: (...args: never[]) => Promise<unknown>) => handlers.set(name, handler))
+      }
+    }
+    expect(eval(INSTALL_FIXTURE_HANDLERS)).toBe(true)
+    eval(`(() => {
+      globalThis.__historyDesign.list = { kind: 'pending' }
+      globalThis.__historyDesign.search = { kind: 'pending' }
+      globalThis.__historyDesign.read = 'hydrating'
+    })()`)
+
+    const unparked = unparkedPendingRef()
+    await collectUntilCleared(unparked)
+    expect(unparked.deref()).toBeUndefined()
+
+    let listPending: object | null = handlers.get(IPC_CHANNELS.recallList)!()
+    const listRef = new WeakRef(listPending)
+    listPending = null
+    let searchPending: object | null = handlers.get(IPC_CHANNELS.recallSearch)!()
+    const searchRef = new WeakRef(searchPending)
+    searchPending = null
+    const sender = { send: vi.fn() }
+    let readPending: object | null = handlers.get(IPC_CHANNELS.recallRead)!({ sender } as never, 'sample.md' as never)
+    const readRef = new WeakRef(readPending)
+    readPending = null
+
+    exposedGc()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(listRef.deref()).toBeDefined()
+    expect(searchRef.deref()).toBeDefined()
+    expect(readRef.deref()).toBeDefined()
+    expect(eval('globalThis.__historyDesign.parked')).toHaveLength(3)
+    expect(sender.send).toHaveBeenCalledWith(IPC_CHANNELS.recallHydration, { file: 'sample.md', state: 'hydrating' })
+  })
+
+  it('forces main-process garbage collection after a pending list request reaches main', async () => {
+    const state = HISTORY_DESIGN_STATES.find((candidate) => candidate.id === 'slow')!
+    const history = { requests: { list: 0, search: 0 }, requestedAt: { list: 0, search: 0 } }
+    let collectedBeforeCue = false
+    const collectGarbage = vi.fn(async () => {
+      collectedBeforeCue = true
+    })
+    const main = withCollectGarbage(vi.fn(async (expression: string) => {
+      if (expression === 'globalThis.__historyDesign.requests.list') return history.requests.list
+      if (expression.includes('requests, requestedAt')) return { requests: { ...history.requests }, requestedAt: { ...history.requestedAt } }
+      return true
+    }), collectGarbage)
+    const page = {
+      getByLabel: vi.fn(() => ({
+        first: () => ({
+          isVisible: vi.fn(async () => false)
+        }),
+        inputValue: vi.fn(async () => '')
+      })),
+      getByRole: vi.fn(() => ({
+        filter: ({ hasText }: { hasText: string }) => ({
+          first: () => ({
+            waitFor: vi.fn(async () => {
+              expect(hasText).toBe('OneDrive is slow to answer')
+              expect(collectedBeforeCue).toBe(true)
+            })
+          })
+        })
+      }))
+    }
+
+    await driveState(page as never, main as never, state, [{ title: 'Quarterly planning sample' }], {
+      wait: async () => undefined,
+      ensureIdleBar: async () => undefined,
+      clickHistory: async () => {
+        history.requests.list += 1
+        history.requestedAt.list = 10
+      }
+    })
+
+    expect(collectGarbage).toHaveBeenCalledTimes(1)
+  })
+
   it('waits for the expected request channel and ignores the other one', async () => {
     let now = 0
     vi.spyOn(Date, 'now').mockImplementation(() => now)
@@ -147,12 +263,13 @@ describe('History design matrix (M2-0032)', () => {
     let now = 0
     vi.spyOn(Date, 'now').mockImplementation(() => now)
 
-    const main = vi.fn(async (expression: string) => {
+    const collectGarbage = vi.fn(async () => undefined)
+    const main = withCollectGarbage(vi.fn(async (expression: string) => {
       if (expression === 'globalThis.__historyDesign.requests.list') return history.requests.list
       if (expression === 'globalThis.__historyDesign.requests.search') return history.requests.search
       if (expression.includes('requests, requestedAt')) return { requests: { ...history.requests }, requestedAt: { ...history.requestedAt } }
       return true
-    })
+    }), collectGarbage)
     const noteRequest = (channel: 'list' | 'search', requestedAt: number) => {
       history.requests[channel] += 1
       history.requestedAt[channel] = requestedAt
@@ -204,6 +321,7 @@ describe('History design matrix (M2-0032)', () => {
       searchFillToSearchRequest: 50,
       searchRequestToCue: HISTORY_DEGRADED_MS
     })
+    expect(collectGarbage).toHaveBeenCalledTimes(1)
     expect(calls).toContain(`role:status:OneDrive is slow to answer:${STATE_TIMEOUT_MS}`)
   })
 
@@ -248,13 +366,13 @@ describe('History design matrix (M2-0032)', () => {
       evaluate: vi.fn(async () => undefined)
     }
     const requests = { list: 0, search: 0 }
-    const main = vi.fn(async (expression: string) => {
+    const main = withCollectGarbage(vi.fn(async (expression: string) => {
       if (expression === 'globalThis.__historyDesign.requests.list') return requests.list
       if (expression === 'globalThis.__historyDesign.requests.search') return requests.search
       if (expression.includes('requests, requestedAt')) return { requests: { ...requests }, requestedAt: { list: 100, search: 0 } }
       events.push('apply-or-arm')
       return true
-    })
+    }))
 
     await warmUp({
       page: page as never,
@@ -293,7 +411,7 @@ describe('History design matrix (M2-0032)', () => {
     let searchFillPending = false
     let searchRequestSeen = false
 
-    const main = vi.fn(async (expression: string) => {
+    const main = withCollectGarbage(vi.fn(async (expression: string) => {
       if (expression === 'globalThis.__historyDesign.requests.list') {
         events.push('read-requests')
         return history.requests.list
@@ -305,7 +423,7 @@ describe('History design matrix (M2-0032)', () => {
       if (expression.includes('requests, requestedAt')) return { requests: { ...history.requests }, requestedAt: { ...history.requestedAt } }
       events.push('arm-fixture')
       return true
-    })
+    }), vi.fn(async () => events.push('gc')))
     const noteRequest = (channel: 'list' | 'search', requestedAt: number) => {
       history.requests[channel] += 1
       history.requestedAt[channel] = requestedAt
@@ -385,6 +503,7 @@ describe('History design matrix (M2-0032)', () => {
       'read-requests',
       'fill-search',
       'search-request',
+      'gc',
       'role:status:OneDrive is slow to answer'
     ])
     expect(drive.closedBeforeArm).toBe(true)
