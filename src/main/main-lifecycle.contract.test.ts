@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from 'vitest'
 // core.autocrlf yields CRLF and every marker below containing a literal \n stops matching. These
 // assertions are about the shipped expression, never about how git wrote the line endings.
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
+const lifecycleSrc = readFileSync(join(__dirname, 'lifecycle', 'main-lifecycle.ts'), 'utf8').replace(/\r\n/g, '\n')
 
 /** Slice the source from `from` up to (excluding) the next occurrence of `to`. Sliced inside each test so
  *  one drifted marker reports as its own failure instead of aborting collection for the whole file. */
@@ -21,6 +22,14 @@ function sliceBetween(from: string, to: string): string {
   const end = indexSrc.indexOf(to, start)
   expect(end, `end marker not found after ${from}: ${to}`).toBeGreaterThan(-1)
   return indexSrc.slice(start, end)
+}
+
+function sliceLifecycleBetween(from: string, to: string): string {
+  const start = lifecycleSrc.indexOf(from)
+  expect(start, `marker not found: ${from}`).toBeGreaterThan(-1)
+  const end = lifecycleSrc.indexOf(to, start)
+  expect(end, `end marker not found after ${from}: ${to}`).toBeGreaterThan(-1)
+  return lifecycleSrc.slice(start, end)
 }
 
 describe('MQA-155 — a failed post-sweep source refresh is observed, never fabricated into an app.crash', () => {
@@ -94,14 +103,14 @@ describe('MQA-155 — a failed post-sweep source refresh is observed, never fabr
 describe('MQA-172 — a second launch after a failed boot window recreates it instead of doing nothing', () => {
   /** Execute the real `app.on('second-instance', ...)` registration and hand back the handler it installs. */
   const secondInstanceHandler = (reveal: (reason: string, options: { focus?: boolean }) => void): (() => void) => {
-    const src = sliceBetween("app.on('second-instance'", 'app.whenReady()')
+    const src = sliceLifecycleBetween("app.on('second-instance'", 'export interface BootstrapLifecycleDeps')
     let handler: (() => void) | null = null
     const app = {
       on: (_event: string, fn: () => void) => {
         handler = fn
       }
     }
-    ;(new Function('app', 'reveal', src) as (...args: unknown[]) => void)(app, reveal)
+    ;(new Function('app', 'deps', src) as (...args: unknown[]) => void)(app, { reveal, handleSmokeReopenProbe: vi.fn() })
     expect(handler, 'second-instance handler was never registered').not.toBeNull()
     return handler as unknown as () => void
   }
@@ -124,7 +133,7 @@ describe('MQA-172 — a second launch after a failed boot window recreates it in
 
   it('M2-0036 — activate, second-instance, tray, hotkey and notification click all route through reveal()', () => {
     expect(indexSrc).toContain("reveal('activate', { focus: true })")
-    expect(indexSrc).toContain("reveal('second-instance', { focus: true })")
+    expect(lifecycleSrc).toContain("deps.reveal('second-instance', { focus: true })")
     expect(indexSrc).toContain("reveal(reason, { focus: true })")
     expect(indexSrc).toContain("reveal('hotkey', { focus: action === 'ask' })")
     expect(indexSrc).toContain("reveal('notification-click', { focus: false })")
@@ -271,18 +280,18 @@ describe('MQA-345 — constructor swaps keep the retiring renderer trusted until
   })
 
   it('never lets a retired renderer crash reconfigure its successor', () => {
-    const rendererGone = sliceBetween("win.webContents.on('render-process-gone'", '// FITO-185-N')
-    const ownerGuard = rendererGone.indexOf('if (win !== self) return')
-    const revoke = rendererGone.indexOf("commandControl.revokeForLifecycleEvent('renderer_replaced')")
+    const rendererGone = sliceLifecycleBetween("self.webContents.on('render-process-gone'", 'deps.ipcMain.handle')
+    const ownerGuard = rendererGone.indexOf('if (context.mainWindow() !== self) return')
+    const revoke = rendererGone.indexOf("deps.commandControl.revokeForLifecycleEvent('renderer_replaced')")
     expect(ownerGuard).toBeGreaterThan(-1)
     expect(revoke).toBeGreaterThan(ownerGuard)
-    const apply = rendererGone.indexOf('const retainedOwnership = applyExclusiveOnboardingStage(self)')
-    const postApplyGuard = rendererGone.indexOf('if (!retainedOwnership && win !== self) return')
+    const apply = rendererGone.indexOf('const retainedOwnership = deps.applyExclusiveOnboardingStage(self)')
+    const postApplyGuard = rendererGone.indexOf('if (!retainedOwnership && context.mainWindow() !== self) return')
     expect(apply).toBeGreaterThan(-1)
     expect(postApplyGuard).toBeGreaterThan(apply)
-    expect(rendererGone).toMatch(/showForExclusiveOnboarding\(self\)/)
-    expect(rendererGone).toMatch(/reloadOverlay\(self\)/)
-    expect(rendererGone).toMatch(/if \(retainedOwnership\) \{[\s\S]*?showForExclusiveOnboarding\(self\)/)
+    expect(rendererGone).toMatch(/deps\.showForExclusiveOnboarding\(self\)/)
+    expect(rendererGone).toMatch(/deps\.reloadOverlay\(self\)/)
+    expect(rendererGone).toMatch(/if \(retainedOwnership\) \{[\s\S]*?deps\.showForExclusiveOnboarding\(self\)/)
     expect(rendererGone).not.toMatch(/applyExclusiveOnboardingStage\(win\)/)
   })
 })

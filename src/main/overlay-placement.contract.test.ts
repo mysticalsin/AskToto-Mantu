@@ -21,6 +21,7 @@ import { overlayUsesHover } from '@shared/overlay-chrome'
  * the already-covered pure math imported instead of re-sliced.
  */
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+const lifecycleSrc = readFileSync(join(__dirname, 'lifecycle', 'main-lifecycle.ts'), 'utf8')
 
 /** Slice the source from `from` up to (excluding) the next occurrence of `to`. Sliced inside each test so
  *  one drifted marker reports as its own failure instead of aborting collection for the whole file. */
@@ -59,17 +60,18 @@ describe('MQA-196 — a renderer crash restores the overlay geometry, not just t
    *  have found, and hand back that state afterwards. */
   async function crash(before: OverlayState): Promise<OverlayState> {
     const body = await toJs(
-      sliceBetween(
-        "win.webContents.on('render-process-gone', (_e, details) => {",
-        'const rendererUrl = overlayRendererUrl()'
-      )
+      (() => {
+        const start = lifecycleSrc.indexOf("self.webContents.on('render-process-gone', (_e, details) => {")
+        expect(start, "marker not found: self.webContents.on('render-process-gone', (_e, details) => {").toBeGreaterThan(-1)
+        const end = lifecycleSrc.indexOf('deps.ipcMain.handle', start)
+        expect(end, 'end marker not found after renderer-gone handler').toBeGreaterThan(start)
+        return lifecycleSrc.slice(start, end)
+      })()
     )
     const preamble = [
       'const { mainLog, auditLog, crashDetail, resetDustConversation, setTrayRecording, setRecordingPowerSaveBlock, discardActiveLiveSpeakerSession, invalidateCloudSttOwner, commandControl, responsiveness, before } = stubs',
       `const BAR_WIDTH = ${constant('BAR_WIDTH')}`,
       'let { listeningActive, lastPlainAskAt, audioArmed, isMinimized, currentWidth } = before',
-      'const setListeningActive = (on) => { listeningActive = on }',
-      'const setAudioArmed = (on) => { audioArmed = on }',
       'let handler = null',
       // isDestroyed() -> true stops the handler before the reload, which needs a real BrowserWindow. The
       // reload itself is already pinned by c-main-fixes.contract.test.ts; this is about the reset above it.
@@ -78,8 +80,9 @@ describe('MQA-196 — a renderer crash restores the overlay geometry, not just t
       // Captured beside `const self = win` in main, outside this handler, because the real callback runs
       // after the WebContents is gone (MQA-340).
       'const selfWebContentsId = 1',
-      'const onboardingExclusiveLive = () => false',
-      'const overlayRendererUrl = () => "file:///fixture/renderer/index.html"',
+      'const context = { mainWindow: () => win }',
+      'const reloadBudget = { onRenderProcessGone: () => "reload" }',
+      'const deps = { log: mainLog, auditLog, crashDetail, resetDustConversation, setTrayRecording, setRecordingPowerSaveBlock, discardActiveLiveSpeakerSession, invalidateCloudSttOwner, commandControl, onboardingExclusiveLive: () => false, resetLastPlainAskAt: () => { lastPlainAskAt = 0 }, setListeningActive: (on) => { listeningActive = on }, setAudioArmed: (on) => { audioArmed = on }, resetRecoveredOverlayGeometry: () => { isMinimized = false; currentWidth = BAR_WIDTH }, applyExclusiveOnboardingStage: () => false, showForExclusiveOnboarding: () => {}, reloadOverlay: () => {} }',
       ''
     ].join('\n')
     const driver = [

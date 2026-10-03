@@ -15,6 +15,7 @@ import { describe, it, expect } from 'vitest'
  * license-enforcement-drift.contract.test.ts / index-audit-fixes.contract.test.ts.
  */
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+const lifecycleSrc = readFileSync(join(__dirname, 'lifecycle', 'main-lifecycle.ts'), 'utf8')
 
 /** Brace-counted function body extraction — robust to nested blocks (unlike a marker-to-marker slice,
  *  which breaks the moment a sibling function's name changes). */
@@ -87,7 +88,7 @@ describe('MQA-275 — the overlay never steals focus except the one deliberate a
     // show() at all), second-instance, and app.on('activate'). Named here so the intent is explicit even
     // though the sweep test above is what actually enforces it.
     expect(indexSrc).toContain("reveal('notification-click', { focus: false })") // notification click
-    expect(indexSrc).toContain("reveal('second-instance', { focus: true })") // explicit relaunch
+    expect(lifecycleSrc).toContain("deps.reveal('second-instance', { focus: true })") // explicit relaunch
     expect(indexSrc).toContain("reveal('activate', { focus: true })") // Finder/Dock reopen
     // The two tray menu items (Settings…, Today's agenda) no longer call win.show() at all — they let
     // sendHotkey() reveal (non-activating, since neither action is 'ask').

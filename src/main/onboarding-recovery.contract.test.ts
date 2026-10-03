@@ -10,6 +10,8 @@ import { isOrphanScreenSourcesRejection } from './capture-permissions/loopback-g
 
 const indexText = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const indexSource = ts.createSourceFile('index.ts', indexText, ts.ScriptTarget.Latest, true)
+const lifecycleText = readFileSync(join(__dirname, 'lifecycle', 'main-lifecycle.ts'), 'utf8')
+const lifecycleSource = ts.createSourceFile('main-lifecycle.ts', lifecycleText, ts.ScriptTarget.Latest, true)
 
 function runSource(sourceText: string, globals: Record<string, unknown>): any {
   const compiled = ts.transpileModule(sourceText, {
@@ -41,19 +43,23 @@ function actualFunction(name: string, globals: Record<string, unknown>): (...arg
   return runSource(`${declaration.getText(indexSource)}\nglobalThis.result = ${name};`, globals)
 }
 
-function webContentsOnCallback(target: string, eventName: string): ts.Expression | undefined {
+function webContentsOnCallback(
+  target: string,
+  eventName: string,
+  sourceFile: ts.SourceFile = indexSource
+): ts.Expression | undefined {
   let callback: ts.Expression | undefined
   const visit = (node: ts.Node): void => {
     if (
       ts.isCallExpression(node) &&
       ts.isPropertyAccessExpression(node.expression) &&
-      node.expression.expression.getText(indexSource) === target &&
+      node.expression.expression.getText(sourceFile) === target &&
       node.expression.name.text === 'on' &&
-      node.arguments[0]?.getText(indexSource) === `'${eventName}'`
+      node.arguments[0]?.getText(sourceFile) === `'${eventName}'`
     ) callback = node.arguments[1]
     ts.forEachChild(node, visit)
   }
-  visit(indexSource)
+  visit(sourceFile)
   return callback
 }
 
@@ -61,8 +67,8 @@ function actualRendererRecoveryHandlers(globals: Record<string, unknown>): {
   didFinishLoad: () => void
   renderProcessGone: (...args: any[]) => any
 } {
-  const didFinishLoad = webContentsOnCallback('self.webContents', 'did-finish-load')
-  const renderProcessGone = webContentsOnCallback('win.webContents', 'render-process-gone')
+  const didFinishLoad = webContentsOnCallback('self.webContents', 'did-finish-load', lifecycleSource)
+  const renderProcessGone = webContentsOnCallback('self.webContents', 'render-process-gone', lifecycleSource)
   expect(didFinishLoad, 'Actual overlay did-finish-load handler was not found').toBeDefined()
   expect(renderProcessGone, 'Actual overlay render-process-gone handler was not found').toBeDefined()
   if (!didFinishLoad || !renderProcessGone) {
@@ -73,9 +79,33 @@ function actualRendererRecoveryHandlers(globals: Record<string, unknown>): {
   const reloadOverlayDecl = topLevelFunctionDeclaration('reloadOverlay')
   expect(reloadOverlayDecl, 'Actual source function reloadOverlay was not found').toBeDefined()
   const prefix = reloadOverlayDecl ? `${reloadOverlayDecl.getText(indexSource)}\n` : ''
+  const deps = {
+    ...globals,
+    log: globals.mainLog,
+    resetLastPlainAskAt: globals.resetLastPlainAskAt ?? (() => { (globals as { lastPlainAskAt?: number }).lastPlainAskAt = 0 }),
+    resetRecoveredOverlayGeometry: globals.resetRecoveredOverlayGeometry ?? (() => {
+      ;(globals as { isMinimized?: boolean }).isMinimized = false
+      ;(globals as { currentWidth?: number; BAR_WIDTH?: number }).currentWidth = (globals as { BAR_WIDTH?: number }).BAR_WIDTH
+    }),
+    reloadOverlay: globals.reloadOverlay ?? ((win: { loadURL: (url: string) => Promise<unknown> }) => {
+      win.loadURL((globals.overlayRendererUrl as () => string)()).catch((err: unknown) => {
+        const message = (globals.redactSecrets as (s: string) => string)(err instanceof Error ? err.message : String(err))
+        ;(globals.mainLog as { error: (...args: unknown[]) => void }).error('[renderer-gone] reload failed:', message)
+        ;(globals.auditLog as (event: string, detail: unknown) => void)('app.error.reload_failed', { message, recoveryStatus: 'unrecovered' })
+      })
+    }),
+    showMessageBox: globals.showMessageBox ?? (() => Promise.resolve({ response: 1 })),
+    quit: globals.quit ?? (() => undefined),
+    openMeetingsFolder: globals.openMeetingsFolder ?? (globals.shell as { openPath?: (path: string) => Promise<string> } | undefined)?.openPath,
+    copyDiagnostics: globals.copyDiagnostics ?? (() => undefined),
+    appInfo: globals.appInfo ?? (() => ({ version: 'test', platform: 'test', arch: 'test', packaged: false })),
+    resolveMeetingsFolder: globals.resolveMeetingsFolder ?? (() => '/meetings'),
+    requireAuth: globals.requireAuth ?? (() => true)
+  }
+  const context = globals.context ?? { mainWindow: () => globals.win }
   return runSource(
-    `${prefix}globalThis.result = { didFinishLoad: (${didFinishLoad.getText(indexSource)}), renderProcessGone: (${renderProcessGone.getText(indexSource)}) };`,
-    globals
+    `${prefix}globalThis.result = { didFinishLoad: (${didFinishLoad.getText(lifecycleSource)}), renderProcessGone: (${renderProcessGone.getText(lifecycleSource)}) };`,
+    { ...globals, deps, context }
   )
 }
 
@@ -280,7 +310,6 @@ describe('render-process-gone reload budget wiring', () => {
 
   it("gates the halted dialog's 'Open meetings folder' action on requireAuth(), matching IPC.openPath", async () => {
     const shellOpenPath = vi.fn(() => Promise.resolve(''))
-    const getSettings = vi.fn(() => ({ meetingsFolder: '/meetings' }))
     const resolveMeetingsFolder = vi.fn(() => '/meetings/resolved')
 
     // Locked session: no button rather than one whose click would silently do nothing.
@@ -290,7 +319,6 @@ describe('render-process-gone reload budget wiring', () => {
       requireAuth: () => false,
       showRenderLoopHaltedDialog: lockedDialog,
       shell: { openPath: shellOpenPath },
-      getSettings,
       resolveMeetingsFolder
     })
     actualRendererGoneHandler(lockedGlobals)({}, { reason: 'crashed', exitCode: 1 })
@@ -303,7 +331,6 @@ describe('render-process-gone reload budget wiring', () => {
       requireAuth: () => true,
       showRenderLoopHaltedDialog: unlockedDialog,
       shell: { openPath: shellOpenPath },
-      getSettings,
       resolveMeetingsFolder
     })
     actualRendererGoneHandler(unlockedGlobals)({}, { reason: 'crashed', exitCode: 1 })
@@ -313,8 +340,7 @@ describe('render-process-gone reload budget wiring', () => {
     expect(typeof actions.openMeetingsFolder).toBe('function')
 
     await actions.openMeetingsFolder()
-    expect(getSettings).toHaveBeenCalled()
-    expect(resolveMeetingsFolder).toHaveBeenCalledWith({ meetingsFolder: '/meetings' })
+    expect(resolveMeetingsFolder).toHaveBeenCalledWith()
     expect(shellOpenPath).toHaveBeenCalledWith('/meetings/resolved')
   })
 })
@@ -325,24 +351,21 @@ describe('onFatal — async relaunch dialog', () => {
    *  for each test. `persistCrash` is injected rather than lifted: this test is about the async-dialog
    *  half of the ticket, and persistCrash's own redact/log/write behaviour has its own coverage. */
   function actualOnFatal(globals: Record<string, unknown>): (kind: 'uncaughtException' | 'unhandledRejection', err: unknown) => void {
-    const fatalHandledDecl = indexSource.statements.find(
-      (node): node is ts.VariableStatement =>
-        ts.isVariableStatement(node) &&
-        node.declarationList.declarations.some(d => ts.isIdentifier(d.name) && d.name.text === 'fatalHandled')
+    const dialog = globals.dialog as { showMessageBox: (win: unknown, options: unknown) => Promise<{ response: number }> }
+    const showFatalDialog = async (): Promise<void> => {
+      const res = await dialog.showMessageBox(globals.win, { buttons: ['Relaunch Métis', 'Continue'] })
+      if (res.response === 0) (globals.exitAndRelaunch as () => void)()
+    }
+    const factoryDecl = lifecycleSource.statements.find(
+      (node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'createProcessFatalLifecycle'
     )
-    const onFatalDecl = topLevelFunctionDeclaration('onFatal')
-    const showFatalDialogDecl = topLevelFunctionDeclaration('showFatalDialog')
-    expect(fatalHandledDecl, 'Actual source declaration fatalHandled was not found').toBeDefined()
-    expect(onFatalDecl, 'Actual source function onFatal was not found').toBeDefined()
-    expect(showFatalDialogDecl, 'Actual source function showFatalDialog was not found').toBeDefined()
-    if (!fatalHandledDecl || !onFatalDecl || !showFatalDialogDecl) return () => undefined
-    const source = [
-      fatalHandledDecl.getText(indexSource),
-      onFatalDecl.getText(indexSource),
-      showFatalDialogDecl.getText(indexSource),
-      'globalThis.result = onFatal;'
-    ].join('\n')
-    return runSource(source, globals)
+    expect(factoryDecl, 'Actual source function createProcessFatalLifecycle was not found').toBeDefined()
+    if (!factoryDecl) return () => undefined
+    return runSource(
+      `${factoryDecl.getText(lifecycleSource).replace(/^export function/, 'function')}
+globalThis.result = createProcessFatalLifecycle({ isOrphanScreenSourcesRejection, persistCrash, showFatalDialog, log: mainLog }).onFatal;`,
+      { ...globals, showFatalDialog, isOrphanScreenSourcesRejection }
+    )
   }
 
   /** A `dialog.showMessageBox` whose promise the test resolves itself, plus the `persistCrash`/`exitAndRelaunch`/`win`

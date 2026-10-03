@@ -12,6 +12,7 @@ import { createAsrModelProtocolHandler } from './asr-model-protocol'
  */
 
 const source = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
+const lifecycleSource = readFileSync(join(__dirname, 'lifecycle', 'main-lifecycle.ts'), 'utf8').replace(/\r\n/g, '\n')
 
 describe('finding 1: "settings" hotkey is registered, not just bindable', () => {
   it('shortcutActions includes a settings entry wired to sendHotkey', () => {
@@ -114,23 +115,22 @@ describe('finding 9: renderer crash recovery on the main overlay window', () => 
     // separate, pre-existing listener earlier in the file) must sit OUTSIDE the ASKTOTO_DEBUG_RENDERER
     // block so it's active in a packaged/production build, not just a debug one.
     const debugBlockStart = source.indexOf('if (process.env.ASKTOTO_DEBUG_RENDERER) {')
-    const debugBlockEnd = source.indexOf('\n  }', debugBlockStart)
-    const listenerIdx = source.indexOf("win.webContents.on('render-process-gone'", debugBlockEnd)
+    const listenerIdx = lifecycleSource.indexOf("self.webContents.on('render-process-gone'")
     expect(debugBlockStart).toBeGreaterThan(-1)
     expect(listenerIdx).toBeGreaterThan(-1)
-    expect(listenerIdx).toBeGreaterThan(debugBlockEnd) // registered after (outside) the debug-only block
+    expect(lifecycleSource).not.toContain('ASKTOTO_DEBUG_RENDERER')
   })
 
   it('logs to mainLog + auditLog and reloads the window content instead of leaving it blank', () => {
-    const listenerStart = source.indexOf("win.webContents.on('render-process-gone', (_e, details) => {")
+    const listenerStart = lifecycleSource.indexOf("self.webContents.on('render-process-gone', (_e, details) => {")
     expect(listenerStart).toBeGreaterThan(-1)
-    const listenerEnd = source.indexOf('\n  })', listenerStart)
-    const body = source.slice(listenerStart, listenerEnd)
-    expect(body).toMatch(/mainLog\.error\(/)
-    expect(body).toMatch(/auditLog\('app\.crash', crashDetail\('render-process-gone'/)
-    expect(body).toMatch(/if \(win !== self\) return/)
-    expect(body).toMatch(/if \(win !== self \|\| self\.isDestroyed\(\)\) return/)
-    expect(body).toMatch(/reloadOverlay\(self\)/)
+    const listenerEnd = lifecycleSource.indexOf('\n  })', listenerStart)
+    const body = lifecycleSource.slice(listenerStart, listenerEnd)
+    expect(body).toMatch(/deps\.log\.error\(/)
+    expect(body).toMatch(/deps\.auditLog\('app\.crash', deps\.crashDetail\('render-process-gone'/)
+    expect(body).toMatch(/if \(context\.mainWindow\(\) !== self\) return/)
+    expect(body).toMatch(/if \(context\.mainWindow\(\) !== self \|\| self\.isDestroyed\(\)\) return/)
+    expect(body).toMatch(/deps\.reloadOverlay\(self\)/)
   })
 })
 

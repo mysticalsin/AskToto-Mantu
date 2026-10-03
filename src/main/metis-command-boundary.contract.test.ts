@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const main = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+const lifecycle = readFileSync(join(__dirname, 'lifecycle', 'main-lifecycle.ts'), 'utf8')
 const preload = readFileSync(join(__dirname, '../preload/index.ts'), 'utf8')
 const ipc = readFileSync(join(__dirname, '../shared/ipc.ts'), 'utf8')
 const app = readFileSync(join(__dirname, '../renderer/src/App.tsx'), 'utf8')
@@ -40,12 +41,12 @@ describe('Cap2 command authority boundary', () => {
     expect(main).toContain('const self = win')
     const closed = between(main, "win.on('closed', () => {", "win.webContents.setWindowOpenHandler(")
     expect(closed).toMatch(/if \(win !== self\) return\s*commandControl\.revokeForLifecycleEvent\('window_closed'\)/)
-    const rendererGone = between(main, "win.webContents.on('render-process-gone', (_e, details) => {", 'const rendererUrl = overlayRendererUrl()')
-    expect(rendererGone).toMatch(/if \(win !== self\) return\s*commandControl\.revokeForLifecycleEvent\('renderer_replaced'\)/)
+    const rendererGone = between(lifecycle, "self.webContents.on('render-process-gone', (_e, details) => {", 'deps.ipcMain.handle')
+    expect(rendererGone).toMatch(/if \(context\.mainWindow\(\) !== self\) return\s*deps\.commandControl\.revokeForLifecycleEvent\('renderer_replaced'\)/)
     // M2-0037: the destroyed-check guard now leads into the reload-budget decision (reload / halt / ignore)
     // rather than reloading unconditionally — assert order, not exact adjacency, so that branch can grow.
-    const destroyedGuard = rendererGone.indexOf('if (win !== self || self.isDestroyed()) return')
-    const reload = rendererGone.indexOf('reloadOverlay(self)')
+    const destroyedGuard = rendererGone.indexOf('if (context.mainWindow() !== self || self.isDestroyed()) return')
+    const reload = rendererGone.indexOf('deps.reloadOverlay(self)')
     expect(destroyedGuard).toBeGreaterThan(-1)
     expect(reload).toBeGreaterThan(destroyedGuard)
   })

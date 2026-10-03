@@ -25,7 +25,7 @@ function sliceBetween(text: string, start: string, end: string): string {
 
 describe('MQA-186 — the first-run weight fetch is gated, and the gate is not a dead end', () => {
   it('boot uses the opt-in provisioning gate without upgrading the selected model', () => {
-    const boot = sliceBetween(src, 'app.whenReady().then(async () => {', 'app.setAppUserModelId')
+    const boot = sliceBetween(src, "bootWork.run('provisionLocalModel'", 'app.setAppUserModelId')
     expect(boot).toMatch(/provisionLocalModel\(getSettings\(\)\.localLlm, getAllowedProviders\(\), ensureLocalModel\)/)
     expect(boot).not.toMatch(/bestModelForMachine|setSettings\(\{ localLlm/)
     expect(boot).not.toMatch(/ensureLocalModel\([^)]*\.id\)/)

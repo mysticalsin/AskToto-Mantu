@@ -44,7 +44,7 @@
     "src/main/brain/store.ts": 1190,
     "src/main/cli.ts": 1690,
     "src/main/import-jobs.ts": 1198,
-    "src/main/index.ts": 9937,
+    "src/main/index.ts": 9795,
     "src/main/store.ts": 1364,
     "src/main/transcripts.ts": 1210,
     "src/renderer/src/App.tsx": 4331,
@@ -317,7 +317,8 @@
     "src/shared/reset-time.test.ts": 2
   },
   "FF-09": {
-    "src/main/index.ts": 166
+    "src/main/index.ts": 165,
+    "src/main/lifecycle/main-lifecycle.ts": 1
   },
   "FF-10": {
     "src/main/apple-speech.ts": 1,
