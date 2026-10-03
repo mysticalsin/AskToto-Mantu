@@ -138,7 +138,6 @@ import {
   resetProviderHealth,
   unhealthyProviders
 } from './llm/provider-health'
-
 /** Wave 2 — session-scoped last successful failover hop for the one-shot UI chip. Never persisted. */
 let lastFailoverNotice: { from: string; to: string; at: number; reason: string } | null = null
 export function peekLastFailoverNotice(): typeof lastFailoverNotice {
@@ -178,6 +177,7 @@ import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import { registerWriteupIpc } from './ipc/writeup'
 import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText, macStallWatchCommand } from './mac-helper'
+import type { runInteractionWindowOcr as runInteractionWindowOcrEntrypoint } from './features/ocr/electron'
 import * as screenPerm from './capture-permissions/screen-permission-runtime'
 import { isOrphanScreenSourcesRejection } from './capture-permissions/loopback-grant'
 import { registerScreenPermissionIpc } from './ipc/screen-permission-ipc'
