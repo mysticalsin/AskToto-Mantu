@@ -177,7 +177,7 @@ import { localModelAllowedByPolicy } from '@shared/model-policy'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import { registerWriteupIpc } from './ipc/writeup'
 import * as fmRuntime from './llm/fm-runtime'
-import { extractScreenOcrWords, extractScreenText, macStallWatchCommand } from './mac-helper'
+import { extractScreenText, macStallWatchCommand } from './mac-helper'
 import * as screenPerm from './capture-permissions/screen-permission-runtime'
 import { isOrphanScreenSourcesRejection } from './capture-permissions/loopback-grant'
 import { registerScreenPermissionIpc } from './ipc/screen-permission-ipc'
@@ -541,13 +541,12 @@ import { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-hooks'
 import { installQaCaptureSource } from './qa-capture-source'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
 import {
-  captureSingleWindowSource,
   createKeyedSingleFlight,
   getScreenSourcesWithRetry,
   isUsableScreenSource,
   screenCaptureUnavailableMessage
 } from './screen-capture'
-import { runWindowOcr, type OcrRequest, type OcrRunResult, type OcrSessionPort } from './features/ocr'
+import { runInteractionWindowOcr } from './features/ocr/electron'
 import {
   enqueueIngest,
   exciseDeletedMeeting,
@@ -4074,26 +4073,6 @@ async function captureScreenshotOnce(displayId: number): Promise<CapturedScreen>
 
 /** Share a native capture only between pre-warm and click requests for the same display. */
 const captureScreenshot = createKeyedSingleFlight<number, CapturedScreen>(captureScreenshotOnce)
-
-function runInteractionWindowOcr(request: OcrRequest, sessions: OcrSessionPort): Promise<OcrRunResult> {
-  return runWindowOcr(request, {
-    sessions,
-    capture: {
-      capture: (target) => captureSingleWindowSource(target, (options) => desktopCapturer.getSources(options))
-    },
-    helper: {
-      recognize: (image) => {
-        const invocation = process.platform === 'darwin' ? extractScreenOcrWords(image) : null
-        if (invocation) return invocation
-        return {
-          result: Promise.reject(new Error('On-device window OCR is unavailable on this platform.')),
-          kill: () => {}
-        }
-      }
-    }
-  })
-}
-
 /** The one wording for the one promise. getScreenshot() throws it when Private View blocks a LIVE capture;
  *  IPC.askStart sends it verbatim when it refuses an already-captured frame (MQA-182). Keeping both on the
  *  same string is what lets the renderer's /private view/i copy paths recognise either one. */
