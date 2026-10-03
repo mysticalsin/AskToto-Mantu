@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 const root = join(__dirname, '..', '..')
 const workflow = readFileSync(join(root, '.github', 'workflows', 'qa-candidate.yml'), 'utf8').replace(/\r\n/g, '\n')
+const ownerSandboxProbe = readFileSync(join(root, 'scripts', 'hermetic', 'prove-owner-sandbox.sh'), 'utf8').replace(/\r\n/g, '\n')
 
 /** A job's text: from its two-space key to the next two-space key. No YAML library is a dependency here. */
 function jobBlock(name: string): string {
@@ -280,6 +281,14 @@ describe('QA candidate strict ST-1 hosted-runner rows', () => {
     expect(workflow).not.toContain('      - scripts/hermetic/prove-owner-sandbox.sh\n')
     expect(workflow).not.toContain('      - scripts/hermetic/run-under-owner-sandbox.sh\n')
     expect(workflow).not.toContain('      - scripts/hermetic/owner-account.sb\n')
+  })
+
+  it('keeps the owner-account sandbox probe strict when that helper is used outside the public hosted workflow', () => {
+    expect(ownerSandboxProbe).toContain('bash scripts/hermetic/run-under-owner-sandbox.sh /bin/ls "$target"')
+    expect(ownerSandboxProbe).toContain('"$HOME/Library/CloudStorage"')
+    expect(ownerSandboxProbe).toContain('"$HOME/Library/Application Support/Metis"')
+    expect(ownerSandboxProbe).toContain("grep -Fqi 'Operation not permitted'")
+    expect(ownerSandboxProbe).not.toContain('Operation not permitted|deny|sandbox')
   })
 
   it('runs every strict candidate verification and launch directly on the hosted runner', () => {
