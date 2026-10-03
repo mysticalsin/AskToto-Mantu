@@ -26,6 +26,7 @@ import {
   quietHostInvalidReason,
   recordSample,
   releaseExpression,
+  rendererPreflightInvalidDetails,
   rendererPreflightStatus,
   sampleExpression,
   shouldProbeHistory,
@@ -349,6 +350,18 @@ describe('candidate lifecycle invalidation', () => {
     completedSocket.dispatchEvent(new Event('close'))
     expect(completed.invalidDetails()).toBeNull()
   })
+
+  it('tracks an EventEmitter inspector socket close, matching the fake sockets used by harness tests', () => {
+    let now = 70
+    const lifecycle = createCandidateLifecycle({ now: () => now })
+    const socket = new EventEmitter()
+
+    lifecycle.attachInspector(socket)
+    now = 88
+    socket.emit('close')
+
+    expect(lifecycle.invalidDetails()).toMatchObject({ reason: 'inspector-closed', inspectorClosed: { tMs: 88 } })
+  })
 })
 
 describe('renderer preflight and quiet-host precondition', () => {
@@ -365,6 +378,29 @@ describe('renderer preflight and quiet-host precondition', () => {
   it('invalidates a run when any runner witness sample exceeds the quiet-host loop budget', () => {
     expect(quietHostInvalidReason([{ tMs: 1_000, witness: { loopMaxSinceLastMs: WITNESS_LOOP_MAX_MS } }])).toBeNull()
     expect(quietHostInvalidReason([{ tMs: 1_000, witness: { loopMaxSinceLastMs: WITNESS_LOOP_MAX_MS + 0.1 } }])).toBe('noisy-host')
+  })
+
+  it('checks lifecycle invalidation before audit records during renderer-ready preflight', () => {
+    const lifecycleDetails = { reason: 'inspector-closed', inspectorClosed: { tMs: 99 }, stderrTail: { bytes: 0 } }
+
+    expect(
+      rendererPreflightInvalidDetails({
+        lifecycleDetails,
+        records: [{ event: 'app.crash', kind: 'render-process-gone' }],
+        stderrTail: { bytes: 0 }
+      })
+    ).toBe(lifecycleDetails)
+  })
+
+  it('invalidates render-process-gone during preflight without starting the sampled window', () => {
+    expect(
+      rendererPreflightInvalidDetails({
+        lifecycleDetails: null,
+        records: [{ event: 'app.crash', kind: 'render-process-gone' }],
+        stderrTail: { bytes: 24 }
+      })
+    ).toEqual({ reason: 'renderer-not-ready', stderrTail: { bytes: 24 } })
+    expect(rendererPreflightInvalidDetails({ lifecycleDetails: null, records: [{ event: 'app.renderer.ready' }], stderrTail: { bytes: 0 } })).toBeNull()
   })
 })
 

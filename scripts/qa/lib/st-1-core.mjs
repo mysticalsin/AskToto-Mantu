@@ -77,9 +77,11 @@ export function createCandidateLifecycle({ now = () => performance.now(), stderr
       })
     },
     attachInspector(socket) {
-      socket.addEventListener?.('close', () => {
+      const onClose = () => {
         if (!ignoreInspectorClose) inspectorClosed ??= { tMs: Math.round(now()) }
-      })
+      }
+      socket.addEventListener?.('close', onClose)
+      socket.on?.('close', onClose)
     },
     finish() {
       ignoreInspectorClose = true
@@ -107,6 +109,14 @@ export function rendererPreflightStatus(records) {
   const renderCrash = records.some((record) => record?.event === 'app.crash' && record?.kind === 'render-process-gone')
   if (renderCrash) return { ok: false, reason: 'renderer-not-ready', renderProcessGone: true }
   return records.some((record) => record?.event === 'app.renderer.ready') ? { ok: true } : { ok: false, reason: 'renderer-not-ready' }
+}
+
+export function rendererPreflightInvalidDetails({ lifecycleDetails, records, stderrTail }) {
+  if (lifecycleDetails) return lifecycleDetails
+  const status = rendererPreflightStatus(records)
+  if (status.ok) return null
+  if (status.renderProcessGone) return { reason: status.reason, stderrTail }
+  return null
 }
 
 export function quietHostInvalidReason(timeline, budgetMs = WITNESS_LOOP_MAX_MS) {

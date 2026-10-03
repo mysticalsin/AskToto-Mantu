@@ -101,6 +101,7 @@ import {
   parseArgs,
   pinnedExpression,
   quietHostInvalidReason,
+  rendererPreflightInvalidDetails,
   recordSample,
   releaseExpression,
   rendererPreflightStatus,
@@ -460,11 +461,15 @@ function readAuditRecordsSince(profile, spawnedWallMs) {
 async function waitForRendererReadyPreflight(profile, spawnedWallMs, lifecycle) {
   const deadline = Date.now() + RENDERER_READY_WAIT_MS
   while (Date.now() < deadline) {
-    const lifecycleReason = lifecycle.invalidReason()
-    if (lifecycleReason) return lifecycle.invalidDetails()
-    const status = rendererPreflightStatus(readAuditRecordsSince(profile, spawnedWallMs))
+    const records = readAuditRecordsSince(profile, spawnedWallMs)
+    const details = rendererPreflightInvalidDetails({
+      lifecycleDetails: lifecycle.invalidDetails(),
+      records,
+      stderrTail: lifecycle.stderrTail()
+    })
+    if (details) return details
+    const status = rendererPreflightStatus(records)
     if (status.ok) return null
-    if (status.renderProcessGone) return { reason: status.reason, stderrTail: lifecycle.stderrTail() }
     if (Date.now() >= deadline) break
     await new Promise((resolve) => setTimeout(resolve, PREFLIGHT_POLL_MS))
   }
