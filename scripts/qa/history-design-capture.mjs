@@ -290,6 +290,20 @@ export async function waitForHistoryDesignCue(page, { text, role = null }) {
   await locator.first().waitFor({ timeout: STATE_TIMEOUT_MS })
 }
 
+// Hosted evidence for M2-0540 showed slow/light-1x-reduced-motion timing out after STATE_TIMEOUT_MS
+// while driveState waited for the slow banner as a role-gated cue. The slow banner is still judged as
+// role=status after capture; reaching the slow visual state is synchronized on its text.
+export const HISTORY_DESIGN_CUE_BY_STATE = Object.freeze({
+  slow: Object.freeze({ text: 'OneDrive is slow to answer', role: null }),
+  'slow-with-rows': Object.freeze({ text: 'OneDrive is slow to answer', role: null }),
+  failed: Object.freeze({ text: 'Could not load your meetings', role: 'alert' }),
+  unavailable: Object.freeze({ text: 'could not be read right now', role: 'status' })
+})
+
+export function historyDesignCueForState(stateId) {
+  return HISTORY_DESIGN_CUE_BY_STATE[stateId] ?? null
+}
+
 /**
  * Puts History into `state` from a fresh open; returns when the open was clicked, when History's list
  * request reached main, and how it went. The renderer arms its HISTORY_DEGRADED_MS notice when it sends
@@ -314,15 +328,15 @@ async function driveState(page, main, state, realRows) {
   const visible = (text, role = null) => waitForHistoryDesignCue(page, { text, role })
   const drive = { clickedAt, requestedAt }
   if (state.id === 'slow' || state.id === 'unavailable' || state.id === 'failed') {
-    const [text, role] =
-      state.id === 'slow' ? ['OneDrive is slow to answer', null] : state.id === 'failed' ? ['Could not load your meetings', 'alert'] : ['could not be read right now', 'status']
-    await visible(text, role)
+    const cue = historyDesignCueForState(state.id)
+    await visible(cue.text, cue.role)
     drive.bannerAfterMs = Date.now() - clickedAt
   } else if (state.id === 'slow-with-rows') {
     await visible(SAMPLE_MEETINGS[0])
     const typedAt = Date.now()
     await page.getByLabel('Search past meetings').fill('planning')
-    await visible('OneDrive is slow to answer')
+    const cue = historyDesignCueForState(state.id)
+    await visible(cue.text, cue.role)
     drive.bannerAfterMs = Date.now() - typedAt
   } else if (state.list !== 'pending') {
     await visible(state.list === 'rows+notDownloaded' ? 'Not downloaded' : SAMPLE_MEETINGS[0])

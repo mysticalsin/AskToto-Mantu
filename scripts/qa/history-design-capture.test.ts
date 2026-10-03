@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { IPC } from '../../src/shared/ipc'
 import { HISTORY_DEGRADED_MS as RENDERER_DEGRADED_MS } from '../../src/renderer/src/components/history/list-status'
 import { NOT_DOWNLOADED_TEXT, UNAVAILABLE_TEXT } from '../../src/renderer/src/components/history/hydration'
-import { waitForHistoryDesignCue } from './history-design-capture.mjs'
+import { historyDesignCueForState, waitForHistoryDesignCue } from './history-design-capture.mjs'
 import {
   BACKDROPS,
   BLOCKED_EXTERNAL_ROWS,
@@ -115,6 +115,13 @@ describe('History design matrix (M2-0032)', () => {
     expect(page.getByRole).not.toHaveBeenCalled()
     expect(textWaitFor).toHaveBeenCalledWith({ timeout: 10_000 })
     expect(roleWaitFor).not.toHaveBeenCalled()
+  })
+
+  it('drives slow degraded captures from the visual text cue, not a role-gated transition cue', () => {
+    expect(historyDesignCueForState('slow')).toEqual({ text: 'OneDrive is slow to answer', role: null })
+    expect(historyDesignCueForState('slow-with-rows')).toEqual({ text: 'OneDrive is slow to answer', role: null })
+    expect(historyDesignCueForState('failed')).toEqual({ text: 'Could not load your meetings', role: 'alert' })
+    expect(historyDesignCueForState('unavailable')).toEqual({ text: 'could not be read right now', role: 'status' })
   })
 
   it('still supports role-gated waits for cues whose role is the state transition signal', async () => {
