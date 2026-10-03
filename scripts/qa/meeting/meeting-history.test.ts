@@ -49,7 +49,8 @@ const cleanObserved = (overrides: Record<string, unknown> = {}) => ({
       linesAfter: 5,
       listRendered: true,
       searchRendered: true,
-      rowOpened: true
+      rowOpened: true,
+      returnedToMeeting: true
     }
   ],
   sidecars: { 'whisper-utility': true, 'speaker-utility': false, 'llama-server': false, 'sidecar-supervisor': true },
@@ -177,10 +178,11 @@ describe('meeting-history verdict clauses', () => {
 
 describe('meeting-history History search proof', () => {
   it('requires the search result list to be non-empty and smaller than the unfiltered list', () => {
-    expect(filteredHistoryRendered(59, 1)).toBe(true)
-    expect(filteredHistoryRendered(59, 59)).toBe(false)
-    expect(filteredHistoryRendered(59, 0)).toBe(false)
-    expect(filteredHistoryRendered(0, 0)).toBe(false)
+    expect(filteredHistoryRendered(59, 1, 1)).toBe(true)
+    expect(filteredHistoryRendered(59, 59, 1)).toBe(false)
+    expect(filteredHistoryRendered(59, 0, 0)).toBe(false)
+    expect(filteredHistoryRendered(59, 1, 0)).toBe(false)
+    expect(filteredHistoryRendered(0, 0, 0)).toBe(false)
   })
 })
 
@@ -230,7 +232,8 @@ describe('meeting-history report', () => {
     const floorEvidence = summarizeAuditEvidence([
       { event: 'local.host-floor-override', floor: 'advertised-ram', hostTotalBytes: 1, hostAvailableBytes: 1 }
     ])
-    expect(deriveLlamaCause({ 'llama-server': false }, floorEvidence)).toBe('floor-refused-despite-override')
+    expect(deriveLlamaCause({ 'llama-server': false }, floorEvidence, { hostFloorOverride: true })).toBe('floor-lifted-by-override; llama-server not observed')
+    expect(deriveLlamaCause({ 'llama-server': false }, summarizeAuditEvidence([]), { hostFloorOverride: true })).toBe('floor-refused-despite-override')
     expect(deriveLlamaCause({ 'llama-server': false }, summarizeAuditEvidence([{ event: 'local.runtime.missing' }]))).toBe('local-runtime-missing')
     expect(deriveLlamaCause({ 'llama-server': true }, floorEvidence)).toBeNull()
   })

@@ -170,12 +170,13 @@ export function readAuditEvidence(profileDir) {
   return summarizeAuditEvidence(records)
 }
 
-export function deriveLlamaCause(sidecars, auditEvidence) {
+export function deriveLlamaCause(sidecars, auditEvidence, { hostFloorOverride = false, localSummaryExpected = true } = {}) {
   if (sidecars?.['llama-server']) return null
-  if ((auditEvidence?.floorOverrides ?? []).length > 0) return 'floor-refused-despite-override'
   if (auditEvidence?.events?.['local.runtime.missing']) return 'local-runtime-missing'
   if (auditEvidence?.events?.['local.model.download_fail']) return 'local-model-download-failed'
   if (auditEvidence?.events?.['local.model.checksum_fail']) return 'local-model-checksum-failed'
+  if ((auditEvidence?.floorOverrides ?? []).length > 0) return 'floor-lifted-by-override; llama-server not observed'
+  if (hostFloorOverride && localSummaryExpected) return 'floor-refused-despite-override'
   if (auditEvidence?.events?.['llm.call']) return 'llm-call-observed-without-llama-server'
   return 'not-observed'
 }
@@ -188,8 +189,13 @@ export function deriveThemChannel(settings, auditEvidence) {
   return { active: false, cause: 'not-observed' }
 }
 
-export function filteredHistoryRendered(unfilteredRows, resultRows) {
-  return Number.isFinite(unfilteredRows) && Number.isFinite(resultRows) && resultRows > 0 && resultRows < unfilteredRows
+export function filteredHistoryRendered(unfilteredRows, resultRows, termMatches = resultRows) {
+  return Number.isFinite(unfilteredRows)
+    && Number.isFinite(resultRows)
+    && Number.isFinite(termMatches)
+    && resultRows > 0
+    && resultRows < unfilteredRows
+    && termMatches > 0
 }
 
 function parseNdjsonRecords(text) {
@@ -281,7 +287,8 @@ export function buildMeetingHistoryReport(observed, outcome) {
       linesAfter: action.linesAfter,
       listRendered: action.listRendered === true,
       searchRendered: action.searchRendered === true,
-      rowOpened: action.rowOpened === true
+      rowOpened: action.rowOpened === true,
+      returnedToMeeting: action.returnedToMeeting === true
     })),
     census: observed.census,
     growth: observed.growth
@@ -377,16 +384,16 @@ const HISTORY_SEARCH = (term) => `(() => {
   return { ok: true }
 })()`
 
-const HISTORY_RESULT_ROWS = (term, unfilteredRows) => `(() => {
+const HISTORY_RESULT_ROWS = (term) => `(() => {
   const term = ${JSON.stringify(term)}.toLowerCase()
-  const unfilteredRows = ${Number(unfilteredRows)}
   const buttons = [...document.querySelectorAll('button')]
   const rows = buttons.filter((button) => {
     const label = button.getAttribute('aria-label') || ''
     const text = (button.textContent || '').trim()
-    return !label && text.toLowerCase().includes(term) && !/^(import meetings|back|rename meeting|export meeting copy|delete meeting)$/i.test(text)
-  }).length
-  return { count: rows, filtered: Number.isFinite(unfilteredRows) && rows > 0 && rows < unfilteredRows }
+    return !label && text && !/^(import meetings|back|rename meeting|show connections|export meeting copy|delete meeting|show all \\d+ meetings)$/i.test(text)
+  })
+  const termMatches = rows.filter((row) => (row.textContent || '').toLowerCase().includes(term)).length
+  return { count: rows.length, termMatches }
 })()`
 
 const HISTORY_OPEN_ROW = (term) => `(() => {
@@ -433,6 +440,7 @@ async function historyCycle(page, { index, tMs, term }) {
   let listRendered = false
   let searchRendered = false
   let rowOpened = false
+  let returnedToMeeting = false
   let outcome = 'failed'
   try {
     await page.evaluate(HISTORY_OPEN)
@@ -440,8 +448,8 @@ async function historyCycle(page, { index, tMs, term }) {
     const unfilteredRows = Number(await page.evaluate(HISTORY_ROWS).catch(() => 0))
     const search = await page.evaluate(HISTORY_SEARCH(term)).catch(() => null)
     searchRendered = Boolean(search?.ok && await waitFor(async () => {
-      const result = await page.evaluate(HISTORY_RESULT_ROWS(term, unfilteredRows)).catch(() => null)
-      return result?.filtered ? result : null
+      const result = await page.evaluate(HISTORY_RESULT_ROWS(term)).catch(() => null)
+      return filteredHistoryRendered(unfilteredRows, result?.count, result?.termMatches) ? result : null
     }, 5_000, 250))
     rowOpened = searchRendered && Boolean(await page.evaluate(HISTORY_OPEN_ROW(term)).catch(() => false))
     rowOpened = rowOpened && Boolean(await waitFor(() => page.evaluate(HISTORY_DETAIL_PRESENT), 5_000, 250))
@@ -450,13 +458,13 @@ async function historyCycle(page, { index, tMs, term }) {
     await sleep(250)
     await page.evaluate(BACK_OR_TRANSCRIPT).catch(() => null)
     await page.evaluate(TRANSCRIPT_CLICK).catch(() => false)
-    await waitFor(() => page.evaluate(TRANSCRIPT_PRESENT), 5_000, 250)
-    outcome = listRendered && searchRendered && rowOpened ? 'completed' : 'failed'
+    returnedToMeeting = Boolean(await waitFor(() => page.evaluate(TRANSCRIPT_PRESENT), 5_000, 250))
+    outcome = listRendered && searchRendered && rowOpened && returnedToMeeting ? 'completed' : 'failed'
   } catch {
     outcome = 'failed'
   }
   const linesAfter = Number(await page.evaluate(LINE_COUNT).catch(() => 0))
-  return { index, tMs, durationMs: Math.round(performance.now() - started), outcome, listRendered, searchRendered, rowOpened, linesBefore, linesAfter }
+  return { index, tMs, durationMs: Math.round(performance.now() - started), outcome, listRendered, searchRendered, rowOpened, returnedToMeeting, linesBefore, linesAfter }
 }
 
 function parseArgs(argv) {
@@ -649,7 +657,7 @@ async function main() {
       observed.sidecars = activeKindsFromNdjson(`${activeText}\n${postText}`)
       observed.auditEvidence = readAuditEvidence(profileDir)
       observed.sidecarCauses = {
-        'llama-server': deriveLlamaCause(observed.sidecars, observed.auditEvidence)
+        'llama-server': deriveLlamaCause(observed.sidecars, observed.auditEvidence, { hostFloorOverride: observed.hostFloorOverride, localSummaryExpected: true })
       }
       observed.themChannel = deriveThemChannel(preparedSettings, observed.auditEvidence)
       observed.growth = evaluateMeetingGrowth({
