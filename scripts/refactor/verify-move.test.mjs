@@ -231,6 +231,73 @@ test('CLI writes an artifact and fails when a pure move changes tokens', () => {
   assert.equal(report.token_differences.length, 2)
 })
 
+test('CLI reads git output larger than the default exec buffer and judges the move', () => {
+  const root = mkdtempSync(join(tmpdir(), 'verify-move-large-'))
+  const repo = join(root, 'repo')
+  mkdirSync(join(repo, 'scripts', 'refactor'), { recursive: true })
+  mkdirSync(join(repo, 'src', 'old'), { recursive: true })
+  mkdirSync(join(repo, 'src', 'new'), { recursive: true })
+  writeFileSync(join(repo, 'scripts', 'refactor', 'verify-move.mjs'), readFileSync(new URL('./verify-move.mjs', import.meta.url)))
+  const largeBody = Array.from({ length: 70_000 }, (_, index) => `export const value${index} = ${index}`).join('\n')
+  assert.ok(Buffer.byteLength(largeBody, 'utf8') > 1024 * 1024)
+  writeFileSync(join(repo, 'src', 'old', 'large.ts'), `${largeBody}\n`)
+  execFileSync('git', ['init'], { cwd: repo })
+  execFileSync('git', ['config', 'user.email', 'test@example.invalid'], { cwd: repo })
+  execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: repo })
+  execFileSync('git', ['add', '.'], { cwd: repo })
+  execFileSync('git', ['commit', '-m', 'base'], { cwd: repo })
+  const base = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim()
+  renameSync(join(repo, 'src', 'old', 'large.ts'), join(repo, 'src', 'new', 'large.ts'))
+  execFileSync('git', ['add', '-A'], { cwd: repo })
+  execFileSync('git', ['commit', '-m', 'head'], { cwd: repo })
+  const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim()
+
+  const output = execFileSync(process.execPath, ['scripts/refactor/verify-move.mjs', '--base', base, '--head', head], {
+    cwd: repo,
+    encoding: 'utf8'
+  })
+
+  assert.match(output, /Pure-move verification passed/)
+  const report = JSON.parse(readFileSync(join(repo, 'out', 'refactor', 'verify-move', 'verify-move.json'), 'utf8'))
+  assert.equal(report.ok, true)
+  assert.equal(report.changed_paths, 1)
+})
+
+test('CLI reports an explicit error when git output exceeds the configured bound', () => {
+  const root = mkdtempSync(join(tmpdir(), 'verify-move-bound-'))
+  const repo = join(root, 'repo')
+  mkdirSync(join(repo, 'scripts', 'refactor'), { recursive: true })
+  mkdirSync(join(repo, 'src', 'old'), { recursive: true })
+  mkdirSync(join(repo, 'src', 'new'), { recursive: true })
+  writeFileSync(join(repo, 'scripts', 'refactor', 'verify-move.mjs'), readFileSync(new URL('./verify-move.mjs', import.meta.url)))
+  const body = Array.from({ length: 200 }, (_, index) => `export const value${index} = ${index}`).join('\n')
+  assert.ok(Buffer.byteLength(body, 'utf8') > 1024)
+  writeFileSync(join(repo, 'src', 'old', 'large.ts'), `${body}\n`)
+  execFileSync('git', ['init'], { cwd: repo })
+  execFileSync('git', ['config', 'user.email', 'test@example.invalid'], { cwd: repo })
+  execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: repo })
+  execFileSync('git', ['add', '.'], { cwd: repo })
+  execFileSync('git', ['commit', '-m', 'base'], { cwd: repo })
+  const base = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim()
+  renameSync(join(repo, 'src', 'old', 'large.ts'), join(repo, 'src', 'new', 'large.ts'))
+  execFileSync('git', ['add', '-A'], { cwd: repo })
+  execFileSync('git', ['commit', '-m', 'head'], { cwd: repo })
+  const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim()
+
+  assert.throws(
+    () => execFileSync(process.execPath, ['scripts/refactor/verify-move.mjs', '--base', base, '--head', head], {
+      cwd: repo,
+      env: { ...process.env, VERIFY_MOVE_GIT_OUTPUT_MAX_BYTES: '1024' }
+    }),
+    (error) => {
+      const message = String(error.stderr)
+      assert.match(message, /verify-move: git output exceeded 1 KiB limit/)
+      assert.doesNotMatch(message, /ENOBUFS/)
+      return true
+    }
+  )
+})
+
 test('PR classification requires exactly one refactor type', () => {
   assert.deepEqual(refactorClassification('- [x] Pure move\n- [ ] Behaviour change\n'), {
     ok: true,
