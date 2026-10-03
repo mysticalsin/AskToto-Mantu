@@ -1,4 +1,5 @@
 import {
+  Fragment,
   memo,
   useCallback,
   useEffect,
@@ -50,7 +51,7 @@ export function virtualWindow(
   const safeBottom = safeTop + Math.max(0, viewportHeight)
   let start = 0
   let offsetTop = 0
-  while (start < sizes.length && offsetTop + sizes[start] < safeTop) {
+  while (start < sizes.length && offsetTop + sizes[start] <= safeTop) {
     offsetTop += sizes[start]
     start += 1
   }
@@ -137,12 +138,16 @@ function VirtualListInner<T>({
           const measureRef = (node: HTMLDivElement | null): void => {
             if (node) rememberSize(key, Math.ceil(node.getBoundingClientRect().height))
           }
-          return renderItem({
-            item,
-            index,
-            measureRef,
-            style: { position: 'absolute', top, left: 0, right: 0 }
-          })
+          return (
+            <Fragment key={key}>
+              {renderItem({
+                item,
+                index,
+                measureRef,
+                style: { position: 'absolute', top, left: 0, right: 0 }
+              })}
+            </Fragment>
+          )
         })}
       </div>
     </div>

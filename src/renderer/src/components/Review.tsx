@@ -1903,6 +1903,8 @@ export const Review = memo(function Review({
           {speechLines.length === 0 ? (
             <div className="text-[13px] text-[color:var(--color-ink-2)]">No transcript captured.</div>
           ) : (
+            // No inner scroll trap for the recap body: the transcript list is virtualized only after
+            // explicit disclosure, while the Summary remains owned by the parent Panel scroller.
             <VirtualList
               items={speechLines}
               getKey={(line, index) => `${line.t}:${line.speaker}:${index}`}
