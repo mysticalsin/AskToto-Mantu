@@ -1,7 +1,8 @@
 import { useLayoutEffect, useRef, useState, type ReactNode, type Ref } from 'react'
-import { AudioLines, Brain, ChevronRight, CornerDownLeft, FileSearch, Image, LoaderCircle, Pause, Play, Settings, Square, X } from 'lucide-react'
+import { AudioLines, Brain, ChevronRight, CornerDownLeft, FileSearch, Image, LoaderCircle, Pause, Play, ScrollText, Settings, Square, X } from 'lucide-react'
 import type { MetisCommandState } from '@shared/ipc'
 import { RIGHT_EDGE_DRAWER_WIDTH, RIGHT_EDGE_TAB_WIDTH } from '@shared/right-edge-geometry'
+import { RIGHT_EDGE_STRINGS, type RightEdgeStrings } from '../lib/right-edge/strings'
 import { ElapsedClock } from './Bar'
 import { MantuMark } from './MantuMark'
 
@@ -137,6 +138,72 @@ function compactLiveNotice(notice: string): string {
   return notice
 }
 
+export type PendingCancelStatus = 'idle' | 'cancelling' | 'cancelled' | 'unavailable'
+
+/** Cancels the opaque pending command (it has no verified preview, so it is never approvable); the status
+ *  belongs to the proposal it was asked for and reads 'idle' for any other. */
+export function usePendingCommandCancel(commandState: MetisCommandState): { status: PendingCancelStatus; cancel: () => void } {
+  const [pendingCancel, setPendingCancel] = useState<{ proposalId: string | null; status: PendingCancelStatus }>({
+    proposalId: null,
+    status: 'idle'
+  })
+  const cancel = (): void => {
+    if (!commandState.proposalId) return
+    const proposalId = commandState.proposalId
+    setPendingCancel({ proposalId, status: 'cancelling' })
+    void window.toto
+      .cancelMetisCommand({ proposalId, nonce: commandState.nonce })
+      .then((result) => setPendingCancel({ proposalId, status: result.ok ? 'cancelled' : 'unavailable' }))
+      .catch(() => setPendingCancel({ proposalId, status: 'unavailable' }))
+  }
+  const status = commandState.proposalId !== null && pendingCancel.proposalId === commandState.proposalId ? pendingCancel.status : 'idle'
+  return { status, cancel }
+}
+
+/** What the dock's ↗ controls open in the Reader. */
+export type SidecarReaderTarget = 'answer' | 'transcript' | 'details'
+
+const ANSWER_PREVIEW_MAX = 140
+
+/** The first readable line of a markdown answer as plain text, at most ANSWER_PREVIEW_MAX characters. Code
+ *  blocks and table rows are never a preview line. */
+export function rightEdgeAnswerPreview(markdown: string): string {
+  let inFence = false
+  for (const raw of markdown.split('\n')) {
+    const trimmed = raw.trim()
+    if (trimmed.startsWith('```')) inFence = !inFence
+    if (inFence || !trimmed || trimmed.startsWith('```') || trimmed.startsWith('|')) continue
+    const line = trimmed
+      .replace(/^(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)/, '')
+      .replace(/\[([^\]]*)\]\([^)]*\)|[*`~]|(?<!\w)_+|_+(?!\w)/g, (_match, label: string | undefined) => label ?? '')
+      .trim()
+    if (!line) continue
+    return line.length > ANSWER_PREVIEW_MAX ? `${line.slice(0, ANSWER_PREVIEW_MAX - 1).trimEnd()}…` : line
+  }
+  return ''
+}
+
+/** The dock's body for an answer on the right edge: a one-line summary. The full answer mounts only in the
+ *  Reader (spec v3 §6, RE-L05); the header's Open ↗ opens it there. */
+export function RightEdgeAnswerSummary({
+  text,
+  streaming,
+  error,
+  strings
+}: {
+  text: string
+  streaming: boolean
+  error?: string | null
+  strings: RightEdgeStrings
+}): JSX.Element {
+  const preview = rightEdgeAnswerPreview(error || text)
+  return (
+    <p className="right-edge-sidecar__summary" data-re-answer-summary>
+      {preview || (streaming ? strings.answerPending : strings.answerReady)}
+    </p>
+  )
+}
+
 /** Escape hides the dock whenever it can park, except while an IME composition owns the key (Escape
  *  cancels the composition there and must never hide the dock). */
 export function dockEscapeHides(event: { key: string; isComposing: boolean }, canClose: boolean): boolean {
@@ -166,6 +233,12 @@ export interface RightEdgeDockActions {
   /** A live meeting notice that remains inside the dock instead of leaking from the parked rail. */
   liveNotice?: string | null
   onSettings?: () => void
+  /** Opens long content in the Reader (spec v3 §6): the full answer, the live transcript or the Details. */
+  onOpenReader?: (target: SidecarReaderTarget) => void
+  /** There are approval or error Details to read. */
+  detailsAvailable?: boolean
+  /** The ↗ controls' copy (lib/right-edge/strings.ts). */
+  readerStrings?: RightEdgeStrings
 }
 
 export function RightEdgeSidecar({
@@ -199,6 +272,9 @@ export function RightEdgeSidecar({
   onHistory,
   liveNotice,
   onSettings,
+  onOpenReader,
+  detailsAvailable = false,
+  readerStrings = RIGHT_EDGE_STRINGS.en,
   onComposerActivity,
   onComposingChange
 }: {
@@ -212,10 +288,7 @@ export function RightEdgeSidecar({
   /** Opaque state only. Main has not supplied a verified action preview in this version. */
   commandState?: MetisCommandState
 } & SidecarChatProps & RightEdgeDockActions): JSX.Element {
-  const [pendingCancel, setPendingCancel] = useState<{
-    proposalId: string | null
-    status: 'idle' | 'cancelling' | 'cancelled' | 'unavailable'
-  }>({ proposalId: null, status: 'idle' })
+  const pendingCancel = usePendingCommandCancel(commandState)
   const [intelligence, setIntelligence] = useState<{ status: 'idle' | 'opening' | 'error'; error?: string }>({ status: 'idle' })
   const composerRef = useRef<HTMLInputElement>(null)
   // D4: an explicit open (a summon bumps focusSignal; a click on the rail tab) focuses the composer in the
@@ -229,15 +302,7 @@ export function RightEdgeSidecar({
     composerRef.current?.focus()
   }, [open, focusSignal])
 
-  const cancelPendingCommand = (): void => {
-    if (!commandState.proposalId) return
-    const proposalId = commandState.proposalId
-    setPendingCancel({ proposalId, status: 'cancelling' })
-    void window.toto
-      .cancelMetisCommand({ proposalId, nonce: commandState.nonce })
-      .then((result) => setPendingCancel({ proposalId, status: result.ok ? 'cancelled' : 'unavailable' }))
-      .catch(() => setPendingCancel({ proposalId, status: 'unavailable' }))
-  }
+  const cancelPendingCommand = pendingCancel.cancel
 
   const close = (): void => {
     // A proposal with no verified preview must never survive an edge-panel dismissal.
@@ -253,10 +318,8 @@ export function RightEdgeSidecar({
       .catch(() => setIntelligence({ status: 'error', error: 'Could not open Mantu Intelligence.' }))
   }
 
-  const pendingCancelStatus =
-    commandState.proposalId !== null && pendingCancel.proposalId === commandState.proposalId
-      ? pendingCancel.status
-      : 'idle'
+  const pendingCancelStatus = pendingCancel.status
+  const hasBody = body !== undefined && body !== null
   const status = capturing ? 'Capturing screen' : listening ? (paused ? 'Paused' : 'Listening') : busy ? 'Thinking' : 'Ready'
 
   return (
@@ -306,9 +369,22 @@ export function RightEdgeSidecar({
                 <span>Métis</span>
               </span>
             </span>
-            <span className="right-edge-sidecar__status" data-right-edge-status={status} aria-live="polite">
-              <span className="right-edge-sidecar__status-dot" aria-hidden="true" />
-              <span>{status}</span>
+            <span className="right-edge-sidecar__header-leading">
+              <span className="right-edge-sidecar__status" data-right-edge-status={status} aria-live="polite">
+                <span className="right-edge-sidecar__status-dot" aria-hidden="true" />
+                <span>{status}</span>
+              </span>
+              {onOpenReader && hasBody ? (
+                <button
+                  type="button"
+                  aria-label={readerStrings.openReaderName}
+                  className="right-edge-sidecar__history no-drag focus-ring"
+                  data-re-open-reader="answer"
+                  onClick={() => onOpenReader('answer')}
+                >
+                  {readerStrings.openReader}
+                </button>
+              ) : null}
             </span>
           </header>
 
@@ -325,6 +401,11 @@ export function RightEdgeSidecar({
                 <span className="right-edge-sidecar__meeting-time" aria-label="Meeting duration">
                   <ElapsedClock startedAt={startedAt} paused={paused} pausedMs={pausedMs} pausedAt={pausedAt} />
                 </span>
+              ) : null}
+              {onOpenReader ? (
+                <DockAction label={readerStrings.openTranscriptName} onClick={() => onOpenReader('transcript')}>
+                  <ScrollText size={16} strokeWidth={1.9} />
+                </DockAction>
               ) : null}
               {onTogglePause ? (
                 <DockAction label={paused ? 'Resume meeting' : 'Pause meeting'} onClick={onTogglePause}>
@@ -440,6 +521,17 @@ export function RightEdgeSidecar({
               {pendingCancelStatus === 'cancelled' ? <p>The pending action was cancelled.</p> : null}
               {pendingCancelStatus === 'unavailable' ? <p>That pending action is no longer available.</p> : null}
             </section>
+          ) : null}
+          {onOpenReader && detailsAvailable ? (
+            <button
+              type="button"
+              aria-label={readerStrings.openDetailsName}
+              className="right-edge-sidecar__history no-drag focus-ring"
+              data-re-open-reader="details"
+              onClick={() => onOpenReader('details')}
+            >
+              {readerStrings.openDetails}
+            </button>
           ) : null}
 
           <div className="right-edge-sidecar__composer">

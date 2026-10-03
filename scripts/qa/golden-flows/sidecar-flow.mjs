@@ -87,6 +87,12 @@ export function createSidecarFlow(ctx) {
       throw new Error(`Long sidecar response escaped its reading surface: ${JSON.stringify({ layout, horizontalOverflow, composerAnchored })}`)
     }
     ok('long sidecar answer wraps prose and tables while the composer remains anchored')
+    // RE-L05 (M2-0202): the island holds a one-line summary; the code block and the table mount only in the Reader.
+    if (layout.code.length > 0 || layout.table.length > 0) {
+      throw new Error(`The right-edge island mounted the full answer: ${JSON.stringify({ code: layout.code, table: layout.table })}`)
+    }
+    await ctx.win.locator('[data-re-open-reader="answer"]').waitFor({ state: 'visible', timeout: 5_000 })
+    ok('right-edge island summarises the long answer and offers Open ↗ into the Reader')
   }
 
   return { verifyLongSidecarResponse }

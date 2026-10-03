@@ -16,6 +16,7 @@ import {
   holdRegion,
   legacyDrawerRect,
   legacyTabRect,
+  readerRect,
   resolveRightEdgeAnchor,
   restRect,
   revealCorridor,
@@ -29,8 +30,8 @@ export interface RightEdgeDisplay {
   workArea: Rect
 }
 
-/** Which right-edge window: the open legacy drawer, the Hide park (rest 'none', the band) or the Island tab. */
-export type RightEdgeWindowKind = 'open' | 'band' | 'tab'
+/** Which right-edge window: the open legacy drawer, the Reader, the Hide park (rest 'none', the band) or the Island tab. */
+export type RightEdgeWindowKind = 'open' | 'reader' | 'band' | 'tab'
 
 export interface RightEdgeAnchorDeps {
   /** The stored anchors (overlayRightEdgeAnchorByDisplay) and legacy normalized Ys (overlayRightEdgeYByDisplay). */
@@ -88,6 +89,7 @@ export function createRightEdgeAnchors(deps: RightEdgeAnchorDeps) {
   function rect(kind: RightEdgeWindowKind, display: RightEdgeDisplay): Rect {
     const a = y(display)
     if (kind === 'open') return legacyDrawerRect(display.workArea, a)
+    if (kind === 'reader') return readerRect(display.workArea)
     return kind === 'band' ? restRect('none', display.workArea, a) : legacyTabRect(display.workArea, a)
   }
 
