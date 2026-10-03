@@ -28,6 +28,11 @@ export const DEFAULT_TEST_FILE = 'scripts/qa/uc-registry.test.ts'
 const UC_ID_RE = /^UC-\d{3}$/
 const TICKET_RE = /^M2-\d{4}$/
 const LEAD_ACTION_RE = /^LEAD_ACTION: \S/
+const here = dirname(fileURLToPath(import.meta.url))
+
+export function loadRegistry(path) {
+  return normalizeRegistry(JSON.parse(readFileSync(resolve(path ?? join(here, 'uc-registry.json')), 'utf8')))
+}
 
 const isPlainObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value)
 export const rowTestId = (id) => `${id} registry row is mapped`
@@ -198,8 +203,7 @@ function main() {
       out: { type: 'string' }
     }
   })
-  const here = dirname(fileURLToPath(import.meta.url))
-  const registry = normalizeRegistry(JSON.parse(readFileSync(resolve(values.registry ?? join(here, 'uc-registry.json')), 'utf8')))
+  const registry = loadRegistry(values.registry)
   if (values['list-files']) {
     console.log(registryTestFiles(registry).join('\n'))
     return

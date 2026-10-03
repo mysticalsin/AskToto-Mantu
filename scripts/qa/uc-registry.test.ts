@@ -1,10 +1,11 @@
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync } from 'node:fs'
+import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   EXPECTED_IDS,
+  loadRegistry,
   normalizeRegistry,
   regressionReport,
   registryMappingProblems,
@@ -15,7 +16,7 @@ import {
   resultsFromVitest
 } from './uc-registry.mjs'
 
-const shipped = JSON.parse(readFileSync(join(__dirname, 'uc-registry.json'), 'utf8'))
+const shipped = loadRegistry()
 const shippedRows = normalizeRegistry(shipped)
 
 const mapped = (id: string, over: Record<string, unknown> = {}) => ({
