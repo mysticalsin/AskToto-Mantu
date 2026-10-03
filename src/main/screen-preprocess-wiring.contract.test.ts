@@ -47,18 +47,19 @@ describe('MQA-178 — the engine is armed at boot, not only when some other sett
 })
 
 describe('MQA-209 — arming at boot must not raise the macOS Screen Recording prompt', () => {
-  it('MQA-209 — the engine is wired with a darwin-only screen-grant gate', () => {
+  it('MQA-209 / M2-0044 — the engine is wired through the platform screen-grant gate', () => {
     // On macOS the background loop's own capture is what registers the app with TCC and raises the
     // system dialog (captureScreenshotOnce lets `not-determined` through on purpose), so the boot
-    // reconcile MQA-178 added would pop an unexplained prompt ~6s after launch. Off darwin the dep
-    // stays undefined: Windows has no queryable screen grant and its capture raises no prompt.
+    // reconcile MQA-178 added would pop an unexplained prompt ~6s after launch. On Windows the gate
+    // reads the real capture probe/outcome cache, so denied capture cannot spin in the background loop.
     const deps = sliceBetween(
       indexSrc,
       'createScreenPreprocess({',
       'function refreshScreenPreprocess'
     )
-    expect(deps).toMatch(/screenCaptureGranted:[\s\S]{0,80}process\.platform === 'darwin'/)
+    expect(deps).toContain('screenCaptureGranted: createScreenCaptureGrantGate')
     expect(deps).toContain("getMediaAccessStatus('screen') === 'granted'")
+    expect(deps).toContain('windowsScreenStatus')
   })
 
   it('MQA-209 — the "not running" copy no longer blames the window signal on macOS', () => {

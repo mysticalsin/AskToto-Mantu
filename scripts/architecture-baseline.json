@@ -44,7 +44,7 @@
     "src/main/brain/store.ts": 1190,
     "src/main/cli.ts": 1690,
     "src/main/import-jobs.ts": 1198,
-    "src/main/index.ts": 9937,
+    "src/main/index.ts": 9936,
     "src/main/store.ts": 1364,
     "src/main/transcripts.ts": 1210,
     "src/renderer/src/App.tsx": 4331,
@@ -356,7 +356,6 @@
     "src/main/index.ts": 10,
     "src/main/operator-ingest.ts": 1,
     "src/main/operator-overlay.ts": 1,
-    "src/main/screen-preprocess.ts": 1,
     "src/main/updater.ts": 1
   },
   "FF-15": {}

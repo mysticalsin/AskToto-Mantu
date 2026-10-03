@@ -36,6 +36,7 @@
  */
 import type { ForegroundInfo, ForegroundWatcher } from './foreground-watcher'
 import { createCaptureBackoff, isPermissionTypeCaptureFailure } from './capture-backoff'
+import { startScreenPreprocessRefresh, type ScreenPreprocessRefresh } from './infra/scheduler/screen-preprocess-refresh'
 
 export interface ScreenShot {
   image: string
@@ -95,13 +96,11 @@ export interface ScreenPreprocessDeps {
    *  local LLM isn't ready, OCR is the whole engine (it needs no LLM) — a null OCR result yields no
    *  description rather than falling back, since the VLM fallback itself requires the local runtime. */
   extractScreenText?: (imageB64: string) => Promise<string | null>
-  /** macOS only: is the Screen Recording (TCC) grant already in place? On darwin this engine's first
-   *  capture IS the permission request — main deliberately lets a `not-determined` status through to
-   *  desktopCapturer because that is what registers the app with TCC and makes the system show its
-   *  dialog. Since the engine is armed at boot (MQA-178), that dialog would appear unexplained seconds
-   *  after launch, which is exactly what the win32-only boot probe next to it refuses to do (MQA-209).
-   *  Part of eligibility rather than of the capture, so canRun() — what Settings renders — stays the one
-   *  truth. Undefined off darwin: there is no queryable screen grant there and a capture prompts nothing. */
+  /** Is unattended screen capture already eligible on this OS? On darwin this engine's first capture IS
+   *  the permission request, so it requires a live TCC grant. On win32 there is no queryable permission,
+   *  so main supplies the live verdict from the real capture probe/outcome cache. Part of eligibility
+   *  rather than of the capture, so canRun() — what Settings renders — stays the one truth. Undefined on
+   *  platforms that do not need a screen-capture permission dependency. */
   screenCaptureGranted?: () => boolean
   /** Which OS the capture errors come from (a darwin "Failed to get sources." is a permission failure). */
   platform?: NodeJS.Platform | string
@@ -185,7 +184,7 @@ export function createScreenPreprocess(deps: ScreenPreprocessDeps): ScreenPrepro
   let lastDescribeAt = 0
   let started = false
   let debounceTimer: NodeJS.Timeout | null = null
-  let refreshTimer: NodeJS.Timeout | null = null
+  let refreshTimer: ScreenPreprocessRefresh | null = null
   // Latched for the session once the foreground watcher proves it cannot report window changes on this
   // machine. Every invalidation this cache has (drop on focus change, refuse on window mismatch) is fed
   // by that watcher, so without it a cached description is a coin flip on the user's next alt-tab.
@@ -200,9 +199,8 @@ export function createScreenPreprocess(deps: ScreenPreprocessDeps): ScreenPrepro
   // its presence IS the "OCR available" signal — no separate platform check needed here.
   const ocrAvailable = (): boolean => !!deps.extractScreenText
 
-  // MQA-209: on macOS a capture is how the app asks for Screen Recording, so a background loop that runs
-  // before the grant exists raises the system dialog with nothing on screen that asked for it. No dep
-  // (Windows/linux) = no such gate to satisfy; the user-facing prompt belongs to onboarding.
+  // MQA-209 / M2-0044: a missing grant/probe verdict means the unattended loop is not allowed to capture.
+  // No dep (linux) = no such gate to satisfy.
   const captureAllowed = (): boolean => !deps.screenCaptureGranted || deps.screenCaptureGranted()
 
   const eligible = (): boolean =>
@@ -410,7 +408,7 @@ export function createScreenPreprocess(deps: ScreenPreprocessDeps): ScreenPrepro
       log('warn', '[screen-preprocess] no foreground-window signal — background screen context stays off')
       return
     }
-    refreshTimer = setInterval(onRefreshTick, REFRESH_INTERVAL_MS)
+    refreshTimer = startScreenPreprocessRefresh(onRefreshTick, REFRESH_INTERVAL_MS)
     log('info', '[screen-preprocess] started (on-device background screen context)')
   }
 
@@ -421,7 +419,7 @@ export function createScreenPreprocess(deps: ScreenPreprocessDeps): ScreenPrepro
       debounceTimer = null
     }
     if (refreshTimer) {
-      clearInterval(refreshTimer)
+      refreshTimer.stop()
       refreshTimer = null
     }
     if (watcher) {

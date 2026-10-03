@@ -535,6 +535,7 @@ import { listModels as listLocalModels, isDownloaded as localModelDownloaded } f
 import { ensureLocalModel, localModelDownloadState } from './llm/local-model-download'
 import { provisionLocalModel } from './local-model-provisioning'
 import { createScreenPreprocess, type ScreenPreprocess } from './screen-preprocess'
+import { createScreenCaptureGrantGate } from './screen-capture-eligibility'
 import { startForegroundWatcher } from './foreground-watcher'
 import { createStopAll } from './infra/process/stop-all'
 import { installExitPaths } from './lifecycle/exit-paths'
@@ -758,7 +759,7 @@ import {
   sweepStaleTempFiles
 } from './transcripts'
 import { meetingOpenTarget, readSavedMeeting } from './history-actions'
-import { getPlatformPermissions, probeScreenCapture, noteScreenCaptureOutcome } from './platform-perms'
+import { getPlatformPermissions, probeScreenCapture, noteScreenCaptureOutcome, windowsScreenStatus } from './platform-perms'
 import { collectVisionStream, runScreenCaptureCheck } from './screen-capture-check'
 import {
   VISION_CHECK_PROMPT,
@@ -3990,14 +3991,21 @@ async function captureScreenshotOnce(displayId: number): Promise<CapturedScreen>
   if (process.platform === 'darwin' && accessStatus !== 'granted' && accessStatus !== 'not-determined') {
     throw new Error(screenCaptureUnavailableMessage(process.platform, accessStatus))
   }
-  const sources = await getScreenSourcesWithRetry(
-    () => desktopCapturer.getSources({ types: ['screen'], thumbnailSize }),
-    isUsableScreenSource,
-    {
-      onError: (error, attempt) =>
-        mainLog.warn(`[capture] getSources failed (attempt ${attempt}): ${error instanceof Error ? error.message : String(error)}`)
-    }
-  )
+  let sources: Electron.DesktopCapturerSource[]
+  try {
+    sources = await getScreenSourcesWithRetry(
+      () => desktopCapturer.getSources({ types: ['screen'], thumbnailSize }),
+      isUsableScreenSource,
+      {
+        onError: (error, attempt) =>
+          mainLog.warn(`[capture] getSources failed (attempt ${attempt}): ${error instanceof Error ? error.message : String(error)}`)
+      }
+    )
+  } catch (e) {
+    noteScreenCaptureOutcome(false)
+    screenPerm.screenPermission().noteOutcome(false)
+    throw e
+  }
   // Match the source to the display under the cursor. With one available source it is necessarily the
   // requested display. With several, never fall back to an arbitrary one: sending another monitor to a
   // provider is worse than asking the user to retry after a display-topology change.
@@ -4240,9 +4248,7 @@ function askVisionForScreenCheck(backend: 'local' | 'api', image: string): Promi
 }
 
 // --- Background screen preprocessing (M13) ---------------------------------------------------------------
-// On-device pre-analysis of the screen on window/content change, so a "what's on my screen" ask answers from
-// a pre-computed description instead of a cold capture + image round trip. All the privacy/cost guardrails
-// live in screen-preprocess.ts; this just wires it to the app's real capture, settings, and local runtime.
+// On-device pre-analysis of the screen; screen-preprocess.ts owns the privacy/cost guardrails.
 const screenPreprocess: ScreenPreprocess = createScreenPreprocess({
   getScreenshot,
   getSettings: () => {
@@ -4268,28 +4274,19 @@ const screenPreprocess: ScreenPreprocess = createScreenPreprocess({
       onError: (message) => mainLog.warn(`[screen-preprocess] watcher: ${message}`)
     }),
   // macOS: Vision-framework OCR via the bundled metis-mac-helper — tried before the VLM caption.
-  // Windows keeps the VLM-only path (extractScreenText returns null without a helper anyway, but gating
-  // here keeps the win32 wiring visibly identical to before).
   extractScreenText: process.platform === 'darwin' ? extractScreenText : undefined,
-  // macOS: never let this background loop be the thing that asks for Screen Recording at boot.
-  // Undefined off darwin: Windows has no queryable screen grant and its capture prompts nothing.
-  screenCaptureGranted:
-    process.platform === 'darwin'
-      ? () => systemPreferences.getMediaAccessStatus('screen') === 'granted'
-      : undefined,
+  screenCaptureGranted: createScreenCaptureGrantGate({
+    platform: process.platform,
+    macScreenStatus: () => systemPreferences.getMediaAccessStatus('screen') === 'granted' ? 'granted' : 'unknown',
+    windowsScreenStatus
+  }),
   log: (level, message) => (level === 'warn' ? mainLog.warn(message) : mainLog.info(message)),
   audit: (event, data) => auditLog(event as Parameters<typeof auditLog>[0], data)
 })
 
 /**
  * The ONE place that reconciles background screen preprocessing with reality. Call it from every event
- * that can change canRun(): boot, a settings write, sign-in, session clear, the local-model download
- * landing, and the onboarding permission request (on macOS the Screen Recording grant is part of
- * eligibility — MQA-209). Safe to call repeatedly — it's a no-op when the running state already matches.
- *
- * Auth is not re-checked here: it is a dep of the engine's own eligibility (screen-preprocess.ts), so the
- * lifecycle and the `backgroundScreenReady` flag Settings renders read one expression instead of two that
- * drifted apart (MQA-178/MQA-179).
+ * that can change canRun(); safe to call repeatedly.
  */
 function refreshScreenPreprocess(): void {
   screenPreprocess.refresh()
@@ -9770,7 +9767,9 @@ if (!app.requestSingleInstanceLock()) {
   // Windows-only and queued post-show: on macOS this probe raises TCC and belongs in onboarding.
   if (process.platform === 'win32') {
     bootWork.run('probeScreenCapture', () => runStep('probeScreenCapture', () => {
-      void probeScreenCapture().catch(() => false)
+      void probeScreenCapture()
+        .catch(() => false)
+        .finally(refreshScreenPreprocess)
     }))
   }
   runStep('resumeScreenRepair', screenPerm.resumeScreenRepairOnBoot) // M2-0429: the boot half of a Repair

@@ -9,6 +9,7 @@ name: Windows QA
 # The capabilities suite is a content-free probe of the hosted runner (OS, hardware, UIA, SendInput, tray, hotkey,
 # audio endpoint, dxdiag, OneDrive env). It has no checkout, runs no repository code and uses no credentials.
 #   gh workflow run windows-qa.yml --ref main -f suite=hk-w -f candidate_run=<run id> -f sha256=<Setup sha256>
+#   gh workflow run windows-qa.yml --ref main -f suite=capture-gate
 #   gh workflow run windows-qa.yml --ref main -f suite=capabilities
 # The pull_request trigger on this file's own path only registers the workflow with GitHub (M2-0501): the
 # run it creates skips every job, uses no runner minutes and reaches no secret.
@@ -27,6 +28,7 @@ on:
         type: choice
         options:
           - hk-w
+          - capture-gate
           - capabilities
       candidate_run:
         description: qa-candidate.yml run id whose candidate-win artifact is measured (suite hk-w only)
@@ -55,6 +57,56 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  capture-gate:
+    name: Capture gate (Windows)
+    if: github.event_name == 'workflow_dispatch' && inputs.suite == 'capture-gate' && github.repository == 'mysticalsin/AskToto-Mantu'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - name: Prepare capture-gate evidence
+        run: New-Item -ItemType Directory -Force -Path capture-gate-output | Out-Null
+      - name: Run capture-gate behavior tests
+        env:
+          CAPTURE_GATE_EVIDENCE: capture-gate-output/capture-gate-summary.json
+        run: >
+          npx vitest run
+          src/main/screen-capture-eligibility.test.ts
+          src/main/screen-preprocess.test.ts
+          src/main/screen-capture-gate.evidence.test.ts
+          --reporter=basic
+      - name: Summarize the verdict
+        run: |
+          $path = 'capture-gate-output/capture-gate-summary.json'
+          if (!(Test-Path $path)) { throw 'capture-gate evidence file was not produced by the behavior test.' }
+          $summary = Get-Content $path -Raw | ConvertFrom-Json
+          if ($summary.deniedBackgroundShots -ne 0) {
+            throw "Denied Windows background gate still took $($summary.deniedBackgroundShots) screenshot(s)."
+          }
+          if ($summary.repeatingCaptureFailedEvents -ne 0) {
+            throw "Denied Windows background gate still emitted $($summary.repeatingCaptureFailedEvents) repeating capture.failed event(s)."
+          }
+          Get-Content capture-gate-output/capture-gate-summary.json | Add-Content $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: capture-gate-windows
+          path: capture-gate-output/
+          if-no-files-found: error
+          retention-days: 30
+
   hk-w:
     name: HK-W (Windows)
     if: github.event_name == 'workflow_dispatch' && inputs.suite == 'hk-w' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'

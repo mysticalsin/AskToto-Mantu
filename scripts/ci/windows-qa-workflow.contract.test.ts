@@ -63,10 +63,11 @@ const probeKeys = [
 ]
 
 describe('Windows QA workflow', () => {
-  it('offers the hk-w and capabilities suites and documents both dispatch commands', () => {
+  it('offers the hk-w, capture-gate, and capabilities suites and documents every dispatch command', () => {
     const suite = inputBlock('suite')
-    expect(suite).toMatch(/options:\n\s+- hk-w\n\s+- capabilities\n?$/)
+    expect(suite).toMatch(/options:\n\s+- hk-w\n\s+- capture-gate\n\s+- capabilities\n?$/)
     expect(workflow).toContain('-f suite=hk-w -f candidate_run=<run id> -f sha256=<Setup sha256>')
+    expect(workflow).toContain('-f suite=capture-gate')
     expect(workflow).toContain('-f suite=capabilities')
   })
 
