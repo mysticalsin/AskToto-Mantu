@@ -19,14 +19,26 @@ const DENY_NON_LOOPBACK = resolve(REPO_ROOT, 'scripts', 'hermetic', 'deny-non-lo
 // A throwaway value that only exists for this local Worker; it is not a credential for anything.
 const LOCAL_INGEST_SECRET = 'local-contract-lane-secret'
 
-function freePort(): Promise<number> {
-  return new Promise((resolvePort, reject) => {
-    const server = createServer()
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address() as { port: number }
-      server.close(() => resolvePort(port))
-    })
+function reservePorts(count: number): Promise<number[]> {
+  return new Promise((resolvePorts, reject) => {
+    const servers = Array.from({ length: count }, () => createServer())
+    let listening = 0
+    let closed = 0
+    for (const server of servers) {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', () => {
+        listening += 1
+        if (listening === count) {
+          const ports = servers.map((reserved) => (reserved.address() as { port: number }).port)
+          for (const reserved of servers) {
+            reserved.close(() => {
+              closed += 1
+              if (closed === count) resolvePorts(ports)
+            })
+          }
+        }
+      })
+    }
   })
 }
 
@@ -66,7 +78,7 @@ describe.skipIf(process.platform === 'win32')('local staging contract lane (no C
     expect(migrate.stderr, migrate.stdout).not.toContain('HERMETIC_NETWORK_DENIED')
     expect(migrate.status, `${migrate.stdout}\n${migrate.stderr}`).toBe(0)
 
-    const port = await freePort()
+    const [port, inspectorPort] = await reservePorts(2)
     base = `http://127.0.0.1:${port}`
     dev = spawn(
       process.execPath,
@@ -81,7 +93,7 @@ describe.skipIf(process.platform === 'win32')('local staging contract lane (no C
         '--port',
         String(port),
         '--inspector-port',
-        '0',
+        String(inspectorPort),
         '--persist-to',
         state,
         '--var',

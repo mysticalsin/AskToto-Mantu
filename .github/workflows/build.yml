@@ -88,6 +88,8 @@ jobs:
         if: runner.os == 'Linux'
         run: npm run check:architecture
       - run: npm run build
+      - name: Preload output is standalone
+        run: npm run check:preload-output
       - name: QA fault-hook deterministic repeat
         shell: bash
         run: |

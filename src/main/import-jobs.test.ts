@@ -68,7 +68,7 @@ it('MQA-309 both decoder implementations replay PCM for VAD window checkpoints',
   const index = readFileSync(join(__dirname, 'index.ts'), 'utf8')
   expect(index).toContain('const skipThrough = decodeSkipThrough(job)')
   expect(index).toContain('startFfmpegDecode(ffmpeg, job.sourcePath, skipThrough,')
-  expect(index).toContain("'import-decoder:source-start', { jobId: job.jobId, skipThrough }")
+  expect(index).toContain('active.webContents.send(IPC.importDecoderSourceStart, { jobId: job.jobId, skipThrough })')
 })
 
 // --- MQA-235 vad-v2 PCM fixtures ------------------------------------------------------------------------
