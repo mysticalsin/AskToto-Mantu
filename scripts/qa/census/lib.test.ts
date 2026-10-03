@@ -675,6 +675,16 @@ warm TTFT: 2000 ms`)
         `${header}[prove-local-ttft] healthy on 127.0.0.1:5 after 23900ms\n[prove-local-ttft] prewarm (cold prefill): 9100 ms (prompt_n=4, cache_n=0)\n[prove-local-ttft] FAIL — warm TTFT 2000ms exceeds the 1500ms budget.\n`
       )
     ).toEqual({ outcome: 'FAIL', healthMs: 23900, prewarmColdPrefillMs: 9100 })
+    expect(
+      parseProveLocalTtftOutcome(
+        `${header}[prove-local-ttft] FAIL — warm suggest produced no first token within 180000 ms.\n`
+      )
+    ).toEqual({ outcome: 'FAIL', reason: 'suggest-timeout', suggestTimeoutMs: 180000 })
+    expect(
+      parseProveLocalTtftOutcome(
+        `${header}warm TTFT: 1420 ms\n[prove-local-ttft] FAIL — warm suggest stream timed out after 180000 ms after first token; preserving measured TTFT.\n`
+      )
+    ).toEqual({ outcome: 'FAIL', reason: 'suggest-timeout', suggestTimeoutMs: 180000, warmTtftMs: 1420 })
     expect(parseProveLocalTtftOutcome(`${header}[prove-local-ttft] prewarm timeout: 240000 ms\n`)).toEqual({
       outcome: 'INCOMPLETE'
     })
