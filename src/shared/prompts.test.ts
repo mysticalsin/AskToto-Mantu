@@ -9,6 +9,7 @@ import {
   retargetForTypedAsk,
   ASSIST_PROMPT,
   buildNoDecisionPrompt,
+  buildNoDecisionPromptForTranscript,
   COLD_CALL_COACHING_PROMPT,
   BOOK_MEETING_PROMPT
 } from './prompts'
@@ -165,6 +166,14 @@ describe('DEFAULT_MODE_PROMPTS', () => {
     expect(honk).toContain('SAY THIS:')
     expect(honk).toContain('x'.repeat(4000))
     expect(honk).not.toContain('x'.repeat(4001))
+  })
+
+  it('honk has a transcript-free variant for main-side transcript wrapping', () => {
+    const honk = buildNoDecisionPromptForTranscript()
+    expect(honk).toContain('NUDGE:')
+    expect(honk).toContain('SAY THIS:')
+    expect(honk).toContain('live transcript')
+    expect(honk).not.toContain('"""')
   })
 })
 

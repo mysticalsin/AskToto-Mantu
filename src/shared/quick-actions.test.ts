@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildFactCheckClaimPrompt,
+  buildFactCheckTranscriptPrompt,
   buildSpotlightRefPrompt,
+  buildWhatNextContextPrompt,
   buildWhatNextPrompt,
+  SPOTLIGHT_REF_TRANSCRIPT_PROMPT,
   chooseQuickActionRoute,
   dustAgentUnavailableMessage,
   quickActionUnavailableMessage,
@@ -69,6 +72,13 @@ describe('quick action request planning', () => {
     expect(prompt).not.toContain('undefined')
   })
 
+  it('fact-check transcript prompts do not embed placeholder claims', () => {
+    const prompt = buildFactCheckTranscriptPrompt()
+    expect(prompt).toContain('live conversation context')
+    expect(prompt).not.toContain('the claim in the transcript context')
+    expect(prompt).not.toContain('Claim: "')
+  })
+
   it('does not pretend whitespace transcript is usable context', () => {
     expect(transcriptHasContent('  \n  ')).toBe(false)
     expect(transcriptHasContent('THEM: Need an answer?')).toBe(true)
@@ -79,6 +89,12 @@ describe('quick action request planning', () => {
     expect(buildWhatNextPrompt('', 'screen')).not.toContain('"""\n\n"""')
   })
 
+  it('typed what-next context wraps real input, not placeholder transcript text', () => {
+    const prompt = buildWhatNextContextPrompt('We need to close the renewal.')
+    expect(prompt).toContain('We need to close the renewal.')
+    expect(prompt).not.toContain('this live conversation')
+  })
+
   it('spotlight ref prefers typed input over transcript, and asks for references either way', () => {
     const typed = buildSpotlightRefPrompt('THEM: we need SOC2', 'Fintech onboarding use case')
     expect(typed).toContain('Fintech onboarding use case')
@@ -87,6 +103,7 @@ describe('quick action request planning', () => {
 
     const fromTranscript = buildSpotlightRefPrompt('THEM: we need SOC2', '')
     expect(fromTranscript).toContain('THEM: we need SOC2')
+    expect(SPOTLIGHT_REF_TRANSCRIPT_PROMPT).not.toContain('below')
   })
 
   it('spotlight ref unavailable message asks to Set up Dust / install the CLI, not reconnect', () => {

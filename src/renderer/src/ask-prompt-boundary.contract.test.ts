@@ -30,4 +30,16 @@ describe('ask prompt trust boundary', () => {
     })
     expect(offenders).toEqual([])
   })
+
+  it('keeps ask prompt instruction literals out of production renderer code', () => {
+    const promptPropertyLiteral =
+      /\bprompt\s*:\s*(["'`])(?:Based on|Fact-check|Give me|Given this context|Help me|Explain|Summarize|What is|You are|Read the live transcript)[\s\S]*?\1/
+    const askScreenLiteral =
+      /\baskScreen\s*\(\s*(["'`])(?:Based on|Fact-check|Give me|Help me|Explain|Summarize|What is)[\s\S]*?\1/
+    const offenders = productionFiles(root).flatMap((path) => {
+      const source = readFileSync(path, 'utf8')
+      return promptPropertyLiteral.test(source) || askScreenLiteral.test(source) ? [relative(root, path)] : []
+    })
+    expect(offenders).toEqual([])
+  })
 })

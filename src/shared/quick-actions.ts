@@ -16,6 +16,17 @@ export interface QuickActionRouteInput {
 
 const VERDICT_FORMAT = 'VERDICT: <TRUE|FALSE|MISLEADING|UNVERIFIABLE>'
 
+export const SCREEN_HELP_PROMPT = 'Help me with what is on my screen.'
+export const SCREEN_EXPLAIN_PROMPT = 'Explain what is on my screen in simple terms.'
+export const SCREEN_SUMMARIZE_PROMPT = 'Summarize what is on my screen.'
+export const MEETING_SUMMARY_REPLAY_PROMPT = 'Summarize this meeting.'
+export const CONVERSATION_SUMMARY_REPLAY_PROMPT = 'Summarize the conversation so far.'
+export const TYPED_WHAT_NEXT_PROMPT =
+  'Based on this live conversation, what should I say NEXT to move it forward? Give me the exact words to say, concise and first person.'
+export const TYPED_WHAT_NEXT_CONTEXT_PROMPT = 'Given this context, give me the exact next words to say:'
+export const SPOTLIGHT_REF_TRANSCRIPT_PROMPT =
+  'Based on the use case being discussed, search our references and tell me what relevant sales references or case studies we have, and call out the gaps. Be specific.'
+
 export function transcriptHasContent(transcript: string): boolean {
   return /\S/.test(transcript)
 }
@@ -33,6 +44,14 @@ export function buildFactCheckClaimPrompt(claim: string): string {
     'then 2-4 short bullet points (each ≤15 words) explaining why; if it is false or misleading, include the correct fact. Be fast and precise.\n' +
     `${EPISTEMIC_HUMILITY_LINE}\n\n` +
     `Claim: "${clean}"`
+  )
+}
+
+export function buildFactCheckTranscriptPrompt(): string {
+  return (
+    `Fact-check the most checkable claim in the live conversation context. Respond in EXACTLY this format and nothing else:\n${VERDICT_FORMAT}\n` +
+    'then 2-4 short bullet points (each ≤15 words) explaining why; if it is false or misleading, include the correct fact. Be fast and precise.\n' +
+    EPISTEMIC_HUMILITY_LINE
   )
 }
 
@@ -55,11 +74,15 @@ export function buildWhatNextPrompt(transcript: string, source: 'transcript' | '
   }
   const tx = transcript.trim()
   return (
-    'Based on this live conversation, what should I say NEXT to move it forward? Give me the exact words to say, concise and first person.\n\n' +
+    TYPED_WHAT_NEXT_PROMPT + '\n\n' +
     'Transcript (THEM = the other person, YOU = me):\n"""\n' +
     tx.slice(-3000) +
     '\n"""'
   )
+}
+
+export function buildWhatNextContextPrompt(input: string): string {
+  return `${TYPED_WHAT_NEXT_CONTEXT_PROMPT}\n"""\n${input.trim()}\n"""`
 }
 
 export function buildExplainPrompt(input: string, transcript: string): { prompt: string; source: 'input' | 'transcript' | 'generic' } {
@@ -82,8 +105,7 @@ export function buildSpotlightRefPrompt(transcript: string, typed: string): stri
   const input = typed.trim()
   const context = input || tx.slice(-3000)
   return (
-    'Based on the use case being discussed below, search our references and tell me what relevant sales ' +
-    'references or case studies we have, and call out the gaps. Be specific.\n\n' +
+    SPOTLIGHT_REF_TRANSCRIPT_PROMPT.replace('being discussed', 'being discussed below') + '\n\n' +
     'Use case:\n"""\n' +
     context +
     '\n"""'

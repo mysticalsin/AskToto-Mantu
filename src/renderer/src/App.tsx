@@ -106,7 +106,7 @@ import { HOTKEY_ACTIONS } from '@shared/ipc'
 import { useTapControl } from './lib/tap/tap-control'
 import type { TapProfile } from './lib/tap/classify'
 import { PROVIDERS, isDustReady, isSpotlightRefReady, providerBaseUrl, requiresUserBaseUrl } from '@shared/providers'
-import { ASSIST_PROMPT, buildNoDecisionPrompt, EMAIL_RECAP_PROMPT, COLD_CALL_COACHING_PROMPT, BOOK_MEETING_PROMPT } from '@shared/prompts'
+import { ASSIST_PROMPT, buildNoDecisionPromptForTranscript, EMAIL_RECAP_PROMPT, COLD_CALL_COACHING_PROMPT, BOOK_MEETING_PROMPT } from '@shared/prompts'
 import { isScreenCapturePermissionError } from '@shared/screen-capture'
 import { detectNoDecisionEnding } from '@shared/wrapup'
 import { transcriptStateKey } from '@shared/hash'
@@ -118,8 +118,17 @@ import {
 import {
   FACT_CHECK_SCREEN_PROMPT,
   LOCAL_SCREEN_SUMMARY_PROMPT,
+  CONVERSATION_SUMMARY_REPLAY_PROMPT,
+  MEETING_SUMMARY_REPLAY_PROMPT,
+  SCREEN_EXPLAIN_PROMPT,
+  SCREEN_HELP_PROMPT,
+  SCREEN_SUMMARIZE_PROMPT,
+  SPOTLIGHT_REF_TRANSCRIPT_PROMPT,
+  TYPED_WHAT_NEXT_PROMPT,
   buildExplainPrompt,
   buildFactCheckClaimPrompt,
+  buildFactCheckTranscriptPrompt,
+  buildWhatNextContextPrompt,
   buildWhatNextPrompt,
   buildSpotlightRefPrompt,
   chooseQuickActionRoute,
@@ -1239,7 +1248,7 @@ export function App(): JSX.Element {
   useEffect(() => {
     if (!listen.listening || honkedRef.current) return
     // providerReady only — NOT localSuggestReady. The honk always fires suggest.run({ mode: 'answer', ... })
-    // (buildNoDecisionPrompt is deliberately answer-shaped, a free-form nudge, not a suggest-card prompt),
+    // (buildNoDecisionPromptForTranscript is deliberately answer-shaped, a free-form nudge, not a suggest-card prompt),
     // and localSuggestReady is the suggest-mode opt-in, so it says nothing about whether answer mode can
     // be served. Nor is this widened to localFallbackReady, which genuinely would serve it: the honk is
     // the one request in the app the USER never asked for, and spending an unprompted multi-second
@@ -1254,7 +1263,7 @@ export function App(): JSX.Element {
       setView('copilot')
       setCollapsed(false)
     }
-    suggest.run({ mode: 'answer', prompt: buildNoDecisionPrompt('the conversation so far'), transcript: listen.text() })
+    suggest.run({ mode: 'answer', prompt: buildNoDecisionPromptForTranscript(), transcript: listen.text() })
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fire on new transcript lines only
   }, [listen.lines])
 
@@ -1403,7 +1412,7 @@ export function App(): JSX.Element {
                 label: opts?.label,
                 kind: opts?.kind,
                 history: opts?.history,
-                transcript: opts?.transcript ?? listen.text(), // fuse recent spoken context alongside the screen
+                // Main's cached screenContext already carries the recent audio tail for this path.
                 wantsScreenContext: true
               })
               if (id && opts?.record) pendingUserRef.current = { id, q: opts.record }
@@ -1462,7 +1471,8 @@ export function App(): JSX.Element {
         // The fallback never saw a screen — a screen-asserting label ("Viewed screen") would contradict
         // the banner above and claim a capture that didn't happen.
         const fallbackLabel = opts?.label && /screen/i.test(opts.label) ? undefined : opts?.label
-        const id = ask.run({ mode: 'answer',
+        const id = ask.run({
+          mode: 'answer',
           prompt,
           label: fallbackLabel,
           kind: opts?.kind,
@@ -1581,9 +1591,9 @@ export function App(): JSX.Element {
       if (!q) {
         // Blank Enter always means "look at my screen right now" — a deliberate fresh look, regardless
         // of whether an answer is already showing.
-        void askScreen('Help me with what is on my screen.', {
+        void askScreen(SCREEN_HELP_PROMPT, {
           history: historyRef.current,
-          record: 'Help me with what is on my screen.'
+          record: SCREEN_HELP_PROMPT
         })
         // askScreen no-ops (returns null) when a prior capture is still in flight — without this return,
         // the unconditional setInput('') below would still fire and silently drop whatever the user just
@@ -1661,7 +1671,7 @@ export function App(): JSX.Element {
         mode: 'answer',
         kind: 'factcheck',
         label: c || 'the conversation so far',
-        prompt: buildFactCheckClaimPrompt(claim || 'the claim in the transcript context'),
+        prompt: claim ? buildFactCheckClaimPrompt(claim) : buildFactCheckTranscriptPrompt(),
         transcript: context || transcript
       })
       setInput('')
@@ -1687,7 +1697,7 @@ export function App(): JSX.Element {
       mode: 'answer' as const,
       kind: 'factcheck' as const,
       label: c || 'the conversation so far',
-      prompt: buildFactCheckClaimPrompt('the claim in the transcript context'),
+      prompt: buildFactCheckTranscriptPrompt(),
       transcript: c,
       history: historyRef.current
     }
@@ -1889,9 +1899,7 @@ export function App(): JSX.Element {
       suggest.run({ mode: 'suggest', transcript, history: copilotHistoryRef.current })
       return
     }
-    const prompt = typed
-      ? `Given this context, give me the exact next words to say:\n"""\n${typed}\n"""`
-      : 'Based on this live conversation, what should I say NEXT to move it forward? Give me the exact words to say, concise and first person.'
+    const prompt = typed ? buildWhatNextContextPrompt(typed) : TYPED_WHAT_NEXT_PROMPT
     const id = ask.run({ mode: 'answer', prompt, transcript: typed ? undefined : transcript, history: historyRef.current })
     pendingUserRef.current = { id, q: typed || prompt } // record into memory so a follow-up keeps continuity
     setInput('')
@@ -1935,7 +1943,7 @@ export function App(): JSX.Element {
       const transcript = listen.text()
       const prompt = typed
         ? buildSpotlightRefPrompt('', typed)
-        : 'Based on the use case being discussed, search our references and tell me what relevant sales references or case studies we have, and call out the gaps. Be specific.'
+        : SPOTLIGHT_REF_TRANSCRIPT_PROMPT
       ask.run({
         mode: 'answer',
         prompt,
@@ -2078,7 +2086,7 @@ export function App(): JSX.Element {
   const capture = useCallback(async () => {
     const q = input.trim()
     // Screen-ask from the Capture button carries memory + records the turn, same as a typed screen-ask.
-    const qScreen = q || 'Help me with what is on my screen.'
+    const qScreen = q || SCREEN_HELP_PROMPT
     const ok = await askScreen(qScreen, { history: historyRef.current, record: qScreen })
     if (ok) setInput('')
   }, [askScreen, input])
@@ -2271,7 +2279,7 @@ export function App(): JSX.Element {
       // Inert server-side for mode:'recap'/'summary' (the transcript alone builds the request) — but keeps
       // retryAnswer's replay-gate (ask.answer?.prompt) truthy so "Retry summary" works after a failure,
       // same reasoning as the Summarize quick action above.
-      prompt: 'Summarize this meeting.',
+      prompt: MEETING_SUMMARY_REPLAY_PROMPT,
       ...(dustReady && !preferLocalSummary ? { providerOverride: 'dust' as const } : {})
     })
     liveRecapTargetRef.current = {
@@ -2776,7 +2784,7 @@ export function App(): JSX.Element {
       const runId = recapGen.run({
         mode: preferLocalSummary ? 'summary' : 'recap',
         transcript,
-        prompt: 'Summarize this meeting.',
+        prompt: MEETING_SUMMARY_REPLAY_PROMPT,
         ...(dustReady && !preferLocalSummary ? { providerOverride: 'dust' as const } : {})
       })
       recapGenRunIdRef.current = runId
@@ -3163,11 +3171,11 @@ export function App(): JSX.Element {
         if (route.transport === 'screen') {
           setView('answer')
           setCollapsed(false)
-          void askScreen('Explain what is on my screen in simple terms.', {
+          void askScreen(SCREEN_EXPLAIN_PROMPT, {
             label: 'Explaining your screen',
             history: historyRef.current,
-            transcript,
-            record: typed || 'Explain what is on my screen in simple terms.'
+            transcript: settings?.localVisionReady ? undefined : transcript,
+            record: typed || SCREEN_EXPLAIN_PROMPT
           })
           return
         }
@@ -3216,10 +3224,12 @@ export function App(): JSX.Element {
           // The bundled local model handles this image directly. Keep its prompt on the base tier and
           // do not append transcript text that could escalate the request to a cloud-only tier. Cloud
           // providers retain the richer transcript context they had before.
-          const screenPrompt = settings?.localVisionReady
-            ? LOCAL_SCREEN_SUMMARY_PROMPT
-            : 'Summarize what is on my screen.'
-          void askScreen(screenPrompt, { label: 'Viewed screen', history: historyRef.current, transcript })
+          const screenPrompt = settings?.localVisionReady ? LOCAL_SCREEN_SUMMARY_PROMPT : SCREEN_SUMMARIZE_PROMPT
+          void askScreen(screenPrompt, {
+            label: 'Viewed screen',
+            history: historyRef.current,
+            transcript: settings?.localVisionReady ? undefined : transcript
+          })
           return
         }
         // Cascade into Dust whenever it's configured, regardless of the active provider — same reasoning
@@ -3236,10 +3246,10 @@ export function App(): JSX.Element {
           // goDeeper()/retryAnswer() gate their replay on ask.answer?.prompt being truthy — without it "Go
           // deeper"/"Retry" are dead buttons on every Summarize answer. Also doubles as the clean label
           // Answer.tsx falls back to when no explicit `label` is set.
-          prompt: 'Summarize the conversation so far.',
+          prompt: CONVERSATION_SUMMARY_REPLAY_PROMPT,
           ...(dustReady && !settings?.localSummaryReady ? { providerOverride: 'dust' as const } : {})
         })
-        pendingUserRef.current = { id, q: 'Summarize the conversation so far.' } // record for follow-up continuity
+        pendingUserRef.current = { id, q: CONVERSATION_SUMMARY_REPLAY_PROMPT } // record for follow-up continuity
       }
     },
     [
