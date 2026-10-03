@@ -7,11 +7,19 @@
  * Run: `npm run check:operator-bundle`
  */
 import { realpathSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { dirname, extname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { createRequire } from 'node:module'
 import { build } from 'esbuild'
 
 const OPERATOR_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
+const execFileAsync = promisify(execFile)
+const require = createRequire(import.meta.url)
+const RUNTIME_WORKER_EXTENSIONS = new Set(['.js', '.mjs'])
 
 /** Bundle `entry` (a path under operator/) to a string. Node built-ins stay external: the Worker runtime
  *  provides them and they are irrelevant to what this gate looks for. */
@@ -35,12 +43,55 @@ export function containsMemoryStore(bundleText) {
   return /\bmemoryStore\b/.test(bundleText)
 }
 
+/** True when the Worker bundle carries the QA dashboard fixture. */
+export function containsQaDashboardFixture(bundleText) {
+  return /\bfixtureRows\b|\bfixtureDashboard\b|\bFIXTURE_NOW\b/.test(bundleText)
+}
+
+export function isRuntimeWorkerArtifact(fileName) {
+  return RUNTIME_WORKER_EXTENSIONS.has(extname(fileName))
+}
+
+async function readRuntimeWorkerFiles(dir) {
+  const entries = await readdir(dir, { withFileTypes: true })
+  const chunks = []
+  for (const entry of entries) {
+    const path = join(dir, entry.name)
+    if (entry.isDirectory()) {
+      chunks.push(await readRuntimeWorkerFiles(path))
+    } else if (entry.isFile() && isRuntimeWorkerArtifact(entry.name)) {
+      chunks.push(await readFile(path, 'utf8'))
+    }
+  }
+  return chunks.join('\n')
+}
+
+/** Bundle through Wrangler's dry-run deploy path and return the emitted Worker text. */
+export async function wranglerDryRunOutput() {
+  const outdir = await mkdtemp(join(tmpdir(), 'metis-operator-worker-'))
+  try {
+    const wrangler = join(dirname(require.resolve('wrangler/package.json')), 'bin', 'wrangler.js')
+    await execFileAsync(process.execPath, [wrangler, 'deploy', '--dry-run', '--outdir', outdir, '--config', 'wrangler.jsonc'], {
+      cwd: OPERATOR_ROOT,
+      env: { ...process.env, NO_COLOR: '1' },
+      maxBuffer: 10 * 1024 * 1024
+    })
+    return await readRuntimeWorkerFiles(outdir)
+  } finally {
+    await rm(outdir, { recursive: true, force: true })
+  }
+}
+
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === realpathSync(process.argv[1])
 if (isMain) {
-  const text = await bundleEntry()
+  const text = await wranglerDryRunOutput()
   if (containsMemoryStore(text)) {
-    console.error('Operator Worker bundle contains memoryStore: the in-memory store must be reachable only from tests and seed/preview scripts.')
+    console.error('Wrangler Worker output contains memoryStore: the in-memory store must be reachable only from tests and seed/preview scripts.')
     process.exit(1)
   }
-  console.log('Operator Worker bundle does not contain memoryStore.')
+  if (containsQaDashboardFixture(text)) {
+    console.error('Wrangler Worker output contains the QA dashboard fixture: fixtures must stay in operator/test/ only.')
+    process.exit(1)
+  }
+  console.log('Wrangler Worker output contains neither memoryStore nor the QA dashboard fixture.')
 }

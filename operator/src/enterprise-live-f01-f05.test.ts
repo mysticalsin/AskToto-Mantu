@@ -5,7 +5,7 @@ import {
   resolvePortalCloudflareModel
 } from '../../src/shared/ask-routing'
 import { parseUseBody, screenshotGatewayHeaders } from './use'
-import { fixtureDashboard } from './render/fixture'
+import { fixtureDashboard } from '../test/fixtures/dashboard'
 import { renderRealtime } from './render/pages/realtime'
 
 describe('enterprise-live F01 portal tier', () => {

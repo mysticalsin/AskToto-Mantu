@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { FIXTURE_NOW, fixtureDashboard, fixtureRows } from './fixture'
+import { FIXTURE_NOW, fixtureDashboard, fixtureRows } from '../../test/fixtures/dashboard'
 
 describe('QA fixture', () => {
   it('is deterministic across calls', () => {

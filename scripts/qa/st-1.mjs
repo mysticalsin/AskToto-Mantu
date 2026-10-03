@@ -106,10 +106,10 @@ import {
   runPurpose,
   shouldProbeHistory,
   timedCallsExpression,
-  windowConstructionGate,
   withTimeout,
   writeJsonToStdout
 } from './lib/st-1-core.mjs'
+import { gateWindow } from './lib/st-1-window-gate.mjs'
 
 const FIXTURE_KINDS = ['fifo', 'dataless', 'synthetic-dataless', 'none']
 const MIN_FIFO_COUNT = 3
@@ -133,10 +133,8 @@ const PROFILE_STOP_TIMEOUT_MS = 30_000
 const HISTORY_FROM_MS = 20_000
 const HISTORY_EVERY_MS = 5_000
 const HISTORY_TIMEOUT_MS = 10_000
-/** Delayed History mode samples through the idle window, then retries History opens for this long. */
 const HISTORY_AFTER_IDLE_RETRY_MS = 60_000
-/** Each History call's own bound in the renderer: twice the 2 s budget, and the open plus the search still
- *  settle within HISTORY_TIMEOUT_MS, so every call of a probe keeps its own time even when one of them hangs. */
+/** Each History call's own bound in the renderer; the whole probe still settles within HISTORY_TIMEOUT_MS. */
 const HISTORY_CALL_BOUND_MS = 4_000
 const MAIN_LOG_QUERY_TIMEOUT_MS = 10_000
 /** What the History row searches for: any query exercises the whole search path over every row. */
@@ -758,37 +756,6 @@ function cleanup({ kind, root, profile, unzipDir, witnessFile }) {
   }
   if (profile) rmSync(profile, { recursive: true, force: true })
   if (unzipDir) rmSync(unzipDir, { recursive: true, force: true })
-}
-
-/** Every report one folder below `dir` (`<dir>/<run>/<run>.json`), each named by its path relative to `dir`. A
- *  file that does not parse is skipped; the gate then finds its stages missing. */
-function readWindowReports(dir) {
-  const reports = []
-  for (const run of readdirSync(dir, { withFileTypes: true })) {
-    if (!run.isDirectory()) continue
-    for (const file of readdirSync(join(dir, run.name))) {
-      if (!file.endsWith('.json')) continue
-      try {
-        reports.push({ name: join(run.name, file), report: JSON.parse(readFileSync(join(dir, run.name, file), 'utf8')) })
-      } catch {
-        /* not a report */
-      }
-    }
-  }
-  return reports
-}
-
-/** The window-construction gate over a report directory: 0 when it passes, 1 when it fails. */
-function gateWindow(dir, out) {
-  const gate = { harness: 'ST-1', gate: 'window-construction', ...windowConstructionGate(existsSync(dir) ? readWindowReports(dir) : []) }
-  if (out) {
-    mkdirSync(dirname(out), { recursive: true })
-    writeFileSync(out, `${JSON.stringify(gate, null, 2)}\n`)
-  }
-  console.log(JSON.stringify(gate, null, 2))
-  console.error(`[st-1] window gate skipped ${gate.skippedWarmups} warm-up launch${gate.skippedWarmups === 1 ? '' : 'es'}`)
-  for (const failure of gate.failures) console.error(`[st-1] window gate FAIL — ${failure}`)
-  return gate.pass ? 0 : 1
 }
 
 async function main() {

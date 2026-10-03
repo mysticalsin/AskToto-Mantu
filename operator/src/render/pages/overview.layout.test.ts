@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { chromium, type Browser } from 'playwright'
-import { fixtureDashboard } from '../fixture'
+import { fixtureDashboard } from '../../../test/fixtures/dashboard'
 import { SPA_CSS } from '../../spa/manifest'
 import { renderOverview } from './overview'
 import { renderRealtime } from './realtime'
