@@ -352,20 +352,18 @@ describe('onFatal — async relaunch dialog', () => {
    *  for each test. `persistCrash` is injected rather than lifted: this test is about the async-dialog
    *  half of the ticket, and persistCrash's own redact/log/write behaviour has its own coverage. */
   function actualOnFatal(globals: Record<string, unknown>): (kind: 'uncaughtException' | 'unhandledRejection', err: unknown) => void {
-    const dialog = globals.dialog as { showMessageBox: (win: unknown, options: unknown) => Promise<{ response: number }> }
-    const showFatalDialog = async (): Promise<void> => {
-      const res = await dialog.showMessageBox(globals.win, { buttons: ['Relaunch Métis', 'Continue'] })
-      if (res.response === 0) (globals.exitAndRelaunch as () => void)()
-    }
+    const showFatalDialogDecl = topLevelFunctionDeclaration('showFatalDialog')
+    expect(showFatalDialogDecl, 'Actual source function showFatalDialog was not found').toBeDefined()
     const factoryDecl = lifecycleSource.statements.find(
       (node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'createProcessFatalLifecycle'
     )
     expect(factoryDecl, 'Actual source function createProcessFatalLifecycle was not found').toBeDefined()
-    if (!factoryDecl) return () => undefined
+    if (!factoryDecl || !showFatalDialogDecl) return () => undefined
     return runSource(
-      `${factoryDecl.getText(lifecycleSource).replace(/^export function/, 'function')}
+      `${showFatalDialogDecl.getText(indexSource)}
+${factoryDecl.getText(lifecycleSource).replace(/^export function/, 'function')}
 globalThis.result = createProcessFatalLifecycle({ isOrphanScreenSourcesRejection, persistCrash, showFatalDialog, log: mainLog }).onFatal;`,
-      { ...globals, showFatalDialog, isOrphanScreenSourcesRejection }
+      { ...globals, isOrphanScreenSourcesRejection }
     )
   }
 
