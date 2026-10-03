@@ -6,9 +6,16 @@ import { OPERATOR_LICENSE_MAX } from './operator-license'
 import { RECAP_STATUSES, recapStatusValidationError, type RecapStatus } from './recap-status'
 import { RENDERER_VIEWS } from './renderer-view'
 import { DEFAULT_PERMISSION_STATE, PermissionStateSchema } from './screen-permission'
+import { SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION } from './contracts/settings/server-authoritative'
+import type { ServerAuthoritativeSettingsKey } from './contracts/settings/server-authoritative'
 export { IPC } from './contracts/channels'
 export type { PermissionStatus, PlatformPermissions, ScreenCaptureCheckResult } from './screen-permission'
 export { ScreenCaptureCheckPassSchema, ScreenCaptureCheckPayloadSchema, ScreenCaptureCheckResultSchema } from './screen-permission'
+export {
+  SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION,
+  SERVER_AUTHORITATIVE_SETTINGS_KEYS
+} from './contracts/settings/server-authoritative'
+export type { ServerAuthoritativeSettingsKey } from './contracts/settings/server-authoritative'
 
 /** The existing persisted meeting start is also its live audio owner. Never coerce or create a clock. */
 export const LiveMeetingStartedAtSchema = z.number().int().positive().max(8.64e15)
@@ -1006,16 +1013,16 @@ export const BaseSettingsSchema = z.object({
   // is dev-only, so the user must supply wherever they actually deploy/run their backend. Replaces the
   // old single-connection bidstackEndpointUrl/bidstackConnected/bidstackTools fields — see
   // migrateLegacyBidstackConnection in main/store.ts for how an existing user's data carries forward.
-  mcpConnections: z.array(McpConnectionSchema).max(10).default([]),
+  mcpConnections: z.array(McpConnectionSchema).max(10).default([]).describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
   // ClickUp's Dynamic Client Registration (RFC 7591) client_id — public, not a secret, so it lives in
   // plain settings rather than mcpSecrets.ts. ClickUp binds each client_id to the exact redirect_uri
   // from that registration (no RFC 8252 port flexibility). Each Connect run in clickupOAuth.ts
   // registers a fresh client with this run's loopback URI and stores the new id here for token refresh;
   // a leftover portless/mismatched client_id is never reused for /authorize.
-  clickupClientId: z.string().default(''),
+  clickupClientId: z.string().default('').describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
   // Plane DCR client_id — public, like clickupClientId. The matching client_secret is encrypted in
   // mcpSecrets (`key-mcp-plane-client.bin`) because Plane's token endpoint requires client_secret_post.
-  planeClientId: z.string().default(''),
+  planeClientId: z.string().default('').describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
   // Métis Local uses a single on-device model. The preprocess is a persisted-settings migration for
   // releases that offered qwen3.5-2b; unknown ids fail validation and fall back safely in
   // main/store.ts instead of pointing llama-server at a file that can never exist.
@@ -1187,12 +1194,12 @@ export const BaseSettingsSchema = z.object({
   // LicenseGate, via the license:gate IPC channel, plus a 12h background re-validation in main/index.ts) —
   // turning this on only matters once a license server is deployed and this device has activated.
   licenseServerUrl: z.string().default(''),
-  licenseKey: z.string().default(''),
-  licenseCompanyName: z.string().default(''),
-  licenseSeatCap: z.number().default(0),
-  licenseExpiresAt: z.number().nullable().default(null),
-  licenseValid: z.boolean().default(false),
-  licenseLastValidatedAt: z.number().default(0),
+  licenseKey: z.string().default('').describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
+  licenseCompanyName: z.string().default('').describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
+  licenseSeatCap: z.number().default(0).describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
+  licenseExpiresAt: z.number().nullable().default(null).describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
+  licenseValid: z.boolean().default(false).describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
+  licenseLastValidatedAt: z.number().default(0).describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
   licenseGateEnabled: z.boolean().default(false),
   // ── Act 5 (License/trial), MQA-281/282 ──────────────────────────────────────────────────────────
   /** Compact Ed25519-signed offline lease from the most recent successful /activate or /heartbeat that
@@ -1201,14 +1208,14 @@ export const BaseSettingsSchema = z.object({
    *  the wall-clock grace exactly as it did before this existed. Server-authoritative: stripped from
    *  any renderer-supplied settings patch, same as the other license fields above (settings:set's strip
    *  list, main/index.ts) — a hostile renderer must not be able to self-issue a lease. */
-  licenseLease: z.string().default(''),
+  licenseLease: z.string().default('').describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
   /** Epoch ms of the first QUALIFYING real use — a real suggest/summary/recap result actually delivered
    *  (main/license.ts's noteQualifyingUse, called from main/index.ts's ask pipeline). null = no
    *  qualifying use yet. Deliberately NOT set on install/first launch, and never reachable from Act 2's
    *  onboarding demo (structurally IPC-free — see onboarding-demo.ts). Main-authoritative: stripped
    *  from renderer patches for the same reason as licenseLease — a plain settings patch must not be
    *  able to grant a fresh 14-day trial. */
-  trialStartedAt: z.number().nullable().default(null),
+  trialStartedAt: z.number().nullable().default(null).describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
   // Operator control plane (Cloudflare Worker `metis-operator`). Empty URL = off. Not the Fly
   // license-server and not cloudflare-proxy. Ingest secret is the HMAC shared with the Worker;
   // it is a Wrangler secret on the server and a Settings power field here. Never commit it.
@@ -1224,20 +1231,20 @@ export const BaseSettingsSchema = z.object({
   // (licenseId) and last4 are telemetry. The token authenticates HTTPS requests to the Operator in a
   // dedicated credential header; it must never appear in telemetry, renderer settings, or logs.
   // Empty token = no license activated.
-  operatorLicenseToken: z.string().max(OPERATOR_LICENSE_MAX).default(''),
+  operatorLicenseToken: z.string().max(OPERATOR_LICENSE_MAX).default('').describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
   /** Parsed from operatorLicenseToken at activation time (format-only; the Worker verifies the
    *  signature). 16 lowercase hex chars, or '' when no license is activated. */
-  operatorLicenseJti: z.string().default(''),
-  operatorLicenseLast4: z.string().default(''),
+  operatorLicenseJti: z.string().default('').describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
+  operatorLicenseLast4: z.string().default('').describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
   /** Epoch ms, read straight out of the token's own (unsigned) exp claim — informational display only;
    *  the Worker is the actual authority on whether the license is still good. */
-  operatorLicenseExpiresAt: z.number().nullable().default(null),
+  operatorLicenseExpiresAt: z.number().nullable().default(null).describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
   // ── Everything below is Worker-authoritative (PLAN.md P2.2b #2): written ONLY by operator-ingest.ts
   // after a successful heartbeat, never by a renderer settings patch (stripped in settingsSet, same
   // class as licenseValid/licenseLease above) — a compromised renderer must not be able to self-grant
   // Operator entitlements. Persisted (not just in-memory) so a cold start before the first heartbeat can
   // still honour the last known grant for the grace window (operator-entitlements.ts).
-  operatorTier: z.enum(['metis', 'metis-light']).nullable().default(null),
+  operatorTier: z.enum(['metis', 'metis-light']).nullable().default(null).describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
   operatorEntitlements: z
     .object({
       ask: z.boolean(),
@@ -1249,14 +1256,15 @@ export const BaseSettingsSchema = z.object({
       integrations: z.boolean()
     })
     .nullable()
-    .default(null),
+    .default(null)
+    .describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
   /** Monotonic; 0 = no Operator integrations delivered yet. Drives operator-integrations.ts's refetch. */
-  operatorIntegrationsVersion: z.number().default(0),
+  operatorIntegrationsVersion: z.number().default(0).describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
   /** Epoch ms of the last successful heartbeat that carried entitlements. 0 = never — grace window
    *  (operator-entitlements.ts) treats this the same as "no snapshot at all". */
-  operatorEntitlementsAt: z.number().default(0),
+  operatorEntitlementsAt: z.number().default(0).describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
   /** Main-owned Screen Recording history (M2-0429); see shared/screen-permission.ts. */
-  permissionState: PermissionStateSchema.default(DEFAULT_PERMISSION_STATE)
+  permissionState: PermissionStateSchema.default(DEFAULT_PERMISSION_STATE).describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION)
 })
 
 export const SettingsSchema = BaseSettingsSchema.refine(
@@ -1390,6 +1398,7 @@ export type SettingsPatch = Partial<
     | 'loginItemOpenAtLogin'
     | 'lastFailover'
     | 'localSpeechPack'
+    | ServerAuthoritativeSettingsKey
   >
 >
 

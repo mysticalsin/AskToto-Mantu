@@ -10,6 +10,7 @@ import {
   ScreenCaptureCheckPayloadSchema,
   ScreenCaptureCheckResultSchema,
   SettingsSchema,
+  BaseSettingsSchema,
   DEFAULT_SETTINGS,
   IPC,
   McpConnectionSchema,
@@ -31,13 +32,22 @@ import {
   HistorySettledSchema,
   HistoryTraceSchema,
   RendererCrashContextSchema,
+  SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION,
+  SERVER_AUTHORITATIVE_SETTINGS_KEYS,
   appendAsrCorrection,
   TranscriptLineSchema,
   stripProvisionalLines,
   SaveMeetingSchema,
   modeLabel
 } from './ipc'
-import type { TranscriptLine } from './ipc'
+import type { ServerAuthoritativeSettingsKey, SettingsPatch, TranscriptLine } from './ipc'
+
+type Assert<T extends true> = T
+type SettingsPatchExcludesServerAuthoritativeKeys = Assert<
+  Extract<ServerAuthoritativeSettingsKey, keyof SettingsPatch> extends never ? true : false
+>
+const settingsPatchExcludesServerAuthoritativeKeys: SettingsPatchExcludesServerAuthoritativeKeys = true
+void settingsPatchExcludesServerAuthoritativeKeys
 
 const SHARED_DIR = dirname(fileURLToPath(import.meta.url))
 const SRC_DIR = resolve(SHARED_DIR, '..')
@@ -314,6 +324,15 @@ describe('AskStart screen fast-path fields (M13)', () => {
 })
 
 describe('SettingsSchema', () => {
+  it('marks every server-authoritative settings field covered by the shared constant', () => {
+    const authoritativeFromSchema = Object.entries(BaseSettingsSchema.shape)
+      .filter(([, field]) => field.description === SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION)
+      .map(([key]) => key)
+      .sort()
+
+    expect(authoritativeFromSchema).toEqual([...SERVER_AUTHORITATIVE_SETTINGS_KEYS].sort())
+  })
+
   it('defaults lastClickedCli to null — not a secret, not a vault row', () => {
     expect(DEFAULT_SETTINGS.lastClickedCli).toBeNull()
     const { lastClickedCli: _last, ...withoutLast } = DEFAULT_SETTINGS
