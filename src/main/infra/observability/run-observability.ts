@@ -13,7 +13,7 @@
 import { performance } from 'node:perf_hooks'
 import { beginRunWatch, markAlive, markShutdownClean, type PriorShutdown } from '../../boot-sentinel'
 import type { AuditSink } from '../../logger'
-import type { BootStage } from './projection'
+import type { BootStage, BootWindowVariant } from './projection'
 import { startStallMonitor, type StallMonitor, type StallMonitorOptions } from './stall-monitor'
 import { startStallSampler, type StallSampler, type StallSamplerOptions } from './stall-sampler'
 
@@ -42,6 +42,8 @@ export interface RunObservabilityOptions {
    *  Absent or null means no sampler (no helper on this platform, or flag `diagnostics.stall_sampler`
    *  off), and then this module behaves exactly as it did before M2-0192. */
   stallWatchCommand?: string | null
+  /** Optional boot-work gate for the helper spawn; production opens it after the first show. */
+  deferStallSamplerStart?: (start: () => void) => void
   /** Test seams only — production wires the real fs-backed boot-sentinel functions and real timers. */
   deps?: {
     beginRunWatch?: typeof beginRunWatch
@@ -60,6 +62,7 @@ export interface RunObservabilityOptions {
 /** What a window stage built. */
 export interface BootStageDetail {
   transparent?: boolean
+  windowVariant?: BootWindowVariant
 }
 
 export interface RunObservability {
@@ -120,15 +123,22 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
     void doMarkAlive(opts.userData, bootId)
   }, ALIVE_INTERVAL_MS)
 
-  const stallSampler = opts.stallWatchCommand
-    ? doStartStallSampler({
+  let stopped = false
+  let stallSampler: StallSampler | undefined
+  const startStallSamplerNow = (): void => {
+    if (stopped || !opts.stallWatchCommand || stallSampler) return
+    stallSampler = doStartStallSampler({
         command: opts.stallWatchCommand,
         userData: opts.userData,
         bootId,
         aliveIntervalMs: ALIVE_INTERVAL_MS,
         audit: opts.audit
       })
-    : undefined
+  }
+  if (opts.stallWatchCommand) {
+    if (opts.deferStallSamplerStart) opts.deferStallSamplerStart(startStallSamplerNow)
+    else startStallSamplerNow()
+  }
 
   const stallMonitor = doStartStallMonitor({
     bootId,
@@ -166,7 +176,6 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
     if (pendingStages.length === 1) scheduleFlush(flushBootStages)
   }
 
-  let stopped = false
   return {
     priorShutdown: prior.prevShutdown,
     timePhase<T>(label: string, fn: () => T): T {

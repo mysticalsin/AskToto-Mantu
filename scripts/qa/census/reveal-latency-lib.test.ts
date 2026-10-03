@@ -9,7 +9,7 @@ import {
   CURSOR_WATCH_IDLE_INTERVAL_MS as THROTTLE_IDLE_INTERVAL_MS,
   CURSOR_WATCH_NEAR_PX
 } from '../../../src/main/island/idle-throttle'
-import { parkedIdleBlockedReport, stripSecretEnv, validatePointerAwayForState } from './lib.mjs'
+import { stripSecretEnv } from './lib.mjs'
 import {
   DARWIN_POINTER_DRIVER,
   WIN32_POINTER_DRIVER,
@@ -69,13 +69,13 @@ describe('reveal latency constants mirror the app (ADR-018)', () => {
 
 describe('reveal latency profile and geometry', () => {
   it('accepts only a Hide right-edge profile with onboarding done', () => {
-    expect(() => validateRevealProfile(representativeSettings('/tmp/p', 1, { overlayLayout: 'hide' }))).not.toThrow()
+    expect(() => validateRevealProfile(representativeSettings('/tmp/p', 1, { layout: 'hide' }))).not.toThrow()
     expect(() => validateRevealProfile(representativeSettings('/tmp/p', 1))).toThrow(/overlayLayout hide/)
     expect(() =>
-      validateRevealProfile({ ...representativeSettings('/tmp/p', 1, { overlayLayout: 'hide' }), overlayPlacement: 'top-center' })
+      validateRevealProfile({ ...representativeSettings('/tmp/p', 1, { layout: 'hide' }), overlayPlacement: 'top-center' })
     ).toThrow(/right-edge/)
     expect(() =>
-      validateRevealProfile({ ...representativeSettings('/tmp/p', 1, { overlayLayout: 'hide' }), onboardingDone: false })
+      validateRevealProfile({ ...representativeSettings('/tmp/p', 1, { layout: 'hide' }), onboardingDone: false })
     ).toThrow(/onboarding/)
   })
 
@@ -242,25 +242,11 @@ describe('pointer driver (ADR-018)', () => {
   })
 })
 
-describe('parked-idle pointer precondition (ADR-018)', () => {
-  it('requires a pointer-away point for parked-idle only', () => {
-    expect(() => validatePointerAwayForState('parked-idle', undefined)).toThrow(/--pointer-away/)
-    expect(() => validatePointerAwayForState('parked-idle', { x: 400, y: 400 })).not.toThrow()
-    expect(() => validatePointerAwayForState('settled-idle', undefined)).not.toThrow()
-  })
-
-  it('reports a pointer that cannot be moved as BLOCKED_EXTERNAL with no census numbers', () => {
-    const report = parkedIdleBlockedReport({ platform: 'darwin', reason: 'pointer did not move' })
-    expect(report).toEqual({
-      state: 'parked-idle',
-      platform: 'darwin',
-      status: 'BLOCKED_EXTERNAL',
-      reason: 'pointer did not move',
-      unblockStep: expect.stringContaining('--pointer-away')
-    })
-  })
-
-  it('launches measured apps without provider keys or tokens', () => {
+describe('reveal latency launch environment', () => {
+  it('launches measured apps without provider keys, tokens or QA-only switches', () => {
     expect(stripSecretEnv({ PATH: '/bin', OPENAI_API_KEY: 'x', GH_TOKEN: 'y', MY_SECRET: 'z' })).toEqual({ PATH: '/bin' })
+    expect(stripSecretEnv({ PATH: '/bin', ASKTOTO_SMOKE_REOPEN_PROBE: '1', METIS_QA_HOST_FLOOR_OVERRIDE: '1' })).toEqual({
+      PATH: '/bin'
+    })
   })
 })

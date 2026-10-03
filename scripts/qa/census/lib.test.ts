@@ -8,12 +8,15 @@ import {
   REQUIRED_TRACE_SCENARIOS,
   STATES_REQUIRING_ATTACH_PRECONDITION,
   STATES,
-  SUPPLEMENTARY_STATES,
   classifyProcess,
   collectCensus,
   missingStates,
+  normalizeWin32ResourceRows,
   oneCoreCpuPercent,
+  openNdjsonWriter,
   parseProveLocalTtftOutcome,
+  sanitizeProcessSample,
+  streamCensus,
   parseProveLocalTtftOutput,
   proveLocalTtftEvidenceFromArtifact,
   rendererScenarioProbeSource,
@@ -23,12 +26,12 @@ import {
   stateCoverageForRun,
   stateRequiresAttachPrecondition,
   summarize,
-  validateProfileForState,
   validateStatePrecondition,
   validateState,
   windowsWorkingSetEvidenceFromArtifact
 } from './lib.mjs'
-import { isMainModule, readProfileArgs, representativeSettings, writeRepresentativeProfile } from './profile.mjs'
+import { PARKED_BOUNDS, parkVerdict } from './park.mjs'
+import { isMainModule, representativeSettings, writeRepresentativeProfile } from './profile.mjs'
 
 const startedMs = Date.UTC(2026, 8, 27, 12)
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -38,12 +41,14 @@ describe('resource census state contract', () => {
     expect(STATES).toEqual([
       'cold-start',
       'settled-idle',
+      'parked-idle',
       'first-inference',
       'active-transcription',
       'post-meeting',
       'post-recovery'
     ])
     expect(missingStates(['cold-start', 'settled-idle'])).toEqual([
+      'parked-idle',
       'first-inference',
       'active-transcription',
       'post-meeting',
@@ -63,6 +68,7 @@ describe('resource census state contract', () => {
       'post-recovery'
     ])
     expect(stateRequiresAttachPrecondition('settled-idle')).toBe(false)
+    expect(stateRequiresAttachPrecondition('parked-idle')).toBe(false)
     expect(stateRequiresAttachPrecondition('first-inference')).toBe(true)
     expect(() =>
       validateStatePrecondition({
@@ -398,6 +404,148 @@ describe('resource census CPU formula', () => {
       lane: 'windows-qa'
     })
   })
+
+  it('adds parked-idle informational budget fields without failing the census', async () => {
+    let clockMs = 0
+    const report = await collectCensus({
+      state: 'parked-idle',
+      seconds: 300,
+      intervalMs: 300_000,
+      platform: 'darwin',
+      installRoot: '/Applications/Metis.app',
+      mainPid: 100,
+      productVersion: '1.9.6',
+      parkedIdle: {
+        boundsSignal: 'Browser.getWindowForTarget/getWindowBounds',
+        expectedBounds: { width: 8, height: 2 },
+        checks: [{ observedAt: new Date(0).toISOString(), bounds: { width: 8, height: 2 }, parked: true }]
+      },
+      listProcesses: () => [
+        {
+          pid: 100,
+          ppid: 1,
+          startedMs,
+          exe: '/Applications/Metis.app/Contents/MacOS/Metis',
+          role: 'Metis'
+        }
+      ],
+      sampleOwnedProcesses: () => [
+        {
+          pid: 100,
+          startedMs,
+          role: 'Metis',
+          kind: 'main',
+          rssBytes: 100,
+          physFootprintBytes: 80,
+          workingSetBytes: null,
+          cpuSeconds: clockMs / 1000
+        }
+      ],
+      now: () => clockMs,
+      sleep: async (ms: number) => {
+        clockMs += ms
+      }
+    })
+
+    expect(report.summary).toMatchObject({
+      oneCoreCpuPercent: 100,
+      budgetOneCorePercent: 1,
+      overBudget: true
+    })
+    expect((report as any).parkedIdle.summary).toEqual({
+      checks: 1,
+      parked: 1,
+      notParked: 0,
+      parkedCoverage: 1,
+      sampleSummary: { samples: 2, parked: 2, notParked: 0, parkedCoverage: 1 }
+    })
+    expect((report as any).samples.map((sample: { parked?: boolean }) => sample.parked)).toEqual([true, true])
+  })
+
+  it('checks parked-idle every 60s and at the end, then marks samples from the latest verdict', async () => {
+    let clockMs = 0
+    const checkTimes: number[] = []
+    const report = await collectCensus({
+      state: 'parked-idle',
+      seconds: 180,
+      intervalMs: 120_000,
+      platform: 'darwin',
+      installRoot: '/Applications/Metis.app',
+      mainPid: 100,
+      productVersion: '1.9.6',
+      parkedIdle: {
+        boundsSignal: 'Browser.getWindowForTarget/getWindowBounds',
+        expectedBounds: PARKED_BOUNDS,
+        checks: [parkVerdict(PARKED_BOUNDS, 0)]
+      },
+      checkPark: async (observedAtMs: number) => {
+        checkTimes.push(observedAtMs)
+        return parkVerdict(checkTimes.length < 2 ? PARKED_BOUNDS : { width: 880, height: 120 }, observedAtMs)
+      },
+      listProcesses: () => [
+        {
+          pid: 100,
+          ppid: 1,
+          startedMs,
+          exe: '/Applications/Metis.app/Contents/MacOS/Metis',
+          role: 'Metis'
+        }
+      ],
+      sampleOwnedProcesses: () => [
+        {
+          pid: 100,
+          startedMs,
+          role: 'Metis',
+          kind: 'main',
+          rssBytes: 100,
+          physFootprintBytes: 80,
+          workingSetBytes: null,
+          cpuSeconds: clockMs / 1000
+        }
+      ],
+      now: () => clockMs,
+      sleep: async (ms: number) => {
+        clockMs += ms
+      }
+    })
+
+    expect(checkTimes).toEqual([60_000, 120_000, 180_000])
+    expect((report as any).parkedIdle.checks.map((check: { parked: boolean }) => check.parked)).toEqual([true, true, false, false])
+    expect((report as any).samples.map((sample: { tMs: number; parked?: boolean }) => [sample.tMs, sample.parked])).toEqual([
+      [0, true],
+      [60_000, true],
+      [120_000, false],
+      [180_000, false]
+    ])
+    expect((report as any).parkedIdle.summary).toEqual({
+      checks: 4,
+      parked: 2,
+      notParked: 2,
+      parkedCoverage: 0.5,
+      sampleSummary: { samples: 4, parked: 2, notParked: 2, parkedCoverage: 0.5 }
+    })
+  })
+
+  it('normalizes Windows private bytes from the same resource row as working set', () => {
+    const rows = normalizeWin32ResourceRows([
+      {
+        pid: 100,
+        ws: '123456',
+        priv: '654321',
+        user: 20_000_000,
+        kernel: 10_000_000,
+        cmd: 'Metis.exe --type=browser'
+      }
+    ])
+
+    expect(rows.get(100)).toEqual({
+      workingSetBytes: 123456,
+      rssBytes: 123456,
+      privateBytes: 654321,
+      cpuSeconds: 3,
+      commandLine: 'Metis.exe --type=browser'
+    })
+  })
 })
 
 describe('resource census report boundary', () => {
@@ -442,6 +590,11 @@ describe('resource census report boundary', () => {
     expect(stateCoverageForRun('settled-idle')).toEqual([
       { state: 'cold-start', status: 'SUPPORTED_NOT_RUN', unblockStep: 'Run node scripts/qa/census/run.mjs --state cold-start --seconds 300.' },
       { state: 'settled-idle', status: 'MEASURED' },
+      {
+        state: 'parked-idle',
+        status: 'SUPPORTED_NOT_RUN',
+        unblockStep: 'Run node scripts/qa/census/run.mjs --state parked-idle --seconds 300.'
+      },
       {
         state: 'first-inference',
         status: 'BLOCKED_EXTERNAL',
@@ -639,15 +792,18 @@ describe('resource census representative profile', () => {
       expect(persisted.localLlm.enabled).toBe(true)
       expect(manifest).toMatchObject({
         profileKind: 'representative-synthetic',
-        meetingsFolder: join(root, 'meetings'),
-        expectedPopulationHints: ATTRIBUTABLE_PROCESS_KINDS
+        meetingCount: 59,
+        layout: 'bar',
+        localLlm: { enabled: true, modelId: 'qwen3.5-0.8b' },
+        brain: { enabled: true },
+        datalessMeetings: 0
       })
-      expect(manifest.meetings.length).toBeGreaterThanOrEqual(2)
-      expect(brainIndex.documents.map((document: { file: string }) => document.file)).toEqual(
-        manifest.meetings.map((meeting: { file: string }) => meeting.file)
-      )
-      for (const meeting of manifest.meetings) {
-        const text = readFileSync(join(root, 'meetings', meeting.file), 'utf8')
+      expect(manifest).not.toHaveProperty('meetingsFolder')
+      expect(manifest).not.toHaveProperty('meetings')
+      const indexedFiles = Object.keys(brainIndex.ingested)
+      expect(indexedFiles).toHaveLength(59)
+      for (const file of indexedFiles) {
+        const text = readFileSync(join(root, 'meetings', file), 'utf8')
         expect(text).toContain('type: meeting-transcript')
         expect(text).toContain('## Full transcript')
       }
@@ -672,9 +828,14 @@ describe('resource census GitHub Actions lane', () => {
     expect(workflow).toContain('node scripts/qa/census/run.mjs')
     expect(workflow).toContain('for state in cold-start settled-idle; do')
     expect(workflow).toContain('--state "$state"')
+    expect(workflow).toContain('profile.mjs --layout hide "$RUNNER_TEMP/metis-census-parked-profile"')
+    expect(workflow).toContain('--state parked-idle')
     expect(workflow).toContain('darwin-$state.json')
     expect(workflow).toContain('win32-$state.json')
+    expect(workflow).toContain('darwin-parked-idle.json')
+    expect(workflow).toContain('win32-parked-idle.json')
     expect(workflow).toContain('profile-manifest.json')
+    expect(workflow).toContain('parked-profile-manifest.json')
     expect(workflow).toContain('resource-census-profile.json')
     expect(workflow).toContain('settled-idle')
     expect(workflow).toContain('--seconds 300')
@@ -683,7 +844,7 @@ describe('resource census GitHub Actions lane', () => {
   })
 
   it('reads the profile manifest from the path profile.mjs prints and never gates the census on the TTFT proof', () => {
-    expect(workflow.match(/sed -n 's\/\^\\\[census-profile\\\] manifest \/\/p'/g)).toHaveLength(2)
+    expect(workflow.match(/sed -n 's\/\^\\\[census-profile\\\] manifest \/\/p'/g)).toHaveLength(4)
     expect(workflow).not.toContain('cp "$RUNNER_TEMP/metis-census-profile/resource-census-profile.json"')
     const ttftStep = workflow.slice(workflow.indexOf('- name: Record local TTFT proof'), workflow.indexOf('- name: Measure hosted census states'))
     expect(ttftStep).toContain('continue-on-error: true')
@@ -701,7 +862,12 @@ describe('resource census GitHub Actions lane', () => {
   it('downloads the real 1.9.6 release, verifies SHA256SUMS before install, and only runs on main', () => {
     expect(workflow).toContain('default: mysticalsin/Metis-Releases')
     expect(workflow).toContain('default: v1.9.6-unsigned')
-    expect(workflow).not.toContain('"$GITHUB_REPOSITORY"')
+    const releaseDownloadSteps = workflow.match(/- name: Download the packaged release artifact\n(?: {8}.+\n)+/g) ?? []
+    expect(releaseDownloadSteps).toHaveLength(2)
+    for (const step of releaseDownloadSteps) {
+      expect(step).toContain('--repo "$RELEASE_REPO"')
+      expect(step).not.toContain('"$GITHUB_REPOSITORY"')
+    }
     expect(workflow.match(/--repo "\$RELEASE_REPO" --pattern 'SHA256SUMS\*'/g)).toHaveLength(2)
     expect(workflow.match(/node scripts\/qa\/verify-sha256sums\.mjs/g)).toHaveLength(2)
     expect(workflow.indexOf('verify-sha256sums.mjs')).toBeLessThan(workflow.indexOf('hdiutil attach'))
@@ -710,27 +876,12 @@ describe('resource census GitHub Actions lane', () => {
     expect(workflow).not.toContain('secrets.')
   })
 
-  it('measures parked-idle on both OSes from a Hide-layout profile with the pointer moved away', () => {
-    expect(workflow.match(/- name: Measure parked-idle census \(ADR-018\)/g)).toHaveLength(2)
-    expect(workflow.match(/profile\.mjs "\$RUNNER_TEMP\/metis-census-parked-profile" --overlay-layout hide/g)).toHaveLength(2)
+  it('measures parked-idle on both OSes from the Hide-layout profile without masking a failure', () => {
+    expect(workflow.match(/profile\.mjs --layout hide "\$RUNNER_TEMP\/metis-census-parked-profile"/g)).toHaveLength(2)
     expect(workflow.match(/--state parked-idle/g)).toHaveLength(2)
     expect(workflow).toContain('census-output/darwin-parked-idle.json')
     expect(workflow).toContain('census-output/win32-parked-idle.json')
-    // run.mjs moves the pointer with CGWarpMouseCursorPosition / Cursor::Position (pointer.mjs) and reads it back.
-    expect(workflow.match(/--pointer-away 400,400/g)).toHaveLength(2)
-    const parked = workflow.indexOf('- name: Measure parked-idle census')
-    expect(parked).toBeGreaterThan(workflow.indexOf('- name: Measure hosted census states'))
-    expect(parked).toBeLessThan(workflow.indexOf('- name: Record run identity and file digests'))
-  })
-
-  it('never writes a parked-idle census when the pointer could not be moved away', () => {
-    expect(workflow).not.toContain('pointer warp unavailable')
     expect(workflow).not.toMatch(/\|\|\s*echo/)
-    for (const step of workflow.split('- name: Measure parked-idle census').slice(1)) {
-      const body = step.slice(0, step.indexOf('- name:'))
-      expect(body).not.toContain('continue-on-error')
-      expect(body.indexOf('--pointer-away')).toBeLessThan(body.indexOf('--output'))
-    }
   })
 
   it('measures packaged reveal latency on both OSes from the parked profile, after the parked-idle census', () => {
@@ -744,58 +895,241 @@ describe('resource census GitHub Actions lane', () => {
       expect(body).toContain('if: ${{ !cancelled() }}')
       expect(body).not.toContain('continue-on-error')
     }
-    const reveal = workflow.indexOf('- name: Measure parked reveal latency')
-    expect(reveal).toBeGreaterThan(workflow.indexOf('- name: Measure parked-idle census'))
-    expect(reveal).toBeLessThan(workflow.indexOf('- name: Record run identity and file digests'))
+    for (const job of workflow.split('\n  windows:\n')) {
+      const reveal = job.indexOf('- name: Measure parked reveal latency')
+      expect(reveal).toBeGreaterThan(job.indexOf('--state parked-idle'))
+      expect(reveal).toBeLessThan(job.indexOf('- name: Record run identity and file digests'))
+    }
   })
 })
 
-describe('parked-idle census state (ADR-018)', () => {
-  it('is accepted on demand without joining the release-gate state set', () => {
-    expect(SUPPLEMENTARY_STATES).toEqual(['parked-idle'])
-    expect(validateState('parked-idle')).toBe('parked-idle')
-    expect(STATES).not.toContain('parked-idle')
-    expect(missingStates([...STATES])).toEqual([])
-    expect(stateRequiresAttachPrecondition('parked-idle')).toBe(false)
+describe('parked-idle census profile (ADR-018)', () => {
+  it('reports parked-idle as the only measured state of a parked-idle run', () => {
+    const coverage = stateCoverageForRun('parked-idle')
+    expect(coverage.map((row) => row.state)).toEqual(STATES)
+    expect(coverage.filter((row) => row.status === 'MEASURED')).toEqual([{ state: 'parked-idle', status: 'MEASURED' }])
     expect(() => validateState('parked')).toThrow(/parked-idle/)
   })
 
-  it('reports parked-idle as the measured state and every gated state as not run', () => {
-    const coverage = stateCoverageForRun('parked-idle')
-    expect(coverage.at(-1)).toEqual({ state: 'parked-idle', status: 'MEASURED' })
-    expect(coverage.slice(0, -1).map((row) => row.state)).toEqual(STATES)
-    expect(coverage.slice(0, -1).some((row) => row.status === 'MEASURED')).toBe(false)
-    expect(stateCoverageForRun('settled-idle').map((row) => row.state)).toEqual(STATES)
-  })
-
-  it('refuses a parked-idle run on a profile whose layout never parks', () => {
-    expect(() => validateProfileForState('parked-idle', representativeSettings('/tmp/p', 1))).toThrow(/--overlay-layout hide/)
-    expect(() => validateProfileForState('parked-idle', {})).toThrow(/overlayLayout/)
-    expect(() =>
-      validateProfileForState('parked-idle', representativeSettings('/tmp/p', 1, { overlayLayout: 'hide' }))
-    ).not.toThrow()
-    expect(() => validateProfileForState('parked-idle', { overlayLayout: 'island' })).not.toThrow()
-    expect(() => validateProfileForState('settled-idle', representativeSettings('/tmp/p', 1))).not.toThrow()
-  })
-
-  it('builds a Hide-layout profile from the CLI flag and rejects anything else', () => {
-    expect(readProfileArgs(['/tmp/p'])).toEqual({ profileDir: '/tmp/p', options: {} })
-    expect(readProfileArgs(['/tmp/p', '--overlay-layout', 'hide'])).toEqual({
-      profileDir: '/tmp/p',
-      options: { overlayLayout: 'hide' }
-    })
-    expect(readProfileArgs([])).toBeNull()
-    expect(readProfileArgs(['/tmp/p', '--overlay-layout', 'pill'])).toBeNull()
-    expect(readProfileArgs(['/tmp/p', '--layout', 'hide'])).toBeNull()
-    expect(readProfileArgs(['/tmp/p', '--overlay-layout', 'hide', 'extra'])).toBeNull()
+  it('writes a Hide-layout profile with the shipped orb style', () => {
     const root = mkdtempSync(join(tmpdir(), 'metis-census-parked-'))
     try {
-      const profile = writeRepresentativeProfile(root, 1, { overlayLayout: 'hide' })
+      const profile = writeRepresentativeProfile(root, 1, { layout: 'hide' })
       const written = JSON.parse(readFileSync(join(root, 'settings.json'), 'utf8'))
       expect(written.overlayLayout).toBe('hide')
       expect(profile.settings.overlayOrbStyle).toBe('obsidian')
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
+  })
+})
+
+describe('resource census long-run stream', () => {
+  const mainEntry = {
+    pid: 100,
+    ppid: 1,
+    startedMs,
+    exe: '/Applications/Metis.app/Contents/MacOS/Metis',
+    role: 'Metis'
+  }
+  const mainSample = (extra: Record<string, unknown> = {}) => ({
+    pid: 100,
+    startedMs,
+    role: 'Metis',
+    kind: 'main',
+    rssBytes: 100,
+    physFootprintBytes: 80,
+    workingSetBytes: null,
+    cpuSeconds: 1,
+    ...extra
+  })
+  const base = {
+    state: 'settled-idle',
+    platform: 'darwin' as NodeJS.Platform,
+    installRoot: '/Applications/Metis.app',
+    mainPid: 100,
+    productVersion: '1.9.7',
+    profileKind: 'representative-synthetic'
+  }
+
+  it('writes the header and one flushed line per sample, and no trailer when stopped', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'census-stream-'))
+    try {
+      const path = join(dir, 'run.ndjson')
+      const controller = new AbortController()
+      let clockMs = 1_000
+      let taken = 0
+      let checkpoints = 0
+      const result = await streamCensus({
+        ...base,
+        seconds: 3600,
+        intervalMs: 5_000,
+        writeLine: openNdjsonWriter(path),
+        signal: controller.signal,
+        listProcesses: () => [mainEntry],
+        sampleOwnedProcesses: () => {
+          taken += 1
+          if (taken === 3) controller.abort()
+          return [mainSample({ privateBytes: 7 })]
+        },
+        afterSample: async () => {
+          checkpoints += 1
+        },
+        now: () => clockMs,
+        sleep: async (ms: number) => {
+          clockMs += ms
+        }
+      })
+
+      const lines = readFileSync(path, 'utf8')
+        .trimEnd()
+        .split('\n')
+        .map((line) => JSON.parse(line))
+      expect(result).toMatchObject({ outcome: 'aborted', samples: 3 })
+      expect(checkpoints).toBe(3)
+      expect(lines).toHaveLength(4)
+      expect(lines[0]).toEqual({
+        record: 'header',
+        schema: 'census-stream/1',
+        state: 'settled-idle',
+        platform: 'darwin',
+        productVersion: '1.9.7',
+        mainPid: 100,
+        intervalMs: 5_000,
+        startedAt: new Date(1_000).toISOString(),
+        profileKind: 'representative-synthetic'
+      })
+      expect(lines.slice(1).map((line) => line.record)).toEqual(['sample', 'sample', 'sample'])
+      expect(lines[1]).toEqual({
+        record: 'sample',
+        tMs: 0,
+        processes: [
+          {
+            pid: 100,
+            startedMs,
+            kind: 'main',
+            rssBytes: 100,
+            physFootprintBytes: 80,
+            workingSetBytes: null,
+            privateBytes: 7,
+            cpuSeconds: 1
+          }
+        ],
+        mainAlive: true,
+        sampleDurationMs: 0
+      })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('records mainAlive:false, ends with a main-exited trailer and stops sampling', async () => {
+    const lines: Array<Record<string, unknown>> = []
+    let clockMs = 0
+    let taken = 0
+    const result = await streamCensus({
+      ...base,
+      seconds: 3600,
+      intervalMs: 1_000,
+      writeLine: (record: Record<string, unknown>) => lines.push(record),
+      listProcesses: () => [mainEntry],
+      sampleOwnedProcesses: () => {
+        taken += 1
+        return taken < 3 ? [mainSample()] : []
+      },
+      now: () => clockMs,
+      sleep: async (ms: number) => {
+        clockMs += ms
+      }
+    })
+
+    expect(result.outcome).toBe('main-exited')
+    expect(taken).toBe(3)
+    expect(lines.filter((line) => line.record === 'sample').map((line) => line.mainAlive)).toEqual([true, true, false])
+    expect(lines.at(-1)).toMatchObject({ record: 'trailer', outcome: 'main-exited', samples: 3 })
+  })
+
+  it('schedules each sample from the previous sample start and records how long each took', async () => {
+    const lines: Array<Record<string, any>> = []
+    let clockMs = 0
+    await streamCensus({
+      ...base,
+      seconds: 20,
+      intervalMs: 5_000,
+      writeLine: (record: Record<string, unknown>) => lines.push(record),
+      listProcesses: () => [mainEntry],
+      sampleOwnedProcesses: () => {
+        clockMs += 2_000
+        return [mainSample()]
+      },
+      now: () => clockMs,
+      sleep: async (ms: number) => {
+        clockMs += ms
+      }
+    })
+
+    const samples = lines.filter((line) => line.record === 'sample')
+    expect(samples.map((line) => line.tMs)).toEqual([0, 5_000, 10_000, 15_000, 20_000])
+    expect(samples.every((line) => line.sampleDurationMs === 2_000)).toBe(true)
+    expect(lines.at(-1)).toMatchObject({ record: 'trailer', outcome: 'completed', samples: 5 })
+  })
+})
+
+describe('resource census private bytes and default report shape', () => {
+  it('carries privateBytes through the sanitized process sample, null when absent', () => {
+    expect(sanitizeProcessSample({ pid: 1, startedMs, role: 'x', kind: 'main', privateBytes: 42 }).privateBytes).toBe(42)
+    expect(sanitizeProcessSample({ pid: 1, startedMs, role: 'x', kind: 'main' }).privateBytes).toBeNull()
+  })
+
+  it('keeps the schemaVersion 1 report key set unchanged without the long-run flags', async () => {
+    let clockMs = 0
+    const report = await collectCensus({
+      state: 'settled-idle',
+      seconds: 1,
+      intervalMs: 1,
+      platform: 'darwin',
+      installRoot: '/Applications/Metis.app',
+      mainPid: 100,
+      productVersion: '1.9.7',
+      listProcesses: () => [
+        { pid: 100, ppid: 1, startedMs, exe: '/Applications/Metis.app/Contents/MacOS/Metis', role: 'Metis' }
+      ],
+      sampleOwnedProcesses: () => [{ pid: 100, startedMs, role: 'Metis', kind: 'main', rssBytes: 1, cpuSeconds: 0 }],
+      now: () => clockMs,
+      sleep: async (ms: number) => {
+        clockMs += ms
+      }
+    })
+
+    expect(report.schemaVersion).toBe(1)
+    expect(Object.keys(report).sort()).toEqual(
+      [
+        'schemaVersion',
+        'generatedAt',
+        'ticket',
+        'evidenceLevel',
+        'productVersion',
+        'platform',
+        'state',
+        'seconds',
+        'intervalMs',
+        'accountingBoundary',
+        'accountingContract',
+        'cpuFormula',
+        'attributableProcessKinds',
+        'mainPid',
+        'installRootKind',
+        'profileKind',
+        'stateCoverage',
+        'processIdentities',
+        'samples',
+        'summary',
+        'statePrecondition',
+        'rendererTrace',
+        'proveLocalTtft',
+        'windowsWorkingSet'
+      ].sort()
+    )
+    expect(Object.keys(report.samples[0]).sort()).toEqual(['processes', 'tMs'])
   })
 })

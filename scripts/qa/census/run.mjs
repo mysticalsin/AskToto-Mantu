@@ -1,44 +1,48 @@
 #!/usr/bin/env node
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { mkdirSync, readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { pathToFileURL } from 'node:url'
 import {
   DEFAULT_SECONDS,
   REQUIRED_TRACE_SCENARIOS,
   STATES,
-  SUPPLEMENTARY_STATES,
   collectCensus,
   defaultOutputPath,
   freeLoopbackPort,
-  parkedIdleBlockedReport,
+  openNdjsonWriter,
   proveLocalTtftEvidenceFromArtifact,
   rendererScenarioProbeSource,
   resolveInstallTarget,
   resolveProductVersion,
+  streamCensus,
   stripSecretEnv,
-  validatePointerAwayForState,
-  validateProfileForState,
   validateState,
   validateStatePrecondition,
   windowsWorkingSetEvidenceFromArtifact,
   writeJson
 } from './lib.mjs'
-import { movePointer, parsePoint, stationaryMove } from './pointer.mjs'
+import { writeAuditCounts } from './audit-counts.mjs'
+import { PARKED_BOUNDS, ParkPreconditionError, createCdpParkChecker, summarizeParkChecks } from './park.mjs'
 
 function usage() {
   return `Usage:
-  node scripts/qa/census/run.mjs --state <${[...STATES, ...SUPPLEMENTARY_STATES].join('|')}> [--seconds 300]
+  node scripts/qa/census/run.mjs --state <${STATES.join('|')}> [--seconds 300]
 
 Inputs:
   --app <path>             Installed Metis.app or Metis.exe. Defaults to METIS_CENSUS_APP, then the OS install path.
   --profile <path>         Representative synthetic QA profile from M2-0007. Defaults to METIS_QA_PROFILE.
-                           parked-idle needs one built with profile.mjs --overlay-layout hide.
-  --pointer-away <x,y>     Required for parked-idle: the pointer is moved here, and read back there, before
-                           sampling. A pointer that cannot be moved writes a BLOCKED_EXTERNAL report and fails.
   --main-pid <pid>         Attach instead of launch. Requires --install-root.
   --install-root <path>    Installed app root when attaching.
-  --interval-ms <ms>       Sampling interval. Defaults to 5000.
+  --interval-ms <ms>       Sampling period, scheduled from the previous sample's start. Defaults to 5000.
+  --ndjson <path>          Long-run mode: stream a census-stream/1 header, one line per sample (flushed as
+                           taken) and a trailer on a normal end. No JSON report is written in this mode.
+  --audit-counts <out.json>
+                           With --ndjson: per-bucket audit event counts from the profile's audit trail
+                           (--profile or METIS_QA_PROFILE), refreshed every checkpoint and at the end.
+  --checkpoint-minutes <n> Audit-count refresh period. Defaults to 10.
+  --bucket-minutes <n>     Audit-count bucket width. Defaults to 10.
   --settle-ms <ms>         Wait after launch before non-cold-start states. Defaults to 15000.
   --output <path>          JSON output. Defaults under metis-census-output/.
   --cdp-url <url>          Existing Chromium DevTools endpoint for renderer traces.
@@ -69,6 +73,10 @@ function readArgs(argv) {
     else if (arg === '--seconds') args.seconds = Number(next())
     else if (arg === '--interval-ms') args.intervalMs = Number(next())
     else if (arg === '--settle-ms') args.settleMs = Number(next())
+    else if (arg === '--ndjson') args.ndjson = next()
+    else if (arg === '--audit-counts') args.auditCounts = next()
+    else if (arg === '--checkpoint-minutes') args.checkpointMinutes = Number(next())
+    else if (arg === '--bucket-minutes') args.bucketMinutes = Number(next())
     else if (arg === '--app') args.app = next()
     else if (arg === '--profile') args.profile = next()
     else if (arg === '--main-pid') args.mainPid = Number(next())
@@ -81,7 +89,6 @@ function readArgs(argv) {
     else if (arg === '--windows-working-set-artifact') args.windowsWorkingSetArtifact = next()
     else if (arg === '--product-version') args.productVersion = next()
     else if (arg === '--precondition-evidence') args.preconditionEvidence = next()
-    else if (arg === '--pointer-away') args.pointerAway = parsePoint(next())
     else throw new Error(`unknown argument: ${arg}`)
   }
   return args
@@ -91,6 +98,103 @@ function defaultAppPath(platform) {
   if (platform === 'darwin') return '/Applications/Metis.app'
   if (platform === 'win32') return 'C:\\Program Files\\Metis\\Metis.exe'
   return ''
+}
+
+function readProfileManifest(profile) {
+  try {
+    return JSON.parse(readFileSync(join(profile, 'resource-census-profile.json'), 'utf8'))
+  } catch (error) {
+    throw new ParkPreconditionError(`parked-idle requires a readable profile manifest: ${error?.message ?? error}`)
+  }
+}
+
+export function validateParkedIdleProfile(profile) {
+  if (!profile) throw new ParkPreconditionError('parked-idle requires --profile or METIS_QA_PROFILE')
+  const manifest = readProfileManifest(profile)
+  if (manifest?.layout !== 'hide') {
+    throw new ParkPreconditionError(`parked-idle requires profile manifest layout "hide"; observed "${manifest?.layout ?? 'unknown'}"`, {
+      layout: manifest?.layout ?? null
+    })
+  }
+  return manifest
+}
+
+export function pointerOffTopEdgePosition(_platform) {
+  return { x: 32, y: 200 }
+}
+
+export function pointerMoveCommand(platform, position) {
+  if (platform === 'darwin') {
+    return {
+      executable: '/usr/bin/swift',
+      args: ['-e', `import CoreGraphics\nCGWarpMouseCursorPosition(CGPoint(x: ${position.x}, y: ${position.y}))`],
+      method: 'CGWarpMouseCursorPosition'
+    }
+  }
+  if (platform === 'win32') {
+    return {
+      executable: join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+      args: [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `[Console]::OutputEncoding = [Text.Encoding]::UTF8; Add-Type -Namespace Census -Name Cursor -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);'; if (-not [Census.Cursor]::SetCursorPos(${position.x}, ${position.y})) { throw 'SetCursorPos failed' }`
+      ],
+      method: 'user32.SetCursorPos'
+    }
+  }
+  throw new ParkPreconditionError(`parked-idle pointer movement is unsupported on ${platform}`)
+}
+
+export function movePointerOffTopEdge(platform, execFile = execFileSync) {
+  const position = pointerOffTopEdgePosition(platform)
+  const command = pointerMoveCommand(platform, position)
+  execFile(command.executable, command.args, { stdio: 'ignore', timeout: 10_000 })
+  return { ...position, method: command.method }
+}
+
+export function launchOptions({ env, profile, port }) {
+  return {
+    env: stripSecretEnv({ ...env, ASKTOTO_USERDATA: profile }),
+    args: port ? [`--remote-debugging-port=${port}`] : []
+  }
+}
+
+export function parkedIdlePreconditionFailureReport({
+  parkedIdle,
+  firstCheck,
+  productVersion,
+  platform,
+  state,
+  seconds,
+  mainPid
+}) {
+  const failedParkedIdle = {
+    ...(parkedIdle ?? {}),
+    boundsSignal: 'Browser.getWindowForTarget/getWindowBounds',
+    expectedBounds: PARKED_BOUNDS,
+    checks: [firstCheck],
+    summary: summarizeParkChecks([firstCheck])
+  }
+  return {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    ticket: 'M2-0009',
+    evidenceLevel: 'PRECONDITION',
+    productVersion,
+    platform,
+    state,
+    seconds,
+    mainPid,
+    profileKind: 'representative-synthetic',
+    statePrecondition: {
+      required: true,
+      kind: 'parked-idle',
+      status: 'PRECONDITION',
+      observedBounds: firstCheck.bounds
+    },
+    parkedIdle: failedParkedIdle
+  }
 }
 
 async function findOverlayPage(browser) {
@@ -173,45 +277,44 @@ async function main() {
   const output = args.output ?? defaultOutputPath({ state, platform })
   const outputDir = dirname(output)
   const profile = args.profile ?? process.env.METIS_QA_PROFILE
+  let parkedIdle = null
   let mainPid = args.mainPid ?? null
   let installRoot = args.installRoot ?? null
   let executable = null
   let child = null
   let cdpUrl = args.cdpUrl ?? null
   const attachMode = mainPid !== null
+  const checkpointMinutes = args.checkpointMinutes ?? 10
+  const bucketMinutes = args.bucketMinutes ?? 10
+
+  if (args.auditCounts && !args.ndjson) throw new Error('--audit-counts requires --ndjson')
+  if (args.auditCounts && !profile) throw new Error('--audit-counts requires --profile or METIS_QA_PROFILE')
+  if (!(checkpointMinutes > 0)) throw new Error('--checkpoint-minutes must be positive')
+  if (state === 'parked-idle') validateParkedIdleProfile(profile)
 
   validateStatePrecondition({
     state,
     attachMode,
     evidence: args.preconditionEvidence
   })
-  validatePointerAwayForState(state, args.pointerAway)
-  if (args.pointerAway) {
-    try {
-      await movePointer(stationaryMove(args.pointerAway), { platform })
-    } catch (error) {
-      writeJson(output, parkedIdleBlockedReport({ platform, reason: error?.message ?? String(error) }))
-      throw new Error(`the pointer could not be moved away, so ${output} records BLOCKED_EXTERNAL, not a census`)
-    }
-  }
 
   if (mainPid === null) {
     if (!profile) {
       throw new Error('--profile or METIS_QA_PROFILE is required; a fresh profile is not representative for M2-0009')
     }
-    validateProfileForState(state, JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8')))
     const target = resolveInstallTarget(args.app ?? process.env.METIS_CENSUS_APP ?? defaultAppPath(platform), platform)
     installRoot = target.installRoot
     executable = target.executable
     const traceRequested = args.traceScenarios.length > 0
-    const port = traceRequested ? await freeLoopbackPort() : null
+    const port = traceRequested || state === 'parked-idle' ? await freeLoopbackPort() : null
     if (port) cdpUrl = `http://127.0.0.1:${port}`
-    const env = stripSecretEnv({ ...process.env, ASKTOTO_USERDATA: profile })
-    const launchArgs = port ? [`--remote-debugging-port=${port}`] : []
-    child = spawn(target.executable, launchArgs, { env, stdio: 'ignore' })
+    const pointerPosition = state === 'parked-idle' ? movePointerOffTopEdge(platform) : null
+    const options = launchOptions({ env: process.env, profile, port })
+    child = spawn(target.executable, options.args, { env: options.env, stdio: 'ignore' })
     mainPid = child.pid ?? null
     if (!mainPid) throw new Error('launched app did not expose a pid')
     if (state !== 'cold-start') await sleep(args.settleMs ?? 15_000)
+    if (pointerPosition) parkedIdle = { pointerMovedOffTopEdge: pointerPosition }
   }
 
   if (!installRoot) throw new Error('--install-root is required when --main-pid is used')
@@ -234,29 +337,94 @@ async function main() {
       scenarios: args.traceScenarios,
       outputDir
     })
-    const report = await collectCensus({
-      state,
-      seconds,
-      intervalMs: args.intervalMs,
-      platform,
-      installRoot,
-      mainPid,
-      attachMode,
-      productVersion,
-      preconditionEvidence: args.preconditionEvidence,
-      profileKind: 'representative-synthetic',
-      rendererTrace,
-      proveLocalTtft,
-      windowsWorkingSet
-    })
-    writeJson(output, report)
-    console.log(`[census] wrote ${output}`)
+    let checker = null
+    if (state === 'parked-idle') {
+      checker = await createCdpParkChecker(cdpUrl)
+      const firstCheck = await checker.check()
+      if (!firstCheck.parked) {
+        writeJson(
+          output,
+          parkedIdlePreconditionFailureReport({ parkedIdle, firstCheck, productVersion, platform, state, seconds, mainPid })
+        )
+        await checker.close()
+        checker = null
+        throw new ParkPreconditionError('parked-idle precondition failed: overlay window is not parked', {
+          observedBounds: firstCheck.bounds
+        })
+      }
+      parkedIdle = {
+        ...(parkedIdle ?? {}),
+        boundsSignal: 'Browser.getWindowForTarget/getWindowBounds',
+        expectedBounds: PARKED_BOUNDS,
+        checks: [firstCheck]
+      }
+    }
+    try {
+      if (args.ndjson) {
+        const writeCounts = (from) =>
+          writeAuditCounts(args.auditCounts, { userData: profile, from: new Date(from).toISOString(), bucketMinutes })
+        const countsFrom = Date.now()
+        let lastCheckpoint = 0
+        const result = await streamCensus({
+          state,
+          seconds,
+          intervalMs: args.intervalMs,
+          platform,
+          installRoot,
+          mainPid,
+          productVersion,
+          profileKind: 'representative-synthetic',
+          writeLine: openNdjsonWriter(args.ndjson),
+          afterSample: async () => {
+            if (!args.auditCounts) return
+            if (Date.now() - lastCheckpoint < checkpointMinutes * 60_000) return
+            lastCheckpoint = Date.now()
+            writeCounts(countsFrom)
+          }
+        })
+        if (args.auditCounts) writeCounts(countsFrom)
+        console.log(`[census] streamed ${result.samples} samples (${result.outcome}) to ${args.ndjson}`)
+        return
+      }
+      const report = await collectCensus({
+        state,
+        seconds,
+        intervalMs: args.intervalMs,
+        platform,
+        installRoot,
+        mainPid,
+        attachMode,
+        productVersion,
+        preconditionEvidence: args.preconditionEvidence,
+        profileKind: 'representative-synthetic',
+        rendererTrace,
+        proveLocalTtft,
+        windowsWorkingSet,
+        parkedIdle,
+        checkPark: checker ? (sampledAt) => checker.check(sampledAt) : undefined
+      })
+      writeJson(output, report)
+      console.log(`[census] wrote ${output}`)
+    } finally {
+      await checker?.close()
+    }
   } finally {
     if (child && !child.killed) child.kill()
   }
 }
 
-main().catch((error) => {
-  console.error(`[census] ${error?.message ?? error}`)
-  process.exitCode = 1
-})
+export function isMainModule(metaUrl, argv1) {
+  return Boolean(argv1) && metaUrl === pathToFileURL(resolve(argv1)).href
+}
+
+if (isMainModule(import.meta.url, process.argv[1])) {
+  main().catch((error) => {
+    console.error(`[census] ${error?.message ?? error}`)
+    if (error instanceof ParkPreconditionError) {
+      if (error.details && Object.keys(error.details).length > 0) console.error(`[census] ${JSON.stringify(error.details)}`)
+      process.exitCode = 2
+    } else {
+      process.exitCode = 1
+    }
+  })
+}

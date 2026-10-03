@@ -30,7 +30,7 @@ export const APPROACH_SERIES = [
 export function validateRevealProfile(settings) {
   if (settings?.overlayLayout !== 'hide' || settings?.overlayPlacement !== 'right-edge' || settings?.onboardingDone !== true) {
     throw new Error(
-      'reveal latency needs a profile with overlayLayout hide, overlayPlacement right-edge and onboarding done; build one with profile.mjs --overlay-layout hide'
+      'reveal latency needs a profile with overlayLayout hide, overlayPlacement right-edge and onboarding done; build one with profile.mjs --layout hide'
     )
   }
 }
