@@ -642,6 +642,12 @@ describe('the fresh profile', () => {
     }
   })
 
+  it('refuses a stale QA userData directory before building the meeting-history profile', () => {
+    mkdirSync(join(appData, 'asktoto-qa'))
+    expect(() => prepareProfile({ scenario: 'meeting-history', platform: 'mac', appDataDir: appData })).toThrow(
+      /asktoto-qa userData directory already exists/
+    )
+  })
 
   it('refuses a QA userData directory that already exists', () => {
     mkdirSync(join(appData, 'asktoto-qa'))

@@ -19,7 +19,7 @@
 import { execFileSync, spawnSync } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, isAbsolute, join, relative } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { writeRepresentativeProfile } from './census/profile.mjs'
 import { LOCAL_LLM_SETTINGS } from './lib/local-llm-settings.mjs'
@@ -210,7 +210,7 @@ export const SCENARIOS = Object.freeze({
           '--post-minutes',
           '10',
           '--out',
-          report.slice(0, -'/meeting-history-report.json'.length)
+          dirname(report)
         ],
         report: 'meeting-history-report.json',
         profileLayout: 'bar',
@@ -456,14 +456,19 @@ export function candidateRunProblems(run, candidateRun) {
 export function prepareProfile({ scenario, platform, appDataDir }) {
   const target = platformEntry(scenario, platform)
   if (target.isolatedProfiles) return null
+  const name = PROFILE_DIRS[target.variant]
   if (target.profileLayout) {
+    if (name) {
+      if (!appDataDir) throw new Error(`No fresh-profile location is declared for ${platform}.`)
+      const userData = join(appDataDir, name)
+      if (existsSync(userData)) throw new Error(`The ${name} userData directory already exists; the profile is not fresh.`)
+    }
     const profile = join(process.cwd(), 'candidate-scenario', 'profile')
     if (existsSync(profile)) throw new Error(`The ${scenario} profile directory already exists; the profile is not fresh.`)
     writeRepresentativeProfile(profile, undefined, { layout: target.profileLayout })
     return join(profile, 'resource-census-profile.json')
   }
   if (!appDataDir) throw new Error(`No fresh-profile location is declared for ${platform}.`)
-  const name = PROFILE_DIRS[target.variant]
   if (!name) throw new Error(`No userData directory is declared for variant ${target.variant}.`)
   const profile = join(appDataDir, name)
   if (existsSync(profile)) throw new Error(`The ${name} userData directory already exists; the profile is not fresh.`)
