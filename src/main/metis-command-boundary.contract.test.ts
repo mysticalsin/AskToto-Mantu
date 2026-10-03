@@ -1,10 +1,11 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { HOTKEY_ACTIONS, IPC } from '../shared/ipc'
 
 const main = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const preload = readFileSync(join(__dirname, '../preload/index.ts'), 'utf8')
-const ipc = readFileSync(join(__dirname, '../shared/ipc.ts'), 'utf8')
+const channels = readFileSync(join(__dirname, '../shared/contracts/channels.ts'), 'utf8')
 const app = readFileSync(join(__dirname, '../renderer/src/App.tsx'), 'utf8')
 
 function between(source: string, start: string, end: string): string {
@@ -18,14 +19,14 @@ function between(source: string, start: string, end: string): string {
 describe('Cap2 command authority boundary', () => {
   it('exposes only sanitized command state plus id-and-nonce confirmation controls', () => {
     expect(preload).not.toContain('metisCommandIngest')
-    expect(ipc).not.toContain('metisCommandIngest')
+    expect(channels).not.toContain('metisCommandIngest')
     expect(preload).not.toContain('metisCommandStop')
     expect(preload).toContain('onMetisCommandState')
     expect(preload).toContain('confirmMetisCommand')
     expect(preload).toContain('cancelMetisCommand')
-    expect(ipc).toContain('metisCommandState')
-    expect(ipc).toContain('metisCommandConfirm')
-    expect(ipc).toContain('metisCommandCancel')
+    expect(IPC.metisCommandState).toBe('metis-command:state')
+    expect(IPC.metisCommandConfirm).toBe('metis-command:confirm')
+    expect(IPC.metisCommandCancel).toBe('metis-command:cancel')
     expect(preload).not.toContain('executeDesktopAction')
   })
 
@@ -71,7 +72,7 @@ describe('Cap2 command authority boundary', () => {
   })
 
   it('keeps the Metis command hotkey separate from meeting Listen', () => {
-    expect(ipc).toContain("'metis-command'")
+    expect(HOTKEY_ACTIONS).toContain('metis-command')
     expect(main).toContain("'metis-command': () => sendHotkey('metis-command')")
     expect(app).toContain("a === 'metis-command'")
     expect(app).toMatch(/else if \(a === 'toggle-listen'\) toggleListen\(\)/)

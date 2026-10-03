@@ -1,3 +1,7 @@
+import { readdirSync, readFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import ts from 'typescript'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
   AskStartSchema,
@@ -6,6 +10,7 @@ import {
   ScreenCaptureCheckPayloadSchema,
   ScreenCaptureCheckResultSchema,
   SettingsSchema,
+  BaseSettingsSchema,
   DEFAULT_SETTINGS,
   IPC,
   McpConnectionSchema,
@@ -27,13 +32,125 @@ import {
   HistorySettledSchema,
   HistoryTraceSchema,
   RendererCrashContextSchema,
+  SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION,
+  SERVER_AUTHORITATIVE_SETTINGS_KEYS,
   appendAsrCorrection,
   TranscriptLineSchema,
   stripProvisionalLines,
   SaveMeetingSchema,
   modeLabel
 } from './ipc'
-import type { TranscriptLine } from './ipc'
+import type { ServerAuthoritativeSettingsKey, SettingsPatch, TranscriptLine } from './ipc'
+
+type Assert<T extends true> = T
+type SettingsPatchExcludesServerAuthoritativeKeys = Assert<
+  Extract<ServerAuthoritativeSettingsKey, keyof SettingsPatch> extends never ? true : false
+>
+const settingsPatchExcludesServerAuthoritativeKeys: SettingsPatchExcludesServerAuthoritativeKeys = true
+void settingsPatchExcludesServerAuthoritativeKeys
+
+const SHARED_DIR = dirname(fileURLToPath(import.meta.url))
+const SRC_DIR = resolve(SHARED_DIR, '..')
+const readSource = (relativeToSrc: string): string => readFileSync(resolve(SRC_DIR, relativeToSrc), 'utf8')
+const TS_EXT = ['t', 's'].join('')
+const tsPath = (...parts: string[]): string => `${parts.join('/')}.${TS_EXT}`
+
+function sourceFile(relativeToSrc: string): ts.SourceFile {
+  return ts.createSourceFile(relativeToSrc, readSource(relativeToSrc), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+}
+
+function sourceFilesInDir(relativeToSrc: string): string[] {
+  return readdirSync(resolve(SRC_DIR, relativeToSrc))
+    .filter((name) => name.endsWith(`.${TS_EXT}`) && !name.endsWith(`.test.${TS_EXT}`))
+    .sort()
+    .map((name) => `${relativeToSrc}/${name}`)
+}
+
+function sourceFilesInTree(relativeToSrc: string): string[] {
+  const root = resolve(SRC_DIR, relativeToSrc)
+  const files: string[] = []
+  const visit = (directory: string, prefix: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name
+      const full = join(directory, entry.name)
+      if (entry.isDirectory()) {
+        visit(full, rel)
+      } else if (entry.isFile() && entry.name.endsWith(`.${TS_EXT}`)) {
+        files.push(`${relativeToSrc}/${rel}`)
+      }
+    }
+  }
+  visit(root, '')
+  return files.sort()
+}
+
+function loadJsonFixtures(relativeToSrc: string): Array<{ file: string; value: unknown }> {
+  const directory = resolve(SRC_DIR, relativeToSrc)
+  return readdirSync(directory)
+    .filter((file) => file.endsWith('.json'))
+    .sort()
+    .map((file) => ({ file, value: JSON.parse(readFileSync(join(directory, file), 'utf8')) }))
+}
+
+function firstIpcKey(argument: ts.Expression | undefined, byValue: Map<string, string>): string | null {
+  if (argument && ts.isPropertyAccessExpression(argument) && argument.expression.getText() === 'IPC') {
+    return argument.name.text
+  }
+  if (argument && ts.isStringLiteral(argument)) return byValue.get(argument.text) ?? null
+  return null
+}
+
+function ipcSendExpressionName(file: ts.SourceFile, expression: ts.Expression): string {
+  return expression.getText(file).replace(/[?!]/g, '')
+}
+
+function isMainSendExpression(file: ts.SourceFile, expression: ts.Expression): boolean {
+  const name = ipcSendExpressionName(file, expression)
+  return name.endsWith('.webContents.send') || name.endsWith('.sender.send')
+}
+
+function collectIpcCalls(
+  file: ts.SourceFile,
+  names: ReadonlySet<string>,
+  byValue: Map<string, string>,
+  matches: (file: ts.SourceFile, expression: ts.Expression) => boolean = (source, expression) =>
+    names.has(expression.getText(source))
+): Set<string> {
+  const keys = new Set<string>()
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      if (matches(file, node.expression)) {
+        const key = firstIpcKey(node.arguments[0], byValue)
+        if (key) keys.add(key)
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(file)
+  return keys
+}
+
+function collectIpcImports(file: ts.SourceFile, moduleSpecifier: string): string[] {
+  const names: string[] = []
+  file.statements.forEach((statement) => {
+    if (!ts.isImportDeclaration(statement)) return
+    if (!ts.isStringLiteral(statement.moduleSpecifier) || statement.moduleSpecifier.text !== moduleSpecifier) return
+    const bindings = statement.importClause?.namedBindings
+    if (!bindings || !ts.isNamedImports(bindings)) return
+    bindings.elements.forEach((element) => names.push((element.propertyName ?? element.name).text))
+  })
+  return names
+}
+
+function collectIpcChannelStringLiterals(file: ts.SourceFile, channels: ReadonlySet<string>): string[] {
+  const values: string[] = []
+  const visit = (node: ts.Node): void => {
+    if (ts.isStringLiteral(node) && channels.has(node.text)) values.push(node.text)
+    ts.forEachChild(node, visit)
+  }
+  visit(file)
+  return values.sort()
+}
 
 /** process.platform is configurable in Node — flip it for the duration of a platform-specific test. */
 function setPlatform(p: NodeJS.Platform): void {
@@ -233,6 +350,49 @@ describe('AskStart screen fast-path fields (M13)', () => {
 })
 
 describe('SettingsSchema', () => {
+  const settingsGoldenFixtures = loadJsonFixtures('shared/contracts/settings/__fixtures__/golden')
+  const settingsNegativeFixtures = loadJsonFixtures('shared/contracts/settings/__fixtures__/negative')
+
+  it.each(settingsGoldenFixtures.map((fixture) => [fixture.file, fixture] as const))(
+    'BaseSettingsSchema golden fixture %s parses',
+    (_file, fixture) => {
+      const result = BaseSettingsSchema.safeParse(fixture.value)
+      expect(result.success, result.success ? '' : JSON.stringify(result.error.issues)).toBe(true)
+    }
+  )
+
+  it.each(settingsNegativeFixtures.map((fixture) => [fixture.file, fixture] as const))(
+    'BaseSettingsSchema negative fixture %s is rejected',
+    (_file, fixture) => {
+      const schema = fixture.file === 'base-settings-custom-http.json' ? SettingsSchema : BaseSettingsSchema
+      expect(schema.safeParse(fixture.value).success).toBe(false)
+    }
+  )
+
+  it('keeps workspace-specific Dust agent identifiers out of shared contracts and defaults', () => {
+    expect(DEFAULT_SETTINGS.providerModels.dust).toBeUndefined()
+    expect(DEFAULT_SETTINGS.providerModelsSpotlightRef.dust).toBeUndefined()
+    const forbidden = [
+      ['vJx', 'YHv', 'TRBT'],
+      ['GOr', '913', 'Zr5V'],
+      ['DUST', '_BASE', '_AGENT', '_ID'],
+      ['DUST', '_SPOTLIGHT', '_REF', '_AGENT', '_ID']
+    ].map((parts) => parts.join(''))
+    for (const file of sourceFilesInTree('shared')) {
+      const source = readSource(file)
+      for (const value of forbidden) expect(source, file).not.toContain(value)
+    }
+  })
+
+  it('marks every server-authoritative settings field covered by the shared constant', () => {
+    const authoritativeFromSchema = Object.entries(BaseSettingsSchema.shape)
+      .filter(([, field]) => field.description === SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION)
+      .map(([key]) => key)
+      .sort()
+
+    expect(authoritativeFromSchema).toEqual([...SERVER_AUTHORITATIVE_SETTINGS_KEYS].sort())
+  })
+
   it('defaults lastClickedCli to null — not a secret, not a vault row', () => {
     expect(DEFAULT_SETTINGS.lastClickedCli).toBeNull()
     const { lastClickedCli: _last, ...withoutLast } = DEFAULT_SETTINGS
@@ -983,15 +1143,68 @@ describe('DEFAULT_SHORTCUTS scroll defaults', () => {
   })
 })
 
-describe('local AI IPC channel constants', () => {
-  it('defines the five exact on-device local-AI channel names without collisions', () => {
-    expect(IPC.localAiStatus).toBe('local-ai:status')
-    expect(IPC.localTranscriptBegin).toBe('local-ai:transcript:begin')
-    expect(IPC.localTranscriptAppend).toBe('local-ai:transcript:append')
-    expect(IPC.localTranscriptResync).toBe('local-ai:transcript:resync')
-    expect(IPC.localTranscriptEnd).toBe('local-ai:transcript:end')
+describe('IPC channel contract', () => {
+  it('keeps the channel map zod-free and exposes it through every preload', () => {
+    const channels = sourceFile(tsPath('shared', 'contracts', 'channels'))
+    expect(collectIpcImports(channels, 'zod')).toEqual([])
+
+    const preloadFiles = [
+      tsPath('preload', 'index'),
+      tsPath('preload', 'intelligence'),
+      tsPath('preload', 'import-decoder')
+    ]
+    for (const file of preloadFiles) {
+      const source = sourceFile(file)
+      expect(collectIpcImports(source, '@shared/contracts/channels')).toContain('IPC')
+      expect(collectIpcChannelStringLiterals(source, new Set(Object.values(IPC)))).toEqual([])
+    }
+  })
+
+  it('has no duplicate, dead, or unhandled IPC channels', () => {
+    const declaredKeys = new Set(Object.keys(IPC))
+    const byValue = new Map(Object.entries(IPC).map(([key, value]) => [value, key]))
     const values = Object.values(IPC)
     expect(new Set(values).size).toBe(values.length)
+    expect(values.filter((value) => value.startsWith('local-ai:'))).toEqual([])
+
+    const mainFiles = [
+      tsPath('main', 'index'),
+      tsPath('main', 'updater'),
+      ...sourceFilesInDir('main/ipc')
+    ].map(sourceFile)
+    const preloadFiles = [
+      tsPath('preload', 'index'),
+      tsPath('preload', 'intelligence'),
+      tsPath('preload', 'import-decoder')
+    ].map(sourceFile)
+
+    const mainRegistrations = new Set<string>()
+    const mainSends = new Set<string>()
+    for (const file of mainFiles) {
+      collectIpcCalls(file, new Set(['ipcMain.handle', 'ipcMain.on', 'safeHandle']), byValue)
+        .forEach((key) => mainRegistrations.add(key))
+      collectIpcCalls(file, new Set(), byValue, isMainSendExpression)
+        .forEach((key) => mainSends.add(key))
+    }
+
+    const preloadRequests = new Set<string>()
+    const preloadListeners = new Set<string>()
+    for (const file of preloadFiles) {
+      collectIpcCalls(file, new Set(['ipcRenderer.invoke', 'ipcRenderer.send']), byValue)
+        .forEach((key) => preloadRequests.add(key))
+      collectIpcCalls(file, new Set(['ipcRenderer.on', 'sub']), byValue)
+        .forEach((key) => preloadListeners.add(key))
+    }
+
+    const missingHandlers = [...preloadRequests].filter((key) => !mainRegistrations.has(key)).sort()
+    const missingMainSends = [...preloadListeners].filter((key) => !mainSends.has(key)).sort()
+    const deadChannels = [...declaredKeys]
+      .filter((key) => !mainRegistrations.has(key) && !mainSends.has(key) && !preloadRequests.has(key) && !preloadListeners.has(key))
+      .sort()
+
+    expect(missingHandlers).toEqual([])
+    expect(missingMainSends).toEqual([])
+    expect(deadChannels).toEqual([])
   })
 })
 

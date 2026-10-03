@@ -5,6 +5,9 @@ import './styles.css'
 import { App } from './App'
 import { useAutoResize } from './state'
 import { crashReport } from './lib/crash-context'
+import type { PreloadSettingsTypecheck } from './preload-settings.typecheck'
+
+type _PreloadSettingsTypecheck = PreloadSettingsTypecheck
 
 /**
  * The boundary's fallback replaces the ENTIRE App tree — including App's useAutoResize instance, the

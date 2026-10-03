@@ -1,0 +1,9 @@
+{
+  "provider": "cloudflare",
+  "systemPrompt": "Answer directly.",
+  "temperature": 0.4,
+  "contentProtection": true,
+  "privateView": false,
+  "audioSource": "both",
+  "suggestEverySec": 8
+}

@@ -1,0 +1,15 @@
+{
+  "provider": "dust",
+  "providerModels": {
+    "dust": "managed-base-agent"
+  },
+  "providerModelsSpotlightRef": {
+    "dust": "managed-spotlight-agent"
+  },
+  "systemPrompt": "Answer directly.",
+  "temperature": 0.4,
+  "contentProtection": true,
+  "privateView": false,
+  "audioSource": "both",
+  "suggestEverySec": 8
+}

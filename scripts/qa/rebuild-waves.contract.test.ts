@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { IPC } from '../../src/shared/contracts/channels'
 
 /**
  * Wave 0–6 / QA approval — source contracts that the rebuild's critical seams stay wired.
@@ -15,10 +16,10 @@ function read(rel: string): string {
 
 describe('QA rebuild contracts — Wave 2 routing + failover notice', () => {
   it('exposes routingMode and lastFailover on PublicSettings; dismiss IPC exists', () => {
-    const ipc = read('src/shared/ipc.ts')
+    const ipc = read('src/shared/contracts/settings/schema.ts')
     expect(ipc).toMatch(/routingMode: z\.enum\(\['local', 'api', 'auto'\]\)/)
     expect(ipc).toMatch(/lastFailover:/)
-    expect(ipc).toMatch(/dismissFailoverNotice:/)
+    expect(IPC.dismissFailoverNotice).toBe('settings:dismissFailoverNotice')
   })
 
   it('failover() records lastFailoverNotice and auditLog provider.failover', () => {
@@ -74,7 +75,7 @@ describe('QA rebuild contracts — Wave 1D SUMMARY headings', () => {
 
 describe('QA rebuild contracts — Wave 1 provisional strip', () => {
   it('stripProvisionalLines exists and save paths use it', () => {
-    const ipc = read('src/shared/ipc.ts')
+    const ipc = read('src/shared/contracts/transcript/schema.ts')
     expect(ipc).toMatch(/stripProvisionalLines/)
     expect(ipc).toMatch(/provisional: z\.boolean\(\)\.optional\(\)/)
   })

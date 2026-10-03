@@ -146,16 +146,16 @@ describe('dustStoredAgentMissing', () => {
 
   it('does not false-negative a managed Spotlight Ref agent present on an all/workspace/published list', () => {
     expect(
-      dustStoredAgentMissing('GOr913Zr5V', [{ sId: 'personal-list-only' }, { sId: 'GOr913Zr5V' }])
+      dustStoredAgentMissing('spotlight-managed', [{ sId: 'personal-list-only' }, { sId: 'spotlight-managed' }])
     ).toBe(false)
   })
 })
 
 describe('isSpotlightRefReady', () => {
   const keys = { dust: true }
-  const pin = { dust: 'GOr913Zr5V' }
+  const pin = { dust: 'spotlight-managed' }
   const listOnly = [{ sId: 'user-pickable' }]
-  const allViews = [{ sId: 'user-pickable' }, { sId: 'GOr913Zr5V' }]
+  const allViews = [{ sId: 'user-pickable' }, { sId: 'spotlight-managed' }]
 
   it('stays true when view:list omits the managed agent — REST omission is not a reconnect dead-end', () => {
     expect(isSpotlightRefReady(keys, 'ws_123', pin, listOnly)).toBe(true)
@@ -206,9 +206,9 @@ describe('applyInteractiveGuardrail', () => {
 
 describe('parseDustUrl agent-id extraction (only unambiguous agent sources)', () => {
   it('extracts the agent from builder URLs and query params', () => {
-    expect(parseDustUrl('https://dust.tt/w/abc123/builder/agents/vJxYHvTRBT').agentId).toBe('vJxYHvTRBT')
-    expect(parseDustUrl('https://eu.dust.tt/w/abc123/builder/assistants/GOr913Zr5V').agentId).toBe('GOr913Zr5V')
-    expect(parseDustUrl('https://dust.tt/w/abc123/assistant/CONV42?assistant=vJxYHvTRBT').agentId).toBe('vJxYHvTRBT')
+    expect(parseDustUrl('https://dust.tt/w/abc123/builder/agents/baseAgent123').agentId).toBe('baseAgent123')
+    expect(parseDustUrl('https://eu.dust.tt/w/abc123/builder/assistants/spotlightAgent123').agentId).toBe('spotlightAgent123')
+    expect(parseDustUrl('https://dust.tt/w/abc123/assistant/CONV42?assistant=baseAgent123').agentId).toBe('baseAgent123')
   })
 
   it('never mistakes a conversation id for an agent id', () => {

@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { DEFAULT_SETTINGS } from '../shared/ipc'
 
 const INDEX = readFileSync(join(__dirname, 'index.ts'), 'utf8')
-const IPC = readFileSync(join(__dirname, '..', 'shared', 'ipc.ts'), 'utf8')
+const SETTINGS_SCHEMA = readFileSync(join(__dirname, '..', 'shared', 'contracts', 'settings', 'schema.ts'), 'utf8')
 const SETTINGS = readFileSync(join(__dirname, '..', 'renderer', 'src', 'features', 'settings', 'AiSection.tsx'), 'utf8')
 const ANSWER = readFileSync(join(__dirname, '..', 'renderer', 'src', 'components', 'Answer.tsx'), 'utf8')
 const APP = readFileSync(join(__dirname, '..', 'renderer', 'src', 'App.tsx'), 'utf8')
@@ -23,8 +24,8 @@ const APP = readFileSync(join(__dirname, '..', 'renderer', 'src', 'App.tsx'), 'u
  */
 describe('MQA-269 — the user-authored chain', () => {
   it('exists in the schema with a safe default of empty = automatic', () => {
-    expect(IPC).toMatch(/providerFallbackOrder: z\.array\(ProviderIdSchema\)\.max\(8\)\.default\(\[\]\)/)
-    expect(IPC).toMatch(/providerFallbackOrder: \[\],/)
+    expect(SETTINGS_SCHEMA).toMatch(/providerFallbackOrder: z\.array\(ProviderIdSchema\)\.max\(8\)\.default\(\[\]\)/)
+    expect(DEFAULT_SETTINGS.providerFallbackOrder).toEqual([])
   })
 
   it('replaces BOTH guess-keys when present — cli bucket-swap and the free-tier float', () => {

@@ -11,12 +11,12 @@
 import { spawn } from 'node:child_process'
 import { existsSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { DUST_SPOTLIGHT_REF_AGENT_ID } from '@shared/ipc'
 import { humanizeNpmInstallError } from '@shared/managed-npm'
 import { dustAgentUnavailableMessage } from '@shared/quick-actions'
 import { installManagedCli, managedCliEntry, type CliInstallProgress } from './cli-installer'
 import { ensureManagedNode, resolveManagedNode, vcredistExePath, vcredistQuietArgs } from './managed-node'
 import { killWindowsProcessTree } from './cli'
+import { DUST_SPOTLIGHT_REF_AGENT_ID } from './managed-config-defaults'
 
 export const DUST_SPOTLIGHT_REF_AGENT_NAME = 'Spotlight Ref'
 export const DUST_MANAGED_CLI_ID = 'dust' as const

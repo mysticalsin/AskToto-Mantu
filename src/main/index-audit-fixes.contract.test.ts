@@ -242,7 +242,7 @@ describe('M2-0533 — login item status is cached and refreshed off the boot pat
 })
 
 describe('MQA-066 — the enforced-but-unconfigured wall has exactly one way out', () => {
-  const carveOut = (): string => sliceBetween('if (!requireAuth()) {', 'const p = patch ?? {}')
+  const carveOut = (): string => sliceBetween('if (!requireAuth()) {', 'const p = stripServerAuthoritativeSettingsPatch(patch ?? {})')
 
   it('re-checks every gate in main rather than trusting the renderer that reached this handler', () => {
     expect(carveOut()).toMatch(/if \(!ssoBootstrapAllowed\(\)\) return publicSettings\(\)/)

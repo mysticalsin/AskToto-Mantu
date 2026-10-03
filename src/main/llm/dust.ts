@@ -9,7 +9,7 @@ import { type StreamOptions, type StreamHandle, errMsg, idleWatchdog, userText }
 import { attachScreenshot, type DustFileContentFragment } from './dust-attachments'
 import { redactSecrets } from '@shared/redact'
 import { dustAgentUnavailableMessage } from '@shared/quick-actions'
-import { DUST_SPOTLIGHT_REF_AGENT_ID } from '@shared/ipc'
+import { DUST_SPOTLIGHT_REF_AGENT_ID } from '../managed-config-defaults'
 import { runManagedDustChat, projectNameForDataAndAiAsk } from '../dust-cli-chat'
 import { fetchDustProjects, matchDataAndAiProjects } from '../dust-projects'
 

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { type AskStart, DUST_SPOTLIGHT_REF_AGENT_ID } from '@shared/ipc'
+import { type AskStart } from '@shared/ipc'
+import { DUST_SPOTLIGHT_REF_AGENT_ID } from '../managed-config-defaults'
 import { streamDust, resetDustConversation } from './dust'
 import type { StreamHandlers } from './shared'
 import type { runManagedDustChat as runManagedDustChatFn } from '../dust-cli-chat'

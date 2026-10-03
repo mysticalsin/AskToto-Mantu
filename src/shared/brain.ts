@@ -1,4 +1,7 @@
 import { z } from 'zod'
+import { EntityKindSchema } from './contracts/brain/entity-kind'
+import type { EntityKind } from './contracts/brain/entity-kind'
+export { EntityKindSchema, type EntityKind } from './contracts/brain/entity-kind'
 
 /**
  * Mantu Intelligence "Brain" — the LLM-maintained knowledge store built from meeting transcripts.
@@ -317,9 +320,6 @@ export interface ProvenantField<T> {
  * `snapshot` carries whatever pre-mutation state its own kind needs for reversibility (e.g. a merge's
  * `entity_unmerge` restores from the merge entry's `snapshot`); kinds with nothing to restore omit it.
  */
-export const EntityKindSchema = z.enum(['person', 'account', 'deal'])
-export type EntityKind = z.infer<typeof EntityKindSchema>
-
 const CorrectionRenamePayloadSchema = z.object({ kind: EntityKindSchema, id: z.string(), newName: z.string() })
 const CorrectionMergePayloadSchema = z.object({ kind: EntityKindSchema, fromId: z.string(), intoId: z.string() })
 const CorrectionUnmergePayloadSchema = z.object({ targetSeq: z.number().int().nonnegative() })

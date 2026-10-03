@@ -45,6 +45,7 @@ import {
 } from './geometry'
 import { resolveOverlayPresentation } from '@shared/overlay-presentation'
 import { anchorY, legacyTabRect, revealBand } from '@shared/right-edge-geometry'
+import { DEFAULT_SETTINGS } from '@shared/ipc'
 
 /**
  * geometry.test.ts — MQA-275. Pins the pure positioning math extracted from src/main/index.ts (the
@@ -817,7 +818,7 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
 
 describe('overlay chrome modes resolve through placement', () => {
   it('default is hide; top-center supports Bar while right-edge normalizes it to Island', () => {
-    const ipc = readFileSync(join(__dirname, '../../shared/ipc.ts'), 'utf8')
+    const ipc = readFileSync(join(__dirname, '../../shared/contracts/settings/schema.ts'), 'utf8')
     const settings = readFileSync(join(__dirname, '../../renderer/src/features/settings/SettingsRoot.tsx'), 'utf8')
     const picker = readFileSync(join(__dirname, '../../renderer/src/components/OverlayChromePicker.tsx'), 'utf8')
     const app = readFileSync(join(__dirname, '../../renderer/src/App.tsx'), 'utf8')
@@ -825,7 +826,7 @@ describe('overlay chrome modes resolve through placement', () => {
     const css = readAppCss()
     const autohide = readFileSync(join(__dirname, '../../renderer/src/lib/overlay-autohide.ts'), 'utf8')
     expect(ipc).toMatch(/overlayLayout: z\.enum\(\['hide', 'island', 'bar'\]\)\.default\('hide'\)/)
-    expect(ipc).toMatch(/overlayLayout: 'hide'/)
+    expect(DEFAULT_SETTINGS.overlayLayout).toBe('hide')
     expect(ipc).toMatch(/overlayOrbStyle: z\.enum\(\['bar', 'jakub', 'obsidian'\]\)\.default\('jakub'\)/)
     expect(settings).toMatch(/OverlayChromePicker/)
     expect(settings).toMatch(/resolveOverlayPresentation/)
