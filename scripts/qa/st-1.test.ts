@@ -1,11 +1,17 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { BOOT_WINDOW_VARIANTS } from '../../src/main/infra/observability/projection'
 import {
   GATED_WINDOW_STAGES,
   PENDING_GLOBAL,
   STORAGE_SATURATED_LOG,
+  WINDOW_CHROMES,
+  WINDOW_MEASURED_VARIANT_ORDER,
+  WINDOW_MEASURED_REPEATS,
   WINDOW_STAGE_BUDGET_MS,
   WINDOW_VARIANTS,
+  WINDOW_CONSTRUCTION_ROOT_CAUSE,
   bootStagesFromAudit,
   buildLaunchFailureReport,
   buildReport,
@@ -26,6 +32,7 @@ import {
   syntheticDatalessPlan,
   runPurpose,
   timedCallsExpression,
+  windowConstructionPlan,
   windowConstructionGate,
   withTimeout,
   writeJsonToStdout,
@@ -36,6 +43,7 @@ import {
 const evaluateGlobally = (expression: string): unknown => (0, eval)(expression)
 const globals = globalThis as unknown as Record<string, Record<string, unknown> | undefined>
 const pending = (): Record<string, unknown> | undefined => globals[PENDING_GLOBAL]
+const workflowText = () => readFileSync(join(process.cwd(), '.github', 'workflows', 'qa-candidate.yml'), 'utf8').replace(/\r\n/g, '\n')
 
 const candidate = { build_run_id: 1, artifact_sha256: 'a'.repeat(64) }
 const goodSample = (tMs: number) => ({ tMs, writeMs: 2, lookupMs: 1, loopMaxSinceLastMs: 12, resources: {} })
@@ -341,6 +349,62 @@ describe('window-construction runs (M2-0516)', () => {
     expect(WINDOW_VARIANTS).toEqual([...BOOT_WINDOW_VARIANTS])
   })
 
+  it('prints the restored launch order with shipped warm-ups before measured repeats', () => {
+    const plan = windowConstructionPlan()
+    const warmups = plan.filter((entry) => entry.warmup)
+    const measured = plan.filter((entry) => !entry.warmup)
+    expect(WINDOW_CHROMES).toEqual(['opaque', 'transparent'])
+    expect(WINDOW_MEASURED_REPEATS).toBe(2)
+    expect(plan).toHaveLength(2 + WINDOW_VARIANTS.length * WINDOW_CHROMES.length * WINDOW_MEASURED_REPEATS)
+    expect(warmups).toHaveLength(WINDOW_CHROMES.length)
+    expect(measured).toHaveLength(WINDOW_VARIANTS.length * WINDOW_CHROMES.length * WINDOW_MEASURED_REPEATS)
+    expect(plan[0]).toEqual({ name: 'window-warmup-shipped-opaque', variant: 'shipped', chrome: 'opaque', warmup: true })
+    expect(plan[1]).toEqual({ name: 'window-warmup-shipped-transparent', variant: 'shipped', chrome: 'transparent', warmup: true })
+    expect(warmups.every((warmup) => plan.indexOf(warmup) < plan.findIndex((entry) => !entry.warmup))).toBe(true)
+    expect([...WINDOW_MEASURED_VARIANT_ORDER].sort()).toEqual([...WINDOW_VARIANTS].sort())
+    for (const warmup of warmups) {
+      const firstMeasured = plan.findIndex((entry) => !entry.warmup && entry.variant === warmup.variant && entry.chrome === warmup.chrome)
+      expect(firstMeasured).toBeGreaterThan(plan.indexOf(warmup))
+    }
+    expect(windowConstructionPlan().map((entry) => entry.name)).toEqual([
+      'window-warmup-shipped-opaque',
+      'window-warmup-shipped-transparent',
+      'window-spellcheck-off-opaque-1',
+      'window-spellcheck-off-transparent-1',
+      'window-paint-when-hidden-opaque-1',
+      'window-paint-when-hidden-transparent-1',
+      'window-prewarm-spellchecker-opaque-1',
+      'window-prewarm-spellchecker-transparent-1',
+      'window-shipped-opaque-1',
+      'window-shipped-transparent-1',
+      'window-spellcheck-off-opaque-2',
+      'window-spellcheck-off-transparent-2',
+      'window-paint-when-hidden-opaque-2',
+      'window-paint-when-hidden-transparent-2',
+      'window-prewarm-spellchecker-opaque-2',
+      'window-prewarm-spellchecker-transparent-2',
+      'window-shipped-opaque-2',
+      'window-shipped-transparent-2'
+    ])
+    for (const repeat of [1, 2]) {
+      expect(measured.filter((entry) => entry.name.endsWith(`-${repeat}`)).slice(-2).map((entry) => entry.name)).toEqual([
+        `window-shipped-opaque-${repeat}`,
+        `window-shipped-transparent-${repeat}`
+      ])
+    }
+  })
+
+  it('is the launch order the qa-candidate workflow runs', () => {
+    const workflow = workflowText()
+    expect(workflow).toContain('node scripts/qa/st-1.mjs --print-window-plan > st1-report/window-plan.json')
+    expect(workflow).toContain("jq -c '.[]' st1-report/window-plan.json | while read -r launch; do")
+    expect(workflow).toContain('run=$(jq -r \'.name\' <<<"$launch")')
+    expect(workflow).toContain('if [ "$warmup" = true ]; then warmup_args=(--window-warmup); fi')
+    expect(workflow).toContain('The two marked shipped warm-up launches run before any measured repeat')
+    expect(workflow).not.toContain('variants=(shipped spellcheck-off paint-when-hidden prewarm-spellchecker)')
+    expect(workflow).not.toContain('for repeat in 1 2; do')
+  })
+
   it('makes a run without a purpose an ST-1 run on the shipped window, and refuses a variant there', () => {
     expect(runPurpose({})).toEqual({ purpose: 'st-1', windowVariant: 'shipped' })
     expect(runPurpose({ windowVariant: 'paint-when-hidden' }).error).toMatch(/--window-variant needs --purpose window-construction/)
@@ -405,6 +469,7 @@ describe('windowConstructionGate (M2-0519)', () => {
       stage('createWindow.prewarm', prewarmMs, transparent),
       stage('createWindow.construct', constructMs, transparent),
       stage('createWindow.navigate', 400),
+      stage('createWindow.firstShow', 30),
       stage('createTray.newTray', 900)
     ])
   const passing = [
@@ -419,12 +484,172 @@ describe('windowConstructionGate (M2-0519)', () => {
       { name: 'st-1.json', report: { harness: 'ST-1', row: 'none' } }
     ])
     expect(gate).toMatchObject({ pass: true, budgetMs: 250, failures: [] })
+    expect(gate.rootCause).toEqual(WINDOW_CONSTRUCTION_ROOT_CAUSE)
+    expect(gate.rootCause).toMatchObject({
+      classification: 'UNKNOWN',
+      evidence: [
+        { run: '36999698235', measured: [] },
+        { run: '37080909059', measured: [] }
+      ],
+      leadAction: expect.stringContaining('st-1-macos-window/st1-report/window-gate.json')
+    })
+    expect(gate.rootCause.leadAction).toContain('dispatch qa-candidate three times on m2/integration-equivalent bytes')
+    expect(gate.rootCause.leadAction).toContain('pass: true with budgetMs: 250 each time')
+    expect(JSON.stringify(gate.rootCause)).not.toContain('harness-cold-first-measured-launch')
+    expect(JSON.stringify(gate.rootCause)).not.toContain('"over 250"')
     expect(gate.rows).toEqual([
-      { report: 'window-shipped-opaque-1/a.json', stage: 'createWindow.prewarm', chrome: 'opaque', ms: 12 },
-      { report: 'window-shipped-opaque-1/a.json', stage: 'createWindow.construct', chrome: 'opaque', ms: 111 },
-      { report: 'window-shipped-transparent-1/a.json', stage: 'createWindow.prewarm', chrome: 'transparent', ms: 9 },
-      { report: 'window-shipped-transparent-1/a.json', stage: 'createWindow.construct', chrome: 'transparent', ms: 93 }
+      { report: 'window-shipped-opaque-1/a.json', launch: 'window-shipped-opaque-1', variant: 'shipped', stage: 'createWindow.prewarm', chrome: 'opaque', ms: 12 },
+      { report: 'window-shipped-opaque-1/a.json', launch: 'window-shipped-opaque-1', variant: 'shipped', stage: 'createWindow.construct', chrome: 'opaque', ms: 111 },
+      {
+        report: 'window-shipped-transparent-1/a.json',
+        launch: 'window-shipped-transparent-1',
+        variant: 'shipped',
+        stage: 'createWindow.prewarm',
+        chrome: 'transparent',
+        ms: 9
+      },
+      {
+        report: 'window-shipped-transparent-1/a.json',
+        launch: 'window-shipped-transparent-1',
+        variant: 'shipped',
+        stage: 'createWindow.construct',
+        chrome: 'transparent',
+        ms: 93
+      }
     ])
+    expect(gate.launches).toHaveLength(11)
+    expect(gate.launchSummaries).toEqual(
+      expect.arrayContaining([
+        {
+          launch: 'window-shipped-opaque-1',
+          variant: 'shipped',
+          chrome: 'opaque',
+          warmup: false,
+          stages: [
+            { stage: 'createWindow.prewarm', ms: 12 },
+            { stage: 'createWindow.construct', ms: 111 },
+            { stage: 'createWindow.navigate', ms: 400 },
+            { stage: 'createWindow.firstShow', ms: 30 },
+            { stage: 'createTray.newTray', ms: 900 }
+          ],
+          gatedStages: [
+            { stage: 'createWindow.prewarm', ms: 12 },
+            { stage: 'createWindow.construct', ms: 111 }
+          ],
+          maxStageMs: 900
+        },
+        {
+          launch: 'window-spellcheck-off-opaque-1',
+          variant: 'spellcheck-off',
+          chrome: 'opaque',
+          warmup: false,
+          stages: [{ stage: 'createWindow.construct', ms: 900 }],
+          gatedStages: [{ stage: 'createWindow.construct', ms: 900 }],
+          maxStageMs: 900
+        }
+      ])
+    )
+    expect(gate.launches).toEqual(expect.arrayContaining([
+      {
+        report: 'window-shipped-opaque-1/a.json',
+        launch: 'window-shipped-opaque-1',
+        variant: 'shipped',
+        warmup: false,
+        stage: 'createWindow.prewarm',
+        chrome: 'opaque',
+        ms: 12
+      },
+      {
+        report: 'window-shipped-opaque-1/a.json',
+        launch: 'window-shipped-opaque-1',
+        variant: 'shipped',
+        warmup: false,
+        stage: 'createWindow.construct',
+        chrome: 'opaque',
+        ms: 111
+      },
+      {
+        report: 'window-shipped-opaque-1/a.json',
+        launch: 'window-shipped-opaque-1',
+        variant: 'shipped',
+        warmup: false,
+        stage: 'createWindow.navigate',
+        chrome: null,
+        ms: 400
+      },
+      {
+        report: 'window-shipped-opaque-1/a.json',
+        launch: 'window-shipped-opaque-1',
+        variant: 'shipped',
+        warmup: false,
+        stage: 'createWindow.firstShow',
+        chrome: null,
+        ms: 30
+      },
+      {
+        report: 'window-shipped-opaque-1/a.json',
+        launch: 'window-shipped-opaque-1',
+        variant: 'shipped',
+        warmup: false,
+        stage: 'createTray.newTray',
+        chrome: null,
+        ms: 900
+      },
+      {
+        report: 'window-shipped-transparent-1/a.json',
+        launch: 'window-shipped-transparent-1',
+        variant: 'shipped',
+        warmup: false,
+        stage: 'createWindow.prewarm',
+        chrome: 'transparent',
+        ms: 9
+      },
+      {
+        report: 'window-shipped-transparent-1/a.json',
+        launch: 'window-shipped-transparent-1',
+        variant: 'shipped',
+        warmup: false,
+        stage: 'createWindow.construct',
+        chrome: 'transparent',
+        ms: 93
+      },
+      {
+        report: 'window-spellcheck-off-opaque-1/a.json',
+        launch: 'window-spellcheck-off-opaque-1',
+        variant: 'spellcheck-off',
+        warmup: false,
+        stage: 'createWindow.construct',
+        chrome: 'opaque',
+        ms: 900
+      }
+    ]))
+  })
+
+  it('uses the launch report variant for per-launch diagnostics when a stage payload disagrees', () => {
+    const gate = windowConstructionGate([
+      ...passing,
+      {
+        name: 'window-spellcheck-off-opaque-1/a.json',
+        report: windowReport('spellcheck-off', [{ ...stage('createWindow.construct', 900, false), windowVariant: 'shipped' }])
+      }
+    ])
+
+    expect(gate.pass).toBe(true)
+    expect(gate.rows.map((row) => row.report)).toEqual([
+      'window-shipped-opaque-1/a.json',
+      'window-shipped-opaque-1/a.json',
+      'window-shipped-transparent-1/a.json',
+      'window-shipped-transparent-1/a.json'
+    ])
+    expect(gate.launches).toContainEqual({
+      report: 'window-spellcheck-off-opaque-1/a.json',
+      launch: 'window-spellcheck-off-opaque-1',
+      variant: 'spellcheck-off',
+      warmup: false,
+      stage: 'createWindow.construct',
+      chrome: 'opaque',
+      ms: 900
+    })
   })
 
   it('fails a shipped prewarm or construct at or over 250 ms, in either chrome', () => {
@@ -452,6 +677,24 @@ describe('windowConstructionGate (M2-0519)', () => {
       'no-ms.json: createWindow.prewarm has no measured ms',
       'no-chrome.json: createWindow.prewarm does not say which chrome it built'
     ])
+    expect(gate.launches).toContainEqual({
+      report: 'launch-failed.json',
+      launch: 'launch-failed.json',
+      variant: 'shipped',
+      warmup: false,
+      stage: null,
+      chrome: null,
+      ms: null
+    })
+    expect(gate.launchSummaries).toContainEqual({
+      launch: 'launch-failed.json',
+      variant: 'shipped',
+      chrome: null,
+      warmup: false,
+      stages: [{ stage: null, ms: null }],
+      gatedStages: [],
+      maxStageMs: null
+    })
   })
 
   it('fails when a chrome was never measured, and when there is no shipped report at all', () => {
