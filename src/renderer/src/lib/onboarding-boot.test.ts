@@ -192,6 +192,8 @@ describe('FITO-185-N exclusiveOnboarding flag', () => {
 
   it('main createWindow stamps exclusiveOnboarding on packaged file URL too', () => {
     const main = readFileSync(join(__dirname, '../../../main/index.ts'), 'utf8')
+    const lifecycleFile = ['main-lifecycle', 'ts'].join('.')
+    const lifecycle = readFileSync(join(__dirname, '../../../main/lifecycle', lifecycleFile), 'utf8')
     expect(main).toMatch(/function overlayRendererUrl\(\): string/)
     expect(main).toMatch(/const onboardingLive = onboardingExclusiveLive\(\)/)
     expect(main).toMatch(/if \(onboardingLive\) params\.set\('exclusiveOnboarding'/)
@@ -202,7 +204,7 @@ describe('FITO-185-N exclusiveOnboarding flag', () => {
     expect(main).toMatch(/const rendererUrl = overlayRendererUrl\(\)/)
     // createWindow navigates via bindReadinessThenNavigate with this same rendererUrl.
     expect(main).toMatch(/bindReadinessThenNavigate\(win, rendererUrl,/)
-    expect(main).toMatch(/reloadOverlay\(self\)/)
+    expect(lifecycle).toMatch(/reloadOverlay\(self\)/)
   })
 })
 

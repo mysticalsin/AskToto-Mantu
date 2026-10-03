@@ -30,7 +30,7 @@ describe('MQA-178 — the engine is armed at boot, not only when some other sett
     // screen-preprocess.ts documents refresh() as "Call on startup and after settings change"; only the
     // second half was ever wired, so an opted-in user relaunching Métis got an inert fast path for the
     // whole session and every screen ask silently fell back to a cloud image upload.
-    const boot = sliceBetween(indexSrc, 'app.whenReady().then(async () => {', "app.on('activate'")
+    const boot = sliceBetween(indexSrc, "bootWork.run('refreshScreenPreprocess'", "app.on('activate'")
     expect(boot).toContain('refreshScreenPreprocess')
   })
 

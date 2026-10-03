@@ -13,7 +13,7 @@ import { join } from 'node:path'
  * crash.
  */
 describe('will-quit handler crash guard', () => {
-  const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+  const source = readFileSync(join(__dirname, 'lifecycle', 'main-lifecycle.ts'), 'utf8')
   const handler = (() => {
     const start = source.indexOf("app.on('will-quit'")
     expect(start).toBeGreaterThan(-1)

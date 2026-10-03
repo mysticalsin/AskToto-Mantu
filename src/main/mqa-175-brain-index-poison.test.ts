@@ -11,6 +11,9 @@ import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentine
 
 vi.mock('electron')
 
+const lifecycleFile = ['main-lifecycle', 'ts'].join('.')
+const lifecycleSource = readFileSync(join(__dirname, 'lifecycle', lifecycleFile), 'utf8')
+
 const ENC_MARKER_V2 = Buffer.from('ATKENC2\n', 'utf8')
 
 /**
@@ -412,8 +415,8 @@ describe('MQA-175 — an early death must leave a trace and route the next launc
     expect(clear).toBeGreaterThan(stop) // stop power-save with the 15s backstop clear
     // Brain resume still inside the 15s timer (MQA-175).
     expect(slice.indexOf('resumeBackfillIfPending()')).toBeGreaterThan(-1)
-    const willQuit = source.indexOf("app.on('will-quit'")
-    const willSlice = source.slice(willQuit, willQuit + 900)
+    const willQuit = lifecycleSource.indexOf("app.on('will-quit'")
+    const willSlice = lifecycleSource.slice(willQuit, willQuit + 900)
     expect(willSlice).toMatch(/setBootPowerSaveBlock\(false\)/)
     expect(willSlice).toMatch(/endBootWatch\(/)
     expect(source).toMatch(/bootPowerSaveBlockerId/)

@@ -222,8 +222,16 @@ describe('boot wiring in index.ts (M2-0518)', () => {
   const isCallTo = (node: ts.Node, callee: string): node is ts.CallExpression =>
     ts.isCallExpression(node) && node.expression.getText(indexSource) === callee
 
-  const whenReady = findAll(indexSource, (node) => isCallTo(node, 'app.whenReady().then')) as ts.CallExpression[]
-  const bootCallback = whenReady[0]?.arguments[0]
+  const readyBootstrap = findAll(indexSource, (node) => isCallTo(node, 'installReadyBootstrapLifecycle')) as ts.CallExpression[]
+  const readyDeps = readyBootstrap[0]?.arguments[2]
+  const runReadyProperty = readyDeps && ts.isObjectLiteralExpression(readyDeps)
+    ? readyDeps.properties.find((property): property is ts.PropertyAssignment =>
+        ts.isPropertyAssignment(property) &&
+        ts.isIdentifier(property.name) &&
+        property.name.text === 'runReady'
+      )
+    : undefined
+  const bootCallback = runReadyProperty?.initializer
 
   /** True when `node` is, or sits inside, the job argument of a bootWork.run call (or a periodic setInterval re-run). */
   const insideBootJob = (node: ts.Node): boolean => {
@@ -249,7 +257,7 @@ describe('boot wiring in index.ts (M2-0518)', () => {
     'endBootWatch',
     'probeScreenCapture'
   ])('starts %s at launch only through the boot-work queue', (name) => {
-    expect(whenReady).toHaveLength(1)
+    expect(readyBootstrap).toHaveLength(1)
     expect(bootCallback).toBeDefined()
     const references = findAll(bootCallback!, (node) =>
       ts.isIdentifier(node) &&

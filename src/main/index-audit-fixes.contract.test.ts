@@ -18,6 +18,8 @@ import { describe, expect, it } from 'vitest'
 // `providerReady`: the verifier flagged that as the riskier change, because ~10 renderer gates currently
 // succeed via failover and would start failing closed.
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+const lifecycleFile = ['main-lifecycle', 'ts'].join('.')
+const lifecycleSrc = readFileSync(join(__dirname, 'lifecycle', lifecycleFile), 'utf8')
 
 /** Slice the source from `from` up to (excluding) the next occurrence of `to`. Sliced inside each test so
  *  one drifted marker reports as its own failure instead of aborting collection for the whole file. */
@@ -27,6 +29,14 @@ function sliceBetween(from: string, to: string): string {
   const end = indexSrc.indexOf(to, start)
   expect(end, `end marker not found after ${from}: ${to}`).toBeGreaterThan(-1)
   return indexSrc.slice(start, end)
+}
+
+function sliceLifecycleBetween(from: string, to: string): string {
+  const start = lifecycleSrc.indexOf(from)
+  expect(start, `marker not found: ${from}`).toBeGreaterThan(-1)
+  const end = lifecycleSrc.indexOf(to, start)
+  expect(end, `end marker not found after ${from}: ${to}`).toBeGreaterThan(-1)
+  return lifecycleSrc.slice(start, end)
 }
 
 describe('MQA-037 — the retry idle cap is a network diagnostic and must not shrink a local attempt', () => {
@@ -78,12 +88,12 @@ describe('MQA-037 — the retry idle cap is a network diagnostic and must not sh
 
 describe('MQA-038 — a renderer crash re-syncs the renderer-owned meeting state', () => {
   const handler = (): string =>
-    sliceBetween("win.webContents.on('render-process-gone', (_e, details) => {", 'const rendererUrl = overlayRendererUrl()')
+    sliceLifecycleBetween("self.webContents.on('render-process-gone', (_e, details) => {", 'deps.ipcMain.handle')
 
   it('resets the fresh-question boundary so a later plain ask cannot inherit the dead meeting', () => {
     const body = handler()
     expect(body).toMatch(/setListeningActive\(false\)/)
-    expect(body).toMatch(/lastPlainAskAt = 0/)
+    expect(body).toMatch(/resetLastPlainAskAt\(\)/)
     expect(body).toMatch(/resetDustConversation\(\)/)
   })
 
@@ -230,7 +240,7 @@ describe('M2-0533 — login item status is cached and refreshed off the boot pat
   })
 
   it('boot reconciles launch-at-login through bootWork after first show', () => {
-    const boot = sliceBetween('app.whenReady().then(async () => {', '  // Unpackaged (dev/QA) runs show Electron')
+    const boot = sliceBetween("bootWork.run('reconcileLaunchAtLogin'", '  // Unpackaged (dev/QA) runs show Electron')
     expect(boot).toMatch(/bootWork\.run\('reconcileLaunchAtLogin'/)
     expect(boot).not.toMatch(/getLoginItemSettings/)
   })

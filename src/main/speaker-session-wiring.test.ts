@@ -23,6 +23,9 @@ import { crashDetail } from './infra/observability/crash-taxonomy'
 
 const indexText = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const indexSource = ts.createSourceFile('index.ts', indexText, ts.ScriptTarget.Latest, true)
+const lifecycleFile = ['main-lifecycle', 'ts'].join('.')
+const lifecycleText = readFileSync(join(__dirname, 'lifecycle', lifecycleFile), 'utf8')
+const lifecycleSource = ts.createSourceFile(lifecycleFile, lifecycleText, ts.ScriptTarget.Latest, true)
 
 function runSource(sourceText: string, globals: Record<string, unknown>): any {
   const compiled = ts.transpileModule(sourceText, {
@@ -75,13 +78,13 @@ function actualRendererGoneHandler(globals: Record<string, unknown>): (...args: 
     if (
       ts.isCallExpression(node) &&
       ts.isPropertyAccessExpression(node.expression) &&
-      node.expression.expression.getText(indexSource) === 'win.webContents' &&
+      node.expression.expression.getText(lifecycleSource) === 'self.webContents' &&
       node.expression.name.text === 'on' &&
-      node.arguments[0]?.getText(indexSource) === "'render-process-gone'"
+      node.arguments[0]?.getText(lifecycleSource) === "'render-process-gone'"
     ) callback = node.arguments[1]
     ts.forEachChild(node, visit)
   }
-  visit(indexSource)
+  visit(lifecycleSource)
   expect(callback, 'Actual overlay render-process-gone handler was not found').toBeDefined()
   if (!callback) return () => undefined
   // The handler's automatic-reload branch calls the real reloadOverlay(...) helper — lift it too, so a
@@ -91,7 +94,28 @@ function actualRendererGoneHandler(globals: Record<string, unknown>): (...args: 
   )
   expect(reloadOverlayDecl, 'Actual source function reloadOverlay was not found').toBeDefined()
   const prefix = reloadOverlayDecl ? `${reloadOverlayDecl.getText(indexSource)}\n` : ''
-  return runSource(`${prefix}globalThis.result = (${callback.getText(indexSource)});`, globals)
+  const deps = {
+    ...globals,
+    log: globals.mainLog,
+    resetLastPlainAskAt: globals.resetLastPlainAskAt ?? (() => { (globals as { lastPlainAskAt?: number }).lastPlainAskAt = 0 }),
+    resetRecoveredOverlayGeometry: globals.resetRecoveredOverlayGeometry ?? (() => {
+      ;(globals as { isMinimized?: boolean }).isMinimized = false
+      ;(globals as { currentWidth?: number; BAR_WIDTH?: number }).currentWidth = (globals as { BAR_WIDTH?: number }).BAR_WIDTH
+    }),
+    reloadOverlay: globals.reloadOverlay ?? ((win: { loadURL: (url: string) => Promise<unknown> }) => {
+      win.loadURL((globals.overlayRendererUrl as () => string)()).catch(() => undefined)
+    }),
+    requireAuth: globals.requireAuth ?? (() => true),
+    showRenderLoopHaltedDialog: globals.showRenderLoopHaltedDialog ?? (() => Promise.resolve()),
+    showMessageBox: globals.showMessageBox ?? (() => Promise.resolve({ response: 1 })),
+    quit: globals.quit ?? (() => undefined),
+    resolveMeetingsFolder: globals.resolveMeetingsFolder ?? (() => '/meetings'),
+    openMeetingsFolder: globals.openMeetingsFolder ?? (() => Promise.resolve('')),
+    copyDiagnostics: globals.copyDiagnostics ?? (() => undefined),
+    appInfo: globals.appInfo ?? (() => ({ version: 'test', platform: 'test', arch: 'test', packaged: false }))
+  }
+  const context = globals.context ?? { mainWindow: () => globals.win }
+  return runSource(`${prefix}globalThis.result = (${callback.getText(lifecycleSource)});`, { ...globals, deps, context })
 }
 
 interface SessionApi {

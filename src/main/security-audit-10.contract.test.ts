@@ -4,13 +4,15 @@ import { describe, expect, it, vi } from 'vitest'
 import { createListeningStateHandler } from './listening-state-ipc'
 
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+const lifecycleFile = ['main-lifecycle', 'ts'].join('.')
+const lifecycleSrc = readFileSync(join(__dirname, 'lifecycle', lifecycleFile), 'utf8')
 
-function sliceBetween(from: string, to: string): string {
-  const start = indexSrc.indexOf(from)
+function sliceBetween(from: string, to: string, source = indexSrc): string {
+  const start = source.indexOf(from)
   expect(start, `marker not found: ${from}`).toBeGreaterThan(-1)
-  const end = indexSrc.indexOf(to, start)
+  const end = source.indexOf(to, start)
   expect(end, `end marker not found after ${from}: ${to}`).toBeGreaterThan(-1)
-  return indexSrc.slice(start, end)
+  return source.slice(start, end)
 }
 
 describe('AUDIT-10 — Settings surface stays on the isolated main window', () => {
@@ -139,9 +141,9 @@ describe('AUDIT-10 — remaining disk/network IPC is SSO-gated', () => {
     expect(captureWarm).toMatch(/if \(!requireAuth\(\)\) return/)
     expect(captureWarm.indexOf('if (!requireAuth()) return')).toBeLessThan(captureWarm.indexOf('prewarmCapture()'))
 
-    const crash = sliceBetween('ipcMain.handle(IPC.rendererCrash', 'ipcMain.handle(IPC.windowMoveBy')
-    expect(crash).toMatch(/if \(!requireAuth\(\)\) return/)
-    expect(crash.indexOf('if (!requireAuth()) return')).toBeLessThan(crash.indexOf('persistCrash'))
+    const crash = sliceBetween('deps.ipcMain.handle(deps.rendererCrashChannel', '})', lifecycleSrc)
+    expect(crash).toMatch(/if \(!deps\.requireAuth\(\)\) return/)
+    expect(crash.indexOf('if (!deps.requireAuth()) return')).toBeLessThan(crash.indexOf('deps.persistRendererCrash'))
 
     const check = sliceBetween('ipcMain.handle(IPC.updateCheck', 'ipcMain.handle(IPC.updateDownload')
     expect(check).toMatch(/if \(!requireAuth\(\)\) return/)
