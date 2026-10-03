@@ -1,4 +1,5 @@
 name: Kit checks
+run-name: ${{ github.event_name == 'pull_request' && 'Kit checks (registration)' || 'Kit checks' }}
 
 # Runs the skill-registry check and the Hindsight package validator against a kit copy. The kit itself
 # lives outside this repository. The program repository copies this workflow and must add a `push` and
@@ -15,6 +16,9 @@ on:
         description: Path to the Hindsight kit package directory, relative to the repository root; it must contain check_hindsight_package.py
         required: true
         type: string
+  pull_request:
+    paths:
+      - .github/workflows/kit-checks.yml
 
 permissions:
   contents: read
@@ -25,6 +29,7 @@ concurrency:
 
 jobs:
   kit-checks:
+    if: github.event_name == 'workflow_dispatch'
     name: Kit checks
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -45,11 +50,32 @@ jobs:
       - name: One entry, auto_install and auto_capture false
         env:
           REGISTRY: ${{ inputs.registry }}
-        run: node scripts/kit/check-skill-registry.mjs --registry "$REGISTRY"
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs'
+
+          const registryPath = process.env.REGISTRY
+          const registry = JSON.parse(readFileSync(registryPath, 'utf8'))
+          const entries = Array.isArray(registry) ? registry : Array.isArray(registry.skills) ? registry.skills : null
+          const problems = []
+          if (!entries) problems.push('registry has no skills array')
+          else {
+            if (entries.length !== 1) problems.push(`expected exactly one skill entry, found ${entries.length}`)
+            entries.forEach((entry, index) => {
+              const label = entry?.name ?? entry?.id ?? `#${index}`
+              for (const flag of ['auto_install', 'auto_capture']) {
+                if (entry?.[flag] !== false) problems.push(`skill ${label}: ${flag} must be false`)
+              }
+            })
+          }
+          for (const problem of problems) console.error(`FAIL ${problem}`)
+          if (problems.length) process.exit(1)
+          console.log('skill registry ok: one entry, auto_install and auto_capture false')
+          NODE
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.12'
       - name: Hindsight package validator
         env:
           KIT_DIR: ${{ inputs.kit_dir }}
-        run: python3 "$KIT_DIR/check_hindsight_package.py" "$KIT_DIR"
+        run: python3 "$KIT_DIR/check_hindsight_package.py"
