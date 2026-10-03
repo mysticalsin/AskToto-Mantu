@@ -953,6 +953,8 @@ jobs:
           hdiutil detach "$volume" > /dev/null
           echo "app=$target/$bundle" >> "$GITHUB_OUTPUT"
       - name: Capture every History state in every variant and check contrast and clipping
+        id: capture
+        continue-on-error: true
         timeout-minutes: 20
         env:
           APP: ${{ steps.install.outputs.app }}
@@ -960,7 +962,7 @@ jobs:
           node scripts/qa/history-design-capture.mjs "$APP" --out history-design
           cat history-design/SUMMARY.md >> "$GITHUB_STEP_SUMMARY"
       - name: Summarize a capture that did not pass
-        if: failure()
+        if: steps.capture.outcome == 'failure'
         run: |
           if [ -f history-design/SUMMARY.md ]; then cat history-design/SUMMARY.md >> "$GITHUB_STEP_SUMMARY"; fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
