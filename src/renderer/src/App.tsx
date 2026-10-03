@@ -261,6 +261,7 @@ const DEMO_SUG = `**Say this:** "At Mantu I led the Métis build, a Cluely-class
 
 // ── License enforcement master switch ──────────────────────────────────────────────────────────
 // OFF: licenseGateEnabled, even from managed-config, is inert unless this and Settings.tsx's LICENSE_UI_ENABLED move together.
+// Flipping this constant alone ships a brick: the runtime gate can block while Settings still hides activation.
 const LICENSE_ENFORCEMENT = false
 
 export function App(): JSX.Element {
@@ -281,7 +282,7 @@ export function App(): JSX.Element {
   }, [])
   const windowDrag = useWindowDrag(onWindowDragStart, { noTouch: true })
 
-  const [savedPath, setSavedPath] = useState<string | null>(null) // FITO-185-X: bound license:gate in useAppBoot; failOpen on timeout.
+  const [savedPath, setSavedPath] = useState<string | null>(null)
   const {
     settings,
     settingsBootError,
@@ -408,6 +409,7 @@ export function App(): JSX.Element {
     settingsInitialTab,
     settingsNotice,
     openSettings,
+    openSettingsTab,
     openSettingsDefault,
     navigationGuard,
     setNavigationReveal,
@@ -3348,7 +3350,7 @@ export function App(): JSX.Element {
         }}
         onBack={() => setView('answer')}
         onConnectCalendar={() => {
-          openSettings('calendar')
+          openSettingsTab('calendar')
         }}
         onNewChat={reset}
         // savedPath is the FULL path returned by the save IPC; RecallView's rows compare against the bare
@@ -3367,7 +3369,7 @@ export function App(): JSX.Element {
         onDashboardOpen={minimizeForIntelligence}
       />
     ),
-    [reset, savedPath, openPastMeeting, openSettings, minimizeForIntelligence]
+    [reset, savedPath, openPastMeeting, openSettings, openSettingsTab, minimizeForIntelligence]
   )
   const brainBody = useMemo(
     () => (

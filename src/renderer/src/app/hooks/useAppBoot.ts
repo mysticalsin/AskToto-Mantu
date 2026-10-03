@@ -41,6 +41,7 @@ export function useAppBoot({ demo, savedPath, licenseEnforcement }: UseAppBootOp
       return
     }
     let cancelled = false
+    // FITO-185-X: bound license:gate in useAppBoot; fail open on timeout so post-boot Loading cannot spin forever.
     const failOpen: LicenseGateVerdict = { gateEnabled: true, allowed: true }
     const timer = window.setTimeout(() => {
       if (!cancelled) setLicenseGate(failOpen)

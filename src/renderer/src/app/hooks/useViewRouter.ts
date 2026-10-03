@@ -31,6 +31,7 @@ export function useViewRouter({
   settingsInitialTab: SettingsInitialTab
   settingsNotice: string | undefined
   openSettings: (tab?: SettingsInitialTab, notice?: string) => void
+  openSettingsTab: (tab?: SettingsInitialTab, notice?: string) => void
   openSettingsDefault: () => void
   navigationGuard: NavigationGuardService
   setNavigationReveal: (reveal: () => void) => void
@@ -40,19 +41,25 @@ export function useViewRouter({
   guardReviewNav: (proceed: () => void) => void
 } {
   // Keep App's route state outside the root render body while preserving transition-wrapped switches and
-  // History transition reporting for lazy chunks.
+  // History transition reporting for lazy chunks. Plain setViewRaw is still exposed for switches that
+  // must land in the current frame; setView stays transition-wrapped to avoid React #426 when a discrete
+  // click first mounts a lazy view chunk.
   const [view, setView, setViewRaw] = useTransitionView(initialViewFromLaunch)
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsInitialTab>(initialSettingsTabFromLaunch)
   const [settingsNotice, setSettingsNotice] = useState<string | undefined>(undefined)
 
-  const openSettings = useCallback((tab?: SettingsInitialTab, notice?: string): void => {
+  const openSettingsTab = useCallback((tab?: SettingsInitialTab, notice?: string): void => {
     setSettingsInitialTab(tab)
     setSettingsNotice(notice)
-    setMinimized(false)
-    void window.toto.minimize(false)
     setView('settings')
     setCollapsed(false)
-  }, [setCollapsed, setMinimized, setView])
+  }, [setCollapsed, setView])
+
+  const openSettings = useCallback((tab?: SettingsInitialTab, notice?: string): void => {
+    openSettingsTab(tab, notice)
+    setMinimized(false)
+    void window.toto.minimize(false)
+  }, [openSettingsTab, setMinimized])
 
   const openSettingsDefault = useCallback((): void => {
     setSettingsInitialTab(undefined)
@@ -72,6 +79,8 @@ export function useViewRouter({
   const onReviewDirtyChange = useCallback((dirty: boolean, save?: () => Promise<boolean>): void => {
     reviewDirtyRef.current = { dirty, save }
   }, [])
+  // These refs keep the guard callback identity stable for React.memo(Bar): it can read the latest view
+  // and dirty-save hook without re-creating every Bar callback whenever Review's draft state changes.
   const viewRef = useRef(view)
   viewRef.current = view
 
@@ -103,6 +112,7 @@ export function useViewRouter({
     settingsInitialTab,
     settingsNotice,
     openSettings,
+    openSettingsTab,
     openSettingsDefault,
     navigationGuard,
     setNavigationReveal,
