@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import type { Browser } from 'playwright'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { DESIGN_CAPTURE_ENTRY, rendererInputs } from './renderer-inputs'
 import {
   MOTIONS,
@@ -15,7 +16,7 @@ import {
   pngSize,
   sha256Hex
 } from './capture-manifest.mjs'
-import { AUDIT_STANDARD } from './capture-audit.mjs'
+import { AUDIT_STANDARD, contrastRatio } from './capture-audit.mjs'
 import {
   AUDIT_NEGATIVE_CONTROL_STATE,
   DESIGN_STATES,
@@ -112,6 +113,46 @@ describe('design states', () => {
     expect(resolveDesignStateIncludingQa(`?state=${AUDIT_NEGATIVE_CONTROL_STATE.id}`)).toBe(
       AUDIT_NEGATIVE_CONTROL_STATE
     )
+  })
+})
+
+describe('audit negative-control CSS', () => {
+  let browser: Browser
+
+  beforeAll(async () => {
+    const { chromium } = await import('playwright')
+    browser = await chromium.launch({ headless: true })
+  })
+
+  afterAll(async () => {
+    await browser?.close()
+  })
+
+  it('keeps the low-contrast text color active in both capture themes', async () => {
+    const styles = `${read('src/renderer/src/tokens.css')}\n${read('src/renderer/src/design-capture/capture.css')}`
+
+    for (const colorScheme of ['light', 'dark'] as const) {
+      const page = await browser.newPage({ colorScheme, viewport: { width: 960, height: 640 } })
+      try {
+        await page.setContent(
+          `<!doctype html><html class="design-capture"><head><style>${styles}</style></head><body><div id="root"><div class="dc-card dc-audit-negative"><p class="dc-audit-negative-text">Contrast guard sample</p></div></div></body></html>`,
+          { waitUntil: 'domcontentloaded' }
+        )
+        const computed = await page.locator('.dc-audit-negative-text').evaluate((element: any) => {
+          const view = element.ownerDocument.defaultView
+          const text = view.getComputedStyle(element)
+          const card = view.getComputedStyle(element.closest('.dc-audit-negative'))
+          return { color: text.color, background: card.backgroundColor }
+        })
+        expect(computed, colorScheme).toEqual({
+          color: 'rgb(119, 119, 119)',
+          background: 'rgb(255, 255, 255)'
+        })
+        expect(contrastRatio(computed.color, computed.background), colorScheme).toBeLessThan(4.5)
+      } finally {
+        await page.close()
+      }
+    }
   })
 })
 

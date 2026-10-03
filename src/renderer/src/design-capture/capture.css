@@ -108,7 +108,7 @@ body {
   background: rgb(255 255 255);
   color: rgb(27 21 36);
 }
-.dc-audit-negative-text {
+.dc-audit-negative .dc-audit-negative-text {
   color: rgb(119 119 119);
 }
 .dc-audit-negative-control {
