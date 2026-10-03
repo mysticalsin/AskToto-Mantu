@@ -10,6 +10,7 @@ import {
   HISTORY_DESIGN_STATES,
   IPC_CHANNELS,
   KEYBOARD_VARIANT_ID,
+  captureNeedsResizeSettle,
   composite,
   contrastRatio,
   designVerdict,
@@ -85,6 +86,13 @@ describe('History design matrix (M2-0032)', () => {
       recallHydration: IPC.recallHydration
     })
     expect(HISTORY_DEGRADED_MS).toBe(RENDERER_DEGRADED_MS)
+  })
+
+  it('does not spend the loading capture window on harness resize settling', () => {
+    const loading = HISTORY_DESIGN_STATES.find((state) => state.id === 'loading')!
+    const rows = HISTORY_DESIGN_STATES.find((state) => state.id === 'rows')!
+    expect(captureNeedsResizeSettle(loading)).toBe(false)
+    expect(captureNeedsResizeSettle(rows)).toBe(true)
   })
 
   it('answers the list with the real rows, plus one flagged row where the state needs it', () => {
