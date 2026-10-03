@@ -68,4 +68,13 @@ describe('MQA-177 — logs written under test land nowhere near the real user pr
     expect(existsSync(scratchAudit)).toBe(true)
     expect(readFileSync(scratchAudit, 'utf8')).toContain('MQA-177')
   })
+
+  it('writes app.shutdown.clean before the will-quit caller returns', () => {
+    const scratchAudit = join(scratchLogDir, 'audit.log')
+    rmSync(scratchAudit, { force: true })
+
+    auditLog('app.shutdown.clean', { bootId: 'boot-test', uptimeS: 7, reason: 'will-quit' })
+
+    expect(readFileSync(scratchAudit, 'utf8')).toContain('"event":"app.shutdown.clean"')
+  })
 })

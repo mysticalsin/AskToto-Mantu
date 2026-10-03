@@ -32,7 +32,7 @@ Options:
   --implementer-model <id>     implementer model label for the evidence record
   --validator-model <id>       validator model label for the evidence record
   --candidate-run <id>         qa-candidate.yml run id that built the app under test; switches the bundle to the
-                               M2-0194 attribution shape (adds audit excerpts and stall-bundle names)
+                               M2-0194 attribution shape (adds audit excerpts, stalls.jsonl and stall-bundle names)
   --collect-diagnostic-reports explicit consent to collect matching Metis/AskToto .spin/.hang reports
   --dry-run                    create fixtures and reports without launching or sampling; if --app is provided,
                                record the app executable hash and NODE_OPTIONS fuse state
@@ -144,6 +144,10 @@ append_jsonl() {
   local file=$1
   local row=$2
   printf '%s\n' "$row" >> "$file"
+}
+
+epoch_ms() {
+  node -e 'console.log(Date.now())'
 }
 
 prompt_result() {
@@ -286,9 +290,13 @@ sample_app() {
   fi
   local main_sampled=true
   printf '%s\n' "$APP_PID" >> "$OUT/app-pids.txt"
+  local main_sample_start_ms
+  main_sample_start_ms=$(epoch_ms)
   if ! sample_pid "$APP_PID" "$row-main"; then
     main_sampled=false
     SAMPLE_FAILURES=$((SAMPLE_FAILURES + 1))
+  else
+    append_jsonl "$OUT/sample-index.jsonl" "{\"row\":$(json_string "$row"),\"role\":\"main\",\"capturedMs\":$((main_sample_start_ms + 5000)),\"file\":$(json_string "samples/$row-main.sample.txt")}"
   fi
   local rp renderer_successes=0 renderer_attempts=0
   while IFS= read -r rp; do
@@ -478,6 +486,9 @@ write_environment() {
     printf '  "artifact_sha256": %s,\n' "$(json_string "$ARTIFACT")"
     printf '  "build_run_id": %s,\n' "$(json_string "$BUILD_RUN_ID")"
     [[ -z "$CANDIDATE_RUN" ]] || printf '  "candidate_run": %s,\n' "$(json_string "$CANDIDATE_RUN")"
+    if [[ -n "$CANDIDATE_RUN" ]]; then
+      printf '  "installed_variant": %s,\n' "$(json_string "$([[ "${HOSTED_WINDOWS:-0}" == 1 || "$QA_HOST_LABEL" == windows-latest || "$APP" == *.exe ]] && echo windows-setup || echo macos-dmg)")"
+    fi
     printf '  "qa_account_asserted": %s,\n' "$QA_ACCOUNT"
     printf '  "dry_run": %s,\n' "$DRY_RUN"
     printf '  "app_executable_sha256": %s,\n' "$(json_string "${APP_EXE_SHA:-not-recorded}")"
@@ -754,7 +765,9 @@ EOF_HOSTED_RECORDS
 hosted_row() {
   local row=$1 drive=$2 method=$3 precondition=$4
   shift 4
-  local observation result
+  local observation result row_started_ms row_finished_ms
+  row_started_ms=${ROW_WINDOW_STARTED_MS:-$(epoch_ms)}
+  ROW_WINDOW_STARTED_MS=""
   observation=$(run_with_timeout "$OBSERVE_WALL_SECONDS" node "$SCRIPT_DIR/cdp-observe.mjs" \
     --port "$CDP_PORT" --row "$row" --drive "$drive" --timeout-ms "$OBSERVE_TIMEOUT_MS" 2>/dev/null | head -n 1) || true
   result=$(printf '%s' "$observation" | sed -n 's/^{"operator_result":"\([a-z-]*\)".*}$/\1/p')
@@ -765,7 +778,8 @@ hosted_row() {
   [[ "$precondition" == ok ]] || result="not-exercised"
   [[ "$result" != observed ]] || SYMPTOM_ROWS+="$row "
   sample_app "$row"
-  record_row_result "$row" "$result" ",\"automatic\":true,\"drive_method\":$(json_string "$method"),\"precondition\":$(json_string "$precondition"),\"observation\":$observation$*"
+  row_finished_ms=$(epoch_ms)
+  record_row_result "$row" "$result" ",\"automatic\":true,\"drive_method\":$(json_string "$method"),\"precondition\":$(json_string "$precondition"),\"row_started_ms\":$row_started_ms,\"row_finished_ms\":$row_finished_ms,\"observation\":$observation$*"
 }
 
 # Opens every FIFO fixture for writing without blocking and keeps the write ends open. A fixture the app is
@@ -857,12 +871,14 @@ run_hosted_live_matrix() {
     ",\"brain_status_poll_wait_seconds\":$BRAIN_POLL_WAIT_SECONDS"
 
   reopen_status=ok
+  ROW_WINDOW_STARTED_MS=$(epoch_ms)
   "$OPEN_BIN" "$APP" >/dev/null 2>&1 || reopen_status="open-failed"
   sleep "$REOPEN_SETTLE_SECONDS"
   hosted_row "row-3-macos-activate" none "open <app>" "$reopen_status"
 
   reopen_status=ok
   # The second instance gets the same profile, so the app's single-instance lock hands it to the first.
+  ROW_WINDOW_STARTED_MS=$(epoch_ms)
   "$OPEN_BIN" -n --env "ASKTOTO_USERDATA=$PROFILE" "$APP" --args "--user-data-dir=$PROFILE" >/dev/null 2>&1 || reopen_status="open-failed"
   sleep "$REOPEN_SETTLE_SECONDS"
   hosted_row "row-4-second-instance-reopen" none "open -n --env ASKTOTO_USERDATA=<profile> <app> --args --user-data-dir=<profile>" "$reopen_status"
@@ -891,6 +907,7 @@ run_windows_hosted_live_matrix() {
     ',"automatic":false'
 
   app_profile=$(app_profile_path "$PROFILE")
+  ROW_WINDOW_STARTED_MS=$(epoch_ms)
   ASKTOTO_USERDATA="$app_profile" "$EXE" "--user-data-dir=$app_profile" "--remote-debugging-port=$CDP_PORT" >/dev/null 2>>"$OUT/app.stderr.txt" &
   second_pid=$!
   sleep "$REOPEN_SETTLE_SECONDS"
@@ -952,7 +969,16 @@ EOF_LEAD_ACTION
 
 write_attribution_bundle() {
   stop_app
-  node "$SCRIPT_DIR/attribution-bundle.mjs" --out "$OUT" --profile "$PROFILE" --profile "$IDLE_PROFILE"
+  node "$SCRIPT_DIR/attribution-bundle.mjs" \
+    --out "$OUT" \
+    --profile "$PROFILE" \
+    --profile "$IDLE_PROFILE" \
+    --matrix "$OUT/matrix.jsonl" \
+    --sample-index "$OUT/sample-index.jsonl" \
+    --host "$QA_HOST_LABEL"
+  if [[ -s "$OUT/stalls.jsonl" ]]; then
+    STALL_ATTRIBUTION_FAILURES=$(grep -c '"status":"FAIL"' "$OUT/stalls.jsonl" || true)
+  fi
   if [[ "$DRY_RUN" == 1 ]]; then
     cat > "$OUT/M2-0194.lead-action.md" <<EOF_LEAD_ACTION_0194_DRY
 LEAD_ACTION: Import this public dry-run bundle into the controlled program evidence chain only as M2-0194 LOCALLY_TESTED support for qa-candidate run $CANDIDATE_RUN (artifact sha256 $ARTIFACT). Do not file a live evidence record from this dry run; dispatch freeze-repro from main on macos-latest with --hosted-live for the live attribution record.
@@ -960,7 +986,7 @@ EOF_LEAD_ACTION_0194_DRY
     return
   fi
   cat > "$OUT/M2-0194.lead-action.md" <<EOF_LEAD_ACTION_0194
-LEAD_ACTION: Import this public bundle into the controlled program evidence chain: file the M2-0194 LIVE_VERIFIED record for qa-candidate run $CANDIDATE_RUN (artifact sha256 $ARTIFACT) from matrix.jsonl, interrupt-results.jsonl, the stall, sampler, reveal and sidecar excerpts, and stall-bundle-names.json. Rows listed in external-blockers.json are BLOCKED_EXTERNAL until they are run on the QA account.
+LEAD_ACTION: Import this public bundle into the controlled program evidence chain: file the M2-0194 LIVE_VERIFIED record for qa-candidate run $CANDIDATE_RUN (artifact sha256 $ARTIFACT) from matrix.jsonl, interrupt-results.jsonl, stalls.jsonl, the stall, sampler, reveal and sidecar excerpts, and stall-bundle-names.json. Rows listed in external-blockers.json are BLOCKED_EXTERNAL until they are run on the QA account.
 EOF_LEAD_ACTION_0194
 }
 
@@ -969,7 +995,7 @@ live_result() {
     printf 'PASS'
     return
   }
-  if (( SAMPLE_FAILURES > 0 || MATRIX_RESULT_FAILURES > 0 || INTERRUPT_RESULT_FAILURES > 0 )); then
+  if (( SAMPLE_FAILURES > 0 || STALL_ATTRIBUTION_FAILURES > 0 || MATRIX_RESULT_FAILURES > 0 || INTERRUPT_RESULT_FAILURES > 0 )); then
     printf 'FAIL'
     return
   fi
@@ -979,6 +1005,7 @@ live_result() {
 live_failure_summary() {
   local -a reasons=()
   (( SAMPLE_FAILURES == 0 )) || reasons+=("required main and renderer samples")
+  (( STALL_ATTRIBUTION_FAILURES == 0 )) || reasons+=("required stall attribution samples")
   (( MATRIX_RESULT_FAILURES == 0 )) || reasons+=("required matrix rows exercised")
   (( INTERRUPT_RESULT_FAILURES == 0 )) || reasons+=("required interrupt checks exercised")
   local joined=""
@@ -1009,6 +1036,7 @@ QA_HOST_LABEL=""
 COLLECT_DIAGNOSTIC_REPORTS=0
 HOSTED_LIVE=0
 SAMPLE_FAILURES=0
+STALL_ATTRIBUTION_FAILURES=0
 MATRIX_RESULT_FAILURES=0
 INTERRUPT_RESULT_FAILURES=0
 LAUNCH_SETTLE_SECONDS="${M2_0008_CONTRACT_LAUNCH_SETTLE_SECONDS:-10}"
@@ -1117,6 +1145,7 @@ mkdir -p "$SAMPLE_DIR"
 : > "$OUT/matrix.jsonl"
 : > "$OUT/interrupt-results.jsonl"
 : > "$OUT/app-pids.txt"
+: > "$OUT/sample-index.jsonl"
 STAMP="$OUT/run-start.stamp"
 : > "$STAMP"
 
@@ -1175,9 +1204,9 @@ if [[ "$HOSTED_LIVE" == 1 ]]; then
   run_hosted_live_matrix
   write_fixture_manifest
   copy_diagnostic_reports "$STAMP"
-  RESULT=$(live_result)
   if [[ -n "$CANDIDATE_RUN" ]]; then
     write_attribution_bundle
+    RESULT=$(live_result)
     cat > "$OUT/README.md" <<EOF_HOSTED_ATTRIBUTION_README
 # M2-0194 Freeze Repro Attribution Bundle (hosted-live)
 
@@ -1188,6 +1217,7 @@ if [[ "$HOSTED_LIVE" == 1 ]]; then
 - Build run id: \`$BUILD_RUN_ID\`
 - Matrix rows (rows 1-4 automatic, rows 5 and 9 BLOCKED_EXTERNAL): \`matrix.jsonl\`
 - Attribution excerpts: \`stall-excerpt.jsonl\`, \`sampler-excerpt.jsonl\`, \`reveal-excerpt.jsonl\`, \`sidecar-excerpt.jsonl\`
+- Stall attribution rows: \`stalls.jsonl\`
 - Stall bundle file names only: \`stall-bundle-names.json\`
 - Interrupt checks for ADR-021/C10: \`interrupt-results.jsonl\`
 - Cloud-account blockers and their unblock step: \`external-blockers.json\`
@@ -1199,6 +1229,7 @@ EOF_HOSTED_ATTRIBUTION_README
     [[ "$RESULT" == PASS ]] || fail "live run did not produce PASS evidence: $(live_failure_summary)"
     exit 0
   fi
+  RESULT=$(live_result)
   write_hosted_summary
   write_evidence_records "$RESULT"
   write_lead_action
@@ -1288,7 +1319,7 @@ fi
 cat > "$OUT/README.md" <<EOF_README
 # $TICKET Freeze Repro Bundle
 
-$([[ -z "$CANDIDATE_RUN" ]] || printf -- '- QA candidate run: `%s`\n- Attribution excerpts: `stall-excerpt.jsonl`, `sampler-excerpt.jsonl`, `reveal-excerpt.jsonl`, `sidecar-excerpt.jsonl`\n- Stall bundle file names only: `stall-bundle-names.json`\n- Lead filing handoff: `M2-0194.lead-action.md`\n' "$CANDIDATE_RUN")
+$([[ -z "$CANDIDATE_RUN" ]] || printf -- '- QA candidate run: `%s`\n- Attribution excerpts: `stall-excerpt.jsonl`, `sampler-excerpt.jsonl`, `reveal-excerpt.jsonl`, `sidecar-excerpt.jsonl`\n- Stall attribution rows: `stalls.jsonl`\n- Stall bundle file names only: `stall-bundle-names.json`\n- Lead filing handoff: `M2-0194.lead-action.md`\n' "$CANDIDATE_RUN")
 
 - Artifact sha256: \`$ARTIFACT\`
 - Build run id: \`$BUILD_RUN_ID\`

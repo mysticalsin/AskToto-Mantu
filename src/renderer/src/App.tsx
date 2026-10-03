@@ -35,6 +35,7 @@ import { ConfirmSheet } from './ui/ConfirmSheet'
 import { useAsk, useAutoResize, useSettings, useAuth, type AnswerState } from './state'
 import { useWindowDrag } from './lib/window-drag'
 import { noteCrashContext } from './lib/crash-context'
+import { useTransitionView } from './lib/history-transition'
 import { NavigationGuardService, type NavigationGuardRequest } from './lib/navigation-guard'
 import {
   AUTO_HIDE_GRACE_MS,
@@ -463,11 +464,8 @@ export function App(): JSX.Element {
   // synchronous input"), crashing to the error boundary ("Métis hit a snag") instead of showing
   // the Suspense fallback. Reproduced physically on first "Start listening" (cold Copilot chunk).
   // The documented fix: mark view switches as transitions — the old view stays up for the few ms the
-  // chunk needs, then the new one mounts. setView keeps its identity via the useCallback wrapper.
-  const [view, setViewRaw] = useState<View>(initialViewFromLaunch)
-  const setView = useCallback((v: View | ((prev: View) => View)): void => {
-    startTransition(() => setViewRaw(v))
-  }, [])
+  // chunk needs, then the new one mounts. setView keeps a stable identity and records History transitions.
+  const [view, setView, setViewRaw] = useTransitionView(initialViewFromLaunch)
   // See crash-context.ts for why this runs in render rather than an effect.
   noteCrashContext({ view, listening: listen.listening })
 
@@ -3037,7 +3035,8 @@ export function App(): JSX.Element {
   }, [])
 
   // Open a saved meeting from History as a read-only recap (Cluely recap detail) via the recall:read IPC.
-  const openPastMeeting = useCallback(async (file: string) => {
+  // A caller that shows the failure itself (a History row's explicit download) passes `reportError`.
+  const openPastMeeting = useCallback(async (file: string, reportError?: (message: string) => void) => {
     setOpenMeetingError(null)
     followup.clear() // the viewed meeting is about to change — a stale draft from whatever was reviewed
     // before must never carry over and render/send as THIS meeting's follow-up (see followup's own
@@ -3046,7 +3045,8 @@ export function App(): JSX.Element {
     if (!r.ok) {
       // recallRead already returns an exact, actionable message (not found / undecryptable on this
       // device / invalid name) — surface it instead of leaving the click looking completely dead.
-      setOpenMeetingError(r.error || 'Could not open that meeting.')
+      if (reportError) reportError(r.error || 'Could not open that meeting.')
+      else setOpenMeetingError(r.error || 'Could not open that meeting.')
       return
     }
     setOpenMeetingError(null)

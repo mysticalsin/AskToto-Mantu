@@ -15,17 +15,20 @@ import {
   emptyRun,
   evaluateCriteria,
   historyEntry,
+  historyProbeWindow,
   historySummary,
   parseArgs,
   pinnedExpression,
   recordSample,
   releaseExpression,
+  sampleExpression,
   shouldProbeHistory,
   syntheticDatalessPlan,
   runPurpose,
   timedCallsExpression,
   windowConstructionGate,
   withTimeout,
+  writeJsonToStdout,
   witnessSummary
 } from './lib/st-1-core.mjs'
 
@@ -36,6 +39,22 @@ const pending = (): Record<string, unknown> | undefined => globals[PENDING_GLOBA
 
 const candidate = { build_run_id: 1, artifact_sha256: 'a'.repeat(64) }
 const goodSample = (tMs: number) => ({ tMs, writeMs: 2, lookupMs: 1, loopMaxSinceLastMs: 12, resources: {} })
+const refusedHistoryProbe = (tMs = 20_000, notDownloaded = 4) => ({
+  tMs,
+  ms: 33,
+  rows: Math.max(6, notDownloaded),
+  notDownloaded,
+  unavailable: notDownloaded,
+  searchMs: 42,
+  hits: 4,
+  calls: { recallList: { ms: 30 }, brainStatus: { ms: 5 }, recallSearch: { ms: 40 } }
+})
+const refusedRun = (notDownloaded = 4) => ({
+  ...emptyRun(),
+  samples: [goodSample(1_000), goodSample(2_000)],
+  loop: { p99Ms: 12, maxMs: 40 },
+  history: [refusedHistoryProbe(20_000, notDownloaded)]
+})
 
 function report(overrides: Record<string, unknown> = {}) {
   const measured = { ...emptyRun(), samples: [goodSample(1_000), goodSample(2_000)], loop: { p99Ms: 12, maxMs: 40 } }
@@ -57,6 +76,7 @@ function report(overrides: Record<string, unknown> = {}) {
 afterEach(() => {
   vi.useRealTimers()
   delete globals[PENDING_GLOBAL]
+  delete (globalThis as Record<string, unknown>).__st1since
 })
 
 describe('withTimeout', () => {
@@ -118,8 +138,118 @@ describe('pinnedExpression', () => {
     })
   })
 
+  it('still returns the expression value when the in-app timer cannot be started', async () => {
+    const originalSetTimeout = globalThis.setTimeout
+    globalThis.setTimeout = (() => {
+      throw new TypeError('testEnabled is not a function')
+    }) as unknown as typeof setTimeout
+    try {
+      await expect(evaluateGlobally(pinnedExpression('timer-6', '41 + 1', 1_000))).resolves.toEqual({ ok: true, value: 42 })
+    } finally {
+      globalThis.setTimeout = originalSetTimeout
+    }
+  })
+
   it('releasing a key that was never stored is harmless', () => {
     expect(() => evaluateGlobally(releaseExpression('never-stored'))).not.toThrow()
+  })
+})
+
+describe('sampleExpression', () => {
+  it('carries a pre-sample boot block into sample 0 through the whole-run max', async () => {
+    const originalGetBuiltinModule = (process as unknown as { getBuiltinModule?: (name: string) => unknown }).getBuiltinModule
+    const installSampleHarness = ({
+      sinceMaxNs = 0,
+      runMaxNs = 0,
+      write = () => {}
+    }: {
+      sinceMaxNs?: number
+      runMaxNs?: number
+      write?: (record: { since: (ns: number) => void; run: (ns: number) => void }) => void
+    }) => {
+      let sampleMaxNs = sinceMaxNs
+      let wholeRunMaxNs = runMaxNs
+      let dropNextSinceInterval = false
+      const reset = vi.fn(() => {
+        sampleMaxNs = 0
+        dropNextSinceInterval = true
+      })
+      const recordSince = (ns: number) => {
+        if (dropNextSinceInterval) {
+          dropNextSinceInterval = false
+          return
+        }
+        sampleMaxNs = Math.max(sampleMaxNs, ns)
+      }
+      const recordRun = (ns: number) => {
+        wholeRunMaxNs = Math.max(wholeRunMaxNs, ns)
+      }
+      ;(globalThis as Record<string, unknown>).__st1 = {
+        get max() {
+          return wholeRunMaxNs
+        }
+      }
+      ;(globalThis as Record<string, unknown>).__st1since = {
+        get max() {
+          return sampleMaxNs
+        },
+        reset
+      }
+      ;(process as unknown as { getBuiltinModule?: (name: string) => unknown }).getBuiltinModule = (name) => {
+        if (name === 'node:fs/promises') {
+          return {
+            writeFile: async () => {
+              write({ since: recordSince, run: recordRun })
+            }
+          }
+        }
+        if (name === 'node:dns/promises') return { lookup: async () => ({ address: '127.0.0.1', family: 4 }) }
+        throw new Error(`unexpected module ${name}`)
+      }
+      return reset
+    }
+    try {
+      const preSampleReset = installSampleHarness({ runMaxNs: 80_000_000 })
+      await expect(evaluateGlobally(sampleExpression('probe.txt'))).resolves.toMatchObject({
+        loopMaxSinceLastMs: 80,
+        loopMaxDuringWriteMs: 0,
+        runLoopMaxMs: 80,
+        writeMs: expect.any(Number),
+        lookupMs: expect.any(Number),
+        resources: expect.any(Object)
+      })
+      expect(preSampleReset).toHaveBeenCalledTimes(1)
+
+      delete (globalThis as Record<string, unknown>).__st1lastRunLoopMaxMs
+      const postResetReset = installSampleHarness({
+        write: ({ since, run }) => {
+          since(80_000_000)
+          run(80_000_000)
+        }
+      })
+      await expect(evaluateGlobally(sampleExpression('probe.txt'))).resolves.toMatchObject({
+        loopMaxSinceLastMs: 80,
+        loopMaxDuringWriteMs: 0,
+        runLoopMaxMs: 80,
+        writeMs: expect.any(Number),
+        lookupMs: expect.any(Number),
+        resources: expect.any(Object)
+      })
+      expect(postResetReset).toHaveBeenCalledTimes(1)
+
+      ;(globalThis as Record<string, unknown>).__st1lastRunLoopMaxMs = 80
+      const unchangedRunMaxReset = installSampleHarness({ sinceMaxNs: 12_000_000, runMaxNs: 80_000_000 })
+      await expect(evaluateGlobally(sampleExpression('probe.txt'))).resolves.toMatchObject({
+        loopMaxSinceLastMs: 12,
+        loopMaxDuringWriteMs: 0,
+        runLoopMaxMs: 80
+      })
+      expect(unchangedRunMaxReset).toHaveBeenCalledTimes(1)
+    } finally {
+      ;(process as unknown as { getBuiltinModule?: (name: string) => unknown }).getBuiltinModule = originalGetBuiltinModule
+      delete (globalThis as Record<string, unknown>).__st1
+      delete (globalThis as Record<string, unknown>).__st1lastRunLoopMaxMs
+    }
   })
 })
 
@@ -236,6 +366,8 @@ describe('window-construction runs (M2-0516)', () => {
   it('marks its report and launch failure as never ST-1 evidence, whatever the verdict; an ST-1 report carries no mark', () => {
     const built = report({ purpose: 'window-construction', windowVariant: 'spellcheck-off' })
     expect(built).toMatchObject({ purpose: 'window-construction', st1Evidence: false, windowVariant: 'spellcheck-off', verdict: 'PASS' })
+    const warmup = report({ purpose: 'window-construction', windowVariant: 'shipped', windowWarmup: true })
+    expect(warmup).toMatchObject({ purpose: 'window-construction', st1Evidence: false, windowVariant: 'shipped', warmup: true })
     const failed = buildLaunchFailureReport({
       row: 'none',
       installer: 'Metis-QA.zip',
@@ -329,6 +461,18 @@ describe('windowConstructionGate (M2-0519)', () => {
     expect(variantsOnly).toMatchObject({ pass: false, failures: ['no shipped window-construction report'] })
   })
 
+  it('skips marked warm-up reports, counts them, and still fails a slow measured shipped run', () => {
+    const gate = windowConstructionGate([
+      { name: 'window-warmup-opaque/window-warmup-opaque.json', report: { ...shipped(false, 12, 900), warmup: true } },
+      ...passing,
+      { name: 'window-shipped-transparent-2/a.json', report: shipped(true, 9, 250) }
+    ])
+    expect(gate.skippedWarmups).toBe(1)
+    expect(gate.rows.map((row) => row.report)).not.toContain('window-warmup-opaque/window-warmup-opaque.json')
+    expect(gate.pass).toBe(false)
+    expect(gate.failures).toContain('window-shipped-transparent-2/a.json: createWindow.construct 250 ms >= 250 ms')
+  })
+
   it('holds the gated stages to 250 ms', () => {
     expect(WINDOW_STAGE_BUDGET_MS).toBe(250)
     expect(GATED_WINDOW_STAGES).toEqual(['createWindow.prewarm', 'createWindow.construct'])
@@ -391,11 +535,11 @@ describe('historyEntry', () => {
 })
 
 describe('shouldProbeHistory', () => {
-  const due = { historyOn: true, historyRunning: null, tMs: 20_000, historyLastMs: -Infinity, fromMs: 20_000, everyMs: 5_000 }
+  const due = { historyMode: 'on', historyRunning: null, tMs: 20_000, historyLastMs: -Infinity, fromMs: 20_000, everyMs: 5_000 }
 
   it('schedules the first due History probe only when History is on and idle', () => {
     expect(shouldProbeHistory(due)).toBe(true)
-    expect(shouldProbeHistory({ ...due, historyOn: false })).toBe(false)
+    expect(shouldProbeHistory({ ...due, historyMode: 'off' })).toBe(false)
     expect(shouldProbeHistory({ ...due, historyRunning: Promise.resolve() })).toBe(false)
     expect(shouldProbeHistory({ ...due, tMs: 19_999 })).toBe(false)
   })
@@ -403,6 +547,31 @@ describe('shouldProbeHistory', () => {
   it('waits for the configured interval after the previous History probe', () => {
     expect(shouldProbeHistory({ ...due, tMs: 24_999, historyLastMs: 20_000 })).toBe(false)
     expect(shouldProbeHistory({ ...due, tMs: 25_000, historyLastMs: 20_000 })).toBe(true)
+  })
+
+  it('keeps delayed History idle until its start time, then stops after one answer or the retry bound', () => {
+    const delayed = { ...due, historyMode: 'after-idle', fromMs: 300_000, retryUntilMs: 360_000 }
+    expect(shouldProbeHistory({ ...delayed, tMs: 299_999 })).toBe(false)
+    expect(shouldProbeHistory({ ...delayed, tMs: 300_000 })).toBe(true)
+    expect(shouldProbeHistory({ ...delayed, tMs: 305_000, historyLastMs: 300_000 })).toBe(true)
+    expect(shouldProbeHistory({ ...delayed, tMs: 305_000, historyAnswered: true })).toBe(false)
+    expect(shouldProbeHistory({ ...delayed, tMs: 360_001 })).toBe(false)
+  })
+})
+
+describe('historyProbeWindow', () => {
+  it('starts after-idle History from the end of the measured idle window, then bounds retries from that start', () => {
+    expect(historyProbeWindow({ historyMode: 'after-idle', nowMs: 12_345, minutes: 5, defaultFromMs: 20_000, retryMs: 60_000 })).toEqual({
+      fromMs: 312_345,
+      retryUntilMs: 372_345
+    })
+  })
+
+  it('keeps the regular History window unchanged', () => {
+    expect(historyProbeWindow({ historyMode: 'on', nowMs: 12_345, minutes: 5, defaultFromMs: 20_000, retryMs: 60_000 })).toEqual({
+      fromMs: 20_000,
+      retryUntilMs: Infinity
+    })
   })
 })
 
@@ -458,10 +627,82 @@ describe('buildReport', () => {
     expect(crashed.harnessError).toBe('socket closed')
   })
 
-  it('reports a fifo row no FIFO reader reached as NOT_EXERCISED, naming the opened fixtures', () => {
-    const built = report({ row: 'fifo', evidence: { exercised: false, fixturesOpened: [] } })
-    expect(built.verdict).toBe('NOT_EXERCISED')
+  it('exercises a fifo row when History refused enough fixture meetings and brainStatus answered', () => {
+    const built = report({
+      row: 'fifo',
+      fixtures: ['one.md', 'two.md', '.brain/index.json'],
+      measured: refusedRun(2),
+      evidence: { fixturesOpened: [], fifoMeetingFixtures: 2 }
+    })
+    expect(built.verdict).toBe('PASS')
+    expect(built.exercised).toBe(true)
+    expect(built.exerciseEvidence).toEqual({
+      exercised: true,
+      reason: 'history-refused-fixtures',
+      historyProbesAnswered: 1,
+      unavailableRows: 2,
+      requiredUnavailableRows: 2,
+      brainStatusAnswered: true
+    })
     expect(built.fixturesOpened).toEqual([])
+  })
+
+  it('exercises a fifo row for locked Unavailable rows even when they are not marked not-downloaded', () => {
+    const built = report({
+      row: 'fifo',
+      fixtures: ['one.md', 'two.md'],
+      measured: {
+        ...refusedRun(0),
+        history: [
+          {
+            ...refusedHistoryProbe(20_000, 0),
+            rows: 2,
+            notDownloaded: 0,
+            unavailable: 2
+          }
+        ]
+      },
+      evidence: { fixturesOpened: [], fifoMeetingFixtures: 2 }
+    })
+    expect(built.verdict).toBe('PASS')
+    expect(built.exerciseEvidence).toMatchObject({
+      exercised: true,
+      unavailableRows: 2,
+      requiredUnavailableRows: 2,
+      brainStatusAnswered: true
+    })
+  })
+
+  it('reports a fifo row History never answered as NOT_EXERCISED, naming the missing refusal evidence', () => {
+    const built = report({
+      row: 'fifo',
+      fixtures: ['one.md', 'two.md'],
+      measured: { ...emptyRun(), samples: [goodSample(1_000)], loop: { p99Ms: 12, maxMs: 40 }, history: [{ tMs: 20_000, skipped: 'no window' }] },
+      evidence: { fixturesOpened: [], fifoMeetingFixtures: 2 }
+    })
+    expect(built.verdict).toBe('NOT_EXERCISED')
+    expect(built.exercised).toBe(false)
+    expect(built.exerciseEvidence).toMatchObject({
+      reason: 'history-did-not-answer',
+      historyProbesAnswered: 0,
+      unavailableRows: null,
+      requiredUnavailableRows: 2,
+      brainStatusAnswered: false
+    })
+  })
+
+  it('fails a fifo row with its own criterion when any fixture has a reader at the end', () => {
+    const built = report({
+      row: 'fifo',
+      fixtures: ['one.md'],
+      measured: refusedRun(1),
+      evidence: { fixturesOpened: ['one.md'], fifoMeetingFixtures: 1 }
+    })
+    expect(built.verdict).toBe('FAIL')
+    expect(built.criteria.find((c: { name: string }) => c.name === 'non-regular-fixtures-unopened')).toEqual({
+      name: 'non-regular-fixtures-unopened',
+      pass: false
+    })
   })
 
   it('reports the main.log offset or the reason it is unknown', () => {
@@ -470,6 +711,31 @@ describe('buildReport', () => {
       exactLaunchOffset: false
     })
     expect(report({ attribution: { mainLog: { error: 'no require' }, appEvidence: null } }).mainLog).toEqual({ error: 'no require' })
+  })
+
+  it('reports when Profiler.start was requested and answered without changing the verdict', () => {
+    const plain = report()
+    const profiler = { requestedAtMs: 615, answeredAtMs: 694, startedAtMs: 694, stoppedAtMs: 300_000, file: 'st-1.cpuprofile' }
+    const withProfiler = report({ measured: { ...emptyRun(), samples: [goodSample(1_000), goodSample(2_000)], loop: { p99Ms: 12, maxMs: 40 }, profiler } })
+    expect(withProfiler.cpuProfile).toEqual(profiler)
+    expect(withProfiler.criteria).toEqual(plain.criteria)
+    expect(withProfiler.verdict).toBe(plain.verdict)
+  })
+
+  it('returns identical criteria and verdict with and without sample loop attribution fields', () => {
+    const plain = report()
+    const withLoopAttribution = report({
+      measured: {
+        ...emptyRun(),
+        samples: [
+          { ...goodSample(1_000), loopMaxDuringWriteMs: 0, runLoopMaxMs: 80 },
+          { ...goodSample(2_000), loopMaxDuringWriteMs: 4, runLoopMaxMs: 80 }
+        ],
+        loop: { p99Ms: 12, maxMs: 40 }
+      }
+    })
+    expect(withLoopAttribution.criteria).toEqual(plain.criteria)
+    expect(withLoopAttribution.verdict).toBe(plain.verdict)
   })
 
   it('returns identical criteria and verdict with and without witness data, and carries bootStages and witness (M2-0515)', () => {
@@ -519,6 +785,11 @@ describe('parseArgs (M2-0193)', () => {
       minutes: '5',
       fixtures: 'synthetic-dataless',
       history: 'off'
+    })
+    expect(parseArgs(['--fixtures', 'synthetic-dataless', '--history', 'after-idle'], { minutes: '5' })).toEqual({
+      minutes: '5',
+      fixtures: 'synthetic-dataless',
+      history: 'after-idle'
     })
   })
 })
@@ -593,9 +864,17 @@ describe('the History row (M2-0193)', () => {
   })
 
   it('reports the first call apart from the rest, and fails the report on it', () => {
-    const measured = historyRun([{ tMs: 20_000, skipped: 'no window' }, open(25_000, 2_050), open(30_000, 30, { searchMs: 90, notDownloaded: 5 })])
-    // These probes predate the per-call split (M2-0512): no call has its own time, so the row's checks fail.
-    const untimed = { calls: 0, unsettled: 0, firstMs: null, p50Ms: null, p95Ms: null, maxMs: null }
+    const measured = historyRun([
+      { tMs: 20_000, skipped: 'no window' },
+      {
+        ...open(25_000, 2_050, { notDownloaded: 5, unavailable: 5 }),
+        calls: { recallList: { ms: 2_050 }, brainStatus: { ms: 5 }, recallSearch: { ms: 90 } }
+      },
+      {
+        ...open(30_000, 30, { searchMs: 90, notDownloaded: 5, unavailable: 5 }),
+        calls: { recallList: { ms: 30 }, brainStatus: { ms: 5 }, recallSearch: { ms: 90 } }
+      }
+    ])
     expect(historySummary(measured)).toEqual({
       probes: 2,
       firstOpenMs: 2_050,
@@ -603,22 +882,31 @@ describe('the History row (M2-0193)', () => {
       maxSearchMs: 90,
       maxRows: 6,
       maxNotDownloaded: 5,
-      calls: { recallList: untimed, brainStatus: untimed, recallSearch: untimed },
+      calls: {
+        recallList: { calls: 2, unsettled: 0, firstMs: 2_050, p50Ms: 30, p95Ms: 2_050, maxMs: 2_050 },
+        brainStatus: { calls: 2, unsettled: 0, firstMs: 5, p50Ms: 5, p95Ms: 5, maxMs: 5 },
+        recallSearch: { calls: 2, unsettled: 0, firstMs: 90, p50Ms: 90, p95Ms: 90, maxMs: 90 }
+      },
       checks: [
         { name: 'first-list < 250', pass: false },
         { name: 'list < 2000', pass: false },
-        { name: 'search < 2000', pass: false },
+        { name: 'search < 2000', pass: true },
         { name: 'loop-p99 < 50', pass: true }
       ],
       verdict: 'FAIL',
       storageSaturations: null,
       firstListCause: 'main-log-unread'
     })
-    const built = report({ row: 'fifo', history: true, measured, evidence: { exercised: true, fixturesOpened: ['x'] } })
+    const built = report({ row: 'fifo', history: true, measured, evidence: { fixturesOpened: [], fifoMeetingFixtures: 5 } })
     expect(built.historyRow).toBe(true)
     expect(built.historySummary?.firstOpenMs).toBe(2_050)
+    expect(built.exerciseEvidence).toMatchObject({ exercised: true, unavailableRows: 5, brainStatusAnswered: true })
+    expect(built.criteria.find((c: { name: string }) => c.name === 'non-regular-fixtures-unopened')).toEqual({
+      name: 'non-regular-fixtures-unopened',
+      pass: true
+    })
     expect(built.verdict).toBe('FAIL')
-    expect(report({ row: 'fifo', history: true, measured: historyRun([open(25_000, 30)]), evidence: { exercised: true } }).verdict).toBe('PASS')
+    expect(report({ row: 'fifo', history: true, measured: refusedRun(0), evidence: { fixturesOpened: [], fifoMeetingFixtures: 0 } }).verdict).toBe('PASS')
     expect(report().historySummary).toBeUndefined()
   })
 })
@@ -634,6 +922,30 @@ describe('timedCallsExpression (M2-0512)', () => {
     expect(outcomes.hung).toEqual({ ms: expect.any(Number), hung: true })
     expect(outcomes.hung.ms).toBeGreaterThanOrEqual(45)
     expect(outcomes.answered.ms).toBeLessThan(outcomes.hung.ms)
+  })
+})
+
+describe('writeJsonToStdout', () => {
+  it('waits for stdout to accept a report over 64 KiB before returning', async () => {
+    const chunks: string[] = []
+    let flushed = false
+    const report = { harness: 'ST-1', body: 'x'.repeat(70 * 1024) }
+    const stdout = {
+      write(text: string, callback: (error?: Error | null) => void) {
+        chunks.push(text)
+        setTimeout(() => {
+          flushed = true
+          callback()
+        }, 0)
+        return false
+      }
+    }
+
+    await writeJsonToStdout(report, stdout as unknown as typeof process.stdout)
+
+    expect(flushed).toBe(true)
+    expect(chunks.join('').length).toBeGreaterThan(64 * 1024)
+    expect(JSON.parse(chunks.join(''))).toEqual(report)
   })
 })
 
@@ -746,15 +1058,13 @@ describe('the History row per call (M2-0512)', () => {
       row: 'fifo',
       history: true,
       measured: slowFirst,
-      evidence: { exercised: true },
+      evidence: { fixturesOpened: [], fifoMeetingFixtures: 0 },
       attribution: { mainLog: null, appEvidence: null, storageSaturations: 3 }
     })
     expect(built.verdict).toBe('PASS')
     expect(built.criteria.map((c: { name: string }) => c.name)).not.toContain('first-list < 250')
     expect(built.historySummary).toMatchObject({ verdict: 'FAIL', storageSaturations: 3, firstListCause: 'admission-saturated' })
-    expect(report({ row: 'fifo', history: true, measured: slowFirst, evidence: { exercised: true }, complete: false }).historySummary?.verdict).toBe(
-      'INCOMPLETE'
-    )
+    expect(report({ row: 'fifo', history: true, measured: slowFirst, evidence: { fixturesOpened: [], fifoMeetingFixtures: 0 }, complete: false }).historySummary?.verdict).toBe('INCOMPLETE')
   })
 
   it('counts the admission saturation lines of a main.log', () => {
@@ -791,12 +1101,18 @@ describe('syntheticDatalessPlan', () => {
 })
 
 describe('synthetic-dataless and history reports', () => {
+  const syntheticFixtures = [
+    ...Array.from({ length: 6 }, (_, i) => `fixture-${i + 1}.md`),
+    '.brain/index.json',
+    ...Array.from({ length: 4 }, (_, i) => `.brain/entities/st1-${i + 1}.json`)
+  ]
   const synthetic = (overrides: Record<string, unknown> = {}) =>
     report({
       row: 'synthetic-dataless',
-      fixtures: Array.from({ length: 11 }, (_, i) => `fifo-${i}`),
+      fixtures: syntheticFixtures,
       fixtureCounts: syntheticDatalessPlan().counts,
-      evidence: { exercised: true, fixturesOpened: ['a.md'], sfDatalessSet: false },
+      measured: refusedRun(6),
+      evidence: { fixturesOpened: [], fifoMeetingFixtures: 6, sfDatalessSet: false },
       ...overrides
     })
 
@@ -808,17 +1124,106 @@ describe('synthetic-dataless and history reports', () => {
     expect(built.verdict).toBe('PASS')
   })
 
-  it('uses the fifo row exercised rule and the same criteria', () => {
-    expect(synthetic({ evidence: { exercised: false, fixturesOpened: [], sfDatalessSet: false } }).verdict).toBe('NOT_EXERCISED')
-    expect(synthetic().criteria).toEqual(report().criteria)
-    expect(synthetic({ measured: { ...emptyRun(), samples: [goodSample(1_000)], loop: { p99Ms: 12, maxMs: 460 } } }).verdict).toBe('FAIL')
+  it('uses the fifo row refused-without-opening rule and the same timing criteria', () => {
+    expect(synthetic({ measured: { ...refusedRun(5) }, evidence: { fixturesOpened: [], fifoMeetingFixtures: 6, sfDatalessSet: false } }).verdict).toBe(
+      'NOT_EXERCISED'
+    )
+    expect(synthetic().criteria.slice(0, report().criteria.length)).toEqual(report().criteria)
+    expect(synthetic({ measured: { ...refusedRun(6), loop: { p99Ms: 12, maxMs: 460 } } }).verdict).toBe('FAIL')
   })
 
   it('reports historyMode on by default and off when asked, and adds nothing to other rows', () => {
     expect(report().historyMode).toBe('on')
     expect(report({ historyMode: 'off' }).historyMode).toBe('off')
     expect(report({ historyMode: 'off' }).history).toEqual([])
-    expect(report({ row: 'fifo', evidence: { exercised: true, fixturesOpened: [] } })).not.toHaveProperty('fixtureKind')
+    expect(report({ row: 'fifo', measured: refusedRun(0), evidence: { fixturesOpened: [], fifoMeetingFixtures: 0 } })).not.toHaveProperty('fixtureKind')
     expect(report()).not.toHaveProperty('sfDatalessSet')
+  })
+
+  it('turns a delayed synthetic-dataless History open that lacks refusal evidence into FAIL, not NOT_EXERCISED', () => {
+    const built = synthetic({
+      historyMode: 'after-idle',
+      measured: {
+        ...emptyRun(),
+        samples: [goodSample(1_000), goodSample(301_000)],
+        loop: { p99Ms: 12, maxMs: 40 },
+        history: [{ tMs: 300_000, hung: true, ms: 10_000 }]
+      },
+      evidence: { fixturesOpened: [], fifoMeetingFixtures: 6, sfDatalessSet: false }
+    })
+    expect(built.verdict).toBe('FAIL')
+    expect(built.exercised).toBe(false)
+    expect(built.exerciseEvidence).toMatchObject({
+      exercised: false,
+      historyProbesAnswered: 0,
+      requiredUnavailableRows: 6,
+      brainStatusAnswered: false
+    })
+  })
+
+  it('names an after-idle History answer that stops retries before proving enough refusals', () => {
+    const built = synthetic({
+      historyMode: 'after-idle',
+      measured: {
+        ...emptyRun(),
+        samples: [goodSample(1_000), goodSample(299_000)],
+        loop: { p99Ms: 12, maxMs: 40 },
+        history: [refusedHistoryProbe(312_000, 5)]
+      },
+      evidence: { fixturesOpened: [], fifoMeetingFixtures: 6, sfDatalessSet: false }
+    })
+    expect(built.verdict).toBe('FAIL')
+    expect(built.exerciseEvidence).toMatchObject({
+      exercised: false,
+      reason: 'history-answer-lacked-required-refusals',
+      historyProbesAnswered: 1,
+      unavailableRows: 5,
+      requiredUnavailableRows: 6,
+      brainStatusAnswered: true
+    })
+  })
+
+  it('passes an after-idle synthetic-dataless run whose first History answer proves refusal', () => {
+    const built = synthetic({
+      historyMode: 'after-idle',
+      measured: {
+        ...emptyRun(),
+        samples: [goodSample(1_000), goodSample(299_000)],
+        loop: { p99Ms: 12, maxMs: 40 },
+        history: [refusedHistoryProbe(312_000, 6)]
+      },
+      evidence: { fixturesOpened: [], fifoMeetingFixtures: 6, sfDatalessSet: false }
+    })
+    expect(built.verdict).toBe('PASS')
+    expect(built.exerciseEvidence).toMatchObject({
+      exercised: true,
+      reason: 'history-refused-fixtures',
+      historyProbesAnswered: 1,
+      unavailableRows: 6,
+      requiredUnavailableRows: 6,
+      brainStatusAnswered: true
+    })
+  })
+
+  it('turns a complete delayed synthetic-dataless run with no History answer into FAIL, not NOT_EXERCISED', () => {
+    const built = synthetic({
+      historyMode: 'after-idle',
+      measured: {
+        ...emptyRun(),
+        samples: [goodSample(1_000), goodSample(301_000)],
+        loop: { p99Ms: 12, maxMs: 40 },
+        history: []
+      },
+      evidence: { fixturesOpened: [], fifoMeetingFixtures: 6, sfDatalessSet: false }
+    })
+    expect(built.verdict).toBe('FAIL')
+    expect(built.exercised).toBe(false)
+    expect(built.exerciseEvidence).toMatchObject({
+      exercised: false,
+      reason: 'history-did-not-answer',
+      historyProbesAnswered: 0,
+      requiredUnavailableRows: 6,
+      brainStatusAnswered: false
+    })
   })
 })

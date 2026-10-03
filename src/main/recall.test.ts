@@ -858,6 +858,7 @@ describe('recall — a transient read failure never hides a meeting (MQA-033)', 
     expect(row).toBeDefined() // the row must survive the failed read, not silently disappear
     expect(row?.locked).toBe(true)
     expect(row?.title).toContain('Unavailable')
+    expect(row?.unavailable).toBe(true) // History renders it as Unavailable, not as a Locked meeting
 
     // Hydration / lock release changes neither mtimeMs nor size — the readCache key — so a cached null
     // would keep the meeting invisible until the app restarts.
@@ -1259,6 +1260,7 @@ describe('recall — dataless files are listed, never read (M2-0193)', () => {
 
     const row = (await listMeetings()).find((m) => m.file === basename(odd))
     expect(row?.title).toContain('Unavailable')
+    expect(row?.unavailable).toBe(true)
     expect(await searchMeetings('march')).toHaveLength(0)
     expect(await recallRead(basename(odd))).toEqual({ ok: false, error: 'Could not read the meeting file.' })
     expect(reads).toEqual([])

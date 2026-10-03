@@ -16,8 +16,10 @@ import {
   bootLaunchActivateVerdict,
   buildWindowsShortcutLauncher,
   NAVIGATION_GUARD_BOOTSTRAP_PATCH,
+  LATE_NATIVE_FRAME_HOLD_MS,
   childPidReserved,
   computeCleanupTargets,
+  framesAboveWorkArea,
   isOverlayUrl,
   isPassingRevealEvidence,
   waitUntilParked,
@@ -27,6 +29,7 @@ import {
   initialNavigationGuardRows,
   initialRightEdgeHideRows,
   navigationViewReadiness,
+  returnToHistoryFromReview,
   readNavigationViewSnapshot,
   navigationMeetingTitles,
   initialOverlayStabilityRows,
@@ -36,6 +39,8 @@ import {
   pinnedBridgeCall,
   rightEdgeExpectedRects,
   rightEdgeHideParkMatches,
+  rightEdgeMeetingHideVerdict,
+  rightEdgePageChromeState,
   rightEdgeStateMatches,
   rightEdgeStateMismatches,
   runRevealRow,
@@ -45,6 +50,7 @@ import {
   smokeVerdict,
   waitForNavigationView
 } from './packaged-smoke.mjs'
+import { CURSOR_SAMPLED_READS, MAIN_CURSOR_READS, MAIN_RE_HIDE_SHIM, setMainCursor } from './golden-flows/right-edge-hide-rows.mjs'
 
 interface ProcessEntry {
   pid: number
@@ -338,13 +344,19 @@ describe('smokeVerdict', () => {
     expect(smokeVerdict(observation)).toEqual({ result: 'fail', failures: ['smoke_incomplete'] })
   })
 
-  it('does not fail a completed smoke observation for BLOCKED_EXTERNAL rows', () => {
+  it('does not fail a completed smoke observation for terminal non-pass rows', () => {
     const observation = goodObservation()
     observation.rv[0] = {
       ...observation.rv[0],
       status: 'BLOCKED_EXTERNAL',
       evidence: null,
       unblock: 'Run this row where the outside dependency is available.'
+    }
+    observation.rv[1] = {
+      ...observation.rv[1],
+      status: 'PRECONDITION',
+      evidence: null,
+      unblock: 'Run this row where the launch precondition is available.'
     }
     observation.navigationGuard[0] = {
       ...observation.navigationGuard[0],
@@ -731,9 +743,11 @@ describe('right-edge Hide rows (RE-HIDE)', () => {
     expect(expected.drawer).toEqual(rightEdgeSidecarBounds(windows, { open: true }))
     expect(expected.tab).toEqual(parkAfterExclusiveOnboarding('island', windows, 8, 'right-edge'))
     expect(expected.band).toEqual(parkAfterExclusiveOnboarding('hide', windows, 8, 'right-edge'))
-    // The observed Windows parks: Island rail at y 141, Hide band at the drawer's y 39.
-    expect(expected.tab).toEqual({ x: 960, y: 141, width: 52, height: 52 })
-    expect(expected.band.y).toBe(39)
+    // M2-0202: one anchor A = 0.15 × 720 = 108 places the rail (centred on A) and the drawer (A − 36); the
+    // Hide band is the authority's revealBand, [wa.y+48, wa.bottom−48] whatever the anchor.
+    expect(expected.tab).toEqual({ x: 960, y: 82, width: 52, height: 52 })
+    expect(expected.drawer.y).toBe(72)
+    expect(expected.band).toEqual({ x: 1020, y: 48, width: 4, height: 624 })
   })
 
   it('accepts a Hide park the OS widened only when its right edge stays at the work-area edge', () => {
@@ -761,8 +775,8 @@ describe('right-edge Hide rows (RE-HIDE)', () => {
   })
 
   it('names the parked criteria a Windows readback misses, so a failing row says which one', () => {
-    // Run 36645827157 readback: the widened band flush at the edge is a bounds match.
-    const bounds = { x: 992, y: 39, width: 32, height: 560 }
+    // The run 36645827157 readback shape on the M2-0202 band: widened to 32 px, flush at the edge, is a bounds match.
+    const bounds = { x: 992, y: 48, width: 32, height: 624 }
     const win = (opacity: number, clickThrough: boolean | null) => ({ bounds, opacity, clickThrough, visible: true, displayBounds: windows.bounds, workArea: windows.workArea })
     const page = { dock: true, drawer: false, rail: true, hideControl: false, meetingLive: false, composerFocused: false, draft: '' }
     expect(rightEdgeStateMismatches({ win: win(0, true), page }, 'parked', 'hide')).toEqual([])
@@ -771,6 +785,82 @@ describe('right-edge Hide rows (RE-HIDE)', () => {
     expect(rightEdgeStateMismatches({ win: win(0, null), page }, 'parked', 'hide')).toEqual(['clickThrough'])
     expect(rightEdgeStateMismatches({ win: win(0, true), page }, 'parked', 'island')).toEqual(['bounds', 'opacity', 'clickThrough'])
     expect(rightEdgeStateMismatches(null, 'parked', 'hide')).toEqual(['observation'])
+  })
+
+  it('counts main reads of the stubbed pointer, so a row knows the cursor watch sampled it away from the band', () => {
+    const real = { x: 1, y: 1 }
+    const screen = { getCursorScreenPoint: () => real }
+    const g = globalThis as Record<string, unknown>
+    const run = (expression: string): unknown => (0, eval)(expression)
+    g.__metisReHideElectron = { screen, BrowserWindow: { getAllWindows: () => [] } }
+    try {
+      run(MAIN_RE_HIDE_SHIM)
+      run(setMainCursor({ x: 40, y: 400 }))
+      expect(run(MAIN_CURSOR_READS)).toBe(0)
+      expect(screen.getCursorScreenPoint()).toEqual({ x: 40, y: 400 })
+      expect(screen.getCursorScreenPoint()).toEqual({ x: 40, y: 400 })
+      expect(run(MAIN_CURSOR_READS)).toBe(CURSOR_SAMPLED_READS)
+      // A new point starts a fresh count: reads of the previous point never prove the new one was sampled.
+      run(setMainCursor({ x: 1023, y: 380 }))
+      expect(run(MAIN_CURSOR_READS)).toBe(0)
+      // The real pointer is not the stub's: releasing the stub stops the count.
+      run(setMainCursor(null))
+      expect(screen.getCursorScreenPoint()).toBe(real)
+      expect(run(MAIN_CURSOR_READS)).toBe(0)
+    } finally {
+      delete g.__metisReHideElectron
+      delete g.__metisReHide
+    }
+  })
+
+  it('treats a mounted but aria-hidden right-edge drawer as parked rail chrome', () => {
+    expect(rightEdgePageChromeState({ rootOpen: false, drawerAriaHidden: 'true', tabAriaExpanded: 'false' })).toEqual({
+      drawer: false,
+      rail: true
+    })
+    expect(rightEdgePageChromeState({ rootOpen: true, drawerAriaHidden: null, tabAriaExpanded: 'true' })).toEqual({
+      drawer: true,
+      rail: false
+    })
+  })
+
+  it('keeps RE-HIDE-3 meeting Hide held for late native frames and carries geometry evidence', () => {
+    expect(LATE_NATIVE_FRAME_HOLD_MS).toBe(500)
+    const { band } = rightEdgeExpectedRects(windows.workArea)
+    const parkedWin = {
+      bounds: { x: 992, y: band.y, width: 32, height: band.height },
+      opacity: 0,
+      clickThrough: true,
+      visible: true,
+      displayBounds: windows.bounds,
+      workArea: windows.workArea
+    }
+    const page = { dock: true, drawer: false, rail: true, hideControl: false, meetingLive: true, composerFocused: false, draft: '' }
+    const parked = { ok: true, observed: { win: parkedWin, page } }
+    const held = { win: parkedWin, page }
+    const geometry = [
+      { ms: 1, kind: 'write', bounds: band },
+      { ms: 50, kind: 'frame', bounds: parkedWin.bounds },
+      { ms: 100, kind: 'call', bounds: parkedWin.bounds, call: { name: 'setOpacity', args: [0] } }
+    ]
+
+    expect(framesAboveWorkArea(geometry, windows.workArea.y)).toEqual([])
+    expect(rightEdgeMeetingHideVerdict({ meetingLive: true, hideVisible: true, parked, held, geometry })).toEqual({
+      pass: true,
+      evidence: {
+        meetingLive: true,
+        hideVisible: true,
+        parked: expect.objectContaining({ kind: 'hide-band' }),
+        after500ms: expect.objectContaining({ kind: 'hide-band' }),
+        framesAboveWorkArea: [],
+        geometry
+      }
+    })
+
+    const badFrame = { ms: 75, kind: 'frame', bounds: { ...parkedWin.bounds, y: windows.workArea.y - 1 } }
+    const failed = rightEdgeMeetingHideVerdict({ meetingLive: true, hideVisible: true, parked, held, geometry: [...geometry, badFrame] })
+    expect(failed.pass).toBe(false)
+    expect(failed.evidence.framesAboveWorkArea).toEqual([badFrame])
   })
 })
 
@@ -972,6 +1062,34 @@ describe('navigation view readiness', () => {
     ).rejects.toThrow(/review view was not reached: target review was not visible/)
   })
 
+  it('waits for the requested Review title before returning to the requested History row', async () => {
+    const evaluateTitles: Array<string | null> = []
+    const clicked: string[] = []
+    const page = {
+      evaluate: async (_fn: unknown, arg: { title?: string | null }) => {
+        evaluateTitles.push(arg.title ?? null)
+        if (arg.title === 'Smoke navigation beta') return reviewReady
+        if (arg.title === 'Smoke navigation alpha') return historyReady
+        throw new Error(`unexpected navigation title ${arg.title ?? '<none>'}`)
+      },
+      getByRole: (_role: string, options: { name: RegExp }) => ({
+        first: () => ({
+          click: async () => {
+            clicked.push(String(options.name))
+          }
+        })
+      })
+    }
+
+    await returnToHistoryFromReview(page, {
+      reviewTitle: 'Smoke navigation beta',
+      historyTitle: 'Smoke navigation alpha'
+    })
+
+    expect(evaluateTitles).toEqual(['Smoke navigation beta', 'Smoke navigation alpha'])
+    expect(clicked).toEqual(['/Back to history/'])
+  })
+
   it('does not treat a Recent meetings row title as the open Review title', async () => {
     class ElementStub {
       textContent: string
@@ -1074,9 +1192,22 @@ describe('seedNavigationMeetings', () => {
       waitFor: async () => events.push('history:wait')
     }
     const page = {
-      evaluate: async (_fn: unknown, titles: ReturnType<typeof navigationMeetingTitles>) => {
-        events.push(`seed:${titles.alpha}`)
-        return { first: 'alpha.md', second: 'beta.md', titles }
+      evaluate: async (_fn: unknown, payload: ReturnType<typeof navigationMeetingTitles> | { title: string }) => {
+        if ('title' in payload) {
+          events.push(`snapshot:${payload.title}`)
+          return {
+            searchVisible: true,
+            searchEnabled: true,
+            targetMeetingButtonVisible: true,
+            targetMeetingButtonEnabled: true,
+            backVisible: false,
+            backEnabled: false,
+            titleVisible: false,
+            guardVisible: false
+          }
+        }
+        events.push(`seed:${payload.alpha}`)
+        return { first: 'alpha.md', second: 'beta.md', titles: payload }
       },
       getByLabel: () => search,
       getByRole: () => history,
@@ -1093,7 +1224,7 @@ describe('seedNavigationMeetings', () => {
       'search:hidden',
       'wait:450',
       'history:click',
-      'search:visible'
+      'snapshot:Smoke navigation alpha HIST dirty save bar'
     ])
   })
 

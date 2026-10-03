@@ -83,9 +83,12 @@ function overlayWindow(): MacOverlayWindow {
   return new MacOverlayWindow({ frame: false, roundedCorners: overlayWindowChrome(false).roundedCorners })
 }
 
+/** The band the failing runs requested (the drawer-height band before M2-0202 moved it to the authority's
+ *  revealBand, [wa.y+48, wa.bottom−48]). The native reframe does not depend on which band is parked. */
+const OBSERVED_FAILING_BAND: Rect = { x: 1020, y: 61, width: 4, height: 560 }
+
 /** The explicit right-edge Hide park: minimum size, chrome (opacity 0), band, click-through. */
-function hidePark(win: MacOverlayWindow): Rect {
-  const band = rightEdgeHoverRestRect(undefined, runner)
+function hidePark(win: MacOverlayWindow, band: Rect = rightEdgeHoverRestRect(undefined, runner)): Rect {
   win.setMinimumSize()
   win.setOpacity(0)
   win.setBounds(band)
@@ -101,7 +104,7 @@ describe('right-edge Hide park on the macOS overlay window (RE-HIDE-3-meeting-hi
   it('a titled frameless window reproduces the smoke failure: a native pass puts the band 32 px above itself', async () => {
     vi.useFakeTimers()
     const win = new MacOverlayWindow({ frame: false, roundedCorners: true })
-    const band = hidePark(win)
+    const band = hidePark(win, OBSERVED_FAILING_BAND)
     expect(band).toEqual({ x: 1020, y: 61, width: 4, height: 560 })
     expect(win.getBounds()).toEqual(band)
     await vi.advanceTimersByTimeAsync(NATIVE_REFRAME_MS)

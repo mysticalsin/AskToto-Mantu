@@ -106,6 +106,11 @@ interface CacheEntry {
 // order, so re-inserting on every hit keeps the coldest entry first.
 const READ_CACHE_MAX = 2000
 const readCache = new Map<string, CacheEntry>()
+const newestFirstDateCollator = new Intl.Collator()
+
+export function compareMeetingRowsNewestFirst(a: Pick<HistoryRow, 'date'>, b: Pick<HistoryRow, 'date'>): number {
+  return newestFirstDateCollator.compare(b.date || '', a.date || '')
+}
 
 function cachedRead(path: string): CacheEntry | undefined {
   const entry = readCache.get(path)
@@ -136,9 +141,10 @@ function notDownloadedRow(file: string): Read | null {
   return stub ? { text: '', sum: { ...stub, notDownloaded: true } } : null
 }
 
+/** The row for a file that could not be read right now: listed, retried on the next listing. */
 function unavailableRow(file: string): Read | null {
   const stub = lockedStub(file, 'Unavailable')
-  return stub ? { text: '', sum: stub } : null
+  return stub ? { text: '', sum: { ...stub, unavailable: true } } : null
 }
 
 /** Read + decode one file (async), parse its frontmatter. Null if it isn't a saved meeting.
@@ -243,7 +249,7 @@ export async function listMeetings(): Promise<HistoryRow[]> {
   return read
     .filter((r): r is Read => r !== null)
     .map((r) => r.sum)
-    .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+    .sort(compareMeetingRowsNewestFirst)
 }
 
 /** Keyword search across saved meetings; returns scored hits with a snippet. */
