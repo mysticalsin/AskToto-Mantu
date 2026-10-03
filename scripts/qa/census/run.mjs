@@ -25,7 +25,7 @@ import {
   writeJson
 } from './lib.mjs'
 import { writeAuditCounts } from './audit-counts.mjs'
-import { PARKED_BOUNDS, ParkPreconditionError, createCdpParkChecker, summarizeParkChecks } from './park.mjs'
+import { PARKED_BOUNDS, PARK_BOUNDS_SIGNAL, ParkPreconditionError, createCdpParkChecker, summarizeParkChecks } from './park.mjs'
 
 function usage() {
   return `Usage:
@@ -202,7 +202,7 @@ export function parkedIdlePreconditionFailureReport({
 }) {
   const failedParkedIdle = {
     ...(parkedIdle ?? {}),
-    boundsSignal: 'Browser.getWindowForTarget/getWindowBounds',
+    boundsSignal: PARK_BOUNDS_SIGNAL,
     expectedBounds: PARKED_BOUNDS,
     checks: [firstCheck],
     summary: summarizeParkChecks([firstCheck])
@@ -412,7 +412,7 @@ async function main() {
       }
       parkedIdle = {
         ...(parkedIdle ?? {}),
-        boundsSignal: 'Browser.getWindowForTarget/getWindowBounds',
+        boundsSignal: PARK_BOUNDS_SIGNAL,
         expectedBounds: PARKED_BOUNDS,
         checks: [firstCheck]
       }
