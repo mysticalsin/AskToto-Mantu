@@ -43,6 +43,7 @@ import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
 import { DEFAULT_OUT_DIR as SOAK_OUT_DIR, RECORD_FILE as SOAK_RECORD_FILE, soakRecordProblems } from '../qa/owner-soak/verdict.mjs'
+import { DEFAULT_OUT_DIR as M2_0199_DEFAULT_BUNDLE, closureDirProblems } from '../qa/owner-soak/closure.mjs'
 import { EXCERPT_FILES, STALL_BUNDLE_NAMES_FILE, STALL_BUNDLE_NAME, STALLS_FILE, excerptOf } from '../qa/freeze-repro/attribution-bundle.mjs'
 import { VARIANTS, promotableAssets } from '../qa/provenance.mjs'
 import { EVIDENCE_LEVELS, latestByLevel, readRecordStore, recordsInPrBody, recordProblems, sha256Hex } from './record.mjs'
@@ -1333,7 +1334,7 @@ function releaseMain(values) {
 }
 
 async function main() {
-  const usage = 'usage: check.mjs --ledger <path>  |  check.mjs --pr-event <path>  |  check.mjs --ticket M2-0008|M2-0194 [--bundle <path>]  |  ' +
+  const usage = 'usage: check.mjs --ledger <path>  |  check.mjs --pr-event <path>  |  check.mjs --ticket M2-0008|M2-0194|M2-0199 [--bundle <path>]  |  ' +
     'check.mjs --ticket M2-0198 [--record <path>]  |  ' +
     'check.mjs --release <version> --gates <gates.json> --provenance <provenance.json> --ledger <tickets.json> --notes <release notes .md>'
   let values
@@ -1407,9 +1408,12 @@ async function main() {
     }
     const checker = {
       'M2-0008': { check: m2_0008BundleProblems, defaultBundle: M2_0008_DEFAULT_BUNDLE },
-      'M2-0194': { check: m2_0194BundleProblems, defaultBundle: M2_0194_DEFAULT_BUNDLE }
+      'M2-0194': { check: m2_0194BundleProblems, defaultBundle: M2_0194_DEFAULT_BUNDLE },
+      // The owner-bug closure directory closure.mjs writes: refuses 'fixed' for B1 or B2 without the
+      // MEASURED CLOSE record and the owner's ACCEPTED record.
+      'M2-0199': { check: closureDirProblems, defaultBundle: M2_0199_DEFAULT_BUNDLE }
     }[values.ticket]
-    if (!checker) return usageExit('only --ticket M2-0008, M2-0194 and M2-0198 are supported in this public-repo checker')
+    if (!checker) return usageExit('only --ticket M2-0008, M2-0194, M2-0198 and M2-0199 are supported in this public-repo checker')
     const bundle = values.bundle ?? checker.defaultBundle
     const problems = checker.check(resolve(bundle))
     if (problems.length > 0) {

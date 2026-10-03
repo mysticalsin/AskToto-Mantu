@@ -1,0 +1,98 @@
+name: Owner-bug closure
+
+# Owner-bug closure lane (M2-0199): runs scripts/qa/owner-soak/closure.mjs on the diagnostics summary the
+# owner pasted after the closure window (and, on a violation, the exported diagnostics folder), then
+# validates the result with `check.mjs --ticket M2-0199`, in CI only (D-28). The summary lives in a private
+# repository that never appears here (AGENTS.md #1), so this is a `workflow_call` workflow in the same
+# shape as program-audit.yml: the caller's own workflow
+#   jobs:
+#     closure:
+#       uses: mysticalsin/AskToto-Mantu/.github/workflows/owner-closure.yml@main
+#       with:
+#         summary-path: <path to the pasted summary JSON>
+#         export-path: <path to the exported diagnostics folder, on a violation>
+# runs this job in the caller's context. The first checkout (no `repository:` input) is the caller's tree,
+# so no cross-repository credential exists anywhere; the second fetches this repository's scripts at
+# `checker-ref` into a separate path. `workflow_dispatch` (same inputs) smoke-runs the fixture summary
+# inside this repository. The content-free artifact (dates, counts, versions, stall-bundle names and the
+# redacted stall bundles) is uploaded even when the check fails; the lead files the evidence from it.
+on:
+  workflow_call:
+    inputs:
+      summary-path:
+        description: Path to the pasted diagnostics summary JSON in the caller's own checkout
+        required: true
+        type: string
+      export-path:
+        description: Path to the exported diagnostics folder in the caller's checkout (needed on a violation)
+        required: false
+        type: string
+        default: ''
+      checker-ref:
+        description: Ref of this repository to fetch the closure scripts from
+        required: false
+        type: string
+        default: main
+  workflow_dispatch:
+    inputs:
+      summary-path:
+        description: Path to a diagnostics summary JSON for a manual smoke run
+        required: true
+        type: string
+        default: scripts/qa/owner-soak/fixtures/closure-summary.json
+      export-path:
+        description: Path to an exported diagnostics folder (needed on a violation)
+        required: false
+        type: string
+        default: ''
+      checker-ref:
+        description: Ref of this repository to fetch the closure scripts from
+        required: false
+        type: string
+        default: main
+
+permissions:
+  contents: read
+
+jobs:
+  closure:
+    name: Owner-bug closure (M2-0199)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SUMMARY_PATH: ${{ inputs.summary-path }}
+      EXPORT_PATH: ${{ inputs.export-path }}
+      OUT_DIR: out/owner-closure
+    steps:
+      - name: Checkout the caller's summary
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Fetch the public closure scripts
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: mysticalsin/AskToto-Mantu
+          ref: ${{ inputs.checker-ref }}
+          path: .owner-closure-scripts
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Evaluate the closure window
+        run: |
+          set -euo pipefail
+          args=(--summary "$SUMMARY_PATH" --out "$OUT_DIR")
+          if [ -n "$EXPORT_PATH" ]; then
+            args+=(--export "$EXPORT_PATH")
+          fi
+          node .owner-closure-scripts/scripts/qa/owner-soak/closure.mjs "${args[@]}"
+          { echo '```'; cat "$OUT_DIR/closure-record.md" "$OUT_DIR/bug-status.md"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Validate the closure directory
+        run: node .owner-closure-scripts/scripts/evidence/check.mjs --ticket M2-0199 --bundle "$OUT_DIR"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always() && hashFiles('out/owner-closure/**') != ''
+        with:
+          name: owner-closure
+          path: out/owner-closure/
+          if-no-files-found: error
+          retention-days: 90

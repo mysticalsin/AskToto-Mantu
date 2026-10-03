@@ -33,6 +33,15 @@ describe('diagnostics export — logs out, content never', () => {
     expect(body).toMatch(/MANIFEST\.txt/)
   })
 
+  it('copies the redacted stall bundles (M2-0199) by the helper that lists them, never the raw captures', () => {
+    // Which names are listed (well-formed, newest MAX_BUNDLES, nothing from raw/) is proven by behaviour in
+    // stall-bundle.test.ts; this pins that the handler copies exactly that list from the bundle directory.
+    const body = handler()
+    expect(body).toMatch(/for \(const f of await exportableStallBundles\(userData\)\) copy\(join\(stallBundleDir\(userData\), f\), f\)/)
+    expect(body).not.toMatch(/captureDir\(/)
+    expect(indexSrc).toMatch(/import \{ bundleDir as stallBundleDir, exportableStallBundles \} from '\.\/infra\/observability\/stall-bundle'/)
+  })
+
   it('NEVER reaches for meetings, the brain store, the wiki mirror, or settings.json', () => {
     const body = handler()
     expect(body).not.toMatch(/resolveMeetingsFolder/)
