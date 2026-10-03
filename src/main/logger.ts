@@ -253,6 +253,8 @@ export type AuditEvent =
   | 'app.boot.watch_cleared'
   // M2-0515: one native boot stage's own main-thread duration (tray stages, window construction and first show).
   | 'app.boot.stage'
+  // M2-0518: the boot-work gate opened ({ reason: show | fallback | immediate, held }), so no held boot job is silent.
+  | 'app.boot.work.released'
   // FITO-185-F: menu-bar Tray create succeeded/failed — hardprove AXExtrasMenuBar needs a diagnosable trail.
   | 'tray.created'
   | 'tray.failed'
@@ -269,6 +271,8 @@ export type AuditEvent =
   | 'sidecar.unsupervised'
   // M2-0215: History list request timing across renderer and main.
   | 'history.request'
+  // M2-0032: a committed navigation a History request took part in (from === to is the toggle-race no-op).
+  | 'history.transition'
   // M2-0037 (B3-RC2): render-process-gone's reload budget was exhausted (>=3 reloads within 60s with no
   // recovered 30s-alive window) — auto-reload stops and a recovery dialog is shown instead.
   | 'app.render_loop_halted'

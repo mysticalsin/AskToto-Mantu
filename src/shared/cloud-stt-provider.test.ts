@@ -50,6 +50,7 @@ describe('enforceSttPolicy (M2-0412)', () => {
     version: 1,
     updatedAt: 1,
     updatedBy: 'owner@example.test',
+    localSpeechPack: 'offered',
     capabilities: {
       askChat: entry('anthropic'),
       commandAgent: entry('anthropic'),

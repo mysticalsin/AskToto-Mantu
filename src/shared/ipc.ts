@@ -28,15 +28,8 @@ export type PreservedBrainIndexListResult = {
   copies: PreservedBrainIndexCopy[]
 }
 
-export const HistoryTraceSchema = z.object({ requestId: z.string().uuid(), sentAt: z.number().finite().positive() })
-export type HistoryTrace = z.infer<typeof HistoryTraceSchema>
-export const HistorySettledSchema = z.object({
-  requestId: z.string().uuid(),
-  outcome: z.enum(['ok', 'failed', 'discarded']),
-  ipcMs: z.number().finite().nonnegative(),
-  renderMs: z.number().finite().nonnegative().optional()
-})
-export type HistorySettled = z.infer<typeof HistorySettledSchema>
+export type { HistorySettled, HistoryTrace, HistoryTransition } from './history-trace'
+export { HistorySettledSchema, HistoryTraceSchema, HistoryTransitionSchema } from './history-trace'
 export const RendererCrashContextSchema = z.object({ view: z.enum(RENDERER_VIEWS), listening: z.boolean() })
 export type RendererCrashContext = z.infer<typeof RendererCrashContextSchema>
 export interface RendererCrashReport extends RendererCrashContext {
@@ -183,6 +176,7 @@ export const IPC = {
   recallList: 'recall:list',
   recallSearch: 'recall:search',
   historySettled: 'history:settled',
+  historyTransition: 'history:transition',
   recallOpen: 'recall:open',
   recallRead: 'recall:read',
   recallHydration: 'recall:hydration', // main → renderer: an explicit open downloading one cloud-only meeting
@@ -1176,11 +1170,10 @@ export const BaseSettingsSchema = z.object({
   overlayOrbStyle: z.enum(['bar', 'jakub', 'obsidian']).default('jakub'),
   /** Physical location is separate from the overlay chrome. Legacy profiles stay top-center. */
   overlayPlacement: z.enum(['top-center', 'right-edge']).default('top-center'),
-  /**
-   * Per-display sidecar position, stored as a normalized Y (0..1), never a raw desktop coordinate.
-   * It remains in the encrypted local profile and is never sent to Operator or a meeting.
-   */
-  overlayRightEdgeYByDisplay: z.record(z.string(), z.number().finite().min(0).max(1)).default({}),
+  // Per-display right-edge position, normalized (0..1) to the work area, never a raw desktop coordinate. It
+  // remains in the encrypted local profile and is never sent to Operator or a meeting (right-edge-geometry.ts).
+  overlayRightEdgeYByDisplay: z.record(z.string(), z.number().finite().min(0).max(1)).default({}), // legacy sidecar Y: migrated once per display, then read-only
+  overlayRightEdgeAnchorByDisplay: z.record(z.string(), z.number().finite().min(0).max(1)).default({}), // handle centre (default 0.15); a lock on either key locks it
   showFullTranscriptInReview: z.boolean().default(false), // review = summary-first; transcript opt-in
   asrQuality: z.enum(['best', 'fast']).default('best'), // Best is default; Fast is a Settings power option (docs/asr/QUALITY.md)
   // parakeet = conservative schema/legacy fallback. Fresh incomplete profiles with >8 GiB physical RAM
@@ -1642,14 +1635,8 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
    *  blocked provider "restricted by your organization" — the SAME source the main process enforces at
    *  request time, so the UI can't offer a provider that every ask would then reject. */
   allowedProviders: z.array(z.string()).nullable().default(null),
-  /** M2-0412: the fleet model policy's effective provider+model per capability, Worker-authoritative
-   *  (main computes it from model-policy-client.ts's verified, signed cache — never client-computed,
-   *  same rule as operatorEntitlements below). A capability absent from this record has no fleet
-   *  policy set for it ("not managed" — Settings shows today's local defaults, editable as usual).
-   *  A capability present here is locked: Settings shows it read-only with "Managed by your
-   *  organization — set on the Operator portal" and the portal's own provider/model, never letting
-   *  a local setting pick something outside it. */
-  modelPolicyCapabilities: z.record(z.string(), z.object({ provider: z.string(), model: z.string() })).default({})
+  modelPolicyCapabilities: z.record(z.string(), z.object({ provider: z.string(), model: z.string() })).default({}),
+  localSpeechPack: z.enum(['required', 'offered', 'blocked']).default('offered')
 })
 export type PublicSettings = z.infer<typeof PublicSettingsSchema>
 
@@ -1672,6 +1659,7 @@ export type SettingsPatch = Partial<
     | 'envKeys'
     | 'loginItemOpenAtLogin'
     | 'lastFailover'
+    | 'localSpeechPack'
   >
 >
 
@@ -1750,6 +1738,7 @@ export const DEFAULT_SETTINGS: Settings = {
   overlayOrbStyle: 'jakub',
   overlayPlacement: 'top-center',
   overlayRightEdgeYByDisplay: {},
+  overlayRightEdgeAnchorByDisplay: {},
   showFullTranscriptInReview: false,
   asrQuality: 'best',
   asrEngine: 'parakeet',
@@ -1921,6 +1910,7 @@ export interface MeetingSummary {
   /** True for a real encrypted meeting this device can't decrypt: a locked stub (no preview), never silently dropped. */
   locked?: boolean
   notDownloaded?: boolean // bytes not on this device: listed by name, never read; an explicit open downloads it
+  unavailable?: boolean // could not be read right now (a failed read or a non-regular entry): listed by name
 }
 export interface RecallHit extends MeetingSummary {
   snippet: string

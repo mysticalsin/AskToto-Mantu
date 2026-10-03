@@ -10,6 +10,7 @@ function policy(): ModelPolicyDocument {
     version: CTX.now,
     updatedAt: CTX.now,
     updatedBy: 'owner@example.test',
+    localSpeechPack: 'required',
     capabilities: Object.fromEntries(
       MODEL_POLICY_CAPABILITIES.map((k) => [k, { provider: 'anthropic', model: 'claude-sonnet-4-6', fallbacks: [] }])
     ) as ModelPolicyDocument['capabilities']
@@ -23,6 +24,7 @@ describe('renderModels', () => {
     const html = renderModels(data, CTX)
     expect(html).toContain('>Models<')
     expect(html).toContain('Not managed')
+    expect(html).toContain('Offered')
     expect(html).not.toContain('id="model-policy-form"')
     expect(html).toContain('Only the fleet owner can change this policy.')
   })
@@ -33,6 +35,7 @@ describe('renderModels', () => {
     const html = renderModels(data, CTX)
     expect(html).toContain('anthropic')
     expect(html).toContain('claude-sonnet-4-6')
+    expect(html).toContain('Required')
     expect(html).not.toContain('id="model-policy-form"')
   })
 
@@ -43,6 +46,8 @@ describe('renderModels', () => {
     expect(html).toContain('id="model-policy-form"')
     expect(html).toContain('name="askChat.provider" value="anthropic"')
     expect(html).toContain('name="askChat.model" value="claude-sonnet-4-6"')
+    expect(html).toContain('name="localSpeechPack"')
+    expect(html).toContain('value="required" selected')
     expect(html).toContain(`nonce="${CTX.nonce}"`)
   })
 

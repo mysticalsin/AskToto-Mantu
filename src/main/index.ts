@@ -23,13 +23,7 @@ import {
 import { join, basename, dirname, resolve } from 'node:path'
 import { readFileSync, existsSync, writeFileSync, readdirSync, unlinkSync, createReadStream, statSync, renameSync, rmdirSync, mkdirSync, copyFileSync } from 'node:fs'
 
-// Enterprise checkbox: DevTools stay reachable only where they are a development tool. No secret ever
-// reaches the renderer (publicSettings strips key material), but DevTools on a packaged build still
-// exposes in-memory renderer state (transcript text, screen-context strings) to anyone at the keyboard,
-// and every security questionnaire asks. Packaged builds ignore ASKTOTO_DEVTOOLS: devEnv() returns
-// undefined once isPackagedBuild() is true, so there is no env backdoor in a shipped DMG/EXE.
-// Shared with intelligence.ts so every window in src/main gates on ONE decision — see
-// dev-env.ts's devToolsEnabled() for why this moved out of this file.
+// DevTools stay reachable only where dev-env permits them; packaged builds ignore ASKTOTO_DEVTOOLS.
 const DEVTOOLS_ENABLED = devToolsEnabled()
 import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
@@ -125,6 +119,7 @@ import {
   listDustAgents,
   dustSelectedAgentVision,
   recordMeetingSummarized,
+  getAdminLocalSpeechPackPolicy,
   getSonioxApiKey,
   setSonioxApiKey,
   clearSonioxApiKey
@@ -177,8 +172,8 @@ import {
   portalFundedCloudflareModel,
   workingCliOrder
 } from '@shared/ask-routing'
-import { getActiveModelPolicy, narrowAllowedForCapability, resolveManagedModel } from './model-policy-client'
-import { localModelAllowedByPolicy, MODEL_POLICY_CAPABILITIES } from '@shared/model-policy'
+import { getActiveModelPolicy, modelPolicyCapabilitiesForSettings, narrowAllowedForCapability, resolveLocalSpeechPackPolicy, resolveManagedModel } from './model-policy-client'
+import { localModelAllowedByPolicy } from '@shared/model-policy'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import { registerWriteupIpc } from './ipc/writeup'
 import * as fmRuntime from './llm/fm-runtime'
@@ -186,6 +181,7 @@ import { extractScreenText, macStallWatchCommand } from './mac-helper'
 import * as screenPerm from './capture-permissions/screen-permission-runtime'
 import { isOrphanScreenSourcesRejection } from './capture-permissions/loopback-grant'
 import { registerScreenPermissionIpc } from './ipc/screen-permission-ipc'
+import { registerHistoryTraceIpc } from './ipc/history-trace-ipc'
 import { configureSidecarRegistry, createSidecarRegistry } from './infra/process/registry'
 import { runBootSidecarReaper } from './infra/process/reaper'
 import { startAvailableMemorySampler } from './infra/scheduler/memory-sampler'
@@ -213,9 +209,7 @@ import {
   hoverRestTop,
   hoverWatchRestRect,
   overlayRestSize,
-  normalizeRightEdgeY,
   overlayPlacementPosition,
-  rightEdgeSidecarBounds,
   rightEdgeParkLayout,
   rightAnchoredParkPosition,
   resolveOverlayPlacement,
@@ -237,6 +231,7 @@ import {
   settingsContentHeight
 } from '@shared/settings-bounds'
 import { ONBOARDING_AUDIO_LOCK_EVENT } from '@shared/onboarding-audio'
+import { createRightEdgeAnchors } from './island/right-edge-anchor'
 import {
   CURSOR_WATCH_INTERVAL_MS,
   OVERLAY_LEAVE_PARK_MS,
@@ -271,7 +266,7 @@ import {
   overlayOrbRestIsCircle,
   parseOverlayOrbStyle
 } from '@shared/overlay-orb'
-import { overlayDisplayKey, parseOverlayPlacement, type OverlayPlacement } from '@shared/overlay-placement'
+import { parseOverlayPlacement, type OverlayPlacement } from '@shared/overlay-placement'
 import { resolveOverlayPresentation } from '@shared/overlay-presentation'
 
 // --- Speaker session ownership (Task 7-P2b) ---
@@ -659,9 +654,10 @@ import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
 import { buildTrayInStages, createSingleFlight, formatTrayAccelerator, loadPresizedTrayIcon, scheduleTrayAfterFirstPaint, trayIconPaths, yieldToEventLoop } from './boot-tray'
-import { BOOT_WINDOW_OPTIONS, BOOT_WINDOW_VARIANT, yieldBeforeBootWindow } from './boot-window-rendering'
+import { BOOT_WINDOW_OPTIONS, BOOT_WINDOW_VARIANT, takeBootWindowPrewarmMs, yieldBeforeBootWindow } from './boot-window-rendering'
 import { isBootFirstShowDeferred, navigateWindow, scheduleCurrentFirstShow, withBootFirstShowDeferred } from './lifecycle/first-show'
-import { createBootWork } from './lifecycle/boot-work'
+import { createBootWork, type BootWork } from './lifecycle/boot-work'
+import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
 import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
 import { noteUserInput, runAsMaintenance, settlePriorExit, startMaintenanceGate } from './infra/scheduler/maintenance'
 import { createResponsivenessTracker } from './infra/observability/responsiveness-tracker'
@@ -1178,9 +1174,6 @@ let lastBarHeight = BAR_HEIGHT // remember the bar's content height to restore o
 // bar parked near the bottom all the way to the top of the screen, 24px at a time, and it stayed there.
 // Keeping the anchor separate lets the slide be temporary — up to fit, back down when the content shrinks.
 let userAnchorY: number | null = null
-// Sidecar vertical positions are normalised per local display. Persist only once after a drag settles.
-const pendingRightEdgeYByDisplay = new Map<string, number>()
-let rightEdgeYSaveTimer: ReturnType<typeof setTimeout> | null = null
 let currentWidth = BAR_WIDTH // window width; narrows to PILL_WIDTH while collapsed to the control mini-pill
 // True while collapsed to the control mini-pill. Guards lastBarHeight below: the pill's own (much shorter)
 // content height must never overwrite the remembered full-bar height, or expanding back out would apply
@@ -1893,12 +1886,22 @@ function initializeImportJobs(): void {
     newId: () => randomBytes(16).toString('hex'),
     concurrency: MAX_CONCURRENT_DECODES
   })
-  void ensureImportAsrAssets((pct) => {
-    publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
-  }).catch((err) => {
-    mainLog.warn('[asr-assets] background ensure failed:', err instanceof Error ? err.message : err)
-    publishAsrAssetsProgress()
-  })
+  const speechPackBlocked =
+    resolveLocalSpeechPackPolicy(getSettings(), getAdminLocalSpeechPackPolicy()) === 'blocked'
+  if (!speechPackBlocked) {
+    void ensureImportAsrAssets((pct) => {
+      publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
+    }).catch((err) => {
+      mainLog.warn('[asr-assets] background ensure failed:', err instanceof Error ? err.message : err)
+      publishAsrAssetsProgress()
+    })
+  }
+}
+
+function getImportJobs(): ImportJobManager {
+  initializeImportJobs()
+  if (!importJobs) throw new Error('Audio import service is unavailable.')
+  return importJobs
 }
 
 /** Minimal .env loader (no dep) — dev convenience; prod uses in-app key. */
@@ -1959,7 +1962,7 @@ async function verifyCliSessions(now = Date.now()): Promise<void> {
   // would spawn the probe twice for the same provider.
   if (cliSessionSweep) return cliSessionSweep
   cliSessionSweep = (async () => {
-    // Never reject. One caller is a bare `void verifyCliSessions()` at boot, and an async body with no
+    // Never reject. One caller is a bare `void verifyCliSessions()` in a boot job, and an async body with no
     // guard is precisely how a transient settings-read failure becomes an unhandledRejection — which
     // onFatal turns into a crash-*.log and an `app.crash` audit entry for something that crashed nothing.
     // Same guarded shape startMeetingPoller uses, and for the same reason.
@@ -1990,14 +1993,26 @@ async function verifyCliSessions(now = Date.now()): Promise<void> {
   return cliSessionSweep
 }
 
+let loginItemOpenAtLoginCache: boolean | null = null
+
+function refreshLoginItemOpenAtLoginCache(): boolean | null {
+  try { return (loginItemOpenAtLoginCache = app.getLoginItemSettings().openAtLogin) } catch { return null }
+}
+
+const publicLoginItemOpenAtLogin = (s: Settings): boolean => loginItemOpenAtLoginCache ?? s.launchAtLogin
+
+function reconcileLaunchAtLogin(): boolean {
+  const want = getSettings().launchAtLogin
+  const current = refreshLoginItemOpenAtLoginCache()
+  if (current === null || current === want) return false
+  app.setLoginItemSettings({ openAtLogin: want })
+  loginItemOpenAtLoginCache = want
+  return true
+}
+
 function publicSettings(): PublicSettings {
   const s = getSettings()
-  let loginItemOpenAtLogin = false
-  try {
-    loginItemOpenAtLogin = app.getLoginItemSettings().openAtLogin
-  } catch {
-    /* not supported on this platform */
-  }
+  const loginItemOpenAtLogin = publicLoginItemOpenAtLogin(s)
   // Active provider is usable: key present AND any provider-specific setup done (Dust needs a workspace +
   // a chosen base agent; custom needs an https base URL). Drives the add-key CTA so it only shows when the
   // app genuinely can't answer yet — not when a key for a DIFFERENT provider exists.
@@ -2120,18 +2135,9 @@ function publicSettings(): PublicSettings {
     loginItemOpenAtLogin,
     version: app.getVersion(),
     allowedProviders: allowed, // org allowlist (null = unrestricted); surfaced so the picker matches enforcement
-    modelPolicyCapabilities: modelPolicyCapabilitiesForSettings(s)
+    modelPolicyCapabilities: modelPolicyCapabilitiesForSettings(s),
+    localSpeechPack: resolveLocalSpeechPackPolicy(s, getAdminLocalSpeechPackPolicy())
   }
-}
-
-/** M2-0412: the fleet policy's effective provider+model, per capability, for Settings' managed/locked
- *  display — {} (nothing locked) when no fleet policy has ever been set ("not managed"). */
-function modelPolicyCapabilitiesForSettings(s: Settings): Record<string, { provider: string; model: string }> {
-  const policy = getActiveModelPolicy(s)
-  if (!policy) return {}
-  return Object.fromEntries(
-    MODEL_POLICY_CAPABILITIES.map((cap) => [cap, { provider: policy.capabilities[cap].provider, model: policy.capabilities[cap].model }])
-  )
 }
 
 /** Wiped-profile / mid-tour: exclusive fullscreen owns the display until onboardingDone. */
@@ -2177,6 +2183,7 @@ let emittedAppStarted = false
 // M2-0006: set once, at the same point app.started fires — will-quit calls observability.shutdownClean()
 // on it, and it is meaningless before that first createWindow() has run.
 let observability: RunObservability | null = null
+let bootWorkGate: BootWork | null = null
 /** Consumed by the next transparent window created when Act 6 finishes. Never persisted. */
 let postOnboardingDestination: 'answer' | 'settings' = 'answer'
 const ONBOARDING_EXIT_FALLBACK_MS = 5_000
@@ -2358,16 +2365,18 @@ function applyOverlaySurfaceChrome(): void {
   }
 }
 
-/** Hide/island park at bounds.y. Re-assert if darwin clamped into workArea.y≈39. */
+/** Hide/island park at bounds.y. Re-assert if darwin clamped into workArea.y≈39. Right-edge: applyRightEdgeBounds. */
 function commitParkedOverlayBounds(park: { x: number; y: number; width: number; height: number }): void {
   if (!win || win.isDestroyed()) return
+  const display = screen.getDisplayMatching(park)
+  if (resolvedOverlayPlacementForDisplay(display) === 'right-edge') {
+    applyRightEdgeBounds('rest', display)
+    return
+  }
   win.setBounds(park, false)
   try {
     const after = win.getBounds()
-    // A right-edge park the OS widened (Windows minimum width) keeps its right edge at the work-area edge.
-    const rightEdge = resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(park)) === 'right-edge'
-    const target = rightEdge ? rightAnchoredParkPosition(park, after.width) : park
-    if (after.x !== target.x || after.y !== target.y) win.setPosition(target.x, target.y, false)
+    if (after.x !== park.x || after.y !== park.y) win.setPosition(park.x, park.y, false)
   } catch {
     /* headless */
   }
@@ -2547,13 +2556,15 @@ function exitExclusiveOnboardingStage(): void {
   lastBarHeight = BAR_HEIGHT
   const display = screen.getDisplayMatching(win.getBounds())
   const layout = liveOverlayLayout()
-  const park = parkAfterExclusiveOnboarding(
-    parkLayoutForDisplay(layout, display),
-    getDisplayMetrics(display),
-    ISLAND_TOP_MARGIN,
-    liveOverlayPlacement(),
-    rightEdgeYForDisplay(display)
-  )
+  // The right edge rests through the geometry authority; every other placement takes the onboarding park.
+  const park = resolvedOverlayPlacementForDisplay(display) === 'right-edge'
+    ? rightEdgeBounds('rest', display, layout)
+    : parkAfterExclusiveOnboarding(
+      parkLayoutForDisplay(layout, display),
+      getDisplayMetrics(display),
+      ISLAND_TOP_MARGIN,
+      liveOverlayPlacement()
+    )
   currentWidth = park.width
   islandResting = overlayUsesHover(layout)
   userAnchorY = park.y
@@ -2616,22 +2627,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // overwrite `win` with a second BrowserWindow and orphan the first one — still visible, still
   // always-on-top, unreferenced.
   if (win && !win.isDestroyed()) return
-  // MQA-249: the one unconditional "this build came up" signal, and the only portable one.
-  //
-  // check-packaged-launch.mjs proves a packaged app actually starts, but it is Win32-only: it asserts on
-  // the real top-level window via PowerShell + UI Automation, and the macOS equivalents all need a TCC
-  // Automation grant an unattended build cannot answer. Its own doc names the missing piece — "no
-  // unconditional audit event fires at startup — so today there is no portable positive signal to assert
-  // on". This is that signal. auditLog writes to userData/logs/audit.log, which ASKTOTO_USERDATA relocates
-  // (electron-log's main.log does NOT on macOS — it goes to ~/Library/Logs), so a gate can point a clean
-  // profile at a temp directory and read the answer out of it on either platform.
-  //
-  // Emitted here rather than at app-ready because reaching createWindow means the main process survived
-  // module load, bytecode load, and boot — which is exactly the class of failure that shipped DOA twice.
   if (!emittedAppStarted) {
-    // M2-0006: app.started/app.stall/app.shutdown.clean and the run/liveness/stall-monitor lifecycle
-    // behind them, and the out-of-process stall sampler (M2-0192) — see
-    // infra/observability/run-observability.ts for the invariant this enforces.
     observability = startRunObservability({
       userData: app.getPath('userData'),
       version: app.getVersion(),
@@ -2640,7 +2636,9 @@ function createWindow(targetDisplay?: Electron.Display): void {
       uvThreadpoolSize: process.env.UV_THREADPOOL_SIZE,
       audit: auditLog,
       powerMonitor,
-      stallWatchCommand: macStallWatchCommand()
+      stallWatchCommand: macStallWatchCommand(),
+      deferStallSamplerStart: (start) => { bootWorkGate ? bootWorkGate.run('startStallSampler', start) : setImmediate(start) },
+      deps: { scheduleFlush: (flush) => { bootWorkGate ? bootWorkGate.run('flushBootStages', flush) : setImmediate(flush) } }
     })
     settlePriorExit(observability.priorShutdown)
     emittedAppStarted = true
@@ -2669,7 +2667,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
     metrics: placementMetrics,
     topMargin: ISLAND_TOP_MARGIN,
     placement,
-    normalizedY: rightEdgeYForDisplay(placementDisplay)
+    anchor: placement === 'right-edge' ? rightEdgeAnchors.fraction(placementDisplay) : undefined
   })
   if (onboardingLive) {
     currentWidth = firstPaint.width
@@ -2728,6 +2726,8 @@ function createWindow(targetDisplay?: Electron.Display): void {
     ...BOOT_WINDOW_OPTIONS.window // M2-0516: a QA-identity-only variant's values; none in every shipping build
   })
   observability?.recordBootStage('createWindow.construct', performance.now() - constructStartedMs, { transparent: chrome.transparent, windowVariant: BOOT_WINDOW_VARIANT })
+  const prewarmMs = takeBootWindowPrewarmMs() // M2-0519: the boot prewarm ran before observability started; recorded once
+  if (prewarmMs !== null) observability?.recordBootStage('createWindow.prewarm', prewarmMs, { transparent: chrome.transparent, windowVariant: BOOT_WINDOW_VARIANT })
   ensureMetisCommandRuntime({
     getSettings,
     commandControl,
@@ -2782,6 +2782,8 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // freshly-recreated one (render-process-gone recovery reassigns `win` before the old one's 'closed'
   // may fire). Only clear the module ref when it still points at the window that closed.
   const self = win
+  // M2-0518: App Nap must not throttle the shown overlay once the boot power-save hold ends.
+  holdAppSuspensionWhileVisible(self, powerSaveBlocker)
   // `closed` fires after BrowserWindow.destroy() has torn down WebContents. Cache the numeric owner
   // while it is valid; touching `self.webContents` from the callback throws and falsely crashes Métis.
   const selfWebContentsId = self.webContents.id
@@ -3169,14 +3171,17 @@ function resolvedOverlayPlacementForDisplay(display: Electron.Display): OverlayP
   return resolveOverlayPlacement(liveOverlayPlacement(), getDisplayMetrics(display))
 }
 
-function rightEdgeYForDisplay(display: Pick<Electron.Display, 'id'>): number | undefined {
-  const key = overlayDisplayKey(display.id)
-  if (!key) return undefined
-  const value = getSettings().overlayRightEdgeYByDisplay[key]
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
-}
+/** Per-display right-edge anchor (right-edge-anchor.ts); every right-edge rect follows it. */
+const rightEdgeAnchors = createRightEdgeAnchors({
+  stored: () => ({ anchors: getSettings().overlayRightEdgeAnchorByDisplay, legacy: getSettings().overlayRightEdgeYByDisplay }),
+  saveAnchors: (anchors) => setSettings({ overlayRightEdgeAnchorByDisplay: { ...getSettings().overlayRightEdgeAnchorByDisplay, ...anchors } }),
+  lockedKeys: getLockedKeys,
+  rightEdgeLive: () => liveOverlayPlacement() === 'right-edge',
+  warn: (message, error) => mainLog.warn(`[overlay-placement] ${message}`, error),
+  later: (run, ms) => setTimeout(run, ms).unref?.()
+})
 
-/** The one main-process bridge from live Electron displays to pure placement geometry. */
+/** The one main-process bridge from live displays to pure placement geometry (right-edge: applyRightEdgeBounds). */
 function overlayPositionForDisplay(
   width: number,
   height: number,
@@ -3190,8 +3195,7 @@ function overlayPositionForDisplay(
     height,
     layout,
     metrics: getDisplayMetrics(display),
-    topMargin,
-    normalizedY: rightEdgeYForDisplay(display)
+    topMargin
   })
 }
 
@@ -3199,52 +3203,56 @@ function overlayPositionForDisplay(
 function parkLayoutForDisplay(layout: OverlayLayout, display: Electron.Display): OverlayLayout {
   if (layout !== 'hide' || resolvedOverlayPlacementForDisplay(display) !== 'right-edge') return layout
   const others = screen.getAllDisplays().filter((other) => other.id !== display.id).map((other) => other.bounds)
-  return rightEdgeParkLayout(layout, getDisplayMetrics(display), others, rightEdgeYForDisplay(display))
+  return rightEdgeParkLayout(layout, getDisplayMetrics(display), others, rightEdgeAnchors.fraction(display))
 }
 
 function parkedOverlayBounds(layout: OverlayLayout, display: Electron.Display): Electron.Rectangle {
+  if (resolvedOverlayPlacementForDisplay(display) === 'right-edge') return rightEdgeBounds('rest', display, layout)
   return parkAfterExclusiveOnboarding(
     parkLayoutForDisplay(layout, display),
     getDisplayMetrics(display),
     ISLAND_TOP_MARGIN,
-    liveOverlayPlacement(),
-    rightEdgeYForDisplay(display)
+    liveOverlayPlacement()
   )
 }
 
 function overlayHoverRestRect(layout: OverlayLayout, display: Electron.Display): Electron.Rectangle {
+  const rightEdge = resolvedOverlayPlacementForDisplay(display) === 'right-edge'
   return hoverWatchRestRect(
     layout,
     getDisplayMetrics(display),
     liveOverlayPlacement(),
-    rightEdgeYForDisplay(display)
+    rightEdge ? rightEdgeAnchors.fraction(display) : undefined
   )
 }
 
-/** Persist only the deliberate vertical sidecar position, trailing one drag gesture. */
-function queueRightEdgeYForDisplay(display: Pick<Electron.Display, 'id'>, normalizedY: number): void {
-  if (getLockedKeys().includes('overlayRightEdgeYByDisplay')) return
-  const key = overlayDisplayKey(display.id)
-  if (!key) return
-  const bounded = Math.max(0, Math.min(1, normalizedY))
-  pendingRightEdgeYByDisplay.set(key, bounded)
-  if (rightEdgeYSaveTimer) return
-  rightEdgeYSaveTimer = setTimeout(() => {
-    rightEdgeYSaveTimer = null
-    const pending = Object.fromEntries(pendingRightEdgeYByDisplay)
-    pendingRightEdgeYByDisplay.clear()
-    if (Object.keys(pending).length === 0 || liveOverlayPlacement() !== 'right-edge') return
-    try {
-      if (getLockedKeys().includes('overlayRightEdgeYByDisplay')) return
-      const settings = getSettings()
-      setSettings({
-        overlayRightEdgeYByDisplay: { ...settings.overlayRightEdgeYByDisplay, ...pending }
-      })
-    } catch (error) {
-      mainLog.warn('[overlay-placement] could not persist right-edge position', error)
-    }
-  }, 350)
-  rightEdgeYSaveTimer.unref?.()
+/** Right-edge bounds at the display's anchor: the legacy drawer, or at rest the Hide band or the Island tab. */
+function rightEdgeBounds(surface: 'open' | 'rest', display: Electron.Display, layout: OverlayLayout = liveOverlayLayout()): Electron.Rectangle {
+  if (surface === 'open') return rightEdgeAnchors.rect('open', display)
+  return rightEdgeAnchors.rect(parkLayoutForDisplay(layout, display) === 'hide' ? 'band' : 'tab', display)
+}
+
+/** The only writer of right-edge window bounds (M2-0202 D8c): every right-edge path sets bounds here, from
+ *  rightEdgeBounds, so open, rest and band agree on one anchor. A rest the OS widened keeps its right edge. */
+function applyRightEdgeBounds(surface: 'open' | 'rest', display: Electron.Display, layout: OverlayLayout = liveOverlayLayout()): Electron.Rectangle {
+  const rect = rightEdgeBounds(surface, display, layout)
+  currentWidth = rect.width
+  userAnchorY = rect.y
+  if (!win || win.isDestroyed()) return rect
+  if (surface === 'open') {
+    const b = win.getBounds()
+    if (b.x !== rect.x || b.y !== rect.y || b.width !== rect.width || b.height !== rect.height) win.setBounds(rect, false)
+    return rect
+  }
+  win.setBounds(rect, false)
+  try {
+    const after = win.getBounds()
+    const target = rightAnchoredParkPosition(rect, after.width)
+    if (after.x !== target.x || after.y !== target.y) win.setPosition(target.x, target.y, false)
+  } catch {
+    /* headless */
+  }
+  return rect
 }
 
 function overlayCursorWatchWanted(): boolean {
@@ -3308,6 +3316,7 @@ function tickOverlayCursorWatch(): void {
     osHoverSeen: overlayCursorWatchHovering,
     hugStub: isIncompleteAskReveal(bounds),
     heldCursor: overlayCursorWatchHeldCursor,
+    holdRegion: placement === 'right-edge' ? rightEdgeAnchors.hold(display, cursor) : undefined,
     placement
   })
   if (islandResting || step.osHoverSeen) rightEdgeUnhoveredRevealAt = null
@@ -3325,6 +3334,8 @@ function tickOverlayCursorWatch(): void {
     const restoredFromParkedRail = islandResting
     cancelOverlayLeavePark()
     restoreBarWidth()
+    // A band reveal holds the corridor from where the pointer revealed it until the pointer reaches the drawer.
+    if (placement === 'right-edge' && restoredFromParkedRail) rightEdgeAnchors.noteReveal(cursor.y)
     notifyOverlayCursorHover(true, restoredFromParkedRail)
     const after = win.getBounds()
     // Transition log only (a hug-stub restore can repeat per tick until the bar settles).
@@ -3396,13 +3407,15 @@ function pointerInIslandOrBar(opts?: { ignoreWindow?: boolean }): boolean {
   const bounds = win.getBounds()
   // A Settings-tall ghost is not the Ask bar. (900, 600) over 880×1017 must still park 8×2.
   if (isSettingsTallHeight(bounds.height) && !settingsSurfaceOpen) return false
+  const placement = resolvedOverlayPlacementForDisplay(display)
   return (
     decideCursorWatch({
       cursor,
       restRect: rest,
       revealedRect: bounds,
       revealed: true,
-      placement: resolvedOverlayPlacementForDisplay(display)
+      placement,
+      holdRegion: placement === 'right-edge' ? rightEdgeAnchors.hold(display, cursor) : undefined
     }) === 'stay'
   )
 }
@@ -3525,6 +3538,10 @@ function anchorTopCenter(): void {
     return
   }
   const display = screen.getDisplayMatching(win.getBounds())
+  if (resolvedOverlayPlacementForDisplay(display) === 'right-edge') {
+    applyRightEdgeBounds(islandResting ? 'rest' : 'open', display)
+    return
+  }
   const b = win.getBounds()
   const { x, y } = overlayPositionForDisplay(
     b.width,
@@ -3559,8 +3576,9 @@ function restoreBarWidth(): void {
   const placement = resolvedOverlayPlacementForDisplay(display)
   let next: Electron.Rectangle
   if (placement === 'right-edge') {
-    next = rightEdgeSidecarBounds(getDisplayMetrics(display), { open: true, normalizedY: rightEdgeYForDisplay(display) })
-    currentWidth = next.width
+    // Bounds first, then visibility and chrome (revealOverlaySurface finds them already applied).
+    rightEdgeAnchors.noteReveal(null)
+    next = applyRightEdgeBounds('open', display)
   } else {
     // Hide/Island reveal keeps the 120 Ask floor. Never Math.max a leftover Settings 800+ slab
     // (Ultron 880×1017 Expand Métis). Bar idle hugs the bar.
@@ -3581,6 +3599,11 @@ function repairOverlayBoundsForReveal(): void {
   if (!win || win.isDestroyed() || onboardingExclusiveLive()) return
   const b = win.getBounds()
   const display = screen.getDisplayMatching(b)
+  // Right-edge rects lie inside the work area by construction; a generic height clamp would cut the drawer.
+  if (!settingsSurfaceOpen && resolvedOverlayPlacementForDisplay(display) === 'right-edge') {
+    applyRightEdgeBounds(islandResting ? 'rest' : 'open', display)
+    return
+  }
   const { workArea } = display
   const height = clampHeight(b.height, workArea.height)
   const visible =
@@ -3670,12 +3693,12 @@ function setWindowMode(): void {
   } catch {
     /* headless / lifted placement stub */
   }
+  if (resolvedOverlayPlacementForDisplay(display) === 'right-edge') {
+    applyRightEdgeBounds('open', display)
+    return
+  }
   const nextHeight = clampHeight(height, workArea.height)
-  const placement = resolvedOverlayPlacementForDisplay(display)
-  const position =
-    placement === 'right-edge'
-      ? overlayPositionForDisplay(currentWidth, nextHeight, liveOverlayLayout(), display, ISLAND_TOP_MARGIN)
-      : { x: recenterXForWidth(b.x, b.width, currentWidth, workArea, 16), y: b.y }
+  const position = { x: recenterXForWidth(b.x, b.width, currentWidth, workArea, 16), y: b.y }
   win.setBounds({ ...position, width: currentWidth, height: nextHeight }, false)
 }
 
@@ -4156,10 +4179,7 @@ function visionCheckContextFromSettings(): import('@shared/screen-capture-check'
 }
 
 /** Isolated vision ask for the Settings self-check. Never askStart, never overlay chat, never a teammate push. */
-function askVisionForScreenCheck(
-  backend: 'local' | 'api',
-  image: string
-): Promise<{ text: string; label: string }> {
+function askVisionForScreenCheck(backend: 'local' | 'api', image: string): Promise<{ text: string; label: string }> {
   const s = getSettings()
   const req: AskStart = {
     id: `screen-check-${Date.now()}`,
@@ -4169,6 +4189,9 @@ function askVisionForScreenCheck(
     history: []
   }
   if (backend === 'local') {
+    if (!localModelAllowedByPolicy(getActiveModelPolicy(s), s.localLlm.modelId)) {
+      return Promise.reject(new Error('The selected provider is not allowed by the fleet model policy.'))
+    }
     return collectVisionStream((handlers) =>
       createStream({
         providerId: 'local',
@@ -4269,11 +4292,8 @@ const screenPreprocess: ScreenPreprocess = createScreenPreprocess({
   // Windows keeps the VLM-only path (extractScreenText returns null without a helper anyway, but gating
   // here keeps the win32 wiring visibly identical to before).
   extractScreenText: process.platform === 'darwin' ? extractScreenText : undefined,
-  // macOS: never let this background loop be the thing that asks for Screen Recording. captureScreenshotOnce
-  // deliberately lets a `not-determined` status reach desktopCapturer because that is what registers the app
-  // with TCC and raises the system dialog — fine for a user-initiated capture, wrong for a loop armed at boot
-  // (MQA-178), which would pop an unexplained prompt seconds after launch (MQA-209). Undefined off darwin:
-  // Windows has no queryable screen grant and its capture prompts nothing.
+  // macOS: never let this background loop be the thing that asks for Screen Recording at boot.
+  // Undefined off darwin: Windows has no queryable screen grant and its capture prompts nothing.
   screenCaptureGranted:
     process.platform === 'darwin'
       ? () => systemPreferences.getMediaAccessStatus('screen') === 'granted'
@@ -4296,15 +4316,7 @@ function refreshScreenPreprocess(): void {
   screenPreprocess.refresh()
 }
 
-/**
- * Revoke everything privileged that outlives a single IPC call, the moment the session does. ONE place
- * on purpose: the sign-out handler used to tear down only what it remembered, so the background screen
- * pre-analysis engine kept capturing + describing (MQA-154) and the Intelligence dashboard kept
- * rendering the decrypted brain (MQA-169) for a signed-out user, with no in-app way to stop either.
- * Registered on auth's session-cleared hook rather than called from the handler, because a session also
- * ends with no user action at all — max-age eviction and the background re-validation sweep. Import
- * jobs stay at the handler: cancelAll() is async and this hook is not.
- */
+/** Revoke every privileged surface that outlives one IPC call when the session ends. */
 function revokePrivilegedSurface(): void {
   refreshScreenPreprocess() // stops the watcher child, the 6s tick and the cached description
   invalidateCloudSttOwner() // closes authenticated live-speech sockets and invalidates their callbacks
@@ -4361,24 +4373,11 @@ function moveBy(dx: number, dy: number): void {
   const b = w.getBounds()
   const fromDisplayId = screen.getDisplayMatching(b).id
   // Right edge is a vertical-only sidecar. Keeping ownership on its current display avoids a
-  // misleading cross-display drag while preserving a stable per-display normalized Y.
+  // misleading cross-display drag while preserving a stable per-display anchor A, which every rect follows.
   const display = screen.getDisplayMatching(b)
-  if (resolvedOverlayPlacementForDisplay(display) === 'right-edge') {
-    const height = clampHeight(b.height, display.workArea.height)
-    const normalizedY = normalizeRightEdgeY(b.y + dy, height, getDisplayMetrics(display))
-    const position = overlayPlacementPosition({
-      placement: 'right-edge',
-      width: b.width,
-      height,
-      layout: liveOverlayLayout(),
-      metrics: getDisplayMetrics(display),
-      topMargin: ISLAND_TOP_MARGIN,
-      normalizedY
-    })
-    const next = { ...b, ...position, height }
-    userAnchorY = next.y
-    if (dy !== 0) queueRightEdgeYForDisplay(display, normalizedY)
-    w.setBounds(next)
+  if (!settingsSurfaceOpen && resolvedOverlayPlacementForDisplay(display) === 'right-edge') {
+    if (dy !== 0) rightEdgeAnchors.drag(display, rightEdgeAnchors.y(display) + dy)
+    applyRightEdgeBounds(islandResting ? 'rest' : 'open', display)
     return
   }
   // Top-center Hide/Island stays anchored under the notch; a drag would move its park position (M2-0431).
@@ -4427,22 +4426,13 @@ function registerScreenListeners(): void {
       const display = screen.getDisplayMatching(win.getBounds())
       const layout = liveOverlayLayout()
       const placement = resolvedOverlayPlacementForDisplay(display)
-      const park = parkedHoverReanchor(
-        layout,
-        islandResting,
-        getDisplayMetrics(display),
-        ISLAND_TOP_MARGIN,
-        placement,
-        rightEdgeYForDisplay(display)
-      )
+      const park = parkedHoverReanchor(layout, islandResting, getDisplayMetrics(display), ISLAND_TOP_MARGIN, placement)
       if (park) {
         overlayCursorWatchHovering = false
         if (placement === 'right-edge') {
-          const rest = parkedOverlayBounds(layout, display) // honors a right edge shared with a new display
-          currentWidth = rest.width
-          userAnchorY = rest.y
+          // The rest at the stored anchor, from the authority; honors a right edge shared with a new display.
           applyOverlaySurfaceChrome()
-          commitParkedOverlayBounds(rest)
+          applyRightEdgeBounds('rest', display, layout)
           applyHideClickThrough()
         } else {
           parkOverlayAfterHideSpring()
@@ -4453,14 +4443,9 @@ function registerScreenListeners(): void {
     const b = win.getBounds()
     const display = screen.getDisplayMatching(b)
     // A sidecar owns its screen edge, so topology changes must recompute both axes from its
-    // persisted normalized Y before generic reachability logic considers a free-form position.
+    // persisted anchor before generic reachability logic considers a free-form position.
     if (!settingsSurfaceOpen && resolvedOverlayPlacementForDisplay(display) === 'right-edge') {
-      const height = clampHeight(b.height, display.workArea.height)
-      const position = overlayPositionForDisplay(b.width, height, liveOverlayLayout(), display, ISLAND_TOP_MARGIN)
-      userAnchorY = position.y
-      if (b.x !== position.x || b.y !== position.y || b.height !== height) {
-        win.setBounds({ ...b, ...position, height })
-      }
+      applyRightEdgeBounds('open', display)
       return
     }
     const { workArea: wa } = display
@@ -5344,6 +5329,8 @@ function registerIpc(): void {
             applyOverlaySurfaceChrome()
             commitParkedOverlayBounds(park)
             applyHideClickThrough()
+          } else if (resolvedOverlayPlacementForDisplay(display) === 'right-edge') {
+            applyRightEdgeBounds('open', display)
           } else {
             const b = win.getBounds()
             const position = overlayPositionForDisplay(b.width, b.height, layout, display, ISLAND_TOP_MARGIN)
@@ -5414,6 +5401,7 @@ function registerIpc(): void {
     if ('launchAtLogin' in p) {
       try {
         app.setLoginItemSettings({ openAtLogin: next.launchAtLogin })
+        loginItemOpenAtLoginCache = next.launchAtLogin
       } catch {
         /* not supported on this platform */
       }
@@ -8730,14 +8718,14 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const parsed = ImportAudioStartSchema.parse(raw)
-    if (!importJobs) throw new Error('Audio import service is unavailable.')
-    return importJobView(await importJobs.start(consumePickedAudio(parsed.token)))
+    const jobs = getImportJobs()
+    return importJobView(await jobs.start(consumePickedAudio(parsed.token)))
   })
   ipcMain.handle(IPC.importAudioStartBatch, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const parsed = ImportAudioStartBatchSchema.parse(raw)
-    if (!importJobs) throw new Error('Audio import service is unavailable.')
+    const jobs = getImportJobs()
     const sources = []
     const errors: string[] = []
     for (const token of parsed.tokens) {
@@ -8748,33 +8736,30 @@ function registerIpc(): void {
       }
     }
     if (!sources.length) throw new Error(errors[0] || 'Could not start the imports.')
-    return (await importJobs.startMany(sources)).map(importJobView)
+    return (await jobs.startMany(sources)).map(importJobView)
   })
   ipcMain.handle(IPC.importJobsList, (e) => {
     assertMainWindow(e)
-    if (!requireAuth() || !importJobs) return []
-    return importJobs.list().map(importJobView)
+    if (!requireAuth()) return []
+    return getImportJobs().list().map(importJobView)
   })
   ipcMain.handle(IPC.importJobCancel, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const parsed = ImportJobIdSchema.parse(raw)
-    if (!importJobs) throw new Error('Audio import service is unavailable.')
-    await importJobs.cancel(parsed.jobId)
+    await getImportJobs().cancel(parsed.jobId)
   })
   ipcMain.handle(IPC.importJobResume, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const parsed = ImportJobIdSchema.parse(raw)
-    if (!importJobs) throw new Error('Audio import service is unavailable.')
-    return importJobView(await importJobs.resume(parsed.jobId))
+    return importJobView(await getImportJobs().resume(parsed.jobId))
   })
   ipcMain.handle(IPC.importJobRemove, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const parsed = ImportJobIdSchema.parse(raw)
-    if (!importJobs) throw new Error('Audio import service is unavailable.')
-    await importJobs.remove(parsed.jobId)
+    await getImportJobs().remove(parsed.jobId)
   })
 
   ipcMain.on(IPC.importDecoderReady, (e) => {
@@ -8990,11 +8975,7 @@ function registerIpc(): void {
     auditLog('recall.open', { encrypted: target.encrypted })
     return shell.openPath(target.path)
   })
-  ipcMain.handle(IPC.historySettled, (e, report: unknown) => {
-    assertMainWindow(e)
-    if (!requireAuth()) return
-    history.settle(report)
-  })
+  registerHistoryTraceIpc(assertMainWindow, requireAuth, history)
 
   // "Open brain folder for Claude" (the handshake): reveal the published wiki — a plaintext, self-describing
   // mirror with a CLAUDE.md entry doc — so the user can point Claude at it (a Claude Project, Claude Desktop,
@@ -9240,9 +9221,11 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
   initLogging() // route main-process logs to a rotated file before anything else can fail
   const bootWork = createBootWork() // M2-0031: non-first-paint fs work starts after the first show, under the pool cap
+  bootWorkGate = bootWork
   configureSidecarRegistry(createSidecarRegistry(app.getPath('userData')))
-  await runBootSidecarReaper(app.getPath('userData'))
-  startAvailableMemorySampler() // M2-0430: background vm_stat reading for the local-model memory gate
+  // M2-0518: child processes first paint does not need; the reaper spares this launch's own sidecars, the memory gate reads freemem() meanwhile.
+  bootWork.run('runBootSidecarReaper', () => runBootSidecarReaper(app.getPath('userData')))
+  bootWork.run('startAvailableMemorySampler', () => { startAvailableMemorySampler() }) // M2-0430: vm_stat reading for the local-model memory gate
   // M2-0033: unattended model work waits for the maintenance gate.
   startMaintenanceGate({ interactiveActive: () => localRuntime.activeStreams() + fmRuntime.activeStreams() > 0 })
   app.on('web-contents-created', (_event, contents) => {
@@ -9276,7 +9259,8 @@ if (!app.requestSingleInstanceLock()) {
   }
   // Warm the CLI binary cache at boot when a CLI provider is connected, so the session's FIRST CLI ask
   // doesn't stall on the login-shell PATH lookup (it only ran on sign-in before — i.e. once ever).
-  try {
+  // M2-0518: both spawn child processes, so they start behind the first show.
+  bootWork.run('warmCliSessions', () => {
     const s0 = getSettings()
     if (s0.cliConnected['claude-cli'] || s0.cliConnected['codex-cli']) {
       prewarmCli()
@@ -9284,13 +9268,16 @@ if (!app.requestSingleInstanceLock()) {
       // runs otherwise leaves the app asserting a provider it cannot use until the first ask fails.
       void verifyCliSessions()
     }
-  } catch {
-    /* best-effort warm-up */
-  }
+  })
   // Seed an optional installer-embedded Cloudflare proxy key, once per profile, so a fresh install of
   // the default provider can answer with zero paste-a-key setup when the operator chose to embed one.
   // See embedded-cloudflare-key.ts — a no-op when no bundle was packaged.
-  importEmbeddedCloudflareKey()
+  // M2-0518: the first-launch seed decrypts the bundle and writes the keystore, so it starts behind the first show;
+  // the renderer then re-reads settings, so a seeded provider shows as ready without a relaunch.
+  bootWork.run('importEmbeddedCloudflareKey', () => {
+    importEmbeddedCloudflareKey()
+    notifySettingsChanged()
+  })
   {
     setModeSkillsOverlayRoot(join(app.getPath('userData'), 'skills-overrides'))
     const boot = getSettings()
@@ -9321,13 +9308,14 @@ if (!app.requestSingleInstanceLock()) {
       }
     }
     // The warm is unattended model work: it waits for the maintenance gate, so it never starts in the boot quiet period.
-    void provisionLocalModel(getSettings().localLlm, getAllowedProviders(), ensureLocalModel)
+    // M2-0518: provisioning stats, hashes and downloads model files, so it starts behind the first show.
+    bootWork.run('provisionLocalModel', () => provisionLocalModel(getSettings().localLlm, getAllowedProviders(), ensureLocalModel)
       .then((ready) => {
         if (!ready) return
         refreshScreenPreprocess()
         void runAsMaintenance(warmLocalIfReady)
       })
-      .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
+      .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e)))
     void runAsMaintenance(warmLocalIfReady)
   }
   // Windows toast attribution: a process's AppUserModelID must match the installed shortcut's AUMID
@@ -9343,14 +9331,11 @@ if (!app.requestSingleInstanceLock()) {
   if (process.platform === 'win32') {
     try { process.chdir(app.getPath('userData')) } catch { /* best-effort */ }
   }
-  // Reconcile the OS login item with the effective launchAtLogin setting once at boot. Covers two gaps:
-  // a managed-config/default launchAtLogin:true is never registered (setLoginItemSettings only ran on an
-  // explicit user patch), and OS-side drift (Task Manager Startup disable, AV cleanup, profile migration)
-  // silently diverges from the persisted preference. Idempotent — only writes when they actually differ.
-  try {
-    const want = getSettings().launchAtLogin
-    if (app.getLoginItemSettings().openAtLogin !== want) app.setLoginItemSettings({ openAtLogin: want })
-  } catch { /* best-effort — never block startup */ }
+  bootWork.run('reconcileLaunchAtLogin', () => {
+    try {
+      if (reconcileLaunchAtLogin()) notifySettingsChanged()
+    } catch { /* best-effort — never block startup */ }
+  })
   // Unpackaged (dev/QA) runs show Electron's default icon in the Dock — brand them with the Mantu M so
   // a dev window is never mistaken for "the Electron thing". Packaged builds get build/icon.png baked
   // in by electron-builder (mac .icns / win .ico) and don't need this.
@@ -9383,12 +9368,14 @@ if (!app.requestSingleInstanceLock()) {
   const clearBootWatchOnce = (reason: string): void => {
     if (bootWatchClosed) return
     bootWatchClosed = true
-    try {
-      endBootWatch(app.getPath('userData'))
-      auditLog('app.boot.watch_cleared', { earlyDeath: Boolean(earlyDeath), reason })
-    } catch (e) {
-      mainLog.warn('[boot] clearBootWatchOnce failed:', e)
-    }
+    bootWork.run('clearBootWatch', () => {
+      try {
+        endBootWatch(app.getPath('userData'))
+        auditLog('app.boot.watch_cleared', { earlyDeath: Boolean(earlyDeath), reason })
+      } catch (e) {
+        mainLog.warn('[boot] clearBootWatchOnce failed:', e)
+      }
+    })
   }
   if (earlyDeath) persistCrash('boot-early-death', describeEarlyDeath(earlyDeath), 'previous launch died before boot completed')
   // Never let an unhandled error crash the overlay silently — log to file, audit, write a crash dump, and
@@ -9411,16 +9398,19 @@ if (!app.requestSingleInstanceLock()) {
     return
   }
   if (!app.isPackaged) loadDotEnv() // dev convenience only; never read a stray .env in production
-  sweepStaleTempFiles() // remove any decrypted-transcript temp copies orphaned by a previous hard-kill
+  // Remove decrypted-transcript temp copies orphaned by a previous hard-kill after first show; the sweep
+  // can touch the profile filesystem and first paint does not depend on it.
+  bootWork.run('sweepStaleTempFiles', sweepStaleTempFiles)
   // Promote any orphaned crash-recovery drafts into real meetings BEFORE the retention sweep, so a
   // recovered meeting is visible in History and immediately subject to the same retention policy.
-  recoverOrphanDrafts(getSettings()).then((r) => {
+  // M2-0518: both read (and decrypt) the meetings root, so they start behind the first show, in this order.
+  bootWork.run('recoverOrphanDrafts', () => recoverOrphanDrafts(getSettings()).then((r) => {
     if (r.recovered > 0) auditLog('transcript.recovered', { recovered: r.recovered })
-  }).catch(() => { /* best-effort — never block startup */ })
+  }).catch(() => { /* best-effort — never block startup */ }))
   // Auto-delete meetings past the configured retention window (off by default — see transcriptRetentionDays).
   // Runs at launch AND every 6 hours after: this overlay realistically stays up for weeks, so a launch-only
   // sweep silently stopped enforcing retention the day after boot (storage-limitation promise broken).
-  const runRetentionSweep = (): void => {
+  const runRetentionSweep = (): Promise<void> =>
     sweepExpiredMeetings(getSettings().transcriptRetentionDays).then((r) => {
       if (r.deleted > 0) {
         auditLog('transcript.deleted', { bulk: true, expired: true, deleted: r.deleted })
@@ -9433,9 +9423,8 @@ if (!app.requestSingleInstanceLock()) {
         )
       }
     }).catch(() => { /* best-effort — never block startup or the interval */ })
-  }
-  runRetentionSweep()
-  trackTimer(setInterval(runRetentionSweep, 6 * 60 * 60 * 1000))
+  bootWork.run('runRetentionSweep', runRetentionSweep)
+  trackTimer(setInterval(() => void runRetentionSweep(), 6 * 60 * 60 * 1000))
   // Guarded like the neighboring dock.setIcon / crash-log pruning below — a throw here must never abort
   // createTray/registerShortcuts/createWindow further down the boot sequence.
   if (process.platform === 'darwin') {
@@ -9574,11 +9563,7 @@ if (!app.requestSingleInstanceLock()) {
   }
   })
 
-  // Deny every web permission by default; only the main window may use audio media (the Listen mic) or
-  // write to the system clipboard (Copy Summary / Export JSON / copy-code buttons all need this — it's a
-  // one-way, user-initiated write of text the app itself built, not a snooping vector). clipboard-READ
-  // (reading arbitrary external clipboard content) stays denied along with geolocation, notifications,
-  // camera, USB, MIDI, etc.
+  // Deny every web permission by default; only the main window may use media or write sanitized clipboard text.
   runStep('permissionHandlers', () => {
     const allowPermission = (wc: Electron.WebContents | null, permission: string): boolean =>
       (permission === 'media' || permission === 'clipboard-sanitized-write') && !!win && wc === win.webContents
@@ -9588,19 +9573,18 @@ if (!app.requestSingleInstanceLock()) {
     session.defaultSession.setPermissionCheckHandler((wc, permission) => allowPermission(wc, permission))
   })
 
-  // ─── asr-model:// protocol handler ───────────────────────────────────────
-  // Maps asr-model://<host>/<pathname> → RES_BASE/<host>/<pathname> on disk.
-  // This lets the Whisper worker (served over file://) use fetch() to load
-  // bundled ONNX model weights and WASM blobs with zero network access.
-  // Installed builds serve only their canonical resources; development may use its guarded userData root.
-  // FITO/Tony 2026-09-20: register ASR IPC BEFORE protocol.handle and BEFORE createWindow.
-  // A protocol throw must never leave asr:assets-ensure with "No handler registered" (Your setup Continue hang).
+  // Register ASR IPC before protocol.handle/createWindow; the bundled-status probe is primed after first show.
   runStep('asrAssetsIpc', () => {
     const REPO_ROOT = join(__dirname, '..', '..')
-    const RES_BASE = app.isPackaged
-      ? process.resourcesPath
-      : join(REPO_ROOT, 'resources')
-    const ASR_BUNDLED = app.isPackaged ? importAsrAssetsReady() : asrManifestComplete(RES_BASE)
+    const RES_BASE = app.isPackaged ? process.resourcesPath : join(REPO_ROOT, 'resources')
+    let asrBundledCache: boolean | null = null
+    let readAsrBundledStatus = (): boolean => false
+    const asrBundledReady = (): boolean => {
+      if (asrBundledCache === null) asrBundledCache = readAsrBundledStatus()
+      return asrBundledCache
+    }
+    bootWork.run('primeAsrBundledStatus', () => { asrBundledReady() })
+    readAsrBundledStatus = (): boolean => app.isPackaged ? importAsrAssetsReady() : asrManifestComplete(RES_BASE)
     const safeHandle = (channel: string, listener: (...args: any[]) => unknown): void => {
       try {
         ipcMain.removeHandler(channel)
@@ -9612,7 +9596,7 @@ if (!app.requestSingleInstanceLock()) {
     safeHandle(IPC.asrBundled, (e) => {
       if (isRecentlyRetiredOverlaySender(e)) return true
       assertMainWindow(e)
-      return ASR_BUNDLED
+      return asrBundledReady()
     })
     safeHandle(IPC.asrAssetsStatus, (e) => {
       assertMainWindow(e)
@@ -9620,6 +9604,7 @@ if (!app.requestSingleInstanceLock()) {
     })
     safeHandle(IPC.asrAssetsEnsure, async (e) => {
       assertMainWindow(e)
+      if (resolveLocalSpeechPackPolicy(getSettings(), getAdminLocalSpeechPackPolicy()) === 'blocked') return asrAssetsStatusSnapshot()
       try {
         await ensureImportAsrAssets((pct) => {
           publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
@@ -9778,16 +9763,11 @@ if (!app.requestSingleInstanceLock()) {
   // event set registerScreenListeners just subscribed to, plus powerMonitor resume (a notch MacBook can
   // wake docked to a different external display than it slept on). macOS-only signal; a no-op elsewhere.
   runStep('registerDisplayMetricsInvalidation', registerDisplayMetricsInvalidation)
-  // Establish real screen-capture readiness at boot on Windows, where the probe raises NO system prompt
-  // and there is no queryable permission to read instead — without it getPlatformPermissions() reports
-  // 'unknown' forever and the readiness checklist cannot tell the user whether screenshots will work
-  // until one fails mid-meeting. Deliberately NOT run at boot on macOS: there the same call raises the
-  // TCC prompt, which belongs in onboarding (permissionsRequestUpfront) where it is explained, not as an
-  // unattended pop-up seconds after launch. Fire-and-forget: readiness reporting must never delay boot.
+  // Windows-only and queued post-show: on macOS this probe raises TCC and belongs in onboarding.
   if (process.platform === 'win32') {
-    runStep('probeScreenCapture', () => {
+    bootWork.run('probeScreenCapture', () => runStep('probeScreenCapture', () => {
       void probeScreenCapture().catch(() => false)
-    })
+    }))
   }
   runStep('resumeScreenRepair', screenPerm.resumeScreenRepairOnBoot) // M2-0429: the boot half of a Repair
   runStep('startMeetingNotifier', startMeetingNotifier)

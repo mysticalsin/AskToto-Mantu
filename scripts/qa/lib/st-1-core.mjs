@@ -65,17 +65,58 @@ export function pinnedExpression(key, expression, ms) {
   return `(() => {
   const pending = (globalThis.${PENDING_GLOBAL} ??= {})
   let timer
-  const bounded = Promise.race([
-    Promise.resolve()
-      .then(() => (${expression}))
-      .then((value) => ({ ok: true, value }), (error) => ({ ok: false, error: String(error?.message ?? error) })),
-    new Promise((resolve) => {
-      timer = setTimeout(() => resolve({ ok: false, timedOut: true }), ${Number(ms)})
-    })
-  ])
-  bounded.then(() => clearTimeout(timer))
+  const clearBound = () => {
+    try {
+      if (timer !== undefined) clearTimeout(timer)
+    } catch {}
+  }
+  const settled = Promise.resolve()
+    .then(() => (${expression}))
+    .then((value) => ({ ok: true, value }), (error) => ({ ok: false, error: String(error?.message ?? error) }))
+  let resolveTimeout
+  const timeout = new Promise((resolve) => {
+    resolveTimeout = resolve
+  })
+  try {
+    timer = setTimeout(() => resolveTimeout({ ok: false, timedOut: true }), ${Number(ms)})
+  } catch {}
+  const bounded = Promise.race([settled, timeout]).finally(clearBound)
   pending[${JSON.stringify(key)}] = bounded
   return bounded
+})()`
+}
+
+/** One app-side sample expression. The reported max covers the interval before the sample plus the probe
+ *  write after the histogram reset, and uses the never-reset run histogram only when it rose in this
+ *  interval, so a dropped post-reset block reaches one timeline sample without being replayed forever. */
+export function sampleExpression(probeFile) {
+  return `(async () => {
+  const loopMaxBeforeWriteMs = __st1since.max / 1e6
+  __st1since.reset()
+  const resources = {}
+  if (typeof process.getActiveResourcesInfo === 'function') {
+    for (const type of process.getActiveResourcesInfo()) resources[type] = (resources[type] ?? 0) + 1
+  }
+  const { writeFile } = process.getBuiltinModule('node:fs/promises')
+  const { lookup } = process.getBuiltinModule('node:dns/promises')
+  let started = performance.now()
+  await writeFile(${JSON.stringify(probeFile)}, String(started))
+  const writeMs = performance.now() - started
+  const loopMaxDuringWriteMs = __st1since.max / 1e6
+  const runLoopMaxMs = __st1.max / 1e6
+  const previousRunLoopMaxMs = globalThis.__st1lastRunLoopMaxMs ?? 0
+  globalThis.__st1lastRunLoopMaxMs = Math.max(previousRunLoopMaxMs, runLoopMaxMs)
+  const sampleLoopMaxMs = Math.max(loopMaxBeforeWriteMs, loopMaxDuringWriteMs)
+  started = performance.now()
+  await lookup('localhost')
+  return {
+    writeMs,
+    loopMaxDuringWriteMs,
+    runLoopMaxMs,
+    lookupMs: performance.now() - started,
+    loopMaxSinceLastMs: runLoopMaxMs > previousRunLoopMaxMs ? Math.max(sampleLoopMaxMs, runLoopMaxMs) : sampleLoopMaxMs,
+    resources
+  }
 })()`
 }
 
@@ -180,9 +221,43 @@ export function countStorageSaturations(mainLogText) {
   return mainLogText.split('\n').filter((line) => line.includes(STORAGE_SATURATED_LOG)).length
 }
 
+/** Whether this sample should schedule the next History probe. Pure so the idle row can prove no probe is
+ *  scheduled while `--history off` keeps History untouched. */
+export function shouldProbeHistory({ historyOn, historyRunning, tMs, historyLastMs, fromMs, everyMs }) {
+  return historyOn && !historyRunning && tMs >= fromMs && tMs - historyLastMs >= everyMs
+}
+
+/** The representative profile of ARCHITECTURE 6.1: 59 meetings, 6 of them cloud-only, and a mostly
+ *  cloud-only `.brain`. */
+export const SYNTHETIC_LOCAL_MEETINGS = 53
+export const SYNTHETIC_FIFO_MEETINGS = 6
+export const SYNTHETIC_BRAIN_ENTITY_FIFOS = 4
+
+/**
+ * Where `--fixtures synthetic-dataless` places things, relative to the meetings root. Hosted runners have
+ * no cloud-file provider, so a kernel-blocking FIFO stands at every path a mostly-evicted cloud folder
+ * would present as unreadable: `local` are content-free placeholder meeting files, `fifos` the paths that
+ * block a reader. Pure: st-1.mjs materializes it.
+ */
+export function syntheticDatalessPlan() {
+  const pad = (n) => String(n).padStart(2, '0')
+  const meeting = (i, tag) => `2026-${pad(1 + Math.floor(i / 28))}-${pad((i % 28) + 1)}_090000-st1-${tag}.md`
+  const local = Array.from({ length: SYNTHETIC_LOCAL_MEETINGS }, (_, i) => meeting(i, 'local'))
+  const meetingFifos = Array.from({ length: SYNTHETIC_FIFO_MEETINGS }, (_, i) => meeting(SYNTHETIC_LOCAL_MEETINGS + i, 'cloud-only'))
+  const brainFifos = [
+    '.brain/index.json',
+    ...Array.from({ length: SYNTHETIC_BRAIN_ENTITY_FIFOS }, (_, i) => `.brain/entities/${i % 2 === 0 ? 'person' : 'org'}/st1-cloud-only-${i + 1}.json`)
+  ]
+  return {
+    local,
+    fifos: [...meetingFifos, ...brainFifos],
+    counts: { localMeetings: local.length, fifoMeetings: meetingFifos.length, brainFifos: brainFifos.length }
+  }
+}
+
 /** The boot window variants the QA-identity build can construct (src/main/infra/observability/projection.ts
  *  BOOT_WINDOW_VARIANTS, M2-0516). An ST-1 run always launches 'shipped'. */
-export const WINDOW_VARIANTS = ['shipped', 'spellcheck-off', 'paint-when-hidden', 'prewarm-spellchecker', 'prewarm-view']
+export const WINDOW_VARIANTS = ['shipped', 'spellcheck-off', 'paint-when-hidden', 'prewarm-spellchecker']
 
 /** The only purpose besides ST-1 itself: a short launch that measures the window constructor under one variant. */
 export const WINDOW_CONSTRUCTION = 'window-construction'
@@ -209,6 +284,51 @@ export function runPurpose({ purpose, windowVariant }) {
  *  inherited value can never reach an ST-1 run. */
 export function candidateEnv(env, profile, windowVariant) {
   return { ...env, ASKTOTO_USERDATA: profile, METIS_QA_WINDOW_VARIANT: windowVariant }
+}
+
+/** The window-construction gate's budget (M2-0519): every shipped createWindow.prewarm and createWindow.construct
+ *  stays under it, in both chromes. */
+export const WINDOW_STAGE_BUDGET_MS = 250
+
+/** The boot stages the window-construction gate holds to its budget. */
+export const GATED_WINDOW_STAGES = ['createWindow.prewarm', 'createWindow.construct']
+
+/**
+ * The window-construction gate (M2-0519) over a set of window-construction reports: `{ pass, rows, failures }`.
+ * Only the shipped variant is gated; marked warm-ups and the other variants stay report-only. It fails unless
+ * every measured shipped report carries each gated stage with a measured ms under WINDOW_STAGE_BUDGET_MS, and the
+ * measured shipped reports built both chromes (opaque and transparent). A measured shipped report without boot
+ * stages (a launch that never reached the window) fails as missing, never passes as absent. `rows` lists every
+ * measured shipped gated stage found, per report.
+ * @param {Array<{ name: string, report: any }>} reports
+ */
+export function windowConstructionGate(reports, budgetMs = WINDOW_STAGE_BUDGET_MS) {
+  const rows = []
+  const failures = []
+  const chromes = new Set()
+  const windowReports = reports.filter(({ report }) => report?.purpose === WINDOW_CONSTRUCTION)
+  const warmups = windowReports.filter(({ report }) => report.warmup === true)
+  const shipped = windowReports.filter(({ report }) => report.windowVariant === 'shipped' && report.warmup !== true)
+  if (shipped.length === 0) failures.push('no shipped window-construction report')
+  for (const { name, report } of shipped) {
+    const stages = Array.isArray(report.bootStages?.stages) ? report.bootStages.stages : []
+    for (const stage of GATED_WINDOW_STAGES) {
+      const found = stages.filter((entry) => entry.stage === stage)
+      if (found.length === 0) failures.push(`${name}: ${stage} missing`)
+      for (const entry of found) {
+        const chrome = entry.transparent === true ? 'transparent' : entry.transparent === false ? 'opaque' : null
+        if (chrome) chromes.add(chrome)
+        rows.push({ report: name, stage, chrome, ms: entry.ms })
+        if (typeof entry.ms !== 'number') failures.push(`${name}: ${stage} has no measured ms`)
+        else if (entry.ms >= budgetMs) failures.push(`${name}: ${stage} ${entry.ms} ms >= ${budgetMs} ms`)
+        if (!chrome) failures.push(`${name}: ${stage} does not say which chrome it built`)
+      }
+    }
+  }
+  for (const chrome of ['opaque', 'transparent']) {
+    if (shipped.length > 0 && !chromes.has(chrome)) failures.push(`no shipped ${chrome} window was measured`)
+  }
+  return { pass: failures.length === 0, budgetMs, skippedWarmups: warmups.length, rows, failures }
 }
 
 /** The app's own native boot stage timings (tray stages, window construction, navigation and first show): every
@@ -274,6 +394,42 @@ export function witnessSummary(timeline, loop) {
 /** The History probes that reached a window (`skipped` ones did not: no window bridged History yet). */
 function historyProbes(measured) {
   return measured.history.filter((entry) => !entry.skipped)
+}
+
+function maxNumber(values) {
+  const numbers = values.filter((value) => typeof value === 'number')
+  return numbers.length > 0 ? Math.max(...numbers) : null
+}
+
+function fifoMeetingFixtures(row, fixtures, fixtureCounts, evidence) {
+  if (typeof evidence?.fifoMeetingFixtures === 'number') return evidence.fifoMeetingFixtures
+  if (row === 'synthetic-dataless' && typeof fixtureCounts?.fifoMeetings === 'number') return fixtureCounts.fifoMeetings
+  return fixtures.filter((fixture) => String(fixture).endsWith('.md')).length
+}
+
+/** FIFO-backed rows are exercised when History reached the fixture set and refused the unreadable meeting
+ * rows without opening a non-regular file. An open reader is reported by its own criterion, never as PASS. */
+function fifoRefusalEvidence(row, measured, evidence, fixtures, fixtureCounts) {
+  if (row !== 'fifo' && row !== 'synthetic-dataless') return null
+  const probes = historyProbes(measured)
+  const requiredUnavailableRows = fifoMeetingFixtures(row, fixtures, fixtureCounts, evidence)
+  const answered = probes.filter((entry) => !entry.hung && !entry.error)
+  const brainStatusAnswered = answered.some((entry) => settledWithin(entry.calls?.brainStatus, Number.POSITIVE_INFINITY))
+  const unavailableRows = maxNumber(answered.map((entry) => entry.unavailable ?? entry.notDownloaded))
+  const matchingProbe = answered.find(
+    (entry) =>
+      typeof (entry.unavailable ?? entry.notDownloaded) === 'number' &&
+      (entry.unavailable ?? entry.notDownloaded) >= requiredUnavailableRows &&
+      settledWithin(entry.calls?.brainStatus, Number.POSITIVE_INFINITY)
+  )
+  return {
+    exercised: Boolean(matchingProbe),
+    reason: matchingProbe ? 'history-refused-fixtures' : 'history-did-not-prove-refusal',
+    historyProbesAnswered: answered.length,
+    unavailableRows,
+    requiredUnavailableRows,
+    brainStatusAnswered
+  }
 }
 
 /** Whether one History probe of `row` opened History (list + brain status) with a usable list, or searched
@@ -393,6 +549,9 @@ export function evaluateCriteria(row, measured, evidence, { history = false } = 
     { name: 'dns-lookup < 250', pass: measured.samples.every((s) => s.lookupMs < 250) }
   ]
   if (row === 'dataless') criteria.push({ name: 'still-dataless', pass: evidence?.stillDataless === true })
+  if (row === 'fifo' || row === 'synthetic-dataless') {
+    criteria.push({ name: 'non-regular-fixtures-unopened', pass: (evidence?.fixturesOpened ?? []).length === 0 })
+  }
   if (history) {
     const probes = historyProbes(measured)
     criteria.push(
@@ -417,15 +576,43 @@ export function emptyRun() {
  * witness and the boot stages are report-only. A window-construction run (`purpose`) says so, names its variant
  * and is never ST-1 evidence (`st1Evidence: false`), whatever its verdict.
  */
-export function buildReport({ row, history = false, installer, candidate, minutes, measured, evidence, fixtures, attribution, complete, harnessError, purpose = 'st-1', windowVariant = 'shipped' }) {
+export function buildReport({
+  row,
+  history = false,
+  installer,
+  candidate,
+  minutes,
+  measured,
+  evidence,
+  fixtures,
+  attribution,
+  complete,
+  harnessError,
+  historyMode = 'on',
+  fixtureCounts = null,
+  purpose = 'st-1',
+  windowVariant = 'shipped',
+  windowWarmup = false
+}) {
   const criteria = evaluateCriteria(row, measured, evidence, { history })
+  const refusalEvidence = fifoRefusalEvidence(row, measured, evidence, fixtures, fixtureCounts)
   // The control row has nothing to exercise: its verdict is the criteria alone.
-  const exercised = row === 'none' || evidence?.exercised
-  const verdict = !complete ? 'INCOMPLETE' : !exercised ? 'NOT_EXERCISED' : criteria.every((c) => c.pass) ? 'PASS' : 'FAIL'
+  const exercised = refusalEvidence?.exercised ?? (row === 'none' || evidence?.exercised)
+  const openedNonRegularFixture = criteria.some((criterion) => criterion.name === 'non-regular-fixtures-unopened' && !criterion.pass)
+  const verdict = !complete
+    ? 'INCOMPLETE'
+    : openedNonRegularFixture
+      ? 'FAIL'
+      : !exercised
+        ? 'NOT_EXERCISED'
+        : criteria.every((c) => c.pass)
+          ? 'PASS'
+          : 'FAIL'
   const timeline = [...measured.samples, ...measured.late.map((entry) => ({ ...entry, late: true }))].sort((a, b) => a.tMs - b.tMs)
   return {
     harness: 'ST-1',
     ...(purpose === WINDOW_CONSTRUCTION ? { purpose, st1Evidence: false, windowVariant } : {}),
+    ...(purpose === WINDOW_CONSTRUCTION && windowWarmup ? { warmup: true } : {}),
     row,
     ...(history ? { historyRow: true } : {}),
     platform: process.platform,
@@ -441,8 +628,12 @@ export function buildReport({ row, history = false, installer, candidate, minute
     loop: measured.loop,
     write: { maxMs: Math.max(0, ...measured.samples.map((s) => s.writeMs)) },
     lookup: { maxMs: Math.max(0, ...measured.samples.map((s) => s.lookupMs)) },
-    exercised: evidence?.exercised ?? null,
-    ...(row === 'fifo' ? { fixturesOpened: evidence?.fixturesOpened ?? null } : {}),
+    exercised: refusalEvidence?.exercised ?? evidence?.exercised ?? null,
+    ...(refusalEvidence ? { exerciseEvidence: refusalEvidence } : {}),
+    ...(row === 'fifo' || row === 'synthetic-dataless' ? { fixturesOpened: evidence?.fixturesOpened ?? null } : {}),
+    ...(row === 'synthetic-dataless'
+      ? { fixtureKind: 'synthetic-dataless', fixtureCounts, sfDatalessSet: evidence?.sfDatalessSet ?? null }
+      : {}),
     ...(row === 'dataless' ? { stillDataless: evidence?.stillDataless ?? null } : {}),
     ...(history ? { historySummary: historySummary(measured, { row, complete, storageSaturations: attribution.storageSaturations }) } : {}),
     criteria,
@@ -453,6 +644,7 @@ export function buildReport({ row, history = false, installer, candidate, minute
     errors: measured.errors,
     setupAtMs: measured.setupAtMs,
     timeline,
+    historyMode,
     witness: witnessSummary(timeline, measured.witnessLoop),
     history: measured.history,
     cpuProfile: measured.profiler,
@@ -466,12 +658,27 @@ export function buildReport({ row, history = false, installer, candidate, minute
   }
 }
 
+export function writeJsonToStdout(value, stdout = process.stdout) {
+  const text = `${JSON.stringify(value, null, 2)}\n`
+  return new Promise((resolve, reject) => {
+    try {
+      stdout.write(text, (error) => {
+        if (error) reject(error)
+        else resolve()
+      })
+    } catch (error) {
+      reject(error)
+    }
+  })
+}
+
 /** The launch itself never reached a candidate to measure: a genuine FAIL (inspector: false), never a
  *  skipped row. A window-construction launch is marked as in buildReport. */
-export function buildLaunchFailureReport({ row, installer, candidate, fixtures, reason, purpose = 'st-1', windowVariant = 'shipped' }) {
+export function buildLaunchFailureReport({ row, installer, candidate, fixtures, reason, purpose = 'st-1', windowVariant = 'shipped', windowWarmup = false }) {
   return {
     harness: 'ST-1',
     ...(purpose === WINDOW_CONSTRUCTION ? { purpose, st1Evidence: false, windowVariant } : {}),
+    ...(purpose === WINDOW_CONSTRUCTION && windowWarmup ? { warmup: true } : {}),
     row,
     platform: process.platform,
     arch: process.arch,
