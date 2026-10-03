@@ -1,15 +1,28 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ipcMain } from 'electron'
 import { z } from 'zod'
-import ts from 'typescript'
 import { IPC } from '@shared/ipc'
 import { UNAUTHENTICATED_RESULT } from '@shared/ipc-auth'
 import { PUBLIC_IPC_HANDLERS } from './security'
 import { registerHandler } from './register'
+import { registerScreenPermissionIpc } from './screen-permission-ipc'
+import { registerWriteupIpc } from './writeup'
 
 vi.mock('electron')
+vi.mock('../auth', () => ({ requireAuth: () => true }))
+vi.mock('../logger', () => ({ auditLog: vi.fn() }))
+vi.mock('../llm/local', () => ({ appleEngineStatus: async () => 'unlicensed' }))
+vi.mock('../permission-repair', () => ({ repairScreenPermission: vi.fn() }))
+vi.mock('../infra/process/exec-file', () => ({ execFileNoShell: vi.fn() }))
+vi.mock('../capture-permissions/screen-permission-runtime', () => ({
+  APP_BUNDLE_ID: 'com.mantu.asktoto',
+  screenPermission: () => ({
+    noteRepairStarted: vi.fn(),
+    noteRepairFailed: vi.fn(),
+    attest: vi.fn(),
+    diagnose: () => ({ duplicates: [] })
+  })
+}))
 
 type Handler = Parameters<typeof ipcMain.handle>[1]
 const event = {} as Electron.IpcMainInvokeEvent
@@ -20,60 +33,6 @@ function handlers(): Map<string, Handler> {
     registered.set(channel, fn)
   })
   return registered
-}
-
-function sourceFiles(dir: string): string[] {
-  const files: string[] = []
-  for (const name of readdirSync(dir)) {
-    const path = join(dir, name)
-    if (statSync(path).isDirectory()) {
-      files.push(...sourceFiles(path))
-      continue
-    }
-    if (!name.endsWith('.ts') || name.endsWith('.test.ts') || name.endsWith('.contract.test.ts')) continue
-    files.push(path)
-  }
-  return files
-}
-
-function property(node: ts.ObjectLiteralExpression, name: string): ts.Expression | undefined {
-  const prop = node.properties.find((entry): entry is ts.PropertyAssignment =>
-    ts.isPropertyAssignment(entry) && ts.isIdentifier(entry.name) && entry.name.text === name
-  )
-  return prop?.initializer
-}
-
-function ipcChannelFrom(expression: ts.Expression): string | null {
-  if (ts.isPropertyAccessExpression(expression) && expression.expression.getText() === 'IPC') {
-    const value = IPC[expression.name.text as keyof typeof IPC]
-    return typeof value === 'string' ? value : null
-  }
-  if (ts.isStringLiteral(expression)) return expression.text
-  return null
-}
-
-function registeredPublicHandlers(): string[] {
-  const publicHandlers = new Set<string>()
-  for (const path of sourceFiles(join(__dirname, '..'))) {
-    const file = ts.createSourceFile(path, readFileSync(path, 'utf8'), ts.ScriptTarget.Latest, true)
-    const visit = (node: ts.Node): void => {
-      if (ts.isCallExpression(node) && node.expression.getText(file) === 'registerHandler') {
-        const [first] = node.arguments
-        if (first && ts.isObjectLiteralExpression(first)) {
-          const auth = property(first, 'auth')
-          const channel = property(first, 'channel')
-          if (auth && ts.isStringLiteral(auth) && auth.text === 'public' && channel) {
-            const resolved = ipcChannelFrom(channel)
-            if (!resolved) throw new Error(`Could not resolve public IPC channel in ${path}: ${channel.getText(file)}`)
-            publicHandlers.add(resolved)
-          }
-        }
-      }
-      ts.forEachChild(node, visit)
-    }
-    visit(file)
-  }
-  return [...publicHandlers].sort()
 }
 
 describe('M2-0249 registerHandler authentication policy', () => {
@@ -90,15 +49,18 @@ describe('M2-0249 registerHandler authentication policy', () => {
       assertSender: () => undefined
     }, (_event, value) => value.toUpperCase())
 
-    // @ts-expect-error M2-0249: omitting auth must not compile for new handlers.
-    registerHandler({
-      channel: IPC.writeupSpan,
-      isAuthenticated: () => true,
-      args: z.tuple([]),
-      assertSender: () => undefined
-    }, () => undefined)
+    function compileOnly(): void {
+      // @ts-expect-error M2-0249: omitting auth must not compile for new handlers.
+      registerHandler({
+        channel: IPC.writeupSpan,
+        isAuthenticated: () => true,
+        args: z.tuple([]),
+        assertSender: () => undefined
+      }, () => undefined)
+    }
+    void compileOnly
 
-    expect(ipcMain.handle).toHaveBeenCalledTimes(2)
+    expect(ipcMain.handle).toHaveBeenCalledTimes(1)
   })
 
   it('returns the one typed unauthenticated result before the handler body runs', async () => {
@@ -138,12 +100,23 @@ describe('M2-0249 registerHandler authentication policy', () => {
   })
 
   it('refuses a public handler that has not been reviewed into the allowlist', () => {
+    function compileOnly(): void {
+      // @ts-expect-error M2-0249: public handlers must first be reviewed into PUBLIC_IPC_HANDLERS.
+      registerHandler({
+        channel: IPC.writeupSpan,
+        auth: 'public',
+        args: z.tuple([]),
+        assertSender: () => undefined
+      }, () => undefined)
+    }
+    void compileOnly
+
     expect(() => registerHandler({
       channel: IPC.writeupSpan,
       auth: 'public',
       args: z.tuple([]),
       assertSender: () => undefined
-    }, () => undefined)).toThrow(/allowlist/)
+    } as never, () => undefined)).toThrow(/allowlist/)
   })
 
   it('fails closed when JavaScript or a cast passes an unknown auth policy', () => {
@@ -166,7 +139,26 @@ describe('M2-0249 registerHandler authentication policy', () => {
     ])
   })
 
-  it('lists every handler actually registered as public in the reviewed allowlist', () => {
-    expect(registeredPublicHandlers()).toEqual([...PUBLIC_IPC_HANDLERS].sort())
+  it('lists every migrated public handler in the reviewed allowlist', () => {
+    const registered = handlers()
+
+    registerWriteupIpc(() => undefined)
+    registerScreenPermissionIpc(() => undefined)
+
+    expect([...registered.keys()].sort()).toEqual([
+      IPC.localAppleEngineStatus,
+      IPC.permissionsAttestScreen,
+      IPC.permissionsOpenSettings,
+      IPC.permissionsRepairScreen,
+      IPC.permissionsRevealCopy,
+      IPC.writeupSpan
+    ].sort())
+    expect([...PUBLIC_IPC_HANDLERS].sort()).toEqual([
+      IPC.localAppleEngineStatus,
+      IPC.permissionsAttestScreen,
+      IPC.permissionsOpenSettings,
+      IPC.permissionsRepairScreen,
+      IPC.permissionsRevealCopy
+    ].sort())
   })
 })

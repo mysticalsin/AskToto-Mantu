@@ -1,7 +1,7 @@
 import { ipcMain } from 'electron'
 import { UNAUTHENTICATED_RESULT, type UnauthenticatedResult } from '@shared/ipc-auth'
 import type { z } from 'zod'
-import { assertReviewedPublicHandler, type IpcChannel } from './security'
+import { assertReviewedPublicHandler, type IpcChannel, type ReviewedPublicIpcChannel } from './security'
 
 type InvokeEvent = Electron.IpcMainInvokeEvent
 type AssertSender = (event: InvokeEvent) => void
@@ -20,7 +20,8 @@ type RequiredAuthOptions<Schema extends AnyArgsSchema> = BaseOptions<Schema> & {
   isAuthenticated: RequireAuth
 }
 
-type PublicAuthOptions<Schema extends AnyArgsSchema> = BaseOptions<Schema> & {
+type PublicAuthOptions<Schema extends AnyArgsSchema> = Omit<BaseOptions<Schema>, 'channel'> & {
+  channel: ReviewedPublicIpcChannel
   auth: 'public'
 }
 

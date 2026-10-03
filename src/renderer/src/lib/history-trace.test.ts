@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { UNAUTHENTICATED_RESULT } from '@shared/ipc-auth'
 import { IPC_UNAUTHENTICATED_EVENT } from './ipc-auth'
 import { beginHistoryRequest } from './history-trace'
+import { installIpcAuthTestWindow } from './ipc-auth-test-window'
 
 const requestId = '123e4567-e89b-12d3-a456-426614174000'
 
@@ -81,7 +82,7 @@ describe('beginHistoryRequest', () => {
   })
 
   it('routes the default History settled reporter through the shared unauthenticated handler', async () => {
-    const events: Event[] = []
+    const events = installIpcAuthTestWindow()
     window.addEventListener(IPC_UNAUTHENTICATED_EVENT, (event) => events.push(event))
     vi.spyOn(crypto, 'randomUUID').mockReturnValue(requestId as `${string}-${string}-${string}-${string}-${string}`)
     vi.spyOn(performance, 'now').mockReturnValue(10)

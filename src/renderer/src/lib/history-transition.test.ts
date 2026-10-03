@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { UNAUTHENTICATED_RESULT } from '@shared/ipc-auth'
 import { IPC_UNAUTHENTICATED_EVENT } from './ipc-auth'
 import { createHistoryTransitionRecorder } from './history-transition'
+import { installIpcAuthTestWindow } from './ipc-auth-test-window'
 
 function recorder(at = 1_700_000_000_000) {
   const report = vi.fn()
@@ -62,7 +63,7 @@ describe('createHistoryTransitionRecorder', () => {
   })
 
   it('routes the default History transition reporter through the shared unauthenticated handler', async () => {
-    const events: Event[] = []
+    const events = installIpcAuthTestWindow()
     window.addEventListener(IPC_UNAUTHENTICATED_EVENT, (event) => events.push(event))
     const reportHistoryTransition = vi.fn().mockResolvedValue(UNAUTHENTICATED_RESULT)
     window.toto = { ...window.toto, reportHistoryTransition }

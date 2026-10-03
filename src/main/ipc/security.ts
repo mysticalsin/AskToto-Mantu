@@ -10,6 +10,7 @@ export const PUBLIC_IPC_HANDLERS = [
   IPC.permissionsAttestScreen,
   IPC.permissionsRevealCopy
 ] as const satisfies readonly IpcChannel[]
+export type ReviewedPublicIpcChannel = typeof PUBLIC_IPC_HANDLERS[number]
 
 const publicHandlers = new Set<IpcChannel>(PUBLIC_IPC_HANDLERS)
 
@@ -18,4 +19,3 @@ export function assertReviewedPublicHandler(channel: IpcChannel): void {
     throw new Error(`Public IPC handler is not in the reviewed allowlist: ${channel}`)
   }
 }
-

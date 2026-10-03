@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 import { UNAUTHENTICATED_RESULT } from '@shared/ipc-auth'
 import { IPC_UNAUTHENTICATED_EVENT } from './ipc-auth'
+import { installIpcAuthTestWindow } from './ipc-auth-test-window'
 import { reportWriteupSpan } from './writeup-spans'
 
 describe('reportWriteupSpan', () => {
   it('routes the migrated write-up reporter through the shared unauthenticated handler', async () => {
-    const events: Event[] = []
+    const events = installIpcAuthTestWindow()
     window.addEventListener(IPC_UNAUTHENTICATED_EVENT, (event) => events.push(event))
     const reportWriteupSpanIpc = vi.fn().mockResolvedValue(UNAUTHENTICATED_RESULT)
     window.toto = { ...window.toto, reportWriteupSpan: reportWriteupSpanIpc }
