@@ -106,7 +106,7 @@ function runClosedStdin(args: string[], env: NodeJS.ProcessEnv): Promise<{ statu
 }
 
 /** Stub app, macOS tools and process table for a hosted-live run on any CI host. */
-function hostedStubs(root: string, { sampleFails = false, secondLaunchKillsFirst = false } = {}) {
+function hostedStubs(root: string, { sampleFails = false, secondLaunchKillsFirst = false, pgrepReturnsParent = false } = {}) {
   const bin = join(root, 'bin')
   mkdirSync(bin, { recursive: true })
   const app = join(root, 'Metis')
@@ -134,7 +134,12 @@ function hostedStubs(root: string, { sampleFails = false, secondLaunchKillsFirst
   writeExecutable(join(bin, 'pgrep'), [
     '#!/usr/bin/env bash',
     'case " $* " in',
-    `  *" -P "*) printf '%s\\n' ${Object.keys(CHILD_ROLES).join(' ')} ;;`,
+    '  *" -P "*)',
+    '    parent=""',
+    '    while [ $# -gt 0 ]; do [ "$1" = "-P" ] && parent=$2; shift; done',
+    pgrepReturnsParent ? '    [ -z "$parent" ] || printf \'%s\\n\' "$parent"' : '    :',
+    `    printf '%s\\n' ${Object.keys(CHILD_ROLES).join(' ')}`,
+    '    ;;',
     `  *" -f "*) [ -s '${bashPath(decoyPid)}' ] && kill -0 "$(cat '${bashPath(decoyPid)}')" 2>/dev/null && cat '${bashPath(decoyPid)}'; [ -s '${bashPath(secondPid)}' ] && kill -0 "$(cat '${bashPath(secondPid)}')" 2>/dev/null && cat '${bashPath(secondPid)}' ;;`,
     'esac',
     ''
@@ -683,6 +688,35 @@ describe('M2-0462 hosted-live mode', () => {
         .toMatchObject({ signal: 'KILL', when: 'after-second-instance-launch', observed_exit_by_ms: expect.any(Number) })
       expect(matrix.find((entry) => entry.row === 'row-4-second-instance-reopen' && 'sampled' in entry))
         .toMatchObject({ sampled: true, main_sample: true, renderer_samples: 1 })
+      expect(JSON.parse(readFileSync(join(out, 'M2-0008.evidence-import.json'), 'utf8')))
+        .toMatchObject({ result: 'PASS', sample_failures: 0, matrix_result_failures: 0, interrupt_result_failures: 0 })
+      expect(m2_0008BundleProblems(out)).toEqual([])
+    } finally {
+      await devtools.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  it('terminates when pgrep reports repeating descendants and the queried parent', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'm2-0556-hosted-'))
+    const out = join(root, 'bundle')
+    const devtools = await fakeDevTools()
+    const started = Date.now()
+    try {
+      const stubs = hostedStubs(root, { pgrepReturnsParent: true })
+      const result = await runClosedStdin(hostedArgs(out, stubs.app), hostedEnv(root, stubs, devtools.port))
+      const elapsedMs = Date.now() - started
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)
+      expect(elapsedMs).toBeLessThan(30_000)
+
+      const matrix = jsonl(join(out, 'matrix.jsonl'))
+      for (const row of AUTOMATIC_ROWS) {
+        expect(matrix.find((entry) => entry.row === row && 'operator_result' in entry), row)
+          .toMatchObject({ automatic: true, operator_result: 'pass', precondition: 'ok' })
+      }
+      expect(jsonl(join(out, 'interrupt-results.jsonl')).find((entry) => entry.interrupt === 'process-signal'))
+        .toMatchObject({ automatic: true, result: 'pass', signal: 'TERM' })
       expect(JSON.parse(readFileSync(join(out, 'M2-0008.evidence-import.json'), 'utf8')))
         .toMatchObject({ result: 'PASS', sample_failures: 0, matrix_result_failures: 0, interrupt_result_failures: 0 })
       expect(m2_0008BundleProblems(out)).toEqual([])
