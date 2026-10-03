@@ -4,6 +4,7 @@ import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
 import { Children, isValidElement, type ReactElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { RIGHT_EDGE_DRAWER_WIDTH, RIGHT_EDGE_TAB_WIDTH } from '@shared/right-edge-geometry'
 import { RightEdgeSidecar, SidecarChat, dockEscapeHides } from './RightEdgeSidecar'
 
 const sidecar = readFileSync(join(__dirname, './RightEdgeSidecar.tsx'), 'utf8')
@@ -320,8 +321,13 @@ describe('right-edge dock', () => {
   })
 
   it('keeps a narrow accessible rail and a single fixed-composer body scroller without mounting Bar', () => {
-    expect(sidecar).toMatch(/RIGHT_EDGE_TAB_WIDTH = 52/)
-    expect(sidecar).toMatch(/RIGHT_EDGE_DRAWER_WIDTH = 360/)
+    // D8a (M2-0202): the rail and drawer widths are the main process's, from the shared geometry authority.
+    expect(RIGHT_EDGE_TAB_WIDTH).toBe(52)
+    expect(RIGHT_EDGE_DRAWER_WIDTH).toBe(360)
+    const rendered = renderToStaticMarkup(<RightEdgeSidecar open onOpen={() => undefined} onClose={() => undefined} />)
+    expect(rendered).toContain(`width:${RIGHT_EDGE_TAB_WIDTH}px`)
+    expect(rendered).toContain(`max-width:${RIGHT_EDGE_DRAWER_WIDTH}px`)
+    expect(sidecar).not.toMatch(/const RIGHT_EDGE_(TAB|DRAWER)_WIDTH/)
     expect(sidecar).toMatch(/aria-label="Open Métis"/)
     expect(sidecar).toMatch(/aria-expanded=\{open\}/)
     expect(sidecar).toMatch(/role="complementary"/)

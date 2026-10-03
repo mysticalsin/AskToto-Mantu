@@ -19,9 +19,9 @@
  *
  * Attribution evidence, reported and never judged: every sample's time since spawn, the loop's max since
  * the previous sample, the loop's max during its write (a slow write close to it waited on a main-thread
- * block, not on the libuv pool) and the active libuv resources; a CPU profile of the first 90 s, with when
- * it was requested and when the profiler actually started; the profile's audit logs, stall bundles and this
- * launch's main.log; which FIFOs had a reader; from +20 s, History's own IPC round trip (recallList +
+ * block, not on the libuv pool) and the active libuv resources; a CPU profile from boot until after the loop
+ * summary, with when it was requested and when the profiler actually started; the profile's audit logs, stall
+ * bundles and this launch's main.log; which FIFOs had a reader; from +20 s, History's own IPC round trip (recallList +
  * brainStatus, with its row and not-downloaded row counts) measured in the main window (`--history off`
  * skips those probes, so History stays idle for the whole run); the app's own native boot stage timings
  * (`bootStages`, read from the profile's audit trail); and the runner witness (`witness`, on every timeline
@@ -97,6 +97,7 @@ import {
   pinnedExpression,
   recordSample,
   releaseExpression,
+  sampleExpression,
   syntheticDatalessPlan,
   runPurpose,
   shouldProbeHistory,
@@ -121,8 +122,7 @@ const SAMPLE_TIMEOUT_MS = 5_000
 /** The harness's own wait beyond an in-app bound, for a main loop too blocked to fire the in-app timer. */
 const EVALUATE_MARGIN_MS = 2_000
 const PARTIAL_REPORT_EVERY_MS = 30_000
-/** The CPU profile covers boot: it starts at SETUP and stops this long after spawn. */
-const PROFILE_UNTIL_MS = 90_000
+/** The CPU profile covers boot through the final loop summary; its own start/stop timing is report-only. */
 const PROFILE_SAMPLING_US = 1_000
 const PROFILE_STOP_TIMEOUT_MS = 30_000
 /** History's IPC round trip is measured from this long after spawn, this often. */
@@ -407,28 +407,10 @@ const SETUP = `(() => {
   const { monitorEventLoopDelay } = process.getBuiltinModule('node:perf_hooks')
   globalThis.__st1 = monitorEventLoopDelay({ resolution: ${LOOP_RESOLUTION_MS} })
   globalThis.__st1.enable()
+  globalThis.__st1lastRunLoopMaxMs = __st1.max / 1e6
   globalThis.__st1since = monitorEventLoopDelay({ resolution: ${LOOP_RESOLUTION_MS} })
   globalThis.__st1since.enable()
   return process.env.UV_THREADPOOL_SIZE ?? 'default'
-})()`
-
-const sample = (probeFile) => `(async () => {
-  const loopMaxSinceLastMs = __st1since.max / 1e6
-  __st1since.reset()
-  const resources = {}
-  if (typeof process.getActiveResourcesInfo === 'function') {
-    for (const type of process.getActiveResourcesInfo()) resources[type] = (resources[type] ?? 0) + 1
-  }
-  const { writeFile } = process.getBuiltinModule('node:fs/promises')
-  const { lookup } = process.getBuiltinModule('node:dns/promises')
-  let started = performance.now()
-  await writeFile(${JSON.stringify(probeFile)}, String(started))
-  const writeMs = performance.now() - started
-  // Read, not reset: the next sample's loopMaxSinceLastMs still covers this write.
-  const loopMaxDuringWriteMs = __st1since.max / 1e6
-  started = performance.now()
-  await lookup('localhost')
-  return { writeMs, loopMaxDuringWriteMs, lookupMs: performance.now() - started, loopMaxSinceLastMs, resources }
 })()`
 
 const SUMMARY = '({ p99Ms: __st1.percentile(99) / 1e6, maxMs: __st1.max / 1e6 })'
@@ -493,18 +475,21 @@ const historyProbe = (search) => `(async () => {
   return { skipped: 'no window exposes window.toto.recallList, brainStatus and recallSearch' }
 })()`
 
-/** Starts the sampling CPU profiler; reports why when it cannot. `startedAtMs` is stamped when Profiler.start
- *  answers, so the profile's own clock can be lined up with the timeline; null when it never started. */
+/** Starts the sampling CPU profiler; reports when Profiler.start was requested and when it answered, so
+ *  the profile's own cost can be lined up with the timeline. */
 async function startProfiler(cdp, sinceSpawn) {
+  let requestedAtMs = null
   try {
     await cdp.send('Profiler.enable', {}, EVALUATE_TIMEOUT_MS)
     await cdp.send('Profiler.setSamplingInterval', { interval: PROFILE_SAMPLING_US }, EVALUATE_TIMEOUT_MS)
+    requestedAtMs = sinceSpawn()
     const started = await cdp.send('Profiler.start', {}, EVALUATE_TIMEOUT_MS)
+    const answeredAtMs = sinceSpawn()
     return started.late
-      ? { startedAtMs: null, running: false, error: 'Profiler.start did not answer' }
-      : { startedAtMs: sinceSpawn(), running: true }
+      ? { requestedAtMs, answeredAtMs, startedAtMs: null, running: false, error: 'Profiler.start did not answer' }
+      : { requestedAtMs, answeredAtMs, startedAtMs: answeredAtMs, running: true }
   } catch (error) {
-    return { startedAtMs: null, running: false, error: error.message }
+    return { requestedAtMs, answeredAtMs: requestedAtMs === null ? null : sinceSpawn(), startedAtMs: null, running: false, error: error.message }
   }
 }
 
@@ -583,15 +568,13 @@ async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, 
   const setup = await evaluateBounded(cdp, 'setup', SETUP, SETUP_TIMEOUT_MS)
   if (setup.ok) run.poolSize = setup.value
   else run.errors.push(failureRecord('setup', run.setupAtMs, setup, SETUP_TIMEOUT_MS))
-  const requestedAtMs = sinceSpawn()
-  run.profiler = { requestedAtMs, ...(await startProfiler(cdp, sinceSpawn)) }
+  run.profiler = await startProfiler(cdp, sinceSpawn)
   const probeFile = join(profile, 'st1-probe.txt')
   let historyRunning = null
   let historyLastMs = -Infinity
   const deadline = Date.now() + minutes * 60_000
   while (Date.now() < deadline) {
     const tMs = sinceSpawn()
-    if (run.profiler.running && tMs >= PROFILE_UNTIL_MS) await stopProfiler(cdp, run.profiler, cpuProfilePath, tMs)
     if (shouldProbeHistory({ historyOn, historyRunning, tMs, historyLastMs, fromMs: HISTORY_FROM_MS, everyMs: HISTORY_EVERY_MS })) {
       historyLastMs = tMs
       historyRunning = probeHistory(cdp, tMs, history).then((probe) => {
@@ -599,7 +582,7 @@ async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, 
         historyRunning = null
       })
     }
-    const answer = evaluateBounded(cdp, 'sample', sample(probeFile), SAMPLE_TIMEOUT_MS)
+    const answer = evaluateBounded(cdp, 'sample', sampleExpression(probeFile), SAMPLE_TIMEOUT_MS)
     // Queued behind the evaluation's own inspector send (already queued by the call above), so the witness
     // is taken at the sample instant and never delays the app sample.
     const sampleWitness = await Promise.resolve().then(() => witness.sample())
@@ -607,12 +590,12 @@ async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, 
     recordSample(run, tMs, outcome, { lateAfterMs: EVALUATE_TIMEOUT_MS, boundMs: SAMPLE_TIMEOUT_MS, witness: sampleWitness })
     await new Promise((resolve) => setTimeout(resolve, SAMPLE_INTERVAL_MS))
   }
-  if (run.profiler.running) await stopProfiler(cdp, run.profiler, cpuProfilePath, sinceSpawn())
   await historyRunning
   const summaryAtMs = sinceSpawn()
   const summary = await evaluateBounded(cdp, 'summary', SUMMARY, SETUP_TIMEOUT_MS)
   if (!summary.ok) run.errors.push(failureRecord('summary', summaryAtMs, summary, SETUP_TIMEOUT_MS))
   run.loop = summary.ok ? summary.value : { p99Ms: Infinity, maxMs: Infinity }
+  if (run.profiler.running) await stopProfiler(cdp, run.profiler, cpuProfilePath, sinceSpawn())
   run.witnessLoop = await witness.stop(SAMPLE_TIMEOUT_MS)
 }
 
