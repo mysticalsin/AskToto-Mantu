@@ -627,7 +627,7 @@ export async function runFileCapture({ installer, workDir = mkdtempSync(join(tmp
         ? 'ready'
         : observed.diagnostics.loadingModel
           ? 'loading'
-          : 'loading'
+          : 'no-signal'
     if (stderrPath && existsSync(stderrPath)) {
       observed.diagnostics.stderrFakeDeviceInput = /as input to the fake device/.test(readFileSync(stderrPath, 'utf8'))
     }

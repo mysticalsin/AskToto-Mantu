@@ -43,7 +43,6 @@ import {
   HISTORY_DESIGN_STATES,
   IPC_CHANNELS,
   KEYBOARD_VARIANT_ID,
-  captureNeedsResizeSettle,
   designVerdict,
   historyTransitions,
   judgeCapture,
@@ -368,7 +367,7 @@ async function captureReachedState({ page, cdp, main, state, variant, realRows, 
   // applies at 2x (layout there can differ by a few pixels); only the device scale factor is emulated.
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 0, height: 0, deviceScaleFactor: variant.scale, mobile: false })
   try {
-    if (captureNeedsResizeSettle(state)) await settleWindow(page)
+    await settleWindow(page)
     await page.screenshot({ path: join(out, screenshot), scale: 'device' })
     drive.capturedAfterMs = Date.now() - drive.requestedAt
     collected = await page.evaluate(`(${collectHistoryView})(${solidGradientLayers})`)
@@ -395,21 +394,18 @@ async function captureReachedState({ page, cdp, main, state, variant, realRows, 
  * otherwise land inside the loading capture's HISTORY_DEGRADED_MS budget; nothing from this pass is
  * written or judged, and a failure here is left for the real capture to report.
  */
-async function warmUp({ page, cdp, main, realRows, out }) {
+async function warmUp({ page, cdp, main, realRows }) {
   const [variant] = DESIGN_VARIANTS
-  const screenshot = join(out, '.warmup.png')
   try {
     await applyVariant(page, cdp, main, variant)
     await driveState(page, main, HISTORY_DESIGN_STATES[0], realRows)
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 0, height: 0, deviceScaleFactor: variant.scale, mobile: false })
     await settleWindow(page)
-    await page.screenshot({ path: screenshot, scale: 'device' })
+    await page.screenshot({ scale: 'device' })
   } catch {
     // The matrix drives and judges every state from scratch.
   } finally {
     await cdp.send('Emulation.clearDeviceMetricsOverride').catch(() => undefined)
-    rmSync(screenshot, { force: true })
-    await ensureIdleBar(page).catch(() => undefined)
   }
 }
 
@@ -490,7 +486,7 @@ async function main() {
     if (!realRows.some((row) => row.title === SAMPLE_MEETINGS[0])) throw new Error('the saved sample meetings are not listed')
     await main(INSTALL_FIXTURE_HANDLERS)
     const cdp = await page.context().newCDPSession(page)
-    await warmUp({ page, cdp, main, realRows, out: args.out })
+    await warmUp({ page, cdp, main, realRows })
     for (const variant of DESIGN_VARIANTS) {
       await applyVariant(page, cdp, main, variant)
       for (const state of HISTORY_DESIGN_STATES) {

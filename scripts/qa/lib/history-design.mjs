@@ -160,11 +160,6 @@ export function listAnswer(mode, realRows, nowMs) {
   throw new Error(`unknown list mode ${JSON.stringify(mode)}`)
 }
 
-/** The loading state is judged against a 2 s request window, so harness resize settling must not spend it. */
-export function captureNeedsResizeSettle(state) {
-  return state.id !== 'loading'
-}
-
 /**
  * A computed `background-image` as solid colour layers, topmost first: [] for 'none', null when any layer
  * is not one colour (a real gradient, an image). The overlay glass paints each translucent fill as

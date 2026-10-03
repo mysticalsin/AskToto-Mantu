@@ -471,6 +471,11 @@ describe('the report', () => {
     )
   })
 
+  it('can report no engine signal without calling it loading', () => {
+    const report = buildReport(observed({ diagnostics: { ...observed().diagnostics, engine: 'no-signal', loadingModel: false, whisperEngineMessages: 0 } }), judge(observed()))
+    expect(report.diagnostics?.engine).toBe('no-signal')
+  })
+
   it.each([
     ['PASS report', buildReport(observed(), judge(observed()))],
     ['PRECONDITION report', buildReport({ ready: false, reason: 'spawn failed before app readiness' }, judge({ ready: false, reason: 'spawn failed before app readiness' }))]
