@@ -77,6 +77,7 @@ import {
   type PreservedBrainIndexListResult
 } from '@shared/ipc'
 import type { ScreenRepairResult } from '@shared/screen-permission'
+import type { RightEdgeState, RightEdgeSurfaceState } from '@shared/right-edge-state'
 import type { ProviderId } from '@shared/providers'
 import type { RecapStatus } from '@shared/recap-status'
 import type { RecallHydration } from '@shared/recall-hydration'
@@ -468,6 +469,9 @@ const api = {
   // `parked`: main already parked the window itself, so the page must render its rest surface.
   onOverlayCursorHover: (cb: (d: { hovering: boolean; restoredFromParkedRail?: boolean; parked?: boolean }) => void): Unsub =>
     sub(IPC.overlayCursorHover, cb),
+  // Right edge (M2-0202): the page reports its surface and pins; main answers, and later pushes, its surface.
+  reportRightEdgeState: (state: RightEdgeState): Promise<RightEdgeSurfaceState> => ipcRenderer.invoke(IPC.rightEdgeState, state),
+  onRightEdgeSurface: (cb: (surface: RightEdgeSurfaceState) => void): Unsub => sub(IPC.rightEdgeSurface, cb),
   // `force` is limited to a user-initiated edge-dock dismissal. It only bypasses the main process's
   // cursor-in-drawer deferment after the renderer has completed its exit spring.
   parkAfterHide: (force = false): Promise<void> => ipcRenderer.invoke(IPC.overlayParkAfterHide, force === true),

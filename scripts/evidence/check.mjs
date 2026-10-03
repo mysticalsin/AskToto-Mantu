@@ -26,7 +26,8 @@
 // - Candidate-bound rows (promotable, qa-identity) need that record's build_run_id to equal provenance
 //   run.id and its artifact_sha256 to be one of that bytes class's provenance assets, at every level,
 //   MEASURED included. Baseline rows carry `sha256`, the earlier release's bytes, and need
-//   artifact_sha256 among them. A hosted-runner record must carry ci_run_id.
+//   artifact_sha256 among them. Runner records (hosted-runner, and owner-mac on metis-owner-mac)
+//   must carry ci_run_id.
 // - PASS needs that record to be a PASS. PASS_OR_STATED accepts a bound PASS or FAIL, or a line in the
 //   release file containing the marker `gate:<id>`. REPORT rows are printed and never fail.
 // - The sample row recomputes sample.mjs --population-of from the ledger at the sample JSON's
@@ -45,7 +46,16 @@ import { parseArgs } from 'node:util'
 import { DEFAULT_OUT_DIR as SOAK_OUT_DIR, RECORD_FILE as SOAK_RECORD_FILE, soakRecordProblems } from '../qa/owner-soak/verdict.mjs'
 import { EXCERPT_FILES, STALL_BUNDLE_NAMES_FILE, STALL_BUNDLE_NAME, STALLS_FILE, excerptOf } from '../qa/freeze-repro/attribution-bundle.mjs'
 import { VARIANTS, promotableAssets } from '../qa/provenance.mjs'
-import { EVIDENCE_LEVELS, latestByLevel, readRecordStore, recordsInPrBody, recordProblems, sha256Hex } from './record.mjs'
+import {
+  EVIDENCE_LEVELS,
+  latestByLevel,
+  missingRunnerCiRunIdLabel,
+  readRecordStore,
+  recordsInPrBody,
+  recordProblems,
+  runnerCiRunIdLabel,
+  sha256Hex
+} from './record.mjs'
 // sample.mjs imports this module back; the cycle is safe because neither module calls the other at top level.
 import { drawSample, populationOf } from './sample.mjs'
 
@@ -1268,7 +1278,8 @@ function selectsRecord(row, host, record) {
 
 /** Why `record` does not bind to the bytes `row` requires, or null when it does. */
 function bindingProblem(record, row, candidate) {
-  if (record.environment?.kind === 'hosted-runner' && record.ci_run_id == null) return 'is a hosted-runner record with no ci_run_id'
+  const runnerLabel = record.ci_run_id == null ? runnerCiRunIdLabel(record) : null
+  if (runnerLabel) return `is a ${runnerLabel} record with no ci_run_id`
   if (row.bytes === 'baseline') {
     if (record.artifact_sha256 == null) return 'has no artifact_sha256'
     return row.sha256.includes(record.artifact_sha256) ? null : `names sha256 ${record.artifact_sha256}, not one of the baseline sha256s`
