@@ -23,7 +23,7 @@ on:
         description: Required for mode=history; sha256 of the owner-channel build.
         required: false
       min_history_requests:
-        description: Required not-downloaded served History requests for mode=history.
+        description: Required not-downloaded served History requests for mode=history; must be at least the pre-registered default.
         required: false
         default: "3"
 

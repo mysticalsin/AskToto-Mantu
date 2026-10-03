@@ -229,6 +229,7 @@ test('H1 History mode accepts a complete rotated summary and writes a content-fr
   assert.deepEqual(historyRecordProblems(content), [])
   assert.match(content, /^environment_host: owner-mac$/m)
   assert.match(content, /^build_sha256: a{64}$/m)
+  assert.match(content, /^lead_action: file_m2_0067_record_from_artifact$/m)
 })
 
 test('H2 History mode requires version 1.9.9 or later and a complete audit read', () => {
@@ -260,6 +261,11 @@ test('H4 History mode rejects a window with no not-downloaded rows', () => {
     }
   }))
   assert.match(result.problems.join('\n'), /notDownloaded\.served/)
+})
+
+test('H4b History mode rejects a dispatch minimum below the pre-registered default', () => {
+  assert.match(evaluateHistory(historySummary(), { minNotDownloadedRequests: 2 }).problems.join('\n'), /at least 3/)
+  assert.deepEqual(evaluateHistory(historySummary(), { minNotDownloadedRequests: 3 }).problems, [])
 })
 
 test('H5 History mode holds when a not-downloaded p95 exceeds the pre-registered limit', () => {

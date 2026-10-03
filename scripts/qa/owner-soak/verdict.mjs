@@ -35,6 +35,7 @@ export const HISTORY_P95_LIMITS_MS = Object.freeze({
 })
 export const DEFAULT_OUT_DIR = 'out/owner-soak'
 
+// PRE-REGISTERED RULE history-rule-1: the default minimum is part of the rule; dispatch may only raise it.
 const DAY_MS = 24 * 60 * 60 * 1000
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/
 const USER_PATH_RE = /(?:\/Users\/|\/home\/|[A-Za-z]:\\Users\\)[^\s/\\]+/i
@@ -223,8 +224,12 @@ function p95Of(timings, key, problems) {
  */
 export function evaluateHistory(summary, { minNotDownloadedRequests = HISTORY_DEFAULT_MIN_NOT_DOWNLOADED_REQUESTS } = {}) {
   const problems = []
-  if (!isCount(minNotDownloadedRequests) || minNotDownloadedRequests < 1) {
-    return { problems: ['minNotDownloadedRequests: expected a positive integer'] }
+  if (!isCount(minNotDownloadedRequests) || minNotDownloadedRequests < HISTORY_DEFAULT_MIN_NOT_DOWNLOADED_REQUESTS) {
+    return {
+      problems: [
+        `minNotDownloadedRequests: expected an integer at least ${HISTORY_DEFAULT_MIN_NOT_DOWNLOADED_REQUESTS}`
+      ]
+    }
   }
   if (!isPlainObject(summary)) return { problems: ['summary: expected a JSON object'] }
   if (summary.kind !== 'metis-diagnostics-summary') problems.push("kind: expected 'metis-diagnostics-summary'")
@@ -283,6 +288,7 @@ export function historyRecordContent({ result, buildSha256 }) {
     `app_version: ${result.version}`,
     'environment_host: owner-mac',
     `build_sha256: ${buildSha256}`,
+    'lead_action: file_m2_0067_record_from_artifact',
     `min_not_downloaded_requests: ${result.minNotDownloadedRequests}`,
     `not_downloaded_served_requests: ${result.notDownloadedServed}`,
     `queue_p95_ms: ${result.p95.queue_ms}`,
@@ -314,6 +320,7 @@ export function historyRecordProblems(text) {
   }
   const keys = [
     'evidence_level', 'rule', 'app_version', 'environment_host', 'build_sha256',
+    'lead_action',
     'min_not_downloaded_requests', 'not_downloaded_served_requests',
     'queue_p95_ms', 'main_p95_ms', 'ipc_p95_ms', 'render_p95_ms', 'total_p95_ms',
     'queue_p95_limit_ms', 'main_p95_limit_ms', 'ipc_p95_limit_ms', 'render_p95_limit_ms', 'total_p95_limit_ms',
@@ -327,6 +334,9 @@ export function historyRecordProblems(text) {
   if (fields.get('rule') !== HISTORY_RULE_ID) problems.push(`record: rule must be ${HISTORY_RULE_ID}`)
   if (fields.get('environment_host') !== 'owner-mac') problems.push('record: environment_host must be owner-mac')
   if (!SHA256_RE.test(fields.get('build_sha256'))) problems.push('record: build_sha256 must be a sha256 hex digest')
+  if (fields.get('lead_action') !== 'file_m2_0067_record_from_artifact') {
+    problems.push('record: lead_action must be file_m2_0067_record_from_artifact')
+  }
   const number = (key) => (/^\d+(?:\.\d+)?$/.test(fields.get(key)) ? Number(fields.get(key)) : NaN)
   for (const key of keys.filter((key) => key.endsWith('_ms') || key.endsWith('_requests'))) {
     if (!Number.isFinite(number(key)) || number(key) < 0) problems.push(`record: ${key} must be a non-negative number`)

@@ -351,6 +351,104 @@ describe('diagnostics summary schema 2', () => {
     })
   })
 
+  it('joins a History request split across rotated generations and keeps its not-downloaded timing split', async () => {
+    const rid = '123e4567-e89b-12d3-a456-426614174105'
+
+    await withTrail({
+      'audit-1.log': [
+        started('2.0.15', 'clean', '2026-01-01T23:59:50.000Z'),
+        line('history.request', { requestId: rid, stage: 'received', queueMs: 11 }, '2026-01-01T23:59:55.000Z')
+      ].join('\n') + '\n',
+      'audit.log': [
+        line('history.request', {
+          requestId: rid,
+          stage: 'served',
+          outcome: 'ok',
+          mainMs: 22,
+          resultCount: 4,
+          notDownloadedCount: 2
+        }, '2026-01-02T00:00:01.000Z'),
+        line('history.request', { requestId: rid, stage: 'settled', outcome: 'ok', ipcMs: 33, renderMs: 44 }, '2026-01-02T00:00:02.000Z')
+      ].join('\n') + '\n'
+    }, async (auditTrailPath) => {
+      const summary = await summarizeAuditGenerations(auditTrailPath, identity, generatedAt)
+
+      expect(summary.scope.history).toMatchObject({
+        status: 'present',
+        requests: 1,
+        served: 1,
+        outcomes: { ok: 1, failed: 0, discarded: 0 },
+        timings: {
+          queueMs: { count: 1, p50: 11, p95: 11, max: 11 },
+          mainMs: { count: 1, p50: 22, p95: 22, max: 22 },
+          ipcMs: { count: 1, p50: 33, p95: 33, max: 33 },
+          renderMs: { count: 1, p50: 44, p95: 44, max: 44 },
+          totalMs: { count: 1, p50: 110, p95: 110, max: 110 }
+        },
+        notDownloaded: {
+          status: 'present',
+          requests: 1,
+          served: 1,
+          timings: {
+            queueMs: { count: 1, p50: 11, p95: 11, max: 11 },
+            mainMs: { count: 1, p50: 22, p95: 22, max: 22 },
+            ipcMs: { count: 1, p50: 33, p95: 33, max: 33 },
+            renderMs: { count: 1, p50: 44, p95: 44, max: 44 },
+            totalMs: { count: 1, p50: 110, p95: 110, max: 110 }
+          }
+        }
+      })
+      expect(summary.scope.days['2026-01-01'].history).toMatchObject({
+        requests: 1,
+        timings: { totalMs: { count: 1, p95: 110 } },
+        notDownloaded: { requests: 1, timings: { totalMs: { count: 1, p95: 110 } } }
+      })
+      expect(summary.scope.days['2026-01-02'].history.status).toBe('empty')
+    })
+  })
+
+  it('counts History requests only after the active version start and marks non-History days empty', () => {
+    const oldRid = '123e4567-e89b-12d3-a456-426614174106'
+    const newRid = '123e4567-e89b-12d3-a456-426614174107'
+    const summary = summarizeAuditTrail([
+      started('2.0.14', 'clean', '2026-01-01T00:00:00.000Z'),
+      line('history.request', { requestId: oldRid, stage: 'received', queueMs: 100 }, '2026-01-01T00:00:01.000Z'),
+      line('history.request', {
+        requestId: oldRid,
+        stage: 'served',
+        outcome: 'ok',
+        mainMs: 200,
+        resultCount: 1,
+        notDownloadedCount: 1
+      }, '2026-01-01T00:00:02.000Z'),
+      started('2.0.15', 'clean', '2026-01-02T00:00:00.000Z'),
+      line('reveal', { outcome: 'shown' }, '2026-01-02T00:00:01.000Z'),
+      line('history.request', { requestId: newRid, stage: 'received', queueMs: 10 }, '2026-01-03T00:00:01.000Z'),
+      line('history.request', {
+        requestId: newRid,
+        stage: 'served',
+        outcome: 'ok',
+        mainMs: 20,
+        resultCount: 2,
+        notDownloadedCount: 1
+      }, '2026-01-03T00:00:02.000Z'),
+      line('history.request', { requestId: newRid, stage: 'settled', outcome: 'ok', ipcMs: 30, renderMs: 40 }, '2026-01-03T00:00:03.000Z')
+    ], identity, generatedAt)
+
+    expect(summary.scope).toMatchObject({
+      from: '2026-01-02T00:00:00.000Z',
+      to: '2026-01-03T00:00:03.000Z',
+      history: {
+        requests: 1,
+        served: 1,
+        timings: { totalMs: { count: 1, p95: 100 } },
+        notDownloaded: { requests: 1, timings: { totalMs: { count: 1, p95: 100 } } }
+      }
+    })
+    expect(summary.scope.days['2026-01-02'].history.status).toBe('empty')
+    expect(summary.scope.days['2026-01-03'].history).toMatchObject({ status: 'present', requests: 1 })
+  })
+
   it('restarts the scope when the trail leaves the running version and comes back', () => {
     const summary = summarizeAuditTrail([
       started('2.0.15', 'clean', '2026-01-01T00:00:00.000Z'),

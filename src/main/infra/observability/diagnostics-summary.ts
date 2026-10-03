@@ -427,6 +427,7 @@ function recordHistoryRequest(history: HistoryCollector, record: AuditRecord, ts
   const day = ts ? ts.slice(0, 10) : null
   let request = history.requests.get(record.requestId)
   if (!request) {
+    // A request that spans midnight UTC belongs to the day of its first observed stage.
     request = {
       day,
       received: false,
