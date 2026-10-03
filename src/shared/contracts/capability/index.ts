@@ -15,8 +15,19 @@ import { z } from 'zod'
 export const SpeechEngineIdSchema = z.enum(['cloudflare-nova3', 'soniox', 'parakeet', 'whisper', 'apple'])
 export type SpeechEngineId = z.infer<typeof SpeechEngineIdSchema>
 
-/** A generation provider id, in the same form the signed model policy names providers. */
-export const GenerationEngineIdSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/)
+/**
+ * A generation provider id, in the same form the signed model policy names providers. It is never a speech
+ * engine id, so the two engine sets stay disjoint. The issue is fatal, like a speech id outside its enum,
+ * so a speech id is reported once, at its own path, and the selection checks do not also run on it.
+ */
+export const GenerationEngineIdSchema = z
+  .string()
+  .regex(/^[a-z0-9][a-z0-9-]{0,63}$/)
+  .superRefine((engine, context) => {
+    if ((SpeechEngineIdSchema.options as readonly string[]).includes(engine)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: `${engine} is a speech engine.`, fatal: true })
+    }
+  })
 export type GenerationEngineId = z.infer<typeof GenerationEngineIdSchema>
 
 /** Why an engine cannot serve its capability now. */

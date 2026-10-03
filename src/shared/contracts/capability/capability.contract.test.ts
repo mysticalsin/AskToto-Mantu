@@ -24,6 +24,7 @@ const REJECTED_AT: Record<string, Array<string | number>> = {
   'capabilities.generation-missing.json': ['generation'],
   'capabilities.speech-in-generation-slot.json': ['generation', 'capability'],
   'generation.not-ready-reported-ready.json': ['status', 'state'],
+  'generation.speech-engine.json': ['selected'],
   'speech.allowed-twice.json': ['allowed', 1],
   'speech.fallback-key.json': [],
   'speech.generation-engine.json': ['selected'],
