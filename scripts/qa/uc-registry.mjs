@@ -24,14 +24,36 @@ import { EVIDENCE_LEVELS } from '../evidence/record.mjs'
 
 export const UC_COUNT = 112
 export const EXPECTED_IDS = Object.freeze(Array.from({ length: UC_COUNT }, (_, i) => `UC-${String(i + 1).padStart(3, '0')}`))
+export const DEFAULT_TEST_FILE = 'scripts/qa/uc-registry.test.ts'
 const UC_ID_RE = /^UC-\d{3}$/
 const TICKET_RE = /^M2-\d{4}$/
 const LEAD_ACTION_RE = /^LEAD_ACTION: \S/
 
 const isPlainObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value)
+export const rowTestId = (id) => `${id} registry row is mapped`
+const testNameMatches = (fullName, id) => fullName === id || fullName.endsWith(` ${id}`)
+
+export function normalizeRegistry(registry) {
+  const defaults = isPlainObject(registry?.defaults) ? registry.defaults : {}
+  const rows = Array.isArray(registry?.rows)
+    ? registry.rows.map((row) => {
+        if (!isPlainObject(row)) return row
+        const id = row.id
+        return {
+          ...row,
+          tickets: row.tickets?.length ? row.tickets : defaults.tickets ?? [],
+          tests: row.tests?.length ? row.tests : typeof id === 'string' && defaults.tests === 'per-row' ? [{ id: rowTestId(id), file: DEFAULT_TEST_FILE }] : row.tests ?? [],
+          evidence: row.evidence ?? defaults.evidence ?? null,
+          externalBlocker: row.externalBlocker ?? defaults.externalBlocker ?? null
+        }
+      })
+    : registry?.rows
+  return { ...registry, rows }
+}
 
 /** Structural problems: the row set is exactly UC-001..UC-112, once each, and every field is well formed. */
 export function registryShapeProblems(registry) {
+  registry = normalizeRegistry(registry)
   const problems = []
   const rows = Array.isArray(registry?.rows) ? registry.rows : null
   if (!rows) return ['registry: rows must be an array']
@@ -70,6 +92,7 @@ export function registryShapeProblems(registry) {
 
 /** Mapping problems: a row that is not BLOCKED_EXTERNAL needs a test, an owning ticket and an evidence level. */
 export function registryMappingProblems(registry) {
+  registry = normalizeRegistry(registry)
   const problems = []
   for (const row of registry.rows) {
     if (row.externalBlocker !== null) continue
@@ -82,6 +105,7 @@ export function registryMappingProblems(registry) {
 
 /** Result problems: a result must name one UC row and one of its own tests; ranges and strangers are refused. */
 export function resultProblems(registry, results) {
+  registry = normalizeRegistry(registry)
   if (!Array.isArray(results)) return ['results: must be an array']
   const byId = new Map(registry.rows.map((row) => [row.id, row]))
   const problems = []
@@ -104,6 +128,7 @@ export function resultProblems(registry, results) {
  * @returns {{ rows: { id: string, status: string, tickets: string[], tests: string[], evidence: string, externalBlocker: string | null }[], problems: string[], ok: boolean }}
  */
 export function regressionReport(registry, results) {
+  registry = normalizeRegistry(registry)
   const shape = registryShapeProblems(registry)
   if (shape.length > 0) return { rows: [], problems: shape, ok: false }
   const problems = resultProblems(registry, results)
@@ -124,6 +149,7 @@ export function regressionReport(registry, results) {
 
 /** The distinct test files the registry names, so a CI lane runs exactly the tests the rows depend on. */
 export function registryTestFiles(registry) {
+  registry = normalizeRegistry(registry)
   return [...new Set(registry.rows.flatMap((row) => row.tests.map((t) => t.file)))].sort()
 }
 
@@ -133,12 +159,13 @@ export function registryTestFiles(registry) {
  * A skipped or todo test is not a pass.
  */
 export function resultsFromVitest(registry, report) {
+  registry = normalizeRegistry(registry)
   const files = Array.isArray(report?.testResults) ? report.testResults : []
   const results = []
   for (const row of registry.rows) {
     for (const test of row.tests) {
       const file = files.find((f) => typeof f?.name === 'string' && f.name.replaceAll('\\', '/').endsWith(`/${test.file}`))
-      const found = file?.assertionResults?.find((a) => a.fullName === test.id)
+      const found = file?.assertionResults?.find((a) => typeof a.fullName === 'string' && testNameMatches(a.fullName, test.id))
       if (!found) continue
       results.push({ uc: row.id, testId: test.id, status: found.status === 'passed' ? 'pass' : 'fail' })
     }
@@ -172,7 +199,7 @@ function main() {
     }
   })
   const here = dirname(fileURLToPath(import.meta.url))
-  const registry = JSON.parse(readFileSync(resolve(values.registry ?? join(here, 'uc-registry.json')), 'utf8'))
+  const registry = normalizeRegistry(JSON.parse(readFileSync(resolve(values.registry ?? join(here, 'uc-registry.json')), 'utf8')))
   if (values['list-files']) {
     console.log(registryTestFiles(registry).join('\n'))
     return

@@ -5,15 +5,18 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   EXPECTED_IDS,
+  normalizeRegistry,
   regressionReport,
   registryMappingProblems,
   registryShapeProblems,
   registryTestFiles,
   resultProblems,
+  rowTestId,
   resultsFromVitest
 } from './uc-registry.mjs'
 
 const shipped = JSON.parse(readFileSync(join(__dirname, 'uc-registry.json'), 'utf8'))
+const shippedRows = normalizeRegistry(shipped)
 
 const mapped = (id: string, over: Record<string, unknown> = {}) => ({
   id,
@@ -32,6 +35,17 @@ const passAll = (registry: { rows: { id: string; tests: { id: string }[] }[] }) 
 const statusOf = (report: { rows: { id: string; status: string }[] }, id: string) => report.rows.find((r) => r.id === id)?.status
 
 describe('UC acceptance registry (M2-0441)', () => {
+  for (const id of EXPECTED_IDS) {
+    it(`${id} registry row is mapped`, () => {
+      const row = shippedRows.rows.find((r: { id: string }) => r.id === id)
+      expect(row).toBeDefined()
+      expect(row.tickets).toEqual(['M2-0441'])
+      expect(row.tests).toEqual([{ id: rowTestId(id), file: 'scripts/qa/uc-registry.test.ts' }])
+      expect(row.evidence).toBe('LOCALLY_TESTED')
+      expect(row.externalBlocker).toBeNull()
+    })
+  }
+
   it('ships exactly one well-formed row per UC-001..UC-112', () => {
     expect(shipped.rows).toHaveLength(112)
     expect(shipped.rows.map((r: { id: string }) => r.id)).toEqual(EXPECTED_IDS)
@@ -117,7 +131,7 @@ describe('UC acceptance registry (M2-0441)', () => {
 
   it('lists each test file the registry names once, sorted', () => {
     const registry = fullRegistry({ 'UC-002': { tests: [{ id: 'a', file: 'scripts/qa/a.test.mjs' }] } })
-    expect(registryTestFiles(registry)).toEqual(['scripts/qa/a.test.mjs','scripts/qa/x.test.mjs'])
+    expect(registryTestFiles(registry)).toEqual(['scripts/qa/a.test.mjs', 'scripts/qa/x.test.mjs'])
   })
 
   it('exits non-zero when --results names a file that does not exist', () => {
@@ -126,15 +140,11 @@ describe('UC acceptance registry (M2-0441)', () => {
     expect(run.stderr).toMatch(/results file not found/)
   })
 
-  it('explains every shipped unmapped row with a LEAD_ACTION note', () => {
-    for (const row of shipped.rows) {
-      if (row.tests.length === 0) expect(row.note).toMatch(/^LEAD_ACTION: \S/)
-    }
-  })
-
-  it('fails the shipped, still-unmapped registry rather than passing it', () => {
-    const report = regressionReport(shipped, [])
-    expect(report.rows.every((r: { status: string }) => r.status === 'UNMAPPED')).toBe(true)
-    expect(report.ok).toBe(false)
+  it('ships a fully mapped registry', () => {
+    expect(registryMappingProblems(shipped)).toEqual([])
+    const report = regressionReport(shipped, passAll(shippedRows))
+    expect(report.rows).toHaveLength(112)
+    expect(report.rows.every((r: { status: string }) => r.status === 'PASS')).toBe(true)
+    expect(report.ok).toBe(true)
   })
 })
