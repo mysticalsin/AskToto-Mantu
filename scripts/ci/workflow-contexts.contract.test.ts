@@ -99,8 +99,9 @@ function referencedContexts(value: string | undefined, options: { implicitExpres
     }
   }
   if (options.implicitExpression) {
-    for (const context of value.matchAll(CONTEXT_ROOT_PATTERN)) {
-      const previous = context.index && context.index > 0 ? value[context.index - 1] : ''
+    const unquoted = value.replace(/'[^']*'|"[^"]*"/g, '')
+    for (const context of unquoted.matchAll(CONTEXT_ROOT_PATTERN)) {
+      const previous = context.index && context.index > 0 ? unquoted[context.index - 1] : ''
       if (previous === '.' || /[A-Za-z0-9_-]/.test(previous)) continue
       contexts.add(context[1])
     }
@@ -224,7 +225,7 @@ on:
   pull_request:
 jobs:
   valid:
-    if: github.event_name == 'pull_request' && inputs.suite != 'skip'
+    if: github.event_name == 'pull_request' && inputs.suite != 'skip' && inputs.version != 'v1.2'
     runs-on: \${{ matrix.os }}
     strategy:
       matrix:

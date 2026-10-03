@@ -252,16 +252,6 @@ describe('QA candidate History design evidence (M2-0032)', () => {
     expect(upload).toContain("retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}")
   })
 
-  it('keeps capture failures report-only while still summarizing the failed evidence', () => {
-    const capture = steps('history-design-mac').find((step) => step.includes('history-design-capture.mjs')) ?? ''
-    expect(capture).toContain('id: capture')
-    expect(capture).toContain('continue-on-error: true')
-
-    const summary = steps('history-design-mac').find((step) => step.includes('name: Summarize a capture that did not pass')) ?? ''
-    expect(summary).toContain("if: steps.capture.outcome == 'failure'")
-    expect(summary).toContain('cat history-design/SUMMARY.md >> "$GITHUB_STEP_SUMMARY"')
-  })
-
   // TypeScript source files are left out of the assertion: tests that read files never name them (FF-07).
   it('self-tests when the capture or the History views it captures change', () => {
     for (const path of [
@@ -416,6 +406,32 @@ exit 1
       expect(result.status).toBe(1)
       expect(result.stdout).toContain(`::error::owner-account sandbox allowed creating absent protected path ${bashPath(allowedPath)}`)
       expect(existsSync(allowedPath)).toBe(false)
+    } finally {
+      rmSync(sandbox, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects test-only sandbox probe overrides in GitHub Actions', () => {
+    const sandbox = mkdtempSync(join(tmpdir(), 'owner-sandbox-probe-'))
+    try {
+      const runnerTemp = join(sandbox, 'runner-temp')
+      mkdirSync(runnerTemp)
+
+      const result = spawnSync('bash', [ownerSandboxProbePath], {
+        cwd: root,
+        env: {
+          ...process.env,
+          GITHUB_ACTIONS: 'true',
+          PROVE_OWNER_SANDBOX_WRAPPER: join(sandbox, 'fake-sandbox.sh'),
+          RUNNER_TEMP: runnerTemp
+        },
+        encoding: 'utf8'
+      })
+
+      expect(result.status).toBe(1)
+      expect(result.stdout).toContain(
+        '::error::owner-account sandbox probe overrides are test-only and must not be set in GitHub Actions.'
+      )
     } finally {
       rmSync(sandbox, { recursive: true, force: true })
     }

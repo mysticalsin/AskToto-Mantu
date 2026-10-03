@@ -7,6 +7,11 @@ if [ -z "${RUNNER_TEMP:-}" ]; then
   exit 1
 fi
 
+if [ "${GITHUB_ACTIONS:-}" = "true" ] && { [ -n "${PROVE_OWNER_SANDBOX_WRAPPER:-}" ] || [ -n "${PROVE_OWNER_SANDBOX_HOME:-}" ]; }; then
+  echo "::error::owner-account sandbox probe overrides are test-only and must not be set in GitHub Actions."
+  exit 1
+fi
+
 SANDBOX_WRAPPER="${PROVE_OWNER_SANDBOX_WRAPPER:-scripts/hermetic/run-under-owner-sandbox.sh}"
 PROBE_OUT="$RUNNER_TEMP/sandbox-probe.out"
 PROBE_ERR="$RUNNER_TEMP/sandbox-probe.err"
