@@ -9,8 +9,8 @@
  * Usage: node scripts/qa/meeting/file-capture-smoke.mjs --installer <Metis-QA-<v>.zip> [--out <dir>]
  * Exit codes: 0 PASS, 1 FAIL, 2 PRECONDITION or usage.
  */
-import { mkdirSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { LINES_TIMEOUT_MS, LIVE_LINES_NEEDED, runFileCapture } from './file-capture.mjs'
 
 export const DEADLINE_MS = 180_000
@@ -91,6 +91,11 @@ export function diagnosticLine(report) {
   return `DIAG engine=${d.engine} source=${d.source} framesFed=${d.framesFed}/peak=${Number(d.peakRms).toFixed(4)} firstLineMs=${firstLineMs}`
 }
 
+/** Keep the profile/WAV under the workspace artifact path, not the macOS temp sandbox. */
+export function smokeWorkDir(outDir, cwd = process.cwd()) {
+  return resolve(cwd, outDir, 'work')
+}
+
 function parseArgs(argv) {
   const args = {}
   for (let i = 0; i < argv.length; i += 2) args[argv[i].replace(/^--/, '')] = argv[i + 1]
@@ -105,13 +110,16 @@ async function main() {
   }
   const outDir = args.out ?? 'out/file-capture'
   mkdirSync(outDir, { recursive: true })
+  const workDir = smokeWorkDir(outDir)
   let observed
   try {
-    observed = await runFileCapture({ installer: args.installer, reportDir: outDir })
+    observed = await runFileCapture({ installer: args.installer, reportDir: outDir, workDir })
   } catch (error) {
     const reason = preconditionReason(error)
     console.error(`file-capture precondition: ${reason}`)
     observed = { ready: false, reason }
+  } finally {
+    rmSync(workDir, { recursive: true, force: true })
   }
   const outcome = judge(observed)
   const report = buildReport(observed, outcome)

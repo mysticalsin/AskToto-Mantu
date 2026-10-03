@@ -13,7 +13,7 @@
  */
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -146,7 +146,8 @@ export function writeCaptureWav(profileDir, options) {
   const { wav, durationSeconds } = buildCaptureWav(options)
   mkdirSync(profileDir, { recursive: true })
   const path = join(profileDir, CAPTURE_WAV_NAME)
-  writeFileSync(path, wav, { mode: 0o600 })
+  writeFileSync(path, wav, { mode: 0o644 })
+  chmodSync(path, 0o644)
   return { path, sha256: createHash('sha256').update(wav).digest('hex'), durationSeconds }
 }
 

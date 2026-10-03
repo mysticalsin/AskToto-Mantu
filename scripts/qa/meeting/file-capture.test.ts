@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -37,7 +37,7 @@ import {
   withTimeout,
   seedProfile
 } from './file-capture.mjs'
-import { buildReport, diagnosticLine, judge, preconditionReason } from './file-capture-smoke.mjs'
+import { buildReport, diagnosticLine, judge, preconditionReason, smokeWorkDir } from './file-capture-smoke.mjs'
 
 const dirs: string[] = []
 const tempDir = (): string => {
@@ -188,6 +188,14 @@ describe('capture WAV: command construction', () => {
     expect(out.sha256).toMatch(/^[0-9a-f]{64}$/)
     expect(readFileSync(out.path).length).toBeGreaterThan(44)
     expect(out.durationSeconds).toBeGreaterThanOrEqual(MIN_SECONDS)
+  })
+
+  it('leaves the WAV readable by Chromium helper processes while still inside the profile', () => {
+    const profile = tempDir()
+    const { run } = fakeTools()
+    const out = writeCaptureWav(profile, { sentences: ['one'], run })
+    expect(out.path.startsWith(profile)).toBe(true)
+    expect(statSync(out.path).mode & 0o777).toBe(0o644)
   })
 
   it('formats the CLI summary as only the WAV sha256 and duration', () => {
@@ -484,5 +492,11 @@ describe('the report', () => {
     for (const sentence of englishSentences()) expect(text).not.toContain(sentence.toLowerCase())
     for (const token of distinctiveTokens(englishSentences())) expect(text).not.toContain(token)
     for (const forbidden of ['/users/', '/private/', 'qa-capture.wav', 'capture-meetings']) expect(text).not.toContain(forbidden)
+  })
+})
+
+describe('smoke runner workspace', () => {
+  it('places the app profile and capture WAV under the artifact workspace, not the macOS temp directory', () => {
+    expect(smokeWorkDir('capture-report', '/workspace/repo')).toBe('/workspace/repo/capture-report/work')
   })
 })
