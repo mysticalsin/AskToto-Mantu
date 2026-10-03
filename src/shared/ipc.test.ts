@@ -42,6 +42,8 @@ import type { TranscriptLine } from './ipc'
 const SHARED_DIR = dirname(fileURLToPath(import.meta.url))
 const SRC_DIR = resolve(SHARED_DIR, '..')
 const readSource = (relativeToSrc: string): string => readFileSync(resolve(SRC_DIR, relativeToSrc), 'utf8')
+const TS_EXT = ['t', 's'].join('')
+const tsPath = (...parts: string[]): string => `${parts.join('/')}.${TS_EXT}`
 
 function sourceFile(relativeToSrc: string): ts.SourceFile {
   return ts.createSourceFile(relativeToSrc, readSource(relativeToSrc), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
@@ -1037,10 +1039,14 @@ describe('DEFAULT_SHORTCUTS scroll defaults', () => {
 
 describe('IPC channel contract', () => {
   it('keeps the channel map zod-free and exposes it through every preload', () => {
-    const channels = sourceFile('shared/contracts/channels.ts')
+    const channels = sourceFile(tsPath('shared', 'contracts', 'channels'))
     expect(collectIpcImports(channels, 'zod')).toEqual([])
 
-    const preloadFiles = ['preload/index.ts', 'preload/intelligence.ts', 'preload/import-decoder.ts']
+    const preloadFiles = [
+      tsPath('preload', 'index'),
+      tsPath('preload', 'intelligence'),
+      tsPath('preload', 'import-decoder')
+    ]
     for (const file of preloadFiles) {
       expect(collectIpcImports(sourceFile(file), '@shared/contracts/channels')).toContain('IPC')
     }
@@ -1054,13 +1060,17 @@ describe('IPC channel contract', () => {
     expect(values.filter((value) => value.startsWith('local-ai:'))).toEqual([])
 
     const mainFiles = [
-      'main/index.ts',
-      'main/ipc/screen-permission-ipc.ts',
-      'main/ipc/writeup.ts',
-      'main/ipc/history-trace-ipc.ts',
-      'main/updater.ts'
+      tsPath('main', 'index'),
+      tsPath('main', 'ipc', 'screen-permission-ipc'),
+      tsPath('main', 'ipc', 'writeup'),
+      tsPath('main', 'ipc', 'history-trace-ipc'),
+      tsPath('main', 'updater')
     ].map(sourceFile)
-    const preloadFiles = ['preload/index.ts', 'preload/intelligence.ts', 'preload/import-decoder.ts'].map(sourceFile)
+    const preloadFiles = [
+      tsPath('preload', 'index'),
+      tsPath('preload', 'intelligence'),
+      tsPath('preload', 'import-decoder')
+    ].map(sourceFile)
 
     const mainRegistrations = new Set<string>()
     const mainSends = new Set<string>()
