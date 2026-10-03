@@ -281,6 +281,28 @@ async function waitForRequest(main, before, wait = sleep, label = 'list') {
   throw new Error(`History did not request its ${label}`)
 }
 
+async function locatorVisible(locator) {
+  return locator.first().isVisible({ timeout: 500 }).catch(() => false)
+}
+
+async function waitForHistoryClosed(page, wait = sleep) {
+  const search = page.getByLabel('Search past meetings')
+  const deadline = Date.now() + STATE_TIMEOUT_MS
+  while (Date.now() < deadline) {
+    if (!(await locatorVisible(search))) return
+    await wait(50)
+  }
+  throw new Error('History did not close before the next capture')
+}
+
+export async function ensureHistoryClosed(page, wait = sleep) {
+  const search = page.getByLabel('Search past meetings')
+  if (!(await locatorVisible(search))) return false
+  await page.getByRole('button', { name: 'History' }).first().click({ timeout: 15_000 })
+  await waitForHistoryClosed(page, wait)
+  return true
+}
+
 /**
  * Waits for the visual cue needed before capture. Accessibility roles are still checked afterwards by
  * rolesPresent/judgeCapture.
@@ -312,9 +334,12 @@ export async function driveState(page, main, state, realRows, deps = {}) {
   const wait = deps.wait ?? sleep
   const ensureIdle = deps.ensureIdleBar ?? ensureIdleBar
   const openHistory = deps.clickHistory ?? clickHistory
+  const closeHistory = deps.ensureHistoryClosed ?? ensureHistoryClosed
   // Bar History ignores a toggle within 400 ms of the last one; a fast capture can end inside that window.
   await wait(450)
   await ensureIdle(page)
+  const wasOpen = await closeHistory(page, wait)
+  if (wasOpen) await wait(450)
   const now = Date.now()
   await main(`(() => {
     const s = globalThis.__historyDesign

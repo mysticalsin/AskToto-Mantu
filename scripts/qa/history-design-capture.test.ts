@@ -160,6 +160,93 @@ describe('History design matrix (M2-0032)', () => {
     expect(calls).toContain(`role:status:OneDrive is slow to answer:${STATE_TIMEOUT_MS}`)
   })
 
+  it('starts each capture from a closed History view before arming fixtures and reopening it', async () => {
+    const state = HISTORY_DESIGN_STATES.find((candidate) => candidate.id === 'slow-with-rows')!
+    const events: string[] = []
+    const history = { requests: 0, requestedAt: 0 }
+    let historyOpen = true
+    let searchFillPending = false
+    let searchRequestSeen = false
+
+    const main = vi.fn(async (expression: string) => {
+      if (expression === 'globalThis.__historyDesign.requests') {
+        events.push('read-requests')
+        return history.requests
+      }
+      if (expression.includes('requests, requestedAt')) return { ...history }
+      events.push('arm-fixture')
+      return true
+    })
+    const noteRequest = (requestedAt: number) => {
+      history.requests += 1
+      history.requestedAt = requestedAt
+    }
+    const wait = vi.fn(async () => {
+      if (searchFillPending && !searchRequestSeen) {
+        searchRequestSeen = true
+        events.push('search-request')
+        noteRequest(3_000)
+      }
+    })
+    const searchLocator = {
+      first: () => ({
+        isVisible: vi.fn(async () => historyOpen)
+      }),
+      fill: vi.fn(async () => {
+        events.push('fill-search')
+        searchFillPending = true
+      })
+    }
+    const page = {
+      getByText: vi.fn((text: string) => ({
+        first: () => ({
+          waitFor: vi.fn(async () => {
+            events.push(`text:${text}`)
+          })
+        })
+      })),
+      getByRole: vi.fn((role: string, options?: { name?: string | RegExp }) => {
+        if (role === 'button' && options?.name === 'History') {
+          return {
+            first: () => ({
+              click: vi.fn(async () => {
+                events.push('close-history')
+                historyOpen = false
+              })
+            })
+          }
+        }
+        return {
+          filter: ({ hasText }: { hasText: string }) => ({
+            first: () => ({
+              waitFor: vi.fn(async () => {
+                events.push(`role:${role}:${hasText}`)
+              })
+            })
+          })
+        }
+      }),
+      getByLabel: vi.fn(() => searchLocator)
+    }
+
+    await driveState(page as never, main as never, state, [{ title: 'Quarterly planning sample' }], {
+      wait,
+      ensureIdleBar: async () => {
+        events.push('idle')
+      },
+      clickHistory: async () => {
+        events.push('open-history')
+        historyOpen = true
+        noteRequest(2_000)
+      }
+    })
+
+    expect(events.indexOf('close-history')).toBeLessThan(events.indexOf('arm-fixture'))
+    expect(events.indexOf('arm-fixture')).toBeLessThan(events.indexOf('open-history'))
+    expect(events).toContain('search-request')
+    expect(history.requests).toBe(2)
+  })
+
   it("uses the real window size with only the variant's device scale overridden", () => {
     expect(deviceMetricsForVariant(DESIGN_VARIANTS.find((v) => v.id === 'dark-2x-motion')!)).toEqual({
       width: 0,
