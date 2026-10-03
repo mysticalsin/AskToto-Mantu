@@ -70,13 +70,14 @@ describe('MQA-170 — the graph purge covers the runner directory and only audit
     // purgeGraphIfEncryptedAndStale runs on EVERY settingsGet poll and at boot: auditing unconditionally
     // once the predicate widens past graph.html would write a graph.purged record forever.
     const fn = sliceBetween('function purgeGraphIfEncryptedAndStale', 'let lastAppliedManagedSnapshot')
-    expect(fn).toMatch(/if \(getSettings\(\)\.encryptTranscripts && purgeGraphArtifacts\(\)\) auditLog\('graph\.purged'/)
+    expect(fn).toMatch(/if \(!getSettings\(\)\.encryptTranscripts\) return/)
+    expect(fn).toMatch(/purgeGraphArtifacts\(\)\.then\(\(removed\) => \{[\s\S]*?if \(removed\) auditLog\('graph\.purged'/)
     expect(fn).not.toMatch(/graphHtml\(\)/)
   })
 
   it('gates the settingsSet-time audit line the same way', () => {
     const edge = sliceBetween('// At-rest encryption just turned on', '// publishBrainPages turned off')
-    expect(edge).toMatch(/if \(!wasEncrypted && next\.encryptTranscripts && purgeGraphArtifacts\(\)\)/)
+    expect(edge).toMatch(/if \(!wasEncrypted && next\.encryptTranscripts\) \{[\s\S]*?const purged = await purgeGraphArtifacts\(\)[\s\S]*?if \(purged\) auditLog\('graph\.purged'/)
   })
 })
 

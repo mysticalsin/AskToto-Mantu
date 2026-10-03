@@ -401,7 +401,8 @@ function inferredMeetingsRoot(file: string): string {
 }
 
 function storageWriteError(op: string, result: { status: string; code?: string }): NodeJS.ErrnoException {
-  const error = new Error(`${op} failed: ${result.status}`) as NodeJS.ErrnoException
+  const suffix = result.status === 'unavailable' && result.code ? ` (${result.code})` : ''
+  const error = new Error(`${op} failed: ${result.status}${suffix}`) as NodeJS.ErrnoException
   if (result.status === 'unavailable' && result.code) error.code = result.code
   return error
 }

@@ -60,7 +60,7 @@ const syncNameSet = new Set<string>(syncNames)
  * Only ever revise an entry DOWNWARD when that file is migrated further; never raise it.
  */
 const BASELINE = {
-  'transcripts.ts': 27,
+  'transcripts.ts': 0,
   'brain/ingest.ts': 0,
   'brain/inputs.ts': 0,
   'brain/consolidate.ts': 0,
@@ -68,7 +68,7 @@ const BASELINE = {
   'brain/intelligence-work.ts': 0,
   'brain/intelligence-pass.ts': 0,
   'brain/corrections.ts': 10,
-  'brain/store.ts': 63,
+  'brain/store.ts': 0,
   'brain/match-key-cache.ts': 4,
   'recall.ts': 0,
   'history-actions.ts': 0
@@ -79,12 +79,14 @@ type TargetFile = keyof typeof BASELINE
 const FILES = Object.keys(BASELINE) as TargetFile[]
 
 const GATEWAY_MIGRATED_ZERO_FILES = [
+  'transcripts.ts',
   'brain/ingest.ts',
   'brain/inputs.ts',
   'brain/consolidate.ts',
   'brain/intelligence-index.ts',
   'brain/intelligence-work.ts',
   'brain/intelligence-pass.ts',
+  'brain/store.ts',
   'recall.ts',
   'history-actions.ts'
 ] as const satisfies readonly TargetFile[]

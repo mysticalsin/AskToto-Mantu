@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs'
+import { readFile as readFileAsync } from 'node:fs/promises'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Settings } from '@shared/ipc'
@@ -161,7 +162,19 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
   let s: Settings
 
   beforeEach(() => {
-    useStorageForTests()
+    useStorageForTests({
+      fs: {
+        async readFile(path: string) {
+          readLog.paths.push(path)
+          const base = path.split(/[\\/]/).pop() ?? ''
+          if (readFaults.throwOn.has(base)) {
+            throw Object.assign(new Error(`EBUSY: resource busy or locked, open '${path}'`), { code: 'EBUSY' })
+          }
+          if (readFaults.emptyOn.has(base)) return Buffer.alloc(0)
+          return readFileAsync(path)
+        }
+      }
+    })
     folder = mkdtempSync(join(tmpdir(), 'asktoto-publish-test-'))
     s = settingsFor(folder)
     readFaults.throwOn.clear()
