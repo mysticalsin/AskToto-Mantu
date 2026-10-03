@@ -60,6 +60,8 @@ const QUIT_TIMEOUT_MS = 30_000
 const TAB_STOPS_MAX = 80
 const DOWNLOAD_ERROR = 'OneDrive is offline. Connect, then retry.'
 const SAMPLE_MEETINGS = ['Quarterly planning sample', 'Design review sample']
+const M2_0550_ROOT_CAUSE =
+  'CI run 37128364535 timed out on the first slow-with-rows / light-1x-reduced-motion degraded cue after the harness drove the debounced search. The harness was waiting for the cue immediately after the observed search request, but RecallView only exposes that cue after HISTORY_DEGRADED_MS from the request.'
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -289,6 +291,16 @@ async function locatorVisible(locator) {
   }
 }
 
+async function waitForRendererDegradedNotice(requestedAt, wait) {
+  const remaining = requestedAt + HISTORY_DEGRADED_MS - Date.now()
+  if (remaining > 0) await wait(remaining)
+}
+
+function throwWithDrive(error, drive) {
+  if (error && typeof error === 'object') error.drive = drive
+  throw error
+}
+
 /**
  * Waits for the visual cue needed before capture. Accessibility roles are still checked afterwards by
  * rolesPresent/judgeCapture.
@@ -330,11 +342,23 @@ export async function driveState(page, main, state, realRows, deps = {}) {
   const idleSettledAt = Date.now()
   const closedBeforeArm = !(await locatorVisible(page.getByLabel('Search past meetings')))
   const closeCheckedAt = Date.now()
+  if (!closedBeforeArm) {
+    throwWithDrive(new Error('History was still open before fixture arm'), {
+      closedBeforeArm,
+      timingsMs: {
+        toggleGuard: toggleGuardSettledAt - driveStartedAt,
+        ensureIdle: idleSettledAt - toggleGuardSettledAt,
+        closeCheck: closeCheckedAt - idleSettledAt
+      }
+    })
+  }
   const now = Date.now()
+  const listFixture = listAnswer(state.list, realRows, now)
+  const searchFixture = state.search ? listAnswer(state.search, realRows, now) : listAnswer('rows', realRows, now)
   await main(`(() => {
     const s = globalThis.__historyDesign
-    s.list = ${JSON.stringify(listAnswer(state.list, realRows, now))}
-    s.search = ${JSON.stringify(state.search ? listAnswer(state.search, realRows, now) : listAnswer('rows', realRows, now))}
+    s.list = ${JSON.stringify(listFixture)}
+    s.search = ${JSON.stringify(searchFixture)}
     s.read = ${JSON.stringify(state.read ?? 'hydrating')}
     return true
   })()`)
@@ -358,6 +382,11 @@ export async function driveState(page, main, state, realRows, deps = {}) {
   }
   if (state.id === 'slow' || state.id === 'unavailable' || state.id === 'failed') {
     const cue = historyDesignCueForState(state.id)
+    if (state.id === 'slow') {
+      await waitForRendererDegradedNotice(requestedAt, wait)
+      const degradedWaitedAt = Date.now()
+      drive.timingsMs.listRequestToDegradedWait = degradedWaitedAt - requestedAt
+    }
     await visible(cue.text, cue.role)
     const cueAt = Date.now()
     drive.bannerAfterMs = cueAt - clickedAt
@@ -371,7 +400,17 @@ export async function driveState(page, main, state, realRows, deps = {}) {
     drive.timingsMs.listRequestToSearchFill = typedAt - requestedAt
     drive.timingsMs.searchFillToSearchRequest = drive.requestedAt - typedAt
     const cue = historyDesignCueForState(state.id)
-    await visible(cue.text, cue.role)
+    // Run 37128364535 showed the first light-1x-reduced-motion slow-with-rows row timing out while
+    // waiting for the slow cue: the harness had observed the debounced search request, then immediately
+    // asked Playwright for a cue that the renderer only arms after HISTORY_DEGRADED_MS.
+    await waitForRendererDegradedNotice(drive.requestedAt, wait)
+    const degradedWaitedAt = Date.now()
+    drive.timingsMs.searchRequestToDegradedWait = degradedWaitedAt - drive.requestedAt
+    try {
+      await visible(cue.text, cue.role)
+    } catch (error) {
+      throwWithDrive(error, drive)
+    }
     const cueAt = Date.now()
     drive.bannerAfterMs = cueAt - typedAt
     drive.timingsMs.searchRequestToCue = cueAt - drive.requestedAt
@@ -399,7 +438,19 @@ async function captureState({ page, cdp, main, state, variant, realRows, out }) 
   try {
     return await captureReachedState({ page, cdp, main, state, variant, realRows, out })
   } catch (error) {
-    return { judged: judgeCapture({ state, variant, collected: null, roles: [], tabOrder: null, drive: { error: error.message } }), screenshot: null }
+    const drive = { ...(error.drive ?? {}), error: error.message }
+    const judged = judgeCapture({ state, variant, collected: null, roles: [], tabOrder: null, drive })
+    return {
+      judged: {
+        ...judged,
+        bannerAfterMs: drive.bannerAfterMs ?? null,
+        capturedAfterMs: drive.capturedAfterMs,
+        driveTimingsMs: drive.timingsMs,
+        closedBeforeArm: drive.closedBeforeArm ?? null,
+        tabOrder: null
+      },
+      screenshot: null
+    }
   }
 }
 
@@ -592,6 +643,12 @@ async function main() {
     states: HISTORY_DESIGN_STATES.map(({ id, title, list, search, read }) => ({ id, title, list, search: search ?? null, read: read ?? null })),
     variants: DESIGN_VARIANTS,
     backdrops: BACKDROPS,
+    rootCause: {
+      ticket: 'M2-0550',
+      source: 'CI run 37128364535',
+      summary: M2_0550_ROOT_CAUSE,
+      evidenceFields: ['closedBeforeArm', 'driveTimingsMs.searchFillToSearchRequest', 'driveTimingsMs.searchRequestToDegradedWait', 'driveTimingsMs.searchRequestToCue']
+    },
     sources: {
       rows: 'real meetings saved through window.toto.saveTranscript and listed by the real recallList',
       fixtures: "slow, failed, cloud-only and unreadable answers served by History's own IPC channels, replaced in main through the inspector"

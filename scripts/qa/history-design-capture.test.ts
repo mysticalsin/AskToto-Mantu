@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { IPC } from '../../src/shared/ipc'
 import { HISTORY_DEGRADED_MS as RENDERER_DEGRADED_MS } from '../../src/renderer/src/components/history/list-status'
 import { NOT_DOWNLOADED_TEXT, UNAVAILABLE_TEXT } from '../../src/renderer/src/components/history/hydration'
@@ -46,6 +46,10 @@ function textSample(overrides: Record<string, unknown> = {}) {
 
 const viewport = { width: 400, height: 600 }
 const dark = DESIGN_VARIANTS.find((variant) => variant.id === KEYBOARD_VARIANT_ID)!
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 
 describe('History design matrix (M2-0032)', () => {
   it('captures every state in light and dark, at 1x and 2x, with motion allowed and reduced', () => {
@@ -105,9 +109,12 @@ describe('History design matrix (M2-0032)', () => {
   it('anchors the slow search degraded cue to the search request, not the typed character', async () => {
     const state = HISTORY_DESIGN_STATES.find((candidate) => candidate.id === 'slow-with-rows')!
     const calls: string[] = []
+    const waits: number[] = []
     const history = { requests: 0, requestedAt: 0 }
     let searchFillPending = false
     let searchRequestSeen = false
+    let now = 0
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
 
     const main = vi.fn(async (expression: string) => {
       if (expression === 'globalThis.__historyDesign.requests') return history.requests
@@ -118,10 +125,12 @@ describe('History design matrix (M2-0032)', () => {
       history.requests += 1
       history.requestedAt = requestedAt
     }
-    const wait = vi.fn(async () => {
+    const wait = vi.fn(async (ms: number) => {
+      waits.push(ms)
+      now += ms
       if (searchFillPending && !searchRequestSeen) {
         searchRequestSeen = true
-        noteRequest(2200)
+        noteRequest(now)
       }
     })
     const page = {
@@ -152,11 +161,18 @@ describe('History design matrix (M2-0032)', () => {
     const drive = await driveState(page as never, main as never, state, [{ title: 'Quarterly planning sample' }], {
       wait,
       ensureIdleBar: async () => undefined,
-      clickHistory: async () => noteRequest(1000)
+      clickHistory: async () => noteRequest(now)
     })
 
-    expect(drive.requestedAt).toBe(2200)
-    expect(wait).toHaveBeenCalled()
+    expect(drive.requestedAt).toBe(500)
+    expect(drive.closedBeforeArm).toBe(true)
+    expect(drive.timingsMs).toMatchObject({
+      toggleGuard: 450,
+      searchFillToSearchRequest: 50,
+      searchRequestToDegradedWait: HISTORY_DEGRADED_MS,
+      searchRequestToCue: HISTORY_DEGRADED_MS
+    })
+    expect(waits).toContain(HISTORY_DEGRADED_MS)
     expect(calls).toContain(`role:status:OneDrive is slow to answer:${STATE_TIMEOUT_MS}`)
   })
 
@@ -229,7 +245,7 @@ describe('History design matrix (M2-0032)', () => {
       getByLabel: vi.fn(() => searchLocator)
     }
 
-    await driveState(page as never, main as never, state, [{ title: 'Quarterly planning sample' }], {
+    const drive = await driveState(page as never, main as never, state, [{ title: 'Quarterly planning sample' }], {
       wait,
       ensureIdleBar: async () => {
         events.push('idle')
@@ -257,7 +273,42 @@ describe('History design matrix (M2-0032)', () => {
       'search-request',
       'role:status:OneDrive is slow to answer'
     ])
+    expect(drive.closedBeforeArm).toBe(true)
+    expect(drive.timingsMs).toEqual(
+      expect.objectContaining({
+        toggleGuard: expect.any(Number),
+        ensureIdle: expect.any(Number),
+        closeCheck: expect.any(Number),
+        armFixture: expect.any(Number),
+        openToListRequest: expect.any(Number),
+        listRequestToSearchFill: expect.any(Number),
+        searchFillToSearchRequest: expect.any(Number),
+        searchRequestToDegradedWait: expect.any(Number),
+        searchRequestToCue: expect.any(Number)
+      })
+    )
     expect(history.requests).toBe(2)
+  })
+
+  it('fails fast instead of arming fixtures while History is still open', async () => {
+    const state = HISTORY_DESIGN_STATES.find((candidate) => candidate.id === 'slow-with-rows')!
+    const main = vi.fn(async () => true)
+    const page = {
+      getByLabel: vi.fn(() => ({
+        first: () => ({
+          isVisible: vi.fn(async () => true)
+        })
+      }))
+    }
+
+    await expect(
+      driveState(page as never, main as never, state, [{ title: 'Quarterly planning sample' }], {
+        wait: async () => undefined,
+        ensureIdleBar: async () => undefined,
+        clickHistory: async () => undefined
+      })
+    ).rejects.toThrow('History was still open before fixture arm')
+    expect(main).not.toHaveBeenCalled()
   })
 
   it("uses the real window size with only the variant's device scale overridden", () => {
