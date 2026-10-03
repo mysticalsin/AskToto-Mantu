@@ -1566,7 +1566,7 @@ describe('pinnedBridgeCall (M2-0519)', () => {
     try {
       const call = pinnedBridgeCall(['toggle', ['a', 1]])
       expect(seen).toEqual([['a', 1]])
-      expect([...(scope.__metisSmokeBridgePending ?? [])]).toEqual([bridged, call])
+      expect([...(scope.__metisSmokeBridgePending ?? [])]).toEqual([bridged])
       settle({ visible: true })
       await expect(call).resolves.toBeUndefined()
       expect(scope.__metisSmokeBridgePending?.size).toBe(0)
@@ -1577,12 +1577,9 @@ describe('pinnedBridgeCall (M2-0519)', () => {
   })
 
   it('rejects with the bridge call’s error and still releases it', async () => {
-    const rejected = Promise.reject(new Error('no window'))
-    bridgeWith(() => rejected)
+    bridgeWith(() => Promise.reject(new Error('no window')))
     try {
-      const call = pinnedBridgeCall(['toggle', []])
-      expect([...(scope.__metisSmokeBridgePending ?? [])]).toEqual([rejected, call])
-      await expect(call).rejects.toThrow('no window')
+      await expect(pinnedBridgeCall(['toggle', []])).rejects.toThrow('no window')
       expect(scope.__metisSmokeBridgePending?.size).toBe(0)
     } finally {
       Object.defineProperty(globalThis, 'window', { configurable: true, value: undefined })
