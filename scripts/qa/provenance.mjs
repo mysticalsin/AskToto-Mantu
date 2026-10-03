@@ -40,6 +40,12 @@ export const VARIANTS = Object.freeze({
     configs: ['build/qa-identity.electron-builder.yml', 'electron-builder.yml'],
     assets: (version) => [`Metis-QA-${version}.zip`]
   },
+  'mac-native': {
+    promotable: false,
+    platform: 'mac',
+    configs: ['native-app/project.yml'],
+    assets: (version) => [`Metis-Native-${version}.zip`]
+  },
   win: {
     promotable: true,
     platform: 'win',

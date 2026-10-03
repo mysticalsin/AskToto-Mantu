@@ -58,6 +58,8 @@ function fixture() {
   writeFileSync(join(root, 'electron-builder.win.yml'), 'windows config for the fixture\n')
   mkdirSync(join(root, 'build'), { recursive: true })
   writeFileSync(join(root, 'build', 'qa-identity.electron-builder.yml'), 'qa identity config for the fixture\n')
+  mkdirSync(join(root, 'native-app'), { recursive: true })
+  writeFileSync(join(root, 'native-app', 'project.yml'), 'native app config for the fixture\n')
   const releaseDir = join(root, 'release')
   mkdirSync(releaseDir, { recursive: true })
   for (const config of Object.values(VARIANTS)) {
@@ -150,6 +152,9 @@ test("stage moves exactly the variant's installers and records size and sha256",
     for (const name of VARIANTS['mac-qa-identity'].assets(VERSION)) {
       assert.ok(existsSync(join(releaseDir, name)), `${name} should remain in release/ untouched`)
     }
+    for (const name of VARIANTS['mac-native'].assets(VERSION)) {
+      assert.ok(existsSync(join(releaseDir, name)), `${name} should remain in release/ untouched`)
+    }
   } finally {
     cleanup(root)
   }
@@ -159,6 +164,7 @@ test('a D-34 hotfix version stages the same asset names under the hotfix version
   const hotfix = '1.9.7-hotfix.1'
   assert.deepEqual(VARIANTS.mac.assets(hotfix), ['Metis-1.9.7-hotfix.1.dmg', 'Metis-1.9.7-hotfix.1.zip'])
   assert.deepEqual(VARIANTS['mac-qa-identity'].assets(hotfix), ['Metis-QA-1.9.7-hotfix.1.zip'])
+  assert.deepEqual(VARIANTS['mac-native'].assets(hotfix), ['Metis-Native-1.9.7-hotfix.1.zip'])
   assert.deepEqual(VARIANTS.win.assets(hotfix), ['Metis-Setup-1.9.7-hotfix.1.exe'])
   assert.deepEqual(VARIANTS['win-portable'].assets(hotfix), ['Metis-Portable-1.9.7-hotfix.1.exe'])
 
@@ -204,6 +210,19 @@ test('stage records the runner image, Node, Electron, electron-builder and per-f
       VARIANTS['mac-qa-identity'].configs
     )
     for (const config of record.builder_config) {
+      assert.equal(config.sha256, sha256(readFileSync(join(root, config.path))))
+    }
+    const nativeRecord = await stageBuild({
+      variant: 'mac-native',
+      repoRoot: root,
+      releaseDir,
+      outDir: join(root, 'native-out'),
+      env: e,
+      nodeVersion: NODE_VERSION
+    })
+    assert.deepEqual(nativeRecord.runner, record.runner)
+    assert.deepEqual(nativeRecord.builder_config.map((c) => c.path), VARIANTS['mac-native'].configs)
+    for (const config of nativeRecord.builder_config) {
       assert.equal(config.sha256, sha256(readFileSync(join(root, config.path))))
     }
   } finally {
@@ -288,7 +307,7 @@ test('stage records the mac identity from the environment, ad-hoc without it, an
     assert.deepEqual(withIdentity.signing, { mode: 'qa-identity', certificate_sha1: fingerprint.toLowerCase() })
 
     const withoutIdentity = await stageBuild({
-      variant: 'mac-qa-identity',
+      variant: 'mac-native',
       repoRoot: root,
       releaseDir,
       outDir: join(root, 'out-mac-qa'),
@@ -342,7 +361,7 @@ test('assemble binds every build to one commit and run and lists every asset in 
     assert.equal(provenance.run.url, `${e.GITHUB_SERVER_URL}/${e.GITHUB_REPOSITORY}/actions/runs/${e.GITHUB_RUN_ID}`)
     assert.deepEqual(
       provenance.builds.map((b) => b.variant),
-      ['mac', 'mac-qa-identity', 'win', 'win-portable']
+      ['mac', 'mac-qa-identity', 'mac-native', 'win', 'win-portable']
     )
     for (const build of provenance.builds) {
       assert.equal(Object.hasOwn(build, 'commit'), false)
@@ -595,15 +614,16 @@ test('a PASS record for one promotable asset never covers a different asset or p
       )
     }
 
-    // QA-only builds are built and tested but never shipped: a PASS record naming either asset covers
-    // no promotable asset, and alongside full coverage it is still a refusal.
-    for (const variant of ['mac-qa-identity', 'win-portable']) {
+    assert.deepEqual(PROMOTABLE_VARIANTS.sort(), ['mac', 'win'])
+
+    // QA-only builds are built and tested but never shipped: a PASS record naming any QA asset
+    // asset covers no promotable asset, and alongside full coverage it is still a refusal.
+    for (const variant of ['mac-qa-identity', 'mac-native', 'win-portable']) {
       const qaAsset = provenance.builds.find((build) => build.variant === variant).assets[0]
       const fullCoveragePlusQa = passEvidenceFor(provenance, assets) + passEvidenceLine(provenance, qaAsset.sha256)
       problems = evidenceProblems(fullCoveragePlusQa, provenance)
       assert.equal(problems.length, 1)
       assert.match(problems[0], /not one of this candidate's promotable assets/)
-
       const qaOnly = passEvidenceLine(provenance, qaAsset.sha256)
       problems = evidenceProblems(qaOnly, provenance)
       assert.equal(problems.length, assets.length + 1)
@@ -632,12 +652,12 @@ test('prepare-release publishes only the shipping installers with SHA256SUMS.txt
     mkdirSync(downloadsDir, { recursive: true })
     copyPromotableAssetsToDownloads(root, provenance, downloadsDir)
     // QA-only assets are never handed to promotion at all: they live only where their variants staged them.
-    const qaAsset = provenance.builds.find((b) => b.variant === 'mac-qa-identity').assets[0]
-    const qaZipElsewhere = join(root, 'staged', 'mac-qa-identity', 'assets', qaAsset.name)
-    assert.ok(existsSync(qaZipElsewhere))
-    const portableAsset = provenance.builds.find((b) => b.variant === 'win-portable').assets[0]
-    const portableElsewhere = join(root, 'staged', 'win-portable', 'assets', portableAsset.name)
-    assert.ok(existsSync(portableElsewhere))
+    const qaAssetsElsewhere = ['mac-qa-identity', 'mac-native', 'win-portable'].map((variant) => {
+      const asset = provenance.builds.find((b) => b.variant === variant).assets[0]
+      const path = join(root, 'staged', variant, 'assets', asset.name)
+      assert.ok(existsSync(path))
+      return path
+    })
 
     const evidencePath = join(root, 'evidence.jsonl')
     const macSha = provenance.builds.find((b) => b.variant === 'mac').assets[0].sha256
@@ -684,8 +704,7 @@ test('prepare-release publishes only the shipping installers with SHA256SUMS.txt
     assert.deepEqual(readFileSync(join(uploadDir, 'provenance.json')), Buffer.from(provenanceBytes))
 
     // The QA-only assets are still exactly where they were: prepareRelease never touched them.
-    assert.ok(existsSync(qaZipElsewhere))
-    assert.ok(existsSync(portableElsewhere))
+    for (const path of qaAssetsElsewhere) assert.ok(existsSync(path))
 
     const manifest = JSON.parse(readFileSync(join(outDir, 'manifest.json'), 'utf8'))
     assert.equal(manifest.length, 5)
@@ -828,9 +847,11 @@ test('release notes state version, commit, candidate run, promotion run, not-Lat
       assert.ok(notes.includes(asset.sha256))
     }
     const qaAsset = provenance.builds.find((b) => b.variant === 'mac-qa-identity').assets[0]
+    const nativeAsset = provenance.builds.find((b) => b.variant === 'mac-native').assets[0]
     assert.ok(!notes.includes(qaAsset.name), 'the QA-identity asset is never promoted, so it must not appear')
     const portableAsset = provenance.builds.find((b) => b.variant === 'win-portable').assets[0]
     assert.ok(!notes.includes(portableAsset.name), 'the Portable asset is QA-only, so it must not appear')
+    assert.ok(!notes.includes(nativeAsset.name), 'the native asset is never promoted, so it must not appear')
 
     assert.ok(notes.includes('ad-hoc signed and not notarized'))
     assert.ok(
