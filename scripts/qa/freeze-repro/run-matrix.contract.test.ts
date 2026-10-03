@@ -114,7 +114,9 @@ function hostedStubs(root: string, { sampleFails = false, secondLaunchKillsFirst
   const openLog = join(root, 'open-calls.txt')
   const firstPid = join(root, 'first-app-pid.txt')
   const secondPid = join(root, 'second-app-pid.txt')
+  const decoyPid = join(root, 'decoy-pid.txt')
   writeExecutable(app, `#!/usr/bin/env bash\nfor arg in "$@"; do [ "$arg" = "-e" ] && exit 0; done\nprintf '%s\\n' "$$" > '${bashPath(firstPid)}'\nexec sleep 120\n`)
+  writeFileSync(decoyPid, `${process.pid}\n`, 'utf8')
   writeExecutable(join(root, 'sample'), sampleFails
     ? '#!/usr/bin/env bash\nexit 1\n'
     : `#!/usr/bin/env bash\nprintf '%s\\n' "$1" >> '${bashPath(sampleLog)}'\nprintf 'Sampling process %s for 10 seconds\\nBinary: %s/Applications/Metis.app\\n' "$1" "$HOME" > "$4"\n`)
@@ -133,7 +135,7 @@ function hostedStubs(root: string, { sampleFails = false, secondLaunchKillsFirst
     '#!/usr/bin/env bash',
     'case " $* " in',
     `  *" -P "*) printf '%s\\n' ${Object.keys(CHILD_ROLES).join(' ')} ;;`,
-    `  *" -f "*) [ -s '${bashPath(secondPid)}' ] && kill -0 "$(cat '${bashPath(secondPid)}')" 2>/dev/null && cat '${bashPath(secondPid)}' ;;`,
+    `  *" -f "*) [ -s '${bashPath(decoyPid)}' ] && kill -0 "$(cat '${bashPath(decoyPid)}')" 2>/dev/null && cat '${bashPath(decoyPid)}'; [ -s '${bashPath(secondPid)}' ] && kill -0 "$(cat '${bashPath(secondPid)}')" 2>/dev/null && cat '${bashPath(secondPid)}' ;;`,
     'esac',
     ''
   ].join('\n'))
@@ -141,6 +143,7 @@ function hostedStubs(root: string, { sampleFails = false, secondLaunchKillsFirst
     '#!/usr/bin/env bash',
     'pid=""',
     'while [ $# -gt 0 ]; do [ "$1" = "-p" ] && pid=$2; shift; done',
+    `if [ -s '${bashPath(decoyPid)}' ] && [ "$pid" = "$(cat '${bashPath(decoyPid)}')" ]; then printf '%s\\n' 'sleep 120 --app ${bashPath(root)}/Metis.app'; exit 0; fi`,
     `if [ -s '${bashPath(secondPid)}' ] && [ "$pid" = "$(cat '${bashPath(secondPid)}')" ]; then printf '%s\\n' '${bashPath(app)}'; exit 0; fi`,
     'case "$pid" in',
     ...Object.entries(CHILD_ROLES).map(([pid, command]) => `  ${pid}) printf '%s\\n' '${command}' ;;`),
@@ -148,7 +151,7 @@ function hostedStubs(root: string, { sampleFails = false, secondLaunchKillsFirst
     'esac',
     ''
   ].join('\n'))
-  return { app, bin, sampleLog, openLog, secondPid }
+  return { app, bin, sampleLog, openLog, secondPid, decoyPid }
 }
 
 function hostedWindowsStubs(root: string, { secondLaunchFails = false } = {}) {
@@ -661,6 +664,9 @@ describe('M2-0462 hosted-live mode', () => {
       })
       const recordedSecondPid = Number(row4?.second_instance?.pid)
       expect(recordedSecondPid).toBeGreaterThan(0)
+      const decoyPid = Number(readFileSync(stubs.decoyPid, 'utf8'))
+      expect(recordedSecondPid).not.toBe(decoyPid)
+      expect(() => process.kill(decoyPid, 0)).not.toThrow()
       let secondStillRunning = true
       for (let attempt = 0; attempt < 10; attempt += 1) {
         try {

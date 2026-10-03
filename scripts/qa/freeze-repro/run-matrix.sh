@@ -266,9 +266,35 @@ stop_app() {
 }
 
 stop_second_instance() {
+  STOP_SECOND_INSTANCE_STATUS=not-needed
   if [[ -n "${SECOND_INSTANCE_PID:-}" ]]; then
-    kill "$SECOND_INSTANCE_PID" >/dev/null 2>&1 || true
-    wait "$SECOND_INSTANCE_PID" >/dev/null 2>&1 || true
+    local pid=$SECOND_INSTANCE_PID waited=0 stopped=false
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+      STOP_SECOND_INSTANCE_STATUS=already-exited
+      SECOND_INSTANCE_PID=""
+      return 0
+    fi
+    kill "$pid" >/dev/null 2>&1 || true
+    while (( waited < 10 )); do
+      if ! kill -0 "$pid" >/dev/null 2>&1; then
+        stopped=true
+        break
+      fi
+      sleep 0.2
+      waited=$((waited + 1))
+    done
+    if [[ "$stopped" == true ]]; then
+      STOP_SECOND_INSTANCE_STATUS=stopped
+    else
+      kill -KILL "$pid" >/dev/null 2>&1 || true
+      sleep 0.2
+      if kill -0 "$pid" >/dev/null 2>&1; then
+        STOP_SECOND_INSTANCE_STATUS=kill-sent-still-running
+      else
+        STOP_SECOND_INSTANCE_STATUS=killed
+      fi
+    fi
+    wait "$pid" >/dev/null 2>&1 || true
     SECOND_INSTANCE_PID=""
   fi
 }
@@ -322,19 +348,57 @@ record_main_exit_observation() {
   return 0
 }
 
-find_second_instance_pid() {
+pid_in_list() {
+  local needle=$1 pid
+  while IFS= read -r pid; do
+    [[ "$pid" != "$needle" ]] || return 0
+  done
+  return 1
+}
+
+descendant_pids() {
+  local parent=$1 child
+  [[ -n "$parent" ]] || return 0
+  for child in $("$PGREP_BIN" -P "$parent" 2>/dev/null || true); do
+    [[ "$child" =~ ^[0-9]+$ ]] || continue
+    printf '%s\n' "$child"
+    descendant_pids "$child"
+  done
+}
+
+command_is_exe_invocation() {
+  local pid=$1 command
+  command=$("$PS_BIN" -ww -o command= -p "$pid" 2>/dev/null || true)
+  [[ "$command" == "$EXE" || "$command" == "$EXE "* ]]
+}
+
+matching_second_instance_candidates() {
   local first_pid=$1
-  local pid command
+  local pid descendants
   local exe_base
   exe_base=$(basename "$EXE")
+  descendants=$(descendant_pids "$first_pid")
   for pid in $("$PGREP_BIN" -f "$exe_base" 2>/dev/null || true); do
     [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    [[ "$pid" != "$$" ]] || continue
+    [[ "$pid" != "${BASHPID:-$$}" ]] || continue
     [[ "$pid" != "$first_pid" ]] || continue
-    command=$("$PS_BIN" -ww -o command= -p "$pid" 2>/dev/null || true)
-    [[ "$command" == *"$EXE"* || "$command" == "$exe_base"* || "$command" == *"/$exe_base"* ]] || continue
+    ! printf '%s\n' "$descendants" | pid_in_list "$pid" || continue
+    command_is_exe_invocation "$pid" || continue
+    printf '%s\n' "$pid"
+  done
+}
+
+find_second_instance_pid() {
+  local first_pid=$1
+  local before_pids=${2:-}
+  local pid
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] || continue
+    ! printf '%s\n' "$before_pids" | pid_in_list "$pid" || continue
     printf '%s\n' "$pid"
     return 0
-  done
+  done < <(matching_second_instance_candidates "$first_pid")
   return 1
 }
 
@@ -981,24 +1045,26 @@ run_hosted_live_matrix() {
   reopen_status=ok
   local first_pid=${APP_PID:-}
   local first_state_before=not-running first_state_after=not-running second_launch_status=open-exited-zero relaunched_after_first_exit=false row4_extra
+  local second_instance_pids_before=""
   local second_state=not-found second_pid_json=null second_stop_status=not-needed
   if [[ -n "$first_pid" ]] && app_job_running "$first_pid"; then
     first_state_before=running
   fi
   # The second instance gets the same profile, so the app's single-instance lock hands it to the first.
+  second_instance_pids_before=$(matching_second_instance_candidates "$first_pid")
   ROW_WINDOW_STARTED_MS=$(epoch_ms)
   if ! "$OPEN_BIN" -n --env "ASKTOTO_USERDATA=$PROFILE" "$APP" --args "--user-data-dir=$PROFILE" >/dev/null 2>&1; then
     reopen_status="open-failed"
     second_launch_status=open-failed
   fi
   sleep "$REOPEN_SETTLE_SECONDS"
-  SECOND_INSTANCE_PID=$(find_second_instance_pid "$first_pid" || true)
+  SECOND_INSTANCE_PID=$(find_second_instance_pid "$first_pid" "$second_instance_pids_before" || true)
   if [[ -n "$SECOND_INSTANCE_PID" ]]; then
     second_pid_json=$SECOND_INSTANCE_PID
     if kill -0 "$SECOND_INSTANCE_PID" >/dev/null 2>&1; then
       second_state=running
       stop_second_instance
-      second_stop_status=stopped
+      second_stop_status=$STOP_SECOND_INSTANCE_STATUS
     else
       second_state=exited
       SECOND_INSTANCE_PID=""
@@ -1008,13 +1074,16 @@ run_hosted_live_matrix() {
   first_state_after=$first_state_before
   if [[ -n "$first_pid" ]] && record_main_exit_observation "row-4-second-instance-reopen" "$first_pid" "after-second-instance-launch"; then
     first_state_after=main-exited
-    stop_second_instance
+    if [[ -n "${SECOND_INSTANCE_PID:-}" ]]; then
+      stop_second_instance
+      second_stop_status=$STOP_SECOND_INSTANCE_STATUS
+    fi
     ensure_app_for_row "row-4-second-instance-reopen"
     relaunched_after_first_exit=true
   elif [[ -n "${APP_PID:-}" ]] && app_job_running "$APP_PID"; then
     first_state_after=running
   fi
-  row4_extra=",\"first_instance\":{\"pid\":${first_pid:-null},\"state_before_second_launch\":$(json_string "$first_state_before"),\"state_after_second_launch\":$(json_string "$first_state_after")},\"second_instance\":{\"launch_status\":$(json_string "$second_launch_status"),\"method\":\"open -n\",\"pid\":$second_pid_json,\"state\":$(json_string "$second_state"),\"stop_status\":$(json_string "$second_stop_status")},\"relaunched_after_first_exit\":$relaunched_after_first_exit"
+  row4_extra=",\"first_instance\":{\"pid\":${first_pid:-null},\"state_before_second_launch\":$(json_string "$first_state_before"),\"state_after_second_launch\":$(json_string "$first_state_after")},\"second_instance\":{\"launch_status\":$(json_string "$second_launch_status"),\"method\":\"open -n\",\"pid\":$second_pid_json,\"state\":$(json_string "$second_state"),\"state_at_settle\":$(json_string "$second_state"),\"stop_status\":$(json_string "$second_stop_status")},\"relaunched_after_first_exit\":$relaunched_after_first_exit"
   hosted_row "row-4-second-instance-reopen" none "open -n --env ASKTOTO_USERDATA=<profile> <app> --args --user-data-dir=<profile>" "$reopen_status" "$row4_extra"
 
   record_blocked_row "row-5-dataless-brain-idle" ',"automatic":false,"fixture":"dataless-brain-index"'
