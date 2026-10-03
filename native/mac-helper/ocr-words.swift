@@ -52,7 +52,7 @@ private func topLeftBox(_ box: CGRect) -> OcrWordsBox {
     let y0 = max(0, min(1, 1 - box.origin.y - box.size.height))
     let x1 = max(0, min(1, box.origin.x + box.size.width))
     let y1 = max(0, min(1, 1 - box.origin.y))
-    OcrWordsBox(
+    return OcrWordsBox(
         x: x0,
         y: y0,
         width: max(0, x1 - x0),
