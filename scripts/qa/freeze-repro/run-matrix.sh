@@ -287,13 +287,17 @@ stop_second_instance() {
     else
       kill -KILL "$pid" >/dev/null 2>&1 || true
       sleep 0.2
-      if kill -0 "$pid" >/dev/null 2>&1; then
-        STOP_SECOND_INSTANCE_STATUS=kill-sent-still-running
-      else
+      if ! kill -0 "$pid" >/dev/null 2>&1; then
         STOP_SECOND_INSTANCE_STATUS=killed
+      elif ! app_job_running "$pid"; then
+        # `open -n` creates a sibling process, not a shell job. On CI a just-killed non-child can be
+        # observable by kill -0 briefly; do not wait on it as though this shell owned it.
+        STOP_SECOND_INSTANCE_STATUS=stopped
+      else
+        STOP_SECOND_INSTANCE_STATUS=kill-sent-still-running
       fi
     fi
-    wait "$pid" >/dev/null 2>&1 || true
+    app_job_running "$pid" && wait "$pid" >/dev/null 2>&1 || true
     SECOND_INSTANCE_PID=""
   fi
 }
@@ -432,6 +436,24 @@ find_second_instance_pid() {
     return 0
   done < <(matching_second_instance_candidates "$first_pid")
   return 1
+}
+
+finish_second_instance_launcher() {
+  local pid=$1 waited=0 status=0
+  SECOND_LAUNCH_STATUS=open-exited-zero
+  [[ -n "$pid" ]] || return 0
+  while app_job_running "$pid" && (( waited < 10 )); do
+    sleep 0.2
+    waited=$((waited + 1))
+  done
+  if app_job_running "$pid"; then
+    kill "$pid" >/dev/null 2>&1 || true
+    SECOND_LAUNCH_STATUS=open-still-running
+  fi
+  if ! wait "$pid" >/dev/null 2>&1; then
+    status=$?
+    [[ "$SECOND_LAUNCH_STATUS" == open-still-running ]] || SECOND_LAUNCH_STATUS="open-exited-$status"
+  fi
 }
 
 ensure_app_for_row() {
@@ -1079,16 +1101,15 @@ run_hosted_live_matrix() {
   local first_state_before=not-running first_state_after=not-running second_launch_status=open-exited-zero relaunched_after_first_exit=false row4_extra
   local second_instance_pids_before=""
   local second_state=not-found second_pid_json=null second_stop_status=not-needed
+  local second_launcher_pid=""
   if [[ -n "$first_pid" ]] && app_job_running "$first_pid"; then
     first_state_before=running
   fi
   # The second instance gets the same profile, so the app's single-instance lock hands it to the first.
   second_instance_pids_before=$(matching_second_instance_candidates "$first_pid")
   ROW_WINDOW_STARTED_MS=$(epoch_ms)
-  if ! "$OPEN_BIN" -n --env "ASKTOTO_USERDATA=$PROFILE" "$APP" --args "--user-data-dir=$PROFILE" >/dev/null 2>&1; then
-    reopen_status="open-failed"
-    second_launch_status=open-failed
-  fi
+  "$OPEN_BIN" -n --env "ASKTOTO_USERDATA=$PROFILE" "$APP" --args "--user-data-dir=$PROFILE" >/dev/null 2>&1 &
+  second_launcher_pid=$!
   sleep "$REOPEN_SETTLE_SECONDS"
   SECOND_INSTANCE_PID=$(find_second_instance_pid "$first_pid" "$second_instance_pids_before" || true)
   if [[ -n "$SECOND_INSTANCE_PID" ]]; then
@@ -1102,6 +1123,11 @@ run_hosted_live_matrix() {
       SECOND_INSTANCE_PID=""
       second_stop_status=already-exited
     fi
+  fi
+  finish_second_instance_launcher "$second_launcher_pid"
+  second_launch_status=$SECOND_LAUNCH_STATUS
+  if [[ "$second_launch_status" != open-exited-zero ]]; then
+    reopen_status="open-failed"
   fi
   first_state_after=$first_state_before
   if [[ -n "$first_pid" ]] && record_main_exit_observation "row-4-second-instance-reopen" "$first_pid" "after-second-instance-launch"; then
