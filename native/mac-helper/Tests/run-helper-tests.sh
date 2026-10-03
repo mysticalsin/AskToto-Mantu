@@ -263,38 +263,40 @@ banner_title="Metis OCR Banner $$"
 target_ready="$work/target.ready"
 overlap_ready="$work/overlap.ready"
 banner_ready="$work/banner.ready"
-swift "$here/single-window-ocr-row.swift" window "$target_title" "TARGET ONLY" 80 420 normal >"$target_ready" 2>"$work/target.err" &
-target_pid=$!
-swift "$here/single-window-ocr-row.swift" window "$overlap_title" "OVERLAP NOISE" 120 430 normal >"$overlap_ready" 2>"$work/overlap.err" &
-overlap_pid=$!
-swift "$here/single-window-ocr-row.swift" window "$banner_title" "BANNER NOISE" 60 600 floating >"$banner_ready" 2>"$work/banner.err" &
-banner_pid=$!
-cleanup_single_window_row() {
-  kill "$target_pid" "$overlap_pid" "$banner_pid" 2>/dev/null || true
-  wait "$target_pid" "$overlap_pid" "$banner_pid" 2>/dev/null || true
-}
-for _ in $(seq 1 120); do
+single_window_row="$work/single-window-ocr-row"
+if swiftc -O -o "$single_window_row" "$here/single-window-ocr-row.swift"; then
+  "$single_window_row" window "$target_title" "TARGET ONLY" 80 420 normal >"$target_ready" 2>"$work/target.err" &
+  target_pid=$!
+  "$single_window_row" window "$overlap_title" "OVERLAP NOISE" 120 430 normal >"$overlap_ready" 2>"$work/overlap.err" &
+  overlap_pid=$!
+  "$single_window_row" window "$banner_title" "BANNER NOISE" 60 600 floating >"$banner_ready" 2>"$work/banner.err" &
+  banner_pid=$!
+  cleanup_single_window_row() {
+    kill "$target_pid" "$overlap_pid" "$banner_pid" 2>/dev/null || true
+    wait "$target_pid" "$overlap_pid" "$banner_pid" 2>/dev/null || true
+  }
+  for _ in $(seq 1 120); do
+    if grep -q ready "$target_ready" 2>/dev/null &&
+       grep -q ready "$overlap_ready" 2>/dev/null &&
+       grep -q ready "$banner_ready" 2>/dev/null; then
+      break
+    fi
+    sleep 0.25
+  done
   if grep -q ready "$target_ready" 2>/dev/null &&
      grep -q ready "$overlap_ready" 2>/dev/null &&
      grep -q ready "$banner_ready" 2>/dev/null; then
-    break
-  fi
-  sleep 0.25
-done
-if grep -q ready "$target_ready" 2>/dev/null &&
-   grep -q ready "$overlap_ready" 2>/dev/null &&
-   grep -q ready "$banner_ready" 2>/dev/null; then
-  capture_err="$work/single-window-capture.err"
-  swift "$here/single-window-ocr-row.swift" capture "$target_title" "$work/single-window-target.png" 2>"$capture_err"; capture_code=$?
-  if [ "$capture_code" = 75 ]; then
-    cat "$capture_err"
-    pass "single-window OCR row reports BLOCKED_EXTERNAL when Screen Recording is unavailable"
-  else
-    expect_exit "single-window target capture exits 0" 0 "$capture_code"
-    if [ "$capture_code" = 0 ]; then
-      out="$(run_denied_network "$helper" ocr-words "$work/single-window-target.png")"; code=$?
-      expect_exit "single-window target capture feeds ocr-words under deny-network sandbox" 0 "$code"
-      if printf '%s' "$out" | py '
+    capture_err="$work/single-window-capture.err"
+    "$single_window_row" capture "$target_title" "$work/single-window-target.png" 2>"$capture_err"; capture_code=$?
+    if [ "$capture_code" = 75 ]; then
+      cat "$capture_err"
+      pass "single-window OCR row reports BLOCKED_EXTERNAL when Screen Recording is unavailable"
+    else
+      expect_exit "single-window target capture exits 0" 0 "$capture_code"
+      if [ "$capture_code" = 0 ]; then
+        out="$(run_denied_network "$helper" ocr-words "$work/single-window-target.png")"; code=$?
+        expect_exit "single-window target capture feeds ocr-words under deny-network sandbox" 0 "$code"
+        if printf '%s' "$out" | py '
 import json, sys
 d = json.load(sys.stdin)
 text = " ".join(w["text"].strip().upper() for w in d["words"])
@@ -302,12 +304,18 @@ assert "TARGET" in text and "ONLY" in text, text
 for forbidden in ("OVERLAP", "BANNER", "NOISE"):
     assert forbidden not in text, text
 '; then pass "single-window OCR excludes overlapping and banner window text"; else fail "single-window OCR JSON: $out"; fi
+      fi
     fi
+  else
+    for err in "$work/target.err" "$work/overlap.err" "$work/banner.err"; do
+      [ ! -s "$err" ] || cat "$err"
+    done
+    fail "single-window OCR row windows became ready"
   fi
+  cleanup_single_window_row
 else
-  fail "single-window OCR row windows became ready"
+  fail "compile single-window OCR row harness"
 fi
-cleanup_single_window_row
 
 # --- code-identity (read-only; M2-0429) ------------------------------------------------------------
 "$helper" code-identity >/dev/null 2>&1; code=$?
