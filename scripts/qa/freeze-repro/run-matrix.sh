@@ -310,24 +310,28 @@ terminate_app_job() {
   local kill_wait_loops=${3:-50}
   local waited=0
   [[ -n "$pid" ]] || return 0
-  if app_job_running "$pid"; then
-    kill "$pid" >/dev/null 2>&1 || true
-    while (( waited < term_wait_loops )); do
-      app_job_running "$pid" || break
-      sleep 0.2
-      waited=$((waited + 1))
-    done
-  fi
-  if app_job_running "$pid"; then
+  kill "$pid" >/dev/null 2>&1 || true
+  while (( waited < term_wait_loops )); do
+    if ! kill -0 "$pid" >/dev/null 2>&1 || ! app_job_running "$pid"; then
+      break
+    fi
+    sleep 0.2
+    waited=$((waited + 1))
+  done
+  if kill -0 "$pid" >/dev/null 2>&1; then
     kill -KILL "$pid" >/dev/null 2>&1 || true
     waited=0
     while (( waited < kill_wait_loops )); do
-      app_job_running "$pid" || break
+      if ! kill -0 "$pid" >/dev/null 2>&1 || ! app_job_running "$pid"; then
+        break
+      fi
       sleep 0.2
       waited=$((waited + 1))
     done
   fi
-  app_job_running "$pid" && return 1
+  if kill -0 "$pid" >/dev/null 2>&1 && app_job_running "$pid"; then
+    return 1
+  fi
   wait "$pid" >/dev/null 2>&1 || true
   return 0
 }
@@ -1292,6 +1296,10 @@ fi
 [[ "$CDP_PORT" =~ ^[1-9][0-9]*$ && "$OBSERVE_TIMEOUT_MS" =~ ^[1-9][0-9]*$ ]] || fail "contract overrides must be positive integers"
 # Each observation makes at most three bounded evaluations per page plus the target list.
 OBSERVE_WALL_SECONDS=$(( OBSERVE_TIMEOUT_MS * 6 / 1000 + 10 ))
+if [[ "${M2_0008_CONTRACT_ALLOW_NON_DARWIN:-0}" == 1 ]]; then
+  OBSERVE_WALL_SECONDS=${M2_0008_CONTRACT_OBSERVE_WALL_SECONDS:-$(( OBSERVE_TIMEOUT_MS / 1000 + 8 ))}
+fi
+[[ "$OBSERVE_WALL_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail "contract observer wall timeout must be a positive integer"
 SYMPTOM_ROWS=""
 HOSTED_CONCLUSION=""
 FIFO_HOLDER_PID=""
