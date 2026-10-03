@@ -9,6 +9,7 @@
 import type { OverlayLayout } from '@shared/overlay-chrome'
 import { overlayUsesHover } from '@shared/overlay-chrome'
 import type { OverlayPlacement } from '@shared/overlay-placement'
+import { pointInRegion } from '@shared/right-edge-geometry'
 import { HOVER_ISLAND_HEIGHT_MAX_PX, type Rect } from './geometry'
 
 /** Cap leftover 44px slabs so Teams mute at Y=40 still misses. Top edge only: the right-edge reveal band
@@ -111,6 +112,7 @@ export function overlayWatchStep(input: {
   hugStub?: boolean
   placement?: OverlayPlacement
   heldCursor?: { x: number; y: number } | null
+  holdRegion?: readonly Rect[]
 }): { action: OverlayWatchAction; osHoverSeen: boolean } {
   const revealed = overlayWatchTreatAsRevealed(input.islandResting, input.windowVisible)
   const measured = decideCursorWatch({
@@ -118,7 +120,8 @@ export function overlayWatchStep(input: {
     restRect: input.restRect,
     revealedRect: input.revealedRect,
     revealed,
-    placement: input.placement
+    placement: input.placement,
+    holdRegion: input.holdRegion
   })
   const held =
     measured === 'hide' &&
@@ -175,6 +178,8 @@ export function inflateRect(rect: Rect, pad: number): Rect {
  * Revealed: stay if the cursor is still in that zone OR the inflated bar.
  * Hide only when it is in neither. macOS clamps the bar to workArea.y (~39);
  * a cursor on the top edge (Y≈12) must not oscillate hide/reveal.
+ * `holdRegion` (right edge, already grown by the grace) replaces both while revealed: it is the authority's
+ * holdRegion, which contains the band and the open rect widened to the edge.
  */
 export function decideCursorWatch(input: {
   cursor: { x: number; y: number }
@@ -183,11 +188,13 @@ export function decideCursorWatch(input: {
   revealed: boolean
   gracePx?: number
   placement?: OverlayPlacement
+  holdRegion?: readonly Rect[]
 }): CursorWatchDecision {
   const restRect = input.placement === 'right-edge' ? input.restRect : clampHoverRestRect(input.restRect)
   if (!input.revealed) {
     return pointInRect(input.cursor, restRect) ? 'reveal' : 'stay'
   }
+  if (input.holdRegion) return pointInRegion(input.cursor, input.holdRegion) ? 'stay' : 'hide'
   const leave = inflateRect(input.revealedRect, input.gracePx ?? CURSOR_LEAVE_GRACE_PX)
   if (pointInRect(input.cursor, restRect) || pointInRect(input.cursor, leave)) return 'stay'
   return 'hide'

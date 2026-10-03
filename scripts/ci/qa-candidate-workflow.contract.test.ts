@@ -1,13 +1,20 @@
-import { readFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { candidateArgv } from '../qa/lib/st-1-core.mjs'
 
 const root = join(__dirname, '..', '..')
 const workflow = readFileSync(join(root, '.github', 'workflows', 'qa-candidate.yml'), 'utf8').replace(/\r\n/g, '\n')
-const ownerSandboxProbe = readFileSync(join(root, 'scripts', 'hermetic', 'prove-owner-sandbox.sh'), 'utf8').replace(/\r\n/g, '\n')
+const ownerSandboxProbePath = join(root, 'scripts', 'hermetic', 'prove-owner-sandbox.sh')
+const ownerSandboxProbe = readFileSync(ownerSandboxProbePath, 'utf8').replace(/\r\n/g, '\n')
 const ownerRunnerProfile = readFileSync(join(root, 'scripts', 'hermetic', 'owner-runner.sb'), 'utf8').replace(/\r\n/g, '\n')
 const ownerAccountProfile = readFileSync(join(root, 'scripts', 'hermetic', 'owner-account.sb'), 'utf8').replace(/\r\n/g, '\n')
+
+function bashPath(path: string): string {
+  return path.replace(/\\/g, '/')
+}
 
 /** A job's text: from its two-space key to the next two-space key. No YAML library is a dependency here. */
 function jobBlock(name: string): string {
@@ -38,9 +45,9 @@ describe('QA candidate job st1-mac-dataless-synthetic (M2-0505, OD-36)', () => {
     expect(job).toContain('provenance.mjs verify provenance/provenance.json assets-mac mac')
   })
 
-  it('measures the synthetic dataless row with History off for five minutes', () => {
+  it('measures the synthetic dataless row with History delayed until after five idle minutes', () => {
     expect(job).toContain('--fixtures synthetic-dataless')
-    expect(job).toContain('--history off')
+    expect(job).toContain('--history after-idle')
     expect(job).toContain('--minutes 5')
     expect(job).toContain('--out st1-report/st-1-macos-synthetic-dataless.json')
   })
@@ -296,9 +303,14 @@ describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
   ]
   const ownerRunnerProbeDenials = [
     '/Library/CloudStorage',
+    '/Library/Keychains',
     '/Library/Application Support/Metis',
     '/Library/Application Support/Metis Light',
+    '/Library/Application Support/Métis',
+    '/Library/Application Support/AskToto',
     '/Library/Application Support/TotoWhisper',
+    '/Library/Application Support/asktoto-dev',
+    '/Library/Application Support/asktoto',
     '/.ssh',
     '/.aws',
     '/.gnupg',
@@ -358,16 +370,137 @@ describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
     expect(workflow).toContain('      - scripts/hermetic/run-under-owner-sandbox.sh\n')
     expect(workflow).toContain('      - scripts/hermetic/owner-account.sb\n')
     expect(workflow).toContain('      - scripts/hermetic/owner-runner.sb\n')
-    expect(ownerSandboxProbe).toContain('probe=(/bin/ls "$target")')
-    expect(ownerSandboxProbe).toContain('probe=(/bin/mkdir -p "$target")')
     expect(ownerSandboxProbe).toContain('OWNER_SANDBOX_PROFILE=owner-runner.sb')
     for (const path of ownerRunnerProbeDenials) {
-      expect(ownerSandboxProbe).toContain(`"$HOME${path}"`)
+      expect(ownerSandboxProbe).toContain(`"$probe_home${path}"`)
     }
+    expect(ownerSandboxProbe).toContain('/bin/ls -ld "$target"')
+    expect(ownerSandboxProbe).toContain('/bin/mkdir "$target"')
+    expect(ownerSandboxProbe).toContain('expected at least 2')
     expect(ownerSandboxProbe).toContain('assert_writable "$RUNNER_TEMP/owner-runner-sandbox-probe"')
     expect(ownerSandboxProbe).toContain('assert_writable "${GITHUB_WORKSPACE:-$PWD}/.owner-runner-sandbox-probe"')
     expect(ownerSandboxProbe).toContain("grep -Fqi 'Operation not permitted'")
     expect(ownerSandboxProbe).not.toContain('Operation not permitted|deny|sandbox')
+  })
+
+  it('proves existing paths with denied reads and absent paths with denied mkdirs', () => {
+    const sandbox = mkdtempSync(join(tmpdir(), 'owner-sandbox-probe-'))
+    try {
+      const home = join(sandbox, 'home')
+      const runnerTemp = join(sandbox, 'runner-temp')
+      const log = join(sandbox, 'wrapper.log')
+      const wrapper = join(sandbox, 'fake-sandbox.sh')
+      mkdirSync(join(home, 'Library', 'Application Support'), { recursive: true })
+      mkdirSync(join(home, 'Library', 'CloudStorage'), { recursive: true })
+      mkdirSync(join(home, 'Library', 'Keychains'), { recursive: true })
+      mkdirSync(runnerTemp)
+      writeFileSync(
+        wrapper,
+        `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$PROBE_WRAPPER_LOG"
+echo 'Operation not permitted' >&2
+exit 1
+`
+      )
+      chmodSync(wrapper, 0o755)
+
+      const result = spawnSync('bash', [ownerSandboxProbePath], {
+        cwd: root,
+        env: {
+          ...process.env,
+          GITHUB_ACTIONS: '',
+          PROVE_OWNER_SANDBOX_HOME: home,
+          PROVE_OWNER_SANDBOX_WRAPPER: wrapper,
+          PROBE_WRAPPER_LOG: log,
+          RUNNER_TEMP: runnerTemp
+        },
+        encoding: 'utf8'
+      })
+
+      expect(result.stderr).toBe('')
+      expect(result.status).toBe(0)
+      expect(result.stdout).toContain(`${bashPath(join(home, 'Library', 'CloudStorage'))} exists -> denied`)
+      expect(result.stdout).toContain(`${bashPath(join(home, 'Library', 'Keychains'))} exists -> denied`)
+      expect(result.stdout).toContain(`${bashPath(join(home, 'Library', 'Application Support', 'Metis'))} absent -> denied`)
+      const wrapperLog = readFileSync(log, 'utf8')
+      expect(wrapperLog).toContain(`/bin/ls -ld ${bashPath(join(home, 'Library', 'CloudStorage'))}`)
+      expect(wrapperLog).toContain(`/bin/ls -ld ${bashPath(join(home, 'Library', 'Keychains'))}`)
+      expect(wrapperLog).toContain(`/bin/mkdir ${bashPath(join(home, 'Library', 'Application Support', 'Metis'))}`)
+    } finally {
+      rmSync(sandbox, { recursive: true, force: true })
+    }
+  })
+
+  it('removes an absent protected path if the sandbox unexpectedly allows mkdir', () => {
+    const sandbox = mkdtempSync(join(tmpdir(), 'owner-sandbox-probe-'))
+    try {
+      const home = join(sandbox, 'home')
+      const runnerTemp = join(sandbox, 'runner-temp')
+      const wrapper = join(sandbox, 'fake-sandbox.sh')
+      const allowedPath = join(home, 'Library', 'Application Support', 'Metis')
+      mkdirSync(join(home, 'Library', 'Application Support'), { recursive: true })
+      mkdirSync(join(home, 'Library', 'CloudStorage'), { recursive: true })
+      mkdirSync(join(home, 'Library', 'Keychains'), { recursive: true })
+      mkdirSync(runnerTemp)
+      writeFileSync(
+        wrapper,
+        `#!/usr/bin/env bash
+set -euo pipefail
+if [ "$1" = /bin/mkdir ]; then
+  shift
+  exec /bin/mkdir "$@"
+fi
+echo 'Operation not permitted' >&2
+exit 1
+`
+      )
+      chmodSync(wrapper, 0o755)
+
+      const result = spawnSync('bash', [ownerSandboxProbePath], {
+        cwd: root,
+        env: {
+          ...process.env,
+          GITHUB_ACTIONS: '',
+          PROVE_OWNER_SANDBOX_HOME: home,
+          PROVE_OWNER_SANDBOX_WRAPPER: wrapper,
+          RUNNER_TEMP: runnerTemp
+        },
+        encoding: 'utf8'
+      })
+
+      expect(result.status).toBe(1)
+      expect(result.stdout).toContain(`::error::owner-runner sandbox allowed creating absent protected path ${bashPath(allowedPath)}`)
+      expect(existsSync(allowedPath)).toBe(false)
+    } finally {
+      rmSync(sandbox, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects test-only sandbox probe overrides in GitHub Actions', () => {
+    const sandbox = mkdtempSync(join(tmpdir(), 'owner-sandbox-probe-'))
+    try {
+      const runnerTemp = join(sandbox, 'runner-temp')
+      mkdirSync(runnerTemp)
+
+      const result = spawnSync('bash', [ownerSandboxProbePath], {
+        cwd: root,
+        env: {
+          ...process.env,
+          GITHUB_ACTIONS: 'true',
+          PROVE_OWNER_SANDBOX_WRAPPER: join(sandbox, 'fake-sandbox.sh'),
+          RUNNER_TEMP: runnerTemp
+        },
+        encoding: 'utf8'
+      })
+
+      expect(result.status).toBe(1)
+      expect(result.stdout).toContain(
+        '::error::owner-runner sandbox probe overrides are test-only and must not be set in GitHub Actions.'
+      )
+    } finally {
+      rmSync(sandbox, { recursive: true, force: true })
+    }
   })
 
   it('runs every strict candidate verification and launch through the owner-runner sandbox wrapper', () => {
@@ -389,7 +522,6 @@ describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
       expect(jobContinueOnError(block)).toBe('true')
       expect(block).not.toMatch(/^    env:/m)
       for (const step of steps(name)) {
-        expect(step).toContain('RUNNER_TEMP: ${{ runner.temp }}')
         expect(step).toContain('TMPDIR: ${{ runner.temp }}')
       }
 

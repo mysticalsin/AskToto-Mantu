@@ -56,6 +56,7 @@ export const DECISION_STATES = Object.freeze(['OPEN', 'ANSWERED_AS_DEFAULT', 'AN
 export const TEST_WORKFLOW = '.github/workflows/build.yml'
 export const M2_0008_DEFAULT_BUNDLE = 'out/m2-0008-freeze-repro'
 export const M2_0194_DEFAULT_BUNDLE = 'out/m2-0194-freeze-repro'
+export const M2_0195_DEFAULT_BUNDLE = 'out/windows-baseline'
 
 // Rows and interrupt checks every freeze-repro matrix records, whichever ticket's bundle carries it.
 const REQUIRED_MATRIX_ROWS = Object.freeze([
@@ -1035,6 +1036,116 @@ export function m2_0194BundleProblems(bundlePath) {
   return problems
 }
 
+const M2_0195_REQUIRED_ROWS = Object.freeze([
+  'census-cold-start',
+  'census-settled-idle',
+  'st-1-w-onedrive-placeholders-network-off',
+  'hk-w-end-task-owned-sidecars',
+  'managed-resource-census-representative',
+  'managed-foreground-watcher-cost',
+  'managed-edr-interaction'
+])
+
+const M2_0195_MANAGED_ROWS = new Set([
+  'st-1-w-onedrive-placeholders-network-off',
+  'hk-w-end-task-owned-sidecars',
+  'managed-resource-census-representative',
+  'managed-foreground-watcher-cost',
+  'managed-edr-interaction'
+])
+
+export function m2_0195BundleProblems(bundlePath) {
+  const root = resolve(bundlePath)
+  const problems = []
+  const requiredFiles = [
+    'README.md',
+    'environment.json',
+    'baseline.json',
+    'external-blockers.json',
+    'findings-handoff.json',
+    'SHA256SUMS.txt',
+    'M2-0195.lead-action.md'
+  ]
+  for (const file of requiredFiles) {
+    if (!existsSync(join(root, file))) problems.push(`${file}: missing from M2-0195 bundle`)
+  }
+  if (problems.length > 0) return problems
+
+  const environment = readJsonFile(join(root, 'environment.json'), problems, 'environment.json')
+  const baseline = readJsonFile(join(root, 'baseline.json'), problems, 'baseline.json')
+  const blockers = readJsonFile(join(root, 'external-blockers.json'), problems, 'external-blockers.json')
+  const handoff = readJsonFile(join(root, 'findings-handoff.json'), problems, 'findings-handoff.json')
+  const leadAction = readFileSync(join(root, 'M2-0195.lead-action.md'), 'utf8')
+
+  if (environment?.ticket !== 'M2-0195') problems.push('environment.json: ticket must be M2-0195')
+  if (environment?.version !== '1.9.6') problems.push('environment.json: version must be 1.9.6')
+  if (environment?.platform !== 'win32') problems.push('environment.json: platform must be win32')
+  if (environment?.host?.label !== 'windows-latest') problems.push('environment.json: hosted row must record host.label windows-latest')
+  if (typeof environment?.artifact_sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(environment.artifact_sha256)) {
+    problems.push('environment.json: artifact_sha256 must be a lowercase sha256')
+  }
+
+  if (baseline?.ticket !== 'M2-0195') problems.push('baseline.json: ticket must be M2-0195')
+  if (baseline?.version !== '1.9.6') problems.push('baseline.json: version must be 1.9.6')
+  if (!Array.isArray(baseline?.rows)) {
+    problems.push('baseline.json: rows array is required')
+  } else {
+    const rowsById = new Map(baseline.rows.map((row) => [row?.id, row]))
+    for (const id of M2_0195_REQUIRED_ROWS) {
+      if (!rowsById.has(id)) problems.push(`baseline.json: missing required row ${id}`)
+    }
+    for (const id of ['census-cold-start', 'census-settled-idle']) {
+      const row = rowsById.get(id)
+      if (row && !['MEASURED', 'SUPPORTED_NOT_RUN'].includes(row.status)) {
+        problems.push(`baseline.json: ${id} must be MEASURED or SUPPORTED_NOT_RUN`)
+      }
+      if (row?.status === 'MEASURED' && typeof row.artifact !== 'string') {
+        problems.push(`baseline.json: ${id} MEASURED rows must name the census artifact`)
+      }
+    }
+    for (const id of M2_0195_MANAGED_ROWS) {
+      const row = rowsById.get(id)
+      if (!row) continue
+      if (row.status !== 'BLOCKED_EXTERNAL') problems.push(`baseline.json: ${id} must be BLOCKED_EXTERNAL until the managed laptop runs`)
+      if (typeof row.unblock !== 'string' || row.unblock.trim().length < 20) {
+        problems.push(`baseline.json: ${id} needs an exact unblock step`)
+      }
+    }
+  }
+
+  if (blockers?.ticket !== 'M2-0195') problems.push('external-blockers.json: ticket must be M2-0195')
+  if (!Array.isArray(blockers?.blockers) || blockers.blockers.length === 0) {
+    problems.push('external-blockers.json: blockers array is required')
+  } else {
+    for (const blocker of blockers.blockers) {
+      if (blocker.status !== 'BLOCKED_EXTERNAL') problems.push('external-blockers.json: blockers must be BLOCKED_EXTERNAL')
+      if (typeof blocker.unblock_step !== 'string' || !/managed Windows 11/.test(blocker.unblock_step) ||
+          !/OneDrive Files On-Demand/.test(blocker.unblock_step) || !/EDR/.test(blocker.unblock_step)) {
+        problems.push('external-blockers.json: managed-laptop unblock step must name Windows 11, EDR and OneDrive Files On-Demand')
+      }
+    }
+  }
+
+  if (handoff?.ticket !== 'M2-0195') problems.push('findings-handoff.json: ticket must be M2-0195')
+  if (handoff?.release !== '1.9.7') problems.push('findings-handoff.json: release must be 1.9.7')
+  if (!/ticket or an explicit residual/.test(String(handoff?.rule ?? ''))) {
+    problems.push('findings-handoff.json: rule must require each finding to become a ticket or an explicit residual')
+  }
+  if (!Array.isArray(handoff?.rows) || handoff.rows.length === 0) {
+    problems.push('findings-handoff.json: rows array is required')
+  }
+
+  if (!leadAction.includes('LEAD_ACTION:')) problems.push('M2-0195.lead-action.md: missing LEAD_ACTION handoff')
+  if (!leadAction.includes('LIVE_VERIFIED') || !leadAction.includes('MEASURED')) {
+    problems.push('M2-0195.lead-action.md: must hand off filing the M2-0195 LIVE_VERIFIED/MEASURED record')
+  }
+  if (!leadAction.includes('1.9.7 release notes') || !leadAction.includes('ticket or explicit residual')) {
+    problems.push('M2-0195.lead-action.md: must hand off ticket or explicit residual filing in the 1.9.7 release notes')
+  }
+
+  return problems
+}
+
 export const RELEASE_GATES_SCHEMA = 1
 const GATE_ROW_KEYS = new Set(['id', 'ticket', 'level', 'bytes', 'hosts', 'accept', 'match', 'sha256'])
 const GATE_BYTES = Object.freeze(['promotable', 'qa-identity', 'baseline'])
@@ -1333,7 +1444,7 @@ function releaseMain(values) {
 }
 
 async function main() {
-  const usage = 'usage: check.mjs --ledger <path>  |  check.mjs --pr-event <path>  |  check.mjs --ticket M2-0008|M2-0194 [--bundle <path>]  |  ' +
+  const usage = 'usage: check.mjs --ledger <path>  |  check.mjs --pr-event <path>  |  check.mjs --ticket M2-0008|M2-0194|M2-0195 [--bundle <path>]  |  ' +
     'check.mjs --ticket M2-0198 [--record <path>]  |  ' +
     'check.mjs --release <version> --gates <gates.json> --provenance <provenance.json> --ledger <tickets.json> --notes <release notes .md>'
   let values
@@ -1407,9 +1518,10 @@ async function main() {
     }
     const checker = {
       'M2-0008': { check: m2_0008BundleProblems, defaultBundle: M2_0008_DEFAULT_BUNDLE },
-      'M2-0194': { check: m2_0194BundleProblems, defaultBundle: M2_0194_DEFAULT_BUNDLE }
+      'M2-0194': { check: m2_0194BundleProblems, defaultBundle: M2_0194_DEFAULT_BUNDLE },
+      'M2-0195': { check: m2_0195BundleProblems, defaultBundle: M2_0195_DEFAULT_BUNDLE }
     }[values.ticket]
-    if (!checker) return usageExit('only --ticket M2-0008, M2-0194 and M2-0198 are supported in this public-repo checker')
+    if (!checker) return usageExit('only --ticket M2-0008, M2-0194, M2-0195 and M2-0198 are supported in this public-repo checker')
     const bundle = values.bundle ?? checker.defaultBundle
     const problems = checker.check(resolve(bundle))
     if (problems.length > 0) {

@@ -221,10 +221,22 @@ export function countStorageSaturations(mainLogText) {
   return mainLogText.split('\n').filter((line) => line.includes(STORAGE_SATURATED_LOG)).length
 }
 
-/** Whether this sample should schedule the next History probe. Pure so the idle row can prove no probe is
- *  scheduled while `--history off` keeps History untouched. */
-export function shouldProbeHistory({ historyOn, historyRunning, tMs, historyLastMs, fromMs, everyMs }) {
-  return historyOn && !historyRunning && tMs >= fromMs && tMs - historyLastMs >= everyMs
+/** Whether this sample should schedule the next History probe. Pure so idle rows can prove when History is
+ *  untouched, including a delayed mode that opens it only after the idle measurement window. */
+export function shouldProbeHistory({ historyMode = 'on', historyRunning, historyAnswered = false, tMs, historyLastMs, fromMs, everyMs, retryUntilMs = Infinity }) {
+  if (historyMode === 'off' || historyRunning) return false
+  if (historyMode === 'after-idle' && historyAnswered) return false
+  return tMs >= fromMs && tMs <= retryUntilMs && tMs - historyLastMs >= everyMs
+}
+
+/** The History probe window. In after-idle mode, the first probe is scheduled from the end of the
+ *  measurement window, not from process spawn, so the row stays idle for the full sampled period. */
+export function historyProbeWindow({ historyMode = 'on', nowMs, minutes, defaultFromMs, retryMs }) {
+  const fromMs = historyMode === 'after-idle' ? nowMs + minutes * 60_000 : defaultFromMs
+  return {
+    fromMs,
+    retryUntilMs: historyMode === 'after-idle' ? fromMs + retryMs : Infinity
+  }
 }
 
 /** The representative profile of ARCHITECTURE 6.1: 59 meetings, 6 of them cloud-only, and a mostly
@@ -430,9 +442,16 @@ function fifoRefusalEvidence(row, measured, evidence, fixtures, fixtureCounts) {
       (entry.unavailable ?? entry.notDownloaded) >= requiredUnavailableRows &&
       settledWithin(entry.calls?.brainStatus, Number.POSITIVE_INFINITY)
   )
+  const reason = matchingProbe
+    ? 'history-refused-fixtures'
+    : answered.length === 0
+      ? 'history-did-not-answer'
+      : brainStatusAnswered && typeof unavailableRows === 'number' && unavailableRows < requiredUnavailableRows
+        ? 'history-answer-lacked-required-refusals'
+        : 'history-did-not-prove-refusal'
   return {
     exercised: Boolean(matchingProbe),
-    reason: matchingProbe ? 'history-refused-fixtures' : 'history-did-not-prove-refusal',
+    reason,
     historyProbesAnswered: answered.length,
     unavailableRows,
     requiredUnavailableRows,
@@ -607,9 +626,11 @@ export function buildReport({
   // The control row has nothing to exercise: its verdict is the criteria alone.
   const exercised = refusalEvidence?.exercised ?? (row === 'none' || evidence?.exercised)
   const openedNonRegularFixture = criteria.some((criterion) => criterion.name === 'non-regular-fixtures-unopened' && !criterion.pass)
+  // OD-43/M2-0534: after-idle rows must resolve to PASS or FAIL; missing refusal proof is a row failure.
+  const delayedHistoryFailed = historyMode === 'after-idle' && refusalEvidence && !refusalEvidence.exercised
   const verdict = !complete
     ? 'INCOMPLETE'
-    : openedNonRegularFixture
+    : openedNonRegularFixture || delayedHistoryFailed
       ? 'FAIL'
       : !exercised
         ? 'NOT_EXERCISED'

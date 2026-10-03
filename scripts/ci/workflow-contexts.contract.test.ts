@@ -50,17 +50,17 @@ function jobBlocks(source: string): Map<string, string[]> {
   return jobs
 }
 
-function scalarAt(job: string[], key: 'if' | 'runs-on'): string | undefined {
+function valueAt(job: string[], key: 'if' | 'runs-on'): string | undefined {
   for (let index = 0; index < job.length; index += 1) {
     const match = new RegExp(`^ {4}${key}:\\s*(.*)$`).exec(job[index])
     if (!match) continue
-    if (!/^[>|][-+]?$/.test(match[1])) return match[1]
-    const folded: string[] = []
+    if (match[1] && !/^[>|][-+]?$/.test(match[1])) return match[1]
+    const nested: string[] = []
     for (const line of job.slice(index + 1)) {
       if (/^ {4}\S/.test(line)) break
-      if (/^ {6}\S/.test(line)) folded.push(line.trim())
+      if (/^ {6}\S/.test(line)) nested.push(line.trim())
     }
-    return folded.join(' ')
+    return nested.join(' ')
   }
 }
 
@@ -68,10 +68,22 @@ function jobEnvScalars(job: string[]): Map<string, string> {
   const values = new Map<string, string>()
   const start = job.findIndex((line) => line === '    env:')
   if (start === -1) return values
-  for (const line of job.slice(start + 1)) {
+  const env = job.slice(start + 1)
+  for (let index = 0; index < env.length; index += 1) {
+    const line = env[index]
     if (/^ {4}\S/.test(line)) break
     const match = /^ {6}([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/.exec(line)
-    if (match) values.set(match[1], match[2])
+    if (!match) continue
+    if (match[2] && !/^[>|][-+]?$/.test(match[2])) {
+      values.set(match[1], match[2])
+      continue
+    }
+    const nested: string[] = []
+    for (const nestedLine of env.slice(index + 1)) {
+      if (/^ {6}\S/.test(nestedLine) || /^ {4}\S/.test(nestedLine)) break
+      if (/^ {8}\S/.test(nestedLine)) nested.push(nestedLine.trim())
+    }
+    values.set(match[1], nested.join(' '))
   }
   return values
 }
@@ -87,8 +99,9 @@ function referencedContexts(value: string | undefined, options: { implicitExpres
     }
   }
   if (options.implicitExpression) {
-    for (const context of value.matchAll(CONTEXT_ROOT_PATTERN)) {
-      const previous = context.index && context.index > 0 ? value[context.index - 1] : ''
+    const unquoted = value.replace(/'[^']*'|"[^"]*"/g, '')
+    for (const context of unquoted.matchAll(CONTEXT_ROOT_PATTERN)) {
+      const previous = context.index && context.index > 0 ? unquoted[context.index - 1] : ''
       if (previous === '.' || /[A-Za-z0-9_-]/.test(previous)) continue
       contexts.add(context[1])
     }
@@ -106,7 +119,7 @@ function contextViolations(workflow: string, source: string): Violation[] {
     }
     for (const location of ['jobs.<id>.if', 'jobs.<id>.runs-on'] as const) {
       const key = location === 'jobs.<id>.if' ? 'if' : 'runs-on'
-      for (const context of referencedContexts(scalarAt(block, key), { implicitExpression: location === 'jobs.<id>.if' })) {
+      for (const context of referencedContexts(valueAt(block, key), { implicitExpression: location === 'jobs.<id>.if' })) {
         if (!ALLOWED_CONTEXTS[location].has(context)) violations.push({ workflow, job, location, context })
       }
     }
@@ -181,13 +194,38 @@ jobs:
     ])
   })
 
+  it('rejects disallowed contexts in multiline job env and runs-on forms', () => {
+    const source = `name: Broken
+on:
+  pull_request:
+jobs:
+  invalid-env:
+    runs-on: ubuntu-latest
+    env:
+      FROM_RUNNER: >-
+        \${{ runner.temp }}
+    steps:
+      - run: echo ok
+  invalid-runs-on:
+    runs-on:
+      - self-hosted
+      - \${{ runner.os }}
+    steps:
+      - run: echo ok
+`
+    expect(summary(contextViolations('broken.yml', source))).toEqual([
+      'broken.yml: invalid-env jobs.<id>.env.FROM_RUNNER uses disallowed runner context',
+      'broken.yml: invalid-runs-on jobs.<id>.runs-on uses disallowed runner context'
+    ])
+  })
+
   it('accepts contexts GitHub allows at the guarded job locations', () => {
     const source = `name: Valid
 on:
   pull_request:
 jobs:
   valid:
-    if: github.event_name == 'pull_request' && inputs.suite != 'skip'
+    if: github.event_name == 'pull_request' && inputs.suite != 'skip' && inputs.version != 'v1.2'
     runs-on: \${{ matrix.os }}
     strategy:
       matrix:
