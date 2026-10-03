@@ -46,6 +46,26 @@ export interface RevealController {
   hasPendingReveal(): boolean
 }
 
+export interface RevealLifecycleDeps {
+  env: { METIS_REVEAL?: string }
+  argv: readonly string[]
+  ensureWindow(): RevealWindow | null
+  presenterState(): PresenterState
+  showForAsk(w: RevealWindow): void
+  cancelPendingRepark(): void
+  restoreInteractiveLayout(): void
+  repairOffscreenBounds(): void
+  disableClickThrough(): void
+  traceReveal(reason: RevealReason, reveal: () => void): void
+  noteOverlay(cause: 'hotkey' | 'toggle'): void
+}
+
+export interface RevealLifecycle {
+  reveal(reason: RevealReason, options?: RevealOptions): void
+  markBootComplete(): RevealResult | null
+  hasPendingReveal(): boolean
+}
+
 export function revealLegacyEnabled(
   env: { METIS_REVEAL?: string },
   argv: readonly string[]
@@ -136,5 +156,37 @@ export function createRevealController(deps: RevealControllerDeps): RevealContro
     hasPendingReveal() {
       return pendingReveal !== null
     }
+  }
+}
+
+export function createRevealLifecycle(deps: RevealLifecycleDeps): RevealLifecycle {
+  const legacyRevealEnabled = (): boolean => revealLegacyEnabled(deps.env, deps.argv)
+
+  function legacyReveal(reason: RevealReason, options: Required<RevealOptions>): void {
+    const w = deps.ensureWindow()
+    if (!w) return
+    legacyRevealWindow(reason, options, w, deps.showForAsk)
+  }
+
+  const revealController = createRevealController({
+    ensureWindow: deps.ensureWindow,
+    legacyRevealEnabled,
+    legacyReveal,
+    presenterState: deps.presenterState,
+    cancelPendingRepark: deps.cancelPendingRepark,
+    restoreInteractiveLayout: deps.restoreInteractiveLayout,
+    repairOffscreenBounds: deps.repairOffscreenBounds,
+    disableClickThrough: deps.disableClickThrough
+  })
+
+  return {
+    reveal(reason, options = {}) {
+      deps.traceReveal(reason, () => {
+        revealController.reveal(reason, options)
+      })
+      deps.noteOverlay(reason === 'hotkey' ? 'hotkey' : 'toggle')
+    },
+    markBootComplete: () => revealController.markBootComplete(),
+    hasPendingReveal: () => revealController.hasPendingReveal()
   }
 }

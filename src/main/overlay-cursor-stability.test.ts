@@ -131,7 +131,7 @@ function nativeHover(options: {
   const layoutChangeHandler = lift('function parkOverlayForLayoutChange(): void {', '/** Pin the overlay')
   const moveHandler = lift('function moveBy(dx: number, dy: number): void {', '/**\n * Keep the overlay reachable', 'function moveBy(dx, dy) {')
   const resizeHandler = lift('function resizeTo(height: number): void {', '/** Collapse to / expand', 'function resizeTo(height) {')
-  const pageRevealHandler = lift('function revealTopCenterHoverInPage(): void {', 'const revealController')
+  const pageRevealHandler = lift('function revealTopCenterHoverInPage(): void {', 'const revealLifecycle')
   const build = new Function(...Object.keys(deps), `
     let islandResting = ${rightEdge ? rightEdge.resting : true};
     let settingsSurfaceOpen = false;

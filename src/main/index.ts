@@ -30,9 +30,7 @@ import { randomBytes } from 'node:crypto'
 import { bindReadinessThenNavigate } from './renderer-readiness'
 import { bindAct1DomProbe } from './act1-dom-probe'
 import {
-  createRevealController,
-  legacyRevealWindow,
-  revealLegacyEnabled as revealLegacyFlagEnabled,
+  createRevealLifecycle,
   type PresenterState,
   type RevealReason
 } from './lifecycle/reveal'
@@ -3731,16 +3729,6 @@ function restartMetisWindow(): void {
   reloadOverlay(w)
 }
 
-function revealLegacyEnabled(): boolean {
-  return revealLegacyFlagEnabled(process.env, process.argv)
-}
-
-function legacyReveal(reason: RevealReason, options: { focus: boolean }): void {
-  const w = ensureWindow()
-  if (!w) return
-  legacyRevealWindow(reason, options, w, (target) => showForAsk(target as BrowserWindow))
-}
-
 /** A keyboard/tray/relaunch reveal of the right-edge dock opens the page's drawer too (never a stretched
  *  rail) and parks again once the pointer stays away. Top-center reveals are unchanged. */
 function revealRightEdgeDockInPage(): void {
@@ -3760,10 +3748,11 @@ function revealTopCenterHoverInPage(): void {
   notifyOverlayCursorHover(true)
 }
 
-const revealController = createRevealController({
+const revealLifecycle = createRevealLifecycle({
+  env: process.env,
+  argv: process.argv,
   ensureWindow,
-  legacyRevealEnabled: revealLegacyEnabled,
-  legacyReveal,
+  showForAsk: (target) => showForAsk(target as BrowserWindow),
   presenterState,
   cancelPendingRepark: cancelOverlayLeavePark,
   restoreInteractiveLayout: () => {
@@ -3780,15 +3769,12 @@ const revealController = createRevealController({
     } catch {
       /* headless */
     }
-  }
+  },
+  traceReveal: (reason, run) => reveals.trace(reason, run),
+  noteOverlay: (cause) => noteOverlay(cause)
 })
 
-function reveal(reason: RevealReason, options: { focus?: boolean } = {}): void {
-  reveals.trace(reason, () => {
-    revealController.reveal(reason, options)
-  })
-  noteOverlay(reason === 'hotkey' ? 'hotkey' : 'toggle') // tray, relaunch, activate, notification: a show request
-}
+const reveal = revealLifecycle.reveal
 
 function writeSmokeParkState(w: Electron.BrowserWindow): void {
   try {
@@ -9641,7 +9627,7 @@ if (!app.requestSingleInstanceLock()) {
   withBootFirstShowDeferred(() => runStep('createWindow', createWindow))
   scheduleTrayAfterFirstPaint(win, () => runStep('createTray', createTray))
   bootWork.releaseAfterFirstShow(win)
-  revealController.markBootComplete()
+  revealLifecycle.markBootComplete()
   // FITO-185-G-SHOW: createWindow completed → past kill zone; clear sentinel (brain stays on 15s).
   clearBootWatchOnce('createWindow')
   // FITO-185-G-TIMER: also setImmediate + unlock-screen so App Nap / locked-screen cannot leave

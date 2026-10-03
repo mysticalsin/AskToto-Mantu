@@ -17,31 +17,32 @@ import { describe, it, expect } from 'vitest'
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const lifecycleFile = ['main-lifecycle', 'ts'].join('.')
 const lifecycleSrc = readFileSync(join(__dirname, 'lifecycle', lifecycleFile), 'utf8')
+const revealSrc = readFileSync(join(__dirname, 'lifecycle', 'reveal.ts'), 'utf8')
 
 /** Brace-counted function body extraction — robust to nested blocks (unlike a marker-to-marker slice,
  *  which breaks the moment a sibling function's name changes). */
-function functionBody(name: string): { start: number; end: number; text: string } {
+function functionBody(source: string, sourceName: string, name: string): { start: number; end: number; text: string } {
   const marker = `function ${name}(`
-  const start = indexSrc.indexOf(marker)
-  expect(start, `${name} not found in index.ts`).toBeGreaterThan(-1)
-  const braceOpen = indexSrc.indexOf('{', start)
+  const start = source.indexOf(marker)
+  expect(start, `${name} not found in ${sourceName}`).toBeGreaterThan(-1)
+  const braceOpen = source.indexOf('{', start)
   expect(braceOpen, `${name}: opening brace not found`).toBeGreaterThan(-1)
   let depth = 0
   let i = braceOpen
-  for (; i < indexSrc.length; i++) {
-    if (indexSrc[i] === '{') depth++
-    else if (indexSrc[i] === '}') {
+  for (; i < source.length; i++) {
+    if (source[i] === '{') depth++
+    else if (source[i] === '}') {
       depth--
       if (depth === 0) break
     }
   }
-  expect(i, `${name}: matching closing brace not found`).toBeLessThan(indexSrc.length)
-  return { start, end: i + 1, text: indexSrc.slice(start, i + 1) }
+  expect(i, `${name}: matching closing brace not found`).toBeLessThan(source.length)
+  return { start, end: i + 1, text: source.slice(start, i + 1) }
 }
 
 describe('MQA-275 — the overlay never steals focus except the one deliberate ask exception', () => {
   it('showForAsk exists, calls show()+focus(), and its doc comment names it as the one exception', () => {
-    const { text } = functionBody('showForAsk')
+    const { text } = functionBody(indexSrc, 'index.ts', 'showForAsk')
     expect(text).toMatch(/\.show\(\)/)
     expect(text).toMatch(/\.focus\(\)/)
     const fnStart = indexSrc.indexOf('function showForAsk(')
@@ -52,17 +53,15 @@ describe('MQA-275 — the overlay never steals focus except the one deliberate a
   })
 
   it('every win.show()/w.show() call site in index.ts sits inside an allowed focus helper', () => {
-    const ask = functionBody('showForAsk')
-    const exclusive = functionBody('showForExclusiveOnboarding')
-    const legacy = functionBody('legacyReveal')
+    const ask = functionBody(indexSrc, 'index.ts', 'showForAsk')
+    const exclusive = functionBody(indexSrc, 'index.ts', 'showForExclusiveOnboarding')
     const showCall = /\b(?:win|w)\??\.show\(\)/g
     const offenders: number[] = []
     let m: RegExpExecArray | null
     while ((m = showCall.exec(indexSrc))) {
       const insideAsk = m.index >= ask.start && m.index < ask.end
       const insideExclusive = m.index >= exclusive.start && m.index < exclusive.end
-      const insideLegacy = m.index >= legacy.start && m.index < legacy.end
-      if (!insideAsk && !insideExclusive && !insideLegacy) offenders.push(m.index)
+      if (!insideAsk && !insideExclusive) offenders.push(m.index)
     }
     const lines = offenders.map((idx) => indexSrc.slice(0, idx).split('\n').length)
     expect(
@@ -94,5 +93,10 @@ describe('MQA-275 — the overlay never steals focus except the one deliberate a
     // The two tray menu items (Settings…, Today's agenda) no longer call win.show() at all — they let
     // sendHotkey() reveal (non-activating, since neither action is 'ask').
     expect(indexSrc).not.toMatch(/label: 'Settings…', click: \(\) => \{\s*\n\s*if \(win/)
+  })
+
+  it('legacy reveal focus remains isolated in the lifecycle reveal helper', () => {
+    const { text } = functionBody(revealSrc, 'lifecycle/reveal.ts', 'legacyReveal')
+    expect(text).toContain('legacyRevealWindow(reason, options, w, deps.showForAsk)')
   })
 })

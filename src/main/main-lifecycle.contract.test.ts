@@ -14,6 +14,7 @@ import { describe, expect, it, vi } from 'vitest'
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
 const lifecycleFile = ['main-lifecycle', 'ts'].join('.')
 const lifecycleSrc = readFileSync(join(__dirname, 'lifecycle', lifecycleFile), 'utf8').replace(/\r\n/g, '\n')
+const revealSrc = readFileSync(join(__dirname, 'lifecycle', 'reveal.ts'), 'utf8').replace(/\r\n/g, '\n')
 
 /** Slice the source from `from` up to (excluding) the next occurrence of `to`. Sliced inside each test so
  *  one drifted marker reports as its own failure instead of aborting collection for the whole file. */
@@ -31,6 +32,14 @@ function sliceLifecycleBetween(from: string, to: string): string {
   const end = lifecycleSrc.indexOf(to, start)
   expect(end, `end marker not found after ${from}: ${to}`).toBeGreaterThan(-1)
   return lifecycleSrc.slice(start, end)
+}
+
+function sliceRevealBetween(from: string, to: string): string {
+  const start = revealSrc.indexOf(from)
+  expect(start, `marker not found: ${from}`).toBeGreaterThan(-1)
+  const end = revealSrc.indexOf(to, start)
+  expect(end, `end marker not found after ${from}: ${to}`).toBeGreaterThan(-1)
+  return revealSrc.slice(start, end)
 }
 
 describe('MQA-155 — a failed post-sweep source refresh is observed, never fabricated into an app.crash', () => {
@@ -142,7 +151,7 @@ describe('MQA-172 — a second launch after a failed boot window recreates it in
   })
 
   it('M2-0036 — the reveal wrapper delegates to the one controller instead of reimplementing window show logic', () => {
-    const body = sliceBetween('function reveal(reason: RevealReason', 'function handleSmokeReopenProbe')
+    const body = sliceRevealBetween('reveal(reason, options = {})', 'markBootComplete:')
     expect(body).toContain('revealController.reveal(reason, options)')
     expect(body).not.toMatch(/\.(show|showInactive|focus)\(/)
     expect(body).not.toMatch(/setIgnoreMouseEvents/)
