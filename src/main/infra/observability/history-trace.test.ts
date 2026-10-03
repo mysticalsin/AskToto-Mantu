@@ -22,19 +22,27 @@ describe('createHistoryTracer', () => {
     expect(audit).toHaveBeenCalledWith('history.request', { requestId: id(1), stage: 'received', queueMs: 0 })
   })
 
-  it('audits served ok with mainMs and resultCount', async () => {
+  it('audits served ok with mainMs, resultCount and notDownloadedCount', async () => {
     const audit = vi.fn()
     const times = [10, 37]
     const tracer = createHistoryTracer({ audit, wallClock: () => 125, clock: () => times.shift() ?? 37 })
 
-    await expect(tracer.traceList({ requestId: id(2), sentAt: 100 }, async () => ['a', 'b'] as const)).resolves.toEqual(['a', 'b'])
+    const rows = [
+      { title: 'local', notDownloaded: false },
+      { title: 'cloud', notDownloaded: true },
+      { title: 'unknown' },
+      { title: 'truthy string', notDownloaded: 'true' }
+    ] as const
+
+    await expect(tracer.traceList({ requestId: id(2), sentAt: 100 }, async () => rows)).resolves.toEqual(rows)
 
     expect(audit).toHaveBeenCalledWith('history.request', {
       requestId: id(2),
       stage: 'served',
       outcome: 'ok',
       mainMs: 27,
-      resultCount: 2
+      resultCount: 4,
+      notDownloadedCount: 1
     })
   })
 

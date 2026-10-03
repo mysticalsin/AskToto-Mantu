@@ -236,6 +236,219 @@ describe('diagnostics summary schema 2', () => {
     expect(Object.keys(summary.scope.days)).toEqual(['2026-01-02', '2026-01-03'])
   })
 
+  it('adds content-free History timing blocks for the scoped window and each UTC day', () => {
+    const rid1 = '123e4567-e89b-12d3-a456-426614174101'
+    const rid2 = '123e4567-e89b-12d3-a456-426614174102'
+    const rid3 = '123e4567-e89b-12d3-a456-426614174103'
+    const summary = summarizeAuditTrail([
+      started('2.0.15', 'clean', '2026-01-01T00:00:00.000Z'),
+      line('history.request', { requestId: rid1, stage: 'received', queueMs: 10 }, '2026-01-01T00:00:01.000Z'),
+      line('history.request', {
+        requestId: rid1,
+        stage: 'served',
+        outcome: 'ok',
+        mainMs: 20,
+        resultCount: 3,
+        notDownloadedCount: 1,
+        title: 'Board budget'
+      }, '2026-01-01T00:00:02.000Z'),
+      line('history.request', { requestId: rid1, stage: 'settled', outcome: 'ok', ipcMs: 30, renderMs: 40 }, '2026-01-01T00:00:03.000Z'),
+      line('history.request', { requestId: rid2, stage: 'received', queueMs: 5 }, '2026-01-01T00:00:04.000Z'),
+      line('history.request', {
+        requestId: rid2,
+        stage: 'served',
+        outcome: 'failed',
+        mainMs: 15,
+        resultCount: 0,
+        notDownloadedCount: 0
+      }, '2026-01-01T00:00:05.000Z'),
+      line('history.request', { requestId: rid3, stage: 'received', queueMs: 100 }, '2026-01-02T00:00:01.000Z'),
+      line('history.request', {
+        requestId: rid3,
+        stage: 'served',
+        outcome: 'ok',
+        mainMs: 200,
+        resultCount: 2,
+        notDownloadedCount: 2
+      }, '2026-01-02T00:00:02.000Z'),
+      line('history.request', { requestId: rid3, stage: 'settled', outcome: 'ok', ipcMs: 300, renderMs: 400 }, '2026-01-02T00:00:03.000Z')
+    ], identity, generatedAt)
+
+    expect(summary.scope.history).toMatchObject({
+      status: 'present',
+      requests: 3,
+      served: 3,
+      outcomes: { ok: 2, failed: 1, discarded: 0 },
+      unsettledServed: { count: 1, share: 0.333 },
+      timings: {
+        queueMs: { count: 3, p50: 10, p95: 100, max: 100 },
+        mainMs: { count: 3, p50: 20, p95: 200, max: 200 },
+        ipcMs: { count: 2, p50: 30, p95: 300, max: 300 },
+        renderMs: { count: 2, p50: 40, p95: 400, max: 400 },
+        totalMs: { count: 2, p50: 100, p95: 1000, max: 1000 }
+      },
+      notDownloaded: {
+        status: 'present',
+        requests: 2,
+        served: 2,
+        outcomes: { ok: 2, failed: 0, discarded: 0 },
+        timings: {
+          queueMs: { count: 2, p50: 10, p95: 100, max: 100 },
+          totalMs: { count: 2, p50: 100, p95: 1000, max: 1000 }
+        }
+      }
+    })
+    expect(summary.scope.days['2026-01-01'].history).toMatchObject({
+      requests: 2,
+      outcomes: { ok: 1, failed: 1, discarded: 0 },
+      notDownloaded: { requests: 1 }
+    })
+    expect(summary.scope.days['2026-01-02'].history).toMatchObject({
+      requests: 1,
+      outcomes: { ok: 1, failed: 0, discarded: 0 },
+      notDownloaded: { requests: 1 }
+    })
+    expect(JSON.stringify(summary)).not.toContain('123e4567')
+    expect(JSON.stringify(summary)).not.toContain('Board')
+  })
+
+  it('emits an explicit empty History block when no History requests are in scope', () => {
+    const summary = summarizeAuditTrail([
+      started('2.0.15', 'clean', '2026-01-01T00:00:00.000Z'),
+      line('reveal', { outcome: 'shown' }, '2026-01-01T00:00:01.000Z')
+    ], identity, generatedAt)
+
+    expect(summary.scope.history).toMatchObject({
+      status: 'empty',
+      requests: 0,
+      served: 0,
+      outcomes: { ok: 0, failed: 0, discarded: 0 },
+      timings: { queueMs: { count: 0, p50: null, p95: null, max: null } },
+      notDownloaded: { status: 'empty', requests: 0 },
+      unsettledServed: { count: 0, share: null }
+    })
+    expect(summary.scope.days['2026-01-01'].history.status).toBe('empty')
+  })
+
+  it('keeps the not-downloaded split empty for older History events without notDownloadedCount', () => {
+    const rid = '123e4567-e89b-12d3-a456-426614174104'
+    const summary = summarizeAuditTrail([
+      started('2.0.15', 'clean', '2026-01-01T00:00:00.000Z'),
+      line('history.request', { requestId: rid, stage: 'received', queueMs: 7 }, '2026-01-01T00:00:01.000Z'),
+      line('history.request', { requestId: rid, stage: 'served', outcome: 'ok', mainMs: 9, resultCount: 4 }, '2026-01-01T00:00:02.000Z')
+    ], identity, generatedAt)
+
+    expect(summary.scope.history).toMatchObject({
+      status: 'present',
+      requests: 1,
+      served: 1,
+      notDownloaded: {
+        status: 'empty',
+        requests: 0,
+        served: 0,
+        timings: { queueMs: { count: 0, p50: null, p95: null, max: null } }
+      }
+    })
+  })
+
+  it('joins a History request split across rotated generations and keeps its not-downloaded timing split', async () => {
+    const rid = '123e4567-e89b-12d3-a456-426614174105'
+
+    await withTrail({
+      'audit-1.log': [
+        started('2.0.15', 'clean', '2026-01-01T23:59:50.000Z'),
+        line('history.request', { requestId: rid, stage: 'received', queueMs: 11 }, '2026-01-01T23:59:55.000Z')
+      ].join('\n') + '\n',
+      'audit.log': [
+        line('history.request', {
+          requestId: rid,
+          stage: 'served',
+          outcome: 'ok',
+          mainMs: 22,
+          resultCount: 4,
+          notDownloadedCount: 2
+        }, '2026-01-02T00:00:01.000Z'),
+        line('history.request', { requestId: rid, stage: 'settled', outcome: 'ok', ipcMs: 33, renderMs: 44 }, '2026-01-02T00:00:02.000Z')
+      ].join('\n') + '\n'
+    }, async (auditTrailPath) => {
+      const summary = await summarizeAuditGenerations(auditTrailPath, identity, generatedAt)
+
+      expect(summary.scope.history).toMatchObject({
+        status: 'present',
+        requests: 1,
+        served: 1,
+        outcomes: { ok: 1, failed: 0, discarded: 0 },
+        timings: {
+          queueMs: { count: 1, p50: 11, p95: 11, max: 11 },
+          mainMs: { count: 1, p50: 22, p95: 22, max: 22 },
+          ipcMs: { count: 1, p50: 33, p95: 33, max: 33 },
+          renderMs: { count: 1, p50: 44, p95: 44, max: 44 },
+          totalMs: { count: 1, p50: 110, p95: 110, max: 110 }
+        },
+        notDownloaded: {
+          status: 'present',
+          requests: 1,
+          served: 1,
+          timings: {
+            queueMs: { count: 1, p50: 11, p95: 11, max: 11 },
+            mainMs: { count: 1, p50: 22, p95: 22, max: 22 },
+            ipcMs: { count: 1, p50: 33, p95: 33, max: 33 },
+            renderMs: { count: 1, p50: 44, p95: 44, max: 44 },
+            totalMs: { count: 1, p50: 110, p95: 110, max: 110 }
+          }
+        }
+      })
+      expect(summary.scope.days['2026-01-01'].history).toMatchObject({
+        requests: 1,
+        timings: { totalMs: { count: 1, p95: 110 } },
+        notDownloaded: { requests: 1, timings: { totalMs: { count: 1, p95: 110 } } }
+      })
+      expect(summary.scope.days['2026-01-02'].history.status).toBe('empty')
+    })
+  })
+
+  it('counts History requests only after the active version start and marks non-History days empty', () => {
+    const oldRid = '123e4567-e89b-12d3-a456-426614174106'
+    const newRid = '123e4567-e89b-12d3-a456-426614174107'
+    const summary = summarizeAuditTrail([
+      started('2.0.14', 'clean', '2026-01-01T00:00:00.000Z'),
+      line('history.request', { requestId: oldRid, stage: 'received', queueMs: 100 }, '2026-01-01T00:00:01.000Z'),
+      line('history.request', {
+        requestId: oldRid,
+        stage: 'served',
+        outcome: 'ok',
+        mainMs: 200,
+        resultCount: 1,
+        notDownloadedCount: 1
+      }, '2026-01-01T00:00:02.000Z'),
+      started('2.0.15', 'clean', '2026-01-02T00:00:00.000Z'),
+      line('reveal', { outcome: 'shown' }, '2026-01-02T00:00:01.000Z'),
+      line('history.request', { requestId: newRid, stage: 'received', queueMs: 10 }, '2026-01-03T00:00:01.000Z'),
+      line('history.request', {
+        requestId: newRid,
+        stage: 'served',
+        outcome: 'ok',
+        mainMs: 20,
+        resultCount: 2,
+        notDownloadedCount: 1
+      }, '2026-01-03T00:00:02.000Z'),
+      line('history.request', { requestId: newRid, stage: 'settled', outcome: 'ok', ipcMs: 30, renderMs: 40 }, '2026-01-03T00:00:03.000Z')
+    ], identity, generatedAt)
+
+    expect(summary.scope).toMatchObject({
+      from: '2026-01-02T00:00:00.000Z',
+      to: '2026-01-03T00:00:03.000Z',
+      history: {
+        requests: 1,
+        served: 1,
+        timings: { totalMs: { count: 1, p95: 100 } },
+        notDownloaded: { requests: 1, timings: { totalMs: { count: 1, p95: 100 } } }
+      }
+    })
+    expect(summary.scope.days['2026-01-02'].history.status).toBe('empty')
+    expect(summary.scope.days['2026-01-03'].history).toMatchObject({ status: 'present', requests: 1 })
+  })
+
   it('restarts the scope when the trail leaves the running version and comes back', () => {
     const summary = summarizeAuditTrail([
       started('2.0.15', 'clean', '2026-01-01T00:00:00.000Z'),
@@ -279,7 +492,7 @@ describe('diagnostics summary schema 2', () => {
     expect(summary.scope.daySpan).toBe(3)
     expect(summary.scope.idleDays).toBe(1)
     // Exactly 5 s is not over 5 s.
-    expect(summary.scope.days['2026-01-01']).toEqual({
+    expect(summary.scope.days['2026-01-01']).toMatchObject({
       records: 2,
       boots: 1,
       uncleanShutdowns: 0,
@@ -288,7 +501,7 @@ describe('diagnostics summary schema 2', () => {
       revealNoOps: 0,
       brainIndexQuarantined: 0
     })
-    expect(summary.scope.days['2026-01-03']).toEqual({
+    expect(summary.scope.days['2026-01-03']).toMatchObject({
       records: 2,
       boots: 0,
       uncleanShutdowns: 0,
@@ -373,21 +586,38 @@ describe('diagnostics summary schema 2', () => {
       'reveals.created', 'reveals.shown', 'reveals.already-visible', 'reveals.failed',
       'events.*'
     ].map((p) => prefix + p)
+    const historyPaths = (prefix: string): string[] => [
+      `${prefix}history.status`, `${prefix}history.requests`, `${prefix}history.served`,
+      `${prefix}history.outcomes.ok`, `${prefix}history.outcomes.failed`, `${prefix}history.outcomes.discarded`,
+      `${prefix}history.unsettledServed.count`, `${prefix}history.unsettledServed.share`,
+      `${prefix}history.notDownloaded.status`, `${prefix}history.notDownloaded.requests`, `${prefix}history.notDownloaded.served`,
+      `${prefix}history.notDownloaded.outcomes.ok`, `${prefix}history.notDownloaded.outcomes.failed`,
+      `${prefix}history.notDownloaded.outcomes.discarded`,
+      ...['queueMs', 'mainMs', 'ipcMs', 'renderMs', 'totalMs'].flatMap((metric) => [
+        `${prefix}history.timings.${metric}.count`, `${prefix}history.timings.${metric}.p50`,
+        `${prefix}history.timings.${metric}.p95`, `${prefix}history.timings.${metric}.max`,
+        `${prefix}history.notDownloaded.timings.${metric}.count`, `${prefix}history.notDownloaded.timings.${metric}.p50`,
+        `${prefix}history.notDownloaded.timings.${metric}.p95`, `${prefix}history.notDownloaded.timings.${metric}.max`
+      ])
+    ]
     const allowlist = [
       'kind', 'schema', 'generatedAt', 'app.version', 'app.platform', 'app.arch',
       'window.from', 'window.to', 'window.records', 'window.generations', 'window.truncated',
       ...counts(''),
       'scope.version', 'scope.from', 'scope.to', 'scope.records', 'scope.daySpan', 'scope.idleDays',
       ...counts('scope.'),
+      ...historyPaths('scope.'),
       ...['records', 'boots', 'uncleanShutdowns', 'stallsOver5s', 'orphanReaps', 'revealNoOps', 'brainIndexQuarantined']
         .map((f) => `scope.days.*.${f}`),
+      ...historyPaths('scope.days.*.'),
       'scope.soak.stallsOver5s', 'scope.soak.uncleanShutdowns', 'scope.soak.orphanReaps.registry',
       'scope.soak.orphanReaps.legacy-orphan', 'scope.soak.orphanReaps.afterUncleanExit',
       'scope.soak.revealNoOps', 'scope.soak.brainIndexQuarantined'
     ]
     expect([...paths].sort()).toEqual([...allowlist].sort())
     for (const value of strings) {
-      const allowed = value === 'metis-diagnostics-summary' || Object.values(identity).includes(value) ||
+      const allowed = value === 'metis-diagnostics-summary' || value === 'empty' || value === 'present' ||
+        Object.values(identity).includes(value) ||
         /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value)
       expect(allowed, value).toBe(true)
     }

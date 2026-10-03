@@ -279,7 +279,8 @@ export const OBSERVABILITY_EVENTS = {
     mainMs: 'ms',
     ipcMs: 'ms',
     renderMs: 'ms',
-    resultCount: 'int'
+    resultCount: 'int',
+    notDownloadedCount: 'int'
   },
   /** A committed navigation a History request took part in; `from === to` is the toggle-race no-op. */
   'history.transition': {
