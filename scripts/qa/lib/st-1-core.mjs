@@ -298,6 +298,19 @@ export function candidateEnv(env, profile, windowVariant) {
   return { ...env, ASKTOTO_USERDATA: profile, METIS_QA_WINDOW_VARIANT: windowVariant }
 }
 
+/** The candidate's launch argv. Strict owner-runner jobs opt into Chromium's mock keychain so a QA identity
+ *  launch cannot create a Safe Storage item in the owner's login keychain. */
+export function candidateArgv(env) {
+  const argv = ['--inspect=127.0.0.1:0']
+  if (env.ASKTOTO_QA_MOCK_KEYCHAIN === '1') argv.push('--use-mock-keychain')
+  if (env.ST1_CHROMIUM_SANDBOX === 'off') argv.push('--no-sandbox')
+  return argv
+}
+
+function chromiumSandbox(env = process.env) {
+  return env.ST1_CHROMIUM_SANDBOX === 'off' ? 'off-under-owner-account.sb' : 'on'
+}
+
 /** The window-construction gate's budget (M2-0519): every shipped createWindow.prewarm and createWindow.construct
  *  stays under it, in both chromes. */
 export const WINDOW_STAGE_BUDGET_MS = 250
@@ -611,7 +624,8 @@ export function buildReport({
   fixtureCounts = null,
   purpose = 'st-1',
   windowVariant = 'shipped',
-  windowWarmup = false
+  windowWarmup = false,
+  env = process.env
 }) {
   const criteria = evaluateCriteria(row, measured, evidence, { history })
   const refusalEvidence = fifoRefusalEvidence(row, measured, evidence, fixtures, fixtureCounts)
@@ -638,6 +652,7 @@ export function buildReport({
     ...(history ? { historyRow: true } : {}),
     platform: process.platform,
     arch: process.arch,
+    chromiumSandbox: chromiumSandbox(env),
     installer,
     build_run_id: candidate.build_run_id,
     artifact_sha256: candidate.artifact_sha256,
@@ -695,7 +710,17 @@ export function writeJsonToStdout(value, stdout = process.stdout) {
 
 /** The launch itself never reached a candidate to measure: a genuine FAIL (inspector: false), never a
  *  skipped row. A window-construction launch is marked as in buildReport. */
-export function buildLaunchFailureReport({ row, installer, candidate, fixtures, reason, purpose = 'st-1', windowVariant = 'shipped', windowWarmup = false }) {
+export function buildLaunchFailureReport({
+  row,
+  installer,
+  candidate,
+  fixtures,
+  reason,
+  purpose = 'st-1',
+  windowVariant = 'shipped',
+  windowWarmup = false,
+  env = process.env
+}) {
   return {
     harness: 'ST-1',
     ...(purpose === WINDOW_CONSTRUCTION ? { purpose, st1Evidence: false, windowVariant } : {}),
@@ -703,6 +728,7 @@ export function buildLaunchFailureReport({ row, installer, candidate, fixtures, 
     row,
     platform: process.platform,
     arch: process.arch,
+    chromiumSandbox: chromiumSandbox(env),
     installer,
     build_run_id: candidate.build_run_id,
     artifact_sha256: candidate.artifact_sha256,
