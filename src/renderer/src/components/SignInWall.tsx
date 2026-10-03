@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { ShieldCheck, AlertCircle } from 'lucide-react'
 import { AgentStatus, InlineOrb } from './AgentStatus'
 import type { AuthStatus, SignInResult } from '@shared/ipc'
 import { MantuLogo } from './MantuLogo'
+import { activateDialogFocusTrap } from '../lib/dialog-focus'
 
 function MsLogo({ size = 16 }: { size?: number }): JSX.Element {
   const g = size / 2 - 1
@@ -53,6 +54,12 @@ export function SignInWall({
   // MQA-107 escape hatch. `idle` → show the subtle reset link; `confirm` → a one-line confirm; `busy` →
   // the reset is running. Kept separate from `busy` (sign-in) so a stuck sign-in and a reset never race.
   const [resetPhase, setResetPhase] = useState<'idle' | 'confirm' | 'busy'>('idle')
+  const dialogRef = useRef<HTMLDivElement | null>(null)
+  const titleId = useId()
+  useEffect(() => {
+    if (!dialogRef.current) return undefined
+    return activateDialogFocusTrap(dialogRef.current)
+  }, [])
   const domainLabel = status.domain ? `@${status.domain}` : 'your organization'
   const go = async (): Promise<void> => {
     setBusy(true)
@@ -121,7 +128,14 @@ export function SignInWall({
     }
   }
   return (
-    <div className="cl-root fade-up relative flex min-h-[360px] w-full flex-col items-center justify-center gap-7 overflow-hidden rounded-2xl border border-[var(--cl-border)] p-8 text-center">
+    <div
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+      tabIndex={-1}
+      className="cl-root fade-up relative flex min-h-[360px] w-full flex-col items-center justify-center gap-7 overflow-hidden rounded-2xl border border-[var(--cl-border)] p-8 text-center"
+    >
       {/* Soft brand glow behind the logo — premium, on-brand, purely decorative. */}
       <div
         aria-hidden="true"
@@ -131,7 +145,7 @@ export function SignInWall({
       <div className="relative flex flex-col items-center gap-5">
         <MantuLogo size={148} />
         <div className="flex flex-col gap-2">
-          <div className="font-ui text-[19px] font-semibold tracking-tight text-[color:var(--cl-foreground)]">
+          <div id={titleId} className="font-ui text-[19px] font-semibold tracking-tight text-[color:var(--cl-foreground)]">
             Sign in to Métis
           </div>
           <p className="max-w-[420px] text-[13px] leading-relaxed text-[color:var(--cl-muted-foreground)]">
