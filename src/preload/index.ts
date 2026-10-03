@@ -3,7 +3,6 @@ import { IPC } from '@shared/contracts/channels'
 import {
   type AskStart,
   type PublicSettings,
-  type Settings,
   type HotkeyAction,
   type CaptureResult,
   type ScreenContextResult,
@@ -110,7 +109,7 @@ const api = {
   revealAppCopy: (path: string): Promise<void> => ipcRenderer.invoke(IPC.permissionsRevealCopy, path),
   screenCaptureCheck: (pass: 'probe' | 'vision'): Promise<ScreenCaptureCheckResult> =>
     ipcRenderer.invoke(IPC.screenCaptureCheck, { pass }),
-  setSettings: (patch: Partial<Settings> | SettingsPatch): Promise<PublicSettings> =>
+  setSettings: (patch: SettingsPatch): Promise<PublicSettings> =>
     ipcRenderer.invoke(IPC.settingsSet, patch),
   /** Sent only after `setSettings({ onboardingDone: true })` resolves. Never use this as a settings write. */
   onboardingEnter: (): void => ipcRenderer.send(IPC.onboardingEnter),
