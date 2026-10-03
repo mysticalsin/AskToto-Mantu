@@ -259,8 +259,7 @@ launch_app() {
 
 stop_app() {
   if [[ -n "${APP_PID:-}" ]]; then
-    kill "$APP_PID" >/dev/null 2>&1 || true
-    wait "$APP_PID" >/dev/null 2>&1 || true
+    terminate_app_job "$APP_PID" 50 50 || true
     APP_PID=""
   fi
 }
@@ -303,6 +302,34 @@ app_job_running() {
   local pid=$1
   [[ -n "$pid" ]] || return 1
   jobs -r -p | grep -Fx "$pid" >/dev/null 2>&1
+}
+
+terminate_app_job() {
+  local pid=$1
+  local term_wait_loops=${2:-50}
+  local kill_wait_loops=${3:-50}
+  local waited=0
+  [[ -n "$pid" ]] || return 0
+  if app_job_running "$pid"; then
+    kill "$pid" >/dev/null 2>&1 || true
+    while (( waited < term_wait_loops )); do
+      app_job_running "$pid" || break
+      sleep 0.2
+      waited=$((waited + 1))
+    done
+  fi
+  if app_job_running "$pid"; then
+    kill -KILL "$pid" >/dev/null 2>&1 || true
+    waited=0
+    while (( waited < kill_wait_loops )); do
+      app_job_running "$pid" || break
+      sleep 0.2
+      waited=$((waited + 1))
+    done
+  fi
+  app_job_running "$pid" && return 1
+  wait "$pid" >/dev/null 2>&1 || true
+  return 0
 }
 
 signal_name_for_status() {
@@ -1009,7 +1036,7 @@ hosted_process_signal() {
       result="observed"
       kill -KILL "$APP_PID" >/dev/null 2>&1 || true
     fi
-    wait "$APP_PID" >/dev/null 2>&1 || true
+    terminate_app_job "$APP_PID" 0 50 || true
     APP_PID=""
   fi
   release_fifo_writers
