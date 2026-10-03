@@ -163,8 +163,7 @@ function unwrapWithKeychain(blob: Buffer): string {
  *   '<bare base64>' — legacy: written before this change; treated as safeStorage on read.
  *
  * The content key is always encrypted at rest. This function never falls through to cleartext —
- * callers should let any error propagate (fail-closed). Exported for the local journal
- * (src/main/features/journal/), which seals every record with this same envelope.
+ * callers should let any error propagate (fail-closed). The local journal seals records with it.
  */
 export function encryptEnvelopeV2(content: string): Buffer {
   const contentKey = randomBytes(32)
