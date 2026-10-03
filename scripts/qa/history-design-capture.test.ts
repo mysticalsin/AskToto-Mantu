@@ -152,7 +152,6 @@ describe('History design matrix (M2-0032)', () => {
     const drive = await driveState(page as never, main as never, state, [{ title: 'Quarterly planning sample' }], {
       wait,
       ensureIdleBar: async () => undefined,
-      ensureHistoryClosed: async () => false,
       clickHistory: async () => noteRequest(1000)
     })
 
@@ -234,6 +233,10 @@ describe('History design matrix (M2-0032)', () => {
       wait,
       ensureIdleBar: async () => {
         events.push('idle')
+        if (historyOpen) {
+          events.push('close-history')
+          historyOpen = false
+        }
       },
       clickHistory: async () => {
         events.push('open-history')
@@ -242,9 +245,18 @@ describe('History design matrix (M2-0032)', () => {
       }
     })
 
-    expect(events.indexOf('close-history')).toBeLessThan(events.indexOf('arm-fixture'))
-    expect(events.indexOf('arm-fixture')).toBeLessThan(events.indexOf('open-history'))
-    expect(events).toContain('search-request')
+    expect(events).toEqual([
+      'idle',
+      'close-history',
+      'arm-fixture',
+      'read-requests',
+      'open-history',
+      'text:Quarterly planning sample',
+      'read-requests',
+      'fill-search',
+      'search-request',
+      'role:status:OneDrive is slow to answer'
+    ])
     expect(history.requests).toBe(2)
   })
 

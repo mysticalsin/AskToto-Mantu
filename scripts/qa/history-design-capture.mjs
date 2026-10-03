@@ -282,25 +282,11 @@ async function waitForRequest(main, before, wait = sleep, label = 'list') {
 }
 
 async function locatorVisible(locator) {
-  return locator.first().isVisible({ timeout: 500 }).catch(() => false)
-}
-
-async function waitForHistoryClosed(page, wait = sleep) {
-  const search = page.getByLabel('Search past meetings')
-  const deadline = Date.now() + STATE_TIMEOUT_MS
-  while (Date.now() < deadline) {
-    if (!(await locatorVisible(search))) return
-    await wait(50)
+  try {
+    return await locator.first().isVisible({ timeout: 500 })
+  } catch {
+    return false
   }
-  throw new Error('History did not close before the next capture')
-}
-
-export async function ensureHistoryClosed(page, wait = sleep) {
-  const search = page.getByLabel('Search past meetings')
-  if (!(await locatorVisible(search))) return false
-  await page.getByRole('button', { name: 'History' }).first().click({ timeout: 15_000 })
-  await waitForHistoryClosed(page, wait)
-  return true
 }
 
 /**
@@ -334,12 +320,16 @@ export async function driveState(page, main, state, realRows, deps = {}) {
   const wait = deps.wait ?? sleep
   const ensureIdle = deps.ensureIdleBar ?? ensureIdleBar
   const openHistory = deps.clickHistory ?? clickHistory
-  const closeHistory = deps.ensureHistoryClosed ?? ensureHistoryClosed
+  const driveStartedAt = Date.now()
   // Bar History ignores a toggle within 400 ms of the last one; a fast capture can end inside that window.
   await wait(450)
+  const toggleGuardSettledAt = Date.now()
+  // ensureIdleBar owns the close-before-arm invariant: if History is already mounted, close it and wait
+  // through the toolbar's toggle guard before fixtures are changed and the next open requests fresh data.
   await ensureIdle(page)
-  const wasOpen = await closeHistory(page, wait)
-  if (wasOpen) await wait(450)
+  const idleSettledAt = Date.now()
+  const closedBeforeArm = !(await locatorVisible(page.getByLabel('Search past meetings')))
+  const closeCheckedAt = Date.now()
   const now = Date.now()
   await main(`(() => {
     const s = globalThis.__historyDesign
@@ -348,25 +338,43 @@ export async function driveState(page, main, state, realRows, deps = {}) {
     s.read = ${JSON.stringify(state.read ?? 'hydrating')}
     return true
   })()`)
+  const armedAt = Date.now()
   const before = await main('globalThis.__historyDesign.requests')
   const clickedAt = Date.now()
   await openHistory(page)
   const requestedAt = await waitForRequest(main, before, wait, 'list')
   const visible = (text, role = null, timeoutMs = STATE_TIMEOUT_MS) => waitForHistoryDesignCue(page, { text, role, timeoutMs })
-  const drive = { clickedAt, requestedAt }
+  const drive = {
+    clickedAt,
+    requestedAt,
+    closedBeforeArm,
+    timingsMs: {
+      toggleGuard: toggleGuardSettledAt - driveStartedAt,
+      ensureIdle: idleSettledAt - toggleGuardSettledAt,
+      closeCheck: closeCheckedAt - idleSettledAt,
+      armFixture: armedAt - closeCheckedAt,
+      openToListRequest: requestedAt - clickedAt
+    }
+  }
   if (state.id === 'slow' || state.id === 'unavailable' || state.id === 'failed') {
     const cue = historyDesignCueForState(state.id)
     await visible(cue.text, cue.role)
-    drive.bannerAfterMs = Date.now() - clickedAt
+    const cueAt = Date.now()
+    drive.bannerAfterMs = cueAt - clickedAt
+    drive.timingsMs.listRequestToCue = cueAt - requestedAt
   } else if (state.id === 'slow-with-rows') {
     await visible(SAMPLE_MEETINGS[0])
     const beforeSearch = await main('globalThis.__historyDesign.requests')
     const typedAt = Date.now()
     await page.getByLabel('Search past meetings').fill('planning')
     drive.requestedAt = await waitForRequest(main, beforeSearch, wait, 'search')
+    drive.timingsMs.listRequestToSearchFill = typedAt - requestedAt
+    drive.timingsMs.searchFillToSearchRequest = drive.requestedAt - typedAt
     const cue = historyDesignCueForState(state.id)
     await visible(cue.text, cue.role)
-    drive.bannerAfterMs = Date.now() - typedAt
+    const cueAt = Date.now()
+    drive.bannerAfterMs = cueAt - typedAt
+    drive.timingsMs.searchRequestToCue = cueAt - drive.requestedAt
   } else if (state.list !== 'pending') {
     await visible(state.list === 'rows+notDownloaded' ? 'Not downloaded' : SAMPLE_MEETINGS[0])
   }
@@ -426,6 +434,7 @@ async function captureReachedState({ page, cdp, main, state, variant, realRows, 
     await settleWindow(page)
     await page.screenshot({ path: join(out, screenshot), scale: 'device' })
     drive.capturedAfterMs = Date.now() - drive.requestedAt
+    drive.timingsMs.requestToCapture = drive.capturedAfterMs
     collected = await page.evaluate(`(${collectHistoryView})(${solidGradientLayers})`)
   } finally {
     await cdp.send('Emulation.clearDeviceMetricsOverride')
@@ -441,7 +450,7 @@ async function captureReachedState({ page, cdp, main, state, variant, realRows, 
     tabOrder = await walkTabOrder(page)
   }
   const judged = judgeCapture({ state, variant, collected, roles, tabOrder, drive })
-  return { judged: { ...judged, scope: collected.scope, bannerAfterMs: drive.bannerAfterMs ?? null, capturedAfterMs: drive.capturedAfterMs, tabOrder }, screenshot }
+  return { judged: { ...judged, scope: collected.scope, bannerAfterMs: drive.bannerAfterMs ?? null, capturedAfterMs: drive.capturedAfterMs, driveTimingsMs: drive.timingsMs, closedBeforeArm: drive.closedBeforeArm, tabOrder }, screenshot }
 }
 
 /**
@@ -591,7 +600,8 @@ async function main() {
     captures,
     transitions,
     blockedExternal: BLOCKED_EXTERNAL_ROWS,
-    validation: 'Pending: an Opus session other than the implementer checks these captures against the design spec.'
+    validation: 'Pending: an Opus session other than the implementer checks these captures against the design spec.',
+    leadAction: 'Dispatch three QA candidate runs and confirm History design evidence reports 72/72 in each run.'
   }
   writeFileSync(join(args.out, 'history-design-report.json'), `${JSON.stringify(report, null, 2)}\n`)
   writeFileSync(join(args.out, 'SUMMARY.md'), summaryMarkdown(report))
