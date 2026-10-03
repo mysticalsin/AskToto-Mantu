@@ -33,7 +33,7 @@ describe('MQA-149 — a full erasure takes the published wiki mirror with it', (
     // A plain statement, never guarded: a mirror outlives publishBrainPages being turned off whenever
     // that removal failed, so gating this on the current setting would leave exactly the copy erasure is
     // asked to remove.
-    expect(deleteAll()).toMatch(/^ +const wiki = removeWiki\(getSettings\(\)\)$/m)
+    expect(deleteAll()).toMatch(/^ +const wiki = await removeWiki\(getSettings\(\)\)$/m)
   })
 
   it('reports a mirror it could not remove instead of returning a silent success', () => {

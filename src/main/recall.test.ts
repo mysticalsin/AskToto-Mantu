@@ -803,7 +803,7 @@ describe("recall — deleteAllMeetings erases only Métis's own files (MQA-032)"
     const renamed = 'acme-renewal.md'
     writeFileSync(join(folder, renamed), '---\ntype: meeting-transcript\n---\n\n# Acme\n', 'utf8')
     // The read of exactly that file throws (a transient lock); every other read passes through untouched.
-    unreadablePaths.add(join(folder, renamed))
+    unreadablePaths.add(realpathSync.native(join(folder, renamed)))
 
     const r = await deleteAllMeetings()
 
