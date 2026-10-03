@@ -29,6 +29,11 @@ describe('parseArgs', () => {
   it('--help sets help without requiring a valid --env', () => {
     expect(parseArgs(['--help']).help).toBe(true)
   })
+
+  it('reads --outdir and refuses it without a directory', () => {
+    expect(parseArgs(['--env', 'staging', '--outdir', 'bundle']).outdir).toBe('bundle')
+    expect(() => parseArgs(['--env', 'staging', '--outdir'])).toThrow(/--outdir requires a directory/)
+  })
 })
 
 describe('buildDeployArgs', () => {
@@ -59,6 +64,11 @@ describe('buildDeployArgs', () => {
   it('never touches TEAM_DOMAIN or any other config var', () => {
     const args = buildDeployArgs({ env: 'production', version: 'x', builtAt: 'y' })
     expect(args.join(' ')).not.toContain('TEAM_DOMAIN')
+  })
+
+  it('staging with an outdir: wrangler also writes the uploaded bundle there, as an absolute path', () => {
+    const args = buildDeployArgs({ env: 'staging', version: 'abc1234', builtAt: 'y', outdir: 'bundle' })
+    expect(args.slice(-4)).toEqual(['--env', 'staging', '--outdir', resolve('bundle')])
   })
 })
 

@@ -3,7 +3,7 @@
  * deploy.mjs — versioned, gated deploy for the Métis Operator Worker.
  *
  *   node operator/scripts/deploy.mjs --dry-run [--env staging|production]
- *   node operator/scripts/deploy.mjs --env staging
+ *   node operator/scripts/deploy.mjs --env staging [--outdir <dir>]
  *   node operator/scripts/deploy.mjs --env production --owner-confirm   (owner only, see below)
  *
  * Staging is the default target. A real production deploy is owner-only: it refuses --allow-dirty,
@@ -21,6 +21,8 @@
  *   6. Run the D1 migration runner (`migrate.mjs --remote [--env staging]`) BEFORE deploying, so a
  *      new schema is in place before the new code that expects it goes live.
  *   7. Lockfile-pinned `wrangler deploy [--env staging] --var OPERATOR_VERSION:<sha> --var OPERATOR_BUILT_AT:<iso>`.
+ *      --outdir <dir> is passed through, so wrangler also writes the bundle it uploads there and the
+ *      staging workflow (operator-staging.yml) can record its sha256.
  *      TEAM_DOMAIN and every other `vars` entry in wrangler.jsonc are left alone — `--var` only
  *      overrides the two keys named here for this deploy, per Wrangler's docs (it does not require
  *      restating the whole vars object, and does not persist to the config file).
@@ -35,7 +37,7 @@
  */
 import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
-import { dirname, join, posix } from 'node:path'
+import { dirname, join, posix, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolveDatabaseName, stripJsonComments } from './migrate.mjs'
 import { commandFailureDetails, localNodeCommand } from './toolchain.mjs'
@@ -57,8 +59,10 @@ export function parseArgs(argv) {
     else if (a === '--dry-run') args.dryRun = true
     else if (a === '--allow-dirty') args.allowDirty = true
     else if (a === '--owner-confirm') args.ownerConfirm = true
+    else if (a === '--outdir') args.outdir = argv[++i]
     else if (a === '--help' || a === '-h') args.help = true
   }
+  if ('outdir' in args && !args.outdir) throw new Error('--outdir requires a directory')
   if (args.env !== 'production' && args.env !== 'staging') {
     throw new Error(`--env must be "production" or "staging", got ${JSON.stringify(args.env)}`)
   }
@@ -101,10 +105,12 @@ export function productionDeployRefusals({ args, processEnv, git }) {
   return refusals
 }
 
-/** Pure: builds the wrangler deploy argv (no cwd, no execution). */
-export function buildDeployArgs({ env, version, builtAt }) {
+/** Pure: builds the wrangler deploy argv (no cwd, no execution). `outdir` makes wrangler also write
+ *  the bundle it uploads to that directory. */
+export function buildDeployArgs({ env, version, builtAt, outdir }) {
   const args = ['deploy', '--var', `OPERATOR_VERSION:${version}`, '--var', `OPERATOR_BUILT_AT:${builtAt}`]
   if (env === 'staging') args.push('--env', 'staging')
+  if (outdir) args.push('--outdir', resolve(outdir))
   return args
 }
 
@@ -147,11 +153,12 @@ export function formatBuiltAt(date = new Date()) {
 }
 
 function printHelp() {
-  console.log(`Usage: node operator/scripts/deploy.mjs [--env staging|production] [--dry-run] [--allow-dirty]
+  console.log(`Usage: node operator/scripts/deploy.mjs [--env staging|production] [--dry-run] [--allow-dirty] [--outdir <dir>]
 
 Default --env is staging. --dry-run prints every command this script would run (including the
 resolved version/timestamp) without executing typecheck, tests, builds, migrations, or wrangler.
 --allow-dirty skips the "clean git tree" gate (refused for production).
+--outdir <dir> also writes the Worker bundle wrangler uploads to <dir>.
 A real --env production deploy is owner-only: it needs --owner-confirm, a clean tree, a terminal
 that is not CI or an agent, and HEAD reachable from a freshly fetched origin/main.`)
 }
@@ -278,7 +285,7 @@ async function main() {
   receipt.migration = dryRun ? '(dry-run, not executed)' : 'applied (see migrate.mjs output above)'
 
   // 7. Deploy.
-  const deployArgs = buildDeployArgs({ env, version, builtAt })
+  const deployArgs = buildDeployArgs({ env, version, builtAt, outdir: args.outdir })
   res = runLocalTool('wrangler deploy', 'wrangler', deployArgs, { cwd: OPERATOR_ROOT, dryRun, capture: true })
   if (!dryRun && res.status !== 0) {
     fatal(

@@ -22,11 +22,13 @@ const SHA256_RE = /^[0-9a-f]{64}$/
 const SESSION_MODEL_RE = /^[a-z0-9][a-z0-9.-]{0,63}$/
 const SESSION_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/
 const HOST_RE = /^[a-z0-9][a-z0-9._-]{0,62}$/
-const ENVIRONMENT_KINDS = Object.freeze(['ci', 'qa-mac', 'windows-laptop', 'windows-runner', 'owner-mac', 'hosted-runner'])
+const ENVIRONMENT_KINDS = Object.freeze(['ci', 'qa-mac', 'windows-laptop', 'windows-runner', 'owner-mac', 'hosted-runner', 'deployed-service'])
 // Runner records need a CI run id: hosted-runner on GitHub-hosted images, owner-mac on
-// metis-owner-mac, and every other kind keeps the generic HOST_RE label rule.
+// metis-owner-mac, deployed-service for CI-checked deployed servers, and every other kind keeps
+// the generic HOST_RE label rule.
 const HOSTED_RUNNER_HOSTS = Object.freeze(['macos-latest', 'windows-latest'])
 export const OWNER_MAC_RUNNER_HOST = 'metis-owner-mac'
+const DEPLOYED_SERVICE_FORBIDDEN_HOSTS = Object.freeze(['ubuntu-latest', ...HOSTED_RUNNER_HOSTS, OWNER_MAC_RUNNER_HOST])
 const RUNNER_CI_LEVELS = new Set(['HOST_CONFIGURED', 'LIVE_VERIFIED', 'MEASURED'])
 const CAPABILITY_RE = /^[a-z0-9][a-z0-9._-]*$/
 const DECISION_RE = /^D-\d+$/
@@ -100,6 +102,9 @@ function isEnvironment(value) {
   if (!isPlainObject(value)) return 'environment: expected an object'
   if (!ENVIRONMENT_KINDS.includes(value.kind)) return `environment.kind: expected one of ${ENVIRONMENT_KINDS.join(', ')}`
   if (typeof value.host !== 'string' || !HOST_RE.test(value.host)) return 'environment.host: expected a registered lowercase label'
+  if (value.kind === 'deployed-service' && DEPLOYED_SERVICE_FORBIDDEN_HOSTS.includes(value.host)) {
+    return `environment.host: a deployed-service record must not name a runner label (${DEPLOYED_SERVICE_FORBIDDEN_HOSTS.join(', ')})`
+  }
   if (value.host === OWNER_MAC_RUNNER_HOST && value.kind !== 'owner-mac' && value.kind !== 'hosted-runner') {
     return `environment.kind: host ${OWNER_MAC_RUNNER_HOST} is valid only for owner-mac records`
   }
@@ -234,6 +239,7 @@ function unsafePaths(record) {
 export function runnerCiRunIdLabel(recordOrEnvironment) {
   const environment = recordOrEnvironment?.environment ?? recordOrEnvironment
   if (environment?.kind === 'hosted-runner') return 'hosted-runner'
+  if (environment?.kind === 'deployed-service') return 'deployed-service'
   if (environment?.kind === 'owner-mac' && environment?.host === OWNER_MAC_RUNNER_HOST) return OWNER_MAC_RUNNER_HOST
   return null
 }
