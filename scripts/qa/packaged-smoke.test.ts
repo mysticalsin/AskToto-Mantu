@@ -51,6 +51,7 @@ import {
   smokeVerdict,
   waitForNavigationView
 } from './packaged-smoke.mjs'
+import { CURSOR_SAMPLED_READS, MAIN_CURSOR_READS, MAIN_RE_HIDE_SHIM, setMainCursor } from './golden-flows/right-edge-hide-rows.mjs'
 
 interface ProcessEntry {
   pid: number
@@ -743,9 +744,11 @@ describe('right-edge Hide rows (RE-HIDE)', () => {
     expect(expected.drawer).toEqual(rightEdgeSidecarBounds(windows, { open: true }))
     expect(expected.tab).toEqual(parkAfterExclusiveOnboarding('island', windows, 8, 'right-edge'))
     expect(expected.band).toEqual(parkAfterExclusiveOnboarding('hide', windows, 8, 'right-edge'))
-    // The observed Windows parks: Island rail at y 141, Hide band at the drawer's y 39.
-    expect(expected.tab).toEqual({ x: 960, y: 141, width: 52, height: 52 })
-    expect(expected.band.y).toBe(39)
+    // M2-0202: one anchor A = 0.15 × 720 = 108 places the rail (centred on A) and the drawer (A − 36); the
+    // Hide band is the authority's revealBand, [wa.y+48, wa.bottom−48] whatever the anchor.
+    expect(expected.tab).toEqual({ x: 960, y: 82, width: 52, height: 52 })
+    expect(expected.drawer.y).toBe(72)
+    expect(expected.band).toEqual({ x: 1020, y: 48, width: 4, height: 624 })
   })
 
   it('accepts a Hide park the OS widened only when its right edge stays at the work-area edge', () => {
@@ -773,8 +776,8 @@ describe('right-edge Hide rows (RE-HIDE)', () => {
   })
 
   it('names the parked criteria a Windows readback misses, so a failing row says which one', () => {
-    // Run 36645827157 readback: the widened band flush at the edge is a bounds match.
-    const bounds = { x: 992, y: 39, width: 32, height: 560 }
+    // The run 36645827157 readback shape on the M2-0202 band: widened to 32 px, flush at the edge, is a bounds match.
+    const bounds = { x: 992, y: 48, width: 32, height: 624 }
     const win = (opacity: number, clickThrough: boolean | null) => ({ bounds, opacity, clickThrough, visible: true, displayBounds: windows.bounds, workArea: windows.workArea })
     const page = { dock: true, drawer: false, rail: true, hideControl: false, meetingLive: false, composerFocused: false, draft: '' }
     expect(rightEdgeStateMismatches({ win: win(0, true), page }, 'parked', 'hide')).toEqual([])
@@ -783,6 +786,32 @@ describe('right-edge Hide rows (RE-HIDE)', () => {
     expect(rightEdgeStateMismatches({ win: win(0, null), page }, 'parked', 'hide')).toEqual(['clickThrough'])
     expect(rightEdgeStateMismatches({ win: win(0, true), page }, 'parked', 'island')).toEqual(['bounds', 'opacity', 'clickThrough'])
     expect(rightEdgeStateMismatches(null, 'parked', 'hide')).toEqual(['observation'])
+  })
+
+  it('counts main reads of the stubbed pointer, so a row knows the cursor watch sampled it away from the band', () => {
+    const real = { x: 1, y: 1 }
+    const screen = { getCursorScreenPoint: () => real }
+    const g = globalThis as Record<string, unknown>
+    const run = (expression: string): unknown => (0, eval)(expression)
+    g.__metisReHideElectron = { screen, BrowserWindow: { getAllWindows: () => [] } }
+    try {
+      run(MAIN_RE_HIDE_SHIM)
+      run(setMainCursor({ x: 40, y: 400 }))
+      expect(run(MAIN_CURSOR_READS)).toBe(0)
+      expect(screen.getCursorScreenPoint()).toEqual({ x: 40, y: 400 })
+      expect(screen.getCursorScreenPoint()).toEqual({ x: 40, y: 400 })
+      expect(run(MAIN_CURSOR_READS)).toBe(CURSOR_SAMPLED_READS)
+      // A new point starts a fresh count: reads of the previous point never prove the new one was sampled.
+      run(setMainCursor({ x: 1023, y: 380 }))
+      expect(run(MAIN_CURSOR_READS)).toBe(0)
+      // The real pointer is not the stub's: releasing the stub stops the count.
+      run(setMainCursor(null))
+      expect(screen.getCursorScreenPoint()).toBe(real)
+      expect(run(MAIN_CURSOR_READS)).toBe(0)
+    } finally {
+      delete g.__metisReHideElectron
+      delete g.__metisReHide
+    }
   })
 
   it('treats a mounted but aria-hidden right-edge drawer as parked rail chrome', () => {

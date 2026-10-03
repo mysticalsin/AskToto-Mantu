@@ -114,7 +114,9 @@ export function componentBytes(component: SpeechPackComponent): number {
 
 /** A URL that names a branch can serve different bytes tomorrow; refuse it before the network is touched. */
 export function isImmutableUrl(url: string): boolean {
-  return !/\/(resolve|blob|raw|tree)\/(main|master|HEAD)\//i.test(url) && !/refs\/heads\//i.test(url)
+  if (/refs\/heads\//i.test(url)) return false
+  const repositoryPath = /\/(resolve|blob|raw|tree)\/([^/?#]+)/i.exec(url)
+  return repositoryPath ? /^[0-9a-f]{40}$/i.test(repositoryPath[2]) : true
 }
 
 /** Where one pinned file is fetched from, or null when the source pin has not been recorded. */

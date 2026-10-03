@@ -62,6 +62,7 @@ describe('speech-pack sources are immutable', () => {
   it('rejects branch references and accepts commit-pinned URLs', () => {
     expect(isImmutableUrl('https://huggingface.co/Xenova/whisper-base/resolve/main/config.json')).toBe(false)
     expect(isImmutableUrl('https://huggingface.co/Xenova/whisper-base/resolve/master/config.json')).toBe(false)
+    expect(isImmutableUrl('https://huggingface.co/Xenova/whisper-base/resolve/feature-branch/config.json')).toBe(false)
     expect(isImmutableUrl('https://example.test/repo/refs/heads/dev/file')).toBe(false)
     expect(isImmutableUrl(`https://huggingface.co/Xenova/whisper-base/resolve/${'a'.repeat(40)}/config.json`)).toBe(true)
   })
