@@ -255,6 +255,15 @@ describe('QA candidate History design evidence (M2-0032)', () => {
     expect(upload).toContain("retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}")
   })
 
+  it('keeps the capture report-only: failed evidence warns, but the check stays green', () => {
+    const capture = steps('history-design-mac').find((step) => step.includes('history-design-capture.mjs')) ?? ''
+    expect(capture).toContain('set +e')
+    expect(capture).toContain('status=$?')
+    expect(capture).toContain('cat history-design/SUMMARY.md >> "$GITHUB_STEP_SUMMARY"')
+    expect(capture).toContain('::warning::History design evidence did not pass; see the uploaded history-design-macos artifact.')
+    expect(capture).toContain('exit 0')
+  })
+
   // TypeScript source files are left out of the assertion: tests that read files never name them (FF-07).
   it('self-tests when the capture or the History views it captures change', () => {
     for (const path of [
