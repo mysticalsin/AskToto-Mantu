@@ -102,7 +102,8 @@ jobs:
           MAC_SHA256: ${{ inputs.mac_sha256 }}
           WIN_SHA256: ${{ inputs.win_sha256 }}
         run: node scripts/qa/candidate-scenarios.mjs resolve --scenario "$SCENARIO" --mac-sha256 "$MAC_SHA256" --win-sha256 "$WIN_SHA256" >> "$GITHUB_OUTPUT"
-      - name: The candidate is a successful qa-candidate.yml dispatch on main or release/1.9.x
+      - name: >
+          qa-candidate.yml dispatch on main or release/1.9.x
         env:
           GH_TOKEN: ${{ github.token }}
           CANDIDATE_RUN: ${{ inputs.candidate_run }}
