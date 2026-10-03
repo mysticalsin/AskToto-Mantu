@@ -180,6 +180,7 @@ function hostedWindowsEnv(stubs: ReturnType<typeof hostedWindowsStubs>, port: nu
     M2_0008_CONTRACT_LAUNCH_SETTLE_SECONDS: '1',
     M2_0008_CONTRACT_POLL_WAIT_SECONDS: '1',
     M2_0008_CONTRACT_REOPEN_SETTLE_SECONDS: '1',
+    M2_0008_CONTRACT_CYGPATH_BIN: bashPath(join(stubs.bin, 'cygpath')),
     M2_0008_CONTRACT_CDP_PORT: String(port),
     ...extra
   }
@@ -499,10 +500,18 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
 
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)
       const nodeOptions = readFileSync(nodeOptionsLog, 'utf8').trim()
-      expect(nodeOptions).toMatch(/^--require "\//)
-      expect(nodeOptions).toContain('/fuse-probe/node-options-probe.cjs"')
       expect(nodeOptions).not.toContain(`--require ${outArg}`)
-      expect(readFileSync(requirePathLog, 'utf8').trim()).toBe(join(realpathSync(out), 'fuse-probe', 'node-options-probe.cjs'))
+      const requirePath = readFileSync(requirePathLog, 'utf8').trim()
+      if (process.platform === 'win32') {
+        expect(nodeOptions).toMatch(/^--require "[A-Z]:\\/)
+        expect(nodeOptions).toContain('\\fuse-probe\\node-options-probe.cjs"')
+        expect(requirePath).toMatch(/^[A-Z]:\\/)
+        expect(requirePath).toContain('\\fuse-probe\\node-options-probe.cjs')
+      } else {
+        expect(nodeOptions).toMatch(/^--require "\//)
+        expect(nodeOptions).toContain('/fuse-probe/node-options-probe.cjs"')
+        expect(requirePath).toBe(join(realpathSync(out), 'fuse-probe', 'node-options-probe.cjs'))
+      }
       expect(JSON.parse(readFileSync(join(out, 'node-options-fuse.json'), 'utf8'))).toMatchObject({ node_options_fuse: 'ENABLED' })
     } finally {
       rmSync(root, { recursive: true, force: true })

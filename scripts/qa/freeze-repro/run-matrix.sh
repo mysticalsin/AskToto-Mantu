@@ -219,8 +219,9 @@ record_not_applicable_interrupt() {
 
 app_profile_path() {
   local profile=$1
-  if [[ "${HOSTED_WINDOWS:-0}" == 1 ]] && command -v cygpath >/dev/null 2>&1; then
-    cygpath -w "$profile"
+  local cygpath_bin="${M2_0008_CONTRACT_CYGPATH_BIN:-cygpath}"
+  if [[ "${HOSTED_WINDOWS:-0}" == 1 ]] && command -v "$cygpath_bin" >/dev/null 2>&1; then
+    "$cygpath_bin" -w "$profile"
     return
   fi
   printf '%s' "$profile"
@@ -232,8 +233,9 @@ node_options_require_path() {
   dir=$(cd "$(dirname "$path")" && pwd -P)
   base=$(basename "$path")
   absolute="$dir/$base"
-  if [[ "${HOSTED_WINDOWS:-0}" == 1 ]] && command -v cygpath >/dev/null 2>&1; then
-    cygpath -w "$absolute"
+  local cygpath_bin="${M2_0008_CONTRACT_CYGPATH_BIN:-cygpath}"
+  if [[ ("${HOSTED_WINDOWS:-0}" == 1 || "$(uname -s)" =~ ^(MINGW|MSYS|CYGWIN)) ]] && command -v "$cygpath_bin" >/dev/null 2>&1; then
+    "$cygpath_bin" -w "$absolute"
     return
   fi
   printf '%s' "$absolute"
