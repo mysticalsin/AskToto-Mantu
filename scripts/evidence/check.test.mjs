@@ -1,13 +1,17 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { RECORD_SCHEMA } from './record.mjs'
-import { TEST_WORKFLOW, ledgerProblems, loadProgram, outputProblems, prProblems, githubApi, m2_0008BundleProblems, m2_0194BundleProblems } from './check.mjs'
+import { RECORD_SCHEMA, recordProblems } from './record.mjs'
+import {
+  TEST_WORKFLOW, ledgerProblems, loadProgram, outputProblems, prProblems, githubApi, m2_0008BundleProblems,
+  m2_0194BundleProblems, releaseInputProblems, releaseProblems
+} from './check.mjs'
+import { drawSample, populationOf } from './sample.mjs'
 
 const SHA1_A = '1'.repeat(40)
 const SHA1_B = '2'.repeat(40)
@@ -542,6 +546,29 @@ test('C28 CLI --ticket M2-0008 validates a freeze repro bundle path', () => {
   assert.match(output, /M2-0008 bundle: OK/)
 })
 
+test('C29 CLI --ticket M2-0198 validates a soak record: a supported verdict exits 0, a contradicted one exits 1', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'check-soak-'))
+  const cliPath = fileURLToPath(new URL('./check.mjs', import.meta.url))
+  const content = [
+    '# Owner soak, five-day window', '', 'evidence_level: MEASURED', 'rule: soak-rule-1', 'app_version: 1.9.7',
+    'consecutive_active_days: 5', 'first_day: 2026-10-01', 'last_day: 2026-10-05', 'stalls_over_5s: 0',
+    'unclean_shutdowns: 1', 'orphan_reaps: 2', 'orphan_reaps_after_unclean_exit: 2', 'reveal_no_ops: 0',
+    'brain_index_quarantined: 0', 'verdict: HOLD', ''
+  ].join('\n')
+  const good = join(dir, 'good.md')
+  const bad = join(dir, 'bad.md')
+  writeFileSync(good, content)
+  writeFileSync(bad, content.replace('verdict: HOLD', 'verdict: PROCEED'))
+
+  const output = execFileSync(process.execPath, [cliPath, '--ticket', 'M2-0198', '--record', good], { encoding: 'utf8' })
+  assert.match(output, /M2-0198 soak record: OK/)
+  const failed = spawnSync(process.execPath, [cliPath, '--ticket', 'M2-0198', '--record', bad], { encoding: 'utf8' })
+  assert.equal(failed.status, 1)
+  assert.match(failed.stderr, /contradicts the counts/)
+  const missing = spawnSync(process.execPath, [cliPath, '--ticket', 'M2-0198', '--record', join(dir, 'none.md')], { encoding: 'utf8' })
+  assert.equal(missing.status, 2)
+})
+
 const STALL_BUNDLE = '0f8fad5b-d9cb-469f-a165-70867728950e.1700000000000.31000.txt'
 
 function writeM2_0194Bundle(root, { environment = {}, leadAction } = {}) {
@@ -549,25 +576,55 @@ function writeM2_0194Bundle(root, { environment = {}, leadAction } = {}) {
   const writeRows = (name, rows) => writeFileSync(join(root, name), rows.map((row) => JSON.stringify(row)).join('\n') + '\n')
   writeFileSync(join(root, 'README.md'), '# M2-0194\n')
   writeFileSync(join(root, 'M2-0194.lead-action.md'), leadAction ?? 'LEAD_ACTION: File the M2-0194 LIVE_VERIFIED record from this bundle.\n')
-  writeJson('environment.json', { ticket: 'M2-0194', artifact_sha256: 'a'.repeat(64), candidate_run: '123456', ...environment })
+  writeJson('environment.json', {
+    ticket: 'M2-0194',
+    artifact_sha256: 'a'.repeat(64),
+    candidate_run: '123456',
+    mode: 'hosted-live',
+    installed_variant: 'macos-dmg',
+    host: { label: 'macos-latest' },
+    ...environment
+  })
   writeJson('external-blockers.json', { ticket: 'M2-0194', blockers: [{ status: 'BLOCKED_EXTERNAL', unblock_step: 'Run on QA account.' }] })
   writeJson('stall-bundle-names.json', { names: [STALL_BUNDLE] })
   writeRows('matrix.jsonl', [
-    { row: 'row-1-history-open' },
-    { row: 'row-2-brain-status-blocked-brain' },
-    { row: 'row-3-macos-activate' },
-    { row: 'row-4-second-instance-reopen' },
+    { row: 'row-1-history-open', operator_result: 'pass', automatic: true },
+    { row: 'row-1-history-open', sampled: true, main_sample: true, renderer_samples: 1, renderers_selected_by: '--type=renderer' },
+    { row: 'row-2-brain-status-blocked-brain', operator_result: 'pass', automatic: true },
+    { row: 'row-2-brain-status-blocked-brain', sampled: true, main_sample: true, renderer_samples: 1, renderers_selected_by: '--type=renderer' },
+    { row: 'row-3-macos-activate', operator_result: 'pass', automatic: true },
+    { row: 'row-3-macos-activate', sampled: true, main_sample: true, renderer_samples: 1, renderers_selected_by: '--type=renderer' },
+    { row: 'row-4-second-instance-reopen', operator_result: 'pass', automatic: true },
+    { row: 'row-4-second-instance-reopen', sampled: true, main_sample: true, renderer_samples: 1, renderers_selected_by: '--type=renderer' },
     { row: 'row-5-dataless-brain-idle', fixture: 'dataless-brain-index' },
     { row: 'row-9-network-off-flapping', fixture: 'dataless-meeting' }
   ])
   writeRows('interrupt-results.jsonl', ['network-off', 'file-provider-cancel', 'process-signal'].map((interrupt) => ({ interrupt })))
-  writeRows('stall-excerpt.jsonl', [{ event: 'app.stall.summary', count: 1 }])
-  writeRows('sampler-excerpt.jsonl', [{ event: 'app.stall.sampled', stalledMs: 31000, bundle: STALL_BUNDLE }])
+  writeRows('stall-excerpt.jsonl', [{ event: 'app.stall', tMs: 1700000000000, stalledMs: 31000 }])
+  writeRows('sampler-excerpt.jsonl', [{ event: 'app.stall.sampled', tMs: 1700000000010, stalledMs: 31000 }])
   writeRows('reveal-excerpt.jsonl', [{ event: 'reveal', outcome: 'shown' }])
   writeRows('sidecar-excerpt.jsonl', [{ event: 'sidecar.spawn', name: 'asr' }])
+  writeRows('stalls.jsonl', [
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000000,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [{ symbol: 'main', image: 'Metis' }],
+      attribution: null
+    },
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000010,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [{ symbol: 'main', image: 'Metis' }],
+      attribution: null
+    }
+  ])
 }
 
-test('C29 M2-0194 bundle check requires the matrix, the four excerpts and stall bundle names only', () => {
+test('C30 M2-0194 bundle check requires the matrix, the four excerpts and stall bundle names only', () => {
   const root = mkdtempSync(join(tmpdir(), 'm2-0194-bundle-'))
   writeM2_0194Bundle(root)
   assert.deepEqual(m2_0194BundleProblems(root), [])
@@ -609,7 +666,288 @@ test('C29 M2-0194 bundle check requires the matrix, the four excerpts and stall 
   assertProblem(m2_0194BundleProblems(root), 'sampler-excerpt.jsonl: missing from M2-0194 bundle')
 })
 
-test('C30 CLI --ticket M2-0194 validates a bundle and rejects an incomplete one; other tickets exit 2', () => {
+test('C30b M2-0194 hosted-live bundle rejects each live attribution rule gap', () => {
+  const root = mkdtempSync(join(tmpdir(), 'm2-0194-live-rules-'))
+  writeM2_0194Bundle(root)
+
+  const writeJson = (name, value) => writeFileSync(join(root, name), `${JSON.stringify(value)}\n`)
+  const writeRows = (name, rows) => writeFileSync(join(root, name), rows.map((row) => JSON.stringify(row)).join('\n') + '\n')
+
+  writeJson('environment.json', { ticket: 'M2-0194', candidate_run: '123456', artifact_sha256: 'a'.repeat(64), installed_variant: 'macos-dmg' })
+  assertProblem(m2_0194BundleProblems(root), 'mode must be hosted-live or dry-run')
+
+  writeM2_0194Bundle(root)
+  writeJson('environment.json', { ticket: 'M2-0194', mode: 'hosted-live', artifact_sha256: 'a'.repeat(64), installed_variant: 'macos-dmg' })
+  assertProblem(m2_0194BundleProblems(root), 'candidate_run must be the qa-candidate run id')
+
+  writeM2_0194Bundle(root)
+  writeJson('environment.json', { ticket: 'M2-0194', mode: 'hosted-live', candidate_run: '123456', installed_variant: 'macos-dmg' })
+  assertProblem(m2_0194BundleProblems(root), 'artifact_sha256 must be a lowercase sha256')
+
+  writeM2_0194Bundle(root)
+  writeJson('environment.json', {
+    ticket: 'M2-0194',
+    mode: 'hosted-live',
+    candidate_run: '123456',
+    artifact_sha256: 'a'.repeat(64),
+    host: { label: 'macos-latest' }
+  })
+  assertProblem(m2_0194BundleProblems(root), 'installed_variant must be macos-dmg or windows-setup')
+
+  writeM2_0194Bundle(root)
+  writeRows('matrix.jsonl', [
+    { row: 'row-1-history-open', operator_result: 'pass', automatic: true },
+    { row: 'row-1-history-open', sampled: false, reason: 'dry-run-or-no-app' },
+    { row: 'row-2-brain-status-blocked-brain', operator_result: 'pass', automatic: true },
+    { row: 'row-2-brain-status-blocked-brain', sampled: true, main_sample: true, renderer_samples: 1, renderers_selected_by: '--type=renderer' },
+    { row: 'row-3-macos-activate', operator_result: 'pass', automatic: true },
+    { row: 'row-3-macos-activate', sampled: true, main_sample: true, renderer_samples: 1, renderers_selected_by: '--type=renderer' },
+    { row: 'row-4-second-instance-reopen', operator_result: 'pass', automatic: true },
+    { row: 'row-4-second-instance-reopen', sampled: true, main_sample: true, renderer_samples: 1, renderers_selected_by: '--type=renderer' },
+    { row: 'row-5-dataless-brain-idle', fixture: 'dataless-brain-index' },
+    { row: 'row-9-network-off-flapping', fixture: 'dataless-meeting' }
+  ])
+  assertProblem(m2_0194BundleProblems(root), 'row-1-history-open', 'main and role-selected renderer samples')
+
+  writeM2_0194Bundle(root)
+  writeRows('stalls.jsonl', [
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000999,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [{ symbol: 'main', image: 'Metis' }],
+      attribution: null
+    },
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000010,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [{ symbol: 'main', image: 'Metis' }],
+      attribution: null
+    }
+  ])
+  assertProblem(m2_0194BundleProblems(root), 'missing entry for stall excerpt', '1700000000000', '31000')
+
+  writeM2_0194Bundle(root)
+  writeRows('stalls.jsonl', [
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000000,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [],
+      attribution: null,
+      status: 'FAIL',
+      error_class: 'sample_missing'
+    },
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000010,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [{ symbol: 'main', image: 'Metis' }],
+      attribution: null
+    }
+  ])
+  assertProblem(m2_0194BundleProblems(root), 'live macOS stall entries', 'nearest main-thread sample')
+
+  writeM2_0194Bundle(root, { environment: { host: { label: 'windows-latest' }, installed_variant: 'windows-setup' } })
+  writeRows('matrix.jsonl', [
+    { row: 'row-1-history-open', operator_result: 'pass', automatic: true },
+    { row: 'row-1-history-open', sampled: false, reason: 'process sampling unavailable on windows-latest; /usr/bin/sample is macOS-only and pgrep is not used' },
+    {
+      row: 'row-2-brain-status-blocked-brain',
+      operator_result: 'BLOCKED_EXTERNAL',
+      status: 'BLOCKED_EXTERNAL',
+      unblock_step: 'Run the FIFO-dependent row on macos-latest.'
+    },
+    {
+      row: 'row-3-macos-activate',
+      operator_result: 'not-applicable',
+      status: 'not-applicable',
+      reason: 'macOS-only activation row; windows-latest has no open(1) activation equivalent'
+    },
+    { row: 'row-4-second-instance-reopen', operator_result: 'pass', automatic: true },
+    { row: 'row-4-second-instance-reopen', sampled: false, reason: 'process sampling unavailable on windows-latest; /usr/bin/sample is macOS-only and pgrep is not used' },
+    { row: 'row-5-dataless-brain-idle', fixture: 'dataless-brain-index' },
+    { row: 'row-9-network-off-flapping', fixture: 'dataless-meeting' }
+  ])
+  writeRows('stalls.jsonl', [
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000000,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [],
+      attribution: null,
+      status: 'NOT_APPLICABLE',
+      reason: 'process sampling unavailable on windows-latest; /usr/bin/sample is macOS-only'
+    },
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000010,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [],
+      attribution: null,
+      status: 'NOT_APPLICABLE',
+      reason: 'process sampling unavailable on windows-latest; /usr/bin/sample is macOS-only'
+    }
+  ])
+  assert.deepEqual(m2_0194BundleProblems(root), [])
+})
+
+test('C30c M2-0194 hosted-live bundle rejects malformed stall attribution details', () => {
+  const root = mkdtempSync(join(tmpdir(), 'm2-0194-stall-rules-'))
+  const writeRows = (name, rows) => writeFileSync(join(root, name), rows.map((row) => JSON.stringify(row)).join('\n') + '\n')
+
+  writeM2_0194Bundle(root)
+  writeRows('stalls.jsonl', [
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000000,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [{ symbol: 'main', image: 'Metis' }],
+      attribution: null
+    }
+  ])
+  assertProblem(m2_0194BundleProblems(root), 'must have one entry per app.stall or app.stall.sampled excerpt')
+
+  writeM2_0194Bundle(root)
+  writeRows('stalls.jsonl', [
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000000,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [{ symbol: 'main', image: 'Metis' }],
+      attribution: 'x'
+    },
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000010,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [{ symbol: 'main', image: 'Metis' }],
+      attribution: null
+    }
+  ])
+  assertProblem(m2_0194BundleProblems(root), 'attribution must be null')
+
+  writeM2_0194Bundle(root)
+  writeRows('stalls.jsonl', [
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000000,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: Array.from({ length: 13 }, (_, i) => ({ symbol: `frame${i}`, image: 'Metis' })),
+      attribution: null
+    },
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000010,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [{ symbol: 'main', image: 'Metis' }],
+      attribution: null
+    }
+  ])
+  assertProblem(m2_0194BundleProblems(root), 'at most 12 entries')
+
+  writeM2_0194Bundle(root)
+  writeRows('stalls.jsonl', [
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000000,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [{ symbol: 'main', image: '/Applications/Metis.app/Contents/MacOS/Metis' }],
+      attribution: null
+    },
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000010,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [{ symbol: 'main', image: 'Metis' }],
+      attribution: null
+    }
+  ])
+  assertProblem(m2_0194BundleProblems(root), 'symbol and image basename only')
+
+  writeM2_0194Bundle(root)
+  writeRows('stall-excerpt.jsonl', [{ event: 'app.stall', tMs: 1, stalledMs: 1, message: 'meeting text' }])
+  assertProblem(m2_0194BundleProblems(root), 'message is not an allowed content-free attribution field')
+
+  writeM2_0194Bundle(root)
+  writeRows('stalls.jsonl', [
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000000,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [],
+      attribution: null,
+      status: 'FAIL'
+    },
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000010,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [{ symbol: 'main', image: 'Metis' }],
+      attribution: null
+    }
+  ])
+  assertProblem(m2_0194BundleProblems(root), 'FAIL entries need an error_class')
+
+  writeM2_0194Bundle(root)
+  writeRows('stalls.jsonl', [
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000000,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [],
+      attribution: null,
+      status: 'NOT_APPLICABLE',
+      reason: 'process sampling unavailable on windows-latest'
+    },
+    {
+      row: 'row-1-history-open',
+      tMs: 1700000000010,
+      stalledMs: 31000,
+      bundle: STALL_BUNDLE,
+      frames: [{ symbol: 'main', image: 'Metis' }],
+      attribution: null
+    }
+  ])
+  assertProblem(m2_0194BundleProblems(root), 'NOT_APPLICABLE sampling is only valid on windows-latest')
+
+  writeM2_0194Bundle(root, { environment: { host: { label: 'windows-latest' }, installed_variant: 'windows-setup' } })
+  writeRows('matrix.jsonl', [
+    { row: 'row-1-history-open', operator_result: 'pass', automatic: true },
+    { row: 'row-1-history-open', sampled: false, reason: 'process sampling unavailable on windows-latest; /usr/bin/sample is macOS-only and pgrep is not used' },
+    {
+      row: 'row-2-brain-status-blocked-brain',
+      operator_result: 'BLOCKED_EXTERNAL',
+      status: 'BLOCKED_EXTERNAL',
+      unblock_step: 'Run the FIFO-dependent row on macos-latest.'
+    },
+    { row: 'row-3-macos-activate', operator_result: 'pass', automatic: true },
+    { row: 'row-4-second-instance-reopen', operator_result: 'pass', automatic: true },
+    { row: 'row-4-second-instance-reopen', sampled: false, reason: 'process sampling unavailable on windows-latest; /usr/bin/sample is macOS-only and pgrep is not used' },
+    { row: 'row-5-dataless-brain-idle', fixture: 'dataless-brain-index' },
+    { row: 'row-9-network-off-flapping', fixture: 'dataless-meeting' }
+  ])
+  assertProblem(m2_0194BundleProblems(root), 'row-3-macos-activate must be not-applicable on windows-latest')
+})
+
+test('C31 CLI --ticket M2-0194 validates a bundle and rejects an incomplete one; other tickets exit 2', () => {
   const root = mkdtempSync(join(tmpdir(), 'm2-0194-bundle-cli-'))
   writeM2_0194Bundle(root)
   const cliPath = fileURLToPath(new URL('./check.mjs', import.meta.url))
@@ -732,7 +1070,7 @@ function hostedLiveBundle({ symptomRow = null } = {}) {
   return { root, writeJson, writeJsonl, matrix }
 }
 
-test('C29 M2-0008 hosted-live bundle: a documented-unsuccessful run and a reproduced run are both valid', () => {
+test('C30 M2-0008 hosted-live bundle: a documented-unsuccessful run and a reproduced run are both valid', () => {
   assert.deepEqual(m2_0008BundleProblems(hostedLiveBundle().root), [])
   assert.deepEqual(m2_0008BundleProblems(hostedLiveBundle({ symptomRow: 'row-1-history-open' }).root), [])
 
@@ -741,7 +1079,7 @@ test('C29 M2-0008 hosted-live bundle: a documented-unsuccessful run and a reprod
   assert.match(output, /M2-0008 bundle: OK/)
 })
 
-test('C30 M2-0008 hosted-live bundle requires mode artifacts, host facts and exercised, sampled automatic rows', () => {
+test('C31 M2-0008 hosted-live bundle requires mode artifacts, host facts and exercised, sampled automatic rows', () => {
   const noSummaryFile = hostedLiveBundle()
   rmSync(join(noSummaryFile.root, 'hosted-live-summary.json'))
   assertProblem(m2_0008BundleProblems(noSummaryFile.root), 'hosted-live-summary.json', 'missing from the hosted-live bundle')
@@ -789,7 +1127,7 @@ test('C30 M2-0008 hosted-live bundle requires mode artifacts, host facts and exe
   assertProblem(m2_0008BundleProblems(unprobed.root), 'node-options-fuse.json', 'hosted-live')
 })
 
-test('C31 M2-0008 hosted-live bundle requires blocked rows with unblock steps, the process-signal run and a hosted-runner import', () => {
+test('C32 M2-0008 hosted-live bundle requires blocked rows with unblock steps, the process-signal run and a hosted-runner import', () => {
   const unblocked = hostedLiveBundle()
   unblocked.writeJsonl('matrix.jsonl', unblocked.matrix.map((entry) =>
     entry.row === 'row-9-network-off-flapping' ? { ...entry, unblock_step: '' } : entry))
@@ -1095,4 +1433,396 @@ test('G2 mergedPullRequests pages until a short page, keeps only merged PRs, and
 test('G3 mergedPullRequests raises on a non-OK response instead of silently truncating', async () => {
   const api = githubApi('mysticalsin/AskToto-Mantu', undefined, async () => ({ ok: false, status: 502, json: async () => [] }))
   await assert.rejects(() => api.mergedPullRequests(), /502/)
+})
+
+// --release (M2-0511): the pre-registered release gate rows against the candidate's provenance.
+const RELEASE = '1.9.7'
+const CANDIDATE_RUN = 9001
+const CANDIDATE_COMMIT = '3'.repeat(40)
+const LEDGER_COMMIT = '4'.repeat(40)
+const SHA_MAC = 'a'.repeat(64)
+const SHA_WIN = 'b'.repeat(64)
+const SHA_QA = 'c'.repeat(64)
+const SHA_BASELINE = 'd'.repeat(64)
+const NOTES_PATH = `releases/${RELEASE}.md`
+const SAMPLE_PATH = `samples/${RELEASE}.sample.json`
+const RELEASE_DEPS = ['M2-0008', 'M2-0029', 'M2-0187', 'M2-0433', 'M2-0489']
+
+const releaseProvenance = (overrides = {}) => ({
+  schema: 1,
+  repository: 'owner/repo',
+  commit: CANDIDATE_COMMIT,
+  version: RELEASE,
+  run: { id: CANDIDATE_RUN, url: 'https://github.invalid/owner/repo/actions/runs/9001' },
+  builds: [
+    { variant: 'mac', assets: [{ name: `Metis-${RELEASE}.dmg`, size: 1, sha256: SHA_MAC }] },
+    { variant: 'mac-qa-identity', assets: [{ name: `Metis-QA-${RELEASE}.zip`, size: 1, sha256: SHA_QA }] },
+    { variant: 'win', assets: [{ name: `Metis-Setup-${RELEASE}.exe`, size: 1, sha256: SHA_WIN }] }
+  ],
+  ...overrides
+})
+
+const releaseGates = () => ({
+  schema: 1,
+  version: RELEASE,
+  rows: [
+    { id: 'install-launch', ticket: 'M2-0187', level: 'LIVE_VERIFIED', bytes: 'promotable', hosts: ['macos-latest', 'windows-latest'], accept: 'PASS' },
+    { id: 'st1-fifo', ticket: 'M2-0433', level: 'LIVE_VERIFIED', bytes: 'qa-identity', hosts: ['macos-latest'], accept: 'PASS', match: 'st1-fifo/' },
+    { id: 'st1-control', ticket: 'M2-0433', level: 'LIVE_VERIFIED', bytes: 'qa-identity', hosts: ['macos-latest'], accept: 'PASS', match: 'st1-control/' },
+    { id: 'census', ticket: 'M2-0489', level: 'MEASURED', bytes: 'promotable', hosts: ['macos-latest'], accept: 'PASS' },
+    { id: 'freeze-baseline', ticket: 'M2-0008', level: 'LIVE_VERIFIED', bytes: 'baseline', hosts: ['macos-latest'], accept: 'PASS', sha256: [SHA_BASELINE] },
+    { id: 'hk-w', ticket: 'M2-0029', level: 'LIVE_VERIFIED', bytes: 'promotable', hosts: ['windows-latest'], accept: 'PASS_OR_STATED' },
+    { id: 'renderer-kill', ticket: 'M2-0037', level: 'LIVE_VERIFIED', bytes: 'promotable', hosts: ['macos-latest'], accept: 'REPORT' }
+  ],
+  sample: { id: 'reexecution-sample', population_of: 'M2-0046', fraction: 0.1, path: SAMPLE_PATH },
+  accepted: { id: 'accepted' }
+})
+
+const releaseLedger = (statusOf = () => 'DONE') => ({
+  tickets: [
+    ticket({ id: 'M2-0046', status: 'TODO', depends_on: RELEASE_DEPS, scope_paths: [NOTES_PATH] }),
+    ...RELEASE_DEPS.map((id) => ticket({ id, status: statusOf(id) })),
+    ticket({ id: 'M2-0037', status: 'TODO' })
+  ]
+})
+
+function boundRecord(ticketId, host, artifactSha256, overrides = {}) {
+  return record({
+    ticket: ticketId,
+    evidence_level: 'LIVE_VERIFIED',
+    environment: { kind: 'hosted-runner', host },
+    ci_run_id: 700,
+    command: `node scripts/qa/${ticketId}.mjs --host ${host}`,
+    output: { path: `evidence/raw/${ticketId}/${host}/result.json`, sha256: 'e'.repeat(64) },
+    artifact_sha256: artifactSha256,
+    build_run_id: CANDIDATE_RUN,
+    ...overrides
+  })
+}
+
+const reexecutionRecord = (ticketId) => record({ ticket: ticketId, reexecuted_by: session('reexec-1', 'gpt-5.5') })
+
+const acceptedRecord = (text = `Accepted candidate run ${CANDIDATE_RUN}: ${SHA_MAC} and ${SHA_WIN}.`) =>
+  record({ ticket: 'M2-0046', evidence_level: 'ACCEPTED', owner_statement: { date: '2026-10-01', text } })
+
+const releaseNotes = (extra = '') => `# Métis ${RELEASE}
+
+Candidate run ${CANDIDATE_RUN}, built from commit ${CANDIDATE_COMMIT}.
+
+| Metis-${RELEASE}.dmg | ${SHA_MAC} |
+| Metis-Setup-${RELEASE}.exe | ${SHA_WIN} |
+
+## Residual risks
+
+- None beyond the gate rows.${extra}
+
+## Deferred
+
+- Nothing.
+`
+
+function sampleJson(ledgerObject, overrides = {}) {
+  const population = populationOf(ledgerObject, 'M2-0046')
+  return {
+    since: null, populationRule: 'depends-on-closed', of: 'M2-0046', seed: CANDIDATE_COMMIT,
+    population, sample: drawSample(population, CANDIDATE_COMMIT, 0.1), ledger_commit: LEDGER_COMMIT, ...overrides
+  }
+}
+
+function releaseRecords(sampled) {
+  return [
+    boundRecord('M2-0187', 'macos-latest', SHA_MAC),
+    boundRecord('M2-0187', 'windows-latest', SHA_WIN),
+    boundRecord('M2-0433', 'macos-latest', SHA_QA, { output: { path: 'evidence/raw/M2-0433/st1-fifo/result.json', sha256: 'e'.repeat(64) } }),
+    boundRecord('M2-0433', 'macos-latest', SHA_QA, { output: { path: 'evidence/raw/M2-0433/st1-control/result.json', sha256: 'e'.repeat(64) } }),
+    boundRecord('M2-0489', 'macos-latest', SHA_MAC, { evidence_level: 'MEASURED' }),
+    boundRecord('M2-0008', 'macos-latest', SHA_BASELINE, { build_run_id: 777 }),
+    boundRecord('M2-0029', 'windows-latest', SHA_WIN),
+    acceptedRecord(),
+    ...sampled.map(reexecutionRecord)
+  ]
+}
+
+function byTicket(records) {
+  const map = new Map()
+  for (const r of records) map.set(r.ticket, [...(map.get(r.ticket) ?? []), r])
+  return map
+}
+
+/** Every releaseProblems argument for a candidate that meets every row; tests mutate one piece. */
+function releaseCase() {
+  const ledgerObject = releaseLedger()
+  const sample = sampleJson(ledgerObject)
+  return {
+    version: RELEASE,
+    gates: releaseGates(),
+    provenance: releaseProvenance(),
+    ledger: ledgerObject,
+    recordsByTicket: byTicket(releaseRecords(sample.sample)),
+    notesText: releaseNotes(),
+    sample,
+    pastLedger: ledgerObject
+  }
+}
+
+function releaseOf(c) {
+  assert.deepEqual(releaseInputProblems(c.gates, c.provenance, c.ledger), [])
+  return releaseProblems({
+    ...c,
+    notesPath: NOTES_PATH,
+    readSample(path) {
+      assert.equal(path, SAMPLE_PATH)
+      return c.sample
+    },
+    ledgerAt(commit) {
+      if (commit !== LEDGER_COMMIT) throw new Error(`unknown commit ${commit}`)
+      return c.pastLedger
+    }
+  })
+}
+
+/** Replaces a ticket's gate records, keeping any re-execution record so the sample row stays met. */
+function setRecords(c, ticketId, records) {
+  c.recordsByTicket.set(ticketId, [...records, ...(c.recordsByTicket.get(ticketId) ?? []).filter((r) => r.reexecuted_by !== undefined)])
+}
+
+/** Exactly one problem line, containing every fragment. */
+function assertOnlyProblem(problems, ...fragments) {
+  assert.equal(problems.length, 1, JSON.stringify(problems))
+  assertProblem(problems, ...fragments)
+}
+
+test('R1 --release: every row met on the candidate bytes has no problems; a REPORT row is printed, never failed', () => {
+  const { problems, reports } = releaseOf(releaseCase())
+  assert.deepEqual(problems, [])
+  assert.deepEqual(reports, ['REPORT renderer-kill [M2-0037 LIVE_VERIFIED promotable on macos-latest]: no LIVE_VERIFIED record'])
+})
+
+test('R2 --release: a PASS bound to another run is reported as bound to that run, not the candidate', () => {
+  const c = releaseCase()
+  setRecords(c, 'M2-0187', [
+    boundRecord('M2-0187', 'macos-latest', SHA_MAC, { build_run_id: 1234 }),
+    boundRecord('M2-0187', 'windows-latest', SHA_WIN)
+  ])
+  assertOnlyProblem(releaseOf(c).problems, 'install-launch', 'macos-latest', 'bound to run 1234, not the candidate')
+})
+
+test('R3 --release: a hosted-runner record without ci_run_id does not meet a row', () => {
+  const c = releaseCase()
+  const { ci_run_id: _dropped, ...withoutRun } = boundRecord('M2-0489', 'macos-latest', SHA_MAC, { evidence_level: 'MEASURED' })
+  setRecords(c, 'M2-0489', [withoutRun])
+  assertOnlyProblem(releaseOf(c).problems, 'census', 'hosted-runner record with no ci_run_id')
+})
+
+test('R4 --release: QA-identity bytes do not meet a row that requires promotable bytes', () => {
+  const c = releaseCase()
+  setRecords(c, 'M2-0187', [
+    boundRecord('M2-0187', 'macos-latest', SHA_QA),
+    boundRecord('M2-0187', 'windows-latest', SHA_WIN)
+  ])
+  assertOnlyProblem(releaseOf(c).problems, 'install-launch', 'macos-latest', 'names qa-identity bytes', 'promotable bytes are required')
+})
+
+test('R5 --release: a MEASURED record without build_run_id does not meet a candidate-bound row', () => {
+  const c = releaseCase()
+  const { build_run_id: _dropped, ...unbound } = boundRecord('M2-0489', 'macos-latest', SHA_MAC, { evidence_level: 'MEASURED' })
+  assert.deepEqual(recordProblems(unbound), [], 'record.mjs accepts a MEASURED record without build_run_id')
+  setRecords(c, 'M2-0489', [unbound])
+  assertOnlyProblem(releaseOf(c).problems, 'census', 'MEASURED', 'no build_run_id')
+})
+
+test('R6 --release: rows sharing ticket, level and host are told apart by match; an ambiguous gate file is malformed', () => {
+  const c = releaseCase()
+  c.recordsByTicket.set('M2-0433', c.recordsByTicket.get('M2-0433').filter((r) => !(r.output?.path ?? '').includes('st1-control/')))
+  assertOnlyProblem(releaseOf(c).problems, 'st1-control', 'no LIVE_VERIFIED record matching "st1-control/"')
+
+  // The control record alone must not satisfy the fifo row either.
+  const d = releaseCase()
+  d.recordsByTicket.set('M2-0433', d.recordsByTicket.get('M2-0433').filter((r) => !(r.output?.path ?? '').includes('st1-fifo/')))
+  assertOnlyProblem(releaseOf(d).problems, 'st1-fifo [', 'matching "st1-fifo/"')
+
+  const unmatched = releaseGates()
+  delete unmatched.rows[2].match
+  assertProblem(releaseInputProblems(unmatched, releaseProvenance(), releaseLedger()), 'st1-fifo, st1-control', 'M2-0433 LIVE_VERIFIED on macos-latest')
+  const overlapping = releaseGates()
+  overlapping.rows[2].match = 'st1-fifo/control'
+  assertProblem(releaseInputProblems(overlapping, releaseProvenance(), releaseLedger()), 'st1-fifo, st1-control')
+})
+
+test('R7 --release: a stated row is met by a bound PASS or FAIL, or by a gate:<id> line in the release file', () => {
+  const c = releaseCase()
+  setRecords(c, 'M2-0029', [])
+  assertOnlyProblem(releaseOf(c).problems, 'hk-w', 'no LIVE_VERIFIED record', 'no gate:hk-w line')
+
+  c.notesText = releaseNotes('\n- gate:hk-w-2 is a different row.')
+  assertOnlyProblem(releaseOf(c).problems, 'hk-w', 'no gate:hk-w line')
+
+  c.notesText = releaseNotes('\n- gate:hk-w Windows hotkey rows have no hosted-runner result yet.')
+  assert.deepEqual(releaseOf(c).problems, [])
+
+  const d = releaseCase()
+  setRecords(d, 'M2-0029', [boundRecord('M2-0029', 'windows-latest', SHA_WIN, { result: 'FAIL', exit_code: 1 })])
+  assert.deepEqual(releaseOf(d).problems, [])
+  setRecords(d, 'M2-0029', [boundRecord('M2-0029', 'windows-latest', SHA_WIN, { result: 'FAIL', exit_code: 1, build_run_id: 1234 })])
+  assertOnlyProblem(releaseOf(d).problems, 'hk-w', 'bound to run 1234')
+})
+
+test('R8 --release: the sample is recomputed at its ledger_commit, so tickets closing after the draw do not change it', () => {
+  const c = releaseCase()
+  c.pastLedger = releaseLedger((id) => (id === 'M2-0029' ? 'IN_PROGRESS' : 'DONE'))
+  c.sample = sampleJson(c.pastLedger)
+  for (const id of c.sample.sample) c.recordsByTicket.set(id, [...(c.recordsByTicket.get(id) ?? []), reexecutionRecord(id)])
+  assert.notDeepEqual(populationOf(c.ledger, 'M2-0046'), c.sample.population, 'M2-0029 closed after the draw')
+  assert.deepEqual(releaseOf(c).problems, [])
+})
+
+test('R9 --release: a sample that differs from the recomputed draw, another seed or a missing re-execution each fail the row', () => {
+  const c = releaseCase()
+  const other = c.sample.population.find((id) => !c.sample.sample.includes(id))
+  c.sample = { ...c.sample, sample: [other] }
+  assertOnlyProblem(releaseOf(c).problems, 'reexecution-sample', 'differ from sample.mjs --population-of M2-0046', LEDGER_COMMIT)
+
+  const d = releaseCase()
+  d.sample = { ...d.sample, seed: '5'.repeat(40) }
+  assertOnlyProblem(releaseOf(d).problems, 'reexecution-sample', 'is not the candidate commit')
+
+  const e = releaseCase()
+  const [sampled] = e.sample.sample
+  e.recordsByTicket.set(sampled, e.recordsByTicket.get(sampled).filter((r) => r.reexecuted_by === undefined))
+  assertOnlyProblem(releaseOf(e).problems, 'reexecution-sample', `R-REEX) for ${sampled}`)
+
+  // A re-execution by the implementer's own model fails R-REEX.
+  const f = releaseCase()
+  const [fSampled] = f.sample.sample
+  f.recordsByTicket.set(fSampled, [...f.recordsByTicket.get(fSampled), record({ ticket: fSampled, reexecuted_by: session('reexec-2') })])
+  assertOnlyProblem(releaseOf(f).problems, 'reexecution-sample', fSampled)
+})
+
+test('R10 --release: an ACCEPTED record must name the candidate run and every promotable sha256', () => {
+  const c = releaseCase()
+  c.recordsByTicket.set('M2-0046', [acceptedRecord(`Accepted candidate run ${CANDIDATE_RUN}: ${SHA_MAC}.`)])
+  assertOnlyProblem(releaseOf(c).problems, 'accepted [M2-0046 ACCEPTED]', `Metis-Setup-${RELEASE}.exe`)
+
+  c.recordsByTicket.set('M2-0046', [acceptedRecord(`Accepted candidate run ${CANDIDATE_RUN}0: ${SHA_MAC} ${SHA_WIN}.`)])
+  assertOnlyProblem(releaseOf(c).problems, 'accepted', `run ${CANDIDATE_RUN}`)
+
+  c.recordsByTicket.delete('M2-0046')
+  assertOnlyProblem(releaseOf(c).problems, 'accepted', 'no ACCEPTED record')
+})
+
+test('R11 --release: the release file must name the run, the commit and every promotable sha256, with both headings', () => {
+  const c = releaseCase()
+  c.notesText = releaseNotes().replace('## Deferred', '## Later')
+  assertOnlyProblem(releaseOf(c).problems, 'release file', 'missing the heading "Deferred"')
+
+  c.notesText = releaseNotes().replace(CANDIDATE_COMMIT, 'the candidate commit').replace(SHA_WIN, 'pending')
+  const { problems } = releaseOf(c)
+  assert.equal(problems.length, 2, JSON.stringify(problems))
+  assertProblem(problems, 'release file', CANDIDATE_COMMIT)
+  assertProblem(problems, 'release file', `Metis-Setup-${RELEASE}.exe`)
+})
+
+test('R12 --release: the provenance version, the baseline sha256s and a single release ticket are each required', () => {
+  const c = releaseCase()
+  c.provenance = releaseProvenance({ version: '1.9.8' })
+  assertOnlyProblem(releaseOf(c).problems, 'provenance', '1.9.8 is not 1.9.7')
+
+  const d = releaseCase()
+  setRecords(d, 'M2-0008', [boundRecord('M2-0008', 'macos-latest', SHA_MAC)])
+  assertOnlyProblem(releaseOf(d).problems, 'freeze-baseline', 'not one of the baseline sha256s')
+
+  const e = releaseCase()
+  e.ledger = { tickets: [...e.ledger.tickets, ticket({ id: 'M2-0600', scope_paths: [NOTES_PATH] })] }
+  assertOnlyProblem(releaseOf(e).problems, 'accepted', 'exactly one ledger ticket', 'found 2')
+})
+
+test('R13 releaseInputProblems rejects a malformed gate file, provenance or ledger', () => {
+  const good = [releaseGates(), releaseProvenance(), releaseLedger()]
+  assert.deepEqual(releaseInputProblems(...good), [])
+  const broken = [
+    [{ ...releaseGates(), schema: 2 }, 'gates.schema'],
+    [{ ...releaseGates(), rows: [] }, 'gates.rows'],
+    [{ ...releaseGates(), rows: [{ ...releaseGates().rows[0], bytes: 'any' }] }, 'bytes'],
+    [{ ...releaseGates(), rows: [{ ...releaseGates().rows[4], sha256: [] }] }, 'baseline row'],
+    [{ ...releaseGates(), rows: [{ ...releaseGates().rows[0], extra: 1 }] }, 'unexpected key'],
+    [{ ...releaseGates(), sample: { id: 'sample', population_of: 'M2-0046', fraction: 0 } }, 'gates.sample'],
+    [{ ...releaseGates(), accepted: { id: 'census' } }, 'duplicate row id census']
+  ]
+  for (const [gates, fragment] of broken) assertProblem(releaseInputProblems(gates, good[1], good[2]), fragment)
+  assertProblem(releaseInputProblems(good[0], { ...releaseProvenance(), run: { id: 'x' } }, good[2]), 'provenance.run.id')
+  assertProblem(releaseInputProblems(good[0], good[1], {}), 'ledger')
+})
+
+test('C32 CLI --release: a met tree exits 0, an unmet row exits 1 one line per problem, bad usage or input exits 2', () => {
+  const root = mkdtempSync(join(tmpdir(), 'evidence-release-'))
+  for (const dir of ['ledger', 'evidence/records', 'samples', 'releases']) mkdirSync(join(root, ...dir.split('/')), { recursive: true })
+  const ledgerPath = join(root, 'ledger', 'tickets.json')
+  const ledgerObject = releaseLedger()
+  writeFileSync(ledgerPath, JSON.stringify(ledgerObject))
+  const git = (...args) => execFileSync('git', ['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.com', '-c', 'commit.gpgsign=false', ...args],
+    { cwd: root, encoding: 'utf8', stdio: 'pipe' }).trim()
+  git('init', '-q')
+  git('add', 'ledger/tickets.json')
+  git('commit', '-q', '-m', 'ledger')
+  const ledgerCommit = git('rev-parse', 'HEAD')
+
+  const sample = sampleJson(ledgerObject, { ledger_commit: ledgerCommit })
+  writeFileSync(join(root, ...SAMPLE_PATH.split('/')), JSON.stringify(sample))
+  for (const [id, list] of byTicket(releaseRecords(sample.sample))) {
+    writeFileSync(join(root, 'evidence', 'records', `${id}.jsonl`), list.map((r) => `${JSON.stringify(r)}\n`).join(''))
+  }
+  const notesPath = join(root, ...NOTES_PATH.split('/'))
+  const gatesPath = join(root, 'gates.json')
+  const provenancePath = join(root, 'provenance.json')
+  writeFileSync(notesPath, releaseNotes())
+  writeFileSync(gatesPath, JSON.stringify(releaseGates()))
+  writeFileSync(provenancePath, JSON.stringify(releaseProvenance()))
+
+  const cliPath = fileURLToPath(new URL('./check.mjs', import.meta.url))
+  const releaseArgs = ['--release', RELEASE, '--gates', gatesPath, '--provenance', provenancePath, '--ledger', ledgerPath, '--notes', notesPath]
+  const run = (args) => execFileSync(process.execPath, [cliPath, ...args], { encoding: 'utf8', stdio: 'pipe' })
+  const ok = run(releaseArgs)
+  assert.match(ok, /release 1\.9\.7: OK/)
+  assert.match(ok, /REPORT renderer-kill/)
+
+  writeFileSync(notesPath, releaseNotes().replace('## Deferred', '## Later').replace(CANDIDATE_COMMIT, 'the commit'))
+  assert.throws(() => run(releaseArgs), (error) => {
+    assert.equal(error.status, 1)
+    assert.deepEqual(error.stderr.trim().split(/\r?\n/).sort(), [
+      `- release file: does not name the commit ${CANDIDATE_COMMIT}`,
+      '- release file: missing the heading "Deferred"'
+    ])
+    return true
+  })
+  writeFileSync(notesPath, releaseNotes())
+
+  // A later hosted-runner record without ci_run_id is malformed input, not skipped for the older PASS.
+  const censusPath = join(root, 'evidence', 'records', 'M2-0489.jsonl')
+  const censusRecords = readFileSync(censusPath, 'utf8')
+  const { ci_run_id: _dropped, ...unrun } = boundRecord('M2-0489', 'macos-latest', SHA_MAC, { evidence_level: 'MEASURED' })
+  writeFileSync(censusPath, `${censusRecords}${JSON.stringify(unrun)}\n`)
+  assert.throws(() => run(releaseArgs), (error) => {
+    assert.equal(error.status, 2)
+    assert.match(error.stderr, /records\/M2-0489\.jsonl:\d+: ci_run_id: required for a hosted-runner MEASURED record/)
+    return true
+  })
+  writeFileSync(censusPath, censusRecords)
+  assert.match(run(releaseArgs), /release 1\.9\.7: OK/)
+
+  for (const args of [
+    releaseArgs.slice(0, -2),
+    [...releaseArgs, '--pr-event', gatesPath],
+    ['--ledger', ledgerPath, '--gates', gatesPath],
+    ['--release', RELEASE, '--unknown', 'x']
+  ]) {
+    assert.throws(() => run(args), (error) => error.status === 2)
+  }
+  const usage = /--release <version> --gates <gates\.json> --provenance <provenance\.json> --ledger <tickets\.json> --notes/
+  assert.throws(() => run([]), (error) => error.status === 2 && usage.test(error.stderr))
+
+  writeFileSync(gatesPath, JSON.stringify({ schema: 1 }))
+  assert.throws(() => run(releaseArgs), (error) => error.status === 2 && /gates\.rows/.test(error.stderr))
+  writeFileSync(gatesPath, '{')
+  assert.throws(() => run(releaseArgs), (error) => error.status === 2)
+  rmSync(root, { recursive: true, force: true })
 })

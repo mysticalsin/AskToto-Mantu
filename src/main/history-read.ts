@@ -16,29 +16,7 @@ import { classifyAll, storageAt } from './infra/storage/meetings-storage'
 import type { FileClass } from './infra/storage/gateway'
 import { getSettings } from './store'
 import type { MeetingSummary, RecallHit } from '@shared/ipc'
-
-// A well-formed double-quoted YAML scalar, capturing its body: the shape every title/mode value is
-// written in (see saveMeeting's frontmatter block in transcripts.ts, and renameMeeting in recall.ts).
-const QUOTED_SCALAR = /^"((?:[^"\\]|\\.)*)"\s*$/
-
-export function frontmatter(text: string): Record<string, string> {
-  const out: Record<string, string> = {}
-  const m = text.match(/^---\n([\s\S]*?)\n---/)
-  if (!m) return out
-  for (const line of m[1].split('\n')) {
-    const kv = line.match(/^([a-z_]+):\s*(.*)$/i)
-    if (!kv) continue
-    // Undo the YAML escaping the writers apply (`\` → `\\`, `"` → `\"` — transcripts.ts's yamlSafeTitle
-    // and recall.ts's yamlSafeRenameTitle): this is the only reader, so without the inverse the escapes reach
-    // History verbatim AND the rename box, which is pre-filled from this same value, re-escapes what was
-    // already escaped on every commit — the backslashes double per rename, unbounded. Anything that is
-    // not a well-formed quoted scalar (the `[a, b]` flow lists this frontmatter also carries, or a plain
-    // unquoted value like `date:`) keeps the original outer-character strip untouched.
-    const quoted = kv[2].match(QUOTED_SCALAR)
-    out[kv[1]] = quoted ? quoted[1].replace(/\\(["\\])/g, '$1') : kv[2].replace(/^["[]|["\]]$/g, '').trim()
-  }
-  return out
-}
+import { readMeetingFields as frontmatter, stripMeetingFrontmatter } from './features/meetings/meeting-document'
 
 // `meeting-summary` is a first-class saved meeting under managed summary-only retention. Keep the accepted
 // document kinds in one place: History, search, recap editing, and erasure must never disagree about
@@ -128,6 +106,11 @@ interface CacheEntry {
 // order, so re-inserting on every hit keeps the coldest entry first.
 const READ_CACHE_MAX = 2000
 const readCache = new Map<string, CacheEntry>()
+const newestFirstDateCollator = new Intl.Collator()
+
+export function compareMeetingRowsNewestFirst(a: Pick<HistoryRow, 'date'>, b: Pick<HistoryRow, 'date'>): number {
+  return newestFirstDateCollator.compare(b.date || '', a.date || '')
+}
 
 function cachedRead(path: string): CacheEntry | undefined {
   const entry = readCache.get(path)
@@ -158,9 +141,10 @@ function notDownloadedRow(file: string): Read | null {
   return stub ? { text: '', sum: { ...stub, notDownloaded: true } } : null
 }
 
+/** The row for a file that could not be read right now: listed, retried on the next listing. */
 function unavailableRow(file: string): Read | null {
   const stub = lockedStub(file, 'Unavailable')
-  return stub ? { text: '', sum: stub } : null
+  return stub ? { text: '', sum: { ...stub, unavailable: true } } : null
 }
 
 /** Read + decode one file (async), parse its frontmatter. Null if it isn't a saved meeting.
@@ -265,7 +249,7 @@ export async function listMeetings(): Promise<HistoryRow[]> {
   return read
     .filter((r): r is Read => r !== null)
     .map((r) => r.sum)
-    .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+    .sort(compareMeetingRowsNewestFirst)
 }
 
 /** Keyword search across saved meetings; returns scored hits with a snippet. */
@@ -281,7 +265,7 @@ export async function searchMeetings(query: string, signal?: AbortSignal): Promi
     // Strip the frontmatter block before scoring/snippeting so boilerplate keys (type, source,
     // status, etc.) don't manufacture hits or snippets for terms that never appear in the actual
     // recap/transcript body (mirrors the delimiter the frontmatter() helper already uses).
-    const body = text.replace(/^---\n[\s\S]*?\n---\n?/, '')
+    const body = stripMeetingFrontmatter(text)
     const lc = body.toLowerCase()
     let score = 0
     for (const t of terms) {

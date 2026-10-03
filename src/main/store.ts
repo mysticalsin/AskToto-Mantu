@@ -51,6 +51,7 @@ import OpenAI from 'openai'
 import { stripProxyFaultMarker } from './llm/retry'
 import { migrateOverlayLayout } from '@shared/overlay-chrome'
 import { preferredFreshAsrEngine, type FreshAsrEngine } from '@shared/asr-hardware-preference'
+import { LocalSpeechPackPolicySchema, type LocalSpeechPackPolicy } from '@shared/model-policy'
 
 const dir = () => app.getPath('userData')
 const settingsPath = () => join(dir(), 'settings.json')
@@ -173,14 +174,12 @@ function readLockedFrom(p: string): string[] {
   }
 }
 
-/** Read the `allowedProviders` policy array out of raw managed-config JSON text. It is NOT a settings
- *  key, so it must be parsed here rather than via validatedManaged() (which drops non-schema keys). */
+/** Read raw managed-config policy keys that validatedManaged() drops because they are not settings. */
 function parseAllowedContent(raw: string): string[] | null {
   try {
     const obj = JSON.parse(raw)
     const list = obj?.allowedProviders
-    // An explicit empty array is a real deny-all policy, not "no policy" — only an absent/non-array
-    // key means null (no restriction). Collapsing the two let `"allowedProviders": []` fail open.
+    // Empty array is deny-all; only absent/non-array means no restriction.
     if (!Array.isArray(list)) return null
     return [...new Set(list.filter((x): x is string => typeof x === 'string'))]
   } catch {
@@ -188,30 +187,27 @@ function parseAllowedContent(raw: string): string[] | null {
   }
 }
 
-function readAllowedFrom(p: string): string[] | null {
+function readRawPolicyFrom(p: string): string | null {
   try {
-    return parseAllowedContent(readFileSync(p, 'utf8'))
+    return readFileSync(p, 'utf8')
   } catch {
     return null
   }
 }
 
-// The machine-wide org-policy path lives in win-security.ts (single source of truth). On Windows it is
-// only honored when admin-owned + not user-writable, and readTrustedAdminManaged() reads its content
-// through the SAME held fd that verified that trust (closes the check-path/read-path TOCTOU a plain
-// `trustedAdminManagedPath() ? readFileSync(path) : ...` pattern would reopen). On macOS/Linux the
-// root-owned parent dir already enforces the trust boundary, so it's a plain read there.
+function parseLocalSpeechPackContent(raw: string): LocalSpeechPackPolicy | null {
+  try {
+    const value = JSON.parse(raw)?.localSpeechPack
+    if (value === undefined) return null
+    const parsed = LocalSpeechPackPolicySchema.safeParse(value)
+    return parsed.success ? parsed.data : null
+  } catch {
+    return null
+  }
+}
 
-// Snapshot of the admin policy content, because the two accessors below run OUTSIDE getSettings()'s
-// cache — on every renderer settings fetch, on every ask, and (via localReady) on screen-preprocess's
-// 6 s tick — and on win32 each raw read runs a synchronous PowerShell Get-Acl probe measured at
-// 0.5-1.9 s, freezing the main process for 10-30% of wall clock (MQA-034).
-//
-// What is cached is the VERIFIED CONTENT, never a bare "this path is trusted" verdict, so a file swapped
-// in behind a forged mtime can at worst make us keep serving bytes that already passed the ACL check —
-// it can never get its own bytes honored. Invalidation matches getSettings()'s own envelope (the admin
-// file's mtime, so an IT policy edit still lands without an app restart), plus a wall-clock ceiling so a
-// DACL-only change — which no mtime can reveal — is re-probed within the minute rather than never.
+// readTrustedAdminManaged() owns the trust check and reads through the verified fd; cache those bytes.
+// Path + dev + inode + mtime prevent replace races and stale fast-test/admin-edit snapshots.
 const ADMIN_POLICY_REPROBE_MS = 60_000
 let _adminManagedCache: {
   path: string
@@ -236,9 +232,7 @@ export function resetAdminManagedCache(): void {
   _adminManagedCache = null
 }
 
-/** Test-only: drop the admin-policy content snapshot between cases that redirect ProgramData /
- *  recreate the policy file. Same class of flake as resetSettingsCacheForTests — mtime collision +
- *  wall-clock TTL would otherwise serve a previous case's bytes (or skip the probe entirely). */
+/** Test-only: drop admin-policy bytes between ProgramData redirection/recreate cases. */
 export function resetAdminManagedCacheForTests(): void {
   _adminManagedCache = null
 }
@@ -285,11 +279,6 @@ export function getLockedKeys(): string[] {
 }
 
 /**
- * Optional org allowlist of LLM provider ids (data-residency / governance), from managed-config
- * `allowedProviders`. Null = no restriction (all providers allowed). Enforced in the main process before
- * any screen/transcript egress, so a policy can confine data to approved/DPA-backed providers.
- */
-/**
  * Optional org allowlist of network HOSTS (managed-config `egressAllowlist`, see docs/NETWORK-EGRESS.md).
  * Null = no restriction, which is every install's behavior unless IT sets the key. Same precedence as
  * `allowedProviders`: machine (admin) policy wins over the per-user managed file. Enforced at boot by
@@ -306,11 +295,19 @@ export function getEgressAllowlist(): string[] | null {
   }
 }
 
+/** Raw managed provider allowlist. Machine (admin) policy wins over the per-user managed file, mirroring
+ *  validatedManaged() precedence. Read from raw JSON because `allowedProviders` is a policy key, not a
+ *  settings-schema key, and an explicit empty array is a deny-all policy. */
 export function getAllowedProviders(): string[] | null {
-  // Machine (admin) policy wins over the per-user managed file, mirroring validatedManaged() precedence.
-  // Read from the raw JSON because `allowedProviders` is a policy key, not a settings-schema key.
   const admin = adminManagedContent()
-  return (admin ? parseAllowedContent(admin) : null) ?? readAllowedFrom(join(dir(), 'managed-config.json'))
+  const user = readRawPolicyFrom(join(dir(), 'managed-config.json'))
+  return (admin ? parseAllowedContent(admin) : null) ?? (user ? parseAllowedContent(user) : null)
+}
+
+export function getAdminLocalSpeechPackPolicy(): LocalSpeechPackPolicy | null {
+  const admin = adminManagedContent()
+  const user = readRawPolicyFrom(join(dir(), 'managed-config.json'))
+  return (admin ? parseLocalSpeechPackContent(admin) : null) ?? (user ? parseLocalSpeechPackContent(user) : null)
 }
 
 /** Providers whose key currently comes from an environment variable — for those, in-app 'Remove' is a

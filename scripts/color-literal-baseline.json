@@ -4,7 +4,6 @@
   "src/renderer/src/components/OnboardingAppearance.tsx": 1,
   "src/renderer/src/components/OnboardingDemoScene.tsx": 1,
   "src/renderer/src/components/OnboardingExperience.tsx": 3,
-  "src/renderer/src/components/Settings.tsx": 1,
   "src/renderer/src/components/SignInWall.tsx": 4,
   "src/renderer/src/components/UpdateReadyToast.tsx": 1,
   "src/renderer/src/components/brand/ClickUpMark.tsx": 2,

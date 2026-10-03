@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest'
  */
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const settingsSrc = readFileSync(
-  join(__dirname, '..', 'renderer', 'src', 'components', 'Settings.tsx'),
+  join(__dirname, '..', 'renderer', 'src', 'features', 'settings', 'AudioTab.tsx'),
   'utf8'
 )
 
@@ -39,7 +39,7 @@ describe('MQA-178 — the engine is armed at boot, not only when some other sett
     // Only a successful eligible provisioning result should re-arm the feature and warm the model.
     const download = sliceBetween(
       indexSrc,
-      'void provisionLocalModel(getSettings().localLlm, getAllowedProviders(), ensureLocalModel)',
+      "bootWork.run('provisionLocalModel', () => provisionLocalModel(getSettings().localLlm, getAllowedProviders(), ensureLocalModel)",
       'app.setAppUserModelId'
     )
     expect(download).toMatch(/\.then\(\(ready\) => \{\s*if \(!ready\) return\s*refreshScreenPreprocess\(\)\s*void runAsMaintenance\(warmLocalIfReady\)/)

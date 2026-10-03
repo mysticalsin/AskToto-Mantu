@@ -1,5 +1,6 @@
-import { startTransition, useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RendererView } from '@shared/renderer-view'
+import { useTransitionView } from '../../lib/history-transition'
 import { NavigationGuardService, type NavigationGuardRequest } from '../../lib/navigation-guard'
 import { onboardingLaunchFromSearch } from '../../lib/onboarding-launch'
 
@@ -38,10 +39,9 @@ export function useViewRouter({
   confirmReviewNavigation: () => Promise<boolean>
   guardReviewNav: (proceed: () => void) => void
 } {
-  const [view, setViewRaw] = useState<RendererView>(initialViewFromLaunch)
-  const setView = useCallback((v: RendererView | ((prev: RendererView) => RendererView)): void => {
-    startTransition(() => setViewRaw(v))
-  }, [])
+  // Keep App's route state outside the root render body while preserving transition-wrapped switches and
+  // History transition reporting for lazy chunks.
+  const [view, setView, setViewRaw] = useTransitionView(initialViewFromLaunch)
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsInitialTab>(initialSettingsTabFromLaunch)
   const [settingsNotice, setSettingsNotice] = useState<string | undefined>(undefined)
 
