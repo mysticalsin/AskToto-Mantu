@@ -34,6 +34,17 @@ const MAC_UNIVERSAL = process.env.ASKTOTO_MAC_UNIVERSAL === '1'
 const QA_IDENTITY = process.env.METIS_QA_IDENTITY === '1'
 const FEEDBACK_EMAIL = process.env.METIS_FEEDBACK_EMAIL?.trim() || ''
 
+const stdout = process.stdout as NodeJS.WriteStream & {
+  clearLine?: (dir: -1 | 0 | 1) => boolean
+  cursorTo?: (x: number, y?: number) => boolean
+  moveCursor?: (dx: number, dy: number) => boolean
+  columns?: number
+}
+stdout.clearLine ??= () => false
+stdout.cursorTo ??= () => false
+stdout.moveCursor ??= () => false
+stdout.columns ??= 80
+
 export default defineConfig({
   main: {
     define: { __METIS_QA_IDENTITY__: JSON.stringify(QA_IDENTITY) },
@@ -71,6 +82,7 @@ export default defineConfig({
     // Bundle zod into the preload (a sandboxed preload cannot require() externalized deps).
     build: {
       externalizeDeps: { exclude: ['zod'] },
+      isolatedEntries: true,
       minify: 'esbuild', // preload parses before first paint — same unminified-default fix as renderer
       rollupOptions: {
         input: {

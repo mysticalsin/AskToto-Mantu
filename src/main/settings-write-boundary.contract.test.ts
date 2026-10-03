@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { BaseSettingsSchema } from '@shared/ipc'
+import { BaseSettingsSchema, SERVER_AUTHORITATIVE_SETTINGS_KEYS } from '@shared/ipc'
+import { stripServerAuthoritativeSettingsPatch } from './settings-strip'
 
 /**
  * The settings:set write boundary. src/main/index.ts boots Electron at import time and this seam is a
@@ -16,19 +17,8 @@ import { BaseSettingsSchema } from '@shared/ipc'
  */
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 
-/** Pull every key list that the settings:set handler strips from an incoming renderer patch. */
 function strippedKeys(): string[] {
-  const start = indexSrc.indexOf('const p = patch ?? {}')
-  expect(start).toBeGreaterThan(-1)
-  const region = indexSrc.slice(start, start + 4000)
-  const keys: string[] = []
-  for (const m of region.matchAll(/for \(const k of \[([^\]]+)\]\) \{\s*\n\s*if \(k in p\) delete \(p as Record<string, unknown>\)\[k\]/g)) {
-    for (const raw of m[1].split(',')) {
-      const key = raw.trim().replace(/^['"]|['"]$/g, '')
-      if (key) keys.push(key)
-    }
-  }
-  return keys
+  return [...SERVER_AUTHORITATIVE_SETTINGS_KEYS]
 }
 
 describe('settings:set — main-owned keys are not renderer-writable', () => {
@@ -77,7 +67,6 @@ describe('settings:set — main-owned keys are not renderer-writable', () => {
   })
 
   it('the strip actually removes those keys from a hostile patch (logic, not just shape)', () => {
-    // Execute the same delete loop the handler runs, over the key list read from the source above.
     const hostile: Record<string, unknown> = {
       mcpConnections: [
         { id: 'clickup', kind: 'clickup', label: 'ClickUp', endpointUrl: 'https://attacker.example/mcp', connected: true, tools: ['x'], extraHeaders: {} }
@@ -92,7 +81,7 @@ describe('settings:set — main-owned keys are not renderer-writable', () => {
       // a genuine user setting in the same patch must survive
       askFollowUpMemory: true
     }
-    for (const k of strippedKeys()) if (k in hostile) delete hostile[k]
+    stripServerAuthoritativeSettingsPatch(hostile)
 
     expect(hostile.mcpConnections).toBeUndefined()
     expect(hostile.clickupClientId).toBeUndefined()
@@ -103,6 +92,14 @@ describe('settings:set — main-owned keys are not renderer-writable', () => {
     expect(hostile.operatorTier).toBeUndefined()
     expect(hostile.operatorLicenseJti).toBeUndefined()
     expect(hostile.askFollowUpMemory).toBe(true)
+  })
+
+  it('settings:set calls the shared authoritative strip before saving', () => {
+    const start = indexSrc.indexOf('ipcMain.handle(IPC.settingsSet')
+    const end = indexSrc.indexOf('const next = setSettingsWithSpeakerPolicy(p)', start)
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+    expect(indexSrc.slice(start, end)).toContain('const p = stripServerAuthoritativeSettingsPatch(patch ?? {})')
   })
 
   it('every stripped key is a real settings field (the list cannot rot into no-ops)', () => {

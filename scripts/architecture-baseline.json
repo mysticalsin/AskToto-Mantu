@@ -44,7 +44,7 @@
     "src/main/brain/store.ts": 1190,
     "src/main/cli.ts": 1690,
     "src/main/import-jobs.ts": 1198,
-    "src/main/index.ts": 9933,
+    "src/main/index.ts": 9887,
     "src/main/store.ts": 1364,
     "src/main/transcripts.ts": 1210,
     "src/renderer/src/App.tsx": 4331,
@@ -60,7 +60,7 @@
     "src/renderer/src/features/settings/DustSetup.tsx": 980,
     "src/renderer/src/features/settings/SettingsRoot.tsx": 1246,
     "src/renderer/src/lib/listen.ts": 3144,
-    "src/shared/ipc.ts": 2450
+    "src/shared/ipc.ts": 2176
   },
   "FF-05a": {
     "src/main/apple-speech.ts": 2,
@@ -151,7 +151,7 @@
     "src/main/ask-freshness.contract.test.ts": 4,
     "src/main/ask-routing-fixes.contract.test.ts": 1,
     "src/main/asktoto-shot.test.ts": 4,
-    "src/main/asr-model-manifest.test.ts": 9,
+    "src/main/asr-model-manifest.test.ts": 8,
     "src/main/audit-event-coverage.contract.test.ts": 3,
     "src/main/audit-fixes-2026-08-10.contract.test.ts": 2,
     "src/main/audit-log-chain.test.ts": 1,
@@ -229,7 +229,7 @@
     "src/main/settings-write-boundary.contract.test.ts": 1,
     "src/main/signout-revocation.contract.test.ts": 1,
     "src/main/speaker-id-off-switch.test.ts": 2,
-    "src/main/speaker-id.test.ts": 6,
+    "src/main/speaker-id.test.ts": 5,
     "src/main/speaker-session-wiring.test.ts": 2,
     "src/main/sync-fs-meetings-root.contract.test.ts": 21,
     "src/main/tonight-1.8.5-kinetic-checklist.contract.test.ts": 19,

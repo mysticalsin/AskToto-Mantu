@@ -22,6 +22,7 @@
     "check:local-model": "node scripts/check-local-model.mjs",
     "check:runtime-assets": "node scripts/check-runtime-assets.mjs",
     "check:packaged-runtime": "node scripts/check-packaged-runtime.mjs",
+    "check:preload-output": "node scripts/check-preload-output.mjs",
     "check:update-metadata": "node scripts/check-update-metadata.mjs",
     "check:built-offline": "node scripts/check-built-offline.mjs",
     "prebuild": "node scripts/ensure-electron-runtime.mjs --check-only && node scripts/check-no-dynamic-import.mjs && node scripts/check-offline-package.mjs && node scripts/ensure-intelligence-bundle.mjs && node scripts/make-tray-icons.mjs",

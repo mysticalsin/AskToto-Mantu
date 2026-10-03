@@ -6,8 +6,15 @@ import { OPERATOR_LICENSE_MAX } from './operator-license'
 import { RECAP_STATUSES, recapStatusValidationError, type RecapStatus } from './recap-status'
 import { RENDERER_VIEWS } from './renderer-view'
 import { DEFAULT_PERMISSION_STATE, PermissionStateSchema } from './screen-permission'
+import {
+  SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION,
+  type ServerAuthoritativeSettingsKey
+} from './contracts/settings/server-authoritative'
+export { IPC } from './contracts/channels'
 export type { PermissionStatus, PlatformPermissions, ScreenCaptureCheckResult } from './screen-permission'
 export { ScreenCaptureCheckPassSchema, ScreenCaptureCheckPayloadSchema, ScreenCaptureCheckResultSchema } from './screen-permission'
+export { SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION, SERVER_AUTHORITATIVE_SETTINGS_KEYS } from './contracts/settings/server-authoritative'
+export type { ServerAuthoritativeSettingsKey } from './contracts/settings/server-authoritative'
 
 /** The existing persisted meeting start is also its live audio owner. Never coerce or create a clock. */
 export const LiveMeetingStartedAtSchema = z.number().int().positive().max(8.64e15)
@@ -68,277 +75,6 @@ const _providerIdParity: ([_ProviderIdEnum] extends [ProviderId]
     : never
   : never) = true
 void _providerIdParity
-
-/** Single source of truth for every IPC channel name. */
-export const IPC = {
-  settingsGet: 'settings:get',
-  settingsChanged: 'settings:changed',
-  settingsSet: 'settings:set',
-  // One-way only: sent after settings:set has replied, so replaying onboarding cannot sever the
-  // renderer's durable-save response by replacing its transparent BrowserWindow mid-invoke.
-  onboardingEnter: 'onboarding:enter',
-  // One-way only: sent after settings:set has replied, so exiting opaque onboarding cannot sever the
-  // renderer's durable-save response by destroying its BrowserWindow mid-invoke.
-  onboardingExit: 'onboarding:exit',
-  settingsRecoverProfile: 'settings:recoverProfile',
-  setApiKey: 'settings:setApiKey',
-  clearApiKey: 'settings:clearApiKey',
-  testApiKey: 'settings:testApiKey',
-  dustListAgents: 'dust:listAgents',
-  dustImportCli: 'dust:importCli',
-  dustProbeSession: 'dust:probeSession',
-  // Native OAuth sign-in (no CLI, no system Node.js) — see main/dust-oauth.ts.
-  dustLoginBegin: 'dust:loginBegin',
-  dustLoginPoll: 'dust:loginPoll',
-  dustLoginPickWorkspace: 'dust:loginPickWorkspace',
-  dustInstallCli: 'dust:installCli',
-  dustInstallCliProgress: 'dust:installCli:progress',
-  graphifyStatus: 'graphify:status',
-  graphifyRebuild: 'graphify:rebuild',
-  graphifyRelated: 'graphify:related',
-  graphifyOpenGraph: 'graphify:openGraph',
-  brainStatus: 'brain:status',
-  brainBackfill: 'brain:backfill',
-  brainIntelligencePass: 'brain:intelligencePass',
-  brainRead: 'brain:read',
-  brainEntityNames: 'brain:entityNames',
-  restoreEmbeddedCloudflareKey: 'settings:restoreEmbeddedCloudflareKey',
-  brainOpenDashboard: 'brain:openDashboard',
-  brainRebuildAll: 'brain:rebuildAll',
-  brainPreservedIndexesList: 'brain:preservedIndexes:list',
-  brainPreservedIndexRestore: 'brain:preservedIndex:restore',
-  brainPreservedIndexDelete: 'brain:preservedIndex:delete',
-  brainClearJournalCorruption: 'brain:clearJournalCorruption',
-  authStatus: 'auth:status',
-  authSignIn: 'auth:signIn',
-  authSignOut: 'auth:signOut',
-  calendarToday: 'calendar:today',
-  parakeetStatus: 'parakeet:status',
-  parakeetEnsure: 'parakeet:ensure',
-  parakeetFeed: 'parakeet:feed',
-  parakeetProgress: 'parakeet:progress',
-  // Apple Speech (SFSpeechRecognizer, on-device via the mac-helper sidecar) — opt-in third ASR engine.
-  // No status/ensure/progress channels: unlike Parakeet there is no bundled model to download: the
-  // helper binary either transcribes or the call resolves to '' (see main/apple-speech.ts).
-  appleSpeechFeed: 'apple-speech:feed',
-  // Cloud STT live WebSocket (Nova-3 / Soniox) — main holds credentials; renderer streams PCM.
-  cloudSttStart: 'cloud-stt:start',
-  cloudSttStop: 'cloud-stt:stop',
-  cloudSttPush: 'cloud-stt:push',
-  cloudSttUpdateLang: 'cloud-stt:update-lang',
-  cloudSttFinal: 'cloud-stt:final',
-  cloudSttError: 'cloud-stt:error',
-  cloudSttInterim: 'cloud-stt:interim',
-  cloudSttSetSonioxKey: 'cloud-stt:set-soniox-key',
-  cloudSttClearSonioxKey: 'cloud-stt:clear-soniox-key',
-  // Speaker Intelligence — Whisper's speaker-embedding tap. echo:true means operator loopback bleed.
-  speakerEmbed: 'speaker:embed',
-  askStart: 'ask:start',
-  askCancel: 'ask:cancel',
-  // Explicit "new chat" boundary: clears the main-owned carriers of cross-question state (the server-side
-  // Dust conversation + the follow-up-memory idle clock). The renderer clears its own history refs; without
-  // this channel that clear was a no-op for Dust users (the contamination lived server-side).
-  askResetContext: 'ask:resetContext',
-  streamDelta: 'stream:delta',
-  streamDone: 'stream:done',
-  streamError: 'stream:error',
-  streamMeta: 'stream:meta',
-  captureScreen: 'capture:screen',
-  prewarmCapture: 'capture:prewarm',
-  screenContext: 'capture:context',
-  armAudio: 'audio:arm',
-  saveTranscript: 'transcript:save',
-  saveDraftTranscript: 'transcript:saveDraft',
-  saveNote: 'note:save',
-  importAudioPick: 'import-audio:pick',
-  importAudioOffer: 'import-audio:offer',
-  importAudioStart: 'import-audio:start',
-  importAudioStartBatch: 'import-audio:start-batch',
-  importJobsList: 'import-audio:jobs:list',
-  importJobCancel: 'import-audio:job:cancel',
-  importJobResume: 'import-audio:job:resume',
-  importJobRemove: 'import-audio:job:remove',
-  importAudioProgress: 'import-audio:progress',
-  importAssetsProgress: 'import-assets:progress',
-  // Private channels used only by the sandboxed hidden decoder window. They are never bridged to the
-  // interactive overlay preload.
-  importDecoderChunk: 'import-decoder:chunk',
-  importDecoderComplete: 'import-decoder:complete',
-  importDecoderFailed: 'import-decoder:failed',
-  importDecoderReady: 'import-decoder:ready',
-  importDecoderSourceAck: 'import-decoder:source-ack',
-  exportRecapJson: 'recap:export-json',
-  pickFolder: 'folder:pick',
-  addTeamTranscriptFolder: 'team-folder:add',
-  removeTeamTranscriptFolder: 'team-folder:remove',
-  openPath: 'path:open',
-  openBrainForClaude: 'brain:open-for-claude',
-  recallList: 'recall:list',
-  recallSearch: 'recall:search',
-  historySettled: 'history:settled',
-  historyTransition: 'history:transition',
-  recallOpen: 'recall:open',
-  recallRead: 'recall:read',
-  recallHydration: 'recall:hydration', // main → renderer: an explicit open downloading one cloud-only meeting
-  recallExportPlain: 'recall:export-plain', // user-initiated decrypted md copy of ONE meeting
-  recallDelete: 'recall:delete',
-  recallRename: 'recall:rename',
-  recallUpdateRecap: 'recall:update-recap',
-  recallSetConfidential: 'recall:set-confidential',
-  // MQA-092: durable "this recap already reached the CRM" marker, so a relaunch cannot re-arm the push
-  // and file a byte-identical duplicate record. See recall.ts's setMeetingCrmPushed.
-  recallSetCrmPushed: 'recall:set-crm-pushed',
-  recallBackfillSpeakers: 'recall:backfillSpeakers',
-  recallDeleteAll: 'recall:deleteAll',
-  // Support diagnosability: copy the log trail (main + audit + crash dumps + boot sentinel) into a
-  // user-chosen folder — the ONLY way that data reaches support, since nothing uploads by design.
-  diagnosticsExport: 'diagnostics:export',
-  debriefSave: 'debrief:save',
-  brainCommitmentSettle: 'brain:commitmentSettle',
-  brainSetDealOutcome: 'brain:setDealOutcome',
-  // Correction engine (Task MI-2): human fixes for misheard/merged entities and never-made commitments.
-  brainEntityRename: 'brain:entityRename',
-  brainEntityMerge: 'brain:entityMerge',
-  brainEntityUnmerge: 'brain:entityUnmerge',
-  brainEntityUpdateField: 'brain:entityUpdateField',
-  brainCommitmentReject: 'brain:commitmentReject',
-  // Dashboard suggestion accept/dismiss (deferred CRM pattern 3): callable from the Mantu Intelligence
-  // window (see assertBrainReader in main/index.ts), not just the main window — the one privileged
-  // write that surface gets, narrowly scoped to promoting a single already-extracted field.
-  brainFieldDecision: 'brain:field-decision',
-  // Task MI-3: read-only channels feeding the CRM record pages, the Review.tsx entity strip, and the
-  // needs-attention queue.
-  brainMeetingExtraction: 'brain:meetingExtraction',
-  brainAttention: 'brain:attention',
-  windowResize: 'window:resize',
-  windowMode: 'window:mode',
-  windowMoveBy: 'window:moveBy',
-  windowHide: 'window:hide',
-  windowToggle: 'window:toggle',
-  windowQuit: 'window:quit',
-  windowRelaunch: 'window:relaunch',
-  windowMinimize: 'window:minimize',
-  // Vibe-Island auto-hide: pin the overlay to the top-center of its current display and re-arm the
-  // resizeTo anchor there, so the peek strip / revealed bar grow downward from the top edge. Never
-  // shows or focuses the window — a pure setBounds, so the user's foreground app keeps focus.
-  windowAnchorTop: 'window:anchorTop',
-  // Auto-hide reveal: widen the window back to the full bar width (the peek narrowed it via
-  // data-hug-width, and the plain-bar view never reports a width again). Pure setBounds; no show/focus.
-  windowRevealWidth: 'window:revealWidth',
-  // Main-process cursor watch (darwin / Windows top-edge): menu-bar / Dynamic Island
-  // often does not deliver mouseenter. Payload: { hovering: boolean }.
-  overlayCursorHover: 'overlay:cursorHover',
-  // Renderer finished the hide spring (or 400ms fallback) — now park the rest rect.
-  overlayParkAfterHide: 'overlay:parkAfterHide',
-  // Renderer ErrorBoundary catch (React render-throw) → persisted crash-*.log, same sink as onFatal's
-  // main-process crashes. Distinct from render-process-gone (whole renderer dies): this is a caught JS
-  // exception the renderer survives, previously visible only via ASKTOTO_DEBUG_RENDERER console mirroring.
-  rendererCrash: 'renderer:crash',
-  hotkey: 'hotkey',
-  metisCommandState: 'metis-command:state',
-  metisCommandConfirm: 'metis-command:confirm',
-  metisCommandCancel: 'metis-command:cancel',
-  shortcutFailures: 'shortcuts:failures',
-  permissionsGet: 'permissions:get',
-  permissionsOpenSettings: 'permissions:openSettings',
-  permissionsRequestUpfront: 'permissions:requestUpfront',
-  // M2-0429 (main/ipc/screen-permission-ipc.ts): Repair, "It's already on", Show a duplicate copy in Finder.
-  permissionsRepairScreen: 'permissions:repairScreen',
-  permissionsAttestScreen: 'permissions:attestScreen',
-  permissionsRevealCopy: 'permissions:revealCopy',
-  // Settings / overlay self-check: first pass is the OS probe; second pass is a real vision ask.
-  // Result stays on this device — never forwarded to a teammate, CRM, or askStart overlay chat.
-  screenCaptureCheck: 'permissions:screenCaptureCheck',
-  listeningState: 'listening:state',
-  asrBundled: 'asr:bundled',
-  // Onboarding + Settings: live Parakeet/Whisper-floor readiness (bundled or userData). Distinct from
-  // asrBundled, which only answers “is the installer/repo resources/ manifest complete?”
-  asrAssetsStatus: 'asr:assets-status',
-  asrAssetsEnsure: 'asr:assets-ensure',
-  // Métis Local (on-device LLM): readiness metadata plus a start/retry that does not require toggling
-  // Local AI (routing) on. Cancel/delete stay off the renderer — main owns the transfer.
-  localModelsList: 'localModels:list',
-  localModelsEnsure: 'localModels:ensure',
-  // MQA-247: the high-accuracy transcription model. Its own pair rather than folded into the LLM
-  // channel above — different asset, different size, different consent, and a user may want one
-  // and not the other.
-  asrModelState: 'asrModel:state',
-  asrModelFetch: 'asrModel:fetch',
-  asrModelRemove: 'asrModel:remove',
-  // Live-meeting pre-warm (PLAN.md §4.4): a debounced transcript tail, fire-and-forget, so the sidecar's
-  // per-slot KV cache stays hot between real suggest requests. See LocalPrewarmPayloadSchema.
-  localPrewarm: 'local:prewarm',
-  // M2-0430: Apple engine status for Settings, and the renderer's content-free post-meeting spans.
-  localAppleEngineStatus: 'local:appleEngineStatus',
-  writeupSpan: 'writeup:span',
-  cliDetect: 'cli:detect',
-  cliSetup: 'cli:setup',
-  cliTest: 'cli:test',
-  cliInstall: 'cli:install',
-  cliInstallProgress: 'cli:install:progress',
-  cliLogin: 'cli:login',
-  // MQA-062: re-verify the real CLI session behind every `cliConnected` flag (a `claude logout` between
-  // launches leaves the flag asserting a session that is gone). Zero-token status probe, throttled in
-  // main; returns the refreshed settings snapshot so the caller sees any retired flag immediately.
-  cliVerifySessions: 'cli:verify-sessions',
-  answerFeedback: 'answer:feedback',
-  metricsRead: 'metrics:read',
-  updateDownloaded: 'update:downloaded',
-  updateProgress: 'update:progress',
-  // A download the user started failed mid-flight. Without this the Settings row kept a progress bar that
-  // could never finish and hid its own download-page fallback (which only renders in 'blocked'/'idle').
-  updateError: 'update:error',
-  updateInstall: 'update:install',
-  updateDownload: 'update:download', // Settings "Update now" — kick the in-app download (progress/downloaded then stream back)
-  updateCheck: 'update:check', // manual Settings-driven check against the public releases feed
-  recapPdf: 'recap:pdf',
-  openMailDraft: 'mail:openDraft',
-  mcpTestConnection: 'mcp:testConnection',
-  mcpSaveConnection: 'mcp:saveConnection',
-  mcpDisconnect: 'mcp:disconnect',
-  mcpPush: 'mcp:push',
-  // ClickUp's connection has no endpoint/key form to Test/Save — one button runs the whole OAuth 2.1
-  // + PKCE flow (browser consent) and, on success, upserts an mcpConnections entry exactly like
-  // mcpSaveConnection does for a pasted key. Reuses mcpDisconnect/mcpPush unchanged.
-  mcpClickupConnect: 'mcp:clickupConnect',
-  // Names the last/connected ClickUp list without creating a task. Used when the seat was already
-  // connected before dest storage existed, so Review can show `Task in {list}` before Confirm.
-  mcpClickupDiscoverDestination: 'mcp:clickupDiscoverDestination',
-  // Plane Connect — same shape as ClickUp: one button, OAuth 2.1 + PKCE + DCR, pinned hosted MCP URL.
-  mcpPlaneConnect: 'mcp:planeConnect',
-  operatorOpen: 'operator:open',
-  // Operator seat license (METIS-OP-1) pairing (PLAN.md P2.2b): local format parse + jti/last4/exp
-  // extraction only — the Worker verifies the signature and hands back tier/entitlements on the next
-  // heartbeat. An empty licenseKey clears a previously activated license.
-  operatorLicenseActivate: 'operator:licenseActivate',
-  // Read-only snapshot of Operator entitlement/integration state for Settings — mirrors licenseStatus's
-  // "local settings only, never touches the network" contract.
-  operatorStatus: 'operator:status',
-  licenseActivate: 'license:activate',
-  licenseStatus: 'license:status',
-  licenseGate: 'license:gate',
-  cloudflareConnect: 'cloudflare:connect',
-  identitySnapshot: 'identity:snapshot',
-  memberLicenseActivate: 'license:memberActivate',
-  memberLicenseDeactivate: 'license:memberDeactivate',
-  memberLicenseStatus: 'license:memberStatus',
-  memberLicenseVerifyCached: 'license:memberVerifyCached',
-  memberLicenseImportFile: 'license:memberImportFile',
-  licenseConfig: 'license:config',
-  localAiStatus: 'local-ai:status',
-  localTranscriptBegin: 'local-ai:transcript:begin',
-  localTranscriptAppend: 'local-ai:transcript:append',
-  localTranscriptResync: 'local-ai:transcript:resync',
-  localTranscriptEnd: 'local-ai:transcript:end',
-  timeSavedRead: 'time-saved:read',
-  timeSavedRecord: 'time-saved:record',
-  outlookWriteStatus: 'outlook:writeStatus',
-  outlookCreateDraft: 'outlook:createDraft',
-  outlookCreateEvent: 'outlook:createEvent',
-  mcpWriteTargets: 'mcp:writeTargets',
-  /** Wave 2 — clear the one-shot last-failover chip after the user dismisses it. */
-  dismissFailoverNotice: 'settings:dismissFailoverNotice'
-} as const
 
 /** User's verdict on an answer (metadata only — never the answer text). Feeds the audit log + future evals.
  *  `askId` is the real answer id (App.tsx's ask.answer.id, the same id recordOperatorAsk sent for this
@@ -1276,16 +1012,16 @@ export const BaseSettingsSchema = z.object({
   // is dev-only, so the user must supply wherever they actually deploy/run their backend. Replaces the
   // old single-connection bidstackEndpointUrl/bidstackConnected/bidstackTools fields — see
   // migrateLegacyBidstackConnection in main/store.ts for how an existing user's data carries forward.
-  mcpConnections: z.array(McpConnectionSchema).max(10).default([]),
+  mcpConnections: z.array(McpConnectionSchema).max(10).default([]).describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
   // ClickUp's Dynamic Client Registration (RFC 7591) client_id — public, not a secret, so it lives in
   // plain settings rather than mcpSecrets.ts. ClickUp binds each client_id to the exact redirect_uri
   // from that registration (no RFC 8252 port flexibility). Each Connect run in clickupOAuth.ts
   // registers a fresh client with this run's loopback URI and stores the new id here for token refresh;
   // a leftover portless/mismatched client_id is never reused for /authorize.
-  clickupClientId: z.string().default(''),
+  clickupClientId: z.string().default('').describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
   // Plane DCR client_id — public, like clickupClientId. The matching client_secret is encrypted in
   // mcpSecrets (`key-mcp-plane-client.bin`) because Plane's token endpoint requires client_secret_post.
-  planeClientId: z.string().default(''),
+  planeClientId: z.string().default('').describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
   // Métis Local uses a single on-device model. The preprocess is a persisted-settings migration for
   // releases that offered qwen3.5-2b; unknown ids fail validation and fall back safely in
   // main/store.ts instead of pointing llama-server at a file that can never exist.
@@ -1457,12 +1193,12 @@ export const BaseSettingsSchema = z.object({
   // LicenseGate, via the license:gate IPC channel, plus a 12h background re-validation in main/index.ts) —
   // turning this on only matters once a license server is deployed and this device has activated.
   licenseServerUrl: z.string().default(''),
-  licenseKey: z.string().default(''),
-  licenseCompanyName: z.string().default(''),
-  licenseSeatCap: z.number().default(0),
-  licenseExpiresAt: z.number().nullable().default(null),
-  licenseValid: z.boolean().default(false),
-  licenseLastValidatedAt: z.number().default(0),
+  licenseKey: z.string().default('').describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
+  licenseCompanyName: z.string().default('').describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
+  licenseSeatCap: z.number().default(0).describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
+  licenseExpiresAt: z.number().nullable().default(null).describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
+  licenseValid: z.boolean().default(false).describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
+  licenseLastValidatedAt: z.number().default(0).describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
   licenseGateEnabled: z.boolean().default(false),
   // ── Act 5 (License/trial), MQA-281/282 ──────────────────────────────────────────────────────────
   /** Compact Ed25519-signed offline lease from the most recent successful /activate or /heartbeat that
@@ -1471,14 +1207,14 @@ export const BaseSettingsSchema = z.object({
    *  the wall-clock grace exactly as it did before this existed. Server-authoritative: stripped from
    *  any renderer-supplied settings patch, same as the other license fields above (settings:set's strip
    *  list, main/index.ts) — a hostile renderer must not be able to self-issue a lease. */
-  licenseLease: z.string().default(''),
+  licenseLease: z.string().default('').describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
   /** Epoch ms of the first QUALIFYING real use — a real suggest/summary/recap result actually delivered
    *  (main/license.ts's noteQualifyingUse, called from main/index.ts's ask pipeline). null = no
    *  qualifying use yet. Deliberately NOT set on install/first launch, and never reachable from Act 2's
    *  onboarding demo (structurally IPC-free — see onboarding-demo.ts). Main-authoritative: stripped
    *  from renderer patches for the same reason as licenseLease — a plain settings patch must not be
    *  able to grant a fresh 14-day trial. */
-  trialStartedAt: z.number().nullable().default(null),
+  trialStartedAt: z.number().nullable().default(null).describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
   // Operator control plane (Cloudflare Worker `metis-operator`). Empty URL = off. Not the Fly
   // license-server and not cloudflare-proxy. Ingest secret is the HMAC shared with the Worker;
   // it is a Wrangler secret on the server and a Settings power field here. Never commit it.
@@ -1494,20 +1230,20 @@ export const BaseSettingsSchema = z.object({
   // (licenseId) and last4 are telemetry. The token authenticates HTTPS requests to the Operator in a
   // dedicated credential header; it must never appear in telemetry, renderer settings, or logs.
   // Empty token = no license activated.
-  operatorLicenseToken: z.string().max(OPERATOR_LICENSE_MAX).default(''),
+  operatorLicenseToken: z.string().max(OPERATOR_LICENSE_MAX).default('').describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
   /** Parsed from operatorLicenseToken at activation time (format-only; the Worker verifies the
    *  signature). 16 lowercase hex chars, or '' when no license is activated. */
-  operatorLicenseJti: z.string().default(''),
-  operatorLicenseLast4: z.string().default(''),
+  operatorLicenseJti: z.string().default('').describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
+  operatorLicenseLast4: z.string().default('').describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
   /** Epoch ms, read straight out of the token's own (unsigned) exp claim — informational display only;
    *  the Worker is the actual authority on whether the license is still good. */
-  operatorLicenseExpiresAt: z.number().nullable().default(null),
+  operatorLicenseExpiresAt: z.number().nullable().default(null).describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
   // ── Everything below is Worker-authoritative (PLAN.md P2.2b #2): written ONLY by operator-ingest.ts
   // after a successful heartbeat, never by a renderer settings patch (stripped in settingsSet, same
   // class as licenseValid/licenseLease above) — a compromised renderer must not be able to self-grant
   // Operator entitlements. Persisted (not just in-memory) so a cold start before the first heartbeat can
   // still honour the last known grant for the grace window (operator-entitlements.ts).
-  operatorTier: z.enum(['metis', 'metis-light']).nullable().default(null),
+  operatorTier: z.enum(['metis', 'metis-light']).nullable().default(null).describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
   operatorEntitlements: z
     .object({
       ask: z.boolean(),
@@ -1519,14 +1255,15 @@ export const BaseSettingsSchema = z.object({
       integrations: z.boolean()
     })
     .nullable()
-    .default(null),
+    .default(null)
+    .describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
   /** Monotonic; 0 = no Operator integrations delivered yet. Drives operator-integrations.ts's refetch. */
-  operatorIntegrationsVersion: z.number().default(0),
+  operatorIntegrationsVersion: z.number().default(0).describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
   /** Epoch ms of the last successful heartbeat that carried entitlements. 0 = never — grace window
    *  (operator-entitlements.ts) treats this the same as "no snapshot at all". */
-  operatorEntitlementsAt: z.number().default(0),
+  operatorEntitlementsAt: z.number().default(0).describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION),
   /** Main-owned Screen Recording history (M2-0429); see shared/screen-permission.ts. */
-  permissionState: PermissionStateSchema.default(DEFAULT_PERMISSION_STATE)
+  permissionState: PermissionStateSchema.default(DEFAULT_PERMISSION_STATE).describe(SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION)
 })
 
 export const SettingsSchema = BaseSettingsSchema.refine(
@@ -1644,22 +1381,11 @@ export type PublicSettings = z.infer<typeof PublicSettingsSchema>
 export type SettingsPatch = Partial<
   Omit<
     PublicSettings,
-    | 'hasApiKey'
-    | 'providerReady'
-    | 'localReady'
-    | 'localSuggestReady'
-    | 'localSummaryReady'
-    | 'localVisionReady'
-    | 'localRuntimeRunning'
-    | 'localRuntimeState'
-    | 'hasKeys'
-    | 'hasEncryption'
-    | 'resolvedMeetingsFolder'
-    | 'managedKeys'
-    | 'envKeys'
-    | 'loginItemOpenAtLogin'
-    | 'lastFailover'
-    | 'localSpeechPack'
+    | 'hasApiKey' | 'providerReady' | 'localReady' | 'localSuggestReady' | 'localSummaryReady'
+    | 'localVisionReady' | 'localRuntimeRunning' | 'localRuntimeState' | 'hasKeys'
+    | 'hasEncryption' | 'resolvedMeetingsFolder' | 'managedKeys' | 'envKeys'
+    | 'loginItemOpenAtLogin' | 'lastFailover' | 'localSpeechPack'
+    | ServerAuthoritativeSettingsKey
   >
 >
 
