@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { anchorY, revealBand } from '@shared/right-edge-geometry'
 import { pointInRect } from './cursor-watch'
 import {
   RIGHT_EDGE_MARGIN_PX,
@@ -30,8 +31,8 @@ const METRICS: DisplayMetrics = {
 
 describe('right-edge overlay placement', () => {
   it('keeps the tab and opened drawer on one shared right boundary', () => {
-    const tab = rightEdgeSidecarBounds(METRICS, { open: false, normalizedY: 0.5 })
-    const drawer = rightEdgeSidecarBounds(METRICS, { open: true, normalizedY: 0.5 })
+    const tab = rightEdgeSidecarBounds(METRICS, { open: false, anchor: 0.5 })
+    const drawer = rightEdgeSidecarBounds(METRICS, { open: true, anchor: 0.5 })
     expect(tab.x + tab.width).toBe(drawer.x + drawer.width)
     expect(tab.width).toBeGreaterThanOrEqual(48)
     expect(drawer.width).toBeGreaterThanOrEqual(336)
@@ -58,20 +59,22 @@ describe('right-edge overlay placement', () => {
     expect(overlayPlacementPosition({ placement: 'top-center', width: 880, height: 140, layout: 'bar', metrics: METRICS, topMargin: 8 })).toEqual({ x: 2200, y: 44 })
   })
 
-  it('reveals from a band flush with the physical right edge that spans the drawer height, never an inset square', () => {
+  it('reveals from a band flush with the physical right edge that is the authority revealBand(A), never an inset square', () => {
     // Owner report on 1.9.6: the hover target was the 52x52 tab, 12 px inside the work area, so pushing the
     // pointer to the screen edge never revealed the dock.
-    const drawer = rightEdgeSidecarBounds(METRICS, { open: true, normalizedY: 0.5 })
+    const drawer = rightEdgeSidecarBounds(METRICS, { open: true, anchor: 0.5 })
     const rect = hoverWatchRestRect('hide', METRICS, 'right-edge', 0.5)
     expect(rightEdgeHoverRestRect(0.5, METRICS)).toEqual(rect)
     expect(rect.x + rect.width).toBe(METRICS.bounds.x + METRICS.bounds.width)
     expect(rect.width).toBeLessThan(RIGHT_EDGE_MARGIN_PX)
-    expect(rect.y).toBe(drawer.y)
-    expect(rect.height).toBe(drawer.height)
+    // M2-0202 (spec v3 §2, LD1): band = authority.revealBand(A), [wa.y+48, wa.bottom−48] for every A.
+    expect(rect).toEqual(revealBand(WORK_AREA, anchorY(WORK_AREA, 0.5)))
+    expect(rect.y).toBe(WORK_AREA.y + 48)
+    expect(rect.height).toBe(WORK_AREA.height - 96)
     // The pointer stopped by the screen edge, level with the middle of the drawer.
     expect(pointInRect({ x: METRICS.bounds.x + METRICS.bounds.width - 1, y: drawer.y + drawer.height / 2 }, rect)).toBe(true)
     // The old tab position, 40 px inside the work area, is no longer a reveal target.
-    const tab = rightEdgeSidecarBounds(METRICS, { open: false, normalizedY: 0.5 })
+    const tab = rightEdgeSidecarBounds(METRICS, { open: false, anchor: 0.5 })
     expect(pointInRect({ x: WORK_AREA.x + WORK_AREA.width - 40, y: tab.y + 20 }, rect)).toBe(false)
     expect(hoverWatchRestRect('island', METRICS, 'right-edge', 0.5)).toEqual(rect)
   })
@@ -79,16 +82,16 @@ describe('right-edge overlay placement', () => {
   it('reveals from the work-area edge when the Dock or taskbar sits on the right', () => {
     const dockRight: DisplayMetrics = { ...METRICS, workArea: { ...WORK_AREA, width: WORK_AREA.width - 70 } }
     const rect = hoverWatchRestRect('hide', dockRight, 'right-edge', 0.5)
-    const drawer = rightEdgeSidecarBounds(dockRight, { open: true, normalizedY: 0.5 })
+    const drawer = rightEdgeSidecarBounds(dockRight, { open: true, anchor: 0.5 })
     expect(rect.x + rect.width).toBe(dockRight.workArea.x + dockRight.workArea.width)
-    expect(rect.height).toBe(drawer.height)
+    expect(rect).toEqual(revealBand(dockRight.workArea, anchorY(dockRight.workArea, 0.5)))
     expect(pointInRect({ x: dockRight.workArea.x + dockRight.workArea.width - 1, y: drawer.y + 1 }, rect)).toBe(true)
   })
 
   it('parks Hide as the invisible reveal band and Island as its visible rail', () => {
     expect(parkAfterExclusiveOnboarding('hide', METRICS, 8, 'right-edge', 0.5)).toEqual(rightEdgeHoverRestRect(0.5, METRICS))
     expect(parkAfterExclusiveOnboarding('island', METRICS, 8, 'right-edge', 0.5)).toEqual(
-      rightEdgeSidecarBounds(METRICS, { open: false, normalizedY: 0.5 })
+      rightEdgeSidecarBounds(METRICS, { open: false, anchor: 0.5 })
     )
     expect(hideParkWindowOpacity('hide', true)).toBe(0)
     expect(hideParkWindowOpacity('island', true)).toBe(1)
