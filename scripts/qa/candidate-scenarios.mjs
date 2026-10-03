@@ -121,8 +121,8 @@ export const SCENARIOS = Object.freeze({
       })
     })
   }),
-  // M2-0256: hosted ST-1 row for publish/wiki and graphify IPC while the meetings root has blocked
-  // synthetic cloud-only fixtures. The report is content-free: timings and coarse graphify status only.
+  // M2-0256: hosted ST-1 row for publish/wiki and graphify IPC while the meetings root has blocked FIFO
+  // fixtures. The report is content-free: timings and coarse graphify status only.
   'st1-publish-graphify': Object.freeze({
     ticket: 'M2-0256',
     qaOnlyHook: false,
@@ -139,7 +139,7 @@ export const SCENARIOS = Object.freeze({
             '--installer', installer,
             '--provenance', 'provenance/provenance.json',
             '--exe', `${app}/Contents/MacOS/Metis`,
-            '--fixtures', 'synthetic-dataless',
+            '--fixtures', 'fifo',
             '--history', 'off',
             '--publish-graphify',
             '--minutes', '1',
@@ -169,6 +169,9 @@ export const SCENARIOS = Object.freeze({
           ]
         },
         report: 'st1-publish-graphify.json',
+        notCovered: Object.freeze([
+          Object.freeze({ row: 'fifo', reason: 'Windows hosted runners do not provide POSIX FIFO fixtures; macOS carries the blocked FIFO coverage.' })
+        ]),
         timeoutMinutes: 45,
         stepTimeoutMinutes: 30
       })

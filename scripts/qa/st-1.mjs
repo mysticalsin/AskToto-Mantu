@@ -485,9 +485,11 @@ const PUBLISH_GRAPHIFY_PROBE = `(async () => {
   const graphifyStarted = performance.now()
   const status = await api.graphifyRebuild()
   const graphifyMs = performance.now() - graphifyStarted
+  const graphifyBuildRan = !!status.hasGraph && !status.error
   return {
     publishMs,
     graphifyMs,
+    graphifyBuildRan,
     graphifyInstalled: !!status.installed,
     graphifyBackend: status.backend || null,
     graphifyHasGraph: !!status.hasGraph,
@@ -588,18 +590,24 @@ async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, 
   const setup = await evaluateBounded(cdp, 'setup', SETUP, SETUP_TIMEOUT_MS)
   if (setup.ok) run.poolSize = setup.value
   else run.errors.push(failureRecord('setup', run.setupAtMs, setup, SETUP_TIMEOUT_MS))
-  if (publishGraphify) {
-    const probe = await evaluateBounded(cdp, 'publish-graphify', PUBLISH_GRAPHIFY_PROBE, HISTORY_TIMEOUT_MS)
-    run.publishGraphify = probe.ok ? probe.value : { error: probe.timedOut ? `no answer within ${HISTORY_TIMEOUT_MS} ms` : probe.error }
-    if (!probe.ok) run.errors.push(failureRecord('publish-graphify', sinceSpawn(), probe, HISTORY_TIMEOUT_MS))
-  }
   run.profiler = await startProfiler(cdp, sinceSpawn)
   const probeFile = join(profile, 'st1-probe.txt')
   let historyRunning = null
+  let publishGraphifyRunning = null
+  let publishGraphifyStarted = false
   let historyLastMs = -Infinity
   const deadline = Date.now() + minutes * 60_000
   while (Date.now() < deadline) {
     const tMs = sinceSpawn()
+    if (publishGraphify && !publishGraphifyStarted) {
+      publishGraphifyStarted = true
+      publishGraphifyRunning = evaluateBounded(cdp, 'publish-graphify', PUBLISH_GRAPHIFY_PROBE, HISTORY_TIMEOUT_MS).then((probe) => {
+        run.publishGraphify = probe.ok
+          ? { ...probe.value, startedAtMs: tMs, answeredAtMs: sinceSpawn() }
+          : { startedAtMs: tMs, answeredAtMs: sinceSpawn(), error: probe.timedOut ? `no answer within ${HISTORY_TIMEOUT_MS} ms` : probe.error }
+        if (!probe.ok) run.errors.push(failureRecord('publish-graphify', sinceSpawn(), probe, HISTORY_TIMEOUT_MS))
+      })
+    }
     if (shouldProbeHistory({ historyOn, historyRunning, tMs, historyLastMs, fromMs: HISTORY_FROM_MS, everyMs: HISTORY_EVERY_MS })) {
       historyLastMs = tMs
       historyRunning = probeHistory(cdp, tMs, history).then((probe) => {
@@ -616,6 +624,7 @@ async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, 
     await new Promise((resolve) => setTimeout(resolve, SAMPLE_INTERVAL_MS))
   }
   await historyRunning
+  await publishGraphifyRunning
   const summaryAtMs = sinceSpawn()
   const summary = await evaluateBounded(cdp, 'summary', SUMMARY, SETUP_TIMEOUT_MS)
   if (!summary.ok) run.errors.push(failureRecord('summary', summaryAtMs, summary, SETUP_TIMEOUT_MS))

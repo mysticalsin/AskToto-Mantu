@@ -4,6 +4,7 @@ import {
   rmSync,
   readFileSync,
   readdirSync,
+  statSync,
   writeFileSync,
   renameSync,
   mkdirSync,
@@ -1120,6 +1121,14 @@ describe('writeSaved', () => {
 
     expect(calls).toBe(1) // first rename failed transiently, retry (the default real impl) succeeded
     expect(readFileSync(target, 'utf8')).toBe('hello world')
+  })
+
+  it('creates saved files owner-readable and owner-writable only', async () => {
+    const target = join(folder, 'private-note.md')
+
+    await writeSaved(target, 'private', false)
+
+    expect(statSync(target).mode & 0o777).toBe(0o600)
   })
 
   it('does not retry and rethrows on a non-transient error', async () => {

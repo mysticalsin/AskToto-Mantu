@@ -91,10 +91,10 @@ module.exports = {
     },
     {
       name: 'ff05b-meetings-root-readers-no-node-fs',
-      comment: 'Meetings-root readers reach filesystem I/O through the storage gateway, never direct node:fs imports.',
+      comment: 'Meetings-root readers reach filesystem I/O through the storage gateway, never direct node:fs imports or storage fs shims.',
       severity: 'error',
       from: { path: MEETINGS_ROOT_READERS },
-      to: { path: '^(node:)?fs(/promises)?$' },
+      to: { path: '^((node:)?fs(/promises)?|src/main/infra/storage/fs-(sync|async)\\.ts)$' },
     },
   ],
   options: {

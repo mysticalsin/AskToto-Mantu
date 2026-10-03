@@ -8,8 +8,8 @@ import {
   appendFileSync,
   unlinkSync,
   renameSync
-} from './infra/storage/fs-sync'
-import { rename, unlink, writeFile } from './infra/storage/fs-async'
+} from './infra/storage/legacy-sync-io'
+import { rename, unlink, writeFile } from './infra/storage/legacy-async-io'
 import { join, basename, dirname, relative } from 'node:path'
 import { randomBytes, createCipheriv, createDecipheriv, publicEncrypt, constants } from 'node:crypto'
 import type { SaveMeeting, SaveNote, Settings, RecapExport, TranscriptLine } from '@shared/ipc'
@@ -366,11 +366,11 @@ export async function writeSaved(file: string, content: string, encrypt: boolean
   const relTmp = relative(root, tmp)
   const relFile = relative(root, file)
   try {
-    const written = await gateway.write(relTmp, data)
+    const written = await gateway.write(relTmp, data, { mode: 0o600, deadlineMs: null })
     if (written.status !== 'ok') throw storageWriteError('write', written)
     // OneDrive/AV can briefly hold a just-written file; retry only those transient Windows locks.
     for (let attempt = 0; ; attempt++) {
-      const moved = await gateway.rename(relTmp, relFile)
+      const moved = await gateway.rename(relTmp, relFile, { deadlineMs: null })
       try {
         if (moved.status !== 'ok') throw storageWriteError('rename', moved)
         break

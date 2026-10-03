@@ -89,6 +89,13 @@ export interface RequestOptions {
   signal?: AbortSignal
 }
 
+export interface WriteOptions extends RequestOptions {
+  /** File mode used when creating a new file. */
+  mode?: number
+  /** null means no internal deadline; the caller still may abort with `signal`. */
+  deadlineMs?: number | null
+}
+
 /** What an explicit open reports while one cloud-only file downloads. A read that reported 'hydrating'
  *  ends in exactly one 'done' or 'failed'. A 'failed' read (deadline, abort, provider error) can leave its
  *  fs call running, holding its content permit: `settled` resolves (never rejects) once no fs call reads
@@ -116,9 +123,9 @@ export interface StorageGateway {
    *  call and one buffer: treat it as read-only. */
   read(relPath: string, options?: ReadOptions): Promise<ReadResult>
   /** Write bytes under the root, through the same admission cap as reads. */
-  write(relPath: string, bytes: Buffer, options?: RequestOptions): Promise<WriteResult>
+  write(relPath: string, bytes: Buffer, options?: WriteOptions): Promise<WriteResult>
   /** Atomically move an entry within the root. Both paths must stay under the root. */
-  rename(fromRelPath: string, toRelPath: string, options?: RequestOptions): Promise<WriteResult>
+  rename(fromRelPath: string, toRelPath: string, options?: RequestOptions & { deadlineMs?: number | null }): Promise<WriteResult>
   /** Remove a file or, with `recursive`, a directory tree under the root. Missing entries are ok. */
   unlink(relPath: string, options?: RequestOptions & { recursive?: boolean }): Promise<WriteResult>
   /** Create a directory under the root. */
@@ -130,7 +137,7 @@ export interface StorageGateway {
 export interface StorageFs {
   readdir(path: string): Promise<string[]>
   readFile(path: string): Promise<Buffer>
-  writeFile(path: string, bytes: Buffer): Promise<void>
+  writeFile(path: string, bytes: Buffer, options?: { mode?: number }): Promise<void>
   rename(from: string, to: string): Promise<void>
   unlink(path: string): Promise<void>
   rm(path: string, options: { recursive: boolean; force: boolean }): Promise<void>
@@ -234,17 +241,21 @@ interface Request {
   close(): void
 }
 
-function openRequest(deadlineMs: number, caller: AbortSignal | undefined): Request {
+function openRequest(deadlineMs: number | null, caller: AbortSignal | undefined): Request {
   const deadline = new AbortController()
-  const timer = setTimeout(() => deadline.abort(DEADLINE), deadlineMs)
-  const signal = caller ? AbortSignal.any([deadline.signal, caller]) : deadline.signal
+  const timer = deadlineMs === null ? undefined : setTimeout(() => deadline.abort(DEADLINE), deadlineMs)
+  const signal = deadlineMs === null
+    ? caller ?? deadline.signal
+    : caller ? AbortSignal.any([deadline.signal, caller]) : deadline.signal
   return {
     signal,
     ended(phase) {
       if (signal.reason !== DEADLINE) return { status: 'aborted' }
       return phase === 'running' ? { status: 'timeout' } : { status: 'degraded' }
     },
-    close: () => clearTimeout(timer)
+    close: () => {
+      if (timer) clearTimeout(timer)
+    }
   }
 }
 
@@ -416,8 +427,8 @@ export function createStorageGateway({
     return untilEnded(reading, request, 'running')
   }
 
-  async function writeLocal(path: string, bytes: Buffer, request: Request): Promise<WriteResult> {
-    const written = await call('content', request, () => fs.writeFile(path, bytes))
+  async function writeLocal(path: string, bytes: Buffer, request: Request, mode?: number): Promise<WriteResult> {
+    const written = await call('content', request, () => fs.writeFile(path, bytes, { mode }))
     if (written.status !== 'ok') return written
     await recordLocalWrite(path)
     return { status: 'ok' }
@@ -548,26 +559,26 @@ export function createStorageGateway({
       }
     },
 
-    async write(relPath, bytes, { signal } = {}) {
+    async write(relPath, bytes, { signal, mode, deadlineMs = CONTENT_DEADLINE_MS } = {}) {
       const current = currentRoot()
       if (current.status !== 'ok') return current
       const path = underRoot(current.root, relPath)
       if (!path) return outsideRoot()
-      const request = openRequest(CONTENT_DEADLINE_MS, signal)
+      const request = openRequest(deadlineMs, signal)
       try {
-        return await writeLocal(path, bytes, request)
+        return await writeLocal(path, bytes, request, mode)
       } finally {
         request.close()
       }
     },
 
-    async rename(fromRelPath, toRelPath, { signal } = {}) {
+    async rename(fromRelPath, toRelPath, { signal, deadlineMs = CONTENT_DEADLINE_MS } = {}) {
       const current = currentRoot()
       if (current.status !== 'ok') return current
       const from = underRoot(current.root, fromRelPath)
       const to = underRoot(current.root, toRelPath)
       if (!from || !to) return outsideRoot()
-      const request = openRequest(CONTENT_DEADLINE_MS, signal)
+      const request = openRequest(deadlineMs, signal)
       try {
         return await renameLocal(from, to, request)
       } finally {

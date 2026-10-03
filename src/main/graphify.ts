@@ -7,7 +7,7 @@ import { getSettings, getApiKey, hasApiKey, getAllowedProviders } from './store'
 import { resolveMeetingsFolder } from './transcripts'
 import { readConfidentialMeetings } from './brain/publish'
 import type { GraphStatus, GraphRelated, Settings } from '@shared/ipc'
-import { existsSync, readdirSync, readFileSync } from './infra/storage/fs-sync'
+import { existsSync, readdirSync, readFileSync } from './infra/storage/legacy-sync-io'
 import { storageAt } from './infra/storage/meetings-storage'
 
 const exec = promisify(execFile)

@@ -425,6 +425,17 @@ describe('architecture source detectors', () => {
       expect(countSourceFile('src/main/transcripts.ts', text)).toEqual({ 'FF-05a': 1, 'FF-05b': 4 })
       expect(countSourceFile('src/main/other.ts', text)).toEqual({ 'FF-05a': 1 })
     })
+
+    it('counts storage fs shim calls as filesystem calls in meetings-root files', () => {
+      const text = [
+        "import { readFileSync } from './infra/storage/fs-sync'",
+        "import { writeFile } from './infra/storage/fs-async'",
+        'readFileSync("a")',
+        'writeFile("b", Buffer.from("c"))',
+      ].join('\n')
+
+      expect(countSourceFile('src/main/transcripts.ts', text)).toEqual({ 'FF-05a': 1, 'FF-05b': 2 })
+    })
   })
 
   describe('FF-06 native dialogs', () => {

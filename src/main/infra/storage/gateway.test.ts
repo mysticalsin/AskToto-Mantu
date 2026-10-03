@@ -39,6 +39,7 @@ interface HeldCall {
 
 interface TestFs extends StorageFs {
   calls: string[]
+  writes: Array<{ path: string; mode?: number }>
   /** Every call's exact full path, in order — lets a test tell two roots apart even when `calls` (kept
    *  basename-only for the other tests' assertions) cannot. */
   paths: string[]
@@ -70,6 +71,7 @@ function memoryFs(files: Record<string, string>): TestFs {
 
   const calls: string[] = []
   const paths: string[] = []
+  const writes: Array<{ path: string; mode?: number }> = []
   let inflight = 0
   const gates = new Map<string, Array<() => Promise<void>>>()
 
@@ -97,6 +99,7 @@ function memoryFs(files: Record<string, string>): TestFs {
   return {
     calls,
     paths,
+    writes,
     inFlight: () => inflight,
     hold(method, name) {
       let resolveFn!: () => void
@@ -138,8 +141,9 @@ function memoryFs(files: Record<string, string>): TestFs {
         return Buffer.from(entry.content)
       })
     },
-    async writeFile(path, bytes) {
+    async writeFile(path, bytes, options) {
       return invoke('writeFile', path, () => {
+        writes.push({ path, mode: options?.mode })
         entries.set(path, { content: bytes.toString('utf8'), mtimeMs: 1_001, ctimeMs: 1_001 })
       })
     },
@@ -1077,5 +1081,29 @@ describe('gateway writes', () => {
     await expect(gateway.unlink('old.md')).resolves.toEqual({ status: 'ok' })
 
     expect(detector.classify).not.toHaveBeenCalled()
+  })
+
+  it('passes the requested creation mode to the filesystem write', async () => {
+    const fs = memoryFs({})
+    const gateway = createStorageGateway({ root: () => ROOT, detector: fakeDetector(), fs, poolSize: 4 })
+
+    await expect(gateway.write('secret.tmp', Buffer.from('private'), { mode: 0o600 })).resolves.toEqual({ status: 'ok' })
+
+    expect(fs.writes).toEqual([{ path: join(ROOT, 'secret.tmp'), mode: 0o600 }])
+  })
+
+  it('can wait for a held write longer than the normal content deadline', async () => {
+    const fs = memoryFs({})
+    const held = fs.hold('writeFile', 'slow.tmp')
+    const gateway = createStorageGateway({ root: () => ROOT, detector: fakeDetector(), fs, poolSize: 3 }) // cap = 1
+
+    const write = gateway.write('slow.tmp', Buffer.from('slow'), { deadlineMs: null })
+    await flush()
+    vi.advanceTimersByTime(60_000)
+    await flush()
+
+    expect(fs.inFlight()).toBe(1)
+    held.release()
+    await expect(write).resolves.toEqual({ status: 'ok' })
   })
 })

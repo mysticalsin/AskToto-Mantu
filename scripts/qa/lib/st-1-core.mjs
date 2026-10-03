@@ -563,7 +563,11 @@ export function evaluateCriteria(row, measured, evidence, { history = false } = 
   if (measured.publishGraphify) {
     criteria.push({
       name: 'publish-graphify-probed',
-      pass: !measured.publishGraphify.error && measured.publishGraphify.publishMs < HISTORY_BUDGET_MS && measured.publishGraphify.graphifyMs < HISTORY_BUDGET_MS
+      pass:
+        !measured.publishGraphify.error &&
+        measured.publishGraphify.graphifyBuildRan === true &&
+        measured.publishGraphify.publishMs < HISTORY_BUDGET_MS &&
+        measured.publishGraphify.graphifyMs < HISTORY_BUDGET_MS
     })
   }
   return criteria
@@ -621,6 +625,7 @@ export function buildReport({
     ...(purpose === WINDOW_CONSTRUCTION && windowWarmup ? { warmup: true } : {}),
     row,
     ...(history ? { historyRow: true } : {}),
+    ...(measured.publishGraphify ? { evidenceLevel: 'LEAD_ACTION' } : {}),
     platform: process.platform,
     arch: process.arch,
     installer,

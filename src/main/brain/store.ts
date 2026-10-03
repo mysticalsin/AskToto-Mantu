@@ -8,7 +8,7 @@ import { classifyAll, storageAt } from '../infra/storage/meetings-storage'
 import { activeIngestLedgerPath, classifyIngestLedgerBytes, ingestLedgerMode, readUserDataIngestLedger, seedUserDataIngestLedgerFromLegacy, type IngestLedgerLoad, userDataIngestLedgerPath, writeIngestLedger } from '../infra/storage/ingest-ledger'
 import { mainLog, auditLog } from '../logger'
 import { fileKeyState, isKeychainAvailable } from '../secrets'
-import { closeSync, constants, copyFileSync, cpSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, renameSync, statSync, writeFileSync } from '../infra/storage/fs-sync'
+import { closeSync, constants, copyFileSync, cpSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, renameSync, statSync, writeFileSync } from '../infra/storage/legacy-sync-io'
 
 /** Brain store — JSON under `<meetings folder>/.brain/`, beside transcripts and the same encryption policy. */
 

@@ -94,7 +94,8 @@ function collectSyncFsCalls(file: string, text: string): SyncFsCall[] {
   const scopeStack: Array<Set<string>> = [new Set()]
 
   const isNodeFsImport = (node: ts.ImportDeclaration): boolean =>
-    ts.isStringLiteral(node.moduleSpecifier) && node.moduleSpecifier.text === 'node:fs'
+    ts.isStringLiteral(node.moduleSpecifier) &&
+    (node.moduleSpecifier.text === 'node:fs' || /(?:^|\/)infra\/storage\/fs-sync$/.test(node.moduleSpecifier.text))
 
   const declareShadow = (name: string): void => {
     if (importedSyncNames.has(name) || namespaceImports.has(name)) scopeStack[scopeStack.length - 1].add(name)
@@ -194,6 +195,7 @@ describe('meetings-root readers — synchronous node:fs structural ratchet', () 
     const calls = collectSyncFsCalls('synthetic.ts', `
       import { readFileSync, statSync as statNow } from 'node:fs'
       import * as fs from 'node:fs'
+      import { writeFileSync as writeViaShim } from './infra/storage/fs-sync'
       import { readFileSync as readPromiseNamedSame } from 'node:fs/promises'
 
       const readFileSync = () => undefined
@@ -202,10 +204,11 @@ describe('meetings-root readers — synchronous node:fs structural ratchet', () 
       readFileSync()
       statNow('/tmp/a')
       fs.readdirSync('/tmp')
+      writeViaShim('/tmp/c', 'x')
       readPromiseNamedSame('/tmp/b')
     `)
 
-    expect(calls.map((call) => call.importedName)).toEqual(['statSync', 'readdirSync'])
+    expect(calls.map((call) => call.importedName)).toEqual(['statSync', 'readdirSync', 'writeFileSync'])
   })
 
   it('matches the checked-in per-file sync node:fs baseline exactly', () => {
