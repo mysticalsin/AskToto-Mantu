@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { IPC } from '../../src/shared/ipc'
 import { HISTORY_DEGRADED_MS as RENDERER_DEGRADED_MS } from '../../src/renderer/src/components/history/list-status'
 import { NOT_DOWNLOADED_TEXT, UNAVAILABLE_TEXT } from '../../src/renderer/src/components/history/hydration'
+import { waitForHistoryDesignCue } from './history-design-capture.mjs'
 import {
   BACKDROPS,
   BLOCKED_EXTERNAL_ROWS,
@@ -98,6 +99,38 @@ describe('History design matrix (M2-0032)', () => {
     expect(listAnswer('pending', real, 0)).toEqual({ kind: 'pending' })
     expect(listAnswer('failed', real, 0)).toEqual({ kind: 'failed' })
     expect(() => listAnswer('bogus', real, 0)).toThrow(/unknown list mode/)
+  })
+
+  it('waits for slow visual cues by text, leaving role verification to the capture judge', async () => {
+    const textWaitFor = vi.fn(async () => undefined)
+    const roleWaitFor = vi.fn(async () => undefined)
+    const page = {
+      getByText: vi.fn(() => ({ first: () => ({ waitFor: textWaitFor }) })),
+      getByRole: vi.fn(() => ({ filter: () => ({ first: () => ({ waitFor: roleWaitFor }) }) }))
+    }
+
+    await waitForHistoryDesignCue(page as never, { text: 'OneDrive is slow to answer' })
+
+    expect(page.getByText).toHaveBeenCalledWith('OneDrive is slow to answer')
+    expect(page.getByRole).not.toHaveBeenCalled()
+    expect(textWaitFor).toHaveBeenCalledWith({ timeout: 10_000 })
+    expect(roleWaitFor).not.toHaveBeenCalled()
+  })
+
+  it('still supports role-gated waits for cues whose role is the state transition signal', async () => {
+    const waitFor = vi.fn(async () => undefined)
+    const filter = vi.fn(() => ({ first: () => ({ waitFor }) }))
+    const page = {
+      getByText: vi.fn(),
+      getByRole: vi.fn(() => ({ filter }))
+    }
+
+    await waitForHistoryDesignCue(page as never, { text: 'Could not load your meetings', role: 'alert' })
+
+    expect(page.getByRole).toHaveBeenCalledWith('alert')
+    expect(filter).toHaveBeenCalledWith({ hasText: 'Could not load your meetings' })
+    expect(page.getByText).not.toHaveBeenCalled()
+    expect(waitFor).toHaveBeenCalledWith({ timeout: 10_000 })
   })
 })
 

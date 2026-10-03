@@ -31,6 +31,7 @@ import { spawn } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { NAVIGATION_GUARD_BOOTSTRAP_PATCH, clickHistory, ensureIdleBar, findOverlayPage } from './golden-flows/navigation-guard-rows.mjs'
 import { mainInspector } from './golden-flows/right-edge-hide-rows.mjs'
 import { isOverlayUrl, parseAuditLog } from './golden-flows/smoke-support.mjs'
@@ -279,6 +280,17 @@ async function waitForRequest(main, before) {
 }
 
 /**
+ * Waits for the visual cue needed before capture. Accessibility roles are still checked afterwards by
+ * rolesPresent/judgeCapture; the slow status cue must not depend on Playwright's role projection.
+ * @param {import('playwright').Page} page
+ * @param {{ text: string, role?: string | null }} cue
+ */
+export async function waitForHistoryDesignCue(page, { text, role = null }) {
+  const locator = role ? page.getByRole(role).filter({ hasText: text }) : page.getByText(text)
+  await locator.first().waitFor({ timeout: STATE_TIMEOUT_MS })
+}
+
+/**
  * Puts History into `state` from a fresh open; returns when the open was clicked, when History's list
  * request reached main, and how it went. The renderer arms its HISTORY_DEGRADED_MS notice when it sends
  * that request, so the loading capture's budget starts there, not at the harness's click.
@@ -299,18 +311,18 @@ async function driveState(page, main, state, realRows) {
   const clickedAt = Date.now()
   await clickHistory(page)
   const requestedAt = await waitForRequest(main, before)
-  const visible = (text, role) => (role ? page.getByRole(role).filter({ hasText: text }) : page.getByText(text)).first().waitFor({ timeout: STATE_TIMEOUT_MS })
+  const visible = (text, role = null) => waitForHistoryDesignCue(page, { text, role })
   const drive = { clickedAt, requestedAt }
   if (state.id === 'slow' || state.id === 'unavailable' || state.id === 'failed') {
     const [text, role] =
-      state.id === 'slow' ? ['OneDrive is slow to answer', 'status'] : state.id === 'failed' ? ['Could not load your meetings', 'alert'] : ['could not be read right now', 'status']
+      state.id === 'slow' ? ['OneDrive is slow to answer', null] : state.id === 'failed' ? ['Could not load your meetings', 'alert'] : ['could not be read right now', 'status']
     await visible(text, role)
     drive.bannerAfterMs = Date.now() - clickedAt
   } else if (state.id === 'slow-with-rows') {
     await visible(SAMPLE_MEETINGS[0])
     const typedAt = Date.now()
     await page.getByLabel('Search past meetings').fill('planning')
-    await visible('OneDrive is slow to answer', 'status')
+    await visible('OneDrive is slow to answer')
     drive.bannerAfterMs = Date.now() - typedAt
   } else if (state.list !== 'pending') {
     await visible(state.list === 'rows+notDownloaded' ? 'Not downloaded' : SAMPLE_MEETINGS[0])
@@ -543,10 +555,12 @@ async function main() {
   return report.verdict === 'PASS' ? 0 : 1
 }
 
-main().then(
-  (code) => process.exit(code),
-  (error) => {
-    console.error(`[history-design] ${error.stack ?? error.message}`)
-    process.exit(1)
-  }
-)
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().then(
+    (code) => process.exit(code),
+    (error) => {
+      console.error(`[history-design] ${error.stack ?? error.message}`)
+      process.exit(1)
+    }
+  )
+}
