@@ -65,7 +65,7 @@ async function readOutputFiles(dir) {
 export async function wranglerDryRunOutput() {
   const outdir = await mkdtemp(join(tmpdir(), 'metis-operator-worker-'))
   try {
-    const wrangler = require.resolve('wrangler/bin/wrangler.js')
+    const wrangler = join(dirname(require.resolve('wrangler/package.json')), 'bin', 'wrangler.js')
     await execFileAsync(process.execPath, [wrangler, 'deploy', '--dry-run', '--outdir', outdir, '--config', 'wrangler.jsonc'], {
       cwd: OPERATOR_ROOT,
       env: { ...process.env, NO_COLOR: '1' },
