@@ -86,7 +86,6 @@ export function DustSetup({
   // The manual API-key path is collapsed by default so the one-click "Set up Dust automatically" button
   // is the obvious choice; users who already hold an admin key expand it.
   const [showKeyPath, setShowKeyPath] = useState(false)
-
   const isEu = /eu\.dust\.tt/i.test(settings.dustBaseUrl)
   // The one-click CLI setup (dustImportCli/dustSetupCli) is cross-platform now (dust-secret-store reads
   // the session on macOS/Windows/Linux), so it's the primary path on every OS — no per-platform gating.
@@ -119,7 +118,6 @@ export function DustSetup({
   const storedAgentMissing = dustStoredAgentMissing(agent, agents)
   const spotlightAgentMissing = dustStoredAgentMissing(spotlightAgent, agents)
   const selectedAgentRunsSonnet = !!selectedAgent && selectedAgent.modelProviderId === 'anthropic' && /sonnet/i.test(selectedAgent.modelId || '')
-
   const applyDustValidate = (verdict: DustInstantValidateResult): void => {
     if (verdict.ok) {
       setCli({ busy: false, ok: true, msg: verdict.message })

@@ -22,7 +22,6 @@ import {
 } from 'electron'
 import { join, basename, dirname, resolve } from 'node:path'
 import { readFileSync, existsSync, writeFileSync, readdirSync, unlinkSync, createReadStream, statSync, renameSync, rmdirSync, mkdirSync, copyFileSync } from 'node:fs'
-
 // DevTools stay reachable only where dev-env permits them; packaged builds ignore ASKTOTO_DEVTOOLS.
 const DEVTOOLS_ENABLED = devToolsEnabled()
 import { pathToFileURL } from 'node:url'
@@ -140,7 +139,6 @@ import {
   resetProviderHealth,
   unhealthyProviders
 } from './llm/provider-health'
-
 /** Wave 2 — session-scoped last successful failover hop for the one-shot UI chip. Never persisted. */
 let lastFailoverNotice: { from: string; to: string; at: number; reason: string } | null = null
 export function peekLastFailoverNotice(): typeof lastFailoverNotice {
@@ -270,9 +268,7 @@ import {
 } from '@shared/overlay-orb'
 import { parseOverlayPlacement, type OverlayPlacement } from '@shared/overlay-placement'
 import { resolveOverlayPresentation } from '@shared/overlay-presentation'
-
 // --- Speaker session ownership (Task 7-P2b) ---
-
 // Lazy Speaker Intelligence singleton — building it probes the sherpa addon + embedding model, so defer
 // until an identified and admitted live/import session needs it (never on the startup path).
 let speakerIdInstance: SpeakerId | null = null
@@ -9823,7 +9819,6 @@ if (!app.requestSingleInstanceLock()) {
 app.on('window-all-closed', () => {
   // Overlay app: stay alive in tray; quit only via tray/menu.
 })
-
 // Tray "Quit AskToto" (and any other path that calls app.quit() directly, e.g. Cmd+Q on macOS) used to
 // tear the process down with zero drain: the in-progress meeting's transcript lives only in renderer
 // React state, written to disk solely by a 60s autosave interval, so a graceful-looking Quit could lose

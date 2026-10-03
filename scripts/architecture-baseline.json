@@ -197,7 +197,7 @@
     "src/main/logger.single-owner.test.ts": 2,
     "src/main/main-lifecycle.contract.test.ts": 2,
     "src/main/managed-node.test.ts": 1,
-    "src/main/metis-command-boundary.contract.test.ts": 4,
+    "src/main/metis-command-boundary.contract.test.ts": 3,
     "src/main/model-policy-contract.test.ts": 12,
     "src/main/mqa-175-brain-index-poison.test.ts": 5,
     "src/main/no-emotion-inference.contract.test.ts": 5,
