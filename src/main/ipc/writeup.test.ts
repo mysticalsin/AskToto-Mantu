@@ -47,8 +47,8 @@ describe('M2-0430: write-up IPC', () => {
   it('rejects a sender that is not the main window before doing anything', async () => {
     const denied = vi.fn(() => { throw new Error('IPC denied') })
     const handlers = register(denied)
-    expect(() => handlers.get(IPC.writeupSpan)!(event, { span: 'stop_to_recap_done', ms: 1 })).toThrow('IPC denied')
-    expect(() => handlers.get(IPC.localAppleEngineStatus)!(event)).toThrow('IPC denied')
+    await expect(handlers.get(IPC.writeupSpan)!(event, { span: 'stop_to_recap_done', ms: 1 })).rejects.toThrow('IPC denied')
+    await expect(handlers.get(IPC.localAppleEngineStatus)!(event)).rejects.toThrow('IPC denied')
     expect(auditLogMock).not.toHaveBeenCalled()
     const allowed = register()
     await expect(allowed.get(IPC.localAppleEngineStatus)!(event)).resolves.toBe('unlicensed')

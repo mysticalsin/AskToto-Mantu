@@ -37,6 +37,7 @@ const RULE_IDS = [
   'FF-11',
   'FF-14',
   'FF-15',
+  'FF-16',
 ]
 
 function sortedViolationLines(stdout: string): string[] {
@@ -321,6 +322,7 @@ describe('architecture ratchet pure functions', () => {
       'FF-11': {},
       'FF-14': {},
       'FF-15': {},
+      'FF-16': {},
     }, null, 2)}\n`)
     expect(Object.keys(JSON.parse(canonical) as Counts)).toEqual(RULE_IDS)
     expect(formatBaseline(JSON.parse(canonical) as Counts)).toBe(canonical)
