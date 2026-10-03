@@ -29,7 +29,6 @@ import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
 import { bindReadinessThenNavigate } from './renderer-readiness'
 import { bindAct1DomProbe } from './act1-dom-probe'
-import './features/ocr/electron'
 import {
   createRevealController,
   legacyRevealWindow,

@@ -50,7 +50,7 @@ function createWindow(title, text, bounds, alwaysOnTop = false) {
     backgroundColor: '#ffffff',
     webPreferences: { sandbox: true }
   })
-  const html = `<!doctype html><html><body style="margin:0;background:white;color:black;font:700 56px system-ui;display:grid;place-items:center;height:100vh">${text}</body></html>`
+  const html = `<!doctype html><html><head><title>${title}</title></head><body style="margin:0;background:white;color:black;font:700 56px system-ui;display:grid;place-items:center;height:100vh">${text}</body></html>`
   window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
   return window
 }
@@ -130,9 +130,8 @@ async function main() {
 }
 
 main()
-  .then(() => app.quit())
+  .then(() => app.exit(0))
   .catch((error) => {
     console.error(error instanceof Error ? error.message : String(error))
-    app.quit()
-    process.exitCode = 1
+    app.exit(1)
   })
