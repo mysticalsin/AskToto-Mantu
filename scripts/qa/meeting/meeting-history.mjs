@@ -269,10 +269,11 @@ async function historyCycle(page, { index, tMs, term }) {
     await page.evaluate(BACK_OR_TRANSCRIPT).catch(() => null)
     await page.evaluate(TRANSCRIPT_CLICK).catch(() => false)
     outcome = listRendered && searchRendered && rowOpened ? 'completed' : 'failed'
-  } finally {
-    const linesAfter = Number(await page.evaluate(LINE_COUNT).catch(() => 0))
-    return { index, tMs, durationMs: Math.round(performance.now() - started), outcome, listRendered, searchRendered, rowOpened, linesBefore, linesAfter }
+  } catch {
+    outcome = 'failed'
   }
+  const linesAfter = Number(await page.evaluate(LINE_COUNT).catch(() => 0))
+  return { index, tMs, durationMs: Math.round(performance.now() - started), outcome, listRendered, searchRendered, rowOpened, linesBefore, linesAfter }
 }
 
 function parseArgs(argv) {
