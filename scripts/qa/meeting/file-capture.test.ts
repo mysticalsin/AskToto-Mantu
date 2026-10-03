@@ -1,6 +1,6 @@
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   CAPTURE_SAMPLE_RATE,
@@ -195,7 +195,13 @@ describe('capture WAV: command construction', () => {
     const { run } = fakeTools()
     const out = writeCaptureWav(profile, { sentences: ['one'], run })
     expect(out.path.startsWith(profile)).toBe(true)
-    expect(statSync(out.path).mode & 0o777).toBe(0o644)
+    const mode = statSync(out.path).mode & 0o777
+    if (process.platform === 'win32') {
+      expect(mode & 0o444).toBe(0o444)
+      expect(mode & 0o111).toBe(0)
+    } else {
+      expect(mode).toBe(0o644)
+    }
   })
 
   it('formats the CLI summary as only the WAV sha256 and duration', () => {
@@ -497,6 +503,7 @@ describe('the report', () => {
 
 describe('smoke runner workspace', () => {
   it('places the app profile and capture WAV under the artifact workspace, not the macOS temp directory', () => {
-    expect(smokeWorkDir('capture-report', '/workspace/repo')).toBe('/workspace/repo/capture-report/work')
+    const workspace = process.platform === 'win32' ? 'D:\\workspace\\repo' : '/workspace/repo'
+    expect(smokeWorkDir('capture-report', workspace)).toBe(resolve(workspace, 'capture-report', 'work'))
   })
 })
