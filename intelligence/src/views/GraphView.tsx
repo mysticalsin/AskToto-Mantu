@@ -6,6 +6,8 @@ import type { DashboardData, GraphEdge, GraphNode, Reason, ScopeSummary, WinLike
 import { bandColor, bandLabel, fmtScopeTotal } from '../lib/format'
 import { findBridges } from '../lib/bridges'
 import { slug } from '../lib/slug'
+import { VirtualList } from '../../../src/renderer/src/ui/VirtualList'
+import { BridgeRow, GoingColdRow, RelationshipRiskRow } from './GraphRows'
 
 interface Props {
   data: DashboardData
@@ -628,27 +630,18 @@ export function GraphView({ data }: Props) {
         {(data.going_cold?.length ?? 0) > 0 && (
           <div className="shrink-0 border-b border-[var(--color-mantu-border)] p-4">
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-white/40">Going cold</h3>
-            <div className="max-h-56 space-y-1.5 overflow-y-auto">
-              {data.going_cold!.slice(0, 6).map((r) => (
-                <button
-                  key={r.nodeId}
-                  onClick={() => focusNode(r.nodeId)}
-                  className="block w-full rounded-md bg-black/20 px-2 py-1.5 text-left hover:bg-white/5"
-                >
-                  <div className="flex items-center gap-2 text-xs">
-                    <span className="truncate font-medium text-white/85">{r.label}</span>
-                    {r.account && <span className="truncate text-[10px] text-white/35">{r.account}</span>}
-                    <span
-                      className="ml-auto shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold"
-                      style={{ color: r.daysQuiet > 45 ? '#f7768e' : '#e0af68', background: 'rgba(255,255,255,0.06)' }}
-                    >
-                      {r.daysQuiet}d quiet
-                    </span>
-                  </div>
-                  <div className="mt-0.5 text-[11px] leading-snug text-white/50">{r.hook}</div>
-                </button>
-              ))}
-            </div>
+            <VirtualList
+              items={data.going_cold!}
+              getKey={(item) => `cold:${item.nodeId}`}
+              estimateSize={() => 62}
+              className="scroll-thin h-56 overflow-y-auto"
+              ariaLabel="Going cold relationships"
+              renderItem={({ item, style, measureRef }) => (
+                <div key={item.nodeId} ref={measureRef} style={style} className="pb-1.5">
+                  <GoingColdRow item={item} onFocus={focusNode} />
+                </div>
+              )}
+            />
             <p className="mt-2 text-[10px] leading-relaxed text-white/30">
               Hooks come from your own open promises and last real topics, never invented. Faded nodes in
               the graph are these relationships decaying in place.
@@ -661,25 +654,18 @@ export function GraphView({ data }: Props) {
         {relationshipRisk.length > 0 && (
           <div className="shrink-0 border-b border-[var(--color-mantu-border)] p-4">
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-white/40">Relationship risk</h3>
-            <div className="max-h-56 space-y-1.5 overflow-y-auto">
-              {relationshipRisk.map((n) => (
-                <button
-                  key={n.id}
-                  onClick={() => focusNode(n.id)}
-                  className="block w-full rounded-md bg-black/20 px-2 py-1.5 text-left hover:bg-white/5"
-                >
-                  <div className="flex items-center gap-2 text-xs">
-                    <span className="truncate font-medium text-white/85">{n.label}</span>
-                    {n.account && n.account !== n.label && (
-                      <span className="truncate text-[10px] text-white/35">{n.account}</span>
-                    )}
-                    <span className="ml-auto shrink-0 rounded-full bg-amber-400/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-200/90">
-                      {n.single_threaded ? 'single-threaded' : 'unmapped'}
-                    </span>
-                  </div>
-                </button>
-              ))}
-            </div>
+            <VirtualList
+              items={relationshipRisk}
+              getKey={(node) => `risk:${node.id}`}
+              estimateSize={() => 44}
+              className="scroll-thin h-56 overflow-y-auto"
+              ariaLabel="Relationship risk"
+              renderItem={({ item, style, measureRef }) => (
+                <div key={item.id} ref={measureRef} style={style} className="pb-1.5">
+                  <RelationshipRiskRow node={item} onFocus={focusNode} />
+                </div>
+              )}
+            />
             <p className="mt-2 text-[10px] leading-relaxed text-white/30">
               Deals with one mapped contact, or accounts with zero. Structural exposure, not a prediction.
             </p>
@@ -692,28 +678,18 @@ export function GraphView({ data }: Props) {
         {bridges.length > 0 && (
           <div className="shrink-0 border-b border-[var(--color-mantu-border)] p-4">
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-white/40">Connectors</h3>
-            <div className="max-h-56 space-y-1.5 overflow-y-auto">
-              {bridges.map((b) => (
-                <button
-                  key={b.id}
-                  onClick={() => focusNode(b.id)}
-                  className="block w-full rounded-md bg-black/20 px-2 py-1.5 text-left hover:bg-white/5"
-                >
-                  <div className="flex items-center gap-2 text-xs">
-                    <span className="truncate font-medium text-white/85">{b.label}</span>
-                    {b.account && b.account !== b.label && (
-                      <span className="truncate text-[10px] text-white/35">{b.account}</span>
-                    )}
-                    <span className="ml-auto shrink-0 rounded-full bg-[var(--color-mantu-light)]/15 px-1.5 py-0.5 text-[10px] font-semibold text-[var(--color-mantu-light)]">
-                      {b.spans} groups
-                    </span>
-                  </div>
-                  <div className="mt-0.5 truncate text-[11px] leading-snug text-white/50">
-                    connects {b.communityLabels.join(' · ')}
-                  </div>
-                </button>
-              ))}
-            </div>
+            <VirtualList
+              items={bridges}
+              getKey={(bridge) => `bridge:${bridge.id}`}
+              estimateSize={() => 58}
+              className="scroll-thin h-56 overflow-y-auto"
+              ariaLabel="Connectors"
+              renderItem={({ item, style, measureRef }) => (
+                <div key={item.id} ref={measureRef} style={style} className="pb-1.5">
+                  <BridgeRow bridge={item} onFocus={focusNode} />
+                </div>
+              )}
+            />
             <p className="mt-2 text-[10px] leading-relaxed text-white/30">
               People and deals whose links cross more than one detected group — the paths between
               otherwise-separate parts of your map. Structural, computed from existing edges only.
