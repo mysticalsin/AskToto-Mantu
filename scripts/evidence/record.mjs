@@ -23,9 +23,10 @@ const SESSION_MODEL_RE = /^[a-z0-9][a-z0-9.-]{0,63}$/
 const SESSION_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/
 const HOST_RE = /^[a-z0-9][a-z0-9._-]{0,62}$/
 const ENVIRONMENT_KINDS = Object.freeze(['ci', 'qa-mac', 'windows-laptop', 'windows-runner', 'owner-mac', 'hosted-runner'])
-// A hosted-runner record names the GitHub-hosted runner image that executed the check; every other
-// kind keeps the generic HOST_RE label rule.
+// Runner records need a CI run id: hosted-runner on GitHub-hosted images, and owner-mac on metis-owner-mac.
 const HOSTED_RUNNER_HOSTS = Object.freeze(['macos-latest', 'windows-latest'])
+export const OWNER_MAC_RUNNER_HOST = 'metis-owner-mac'
+const RUNNER_CI_LEVELS = new Set(['HOST_CONFIGURED', 'LIVE_VERIFIED', 'MEASURED'])
 const CAPABILITY_RE = /^[a-z0-9][a-z0-9._-]*$/
 const DECISION_RE = /^D-\d+$/
 const TEST_PATH_RE = /\.(test|spec)\.[cm]?[jt]sx?$/
@@ -98,6 +99,9 @@ function isEnvironment(value) {
   if (!isPlainObject(value)) return 'environment: expected an object'
   if (!ENVIRONMENT_KINDS.includes(value.kind)) return `environment.kind: expected one of ${ENVIRONMENT_KINDS.join(', ')}`
   if (typeof value.host !== 'string' || !HOST_RE.test(value.host)) return 'environment.host: expected a registered lowercase label'
+  if (value.host === OWNER_MAC_RUNNER_HOST && value.kind !== 'owner-mac' && value.kind !== 'hosted-runner') {
+    return `environment.kind: host ${OWNER_MAC_RUNNER_HOST} is valid only for owner-mac records`
+  }
   if (value.kind === 'hosted-runner' && !HOSTED_RUNNER_HOSTS.includes(value.host)) {
     return `environment.host: a hosted-runner record must name ${HOSTED_RUNNER_HOSTS.map((host) => `'${host}'`).join(' or ')}`
   }
@@ -223,6 +227,17 @@ function unsafePaths(record) {
 }
 
 /**
+ * @param {object} record
+ * @returns {string | null} runner label/kind that requires ci_run_id but is missing it
+ */
+export function missingRunnerCiRunIdLabel(record) {
+  if (!isPlainObject(record) || record.ci_run_id != null || !RUNNER_CI_LEVELS.has(record.evidence_level)) return null
+  if (record.environment?.kind === 'hosted-runner') return 'hosted-runner'
+  if (record.environment?.kind === 'owner-mac' && record.environment?.host === OWNER_MAC_RUNNER_HOST) return OWNER_MAC_RUNNER_HOST
+  return null
+}
+
+/**
  * Validates one record in isolation (context-free: no ledger, no ticket). Returns a list of problem
  * strings; an empty list means the record is well-formed. Includes the record-local cross-field rules
  * R-SEP, R-REEX, R-EXIT, R-REPRO, R-WIRED, R-DESIGNED and R-SAFE.
@@ -263,10 +278,8 @@ export function recordProblems(record) {
       if ((level === 'HOST_CONFIGURED' || level === 'LIVE_VERIFIED') && kind === 'ci') {
         problems.push(`environment.kind: must not be 'ci' for ${level}`)
       }
-      if (kind === 'hosted-runner' && (level === 'HOST_CONFIGURED' || level === 'LIVE_VERIFIED' || level === 'MEASURED') &&
-          !has('ci_run_id')) {
-        problems.push(`ci_run_id: required for a hosted-runner ${level} record`)
-      }
+      const runnerLabel = missingRunnerCiRunIdLabel(record)
+      if (runnerLabel) problems.push(`ci_run_id: required for a ${runnerLabel} ${level} record`)
     }
   }
 
