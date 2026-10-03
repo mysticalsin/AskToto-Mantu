@@ -3,7 +3,7 @@
 Métis ships as normal desktop installers:
 
 - macOS (Electron): `.dmg` — the cross-platform overlay app
-- Windows: x64 setup `.exe`, plus a portable `.exe` for no-install testing
+- Windows: x64 setup `.exe`; the portable `.exe` is a QA-only, non-updating build
 
 ## Download And Install
 
@@ -15,9 +15,9 @@ Métis ships as normal desktop installers:
 3. Install:
    - macOS Electron: open the Developer ID-signed, notarized `.dmg` and drag Métis to Applications.
    - Windows: run `Metis-Setup-*.exe`.
-   - Windows no-install test: run `Metis-Portable-*.exe`. The portable exe never auto-updates —
-     electron-updater only supports the NSIS-installed app — so redownload it from the releases
-     page for each new version.
+   - Windows Portable builds (`Metis-Portable-*.exe`) are QA-only artifacts. They never
+     auto-update because electron-updater only supports the NSIS-installed app, so they are not
+     promoted or published as customer release assets.
 
 The SwiftUI native prototype is a local QA artifact, not a public download, until it has a separate
 Developer ID signing and notarization pipeline. Each platform's tagged public release fails closed on
@@ -62,7 +62,7 @@ npm run installers:all
 ```
 
 Use GitHub Actions for the cleanest two-platform build: macOS runners build the `.dmg`/`.zip`; Windows
-runners build the setup `.exe`, portable `.exe`, and AppX package. Actions billing was reported blocked
+runners build the setup `.exe` for customer release and keep the portable `.exe` as QA-only coverage. Actions billing was reported blocked
 on 2026-07-10; verify the current run before treating that mutable external state as today's blocker
 (see `docs/ENTERPRISE_RELEASE.md`).
 
@@ -77,5 +77,5 @@ The Release workflow publishes signed installers to `mysticalsin/Metis-Releases`
 repo. `release.yml` derives the publish target by reading `owner:`/`repo:` out of
 `electron-builder.yml`'s `publish` block, which names `mysticalsin/Metis-Releases` — the same public
 feed `src/main/updater.ts` polls. `AskToto-Mantu` is private, so nothing installed could ever have
-updated from it. Installed direct-release apps update from that public feed — except the Windows
-portable exe, which has no update mechanism (see above).
+updated from it. Installed direct-release apps update from that public feed. The Windows portable exe
+has no update mechanism and is not a customer release asset.

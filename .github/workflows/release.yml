@@ -368,6 +368,18 @@ jobs:
       - run: npm run check:release
         env:
           ASKTOTO_ARTIFACTS_DIR: release
+      - name: Refuse Portable in the Windows release upload set
+        shell: bash
+        run: |
+          shopt -s nullglob
+          upload_set=(release/Metis-Setup-*.exe release/*.blockmap release/latest.yml)
+          for asset in "${upload_set[@]}"; do
+            case "$(basename "$asset")" in
+              Metis-Portable-*.exe)
+                echo "::error::Metis-Portable is QA-only and must not reach the public release upload set."
+                exit 1 ;;
+            esac
+          done
       - run: node scripts/verify-signing.mjs
         env:
           WIN_CSC_EXPECTED_SUBJECT: ${{ secrets.WIN_CSC_EXPECTED_SUBJECT }}
@@ -378,7 +390,7 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           path: |
-            release/*.exe
+            release/Metis-Setup-*.exe
             release/*.blockmap
             release/latest.yml
 

@@ -70,7 +70,7 @@ function printInstallHelp(files) {
   const hasStore = installers.some((name) => /\.(appx|msix|pkg)$/i.test(name))
   console.log('\nHow to install:')
   if (hasMac) console.log('  macOS: open the .dmg, drag Métis to Applications, then open Métis.')
-  if (hasWin) console.log('  Windows: run Metis-Setup-*.exe. Use Metis-Portable-*.exe for no-install testing.')
+  if (hasWin) console.log('  Windows: run Metis-Setup-*.exe. Metis-Portable-*.exe is QA-only and never auto-updates.')
   if (hasStore) console.log('  Store package: upload the .pkg/.appx/.msix through the relevant store dashboard.')
   if (hasMac && process.env.ASKTOTO_SIGN_INSTALLER !== '1') {
     console.log('\nNote: local macOS installers use a complete ad-hoc signature, not Developer ID/notarization.')
