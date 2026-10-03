@@ -1,9 +1,7 @@
 import AppKit
 import Dispatch
 import Foundation
-import ImageIO
 import ScreenCaptureKit
-import UniformTypeIdentifiers
 
 func fail(_ message: String, code: Int32 = 1) -> Never {
     FileHandle.standardError.write((message + "\n").data(using: .utf8)!)
@@ -41,17 +39,6 @@ func runWindow(title: String, text: String, x: Double, y: Double, level: String)
     exit(0)
 }
 
-func writePng(_ image: CGImage, output: String) {
-    let url = URL(fileURLWithPath: output)
-    guard let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else {
-        fail("single-window row: could not create PNG destination")
-    }
-    CGImageDestinationAddImage(destination, image, nil)
-    guard CGImageDestinationFinalize(destination) else {
-        fail("single-window row: could not write PNG")
-    }
-}
-
 @available(macOS 14.0, *)
 func captureWithScreenCaptureKit(title: String, output: String) async -> Never {
     do {
@@ -59,13 +46,18 @@ func captureWithScreenCaptureKit(title: String, output: String) async -> Never {
         guard let window = content.windows.first(where: { ($0.title ?? "") == title }) else {
             fail("single-window row: target window not found: \(title)")
         }
-        let configuration = SCStreamConfiguration()
-        configuration.width = max(1, Int(window.frame.width.rounded()))
-        configuration.height = max(1, Int(window.frame.height.rounded()))
-        configuration.showsCursor = false
-        let filter = SCContentFilter(desktopIndependentWindow: window)
-        let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
-        writePng(image, output: output)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+        process.arguments = ["-x", "-l\(window.windowID)", output]
+        try process.run()
+        process.waitUntilExit()
+        if process.terminationStatus != 0 {
+            fail("BLOCKED_EXTERNAL: Screen Recording granted to the test host on the runner image.", code: 75)
+        }
+        let attributes = try FileManager.default.attributesOfItem(atPath: output)
+        if (attributes[.size] as? NSNumber)?.intValue ?? 0 <= 0 {
+            fail("single-window row: screenshot output was empty")
+        }
     } catch {
         fail("BLOCKED_EXTERNAL: Screen Recording granted to the test host on the runner image.", code: 75)
     }
