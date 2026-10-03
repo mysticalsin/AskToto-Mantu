@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { BOOT_WINDOW_VARIANTS } from '../../src/main/infra/observability/projection'
 import {
@@ -8,6 +10,7 @@ import {
   WINDOW_MEASURED_REPEATS,
   WINDOW_STAGE_BUDGET_MS,
   WINDOW_VARIANTS,
+  WINDOW_CONSTRUCTION_ROOT_CAUSE,
   bootStagesFromAudit,
   buildLaunchFailureReport,
   buildReport,
@@ -38,6 +41,7 @@ import {
 const evaluateGlobally = (expression: string): unknown => (0, eval)(expression)
 const globals = globalThis as unknown as Record<string, Record<string, unknown> | undefined>
 const pending = (): Record<string, unknown> | undefined => globals[PENDING_GLOBAL]
+const workflowText = () => readFileSync(join(process.cwd(), '.github', 'workflows', 'qa-candidate.yml'), 'utf8').replace(/\r\n/g, '\n')
 
 const candidate = { build_run_id: 1, artifact_sha256: 'a'.repeat(64) }
 const goodSample = (tMs: number) => ({ tMs, writeMs: 2, lookupMs: 1, loopMaxSinceLastMs: 12, resources: {} })
@@ -360,6 +364,16 @@ describe('window-construction runs (M2-0516)', () => {
     )
   })
 
+  it('is the launch order the qa-candidate workflow runs', () => {
+    const workflow = workflowText()
+    expect(workflow).toContain('node scripts/qa/st-1.mjs --print-window-plan > st1-report/window-plan.json')
+    expect(workflow).toContain("jq -c '.[]' st1-report/window-plan.json | while read -r launch; do")
+    expect(workflow).toContain('run=$(jq -r \'.name\' <<<"$launch")')
+    expect(workflow).toContain('if [ "$warmup" = true ]; then warmup_args=(--window-warmup); fi')
+    expect(workflow).not.toContain('variants=(shipped spellcheck-off paint-when-hidden prewarm-spellchecker)')
+    expect(workflow).not.toContain('for repeat in 1 2; do')
+  })
+
   it('makes a run without a purpose an ST-1 run on the shipped window, and refuses a variant there', () => {
     expect(runPurpose({})).toEqual({ purpose: 'st-1', windowVariant: 'shipped' })
     expect(runPurpose({ windowVariant: 'paint-when-hidden' }).error).toMatch(/--window-variant needs --purpose window-construction/)
@@ -424,6 +438,7 @@ describe('windowConstructionGate (M2-0519)', () => {
       stage('createWindow.prewarm', prewarmMs, transparent),
       stage('createWindow.construct', constructMs, transparent),
       stage('createWindow.navigate', 400),
+      stage('createWindow.firstShow', 30),
       stage('createTray.newTray', 900)
     ])
   const passing = [
@@ -438,6 +453,7 @@ describe('windowConstructionGate (M2-0519)', () => {
       { name: 'st-1.json', report: { harness: 'ST-1', row: 'none' } }
     ])
     expect(gate).toMatchObject({ pass: true, budgetMs: 250, failures: [] })
+    expect(gate.rootCause).toEqual(WINDOW_CONSTRUCTION_ROOT_CAUSE)
     expect(gate.rows).toEqual([
       { report: 'window-shipped-opaque-1/a.json', launch: 'window-shipped-opaque-1', variant: 'shipped', stage: 'createWindow.prewarm', chrome: 'opaque', ms: 12 },
       { report: 'window-shipped-opaque-1/a.json', launch: 'window-shipped-opaque-1', variant: 'shipped', stage: 'createWindow.construct', chrome: 'opaque', ms: 111 },
@@ -458,7 +474,8 @@ describe('windowConstructionGate (M2-0519)', () => {
         ms: 93
       }
     ])
-    expect(gate.launches).toEqual([
+    expect(gate.launches).toHaveLength(11)
+    expect(gate.launches).toEqual(expect.arrayContaining([
       {
         report: 'window-shipped-opaque-1/a.json',
         launch: 'window-shipped-opaque-1',
@@ -476,6 +493,33 @@ describe('windowConstructionGate (M2-0519)', () => {
         stage: 'createWindow.construct',
         chrome: 'opaque',
         ms: 111
+      },
+      {
+        report: 'window-shipped-opaque-1/a.json',
+        launch: 'window-shipped-opaque-1',
+        variant: 'shipped',
+        warmup: false,
+        stage: 'createWindow.navigate',
+        chrome: null,
+        ms: 400
+      },
+      {
+        report: 'window-shipped-opaque-1/a.json',
+        launch: 'window-shipped-opaque-1',
+        variant: 'shipped',
+        warmup: false,
+        stage: 'createWindow.firstShow',
+        chrome: null,
+        ms: 30
+      },
+      {
+        report: 'window-shipped-opaque-1/a.json',
+        launch: 'window-shipped-opaque-1',
+        variant: 'shipped',
+        warmup: false,
+        stage: 'createTray.newTray',
+        chrome: null,
+        ms: 900
       },
       {
         report: 'window-shipped-transparent-1/a.json',
@@ -504,7 +548,7 @@ describe('windowConstructionGate (M2-0519)', () => {
         chrome: 'opaque',
         ms: 900
       }
-    ])
+    ]))
   })
 
   it('fails a shipped prewarm or construct at or over 250 ms, in either chrome', () => {

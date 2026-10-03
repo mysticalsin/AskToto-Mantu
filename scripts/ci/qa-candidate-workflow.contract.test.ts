@@ -358,19 +358,24 @@ describe('QA candidate workflow: the shipped window gate (M2-0519)', () => {
 
   it('runs one marked warm-up per variant and chrome before any measured repeats', () => {
     const measure = steps('st1-mac-window').find((step) => step.includes('--purpose window-construction')) ?? ''
-    expect(measure.indexOf('run="window-warmup-$variant-$chrome"')).toBeLessThan(measure.indexOf('for repeat in 1 2; do'))
+    expect(measure).toContain('node scripts/qa/st-1.mjs --print-window-plan > st1-report/window-plan.json')
+    expect(measure).toContain("jq -c '.[]' st1-report/window-plan.json | while read -r launch; do")
+    expect(measure).toContain('run=$(jq -r \'.name\' <<<"$launch")')
     expect(measure).toContain('--window-warmup')
-    expect(measure).toContain('variants=(shipped spellcheck-off paint-when-hidden prewarm-spellchecker)')
-    expect(measure).toContain('chromes=(opaque transparent)')
+    expect(measure).toContain('if [ "$warmup" = true ]; then warmup_args=(--window-warmup); fi')
     expect(measure).toContain('--window-variant "$variant"')
     expect(measure).toContain('if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi')
+    expect(measure).not.toContain('variants=(shipped spellcheck-off paint-when-hidden prewarm-spellchecker)')
+    expect(measure).not.toContain('chromes=(opaque transparent)')
   })
 
-  it('measures repeats in the same variant and chrome order after warm-up', () => {
+  it('takes measured repeat order from scripts/qa/st-1.mjs instead of hand-coded workflow loops', () => {
     const measure = steps('st1-mac-window').find((step) => step.includes('--purpose window-construction')) ?? ''
-    expect(measure).toContain('for repeat in 1 2; do')
-    expect(measure).toContain('for variant in "${variants[@]}"; do')
-    expect(measure).toContain('for chrome in "${chromes[@]}"; do')
-    expect(measure.indexOf('for repeat in 1 2; do')).toBeGreaterThan(measure.indexOf('run="window-warmup-$variant-$chrome"'))
+    expect(measure).not.toContain('for repeat in 1 2; do')
+    expect(measure).not.toContain('for variant in "${variants[@]}"; do')
+    expect(measure).not.toContain('for chrome in "${chromes[@]}"; do')
+    expect(measure).toContain('warmup=$(jq -r \'.warmup\' <<<"$launch")')
+    expect(measure).toContain('variant=$(jq -r \'.variant\' <<<"$launch")')
+    expect(measure).toContain('chrome=$(jq -r \'.chrome\' <<<"$launch")')
   })
 })
