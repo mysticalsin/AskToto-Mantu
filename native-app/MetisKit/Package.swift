@@ -15,6 +15,6 @@ let package = Package(
     ],
     targets: [
         .target(name: "MetisKit"),
-        .testTarget(name: "MetisKitTests", dependencies: ["MetisKit"])
+        .testTarget(name: "MetisKitTests", dependencies: ["MetisKit"], exclude: ["Fixtures"])
     ]
 )
