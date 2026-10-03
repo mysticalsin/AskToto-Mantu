@@ -1,14 +1,15 @@
 import { z } from 'zod'
-import { DEFAULT_PERMISSION_STATE, PermissionStateSchema } from '../../screen-permission'
-import { OPERATOR_LICENSE_MAX } from '../../operator-license'
 import { AsrCorrectionPairSchema } from '../brain/ipc'
 import { McpConnectionSchema } from '../mcp/connection'
 import { ProfileSchema } from '../app/profile'
 import { ProviderIdSchema } from '../providers'
+import { DEFAULT_PERMISSION_STATE, PermissionStateSchema } from './permission-state'
 import {
   SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION,
   type ServerAuthoritativeSettingsKey
 } from './server-authoritative'
+
+const OPERATOR_LICENSE_MAX = 200
 
 /**
  * On-device model ids the registry knows (main/llm/local-models.ts owns the URLs, sizes and hashes;

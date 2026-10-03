@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { EntityKindSchema } from '../../brain'
+import { EntityKindSchema } from './entity-kind'
 
 export const SetDealOutcomePayloadSchema = z.object({
   dealSlug: z.string().min(1),

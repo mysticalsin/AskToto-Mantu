@@ -5,7 +5,7 @@ import { IPC } from '../shared/contracts/channels'
 
 const main = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const preload = readFileSync(join(__dirname, '../preload/index.ts'), 'utf8')
-const ipc = readFileSync(join(__dirname, '../shared/ipc.ts'), 'utf8')
+const channels = readFileSync(join(__dirname, '../shared/contracts/channels.ts'), 'utf8')
 const app = readFileSync(join(__dirname, '../renderer/src/App.tsx'), 'utf8')
 
 function between(source: string, start: string, end: string): string {
@@ -19,7 +19,7 @@ function between(source: string, start: string, end: string): string {
 describe('Cap2 command authority boundary', () => {
   it('exposes only sanitized command state plus id-and-nonce confirmation controls', () => {
     expect(preload).not.toContain('metisCommandIngest')
-    expect(ipc).not.toContain('metisCommandIngest')
+    expect(channels).not.toContain('metisCommandIngest')
     expect(preload).not.toContain('metisCommandStop')
     expect(preload).toContain('onMetisCommandState')
     expect(preload).toContain('confirmMetisCommand')
@@ -72,7 +72,7 @@ describe('Cap2 command authority boundary', () => {
   })
 
   it('keeps the Metis command hotkey separate from meeting Listen', () => {
-    expect(ipc).toContain("'metis-command'")
+    expect(channels).toContain("'metis-command'")
     expect(main).toContain("'metis-command': () => sendHotkey('metis-command')")
     expect(app).toContain("a === 'metis-command'")
     expect(app).toMatch(/else if \(a === 'toggle-listen'\) toggleListen\(\)/)

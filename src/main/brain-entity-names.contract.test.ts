@@ -19,7 +19,7 @@ import { describe, expect, it } from 'vitest'
  * into index.ts (and out of the gateway) unnoticed.
  */
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
-const ipcSrc = readFileSync(join(__dirname, '..', 'shared', 'ipc.ts'), 'utf8')
+const ipcSrc = readFileSync(join(__dirname, '..', 'shared', 'contracts', 'brain', 'ipc.ts'), 'utf8')
 
 describe('MQA-115 — brainEntityNames returns a flat { names }, not { people, accounts }', () => {
   it('the shared result type is exactly { names: string[] }', () => {

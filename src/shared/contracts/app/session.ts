@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { RENDERER_VIEWS } from '../../renderer-view'
+import { RENDERER_VIEWS } from './renderer-view'
 
 export const LiveMeetingStartedAtSchema = z.number().int().positive().max(8.64e15)
 export const ListeningStatePayloadSchema = z.object({

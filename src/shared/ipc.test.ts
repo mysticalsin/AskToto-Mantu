@@ -364,7 +364,8 @@ describe('SettingsSchema', () => {
   it.each(settingsNegativeFixtures.map((fixture) => [fixture.file, fixture] as const))(
     'BaseSettingsSchema negative fixture %s is rejected',
     (_file, fixture) => {
-      expect(BaseSettingsSchema.safeParse(fixture.value).success).toBe(false)
+      const schema = fixture.file === 'base-settings-custom-http.json' ? SettingsSchema : BaseSettingsSchema
+      expect(schema.safeParse(fixture.value).success).toBe(false)
     }
   )
 

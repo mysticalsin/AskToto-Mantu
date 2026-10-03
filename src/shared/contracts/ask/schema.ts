@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { LocalVisionEvidenceSchema } from '../../local-ai'
+import { LocalVisionEvidenceSchema } from '../local/vision-evidence'
 import { ProviderIdSchema } from '../providers'
 
 export const ASK_MEMORY_IDLE_MS = 10 * 60 * 1000

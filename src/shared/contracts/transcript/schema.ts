@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { RECAP_STATUSES, recapStatusValidationError, type RecapStatus } from '../../recap-status'
+import { RECAP_STATUSES, recapStatusValidationError, type RecapStatus } from '../recap-status'
 
 export const TranscriptLineSchema = z.object({
   // Imported recordings have speech but no diarization. `unknown` prevents the UI and recap prompt from

@@ -1,6 +1,6 @@
-import { DEFAULT_PERMISSION_STATE } from '../../screen-permission'
 import type { Settings } from './schema'
 import { BUNDLED_LOCAL_MODEL_ID, METIS_WORKER_URL } from './schema'
+import { DEFAULT_PERMISSION_STATE } from './permission-state'
 
 export const DEFAULT_SETTINGS: Settings = {
   provider: 'cloudflare', // keep in lockstep with BaseSettingsSchema's ProviderIdSchema default above

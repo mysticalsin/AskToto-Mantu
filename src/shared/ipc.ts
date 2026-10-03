@@ -32,12 +32,3 @@ export {
   ScreenCaptureCheckPayloadSchema,
   ScreenCaptureCheckResultSchema
 } from './screen-permission'
-export {
-  LICENSE_ACTIVATION_OPEN,
-  MemberActivatePayloadSchema,
-  emptyLicenseStatus,
-  type IdentitySnapshot,
-  type MemberActivatePayload,
-  type MemberActivateResult,
-  type MemberLicenseStatus
-} from './license-types'

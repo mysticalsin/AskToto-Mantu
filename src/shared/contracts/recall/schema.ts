@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { RECAP_STATUSES, recapStatusValidationError, type RecapStatus } from '../../recap-status'
+import { RECAP_STATUSES, recapStatusValidationError, type RecapStatus } from '../recap-status'
 import { ProviderIdSchema } from '../providers'
 import type { TranscriptLine } from '../transcript/schema'
 
