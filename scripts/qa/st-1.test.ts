@@ -347,32 +347,25 @@ describe('window-construction runs (M2-0516)', () => {
     expect(WINDOW_VARIANTS).toEqual([...BOOT_WINDOW_VARIANTS])
   })
 
-  it('prints the restored launch order with both warm-ups before a variant/chrome measured repeat', () => {
+  it('prints the restored launch order with shipped warm-ups before measured repeats', () => {
     const plan = windowConstructionPlan()
     const warmups = plan.filter((entry) => entry.warmup)
     const measured = plan.filter((entry) => !entry.warmup)
     expect(WINDOW_CHROMES).toEqual(['opaque', 'transparent'])
     expect(WINDOW_MEASURED_REPEATS).toBe(2)
-    expect(warmups).toHaveLength(WINDOW_VARIANTS.length * WINDOW_CHROMES.length * WINDOW_MEASURED_REPEATS)
+    expect(plan).toHaveLength(2 + WINDOW_VARIANTS.length * WINDOW_CHROMES.length * WINDOW_MEASURED_REPEATS)
+    expect(warmups).toHaveLength(WINDOW_CHROMES.length)
     expect(measured).toHaveLength(WINDOW_VARIANTS.length * WINDOW_CHROMES.length * WINDOW_MEASURED_REPEATS)
-    expect(plan[0]).toEqual({ name: 'window-warmup-shipped-opaque-1', variant: 'shipped', chrome: 'opaque', repeat: 1, warmup: true })
-    expect(plan[1]).toEqual({ name: 'window-warmup-shipped-opaque-2', variant: 'shipped', chrome: 'opaque', repeat: 2, warmup: true })
-    expect(plan[2]).toEqual({ name: 'window-shipped-opaque-1', variant: 'shipped', chrome: 'opaque', repeat: 1, warmup: false })
-    expect(plan[3]).toEqual({ name: 'window-shipped-opaque-2', variant: 'shipped', chrome: 'opaque', repeat: 2, warmup: false })
-    for (const variant of WINDOW_VARIANTS) {
-      for (const chrome of WINDOW_CHROMES) {
-        const group = plan.filter((entry) => entry.variant === variant && entry.chrome === chrome)
-        expect(group.map((entry) => entry.name)).toEqual([
-          `window-warmup-${variant}-${chrome}-1`,
-          `window-warmup-${variant}-${chrome}-2`,
-          `window-${variant}-${chrome}-1`,
-          `window-${variant}-${chrome}-2`
-        ])
-      }
+    expect(plan[0]).toEqual({ name: 'window-warmup-shipped-opaque', variant: 'shipped', chrome: 'opaque', warmup: true })
+    expect(plan[1]).toEqual({ name: 'window-warmup-shipped-transparent', variant: 'shipped', chrome: 'transparent', warmup: true })
+    expect(warmups.every((warmup) => plan.indexOf(warmup) < plan.findIndex((entry) => !entry.warmup))).toBe(true)
+    for (const warmup of warmups) {
+      const firstMeasured = plan.findIndex((entry) => !entry.warmup && entry.variant === warmup.variant && entry.chrome === warmup.chrome)
+      expect(firstMeasured).toBeGreaterThan(plan.indexOf(warmup))
     }
     expect(measured.map((entry) => entry.name)).toEqual(
-      WINDOW_VARIANTS.flatMap((variant) =>
-        WINDOW_CHROMES.flatMap((chrome) => Array.from({ length: WINDOW_MEASURED_REPEATS }, (_, i) => `window-${variant}-${chrome}-${i + 1}`))
+      Array.from({ length: WINDOW_MEASURED_REPEATS }, (_, repeat) => repeat + 1).flatMap((repeat) =>
+        WINDOW_VARIANTS.flatMap((variant) => WINDOW_CHROMES.map((chrome) => `window-${variant}-${chrome}-${repeat}`))
       )
     )
   })
@@ -383,7 +376,7 @@ describe('window-construction runs (M2-0516)', () => {
     expect(workflow).toContain("jq -c '.[]' st1-report/window-plan.json | while read -r launch; do")
     expect(workflow).toContain('run=$(jq -r \'.name\' <<<"$launch")')
     expect(workflow).toContain('if [ "$warmup" = true ]; then warmup_args=(--window-warmup); fi')
-    expect(workflow).toContain('Both marked warm-up launches for a variant/chrome run before its measured repeats')
+    expect(workflow).toContain('The two marked shipped warm-up launches run before any measured repeat')
     expect(workflow).not.toContain('variants=(shipped spellcheck-off paint-when-hidden prewarm-spellchecker)')
     expect(workflow).not.toContain('for repeat in 1 2; do')
   })

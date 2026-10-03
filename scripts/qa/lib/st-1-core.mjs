@@ -321,16 +321,16 @@ export const WINDOW_CONSTRUCTION_ROOT_CAUSE = {
     'LEAD_ACTION: read qa-candidate runs 36999698235 and 37080909059, artifact st-1-macos-window/st1-report/window-gate.json plus st1-report/window-*/window-*.json; record every launch, variant, chrome, warmup flag, stage and numeric ms before classifying the cause; then dispatch qa-candidate three times on m2/integration-equivalent bytes and confirm st-1-macos-window/st1-report/window-gate.json has pass: true with budgetMs: 250 each time'
 }
 
-/** The CI launch order for window construction: both warm-up launches for a variant/chrome run before its
- * measured repeats, and the shared workflow consumes this exact plan. */
+/** The CI launch order for window construction. The shipped warm-up launches keep the original first-run
+ * profile setup ahead of the measured rotation; measured repeats stay interleaved by repeat, variant and chrome. */
 export function windowConstructionPlan({ variants = WINDOW_VARIANTS, chromes = WINDOW_CHROMES, repeats = WINDOW_MEASURED_REPEATS } = {}) {
   const repeatNumbers = Array.from({ length: repeats }, (_, i) => i + 1)
-  return variants.flatMap((variant) =>
-    chromes.flatMap((chrome) => [
-      ...repeatNumbers.map((repeat) => ({ name: `window-warmup-${variant}-${chrome}-${repeat}`, variant, chrome, repeat, warmup: true })),
-      ...repeatNumbers.map((repeat) => ({ name: `window-${variant}-${chrome}-${repeat}`, variant, chrome, repeat, warmup: false }))
-    ])
-  )
+  return [
+    ...chromes.map((chrome) => ({ name: `window-warmup-shipped-${chrome}`, variant: 'shipped', chrome, warmup: true })),
+    ...repeatNumbers.flatMap((repeat) =>
+      variants.flatMap((variant) => chromes.map((chrome) => ({ name: `window-${variant}-${chrome}-${repeat}`, variant, chrome, repeat, warmup: false })))
+    )
+  ]
 }
 
 function launchNameFromReportPath(name) {
