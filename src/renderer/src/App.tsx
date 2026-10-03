@@ -36,6 +36,7 @@ import { useAsk, useAutoResize, useSettings, useAuth, type AnswerState } from '.
 import { useWindowDrag } from './lib/window-drag'
 import { noteCrashContext } from './lib/crash-context'
 import { useTransitionView } from './lib/history-transition'
+import { IPC_UNAUTHENTICATED_EVENT } from './lib/ipc-auth'
 import { NavigationGuardService, type NavigationGuardRequest } from './lib/navigation-guard'
 import {
   AUTO_HIDE_GRACE_MS,
@@ -304,6 +305,13 @@ export function App(): JSX.Element {
   const stealthLocked = settings?.managedKeys?.includes('contentProtection') ?? false
   const auth = useAuth() // Azure AD gate (only enforces when configured)
   const bootError = settingsBootError ?? auth.bootError
+  useEffect(() => {
+    const refreshAuth = (): void => {
+      void auth.refresh()
+    }
+    window.addEventListener(IPC_UNAUTHENTICATED_EVENT, refreshAuth)
+    return () => window.removeEventListener(IPC_UNAUTHENTICATED_EVENT, refreshAuth)
+  }, [auth.refresh])
   // FITO-185-X: mid-wait escape on the post-onboarding Loading strip (Tony: never forever Loading).
   const [bootSlow, setBootSlow] = useState(false)
 

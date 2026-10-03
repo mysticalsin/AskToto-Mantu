@@ -3,6 +3,11 @@ import { UNAUTHENTICATED_RESULT, type UnauthenticatedResult } from '@shared/ipc-
 import type { z } from 'zod'
 import { assertReviewedPublicHandler, type IpcChannel, type ReviewedPublicIpcChannel } from './security'
 
+/**
+ * Central IPC policy gate for migrated handlers. Sender validation and argument parsing run before auth
+ * so malformed payloads are rejected at the schema boundary, even for signed-out callers; valid required
+ * calls from signed-out renderers return the single shared unauthenticated result before handler code runs.
+ */
 type InvokeEvent = Electron.IpcMainInvokeEvent
 type AssertSender = (event: InvokeEvent) => void
 type RequireAuth = () => boolean
