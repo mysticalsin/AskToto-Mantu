@@ -318,7 +318,10 @@ describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
     for (const name of strictJobs) {
       const block = job(name)
       expect(jobContinueOnError(block)).toBe('true')
-      expect(block).toMatch(/^    env:\n      TMPDIR: \$\{\{ runner\.temp \}\}$/m)
+      expect(block).not.toMatch(/^    env:/m)
+      for (const step of steps(name)) {
+        expect(step).toContain('TMPDIR: ${{ runner.temp }}')
+      }
 
       const cleanup = steps(name).find((step) => step.includes('name: Remove ST-1 temporary state')) ?? ''
       expect(cleanup).toMatch(/^        if: always\(\)$/m)
