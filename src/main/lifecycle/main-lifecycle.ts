@@ -289,6 +289,7 @@ export function installRendererHealthLifecycle(
     }
     deps.reloadOverlay(self)
   })
+  // deps.ipcMain.handle is installed by installRendererCrashIpcLifecycle; renderer health owns only window events.
 }
 
 export function installRendererCrashIpcLifecycle(deps: RendererCrashIpcLifecycleDeps): void {
