@@ -30,6 +30,7 @@ on:
       - scripts/hermetic/prove-owner-sandbox.sh
       - scripts/hermetic/run-under-owner-sandbox.sh
       - scripts/hermetic/owner-account.sb
+      - scripts/hermetic/owner-runner.sb
       # The boot path ST-1 measures (M2-0433), so every fix slice on it gets a QA self-test.
       - src/main/boot-tray.ts
       - src/main/boot-window-rendering.ts
@@ -508,7 +509,7 @@ jobs:
           TMPDIR: ${{ runner.temp }}
         with:
           persist-credentials: false
-      - name: Prove owner-account sandbox denies private state
+      - name: Prove owner-runner sandbox denies private state
         env:
           TMPDIR: ${{ runner.temp }}
         run: bash scripts/hermetic/prove-owner-sandbox.sh
@@ -532,11 +533,16 @@ jobs:
       - name: Verify every byte against the provenance
         env:
           TMPDIR: ${{ runner.temp }}
+          OWNER_SANDBOX_PROFILE: owner-runner.sb
         run: bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
       - name: Measure packaged stall resilience
         continue-on-error: true
         env:
           TMPDIR: ${{ runner.temp }}
+          ASKTOTO_LOCAL_KEYSTORE: 1
+          ASKTOTO_QA_MOCK_KEYCHAIN: 1
+          ST1_CHROMIUM_SANDBOX: off
+          OWNER_SANDBOX_PROFILE: owner-runner.sb
         run: |
           mkdir -p st1-report
           installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
@@ -563,7 +569,16 @@ jobs:
             "$HOME/Library/Preferences/com.mantu.asktoto.qa.plist" \
             "$HOME/Library/Saved Application State/com.mantu.asktoto.qa.savedState" \
             "$HOME/Library/Caches/com.mantu.asktoto.qa"
-          security delete-generic-password -s "asktoto-qa Safe Storage" || true
+      - name: Prove QA identity did not touch the login keychain
+        if: always()
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          if security find-generic-password -s "asktoto-qa Safe Storage" >/dev/null 2>&1; then
+            echo "::error::QA identity created a login-keychain Safe Storage item."
+            exit 1
+          fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         env:
@@ -730,7 +745,7 @@ jobs:
           TMPDIR: ${{ runner.temp }}
         with:
           persist-credentials: false
-      - name: Prove owner-account sandbox denies private state
+      - name: Prove owner-runner sandbox denies private state
         env:
           TMPDIR: ${{ runner.temp }}
         run: bash scripts/hermetic/prove-owner-sandbox.sh
@@ -754,11 +769,16 @@ jobs:
       - name: Verify every byte against the provenance
         env:
           TMPDIR: ${{ runner.temp }}
+          OWNER_SANDBOX_PROFILE: owner-runner.sb
         run: bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
       - name: Measure the packaged app with no fixture
         continue-on-error: true
         env:
           TMPDIR: ${{ runner.temp }}
+          ASKTOTO_LOCAL_KEYSTORE: 1
+          ASKTOTO_QA_MOCK_KEYCHAIN: 1
+          ST1_CHROMIUM_SANDBOX: off
+          OWNER_SANDBOX_PROFILE: owner-runner.sb
         run: |
           mkdir -p st1-report
           installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
@@ -785,7 +805,16 @@ jobs:
             "$HOME/Library/Preferences/com.mantu.asktoto.qa.plist" \
             "$HOME/Library/Saved Application State/com.mantu.asktoto.qa.savedState" \
             "$HOME/Library/Caches/com.mantu.asktoto.qa"
-          security delete-generic-password -s "asktoto-qa Safe Storage" || true
+      - name: Prove QA identity did not touch the login keychain
+        if: always()
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          if security find-generic-password -s "asktoto-qa Safe Storage" >/dev/null 2>&1; then
+            echo "::error::QA identity created a login-keychain Safe Storage item."
+            exit 1
+          fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         env:
