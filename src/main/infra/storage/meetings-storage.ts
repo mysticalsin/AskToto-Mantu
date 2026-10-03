@@ -1,6 +1,7 @@
 import { resolve } from 'node:path'
 import type { ContentPresence, DatalessDetector } from './dataless'
 import { createStorageGateway, poolAdmission, type FileClass, type StorageFs, type StorageGateway } from './gateway'
+export type { MeetingsIndex, MeetingsIndexEntry, MeetingsIndexRoot } from './meetings-index'
 
 const CLASSIFY_BATCH = 1_000
 

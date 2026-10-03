@@ -102,11 +102,20 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install ${{ runner.os == 'Linux' && '--with-deps' || '' }} chromium
       - run: npm test
+      - name: IX suite
+        run: node scripts/qa/ix-suite.mjs --out out/ix-suite/${{ runner.os }}-ix-suite.json
       # MQA-252 (M2-0048): every skipped test must be declared and stay within its per-OS baseline, so a
       # newly-skipped test fails the build instead of quietly joining the pile. Runs its own vitest pass
       # (scripts/check-skipped-tests.mjs collects a fresh JSON report) against the same checkout npm test
       # just verified.
       - run: npm run check:skips
+      - name: Upload IX suite report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ix-suite-${{ runner.os }}
+          path: out/ix-suite/${{ runner.os }}-ix-suite.json
+          if-no-files-found: ignore
       # M2-0411: hex colour literals in renderer .css/.tsx may only ratchet down from
       # scripts/color-literal-baseline.json, and design tokens live only in tokens.css.
       - run: npm run check:colors

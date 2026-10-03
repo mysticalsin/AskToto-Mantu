@@ -46,7 +46,7 @@
     "src/main/import-jobs.ts": 1198,
     "src/main/index.ts": 9933,
     "src/main/store.ts": 1364,
-    "src/main/transcripts.ts": 1210,
+    "src/main/transcripts.ts": 883,
     "src/renderer/src/App.tsx": 4331,
     "src/renderer/src/components/Bar.tsx": 898,
     "src/renderer/src/components/BrainRecordPage.tsx": 831,
@@ -118,7 +118,7 @@
     "src/main/speaker-id.ts": 6,
     "src/main/store.ts": 42,
     "src/main/time-saved-log.ts": 4,
-    "src/main/transcripts.ts": 27,
+    "src/main/transcripts.ts": 24,
     "src/main/updater.ts": 1,
     "src/main/whisper-asr-host.ts": 1,
     "src/main/win-security.ts": 7
@@ -127,7 +127,7 @@
     "src/main/brain/publish.ts": 20,
     "src/main/brain/store.ts": 63,
     "src/main/graphify.ts": 17,
-    "src/main/transcripts.ts": 33
+    "src/main/transcripts.ts": 27
   },
   "FF-06": {},
   "FF-07": {
