@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   ATTRIBUTABLE_PROCESS_KINDS,
+  BAR_ORB_TRACE_SCENARIOS,
   REQUIRED_TRACE_SCENARIOS,
   STATES_REQUIRING_ATTACH_PRECONDITION,
   STATES,
@@ -20,6 +21,7 @@ import {
   parseProveLocalTtftOutput,
   proveLocalTtftEvidenceFromArtifact,
   rendererScenarioProbeSource,
+  rendererProbeFailureMessage,
   resolveProductVersion,
   sanitizeReport,
   defaultOutputPath,
@@ -27,10 +29,12 @@ import {
   stateRequiresAttachPrecondition,
   summarize,
   validateStatePrecondition,
+  validateTraceProfileCompatibility,
   validateState,
   windowsWorkingSetEvidenceFromArtifact
 } from './lib.mjs'
 import { PARKED_BOUNDS, parkVerdict } from './park.mjs'
+import { captureRendererTrace } from './run.mjs'
 import { isMainModule, representativeSettings, writeRepresentativeProfile } from './profile.mjs'
 
 const startedMs = Date.UTC(2026, 8, 27, 12)
@@ -624,13 +628,131 @@ describe('resource census report boundary', () => {
 
   it('pins the renderer trace scenarios required by the ticket', () => {
     expect(REQUIRED_TRACE_SCENARIOS).toEqual(['parked-bar-orb', 'backdrop-filter', 'threejs-obsidian-orb'])
+    expect(BAR_ORB_TRACE_SCENARIOS).toEqual(['parked-bar-orb', 'threejs-obsidian-orb'])
   })
 
   it('emits renderer probes that check the actual requested UI state before tracing', () => {
     expect(rendererScenarioProbeSource('parked-bar-orb')).toContain('[data-bar-pill-orb]')
+    expect(rendererScenarioProbeSource('parked-bar-orb')).toContain('orbFound')
+    expect(rendererScenarioProbeSource('parked-bar-orb')).toContain('canvasFound')
     expect(rendererScenarioProbeSource('backdrop-filter')).toContain('backdropFilter')
     expect(rendererScenarioProbeSource('threejs-obsidian-orb')).toContain('[data-orb-style="obsidian"] canvas')
     expect(() => rendererScenarioProbeSource('caller-supplied-label')).toThrow(/unknown trace scenario/)
+  })
+
+  it('refuses bar-orb trace scenarios against a right-edge profile before launching the app', () => {
+    expect(() =>
+      validateTraceProfileCompatibility({
+        profileSettings: { overlayPlacement: 'right-edge' },
+        scenarios: ['parked-bar-orb']
+      })
+    ).toThrow(/parked-bar-orb requires an overlay profile with overlayPlacement "top-center"; observed "right-edge"/)
+    expect(() =>
+      validateTraceProfileCompatibility({
+        profileSettings: { overlayPlacement: 'right-edge' },
+        scenarios: ['threejs-obsidian-orb']
+      })
+    ).toThrow(/threejs-obsidian-orb requires/)
+    expect(
+      validateTraceProfileCompatibility({
+        profileSettings: { overlayPlacement: 'right-edge' },
+        scenarios: ['backdrop-filter']
+      })
+    ).toBeUndefined()
+    expect(
+      validateTraceProfileCompatibility({
+        profileSettings: { overlayPlacement: 'top-center' },
+        scenarios: ['parked-bar-orb', 'backdrop-filter', 'threejs-obsidian-orb']
+      })
+    ).toBeUndefined()
+    expect(() =>
+      validateTraceProfileCompatibility({
+        profileSettings: { overlayPlacement: 'top-center' },
+        scenarios: ['caller-supplied-label']
+      })
+    ).toThrow(/unknown trace scenario/)
+  })
+
+  it('includes the probe result in renderer trace setup failures', () => {
+    expect(
+      rendererProbeFailureMessage('parked-bar-orb', {
+        ok: false,
+        orbFound: true,
+        box: null,
+        canvasFound: false
+      })
+    ).toContain('renderer trace scenario is not established: parked-bar-orb; orb found: true; box: null; canvas found: false')
+    expect(
+      rendererProbeFailureMessage('threejs-obsidian-orb', {
+        ok: false,
+        canvasFound: true,
+        box: { width: 0, height: 0, tag: 'canvas', className: '' },
+        hostFound: true
+      })
+    ).toContain('canvas found: true')
+  })
+
+  it('records every requested renderer trace proof before reporting combined setup failures', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'metis-census-trace-'))
+    try {
+      const proofs = {
+        'parked-bar-orb': { ok: false, orbFound: true, box: null, canvasFound: false },
+        'backdrop-filter': { ok: true, box: { width: 10, height: 10, tag: 'div', className: '' }, filter: 'blur(8px)' },
+        'threejs-obsidian-orb': { ok: false, canvasFound: true, box: null, hostFound: true }
+      }
+      let traced = 0
+      const page = {
+        evaluate: async (source: unknown) => {
+          if (typeof source === 'function') return true
+          const text = String(source)
+          if (text.includes('"parked-bar-orb"')) return proofs['parked-bar-orb']
+          if (text.includes('"backdrop-filter"')) return proofs['backdrop-filter']
+          if (text.includes('"threejs-obsidian-orb"')) return proofs['threejs-obsidian-orb']
+          throw new Error('unexpected probe source')
+        },
+        context: () => ({
+          newCDPSession: async () => ({
+            once: (_event: string, callback: (event: { stream: string }) => void) => {
+              callback({ stream: 'trace-stream' })
+            },
+            send: async (method: string) => {
+              if (method === 'Tracing.start') traced += 1
+              if (method === 'IO.read') return { data: '{"traceEvents":[]}', eof: true }
+              return {}
+            }
+          })
+        })
+      }
+      const browser = {
+        contexts: () => [{ pages: () => [page] }],
+        close: async () => {}
+      }
+
+      await expect(
+        captureRendererTrace({
+          cdpUrl: 'http://127.0.0.1:1',
+          scenarios: ['parked-bar-orb', 'backdrop-filter', 'threejs-obsidian-orb'],
+          outputDir: root,
+          connectOverCDP: async () => browser,
+          sleepFn: async <T>(_delay?: number, value?: T) => value as T,
+          now: () => '2026-10-03T00:00:00.000Z'
+        })
+      ).rejects.toThrow(/parked-bar-orb.*threejs-obsidian-orb/)
+
+      expect(traced).toBe(1)
+      expect(JSON.parse(readFileSync(join(root, 'parked-bar-orb.proof.json'), 'utf8')).proof).toEqual(
+        proofs['parked-bar-orb']
+      )
+      expect(JSON.parse(readFileSync(join(root, 'backdrop-filter.proof.json'), 'utf8')).proof).toEqual(
+        proofs['backdrop-filter']
+      )
+      expect(JSON.parse(readFileSync(join(root, 'threejs-obsidian-orb.proof.json'), 'utf8')).proof).toEqual(
+        proofs['threejs-obsidian-orb']
+      )
+      expect(JSON.parse(readFileSync(join(root, 'backdrop-filter.trace.json'), 'utf8'))).toEqual({ traceEvents: [] })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 
   it('keeps the reusable tool default output out of program-document paths', () => {
@@ -829,6 +951,12 @@ describe('resource census GitHub Actions lane', () => {
     expect(workflow).toContain('for state in cold-start settled-idle; do')
     expect(workflow).toContain('--state "$state"')
     expect(workflow).toContain('profile.mjs --layout hide "$RUNNER_TEMP/metis-census-parked-profile"')
+    expect(workflow).toContain('profile.mjs --layout bar --placement top-center "$RUNNER_TEMP/metis-census-trace-profile"')
+    expect(workflow).toContain('METIS_QA_PROFILE="$RUNNER_TEMP/metis-census-trace-profile" node scripts/qa/census/run.mjs')
+    expect(workflow).toContain('--output census-output/darwin-renderer-traces.json')
+    expect(workflow).toContain('--trace-scenario parked-bar-orb')
+    expect(workflow).toContain('--trace-scenario backdrop-filter')
+    expect(workflow).toContain('--trace-scenario threejs-obsidian-orb')
     expect(workflow).toContain('--state parked-idle')
     expect(workflow).toContain('darwin-$state.json')
     expect(workflow).toContain('win32-$state.json')
@@ -836,6 +964,7 @@ describe('resource census GitHub Actions lane', () => {
     expect(workflow).toContain('win32-parked-idle.json')
     expect(workflow).toContain('profile-manifest.json')
     expect(workflow).toContain('parked-profile-manifest.json')
+    expect(workflow).toContain('trace-profile-manifest.json')
     expect(workflow).toContain('resource-census-profile.json')
     expect(workflow).toContain('settled-idle')
     expect(workflow).toContain('--seconds 300')
@@ -844,11 +973,31 @@ describe('resource census GitHub Actions lane', () => {
   })
 
   it('reads the profile manifest from the path profile.mjs prints and never gates the census on the TTFT proof', () => {
-    expect(workflow.match(/sed -n 's\/\^\\\[census-profile\\\] manifest \/\/p'/g)).toHaveLength(4)
+    expect(workflow.match(/sed -n 's\/\^\\\[census-profile\\\] manifest \/\/p'/g)).toHaveLength(5)
     expect(workflow).not.toContain('cp "$RUNNER_TEMP/metis-census-profile/resource-census-profile.json"')
+    const representativeRun = workflow.slice(
+      workflow.indexOf('for state in cold-start settled-idle; do'),
+      workflow.indexOf('METIS_QA_PROFILE="$RUNNER_TEMP/metis-census-trace-profile"')
+    )
+    expect(representativeRun).not.toContain('--trace-scenario')
     const ttftStep = workflow.slice(workflow.indexOf('- name: Record local TTFT proof'), workflow.indexOf('- name: Measure hosted census states'))
     expect(ttftStep).toContain('continue-on-error: true')
     expect(workflow.slice(workflow.indexOf('- name: Measure hosted census states'))).not.toMatch(/^\s+if:\s.*(success|failure)/m)
+  })
+
+  it('keeps renderer traces from blocking parked-idle and wires trace profile validation before launch', () => {
+    const macosMeasureStep = workflow.slice(
+      workflow.indexOf('- name: Measure hosted census states'),
+      workflow.indexOf('- name: Compare with baseline run')
+    )
+    expect(macosMeasureStep.indexOf('--output census-output/darwin-parked-idle.json')).toBeLessThan(
+      macosMeasureStep.indexOf('--output census-output/darwin-renderer-traces.json')
+    )
+    const runSource = readFileSync(join(repoRoot, 'scripts/qa/census/run.mjs'), 'utf8')
+    expect(runSource).toContain("if (!profile) throw new Error('trace scenarios require --profile or METIS_QA_PROFILE')")
+    expect(runSource.indexOf('validateTraceProfileCompatibility({')).toBeLessThan(
+      runSource.indexOf('if (mainPid === null)')
+    )
   })
 
   it('measures install footprint per OS and records run identity with file digests', () => {
