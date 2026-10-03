@@ -29,12 +29,14 @@
     "src/renderer/src/lib/use-command-mic.ts": 1,
     "src/renderer/src/lib/whisper-worklet.ts": 1,
     "src/shared/brain-analyze.ts": 1,
+    "src/shared/contracts/capability/index.ts": 1,
     "src/shared/contracts/knowledge/identity.ts": 1,
     "src/shared/contracts/knowledge/index.ts": 1,
     "src/shared/contracts/knowledge/issue.ts": 1,
     "src/shared/contracts/knowledge/mutation.ts": 1,
     "src/shared/contracts/knowledge/provenance.ts": 1,
-    "src/shared/contracts/knowledge/record.ts": 1
+    "src/shared/contracts/knowledge/record.ts": 1,
+    "src/shared/contracts/speech/index.ts": 1
   },
   "FF-04": {
     "src/main/auth.ts": 999,

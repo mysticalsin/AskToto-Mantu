@@ -1,0 +1,7 @@
+{
+  "capability": "speech",
+  "selected": "parakeet",
+  "allowed": ["parakeet"],
+  "ready": ["parakeet"],
+  "status": { "state": "not-ready", "reason": "not-installed" }
+}

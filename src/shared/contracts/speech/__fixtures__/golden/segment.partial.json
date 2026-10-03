@@ -1,0 +1,10 @@
+{
+  "stream": { "generation": 1, "track": "microphone", "epoch": 1 },
+  "engine": "cloudflare-nova3",
+  "index": 4,
+  "revision": 1,
+  "final": false,
+  "text": "Let us look at the",
+  "startMs": 12000,
+  "endMs": 13250
+}

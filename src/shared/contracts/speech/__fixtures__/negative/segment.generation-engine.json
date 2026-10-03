@@ -1,0 +1,10 @@
+{
+  "stream": { "generation": 1, "track": "system", "epoch": 1 },
+  "engine": "cloudflare",
+  "index": 1,
+  "revision": 1,
+  "final": true,
+  "text": "Hello",
+  "startMs": 0,
+  "endMs": 400
+}
