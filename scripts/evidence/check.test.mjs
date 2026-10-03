@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { RECORD_SCHEMA, recordProblems } from './record.mjs'
+import { OWNER_MAC_RUNNER_HOST, RECORD_SCHEMA, recordProblems } from './record.mjs'
 import {
   TEST_WORKFLOW, ledgerProblems, loadProgram, outputProblems, prProblems, githubApi, m2_0008BundleProblems,
   m2_0194BundleProblems, m2_0195BundleProblems, releaseInputProblems, releaseProblems
@@ -1691,6 +1691,53 @@ test('R3 --release: a hosted-runner record without ci_run_id does not meet a row
   const { ci_run_id: _dropped, ...withoutRun } = boundRecord('M2-0489', 'macos-latest', SHA_MAC, { evidence_level: 'MEASURED' })
   setRecords(c, 'M2-0489', [withoutRun])
   assertOnlyProblem(releaseOf(c).problems, 'census', 'hosted-runner record with no ci_run_id')
+})
+
+test('R3b --release: a metis-owner-mac record without ci_run_id does not meet a row', () => {
+  const c = releaseCase()
+  c.gates.rows = c.gates.rows.map((row) => row.id === 'census' ? { ...row, hosts: [OWNER_MAC_RUNNER_HOST] } : row)
+  const { ci_run_id: _dropped, ...withoutRun } = boundRecord('M2-0489', OWNER_MAC_RUNNER_HOST, SHA_MAC, {
+    evidence_level: 'MEASURED',
+    environment: { kind: 'owner-mac', host: OWNER_MAC_RUNNER_HOST }
+  })
+  setRecords(c, 'M2-0489', [withoutRun])
+  assertOnlyProblem(releaseOf(c).problems, 'census', OWNER_MAC_RUNNER_HOST, `${OWNER_MAC_RUNNER_HOST} record with no ci_run_id`)
+})
+
+test('R3c --release: runner records without ci_run_id fail rows at runner levels', () => {
+  for (const [level, ticketId] of [['HOST_CONFIGURED', 'M2-0187'], ['LIVE_VERIFIED', 'M2-0433'], ['MEASURED', 'M2-0489']]) {
+    const c = releaseCase()
+    c.gates.rows = [{
+      id: `runner-${level.toLowerCase().replace('_', '-')}`,
+      ticket: ticketId,
+      level,
+      bytes: 'promotable',
+      hosts: ['macos-latest'],
+      accept: 'PASS'
+    }]
+    const { ci_run_id: _dropped, ...withoutRun } = boundRecord(ticketId, 'macos-latest', SHA_MAC, { evidence_level: level })
+    setRecords(c, ticketId, [withoutRun])
+    assertOnlyProblem(releaseOf(c).problems, ticketId, level, 'hosted-runner record with no ci_run_id')
+  }
+})
+
+test('R3d --release: a metis-owner-mac ACCEPTED row still needs ci_run_id', () => {
+  const c = releaseCase()
+  c.gates.rows = [{
+    id: 'owner-accepted',
+    ticket: 'M2-0187',
+    level: 'ACCEPTED',
+    bytes: 'promotable',
+    hosts: [OWNER_MAC_RUNNER_HOST],
+    accept: 'PASS'
+  }]
+  const { ci_run_id: _dropped, ...withoutRun } = boundRecord('M2-0187', OWNER_MAC_RUNNER_HOST, SHA_MAC, {
+    evidence_level: 'ACCEPTED',
+    environment: { kind: 'owner-mac', host: OWNER_MAC_RUNNER_HOST },
+    owner_statement: { date: '2026-10-01', text: 'Accepted for release gate evidence.' }
+  })
+  setRecords(c, 'M2-0187', [withoutRun])
+  assertOnlyProblem(releaseOf(c).problems, 'owner-accepted', OWNER_MAC_RUNNER_HOST, `${OWNER_MAC_RUNNER_HOST} record with no ci_run_id`)
 })
 
 test('R4 --release: QA-identity bytes do not meet a row that requires promotable bytes', () => {
