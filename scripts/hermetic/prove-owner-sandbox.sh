@@ -7,7 +7,11 @@ if [ -z "${RUNNER_TEMP:-}" ]; then
   exit 1
 fi
 
-if [ "${GITHUB_ACTIONS:-}" = "true" ] && { [ -n "${PROVE_OWNER_SANDBOX_WRAPPER:-}" ] || [ -n "${PROVE_OWNER_SANDBOX_HOME:-}" ]; }; then
+if [ "${GITHUB_ACTIONS:-}" = "true" ] && {
+  [ -n "${PROVE_OWNER_SANDBOX_WRAPPER:-}" ] ||
+  [ -n "${PROVE_OWNER_SANDBOX_HOME:-}" ] ||
+  [ -n "${PROVE_OWNER_SANDBOX_ASSERT_WRITABLE:-}" ]
+}; then
   echo "::error::owner-runner sandbox probe overrides are test-only and must not be set in GitHub Actions."
   exit 1
 fi
@@ -110,7 +114,7 @@ if [ "$existing_count" -lt 2 ]; then
   exit 1
 fi
 
-if [ -z "${PROVE_OWNER_SANDBOX_WRAPPER:-}" ]; then
+if [ -z "${PROVE_OWNER_SANDBOX_WRAPPER:-}" ] || [ "${PROVE_OWNER_SANDBOX_ASSERT_WRITABLE:-}" = "1" ]; then
   assert_writable "$RUNNER_TEMP/owner-runner-sandbox-probe"
   assert_writable "${GITHUB_WORKSPACE:-$PWD}/.owner-runner-sandbox-probe"
 fi

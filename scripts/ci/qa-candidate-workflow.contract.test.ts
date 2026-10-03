@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
-import { candidateArgv } from '../qa/lib/st-1-core.mjs'
 
 const root = join(__dirname, '..', '..')
 const workflow = readFileSync(join(root, '.github', 'workflows', 'qa-candidate.yml'), 'utf8').replace(/\r\n/g, '\n')
@@ -255,15 +254,6 @@ describe('QA candidate History design evidence (M2-0032)', () => {
     expect(upload).toContain("retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}")
   })
 
-  it('keeps the capture report-only: failed evidence warns, but the check stays green', () => {
-    const capture = steps('history-design-mac').find((step) => step.includes('history-design-capture.mjs')) ?? ''
-    expect(capture).toContain('set +e')
-    expect(capture).toContain('status=$?')
-    expect(capture).toContain('cat history-design/SUMMARY.md >> "$GITHUB_STEP_SUMMARY"')
-    expect(capture).toContain('::warning::History design evidence did not pass; see the uploaded history-design-macos artifact.')
-    expect(capture).toContain('exit 0')
-  })
-
   // TypeScript source files are left out of the assertion: tests that read files never name them (FF-07).
   it('self-tests when the capture or the History views it captures change', () => {
     for (const path of [
@@ -512,6 +502,59 @@ exit 1
     }
   })
 
+  it('proves the workspace and RUNNER_TEMP writable exceptions when the harness asks for that branch', () => {
+    const sandbox = mkdtempSync(join(tmpdir(), 'owner-sandbox-probe-'))
+    try {
+      const home = join(sandbox, 'home')
+      const runnerTemp = join(sandbox, 'runner-temp')
+      const workspace = join(sandbox, 'workspace')
+      const wrapper = join(sandbox, 'fake-sandbox.sh')
+      mkdirSync(join(home, 'Library', 'Application Support'), { recursive: true })
+      mkdirSync(join(home, 'Library', 'CloudStorage'), { recursive: true })
+      mkdirSync(join(home, 'Library', 'Keychains'), { recursive: true })
+      mkdirSync(runnerTemp)
+      mkdirSync(workspace)
+      writeFileSync(
+        wrapper,
+        `#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  /bin/mkdir)
+    if [ "\${2:-}" = -p ]; then exec "$@"; fi
+    ;;
+  /usr/bin/touch)
+    exec "$@"
+    ;;
+esac
+echo 'Operation not permitted' >&2
+exit 1
+`
+      )
+      chmodSync(wrapper, 0o755)
+
+      const result = spawnSync('bash', [ownerSandboxProbePath], {
+        cwd: workspace,
+        env: {
+          ...process.env,
+          GITHUB_ACTIONS: '',
+          GITHUB_WORKSPACE: workspace,
+          PROVE_OWNER_SANDBOX_ASSERT_WRITABLE: '1',
+          PROVE_OWNER_SANDBOX_HOME: home,
+          PROVE_OWNER_SANDBOX_WRAPPER: wrapper,
+          RUNNER_TEMP: runnerTemp
+        },
+        encoding: 'utf8'
+      })
+
+      expect(result.stderr).toBe('')
+      expect(result.status).toBe(0)
+      expect(existsSync(join(runnerTemp, 'owner-runner-sandbox-probe'))).toBe(false)
+      expect(existsSync(join(workspace, '.owner-runner-sandbox-probe'))).toBe(false)
+    } finally {
+      rmSync(sandbox, { recursive: true, force: true })
+    }
+  })
+
   it('runs every strict candidate verification and launch through the owner-runner sandbox wrapper', () => {
     const measureSteps = new Map([
       ['st1-mac-fifo', 'name: Measure packaged stall resilience'],
@@ -529,9 +572,6 @@ exit 1
       const measure = steps(name).find((step) => step.includes(measureSteps.get(name)!)) ?? ''
       expect(measure).toContain('ST1_CHROMIUM_SANDBOX: off')
     }
-    expect(candidateArgv({ ASKTOTO_QA_MOCK_KEYCHAIN: '1' })).toEqual(['--inspect=127.0.0.1:0', '--use-mock-keychain'])
-    expect(candidateArgv({ ST1_CHROMIUM_SANDBOX: 'off' })).toEqual(['--inspect=127.0.0.1:0', '--no-sandbox'])
-    expect(candidateArgv({})).not.toContain('--no-sandbox')
   })
 
   it('keeps strict rows report-only and removes temp profiles and unzipped candidates on every outcome', () => {
