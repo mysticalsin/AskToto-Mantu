@@ -22,6 +22,7 @@ import { homedir } from 'node:os'
 import { basename, isAbsolute, join, relative } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { writeRepresentativeProfile } from './census/profile.mjs'
+import { MAX_BG_FAILURES } from './lib/capture-backoff-constants.mjs'
 import { LOCAL_LLM_SETTINGS } from './lib/local-llm-settings.mjs'
 import { VARIANTS } from './provenance.mjs'
 
@@ -264,6 +265,36 @@ export const SCENARIOS = Object.freeze({
         // It finds the halted dialog and clicks its Quit button through System Events, so the lane
         // authorises GUI scripting (grant-gui) before it runs.
         guiScripting: true
+      })
+    })
+  }),
+  // M2-0559: Windows hosted runner proof for the background screen capture backoff. The script seeds and
+  // owns its throwaway ASKTOTO_USERDATA profile, locks the Windows workstation as the OS-level induction,
+  // then judges only bg-screen capture.failed audit rows from that profile.
+  'capture-gate': Object.freeze({
+    ticket: 'M2-0559',
+    qaOnlyHook: false,
+    exits: Object.freeze({ 0: 'PASS', 1: 'FAIL', 2: 'PRECONDITION' }),
+    platforms: Object.freeze({
+      win: Object.freeze({
+        variant: 'win',
+        artifact: 'candidate-win',
+        script: 'scripts/qa/capture-gate.mjs',
+        args: ({ app, report }) => [app, report, '--max-bg-failures', String(MAX_BG_FAILURES)],
+        report: 'capture-gate.json',
+        isolatedProfiles: true,
+        timeoutMinutes: 75,
+        stepTimeoutMinutes: 60,
+        bgScreenCaptureFailedMax: MAX_BG_FAILURES,
+        laneReportFields: Object.freeze([
+          'inductionMethod',
+          'readinessProof',
+          'failingStateProof',
+          'bgScreenCaptureFailedTotal',
+          'bgScreenCaptureFailedFinal15Minutes',
+          'screenPreprocessSuspended',
+          'backgroundScreenReadyAfterPark'
+        ])
       })
     })
   })

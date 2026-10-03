@@ -29,6 +29,7 @@ import {
   scenarioCommand
 } from './candidate-scenarios.mjs'
 import { LOCAL_LLM_SETTINGS } from './lib/local-llm-settings.mjs'
+import { MAX_BG_FAILURES } from './lib/capture-backoff-constants.mjs'
 import { VARIANTS } from './provenance.mjs'
 
 const root = join(__dirname, '..', '..')
@@ -84,7 +85,8 @@ describe('the scenario registry', () => {
       'idle-soak',
       'sidecar-boot-reaper',
       'packaged-lifecycle',
-      'renderer-kill'
+      'renderer-kill',
+      'capture-gate'
     ])
     const mac = SCENARIOS['fault-fatal-relaunch'].platforms.mac
     expect(Object.keys(SCENARIOS['fault-fatal-relaunch'].platforms)).toEqual(['mac'])
@@ -182,6 +184,71 @@ describe('the scenario registry', () => {
     expect(() => resolveScenario({ scenario: 'renderer-kill', sha256: { mac: MAC_SHA, win: MAC_SHA } })).toThrow(
       /win_sha256 is set, but renderer-kill does not run on win/
     )
+  })
+
+  it('declares capture-gate on Windows only, installing promotable Setup bytes with the long park timeout', () => {
+    const entry = SCENARIOS['capture-gate']
+    expect(entry.ticket).toBe('M2-0559')
+    expect(entry.qaOnlyHook).toBe(false)
+    expect(entry.exits).toEqual({ 0: 'PASS', 1: 'FAIL', 2: 'PRECONDITION' })
+    expect(Object.keys(entry.platforms)).toEqual(['win'])
+    const win = entry.platforms.win
+    expect(win).toMatchObject({
+      variant: 'win',
+      artifact: 'candidate-win',
+      script: 'scripts/qa/capture-gate.mjs',
+      report: 'capture-gate.json',
+      isolatedProfiles: true,
+      timeoutMinutes: 75,
+      stepTimeoutMinutes: 60,
+      bgScreenCaptureFailedMax: MAX_BG_FAILURES
+    })
+    expect(existsSync(join(root, win.script))).toBe(true)
+    expect(VARIANTS.win.promotable).toBe(true)
+    expect(VARIANTS.win.assets('1.0.0')).toContain('Metis-Setup-1.0.0.exe')
+    expect(win.laneReportFields).toEqual([
+      'inductionMethod',
+      'readinessProof',
+      'failingStateProof',
+      'bgScreenCaptureFailedTotal',
+      'bgScreenCaptureFailedFinal15Minutes',
+      'screenPreprocessSuspended',
+      'backgroundScreenReadyAfterPark'
+    ])
+    expect(resolveScenario({ scenario: 'capture-gate', sha256: { win: WIN_SHA } })).toEqual({
+      win: { variant: 'win', artifact: 'candidate-win', sha256: WIN_SHA, timeoutMinutes: 75, stepTimeoutMinutes: 60 }
+    })
+    expect(() => resolveScenario({ scenario: 'capture-gate', sha256: { mac: MAC_SHA, win: WIN_SHA } })).toThrow(
+      /mac_sha256 is set, but capture-gate does not run on mac/
+    )
+  })
+
+  it('runs capture-gate on the installed Windows app with the registry maximum', () => {
+    expect(
+      scenarioCommand({
+        scenario: 'capture-gate',
+        platform: 'win',
+        installer: 'assets/Metis-Setup-1.0.0.exe',
+        sha256: WIN_SHA,
+        outDir: 'candidate-scenario',
+        app: '../../_temp/candidate-install/Metis.exe'
+      })
+    ).toEqual([
+      'scripts/qa/capture-gate.mjs',
+      '../../_temp/candidate-install/Metis.exe',
+      'candidate-scenario/capture-gate.json',
+      '--max-bg-failures',
+      String(MAX_BG_FAILURES)
+    ])
+    expect(() =>
+      scenarioCommand({
+        scenario: 'capture-gate',
+        platform: 'win',
+        installer: 'assets/Metis-Setup-1.0.0.exe',
+        sha256: WIN_SHA,
+        outDir: 'candidate-scenario'
+      })
+    ).toThrow(/pass the installed app with --app/)
   })
 
   it('runs renderer-kill on the DMG, 4 kills within 60 s, with a repository-relative report path', () => {
@@ -304,6 +371,9 @@ describe('the scenario registry', () => {
       mac: { variant: 'mac', artifact: 'candidate-mac', sha256: IDLE_SHA, timeoutMinutes: 355, stepTimeoutMinutes: 340 },
       win: { variant: 'win', artifact: 'candidate-win', sha256: WIN_SHA, timeoutMinutes: 355, stepTimeoutMinutes: 340 }
     })
+    expect(resolveScenario({ scenario: 'capture-gate', sha256: { win: WIN_SHA } })).toEqual({
+      win: { variant: 'win', artifact: 'candidate-win', sha256: WIN_SHA, timeoutMinutes: 75, stepTimeoutMinutes: 60 }
+    })
     expect(() => resolveScenario({ scenario: 'hk-m', sha256: { mac: MAC_SHA } })).toThrow(/Unknown scenario "hk-m"/)
     expect(() => resolveScenario({ scenario: 'toString', sha256: { mac: MAC_SHA } })).toThrow(/Unknown scenario/)
   })
@@ -320,6 +390,13 @@ describe('the scenario registry', () => {
     expect(resolveOutputs(plan)).toBe(
       `mac=true\nmac_variant=mac\nmac_artifact=candidate-mac\nmac_sha256=${IDLE_SHA}\nmac_timeout_minutes=355\nmac_step_timeout_minutes=340\n` +
         `win=true\nwin_variant=win\nwin_artifact=candidate-win\nwin_sha256=${WIN_SHA}\nwin_timeout_minutes=355\nwin_step_timeout_minutes=340\n`
+    )
+  })
+
+  it('publishes the long Windows timeout for capture-gate', () => {
+    const plan = resolveScenario({ scenario: 'capture-gate', sha256: { win: WIN_SHA } })
+    expect(resolveOutputs(plan)).toBe(
+      `mac=false\nwin=true\nwin_variant=win\nwin_artifact=candidate-win\nwin_sha256=${WIN_SHA}\nwin_timeout_minutes=75\nwin_step_timeout_minutes=60\n`
     )
   })
 
@@ -585,6 +662,7 @@ describe('the fresh profile', () => {
     expect(prepareProfile({ scenario: 'sidecar-boot-reaper', platform: 'win', appDataDir: null })).toBeNull()
     expect(prepareProfile({ scenario: 'packaged-lifecycle', platform: 'mac', appDataDir: appData })).toBeNull()
     expect(prepareProfile({ scenario: 'packaged-lifecycle', platform: 'win', appDataDir: null })).toBeNull()
+    expect(prepareProfile({ scenario: 'capture-gate', platform: 'win', appDataDir: null })).toBeNull()
     expect(readdirSync(appData)).toEqual([])
     expect(() => prepareProfile({ scenario: 'fault-fatal-relaunch', platform: 'mac', appDataDir: null })).toThrow(
       /No fresh-profile location is declared for mac/
