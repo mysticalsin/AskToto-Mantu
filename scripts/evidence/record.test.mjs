@@ -4,6 +4,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  OWNER_MAC_RUNNER_HOST,
   RECORD_SCHEMA,
   recordProblems,
   parseRecordLines,
@@ -161,6 +162,39 @@ test('R6c hosted-runner is rejected for LOCALLY_TESTED and needs ci_run_id at ea
   for (const [level, build] of [['HOST_CONFIGURED', hostConfigured], ['LIVE_VERIFIED', liveVerified], ['MEASURED', measured]]) {
     assertProblem(recordProblems(build({ environment: hosted })), `ci_run_id: required for a hosted-runner ${level} record`)
   }
+})
+
+test('R6e metis-owner-mac is valid only for owner-mac records, except hosted-runner keeps its host message', () => {
+  const wrongKind = recordProblems(liveVerified({
+    environment: { kind: 'qa-mac', host: OWNER_MAC_RUNNER_HOST }
+  }))
+  assertProblem(wrongKind, 'environment.kind', OWNER_MAC_RUNNER_HOST)
+
+  const hosted = recordProblems(liveVerified({
+    environment: { kind: 'hosted-runner', host: OWNER_MAC_RUNNER_HOST },
+    ci_run_id: 303
+  }))
+  assert.deepEqual(
+    hosted.filter((problem) => problem.startsWith('environment.')),
+    ["environment.host: a hosted-runner record must name 'macos-latest' or 'windows-latest'"]
+  )
+})
+
+test('R6f metis-owner-mac records need ci_run_id at runner levels only', () => {
+  const ownerRunner = { kind: 'owner-mac', host: OWNER_MAC_RUNNER_HOST }
+  for (const [level, build] of [['HOST_CONFIGURED', hostConfigured], ['LIVE_VERIFIED', liveVerified], ['MEASURED', measured]]) {
+    assertProblem(
+      recordProblems(build({ environment: ownerRunner })),
+      `ci_run_id: required for a ${OWNER_MAC_RUNNER_HOST} ${level} record`
+    )
+    assert.deepEqual(recordProblems(build({ environment: ownerRunner, ci_run_id: 303 })), [])
+  }
+  assert.deepEqual(recordProblems(designed({ environment: ownerRunner })), [])
+  assert.deepEqual(recordProblems(accepted({ environment: ownerRunner })), [])
+  assertProblem(
+    recordProblems(locallyTested({ environment: ownerRunner })),
+    "environment.kind: expected 'ci'"
+  )
 })
 
 test('R6d the other kinds keep the generic host-label rule', () => {
