@@ -301,6 +301,7 @@ stop_second_instance() {
 app_job_running() {
   local pid=$1
   [[ -n "$pid" ]] || return 1
+  kill -0 "$pid" >/dev/null 2>&1 || return 1
   jobs -r -p | grep -Fx "$pid" >/dev/null 2>&1
 }
 
@@ -983,7 +984,7 @@ hosted_row() {
 # interrupt below therefore still hits a FIFO-blocked read.
 hold_fifo_writers() {
   local states="$FIFO_HOLD_DIR/states"
-  perl -e '
+  M2_0008_FIFO_HOLD_SECONDS="${M2_0008_CONTRACT_FIFO_HOLD_SECONDS:-300}" perl -e '
     use Fcntl qw(O_WRONLY O_NONBLOCK);
     my $out = shift @ARGV;
     my (@held, $states);
@@ -995,8 +996,8 @@ hold_fifo_writers() {
     print $fh $states;
     close $fh;
     rename("$out.part", $out) or exit 2;
-    sleep 3600;
-  ' "$states" "${FIFO_FIXTURES[@]}" &
+    sleep $ENV{M2_0008_FIFO_HOLD_SECONDS};
+  ' "$states" "${FIFO_FIXTURES[@]}" >/dev/null 2>&1 &
   FIFO_HOLDER_PID=$!
   local waited=0
   while [[ ! -f "$states" ]] && (( waited < 20 )); do
