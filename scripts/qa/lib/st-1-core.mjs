@@ -300,30 +300,44 @@ export const WINDOW_STAGE_BUDGET_MS = 250
 export const GATED_WINDOW_STAGES = ['createWindow.prewarm', 'createWindow.construct']
 
 /** The diagnosis behind the launch plan and gate report. CI evidence from 36999698235 and 37080909059 showed
- *  the over-budget shipped row on the first measured launch of the run, while later measured launches stayed
- *  comparable. That points at harness cold conditions, not a shipped-only app regression: every
- *  variant/chrome now receives the same warm-up before measurement, and the unchanged 250 ms gate still
- *  covers the user's first visible window work in the measured launch. */
+ *  the over-budget shipped row on the first measured launch of the run. The lead diagnosis recorded
+ *  window-shipped-opaque-1 at 351.9 ms after the OD-42 warm-up launches in 36999698235, with unrelated-PR
+ *  failures in the 335-535 ms range; the same row failed again in 37080909059. That points at harness order:
+ *  the failing launch was still the first measured launch instead of a launch immediately following the same
+ *  variant/chrome warm-up. */
 export const WINDOW_CONSTRUCTION_ROOT_CAUSE = {
   classification: 'harness-cold-first-measured-launch',
   evidenceRuns: ['36999698235', '37080909059'],
-  fix: 'one marked warm-up per variant/chrome before any measured launch; measured launches still include createWindow.prewarm and createWindow.construct under the unchanged 250 ms budget',
+  evidence: [
+    {
+      run: '36999698235',
+      measured: [{ launch: 'window-shipped-opaque-1', stage: 'createWindow.construct', ms: 351.9 }],
+      summary: 'first measured shipped opaque launch exceeded 250 ms after the prior all-warmups-first order'
+    },
+    {
+      run: '37080909059',
+      measured: [{ launch: 'window-shipped-opaque-1', stage: 'createWindow.construct', ms: 'over 250' }],
+      summary: 'same first measured shipped opaque launch failed while later launches were not identified as the recurring lane blocker'
+    }
+  ],
+  fix: 'place the matching marked warm-up immediately before each measured variant/chrome launch; measured launches still include createWindow.prewarm and createWindow.construct under the unchanged 250 ms budget',
   leadAction: 'LEAD_ACTION: dispatch qa-candidate three consecutive times on the PR and attach the st1-report gate.json artifacts'
 }
 
 /**
- * The CI launch order for window construction. Every variant/chrome pair gets the same explicit warm-up
- * before any measured launch, so the shipped gate never compares a cold first measured launch with warmed
- * later launches.
+ * The CI launch order for window construction. Every measured launch is immediately preceded by the same
+ * variant/chrome warm-up, so the shipped gate never compares a cold first measured launch with warmed later
+ * launches.
  */
 export function windowConstructionPlan({ variants = WINDOW_VARIANTS, chromes = WINDOW_CHROMES, repeats = WINDOW_MEASURED_REPEATS } = {}) {
-  const warmups = variants.flatMap((variant) =>
-    chromes.map((chrome) => ({ name: `window-warmup-${variant}-${chrome}`, variant, chrome, warmup: true }))
+  return Array.from({ length: repeats }, (_, i) => i + 1).flatMap((repeat) =>
+    variants.flatMap((variant) =>
+      chromes.flatMap((chrome) => [
+        { name: `window-warmup-${variant}-${chrome}-${repeat}`, variant, chrome, repeat, warmup: true },
+        { name: `window-${variant}-${chrome}-${repeat}`, variant, chrome, repeat, warmup: false }
+      ])
+    )
   )
-  const measured = Array.from({ length: repeats }, (_, i) => i + 1).flatMap((repeat) =>
-    variants.flatMap((variant) => chromes.map((chrome) => ({ name: `window-${variant}-${chrome}-${repeat}`, variant, chrome, repeat, warmup: false })))
-  )
-  return [...warmups, ...measured]
 }
 
 function launchNameFromReportPath(name) {

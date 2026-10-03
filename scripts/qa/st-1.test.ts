@@ -347,20 +347,31 @@ describe('window-construction runs (M2-0516)', () => {
     expect(WINDOW_VARIANTS).toEqual([...BOOT_WINDOW_VARIANTS])
   })
 
-  it('warms every variant and chrome before measured launches start', () => {
+  it('warms the same variant and chrome immediately before each measured launch', () => {
     const plan = windowConstructionPlan()
     const warmups = plan.filter((entry) => entry.warmup)
     const measured = plan.filter((entry) => !entry.warmup)
     expect(WINDOW_CHROMES).toEqual(['opaque', 'transparent'])
     expect(WINDOW_MEASURED_REPEATS).toBe(2)
-    expect(warmups).toHaveLength(WINDOW_VARIANTS.length * WINDOW_CHROMES.length)
+    expect(warmups).toHaveLength(WINDOW_VARIANTS.length * WINDOW_CHROMES.length * WINDOW_MEASURED_REPEATS)
     expect(measured).toHaveLength(WINDOW_VARIANTS.length * WINDOW_CHROMES.length * WINDOW_MEASURED_REPEATS)
-    expect(plan.findIndex((entry) => !entry.warmup)).toBe(warmups.length)
-    expect(new Set(warmups.map((entry) => `${entry.variant}/${entry.chrome}`))).toEqual(
-      new Set(WINDOW_VARIANTS.flatMap((variant) => WINDOW_CHROMES.map((chrome) => `${variant}/${chrome}`)))
-    )
-    expect(measured.slice(0, WINDOW_VARIANTS.length * WINDOW_CHROMES.length).map((entry) => entry.name)).toEqual(
-      WINDOW_VARIANTS.flatMap((variant) => WINDOW_CHROMES.map((chrome) => `window-${variant}-${chrome}-1`))
+    expect(plan[0]).toEqual({ name: 'window-warmup-shipped-opaque-1', variant: 'shipped', chrome: 'opaque', repeat: 1, warmup: true })
+    expect(plan[1]).toEqual({ name: 'window-shipped-opaque-1', variant: 'shipped', chrome: 'opaque', repeat: 1, warmup: false })
+    for (const [index, entry] of plan.entries()) {
+      if (entry.warmup) continue
+      expect(index).toBeGreaterThan(0)
+      expect(plan[index - 1]).toEqual({
+        name: `window-warmup-${entry.variant}-${entry.chrome}-${entry.repeat}`,
+        variant: entry.variant,
+        chrome: entry.chrome,
+        repeat: entry.repeat,
+        warmup: true
+      })
+    }
+    expect(measured.map((entry) => entry.name)).toEqual(
+      Array.from({ length: WINDOW_MEASURED_REPEATS }, (_, i) => i + 1).flatMap((repeat) =>
+        WINDOW_VARIANTS.flatMap((variant) => WINDOW_CHROMES.map((chrome) => `window-${variant}-${chrome}-${repeat}`))
+      )
     )
   })
 
@@ -454,6 +465,13 @@ describe('windowConstructionGate (M2-0519)', () => {
     ])
     expect(gate).toMatchObject({ pass: true, budgetMs: 250, failures: [] })
     expect(gate.rootCause).toEqual(WINDOW_CONSTRUCTION_ROOT_CAUSE)
+    expect(gate.rootCause).toMatchObject({
+      classification: 'harness-cold-first-measured-launch',
+      evidence: [
+        { run: '36999698235', measured: [{ launch: 'window-shipped-opaque-1', stage: 'createWindow.construct', ms: 351.9 }] },
+        { run: '37080909059', measured: [{ launch: 'window-shipped-opaque-1', stage: 'createWindow.construct' }] }
+      ]
+    })
     expect(gate.rows).toEqual([
       { report: 'window-shipped-opaque-1/a.json', launch: 'window-shipped-opaque-1', variant: 'shipped', stage: 'createWindow.prewarm', chrome: 'opaque', ms: 12 },
       { report: 'window-shipped-opaque-1/a.json', launch: 'window-shipped-opaque-1', variant: 'shipped', stage: 'createWindow.construct', chrome: 'opaque', ms: 111 },

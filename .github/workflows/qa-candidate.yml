@@ -946,8 +946,8 @@ jobs:
   # bootStages carries createWindow.prewarm and createWindow.construct (with the chrome and variant built),
   # createWindow.navigate and createWindow.firstShow. The other variants stay report-only; the shipped window is
   # gated (M2-0519): the job fails unless every shipped createWindow.prewarm and createWindow.construct is present
-  # and under 250 ms in both chromes. Every variant/chrome pair gets one marked warm-up launch before any
-  # measured repeat, and the gate skips those warm-up reports.
+  # and under 250 ms in both chromes. Every measured launch is immediately preceded by the same
+  # variant/chrome marked warm-up, and the gate skips those warm-up reports.
   st1-mac-window:
     name: ST-1 window construction per variant and chrome (shipped gated < 250 ms)
     needs: provenance
