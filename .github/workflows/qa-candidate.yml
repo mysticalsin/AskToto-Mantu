@@ -434,13 +434,10 @@ jobs:
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 
   smoke-win:
-    name: Install and launch ${{ matrix.variant }} by sha256
+    name: Install and launch win by sha256
     needs: provenance
     runs-on: windows-latest
     timeout-minutes: 30
-    strategy:
-      matrix:
-        variant: [win, win-portable]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -454,50 +451,54 @@ jobs:
           path: provenance
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: candidate-${{ matrix.variant }}
-          path: assets
+          name: candidate-win
+          path: assets/win
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-win-portable
+          path: assets/win-portable
       - name: Verify every byte against the provenance
-        run: node scripts/qa/provenance.mjs verify provenance/provenance.json assets ${{ matrix.variant }}
+        run: |
+          node scripts/qa/provenance.mjs verify provenance/provenance.json assets/win win
+          node scripts/qa/provenance.mjs verify provenance/provenance.json assets/win-portable win-portable
       - name: Install or launch the Windows candidate
         shell: pwsh
-        env:
-          VARIANT: ${{ matrix.variant }}
         run: |
           $ErrorActionPreference = 'Stop'
           $provenance = Get-Content provenance/provenance.json -Raw | ConvertFrom-Json
           $runId = $provenance.run.id
-          $assets = ($provenance.builds | Where-Object { $_.variant -eq $env:VARIANT }).assets
+          $setupAssets = ($provenance.builds | Where-Object { $_.variant -eq 'win' }).assets
+          $portableAssets = ($provenance.builds | Where-Object { $_.variant -eq 'win-portable' }).assets
           New-Item -ItemType Directory -Force launch-reports | Out-Null
           $signatures = @{}
-          foreach ($exe in Get-ChildItem assets -Filter *.exe) {
+          foreach ($exe in Get-ChildItem assets -Recurse -Filter *.exe) {
             $status = (Get-AuthenticodeSignature $exe.FullName).Status
             if ($status -ne 'NotSigned') { throw "$($exe.Name) is signed; Windows candidates are unsigned." }
             $signatures[$exe.Name] = [string]$status
           }
           $target = Join-Path $env:RUNNER_TEMP 'installed'
-          if ($env:VARIANT -eq 'win') {
-            $setup = Get-Item assets/Metis-Setup-*.exe
-            $install = Start-Process -FilePath $setup.FullName -ArgumentList '/S', "/D=$target" -Wait -PassThru
-            if ($install.ExitCode -ne 0) { throw "Setup exited with $($install.ExitCode)." }
-            $launches = @(@{ Installer = $setup; Exe = (Join-Path $target 'Metis.exe') })
-          } else {
-            $portable = Get-Item assets/Metis-Portable-*.exe
-            $launches = @(@{ Installer = $portable; Exe = $portable.FullName })
-          }
+          $setup = Get-Item assets/win/Metis-Setup-*.exe
+          $install = Start-Process -FilePath $setup.FullName -ArgumentList '/S', "/D=$target" -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Setup exited with $($install.ExitCode)." }
+          $portable = Get-Item assets/win-portable/Metis-Portable-*.exe
+          $launches = @(
+            @{ Installer = $setup; Exe = (Join-Path $target 'Metis.exe'); Assets = $setupAssets },
+            @{ Installer = $portable; Exe = $portable.FullName; Assets = $portableAssets }
+          )
           foreach ($launch in $launches) {
             $name = $launch.Installer.Name
-            $sha = ($assets | Where-Object { $_.name -eq $name }).sha256
+            $sha = ($launch.Assets | Where-Object { $_.name -eq $name }).sha256
             node scripts/check-packaged-launch.mjs $launch.Exe --report "launch-reports/$name.launch.json" --installer $name --artifact-sha256 $sha --candidate-run $runId --signature ($signatures[$name])
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
       - name: Require a PASS report per installer, bound to the provenance sha256
         if: always()
         shell: pwsh
-        env:
-          VARIANT: ${{ matrix.variant }}
         run: |
           $provenance = Get-Content provenance/provenance.json -Raw | ConvertFrom-Json
-          $assets = ($provenance.builds | Where-Object { $_.variant -eq $env:VARIANT }).assets
+          $assets = @()
+          $assets += ($provenance.builds | Where-Object { $_.variant -eq 'win' }).assets
+          $assets += ($provenance.builds | Where-Object { $_.variant -eq 'win-portable' }).assets
           $failed = $false
           foreach ($asset in $assets) {
             $path = "launch-reports/$($asset.name).launch.json"
@@ -511,7 +512,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
-          name: candidate-launch-${{ matrix.variant }}
+          name: candidate-launch-win
           path: launch-reports/
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
