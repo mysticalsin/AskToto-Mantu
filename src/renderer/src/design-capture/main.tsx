@@ -2,20 +2,21 @@ import React from 'react'
 import { createRoot } from 'react-dom/client'
 import '../tokens.css'
 import './capture.css'
+import './settings/settings.css'
 import { DesignIndex, DesignSurface } from './DesignSurface'
-import { DESIGN_STATE_IDS, resolveDesignStateIncludingQa } from './states'
+import { DESIGN_CAPTURE_STATES, resolveDesignStateIncludingQa, type DesignViewport } from './states'
 
 declare global {
   interface Window {
-    /** Read by scripts/design/capture-states.mjs: the state ids to screenshot. */
-    __DESIGN_CAPTURE__?: { states: readonly string[] }
+    /** Read by scripts/design/capture-states.mjs: the states to screenshot, each with its viewport. */
+    __DESIGN_CAPTURE__?: { states: readonly { id: string; viewport: DesignViewport }[] }
   }
 }
 
 const requested = new URLSearchParams(window.location.search).get('state')
 const state = resolveDesignStateIncludingQa(window.location.search)
 
-window.__DESIGN_CAPTURE__ = { states: DESIGN_STATE_IDS }
+window.__DESIGN_CAPTURE__ = { states: DESIGN_CAPTURE_STATES }
 
 createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>

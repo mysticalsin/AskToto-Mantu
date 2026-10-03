@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Screenshot every design-capture state in the real Electron renderer, in light/dark, 1x/2x and reduced
- * motion, and write manifest.json (state id, sha256, commit) beside the images.
+ * motion, each at the viewport the page lists for it, and write manifest.json (state id, viewport, sha256,
+ * commit) beside the images.
  *
  * Needs a renderer built with METIS_DESIGN_CAPTURE=1 (out/renderer/design-capture.html). CI-only: the
  * design-capture workflow runs it and uploads the output directory as an artifact.
@@ -12,7 +13,7 @@ import { _electron as electron } from 'playwright'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { assertPngSize, buildManifest, captureFileName, captureMatrix } from './capture-manifest.mjs'
+import { assertPngSize, buildManifest, captureFileName, captureMatrix, captureStates } from './capture-manifest.mjs'
 import { detectedFailureKinds } from './capture-audit.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -20,7 +21,9 @@ const root = resolve(here, '..', '..')
 const html = resolve(root, 'out', 'renderer', 'design-capture.html')
 const outDir = resolve(process.argv[2] || join(root, 'out-design-capture'))
 const commit = process.env.GITHUB_SHA || 'unknown'
-const VIEWPORT = { width: 960, height: 640 }
+// Each listed state brings its own viewport from the page; the QA negative control is not listed and keeps
+// the placeholder states' size.
+const NEGATIVE_CONTROL_VIEWPORT = { width: 960, height: 640 }
 const READY_TIMEOUT_MS = 15_000
 const auditScript = join(here, 'capture-audit.mjs')
 const NEGATIVE_CONTROL_STATE = 'audit-negative-control'
@@ -78,12 +81,11 @@ app = await electron.launch({
 try {
   const page = await app.firstWindow()
   await page.waitForSelector('html[data-capture-ready]', { timeout: READY_TIMEOUT_MS })
-  const states = await page.evaluate(() => window.__DESIGN_CAPTURE__.states)
-  if (!Array.isArray(states) || states.length === 0) throw new Error('The page listed no design states')
+  const states = captureStates(await page.evaluate(() => window.__DESIGN_CAPTURE__.states))
 
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Emulation.setDeviceMetricsOverride', {
-    ...VIEWPORT,
+    ...NEGATIVE_CONTROL_VIEWPORT,
     deviceScaleFactor: 1,
     mobile: false
   })
@@ -109,15 +111,16 @@ try {
 
   for (const row of captureMatrix()) {
     await page.emulateMedia({ colorScheme: row.theme, reducedMotion: row.motion })
-    await cdp.send('Emulation.setDeviceMetricsOverride', {
-      ...VIEWPORT,
-      deviceScaleFactor: row.scale,
-      mobile: false
-    })
-    for (const state of states) {
+    for (const { id: state, viewport } of states) {
       const file = captureFileName(state, row)
       const path = join(outDir, file)
       try {
+        // Set before navigating, so layout, media queries and the audit all see this state's viewport.
+        await cdp.send('Emulation.setDeviceMetricsOverride', {
+          ...viewport,
+          deviceScaleFactor: row.scale,
+          mobile: false
+        })
         await page.goto(`${pageUrl}?state=${encodeURIComponent(state)}`)
         await page.waitForSelector('html[data-capture-ready="1"]', { timeout: READY_TIMEOUT_MS })
         let audit
@@ -129,8 +132,8 @@ try {
         }
         await page.screenshot({ path })
         const bytes = readFileSync(path)
-        assertPngSize(bytes, VIEWPORT, row.scale, file)
-        shots.push({ state, ...row, file, bytes, audit })
+        assertPngSize(bytes, viewport, row.scale, file)
+        shots.push({ state, viewport, ...row, file, bytes, audit })
         console.log(`wrote ${file}`)
       } catch (error) {
         failures.push(`${file}: ${errorMessage(error)}`)

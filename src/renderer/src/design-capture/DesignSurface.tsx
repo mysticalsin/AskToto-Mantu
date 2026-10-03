@@ -1,3 +1,4 @@
+import { SettingsSurface } from './settings/SettingsSurface'
 import {
   DESIGN_STATES,
   SAMPLE_ANSWER,
@@ -82,6 +83,8 @@ export function DesignSurface({ state }: { state: DesignState }): JSX.Element {
       return <ErrorBanner />
     case 'audit-negative-control':
       return <AuditNegativeControl />
+    case 'settings':
+      return <SettingsSurface scene={state.scene} />
   }
 }
 

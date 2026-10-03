@@ -9,6 +9,7 @@ import {
   buildManifest,
   captureFileName,
   captureMatrix,
+  captureStates,
   assertPngSize,
   pngSize,
   sha256Hex
@@ -16,11 +17,15 @@ import {
 import { AUDIT_STANDARD } from './capture-audit.mjs'
 import {
   AUDIT_NEGATIVE_CONTROL_STATE,
+  DESIGN_CAPTURE_STATES,
   DESIGN_STATES,
   DESIGN_STATE_IDS,
+  designStateViewport,
   resolveDesignState,
   resolveDesignStateIncludingQa
 } from '../../src/renderer/src/design-capture/states'
+import { searchSettings } from '../../src/renderer/src/design-capture/settings/data'
+import { SETTINGS_WINDOW_MIN } from '@shared/settings-bounds'
 
 const root = resolve(__dirname, '..', '..')
 const read = (...parts: string[]): string =>
@@ -111,6 +116,81 @@ describe('design states', () => {
       AUDIT_NEGATIVE_CONTROL_STATE
     )
   })
+
+  it('keeps the six placeholder states and adds exactly the eight Settings baseline states', () => {
+    expect(DESIGN_STATES.map((s) => [s.id, s.title])).toEqual([
+      ['bar-idle', 'Bar, idle'],
+      ['bar-listening', 'Bar, listening'],
+      ['answer-streaming', 'Answer, streaming'],
+      ['answer-complete', 'Answer, complete'],
+      ['review-summary', 'Review, summary'],
+      ['error-recoverable', 'Error, recoverable'],
+      ['S01-general', 'General, fresh install'],
+      ['S02-voice-ready', 'Voice & meetings, cloud speech ready'],
+      ['S07-knowledge', 'Knowledge & skills'],
+      ['S10-advanced', 'Advanced drawer'],
+      ['S11-search', 'Search with synonyms'],
+      ['S15-narrow', 'Narrow window'],
+      ['S16-migrated', 'First open after upgrading'],
+      ['S17-connected-apps', 'Privacy & account, connected apps']
+    ])
+  })
+})
+
+describe('per-state viewport', () => {
+  const state = (id: string) => {
+    const found = resolveDesignState(`?state=${id}`)
+    if (!found) throw new Error(`missing state ${id}`)
+    return found
+  }
+
+  const placeholders = DESIGN_STATES.filter((s) => s.kind !== 'settings')
+  const settings = DESIGN_STATES.filter((s) => s.kind === 'settings')
+
+  it('opens a Settings state at SETTINGS_WINDOW_MIN, the shared constant itself rather than a copy', () => {
+    expect(SETTINGS_WINDOW_MIN).toEqual({ width: 880, height: 800 })
+    expect(settings).toHaveLength(8)
+    for (const s of settings.filter((s) => s.id !== 'S15-narrow')) {
+      expect(designStateViewport(s), s.id).toBe(SETTINGS_WINDOW_MIN)
+    }
+  })
+
+  it('captures the narrow window at 360x720 and the placeholder states at 960x640', () => {
+    expect(designStateViewport(state('S15-narrow'))).toEqual({ width: 360, height: 720 })
+    expect(placeholders).toHaveLength(6)
+    for (const s of placeholders) expect(designStateViewport(s), s.id).toEqual({ width: 960, height: 640 })
+  })
+
+  it('exposes {id, viewport} for every listed state to the driver, which accepts the list', () => {
+    expect(DESIGN_CAPTURE_STATES.map((s) => s.id)).toEqual(DESIGN_STATE_IDS)
+    for (const s of DESIGN_CAPTURE_STATES) expect(s.viewport, s.id).toEqual(designStateViewport(state(s.id)))
+    expect(captureStates(JSON.parse(JSON.stringify(DESIGN_CAPTURE_STATES)))).toEqual(DESIGN_CAPTURE_STATES)
+  })
+
+  it('rejects a page list without states, with a duplicate id or without a usable viewport', () => {
+    const ok = { id: 'a', viewport: { width: 10, height: 20 } }
+    expect(() => captureStates([])).toThrow(/no design states/)
+    expect(() => captureStates(undefined)).toThrow(/no design states/)
+    expect(() => captureStates(['a'])).toThrow(/without an id/)
+    expect(() => captureStates([ok, ok])).toThrow(/Duplicate design state id: a/)
+    expect(() => captureStates([{ id: 'b' }])).toThrow(/b has no valid viewport/)
+    expect(() => captureStates([{ id: 'b', viewport: { width: 0, height: 20 } }])).toThrow(/b has no valid viewport/)
+    expect(() => captureStates([{ id: 'b', viewport: { width: 10.5, height: 20 } }])).toThrow(/b has no valid viewport/)
+  })
+})
+
+describe('Settings search', () => {
+  it("widens 'mic' to the microphone, input-device and speech rows and nothing else", () => {
+    const groups = searchSettings('mic', 'cloud-ready')
+    expect(groups.map((g) => [g.label, g.rows.map((r) => r.label)])).toEqual([
+      ['Voice & meetings', ['Microphone access', 'Input device', 'Speech processing']]
+    ])
+  })
+
+  it('matches nothing for an empty or unrelated query', () => {
+    expect(searchSettings('  ', 'cloud-ready')).toEqual([])
+    expect(searchSettings('zzz', 'cloud-ready')).toEqual([])
+  })
 })
 
 describe('capture matrix and manifest', () => {
@@ -139,13 +219,22 @@ describe('capture matrix and manifest', () => {
     )
   })
 
-  it('records state, sha256 and commit for each image', () => {
+  it('records state, viewport, sha256 and commit for each image', () => {
     const bytes = new TextEncoder().encode('png-bytes')
     const manifest = buildManifest({
       commit: 'abc123',
       platform: 'darwin',
       shots: [
-        { state: 'bar-idle', theme: 'light', scale: 1, motion: 'no-preference', file: 'a.png', bytes, audit: cleanAudit }
+        {
+          state: 'bar-idle',
+          viewport: { width: 960, height: 640 },
+          theme: 'light',
+          scale: 1,
+          motion: 'no-preference',
+          file: 'a.png',
+          bytes,
+          audit: cleanAudit
+        }
       ],
       negativeControl: { detected: true, kinds: ['clipping', 'nonText', 'text'] }
     })
@@ -153,6 +242,7 @@ describe('capture matrix and manifest', () => {
     expect(manifest.entries).toEqual([
       {
         state: 'bar-idle',
+        viewport: { width: 960, height: 640 },
         theme: 'light',
         scale: 1,
         motion: 'no-preference',
@@ -221,6 +311,16 @@ describe('png size check', () => {
   it('accepts a shot at scale x viewport and rejects a silent 1x capture as 2x', () => {
     expect(() => assertPngSize(png(1920, 1280), viewport, 2, 'a.png')).not.toThrow()
     expect(() => assertPngSize(png(960, 640), viewport, 2, 'a.png')).toThrow(/expected 1920x1280, got 960x640/)
+  })
+
+  it("checks each state's own viewport x scale", () => {
+    const narrow = DESIGN_CAPTURE_STATES.find((s) => s.id === 'S15-narrow')?.viewport
+    const settings = DESIGN_CAPTURE_STATES.find((s) => s.id === 'S01-general')?.viewport
+    if (!narrow || !settings) throw new Error('missing Settings states')
+    expect(() => assertPngSize(png(720, 1440), narrow, 2, 'n.png')).not.toThrow()
+    expect(() => assertPngSize(png(1760, 1600), settings, 2, 's.png')).not.toThrow()
+    expect(() => assertPngSize(png(1760, 1600), narrow, 2, 'n.png')).toThrow(/expected 720x1440, got 1760x1600/)
+    expect(() => assertPngSize(png(1920, 1280), settings, 2, 's.png')).toThrow(/expected 1760x1600, got 1920x1280/)
   })
 
   it('rejects bytes that are not a PNG', () => {

@@ -18,6 +18,26 @@ export function captureMatrix() {
   return rows
 }
 
+/**
+ * The page's `{ id, viewport }` list, checked: a non-empty array of unique ids, each with a positive integer
+ * width and height. Throws on anything else so a malformed page never yields a silently mis-sized shot.
+ */
+export function captureStates(listed) {
+  if (!Array.isArray(listed) || listed.length === 0) throw new Error('The page listed no design states')
+  const ids = new Set()
+  return listed.map((entry) => {
+    const id = entry?.id
+    const { width, height } = entry?.viewport ?? {}
+    if (typeof id !== 'string' || id === '') throw new Error(`Design state without an id: ${JSON.stringify(entry)}`)
+    if (ids.has(id)) throw new Error(`Duplicate design state id: ${id}`)
+    if (![width, height].every((n) => Number.isInteger(n) && n > 0)) {
+      throw new Error(`Design state ${id} has no valid viewport: ${JSON.stringify(entry.viewport)}`)
+    }
+    ids.add(id)
+    return { id, viewport: { width, height } }
+  })
+}
+
 /** Windows-safe name, unique per (state, theme, scale, motion). */
 export function captureFileName(stateId, { theme, scale, motion }) {
   return `${stateId}__${theme}__${scale}x__${motion === 'reduce' ? 'reduced-motion' : 'motion'}.png`
@@ -44,11 +64,12 @@ export function sha256Hex(bytes) {
 }
 
 /**
- * @param {{ commit: string, platform: string, shots: Array<{ state: string, theme: string, scale: number, motion: string, file: string, bytes: Uint8Array, audit: object }>, negativeControl?: { detected: boolean, kinds: string[] } }} input
+ * @param {{ commit: string, platform: string, shots: Array<{ state: string, viewport: { width: number, height: number }, theme: string, scale: number, motion: string, file: string, bytes: Uint8Array, audit: object }>, negativeControl?: { detected: boolean, kinds: string[] } }} input
  */
 export function buildManifest({ commit, platform, shots, negativeControl }) {
-  const entries = shots.map(({ state, theme, scale, motion, file, bytes, audit }) => ({
+  const entries = shots.map(({ state, viewport, theme, scale, motion, file, bytes, audit }) => ({
     state,
+    viewport: { width: viewport.width, height: viewport.height },
     theme,
     scale,
     motion,
