@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import * as cursorWatch from './island/cursor-watch'
-import { RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS, TOP_CENTER_REVEAL_DWELL_MS } from './island/cursor-watch'
+import { CURSOR_LEAVE_GRACE_PX, RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS, TOP_CENTER_REVEAL_DWELL_MS } from './island/cursor-watch'
 import {
   clampHeight as islandClampHeight,
   hoverRestTop,
@@ -22,6 +22,7 @@ import {
   overlayUsesHover,
   rememberBarContentHeight
 } from '@shared/overlay-chrome'
+import { createRightEdgeAnchors } from './island/right-edge-anchor'
 
 const source = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
 
@@ -116,7 +117,16 @@ function nativeHover(options: {
     applyOverlaySurfaceChrome: () => {},
     commitParkedOverlayBounds: (park: Rect) => { bounds = park },
     applyHideClickThrough: () => {},
-    startOverlayCursorWatch: () => {}
+    startOverlayCursorWatch: () => {},
+    // The right-edge hold region (M2-0202) is the real anchor store at the default anchor, nothing persisted.
+    rightEdgeAnchors: createRightEdgeAnchors({
+      stored: () => ({ anchors: {}, legacy: {} }),
+      saveAnchors: () => {},
+      lockedKeys: () => [],
+      rightEdgeLive: () => true,
+      warn: () => {},
+      later: () => {}
+    })
   }
   // Lifts one shipped function, dropping only its TypeScript parameter and return annotations.
   const lift = (signature: string, stop: string, jsSignature = signature.replace(/\): \w+ \{$/, ') {')): string => {
@@ -387,6 +397,29 @@ describe('right-edge Hide native watch', () => {
     expect(revealedAt!).toBeLessThanOrEqual(400)
     expect(hover.state().bounds).toEqual(hover.revealed)
     expect(hover.state().notifications).toEqual([true])
+  })
+
+  it('M2-0202 RE-G05: a reveal at wa.bottom−60 (f = 0.15) holds while the pointer moves diagonally into the drawer over 800 ms', () => {
+    const hover = nativeHover({ rightEdge: { resting: true } })
+    const reveal = { x: edge, y: DISPLAY.workArea.y + DISPLAY.workArea.height - 60 }
+    // The drawer opens far above that point: the path to it leaves the band and runs below the drawer.
+    expect(reveal.y).toBeGreaterThan(hover.revealed.y + hover.revealed.height + CURSOR_LEAVE_GRACE_PX)
+    let at = 0
+    for (; at <= 192 && hover.state().restoreCount === 0; at += 24) hover.tickAt(at, reveal)
+    expect(hover.state().restoreCount).toBe(1)
+    const target = { x: hover.revealed.x + hover.revealed.width / 2, y: hover.revealed.y + hover.revealed.height / 2 }
+    for (let t = 24; t <= 800; t += 24, at += 24) {
+      hover.tickAt(at, {
+        x: Math.round(reveal.x + ((target.x - reveal.x) * t) / 800),
+        y: Math.round(reveal.y + ((target.y - reveal.y) * t) / 800)
+      })
+    }
+    expect(hover.state().parkPending).toBe(false)
+    expect(hover.state().notifications).toEqual([true])
+    // Once the pointer has entered the drawer the corridor is gone: the same spot below the drawer is a leave.
+    hover.tickAt(at, { x: target.x + 60, y: reveal.y - 40 })
+    expect(hover.state().parkPending).toBe(true)
+    expect(hover.state().notifications).toEqual([true, false])
   })
 
   it('RE-HIDE-2: the pointer 40 px inside the work area at the old tab position never reveals', () => {
