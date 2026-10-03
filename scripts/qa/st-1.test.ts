@@ -30,6 +30,7 @@ import {
   rendererPreflightStatus,
   sampleExpression,
   shouldProbeHistory,
+  st1ExitCode,
   syntheticDatalessPlan,
   runPurpose,
   timedCallsExpression,
@@ -1197,6 +1198,16 @@ describe('buildLaunchFailureReport', () => {
     expect(built.verdict).toBe('FAIL')
     expect(built.criteria).toEqual([{ name: 'inspector', pass: false }])
     expect(built.fixtures).toBe(3)
+  })
+})
+
+describe('st1ExitCode', () => {
+  it('keeps launch precondition INVALID rows green while real scoring outcomes still fail the CLI', () => {
+    expect(st1ExitCode('PASS')).toBe(0)
+    expect(st1ExitCode('INVALID')).toBe(0)
+    expect(st1ExitCode('FAIL')).toBe(1)
+    expect(st1ExitCode('NOT_EXERCISED')).toBe(1)
+    expect(st1ExitCode('INCOMPLETE')).toBe(1)
   })
 })
 

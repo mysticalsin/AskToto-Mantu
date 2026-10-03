@@ -31,6 +31,10 @@ export const WITNESS_LOOP_MAX_MS = 50
 /** The candidate stderr tail is bounded and content-free: byte counts only, never stderr text. */
 export const STDERR_TAIL_LIMIT_BYTES = 4_096
 
+export function st1ExitCode(verdict) {
+  return verdict === 'PASS' || verdict === 'INVALID' ? 0 : 1
+}
+
 export function createContentFreeStderrTail(limitBytes = STDERR_TAIL_LIMIT_BYTES) {
   let bytes = 0
   let retainedBytes = 0
