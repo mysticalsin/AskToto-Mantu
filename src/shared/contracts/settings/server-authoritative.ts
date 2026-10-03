@@ -1,5 +1,3 @@
-import type { Settings } from '../../ipc'
-
 export const SERVER_AUTHORITATIVE_SETTINGS_DESCRIPTION = 'server-authoritative-setting'
 
 export const SERVER_AUTHORITATIVE_SETTINGS_KEYS = [
@@ -23,6 +21,6 @@ export const SERVER_AUTHORITATIVE_SETTINGS_KEYS = [
   'operatorLicenseJti',
   'operatorLicenseLast4',
   'operatorLicenseExpiresAt'
-] as const satisfies readonly (keyof Settings)[]
+] as const
 
 export type ServerAuthoritativeSettingsKey = (typeof SERVER_AUTHORITATIVE_SETTINGS_KEYS)[number]
