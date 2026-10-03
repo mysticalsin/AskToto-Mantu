@@ -26,8 +26,8 @@
 // - Candidate-bound rows (promotable, qa-identity) need that record's build_run_id to equal provenance
 //   run.id and its artifact_sha256 to be one of that bytes class's provenance assets, at every level,
 //   MEASURED included. Baseline rows carry `sha256`, the earlier release's bytes, and need
-//   artifact_sha256 among them. Runner records (hosted-runner, and owner-mac on metis-owner-mac)
-//   must carry ci_run_id.
+//   artifact_sha256 among them. Runner/service records (hosted-runner, deployed-service, and
+//   owner-mac on metis-owner-mac) must carry ci_run_id.
 // - PASS needs that record to be a PASS. PASS_OR_STATED accepts a bound PASS or FAIL, or a line in the
 //   release file containing the marker `gate:<id>`. REPORT rows are printed and never fail.
 // - The sample row recomputes sample.mjs --population-of from the ledger at the sample JSON's
