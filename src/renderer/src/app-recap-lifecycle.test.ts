@@ -15,8 +15,8 @@ import {
 // Only React refs/setters and IPC storage are supplied by the host; ordering/ownership logic is real.
 const app = ts.createSourceFile('App.tsx', readFileSync(join(__dirname, 'App.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
 const review = ts.createSourceFile(
-  'Review.' + 'tsx',
-  readFileSync(join(__dirname, 'features', 'review', 'Review.' + 'tsx'), 'utf8'),
+  'Review.tsx',
+  readFileSync(join(__dirname, 'features', 'review', 'Review.tsx'), 'utf8'),
   ts.ScriptTarget.Latest,
   true,
   ts.ScriptKind.TSX
