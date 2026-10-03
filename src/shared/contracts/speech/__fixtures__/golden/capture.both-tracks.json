@@ -1,0 +1,6 @@
+{
+  "generation": 1,
+  "engine": "cloudflare-nova3",
+  "requestedTracks": ["microphone", "system"],
+  "capturedTracks": ["microphone", "system"]
+}

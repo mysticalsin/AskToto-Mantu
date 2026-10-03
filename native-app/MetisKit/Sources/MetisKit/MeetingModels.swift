@@ -20,6 +20,37 @@ public struct TranscriptLine: Identifiable, Codable, Sendable, Hashable {
     public init(id: UUID = UUID(), speaker: Speaker, name: String? = nil, text: String, at: Date) {
         self.id = id; self.speaker = speaker; self.name = name; self.text = text; self.at = at
     }
+
+    private enum CodingKeys: String, CodingKey { case id, speaker, name, text, at }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        let speakerValue = try container.decode(String.self, forKey: .speaker)
+        switch speakerValue {
+        case "me", "you": speaker = .me
+        case "them": speaker = .them
+        case "unknown": speaker = .unknown
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .speaker,
+                in: container,
+                debugDescription: "Unknown transcript speaker."
+            )
+        }
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+        text = try container.decode(String.self, forKey: .text)
+        at = try container.decode(Date.self, forKey: .at)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(speaker.rawValue, forKey: .speaker)
+        try container.encodeIfPresent(name, forKey: .name)
+        try container.encode(text, forKey: .text)
+        try container.encode(at, forKey: .at)
+    }
 }
 
 public struct Meeting: Identifiable, Codable, Sendable {

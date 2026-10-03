@@ -1,0 +1,7 @@
+{
+  "generation": 1,
+  "engine": "cloudflare-nova3",
+  "fallbackEngine": "parakeet",
+  "requestedTracks": ["microphone"],
+  "capturedTracks": ["microphone"]
+}

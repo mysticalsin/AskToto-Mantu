@@ -1,0 +1,7 @@
+{
+  "capability": "speech",
+  "selected": "whisper",
+  "allowed": ["cloudflare-nova3"],
+  "ready": [],
+  "status": { "state": "not-ready", "reason": "failed" }
+}

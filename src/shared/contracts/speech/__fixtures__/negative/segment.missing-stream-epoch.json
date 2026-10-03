@@ -1,0 +1,10 @@
+{
+  "stream": { "generation": 1, "track": "microphone" },
+  "engine": "parakeet",
+  "index": 1,
+  "revision": 1,
+  "final": false,
+  "text": "Hello",
+  "startMs": 0,
+  "endMs": 400
+}
