@@ -1892,7 +1892,7 @@ export const Review = memo(function Review({
               items={speechLines}
               getKey={(line, index) => `${line.t}:${line.speaker}:${index}`}
               estimateSize={(line) => Math.max(28, 18 + Math.ceil(line.text.length / 72) * 18)}
-              className="scroll-thin h-[min(560px,65vh)] overflow-y-auto"
+              className="scroll-thin h-[560px] max-h-[560px] overflow-y-auto"
               contentClassName="pr-1"
               ariaLabel="Full transcript"
               renderItem={({ item, style, measureRef }) => (

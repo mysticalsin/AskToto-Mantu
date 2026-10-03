@@ -23,12 +23,12 @@ try {
   const lines = [
     `# M2-0075 virtual-list measurement: ${report.verdict}`,
     '',
-    `Budget: ${report.budgetMs} ms per measured animation frame.`,
+    `Budget: ${report.budgetMs} ms of measured work per scroll frame, with zero dropped frames allowed.`,
     '',
-    '| Surface | Rows | Rendered rows | Frames | Max frame | Avg frame | Max long task |',
-    '|---|---:|---:|---:|---:|---:|---:|',
+    '| Surface | Rows | Rendered rows | Frames | Idle gap | Max frame gap | Dropped frames | Max work | Avg work | Max long task |',
+    '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|',
     ...report.results.map((r) =>
-      `| ${r.surface} | ${r.rows} | ${r.renderedRows} | ${r.frames} | ${r.maxFrameMs.toFixed(3)} ms | ${r.avgFrameMs.toFixed(3)} ms | ${r.maxLongTaskMs.toFixed(3)} ms |`
+      `| ${r.surface} | ${r.rows} | ${r.renderedRows} | ${r.frames} | ${r.idleFrameGapMs.toFixed(3)} ms | ${r.maxFrameGapMs.toFixed(3)} ms | ${r.droppedFrames} | ${r.maxWorkMs.toFixed(3)} ms | ${r.avgWorkMs.toFixed(3)} ms | ${r.maxLongTaskMs.toFixed(3)} ms |`
     ),
     ''
   ]

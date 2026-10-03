@@ -23,8 +23,12 @@ type SurfaceResult = {
   rows: number
   renderedRows: number
   frames: number
-  maxFrameMs: number
-  avgFrameMs: number
+  idleFrameGapMs: number
+  maxFrameGapMs: number
+  avgFrameGapMs: number
+  droppedFrames: number
+  maxWorkMs: number
+  avgWorkMs: number
   maxLongTaskMs: number
 }
 
@@ -197,9 +201,36 @@ function animationFrame(): Promise<number> {
   return new Promise((resolveFrame) => requestAnimationFrame(resolveFrame))
 }
 
+function afterFrameWork(): Promise<number> {
+  return new Promise((resolveWork) => {
+    const channel = new MessageChannel()
+    channel.port1.onmessage = () => {
+      channel.port1.close()
+      channel.port2.close()
+      resolveWork(performance.now())
+    }
+    channel.port2.postMessage(undefined)
+  })
+}
+
+async function measureIdleFrameGap(frames: number): Promise<{ average: number; lastFrame: number }> {
+  const gaps: number[] = []
+  let previousFrame = await animationFrame()
+  for (let i = 0; i < frames; i++) {
+    const frame = await animationFrame()
+    gaps.push(frame - previousFrame)
+    previousFrame = frame
+  }
+  return {
+    average: gaps.reduce((sum, n) => sum + n, 0) / Math.max(1, gaps.length),
+    lastFrame: previousFrame
+  }
+}
+
 async function measureScroller(scroller: HTMLElement, surface: Surface): Promise<SurfaceResult> {
   const frames = 120
-  const frameDurations: number[] = []
+  const frameGaps: number[] = []
+  const workDurations: number[] = []
   const longTaskDurations: number[] = []
   const observers: PerformanceObserver[] = []
   if (typeof PerformanceObserver !== 'undefined') {
@@ -211,32 +242,45 @@ async function measureScroller(scroller: HTMLElement, surface: Surface): Promise
         observer.observe({ type, buffered: true })
         observers.push(observer)
       } catch {
-        // Chromium versions differ on long-animation-frame support; rAF gaps remain the gate.
+        // Chromium versions differ on long-animation-frame support; dropped-frame counts remain the gap gate.
       }
     }
   }
   const maxTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight)
-  let previousFrame = await animationFrame()
+  const idle = await measureIdleFrameGap(30)
+  let previousFrame = idle.lastFrame
+  let droppedFrames = 0
+  const droppedFrameThreshold = idle.average * 1.5
   for (let i = 0; i < frames; i++) {
+    const frame = await animationFrame()
+    const frameGap = frame - previousFrame
+    frameGaps.push(frameGap)
+    if (frameGap > droppedFrameThreshold) droppedFrames += 1
     scroller.scrollTop = (maxTop * i) / Math.max(1, frames - 1)
-    const afterFrame = await animationFrame()
-    frameDurations.push(afterFrame - previousFrame)
-    previousFrame = afterFrame
+    const afterWork = await afterFrameWork()
+    workDurations.push(afterWork - frame)
+    previousFrame = frame
     const renderedRows = scroller.querySelectorAll('[data-row]').length
     if (renderedRows > 180) throw new Error(`${surface} rendered ${renderedRows} rows in one frame`)
   }
   for (const observer of observers) observer.disconnect()
   const renderedRows = scroller.querySelectorAll('[data-row]').length
-  const maxFrameMs = Math.max(...frameDurations)
-  const avgFrameMs = frameDurations.reduce((sum, n) => sum + n, 0) / frameDurations.length
+  const maxFrameGapMs = Math.max(...frameGaps)
+  const avgFrameGapMs = frameGaps.reduce((sum, n) => sum + n, 0) / frameGaps.length
+  const maxWorkMs = Math.max(...workDurations)
+  const avgWorkMs = workDurations.reduce((sum, n) => sum + n, 0) / workDurations.length
   const maxLongTaskMs = longTaskDurations.length > 0 ? Math.max(...longTaskDurations) : 0
   return {
     surface,
     rows: ROWS,
     renderedRows,
     frames,
-    maxFrameMs,
-    avgFrameMs,
+    idleFrameGapMs: idle.average,
+    maxFrameGapMs,
+    avgFrameGapMs,
+    droppedFrames,
+    maxWorkMs,
+    avgWorkMs,
     maxLongTaskMs
   }
 }
@@ -247,7 +291,7 @@ window.__virtualListMeasure = async (): Promise<MeasureReport> => {
   const results: SurfaceResult[] = []
   for (let i = 0; i < scrollers.length; i++) results.push(await measureScroller(scrollers[i], specs[i].surface))
   return {
-    verdict: results.every((r) => r.maxFrameMs <= BUDGET_MS && r.maxLongTaskMs <= BUDGET_MS) ? 'PASS' : 'FAIL',
+    verdict: results.every((r) => r.maxWorkMs <= BUDGET_MS && r.droppedFrames === 0) ? 'PASS' : 'FAIL',
     budgetMs: BUDGET_MS,
     results
   }

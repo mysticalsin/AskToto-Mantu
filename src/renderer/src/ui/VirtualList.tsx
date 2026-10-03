@@ -38,35 +38,51 @@ export type VirtualWindow = {
   totalSize: number
 }
 
+function upperBound(values: readonly number[], target: number): number {
+  let low = 0
+  let high = values.length
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2)
+    if (values[mid] <= target) low = mid + 1
+    else high = mid
+  }
+  return low
+}
+
+function sizeOffsets(sizes: readonly number[]): number[] {
+  const offsets: number[] = new Array(sizes.length + 1)
+  offsets[0] = 0
+  for (let i = 0; i < sizes.length; i++) offsets[i + 1] = offsets[i] + sizes[i]
+  return offsets
+}
+
+export function virtualWindowFromOffsets(
+  offsets: readonly number[],
+  scrollTop: number,
+  viewportHeight: number,
+  overscan: number
+): VirtualWindow {
+  const itemCount = Math.max(0, offsets.length - 1)
+  const totalSize = offsets[itemCount] ?? 0
+  if (itemCount === 0) return { start: 0, end: 0, offsetTop: 0, totalSize }
+
+  const safeTop = Math.max(0, scrollTop)
+  const safeBottom = safeTop + Math.max(0, viewportHeight)
+  let start = Math.max(0, upperBound(offsets, safeTop) - 1)
+  let end = Math.min(itemCount, upperBound(offsets, safeBottom))
+
+  start = Math.max(0, start - overscan)
+  end = Math.min(itemCount, end + overscan)
+  return { start, end, offsetTop: offsets[start] ?? 0, totalSize }
+}
+
 export function virtualWindow(
   sizes: readonly number[],
   scrollTop: number,
   viewportHeight: number,
   overscan: number
 ): VirtualWindow {
-  const totalSize = sizes.reduce((sum, n) => sum + n, 0)
-  if (sizes.length === 0) return { start: 0, end: 0, offsetTop: 0, totalSize }
-
-  const safeTop = Math.max(0, scrollTop)
-  const safeBottom = safeTop + Math.max(0, viewportHeight)
-  let start = 0
-  let offsetTop = 0
-  while (start < sizes.length && offsetTop + sizes[start] <= safeTop) {
-    offsetTop += sizes[start]
-    start += 1
-  }
-
-  let end = start
-  let offset = offsetTop
-  while (end < sizes.length && offset <= safeBottom) {
-    offset += sizes[end]
-    end += 1
-  }
-
-  start = Math.max(0, start - overscan)
-  end = Math.min(sizes.length, end + overscan)
-  offsetTop = sizes.slice(0, start).reduce((sum, n) => sum + n, 0)
-  return { start, end, offsetTop, totalSize }
+  return virtualWindowFromOffsets(sizeOffsets(sizes), scrollTop, viewportHeight, overscan)
 }
 
 function VirtualRow<T>({
@@ -137,14 +153,11 @@ function VirtualListInner<T>({
     [estimateSize, getKey, items, measuredSizes]
   )
   const offsets = useMemo(() => {
-    const next: number[] = new Array(sizes.length + 1)
-    next[0] = 0
-    for (let i = 0; i < sizes.length; i++) next[i + 1] = next[i] + sizes[i]
-    return next
+    return sizeOffsets(sizes)
   }, [sizes])
   const windowed = useMemo(
-    () => virtualWindow(sizes, scrollTop, viewportHeight, overscan),
-    [overscan, scrollTop, sizes, viewportHeight]
+    () => virtualWindowFromOffsets(offsets, scrollTop, viewportHeight, overscan),
+    [offsets, overscan, scrollTop, viewportHeight]
   )
   const visible = items.slice(windowed.start, windowed.end)
 
