@@ -623,7 +623,10 @@ function ledgerAtCommit(ledgerPath, commit) {
   const repoRoot = execFileSync('git', ['-C', ledgerDir, 'rev-parse', '--show-toplevel'], {
     encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']
   }).trim()
-  const ledgerTreePath = relative(repoRoot, ledgerPath).split(sep).join('/')
+  const ledgerTreePath = execFileSync('git', ['-C', repoRoot, 'ls-files', '--full-name', '--', ledgerPath], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']
+  }).trim().split(/\r?\n/)[0]
+  if (!ledgerTreePath) throw new Error(`ledger ${ledgerPath} is not tracked by git`)
   return JSON.parse(execFileSync('git', ['-C', repoRoot, 'show', `${commit}:${ledgerTreePath}`], {
     encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024
   }))
