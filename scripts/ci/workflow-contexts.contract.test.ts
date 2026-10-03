@@ -80,10 +80,18 @@ function referencedContexts(value: string | undefined, options: { implicitExpres
   if (!value) return []
   const contexts = new Set<string>()
   for (const expression of value.matchAll(CONTEXT_PATTERN)) {
-    for (const context of expression[1].matchAll(CONTEXT_ROOT_PATTERN)) contexts.add(context[1])
+    for (const context of expression[1].matchAll(CONTEXT_ROOT_PATTERN)) {
+      const previous = context.index && context.index > 0 ? expression[1][context.index - 1] : ''
+      if (previous === '.' || /[A-Za-z0-9_-]/.test(previous)) continue
+      contexts.add(context[1])
+    }
   }
   if (options.implicitExpression) {
-    for (const context of value.matchAll(CONTEXT_ROOT_PATTERN)) contexts.add(context[1])
+    for (const context of value.matchAll(CONTEXT_ROOT_PATTERN)) {
+      const previous = context.index && context.index > 0 ? value[context.index - 1] : ''
+      if (previous === '.' || /[A-Za-z0-9_-]/.test(previous)) continue
+      contexts.add(context[1])
+    }
   }
   return [...contexts].sort()
 }
