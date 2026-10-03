@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { IPC } from '../../src/shared/contracts/channels'
 
 /**
  * Wave 0–6 / QA approval — source contracts that the rebuild's critical seams stay wired.
@@ -18,7 +19,7 @@ describe('QA rebuild contracts — Wave 2 routing + failover notice', () => {
     const ipc = read('src/shared/ipc.ts')
     expect(ipc).toMatch(/routingMode: z\.enum\(\['local', 'api', 'auto'\]\)/)
     expect(ipc).toMatch(/lastFailover:/)
-    expect(ipc).toMatch(/dismissFailoverNotice:/)
+    expect(IPC.dismissFailoverNotice).toBe('settings:dismissFailoverNotice')
   })
 
   it('failover() records lastFailoverNotice and auditLog provider.failover', () => {

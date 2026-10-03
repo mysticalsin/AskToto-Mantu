@@ -604,7 +604,7 @@ export function useSettings(): {
       unsubscribe()
     }
   }, [refresh])
-  const patch = useCallback(async (p: Partial<PublicSettings>) => {
+  const patch = useCallback(async (p: SettingsPatch) => {
     const next = await window.toto.setSettings(p)
     setSettings(next)
     return next

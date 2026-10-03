@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { IPC } from '../shared/contracts/channels'
 
 // Mutable so the parakeet suite below can flip to the packaged layout (resourcesPath) without a second
 // mock registration — vi.mock is hoisted per file, one electron stub has to serve both suites.
@@ -398,8 +399,7 @@ describe('speaker:embed — the Whisper-engine speaker-embedding tap (contract)'
   const preloadSrc = readFileSync(join(__dirname, '..', 'preload', 'index.ts'), 'utf8')
 
   it('the IPC channel name exists and follows the parakeetFeed/appleSpeechFeed naming convention', () => {
-    const ipcSrc = readFileSync(join(__dirname, '..', 'shared', 'ipc.ts'), 'utf8')
-    expect(ipcSrc).toMatch(/speakerEmbed: 'speaker:embed'/)
+    expect(IPC.speakerEmbed).toBe('speaker:embed')
   })
 
   it('the handler returns a best-effort { name?, echo? } shape, gated on Float32Array + size, and flags echo', () => {

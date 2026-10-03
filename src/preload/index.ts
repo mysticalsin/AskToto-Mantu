@@ -1,9 +1,8 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import { IPC } from '@shared/contracts/channels'
 import {
-  IPC,
   type AskStart,
   type PublicSettings,
-  type Settings,
   type HotkeyAction,
   type CaptureResult,
   type ScreenContextResult,
@@ -74,7 +73,10 @@ import {
   type ScreenCaptureCheckResult,
   type MetisCommandState,
   type MetisCommandConfirmation,
-  type PreservedBrainIndexListResult
+  type PreservedBrainIndexListResult,
+  type SettingsPatch,
+  type BrainEntityNamesResult,
+  type BrainAttentionResult
 } from '@shared/ipc'
 import type { ScreenRepairResult } from '@shared/screen-permission'
 import type { ProviderId } from '@shared/providers'
@@ -107,7 +109,7 @@ const api = {
   revealAppCopy: (path: string): Promise<void> => ipcRenderer.invoke(IPC.permissionsRevealCopy, path),
   screenCaptureCheck: (pass: 'probe' | 'vision'): Promise<ScreenCaptureCheckResult> =>
     ipcRenderer.invoke(IPC.screenCaptureCheck, { pass }),
-  setSettings: (patch: Partial<Settings> | import('@shared/ipc').SettingsPatch): Promise<PublicSettings> =>
+  setSettings: (patch: SettingsPatch): Promise<PublicSettings> =>
     ipcRenderer.invoke(IPC.settingsSet, patch),
   /** Sent only after `setSettings({ onboardingDone: true })` resolves. Never use this as a settings write. */
   onboardingEnter: (): void => ipcRenderer.send(IPC.onboardingEnter),
@@ -196,7 +198,7 @@ const api = {
     ipcRenderer.invoke(IPC.brainClearJournalCorruption),
   brainRead: (): Promise<import('@shared/brain').BrainRead> => ipcRenderer.invoke(IPC.brainRead),
   // Canonical people/account names only — feeds the ASR entity-casing bias (lib/entity-casing.ts).
-  brainEntityNames: (): Promise<import('@shared/ipc').BrainEntityNamesResult> =>
+  brainEntityNames: (): Promise<BrainEntityNamesResult> =>
     ipcRenderer.invoke(IPC.brainEntityNames),
   authStatus: (): Promise<AuthStatus> => ipcRenderer.invoke(IPC.authStatus),
   signIn: (): Promise<SignInResult> => ipcRenderer.invoke(IPC.authSignIn),
@@ -425,7 +427,7 @@ const api = {
   brainMeetingExtraction: (file: string): Promise<import('@shared/brain').MeetingExtraction | null> =>
     ipcRenderer.invoke(IPC.brainMeetingExtraction, { file }),
   // Task MI-3: aggregated needs-attention queue (lint contradictions, AMBIGUOUS fields, contradicted pins).
-  brainAttention: (): Promise<import('@shared/ipc').BrainAttentionResult> =>
+  brainAttention: (): Promise<BrainAttentionResult> =>
     ipcRenderer.invoke(IPC.brainAttention),
   setListeningState: (on: boolean, startedAt?: number): Promise<void> =>
     ipcRenderer.invoke(IPC.listeningState, { on, startedAt }),
