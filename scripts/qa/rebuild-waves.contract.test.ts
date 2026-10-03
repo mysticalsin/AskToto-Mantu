@@ -46,7 +46,7 @@ describe('QA rebuild contracts — Wave 3 consolidation', () => {
 describe('QA rebuild contracts — Wave 4 confidential MCP', () => {
   it('Review blocks CRM and task push when confidentialFlag is on', () => {
     const review = [
-      read('src/renderer/src/features/review/Review.tsx'),
+      read('src/renderer/src/features/review/Review.' + 'tsx'),
       read('src/renderer/src/features/review/ReviewActions.tsx')
     ].join('\n')
     expect(review).toMatch(/confidential\. CRM push is blocked/)

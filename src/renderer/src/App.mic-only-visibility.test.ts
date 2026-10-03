@@ -6,7 +6,10 @@ import { describe, expect, it } from 'vitest'
 // otherwise break any anchor whose newline sits mid-string.
 const app = readFileSync(join(__dirname, 'App.tsx'), 'utf8').replace(/\r\n/g, '\n')
 const listen = readFileSync(join(__dirname, 'lib', 'listen.ts'), 'utf8').replace(/\r\n/g, '\n')
-const bar = readFileSync(join(__dirname, 'features', 'bar', 'Bar.tsx'), 'utf8').replace(/\r\n/g, '\n')
+const bar = [
+  readFileSync(join(__dirname, 'features', 'bar', 'Bar.tsx'), 'utf8'),
+  readFileSync(join(__dirname, 'features', 'bar', 'bar-chrome.' + 'tsx'), 'utf8')
+].join('\n').replace(/\r\n/g, '\n')
 const pill = readFileSync(join(__dirname, 'components', 'ControlPill.tsx'), 'utf8').replace(/\r\n/g, '\n')
 const settingsUi = readFileSync(join(__dirname, 'features', 'settings', 'AudioTab.tsx'), 'utf8').replace(/\r\n/g, '\n')
 

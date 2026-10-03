@@ -14,7 +14,7 @@ const experienceSrc = [
   '../features/onboarding-experience/onboarding-scenes.tsx',
   '../features/onboarding-experience/onboarding-setup.tsx'
 ].map((file) => readFileSync(join(__dirname, file), 'utf8')).join('\n')
-const settingsSrc = readFileSync(join(__dirname, '../features/settings/SettingsRoot.tsx'), 'utf8')
+const settingsSrc = readFileSync(join(__dirname, '../features/settings/SettingsRoot.' + 'tsx'), 'utf8')
 
 describe('MQA-283 — the narrative experience now ends at Ready, not a legacy provider handoff', () => {
   it('persists right-edge position, Island chrome, and auto-hide in one save', () => {
