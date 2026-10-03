@@ -4,7 +4,7 @@ import { Bar } from './components/Bar'
 import { OnboardingV2 } from './components/OnboardingExperience'
 import { ControlPill } from './components/ControlPill'
 import { OverlayPeek } from './components/OverlayPeek'
-import { RightEdgeSidecar, type SidecarReaderTarget } from './components/RightEdgeSidecar'
+import { RightEdgeAnswerSummary, RightEdgeSidecar, type SidecarReaderTarget } from './components/RightEdgeSidecar'
 import {
   RightEdgeReader,
   RightEdgeReaderDetails,
@@ -4017,8 +4017,20 @@ export function App(): JSX.Element {
   const answerView = view === 'answer' || view === 'copilot' || DEMO === 'answer' || DEMO === 'copilot'
   // Answer / live-copilot render INSIDE the expanded bar (one surface: big input → body → toolbar at the
   // bottom). Only the full views (settings / history / review / agenda) render as a panel below the bar.
-  // While the Reader shows the full answer, the hidden dock holds no second copy of it.
-  const barBody = answerView && !collapsed && !(rightEdgeReaderShown && rightEdgeReaderKind === 'answer') ? body : undefined
+  // On the right edge the dock holds a one-line summary of the answer or suggestion, never the full body: that
+  // mounts only in the Reader (RE-L05), which the dock's Open ↗ opens.
+  const islandAnswer =
+    DEMO === 'answer' ? { text: DEMO_ANSWER, streaming: false, error: null }
+    : DEMO === 'copilot' ? { text: DEMO_SUG, streaming: false, error: null }
+    : view === 'copilot' ? suggest.answer
+    : capturing ? { text: '', streaming: true, error: null }
+    : ask.answer ? { text: ask.answer.text, streaming: ask.answer.streaming, error: ask.answer.error ?? captureError }
+    : captureError ? { text: '', streaming: false, error: captureError }
+    : null
+  const barBody = !answerView || collapsed ? undefined
+    : !rightEdgePresentation ? body
+    : islandAnswer ? <RightEdgeAnswerSummary text={islandAnswer.text} streaming={islandAnswer.streaming} error={islandAnswer.error} strings={rightEdgeCopy} />
+    : undefined
   // On the right edge the full views are Readers (RightEdgeReader), never a panel under the dock.
   const isPanelBody = body != null && !answerView && !(rightEdgePresentation && readerKindForView(view) !== null)
   // Edge chrome is for the compact Ask/Copilot surface only. Full product views (Settings, History,

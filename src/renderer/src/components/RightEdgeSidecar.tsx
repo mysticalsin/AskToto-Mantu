@@ -163,6 +163,47 @@ export function usePendingCommandCancel(commandState: MetisCommandState): { stat
 /** What the dock's ↗ controls open in the Reader. */
 export type SidecarReaderTarget = 'answer' | 'transcript' | 'details'
 
+const ANSWER_PREVIEW_MAX = 140
+
+/** The first readable line of a markdown answer as plain text, at most ANSWER_PREVIEW_MAX characters. Code
+ *  blocks and table rows are never a preview line. */
+export function rightEdgeAnswerPreview(markdown: string): string {
+  let inFence = false
+  for (const raw of markdown.split('\n')) {
+    const trimmed = raw.trim()
+    if (trimmed.startsWith('```')) inFence = !inFence
+    if (inFence || !trimmed || trimmed.startsWith('```') || trimmed.startsWith('|')) continue
+    const line = trimmed
+      .replace(/^(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)/, '')
+      .replace(/\[([^\]]*)\]\([^)]*\)|[*`~]|(?<!\w)_+|_+(?!\w)/g, (_match, label: string | undefined) => label ?? '')
+      .trim()
+    if (!line) continue
+    return line.length > ANSWER_PREVIEW_MAX ? `${line.slice(0, ANSWER_PREVIEW_MAX - 1).trimEnd()}…` : line
+  }
+  return ''
+}
+
+/** The dock's body for an answer on the right edge: a one-line summary. The full answer mounts only in the
+ *  Reader (spec v3 §6, RE-L05); the header's Open ↗ opens it there. */
+export function RightEdgeAnswerSummary({
+  text,
+  streaming,
+  error,
+  strings
+}: {
+  text: string
+  streaming: boolean
+  error?: string | null
+  strings: RightEdgeStrings
+}): JSX.Element {
+  const preview = rightEdgeAnswerPreview(error || text)
+  return (
+    <p className="right-edge-sidecar__summary" data-re-answer-summary>
+      {preview || (streaming ? strings.answerPending : strings.answerReady)}
+    </p>
+  )
+}
+
 /** Escape hides the dock whenever it can park, except while an IME composition owns the key (Escape
  *  cancels the composition there and must never hide the dock). */
 export function dockEscapeHides(event: { key: string; isComposing: boolean }, canClose: boolean): boolean {

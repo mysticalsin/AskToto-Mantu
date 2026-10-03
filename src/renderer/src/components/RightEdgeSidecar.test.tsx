@@ -8,7 +8,8 @@ import type { Browser, Page } from 'playwright'
 import { build, type Rollup } from 'vite'
 import react from '@vitejs/plugin-react'
 import { RIGHT_EDGE_DRAWER_WIDTH, RIGHT_EDGE_TAB_WIDTH } from '@shared/right-edge-geometry'
-import { RightEdgeSidecar, SidecarChat, dockEscapeHides } from './RightEdgeSidecar'
+import { RIGHT_EDGE_STRINGS } from '../lib/right-edge/strings'
+import { RightEdgeAnswerSummary, RightEdgeSidecar, SidecarChat, dockEscapeHides, rightEdgeAnswerPreview } from './RightEdgeSidecar'
 
 const sidecar = readFileSync(join(__dirname, './RightEdgeSidecar.tsx'), 'utf8')
 const answer = readFileSync(join(__dirname, './Answer.tsx'), 'utf8')
@@ -135,6 +136,55 @@ describe('right-edge dock', () => {
     expect(markup).toContain('aria-label="Open settings"')
     expect(markup).toContain('aria-label="Open History"')
     expect(markup).toContain('History')
+  })
+
+  it('RE-L05: a right-edge answer is summarised in the dock and mounts in full only in the Reader', () => {
+    const token = 'metisrightedge'.repeat(12)
+    const longAnswer = [
+      '## Sidecar layout check',
+      `The dock must never hold this paragraph: ${token}`,
+      '```ts\nconst wide = 1\n```',
+      '| Surface | Behavior |',
+      '| --- | --- |',
+      '| Dock | Summary only |'
+    ].join('\n\n')
+    const markup = renderToStaticMarkup(
+      <RightEdgeSidecar
+        open
+        onOpen={() => undefined}
+        onClose={() => undefined}
+        body={<RightEdgeAnswerSummary text={longAnswer} streaming={false} strings={RIGHT_EDGE_STRINGS.en} />}
+        onOpenReader={() => undefined}
+      />
+    )
+    expect(markup).toContain('aria-label="Métis response"')
+    expect(markup).toContain('data-re-answer-summary')
+    expect(markup).toContain('Sidecar layout check')
+    expect(markup).toContain('data-re-open-reader="answer"')
+    expect(markup).not.toContain(token)
+    expect(markup).not.toContain('<pre')
+    expect(markup).not.toContain('<table')
+    expect(markup).not.toContain('<h2')
+
+    // App hands the dock the summary on the right edge, the Bar the full body elsewhere, and the Reader the full
+    // answer body.
+    expect(app).toMatch(/const barBody = !answerView \|\| collapsed \? undefined\s+: !rightEdgePresentation \? body\s+: islandAnswer \? <RightEdgeAnswerSummary /)
+    expect(app).toContain("rightEdgeReaderKind === 'answer' ? (answerView ? body : answerBody)")
+  })
+
+  it('previews the first readable answer line as plain text, never a code fence or a table row', () => {
+    expect(rightEdgeAnswerPreview('## **Quicksort** in `TypeScript`\n\nBody')).toBe('Quicksort in TypeScript')
+    expect(rightEdgeAnswerPreview('```ts\nconst x = 1\n```\n\n- See [the docs](https://example.com) now')).toBe('See the docs now')
+    expect(rightEdgeAnswerPreview('| a | b |\n| --- | --- |\n\n> Quoted _note_')).toBe('Quoted note')
+    expect(rightEdgeAnswerPreview('1. Rename snake_case_name')).toBe('Rename snake_case_name')
+    expect(rightEdgeAnswerPreview('')).toBe('')
+    const long = rightEdgeAnswerPreview('word '.repeat(60))
+    expect(long.length).toBeLessThanOrEqual(140)
+    expect(long.endsWith('…')).toBe(true)
+    const streaming = renderToStaticMarkup(<RightEdgeAnswerSummary text="" streaming strings={RIGHT_EDGE_STRINGS.fr} />)
+    expect(streaming).toContain(RIGHT_EDGE_STRINGS.fr.answerPending)
+    const failed = renderToStaticMarkup(<RightEdgeAnswerSummary text="" streaming={false} error="Provider unavailable." strings={RIGHT_EDGE_STRINGS.en} />)
+    expect(failed).toContain('Provider unavailable.')
   })
 
   it('keeps live meeting pause and transcript controls reachable without widening the action rail', () => {
