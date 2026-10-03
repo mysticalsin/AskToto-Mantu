@@ -1,0 +1,195 @@
+name: Operator staging
+
+# The one lane that deploys the Operator Worker to staging and checks it (M2-0566). With deploy=true it
+# deploys main's commit to metis-operator-staging through operator/scripts/deploy.mjs (migrate, deploy,
+# post-deploy smoke with the deployed version) and records the sha256 of the bundle wrangler uploaded. It
+# then runs one check from the registry in scripts/qa/staging-checks/index.mjs against the staging URL and
+# uploads a content-free report plus lane.json, whose fields the lead copies into an evidence record. A new
+# check is a registry entry, not a new job. Runs only from main; it never touches production.
+#   gh workflow run operator-staging.yml --ref main -f deploy=true -f check=health
+#   gh workflow run operator-staging.yml --ref main -f deploy=false -f check=gateway-privacy
+# Both jobs that run use the protected 'staging' environment, which holds the staging secrets (OD-61).
+# The pull_request trigger on this file's own path only registers the workflow with GitHub (M2-0501): the
+# run it creates skips every job, uses no runner minutes and reaches no secret.
+run-name: ${{ github.event_name == 'pull_request' && 'Operator staging (registration)' || format('Operator staging {0} (deploy {1})', inputs.check, inputs.deploy) }}
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/operator-staging.yml
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Deploy main's commit to staging before the check
+        required: true
+        default: false
+        type: boolean
+      check:
+        description: Check to run (scripts/qa/staging-checks/index.mjs CHECKS)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: operator-staging
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  guard:
+    name: Check the requested staging check
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Refuse a check that is not in the registry
+        env:
+          CHECK: ${{ inputs.check }}
+        run: node scripts/qa/staging-checks/index.mjs guard --check "$CHECK"
+
+  deploy:
+    name: Deploy main to staging
+    needs: guard
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: staging
+    outputs:
+      version: ${{ steps.receipt.outputs.version }}
+      bundle_sha256: ${{ steps.receipt.outputs.bundle_sha256 }}
+    env:
+      OUT: operator-staging-deploy
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      # deploy.mjs runs the operator test suite before it deploys; its layout tests need Chromium.
+      - name: Install Playwright Chromium for the Operator layout tests
+        run: npx playwright install --with-deps chromium
+      # The same assertions as build.yml's staging plan step. The plan goes to RUNNER_TEMP so the tree stays
+      # clean for the real deploy's dirty-tree gate.
+      - name: The staging plan names only the staging Worker and D1
+        run: |
+          plan="$RUNNER_TEMP/staging-plan.txt"
+          node operator/scripts/deploy.mjs --dry-run --env staging | tee "$plan"
+          grep -q 'worker:        metis-operator-staging' "$plan"
+          grep -q 'd1 database:   metis-operator-staging' "$plan"
+          grep -q 'migrate.mjs --remote --env staging' "$plan"
+          grep -Eq 'wrangler.js deploy .*--env staging' "$plan"
+          if grep -q 'metis-operator$' "$plan"; then echo "::error::The plan names the production Worker or D1."; exit 1; fi
+      # The only step that sees the staging Cloudflare token. Without it, migrate.mjs and wrangler fail with
+      # the CLI's own authentication error; the step is never skipped.
+      - name: Deploy to staging (migrate, deploy, smoke with the deployed version)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.OPERATOR_STAGING_CLOUDFLARE_TOKEN }}
+        run: node operator/scripts/deploy.mjs --env staging --outdir "$RUNNER_TEMP/worker-bundle"
+      - name: Record the uploaded bundle's sha256
+        id: receipt
+        run: node scripts/qa/staging-checks/index.mjs receipt --bundle-dir "$RUNNER_TEMP/worker-bundle" --version "$(git rev-parse --short HEAD)" --out "$OUT"
+      - name: Content-free gate
+        run: node scripts/qa/staging-checks/index.mjs scan "$OUT" --account "$(id -un)"
+      # Uploaded only after a successful deploy: a later run with deploy=false finds the latest successful
+      # deploy of a version by this artifact.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: operator-staging-deploy
+          path: operator-staging-deploy/
+          if-no-files-found: error
+          retention-days: 90
+
+  check:
+    name: ${{ inputs.check }} against staging
+    needs: [guard, deploy]
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      && !cancelled()
+      && needs.guard.result == 'success'
+      && (needs.deploy.result == 'success' || needs.deploy.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: staging
+    env:
+      CHECK: ${{ inputs.check }}
+      DEPLOY: ${{ inputs.deploy }}
+      STAGING_URL: ${{ vars.OPERATOR_STAGING_URL }}
+      OUT: operator-staging-check
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      # Only so the checks' imports (esbuild for operator/src/ai-gateway.ts) resolve.
+      - run: npm ci
+      - name: Read the version staging serves
+        id: deployed
+        run: node scripts/qa/staging-checks/index.mjs version >> "$GITHUB_OUTPUT"
+      # This run's deploy when deploy=true; otherwise the latest run whose deploy produced that version.
+      - name: Find the deploy run that produced that version
+        id: deploy-run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOYED_VERSION: ${{ steps.deployed.outputs.version }}
+        run: |
+          if [ "$DEPLOY" = "true" ]; then
+            candidates="$GITHUB_RUN_ID"
+          else
+            gh api "repos/$GITHUB_REPOSITORY/actions/workflows/operator-staging.yml/runs?branch=main&event=workflow_dispatch&status=completed&per_page=100" > "$RUNNER_TEMP/runs.json"
+            candidates=$(node scripts/qa/staging-checks/index.mjs deploy-runs "$RUNNER_TEMP/runs.json" --version "$DEPLOYED_VERSION")
+          fi
+          for id in $candidates; do
+            if gh run download "$id" --repo "$GITHUB_REPOSITORY" --name operator-staging-deploy --dir "$RUNNER_TEMP/deploy-$id"; then
+              echo "run_id=$id" >> "$GITHUB_OUTPUT"
+              echo "receipt=$RUNNER_TEMP/deploy-$id/receipt.json" >> "$GITHUB_OUTPUT"
+              break
+            fi
+          done
+      - name: Run the check
+        id: check
+        continue-on-error: true
+        env:
+          DEPLOYED_VERSION: ${{ steps.deployed.outputs.version }}
+          DEPLOY_RUN: ${{ steps.deploy-run.outputs.run_id }}
+          DEPLOY_RECEIPT: ${{ steps.deploy-run.outputs.receipt }}
+          OPERATOR_STAGING_GATEWAY_READ_TOKEN: ${{ secrets.OPERATOR_STAGING_GATEWAY_READ_TOKEN }}
+          OPERATOR_STAGING_TEST_DEVICE_CREDENTIAL: ${{ secrets.OPERATOR_STAGING_TEST_DEVICE_CREDENTIAL }}
+        run: >
+          node scripts/qa/staging-checks/index.mjs run
+          --check "$CHECK" --expected-version "$(git rev-parse --short HEAD)" --out "$OUT"
+          --deployed-version "$DEPLOYED_VERSION" --deploy-run "$DEPLOY_RUN" --deploy-receipt "$DEPLOY_RECEIPT"
+      - name: Content-free gate
+        id: scan
+        if: always()
+        continue-on-error: true
+        run: node scripts/qa/staging-checks/index.mjs scan "$OUT" --account "$(id -un)"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: operator-staging-check-${{ inputs.check }}
+          path: operator-staging-check/
+          if-no-files-found: warn
+          retention-days: 90
+      - name: Fail unless the check passed and every file was content-free
+        if: always() && (steps.check.outcome != 'success' || steps.scan.outcome != 'success')
+        run: |
+          echo "::error::$CHECK did not PASS against staging, or a file failed the content-free gate (see lane.json and the summary)."
+          exit 1
