@@ -1,0 +1,81 @@
+name: Kit checks
+run-name: ${{ github.event_name == 'pull_request' && 'Kit checks (registration)' || 'Kit checks' }}
+
+# Runs the skill-registry check and the Hindsight package validator against a kit copy. The kit itself
+# lives outside this repository. The program repository copies this workflow and must add a `push` and
+# `pull_request` trigger with a `paths:` filter on its kit v5 folder (defaulting both inputs to the kit
+# registry file and the kit skill folder), then confirm both steps pass.
+on:
+  workflow_dispatch:
+    inputs:
+      registry:
+        description: Path to the kit skill registry JSON, relative to the repository root
+        required: true
+        type: string
+      kit_dir:
+        description: Path to the Hindsight kit package directory, relative to the repository root; it must contain check_hindsight_package.py
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - .github/workflows/kit-checks.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kit-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kit-checks:
+    if: github.event_name == 'workflow_dispatch'
+    name: Kit checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Inputs point at existing files
+        env:
+          REGISTRY: ${{ inputs.registry }}
+          KIT_DIR: ${{ inputs.kit_dir }}
+        run: |
+          test -f "$REGISTRY" || { echo "::error::registry input '$REGISTRY' is not a file in this checkout"; exit 1; }
+          test -f "$KIT_DIR/check_hindsight_package.py" || { echo "::error::kit_dir input '$KIT_DIR' has no check_hindsight_package.py"; exit 1; }
+      - name: One entry, auto_install and auto_capture false
+        env:
+          REGISTRY: ${{ inputs.registry }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs'
+
+          const registryPath = process.env.REGISTRY
+          const registry = JSON.parse(readFileSync(registryPath, 'utf8'))
+          const entries = Array.isArray(registry) ? registry : Array.isArray(registry.skills) ? registry.skills : null
+          const problems = []
+          if (!entries) problems.push('registry has no skills array')
+          else {
+            if (entries.length !== 1) problems.push(`expected exactly one skill entry, found ${entries.length}`)
+            entries.forEach((entry, index) => {
+              const label = entry?.name ?? entry?.id ?? `#${index}`
+              for (const flag of ['auto_install', 'auto_capture']) {
+                if (entry?.[flag] !== false) problems.push(`skill ${label}: ${flag} must be false`)
+              }
+            })
+          }
+          for (const problem of problems) console.error(`FAIL ${problem}`)
+          if (problems.length) process.exit(1)
+          console.log('skill registry ok: one entry, auto_install and auto_capture false')
+          NODE
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Hindsight package validator
+        env:
+          KIT_DIR: ${{ inputs.kit_dir }}
+        run: python3 "$KIT_DIR/check_hindsight_package.py"
