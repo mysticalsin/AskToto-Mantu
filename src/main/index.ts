@@ -663,6 +663,13 @@ import { createHistoryTracer } from './infra/observability/history-trace'
 import { copyDiagnosticsSummary } from './infra/observability/diagnostics-summary'
 import { createReloadBudget } from './lifecycle/reload-budget'
 import { formatRenderLoopDiagnostics, showRenderLoopHaltedDialog } from './lifecycle/render-loop-halted-dialog'
+import {
+  createProcessFatalLifecycle,
+  installQuitFlowLifecycle,
+  installReadyBootstrapLifecycle,
+  installRendererHealthLifecycle,
+  installSecondInstanceLifecycle
+} from './lifecycle/main-lifecycle'
 import { installProxyAwareFetch } from './net/install-proxy'
 import {
   authStatus,
@@ -2815,127 +2822,57 @@ function createWindow(targetDisplay?: Electron.Display): void {
       if (level >= 2) mainLog.info(`[renderer] ${message}  (${sourceId}:${line})`)
     })
   }
-  // A renderer that is wedged (event loop stuck) never fires render-process-gone below, so the island can
-  // sit blank with no trace in any log. Record it, and record the recovery. No automatic reload: Chromium
-  // recovers most stalls on its own, and a forced reload mid-meeting would drop the live transcript.
-  // M2-0006: when the overlay recovers on its own, pair it with how long it was wedged — 'app.unresponsive'
-  // alone cannot tell a stall Chromium recovered from a wedge that never did.
-  const responsiveness = createResponsivenessTracker()
-  win.on('unresponsive', () => {
-    if (win !== self) return
-    responsiveness.markUnresponsive()
-    mainLog.warn('[renderer-unresponsive] overlay renderer stopped responding')
-    auditLog('app.unresponsive', { kind: 'overlay' })
-  })
-  win.on('responsive', () => {
-    if (win !== self) return
-    mainLog.info('[renderer-responsive] overlay renderer recovered')
-    const stallMs = responsiveness.markResponsive()
-    if (stallMs !== null) auditLog('app.responsive', { kind: 'overlay', stallMs })
-  })
-  // M2-0037 (B3-RC2): bounds the render-process-gone reload below to 3 reloads/60s instead of reloading
-  // forever. did-finish-load is the "this reload actually worked" signal the budget resets on once the
-  // content stays up for its own alive window — see lifecycle/reload-budget.ts.
-  const reloadBudget = createReloadBudget()
-  self.webContents.on('did-finish-load', () => {
-    if (win !== self) return
-    reloadBudget.onDidFinishLoad()
-  })
-  // The BrowserWindow survives a renderer crash (GPU/compositor crash, OOM in the in-renderer ASR
-  // worker) — only its content dies, so `win` stays non-null while hotkeys/tray silently no-op into the
-  // dead renderer and the overlay sits permanently blank. Previously this was only logged via
-  // console.log gated behind ASKTOTO_DEBUG_RENDERER (never in a packaged build, never persisted).
-  // Persist it like onFatal does for a main-process crash, then reload the same content so the overlay
-  // recovers instead of hanging forever.
-  win.webContents.on('render-process-gone', (_e, details) => {
-    if (win !== self) return
-    commandControl.revokeForLifecycleEvent('renderer_replaced')
-    mainLog.error(`[renderer-gone] reason=${details.reason} exitCode=${details.exitCode}`)
-    auditLog('app.crash', crashDetail('render-process-gone', { reason: details.reason, exitCode: details.exitCode }))
-    // The content died instead of recovering on its own — any pending unresponsiveSince belongs to a wedge
-    // that will never get its matching 'responsive'. Without this, a later 'unresponsive' in the reloaded
-    // renderer would be paired with the stale one and report a stallMs of however long it's been since.
-    responsiveness.markGone()
-    // A dead/reloading renderer cannot receive final STT messages or issue Stop. Force-close the live
-    // socket before reload so provider callbacks cannot bleed into the new renderer session.
-    invalidateCloudSttOwner(selfWebContentsId)
-    // MQA-038: recovery reloads the SAME window, so createWindow()'s crash/recovery guard above never
-    // runs and the renderer-OWNED module state survives the renderer that set it. The remounted renderer
-    // starts idle and never sends the listeningState(false) it owed us, so `listeningActive` would stay
-    // true for the rest of the session — permanently suspending the fresh-question boundary, so every
-    // later plain ask keeps the dead meeting's Dust conversation and its replayed history. The tray dot
-    // and the power-save block would likewise stay stuck on "meeting in progress" (before-quit reads
-    // them as exactly that). Reset the whole set here, mirroring the meeting-start boundary.
-    resetDustConversation()
-    discardActiveLiveSpeakerSession()
-    setListeningActive(false)
-    lastPlainAskAt = 0
-    setAudioArmed(false)
-    setTrayRecording(false)
-    setRecordingPowerSaveBlock(false)
-    // MQA-196: the geometry half of the same root cause. If the overlay was collapsed to the mini-pill
-    // when the renderer died, the remounted App boots `minimized` false and renders the full Bar, but its
-    // mount-effect windowMode('bar') would setBounds({ width: currentWidth }) with the surviving pill
-    // width — squeezing the recovered bar into a ~130px sliver that resizable:false makes unfixable. Same
-    // two lines createWindow's crash guard uses, for the reload path that never reaches it.
-    isMinimized = false
-    currentWidth = BAR_WIDTH
-    if (onboardingExclusiveLive() && !self.isDestroyed()) {
-      const retainedOwnership = applyExclusiveOnboardingStage(self)
-      // A transparent renderer can crash after Settings durably re-arms onboarding but before its
-      // replay IPC runs. The exclusive helper then creates the opaque successor itself; this retiring
-      // crash callback must not show, resize, or reload that successor.
-      if (!retainedOwnership && win !== self) return
-      if (retainedOwnership) {
-        try {
-          showForExclusiveOnboarding(self)
-        } catch {
-          /* headless */
-        }
-      }
-    } else {
+  installRendererHealthLifecycle(appContext, self, {
+    ipcMain,
+    rendererCrashChannel: IPC.rendererCrash,
+    assertMainWindow,
+    commandControl,
+    log: mainLog,
+    auditLog,
+    crashDetail,
+    createResponsivenessTracker,
+    createReloadBudget,
+    invalidateCloudSttOwner,
+    resetDustConversation,
+    discardActiveLiveSpeakerSession,
+    setListeningActive,
+    resetLastPlainAskAt: () => { lastPlainAskAt = 0 },
+    setAudioArmed,
+    setTrayRecording,
+    setRecordingPowerSaveBlock,
+    resetRecoveredOverlayGeometry: () => {
+      isMinimized = false
       currentWidth = BAR_WIDTH
-    }
-    if (win !== self || self.isDestroyed()) return
-    // M2-0037 (B3-RC2): consumed only once we know this crash will actually be handled — computing it
-    // any earlier would count a reload against the budget for an event one of the guards above discards.
-    const reloadDecision = reloadBudget.onRenderProcessGone(details.reason)
-    // 'ignore' (clean-exit): the content exited on purpose, not a crash — never reload for it.
-    if (reloadDecision === 'ignore') return
-    if (reloadDecision === 'halt') {
-      auditLog('app.render_loop_halted', { reason: details.reason, exitCode: details.exitCode })
-      void showRenderLoopHaltedDialog(
-        details.reason,
-        details.exitCode,
-        () => win !== self || self.isDestroyed(),
-        (opts) => dialog.showMessageBox(self, opts),
-        {
-          reload: () => reloadOverlay(self),
-          quit: () => app.quit(),
-          // Mirrors the openPath IPC handler's requireAuth() gate for the same
-          // shell.openPath(resolveMeetingsFolder(...)) call, so a locked session gets no button rather
-          // than one whose click silently does nothing.
-          openMeetingsFolder: requireAuth()
-            ? async () => {
-                const openError = await shell.openPath(resolveMeetingsFolder(getSettings()))
-                if (openError) mainLog.warn('[render-loop-halted] open meetings folder failed:', openError)
-              }
-            : undefined,
-          copyDiagnostics: () =>
-            clipboard.writeText(formatRenderLoopDiagnostics({
-              version: app.getVersion(),
-              platform: process.platform,
-              arch: process.arch,
-              packaged: app.isPackaged,
-              reason: details.reason,
-              exitCode: details.exitCode,
-              at: new Date().toISOString()
-            }))
-        }
-      ).catch((err) => mainLog.warn('[render-loop-halted] dialog failed:', err))
-      return
-    }
-    reloadOverlay(self)
+    },
+    onboardingExclusiveLive,
+    applyExclusiveOnboardingStage,
+    showForExclusiveOnboarding,
+    requireAuth,
+    resolveMeetingsFolder: () => resolveMeetingsFolder(getSettings()),
+    openMeetingsFolder: (path) => shell.openPath(path),
+    showRenderLoopHaltedDialog,
+    showMessageBox: (target, opts) => dialog.showMessageBox(target, opts),
+    reloadOverlay,
+    quit: () => app.quit(),
+    copyDiagnostics: (input) => clipboard.writeText(formatRenderLoopDiagnostics(input)),
+    appInfo: () => ({
+      version: app.getVersion(),
+      platform: process.platform,
+      arch: process.arch,
+      packaged: app.isPackaged
+    }),
+    redactRendererError: (raw) => {
+      const r = raw as { message?: unknown; stack?: unknown; componentStack?: unknown } | null
+      const context = RendererCrashContextSchema.safeParse(raw)
+      return {
+        message: typeof r?.message === 'string' ? r.message : 'unknown renderer error',
+        stack: typeof r?.stack === 'string' ? r.stack : '',
+        componentStack: typeof r?.componentStack === 'string' ? r.componentStack : '',
+        context: context.success ? context.data : undefined
+      }
+    },
+    persistRendererCrash: (message, detail, context) =>
+      persistCrash('renderer-error-boundary', detail, message, context as RendererCrashContext | undefined)
   })
   // FITO-185-N: stamp exclusiveOnboarding on BOTH packaged file:// and dev ELECTRON_RENDERER_URL.
   // The same helper is used by crash recovery, so the parser-time Act 1 shell cannot disappear there.
@@ -3914,22 +3851,16 @@ function handleSmokeReopenProbe(commandLine: readonly string[]): boolean {
   return true
 }
 
-let fatalHandled = false
 /**
  * For a fatal exception, offer a ONE-TIME relaunch — but default to "Continue" so a benign async error
  * never kills the overlay. No crashReporter upload by design (zero telemetry).
  */
-function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown): void {
-  // M2-0429: a refused macOS capture, already audited as capture.failed by its caller — not a crash.
-  if (kind === 'unhandledRejection' && isOrphanScreenSourcesRejection(err, process.platform)) {
-    return void mainLog.warn('[capture] desktopCapturer rejected a screen-source request (Screen Recording not in effect)')
-  }
-  const detail = err instanceof Error ? err.stack || err.message : String(err)
-  persistCrash(kind, detail, err instanceof Error ? err.message : String(err))
-  if (kind !== 'uncaughtException' || fatalHandled) return
-  fatalHandled = true
-  void showFatalDialog()
-}
+const { onFatal } = createProcessFatalLifecycle({
+  isOrphanScreenSourcesRejection,
+  persistCrash,
+  showFatalDialog,
+  log: mainLog
+})
 
 // M2-0037: split out of onFatal so the main thread is never blocked showing this — a synchronous native
 // dialog (showMessageBoxSync) froze every window, including whatever else the user was mid-click in,
@@ -9104,24 +9035,6 @@ function registerIpc(): void {
     parkOverlayAfterHideSpring(force === true)
     noteOverlay('renderer')
   })
-  // Renderer ErrorBoundary catch: persist via the same sink as onFatal's main-process crashes, so a
-  // caught render-throw survives to disk instead of only reaching console (gated behind
-  // ASKTOTO_DEBUG_RENDERER, never on in a packaged build).
-  ipcMain.handle(IPC.rendererCrash, (e, raw: unknown) => {
-    assertMainWindow(e)
-    if (!requireAuth()) return
-    const r = raw as { message?: unknown; stack?: unknown; componentStack?: unknown } | null
-    const message = typeof r?.message === 'string' ? r.message : 'unknown renderer error'
-    const stack = typeof r?.stack === 'string' ? r.stack : ''
-    const componentStack = typeof r?.componentStack === 'string' ? r.componentStack : ''
-    const context = RendererCrashContextSchema.safeParse(raw)
-    persistCrash(
-      'renderer-error-boundary',
-      `${message}\nstack: ${stack}\ncomponentStack: ${componentStack}`,
-      message,
-      context.success ? context.data : undefined
-    )
-  })
   // Drag the overlay from anywhere on the bar (the renderer's JS drag drives this with screen-pixel deltas).
   ipcMain.handle(IPC.windowMoveBy, (e, d: unknown) => {
     assertMainWindow(e)
@@ -9218,11 +9131,9 @@ protocol.registerSchemesAsPrivileged([
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
-  app.on('second-instance', (_event, commandLine) => {
-    reveal('second-instance', { focus: true })
-    if (typeof handleSmokeReopenProbe === 'function') handleSmokeReopenProbe(commandLine)
-  })
-  app.whenReady().then(async () => {
+  installSecondInstanceLifecycle(app, { reveal, handleSmokeReopenProbe })
+  installReadyBootstrapLifecycle(app, appContext, {
+    runReady: async () => {
   initLogging() // route main-process logs to a rotated file before anything else can fail
   const bootWork = createBootWork() // M2-0031: non-first-paint fs work starts after the first show, under the pool cap
   bootWorkGate = bootWork
@@ -9856,82 +9767,29 @@ if (!app.requestSingleInstanceLock()) {
       /* settings store not ready */
     }
   })
-  }).catch((e) => {
-    // console.error is a no-op in a packaged GUI build with no console — route to the real sinks (same
-    // redact-before-log discipline as onFatal) so a boot failure is actually diagnosable and audited.
-    const detail = e instanceof Error ? e.stack || e.message : String(e)
-    mainLog.error('[boot] Métis startup failed:', redactSecrets(detail))
-    auditLog('app.crash', crashDetail('boot', { message: redactSecrets(e instanceof Error ? e.message : String(e)) }))
+  },
+    onReadyFailure: (e) => {
+      // console.error is a no-op in a packaged GUI build with no console — route to the real sinks (same
+      // redact-before-log discipline as onFatal) so a boot failure is actually diagnosable and audited.
+      const detail = e instanceof Error ? e.stack || e.message : String(e)
+      mainLog.error('[boot] Métis startup failed:', redactSecrets(detail))
+      auditLog('app.crash', crashDetail('boot', { message: redactSecrets(e instanceof Error ? e.message : String(e)) }))
+    }
   })
 }
 
-app.on('window-all-closed', () => {
-  // Overlay app: stay alive in tray; quit only via tray/menu.
-})
-
-// Tray "Quit AskToto" (and any other path that calls app.quit() directly, e.g. Cmd+Q on macOS) used to
-// tear the process down with zero drain: the in-progress meeting's transcript lives only in renderer
-// React state, written to disk solely by a 60s autosave interval, so a graceful-looking Quit could lose
-// up to 60s of a meeting or the entire thing for a sub-60s one. The in-app Settings "Quit" button is
-// already safe — App.tsx's quitApp() awaits flushLiveMeeting() before calling window.toto.quit(), which
-// marks quitFlushDone above and lets this handler no-op. For every other quit path, give the renderer one
-// bounded chance to save: recordingPowerSaveBlockerId is non-null for exactly the duration of an active
-// meeting (see setRecordingPowerSaveBlock), so it's a reliable "is a meeting in progress" signal here in
-// main. Reuses the existing 'reset' hotkey, which already runs saveMeetingNow() for a live meeting
-// (App.tsx's reset()) — no new IPC channel needed.
-app.on('before-quit', (e) => {
-  if (quitFlushDone || recordingPowerSaveBlockerId === null || !win || win.isDestroyed()) return
-  e.preventDefault()
-  quitFlushDone = true
-  try {
-    win.webContents.send(IPC.hotkey, 'reset')
-  } catch {
-    /* window may already be gone */
-  }
-  setTimeout(() => app.quit(), 2000)
-})
-
-app.on('will-quit', () => {
-  // The renderer may already be unavailable during shutdown; main owns the socket and must still stop it.
-  invalidateCloudSttOwner()
-  // MQA-175: quitting before the boot watch closed on its own is a normal exit, not an early death —
-  // clear it here so the next launch is not pushed into safe start by a user who simply quit fast.
-  // Own try, like every other step below: a failure here must never skip the sidecar kill.
-  try {
-    setBootPowerSaveBlock(false)
-    endBootWatch(app.getPath('userData'))
-  } catch (e) {
-    mainLog.warn('[will-quit] endBootWatch failed', e)
-  }
-  // will-quit can fire BEFORE the app ever finished becoming ready — a quit requested during the async
-  // startup sequence, an automation/Playwright app.close(), or an early abort. Calling globalShortcut in
-  // that window throws "globalShortcut cannot be used before the app is ready" as an UNCAUGHT exception
-  // (the observed crash), and there is nothing registered to unregister anyway — so gate it on isReady().
-  // Each cleanup step is independent (its own try), so one throw never skips the rest. Owned sidecars are
-  // already stopped: installExitPaths registered the first will-quit listener (lifecycle/exit-paths.ts).
-  if (app.isReady()) {
-    try {
-      globalShortcut.unregisterAll()
-    } catch (e) {
-      mainLog.warn('[will-quit] globalShortcut.unregisterAll failed', e)
-    }
-  }
-  if (notifTimer) clearInterval(notifTimer)
-  // Cancel every tracked background poller FIRST, before the network stack is torn down — a Dust-refresh
-  // or reconcile interval firing a resolve mid-teardown is the shutdown-race SIGTRAP class.
-  for (const t of backgroundTimers) {
-    try {
-      clearInterval(t)
-    } catch {
-      /* already cleared */
-    }
-  }
-  backgroundTimers.length = 0
-  // M2-0006: last, so it only fires once every other teardown step above has run. This is the one signal
-  // that distinguishes THIS quit from a hard kill on the next boot's app.started.prevShutdown.
-  try {
-    observability?.shutdownClean(process.uptime())
-  } catch (e) {
-    mainLog.warn('[will-quit] observability.shutdownClean failed', e)
-  }
+installQuitFlowLifecycle(app, appContext, {
+  ipc: { hotkey: IPC.hotkey },
+  getQuitFlushDone: () => quitFlushDone,
+  setQuitFlushDone: (done) => { quitFlushDone = done },
+  getRecordingPowerSaveBlockerId: () => recordingPowerSaveBlockerId,
+  invalidateCloudSttOwner,
+  setBootPowerSaveBlock,
+  endBootWatch,
+  globalShortcut,
+  getNotifTimer: () => notifTimer,
+  clearNotifTimer: clearInterval,
+  backgroundTimers,
+  getObservability: () => observability,
+  log: mainLog
 })
