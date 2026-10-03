@@ -659,20 +659,13 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
   await setCursor(null).catch(() => undefined)
 }
 
-/** Minimal Chrome DevTools Protocol client for the main process's Node inspector. */
-export async function mainInspector(inspectPort) {
-  const deadline = Date.now() + 30_000
-  let wsUrl = null
-  while (!wsUrl && Date.now() < deadline) {
-    try {
-      const targets = await (await fetch(`http://127.0.0.1:${inspectPort}/json/list`)).json()
-      wsUrl = targets.find((target) => typeof target.webSocketDebuggerUrl === 'string')?.webSocketDebuggerUrl ?? null
-    } catch {
-      /* the inspector is not listening yet */
-    }
-    if (!wsUrl) await sleep(250)
-  }
-  if (!wsUrl) throw new Error('no main-process inspector: the EnableNodeCliInspectArguments fuse may be off')
+/**
+ * Minimal Chrome DevTools Protocol client. `evaluate` accepts synchronous expressions only: V8 15.0 in
+ * Electron 43 holds an awaited non-promise result only weakly, so a main-process GC can answer
+ * "Promise was collected". A Promise result comes back as {}; async callers should use st-1-core.mjs
+ * `pinnedExpression`.
+ */
+export async function inspectorClient(wsUrl) {
   const socket = new WebSocket(wsUrl)
   const pending = new Map()
   let nextId = 1
@@ -698,7 +691,32 @@ export async function mainInspector(inspectPort) {
     return message.result
   }
   const evaluate = async (expression) =>
-    (await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }))?.result?.value
+    (await send('Runtime.evaluate', { expression, returnByValue: true }))?.result?.value
+  const close = () => {
+    if (socket.readyState === WebSocket.CLOSED) return Promise.resolve()
+    return new Promise((resolve) => {
+      socket.addEventListener('close', () => resolve(), { once: true })
+      socket.close()
+    })
+  }
+  return { send, evaluate, close }
+}
+
+/** Minimal Chrome DevTools Protocol client for the main process's Node inspector. */
+export async function mainInspector(inspectPort) {
+  const deadline = Date.now() + 30_000
+  let wsUrl = null
+  while (!wsUrl && Date.now() < deadline) {
+    try {
+      const targets = await (await fetch(`http://127.0.0.1:${inspectPort}/json/list`)).json()
+      wsUrl = targets.find((target) => typeof target.webSocketDebuggerUrl === 'string')?.webSocketDebuggerUrl ?? null
+    } catch {
+      /* the inspector is not listening yet */
+    }
+    if (!wsUrl) await sleep(250)
+  }
+  if (!wsUrl) throw new Error('no main-process inspector: the EnableNodeCliInspectArguments fuse may be off')
+  const { send, evaluate, close } = await inspectorClient(wsUrl)
   // The app holds its Tray in a module-local binding, so find the live instance on the heap and emit the same
   // 'click' the OS delivers: its listener is the product's own Settings entry (sendHotkey('settings')).
   const clickTray = async () => {
@@ -713,7 +731,7 @@ export async function mainInspector(inspectPort) {
     return clicked?.result?.value === true
   }
   await evaluate("globalThis.__metisReHideElectron = process.mainModule.require('electron'); true")
-  return { evaluate, clickTray, close: () => socket.close() }
+  return { evaluate, clickTray, close }
 }
 
 export async function runPackagedRightEdgeHideRows({ port, inspectPort, rows }) {
@@ -729,6 +747,6 @@ export async function runPackagedRightEdgeHideRows({ port, inspectPort, rows }) 
   try {
     await withOverlayPage(port, (page) => runRightEdgeHideRows({ page, main: inspector.evaluate, rows }))
   } finally {
-    inspector.close()
+    await inspector.close()
   }
 }
