@@ -138,6 +138,24 @@ test('stage moves exactly the variant\'s installers and records size and sha256'
   }
 })
 
+test('a D-34 hotfix version stages the same asset names under the hotfix version', async () => {
+  const hotfix = '1.9.7-hotfix.1'
+  assert.deepEqual(VARIANTS.mac.assets(hotfix), ['Metis-1.9.7-hotfix.1.dmg', 'Metis-1.9.7-hotfix.1.zip'])
+  assert.deepEqual(VARIANTS['mac-qa-identity'].assets(hotfix), ['Metis-QA-1.9.7-hotfix.1.zip'])
+  assert.deepEqual(VARIANTS.win.assets(hotfix), ['Metis-Setup-1.9.7-hotfix.1.exe', 'Metis-Portable-1.9.7-hotfix.1.exe'])
+
+  const { root, releaseDir } = fixture()
+  try {
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'metis', version: hotfix }))
+    for (const name of VARIANTS.mac.assets(hotfix)) writeFileSync(join(releaseDir, name), `content of ${name}\n`)
+    const outDir = join(root, 'candidate')
+    await stageBuild({ variant: 'mac', repoRoot: root, releaseDir, outDir, env: env(), nodeVersion: NODE_VERSION })
+    assert.deepEqual(readdirSync(join(outDir, 'assets')).sort(), ['Metis-1.9.7-hotfix.1.dmg', 'Metis-1.9.7-hotfix.1.zip'])
+  } finally {
+    cleanup(root)
+  }
+})
+
 test('stage records the runner image, Node, Electron, electron-builder and per-file builder config hashes', async () => {
   const { root, releaseDir } = fixture()
   try {

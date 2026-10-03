@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { redactSecrets } from '@shared/redact'
 import { crashDetail } from './infra/observability/crash-taxonomy'
 import { createReloadBudget } from './lifecycle/reload-budget'
+import { isOrphanScreenSourcesRejection } from './capture-permissions/loopback-grant'
 
 const indexText = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const indexSource = ts.createSourceFile('index.ts', indexText, ts.ScriptTarget.Latest, true)
@@ -351,15 +352,32 @@ describe('onFatal — async relaunch dialog', () => {
     const showMessageBox = vi.fn(() => new Promise<{ response: number }>((resolve) => { resolveDialog = resolve }))
     const persistCrash = vi.fn()
     const win = {}
+    const mainLog = { warn: vi.fn() }
     const globals: Record<string, unknown> = {
       persistCrash,
       dialog: { showMessageBox },
       exitAndRelaunch: vi.fn(),
       win,
+      isOrphanScreenSourcesRejection,
+      mainLog,
+      process: { platform: 'darwin' },
       ...overrides
     }
-    return { globals, showMessageBox, persistCrash, win, resolve: (response: number) => resolveDialog({ response }) }
+    return { globals, showMessageBox, persistCrash, win, mainLog, resolve: (response: number) => resolveDialog({ response }) }
   }
+
+  // M2-0429: Electron's own orphan "Failed to get sources." rejection for a refused macOS capture used to
+  // write a crash-*.log and an app.crash audit line on every denied Listen start.
+  it('a refused macOS screen-source request is logged, never persisted as a crash', () => {
+    const { globals, showMessageBox, persistCrash, mainLog } = pendingDialogGlobals()
+    const onFatal = actualOnFatal(globals)
+
+    onFatal('unhandledRejection', 'Failed to get sources.')
+
+    expect(persistCrash).not.toHaveBeenCalled()
+    expect(showMessageBox).not.toHaveBeenCalled()
+    expect(mainLog.warn).toHaveBeenCalledOnce()
+  })
 
   it('returns while the relaunch dialog is still pending, parented to win', () => {
     const { globals, showMessageBox, persistCrash, win } = pendingDialogGlobals()

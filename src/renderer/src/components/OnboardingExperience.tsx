@@ -66,6 +66,8 @@ import type {
   ProfileRecoveryResult,
   PublicSettings
 } from '@shared/ipc'
+import { MEETING_AUDIO_SCREEN_LABEL } from '../lib/screen-permission-copy'
+import { ScreenSetupActions, resumeSetupAtLoad, screenRowStatus, useScreenSetup } from './OnboardingScreenSetup'
 import type { OverlayLayout } from '@shared/overlay-chrome'
 import type { OverlayPlacement } from '@shared/overlay-placement'
 import { resolveOverlayPresentation } from '@shared/overlay-presentation'
@@ -127,9 +129,9 @@ import {
   preloadOnboardingHeroVideo,
   resolveOnboardingHeroVideoSrc
 } from '../lib/onboarding-hero-video'
+export { speechPackAllowsEnsure, speechPackSetupRowVisible } from '../lib/local-speech-pack-policy'
+import { speechPackAllowsEnsure, speechPackSetupRowVisible, type LocalSpeechPackSetting } from '../lib/local-speech-pack-policy'
 
-// Same icon-per-mode mapping as the Settings → Personalize `ModePicker` (ModePicker.tsx) — one mode,
-// one icon, everywhere it appears, rather than inventing a second icon language just for this scene.
 const PERSONA_ICONS: Record<OnboardingPersonaId, typeof MessageSquare> = {
   general: MessageSquare,
   meeting: CalendarDays,
@@ -375,6 +377,17 @@ export interface SetupRow {
   progress?: number
 }
 
+export function setupRowsForSpeechPackPolicy(policy: LocalSpeechPackSetting): SetupRow[] {
+  return [
+    ...(speechPackSetupRowVisible(policy) ? [{ key: 'asr', label: 'On-device transcription', icon: Sparkles, state: 'checking' } satisfies SetupRow] : []),
+    { key: 'brain', label: 'Private meeting brain', icon: FolderLock, state: 'checking' },
+    { key: 'mic', label: 'Microphone', icon: Mic, state: 'checking' },
+    { key: 'screen', label: MEETING_AUDIO_SCREEN_LABEL, icon: MonitorUp, state: 'checking' },
+    { key: 'ai', label: 'Métis AI', icon: Cloud, state: 'checking' },
+    { key: 'local', label: 'On-device model', icon: Cpu, state: 'checking' }
+  ]
+}
+
 /** The microphone row for an OS permission status. 'denied' MUST be its own state: getUserMedia never
  *  re-prompts after an explicit Deny and main's requestPermissionsUpfront only asks while the status is
  *  'not-determined', so in that state the "Allow Microphone" button produces no prompt, no error and no
@@ -547,11 +560,6 @@ export function asrStatusIsReady(status: AsrAssetsStatus | null | undefined): bo
   return Boolean(status?.ready || status?.status === 'ready')
 }
 
-/** Act 3 — "scan first, then present a completed configuration": two DIFFERENT claims the scene makes,
- *  kept as one pure derivation so both stay honest and are each independently testable.
- *  `scanDone` only means every row has left 'checking' — loading (bytes moving) still counts as
- *  scanned. Safe to reveal the Listen-only caveat. `allReady` stays false while any row is
- *  loading / action / blocked / restart. */
 export interface SetupScanSummary {
   scanDone: boolean
   allReady: boolean
@@ -1108,8 +1116,10 @@ export function OnboardingExperience({
   useLayoutEffect(() => {
     requestOnboardingPortalOpen()
   }, [])
-  const [scene, setScene] = useState<Scene>('hero')
+  const [scene, setScene] = useState<Scene>(() => (resumeSetupAtLoad() ? 'setup' : 'hero'))
   const [rows, setRows] = useState<SetupRow[]>([])
+  // M2-0429: the latest permission snapshot and the real loopback self-test behind the screen row.
+  const screenSetup = useScreenSetup(scene === 'setup')
   const [mode, setMode] = useState<ConversationMode>('general')
   const [appearance, setAppearance] = useState<OverlayLayout>(() => seedOnboardingAppearance(settings))
   const [placement, setPlacement] = useState<OverlayPlacement>(() => seedOnboardingPlacement(settings))
@@ -1177,11 +1187,18 @@ export function OnboardingExperience({
   const [asrStatus, setAsrStatus] = useState<AsrAssetsStatus>(IDLE_ASR_STATUS)
   /** Once true, Continue stays unlocked even if ASR poll returns loading. */
   const [setupAccessFailOpen, setSetupAccessFailOpen] = useState(false)
-  const asrReady = asrStatusIsReady(asrStatus)
-  const asrRow = asrAssetsRowStatus(asrStatus, settings?.asrEngine)
+  const speechPackPolicy = settings?.localSpeechPack ?? 'offered'
+  const speechPackBlocked = !speechPackAllowsEnsure(speechPackPolicy)
+  const speechPackManaged = speechPackPolicy === 'required'
+  const asrReady = speechPackBlocked || asrStatusIsReady(asrStatus)
+  const asrRowBase = asrAssetsRowStatus(asrStatus, settings?.asrEngine)
+  const asrRow = speechPackManaged
+    ? { ...asrRowBase, detail: `${asrRowBase.detail} Managed by your organization.` }
+    : asrRowBase
   const doneRef = useRef(false)
 
   useEffect(() => {
+    if (speechPackBlocked) return
     let live = true
     const apply = (s: AsrAssetsStatus): void => {
       if (live) setAsrStatus(s)
@@ -1217,12 +1234,13 @@ export function OnboardingExperience({
       clearInterval(interval)
       unsub?.()
     }
-  }, [])
-  // Tracks the last-seen screenRecording status across polls so a false→true flip mid-scene (the user
-  // just toggled it on in System Settings) can be told apart from "was already granted on mount" — only
-  // the former needs a restart, since this process's ScreenCaptureKit handle never saw the earlier one.
-  const screenGrantedRef = useRef<boolean | null>(null)
+  }, [speechPackBlocked])
   const [restarting, setRestarting] = useState(false)
+  useEffect(() => {
+    if (scene !== 'setup') return
+    const s = screenRowStatus(screenSetup.perms, screenSetup.check, isWindows)
+    setRows((rs) => rs.map((r) => (r.key === 'screen' ? { ...r, state: s.state, detail: s.detail } : r)))
+  }, [scene, screenSetup.perms, screenSetup.check])
   // P0: any post-hero scene must keep portal mask open (Example: after Next → black).
   useEffect(() => {
     if (scene === 'hero') return
@@ -1238,24 +1256,8 @@ export function OnboardingExperience({
   useEffect(() => {
     if (scene !== 'setup') return
     let live = true
-    const base: SetupRow[] = [
-      // No acceleration row (MQA-201): it asserted "ready / detected" unconditionally, justified by a
-      // claim that the build was arm64-only. It is not — the mac target is universal (electron-builder
-      // verifies x64 Mach-O slices) and Windows ships x64 only. Nor can the renderer honestly answer the
-      // question at this point: on Windows the llama variant
-      // (vulkan vs cpu) is only decided when a sidecar is first spawned, which has not happened yet at
-      // onboarding. docs/ONBOARDING-EXPERIENCE.md's rule is to show only rows that are actually true.
-      { key: 'asr', label: 'On-device transcription', icon: Sparkles, state: 'checking' },
-      { key: 'brain', label: 'Private meeting brain', icon: FolderLock, state: 'checking' },
-      { key: 'mic', label: 'Microphone', icon: Mic, state: 'checking' },
-      { key: 'screen', label: 'Screen context', icon: MonitorUp, state: 'checking' },
-      // Act 3 (MQA-279): AI readiness, derived from the SAME `providerReady`/`provider` publicSettings()
-      // computes for every other gate in the app — see `aiRowStatus` above.
-      { key: 'ai', label: 'Métis AI', icon: Cloud, state: 'checking' },
-      { key: 'local', label: 'On-device model', icon: Cpu, state: 'checking' }
-    ]
+    const base = setupRowsForSpeechPackPolicy(speechPackPolicy)
     setRows(base)
-    screenGrantedRef.current = null
     const set = (key: string, state: SetupRowState, detail?: string, progress?: number): void => {
       if (!live) return
       setRows((rs) => rs.map((r) => (r.key === key ? { ...r, state, detail, progress } : r)))
@@ -1264,38 +1266,41 @@ export function OnboardingExperience({
     void (async () => {
       const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
       await delay(500)
-      void window.toto
-        .asrAssetsEnsure()
-        .then((s) => {
-          if (live) setAsrStatus(s)
-        })
-        .catch((err) => {
-          if (!live) return
-          setAsrStatus(asrEnsureFailureStatus(err))
-        })
-      const asrStatus =
-        (await Promise.race([
-          window.toto.asrAssetsStatus().catch((err) => asrEnsureFailureStatus(err)),
-          new Promise<AsrAssetsStatus>((r) =>
-            setTimeout(
-              () =>
-                r({
-                  ready: false,
-                  status: 'error',
-                  progress: 0,
-                  label: 'Transcription files are still downloading. You can continue and finish them in Settings.',
-                  error: 'Transcription files are still downloading. You can continue and finish them in Settings.'
-                }),
-              ASR_SETUP_FAIL_OPEN_MS
+      if (!speechPackBlocked) {
+        void window.toto
+          .asrAssetsEnsure()
+          .then((s) => {
+            if (live) setAsrStatus(s)
+          })
+          .catch((err) => {
+            if (!live) return
+            setAsrStatus(asrEnsureFailureStatus(err))
+          })
+        const asrStatus =
+          (await Promise.race([
+            window.toto.asrAssetsStatus().catch((err) => asrEnsureFailureStatus(err)),
+            new Promise<AsrAssetsStatus>((r) =>
+              setTimeout(
+                () =>
+                  r({
+                    ready: false,
+                    status: 'error',
+                    progress: 0,
+                    label: 'Transcription files are still downloading. You can continue and finish them in Settings.',
+                    error: 'Transcription files are still downloading. You can continue and finish them in Settings.'
+                  }),
+                ASR_SETUP_FAIL_OPEN_MS
+              )
             )
-          )
-        ])) || asrEnsureFailureStatus()
-      if (live) {
-        if (asrStatus.status === 'error' || !asrStatus.ready) setSetupAccessFailOpen(true)
-        setAsrStatus(asrStatus)
+          ])) || asrEnsureFailureStatus()
+        if (live) {
+          if (asrStatus.status === 'error' || !asrStatus.ready) setSetupAccessFailOpen(true)
+          setAsrStatus(asrStatus)
+        }
+        const asr = asrAssetsRowStatus(asrStatus, settingsRef.current?.asrEngine)
+        const detail = speechPackManaged ? `${asr.detail} Managed by your organization.` : asr.detail
+        set('asr', asr.state, detail, asr.progress)
       }
-      const asr = asrAssetsRowStatus(asrStatus, settingsRef.current?.asrEngine)
-      set('asr', asr.state, asr.detail, asr.progress)
       await delay(450)
       set('brain', 'ready', isWindows ? 'stays on this PC' : 'stays on this Mac')
       await delay(450)
@@ -1306,12 +1311,11 @@ export function OnboardingExperience({
       const mic = micRowStatus(perms?.microphone)
       set('mic', mic.state, mic.detail)
       await delay(350)
-      // Windows has no per-app Screen Recording permission — desktopCapturer captures without one, so the
-      // status stays 'unknown' forever there. Treat isWindows as screen-available (matches Onboarding.tsx
-      // and listen.ts) so the scene never demands a grant the OS can't give and can actually reach "ready".
-      const screenGranted = isWindows || perms?.screenRecording === 'granted'
-      screenGrantedRef.current = screenGranted
-      set('screen', screenGranted ? 'ready' : 'action', isWindows ? 'available' : screenGranted ? 'granted' : 'needs permission')
+      // Windows has no per-app Screen Recording permission, so screenRowStatus treats it as available (matches
+      // Onboarding.tsx and listen.ts). On macOS the row follows the diagnosis and the loopback self-test.
+      if (live) screenSetup.setPerms(perms)
+      const screenRow = screenRowStatus(perms, screenSetup.checkRef.current, isWindows)
+      set('screen', screenRow.state, screenRow.detail)
       // Proactively trigger the real OS consent flow the moment setup lands, instead of waiting for a
       // button press: macOS pops the mic prompt and registers Métis in the Screen Recording TCC list
       // (the pane doesn't even list an app until it has probed once); Windows resolves mic consent via a
@@ -1347,7 +1351,7 @@ export function OnboardingExperience({
     return () => {
       live = false
     }
-  }, [scene])
+  }, [scene, speechPackBlocked, speechPackManaged])
 
   // --- Live-poll while the scene stays mounted, so a grant flipped in System Settings (possibly in a
   // split view right next to this window) is reflected without the user coming back to click anything.
@@ -1357,7 +1361,7 @@ export function OnboardingExperience({
     const poll = async (): Promise<void> => {
       const perms = await window.toto.getPermissions().catch(() => null)
       const models = await window.toto.localModelsList().catch(() => [])
-      const asrStatusNow = await window.toto.asrAssetsStatus().catch(() => null)
+      const asrStatusNow = speechPackBlocked ? null : await window.toto.asrAssetsStatus().catch(() => null)
       if (!live) return
       if (asrStatusNow) setAsrStatus(asrStatusNow)
       const current = settingsRef.current
@@ -1365,29 +1369,18 @@ export function OnboardingExperience({
       const lm = current ? localModelRowStatus(local, current.localLlm.enabled,
         !current.allowedProviders || current.allowedProviders.includes('local')) : { state: 'checking' as const, detail: '' }
       const asr = asrStatusNow ? asrAssetsRowStatus(asrStatusNow, current?.asrEngine) : null
+      // The screen row re-derives from this snapshot; a fresh grant mid-scene reads needs-relaunch (macOS).
+      if (perms) screenSetup.setPerms(perms)
       setRows((rs) =>
         rs.map((r) => {
           if (r.key === 'asr' && asr) {
-            return { ...r, state: asr.state, detail: asr.detail, progress: asr.progress }
+            return { ...r, state: asr.state, detail: speechPackManaged ? `${asr.detail} Managed by your organization.` : asr.detail, progress: asr.progress }
           }
           if (r.key === 'local') return { ...r, state: lm.state, detail: lm.detail, progress: lm.progress }
           if (!perms) return r
           if (r.key === 'mic') {
             const mic = micRowStatus(perms.microphone)
             return { ...r, state: mic.state, detail: mic.detail }
-          }
-          if (r.key === 'screen') {
-            // On Windows screen capture needs no grant (see mount effect) — always available, never a
-            // restart. The false→true "just granted, needs restart" dance is macOS ScreenCaptureKit only.
-            const granted = isWindows || perms.screenRecording === 'granted'
-            const justGranted = !isWindows && screenGrantedRef.current === false && granted
-            screenGrantedRef.current = granted
-            const needsRestart = justGranted || (!isWindows && r.state === 'restart')
-            return {
-              ...r,
-              state: needsRestart ? 'restart' : granted ? 'ready' : 'action',
-              detail: needsRestart ? 'granted' : isWindows ? 'available' : granted ? 'granted' : 'needs permission'
-            }
           }
           return r
         })
@@ -1406,9 +1399,10 @@ export function OnboardingExperience({
       clearInterval(interval)
       unsub?.()
     }
-  }, [scene, settings?.localLlm.modelId])
+  }, [scene, settings?.localLlm.modelId, speechPackBlocked, speechPackManaged])
 
   const retryAsr = async (): Promise<void> => {
+    if (speechPackBlocked) return
     const status = await window.toto.asrAssetsEnsure().catch((err) => asrEnsureFailureStatus(err))
     setAsrStatus(status)
     const asr = asrAssetsRowStatus(status, settingsRef.current?.asrEngine)
@@ -1661,19 +1655,13 @@ export function OnboardingExperience({
                       </button>
                     </div>
                   )}
-                  {r.key === 'screen' && r.state === 'action' && (
-                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                      <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-                        Lets Métis answer questions about what's on your screen.
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => void window.toto.openPermissionSettings('screenRecording')}
-                        className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
-                      >
-                        Open Screen Recording Settings
-                      </button>
-                    </div>
+                  {r.key === 'screen' && (r.state === 'action' || r.state === 'blocked') && (
+                    <ScreenSetupActions
+                      perms={screenSetup.perms}
+                      check={screenSetup.check}
+                      onRequest={() => void screenSetup.request()}
+                      onRecheck={screenSetup.recheck}
+                    />
                   )}
                   {r.key === 'screen' && r.state === 'restart' && (
                     <div className="mt-1.5 flex flex-wrap items-center gap-2">

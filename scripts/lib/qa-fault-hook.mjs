@@ -1,13 +1,21 @@
 /**
- * The packaged half of the QA-only fatal fault hook (src/main/qa-identity.ts): prove the compiled bytes match
- * the package's declared identity, in both directions. A shipping package must never carry the hook, and the
- * QA-identity package must always carry it — otherwise scripts/qa/fault-fatal-relaunch.mjs cannot drive it.
+ * The packaged half of the QA-only hooks — the fatal fault hook (src/main/qa-identity.ts) and the file-fed capture
+ * source (src/main/qa-capture-source.ts): prove the compiled bytes match the package's declared identity, in both
+ * directions. A shipping package must never carry either hook, and the QA-identity package must always carry both —
+ * otherwise scripts/qa/fault-fatal-relaunch.mjs and the QA capture run cannot drive them.
  */
 import { closeSync, openSync, readSync, statSync } from 'node:fs'
 import { getRawHeader, listPackage, uncache } from '@electron/asar'
 
 /** The string only the QA fault hook (src/main/qa-identity.ts) puts into a main-process bundle. */
 export const QA_FAULT_MARKER = 'METIS_QA_FAULT_HOOK'
+/** The env name only the QA capture hook (src/main/qa-capture-source.ts QA_CAPTURE_ENV) puts into a main-process bundle. */
+export const QA_CAPTURE_MARKER = 'METIS_QA_CAPTURE_FILE'
+/** Every QA-only hook whose presence must match the package identity, checked in this order. */
+const QA_HOOK_MARKERS = [
+  { marker: QA_FAULT_MARKER, hook: 'QA fault hook' },
+  { marker: QA_CAPTURE_MARKER, hook: 'QA capture hook' }
+]
 /** The packaged package.json name of the QA-identity variant (build/qa-identity.electron-builder.yml extraMetadata). */
 export const QA_IDENTITY_PACKAGE_NAME = 'asktoto-qa'
 
@@ -30,16 +38,18 @@ export function assertQaFaultHookMatchesIdentity(archive) {
     const packageJson = packedFilesByPosix.get('/package.json')
     if (!packageJson) throw new Error('app.asar has no package.json — the packaged app identity is missing')
     const qaIdentity = JSON.parse(readPackedFile(archive, headerSize, packageJson, 'package.json').toString('utf8')).name === QA_IDENTITY_PACKAGE_NAME
-    const mainFiles = [...rawByPosix.keys()].filter((entry) => /^\/out\/main\/.+\.(?:c?js|jsc)$/.test(entry))
-    const carriesHook = mainFiles.some((entry) =>
-      readPackedFile(archive, headerSize, packedFilesByPosix.get(entry), rawByPosix.get(entry)).includes(QA_FAULT_MARKER)
-    )
-    if (carriesHook !== qaIdentity) {
-      throw new Error(
-        qaIdentity
-          ? 'The QA-identity package lacks the QA fault hook. Build it with METIS_QA_IDENTITY=1 (package.json dist:qa-identity).'
-          : 'A shipping package carries the QA fault hook. Only dist:qa-identity may set METIS_QA_IDENTITY=1.'
-      )
+    const mainBundles = [...rawByPosix.keys()]
+      .filter((entry) => /^\/out\/main\/.+\.(?:c?js|jsc)$/.test(entry))
+      .map((entry) => readPackedFile(archive, headerSize, packedFilesByPosix.get(entry), rawByPosix.get(entry)))
+    for (const { marker, hook } of QA_HOOK_MARKERS) {
+      const carriesHook = mainBundles.some((bytes) => bytes.includes(marker))
+      if (carriesHook !== qaIdentity) {
+        throw new Error(
+          qaIdentity
+            ? `The QA-identity package lacks the ${hook}. Build it with METIS_QA_IDENTITY=1 (package.json dist:qa-identity).`
+            : `A shipping package carries the ${hook}. Only dist:qa-identity may set METIS_QA_IDENTITY=1.`
+        )
+      }
     }
     return { qaIdentity }
   } finally {

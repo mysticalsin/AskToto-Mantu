@@ -18,6 +18,17 @@ import type { OverlayLayout } from '@shared/overlay-chrome'
 import { overlayUsesHover } from '@shared/overlay-chrome'
 import type { OverlayPlacement } from '@shared/overlay-placement'
 import { SETTINGS_WINDOW_MIN, isFatHoverTrigger as sharedIsFatHoverTrigger } from '@shared/settings-bounds'
+import {
+  RIGHT_EDGE_DRAWER_WIDTH,
+  RIGHT_EDGE_MARGIN_PX,
+  RIGHT_EDGE_REVEAL_BAND_PX,
+  RIGHT_EDGE_TAB_HEIGHT,
+  RIGHT_EDGE_TAB_WIDTH,
+  anchorY,
+  legacyDrawerRect,
+  legacyTabRect,
+  revealBand
+} from '@shared/right-edge-geometry'
 
 export type { OverlayLayout }
 
@@ -217,18 +228,21 @@ export function hoverRestHeight(m: DisplayMetrics): number {
   return hoverHitBandHeight(m)
 }
 
-/** Full-width top-edge approach strip. Camera island is included; left/right top edge also hits. */
+/**
+ * Owner decision OD-23 (2026-09-29): top-center Hide/Island opens only from the notch area, this many px
+ * either side of the bar's centre. The full-width strip opened the bar on every pause over a menu or a
+ * status icon, which read as Métis flashing.
+ */
+export const TOP_CENTER_HOVER_HALF_WIDTH_PX = 150
+
+/** Top-center reveal zone width: ±TOP_CENTER_HOVER_HALF_WIDTH_PX around the bar's centre, never narrower
+ *  than the physical notch and never wider than the work area. */
 export function hoverRestWidth(m: DisplayMetrics): number {
-  return Math.max(1, m.workArea.width)
+  return Math.max(1, Math.min(m.workArea.width, Math.max(TOP_CENTER_HOVER_HALF_WIDTH_PX * 2, m.notchWidth)))
 }
 
-/** Breathing room between a sidecar overlay and the usable display edge. */
-export const RIGHT_EDGE_MARGIN_PX = 12
-export const RIGHT_EDGE_TAB_WIDTH = 52
-export const RIGHT_EDGE_DRAWER_WIDTH = 360
-export const RIGHT_EDGE_TAB_HEIGHT = 52
-export const RIGHT_EDGE_DRAWER_HEIGHT = 560
-/** A sidecar opens high enough to be discoverable without covering meeting controls. */
+export { RIGHT_EDGE_MARGIN_PX, RIGHT_EDGE_TAB_WIDTH, RIGHT_EDGE_DRAWER_WIDTH, RIGHT_EDGE_TAB_HEIGHT, RIGHT_EDGE_REVEAL_BAND_PX }
+/** Legacy normalized Y default (`overlayRightEdgeYByDisplay`); the anchor default is RIGHT_EDGE_DEFAULT_ANCHOR. */
 export const RIGHT_EDGE_DEFAULT_NORMALIZED_Y = 0.2
 /** The compact side target is intentionally small; cursor-watch supplies dwell and leave hysteresis. */
 export const RIGHT_EDGE_HOVER_TARGET = { width: 24, height: HOVER_ISLAND_HEIGHT_MAX_PX } as const
@@ -263,7 +277,9 @@ function rightEdgeYRange(height: number, m: DisplayMetrics, margin = RIGHT_EDGE_
   return min <= max ? { min, max } : { min: max, max: min }
 }
 
-/** Map normalized sidecar Y to the current display without retaining desktop coordinates. */
+/** Map a legacy normalized Y to the current display without retaining desktop coordinates. Right-edge
+ *  windows are placed from the anchor (right-edge-geometry.ts); this mapping is what the stored legacy
+ *  value meant, so it is the oracle for the anchor migration. */
 export function rightEdgePosition(
   width: number,
   height: number,
@@ -283,21 +299,14 @@ export function rightEdgePosition(
   return { x, y }
 }
 
-/** Closed tab and opened drawer share one display-relative right boundary. */
-export function rightEdgeSidecarBounds(
-  m: DisplayMetrics,
-  input: { open: boolean; normalizedY?: number; margin?: number }
-): Rect {
-  const margin = input.margin ?? RIGHT_EDGE_MARGIN_PX
-  const width = input.open ? RIGHT_EDGE_DRAWER_WIDTH : RIGHT_EDGE_TAB_WIDTH
-  const height = input.open
-    ? Math.min(RIGHT_EDGE_DRAWER_HEIGHT, Math.max(RIGHT_EDGE_TAB_HEIGHT, m.workArea.height - margin * 2))
-    : RIGHT_EDGE_TAB_HEIGHT
-  const { y } = rightEdgePosition(width, height, m, input.normalizedY, margin)
-  return { x: m.workArea.x + m.workArea.width - margin - width, y, width, height }
+/** The legacy open drawer and the Island rail tab at the anchor fraction `anchor` (default 0.15), from the
+ *  shared authority: both share one display-relative right boundary and follow the same anchor. */
+export function rightEdgeSidecarBounds(m: DisplayMetrics, input: { open: boolean; anchor?: number }): Rect {
+  const a = anchorY(m.workArea, input.anchor)
+  return input.open ? legacyDrawerRect(m.workArea, a) : legacyTabRect(m.workArea, a)
 }
 
-/** Inverse of rightEdgePosition's vertical mapping for an explicit user drag. */
+/** Inverse of rightEdgePosition's legacy vertical mapping (a drag now moves the anchor; right-edge-geometry.ts). */
 export function normalizeRightEdgeY(
   y: number,
   height: number,
@@ -309,9 +318,46 @@ export function normalizeRightEdgeY(
   return clampNormalized((y - range.min) / (range.max - range.min))
 }
 
-/** Compact side-edge target for Hide/Island that reuses the cursor-watch dwell/leave state machine. */
-export function rightEdgeHoverRestRect(normalizedY: number | undefined, m: DisplayMetrics): Rect {
-  return rightEdgeSidecarBounds(m, { open: false, normalizedY })
+/**
+ * Right-edge reveal band for Hide/Island: the authority's revealBand, flush with the right edge the pointer
+ * stops at (the work-area edge, so also when the Dock or taskbar sits on the right) and spanning
+ * [wa.y+48, wa.bottom−48] whatever the anchor. Never the inset tab square: that sat 12 px inside the work
+ * area within the drawer's own footprint, so pushing the pointer to the edge missed it while a pause over
+ * empty desktop opened it. It is also the parked Hide window, which is invisible and click-through.
+ */
+export function rightEdgeHoverRestRect(anchor: number | undefined, m: DisplayMetrics): Rect {
+  return revealBand(m.workArea, anchorY(m.workArea, anchor))
+}
+
+/**
+ * Position for a right-edge park the OS widened past `requested` (Windows enforces a minimum width on
+ * frameless windows, so the 4 px Hide band reads back 32 px wide): the right edge stays where requested,
+ * so the parked window never crosses the work-area edge. The window is invisible and click-through, and
+ * the cursor watch uses the computed band, so the extra width is harmless.
+ */
+export function rightAnchoredParkPosition(requested: Rect, actualWidth: number): { x: number; y: number } {
+  if (actualWidth <= requested.width) return { x: requested.x, y: requested.y }
+  return { x: requested.x + requested.width - actualWidth, y: requested.y }
+}
+
+/**
+ * Hide parks invisibly at the right edge only where the pointer can stop there. When another display
+ * continues past this display's right edge beside the drawer, a pushed pointer crosses into it instead,
+ * so Hide parks as the visible Island rail on that display. Every other layout is unchanged.
+ */
+export function rightEdgeParkLayout(
+  layout: OverlayLayout,
+  m: DisplayMetrics,
+  otherDisplays: readonly Rect[],
+  anchor?: number
+): OverlayLayout {
+  if (layout !== 'hide') return layout
+  const band = rightEdgeHoverRestRect(anchor, m)
+  const edge = m.bounds.x + m.bounds.width
+  const continues = otherDisplays.some(
+    (other) => other.x === edge && Math.min(band.y + band.height, other.y + other.height) > Math.max(band.y, other.y)
+  )
+  return continues ? 'island' : layout
 }
 
 /** One placement-aware bounds resolver. Top-center remains on its established path. */
@@ -330,17 +376,19 @@ export function overlayPlacementPosition(input: {
   return topCenterPosition(input.width, input.layout, input.metrics, input.topMargin)
 }
 
-/** Placement-aware hover rest. Top-center preserves the existing top-edge band. */
+/** Placement-aware hover rest. Top-center is the notch area (OD-23), centred where the bar and its park
+ *  are centred (`topCenterPosition`, `hideParkRect`). */
 export function hoverWatchRestRect(
   _layout: OverlayLayout,
   m: DisplayMetrics,
   placement: OverlayPlacement = 'top-center',
-  normalizedY?: number
+  anchor?: number
 ): Rect {
-  if (resolveOverlayPlacement(placement, m) === 'right-edge') return rightEdgeHoverRestRect(normalizedY, m)
+  if (resolveOverlayPlacement(placement, m) === 'right-edge') return rightEdgeHoverRestRect(anchor, m)
   const height = hoverRestHeight(m)
   const width = hoverRestWidth(m)
-  return { x: m.workArea.x, y: hoverRestTop(m), width, height }
+  const x = clampAxis(Math.round(m.workArea.x + (m.workArea.width - width) / 2), width, m.workArea.x, m.workArea.width)
+  return { x, y: hoverRestTop(m), width, height }
 }
 
 /**
@@ -410,7 +458,13 @@ export interface OverlayWindowChrome {
   transparent: boolean
   backgroundColor: string
   fullscreenable: boolean
-  roundedCorners: boolean
+  /**
+   * Always false. On macOS a `frame: false` window keeps NSWindowStyleMaskTitled unless roundedCorners is
+   * false, and AppKit re-deriving that window's frame from its content rect adds the hidden title strip above
+   * it: a parked Hide band moved 32 px up, above the work area (M2-0526). Borderless, frame and content rect
+   * are the same rect. The renderer paints its own rounded panels and shadow on a transparent window.
+   */
+  roundedCorners: false
 }
 
 export function overlayWindowChrome(onboardingLive: boolean): OverlayWindowChrome {
@@ -426,7 +480,7 @@ export function overlayWindowChrome(onboardingLive: boolean): OverlayWindowChrom
     transparent: true,
     backgroundColor: OVERLAY_TRANSPARENT_BACKGROUND,
     fullscreenable: false,
-    roundedCorners: true
+    roundedCorners: false
   }
 }
 
@@ -572,10 +626,10 @@ export function parkedHoverReanchor(
   nextDisplay: DisplayMetrics,
   topMargin: number,
   placement: OverlayPlacement = 'top-center',
-  normalizedY?: number
+  anchor?: number
 ): Rect | null {
   if (!resting || !overlayUsesHover(layout)) return null
-  return parkAfterExclusiveOnboarding(layout, nextDisplay, topMargin, placement, normalizedY)
+  return parkAfterExclusiveOnboarding(layout, nextDisplay, topMargin, placement, anchor)
 }
 
 /** Tony live fails: 560×44 slab and 560×103 stub. Hide rest must not look like either. */
@@ -593,13 +647,15 @@ export function parkAfterExclusiveOnboarding(
   m: DisplayMetrics,
   topMargin: number,
   placement: OverlayPlacement = 'top-center',
-  normalizedY?: number
+  anchor?: number
 ): Rect {
   const effectivePlacement = resolveOverlayPlacement(placement, m)
   if (effectivePlacement === 'top-center' && layout === 'hide') return hideParkRect(m)
   const size = overlayRestSize(layout, m)
   if (effectivePlacement === 'right-edge') {
-    return rightEdgeSidecarBounds(m, { open: false, normalizedY })
+    // Hide parks as the invisible reveal band (rest 'none'); Island keeps its visible tab rail at the anchor.
+    if (layout === 'hide') return rightEdgeHoverRestRect(anchor, m)
+    return rightEdgeSidecarBounds(m, { open: false, anchor })
   }
   if (layout === 'island') {
     const x = clampAxis(
@@ -626,7 +682,8 @@ export function firstPaintOverlayBounds(input: {
   metrics: DisplayMetrics
   topMargin: number
   placement?: OverlayPlacement
-  normalizedY?: number
+  /** Right-edge anchor fraction f (right-edge-geometry.ts). */
+  anchor?: number
 }): Rect {
   if (!input.onboardingDone) return exclusiveOnboardingBounds(input.bounds, input.workArea)
   return parkAfterExclusiveOnboarding(
@@ -634,7 +691,7 @@ export function firstPaintOverlayBounds(input: {
     input.metrics,
     input.topMargin,
     input.placement,
-    input.normalizedY
+    input.anchor
   )
 }
 

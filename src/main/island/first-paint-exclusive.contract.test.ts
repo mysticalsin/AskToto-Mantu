@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readAppCss } from '../../../scripts/lib/read-app-css.mjs'
 import { describe, expect, it } from 'vitest'
 import {
   exclusiveMayUseSimpleFullScreen,
@@ -106,7 +107,8 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
     expect(parked.backgroundColor).toBe(OVERLAY_TRANSPARENT_BACKGROUND)
     expect(parked.backgroundColor).toBe('#00000000')
     expect(parked.fullscreenable).toBe(false)
-    expect(parked.roundedCorners).toBe(true)
+    // M2-0526: borderless on macOS, so no hidden title strip can grow a parked frame.
+    expect(parked.roundedCorners).toBe(false)
     expect(exclusiveMayUseSimpleFullScreen(parked.transparent)).toBe(false)
   })
 
@@ -118,6 +120,13 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
     expect(create).toMatch(/backgroundColor: chrome\.backgroundColor/)
     // FITO-185-Z: exclusive shows immediately (never show:!onboardingLive hide-for-seconds)
     expect(create).toMatch(/show:\s*true/)
+    // M2-0031: the constructor shows at once for every caller except boot, whose first show is the very
+    // next task (scheduleCurrentFirstShow, never gated on renderer JS — lifecycle/first-show.test.ts).
+    expect(create).toMatch(/show:\s*!deferFirstShow/)
+    expect(create).toMatch(/scheduleCurrentFirstShow\(win,[\s\S]*?onboardingLive \? showForExclusiveOnboarding\(firstShown\)/)
+    // The overlay's deferred first show activates like the constructor's show:true did (focus + front).
+    expect(create).toMatch(/showForExclusiveOnboarding\(firstShown\) : firstShown\.isVisible\(\) \|\| firstShown\.show\(\)\)/)
+    expect(create).not.toMatch(/firstShown\.showInactive\(\)/)
     expect(create).not.toMatch(/show:\s*!onboardingLive/)
     expect(create).toMatch(/FITO-185-Z/)
     expect(create).toMatch(/pollAct1Paint/)
@@ -147,7 +156,7 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
     const exit = index.slice(index.indexOf('function exitExclusiveOnboardingStage'), index.indexOf('function createWindow'))
     expect(exit).toMatch(/if \(!overlayWindowTransparent\) \{\s*recreateOverlayWindow\(\)/)
 
-    const settings = readFileSync(join(__dirname, '../../renderer/src/components/Settings.tsx'), 'utf8')
+    const settings = readFileSync(join(__dirname, '../../renderer/src/features/settings/SettingsRoot.tsx'), 'utf8')
     const replay = settings.slice(settings.indexOf('const replayOnboarding = async'))
     expect(replay.indexOf('const saved = await patch({ onboardingDone: false })')).toBeGreaterThan(-1)
     expect(replay.indexOf('haltAllOnboardingAudio()')).toBeGreaterThan(-1)
@@ -192,7 +201,10 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
   })
 
   it('smoke tests full native onboarding bounds instead of creating a compact onboarding window', () => {
-    const smoke = readFileSync(join(__dirname, '../../../scripts/e2e-smoke.mjs'), 'utf8')
+    const smoke = [
+      readFileSync(join(__dirname, '../../../scripts/e2e-smoke.mjs'), 'utf8'),
+      readFileSync(join(__dirname, '../../../scripts/qa/golden-flows/onboarding-flows.mjs'), 'utf8')
+    ].join('\n')
     expect(smoke).not.toContain('COMPACT_ONBOARDING')
     expect(smoke).not.toContain('setCompactOnboardingBounds')
     expect(smoke).toMatch(/assertExclusiveOnboardingNativeBounds/)
@@ -207,7 +219,7 @@ describe('exclusive onboarding cannot be dragged off-screen', () => {
   it('onboard root has no windowDrag and main ignores move while exclusive', () => {
     const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
     const app = readFileSync(join(__dirname, '../../renderer/src/App.tsx'), 'utf8')
-    const css = readFileSync(join(__dirname, '../../renderer/src/styles.css'), 'utf8')
+    const css = readAppCss()
     const gate = app.slice(
       app.indexOf('Onboarding gate FIRST'),
       app.indexOf('Post-onboarding only:')
@@ -301,7 +313,7 @@ describe('MQA-338 exclusive Act 1 privacy + bounded diagnostics', () => {
   })
 
   it('portal-open CSS unlock includes onboard-cta / Next (FITO-185-V)', () => {
-    const css = readFileSync(join(__dirname, '../../renderer/src/styles.css'), 'utf8')
+    const css = readAppCss()
     expect(css).toMatch(/\.onboard-stage\.onboard-stage--portal-open[\s\S]*\.onboard-cta/)
     expect(css).toMatch(/FITO-185-V/)
   })

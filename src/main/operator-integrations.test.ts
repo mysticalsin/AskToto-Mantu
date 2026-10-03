@@ -97,6 +97,15 @@ describe('shouldRefetchOperatorIntegrations', () => {
     const cache = { version: 1, fetchedAt: 1000, integrations: [] }
     expect(shouldRefetchOperatorIntegrations(cache, 1, 1000 + 6 * 60 * 60 * 1000)).toBe(true)
   })
+  it('refetches a cache holding a brokered row before its 1h gateway token expires', () => {
+    const cache = { version: 1, fetchedAt: 1000, integrations: [{ ...customMcp, brokered: true as const }] }
+    expect(shouldRefetchOperatorIntegrations(cache, 1, 1000 + 30 * 60_000)).toBe(false)
+    expect(shouldRefetchOperatorIntegrations(cache, 1, 1000 + 50 * 60_000)).toBe(true)
+  })
+  it('keeps the 6h interval for a cache with only direct rows', () => {
+    const cache = { version: 1, fetchedAt: 1000, integrations: [customMcp] }
+    expect(shouldRefetchOperatorIntegrations(cache, 1, 1000 + 50 * 60_000)).toBe(false)
+  })
 })
 
 describe('reconcileOperatorMcpRegistry (register / replace / remove)', () => {
@@ -172,6 +181,22 @@ describe('MQA-295 fetchOperatorIntegrations credential isolation', () => {
     expect(await fetchOperatorIntegrations(SETTINGS)).toBeNull()
     expect(fetcher).not.toHaveBeenCalled()
     expect(operatorIntegrationFor('hubspot')?.id).toBe('int-hubspot')
+  })
+
+  it('makes a brokered path endpoint absolute, leaves an absolute endpoint alone, and marks both brokered', async () => {
+    const brokeredRow = (id: string, endpoint: string) => ({
+      id, kind: 'custom-mcp', label: id, transport: 'mcp', mode: 'brokered', endpoint, gatewayToken: 'tok.sig', scopes: []
+    })
+    setOperatorIntegrationsFetchForTests((async () =>
+      jsonResponse({
+        ok: true,
+        version: 1,
+        integrations: [brokeredRow('rel', '/v1/mcp/rel'), brokeredRow('abs', 'https://other.example/v1/mcp/abs')]
+      })) as typeof fetch)
+    await fetchOperatorIntegrations(SETTINGS)
+    const byId = new Map(operatorIntegrationsSnapshot().integrations.map((i) => [i.id, i]))
+    expect(byId.get('rel')).toMatchObject({ baseUrl: 'https://operator.test/v1/mcp/rel', credential: 'tok.sig', brokered: true })
+    expect(byId.get('abs')?.baseUrl).toBe('https://other.example/v1/mcp/abs')
   })
 
   it('never forwards a licence credential through an HTTP redirect', async () => {

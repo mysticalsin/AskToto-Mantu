@@ -1,0 +1,266 @@
+/* Exclusive-stage appearance ask. CSS mock only. No backdrop-filter. Transform + opacity. */
+.onboard-appearance {
+  width: min(560px, 100%);
+}
+.onboard-appearance-scroll {
+  max-height: 100%;
+  overscroll-behavior: contain;
+}
+/* On short or zoomed onboarding windows, preserve every choice by compacting the preview and letting
+   this scene, rather than the whole exclusive stage, scroll. The Position picker must never be clipped. */
+@media (max-height: 720px) {
+  .onboard-appearance {
+    gap: 0.75rem;
+  }
+  .onboard-appearance-preview {
+    height: 104px;
+  }
+  .onboard-appearance-preview__edge-rail {
+    top: 14px;
+  }
+  .onboard-appearance-preview__edge-glow {
+    top: 32px;
+  }
+  .onboard-appearance-preview__edge-drawer {
+    top: 6px;
+  }
+}
+.onboard-appearance .overlay-chrome-grid {
+  width: 100%;
+}
+.onboard-appearance .overlay-chrome-card {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.12);
+}
+.onboard-appearance .overlay-chrome-card:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.16);
+}
+.onboard-appearance .overlay-chrome-card--selected {
+  border-color: rgba(244, 244, 245, 0.55);
+  background: rgba(255, 255, 255, 0.2);
+}
+.onboard-appearance .overlay-chrome-card__title {
+  color: #fafafa;
+}
+.onboard-appearance .overlay-chrome-card__desc,
+.onboard-appearance .overlay-chrome-card__default {
+  color: rgba(244, 244, 245, 0.72);
+}
+.onboard-appearance-preview {
+  position: relative;
+  width: 100%;
+  height: 148px;
+  overflow: hidden;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: linear-gradient(180deg, #2a084c 0%, #12041f 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 14px 32px -24px rgba(0, 0, 0, 0.86);
+}
+.onboard-appearance--compact .onboard-appearance-preview {
+  height: 104px;
+}
+.onboard-appearance-preview-caption {
+  max-width: 100%;
+  margin: -10px 0 0;
+  color: rgba(255, 255, 255, 0.76);
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: center;
+}
+.onboard-appearance-preview__desktop {
+  position: absolute;
+  inset: 28px 16px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  pointer-events: none;
+}
+.onboard-appearance-preview__hit {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  z-index: 3;
+  width: 220px;
+  height: 36px;
+  transform: translateX(-50%);
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.onboard-appearance-preview--bar .onboard-appearance-preview__hit {
+  cursor: default;
+}
+.onboard-appearance-preview__hint {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  z-index: 1;
+  width: 22px;
+  height: 3px;
+  transform: translateX(-50%);
+  border-radius: 0 0 4px 4px;
+  background: rgba(214, 186, 255, 0.28);
+  pointer-events: none;
+}
+.onboard-appearance-preview__island {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  z-index: 2;
+  width: 36px;
+  height: 16px;
+  transform: translateX(-50%);
+  border-radius: 0 0 10px 10px;
+  background: rgba(214, 186, 255, 0.92);
+  pointer-events: none;
+}
+.onboard-appearance-preview__bar-slot {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  z-index: 2;
+  width: 72%;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.onboard-appearance-preview__bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(20, 20, 22, 0.78);
+  color: rgba(255, 255, 255, 0.95);
+  font-size: 11px;
+  font-weight: 500;
+}
+/* Physical placement preview only. It deliberately reuses the same mock and spring state as the
+   top-center preview; it does not emulate or depend on a hardware notch. */
+.onboard-appearance-preview--right-edge .onboard-appearance-preview__hit {
+  top: 24px;
+  right: 0;
+  left: auto;
+  width: 52px;
+  height: 84px;
+  transform: none;
+}
+.onboard-appearance-preview--right-edge .onboard-appearance-preview__hint {
+  top: 48px;
+  right: 0;
+  left: auto;
+  width: 3px;
+  height: 20px;
+  transform: none;
+  border-radius: 4px 0 0 4px;
+}
+.onboard-appearance-preview--right-edge .onboard-appearance-preview__island {
+  top: 45px;
+  right: 0;
+  left: auto;
+  width: 18px;
+  height: 32px;
+  transform: none;
+  border-radius: 10px 0 0 10px;
+}
+.onboard-appearance-preview--right-edge .onboard-appearance-preview__bar-slot {
+  top: 38px;
+  right: 0;
+  left: auto;
+  width: 68%;
+  transform: none;
+}
+.onboard-appearance-preview--right-edge .onboard-appearance-preview__bar {
+  border-radius: 999px 0 0 999px;
+}
+.onboard-appearance-preview__edge-rail {
+  position: absolute;
+  top: 36px;
+  right: 0;
+  z-index: 3;
+  width: 10px;
+  height: 76px;
+  border: 1px solid rgba(214, 186, 255, 0.28);
+  border-right: 0;
+  border-radius: 8px 0 0 8px;
+  background: rgba(24, 16, 36, 0.82);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    -4px 0 12px -7px rgba(0, 0, 0, 0.64),
+    0 0 14px -8px rgba(127, 0, 218, 0.62);
+  pointer-events: none;
+}
+.onboard-appearance-preview__edge-rail::after {
+  content: '';
+  display: block;
+  width: 2px;
+  height: 34px;
+  margin: 19px auto;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.48);
+}
+.onboard-appearance-preview__edge-glow {
+  position: absolute;
+  top: 48px;
+  right: 0;
+  z-index: 1;
+  width: 2px;
+  height: 28px;
+  border-radius: 4px 0 0 4px;
+  background: linear-gradient(to bottom, transparent, rgba(214, 186, 255, 0.52), transparent);
+  box-shadow: -2px 0 10px -4px rgba(127, 0, 218, 0.7);
+  pointer-events: none;
+}
+.onboard-appearance-preview__edge-drawer {
+  position: absolute;
+  top: 28px;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: min(36%, 148px);
+  height: 92px;
+  padding: 0 14px 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-right: 0;
+  border-radius: 12px 0 0 12px;
+  background: rgba(24, 16, 36, 0.9);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    -12px 0 28px -18px rgba(0, 0, 0, 0.72),
+    0 0 20px -12px rgba(127, 0, 218, 0.52);
+  color: rgba(255, 255, 255, 0.86);
+  font-size: 10px;
+  font-weight: 600;
+  pointer-events: none;
+  transform-origin: right center;
+}
+.onboard-appearance-preview__edge-drawer--in {
+  animation: onboard-edge-preview-in 340ms var(--ease-spring) both;
+}
+.onboard-appearance-preview__edge-drawer--out {
+  animation: onboard-edge-preview-out 300ms var(--ease-spring) both;
+}
+.onboard-appearance--compact .onboard-appearance-preview__edge-rail {
+  top: 14px;
+}
+.onboard-appearance--compact .onboard-appearance-preview__edge-glow {
+  top: 32px;
+}
+.onboard-appearance--compact .onboard-appearance-preview__edge-drawer {
+  top: 6px;
+}
+@keyframes onboard-edge-preview-in {
+  from { opacity: 1; transform: translateX(12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes onboard-edge-preview-out {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: 1; transform: translateX(12px); }
+}

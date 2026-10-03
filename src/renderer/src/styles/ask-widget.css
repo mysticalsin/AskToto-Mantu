@@ -1,0 +1,196 @@
+/* ── Ask widget — Cluely-style two-row overlay, Mantu purple glass ──────────────────────────
+   The hero input + ↵ on top, a slim toolbar below; answers expand inside it above the input.
+   Glass technique: same 3-layer system as .glass — white tint → translucent fill → dark scrim.
+   Shared tokens: --blur-panel/--blur-saturate/--glass-scrim-bar/--glass-fill/--glass-tint-white.
+   The scrim (--glass-scrim-bar) keeps text legible over any desktop; the ~0.6 fill lets the
+   backdrop blur breathe through. */
+.aw-widget {
+  position: relative;
+  border-radius: var(--radius-outer);
+  overflow: hidden;
+  /* 3-layer glass: white specular tint → ~0.6 purple fill → dark scrim (same technique as .glass) */
+  background:
+    linear-gradient(var(--glass-tint-white), var(--glass-tint-white)),
+    linear-gradient(var(--glass-fill), var(--glass-fill)),
+    var(--glass-scrim-bar);
+  -webkit-backdrop-filter: blur(var(--blur-panel)) saturate(var(--blur-saturate));
+  backdrop-filter: blur(var(--blur-panel)) saturate(var(--blur-saturate));
+  border: 1px solid var(--color-hair);
+  /* No outer black drop-shadow (was 0 30px 70px -20px rgba(0,0,0,0.74)) — it bled well past the
+     widget's edges into the empty space around it, reading as a grey halo over a light desktop. The
+     thin purple ring + ambient glow + inset specular rim-light still give it a "lifted" feel without
+     smudging the background. */
+  box-shadow:
+    0 0 0 1px rgba(127, 0, 218, 0.09),
+    0 0 50px -14px var(--color-accent-glow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+.aw-toolbar {
+  background: var(--aw-glass-bot);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 20px;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  container-type: inline-size;
+  container-name: aw-toolbar;
+}
+.aw-toolbar__tools {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+}
+.aw-toolbar__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.aw-toolbar__timer {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 96px;
+}
+.aw-toolbar__transcript {
+  flex: 0 0 auto;
+}
+.aw-toolbar__transcript-copy {
+  display: inline;
+}
+/* Shrink copy before any control may paint on a neighbor. */
+@container aw-toolbar (max-width: 720px) {
+  .aw-toolbar__transcript-copy {
+    display: none;
+  }
+}
+/* ↵ submit + the mini-pill mic/buttons share the purple fill */
+.aw-fill {
+  background: var(--aw-btnfill);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.aw-fill:hover {
+  background: var(--aw-btnfill-hover);
+}
+/* the Mantu mark gets a soft brand glow ring. Kept tight (small blur, generous negative spread) since
+   the control pill's own window is hugged to its visible content — a wider glow than this gets hard-
+   clipped into a flat-edged smudge at the window boundary instead of fading out naturally. */
+.aw-mark-glow {
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.16),
+    0 3px 8px -4px var(--color-accent-glow);
+}
+/* hover menu off the mark + the mode popover */
+.aw-menu {
+  background: var(--aw-glass-bot);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 12px 26px -10px rgba(0, 0, 0, 0.6);
+}
+/* floating control mini-pill (collapsed state). The window is hugged tightly to this element's own
+   width/height (see data-hug-width in state.ts) — a shadow with too much reach gets hard-clipped into
+   a flat-edged box at the window boundary instead of fading out, so this stays deliberately more
+   contained than a typical floating-panel shadow. */
+.aw-pill {
+  border-radius: 999px;
+  background: var(--aw-glass-bot);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  backdrop-filter: blur(20px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow:
+    0 6px 16px -8px rgba(0, 0, 0, 0.55),
+    0 0 16px -8px var(--color-accent-glow);
+}
+
+/* ── Auto-hide peek strip (MQA-274) ─────────────────────────────────────────────────────────
+   The slim, top-hugging capsule the overlay collapses to when idle and un-hovered (the Vibe-Island
+   resting "notch"). Deliberately small so the hugged window is a tiny top-center strip, not a wide
+   transparent click-trap. Springs into place with a compositor-cheap transform+opacity (reduced-motion
+   is honoured by the global rule at the bottom of this file, which zeroes the duration). */
+/* Hide rest: 1–8px fully transparent hairline. Cursor watch is the sensor, not this paint. */
+.overlay-hide-target {
+  display: block;
+  width: 8px;
+  height: 2px;
+  min-width: 0;
+  min-height: 0;
+  max-width: 8px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  opacity: 1;
+  pointer-events: none;
+  cursor: default;
+}
+
+.overlay-peek {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 132px;
+  height: 15px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-top-color: rgba(255, 255, 255, 0.04);
+  border-radius: 0 0 999px 999px; /* flat top edge — it hugs the very top of the screen */
+  background: var(--aw-glass-bot);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  backdrop-filter: blur(18px) saturate(140%);
+  box-shadow:
+    0 4px 12px -6px rgba(0, 0, 0, 0.55),
+    0 0 14px -8px var(--color-accent-glow);
+  cursor: pointer;
+  transform: translateY(0);
+  transition:
+    width 160ms var(--ease-spring),
+    background-color 160ms ease,
+    box-shadow 160ms ease;
+  animation: overlay-peek-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.overlay-peek:hover {
+  width: 156px;
+  box-shadow:
+    0 5px 14px -6px rgba(0, 0, 0, 0.6),
+    0 0 18px -6px var(--color-accent-glow);
+}
+.overlay-peek__grip {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+.overlay-peek__grip > span {
+  display: block;
+  width: 3px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--color-ink-3);
+}
+/* Contained multi-colour hint while the overlay is hidden from screen capture (contentProtection on) —
+   the peek's own box can't afford the full aw-hidden-rainbow halo without the narrow hugged window
+   clipping it into a flat band, so this is a tighter version that stays inside the strip. */
+.overlay-peek--stealth {
+  border-color: rgba(175, 82, 222, 0.5);
+  box-shadow:
+    0 0 0 1px rgba(175, 82, 222, 0.5),
+    0 0 10px -2px rgba(127, 0, 218, 0.7),
+    0 0 14px 0 rgba(50, 173, 230, 0.35),
+    0 4px 12px -6px rgba(0, 0, 0, 0.5);
+}
+.overlay-peek--stealth .overlay-peek__grip > span {
+  background: rgba(219, 190, 255, 0.85);
+}
+.overlay-chrome-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
