@@ -40,7 +40,7 @@ describe('screen-capture permission recovery', () => {
     expect(submitBlock).not.toMatch(/askScreen\(q/)
     // … the blank "look at my screen" gesture is the ONLY askScreen call in submit …
     expect(submitBlock.match(/askScreen\(/g)?.length).toBe(1)
-    expect(submitBlock).toMatch(/askScreen\('Help me with what is on my screen\.'/)
+    expect(submitBlock).toMatch(/askScreen\(SCREEN_HELP_PROMPT/)
     // … and the typed branch answers plainly.
     expect(submitBlock).toMatch(/ask\.run\(\{ mode: 'answer', prompt: q, history: historyRef\.current \}\)/)
   })

@@ -98,7 +98,7 @@ import {
   retireRecapWriteKeys
 } from './lib/recap-write-coordinator'
 import { playCue, playClick, setSoundsEnabled } from './lib/sound'
-import { DEFAULT_SHORTCUTS, ASK_MEMORY_IDLE_MS } from '@shared/ipc'
+import { DEFAULT_SHORTCUTS } from '@shared/ipc'
 import { applyCaveman, DEFAULT_ASK_CAVEMAN } from '@shared/caveman-ask'
 import type { HotkeyAction, TranscriptLine, ConversationMode, ChatTurn, MetisCommandState } from '@shared/ipc'
 import type { RecapStatus } from '@shared/recap-status'
@@ -550,9 +550,7 @@ export function App(): JSX.Element {
   const lastSuggestRef = useRef(0)
   const historyRef = useRef<ChatTurn[]>([]) // multi-turn memory for plain Ask follow-ups
   const copilotHistoryRef = useRef<ChatTurn[]>([]) // multi-turn memory for Copilot follow-ups during Listen
-  // When the last Ask turn completed — the renderer half of main's fresh-question staleness check. The
-  // screen-ask fast path (submit's priorAnswerOk branch) relies on history carrying the prior screen
-  // description; once main would wipe that history as stale, the fast path must re-capture instead.
+  // When the last Ask turn completed — the renderer half of main's fresh-question staleness check.
   const lastTurnAtRef = useRef(0)
   const pendingUserRef = useRef<{ id: string; q: string } | null>(null)
   const meetingStartRef = useRef(0)
@@ -1471,14 +1469,7 @@ export function App(): JSX.Element {
         // The fallback never saw a screen — a screen-asserting label ("Viewed screen") would contradict
         // the banner above and claim a capture that didn't happen.
         const fallbackLabel = opts?.label && /screen/i.test(opts.label) ? undefined : opts?.label
-        const id = ask.run({
-          mode: 'answer',
-          prompt,
-          label: fallbackLabel,
-          kind: opts?.kind,
-          history: opts?.history,
-          transcript: opts?.transcript
-        })
+        const id = ask.run({ mode: 'answer', prompt, label: fallbackLabel, kind: opts?.kind, history: opts?.history, transcript: opts?.transcript })
         if (id && opts?.record) pendingUserRef.current = { id, q: opts.record }
         return id
       } finally {
@@ -1580,14 +1571,6 @@ export function App(): JSX.Element {
       // configured provider can read images) instead — without it, a fully vision-incapable setup (e.g.
       // claude-cli/codex-cli/Grok only, all vision:false) hard-errored here instead of falling through to
       // the plain-text else branch below.
-      // The stay-fast branch below answers a typed follow-up from HISTORY (no fresh capture) — the prior
-      // turn's text describes what was on screen. That premise only holds while follow-up memory is ON
-      // and main's fresh-question gate would still let the history through (same idle window). With
-      // memory off (the default) or the window expired, main wipes the history, which used to leave this
-      // branch answering with zero context (review blocker, 2026-08-04) — re-capture instead.
-      const memoryLive =
-        (settings?.askFollowUpMemory ?? false) && Date.now() - lastTurnAtRef.current <= ASK_MEMORY_IDLE_MS
-      const priorAnswerOk = !!ask.answer?.text && !ask.answer.error && memoryLive
       if (!q) {
         // Blank Enter always means "look at my screen right now" — a deliberate fresh look, regardless
         // of whether an answer is already showing.
@@ -1620,14 +1603,12 @@ export function App(): JSX.Element {
     setInput('')
   }, [
     input,
-    ask.answer,
     ask.run,
     suggest.run,
     listen.listening,
     listen.text,
     settings?.screenAsk,
     settings?.visionAvailable,
-    settings?.askFollowUpMemory,
     settings?.askCaveman,
     askScreen,
     assist,
