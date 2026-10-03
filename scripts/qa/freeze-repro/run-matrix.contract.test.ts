@@ -1,12 +1,12 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
-import type { AddressInfo } from 'node:net'
+import type { AddressInfo, Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { WebSocketServer } from 'ws'
 import { describe, expect, it } from 'vitest'
-import { DRIVE_EXPRESSIONS, PAGE_PROBE, deriveRowResult } from './cdp-observe.mjs'
+import { DRIVE_EXPRESSIONS, PAGE_PROBE, deriveRowResult, observe } from './cdp-observe.mjs'
 import { recordProblems } from '../../evidence/record.mjs'
 import { m2_0008BundleProblems, m2_0194BundleProblems } from '../../evidence/check.mjs'
 
@@ -56,6 +56,25 @@ async function fakeDevTools({ hangHistory = false, visible = true } = {}): Promi
     close: () => new Promise<void>((resolve) => {
       for (const client of sockets.clients) client.terminate()
       sockets.close()
+      server.close(() => resolve())
+    })
+  }
+}
+
+async function hangingDevToolsList(): Promise<{ port: number; close: () => Promise<void> }> {
+  const sockets = new Set<Socket>()
+  const server: Server = createServer(() => {
+    // The DevTools listener accepted the request, but the hung app never writes /json/list.
+  })
+  server.on('connection', (socket) => {
+    sockets.add(socket)
+    socket.on('close', () => sockets.delete(socket))
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  return {
+    port: (server.address() as AddressInfo).port,
+    close: () => new Promise<void>((resolve) => {
+      for (const socket of sockets) socket.destroy()
       server.close(() => resolve())
     })
   }
@@ -814,5 +833,21 @@ describe('M2-0462 cdp-observe derivation', () => {
     expect(deriveRowResult('row-1-history-open', { ...answered, window_visible: false })).toMatchObject({ operator_result: 'pass' })
     expect(deriveRowResult('row-4-second-instance-reopen', { ...answered, reachable: false, page_targets: 0 })).toMatchObject({ operator_result: 'not-exercised' })
     expect(deriveRowResult('row-1-history-open', { ...answered, main_round_trip: 'no-bridge', drive: 'no-bridge' })).toMatchObject({ operator_result: 'not-exercised' })
+  })
+
+  it('treats a DevTools HTTP timeout as an observed freeze', async () => {
+    const devtools = await hangingDevToolsList()
+    try {
+      const cdp = await observe({ port: devtools.port, drive: 'none', timeoutMs: 100 })
+
+      expect(cdp).toMatchObject({ reachable: true, devtools_http: 'timeout', page_targets: 0 })
+      expect(deriveRowResult('row-1-history-open', cdp)).toMatchObject({
+        operator_result: 'observed',
+        symptom_observed: true,
+        reason: 'devtools-http-timeout'
+      })
+    } finally {
+      await devtools.close()
+    }
   })
 })
