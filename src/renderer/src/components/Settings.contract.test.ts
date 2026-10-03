@@ -207,7 +207,7 @@ describe('the Custom provider tile can actually be selected (finding 5)', () => 
 
 describe('About footer version', () => {
   it('reads the release version from package.json instead of hard-coding a stale value', () => {
-    expect(source).toContain("import appPackage from '../../../../package.json'")
+    expect(source).toContain("import appPackage from '../../../../../package.json'")
     expect(source).toMatch(/Métis \{appPackage\.version\} · Mantu/)
     expect(source).not.toMatch(/Métis 1\.0\.0 · Mantu/)
   })
@@ -407,7 +407,7 @@ describe('Set up automatically shows an honest status chip', () => {
 // with its own download-page fallback ("Always reachable so the user is never stranded") hidden, because
 // that link renders only in phase 'blocked' or 'idle'.
 describe('MQA-164 — a failed update download leaves the Settings row with a way out', () => {
-  const block = (): string => blockAfter('function UpdatesSection(', '\nfunction ModePromptEditor')
+  const block = (): string => blockAfter('function UpdatesSection(', '\n// FILE: features/settings/TapControlCard.tsx')
 
   it('tells the user only a QA-approved Latest is offered', () => {
     expect(block()).toMatch(/QA-approved Latest from Metis-Releases/)
@@ -452,14 +452,14 @@ describe('Set up Dust installs the managed CLI, then signs in', () => {
 })
 
 describe('BRAIN-CONNECTORS — one-click ClickUp and Plane, Polo form stays', () => {
-  const product = blockAfter('function ProductConnectCard(', '\nfunction ClickupCard(')
-  const polo = blockAfter('function McpConnectionCard(', '\nconst primaryBtnStyle')
-  const intelligence = blockAfter('function IntelligenceTab(', '\nfunction GraphSection(')
+  const product = blockAfter('function ProductConnectCard(', '\nexport function ClickupCard(')
+  const polo = blockAfter('function McpConnectionCard(', '\nexport const primaryBtnStyle')
+  const intelligence = blockAfter('function IntelligenceTab(', '\nexport function GraphSection(')
   const productCopy = product.replace(/^\s*\/\/.*$/gm, '')
 
   it('ClickUp and Plane default cards have no MCP URL field', () => {
-    const clickup = blockAfter('function ClickupCard(', '\nfunction PlaneCard(')
-    const plane = blockAfter('function PlaneCard(', '\nfunction getAudioChoices(')
+    const clickup = blockAfter('function ClickupCard(', '\nexport function PlaneCard(')
+    const plane = blockAfter('function PlaneCard(', '\nexport const OPERATOR_ENTITLEMENT_LABELS')
     expect(productCopy).not.toMatch(/MCP endpoint URL/)
     expect(clickup).toMatch(/<ClickUpMark/)
     expect(plane).toMatch(/<PlaneMark/)
@@ -693,5 +693,51 @@ describe('Cloudflare tile opens Operator OAuth, not a key-paste card', () => {
     expect(source).not.toMatch(/Paste the Worker/)
     const preload = readFileSync(join(__dirname, '../../../preload/index.ts'), 'utf8')
     expect(preload).toMatch(/cloudflareConnect:/)
+  })
+})
+
+describe('M2-0412 fleet model policy — "managed by your organization" banner', () => {
+  it('reads modelPolicyCapabilities.askChat (Worker-authoritative, never client-computed) and shows the portal as the source', () => {
+    const block = blockAfter('const askChatPolicy = settings.modelPolicyCapabilities.askChat', '{/* CLI Integration')
+    expect(block).toMatch(/askChatPolicy &&/)
+    expect(block).toMatch(/Managed by your organization/)
+    expect(block).toMatch(/set on the Operator portal/)
+  })
+
+  it('never lets the provider tiles below silently offer a choice outside the fleet policy', () => {
+    expect(source).toContain('const providerLocked = locked || modelPolicyLocked')
+    expect(source).toContain('locked={providerLocked}')
+    expect(source).toContain('disabled={providerLocked}')
+    expect(source).toContain('askChatPolicy.provider')
+    expect(source).toContain('askChatPolicy.model')
+  })
+
+  it('shows a visible "not managed" state when no policy capability is set', () => {
+    const banners = blockAfter('{Object.keys(settings.modelPolicyCapabilities).length === 0 &&', '{askChatPolicy &&')
+    expect(banners).toMatch(/Object\.keys\(settings\.modelPolicyCapabilities\)\.length === 0/)
+    expect(banners).toMatch(/Models: not managed/)
+    expect(banners).toMatch(/Operator portal/)
+  })
+
+  it('locks the base and thinking model fields while a policy governs askChat, naming the portal as the source', () => {
+    expect(source).toContain('const modelPolicyLocked = !!askChatPolicy')
+    const base = blockAfter('Base model · fast, cheap', 'Thinking model · hard, coding questions')
+    expect(base).toMatch(/modelPolicyLocked \|\| settings\.managedKeys\.includes\('providerModels'\)/)
+    expect(base).toMatch(/modelPolicyLocked && <span className=\{managedChipCls\}>Managed by the Operator portal/)
+    const thinking = blockAfter('Thinking model · hard, coding questions', 'datalist id')
+    expect(thinking).toMatch(/modelPolicyLocked \|\| settings\.managedKeys\.includes\('providerModelsThinking'\)/)
+  })
+
+  it('also surfaces the stt and localModel capabilities as managed banners in their split settings sections', () => {
+    const localBanner = blockAfter('const localModelPolicy = settings.modelPolicyCapabilities.localModel', '{/* CLI Integration')
+    expect(localBanner).toMatch(/localModelPolicy &&/)
+    expect(localBanner).toMatch(/MODEL_POLICY_CAPABILITY_LABELS\.localModel/)
+    const sttBanner = blockAfter('const sttPolicy = settings.modelPolicyCapabilities.stt', '<Section title="Listen to"')
+    expect(sttBanner).toMatch(/sttPolicy &&/)
+    expect(sttBanner).toMatch(/MODEL_POLICY_CAPABILITY_LABELS\.stt/)
+    expect(`${localBanner}\n${sttBanner}`).toMatch(/Managed by your organization/)
+    expect(`${localBanner}\n${sttBanner}`).toMatch(/set on the Operator portal/)
+    expect(source).toContain('sttPolicy.provider')
+    expect(source).toContain('localModelPolicy.provider')
   })
 })

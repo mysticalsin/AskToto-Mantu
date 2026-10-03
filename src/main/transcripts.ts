@@ -21,6 +21,7 @@ import { refuseIfDemoTagged } from '@shared/demo-guard'
 import { recapStatusValidationError } from '@shared/recap-status'
 import { measuredDurationMs, meetingDurationMinutes } from '@shared/meeting-duration'
 import { classifyAll, storageAt } from './infra/storage/meetings-storage'
+import { recordLocalWrite } from './infra/storage/local-writes'
 import type { FileClass } from './infra/storage/gateway'
 import { decodeSaved, isEncryptedBytes, tryDecodeSaved, writeSaved } from './infra/storage/saved-file'
 export {
@@ -60,6 +61,7 @@ function rewrapRecoveredEnvelope(filePath: string, bytes: Buffer): void {
   try {
     writeFileSync(tmp, bytes, { mode: 0o600 })
     renameSync(tmp, filePath)
+    void recordLocalWrite(filePath)
   } catch {
     try {
       if (existsSync(tmp)) unlinkSync(tmp)

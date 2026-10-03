@@ -544,7 +544,28 @@ export function summarizeProof(report) {
 
 function failureLabel(error) {
   if (error instanceof Precondition || error instanceof Failure) return error.message
+  if (error && typeof error === 'object' && typeof error.code === 'string' && error.code.trim()) return `unexpected-error:${error.code}`
+  if (error && typeof error === 'object' && typeof error.name === 'string' && error.name.trim()) return `unexpected-error:${error.name}`
   return 'unexpected-error'
+}
+
+export function topLevelFailureReport(error) {
+  return {
+    schema: 3,
+    ticket: 'M2-0233',
+    result: 'fail',
+    failures: [failureLabel(error)],
+    proofs: {},
+    externalBlockers: []
+  }
+}
+
+function removeProfileBestEffort(profile) {
+  try {
+    rmSync(profile, { recursive: true, force: true, maxRetries: process.platform === 'win32' ? 5 : 0, retryDelay: 250 })
+  } catch {
+    /* A hosted-runner temp profile can remain locked briefly after process exit; cleanup is not proof evidence. */
+  }
 }
 
 async function runStandInProof({ installRoot, executable }) {
@@ -634,7 +655,7 @@ async function runStandInProof({ installRoot, executable }) {
     await waitFor(() => !first?.pid || !processAlive(first.pid), 5_000, POLL_MS)
     await waitFor(() => !second?.pid || !processAlive(second.pid), 5_000, POLL_MS)
     await waitFor(() => !standIn?.pid || !processAlive(standIn.pid), 5_000, POLL_MS)
-    rmSync(profile, { recursive: true, force: true })
+    removeProfileBestEffort(profile)
   }
   return summarizeProof(observation)
 }
@@ -735,7 +756,7 @@ async function runRealLlamaProof({ installRoot, executable }) {
     await waitFor(() => !first?.pid || !processAlive(first.pid), 5_000, POLL_MS)
     await waitFor(() => !second?.pid || !processAlive(second.pid), 5_000, POLL_MS)
     observation.hostFloorOverrides = hostFloorOverrides(readAudit(profile))
-    rmSync(profile, { recursive: true, force: true })
+    removeProfileBestEffort(profile)
   }
   return summarizeProof(observation)
 }
@@ -890,7 +911,7 @@ async function runLegacyOrphanProof({ installRoot, executable }) {
     for (const pid of [orphanPid, controlPid]) if (pid && processAlive(pid)) killBestEffort(pid)
     await waitFor(() => !app?.pid || !processAlive(app.pid), 5_000, POLL_MS)
     await waitFor(() => [orphanPid, controlPid].every((pid) => !pid || !processAlive(pid)), 5_000, POLL_MS)
-    rmSync(profile, { recursive: true, force: true })
+    removeProfileBestEffort(profile)
   }
   return summarizeProof(observation)
 }
@@ -978,6 +999,13 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     await main()
   } catch (error) {
+    try {
+      const { reportPath } = parseCliArgs(process.argv.slice(2))
+      mkdirSync(dirname(reportPath), { recursive: true })
+      writeFileSync(reportPath, `${JSON.stringify(topLevelFailureReport(error), null, 2)}\n`)
+    } catch {
+      /* Usage errors or report-write failures are already represented by stderr and the exit code. */
+    }
     console.error(`[sidecar-boot-reaper] ${failureLabel(error)}`)
     process.exit(error instanceof Precondition ? 2 : 1)
   }
