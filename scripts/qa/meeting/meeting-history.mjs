@@ -5,7 +5,7 @@
  * this process.
  */
 import { spawn } from 'node:child_process'
-import { closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { freemem, tmpdir, totalmem } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -51,6 +51,7 @@ export const HISTORY_JITTER_MS = 5_000
 export const LOOP_P99_BUDGET_MS = 50
 export const STRICT_BUDGET_MS = 250
 export const HISTORY_COMPLETION_FRACTION = 0.95
+export const HISTORY_SEARCH_TERM = 'meeting 01'
 
 export function seededRandom(seed) {
   let state = seed >>> 0
@@ -135,6 +136,62 @@ export function activeKindsFromNdjson(text) {
   return Object.fromEntries(['parakeet-utility', 'whisper-utility', 'speaker-utility', 'llama-server', 'sidecar-supervisor'].map((kind) => [kind, kinds.has(kind)]))
 }
 
+export function summarizeAuditEvidence(records) {
+  const events = {}
+  const floorOverrides = []
+  const captureFailures = []
+  for (const record of records) {
+    if (typeof record?.event !== 'string') continue
+    events[record.event] = (events[record.event] ?? 0) + 1
+    if (record.event === 'local.host-floor-override') {
+      const floor = record.floor === 'advertised-ram' || record.floor === 'prewarm-available-ram' ? record.floor : 'unknown'
+      floorOverrides.push({ floor })
+    }
+    if (record.event === 'capture.failed') {
+      const reason = typeof record.reason === 'string' ? record.reason : 'unknown'
+      captureFailures.push({ reason })
+    }
+  }
+  return { events, floorOverrides, captureFailures }
+}
+
+export function readAuditEvidence(profileDir) {
+  const dir = join(profileDir, 'logs')
+  if (!existsSync(dir)) return summarizeAuditEvidence([])
+  const records = []
+  for (const name of readdirSync(dir).filter((entry) => /^audit(-\d+)?\.log$/.test(entry))) {
+    for (const line of readFileSync(join(dir, name), 'utf8').split('\n')) {
+      if (!line.trim()) continue
+      try {
+        records.push(JSON.parse(line))
+      } catch {}
+    }
+  }
+  return summarizeAuditEvidence(records)
+}
+
+export function deriveLlamaCause(sidecars, auditEvidence) {
+  if (sidecars?.['llama-server']) return null
+  if ((auditEvidence?.floorOverrides ?? []).length > 0) return 'floor-refused-despite-override'
+  if (auditEvidence?.events?.['local.runtime.missing']) return 'local-runtime-missing'
+  if (auditEvidence?.events?.['local.model.download_fail']) return 'local-model-download-failed'
+  if (auditEvidence?.events?.['local.model.checksum_fail']) return 'local-model-checksum-failed'
+  if (auditEvidence?.events?.['llm.call']) return 'llm-call-observed-without-llama-server'
+  return 'not-observed'
+}
+
+export function deriveThemChannel(settings, auditEvidence) {
+  if (settings?.audioSource === 'mic') return { active: false, cause: 'mic-only-configuration' }
+  const reasons = new Set((auditEvidence?.captureFailures ?? []).map((failure) => failure.reason))
+  if (reasons.has('screen_permission_denied')) return { active: false, cause: 'no-screen-recording-grant' }
+  if (reasons.has('loopback_no_screen_source')) return { active: false, cause: 'no-system-audio-source' }
+  return { active: false, cause: 'not-observed' }
+}
+
+export function filteredHistoryRendered(unfilteredRows, resultRows) {
+  return Number.isFinite(unfilteredRows) && Number.isFinite(resultRows) && resultRows > 0 && resultRows < unfilteredRows
+}
+
 function parseNdjsonRecords(text) {
   return String(text)
     .split('\n')
@@ -190,9 +247,11 @@ export function buildMeetingHistoryReport(observed, outcome) {
     sidecars: observed.sidecars ?? {},
     sidecarCauses: observed.sidecarCauses ?? {},
     themChannel: observed.themChannel ?? { active: false, cause: 'not-probed' },
+    auditEvidence: observed.auditEvidence ?? { events: {}, floorOverrides: [], captureFailures: [] },
     profile: observed.profile ?? { kind: 'unknown' },
     timingNotes: {
-      historyLoopMaxWindow: 'measured from the preceding main-loop sample through the History cycle'
+      historyLoopMaxWindow: 'measured from the preceding main-loop sample through the History cycle',
+      ...(observed.timingNotes ?? {})
     },
     counts: {
       meetingFilesBefore: observed.meetingFilesBefore,
@@ -310,19 +369,24 @@ const HISTORY_SEARCH = (term) => `(() => {
   const input = document.querySelector('input[aria-label="Search past meetings"]')
   if (!input) return { ok: false, rows: 0 }
   input.focus()
-  input.value = ${JSON.stringify(term)}
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+  if (!setter) return { ok: false, rows: 0 }
+  setter.call(input, ${JSON.stringify(term)})
   input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ${JSON.stringify(term)} }))
+  input.dispatchEvent(new Event('change', { bubbles: true }))
   return { ok: true }
 })()`
 
-const HISTORY_RESULT_ROWS = (term) => `(() => {
+const HISTORY_RESULT_ROWS = (term, unfilteredRows) => `(() => {
   const term = ${JSON.stringify(term)}.toLowerCase()
+  const unfilteredRows = ${Number(unfilteredRows)}
   const buttons = [...document.querySelectorAll('button')]
-  return buttons.filter((button) => {
+  const rows = buttons.filter((button) => {
     const label = button.getAttribute('aria-label') || ''
     const text = (button.textContent || '').trim()
     return !label && text.toLowerCase().includes(term) && !/^(import meetings|back|rename meeting|export meeting copy|delete meeting)$/i.test(text)
   }).length
+  return { count: rows, filtered: Number.isFinite(unfilteredRows) && rows > 0 && rows < unfilteredRows }
 })()`
 
 const HISTORY_OPEN_ROW = (term) => `(() => {
@@ -344,7 +408,7 @@ const HISTORY_DETAIL_PRESENT = `(() => {
 })()`
 
 const BACK_OR_TRANSCRIPT = `(() => {
-  const back = document.querySelector('button[aria-label="Back"]')
+  const back = document.querySelector('button[aria-label="Back"], button[aria-label^="Back " i]')
   if (back) { back.click(); return 'back' }
   const transcript = document.querySelector('[data-bar-transcript], button[aria-label="Show transcript"]')
   if (transcript) { transcript.click(); return 'transcript' }
@@ -373,8 +437,12 @@ async function historyCycle(page, { index, tMs, term }) {
   try {
     await page.evaluate(HISTORY_OPEN)
     listRendered = Boolean(await waitFor(() => page.evaluate("!!document.querySelector('input[aria-label=\"Search past meetings\"]')"), 5_000, 250))
+    const unfilteredRows = Number(await page.evaluate(HISTORY_ROWS).catch(() => 0))
     const search = await page.evaluate(HISTORY_SEARCH(term)).catch(() => null)
-    searchRendered = Boolean(search?.ok && await waitFor(() => page.evaluate(HISTORY_RESULT_ROWS(term)), 5_000, 250))
+    searchRendered = Boolean(search?.ok && await waitFor(async () => {
+      const result = await page.evaluate(HISTORY_RESULT_ROWS(term, unfilteredRows)).catch(() => null)
+      return result?.filtered ? result : null
+    }, 5_000, 250))
     rowOpened = searchRendered && Boolean(await page.evaluate(HISTORY_OPEN_ROW(term)).catch(() => false))
     rowOpened = rowOpened && Boolean(await waitFor(() => page.evaluate(HISTORY_DETAIL_PRESENT), 5_000, 250))
     await sleep(250)
@@ -382,6 +450,7 @@ async function historyCycle(page, { index, tMs, term }) {
     await sleep(250)
     await page.evaluate(BACK_OR_TRANSCRIPT).catch(() => null)
     await page.evaluate(TRANSCRIPT_CLICK).catch(() => false)
+    await waitFor(() => page.evaluate(TRANSCRIPT_PRESENT), 5_000, 250)
     outcome = listRendered && searchRendered && rowOpened ? 'completed' : 'failed'
   } catch {
     outcome = 'failed'
@@ -463,7 +532,8 @@ async function main() {
     auditEvent: false,
     sidecars: {},
     sidecarCauses: {},
-    themChannel: { active: false, cause: 'no-screen-recording-grant' },
+    themChannel: { active: false, cause: 'not-probed' },
+    auditEvidence: { events: {}, floorOverrides: [], captureFailures: [] },
     census: {}
   }
   let activeCensus = null
@@ -471,7 +541,7 @@ async function main() {
 
   try {
     const { installRoot, executable } = installQaZipDetails(args.zip, installDir)
-    const { meetingsFolder, profile } = prepareProfile({ sourceProfile: args.profile, profileDir })
+    const { meetingsFolder, profile, settings: preparedSettings } = prepareProfile({ sourceProfile: args.profile, profileDir })
     observed.profile = profile
     const { path: wavPath } = writeCaptureWav(profileDir)
     const before = meetingFiles(meetingsFolder)
@@ -533,7 +603,7 @@ async function main() {
         break
       }
       if (nextCycle < cycleTimes.length && tMs >= cycleTimes[nextCycle]) {
-        const action = await historyCycle(page, { index: nextCycle, tMs, term: 'synthetic' })
+        const action = await historyCycle(page, { index: nextCycle, tMs, term: HISTORY_SEARCH_TERM })
         const sample = await sampleMainLoop(inspector, probeFile)
         action.loopMaxMs = sample.ok ? sample.value.loopMaxSinceLastMs : Infinity
         observed.historyActions.push(action)
@@ -558,6 +628,9 @@ async function main() {
       observed.savedBytes = saved?.[0] && existsSync(saved[0]) ? statSync(saved[0]).size : 0
       observed.census.active = await activeCensus.done
       activeCensus = null
+      const summary = await summarizeMainLoop(inspector)
+      observed.mainLoop = summary.ok ? summary.value : { p99Ms: Infinity, maxMs: Infinity }
+      observed.timingNotes = { mainLoopWindow: 'capture-start-through-stop' }
       const postNdjson = join(args.out, 'post-census.ndjson')
       const postCensus = startCensus({
         profileDir,
@@ -570,15 +643,15 @@ async function main() {
         evidence: 'file-fed capture stopped, saved meeting observed'
       })
       observed.census.post = await postCensus.done
-      const summary = await summarizeMainLoop(inspector)
-      observed.mainLoop = summary.ok ? summary.value : { p99Ms: Infinity, maxMs: Infinity }
       writeAuditCounts(auditCounts, { userData: profileDir, from: new Date(captureStart).toISOString(), bucketMinutes: 10 })
       const activeText = existsSync(activeNdjson) ? readFileSync(activeNdjson, 'utf8') : ''
       const postText = existsSync(postNdjson) ? readFileSync(postNdjson, 'utf8') : ''
       observed.sidecars = activeKindsFromNdjson(`${activeText}\n${postText}`)
+      observed.auditEvidence = readAuditEvidence(profileDir)
       observed.sidecarCauses = {
-        'llama-server': observed.sidecars['llama-server'] ? null : 'floor-refused-despite-override'
+        'llama-server': deriveLlamaCause(observed.sidecars, observed.auditEvidence)
       }
+      observed.themChannel = deriveThemChannel(preparedSettings, observed.auditEvidence)
       observed.growth = evaluateMeetingGrowth({
         active: activeText,
         post: postText,

@@ -6,10 +6,14 @@ import {
   activeKindsFromNdjson,
   buildMeetingHistoryReport,
   classifyDriverError,
+  deriveLlamaCause,
+  deriveThemChannel,
   evaluateMeetingGrowth,
+  filteredHistoryRendered,
   hostMemorySnapshot,
   judgeMeetingHistory,
   mergeCensusStreams,
+  summarizeAuditEvidence,
   scheduleHistoryCycles
 } from './meeting-history.mjs'
 
@@ -49,9 +53,11 @@ const cleanObserved = (overrides: Record<string, unknown> = {}) => ({
     }
   ],
   sidecars: { 'whisper-utility': true, 'speaker-utility': false, 'llama-server': false, 'sidecar-supervisor': true },
-  sidecarCauses: { 'llama-server': 'floor-refused-despite-override' },
-  themChannel: { active: false, cause: 'no-screen-recording-grant' },
+  sidecarCauses: { 'llama-server': 'not-observed' },
+  themChannel: { active: false, cause: 'mic-only-configuration' },
+  auditEvidence: { events: {}, floorOverrides: [], captureFailures: [] },
   profile: { kind: 'representative-synthetic', meetingCount: 59, layout: 'bar' },
+  timingNotes: { mainLoopWindow: 'capture-start-through-stop' },
   census: { active: { code: 0 }, post: { code: 0 } },
   growth: { outcome: 'PASS' },
   ...overrides
@@ -169,6 +175,15 @@ describe('meeting-history verdict clauses', () => {
   })
 })
 
+describe('meeting-history History search proof', () => {
+  it('requires the search result list to be non-empty and smaller than the unfiltered list', () => {
+    expect(filteredHistoryRendered(59, 1)).toBe(true)
+    expect(filteredHistoryRendered(59, 59)).toBe(false)
+    expect(filteredHistoryRendered(59, 0)).toBe(false)
+    expect(filteredHistoryRendered(0, 0)).toBe(false)
+  })
+})
+
 describe('meeting-history report', () => {
   it('summarizes active sidecar kinds from census samples without process details', () => {
     const text = [
@@ -196,9 +211,10 @@ describe('meeting-history report', () => {
       verdict: 'PASS',
       hostFloorOverride: true,
       counts: { meetingFilesBefore: 2, meetingFilesAfter: 3, savedBytes: 800 },
-      themChannel: { active: false, cause: 'no-screen-recording-grant' },
-      sidecarCauses: { 'llama-server': 'floor-refused-despite-override' },
+      themChannel: { active: false, cause: 'mic-only-configuration' },
+      sidecarCauses: { 'llama-server': 'not-observed' },
       profile: { kind: 'representative-synthetic', meetingCount: 59, layout: 'bar' },
+      timingNotes: { mainLoopWindow: 'capture-start-through-stop' },
       growth: { outcome: 'PASS' }
     })
   })
@@ -207,6 +223,26 @@ describe('meeting-history report', () => {
     expect(hostMemorySnapshot()).toEqual({
       totalBytes: expect.any(Number),
       freeBytes: expect.any(Number)
+    })
+  })
+
+  it('derives missing sidecar causes from audit evidence', () => {
+    const floorEvidence = summarizeAuditEvidence([
+      { event: 'local.host-floor-override', floor: 'advertised-ram', hostTotalBytes: 1, hostAvailableBytes: 1 }
+    ])
+    expect(deriveLlamaCause({ 'llama-server': false }, floorEvidence)).toBe('floor-refused-despite-override')
+    expect(deriveLlamaCause({ 'llama-server': false }, summarizeAuditEvidence([{ event: 'local.runtime.missing' }]))).toBe('local-runtime-missing')
+    expect(deriveLlamaCause({ 'llama-server': true }, floorEvidence)).toBeNull()
+  })
+
+  it('reports the them channel cause from configuration or capture audit evidence', () => {
+    expect(deriveThemChannel({ audioSource: 'mic' }, summarizeAuditEvidence([]))).toEqual({
+      active: false,
+      cause: 'mic-only-configuration'
+    })
+    expect(deriveThemChannel({ audioSource: 'system' }, summarizeAuditEvidence([{ event: 'capture.failed', reason: 'screen_permission_denied' }]))).toEqual({
+      active: false,
+      cause: 'no-screen-recording-grant'
     })
   })
 })
