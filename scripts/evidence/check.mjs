@@ -87,6 +87,8 @@ export const CLOSED = new Set(['DONE', 'ENGINEERING_COMPLETE'])
 const READY_STATUSES = new Set(['IN_PROGRESS', 'ENGINEERING_COMPLETE', 'DEFERRED', 'DONE'])
 const TICKET_RE = /^M2-\d{4}$/
 const DECISION_RE = /^D-\d+$/
+const LEGACY_FIX_FILE = 'legacy-fix.json'
+const LEGACY_EVIDENCE_FILE = 'legacy-evidence.json'
 
 const isPlainObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value)
 
@@ -273,25 +275,29 @@ function deferredProblems(ticket, latest) {
   return problems
 }
 
-function engineeringCompleteProblems(ticket, latest, caps) {
+function engineeringCompleteProblems(ticket, latest, caps, closesProgram, legacyEvidenceTickets = new Set()) {
   const problems = []
   if (!(ticket.external_blocker != null || caps.length > 0)) {
     problems.push(`${ticket.id}: ENGINEERING_COMPLETE requires its own or an inherited external blocker`)
   }
-  // INV-2: the *latest* record per level governs, so a withdrawn PASS (a later FAIL) must not count.
-  if (![...latest.values()].some((record) => record.result === 'PASS')) {
-    problems.push(`${ticket.id}: ENGINEERING_COMPLETE requires at least one PASS record`)
-  }
-  for (const level of (ticket.required_evidence ?? []).filter((l) => IN_HOUSE.has(l))) {
-    if (!isLatestPass(latest, level)) problems.push(`${ticket.id}: ENGINEERING_COMPLETE requires a PASS ${level} record`)
+  if (!legacyEvidenceTickets.has(ticket.id)) {
+    // INV-2: the *latest* record per level governs, so a withdrawn PASS (a later FAIL) must not count.
+    if (![...latest.values()].some((record) => record.result === 'PASS')) {
+      problems.push(`${ticket.id}: ENGINEERING_COMPLETE requires at least one PASS record`)
+    }
+    for (const level of (ticket.required_evidence ?? []).filter((l) => IN_HOUSE.has(l))) {
+      if (!isLatestPass(latest, level)) problems.push(`${ticket.id}: ENGINEERING_COMPLETE requires a PASS ${level} record`)
+    }
   }
   return problems
 }
 
-function doneProblems(ticket, latest, caps, closesProgram) {
+function doneProblems(ticket, latest, caps, closesProgram, legacyEvidenceTickets = new Set()) {
   const problems = []
-  for (const level of ticket.required_evidence ?? []) {
-    if (!isLatestPass(latest, level)) problems.push(`${ticket.id}: DONE requires a PASS ${level} record`)
+  if (!legacyEvidenceTickets.has(ticket.id)) {
+    for (const level of ticket.required_evidence ?? []) {
+      if (!isLatestPass(latest, level)) problems.push(`${ticket.id}: DONE requires a PASS ${level} record`)
+    }
   }
   if (caps.length > 0 && !closesProgram) {
     problems.push(`${ticket.id}: DONE is blocked by a dependency ancestor that is ENGINEERING_COMPLETE or BLOCKED_EXTERNAL; it can close only as ENGINEERING_COMPLETE`)
@@ -331,21 +337,22 @@ function inheritedBlockProblems(ticket, latest, roots, closesProgram) {
   return problems
 }
 
-function redBeforeProblems(ticket, latest) {
+function redBeforeProblems(ticket, latest, legacyFixTickets = new Set()) {
   if (!(CLOSED.has(ticket.status) && ticket.type === 'fix' && (ticket.required_evidence ?? []).includes('LOCALLY_TESTED'))) {
     return []
   }
+  if (legacyFixTickets.has(ticket.id)) return []
   const record = latest.get('LOCALLY_TESTED')
   return record && !record.repro ? [`${ticket.id}: fix ticket requires repro (red-before) on its LOCALLY_TESTED record`] : []
 }
 
-function statusRuleProblems(ticket, latest, caps, roots) {
+function statusRuleProblems(ticket, latest, caps, roots, legacyFixTickets = new Set(), legacyEvidenceTickets = new Set()) {
   const closesProgram = ticket.closes_program === true
   const rule = STATUS_RULES[ticket.status]
   return [
-    ...(rule ? rule(ticket, latest, caps, closesProgram) : []),
+    ...(rule ? rule(ticket, latest, caps, closesProgram, legacyEvidenceTickets) : []),
     ...inheritedBlockProblems(ticket, latest, roots, closesProgram),
-    ...redBeforeProblems(ticket, latest)
+    ...redBeforeProblems(ticket, latest, legacyFixTickets)
   ]
 }
 
@@ -399,13 +406,16 @@ function revalidationProblems(ticket, latest, decisions) {
  * because it reads files.
  * @param {object} ledger
  * @param {Map<string, object[]>} recordsByTicket
+ * @param {{legacyFixTickets?: Set<string>, legacyEvidenceTickets?: Set<string>}} options
  * @returns {string[]}
  */
-export function ledgerProblems(ledger, recordsByTicket) {
+export function ledgerProblems(ledger, recordsByTicket, options = {}) {
   const { problems: shapeProblems, tickets } = ticketShapeProblems(ledger)
   const problems = [...shapeProblems]
   const byId = ticketsById(tickets)
   const decisions = isPlainObject(ledger?.decisions) ? ledger.decisions : undefined
+  const legacyFixTickets = options.legacyFixTickets ?? new Set()
+  const legacyEvidenceTickets = options.legacyEvidenceTickets ?? new Set()
 
   problems.push(...cycleProblems(tickets, byId))
 
@@ -416,7 +426,7 @@ export function ledgerProblems(ledger, recordsByTicket) {
     const latest = latestByLevel(records)
     problems.push(...dependencyProblems(ticket, byId))
     problems.push(...slicingProblems(ticket))
-    problems.push(...statusRuleProblems(ticket, latest, caps, roots))
+    problems.push(...statusRuleProblems(ticket, latest, caps, roots, legacyFixTickets, legacyEvidenceTickets))
     problems.push(...recordContextProblems(ticket, records, decisions))
     problems.push(...revalidationProblems(ticket, latest, decisions))
   }
@@ -426,6 +436,49 @@ export function ledgerProblems(ledger, recordsByTicket) {
   }
 
   return [...new Set(problems)].sort()
+}
+
+/**
+ * @param {unknown} json
+ * @param {string} expectedDecision
+ * @param {string} label
+ * @returns {{tickets: Set<string>, problems: string[]}}
+ */
+export function legacyTicketListProblems(json, expectedDecision, label) {
+  const problems = []
+  const tickets = new Set()
+  if (!isPlainObject(json)) return { tickets, problems: [`${label}: expected a JSON object`] }
+  if (json.decision !== expectedDecision) problems.push(`${label}: decision must be ${expectedDecision}`)
+  if (!Array.isArray(json.tickets)) {
+    problems.push(`${label}: tickets must be an array`)
+  } else {
+    for (const id of json.tickets) {
+      if (typeof id !== 'string' || !TICKET_RE.test(id)) {
+        problems.push(`${label}: tickets contains invalid id ${JSON.stringify(id)}`)
+      } else if (tickets.has(id)) {
+        problems.push(`${label}: duplicate ticket ${id}`)
+      } else {
+        tickets.add(id)
+      }
+    }
+  }
+  return { tickets: problems.length > 0 ? new Set() : tickets, problems }
+}
+
+/**
+ * Missing legacy files mean no legacy tickets; malformed files are checker problems.
+ * @param {string} path
+ * @param {string} expectedDecision
+ * @param {string} label
+ * @returns {{tickets: Set<string>, problems: string[]}}
+ */
+export function readLegacyTicketList(path, expectedDecision, label) {
+  if (!existsSync(path)) return { tickets: new Set(), problems: [] }
+  try {
+    return legacyTicketListProblems(JSON.parse(readFileSync(path, 'utf8')), expectedDecision, label)
+  } catch (error) {
+    return { tickets: new Set(), problems: [`${label}: could not read JSON: ${error.message}`] }
+  }
 }
 
 /**
@@ -454,13 +507,28 @@ export function outputProblems(recordsByTicket, programRoot) {
 
 /**
  * @param {string} ledgerPath
- * @returns {{ledger: object, programRoot: string, recordsByTicket: Map<string, object[]>, problems: string[]}}
+ * @param {{legacyFixPath?: string, legacyEvidencePath?: string}} options
+ * @returns {{ledger: object, programRoot: string, recordsByTicket: Map<string, object[]>, legacyFixTickets: Set<string>, legacyEvidenceTickets: Set<string>, problems: string[]}}
  */
-export function loadProgram(ledgerPath) {
+export function loadProgram(ledgerPath, options = {}) {
   const programRoot = resolve(dirname(ledgerPath), '..')
   const ledger = JSON.parse(readFileSync(ledgerPath, 'utf8'))
-  const { recordsByTicket, problems } = readRecordStore(join(programRoot, 'evidence', 'records'))
-  return { ledger, programRoot, recordsByTicket, problems }
+  const evidenceRoot = join(programRoot, 'evidence')
+  const { recordsByTicket, problems } = readRecordStore(join(evidenceRoot, 'records'))
+  const legacyFix = readLegacyTicketList(options.legacyFixPath ?? join(evidenceRoot, LEGACY_FIX_FILE), 'OD-65', `evidence/${LEGACY_FIX_FILE}`)
+  const legacyEvidence = readLegacyTicketList(
+    options.legacyEvidencePath ?? join(evidenceRoot, LEGACY_EVIDENCE_FILE),
+    'OD-67',
+    `evidence/${LEGACY_EVIDENCE_FILE}`
+  )
+  return {
+    ledger,
+    programRoot,
+    recordsByTicket,
+    legacyFixTickets: legacyFix.tickets,
+    legacyEvidenceTickets: legacyEvidence.tickets,
+    problems: [...problems, ...legacyFix.problems, ...legacyEvidence.problems]
+  }
 }
 
 /**
@@ -1470,7 +1538,9 @@ async function main() {
         release: { type: 'string' },
         gates: { type: 'string' },
         provenance: { type: 'string' },
-        notes: { type: 'string' }
+        notes: { type: 'string' },
+        'legacy-fix': { type: 'string' },
+        'legacy-evidence': { type: 'string' }
       }
     }).values
   } catch (error) {
@@ -1492,13 +1562,19 @@ async function main() {
   if (hasLedger) {
     let program
     try {
-      program = loadProgram(resolve(values.ledger))
+      program = loadProgram(resolve(values.ledger), {
+        legacyFixPath: values['legacy-fix'] ? resolve(values['legacy-fix']) : undefined,
+        legacyEvidencePath: values['legacy-evidence'] ? resolve(values['legacy-evidence']) : undefined
+      })
     } catch (error) {
       return usageExit(`could not read the ledger: ${error.message}`)
     }
     const problems = [
       ...program.problems,
-      ...ledgerProblems(program.ledger, program.recordsByTicket),
+      ...ledgerProblems(program.ledger, program.recordsByTicket, {
+        legacyFixTickets: program.legacyFixTickets,
+        legacyEvidenceTickets: program.legacyEvidenceTickets
+      }),
       ...outputProblems(program.recordsByTicket, program.programRoot)
     ]
     if (problems.length > 0) {
