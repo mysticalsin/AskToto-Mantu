@@ -1,4 +1,6 @@
 ;; M2-0538 — strict owner-runner sandbox profile for pre-review ST-1 jobs on the owner's Mac.
+;; M2-0572 uses the same profile for the one OD-63 owner-camera job; the only additional access is
+;; the candidate app's owner-approved Camera device grant, not broader filesystem access here.
 ;;
 ;; This starts from owner-account.sb's real-data denies, then adds the rest of the owner's
 ;; credential stores, personal folders and queue workspace. It is selected only through

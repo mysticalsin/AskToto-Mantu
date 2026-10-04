@@ -2,8 +2,8 @@ name: Owner camera
 
 # Manual OD-63 lane for M2-0572. It runs only from main on the owner Mac runner, downloads the
 # named candidate DMG, verifies its sha256, grants only camera beyond the strict owner-runner sandbox,
-# and uploads content-free JSON. It is never a pull_request or fork trigger.
-run-name: Owner camera ${{ inputs.candidate_run }}
+# and uploads content-free JSON. Its pull_request trigger registers the workflow only; the job never runs there.
+run-name: ${{ github.event_name == 'pull_request' && 'Owner camera (registration)' || format('Owner camera {0}', inputs.candidate_run) }}
 
 on:
   workflow_dispatch:
@@ -16,6 +16,9 @@ on:
         description: sha256 of that run's Metis-*.dmg
         required: true
         type: string
+  pull_request:
+    paths:
+      - .github/workflows/owner-camera.yml
 
 permissions:
   contents: read

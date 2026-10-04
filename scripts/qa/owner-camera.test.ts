@@ -107,8 +107,10 @@ describe('owner-camera workflow contract', () => {
 
   it('is manual-only, main-only, and runs on the owner Mac runner', () => {
     expect(workflow).toContain('workflow_dispatch:')
-    expect(workflow).not.toContain('pull_request:')
+    expect(workflow).toContain('pull_request:')
+    expect(workflow).toContain('.github/workflows/owner-camera.yml')
     expect(workflow).toContain("github.ref == 'refs/heads/main'")
+    expect(workflow).toContain("if: github.event_name == 'workflow_dispatch'")
     expect(workflow).toContain('runs-on: [self-hosted, metis-owner-mac]')
   })
 

@@ -1,4 +1,4 @@
-import { readdirSync, statSync, writeFileSync } from 'node:fs'
+import { readdir, stat, writeFile } from 'node:fs/promises'
 import { basename, resolve } from 'node:path'
 import { app, systemPreferences } from 'electron'
 import { CommandControl } from './command-control'
@@ -7,6 +7,7 @@ import { executeDesktopAction } from './desktop-adapters'
 const REPORT_ENV = 'METIS_OWNER_CAMERA_REPORT'
 const PHOTO_DIR_ENV = 'METIS_OWNER_CAMERA_DIR'
 const APPROVED_ENV = 'METIS_OWNER_CAMERA_APPROVED'
+const WEBCONTENTS_ENV = 'METIS_OWNER_CAMERA_WEBCONTENTS_ID'
 
 type OwnerCameraSelftestReport = {
   schema: 1
@@ -22,15 +23,16 @@ type OwnerCameraSelftestReport = {
   reason?: string
 }
 
-function imageFiles(dir: string): Array<{ name: string; size: number }> {
-  return readdirSync(dir)
+async function imageFiles(dir: string): Promise<Array<{ name: string; size: number }>> {
+  const files = await Promise.all((await readdir(dir))
     .filter((name) => /\.(png|jpe?g|heic)$/i.test(name))
-    .map((name) => ({ name: basename(name), size: statSync(resolve(dir, name)).size }))
+    .map(async (name) => ({ name: basename(name), size: (await stat(resolve(dir, name))).size })))
+  return files
     .sort((a, b) => a.name.localeCompare(b.name))
 }
 
-function writeReport(path: string, report: OwnerCameraSelftestReport): void {
-  writeFileSync(path, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 })
+async function writeReport(path: string, report: OwnerCameraSelftestReport): Promise<void> {
+  await writeFile(path, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 })
 }
 
 export async function runOwnerCameraSelftest(ownerWebContentsId: number): Promise<boolean> {
@@ -55,17 +57,17 @@ export async function runOwnerCameraSelftest(ownerWebContentsId: number): Promis
 
   const cameraStatus = systemPreferences.getMediaAccessStatus('camera')
   if (cameraStatus !== 'granted') {
-    writeReport(reportPath, report({ result: 'PRECONDITION', reason: `camera grant is ${cameraStatus}` }))
+    await writeReport(reportPath, report({ result: 'PRECONDITION', reason: `camera grant is ${cameraStatus}` }))
     app.exit(0)
     return true
   }
   if (process.env[APPROVED_ENV] !== '1') {
-    writeReport(reportPath, report({ result: 'PRECONDITION', reason: 'explicit approval was not accepted' }))
+    await writeReport(reportPath, report({ result: 'PRECONDITION', reason: 'explicit approval was not accepted' }))
     app.exit(0)
     return true
   }
 
-  const before = new Set(imageFiles(photoDir).map((file) => file.name))
+  const before = new Set((await imageFiles(photoDir)).map((file) => file.name))
   let approvalPromptShown = false
   const controller = new CommandControl({
     execute: executeDesktopAction,
@@ -77,11 +79,17 @@ export async function runOwnerCameraSelftest(ownerWebContentsId: number): Promis
     { webContentsId: ownerWebContentsId, revision: 1 },
     { id: 'desktop.photo_booth_capture', args: {} }
   )
-  const confirmation = await controller.confirm({ ...proposal, webContentsId: ownerWebContentsId })
-  const after = imageFiles(photoDir).filter((file) => !before.has(file.name))
+  process.env[WEBCONTENTS_ENV] = String(ownerWebContentsId)
+  let confirmation: Awaited<ReturnType<CommandControl['confirm']>>
+  try {
+    confirmation = await controller.confirm({ ...proposal, webContentsId: ownerWebContentsId })
+  } finally {
+    delete process.env[WEBCONTENTS_ENV]
+  }
+  const after = (await imageFiles(photoDir)).filter((file) => !before.has(file.name))
   const imageBytes = after.reduce((sum, file) => sum + file.size, 0)
 
-  writeReport(reportPath, report({
+  await writeReport(reportPath, report({
     result: confirmation.ok && after.length === 1 && imageBytes > 0 ? 'PASS' : 'FAIL',
     cameraDevicePresent: after.length > 0 || /camera-count=/.test(JSON.stringify(confirmation)),
     approvalPromptShown,
