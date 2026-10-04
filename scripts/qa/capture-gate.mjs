@@ -35,8 +35,11 @@ export const PROBE_SETTLE_MS = 2_000
 export const POLL_MS = 1_000
 export const REPORT_SCHEMA = 1
 
-const FIXED_PRECONDITION_REASONS = Object.freeze(['readiness_unproven', 'failing_state_unproven'])
-const FIXED_FAILURE_REASONS = Object.freeze(['bg_screen_failed_total', 'bg_screen_failed_final_tail'])
+const FIXED_PRECONDITION_REASONS = Object.freeze(['readiness_unproven', 'failing_state_unproven', 'candidate_liveness_unproven'])
+const FIXED_FAILURE_REASONS = Object.freeze(['bg_screen_failed_total', 'bg_screen_failed_final_tail', 'candidate_exited'])
+const CAPTURE_OK = 'METIS_CAPTURE_OK'
+const CAPTURE_UNAVAILABLE = 'METIS_CAPTURE_UNAVAILABLE'
+const CAPTURE_UNAVAILABLE_EXIT = 10
 
 class Precondition extends Error {}
 class Failure extends Error {}
@@ -95,9 +98,35 @@ function failingStateProved(proof) {
     proof?.method === INDUCTION_METHOD &&
     proof?.inductionStarted === true &&
     proof?.beforeInduction?.captureWorks === true &&
+    proof?.beforeInduction?.category === 'ok' &&
     proof?.afterInduction?.captureWorks === false &&
-    proof?.afterPark?.captureWorks === false
+    proof?.afterInduction?.category === 'capture_unavailable' &&
+    proof?.afterPark?.captureWorks === false &&
+    proof?.afterPark?.category === 'capture_unavailable'
   )
+}
+
+function candidateParkProved(proof, parkMs) {
+  return (
+    proof?.observed === true &&
+    proof?.aliveAtInduction === true &&
+    proof?.aliveAfterPark === true &&
+    proof?.exitObserved === false &&
+    proof?.exitedBeforeParkComplete === false &&
+    proof?.processErrorObserved === false &&
+    Number.isFinite(proof?.parkElapsedMs) &&
+    proof.parkElapsedMs >= Math.max(PARK_MS, parkMs)
+  )
+}
+
+function unmeasuredVerdict(records, reason, outcome = 'PRECONDITION') {
+  return {
+    outcome,
+    reasons: [reason],
+    bgScreenCaptureFailedTotal: 0,
+    bgScreenCaptureFailedFinal15Minutes: 0,
+    screenPreprocessSuspended: suspendedSummary(records)
+  }
 }
 
 export function captureGateVerdict({
@@ -109,23 +138,14 @@ export function captureGateVerdict({
   parkMs = PARK_MS,
   finalTailMs = FINAL_TAIL_MS
 }) {
-  if (!proofReady(readinessProof)) {
-    return {
-      outcome: 'PRECONDITION',
-      reasons: ['readiness_unproven'],
-      bgScreenCaptureFailedTotal: 0,
-      bgScreenCaptureFailedFinal15Minutes: 0,
-      screenPreprocessSuspended: suspendedSummary(records)
-    }
-  }
+  if (!proofReady(readinessProof)) return unmeasuredVerdict(records, 'readiness_unproven')
+  const candidateProof = failingStateProof?.candidateLivenessProof
+  if (candidateProof?.exitObserved === true) return unmeasuredVerdict(records, 'candidate_exited', 'FAIL')
   if (!failingStateProved(failingStateProof)) {
-    return {
-      outcome: 'PRECONDITION',
-      reasons: ['failing_state_unproven'],
-      bgScreenCaptureFailedTotal: 0,
-      bgScreenCaptureFailedFinal15Minutes: 0,
-      screenPreprocessSuspended: suspendedSummary(records)
-    }
+    return unmeasuredVerdict(records, 'failing_state_unproven')
+  }
+  if (!candidateParkProved(candidateProof, parkMs)) {
+    return unmeasuredVerdict(records, 'candidate_liveness_unproven')
   }
 
   const finalTailStartMs = inductionAtMs + parkMs - finalTailMs
@@ -174,6 +194,7 @@ export function buildReport({
     inductionAt: iso(inductionAtMs),
     readinessProof,
     failingStateProof,
+    candidateLivenessProof: failingStateProof?.candidateLivenessProof ?? null,
     bgScreenCaptureFailedTotal: judged.bgScreenCaptureFailedTotal,
     bgScreenCaptureFailedFinal15Minutes: judged.bgScreenCaptureFailedFinal15Minutes,
     screenPreprocessSuspended: judged.screenPreprocessSuspended,
@@ -194,14 +215,24 @@ function seedProfile(profile) {
   writeFileSync(join(profile, 'settings.json'), `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 })
 }
 
-export function runPowerShell(script, timeoutMs = 20_000, spawnProcess = spawnSync) {
+export function runPowerShell(script, timeoutMs = 20_000, spawnProcess = spawnSync, captureResult = false) {
   const child = spawnProcess('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], {
     encoding: 'utf8',
     timeout: timeoutMs,
     stdio: ['ignore', 'pipe', 'pipe']
   })
   if (child.error) return { ok: false, category: child.error.code === 'ETIMEDOUT' ? 'timeout' : 'process_error' }
-  return { ok: child.status === 0, category: child.status === 0 ? 'ok' : 'capture_unavailable' }
+  if (child.signal || !Number.isInteger(child.status)) return { ok: false, category: 'process_error' }
+  if (captureResult) {
+    // Only the completed CopyFromScreen branch emits this status/result pair; setup errors are unknown.
+    const result = typeof child.stdout === 'string' ? child.stdout.trim() : null
+    if (child.status === 0 && result === CAPTURE_OK) return { ok: true, category: 'ok' }
+    if (child.status === CAPTURE_UNAVAILABLE_EXIT && result === CAPTURE_UNAVAILABLE) {
+      return { ok: false, category: 'capture_unavailable' }
+    }
+    return { ok: false, category: 'process_error' }
+  }
+  return { ok: child.status === 0, category: child.status === 0 ? 'ok' : 'process_error' }
 }
 
 export function captureProbe(spawnProcess = spawnSync) {
@@ -212,14 +243,21 @@ Add-Type -AssemblyName System.Drawing
 $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 $bitmap = New-Object System.Drawing.Bitmap 1, 1
 $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+$size = New-Object System.Drawing.Size 1, 1
+$result = '${CAPTURE_OK}'
+$exitCode = 0
 try {
-  $graphics.CopyFromScreen($bounds.Left, $bounds.Top, 0, 0, (New-Object System.Drawing.Size 1, 1))
-  exit 0
+  $graphics.CopyFromScreen($bounds.Left, $bounds.Top, 0, 0, $size)
+} catch {
+  $result = '${CAPTURE_UNAVAILABLE}'
+  $exitCode = ${CAPTURE_UNAVAILABLE_EXIT}
 } finally {
   $graphics.Dispose()
   $bitmap.Dispose()
 }
-`, 20_000, spawnProcess)
+[Console]::Out.WriteLine($result)
+exit $exitCode
+`, 20_000, spawnProcess, true)
 }
 
 function lockWorkstation() {
@@ -289,6 +327,58 @@ async function backgroundScreenReadyAfterPark(page) {
   }
 }
 
+function captureState(probe) {
+  if (probe?.ok === true && probe?.category === 'ok') return { captureWorks: true, category: 'ok' }
+  if (probe?.ok === false && probe?.category === 'capture_unavailable') {
+    return { captureWorks: false, category: 'capture_unavailable' }
+  }
+  return { captureWorks: null, category: probe?.category === 'timeout' ? 'timeout' : 'process_error' }
+}
+
+function observeOwnedCandidate(child, monotonicNow) {
+  const pid = child?.pid
+  const canObserve = typeof child?.on === 'function' && typeof child?.removeListener === 'function'
+  const ownedIdentity = canObserve && Number.isInteger(pid) && pid > 0
+  let exitObserved = false
+  let exitedAtMs = null
+  let processErrorObserved = false
+  const onExit = () => {
+    if (exitObserved) return
+    exitObserved = true
+    const atMs = monotonicNow()
+    exitedAtMs = Number.isFinite(atMs) ? atMs : null
+  }
+  const onError = () => { processErrorObserved = true }
+  if (canObserve) {
+    child.on('exit', onExit)
+    child.on('error', onError)
+  }
+  // Retain the owned process handle and latch its exit; a reused numeric PID cannot revive it.
+  const snapshot = () => {
+    if (Number.isInteger(child?.exitCode) || typeof child?.signalCode === 'string') onExit()
+    const knownStatus = (child?.exitCode === null || Number.isInteger(child?.exitCode)) &&
+      (child?.signalCode === null || typeof child?.signalCode === 'string')
+    const observed = ownedIdentity && child.pid === pid && knownStatus && !processErrorObserved
+    return {
+      observed,
+      alive: observed ? !exitObserved : null,
+      exitObserved,
+      exitedAtMs,
+      processErrorObserved
+    }
+  }
+  snapshot()
+  return {
+    snapshot,
+    dispose: () => {
+      if (canObserve) {
+        child.removeListener('exit', onExit)
+        child.removeListener('error', onError)
+      }
+    }
+  }
+}
+
 export async function runCaptureGate({
   child,
   maxBgFailures,
@@ -303,34 +393,73 @@ export async function runCaptureGate({
   monotonicNow = () => performance.now(),
   wait = (ms) => sleep(ms)
 }) {
-  const page = await connect()
-  const beforeProbe = probe()
-  const ready = await proveReady(page)
-  if (beforeProbe.ok === true) await hide(page)
+  const lifetime = observeOwnedCandidate(child, monotonicNow)
+  try {
+    const page = await connect()
+    const beforeProbe = probe()
+    const ready = await proveReady(page)
+    if (beforeProbe.ok === true) await hide(page)
 
-  const inductionAtMs = now()
-  const induction = induce()
-  await wait(PROBE_SETTLE_MS)
-  const afterInductionProbe = probe()
+    const inductionAtMs = now()
+    const aliveAtInduction = lifetime.snapshot().alive
+    const induction = induce()
+    await wait(PROBE_SETTLE_MS)
+    const afterInductionProbe = probe()
 
-  await wait(PARK_MS)
-  const afterParkProbe = probe()
-  const afterParkReady = await readAfterPark(page)
-  const failingStateProof = {
-    method: INDUCTION_METHOD,
-    inductionStarted: induction.ok === true,
-    beforeInduction: { captureWorks: beforeProbe.ok === true },
-    afterInduction: { captureWorks: afterInductionProbe.ok === true ? true : false },
-    afterPark: { captureWorks: afterParkProbe.ok === true ? true : false }
+    const parkStartedAtMs = monotonicNow()
+    let lastParkAtMs = parkStartedAtMs
+    let clockObserved = Number.isFinite(parkStartedAtMs)
+    let parkElapsedMs = clockObserved ? 0 : null
+    let waitedForPark = false
+    while (clockObserved) {
+      const atMs = monotonicNow()
+      if (!Number.isFinite(atMs) || atMs < lastParkAtMs || (waitedForPark && atMs === lastParkAtMs)) {
+        clockObserved = false
+        parkElapsedMs = null
+        break
+      }
+      lastParkAtMs = atMs
+      parkElapsedMs = atMs - parkStartedAtMs
+      if (parkElapsedMs >= PARK_MS || lifetime.snapshot().alive !== true) break
+      await wait(Math.min(POLL_MS, PARK_MS - parkElapsedMs))
+      waitedForPark = true
+    }
+    // Drain owned-child notifications before and after the final probes, including synchronous ones.
+    await wait(0)
+    const afterParkProbe = probe()
+    const afterParkReady = await readAfterPark(page)
+    await wait(0)
+    const afterPark = lifetime.snapshot()
+    const candidateLivenessProof = {
+      observed: afterPark.observed && clockObserved,
+      aliveAtInduction,
+      aliveAfterPark: afterPark.alive,
+      exitObserved: afterPark.exitObserved,
+      exitedBeforeParkComplete: afterPark.exitObserved && (
+        !clockObserved || afterPark.exitedAtMs === null || afterPark.exitedAtMs < parkStartedAtMs + PARK_MS
+      ),
+      processErrorObserved: afterPark.processErrorObserved,
+      parkElapsedMs
+    }
+    const failingStateProof = {
+      method: INDUCTION_METHOD,
+      inductionStarted: induction?.ok === true && induction?.category === 'ok',
+      beforeInduction: captureState(beforeProbe),
+      afterInduction: captureState(afterInductionProbe),
+      afterPark: captureState(afterParkProbe),
+      candidateLivenessProof
+    }
+    return buildReport({
+      records: readAudit(),
+      readinessProof: ready,
+      failingStateProof,
+      inductionAtMs,
+      maxBgFailures,
+      backgroundScreenReadyAfterPark: afterParkReady
+    })
+  } finally {
+    lifetime.dispose()
   }
-  return buildReport({
-    records: readAudit(),
-    readinessProof: ready,
-    failingStateProof,
-    inductionAtMs,
-    maxBgFailures,
-    backgroundScreenReadyAfterPark: afterParkReady
-  })
 }
 
 async function main() {

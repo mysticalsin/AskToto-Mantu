@@ -20,12 +20,22 @@ const INDUCTION_AT = Date.parse('2026-10-03T12:00:00.000Z')
 const reportFor = buildReport as unknown as (input: Record<string, unknown>) => Record<string, unknown>
 
 const ready = Object.freeze({ observed: true, backgroundScreenReady: true, localReady: true })
+const parkedCandidate = Object.freeze({
+  observed: true,
+  aliveAtInduction: true,
+  aliveAfterPark: true,
+  exitObserved: false,
+  exitedBeforeParkComplete: false,
+  processErrorObserved: false,
+  parkElapsedMs: PARK_MS
+})
 const failing = Object.freeze({
   method: INDUCTION_METHOD,
   inductionStarted: true,
-  beforeInduction: { captureWorks: true },
-  afterInduction: { captureWorks: false },
-  afterPark: { captureWorks: false }
+  beforeInduction: { captureWorks: true, category: 'ok' },
+  afterInduction: { captureWorks: false, category: 'capture_unavailable' },
+  afterPark: { captureWorks: false, category: 'capture_unavailable' },
+  candidateLivenessProof: parkedCandidate
 })
 
 class OwnedCandidate extends EventEmitter {
@@ -55,8 +65,10 @@ type FlowOptions = {
   child?: OwnedCandidate
   exitAtMs?: number
   processErrorAtMs?: number
+  connectFails?: boolean
   maxWaitAdvanceMs?: number
   clockInvalid?: boolean
+  clockFrozen?: boolean
   afterParkReady?: { observed: boolean; backgroundScreenReady: boolean | null }
   records?: unknown[]
 }
@@ -66,8 +78,10 @@ function flowFixture({
   child = new OwnedCandidate(),
   exitAtMs = Number.POSITIVE_INFINITY,
   processErrorAtMs = Number.POSITIVE_INFINITY,
+  connectFails = false,
   maxWaitAdvanceMs = Number.POSITIVE_INFINITY,
   clockInvalid = false,
+  clockFrozen = false,
   afterParkReady = { observed: true, backgroundScreenReady: false },
   records = []
 }: FlowOptions = {}) {
@@ -83,7 +97,10 @@ function flowFixture({
   const run = () => runCaptureGate({
     child,
     maxBgFailures: MAX_BG_FAILURES,
-    connect: async () => ({}),
+    connect: async () => {
+      if (connectFails) throw new Error('synthetic connection failure')
+      return {}
+    },
     readAudit: () => records,
     probe: () => captureProbe(spawnProbe as unknown as typeof spawnSync),
     induce: () => ({ ok: true, category: 'ok' }),
@@ -91,7 +108,7 @@ function flowFixture({
     hide,
     readAfterPark: async () => afterParkReady,
     now: () => INDUCTION_AT + clock.elapsed,
-    monotonicNow: () => clockInvalid ? Number.NaN : clock.elapsed,
+    monotonicNow: () => clockInvalid ? Number.NaN : clockFrozen ? 0 : clock.elapsed,
     wait: async (ms: number) => {
       waits.push(ms)
       clock.elapsed += Math.min(ms, maxWaitAdvanceMs)
@@ -191,6 +208,17 @@ describe('capture-gate production flow', () => {
     expect(fixture.child.listenerCount('error')).toBe(0)
   })
 
+  it('removes only its own lifetime observers on a failed connection', async () => {
+    const child = new OwnedCandidate()
+    const otherExitObserver = vi.fn()
+    const otherErrorObserver = vi.fn()
+    child.on('exit', otherExitObserver)
+    child.on('error', otherErrorObserver)
+    await expect(flowFixture({ child, connectFails: true }).run()).rejects.toThrow('synthetic connection failure')
+    expect(child.listeners('exit')).toEqual([otherExitObserver])
+    expect(child.listeners('error')).toEqual([otherErrorObserver])
+  })
+
   it('measures the actual park rather than trusting an early-resolving wait', async () => {
     const fixture = flowFixture({ maxWaitAdvanceMs: 60_000 })
     const report = await fixture.run()
@@ -205,6 +233,13 @@ describe('capture-gate production flow', () => {
 
   it('does not accept an unmeasurable park', async () => {
     expect(await flowFixture({ clockInvalid: true }).run()).toMatchObject({
+      outcome: 'PRECONDITION',
+      reasons: ['candidate_liveness_unproven']
+    })
+  })
+
+  it('fails closed when the measured clock does not advance after a positive wait', async () => {
+    expect(await flowFixture({ clockFrozen: true }).run()).toMatchObject({
       outcome: 'PRECONDITION',
       reasons: ['candidate_liveness_unproven']
     })
@@ -337,6 +372,26 @@ describe('capture-gate oracle', () => {
     ).toMatchObject({ outcome: 'PRECONDITION', reasons: ['failing_state_unproven'] })
   })
 
+  it('does not accept false capture booleans with transport-error categories', () => {
+    expect(captureGateVerdict({
+      records: [],
+      inductionAtMs: INDUCTION_AT,
+      readinessProof: ready,
+      failingStateProof: { ...failing, afterPark: { captureWorks: false, category: 'timeout' } },
+      maxBgFailures: MAX_BG_FAILURES
+    })).toMatchObject({ outcome: 'PRECONDITION', reasons: ['failing_state_unproven'] })
+  })
+
+  it.each([undefined, { ...parkedCandidate, parkElapsedMs: PARK_MS - 1 }])('requires full measured owned lifetime even with a silent audit tail', (candidateLivenessProof) => {
+    expect(captureGateVerdict({
+      records: [],
+      inductionAtMs: INDUCTION_AT,
+      readinessProof: ready,
+      failingStateProof: { ...failing, candidateLivenessProof },
+      maxBgFailures: MAX_BG_FAILURES
+    })).toMatchObject({ outcome: 'PRECONDITION', reasons: ['candidate_liveness_unproven'] })
+  })
+
   it('maps exits and emits the lane report fields without raw failure text', () => {
     expect(exitCodeForOutcome('PASS')).toBe(0)
     expect(exitCodeForOutcome('FAIL')).toBe(1)
@@ -357,6 +412,7 @@ describe('capture-gate oracle', () => {
       inductionMethod: INDUCTION_METHOD,
       readinessProof: ready,
       failingStateProof: failing,
+      candidateLivenessProof: parkedCandidate,
       bgScreenCaptureFailedTotal: 1,
       bgScreenCaptureFailedFinal15Minutes: 0,
       screenPreprocessSuspended: { count: 1, latched: true, reasons: ['permission'] },
