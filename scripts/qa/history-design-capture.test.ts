@@ -541,11 +541,13 @@ describe('History design matrix (M2-0032)', () => {
     const state = HISTORY_DESIGN_STATES.find((candidate) => candidate.id === 'slow-with-rows')!
     const variant = DESIGN_VARIANTS.find((candidate) => candidate.id === 'light-1x-reduced-motion')!
     const history = { requests: { list: 0, search: 0 }, requestedAt: { list: 1_000, search: 2_000 } }
+    const events: string[] = []
     let searchValue = ''
     let searchFillPending = false
     const main = withCollectGarbage(vi.fn(async (expression: string) => {
       if (expression === 'globalThis.__historyDesign.requests.list') return history.requests.list
       if (expression === 'globalThis.__historyDesign.requests.search') return history.requests.search
+      if (expression === '({ ...globalThis.__historyDesign.requests })') return { ...history.requests }
       if (expression.includes('requests, requestedAt')) return { requests: { ...history.requests }, requestedAt: { ...history.requestedAt } }
       return true
     }))
@@ -566,7 +568,10 @@ describe('History design matrix (M2-0032)', () => {
     const rootLocator = {
       getByRole: vi.fn(() => ({
         filter: () => ({
-          count: vi.fn(async () => (searchValue === '' ? 0 : 1))
+          count: vi.fn(async () => {
+            events.push('roles-present')
+            return searchValue === '' ? 0 : 1
+          })
         })
       }))
     }
@@ -586,10 +591,16 @@ describe('History design matrix (M2-0032)', () => {
       })),
       waitForFunction: vi.fn(async () => undefined),
       evaluate: vi.fn(async () => ({ scope: 'history-view', viewport, samples: [textSample()] })),
-      screenshot: vi.fn(async () => undefined),
+      screenshot: vi.fn(async () => {
+        events.push('screenshot')
+      }),
       locator: vi.fn(() => rootLocator)
     }
-    const cdp = { send: vi.fn(async () => undefined) }
+    const cdp = {
+      send: vi.fn(async (command: string) => {
+        if (command === 'Emulation.clearDeviceMetricsOverride') events.push('clear-metrics')
+      })
+    }
 
     const result = await captureReachedState({
       page: page as never,
@@ -609,6 +620,11 @@ describe('History design matrix (M2-0032)', () => {
     })
 
     expect(result.judged.verdict).toBe('PASS')
+    expect(events).toEqual(['screenshot', 'roles-present', 'clear-metrics'])
+    expect(result.judged.requestCounts).toEqual({
+      screenshot: { list: 1, search: 1 },
+      rolesCheck: { list: 1, search: 1 }
+    })
     expect(rootLocator.getByRole).toHaveBeenCalledWith('status', undefined)
     expect(searchLocator.fill).toHaveBeenLastCalledWith('')
     expect(searchValue).toBe('')
