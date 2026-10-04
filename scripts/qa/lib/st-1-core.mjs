@@ -271,8 +271,16 @@ export function syntheticDatalessPlan() {
  *  BOOT_WINDOW_VARIANTS, M2-0516). An ST-1 run always launches 'shipped'. */
 export const WINDOW_VARIANTS = ['shipped', 'spellcheck-off', 'paint-when-hidden', 'prewarm-spellchecker']
 
+export const WINDOW_MEASURED_VARIANT_ORDER = ['spellcheck-off', 'paint-when-hidden', 'prewarm-spellchecker', 'shipped']
+
 /** The only purpose besides ST-1 itself: a short launch that measures the window constructor under one variant. */
 export const WINDOW_CONSTRUCTION = 'window-construction'
+
+/** The two boot-window chromes ST-1 measures: first-run onboarding and onboarded transparent overlay. */
+export const WINDOW_CHROMES = ['opaque', 'transparent']
+
+/** The window-construction gate's measured repeats per variant/chrome after warm-up. */
+export const WINDOW_MEASURED_REPEATS = 2
 
 /**
  * `--purpose` and `--window-variant`, checked: `{ purpose, windowVariant }` or `{ error }`. Without a purpose the
@@ -292,6 +300,21 @@ export function runPurpose({ purpose, windowVariant }) {
   return { purpose, windowVariant }
 }
 
+/**
+ * `--window-remeasures <launch>` (OD-66), checked: `{ remeasures }` (null without the flag) or `{ error }`. Only a
+ * measured shipped window-construction launch can re-measure a planned launch, and it names exactly one.
+ * @param {{ purpose?: string, windowVariant?: string, windowWarmup?: string, windowRemeasures?: string }} args
+ */
+export function windowRemeasureArg({ purpose, windowVariant, windowWarmup, windowRemeasures }) {
+  if (windowRemeasures === undefined) return { remeasures: null }
+  if (windowRemeasures === 'true' || windowRemeasures === '') return { error: '--window-remeasures needs the launch it re-measures' }
+  if (purpose !== WINDOW_CONSTRUCTION || windowVariant !== 'shipped') {
+    return { error: `--window-remeasures needs --purpose ${WINDOW_CONSTRUCTION} --window-variant shipped` }
+  }
+  if (windowWarmup !== undefined) return { error: '--window-remeasures is a measured launch, never a --window-warmup' }
+  return { remeasures: windowRemeasures }
+}
+
 /** The candidate's environment: this one, on the isolated profile, with the window variant set explicitly so an
  *  inherited value can never reach an ST-1 run. */
 export function candidateEnv(env, profile, windowVariant) {
@@ -305,42 +328,302 @@ export const WINDOW_STAGE_BUDGET_MS = 250
 /** The boot stages the window-construction gate holds to its budget. */
 export const GATED_WINDOW_STAGES = ['createWindow.prewarm', 'createWindow.construct']
 
+/** The window gate's verified cause (OD-66): after OD-42, the failing QA candidate runs were one slow launch on
+ *  unchanged bytes among fast siblings, not a harness step or an app first-window cost. A measured entry is only
+ *  a per-launch number transcribed from the run's st-1-macos-window artifact (window-shipped-*.json: the
+ *  createWindow.construct and createWindow.prewarm ms, the chrome from the construct stage's transparent flag, and
+ *  witness.loop.p99Ms/maxMs, witness.write.maxMs and witness.cpuBusyMaxPct at that launch); a summary like
+ *  "over 250" is not a measurement and must not become evidence. */
+export const WINDOW_CONSTRUCTION_ROOT_CAUSE = {
+  classification: 'LAUNCH_VARIANCE',
+  evidenceRuns: ['36999698235', '37071491310', '37156371974'],
+  evidence: [
+    {
+      run: '36999698235',
+      measured: [
+        { launch: 'window-shipped-opaque-1', chrome: 'opaque', constructMs: 351.9, prewarmMs: 142.4, witness: { loopP99Ms: 15.254, loopMaxMs: 41.55, writeMaxMs: 6.154, cpuBusyMaxPct: 85.2 } },
+        { launch: 'window-shipped-opaque-2', chrome: 'opaque', constructMs: 124.5, prewarmMs: 68, witness: { loopP99Ms: 15.933, loopMaxMs: 43.713, writeMaxMs: 51.805, cpuBusyMaxPct: 84.7 } },
+        { launch: 'window-shipped-transparent-1', chrome: 'transparent', constructMs: 107.7, prewarmMs: 37.7, witness: { loopP99Ms: 14.86, loopMaxMs: 41.517, writeMaxMs: 15.329, cpuBusyMaxPct: 76.7 } },
+        { launch: 'window-shipped-transparent-2', chrome: 'transparent', constructMs: 86.9, prewarmMs: 24.8, witness: { loopP99Ms: 14.5, loopMaxMs: 43.024, writeMaxMs: 4.847, cpuBusyMaxPct: 76.8 } }
+      ],
+      summary: 'window-shipped-opaque-1 built in 351.9 ms (createWindow.construct) while its three shipped siblings built in 86.9-124.5 ms on the same bytes and runner'
+    },
+    {
+      run: '37071491310',
+      measured: [
+        { launch: 'window-shipped-opaque-1', chrome: 'opaque', constructMs: 171.7, prewarmMs: 81.7, witness: { loopP99Ms: 15.778, loopMaxMs: 66.093, writeMaxMs: 19.925, cpuBusyMaxPct: 88.5 } },
+        { launch: 'window-shipped-opaque-2', chrome: 'opaque', constructMs: 88.2, prewarmMs: 364.4, witness: { loopP99Ms: 15.696, loopMaxMs: 67.437, writeMaxMs: 4.966, cpuBusyMaxPct: 55.2 } },
+        { launch: 'window-shipped-transparent-1', chrome: 'transparent', constructMs: 90.8, prewarmMs: 31.7, witness: { loopP99Ms: 14.049, loopMaxMs: 20.021, writeMaxMs: 18.772, cpuBusyMaxPct: 81.7 } },
+        { launch: 'window-shipped-transparent-2', chrome: 'transparent', constructMs: 74.4, prewarmMs: 37.4, witness: { loopP99Ms: 14.418, loopMaxMs: 31.031, writeMaxMs: 7.85, cpuBusyMaxPct: 59.2 } }
+      ],
+      summary: 'window-shipped-opaque-2 prewarmed in 364.4 ms (createWindow.prewarm) while its three shipped siblings prewarmed in 31.7-81.7 ms on the same bytes and runner'
+    },
+    {
+      run: '37156371974',
+      measured: [
+        { launch: 'window-shipped-opaque-1', chrome: 'opaque', constructMs: 254.8, prewarmMs: 145.4, witness: { loopP99Ms: 19.333, loopMaxMs: 67.961, writeMaxMs: 32.638, cpuBusyMaxPct: 97.7 } },
+        { launch: 'window-shipped-opaque-2', chrome: 'opaque', constructMs: 117.2, prewarmMs: 54, witness: { loopP99Ms: 15.827, loopMaxMs: 63.537, writeMaxMs: 4.528, cpuBusyMaxPct: 76.2 } },
+        { launch: 'window-shipped-transparent-1', chrome: 'transparent', constructMs: 85.8, prewarmMs: 35.8, witness: { loopP99Ms: 14.426, loopMaxMs: 33.587, writeMaxMs: 7.9, cpuBusyMaxPct: 76 } },
+        { launch: 'window-shipped-transparent-2', chrome: 'transparent', constructMs: 108.5, prewarmMs: 55.9, witness: { loopP99Ms: 15.0, loopMaxMs: 185.205, writeMaxMs: 26.132, cpuBusyMaxPct: 83.6 } }
+      ],
+      summary: 'window-shipped-opaque-1 built in 254.8 ms (createWindow.construct) while its three shipped siblings built in 85.8-117.2 ms on the same bytes and runner'
+    }
+  ],
+  baseline: {
+    since: 'OD-42',
+    failedRuns: 3,
+    completeRuns: 39,
+    overBudgetOpaqueLaunches: 3,
+    opaqueLaunches: 78,
+    opaqueConstructMedianMs: 119,
+    opaqueConstructP95Ms: 184
+  },
+  fix: 'OD-66: one in-job re-measure per chrome of the only over-budget shipped launch of that chrome, accepted only under 250 ms and listed under remeasured; the 250 ms gate remains unchanged',
+  leadAction:
+    'LEAD_ACTION: dispatch qa-candidate three times on m2/integration-equivalent bytes and confirm st-1-macos-window/st1-report/window-gate.json has pass: true with budgetMs: 250 each time, attaching the artifacts; after 30 more runs, recount the window-gate failure rate and the share of runs with a non-empty remeasured, and file a re-measure share above 15% of runs as a suspected regression'
+}
+
+/** The CI launch order for window construction. The shipped warm-up launches keep the original first-run
+ * profile setup ahead of the measured rotation; measured repeats stay interleaved by repeat, variant and chrome,
+ * with shipped measured last in each repeat. */
+export function windowConstructionPlan({ variants = WINDOW_MEASURED_VARIANT_ORDER, chromes = WINDOW_CHROMES, repeats = WINDOW_MEASURED_REPEATS } = {}) {
+  const repeatNumbers = Array.from({ length: repeats }, (_, i) => i + 1)
+  return [
+    ...chromes.map((chrome) => ({ name: `window-warmup-shipped-${chrome}`, variant: 'shipped', chrome, warmup: true })),
+    ...repeatNumbers.flatMap((repeat) =>
+      variants.flatMap((variant) => chromes.map((chrome) => ({ name: `window-${variant}-${chrome}-${repeat}`, variant, chrome, repeat, warmup: false })))
+    )
+  ]
+}
+
+function launchNameFromReportPath(name) {
+  // The workflow writes one report below each launch directory, so the directory name is the launch key.
+  const [head] = String(name).split(/[\\/]/)
+  return head || String(name)
+}
+
+function windowLaunchStageRows(reports) {
+  return reports.flatMap(({ name, report }) => {
+    if (report?.purpose !== WINDOW_CONSTRUCTION) return []
+    const stages = Array.isArray(report.bootStages?.stages) ? report.bootStages.stages : []
+    const launchVariant = report.windowVariant ?? stages.find((entry) => typeof entry.windowVariant === 'string')?.windowVariant ?? null
+    if (stages.length === 0) {
+      return [{
+        report: name,
+        launch: launchNameFromReportPath(name),
+        variant: launchVariant,
+        warmup: report.warmup === true,
+        stage: null,
+        chrome: null,
+        ms: null
+      }]
+    }
+    return stages.map((entry) => {
+      const chrome = entry.transparent === true ? 'transparent' : entry.transparent === false ? 'opaque' : null
+      return {
+        report: name,
+        launch: launchNameFromReportPath(name),
+        variant: launchVariant,
+        warmup: report.warmup === true,
+        stage: entry.stage,
+        chrome,
+        ms: entry.ms
+      }
+    })
+  })
+}
+
+function windowLaunchSummaries(rows) {
+  const launches = new Map()
+  for (const row of rows) {
+    const key = row.launch
+    const launch =
+      launches.get(key) ??
+      {
+        launch: row.launch,
+        variant: row.variant,
+        chrome: row.chrome,
+        warmup: row.warmup,
+        stages: [],
+        gatedStages: [],
+        maxStageMs: null
+      }
+    if (launch.chrome === null && row.chrome !== null) launch.chrome = row.chrome
+    const stage = { stage: row.stage, ms: row.ms }
+    launch.stages.push(stage)
+    if (GATED_WINDOW_STAGES.includes(row.stage)) launch.gatedStages.push(stage)
+    if (typeof row.ms === 'number') launch.maxStageMs = Math.max(launch.maxStageMs ?? Number.NEGATIVE_INFINITY, row.ms)
+    launches.set(key, launch)
+  }
+  return Array.from(launches.values()).map((launch) => ({
+    ...launch,
+    maxStageMs: launch.maxStageMs === Number.NEGATIVE_INFINITY ? null : launch.maxStageMs
+  }))
+}
+
 /**
  * The window-construction gate (M2-0519) over a set of window-construction reports: `{ pass, rows, failures }`.
  * Only the shipped variant is gated; marked warm-ups and the other variants stay report-only. It fails unless
  * every measured shipped report carries each gated stage with a measured ms under WINDOW_STAGE_BUDGET_MS, and the
  * measured shipped reports built both chromes (opaque and transparent). A measured shipped report without boot
  * stages (a launch that never reached the window) fails as missing, never passes as absent. `rows` lists every
- * measured shipped gated stage found, per report.
+ * measured shipped gated stage found, per report, then every re-measure's.
+ * OD-66: a measured shipped launch at or over budget passes only through one accepted same-chrome re-measure
+ * (acceptedRemeasures); it is then listed under `remeasured` as `{ launch, stage, ms, remeasure, remeasureMs }`, one
+ * entry per over-budget stage. Every re-measure report is gated itself.
  * @param {Array<{ name: string, report: any }>} reports
  */
 export function windowConstructionGate(reports, budgetMs = WINDOW_STAGE_BUDGET_MS) {
+  const launches = windowLaunchStageRows(reports)
   const rows = []
   const failures = []
+  const remeasured = []
   const chromes = new Set()
-  const windowReports = reports.filter(({ report }) => report?.purpose === WINDOW_CONSTRUCTION)
-  const warmups = windowReports.filter(({ report }) => report.warmup === true)
-  const shipped = windowReports.filter(({ report }) => report.windowVariant === 'shipped' && report.warmup !== true)
+  const { planned, shipped, remeasures } = windowGateReports(reports)
+  const warmups = planned.filter(({ report }) => report.warmup === true)
   if (shipped.length === 0) failures.push('no shipped window-construction report')
-  for (const { name, report } of shipped) {
-    const stages = Array.isArray(report.bootStages?.stages) ? report.bootStages.stages : []
-    for (const stage of GATED_WINDOW_STAGES) {
-      const found = stages.filter((entry) => entry.stage === stage)
-      if (found.length === 0) failures.push(`${name}: ${stage} missing`)
-      for (const entry of found) {
-        const chrome = entry.transparent === true ? 'transparent' : entry.transparent === false ? 'opaque' : null
-        if (chrome) chromes.add(chrome)
-        rows.push({ report: name, stage, chrome, ms: entry.ms })
-        if (typeof entry.ms !== 'number') failures.push(`${name}: ${stage} has no measured ms`)
-        else if (entry.ms >= budgetMs) failures.push(`${name}: ${stage} ${entry.ms} ms >= ${budgetMs} ms`)
-        if (!chrome) failures.push(`${name}: ${stage} does not say which chrome it built`)
-      }
+  const checked = shipped.map(({ name, report }) => gatedStageChecks(name, report, budgetMs))
+  const accepted = acceptedRemeasures(checked, remeasures, planned, budgetMs)
+  for (const launch of checked) {
+    rows.push(...launch.rows)
+    for (const chrome of launch.chromes) chromes.add(chrome)
+    const remeasure = accepted.accepted.get(launch.launch)
+    if (!remeasure) {
+      failures.push(...launch.failures)
+      continue
+    }
+    for (const { stage, ms } of launch.overBudget) {
+      remeasured.push({ launch: launch.launch, stage, ms, remeasure: remeasure.launch, remeasureMs: remeasure.rows.find((row) => row.stage === stage).ms })
     }
   }
+  rows.push(...accepted.rows)
+  failures.push(...accepted.failures)
   for (const chrome of ['opaque', 'transparent']) {
     if (shipped.length > 0 && !chromes.has(chrome)) failures.push(`no shipped ${chrome} window was measured`)
   }
-  return { pass: failures.length === 0, budgetMs, skippedWarmups: warmups.length, rows, failures }
+  return {
+    pass: failures.length === 0,
+    budgetMs,
+    skippedWarmups: warmups.length,
+    rootCause: WINDOW_CONSTRUCTION_ROOT_CAUSE,
+    launches,
+    launchSummaries: windowLaunchSummaries(launches),
+    rows,
+    remeasured,
+    failures
+  }
+}
+
+/** The window-construction reports split for the gate: `planned` (every launch of the plan, warm-ups and report-only
+ *  variants included), `shipped` (the measured shipped launches the gate holds to the budget) and `remeasures`
+ *  (OD-66 re-measure launches, recognised by their `remeasures` field whatever else they claim). */
+function windowGateReports(reports) {
+  const windowReports = reports.filter(({ report }) => report?.purpose === WINDOW_CONSTRUCTION)
+  const remeasures = windowReports.filter(({ report }) => Object.hasOwn(report, 'remeasures'))
+  const planned = windowReports.filter(({ report }) => !Object.hasOwn(report, 'remeasures'))
+  const shipped = planned.filter(({ report }) => report.windowVariant === 'shipped' && report.warmup !== true)
+  return { planned, shipped, remeasures }
+}
+
+/** One report's gated stages against the budget, failures in report order. `overBudget` holds the budget failures;
+ *  `budgetOnly` is true when every failure is one of them (no stage missing, no ms missing, no chrome missing). */
+function gatedStageChecks(name, report, budgetMs) {
+  const stages = Array.isArray(report.bootStages?.stages) ? report.bootStages.stages : []
+  const launch = launchNameFromReportPath(name)
+  const rows = []
+  const failures = []
+  const overBudget = []
+  const chromes = new Set()
+  let budgetOnly = true
+  const fail = (message) => {
+    failures.push(message)
+    budgetOnly = false
+  }
+  for (const stage of GATED_WINDOW_STAGES) {
+    const found = stages.filter((entry) => entry.stage === stage)
+    if (found.length === 0) fail(`${name}: ${stage} missing`)
+    for (const entry of found) {
+      const chrome = entry.transparent === true ? 'transparent' : entry.transparent === false ? 'opaque' : null
+      if (chrome) chromes.add(chrome)
+      rows.push({ report: name, launch, variant: report.windowVariant ?? null, stage, chrome, ms: entry.ms })
+      if (typeof entry.ms !== 'number') fail(`${name}: ${stage} has no measured ms`)
+      else if (entry.ms >= budgetMs) {
+        failures.push(`${name}: ${stage} ${entry.ms} ms >= ${budgetMs} ms`)
+        overBudget.push({ stage, ms: entry.ms })
+      }
+      if (!chrome) fail(`${name}: ${stage} does not say which chrome it built`)
+    }
+  }
+  return { name, launch, rows, failures, overBudget, budgetOnly, chromes }
+}
+
+/** The measured shipped launches one re-measure may decide (OD-66): over budget on budget failures alone, built in
+ *  one chrome, and the only over-budget measured shipped launch of that chrome. `{ launch, chrome }` each. */
+function remeasurableLaunches(checked) {
+  const overBudget = checked.filter((launch) => launch.overBudget.length > 0)
+  return overBudget
+    .filter((launch) => launch.budgetOnly && launch.chromes.size === 1)
+    .map((launch) => ({ launch: launch.launch, chrome: [...launch.chromes][0] }))
+    .filter(({ chrome }) => overBudget.filter((launch) => launch.chromes.has(chrome)).length === 1)
+}
+
+/** Every parseable boot-stage time of a report, in ms since the epoch. */
+function stageTimes(report) {
+  const stages = Array.isArray(report.bootStages?.stages) ? report.bootStages.stages : []
+  return stages.map((entry) => Date.parse(entry.ts)).filter(Number.isFinite)
+}
+
+/**
+ * The OD-66 re-measures, each gated itself: `{ accepted, rows, failures }`. `accepted` maps a measured shipped
+ * launch to the one re-measure that decides it: a measured shipped launch in the same chrome whose `remeasures`
+ * names it, whose every stage was written after every stage of every planned launch, with both gated stages present
+ * and under budget, and the only re-measure naming that launch. Anything else stays a failure, so the slow launch's
+ * own budget failures stand.
+ */
+function acceptedRemeasures(checked, remeasures, planned, budgetMs) {
+  const accepted = new Map()
+  const rows = []
+  const failures = []
+  const remeasurable = remeasurableLaunches(checked)
+  const lastPlannedMs = Math.max(Number.NEGATIVE_INFINITY, ...planned.flatMap(({ report }) => stageTimes(report)))
+  for (const { name, report } of remeasures) {
+    const checks = gatedStageChecks(name, report, budgetMs)
+    rows.push(...checks.rows.map((row) => ({ ...row, remeasures: report.remeasures })))
+    const reasons = [...checks.failures]
+    if (report.windowVariant !== 'shipped' || report.warmup === true) reasons.push(`${name}: a re-measure must be a measured shipped launch`)
+    const target = remeasurable.find(({ launch }) => launch === report.remeasures)
+    if (!target) {
+      reasons.push(
+        `${name}: re-measures ${JSON.stringify(report.remeasures)}, which is not the only over-budget measured shipped launch of its chrome failing on budget alone`
+      )
+    } else if (checks.chromes.size !== 1 || !checks.chromes.has(target.chrome)) {
+      reasons.push(`${name}: built ${[...checks.chromes].join(' and ') || 'no known chrome'}, not ${target.chrome} like ${target.launch}`)
+    }
+    const times = stageTimes(report)
+    if (times.length === 0 || Math.min(...times) <= lastPlannedMs) reasons.push(`${name}: did not run after every planned launch`)
+    if (remeasures.filter(({ report: other }) => other.remeasures === report.remeasures).length > 1) {
+      reasons.push(`${name}: ${JSON.stringify(report.remeasures)} has more than one re-measure`)
+    }
+    failures.push(...reasons)
+    if (reasons.length === 0) accepted.set(target.launch, checks)
+  }
+  return { accepted, rows, failures }
+}
+
+/**
+ * The OD-66 re-measure plan over the planned window-construction reports: one shipped launch per chrome whose only
+ * over-budget measured shipped launch failed on budget alone, `[]` when no measured shipped launch reached the
+ * budget (or none can be re-measured). The workflow runs it after every planned launch and before the gate.
+ * @param {Array<{ name: string, report: any }>} reports
+ */
+export function windowRemeasurePlan(reports, budgetMs = WINDOW_STAGE_BUDGET_MS) {
+  const { shipped } = windowGateReports(reports)
+  return remeasurableLaunches(shipped.map(({ name, report }) => gatedStageChecks(name, report, budgetMs))).map(({ launch, chrome }) => ({
+    name: `window-remeasure-shipped-${chrome}`,
+    variant: 'shipped',
+    chrome,
+    remeasures: launch
+  }))
 }
 
 /** The app's own native boot stage timings (tray stages, window construction, navigation and first show): every
@@ -611,7 +894,8 @@ export function buildReport({
   fixtureCounts = null,
   purpose = 'st-1',
   windowVariant = 'shipped',
-  windowWarmup = false
+  windowWarmup = false,
+  windowRemeasures = null
 }) {
   const criteria = evaluateCriteria(row, measured, evidence, { history })
   const refusalEvidence = fifoRefusalEvidence(row, measured, evidence, fixtures, fixtureCounts)
@@ -634,6 +918,7 @@ export function buildReport({
     harness: 'ST-1',
     ...(purpose === WINDOW_CONSTRUCTION ? { purpose, st1Evidence: false, windowVariant } : {}),
     ...(purpose === WINDOW_CONSTRUCTION && windowWarmup ? { warmup: true } : {}),
+    ...(purpose === WINDOW_CONSTRUCTION && windowRemeasures ? { remeasures: windowRemeasures } : {}),
     row,
     ...(history ? { historyRow: true } : {}),
     platform: process.platform,
@@ -694,12 +979,25 @@ export function writeJsonToStdout(value, stdout = process.stdout) {
 }
 
 /** The launch itself never reached a candidate to measure: a genuine FAIL (inspector: false), never a
- *  skipped row. A window-construction launch is marked as in buildReport. */
-export function buildLaunchFailureReport({ row, installer, candidate, fixtures, reason, purpose = 'st-1', windowVariant = 'shipped', windowWarmup = false }) {
+ *  skipped row. A window-construction launch is marked as in buildReport.
+ * @param {{ row: string, installer: string, candidate: { build_run_id: unknown, artifact_sha256: unknown }, fixtures: unknown[],
+ *   reason: string, purpose?: string, windowVariant?: string, windowWarmup?: boolean, windowRemeasures?: string | null }} args */
+export function buildLaunchFailureReport({
+  row,
+  installer,
+  candidate,
+  fixtures,
+  reason,
+  purpose = 'st-1',
+  windowVariant = 'shipped',
+  windowWarmup = false,
+  windowRemeasures = null
+}) {
   return {
     harness: 'ST-1',
     ...(purpose === WINDOW_CONSTRUCTION ? { purpose, st1Evidence: false, windowVariant } : {}),
     ...(purpose === WINDOW_CONSTRUCTION && windowWarmup ? { warmup: true } : {}),
+    ...(purpose === WINDOW_CONSTRUCTION && windowRemeasures ? { remeasures: windowRemeasures } : {}),
     row,
     platform: process.platform,
     arch: process.arch,
