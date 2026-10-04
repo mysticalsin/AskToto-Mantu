@@ -1,12 +1,12 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
-import type { AddressInfo } from 'node:net'
+import type { AddressInfo, Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { WebSocketServer } from 'ws'
 import { describe, expect, it } from 'vitest'
-import { DRIVE_EXPRESSIONS, PAGE_PROBE, deriveRowResult } from './cdp-observe.mjs'
+import { DRIVE_EXPRESSIONS, PAGE_PROBE, deriveRowResult, observe } from './cdp-observe.mjs'
 import { recordProblems } from '../../evidence/record.mjs'
 import { m2_0008BundleProblems, m2_0194BundleProblems } from '../../evidence/check.mjs'
 
@@ -61,6 +61,25 @@ async function fakeDevTools({ hangHistory = false, visible = true } = {}): Promi
   }
 }
 
+async function hangingDevToolsList(): Promise<{ port: number; close: () => Promise<void> }> {
+  const sockets = new Set<Socket>()
+  const server: Server = createServer(() => {
+    // The DevTools listener accepted the request, but the hung app never writes /json/list.
+  })
+  server.on('connection', (socket) => {
+    sockets.add(socket)
+    socket.on('close', () => sockets.delete(socket))
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  return {
+    port: (server.address() as AddressInfo).port,
+    close: () => new Promise<void>((resolve) => {
+      for (const socket of sockets) socket.destroy()
+      server.close(() => resolve())
+    })
+  }
+}
+
 async function unusedPort(): Promise<number> {
   const server = createServer()
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -87,29 +106,57 @@ function runClosedStdin(args: string[], env: NodeJS.ProcessEnv): Promise<{ statu
 }
 
 /** Stub app, macOS tools and process table for a hosted-live run on any CI host. */
-function hostedStubs(root: string, { sampleFails = false } = {}) {
+function hostedStubs(root: string, { sampleFails = false, secondLaunchKillsFirst = false, pgrepReturnsParent = false } = {}) {
   const bin = join(root, 'bin')
   mkdirSync(bin, { recursive: true })
   const app = join(root, 'Metis')
   const sampleLog = join(root, 'sampled-pids.txt')
   const openLog = join(root, 'open-calls.txt')
-  writeExecutable(app, '#!/usr/bin/env bash\nfor arg in "$@"; do [ "$arg" = "-e" ] && exit 0; done\nexec sleep 120\n')
+  const firstPid = join(root, 'first-app-pid.txt')
+  const secondPid = join(root, 'second-app-pid.txt')
+  const decoyPid = join(root, 'decoy-pid.txt')
+  writeExecutable(app, `#!/usr/bin/env bash\nfor arg in "$@"; do [ "$arg" = "-e" ] && exit 0; done\nprintf '%s\\n' "$$" > '${bashPath(firstPid)}'\nexec sleep 120\n`)
+  writeFileSync(decoyPid, `${process.pid}\n`, 'utf8')
   writeExecutable(join(root, 'sample'), sampleFails
     ? '#!/usr/bin/env bash\nexit 1\n'
     : `#!/usr/bin/env bash\nprintf '%s\\n' "$1" >> '${bashPath(sampleLog)}'\nprintf 'Sampling process %s for 10 seconds\\nBinary: %s/Applications/Metis.app\\n' "$1" "$HOME" > "$4"\n`)
-  writeExecutable(join(root, 'open'), `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> '${bashPath(openLog)}'\n`)
-  writeExecutable(join(bin, 'pgrep'), `#!/usr/bin/env bash\nprintf '%s\\n' ${Object.keys(CHILD_ROLES).join(' ')}\n`)
+  writeExecutable(join(root, 'open'), [
+    '#!/usr/bin/env bash',
+    `printf '%s\\n' "$*" >> '${bashPath(openLog)}'`,
+    'second=false',
+    'for arg in "$@"; do [ "$arg" = "-n" ] && second=true; done',
+    `if [ "$second" = true ]; then (exec -a '${bashPath(app)}' sleep 120) & printf '%s\\n' "$!" > '${bashPath(secondPid)}'; fi`,
+    secondLaunchKillsFirst
+      ? `case " $* " in *" -n "*) [ ! -s '${bashPath(firstPid)}' ] || kill -9 "$(cat '${bashPath(firstPid)}')" 2>/dev/null || true ;; esac`
+      : ':',
+    ''
+  ].join('\n'))
+  writeExecutable(join(bin, 'pgrep'), [
+    '#!/usr/bin/env bash',
+    'case " $* " in',
+    '  *" -P "*)',
+    '    parent=""',
+    '    while [ $# -gt 0 ]; do [ "$1" = "-P" ] && parent=$2; shift; done',
+    pgrepReturnsParent ? '    [ -z "$parent" ] || printf \'%s\\n\' "$parent"' : '    :',
+    `    printf '%s\\n' ${Object.keys(CHILD_ROLES).join(' ')}`,
+    '    ;;',
+    `  *" -f "*) [ -s '${bashPath(decoyPid)}' ] && kill -0 "$(cat '${bashPath(decoyPid)}')" 2>/dev/null && cat '${bashPath(decoyPid)}'; [ -s '${bashPath(secondPid)}' ] && kill -0 "$(cat '${bashPath(secondPid)}')" 2>/dev/null && cat '${bashPath(secondPid)}' ;;`,
+    'esac',
+    ''
+  ].join('\n'))
   writeExecutable(join(bin, 'ps'), [
     '#!/usr/bin/env bash',
     'pid=""',
     'while [ $# -gt 0 ]; do [ "$1" = "-p" ] && pid=$2; shift; done',
+    `if [ -s '${bashPath(decoyPid)}' ] && [ "$pid" = "$(cat '${bashPath(decoyPid)}')" ]; then printf '%s\\n' 'sleep 120 --app ${bashPath(root)}/Metis.app'; exit 0; fi`,
+    `if [ -s '${bashPath(secondPid)}' ] && [ "$pid" = "$(cat '${bashPath(secondPid)}')" ]; then printf '%s\\n' '${bashPath(app)}'; exit 0; fi`,
     'case "$pid" in',
     ...Object.entries(CHILD_ROLES).map(([pid, command]) => `  ${pid}) printf '%s\\n' '${command}' ;;`),
     '  *) exit 1 ;;',
     'esac',
     ''
   ].join('\n'))
-  return { app, bin, sampleLog, openLog }
+  return { app, bin, sampleLog, openLog, secondPid, decoyPid }
 }
 
 function hostedWindowsStubs(root: string, { secondLaunchFails = false } = {}) {
@@ -597,6 +644,88 @@ describe('M2-0462 hosted-live mode', () => {
     }
   }, 120_000)
 
+  it('runs process-signal before row 4 and relaunches when the second instance kills the first main process', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'm2-0556-hosted-'))
+    const out = join(root, 'bundle')
+    const devtools = await fakeDevTools()
+    try {
+      const stubs = hostedStubs(root, { secondLaunchKillsFirst: true })
+      const result = await runClosedStdin(hostedArgs(out, stubs.app), hostedEnv(root, stubs, devtools.port))
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)
+
+      const interrupts = jsonl(join(out, 'interrupt-results.jsonl'))
+      expect(interrupts.find((entry) => entry.interrupt === 'process-signal'))
+        .toMatchObject({ automatic: true, result: 'pass', signal: 'TERM', exited_within_10s: true })
+
+      const matrix = jsonl(join(out, 'matrix.jsonl'))
+      const row4 = matrix.find((entry) => entry.row === 'row-4-second-instance-reopen' && 'operator_result' in entry)
+      expect(row4).toMatchObject({
+        automatic: true,
+        operator_result: 'pass',
+        first_instance: { state_after_second_launch: 'main-exited' },
+        second_instance: { launch_status: 'open-exited-zero', state: 'running', stop_status: 'stopped' },
+        relaunched_after_first_exit: true
+      })
+      const recordedSecondPid = Number(row4?.second_instance?.pid)
+      expect(recordedSecondPid).toBeGreaterThan(0)
+      const decoyPid = Number(readFileSync(stubs.decoyPid, 'utf8'))
+      expect(recordedSecondPid).not.toBe(decoyPid)
+      expect(() => process.kill(decoyPid, 0)).not.toThrow()
+      let secondStillRunning = true
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        try {
+          process.kill(recordedSecondPid, 0)
+        } catch {
+          secondStillRunning = false
+          break
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+      if (secondStillRunning) process.kill(recordedSecondPid, 'SIGTERM')
+      expect(secondStillRunning).toBe(false)
+      expect(matrix.find((entry) => entry.row === 'row-4-second-instance-reopen' && entry.event === 'main_exited'))
+        .toMatchObject({ signal: 'KILL', when: 'after-second-instance-launch', observed_exit_by_ms: expect.any(Number) })
+      expect(matrix.find((entry) => entry.row === 'row-4-second-instance-reopen' && 'sampled' in entry))
+        .toMatchObject({ sampled: true, main_sample: true, renderer_samples: 1 })
+      expect(JSON.parse(readFileSync(join(out, 'M2-0008.evidence-import.json'), 'utf8')))
+        .toMatchObject({ result: 'PASS', sample_failures: 0, matrix_result_failures: 0, interrupt_result_failures: 0 })
+      expect(m2_0008BundleProblems(out)).toEqual([])
+    } finally {
+      await devtools.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  it('terminates when pgrep reports repeating descendants and the queried parent', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'm2-0556-hosted-'))
+    const out = join(root, 'bundle')
+    const devtools = await fakeDevTools()
+    const started = Date.now()
+    try {
+      const stubs = hostedStubs(root, { pgrepReturnsParent: true })
+      const result = await runClosedStdin(hostedArgs(out, stubs.app), hostedEnv(root, stubs, devtools.port))
+      const elapsedMs = Date.now() - started
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)
+      expect(elapsedMs).toBeLessThan(30_000)
+
+      const matrix = jsonl(join(out, 'matrix.jsonl'))
+      for (const row of AUTOMATIC_ROWS) {
+        expect(matrix.find((entry) => entry.row === row && 'operator_result' in entry), row)
+          .toMatchObject({ automatic: true, operator_result: 'pass', precondition: 'ok' })
+      }
+      expect(jsonl(join(out, 'interrupt-results.jsonl')).find((entry) => entry.interrupt === 'process-signal'))
+        .toMatchObject({ automatic: true, result: 'pass', signal: 'TERM' })
+      expect(JSON.parse(readFileSync(join(out, 'M2-0008.evidence-import.json'), 'utf8')))
+        .toMatchObject({ result: 'PASS', sample_failures: 0, matrix_result_failures: 0, interrupt_result_failures: 0 })
+      expect(m2_0008BundleProblems(out)).toEqual([])
+    } finally {
+      await devtools.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 120_000)
+
   it('with --candidate-run emits the M2-0194 attribution bundle instead of M2-0008 hosted records', async () => {
     const root = mkdtempSync(join(tmpdir(), 'm2-0194-hosted-'))
     const out = join(root, 'bundle')
@@ -814,5 +943,21 @@ describe('M2-0462 cdp-observe derivation', () => {
     expect(deriveRowResult('row-1-history-open', { ...answered, window_visible: false })).toMatchObject({ operator_result: 'pass' })
     expect(deriveRowResult('row-4-second-instance-reopen', { ...answered, reachable: false, page_targets: 0 })).toMatchObject({ operator_result: 'not-exercised' })
     expect(deriveRowResult('row-1-history-open', { ...answered, main_round_trip: 'no-bridge', drive: 'no-bridge' })).toMatchObject({ operator_result: 'not-exercised' })
+  })
+
+  it('treats a DevTools HTTP timeout as an observed freeze', async () => {
+    const devtools = await hangingDevToolsList()
+    try {
+      const cdp = await observe({ port: devtools.port, drive: 'none', timeoutMs: 100 })
+
+      expect(cdp).toMatchObject({ reachable: true, devtools_http: 'timeout', page_targets: 0 })
+      expect(deriveRowResult('row-1-history-open', cdp)).toMatchObject({
+        operator_result: 'observed',
+        symptom_observed: true,
+        reason: 'devtools-http-timeout'
+      })
+    } finally {
+      await devtools.close()
+    }
   })
 })

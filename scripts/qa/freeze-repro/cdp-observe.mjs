@@ -85,6 +85,7 @@ function worst(outcomes) {
 export async function observe({ port, drive, timeoutMs }) {
   const cdp = {
     reachable: false,
+    devtools_http: 'not-run',
     page_targets: 0,
     renderer_round_trip: 'not-run',
     renderer_round_trip_ms: null,
@@ -95,6 +96,11 @@ export async function observe({ port, drive, timeoutMs }) {
     window_visible_observed_by: VISIBILITY_OBSERVED_BY
   }
   const list = await bounded(fetch(`http://127.0.0.1:${port}/json/list`).then((response) => response.json()), timeoutMs)
+  cdp.devtools_http = list.outcome
+  if (list.outcome === 'timeout') {
+    cdp.reachable = true
+    return cdp
+  }
   if (list.outcome !== 'answered' || !Array.isArray(list.value)) return cdp
   cdp.reachable = true
   const pages = list.value.filter((target) => target?.type === 'page' && typeof target.webSocketDebuggerUrl === 'string')
@@ -148,6 +154,9 @@ export async function observe({ port, drive, timeoutMs }) {
  * round trip answered and nothing froze; `not-exercised` means the row could not be observed at all.
  */
 export function deriveRowResult(row, cdp) {
+  if (cdp.devtools_http === 'timeout') {
+    return { operator_result: 'observed', symptom_observed: true, reason: 'devtools-http-timeout' }
+  }
   if (!cdp.reachable || cdp.page_targets === 0) {
     return { operator_result: 'not-exercised', symptom_observed: null, reason: 'devtools-unreachable' }
   }
