@@ -546,22 +546,22 @@ jobs:
           write_report() {
             VERDICT="$1" ALIVE_AFTER_30S="$alive_after_30s" QUIT_CLEANLY="$quit_cleanly" SURVIVOR_PROCESSES="$survivor_processes" \
             INSTALLER="$name" ARTIFACT_SHA256="$sha" CANDIDATE_RUN="$run_id" SIGNATURE="$expected" REPORT="$report" python3 - <<'PY'
-import json, os
-report = {
-  "variant": "mac-native",
-  "installer": os.environ["INSTALLER"],
-  "artifact_sha256": os.environ["ARTIFACT_SHA256"],
-  "candidate_run": int(os.environ["CANDIDATE_RUN"]),
-  "signature": os.environ["SIGNATURE"],
-  "verdict": os.environ["VERDICT"],
-  "alive_after_30s": os.environ["ALIVE_AFTER_30S"] == "true",
-  "quit_cleanly": os.environ["QUIT_CLEANLY"] == "true",
-  "survivor_processes": os.environ["SURVIVOR_PROCESSES"] == "true",
-}
-with open(os.environ["REPORT"], "w", encoding="utf-8") as f:
-  json.dump(report, f, indent=2)
-  f.write("\n")
-PY
+          import json, os
+          report = {
+            "variant": "mac-native",
+            "installer": os.environ["INSTALLER"],
+            "artifact_sha256": os.environ["ARTIFACT_SHA256"],
+            "candidate_run": int(os.environ["CANDIDATE_RUN"]),
+            "signature": os.environ["SIGNATURE"],
+            "verdict": os.environ["VERDICT"],
+            "alive_after_30s": os.environ["ALIVE_AFTER_30S"] == "true",
+            "quit_cleanly": os.environ["QUIT_CLEANLY"] == "true",
+            "survivor_processes": os.environ["SURVIVOR_PROCESSES"] == "true",
+          }
+          with open(os.environ["REPORT"], "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2)
+            f.write("\n")
+          PY
           }
           fail() {
             echo "::error::$1"
