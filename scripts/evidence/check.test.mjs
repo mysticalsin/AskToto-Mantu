@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { OWNER_MAC_RUNNER_HOST, RECORD_SCHEMA, recordProblems } from './record.mjs'
 import {
-  TEST_WORKFLOW, ledgerProblems, loadProgram, outputProblems, prProblems, githubApi, m2_0008BundleProblems,
+  TEST_WORKFLOW, legacyTicketListProblems, ledgerProblems, loadProgram, outputProblems, prProblems, githubApi, m2_0008BundleProblems,
   m2_0194BundleProblems, m2_0195BundleProblems, releaseInputProblems, releaseProblems
 } from './check.mjs'
 import { drawSample, populationOf } from './sample.mjs'
@@ -225,6 +225,50 @@ test('C14 a closed fix ticket needs repro on its LOCALLY_TESTED record; a MEASUR
   assert.ok(noneMatching(ledgerProblems(ledger({ tickets: [measuredFix] }), measuredRecs), 'repro'))
 })
 
+test('C14b OD-65 legacy-fix list skips only listed fix tickets for red-before repro', () => {
+  const listed = ticket({ id: 'M2-0001', status: 'DONE', type: 'fix', required_evidence: ['LOCALLY_TESTED'] })
+  const unlisted = ticket({ id: 'M2-0002', status: 'DONE', type: 'fix', required_evidence: ['LOCALLY_TESTED'] })
+  const recs = new Map([
+    ['M2-0001', [record({ ticket: 'M2-0001' })]],
+    ['M2-0002', [record({ ticket: 'M2-0002' })]]
+  ])
+  const problems = ledgerProblems(ledger({ tickets: [listed, unlisted] }), recs, { legacyFixTickets: new Set(['M2-0001']) })
+  assert.ok(noneMatching(problems.filter((p) => p.startsWith('M2-0001:')), 'repro'))
+  assertProblem(problems, 'M2-0002', 'repro')
+})
+
+test('C14c OD-67 legacy-evidence list skips only listed tickets for closed-ticket record requirements', () => {
+  const listed = ticket({ id: 'M2-0001', status: 'DONE', required_evidence: ['LOCALLY_TESTED'] })
+  const unlisted = ticket({ id: 'M2-0002', status: 'DONE', required_evidence: ['LOCALLY_TESTED'] })
+  const problems = ledgerProblems(
+    ledger({ tickets: [listed, unlisted] }),
+    new Map(),
+    { legacyEvidenceTickets: new Set(['M2-0001']) }
+  )
+  assert.ok(noneMatching(problems.filter((p) => p.startsWith('M2-0001:')), 'LOCALLY_TESTED'))
+  assertProblem(problems, 'M2-0002', 'DONE', 'LOCALLY_TESTED')
+})
+
+test('C14d legacy ticket lists reject malformed shapes, invalid ids and duplicates', () => {
+  assertProblem(legacyTicketListProblems([], 'OD-65', 'evidence/legacy-fix.json').problems, 'expected a JSON object')
+  assertProblem(
+    legacyTicketListProblems({ decision: 'OD-65', tickets: ['M2-0001', 'M2-0001'] }, 'OD-65', 'evidence/legacy-fix.json').problems,
+    'duplicate ticket M2-0001'
+  )
+  assertProblem(
+    legacyTicketListProblems({ decision: 'OD-65', tickets: ['T-1'] }, 'OD-65', 'evidence/legacy-fix.json').problems,
+    'invalid id'
+  )
+  assertProblem(
+    legacyTicketListProblems({ decision: 'OD-00', tickets: ['M2-0001'] }, 'OD-65', 'evidence/legacy-fix.json').problems,
+    'decision must be OD-65'
+  )
+  assertProblem(
+    legacyTicketListProblems({ decision: 'OD-67', tickets: 'M2-0001' }, 'OD-67', 'evidence/legacy-evidence.json').problems,
+    'tickets must be an array'
+  )
+})
+
 test('C15 a record kit_refs set must equal the ticket kit_refs exactly', () => {
   const t = ticket({ id: 'M2-0001', status: 'IN_PROGRESS', kit_refs: ['F-18', 'FLOW-12'] })
   const missing = new Map([['M2-0001', [record({ ticket: 'M2-0001', kit_refs: { 'F-18': 'PARTIAL' } })]]])
@@ -370,6 +414,37 @@ test('C24 CLI --ledger: a valid tree exits 0, a FAIL line exits 1 naming the tic
       { status: 2 }
     )
   }
+})
+
+test('C24b loadProgram reads legacy lists next to the records store, allows overrides, and fails closed when missing', () => {
+  const root = mkdtempSync(join(tmpdir(), 'evidence-program-'))
+  mkdirSync(join(root, 'ledger'), { recursive: true })
+  mkdirSync(join(root, 'evidence', 'records'), { recursive: true })
+  const ledgerPath = join(root, 'ledger', 'tickets.json')
+  const t = ticket({ id: 'M2-0001', status: 'DONE', type: 'fix', required_evidence: ['LOCALLY_TESTED'] })
+  writeFileSync(ledgerPath, JSON.stringify({ tickets: [t] }))
+  writeFileSync(join(root, 'evidence', 'records', 'M2-0001.jsonl'), `${JSON.stringify(record({ ticket: 'M2-0001' }))}\n`)
+
+  const missing = loadProgram(ledgerPath)
+  assert.deepEqual(missing.problems, [])
+  assertProblem(ledgerProblems(missing.ledger, missing.recordsByTicket, {
+    legacyFixTickets: missing.legacyFixTickets,
+    legacyEvidenceTickets: missing.legacyEvidenceTickets
+  }), 'M2-0001', 'repro')
+
+  writeFileSync(join(root, 'evidence', 'legacy-fix.json'), JSON.stringify({ decision: 'OD-65', tickets: ['M2-0001'] }))
+  writeFileSync(join(root, 'evidence', 'legacy-evidence.json'), JSON.stringify({ decision: 'OD-67', tickets: [] }))
+  const defaults = loadProgram(ledgerPath)
+  assert.equal(defaults.legacyFixTickets.has('M2-0001'), true)
+  assert.ok(noneMatching(ledgerProblems(defaults.ledger, defaults.recordsByTicket, {
+    legacyFixTickets: defaults.legacyFixTickets,
+    legacyEvidenceTickets: defaults.legacyEvidenceTickets
+  }), 'repro'))
+
+  const overridePath = join(root, 'legacy-fix-override.json')
+  writeFileSync(overridePath, JSON.stringify({ decision: 'OD-65', tickets: [] }))
+  const overridden = loadProgram(ledgerPath, { legacyFixPath: overridePath })
+  assert.equal(overridden.legacyFixTickets.has('M2-0001'), false)
 })
 
 test('C25 ENGINEERING_COMPLETE requires a latest PASS record; a later FAIL withdraws an earlier PASS', () => {

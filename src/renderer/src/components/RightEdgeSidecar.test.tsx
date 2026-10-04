@@ -3,7 +3,10 @@ import { join } from 'node:path'
 import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
 import { Children, isValidElement, type ReactElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import type { Browser, Page } from 'playwright'
+import { build, type Rollup } from 'vite'
+import react from '@vitejs/plugin-react'
 import { RIGHT_EDGE_DRAWER_WIDTH, RIGHT_EDGE_TAB_WIDTH } from '@shared/right-edge-geometry'
 import { RightEdgeSidecar, SidecarChat, dockEscapeHides } from './RightEdgeSidecar'
 
@@ -357,7 +360,8 @@ describe('right-edge dock', () => {
     expect(sidecar).not.toMatch(/window\.toto\.resize/)
     expect(sidecar).toContain('tabIndex={open ? -1 : 0}')
     expect(sidecar).toContain('aria-hidden={open || undefined}')
-    expect(sidecar).toContain('requestAnimationFrame(() => composerRef.current?.focus())')
+    // D4 (M2-0202): the composer focus on an explicit open is synchronous and a hover reveal never focuses;
+    // the RE-K01 rows below drive that in Chromium.
     expect(sidecar).toContain('data-right-edge-status={')
     expect(sidecar).toContain('right-edge-sidecar__header-back')
     expect(sidecar).toContain('data-right-edge-action-rail="true"')
@@ -488,5 +492,194 @@ describe('right-edge dock', () => {
     expect(sidecar).toMatch(/if \(!onOpenIntelligence \|\| capturing \|\| intelligence\.status === 'opening'\) return/)
     expect(sidecar).toMatch(/disabled=\{intelligence\.status === 'opening' \|\| capturing\}/)
     expect(app).toMatch(/const openIntelligenceDashboard = useCallback\(async[\s\S]*?if \(capturing \|\| capturingRef\.current\) return \{ ok: false, error: 'Wait for screen capture to finish before opening Mantu Intelligence\.' \}/)
+  })
+})
+
+// RE-K01 for D4, D10 and D11 (M2-0202 S2): the real RightEdgeSidecar and Bar, bundled by Vite and driven in
+// Chromium with page.keyboard and page.mouse (the browser the dock-identity test already uses). An IME
+// keydown is a dispatched KeyboardEvent carrying isComposing or keyCode 229, exactly what Chromium sends
+// while a composition owns the key.
+const K01_HARNESS_ID = '\0right-edge-k01-harness'
+const k01Module = (path: string): string => JSON.stringify(join(__dirname, path).replace(/\\/g, '/'))
+const K01_HARNESS = `
+import { createElement } from 'react'
+import { flushSync } from 'react-dom'
+import { createRoot } from 'react-dom/client'
+import { RightEdgeSidecar } from ${k01Module('RightEdgeSidecar')}
+import { Bar } from ${k01Module('Bar')}
+import ${k01Module('../styles/right-edge-sidecar.css')}
+
+const log = { submits: 0, barSubmits: 0, closes: 0, activity: 0, composing: [] }
+let state = { open: false, focusSignal: 0 }
+const dock = createRoot(document.getElementById('dock'))
+const composer = () => document.querySelector('#dock input')
+const renderDock = () => flushSync(() => dock.render(createElement(RightEdgeSidecar, {
+  open: state.open,
+  focusSignal: state.focusSignal,
+  onOpen: () => { state = { ...state, open: true }; renderDock() },
+  onClose: () => { log.closes += 1 },
+  value: '',
+  onChange: () => {},
+  onSubmit: () => { log.submits += 1 },
+  onComposerActivity: () => { log.activity += 1 },
+  onComposingChange: (on) => { log.composing.push(on) }
+})))
+renderDock()
+const noop = () => {}
+flushSync(() => createRoot(document.getElementById('bar')).render(createElement(Bar, {
+  value: 'Draft', onChange: noop, onSubmit: () => { log.barSubmits += 1 }, onStop: noop, busy: false, listening: false,
+  onToggleListen: noop, paused: false, onTogglePause: noop, onCapture: noop, capturing: false, onSettings: noop,
+  onHistory: noop, onMinimize: noop, stealth: true, onToggleStealth: noop, startedAt: 0, panelOpen: false,
+  onTogglePanel: noop, canTogglePanel: false, focusSignal: 0, mode: 'general', onSetMode: noop
+})))
+window.__k01 = {
+  log,
+  // Renders the patch and reports focus in the same task: a focus deferred to a later frame reads false here.
+  set: (patch) => { state = { ...state, ...patch }; renderDock(); return document.activeElement === composer() },
+  composerFocused: () => document.activeElement === composer(),
+  blur: () => document.activeElement?.blur(),
+  imeKey: (selector, key, kind) => {
+    const target = document.querySelector(selector)
+    target.focus()
+    const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, isComposing: kind === 'composing' })
+    if (kind === '229') Object.defineProperty(event, 'keyCode', { get: () => 229 })
+    target.dispatchEvent(event)
+  },
+  composition: (type) => composer().dispatchEvent(new CompositionEvent(type, { bubbles: true, data: 'か' }))
+}
+`
+
+async function bundleK01Harness(): Promise<{ js: string; css: string }> {
+  const rendererSrc = join(__dirname, '..')
+  const output = (await build({
+    root: join(rendererSrc, '..'),
+    configFile: false,
+    logLevel: 'silent',
+    define: { __METIS_FEEDBACK_EMAIL__: '""', __METIS_QA_IDENTITY__: 'false' },
+    resolve: { alias: { '@': rendererSrc, '@shared': join(rendererSrc, '../../shared') } },
+    plugins: [
+      react(),
+      {
+        name: 'right-edge-k01-harness',
+        resolveId: (id: string) => (id === K01_HARNESS_ID ? id : null),
+        load: (id: string) => (id === K01_HARNESS_ID ? K01_HARNESS : null)
+      }
+    ],
+    build: { write: false, minify: false, cssCodeSplit: false, rollupOptions: { input: K01_HARNESS_ID, output: { format: 'iife', inlineDynamicImports: true } } }
+  })) as Rollup.RollupOutput | Rollup.RollupOutput[]
+  const files = (Array.isArray(output) ? output : [output]).flatMap((result) => result.output)
+  return {
+    js: files.filter((file): file is Rollup.OutputChunk => file.type === 'chunk').map((chunk) => chunk.code).join('\n'),
+    css: files
+      .filter((file): file is Rollup.OutputAsset => file.type === 'asset' && file.fileName.endsWith('.css'))
+      .map((asset) => String(asset.source))
+      .join('\n')
+  }
+}
+
+type K01Log = { submits: number; barSubmits: number; closes: number; activity: number; composing: boolean[] }
+type K01 = {
+  log: K01Log
+  set(patch: { open?: boolean; focusSignal?: number }): boolean
+  composerFocused(): boolean
+  blur(): void
+  imeKey(selector: string, key: string, kind: 'composing' | '229'): void
+  composition(type: 'compositionstart' | 'compositionend'): void
+}
+
+describe('RE-K01: right-edge keyboard and IME in Chromium (D4, D10, D11)', () => {
+  let browser: Browser
+  let page: Page
+  /** Renders the patch; true when the composer holds focus in the same task. */
+  const setDock = (patch: { open?: boolean; focusSignal?: number }): Promise<boolean> =>
+    page.evaluate((p) => (window as unknown as { __k01: K01 }).__k01.set(p), patch)
+  const composerFocused = (): Promise<boolean> => page.evaluate(() => (window as unknown as { __k01: K01 }).__k01.composerFocused())
+  const blur = (): Promise<void> => page.evaluate(() => (window as unknown as { __k01: K01 }).__k01.blur())
+  const log = (): Promise<K01Log> => page.evaluate(() => (window as unknown as { __k01: K01 }).__k01.log)
+  const imeKey = (selector: string, key: string, kind: 'composing' | '229'): Promise<void> =>
+    page.evaluate(([s, k, c]) => (window as unknown as { __k01: K01 }).__k01.imeKey(s, k, c as 'composing' | '229'), [selector, key, kind])
+
+  beforeAll(async () => {
+    const { js, css } = await bundleK01Harness()
+    const { chromium } = await import('playwright')
+    browser = await chromium.launch({ headless: true })
+    page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
+    await page.setContent(
+      `<!doctype html><html><head><meta charset="utf-8"><style>${css}</style></head><body>` +
+        '<div id="dock" style="position:relative;width:360px;height:560px"></div><div id="bar" style="width:880px"></div></body></html>'
+    )
+    await page.addScriptTag({ content: `window.toto = {};\n${js}` })
+    await page.waitForSelector('#dock [data-re-surface]')
+  }, 120_000)
+
+  afterAll(async () => {
+    await browser?.close()
+  })
+
+  it('D4: a hover reveal never moves focus to the composer', async () => {
+    await setDock({ open: false })
+    await blur()
+    expect(await setDock({ open: true })).toBe(false)
+    expect(await page.locator('#dock [data-re-surface]').getAttribute('data-re-surface')).toBe('island')
+  })
+
+  it('D4: an explicit open focuses the composer in the same commit, with no animation frame in between', async () => {
+    await setDock({ open: false })
+    expect(await page.locator('#dock [data-re-surface]').getAttribute('data-re-surface')).toBe('rest')
+    await blur()
+    // The summon arrives while parked: the drawer is hidden, so nothing focuses yet.
+    expect(await setDock({ focusSignal: 1 })).toBe(false)
+    // The reveal commit focuses synchronously.
+    expect(await setDock({ open: true })).toBe(true)
+    // A summon of an already-open dock hands the caret back.
+    await blur()
+    expect(await setDock({ focusSignal: 2 })).toBe(true)
+  })
+
+  it('D4: a click on the parked rail tab is an explicit open and focuses the composer', async () => {
+    await setDock({ open: false })
+    await blur()
+    await page.getByRole('button', { name: 'Open Métis' }).click()
+    expect(await composerFocused()).toBe(true)
+  })
+
+  it('D10: Enter submits only outside a composition, in the dock and in the Bar', async () => {
+    await setDock({ open: true })
+    for (const selector of ['#dock input', '#bar input']) {
+      await imeKey(selector, 'Enter', 'composing')
+      await imeKey(selector, 'Enter', '229')
+    }
+    expect(await log()).toMatchObject({ submits: 0, barSubmits: 0 })
+    await page.locator('#dock input').focus()
+    await page.keyboard.press('Enter')
+    await page.locator('#bar input').focus()
+    await page.keyboard.press('Enter')
+    expect(await log()).toMatchObject({ submits: 1, barSubmits: 1 })
+  })
+
+  it('D11: Escape during a composition stays with the IME; Escape outside one hides the dock', async () => {
+    await setDock({ open: true })
+    await imeKey('#dock input', 'Escape', 'composing')
+    await imeKey('#dock input', 'Escape', '229')
+    expect((await log()).closes).toBe(0)
+    await page.locator('#dock input').focus()
+    await page.keyboard.press('Escape')
+    expect((await log()).closes).toBe(1)
+  })
+
+  it('the composer reports the typing and ime pin sources: a pointerdown, a keystroke and a composition', async () => {
+    await setDock({ open: true })
+    const before = (await log()).activity
+    await page.locator('#dock input').click()
+    const afterClick = (await log()).activity
+    expect(afterClick).toBe(before + 1)
+    await page.keyboard.press('a')
+    expect((await log()).activity).toBe(afterClick + 1)
+    await page.evaluate(() => {
+      const k01 = (window as unknown as { __k01: K01 }).__k01
+      k01.composition('compositionstart')
+      k01.composition('compositionend')
+    })
+    expect((await log()).composing).toEqual([true, false])
   })
 })
