@@ -6,10 +6,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { RECORD_SCHEMA, recordProblems } from './record.mjs'
+import { OWNER_MAC_RUNNER_HOST, RECORD_SCHEMA, recordProblems } from './record.mjs'
 import {
-  TEST_WORKFLOW, ledgerProblems, loadProgram, outputProblems, prProblems, githubApi, m2_0008BundleProblems,
-  m2_0194BundleProblems, releaseInputProblems, releaseProblems
+  TEST_WORKFLOW, legacyTicketListProblems, ledgerProblems, loadProgram, outputProblems, prProblems, githubApi, m2_0008BundleProblems,
+  m2_0194BundleProblems, m2_0195BundleProblems, releaseInputProblems, releaseProblems
 } from './check.mjs'
 import { drawSample, populationOf } from './sample.mjs'
 
@@ -225,6 +225,50 @@ test('C14 a closed fix ticket needs repro on its LOCALLY_TESTED record; a MEASUR
   assert.ok(noneMatching(ledgerProblems(ledger({ tickets: [measuredFix] }), measuredRecs), 'repro'))
 })
 
+test('C14b OD-65 legacy-fix list skips only listed fix tickets for red-before repro', () => {
+  const listed = ticket({ id: 'M2-0001', status: 'DONE', type: 'fix', required_evidence: ['LOCALLY_TESTED'] })
+  const unlisted = ticket({ id: 'M2-0002', status: 'DONE', type: 'fix', required_evidence: ['LOCALLY_TESTED'] })
+  const recs = new Map([
+    ['M2-0001', [record({ ticket: 'M2-0001' })]],
+    ['M2-0002', [record({ ticket: 'M2-0002' })]]
+  ])
+  const problems = ledgerProblems(ledger({ tickets: [listed, unlisted] }), recs, { legacyFixTickets: new Set(['M2-0001']) })
+  assert.ok(noneMatching(problems.filter((p) => p.startsWith('M2-0001:')), 'repro'))
+  assertProblem(problems, 'M2-0002', 'repro')
+})
+
+test('C14c OD-67 legacy-evidence list skips only listed tickets for closed-ticket record requirements', () => {
+  const listed = ticket({ id: 'M2-0001', status: 'DONE', required_evidence: ['LOCALLY_TESTED'] })
+  const unlisted = ticket({ id: 'M2-0002', status: 'DONE', required_evidence: ['LOCALLY_TESTED'] })
+  const problems = ledgerProblems(
+    ledger({ tickets: [listed, unlisted] }),
+    new Map(),
+    { legacyEvidenceTickets: new Set(['M2-0001']) }
+  )
+  assert.ok(noneMatching(problems.filter((p) => p.startsWith('M2-0001:')), 'LOCALLY_TESTED'))
+  assertProblem(problems, 'M2-0002', 'DONE', 'LOCALLY_TESTED')
+})
+
+test('C14d legacy ticket lists reject malformed shapes, invalid ids and duplicates', () => {
+  assertProblem(legacyTicketListProblems([], 'OD-65', 'evidence/legacy-fix.json').problems, 'expected a JSON object')
+  assertProblem(
+    legacyTicketListProblems({ decision: 'OD-65', tickets: ['M2-0001', 'M2-0001'] }, 'OD-65', 'evidence/legacy-fix.json').problems,
+    'duplicate ticket M2-0001'
+  )
+  assertProblem(
+    legacyTicketListProblems({ decision: 'OD-65', tickets: ['T-1'] }, 'OD-65', 'evidence/legacy-fix.json').problems,
+    'invalid id'
+  )
+  assertProblem(
+    legacyTicketListProblems({ decision: 'OD-00', tickets: ['M2-0001'] }, 'OD-65', 'evidence/legacy-fix.json').problems,
+    'decision must be OD-65'
+  )
+  assertProblem(
+    legacyTicketListProblems({ decision: 'OD-67', tickets: 'M2-0001' }, 'OD-67', 'evidence/legacy-evidence.json').problems,
+    'tickets must be an array'
+  )
+})
+
 test('C15 a record kit_refs set must equal the ticket kit_refs exactly', () => {
   const t = ticket({ id: 'M2-0001', status: 'IN_PROGRESS', kit_refs: ['F-18', 'FLOW-12'] })
   const missing = new Map([['M2-0001', [record({ ticket: 'M2-0001', kit_refs: { 'F-18': 'PARTIAL' } })]]])
@@ -370,6 +414,37 @@ test('C24 CLI --ledger: a valid tree exits 0, a FAIL line exits 1 naming the tic
       { status: 2 }
     )
   }
+})
+
+test('C24b loadProgram reads legacy lists next to the records store, allows overrides, and fails closed when missing', () => {
+  const root = mkdtempSync(join(tmpdir(), 'evidence-program-'))
+  mkdirSync(join(root, 'ledger'), { recursive: true })
+  mkdirSync(join(root, 'evidence', 'records'), { recursive: true })
+  const ledgerPath = join(root, 'ledger', 'tickets.json')
+  const t = ticket({ id: 'M2-0001', status: 'DONE', type: 'fix', required_evidence: ['LOCALLY_TESTED'] })
+  writeFileSync(ledgerPath, JSON.stringify({ tickets: [t] }))
+  writeFileSync(join(root, 'evidence', 'records', 'M2-0001.jsonl'), `${JSON.stringify(record({ ticket: 'M2-0001' }))}\n`)
+
+  const missing = loadProgram(ledgerPath)
+  assert.deepEqual(missing.problems, [])
+  assertProblem(ledgerProblems(missing.ledger, missing.recordsByTicket, {
+    legacyFixTickets: missing.legacyFixTickets,
+    legacyEvidenceTickets: missing.legacyEvidenceTickets
+  }), 'M2-0001', 'repro')
+
+  writeFileSync(join(root, 'evidence', 'legacy-fix.json'), JSON.stringify({ decision: 'OD-65', tickets: ['M2-0001'] }))
+  writeFileSync(join(root, 'evidence', 'legacy-evidence.json'), JSON.stringify({ decision: 'OD-67', tickets: [] }))
+  const defaults = loadProgram(ledgerPath)
+  assert.equal(defaults.legacyFixTickets.has('M2-0001'), true)
+  assert.ok(noneMatching(ledgerProblems(defaults.ledger, defaults.recordsByTicket, {
+    legacyFixTickets: defaults.legacyFixTickets,
+    legacyEvidenceTickets: defaults.legacyEvidenceTickets
+  }), 'repro'))
+
+  const overridePath = join(root, 'legacy-fix-override.json')
+  writeFileSync(overridePath, JSON.stringify({ decision: 'OD-65', tickets: [] }))
+  const overridden = loadProgram(ledgerPath, { legacyFixPath: overridePath })
+  assert.equal(overridden.legacyFixTickets.has('M2-0001'), false)
 })
 
 test('C25 ENGINEERING_COMPLETE requires a latest PASS record; a later FAIL withdraws an earlier PASS', () => {
@@ -957,6 +1032,85 @@ test('C31 CLI --ticket M2-0194 validates a bundle and rejects an incomplete one;
   rmSync(join(root, 'stall-bundle-names.json'))
   assert.throws(() => execFileSync(process.execPath, [cliPath, '--ticket', 'M2-0194', '--bundle', root], { stdio: 'pipe' }), (error) => error.status === 1)
   assert.throws(() => execFileSync(process.execPath, [cliPath, '--ticket', 'M2-0001', '--bundle', root], { stdio: 'pipe' }), (error) => error.status === 2)
+})
+
+function writeM2_0195Bundle(root, { environment = {}, rows = [], leadAction } = {}) {
+  const writeJson = (name, value) => writeFileSync(join(root, name), `${JSON.stringify(value, null, 2)}\n`)
+  writeFileSync(join(root, 'README.md'), '# M2-0195\n')
+  writeFileSync(
+    join(root, 'M2-0195.lead-action.md'),
+    leadAction ?? 'LEAD_ACTION: File the M2-0195 LIVE_VERIFIED/MEASURED record, then ensure every finding is a ticket or explicit residual in the 1.9.7 release notes.\n'
+  )
+  writeJson('environment.json', {
+    ticket: 'M2-0195',
+    version: '1.9.6',
+    platform: 'win32',
+    artifact_sha256: 'b'.repeat(64),
+    mode: 'hosted-live',
+    host: { label: 'windows-latest' },
+    ...environment
+  })
+  writeJson('baseline.json', {
+    ticket: 'M2-0195',
+    version: '1.9.6',
+    platform: 'win32',
+    rows: rows.length > 0
+      ? rows
+      : [
+          { id: 'census-cold-start', status: 'MEASURED', artifact: 'win32-cold-start.json' },
+          { id: 'census-settled-idle', status: 'MEASURED', artifact: 'win32-settled-idle.json' },
+          { id: 'st-1-w-onedrive-placeholders-network-off', status: 'BLOCKED_EXTERNAL', unblock: 'Run ST-1-W on the managed laptop with OneDrive placeholders and network disabled.' },
+          { id: 'hk-w-end-task-owned-sidecars', status: 'BLOCKED_EXTERNAL', unblock: 'Run HK-W on the managed laptop and record owned sidecars plus utilityProcess hosts after End task on main.' },
+          { id: 'managed-resource-census-representative', status: 'BLOCKED_EXTERNAL', unblock: 'Run the resource census on the managed laptop with EDR and OneDrive Files On-Demand enabled.' },
+          { id: 'managed-foreground-watcher-cost', status: 'BLOCKED_EXTERNAL', unblock: 'Measure PowerShell foreground-watcher working set, private bytes and CPU-time deltas on the managed laptop.' },
+          { id: 'managed-edr-interaction', status: 'BLOCKED_EXTERNAL', unblock: 'Record EDR prompts, quarantines or process blocks on the managed laptop while running the baseline.' }
+        ]
+  })
+  writeJson('external-blockers.json', {
+    ticket: 'M2-0195',
+    blockers: [
+      {
+        status: 'BLOCKED_EXTERNAL',
+        unblock_step: 'Provide one managed Windows 11 x64 laptop on the standard enterprise image with EDR as deployed and OneDrive Files On-Demand.'
+      }
+    ]
+  })
+  writeJson('findings-handoff.json', {
+    ticket: 'M2-0195',
+    release: '1.9.7',
+    rule: 'Every finding becomes a ticket or an explicit residual in the 1.9.7 release notes.',
+    rows: [
+      { row: 'st-1-w-onedrive-placeholders-network-off', disposition: 'release-residual' },
+      { row: 'hk-w-end-task-owned-sidecars', disposition: 'release-residual' }
+    ]
+  })
+  writeJson('SHA256SUMS.txt', { verified: ['Metis-Setup-1.9.6.exe'] })
+}
+
+test('C31b M2-0195 bundle check validates Windows baseline rows and release-note handoff', () => {
+  const root = mkdtempSync(join(tmpdir(), 'm2-0195-bundle-'))
+  writeM2_0195Bundle(root)
+  assert.deepEqual(m2_0195BundleProblems(root), [])
+
+  writeM2_0195Bundle(root, { environment: { artifact_sha256: 'not-sha' } })
+  assertProblem(m2_0195BundleProblems(root), 'artifact_sha256')
+
+  writeM2_0195Bundle(root, { rows: [{ id: 'census-cold-start', status: 'MEASURED', artifact: 'win32-cold-start.json' }] })
+  assertProblem(m2_0195BundleProblems(root), 'missing required row', 'hk-w-end-task-owned-sidecars')
+
+  writeM2_0195Bundle(root, { leadAction: 'LEAD_ACTION: File evidence only.\n' })
+  assertProblem(m2_0195BundleProblems(root), '1.9.7 release notes')
+})
+
+test('C31c CLI --ticket M2-0195 validates a bundle', () => {
+  const root = mkdtempSync(join(tmpdir(), 'm2-0195-bundle-cli-'))
+  writeM2_0195Bundle(root)
+  const cliPath = fileURLToPath(new URL('./check.mjs', import.meta.url))
+  const output = execFileSync(process.execPath, [cliPath, '--ticket', 'M2-0195', '--bundle', root], { encoding: 'utf8' })
+  assert.match(output, /M2-0195 bundle: OK/)
+
+  rmSync(join(root, 'findings-handoff.json'))
+  assert.throws(() => execFileSync(process.execPath, [cliPath, '--ticket', 'M2-0195', '--bundle', root], { stdio: 'pipe' }), (error) => error.status === 1)
 })
 
 const HOSTED_AUTOMATIC_ROWS = ['row-1-history-open', 'row-2-brain-status-blocked-brain', 'row-3-macos-activate', 'row-4-second-instance-reopen']
@@ -1612,6 +1766,53 @@ test('R3 --release: a hosted-runner record without ci_run_id does not meet a row
   const { ci_run_id: _dropped, ...withoutRun } = boundRecord('M2-0489', 'macos-latest', SHA_MAC, { evidence_level: 'MEASURED' })
   setRecords(c, 'M2-0489', [withoutRun])
   assertOnlyProblem(releaseOf(c).problems, 'census', 'hosted-runner record with no ci_run_id')
+})
+
+test('R3b --release: a metis-owner-mac record without ci_run_id does not meet a row', () => {
+  const c = releaseCase()
+  c.gates.rows = c.gates.rows.map((row) => row.id === 'census' ? { ...row, hosts: [OWNER_MAC_RUNNER_HOST] } : row)
+  const { ci_run_id: _dropped, ...withoutRun } = boundRecord('M2-0489', OWNER_MAC_RUNNER_HOST, SHA_MAC, {
+    evidence_level: 'MEASURED',
+    environment: { kind: 'owner-mac', host: OWNER_MAC_RUNNER_HOST }
+  })
+  setRecords(c, 'M2-0489', [withoutRun])
+  assertOnlyProblem(releaseOf(c).problems, 'census', OWNER_MAC_RUNNER_HOST, `${OWNER_MAC_RUNNER_HOST} record with no ci_run_id`)
+})
+
+test('R3c --release: runner records without ci_run_id fail rows at runner levels', () => {
+  for (const [level, ticketId] of [['HOST_CONFIGURED', 'M2-0187'], ['LIVE_VERIFIED', 'M2-0433'], ['MEASURED', 'M2-0489']]) {
+    const c = releaseCase()
+    c.gates.rows = [{
+      id: `runner-${level.toLowerCase().replace('_', '-')}`,
+      ticket: ticketId,
+      level,
+      bytes: 'promotable',
+      hosts: ['macos-latest'],
+      accept: 'PASS'
+    }]
+    const { ci_run_id: _dropped, ...withoutRun } = boundRecord(ticketId, 'macos-latest', SHA_MAC, { evidence_level: level })
+    setRecords(c, ticketId, [withoutRun])
+    assertOnlyProblem(releaseOf(c).problems, ticketId, level, 'hosted-runner record with no ci_run_id')
+  }
+})
+
+test('R3d --release: a metis-owner-mac ACCEPTED row still needs ci_run_id', () => {
+  const c = releaseCase()
+  c.gates.rows = [{
+    id: 'owner-accepted',
+    ticket: 'M2-0187',
+    level: 'ACCEPTED',
+    bytes: 'promotable',
+    hosts: [OWNER_MAC_RUNNER_HOST],
+    accept: 'PASS'
+  }]
+  const { ci_run_id: _dropped, ...withoutRun } = boundRecord('M2-0187', OWNER_MAC_RUNNER_HOST, SHA_MAC, {
+    evidence_level: 'ACCEPTED',
+    environment: { kind: 'owner-mac', host: OWNER_MAC_RUNNER_HOST },
+    owner_statement: { date: '2026-10-01', text: 'Accepted for release gate evidence.' }
+  })
+  setRecords(c, 'M2-0187', [withoutRun])
+  assertOnlyProblem(releaseOf(c).problems, 'owner-accepted', OWNER_MAC_RUNNER_HOST, `${OWNER_MAC_RUNNER_HOST} record with no ci_run_id`)
 })
 
 test('R4 --release: QA-identity bytes do not meet a row that requires promotable bytes', () => {

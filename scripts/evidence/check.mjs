@@ -26,7 +26,8 @@
 // - Candidate-bound rows (promotable, qa-identity) need that record's build_run_id to equal provenance
 //   run.id and its artifact_sha256 to be one of that bytes class's provenance assets, at every level,
 //   MEASURED included. Baseline rows carry `sha256`, the earlier release's bytes, and need
-//   artifact_sha256 among them. A hosted-runner record must carry ci_run_id.
+//   artifact_sha256 among them. Runner records (hosted-runner, and owner-mac on metis-owner-mac)
+//   must carry ci_run_id.
 // - PASS needs that record to be a PASS. PASS_OR_STATED accepts a bound PASS or FAIL, or a line in the
 //   release file containing the marker `gate:<id>`. REPORT rows are printed and never fail.
 // - The sample row recomputes sample.mjs --population-of from the ledger at the sample JSON's
@@ -45,7 +46,16 @@ import { parseArgs } from 'node:util'
 import { DEFAULT_OUT_DIR as SOAK_OUT_DIR, RECORD_FILE as SOAK_RECORD_FILE, soakRecordProblems } from '../qa/owner-soak/verdict.mjs'
 import { EXCERPT_FILES, STALL_BUNDLE_NAMES_FILE, STALL_BUNDLE_NAME, STALLS_FILE, excerptOf } from '../qa/freeze-repro/attribution-bundle.mjs'
 import { VARIANTS, promotableAssets } from '../qa/provenance.mjs'
-import { EVIDENCE_LEVELS, latestByLevel, readRecordStore, recordsInPrBody, recordProblems, sha256Hex } from './record.mjs'
+import {
+  EVIDENCE_LEVELS,
+  latestByLevel,
+  missingRunnerCiRunIdLabel,
+  readRecordStore,
+  recordsInPrBody,
+  recordProblems,
+  runnerCiRunIdLabel,
+  sha256Hex
+} from './record.mjs'
 // sample.mjs imports this module back; the cycle is safe because neither module calls the other at top level.
 import { drawSample, populationOf } from './sample.mjs'
 
@@ -56,6 +66,7 @@ export const DECISION_STATES = Object.freeze(['OPEN', 'ANSWERED_AS_DEFAULT', 'AN
 export const TEST_WORKFLOW = '.github/workflows/build.yml'
 export const M2_0008_DEFAULT_BUNDLE = 'out/m2-0008-freeze-repro'
 export const M2_0194_DEFAULT_BUNDLE = 'out/m2-0194-freeze-repro'
+export const M2_0195_DEFAULT_BUNDLE = 'out/windows-baseline'
 
 // Rows and interrupt checks every freeze-repro matrix records, whichever ticket's bundle carries it.
 const REQUIRED_MATRIX_ROWS = Object.freeze([
@@ -76,6 +87,8 @@ export const CLOSED = new Set(['DONE', 'ENGINEERING_COMPLETE'])
 const READY_STATUSES = new Set(['IN_PROGRESS', 'ENGINEERING_COMPLETE', 'DEFERRED', 'DONE'])
 const TICKET_RE = /^M2-\d{4}$/
 const DECISION_RE = /^D-\d+$/
+const LEGACY_FIX_FILE = 'legacy-fix.json'
+const LEGACY_EVIDENCE_FILE = 'legacy-evidence.json'
 
 const isPlainObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value)
 
@@ -262,25 +275,29 @@ function deferredProblems(ticket, latest) {
   return problems
 }
 
-function engineeringCompleteProblems(ticket, latest, caps) {
+function engineeringCompleteProblems(ticket, latest, caps, closesProgram, legacyEvidenceTickets = new Set()) {
   const problems = []
   if (!(ticket.external_blocker != null || caps.length > 0)) {
     problems.push(`${ticket.id}: ENGINEERING_COMPLETE requires its own or an inherited external blocker`)
   }
-  // INV-2: the *latest* record per level governs, so a withdrawn PASS (a later FAIL) must not count.
-  if (![...latest.values()].some((record) => record.result === 'PASS')) {
-    problems.push(`${ticket.id}: ENGINEERING_COMPLETE requires at least one PASS record`)
-  }
-  for (const level of (ticket.required_evidence ?? []).filter((l) => IN_HOUSE.has(l))) {
-    if (!isLatestPass(latest, level)) problems.push(`${ticket.id}: ENGINEERING_COMPLETE requires a PASS ${level} record`)
+  if (!legacyEvidenceTickets.has(ticket.id)) {
+    // INV-2: the *latest* record per level governs, so a withdrawn PASS (a later FAIL) must not count.
+    if (![...latest.values()].some((record) => record.result === 'PASS')) {
+      problems.push(`${ticket.id}: ENGINEERING_COMPLETE requires at least one PASS record`)
+    }
+    for (const level of (ticket.required_evidence ?? []).filter((l) => IN_HOUSE.has(l))) {
+      if (!isLatestPass(latest, level)) problems.push(`${ticket.id}: ENGINEERING_COMPLETE requires a PASS ${level} record`)
+    }
   }
   return problems
 }
 
-function doneProblems(ticket, latest, caps, closesProgram) {
+function doneProblems(ticket, latest, caps, closesProgram, legacyEvidenceTickets = new Set()) {
   const problems = []
-  for (const level of ticket.required_evidence ?? []) {
-    if (!isLatestPass(latest, level)) problems.push(`${ticket.id}: DONE requires a PASS ${level} record`)
+  if (!legacyEvidenceTickets.has(ticket.id)) {
+    for (const level of ticket.required_evidence ?? []) {
+      if (!isLatestPass(latest, level)) problems.push(`${ticket.id}: DONE requires a PASS ${level} record`)
+    }
   }
   if (caps.length > 0 && !closesProgram) {
     problems.push(`${ticket.id}: DONE is blocked by a dependency ancestor that is ENGINEERING_COMPLETE or BLOCKED_EXTERNAL; it can close only as ENGINEERING_COMPLETE`)
@@ -320,21 +337,22 @@ function inheritedBlockProblems(ticket, latest, roots, closesProgram) {
   return problems
 }
 
-function redBeforeProblems(ticket, latest) {
+function redBeforeProblems(ticket, latest, legacyFixTickets = new Set()) {
   if (!(CLOSED.has(ticket.status) && ticket.type === 'fix' && (ticket.required_evidence ?? []).includes('LOCALLY_TESTED'))) {
     return []
   }
+  if (legacyFixTickets.has(ticket.id)) return []
   const record = latest.get('LOCALLY_TESTED')
   return record && !record.repro ? [`${ticket.id}: fix ticket requires repro (red-before) on its LOCALLY_TESTED record`] : []
 }
 
-function statusRuleProblems(ticket, latest, caps, roots) {
+function statusRuleProblems(ticket, latest, caps, roots, legacyFixTickets = new Set(), legacyEvidenceTickets = new Set()) {
   const closesProgram = ticket.closes_program === true
   const rule = STATUS_RULES[ticket.status]
   return [
-    ...(rule ? rule(ticket, latest, caps, closesProgram) : []),
+    ...(rule ? rule(ticket, latest, caps, closesProgram, legacyEvidenceTickets) : []),
     ...inheritedBlockProblems(ticket, latest, roots, closesProgram),
-    ...redBeforeProblems(ticket, latest)
+    ...redBeforeProblems(ticket, latest, legacyFixTickets)
   ]
 }
 
@@ -388,13 +406,16 @@ function revalidationProblems(ticket, latest, decisions) {
  * because it reads files.
  * @param {object} ledger
  * @param {Map<string, object[]>} recordsByTicket
+ * @param {{legacyFixTickets?: Set<string>, legacyEvidenceTickets?: Set<string>}} options
  * @returns {string[]}
  */
-export function ledgerProblems(ledger, recordsByTicket) {
+export function ledgerProblems(ledger, recordsByTicket, options = {}) {
   const { problems: shapeProblems, tickets } = ticketShapeProblems(ledger)
   const problems = [...shapeProblems]
   const byId = ticketsById(tickets)
   const decisions = isPlainObject(ledger?.decisions) ? ledger.decisions : undefined
+  const legacyFixTickets = options.legacyFixTickets ?? new Set()
+  const legacyEvidenceTickets = options.legacyEvidenceTickets ?? new Set()
 
   problems.push(...cycleProblems(tickets, byId))
 
@@ -405,7 +426,7 @@ export function ledgerProblems(ledger, recordsByTicket) {
     const latest = latestByLevel(records)
     problems.push(...dependencyProblems(ticket, byId))
     problems.push(...slicingProblems(ticket))
-    problems.push(...statusRuleProblems(ticket, latest, caps, roots))
+    problems.push(...statusRuleProblems(ticket, latest, caps, roots, legacyFixTickets, legacyEvidenceTickets))
     problems.push(...recordContextProblems(ticket, records, decisions))
     problems.push(...revalidationProblems(ticket, latest, decisions))
   }
@@ -415,6 +436,49 @@ export function ledgerProblems(ledger, recordsByTicket) {
   }
 
   return [...new Set(problems)].sort()
+}
+
+/**
+ * @param {unknown} json
+ * @param {string} expectedDecision
+ * @param {string} label
+ * @returns {{tickets: Set<string>, problems: string[]}}
+ */
+export function legacyTicketListProblems(json, expectedDecision, label) {
+  const problems = []
+  const tickets = new Set()
+  if (!isPlainObject(json)) return { tickets, problems: [`${label}: expected a JSON object`] }
+  if (json.decision !== expectedDecision) problems.push(`${label}: decision must be ${expectedDecision}`)
+  if (!Array.isArray(json.tickets)) {
+    problems.push(`${label}: tickets must be an array`)
+  } else {
+    for (const id of json.tickets) {
+      if (typeof id !== 'string' || !TICKET_RE.test(id)) {
+        problems.push(`${label}: tickets contains invalid id ${JSON.stringify(id)}`)
+      } else if (tickets.has(id)) {
+        problems.push(`${label}: duplicate ticket ${id}`)
+      } else {
+        tickets.add(id)
+      }
+    }
+  }
+  return { tickets: problems.length > 0 ? new Set() : tickets, problems }
+}
+
+/**
+ * Missing legacy files mean no legacy tickets; malformed files are checker problems.
+ * @param {string} path
+ * @param {string} expectedDecision
+ * @param {string} label
+ * @returns {{tickets: Set<string>, problems: string[]}}
+ */
+export function readLegacyTicketList(path, expectedDecision, label) {
+  if (!existsSync(path)) return { tickets: new Set(), problems: [] }
+  try {
+    return legacyTicketListProblems(JSON.parse(readFileSync(path, 'utf8')), expectedDecision, label)
+  } catch (error) {
+    return { tickets: new Set(), problems: [`${label}: could not read JSON: ${error.message}`] }
+  }
 }
 
 /**
@@ -443,13 +507,28 @@ export function outputProblems(recordsByTicket, programRoot) {
 
 /**
  * @param {string} ledgerPath
- * @returns {{ledger: object, programRoot: string, recordsByTicket: Map<string, object[]>, problems: string[]}}
+ * @param {{legacyFixPath?: string, legacyEvidencePath?: string}} options
+ * @returns {{ledger: object, programRoot: string, recordsByTicket: Map<string, object[]>, legacyFixTickets: Set<string>, legacyEvidenceTickets: Set<string>, problems: string[]}}
  */
-export function loadProgram(ledgerPath) {
+export function loadProgram(ledgerPath, options = {}) {
   const programRoot = resolve(dirname(ledgerPath), '..')
   const ledger = JSON.parse(readFileSync(ledgerPath, 'utf8'))
-  const { recordsByTicket, problems } = readRecordStore(join(programRoot, 'evidence', 'records'))
-  return { ledger, programRoot, recordsByTicket, problems }
+  const evidenceRoot = join(programRoot, 'evidence')
+  const { recordsByTicket, problems } = readRecordStore(join(evidenceRoot, 'records'))
+  const legacyFix = readLegacyTicketList(options.legacyFixPath ?? join(evidenceRoot, LEGACY_FIX_FILE), 'OD-65', `evidence/${LEGACY_FIX_FILE}`)
+  const legacyEvidence = readLegacyTicketList(
+    options.legacyEvidencePath ?? join(evidenceRoot, LEGACY_EVIDENCE_FILE),
+    'OD-67',
+    `evidence/${LEGACY_EVIDENCE_FILE}`
+  )
+  return {
+    ledger,
+    programRoot,
+    recordsByTicket,
+    legacyFixTickets: legacyFix.tickets,
+    legacyEvidenceTickets: legacyEvidence.tickets,
+    problems: [...problems, ...legacyFix.problems, ...legacyEvidence.problems]
+  }
 }
 
 /**
@@ -1035,6 +1114,116 @@ export function m2_0194BundleProblems(bundlePath) {
   return problems
 }
 
+const M2_0195_REQUIRED_ROWS = Object.freeze([
+  'census-cold-start',
+  'census-settled-idle',
+  'st-1-w-onedrive-placeholders-network-off',
+  'hk-w-end-task-owned-sidecars',
+  'managed-resource-census-representative',
+  'managed-foreground-watcher-cost',
+  'managed-edr-interaction'
+])
+
+const M2_0195_MANAGED_ROWS = new Set([
+  'st-1-w-onedrive-placeholders-network-off',
+  'hk-w-end-task-owned-sidecars',
+  'managed-resource-census-representative',
+  'managed-foreground-watcher-cost',
+  'managed-edr-interaction'
+])
+
+export function m2_0195BundleProblems(bundlePath) {
+  const root = resolve(bundlePath)
+  const problems = []
+  const requiredFiles = [
+    'README.md',
+    'environment.json',
+    'baseline.json',
+    'external-blockers.json',
+    'findings-handoff.json',
+    'SHA256SUMS.txt',
+    'M2-0195.lead-action.md'
+  ]
+  for (const file of requiredFiles) {
+    if (!existsSync(join(root, file))) problems.push(`${file}: missing from M2-0195 bundle`)
+  }
+  if (problems.length > 0) return problems
+
+  const environment = readJsonFile(join(root, 'environment.json'), problems, 'environment.json')
+  const baseline = readJsonFile(join(root, 'baseline.json'), problems, 'baseline.json')
+  const blockers = readJsonFile(join(root, 'external-blockers.json'), problems, 'external-blockers.json')
+  const handoff = readJsonFile(join(root, 'findings-handoff.json'), problems, 'findings-handoff.json')
+  const leadAction = readFileSync(join(root, 'M2-0195.lead-action.md'), 'utf8')
+
+  if (environment?.ticket !== 'M2-0195') problems.push('environment.json: ticket must be M2-0195')
+  if (environment?.version !== '1.9.6') problems.push('environment.json: version must be 1.9.6')
+  if (environment?.platform !== 'win32') problems.push('environment.json: platform must be win32')
+  if (environment?.host?.label !== 'windows-latest') problems.push('environment.json: hosted row must record host.label windows-latest')
+  if (typeof environment?.artifact_sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(environment.artifact_sha256)) {
+    problems.push('environment.json: artifact_sha256 must be a lowercase sha256')
+  }
+
+  if (baseline?.ticket !== 'M2-0195') problems.push('baseline.json: ticket must be M2-0195')
+  if (baseline?.version !== '1.9.6') problems.push('baseline.json: version must be 1.9.6')
+  if (!Array.isArray(baseline?.rows)) {
+    problems.push('baseline.json: rows array is required')
+  } else {
+    const rowsById = new Map(baseline.rows.map((row) => [row?.id, row]))
+    for (const id of M2_0195_REQUIRED_ROWS) {
+      if (!rowsById.has(id)) problems.push(`baseline.json: missing required row ${id}`)
+    }
+    for (const id of ['census-cold-start', 'census-settled-idle']) {
+      const row = rowsById.get(id)
+      if (row && !['MEASURED', 'SUPPORTED_NOT_RUN'].includes(row.status)) {
+        problems.push(`baseline.json: ${id} must be MEASURED or SUPPORTED_NOT_RUN`)
+      }
+      if (row?.status === 'MEASURED' && typeof row.artifact !== 'string') {
+        problems.push(`baseline.json: ${id} MEASURED rows must name the census artifact`)
+      }
+    }
+    for (const id of M2_0195_MANAGED_ROWS) {
+      const row = rowsById.get(id)
+      if (!row) continue
+      if (row.status !== 'BLOCKED_EXTERNAL') problems.push(`baseline.json: ${id} must be BLOCKED_EXTERNAL until the managed laptop runs`)
+      if (typeof row.unblock !== 'string' || row.unblock.trim().length < 20) {
+        problems.push(`baseline.json: ${id} needs an exact unblock step`)
+      }
+    }
+  }
+
+  if (blockers?.ticket !== 'M2-0195') problems.push('external-blockers.json: ticket must be M2-0195')
+  if (!Array.isArray(blockers?.blockers) || blockers.blockers.length === 0) {
+    problems.push('external-blockers.json: blockers array is required')
+  } else {
+    for (const blocker of blockers.blockers) {
+      if (blocker.status !== 'BLOCKED_EXTERNAL') problems.push('external-blockers.json: blockers must be BLOCKED_EXTERNAL')
+      if (typeof blocker.unblock_step !== 'string' || !/managed Windows 11/.test(blocker.unblock_step) ||
+          !/OneDrive Files On-Demand/.test(blocker.unblock_step) || !/EDR/.test(blocker.unblock_step)) {
+        problems.push('external-blockers.json: managed-laptop unblock step must name Windows 11, EDR and OneDrive Files On-Demand')
+      }
+    }
+  }
+
+  if (handoff?.ticket !== 'M2-0195') problems.push('findings-handoff.json: ticket must be M2-0195')
+  if (handoff?.release !== '1.9.7') problems.push('findings-handoff.json: release must be 1.9.7')
+  if (!/ticket or an explicit residual/.test(String(handoff?.rule ?? ''))) {
+    problems.push('findings-handoff.json: rule must require each finding to become a ticket or an explicit residual')
+  }
+  if (!Array.isArray(handoff?.rows) || handoff.rows.length === 0) {
+    problems.push('findings-handoff.json: rows array is required')
+  }
+
+  if (!leadAction.includes('LEAD_ACTION:')) problems.push('M2-0195.lead-action.md: missing LEAD_ACTION handoff')
+  if (!leadAction.includes('LIVE_VERIFIED') || !leadAction.includes('MEASURED')) {
+    problems.push('M2-0195.lead-action.md: must hand off filing the M2-0195 LIVE_VERIFIED/MEASURED record')
+  }
+  if (!leadAction.includes('1.9.7 release notes') || !leadAction.includes('ticket or explicit residual')) {
+    problems.push('M2-0195.lead-action.md: must hand off ticket or explicit residual filing in the 1.9.7 release notes')
+  }
+
+  return problems
+}
+
 export const RELEASE_GATES_SCHEMA = 1
 const GATE_ROW_KEYS = new Set(['id', 'ticket', 'level', 'bytes', 'hosts', 'accept', 'match', 'sha256'])
 const GATE_BYTES = Object.freeze(['promotable', 'qa-identity', 'baseline'])
@@ -1157,7 +1346,8 @@ function selectsRecord(row, host, record) {
 
 /** Why `record` does not bind to the bytes `row` requires, or null when it does. */
 function bindingProblem(record, row, candidate) {
-  if (record.environment?.kind === 'hosted-runner' && record.ci_run_id == null) return 'is a hosted-runner record with no ci_run_id'
+  const runnerLabel = record.ci_run_id == null ? runnerCiRunIdLabel(record) : null
+  if (runnerLabel) return `is a ${runnerLabel} record with no ci_run_id`
   if (row.bytes === 'baseline') {
     if (record.artifact_sha256 == null) return 'has no artifact_sha256'
     return row.sha256.includes(record.artifact_sha256) ? null : `names sha256 ${record.artifact_sha256}, not one of the baseline sha256s`
@@ -1333,7 +1523,7 @@ function releaseMain(values) {
 }
 
 async function main() {
-  const usage = 'usage: check.mjs --ledger <path>  |  check.mjs --pr-event <path>  |  check.mjs --ticket M2-0008|M2-0194 [--bundle <path>]  |  ' +
+  const usage = 'usage: check.mjs --ledger <path>  |  check.mjs --pr-event <path>  |  check.mjs --ticket M2-0008|M2-0194|M2-0195 [--bundle <path>]  |  ' +
     'check.mjs --ticket M2-0198 [--record <path>]  |  ' +
     'check.mjs --release <version> --gates <gates.json> --provenance <provenance.json> --ledger <tickets.json> --notes <release notes .md>'
   let values
@@ -1348,7 +1538,9 @@ async function main() {
         release: { type: 'string' },
         gates: { type: 'string' },
         provenance: { type: 'string' },
-        notes: { type: 'string' }
+        notes: { type: 'string' },
+        'legacy-fix': { type: 'string' },
+        'legacy-evidence': { type: 'string' }
       }
     }).values
   } catch (error) {
@@ -1370,13 +1562,19 @@ async function main() {
   if (hasLedger) {
     let program
     try {
-      program = loadProgram(resolve(values.ledger))
+      program = loadProgram(resolve(values.ledger), {
+        legacyFixPath: values['legacy-fix'] ? resolve(values['legacy-fix']) : undefined,
+        legacyEvidencePath: values['legacy-evidence'] ? resolve(values['legacy-evidence']) : undefined
+      })
     } catch (error) {
       return usageExit(`could not read the ledger: ${error.message}`)
     }
     const problems = [
       ...program.problems,
-      ...ledgerProblems(program.ledger, program.recordsByTicket),
+      ...ledgerProblems(program.ledger, program.recordsByTicket, {
+        legacyFixTickets: program.legacyFixTickets,
+        legacyEvidenceTickets: program.legacyEvidenceTickets
+      }),
       ...outputProblems(program.recordsByTicket, program.programRoot)
     ]
     if (problems.length > 0) {
@@ -1407,9 +1605,10 @@ async function main() {
     }
     const checker = {
       'M2-0008': { check: m2_0008BundleProblems, defaultBundle: M2_0008_DEFAULT_BUNDLE },
-      'M2-0194': { check: m2_0194BundleProblems, defaultBundle: M2_0194_DEFAULT_BUNDLE }
+      'M2-0194': { check: m2_0194BundleProblems, defaultBundle: M2_0194_DEFAULT_BUNDLE },
+      'M2-0195': { check: m2_0195BundleProblems, defaultBundle: M2_0195_DEFAULT_BUNDLE }
     }[values.ticket]
-    if (!checker) return usageExit('only --ticket M2-0008, M2-0194 and M2-0198 are supported in this public-repo checker')
+    if (!checker) return usageExit('only --ticket M2-0008, M2-0194, M2-0195 and M2-0198 are supported in this public-repo checker')
     const bundle = values.bundle ?? checker.defaultBundle
     const problems = checker.check(resolve(bundle))
     if (problems.length > 0) {

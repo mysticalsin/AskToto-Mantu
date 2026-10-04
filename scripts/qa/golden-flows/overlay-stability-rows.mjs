@@ -277,6 +277,6 @@ export async function runPackagedOverlayStabilityRows({ port, inspectPort, audit
       runOverlayStabilityRows({ page, main: inspector.evaluate, openSettings: inspector.clickTray, rows, flashCount })
     )
   } finally {
-    inspector.close()
+    await inspector.close()
   }
 }

@@ -422,6 +422,16 @@ async function waitFor(predicate, timeoutMs, intervalMs = POLL_MS) {
   }
 }
 
+export async function waitForSpawnedRegistry({ readRegistry, pid, timeoutMs, intervalMs = POLL_MS, now = Date.now, sleepFn = sleep }) {
+  const startedAt = now()
+  const deadline = startedAt + timeoutMs
+  for (;;) {
+    if (registryHasSpawnedPid(readRegistry(), pid)) return { found: true, waitedMs: now() - startedAt }
+    if (now() > deadline) return { found: false, waitedMs: now() - startedAt }
+    await sleepFn(intervalMs)
+  }
+}
+
 async function connectAndFindTotoPage(port) {
   return waitFor(async () => {
     let browser
@@ -515,6 +525,7 @@ function initialRealLlamaObservation() {
   const observation = initialObservation('real-llama-server')
   observation.supervision = REAL_LLAMA_SUPERVISION
   observation.timingsMs.llamaStarted = null
+  observation.timingsMs.registryWrite = null
   observation.pids.orphan = null
   return observation
 }
@@ -698,12 +709,18 @@ async function runRealLlamaProof({ installRoot, executable }) {
     const llamaStartedAt = Date.now()
     const llama = await prewarmAndFindLlama(firstPort, first.pid, installRoot)
     if (!llama) throw new Precondition(REAL_LLAMA_UNBLOCK)
-    const registered = await waitFor(() => registryHasSpawnedPid(readSidecarRegistry(profile), llama.pid), 5_000, POLL_MS)
-    if (!registered) throw new Failure('llama-server spawned identity registry did not land before hard kill')
     observation.pids.sidecar = llama.pid
     observation.pids.orphan = llama.pid
-    observation.timingsMs.sidecarStarted = Date.now() - llamaStartedAt
-    observation.timingsMs.llamaStarted = observation.timingsMs.sidecarStarted
+    observation.timingsMs.llamaStarted = Date.now() - llamaStartedAt
+    observation.timingsMs.sidecarStarted = observation.timingsMs.llamaStarted
+    const registry = await waitForSpawnedRegistry({
+      readRegistry: () => readSidecarRegistry(profile),
+      pid: llama.pid,
+      timeoutMs: LLAMA_TIMEOUT_MS,
+      intervalMs: POLL_MS
+    })
+    observation.timingsMs.registryWrite = registry.waitedMs
+    if (!registry.found) throw new Failure('llama-server spawned identity registry did not land before hard kill')
     observation.processes.beforeKill = roleCounts(
       ownedProcesses(listProcesses(process.platform), { mainPid: first.pid, installRoot, platform: process.platform })
     )
