@@ -8,11 +8,10 @@ name: M2-0238 evidence back-fill
 # the uploaded artifact. A gap is an expected outcome (a ticket the lead needs to review), not a tool
 # failure, so the job stays green with the gap count in its summary rather than turning red.
 #
-# The ledger itself lives in the private program repository (AGENTS.md #1), which this workflow never
-# names: leave ledger_repository blank to point ledger_path at a path already inside this checkout (for
-# example a fixture you add to the dispatching branch before running it), or supply ledger_repository
-# (and a LEDGER_REPO_TOKEN repository secret with read access to it) at dispatch time to back-fill
-# against the real ledger.
+# The program ledger repository is public since OD-37, so LEDGER_REPO_TOKEN is optional: leave
+# ledger_repository blank to point ledger_path at a path already inside this checkout (for example a
+# fixture you add to the dispatching branch before running it), or supply ledger_repository at dispatch
+# time to back-fill against that ledger. When LEDGER_REPO_TOKEN is configured it still takes precedence.
 #
 # The pull_request trigger on this file's own path only registers the workflow with GitHub (M2-0501): the
 # run it creates skips the job, uses no runner minutes and never reaches LEDGER_REPO_TOKEN.
@@ -25,11 +24,11 @@ on:
   workflow_dispatch:
     inputs:
       ledger_path:
-        description: Path to ledger/tickets.json, relative to the private repo checkout (or to this checkout when ledger_repository is blank)
+        description: Path to ledger/tickets.json, relative to the ledger repo checkout (or to this checkout when ledger_repository is blank)
         required: true
         type: string
       ledger_repository:
-        description: "owner/repo of the private program repository holding the ledger; blank uses ledger_path inside this checkout"
+        description: "owner/repo of the program ledger repository; blank uses ledger_path inside this checkout"
         required: false
         type: string
       ledger_ref:
@@ -56,13 +55,13 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - name: Checkout the private ledger repository
+      - name: Checkout the ledger repository
         if: inputs.ledger_repository != ''
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: ${{ inputs.ledger_repository }}
           ref: ${{ inputs.ledger_ref }}
-          token: ${{ secrets.LEDGER_REPO_TOKEN }}
+          token: ${{ secrets.LEDGER_REPO_TOKEN || github.token }}
           path: .ledger-repo
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -84,7 +83,10 @@ jobs:
           node scripts/evidence/backfill.mjs --repo "$GITHUB_REPOSITORY" --ledger "$resolved_ledger" --out out/m2-0238-backfill
       - name: Summarize the back-fill bundle
         if: always()
-        run: cat out/m2-0238-backfill/README.md >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          if [ -f out/m2-0238-backfill/README.md ]; then
+            cat out/m2-0238-backfill/README.md >> "$GITHUB_STEP_SUMMARY"
+          fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
