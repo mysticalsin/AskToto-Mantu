@@ -1,4 +1,5 @@
 import type { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
 import {
@@ -13,6 +14,7 @@ import {
   captureProbe,
   captureGateVerdict,
   exitCodeForOutcome,
+  readCaptureAudit,
   runCaptureGate
 } from './capture-gate.mjs'
 
@@ -71,7 +73,22 @@ type FlowOptions = {
   clockFrozen?: boolean
   afterParkReady?: { observed: boolean; backgroundScreenReady: boolean | null }
   records?: unknown[]
+  auditTexts?: readonly (string | Buffer | Error)[]
 }
+
+function auditText(records: Record<string, unknown>[]) {
+  let previous = 'GENESIS'
+  return records.map((record, index) => {
+    const line = JSON.stringify({ ...record, seq: index + 1, prev: previous })
+    previous = createHash('sha256').update(line, 'utf8').digest('hex')
+    return `${line}\r\n`
+  }).join('')
+}
+
+const startupAudit = () => [
+  { ts: new Date(INDUCTION_AT).toISOString(), event: 'app.started', privateMetadata: 'synthetic audit content' },
+  { ts: new Date(INDUCTION_AT).toISOString(), event: 'app.renderer.ready' }
+]
 
 function flowFixture({
   results = [nativeCaptureWorks, nativeCaptureUnavailable, nativeCaptureUnavailable],
@@ -83,11 +100,13 @@ function flowFixture({
   clockInvalid = false,
   clockFrozen = false,
   afterParkReady = { observed: true, backgroundScreenReady: false },
-  records = []
+  records = [],
+  auditTexts
 }: FlowOptions = {}) {
   const clock = { elapsed: 0 }
   const waits: number[] = []
   let probes = 0
+  let auditReads = 0
   const spawnProbe = vi.fn(() => {
     const result = results[probes++]
     if (!result) throw new Error('Unexpected probe invocation')
@@ -101,7 +120,12 @@ function flowFixture({
       if (connectFails) throw new Error('synthetic connection failure')
       return {}
     },
-    readAudit: () => records,
+    readAudit: () => readCaptureAudit('owned-capture-profile', () => {
+      const ordinal = auditReads++
+      const snapshot = auditTexts?.[ordinal] ?? (ordinal === 0 ? auditText(startupAudit()) : auditText([...startupAudit(), ...records as Record<string, unknown>[]]))
+      if (snapshot instanceof Error) throw snapshot
+      return Buffer.isBuffer(snapshot) ? Buffer.from(snapshot) : Buffer.from(snapshot, 'utf8')
+    }),
     probe: () => captureProbe(spawnProbe as unknown as typeof spawnSync),
     induce: () => ({ ok: true, category: 'ok' }),
     proveReady: async () => ready,
@@ -116,8 +140,79 @@ function flowFixture({
       if (clock.elapsed >= processErrorAtMs) child.emit('error', new Error('private process transport diagnostic'))
     }
   })
-  return { run, child, clock, waits, spawnProbe, hide }
+  return { run, child, clock, waits, spawnProbe, hide, auditReads: () => auditReads }
 }
+
+describe('capture-gate actual audit measurement', () => {
+  it.each(['baseline', 'final'] as const)('keeps an unavailable %s audit unproven', async (phase) => {
+    const snapshots: (string | Error)[] = [auditText(startupAudit()), auditText(startupAudit())]
+    snapshots[phase === 'baseline' ? 0 : 1] = new Error('synthetic private audit IO diagnosis')
+    const report = await flowFixture({ auditTexts: snapshots }).run()
+    expect(report).toMatchObject({ outcome: 'PRECONDITION', reasons: ['audit_unproven'] })
+    expect(exitCodeForOutcome(report.outcome)).toBe(2)
+    expect(JSON.stringify(report)).not.toContain('synthetic private audit IO diagnosis')
+  })
+
+  it.each(['', 'not JSON\r\n', '{}\r\n', 'null\r\n', '[]\r\n'])('does not turn invalid baseline bytes into a zero-failure PASS', async (unproven) => {
+    expect(await flowFixture({ auditTexts: [unproven, auditText(startupAudit())] }).run()).toMatchObject({
+      outcome: 'PRECONDITION', reasons: ['audit_unproven']
+    })
+  })
+
+  it.each([
+    () => '',
+    () => 'not JSON\r\n',
+    () => `${auditText(startupAudit())}not JSON\r\n`,
+    () => `${auditText(startupAudit())}{"ts":`,
+    () => auditText(startupAudit()).trimEnd(),
+    () => auditText(startupAudit().slice(0, 1)),
+    () => auditText([{ ts: new Date(INDUCTION_AT + PARK_MS).toISOString(), event: 'capture.blocked' }]),
+    () => auditText([{ ...startupAudit()[0], privateMetadata: 'replacement audit' }, startupAudit()[1]]),
+    () => auditText([...startupAudit(), { ts: 'invalid', event: 'capture.failed', phase: 'bg-screen' }])
+  ])('rejects a malformed, incomplete, rotated, truncated or replaced final audit', async (finalSnapshot) => {
+    expect(await flowFixture({ auditTexts: [auditText(startupAudit()), finalSnapshot()] }).run()).toMatchObject({
+      outcome: 'PRECONDITION', reasons: ['audit_unproven']
+    })
+  })
+
+  it.each([
+    { records: startupAudit().slice(0, 1) },
+    { records: startupAudit().slice(1) },
+    { records: startupAudit().map((record) => ({ ...record, ts: new Date(INDUCTION_AT - 1).toISOString() })) }
+  ])('requires fresh startup and readiness anchors before induction', async ({ records }) => {
+    const text = auditText(records)
+    expect(await flowFixture({ auditTexts: [text, text] }).run()).toMatchObject({ outcome: 'PRECONDITION', reasons: ['audit_unproven'] })
+  })
+
+  it('does not ignore an appended audit chain gap', async () => {
+    const baseline = auditText(startupAudit())
+    const final = `${baseline}${JSON.stringify({ ts: new Date(INDUCTION_AT + 1).toISOString(), event: 'capture.blocked', seq: 99, prev: 'GENESIS' })}\r\n`
+    expect(await flowFixture({ auditTexts: [baseline, final] }).run()).toMatchObject({ outcome: 'PRECONDITION', reasons: ['audit_unproven'] })
+  })
+
+  it('does not normalize invalid UTF-8 into ignored audit bytes', async () => {
+    const baseline = auditText(startupAudit())
+    const final = Buffer.concat([Buffer.from(baseline), Buffer.from([0xff]), Buffer.from('\r\n')])
+    expect(await flowFixture({ auditTexts: [baseline, final] }).run()).toMatchObject({ outcome: 'PRECONDITION', reasons: ['audit_unproven'] })
+  })
+
+  it('accepts continuous, readable anchored zero-failure audit coverage and publishes only counts and booleans', async () => {
+    const fixture = flowFixture()
+    const report = await fixture.run()
+    expect(report).toMatchObject({
+      outcome: 'PASS',
+      bgScreenCaptureFailedTotal: 0,
+      bgScreenCaptureFailedFinal15Minutes: 0,
+      failingStateProof: { auditProof: {
+        observed: true, baselineComplete: true, baselineValid: true, finalComplete: true, finalValid: true,
+        freshProfile: true, startupAnchored: true, readinessAnchored: true, baselineRetained: true,
+        lengthNondecreasing: true, parkCovered: true, baselineRecordCount: 2, finalRecordCount: 2
+      } }
+    })
+    expect(fixture.auditReads()).toBe(2)
+    expect(JSON.stringify(report)).not.toMatch(/synthetic audit content|owned-capture-profile|GENESIS|privateMetadata|exitedAtMs|baselineAt/i)
+  })
+})
 
 describe('capture-gate production flow', () => {
   it.each(['afterInduction', 'afterPark'] as const)('does not prove unavailable capture from a timeout at %s', async (phase) => {

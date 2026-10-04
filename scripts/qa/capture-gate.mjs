@@ -14,7 +14,7 @@
  * Exit 0 PASS · 1 FAIL · 2 PRECONDITION.
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -22,7 +22,7 @@ import { pathToFileURL } from 'node:url'
 import { CAPTURE_BACKOFF_CONSTANTS, MAX_BG_FAILURES, readCaptureBackoffConstants } from './lib/capture-backoff-constants.mjs'
 import { LOCAL_LLM_SETTINGS } from './lib/local-llm-settings.mjs'
 import { attach, findPage, freeLoopbackPort, waitForChildExit } from './lib/app-driver.mjs'
-import { parseAuditLog, readAuditLog } from './golden-flows/smoke-support.mjs'
+import { parseAuditLog } from './golden-flows/smoke-support.mjs'
 import { launchEnv } from './sidecar-boot-reaper.mjs'
 
 export { CAPTURE_BACKOFF_CONSTANTS, MAX_BG_FAILURES, readCaptureBackoffConstants }
@@ -276,8 +276,17 @@ exit 1
 `)
 }
 
+export function readCaptureAudit(profile, readBytes = (path) => readFileSync(path)) {
+  try {
+    const text = readBytes(join(profile, 'logs', 'audit.log')).toString('utf8')
+    return { readable: true, text, records: parseAuditLog(text) }
+  } catch {
+    return { readable: false, text: '', records: [] }
+  }
+}
+
 function readRecords(profile) {
-  return parseAuditLog(readAuditLog(join(profile, 'logs', 'audit.log')))
+  return readCaptureAudit(profile).records
 }
 
 async function waitForTotoPage(port) {
@@ -398,6 +407,7 @@ export async function runCaptureGate({
     const page = await connect()
     const beforeProbe = probe()
     const ready = await proveReady(page)
+    readAudit()
     if (beforeProbe.ok === true) await hide(page)
 
     const inductionAtMs = now()
@@ -449,8 +459,9 @@ export async function runCaptureGate({
       afterPark: captureState(afterParkProbe),
       candidateLivenessProof
     }
+    const audit = readAudit()
     return buildReport({
-      records: readAudit(),
+      records: Array.isArray(audit) ? audit : audit.records,
       readinessProof: ready,
       failingStateProof,
       inductionAtMs,
@@ -488,7 +499,7 @@ async function main() {
         ;({ browser, page } = await waitForTotoPage(port))
         return page
       },
-      readAudit: () => readRecords(profile),
+      readAudit: () => readCaptureAudit(profile),
       now: () => {
         inductionAtMs = Date.now()
         return inductionAtMs
