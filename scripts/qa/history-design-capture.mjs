@@ -563,7 +563,7 @@ async function settleWindow(page) {
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
 }
 
-async function captureReachedState({ page, cdp, main, state, variant, realRows, out }) {
+export async function captureReachedState({ page, cdp, main, state, variant, realRows, out, deps = {} }) {
   const screenshot = join(state.id, `${variant.id}.png`)
   let drive
   let collected
@@ -571,39 +571,39 @@ async function captureReachedState({ page, cdp, main, state, variant, realRows, 
   // applies at 2x (layout there can differ by a few pixels); only the device scale factor is emulated.
   await cdp.send('Emulation.setDeviceMetricsOverride', deviceMetricsForVariant(variant))
   try {
-    drive = await driveState(page, main, state, realRows)
+    drive = await driveState(page, main, state, realRows, deps)
     await settleWindow(page)
     await page.screenshot({ path: join(out, screenshot), scale: 'device' })
     drive.capturedAfterMs = Date.now() - drive.requestedAt
     drive.timingsMs.requestToCapture = drive.capturedAfterMs
     collected = await page.evaluate(`(${collectHistoryView})(${solidGradientLayers})`)
+    const roles = await rolesPresent(page, state)
+    let tabOrder = null
+    if (variant.id === KEYBOARD_VARIANT_ID) {
+      try {
+        writeFileSync(join(out, state.id, 'aria.yml'), await page.locator('[data-history-design-root]').ariaSnapshot())
+      } catch (error) {
+        writeFileSync(join(out, state.id, 'aria.yml'), `# accessibility snapshot failed: ${error.message}\n`)
+      }
+      tabOrder = await walkTabOrder(page)
+    }
+    const judged = judgeCapture({ state, variant, collected, roles, tabOrder, drive })
+    return {
+      judged: {
+        ...judged,
+        scope: collected.scope,
+        bannerAfterMs: drive.bannerAfterMs ?? null,
+        capturedAfterMs: drive.capturedAfterMs,
+        driveTimingsMs: drive.timingsMs,
+        requestChannels: drive.requestChannels,
+        closedBeforeArm: drive.closedBeforeArm,
+        tabOrder
+      },
+      screenshot
+    }
   } finally {
     if (state.id === 'slow-with-rows') await clearHistorySearch(page).catch(() => undefined)
     await cdp.send('Emulation.clearDeviceMetricsOverride')
-  }
-  const roles = await rolesPresent(page, state)
-  let tabOrder = null
-  if (variant.id === KEYBOARD_VARIANT_ID) {
-    try {
-      writeFileSync(join(out, state.id, 'aria.yml'), await page.locator('[data-history-design-root]').ariaSnapshot())
-    } catch (error) {
-      writeFileSync(join(out, state.id, 'aria.yml'), `# accessibility snapshot failed: ${error.message}\n`)
-    }
-    tabOrder = await walkTabOrder(page)
-  }
-  const judged = judgeCapture({ state, variant, collected, roles, tabOrder, drive })
-  return {
-    judged: {
-      ...judged,
-      scope: collected.scope,
-      bannerAfterMs: drive.bannerAfterMs ?? null,
-      capturedAfterMs: drive.capturedAfterMs,
-      driveTimingsMs: drive.timingsMs,
-      requestChannels: drive.requestChannels,
-      closedBeforeArm: drive.closedBeforeArm,
-      tabOrder
-    },
-    screenshot
   }
 }
 
