@@ -330,26 +330,43 @@ export const GATED_WINDOW_STAGES = ['createWindow.prewarm', 'createWindow.constr
 
 /** The window gate's verified cause (OD-66): after OD-42, the failing QA candidate runs were one slow launch on
  *  unchanged bytes among fast siblings, not a harness step or an app first-window cost. A measured entry is only
- *  a per-launch, per-stage number from the run's window-gate.json artifact; a summary like "over 250" is not a
- *  measurement and must not become evidence. */
+ *  a per-launch number transcribed from the run's st-1-macos-window artifact (window-shipped-*.json: the
+ *  createWindow.construct and createWindow.prewarm ms, the chrome from the construct stage's transparent flag, and
+ *  witness.loop.p99Ms/maxMs, witness.write.maxMs and witness.cpuBusyMaxPct at that launch); a summary like
+ *  "over 250" is not a measurement and must not become evidence. */
 export const WINDOW_CONSTRUCTION_ROOT_CAUSE = {
   classification: 'LAUNCH_VARIANCE',
   evidenceRuns: ['36999698235', '37071491310', '37156371974'],
   evidence: [
     {
       run: '36999698235',
-      measured: [],
-      summary: 'a QA candidate run whose window gate failed on one shipped launch; its per-launch numbers are not yet transcribed from the artifact (leadAction)'
+      measured: [
+        { launch: 'window-shipped-opaque-1', chrome: 'opaque', constructMs: 351.9, prewarmMs: 142.4, witness: { loopP99Ms: 15.254, loopMaxMs: 41.55, writeMaxMs: 6.154, cpuBusyMaxPct: 85.2 } },
+        { launch: 'window-shipped-opaque-2', chrome: 'opaque', constructMs: 124.5, prewarmMs: 68, witness: { loopP99Ms: 15.933, loopMaxMs: 43.713, writeMaxMs: 51.805, cpuBusyMaxPct: 84.7 } },
+        { launch: 'window-shipped-transparent-1', chrome: 'transparent', constructMs: 107.7, prewarmMs: 37.7, witness: { loopP99Ms: 14.86, loopMaxMs: 41.517, writeMaxMs: 15.329, cpuBusyMaxPct: 76.7 } },
+        { launch: 'window-shipped-transparent-2', chrome: 'transparent', constructMs: 86.9, prewarmMs: 24.8, witness: { loopP99Ms: 14.5, loopMaxMs: 43.024, writeMaxMs: 4.847, cpuBusyMaxPct: 76.8 } }
+      ],
+      summary: 'window-shipped-opaque-1 built in 351.9 ms (createWindow.construct) while its three shipped siblings built in 86.9-124.5 ms on the same bytes and runner'
     },
     {
       run: '37071491310',
-      measured: [],
-      summary: 'a QA candidate run whose window gate failed on one shipped launch; its per-launch numbers are not yet transcribed from the artifact (leadAction)'
+      measured: [
+        { launch: 'window-shipped-opaque-1', chrome: 'opaque', constructMs: 171.7, prewarmMs: 81.7, witness: { loopP99Ms: 15.778, loopMaxMs: 66.093, writeMaxMs: 19.925, cpuBusyMaxPct: 88.5 } },
+        { launch: 'window-shipped-opaque-2', chrome: 'opaque', constructMs: 88.2, prewarmMs: 364.4, witness: { loopP99Ms: 15.696, loopMaxMs: 67.437, writeMaxMs: 4.966, cpuBusyMaxPct: 55.2 } },
+        { launch: 'window-shipped-transparent-1', chrome: 'transparent', constructMs: 90.8, prewarmMs: 31.7, witness: { loopP99Ms: 14.049, loopMaxMs: 20.021, writeMaxMs: 18.772, cpuBusyMaxPct: 81.7 } },
+        { launch: 'window-shipped-transparent-2', chrome: 'transparent', constructMs: 74.4, prewarmMs: 37.4, witness: { loopP99Ms: 14.418, loopMaxMs: 31.031, writeMaxMs: 7.85, cpuBusyMaxPct: 59.2 } }
+      ],
+      summary: 'window-shipped-opaque-2 prewarmed in 364.4 ms (createWindow.prewarm) while its three shipped siblings prewarmed in 31.7-81.7 ms on the same bytes and runner'
     },
     {
       run: '37156371974',
-      measured: [],
-      summary: 'a QA candidate run whose window gate failed on one shipped launch; its per-launch numbers are not yet transcribed from the artifact (leadAction)'
+      measured: [
+        { launch: 'window-shipped-opaque-1', chrome: 'opaque', constructMs: 254.8, prewarmMs: 145.4, witness: { loopP99Ms: 19.333, loopMaxMs: 67.961, writeMaxMs: 32.638, cpuBusyMaxPct: 97.7 } },
+        { launch: 'window-shipped-opaque-2', chrome: 'opaque', constructMs: 117.2, prewarmMs: 54, witness: { loopP99Ms: 15.827, loopMaxMs: 63.537, writeMaxMs: 4.528, cpuBusyMaxPct: 76.2 } },
+        { launch: 'window-shipped-transparent-1', chrome: 'transparent', constructMs: 85.8, prewarmMs: 35.8, witness: { loopP99Ms: 14.426, loopMaxMs: 33.587, writeMaxMs: 7.9, cpuBusyMaxPct: 76 } },
+        { launch: 'window-shipped-transparent-2', chrome: 'transparent', constructMs: 108.5, prewarmMs: 55.9, witness: { loopP99Ms: 15.0, loopMaxMs: 185.205, writeMaxMs: 26.132, cpuBusyMaxPct: 83.6 } }
+      ],
+      summary: 'window-shipped-opaque-1 built in 254.8 ms (createWindow.construct) while its three shipped siblings built in 85.8-117.2 ms on the same bytes and runner'
     }
   ],
   baseline: {
@@ -363,7 +380,7 @@ export const WINDOW_CONSTRUCTION_ROOT_CAUSE = {
   },
   fix: 'OD-66: one in-job re-measure per chrome of the only over-budget shipped launch of that chrome, accepted only under 250 ms and listed under remeasured; the 250 ms gate remains unchanged',
   leadAction:
-    'LEAD_ACTION: read qa-candidate runs 36999698235, 37071491310 and 37156371974, artifact st-1-macos-window/st1-report/window-gate.json plus st1-report/window-*/window-*.json; record each shipped launch with its chrome, createWindow.construct and createWindow.prewarm ms and the runner witness values at that launch under measured; then dispatch qa-candidate three times on m2/integration-equivalent bytes and confirm st-1-macos-window/st1-report/window-gate.json has pass: true with budgetMs: 250 each time'
+    'LEAD_ACTION: dispatch qa-candidate three times on m2/integration-equivalent bytes and confirm st-1-macos-window/st1-report/window-gate.json has pass: true with budgetMs: 250 each time, attaching the artifacts; after 30 more runs, recount the window-gate failure rate and the share of runs with a non-empty remeasured, and file a re-measure share above 15% of runs as a suspected regression'
 }
 
 /** The CI launch order for window construction. The shipped warm-up launches keep the original first-run
