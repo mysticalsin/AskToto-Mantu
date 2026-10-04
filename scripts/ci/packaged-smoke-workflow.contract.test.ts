@@ -334,6 +334,17 @@ describe('packaged-smoke workflow supply chain', () => {
   it('uses no repository secret', () => {
     expect(workflow).not.toMatch(/\$\{\{\s*secrets\./)
   })
+
+  it('restores prior runtime asset caches before falling back to network downloads', () => {
+    const cacheSteps = workflow.split('\n      - uses: actions/cache@').slice(1)
+    expect(cacheSteps).toHaveLength(2)
+    for (const step of cacheSteps) {
+      const block = step.slice(0, step.indexOf('\n      - '))
+      expect(block).toContain('resources/managed-node')
+      expect(block).toContain('key: runtime-assets-${{ runner.os }}-')
+      expect(block).toContain('restore-keys: |\n            runtime-assets-${{ runner.os }}-')
+    }
+  })
 })
 
 describe('packaged-smoke workflow trigger', () => {
