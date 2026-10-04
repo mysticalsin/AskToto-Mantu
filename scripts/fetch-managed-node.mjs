@@ -10,8 +10,8 @@
  */
 
 import { createHash } from 'node:crypto'
-import { createWriteStream, existsSync, mkdirSync, readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { get as httpsGet } from 'node:https'
 import { fileURLToPath } from 'node:url'
@@ -26,13 +26,26 @@ const ASSETS = manifest.assets
 
 const VC_REDIST_URL = 'https://aka.ms/vs/17/release/vc_redist.x64.exe'
 const VC_DEST = join(REPO_ROOT, 'resources', 'vcredist', 'vc_redist.x64.exe')
+const DOWNLOAD_ATTEMPTS = 4
+const DOWNLOAD_RETRY_BASE_MS = 1_000
+const RETRYABLE_DOWNLOAD_CODES = new Set(['EAI_AGAIN', 'ECONNRESET', 'ECONNREFUSED', 'ENETRESET', 'ETIMEDOUT', 'ENOTFOUND'])
 
-function download(url, dest) {
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function retryableDownloadError(error) {
+  if (RETRYABLE_DOWNLOAD_CODES.has(error?.code)) return true
+  const message = error instanceof Error ? error.message : String(error)
+  return /HTTP (429|5\d\d)\b/.test(message)
+}
+
+function downloadOnce(url, dest) {
   return new Promise((resolve, reject) => {
     const req = httpsGet(url, { timeout: 60_000 }, (res) => {
       if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume()
-        download(res.headers.location, dest).then(resolve, reject)
+        downloadOnce(res.headers.location, dest).then(resolve, reject)
         return
       }
       if (res.statusCode !== 200) {
@@ -41,8 +54,26 @@ function download(url, dest) {
       }
       pipeline(res, createWriteStream(dest)).then(resolve, reject)
     })
+    req.on('timeout', () => {
+      req.destroy(Object.assign(new Error(`${url}: request timed out`), { code: 'ETIMEDOUT' }))
+    })
     req.on('error', reject)
   })
+}
+
+async function download(url, dest, attempts = DOWNLOAD_ATTEMPTS) {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      await downloadOnce(url, dest)
+      return
+    } catch (error) {
+      rmSync(dest, { force: true })
+      if (attempt === attempts || !retryableDownloadError(error)) throw error
+      const delayMs = DOWNLOAD_RETRY_BASE_MS * attempt
+      process.stdout.write(`Retrying ${basename(dest)} after ${error?.code ?? 'download error'} (${attempt}/${attempts})…\n`)
+      await sleep(delayMs)
+    }
+  }
 }
 
 function sha256File(path) {
