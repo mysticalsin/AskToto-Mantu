@@ -32,7 +32,7 @@ export const WITNESS_LOOP_MAX_MS = 50
 export const STDERR_TAIL_LIMIT_BYTES = 4_096
 
 export function st1ExitCode(verdict) {
-  return verdict === 'PASS' || verdict === 'INVALID' ? 0 : 1
+  return verdict === 'PASS' ? 0 : 1
 }
 
 export function createContentFreeStderrTail(limitBytes = STDERR_TAIL_LIMIT_BYTES) {

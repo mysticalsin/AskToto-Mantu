@@ -64,7 +64,7 @@
  * createWindow.construct, in both chromes, present and under 250 ms. It prints and writes the gate, and exits 1
  * when the gate fails.
  *
- * Exit codes: 0 PASS or INVALID, 1 FAIL, NOT_EXERCISED or INCOMPLETE, 2 usage.
+ * Exit codes: 0 PASS, 1 INVALID, FAIL, NOT_EXERCISED or INCOMPLETE, 2 usage.
  */
 import { execFileSync, spawn } from 'node:child_process'
 import {
