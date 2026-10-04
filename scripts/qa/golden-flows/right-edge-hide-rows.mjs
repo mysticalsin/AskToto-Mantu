@@ -318,6 +318,40 @@ export function pinnedBridgeCall([method, args]) {
   return task
 }
 
+/**
+ * Starts one bridge call without asking CDP to await the call's Promise. Windows runners can collect a
+ * long awaited Runtime.evaluate Promise even when the page still needs the IPC call; the page global below
+ * keeps the real bridge Promise reachable while the harness polls a plain status object.
+ */
+export function startPinnedBridgeCall([key, method, args]) {
+  const pending = (globalThis.__metisSmokeBridgePending ??= new Set())
+  const results = (globalThis.__metisSmokeBridgeResults ??= {})
+  results[key] = { status: 'pending' }
+  const call = Promise.resolve()
+    .then(() => window.toto[method](...args))
+    .then(
+      () => {
+        results[key] = { status: 'resolved' }
+      },
+      (error) => {
+        results[key] = { status: 'rejected', error: String(error?.message ?? error) }
+      }
+    )
+    .finally(() => {
+      pending.delete(call)
+    })
+  pending.add(call)
+  return key
+}
+
+export function readPinnedBridgeCall(key) {
+  return globalThis.__metisSmokeBridgeResults?.[key] ?? { status: 'missing' }
+}
+
+export function releasePinnedBridgeCall(key) {
+  if (globalThis.__metisSmokeBridgeResults) delete globalThis.__metisSmokeBridgeResults[key]
+}
+
 /** Content-free evidence: geometry kind and chrome flags only, never page text. */
 function summarize(observation) {
   const win = observation?.win
@@ -410,7 +444,24 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
   // Main broadcasts the placement/layout change, and the page re-renders from its refreshed settings.
   // Give that refresh time to land, so an Escape below never reaches a stale top-center page.
   // Every bridge call goes through pinnedBridgeCall: an unpinned one let Windows collect it mid-call.
-  const bridge = (method, ...args) => page.evaluate(pinnedBridgeCall, [method, args])
+  let bridgeSeq = 0
+  const bridge = async (method, ...args) => {
+    const key = `re-hide-${Date.now()}-${bridgeSeq++}`
+    await page.evaluate(startPinnedBridgeCall, [key, method, args])
+    const deadline = Date.now() + 10_000
+    let result = null
+    try {
+      while (Date.now() < deadline) {
+        result = await page.evaluate(readPinnedBridgeCall, key)
+        if (result?.status === 'resolved') return
+        if (result?.status === 'rejected') throw new Error(result.error ?? `${method} failed`)
+        await wait(50)
+      }
+      throw new Error(`${method} bridge call did not settle within 10000 ms`)
+    } finally {
+      await page.evaluate(releasePinnedBridgeCall, key).catch(() => undefined)
+    }
+  }
   const setLayout = async (layout) => {
     await bridge('setSettings', { overlayPlacement: 'right-edge', overlayLayout: layout, autoHideOverlay: true })
     for (let waited = 0; waited < 1_500 && !(await rightEdgePageState(page)).dock; waited += 100) await wait(100)
