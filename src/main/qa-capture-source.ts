@@ -13,6 +13,9 @@
  *   resolves to an existing .wav inside that profile.
  * - Touches no native permission surface: no systemPreferences, TCC or media-access API, no OS permission
  *   grant, no display-media handler. The audit event carries no path or file name.
+ * - The audio-service sandbox is disabled only for this QA file-fed fake microphone. Chromium's fake
+ *   device opens the WAV from the audio service; hosted macOS runners otherwise accept the switch but
+ *   feed zero frames because that service cannot read the isolated profile file.
  */
 import { statSync, realpathSync } from 'node:fs'
 import { extname, isAbsolute, relative } from 'node:path'
@@ -79,6 +82,7 @@ export function qaCaptureSwitches({ qaIdentity, packaged, env, realpath, exists 
   // Chromium gets the resolved path, so a later swap of the requested link cannot redirect it.
   return {
     switches: [
+      ['disable-features', 'AudioServiceSandbox'],
       ['use-fake-ui-for-media-stream'],
       ['use-fake-device-for-media-stream'],
       ['use-file-for-fake-audio-capture', realFile]

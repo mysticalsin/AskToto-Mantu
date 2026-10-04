@@ -55,6 +55,7 @@ describe('installQaCaptureSource — active path', () => {
 
     expect(decision.reason).toBeNull()
     expect(appendSwitch.mock.calls).toEqual([
+      ['disable-features', 'AudioServiceSandbox'],
       ['use-fake-ui-for-media-stream'],
       ['use-fake-device-for-media-stream'],
       ['use-file-for-fake-audio-capture', realpathSync(wav)]
@@ -149,6 +150,7 @@ describe('qaCaptureSwitches — pure decision', () => {
     const file = join(profile, 'in.wav')
     expect(qaCaptureSwitches({ ...base, env: { ASKTOTO_USERDATA: profile, [QA_CAPTURE_ENV]: file } })).toEqual({
       switches: [
+        ['disable-features', 'AudioServiceSandbox'],
         ['use-fake-ui-for-media-stream'],
         ['use-fake-device-for-media-stream'],
         ['use-file-for-fake-audio-capture', file]
@@ -209,6 +211,7 @@ describe('permission surface — the hook touches no native grant API', () => {
       ready()
       await flush()
       expect(appendSwitch.mock.calls).toEqual([
+        ['disable-features', 'AudioServiceSandbox'],
         ['use-fake-ui-for-media-stream'],
         ['use-fake-device-for-media-stream'],
         ['use-file-for-fake-audio-capture', realpathSync(wav)]
