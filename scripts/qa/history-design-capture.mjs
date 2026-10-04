@@ -329,6 +329,11 @@ async function clearHistorySearch(page) {
   if ((await historySearchValue(input)) !== '') await input.fill('')
 }
 
+async function historyRequestCounts(main) {
+  const requests = await main('({ ...globalThis.__historyDesign.requests })')
+  return { list: requests?.list ?? 0, search: requests?.search ?? 0 }
+}
+
 /**
  * Waits for the visual cue needed before capture. Accessibility roles are still checked afterwards by
  * rolesPresent/judgeCapture.
@@ -574,10 +579,12 @@ export async function captureReachedState({ page, cdp, main, state, variant, rea
     drive = await driveState(page, main, state, realRows, deps)
     await settleWindow(page)
     await page.screenshot({ path: join(out, screenshot), scale: 'device' })
+    drive.requestCounts = { screenshot: await historyRequestCounts(main) }
     drive.capturedAfterMs = Date.now() - drive.requestedAt
     drive.timingsMs.requestToCapture = drive.capturedAfterMs
     collected = await page.evaluate(`(${collectHistoryView})(${solidGradientLayers})`)
     const roles = await rolesPresent(page, state)
+    drive.requestCounts.rolesCheck = await historyRequestCounts(main)
     let tabOrder = null
     if (variant.id === KEYBOARD_VARIANT_ID) {
       try {
@@ -596,6 +603,7 @@ export async function captureReachedState({ page, cdp, main, state, variant, rea
         capturedAfterMs: drive.capturedAfterMs,
         driveTimingsMs: drive.timingsMs,
         requestChannels: drive.requestChannels,
+        requestCounts: drive.requestCounts,
         closedBeforeArm: drive.closedBeforeArm,
         tabOrder
       },
@@ -751,7 +759,7 @@ async function main() {
       fixtures: "slow, failed, cloud-only and unreadable answers served by History's own IPC channels, replaced in main through the inspector"
     },
     rootCause:
-      'Pending list/search/read fixture answers must stay strongly referenced; otherwise main-process GC can collect Electron IPC reply state for a never-settling answer, reject the renderer invoke, and show the failed History alert before the slow cue.',
+      'The slow-with-rows cue can be reached and present in the screenshot, then disappear if capture judgment runs after cleanup or device-metrics clearing causes History to request again. The harness now judges roles, keyboard order and verdict on the same frame as the screenshot, before cleanup, and records request counts at screenshot and role-check time.',
     guard:
       'After each pending fixture request reaches main, the harness forces HeapProfiler.collectGarbage through the main-process inspector; a collectable pending answer fails the capture instead of being hidden by timing.',
     expectedCaptures: expected,
