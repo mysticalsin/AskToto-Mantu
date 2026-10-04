@@ -1,0 +1,16 @@
+# QA-identity variant for hosted Windows candidate checks. It is isolated from the shipping app in
+# package identity, executable name, userData name and update feed, and it produces no promotable Setup.
+# electron-builder resolves `extends` against the project directory, not against this file.
+extends: ./electron-builder.win.yml
+appId: com.mantu.asktoto.qa
+productName: Metis QA
+extraMetadata:
+  name: asktoto-qa
+win:
+  executableName: Metis QA
+  target:
+    - portable
+  artifactName: Metis-QA-${version}.${ext}
+portable:
+  artifactName: Metis-QA-${version}.${ext}
+publish: null

@@ -13,6 +13,7 @@ import {
   englishSentences,
   normalizePcmPeak,
   pcmOf,
+  sapiPowerShellArgs,
   sayArgs,
   wavFromPcm,
   writeCaptureWav
@@ -31,6 +32,7 @@ import {
   describeOverlayPoll,
   distinctiveTokens,
   harvestCaptureArtifacts,
+  installQaCandidate,
   launchSpec,
   meetingFiles,
   reduceCdpTarget,
@@ -55,7 +57,9 @@ function fakeTools() {
   const calls: Array<{ command: string; args: string[] }> = []
   const run = (command: string, args: string[]): void => {
     calls.push({ command, args })
-    if (command === '/usr/bin/afconvert') writeFileSync(args[args.length - 1], wavFromPcm(Buffer.alloc(3 * CAPTURE_SAMPLE_RATE * 2)))
+    if (command === '/usr/bin/afconvert' || command === 'powershell') {
+      writeFileSync(args[args.length - 1], wavFromPcm(Buffer.alloc(3 * CAPTURE_SAMPLE_RATE * 2)))
+    }
   }
   return { calls, run }
 }
@@ -73,6 +77,8 @@ const observed = (over: Record<string, unknown> = {}) => ({
   tokenTotal: 12,
   diagnostics: {
     engine: 'ready',
+    wavSource: 'macos-say',
+    candidateSource: 'mac-qa-zip',
     source: 'fake-file',
     fakeDevice: true,
     getUserMediaFailed: false,
@@ -133,6 +139,14 @@ describe('capture WAV: command construction', () => {
     expect(afconvertArgs('/t/a.aiff', '/t/a.wav')).toEqual(['-f', 'WAVE', '-d', `LEI16@${CAPTURE_SAMPLE_RATE}`, '-c', '1', '/t/a.aiff', '/t/a.wav'])
   })
 
+  it('uses Windows System.Speech without shell-interpolating fixture text', () => {
+    const args = sapiPowerShellArgs('Hello there', 'C:\\t\\a.wav')
+    expect(args).toContain('Hello there')
+    expect(args).toContain('C:\\t\\a.wav')
+    expect(args.join(' ')).toContain('System.Speech')
+    expect(args.join(' ')).toContain('SpeechAudioFormatInfo 48000')
+  })
+
   it('uses only the English sentences of the fixture manifest, one say + afconvert pair each', () => {
     const sentences = englishSentences()
     expect(sentences.length).toBeGreaterThan(0)
@@ -140,6 +154,14 @@ describe('capture WAV: command construction', () => {
     buildCaptureWav({ sentences, run })
     expect(calls.filter((c) => c.command === '/usr/bin/say').map((c) => c.args[3])).toEqual(sentences)
     expect(calls.filter((c) => c.command === '/usr/bin/afconvert')).toHaveLength(sentences.length)
+  })
+
+  it('can synthesize the fixture with Windows built-in speech commands', () => {
+    const sentences = englishSentences()
+    const { calls, run } = fakeTools()
+    buildCaptureWav({ sentences, run, platform: 'win32' })
+    expect(calls.map((c) => c.command)).toEqual(sentences.map(() => 'powershell'))
+    expect(calls.map((c) => c.args[c.args.length - 2])).toEqual(sentences)
   })
 
   it('builds a 16-bit PCM mono WAV of 60-180 s with pauses', () => {
@@ -235,6 +257,22 @@ describe('profile seeding and launch', () => {
     expect(spec.command).toBe('/x/Metis QA')
     expect(spec.args).toEqual(['--remote-debugging-port=9555'])
     expect(spec.env).toEqual({ PATH: '/bin', ASKTOTO_USERDATA: '/p', METIS_QA_CAPTURE_FILE: '/p/qa-capture.wav' })
+  })
+
+  it('resolves macOS QA zips and Windows QA portable executables only', () => {
+    const profile = tempDir()
+    writeFileSync(join(profile, 'Metis-QA-1.0.0.exe'), 'qa')
+    writeFileSync(join(profile, 'Metis-Setup-1.0.0.exe'), 'setup')
+    expect(installQaCandidate(join(profile, 'Metis-QA-1.0.0.exe'), join(profile, 'app'), 'win32')).toEqual({
+      executable: join(profile, 'Metis-QA-1.0.0.exe'),
+      source: 'win-qa-portable'
+    })
+    expect(() => installQaCandidate(join(profile, 'Metis-Setup-1.0.0.exe'), join(profile, 'app'), 'win32')).toThrow(
+      /Metis-QA portable/
+    )
+    expect(() => installQaCandidate(join(profile, 'Metis-QA-1.0.0.exe'), join(profile, 'app'), 'darwin')).toThrow(
+      /zip installer/
+    )
   })
 
   it('passes a synchronously opened stderr fd to the packaged app spawn options', () => {
@@ -496,6 +534,8 @@ describe('the report', () => {
     expect(report.asrEngine).toBe('whisper')
     expect(report.diagnostics).toMatchObject({
       engine: 'ready',
+      wavSource: 'macos-say',
+      candidateSource: 'mac-qa-zip',
       source: 'fake-file',
       framesFed: 20,
       firstLineMs: 20_000
@@ -507,7 +547,7 @@ describe('the report', () => {
     }
     walk({ ...report, asrEngine: undefined })
     for (const leaf of leaves) expect(['number', 'boolean', 'string', 'undefined'].includes(typeof leaf) || leaf === null).toBe(true)
-    expect(leaves.filter((leaf) => typeof leaf === 'string')).toEqual(['PASS', 'ready', 'fake-file'])
+    expect(leaves.filter((leaf) => typeof leaf === 'string')).toEqual(['PASS', 'ready', 'macos-say', 'mac-qa-zip', 'fake-file'])
   })
 
   it('prints one content-free diagnostic line for failed hosted smokes', () => {

@@ -6,7 +6,7 @@
  * sentences' distinctive tokens in the saved transcript. Otherwise FAIL. An app that never becomes ready is
  * PRECONDITION. The report holds counts, booleans and the ASR engine name only.
  *
- * Usage: node scripts/qa/meeting/file-capture-smoke.mjs --installer <Metis-QA-<v>.zip> [--out <dir>]
+ * Usage: node scripts/qa/meeting/file-capture-smoke.mjs --installer <Metis-QA-<v>.zip|exe> [--platform <darwin|win32>] [--out <dir>]
  * Exit codes: 0 PASS, 1 FAIL, 2 PRECONDITION or usage.
  */
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -67,6 +67,8 @@ export function buildReport(observed, { verdict, checks }) {
     diagnostics: observed.diagnostics
       ? {
           engine: observed.diagnostics.engine,
+          wavSource: observed.diagnostics.wavSource,
+          candidateSource: observed.diagnostics.candidateSource,
           source: observed.diagnostics.source,
           fakeDevice: observed.diagnostics.fakeDevice === true,
           getUserMediaFailed: observed.diagnostics.getUserMediaFailed === true,
@@ -106,7 +108,7 @@ function parseArgs(argv) {
 async function main() {
   const args = parseArgs(process.argv.slice(2))
   if (!args.installer) {
-    console.error('Usage: node scripts/qa/meeting/file-capture-smoke.mjs --installer <Metis-QA-<v>.zip> [--out <dir>]')
+    console.error('Usage: node scripts/qa/meeting/file-capture-smoke.mjs --installer <Metis-QA-<v>.zip|exe> [--platform <darwin|win32>] [--out <dir>]')
     return 2
   }
   const outDir = args.out ?? 'out/file-capture'
@@ -114,7 +116,7 @@ async function main() {
   const workDir = smokeWorkDir(outDir)
   let observed
   try {
-    observed = await runFileCapture({ installer: args.installer, reportDir: outDir, workDir })
+    observed = await runFileCapture({ installer: args.installer, reportDir: outDir, workDir, platform: args.platform ?? process.platform })
   } catch (error) {
     const reason = preconditionReason(error)
     console.error(`file-capture precondition: ${reason}`)

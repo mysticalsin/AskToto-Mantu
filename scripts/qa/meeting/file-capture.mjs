@@ -12,7 +12,7 @@ import { execFileSync, spawn } from 'node:child_process'
 import { closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, extname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { writeRepresentativeProfile } from '../census/profile.mjs'
 import { englishSentences, writeCaptureWav } from './capture-wav.mjs'
@@ -156,6 +156,21 @@ export function installQaZip(zipPath, dir) {
   const app = readdirSync(dir).find((name) => name.endsWith('.app'))
   if (!app) throw new Error(`no .app in ${basename(zipPath)}`)
   return join(dir, app, 'Contents', 'MacOS', basename(app, '.app'))
+}
+
+/** Resolves the candidate executable for the platform-specific QA-identity artifact. */
+export function installQaCandidate(installer, dir, platform = process.platform) {
+  if (platform === 'darwin') {
+    if (extname(installer).toLowerCase() !== '.zip') throw new Error(`macOS QA capture needs a zip installer: ${basename(installer)}`)
+    return { executable: installQaZip(installer, dir), source: 'mac-qa-zip' }
+  }
+  if (platform === 'win32') {
+    if (!/^Metis-QA-.*\.exe$/i.test(basename(installer))) {
+      throw new Error(`Windows QA capture needs a Metis-QA portable executable: ${basename(installer)}`)
+    }
+    return { executable: installer, source: 'win-qa-portable' }
+  }
+  throw new Error(`file-fed capture is not supported on ${platform}`)
 }
 
 async function freePort() {
@@ -519,12 +534,18 @@ function diagnosticSource(observed) {
  * `driverError` when a step failed after it was ready; `pageStoppedAnswering` when a live-line probe failed).
  * `timings` are milliseconds since the launch.
  */
-export async function runFileCapture({ installer, workDir = mkdtempSync(join(tmpdir(), 'metis-file-capture-')), listenMs = LISTEN_MS, reportDir = null }) {
+export async function runFileCapture({
+  installer,
+  workDir = mkdtempSync(join(tmpdir(), 'metis-file-capture-')),
+  listenMs = LISTEN_MS,
+  reportDir = null,
+  platform = process.platform
+}) {
   const installDir = join(workDir, 'app')
   const profileDir = join(workDir, 'profile')
   mkdirSync(installDir, { recursive: true })
   mkdirSync(profileDir, { recursive: true })
-  const executable = installQaZip(installer, installDir)
+  const { executable, source } = installQaCandidate(installer, installDir, platform)
   const { meetingsFolder } = seedProfile(profileDir)
   const { path: wavPath } = writeCaptureWav(profileDir)
   const before = meetingFiles(meetingsFolder)
@@ -561,6 +582,8 @@ export async function runFileCapture({ installer, workDir = mkdtempSync(join(tmp
     pageStoppedAnswering: false,
     diagnostics: {
       engine: 'loading',
+      wavSource: platform === 'win32' ? 'windows-speech-synthesizer' : 'macos-say',
+      candidateSource: source,
       source: 'none',
       fakeDevice: false,
       getUserMediaFailed: false,

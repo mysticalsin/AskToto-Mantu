@@ -234,6 +234,8 @@ describe('QA candidate workflow: which refs and versions may build (M2-0499)', (
 describe('QA candidate workflow: the file-fed capture smoke (M2-0495)', () => {
   const job = jobBlocks.get('capture-file-smoke-mac') ?? ''
   const jobSteps = jobBlocks.has('capture-file-smoke-mac') ? steps('capture-file-smoke-mac') : []
+  const winJob = jobBlocks.get('capture-file-smoke-win') ?? ''
+  const winJobSteps = jobBlocks.has('capture-file-smoke-win') ? steps('capture-file-smoke-win') : []
 
   it('waits for provenance and runs on macOS', () => {
     expect(job).toMatch(/^    needs: provenance$/m)
@@ -265,6 +267,39 @@ describe('QA candidate workflow: the file-fed capture smoke (M2-0495)', () => {
   it('runs the self-test when the capture scripts or the hook change', () => {
     expect(workflow).toContain('      - scripts/qa/meeting/**\n')
     expect(workflow).toContain('      - src/main/qa-capture-source.ts\n')
+  })
+
+  it('builds the Windows QA-identity variant once, stages it and uploads its candidate artifact', () => {
+    const build = jobBlocks.get('build-win') ?? ''
+    expect(build).toContain('variant: win-qa-identity')
+    expect(build).toContain('script: dist:win:qa-identity')
+    expect(build).toContain('npm run ${{ matrix.script }}')
+    expect(build).toContain('provenance.mjs stage ${{ matrix.variant }} release candidate')
+    expect(build).toContain('name: candidate-${{ matrix.variant }}')
+    expect(build).toContain('name: build-${{ matrix.variant }}')
+  })
+
+  it('runs a blocking Windows capture smoke on the Windows QA-identity bytes', () => {
+    expect(winJob).toMatch(/^    needs: provenance$/m)
+    expect(winJob).toMatch(/^    runs-on: windows-latest$/m)
+    expect(winJob).toMatch(/^    timeout-minutes: 5$/m)
+    expect(winJob).not.toContain('continue-on-error')
+    const download = winJobSteps.findIndex((step) => step.includes('name: candidate-win-qa-identity'))
+    const verify = winJobSteps.findIndex((step) => step.includes('provenance.mjs verify provenance/provenance.json assets win-qa-identity'))
+    const select = winJobSteps.findIndex((step) => step.includes('candidate-installer.mjs assets $asset.sha256 win-qa-identity'))
+    const smoke = winJobSteps.findIndex((step) => step.includes('file-capture-smoke.mjs --installer $installer --platform win32'))
+    expect(download).toBeGreaterThan(-1)
+    expect(verify).toBeGreaterThan(download)
+    expect(select).toBeGreaterThan(verify)
+    expect(smoke).toBeGreaterThan(select)
+  })
+
+  it('uploads the Windows capture report even when the smoke fails', () => {
+    const upload = winJobSteps.find((step) => step.includes('actions/upload-artifact@')) ?? ''
+    expect(upload).toContain('if: always()')
+    expect(upload).toContain('name: capture-file-smoke-win')
+    expect(upload).toContain('path: capture-report/')
+    expect(upload).toContain('if-no-files-found: error')
   })
 })
 

@@ -1,5 +1,6 @@
 // Selects the installer that a QA run may install: the one whose sha256 the lead named. Hosted lanes
-// download a qa-candidate.yml artifact (candidate-win, candidate-mac or candidate-mac-qa-identity) and
+// download a qa-candidate.yml artifact (candidate-win, candidate-mac, candidate-mac-qa-identity or
+// candidate-win-qa-identity) and
 // install only bytes that match; a differing or missing installer is an error, never a fallback to
 // another file.
 //   node scripts/qa/candidate-installer.mjs <dir> <sha256> [win|mac|mac-dmg]   (prints the installer path)
@@ -13,6 +14,7 @@ const SHA256 = /^[0-9a-f]{64}$/
 /** The installer files each platform may select from. Windows installs only the Setup, never the Portable. */
 export const INSTALLER_KINDS = Object.freeze({
   win: Object.freeze({ label: 'Metis-Setup-*.exe', pattern: /^Metis-Setup-.*\.exe$/ }),
+  'win-qa-identity': Object.freeze({ label: 'Metis-QA-*.exe', pattern: /^Metis-QA-.*\.exe$/ }),
   mac: Object.freeze({ label: '*.dmg or *.zip', pattern: /\.(dmg|zip)$/ }),
   'mac-dmg': Object.freeze({ label: 'Metis-*.dmg', pattern: /^Metis-.*\.dmg$/ })
 })
