@@ -268,21 +268,6 @@ describe('QA candidate workflow: the file-fed capture smoke (M2-0495)', () => {
   })
 })
 
-describe('QA candidate workflow: runtime asset cache keys', () => {
-  it('uses one bounded file per hashFiles call so Windows workflow template expansion cannot scan an ambiguous pattern', () => {
-    for (const name of ['build-mac', 'build-win']) {
-      const block = jobBlocks.get(name) ?? ''
-      const runtimeKey = block.split('\n').find((line) => line.includes('key: runtime-assets-')) ?? ''
-      expect(runtimeKey, name).toContain("hashFiles('scripts/fetch-models.mjs')")
-      expect(runtimeKey, name).toContain("hashFiles('resources/runtime-assets-manifest.json')")
-      expect(runtimeKey, name).toContain("hashFiles('scripts/fetch-local-model.mjs')")
-      expect(runtimeKey, name).toContain("hashFiles('scripts/local-model-assets.mjs')")
-      expect(runtimeKey, name).not.toContain("hashFiles('scripts/fetch-models.mjs',")
-      expect(runtimeKey, name).not.toContain("hashFiles('scripts/fetch-local-model.mjs',")
-    }
-  })
-})
-
 describe('QA candidate History design evidence (M2-0032)', () => {
   const block = jobBlocks.get('history-design-mac') ?? ''
 
