@@ -386,13 +386,20 @@ export function ensureSharedFinalSigtermRow(rows, profileMode, reason) {
 export const cleanupWarnings = []
 
 export function removeTempDir(dir, warnings = cleanupWarnings, remove = rmSync) {
-  try {
-    remove(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
-    return true
-  } catch (error) {
-    warnings.push({ code: error?.code ?? 'UNKNOWN', message: error instanceof Error ? error.message : String(error) })
-    return false
+  let lastError = null
+  for (let attempt = 0; attempt <= 10; attempt += 1) {
+    try {
+      remove(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      return true
+    } catch (error) {
+      lastError = error
+    }
   }
+  warnings.push({
+    code: lastError?.code ?? 'UNKNOWN',
+    message: lastError instanceof Error ? lastError.message : String(lastError)
+  })
+  return false
 }
 
 function stopUnrelatedFixture(fixture) {
