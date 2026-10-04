@@ -3,9 +3,9 @@
  * components (see components/OnboardingDemoScene.tsx), replacing the old static mock card (MQA-277).
  * Per the Vibe-Island teardown's boxed pattern ("drive the real UI with fake data... never a video"),
  * this module is the "fake data" half: a pure, DOM-free projection of one meeting's worth of scripted
- * beats onto a single `elapsedMs` clock, in the same spirit as lib/scramble.ts's `scrambleFrame` — the
- * logic that actually matters lives here and is fully unit-tested; the component only measures pixels
- * and drives a rAF/timeout clock over it (a bug there is a wiring bug, not a logic bug).
+ * beats onto a single `elapsedMs` clock — the logic that actually matters lives here and is fully
+ * unit-tested; the component only measures pixels and drives a rAF/timeout clock over it (a bug there
+ * is a wiring bug, not a logic bug).
  *
  * SAFETY (MQA-278): this module has NO dependency on the IPC bridge, the renderer's shared state module,
  * or the live listen engine — it cannot read a real transcript, a real session, or any other real app

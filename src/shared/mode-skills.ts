@@ -79,10 +79,6 @@ export function parseSkillHeader(raw: string): { id: string; version: string; lo
   }
 }
 
-export function expectedSkillIds(): ModeSkillId[] {
-  return [HUMANIZER_SKILL_ID, CAVEMAN_SKILL_ID, ...CONVERSATION_MODES]
-}
-
 export const LOCKED_MODE_SKILL_BEGIN = '--- LOCKED MODE SKILL'
 export const LOCKED_MODE_SKILL_END = '--- END LOCKED MODE SKILL ---'
 export const LOCKED_HUMANIZER_BEGIN = '--- LOCKED HUMANIZER'

@@ -88,14 +88,6 @@
     0 0 0 1px rgba(255, 255, 255, 0.16),
     0 3px 8px -4px var(--color-accent-glow);
 }
-/* hover menu off the mark + the mode popover */
-.aw-menu {
-  background: var(--aw-glass-bot);
-  -webkit-backdrop-filter: blur(20px);
-  backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  box-shadow: 0 12px 26px -10px rgba(0, 0, 0, 0.6);
-}
 /* floating control mini-pill (collapsed state). The window is hugged tightly to this element's own
    width/height (see data-hug-width in state.ts) — a shadow with too much reach gets hard-clipped into
    a flat-edged box at the window boundary instead of fading out, so this stays deliberately more

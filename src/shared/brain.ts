@@ -278,7 +278,7 @@ export type ProvenanceState = z.infer<typeof ProvenanceStateSchema>
  *  confident the extraction — only a human-verified/-pinned/-edited value may. */
 export const RENDERABLE_PROVENANCE_STATES: ReadonlySet<ProvenanceState> = new Set(['verified', 'pinned', 'edited'])
 
-export function provenantFieldSchema<V extends z.ZodTypeAny>(valueSchema: V) {
+function provenantFieldSchema<V extends z.ZodTypeAny>(valueSchema: V) {
   return z.object({
     value: valueSchema,
     source_file: z.string().default(''),

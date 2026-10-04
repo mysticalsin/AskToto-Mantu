@@ -1,10 +1,10 @@
 /**
  * Synthetic cursor geometry (Act 2 Demo) — the pure easing/interpolation math behind the onboarding
- * demo's own drawn cursor (see components/OnboardingDemoScene.tsx). Split out for the same reason
- * lib/scramble.ts's `scrambleFrame` is: the actual measurement (getBoundingClientRect on the target
- * chip) needs a real DOM and isn't unit-testable in this repo's node-only vitest environment, but the
- * "where along the path is the cursor at progress p" question has nothing to do with the DOM at all —
- * it is pure interpolation over two points, and is exactly the part worth pinning with tests.
+ * demo's own drawn cursor (see components/OnboardingDemoScene.tsx). The actual measurement
+ * (getBoundingClientRect on the target chip) needs a real DOM and isn't unit-testable in this repo's
+ * node-only vitest environment, but the "where along the path is the cursor at progress p" question
+ * has nothing to do with the DOM at all — it is pure interpolation over two points, and is exactly
+ * the part worth pinning with tests.
  */
 
 export interface Point {

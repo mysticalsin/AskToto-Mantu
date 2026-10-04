@@ -141,9 +141,6 @@ import {
 
 /** Wave 2 — session-scoped last successful failover hop for the one-shot UI chip. Never persisted. */
 let lastFailoverNotice: { from: string; to: string; at: number; reason: string } | null = null
-export function peekLastFailoverNotice(): typeof lastFailoverNotice {
-  return lastFailoverNotice
-}
 export function dismissLastFailoverNotice(): void {
   lastFailoverNotice = null
 }

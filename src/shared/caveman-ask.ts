@@ -19,10 +19,6 @@ export type AskCavemanIntensity = Exclude<AskCavemanLevel, 'off'>
 
 export const DEFAULT_ASK_CAVEMAN: AskCavemanIntensity = 'full'
 
-export function isAskCavemanLevel(value: unknown): value is AskCavemanLevel {
-  return typeof value === 'string' && (ASK_CAVEMAN_LEVELS as readonly string[]).includes(value)
-}
-
 const LEVEL_ALT = 'off|lite|full|ultra|wenyan-lite|wenyan-full|wenyan-ultra|wenyan'
 const SLASH_RE = new RegExp(`^\\s*/caveman(?:\\s+(${LEVEL_ALT}))?\\s*`, 'i')
 const STOP_RE = /^\s*stop\s+caveman(?:\s*[.!?]+)?\s*/i
