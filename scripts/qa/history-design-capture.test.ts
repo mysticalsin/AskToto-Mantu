@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { IPC } from '../../src/shared/ipc'
 import { HISTORY_DEGRADED_MS as RENDERER_DEGRADED_MS } from '../../src/renderer/src/components/history/list-status'
 import { NOT_DOWNLOADED_TEXT, UNAVAILABLE_TEXT } from '../../src/renderer/src/components/history/hydration'
-import { driveState, fixtureAnswersForState, INSTALL_FIXTURE_HANDLERS, STATE_TIMEOUT_MS, waitForRequest, warmUp } from './history-design-capture.mjs'
+import { captureReachedState, driveState, fixtureAnswersForState, INSTALL_FIXTURE_HANDLERS, STATE_TIMEOUT_MS, waitForRequest, warmUp } from './history-design-capture.mjs'
 import {
   BACKDROPS,
   BLOCKED_EXTERNAL_ROWS,
@@ -535,6 +535,84 @@ describe('History design matrix (M2-0032)', () => {
         }
       })
     ).rejects.toThrow('History reopened with a non-empty search query')
+  })
+
+  it('checks slow-with-rows roles before clearing the search cleanup state', async () => {
+    const state = HISTORY_DESIGN_STATES.find((candidate) => candidate.id === 'slow-with-rows')!
+    const variant = DESIGN_VARIANTS.find((candidate) => candidate.id === 'light-1x-reduced-motion')!
+    const history = { requests: { list: 0, search: 0 }, requestedAt: { list: 1_000, search: 2_000 } }
+    let searchValue = ''
+    let searchFillPending = false
+    const main = withCollectGarbage(vi.fn(async (expression: string) => {
+      if (expression === 'globalThis.__historyDesign.requests.list') return history.requests.list
+      if (expression === 'globalThis.__historyDesign.requests.search') return history.requests.search
+      if (expression.includes('requests, requestedAt')) return { requests: { ...history.requests }, requestedAt: { ...history.requestedAt } }
+      return true
+    }))
+    const wait = vi.fn(async () => {
+      if (history.requests.list === 0) history.requests.list += 1
+      else if (searchFillPending && history.requests.search === 0) history.requests.search += 1
+    })
+    const searchLocator = {
+      first: () => ({
+        isVisible: vi.fn(async () => false)
+      }),
+      inputValue: vi.fn(async () => searchValue),
+      fill: vi.fn(async (value: string) => {
+        searchValue = value
+        if (value === 'planning') searchFillPending = true
+      })
+    }
+    const rootLocator = {
+      getByRole: vi.fn(() => ({
+        filter: () => ({
+          count: vi.fn(async () => (searchValue === '' ? 0 : 1))
+        })
+      }))
+    }
+    const page = {
+      getByLabel: vi.fn(() => searchLocator),
+      getByText: vi.fn(() => ({
+        first: () => ({
+          waitFor: vi.fn(async () => undefined)
+        })
+      })),
+      getByRole: vi.fn(() => ({
+        filter: () => ({
+          first: () => ({
+            waitFor: vi.fn(async () => undefined)
+          })
+        })
+      })),
+      waitForFunction: vi.fn(async () => undefined),
+      evaluate: vi.fn(async () => ({ scope: 'history-view', viewport, samples: [textSample()] })),
+      screenshot: vi.fn(async () => undefined),
+      locator: vi.fn(() => rootLocator)
+    }
+    const cdp = { send: vi.fn(async () => undefined) }
+
+    const result = await captureReachedState({
+      page: page as never,
+      cdp: cdp as never,
+      main: main as never,
+      state,
+      variant,
+      realRows: [{ title: 'Quarterly planning sample' }],
+      out: 'out/history-design-test',
+      deps: {
+        wait,
+        ensureIdleBar: async () => undefined,
+        clickHistory: async () => {
+          history.requests.list += 1
+        }
+      }
+    })
+
+    expect(result.judged.verdict).toBe('PASS')
+    expect(rootLocator.getByRole).toHaveBeenCalledWith('status', undefined)
+    expect(searchLocator.fill).toHaveBeenLastCalledWith('')
+    expect(searchValue).toBe('')
+    expect(cdp.send).toHaveBeenLastCalledWith('Emulation.clearDeviceMetricsOverride')
   })
 
   it('fails fast instead of arming fixtures while History is still open', async () => {
