@@ -552,8 +552,7 @@ describe('History design matrix (M2-0032)', () => {
       return true
     }))
     const wait = vi.fn(async () => {
-      if (history.requests.list === 0) history.requests.list += 1
-      else if (searchFillPending && history.requests.search === 0) history.requests.search += 1
+      if (searchFillPending && history.requests.search === 0) history.requests.search += 1
     })
     const searchLocator = {
       first: () => ({
