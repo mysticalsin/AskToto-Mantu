@@ -78,7 +78,7 @@ export function qaCaptureSwitches({ qaIdentity, packaged, env, realpath, exists 
   if (!isWav(realFile)) return refuse('not-wav')
   // Chromium gets the resolved path, so a later swap of the requested link cannot redirect it.
   return {
-    switches: [['use-fake-device-for-media-stream'], ['use-file-for-fake-audio-capture', realFile]],
+    switches: [['use-fake-ui-for-media-stream'], ['use-fake-device-for-media-stream'], ['use-file-for-fake-audio-capture', realFile]],
     reason: null
   }
 }
