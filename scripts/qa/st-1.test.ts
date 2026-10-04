@@ -739,6 +739,7 @@ describe('buildReport', () => {
         invalidDetails: { reason, stderrTail: { bytes: 12, limitBytes: 4_096, retainedBytes: 12, truncatedBytes: 0, chunkBytes: [12] } }
       })
       expect(built.verdict).toBe('INVALID')
+      expect(st1ExitCode(built.verdict)).toBe(1)
       expect(built.reason).toBe(reason)
       expect(built.invalidDetails).toMatchObject({ reason, stderrTail: { bytes: 12, retainedBytes: 12 } })
       expect(built.criteria.every((criterion: { pass: boolean }) => criterion.pass)).toBe(true)
@@ -1202,9 +1203,9 @@ describe('buildLaunchFailureReport', () => {
 })
 
 describe('st1ExitCode', () => {
-  it('keeps launch precondition INVALID rows green while real scoring outcomes still fail the CLI', () => {
+  it('exits successfully only for PASS, never for an INVALID or unsuccessful measurement', () => {
     expect(st1ExitCode('PASS')).toBe(0)
-    expect(st1ExitCode('INVALID')).toBe(0)
+    expect(st1ExitCode('INVALID')).toBe(1)
     expect(st1ExitCode('FAIL')).toBe(1)
     expect(st1ExitCode('NOT_EXERCISED')).toBe(1)
     expect(st1ExitCode('INCOMPLETE')).toBe(1)
