@@ -424,6 +424,24 @@ command_is_exe_invocation() {
   local pid=$1 command
   command=$("$PS_BIN" -ww -o command= -p "$pid" 2>/dev/null || true)
   [[ "$command" == "$EXE" || "$command" == "$EXE "* ]]
+  local matched=$?
+  if (( matched == 0 )); then
+    return 0
+  fi
+  local command_slash=${command//\\//}
+  local exe_slash=${EXE//\\//}
+  [[ "$command_slash" == "$exe_slash" || "$command_slash" == "$exe_slash "* ]]
+  matched=$?
+  if (( matched == 0 )); then
+    return 0
+  fi
+  if command -v cygpath >/dev/null 2>&1; then
+    local exe_unix
+    exe_unix=$(cygpath -u "$EXE" 2>/dev/null || true)
+    [[ -n "$exe_unix" && ( "$command_slash" == "$exe_unix" || "$command_slash" == "$exe_unix "* ) ]]
+    return $?
+  fi
+  return 1
 }
 
 matching_second_instance_candidates() {
