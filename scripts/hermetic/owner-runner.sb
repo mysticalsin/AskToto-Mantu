@@ -1,0 +1,50 @@
+;; M2-0538 — strict owner-runner sandbox profile for pre-review ST-1 jobs on the owner's Mac.
+;; M2-0572 uses the same profile for the one OD-63 owner-camera job; the only additional access is
+;; the candidate app's owner-approved Camera device grant, not broader filesystem access here.
+;;
+;; This starts from owner-account.sb's real-data denies, then adds the rest of the owner's
+;; credential stores, personal folders and queue workspace. It is selected only through
+;; OWNER_SANDBOX_PROFILE=owner-runner.sb in the strict owner-runner jobs.
+(version 1)
+(allow default)
+
+(deny file-read* file-write*
+  (subpath (string-append (param "HOME") "/Library/CloudStorage"))
+  (subpath (string-append (param "HOME") "/Library/Keychains"))
+  (subpath (string-append (param "HOME") "/.wrangler"))
+  (subpath (string-append (param "HOME") "/.config/.wrangler"))
+  (subpath (string-append (param "HOME") "/Library/Preferences/.wrangler"))
+  (subpath (string-append (param "HOME") "/Library/Application Support/Metis"))
+  (subpath (string-append (param "HOME") "/Library/Application Support/Metis Light"))
+  (subpath (string-append (param "HOME") "/Library/Application Support/Métis"))
+  (subpath (string-append (param "HOME") "/Library/Application Support/AskToto"))
+  (subpath (string-append (param "HOME") "/Library/Application Support/TotoWhisper"))
+  (subpath (string-append (param "HOME") "/Library/Application Support/asktoto-dev"))
+  (subpath (string-append (param "HOME") "/Library/Application Support/asktoto")))
+
+(deny file-read* file-write*
+  (subpath (string-append (param "HOME") "/.ssh"))
+  (subpath (string-append (param "HOME") "/.aws"))
+  (subpath (string-append (param "HOME") "/.gnupg"))
+  (subpath (string-append (param "HOME") "/.config"))
+  (literal (string-append (param "HOME") "/.netrc"))
+  (subpath (string-append (param "HOME") "/.claude"))
+  (subpath (string-append (param "HOME") "/.codex"))
+  (subpath (string-append (param "HOME") "/Documents"))
+  (subpath (string-append (param "HOME") "/Desktop"))
+  (subpath (string-append (param "HOME") "/Downloads"))
+  (subpath (string-append (param "HOME") "/Pictures"))
+  (subpath (string-append (param "HOME") "/Movies"))
+  (subpath (string-append (param "HOME") "/Music"))
+  (subpath (string-append (param "HOME") "/Library/Mail"))
+  (subpath (string-append (param "HOME") "/Library/Messages"))
+  (subpath (string-append (param "HOME") "/Library/Safari"))
+  (subpath (string-append (param "HOME") "/Library/Cookies")))
+
+;; The queue workspace is denied, except for this job's checked-out repository and temp directory if the
+;; runner keeps either under that parent.
+(deny file-read* file-write*
+  (require-all
+    (subpath (string-append (param "HOME") "/AI-Brain-build"))
+    (require-not (subpath (param "WORKSPACE")))
+    (require-not (subpath (param "RUNNER_TEMP")))))

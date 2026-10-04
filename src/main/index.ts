@@ -22,13 +22,13 @@ import {
 } from 'electron'
 import { join, basename, dirname, resolve } from 'node:path'
 import { readFileSync, existsSync, writeFileSync, readdirSync, unlinkSync, createReadStream, statSync, renameSync, rmdirSync, mkdirSync, copyFileSync } from 'node:fs'
-
 // DevTools stay reachable only where dev-env permits them; packaged builds ignore ASKTOTO_DEVTOOLS.
 const DEVTOOLS_ENABLED = devToolsEnabled()
 import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
 import { bindReadinessThenNavigate } from './renderer-readiness'
 import { bindAct1DomProbe } from './act1-dom-probe'
+import { runOwnerCameraSelftest } from './owner-camera-selftest'
 import {
   createRevealController,
   legacyRevealWindow,
@@ -2737,7 +2737,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
     commandControl,
     getCommandOwner: () => (win && !win.isDestroyed() ? { webContentsId: win.webContents.id } : null)
   })
-
+  void runOwnerCameraSelftest(win.webContents.id).catch((error) => { mainLog.error('[owner-camera] selftest failed:', error instanceof Error ? error.message : String(error)); app.exit(1) })
   try {
   // Frameless transparent windows on darwin still inherit an OS min (~44). Hide park is 8×2.
   try { win.setMinimumSize(1, 1) } catch { /* headless */ }

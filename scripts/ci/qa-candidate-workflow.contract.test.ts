@@ -8,6 +8,8 @@ const root = join(__dirname, '..', '..')
 const workflow = readFileSync(join(root, '.github', 'workflows', 'qa-candidate.yml'), 'utf8').replace(/\r\n/g, '\n')
 const ownerSandboxProbePath = join(root, 'scripts', 'hermetic', 'prove-owner-sandbox.sh')
 const ownerSandboxProbe = readFileSync(ownerSandboxProbePath, 'utf8').replace(/\r\n/g, '\n')
+const ownerRunnerProfile = readFileSync(join(root, 'scripts', 'hermetic', 'owner-runner.sb'), 'utf8').replace(/\r\n/g, '\n')
+const ownerAccountProfile = readFileSync(join(root, 'scripts', 'hermetic', 'owner-account.sb'), 'utf8').replace(/\r\n/g, '\n')
 
 function bashPath(path: string): string {
   return path.replace(/\\/g, '/')
@@ -266,6 +268,67 @@ describe('QA candidate History design evidence (M2-0032)', () => {
 
 describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
   const strictJobs = ['st1-mac-fifo', 'st1-mac-control']
+  const ownerRunnerProfileDenials = [
+    '/Library/CloudStorage',
+    '/Library/Keychains',
+    '/.wrangler',
+    '/.config/.wrangler',
+    '/Library/Preferences/.wrangler',
+    '/Library/Application Support/Metis',
+    '/Library/Application Support/Metis Light',
+    '/Library/Application Support/Métis',
+    '/Library/Application Support/AskToto',
+    '/Library/Application Support/TotoWhisper',
+    '/Library/Application Support/asktoto-dev',
+    '/Library/Application Support/asktoto',
+    '/.ssh',
+    '/.aws',
+    '/.gnupg',
+    '/.config',
+    '/.netrc',
+    '/.claude',
+    '/.codex',
+    '/Documents',
+    '/Desktop',
+    '/Downloads',
+    '/Pictures',
+    '/Movies',
+    '/Music',
+    '/Library/Mail',
+    '/Library/Messages',
+    '/Library/Safari',
+    '/Library/Cookies',
+    '/AI-Brain-build'
+  ]
+  const ownerRunnerProbeDenials = [
+    '/Library/CloudStorage',
+    '/Library/Keychains',
+    '/Library/Application Support/Metis',
+    '/Library/Application Support/Metis Light',
+    '/Library/Application Support/Métis',
+    '/Library/Application Support/AskToto',
+    '/Library/Application Support/TotoWhisper',
+    '/Library/Application Support/asktoto-dev',
+    '/Library/Application Support/asktoto',
+    '/.ssh',
+    '/.aws',
+    '/.gnupg',
+    '/.config',
+    '/.netrc',
+    '/.claude',
+    '/.codex',
+    '/Documents',
+    '/Desktop',
+    '/Downloads',
+    '/Pictures',
+    '/Movies',
+    '/Music',
+    '/Library/Mail',
+    '/Library/Messages',
+    '/Library/Safari',
+    '/Library/Cookies',
+    '/AI-Brain-build'
+  ]
 
   it('moves only the strict fifo and control rows to the owner self-hosted Mac label', () => {
     for (const name of strictJobs) {
@@ -285,11 +348,11 @@ describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
     }
   })
 
-  it('proves the owner-account sandbox before Node setup or candidate artifact download', () => {
+  it('proves the owner-runner sandbox before Node setup or candidate artifact download', () => {
     for (const name of strictJobs) {
       const jobSteps = steps(name)
       const checkout = jobSteps.findIndex((step) => step.includes('actions/checkout@'))
-      const probe = jobSteps.findIndex((step) => step.includes('name: Prove owner-account sandbox denies private state'))
+      const probe = jobSteps.findIndex((step) => step.includes('name: Prove owner-runner sandbox denies private state'))
       const setup = jobSteps.findIndex((step) => step.includes('actions/setup-node@'))
       const download = jobSteps.findIndex((step) => step.includes('actions/download-artifact@'))
 
@@ -305,16 +368,16 @@ describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
     expect(workflow).toContain('      - scripts/hermetic/prove-owner-sandbox.sh\n')
     expect(workflow).toContain('      - scripts/hermetic/run-under-owner-sandbox.sh\n')
     expect(workflow).toContain('      - scripts/hermetic/owner-account.sb\n')
-    expect(ownerSandboxProbe).toContain('"$HOME/Library/CloudStorage"')
-    expect(ownerSandboxProbe).toContain('"$HOME/Library/Keychains"')
-    expect(ownerSandboxProbe).toContain('"$HOME/Library/Application Support/Metis"')
-    expect(ownerSandboxProbe).toContain('"$HOME/Library/Application Support/Métis"')
-    expect(ownerSandboxProbe).toContain('"$HOME/Library/Application Support/AskToto"')
-    expect(ownerSandboxProbe).toContain('"$HOME/Library/Application Support/asktoto"')
-    expect(ownerSandboxProbe).toContain('"$HOME/Library/Application Support/asktoto-dev"')
+    expect(workflow).toContain('      - scripts/hermetic/owner-runner.sb\n')
+    expect(ownerSandboxProbe).toContain('OWNER_SANDBOX_PROFILE=owner-runner.sb')
+    for (const path of ownerRunnerProbeDenials) {
+      expect(ownerSandboxProbe).toContain(`"$probe_home${path}"`)
+    }
     expect(ownerSandboxProbe).toContain('/bin/ls -ld "$target"')
     expect(ownerSandboxProbe).toContain('/bin/mkdir "$target"')
     expect(ownerSandboxProbe).toContain('expected at least 2')
+    expect(ownerSandboxProbe).toContain('assert_writable "$RUNNER_TEMP/owner-runner-sandbox-probe"')
+    expect(ownerSandboxProbe).toContain('assert_writable "${GITHUB_WORKSPACE:-$PWD}/.owner-runner-sandbox-probe"')
     expect(ownerSandboxProbe).toContain("grep -Fqi 'Operation not permitted'")
     expect(ownerSandboxProbe).not.toContain('Operation not permitted|deny|sandbox')
   })
@@ -406,7 +469,7 @@ exit 1
       })
 
       expect(result.status).toBe(1)
-      expect(result.stdout).toContain(`::error::owner-account sandbox allowed creating absent protected path ${bashPath(allowedPath)}`)
+      expect(result.stdout).toContain(`::error::owner-runner sandbox allowed creating absent protected path ${bashPath(allowedPath)}`)
       expect(existsSync(allowedPath)).toBe(false)
     } finally {
       rmSync(sandbox, { recursive: true, force: true })
@@ -432,19 +495,82 @@ exit 1
 
       expect(result.status).toBe(1)
       expect(result.stdout).toContain(
-        '::error::owner-account sandbox probe overrides are test-only and must not be set in GitHub Actions.'
+        '::error::owner-runner sandbox probe overrides are test-only and must not be set in GitHub Actions.'
       )
     } finally {
       rmSync(sandbox, { recursive: true, force: true })
     }
   })
 
-  it('runs every strict candidate verification and launch through the owner-account sandbox wrapper', () => {
+  it('proves the workspace and RUNNER_TEMP writable exceptions when the harness asks for that branch', () => {
+    const sandbox = mkdtempSync(join(tmpdir(), 'owner-sandbox-probe-'))
+    try {
+      const home = join(sandbox, 'home')
+      const runnerTemp = join(sandbox, 'runner-temp')
+      const workspace = join(sandbox, 'workspace')
+      const wrapper = join(sandbox, 'fake-sandbox.sh')
+      mkdirSync(join(home, 'Library', 'Application Support'), { recursive: true })
+      mkdirSync(join(home, 'Library', 'CloudStorage'), { recursive: true })
+      mkdirSync(join(home, 'Library', 'Keychains'), { recursive: true })
+      mkdirSync(runnerTemp)
+      mkdirSync(workspace)
+      writeFileSync(
+        wrapper,
+        `#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  /bin/mkdir)
+    if [ "\${2:-}" = -p ]; then exec "$@"; fi
+    ;;
+  /usr/bin/touch)
+    exec "$@"
+    ;;
+esac
+echo 'Operation not permitted' >&2
+exit 1
+`
+      )
+      chmodSync(wrapper, 0o755)
+
+      const result = spawnSync('bash', [ownerSandboxProbePath], {
+        cwd: workspace,
+        env: {
+          ...process.env,
+          GITHUB_ACTIONS: '',
+          GITHUB_WORKSPACE: workspace,
+          PROVE_OWNER_SANDBOX_ASSERT_WRITABLE: '1',
+          PROVE_OWNER_SANDBOX_HOME: home,
+          PROVE_OWNER_SANDBOX_WRAPPER: wrapper,
+          RUNNER_TEMP: runnerTemp
+        },
+        encoding: 'utf8'
+      })
+
+      expect(result.stderr).toBe('')
+      expect(result.status).toBe(0)
+      expect(existsSync(join(runnerTemp, 'owner-runner-sandbox-probe'))).toBe(false)
+      expect(existsSync(join(workspace, '.owner-runner-sandbox-probe'))).toBe(false)
+    } finally {
+      rmSync(sandbox, { recursive: true, force: true })
+    }
+  })
+
+  it('runs every strict candidate verification and launch through the owner-runner sandbox wrapper', () => {
+    const measureSteps = new Map([
+      ['st1-mac-fifo', 'name: Measure packaged stall resilience'],
+      ['st1-mac-control', 'name: Measure the packaged app with no fixture']
+    ])
     for (const name of strictJobs) {
       const block = job(name)
+      expect(block).toContain('OWNER_SANDBOX_PROFILE: owner-runner.sb')
+      expect(block).toContain('ASKTOTO_LOCAL_KEYSTORE: 1')
+      expect(block).toContain('ASKTOTO_QA_MOCK_KEYCHAIN: 1')
       expect(block).toContain('bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify')
       expect(block).toContain('bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/st-1.mjs')
       expect(block).not.toMatch(/(?:^|\n) {10}node scripts\/qa\/(?:provenance|st-1)\.mjs/)
+
+      const measure = steps(name).find((step) => step.includes(measureSteps.get(name)!)) ?? ''
+      expect(measure).toContain('ST1_CHROMIUM_SANDBOX: off')
     }
   })
 
@@ -467,8 +593,26 @@ exit 1
       expect(cleanup).toContain('"$HOME/Library/Preferences/com.mantu.asktoto.qa.plist"')
       expect(cleanup).toContain('"$HOME/Library/Saved Application State/com.mantu.asktoto.qa.savedState"')
       expect(cleanup).toContain('"$HOME/Library/Caches/com.mantu.asktoto.qa"')
-      expect(cleanup).toContain('security delete-generic-password -s "asktoto-qa Safe Storage" || true')
+      expect(cleanup).not.toContain('security delete-generic-password')
+
+      const keychainProbe = steps(name).find((step) => step.includes('name: Prove QA identity did not touch the login keychain')) ?? ''
+      expect(keychainProbe).toMatch(/^        if: always\(\)$/m)
+      expect(keychainProbe).toContain('security find-generic-password -s "asktoto-qa Safe Storage"')
+      expect(keychainProbe).not.toContain('delete-generic-password')
     }
+  })
+
+  it('pins the owner-runner denial profile without changing owner-account.sb', () => {
+    expect(ownerAccountProfile).not.toContain('/AI-Brain-build')
+    for (const path of ownerRunnerProfileDenials) {
+      expect(ownerRunnerProfile).toContain(path)
+    }
+    expect(ownerRunnerProfile).toContain('(param "WORKSPACE")')
+    expect(ownerRunnerProfile).toContain('(param "RUNNER_TEMP")')
+    expect(ownerRunnerProfile).toContain('(require-all')
+    expect(ownerRunnerProfile).toContain('(require-not (subpath (param "WORKSPACE")))')
+    expect(ownerRunnerProfile).toContain('(require-not (subpath (param "RUNNER_TEMP")))')
+    expect(ownerRunnerProfile).not.toContain('delete-generic-password')
   })
 })
 

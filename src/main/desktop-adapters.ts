@@ -4,8 +4,11 @@
  */
 
 import { execFile, spawn } from 'node:child_process'
+import { mkdir, stat, writeFile } from 'node:fs/promises'
 import { win32 } from 'node:path'
+import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
+import { systemPreferences, webContents } from 'electron'
 import {
   WINDOWS_DESKTOP_EQUIVALENTS,
   type DesktopActionRequest,
@@ -40,6 +43,8 @@ const PHOTO_BOOTH_SHUTTER_SCRIPT =
   '    tell process "Photo Booth" to keystroke return\n' +
   '  end if\n' +
   'end tell'
+const OWNER_CAMERA_DIR_ENV = 'METIS_OWNER_CAMERA_DIR'
+const OWNER_CAMERA_WEBCONTENTS_ENV = 'METIS_OWNER_CAMERA_WEBCONTENTS_ID'
 
 type MacAppName = 'Notes' | 'Arc' | 'Photo Booth'
 type MacUrl = typeof GOOGLE_NORBERT_WIENER_URL | typeof X_URL
@@ -115,6 +120,74 @@ async function macOsascript(source: MacAppleScript): Promise<{ ok: boolean; deta
   const r = await run('/usr/bin/osascript', ['-e', source])
   if (!r.ok) return { ok: false, detail: r.stderr || 'osascript failed' }
   return { ok: true, detail: r.stdout.trim() || 'ok' }
+}
+
+async function ownerCameraDir(): Promise<string | null> {
+  const raw = process.env[OWNER_CAMERA_DIR_ENV]
+  if (!raw) return null
+  const dir = resolve(raw)
+  await mkdir(dir, { recursive: true, mode: 0o700 })
+  if (!(await stat(dir)).isDirectory()) throw new Error('owner camera output is not a directory')
+  return dir
+}
+
+async function macCaptureCameraFrame(dir: string): Promise<DesktopActionResult> {
+  const status = systemPreferences.getMediaAccessStatus('camera')
+  if (status !== 'granted') {
+    return fail('desktop.photo_booth_capture', `PRECONDITION: camera grant is ${status}`, { outcome: 'unsupported' })
+  }
+
+  const ownerId = Number(process.env[OWNER_CAMERA_WEBCONTENTS_ENV] || '')
+  const target = Number.isInteger(ownerId) && ownerId > 0 ? webContents.fromId(ownerId) : null
+  if (!target || target.isDestroyed()) {
+    return fail('desktop.photo_booth_capture', 'PRECONDITION: owner camera target window is unavailable', { outcome: 'unsupported' })
+  }
+
+  try {
+    const dataUrl = await target.executeJavaScript(`
+      (async () => {
+        const devices = await navigator.mediaDevices.enumerateDevices()
+        const cameras = devices.filter((device) => device.kind === 'videoinput')
+        if (!cameras.length) return { ok: false, reason: 'no-camera' }
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+        try {
+          const video = document.createElement('video')
+          video.autoplay = true
+          video.playsInline = true
+          video.srcObject = stream
+          await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('camera-frame-timeout')), 5000)
+            video.onloadedmetadata = () => {
+              video.play().then(() => {
+                requestAnimationFrame(() => {
+                  clearTimeout(timeout)
+                  resolve()
+                })
+              }, reject)
+            }
+          })
+          const canvas = document.createElement('canvas')
+          canvas.width = video.videoWidth || 320
+          canvas.height = video.videoHeight || 240
+          canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height)
+          return { ok: true, cameras: cameras.length, dataUrl: canvas.toDataURL('image/png') }
+        } finally {
+          for (const track of stream.getTracks()) track.stop()
+        }
+      })()
+    `, true) as { ok: true; cameras: number; dataUrl: string } | { ok: false; reason: string }
+    if (!dataUrl.ok) return fail('desktop.photo_booth_capture', `PRECONDITION: ${dataUrl.reason}`, { outcome: 'unsupported' })
+    const match = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl.dataUrl)
+    if (!match) return fail('desktop.photo_booth_capture', 'camera frame was not a PNG data URL')
+    const bytes = Buffer.from(match[1], 'base64')
+    if (bytes.length === 0) return fail('desktop.photo_booth_capture', 'camera frame was empty')
+    const file = join(dir, `owner-camera-${Date.now()}.png`)
+    await writeFile(file, bytes, { mode: 0o600 })
+    return okResult('desktop.photo_booth_capture', 'verified', `camera-count=${dataUrl.cameras}; bytes=${bytes.length}`)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'camera capture failed'
+    return fail('desktop.photo_booth_capture', message)
+  }
 }
 
 async function winOpenTarget(target: WindowsShellTarget): Promise<{ ok: boolean; detail: string }> {
@@ -213,6 +286,8 @@ async function executeMac(req: DesktopActionRequest): Promise<DesktopActionResul
         : fail(req.id, viaDefault.detail)
     }
     case 'desktop.photo_booth_capture': {
+      const dir = await ownerCameraDir()
+      if (dir) return macCaptureCameraFrame(dir)
       // Permission-gated by OS. Capture stays local — never sent to /v1/decide.
       const open = await macOpenApp('Photo Booth')
       if (!open.ok) return fail(req.id, open.detail, { preferredMissing: true })

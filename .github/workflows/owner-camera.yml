@@ -1,0 +1,89 @@
+name: Owner camera
+
+# Manual OD-63 lane for M2-0572. It runs only from main on the owner Mac runner, downloads the
+# named candidate DMG, verifies its sha256, grants only camera beyond the strict owner-runner sandbox,
+# and uploads content-free JSON. Its pull_request trigger registers the workflow only; the job never runs there.
+run-name: ${{ github.event_name == 'pull_request' && 'Owner camera (registration)' || format('Owner camera {0}', inputs.candidate_run) }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run:
+        description: qa-candidate.yml run id whose candidate-mac artifact is measured
+        required: true
+        type: string
+      mac_sha256:
+        description: sha256 of that run's Metis-*.dmg
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - .github/workflows/owner-camera.yml
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: owner-camera-${{ github.ref }}-${{ inputs.candidate_run }}
+  cancel-in-progress: false
+
+jobs:
+  camera:
+    name: Owner-runner approved camera row
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, metis-owner-mac]
+    timeout-minutes: 20
+    steps:
+      - name: Require main and candidate inputs before checkout
+        env:
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+          MAC_SHA256: ${{ inputs.mac_sha256 }}
+        run: |
+          test "$GITHUB_REF" = "refs/heads/main"
+          [[ "$CANDIDATE_RUN" =~ ^[0-9]+$ ]]
+          [[ "$MAC_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        env:
+          TMPDIR: ${{ runner.temp }}
+        with:
+          persist-credentials: false
+      - name: Prove owner-runner sandbox denies private state
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: bash scripts/hermetic/prove-owner-sandbox.sh
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        env:
+          TMPDIR: ${{ runner.temp }}
+        with:
+          node-version: 22.22.3
+      - name: Download candidate DMG
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+        run: |
+          mkdir -p candidate owner-camera
+          workflow="$(gh run view "$CANDIDATE_RUN" --repo "$GITHUB_REPOSITORY" --json workflowName --jq .workflowName)"
+          test "$workflow" = "QA candidate"
+          gh run download "$CANDIDATE_RUN" --repo "$GITHUB_REPOSITORY" --name candidate-mac --dir candidate
+      - name: Verify and run the approved camera action
+        env:
+          TMPDIR: ${{ runner.temp }}
+          OWNER_SANDBOX_PROFILE: owner-runner.sb
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+          MAC_SHA256: ${{ inputs.mac_sha256 }}
+        run: |
+          dmg="$(node scripts/qa/candidate-installer.mjs candidate "$MAC_SHA256" mac-dmg)"
+          # OD-63 sandbox diff: same M2-0538 owner-runner deny profile as ST-1, plus the candidate app's Camera device grant only.
+          bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/owner-camera.mjs \
+            --dmg "$dmg" \
+            --sha256 "$(printf '%s' "$MAC_SHA256" | tr 'A-F' 'a-f')" \
+            --candidate-run "$CANDIDATE_RUN" \
+            --out owner-camera
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: owner-camera-${{ inputs.candidate_run }}
+          path: owner-camera/
+          if-no-files-found: error
+          retention-days: 30
