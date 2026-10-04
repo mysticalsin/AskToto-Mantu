@@ -151,7 +151,7 @@ describe('capture WAV: command construction', () => {
     const sentences = englishSentences()
     expect(sentences.length).toBeGreaterThan(0)
     const { calls, run } = fakeTools()
-    buildCaptureWav({ sentences, run })
+    buildCaptureWav({ sentences, run, platform: 'darwin' })
     expect(calls.filter((c) => c.command === '/usr/bin/say').map((c) => c.args[3])).toEqual(sentences)
     expect(calls.filter((c) => c.command === '/usr/bin/afconvert')).toHaveLength(sentences.length)
   })
@@ -166,7 +166,7 @@ describe('capture WAV: command construction', () => {
 
   it('builds a 16-bit PCM mono WAV of 60-180 s with pauses', () => {
     const { run } = fakeTools()
-    const { wav, durationSeconds } = buildCaptureWav({ sentences: ['one', 'two'], run })
+    const { wav, durationSeconds } = buildCaptureWav({ sentences: ['one', 'two'], run, platform: 'darwin' })
     expect(durationSeconds).toBeGreaterThanOrEqual(MIN_SECONDS)
     expect(durationSeconds).toBeLessThanOrEqual(MAX_SECONDS)
     expect(wav.toString('latin1', 0, 4)).toBe('RIFF')
@@ -207,7 +207,7 @@ describe('capture WAV: command construction', () => {
   it('writes the WAV into the profile and reports its sha256 and duration', () => {
     const profile = tempDir()
     const { run } = fakeTools()
-    const out = writeCaptureWav(profile, { sentences: ['one'], run })
+    const out = writeCaptureWav(profile, { sentences: ['one'], run, platform: 'darwin' })
     expect(out.path).toBe(join(profile, CAPTURE_WAV_NAME))
     expect(out.sha256).toMatch(/^[0-9a-f]{64}$/)
     expect(readFileSync(out.path).length).toBeGreaterThan(44)
@@ -217,7 +217,7 @@ describe('capture WAV: command construction', () => {
   it('leaves the WAV readable by Chromium helper processes while still inside the profile', () => {
     const profile = tempDir()
     const { run } = fakeTools()
-    const out = writeCaptureWav(profile, { sentences: ['one'], run })
+    const out = writeCaptureWav(profile, { sentences: ['one'], run, platform: 'darwin' })
     expect(out.path.startsWith(profile)).toBe(true)
     const mode = statSync(out.path).mode & 0o777
     if (process.platform === 'win32') {

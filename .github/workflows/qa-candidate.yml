@@ -870,7 +870,7 @@ jobs:
           path: assets
       - name: Verify every byte against the provenance
         run: node scripts/qa/provenance.mjs verify provenance/provenance.json assets win-qa-identity
-      - name: Feed a WAV as the microphone, Listen, Stop, read the saved meeting
+      - name: Select the QA installer by provenance sha256
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -879,6 +879,13 @@ jobs:
           if ($null -eq $asset) { throw 'provenance has no win-qa-identity asset' }
           $installer = node scripts/qa/candidate-installer.mjs assets $asset.sha256 win-qa-identity
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "METIS_QA_INSTALLER=$installer" >> $env:GITHUB_ENV
+      - name: Feed a WAV as the microphone, Listen, Stop, read the saved meeting
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = $env:METIS_QA_INSTALLER
+          if ([string]::IsNullOrWhiteSpace($installer)) { throw 'METIS_QA_INSTALLER was not selected' }
           node scripts/qa/meeting/file-capture-smoke.mjs --installer $installer --platform win32 --out capture-report
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
