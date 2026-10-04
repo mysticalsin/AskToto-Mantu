@@ -31,13 +31,19 @@ const parkedCandidate = Object.freeze({
   processErrorObserved: false,
   parkElapsedMs: PARK_MS
 })
+const measuredAudit = Object.freeze({
+  observed: true, baselineComplete: true, baselineValid: true, finalComplete: true, finalValid: true,
+  freshProfile: true, startupAnchored: true, readinessAnchored: true, baselineRetained: true,
+  lengthNondecreasing: true, parkCovered: true, baselineRecordCount: 2, finalRecordCount: 2
+})
 const failing = Object.freeze({
   method: INDUCTION_METHOD,
   inductionStarted: true,
   beforeInduction: { captureWorks: true, category: 'ok' },
   afterInduction: { captureWorks: false, category: 'capture_unavailable' },
   afterPark: { captureWorks: false, category: 'capture_unavailable' },
-  candidateLivenessProof: parkedCandidate
+  candidateLivenessProof: parkedCandidate,
+  auditProof: measuredAudit
 })
 
 class OwnedCandidate extends EventEmitter {
@@ -74,6 +80,7 @@ type FlowOptions = {
   afterParkReady?: { observed: boolean; backgroundScreenReady: boolean | null }
   records?: unknown[]
   auditTexts?: readonly (string | Buffer | Error)[]
+  hideAdvanceMs?: number
 }
 
 function auditText(records: Record<string, unknown>[]) {
@@ -101,7 +108,8 @@ function flowFixture({
   clockFrozen = false,
   afterParkReady = { observed: true, backgroundScreenReady: false },
   records = [],
-  auditTexts
+  auditTexts,
+  hideAdvanceMs = 0
 }: FlowOptions = {}) {
   const clock = { elapsed: 0 }
   const waits: number[] = []
@@ -112,7 +120,7 @@ function flowFixture({
     if (!result) throw new Error('Unexpected probe invocation')
     return result
   })
-  const hide = vi.fn(async () => undefined)
+  const hide = vi.fn(async () => { clock.elapsed += hideAdvanceMs })
   const run = () => runCaptureGate({
     child,
     maxBgFailures: MAX_BG_FAILURES,
@@ -120,10 +128,16 @@ function flowFixture({
       if (connectFails) throw new Error('synthetic connection failure')
       return {}
     },
-    readAudit: () => readCaptureAudit('owned-capture-profile', () => {
+    readAudit: (phase?: string) => readCaptureAudit('owned-capture-profile', () => {
       const ordinal = auditReads++
-      const snapshot = auditTexts?.[ordinal] ?? (ordinal === 0 ? auditText(startupAudit()) : auditText([...startupAudit(), ...records as Record<string, unknown>[]]))
+      const stage = phase ?? (ordinal === 0 ? 'baseline' : 'final')
+      const selected = auditTexts ? stage === 'baseline' ? auditTexts[0] : stage === 'park'
+        ? auditTexts[auditTexts.length > 2 ? 1 : 0] : auditTexts[auditTexts.length - 1] : undefined
+      const currentRecords = stage === 'baseline' ? [] : stage === 'park'
+        ? records.filter((record) => Date.parse(String((record as { ts?: unknown }).ts)) <= INDUCTION_AT + clock.elapsed) : records
+      const snapshot = selected ?? (auditTexts ? undefined : auditText([...startupAudit(), ...currentRecords as Record<string, unknown>[]]))
       if (snapshot instanceof Error) throw snapshot
+      if (snapshot === undefined) throw new Error('Unexpected audit invocation')
       return Buffer.isBuffer(snapshot) ? Buffer.from(snapshot) : Buffer.from(snapshot, 'utf8')
     }),
     probe: () => captureProbe(spawnProbe as unknown as typeof spawnSync),
@@ -196,6 +210,18 @@ describe('capture-gate actual audit measurement', () => {
     expect(await flowFixture({ auditTexts: [baseline, final] }).run()).toMatchObject({ outcome: 'PRECONDITION', reasons: ['audit_unproven'] })
   })
 
+  it('rejects a grown trail truncated back to its still-valid startup baseline', async () => {
+    const baseline = auditText(startupAudit())
+    const grown = auditText([...startupAudit(), failedAt(6_000)])
+    expect(await flowFixture({ auditTexts: [baseline, grown, baseline] }).run()).toMatchObject({ outcome: 'PRECONDITION', reasons: ['audit_unproven'] })
+  })
+
+  it('does not omit newly appended failure rows whose timestamps precede the induction', async () => {
+    expect(await flowFixture({ hideAdvanceMs: 1_000, records: [failedAt(500)] }).run()).toMatchObject({
+      outcome: 'PRECONDITION', reasons: ['audit_unproven']
+    })
+  })
+
   it('accepts continuous, readable anchored zero-failure audit coverage and publishes only counts and booleans', async () => {
     const fixture = flowFixture()
     const report = await fixture.run()
@@ -209,7 +235,7 @@ describe('capture-gate actual audit measurement', () => {
         lengthNondecreasing: true, parkCovered: true, baselineRecordCount: 2, finalRecordCount: 2
       } }
     })
-    expect(fixture.auditReads()).toBe(2)
+    expect(fixture.auditReads()).toBeGreaterThan(2)
     expect(JSON.stringify(report)).not.toMatch(/synthetic audit content|owned-capture-profile|GENESIS|privateMetadata|exitedAtMs|baselineAt/i)
   })
 })
@@ -376,11 +402,12 @@ function suspendedAt(ms: number, failures = CAPTURE_BACKOFF_CONSTANTS.BACKOFF_LA
 }
 
 function verdict(records: unknown[]) {
+  const allRecords = [...startupAudit(), ...records]
   return captureGateVerdict({
-    records,
+    records: allRecords,
     inductionAtMs: INDUCTION_AT,
     readinessProof: ready,
-    failingStateProof: failing,
+    failingStateProof: { ...failing, auditProof: { ...measuredAudit, finalRecordCount: allRecords.length } },
     maxBgFailures: MAX_BG_FAILURES
   })
 }
@@ -492,9 +519,9 @@ describe('capture-gate oracle', () => {
     expect(exitCodeForOutcome('FAIL')).toBe(1)
     expect(exitCodeForOutcome('PRECONDITION')).toBe(2)
     const report = reportFor({
-      records: [failedAt(0), suspendedAt(90_000)],
+      records: [...startupAudit(), failedAt(0), suspendedAt(90_000)],
       readinessProof: ready,
-      failingStateProof: failing,
+      failingStateProof: { ...failing, auditProof: { ...measuredAudit, finalRecordCount: 4 } },
       inductionAtMs: INDUCTION_AT,
       maxBgFailures: MAX_BG_FAILURES,
       backgroundScreenReadyAfterPark: { observed: true, backgroundScreenReady: false }
@@ -506,7 +533,7 @@ describe('capture-gate oracle', () => {
       reasons: [],
       inductionMethod: INDUCTION_METHOD,
       readinessProof: ready,
-      failingStateProof: failing,
+      failingStateProof: { ...failing, auditProof: { ...measuredAudit, finalRecordCount: 4 } },
       candidateLivenessProof: parkedCandidate,
       bgScreenCaptureFailedTotal: 1,
       bgScreenCaptureFailedFinal15Minutes: 0,

@@ -51,7 +51,10 @@ function validCaptureReport() {
     exitedBeforeParkComplete: false, processErrorObserved: false, parkElapsedMs: captureParkMs
   }
   const report = captureReportFor({
-    records: [],
+    records: [
+      { ts: '2026-10-04T12:00:00.000Z', event: 'app.started' },
+      { ts: '2026-10-04T12:00:00.000Z', event: 'app.renderer.ready' }
+    ],
     readinessProof: { observed: true, backgroundScreenReady: true, localReady: true },
     failingStateProof: {
       method: 'windows-lock-workstation', inductionStarted: true,

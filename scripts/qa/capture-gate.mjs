@@ -14,6 +14,7 @@
  * Exit 0 PASS · 1 FAIL · 2 PRECONDITION.
  */
 import { spawn, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -22,7 +23,6 @@ import { pathToFileURL } from 'node:url'
 import { CAPTURE_BACKOFF_CONSTANTS, MAX_BG_FAILURES, readCaptureBackoffConstants } from './lib/capture-backoff-constants.mjs'
 import { LOCAL_LLM_SETTINGS } from './lib/local-llm-settings.mjs'
 import { attach, findPage, freeLoopbackPort, waitForChildExit } from './lib/app-driver.mjs'
-import { parseAuditLog } from './golden-flows/smoke-support.mjs'
 import { launchEnv } from './sidecar-boot-reaper.mjs'
 
 export { CAPTURE_BACKOFF_CONSTANTS, MAX_BG_FAILURES, readCaptureBackoffConstants }
@@ -35,7 +35,7 @@ export const PROBE_SETTLE_MS = 2_000
 export const POLL_MS = 1_000
 export const REPORT_SCHEMA = 1
 
-const FIXED_PRECONDITION_REASONS = Object.freeze(['readiness_unproven', 'failing_state_unproven', 'candidate_liveness_unproven'])
+const FIXED_PRECONDITION_REASONS = Object.freeze(['readiness_unproven', 'failing_state_unproven', 'candidate_liveness_unproven', 'audit_unproven'])
 const FIXED_FAILURE_REASONS = Object.freeze(['bg_screen_failed_total', 'bg_screen_failed_final_tail', 'candidate_exited'])
 const CAPTURE_OK = 'METIS_CAPTURE_OK'
 const CAPTURE_UNAVAILABLE = 'METIS_CAPTURE_UNAVAILABLE'
@@ -119,6 +119,22 @@ function candidateParkProved(proof, parkMs) {
   )
 }
 
+function auditMetadataValid(record) {
+  const atMs = recordMs(record)
+  return record !== null && typeof record === 'object' && !Array.isArray(record) &&
+    typeof record.event === 'string' && record.event.length > 0 && typeof record.ts === 'string' &&
+    atMs !== null && new Date(atMs).toISOString() === record.ts
+}
+
+function auditMeasurementProved(proof, records) {
+  const flags = ['observed', 'baselineComplete', 'baselineValid', 'finalComplete', 'finalValid', 'freshProfile',
+    'startupAnchored', 'readinessAnchored', 'baselineRetained', 'lengthNondecreasing', 'parkCovered']
+  return flags.every((key) => proof?.[key] === true) &&
+    Number.isSafeInteger(proof?.baselineRecordCount) && proof.baselineRecordCount >= 2 &&
+    Number.isSafeInteger(proof?.finalRecordCount) && proof.finalRecordCount >= proof.baselineRecordCount &&
+    proof.finalRecordCount === records.length && records.every(auditMetadataValid)
+}
+
 function unmeasuredVerdict(records, reason, outcome = 'PRECONDITION') {
   return {
     outcome,
@@ -146,6 +162,9 @@ export function captureGateVerdict({
   }
   if (!candidateParkProved(candidateProof, parkMs)) {
     return unmeasuredVerdict(records, 'candidate_liveness_unproven')
+  }
+  if (!auditMeasurementProved(failingStateProof?.auditProof, records)) {
+    return unmeasuredVerdict(records, 'audit_unproven')
   }
 
   const finalTailStartMs = inductionAtMs + parkMs - finalTailMs
@@ -277,16 +296,91 @@ exit 1
 }
 
 export function readCaptureAudit(profile, readBytes = (path) => readFileSync(path)) {
+  let bytes = null
+  let text = ''
+  let complete = false
   try {
-    const text = readBytes(join(profile, 'logs', 'audit.log')).toString('utf8')
-    return { readable: true, text, records: parseAuditLog(text) }
+    bytes = Buffer.from(readBytes(join(profile, 'logs', 'audit.log')))
+    complete = bytes.length > 0 && bytes[bytes.length - 1] === 10
+    text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)
+    if (!complete) return { readable: true, complete, valid: false, bytes, text, records: [] }
+    const records = []
+    let previous = 'GENESIS'
+    let previousAtMs = Number.NEGATIVE_INFINITY
+    for (const raw of text.split('\n').slice(0, -1)) {
+      const line = raw.replace(/\r$/, '')
+      const record = JSON.parse(line)
+      const atMs = recordMs(record)
+      if (!auditMetadataValid(record) || record.seq !== records.length + 1 || record.prev !== previous || atMs < previousAtMs) {
+        return { readable: true, complete, valid: false, bytes, text, records: [] }
+      }
+      records.push(record)
+      previous = createHash('sha256').update(line, 'utf8').digest('hex')
+      previousAtMs = atMs
+    }
+    return { readable: true, complete, valid: records.length > 0, bytes, text, records }
   } catch {
-    return { readable: false, text: '', records: [] }
+    return { readable: bytes !== null, complete, valid: false, bytes, text, records: [] }
   }
 }
 
 function readRecords(profile) {
   return readCaptureAudit(profile).records
+}
+
+function auditAnchors(snapshot, launchAtMs, observedAtMs) {
+  const records = snapshot?.valid === true ? snapshot.records : []
+  const started = records.findIndex((record) => record.event === 'app.started')
+  const ready = records.findIndex((record, index) => index > started && record.event === 'app.renderer.ready')
+  const freshProfile = Number.isFinite(launchAtMs) && Number.isFinite(observedAtMs) && observedAtMs >= launchAtMs &&
+    records.length > 0 && records.every((record) => recordMs(record) >= launchAtMs && recordMs(record) <= observedAtMs) &&
+    records.filter((record) => record.event === 'app.started').length === 1
+  return { freshProfile, startupAnchored: freshProfile && started >= 0, readinessAnchored: freshProfile && started >= 0 && ready > started }
+}
+
+function auditCoverageProof(baseline, final, anchors, {
+  launchAtMs, inductionAtMs, finalAtMs, baselineAtMonotonicMs, inductionAtMonotonicMs, finalAtMonotonicMs, parkStartedAtMs, candidateLivenessProof, progress
+}) {
+  const baselineRetained = Buffer.isBuffer(baseline?.bytes) && Buffer.isBuffer(final?.bytes) &&
+    final.bytes.length >= baseline.bytes.length && final.bytes.subarray(0, baseline.bytes.length).equals(baseline.bytes)
+  const lengthNondecreasing = Buffer.isBuffer(baseline?.bytes) && Buffer.isBuffer(final?.bytes) && final.bytes.length >= baseline.bytes.length
+  const finalAnchors = auditAnchors(final, launchAtMs, finalAtMs)
+  const failureTimeline = bgScreenCaptureFailed(final?.records?.slice(baseline?.records?.length ?? 0) ?? [])
+    .every((record) => recordMs(record) >= inductionAtMs)
+  return {
+    observed: progress.readable && baseline?.readable === true && final?.readable === true,
+    baselineComplete: baseline?.complete === true,
+    baselineValid: baseline?.valid === true,
+    finalComplete: final?.complete === true,
+    finalValid: progress.valid && final?.valid === true && finalAnchors.freshProfile && failureTimeline,
+    freshProfile: anchors.freshProfile,
+    startupAnchored: anchors.startupAnchored,
+    readinessAnchored: anchors.readinessAnchored,
+    baselineRetained: progress.retained && baselineRetained,
+    lengthNondecreasing: progress.nondecreasing && lengthNondecreasing,
+    parkCovered: [baselineAtMonotonicMs, inductionAtMonotonicMs, finalAtMonotonicMs, parkStartedAtMs].every(Number.isFinite) &&
+      baselineAtMonotonicMs <= inductionAtMonotonicMs && finalAtMonotonicMs >= parkStartedAtMs + PARK_MS &&
+      candidateParkProved(candidateLivenessProof, PARK_MS),
+    baselineRecordCount: baseline?.records?.length ?? 0,
+    finalRecordCount: final?.records?.length ?? 0
+  }
+}
+
+function auditProgress(baseline) {
+  let previous = baseline
+  const proof = { readable: baseline?.readable === true, valid: baseline?.valid === true && baseline?.complete === true, retained: true, nondecreasing: true }
+  return {
+    proof,
+    observe: (snapshot) => {
+      proof.readable &&= snapshot?.readable === true
+      proof.valid &&= snapshot?.valid === true && snapshot?.complete === true
+      const comparable = Buffer.isBuffer(previous?.bytes) && Buffer.isBuffer(snapshot?.bytes)
+      proof.nondecreasing &&= comparable && snapshot.bytes.length >= previous.bytes.length
+      proof.retained &&= comparable && snapshot.bytes.length >= previous.bytes.length &&
+        snapshot.bytes.subarray(0, previous.bytes.length).equals(previous.bytes)
+      previous = snapshot
+    }
+  }
 }
 
 async function waitForTotoPage(port) {
@@ -400,17 +494,25 @@ export async function runCaptureGate({
   readAfterPark = backgroundScreenReadyAfterPark,
   now = Date.now,
   monotonicNow = () => performance.now(),
-  wait = (ms) => sleep(ms)
+  wait = (ms) => sleep(ms),
+  launchAtMs = now(),
+  onInductionAt = (atMs) => {}
 }) {
   const lifetime = observeOwnedCandidate(child, monotonicNow)
   try {
     const page = await connect()
     const beforeProbe = probe()
     const ready = await proveReady(page)
-    readAudit()
+    const baselineAudit = readAudit('baseline')
+    const baselineAtMs = now()
+    const baselineAtMonotonicMs = monotonicNow()
+    const baselineAnchors = auditAnchors(baselineAudit, launchAtMs, baselineAtMs)
+    const continuity = auditProgress(baselineAudit)
     if (beforeProbe.ok === true) await hide(page)
 
     const inductionAtMs = now()
+    onInductionAt(inductionAtMs)
+    const inductionAtMonotonicMs = monotonicNow()
     const aliveAtInduction = lifetime.snapshot().alive
     const induction = induce()
     await wait(PROBE_SETTLE_MS)
@@ -431,6 +533,7 @@ export async function runCaptureGate({
       lastParkAtMs = atMs
       parkElapsedMs = atMs - parkStartedAtMs
       if (parkElapsedMs >= PARK_MS || lifetime.snapshot().alive !== true) break
+      continuity.observe(readAudit('park'))
       await wait(Math.min(POLL_MS, PARK_MS - parkElapsedMs))
       waitedForPark = true
     }
@@ -438,6 +541,11 @@ export async function runCaptureGate({
     await wait(0)
     const afterParkProbe = probe()
     const afterParkReady = await readAfterPark(page)
+    await wait(0)
+    const audit = readAudit('final')
+    const finalAtMs = now()
+    const finalAtMonotonicMs = monotonicNow()
+    continuity.observe(audit)
     await wait(0)
     const afterPark = lifetime.snapshot()
     const candidateLivenessProof = {
@@ -451,17 +559,28 @@ export async function runCaptureGate({
       processErrorObserved: afterPark.processErrorObserved,
       parkElapsedMs
     }
+    const auditProof = auditCoverageProof(baselineAudit, audit, baselineAnchors, {
+      launchAtMs,
+      inductionAtMs,
+      finalAtMs,
+      baselineAtMonotonicMs,
+      inductionAtMonotonicMs,
+      finalAtMonotonicMs,
+      parkStartedAtMs,
+      candidateLivenessProof,
+      progress: continuity.proof
+    })
     const failingStateProof = {
       method: INDUCTION_METHOD,
       inductionStarted: induction?.ok === true && induction?.category === 'ok',
       beforeInduction: captureState(beforeProbe),
       afterInduction: captureState(afterInductionProbe),
       afterPark: captureState(afterParkProbe),
-      candidateLivenessProof
+      candidateLivenessProof,
+      auditProof
     }
-    const audit = readAudit()
     return buildReport({
-      records: Array.isArray(audit) ? audit : audit.records,
+      records: audit.records,
       readinessProof: ready,
       failingStateProof,
       inductionAtMs,
@@ -490,6 +609,7 @@ async function main() {
   let inductionAtMs = Date.now()
 
   try {
+    const launchAtMs = Date.now()
     child = spawn(args.app, [`--remote-debugging-port=${port}`], { env, stdio: 'ignore' })
     child.once('error', () => {})
     report = await runCaptureGate({
@@ -500,10 +620,8 @@ async function main() {
         return page
       },
       readAudit: () => readCaptureAudit(profile),
-      now: () => {
-        inductionAtMs = Date.now()
-        return inductionAtMs
-      }
+      launchAtMs,
+      onInductionAt: (atMs) => { inductionAtMs = atMs }
     })
   } catch (error) {
     const reason = error instanceof Precondition ? 'readiness_unproven' : 'failing_state_unproven'
