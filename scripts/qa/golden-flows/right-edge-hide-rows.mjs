@@ -301,17 +301,21 @@ async function rightEdgePageState(page) {
 
 /**
  * Runs inside the overlay page (page.evaluate(pinnedBridgeCall, [method, args])): awaits
- * window.toto[method](...args) while a global Set pins the bridged promise for Playwright.
+ * window.toto[method](...args) while a global Set pins both the app bridge promise and the outer
+ * evaluation task. CDP can collect an unreferenced awaited promise on slow runners.
  */
-export async function pinnedBridgeCall([method, args]) {
+export function pinnedBridgeCall([method, args]) {
   const pending = (globalThis.__metisSmokeBridgePending ??= new Set())
   const call = window.toto[method](...args)
   pending.add(call)
-  try {
-    await call
-  } finally {
-    pending.delete(call)
-  }
+  const task = Promise.resolve(call)
+    .then(() => undefined)
+    .finally(() => {
+      pending.delete(call)
+      pending.delete(task)
+    })
+  pending.add(task)
+  return task
 }
 
 /** Content-free evidence: geometry kind and chrome flags only, never page text. */
