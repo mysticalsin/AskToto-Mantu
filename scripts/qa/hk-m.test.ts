@@ -31,23 +31,39 @@ import {
 vi.mock('electron')
 
 describe('HK-M temp directory cleanup', () => {
-  it('requests retries and does not turn a one-off ENOTEMPTY into a failure', () => {
+  it('requests retries so a transient ENOTEMPTY cleanup still leaves the row result passing', () => {
     const warnings: { code: string; message: string }[] = []
-    let calls = 0
+    let attempts = 0
     const options: unknown[] = []
     const remove = (_dir: unknown, opts?: unknown) => {
       options.push(opts)
-      calls += 1
-      if (calls === 1) throw Object.assign(new Error('ENOTEMPTY: directory not empty'), { code: 'ENOTEMPTY' })
+      const retries = typeof opts === 'object' && opts !== null && 'maxRetries' in opts ? Number(opts.maxRetries) : 0
+      while (attempts <= retries) {
+        attempts += 1
+        if (attempts === 1) continue
+        return
+      }
+      throw Object.assign(new Error('ENOTEMPTY: directory not empty'), { code: 'ENOTEMPTY' })
     }
 
-    expect(removeTempDir('/tmp/metis-hk-m-x', warnings, remove)).toBe(false)
     expect(removeTempDir('/tmp/metis-hk-m-x', warnings, remove)).toBe(true)
+    expect(attempts).toBe(2)
     expect(options[0]).toEqual({ recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
-    expect(warnings).toEqual([{ code: 'ENOTEMPTY', message: 'ENOTEMPTY: directory not empty' }])
+    expect(warnings).toEqual([])
 
     const rows = [{ scenario: 'idle', cycle: 1, status: 'PASS' }]
     expect(reportResultForRows(rows)).toBe('pass')
+  })
+
+  it('records a persistent cleanup failure as a warning without changing the row result', () => {
+    const warnings: { code: string; message: string }[] = []
+    const remove = () => {
+      throw Object.assign(new Error('ENOTEMPTY: directory not empty'), { code: 'ENOTEMPTY' })
+    }
+
+    expect(removeTempDir('/tmp/metis-hk-m-x', warnings, remove)).toBe(false)
+    expect(warnings).toEqual([{ code: 'ENOTEMPTY', message: 'ENOTEMPTY: directory not empty' }])
+    expect(reportResultForRows([{ scenario: 'idle', cycle: 1, status: 'PASS' }])).toBe('pass')
   })
 
   it('still reports a real survivor as a failure', () => {
