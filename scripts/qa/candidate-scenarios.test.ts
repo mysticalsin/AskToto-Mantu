@@ -82,6 +82,7 @@ describe('the scenario registry', () => {
       'ex-suite',
       'stall-sampler',
       'idle-soak',
+      'meeting-history',
       'sidecar-boot-reaper',
       'packaged-lifecycle',
       'renderer-kill'
@@ -287,6 +288,63 @@ describe('the scenario registry', () => {
     expect(win.laneReportFields).toEqual(mac.laneReportFields)
   })
 
+  it('declares meeting-history on macOS, installing the QA zip on a Bar profile with the hosted long-run timeout', () => {
+    const scenario = SCENARIOS['meeting-history']
+    expect(scenario.ticket).toBe('M2-0497')
+    expect(scenario.qaOnlyHook).toBe(true)
+    expect(scenario.exits).toEqual({ 0: 'PASS', 1: 'FAIL', 2: 'PRECONDITION' })
+    expect(Object.keys(scenario.platforms)).toEqual(['mac'])
+    const mac = scenario.platforms.mac
+    expect(mac).toMatchObject({
+      variant: 'mac-qa-identity',
+      artifact: 'candidate-mac-qa-identity',
+      script: 'scripts/qa/meeting/meeting-history.mjs',
+      report: 'meeting-history-report.json',
+      profileLayout: 'bar',
+      timeoutMinutes: 110,
+      stepTimeoutMinutes: 95,
+      outcomeFromReportField: 'verdict',
+      growthRuleFromReport: true,
+      disclosure: 'qa-identity bytes of the same candidate run'
+    })
+    expect(existsSync(join(root, mac.script))).toBe(true)
+    expect(VARIANTS['mac-qa-identity'].assets('1.0.0')).toEqual(['Metis-QA-1.0.0.zip'])
+    expect(resolveScenario({ scenario: 'meeting-history', sha256: { mac: MAC_SHA, win: '' } })).toEqual({
+      mac: { variant: 'mac-qa-identity', artifact: 'candidate-mac-qa-identity', sha256: MAC_SHA, timeoutMinutes: 110, stepTimeoutMinutes: 95 }
+    })
+    expect(() => resolveScenario({ scenario: 'meeting-history', sha256: { mac: MAC_SHA, win: WIN_SHA } })).toThrow(
+      /win_sha256 is set, but meeting-history does not run on win/
+    )
+  })
+
+  it('runs meeting-history with the QA zip, selected sha256, generated Bar profile and 60 plus 10 minute windows', () => {
+    const argv = scenarioCommand({
+      scenario: 'meeting-history',
+      platform: 'mac',
+      installer: 'assets/Metis-QA-1.0.0.zip',
+      sha256: MAC_SHA,
+      outDir: 'candidate-scenario'
+    })
+    expect(argv).toEqual([
+      'scripts/qa/meeting/meeting-history.mjs',
+      '--zip',
+      'assets/Metis-QA-1.0.0.zip',
+      '--sha256',
+      MAC_SHA,
+      '--profile',
+      'candidate-scenario/profile',
+      '--minutes',
+      '60',
+      '--post-minutes',
+      '10',
+      '--out',
+      'candidate-scenario'
+    ])
+    expect(() =>
+      scenarioCommand({ scenario: 'meeting-history', platform: 'mac', installer: '/tmp/Metis-QA.zip', sha256: MAC_SHA, outDir: 'candidate-scenario' })
+    ).toThrow(/repository-relative/)
+  })
+
   it('requires the sha256 inputs a scenario needs and refuses any it does not use', () => {
     expect(resolveScenario({ scenario: 'fault-fatal-relaunch', sha256: { mac: ` ${MAC_SHA.toUpperCase()}\n`, win: '' } })).toEqual({
       mac: { variant: 'mac-qa-identity', artifact: 'candidate-mac-qa-identity', sha256: MAC_SHA, timeoutMinutes: 60, stepTimeoutMinutes: 40 }
@@ -304,6 +362,7 @@ describe('the scenario registry', () => {
       mac: { variant: 'mac', artifact: 'candidate-mac', sha256: IDLE_SHA, timeoutMinutes: 355, stepTimeoutMinutes: 340 },
       win: { variant: 'win', artifact: 'candidate-win', sha256: WIN_SHA, timeoutMinutes: 355, stepTimeoutMinutes: 340 }
     })
+    expect(() => resolveScenario({ scenario: 'meeting-history', sha256: { mac: '' } })).toThrow(/mac_sha256 is required/)
     expect(() => resolveScenario({ scenario: 'hk-m', sha256: { mac: MAC_SHA } })).toThrow(/Unknown scenario "hk-m"/)
     expect(() => resolveScenario({ scenario: 'toString', sha256: { mac: MAC_SHA } })).toThrow(/Unknown scenario/)
   })
@@ -561,6 +620,34 @@ describe('the fresh profile', () => {
     }
   })
 
+  it('builds the meeting-history representative Bar profile and refuses a stale one', () => {
+    const cwd = process.cwd()
+    const scratch = mkdtempSync(join(tmpdir(), 'candidate-scenarios-meeting-profile-'))
+    try {
+      process.chdir(scratch)
+      const manifest = prepareProfile({ scenario: 'meeting-history', platform: 'mac', appDataDir: appData })
+      expect(manifest).toBe(join(scratch, 'candidate-scenario', 'profile', 'resource-census-profile.json'))
+      const parsed = JSON.parse(readFileSync(manifest as string, 'utf8'))
+      expect(parsed).toMatchObject({
+        profileKind: 'representative-synthetic',
+        layout: 'bar',
+        localLlm: { enabled: true, modelId: 'qwen3.5-0.8b' }
+      })
+      expect(() => prepareProfile({ scenario: 'meeting-history', platform: 'mac', appDataDir: appData })).toThrow(
+        /meeting-history profile directory already exists/
+      )
+    } finally {
+      process.chdir(cwd)
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses a stale QA userData directory before building the meeting-history profile', () => {
+    mkdirSync(join(appData, 'asktoto-qa'))
+    expect(() => prepareProfile({ scenario: 'meeting-history', platform: 'mac', appDataDir: appData })).toThrow(
+      /asktoto-qa userData directory already exists/
+    )
+  })
 
   it('refuses a QA userData directory that already exists', () => {
     mkdirSync(join(appData, 'asktoto-qa'))
@@ -1064,6 +1151,49 @@ describe('lane.json', () => {
     expect(lane.outcome).toBe('INCOMPLETE')
     expect(lane.detail).toBe('parked coverage below 95%')
     expect(lane.parkedCoverage).toBe(0.9)
+  })
+
+  it('records meeting-history QA-identity disclosure and the pre-registered growth rule pin from the report', () => {
+    const meetingArgv = scenarioCommand({
+      scenario: 'meeting-history',
+      platform: 'mac',
+      installer: 'assets/Metis-QA-1.0.0.zip',
+      sha256: MAC_SHA,
+      outDir: 'candidate-scenario'
+    })
+    const meeting = laneRecord({
+      scenario: 'meeting-history',
+      platform: 'mac',
+      env,
+      provenance,
+      candidateRun: '4242',
+      installer: 'assets/Metis-QA-1.0.0.zip',
+      sha256: MAC_SHA,
+      argv: meetingArgv,
+      exitCode: 0,
+      detail: '',
+      reportWritten: true,
+      reportData: {
+        verdict: 'PASS',
+        growth: {
+          outcome: 'PASS',
+          rule: { id: 'MEETING-GROWTH-1', rulesSha256: 'c'.repeat(64), file: 'growth-rule.mjs', fileSha256: 'd'.repeat(64) }
+        }
+      }
+    })
+    expect(meeting).toMatchObject({
+      scenario: 'meeting-history',
+      ticket: 'M2-0497',
+      variant: 'mac-qa-identity',
+      installer: 'Metis-QA-1.0.0.zip',
+      artifact_sha256: MAC_SHA,
+      disclosure: 'qa-identity bytes of the same candidate run',
+      outcome: 'PASS',
+      report: 'meeting-history-report.json',
+      rule: { id: 'MEETING-GROWTH-1', rulesSha256: 'c'.repeat(64) },
+      command: `node scripts/qa/meeting/meeting-history.mjs --zip assets/Metis-QA-1.0.0.zip --sha256 ${MAC_SHA} --profile candidate-scenario/profile --minutes 60 --post-minutes 10 --out candidate-scenario`
+    })
+    expect(contentProblems(JSON.stringify(meeting), { account: 'runner' })).toEqual([])
   })
 
   it('records packaged-lifecycle row verdicts and fails when a required RV row is not PASS', () => {

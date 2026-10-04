@@ -19,7 +19,7 @@
 import { execFileSync, spawnSync } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, isAbsolute, join, relative } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { writeRepresentativeProfile } from './census/profile.mjs'
 import { LOCAL_LLM_SETTINGS } from './lib/local-llm-settings.mjs'
@@ -182,6 +182,43 @@ export const SCENARIOS = Object.freeze({
           'memory',
           'modelState'
         ])
+      })
+    })
+  }),
+  // M2-0497: 60 min file-fed meeting plus repeated History use, followed by the 10 min post-meeting
+  // census and MEETING-GROWTH-1 judgment. The History driver needs a QA-only hook, so the lane installs
+  // the QA-identity zip from the same candidate run and discloses that the measured bytes are not the
+  // promotable DMG.
+  'meeting-history': Object.freeze({
+    ticket: 'M2-0497',
+    qaOnlyHook: true,
+    exits: Object.freeze({ 0: 'PASS', 1: 'FAIL', 2: 'PRECONDITION' }),
+    platforms: Object.freeze({
+      mac: Object.freeze({
+        variant: 'mac-qa-identity',
+        artifact: 'candidate-mac-qa-identity',
+        script: 'scripts/qa/meeting/meeting-history.mjs',
+        args: ({ installer, sha256, report }) => [
+          '--zip',
+          installer,
+          '--sha256',
+          sha256,
+          '--profile',
+          'candidate-scenario/profile',
+          '--minutes',
+          '60',
+          '--post-minutes',
+          '10',
+          '--out',
+          dirname(report)
+        ],
+        report: 'meeting-history-report.json',
+        profileLayout: 'bar',
+        timeoutMinutes: 110,
+        stepTimeoutMinutes: 95,
+        outcomeFromReportField: 'verdict',
+        growthRuleFromReport: true,
+        disclosure: 'qa-identity bytes of the same candidate run'
       })
     })
   }),
@@ -419,14 +456,19 @@ export function candidateRunProblems(run, candidateRun) {
 export function prepareProfile({ scenario, platform, appDataDir }) {
   const target = platformEntry(scenario, platform)
   if (target.isolatedProfiles) return null
+  const name = PROFILE_DIRS[target.variant]
   if (target.profileLayout) {
+    if (name) {
+      if (!appDataDir) throw new Error(`No fresh-profile location is declared for ${platform}.`)
+      const userData = join(appDataDir, name)
+      if (existsSync(userData)) throw new Error(`The ${name} userData directory already exists; the profile is not fresh.`)
+    }
     const profile = join(process.cwd(), 'candidate-scenario', 'profile')
-    if (existsSync(profile)) throw new Error('The idle-soak profile directory already exists; the profile is not fresh.')
+    if (existsSync(profile)) throw new Error(`The ${scenario} profile directory already exists; the profile is not fresh.`)
     writeRepresentativeProfile(profile, undefined, { layout: target.profileLayout })
     return join(profile, 'resource-census-profile.json')
   }
   if (!appDataDir) throw new Error(`No fresh-profile location is declared for ${platform}.`)
-  const name = PROFILE_DIRS[target.variant]
   if (!name) throw new Error(`No userData directory is declared for variant ${target.variant}.`)
   const profile = join(appDataDir, name)
   if (existsSync(profile)) throw new Error(`The ${name} userData directory already exists; the profile is not fresh.`)
@@ -546,6 +588,7 @@ export function assertCandidateProvenance(provenance, candidateRun) {
  *   exitCode: number | null,
  *   detail: string,
  *   reportWritten: boolean,
+ *   reportData?: any,
  *   reportAssessment?: any
  * }} input
  */
@@ -571,12 +614,23 @@ export function laneRecord({
     ...(scenarioEntry(scenario).reportAssessment && !reportWritten ? [`${target.report} was not written.`] : []),
     ...(reportAssessment?.problems ?? [])
   ]
-  const reportOutcome = target.outcomeFromReport && typeof reportData?.outcome === 'string' ? reportData.outcome : mappedOutcome
+  const reportOutcome =
+    target.outcomeFromReportField && typeof reportData?.[target.outcomeFromReportField] === 'string'
+      ? reportData[target.outcomeFromReportField]
+      : target.outcomeFromReport && typeof reportData?.outcome === 'string'
+        ? reportData.outcome
+        : mappedOutcome
   const outcome = reportOutcome === 'PASS' && assessmentProblems.length ? 'FAIL' : reportOutcome
   const host = RUNNER_LABELS[platform]
   const reportFields = target.laneReportFields
     ? Object.fromEntries(target.laneReportFields.filter((key) => reportData && Object.hasOwn(reportData, key)).map((key) => [key, reportData[key]]))
     : {}
+  if (target.growthRuleFromReport && reportData?.growth?.rule) {
+    reportFields.rule = {
+      id: reportData.growth.rule.id,
+      rulesSha256: reportData.growth.rule.rulesSha256
+    }
+  }
   const notCovered = [
     ...(target.notCovered ?? []).map(({ row, reason }) => ({ row, reason })),
     ...(reportAssessment?.notCovered ?? [])
@@ -592,6 +646,7 @@ export function laneRecord({
     variant: target.variant,
     installer: basename(installer),
     artifact_sha256: sha256,
+    ...(target.disclosure ? { disclosure: target.disclosure } : {}),
     ci_run_id: Number(env.GITHUB_RUN_ID),
     environment: { kind: 'hosted-runner', host },
     command: ['node', ...argv].join(' '),
