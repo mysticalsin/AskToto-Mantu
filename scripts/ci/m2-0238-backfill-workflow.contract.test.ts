@@ -9,6 +9,7 @@ const stalePrivateLedgerWording = ['private', 'program', 'repository'].join(' ')
 type Step = {
   name?: string
   uses?: string
+  usesVersionComment?: string
   if?: string
   with: Record<string, string>
   run?: string
@@ -34,14 +35,24 @@ function workflowSteps(source: string): Step[] {
       inWith = false
       runLines = undefined
       if (stepStart[1]) current.name = stepStart[1]
-      if (stepStart[2]) current.uses = stepStart[2]
+      if (stepStart[2]) {
+        const parsedUses = parseUses(stepStart[2])
+        current.uses = parsedUses.ref
+        current.usesVersionComment = parsedUses.versionComment
+      }
       continue
     }
     if (!current) continue
 
     const key = /^ {8}(name|uses|if): (.*)$/.exec(line)
     if (key) {
-      current[key[1] as 'name' | 'uses' | 'if'] = key[2]
+      if (key[1] === 'uses') {
+        const parsedUses = parseUses(key[2])
+        current.uses = parsedUses.ref
+        current.usesVersionComment = parsedUses.versionComment
+      } else {
+        current[key[1] as 'name' | 'if'] = key[2]
+      }
       inWith = false
       runLines = undefined
       continue
@@ -80,6 +91,12 @@ function workflowSteps(source: string): Step[] {
   return steps
 }
 
+function parseUses(value: string): { ref: string; versionComment?: string } {
+  const match = /^(\S+)(?:\s+(#\s*v\d+\.\d+\.\d+))?$/.exec(value)
+  expect(match).not.toBeNull()
+  return { ref: match?.[1] ?? value, versionComment: match?.[2] }
+}
+
 const steps = workflowSteps(workflow)
 const stepNamed = (name: string): Step => {
   const step = steps.find((candidate) => candidate.name === name)
@@ -101,6 +118,7 @@ describe('M2-0238 evidence back-fill workflow', () => {
     const checkout = stepNamed('Checkout the ledger repository')
     expect(checkout.if).toBe("inputs.ledger_repository != ''")
     expect(checkout.uses).toMatch(/^actions\/checkout@[0-9a-f]{40}$/)
+    expect(checkout.usesVersionComment).toBe('# v4.4.0')
     expect(checkout.with.repository).toBe('${{ inputs.ledger_repository }}')
     expect(checkout.with.ref).toBe('${{ inputs.ledger_ref }}')
     expect(checkout.with.token).toBe('${{ secrets.LEDGER_REPO_TOKEN || github.token }}')

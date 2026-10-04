@@ -57,7 +57,7 @@ jobs:
           persist-credentials: false
       - name: Checkout the ledger repository
         if: inputs.ledger_repository != ''
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: ${{ inputs.ledger_repository }}
           ref: ${{ inputs.ledger_ref }}
