@@ -75,10 +75,16 @@ function baseOpts(overrides: Partial<Parameters<typeof streamDust>[0]> = {}): Pa
   } as Parameters<typeof streamDust>[0]
 }
 
-async function waitDone(handlers: { onDone: ReturnType<typeof vi.fn>; onError: ReturnType<typeof vi.fn> }): Promise<void> {
+type MockedStreamHandlers = {
+  onDone: ReturnType<typeof vi.fn>
+  onError: ReturnType<typeof vi.fn>
+}
+
+async function waitDone(handlers: Parameters<typeof streamDust>[0]['handlers']): Promise<void> {
+  const mocked = handlers as unknown as MockedStreamHandlers
   for (let i = 0; i < 500; i++) {
-    if (handlers.onDone.mock.calls.length) return
-    if (handlers.onError.mock.calls.length) throw new Error(String(handlers.onError.mock.calls[0][0]))
+    if (mocked.onDone.mock.calls.length) return
+    if (mocked.onError.mock.calls.length) throw new Error(String(mocked.onError.mock.calls[0][0]))
     await new Promise((r) => setImmediate(r))
   }
   throw new Error(`timed out — calls=${JSON.stringify(calls)}`)
