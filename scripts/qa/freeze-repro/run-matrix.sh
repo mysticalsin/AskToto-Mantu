@@ -400,7 +400,11 @@ write_fixture_manifest() {
   local -a opened_states=()
   local position=0
   for item in "${FIFO_FIXTURES[@]}"; do
-    if [[ ! -p "$item" ]]; then
+    if [[ "$DRY_RUN" == 1 && ${#FIFO_HELD_STATES[@]} -eq 0 ]]; then
+      # Dry-run never launches 1.9.6, so there is no live FIFO reader to probe.
+      placeholders=$((placeholders + 1))
+      opened_states+=("placeholder")
+    elif [[ ! -p "$item" ]]; then
       placeholders=$((placeholders + 1))
       opened_states+=("placeholder")
     elif (( ${#FIFO_HELD_STATES[@]} > 0 )); then

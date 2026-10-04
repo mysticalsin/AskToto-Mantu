@@ -1,8 +1,10 @@
-import { describe, expect, it, vi } from 'vitest'
+import v8 from 'node:v8'
+import vm from 'node:vm'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { IPC } from '../../src/shared/ipc'
 import { HISTORY_DEGRADED_MS as RENDERER_DEGRADED_MS } from '../../src/renderer/src/components/history/list-status'
 import { NOT_DOWNLOADED_TEXT, UNAVAILABLE_TEXT } from '../../src/renderer/src/components/history/hydration'
-import { driveState, STATE_TIMEOUT_MS } from './history-design-capture.mjs'
+import { captureReachedState, driveState, fixtureAnswersForState, INSTALL_FIXTURE_HANDLERS, STATE_TIMEOUT_MS, waitForRequest, warmUp } from './history-design-capture.mjs'
 import {
   BACKDROPS,
   BLOCKED_EXTERNAL_ROWS,
@@ -46,6 +48,26 @@ function textSample(overrides: Record<string, unknown> = {}) {
 
 const viewport = { width: 400, height: 600 }
 const dark = DESIGN_VARIANTS.find((variant) => variant.id === KEYBOARD_VARIANT_ID)!
+
+function exposedGc() {
+  const g = globalThis as unknown as { gc?: () => void }
+  if (typeof g.gc !== 'function') {
+    v8.setFlagsFromString('--expose_gc')
+    g.gc = vm.runInNewContext('gc') as () => void
+  }
+  expect(typeof g.gc).toBe('function')
+  return g.gc!
+}
+
+function withCollectGarbage<T extends (...args: never[]) => unknown>(main: T, collectGarbage: () => Promise<unknown> = vi.fn(async () => undefined)) {
+  return Object.assign(main, { collectGarbage })
+}
+
+afterEach(() => {
+  vi.restoreAllMocks()
+  delete (globalThis as typeof globalThis & { __metisReHideElectron?: unknown }).__metisReHideElectron
+  delete (globalThis as typeof globalThis & { __historyDesign?: unknown }).__historyDesign
+})
 
 describe('History design matrix (M2-0032)', () => {
   it('captures every state in light and dark, at 1x and 2x, with motion allowed and reduced', () => {
@@ -102,26 +124,143 @@ describe('History design matrix (M2-0032)', () => {
     expect(() => listAnswer('bogus', real, 0)).toThrow(/unknown list mode/)
   })
 
+  it("uses a state's list answer for its default search answer", () => {
+    const slow = HISTORY_DESIGN_STATES.find((candidate) => candidate.id === 'slow')!
+    const real = [{ file: 'a.md', title: 'A', date: '', mode: 'general', durationMin: 1, participants: [] }]
+
+    expect(fixtureAnswersForState(slow, real, 0)).toMatchObject({
+      list: { kind: 'pending' },
+      search: { kind: 'pending' },
+      read: 'hydrating'
+    })
+  })
+
+  it('parks pending fixture promises so Electron IPC replies cannot be collected while pending', async () => {
+    const handlers = new Map<string, (...args: never[]) => Promise<unknown>>()
+    ;(globalThis as typeof globalThis & { __metisReHideElectron?: unknown }).__metisReHideElectron = {
+      ipcMain: {
+        removeHandler: vi.fn((name: string) => handlers.delete(name)),
+        handle: vi.fn((name: string, handler: (...args: never[]) => Promise<unknown>) => handlers.set(name, handler))
+      }
+    }
+    expect(eval(INSTALL_FIXTURE_HANDLERS)).toBe(true)
+    eval(`(() => {
+      globalThis.__historyDesign.list = { kind: 'pending' }
+      globalThis.__historyDesign.search = { kind: 'pending' }
+      globalThis.__historyDesign.read = 'hydrating'
+    })()`)
+
+    let listPending: object | null = handlers.get(IPC_CHANNELS.recallList)!()
+    const listRef = new WeakRef(listPending)
+    let searchPending: object | null = handlers.get(IPC_CHANNELS.recallSearch)!()
+    const searchRef = new WeakRef(searchPending)
+    const sender = { send: vi.fn() }
+    let readPending: object | null = handlers.get(IPC_CHANNELS.recallRead)!({ sender } as never, 'sample.md' as never)
+    const readRef = new WeakRef(readPending)
+    expect(eval('globalThis.__historyDesign.parked')).toEqual([listPending, searchPending, readPending])
+    listPending = null
+    searchPending = null
+    readPending = null
+
+    exposedGc()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(listRef.deref()).toBeDefined()
+    expect(searchRef.deref()).toBeDefined()
+    expect(readRef.deref()).toBeDefined()
+    expect(eval('globalThis.__historyDesign.parked')).toHaveLength(3)
+    expect(sender.send).toHaveBeenCalledWith(IPC_CHANNELS.recallHydration, { file: 'sample.md', state: 'hydrating' })
+  })
+
+  it('forces main-process garbage collection after a pending list request reaches main', async () => {
+    const state = HISTORY_DESIGN_STATES.find((candidate) => candidate.id === 'slow')!
+    const history = { requests: { list: 0, search: 0 }, requestedAt: { list: 0, search: 0 } }
+    let collectedBeforeCue = false
+    const collectGarbage = vi.fn(async () => {
+      collectedBeforeCue = true
+    })
+    const main = withCollectGarbage(vi.fn(async (expression: string) => {
+      if (expression === 'globalThis.__historyDesign.requests.list') return history.requests.list
+      if (expression.includes('requests, requestedAt')) return { requests: { ...history.requests }, requestedAt: { ...history.requestedAt } }
+      return true
+    }), collectGarbage)
+    const page = {
+      getByLabel: vi.fn(() => ({
+        first: () => ({
+          isVisible: vi.fn(async () => false)
+        }),
+        inputValue: vi.fn(async () => '')
+      })),
+      getByRole: vi.fn(() => ({
+        filter: ({ hasText }: { hasText: string }) => ({
+          first: () => ({
+            waitFor: vi.fn(async () => {
+              expect(hasText).toBe('OneDrive is slow to answer')
+              expect(collectedBeforeCue).toBe(true)
+            })
+          })
+        })
+      }))
+    }
+
+    await driveState(page as never, main as never, state, [{ title: 'Quarterly planning sample' }], {
+      wait: async () => undefined,
+      ensureIdleBar: async () => undefined,
+      clickHistory: async () => {
+        history.requests.list += 1
+        history.requestedAt.list = 10
+      }
+    })
+
+    expect(collectGarbage).toHaveBeenCalledTimes(1)
+  })
+
+  it('waits for the expected request channel and ignores the other one', async () => {
+    let now = 0
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const history = { requests: { list: 0, search: 0 }, requestedAt: { list: 0, search: 0 } }
+    const main = vi.fn(async () => ({ requests: { ...history.requests }, requestedAt: { ...history.requestedAt } }))
+    const wait = vi.fn(async (ms: number) => {
+      now += ms
+      if (history.requests.search === 0) {
+        history.requests.search += 1
+        history.requestedAt.search = now
+      } else if (history.requests.list === 0) {
+        history.requests.list += 1
+        history.requestedAt.list = now
+      }
+    })
+
+    await expect(waitForRequest(main as never, 'list', 0, wait)).resolves.toBe(100)
+    expect(history.requests).toEqual({ list: 1, search: 1 })
+    expect(wait).toHaveBeenCalledTimes(2)
+  })
+
   it('anchors the slow search degraded cue to the search request, not the typed character', async () => {
     const state = HISTORY_DESIGN_STATES.find((candidate) => candidate.id === 'slow-with-rows')!
     const calls: string[] = []
-    const history = { requests: 0, requestedAt: 0 }
+    const history = { requests: { list: 0, search: 0 }, requestedAt: { list: 0, search: 0 } }
     let searchFillPending = false
     let searchRequestSeen = false
+    let now = 0
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
 
-    const main = vi.fn(async (expression: string) => {
-      if (expression === 'globalThis.__historyDesign.requests') return history.requests
-      if (expression.includes('requests, requestedAt')) return { ...history }
+    const collectGarbage = vi.fn(async () => undefined)
+    const main = withCollectGarbage(vi.fn(async (expression: string) => {
+      if (expression === 'globalThis.__historyDesign.requests.list') return history.requests.list
+      if (expression === 'globalThis.__historyDesign.requests.search') return history.requests.search
+      if (expression.includes('requests, requestedAt')) return { requests: { ...history.requests }, requestedAt: { ...history.requestedAt } }
       return true
-    })
-    const noteRequest = (requestedAt: number) => {
-      history.requests += 1
-      history.requestedAt = requestedAt
+    }), collectGarbage)
+    const noteRequest = (channel: 'list' | 'search', requestedAt: number) => {
+      history.requests[channel] += 1
+      history.requestedAt[channel] = requestedAt
     }
-    const wait = vi.fn(async () => {
+    const wait = vi.fn(async (ms: number) => {
+      now += ms
       if (searchFillPending && !searchRequestSeen) {
         searchRequestSeen = true
-        noteRequest(2200)
+        noteRequest('search', now)
       }
     })
     const page = {
@@ -138,11 +277,13 @@ describe('History design matrix (M2-0032)', () => {
             waitFor: vi.fn(async ({ timeout }: { timeout: number }) => {
               calls.push(`role:${role}:${hasText}:${timeout}`)
               expect(searchRequestSeen).toBe(true)
+              now += HISTORY_DEGRADED_MS
             })
           })
         })
       })),
       getByLabel: vi.fn(() => ({
+        inputValue: vi.fn(async () => ''),
         fill: vi.fn(async () => {
           searchFillPending = true
         })
@@ -152,12 +293,362 @@ describe('History design matrix (M2-0032)', () => {
     const drive = await driveState(page as never, main as never, state, [{ title: 'Quarterly planning sample' }], {
       wait,
       ensureIdleBar: async () => undefined,
-      clickHistory: async () => noteRequest(1000)
+      clickHistory: async () => noteRequest('list', now)
     })
 
-    expect(drive.requestedAt).toBe(2200)
-    expect(wait).toHaveBeenCalled()
+    expect(drive.requestedAt).toBe(500)
+    expect(drive.closedBeforeArm).toBe(true)
+    expect(drive.timingsMs).toMatchObject({
+      toggleGuard: 450,
+      searchFillToSearchRequest: 50,
+      searchRequestToCue: HISTORY_DEGRADED_MS
+    })
+    expect(collectGarbage).toHaveBeenCalledTimes(1)
     expect(calls).toContain(`role:status:OneDrive is slow to answer:${STATE_TIMEOUT_MS}`)
+  })
+
+  it('warms the first fixture-driven open and screenshot before the judged matrix starts', async () => {
+    const events: string[] = []
+    const variant = DESIGN_VARIANTS[0]
+    const cdp = {
+      send: vi.fn(async (command: string, payload?: unknown) => {
+        events.push(`cdp:${command}`)
+        if (command === 'Emulation.setDeviceMetricsOverride') expect(payload).toEqual({ width: 0, height: 0, deviceScaleFactor: variant.scale, mobile: false })
+      })
+    }
+    const page = {
+      emulateMedia: vi.fn(),
+      getByLabel: vi.fn(() => ({
+        first: () => ({
+          isVisible: vi.fn(async () => false)
+        })
+      })),
+      getByText: vi.fn(() => ({
+        first: () => ({
+          waitFor: vi.fn(async () => {
+            events.push('state-reached')
+          })
+        })
+      })),
+      getByRole: vi.fn(() => ({
+        filter: () => ({
+          first: () => ({
+            waitFor: vi.fn(async () => {
+              events.push('state-reached')
+            })
+          })
+        })
+      })),
+      screenshot: vi.fn(async () => {
+        events.push('screenshot')
+      }),
+      waitForFunction: vi.fn(async () => {
+        events.push('settle-window')
+      }),
+      evaluate: vi.fn(async () => undefined)
+    }
+    const requests = { list: 0, search: 0 }
+    const main = withCollectGarbage(vi.fn(async (expression: string) => {
+      if (expression === 'globalThis.__historyDesign.requests.list') return requests.list
+      if (expression === 'globalThis.__historyDesign.requests.search') return requests.search
+      if (expression.includes('requests, requestedAt')) return { requests: { ...requests }, requestedAt: { list: 100, search: 0 } }
+      events.push('apply-or-arm')
+      return true
+    }))
+
+    await warmUp({
+      page: page as never,
+      cdp: cdp as never,
+      main: main as never,
+      realRows: [{ title: 'Quarterly planning sample' }],
+      deps: {
+        wait: async () => undefined,
+        ensureIdleBar: async () => events.push('idle'),
+        clickHistory: async () => {
+          events.push('open-history')
+          requests.list += 1
+        }
+      }
+    })
+
+    expect(page.screenshot).toHaveBeenCalledWith({ scale: 'device' })
+    expect(events).toEqual([
+      'apply-or-arm',
+      'cdp:Emulation.setDefaultBackgroundColorOverride',
+      'idle',
+      'apply-or-arm',
+      'open-history',
+      'cdp:Emulation.setDeviceMetricsOverride',
+      'settle-window',
+      'screenshot',
+      'cdp:Emulation.clearDeviceMetricsOverride'
+    ])
+  })
+
+  it('starts each capture from a closed History view before arming fixtures and reopening it', async () => {
+    const state = HISTORY_DESIGN_STATES.find((candidate) => candidate.id === 'slow-with-rows')!
+    const events: string[] = []
+    const history = { requests: { list: 0, search: 0 }, requestedAt: { list: 0, search: 0 } }
+    let historyOpen = true
+    let searchFillPending = false
+    let searchRequestSeen = false
+
+    const main = withCollectGarbage(vi.fn(async (expression: string) => {
+      if (expression === 'globalThis.__historyDesign.requests.list') {
+        events.push('read-requests')
+        return history.requests.list
+      }
+      if (expression === 'globalThis.__historyDesign.requests.search') {
+        events.push('read-requests')
+        return history.requests.search
+      }
+      if (expression.includes('requests, requestedAt')) return { requests: { ...history.requests }, requestedAt: { ...history.requestedAt } }
+      events.push('arm-fixture')
+      return true
+    }), vi.fn(async () => events.push('gc')))
+    const noteRequest = (channel: 'list' | 'search', requestedAt: number) => {
+      history.requests[channel] += 1
+      history.requestedAt[channel] = requestedAt
+    }
+    const wait = vi.fn(async () => {
+      if (searchFillPending && !searchRequestSeen) {
+        searchRequestSeen = true
+        events.push('search-request')
+        noteRequest('search', 3_000)
+      }
+    })
+    const searchLocator = {
+      first: () => ({
+        isVisible: vi.fn(async () => historyOpen)
+      }),
+      inputValue: vi.fn(async () => ''),
+      fill: vi.fn(async () => {
+        events.push('fill-search')
+        searchFillPending = true
+      })
+    }
+    const page = {
+      getByText: vi.fn((text: string) => ({
+        first: () => ({
+          waitFor: vi.fn(async () => {
+            events.push(`text:${text}`)
+          })
+        })
+      })),
+      getByRole: vi.fn((role: string, options?: { name?: string | RegExp }) => {
+        if (role === 'button' && options?.name === 'History') {
+          return {
+            first: () => ({
+              click: vi.fn(async () => {
+                events.push('close-history')
+                historyOpen = false
+              })
+            })
+          }
+        }
+        return {
+          filter: ({ hasText }: { hasText: string }) => ({
+            first: () => ({
+              waitFor: vi.fn(async () => {
+                events.push(`role:${role}:${hasText}`)
+              })
+            })
+          })
+        }
+      }),
+      getByLabel: vi.fn(() => searchLocator)
+    }
+
+    const drive = await driveState(page as never, main as never, state, [{ title: 'Quarterly planning sample' }], {
+      wait,
+      ensureIdleBar: async () => {
+        events.push('idle')
+        if (historyOpen) {
+          events.push('close-history')
+          historyOpen = false
+        }
+      },
+      clickHistory: async () => {
+        events.push('open-history')
+        historyOpen = true
+        noteRequest('list', 2_000)
+      }
+    })
+
+    expect(events).toEqual([
+      'idle',
+      'close-history',
+      'arm-fixture',
+      'read-requests',
+      'open-history',
+      'text:Quarterly planning sample',
+      'read-requests',
+      'fill-search',
+      'search-request',
+      'gc',
+      'role:status:OneDrive is slow to answer'
+    ])
+    expect(drive.closedBeforeArm).toBe(true)
+    expect(drive.timingsMs).toEqual(
+      expect.objectContaining({
+        toggleGuard: expect.any(Number),
+        ensureIdle: expect.any(Number),
+        closeCheck: expect.any(Number),
+        armFixture: expect.any(Number),
+        openToListRequest: expect.any(Number),
+        listRequestToSearchFill: expect.any(Number),
+        searchFillToSearchRequest: expect.any(Number),
+        searchRequestToCue: expect.any(Number)
+      })
+    )
+    expect(history.requests).toEqual({ list: 1, search: 1 })
+  })
+
+  it('fails a capture explicitly when History reopens with a non-empty search query', async () => {
+    const state = HISTORY_DESIGN_STATES.find((candidate) => candidate.id === 'slow')!
+    const history = { requests: { list: 0, search: 0 }, requestedAt: { list: 0, search: 0 } }
+    let historyOpen = false
+    const main = vi.fn(async (expression: string) => {
+      if (expression === 'globalThis.__historyDesign.requests.list') return history.requests.list
+      if (expression.includes('requests, requestedAt')) return { requests: { ...history.requests }, requestedAt: { ...history.requestedAt } }
+      return true
+    })
+    const searchLocator = {
+      first: () => ({
+        isVisible: vi.fn(async () => historyOpen)
+      }),
+      inputValue: vi.fn(async () => (historyOpen ? 'planning' : '')),
+      fill: vi.fn()
+    }
+    const page = {
+      getByLabel: vi.fn(() => searchLocator)
+    }
+
+    await expect(
+      driveState(page as never, main as never, state, [{ title: 'Quarterly planning sample' }], {
+        wait: async () => undefined,
+        ensureIdleBar: async () => undefined,
+        clickHistory: async () => {
+          historyOpen = true
+          history.requests.list += 1
+          history.requestedAt.list = 10
+        }
+      })
+    ).rejects.toThrow('History reopened with a non-empty search query')
+  })
+
+  it('checks slow-with-rows roles before clearing the search cleanup state', async () => {
+    const state = HISTORY_DESIGN_STATES.find((candidate) => candidate.id === 'slow-with-rows')!
+    const variant = DESIGN_VARIANTS.find((candidate) => candidate.id === 'light-1x-reduced-motion')!
+    const history = { requests: { list: 0, search: 0 }, requestedAt: { list: 1_000, search: 2_000 } }
+    const events: string[] = []
+    let searchValue = ''
+    let searchFillPending = false
+    const main = withCollectGarbage(vi.fn(async (expression: string) => {
+      if (expression === 'globalThis.__historyDesign.requests.list') return history.requests.list
+      if (expression === 'globalThis.__historyDesign.requests.search') return history.requests.search
+      if (expression === '({ ...globalThis.__historyDesign.requests })') return { ...history.requests }
+      if (expression.includes('requests, requestedAt')) return { requests: { ...history.requests }, requestedAt: { ...history.requestedAt } }
+      return true
+    }))
+    const wait = vi.fn(async () => {
+      if (searchFillPending && history.requests.search === 0) history.requests.search += 1
+    })
+    const searchLocator = {
+      first: () => ({
+        isVisible: vi.fn(async () => false)
+      }),
+      inputValue: vi.fn(async () => searchValue),
+      fill: vi.fn(async (value: string) => {
+        searchValue = value
+        if (value === 'planning') searchFillPending = true
+      })
+    }
+    const rootLocator = {
+      getByRole: vi.fn(() => ({
+        filter: () => ({
+          count: vi.fn(async () => {
+            events.push('roles-present')
+            return searchValue === '' ? 0 : 1
+          })
+        })
+      }))
+    }
+    const page = {
+      getByLabel: vi.fn(() => searchLocator),
+      getByText: vi.fn(() => ({
+        first: () => ({
+          waitFor: vi.fn(async () => undefined)
+        })
+      })),
+      getByRole: vi.fn(() => ({
+        filter: () => ({
+          first: () => ({
+            waitFor: vi.fn(async () => undefined)
+          })
+        })
+      })),
+      waitForFunction: vi.fn(async () => undefined),
+      evaluate: vi.fn(async () => ({ scope: 'history-view', viewport, samples: [textSample()] })),
+      screenshot: vi.fn(async () => {
+        events.push('screenshot')
+      }),
+      locator: vi.fn(() => rootLocator)
+    }
+    const cdp = {
+      send: vi.fn(async (command: string) => {
+        if (command === 'Emulation.clearDeviceMetricsOverride') events.push('clear-metrics')
+      })
+    }
+
+    const result = await captureReachedState({
+      page: page as never,
+      cdp: cdp as never,
+      main: main as never,
+      state,
+      variant,
+      realRows: [{ title: 'Quarterly planning sample' }],
+      out: 'out/history-design-test',
+      deps: {
+        wait,
+        ensureIdleBar: async () => undefined,
+        clickHistory: async () => {
+          history.requests.list += 1
+        }
+      }
+    })
+
+    expect(result.judged.verdict).toBe('PASS')
+    expect(events).toEqual(['screenshot', 'roles-present', 'clear-metrics'])
+    expect(result.judged.requestCounts).toEqual({
+      screenshot: { list: 1, search: 1 },
+      rolesCheck: { list: 1, search: 1 }
+    })
+    expect(rootLocator.getByRole).toHaveBeenCalledWith('status', undefined)
+    expect(searchLocator.fill).toHaveBeenLastCalledWith('')
+    expect(searchValue).toBe('')
+    expect(cdp.send).toHaveBeenLastCalledWith('Emulation.clearDeviceMetricsOverride')
+  })
+
+  it('fails fast instead of arming fixtures while History is still open', async () => {
+    const state = HISTORY_DESIGN_STATES.find((candidate) => candidate.id === 'slow-with-rows')!
+    const main = vi.fn(async () => true)
+    const page = {
+      getByLabel: vi.fn(() => ({
+        first: () => ({
+          isVisible: vi.fn(async () => true)
+        })
+      }))
+    }
+
+    await expect(
+      driveState(page as never, main as never, state, [{ title: 'Quarterly planning sample' }], {
+        wait: async () => undefined,
+        ensureIdleBar: async () => undefined,
+        clickHistory: async () => undefined
+      })
+    ).rejects.toThrow('History was still open before fixture arm')
+    expect(main).not.toHaveBeenCalled()
   })
 
   it("uses the real window size with only the variant's device scale overridden", () => {

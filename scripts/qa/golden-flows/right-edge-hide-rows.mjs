@@ -703,6 +703,10 @@ export async function mainInspector(inspectPort) {
   }
   const evaluate = async (expression) =>
     (await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }))?.result?.value
+  const collectGarbage = async () => {
+    await send('HeapProfiler.collectGarbage')
+    return true
+  }
   // The app holds its Tray in a module-local binding, so find the live instance on the heap and emit the same
   // 'click' the OS delivers: its listener is the product's own Settings entry (sendHotkey('settings')).
   const clickTray = async () => {
@@ -717,7 +721,7 @@ export async function mainInspector(inspectPort) {
     return clicked?.result?.value === true
   }
   await evaluate("globalThis.__metisReHideElectron = process.mainModule.require('electron'); true")
-  return { evaluate, clickTray, close: () => socket.close() }
+  return { evaluate, collectGarbage, clickTray, close: () => socket.close() }
 }
 
 export async function runPackagedRightEdgeHideRows({ port, inspectPort, rows }) {
