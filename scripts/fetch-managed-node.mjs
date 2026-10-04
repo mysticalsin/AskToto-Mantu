@@ -23,16 +23,27 @@ const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'src/shared/managed-nod
 const NODE_VERSION = manifest.version
 const BASE = `https://nodejs.org/dist/v${NODE_VERSION}/`
 const ASSETS = manifest.assets
+const DOWNLOAD_ATTEMPTS = 4
+const RETRYABLE_DOWNLOAD_CODES = new Set(['EAI_AGAIN', 'ECONNRESET', 'ENOTFOUND', 'ETIMEDOUT'])
 
 const VC_REDIST_URL = 'https://aka.ms/vs/17/release/vc_redist.x64.exe'
 const VC_DEST = join(REPO_ROOT, 'resources', 'vcredist', 'vc_redist.x64.exe')
 
-function download(url, dest) {
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function retryableDownloadError(error) {
+  if (RETRYABLE_DOWNLOAD_CODES.has(error?.code)) return true
+  return /^https?:\/\/.+: HTTP 5\d\d$/.test(error?.message ?? '')
+}
+
+function downloadOnce(url, dest) {
   return new Promise((resolve, reject) => {
     const req = httpsGet(url, { timeout: 60_000 }, (res) => {
       if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume()
-        download(res.headers.location, dest).then(resolve, reject)
+        downloadOnce(res.headers.location, dest).then(resolve, reject)
         return
       }
       if (res.statusCode !== 200) {
@@ -43,6 +54,22 @@ function download(url, dest) {
     })
     req.on('error', reject)
   })
+}
+
+async function download(url, dest) {
+  let lastError = null
+  for (let attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt++) {
+    try {
+      await downloadOnce(url, dest)
+      return
+    } catch (error) {
+      lastError = error
+      if (attempt === DOWNLOAD_ATTEMPTS || !retryableDownloadError(error)) throw error
+      process.stdout.write(`Retrying ${url} after ${error?.code ?? error?.message ?? error} (${attempt}/${DOWNLOAD_ATTEMPTS})…\n`)
+      await sleep(1_000 * attempt)
+    }
+  }
+  throw lastError
 }
 
 function sha256File(path) {
