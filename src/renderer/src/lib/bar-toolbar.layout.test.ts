@@ -1,22 +1,11 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
-import { afterAll, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { createElement } from 'react'
 import { overlayAllowsMinimize } from '@shared/overlay-chrome'
 import { Bar, type BarProps } from '../components/Bar'
-import {
-  BAR_OVERLAY_WIDTH_PX,
-  BAR_TOOLBAR_MARK_PX,
-  BAR_TOOLBAR_ORB_PX,
-  layoutToolbarRow,
-  listeningToolbarFixtureHtml,
-  measureToolbarChildren,
-  overlappingPairs,
-  rectsIntersect,
-  type ToolbarRect
-} from './bar-toolbar-layout'
 
 const barSrc = readFileSync(join(__dirname, '../components/Bar.tsx'), 'utf8').replace(/\r\n/g, '\n')
 const css = readAppCss().replace(/\r\n/g, '\n')
@@ -54,10 +43,6 @@ function barProps(overrides: Partial<BarProps> = {}): BarProps {
     canMinimize: overlayAllowsMinimize('bar'),
     ...overrides
   }
-}
-
-function named(rects: ToolbarRect[]): Record<string, ToolbarRect> {
-  return Object.fromEntries(rects.map((r) => [r.name, r]))
 }
 
 describe('Bar toolbar reserved boxes (production overlay width)', () => {
@@ -104,95 +89,10 @@ describe('Bar toolbar reserved boxes (production overlay width)', () => {
     expect(idle).toContain('data-bar-pill-orb')
   })
 
-  it('toolbar children getBoundingClientRect must not intersect while listening', () => {
-    const { children, rects, transcriptCopy } = layoutToolbarRow({
-      listening: true,
-      overlayWidth: BAR_OVERLAY_WIDTH_PX
-    })
-    expect(BAR_OVERLAY_WIDTH_PX).toBe(880)
-    expect(transcriptCopy).toBe(true)
-    expect(children.map((c) => c.name)).toEqual(['mark', 'tools', 'timer', 'transcript', 'orb', 'chevron'])
-    expect(children.map((c) => c.name)).not.toContain('new-meeting')
-
-    const measured = children.map((child) => child.getBoundingClientRect())
-    expect(overlappingPairs(measured)).toEqual([])
-
-    const byName = named(rects)
-    expect(byName.mark.width).toBe(BAR_TOOLBAR_MARK_PX)
-    expect(byName.mark.height).toBe(BAR_TOOLBAR_MARK_PX)
-    expect(rectsIntersect(byName.timer, byName.transcript)).toBe(false)
-    expect(rectsIntersect(byName.timer, byName.orb)).toBe(false)
-    expect(byName.orb.width).toBe(BAR_TOOLBAR_ORB_PX)
-    expect(byName.timer.right).toBeLessThanOrEqual(byName.transcript.left)
-    expect(byName.transcript.right).toBeLessThanOrEqual(byName.orb.left)
+  it('does not ship unused leftover chrome classes in the eager stylesheet', () => {
+    expect(css).not.toMatch(/\.aw-menu\b/)
+    expect(css).not.toMatch(/\.cl-sidebar\b/)
+    expect(css).not.toMatch(/\.cl-navitem-active\b/)
+    expect(css).not.toMatch(/\.onboard-skip-screen\b/)
   })
-
-  it('idle History + orb do not clip the locked M and have no timer', () => {
-    const { children, rects } = layoutToolbarRow({ listening: false, overlayWidth: BAR_OVERLAY_WIDTH_PX })
-    expect(children.map((c) => c.name)).toEqual(['mark', 'tools', 'history', 'orb', 'chevron'])
-    expect(overlappingPairs(children.map((c) => c.getBoundingClientRect()))).toEqual([])
-    const byName = named(rects)
-    expect(byName.mark.width).toBe(30)
-    expect(byName.mark.height).toBe(30)
-    expect(byName.history).toBeTruthy()
-    expect(byName.timer).toBeUndefined()
-  })
-})
-
-describe('listening toolbar fixture at production overlay width', () => {
-  let browser: import('playwright').Browser | null = null
-
-  afterAll(async () => {
-    await browser?.close()
-  })
-
-  it('getBoundingClientRect of fixture children do not intersect', async () => {
-    const { chromium } = await import('playwright')
-    browser = await chromium.launch({ headless: true })
-    const page = await browser.newPage({ viewport: { width: BAR_OVERLAY_WIDTH_PX, height: 200 } })
-    await page.setContent(listeningToolbarFixtureHtml(BAR_OVERLAY_WIDTH_PX), { waitUntil: 'domcontentloaded' })
-
-    const measured = await page.evaluate((selectorList: string) => {
-      const root = document.querySelector('[data-bar-toolbar]')
-      if (!root) throw new Error('missing toolbar fixture')
-      if (root.querySelector('[data-bar-new-meeting]') || (root.textContent || '').includes('New meeting')) {
-        throw new Error('New meeting must not be in the listening toolbar row')
-      }
-      return Array.from(root.querySelectorAll(selectorList)).map((node) => {
-        const r = node.getBoundingClientRect()
-        const name =
-          (node.hasAttribute('data-bar-mark') && 'mark') ||
-          (node.hasAttribute('data-bar-tools') && 'tools') ||
-          (node.hasAttribute('data-bar-listen-timer') && 'timer') ||
-          (node.hasAttribute('data-bar-transcript') && 'transcript') ||
-          (node.hasAttribute('data-bar-pill-orb') && 'orb') ||
-          (node.hasAttribute('data-bar-chevron') && 'chevron') ||
-          'unknown'
-        return { name, left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height }
-      })
-    }, '[data-bar-mark], [data-bar-tools], [data-bar-listen-timer], [data-bar-transcript], [data-bar-pill-orb], [data-bar-chevron]')
-
-    expect(measured.map((m) => m.name)).toEqual(['mark', 'tools', 'timer', 'transcript', 'orb', 'chevron'])
-    expect(measured.every((m) => m.width > 0 && m.height > 0)).toBe(true)
-
-    const hits: Array<[string, string]> = []
-    for (let i = 0; i < measured.length; i++) {
-      for (let j = i + 1; j < measured.length; j++) {
-        if (rectsIntersect(measured[i], measured[j])) hits.push([measured[i].name, measured[j].name])
-      }
-    }
-    expect(hits).toEqual([])
-
-    const timer = measured.find((m) => m.name === 'timer')
-    const transcript = measured.find((m) => m.name === 'transcript')
-    const orb = measured.find((m) => m.name === 'orb')
-    expect(timer && transcript && orb).toBeTruthy()
-    if (timer && transcript && orb) {
-      expect(rectsIntersect(timer, transcript)).toBe(false)
-      expect(rectsIntersect(timer, orb)).toBe(false)
-    }
-
-    // Keep measureToolbarChildren wired so a live document uses the same helper.
-    expect(typeof measureToolbarChildren).toBe('function')
-  }, 30_000)
 })

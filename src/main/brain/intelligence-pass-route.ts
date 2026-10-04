@@ -62,7 +62,7 @@ function pickConfiguredApiCandidate(
 }
 
 /** Local is ready for this pass: enabled, on disk, RAM ok, org allows it, runtime not locked out. */
-export function intelligencePassLocalReady(s: Settings, allowed: string[] | null = getAllowedProviders()): boolean {
+function intelligencePassLocalReady(s: Settings, allowed: string[] | null = getAllowedProviders()): boolean {
   return localBaseReady(s, allowed) && localRuntimeState() !== 'unavailable'
 }
 

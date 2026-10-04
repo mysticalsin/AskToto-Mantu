@@ -2,7 +2,7 @@
  * Air-gap license.metis parser + optional MDM path detect.
  * Presence is not a license. Activation stays closed in this change.
  */
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { verifyLicenseJws, type VerifyResult } from './jws'
 
@@ -47,14 +47,4 @@ export function parseLicenseMetis(
   const jws = extractJwsFromLicenseFile(raw)
   if (!jws) return { ok: false, error: 'invalid' }
   return verifyLicenseJws(jws, opts)
-}
-
-export function readManagedLicenseFile(platform: NodeJS.Platform = process.platform): string | null {
-  try {
-    const path = managedLicensePath(platform)
-    if (!existsSync(path)) return null
-    return readFileSync(path, 'utf8')
-  } catch {
-    return null
-  }
 }

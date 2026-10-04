@@ -12,10 +12,9 @@ import { auditLog } from './logger'
 export type { StreamHandlers, StreamOptions, StreamHandle } from './llm/shared'
 
 /**
- * Raw strategy switch. Tests that want the unwrapped dispatcher can import this; production
- * always goes through createStream → wrapEnterpriseStream.
+ * Raw strategy switch. Production always goes through createStream → wrapEnterpriseStream.
  */
-export function dispatchStream(opts: StreamOptions): StreamHandle {
+function dispatchStream(opts: StreamOptions): StreamHandle {
   if (opts.viaOperator) return streamOperatorAsk(opts)
   switch (opts.kind) {
     case 'cli':
