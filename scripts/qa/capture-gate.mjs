@@ -194,8 +194,8 @@ function seedProfile(profile) {
   writeFileSync(join(profile, 'settings.json'), `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 })
 }
 
-function runPowerShell(script, timeoutMs = 20_000) {
-  const child = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], {
+export function runPowerShell(script, timeoutMs = 20_000, spawnProcess = spawnSync) {
+  const child = spawnProcess('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], {
     encoding: 'utf8',
     timeout: timeoutMs,
     stdio: ['ignore', 'pipe', 'pipe']
@@ -204,7 +204,7 @@ function runPowerShell(script, timeoutMs = 20_000) {
   return { ok: child.status === 0, category: child.status === 0 ? 'ok' : 'capture_unavailable' }
 }
 
-function captureProbe() {
+export function captureProbe(spawnProcess = spawnSync) {
   return runPowerShell(`
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
@@ -219,7 +219,7 @@ try {
   $graphics.Dispose()
   $bitmap.Dispose()
 }
-`)
+`, 20_000, spawnProcess)
 }
 
 function lockWorkstation() {
@@ -289,6 +289,50 @@ async function backgroundScreenReadyAfterPark(page) {
   }
 }
 
+export async function runCaptureGate({
+  child,
+  maxBgFailures,
+  connect,
+  readAudit,
+  probe = captureProbe,
+  induce = lockWorkstation,
+  proveReady = readinessProof,
+  hide = (page) => page.evaluate(() => window.toto.hide?.()).catch(() => undefined),
+  readAfterPark = backgroundScreenReadyAfterPark,
+  now = Date.now,
+  monotonicNow = () => performance.now(),
+  wait = (ms) => sleep(ms)
+}) {
+  const page = await connect()
+  const beforeProbe = probe()
+  const ready = await proveReady(page)
+  if (beforeProbe.ok === true) await hide(page)
+
+  const inductionAtMs = now()
+  const induction = induce()
+  await wait(PROBE_SETTLE_MS)
+  const afterInductionProbe = probe()
+
+  await wait(PARK_MS)
+  const afterParkProbe = probe()
+  const afterParkReady = await readAfterPark(page)
+  const failingStateProof = {
+    method: INDUCTION_METHOD,
+    inductionStarted: induction.ok === true,
+    beforeInduction: { captureWorks: beforeProbe.ok === true },
+    afterInduction: { captureWorks: afterInductionProbe.ok === true ? true : false },
+    afterPark: { captureWorks: afterParkProbe.ok === true ? true : false }
+  }
+  return buildReport({
+    records: readAudit(),
+    readinessProof: ready,
+    failingStateProof,
+    inductionAtMs,
+    maxBgFailures,
+    backgroundScreenReadyAfterPark: afterParkReady
+  })
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2))
   if (process.platform !== 'win32') throw new Precondition('capture-gate runs on Windows only.')
@@ -308,38 +352,18 @@ async function main() {
   try {
     child = spawn(args.app, [`--remote-debugging-port=${port}`], { env, stdio: 'ignore' })
     child.once('error', () => {})
-    ;({ browser, page } = await waitForTotoPage(port))
-
-    const beforeProbe = captureProbe()
-    const ready = await readinessProof(page)
-    if (beforeProbe.ok === true) {
-      await page.evaluate(() => window.toto.hide?.()).catch(() => undefined)
-    }
-
-    inductionAtMs = Date.now()
-    const induction = lockWorkstation()
-    await sleep(PROBE_SETTLE_MS)
-    const afterInductionProbe = captureProbe()
-
-    await sleep(PARK_MS)
-    const afterParkProbe = captureProbe()
-    const afterParkReady = await backgroundScreenReadyAfterPark(page)
-
-    const failingStateProof = {
-      method: INDUCTION_METHOD,
-      inductionStarted: induction.ok === true,
-      beforeInduction: { captureWorks: beforeProbe.ok === true },
-      afterInduction: { captureWorks: afterInductionProbe.ok === true ? true : false },
-      afterPark: { captureWorks: afterParkProbe.ok === true ? true : false }
-    }
-
-    report = buildReport({
-      records: readRecords(profile),
-      readinessProof: ready,
-      failingStateProof,
-      inductionAtMs,
+    report = await runCaptureGate({
+      child,
       maxBgFailures: args.maxBgFailures,
-      backgroundScreenReadyAfterPark: afterParkReady
+      connect: async () => {
+        ;({ browser, page } = await waitForTotoPage(port))
+        return page
+      },
+      readAudit: () => readRecords(profile),
+      now: () => {
+        inductionAtMs = Date.now()
+        return inductionAtMs
+      }
     })
   } catch (error) {
     const reason = error instanceof Precondition ? 'readiness_unproven' : 'failing_state_unproven'

@@ -1,14 +1,19 @@
-import { describe, expect, it } from 'vitest'
+import type { spawnSync } from 'node:child_process'
+import { EventEmitter } from 'node:events'
+import { describe, expect, it, vi } from 'vitest'
 import {
   CAPTURE_BACKOFF_CONSTANTS,
   FINAL_TAIL_MS,
   INDUCTION_METHOD,
   MAX_BG_FAILURES,
   PARK_MS,
+  PROBE_SETTLE_MS,
   bgScreenCaptureFailed,
   buildReport,
+  captureProbe,
   captureGateVerdict,
-  exitCodeForOutcome
+  exitCodeForOutcome,
+  runCaptureGate
 } from './capture-gate.mjs'
 
 const INDUCTION_AT = Date.parse('2026-10-03T12:00:00.000Z')
@@ -21,6 +26,209 @@ const failing = Object.freeze({
   beforeInduction: { captureWorks: true },
   afterInduction: { captureWorks: false },
   afterPark: { captureWorks: false }
+})
+
+class OwnedCandidate extends EventEmitter {
+  pid: number | undefined = 4242
+  exitCode: number | null = null
+  signalCode: NodeJS.Signals | null = null
+
+  exit() {
+    this.exitCode = 0
+    this.emit('exit', 0, null)
+  }
+}
+
+type ProbeProcessResult = {
+  status: number | null
+  stdout?: string
+  stderr?: string
+  signal?: NodeJS.Signals | null
+  error?: { code: string }
+}
+
+const nativeCaptureWorks: ProbeProcessResult = { status: 0, stdout: 'METIS_CAPTURE_OK\r\n' }
+const nativeCaptureUnavailable: ProbeProcessResult = { status: 10, stdout: 'METIS_CAPTURE_UNAVAILABLE\r\n' }
+
+type FlowOptions = {
+  results?: ProbeProcessResult[]
+  child?: OwnedCandidate
+  exitAtMs?: number
+  processErrorAtMs?: number
+  maxWaitAdvanceMs?: number
+  clockInvalid?: boolean
+  afterParkReady?: { observed: boolean; backgroundScreenReady: boolean | null }
+  records?: unknown[]
+}
+
+function flowFixture({
+  results = [nativeCaptureWorks, nativeCaptureUnavailable, nativeCaptureUnavailable],
+  child = new OwnedCandidate(),
+  exitAtMs = Number.POSITIVE_INFINITY,
+  processErrorAtMs = Number.POSITIVE_INFINITY,
+  maxWaitAdvanceMs = Number.POSITIVE_INFINITY,
+  clockInvalid = false,
+  afterParkReady = { observed: true, backgroundScreenReady: false },
+  records = []
+}: FlowOptions = {}) {
+  const clock = { elapsed: 0 }
+  const waits: number[] = []
+  let probes = 0
+  const spawnProbe = vi.fn(() => {
+    const result = results[probes++]
+    if (!result) throw new Error('Unexpected probe invocation')
+    return result
+  })
+  const hide = vi.fn(async () => undefined)
+  const run = () => runCaptureGate({
+    child,
+    maxBgFailures: MAX_BG_FAILURES,
+    connect: async () => ({}),
+    readAudit: () => records,
+    probe: () => captureProbe(spawnProbe as unknown as typeof spawnSync),
+    induce: () => ({ ok: true, category: 'ok' }),
+    proveReady: async () => ready,
+    hide,
+    readAfterPark: async () => afterParkReady,
+    now: () => INDUCTION_AT + clock.elapsed,
+    monotonicNow: () => clockInvalid ? Number.NaN : clock.elapsed,
+    wait: async (ms: number) => {
+      waits.push(ms)
+      clock.elapsed += Math.min(ms, maxWaitAdvanceMs)
+      if (clock.elapsed >= exitAtMs && child.exitCode === null) child.exit()
+      if (clock.elapsed >= processErrorAtMs) child.emit('error', new Error('private process transport diagnostic'))
+    }
+  })
+  return { run, child, clock, waits, spawnProbe, hide }
+}
+
+describe('capture-gate production flow', () => {
+  it.each(['afterInduction', 'afterPark'] as const)('does not prove unavailable capture from a timeout at %s', async (phase) => {
+    const results = [nativeCaptureWorks, nativeCaptureUnavailable, nativeCaptureUnavailable]
+    results[phase === 'afterInduction' ? 1 : 2] = { status: null, error: { code: 'ETIMEDOUT' } }
+    const report = await flowFixture({ results }).run()
+    expect(report).toMatchObject({
+      outcome: 'PRECONDITION',
+      reasons: ['failing_state_unproven'],
+      failingStateProof: { [phase]: { captureWorks: null, category: 'timeout' } }
+    })
+    expect(exitCodeForOutcome(report.outcome)).toBe(2)
+  })
+
+  it.each(['afterInduction', 'afterPark'] as const)('does not prove unavailable capture from a process error at %s', async (phase) => {
+    const results = [nativeCaptureWorks, nativeCaptureUnavailable, nativeCaptureUnavailable]
+    results[phase === 'afterInduction' ? 1 : 2] = { status: null, error: { code: 'ENOENT' } }
+    expect(await flowFixture({ results }).run()).toMatchObject({
+      outcome: 'PRECONDITION',
+      reasons: ['failing_state_unproven'],
+      failingStateProof: { [phase]: { captureWorks: null, category: 'process_error' } }
+    })
+  })
+
+  it.each([
+    { status: 1, stderr: 'private setup failure with user path and account name' },
+    { status: 10, stdout: '' },
+    { status: 10, stdout: 'METIS_CAPTURE_OK\r\n' },
+    { status: null, signal: 'SIGTERM' as const },
+    { status: 0, stdout: 'METIS_CAPTURE_UNAVAILABLE\r\n' }
+  ])('requires a completed, matching capture result for native process status $status', async (unproven) => {
+    const report = await flowFixture({ results: [nativeCaptureWorks, unproven, nativeCaptureUnavailable] }).run()
+    expect(report).toMatchObject({
+      outcome: 'PRECONDITION',
+      reasons: ['failing_state_unproven'],
+      failingStateProof: { afterInduction: { captureWorks: null, category: 'process_error' } }
+    })
+    expect(JSON.stringify(report)).not.toMatch(/private setup failure|user path|account name|stderr|stdout/i)
+  })
+
+  it('requires a completed capture success before induction', async () => {
+    expect(await flowFixture({ results: [{ status: 0, stdout: '' }, nativeCaptureUnavailable, nativeCaptureUnavailable] }).run()).toMatchObject({
+      outcome: 'PRECONDITION',
+      reasons: ['failing_state_unproven'],
+      failingStateProof: { beforeInduction: { captureWorks: null, category: 'process_error' } }
+    })
+  })
+
+  it('rejects an owned candidate that exits during the park despite a silent audit tail', async () => {
+    const fixture = flowFixture({ exitAtMs: PROBE_SETTLE_MS + PARK_MS / 2 })
+    const report = await fixture.run()
+    expect(report).toMatchObject({
+      outcome: 'FAIL',
+      reasons: ['candidate_exited'],
+      candidateLivenessProof: { observed: true, aliveAfterPark: false, exitedBeforeParkComplete: true },
+      backgroundScreenReadyAfterPark: { observed: true, backgroundScreenReady: false }
+    })
+    expect(exitCodeForOutcome(report.outcome)).toBe(1)
+    expect(fixture.child.listenerCount('exit')).toBe(0)
+    expect(fixture.child.listenerCount('error')).toBe(0)
+  })
+
+  it('requires owned-candidate identity for liveness proof', async () => {
+    const child = new OwnedCandidate()
+    child.pid = undefined
+    expect(await flowFixture({ child }).run()).toMatchObject({
+      outcome: 'PRECONDITION',
+      reasons: ['candidate_liveness_unproven']
+    })
+  })
+
+  it('latches the original owned candidate exit even if its numeric identity appears live later', async () => {
+    const child = new OwnedCandidate()
+    child.exit = () => {
+      child.emit('exit', 0, null)
+      child.exitCode = null
+    }
+    const report = await flowFixture({ child, exitAtMs: PROBE_SETTLE_MS + PARK_MS / 2 }).run()
+    expect(report).toMatchObject({ outcome: 'FAIL', reasons: ['candidate_exited'] })
+  })
+
+  it('keeps a candidate process transport error unproven and content-free', async () => {
+    const fixture = flowFixture({ processErrorAtMs: PROBE_SETTLE_MS + PARK_MS / 2 })
+    const report = await fixture.run()
+    expect(report).toMatchObject({ outcome: 'PRECONDITION', reasons: ['candidate_liveness_unproven'] })
+    expect(JSON.stringify(report)).not.toContain('private process transport diagnostic')
+    expect(fixture.child.listenerCount('exit')).toBe(0)
+    expect(fixture.child.listenerCount('error')).toBe(0)
+  })
+
+  it('measures the actual park rather than trusting an early-resolving wait', async () => {
+    const fixture = flowFixture({ maxWaitAdvanceMs: 60_000 })
+    const report = await fixture.run()
+    expect(fixture.clock.elapsed).toBeGreaterThanOrEqual(PROBE_SETTLE_MS + PARK_MS)
+    expect(report).toMatchObject({
+      outcome: 'PASS',
+      parkMs: PARK_MS,
+      finalTailMs: FINAL_TAIL_MS,
+      candidateLivenessProof: { observed: true, aliveAtInduction: true, aliveAfterPark: true, exitedBeforeParkComplete: false, parkElapsedMs: PARK_MS }
+    })
+  })
+
+  it('does not accept an unmeasurable park', async () => {
+    expect(await flowFixture({ clockInvalid: true }).run()).toMatchObject({
+      outcome: 'PRECONDITION',
+      reasons: ['candidate_liveness_unproven']
+    })
+  })
+
+  it.each([
+    { observed: true, backgroundScreenReady: false },
+    { observed: false, backgroundScreenReady: null }
+  ])('keeps post-park readiness informational after a live, measured park', async (afterParkReady) => {
+    const fixture = flowFixture({ afterParkReady })
+    const report = await fixture.run()
+    expect(report).toMatchObject({ outcome: 'PASS', reasons: [], backgroundScreenReadyAfterPark: afterParkReady })
+    expect(fixture.hide).toHaveBeenCalledOnce()
+    expect(fixture.spawnProbe).toHaveBeenCalledTimes(3)
+    expect(fixture.clock.elapsed).toBeGreaterThanOrEqual(PROBE_SETTLE_MS + PARK_MS)
+  })
+
+  it('retains the final-tail failure gate through the actual parked flow', async () => {
+    expect(await flowFixture({ records: [failedAt(PARK_MS - 1)] }).run()).toMatchObject({
+      outcome: 'FAIL',
+      reasons: ['bg_screen_failed_final_tail'],
+      bgScreenCaptureFailedFinal15Minutes: 1
+    })
+  })
 })
 
 function failedAt(ms: number) {
