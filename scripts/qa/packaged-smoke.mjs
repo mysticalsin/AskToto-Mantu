@@ -101,8 +101,11 @@ export {
   rightEdgeHideParkMatches,
   rightEdgeMeetingHideVerdict,
   pinnedBridgeCall,
+  readPinnedBridgeCall,
+  releasePinnedBridgeCall,
   rightEdgeStateMatches,
   rightEdgeStateMismatches,
+  startPinnedBridgeCall,
   runRightEdgeHideRows
 } from './golden-flows/right-edge-hide-rows.mjs'
 export {
