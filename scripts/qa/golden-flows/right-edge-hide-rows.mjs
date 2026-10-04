@@ -345,8 +345,15 @@ export function startPinnedBridgeCall([key, method, args]) {
   const pending = (globalThis.__metisSmokeBridgePending ??= new Set())
   const results = (globalThis.__metisSmokeBridgeResults ??= {})
   results[key] = { status: 'pending' }
-  const call = Promise.resolve()
-    .then(() => window.toto[method](...args))
+  let call
+  try {
+    call = window.toto[method](...args)
+  } catch (error) {
+    results[key] = { status: 'rejected', error: String(error?.message ?? error) }
+    return key
+  }
+  pending.add(call)
+  Promise.resolve(call)
     .then(
       () => {
         results[key] = { status: 'resolved' }
@@ -358,7 +365,6 @@ export function startPinnedBridgeCall([key, method, args]) {
     .finally(() => {
       pending.delete(call)
     })
-  pending.add(call)
   return key
 }
 
