@@ -646,6 +646,7 @@ import { initLogging, mainLog, auditLog, auditLogPath } from './logger'
 import { CommandControl } from './command-control'
 import { executeDesktopAction } from './desktop-adapters'
 import { ensureMetisCommandRuntime } from './metis-command-register'
+import { runOwnerCameraSelftest } from './owner-camera-selftest'
 import { consumeSecurityLimit, RATE_LIMIT_USER_MESSAGE, shouldSampleIpcDeny, takeHotPath, type SecurityLimitBucket } from './security-limits'
 import { safeMeetingBasename } from './meeting-path'
 import {
@@ -2736,6 +2737,10 @@ function createWindow(targetDisplay?: Electron.Display): void {
     getSettings,
     commandControl,
     getCommandOwner: () => (win && !win.isDestroyed() ? { webContentsId: win.webContents.id } : null)
+  })
+  void runOwnerCameraSelftest(win.webContents.id).catch((error) => {
+    mainLog.error('[owner-camera] selftest failed:', error instanceof Error ? error.message : String(error))
+    app.exit(1)
   })
 
   try {
