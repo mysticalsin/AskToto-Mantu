@@ -537,7 +537,7 @@ async function main() {
     console.error(`[history-design] ${error.stack ?? error.message}`)
   } finally {
     await browser?.close().catch(() => undefined)
-    inspector?.close()
+    await inspector?.close()
     if (child) {
       const deadline = Date.now() + QUIT_TIMEOUT_MS
       while (child.exitCode === null && child.signalCode === null && Date.now() < deadline) await sleep(250)
