@@ -25,6 +25,108 @@ export const HISTORY_CALLS = ['recallList', 'brainStatus', 'recallSearch']
 /** What admission.ts logs when every meetings-root permit is held by a stalled call and it starts refusing. */
 export const STORAGE_SATURATED_LOG = '[storage] every permit is held by a stalled call'
 
+/** A quiet host must not show its own loop stalls while ST-1 samples the candidate. */
+export const WITNESS_LOOP_MAX_MS = 50
+
+/** The candidate stderr tail is bounded and content-free: byte counts only, never stderr text. */
+export const STDERR_TAIL_LIMIT_BYTES = 4_096
+
+export function st1ExitCode(verdict) {
+  return verdict === 'PASS' || verdict === 'INVALID' ? 0 : 1
+}
+
+export function createContentFreeStderrTail(limitBytes = STDERR_TAIL_LIMIT_BYTES) {
+  let bytes = 0
+  let retainedBytes = 0
+  const chunks = []
+  return {
+    push(chunk) {
+      const size = Buffer.byteLength(String(chunk))
+      bytes += size
+      const retained = Math.min(size, limitBytes)
+      if (size >= limitBytes) {
+        chunks.splice(0, chunks.length, retained)
+        retainedBytes = retained
+        return
+      }
+      chunks.push(retained)
+      retainedBytes += retained
+      while (retainedBytes > limitBytes && chunks.length > 0) retainedBytes -= chunks.shift()
+    },
+    snapshot() {
+      return {
+        bytes,
+        limitBytes,
+        retainedBytes,
+        truncatedBytes: Math.max(0, bytes - retainedBytes),
+        chunkBytes: chunks.slice(-16)
+      }
+    }
+  }
+}
+
+/**
+ * Tracks candidate liveness after the inspector URL has been found. These listeners stay installed until
+ * the run is over, so a dead child or closed inspector cannot be scored as a long stall.
+ */
+export function createCandidateLifecycle({ now = () => performance.now(), stderrTail = createContentFreeStderrTail() } = {}) {
+  let exit = null
+  let inspectorClosed = null
+  let ignoreInspectorClose = false
+  return {
+    attachChild(child) {
+      child.stderr?.on?.('data', (chunk) => stderrTail.push(chunk))
+      child.once?.('exit', (code, signal) => {
+        exit ??= { code, signal, tMs: Math.round(now()) }
+      })
+    },
+    attachInspector(socket) {
+      const onClose = () => {
+        if (!ignoreInspectorClose) inspectorClosed ??= { tMs: Math.round(now()) }
+      }
+      socket.addEventListener?.('close', onClose)
+      socket.on?.('close', onClose)
+    },
+    finish() {
+      ignoreInspectorClose = true
+    },
+    invalidReason() {
+      if (exit) return 'candidate-exited'
+      if (inspectorClosed) return 'inspector-closed'
+      return null
+    },
+    invalidDetails() {
+      const reason = this.invalidReason()
+      if (!reason) return null
+      return {
+        reason,
+        ...(exit ? { candidateExit: exit } : {}),
+        ...(inspectorClosed ? { inspectorClosed } : {}),
+        stderrTail: stderrTail.snapshot()
+      }
+    },
+    stderrTail: () => stderrTail.snapshot()
+  }
+}
+
+export function rendererPreflightStatus(records) {
+  const renderCrash = records.some((record) => record?.event === 'app.crash' && record?.kind === 'render-process-gone')
+  if (renderCrash) return { ok: false, reason: 'renderer-not-ready', renderProcessGone: true }
+  return records.some((record) => record?.event === 'app.renderer.ready') ? { ok: true } : { ok: false, reason: 'renderer-not-ready' }
+}
+
+export function rendererPreflightInvalidDetails({ lifecycleDetails, records, stderrTail }) {
+  if (lifecycleDetails) return lifecycleDetails
+  const status = rendererPreflightStatus(records)
+  if (status.ok) return null
+  if (status.renderProcessGone) return { reason: status.reason, stderrTail }
+  return null
+}
+
+export function quietHostInvalidReason(timeline, budgetMs = WITNESS_LOOP_MAX_MS) {
+  return timeline.some((entry) => entry?.witness?.loopMaxSinceLastMs > budgetMs) ? 'noisy-host' : null
+}
+
 /** Command-line flags as camelCase keys over `defaults`: `--cloud-dir x` becomes `cloudDir: 'x'`. A flag
  *  with no value (last, or followed by another flag) is the string 'true'. */
 export function parseArgs(argv, defaults = {}) {
@@ -611,7 +713,9 @@ export function buildReport({
   fixtureCounts = null,
   purpose = 'st-1',
   windowVariant = 'shipped',
-  windowWarmup = false
+  windowWarmup = false,
+  invalidReason = null,
+  invalidDetails = null
 }) {
   const criteria = evaluateCriteria(row, measured, evidence, { history })
   const refusalEvidence = fifoRefusalEvidence(row, measured, evidence, fixtures, fixtureCounts)
@@ -620,7 +724,9 @@ export function buildReport({
   const openedNonRegularFixture = criteria.some((criterion) => criterion.name === 'non-regular-fixtures-unopened' && !criterion.pass)
   // OD-43/M2-0534: after-idle rows must resolve to PASS or FAIL; missing refusal proof is a row failure.
   const delayedHistoryFailed = historyMode === 'after-idle' && refusalEvidence && !refusalEvidence.exercised
-  const verdict = !complete
+  const verdict = invalidReason
+    ? 'INVALID'
+    : !complete
     ? 'INCOMPLETE'
     : openedNonRegularFixture || delayedHistoryFailed
       ? 'FAIL'
@@ -659,6 +765,8 @@ export function buildReport({
     ...(history ? { historySummary: historySummary(measured, { row, complete, storageSaturations: attribution.storageSaturations }) } : {}),
     criteria,
     verdict,
+    ...(invalidReason ? { reason: invalidReason } : {}),
+    ...(invalidDetails ? { invalidDetails } : {}),
     complete,
     ...(harnessError ? { harnessError } : {}),
     // Report-only attribution evidence; no criterion reads it.

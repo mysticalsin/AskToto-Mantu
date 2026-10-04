@@ -1,9 +1,12 @@
+import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { BOOT_WINDOW_VARIANTS } from '../../src/main/infra/observability/projection'
 import {
   GATED_WINDOW_STAGES,
   PENDING_GLOBAL,
+  STDERR_TAIL_LIMIT_BYTES,
   STORAGE_SATURATED_LOG,
+  WITNESS_LOOP_MAX_MS,
   WINDOW_STAGE_BUDGET_MS,
   WINDOW_VARIANTS,
   bootStagesFromAudit,
@@ -12,6 +15,7 @@ import {
   candidateEnv,
   countStorageSaturations,
   cpuBusyPct,
+  createCandidateLifecycle,
   emptyRun,
   evaluateCriteria,
   historyEntry,
@@ -19,10 +23,14 @@ import {
   historySummary,
   parseArgs,
   pinnedExpression,
+  quietHostInvalidReason,
   recordSample,
   releaseExpression,
+  rendererPreflightInvalidDetails,
+  rendererPreflightStatus,
   sampleExpression,
   shouldProbeHistory,
+  st1ExitCode,
   syntheticDatalessPlan,
   runPurpose,
   timedCallsExpression,
@@ -297,6 +305,103 @@ describe('recordSample', () => {
       { tMs: 2_000, writeMs: 900, lookupMs: 1, answeredMs: 1_600, witness },
       { tMs: 3_000, hung: true, witness }
     ])
+  })
+})
+
+describe('candidate lifecycle invalidation', () => {
+  it('keeps tracking child exit after inspector discovery and reports only a bounded content-free stderr tail', () => {
+    let now = 10
+    const lifecycle = createCandidateLifecycle({ now: () => now })
+    const child = new EventEmitter() as EventEmitter & { stderr: EventEmitter }
+    child.stderr = new EventEmitter()
+
+    lifecycle.attachChild(child)
+    child.stderr.emit('data', `first-${'sensitive'.repeat(600)}`)
+    now = 1_234
+    child.emit('exit', 6, null)
+
+    const details = lifecycle.invalidDetails()
+    expect(details).toMatchObject({
+      reason: 'candidate-exited',
+      candidateExit: { code: 6, signal: null, tMs: 1_234 },
+      stderrTail: {
+        limitBytes: STDERR_TAIL_LIMIT_BYTES,
+        retainedBytes: STDERR_TAIL_LIMIT_BYTES
+      }
+    })
+    expect(details?.stderrTail.truncatedBytes).toBeGreaterThan(0)
+    expect(JSON.stringify(details)).not.toContain('sensitive')
+  })
+
+  it('marks an inspector socket close as INVALID unless the harness is closing it after completion', () => {
+    let now = 40
+    const lifecycle = createCandidateLifecycle({ now: () => now })
+    const socket = new EventTarget()
+
+    lifecycle.attachInspector(socket)
+    now = 55
+    socket.dispatchEvent(new Event('close'))
+
+    expect(lifecycle.invalidDetails()).toMatchObject({ reason: 'inspector-closed', inspectorClosed: { tMs: 55 } })
+
+    const completed = createCandidateLifecycle({ now: () => now })
+    const completedSocket = new EventTarget()
+    completed.attachInspector(completedSocket)
+    completed.finish()
+    completedSocket.dispatchEvent(new Event('close'))
+    expect(completed.invalidDetails()).toBeNull()
+  })
+
+  it('tracks an EventEmitter inspector socket close, matching the fake sockets used by harness tests', () => {
+    let now = 70
+    const lifecycle = createCandidateLifecycle({ now: () => now })
+    const socket = new EventEmitter()
+
+    lifecycle.attachInspector(socket)
+    now = 88
+    socket.emit('close')
+
+    expect(lifecycle.invalidDetails()).toMatchObject({ reason: 'inspector-closed', inspectorClosed: { tMs: 88 } })
+  })
+})
+
+describe('renderer preflight and quiet-host precondition', () => {
+  it('requires renderer-ready and treats a render-process-gone crash as renderer-not-ready', () => {
+    expect(rendererPreflightStatus([{ event: 'app.started' }])).toEqual({ ok: false, reason: 'renderer-not-ready' })
+    expect(rendererPreflightStatus([{ event: 'app.renderer.ready' }])).toEqual({ ok: true })
+    expect(rendererPreflightStatus([{ event: 'app.crash', kind: 'render-process-gone' }, { event: 'app.renderer.ready' }])).toEqual({
+      ok: false,
+      reason: 'renderer-not-ready',
+      renderProcessGone: true
+    })
+  })
+
+  it('invalidates a run when any runner witness sample exceeds the quiet-host loop budget', () => {
+    expect(quietHostInvalidReason([{ tMs: 1_000, witness: { loopMaxSinceLastMs: WITNESS_LOOP_MAX_MS } }])).toBeNull()
+    expect(quietHostInvalidReason([{ tMs: 1_000, witness: { loopMaxSinceLastMs: WITNESS_LOOP_MAX_MS + 0.1 } }])).toBe('noisy-host')
+  })
+
+  it('checks lifecycle invalidation before audit records during renderer-ready preflight', () => {
+    const lifecycleDetails = { reason: 'inspector-closed', inspectorClosed: { tMs: 99 }, stderrTail: { bytes: 0 } }
+
+    expect(
+      rendererPreflightInvalidDetails({
+        lifecycleDetails,
+        records: [{ event: 'app.crash', kind: 'render-process-gone' }],
+        stderrTail: { bytes: 0 }
+      })
+    ).toBe(lifecycleDetails)
+  })
+
+  it('invalidates render-process-gone during preflight without starting the sampled window', () => {
+    expect(
+      rendererPreflightInvalidDetails({
+        lifecycleDetails: null,
+        records: [{ event: 'app.crash', kind: 'render-process-gone' }],
+        stderrTail: { bytes: 24 }
+      })
+    ).toEqual({ reason: 'renderer-not-ready', stderrTail: { bytes: 24 } })
+    expect(rendererPreflightInvalidDetails({ lifecycleDetails: null, records: [{ event: 'app.renderer.ready' }], stderrTail: { bytes: 0 } })).toBeNull()
   })
 })
 
@@ -625,6 +730,19 @@ describe('buildReport', () => {
     const crashed = report({ complete: false, harnessError: 'socket closed' })
     expect(crashed.verdict).toBe('INCOMPLETE')
     expect(crashed.harnessError).toBe('socket closed')
+  })
+
+  it('reports every launch precondition violation as INVALID without changing the criteria it would otherwise show', () => {
+    for (const reason of ['candidate-exited', 'inspector-closed', 'renderer-not-ready', 'noisy-host']) {
+      const built = report({
+        invalidReason: reason,
+        invalidDetails: { reason, stderrTail: { bytes: 12, limitBytes: 4_096, retainedBytes: 12, truncatedBytes: 0, chunkBytes: [12] } }
+      })
+      expect(built.verdict).toBe('INVALID')
+      expect(built.reason).toBe(reason)
+      expect(built.invalidDetails).toMatchObject({ reason, stderrTail: { bytes: 12, retainedBytes: 12 } })
+      expect(built.criteria.every((criterion: { pass: boolean }) => criterion.pass)).toBe(true)
+    }
   })
 
   it('exercises a fifo row when History refused enough fixture meetings and brainStatus answered', () => {
@@ -1080,6 +1198,16 @@ describe('buildLaunchFailureReport', () => {
     expect(built.verdict).toBe('FAIL')
     expect(built.criteria).toEqual([{ name: 'inspector', pass: false }])
     expect(built.fixtures).toBe(3)
+  })
+})
+
+describe('st1ExitCode', () => {
+  it('keeps launch precondition INVALID rows green while real scoring outcomes still fail the CLI', () => {
+    expect(st1ExitCode('PASS')).toBe(0)
+    expect(st1ExitCode('INVALID')).toBe(0)
+    expect(st1ExitCode('FAIL')).toBe(1)
+    expect(st1ExitCode('NOT_EXERCISED')).toBe(1)
+    expect(st1ExitCode('INCOMPLETE')).toBe(1)
   })
 })
 
