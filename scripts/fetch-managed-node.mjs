@@ -10,11 +10,11 @@
  */
 
 import { createHash } from 'node:crypto'
-import { createWriteStream, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { get as httpsGet } from 'node:https'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { provisionManagedNodeArchive } from './lib/managed-node-provision.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -26,23 +26,92 @@ const ASSETS = manifest.assets
 
 const VC_REDIST_URL = 'https://aka.ms/vs/17/release/vc_redist.x64.exe'
 const VC_DEST = join(REPO_ROOT, 'resources', 'vcredist', 'vc_redist.x64.exe')
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
+const DEFAULT_RESPONSE_IDLE_TIMEOUT_MS = 30_000
+const DEFAULT_MAX_ATTEMPTS = 3
+const DEFAULT_BACKOFF_BASE_MS = 1_000
 
-function download(url, dest) {
+export function fetchStream(url, { requestGet = httpsGet, requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS } = {}) {
   return new Promise((resolve, reject) => {
-    const req = httpsGet(url, { timeout: 60_000 }, (res) => {
+    let timeout
+    const req = requestGet(url, (res) => {
+      clearTimeout(timeout)
       if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume()
-        download(res.headers.location, dest).then(resolve, reject)
+        fetchStream(new URL(res.headers.location, url).toString(), { requestGet, requestTimeoutMs }).then(resolve, reject)
         return
       }
       if (res.statusCode !== 200) {
-        reject(new Error(`${url}: HTTP ${res.statusCode}`))
+        res.resume()
+        reject(new Error(`HTTP ${res.statusCode} for ${url}`))
         return
       }
-      pipeline(res, createWriteStream(dest)).then(resolve, reject)
+      resolve(res)
     })
-    req.on('error', reject)
+    timeout = setTimeout(() => {
+      req.destroy(new Error(`request timeout after ${requestTimeoutMs}ms for ${url}`))
+    }, requestTimeoutMs)
+    req.on('error', (error) => {
+      clearTimeout(timeout)
+      reject(error)
+    })
   })
+}
+
+export async function download(
+  url,
+  dest,
+  {
+    requestGet = httpsGet,
+    requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+    responseIdleTimeoutMs = DEFAULT_RESPONSE_IDLE_TIMEOUT_MS,
+    maxAttempts = DEFAULT_MAX_ATTEMPTS,
+    backoffBaseMs = DEFAULT_BACKOFF_BASE_MS
+  } = {}
+) {
+  const part = `${dest}.part`
+  let lastErr
+  try {
+    unlinkSync(part)
+  } catch {
+    /* no partial file */
+  }
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const res = await fetchStream(url, { requestGet, requestTimeoutMs })
+      const total = Number(res.headers['content-length'] || 0)
+      res.setTimeout(responseIdleTimeoutMs, () => {
+        res.destroy(new Error(`response idle timeout after ${responseIdleTimeoutMs}ms for ${url}`))
+      })
+      await pipeline(res, createWriteStream(part))
+      if (res.socket) res.setTimeout(0)
+      const size = statSync(part).size
+      if (total && size !== total) throw new Error(`incomplete download: got ${size} of ${total} bytes`)
+      try {
+        unlinkSync(dest)
+      } catch {
+        /* no previous archive */
+      }
+      renameSync(part, dest)
+      return
+    } catch (error) {
+      lastErr = error
+      try {
+        unlinkSync(part)
+      } catch {
+        /* no partial file */
+      }
+      const clientErr = /HTTP 4\d\d/.test(error?.message || '')
+      if (attempt < maxAttempts && !clientErr) {
+        const backoffMs = backoffBaseMs * 2 ** (attempt - 1)
+        process.stdout.write(`  [retry ${attempt}/${maxAttempts - 1}] ${error?.message ?? error}; waiting ${backoffMs}ms\n`)
+        await new Promise((resolve) => setTimeout(resolve, backoffMs))
+      } else {
+        break
+      }
+    }
+  }
+  throw lastErr
 }
 
 function sha256File(path) {
@@ -72,8 +141,14 @@ async function fetchVcRedist() {
   process.stdout.write(`Ready ${VC_DEST}\n`)
 }
 
-const target = process.argv[2] || 'all'
-const jobs = []
-if (target === 'win' || target === 'all') jobs.push(fetchAsset('win32-x64'), fetchVcRedist())
-if (target === 'mac' || target === 'all') jobs.push(fetchAsset('darwin-arm64'), fetchAsset('darwin-x64'))
-await Promise.all(jobs)
+export async function main(argv = process.argv.slice(2)) {
+  const target = argv[0] || 'all'
+  const jobs = []
+  if (target === 'win' || target === 'all') jobs.push(fetchAsset('win32-x64'), fetchVcRedist())
+  if (target === 'mac' || target === 'all') jobs.push(fetchAsset('darwin-arm64'), fetchAsset('darwin-x64'))
+  await Promise.all(jobs)
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main()
+}

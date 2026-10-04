@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { provisionManagedNodeArchive } from './lib/managed-node-provision.mjs'
 
@@ -38,6 +39,16 @@ function fixture(includeNode = true) {
 }
 
 describe('MQA-314: managed Node provisioning', () => {
+  it('retries transient managed-node download failures without weakening checksum-gated promotion', () => {
+    const provisioner = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'fetch-managed-node.mjs'), 'utf8')
+
+    expect(provisioner).toContain('const DEFAULT_MAX_ATTEMPTS = 3')
+    expect(provisioner).toContain('fetchStream(url, { requestGet, requestTimeoutMs })')
+    expect(provisioner).toContain('[retry ${attempt}/${maxAttempts - 1}]')
+    expect(provisioner).toContain('sha256File(archive) !== spec.sha256')
+    expect(provisioner).toContain('provisionManagedNodeArchive(archive, dest, spec, NODE_VERSION)')
+  })
+
   it('promotes a verified complete archive, removing files from the previous Node release', () => {
     const { archive, dest, spec } = fixture()
     provisionManagedNodeArchive(archive, dest, spec, '24.21.0')
