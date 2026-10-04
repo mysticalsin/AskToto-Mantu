@@ -22,6 +22,7 @@ on:
     paths:
       - .github/workflows/qa-candidate.yml
       - build/qa-identity.electron-builder.yml
+      - scripts/build-native-mac.mjs
       - scripts/qa/provenance.mjs
       - scripts/qa/release-line.mjs
       - scripts/qa/st-1.mjs
@@ -30,6 +31,9 @@ on:
       - scripts/hermetic/prove-owner-sandbox.sh
       - scripts/hermetic/run-under-owner-sandbox.sh
       - scripts/hermetic/owner-account.sb
+      - native-app/project.yml
+      - native-app/App/**
+      - native-app/MetisKit/**
       # The boot path ST-1 measures (M2-0433), so every fix slice on it gets a QA self-test.
       - src/main/boot-tray.ts
       - src/main/boot-window-rendering.ts
@@ -243,6 +247,91 @@ jobs:
           KEYCHAIN: ${{ steps.identity.outputs.keychain }}
         run: security delete-keychain "$KEYCHAIN"
 
+  build-native-mac:
+    name: Build mac-native
+    needs: guard
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - name: Build once
+        run: |
+          if [ "$GITHUB_RUN_ATTEMPT" != 1 ]; then
+            echo "::error::A candidate is built once. Dispatch a new run; its bytes are a new candidate."
+            exit 1
+          fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - name: Install xcodegen
+        run: brew install xcodegen
+      # Same import gate as the Electron macOS candidate. It refuses Developer ID and exposes only the
+      # QA certificate fingerprint to the build and provenance steps; without the secret the app is ad-hoc.
+      - name: Import the stable QA signing identity
+        id: identity
+        env:
+          QA_MAC_SIGNING: ${{ secrets.QA_MAC_SIGNING }}
+        run: |
+          if [ -z "$QA_MAC_SIGNING" ]; then
+            echo "::warning::QA_MAC_SIGNING is not set: this native candidate is ad-hoc signed."
+            exit 0
+          fi
+          password=$(jq -r .password <<<"$QA_MAC_SIGNING")
+          keychain_password=$(openssl rand -hex 32)
+          echo "::add-mask::$password"
+          echo "::add-mask::$keychain_password"
+          keychain="$RUNNER_TEMP/qa-identity.keychain-db"
+          jq -r .p12_base64 <<<"$QA_MAC_SIGNING" | base64 --decode > "$RUNNER_TEMP/qa-identity.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          echo "keychain=$keychain" >> "$GITHUB_OUTPUT"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/qa-identity.p12" -k "$keychain" -P "$password" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/qa-identity.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identities=$(security find-identity -p codesigning "$keychain")
+          if grep -q '"Developer ID' <<<"$identities"; then
+            echo "::error::QA_MAC_SIGNING holds a Developer ID identity. The QA lane never signs with Developer ID."
+            exit 1
+          fi
+          fingerprint=$(grep -Eo '[0-9A-F]{40}' <<<"$identities" | sort -u)
+          if [ -z "$fingerprint" ] || [ "$(wc -l <<<"$fingerprint")" -ne 1 ]; then
+            echo "::error::QA_MAC_SIGNING must hold exactly one code-signing identity."
+            exit 1
+          fi
+          echo "ASKTOTO_MAC_SIGN_IDENTITY=$fingerprint" >> "$GITHUB_ENV"
+      - name: Build the mac-native app zip
+        run: node scripts/build-native-mac.mjs
+      - name: Refuse any native zip over GitHub's per-asset limit
+        run: npm run check:release
+        env:
+          ASKTOTO_ARTIFACTS_DIR: release
+      - name: Stage and hash the native zip
+        run: node scripts/qa/provenance.mjs stage mac-native release candidate
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: candidate-mac-native
+          path: candidate/assets/
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+          compression-level: 0
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: build-mac-native
+          path: candidate/build-mac-native.json
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+      - name: Remove the QA keychain
+        if: always() && steps.identity.outputs.keychain != ''
+        env:
+          KEYCHAIN: ${{ steps.identity.outputs.keychain }}
+        run: security delete-keychain "$KEYCHAIN"
+
   build-win:
     name: Build win
     needs: guard
@@ -304,7 +393,7 @@ jobs:
 
   provenance:
     name: Record provenance
-    needs: [build-mac, build-win]
+    needs: [build-mac, build-native-mac, build-win]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -414,6 +503,132 @@ jobs:
         if: always()
         with:
           name: candidate-launch-${{ matrix.variant }}
+          path: launch-reports/
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+
+  smoke-mac-native:
+    name: Launch mac-native by sha256
+    needs: provenance
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-provenance
+          path: provenance
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-mac-native
+          path: assets
+      - name: Verify the native zip against the provenance
+        run: node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-native
+      - name: Launch the native app from a fresh sha256-checked unzip
+        run: |
+          set -euo pipefail
+          mkdir -p launch-reports
+          variant=mac-native
+          name=$(jq -r --arg v "$variant" '.builds[] | select(.variant == $v) | .assets[0].name' provenance/provenance.json)
+          sha=$(jq -r --arg v "$variant" '.builds[] | select(.variant == $v) | .assets[0].sha256' provenance/provenance.json)
+          expected=$(jq -r --arg v "$variant" '.builds[] | select(.variant == $v) | .signing.certificate_sha1 // "ad-hoc"' provenance/provenance.json)
+          run_id=$(jq -r '.run.id' provenance/provenance.json)
+          zip="assets/$name"
+          report="launch-reports/$name.launch.json"
+          alive_after_30s=false
+          quit_cleanly=false
+          survivor_processes=false
+          write_report() {
+            VERDICT="$1" ALIVE_AFTER_30S="$alive_after_30s" QUIT_CLEANLY="$quit_cleanly" SURVIVOR_PROCESSES="$survivor_processes" \
+            INSTALLER="$name" ARTIFACT_SHA256="$sha" CANDIDATE_RUN="$run_id" SIGNATURE="$expected" REPORT="$report" python3 - <<'PY'
+          import json, os
+          report = {
+            "variant": "mac-native",
+            "installer": os.environ["INSTALLER"],
+            "artifact_sha256": os.environ["ARTIFACT_SHA256"],
+            "candidate_run": int(os.environ["CANDIDATE_RUN"]),
+            "signature": os.environ["SIGNATURE"],
+            "verdict": os.environ["VERDICT"],
+            "alive_after_30s": os.environ["ALIVE_AFTER_30S"] == "true",
+            "quit_cleanly": os.environ["QUIT_CLEANLY"] == "true",
+            "survivor_processes": os.environ["SURVIVOR_PROCESSES"] == "true",
+          }
+          with open(os.environ["REPORT"], "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2)
+            f.write("\n")
+          PY
+          }
+          fail() {
+            echo "::error::$1"
+            write_report FAIL
+            exit 1
+          }
+          printf '%s  %s\n' "$sha" "$zip" | shasum -a 256 -c - || fail "$name does not match provenance sha256."
+          target=$(mktemp -d "$RUNNER_TEMP/mac-native-unzip.XXXXXX")
+          native_home=$(mktemp -d "$RUNNER_TEMP/mac-native-home.XXXXXX")
+          ditto -x -k "$zip" "$target"
+          app=$(find "$target" -maxdepth 1 -name '*.app' -print -quit)
+          [ -n "$app" ] || fail "$name did not unpack to a top-level app bundle."
+          if [ "$expected" = ad-hoc ]; then
+            details=$(codesign -dv "$app" 2>&1)
+            grep -qx 'Signature=adhoc' <<<"$details" \
+              || fail "$name is not ad-hoc signed, but its provenance says it is."
+          else
+            rm -rf "$RUNNER_TEMP/native-certificate" && mkdir "$RUNNER_TEMP/native-certificate"
+            codesign -d --extract-certificates="$RUNNER_TEMP/native-certificate/c" "$app"
+            [ "$(shasum -a 1 "$RUNNER_TEMP/native-certificate/c0" | cut -d' ' -f1)" = "$expected" ] \
+              || fail "$name is not signed with the QA certificate its provenance records."
+          fi
+          exe="$app/Contents/MacOS/Metis"
+          [ -x "$exe" ] || fail "$app has no executable Metis binary."
+          HOME="$native_home" bash scripts/hermetic/run-under-owner-sandbox.sh "$exe" > "$RUNNER_TEMP/mac-native-launch.out" 2> "$RUNNER_TEMP/mac-native-launch.err" &
+          pid=$!
+          sleep 30
+          if kill -0 "$pid" 2> /dev/null; then
+            alive_after_30s=true
+          else
+            wait "$pid" || true
+            fail "The native app process was not alive after 30 seconds."
+          fi
+          osascript -e 'tell application id "com.mantu.metis.native" to quit' || true
+          for _ in {1..20}; do
+            if ! kill -0 "$pid" 2> /dev/null; then
+              if wait "$pid"; then
+                quit_cleanly=true
+              else
+                fail "The native app process exited non-zero after the quit request."
+              fi
+              break
+            fi
+            sleep 1
+          done
+          if [ "$quit_cleanly" != true ]; then
+            kill "$pid" 2> /dev/null || true
+            fail "The native app did not quit cleanly after the quit request."
+          fi
+          if pgrep -f "$target/.*Metis" > /dev/null; then
+            survivor_processes=true
+            fail "A native app process survived after quit."
+          fi
+          write_report PASS
+      - name: Require the native launch PASS report
+        if: always()
+        run: |
+          name=$(jq -r '.builds[] | select(.variant == "mac-native") | .assets[0].name' provenance/provenance.json)
+          sha=$(jq -r '.builds[] | select(.variant == "mac-native") | .assets[0].sha256' provenance/provenance.json)
+          expected=$(jq -r '.builds[] | select(.variant == "mac-native") | .signing.certificate_sha1 // "ad-hoc"' provenance/provenance.json)
+          jq -e --arg n "$name" --arg h "$sha" --arg s "$expected" \
+            '.variant == "mac-native" and .installer == $n and .verdict == "PASS" and .artifact_sha256 == $h and .signature == $s and .alive_after_30s == true and .quit_cleanly == true and .survivor_processes == false' \
+            "launch-reports/$name.launch.json" > /dev/null
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: candidate-launch-mac-native
           path: launch-reports/
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}

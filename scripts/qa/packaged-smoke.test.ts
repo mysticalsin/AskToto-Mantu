@@ -37,6 +37,8 @@ import {
   overlayStablePath,
   overlaySurfaceChanges,
   pinnedBridgeCall,
+  readPinnedBridgeCall,
+  releasePinnedBridgeCall,
   rightEdgeExpectedRects,
   rightEdgeHideParkMatches,
   rightEdgeMeetingHideVerdict,
@@ -48,6 +50,7 @@ import {
   seedOnboardedProfile,
   smokeReport,
   smokeVerdict,
+  startPinnedBridgeCall,
   waitForNavigationView
 } from './packaged-smoke.mjs'
 import {
@@ -1546,7 +1549,11 @@ describe('bootLaunchActivateVerdict', () => {
 })
 
 describe('pinnedBridgeCall (M2-0519)', () => {
-  const scope = globalThis as unknown as { window?: unknown; __metisSmokeBridgePending?: Set<Promise<unknown>> }
+  const scope = globalThis as unknown as {
+    window?: unknown
+    __metisSmokeBridgePending?: Set<Promise<unknown>>
+    __metisSmokeBridgeResults?: Record<string, { status: string; error?: string }>
+  }
 
   function bridgeWith(toggle: (...args: unknown[]) => Promise<unknown>): void {
     Object.defineProperty(globalThis, 'window', { configurable: true, value: { toto: { toggle } } })
@@ -1587,6 +1594,54 @@ describe('pinnedBridgeCall (M2-0519)', () => {
     } finally {
       Object.defineProperty(globalThis, 'window', { configurable: true, value: undefined })
       delete scope.__metisSmokeBridgePending
+    }
+  })
+
+  it('can start a bridge call without returning its Promise to CDP, then poll the page-held result', async () => {
+    let settle: (value: unknown) => void = () => undefined
+    const bridged = new Promise((resolve) => {
+      settle = resolve
+    })
+    const seen: unknown[][] = []
+    bridgeWith((...args) => {
+      seen.push(args)
+      return bridged
+    })
+    try {
+      expect(startPinnedBridgeCall(['re-hide-1', 'toggle', ['a', 1]])).toBe('re-hide-1')
+      expect(seen).toEqual([['a', 1]])
+      expect(readPinnedBridgeCall('re-hide-1')).toEqual({ status: 'pending' })
+      expect(scope.__metisSmokeBridgePending?.size).toBe(1)
+
+      settle({ visible: true })
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(readPinnedBridgeCall('re-hide-1')).toEqual({ status: 'resolved' })
+      expect(scope.__metisSmokeBridgePending?.size).toBe(0)
+      releasePinnedBridgeCall('re-hide-1')
+      expect(readPinnedBridgeCall('re-hide-1')).toEqual({ status: 'missing' })
+    } finally {
+      Object.defineProperty(globalThis, 'window', { configurable: true, value: undefined })
+      delete scope.__metisSmokeBridgePending
+      delete scope.__metisSmokeBridgeResults
+    }
+  })
+
+  it('records a rejected page-held bridge call as a pollable error and releases the promise', async () => {
+    bridgeWith(() => Promise.reject(new Error('no window')))
+    try {
+      startPinnedBridgeCall(['re-hide-2', 'toggle', []])
+      expect(scope.__metisSmokeBridgePending?.size).toBe(1)
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(readPinnedBridgeCall('re-hide-2')).toEqual({ status: 'rejected', error: 'no window' })
+      expect(scope.__metisSmokeBridgePending?.size).toBe(0)
+    } finally {
+      releasePinnedBridgeCall('re-hide-2')
+      Object.defineProperty(globalThis, 'window', { configurable: true, value: undefined })
+      delete scope.__metisSmokeBridgePending
+      delete scope.__metisSmokeBridgeResults
     }
   })
 })

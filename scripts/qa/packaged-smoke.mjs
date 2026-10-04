@@ -97,8 +97,11 @@ export {
   rightEdgeHideParkMatches,
   rightEdgeMeetingHideVerdict,
   pinnedBridgeCall,
+  readPinnedBridgeCall,
+  releasePinnedBridgeCall,
   rightEdgeStateMatches,
   rightEdgeStateMismatches,
+  startPinnedBridgeCall,
   runRightEdgeHideRows
 } from './golden-flows/right-edge-hide-rows.mjs'
 export { RV_BOOT_ROW_ID, RV_SCENARIOS, auditDiagnostic, buildWindowsShortcutLauncher, initialRvRows, isPassingRevealEvidence, runRevealRow } from './golden-flows/reveal-rows.mjs'

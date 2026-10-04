@@ -142,6 +142,57 @@ describe('qa-candidate smoke jobs write per-asset launch reports (M2-0508)', () 
   })
 })
 
+describe('QA candidate mac-native variant (M2-0569)', () => {
+  it('builds the native mac app once, stages provenance, and uploads candidate-mac-native', () => {
+    const block = job('build-native-mac')
+    expect(block).toMatch(/^    needs: guard$/m)
+    expect(block).toMatch(/^    runs-on: macos-latest$/m)
+    expect(block).toContain('A candidate is built once')
+    expect(block).toContain('node scripts/build-native-mac.mjs')
+    expect(block).toContain('node scripts/qa/provenance.mjs stage mac-native release candidate')
+    expect(block).toContain('name: candidate-mac-native')
+    expect(block).toContain('name: build-mac-native')
+    expect(block).toContain('ASKTOTO_MAC_SIGN_IDENTITY=$fingerprint')
+    expect(block).toContain('QA lane never signs with Developer ID')
+  })
+
+  it('assembles provenance only after Electron mac, native mac, and Windows builds finish', () => {
+    expect(job('provenance')).toMatch(/^    needs: \[build-mac, build-native-mac, build-win\]$/m)
+  })
+
+  it('launch-smokes mac-native after provenance using the hermetic wrapper and isolated HOME', () => {
+    const block = job('smoke-mac-native')
+    expect(block).toMatch(/^    needs: provenance$/m)
+    expect(block).toMatch(/^    runs-on: macos-latest$/m)
+    expect(block).toContain('name: candidate-mac-native')
+    expect(block).toContain('node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-native')
+    expect(block).toContain("printf '%s  %s\\n' \"$sha\" \"$zip\" | shasum -a 256 -c -")
+    expect(block).toContain('.signing.certificate_sha1 // "ad-hoc"')
+    expect(block).toContain('Signature=adhoc')
+    expect(block).toContain('codesign -d --extract-certificates=')
+    expect(block).toContain('"signature": os.environ["SIGNATURE"]')
+    expect(block).toContain('.signature == $s')
+    expect(block).toContain('target=$(mktemp -d "$RUNNER_TEMP/mac-native-unzip.XXXXXX")')
+    expect(block).toContain('native_home=$(mktemp -d "$RUNNER_TEMP/mac-native-home.XXXXXX")')
+    expect(block).toContain('HOME="$native_home" bash scripts/hermetic/run-under-owner-sandbox.sh "$exe"')
+    expect(block).toContain('sleep 30')
+    expect(block).toContain('alive_after_30s=true')
+    expect(block).toContain('tell application id "com.mantu.metis.native" to quit')
+    expect(block).toContain('survivor_processes == false')
+    expect(block).toContain('name: candidate-launch-mac-native')
+    expect(block).toContain("retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}")
+  })
+
+  it('keeps mac-native out of promotion and self-tests its lane files', () => {
+    const promote = readFileSync(join(root, '.github', 'workflows', 'promote-candidate.yml'), 'utf8')
+    expect(promote).not.toContain('candidate-mac-native')
+    expect(workflow).toContain('      - scripts/build-native-mac.mjs\n')
+    expect(workflow).toContain('      - native-app/project.yml\n')
+    expect(workflow).toContain('      - native-app/App/**\n')
+    expect(workflow).toContain('      - native-app/MetisKit/**\n')
+  })
+})
+
 const jobsStart = workflow.indexOf('\njobs:\n')
 const jobBlocks = new Map<string, string>()
 {
@@ -192,11 +243,11 @@ describe('QA candidate workflow: which refs and versions may build (M2-0499)', (
     const checkoutIndex = guardSteps.findIndex((step) => step.includes('actions/checkout@'))
     expect(checkoutIndex).toBeGreaterThan(-1)
     expect(checkoutIndex).toBeLessThan(versionIndex)
-    for (const build of ['build-mac', 'build-win']) {
+    for (const build of ['build-mac', 'build-native-mac', 'build-win']) {
       expect(jobBlocks.get(build)).toMatch(/^    needs: guard$/m)
     }
     // Every other job is downstream of a build job.
-    expect(jobBlocks.get('provenance')).toMatch(/^    needs: \[build-mac, build-win\]$/m)
+    expect(jobBlocks.get('provenance')).toMatch(/^    needs: \[build-mac, build-native-mac, build-win\]$/m)
   })
 
   it('reads the feed with the workflow token only, and fails closed naming the call on a dispatch', () => {

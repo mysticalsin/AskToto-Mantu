@@ -10,6 +10,7 @@
  * Usage:
  *   node scripts/build-native-mac.mjs
  *   node scripts/build-native-mac.mjs --out-dir /path/to/release
+ *   node scripts/build-native-mac.mjs --signing-identity <sha1-or-name>
  */
 import { spawnSync } from 'node:child_process'
 import {
@@ -70,13 +71,34 @@ export function syncNativeMarketingVersion(version = readVersion(), projectYmlPa
 
 function parseArgs(argv) {
   let outDir = join(REPO_ROOT, 'release')
+  let signingIdentity = process.env.ASKTOTO_MAC_SIGN_IDENTITY || '-'
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--out-dir') {
       outDir = resolve(argv[++i] || '')
       if (!outDir) die('--out-dir requires a path')
+    } else if (argv[i] === '--signing-identity') {
+      signingIdentity = argv[++i] || ''
+      if (!signingIdentity) die('--signing-identity requires a value')
     }
   }
-  return { outDir }
+  return { outDir, signingIdentity }
+}
+
+export function xcodebuildSigningArgs(signingIdentity = process.env.ASKTOTO_MAC_SIGN_IDENTITY || '-') {
+  if (!signingIdentity || signingIdentity === '-') {
+    return ['CODE_SIGN_IDENTITY=-', 'CODE_SIGNING_ALLOWED=YES', 'CODE_SIGNING_REQUIRED=NO']
+  }
+  if (/Developer ID/i.test(signingIdentity)) {
+    throw new Error('Developer ID signing is not allowed for native QA candidates')
+  }
+  return [
+    `CODE_SIGN_IDENTITY=${signingIdentity}`,
+    'CODE_SIGN_STYLE=Manual',
+    'DEVELOPMENT_TEAM=',
+    'PROVISIONING_PROFILE_SPECIFIER=',
+    'CODE_SIGNING_ALLOWED=YES',
+    'CODE_SIGNING_REQUIRED=YES'
+  ]
 }
 
 function findBuiltAppSync(derivedData) {
@@ -96,7 +118,7 @@ function findBuiltAppSync(derivedData) {
   return join(releaseDir, apps[0])
 }
 
-export function buildNativeMac({ outDir = join(REPO_ROOT, 'release'), version = readVersion() } = {}) {
+export function buildNativeMac({ outDir = join(REPO_ROOT, 'release'), version = readVersion(), signingIdentity } = {}) {
   if (process.platform !== 'darwin') {
     die('the pure Mac native app can only be built on macOS (needs Xcode + xcodegen)')
   }
@@ -138,9 +160,7 @@ export function buildNativeMac({ outDir = join(REPO_ROOT, 'release'), version = 
         'generic/platform=macOS',
         '-derivedDataPath',
         derivedData,
-        'CODE_SIGN_IDENTITY=-',
-        'CODE_SIGNING_ALLOWED=YES',
-        'CODE_SIGNING_REQUIRED=NO',
+        ...xcodebuildSigningArgs(signingIdentity),
         'ONLY_ACTIVE_ARCH=NO',
         'build'
       ],
@@ -170,8 +190,8 @@ export function buildNativeMac({ outDir = join(REPO_ROOT, 'release'), version = 
 }
 
 function main() {
-  const { outDir } = parseArgs(process.argv.slice(2))
-  buildNativeMac({ outDir })
+  const { outDir, signingIdentity } = parseArgs(process.argv.slice(2))
+  buildNativeMac({ outDir, signingIdentity })
 }
 
 const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
