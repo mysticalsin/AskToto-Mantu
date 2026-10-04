@@ -116,6 +116,27 @@ test('resolveBackfill: a DONE ticket with no verified record for a required leve
   assert.equal(gaps[0].target_status, 'ENGINEERING_COMPLETE')
 })
 
+test('resolveBackfill: OD-65 legacy fix without red-before repro is filed, while unlisted fixes gap', () => {
+  const listed = ticket({ id: 'M2-0001', status: 'DONE', type: 'fix', required_evidence: ['LOCALLY_TESTED'] })
+  const unlisted = ticket({ id: 'M2-0002', status: 'DONE', type: 'fix', required_evidence: ['LOCALLY_TESTED'] })
+  const recordsByTicket = new Map([
+    ['M2-0001', [record({ ticket: 'M2-0001' })]],
+    ['M2-0002', [record({ ticket: 'M2-0002' })]]
+  ])
+  const { backfilled, gaps, legacyFixFiled } = resolveBackfill(
+    { tickets: [listed, unlisted] },
+    recordsByTicket,
+    { legacyFixTickets: new Set(['M2-0001']) }
+  )
+
+  assert.equal(backfilled.has('M2-0001'), true)
+  assert.deepEqual(legacyFixFiled, ['M2-0001'])
+  assert.deepEqual(gaps, [{
+    ticket: 'M2-0002', status: 'DONE', level: 'LOCALLY_TESTED',
+    reason: 'latest verified record has no red-before repro', target_status: 'IN_PROGRESS'
+  }])
+})
+
 test('resolveBackfill: latest record governs — a later verified FAIL withdraws an earlier verified PASS', () => {
   const t = ticket({ id: 'M2-0001', status: 'DONE', required_evidence: ['LOCALLY_TESTED'] })
   const recordsByTicket = new Map([[
@@ -169,7 +190,7 @@ test('writeBackfill writes one JSONL file per backfilled ticket, a gaps.jsonl an
     reason: 'no verified PR evidence found for this level', target_status: 'ENGINEERING_COMPLETE'
   }]
 
-  writeBackfill(outDir, { backfilled, gaps })
+  writeBackfill(outDir, { backfilled, gaps, legacyFixFiled: ['M2-0001'] })
 
   const recordLines = readFileSync(join(outDir, 'records', 'M2-0001.jsonl'), 'utf8').trim().split('\n')
   assert.equal(recordLines.length, 1)
@@ -181,6 +202,8 @@ test('writeBackfill writes one JSONL file per backfilled ticket, a gaps.jsonl an
   const readme = readFileSync(join(outDir, 'README.md'), 'utf8')
   assert.match(readme, /LEAD_ACTION: file these records/)
   assert.match(readme, /M2-0001/)
+  assert.match(readme, /OD-65 legacy fix exemptions filed: 1/)
+  assert.match(readme, /M2-0001: OD-65 legacy fix exemption/)
   assert.match(readme, /LEAD_ACTION: revert tickets with no verified evidence/)
   // the target status the lead should revert the gap ticket to, not just that a gap exists
   assert.match(readme, /M2-0002 \[DONE -> ENGINEERING_COMPLETE\]/)
