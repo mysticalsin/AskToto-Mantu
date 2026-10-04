@@ -112,7 +112,9 @@ describe('MQA-248 — the test-file typecheck ratchet', () => {
     expect(readFileSync(TRACKED_TEST, 'utf8')).toBe(trackedBefore)
   })
 
-  it('also fails when the baseline is STALE — a fixed error must lower it', () => {
+  // A zero floor cannot be stale-below: createFixture(BASELINE - 1) would be
+  // createFixture(-1), and Array.from length coerces to 0, so the gate exits 0 at baseline.
+  it.skipIf(BASELINE === 0)('also fails when the baseline is STALE — a fixed error must lower it', () => {
     // A lower diagnostic count must fail too, or a fixed error silently becomes regression headroom.
     const fixture = createFixture(BASELINE - 1)
     try {
