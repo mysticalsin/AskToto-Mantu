@@ -31,7 +31,7 @@ import {
 vi.mock('electron')
 
 describe('HK-M temp directory cleanup', () => {
-  it('requests retries and does not turn a one-off ENOTEMPTY into a failure', () => {
+  it('records a transient ENOTEMPTY cleanup warning without failing a passing row', () => {
     const warnings: { code: string; message: string }[] = []
     let calls = 0
     const options: unknown[] = []
@@ -44,6 +44,7 @@ describe('HK-M temp directory cleanup', () => {
     expect(removeTempDir('/tmp/metis-hk-m-x', warnings, remove)).toBe(false)
     expect(removeTempDir('/tmp/metis-hk-m-x', warnings, remove)).toBe(true)
     expect(options[0]).toEqual({ recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    expect(options[1]).toEqual({ recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     expect(warnings).toEqual([{ code: 'ENOTEMPTY', message: 'ENOTEMPTY: directory not empty' }])
 
     const rows = [{ scenario: 'idle', cycle: 1, status: 'PASS' }]
