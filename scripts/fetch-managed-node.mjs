@@ -10,7 +10,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import { createWriteStream, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, unlinkSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { get as httpsGet } from 'node:https'
@@ -26,23 +26,66 @@ const ASSETS = manifest.assets
 
 const VC_REDIST_URL = 'https://aka.ms/vs/17/release/vc_redist.x64.exe'
 const VC_DEST = join(REPO_ROOT, 'resources', 'vcredist', 'vc_redist.x64.exe')
+const MAX_DOWNLOAD_ATTEMPTS = 4
+const DOWNLOAD_BACKOFF_BASE_MS = 1_000
 
-function download(url, dest) {
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+function removeIfExists(path) {
+  try {
+    unlinkSync(path)
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error
+  }
+}
+
+function downloadOnce(url, dest) {
+  const part = `${dest}.part`
   return new Promise((resolve, reject) => {
     const req = httpsGet(url, { timeout: 60_000 }, (res) => {
       if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume()
-        download(res.headers.location, dest).then(resolve, reject)
+        downloadOnce(new URL(res.headers.location, url).toString(), dest).then(resolve, reject)
         return
       }
       if (res.statusCode !== 200) {
+        res.resume()
         reject(new Error(`${url}: HTTP ${res.statusCode}`))
         return
       }
-      pipeline(res, createWriteStream(dest)).then(resolve, reject)
+      pipeline(res, createWriteStream(part))
+        .then(() => {
+          renameSync(part, dest)
+          resolve()
+        })
+        .catch((error) => {
+          removeIfExists(part)
+          reject(error)
+        })
     })
     req.on('error', reject)
+    req.on('timeout', () => req.destroy(new Error(`${url}: timed out`)))
   })
+}
+
+async function download(url, dest, { maxAttempts = MAX_DOWNLOAD_ATTEMPTS, backoffBaseMs = DOWNLOAD_BACKOFF_BASE_MS } = {}) {
+  let lastError = null
+  rmSync(`${dest}.part`, { force: true })
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await downloadOnce(url, dest)
+      return
+    } catch (error) {
+      lastError = error
+      const message = error instanceof Error ? error.message : String(error)
+      if (/HTTP 4\d\d\b/.test(message) || attempt === maxAttempts) break
+      const waitMs = backoffBaseMs * 2 ** (attempt - 1)
+      process.stdout.write(`  [retry ${attempt}/${maxAttempts - 1}] ${message}; waiting ${waitMs}ms\n`)
+      await sleep(waitMs)
+    }
+  }
+  removeIfExists(`${dest}.part`)
+  throw lastError
 }
 
 function sha256File(path) {

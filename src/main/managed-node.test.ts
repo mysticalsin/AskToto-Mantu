@@ -156,6 +156,15 @@ describe('Windows packaging does not require a preinstalled Node', () => {
     }
   })
 
+  it('fetch-managed-node retries transient official Node download failures before failing packaging', () => {
+    const provisioner = readFileSync(join(__dirname, '../../scripts/fetch-managed-node.mjs'), 'utf8')
+
+    expect(provisioner).toContain('MAX_DOWNLOAD_ATTEMPTS')
+    expect(provisioner).toContain('[retry')
+    expect(provisioner).toContain('.part')
+    expect(provisioner).toContain('sha256File(archive) !== spec.sha256')
+  })
+
   it.each([
     ['win32', 'x64', 'win-x64', 'node.exe'],
     ['darwin', 'arm64', 'darwin-arm64', 'bin/node'],
