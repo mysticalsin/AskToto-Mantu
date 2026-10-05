@@ -334,6 +334,18 @@ describe('packaged-smoke workflow supply chain', () => {
   it('uses no repository secret', () => {
     expect(workflow).not.toMatch(/\$\{\{\s*secrets\./)
   })
+
+  it('caches the managed Node runtime with the other packaged runtime assets', () => {
+    const cacheBlocks = [...workflow.matchAll(/path: \|\n(?<paths>(?: {12}.+\n)+) {10}key: (?<key>runtime-assets-.+)/g)]
+    expect(cacheBlocks).toHaveLength(2)
+
+    for (const match of cacheBlocks) {
+      const paths = match.groups?.paths ?? ''
+      const key = match.groups?.key ?? ''
+      expect(paths).toContain('resources/managed-node')
+      expect(key).toContain("hashFiles('scripts/fetch-managed-node.mjs', 'scripts/lib/managed-node-provision.mjs', 'src/shared/managed-node-manifest.json')")
+    }
+  })
 })
 
 describe('packaged-smoke workflow trigger', () => {
