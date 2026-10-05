@@ -38,6 +38,22 @@ function fixture(includeNode = true) {
 }
 
 describe('MQA-314: managed Node provisioning', () => {
+  it('keeps packaged-smoke from re-downloading managed Node on every CI run', () => {
+    const workflow = readFileSync(join(__dirname, '..', '.github', 'workflows', 'packaged-smoke.yml'), 'utf8')
+    const caches = workflow
+      .split('\n      - uses: actions/cache@')
+      .slice(1)
+      .filter((step) => step.includes('resources/managed-node'))
+
+    expect(caches.length).toBe(2)
+    for (const cache of caches) {
+      expect(cache).toContain('resources/vcredist')
+      expect(cache).toContain(
+        "hashFiles('scripts/fetch-managed-node.mjs', 'scripts/lib/managed-node-provision.mjs', 'src/shared/managed-node-manifest.json')"
+      )
+    }
+  })
+
   it('promotes a verified complete archive, removing files from the previous Node release', () => {
     const { archive, dest, spec } = fixture()
     provisionManagedNodeArchive(archive, dest, spec, '24.21.0')
