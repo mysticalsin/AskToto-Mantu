@@ -10,7 +10,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import { createWriteStream, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { createWriteStream, existsSync, mkdirSync, readFileSync, unlinkSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { get as httpsGet } from 'node:https'
@@ -23,6 +23,8 @@ const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'src/shared/managed-nod
 const NODE_VERSION = manifest.version
 const BASE = `https://nodejs.org/dist/v${NODE_VERSION}/`
 const ASSETS = manifest.assets
+const MAX_DOWNLOAD_ATTEMPTS = 4
+const BACKOFF_BASE_MS = 1_000
 
 const VC_REDIST_URL = 'https://aka.ms/vs/17/release/vc_redist.x64.exe'
 const VC_DEST = join(REPO_ROOT, 'resources', 'vcredist', 'vc_redist.x64.exe')
@@ -45,6 +47,33 @@ function download(url, dest) {
   })
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function downloadWithRetries(url, dest) {
+  let lastError
+  for (let attempt = 1; attempt <= MAX_DOWNLOAD_ATTEMPTS; attempt++) {
+    try {
+      await download(url, dest)
+      return
+    } catch (error) {
+      lastError = error
+      try {
+        unlinkSync(dest)
+      } catch {
+        /* A failed DNS/connect attempt leaves no destination file. */
+      }
+      const message = error instanceof Error ? error.message : String(error)
+      if (/HTTP 4\d\d/.test(message) || attempt === MAX_DOWNLOAD_ATTEMPTS) break
+      const backoffMs = BACKOFF_BASE_MS * 2 ** (attempt - 1)
+      process.stdout.write(`Retrying ${dest.replace(REPO_ROOT, '.')} after ${message} (${attempt}/${MAX_DOWNLOAD_ATTEMPTS - 1})…\n`)
+      await sleep(backoffMs)
+    }
+  }
+  throw lastError
+}
+
 function sha256File(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex')
 }
@@ -57,7 +86,7 @@ async function fetchAsset(id) {
   const archive = join(cache, spec.file)
   if (!existsSync(archive) || sha256File(archive) !== spec.sha256) {
     process.stdout.write(`Downloading ${spec.file}…\n`)
-    await download(BASE + spec.file, archive)
+    await downloadWithRetries(BASE + spec.file, archive)
   }
   provisionManagedNodeArchive(archive, dest, spec, NODE_VERSION)
   process.stdout.write(`Ready ${dest}\n`)
@@ -67,7 +96,7 @@ async function fetchVcRedist() {
   mkdirSync(dirname(VC_DEST), { recursive: true })
   if (!existsSync(VC_DEST)) {
     process.stdout.write('Downloading vc_redist.x64.exe…\n')
-    await download(VC_REDIST_URL, VC_DEST)
+    await downloadWithRetries(VC_REDIST_URL, VC_DEST)
   }
   process.stdout.write(`Ready ${VC_DEST}\n`)
 }

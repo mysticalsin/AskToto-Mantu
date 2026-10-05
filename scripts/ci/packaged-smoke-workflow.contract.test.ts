@@ -331,6 +331,20 @@ describe('packaged-smoke workflow supply chain', () => {
     for (const use of uses) expect(use).toMatch(/^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/)
   })
 
+  it('caches managed Node resources with the manifest and provisioner in the key', () => {
+    const cacheBlocks = workflow
+      .split('\n      - uses: actions/cache@')
+      .slice(1)
+      .map((block) => block.slice(0, block.indexOf('\n      - ')))
+
+    expect(cacheBlocks).toHaveLength(2)
+    for (const block of cacheBlocks) {
+      expect(block).toContain('resources/managed-node')
+      expect(block).toContain('resources/vcredist')
+      expect(block).toContain("hashFiles('scripts/fetch-managed-node.mjs', 'scripts/lib/managed-node-provision.mjs', 'src/shared/managed-node-manifest.json')")
+    }
+  })
+
   it('uses no repository secret', () => {
     expect(workflow).not.toMatch(/\$\{\{\s*secrets\./)
   })
