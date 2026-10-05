@@ -65,9 +65,17 @@ vi.mock('@dust-tt/client', () => {
   return { DustAPI }
 })
 
-function baseOpts(overrides: Partial<Parameters<typeof streamDust>[0]> = {}): Parameters<typeof streamDust>[0] {
+type StreamDustOptions = Parameters<typeof streamDust>[0]
+type MockHandlers = {
+  onDelta: ReturnType<typeof vi.fn>
+  onDone: ReturnType<typeof vi.fn>
+  onError: ReturnType<typeof vi.fn>
+}
+
+function baseOpts(overrides: Partial<StreamDustOptions> = {}): StreamDustOptions & { handlers: MockHandlers } {
   const req = { mode: 'answer', prompt: 'hello' } as AskStart
-  return {
+  const handlers: MockHandlers = { onDelta: vi.fn(), onDone: vi.fn(), onError: vi.fn() }
+  const opts = {
     providerId: 'dust',
     kind: 'dust',
     apiKey: 'stale-key',
@@ -76,16 +84,14 @@ function baseOpts(overrides: Partial<Parameters<typeof streamDust>[0]> = {}): Pa
     temperature: 0.5,
     system: 'SYSTEM PREAMBLE',
     req,
-    handlers: { onDelta: vi.fn(), onDone: vi.fn(), onError: vi.fn() },
+    handlers,
     refreshDustAuth: async () => ({ apiKey: 'fresh-key', workspaceId: 'ws-1' }),
     ...overrides
-  } as Parameters<typeof streamDust>[0]
+  } as StreamDustOptions & { handlers: MockHandlers }
+  return opts
 }
 
-async function waitDone(handlers: {
-  onDone: ReturnType<typeof vi.fn>
-  onError: ReturnType<typeof vi.fn>
-}): Promise<void> {
+async function waitDone(handlers: Pick<MockHandlers, 'onDone' | 'onError'>): Promise<void> {
   for (let i = 0; i < 500; i++) {
     if (handlers.onDone.mock.calls.length) return
     if (handlers.onError.mock.calls.length) throw new Error(String(handlers.onError.mock.calls[0][0]))
