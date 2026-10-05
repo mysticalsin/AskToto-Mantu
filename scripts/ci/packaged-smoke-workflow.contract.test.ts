@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest'
 
 const root = join(__dirname, '..', '..')
 const workflow = readFileSync(join(root, '.github', 'workflows', 'packaged-smoke.yml'), 'utf8').replace(/\r\n/g, '\n')
+const buildWorkflow = readFileSync(join(root, '.github', 'workflows', 'build.yml'), 'utf8').replace(/\r\n/g, '\n')
+const qaCandidateWorkflow = readFileSync(join(root, '.github', 'workflows', 'qa-candidate.yml'), 'utf8').replace(/\r\n/g, '\n')
 
 interface PushEvent {
   eventName: 'push'
@@ -332,12 +334,15 @@ describe('packaged-smoke workflow supply chain', () => {
   })
 
   it('caches managed Node resources with the manifest and provisioner in the key', () => {
-    const cacheBlocks = workflow
-      .split('\n      - uses: actions/cache@')
-      .slice(1)
-      .map((block) => block.slice(0, block.indexOf('\n      - ')))
+    const cacheBlocks = [workflow, buildWorkflow, qaCandidateWorkflow].flatMap((source) =>
+      source
+        .split('\n      - uses: actions/cache@')
+        .slice(1)
+        .map((block) => block.slice(0, block.indexOf('\n      - ')))
+        .filter((block) => block.includes('resources/local-llm'))
+    )
 
-    expect(cacheBlocks).toHaveLength(2)
+    expect(cacheBlocks).toHaveLength(6)
     for (const block of cacheBlocks) {
       expect(block).toContain('resources/managed-node')
       expect(block).toContain('resources/vcredist')

@@ -179,7 +179,9 @@ jobs:
             resources/ort
             resources/llama
             resources/local-llm
-          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}
+            resources/managed-node
+            resources/vcredist
+          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}-${{ hashFiles('scripts/fetch-managed-node.mjs', 'scripts/lib/managed-node-provision.mjs', 'src/shared/managed-node-manifest.json') }}
       # A stable identity keeps one designated requirement across candidates, so TCC grants persist.
       # Without the secret the candidate is ad-hoc signed, and provenance says so.
       - name: Import the stable QA signing identity
@@ -278,7 +280,9 @@ jobs:
             resources/ort
             resources/llama
             resources/local-llm
-          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}
+            resources/managed-node
+            resources/vcredist
+          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}-${{ hashFiles('scripts/fetch-managed-node.mjs', 'scripts/lib/managed-node-provision.mjs', 'src/shared/managed-node-manifest.json') }}
       # No signing secret reaches this job, so electron-builder leaves both installers unsigned.
       - name: Build the win installers
         run: npm run dist:win
