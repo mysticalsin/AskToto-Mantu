@@ -335,10 +335,10 @@ describe('packaged-smoke workflow supply chain', () => {
     expect(workflow).not.toMatch(/\$\{\{\s*secrets\./)
   })
 
-  it('caches the pinned managed Node payloads behind the manifest hash', () => {
-    const cacheSteps = [...workflow.matchAll(/uses: actions\/cache@[0-9a-f]{40}[\s\S]*?key: runtime-assets-[^\n]+/g)].map(
+  it('caches the pinned managed Node payloads behind the manifest hash without downloader-script churn', () => {
+    const cacheSteps = [...workflow.matchAll(/uses: actions\/cache@[0-9a-f]{40}[\s\S]*?(?=\n      - (?:uses|name):|\n  \w|$)/g)].map(
       (match) => match[0]
-    )
+    ).filter((step) => step.includes('resources/managed-node'))
 
     expect(cacheSteps).toHaveLength(2)
     expect(cacheSteps[0]).toContain('resources/managed-node')
@@ -347,8 +347,9 @@ describe('packaged-smoke workflow supply chain', () => {
     expect(cacheSteps[1]).toContain('resources/vcredist')
     for (const step of cacheSteps) {
       expect(step).toContain('src/shared/managed-node-manifest.json')
-      expect(step).toContain('scripts/fetch-managed-node.mjs')
-      expect(step).toContain('scripts/lib/managed-node-provision.mjs')
+      expect(step).not.toContain('scripts/fetch-managed-node.mjs')
+      expect(step).not.toContain('scripts/lib/managed-node-provision.mjs')
+      expect(step).toContain('restore-keys:')
     }
   })
 })
