@@ -10,40 +10,21 @@
  */
 
 import { createHash } from 'node:crypto'
-import { createWriteStream, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { pipeline } from 'node:stream/promises'
-import { get as httpsGet } from 'node:https'
 import { fileURLToPath } from 'node:url'
+import { downloadWithFallbacks } from './lib/download-with-fallbacks.mjs'
 import { provisionManagedNodeArchive } from './lib/managed-node-provision.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = join(__dirname, '..')
 const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'src/shared/managed-node-manifest.json'), 'utf8'))
 const NODE_VERSION = manifest.version
-const BASE = `https://nodejs.org/dist/v${NODE_VERSION}/`
+const NODE_BASES = [`https://nodejs.org/dist/v${NODE_VERSION}/`, `https://r2.nodejs.org/dist/v${NODE_VERSION}/`]
 const ASSETS = manifest.assets
 
 const VC_REDIST_URL = 'https://aka.ms/vs/17/release/vc_redist.x64.exe'
 const VC_DEST = join(REPO_ROOT, 'resources', 'vcredist', 'vc_redist.x64.exe')
-
-function download(url, dest) {
-  return new Promise((resolve, reject) => {
-    const req = httpsGet(url, { timeout: 60_000 }, (res) => {
-      if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        res.resume()
-        download(res.headers.location, dest).then(resolve, reject)
-        return
-      }
-      if (res.statusCode !== 200) {
-        reject(new Error(`${url}: HTTP ${res.statusCode}`))
-        return
-      }
-      pipeline(res, createWriteStream(dest)).then(resolve, reject)
-    })
-    req.on('error', reject)
-  })
-}
 
 function sha256File(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex')
@@ -57,7 +38,7 @@ async function fetchAsset(id) {
   const archive = join(cache, spec.file)
   if (!existsSync(archive) || sha256File(archive) !== spec.sha256) {
     process.stdout.write(`Downloading ${spec.file}…\n`)
-    await download(BASE + spec.file, archive)
+    await downloadWithFallbacks(NODE_BASES.map((base) => base + spec.file), archive)
   }
   provisionManagedNodeArchive(archive, dest, spec, NODE_VERSION)
   process.stdout.write(`Ready ${dest}\n`)
@@ -67,7 +48,7 @@ async function fetchVcRedist() {
   mkdirSync(dirname(VC_DEST), { recursive: true })
   if (!existsSync(VC_DEST)) {
     process.stdout.write('Downloading vc_redist.x64.exe…\n')
-    await download(VC_REDIST_URL, VC_DEST)
+    await downloadWithFallbacks(VC_REDIST_URL, VC_DEST)
   }
   process.stdout.write(`Ready ${VC_DEST}\n`)
 }
