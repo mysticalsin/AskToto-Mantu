@@ -31,7 +31,7 @@ import {
 vi.mock('electron')
 
 describe('HK-M temp directory cleanup', () => {
-  it('requests retries and does not turn a one-off ENOTEMPTY into a failure', () => {
+  it('requests retries and does not turn an ENOTEMPTY cleanup warning into a failure', () => {
     const warnings: { code: string; message: string }[] = []
     let calls = 0
     const options: unknown[] = []
