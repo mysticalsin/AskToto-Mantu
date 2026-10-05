@@ -42,7 +42,32 @@ function download(url, dest) {
       pipeline(res, createWriteStream(dest)).then(resolve, reject)
     })
     req.on('error', reject)
+    req.on('timeout', () => req.destroy(new Error(`${url}: request timed out`)))
   })
+}
+
+function isRetryableDownloadError(error) {
+  return ['EAI_AGAIN', 'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND'].includes(error?.code)
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function downloadWithRetries(url, dest, { attempts = 4, delayMs = 2_000 } = {}) {
+  let lastError = null
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      await download(url, dest)
+      return
+    } catch (error) {
+      lastError = error
+      if (attempt === attempts || !isRetryableDownloadError(error)) break
+      process.stdout.write(`Retrying ${url} after ${error.code} (${attempt}/${attempts})…\n`)
+      await sleep(delayMs * attempt)
+    }
+  }
+  throw lastError
 }
 
 function sha256File(path) {
@@ -57,7 +82,7 @@ async function fetchAsset(id) {
   const archive = join(cache, spec.file)
   if (!existsSync(archive) || sha256File(archive) !== spec.sha256) {
     process.stdout.write(`Downloading ${spec.file}…\n`)
-    await download(BASE + spec.file, archive)
+    await downloadWithRetries(BASE + spec.file, archive)
   }
   provisionManagedNodeArchive(archive, dest, spec, NODE_VERSION)
   process.stdout.write(`Ready ${dest}\n`)
@@ -67,7 +92,7 @@ async function fetchVcRedist() {
   mkdirSync(dirname(VC_DEST), { recursive: true })
   if (!existsSync(VC_DEST)) {
     process.stdout.write('Downloading vc_redist.x64.exe…\n')
-    await download(VC_REDIST_URL, VC_DEST)
+    await downloadWithRetries(VC_REDIST_URL, VC_DEST)
   }
   process.stdout.write(`Ready ${VC_DEST}\n`)
 }
