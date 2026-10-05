@@ -34,6 +34,28 @@ describe('selectCandidateInstaller', () => {
   })
 })
 
+describe('selectCandidateInstaller for the Windows QA identity', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'candidate-installer-win-qa-'))
+    writeFileSync(join(dir, 'Metis-QA-Setup-1.0.0.exe'), 'qa setup bytes')
+    writeFileSync(join(dir, 'Metis-Setup-1.0.0.exe'), 'setup bytes')
+  })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  it('returns the QA-identity Setup whose sha256 matches, and never the promotable Setup', async () => {
+    expect(await selectCandidateInstaller(dir, sha('qa setup bytes'), 'win-qa')).toBe(join(dir, 'Metis-QA-Setup-1.0.0.exe'))
+    await expect(selectCandidateInstaller(dir, sha('setup bytes'), 'win-qa')).rejects.toThrow(/No installer matches/)
+    // The promotable selector never picks the QA-identity Setup either.
+    await expect(selectCandidateInstaller(dir, sha('qa setup bytes'), 'win')).rejects.toThrow(/No installer matches/)
+  })
+
+  it('refuses a directory without a QA-identity Setup', async () => {
+    rmSync(join(dir, 'Metis-QA-Setup-1.0.0.exe'))
+    await expect(selectCandidateInstaller(dir, sha('setup bytes'), 'win-qa')).rejects.toThrow(/No Metis-QA-Setup/)
+  })
+})
+
 describe('selectCandidateInstaller on macOS', () => {
   let dir: string
   beforeEach(() => {

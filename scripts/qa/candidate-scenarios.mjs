@@ -63,7 +63,8 @@ export const PACKAGED_LIFECYCLE_RV_ROWS = Object.freeze({
  * promotable variant so its records bind to bytes that can ship. installerSuffix, when set, is the only
  * installer kind the scenario accepts; installerKind, when set, is the candidate-installer.mjs selector the
  * install step uses instead of the platform. guiScripting marks a platform entry that drives the app's native UI
- * through System Events.
+ * through System Events. budgets, when set, are the scenario's own durations, counts and time limits; the
+ * scenario script reads them from here.
  */
 export const SCENARIOS = Object.freeze({
   // M2-0026: onFatal "Relaunch Métis", then a census 10 s later with no orphaned owned sidecar. The
@@ -264,6 +265,49 @@ export const SCENARIOS = Object.freeze({
         // It finds the halted dialog and clicks its Quit button through System Events, so the lane
         // authorises GUI scripting (grant-gui) before it runs.
         guiScripting: true
+      })
+    })
+  }),
+  // M2-0524: the whole user path on the installed candidate, on a fresh isolated profile: onboarding with the
+  // speech-engine step, then a meeting fed by the QA-identity file source (M2-0494), its saved transcript and
+  // its write-up. Every step runs on every platform and none may be skipped. The file source is compiled only
+  // into QA-identity bytes, so both platforms install the QA identity: the Metis-QA zip on macOS and the
+  // Metis-QA Setup on Windows (build/qa-identity.win.electron-builder.yml). scripts/qa/journey.mjs reads budgets.
+  journey: Object.freeze({
+    ticket: 'M2-0524',
+    qaOnlyHook: true,
+    exits: Object.freeze({ 0: 'PASS', 1: 'FAIL', 2: 'PRECONDITION' }),
+    budgets: Object.freeze({
+      onboardingMs: 240_000,
+      meetingMs: 90_000,
+      stopMs: 30_000,
+      minTranscriptLines: 3,
+      transcriptSaveMs: 60_000,
+      writeUpMs: 600_000
+    }),
+    platforms: Object.freeze({
+      mac: Object.freeze({
+        variant: 'mac-qa-identity',
+        artifact: 'candidate-mac-qa-identity',
+        script: 'scripts/qa/journey.mjs',
+        args: ({ app, installer, sha256, report }) => {
+          if (!app) throw new Error('journey needs the installed app (--app).')
+          return ['--app', app, '--installer', installer, '--sha256', sha256, '--out', report]
+        },
+        report: 'journey.json',
+        isolatedProfiles: true
+      }),
+      win: Object.freeze({
+        variant: 'win-qa-identity',
+        artifact: 'candidate-win-qa-identity',
+        installerKind: 'win-qa',
+        script: 'scripts/qa/journey.mjs',
+        args: ({ app, installer, sha256, report }) => {
+          if (!app) throw new Error('journey needs the installed app (--app).')
+          return ['--app', app, '--installer', installer, '--sha256', sha256, '--out', report]
+        },
+        report: 'journey.json',
+        isolatedProfiles: true
       })
     })
   })
