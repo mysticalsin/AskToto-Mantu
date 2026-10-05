@@ -334,6 +334,19 @@ describe('packaged-smoke workflow supply chain', () => {
   it('uses no repository secret', () => {
     expect(workflow).not.toMatch(/\$\{\{\s*secrets\./)
   })
+
+  it('caches the checksum-pinned managed Node archives used by predist', () => {
+    const cacheBlocks = [...workflow.matchAll(/uses: actions\/cache@[0-9a-f]{40} # v4\.3\.0\n\s+with:\n(?<with>[\s\S]*?)(?=\n\s+- name:|\n\s+- uses:|\n\s+# No signing secret)/g)]
+      .map((match) => match.groups?.with ?? '')
+      .filter((block) => block.includes('runtime-assets-${{ runner.os }}'))
+
+    expect(cacheBlocks).toHaveLength(2)
+    for (const block of cacheBlocks) {
+      expect(block).toContain('resources/managed-node')
+      expect(block).toContain('resources/vcredist')
+      expect(block).toContain("hashFiles('scripts/fetch-managed-node.mjs', 'src/shared/managed-node-manifest.json')")
+    }
+  })
 })
 
 describe('packaged-smoke workflow trigger', () => {
