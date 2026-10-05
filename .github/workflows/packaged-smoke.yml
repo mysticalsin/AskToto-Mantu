@@ -92,6 +92,9 @@ jobs:
             resources/local-llm
             resources/managed-node
           key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}-${{ hashFiles('scripts/fetch-managed-node.mjs', 'src/shared/managed-node-manifest.json') }}
+          restore-keys: |
+            runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}-
+            runtime-assets-${{ runner.os }}-
       - name: Build the unsigned app
         run: npm run dist
       - name: Install from the DMG into a fresh directory
@@ -312,6 +315,9 @@ jobs:
             resources/local-llm
             resources/managed-node
           key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}-${{ hashFiles('scripts/fetch-managed-node.mjs', 'src/shared/managed-node-manifest.json') }}
+          restore-keys: |
+            runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}-
+            runtime-assets-${{ runner.os }}-
       # No signing secret reaches this job, so electron-builder leaves the installers unsigned.
       - name: Build the unsigned installers
         run: npm run dist:win

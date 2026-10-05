@@ -169,7 +169,7 @@ function probeCommands(): string {
 }
 
 function runtimeCacheBlocks(): string[] {
-  return [...workflow.matchAll(new RegExp(`uses: ${runtimeCacheAction}[\\s\\S]*?key: runtime-assets-[^\\n]+`, 'g'))].map((match) => match[0])
+  return [...workflow.matchAll(new RegExp(`uses: ${runtimeCacheAction}[\\s\\S]*?(?=\\n\\s+- name:|\\n\\s+- uses:|\\n\\s+- run:|\\n\\s+- shell:)`, 'g'))].map((match) => match[0])
 }
 
 describe('packaged-smoke runtime cache', () => {
@@ -179,6 +179,9 @@ describe('packaged-smoke runtime cache', () => {
     for (const block of blocks) {
       expect(block).toContain('resources/managed-node')
       expect(block).toContain("hashFiles('scripts/fetch-managed-node.mjs', 'src/shared/managed-node-manifest.json')")
+      expect(block).toContain('restore-keys: |')
+      expect(block).toContain("runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}-")
+      expect(block).toContain('runtime-assets-${{ runner.os }}-')
     }
   })
 })
