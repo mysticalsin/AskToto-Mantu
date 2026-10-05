@@ -240,6 +240,6 @@ describe('post-lady Continue is visible without hover', () => {
     expect(persona).toMatch(/opacity:\s*1/)
     expect(persona).not.toMatch(/onboard-pop-in/)
     expect(persona).not.toMatch(/animation-fill-mode:\s*both/)
-    expect(css).toMatch(/\.onboard-stage \.onboard-pop-in \{\s*animation:\s*none;\s*opacity:\s*1/)
+    expect(css).not.toMatch(/onboard-pop-in/)
   })
 })

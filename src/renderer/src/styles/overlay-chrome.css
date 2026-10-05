@@ -179,7 +179,6 @@
   transform: translate(-50%, -50%) scale(calc(41 / 64));
   transform-origin: center center;
 }
-.overlay-orb-diagram--obsidian .overlay-orb-diagram__jarvis--live,
 .overlay-orb-diagram .aw-orb[data-orb-preview]:not(.overlay-orb-diagram__jakub--live) {
   pointer-events: none;
   cursor: default;
