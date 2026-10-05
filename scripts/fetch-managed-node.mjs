@@ -27,12 +27,12 @@ const ASSETS = manifest.assets
 const VC_REDIST_URL = 'https://aka.ms/vs/17/release/vc_redist.x64.exe'
 const VC_DEST = join(REPO_ROOT, 'resources', 'vcredist', 'vc_redist.x64.exe')
 
-function download(url, dest) {
+function downloadOnce(url, dest) {
   return new Promise((resolve, reject) => {
     const req = httpsGet(url, { timeout: 60_000 }, (res) => {
       if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume()
-        download(res.headers.location, dest).then(resolve, reject)
+        downloadOnce(res.headers.location, dest).then(resolve, reject)
         return
       }
       if (res.statusCode !== 200) {
@@ -43,6 +43,22 @@ function download(url, dest) {
     })
     req.on('error', reject)
   })
+}
+
+async function download(url, dest) {
+  let lastError = null
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await downloadOnce(url, dest)
+      return
+    } catch (error) {
+      lastError = error
+      if (attempt === 3) break
+      process.stdout.write(`Download failed (${error?.code ?? error?.message ?? error}); retrying…\n`)
+      await new Promise((resolve) => setTimeout(resolve, attempt * 1_000))
+    }
+  }
+  throw lastError
 }
 
 function sha256File(path) {
