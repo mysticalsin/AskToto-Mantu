@@ -18,6 +18,12 @@ const calls = {
   streamApiKeys: [] as string[]
 }
 let failFirstStream = false
+type TestHandlers = {
+  onDelta: ReturnType<typeof vi.fn>
+  onDone: ReturnType<typeof vi.fn>
+  onError: ReturnType<typeof vi.fn>
+}
+type TestOpts = Parameters<typeof streamDust>[0] & { handlers: TestHandlers }
 
 function ok<T>(value: T): { isErr: () => false; value: T } {
   return { isErr: () => false, value }
@@ -65,7 +71,7 @@ vi.mock('@dust-tt/client', () => {
   return { DustAPI }
 })
 
-function baseOpts(overrides: Partial<Parameters<typeof streamDust>[0]> = {}): Parameters<typeof streamDust>[0] {
+function baseOpts(overrides: Partial<Parameters<typeof streamDust>[0]> = {}): TestOpts {
   const req = { mode: 'answer', prompt: 'hello' } as AskStart
   return {
     providerId: 'dust',
@@ -79,7 +85,7 @@ function baseOpts(overrides: Partial<Parameters<typeof streamDust>[0]> = {}): Pa
     handlers: { onDelta: vi.fn(), onDone: vi.fn(), onError: vi.fn() },
     refreshDustAuth: async () => ({ apiKey: 'fresh-key', workspaceId: 'ws-1' }),
     ...overrides
-  } as Parameters<typeof streamDust>[0]
+  } as TestOpts
 }
 
 async function waitDone(handlers: {

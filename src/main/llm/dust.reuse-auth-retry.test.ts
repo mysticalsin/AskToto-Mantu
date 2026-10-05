@@ -12,6 +12,12 @@ const postConvIds: string[] = []
 const apiKeysUsed: string[] = []
 let convCounter = 0
 let failNextPostWith401 = false // one-shot: simulates the expired-token 401 on postUserMessage
+type TestHandlers = {
+  onDelta: ReturnType<typeof vi.fn>
+  onDone: ReturnType<typeof vi.fn>
+  onError: ReturnType<typeof vi.fn>
+}
+type TestOpts = Parameters<typeof streamDust>[0] & { handlers: TestHandlers }
 
 function ok<T>(value: T): { isErr: () => false; value: T } {
   return { isErr: () => false, value }
@@ -59,7 +65,7 @@ vi.mock('@dust-tt/client', () => {
   return { DustAPI }
 })
 
-function baseOpts(overrides: Partial<Parameters<typeof streamDust>[0]> = {}): Parameters<typeof streamDust>[0] {
+function baseOpts(overrides: Partial<Parameters<typeof streamDust>[0]> = {}): TestOpts {
   const req = { mode: 'answer', prompt: 'fact-check this' } as AskStart
   return {
     providerId: 'dust',
@@ -72,10 +78,10 @@ function baseOpts(overrides: Partial<Parameters<typeof streamDust>[0]> = {}): Pa
     req,
     handlers: { onDelta: vi.fn(), onDone: vi.fn(), onError: vi.fn() },
     ...overrides
-  } as Parameters<typeof streamDust>[0]
+  } as TestOpts
 }
 
-async function waitDone(handlers: { onDone: ReturnType<typeof vi.fn>; onError: ReturnType<typeof vi.fn> }): Promise<void> {
+async function waitDone(handlers: Pick<TestHandlers, 'onDone' | 'onError'>): Promise<void> {
   for (let i = 0; i < 500; i++) {
     if (handlers.onDone.mock.calls.length) return
     if (handlers.onError.mock.calls.length) throw new Error(String(handlers.onError.mock.calls[0][0]))
