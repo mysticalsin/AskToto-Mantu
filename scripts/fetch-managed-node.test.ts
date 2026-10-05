@@ -1,9 +1,12 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { EventEmitter } from 'node:events'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { get as httpGet } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { download } from './fetch-managed-node.mjs'
 import { provisionManagedNodeArchive } from './lib/managed-node-provision.mjs'
 
 const scratch: string[] = []
@@ -61,5 +64,48 @@ describe('MQA-314: managed Node provisioning', () => {
     expect(() => provisionManagedNodeArchive(archive, dest, spec, '24.21.0')).toThrow(/node binary/)
     expect(readFileSync(join(dest, '.node-version'), 'utf8')).toBe('22.22.3\n')
     expect(readdirSync(dirname(dest))).toEqual(['darwin-arm64'])
+  })
+})
+
+function settleDownload(operation: Promise<void>) {
+  return operation.then(
+    () => ({ kind: 'resolved' as const, error: null }),
+    (error: Error) => ({ kind: 'rejected' as const, error })
+  )
+}
+
+function neverRespondingRequestGet(onAttempt: () => void): typeof httpGet {
+  return (() => {
+    onAttempt()
+    const request = new EventEmitter() as EventEmitter & { destroy(error?: Error): void }
+    request.destroy = (error) => {
+      if (error) request.emit('error', error)
+    }
+    return request
+  }) as unknown as typeof httpGet
+}
+
+describe('managed Node archive download resilience', () => {
+  it('retries transient request failures and removes the partial archive', async () => {
+    let attempts = 0
+    const requestGet = neverRespondingRequestGet(() => { attempts += 1 })
+    const root = mkdtempSync(join(tmpdir(), 'metis-managed-node-download-'))
+    scratch.push(root)
+    const destination = join(root, 'node.tar.gz')
+
+    const outcome = await settleDownload(
+      download('http://127.0.0.1/node.tar.gz', destination, {
+        requestGet,
+        requestTimeoutMs: 5,
+        responseIdleTimeoutMs: 5,
+        maxAttempts: 2,
+        backoffBaseMs: 1
+      })
+    )
+
+    expect(outcome.kind).toBe('rejected')
+    expect(outcome.error?.message).toMatch(/request timeout/)
+    expect(attempts).toBe(2)
+    expect(existsSync(`${destination}.part`)).toBe(false)
   })
 })
