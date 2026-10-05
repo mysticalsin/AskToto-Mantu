@@ -94,6 +94,10 @@ async function waitDone(handlers: {
   throw new Error(`timed out — calls=${JSON.stringify(calls)}`)
 }
 
+function testHandlers(handlers: Parameters<typeof streamDust>[0]['handlers']): Parameters<typeof waitDone>[0] {
+  return handlers as unknown as Parameters<typeof waitDone>[0]
+}
+
 describe('Dust auth retry after stream-start 401', () => {
   beforeEach(() => {
     resetDustConversation()
@@ -112,7 +116,7 @@ describe('Dust auth retry after stream-start 401', () => {
     failFirstStream = true
     const opts = baseOpts()
     streamDust(opts)
-    await waitDone(opts.handlers)
+    await waitDone(testHandlers(opts.handlers))
 
     expect(calls.create).toBe(1)
     expect(calls.post).toBe(0)

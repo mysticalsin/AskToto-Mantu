@@ -84,6 +84,10 @@ async function waitDone(handlers: { onDone: ReturnType<typeof vi.fn>; onError: R
   throw new Error(`timed out — calls=${JSON.stringify(calls)}`)
 }
 
+function testHandlers(handlers: Parameters<typeof streamDust>[0]['handlers']): Parameters<typeof waitDone>[0] {
+  return handlers as unknown as Parameters<typeof waitDone>[0]
+}
+
 describe('Dust 401 self-heal on the conversation-reuse path', () => {
   beforeEach(() => {
     resetDustConversation()
@@ -100,7 +104,7 @@ describe('Dust 401 self-heal on the conversation-reuse path', () => {
     // 1. First ask of the meeting — creates + caches conv-1.
     const opts1 = baseOpts()
     streamDust(opts1)
-    await waitDone(opts1.handlers)
+    await waitDone(testHandlers(opts1.handlers))
     expect(calls.create).toBe(1)
 
     // 2. Token expires mid-meeting. Next ask hits the reuse path and gets the 401.
@@ -110,7 +114,7 @@ describe('Dust 401 self-heal on the conversation-reuse path', () => {
       .mockResolvedValue({ apiKey: 'fresh-key', workspaceId: 'ws-1' })
     const opts2 = baseOpts({ refreshDustAuth })
     streamDust(opts2)
-    await waitDone(opts2.handlers)
+    await waitDone(testHandlers(opts2.handlers))
 
     // The refresh DID fire (self-heal engaged):
     expect(refreshDustAuth).toHaveBeenCalledTimes(1)
@@ -122,7 +126,7 @@ describe('Dust 401 self-heal on the conversation-reuse path', () => {
     // The next ask continues in the same meeting conversation, not a replacement conversation.
     const opts3 = baseOpts({ apiKey: 'fresh-key' })
     streamDust(opts3)
-    await waitDone(opts3.handlers)
+    await waitDone(testHandlers(opts3.handlers))
     expect(postConvIds[postConvIds.length - 1]).toBe('conv-1')
   })
 })
