@@ -78,8 +78,8 @@ jobs:
           node-version: 22.22.3
           cache: npm
       - run: npm ci
-      # Same key as build.yml and qa-candidate.yml. fetch-models.mjs reuses cached files only after its
-      # exact manifest gate.
+      # Same runtime cache family as build.yml and qa-candidate.yml. Each provisioner reuses cached files only
+      # after its exact manifest/checksum gate.
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
@@ -88,7 +88,8 @@ jobs:
             resources/ort
             resources/llama
             resources/local-llm
-          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}
+            resources/managed-node
+          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}-${{ hashFiles('src/shared/managed-node-manifest.json', 'scripts/fetch-managed-node.mjs', 'scripts/lib/managed-node-provision.mjs') }}
       - name: Build the unsigned app
         run: npm run dist
       - name: Install from the DMG into a fresh directory
@@ -307,7 +308,8 @@ jobs:
             resources/ort
             resources/llama
             resources/local-llm
-          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}
+            resources/managed-node
+          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}-${{ hashFiles('src/shared/managed-node-manifest.json', 'scripts/fetch-managed-node.mjs', 'scripts/lib/managed-node-provision.mjs') }}
       # No signing secret reaches this job, so electron-builder leaves the installers unsigned.
       - name: Build the unsigned installers
         run: npm run dist:win
