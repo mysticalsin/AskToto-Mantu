@@ -157,6 +157,7 @@ function macSteps(): WorkflowStep[] {
 
 const probeStepName = 'Probe tccutil reset ScreenCapture without sudo (report only)'
 const launchStepName = 'Launch, exercise RV reopen routes, quit cleanly, and check that nothing survives'
+const runtimeCacheAction = 'actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830'
 
 function probeCommands(): string {
   const step = macSteps().find((candidate) => candidate.name === probeStepName)
@@ -166,6 +167,21 @@ function probeCommands(): string {
     .filter((line) => !line.trim().startsWith('#') && !line.startsWith('name:'))
     .join('\n')
 }
+
+function runtimeCacheBlocks(): string[] {
+  return [...workflow.matchAll(new RegExp(`uses: ${runtimeCacheAction}[\\s\\S]*?key: runtime-assets-[^\\n]+`, 'g'))].map((match) => match[0])
+}
+
+describe('packaged-smoke runtime cache', () => {
+  it('caches the managed Node runtime fetched during packaging', () => {
+    const blocks = runtimeCacheBlocks()
+    expect(blocks).toHaveLength(2)
+    for (const block of blocks) {
+      expect(block).toContain('resources/managed-node')
+      expect(block).toContain("hashFiles('scripts/fetch-managed-node.mjs', 'src/shared/managed-node-manifest.json')")
+    }
+  })
+})
 
 describe('packaged-smoke tccutil probe (M2-0472)', () => {
   it('sits in the mac job after the last app launch and only in the mac job', () => {
