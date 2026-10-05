@@ -1,5 +1,5 @@
 // Regression: a stream-start Dust auth retry must not post the already-created user message twice.
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest'
 import type { AskStart } from '@shared/ipc'
 import { streamDust, resetDustConversation } from './dust'
 
@@ -82,13 +82,12 @@ function baseOpts(overrides: Partial<Parameters<typeof streamDust>[0]> = {}): Pa
   } as Parameters<typeof streamDust>[0]
 }
 
-async function waitDone(handlers: {
-  onDone: ReturnType<typeof vi.fn>
-  onError: ReturnType<typeof vi.fn>
-}): Promise<void> {
+async function waitDone(handlers: Parameters<typeof streamDust>[0]['handlers']): Promise<void> {
+  const onDone = handlers.onDone as Mock
+  const onError = handlers.onError as Mock
   for (let i = 0; i < 500; i++) {
-    if (handlers.onDone.mock.calls.length) return
-    if (handlers.onError.mock.calls.length) throw new Error(String(handlers.onError.mock.calls[0][0]))
+    if (onDone.mock.calls.length) return
+    if (onError.mock.calls.length) throw new Error(String(onError.mock.calls[0][0]))
     await new Promise((r) => setImmediate(r))
   }
   throw new Error(`timed out — calls=${JSON.stringify(calls)}`)
