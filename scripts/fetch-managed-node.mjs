@@ -10,12 +10,11 @@
  */
 
 import { createHash } from 'node:crypto'
-import { createWriteStream, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { pipeline } from 'node:stream/promises'
-import { get as httpsGet } from 'node:https'
 import { fileURLToPath } from 'node:url'
 import { provisionManagedNodeArchive } from './lib/managed-node-provision.mjs'
+import { download } from './lib/managed-node-download.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = join(__dirname, '..')
@@ -26,24 +25,6 @@ const ASSETS = manifest.assets
 
 const VC_REDIST_URL = 'https://aka.ms/vs/17/release/vc_redist.x64.exe'
 const VC_DEST = join(REPO_ROOT, 'resources', 'vcredist', 'vc_redist.x64.exe')
-
-function download(url, dest) {
-  return new Promise((resolve, reject) => {
-    const req = httpsGet(url, { timeout: 60_000 }, (res) => {
-      if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        res.resume()
-        download(res.headers.location, dest).then(resolve, reject)
-        return
-      }
-      if (res.statusCode !== 200) {
-        reject(new Error(`${url}: HTTP ${res.statusCode}`))
-        return
-      }
-      pipeline(res, createWriteStream(dest)).then(resolve, reject)
-    })
-    req.on('error', reject)
-  })
-}
 
 function sha256File(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex')
