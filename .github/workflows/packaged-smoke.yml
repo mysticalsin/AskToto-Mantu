@@ -78,8 +78,9 @@ jobs:
           node-version: 22.22.3
           cache: npm
       - run: npm ci
-      # Same key as build.yml and qa-candidate.yml. fetch-models.mjs reuses cached files only after its
-      # exact manifest gate.
+      # Same asset set as build.yml and qa-candidate.yml. The managed Node bytes are keyed by their pinned
+      # manifest, not the downloader implementation: fetch-managed-node.mjs verifies sha256 before use, and
+      # script-only edits must not force packaged-smoke onto a live nodejs.org download.
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
@@ -88,7 +89,10 @@ jobs:
             resources/ort
             resources/llama
             resources/local-llm
-          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}
+            resources/managed-node
+          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}-managed-node-${{ hashFiles('src/shared/managed-node-manifest.json') }}
+          restore-keys: |
+            runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}-
       - name: Build the unsigned app
         run: npm run dist
       - name: Install from the DMG into a fresh directory
@@ -307,7 +311,11 @@ jobs:
             resources/ort
             resources/llama
             resources/local-llm
-          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}
+            resources/managed-node
+            resources/vcredist
+          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}-managed-node-${{ hashFiles('src/shared/managed-node-manifest.json') }}
+          restore-keys: |
+            runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}-
       # No signing secret reaches this job, so electron-builder leaves the installers unsigned.
       - name: Build the unsigned installers
         run: npm run dist:win
