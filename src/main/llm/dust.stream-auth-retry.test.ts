@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { AskStart } from '@shared/ipc'
 import { streamDust, resetDustConversation } from './dust'
+import type { StreamHandlers } from './shared'
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp' } }))
 vi.mock('../auth', () => ({ authStatus: () => ({ email: null, name: null }) }))
@@ -82,13 +83,17 @@ function baseOpts(overrides: Partial<Parameters<typeof streamDust>[0]> = {}): Pa
   } as Parameters<typeof streamDust>[0]
 }
 
+function mockOf(f: unknown): { mock: { calls: unknown[][] } } {
+  return f as { mock: { calls: unknown[][] } }
+}
+
 async function waitDone(handlers: {
-  onDone: ReturnType<typeof vi.fn>
-  onError: ReturnType<typeof vi.fn>
+  onDone: StreamHandlers['onDone']
+  onError: StreamHandlers['onError']
 }): Promise<void> {
   for (let i = 0; i < 500; i++) {
-    if (handlers.onDone.mock.calls.length) return
-    if (handlers.onError.mock.calls.length) throw new Error(String(handlers.onError.mock.calls[0][0]))
+    if (mockOf(handlers.onDone).mock.calls.length) return
+    if (mockOf(handlers.onError).mock.calls.length) throw new Error(String(mockOf(handlers.onError).mock.calls[0][0]))
     await new Promise((r) => setImmediate(r))
   }
   throw new Error(`timed out — calls=${JSON.stringify(calls)}`)

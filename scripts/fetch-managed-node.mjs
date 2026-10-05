@@ -10,7 +10,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import { createWriteStream, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { createWriteStream, existsSync, mkdirSync, readFileSync, unlinkSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { get as httpsGet } from 'node:https'
@@ -23,16 +23,22 @@ const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'src/shared/managed-nod
 const NODE_VERSION = manifest.version
 const BASE = `https://nodejs.org/dist/v${NODE_VERSION}/`
 const ASSETS = manifest.assets
+const DOWNLOAD_ATTEMPTS = 3
+const DOWNLOAD_BACKOFF_MS = 1_000
 
 const VC_REDIST_URL = 'https://aka.ms/vs/17/release/vc_redist.x64.exe'
 const VC_DEST = join(REPO_ROOT, 'resources', 'vcredist', 'vc_redist.x64.exe')
 
-function download(url, dest) {
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function downloadOnce(url, dest) {
   return new Promise((resolve, reject) => {
     const req = httpsGet(url, { timeout: 60_000 }, (res) => {
       if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume()
-        download(res.headers.location, dest).then(resolve, reject)
+        downloadOnce(new URL(res.headers.location, url).toString(), dest).then(resolve, reject)
         return
       }
       if (res.statusCode !== 200) {
@@ -43,6 +49,38 @@ function download(url, dest) {
     })
     req.on('error', reject)
   })
+}
+
+async function download(url, dest) {
+  let lastError
+  for (let attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt++) {
+    try {
+      await downloadOnce(url, dest)
+      return
+    } catch (error) {
+      lastError = error
+      try {
+        unlinkSync(dest)
+      } catch {
+        /* A failed request can happen before the file is opened. */
+      }
+      const clientError = /HTTP 4\d\d/.test(error?.message ?? '')
+      if (attempt >= DOWNLOAD_ATTEMPTS || clientError) break
+      const delay = DOWNLOAD_BACKOFF_MS * 2 ** (attempt - 1)
+      const reason = error?.code ?? error?.message ?? error
+      process.stdout.write(`Retrying ${basenameForLog(url)} after ${reason} (${attempt}/${DOWNLOAD_ATTEMPTS - 1})…\n`)
+      await sleep(delay)
+    }
+  }
+  throw lastError
+}
+
+function basenameForLog(url) {
+  try {
+    return new URL(url).pathname.split('/').filter(Boolean).at(-1) ?? url
+  } catch {
+    return url
+  }
 }
 
 function sha256File(path) {

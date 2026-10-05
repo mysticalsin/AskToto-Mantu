@@ -334,6 +334,14 @@ describe('packaged-smoke workflow supply chain', () => {
   it('uses no repository secret', () => {
     expect(workflow).not.toMatch(/\$\{\{\s*secrets\./)
   })
+
+  it('caches the verified managed Node runtime assets used by packaging', () => {
+    expect(workflow).toContain('resources/managed-node')
+    expect(workflow).toContain('resources/vcredist')
+    expect(workflow).toContain(
+      "hashFiles('scripts/fetch-managed-node.mjs', 'scripts/lib/managed-node-provision.mjs', 'src/shared/managed-node-manifest.json')"
+    )
+  })
 })
 
 describe('packaged-smoke workflow trigger', () => {
