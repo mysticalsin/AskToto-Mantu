@@ -10,7 +10,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import { createWriteStream, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { get as httpsGet } from 'node:https'
@@ -23,26 +23,73 @@ const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'src/shared/managed-nod
 const NODE_VERSION = manifest.version
 const BASE = `https://nodejs.org/dist/v${NODE_VERSION}/`
 const ASSETS = manifest.assets
+const DEFAULT_REQUEST_TIMEOUT_MS = 60_000
+const DEFAULT_RESPONSE_IDLE_TIMEOUT_MS = 60_000
+const DEFAULT_MAX_ATTEMPTS = 3
+const DEFAULT_BACKOFF_BASE_MS = 1_000
 
 const VC_REDIST_URL = 'https://aka.ms/vs/17/release/vc_redist.x64.exe'
 const VC_DEST = join(REPO_ROOT, 'resources', 'vcredist', 'vc_redist.x64.exe')
 
-function download(url, dest) {
+function fetchStream(url, requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
-    const req = httpsGet(url, { timeout: 60_000 }, (res) => {
+    const req = httpsGet(url, { timeout: requestTimeoutMs }, (res) => {
       if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume()
-        download(res.headers.location, dest).then(resolve, reject)
+        fetchStream(new URL(res.headers.location, url).toString(), requestTimeoutMs).then(resolve, reject)
         return
       }
       if (res.statusCode !== 200) {
-        reject(new Error(`${url}: HTTP ${res.statusCode}`))
+        res.resume()
+        reject(new Error(`HTTP ${res.statusCode} for ${url}`))
         return
       }
-      pipeline(res, createWriteStream(dest)).then(resolve, reject)
+      resolve(res)
+    })
+    req.setTimeout(requestTimeoutMs, () => {
+      req.destroy(new Error(`request timeout after ${requestTimeoutMs}ms for ${url}`))
     })
     req.on('error', reject)
   })
+}
+
+async function download(url, dest, {
+  requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+  responseIdleTimeoutMs = DEFAULT_RESPONSE_IDLE_TIMEOUT_MS,
+  maxAttempts = DEFAULT_MAX_ATTEMPTS,
+  backoffBaseMs = DEFAULT_BACKOFF_BASE_MS
+} = {}) {
+  mkdirSync(dirname(dest), { recursive: true })
+  const part = `${dest}.part`
+  try { unlinkSync(dest) } catch { /* dest may not exist */ }
+  let lastErr
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const res = await fetchStream(url, requestTimeoutMs)
+      const total = Number(res.headers['content-length'] || 0)
+      res.setTimeout(responseIdleTimeoutMs, () => {
+        res.destroy(new Error(`response idle timeout after ${responseIdleTimeoutMs}ms for ${url}`))
+      })
+      await pipeline(res, createWriteStream(part))
+      const size = statSync(part).size
+      if (total && size !== total) throw new Error(`incomplete download: got ${size} of ${total} bytes`)
+      renameSync(part, dest)
+      return
+    } catch (error) {
+      lastErr = error
+      try { unlinkSync(part) } catch { /* .part may not exist */ }
+      const message = error instanceof Error ? error.message : String(error)
+      const clientErr = /HTTP 4\d\d/.test(message)
+      if (attempt < maxAttempts && !clientErr) {
+        const backoffMs = backoffBaseMs * 2 ** (attempt - 1)
+        process.stdout.write(`  [retry ${attempt}/${maxAttempts - 1}] ${message}; waiting ${backoffMs}ms\n`)
+        await new Promise((resolve) => setTimeout(resolve, backoffMs))
+      } else {
+        break
+      }
+    }
+  }
+  throw lastErr
 }
 
 function sha256File(path) {
