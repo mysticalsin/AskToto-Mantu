@@ -48,7 +48,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   return {
     ...actual,
-    rename: vi.fn(async (src: string, dest: string) => renameSync(src, dest))
+    rename: vi.fn(async (src: Parameters<typeof renameAsync>[0], dest: Parameters<typeof renameAsync>[1]) => renameSync(src, dest))
   }
 })
 
@@ -1150,7 +1150,7 @@ describe('old-meeting Keychain recovery (T7): allowKeychainRecovery + self-heali
     // node:fs/promises.rename mock (vi.restoreAllMocks() doesn't undo .mockImplementation() on a
     // factory-vended vi.fn() — only on a real vi.spyOn) — re-establish the real-rename default so
     // saveMeeting below isn't sabotaged by a prior test's leftover override.
-    vi.mocked(renameAsync).mockImplementation(async (src: string, dest: string) => renameSync(src, dest))
+    vi.mocked(renameAsync).mockImplementation(async (src, dest) => renameSync(src, dest))
     // decryptToTemp writes its plaintext copy under app.getPath('temp') — route that to a real,
     // per-test directory instead of the shared default mock path, which nothing here creates on disk.
     // Sandboxed per-run (see __mocks__/electron.ts) rather than a hardcoded literal — only `temp` matters

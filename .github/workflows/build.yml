@@ -517,6 +517,8 @@ jobs:
       # resources/llama (the pinned llama-server sidecar, ~10 MB, fetched by predist ->
       # scripts/fetch-llama-server.mjs) rides the same cache step — its own hashFiles() term means a pin
       # bump in that script busts only this entry, not the unrelated ASR model cache.
+      # resources/managed-node and resources/vcredist ride the same cache: fetch-managed-node.mjs verifies
+      # the pinned archive hashes before provisioning, so cached bytes do not weaken the packaged runtime.
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
@@ -525,7 +527,11 @@ jobs:
             resources/ort
             resources/llama
             resources/local-llm
-          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}
+            resources/managed-node
+            resources/vcredist
+          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}-${{ hashFiles('scripts/fetch-managed-node.mjs', 'src/shared/managed-node-manifest.json') }}
+          restore-keys: |
+            runtime-assets-${{ runner.os }}-
       - run: npm run dist
         env:
           # dist applies a complete ad-hoc signature for runtime verification; it is not Developer ID
@@ -616,7 +622,11 @@ jobs:
             resources/ort
             resources/llama
             resources/local-llm
-          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}
+            resources/managed-node
+            resources/vcredist
+          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}-${{ hashFiles('scripts/fetch-managed-node.mjs', 'src/shared/managed-node-manifest.json') }}
+          restore-keys: |
+            runtime-assets-${{ runner.os }}-
       - run: npm run dist:win
       # AppX packaging only works on Windows runners (needs the Windows SDK). This verification job sets
       # no Windows certificate, so its EXE/AppX artifacts are unsigned and are not customer releases.
