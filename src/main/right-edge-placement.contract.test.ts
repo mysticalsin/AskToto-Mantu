@@ -45,9 +45,15 @@ describe('right-edge placement main-process contract', () => {
     expect(move).not.toMatch(/display\.id !== fromDisplayId/)
     // The debounce, lock and display-key rules run in island/right-edge-anchor.test.ts; this pins main's wiring
     // of the anchor store to the settings keys and the lock list.
-    const persist = section(index, 'const rightEdgeAnchors = createRightEdgeAnchors({', 'function overlayCursorWatchWanted')
+    const persist = section(
+      index,
+      'const rightEdgeAnchors = createRightEdgeAnchors({',
+      'function overlayCursorWatchWanted'
+    )
     expect(persist).toMatch(/legacy: getSettings\(\)\.overlayRightEdgeYByDisplay/)
-    expect(persist).toMatch(/setSettings\(\{ overlayRightEdgeAnchorByDisplay: \{ \.\.\.getSettings\(\)\.overlayRightEdgeAnchorByDisplay, \.\.\.anchors \} \}\)/)
+    expect(persist).toMatch(
+      /setSettings\(\{ overlayRightEdgeAnchorByDisplay: \{ \.\.\.getSettings\(\)\.overlayRightEdgeAnchorByDisplay, \.\.\.anchors \} \}\)/
+    )
     expect(persist).toMatch(/lockedKeys: getLockedKeys/)
     expect(persist).toMatch(/rightEdgeLive: \(\) => liveOverlayPlacement\(\) === 'right-edge'/)
   })
@@ -82,14 +88,16 @@ describe('right-edge placement main-process contract', () => {
   it('wires right-edge Hide: toggle parks and latches, reveals tell the page, parks tell the page, layout changes re-apply chrome', () => {
     // Behavior is proven live by the RE-HIDE rows in scripts/qa/packaged-smoke.mjs; these pin the wiring.
     const toggle = section(index, 'function toggleVisible(', 'const shortcutActions')
-    expect(toggle).toMatch(/=== 'right-edge'\n[^\n]*rightEdge && parkOverlayAfterHideSpring\(true\)\) return startOverlayCursorWatch\(\)/)
+    expect(toggle).toMatch(
+      /=== 'right-edge'[\s\S]*?rightEdge && parkOverlayAfterHideSpring\(true\)\)\s*return startOverlayCursorWatch\(\)/
+    )
     expect(toggle.indexOf('parkOverlayAfterHideSpring(true)')).toBeLessThan(toggle.indexOf('w.hide()'))
     const park = section(index, 'function parkOverlayAfterHideSpring', 'function applyHideClickThrough')
     expect(park).toMatch(/overlayParkLatched = force/)
     expect(park).toMatch(/=== 'right-edge'\) notifyOverlayCursorHover\(false, false, true\)/)
     const tick = section(index, 'function tickOverlayCursorWatch()', 'function notifyOverlayCursorHover')
     expect(tick).toMatch(/if \(overlayParkLatched && islandResting && pointInRect\(cursor, rest\)\)/)
-    expect(tick).toMatch(/placement\n\s*\}\)/)
+    expect(tick).toMatch(/placement\s*\}\)/)
     const restore = section(index, 'function restoreBarWidth()', 'function repairOverlayBoundsForReveal')
     expect(restore).toMatch(/overlayParkLatched = false/)
     const controller = section(index, 'const revealController = createRevealController({', 'function reveal(')
@@ -99,14 +107,17 @@ describe('right-edge placement main-process contract', () => {
     expect(pageReveal).toMatch(/rightEdgeUnhoveredRevealAt = performance\.now\(\)/)
     expect(pageReveal).toMatch(/notifyOverlayCursorHover\(true, true\)/)
     const settings = section(index, 'const layoutChanged = cur.overlayLayout', '// Flipping follow-up memory')
-    const layoutSwitch = settings.slice(settings.indexOf('if (layoutChanged) {'), settings.indexOf('} else if (placementChanged'))
+    const layoutSwitch = settings.slice(
+      settings.indexOf('if (layoutChanged) {'),
+      settings.indexOf('} else if (placementChanged')
+    )
     expect(layoutSwitch).toMatch(/applyOverlaySurfaceChrome\(\)\s*applyHideClickThrough\(\)/)
   })
 
   it('does not resize native sidecar bounds for streaming renderer content', () => {
     const resize = section(index, 'function resizeTo(height: number): void', '/** Collapse to / expand')
     expect(resize).toMatch(/if \(placement === 'right-edge'\) return/)
-    const resizeIpc = section(index, "ipcMain.handle(IPC.windowResize", 'ipcMain.handle(IPC.windowMode')
+    const resizeIpc = section(index, 'ipcMain.handle(IPC.windowResize', 'ipcMain.handle(IPC.windowMode')
     expect(resizeIpc).toMatch(/resolvedOverlayPlacementForDisplay\(display\) === 'right-edge'/)
     expect(resizeIpc).toMatch(/return/)
     expect(resizeIpc).not.toMatch(/resizeTo\(height\).*right-edge/)
