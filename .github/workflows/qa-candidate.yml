@@ -822,7 +822,7 @@ jobs:
         with:
           name: st-1-macos-control
           path: st1-report/
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 
   # The History row (M2-0193): History open and search against the FIFO fixtures, each answering with a

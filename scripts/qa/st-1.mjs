@@ -883,7 +883,7 @@ async function main() {
   let cleanupError = null
   const reportPath = args.out ?? join(reportDir, `${reportBase}.json`)
   const currentReport = () => {
-    const common = { row: args.fixtures, installer: basename(args.installer), candidate, fixtures, purpose, windowVariant, windowWarmup }
+    const common = { row: args.fixtures, installer: basename(args.installer), candidate, fixtures, purpose, windowVariant, windowWarmup, env: process.env }
     if (launchFailure) return buildLaunchFailureReport({ ...common, reason: launchFailure })
     return buildReport({
       ...common,

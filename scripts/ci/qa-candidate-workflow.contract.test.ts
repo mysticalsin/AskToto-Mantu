@@ -574,6 +574,19 @@ exit 1
     }
   })
 
+  it('fails the artifact step if either strict row did not produce its report', () => {
+    for (const [name, artifact] of [
+      ['st1-mac-fifo', 'st-1-macos-fifo'],
+      ['st1-mac-control', 'st-1-macos-control']
+    ] as const) {
+      const [upload] = uploads(job(name)).filter((step) => step.includes(`name: ${artifact}\n`))
+      expect(upload, `upload of ${artifact}`).toBeDefined()
+      expect(upload).toContain('if: always()')
+      expect(upload).toContain('path: st1-report/')
+      expect(upload).toContain('if-no-files-found: error')
+    }
+  })
+
   it('keeps strict rows report-only and removes temp profiles and unzipped candidates on every outcome', () => {
     for (const name of strictJobs) {
       const block = job(name)
