@@ -232,6 +232,7 @@ import {
   hideParkWindowOpacity,
   settingsOpenRect,
   shouldIgnoreResizeWhilePeekResting,
+  shouldParkHoverRestAfterLayoutChange,
   shouldParkHoverRestAfterLeavingSurface,
   topClamp
 } from './island/geometry'
@@ -5555,10 +5556,13 @@ function registerIpc(): void {
           // Switching to Hide/Island must park. A leftover Circle pill or Settings-tall
           // ghost was Ultron 880×1017 + Expand Métis. Keep a real Settings panel open.
           isMinimized = false
+          const display = screen.getDisplayMatching(win.getBounds())
           if (
             !settingsSurfaceOpen &&
-            shouldParkHoverRestAfterLeavingSurface({
+            shouldParkHoverRestAfterLayoutChange({
               layout,
+              placement: resolvedOverlayPlacementForDisplay(display),
+              resting: islandResting,
               pointerInIslandOrBar: pointerInIslandOrBar({ ignoreWindow: true })
             })
           ) {

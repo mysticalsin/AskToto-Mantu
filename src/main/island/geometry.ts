@@ -775,6 +775,24 @@ export function shouldParkHoverRestAfterLeavingSurface(input: {
 }
 
 /**
+ * A right-edge rest has chrome-specific native bounds (Hide band vs Island tab). While already parked, a
+ * Hide/Island layout switch must re-apply those bounds even if the pointer is inside the current rest.
+ */
+export function shouldParkHoverRestAfterLayoutChange(input: {
+  layout: OverlayLayout
+  placement: OverlayPlacement
+  resting: boolean
+  pointerInIslandOrBar: boolean
+}): boolean {
+  if (!overlayUsesHover(input.layout)) return false
+  if (input.placement === 'right-edge' && input.resting) return true
+  return shouldParkHoverRestAfterLeavingSurface({
+    layout: input.layout,
+    pointerInIslandOrBar: input.pointerInIslandOrBar
+  })
+}
+
+/**
  * Full Settings surface. Revealed chrome Y (below the notch), never Hide 8×2 or Island peek.
  * Width/height are Apple-grade Settings mins. Hide/Island park after close, not here.
  */
