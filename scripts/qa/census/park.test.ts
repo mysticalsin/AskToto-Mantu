@@ -11,7 +11,12 @@ import {
   monitorParkedIdle,
   parkVerdict
 } from './park.mjs'
-import { launchOptions, parkedIdlePreconditionFailureReport, pointerMoveCommand, validateParkedIdleProfile } from './run.mjs'
+import {
+  launchOptions,
+  parkedIdlePreconditionFailureReport,
+  pointerMoveCommand,
+  validateParkedIdleProfile
+} from './run.mjs'
 
 function fakeSleep(advance: (ms: number) => void) {
   return async <T = void>(delay?: number, value?: T): Promise<T> => {

@@ -75,7 +75,12 @@ function portableEvidencePath(path, cwd = process.cwd()) {
   if (!text) throw new Error('evidence artifact path is required')
   if (text.includes('\\')) throw new Error(`evidence artifact path must be POSIX-style: ${text}`)
   const normalized = isAbsolute(text) ? relative(cwd, text).replaceAll('\\', '/') : text
-  if (normalized.startsWith('../') || normalized === '..' || normalized.includes('/../') || normalized.startsWith('/')) {
+  if (
+    normalized.startsWith('../') ||
+    normalized === '..' ||
+    normalized.includes('/../') ||
+    normalized.startsWith('/')
+  ) {
     throw new Error(`evidence artifact must be inside the working directory: ${text}`)
   }
   if (normalized.split('/').some((part) => part === '' || part === '.')) {
@@ -440,7 +445,11 @@ export function stateCoverageForRun(measuredState) {
         unblockStep: `Start the packaged app on the representative QA profile, establish ${state}, then rerun with --main-pid, --install-root, and --precondition-evidence.`
       }
     }
-    return { state, status: 'SUPPORTED_NOT_RUN', unblockStep: `Run node scripts/qa/census/run.mjs --state ${state} --seconds 300.` }
+    return {
+      state,
+      status: 'SUPPORTED_NOT_RUN',
+      unblockStep: `Run node scripts/qa/census/run.mjs --state ${state} --seconds 300.`
+    }
   })
 }
 
@@ -531,9 +540,13 @@ function win32PowerShell() {
 
 function win32ResourceRows(pids) {
   if (pids.length === 0) return new Map()
-  const output = execFileSync(win32PowerShell(), ['-NoProfile', '-NonInteractive', '-Command', WIN32_RESOURCE_QUERY(pids)], {
-    encoding: 'utf8'
-  })
+  const output = execFileSync(
+    win32PowerShell(),
+    ['-NoProfile', '-NonInteractive', '-Command', WIN32_RESOURCE_QUERY(pids)],
+    {
+      encoding: 'utf8'
+    }
+  )
   let parsed
   try {
     parsed = JSON.parse(output || '[]')
@@ -637,7 +650,12 @@ function readWin32ProductVersion(target) {
 /**
  * @param {{ explicit?: string, installRoot: string, executable?: string | null, platform?: NodeJS.Platform }} options
  */
-export function resolveProductVersion({ explicit = undefined, installRoot, executable = undefined, platform = process.platform }) {
+export function resolveProductVersion({
+  explicit = undefined,
+  installRoot,
+  executable = undefined,
+  platform = process.platform
+}) {
   const fromCli = cleanProductVersion(explicit)
   if (fromCli) return fromCli
   const detected =
@@ -650,7 +668,12 @@ export function resolveProductVersion({ explicit = undefined, installRoot, execu
   throw new Error('--product-version is required when the installed app version cannot be read')
 }
 
-export function ownedProcessPopulation({ mainPid, installRoot, platform = process.platform, table = listProcesses(platform) }) {
+export function ownedProcessPopulation({
+  mainPid,
+  installRoot,
+  platform = process.platform,
+  table = listProcesses(platform)
+}) {
   return ownedProcesses(table, { mainPid, installRoot, platform })
 }
 
@@ -704,13 +727,22 @@ export async function collectCensus(options) {
   let nextParkCheck = started + 60_000
   while (true) {
     const sampledAt = now()
-    if (state === 'parked-idle' && typeof options.checkPark === 'function' && (sampledAt >= nextParkCheck || sampledAt >= end)) {
+    if (
+      state === 'parked-idle' &&
+      typeof options.checkPark === 'function' &&
+      (sampledAt >= nextParkCheck || sampledAt >= end)
+    ) {
       latestParkCheck = await options.checkPark(sampledAt)
       parkChecks.push(latestParkCheck)
       while (nextParkCheck <= sampledAt) nextParkCheck += 60_000
     }
     const table = listProcessesFn(platform)
-    const owned = ownedProcessPopulation({ mainPid: options.mainPid, installRoot: options.installRoot, platform, table })
+    const owned = ownedProcessPopulation({
+      mainPid: options.mainPid,
+      installRoot: options.installRoot,
+      platform,
+      table
+    })
     const processes = sampleOwnedProcessesFn(owned, platform)
     samples.push({
       tMs: sampledAt - started,
@@ -833,7 +865,12 @@ export async function streamCensus(options) {
     if (options.signal?.aborted) return { outcome: 'aborted', samples: count, startedAt: started }
     const sampleStart = now()
     const table = listProcessesFn(platform)
-    const owned = ownedProcessPopulation({ mainPid: options.mainPid, installRoot: options.installRoot, platform, table })
+    const owned = ownedProcessPopulation({
+      mainPid: options.mainPid,
+      installRoot: options.installRoot,
+      platform,
+      table
+    })
     const processes = sampleOwnedProcessesFn(owned, platform)
     const mainAlive = processes.some((process) => process.pid === options.mainPid && process.kind === 'main')
     count += 1
