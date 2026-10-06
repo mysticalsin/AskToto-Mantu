@@ -22,6 +22,7 @@ import { homedir } from 'node:os'
 import { basename, isAbsolute, join, relative } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { writeRepresentativeProfile } from './census/profile.mjs'
+import { MAX_BG_FAILURES } from './lib/capture-backoff-constants.mjs'
 import { LOCAL_LLM_SETTINGS } from './lib/local-llm-settings.mjs'
 import { VARIANTS } from './provenance.mjs'
 
@@ -266,6 +267,37 @@ export const SCENARIOS = Object.freeze({
         guiScripting: true
       })
     })
+  }),
+  // M2-0559: Windows hosted runner proof for the background screen capture backoff. The script seeds and
+  // owns its throwaway ASKTOTO_USERDATA profile, locks the Windows workstation as the OS-level induction,
+  // then judges only bg-screen capture.failed audit rows from that profile.
+  'capture-gate': Object.freeze({
+    ticket: 'M2-0559',
+    qaOnlyHook: false,
+    exits: Object.freeze({ 0: 'PASS', 1: 'FAIL', 2: 'PRECONDITION' }),
+    reportAssessment: 'capture-gate',
+    platforms: Object.freeze({
+      win: Object.freeze({
+        variant: 'win',
+        artifact: 'candidate-win',
+        script: 'scripts/qa/capture-gate.mjs',
+        args: ({ app, report }) => [app, report, '--max-bg-failures', String(MAX_BG_FAILURES)],
+        report: 'capture-gate.json',
+        isolatedProfiles: true,
+        timeoutMinutes: 75,
+        stepTimeoutMinutes: 60,
+        bgScreenCaptureFailedMax: MAX_BG_FAILURES,
+        laneReportFields: Object.freeze([
+          'inductionMethod',
+          'readinessProof',
+          'failingStateProof',
+          'bgScreenCaptureFailedTotal',
+          'bgScreenCaptureFailedFinal15Minutes',
+          'screenPreprocessSuspended',
+          'backgroundScreenReadyAfterPark'
+        ])
+      })
+    })
   })
 })
 
@@ -499,9 +531,80 @@ export function assessPackagedSmokeReport(report, platform) {
   return { problems, row_verdicts, notCovered }
 }
 
+// This boundary is used by the pre-install guard too; keep capture assessment free of harness imports.
+export function assessCaptureGateReport(report) {
+  const problems = []
+  const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
+  const counter = (value) => Number.isSafeInteger(value) && value >= 0
+  const flags = (value, expected) => object(value) && Object.entries(expected).every(([key, expectedValue]) =>
+    Object.hasOwn(value, key) && value[key] === expectedValue)
+  const inductionAtMs = typeof report?.inductionAt === 'string' ? Date.parse(report.inductionAt) : Number.NaN
+  if (!object(report) || report.schema !== 1 || report.ticket !== 'M2-0559' || report.outcome !== 'PASS' ||
+    !Array.isArray(report.reasons) || report.reasons.length !== 0 || report.inductionMethod !== 'windows-lock-workstation' ||
+    !Number.isFinite(inductionAtMs) || new Date(inductionAtMs).toISOString() !== report.inductionAt ||
+    report.parkMs !== 30 * 60_000 || report.finalTailMs !== 15 * 60_000 || report.maxBgScreenCaptureFailed !== MAX_BG_FAILURES) {
+    problems.push('capture_report_identity_unproven')
+  }
+  if (!flags(report?.readinessProof, { observed: true, backgroundScreenReady: true, localReady: true })) {
+    problems.push('capture_report_readiness_unproven')
+  }
+  const failing = report?.failingStateProof
+  if (!flags(failing, { method: 'windows-lock-workstation', inductionStarted: true }) ||
+    !flags(failing?.beforeInduction, { captureWorks: true, category: 'ok' }) ||
+    !flags(failing?.afterInduction, { captureWorks: false, category: 'capture_unavailable' }) ||
+    !flags(failing?.afterPark, { captureWorks: false, category: 'capture_unavailable' })) {
+    problems.push('capture_report_native_unproven')
+  }
+  const candidate = failing?.candidateLivenessProof
+  const candidateFlags = {
+    observed: true, aliveAtInduction: true, aliveAfterPark: true, exitObserved: false,
+    exitedBeforeParkComplete: false, processErrorObserved: false
+  }
+  if (!flags(candidate, candidateFlags) || !Number.isFinite(candidate?.parkElapsedMs) || candidate.parkElapsedMs < 30 * 60_000) {
+    problems.push('capture_report_park_unproven')
+  }
+  const alias = report?.candidateLivenessProof
+  if (!object(candidate) || !object(alias) || [...Object.keys(candidateFlags), 'parkElapsedMs'].some((key) =>
+    !Object.hasOwn(alias, key) || alias[key] !== candidate[key])) {
+    problems.push('capture_report_proof_contradiction')
+  }
+  const audit = failing?.auditProof
+  const auditFlags = {
+    observed: true, baselineComplete: true, baselineValid: true, finalComplete: true, finalValid: true,
+    freshProfile: true, startupAnchored: true, readinessAnchored: true, baselineRetained: true,
+    lengthNondecreasing: true, parkCovered: true
+  }
+  if (!flags(audit, auditFlags) || !counter(audit?.baselineRecordCount) || audit.baselineRecordCount < 2 ||
+    !counter(audit?.finalRecordCount) || audit.finalRecordCount < audit.baselineRecordCount) {
+    problems.push('capture_report_audit_unproven')
+  }
+  const total = report?.bgScreenCaptureFailedTotal
+  const tail = report?.bgScreenCaptureFailedFinal15Minutes
+  if (!counter(total) || total > MAX_BG_FAILURES || !counter(tail) || tail !== 0 || tail > total ||
+    !counter(audit?.finalRecordCount) || total > audit.finalRecordCount) {
+    problems.push('capture_report_counts_unproven')
+  }
+  const suspended = report?.screenPreprocessSuspended
+  if (!object(suspended) || !counter(suspended.count) || suspended.count > audit?.finalRecordCount ||
+    typeof suspended.latched !== 'boolean' || !Array.isArray(suspended.reasons) ||
+    suspended.reasons.some((reason) => !['permission', 'error', 'other'].includes(reason)) ||
+    new Set(suspended.reasons).size !== suspended.reasons.length ||
+    (suspended.count === 0 && (suspended.latched || suspended.reasons.length !== 0)) ||
+    (suspended.count > 0 && (suspended.reasons.length === 0 || suspended.reasons.length > suspended.count))) {
+    problems.push('capture_report_suspend_unproven')
+  }
+  const afterPark = report?.backgroundScreenReadyAfterPark
+  if (!object(afterPark) || typeof afterPark.observed !== 'boolean' ||
+    (afterPark.observed ? typeof afterPark.backgroundScreenReady !== 'boolean' : afterPark.backgroundScreenReady !== null)) {
+    problems.push('capture_report_informational_state_unproven')
+  }
+  return { problems, row_verdicts: undefined, notCovered: [] }
+}
+
 function assessScenarioReport({ scenario, platform, report }) {
   const entry = scenarioEntry(scenario)
   if (entry.reportAssessment === 'packaged-smoke') return assessPackagedSmokeReport(report, platform)
+  if (entry.reportAssessment === 'capture-gate') return assessCaptureGateReport(report)
   return { problems: [], row_verdicts: undefined, notCovered: [] }
 }
 
@@ -567,10 +670,13 @@ export function laneRecord({
   const target = platformEntry(scenario, platform)
   assertCandidateProvenance(provenance, candidateRun)
   const mappedOutcome = outcomeForExit(scenario, exitCode)
-  const assessmentProblems = [
+  const captureAssessment = scenarioEntry(scenario).reportAssessment === 'capture-gate' ? assessCaptureGateReport(reportData) : null
+  const suppliedProblems = [
     ...(scenarioEntry(scenario).reportAssessment && !reportWritten ? [`${target.report} was not written.`] : []),
-    ...(reportAssessment?.problems ?? [])
+    ...(reportAssessment?.problems ?? []),
+    ...(captureAssessment?.problems ?? [])
   ]
+  const assessmentProblems = captureAssessment ? [...new Set(suppliedProblems)] : suppliedProblems
   const reportOutcome = target.outcomeFromReport && typeof reportData?.outcome === 'string' ? reportData.outcome : mappedOutcome
   const outcome = reportOutcome === 'PASS' && assessmentProblems.length ? 'FAIL' : reportOutcome
   const host = RUNNER_LABELS[platform]
@@ -761,7 +867,8 @@ function run(values) {
       reportData = JSON.parse(readFileSync(reportPath, 'utf8'))
       reportAssessment = assessScenarioReport({ scenario, platform, report: reportData })
     } catch (error) {
-      reportAssessment = { problems: [`${target.report} could not be parsed: ${error.message}`], row_verdicts: undefined, notCovered: [] }
+      reportAssessment = { problems: scenarioEntry(scenario).reportAssessment === 'capture-gate'
+        ? ['capture_report_unreadable'] : [`${target.report} could not be parsed: ${error.message}`], row_verdicts: undefined, notCovered: [] }
     }
   }
 

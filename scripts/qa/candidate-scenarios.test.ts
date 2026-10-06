@@ -29,6 +29,8 @@ import {
   scenarioCommand
 } from './candidate-scenarios.mjs'
 import { LOCAL_LLM_SETTINGS } from './lib/local-llm-settings.mjs'
+import { MAX_BG_FAILURES } from './lib/capture-backoff-constants.mjs'
+import { buildReport as buildCaptureReport } from './capture-gate.mjs'
 import { VARIANTS } from './provenance.mjs'
 
 const root = join(__dirname, '..', '..')
@@ -38,6 +40,135 @@ const STALL_SHA = sha('promotable dmg bytes')
 const IDLE_SHA = sha('idle soak dmg bytes')
 const WIN_SHA = sha('setup bytes')
 const COMMIT = 'a'.repeat(40)
+
+const captureReportFor = buildCaptureReport as unknown as (input: Record<string, unknown>) => Record<string, unknown>
+const captureParkMs = 30 * 60_000
+const captureTailMs = 15 * 60_000
+
+function validCaptureReport() {
+  const candidateLivenessProof = {
+    observed: true, aliveAtInduction: true, aliveAfterPark: true, exitObserved: false,
+    exitedBeforeParkComplete: false, processErrorObserved: false, parkElapsedMs: captureParkMs
+  }
+  const report = captureReportFor({
+    records: [
+      { ts: '2026-10-04T12:00:00.000Z', event: 'app.started' },
+      { ts: '2026-10-04T12:00:00.000Z', event: 'app.renderer.ready' }
+    ],
+    readinessProof: { observed: true, backgroundScreenReady: true, localReady: true },
+    failingStateProof: {
+      method: 'windows-lock-workstation', inductionStarted: true,
+      beforeInduction: { captureWorks: true, category: 'ok' },
+      afterInduction: { captureWorks: false, category: 'capture_unavailable' },
+      afterPark: { captureWorks: false, category: 'capture_unavailable' },
+      candidateLivenessProof,
+      auditProof: {
+        observed: true, baselineComplete: true, baselineValid: true, finalComplete: true, finalValid: true,
+        freshProfile: true, startupAnchored: true, readinessAnchored: true, baselineRetained: true,
+        lengthNondecreasing: true, parkCovered: true, baselineRecordCount: 2, finalRecordCount: 2
+      }
+    },
+    inductionAtMs: Date.parse('2026-10-04T12:00:00.000Z'),
+    maxBgFailures: MAX_BG_FAILURES,
+    backgroundScreenReadyAfterPark: { observed: true, backgroundScreenReady: false }
+  })
+  // The lane consumes JSON, so the producer's convenient in-memory proof alias is not shared here.
+  return JSON.parse(JSON.stringify(report)) as Record<string, unknown>
+}
+
+function captureLane(reportData: unknown, reportWritten = true, exitCode = 0, reportAssessment?: { problems: string[] }) {
+  const input = {
+    scenario: 'capture-gate', platform: 'win', env: { GITHUB_RUN_ID: '5151' },
+    provenance: { commit: COMMIT, run: { id: 4242 } }, candidateRun: '4242',
+    installer: 'assets/Metis-Setup-1.0.0.exe', sha256: WIN_SHA,
+    argv: scenarioCommand({ scenario: 'capture-gate', platform: 'win', installer: 'assets/Metis-Setup-1.0.0.exe', sha256: WIN_SHA, outDir: 'candidate-scenario', app: '../../_temp/candidate-install/Metis.exe' }),
+    exitCode, detail: '', reportWritten, reportData, reportAssessment
+  }
+  return (laneRecord as (input: Parameters<typeof laneRecord>[0] & { reportData: unknown }) => ReturnType<typeof laneRecord>)(input)
+}
+
+function replaceCaptureField(report: Record<string, unknown>, path: readonly string[], value: unknown) {
+  let parent = report
+  for (const segment of path.slice(0, -1)) parent = parent[segment] as Record<string, unknown>
+  parent[path[path.length - 1]] = value
+}
+
+describe('capture-gate actual lane proof boundary', () => {
+  it('rejects green exit without a written capture report', () => {
+    expect(captureLane(null, false)).toMatchObject({ outcome: 'FAIL', report: null })
+  })
+
+  it.each([null, {}, [], 'PASS', { outcome: 'PASS' }])('rejects green exit with incomplete JSON proof', (report) => {
+    expect(captureLane(report)).toMatchObject({ outcome: 'FAIL' })
+  })
+
+  const incomplete: readonly [string, readonly string[], unknown][] = [
+    ['schema', ['schema'], 2], ['ticket', ['ticket'], 'M2-other'], ['outcome', ['outcome'], 'PRECONDITION'],
+    ['causes', ['reasons'], ['audit_unproven']], ['induction timestamp', ['inductionAt'], 'invalid'],
+    ['park configuration', ['parkMs'], captureParkMs - 1], ['tail configuration', ['finalTailMs'], captureTailMs - 1],
+    ['maximum configuration', ['maxBgScreenCaptureFailed'], MAX_BG_FAILURES + 1],
+    ['readiness', ['readinessProof', 'observed'], false],
+    ['native completion', ['failingStateProof', 'afterInduction', 'category'], 'timeout'],
+    ['native contradiction', ['failingStateProof', 'afterPark', 'captureWorks'], true],
+    ['induction', ['failingStateProof', 'inductionStarted'], false],
+    ['owned identity', ['failingStateProof', 'candidateLivenessProof', 'observed'], false],
+    ['owned exit', ['failingStateProof', 'candidateLivenessProof', 'exitObserved'], true],
+    ['measured park', ['failingStateProof', 'candidateLivenessProof', 'parkElapsedMs'], captureParkMs - 1],
+    ['proof alias contradiction', ['candidateLivenessProof', 'aliveAfterPark'], false],
+    ['missing audit', ['failingStateProof', 'auditProof'], null],
+    ['unreadable audit', ['failingStateProof', 'auditProof', 'observed'], false],
+    ['invalid baseline', ['failingStateProof', 'auditProof', 'baselineValid'], false],
+    ['incomplete final audit', ['failingStateProof', 'auditProof', 'finalComplete'], false],
+    ['fresh startup', ['failingStateProof', 'auditProof', 'freshProfile'], false],
+    ['startup anchor', ['failingStateProof', 'auditProof', 'startupAnchored'], false],
+    ['ready anchor', ['failingStateProof', 'auditProof', 'readinessAnchored'], false],
+    ['retained audit', ['failingStateProof', 'auditProof', 'baselineRetained'], false],
+    ['nondecreasing audit', ['failingStateProof', 'auditProof', 'lengthNondecreasing'], false],
+    ['park audit coverage', ['failingStateProof', 'auditProof', 'parkCovered'], false],
+    ['anchor counts', ['failingStateProof', 'auditProof', 'baselineRecordCount'], 0],
+    ['final record counts', ['failingStateProof', 'auditProof', 'finalRecordCount'], 1],
+    ['total threshold', ['bgScreenCaptureFailedTotal'], MAX_BG_FAILURES + 1],
+    ['tail threshold', ['bgScreenCaptureFailedFinal15Minutes'], 1],
+    ['unmeasured total', ['bgScreenCaptureFailedTotal'], null],
+    ['string count', ['bgScreenCaptureFailedTotal'], '0'],
+    ['negative count', ['bgScreenCaptureFailedTotal'], -1],
+    ['fractional count', ['bgScreenCaptureFailedTotal'], 0.5],
+    ['missing suspend summary', ['screenPreprocessSuspended'], null],
+    ['contradictory latch', ['screenPreprocessSuspended', 'latched'], true]
+  ]
+  it.each(incomplete)('rejects a green-exit capture report with unproven %s', (_, path, value) => {
+    const report = validCaptureReport()
+    replaceCaptureField(report, path, value)
+    expect(captureLane(report)).toMatchObject({ outcome: 'FAIL' })
+  })
+
+  it('assesses actual capture proof even if a caller supplies an empty assessment', () => {
+    expect(captureLane({}, true, 0, { problems: [] })).toMatchObject({ outcome: 'FAIL' })
+  })
+
+  it('preserves a valid zero-failure producer report and nested proof in lane.json', () => {
+    const report = validCaptureReport()
+    expect(report).toMatchObject({ outcome: 'PASS', bgScreenCaptureFailedTotal: 0 })
+    const lane = captureLane(report)
+    expect(lane).toMatchObject({
+      outcome: 'PASS', detail: null, bgScreenCaptureFailedTotal: 0, bgScreenCaptureFailedFinal15Minutes: 0,
+      failingStateProof: { auditProof: { observed: true, baselineRetained: true, parkCovered: true } },
+      backgroundScreenReadyAfterPark: { observed: true, backgroundScreenReady: false }
+    })
+    expect(contentProblems(JSON.stringify(lane), { account: 'runner' })).toEqual([])
+  })
+
+  it('keeps unknown post-park readiness informational in a complete proof', () => {
+    const report = validCaptureReport()
+    report.backgroundScreenReadyAfterPark = { observed: false, backgroundScreenReady: null }
+    expect(captureLane(report)).toMatchObject({ outcome: 'PASS' })
+  })
+
+  it('keeps failed and precondition subprocess exits non-PASS', () => {
+    expect(captureLane(validCaptureReport(), true, 1)).toMatchObject({ outcome: 'FAIL' })
+    expect(captureLane(validCaptureReport(), true, 2)).toMatchObject({ outcome: 'PRECONDITION' })
+  })
+})
 
 const successfulDispatch = {
   id: 4242,
@@ -84,7 +215,8 @@ describe('the scenario registry', () => {
       'idle-soak',
       'sidecar-boot-reaper',
       'packaged-lifecycle',
-      'renderer-kill'
+      'renderer-kill',
+      'capture-gate'
     ])
     const mac = SCENARIOS['fault-fatal-relaunch'].platforms.mac
     expect(Object.keys(SCENARIOS['fault-fatal-relaunch'].platforms)).toEqual(['mac'])
@@ -182,6 +314,71 @@ describe('the scenario registry', () => {
     expect(() => resolveScenario({ scenario: 'renderer-kill', sha256: { mac: MAC_SHA, win: MAC_SHA } })).toThrow(
       /win_sha256 is set, but renderer-kill does not run on win/
     )
+  })
+
+  it('declares capture-gate on Windows only, installing promotable Setup bytes with the long park timeout', () => {
+    const entry = SCENARIOS['capture-gate']
+    expect(entry.ticket).toBe('M2-0559')
+    expect(entry.qaOnlyHook).toBe(false)
+    expect(entry.exits).toEqual({ 0: 'PASS', 1: 'FAIL', 2: 'PRECONDITION' })
+    expect(Object.keys(entry.platforms)).toEqual(['win'])
+    const win = entry.platforms.win
+    expect(win).toMatchObject({
+      variant: 'win',
+      artifact: 'candidate-win',
+      script: 'scripts/qa/capture-gate.mjs',
+      report: 'capture-gate.json',
+      isolatedProfiles: true,
+      timeoutMinutes: 75,
+      stepTimeoutMinutes: 60,
+      bgScreenCaptureFailedMax: MAX_BG_FAILURES
+    })
+    expect(existsSync(join(root, win.script))).toBe(true)
+    expect(VARIANTS.win.promotable).toBe(true)
+    expect(VARIANTS.win.assets('1.0.0')).toContain('Metis-Setup-1.0.0.exe')
+    expect(win.laneReportFields).toEqual([
+      'inductionMethod',
+      'readinessProof',
+      'failingStateProof',
+      'bgScreenCaptureFailedTotal',
+      'bgScreenCaptureFailedFinal15Minutes',
+      'screenPreprocessSuspended',
+      'backgroundScreenReadyAfterPark'
+    ])
+    expect(resolveScenario({ scenario: 'capture-gate', sha256: { win: WIN_SHA } })).toEqual({
+      win: { variant: 'win', artifact: 'candidate-win', sha256: WIN_SHA, timeoutMinutes: 75, stepTimeoutMinutes: 60 }
+    })
+    expect(() => resolveScenario({ scenario: 'capture-gate', sha256: { mac: MAC_SHA, win: WIN_SHA } })).toThrow(
+      /mac_sha256 is set, but capture-gate does not run on mac/
+    )
+  })
+
+  it('runs capture-gate on the installed Windows app with the registry maximum', () => {
+    expect(
+      scenarioCommand({
+        scenario: 'capture-gate',
+        platform: 'win',
+        installer: 'assets/Metis-Setup-1.0.0.exe',
+        sha256: WIN_SHA,
+        outDir: 'candidate-scenario',
+        app: '../../_temp/candidate-install/Metis.exe'
+      })
+    ).toEqual([
+      'scripts/qa/capture-gate.mjs',
+      '../../_temp/candidate-install/Metis.exe',
+      'candidate-scenario/capture-gate.json',
+      '--max-bg-failures',
+      String(MAX_BG_FAILURES)
+    ])
+    expect(() =>
+      scenarioCommand({
+        scenario: 'capture-gate',
+        platform: 'win',
+        installer: 'assets/Metis-Setup-1.0.0.exe',
+        sha256: WIN_SHA,
+        outDir: 'candidate-scenario'
+      })
+    ).toThrow(/pass the installed app with --app/)
   })
 
   it('runs renderer-kill on the DMG, 4 kills within 60 s, with a repository-relative report path', () => {
@@ -304,6 +501,9 @@ describe('the scenario registry', () => {
       mac: { variant: 'mac', artifact: 'candidate-mac', sha256: IDLE_SHA, timeoutMinutes: 355, stepTimeoutMinutes: 340 },
       win: { variant: 'win', artifact: 'candidate-win', sha256: WIN_SHA, timeoutMinutes: 355, stepTimeoutMinutes: 340 }
     })
+    expect(resolveScenario({ scenario: 'capture-gate', sha256: { win: WIN_SHA } })).toEqual({
+      win: { variant: 'win', artifact: 'candidate-win', sha256: WIN_SHA, timeoutMinutes: 75, stepTimeoutMinutes: 60 }
+    })
     expect(() => resolveScenario({ scenario: 'hk-m', sha256: { mac: MAC_SHA } })).toThrow(/Unknown scenario "hk-m"/)
     expect(() => resolveScenario({ scenario: 'toString', sha256: { mac: MAC_SHA } })).toThrow(/Unknown scenario/)
   })
@@ -320,6 +520,13 @@ describe('the scenario registry', () => {
     expect(resolveOutputs(plan)).toBe(
       `mac=true\nmac_variant=mac\nmac_artifact=candidate-mac\nmac_sha256=${IDLE_SHA}\nmac_timeout_minutes=355\nmac_step_timeout_minutes=340\n` +
         `win=true\nwin_variant=win\nwin_artifact=candidate-win\nwin_sha256=${WIN_SHA}\nwin_timeout_minutes=355\nwin_step_timeout_minutes=340\n`
+    )
+  })
+
+  it('publishes the long Windows timeout for capture-gate', () => {
+    const plan = resolveScenario({ scenario: 'capture-gate', sha256: { win: WIN_SHA } })
+    expect(resolveOutputs(plan)).toBe(
+      `mac=false\nwin=true\nwin_variant=win\nwin_artifact=candidate-win\nwin_sha256=${WIN_SHA}\nwin_timeout_minutes=75\nwin_step_timeout_minutes=60\n`
     )
   })
 
@@ -585,6 +792,7 @@ describe('the fresh profile', () => {
     expect(prepareProfile({ scenario: 'sidecar-boot-reaper', platform: 'win', appDataDir: null })).toBeNull()
     expect(prepareProfile({ scenario: 'packaged-lifecycle', platform: 'mac', appDataDir: appData })).toBeNull()
     expect(prepareProfile({ scenario: 'packaged-lifecycle', platform: 'win', appDataDir: null })).toBeNull()
+    expect(prepareProfile({ scenario: 'capture-gate', platform: 'win', appDataDir: null })).toBeNull()
     expect(readdirSync(appData)).toEqual([])
     expect(() => prepareProfile({ scenario: 'fault-fatal-relaunch', platform: 'mac', appDataDir: null })).toThrow(
       /No fresh-profile location is declared for mac/

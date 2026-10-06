@@ -71,6 +71,7 @@ describe('candidate-scenarios.yml', () => {
     const options = block(scenario, '        options:', 8).map((line) => line.trim().replace(/^- /, ''))
     expect(options).toEqual(Object.keys(SCENARIOS))
     expect(options).toContain('renderer-kill')
+    expect(options).toContain('capture-gate')
   })
 
   it('reads contents and actions only, uses no secrets, and pins every action by full SHA', () => {
@@ -168,6 +169,8 @@ describe('candidate-scenarios.yml', () => {
     expect(dmgArm.indexOf('mkdir -p "$volume"')).toBeLessThan(dmgArm.indexOf('hdiutil attach'))
     expect(dmgArm).toContain('-mountpoint "$volume"')
     expect(workflow).toContain('-f scenario=renderer-kill -f mac_sha256=<Metis DMG sha256 from SHA256SUMS.txt>')
+    expect(workflow).toContain('-f scenario=capture-gate -f win_sha256=<Metis Setup sha256 from SHA256SUMS.txt>')
+    expect(workflow).toContain('LEAD_ACTION M2-0559')
   })
 
   it('authorises System Events GUI scripting from the registry after the install and before the scenario', () => {
@@ -272,6 +275,19 @@ describe('candidate-scenarios.yml', () => {
     expect(options).toContain('- packaged-lifecycle')
     expect(Object.keys(SCENARIOS['packaged-lifecycle'].platforms)).toEqual(['mac', 'win'])
     expect(job('mac')).toContain('    runs-on: macos-latest')
+    expect(job('win')).toContain('    runs-on: windows-latest')
+  })
+
+  it('offers capture-gate from the registry on the hosted Windows job only', () => {
+    const options = block(block(block(lines, '    inputs:', 4), '      scenario:', 6), '        options:', 8).map((line) => line.trim())
+    expect(options).toContain('- capture-gate')
+    expect(Object.keys(SCENARIOS['capture-gate'].platforms)).toEqual(['win'])
+    expect(resolveScenario({ scenario: 'capture-gate', sha256: { win: 'a'.repeat(64) } }).win).toMatchObject({
+      variant: 'win',
+      artifact: 'candidate-win',
+      timeoutMinutes: 75,
+      stepTimeoutMinutes: 60
+    })
     expect(job('win')).toContain('    runs-on: windows-latest')
   })
 
