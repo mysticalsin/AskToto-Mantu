@@ -182,7 +182,8 @@ describe('QA candidate workflow: which refs and versions may build (M2-0499)', (
     for (const [name, block] of jobBlocks) {
       const jobIf = /^    if: (.*)$/m.exec(block)?.[1] ?? ''
       expect(jobIf, `${name} job condition`).not.toMatch(/github\.ref/)
-      if (name !== 'guard') expect(block, `${name} names a ref`).not.toMatch(/refs\/heads\/|github\.ref\b|github\.base_ref/)
+      if (name !== 'guard')
+        expect(block, `${name} names a ref`).not.toMatch(/refs\/heads\/|github\.ref\b|github\.base_ref/)
     }
     expect(guard).toContain('refs/heads/')
   })
@@ -290,7 +291,9 @@ describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
     for (const name of strictJobs) {
       const jobSteps = steps(name)
       const checkout = jobSteps.findIndex((step) => step.includes('actions/checkout@'))
-      const probe = jobSteps.findIndex((step) => step.includes('name: Prove owner-account sandbox denies private state'))
+      const probe = jobSteps.findIndex((step) =>
+        step.includes('name: Prove owner-account sandbox denies private state')
+      )
       const setup = jobSteps.findIndex((step) => step.includes('actions/setup-node@'))
       const download = jobSteps.findIndex((step) => step.includes('actions/download-artifact@'))
 
@@ -359,7 +362,9 @@ exit 1
       expect(result.status).toBe(0)
       expect(result.stdout).toContain(`${bashPath(join(home, 'Library', 'CloudStorage'))} exists -> denied`)
       expect(result.stdout).toContain(`${bashPath(join(home, 'Library', 'Keychains'))} exists -> denied`)
-      expect(result.stdout).toContain(`${bashPath(join(home, 'Library', 'Application Support', 'Metis'))} absent -> denied`)
+      expect(result.stdout).toContain(
+        `${bashPath(join(home, 'Library', 'Application Support', 'Metis'))} absent -> denied`
+      )
       const wrapperLog = readFileSync(log, 'utf8')
       expect(wrapperLog).toContain(`/bin/ls -ld ${bashPath(join(home, 'Library', 'CloudStorage'))}`)
       expect(wrapperLog).toContain(`/bin/ls -ld ${bashPath(join(home, 'Library', 'Keychains'))}`)
@@ -407,7 +412,9 @@ exit 1
       })
 
       expect(result.status).toBe(1)
-      expect(result.stdout).toContain(`::error::owner-account sandbox allowed creating absent protected path ${bashPath(allowedPath)}`)
+      expect(result.stdout).toContain(
+        `::error::owner-account sandbox allowed creating absent protected path ${bashPath(allowedPath)}`
+      )
       expect(existsSync(allowedPath)).toBe(false)
     } finally {
       rmSync(sandbox, { recursive: true, force: true })
@@ -502,7 +509,9 @@ describe('QA candidate workflow: the shipped window gate (M2-0519)', () => {
     expect(measure).toContain('--window-warmup')
     expect(measure).toContain('if [ "$warmup" = true ]; then warmup_args=(--window-warmup); fi')
     expect(measure).toContain('--window-variant "$variant"')
-    expect(measure).toContain('if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi')
+    expect(measure).toContain(
+      'if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi'
+    )
     expect(measure).not.toContain('variants=(shipped spellcheck-off paint-when-hidden prewarm-spellchecker)')
     expect(measure).not.toContain('chromes=(opaque transparent)')
   })
@@ -543,13 +552,17 @@ describe('QA candidate workflow: the shipped window gate (M2-0519)', () => {
     expect(remeasureIndex).toBeGreaterThan(measureIndex)
     expect(gateIndex).toBeGreaterThan(remeasureIndex)
     const remeasure = jobSteps[remeasureIndex]
-    expect(remeasure).toContain('node scripts/qa/st-1.mjs --print-window-remeasure-plan st1-report > st1-report/window-remeasure-plan.json')
+    expect(remeasure).toContain(
+      'node scripts/qa/st-1.mjs --print-window-remeasure-plan st1-report > st1-report/window-remeasure-plan.json'
+    )
     expect(remeasure).toContain("jq -c '.[]' st1-report/window-remeasure-plan.json | while read -r launch; do")
     expect(remeasure).toContain('remeasures=$(jq -r \'.remeasures\' <<<"$launch")')
     expect(remeasure).toContain('--purpose window-construction')
     expect(remeasure).toContain('--window-variant shipped')
     expect(remeasure).toContain('--window-remeasures "$remeasures"')
-    expect(remeasure).toContain('if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi')
+    expect(remeasure).toContain(
+      'if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi'
+    )
     expect(remeasure).toContain('--report-dir "st1-report/$run"')
     expect(remeasure).not.toContain('--window-warmup')
     // A re-measure that cannot launch leaves the slow launch's failure standing; the gate step decides the job.
@@ -564,11 +577,18 @@ describe('QA candidate workflow: the shipped window gate (M2-0519)', () => {
         purpose: 'window-construction',
         windowVariant: 'shipped',
         bootStages: {
-          stages: ['createWindow.prewarm', 'createWindow.construct'].map((stage) => ({ stage, ms: 249, ts: '2026-10-03T10:00:00.000Z', transparent }))
+          stages: ['createWindow.prewarm', 'createWindow.construct'].map((stage) => ({
+            stage,
+            ms: 249,
+            ts: '2026-10-03T10:00:00.000Z',
+            transparent
+          }))
         }
       }
     })
-    expect(windowRemeasurePlan([fast('window-shipped-opaque-1', false), fast('window-shipped-transparent-1', true)])).toEqual([])
+    expect(
+      windowRemeasurePlan([fast('window-shipped-opaque-1', false), fast('window-shipped-transparent-1', true)])
+    ).toEqual([])
     expect(windowRemeasurePlan([])).toEqual([])
   })
 })
