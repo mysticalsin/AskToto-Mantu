@@ -91,7 +91,7 @@ import {
   circleRestSpringAfterExpand,
   circleRestSpringClassName,
   overlayHideParkedClassName,
-  overlayShowPeek,
+  overlayPeekedState,
   overlaySpringAfterHide,
   overlaySpringAfterReveal,
   overlaySpringClassName,
@@ -865,14 +865,18 @@ export function App(): JSX.Element {
   // exception: after its user-requested dashboard handoff, retain the draft but show the rail until the
   // user clicks it or summons Métis again.
   const overlaySurfaceRevealed = rightEdgePresentation && rightEdgeDockDismissed ? false : overlayRevealed
-  const edgeDockParked = rightEdgePresentation && rightEdgeDockDismissed
   const [overlaySpring, setOverlaySpring] = useState<OverlaySpring>('rest')
   const [circleRestSpring, setCircleRestSpring] = useState<CircleRestSpring>('idle')
   // Hide pad / island peek only when fully parked. Bar stays mounted during the spring (in / out).
   // Hide keeps Bar mounted (park is window size only). Island may swap to OverlayPeek.
-  const overlayPeeked =
-    (edgeDockParked && overlaySpring === 'rest') ||
-    overlayShowPeek(overlayIdle, overlaySurfaceRevealed, overlaySpring, overlayRestsHidden(overlayLayout))
+  const overlayPeeked = overlayPeekedState({
+    rightEdge: rightEdgePresentation,
+    dockDismissed: rightEdgeDockDismissed,
+    idle: overlayIdle,
+    revealed: overlaySurfaceRevealed,
+    spring: overlaySpring,
+    restsHidden: overlayRestsHidden(overlayLayout)
+  })
   // Set by a page pointer-enter on the parked rest (the Island tab); cleared by its reveal or an explicit open.
   const rightEdgePointerRevealRef = useRef(false)
   const rightEdgePinsRef = useRef(rightEdgePins)
