@@ -26,8 +26,7 @@ import {
 } from '../../src/renderer/src/design-capture/states'
 
 const root = resolve(__dirname, '..', '..')
-const read = (...parts: string[]): string =>
-  readFileSync(join(root, ...parts), 'utf8').replace(/\r\n/g, '\n')
+const read = (...parts: string[]): string => readFileSync(join(root, ...parts), 'utf8').replace(/\r\n/g, '\n')
 
 /** The `- 'pattern'` entries of every `files:` list in a packaging config, whatever its indent. */
 function fileLists(config: string): string[][] {
@@ -52,7 +51,10 @@ function excludes(list: string[], path: string): boolean {
   return list
     .filter((entry) => entry.startsWith('!'))
     .some((entry) => {
-      const pattern = entry.slice(1).replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*')
+      const pattern = entry
+        .slice(1)
+        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+        .replace(/\*/g, '[^/]*')
       return new RegExp(`^${pattern}$`).test(path)
     })
 }
@@ -188,7 +190,15 @@ describe('capture matrix and manifest', () => {
       commit: 'abc123',
       platform: 'darwin',
       shots: [
-        { state: 'bar-idle', theme: 'light', scale: 1, motion: 'no-preference', file: 'a.png', bytes, audit: cleanAudit }
+        {
+          state: 'bar-idle',
+          theme: 'light',
+          scale: 1,
+          motion: 'no-preference',
+          file: 'a.png',
+          bytes,
+          audit: cleanAudit
+        }
       ],
       negativeControl: { detected: true, kinds: ['clipping', 'nonText', 'text'] }
     })
