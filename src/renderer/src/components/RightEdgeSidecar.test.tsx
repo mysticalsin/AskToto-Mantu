@@ -10,7 +10,13 @@ import { build, type Rollup } from 'vite'
 import react from '@vitejs/plugin-react'
 import { RIGHT_EDGE_DRAWER_WIDTH, RIGHT_EDGE_TAB_WIDTH } from '@shared/right-edge-geometry'
 import { RIGHT_EDGE_STRINGS } from '../lib/right-edge/strings'
-import { RightEdgeAnswerSummary, RightEdgeSidecar, SidecarChat, dockEscapeHides, rightEdgeAnswerPreview } from './RightEdgeSidecar'
+import {
+  RightEdgeAnswerSummary,
+  RightEdgeSidecar,
+  SidecarChat,
+  dockEscapeHides,
+  rightEdgeAnswerPreview
+} from './RightEdgeSidecar'
 
 const sidecar = readFileSync(join(__dirname, './RightEdgeSidecar.tsx'), 'utf8')
 const answer = readFileSync(join(__dirname, './Answer.tsx'), 'utf8')
@@ -173,13 +179,17 @@ describe('right-edge dock', () => {
 
     // App hands the dock the summary on the right edge, the Bar the full body elsewhere, and the Reader the full
     // answer body.
-    expect(app).toMatch(/const barBody = !answerView \|\| collapsed \? undefined\s+: !rightEdgePresentation \? body\s+: islandAnswer \? <RightEdgeAnswerSummary /)
+    expect(app).toMatch(
+      /const barBody = !answerView \|\| collapsed \? undefined\s+: !rightEdgePresentation \? body\s+: islandAnswer \? <RightEdgeAnswerSummary /
+    )
     expect(app).toContain("rightEdgeReaderKind === 'answer' ? (answerView ? body : answerBody)")
   })
 
   it('previews the first readable answer line as plain text, never a code fence or a table row', () => {
     expect(rightEdgeAnswerPreview('## **Quicksort** in `TypeScript`\n\nBody')).toBe('Quicksort in TypeScript')
-    expect(rightEdgeAnswerPreview('```ts\nconst x = 1\n```\n\n- See [the docs](https://example.com) now')).toBe('See the docs now')
+    expect(rightEdgeAnswerPreview('```ts\nconst x = 1\n```\n\n- See [the docs](https://example.com) now')).toBe(
+      'See the docs now'
+    )
     expect(rightEdgeAnswerPreview('| a | b |\n| --- | --- |\n\n> Quoted _note_')).toBe('Quoted note')
     expect(rightEdgeAnswerPreview('1. Rename snake_case_name')).toBe('Rename snake_case_name')
     expect(rightEdgeAnswerPreview('')).toBe('')
@@ -188,7 +198,9 @@ describe('right-edge dock', () => {
     expect(long.endsWith('…')).toBe(true)
     const streaming = renderToStaticMarkup(<RightEdgeAnswerSummary text="" streaming strings={RIGHT_EDGE_STRINGS.fr} />)
     expect(streaming).toContain(RIGHT_EDGE_STRINGS.fr.answerPending)
-    const failed = renderToStaticMarkup(<RightEdgeAnswerSummary text="" streaming={false} error="Provider unavailable." strings={RIGHT_EDGE_STRINGS.en} />)
+    const failed = renderToStaticMarkup(
+      <RightEdgeAnswerSummary text="" streaming={false} error="Provider unavailable." strings={RIGHT_EDGE_STRINGS.en} />
+    )
     expect(failed).toContain('Provider unavailable.')
   })
 
