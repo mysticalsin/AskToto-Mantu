@@ -36,7 +36,11 @@ describe('buildOcrContext', () => {
     const ctx = buildOcrContext({
       width: 1280,
       height: 800,
-      lines: [line('bottom line of the page', 0.1), line('middle paragraph text', 0.5), line('Top Title Of Document', 0.9)]
+      lines: [
+        line('bottom line of the page', 0.1),
+        line('middle paragraph text', 0.5),
+        line('Top Title Of Document', 0.9)
+      ]
     })
     expect(ctx).not.toBeNull()
     const body = ctx!.split('\n').slice(1)
@@ -162,18 +166,24 @@ describe('code-identity / bundle-copies (M2-0429 — Screen Recording diagnosis)
 
   it('parse the documented JSON and reject anything else', () => {
     const cdhash = '0123456789abcdef0123456789abcdef01234567'
-    expect(parseCodeIdentity(JSON.stringify({ identifier: 'com.mantu.asktoto', cdhash, teamId: '', adhoc: true }))).toEqual({
+    expect(
+      parseCodeIdentity(JSON.stringify({ identifier: 'com.mantu.asktoto', cdhash, teamId: '', adhoc: true }))
+    ).toEqual({
       identifier: 'com.mantu.asktoto',
       cdhash,
       teamId: '',
       adhoc: true
     })
-    expect(parseCodeIdentity(JSON.stringify({ identifier: 'x', cdhash: '', teamId: '', adhoc: false }))?.cdhash).toBe('')
-    expect(parseCodeIdentity(JSON.stringify({ identifier: 'x', cdhash: 'not-hex', teamId: '', adhoc: true }))).toBeNull()
+    expect(parseCodeIdentity(JSON.stringify({ identifier: 'x', cdhash: '', teamId: '', adhoc: false }))?.cdhash).toBe(
+      ''
+    )
+    expect(
+      parseCodeIdentity(JSON.stringify({ identifier: 'x', cdhash: 'not-hex', teamId: '', adhoc: true }))
+    ).toBeNull()
     expect(parseCodeIdentity('garbage')).toBeNull()
-    expect(parseBundleCopies(JSON.stringify({ copies: [{ path: '/Applications/Metis.app', version: '1.9.7' }] }))).toEqual([
-      { path: '/Applications/Metis.app', version: '1.9.7' }
-    ])
+    expect(
+      parseBundleCopies(JSON.stringify({ copies: [{ path: '/Applications/Metis.app', version: '1.9.7' }] }))
+    ).toEqual([{ path: '/Applications/Metis.app', version: '1.9.7' }])
     expect(parseBundleCopies(JSON.stringify({ copies: [{ path: 1 }] }))).toBeNull()
   })
 })
@@ -187,11 +197,12 @@ describe('packaging wiring (mechanical — missing wiring fails this suite)', ()
     }
     for (const key of MAC_CHAIN_KEYS) {
       expect(pkg.scripts[key], `scripts.${key} missing`).toBeTruthy()
-      const body = key === 'release:build:mac'
-        ? releasePlans.mac.map(formatCommand).join(' && ')
-        : key === 'release:mas'
-          ? releasePlans.mas.map(formatCommand).join(' && ')
-          : pkg.scripts[key]
+      const body =
+        key === 'release:build:mac'
+          ? releasePlans.mac.map(formatCommand).join(' && ')
+          : key === 'release:mas'
+            ? releasePlans.mas.map(formatCommand).join(' && ')
+            : pkg.scripts[key]
       expect(body, `scripts.${key} does not build the mac helper`).toContain('build-mac-helper.mjs')
       expect(body, `scripts.${key} does not guard the mac helper`).toContain('check-mac-helper.mjs mac')
     }
@@ -224,7 +235,8 @@ describe('packaging wiring (mechanical — missing wiring fails this suite)', ()
 })
 
 describe('extractScreenText — real helper integration (soft-skip when not built/not darwin)', () => {
-  const helperBuilt = process.platform === 'darwin' && existsSync(join(REPO_ROOT, 'resources', 'mac-helper', 'metis-mac-helper'))
+  const helperBuilt =
+    process.platform === 'darwin' && existsSync(join(REPO_ROOT, 'resources', 'mac-helper', 'metis-mac-helper'))
   // 1x1 transparent PNG: decodable image, zero text — proves the spawn→stdin→JSON pipeline end to end
   // and the text-poor → null contract in one shot, with no OCR-model variance.
   const TINY_PNG_B64 =
