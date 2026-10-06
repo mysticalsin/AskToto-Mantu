@@ -15,6 +15,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, it, expect } from 'vitest'
+import { sourceIndexOf } from '../../scripts/lib/source-layout'
 import { PROVIDERS } from '@shared/providers'
 import {
   COOLDOWN_MS,
@@ -101,9 +102,9 @@ describe('an unconfigured endpoint is a routing decision, never a silent redirec
 
   // Inspect each request seam separately: another correct copy elsewhere must not hide a removed gate.
   const sliceFrom = (marker: string, end: string): string => {
-    const start = indexSource.indexOf(marker)
+    const start = sourceIndexOf(indexSource, marker)
     expect(start, `anchor "${marker}" no longer exists in index.ts`).toBeGreaterThan(-1)
-    const stop = indexSource.indexOf(end, start)
+    const stop = sourceIndexOf(indexSource, end, start)
     expect(stop, `end anchor "${end}" no longer follows "${marker}"`).toBeGreaterThan(start)
     return indexSource.slice(start, stop)
   }
@@ -113,7 +114,9 @@ describe('an unconfigured endpoint is a routing decision, never a silent redirec
     const eligible = sliceFrom('const eligible = ', "req.mode !== 'vision'")
     // A funded provider may bypass its BYOK endpoint only while there is NO user key. A user key must
     // never be sent to an SDK default endpoint merely because that provider is also funded.
-    expect(eligible).toMatch(/\(\(!getApiKey\(p\) && operatorFundedProviders\(\)\.includes\(p\)\) \|\| !requiresUserBaseUrl\(p\) \|\| !!providerBaseUrl\(p, s\)\)/)
+    expect(eligible).toMatch(
+      /\(\(!getApiKey\(p\) && operatorFundedProviders\(\)\.includes\(p\)\) \|\|\s*!requiresUserBaseUrl\(p\) \|\|\s*!!providerBaseUrl\(p, s\)\)/
+    )
     expect(eligible).toMatch(/!allowed \|\| allowed\.includes\(p\)/)
   })
 
@@ -125,7 +128,7 @@ describe('an unconfigured endpoint is a routing decision, never a silent redirec
       /\(managedVisionReady\(p\) \|\| !requiresUserBaseUrl\(p\) \|\| !!providerBaseUrl\(p, s\)\)/
     )
     const managed = sliceFrom('const managedVisionReady =', 'const providerVisionReady =')
-    expect(managed).toMatch(/!hasApiKey\(p\) && funded\.includes\(p\) && !!operatorVisionModel\(p,/)
+    expect(managed).toMatch(/!hasApiKey\(p\) &&\s*funded\.includes\(p\) &&\s*!!operatorVisionModel\(\s*p,/)
     expect(sliceFrom('function publicSettings()', 'const managedVisionReady =')).toMatch(
       /const funded = operatorFundedProviders\(\)/
     )
@@ -149,8 +152,12 @@ describe('an unconfigured endpoint is a routing decision, never a silent redirec
 
   it('the brain ingest candidate walk applies the same rule, so no transcript is misrouted', () => {
     expect(ingestSource).toMatch(/const transport = operatorAskTransport\(s\)/)
-    expect(ingestSource).toMatch(/const operatorTransport = !key && def\.kind !== 'cli' && funded\.includes\(p\) \? transport : null/)
-    expect(ingestSource).toMatch(/if \(!operatorTransport && requiresUserBaseUrl\(p\) && !providerBaseUrl\(p, s\)\) continue/)
+    expect(ingestSource).toMatch(
+      /const operatorTransport = !key && def\.kind !== 'cli' && funded\.includes\(p\) \? transport : null/
+    )
+    expect(ingestSource).toMatch(
+      /if \(!operatorTransport && requiresUserBaseUrl\(p\) && !providerBaseUrl\(p, s\)\) continue/
+    )
   })
 
   it('streamOpenAI still refuses as the last line of defence', () => {

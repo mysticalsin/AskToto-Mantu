@@ -9,6 +9,7 @@ import { readDeal, writeDeal, setDealOutcome, slugify } from './brain/store'
 import { renameEntity, readAliasMap, resolveEntitySlug } from './brain/corrections'
 import { settleCommitment } from './brain/ingest'
 import { useStorageForTests } from './infra/storage/meetings-storage'
+import { sourceIndexOf } from '../../scripts/lib/source-layout'
 
 vi.mock('electron')
 
@@ -22,7 +23,7 @@ const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
  *  regions matched below contain no unbalanced brace in a string or comment (template-literal `${…}`
  *  spans are balanced by construction), so a plain depth counter is exact here. */
 function blockAfter(source: string, marker: string): string {
-  const at = source.indexOf(marker)
+  const at = sourceIndexOf(source, marker)
   expect(at, `marker not found: ${marker}`).toBeGreaterThan(-1)
   const open = source.indexOf('{', at)
   let depth = 0
@@ -55,7 +56,7 @@ describe('MQA-009 — a fact-check ask still receives screenContext', () => {
   it("the injector's own guard admits a fact-check ask and still excludes non-answer / non-screen asks", () => {
     // Evaluates the guard condition lifted verbatim out of index.ts, so a future edit that re-adds a
     // fact-check exclusion to the moved block fails here rather than silently at runtime.
-    const injectorAt = indexSrc.indexOf('const ctx = screenPreprocess.currentFreshContext()')
+    const injectorAt = sourceIndexOf(indexSrc, 'const ctx = screenPreprocess.currentFreshContext()')
     expect(injectorAt).toBeGreaterThan(-1)
     const condition = [...indexSrc.slice(0, injectorAt).matchAll(/if \(([^\n]*)\) \{/g)].pop()?.[1]
     expect(condition, 'no if-guard found above the screen injector').toBeTruthy()
@@ -143,17 +144,21 @@ describe('MQA-013 — settle/outcome resolve a renamed deal by its stable id', (
   it('an un-renamed deal still resolves to slugify(name) — the pre-fix path is unchanged', async () => {
     const deal = DealEntitySchema.parse({ id: DEAL_ID, name: 'Acme Corp - Core Banking', account: 'Acme Corp' })
     await writeDeal(s, DEAL_ID, deal)
-    expect(resolveEntitySlug(readAliasMap(s), 'deal', 'Acme Corp - Core Banking')).toBe(slugify('Acme Corp - Core Banking'))
+    expect(resolveEntitySlug(readAliasMap(s), 'deal', 'Acme Corp - Core Banking')).toBe(
+      slugify('Acme Corp - Core Banking')
+    )
     expect(resolveEntitySlug(readAliasMap(s), 'deal', 'Never Seen Before')).toBe('never-seen-before')
   })
 
   it('both index.ts handlers route the wire name through the alias map, not brainSlugify', () => {
     const settle = blockAfter(indexSrc, 'ipcMain.handle(IPC.brainCommitmentSettle')
-    expect(settle).toMatch(/settleCommitment\(s, resolveEntitySlug\(readAliasMap\(s\), 'deal', deal\)/)
+    expect(settle).toMatch(/settleCommitment\(\s*s,\s*resolveEntitySlug\(readAliasMap\(s\),\s*'deal',\s*deal\)/)
     expect(settle).not.toMatch(/brainSlugify/)
 
     const outcome = blockAfter(indexSrc, 'ipcMain.handle(IPC.brainSetDealOutcome')
-    expect(outcome).toMatch(/setDealOutcome\(s, resolveEntitySlug\(readAliasMap\(s\), 'deal', parsed\.data\.dealSlug\)/)
+    expect(outcome).toMatch(
+      /setDealOutcome\(\s*s,\s*resolveEntitySlug\(readAliasMap\(s\),\s*'deal',\s*parsed\.data\.dealSlug\)/
+    )
     expect(outcome).not.toMatch(/brainSlugify/)
   })
 })
@@ -167,7 +172,9 @@ describe('MQA-228 — the screenshot-incapable advice respects the org allowlist
   it('the advice only ever names an ALLOWED vision-capable provider, preferring a configured one', () => {
     const body = blockAfter(indexSrc, 'const visionSwitchAdvice = (blocked: ProviderId): string =>')
     // Candidate filter: vision-capable AND on the allowlist (null allowlist = unrestricted), never local.
-    expect(body).toMatch(/p !== blocked && p !== 'local' && providerVisionOk\(p\) && \(!allowed \|\| allowed\.includes\(p\)\)/)
+    expect(body).toMatch(
+      /p !== blocked && p !== 'local' && providerVisionOk\(p\) && \(!allowed \|\| allowed\.includes\(p\)\)/
+    )
     // Immediately-actionable first: a keyed / CLI-connected candidate outranks a merely-allowed one.
     expect(body).toMatch(/PROVIDERS\[p\]\.kind === 'cli'/)
     expect(body).toMatch(/getApiKey\(p\)\.length > 0 \|\| operatorFundedProviders\(\)\.includes\(p\)/)
