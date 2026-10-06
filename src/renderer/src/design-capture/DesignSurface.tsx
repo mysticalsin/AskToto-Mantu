@@ -1,10 +1,4 @@
-import {
-  DESIGN_STATES,
-  SAMPLE_ANSWER,
-  SAMPLE_QUESTION,
-  SAMPLE_REVIEW,
-  type DesignState
-} from './states'
+import { DESIGN_STATES, SAMPLE_ANSWER, SAMPLE_QUESTION, SAMPLE_REVIEW, type DesignState } from './states'
 
 function Bar({ phase }: { phase: 'idle' | 'listening' }): JSX.Element {
   return (
@@ -58,6 +52,16 @@ function ErrorBanner(): JSX.Element {
   )
 }
 
+function AuditNegativeControl(): JSX.Element {
+  return (
+    <div className="dc-card dc-audit-negative" aria-label="Audit negative control">
+      <p className="dc-audit-negative-text">Contrast guard sample</p>
+      <span className="dc-audit-negative-control" role="checkbox" aria-checked="false" tabIndex={0} />
+      <span className="dc-audit-negative-clipped">Clipped label for audit control</span>
+    </div>
+  )
+}
+
 export function DesignSurface({ state }: { state: DesignState }): JSX.Element {
   switch (state.kind) {
     case 'bar':
@@ -68,6 +72,8 @@ export function DesignSurface({ state }: { state: DesignState }): JSX.Element {
       return <Review />
     case 'error':
       return <ErrorBanner />
+    case 'audit-negative-control':
+      return <AuditNegativeControl />
   }
 }
 
