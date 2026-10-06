@@ -36,46 +36,51 @@ function base(overrides = {}) {
 }
 
 const designed = (overrides = {}) => base({ evidence_level: 'DESIGNED', pr: 42, ...overrides })
-const locallyTested = (overrides = {}) => base({
-  evidence_level: 'LOCALLY_TESTED',
-  pr: 42,
-  ci_run_id: 101,
-  environment: { kind: 'ci', host: 'ubuntu-latest' },
-  command: 'npm test',
-  exit_code: 0,
-  ...overrides
-})
-const hostConfigured = (overrides = {}) => base({
-  evidence_level: 'HOST_CONFIGURED',
-  environment: { kind: 'qa-mac', host: 'qa-mac-1' },
-  command: 'npm run check:build-host',
-  exit_code: 0,
-  output: { path: 'evidence/raw/M2-0002/host.json', sha256: SHA256_A },
-  ...overrides
-})
-const liveVerified = (overrides = {}) => base({
-  evidence_level: 'LIVE_VERIFIED',
-  artifact_sha256: SHA256_A,
-  build_run_id: 202,
-  environment: { kind: 'qa-mac', host: 'qa-mac-1' },
-  command: 'npm run check:packaged-launch',
-  exit_code: 0,
-  output: { path: 'evidence/raw/M2-0002/launch.json', sha256: SHA256_A },
-  ...overrides
-})
-const measured = (overrides = {}) => base({
-  evidence_level: 'MEASURED',
-  environment: { kind: 'ci', host: 'ubuntu-latest' },
-  command: 'node scripts/bench-llm-client.mjs',
-  exit_code: 0,
-  output: { path: 'evidence/raw/M2-0002/bench.json', sha256: SHA256_A },
-  ...overrides
-})
-const accepted = (overrides = {}) => base({
-  evidence_level: 'ACCEPTED',
-  owner_statement: { date: '2026-09-26', text: 'Approved shipping flag-off under D-14.' },
-  ...overrides
-})
+const locallyTested = (overrides = {}) =>
+  base({
+    evidence_level: 'LOCALLY_TESTED',
+    pr: 42,
+    ci_run_id: 101,
+    environment: { kind: 'ci', host: 'ubuntu-latest' },
+    command: 'npm test',
+    exit_code: 0,
+    ...overrides
+  })
+const hostConfigured = (overrides = {}) =>
+  base({
+    evidence_level: 'HOST_CONFIGURED',
+    environment: { kind: 'qa-mac', host: 'qa-mac-1' },
+    command: 'npm run check:build-host',
+    exit_code: 0,
+    output: { path: 'evidence/raw/M2-0002/host.json', sha256: SHA256_A },
+    ...overrides
+  })
+const liveVerified = (overrides = {}) =>
+  base({
+    evidence_level: 'LIVE_VERIFIED',
+    artifact_sha256: SHA256_A,
+    build_run_id: 202,
+    environment: { kind: 'qa-mac', host: 'qa-mac-1' },
+    command: 'npm run check:packaged-launch',
+    exit_code: 0,
+    output: { path: 'evidence/raw/M2-0002/launch.json', sha256: SHA256_A },
+    ...overrides
+  })
+const measured = (overrides = {}) =>
+  base({
+    evidence_level: 'MEASURED',
+    environment: { kind: 'ci', host: 'ubuntu-latest' },
+    command: 'node scripts/bench-llm-client.mjs',
+    exit_code: 0,
+    output: { path: 'evidence/raw/M2-0002/bench.json', sha256: SHA256_A },
+    ...overrides
+  })
+const accepted = (overrides = {}) =>
+  base({
+    evidence_level: 'ACCEPTED',
+    owner_statement: { date: '2026-09-26', text: 'Approved shipping flag-off under D-14.' },
+    ...overrides
+  })
 
 function assertProblem(problems, ...fragments) {
   const found = problems.some((p) => fragments.every((f) => p.includes(f)))
@@ -93,8 +98,18 @@ test('R2 an unknown key is rejected and named', () => {
 })
 
 test('R3 each ALWAYS field missing yields a problem naming it', () => {
-  for (const field of ['schema', 'ticket', 'evidence_level', 'recorded_at', 'kit_refs', 'finding_refs',
-    'commit', 'result', 'implementer_session', 'validator_session']) {
+  for (const field of [
+    'schema',
+    'ticket',
+    'evidence_level',
+    'recorded_at',
+    'kit_refs',
+    'finding_refs',
+    'commit',
+    'result',
+    'implementer_session',
+    'validator_session'
+  ]) {
     const record = locallyTested()
     delete record[field]
     assertProblem(recordProblems(record), field, 'required')
@@ -115,8 +130,14 @@ test('R5 removing a level-required field yields a problem naming it', () => {
     MEASURED: ['environment', 'command', 'exit_code', 'output'],
     ACCEPTED: ['owner_statement']
   }
-  const builders = { DESIGNED: designed, LOCALLY_TESTED: locallyTested, HOST_CONFIGURED: hostConfigured,
-    LIVE_VERIFIED: liveVerified, MEASURED: measured, ACCEPTED: accepted }
+  const builders = {
+    DESIGNED: designed,
+    LOCALLY_TESTED: locallyTested,
+    HOST_CONFIGURED: hostConfigured,
+    LIVE_VERIFIED: liveVerified,
+    MEASURED: measured,
+    ACCEPTED: accepted
+  }
   for (const [level, fields] of Object.entries(requires)) {
     for (const field of fields) {
       const record = builders[level]()
@@ -127,9 +148,18 @@ test('R5 removing a level-required field yields a problem naming it', () => {
 })
 
 test('R6 environment.kind must match the level: in-house only for LOCALLY_TESTED, never ci on a host', () => {
-  assertProblem(recordProblems(locallyTested({ environment: { kind: 'qa-mac', host: 'qa-mac-1' } })), 'environment.kind')
-  assertProblem(recordProblems(hostConfigured({ environment: { kind: 'ci', host: 'ubuntu-latest' } })), 'environment.kind')
-  assertProblem(recordProblems(liveVerified({ environment: { kind: 'ci', host: 'ubuntu-latest' } })), 'environment.kind')
+  assertProblem(
+    recordProblems(locallyTested({ environment: { kind: 'qa-mac', host: 'qa-mac-1' } })),
+    'environment.kind'
+  )
+  assertProblem(
+    recordProblems(hostConfigured({ environment: { kind: 'ci', host: 'ubuntu-latest' } })),
+    'environment.kind'
+  )
+  assertProblem(
+    recordProblems(liveVerified({ environment: { kind: 'ci', host: 'ubuntu-latest' } })),
+    'environment.kind'
+  )
 })
 
 test('R6b hosted-runner: accepted on HOST_CONFIGURED, LIVE_VERIFIED and MEASURED for the two hosted hosts only', () => {
@@ -159,21 +189,32 @@ test('R6c hosted-runner is rejected for LOCALLY_TESTED and needs ci_run_id at ea
     "environment.kind: expected 'ci'"
   )
   const hosted = { kind: 'hosted-runner', host: 'macos-latest' }
-  for (const [level, build] of [['HOST_CONFIGURED', hostConfigured], ['LIVE_VERIFIED', liveVerified], ['MEASURED', measured]]) {
-    assertProblem(recordProblems(build({ environment: hosted })), `ci_run_id: required for a hosted-runner ${level} record`)
+  for (const [level, build] of [
+    ['HOST_CONFIGURED', hostConfigured],
+    ['LIVE_VERIFIED', liveVerified],
+    ['MEASURED', measured]
+  ]) {
+    assertProblem(
+      recordProblems(build({ environment: hosted })),
+      `ci_run_id: required for a hosted-runner ${level} record`
+    )
   }
 })
 
 test('R6e metis-owner-mac is valid only for owner-mac records, except hosted-runner keeps its host message', () => {
-  const wrongKind = recordProblems(liveVerified({
-    environment: { kind: 'qa-mac', host: OWNER_MAC_RUNNER_HOST }
-  }))
+  const wrongKind = recordProblems(
+    liveVerified({
+      environment: { kind: 'qa-mac', host: OWNER_MAC_RUNNER_HOST }
+    })
+  )
   assertProblem(wrongKind, 'environment.kind', OWNER_MAC_RUNNER_HOST)
 
-  const hosted = recordProblems(liveVerified({
-    environment: { kind: 'hosted-runner', host: OWNER_MAC_RUNNER_HOST },
-    ci_run_id: 303
-  }))
+  const hosted = recordProblems(
+    liveVerified({
+      environment: { kind: 'hosted-runner', host: OWNER_MAC_RUNNER_HOST },
+      ci_run_id: 303
+    })
+  )
   assert.deepEqual(
     hosted.filter((problem) => problem.startsWith('environment.')),
     ["environment.host: a hosted-runner record must name 'macos-latest' or 'windows-latest'"]
@@ -182,7 +223,11 @@ test('R6e metis-owner-mac is valid only for owner-mac records, except hosted-run
 
 test('R6f metis-owner-mac records need ci_run_id at runner levels only', () => {
   const ownerRunner = { kind: 'owner-mac', host: OWNER_MAC_RUNNER_HOST }
-  for (const [level, build] of [['HOST_CONFIGURED', hostConfigured], ['LIVE_VERIFIED', liveVerified], ['MEASURED', measured]]) {
+  for (const [level, build] of [
+    ['HOST_CONFIGURED', hostConfigured],
+    ['LIVE_VERIFIED', liveVerified],
+    ['MEASURED', measured]
+  ]) {
     assertProblem(
       recordProblems(build({ environment: ownerRunner })),
       `ci_run_id: required for a ${OWNER_MAC_RUNNER_HOST} ${level} record`
@@ -191,10 +236,7 @@ test('R6f metis-owner-mac records need ci_run_id at runner levels only', () => {
   }
   assert.deepEqual(recordProblems(designed({ environment: ownerRunner })), [])
   assert.deepEqual(recordProblems(accepted({ environment: ownerRunner })), [])
-  assertProblem(
-    recordProblems(locallyTested({ environment: ownerRunner })),
-    "environment.kind: expected 'ci'"
-  )
+  assertProblem(recordProblems(locallyTested({ environment: ownerRunner })), "environment.kind: expected 'ci'")
 })
 
 test('R6g deployed-service records use registered service hosts and ci_run_id at service levels', () => {
@@ -226,7 +268,10 @@ test('R6g deployed-service records use registered service hosts and ci_run_id at
 })
 
 test('R6d the other kinds keep the generic host-label rule', () => {
-  assert.deepEqual(recordProblems(hostConfigured({ environment: { kind: 'windows-runner', host: 'windows-latest' } })), [])
+  assert.deepEqual(
+    recordProblems(hostConfigured({ environment: { kind: 'windows-runner', host: 'windows-latest' } })),
+    []
+  )
   assert.deepEqual(recordProblems(liveVerified({ environment: { kind: 'owner-mac', host: 'ubuntu-latest' } })), [])
   assertProblem(recordProblems(liveVerified({ environment: { kind: 'qa-mac', host: 'Bad Host' } })), 'environment.host')
 })
@@ -261,11 +306,15 @@ test('R10 a BLOCKED kit status needs a complete, valid wired', () => {
   assert.deepEqual(recordProblems(locallyTested({ kit_refs: { 'M2-REL-01': 'BLOCKED' }, wired })), [])
 
   assertProblem(
-    recordProblems(locallyTested({ kit_refs: { 'M2-REL-01': 'BLOCKED' }, wired: { ...wired, contract_fake: 'src/main/x.ts' } })),
+    recordProblems(
+      locallyTested({ kit_refs: { 'M2-REL-01': 'BLOCKED' }, wired: { ...wired, contract_fake: 'src/main/x.ts' } })
+    ),
     'wired.contract_fake'
   )
   assertProblem(
-    recordProblems(locallyTested({ kit_refs: { 'M2-REL-01': 'BLOCKED' }, wired: { ...wired, client: 'src/main/x.test.ts' } })),
+    recordProblems(
+      locallyTested({ kit_refs: { 'M2-REL-01': 'BLOCKED' }, wired: { ...wired, client: 'src/main/x.test.ts' } })
+    ),
     'wired.client'
   )
   assertProblem(

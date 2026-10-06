@@ -35,13 +35,22 @@ const WIN_DISPLAY = {
 
 describe('MQA-286 — Settings open path sets min bounds', () => {
   it('M2-0431: Settings and reveal route through the ordered surface steps whose order the overlay-surface unit tests prove', () => {
-    const settings = index.slice(index.indexOf('function applySettingsSurface(): void'), index.indexOf('function leaveSettingsSurface'))
+    const settings = index.slice(
+      index.indexOf('function applySettingsSurface(): void'),
+      index.indexOf('function leaveSettingsSurface')
+    )
     expect(settings).toMatch(/openOverlaySettingsSurface\(win, rect, applyOverlaySurfaceChrome\)/)
     expect(settings).not.toMatch(/applyOverlaySurfaceChrome\(\)/)
-    const restore = index.slice(index.indexOf('function restoreBarWidth(): void'), index.indexOf('function repairOverlayBoundsForReveal'))
+    const restore = index.slice(
+      index.indexOf('function restoreBarWidth(): void'),
+      index.indexOf('function repairOverlayBoundsForReveal')
+    )
     expect(restore).toMatch(/revealOverlaySurface\(win, next, applyOverlaySurfaceChrome\)\r?\n\}/)
     expect(restore).not.toMatch(/applyOverlaySurfaceChrome\(\)|showInactive|setBounds/)
-    const chrome = index.slice(index.indexOf('function applyOverlaySurfaceChrome'), index.indexOf('/** Hide/island park at bounds.y'))
+    const chrome = index.slice(
+      index.indexOf('function applyOverlaySurfaceChrome'),
+      index.indexOf('/** Hide/island park at bounds.y')
+    )
     expect(chrome).toMatch(/const chrome = skipUnchangedChrome\(win\)/)
     expect(chrome).not.toMatch(/win\.set(BackgroundColor|Opacity)\(/)
   })
@@ -62,7 +71,7 @@ describe('MQA-286 — Settings open path sets min bounds', () => {
     expect(app).toMatch(/onBarSettings/)
     expect(app).toMatch(/openSettingsDefault/)
     expect(app).toMatch(/overlayShowsSettingsSheet\(view, minimized\) \? 'h-full min-h-0'/)
-    expect(app).toMatch(/overlayShowsSettingsSheet\(view, minimized\) \? 'p-1\.5'/)
+    expect(app).toMatch(/overlayShowsSettingsSheet\(view, minimized\)\s*\?\s*'p-1\.5'/)
     expect(app).toMatch(/flex min-h-0 flex-1 flex-col/)
     expect(index).toMatch(/if \(!win\.isVisible\(\)\) win\.showInactive\(\)/)
     expect(index).toMatch(/function restoreBarWidth\(\): void/)

@@ -11,7 +11,12 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 export const EVIDENCE_LEVELS = Object.freeze([
-  'DESIGNED', 'LOCALLY_TESTED', 'HOST_CONFIGURED', 'LIVE_VERIFIED', 'ACCEPTED', 'MEASURED'
+  'DESIGNED',
+  'LOCALLY_TESTED',
+  'HOST_CONFIGURED',
+  'LIVE_VERIFIED',
+  'ACCEPTED',
+  'MEASURED'
 ])
 export const KIT_STATUSES = Object.freeze(['MET', 'PARTIAL', 'BLOCKED', 'NOT_MET'])
 export const RECORD_SCHEMA = 1
@@ -22,7 +27,15 @@ const SHA256_RE = /^[0-9a-f]{64}$/
 const SESSION_MODEL_RE = /^[a-z0-9][a-z0-9.-]{0,63}$/
 const SESSION_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/
 const HOST_RE = /^[a-z0-9][a-z0-9._-]{0,62}$/
-const ENVIRONMENT_KINDS = Object.freeze(['ci', 'qa-mac', 'windows-laptop', 'windows-runner', 'owner-mac', 'hosted-runner', 'deployed-service'])
+const ENVIRONMENT_KINDS = Object.freeze([
+  'ci',
+  'qa-mac',
+  'windows-laptop',
+  'windows-runner',
+  'owner-mac',
+  'hosted-runner',
+  'deployed-service'
+])
 // Runner records need a CI run id: hosted-runner on GitHub-hosted images, owner-mac on
 // metis-owner-mac, deployed-service for CI-checked deployed servers, and every other kind keeps
 // the generic HOST_RE label rule.
@@ -56,7 +69,9 @@ function isEvidenceLevel(value) {
   return EVIDENCE_LEVELS.includes(value) ? null : `evidence_level: expected one of ${EVIDENCE_LEVELS.join(', ')}`
 }
 function isInstant(value) {
-  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value) && !Number.isNaN(Date.parse(value))
+  return typeof value === 'string' &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value) &&
+    !Number.isNaN(Date.parse(value))
     ? null
     : 'recorded_at: expected a UTC instant YYYY-MM-DDTHH:MM:SSZ'
 }
@@ -93,15 +108,18 @@ function isSessionField(label) {
   }
 }
 function isPositiveInt(label) {
-  return (value) => Number.isInteger(value) && value > 0 ? null : `${label}: expected a positive integer`
+  return (value) => (Number.isInteger(value) && value > 0 ? null : `${label}: expected a positive integer`)
 }
 function isSha256Field(label) {
-  return (value) => typeof value === 'string' && SHA256_RE.test(value) ? null : `${label}: expected 64 lowercase hex characters`
+  return (value) =>
+    typeof value === 'string' && SHA256_RE.test(value) ? null : `${label}: expected 64 lowercase hex characters`
 }
 function isEnvironment(value) {
   if (!isPlainObject(value)) return 'environment: expected an object'
-  if (!ENVIRONMENT_KINDS.includes(value.kind)) return `environment.kind: expected one of ${ENVIRONMENT_KINDS.join(', ')}`
-  if (typeof value.host !== 'string' || !HOST_RE.test(value.host)) return 'environment.host: expected a registered lowercase label'
+  if (!ENVIRONMENT_KINDS.includes(value.kind))
+    return `environment.kind: expected one of ${ENVIRONMENT_KINDS.join(', ')}`
+  if (typeof value.host !== 'string' || !HOST_RE.test(value.host))
+    return 'environment.host: expected a registered lowercase label'
   if (value.kind === 'deployed-service' && DEPLOYED_SERVICE_FORBIDDEN_HOSTS.includes(value.host)) {
     return `environment.host: a deployed-service record must not name a runner label (${DEPLOYED_SERVICE_FORBIDDEN_HOSTS.join(', ')})`
   }
@@ -122,7 +140,9 @@ function isExitCode(value) {
   return Number.isInteger(value) ? null : 'exit_code: expected an integer'
 }
 function isProgramPath(value) {
-  return isRelPath(value) ? null : 'output.path: expected a relative path with no leading /, no \\, and no . or .. segment'
+  return isRelPath(value)
+    ? null
+    : 'output.path: expected a relative path with no leading /, no \\, and no . or .. segment'
 }
 function isOutput(value) {
   if (!isPlainObject(value)) return 'output: expected an object'
@@ -132,16 +152,23 @@ function isOutput(value) {
 }
 function isOwnerStatement(value) {
   if (!isPlainObject(value)) return 'owner_statement: expected an object'
-  if (typeof value.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value.date) || Number.isNaN(Date.parse(value.date))) {
+  if (
+    typeof value.date !== 'string' ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(value.date) ||
+    Number.isNaN(Date.parse(value.date))
+  ) {
     return 'owner_statement.date: expected YYYY-MM-DD'
   }
-  if (typeof value.text !== 'string' || value.text.length === 0) return 'owner_statement.text: expected a non-empty string'
+  if (typeof value.text !== 'string' || value.text.length === 0)
+    return 'owner_statement.text: expected a non-empty string'
   return null
 }
 function isRepro(value) {
   if (!isPlainObject(value)) return 'repro: expected an object'
-  if (!isRelPath(value.test) || !TEST_PATH_RE.test(value.test)) return 'repro.test: expected a test path (.test. or .spec.)'
-  if (typeof value.commit !== 'string' || !SHA1_RE.test(value.commit)) return 'repro.commit: expected 40 lowercase hex characters'
+  if (!isRelPath(value.test) || !TEST_PATH_RE.test(value.test))
+    return 'repro.test: expected a test path (.test. or .spec.)'
+  if (typeof value.commit !== 'string' || !SHA1_RE.test(value.commit))
+    return 'repro.commit: expected 40 lowercase hex characters'
   if (!Number.isInteger(value.ci_run_id) || value.ci_run_id <= 0) return 'repro.ci_run_id: expected a positive integer'
   return null
 }
@@ -153,9 +180,14 @@ function isDecisionIds(value) {
 }
 function isInheritedBlock(value) {
   if (!Array.isArray(value)) return 'inherited_block: expected an array'
-  const bad = value.some((entry) => !isPlainObject(entry) ||
-    typeof entry.ticket !== 'string' || !TICKET_RE.test(entry.ticket) ||
-    typeof entry.unblock_step !== 'string' || entry.unblock_step.length === 0)
+  const bad = value.some(
+    (entry) =>
+      !isPlainObject(entry) ||
+      typeof entry.ticket !== 'string' ||
+      !TICKET_RE.test(entry.ticket) ||
+      typeof entry.unblock_step !== 'string' ||
+      entry.unblock_step.length === 0
+  )
   return bad ? 'inherited_block: expected { ticket, unblock_step } entries' : null
 }
 function isWired(value) {
@@ -163,18 +195,21 @@ function isWired(value) {
   const { client, contract_fake: contractFake, probe, capability, unblock_step: unblockStep, ...rest } = value
   if (Object.keys(rest).length > 0) return `wired.${Object.keys(rest)[0]}: unexpected key`
   if (!isRelPath(client) || isTestOnlyPath(client)) return 'wired.client: expected a real (non-test-only) repo path'
-  if (!isRelPath(contractFake) || !isTestOnlyPath(contractFake)) return 'wired.contract_fake: expected a test-only repo path'
+  if (!isRelPath(contractFake) || !isTestOnlyPath(contractFake))
+    return 'wired.contract_fake: expected a test-only repo path'
   if (typeof probe !== 'string' || probe.length === 0 || /&&|\|\||;|\|/.test(probe) || /\r|\n/.test(probe)) {
     return 'wired.probe: expected one command with no &&, ||, ; or |'
   }
-  if (typeof capability !== 'string' || !CAPABILITY_RE.test(capability)) return 'wired.capability: expected a lowercase capability id'
-  if (typeof unblockStep !== 'string' || unblockStep.length === 0) return 'wired.unblock_step: expected a non-empty string'
+  if (typeof capability !== 'string' || !CAPABILITY_RE.test(capability))
+    return 'wired.capability: expected a lowercase capability id'
+  if (typeof unblockStep !== 'string' || unblockStep.length === 0)
+    return 'wired.unblock_step: expected a non-empty string'
   return null
 }
 
 // Every known field, always valid to check even when the current level does not require it (§3).
 const FIELDS = {
-  schema: (value) => value === RECORD_SCHEMA ? null : `schema: expected the number ${RECORD_SCHEMA}`,
+  schema: (value) => (value === RECORD_SCHEMA ? null : `schema: expected the number ${RECORD_SCHEMA}`),
   ticket: isTicketId,
   evidence_level: isEvidenceLevel,
   recorded_at: isInstant,
@@ -201,8 +236,16 @@ const FIELDS = {
 }
 
 const ALWAYS = Object.freeze([
-  'schema', 'ticket', 'evidence_level', 'recorded_at', 'kit_refs', 'finding_refs',
-  'commit', 'result', 'implementer_session', 'validator_session'
+  'schema',
+  'ticket',
+  'evidence_level',
+  'recorded_at',
+  'kit_refs',
+  'finding_refs',
+  'commit',
+  'result',
+  'implementer_session',
+  'validator_session'
 ])
 
 const LEVEL_REQUIRES = Object.freeze({
@@ -284,7 +327,9 @@ export function recordProblems(record) {
       if (!has(key)) problems.push(`${key}: required for ${level}`)
     }
     if (level === 'DESIGNED' && !has('output') && !has('pr')) {
-      problems.push('DESIGNED requires output or pr (a design document lives in the program repo or is proven by its own PR)')
+      problems.push(
+        'DESIGNED requires output or pr (a design document lives in the program repo or is proven by its own PR)'
+      )
     }
     if (has('environment') && isPlainObject(record.environment)) {
       const kind = record.environment.kind
@@ -309,19 +354,27 @@ export function recordProblems(record) {
     }
   }
 
-  if (has('implementer_session') && has('validator_session') &&
-      isPlainObject(record.implementer_session) && isPlainObject(record.validator_session) &&
-      record.implementer_session.id === record.validator_session.id) {
-    problems.push('validator_session.id: must differ from implementer_session.id (a reviewer never approves its own work)')
+  if (
+    has('implementer_session') &&
+    has('validator_session') &&
+    isPlainObject(record.implementer_session) &&
+    isPlainObject(record.validator_session) &&
+    record.implementer_session.id === record.validator_session.id
+  ) {
+    problems.push(
+      'validator_session.id: must differ from implementer_session.id (a reviewer never approves its own work)'
+    )
   }
 
   if (has('reexecuted_by') && isPlainObject(record.reexecuted_by) && isPlainObject(record.implementer_session)) {
     if (record.reexecuted_by.model === record.implementer_session.model) {
-      problems.push('reexecuted_by.model: must differ from implementer_session.model (a re-execution uses a different model)')
+      problems.push(
+        'reexecuted_by.model: must differ from implementer_session.model (a re-execution uses a different model)'
+      )
     }
     const usedIds = [record.implementer_session.id, record.validator_session?.id]
     if (usedIds.includes(record.reexecuted_by.id)) {
-      problems.push('reexecuted_by.id: must be a fresh session id, not the implementer\'s or validator\'s')
+      problems.push("reexecuted_by.id: must be a fresh session id, not the implementer's or validator's")
     }
   }
 

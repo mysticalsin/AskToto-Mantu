@@ -610,7 +610,9 @@ describe('island reveal/collapse wiring (index.ts)', () => {
     expect(index).toMatch(/notifyOverlayCursorHover\(true\)/)
     expect(index).toMatch(/scheduleOverlayLeavePark/)
     expect(index).toMatch(/OVERLAY_LEAVE_PARK_MS/)
-    expect(index).toMatch(/const y = topClamp\(liveOverlayLayout\(\), getDisplayMetrics\(display\), ISLAND_TOP_MARGIN\)/)
+    expect(index).toMatch(
+      /const y = topClamp\(liveOverlayLayout\(\), getDisplayMetrics\(display\), ISLAND_TOP_MARGIN\)/
+    )
     expect(index).toMatch(/function resizeTo/)
     expect(index).toMatch(/never setBounds on a stay tick/)
     expect(index).toMatch(/islandResting \? hoverRestTop/)
@@ -645,11 +647,17 @@ describe('island reveal/collapse wiring (index.ts)', () => {
     expect(index).toMatch(/setOpacity\(/)
     expect(index).toMatch(/app\.setName\('Métis'\)/)
     expect(index).not.toMatch(/Metis Tip|Métis Tip/)
-    const reanchor = index.slice(index.indexOf('function registerScreenListeners'), index.indexOf('function toggleVisible'))
+    const reanchor = index.slice(
+      index.indexOf('function registerScreenListeners'),
+      index.indexOf('function toggleVisible')
+    )
     expect(reanchor).toMatch(/parkOverlayAfterHideSpring\(\)/)
     expect(reanchor).toMatch(/parkedHoverReanchor/)
     expect(reanchor.indexOf('parkOverlayAfterHideSpring')).toBeLessThan(reanchor.indexOf('const height = clampHeight'))
-    const hideTick = index.slice(index.indexOf('function tickOverlayCursorWatch'), index.indexOf('function notifyOverlayCursorHover'))
+    const hideTick = index.slice(
+      index.indexOf('function tickOverlayCursorWatch'),
+      index.indexOf('function notifyOverlayCursorHover')
+    )
     expect(hideTick).not.toMatch(/setBounds\(park/)
     expect(hideTick).not.toMatch(/parkAfterExclusiveOnboarding/)
   })
@@ -667,9 +675,15 @@ describe('island reveal/collapse wiring (index.ts)', () => {
     expect(index).toMatch(/stopOverlayCursorWatch\(\)/)
     const create = index.slice(index.indexOf('function createWindow'), index.indexOf('function resizeTo'))
     expect(create).toMatch(/startOverlayCursorWatch/)
-    const exit = index.slice(index.indexOf('function exitExclusiveOnboardingStage'), index.indexOf('function createWindow'))
+    const exit = index.slice(
+      index.indexOf('function exitExclusiveOnboardingStage'),
+      index.indexOf('function createWindow')
+    )
     expect(exit).toMatch(/startOverlayCursorWatch/)
-    const apply = index.slice(index.indexOf('function applyExclusiveOnboardingStage'), index.indexOf('function exitExclusiveOnboardingStage'))
+    const apply = index.slice(
+      index.indexOf('function applyExclusiveOnboardingStage'),
+      index.indexOf('function exitExclusiveOnboardingStage')
+    )
     expect(apply).toMatch(/stopOverlayCursorWatch/)
   })
 })
@@ -707,15 +721,23 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
     expect(index).toMatch(/exclusiveOsFullscreenAllowed\(/)
     expect(index).toMatch(/setSimpleFullScreen\(true\)/)
     expect(index.indexOf('exclusiveOsFullscreenAllowed(')).toBeLessThan(index.indexOf('setSimpleFullScreen(true)'))
-    const completionEvent = index.slice(index.indexOf('ipcMain.on(IPC.onboardingExit'), index.indexOf('ipcMain.handle(IPC.settingsSet'))
+    const completionEvent = index.slice(
+      index.indexOf('ipcMain.on(IPC.onboardingExit'),
+      index.indexOf('ipcMain.handle(IPC.settingsSet')
+    )
     expect(completionEvent).toMatch(/exitExclusiveOnboardingStage\(\)/)
     const experience = readFileSync(join(__dirname, '../../renderer/src/components/OnboardingExperience.tsx'), 'utf8')
     const finish = experience.slice(experience.indexOf('const finish = async'))
     expect(finish.indexOf('closeOnboardingPortal')).toBeGreaterThan(-1)
-    expect(finish.indexOf('closeOnboardingPortal')).toBeLessThan(finish.indexOf('onDone({ mode, recordingConsent: true, destination })'))
+    expect(finish.indexOf('closeOnboardingPortal')).toBeLessThan(
+      finish.indexOf('onDone({ mode, recordingConsent: true, destination })')
+    )
     expect(index).toMatch(/if \(onboardingExclusiveLive\(\)\) \{\s*applyExclusiveOnboardingStage\(win\)/)
     expect(index).not.toMatch(/Math\.min\(680/)
-    const exit = index.slice(index.indexOf('function exitExclusiveOnboardingStage'), index.indexOf('function createWindow'))
+    const exit = index.slice(
+      index.indexOf('function exitExclusiveOnboardingStage'),
+      index.indexOf('function createWindow')
+    )
     expect(exit).toMatch(/parkAfterExclusiveOnboarding/)
     expect(exit).toMatch(/applyOverlayAlwaysOnTop/)
     expect(exit).toMatch(/setAlwaysOnTop\(true, 'screen-saver'\)/)
@@ -728,7 +750,10 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
     expect(create).toMatch(/islandResting = overlayUsesHover\(layout\)/)
     expect(create).not.toMatch(/width: onboardingLive \? stage.width : BAR_WIDTH/)
     expect(create).not.toMatch(/onboardingLive \? stage.width : restPark.width/)
-    const live = index.slice(index.indexOf('function onboardingExclusiveLive'), index.indexOf('function overlayRendererUrl'))
+    const live = index.slice(
+      index.indexOf('function onboardingExclusiveLive'),
+      index.indexOf('function overlayRendererUrl')
+    )
     expect(live).toMatch(/return true/)
     expect(live).not.toMatch(/return false/)
   })
@@ -879,8 +904,18 @@ describe('overlay chrome modes resolve through placement', () => {
 describe('M2-0202 park invariant', () => {
   const displays: DisplayMetrics[] = [
     metrics({ workArea: LAPTOP_WORK_AREA }),
-    metrics({ workArea: { x: 0, y: 0, width: 853, height: 432 }, bounds: { x: 0, y: 0, width: 853, height: 480 }, hasNotch: false, menuBarHeight: 0 }),
-    metrics({ workArea: { x: -1920, y: 0, width: 1920, height: 1040 }, bounds: { x: -1920, y: 0, width: 1920, height: 1080 }, hasNotch: false, menuBarHeight: 0 }),
+    metrics({
+      workArea: { x: 0, y: 0, width: 853, height: 432 },
+      bounds: { x: 0, y: 0, width: 853, height: 480 },
+      hasNotch: false,
+      menuBarHeight: 0
+    }),
+    metrics({
+      workArea: { x: -1920, y: 0, width: 1920, height: 1040 },
+      bounds: { x: -1920, y: 0, width: 1920, height: 1080 },
+      hasNotch: false,
+      menuBarHeight: 0
+    }),
     metrics({ workArea: LAPTOP_RIGHT_WORK_AREA })
   ]
 
@@ -912,7 +947,16 @@ describe('M2-0202 park invariant', () => {
         expect(parkedHoverReanchor('hide', true, m, 8, 'right-edge', f)).toEqual(hide)
         expect(parkedHoverReanchor('island', true, m, 8, 'right-edge', f)).toEqual(island)
         expect(
-          firstPaintOverlayBounds({ onboardingDone: true, bounds: m.bounds, workArea: wa, layout: 'island', metrics: m, topMargin: 8, placement: 'right-edge', anchor: f })
+          firstPaintOverlayBounds({
+            onboardingDone: true,
+            bounds: m.bounds,
+            workArea: wa,
+            layout: 'island',
+            metrics: m,
+            topMargin: 8,
+            placement: 'right-edge',
+            anchor: f
+          })
         ).toEqual(island)
       }
     }
@@ -928,7 +972,15 @@ describe('M2-0202 S2 — the IPC.rightEdgeSurface main resolves', () => {
     menuBarHeight: y,
     source: 'heuristic'
   })
-  const surface = (m: DisplayMetrics, input: { layout?: 'hide' | 'island'; resting?: boolean; others?: Rect[]; placement?: 'right-edge' | 'top-center' } = {}) =>
+  const surface = (
+    m: DisplayMetrics,
+    input: {
+      layout?: 'hide' | 'island'
+      resting?: boolean
+      others?: Rect[]
+      placement?: 'right-edge' | 'top-center'
+    } = {}
+  ) =>
     rightEdgeSurfaceState({
       placement: input.placement ?? 'right-edge',
       layout: input.layout ?? 'hide',
@@ -939,18 +991,33 @@ describe('M2-0202 S2 — the IPC.rightEdgeSurface main resolves', () => {
 
   it('RE-G09: under 432 tall or 384 wide resolves to top-center in main; 853x432 stays right-edge', () => {
     // 1280x720 at Windows 150% with a 48 px taskbar leaves 853x432.
-    for (const [width, height] of [[853, 432], [853, 440], [1024, 528], [384, 432]] as const) {
+    for (const [width, height] of [
+      [853, 432],
+      [853, 440],
+      [1024, 528],
+      [384, 432]
+    ] as const) {
       const m = display(width, height)
       expect(rightEdgePlacementFits(m), `${width}x${height}`).toBe(true)
       expect(resolveOverlayPlacement('right-edge', m)).toBe('right-edge')
       expect(surface(m).surface).toBe('rest')
     }
-    for (const [width, height] of [[853, 431], [383, 900], [1280, 400]] as const) {
+    for (const [width, height] of [
+      [853, 431],
+      [383, 900],
+      [1280, 400]
+    ] as const) {
       const m = display(width, height)
       expect(rightEdgePlacementFits(m), `${width}x${height}`).toBe(false)
       expect(resolveOverlayPlacement('right-edge', m)).toBe('top-center')
       // The renderer renders only what this payload says, so it falls back exactly where main does.
-      expect(surface(m)).toEqual({ surface: 'top-center', restKind: 'none', edgeClass: 'W', cardMaxHeight: 0, slotMax: 0 })
+      expect(surface(m)).toEqual({
+        surface: 'top-center',
+        restKind: 'none',
+        edgeClass: 'W',
+        cardMaxHeight: 0,
+        slotMax: 0
+      })
       expect(hoverWatchRestRect('hide', m, 'right-edge')).toEqual(hoverWatchRestRect('hide', m, 'top-center'))
     }
   })
