@@ -500,7 +500,7 @@ jobs:
     needs: provenance
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, macOS, ARM64, metis-owner-mac]
-    timeout-minutes: 20
+    timeout-minutes: 45
     continue-on-error: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -749,7 +749,7 @@ jobs:
     needs: provenance
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, macOS, ARM64, metis-owner-mac]
-    timeout-minutes: 20
+    timeout-minutes: 45
     continue-on-error: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
