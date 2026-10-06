@@ -15,7 +15,8 @@ export function parseCssColor(value: string): Rgba | null {
   const match = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:\s*[,/]\s*([\d.]+%?))?\s*\)$/i.exec(value.trim())
   if (!match) return null
   const alphaText = match[4]
-  const alpha = alphaText === undefined ? 1 : alphaText.endsWith('%') ? Number.parseFloat(alphaText) / 100 : Number(alphaText)
+  const alpha =
+    alphaText === undefined ? 1 : alphaText.endsWith('%') ? Number.parseFloat(alphaText) / 100 : Number(alphaText)
   return [Number(match[1]), Number(match[2]), Number(match[3]), alpha]
 }
 
