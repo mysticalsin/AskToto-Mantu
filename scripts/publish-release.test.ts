@@ -3,13 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import {
-  feedRepository,
-  planBuild,
-  platformAssets,
-  publishPlatform,
-  toRelease
-} from './publish-release.mjs'
+import { feedRepository, planBuild, platformAssets, publishPlatform, toRelease } from './publish-release.mjs'
 
 type Platform = 'mac' | 'win'
 
@@ -199,7 +193,7 @@ function release(
     tag: overrides.tag ?? TAG,
     draft: overrides.draft ?? false,
     prerelease: overrides.prerelease ?? false,
-    assets: overrides.assets ?? (platform ? assetsFor(platform) : []),
+    assets: overrides.assets ?? (platform ? assetsFor(platform) : [])
   }
 }
 
@@ -269,7 +263,9 @@ describe('publish-release platform rules (M2-0053)', () => {
       expect(feed.mutations).not.toContain('publish')
       const metadataIndex = feed.mutations.indexOf(`upload ${metadataName[platform]}`)
       expect(metadataIndex).toBeGreaterThan(0)
-      for (const name of (platformAssets(platform, VERSION) as string[]).filter((name) => name !== metadataName[platform])) {
+      for (const name of (platformAssets(platform, VERSION) as string[]).filter(
+        (name) => name !== metadataName[platform]
+      )) {
         expect(feed.mutations.indexOf(`upload ${name}`)).toBeLessThan(metadataIndex)
       }
       expect(feed.latest).toBe('v9.9.9')
@@ -295,7 +291,9 @@ describe('publish-release platform rules (M2-0053)', () => {
 
     it(`treats a public release with complete ${platformLabels[platform]} assets as already published`, async () => {
       const bundleDir = makeBundle(platform)
-      const feed = new FakeFeed([release({ assets: assetsFromBundle(bundleDir, platformAssets(platform, VERSION) as string[]) })])
+      const feed = new FakeFeed([
+        release({ assets: assetsFromBundle(bundleDir, platformAssets(platform, VERSION) as string[]) })
+      ])
 
       const result = await publishPlatform({ platform, tag: TAG, bundleDir, feed })
 
@@ -330,7 +328,9 @@ describe('publish-release platform rules (M2-0053)', () => {
 
     it(`refuses a release that already carries partial ${platformLabels[platform]}, naming the interrupted-upload recovery`, async () => {
       const other = otherPlatform(platform)
-      const partialOwn = (platformAssets(platform, VERSION) as string[]).filter((name) => name !== metadataName[platform])
+      const partialOwn = (platformAssets(platform, VERSION) as string[]).filter(
+        (name) => name !== metadataName[platform]
+      )
       const feed = new FakeFeed([release({ assets: [...assetsFor(other), ...assetsFor(platform, partialOwn)] })])
 
       let caught: unknown
@@ -348,7 +348,9 @@ describe('publish-release platform rules (M2-0053)', () => {
     })
 
     it(`refuses a public release holding assets it did not publish before ${platformLabels[platform]} joins`, async () => {
-      const feed = new FakeFeed([release({ assets: [...assetsFor(otherPlatform(platform)), ...assetsFor(platform, ['notes.txt'])] })])
+      const feed = new FakeFeed([
+        release({ assets: [...assetsFor(otherPlatform(platform)), ...assetsFor(platform, ['notes.txt'])] })
+      ])
 
       await expect(publishPlatform({ platform, tag: TAG, bundleDir: makeBundle(platform), feed })).rejects.toThrow()
       expect(feed.mutations).toEqual([])
@@ -369,9 +371,7 @@ describe('publish-release platform rules (M2-0053)', () => {
 
     it(`replaces the other platform's partial leftover draft before publishing ${platformLabels[platform]}`, async () => {
       const other = otherPlatform(platform)
-      const feed = new FakeFeed([
-        release({ id: 45, draft: true, assets: assetsFor(other, [primaryInstaller[other]]) })
-      ])
+      const feed = new FakeFeed([release({ id: 45, draft: true, assets: assetsFor(other, [primaryInstaller[other]]) })])
 
       await publishPlatform({ platform, tag: TAG, bundleDir: makeBundle(platform), feed })
 
@@ -498,6 +498,16 @@ describe('publish-release platform rules (M2-0053)', () => {
       await expect(publishPlatform({ platform: 'win', tag, bundleDir: makeBundle('win'), feed })).rejects.toThrow()
       expect(feed.mutations).toEqual([])
     }
+  })
+
+  it('refuses a Windows release bundle containing the QA-only Portable exe', async () => {
+    const feed = new FakeFeed()
+    const bundleDir = makeBundle('win', { extra: `Metis-Portable-${VERSION}.exe` })
+
+    await expect(publishPlatform({ platform: 'win', tag: TAG, bundleDir, feed })).rejects.toThrow(
+      /unexpected Windows release asset/
+    )
+    expect(feed.mutations).toEqual([])
   })
 
   it('maps GitHub release JSON', () => {
