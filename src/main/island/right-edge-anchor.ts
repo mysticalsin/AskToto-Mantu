@@ -108,7 +108,10 @@ export function createRightEdgeAnchors(deps: RightEdgeAnchorDeps) {
     const key = overlayDisplayKey(display.id)
     if (!key) return
     // Stored inside the anchor clamp, so a drag back from past a bound moves at once.
-    pending.set(key, anchorFraction(display.workArea, anchorY(display.workArea, anchorFraction(display.workArea, centreY))))
+    pending.set(
+      key,
+      anchorFraction(display.workArea, anchorY(display.workArea, anchorFraction(display.workArea, centreY)))
+    )
     if (saveQueued) return
     saveQueued = true
     deps.later(() => {
