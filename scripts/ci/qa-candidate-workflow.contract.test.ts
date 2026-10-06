@@ -146,6 +146,9 @@ describe('QA candidate mac-native variant (M2-0569)', () => {
   it('builds the native mac app once, stages provenance, and uploads candidate-mac-native', () => {
     const block = job('build-native-mac')
     expect(block).toMatch(/^    needs: guard$/m)
+    expect(block).toMatch(
+      /^    if: github\.event_name != 'pull_request' \|\| github\.event\.pull_request\.head\.repo\.full_name == github\.repository$/m
+    )
     expect(block).toMatch(/^    runs-on: macos-latest$/m)
     expect(block).toContain('A candidate is built once')
     expect(block).toContain('node scripts/build-native-mac.mjs')
@@ -178,6 +181,7 @@ describe('QA candidate mac-native variant (M2-0569)', () => {
     expect(block).toContain('sleep 30')
     expect(block).toContain('alive_after_30s=true')
     expect(block).toContain('tell application id "com.mantu.metis.native" to quit')
+    expect(block).toContain('pgrep -fl "$target" > "$RUNNER_TEMP/mac-native-survivors.txt"')
     expect(block).toContain('survivor_processes == false')
     expect(block).toContain('name: candidate-launch-mac-native')
     expect(block).toContain("retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}")
