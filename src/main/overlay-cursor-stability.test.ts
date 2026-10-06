@@ -1,8 +1,13 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { sourceIndexOf } from '../../scripts/lib/source-layout'
 import * as cursorWatch from './island/cursor-watch'
-import { CURSOR_LEAVE_GRACE_PX, RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS, TOP_CENTER_REVEAL_DWELL_MS } from './island/cursor-watch'
+import {
+  CURSOR_LEAVE_GRACE_PX,
+  RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS,
+  TOP_CENTER_REVEAL_DWELL_MS
+} from './island/cursor-watch'
 import {
   clampHeight as islandClampHeight,
   hoverRestTop,
@@ -41,15 +46,17 @@ const DISPLAY: DisplayMetrics = {
  * IPC and timer side effects are substituted; hit testing and the watcher's state transitions are real.
  * The default fixture is the established top-edge Hide; `rightEdge` runs the same handler for a
  * right-edge Hide parked as its reveal band (or revealed as its drawer). */
-function nativeHover(options: {
-  rightEdge?: { resting: boolean; latched?: boolean; unhoveredRevealAt?: number | null }
-} = {}) {
+function nativeHover(
+  options: { rightEdge?: { resting: boolean; latched?: boolean; unhoveredRevealAt?: number | null } } = {}
+) {
   const display = DISPLAY
   const rightEdge = options.rightEdge
   const placement = rightEdge ? 'right-edge' : 'top-center'
   const band = hoverWatchRestRect('hide', display, 'right-edge')
   const parked = rightEdge ? band : { x: 896, y: 0, width: 8, height: 2 }
-  const revealed = rightEdge ? rightEdgeSidecarBounds(display, { open: true }) : { x: 460, y: 39, width: 880, height: 120 }
+  const revealed = rightEdge
+    ? rightEdgeSidecarBounds(display, { open: true })
+    : { x: 460, y: 39, width: 880, height: 120 }
   let bounds: Rect = rightEdge && !rightEdge.resting ? revealed : parked
   let cursor = { x: 900, y: 600 }
   let now = 0
@@ -87,13 +94,25 @@ function nativeHover(options: {
     overlayHoverRestRect: (layout: 'hide') => hoverWatchRestRect(layout, display, placement),
     hoverWatchRestRect,
     isIncompleteAskReveal,
-    cancelOverlayLeavePark: () => { parkPending = false },
-    scheduleOverlayLeavePark: () => { parkPending = true },
-    notifyOverlayCursorHover: (hovering: boolean) => { notifications.push(hovering) },
-    restoreWindow: () => { bounds = revealed; restoreCount++; return revealed.width },
+    cancelOverlayLeavePark: () => {
+      parkPending = false
+    },
+    scheduleOverlayLeavePark: () => {
+      parkPending = true
+    },
+    notifyOverlayCursorHover: (hovering: boolean) => {
+      notifications.push(hovering)
+    },
+    restoreWindow: () => {
+      bounds = revealed
+      restoreCount++
+      return revealed.width
+    },
     mainLog: { info: () => {} },
     // Reveal/park cause logging (M2-0431) has no OS side effect; overlay-reveal-log.test.ts covers the log itself.
-    noteOverlay: (cause: string) => { noted.push(cause) },
+    noteOverlay: (cause: string) => {
+      noted.push(cause)
+    },
     // The lifted moveBy / resizeTo (a drag and the renderer's content resize) substitute the same OS side
     // effects; their placement math is the shipped geometry.
     ensureWindow: () => win,
@@ -117,7 +136,9 @@ function nativeHover(options: {
     overlayUsesHover,
     parkedOverlayBounds: () => parked,
     applyOverlaySurfaceChrome: () => {},
-    commitParkedOverlayBounds: (park: Rect) => { bounds = park },
+    commitParkedOverlayBounds: (park: Rect) => {
+      bounds = park
+    },
     applyHideClickThrough: () => {},
     startOverlayCursorWatch: () => {},
     // The right-edge hold region (M2-0202) is the real anchor store at the default anchor, nothing persisted.
@@ -133,24 +154,39 @@ function nativeHover(options: {
     rightEdgeSession: createRightEdgeSession({
       surface: () => ({ surface: 'island', restKind: 'none', edgeClass: 'W', cardMaxHeight: 0, slotMax: 0 }),
       send: () => {},
-      onPinsCleared: () => { parkPending = true }
+      onPinsCleared: () => {
+        parkPending = true
+      }
     })
   }
   // Lifts one shipped function, dropping only its TypeScript parameter and return annotations.
   const lift = (signature: string, stop: string, jsSignature = signature.replace(/\): \w+ \{$/, ') {')): string => {
-    const begin = source.indexOf(signature)
-    const end = source.indexOf(stop, begin)
+    const begin = sourceIndexOf(source, signature)
+    const end = sourceIndexOf(source, stop, begin)
     expect(begin).toBeGreaterThan(-1)
     expect(end).toBeGreaterThan(begin)
     return source.slice(begin, end).replace(signature, jsSignature)
   }
   const handler = lift('function tickOverlayCursorWatch(): void {', 'function notifyOverlayCursorHover')
-  const parkHandler = lift('function parkOverlayAfterHideSpring(force = false): boolean {', 'function applyHideClickThrough')
+  const parkHandler = lift(
+    'function parkOverlayAfterHideSpring(force = false): boolean {',
+    'function applyHideClickThrough'
+  )
   const layoutChangeHandler = lift('function parkOverlayForLayoutChange(): void {', '/** Pin the overlay')
-  const moveHandler = lift('function moveBy(dx: number, dy: number): void {', '/**\n * Keep the overlay reachable', 'function moveBy(dx, dy) {')
-  const resizeHandler = lift('function resizeTo(height: number): void {', '/** Collapse to / expand', 'function resizeTo(height) {')
+  const moveHandler = lift(
+    'function moveBy(dx: number, dy: number): void {',
+    '/**\n * Keep the overlay reachable',
+    'function moveBy(dx, dy) {'
+  )
+  const resizeHandler = lift(
+    'function resizeTo(height: number): void {',
+    '/** Collapse to / expand',
+    'function resizeTo(height) {'
+  )
   const pageRevealHandler = lift('function revealTopCenterHoverInPage(): void {', 'const revealController')
-  const build = new Function(...Object.keys(deps), `
+  const build = new Function(
+    ...Object.keys(deps),
+    `
     let islandResting = ${rightEdge ? rightEdge.resting : true};
     let settingsSurfaceOpen = false;
     let isMinimized = false;
@@ -173,7 +209,8 @@ function nativeHover(options: {
     // The reveal controller's restoreInteractiveLayout (a hotkey, tray or relaunch reveal) for this placement.
     function summon() { restoreBarWidth(); revealTopCenterHoverInPage(); }
     return { tick: tickOverlayCursorWatch, park: parkOverlayAfterHideSpring, layoutChangePark: parkOverlayForLayoutChange, moveBy, resizeTo, summon };
-  `) as (...args: unknown[]) => {
+  `
+  ) as (...args: unknown[]) => {
     tick: () => void
     park: (force?: boolean) => boolean
     layoutChangePark: () => void
@@ -231,7 +268,14 @@ function nativeHover(options: {
     },
     band,
     revealed,
-    state: () => ({ bounds, parkPending, restoreCount, notifications: [...notifications], setBoundsCalls: [...setBoundsCalls], noted: [...noted] })
+    state: () => ({
+      bounds,
+      parkPending,
+      restoreCount,
+      notifications: [...notifications],
+      setBoundsCalls: [...setBoundsCalls],
+      noted: [...noted]
+    })
   }
 }
 
@@ -290,7 +334,12 @@ describe('MQA-298 native overlay hover stability', () => {
 
 describe('M2-0431 top-center Hide stability (owner decision OD-23: the notch area only)', () => {
   /** Rest `ms` at `point`, one 24 ms watch tick at a time, starting at `from`. Returns the next tick time. */
-  const dwell = (hover: ReturnType<typeof nativeHover>, from: number, point: { x: number; y: number }, ms: number): number => {
+  const dwell = (
+    hover: ReturnType<typeof nativeHover>,
+    from: number,
+    point: { x: number; y: number },
+    ms: number
+  ): number => {
     let at = from
     for (; at <= from + ms; at += 24) hover.tickAt(at, point)
     return at
@@ -303,7 +352,13 @@ describe('M2-0431 top-center Hide stability (owner decision OD-23: the notch are
   it('400 ms stops on menu-bar items outside the notch area never reveal, notify or move the window', () => {
     const hover = nativeHover()
     let at = 0
-    for (const stop of [{ x: 24, y: 12 }, { x: 1253, y: 27 }, { x: 1770, y: 8 }, { x: 24, y: 38 }, { x: 1770, y: 0 }]) {
+    for (const stop of [
+      { x: 24, y: 12 },
+      { x: 1253, y: 27 },
+      { x: 1770, y: 8 },
+      { x: 24, y: 38 },
+      { x: 1770, y: 0 }
+    ]) {
       at = dwell(hover, at, stop, 400)
       at = dwell(hover, at, { x: 900, y: 600 }, 48)
     }
