@@ -15,6 +15,7 @@ export type DesignState =
   | { id: 'answer-complete'; kind: 'answer'; title: string; streaming: false }
   | { id: 'review-summary'; kind: 'review'; title: string }
   | { id: 'error-recoverable'; kind: 'error'; title: string }
+  | { id: 'audit-negative-control'; kind: 'audit-negative-control'; title: string }
 
 export const DESIGN_STATES: readonly DesignState[] = [
   { id: 'bar-idle', kind: 'bar', title: 'Bar, idle', phase: 'idle' },
@@ -26,6 +27,11 @@ export const DESIGN_STATES: readonly DesignState[] = [
 ]
 
 export const DESIGN_STATE_IDS: readonly string[] = DESIGN_STATES.map((s) => s.id)
+export const AUDIT_NEGATIVE_CONTROL_STATE: DesignState = {
+  id: 'audit-negative-control',
+  kind: 'audit-negative-control',
+  title: 'Audit negative control'
+}
 
 export const SAMPLE_QUESTION = 'What did we agree about the sample rollout?'
 export const SAMPLE_ANSWER = [
@@ -41,5 +47,12 @@ export const SAMPLE_REVIEW = {
 /** The state named by a `?state=<id>` query string, or undefined when absent or not in the list. */
 export function resolveDesignState(search: string): DesignState | undefined {
   const id = new URLSearchParams(search).get('state')
+  return DESIGN_STATES.find((s) => s.id === id)
+}
+
+/** QA-only state for the audit driver. It is addressable by query string but never listed for evidence shots. */
+export function resolveDesignStateIncludingQa(search: string): DesignState | undefined {
+  const id = new URLSearchParams(search).get('state')
+  if (id === AUDIT_NEGATIVE_CONTROL_STATE.id) return AUDIT_NEGATIVE_CONTROL_STATE
   return DESIGN_STATES.find((s) => s.id === id)
 }
