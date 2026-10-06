@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { sourceIndexOf } from '../../scripts/lib/source-layout'
 
 /**
  * MQA-176 — "Hide from screen capture" (settings.contentProtection; the bar's eye button and
@@ -28,9 +29,9 @@ const indexSrc = readFileSync(join(MAIN_DIR, 'index.ts'), 'utf8')
 /** Slice the source from `from` up to (excluding) the next occurrence of `to`. Sliced inside each test
  *  so one drifted marker reports as its own failure instead of aborting the whole file. */
 function sliceBetween(source: string, from: string, to: string): string {
-  const start = source.indexOf(from)
+  const start = sourceIndexOf(source, from)
   expect(start, `marker not found: ${from}`).toBeGreaterThan(-1)
-  const end = source.indexOf(to, start)
+  const end = sourceIndexOf(source, to, start + 1)
   expect(end, `end marker not found after ${from}: ${to}`).toBeGreaterThan(-1)
   return source.slice(start, end)
 }
@@ -77,16 +78,13 @@ function auditWindows(files: { file: string; source: string }[]): WindowAudit {
       const optionsRaw = open === -1 ? '' : braceBlock(source, open)
       // Strip // line comments and /* */ block comments so prose like "show:false" in
       // FITO notes cannot false-clear a visible window as a hidden worker (MQA-176).
-      const options = optionsRaw
-        .replace(/\/\/[^\n]*/g, '')
-        .replace(/\/\*[\s\S]*?\*\//g, '')
+      const options = optionsRaw.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '')
       if (/\bshow:\s*false\b/.test(options)) continue
       // Search from the construction site FORWARD only. A setContentProtection() that appears EARLIER in
       // the module belongs to a re-sync helper (syncIntelContentProtection), and that helper only runs on
       // the NEXT settings save — until then the window is already on screen and capturable. Accepting it
       // would let the audit pass on the exact regression it exists to catch.
-      if (new RegExp(`(?<![\\w$])${target}\\.setContentProtection\\(`).test(source.slice(match.index ?? 0)))
-        continue
+      if (new RegExp(`(?<![\\w$])${target}\\.setContentProtection\\(`).test(source.slice(match.index ?? 0))) continue
       violations.push(`${file}: ${target}`)
     }
   }
@@ -133,9 +131,7 @@ function openHistoryWindow(): void {
   historyWin.loadFile(join(__dirname, '../renderer/history.html'))
 }
 `
-    expect(auditWindows([{ file: 'index.ts', source: indexSrc + added }]).violations).toEqual([
-      'index.ts: historyWin'
-    ])
+    expect(auditWindows([{ file: 'index.ts', source: indexSrc + added }]).violations).toEqual(['index.ts: historyWin'])
   })
 
   it('MQA-176 — the audit clears that same window once it is hidden, or once it is protected', () => {
@@ -170,7 +166,7 @@ function openHistoryWindow(): void {
     // Deleting that one call is exactly the "a rebuilt window comes back capturable" shape:
     // ensureWindow() / second-instance / the boot retry all rebuild the overlay through createWindow(),
     // and the `win?.setContentProtection(...)` calls in the IPC handlers only run on the NEXT save.
-    const stripped = indexSrc.replace('\n  win.setContentProtection(contentProtectionOn())', '')
+    const stripped = indexSrc.replace(/\n[ \t]*win\.setContentProtection\(contentProtectionOn\(\)\)/, '')
     expect(stripped, 'the line the overlay depends on moved — update this pin').not.toBe(indexSrc)
     expect(auditWindows([{ file: 'index.ts', source: stripped }]).violations).toEqual(['index.ts: win'])
   })
@@ -186,11 +182,7 @@ const unpackagedDevEnv: DevEnv = (name) => process.env[name]
 describe('MQA-176 — contentProtectionOn() is the single decision, and it is honest in both directions', () => {
   /** Lift contentProtectionOn's real body out of index.ts and run it. index.ts boots Electron at import
    *  time, so this is the established pattern here (dev-env-gates.contract.test.ts et al). */
-  const contentProtectionOn = (
-    devEnv: DevEnv,
-    contentProtection: boolean,
-    exclusiveLive = false
-  ): boolean => {
+  const contentProtectionOn = (devEnv: DevEnv, contentProtection: boolean, exclusiveLive = false): boolean => {
     const src = sliceBetween(indexSrc, 'function contentProtectionOn(): boolean {', '\n}')
     const body = src.slice(src.indexOf('{') + 1)
     const lifted = new Function('devEnv', 'getSettings', 'onboardingExclusiveLive', body) as (
@@ -198,7 +190,11 @@ describe('MQA-176 — contentProtectionOn() is the single decision, and it is ho
       getSettings: () => { contentProtection: boolean },
       onboardingExclusiveLive: () => boolean
     ) => boolean
-    return lifted(devEnv, () => ({ contentProtection }), () => exclusiveLive)
+    return lifted(
+      devEnv,
+      () => ({ contentProtection }),
+      () => exclusiveLive
+    )
   }
 
   afterEach(() => {

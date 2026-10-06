@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { sourceIndexOf } from '../../scripts/lib/source-layout'
 
 // Regression locks for the index.ts findings of the 2026-08 Windows audit (MQA-037, 038, 051, 054, 056,
 // 062, 064, 066, 070, 075, 081, 090). src/main/index.ts boots Electron at import time and every one of these
@@ -22,9 +23,9 @@ const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 /** Slice the source from `from` up to (excluding) the next occurrence of `to`. Sliced inside each test so
  *  one drifted marker reports as its own failure instead of aborting collection for the whole file. */
 function sliceBetween(from: string, to: string): string {
-  const start = indexSrc.indexOf(from)
+  const start = sourceIndexOf(indexSrc, from)
   expect(start, `marker not found: ${from}`).toBeGreaterThan(-1)
-  const end = indexSrc.indexOf(to, start)
+  const end = sourceIndexOf(indexSrc, to, start)
   expect(end, `end marker not found after ${from}: ${to}`).toBeGreaterThan(-1)
   return indexSrc.slice(start, end)
 }

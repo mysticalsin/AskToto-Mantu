@@ -15,6 +15,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, it, expect } from 'vitest'
+import { sourceIndexOf } from '../../scripts/lib/source-layout'
 import { PROVIDERS } from '@shared/providers'
 import {
   COOLDOWN_MS,
@@ -101,9 +102,9 @@ describe('an unconfigured endpoint is a routing decision, never a silent redirec
 
   // Inspect each request seam separately: another correct copy elsewhere must not hide a removed gate.
   const sliceFrom = (marker: string, end: string): string => {
-    const start = indexSource.indexOf(marker)
+    const start = sourceIndexOf(indexSource, marker)
     expect(start, `anchor "${marker}" no longer exists in index.ts`).toBeGreaterThan(-1)
-    const stop = indexSource.indexOf(end, start)
+    const stop = sourceIndexOf(indexSource, end, start)
     expect(stop, `end anchor "${end}" no longer follows "${marker}"`).toBeGreaterThan(start)
     return indexSource.slice(start, stop)
   }

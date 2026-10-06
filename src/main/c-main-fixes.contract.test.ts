@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createAsrModelProtocolHandler } from './asr-model-protocol'
+import { sourceIndexOf } from '../../scripts/lib/source-layout'
 
 /**
  * Source-contract tests for the C_Main fix batch (main/index.ts + main/store.ts wiring gaps). Same
@@ -33,7 +34,7 @@ describe('findings 2 & 4: visionAvailable consults per-agent Dust vision, not th
     expect(helper).toMatch(/p === 'dust'\s*\? dustSelectedAgentVision\(s\.providerModels\.dust\)/)
 
     const start = source.indexOf('visionAvailable:')
-    const end = source.indexOf('|| localVisionReady', start)
+    const end = sourceIndexOf(source, '|| localVisionReady', start)
     expect(start).toBeGreaterThan(-1)
     expect(end).toBeGreaterThan(start)
     const body = source.slice(start, end)

@@ -222,7 +222,7 @@ describe('boot wiring in index.ts (M2-0518)', () => {
     return found
   }
   const isCallTo = (node: ts.Node, callee: string): node is ts.CallExpression =>
-    ts.isCallExpression(node) && node.expression.getText(indexSource) === callee
+    ts.isCallExpression(node) && node.expression.getText(indexSource).replace(/\s+/g, '') === callee.replace(/\s+/g, '')
 
   const whenReady = findAll(indexSource, (node) => isCallTo(node, 'app.whenReady().then')) as ts.CallExpression[]
   const bootCallback = whenReady[0]?.arguments[0]
