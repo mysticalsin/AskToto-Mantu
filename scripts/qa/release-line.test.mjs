@@ -87,7 +87,19 @@ function runCli({ ref, version, tags, releases, extra = [] }) {
     writeFileSync(join(dir, 'releases.txt'), releases.join('\n'))
     return spawnSync(
       process.execPath,
-      [MODULE_PATH, 'check', '--ref', ref, '--package', join(dir, 'package.json'), '--tags', join(dir, 'tags.txt'), '--releases', join(dir, 'releases.txt'), ...extra],
+      [
+        MODULE_PATH,
+        'check',
+        '--ref',
+        ref,
+        '--package',
+        join(dir, 'package.json'),
+        '--tags',
+        join(dir, 'tags.txt'),
+        '--releases',
+        join(dir, 'releases.txt'),
+        ...extra
+      ],
       { encoding: 'utf8' }
     )
   } finally {
@@ -96,7 +108,12 @@ function runCli({ ref, version, tags, releases, extra = [] }) {
 }
 
 test('the CLI passes a legal version and fails an illegal one with an ::error::', () => {
-  const ok = runCli({ ref: HOTFIX_REF, version: '1.9.7-hotfix.1', tags: AFTER.feedTags, releases: AFTER.publishedReleases })
+  const ok = runCli({
+    ref: HOTFIX_REF,
+    version: '1.9.7-hotfix.1',
+    tags: AFTER.feedTags,
+    releases: AFTER.publishedReleases
+  })
   assert.equal(ok.status, 0, ok.stdout + ok.stderr)
   const refused = runCli({ ref: HOTFIX_REF, version: '1.9.7', tags: AFTER.feedTags, releases: AFTER.publishedReleases })
   assert.equal(refused.status, 1)
