@@ -13,7 +13,15 @@
  * - The live transcript follows the newest line while the reader sits at its end; scrolled back, a new line
  *   offers "Jump to live" instead of moving the text under the reader.
  */
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MutableRefObject, type ReactNode } from 'react'
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MutableRefObject,
+  type ReactNode
+} from 'react'
 import { ChevronRight } from 'lucide-react'
 import type { MetisCommandState, TranscriptLine } from '@shared/ipc'
 import { transcriptDisplayName } from '@shared/speaker-names'
@@ -23,7 +31,15 @@ import { ElapsedClock } from '../Bar'
 import { usePendingCommandCancel } from '../RightEdgeSidecar'
 import './right-edge-reader.css'
 
-export const RIGHT_EDGE_READER_KINDS = ['answer', 'transcript', 'history', 'review', 'agenda', 'brain', 'details'] as const
+export const RIGHT_EDGE_READER_KINDS = [
+  'answer',
+  'transcript',
+  'history',
+  'review',
+  'agenda',
+  'brain',
+  'details'
+] as const
 export type RightEdgeReaderKind = (typeof RIGHT_EDGE_READER_KINDS)[number]
 
 /** The full views that open only in the Reader on the right edge. Settings keeps its own surface. */
@@ -35,7 +51,12 @@ export function readerKindForView(view: string): RightEdgeReaderKind | null {
 export type RightEdgeReaderTone = 'ready' | 'thinking' | 'listening' | 'paused' | 'attention'
 
 /** A waiting action outranks work in progress, which outranks a live meeting. */
-export function rightEdgeReaderTone(state: { attention: boolean; thinking: boolean; listening: boolean; paused: boolean }): RightEdgeReaderTone {
+export function rightEdgeReaderTone(state: {
+  attention: boolean
+  thinking: boolean
+  listening: boolean
+  paused: boolean
+}): RightEdgeReaderTone {
   if (state.attention) return 'attention'
   if (state.thinking) return 'thinking'
   if (state.listening) return state.paused ? 'paused' : 'listening'
@@ -55,7 +76,9 @@ export interface RightEdgeReaderMeeting {
 }
 
 /** Where each kind was scrolled to when the Reader last closed, and whether it sat at its end. */
-export type RightEdgeReaderScrollMemory = MutableRefObject<Partial<Record<RightEdgeReaderKind, { top: number; atEnd: boolean }>>>
+export type RightEdgeReaderScrollMemory = MutableRefObject<
+  Partial<Record<RightEdgeReaderKind, { top: number; atEnd: boolean }>>
+>
 
 /** Within this many px of the end the reader is "at live". */
 const AT_END_PX = 24
@@ -203,8 +226,15 @@ export function RightEdgeReader({
         <h1 className="re-reader__title">{strings[TITLE[kind]]}</h1>
         {meeting ? (
           <span className="re-reader__timer" data-re-reader-timer role="timer" aria-label={strings.meetingTimer}>
-            {consentDot ? <span className="re-reader__consent" data-re-consent-dot role="img" aria-label={strings.consentDot} /> : null}
-            <ElapsedClock startedAt={meeting.startedAt} paused={meeting.paused} pausedMs={meeting.pausedMs} pausedAt={meeting.pausedAt} />
+            {consentDot ? (
+              <span className="re-reader__consent" data-re-consent-dot role="img" aria-label={strings.consentDot} />
+            ) : null}
+            <ElapsedClock
+              startedAt={meeting.startedAt}
+              paused={meeting.paused}
+              pausedMs={meeting.pausedMs}
+              pausedAt={meeting.pausedAt}
+            />
           </span>
         ) : null}
         {tone === 'attention' && onAttention ? (
@@ -238,13 +268,25 @@ export function RightEdgeReader({
           </button>
         ) : null}
       </header>
-      <div ref={scrollRef} className="re-reader__scroll scroll-thin" data-re-reader-scroll tabIndex={0} aria-label={strings[TITLE[kind]]} onScroll={onScroll}>
+      <div
+        ref={scrollRef}
+        className="re-reader__scroll scroll-thin"
+        data-re-reader-scroll
+        tabIndex={0}
+        aria-label={strings[TITLE[kind]]}
+        onScroll={onScroll}
+      >
         <div ref={contentRef} className="re-reader__content">
           {children}
         </div>
       </div>
       {kind === 'transcript' && behindLive ? (
-        <button type="button" className="re-reader__button re-reader__jump no-drag focus-ring" data-re-reader-jump onClick={jumpToLive}>
+        <button
+          type="button"
+          className="re-reader__button re-reader__jump no-drag focus-ring"
+          data-re-reader-jump
+          onClick={jumpToLive}
+        >
           {strings.jumpToLive}
         </button>
       ) : null}
@@ -266,7 +308,12 @@ export function RightEdgeReaderTranscript({
   return (
     <ol className="re-reader__transcript" aria-live="polite">
       {lines.map((line, index) => (
-        <li key={`${line.t}-${index}`} className="re-reader__line" data-speaker={line.speaker} data-provisional={line.provisional || undefined}>
+        <li
+          key={`${line.t}-${index}`}
+          className="re-reader__line"
+          data-speaker={line.speaker}
+          data-provisional={line.provisional || undefined}
+        >
           <span className="re-reader__speaker">{transcriptDisplayName(line, { youLabel })}</span>
           <span className="re-reader__text">{line.text}</span>
         </li>
@@ -305,7 +352,12 @@ export function RightEdgeReaderDetails({
         </section>
       ) : null}
       {errors.map((error, index) => (
-        <section key={`${index}-${error}`} className="re-reader__detail" data-re-detail="error" aria-label={strings.detailsError}>
+        <section
+          key={`${index}-${error}`}
+          className="re-reader__detail"
+          data-re-detail="error"
+          aria-label={strings.detailsError}
+        >
           <h2 className="re-reader__detail-title">{strings.detailsError}</h2>
           <p>{error}</p>
         </section>
