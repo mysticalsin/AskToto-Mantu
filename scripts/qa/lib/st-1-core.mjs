@@ -446,7 +446,8 @@ function windowLaunchSummaries(rows) {
  * measured shipped gated stage found, per report, then every re-measure's.
  * OD-66: a measured shipped launch at or over budget passes only through one accepted same-chrome re-measure
  * (acceptedRemeasures); it is then listed under `remeasured` as `{ launch, stage, ms, remeasure, remeasureMs }`, one
- * entry per over-budget stage. Every re-measure report is gated itself.
+ * entry per over-budget stage. Every re-measure report is gated itself. The 250 ms budget and its >= comparison are
+ * unchanged by OD-66. A share of runs with a non-empty `remeasured` above 15% is a suspected regression, not variance.
  * @param {Array<{ name: string, report: any }>} reports
  */
 export function windowConstructionGate(reports, budgetMs = WINDOW_STAGE_BUDGET_MS) {
