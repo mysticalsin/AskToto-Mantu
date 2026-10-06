@@ -65,17 +65,58 @@ export function pinnedExpression(key, expression, ms) {
   return `(() => {
   const pending = (globalThis.${PENDING_GLOBAL} ??= {})
   let timer
-  const bounded = Promise.race([
-    Promise.resolve()
-      .then(() => (${expression}))
-      .then((value) => ({ ok: true, value }), (error) => ({ ok: false, error: String(error?.message ?? error) })),
-    new Promise((resolve) => {
-      timer = setTimeout(() => resolve({ ok: false, timedOut: true }), ${Number(ms)})
-    })
-  ])
-  bounded.then(() => clearTimeout(timer))
+  const clearBound = () => {
+    try {
+      if (timer !== undefined) clearTimeout(timer)
+    } catch {}
+  }
+  const settled = Promise.resolve()
+    .then(() => (${expression}))
+    .then((value) => ({ ok: true, value }), (error) => ({ ok: false, error: String(error?.message ?? error) }))
+  let resolveTimeout
+  const timeout = new Promise((resolve) => {
+    resolveTimeout = resolve
+  })
+  try {
+    timer = setTimeout(() => resolveTimeout({ ok: false, timedOut: true }), ${Number(ms)})
+  } catch {}
+  const bounded = Promise.race([settled, timeout]).finally(clearBound)
   pending[${JSON.stringify(key)}] = bounded
   return bounded
+})()`
+}
+
+/** One app-side sample expression. The reported max covers the interval before the sample plus the probe
+ *  write after the histogram reset, and uses the never-reset run histogram only when it rose in this
+ *  interval, so a dropped post-reset block reaches one timeline sample without being replayed forever. */
+export function sampleExpression(probeFile) {
+  return `(async () => {
+  const loopMaxBeforeWriteMs = __st1since.max / 1e6
+  __st1since.reset()
+  const resources = {}
+  if (typeof process.getActiveResourcesInfo === 'function') {
+    for (const type of process.getActiveResourcesInfo()) resources[type] = (resources[type] ?? 0) + 1
+  }
+  const { writeFile } = process.getBuiltinModule('node:fs/promises')
+  const { lookup } = process.getBuiltinModule('node:dns/promises')
+  let started = performance.now()
+  await writeFile(${JSON.stringify(probeFile)}, String(started))
+  const writeMs = performance.now() - started
+  const loopMaxDuringWriteMs = __st1since.max / 1e6
+  const runLoopMaxMs = __st1.max / 1e6
+  const previousRunLoopMaxMs = globalThis.__st1lastRunLoopMaxMs ?? 0
+  globalThis.__st1lastRunLoopMaxMs = Math.max(previousRunLoopMaxMs, runLoopMaxMs)
+  const sampleLoopMaxMs = Math.max(loopMaxBeforeWriteMs, loopMaxDuringWriteMs)
+  started = performance.now()
+  await lookup('localhost')
+  return {
+    writeMs,
+    loopMaxDuringWriteMs,
+    runLoopMaxMs,
+    lookupMs: performance.now() - started,
+    loopMaxSinceLastMs: runLoopMaxMs > previousRunLoopMaxMs ? Math.max(sampleLoopMaxMs, runLoopMaxMs) : sampleLoopMaxMs,
+    resources
+  }
 })()`
 }
 
@@ -180,10 +221,22 @@ export function countStorageSaturations(mainLogText) {
   return mainLogText.split('\n').filter((line) => line.includes(STORAGE_SATURATED_LOG)).length
 }
 
-/** Whether this sample should schedule the next History probe. Pure so the idle row can prove no probe is
- *  scheduled while `--history off` keeps History untouched. */
-export function shouldProbeHistory({ historyOn, historyRunning, tMs, historyLastMs, fromMs, everyMs }) {
-  return historyOn && !historyRunning && tMs >= fromMs && tMs - historyLastMs >= everyMs
+/** Whether this sample should schedule the next History probe. Pure so idle rows can prove when History is
+ *  untouched, including a delayed mode that opens it only after the idle measurement window. */
+export function shouldProbeHistory({ historyMode = 'on', historyRunning, historyAnswered = false, tMs, historyLastMs, fromMs, everyMs, retryUntilMs = Infinity }) {
+  if (historyMode === 'off' || historyRunning) return false
+  if (historyMode === 'after-idle' && historyAnswered) return false
+  return tMs >= fromMs && tMs <= retryUntilMs && tMs - historyLastMs >= everyMs
+}
+
+/** The History probe window. In after-idle mode, the first probe is scheduled from the end of the
+ *  measurement window, not from process spawn, so the row stays idle for the full sampled period. */
+export function historyProbeWindow({ historyMode = 'on', nowMs, minutes, defaultFromMs, retryMs }) {
+  const fromMs = historyMode === 'after-idle' ? nowMs + minutes * 60_000 : defaultFromMs
+  return {
+    fromMs,
+    retryUntilMs: historyMode === 'after-idle' ? fromMs + retryMs : Infinity
+  }
 }
 
 /** The representative profile of ARCHITECTURE 6.1: 59 meetings, 6 of them cloud-only, and a mostly
@@ -355,6 +408,49 @@ function historyProbes(measured) {
   return measured.history.filter((entry) => !entry.skipped)
 }
 
+function maxNumber(values) {
+  const numbers = values.filter((value) => typeof value === 'number')
+  return numbers.length > 0 ? Math.max(...numbers) : null
+}
+
+function fifoMeetingFixtures(row, fixtures, fixtureCounts, evidence) {
+  if (typeof evidence?.fifoMeetingFixtures === 'number') return evidence.fifoMeetingFixtures
+  if (row === 'synthetic-dataless' && typeof fixtureCounts?.fifoMeetings === 'number') return fixtureCounts.fifoMeetings
+  return fixtures.filter((fixture) => String(fixture).endsWith('.md')).length
+}
+
+/** FIFO-backed rows are exercised when History reached the fixture set and refused the unreadable meeting
+ * rows without opening a non-regular file. An open reader is reported by its own criterion, never as PASS. */
+function fifoRefusalEvidence(row, measured, evidence, fixtures, fixtureCounts) {
+  if (row !== 'fifo' && row !== 'synthetic-dataless') return null
+  const probes = historyProbes(measured)
+  const requiredUnavailableRows = fifoMeetingFixtures(row, fixtures, fixtureCounts, evidence)
+  const answered = probes.filter((entry) => !entry.hung && !entry.error)
+  const brainStatusAnswered = answered.some((entry) => settledWithin(entry.calls?.brainStatus, Number.POSITIVE_INFINITY))
+  const unavailableRows = maxNumber(answered.map((entry) => entry.unavailable ?? entry.notDownloaded))
+  const matchingProbe = answered.find(
+    (entry) =>
+      typeof (entry.unavailable ?? entry.notDownloaded) === 'number' &&
+      (entry.unavailable ?? entry.notDownloaded) >= requiredUnavailableRows &&
+      settledWithin(entry.calls?.brainStatus, Number.POSITIVE_INFINITY)
+  )
+  const reason = matchingProbe
+    ? 'history-refused-fixtures'
+    : answered.length === 0
+      ? 'history-did-not-answer'
+      : brainStatusAnswered && typeof unavailableRows === 'number' && unavailableRows < requiredUnavailableRows
+        ? 'history-answer-lacked-required-refusals'
+        : 'history-did-not-prove-refusal'
+  return {
+    exercised: Boolean(matchingProbe),
+    reason,
+    historyProbesAnswered: answered.length,
+    unavailableRows,
+    requiredUnavailableRows,
+    brainStatusAnswered
+  }
+}
+
 /** Whether one History probe of `row` opened History (list + brain status) with a usable list, or searched
  *  with results, within HISTORY_BUDGET_MS. A hung or failed probe did neither; a failed search
  *  (`searchError`) did not search. A usable list lists at least one fixture row, so a fast empty list never
@@ -472,6 +568,9 @@ export function evaluateCriteria(row, measured, evidence, { history = false } = 
     { name: 'dns-lookup < 250', pass: measured.samples.every((s) => s.lookupMs < 250) }
   ]
   if (row === 'dataless') criteria.push({ name: 'still-dataless', pass: evidence?.stillDataless === true })
+  if (row === 'fifo' || row === 'synthetic-dataless') {
+    criteria.push({ name: 'non-regular-fixtures-unopened', pass: (evidence?.fixturesOpened ?? []).length === 0 })
+  }
   if (history) {
     const probes = historyProbes(measured)
     criteria.push(
@@ -515,9 +614,21 @@ export function buildReport({
   windowWarmup = false
 }) {
   const criteria = evaluateCriteria(row, measured, evidence, { history })
+  const refusalEvidence = fifoRefusalEvidence(row, measured, evidence, fixtures, fixtureCounts)
   // The control row has nothing to exercise: its verdict is the criteria alone.
-  const exercised = row === 'none' || evidence?.exercised
-  const verdict = !complete ? 'INCOMPLETE' : !exercised ? 'NOT_EXERCISED' : criteria.every((c) => c.pass) ? 'PASS' : 'FAIL'
+  const exercised = refusalEvidence?.exercised ?? (row === 'none' || evidence?.exercised)
+  const openedNonRegularFixture = criteria.some((criterion) => criterion.name === 'non-regular-fixtures-unopened' && !criterion.pass)
+  // OD-43/M2-0534: after-idle rows must resolve to PASS or FAIL; missing refusal proof is a row failure.
+  const delayedHistoryFailed = historyMode === 'after-idle' && refusalEvidence && !refusalEvidence.exercised
+  const verdict = !complete
+    ? 'INCOMPLETE'
+    : openedNonRegularFixture || delayedHistoryFailed
+      ? 'FAIL'
+      : !exercised
+        ? 'NOT_EXERCISED'
+        : criteria.every((c) => c.pass)
+          ? 'PASS'
+          : 'FAIL'
   const timeline = [...measured.samples, ...measured.late.map((entry) => ({ ...entry, late: true }))].sort((a, b) => a.tMs - b.tMs)
   return {
     harness: 'ST-1',
@@ -538,7 +649,8 @@ export function buildReport({
     loop: measured.loop,
     write: { maxMs: Math.max(0, ...measured.samples.map((s) => s.writeMs)) },
     lookup: { maxMs: Math.max(0, ...measured.samples.map((s) => s.lookupMs)) },
-    exercised: evidence?.exercised ?? null,
+    exercised: refusalEvidence?.exercised ?? evidence?.exercised ?? null,
+    ...(refusalEvidence ? { exerciseEvidence: refusalEvidence } : {}),
     ...(row === 'fifo' || row === 'synthetic-dataless' ? { fixturesOpened: evidence?.fixturesOpened ?? null } : {}),
     ...(row === 'synthetic-dataless'
       ? { fixtureKind: 'synthetic-dataless', fixtureCounts, sfDatalessSet: evidence?.sfDatalessSet ?? null }
@@ -565,6 +677,20 @@ export function buildReport({
         : { fromByte: attribution.mainLog.fromByte, exactLaunchOffset: attribution.mainLog.exactLaunchOffset },
     appEvidence: attribution.appEvidence
   }
+}
+
+export function writeJsonToStdout(value, stdout = process.stdout) {
+  const text = `${JSON.stringify(value, null, 2)}\n`
+  return new Promise((resolve, reject) => {
+    try {
+      stdout.write(text, (error) => {
+        if (error) reject(error)
+        else resolve()
+      })
+    } catch (error) {
+      reject(error)
+    }
+  })
 }
 
 /** The launch itself never reached a candidate to measure: a genuine FAIL (inspector: false), never a

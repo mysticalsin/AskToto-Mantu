@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { sourceIndexOf } from '../../scripts/lib/source-layout'
 
 const main = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const preload = readFileSync(join(__dirname, '../preload/index.ts'), 'utf8')
@@ -8,9 +9,9 @@ const ipc = readFileSync(join(__dirname, '../shared/ipc.ts'), 'utf8')
 const app = readFileSync(join(__dirname, '../renderer/src/App.tsx'), 'utf8')
 
 function between(source: string, start: string, end: string): string {
-  const from = source.indexOf(start)
+  const from = sourceIndexOf(source, start)
   expect(from, `missing start marker: ${start}`).toBeGreaterThan(-1)
-  const to = source.indexOf(end, from)
+  const to = sourceIndexOf(source, end, from + 1)
   expect(to, `missing end marker: ${end}`).toBeGreaterThan(-1)
   return source.slice(from, to)
 }
@@ -38,10 +39,16 @@ describe('Cap2 command authority boundary', () => {
 
   it('revokes command authority when the owning window or renderer is replaced', () => {
     expect(main).toContain('const self = win')
-    const closed = between(main, "win.on('closed', () => {", "win.webContents.setWindowOpenHandler(")
+    const closed = between(main, "win.on('closed', () => {", 'win.webContents.setWindowOpenHandler(')
     expect(closed).toMatch(/if \(win !== self\) return\s*commandControl\.revokeForLifecycleEvent\('window_closed'\)/)
-    const rendererGone = between(main, "win.webContents.on('render-process-gone', (_e, details) => {", 'const rendererUrl = overlayRendererUrl()')
-    expect(rendererGone).toMatch(/if \(win !== self\) return\s*commandControl\.revokeForLifecycleEvent\('renderer_replaced'\)/)
+    const rendererGone = between(
+      main,
+      "win.webContents.on('render-process-gone', (_e, details) => {",
+      'const rendererUrl = overlayRendererUrl()'
+    )
+    expect(rendererGone).toMatch(
+      /if \(win !== self\) return\s*commandControl\.revokeForLifecycleEvent\('renderer_replaced'\)/
+    )
     // M2-0037: the destroyed-check guard now leads into the reload-budget decision (reload / halt / ignore)
     // rather than reloading unconditionally — assert order, not exact adjacency, so that branch can grow.
     const destroyedGuard = rendererGone.indexOf('if (win !== self || self.isDestroyed()) return')
@@ -63,7 +70,7 @@ describe('Cap2 command authority boundary', () => {
     expect(revokeForHandoff).toBeGreaterThan(replacementReady)
     expect(retireWindow).toBeGreaterThan(revokeForHandoff)
 
-    const closed = between(main, "win.on('closed', () => {", "win.webContents.setWindowOpenHandler(")
+    const closed = between(main, "win.on('closed', () => {", 'win.webContents.setWindowOpenHandler(')
     const retiredGuard = closed.indexOf('if (win !== self) return')
     const revokeOnCurrentClose = closed.indexOf("commandControl.revokeForLifecycleEvent('window_closed')")
     expect(retiredGuard).toBeGreaterThan(-1)
@@ -76,7 +83,7 @@ describe('Cap2 command authority boundary', () => {
     expect(app).toContain("a === 'metis-command'")
     expect(app).toMatch(/else if \(a === 'toggle-listen'\) toggleListen\(\)/)
     expect(app).toMatch(
-      /else if \(a === 'metis-command'\) \{\s*rightEdgeDismissalLockRef\.current = reduceRightEdgeDismissalLock\(rightEdgeDismissalLockRef\.current, \{ type: 'metis-command' \}\)\s*setRightEdgeDockDismissed\(false\)\s*dispatchAutoHide\(\{ type: 'reveal-now' \}\)\s*setCollapsed\(false\)\s*\}/
+      /else if \(a === 'metis-command'\) \{\s*rightEdgeDismissalLockRef\.current = reduceRightEdgeDismissalLock\(rightEdgeDismissalLockRef\.current,\s*\{\s*type:\s*'metis-command'\s*\}\)\s*setRightEdgeDockDismissed\(false\)\s*dispatchAutoHide\(\{\s*type:\s*'reveal-now'\s*\}\)\s*setCollapsed\(false\)\s*\}/
     )
   })
 
@@ -103,5 +110,4 @@ describe('Cap2 command authority boundary', () => {
     expect(app).not.toContain('data-metis-command-ear-chip')
     expect(app).not.toContain('CommandListeningPill')
   })
-
 })

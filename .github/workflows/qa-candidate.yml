@@ -27,6 +27,9 @@ on:
       - scripts/qa/st-1.mjs
       - scripts/qa/lib/st-1-core.mjs
       - scripts/qa/stat-flags-fixture.sh
+      - scripts/hermetic/prove-owner-sandbox.sh
+      - scripts/hermetic/run-under-owner-sandbox.sh
+      - scripts/hermetic/owner-account.sb
       # The boot path ST-1 measures (M2-0433), so every fix slice on it gets a QA self-test.
       - src/main/boot-tray.ts
       - src/main/boot-window-rendering.ts
@@ -34,6 +37,11 @@ on:
       - src/main/lifecycle/boot-work.ts
       # The admission the ST-1 History row measures (M2-0193).
       - src/main/infra/storage/admission.ts
+      # The History design evidence capture and the views it captures (M2-0032).
+      - scripts/qa/history-design-capture.mjs
+      - scripts/qa/lib/history-design.mjs
+      - src/renderer/src/components/RecallView.tsx
+      - src/renderer/src/components/history/**
 
 permissions:
   contents: read
@@ -490,28 +498,45 @@ jobs:
   st1-mac-fifo:
     name: ST-1 fifo stall row (macOS)
     needs: provenance
-    runs-on: macos-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, macOS, ARM64, metis-owner-mac]
     timeout-minutes: 20
     continue-on-error: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        env:
+          TMPDIR: ${{ runner.temp }}
         with:
           persist-credentials: false
+      - name: Prove owner-account sandbox denies private state
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: bash scripts/hermetic/prove-owner-sandbox.sh
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        env:
+          TMPDIR: ${{ runner.temp }}
         with:
           node-version: 22.22.3
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        env:
+          TMPDIR: ${{ runner.temp }}
         with:
           name: candidate-provenance
           path: provenance
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        env:
+          TMPDIR: ${{ runner.temp }}
         with:
           name: candidate-mac-qa-identity
           path: assets
       - name: Verify every byte against the provenance
-        run: node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
       - name: Measure packaged stall resilience
         continue-on-error: true
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: |
           mkdir -p st1-report
           installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
@@ -519,14 +544,30 @@ jobs:
             echo "::error::candidate-mac-qa-identity did not contain a zip installer for ST-1."
             exit 1
           fi
-          node scripts/qa/st-1.mjs \
+          bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/st-1.mjs \
             --installer "$installer" \
             --provenance provenance/provenance.json \
             --fixtures fifo \
             --minutes 5 \
             --out st1-report/st-1-macos-fifo.json
+      - name: Remove ST-1 temporary state
+        if: always()
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          rm -rf \
+            "$RUNNER_TEMP"/metis-st1-* \
+            "$RUNNER_TEMP"/st1-unzip-* \
+            "$RUNNER_TEMP"/st1-witness-* \
+            "$HOME/Library/Logs/asktoto-qa" \
+            "$HOME/Library/Preferences/com.mantu.asktoto.qa.plist" \
+            "$HOME/Library/Saved Application State/com.mantu.asktoto.qa.savedState" \
+            "$HOME/Library/Caches/com.mantu.asktoto.qa"
+          security delete-generic-password -s "asktoto-qa Safe Storage" || true
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
+        env:
+          TMPDIR: ${{ runner.temp }}
         with:
           name: st-1-macos-fifo
           path: st1-report/
@@ -535,7 +576,8 @@ jobs:
 
   # OD-36: the candidate itself carries ST-1 with synthetic dataless fixtures. Hosted runners have no
   # cloud-file provider, so a kernel-blocking FIFO stands at every path a mostly-evicted cloud folder would
-  # present, in the representative-profile shape, with History idle. That proves the main-thread and
+  # present, in the representative-profile shape. History stays idle for the five-minute measurement window,
+  # then opens with bounded retries so OD-43 refusal evidence can hold. That proves the main-thread and
   # threadpool guarantees on candidate bytes; SF_DATALESS detection on real evicted files is measured in the
   # owner's field soak (st-1-macos-real-dataless.json says so and never reads as PASS). The job also runs the
   # promotable DMG's own metis-mac-helper stat-flags on the paths that need no cloud account. Its
@@ -583,7 +625,7 @@ jobs:
             --installer "$installer" \
             --provenance provenance/provenance.json \
             --fixtures synthetic-dataless \
-            --history off \
+            --history after-idle \
             --minutes 5 \
             --out st1-report/st-1-macos-synthetic-dataless.json
       - name: Record the real-cloud dataless row as not run on hosted runners
@@ -678,28 +720,45 @@ jobs:
   st1-mac-control:
     name: ST-1 control (no fixtures)
     needs: provenance
-    runs-on: macos-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, macOS, ARM64, metis-owner-mac]
     timeout-minutes: 20
     continue-on-error: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        env:
+          TMPDIR: ${{ runner.temp }}
         with:
           persist-credentials: false
+      - name: Prove owner-account sandbox denies private state
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: bash scripts/hermetic/prove-owner-sandbox.sh
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        env:
+          TMPDIR: ${{ runner.temp }}
         with:
           node-version: 22.22.3
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        env:
+          TMPDIR: ${{ runner.temp }}
         with:
           name: candidate-provenance
           path: provenance
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        env:
+          TMPDIR: ${{ runner.temp }}
         with:
           name: candidate-mac-qa-identity
           path: assets
       - name: Verify every byte against the provenance
-        run: node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
       - name: Measure the packaged app with no fixture
         continue-on-error: true
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: |
           mkdir -p st1-report
           installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
@@ -707,14 +766,30 @@ jobs:
             echo "::error::candidate-mac-qa-identity did not contain a zip installer for ST-1."
             exit 1
           fi
-          node scripts/qa/st-1.mjs \
+          bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/st-1.mjs \
             --installer "$installer" \
             --provenance provenance/provenance.json \
             --fixtures none \
             --minutes 5 \
             --out st1-report/st-1-macos-none.json
+      - name: Remove ST-1 temporary state
+        if: always()
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          rm -rf \
+            "$RUNNER_TEMP"/metis-st1-* \
+            "$RUNNER_TEMP"/st1-unzip-* \
+            "$RUNNER_TEMP"/st1-witness-* \
+            "$HOME/Library/Logs/asktoto-qa" \
+            "$HOME/Library/Preferences/com.mantu.asktoto.qa.plist" \
+            "$HOME/Library/Saved Application State/com.mantu.asktoto.qa.savedState" \
+            "$HOME/Library/Caches/com.mantu.asktoto.qa"
+          security delete-generic-password -s "asktoto-qa Safe Storage" || true
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
+        env:
+          TMPDIR: ${{ runner.temp }}
         with:
           name: st-1-macos-control
           path: st1-report/
@@ -828,6 +903,72 @@ jobs:
         with:
           name: st-1-macos-history
           path: st1-report/
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+
+  # History design evidence (M2-0032), report-only like the ST-1 History row: the promotable DMG, installed
+  # by sha256, captured by history-design-capture.mjs in every History state x light/dark x 1x/2x x
+  # motion allowed/reduced, each capture judged by automated WCAG AA contrast and clipping checks, with the
+  # History view's accessibility snapshot, its keyboard Tab order and the renderer's recorded History
+  # transitions. The artifact is the evidence an independent design validation reviews.
+  history-design-mac:
+    name: History design evidence (macOS)
+    needs: provenance
+    runs-on: macos-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      # Only so the capture's playwright import resolves. This job never builds the app.
+      - run: npm ci
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-provenance
+          path: provenance
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: candidate-mac
+          path: assets
+      - name: Verify every byte against the provenance
+        run: node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac
+      - name: Install the DMG into a fresh directory
+        id: install
+        run: |
+          dmgs=(assets/*.dmg)
+          if [ "${#dmgs[@]}" -ne 1 ] || [ ! -f "${dmgs[0]}" ]; then
+            echo "::error::candidate-mac must hold exactly one DMG, found ${#dmgs[@]}."
+            exit 1
+          fi
+          target="$RUNNER_TEMP/history-design"
+          rm -rf "$target" && mkdir -p "$target"
+          volume="$RUNNER_TEMP/history-design-volume"
+          hdiutil attach -nobrowse -readonly -mountpoint "$volume" "${dmgs[0]}" > /dev/null
+          bundle=$(cd "$volume" && ls -d *.app)
+          ditto "$volume/$bundle" "$target/$bundle"
+          hdiutil detach "$volume" > /dev/null
+          echo "app=$target/$bundle" >> "$GITHUB_OUTPUT"
+      - name: Capture every History state in every variant and check contrast and clipping
+        timeout-minutes: 20
+        env:
+          APP: ${{ steps.install.outputs.app }}
+        run: |
+          node scripts/qa/history-design-capture.mjs "$APP" --out history-design
+          cat history-design/SUMMARY.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Summarize a capture that did not pass
+        if: failure()
+        run: |
+          if [ -f history-design/SUMMARY.md ]; then cat history-design/SUMMARY.md >> "$GITHUB_STEP_SUMMARY"; fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: history-design-macos
+          path: history-design/
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 

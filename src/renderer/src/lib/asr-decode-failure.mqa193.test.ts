@@ -19,6 +19,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { sourceIndexOf } from '../../../../scripts/lib/source-layout'
 import { noteAfterDecodedWindow } from './listen'
 
 const transformers = vi.hoisted(() => ({
@@ -128,9 +129,9 @@ describe('MQA-193 — wiring', () => {
   const source = readFileSync(join(__dirname, 'listen.ts'), 'utf8').replace(/\r\n/g, '\n')
 
   function blockBetween(start: string, end: string): string {
-    const from = source.indexOf(start)
+    const from = sourceIndexOf(source, start)
     if (from === -1) throw new Error(`asr-decode-failure.mqa193 anchor not found (source moved?): ${start}`)
-    const to = source.indexOf(end, from + start.length)
+    const to = sourceIndexOf(source, end, from + 1)
     if (to === -1) throw new Error(`asr-decode-failure.mqa193 end anchor not found after "${start}": ${end}`)
     return source.slice(from, to)
   }

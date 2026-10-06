@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest'
  */
 const root = join(__dirname, '..', '..', '..')
 const DIRECTORIES = [
+  'src/renderer/src/components/history',
   'src/renderer/src/features/settings',
   'src/renderer/src/ui'
 ]
@@ -21,6 +22,7 @@ const FILES = [
   'src/renderer/src/components/Settings.tsx',
   'src/renderer/src/components/Review.tsx',
   'src/renderer/src/components/RecallView.tsx',
+  'src/renderer/src/components/UpcomingSection.tsx',
   'src/renderer/src/components/QuickActions.tsx',
   'src/renderer/src/components/Answer.tsx',
   'src/renderer/src/components/Copilot.tsx',

@@ -7,7 +7,11 @@ import { RECAP_STATUSES, recapStatusValidationError, type RecapStatus } from './
 import { RENDERER_VIEWS } from './renderer-view'
 import { DEFAULT_PERMISSION_STATE, PermissionStateSchema } from './screen-permission'
 export type { PermissionStatus, PlatformPermissions, ScreenCaptureCheckResult } from './screen-permission'
-export { ScreenCaptureCheckPassSchema, ScreenCaptureCheckPayloadSchema, ScreenCaptureCheckResultSchema } from './screen-permission'
+export {
+  ScreenCaptureCheckPassSchema,
+  ScreenCaptureCheckPayloadSchema,
+  ScreenCaptureCheckResultSchema
+} from './screen-permission'
 
 /** The existing persisted meeting start is also its live audio owner. Never coerce or create a clock. */
 export const LiveMeetingStartedAtSchema = z.number().int().positive().max(8.64e15)
@@ -28,15 +32,8 @@ export type PreservedBrainIndexListResult = {
   copies: PreservedBrainIndexCopy[]
 }
 
-export const HistoryTraceSchema = z.object({ requestId: z.string().uuid(), sentAt: z.number().finite().positive() })
-export type HistoryTrace = z.infer<typeof HistoryTraceSchema>
-export const HistorySettledSchema = z.object({
-  requestId: z.string().uuid(),
-  outcome: z.enum(['ok', 'failed', 'discarded']),
-  ipcMs: z.number().finite().nonnegative(),
-  renderMs: z.number().finite().nonnegative().optional()
-})
-export type HistorySettled = z.infer<typeof HistorySettledSchema>
+export type { HistorySettled, HistoryTrace, HistoryTransition } from './history-trace'
+export { HistorySettledSchema, HistoryTraceSchema, HistoryTransitionSchema } from './history-trace'
 export const RendererCrashContextSchema = z.object({ view: z.enum(RENDERER_VIEWS), listening: z.boolean() })
 export type RendererCrashContext = z.infer<typeof RendererCrashContextSchema>
 export interface RendererCrashReport extends RendererCrashContext {
@@ -69,11 +66,11 @@ export const ProviderIdSchema = z.enum([
 // Compile-time parity guard: ProviderIdSchema (this enum) must match the ProviderId union in
 // providers.ts exactly. If either side drifts, this assignment fails to typecheck.
 type _ProviderIdEnum = z.infer<typeof ProviderIdSchema>
-const _providerIdParity: ([_ProviderIdEnum] extends [ProviderId]
+const _providerIdParity: [_ProviderIdEnum] extends [ProviderId]
   ? [ProviderId] extends [_ProviderIdEnum]
     ? true
     : never
-  : never) = true
+  : never = true
 void _providerIdParity
 
 /** Single source of truth for every IPC channel name. */
@@ -183,6 +180,7 @@ export const IPC = {
   recallList: 'recall:list',
   recallSearch: 'recall:search',
   historySettled: 'history:settled',
+  historyTransition: 'history:transition',
   recallOpen: 'recall:open',
   recallRead: 'recall:read',
   recallHydration: 'recall:hydration', // main → renderer: an explicit open downloading one cloud-only meeting
@@ -234,6 +232,9 @@ export const IPC = {
   // Main-process cursor watch (darwin / Windows top-edge): menu-bar / Dynamic Island
   // often does not deliver mouseenter. Payload: { hovering: boolean }.
   overlayCursorHover: 'overlay:cursorHover',
+  // Right edge (M2-0202, shared/right-edge-state.ts): the page's surface and pins in; main's surface out.
+  rightEdgeState: 'right-edge:state',
+  rightEdgeSurface: 'right-edge:surface',
   // Renderer finished the hide spring (or 400ms fallback) — now park the rest rect.
   overlayParkAfterHide: 'overlay:parkAfterHide',
   // Renderer ErrorBoundary catch (React render-throw) → persisted crash-*.log, same sink as onFatal's
@@ -405,12 +406,18 @@ export const BUILTIN_MODE_LABELS: Record<BuiltinMode, string> = {
 
 /** A user-created custom mode (id + display label). Its prompt lives in settings.modePrompts[id] and its
  *  context files in settings.contextDocs[id]. Built-in modes are never stored here. */
-export interface CustomMode { id: string; label: string }
+export interface CustomMode {
+  id: string
+  label: string
+}
 
 /** Cluely-style ordered groups for the modes list (built-ins). Custom modes render under their own group in the UI. */
 export const MODE_GROUPS: { label: string; modes: BuiltinMode[] }[] = [
   { label: 'General', modes: ['general'] },
-  { label: 'Live assist', modes: ['interview', 'recruiting', 'sales', 'negotiation', 'presentation', 'support', 'cold-call'] },
+  {
+    label: 'Live assist',
+    modes: ['interview', 'recruiting', 'sales', 'negotiation', 'presentation', 'support', 'cold-call']
+  },
   { label: 'Meetings', modes: ['meeting'] }
 ]
 
@@ -478,16 +485,18 @@ function validateRecapStatus(value: { recap: string; recapStatus?: RecapStatus }
   if (message) context.addIssue({ code: z.ZodIssueCode.custom, path: ['recap'], message })
 }
 
-export const SaveMeetingSchema = z.object({
-  title: z.string().default(''),
-  mode: z.string().default('general'),
-  startedAt: z.number(),
-  /** Actual elapsed recording length, when measured by the capture/import pipeline. */
-  durationMs: z.number().finite().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
-  lines: z.array(TranscriptLineSchema),
-  recap: z.string().default(''),
-  recapStatus: z.enum(RECAP_STATUSES).optional()
-}).superRefine(validateRecapStatus)
+export const SaveMeetingSchema = z
+  .object({
+    title: z.string().default(''),
+    mode: z.string().default('general'),
+    startedAt: z.number(),
+    /** Actual elapsed recording length, when measured by the capture/import pipeline. */
+    durationMs: z.number().finite().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+    lines: z.array(TranscriptLineSchema),
+    recap: z.string().default(''),
+    recapStatus: z.enum(RECAP_STATUSES).optional()
+  })
+  .superRefine(validateRecapStatus)
 export type SaveMeeting = z.infer<typeof SaveMeetingSchema>
 
 export const SaveNoteSchema = z.object({
@@ -623,7 +632,9 @@ export const ImportDecoderChunkSchema = z.object({
   jobId: z.string().min(1).max(200),
   seq: z.number().int().nonnegative(),
   totalChunks: z.number().int().positive().max(20_000),
-  samples: z.instanceof(Float32Array).refine((s) => s.length <= IMPORT_AUDIO_MAX_CHUNK_SAMPLES, 'Audio chunk too large.')
+  samples: z
+    .instanceof(Float32Array)
+    .refine((s) => s.length <= IMPORT_AUDIO_MAX_CHUNK_SAMPLES, 'Audio chunk too large.')
 })
 export const ImportDecoderCompleteSchema = z.object({ jobId: z.string().min(1).max(200) })
 export const ImportDecoderFailedSchema = z.object({
@@ -745,7 +756,10 @@ export function appendAsrCorrection(
   existing: ReadonlyArray<{ from: string; to: string }>,
   from: string,
   to: string
-): { kind: 'append'; pairs: Array<{ from: string; to: string }> } | { kind: 'noop' } | { kind: 'skipped'; reason: string } {
+):
+  | { kind: 'append'; pairs: Array<{ from: string; to: string }> }
+  | { kind: 'noop' }
+  | { kind: 'skipped'; reason: string } {
   const pair = { from, to }
   const parsed = AsrCorrectionPairSchema.safeParse(pair)
   if (!parsed.success) {
@@ -916,9 +930,7 @@ const BundledLocalModelIdSchema = z.preprocess(
   // 'qwen3.5-2b' is a retired id from an earlier swap; it has no weights any more, so it maps to the
   // floor and boot re-upgrades from there if the machine allows.
   (value) => (value === undefined || value === 'qwen3.5-2b' ? BUNDLED_LOCAL_MODEL_ID : value),
-  z
-    .string()
-    .refine((value) => (LOCAL_MODEL_IDS as readonly string[]).includes(value), 'Unknown bundled local model.')
+  z.string().refine((value) => (LOCAL_MODEL_IDS as readonly string[]).includes(value), 'Unknown bundled local model.')
 )
 
 // ─── MCP connections (generalized from the single BidStack connection) ──────────────────────────────
@@ -991,10 +1003,7 @@ export const BaseSettingsSchema = z.object({
   providerModels: z.record(z.string(), z.string()).default({}),
   customBaseUrl: z
     .string()
-    .refine(
-      (v) => v === '' || /^https:\/\//i.test(v),
-      'Custom endpoint must be an https:// URL'
-    )
+    .refine((v) => v === '' || /^https:\/\//i.test(v), 'Custom endpoint must be an https:// URL')
     .default(''),
   // The operator-deployed Cloudflare Worker that fronts Cloudflare's AI REST API. Métis never holds the
   // Cloudflare ACCOUNT token — that stays a Wrangler secret on the Worker — so this URL plus the per-user
@@ -1008,10 +1017,7 @@ export const BaseSettingsSchema = z.object({
   // endpoint before Cloudflare can answer, so an unconfigured Cloudflare simply never gets a request.
   cloudflareBaseUrl: z
     .string()
-    .refine(
-      (v) => v === '' || /^https:\/\//i.test(v),
-      'Cloudflare Worker endpoint must be an https:// URL'
-    )
+    .refine((v) => v === '' || /^https:\/\//i.test(v), 'Cloudflare Worker endpoint must be an https:// URL')
     .default(METIS_WORKER_URL),
   // Per-provider THINKING-tier model override (parallel to providerModels). For Dust this is the
   // thinking agent sId. Empty → fall back to the provider's built-in think model. See shared/routing.ts.
@@ -1032,9 +1038,7 @@ export const BaseSettingsSchema = z.object({
   // Ask answer register (JuliusBrussee/caveman, locked like humanizer). Default full. Persists in the
   // existing settings store until "stop caveman" / "normal mode" / `/caveman off`. Live suggest, recap,
   // summary, and fact-check skip it. Not an Operator skill pack.
-  askCaveman: z
-    .enum(['off', 'lite', 'full', 'ultra', 'wenyan-lite', 'wenyan-full', 'wenyan-ultra'])
-    .default('full'),
+  askCaveman: z.enum(['off', 'lite', 'full', 'ultra', 'wenyan-lite', 'wenyan-full', 'wenyan-ultra']).default('full'),
   // Dust provider config (workspace id + region base; the agent sId lives in providerModels.dust)
   dustWorkspaceId: z.string().default(''),
   dustBaseUrl: z
@@ -1088,10 +1092,7 @@ export const BaseSettingsSchema = z.object({
   // Imported reference documents (Cluely-style "add files for context"), keyed PER MODE so a doc
   // attached for Interview never leaks into Sales/Meeting/General. Text-extracted client-side.
   contextDocs: z
-    .record(
-      z.string(),
-      z.array(z.object({ name: z.string().max(200), text: z.string().max(120000) })).max(25)
-    )
+    .record(z.string(), z.array(z.object({ name: z.string().max(200), text: z.string().max(120000) })).max(25))
     .default({}),
   // User-created custom modes (id + label). Their prompt lives in modePrompts[id], files in contextDocs[id].
   customModes: z
@@ -1176,11 +1177,10 @@ export const BaseSettingsSchema = z.object({
   overlayOrbStyle: z.enum(['bar', 'jakub', 'obsidian']).default('jakub'),
   /** Physical location is separate from the overlay chrome. Legacy profiles stay top-center. */
   overlayPlacement: z.enum(['top-center', 'right-edge']).default('top-center'),
-  /**
-   * Per-display sidecar position, stored as a normalized Y (0..1), never a raw desktop coordinate.
-   * It remains in the encrypted local profile and is never sent to Operator or a meeting.
-   */
-  overlayRightEdgeYByDisplay: z.record(z.string(), z.number().finite().min(0).max(1)).default({}),
+  // Per-display right-edge position, normalized (0..1) to the work area, never a raw desktop coordinate. It
+  // remains in the encrypted local profile and is never sent to Operator or a meeting (right-edge-geometry.ts).
+  overlayRightEdgeYByDisplay: z.record(z.string(), z.number().finite().min(0).max(1)).default({}), // legacy sidecar Y: migrated once per display, then read-only
+  overlayRightEdgeAnchorByDisplay: z.record(z.string(), z.number().finite().min(0).max(1)).default({}), // handle centre (default 0.15); a lock on either key locks it
   showFullTranscriptInReview: z.boolean().default(false), // review = summary-first; transcript opt-in
   asrQuality: z.enum(['best', 'fast']).default('best'), // Best is default; Fast is a Settings power option (docs/asr/QUALITY.md)
   // parakeet = conservative schema/legacy fallback. Fresh incomplete profiles with >8 GiB physical RAM
@@ -1222,10 +1222,7 @@ export const BaseSettingsSchema = z.object({
     .string()
     .max(64)
     .default('')
-    .refine(
-      (v) => v === '' || /^[a-f0-9]{32}$/i.test(v.trim()),
-      'Cloudflare account id must be 32 hex characters'
-    ),
+    .refine((v) => v === '' || /^[a-f0-9]{32}$/i.test(v.trim()), 'Cloudflare account id must be 32 hex characters'),
   // Spoken-language hint for transcription: 'auto' (per-window detect) or a language display name from
   // Settings' LANGUAGE_OPTIONS ('Portuguese', …). Pins Whisper's decoder and Apple Speech's recognizer
   // locale; Parakeet always auto-detects. Exists because per-window auto-detect on the compact bundled
@@ -1442,7 +1439,10 @@ export const BaseSettingsSchema = z.object({
           micDeviceId: z.string(),
           mean: z.array(z.number()),
           std: z.array(z.number()),
-          zones: z.array(z.object({ name: z.string(), centroid: z.array(z.number()) })).min(1).max(4),
+          zones: z
+            .array(z.object({ name: z.string(), centroid: z.array(z.number()) }))
+            .min(1)
+            .max(4),
           negatives: z.array(z.array(z.number())).max(24),
           dAccept: z.number(),
           levelRange: z.object({ min: z.number(), max: z.number() }),
@@ -1745,6 +1745,7 @@ export const DEFAULT_SETTINGS: Settings = {
   overlayOrbStyle: 'jakub',
   overlayPlacement: 'top-center',
   overlayRightEdgeYByDisplay: {},
+  overlayRightEdgeAnchorByDisplay: {},
   showFullTranscriptInReview: false,
   asrQuality: 'best',
   asrEngine: 'parakeet',
@@ -1916,6 +1917,7 @@ export interface MeetingSummary {
   /** True for a real encrypted meeting this device can't decrypt: a locked stub (no preview), never silently dropped. */
   locked?: boolean
   notDownloaded?: boolean // bytes not on this device: listed by name, never read; an explicit open downloads it
+  unavailable?: boolean // could not be read right now (a failed read or a non-regular entry): listed by name
 }
 export interface RecallHit extends MeetingSummary {
   snippet: string
@@ -2010,11 +2012,13 @@ export type RenameMeetingPayload = z.infer<typeof RenameMeetingPayloadSchema>
 /** Payload for recall:update-recap — edit a saved meeting's recap ("## Notes & follow-ups") after the
  *  fact. `file` is a bare basename (re-basenamed in main for defense); `recap` mirrors recall.ts's own
  *  RECAP_MAX cap. Empty is allowed (clearing the notes / annotating a meeting that had no recap yet). */
-export const UpdateRecapPayloadSchema = z.object({
-  file: z.string().min(1, 'Missing meeting file.'),
-  recap: z.string().max(20000),
-  recapStatus: z.enum(RECAP_STATUSES).optional()
-}).superRefine(validateRecapStatus)
+export const UpdateRecapPayloadSchema = z
+  .object({
+    file: z.string().min(1, 'Missing meeting file.'),
+    recap: z.string().max(20000),
+    recapStatus: z.enum(RECAP_STATUSES).optional()
+  })
+  .superRefine(validateRecapStatus)
 export type UpdateRecapPayload = z.infer<typeof UpdateRecapPayloadSchema>
 
 /** Payload for recall:set-confidential (Task MI-5) — flags/unflags a saved meeting so the wiki
@@ -2315,7 +2319,14 @@ export const LocalModelSummarySchema = z
     ready: z.boolean(),
     source: z.enum(['bundled', 'download']).optional(),
     unavailableReason: z
-      .enum(['invalid-bundle', 'insufficient-ram', 'insufficient-disk', 'downloading', 'download-failed', 'not-downloaded'])
+      .enum([
+        'invalid-bundle',
+        'insufficient-ram',
+        'insufficient-disk',
+        'downloading',
+        'download-failed',
+        'not-downloaded'
+      ])
       .nullable(),
     /** 0..1 while `unavailableReason === 'downloading'`, 0 otherwise. */
     downloadProgress: z.number().min(0).max(1),
@@ -2340,15 +2351,22 @@ export type LocalPrewarmPayload = z.infer<typeof LocalPrewarmPayloadSchema>
 
 /** Content-free post-meeting latency spans (M2-0430), measured in the renderer from the Stop click. */
 export const WRITEUP_SPANS = ['stop_to_transcript_saved', 'stop_to_first_recap_token', 'stop_to_recap_done'] as const
-export type WriteupSpan = typeof WRITEUP_SPANS[number]
+export type WriteupSpan = (typeof WRITEUP_SPANS)[number]
 export const WriteupSpanPayloadSchema = z
-  .object({ span: z.enum(WRITEUP_SPANS), ms: z.number().int().min(0).max(24 * 60 * 60_000) })
+  .object({
+    span: z.enum(WRITEUP_SPANS),
+    ms: z
+      .number()
+      .int()
+      .min(0)
+      .max(24 * 60 * 60_000)
+  })
   .strict()
 export type WriteupSpanPayload = z.infer<typeof WriteupSpanPayloadSchema>
 
 /** Settings' view of Apple's on-device engine. 'unlicensed' needs the owner to accept the CLI terms. */
 export const APPLE_ENGINE_STATUSES = ['unsupported', 'disabled', 'available', 'unlicensed', 'unavailable'] as const
-export type AppleEngineStatus = typeof APPLE_ENGINE_STATUSES[number]
+export type AppleEngineStatus = (typeof APPLE_ENGINE_STATUSES)[number]
 
 // ─── Licensing (phone-home activation against a self-hosted license server; see main/license.ts) ──────
 export const LicenseActivatePayloadSchema = z.object({

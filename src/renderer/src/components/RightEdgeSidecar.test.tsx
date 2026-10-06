@@ -1,9 +1,14 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
+import { flattenSource } from '../../../../scripts/lib/source-layout'
 import { Children, isValidElement, type ReactElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import type { Browser, Page } from 'playwright'
+import { build, type Rollup } from 'vite'
+import react from '@vitejs/plugin-react'
+import { RIGHT_EDGE_DRAWER_WIDTH, RIGHT_EDGE_TAB_WIDTH } from '@shared/right-edge-geometry'
 import { RightEdgeSidecar, SidecarChat, dockEscapeHides } from './RightEdgeSidecar'
 
 const sidecar = readFileSync(join(__dirname, './RightEdgeSidecar.tsx'), 'utf8')
@@ -53,12 +58,14 @@ describe('right-edge dock', () => {
       target: { value: 'Turn this into next steps' }
     })
     let prevented = false
-    ;(input!.props.onKeyDown as (event: {
-      key: string
-      shiftKey: boolean
-      nativeEvent: { isComposing: boolean }
-      preventDefault: () => void
-    }) => void)({
+    ;(
+      input!.props.onKeyDown as (event: {
+        key: string
+        shiftKey: boolean
+        nativeEvent: { isComposing: boolean }
+        preventDefault: () => void
+      }) => void
+    )({
       key: 'Enter',
       shiftKey: false,
       nativeEvent: { isComposing: false },
@@ -71,12 +78,14 @@ describe('right-edge dock', () => {
     expect(prevented).toBe(true)
     expect(submissions).toBe(1)
 
-    ;(input!.props.onKeyDown as (event: {
-      key: string
-      shiftKey: boolean
-      nativeEvent: { isComposing: boolean }
-      preventDefault: () => void
-    }) => void)({
+    ;(
+      input!.props.onKeyDown as (event: {
+        key: string
+        shiftKey: boolean
+        nativeEvent: { isComposing: boolean }
+        preventDefault: () => void
+      }) => void
+    )({
       key: 'Enter',
       shiftKey: false,
       nativeEvent: { isComposing: true },
@@ -220,11 +229,21 @@ describe('right-edge dock', () => {
     }
 
     expect(visibleNotice('Mic silent · check input')).toBe('Mic silent · check input')
-    expect(visibleNotice('Microphone input stopped (device disconnected or sleep); reconnecting automatically…')).toBe('Mic lost · reconnecting')
-    expect(visibleNotice('Could not start the microphone. Check Windows microphone access.')).toBe('Mic unavailable · check access')
-    expect(visibleNotice("Couldn't start the microphone. Check Microphone access in System Settings.")).toBe('Mic unavailable · check access')
-    expect(visibleNotice('Microphone unavailable. Listening to system audio only.')).toBe('Mic unavailable · system audio only')
-    expect(visibleNotice('System audio needs Screen Recording permission. Listening to microphone only.')).toBe('System audio needs Screen Recording permission. Listening to microphone only.')
+    expect(visibleNotice('Microphone input stopped (device disconnected or sleep); reconnecting automatically…')).toBe(
+      'Mic lost · reconnecting'
+    )
+    expect(visibleNotice('Could not start the microphone. Check Windows microphone access.')).toBe(
+      'Mic unavailable · check access'
+    )
+    expect(visibleNotice("Couldn't start the microphone. Check Microphone access in System Settings.")).toBe(
+      'Mic unavailable · check access'
+    )
+    expect(visibleNotice('Microphone unavailable. Listening to system audio only.')).toBe(
+      'Mic unavailable · system audio only'
+    )
+    expect(visibleNotice('System audio needs Screen Recording permission. Listening to microphone only.')).toBe(
+      'System audio needs Screen Recording permission. Listening to microphone only.'
+    )
   })
 
   it('does not expose an inert dismissal control while the dock must remain open', () => {
@@ -250,7 +269,15 @@ describe('right-edge dock', () => {
     // Owner report: with a draft, a live meeting, a toast or a capture the dock had no Close and no Escape.
     for (const props of [{ value: 'Draft kept on Hide' }, { listening: true, onToggleListen: () => undefined }]) {
       const markup = renderToStaticMarkup(
-        <RightEdgeSidecar open canClose onOpen={() => undefined} onClose={() => undefined} onChange={() => undefined} onSubmit={() => undefined} {...props} />
+        <RightEdgeSidecar
+          open
+          canClose
+          onOpen={() => undefined}
+          onClose={() => undefined}
+          onChange={() => undefined}
+          onSubmit={() => undefined}
+          {...props}
+        />
       )
       expect(markup).toContain('aria-label="Hide Métis"')
       expect(markup).toContain('title="Hide"')
@@ -262,7 +289,9 @@ describe('right-edge dock', () => {
     expect(dockEscapeHides({ key: 'Escape', isComposing: false }, false)).toBe(false)
     expect(dockEscapeHides({ key: 'Enter', isComposing: false }, true)).toBe(false)
     // The dock is always able to park while it is shown; closeRightEdgeDock keeps the draft.
-    expect(app).toMatch(/const closeRightEdgeDock = useCallback\(\(\): void => \{[\s\S]*?if \(!overlayIdle\) parkCurrentOverlayAfterHide\(\)/)
+    expect(app).toMatch(
+      /const closeRightEdgeDock = useCallback\(\(\): void => \{[\s\S]*?if \(!overlayIdle\) parkCurrentOverlayAfterHide\(\)/
+    )
     expect(e2eSmoke).toContain('right-edge Hide control parks the dock and keeps the draft')
   })
 
@@ -313,15 +342,22 @@ describe('right-edge dock', () => {
     }
     expect(app.match(/meetingPauseRef\.current = freshMeetingPauseClock\(\)/g)).toHaveLength(2)
     expect(app).toContain('meetingPauseRef.current = setMeetingPaused(meetingPauseRef.current')
-    expect(app).toMatch(/const toggleTranscript = useCallback\(\(\) => \{\s*if \(view !== 'copilot' \|\| collapsed\) \{\s*setTranscriptShown\(true\)\s*setCollapsed\(false\)\s*setView\('copilot'\)/)
+    expect(app).toMatch(
+      /const toggleTranscript = useCallback\(\(\) => \{\s*if \(view !== 'copilot' \|\| collapsed\) \{\s*setTranscriptShown\(true\)\s*setCollapsed\(false\)\s*setView\('copilot'\)/
+    )
     expect(app).toContain('const openIntelligenceDashboard = useCallback')
     expect(app).toContain('window.toto.brainOpenDashboard()')
     expect(app).toContain('minimizeForIntelligence()')
   })
 
   it('keeps a narrow accessible rail and a single fixed-composer body scroller without mounting Bar', () => {
-    expect(sidecar).toMatch(/RIGHT_EDGE_TAB_WIDTH = 52/)
-    expect(sidecar).toMatch(/RIGHT_EDGE_DRAWER_WIDTH = 360/)
+    // D8a (M2-0202): the rail and drawer widths are the main process's, from the shared geometry authority.
+    expect(RIGHT_EDGE_TAB_WIDTH).toBe(52)
+    expect(RIGHT_EDGE_DRAWER_WIDTH).toBe(360)
+    const rendered = renderToStaticMarkup(<RightEdgeSidecar open onOpen={() => undefined} onClose={() => undefined} />)
+    expect(rendered).toContain(`width:${RIGHT_EDGE_TAB_WIDTH}px`)
+    expect(rendered).toContain(`max-width:${RIGHT_EDGE_DRAWER_WIDTH}px`)
+    expect(sidecar).not.toMatch(/const RIGHT_EDGE_(TAB|DRAWER)_WIDTH/)
     expect(sidecar).toMatch(/aria-label="Open Métis"/)
     expect(sidecar).toMatch(/aria-expanded=\{open\}/)
     expect(sidecar).toMatch(/role="complementary"/)
@@ -344,14 +380,19 @@ describe('right-edge dock', () => {
     // The drawer is absolutely positioned, so its host must own the native sidecar height. Otherwise
     // the root hugs a sibling setup CTA and clips the dock to a thin strip at the top of the window.
     expect(app).toMatch(/rightEdgeDockVisible \? 'h-full min-h-0' : ''/)
-    expect(app).toMatch(/overlayPeeked \? 'p-0' : rightEdgeDockVisible \? 'p-0' : overlayShowsSettingsSheet/)
-    expect(app).toContain('settings && !rightEdgeDockVisible && !settings.providerReady')
+    expect(app).toMatch(
+      /overlayPeeked\s*\?\s*'p-0'\s*:\s*rightEdgeDockVisible\s*\?\s*'p-0'\s*:\s*overlayShowsSettingsSheet/
+    )
+    expect(flattenSource(app)).toContain(flattenSource('settings && !rightEdgeDockVisible && !settings.providerReady'))
     expect(app).toMatch(/rightEdgeDockVisible \? 'h-full' : ''/)
-    expect(app).toMatch(/rightEdgeDockVisible \? \(\s*<RightEdgeSidecar[\s\S]*?\) : rightEdgePresentation \? null : <Bar/)
+    expect(app).toMatch(
+      /rightEdgeDockVisible\s*\?\s*\(\s*<RightEdgeSidecar[\s\S]*?\)\s*:\s*rightEdgePresentation\s*\?\s*null\s*:\s*\(?\s*<Bar/
+    )
     expect(sidecar).not.toMatch(/window\.toto\.resize/)
     expect(sidecar).toContain('tabIndex={open ? -1 : 0}')
     expect(sidecar).toContain('aria-hidden={open || undefined}')
-    expect(sidecar).toContain('requestAnimationFrame(() => composerRef.current?.focus())')
+    // D4 (M2-0202): the composer focus on an explicit open is synchronous and a hover reveal never focuses;
+    // the RE-K01 rows below drive that in Chromium.
     expect(sidecar).toContain('data-right-edge-status={')
     expect(sidecar).toContain('right-edge-sidecar__header-back')
     expect(sidecar).toContain('data-right-edge-action-rail="true"')
@@ -373,10 +414,16 @@ describe('right-edge dock', () => {
     expect(sidecar).toContain("return 'Mic silent · check input'")
     expect(sidecar).toContain("return 'Transcription repair'")
     expect(css).not.toMatch(/@keyframes right-edge-sidecar-zone-in/)
-    const rightEdgeSpring = css.slice(css.indexOf('@keyframes overlay-spring-in-right'), css.indexOf('@keyframes overlay-spring-out-right'))
+    const rightEdgeSpring = css.slice(
+      css.indexOf('@keyframes overlay-spring-in-right'),
+      css.indexOf('@keyframes overlay-spring-out-right')
+    )
     expect(rightEdgeSpring).toContain('transform: translateX(10px);')
     expect(rightEdgeSpring).not.toContain('scale(')
-    const onboardingEdgePreviewSpring = css.slice(css.indexOf('@keyframes onboard-edge-preview-in'), css.indexOf('.overlay-spring {'))
+    const onboardingEdgePreviewSpring = css.slice(
+      css.indexOf('@keyframes onboard-edge-preview-in'),
+      css.indexOf('.overlay-spring {')
+    )
     expect(onboardingEdgePreviewSpring).toContain('transform: translateX(12px);')
     expect(onboardingEdgePreviewSpring).not.toContain('scale(')
     expect(css).toMatch(/\.right-edge-sidecar__answer \{[\s\S]*?width: 100%/)
@@ -390,16 +437,28 @@ describe('right-edge dock', () => {
     expect(app).toContain("variant={rightEdgePresentation ? 'sidecar' : 'default'}")
     expect(app).toContain('const showWideMeetingChrome = showListeningChrome && !rightEdgeDockVisible')
     expect(app).toContain("const rightEdgeDismissalLockRef = useRef<RightEdgeDismissalLockState>('open')")
-    expect(app).toContain("reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'explicit-close' })")
+    expect(flattenSource(app)).toContain(
+      flattenSource("reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'explicit-close' })")
+    )
     expect(app).toContain("type: 'park-settled'")
     expect(app).toContain("railHovering: rootElementRef.current?.matches(':hover') === true")
-    expect(app).toContain('shouldIgnoreRightEdgeNativeHover(rightEdgeDismissalLockRef.current, d.restoredFromParkedRail)')
-    expect(app).toMatch(/reduceRightEdgeDismissalLock\(\s*rightEdgeDismissalLockRef\.current,\s*\{ type: 'native-hover-restored' \}\s*\)/)
-    expect(app).toMatch(/const onOverlayPointerEnter = useCallback\(\(\) => \{[\s\S]*?reduceRightEdgeDismissalLock\([\s\S]*?\{ type: 'renderer-pointer-enter' \}/)
+    expect(app).toContain(
+      'shouldIgnoreRightEdgeNativeHover(rightEdgeDismissalLockRef.current, d.restoredFromParkedRail)'
+    )
+    expect(app).toMatch(
+      /reduceRightEdgeDismissalLock\(\s*rightEdgeDismissalLockRef\.current,\s*\{\s*type:\s*'native-hover-restored'\s*\}/
+    )
+    expect(app).toMatch(
+      /const onOverlayPointerEnter = useCallback\(\(\) => \{[\s\S]*?reduceRightEdgeDismissalLock\([\s\S]*?\{\s*type:\s*'renderer-pointer-enter'\s*\}/
+    )
     expect(app).toMatch(/if \(nextLock !== 'open'\) return\s+setRightEdgeDockDismissed\(false\)/)
     expect(app).not.toContain("if (nextLock === 'open') setRightEdgeDockDismissed(false)")
-    expect(app).toMatch(/const onOverlayPointerLeave = useCallback\(\(\) => \{[\s\S]*?const previousLock = rightEdgeDismissalLockRef\.current[\s\S]*?reduceRightEdgeDismissalLock\(previousLock, \{ type: 'renderer-pointer-leave' \}\)[\s\S]*?previousLock === 'closing' && nextLock === 'closing'/)
-    expect(app).toMatch(/else if \(a === 'metis-command'\) \{[\s\S]*?reduceRightEdgeDismissalLock\(rightEdgeDismissalLockRef\.current, \{ type: 'metis-command' \}\)/)
+    expect(app).toMatch(
+      /const onOverlayPointerLeave = useCallback\(\(\) => \{[\s\S]*?const previousLock = rightEdgeDismissalLockRef\.current[\s\S]*?reduceRightEdgeDismissalLock\(previousLock, \{ type: 'renderer-pointer-leave' \}\)[\s\S]*?previousLock === 'closing' && nextLock === 'closing'/
+    )
+    expect(app).toMatch(
+      /else if \(a === 'metis-command'\) \{[\s\S]*?reduceRightEdgeDismissalLock\(rightEdgeDismissalLockRef\.current,\s*\{\s*type:\s*'metis-command'\s*\}/
+    )
     expect(app).toMatch(/\{showWideMeetingChrome && \(\s*<QuickActions/)
     expect(app).toMatch(/\{showWideMeetingChrome && listen\.error/)
     expect(e2eSmoke).toContain('verifyRightEdgeReferenceLayout')
@@ -440,9 +499,11 @@ describe('right-edge dock', () => {
     const cursorHover = app.slice(cursorHoverAt, cursorHoverAt + 1400)
 
     expect(cursorHover).toContain('if (d.hovering)')
-    expect(cursorHover).toContain('shouldIgnoreRightEdgeNativeHover(rightEdgeDismissalLockRef.current, d.restoredFromParkedRail)')
-    expect(cursorHover).toContain("reduceRightEdgeDismissalLock(")
-    expect(cursorHover).toContain("{ type: 'native-hover-restored' }")
+    expect(cursorHover).toContain(
+      'shouldIgnoreRightEdgeNativeHover(rightEdgeDismissalLockRef.current, d.restoredFromParkedRail)'
+    )
+    expect(cursorHover).toContain('reduceRightEdgeDismissalLock(')
+    expect(flattenSource(cursorHover)).toContain(flattenSource("{ type: 'native-hover-restored' }"))
     expect(cursorHover).toContain('setRightEdgeDockDismissed(false)')
     expect(cursorHover).toContain("dispatchAutoHide({ type: 'reveal-now' })")
   })
@@ -454,33 +515,256 @@ describe('right-edge dock', () => {
     const cursorHover = app.slice(cursorHoverAt, cursorHoverAt + 2400)
     // Hide keeps its drawer mounted while the page is collapsed: a main park must render the rail even when
     // the page had already collapsed, or the parked window holds an open drawer.
-    expect(cursorHover).toMatch(/if \(d\.parked && rightEdgePresentation\) \{\s*wasRevealedRef\.current = false\s*setRightEdgeDockDismissed\(true\)\s*setOverlaySpring\('rest'\)/)
+    expect(cursorHover).toMatch(
+      /if \(d\.parked && rightEdgePresentation\) \{\s*wasRevealedRef\.current = false\s*setRightEdgeDockDismissed\(true\)\s*setOverlaySpring\('rest'\)/
+    )
     expect(cursorHover).not.toContain('d.parked && rightEdgePresentation && overlayRevealedRef.current')
     const askAt = app.indexOf("if (a === 'ask') {")
     const ask = app.slice(askAt, askAt + 800)
     expect(ask).toContain('setFocusSignal((x) => x + 1)')
-    expect(ask).toMatch(/if \(rightEdgePresentation\) \{[\s\S]*?\{ type: 'explicit-reveal' \}[\s\S]*?setRightEdgeDockDismissed\(false\)[\s\S]*?dispatchAutoHide\(\{ type: 'reveal-now' \}\)/)
+    expect(ask).toMatch(
+      /if \(rightEdgePresentation\) \{[\s\S]*?\{\s*type:\s*'explicit-reveal'\s*\}[\s\S]*?setRightEdgeDockDismissed\(false\)[\s\S]*?dispatchAutoHide\(\{\s*type:\s*'reveal-now'\s*\}\)/
+    )
     expect(sidecar).toContain('}, [open, focusSignal])')
-    expect(app).toMatch(/\} else if \(rightEdgePresentation\) \{\s*\/\/[^\n]*\n\s*closeRightEdgeDock\(\)\s*\} else \{\s*void window\.toto\.hide\(\)/)
+    expect(app).toMatch(
+      /\} else if \(rightEdgePresentation\) \{\s*\/\/[^\n]*\n\s*closeRightEdgeDock\(\)\s*\} else \{\s*void window\.toto\.hide\(\)/
+    )
   })
 
   it('guards a dirty recap before it launches and collapses for the standalone Intelligence dashboard', () => {
-    expect(app).toMatch(/const approveReviewNav = useCallback\(async \(\): Promise<boolean> => confirmReviewNavigation\(\), \[confirmReviewNavigation\]\)/)
-    expect(app).toMatch(/const openIntelligenceDashboard = useCallback\(async[\s\S]*?if \(!\(await approveReviewNav\(\)\)\) return/)
-    expect(app).toContain("Save or discard the recap before opening Mantu Intelligence.")
+    expect(app).toMatch(
+      /const approveReviewNav = useCallback\([\s\S]*?async \(\): Promise<boolean> => confirmReviewNavigation\(\),[\s\S]*?\[confirmReviewNavigation\]/
+    )
+    expect(app).toMatch(
+      /const openIntelligenceDashboard = useCallback\(async[\s\S]*?if \(!\(await approveReviewNav\(\)\)\)\s*return/
+    )
+    expect(app).toContain('Save or discard the recap before opening Mantu Intelligence.')
     expect(app).toMatch(/window\.toto\.brainOpenDashboard\(\)[\s\S]*?minimizeForIntelligence\(\)/)
-    expect(app).toMatch(/const closeRightEdgeDock = useCallback\(\(\): void => \{[\s\S]*?forceParkAfterHideRef\.current = true[\s\S]*?dispatchAutoHide\(\{ type: 'collapse-now' \}\)/)
-    expect(app).toMatch(/const minimizeForIntelligence = useCallback\(\(\): void => \{[\s\S]*?if \(rightEdgePresentation\) closeRightEdgeDock\(\)/)
+    expect(app).toMatch(
+      /const closeRightEdgeDock = useCallback\(\(\): void => \{[\s\S]*?forceParkAfterHideRef\.current = true[\s\S]*?dispatchAutoHide\(\{ type: 'collapse-now' \}\)/
+    )
+    expect(app).toMatch(
+      /const minimizeForIntelligence = useCallback\(\(\): void => \{[\s\S]*?if \(rightEdgePresentation\) closeRightEdgeDock\(\)/
+    )
     expect(app).toContain('const [rightEdgeDockDismissed, setRightEdgeDockDismissed] = useState(false)')
-    expect(app).toMatch(/const overlaySurfaceRevealed = rightEdgePresentation && rightEdgeDockDismissed \? false : overlayRevealed/)
+    expect(app).toMatch(
+      /const overlaySurfaceRevealed = rightEdgePresentation && rightEdgeDockDismissed \? false : overlayRevealed/
+    )
     expect(app).toMatch(/const edgeDockParked = rightEdgePresentation && rightEdgeDockDismissed/)
-    expect(app).toMatch(/const overlayPeeked = \(edgeDockParked && overlaySpring === 'rest'\) \|\| overlayShowPeek/)
-    expect(app).toMatch(/const revealOverlay = useCallback\(\(\) => \{[\s\S]*?reduceRightEdgeDismissalLock\(rightEdgeDismissalLockRef\.current, \{ type: 'explicit-reveal' \}\)[\s\S]*?setRightEdgeDockDismissed\(false\)/)
+    expect(app).toMatch(
+      /const overlayPeeked =\s*\(edgeDockParked && overlaySpring === 'rest'\) \|\|[\s\S]*?overlayShowPeek/
+    )
+    expect(app).toMatch(
+      /const revealOverlay = useCallback\(\(\) => \{[\s\S]*?reduceRightEdgeDismissalLock\(rightEdgeDismissalLockRef\.current,\s*\{\s*type:\s*'explicit-reveal'\s*\}[\s\S]*?setRightEdgeDockDismissed\(false\)/
+    )
   })
 
   it('does not hand off to Intelligence while a screen capture is still active', () => {
     expect(sidecar).toMatch(/if \(!onOpenIntelligence \|\| capturing \|\| intelligence\.status === 'opening'\) return/)
     expect(sidecar).toMatch(/disabled=\{intelligence\.status === 'opening' \|\| capturing\}/)
-    expect(app).toMatch(/const openIntelligenceDashboard = useCallback\(async[\s\S]*?if \(capturing \|\| capturingRef\.current\) return \{ ok: false, error: 'Wait for screen capture to finish before opening Mantu Intelligence\.' \}/)
+    expect(app).toMatch(
+      /const openIntelligenceDashboard = useCallback\(async[\s\S]*?if \(capturing \|\| capturingRef\.current\)\s*return \{\s*ok:\s*false,\s*error:\s*'Wait for screen capture to finish before opening Mantu Intelligence\.'\s*\}/
+    )
+  })
+})
+
+// RE-K01 for D4, D10 and D11 (M2-0202 S2): the real RightEdgeSidecar and Bar, bundled by Vite and driven in
+// Chromium with page.keyboard and page.mouse (the browser the dock-identity test already uses). An IME
+// keydown is a dispatched KeyboardEvent carrying isComposing or keyCode 229, exactly what Chromium sends
+// while a composition owns the key.
+const K01_HARNESS_ID = '\0right-edge-k01-harness'
+const k01Module = (path: string): string => JSON.stringify(join(__dirname, path).replace(/\\/g, '/'))
+const K01_HARNESS = `
+import { createElement } from 'react'
+import { flushSync } from 'react-dom'
+import { createRoot } from 'react-dom/client'
+import { RightEdgeSidecar } from ${k01Module('RightEdgeSidecar')}
+import { Bar } from ${k01Module('Bar')}
+import ${k01Module('../styles/right-edge-sidecar.css')}
+
+const log = { submits: 0, barSubmits: 0, closes: 0, activity: 0, composing: [] }
+let state = { open: false, focusSignal: 0 }
+const dock = createRoot(document.getElementById('dock'))
+const composer = () => document.querySelector('#dock input')
+const renderDock = () => flushSync(() => dock.render(createElement(RightEdgeSidecar, {
+  open: state.open,
+  focusSignal: state.focusSignal,
+  onOpen: () => { state = { ...state, open: true }; renderDock() },
+  onClose: () => { log.closes += 1 },
+  value: '',
+  onChange: () => {},
+  onSubmit: () => { log.submits += 1 },
+  onComposerActivity: () => { log.activity += 1 },
+  onComposingChange: (on) => { log.composing.push(on) }
+})))
+renderDock()
+const noop = () => {}
+flushSync(() => createRoot(document.getElementById('bar')).render(createElement(Bar, {
+  value: 'Draft', onChange: noop, onSubmit: () => { log.barSubmits += 1 }, onStop: noop, busy: false, listening: false,
+  onToggleListen: noop, paused: false, onTogglePause: noop, onCapture: noop, capturing: false, onSettings: noop,
+  onHistory: noop, onMinimize: noop, stealth: true, onToggleStealth: noop, startedAt: 0, panelOpen: false,
+  onTogglePanel: noop, canTogglePanel: false, focusSignal: 0, mode: 'general', onSetMode: noop
+})))
+window.__k01 = {
+  log,
+  // Renders the patch and reports focus in the same task: a focus deferred to a later frame reads false here.
+  set: (patch) => { state = { ...state, ...patch }; renderDock(); return document.activeElement === composer() },
+  composerFocused: () => document.activeElement === composer(),
+  blur: () => document.activeElement?.blur(),
+  imeKey: (selector, key, kind) => {
+    const target = document.querySelector(selector)
+    target.focus()
+    const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, isComposing: kind === 'composing' })
+    if (kind === '229') Object.defineProperty(event, 'keyCode', { get: () => 229 })
+    target.dispatchEvent(event)
+  },
+  composition: (type) => composer().dispatchEvent(new CompositionEvent(type, { bubbles: true, data: 'か' }))
+}
+`
+
+async function bundleK01Harness(): Promise<{ js: string; css: string }> {
+  const rendererSrc = join(__dirname, '..')
+  const output = (await build({
+    root: join(rendererSrc, '..'),
+    configFile: false,
+    logLevel: 'silent',
+    define: { __METIS_FEEDBACK_EMAIL__: '""', __METIS_QA_IDENTITY__: 'false' },
+    resolve: { alias: { '@': rendererSrc, '@shared': join(rendererSrc, '../../shared') } },
+    plugins: [
+      react(),
+      {
+        name: 'right-edge-k01-harness',
+        resolveId: (id: string) => (id === K01_HARNESS_ID ? id : null),
+        load: (id: string) => (id === K01_HARNESS_ID ? K01_HARNESS : null)
+      }
+    ],
+    build: {
+      write: false,
+      minify: false,
+      cssCodeSplit: false,
+      rollupOptions: { input: K01_HARNESS_ID, output: { format: 'iife', inlineDynamicImports: true } }
+    }
+  })) as Rollup.RollupOutput | Rollup.RollupOutput[]
+  const files = (Array.isArray(output) ? output : [output]).flatMap((result) => result.output)
+  return {
+    js: files
+      .filter((file): file is Rollup.OutputChunk => file.type === 'chunk')
+      .map((chunk) => chunk.code)
+      .join('\n'),
+    css: files
+      .filter((file): file is Rollup.OutputAsset => file.type === 'asset' && file.fileName.endsWith('.css'))
+      .map((asset) => String(asset.source))
+      .join('\n')
+  }
+}
+
+type K01Log = { submits: number; barSubmits: number; closes: number; activity: number; composing: boolean[] }
+type K01 = {
+  log: K01Log
+  set(patch: { open?: boolean; focusSignal?: number }): boolean
+  composerFocused(): boolean
+  blur(): void
+  imeKey(selector: string, key: string, kind: 'composing' | '229'): void
+  composition(type: 'compositionstart' | 'compositionend'): void
+}
+
+describe('RE-K01: right-edge keyboard and IME in Chromium (D4, D10, D11)', () => {
+  let browser: Browser
+  let page: Page
+  /** Renders the patch; true when the composer holds focus in the same task. */
+  const setDock = (patch: { open?: boolean; focusSignal?: number }): Promise<boolean> =>
+    page.evaluate((p) => (window as unknown as { __k01: K01 }).__k01.set(p), patch)
+  const composerFocused = (): Promise<boolean> =>
+    page.evaluate(() => (window as unknown as { __k01: K01 }).__k01.composerFocused())
+  const blur = (): Promise<void> => page.evaluate(() => (window as unknown as { __k01: K01 }).__k01.blur())
+  const log = (): Promise<K01Log> => page.evaluate(() => (window as unknown as { __k01: K01 }).__k01.log)
+  const imeKey = (selector: string, key: string, kind: 'composing' | '229'): Promise<void> =>
+    page.evaluate(
+      ([s, k, c]) => (window as unknown as { __k01: K01 }).__k01.imeKey(s, k, c as 'composing' | '229'),
+      [selector, key, kind]
+    )
+
+  beforeAll(async () => {
+    const { js, css } = await bundleK01Harness()
+    const { chromium } = await import('playwright')
+    browser = await chromium.launch({ headless: true })
+    page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
+    await page.setContent(
+      `<!doctype html><html><head><meta charset="utf-8"><style>${css}</style></head><body>` +
+        '<div id="dock" style="position:relative;width:360px;height:560px"></div><div id="bar" style="width:880px"></div></body></html>'
+    )
+    await page.addScriptTag({ content: `window.toto = {};\n${js}` })
+    await page.waitForSelector('#dock [data-re-surface]')
+  }, 120_000)
+
+  afterAll(async () => {
+    await browser?.close()
+  })
+
+  it('D4: a hover reveal never moves focus to the composer', async () => {
+    await setDock({ open: false })
+    await blur()
+    expect(await setDock({ open: true })).toBe(false)
+    expect(await page.locator('#dock [data-re-surface]').getAttribute('data-re-surface')).toBe('island')
+  })
+
+  it('D4: an explicit open focuses the composer in the same commit, with no animation frame in between', async () => {
+    await setDock({ open: false })
+    expect(await page.locator('#dock [data-re-surface]').getAttribute('data-re-surface')).toBe('rest')
+    await blur()
+    // The summon arrives while parked: the drawer is hidden, so nothing focuses yet.
+    expect(await setDock({ focusSignal: 1 })).toBe(false)
+    // The reveal commit focuses synchronously.
+    expect(await setDock({ open: true })).toBe(true)
+    // A summon of an already-open dock hands the caret back.
+    await blur()
+    expect(await setDock({ focusSignal: 2 })).toBe(true)
+  })
+
+  it('D4: a click on the parked rail tab is an explicit open and focuses the composer', async () => {
+    await setDock({ open: false })
+    await blur()
+    await page.getByRole('button', { name: 'Open Métis' }).click()
+    expect(await composerFocused()).toBe(true)
+  })
+
+  it('D10: Enter submits only outside a composition, in the dock and in the Bar', async () => {
+    await setDock({ open: true })
+    for (const selector of ['#dock input', '#bar input']) {
+      await imeKey(selector, 'Enter', 'composing')
+      await imeKey(selector, 'Enter', '229')
+    }
+    expect(await log()).toMatchObject({ submits: 0, barSubmits: 0 })
+    await page.locator('#dock input').focus()
+    await page.keyboard.press('Enter')
+    await page.locator('#bar input').focus()
+    await page.keyboard.press('Enter')
+    expect(await log()).toMatchObject({ submits: 1, barSubmits: 1 })
+  })
+
+  it('D11: Escape during a composition stays with the IME; Escape outside one hides the dock', async () => {
+    await setDock({ open: true })
+    await imeKey('#dock input', 'Escape', 'composing')
+    await imeKey('#dock input', 'Escape', '229')
+    expect((await log()).closes).toBe(0)
+    await page.locator('#dock input').focus()
+    await page.keyboard.press('Escape')
+    expect((await log()).closes).toBe(1)
+  })
+
+  it('the composer reports the typing and ime pin sources: a pointerdown, a keystroke and a composition', async () => {
+    await setDock({ open: true })
+    const before = (await log()).activity
+    await page.locator('#dock input').click()
+    const afterClick = (await log()).activity
+    expect(afterClick).toBe(before + 1)
+    await page.keyboard.press('a')
+    expect((await log()).activity).toBe(afterClick + 1)
+    await page.evaluate(() => {
+      const k01 = (window as unknown as { __k01: K01 }).__k01
+      k01.composition('compositionstart')
+      k01.composition('compositionend')
+    })
+    expect((await log()).composing).toEqual([true, false])
   })
 })

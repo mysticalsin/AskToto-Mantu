@@ -14,14 +14,14 @@
  *     the representative-profile shape (53 local placeholder meetings, 6 FIFO meetings, a FIFO
  *     `.brain/index.json` and FIFO `.brain` entity files). It proves the main-thread and threadpool
  *     guarantees on candidate bytes; SF_DATALESS detection on real evicted files is not measured here.
- *     Its verdict uses the fifo row's exercised rule.
+ *     Its verdict uses the fifo row's refused-without-opening exercise rule.
  * `none` places no fixture: the control row, which tells a boot-time block apart from a fixture reader.
  *
  * Attribution evidence, reported and never judged: every sample's time since spawn, the loop's max since
  * the previous sample, the loop's max during its write (a slow write close to it waited on a main-thread
- * block, not on the libuv pool) and the active libuv resources; a CPU profile of the first 90 s, with when
- * it was requested and when the profiler actually started; the profile's audit logs, stall bundles and this
- * launch's main.log; which FIFOs had a reader; from +20 s, History's own IPC round trip (recallList +
+ * block, not on the libuv pool) and the active libuv resources; a CPU profile from boot until after the loop
+ * summary, with when it was requested and when the profiler actually started; the profile's audit logs, stall
+ * bundles and this launch's main.log; which FIFOs had a reader; from +20 s, History's own IPC round trip (recallList +
  * brainStatus, with its row and not-downloaded row counts) measured in the main window (`--history off`
  * skips those probes, so History stays idle for the whole run); the app's own native boot stage timings
  * (`bootStages`, read from the profile's audit trail); and the runner witness (`witness`, on every timeline
@@ -39,8 +39,11 @@
  * whether this launch's main.log says every meetings-root permit was held by a stalled call. Only counts and
  * timings leave the renderer, never a row or a hit.
  *
+ * In `--history after-idle`, the idle window starts after setup finishes, so the first History probe is
+ * slightly later than `--minutes` from process launch.
+ *
  * Usage:
- *       --fixtures fifo|dataless|synthetic-dataless|none [--history [on|off]] [--count 6]
+ *       --fixtures fifo|dataless|synthetic-dataless|none [--history [on|off|after-idle]] [--count 6]
  *       [--cloud-dir <folder of evicted files>] [--main-log <main.log>] [--exe <installed executable>]
  *       [--profile-template <userData dir>] [--minutes 5] [--out <report.json>] [--report-dir <dir>]
  *       [--purpose window-construction --window-variant <variant> [--window-warmup]]
@@ -93,16 +96,19 @@ import {
   emptyRun,
   failureRecord,
   historyEntry,
+  historyProbeWindow,
   parseArgs,
   pinnedExpression,
   recordSample,
   releaseExpression,
+  sampleExpression,
   syntheticDatalessPlan,
   runPurpose,
   shouldProbeHistory,
   timedCallsExpression,
   windowConstructionGate,
-  withTimeout
+  withTimeout,
+  writeJsonToStdout
 } from './lib/st-1-core.mjs'
 
 const FIXTURE_KINDS = ['fifo', 'dataless', 'synthetic-dataless', 'none']
@@ -120,14 +126,15 @@ const SAMPLE_TIMEOUT_MS = 5_000
 /** The harness's own wait beyond an in-app bound, for a main loop too blocked to fire the in-app timer. */
 const EVALUATE_MARGIN_MS = 2_000
 const PARTIAL_REPORT_EVERY_MS = 30_000
-/** The CPU profile covers boot: it starts at SETUP and stops this long after spawn. */
-const PROFILE_UNTIL_MS = 90_000
+/** CPU profiles start at boot; their per-run stop point is report-only and follows the sampled window. */
 const PROFILE_SAMPLING_US = 1_000
 const PROFILE_STOP_TIMEOUT_MS = 30_000
 /** History's IPC round trip is measured from this long after spawn, this often. */
 const HISTORY_FROM_MS = 20_000
 const HISTORY_EVERY_MS = 5_000
 const HISTORY_TIMEOUT_MS = 10_000
+/** Delayed History mode samples through the idle window, then retries History opens for this long. */
+const HISTORY_AFTER_IDLE_RETRY_MS = 60_000
 /** Each History call's own bound in the renderer: twice the 2 s budget, and the open plus the search still
  *  settle within HISTORY_TIMEOUT_MS, so every call of a probe keeps its own time even when one of them hangs. */
 const HISTORY_CALL_BOUND_MS = 4_000
@@ -406,28 +413,10 @@ const SETUP = `(() => {
   const { monitorEventLoopDelay } = process.getBuiltinModule('node:perf_hooks')
   globalThis.__st1 = monitorEventLoopDelay({ resolution: ${LOOP_RESOLUTION_MS} })
   globalThis.__st1.enable()
+  globalThis.__st1lastRunLoopMaxMs = __st1.max / 1e6
   globalThis.__st1since = monitorEventLoopDelay({ resolution: ${LOOP_RESOLUTION_MS} })
   globalThis.__st1since.enable()
   return process.env.UV_THREADPOOL_SIZE ?? 'default'
-})()`
-
-const sample = (probeFile) => `(async () => {
-  const loopMaxSinceLastMs = __st1since.max / 1e6
-  __st1since.reset()
-  const resources = {}
-  if (typeof process.getActiveResourcesInfo === 'function') {
-    for (const type of process.getActiveResourcesInfo()) resources[type] = (resources[type] ?? 0) + 1
-  }
-  const { writeFile } = process.getBuiltinModule('node:fs/promises')
-  const { lookup } = process.getBuiltinModule('node:dns/promises')
-  let started = performance.now()
-  await writeFile(${JSON.stringify(probeFile)}, String(started))
-  const writeMs = performance.now() - started
-  // Read, not reset: the next sample's loopMaxSinceLastMs still covers this write.
-  const loopMaxDuringWriteMs = __st1since.max / 1e6
-  started = performance.now()
-  await lookup('localhost')
-  return { writeMs, loopMaxDuringWriteMs, lookupMs: performance.now() - started, loopMaxSinceLastMs, resources }
 })()`
 
 const SUMMARY = '({ p99Ms: __st1.percentile(99) / 1e6, maxMs: __st1.max / 1e6 })'
@@ -447,7 +436,8 @@ const MAIN_LOG_PATH = `(() => {
 /** History's open: recallList and brainStatus started together, as History does, each timed on its own. */
 const HISTORY_OPEN_CALLS = timedCallsExpression(
   {
-    recallList: 'window.toto.recallList().then((rows) => ({ rows: rows.length, notDownloaded: rows.filter((row) => row.notDownloaded).length }))',
+    recallList:
+      'window.toto.recallList().then((rows) => ({ rows: rows.length, notDownloaded: rows.filter((row) => row.notDownloaded).length, unavailable: rows.filter((row) => row.notDownloaded || row.locked).length }))',
     brainStatus: 'window.toto.brainStatus().then(() => true)'
   },
   HISTORY_CALL_BOUND_MS
@@ -491,18 +481,21 @@ const historyProbe = (search) => `(async () => {
   return { skipped: 'no window exposes window.toto.recallList, brainStatus and recallSearch' }
 })()`
 
-/** Starts the sampling CPU profiler; reports why when it cannot. `startedAtMs` is stamped when Profiler.start
- *  answers, so the profile's own clock can be lined up with the timeline; null when it never started. */
+/** Starts the sampling CPU profiler; reports when Profiler.start was requested and when it answered, so
+ *  the profile's own cost can be lined up with the timeline. */
 async function startProfiler(cdp, sinceSpawn) {
+  let requestedAtMs = null
   try {
     await cdp.send('Profiler.enable', {}, EVALUATE_TIMEOUT_MS)
     await cdp.send('Profiler.setSamplingInterval', { interval: PROFILE_SAMPLING_US }, EVALUATE_TIMEOUT_MS)
+    requestedAtMs = sinceSpawn()
     const started = await cdp.send('Profiler.start', {}, EVALUATE_TIMEOUT_MS)
+    const answeredAtMs = sinceSpawn()
     return started.late
-      ? { startedAtMs: null, running: false, error: 'Profiler.start did not answer' }
-      : { startedAtMs: sinceSpawn(), running: true }
+      ? { requestedAtMs, answeredAtMs, startedAtMs: null, running: false, error: 'Profiler.start did not answer' }
+      : { requestedAtMs, answeredAtMs, startedAtMs: answeredAtMs, running: true }
   } catch (error) {
-    return { startedAtMs: null, running: false, error: error.message }
+    return { requestedAtMs, answeredAtMs: requestedAtMs === null ? null : sinceSpawn(), startedAtMs: null, running: false, error: error.message }
   }
 }
 
@@ -574,30 +567,55 @@ async function probeHistory(cdp, tMs, search) {
 
 /** Fills `run` (lib/st-1-core.mjs emptyRun) in place, so a partial report can be written at any moment.
  *  Never throws on a probe that fails or hangs: each is recorded in `run.errors` and the run goes on. */
-async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, witnessFile, historyOn, history }) {
+async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, witnessFile, historyMode, history }) {
   const sinceSpawn = () => Math.round(performance.now() - spawnedAt)
   run.setupAtMs = sinceSpawn()
   const witness = startWitness(witnessFile)
   const setup = await evaluateBounded(cdp, 'setup', SETUP, SETUP_TIMEOUT_MS)
   if (setup.ok) run.poolSize = setup.value
   else run.errors.push(failureRecord('setup', run.setupAtMs, setup, SETUP_TIMEOUT_MS))
-  const requestedAtMs = sinceSpawn()
-  run.profiler = { requestedAtMs, ...(await startProfiler(cdp, sinceSpawn)) }
+  run.profiler = await startProfiler(cdp, sinceSpawn)
   const probeFile = join(profile, 'st1-probe.txt')
   let historyRunning = null
   let historyLastMs = -Infinity
+  let historyAnswered = false
   const deadline = Date.now() + minutes * 60_000
-  while (Date.now() < deadline) {
+  const { fromMs: historyFromMs, retryUntilMs: historyRetryUntilMs } = historyProbeWindow({
+    historyMode,
+    nowMs: sinceSpawn(),
+    minutes,
+    defaultFromMs: HISTORY_FROM_MS,
+    retryMs: HISTORY_AFTER_IDLE_RETRY_MS
+  })
+  const profileUntilMs = historyMode === 'after-idle' ? historyRetryUntilMs : minutes * 60_000
+  const shouldKeepSampling = () => {
+    if (Date.now() < deadline) return true
+    if (historyMode !== 'after-idle' || historyAnswered) return Boolean(historyRunning)
+    return historyRunning || sinceSpawn() <= historyRetryUntilMs
+  }
+  while (shouldKeepSampling()) {
     const tMs = sinceSpawn()
-    if (run.profiler.running && tMs >= PROFILE_UNTIL_MS) await stopProfiler(cdp, run.profiler, cpuProfilePath, tMs)
-    if (shouldProbeHistory({ historyOn, historyRunning, tMs, historyLastMs, fromMs: HISTORY_FROM_MS, everyMs: HISTORY_EVERY_MS })) {
+    if (run.profiler.running && tMs >= profileUntilMs) await stopProfiler(cdp, run.profiler, cpuProfilePath, tMs)
+    if (
+      shouldProbeHistory({
+        historyMode,
+        historyRunning,
+        historyAnswered,
+        tMs,
+        historyLastMs,
+        fromMs: historyFromMs,
+        everyMs: HISTORY_EVERY_MS,
+        retryUntilMs: historyRetryUntilMs
+      })
+    ) {
       historyLastMs = tMs
       historyRunning = probeHistory(cdp, tMs, history).then((probe) => {
         run.history.push(probe)
+        if (!probe.skipped && !probe.hung && !probe.error) historyAnswered = true
         historyRunning = null
       })
     }
-    const answer = evaluateBounded(cdp, 'sample', sample(probeFile), SAMPLE_TIMEOUT_MS)
+    const answer = evaluateBounded(cdp, 'sample', sampleExpression(probeFile), SAMPLE_TIMEOUT_MS)
     // Queued behind the evaluation's own inspector send (already queued by the call above), so the witness
     // is taken at the sample instant and never delays the app sample.
     const sampleWitness = await Promise.resolve().then(() => witness.sample())
@@ -605,12 +623,12 @@ async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, 
     recordSample(run, tMs, outcome, { lateAfterMs: EVALUATE_TIMEOUT_MS, boundMs: SAMPLE_TIMEOUT_MS, witness: sampleWitness })
     await new Promise((resolve) => setTimeout(resolve, SAMPLE_INTERVAL_MS))
   }
-  if (run.profiler.running) await stopProfiler(cdp, run.profiler, cpuProfilePath, sinceSpawn())
   await historyRunning
   const summaryAtMs = sinceSpawn()
   const summary = await evaluateBounded(cdp, 'summary', SUMMARY, SETUP_TIMEOUT_MS)
   if (!summary.ok) run.errors.push(failureRecord('summary', summaryAtMs, summary, SETUP_TIMEOUT_MS))
   run.loop = summary.ok ? summary.value : { p99Ms: Infinity, maxMs: Infinity }
+  if (run.profiler.running) await stopProfiler(cdp, run.profiler, cpuProfilePath, sinceSpawn())
   run.witnessLoop = await witness.stop(SAMPLE_TIMEOUT_MS)
 }
 
@@ -692,12 +710,16 @@ function readStorageSaturations(mainLog) {
   }
 }
 
-/** Whether the run actually reached the fixtures, and (dataless only) whether they stayed unread. */
+/** Fixture state after the run: FIFO-backed rows fail if anything opened them; dataless rows also prove
+ * they stayed unread. */
 function collectExercisedEvidence(kind, fixtures, mainLogPath, mainLogOffset, root) {
   if (kind === 'none') return { exercised: null }
   if (kind === 'fifo' || kind === 'synthetic-dataless') {
     const opened = fixtures.filter((fifo) => releaseFifo(fifo))
-    const evidence = { exercised: opened.length >= 1, fixturesOpened: opened.map((fifo) => relative(root, fifo)) }
+    const evidence = {
+      fixturesOpened: opened.map((fifo) => relative(root, fifo)),
+      fifoMeetingFixtures: fixtures.filter((fixture) => fixture.endsWith('.md')).length
+    }
     // stat reads a FIFO's flags without opening it, so this records the fact without a reader.
     return kind === 'fifo' ? evidence : { ...evidence, sfDatalessSet: datalessFlags(fixtures).some(Boolean) }
   }
@@ -790,12 +812,12 @@ async function main() {
     console.error(`[st-1] FAIL — Windows has no FIFOs; --fixtures ${args.fixtures} is unavailable, use --fixtures dataless`)
     return 2
   }
-  if (args.history !== undefined && args.history !== 'true' && args.history !== 'on' && args.history !== 'off') {
-    console.error(`[st-1] FAIL — --history must be a bare flag, on or off, got ${JSON.stringify(args.history)}`)
+  if (args.history !== undefined && args.history !== 'true' && args.history !== 'on' && args.history !== 'off' && args.history !== 'after-idle') {
+    console.error(`[st-1] FAIL — --history must be a bare flag, on, off or after-idle, got ${JSON.stringify(args.history)}`)
     return 2
   }
   const history = args.history === 'true'
-  const historyMode = args.history === 'off' ? 'off' : 'on'
+  const historyMode = args.history === 'off' ? 'off' : args.history === 'after-idle' ? 'after-idle' : 'on'
   if (args.fixtures === 'dataless' && (!args.cloudDir || !args.mainLog)) {
     console.error('[st-1] FAIL — --fixtures dataless needs --cloud-dir and --main-log')
     return 2
@@ -923,7 +945,7 @@ async function main() {
       mainLogLocated = args.mainLog
         ? Promise.resolve({ path: args.mainLog, fromByte: mainLogOffset, exactLaunchOffset: true })
         : locateMainLog(cdp, spawnedWallMs)
-      await measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, witnessFile, historyOn: historyMode === 'on', history })
+      await measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, witnessFile, historyMode, history })
       mainLog = await mainLogLocated
       evidence = collectExercisedEvidence(args.fixtures, fixtures, args.mainLog, mainLogOffset, root)
       complete = true
@@ -966,7 +988,7 @@ async function main() {
   if (cleanupError) throw cleanupError
 
   const report = currentReport()
-  console.log(JSON.stringify(report, null, 2))
+  await writeJsonToStdout(report)
   return report.verdict === 'PASS' ? 0 : 1
 }
 

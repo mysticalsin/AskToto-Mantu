@@ -50,6 +50,15 @@ import {
   smokeVerdict,
   waitForNavigationView
 } from './packaged-smoke.mjs'
+import {
+  CURSOR_SAMPLED_READS,
+  MAIN_CURSOR_READS,
+  MAIN_RE_HIDE_SHIM,
+  RIGHT_EDGE_TYPING_PIN_MS,
+  rightEdgePageSurfaceState,
+  setMainCursor
+} from './golden-flows/right-edge-hide-rows.mjs'
+import { RE_TYPING_PIN_MS } from '../../src/shared/right-edge-timing'
 
 interface ProcessEntry {
   pid: number
@@ -239,76 +248,176 @@ describe('smokeVerdict', () => {
   })
 
   const cases: Array<[string, (o: ReturnType<typeof goodObservation>) => void, string]> = [
-    ['install root busy', (o) => { o.installRootBusy = true }, 'install_root_busy'],
-    ['the spawn error event fired', (o) => { o.launchFailed = true }, 'launch_failed'],
-    ['an unexpected exception', (o) => { o.error = true }, 'smoke_error'],
-    ['an app.crash record', (o) => { o.audit = [...o.audit, { event: 'app.crash' }] }, 'app_reported_crash'],
-    ['an app.unresponsive record', (o) => { o.audit = [...o.audit, { event: 'app.unresponsive' }] }, 'app_reported_crash'],
-    ['main exited before the quit request', (o) => { o.exitedEarly = true }, 'exited_early'],
-    ['the app was spawned but never reported ready', (o) => { o.readyMs = null }, 'renderer_not_ready'],
+    [
+      'install root busy',
+      (o) => {
+        o.installRootBusy = true
+      },
+      'install_root_busy'
+    ],
+    [
+      'the spawn error event fired',
+      (o) => {
+        o.launchFailed = true
+      },
+      'launch_failed'
+    ],
+    [
+      'an unexpected exception',
+      (o) => {
+        o.error = true
+      },
+      'smoke_error'
+    ],
+    [
+      'an app.crash record',
+      (o) => {
+        o.audit = [...o.audit, { event: 'app.crash' }]
+      },
+      'app_reported_crash'
+    ],
+    [
+      'an app.unresponsive record',
+      (o) => {
+        o.audit = [...o.audit, { event: 'app.unresponsive' }]
+      },
+      'app_reported_crash'
+    ],
+    [
+      'main exited before the quit request',
+      (o) => {
+        o.exitedEarly = true
+      },
+      'exited_early'
+    ],
+    [
+      'the app was spawned but never reported ready',
+      (o) => {
+        o.readyMs = null
+      },
+      'renderer_not_ready'
+    ],
     [
       'the census at quit is missing main',
-      (o) => { o.ownedAtQuit = [{ pid: 101, ppid: 1, startedMs: 1, exe: null, role: 'helper' }, { pid: 102, ppid: 1, startedMs: 1, exe: null, role: 'helper' }] },
+      (o) => {
+        o.ownedAtQuit = [
+          { pid: 101, ppid: 1, startedMs: 1, exe: null, role: 'helper' },
+          { pid: 102, ppid: 1, startedMs: 1, exe: null, role: 'helper' }
+        ]
+      },
       'census_vacuous'
     ],
     [
       'the census at quit holds only main',
-      (o) => { o.ownedAtQuit = [{ pid: 100, ppid: 1, startedMs: 1000, exe: null, role: 'Metis' }] },
+      (o) => {
+        o.ownedAtQuit = [{ pid: 100, ppid: 1, startedMs: 1000, exe: null, role: 'Metis' }]
+      },
       'census_vacuous'
     ],
-    ['the quit IPC could not be delivered', (o) => { o.quitDelivered = false }, 'quit_request_failed'],
-    ['the app never exited after a delivered quit', (o) => { o.exit = null; o.exitMs = null }, 'quit_timeout'],
-    ['exit carried a non-zero code', (o) => { o.exit = { code: 1, signal: null } }, 'exit_not_clean'],
-    ['exit carried a signal', (o) => { o.exit = { code: 0, signal: 'SIGTERM' } }, 'exit_not_clean'],
+    [
+      'the quit IPC could not be delivered',
+      (o) => {
+        o.quitDelivered = false
+      },
+      'quit_request_failed'
+    ],
+    [
+      'the app never exited after a delivered quit',
+      (o) => {
+        o.exit = null
+        o.exitMs = null
+      },
+      'quit_timeout'
+    ],
+    [
+      'exit carried a non-zero code',
+      (o) => {
+        o.exit = { code: 1, signal: null }
+      },
+      'exit_not_clean'
+    ],
+    [
+      'exit carried a signal',
+      (o) => {
+        o.exit = { code: 0, signal: 'SIGTERM' }
+      },
+      'exit_not_clean'
+    ],
     [
       'no app.shutdown.clean record was audited',
-      (o) => { o.audit = o.audit.filter((r) => r.event !== 'app.shutdown.clean') },
+      (o) => {
+        o.audit = o.audit.filter((r) => r.event !== 'app.shutdown.clean')
+      },
       'shutdown_not_recorded'
     ],
-    ['run-state.json did not read back clean', (o) => { o.marker = false }, 'shutdown_not_recorded'],
+    [
+      'run-state.json did not read back clean',
+      (o) => {
+        o.marker = false
+      },
+      'shutdown_not_recorded'
+    ],
     [
       'a process survived the bound',
-      (o) => { o.survivors = [{ pid: 999, ppid: 1, startedMs: 1, exe: null, role: 'Straggler' }] },
+      (o) => {
+        o.survivors = [{ pid: 999, ppid: 1, startedMs: 1, exe: null, role: 'Straggler' }]
+      },
       'processes_survived'
     ],
     [
       'an automated RV row failed',
-      (o) => { o.rv[0] = { ...o.rv[0], status: 'FAIL', evidence: null } },
+      (o) => {
+        o.rv[0] = { ...o.rv[0], status: 'FAIL', evidence: null }
+      },
       'rv_reopen_failed'
     ],
     [
       'an automated RV row never completed after renderer readiness',
-      (o) => { o.rv[0] = { ...o.rv[0], status: 'PENDING', evidence: null } },
+      (o) => {
+        o.rv[0] = { ...o.rv[0], status: 'PENDING', evidence: null }
+      },
       'rv_reopen_incomplete'
     ],
     [
       'an automated navigation guard row failed',
-      (o) => { o.navigationGuard[0] = { ...o.navigationGuard[0], status: 'FAIL', evidence: null } },
+      (o) => {
+        o.navigationGuard[0] = { ...o.navigationGuard[0], status: 'FAIL', evidence: null }
+      },
       'navigation_guard_failed'
     ],
     [
       'an automated navigation guard row never completed after renderer readiness',
-      (o) => { o.navigationGuard[0] = { ...o.navigationGuard[0], status: 'PENDING', evidence: null } },
+      (o) => {
+        o.navigationGuard[0] = { ...o.navigationGuard[0], status: 'PENDING', evidence: null }
+      },
       'navigation_guard_incomplete'
     ],
     [
       'an automated right-edge Hide row failed',
-      (o) => { o.rightEdgeHide![0] = { ...o.rightEdgeHide![0], status: 'FAIL', evidence: null } },
+      (o) => {
+        o.rightEdgeHide![0] = { ...o.rightEdgeHide![0], status: 'FAIL', evidence: null }
+      },
       'right_edge_hide_failed'
     ],
     [
       'an automated right-edge Hide row never completed after renderer readiness',
-      (o) => { o.rightEdgeHide![0] = { ...o.rightEdgeHide![0], status: 'PENDING', evidence: null } },
+      (o) => {
+        o.rightEdgeHide![0] = { ...o.rightEdgeHide![0], status: 'PENDING', evidence: null }
+      },
       'right_edge_hide_incomplete'
     ],
     [
       'an overlay stability row failed',
-      (o) => { o.overlayStability![0] = { ...o.overlayStability![0], status: 'FAIL', evidence: null } },
+      (o) => {
+        o.overlayStability![0] = { ...o.overlayStability![0], status: 'FAIL', evidence: null }
+      },
       'overlay_stability_failed'
     ],
     [
       'an overlay stability row never completed after renderer readiness',
-      (o) => { o.overlayStability![1] = { ...o.overlayStability![1], status: 'PENDING', evidence: null } },
+      (o) => {
+        o.overlayStability![1] = { ...o.overlayStability![1], status: 'PENDING', evidence: null }
+      },
       'overlay_stability_incomplete'
     ]
   ]
@@ -462,7 +571,10 @@ describe('runRevealRow', () => {
         run: async () => {
           // The shortcut's cmd launcher detaches Metis.exe: the relaunched instance hands off after run() returns.
           setTimeout(() => {
-            appendFileSync(auditLogPath, auditLine({ event: 'reveal', reason: 'second-instance', outcome: 'shown', parked: true, layout: 'hide' }))
+            appendFileSync(
+              auditLogPath,
+              auditLine({ event: 'reveal', reason: 'second-instance', outcome: 'shown', parked: true, layout: 'hide' })
+            )
           }, 300)
           return { code: 0, signal: null, error: false }
         },
@@ -471,7 +583,9 @@ describe('runRevealRow', () => {
           waitedWith = timeoutMs
           const deadline = Date.now() + (timeoutMs ?? 0)
           while (Date.now() < deadline) {
-            const matches = parseAuditLog(readFileSync(path, 'utf8')).filter((r) => r.event === 'reveal' && r.reason === reason)
+            const matches = parseAuditLog(readFileSync(path, 'utf8')).filter(
+              (r) => r.event === 'reveal' && r.reason === reason
+            )
             if (matches.length > seenCount) return matches[matches.length - 1]
             await new Promise((resolve) => setTimeout(resolve, 50))
           }
@@ -507,7 +621,18 @@ describe('runRevealRow', () => {
         id: 'RV-3-windows-shortcut-relaunch',
         reason: 'second-instance',
         prepare: async () => {
-          appendFileSync(auditLogPath, auditLine({ event: 'reveal', reason: 'second-instance', outcome: 'shown', parked: false, isVisible: true, layout: 'hide', ms: 2 }))
+          appendFileSync(
+            auditLogPath,
+            auditLine({
+              event: 'reveal',
+              reason: 'second-instance',
+              outcome: 'shown',
+              parked: false,
+              isVisible: true,
+              layout: 'hide',
+              ms: 2
+            })
+          )
           return { code: 0, signal: null, error: false }
         },
         run: async () => {
@@ -518,7 +643,9 @@ describe('runRevealRow', () => {
         failure: 'missing Windows shortcut reveal'
       })
 
-      const row = rows.find((entry) => entry.id === 'RV-3-windows-shortcut-relaunch') as { diagnostics?: unknown } | undefined
+      const row = rows.find((entry) => entry.id === 'RV-3-windows-shortcut-relaunch') as
+        | { diagnostics?: unknown }
+        | undefined
       expect(row).toMatchObject({ status: 'FAIL', evidence: null, unblock: 'missing Windows shortcut reveal' })
       expect(row?.diagnostics).toEqual({
         stage: 'no-reveal',
@@ -528,7 +655,15 @@ describe('runRevealRow', () => {
         auditBefore: [
           { event: 'app.started' },
           { event: 'app.renderer.ready' },
-          { event: 'reveal', reason: 'second-instance', outcome: 'shown', isVisible: true, parked: false, layout: 'hide', ms: 2 }
+          {
+            event: 'reveal',
+            reason: 'second-instance',
+            outcome: 'shown',
+            isVisible: true,
+            parked: false,
+            layout: 'hide',
+            ms: 2
+          }
         ],
         auditAfter: [{ event: 'security.ipc_denied' }]
       })
@@ -556,7 +691,9 @@ describe('runRevealRow', () => {
     })
 
     expect(launched).toBe(false)
-    const row = rows.find((entry) => entry.id === 'RV-3-windows-shortcut-relaunch') as { diagnostics?: unknown } | undefined
+    const row = rows.find((entry) => entry.id === 'RV-3-windows-shortcut-relaunch') as
+      | { diagnostics?: unknown }
+      | undefined
     expect(row?.diagnostics).toMatchObject({
       stage: 'prepare',
       prepare: { code: 1, signal: null, error: true },
@@ -570,7 +707,9 @@ describe('runRevealRow', () => {
 describe('auditDiagnostic', () => {
   it('keeps only the event name of non-reveal records and the typed projection fields of reveals', () => {
     expect(auditDiagnostic({ event: 'app.crash', message: 'stack with /private/path' })).toEqual({ event: 'app.crash' })
-    expect(auditDiagnostic({ event: 'reveal', reason: 'tray', outcome: 'failed', parked: true, detail: { nested: 'x' } })).toEqual({
+    expect(
+      auditDiagnostic({ event: 'reveal', reason: 'tray', outcome: 'failed', parked: true, detail: { nested: 'x' } })
+    ).toEqual({
       event: 'reveal',
       reason: 'tray',
       outcome: 'failed',
@@ -687,6 +826,9 @@ describe('right-edge Hide rows (RE-HIDE)', () => {
       'RE-HIDE-6-toggle-reveals-hide',
       'RE-HIDE-6-toggle-reveals-island',
       'RE-HIDE-7-layout-change-chrome',
+      'RE-K01-D4-edge-reveal-keeps-focus',
+      'RE-K01-D4-toggle-focuses-composer',
+      'RE-P01-composer-click-holds-then-parks',
       'RE-HIDE-3-meeting-hide',
       'RE-HIDE-4-island-meeting-leave-parks'
     ])
@@ -704,7 +846,11 @@ describe('right-edge Hide rows (RE-HIDE)', () => {
 
   it('accepts only the documented revealed and parked chrome', () => {
     const { drawer, tab, band } = rightEdgeExpectedRects(display.workArea)
-    const win = (bounds: { x: number; y: number; width: number; height: number }, opacity: number, clickThrough: boolean | null) => ({
+    const win = (
+      bounds: { x: number; y: number; width: number; height: number },
+      opacity: number,
+      clickThrough: boolean | null
+    ) => ({
       bounds,
       opacity,
       clickThrough,
@@ -712,7 +858,14 @@ describe('right-edge Hide rows (RE-HIDE)', () => {
       displayBounds: display.bounds,
       workArea: display.workArea
     })
-    const page = { drawer: false, rail: true, hideControl: false, meetingLive: false, composerFocused: false, draft: '' }
+    const page = {
+      drawer: false,
+      rail: true,
+      hideControl: false,
+      meetingLive: false,
+      composerFocused: false,
+      draft: ''
+    }
     const open = { ...page, drawer: true, rail: false, hideControl: true }
     expect(rightEdgeStateMatches({ win: win(drawer, 1, false), page: open }, 'revealed')).toBe(true)
     expect(rightEdgeStateMatches({ win: win(drawer, 1, true), page: open }, 'revealed')).toBe(false)
@@ -742,9 +895,11 @@ describe('right-edge Hide rows (RE-HIDE)', () => {
     expect(expected.drawer).toEqual(rightEdgeSidecarBounds(windows, { open: true }))
     expect(expected.tab).toEqual(parkAfterExclusiveOnboarding('island', windows, 8, 'right-edge'))
     expect(expected.band).toEqual(parkAfterExclusiveOnboarding('hide', windows, 8, 'right-edge'))
-    // The observed Windows parks: Island rail at y 141, Hide band at the drawer's y 39.
-    expect(expected.tab).toEqual({ x: 960, y: 141, width: 52, height: 52 })
-    expect(expected.band.y).toBe(39)
+    // M2-0202: one anchor A = 0.15 × 720 = 108 places the rail (centred on A) and the drawer (A − 36); the
+    // Hide band is the authority's revealBand, [wa.y+48, wa.bottom−48] whatever the anchor.
+    expect(expected.tab).toEqual({ x: 960, y: 82, width: 52, height: 52 })
+    expect(expected.drawer.y).toBe(72)
+    expect(expected.band).toEqual({ x: 1020, y: 48, width: 4, height: 624 })
   })
 
   it('accepts a Hide park the OS widened only when its right edge stays at the work-area edge', () => {
@@ -758,7 +913,15 @@ describe('right-edge Hide rows (RE-HIDE)', () => {
       displayBounds: windows.bounds,
       workArea: windows.workArea
     })
-    const page = { dock: true, drawer: false, rail: true, hideControl: false, meetingLive: false, composerFocused: false, draft: '' }
+    const page = {
+      dock: true,
+      drawer: false,
+      rail: true,
+      hideControl: false,
+      meetingLive: false,
+      composerFocused: false,
+      draft: ''
+    }
     const flush = { x: edge - 32, y: band.y, width: 32, height: band.height }
     expect(rightEdgeHideParkMatches(flush, band)).toBe(true)
     expect(rightEdgeStateMatches({ win: win(flush), page }, 'parked', 'hide')).toBe(true)
@@ -772,16 +935,91 @@ describe('right-edge Hide rows (RE-HIDE)', () => {
   })
 
   it('names the parked criteria a Windows readback misses, so a failing row says which one', () => {
-    // Run 36645827157 readback: the widened band flush at the edge is a bounds match.
-    const bounds = { x: 992, y: 39, width: 32, height: 560 }
-    const win = (opacity: number, clickThrough: boolean | null) => ({ bounds, opacity, clickThrough, visible: true, displayBounds: windows.bounds, workArea: windows.workArea })
-    const page = { dock: true, drawer: false, rail: true, hideControl: false, meetingLive: false, composerFocused: false, draft: '' }
+    // The run 36645827157 readback shape on the M2-0202 band: widened to 32 px, flush at the edge, is a bounds match.
+    const bounds = { x: 992, y: 48, width: 32, height: 624 }
+    const win = (opacity: number, clickThrough: boolean | null) => ({
+      bounds,
+      opacity,
+      clickThrough,
+      visible: true,
+      displayBounds: windows.bounds,
+      workArea: windows.workArea
+    })
+    const page = {
+      dock: true,
+      drawer: false,
+      rail: true,
+      hideControl: false,
+      meetingLive: false,
+      composerFocused: false,
+      draft: ''
+    }
     expect(rightEdgeStateMismatches({ win: win(0, true), page }, 'parked', 'hide')).toEqual([])
-    expect(rightEdgeStateMismatches({ win: win(0, true), page: { ...page, drawer: true, rail: false } }, 'parked', 'hide')).toEqual(['drawer'])
-    expect(rightEdgeStateMismatches({ win: win(1, false), page }, 'parked', 'hide')).toEqual(['opacity', 'clickThrough'])
+    expect(
+      rightEdgeStateMismatches({ win: win(0, true), page: { ...page, drawer: true, rail: false } }, 'parked', 'hide')
+    ).toEqual(['drawer'])
+    expect(rightEdgeStateMismatches({ win: win(1, false), page }, 'parked', 'hide')).toEqual([
+      'opacity',
+      'clickThrough'
+    ])
     expect(rightEdgeStateMismatches({ win: win(0, null), page }, 'parked', 'hide')).toEqual(['clickThrough'])
-    expect(rightEdgeStateMismatches({ win: win(0, true), page }, 'parked', 'island')).toEqual(['bounds', 'opacity', 'clickThrough'])
+    expect(rightEdgeStateMismatches({ win: win(0, true), page }, 'parked', 'island')).toEqual([
+      'bounds',
+      'opacity',
+      'clickThrough'
+    ])
     expect(rightEdgeStateMismatches(null, 'parked', 'hide')).toEqual(['observation'])
+  })
+
+  it('counts main reads of the stubbed pointer, so a row knows the cursor watch sampled it away from the band', () => {
+    const real = { x: 1, y: 1 }
+    const screen = { getCursorScreenPoint: () => real }
+    const g = globalThis as Record<string, unknown>
+    const run = (expression: string): unknown => (0, eval)(expression)
+    g.__metisReHideElectron = { screen, BrowserWindow: { getAllWindows: () => [] } }
+    try {
+      run(MAIN_RE_HIDE_SHIM)
+      run(setMainCursor({ x: 40, y: 400 }))
+      expect(run(MAIN_CURSOR_READS)).toBe(0)
+      expect(screen.getCursorScreenPoint()).toEqual({ x: 40, y: 400 })
+      expect(screen.getCursorScreenPoint()).toEqual({ x: 40, y: 400 })
+      expect(run(MAIN_CURSOR_READS)).toBe(CURSOR_SAMPLED_READS)
+      // A new point starts a fresh count: reads of the previous point never prove the new one was sampled.
+      run(setMainCursor({ x: 1023, y: 380 }))
+      expect(run(MAIN_CURSOR_READS)).toBe(0)
+      // The real pointer is not the stub's: releasing the stub stops the count.
+      run(setMainCursor(null))
+      expect(screen.getCursorScreenPoint()).toBe(real)
+      expect(run(MAIN_CURSOR_READS)).toBe(0)
+    } finally {
+      delete g.__metisReHideElectron
+      delete g.__metisReHide
+    }
+  })
+
+  it('M2-0202: reads the page through its data-re-surface hook, never the sidecar class names', () => {
+    expect(rightEdgePageSurfaceState({ surface: 'rest', drawerAriaHidden: 'true' })).toEqual({
+      drawer: false,
+      rail: true
+    })
+    expect(rightEdgePageSurfaceState({ surface: 'island', drawerAriaHidden: null })).toEqual({
+      drawer: true,
+      rail: false
+    })
+    // A drawer still aria-hidden mid-reveal is not an open drawer, and no surface is no right-edge root at all.
+    expect(rightEdgePageSurfaceState({ surface: 'island', drawerAriaHidden: 'true' })).toEqual({
+      drawer: false,
+      rail: false
+    })
+    expect(rightEdgePageSurfaceState({ surface: null, drawerAriaHidden: null })).toEqual({ drawer: false, rail: false })
+    const rows = readFileSync(
+      fileURLToPath(new URL('./golden-flows/right-edge-hide-rows.mjs', import.meta.url)),
+      'utf8'
+    )
+    expect(rows).toContain("document.querySelector('[data-re-surface]')")
+    expect(rows).not.toMatch(/querySelector\('\.right-edge-sidecar/)
+    // The RE-P01 row holds for the renderer's typing pin.
+    expect(RIGHT_EDGE_TYPING_PIN_MS).toBe(RE_TYPING_PIN_MS)
   })
 
   it('treats a mounted but aria-hidden right-edge drawer as parked rail chrome', () => {
@@ -806,7 +1044,15 @@ describe('right-edge Hide rows (RE-HIDE)', () => {
       displayBounds: windows.bounds,
       workArea: windows.workArea
     }
-    const page = { dock: true, drawer: false, rail: true, hideControl: false, meetingLive: true, composerFocused: false, draft: '' }
+    const page = {
+      dock: true,
+      drawer: false,
+      rail: true,
+      hideControl: false,
+      meetingLive: true,
+      composerFocused: false,
+      draft: ''
+    }
     const parked = { ok: true, observed: { win: parkedWin, page } }
     const held = { win: parkedWin, page }
     const geometry = [
@@ -829,15 +1075,27 @@ describe('right-edge Hide rows (RE-HIDE)', () => {
     })
 
     const badFrame = { ms: 75, kind: 'frame', bounds: { ...parkedWin.bounds, y: windows.workArea.y - 1 } }
-    const failed = rightEdgeMeetingHideVerdict({ meetingLive: true, hideVisible: true, parked, held, geometry: [...geometry, badFrame] })
+    const failed = rightEdgeMeetingHideVerdict({
+      meetingLive: true,
+      hideVisible: true,
+      parked,
+      held,
+      geometry: [...geometry, badFrame]
+    })
     expect(failed.pass).toBe(false)
     expect(failed.evidence.framesAboveWorkArea).toEqual([badFrame])
   })
 })
 
 describe('overlay stability rows (OV, M2-0431)', () => {
-  const mac = { bounds: { x: 0, y: 0, width: 1920, height: 1080 }, workArea: { x: 0, y: 25, width: 1920, height: 1055 } }
-  const windows = { bounds: { x: 0, y: 0, width: 1024, height: 768 }, workArea: { x: 0, y: 0, width: 1024, height: 720 } }
+  const mac = {
+    bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+    workArea: { x: 0, y: 25, width: 1920, height: 1055 }
+  }
+  const windows = {
+    bounds: { x: 0, y: 0, width: 1024, height: 768 },
+    workArea: { x: 0, y: 0, width: 1024, height: 720 }
+  }
 
   it('tracks OV-STABLE and OV-BG as pending automation, with a 3-minute path', () => {
     expect(initialOverlayStabilityRows()).toEqual([
@@ -860,15 +1118,21 @@ describe('overlay stability rows (OV, M2-0431)', () => {
 
   it('keeps every menu-bar stop outside the notch reveal zone (the bar centre +/-150 px), even on a 1024 px display', () => {
     for (const display of [mac, windows]) {
-      const hoverZone = hoverWatchRestRect('hide', {
-        bounds: display.bounds,
-        workArea: display.workArea,
-        hasNotch: false,
-        notchWidth: 0,
-        menuBarHeight: display.workArea.y - display.bounds.y,
-        source: 'heuristic'
-      }, 'top-center')
-      for (const stop of overlayStablePath(display.bounds, display.workArea).filter((s) => s.label.startsWith('menu-bar'))) {
+      const hoverZone = hoverWatchRestRect(
+        'hide',
+        {
+          bounds: display.bounds,
+          workArea: display.workArea,
+          hasNotch: false,
+          notchWidth: 0,
+          menuBarHeight: display.workArea.y - display.bounds.y,
+          source: 'heuristic'
+        },
+        'top-center'
+      )
+      for (const stop of overlayStablePath(display.bounds, display.workArea).filter((s) =>
+        s.label.startsWith('menu-bar')
+      )) {
         const insideZone = stop.point.x >= hoverZone.x && stop.point.x < hoverZone.x + hoverZone.width
         expect(insideZone, `${stop.label} at x=${stop.point.x}`).toBe(false)
         expect(stop.point.x).toBeGreaterThanOrEqual(display.bounds.x)
@@ -879,11 +1143,27 @@ describe('overlay stability rows (OV, M2-0431)', () => {
 
   const parked = { bounds: { x: 956, y: 0, width: 8, height: 2 }, opacity: 0, visible: true }
   const bar = { x: 520, y: 25, width: 880, height: 120 }
-  const call = (turn: number, name: string, before: typeof parked, after: typeof parked, arg: unknown = null) => ({ turn, call: name, arg, before, after })
+  const call = (turn: number, name: string, before: typeof parked, after: typeof parked, arg: unknown = null) => ({
+    turn,
+    call: name,
+    arg,
+    before,
+    after
+  })
 
   it('counts no change for repeated calls that leave the window as it was', () => {
-    const events = [call(1, 'setBounds', parked, parked), call(1, 'setOpacity', parked, parked, 0), call(2, 'showInactive', parked, parked)]
-    expect(overlaySurfaceChanges(events)).toEqual({ changes: 0, reveals: 0, parks: 0, opacityBeforeTarget: 0, slabBeforeResize: 0 })
+    const events = [
+      call(1, 'setBounds', parked, parked),
+      call(1, 'setOpacity', parked, parked, 0),
+      call(2, 'showInactive', parked, parked)
+    ]
+    expect(overlaySurfaceChanges(events)).toEqual({
+      changes: 0,
+      reveals: 0,
+      parks: 0,
+      opacityBeforeTarget: 0,
+      slabBeforeResize: 0
+    })
   })
 
   it('accepts a reveal that sets bounds before opacity 1 and a park that fades before shrinking', () => {
@@ -895,7 +1175,13 @@ describe('overlay stability rows (OV, M2-0431)', () => {
       call(2, 'setOpacity', shown, sized, 0),
       call(2, 'setBounds', sized, parked)
     ]
-    expect(overlaySurfaceChanges(events)).toEqual({ changes: 4, reveals: 1, parks: 1, opacityBeforeTarget: 0, slabBeforeResize: 0 })
+    expect(overlaySurfaceChanges(events)).toEqual({
+      changes: 4,
+      reveals: 1,
+      parks: 1,
+      opacityBeforeTarget: 0,
+      slabBeforeResize: 0
+    })
   })
 
   it('flags opacity 1 while the window still has its parked size (the pre-M2-0431 hard cut)', () => {
@@ -909,9 +1195,18 @@ describe('overlay stability rows (OV, M2-0431)', () => {
     const settings = { x: 520, y: 25, width: 880, height: 800 }
     const openState = { bounds: settings, opacity: 1, visible: true }
     const barState = { bounds: bar, opacity: 1, visible: true }
-    const slabFirst = [call(1, 'setBackgroundColor', barState, barState, '#120022'), call(1, 'setBounds', barState, openState)]
-    const resizeFirst = [call(1, 'setBounds', barState, openState), call(1, 'setBackgroundColor', openState, openState, '#120022')]
-    const restFirst = [call(1, 'setBackgroundColor', openState, openState, '#00000000'), call(1, 'setBounds', openState, barState)]
+    const slabFirst = [
+      call(1, 'setBackgroundColor', barState, barState, '#120022'),
+      call(1, 'setBounds', barState, openState)
+    ]
+    const resizeFirst = [
+      call(1, 'setBounds', barState, openState),
+      call(1, 'setBackgroundColor', openState, openState, '#120022')
+    ]
+    const restFirst = [
+      call(1, 'setBackgroundColor', openState, openState, '#00000000'),
+      call(1, 'setBounds', openState, barState)
+    ]
     expect(overlaySurfaceChanges(slabFirst).slabBeforeResize).toBe(1)
     expect(overlaySurfaceChanges(resizeFirst).slabBeforeResize).toBe(0)
     expect(overlaySurfaceChanges(restFirst).slabBeforeResize).toBe(0)
@@ -1007,13 +1302,21 @@ describe('navigation view readiness', () => {
       reason: null
     })
     expect(
-      navigationViewReadiness({ ...historyReady, targetMeetingButtonEnabled: false }, { view: 'history', title: 'Smoke navigation alpha' })
+      navigationViewReadiness(
+        { ...historyReady, targetMeetingButtonEnabled: false },
+        { view: 'history', title: 'Smoke navigation alpha' }
+      )
     ).toEqual({ ready: false, reason: 'target history row was not interactive' })
     expect(navigationViewReadiness(reviewReady, { view: 'review', title: 'Smoke navigation beta' })).toEqual({
       ready: true,
       reason: null
     })
-    expect(navigationViewReadiness({ ...reviewReady, guardVisible: true }, { view: 'review', title: 'Smoke navigation beta' })).toEqual({
+    expect(
+      navigationViewReadiness(
+        { ...reviewReady, guardVisible: true },
+        { view: 'review', title: 'Smoke navigation beta' }
+      )
+    ).toEqual({
       ready: false,
       reason: 'navigation guard was still open'
     })
@@ -1029,7 +1332,11 @@ describe('navigation view readiness', () => {
     }
 
     await expect(
-      waitForNavigationView(page, { view: 'review', title: 'Smoke navigation beta' }, { timeoutMs: 5, pollMs: 1, wait: async () => undefined })
+      waitForNavigationView(
+        page,
+        { view: 'review', title: 'Smoke navigation beta' },
+        { timeoutMs: 5, pollMs: 1, wait: async () => undefined }
+      )
     ).rejects.toThrow(/review view was not reached: target review was not visible/)
   })
 
@@ -1068,7 +1375,11 @@ describe('navigation view readiness', () => {
       private rectCount: number
       style: { visibility: string; display: string }
 
-      constructor({ text = '', attrs = {}, visible = true }: { text?: string; attrs?: Record<string, string>; visible?: boolean }) {
+      constructor({
+        text = '',
+        attrs = {},
+        visible = true
+      }: { text?: string; attrs?: Record<string, string>; visible?: boolean }) {
         this.textContent = text
         this.attrs = new Map(Object.entries(attrs))
         this.rectCount = visible ? 1 : 0
@@ -1236,7 +1547,8 @@ describe('seedNavigationMeetings', () => {
           saveTranscript: async (payload: { title: string }) => {
             saves += 1
             events.push(`save:${payload.title}`)
-            if (saves === 1) throw new Error('Error invoking remote method \'transcript:save\': Error: Could not save the transcript.')
+            if (saves === 1)
+              throw new Error("Error invoking remote method 'transcript:save': Error: Could not save the transcript.")
             return { path: `/tmp/${payload.title}.md` }
           }
         }
@@ -1252,7 +1564,10 @@ describe('seedNavigationMeetings', () => {
       click: async () => events.push('history:click')
     }
     const page = {
-      evaluate: async (fn: (titles: ReturnType<typeof navigationMeetingTitles>) => Promise<unknown>, titles: ReturnType<typeof navigationMeetingTitles>) => fn(titles),
+      evaluate: async (
+        fn: (titles: ReturnType<typeof navigationMeetingTitles>) => Promise<unknown>,
+        titles: ReturnType<typeof navigationMeetingTitles>
+      ) => fn(titles),
       getByLabel: () => search,
       getByRole: () => history,
       waitForTimeout: async (ms: number) => events.push(`wait:${ms}`)
@@ -1300,7 +1615,9 @@ describe('buildWindowsShortcutLauncher', () => {
 
     expect(built.shortcutPath.replace(/\\/g, '/')).toMatch(/Metis-smoke\.lnk$/)
     expect(built.launcherPath.replace(/\\/g, '/')).toMatch(/Metis-smoke-launch\.cmd$/)
-    expect(built.launcherBody).toContain('set "ASKTOTO_USERDATA=C:\\Users\\runner\\AppData\\Local\\Temp\\metis-smoke-xyz"')
+    expect(built.launcherBody).toContain(
+      'set "ASKTOTO_USERDATA=C:\\Users\\runner\\AppData\\Local\\Temp\\metis-smoke-xyz"'
+    )
     expect(built.launcherBody).toContain('set "ASKTOTO_SMOKE_REOPEN_PROBE=1"')
     expect(built.launcherBody).toContain(`start "" ${JSON.stringify('C:\\Program Files\\Metis\\Metis.exe')}`)
     expect(built.shortcutScript).toContain('CreateShortcut')
@@ -1403,10 +1720,9 @@ describe('computeCleanupTargets', () => {
     // The install_root_busy path: the pre-launch check found these and refused to own them.
     const preExisting = { pid: 9, ppid: 1, startedMs: 1, exe: `${installRoot}/Contents/MacOS/Metis`, role: 'Metis' }
 
-    const targets = computeCleanupTargets(
-      { child: null, ownedAtQuit: null, mainPid: null, installRoot, platform },
-      [preExisting]
-    )
+    const targets = computeCleanupTargets({ child: null, ownedAtQuit: null, mainPid: null, installRoot, platform }, [
+      preExisting
+    ])
 
     expect(targets).toEqual([])
   })
@@ -1422,10 +1738,10 @@ describe('computeCleanupTargets', () => {
       role: 'unrelated-child'
     }
 
-    const targets = computeCleanupTargets(
-      { child, ownedAtQuit: [], mainPid: 100, installRoot, platform },
-      [recycled, recycledChild]
-    )
+    const targets = computeCleanupTargets({ child, ownedAtQuit: [], mainPid: 100, installRoot, platform }, [
+      recycled,
+      recycledChild
+    ])
 
     expect(targets).toEqual([])
   })
@@ -1435,10 +1751,10 @@ describe('computeCleanupTargets', () => {
     const main = { pid: 100, ppid: 1, startedMs: 1000, exe: `${installRoot}/Contents/MacOS/Metis`, role: 'Metis' }
     const helper = { pid: 101, ppid: 100, startedMs: 1001, exe: '/opt/elsewhere/helper', role: 'helper' }
 
-    const targets = computeCleanupTargets(
-      { child, ownedAtQuit: [main], mainPid: 100, installRoot, platform },
-      [main, helper]
-    )
+    const targets = computeCleanupTargets({ child, ownedAtQuit: [main], mainPid: 100, installRoot, platform }, [
+      main,
+      helper
+    ])
 
     expect(targets.map((t) => t.pid).sort((a, b) => a - b)).toEqual([100, 101])
   })
@@ -1475,11 +1791,9 @@ describe('bootLaunchActivateVerdict', () => {
   })
 
   it('reports every defect at once', () => {
-    expect(bootLaunchActivateVerdict({ ...passing, activateReveals: 2, parked: false, settingsOpened: true }).failures).toEqual([
-      'activate_reveal_during_boot',
-      'not_parked_after_boot',
-      'settings_opened_on_boot'
-    ])
+    expect(
+      bootLaunchActivateVerdict({ ...passing, activateReveals: 2, parked: false, settingsOpened: true }).failures
+    ).toEqual(['activate_reveal_during_boot', 'not_parked_after_boot', 'settings_opened_on_boot'])
   })
 
   it('is PRECONDITION, never PASS, when the env or CDP port could not be delivered', () => {
@@ -1513,7 +1827,8 @@ describe('pinnedBridgeCall (M2-0519)', () => {
     try {
       const call = pinnedBridgeCall(['toggle', ['a', 1]])
       expect(seen).toEqual([['a', 1]])
-      expect([...(scope.__metisSmokeBridgePending ?? [])]).toEqual([bridged])
+      await Promise.resolve()
+      expect([...(scope.__metisSmokeBridgePending ?? [])]).toEqual([call, bridged])
       settle({ visible: true })
       await expect(call).resolves.toBeUndefined()
       expect(scope.__metisSmokeBridgePending?.size).toBe(0)
@@ -1526,7 +1841,9 @@ describe('pinnedBridgeCall (M2-0519)', () => {
   it('rejects with the bridge call’s error and still releases it', async () => {
     bridgeWith(() => Promise.reject(new Error('no window')))
     try {
-      await expect(pinnedBridgeCall(['toggle', []])).rejects.toThrow('no window')
+      const call = pinnedBridgeCall(['toggle', []])
+      expect(scope.__metisSmokeBridgePending?.has(call)).toBe(true)
+      await expect(call).rejects.toThrow('no window')
       expect(scope.__metisSmokeBridgePending?.size).toBe(0)
     } finally {
       Object.defineProperty(globalThis, 'window', { configurable: true, value: undefined })

@@ -9,6 +9,8 @@
 import type { OverlayLayout } from '@shared/overlay-chrome'
 import { overlayUsesHover } from '@shared/overlay-chrome'
 import type { OverlayPlacement } from '@shared/overlay-placement'
+import { pointInRegion } from '@shared/right-edge-geometry'
+import { RE_REVEAL_DWELL_MS, RE_UNHOVERED_REVEAL_GRACE_MS } from '@shared/right-edge-timing'
 import { HOVER_ISLAND_HEIGHT_MAX_PX, type Rect } from './geometry'
 
 /** Cap leftover 44px slabs so Teams mute at Y=40 still misses. Top edge only: the right-edge reveal band
@@ -47,7 +49,7 @@ export function overlayWatchNeedsRestore(input: {
 /** Poll while hide/island is resting. 16–32ms — one frame-ish, no Accessibility tap. */
 export const CURSOR_WATCH_INTERVAL_MS = 24
 /** Same 150ms intentional-hover threshold as the renderer peek. Native polling must dwell too. Right-edge band. */
-export const CURSOR_REVEAL_DWELL_MS = 150
+export const CURSOR_REVEAL_DWELL_MS = RE_REVEAL_DWELL_MS
 /** OD-23: the top-center notch zone sits under the menu bar the pointer crosses all day, so it needs a
  *  longer rest than the right-edge band before it opens the bar. */
 export const TOP_CENTER_REVEAL_DWELL_MS = 250
@@ -70,7 +72,7 @@ export const OVERLAY_LEAVE_PARK_MS = 800
  * the band and the drawer this long, main reports a leave; the page then applies its own grace and keeps
  * the dock open while a draft or notice forces it.
  */
-export const RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS = 3000
+export const RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS = RE_UNHOVERED_REVEAL_GRACE_MS
 
 /**
  * Revealed Hide/Island + cursor outside the bar and the top-edge strip → park,
@@ -111,6 +113,7 @@ export function overlayWatchStep(input: {
   hugStub?: boolean
   placement?: OverlayPlacement
   heldCursor?: { x: number; y: number } | null
+  holdRegion?: readonly Rect[]
 }): { action: OverlayWatchAction; osHoverSeen: boolean } {
   const revealed = overlayWatchTreatAsRevealed(input.islandResting, input.windowVisible)
   const measured = decideCursorWatch({
@@ -118,7 +121,8 @@ export function overlayWatchStep(input: {
     restRect: input.restRect,
     revealedRect: input.revealedRect,
     revealed,
-    placement: input.placement
+    placement: input.placement,
+    holdRegion: input.holdRegion
   })
   const held =
     measured === 'hide' &&
@@ -146,19 +150,16 @@ export function overlayWatchStep(input: {
     // Revealed + 'stay' means the OS cursor is in the strip or on the bar: latch it.
     return { action: 'stay', osHoverSeen: input.osHoverSeen || revealed }
   }
-  if (!overlayWatchShouldParkOnLeave({ decision, islandResting: input.islandResting, osHoverSeen: input.osHoverSeen })) {
+  if (
+    !overlayWatchShouldParkOnLeave({ decision, islandResting: input.islandResting, osHoverSeen: input.osHoverSeen })
+  ) {
     return { action: 'leave-ignored', osHoverSeen: input.osHoverSeen }
   }
   return { action: 'park', osHoverSeen: false }
 }
 
 export function pointInRect(point: { x: number; y: number }, rect: Rect): boolean {
-  return (
-    point.x >= rect.x &&
-    point.x < rect.x + rect.width &&
-    point.y >= rect.y &&
-    point.y < rect.y + rect.height
-  )
+  return point.x >= rect.x && point.x < rect.x + rect.width && point.y >= rect.y && point.y < rect.y + rect.height
 }
 
 export function inflateRect(rect: Rect, pad: number): Rect {
@@ -175,6 +176,8 @@ export function inflateRect(rect: Rect, pad: number): Rect {
  * Revealed: stay if the cursor is still in that zone OR the inflated bar.
  * Hide only when it is in neither. macOS clamps the bar to workArea.y (~39);
  * a cursor on the top edge (Y≈12) must not oscillate hide/reveal.
+ * `holdRegion` (right edge, already grown by the grace) replaces both while revealed: it is the authority's
+ * holdRegion, which contains the band and the open rect widened to the edge.
  */
 export function decideCursorWatch(input: {
   cursor: { x: number; y: number }
@@ -183,11 +186,13 @@ export function decideCursorWatch(input: {
   revealed: boolean
   gracePx?: number
   placement?: OverlayPlacement
+  holdRegion?: readonly Rect[]
 }): CursorWatchDecision {
   const restRect = input.placement === 'right-edge' ? input.restRect : clampHoverRestRect(input.restRect)
   if (!input.revealed) {
     return pointInRect(input.cursor, restRect) ? 'reveal' : 'stay'
   }
+  if (input.holdRegion) return pointInRegion(input.cursor, input.holdRegion) ? 'stay' : 'hide'
   const leave = inflateRect(input.revealedRect, input.gracePx ?? CURSOR_LEAVE_GRACE_PX)
   if (pointInRect(input.cursor, restRect) || pointInRect(input.cursor, leave)) return 'stay'
   return 'hide'
