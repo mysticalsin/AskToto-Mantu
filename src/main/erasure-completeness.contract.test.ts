@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { sourceIndexOf } from '../../scripts/lib/source-layout'
 
 /**
  * Erasure completeness — "Delete all Metis data" is a GDPR right-to-erasure promise ("This permanently
@@ -19,9 +20,9 @@ const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 /** Slice the source from `from` up to (excluding) the next occurrence of `to`. Sliced inside each test so
  *  one drifted marker reports as its own failure instead of aborting collection for the whole file. */
 function sliceBetween(from: string, to: string): string {
-  const start = indexSrc.indexOf(from)
+  const start = sourceIndexOf(indexSrc, from)
   expect(start, `marker not found: ${from}`).toBeGreaterThan(-1)
-  const end = indexSrc.indexOf(to, start)
+  const end = sourceIndexOf(indexSrc, to, start + 1)
   expect(end, `end marker not found after ${from}: ${to}`).toBeGreaterThan(-1)
   return indexSrc.slice(start, end)
 }
@@ -70,7 +71,9 @@ describe('MQA-170 — the graph purge covers the runner directory and only audit
     // purgeGraphIfEncryptedAndStale runs on EVERY settingsGet poll and at boot: auditing unconditionally
     // once the predicate widens past graph.html would write a graph.purged record forever.
     const fn = sliceBetween('function purgeGraphIfEncryptedAndStale', 'let lastAppliedManagedSnapshot')
-    expect(fn).toMatch(/if \(getSettings\(\)\.encryptTranscripts && purgeGraphArtifacts\(\)\) auditLog\('graph\.purged'/)
+    expect(fn).toMatch(
+      /if \(getSettings\(\)\.encryptTranscripts && purgeGraphArtifacts\(\)\) auditLog\('graph\.purged'/
+    )
     expect(fn).not.toMatch(/graphHtml\(\)/)
   })
 

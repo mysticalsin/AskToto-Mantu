@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { sourceIndexOf } from '../../scripts/lib/source-layout'
 
 /**
  * Source-contract tests for how the background screen pre-analysis engine is WIRED (MQA-178, MQA-179).
@@ -18,9 +19,9 @@ const settingsSrc = readFileSync(
 /** Slice the source from `from` up to (excluding) the next occurrence of `to`. Sliced inside each test so
  *  one drifted marker reports as its own failure instead of aborting collection for the whole file. */
 function sliceBetween(src: string, from: string, to: string): string {
-  const start = src.indexOf(from)
+  const start = sourceIndexOf(src, from)
   expect(start, `marker not found: ${from}`).toBeGreaterThan(-1)
-  const end = src.indexOf(to, start)
+  const end = sourceIndexOf(src, to, start + 1)
   expect(end, `end marker not found after ${from}: ${to}`).toBeGreaterThan(-1)
   return src.slice(start, end)
 }
@@ -42,7 +43,9 @@ describe('MQA-178 — the engine is armed at boot, not only when some other sett
       "bootWork.run('provisionLocalModel', () => provisionLocalModel(getSettings().localLlm, getAllowedProviders(), ensureLocalModel)",
       'app.setAppUserModelId'
     )
-    expect(download).toMatch(/\.then\(\(ready\) => \{\s*if \(!ready\) return\s*refreshScreenPreprocess\(\)\s*void runAsMaintenance\(warmLocalIfReady\)/)
+    expect(download).toMatch(
+      /\.then\(\(ready\) => \{\s*if \(!ready\) return\s*refreshScreenPreprocess\(\)\s*void runAsMaintenance\(warmLocalIfReady\)/
+    )
   })
 })
 
@@ -52,11 +55,7 @@ describe('MQA-209 — arming at boot must not raise the macOS Screen Recording p
     // system dialog (captureScreenshotOnce lets `not-determined` through on purpose), so the boot
     // reconcile MQA-178 added would pop an unexplained prompt ~6s after launch. Off darwin the dep
     // stays undefined: Windows has no queryable screen grant and its capture raises no prompt.
-    const deps = sliceBetween(
-      indexSrc,
-      'createScreenPreprocess({',
-      'function refreshScreenPreprocess'
-    )
+    const deps = sliceBetween(indexSrc, 'createScreenPreprocess({', 'function refreshScreenPreprocess')
     expect(deps).toMatch(/screenCaptureGranted:[\s\S]{0,80}process\.platform === 'darwin'/)
     expect(deps).toContain("getMediaAccessStatus('screen') === 'granted'")
   })
@@ -64,11 +63,7 @@ describe('MQA-209 — arming at boot must not raise the macOS Screen Recording p
   it('MQA-209 — the "not running" copy no longer blames the window signal on macOS', () => {
     // The gate adds a SECOND way to be off on a Mac (no Screen Recording grant), and the existing copy
     // asserted the other one as fact. Same rule as MQA-179: never describe a state the engine isn't in.
-    const toggle = sliceBetween(
-      settingsSrc,
-      'label="Preload screen context (on-device)"',
-      '</Section>'
-    )
+    const toggle = sliceBetween(settingsSrc, 'label="Preload screen context (on-device)"', '</Section>')
     expect(toggle).toContain('Screen Recording')
     expect(toggle).toMatch(/isWindows[\s\S]{0,400}can't tell when you switch windows/)
   })
@@ -100,22 +95,14 @@ describe('MQA-179 — Settings reads the engine’s own gate, not a second expre
   it('MQA-179 — the toggle copy no longer claims the on-device MODEL does the reading', () => {
     // On macOS the reader can be the Vision OCR helper with no local model at all, so "with the on-device
     // model" is false in exactly the state this fix makes reachable.
-    const toggle = sliceBetween(
-      settingsSrc,
-      'label="Preload screen context (on-device)"',
-      '</Section>'
-    )
+    const toggle = sliceBetween(settingsSrc, 'label="Preload screen context (on-device)"', '</Section>')
     expect(toggle).not.toContain('on-device model')
   })
 
   it('MQA-179 — the "not running" copy distinguishes no-local-AI from a dead window signal', () => {
     // backgroundScreenReady is now false for two different reasons; telling a user with Local AI already
     // on to "Enable Local AI" would just be the opposite lie.
-    const toggle = sliceBetween(
-      settingsSrc,
-      'label="Preload screen context (on-device)"',
-      '</Section>'
-    )
+    const toggle = sliceBetween(settingsSrc, 'label="Preload screen context (on-device)"', '</Section>')
     expect(toggle).toContain('settings.localReady')
   })
 })

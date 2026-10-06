@@ -17,7 +17,7 @@ const TEST_FILE = '\\.(test|spec)\\.tsx?$'
 const ENTRY_POINTS = [
   '^src/main/(index|parakeet-asr-host|parakeet-extract-host|speaker-embedding-host|whisper-asr-host)\\.ts$',
   '^src/preload/(index|intelligence|import-decoder)\\.ts$',
-  '^src/renderer/src/(main\\.tsx|import-decoder\\.ts)$',
+  '^src/renderer/src/(main\\.tsx|import-decoder\\.ts|design-capture/main\\.tsx)$',
   '^src/renderer/src/lib/whisper\\.worker\\.ts$',
 ]
 

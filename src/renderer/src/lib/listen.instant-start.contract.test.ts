@@ -13,14 +13,15 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { sourceIndexOf } from '../../../../scripts/lib/source-layout'
 
 const SRC = readFileSync(join(__dirname, 'listen.ts'), 'utf8').replace(/\r\n/g, '\n')
 const APP = readFileSync(join(__dirname, '..', 'App.tsx'), 'utf8').replace(/\r\n/g, '\n')
 
 function blockBetween(src: string, from: string, to: string): string {
-  const start = src.indexOf(from)
+  const start = sourceIndexOf(src, from)
   expect(start, `marker not found: ${from}`).toBeGreaterThan(-1)
-  const end = src.indexOf(to, start)
+  const end = sourceIndexOf(src, to, start + 1)
   expect(end, `end marker not found after ${from}: ${to}`).toBeGreaterThan(-1)
   return src.slice(start, end)
 }
@@ -34,8 +35,12 @@ function codeOnly(s: string): string {
 }
 
 const startBody = codeOnly(blockBetween(SRC, 'const start = useCallback(', 'const closeChannel = useCallback'))
-const prewarm = codeOnly(blockBetween(SRC, '// MQA-285: once Settings has resolved', '// Mid-session spoken-language change'))
-const finishTeardown = codeOnly(blockBetween(SRC, 'const finishTeardown = (): void => {', 'const waitForDrain = (): void => {'))
+const prewarm = codeOnly(
+  blockBetween(SRC, '// MQA-285: once Settings has resolved', '// Mid-session spoken-language change')
+)
+const finishTeardown = codeOnly(
+  blockBetween(SRC, 'const finishTeardown = (): void => {', 'const waitForDrain = (): void => {')
+)
 const endReview = codeOnly(blockBetween(APP, 'const endReview = useCallback(', 'const toggleListen = useCallback('))
 
 describe('MQA-285 — same-turn capture: acquireMic before any await in start()', () => {
@@ -131,7 +136,6 @@ describe('enterprise-live cloud STT language (FR Listen)', () => {
     expect(SRC).toMatch(/export function cloudSttLanguageForListen/)
   })
 })
-
 
 describe('enterprise-live cloud engine path', () => {
   it('starts a cloud engine branch without booting Whisper/Parakeet', () => {

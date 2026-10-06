@@ -21,6 +21,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
+import { sourceIndexOf, sourceSnippet } from '../../../scripts/lib/source-layout'
 
 const source = readFileSync(join(__dirname, 'App.tsx'), 'utf8')
 
@@ -28,7 +29,7 @@ const source = readFileSync(join(__dirname, 'App.tsx'), 'utf8')
 // (e.g. "" for a bare call, or "'suggest'" for a scoped one). Throws loudly if the anchor or the call
 // itself has gone missing, so a rename shows up as a broken test rather than a silently-skipped one.
 function requireProviderArgAfter(anchor: string): string {
-  const idx = source.indexOf(anchor)
+  const idx = sourceIndexOf(source, anchor)
   if (idx === -1) throw new Error(`App.local-gates.test.ts anchor not found (source moved?): ${anchor}`)
   const rest = source.slice(idx)
   const m = rest.match(/requireProvider\(([^)]*)\)/)
@@ -40,8 +41,8 @@ describe('No-Decision Honk gate (H2)', () => {
   // Isolate the effect body that actually fires the honk: from the introducing comment to the closing
   // of its useEffect. `}, [listen.lines])` is unique in the file (the honk's transcript-driven re-fire
   // is the only effect keyed on exactly that dependency array), so it's a stable end anchor.
-  const honkStart = source.indexOf('// No-Decision Honk')
-  const honkEnd = source.indexOf('}, [listen.lines])', honkStart)
+  const honkStart = sourceIndexOf(source, '// No-Decision Honk')
+  const honkEnd = sourceIndexOf(source, '}, [listen.lines])', honkStart)
 
   it('anchors are present (source has not drifted out from under this test)', () => {
     expect(honkStart).toBeGreaterThan(-1)
@@ -89,10 +90,13 @@ describe('requireProvider(local?) call-site contract (H1)', () => {
     expect(requireProviderArgAfter('const answerNow = useCallback(')).toBe("'suggest'")
   })
 
-  it("onQuickAction's summarize branch always fires ask.run({ mode: 'summary' }) on its only non-screen, " +
-      "non-error path -> requireProvider('summary')", () => {
-    expect(requireProviderArgAfter("kind === 'summarize'")).toBe("'summary'")
-  })
+  it(
+    "onQuickAction's summarize branch always fires ask.run({ mode: 'summary' }) on its only non-screen, " +
+      "non-error path -> requireProvider('summary')",
+    () => {
+      expect(requireProviderArgAfter("kind === 'summarize'")).toBe("'summary'")
+    }
+  )
 
   it('assist can fall through to suggest.run({ mode: "answer" }) (capture failure / screenAsk off) -> stays bare', () => {
     expect(requireProviderArgAfter('const assist = useCallback(')).toBe('')
@@ -117,15 +121,15 @@ describe('requireProvider(local?) call-site contract (H1)', () => {
     expect(source).toMatch(/route\.transport === 'text' && !requireProvider\(\)/)
   })
 
-  it("onQuickAction's explain branch only ever fires mode \"answer\" directly -> stays bare", () => {
+  it('onQuickAction\'s explain branch only ever fires mode "answer" directly -> stays bare', () => {
     expect(requireProviderArgAfter("kind === 'explain'")).toBe('')
   })
 
-  it('onGenerateRecap fires generateSavedRecap (local-capable summary) -> requireProvider(\'summary\')', () => {
+  it("onGenerateRecap fires generateSavedRecap (local-capable summary) -> requireProvider('summary')", () => {
     expect(requireProviderArgAfter('onGenerateRecap=')).toBe("'summary'")
   })
 
-  it('onRetryRecap fires generateSavedRecap (local-capable summary) -> requireProvider(\'summary\')', () => {
+  it("onRetryRecap fires generateSavedRecap (local-capable summary) -> requireProvider('summary')", () => {
     expect(requireProviderArgAfter('onRetryRecap=')).toBe("'summary'")
   })
 })
@@ -158,7 +162,7 @@ describe('QuickActions and gate reachability for a zero-API-key install', () => 
   it('the safety net enables EVERY chip, unconditioned on kind', () => {
     // Fact-check and Explain fire answer mode, which the floor serves. Leaving them dim on a local-only
     // install refused a request main would have taken, and the tooltip told the user to go get a key.
-    expect(qaSrc).toMatch(/const localServes =\s*\n\s*localFallbackReady \|\|/)
+    expect(qaSrc).toMatch(sourceSnippet('const localServes = localFallbackReady ||'))
   })
 
   it('the per-task flags stay narrow — only the two in-scope chips', () => {
@@ -177,7 +181,7 @@ describe('QuickActions and gate reachability for a zero-API-key install', () => 
   })
 
   it('requireProvider still honours each per-task useFor toggle', () => {
-    expect(appSrc).toMatch(/local === 'suggest'\s*\n\s*\? settings\?\.localSuggestReady/)
+    expect(appSrc).toMatch(sourceSnippet("local === 'suggest' ? settings?.localSuggestReady"))
     expect(appSrc).toMatch(/\? settings\?\.localSummaryReady/)
     expect(appSrc).toMatch(/\? settings\?\.localVisionReady/)
   })
@@ -185,16 +189,16 @@ describe('QuickActions and gate reachability for a zero-API-key install', () => 
   it('the "add an API key" CTA is suppressed once the on-device model can answer', () => {
     // Not cosmetic: this banner is the app's own statement that it is not yet usable. Showing it to a
     // user whose local model answers every question is the app contradicting itself.
-    expect(appSrc).toMatch(/!settings\.providerReady && !settings\.localFallbackReady && !nudgeExpired/)
+    expect(appSrc).toMatch(/!settings\.providerReady &&\s*!settings\.localFallbackReady &&\s*!nudgeExpired/)
   })
 })
 
 // Returns the source between two anchors (end exclusive), throwing loudly if either anchor has gone
 // missing so a rename/reorder shows up as a broken test rather than a silently-skipped one.
 function blockBetween(startAnchor: string, endAnchor: string): string {
-  const start = source.indexOf(startAnchor)
+  const start = sourceIndexOf(source, startAnchor)
   if (start === -1) throw new Error(`App.local-gates.test.ts anchor not found (source moved?): ${startAnchor}`)
-  const end = source.indexOf(endAnchor, start)
+  const end = sourceIndexOf(source, endAnchor, start + 1)
   if (end === -1) throw new Error(`App.local-gates.test.ts end anchor not found after start: ${endAnchor}`)
   return source.slice(start, end)
 }
@@ -208,7 +212,10 @@ describe('CRITICAL: follow-up draft cross-meeting leak (finding 6)', () => {
   // generated for meeting A can render/send as meeting B's follow-up.
   const startListenBlock = blockBetween('const startListen = useCallback(', 'const endReview = useCallback(')
   const resetBlock = blockBetween('const reset = useCallback(', 'const discardMeeting = useCallback(')
-  const openPastMeetingBlock = blockBetween('const openPastMeeting = useCallback(', 'const resumePastMeeting = useCallback(')
+  const openPastMeetingBlock = blockBetween(
+    'const openPastMeeting = useCallback(',
+    'const resumePastMeeting = useCallback('
+  )
 
   it('startListen (New meeting / toggle-listen / resume) clears followup', () => {
     expect(startListenBlock).toMatch(/followup\.clear\(\)/)
@@ -224,7 +231,10 @@ describe('CRITICAL: follow-up draft cross-meeting leak (finding 6)', () => {
 })
 
 describe('Disregard-vs-autosave race (finding 7)', () => {
-  const autosaveBlock = blockBetween('// auto-save the meeting to the OneDrive folder', '// record a completed Ask turn')
+  const autosaveBlock = blockBetween(
+    '// auto-save the meeting to the OneDrive folder',
+    '// record a completed Ask turn'
+  )
   const discardBlock = blockBetween('const discardMeeting = useCallback(', 'const clearAnswer = useCallback(')
   const startListenBlock = blockBetween('const startListen = useCallback(', 'const endReview = useCallback(')
 
@@ -241,7 +251,7 @@ describe('Disregard-vs-autosave race (finding 7)', () => {
     expect(discardBlock).toMatch(/savingPromiseRef\.current \? await savingPromiseRef\.current : null/)
   })
 
-  it('startListen resets savingPromiseRef so a prior meeting\'s settled promise can never leak into the next', () => {
+  it("startListen resets savingPromiseRef so a prior meeting's settled promise can never leak into the next", () => {
     expect(startListenBlock).toMatch(/savingPromiseRef\.current = null/)
   })
 })
@@ -269,20 +279,20 @@ describe('Fact-check leftover-transcript fallthrough (finding 2)', () => {
   })
 })
 
-describe('Summarize screen-route mirrors askScreen\'s actual vision gate (finding 3)', () => {
+describe("Summarize screen-route mirrors askScreen's actual vision gate (finding 3)", () => {
   // requireProviderArgAfter('summarize') anchors on the literal "kind === 'summarize'" text — reuse the
   // same anchor here, sliced up to the route computation, to isolate ONLY the summarize branch's
   // canUseScreen (explain's own separate canUseScreen, asserted below, must keep the broader flag).
-  const summarizeIdx = source.indexOf("kind === 'summarize'")
+  const summarizeIdx = sourceIndexOf(source, "kind === 'summarize'")
   // canUseScreen here is now a multi-line Boolean(...), so grab the whole block up to the route decision.
   const summarizeCanUseScreenBlock = source.slice(
     summarizeIdx,
-    source.indexOf('const route = chooseQuickActionRoute', summarizeIdx)
+    sourceIndexOf(source, 'const route = chooseQuickActionRoute', summarizeIdx)
   )
 
-  const explainIdx = source.indexOf("kind === 'explain'")
+  const explainIdx = sourceIndexOf(source, "kind === 'explain'")
   const explainCanUseScreenLine = source
-    .slice(explainIdx, source.indexOf('const route = chooseQuickActionRoute', explainIdx))
+    .slice(explainIdx, sourceIndexOf(source, 'const route = chooseQuickActionRoute', explainIdx))
     .split('\n')
     .find((l) => l.includes('const canUseScreen'))
 
@@ -293,24 +303,23 @@ describe('Summarize screen-route mirrors askScreen\'s actual vision gate (findin
     expect(summarizeCanUseScreenBlock).toMatch(
       /settings\?\.providerReady \|\| settings\?\.localVisionReady \|\| settings\?\.localFallbackReady/
     )
-    expect(summarizeCanUseScreenBlock).not.toMatch(/canUseScreen = Boolean\(\(settings\?\.screenAsk \?\? true\) && settings\?\.visionAvailable/)
+    expect(summarizeCanUseScreenBlock).not.toMatch(
+      /canUseScreen = Boolean\(\(settings\?\.screenAsk \?\? true\) && settings\?\.visionAvailable/
+    )
   })
 
-  it('explain\'s canUseScreen is untouched (still the broader settings.visionAvailable)', () => {
+  it("explain's canUseScreen is untouched (still the broader settings.visionAvailable)", () => {
     expect(explainCanUseScreenLine).toMatch(/settings\?\.visionAvailable/)
   })
 
   it('keeps the local screen-summary prompt on the base tier without transcript-driven escalation', () => {
-    const summarizeBlock = source.slice(summarizeIdx, source.indexOf("kind === 'summarize'", summarizeIdx + 1))
+    const summarizeBlock = source.slice(summarizeIdx, sourceIndexOf(source, "kind === 'summarize'", summarizeIdx + 1))
     expect(summarizeBlock).toMatch(/settings\?\.localVisionReady\s*\?\s*LOCAL_SCREEN_SUMMARY_PROMPT/)
   })
 })
 
 describe('Speculative (showSpec) suggestion stays until click or a new question (finding 4)', () => {
-  const machineryBlock = blockBetween(
-    '// Instant-suggestion machinery',
-    'const whatNext = useCallback('
-  )
+  const machineryBlock = blockBetween('// Instant-suggestion machinery', 'const whatNext = useCallback(')
 
   it('does not arm a TTL or max-age timer on showSpec or suggest.answer', () => {
     expect(source).not.toMatch(/SUGGESTION_TTL_MS/)
@@ -338,7 +347,10 @@ describe('Retry button hidden when nothing is retryable (finding 1)', () => {
 })
 
 describe('openPastMeeting surfaces recallRead failures instead of a silent dead-end (finding 5)', () => {
-  const openPastMeetingBlock = blockBetween('const openPastMeeting = useCallback(', 'const resumePastMeeting = useCallback(')
+  const openPastMeetingBlock = blockBetween(
+    'const openPastMeeting = useCallback(',
+    'const resumePastMeeting = useCallback('
+  )
 
   it('a failed recallRead sets a visible error instead of bare-returning', () => {
     expect(openPastMeetingBlock).toMatch(/if \(!r\.ok\) \{/)
