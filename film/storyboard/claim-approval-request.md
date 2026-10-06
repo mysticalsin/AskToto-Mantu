@@ -14,7 +14,7 @@ Approval to publish the launch film with the claims below. The register keeps `r
 | CL-01 | LF-03 Overlay appears | Concept | Register design record | Concept UI sequence |
 | CL-02 | LF-04 Live capture and notes | Reconstruction | Register design record | Reconstruction |
 | CL-03 | LF-05 Hindsight memory recall | Concept | Register design record | Concept memory sequence |
-| CL-06 | LF-06 Toolchain proof card | Concept render-path proof | Toolchain spike record | Concept UI sequence |
+| CL-06 | S05 Toolchain proof card | Render-path proof only | Toolchain spike record | Render-path proof only |
 
 LF-07 (platform availability) is cut. It returns only with signed release evidence for each platform.
 
