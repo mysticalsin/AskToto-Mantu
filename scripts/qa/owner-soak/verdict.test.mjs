@@ -5,7 +5,17 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { evaluateSoak, longestActiveRun, soakRecordContent, soakRecordProblems, verdictFor } from './verdict.mjs'
+import {
+  evaluateHistory,
+  evaluateSoak,
+  historyRecordContent,
+  historyRecordProblems,
+  longestActiveRun,
+  HISTORY_RECORD_FILE,
+  soakRecordContent,
+  soakRecordProblems,
+  verdictFor
+} from './verdict.mjs'
 
 const CLI = fileURLToPath(new URL('./verdict.mjs', import.meta.url))
 
@@ -43,6 +53,60 @@ function summary({ days = daysFrom(FIVE), soak = {}, version = '1.9.7', window =
     },
     ...rest
   }
+}
+
+const timing = (p95) => ({ count: 3, p50: p95 / 2, p95, max: p95 })
+function historySummary({ version = '1.9.9', window = {}, history = {}, notDownloaded = {}, days = daysFrom(FIVE) } = {}) {
+  return summary({
+    version,
+    window,
+    days,
+    scope: {
+      version,
+      from: '2026-10-01T06:00:00.000Z',
+      to: '2026-10-05T20:00:00.000Z',
+      records: 200,
+      daySpan: 5,
+      idleDays: 0,
+      days,
+      soak: {
+        stallsOver5s: 0,
+        uncleanShutdowns: 0,
+        orphanReaps: { registry: 0, 'legacy-orphan': 0, afterUncleanExit: 0 },
+        revealNoOps: 0,
+        brainIndexQuarantined: 0
+      },
+      history: {
+        status: 'present',
+        requests: 5,
+        served: 5,
+        outcomes: { ok: 5, failed: 0, discarded: 0 },
+        unsettledServed: { count: 0, share: 0 },
+        timings: {
+          queueMs: timing(40),
+          mainMs: timing(200),
+          ipcMs: timing(80),
+          renderMs: timing(300),
+          totalMs: timing(620)
+        },
+        notDownloaded: {
+          status: 'present',
+          requests: 3,
+          served: 3,
+          outcomes: { ok: 3, failed: 0, discarded: 0 },
+          timings: {
+            queueMs: timing(50),
+            mainMs: timing(250),
+            ipcMs: timing(90),
+            renderMs: timing(350),
+            totalMs: timing(740)
+          },
+          ...notDownloaded
+        },
+        ...history
+      }
+    }
+  })
 }
 
 test('V1 a clean five-day soak proceeds and writes a record the checker accepts', () => {
@@ -154,4 +218,86 @@ test('V11 the CLI writes the record for an eligible summary, exits 1 for an inel
   assert.equal(bad.status, 1)
   assert.match(bad.stderr, /app\.version/)
   assert.equal(spawnSync(process.execPath, [CLI], { encoding: 'utf8' }).status, 2)
+})
+
+test('H1 History mode accepts a complete rotated summary and writes a content-free record', () => {
+  const result = evaluateHistory(historySummary({ window: { generations: 4 } }))
+  assert.deepEqual(result.problems, [])
+  assert.equal(result.verdict, 'PASS')
+  assert.equal(result.notDownloadedServed, 3)
+  const content = historyRecordContent({ result, buildSha256: 'a'.repeat(64) })
+  assert.deepEqual(historyRecordProblems(content), [])
+  assert.match(content, /^environment_host: owner-mac$/m)
+  assert.match(content, /^build_sha256: a{64}$/m)
+  assert.match(content, /^lead_action: file_m2_0067_record_from_artifact$/m)
+})
+
+test('H2 History mode requires version 1.9.9 or later and a complete audit read', () => {
+  assert.match(evaluateHistory(historySummary({ version: '1.9.8' })).problems.join('\n'), /1\.9\.9 or later/)
+  assert.match(evaluateHistory(historySummary({ window: { truncated: true } })).problems.join('\n'), /audit read must be complete/)
+})
+
+test('H3 History mode rejects a day window with no History block without breaking soak mode', () => {
+  const noHistory = historySummary({ history: { status: 'empty', requests: 0 } })
+  delete noHistory.scope.history.notDownloaded
+  assert.match(evaluateHistory(noHistory).problems.join('\n'), /scope\.history/)
+  assert.equal(evaluateSoak(summary()).verdict, 'PROCEED')
+})
+
+test('H4 History mode rejects a window with no not-downloaded rows', () => {
+  const result = evaluateHistory(historySummary({
+    notDownloaded: {
+      status: 'empty',
+      requests: 0,
+      served: 0,
+      outcomes: { ok: 0, failed: 0, discarded: 0 },
+      timings: {
+        queueMs: { count: 0, p50: null, p95: null, max: null },
+        mainMs: { count: 0, p50: null, p95: null, max: null },
+        ipcMs: { count: 0, p50: null, p95: null, max: null },
+        renderMs: { count: 0, p50: null, p95: null, max: null },
+        totalMs: { count: 0, p50: null, p95: null, max: null }
+      }
+    }
+  }))
+  assert.match(result.problems.join('\n'), /notDownloaded\.served/)
+})
+
+test('H4b History mode rejects a dispatch minimum below the pre-registered default', () => {
+  assert.match(evaluateHistory(historySummary(), { minNotDownloadedRequests: 2 }).problems.join('\n'), /at least 3/)
+  assert.deepEqual(evaluateHistory(historySummary(), { minNotDownloadedRequests: 3 }).problems, [])
+})
+
+test('H5 History mode holds when a not-downloaded p95 exceeds the pre-registered limit', () => {
+  const result = evaluateHistory(historySummary({
+    notDownloaded: {
+      timings: {
+        queueMs: timing(50),
+        mainMs: timing(250),
+        ipcMs: timing(90),
+        renderMs: timing(350),
+        totalMs: timing(3000)
+      }
+    }
+  }))
+  assert.equal(result.verdict, 'HOLD')
+  assert.deepEqual(result.overLimit, ['total_ms'])
+})
+
+test('H6 the CLI history mode writes its record and requires a build sha256', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'owner-history-'))
+  const okPath = join(dir, 'history.json')
+  writeFileSync(okPath, JSON.stringify(historySummary()))
+  const sha = 'b'.repeat(64)
+
+  const output = execFileSync(process.execPath, [
+    CLI, '--mode', 'history', '--summary', okPath, '--out', join(dir, 'out'), '--build-sha256', sha
+  ], { encoding: 'utf8' })
+  assert.match(output, /owner history: PASS \(3 not-downloaded served requests\)/)
+  const record = readFileSync(join(dir, 'out', HISTORY_RECORD_FILE), 'utf8')
+  assert.deepEqual(historyRecordProblems(record), [])
+
+  const missingSha = spawnSync(process.execPath, [CLI, '--mode', 'history', '--summary', okPath], { encoding: 'utf8' })
+  assert.equal(missingSha.status, 2)
+  assert.match(missingSha.stderr, /build-sha256/)
 })

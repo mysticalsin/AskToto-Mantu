@@ -76,6 +76,25 @@ describe('observability projection', () => {
     })
   })
 
+  it('keeps history notDownloadedCount as an integer only', () => {
+    expect(projectEvent('history.request', {
+      requestId: uuid,
+      stage: 'served',
+      outcome: 'ok',
+      resultCount: 3,
+      notDownloadedCount: 2
+    })).toEqual({
+      requestId: uuid,
+      stage: 'served',
+      outcome: 'ok',
+      resultCount: 3,
+      notDownloadedCount: 2
+    })
+    expect(projectEvent('history.request', { stage: 'served', notDownloadedCount: 1.5 })).toEqual({
+      stage: 'served'
+    })
+  })
+
   it('sweeps every event field against content-bearing sentinels', () => {
     for (const [event, fields] of Object.entries(OBSERVABILITY_EVENTS) as [ObservabilityEvent, Record<string, unknown>][]) {
       for (const [field, kind] of Object.entries(fields)) {
