@@ -102,7 +102,7 @@
     "vitest": {
       "vite": "$vite"
     },
-    "sharp": "^0.35.4",
+    "sharp": "^0.35.5",
     "fast-uri": "^3.1.6"
   },
   "dependencies": {
@@ -110,7 +110,7 @@
     "@azure/msal-node": "^5.3.0",
     "@dust-tt/client": "^1.2.6",
     "@huggingface/transformers": "^3.0.0",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.31.0",
     "electron-log": "^5.4.4",
     "electron-updater": "^6.8.9",
     "openai": "^6.45.0",
