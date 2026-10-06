@@ -60,13 +60,9 @@ test('the committed storyboard package passes against the claim register', () =>
 
 test("the resolved scratch edit skips cut scenes and follows each scene's active variant", () => {
   const { timeline, duration_seconds: total } = validate()
-  assert.ok(!timeline.some((entry) => entry.scene_id === 'LF-07'))
+  assert.ok(!timeline.some((entry) => entry.scene_id === 'LF-04' || entry.scene_id === 'LF-05'))
   assert.ok(
     timeline.some((entry) => entry.scene_id === 'LF-03' && entry.source === 'SH-03C'),
-    'the overlay beat plays its concept form while the register says concept'
-  )
-  assert.ok(
-    timeline.some((entry) => entry.scene_id === 'LF-05' && entry.source === 'SH-05C'),
     'the hindsight beat plays its concept form while the register says concept'
   )
   assert.equal(total, timeline.at(-1).end)
@@ -113,16 +109,16 @@ test('forbidden claim phrases are rejected in storyboard treatments', () => {
 test('the hindsight scene is prepared in a live and a concept shot, the live one gated on LIVE_VERIFIED', () => {
   const dropped = failuresOf(({ json, save }) => {
     const shots = json(SHOT_LIST)
-    shots.shots = shots.shots.filter((shot) => !(shot.scene_id === 'LF-05' && shot.form === 'live'))
+    shots.shots = shots.shots.filter((shot) => !(shot.scene_id === 'LF-03' && shot.form === 'live'))
     save(SHOT_LIST, shots)
   })
-  assert.match(dropped, /LF-05 has no live shot/)
+  assert.match(dropped, /LF-03 has no live shot/)
   const ungated = failuresOf(({ json, save }) => {
     const shots = json(SHOT_LIST)
-    shots.shots.find((shot) => shot.id === 'SH-05L').required_evidence_level = 'DESIGNED'
+    shots.shots.find((shot) => shot.id === 'SH-03L').required_evidence_level = 'DESIGNED'
     save(SHOT_LIST, shots)
   })
-  assert.match(ungated, /SH-05L must require LIVE_VERIFIED evidence/)
+  assert.match(ungated, /SH-03L must require LIVE_VERIFIED evidence/)
 })
 
 test('non-product scenes use original assets only', () => {

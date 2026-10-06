@@ -144,9 +144,9 @@ jobs:
             printf "file '%s'\n" "$segment" >> "$review/list.txt"
           done <<'SHOTS'
           S01 NP-01 4
-          S02 SH-03C 6
-          S03 SH-04C 8
-          S04 SH-05C 8
+          S02 SH-01C 6
+          S03 SH-02C 8
+          S04 SH-03C 8
           S05 NP-05 4
           S06 NP-04 4
           SHOTS
