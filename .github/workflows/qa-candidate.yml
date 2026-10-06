@@ -974,13 +974,15 @@ jobs:
 
   # Window-construction measurement (M2-0516), never ST-1 evidence: short launches (--purpose
   # window-construction, st1Evidence: false) that build the boot window under each QA-identity rendering variant,
-  # in both chromes, twice, interleaved, all on this one runner so the numbers compare. A first-run profile builds
+  # in both chromes, twice, interleaved on this one runner so the numbers compare. A first-run profile builds
   # the opaque exclusive onboarding window; an onboarded bar profile builds the transparent overlay. Each report's
   # bootStages carries createWindow.prewarm and createWindow.construct (with the chrome and variant built),
   # createWindow.navigate and createWindow.firstShow. The other variants stay report-only; the shipped window is
   # gated (M2-0519): the job fails unless every shipped createWindow.prewarm and createWindow.construct is present
-  # and under 250 ms in both chromes. OD-42: each chrome gets one marked warm-up launch before any measured
-  # repeat, and the gate skips those warm-up reports.
+  # and under 250 ms in both chromes.
+  # OD-42: each chrome gets one marked shipped warm-up launch before any measured repeat, and the gate skips those
+  # warm-up reports. The two marked shipped warm-up launches run before any measured repeat. Shipped is measured last
+  # in each repeat while keeping per-launch, per-stage timings in the uploaded st1-report artifact.
   st1-mac-window:
     name: ST-1 window construction per variant and chrome (shipped gated < 250 ms)
     needs: provenance
@@ -1014,12 +1016,17 @@ jobs:
           fi
           # The durable settings of a user who finished onboarding with the bar layout (plain JSON is a supported read path).
           printf '{"onboardingDone":true,"onboardingDoneAt":%s000,"recordingConsent":true,"overlayLayout":"bar","autoHideOverlay":false}\n' "$(date +%s)" > onboarded-profile/settings.json
-          # The first launch on a fresh hosted runner can pay one-time Electron/macOS warm-up costs.
-          # Keep that launch explicit and marked so the strict shipped gate measures the steady boot path only.
-          for chrome in opaque transparent; do
+          # The shared ST-1 plan emits every launch so the gate artifact records per-launch, per-stage timings.
+          node scripts/qa/st-1.mjs --print-window-plan > st1-report/window-plan.json
+          jq -c '.[]' st1-report/window-plan.json | while read -r launch; do
+            variant=$(jq -r '.variant' <<<"$launch")
+            chrome=$(jq -r '.chrome' <<<"$launch")
+            run=$(jq -r '.name' <<<"$launch")
+            warmup=$(jq -r '.warmup' <<<"$launch")
             template=()
+            warmup_args=()
             if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi
-            run="window-warmup-shipped-$chrome"
+            if [ "$warmup" = true ]; then warmup_args=(--window-warmup); fi
             node scripts/qa/st-1.mjs \
               --installer "$installer" \
               --provenance provenance/provenance.json \
@@ -1027,31 +1034,12 @@ jobs:
               "${template[@]}" \
               --minutes 0.5 \
               --purpose window-construction \
-              --window-variant shipped \
-              --window-warmup \
+              --window-variant "$variant" \
+              "${warmup_args[@]}" \
               --report-dir "st1-report/$run" \
               --out "st1-report/$run/$run.json" \
+              </dev/null \
               || echo "::warning::$run ended without PASS; its report says why."
-          done
-          for repeat in 1 2; do
-            for variant in spellcheck-off paint-when-hidden prewarm-spellchecker shipped; do
-              for chrome in opaque transparent; do
-                template=()
-                if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi
-                run="window-$variant-$chrome-$repeat"
-                node scripts/qa/st-1.mjs \
-                  --installer "$installer" \
-                  --provenance provenance/provenance.json \
-                  --fixtures none \
-                  "${template[@]}" \
-                  --minutes 0.5 \
-                  --purpose window-construction \
-                  --window-variant "$variant" \
-                  --report-dir "st1-report/$run" \
-                  --out "st1-report/$run/$run.json" \
-                  || echo "::warning::$run ended without PASS; its report says why."
-              done
-            done
           done
       - name: Gate the shipped window (createWindow.prewarm and createWindow.construct < 250 ms in both chromes)
         if: always()

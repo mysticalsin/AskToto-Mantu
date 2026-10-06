@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
+import { windowConstructionPlan } from '../qa/lib/st-1-core.mjs'
 
 const root = join(__dirname, '..', '..')
 const workflow = readFileSync(join(root, '.github', 'workflows', 'qa-candidate.yml'), 'utf8').replace(/\r\n/g, '\n')
@@ -181,7 +182,8 @@ describe('QA candidate workflow: which refs and versions may build (M2-0499)', (
     for (const [name, block] of jobBlocks) {
       const jobIf = /^    if: (.*)$/m.exec(block)?.[1] ?? ''
       expect(jobIf, `${name} job condition`).not.toMatch(/github\.ref/)
-      if (name !== 'guard') expect(block, `${name} names a ref`).not.toMatch(/refs\/heads\/|github\.ref\b|github\.base_ref/)
+      if (name !== 'guard')
+        expect(block, `${name} names a ref`).not.toMatch(/refs\/heads\/|github\.ref\b|github\.base_ref/)
     }
     expect(guard).toContain('refs/heads/')
   })
@@ -289,7 +291,9 @@ describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
     for (const name of strictJobs) {
       const jobSteps = steps(name)
       const checkout = jobSteps.findIndex((step) => step.includes('actions/checkout@'))
-      const probe = jobSteps.findIndex((step) => step.includes('name: Prove owner-account sandbox denies private state'))
+      const probe = jobSteps.findIndex((step) =>
+        step.includes('name: Prove owner-account sandbox denies private state')
+      )
       const setup = jobSteps.findIndex((step) => step.includes('actions/setup-node@'))
       const download = jobSteps.findIndex((step) => step.includes('actions/download-artifact@'))
 
@@ -358,7 +362,9 @@ exit 1
       expect(result.status).toBe(0)
       expect(result.stdout).toContain(`${bashPath(join(home, 'Library', 'CloudStorage'))} exists -> denied`)
       expect(result.stdout).toContain(`${bashPath(join(home, 'Library', 'Keychains'))} exists -> denied`)
-      expect(result.stdout).toContain(`${bashPath(join(home, 'Library', 'Application Support', 'Metis'))} absent -> denied`)
+      expect(result.stdout).toContain(
+        `${bashPath(join(home, 'Library', 'Application Support', 'Metis'))} absent -> denied`
+      )
       const wrapperLog = readFileSync(log, 'utf8')
       expect(wrapperLog).toContain(`/bin/ls -ld ${bashPath(join(home, 'Library', 'CloudStorage'))}`)
       expect(wrapperLog).toContain(`/bin/ls -ld ${bashPath(join(home, 'Library', 'Keychains'))}`)
@@ -406,7 +412,9 @@ exit 1
       })
 
       expect(result.status).toBe(1)
-      expect(result.stdout).toContain(`::error::owner-account sandbox allowed creating absent protected path ${bashPath(allowedPath)}`)
+      expect(result.stdout).toContain(
+        `::error::owner-account sandbox allowed creating absent protected path ${bashPath(allowedPath)}`
+      )
       expect(existsSync(allowedPath)).toBe(false)
     } finally {
       rmSync(sandbox, { recursive: true, force: true })
@@ -495,15 +503,45 @@ describe('QA candidate workflow: the shipped window gate (M2-0519)', () => {
 
   it('runs one marked shipped warm-up per chrome before any measured repeats', () => {
     const measure = steps('st1-mac-window').find((step) => step.includes('--purpose window-construction')) ?? ''
-    expect(measure.indexOf('run="window-warmup-shipped-$chrome"')).toBeLessThan(measure.indexOf('for repeat in 1 2; do'))
+    expect(measure).toContain('node scripts/qa/st-1.mjs --print-window-plan > st1-report/window-plan.json')
+    expect(measure).toContain("jq -c '.[]' st1-report/window-plan.json | while read -r launch; do")
+    expect(measure).toContain('run=$(jq -r \'.name\' <<<"$launch")')
+    // node must not read the plan loop's stdin, or it would swallow the remaining launches.
+    expect(measure).toContain('--out "st1-report/$run/$run.json" \\\n              </dev/null \\\n')
     expect(measure).toContain('--window-warmup')
-    expect(measure).toContain('--window-variant shipped')
-    expect(measure).toContain('if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi')
+    expect(measure).toContain('if [ "$warmup" = true ]; then warmup_args=(--window-warmup); fi')
+    expect(measure).toContain('--window-variant "$variant"')
+    expect(measure).toContain(
+      'if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi'
+    )
+    expect(measure).not.toContain('variants=(shipped spellcheck-off paint-when-hidden prewarm-spellchecker)')
+    expect(measure).not.toContain('chromes=(opaque transparent)')
   })
 
   it('keeps measured report-only window variants before measured shipped rows', () => {
     const measure = steps('st1-mac-window').find((step) => step.includes('--purpose window-construction')) ?? ''
-    expect(measure).toContain('for variant in spellcheck-off paint-when-hidden prewarm-spellchecker shipped; do')
-    expect(measure.indexOf('prewarm-spellchecker shipped')).toBeLessThan(measure.indexOf('--window-variant "$variant"'))
+    expect(measure).toContain('node scripts/qa/st-1.mjs --print-window-plan > st1-report/window-plan.json')
+    expect(measure).toContain("jq -c '.[]' st1-report/window-plan.json | while read -r launch; do")
+    const measured = windowConstructionPlan().filter((entry) => !entry.warmup)
+    for (const repeat of [1, 2]) {
+      const repeatEntries = measured.filter((entry) => entry.name.endsWith(`-${repeat}`))
+      const firstShipped = repeatEntries.findIndex((entry) => entry.variant === 'shipped')
+      expect(firstShipped).toBeGreaterThan(-1)
+      expect(repeatEntries.slice(firstShipped).map((entry) => entry.name)).toEqual([
+        `window-shipped-opaque-${repeat}`,
+        `window-shipped-transparent-${repeat}`
+      ])
+      expect(repeatEntries.slice(0, firstShipped).every((entry) => entry.variant !== 'shipped')).toBe(true)
+    }
+  })
+
+  it('takes measured repeat order from scripts/qa/st-1.mjs instead of hand-coded workflow loops', () => {
+    const measure = steps('st1-mac-window').find((step) => step.includes('--purpose window-construction')) ?? ''
+    expect(measure).not.toContain('for repeat in 1 2; do')
+    expect(measure).not.toContain('for variant in "${variants[@]}"; do')
+    expect(measure).not.toContain('for chrome in "${chromes[@]}"; do')
+    expect(measure).toContain('warmup=$(jq -r \'.warmup\' <<<"$launch")')
+    expect(measure).toContain('variant=$(jq -r \'.variant\' <<<"$launch")')
+    expect(measure).toContain('chrome=$(jq -r \'.chrome\' <<<"$launch")')
   })
 })
