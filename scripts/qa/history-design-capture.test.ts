@@ -4,7 +4,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { IPC } from '../../src/shared/ipc'
 import { HISTORY_DEGRADED_MS as RENDERER_DEGRADED_MS } from '../../src/renderer/src/components/history/list-status'
 import { NOT_DOWNLOADED_TEXT, UNAVAILABLE_TEXT } from '../../src/renderer/src/components/history/hydration'
-import { captureReachedState, driveState, fixtureAnswersForState, INSTALL_FIXTURE_HANDLERS, STATE_TIMEOUT_MS, waitForRequest, warmUp } from './history-design-capture.mjs'
+import {
+  captureReachedState,
+  driveState,
+  fixtureAnswersForState,
+  INSTALL_FIXTURE_HANDLERS,
+  STATE_TIMEOUT_MS,
+  waitForRequest,
+  warmUp
+} from './history-design-capture.mjs'
 import {
   BACKDROPS,
   BLOCKED_EXTERNAL_ROWS,
@@ -67,7 +75,10 @@ function exposedGc() {
   return g.gc!
 }
 
-function withCollectGarbage<T extends (...args: never[]) => unknown>(main: T, collectGarbage: () => Promise<unknown> = vi.fn(async () => undefined)) {
+function withCollectGarbage<T extends (...args: never[]) => unknown>(
+  main: T,
+  collectGarbage: () => Promise<unknown> = vi.fn(async () => undefined)
+) {
   return Object.assign(main, { collectGarbage })
 }
 
@@ -192,11 +203,15 @@ describe('History design matrix (M2-0032)', () => {
     const collectGarbage = vi.fn(async () => {
       collectedBeforeCue = true
     })
-    const main = withCollectGarbage(vi.fn(async (expression: string) => {
-      if (expression === 'globalThis.__historyDesign.requests.list') return history.requests.list
-      if (expression.includes('requests, requestedAt')) return { requests: { ...history.requests }, requestedAt: { ...history.requestedAt } }
-      return true
-    }), collectGarbage)
+    const main = withCollectGarbage(
+      vi.fn(async (expression: string) => {
+        if (expression === 'globalThis.__historyDesign.requests.list') return history.requests.list
+        if (expression.includes('requests, requestedAt'))
+          return { requests: { ...history.requests }, requestedAt: { ...history.requestedAt } }
+        return true
+      }),
+      collectGarbage
+    )
     const page = {
       getByLabel: vi.fn(() => ({
         first: () => ({
@@ -259,12 +274,16 @@ describe('History design matrix (M2-0032)', () => {
     vi.spyOn(Date, 'now').mockImplementation(() => now)
 
     const collectGarbage = vi.fn(async () => undefined)
-    const main = withCollectGarbage(vi.fn(async (expression: string) => {
-      if (expression === 'globalThis.__historyDesign.requests.list') return history.requests.list
-      if (expression === 'globalThis.__historyDesign.requests.search') return history.requests.search
-      if (expression.includes('requests, requestedAt')) return { requests: { ...history.requests }, requestedAt: { ...history.requestedAt } }
-      return true
-    }), collectGarbage)
+    const main = withCollectGarbage(
+      vi.fn(async (expression: string) => {
+        if (expression === 'globalThis.__historyDesign.requests.list') return history.requests.list
+        if (expression === 'globalThis.__historyDesign.requests.search') return history.requests.search
+        if (expression.includes('requests, requestedAt'))
+          return { requests: { ...history.requests }, requestedAt: { ...history.requestedAt } }
+        return true
+      }),
+      collectGarbage
+    )
     const noteRequest = (channel: 'list' | 'search', requestedAt: number) => {
       history.requests[channel] += 1
       history.requestedAt[channel] = requestedAt
@@ -326,7 +345,8 @@ describe('History design matrix (M2-0032)', () => {
     const cdp = {
       send: vi.fn(async (command: string, payload?: unknown) => {
         events.push(`cdp:${command}`)
-        if (command === 'Emulation.setDeviceMetricsOverride') expect(payload).toEqual({ width: 0, height: 0, deviceScaleFactor: variant.scale, mobile: false })
+        if (command === 'Emulation.setDeviceMetricsOverride')
+          expect(payload).toEqual({ width: 0, height: 0, deviceScaleFactor: variant.scale, mobile: false })
       })
     }
     const page = {
@@ -361,13 +381,16 @@ describe('History design matrix (M2-0032)', () => {
       evaluate: vi.fn(async () => undefined)
     }
     const requests = { list: 0, search: 0 }
-    const main = withCollectGarbage(vi.fn(async (expression: string) => {
-      if (expression === 'globalThis.__historyDesign.requests.list') return requests.list
-      if (expression === 'globalThis.__historyDesign.requests.search') return requests.search
-      if (expression.includes('requests, requestedAt')) return { requests: { ...requests }, requestedAt: { list: 100, search: 0 } }
-      events.push('apply-or-arm')
-      return true
-    }))
+    const main = withCollectGarbage(
+      vi.fn(async (expression: string) => {
+        if (expression === 'globalThis.__historyDesign.requests.list') return requests.list
+        if (expression === 'globalThis.__historyDesign.requests.search') return requests.search
+        if (expression.includes('requests, requestedAt'))
+          return { requests: { ...requests }, requestedAt: { list: 100, search: 0 } }
+        events.push('apply-or-arm')
+        return true
+      })
+    )
 
     await warmUp({
       page: page as never,
@@ -406,19 +429,23 @@ describe('History design matrix (M2-0032)', () => {
     let searchFillPending = false
     let searchRequestSeen = false
 
-    const main = withCollectGarbage(vi.fn(async (expression: string) => {
-      if (expression === 'globalThis.__historyDesign.requests.list') {
-        events.push('read-requests')
-        return history.requests.list
-      }
-      if (expression === 'globalThis.__historyDesign.requests.search') {
-        events.push('read-requests')
-        return history.requests.search
-      }
-      if (expression.includes('requests, requestedAt')) return { requests: { ...history.requests }, requestedAt: { ...history.requestedAt } }
-      events.push('arm-fixture')
-      return true
-    }), vi.fn(async () => events.push('gc')))
+    const main = withCollectGarbage(
+      vi.fn(async (expression: string) => {
+        if (expression === 'globalThis.__historyDesign.requests.list') {
+          events.push('read-requests')
+          return history.requests.list
+        }
+        if (expression === 'globalThis.__historyDesign.requests.search') {
+          events.push('read-requests')
+          return history.requests.search
+        }
+        if (expression.includes('requests, requestedAt'))
+          return { requests: { ...history.requests }, requestedAt: { ...history.requestedAt } }
+        events.push('arm-fixture')
+        return true
+      }),
+      vi.fn(async () => events.push('gc'))
+    )
     const noteRequest = (channel: 'list' | 'search', requestedAt: number) => {
       history.requests[channel] += 1
       history.requestedAt[channel] = requestedAt
@@ -523,7 +550,8 @@ describe('History design matrix (M2-0032)', () => {
     let historyOpen = false
     const main = vi.fn(async (expression: string) => {
       if (expression === 'globalThis.__historyDesign.requests.list') return history.requests.list
-      if (expression.includes('requests, requestedAt')) return { requests: { ...history.requests }, requestedAt: { ...history.requestedAt } }
+      if (expression.includes('requests, requestedAt'))
+        return { requests: { ...history.requests }, requestedAt: { ...history.requestedAt } }
       return true
     })
     const searchLocator = {
@@ -557,13 +585,16 @@ describe('History design matrix (M2-0032)', () => {
     const events: string[] = []
     let searchValue = ''
     let searchFillPending = false
-    const main = withCollectGarbage(vi.fn(async (expression: string) => {
-      if (expression === 'globalThis.__historyDesign.requests.list') return history.requests.list
-      if (expression === 'globalThis.__historyDesign.requests.search') return history.requests.search
-      if (expression === '({ ...globalThis.__historyDesign.requests })') return { ...history.requests }
-      if (expression.includes('requests, requestedAt')) return { requests: { ...history.requests }, requestedAt: { ...history.requestedAt } }
-      return true
-    }))
+    const main = withCollectGarbage(
+      vi.fn(async (expression: string) => {
+        if (expression === 'globalThis.__historyDesign.requests.list') return history.requests.list
+        if (expression === 'globalThis.__historyDesign.requests.search') return history.requests.search
+        if (expression === '({ ...globalThis.__historyDesign.requests })') return { ...history.requests }
+        if (expression.includes('requests, requestedAt'))
+          return { requests: { ...history.requests }, requestedAt: { ...history.requestedAt } }
+        return true
+      })
+    )
     const wait = vi.fn(async () => {
       if (searchFillPending && history.requests.search === 0) history.requests.search += 1
     })
