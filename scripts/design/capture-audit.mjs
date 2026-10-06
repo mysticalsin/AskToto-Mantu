@@ -27,13 +27,19 @@ function clamp01(value) {
 }
 
 export function parseCssColor(value) {
-  const input = String(value || '').trim().toLowerCase()
+  const input = String(value || '')
+    .trim()
+    .toLowerCase()
   if (!input || input === 'transparent') return { r: 0, g: 0, b: 0, a: 0 }
 
   const hex = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(input)
   if (hex) {
     let raw = hex[1]
-    if (raw.length === 3 || raw.length === 4) raw = raw.split('').map((c) => `${c}${c}`).join('')
+    if (raw.length === 3 || raw.length === 4)
+      raw = raw
+        .split('')
+        .map((c) => `${c}${c}`)
+        .join('')
     const hasAlpha = raw.length === 8
     return {
       r: Number.parseInt(raw.slice(0, 2), 16),
@@ -176,7 +182,10 @@ function selectorFor(element) {
   const tag = element.tagName.toLowerCase()
   const id = element.id ? `#${cssEscape(element.id)}` : ''
   if (id) return `${tag}${id}`
-  const classes = Array.from(element.classList || []).slice(0, 2).map((c) => `.${cssEscape(c)}`).join('')
+  const classes = Array.from(element.classList || [])
+    .slice(0, 2)
+    .map((c) => `.${cssEscape(c)}`)
+    .join('')
   const role = element.getAttribute('role')
   if (classes) return `${tag}${classes}`
   if (role) return `${tag}[role="${role}"]`
@@ -225,7 +234,8 @@ function resolveBackground(element) {
   const layers = []
   while (current) {
     const style = getComputedStyle(current)
-    if (style.backgroundImage && style.backgroundImage !== 'none') return { resolved: false, reason: 'background-image' }
+    if (style.backgroundImage && style.backgroundImage !== 'none')
+      return { resolved: false, reason: 'background-image' }
     const color = parseCssColor(style.backgroundColor)
     if (color && color.a > 0) layers.push(color)
     current = current.parentElement
@@ -417,7 +427,10 @@ export function collectPageAudit() {
   const result = emptyAuditResult()
   const elements = Array.from(document.body.querySelectorAll('*'))
   collectTextContrast(result, elements)
-  collectNonTextContrast(result, elements.filter((element) => element.matches(CONTROL_SELECTOR)))
+  collectNonTextContrast(
+    result,
+    elements.filter((element) => element.matches(CONTROL_SELECTOR))
+  )
   collectClipping(result, elements)
   if (result.text.checked === 0) {
     result.text.failures.push({ kind: 'vacuous-audit', selector: 'body', measured: 0, required: 1 })
