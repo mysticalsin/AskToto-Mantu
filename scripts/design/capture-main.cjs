@@ -11,6 +11,8 @@ app.whenReady().then(() => {
     width: WIDTH,
     height: HEIGHT,
     useContentSize: true,
+    frame: false,
+    autoHideMenuBar: true,
     resizable: false,
     webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false }
   })
