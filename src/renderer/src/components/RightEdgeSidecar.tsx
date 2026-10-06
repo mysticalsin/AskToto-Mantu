@@ -172,7 +172,10 @@ export type PendingCancelStatus = 'idle' | 'cancelling' | 'cancelled' | 'unavail
 
 /** Cancels the opaque pending command (it has no verified preview, so it is never approvable); the status
  *  belongs to the proposal it was asked for and reads 'idle' for any other. */
-export function usePendingCommandCancel(commandState: MetisCommandState): { status: PendingCancelStatus; cancel: () => void } {
+export function usePendingCommandCancel(commandState: MetisCommandState): {
+  status: PendingCancelStatus
+  cancel: () => void
+} {
   const [pendingCancel, setPendingCancel] = useState<{ proposalId: string | null; status: PendingCancelStatus }>({
     proposalId: null,
     status: 'idle'
@@ -186,7 +189,10 @@ export function usePendingCommandCancel(commandState: MetisCommandState): { stat
       .then((result) => setPendingCancel({ proposalId, status: result.ok ? 'cancelled' : 'unavailable' }))
       .catch(() => setPendingCancel({ proposalId, status: 'unavailable' }))
   }
-  const status = commandState.proposalId !== null && pendingCancel.proposalId === commandState.proposalId ? pendingCancel.status : 'idle'
+  const status =
+    commandState.proposalId !== null && pendingCancel.proposalId === commandState.proposalId
+      ? pendingCancel.status
+      : 'idle'
   return { status, cancel }
 }
 
@@ -317,7 +323,8 @@ export function RightEdgeSidecar({
   focusSignal?: number
   /** Opaque state only. Main has not supplied a verified action preview in this version. */
   commandState?: MetisCommandState
-} & SidecarChatProps & RightEdgeDockActions): JSX.Element {
+} & SidecarChatProps &
+  RightEdgeDockActions): JSX.Element {
   const pendingCancel = usePendingCommandCancel(commandState)
   const [intelligence, setIntelligence] = useState<{ status: 'idle' | 'opening' | 'error'; error?: string }>({
     status: 'idle'
@@ -352,7 +359,15 @@ export function RightEdgeSidecar({
 
   const pendingCancelStatus = pendingCancel.status
   const hasBody = body !== undefined && body !== null
-  const status = capturing ? 'Capturing screen' : listening ? (paused ? 'Paused' : 'Listening') : busy ? 'Thinking' : 'Ready'
+  const status = capturing
+    ? 'Capturing screen'
+    : listening
+      ? paused
+        ? 'Paused'
+        : 'Listening'
+      : busy
+        ? 'Thinking'
+        : 'Ready'
 
   return (
     <div
