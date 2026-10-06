@@ -26,7 +26,7 @@ import {
 import { basename, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-/** Every shipped target, plus the macOS QA-identity variant, which is built but never promoted. */
+/** Every candidate target. QA-only variants are built and launch-checked, but never promoted. */
 export const VARIANTS = Object.freeze({
   mac: {
     promotable: true,
@@ -44,14 +44,20 @@ export const VARIANTS = Object.freeze({
     promotable: true,
     platform: 'win',
     configs: ['electron-builder.win.yml', 'electron-builder.yml'],
-    assets: (version) => [`Metis-Setup-${version}.exe`, `Metis-Portable-${version}.exe`]
+    assets: (version) => [`Metis-Setup-${version}.exe`]
+  },
+  'win-portable': {
+    promotable: false,
+    platform: 'win',
+    configs: ['electron-builder.win.yml', 'electron-builder.yml'],
+    assets: (version) => [`Metis-Portable-${version}.exe`]
   }
 })
 
 export const PROMOTABLE_VARIANTS = Object.keys(VARIANTS).filter((variant) => VARIANTS[variant].promotable)
 
-/** Every asset a provenance's promotable builds produced, in build order. Never includes the QA-identity
- *  build: it is built but never shipped, so evidence naming it never counts toward promotion. */
+/** Every asset a provenance's promotable builds produced, in build order. Never includes QA-only
+ *  builds: they are built but never shipped, so evidence naming them never counts toward promotion. */
 export function promotableAssets(provenance) {
   return provenance.builds
     .filter((build) => PROMOTABLE_VARIANTS.includes(build.variant))
