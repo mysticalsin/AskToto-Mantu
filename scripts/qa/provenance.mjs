@@ -13,7 +13,16 @@
 // stageBuild, assembleProvenance and prepareRelease throw an Error listing every problem, one per line,
 // and leave the filesystem untouched when they throw.
 import { createHash } from 'node:crypto'
-import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import {
+  createReadStream,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  writeFileSync
+} from 'node:fs'
 import { basename, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -44,7 +53,9 @@ export const PROMOTABLE_VARIANTS = Object.keys(VARIANTS).filter((variant) => VAR
 /** Every asset a provenance's promotable builds produced, in build order. Never includes the QA-identity
  *  build: it is built but never shipped, so evidence naming it never counts toward promotion. */
 export function promotableAssets(provenance) {
-  return provenance.builds.filter((build) => PROMOTABLE_VARIANTS.includes(build.variant)).flatMap((build) => build.assets)
+  return provenance.builds
+    .filter((build) => PROMOTABLE_VARIANTS.includes(build.variant))
+    .flatMap((build) => build.assets)
 }
 
 /** Streaming sha256, so a multi-GB installer is never read fully into memory. */
@@ -87,7 +98,9 @@ function resolveSigning(platform, env) {
   const identity = env.ASKTOTO_MAC_SIGN_IDENTITY
   if (!identity) return { mode: 'ad-hoc' }
   if (!/^[0-9A-Fa-f]{40}$/.test(identity)) {
-    throw new Error(`ASKTOTO_MAC_SIGN_IDENTITY is not a 40-character certificate fingerprint: ${JSON.stringify(identity)}`)
+    throw new Error(
+      `ASKTOTO_MAC_SIGN_IDENTITY is not a 40-character certificate fingerprint: ${JSON.stringify(identity)}`
+    )
   }
   return { mode: 'qa-identity', certificate_sha1: identity.toLowerCase() }
 }
@@ -194,7 +207,8 @@ export function assembleProvenance(records, env) {
   const problems = []
 
   const sha = env.GITHUB_SHA ?? ''
-  if (!/^[0-9a-f]{40}$/.test(sha)) problems.push(`GITHUB_SHA is not a 40-character lowercase commit hash: ${JSON.stringify(sha)}`)
+  if (!/^[0-9a-f]{40}$/.test(sha))
+    problems.push(`GITHUB_SHA is not a 40-character lowercase commit hash: ${JSON.stringify(sha)}`)
   const runId = Number(env.GITHUB_RUN_ID)
   if (!Number.isInteger(runId) || runId <= 0) {
     problems.push(`GITHUB_RUN_ID is not a positive integer: ${JSON.stringify(env.GITHUB_RUN_ID)}`)
@@ -382,9 +396,10 @@ export function evidenceProblems(evidenceText, provenance) {
 
 /**
  * releaseNotes' shape is normative: version, commit, candidate run, promotion run, owner-channel/
- * hand-install framing (never Latest), signing mode and the evidence summary.
+ * hand-install framing (never Latest), signing mode and the evidence summary. A release/1.9.x candidate adds
+ * one line naming it a hotfix of 1.9.7.
  */
-export function releaseNotes({ provenance, evidence, promotionRunUrl }) {
+export function releaseNotes({ provenance, evidence, promotionRunUrl, candidateBranch = 'main' }) {
   const macBuild = provenance.builds.find((build) => build.variant === 'mac')
   const macSigning =
     macBuild.signing.mode === 'qa-identity'
@@ -394,11 +409,16 @@ export function releaseNotes({ provenance, evidence, promotionRunUrl }) {
   const assets = promotableAssets(provenance).sort((a, b) => a.name.localeCompare(b.name))
   const rows = assets.map((asset) => `| \`${asset.name}\` | \`${asset.sha256}\` |`).join('\n')
 
+  const hotfix =
+    candidateBranch === 'release/1.9.x'
+      ? `**Hotfix:** a hotfix of 1.9.7 built from release/1.9.x at commit \`${provenance.commit}\`.\n\n`
+      : ''
+
   return `Owner-channel prerelease of Métis ${provenance.version}. These files are the exact bytes of QA candidate run [${provenance.run.id}](${provenance.run.url}), built once from commit \`${provenance.commit}\` and promoted by [this run](${promotionRunUrl}) without rebuilding.
 
 **This is not a signed customer release.** ${macSigning} The Windows installers carry no Authenticode signature. On macOS, allow the first launch in System Settings → Privacy & Security → Open Anyway; on Windows, choose More info → Run anyway. In-app update does not offer this build, so install it by hand.
 
-**Evidence:** ${evidence.count} passing record(s) (${evidence.tickets.join(', ')}) bound to these bytes. Evidence file SHA-256: \`${evidence.sha256}\`.
+${hotfix}**Evidence:** ${evidence.count} passing record(s) (${evidence.tickets.join(', ')}) bound to these bytes. Evidence file SHA-256: \`${evidence.sha256}\`.
 
 | File | SHA-256 |
 |---|---|
@@ -412,7 +432,16 @@ ${rows}
  * Never builds. Proves the candidate's provenance and the promotion evidence, then stages exactly the
  * promotable bytes plus SHA256SUMS.txt and the original provenance.json bytes for upload.
  */
-export async function prepareRelease({ provenancePath, evidencePath, downloadsDir, outDir, candidateRun, candidateCommit, env }) {
+export async function prepareRelease({
+  provenancePath,
+  evidencePath,
+  downloadsDir,
+  outDir,
+  candidateRun,
+  candidateCommit,
+  candidateBranch,
+  env
+}) {
   const provenanceBytes = readFileSync(provenancePath)
   const provenance = JSON.parse(provenanceBytes.toString('utf8'))
   const evidenceBytes = readFileSync(evidencePath)
@@ -454,7 +483,7 @@ export async function prepareRelease({ provenancePath, evidencePath, downloadsDi
   const evidence = { count: evidenceRecords.length, tickets, sha256: sha256Bytes(evidenceBytes) }
   const promotionRunUrl = `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}`
 
-  const notes = releaseNotes({ provenance, evidence, promotionRunUrl })
+  const notes = releaseNotes({ provenance, evidence, promotionRunUrl, candidateBranch })
   writeFileSync(join(outDir, 'notes.md'), notes)
 
   return { manifest, notes }
@@ -499,7 +528,7 @@ function usage() {
       '  stage <variant> <release-dir> <out-dir>\n' +
       '  assemble <records-dir> <out-dir>\n' +
       '  verify <provenance.json> <dir> <variant>...\n' +
-      '  prepare-release <provenance.json> <evidence.jsonl> <downloads-dir> <out-dir> --candidate-run <id> --candidate-commit <sha>\n' +
+      '  prepare-release <provenance.json> <evidence.jsonl> <downloads-dir> <out-dir> --candidate-run <id> --candidate-commit <sha> [--candidate-branch <head_branch>]\n' +
       '  check-release <manifest.json> <uploaded.json>'
   )
   process.exitCode = 2
@@ -512,7 +541,14 @@ async function main(argv) {
       case 'stage': {
         const [variant, releaseDir, outDir] = rest
         if (!variant || !releaseDir || !outDir) return usage()
-        await stageBuild({ variant, repoRoot: process.cwd(), releaseDir, outDir, env: process.env, nodeVersion: process.version })
+        await stageBuild({
+          variant,
+          repoRoot: process.cwd(),
+          releaseDir,
+          outDir,
+          env: process.env,
+          nodeVersion: process.version
+        })
         break
       }
       case 'assemble': {
@@ -539,8 +575,18 @@ async function main(argv) {
         if (!provenancePath || !evidencePath || !downloadsDir || !outDir) return usage()
         const candidateRun = flagValue(flags, '--candidate-run')
         const candidateCommit = flagValue(flags, '--candidate-commit')
+        const candidateBranch = flagValue(flags, '--candidate-branch')
         if (!candidateRun || !candidateCommit) return usage()
-        await prepareRelease({ provenancePath, evidencePath, downloadsDir, outDir, candidateRun, candidateCommit, env: process.env })
+        await prepareRelease({
+          provenancePath,
+          evidencePath,
+          downloadsDir,
+          outDir,
+          candidateRun,
+          candidateCommit,
+          candidateBranch,
+          env: process.env
+        })
         break
       }
       case 'check-release': {
