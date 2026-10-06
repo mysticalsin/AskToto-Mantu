@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { sourceIndexOf } from '../../scripts/lib/source-layout'
 import * as cursorWatch from './island/cursor-watch'
 import {
   CURSOR_LEAVE_GRACE_PX,
@@ -160,8 +161,8 @@ function nativeHover(
   }
   // Lifts one shipped function, dropping only its TypeScript parameter and return annotations.
   const lift = (signature: string, stop: string, jsSignature = signature.replace(/\): \w+ \{$/, ') {')): string => {
-    const begin = source.indexOf(signature)
-    const end = source.indexOf(stop, begin)
+    const begin = sourceIndexOf(source, signature)
+    const end = sourceIndexOf(source, stop, begin)
     expect(begin).toBeGreaterThan(-1)
     expect(end).toBeGreaterThan(begin)
     return source.slice(begin, end).replace(signature, jsSignature)
