@@ -114,10 +114,11 @@ jobs:
       # Same reason as build.yml quality: bar-toolbar.layout.test.ts needs Chromium on the runner.
       - name: Install Playwright Chromium
         run: npx playwright install ${{ runner.os == 'Linux' && '--with-deps' || '' }} chromium
-      - run: npm test
+      # Build before the tests, as build.yml does: the right-edge layout tests read the compiled stylesheet.
       - run: npm run build
         env:
           METIS_FEEDBACK_EMAIL: ${{ vars.METIS_FEEDBACK_EMAIL }}
+      - run: npm test
       - run: npm audit --audit-level=critical
 
   release-macos:

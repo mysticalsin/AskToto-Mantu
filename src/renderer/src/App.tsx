@@ -15,7 +15,17 @@ import { Bar } from './components/Bar'
 import { OnboardingV2 } from './components/OnboardingExperience'
 import { ControlPill } from './components/ControlPill'
 import { OverlayPeek } from './components/OverlayPeek'
-import { RightEdgeSidecar } from './components/RightEdgeSidecar'
+import { RightEdgeAnswerSummary, RightEdgeSidecar, type SidecarReaderTarget } from './components/RightEdgeSidecar'
+import {
+  RightEdgeReader,
+  RightEdgeReaderDetails,
+  RightEdgeReaderTranscript,
+  readerKindForView,
+  rightEdgeDetailErrors,
+  rightEdgeReaderTone
+} from './components/right-edge/RightEdgeReader'
+import type { RightEdgeReaderKind, RightEdgeReaderScrollMemory } from './components/right-edge/RightEdgeReader'
+import { rightEdgeStrings } from './lib/right-edge/strings'
 import { Panel } from './components/Panel'
 import { isOnboardingBoot, provisionalOnboardingSettings } from './lib/onboarding-boot'
 import { installOnboardingAudioLockHooks, lockOnboardingAudio } from './lib/onboarding-music'
@@ -69,7 +79,7 @@ import {
   shouldForceParkOnBecameIdle
 } from '@shared/overlay-chrome'
 import { resolveOverlayPresentation } from '@shared/overlay-presentation'
-import type { RightEdgeSurfaceState } from '@shared/right-edge-state'
+import type { RightEdgeSurface, RightEdgeSurfaceState } from '@shared/right-edge-state'
 import { createAttentionLatch, useRightEdgePins } from './lib/right-edge/pins'
 import type { RendererView } from '@shared/renderer-view'
 import { decideCircleRestMinimize, parseOverlayOrbStyle, type OverlayOrbStyle } from '@shared/overlay-orb'
@@ -712,6 +722,20 @@ export function App(): JSX.Element {
   const rightEdgePresentation = overlayPresentation.surface === 'edge-chat'
   const rightEdge = useRightEdgePins({ approvalPending: rightEdgePresentation && commandState.proposalId !== null })
   const rightEdgePins = rightEdgePresentation ? rightEdge.pins : []
+  // The Reader (spec v3 §6): long content opens beside the island and is never scrolled in it. On the right
+  // edge a full view (History, Review, Agenda, Brain) is always a Reader; the full answer, the live transcript
+  // and the Details open from the dock's ↗. A suspended Reader waits for the next explicit open: main opened
+  // the island instead (a pointer reveal, the ask hotkey), or the user went back to the island.
+  const [rightEdgeReaderRequest, setRightEdgeReaderRequest] = useState<SidecarReaderTarget | null>(null)
+  const [rightEdgeReaderSuspended, setRightEdgeReaderSuspended] = useState(false)
+  // Settings keeps its own surface: an open Reader request waits under it.
+  const rightEdgeReaderKind: RightEdgeReaderKind | null =
+    rightEdgePresentation && view !== 'settings' ? (rightEdgeReaderRequest ?? readerKindForView(view)) : null
+  const rightEdgeReaderWanted = rightEdgeReaderKind !== null && !rightEdgeReaderSuspended
+  const rightEdgeReaderKindRef = useRef(rightEdgeReaderKind)
+  rightEdgeReaderKindRef.current = rightEdgeReaderKind
+  const rightEdgeReaderScroll: RightEdgeReaderScrollMemory = useRef({})
+  const rightEdgeCopy = rightEdgeStrings()
   const overlayOrbStyle = parseOverlayOrbStyle(settings?.overlayOrbStyle)
   const canMinimize = overlayAllowsMinimize(overlayLayout)
   const showBarOrb = overlayShowsBarOrb(overlayLayout, minimized)
@@ -731,7 +755,9 @@ export function App(): JSX.Element {
       updateReady: updateReady.open,
       toast: newMeetingToast || consentReminderOpen || !!visibilityToast || !!openMeetingError || !!operatorGateNotice,
       typedInput: input.trim().length > 0
-    }) || rightEdgePins.length > 0
+    }) ||
+    rightEdgePins.length > 0 ||
+    rightEdgeReaderWanted
   const [autoHide, dispatchAutoHide] = useReducer(reduceAutoHide, autoHideSetting, initialAutoHideState)
   // The user may hand a right-edge session to the standalone Intelligence window while a draft or an
   // important notice keeps the generic auto-hide machine forced open. Keep that state and the draft
@@ -769,6 +795,12 @@ export function App(): JSX.Element {
     // Auto-hide is off while a capture runs, so no exit spring will request this park: request it now.
     if (!overlayIdle) parkCurrentOverlayAfterHide()
   }, [imeComposing, overlayIdle, parkCurrentOverlayAfterHide])
+  // The Reader's Hide and Escape: the dock under it is hidden, so no exit spring will request the park.
+  const hideRightEdgeReader = useCallback((): void => {
+    if (imeComposing) return
+    closeRightEdgeDock()
+    if (overlayIdle) parkCurrentOverlayAfterHide()
+  }, [closeRightEdgeDock, imeComposing, overlayIdle, parkCurrentOverlayAfterHide])
   useEffect(() => {
     dispatchAutoHide({ type: 'set-enabled', enabled: overlayIdle })
   }, [overlayIdle])
@@ -841,6 +873,11 @@ export function App(): JSX.Element {
   const overlayPeeked =
     (edgeDockParked && overlaySpring === 'rest') ||
     overlayShowPeek(overlayIdle, overlaySurfaceRevealed, overlaySpring, overlayRestsHidden(overlayLayout))
+  // Set by a page pointer-enter on the parked rest (the Island tab); cleared by its reveal or an explicit open.
+  const rightEdgePointerRevealRef = useRef(false)
+  const rightEdgePinsRef = useRef(rightEdgePins)
+  rightEdgePinsRef.current = rightEdgePins
+  const rightEdgeReaderShown = rightEdgeReaderWanted && !overlayPeeked && rightEdgeSurface?.surface === 'reader'
   const springIdleRef = useRef(false)
   const wasRevealedRef = useRef(overlaySurfaceRevealed)
   const overlayRevealedRef = useRef(overlaySurfaceRevealed)
@@ -874,6 +911,12 @@ export function App(): JSX.Element {
       return
     }
     if (overlaySurfaceRevealed && !wasRevealed) {
+      // A pointer reveal opens the island: tell main before it sizes the window, so a parked Reader stays parked.
+      if (rightEdgePointerRevealRef.current && rightEdgeReaderKindRef.current !== null) {
+        setRightEdgeReaderSuspended(true)
+        void window.toto.reportRightEdgeState?.({ surface: 'island', contentHeight: 0, pins: rightEdgePinsRef.current })
+      }
+      rightEdgePointerRevealRef.current = false
       void window.toto.revealWidth()
       setOverlaySpring(overlaySpringAfterReveal(reduced))
     } else if (!overlaySurfaceRevealed && wasRevealed) {
@@ -895,6 +938,7 @@ export function App(): JSX.Element {
     rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, {
       type: 'explicit-reveal'
     })
+    rightEdgePointerRevealRef.current = false
     setRightEdgeDockDismissed(false)
     dispatchAutoHide({ type: 'pointer-enter' })
   }, [])
@@ -912,6 +956,8 @@ export function App(): JSX.Element {
     () => navigationGuard.subscribe(() => setNavigationGuardRequest(navigationGuard.current())),
     [navigationGuard]
   )
+  const overlayPeekedRef = useRef(overlayPeeked)
+  overlayPeekedRef.current = overlayPeeked
   const onOverlayPointerEnter = useCallback(() => {
     if (rightEdgePresentation) {
       const nextLock = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, {
@@ -920,10 +966,12 @@ export function App(): JSX.Element {
       rightEdgeDismissalLockRef.current = nextLock
       if (nextLock !== 'open') return
       setRightEdgeDockDismissed(false)
+      if (overlayPeekedRef.current) rightEdgePointerRevealRef.current = true
     }
     dispatchAutoHide({ type: 'pointer-enter' })
   }, [rightEdgePresentation])
   const onOverlayPointerLeave = useCallback(() => {
+    rightEdgePointerRevealRef.current = false
     if (rightEdgePresentation) {
       const previousLock = rightEdgeDismissalLockRef.current
       const nextLock = reduceRightEdgeDismissalLock(previousLock, { type: 'renderer-pointer-leave' })
@@ -938,6 +986,8 @@ export function App(): JSX.Element {
   useEffect(() => {
     return window.toto.onOverlayCursorHover?.((d) => {
       if (d.hovering) {
+        // Main has sized this reveal already (island or Reader); its surface tells the page which.
+        rightEdgePointerRevealRef.current = false
         // An explicit close is authoritative until the pointer truly leaves and re-enters the parked
         // rail. The cursor watcher is still sampling the vanished drawer at this point, so treating this
         // message as a new enter produces the visible close → reopen flash reported in device QA.
@@ -969,7 +1019,41 @@ export function App(): JSX.Element {
     })
   }, [rightEdgePresentation])
   // Main gates its parks on these pins and answers with its surface; a settings change re-reads it.
-  const reportedSurface = rightEdgePresentation ? (overlayPeeked ? 'rest' : 'island') : 'top-center'
+  const reportedSurface = rightEdgePresentation
+    ? overlayPeeked
+      ? 'rest'
+      : rightEdgeReaderWanted
+        ? 'reader'
+        : 'island'
+    : 'top-center'
+  // Main decides what a reveal opens. It opens the Reader only when the Reader was open at the park; when it
+  // opens the island while the page still holds a Reader, the Reader waits for an explicit open.
+  const previousRightEdgeSurfaceRef = useRef<RightEdgeSurface | null>(null)
+  useEffect(() => {
+    const previous = previousRightEdgeSurfaceRef.current
+    const next = rightEdgeSurface?.surface ?? null
+    previousRightEdgeSurfaceRef.current = next
+    if (next === 'reader') setRightEdgeReaderSuspended(false)
+    else if (previous === 'rest' && next === 'island' && rightEdgeReaderKindRef.current !== null)
+      setRightEdgeReaderSuspended(true)
+  }, [rightEdgeSurface])
+  // Navigating to a full view is an explicit open of its Reader.
+  useEffect(() => {
+    if (readerKindForView(view) === null) return
+    setRightEdgeReaderRequest(null)
+    setRightEdgeReaderSuspended(false)
+  }, [view])
+  const openRightEdgeReader = useCallback((target: SidecarReaderTarget): void => {
+    setRightEdgeReaderSuspended(false)
+    // The dock's Open ↗ over a suspended full view resumes that view's Reader.
+    setRightEdgeReaderRequest(target === 'answer' && readerKindForView(viewRef.current) !== null ? null : target)
+  }, [])
+  const leaveRightEdgeReader = useCallback((): void => {
+    // A full view stays the current view (a live Review keeps its recap rescue for its own exits); its Reader
+    // waits until Open ↗. A requested Reader is simply closed.
+    if (readerKindForView(viewRef.current) !== null) setRightEdgeReaderSuspended(true)
+    setRightEdgeReaderRequest(null)
+  }, [])
   const rightEdgePinsKey = rightEdgePins.join(',')
   useEffect(() => {
     const pins = rightEdgePinsKey ? (rightEdgePinsKey.split(',') as typeof rightEdgePins) : []
@@ -3229,6 +3313,7 @@ export function App(): JSX.Element {
         setFocusSignal((x) => x + 1)
         // A summoned right-edge dock opens at once with the composer focused, even after an explicit Hide.
         if (rightEdgePresentation) {
+          setRightEdgeReaderRequest(null)
           rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, {
             type: 'explicit-reveal'
           })
@@ -3304,6 +3389,12 @@ export function App(): JSX.Element {
   const escapeRef = useRef<() => void>(() => {})
   escapeRef.current = (): void => {
     void (async () => {
+      // The Reader's ladder: an open confirm sheet closes first, then a stream stops, then a field drops focus,
+      // then the Reader parks (the next explicit reveal restores it at its scroll position).
+      if (rightEdgeReaderShown && navigationGuardRequest) {
+        navigationGuard.choose('cancel', navigationGuardRequest.id)
+        return
+      }
       // A live stream takes top priority (see the precedence comment above) — checked BEFORE the typing-blur
       // branch below, because the ask input keeps focus after Enter-submit (submit clears its value but never
       // blurs). Without this ordering the first Esc during a stream only drops focus/the caret and the answer
@@ -3316,6 +3407,10 @@ export function App(): JSX.Element {
       const el = document.activeElement as HTMLElement | null
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
         el.blur()
+        return
+      }
+      if (rightEdgeReaderShown) {
+        hideRightEdgeReader()
         return
       }
       // From the minimized pill, Escape expands back to the full widget (the natural "back out" step).
@@ -4127,8 +4222,35 @@ export function App(): JSX.Element {
   const answerView = view === 'answer' || view === 'copilot' || DEMO === 'answer' || DEMO === 'copilot'
   // Answer / live-copilot render INSIDE the expanded bar (one surface: big input → body → toolbar at the
   // bottom). Only the full views (settings / history / review / agenda) render as a panel below the bar.
-  const barBody = answerView && !collapsed ? body : undefined
-  const isPanelBody = body != null && !answerView
+  // On the right edge the dock holds a one-line summary of the answer or suggestion, never the full body: that
+  // mounts only in the Reader (RE-L05), which the dock's Open ↗ opens.
+  const islandAnswer =
+    DEMO === 'answer'
+      ? { text: DEMO_ANSWER, streaming: false, error: null }
+      : DEMO === 'copilot'
+        ? { text: DEMO_SUG, streaming: false, error: null }
+        : view === 'copilot'
+          ? suggest.answer
+          : capturing
+            ? { text: '', streaming: true, error: null }
+            : ask.answer
+              ? { text: ask.answer.text, streaming: ask.answer.streaming, error: ask.answer.error ?? captureError }
+              : captureError
+                ? { text: '', streaming: false, error: captureError }
+                : null
+  const barBody =
+    !answerView || collapsed ? undefined : !rightEdgePresentation ? (
+      body
+    ) : islandAnswer ? (
+      <RightEdgeAnswerSummary
+        text={islandAnswer.text}
+        streaming={islandAnswer.streaming}
+        error={islandAnswer.error}
+        strings={rightEdgeCopy}
+      />
+    ) : undefined
+  // On the right edge the full views are Readers (RightEdgeReader), never a panel under the dock.
+  const isPanelBody = body != null && !answerView && !(rightEdgePresentation && readerKindForView(view) !== null)
   // Edge chrome is for the compact Ask/Copilot surface only. Full product views (Settings, History,
   // Review, Agenda, Intelligence) replace it instead of rendering beneath the dock or being squeezed
   // into its 360px native window.
@@ -4152,6 +4274,38 @@ export function App(): JSX.Element {
   // notices beside its rail: those normal-flow siblings are what leaked a clipped “Mic silent” message
   // across the user's desktop. The dock receives its live notice through its own bounded, scrollable body.
   const showWideMeetingChrome = showListeningChrome && !rightEdgeDockVisible
+  // The Reader's approval and error Details, and its header status (the attention tone while an action waits).
+  const readerDetailErrors = rightEdgeDetailErrors(ask.answer?.error, captureError, listen.error, openMeetingError)
+  const readerTone = rightEdgeReaderTone({
+    attention: !!commandState.proposalId,
+    thinking: !!(capturing || ask.answer?.streaming || suggest.answer?.streaming),
+    listening: showListeningChrome,
+    paused: listen.paused
+  })
+  const rightEdgeReaderBody =
+    rightEdgeReaderKind === 'answer' ? (
+      answerView ? (
+        body
+      ) : (
+        answerBody
+      )
+    ) : rightEdgeReaderKind === 'transcript' ? (
+      <RightEdgeReaderTranscript
+        lines={listen.lines}
+        strings={rightEdgeCopy}
+        youLabel={micSpeakerLabel(settings?.profile)}
+      />
+    ) : rightEdgeReaderKind === 'details' ? (
+      <RightEdgeReaderDetails commandState={commandState} errors={readerDetailErrors} strings={rightEdgeCopy} />
+    ) : rightEdgeReaderKind === 'history' ? (
+      historyBody
+    ) : rightEdgeReaderKind === 'review' ? (
+      reviewBody
+    ) : rightEdgeReaderKind === 'agenda' ? (
+      agendaBody
+    ) : rightEdgeReaderKind === 'brain' ? (
+      brainBody
+    ) : null
 
   return (
     // Root drag is withheld while minimized: ControlPill (rendered below) arms its OWN drag instance on
@@ -4268,8 +4422,10 @@ export function App(): JSX.Element {
         />
       ) : (
         <>
-          {/* Hide/Island: overlay-spring. Bar Circle/Jarvis: circle-rest-spring only. */}
+          {/* Hide/Island: overlay-spring. Bar Circle/Jarvis: circle-rest-spring only. While the Reader is up the
+              dock stays mounted but hidden (out of the tab order and the accessibility tree). */}
           <div
+            hidden={rightEdgeReaderShown || undefined}
             className={[
               overlayIdle
                 ? overlaySpringClassName(overlaySpring, rightEdgePresentation ? 'right' : 'top')
@@ -4330,6 +4486,9 @@ export function App(): JSX.Element {
                 onHistory={onBarHistory}
                 liveNotice={listen.error}
                 onSettings={onBarSettings}
+                onOpenReader={openRightEdgeReader}
+                detailsAvailable={commandState.proposalId !== null || readerDetailErrors.length > 0}
+                readerStrings={rightEdgeCopy}
               />
             ) : rightEdgePresentation ? null : (
               <Bar
@@ -4391,8 +4550,35 @@ export function App(): JSX.Element {
               />
             )}
           </div>
-          {/* The parked right-edge window is its rail: nothing but the dock above renders in it. */}
-          {overlayPeeked ? null : (
+          {/* Main sized the window to readerRect before reporting the 'reader' surface; the Reader fades in. */}
+          {rightEdgeReaderShown && rightEdgeReaderKind !== null ? (
+            <RightEdgeReader
+              kind={rightEdgeReaderKind}
+              strings={rightEdgeCopy}
+              tone={readerTone}
+              onAttention={() => openRightEdgeReader('details')}
+              meeting={
+                showListeningChrome && meetingStartRef.current > 0
+                  ? {
+                      startedAt: meetingStartRef.current,
+                      paused: listen.paused,
+                      pausedMs: meetingPauseRef.current.pausedMs,
+                      pausedAt: meetingPauseRef.current.pausedAt
+                    }
+                  : null
+              }
+              consentDot={showListeningChrome}
+              onBack={leaveRightEdgeReader}
+              onHide={hideRightEdgeReader}
+              liveCount={listen.lines.length}
+              scrollMemory={rightEdgeReaderScroll}
+            >
+              <Suspense fallback={<AgentStatus kind="loading" size="hero" />}>{rightEdgeReaderBody}</Suspense>
+            </RightEdgeReader>
+          ) : null}
+          {/* The parked right-edge window is its rail: nothing but the dock above renders in it; the Reader
+              fills its window alone. */}
+          {overlayPeeked || rightEdgeReaderShown ? null : (
             <>
               {/* Quick actions render as their own row UNDER the whole bar (including its toolbar), only
                   while a meeting is actively being listened to — clean bar with nothing under it at launch
