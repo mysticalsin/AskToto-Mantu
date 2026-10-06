@@ -18,6 +18,32 @@ const step = (needle: string): string => {
   return found!
 }
 
+describe('M2-0503 promote-candidate residuals input', () => {
+  it('declares an optional residuals input that a dry run may omit', () => {
+    const input = workflow.slice(workflow.indexOf('      residuals:'), workflow.indexOf('      confirm_version:'))
+    expect(input).toContain('required: false')
+    expect(input).toContain('type: string')
+    expect(input).toContain('-F residuals=@file')
+  })
+
+  it('refuses publish=true without residuals, before any download or upload', () => {
+    const guard = workflow.indexOf('[ "$PUBLISH" = true ] && [ -z "${RESIDUALS//[[:space:]]/}" ]')
+    expect(guard).toBeGreaterThan(-1)
+    expect(guard).toBeLessThan(workflow.indexOf('actions/download-artifact'))
+    expect(guard).toBeLessThan(workflow.indexOf('gh release create'))
+  })
+
+  it('passes residuals to prepare-release through env and a file, never interpolated into a shell line', () => {
+    expect(workflow.match(/RESIDUALS: \$\{\{ inputs\.residuals \}\}/g)).toHaveLength(2)
+    expect(workflow.match(/inputs\.residuals/g)).toHaveLength(2)
+    expect(workflow).toContain('printf \'%s\' "$RESIDUALS" > "$RUNNER_TEMP/residuals.md"')
+    expect(workflow).toContain('--residuals-file "$RUNNER_TEMP/residuals.md"')
+    for (const line of workflow.split('\n')) {
+      if (line.includes('inputs.residuals')) expect(line).toMatch(/^\s+RESIDUALS: \$\{\{ inputs\.residuals \}\}$/)
+    }
+  })
+})
+
 describe('Promote candidate workflow: main and release/1.9.x candidates (M2-0500)', () => {
   it('still promotes only from a dispatch on refs/heads/main, in this repository', () => {
     expect(workflow).toMatch(

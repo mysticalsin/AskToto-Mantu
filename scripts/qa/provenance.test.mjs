@@ -7,7 +7,16 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -15,6 +24,7 @@ import { fileURLToPath } from 'node:url'
 import {
   VARIANTS,
   PROMOTABLE_VARIANTS,
+  RESIDUALS_MAX_LENGTH,
   promotableAssets,
   stageBuild,
   assembleProvenance,
@@ -134,7 +144,7 @@ test("stage moves exactly the variant's installers and records size and sha256",
       assert.equal(asset.sha256, sha256(bytes))
       assert.equal(asset.size, bytes.length)
     }
-    for (const name of VARIANTS.win.assets(VERSION)) {
+    for (const name of [...VARIANTS.win.assets(VERSION), ...VARIANTS['win-portable'].assets(VERSION)]) {
       assert.ok(existsSync(join(releaseDir, name)), `${name} should remain in release/ untouched`)
     }
     for (const name of VARIANTS['mac-qa-identity'].assets(VERSION)) {
@@ -149,7 +159,8 @@ test('a D-34 hotfix version stages the same asset names under the hotfix version
   const hotfix = '1.9.7-hotfix.1'
   assert.deepEqual(VARIANTS.mac.assets(hotfix), ['Metis-1.9.7-hotfix.1.dmg', 'Metis-1.9.7-hotfix.1.zip'])
   assert.deepEqual(VARIANTS['mac-qa-identity'].assets(hotfix), ['Metis-QA-1.9.7-hotfix.1.zip'])
-  assert.deepEqual(VARIANTS.win.assets(hotfix), ['Metis-Setup-1.9.7-hotfix.1.exe', 'Metis-Portable-1.9.7-hotfix.1.exe'])
+  assert.deepEqual(VARIANTS.win.assets(hotfix), ['Metis-Setup-1.9.7-hotfix.1.exe'])
+  assert.deepEqual(VARIANTS['win-portable'].assets(hotfix), ['Metis-Portable-1.9.7-hotfix.1.exe'])
 
   const { root, releaseDir } = fixture()
   try {
@@ -331,7 +342,7 @@ test('assemble binds every build to one commit and run and lists every asset in 
     assert.equal(provenance.run.url, `${e.GITHUB_SERVER_URL}/${e.GITHUB_REPOSITORY}/actions/runs/${e.GITHUB_RUN_ID}`)
     assert.deepEqual(
       provenance.builds.map((b) => b.variant),
-      ['mac', 'mac-qa-identity', 'win']
+      ['mac', 'mac-qa-identity', 'win', 'win-portable']
     )
     for (const build of provenance.builds) {
       assert.equal(Object.hasOwn(build, 'commit'), false)
@@ -480,6 +491,28 @@ test('evidence needs a PASS record bound to this run for every promotable asset'
   }
 })
 
+test('Windows Portable is staged as QA-only and excluded from promotable assets', async () => {
+  const { root, releaseDir } = fixture()
+  try {
+    const { records, env: e } = await stageAll(root, releaseDir)
+    const provenance = assembleProvenance(records, e)
+    const portableAsset = provenance.builds.find((build) => build.variant === 'win-portable').assets[0]
+    const promotableNames = promotableAssets(provenance).map((asset) => asset.name)
+
+    assert.ok(portableAsset.name.startsWith('Metis-Portable-'))
+    assert.ok(!PROMOTABLE_VARIANTS.includes('win-portable'))
+    assert.ok(!promotableNames.includes(portableAsset.name))
+
+    const fullCoveragePlusPortable =
+      passEvidenceFor(provenance, promotableAssets(provenance)) + passEvidenceLine(provenance, portableAsset.sha256)
+    const problems = evidenceProblems(fullCoveragePlusPortable, provenance)
+    assert.equal(problems.length, 1)
+    assert.match(problems[0], /not one of this candidate's promotable assets/)
+  } finally {
+    cleanup(root)
+  }
+})
+
 test('evidence problems name the line', async () => {
   const { root, releaseDir } = fixture()
   try {
@@ -541,7 +574,7 @@ test('a PASS record for one promotable asset never covers a different asset or p
     const { records, env: e } = await stageAll(root, releaseDir)
     const provenance = assembleProvenance(records, e)
     const assets = promotableAssets(provenance)
-    assert.equal(assets.length, 4, 'fixture must stage both mac and win assets to exercise cross-asset coverage')
+    assert.equal(assets.length, 3, 'fixture must stage both mac and win assets to exercise cross-asset coverage')
 
     const [missing, ...covered] = assets
     const partialCoverage = passEvidenceFor(provenance, covered)
@@ -562,22 +595,24 @@ test('a PASS record for one promotable asset never covers a different asset or p
       )
     }
 
-    // The macOS QA-identity build is built and tested but never shipped: a PASS record naming its
-    // asset covers no promotable asset, and alongside full coverage it is still a refusal.
-    const qaAsset = provenance.builds.find((build) => build.variant === 'mac-qa-identity').assets[0]
-    const fullCoveragePlusQa = passEvidenceFor(provenance, assets) + passEvidenceLine(provenance, qaAsset.sha256)
-    problems = evidenceProblems(fullCoveragePlusQa, provenance)
-    assert.equal(problems.length, 1)
-    assert.match(problems[0], /not one of this candidate's promotable assets/)
+    // QA-only builds are built and tested but never shipped: a PASS record naming either asset covers
+    // no promotable asset, and alongside full coverage it is still a refusal.
+    for (const variant of ['mac-qa-identity', 'win-portable']) {
+      const qaAsset = provenance.builds.find((build) => build.variant === variant).assets[0]
+      const fullCoveragePlusQa = passEvidenceFor(provenance, assets) + passEvidenceLine(provenance, qaAsset.sha256)
+      problems = evidenceProblems(fullCoveragePlusQa, provenance)
+      assert.equal(problems.length, 1)
+      assert.match(problems[0], /not one of this candidate's promotable assets/)
 
-    const qaOnly = passEvidenceLine(provenance, qaAsset.sha256)
-    problems = evidenceProblems(qaOnly, provenance)
-    assert.equal(problems.length, assets.length + 1)
-    for (const asset of assets) {
-      assert.ok(
-        problems.some((p) => p.includes(asset.name)),
-        `expected a problem naming ${asset.name}`
-      )
+      const qaOnly = passEvidenceLine(provenance, qaAsset.sha256)
+      problems = evidenceProblems(qaOnly, provenance)
+      assert.equal(problems.length, assets.length + 1)
+      for (const asset of assets) {
+        assert.ok(
+          problems.some((p) => p.includes(asset.name)),
+          `expected a problem naming ${asset.name}`
+        )
+      }
     }
   } finally {
     cleanup(root)
@@ -596,10 +631,13 @@ test('prepare-release publishes only the shipping installers with SHA256SUMS.txt
     const downloadsDir = join(root, 'downloads')
     mkdirSync(downloadsDir, { recursive: true })
     copyPromotableAssetsToDownloads(root, provenance, downloadsDir)
-    // The QA-identity zip is never handed to promotion at all: it lives only where build-mac-qa-identity staged it.
+    // QA-only assets are never handed to promotion at all: they live only where their variants staged them.
     const qaAsset = provenance.builds.find((b) => b.variant === 'mac-qa-identity').assets[0]
     const qaZipElsewhere = join(root, 'staged', 'mac-qa-identity', 'assets', qaAsset.name)
     assert.ok(existsSync(qaZipElsewhere))
+    const portableAsset = provenance.builds.find((b) => b.variant === 'win-portable').assets[0]
+    const portableElsewhere = join(root, 'staged', 'win-portable', 'assets', portableAsset.name)
+    assert.ok(existsSync(portableElsewhere))
 
     const evidencePath = join(root, 'evidence.jsonl')
     const macSha = provenance.builds.find((b) => b.variant === 'mac').assets[0].sha256
@@ -638,18 +676,19 @@ test('prepare-release publishes only the shipping installers with SHA256SUMS.txt
     const uploaded = readdirSync(uploadDir).sort()
     const promotableAssetNames = promotableAssets(provenance).map((asset) => asset.name)
     assert.deepEqual(uploaded, [...promotableAssetNames, 'SHA256SUMS.txt', 'provenance.json'].sort())
-    assert.equal(uploaded.length, 6)
+    assert.equal(uploaded.length, 5)
 
     const sums = readFileSync(join(uploadDir, 'SHA256SUMS.txt'), 'utf8').split('\n').filter(Boolean)
-    assert.equal(sums.length, 4)
+    assert.equal(sums.length, 3)
 
     assert.deepEqual(readFileSync(join(uploadDir, 'provenance.json')), Buffer.from(provenanceBytes))
 
-    // The QA zip is still exactly where it was: prepareRelease never touched it.
+    // The QA-only assets are still exactly where they were: prepareRelease never touched them.
     assert.ok(existsSync(qaZipElsewhere))
+    assert.ok(existsSync(portableElsewhere))
 
     const manifest = JSON.parse(readFileSync(join(outDir, 'manifest.json'), 'utf8'))
-    assert.equal(manifest.length, 6)
+    assert.equal(manifest.length, 5)
     for (const entry of manifest) {
       assert.ok(typeof entry.name === 'string' && typeof entry.size === 'number' && /^[0-9a-f]{64}$/.test(entry.sha256))
     }
@@ -790,14 +829,22 @@ test('release notes state version, commit, candidate run, promotion run, not-Lat
     }
     const qaAsset = provenance.builds.find((b) => b.variant === 'mac-qa-identity').assets[0]
     assert.ok(!notes.includes(qaAsset.name), 'the QA-identity asset is never promoted, so it must not appear')
+    const portableAsset = provenance.builds.find((b) => b.variant === 'win-portable').assets[0]
+    assert.ok(!notes.includes(portableAsset.name), 'the Portable asset is QA-only, so it must not appear')
 
     assert.ok(notes.includes('ad-hoc signed and not notarized'))
+    assert.ok(
+      notes.includes('grant Screen Recording and Microphone again once in System Settings > Privacy & Security')
+    )
+    assert.ok(notes.includes('Métis Settings > Repair helps'))
+    assert.ok(notes.includes('treats an ad-hoc build as a new app'))
 
     const qaSigned = JSON.parse(JSON.stringify(provenance))
     qaSigned.builds.find((b) => b.variant === 'mac').signing = { mode: 'qa-identity', certificate_sha1: 'a'.repeat(40) }
     const qaNotes = releaseNotes({ provenance: qaSigned, evidence, promotionRunUrl })
     assert.ok(qaNotes.includes('self-signed QA certificate'))
     assert.ok(qaNotes.includes('a'.repeat(40)))
+    assert.ok(!qaNotes.includes('Screen Recording'), 'the qa-identity branch keeps its text: no re-grant instruction')
 
     // Only a release/1.9.x candidate is named a hotfix; main (the default) and any other branch add no line.
     const hotfixLine = `a hotfix of 1.9.7 built from release/1.9.x at commit \`${provenance.commit}\``
@@ -808,6 +855,92 @@ test('release notes state version, commit, candidate run, promotion run, not-Lat
     const hotfixNotes = releaseNotes({ provenance, evidence, promotionRunUrl, candidateBranch: 'release/1.9.x' })
     assert.ok(hotfixNotes.includes(hotfixLine))
     assert.equal(hotfixNotes.split('hotfix of 1.9.7').length - 1, 1)
+  } finally {
+    cleanup(root)
+  }
+})
+
+test('release notes render the residuals verbatim between the evidence line and the sha256 table, in both signing modes', async () => {
+  const { root, releaseDir } = fixture()
+  try {
+    const { records, env: e } = await stageAll(root, releaseDir)
+    const provenance = assembleProvenance(records, e)
+    const promotionRunUrl = 'https://github.com/owner/repo/actions/runs/99'
+    const evidence = { count: 1, tickets: ['M2-0028'], sha256: sha256('evidence bytes') }
+    const residuals = '- **First** limit, `code` and | pipes\n- Second limit\n\n  indented <b>html</b>'
+    const heading = '## Residual risks and known limits'
+
+    const qaSigned = JSON.parse(JSON.stringify(provenance))
+    qaSigned.builds.find((b) => b.variant === 'mac').signing = { mode: 'qa-identity', certificate_sha1: 'a'.repeat(40) }
+    for (const p of [provenance, qaSigned]) {
+      const notes = releaseNotes({ provenance: p, evidence, promotionRunUrl, residuals })
+      assert.equal(notes.split(heading).length, 2)
+      assert.ok(notes.includes(`${heading}\n\n${residuals}\n\n`))
+      const evidenceAt = notes.indexOf('**Evidence:**')
+      const headingAt = notes.indexOf(heading)
+      const tableAt = notes.indexOf('| File | SHA-256 |')
+      assert.ok(evidenceAt !== -1 && evidenceAt < headingAt && headingAt < tableAt)
+    }
+
+    // A dry run may omit the residuals: no section at all.
+    assert.ok(!releaseNotes({ provenance, evidence, promotionRunUrl }).includes(heading))
+  } finally {
+    cleanup(root)
+  }
+})
+
+test('prepare-release renders the residuals into notes.md and refuses empty, oversized, home-path and email residuals', async () => {
+  const { root, releaseDir } = fixture()
+  try {
+    const { records, env: e } = await stageAll(root, releaseDir)
+    const provenance = assembleProvenance(records, e)
+    const provenancePath = join(root, 'provenance.json')
+    writeFileSync(provenancePath, `${JSON.stringify(provenance, null, 2)}\n`)
+    const downloadsDir = join(root, 'downloads')
+    mkdirSync(downloadsDir, { recursive: true })
+    copyPromotableAssetsToDownloads(root, provenance, downloadsDir)
+    const evidencePath = join(root, 'evidence.jsonl')
+    writeFileSync(evidencePath, passEvidenceFor(provenance, promotableAssets(provenance)))
+    const prepare = (name, residuals) =>
+      prepareRelease({
+        provenancePath,
+        evidencePath,
+        downloadsDir,
+        outDir: join(root, name),
+        candidateRun: String(provenance.run.id),
+        candidateCommit: provenance.commit,
+        residuals,
+        env: e
+      })
+
+    const macHome = ['/Users', 'someone', 'notes'].join('/')
+    const linuxHome = ['/home', 'someone', 'notes'].join('/')
+    const winHome = ['C:\\Users', 'someone', 'notes'].join('\\')
+    const email = ['someone', 'example.com'].join('@')
+    const refused = [
+      ['empty', '', /residuals is empty/],
+      ['blank', ' \n\t\n', /residuals is empty/],
+      ['long', 'x'.repeat(RESIDUALS_MAX_LENGTH + 1), /limit is 10000/],
+      ['mac-home', `see ${macHome}`, /user-home path \(INV-7\)/],
+      ['linux-home', `see ${linuxHome}`, /user-home path \(INV-7\)/],
+      ['win-home', `see ${winHome}`, /user-home path \(INV-7\)/],
+      ['email', `ask ${email}`, /email address \(INV-7\)/]
+    ]
+    for (const [name, residuals, rule] of refused) {
+      await assert.rejects(prepare(`refused-${name}`, residuals), (error) => rule.test(error.message), name)
+      assert.equal(existsSync(join(root, `refused-${name}`, 'upload')), false, name)
+    }
+
+    // The limit itself is accepted.
+    await prepare('at-limit', 'x'.repeat(RESIDUALS_MAX_LENGTH))
+    assert.ok(existsSync(join(root, 'at-limit', 'upload')))
+    for (const asset of promotableAssets(provenance)) {
+      renameSync(join(root, 'at-limit', 'upload', asset.name), join(downloadsDir, asset.name))
+    }
+
+    const { notes } = await prepare('ok', 'Known limit: the idle soak is extrapolated.')
+    assert.ok(notes.includes('## Residual risks and known limits\n\nKnown limit: the idle soak is extrapolated.\n\n'))
+    assert.equal(readFileSync(join(root, 'ok', 'notes.md'), 'utf8'), notes)
   } finally {
     cleanup(root)
   }

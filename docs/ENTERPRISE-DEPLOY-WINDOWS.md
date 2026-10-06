@@ -11,7 +11,7 @@ Companion docs: `SIGNING.md` (cert/env reference) · `MANTU-IT-REQUEST.md` (owne
 | File | Purpose |
 |---|---|
 | `Metis-Setup-<version>.exe` | NSIS installer (per-user, no admin needed; silent: `/S`) |
-| `Metis-Portable-<version>.exe` | Single-file portable, no install |
+| `Metis-Portable-<version>.exe` | QA-only single-file portable; never auto-updates and is not promoted to customer releases |
 | `latest.yml` + `*.blockmap` | electron-updater feed metadata (differential updates) |
 
 Both executables embed the on-device ASR models (~2.2 GB) — no first-run download, works offline.
@@ -75,12 +75,15 @@ reports `UnknownError` (signed correctly, root not trusted locally) — expected
   `Metis-Setup-<version>.exe /S` (NSIS silent, per-user context). Detection: presence of
   `%LOCALAPPDATA%\Programs\Metis\Metis.exe` with the target version.
 - **Self-service:** publish the installer on the internal portal; per-user install needs no admin.
-- **Portable:** for locked-down or kiosk machines, ship `Metis-Portable-<version>.exe`.
+- **Locked-down or kiosk machines:** deploy `Metis-Setup-<version>.exe /S` in the user's context.
+  Do not deploy the Portable exe to managed fleets; it is QA-only and never receives auto-updates.
 
 ## Auto-update channel
 
 Installed apps poll the public **Métis-Releases** GitHub repo on launch, download in the
 background, and install on quit (`electron-builder.yml` publish block; `src/main/updater.ts`).
+This channel serves the NSIS Setup installer only on Windows; the Portable exe is QA-only and has no
+updater support.
 Updates are rejected unless their Authenticode signature matches `publisherName` (`CN=Mantu`) —
 a compromised feed cannot push an unsigned or foreign-signed binary. Release flow: tag `v*` →
 `release.yml` builds, signs, and publishes (requires `WIN_CSC_LINK`/`WIN_CSC_KEY_PASSWORD` secrets;
