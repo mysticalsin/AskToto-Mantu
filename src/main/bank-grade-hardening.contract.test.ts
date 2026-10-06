@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { sourceIndexOf } from '../../scripts/lib/source-layout'
 
 /**
  * Source-contract pins for the 2026-09-05 bank-grade hardening pass (see .rocket-fuel/METIS-BANK-GRADE-RECEIPT.md).
@@ -10,15 +11,15 @@ import { describe, expect, it } from 'vitest'
 const src = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
 
 function sliceBetween(start: string, end: string): string {
-  const a = src.indexOf(start)
+  const a = sourceIndexOf(src, start)
   if (a === -1) throw new Error(`marker not found: ${start}`)
-  const b = src.indexOf(end, a)
+  const b = sourceIndexOf(src, end, a + 1)
   if (b === -1) throw new Error(`end marker not found after start: ${end}`)
   return src.slice(a, b)
 }
 
 describe('CLI IPC handlers parse the provider id instead of casting it', () => {
-  const region = sliceBetween("ipcMain.handle(IPC.cliSetup,", '// --- MCP connections')
+  const region = sliceBetween('ipcMain.handle(IPC.cliSetup,', '// --- MCP connections')
 
   it('cliSetup / cliInstall / cliLogin all route the renderer value through ProviderIdSchema', () => {
     expect(region).toContain('setupCli(cliProviderArg(provider))')
@@ -28,7 +29,10 @@ describe('CLI IPC handlers parse the provider id instead of casting it', () => {
   })
 
   it('cliProviderArg is a real parse with the same default the detect/test handlers use', () => {
-    const def = sliceBetween('const cliProviderArg = (provider: unknown): ProviderId =>', "ipcMain.handle(IPC.cliSetup,")
+    const def = sliceBetween(
+      'const cliProviderArg = (provider: unknown): ProviderId =>',
+      'ipcMain.handle(IPC.cliSetup,'
+    )
     expect(def).toContain('ProviderIdSchema.safeParse(provider)')
     expect(def).toContain("parsed.success ? parsed.data : 'claude-cli'")
   })
@@ -36,7 +40,10 @@ describe('CLI IPC handlers parse the provider id instead of casting it', () => {
 
 describe('overlay window reports a wedged renderer', () => {
   it("registers 'unresponsive' and 'responsive' on the overlay, next to the render-process-gone recovery", () => {
-    const region = sliceBetween("win.on('unresponsive', () => {", "win.webContents.on('render-process-gone', (_e, details) => {")
+    const region = sliceBetween(
+      "win.on('unresponsive', () => {",
+      "win.webContents.on('render-process-gone', (_e, details) => {"
+    )
     expect(region).toContain("auditLog('app.unresponsive', { kind: 'overlay' })")
     expect(region).toContain("win.on('responsive', () => {")
     // The handler must not reload or kill the renderer on this signal (a stall mid-meeting is recoverable).

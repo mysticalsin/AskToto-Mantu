@@ -150,19 +150,16 @@ export function overlayWatchStep(input: {
     // Revealed + 'stay' means the OS cursor is in the strip or on the bar: latch it.
     return { action: 'stay', osHoverSeen: input.osHoverSeen || revealed }
   }
-  if (!overlayWatchShouldParkOnLeave({ decision, islandResting: input.islandResting, osHoverSeen: input.osHoverSeen })) {
+  if (
+    !overlayWatchShouldParkOnLeave({ decision, islandResting: input.islandResting, osHoverSeen: input.osHoverSeen })
+  ) {
     return { action: 'leave-ignored', osHoverSeen: input.osHoverSeen }
   }
   return { action: 'park', osHoverSeen: false }
 }
 
 export function pointInRect(point: { x: number; y: number }, rect: Rect): boolean {
-  return (
-    point.x >= rect.x &&
-    point.x < rect.x + rect.width &&
-    point.y >= rect.y &&
-    point.y < rect.y + rect.height
-  )
+  return point.x >= rect.x && point.x < rect.x + rect.width && point.y >= rect.y && point.y < rect.y + rect.height
 }
 
 export function inflateRect(rect: Rect, pad: number): Rect {

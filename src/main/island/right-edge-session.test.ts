@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest'
 import type { RightEdgePin, RightEdgeSurfaceState } from '@shared/right-edge-state'
 import { createRightEdgeSession } from './right-edge-session'
 
-const REST: RightEdgeSurfaceState = { surface: 'rest', restKind: 'none', edgeClass: 'W', cardMaxHeight: 392, slotMax: 236 }
+const REST: RightEdgeSurfaceState = {
+  surface: 'rest',
+  restKind: 'none',
+  edgeClass: 'W',
+  cardMaxHeight: 392,
+  slotMax: 236
+}
 
 function session() {
   let current = REST
