@@ -267,7 +267,7 @@ describe('packaging locks from the Sonnet audit (source-scan)', () => {
     const script = readFileSync(join(REPO_ROOT, 'scripts', 'build-installers.mjs'), 'utf8')
     const buildIdx = script.indexOf('build-mac-helper.mjs')
     const checkIdx = script.indexOf('check-mac-helper.mjs')
-    const ebIdx = script.indexOf("'electron-builder', '--mac'")
+    const ebIdx = script.search(/'electron-builder',\s*'--mac'/)
     expect(buildIdx).toBeGreaterThan(-1)
     expect(checkIdx).toBeGreaterThan(buildIdx)
     expect(ebIdx).toBeGreaterThan(checkIdx)
