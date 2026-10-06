@@ -126,7 +126,14 @@ export function clampHeight(height: number, areaHeight: number, minHeight: numbe
 /** True if, positioned at (x, y), at least `margin` px of the window overlaps the work area of at least
  *  one display in `displays` — checked against ALL connected displays, not just whichever one the window
  *  started the drag on. */
-export function isReachable(x: number, y: number, width: number, height: number, displays: Rect[], margin: number): boolean {
+export function isReachable(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  displays: Rect[],
+  margin: number
+): boolean {
   const marginW = Math.min(margin, width)
   const marginH = Math.min(margin, height)
   return displays.some((wa) => {
@@ -245,7 +252,13 @@ export function hoverRestWidth(m: DisplayMetrics): number {
   return Math.max(1, Math.min(m.workArea.width, Math.max(TOP_CENTER_HOVER_HALF_WIDTH_PX * 2, m.notchWidth)))
 }
 
-export { RIGHT_EDGE_MARGIN_PX, RIGHT_EDGE_TAB_WIDTH, RIGHT_EDGE_DRAWER_WIDTH, RIGHT_EDGE_TAB_HEIGHT, RIGHT_EDGE_REVEAL_BAND_PX }
+export {
+  RIGHT_EDGE_MARGIN_PX,
+  RIGHT_EDGE_TAB_WIDTH,
+  RIGHT_EDGE_DRAWER_WIDTH,
+  RIGHT_EDGE_TAB_HEIGHT,
+  RIGHT_EDGE_REVEAL_BAND_PX
+}
 /** Legacy normalized Y default (`overlayRightEdgeYByDisplay`); the anchor default is RIGHT_EDGE_DEFAULT_ANCHOR. */
 export const RIGHT_EDGE_DEFAULT_NORMALIZED_Y = 0.2
 /** The compact side target is intentionally small; cursor-watch supplies dwell and leave hysteresis. */
@@ -269,7 +282,11 @@ function clampNormalized(value: number): number {
   return Math.max(0, Math.min(1, Number.isFinite(value) ? value : RIGHT_EDGE_DEFAULT_NORMALIZED_Y))
 }
 
-function rightEdgeYRange(height: number, m: DisplayMetrics, margin = RIGHT_EDGE_MARGIN_PX): { min: number; max: number } {
+function rightEdgeYRange(
+  height: number,
+  m: DisplayMetrics,
+  margin = RIGHT_EDGE_MARGIN_PX
+): { min: number; max: number } {
   const min = clampWithMargin(m.workArea.y + margin, height, m.workArea.y, m.workArea.height, margin)
   const max = clampWithMargin(
     m.workArea.y + m.workArea.height - height - margin,
@@ -443,7 +460,12 @@ export function topClamp(layout: OverlayLayout, m: DisplayMetrics, topMargin: nu
 /** Top-center x/y for a window of `width`, on the display described by `m`, honoring the notch clamp.
  *  Used both for the initial window placement (createWindow) and for the auto-hide anchor
  *  (anchorTopCenter) — callers differ only in which `topMargin` they pass. */
-export function topCenterPosition(width: number, layout: OverlayLayout, m: DisplayMetrics, topMargin: number): { x: number; y: number } {
+export function topCenterPosition(
+  width: number,
+  layout: OverlayLayout,
+  m: DisplayMetrics,
+  topMargin: number
+): { x: number; y: number } {
   const x = clampAxis(Math.round(m.workArea.x + (m.workArea.width - width) / 2), width, m.workArea.x, m.workArea.width)
   const y = topClamp(layout, m, topMargin)
   return { x, y }
@@ -455,7 +477,13 @@ export function topCenterPosition(width: number, layout: OverlayLayout, m: Displ
  * to a new one) — the "peek vs revealed footprint" math shared by `restoreBarWidth` (peek → full bar) and
  * `resizeTo`'s own width-change branch (mini-pill ↔ full bar). Clamped into `workArea` with `margin`.
  */
-export function recenterXForWidth(currentX: number, currentWidth: number, newWidth: number, workArea: Rect, margin: number): number {
+export function recenterXForWidth(
+  currentX: number,
+  currentWidth: number,
+  newWidth: number,
+  workArea: Rect,
+  margin: number
+): number {
   const x = currentWidth === newWidth ? currentX : Math.round(currentX + (currentWidth - newWidth) / 2)
   return clampWithMargin(x, newWidth, workArea.x, workArea.width, margin)
 }
@@ -570,12 +598,7 @@ export function overlayRestSize(layout: OverlayLayout, m?: DisplayMetrics): { wi
 /** Parked hide window: tiny, fully transparent. Cursor watch still uses hoverWatchRestRect. */
 export function hideParkRect(m: DisplayMetrics): Rect {
   const { width, height } = OVERLAY_HIDE_PARK
-  const x = clampAxis(
-    Math.round(m.workArea.x + (m.workArea.width - width) / 2),
-    width,
-    m.workArea.x,
-    m.workArea.width
-  )
+  const x = clampAxis(Math.round(m.workArea.x + (m.workArea.width - width) / 2), width, m.workArea.x, m.workArea.width)
   return { x, y: hoverRestTop(m), width, height }
 }
 
@@ -726,13 +749,7 @@ export function firstPaintOverlayBounds(input: {
   anchor?: number
 }): Rect {
   if (!input.onboardingDone) return exclusiveOnboardingBounds(input.bounds, input.workArea)
-  return parkAfterExclusiveOnboarding(
-    input.layout,
-    input.metrics,
-    input.topMargin,
-    input.placement,
-    input.anchor
-  )
+  return parkAfterExclusiveOnboarding(input.layout, input.metrics, input.topMargin, input.placement, input.anchor)
 }
 
 /** Stale exclusive / card measures must not grow a hide/island park back into 880×816.
@@ -764,12 +781,7 @@ export function shouldParkHoverRestAfterLeavingSurface(input: {
 export function settingsOpenRect(m: DisplayMetrics, _topMargin: number): Rect {
   const width = SETTINGS_WINDOW_MIN.width
   const height = SETTINGS_WINDOW_MIN.height
-  const x = clampAxis(
-    Math.round(m.workArea.x + (m.workArea.width - width) / 2),
-    width,
-    m.workArea.x,
-    m.workArea.width
-  )
+  const x = clampAxis(Math.round(m.workArea.x + (m.workArea.width - width) / 2), width, m.workArea.x, m.workArea.width)
   return { x, y: islandSafeTop(m), width, height }
 }
 

@@ -1,14 +1,15 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
+import { sourceIndexOf } from '../../scripts/lib/source-layout'
 import { createListeningStateHandler } from './listening-state-ipc'
 
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 
 function sliceBetween(from: string, to: string): string {
-  const start = indexSrc.indexOf(from)
+  const start = sourceIndexOf(indexSrc, from)
   expect(start, `marker not found: ${from}`).toBeGreaterThan(-1)
-  const end = indexSrc.indexOf(to, start)
+  const end = sourceIndexOf(indexSrc, to, start + 1)
   expect(end, `end marker not found after ${from}: ${to}`).toBeGreaterThan(-1)
   return indexSrc.slice(start, end)
 }
@@ -297,6 +298,8 @@ describe('AUDIT-10 extra — XSS / import / webhook', () => {
     expect(listAndMutations).toMatch(/getImportJobs\(\)\.cancel\(parsed\.jobId\)/)
     expect(listAndMutations).toMatch(/getImportJobs\(\)\.resume\(parsed\.jobId\)/)
     expect(listAndMutations).toMatch(/getImportJobs\(\)\.remove\(parsed\.jobId\)/)
-    expect(listAndMutations).not.toMatch(/if \(!importJobs\) throw new Error\('Audio import service is unavailable\.'\)/)
+    expect(listAndMutations).not.toMatch(
+      /if \(!importJobs\) throw new Error\('Audio import service is unavailable\.'\)/
+    )
   })
 })
