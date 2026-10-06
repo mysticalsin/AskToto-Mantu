@@ -219,11 +219,28 @@ record_not_applicable_interrupt() {
 
 app_profile_path() {
   local profile=$1
-  if [[ "${HOSTED_WINDOWS:-0}" == 1 ]] && command -v cygpath >/dev/null 2>&1; then
-    cygpath -w "$profile"
+  local cygpath_bin="${M2_0008_CONTRACT_CYGPATH_BIN:-cygpath}"
+  if [[ "${HOSTED_WINDOWS:-0}" == 1 ]] && command -v "$cygpath_bin" >/dev/null 2>&1; then
+    "$cygpath_bin" -w "$profile"
     return
   fi
   printf '%s' "$profile"
+}
+
+node_options_require_path() {
+  local path=$1
+  local dir base absolute
+  dir=$(cd "$(dirname "$path")" && pwd -P)
+  base=$(basename "$path")
+  absolute="$dir/$base"
+  local cygpath_bin="${M2_0008_CONTRACT_CYGPATH_BIN:-cygpath}"
+  if [[ ("${HOSTED_WINDOWS:-0}" == 1 || "$(uname -s)" =~ ^(MINGW|MSYS|CYGWIN)) ]] && command -v "$cygpath_bin" >/dev/null 2>&1; then
+    local win
+    win=$("$cygpath_bin" -w "$absolute")
+    printf '%s' "${win//\\/\\\\}"
+    return
+  fi
+  printf '%s' "$absolute"
 }
 
 sample_pid() {
@@ -378,9 +395,11 @@ record_fuse_state() {
   cat > "$probe" <<PROBE
 require('node:fs').writeFileSync(process.env.M2_0008_NODE_OPTIONS_MARKER, 'loaded')
 PROBE
+  local require_probe
+  require_probe=$(node_options_require_path "$probe")
   local status="UNKNOWN"
   local detail="probe did not run"
-  if run_with_timeout 10 env ELECTRON_RUN_AS_NODE=1 NODE_OPTIONS="--require $probe" M2_0008_NODE_OPTIONS_MARKER="$marker" "$exe" -e "process.exit(require('node:fs').existsSync(process.env.M2_0008_NODE_OPTIONS_MARKER) ? 0 : 42)" >/dev/null 2>"$probe_dir/stderr.txt"; then
+  if run_with_timeout 10 env ELECTRON_RUN_AS_NODE=1 NODE_OPTIONS="--require \"$require_probe\"" M2_0008_NODE_OPTIONS_MARKER="$marker" "$exe" -e "process.exit(require('node:fs').existsSync(process.env.M2_0008_NODE_OPTIONS_MARKER) ? 0 : 42)" >/dev/null 2>"$probe_dir/stderr.txt"; then
     status="ENABLED"
     detail="NODE_OPTIONS --require loaded under ELECTRON_RUN_AS_NODE"
   elif [[ -f "$marker" ]]; then
@@ -400,11 +419,7 @@ write_fixture_manifest() {
   local -a opened_states=()
   local position=0
   for item in "${FIFO_FIXTURES[@]}"; do
-    if [[ "$DRY_RUN" == 1 && ${#FIFO_HELD_STATES[@]} -eq 0 ]]; then
-      # Dry-run never launches 1.9.6, so there is no live FIFO reader to probe.
-      placeholders=$((placeholders + 1))
-      opened_states+=("placeholder")
-    elif [[ ! -p "$item" ]]; then
+    if [[ ! -p "$item" ]]; then
       placeholders=$((placeholders + 1))
       opened_states+=("placeholder")
     elif (( ${#FIFO_HELD_STATES[@]} > 0 )); then

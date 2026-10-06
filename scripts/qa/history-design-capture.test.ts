@@ -196,6 +196,48 @@ describe('History design matrix (M2-0032)', () => {
     expect(sender.send).toHaveBeenCalledWith(IPC_CHANNELS.recallHydration, { file: 'sample.md', state: 'hydrating' })
   })
 
+  it("keeps a pending list answer's Electron reply channel alive through a main-process GC, so the slow cue can render", async () => {
+    // Models Electron's ipcMain.handle: an async frame awaits the handler's answer and is the only holder of
+    // the invoke's reply channel; if the channel is collected unanswered, the renderer's invoke rejects with
+    // 'reply was never sent' and History shows 'failed' instead of 'OneDrive is slow to answer'.
+    const handlers = new Map<string, (...args: never[]) => unknown>()
+    ;(globalThis as typeof globalThis & { __metisReHideElectron?: unknown }).__metisReHideElectron = {
+      ipcMain: {
+        removeHandler: (name: string) => handlers.delete(name),
+        handle: (name: string, handler: (...args: never[]) => unknown) => handlers.set(name, handler)
+      }
+    }
+    expect(eval(INSTALL_FIXTURE_HANDLERS)).toBe(true)
+    eval(`(() => { globalThis.__historyDesign.list = { kind: 'pending' } })()`)
+
+    const neverSent: string[] = []
+    const registry = new FinalizationRegistry((label: string) => neverSent.push(label))
+    const invoke = (label: string, handler: () => unknown): void => {
+      const replyChannel = { sendReply: (_reply: unknown) => registry.unregister(replyChannel) }
+      registry.register(replyChannel, label, replyChannel)
+      void (async () => {
+        try {
+          replyChannel.sendReply({ result: await handler() })
+        } catch (error) {
+          replyChannel.sendReply({ error })
+        }
+      })()
+    }
+    invoke('fixture list', handlers.get(IPC_CHANNELS.recallList)! as () => unknown)
+    // Control: the same frame awaiting an unreferenced pending promise must be collected, or this model
+    // could not tell a parked answer from a collected one.
+    invoke('unparked control', () => new Promise(() => {}))
+
+    const gc = exposedGc()
+    for (let round = 0; round < 50 && !neverSent.includes('unparked control'); round++) {
+      gc()
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+
+    expect(neverSent).toEqual(['unparked control'])
+    expect(eval('globalThis.__historyDesign.requests.list')).toBe(1)
+  })
+
   it('forces main-process garbage collection after a pending list request reaches main', async () => {
     const state = HISTORY_DESIGN_STATES.find((candidate) => candidate.id === 'slow')!
     const history = { requests: { list: 0, search: 0 }, requestedAt: { list: 0, search: 0 } }
