@@ -25,9 +25,9 @@ describe('installer branding', () => {
     expect(overlay).toContain('extends: ./electron-builder.yml')
     expect(overlay).toContain('productName: Métis')
     expect(overlay).toContain('executableName: Metis')
-    expect(overlay).toContain("!node_modules/sherpa-onnx-darwin-*{,/**/*}")
-    expect(overlay).toContain("!node_modules/sherpa-onnx-linux-*{,/**/*}")
-    expect(overlay).toContain("!node_modules/@img/sharp-linux-*{,/**/*}")
+    expect(overlay).toContain('!node_modules/sherpa-onnx-darwin-*{,/**/*}')
+    expect(overlay).toContain('!node_modules/sherpa-onnx-linux-*{,/**/*}')
+    expect(overlay).toContain('!node_modules/@img/sharp-linux-*{,/**/*}')
 
     for (const script of ['dist:win', 'dist:win:appx']) {
       expect(pkg.scripts[script]).toContain('--config electron-builder.win.yml')
@@ -92,9 +92,7 @@ describe('deterministic packaging toolchain', () => {
       'node scripts/prune-dust-bundle.mjs && node scripts/ensure-electron-runtime.mjs'
     )
     for (const dependency of ['@modelcontextprotocol/sdk', 'express-rate-limit', 'ip-address']) {
-      expect(builderConfig).toContain(
-        `!node_modules/@dust-tt/client/node_modules/${dependency}{,/**/*}`
-      )
+      expect(builderConfig).toContain(`!node_modules/@dust-tt/client/node_modules/${dependency}{,/**/*}`)
     }
   })
 
