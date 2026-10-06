@@ -10,11 +10,10 @@
  */
 
 import { createHash } from 'node:crypto'
-import { createWriteStream, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, unlinkSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { pipeline } from 'node:stream/promises'
-import { get as httpsGet } from 'node:https'
 import { fileURLToPath } from 'node:url'
+import { download } from './fetch-llama-server.mjs'
 import { provisionManagedNodeArchive } from './lib/managed-node-provision.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -27,26 +26,19 @@ const ASSETS = manifest.assets
 const VC_REDIST_URL = 'https://aka.ms/vs/17/release/vc_redist.x64.exe'
 const VC_DEST = join(REPO_ROOT, 'resources', 'vcredist', 'vc_redist.x64.exe')
 
-function download(url, dest) {
-  return new Promise((resolve, reject) => {
-    const req = httpsGet(url, { timeout: 60_000 }, (res) => {
-      if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        res.resume()
-        download(res.headers.location, dest).then(resolve, reject)
-        return
-      }
-      if (res.statusCode !== 200) {
-        reject(new Error(`${url}: HTTP ${res.statusCode}`))
-        return
-      }
-      pipeline(res, createWriteStream(dest)).then(resolve, reject)
-    })
-    req.on('error', reject)
-  })
-}
-
 function sha256File(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex')
+}
+
+/** Reuse a cached archive only when its sha256 matches; otherwise discard it and fetch through the
+ *  shared retrying download (fetch-llama-server.mjs), so one DNS or connection failure on a CI runner
+ *  does not fail packaging. provisionManagedNodeArchive re-verifies the hash before extraction. */
+export async function fetchVerifiedArchive(url, archive, sha256, downloadOptions = {}) {
+  if (existsSync(archive)) {
+    if (sha256File(archive) === sha256) return
+    unlinkSync(archive)
+  }
+  await download(url, archive, downloadOptions)
 }
 
 async function fetchAsset(id) {
@@ -55,10 +47,7 @@ async function fetchAsset(id) {
   const cache = join(REPO_ROOT, 'resources', 'managed-node', '.cache')
   mkdirSync(cache, { recursive: true })
   const archive = join(cache, spec.file)
-  if (!existsSync(archive) || sha256File(archive) !== spec.sha256) {
-    process.stdout.write(`Downloading ${spec.file}…\n`)
-    await download(BASE + spec.file, archive)
-  }
+  await fetchVerifiedArchive(BASE + spec.file, archive, spec.sha256)
   provisionManagedNodeArchive(archive, dest, spec, NODE_VERSION)
   process.stdout.write(`Ready ${dest}\n`)
 }
@@ -66,14 +55,15 @@ async function fetchAsset(id) {
 async function fetchVcRedist() {
   mkdirSync(dirname(VC_DEST), { recursive: true })
   if (!existsSync(VC_DEST)) {
-    process.stdout.write('Downloading vc_redist.x64.exe…\n')
     await download(VC_REDIST_URL, VC_DEST)
   }
   process.stdout.write(`Ready ${VC_DEST}\n`)
 }
 
-const target = process.argv[2] || 'all'
-const jobs = []
-if (target === 'win' || target === 'all') jobs.push(fetchAsset('win32-x64'), fetchVcRedist())
-if (target === 'mac' || target === 'all') jobs.push(fetchAsset('darwin-arm64'), fetchAsset('darwin-x64'))
-await Promise.all(jobs)
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const target = process.argv[2] || 'all'
+  const jobs = []
+  if (target === 'win' || target === 'all') jobs.push(fetchAsset('win32-x64'), fetchVcRedist())
+  if (target === 'mac' || target === 'all') jobs.push(fetchAsset('darwin-arm64'), fetchAsset('darwin-x64'))
+  await Promise.all(jobs)
+}
