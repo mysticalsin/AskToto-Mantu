@@ -16,7 +16,7 @@ vi.mock('electron')
 // whole Electron app at import time and has no unit-test harness anywhere in this repo, so the WIRING is
 // pinned against the actual source text — same pattern and rationale as pinned-agent-boundary.contract.
 // test.ts — while the behavior each handler now depends on is proven for real against the live functions.
-const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
 
 /** Source text of the block opened by the first `{` at/after `marker`, brace-matched to its close. The
  *  regions matched below contain no unbalanced brace in a string or comment (template-literal `${…}`
@@ -149,11 +149,11 @@ describe('MQA-013 — settle/outcome resolve a renamed deal by its stable id', (
 
   it('both index.ts handlers route the wire name through the alias map, not brainSlugify', () => {
     const settle = blockAfter(indexSrc, 'ipcMain.handle(IPC.brainCommitmentSettle')
-    expect(settle).toMatch(/settleCommitment\(s, resolveEntitySlug\(readAliasMap\(s\), 'deal', deal\)/)
+    expect(settle).toMatch(/settleCommitment\(\s*s,\s*resolveEntitySlug\(readAliasMap\(s\), 'deal', deal\)/)
     expect(settle).not.toMatch(/brainSlugify/)
 
     const outcome = blockAfter(indexSrc, 'ipcMain.handle(IPC.brainSetDealOutcome')
-    expect(outcome).toMatch(/setDealOutcome\(s, resolveEntitySlug\(readAliasMap\(s\), 'deal', parsed\.data\.dealSlug\)/)
+    expect(outcome).toMatch(/setDealOutcome\(\s*s,\s*resolveEntitySlug\(readAliasMap\(s\), 'deal', parsed\.data\.dealSlug\)/)
     expect(outcome).not.toMatch(/brainSlugify/)
   })
 })
