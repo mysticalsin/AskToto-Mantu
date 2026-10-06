@@ -155,7 +155,8 @@ describe('Bar screen-freshness chip', () => {
 describe('Bar Heard-live chip capture degradation', () => {
   // Tony 2026-07-20: a whole meeting ran mic-only (Screen Recording off) behind a chip that said
   // "Heard live" — the chip must stop claiming a side it isn't capturing.
-  const note = 'System audio needs Screen Recording permission. Listening to microphone only; grant it in System Settings → Privacy & Security → Screen Recording, then restart Listen.'
+  const note =
+    'System audio needs Screen Recording permission. Listening to microphone only; grant it in System Settings → Privacy & Security → Screen Recording, then restart Listen.'
 
   it('says Heard live only while nothing is degraded', () => {
     const html = renderToStaticMarkup(<Bar {...props({ listening: true })} />)
@@ -174,7 +175,16 @@ describe('Bar Heard-live chip capture degradation', () => {
 
   it('flips to No mic when the mic side is missing', () => {
     const html = renderToStaticMarkup(
-      <Bar {...props({ listening: true, captureDegraded: { side: 'you', note: 'Microphone unavailable. Listening to system audio only.', permission: false } })} />
+      <Bar
+        {...props({
+          listening: true,
+          captureDegraded: {
+            side: 'you',
+            note: 'Microphone unavailable. Listening to system audio only.',
+            permission: false
+          }
+        })}
+      />
     )
     expect(html).toContain('No mic')
     expect(html).not.toContain('Heard live')
@@ -212,7 +222,13 @@ describe('Bar Heard-live chip capture degradation', () => {
 
   it('keeps degraded capture ahead of the no-speech cue', () => {
     const html = renderToStaticMarkup(
-      <Bar {...props({ listening: true, noSpeechWarning: true, captureDegraded: { side: 'them', note, permission: true } })} />
+      <Bar
+        {...props({
+          listening: true,
+          noSpeechWarning: true,
+          captureDegraded: { side: 'them', note, permission: true }
+        })}
+      />
     )
     expect(html).toContain('Mic only')
     expect(html).not.toContain('No speech detected')
@@ -263,7 +279,9 @@ describe('Bar Heard-live chip capture degradation', () => {
     expect(fallback).toContain('input 44100 Hz, 1 channel(s) → 16 kHz processing')
     // The Node renderer cannot retain a hook instance between markup passes. Pin the useMemo dependency
     // contract directly so a real renderer re-render receives every transition above.
-    expect(barSrc).toMatch(/props\.captureDegraded, props\.captureHealth, props\.noSpeechWarning, props\.recognizerStatus, props\.value/)
+    expect(barSrc).toMatch(
+      /props\.captureDegraded,\s*props\.captureHealth,\s*props\.noSpeechWarning,\s*props\.recognizerStatus,\s*props\.value/
+    )
   })
 
   it('names the actual compact Whisper base model and language mode in live status', () => {
@@ -271,7 +289,13 @@ describe('Bar Heard-live chip capture degradation', () => {
       <Bar
         {...props({
           listening: true,
-          recognizerStatus: { engine: 'whisper', model: 'whisper-base', languageMode: 'detecting', language: null, requestedLanguage: null }
+          recognizerStatus: {
+            engine: 'whisper',
+            model: 'whisper-base',
+            languageMode: 'detecting',
+            language: null,
+            requestedLanguage: null
+          }
         })}
       />
     )
@@ -285,7 +309,13 @@ describe('Bar Heard-live chip capture degradation', () => {
         {...props({
           listening: true,
           captureDegraded: { side: 'you', note: 'Microphone unavailable.', permission: false },
-          recognizerStatus: { engine: 'whisper', model: 'whisper-base', languageMode: 'detecting', language: null, requestedLanguage: null }
+          recognizerStatus: {
+            engine: 'whisper',
+            model: 'whisper-base',
+            languageMode: 'detecting',
+            language: null,
+            requestedLanguage: null
+          }
         })}
       />
     )

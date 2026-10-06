@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
+import { sourceIndexOf } from '../../scripts/lib/source-layout'
 
 /**
  * Source-contract tests for the main-process lifecycle findings (MQA-155, MQA-172). Same pattern as
@@ -16,9 +17,9 @@ const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n
 /** Slice the source from `from` up to (excluding) the next occurrence of `to`. Sliced inside each test so
  *  one drifted marker reports as its own failure instead of aborting collection for the whole file. */
 function sliceBetween(from: string, to: string): string {
-  const start = indexSrc.indexOf(from)
+  const start = sourceIndexOf(indexSrc, from)
   expect(start, `marker not found: ${from}`).toBeGreaterThan(-1)
-  const end = indexSrc.indexOf(to, start)
+  const end = sourceIndexOf(indexSrc, to, start + 1)
   expect(end, `end marker not found after ${from}: ${to}`).toBeGreaterThan(-1)
   return indexSrc.slice(start, end)
 }
@@ -36,10 +37,10 @@ describe('MQA-155 — a failed post-sweep source refresh is observed, never fabr
    *  only shows up when the refresh actually rejects. */
   const liftSweep = (deps: Deps): (() => void) => {
     // M2-0518: the sweep returns its promise so the boot-work queue holds its slot until it settles.
-    const body = sliceBetween('const runRetentionSweep = (): Promise<void> =>', "bootWork.run('runRetentionSweep'").replace(
-      '(): Promise<void> =>',
-      '() =>'
-    )
+    const body = sliceBetween(
+      'const runRetentionSweep = (): Promise<void> =>',
+      "bootWork.run('runRetentionSweep'"
+    ).replace('(): Promise<void> =>', '() =>')
     const build = new Function(
       'sweepExpiredMeetings',
       'getSettings',
@@ -48,13 +49,7 @@ describe('MQA-155 — a failed post-sweep source refresh is observed, never fabr
       'mainLog',
       `${body}\nreturn runRetentionSweep`
     ) as (...args: unknown[]) => () => void
-    return build(
-      deps.sweepExpiredMeetings,
-      deps.getSettings,
-      deps.auditLog,
-      deps.requestSourceRefresh,
-      deps.mainLog
-    )
+    return build(deps.sweepExpiredMeetings, deps.getSettings, deps.auditLog, deps.requestSourceRefresh, deps.mainLog)
   }
 
   it('MQA-155 — attaches a rejection handler to the refresh fired after expired meetings are deleted', async () => {
@@ -125,7 +120,7 @@ describe('MQA-172 — a second launch after a failed boot window recreates it in
   it('M2-0036 — activate, second-instance, tray, hotkey and notification click all route through reveal()', () => {
     expect(indexSrc).toContain("reveal('activate', { focus: true })")
     expect(indexSrc).toContain("reveal('second-instance', { focus: true })")
-    expect(indexSrc).toContain("reveal(reason, { focus: true })")
+    expect(indexSrc).toContain('reveal(reason, { focus: true })')
     expect(indexSrc).toContain("reveal('hotkey', { focus: action === 'ask' })")
     expect(indexSrc).toContain("reveal('notification-click', { focus: false })")
   })
@@ -238,7 +233,9 @@ describe('MQA-345 — constructor swaps keep the retiring renderer trusted until
     const localModels = sliceBetween('ipcMain.handle(IPC.localModelsList', '// Explicit Download/Retry')
     const park = sliceBetween('ipcMain.handle(IPC.overlayParkAfterHide', '// Renderer ErrorBoundary')
     const bundled = sliceBetween('safeHandle(IPC.asrBundled', 'safeHandle(IPC.asrAssetsStatus')
-    expect(localModels.indexOf('isRecentlyRetiredOverlaySender(e)')).toBeLessThan(localModels.indexOf('assertMainWindow(e)'))
+    expect(localModels.indexOf('isRecentlyRetiredOverlaySender(e)')).toBeLessThan(
+      localModels.indexOf('assertMainWindow(e)')
+    )
     expect(localModels).toMatch(/if \(isRecentlyRetiredOverlaySender\(e\)\) return \[\]/)
     expect(park.indexOf('isRecentlyRetiredOverlaySender(e)')).toBeLessThan(park.indexOf('assertMainWindow(e)'))
     expect(park).toMatch(/if \(isRecentlyRetiredOverlaySender\(e\)\) return/)
