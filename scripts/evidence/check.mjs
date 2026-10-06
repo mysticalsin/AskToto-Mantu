@@ -43,8 +43,18 @@ import { existsSync, readFileSync } from 'node:fs'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
-import { DEFAULT_OUT_DIR as SOAK_OUT_DIR, RECORD_FILE as SOAK_RECORD_FILE, soakRecordProblems } from '../qa/owner-soak/verdict.mjs'
-import { EXCERPT_FILES, STALL_BUNDLE_NAMES_FILE, STALL_BUNDLE_NAME, STALLS_FILE, excerptOf } from '../qa/freeze-repro/attribution-bundle.mjs'
+import {
+  DEFAULT_OUT_DIR as SOAK_OUT_DIR,
+  RECORD_FILE as SOAK_RECORD_FILE,
+  soakRecordProblems
+} from '../qa/owner-soak/verdict.mjs'
+import {
+  EXCERPT_FILES,
+  STALL_BUNDLE_NAMES_FILE,
+  STALL_BUNDLE_NAME,
+  STALLS_FILE,
+  excerptOf
+} from '../qa/freeze-repro/attribution-bundle.mjs'
 import { VARIANTS, promotableAssets } from '../qa/provenance.mjs'
 import {
   EVIDENCE_LEVELS,
@@ -60,7 +70,13 @@ import {
 import { drawSample, populationOf } from './sample.mjs'
 
 export const TICKET_STATUSES = Object.freeze([
-  'TODO', 'IN_PROGRESS', 'ENGINEERING_COMPLETE', 'BLOCKED_EXTERNAL', 'DEFERRED', 'DONE', 'CANCELLED'
+  'TODO',
+  'IN_PROGRESS',
+  'ENGINEERING_COMPLETE',
+  'BLOCKED_EXTERNAL',
+  'DEFERRED',
+  'DONE',
+  'CANCELLED'
 ])
 export const DECISION_STATES = Object.freeze(['OPEN', 'ANSWERED_AS_DEFAULT', 'ANSWERED_CHANGED'])
 export const TEST_WORKFLOW = '.github/workflows/build.yml'
@@ -152,7 +168,8 @@ function ticketShapeProblems(ledger) {
     if (seenIds.has(id)) problems.push(`${id}: duplicate ticket id`)
     seenIds.add(id)
 
-    if (!TICKET_STATUSES.includes(ticket.status)) problems.push(`${id}: status "${ticket.status}" is not a known status`)
+    if (!TICKET_STATUSES.includes(ticket.status))
+      problems.push(`${id}: status "${ticket.status}" is not a known status`)
     if (!Array.isArray(ticket.depends_on)) problems.push(`${id}: depends_on must be an array`)
     if (!Array.isArray(ticket.needs_decision)) problems.push(`${id}: needs_decision must be an array`)
     if (!Array.isArray(ticket.kit_refs)) problems.push(`${id}: kit_refs must be an array`)
@@ -271,7 +288,8 @@ function cancelledProblems(ticket) {
 function deferredProblems(ticket, latest) {
   const problems = []
   if (ticket.flag == null) problems.push(`${ticket.id}: DEFERRED requires a non-null flag`)
-  if (!isLatestPass(latest, 'ACCEPTED')) problems.push(`${ticket.id}: DEFERRED requires an ACCEPTED PASS record (owner approval, D-14)`)
+  if (!isLatestPass(latest, 'ACCEPTED'))
+    problems.push(`${ticket.id}: DEFERRED requires an ACCEPTED PASS record (owner approval, D-14)`)
   return problems
 }
 
@@ -286,7 +304,8 @@ function engineeringCompleteProblems(ticket, latest, caps, closesProgram, legacy
       problems.push(`${ticket.id}: ENGINEERING_COMPLETE requires at least one PASS record`)
     }
     for (const level of (ticket.required_evidence ?? []).filter((l) => IN_HOUSE.has(l))) {
-      if (!isLatestPass(latest, level)) problems.push(`${ticket.id}: ENGINEERING_COMPLETE requires a PASS ${level} record`)
+      if (!isLatestPass(latest, level))
+        problems.push(`${ticket.id}: ENGINEERING_COMPLETE requires a PASS ${level} record`)
     }
   }
   return problems
@@ -300,7 +319,9 @@ function doneProblems(ticket, latest, caps, closesProgram, legacyEvidenceTickets
     }
   }
   if (caps.length > 0 && !closesProgram) {
-    problems.push(`${ticket.id}: DONE is blocked by a dependency ancestor that is ENGINEERING_COMPLETE or BLOCKED_EXTERNAL; it can close only as ENGINEERING_COMPLETE`)
+    problems.push(
+      `${ticket.id}: DONE is blocked by a dependency ancestor that is ENGINEERING_COMPLETE or BLOCKED_EXTERNAL; it can close only as ENGINEERING_COMPLETE`
+    )
   }
   return problems
 }
@@ -323,14 +344,17 @@ function inheritedBlockProblems(ticket, latest, roots, closesProgram) {
     for (const [level, record] of latest) {
       const listed = new Set((record.inherited_block ?? []).map((entry) => entry.ticket))
       for (const root of roots) {
-        if (!listed.has(root.id)) problems.push(`${ticket.id}: ${level} record must list inherited_block for ${root.id}`)
+        if (!listed.has(root.id))
+          problems.push(`${ticket.id}: ${level} record must list inherited_block for ${root.id}`)
       }
     }
   } else if (ticket.status === 'DONE') {
     for (const level of ticket.required_evidence ?? []) {
       const record = latest.get(level)
       if (record && (record.inherited_block ?? []).length > 0) {
-        problems.push(`${ticket.id}: DONE ${level} record still carries inherited_block; re-run after the upstream is DONE`)
+        problems.push(
+          `${ticket.id}: DONE ${level} record still carries inherited_block; re-run after the upstream is DONE`
+        )
       }
     }
   }
@@ -338,15 +362,26 @@ function inheritedBlockProblems(ticket, latest, roots, closesProgram) {
 }
 
 function redBeforeProblems(ticket, latest, legacyFixTickets = new Set()) {
-  if (!(CLOSED.has(ticket.status) && ticket.type === 'fix' && (ticket.required_evidence ?? []).includes('LOCALLY_TESTED'))) {
+  if (
+    !(CLOSED.has(ticket.status) && ticket.type === 'fix' && (ticket.required_evidence ?? []).includes('LOCALLY_TESTED'))
+  ) {
     return []
   }
   if (legacyFixTickets.has(ticket.id)) return []
   const record = latest.get('LOCALLY_TESTED')
-  return record && !record.repro ? [`${ticket.id}: fix ticket requires repro (red-before) on its LOCALLY_TESTED record`] : []
+  return record && !record.repro
+    ? [`${ticket.id}: fix ticket requires repro (red-before) on its LOCALLY_TESTED record`]
+    : []
 }
 
-function statusRuleProblems(ticket, latest, caps, roots, legacyFixTickets = new Set(), legacyEvidenceTickets = new Set()) {
+function statusRuleProblems(
+  ticket,
+  latest,
+  caps,
+  roots,
+  legacyFixTickets = new Set(),
+  legacyEvidenceTickets = new Set()
+) {
   const closesProgram = ticket.closes_program === true
   const rule = STATUS_RULES[ticket.status]
   return [
@@ -368,16 +403,21 @@ function recordContextProblems(ticket, records, decisions) {
       problems.push(`${ticket.id}: record kit_refs must equal the ticket's kit_refs exactly`)
     }
     for (const findingRef of record.finding_refs ?? []) {
-      if (!findingRefs.has(findingRef)) problems.push(`${ticket.id}: finding_ref ${findingRef} is not one of the ticket's finding_refs`)
+      if (!findingRefs.has(findingRef))
+        problems.push(`${ticket.id}: finding_ref ${findingRef} is not one of the ticket's finding_refs`)
     }
     for (const decisionId of record.assumed_decisions ?? []) {
       if (!needsDecision.has(decisionId)) {
-        problems.push(`${ticket.id}: assumed_decisions has ${decisionId}, which is not one of the ticket's needs_decision`)
+        problems.push(
+          `${ticket.id}: assumed_decisions has ${decisionId}, which is not one of the ticket's needs_decision`
+        )
       }
     }
     for (const decisionId of needsDecision) {
       if (decisions?.[decisionId] === 'OPEN' && !(record.assumed_decisions ?? []).includes(decisionId)) {
-        problems.push(`${ticket.id}: unlabelled assumption ${decisionId} (an OPEN decision must appear in assumed_decisions)`)
+        problems.push(
+          `${ticket.id}: unlabelled assumption ${decisionId} (an OPEN decision must appear in assumed_decisions)`
+        )
       }
     }
   }
@@ -393,7 +433,9 @@ function revalidationProblems(ticket, latest, decisions) {
     for (const decisionId of record.assumed_decisions ?? []) {
       if (decisions?.[decisionId] === 'ANSWERED_CHANGED' && !seen.has(decisionId)) {
         seen.add(decisionId)
-        problems.push(`${ticket.id}: re-validate: ${decisionId} was answered differently from the default this evidence assumed`)
+        problems.push(
+          `${ticket.id}: re-validate: ${decisionId} was answered differently from the default this evidence assumed`
+        )
       }
     }
   }
@@ -515,7 +557,11 @@ export function loadProgram(ledgerPath, options = {}) {
   const ledger = JSON.parse(readFileSync(ledgerPath, 'utf8'))
   const evidenceRoot = join(programRoot, 'evidence')
   const { recordsByTicket, problems } = readRecordStore(join(evidenceRoot, 'records'))
-  const legacyFix = readLegacyTicketList(options.legacyFixPath ?? join(evidenceRoot, LEGACY_FIX_FILE), 'OD-65', `evidence/${LEGACY_FIX_FILE}`)
+  const legacyFix = readLegacyTicketList(
+    options.legacyFixPath ?? join(evidenceRoot, LEGACY_FIX_FILE),
+    'OD-65',
+    `evidence/${LEGACY_FIX_FILE}`
+  )
   const legacyEvidence = readLegacyTicketList(
     options.legacyEvidencePath ?? join(evidenceRoot, LEGACY_EVIDENCE_FILE),
     'OD-67',
@@ -580,8 +626,10 @@ async function blockProblems(record, { headSha, prNumber, github, fileExists }) 
   }
 
   if (record.wired) {
-    if (!fileExists(record.wired.client)) problems.push(`wired.client: ${record.wired.client} does not exist in the checkout`)
-    if (!fileExists(record.wired.contract_fake)) problems.push(`wired.contract_fake: ${record.wired.contract_fake} does not exist in the checkout`)
+    if (!fileExists(record.wired.client))
+      problems.push(`wired.client: ${record.wired.client} does not exist in the checkout`)
+    if (!fileExists(record.wired.contract_fake))
+      problems.push(`wired.contract_fake: ${record.wired.contract_fake} does not exist in the checkout`)
   }
 
   return problems
@@ -653,7 +701,8 @@ export function githubApi(repo, token, fetchImpl = fetch) {
       if (!response.ok) throw new Error(`GitHub API returned ${response.status} listing pull requests (page ${page})`)
       const json = await response.json()
       for (const pr of json) {
-        if (pr.merged_at) results.push({ number: pr.number, headSha: pr.head.sha, body: pr.body ?? '', mergedAt: pr.merged_at })
+        if (pr.merged_at)
+          results.push({ number: pr.number, headSha: pr.head.sha, body: pr.body ?? '', mergedAt: pr.merged_at })
       }
       if (json.length < 100) break
     }
@@ -732,20 +781,27 @@ function m2_0008HostedLiveProblems(root, { environment, fuse, fifo, blockers, ro
   if (problems.length > 0) return problems
 
   const host = environment.host
-  if (!isPlainObject(host) || !nonEmptyString(host.os_version) || !nonEmptyString(host.arch) ||
-      !(Number.isInteger(host.memory_bytes) && host.memory_bytes > 0)) {
+  if (
+    !isPlainObject(host) ||
+    !nonEmptyString(host.os_version) ||
+    !nonEmptyString(host.arch) ||
+    !(Number.isInteger(host.memory_bytes) && host.memory_bytes > 0)
+  ) {
     problems.push('environment.json: hosted-live must record host os_version, arch and memory_bytes')
   }
   const hostedWindows = environment.host?.label === 'windows-latest'
-  const automaticRows = hostedWindows
-    ? ['row-1-history-open', 'row-4-second-instance-reopen']
-    : M2_0008_AUTOMATIC_ROWS
+  const automaticRows = hostedWindows ? ['row-1-history-open', 'row-4-second-instance-reopen'] : M2_0008_AUTOMATIC_ROWS
   const blockedRows = hostedWindows
     ? ['row-2-brain-status-blocked-brain', ...M2_0008_BLOCKED_ROWS]
     : M2_0008_BLOCKED_ROWS
 
-  if (fuse?.node_options_fuse === 'NOT_EXERCISED') problems.push('node-options-fuse.json: hosted-live must exercise the fuse probe')
-  if (!hostedWindows && Array.isArray(fifo?.fixtures) && !fifo.fixtures.every((fixture) => typeof fixture?.opened_by_1_9_6 === 'boolean')) {
+  if (fuse?.node_options_fuse === 'NOT_EXERCISED')
+    problems.push('node-options-fuse.json: hosted-live must exercise the fuse probe')
+  if (
+    !hostedWindows &&
+    Array.isArray(fifo?.fixtures) &&
+    !fifo.fixtures.every((fixture) => typeof fixture?.opened_by_1_9_6 === 'boolean')
+  ) {
     problems.push('fifo-fixtures.json: hosted-live must record opened_by_1_9_6 as true or false for every FIFO fixture')
   }
 
@@ -757,8 +813,12 @@ function m2_0008HostedLiveProblems(root, { environment, fuse, fifo, blockers, ro
       if (!nonEmptyString(result.drive_method)) problems.push(`matrix.jsonl: ${row} must record its drive_method`)
       const observation = result.observation
       const cdp = observation?.cdp
-      if (!isPlainObject(cdp) || typeof cdp.main_answered !== 'boolean' || !nonEmptyString(cdp.renderer_round_trip) ||
-          !nonEmptyString(cdp.window_visible_observed_by)) {
+      if (
+        !isPlainObject(cdp) ||
+        typeof cdp.main_answered !== 'boolean' ||
+        !nonEmptyString(cdp.renderer_round_trip) ||
+        !nonEmptyString(cdp.window_visible_observed_by)
+      ) {
         problems.push(`matrix.jsonl: ${row} must record its renderer round trip, main answer and window observation`)
       } else if (observation.operator_result !== result.operator_result) {
         problems.push(`matrix.jsonl: ${row} operator_result must be the one derived from its observation`)
@@ -771,8 +831,13 @@ function m2_0008HostedLiveProblems(root, { environment, fuse, fifo, blockers, ro
       }
     } else {
       const sample = rows.find((entry) => entry.row === row && Object.hasOwn(entry, 'sampled'))
-      if (!sample || sample.sampled !== true || sample.main_sample !== true || !(sample.renderer_samples >= 1) ||
-          sample.renderers_selected_by !== '--type=renderer') {
+      if (
+        !sample ||
+        sample.sampled !== true ||
+        sample.main_sample !== true ||
+        !(sample.renderer_samples >= 1) ||
+        sample.renderers_selected_by !== '--type=renderer'
+      ) {
         problems.push(`matrix.jsonl: ${row} must have main and role-selected renderer samples`)
       } else if (!existsSync(join(root, 'samples', `${row}-main.sample.txt`))) {
         problems.push(`samples/${row}-main.sample.txt: missing`)
@@ -781,52 +846,84 @@ function m2_0008HostedLiveProblems(root, { environment, fuse, fifo, blockers, ro
   }
 
   if (hostedWindows) {
-    const macActivate = rows.find((entry) => entry.row === 'row-3-macos-activate' && Object.hasOwn(entry, 'operator_result'))
+    const macActivate = rows.find(
+      (entry) => entry.row === 'row-3-macos-activate' && Object.hasOwn(entry, 'operator_result')
+    )
     if (macActivate?.status !== 'not-applicable' || !/macOS-only/.test(macActivate.reason ?? '')) {
       problems.push('matrix.jsonl: row-3-macos-activate must be not-applicable on windows-latest with an exact reason')
     }
   }
 
   const blocked = Array.isArray(blockers?.blockers) ? blockers.blockers : []
-  const blockerListing = (key, id) => blocked.some((blocker) => Array.isArray(blocker[key]) && blocker[key].includes(id))
+  const blockerListing = (key, id) =>
+    blocked.some((blocker) => Array.isArray(blocker[key]) && blocker[key].includes(id))
   for (const row of blockedRows) {
     const entry = rows.find((candidate) => candidate.row === row && Object.hasOwn(candidate, 'operator_result'))
     if (entry?.status !== 'BLOCKED_EXTERNAL' || !nonEmptyString(entry.unblock_step) || !blockerListing('rows', row)) {
-      problems.push(`matrix.jsonl: ${row} must be BLOCKED_EXTERNAL with an unblock_step listed in external-blockers.json`)
+      problems.push(
+        `matrix.jsonl: ${row} must be BLOCKED_EXTERNAL with an unblock_step listed in external-blockers.json`
+      )
     }
   }
   for (const interrupt of M2_0008_BLOCKED_INTERRUPTS) {
     const entry = interrupts.find((candidate) => candidate.interrupt === interrupt)
-    if (entry?.status !== 'BLOCKED_EXTERNAL' || !nonEmptyString(entry.unblock_step) || !blockerListing('interrupts', interrupt)) {
-      problems.push(`interrupt-results.jsonl: ${interrupt} must be BLOCKED_EXTERNAL with an unblock_step listed in external-blockers.json`)
+    if (
+      entry?.status !== 'BLOCKED_EXTERNAL' ||
+      !nonEmptyString(entry.unblock_step) ||
+      !blockerListing('interrupts', interrupt)
+    ) {
+      problems.push(
+        `interrupt-results.jsonl: ${interrupt} must be BLOCKED_EXTERNAL with an unblock_step listed in external-blockers.json`
+      )
     }
   }
   const signal = interrupts.find((candidate) => candidate.interrupt === 'process-signal')
   if (hostedWindows) {
     if (signal?.status !== 'not-applicable' || !/Windows hosted-live/.test(signal.reason ?? '')) {
-      problems.push('interrupt-results.jsonl: process-signal must be not-applicable on windows-latest with an exact reason')
+      problems.push(
+        'interrupt-results.jsonl: process-signal must be not-applicable on windows-latest with an exact reason'
+      )
     }
-  } else if (!signal || signal.automatic !== true || !M2_0008_EXERCISED.has(signal.result) || typeof signal.exited_within_10s !== 'boolean') {
+  } else if (
+    !signal ||
+    signal.automatic !== true ||
+    !M2_0008_EXERCISED.has(signal.result) ||
+    typeof signal.exited_within_10s !== 'boolean'
+  ) {
     problems.push('interrupt-results.jsonl: process-signal must run automatically and record exited_within_10s')
   }
 
   const summary = readJsonFile(join(root, 'hosted-live-summary.json'), problems, 'hosted-live-summary.json')
   if (summary) {
     const symptomSeen = rows.some((entry) => automaticRows.includes(entry.row) && entry.operator_result === 'observed')
-    if (summary.mode !== 'hosted-live' || typeof summary.reproduced !== 'boolean' || !nonEmptyString(summary.conclusion)) {
+    if (
+      summary.mode !== 'hosted-live' ||
+      typeof summary.reproduced !== 'boolean' ||
+      !nonEmptyString(summary.conclusion)
+    ) {
       problems.push('hosted-live-summary.json: must record mode, reproduced and conclusion')
     } else if (summary.reproduced !== symptomSeen) {
       problems.push('hosted-live-summary.json: reproduced must match the automatic rows that observed a symptom')
     }
   }
 
-  const evidenceImport = readJsonFile(join(root, 'M2-0008.evidence-import.json'), problems, 'M2-0008.evidence-import.json')
+  const evidenceImport = readJsonFile(
+    join(root, 'M2-0008.evidence-import.json'),
+    problems,
+    'M2-0008.evidence-import.json'
+  )
   if (evidenceImport) {
     if (evidenceImport.mode !== 'hosted-live') problems.push('M2-0008.evidence-import.json: mode must be hosted-live')
-    if (evidenceImport.environment?.kind !== 'hosted-runner' || !HOSTED_RUNNER_HOSTS.has(evidenceImport.environment?.host)) {
-      problems.push('M2-0008.evidence-import.json: environment must be the hosted-runner kind on macos-latest or windows-latest')
+    if (
+      evidenceImport.environment?.kind !== 'hosted-runner' ||
+      !HOSTED_RUNNER_HOSTS.has(evidenceImport.environment?.host)
+    ) {
+      problems.push(
+        'M2-0008.evidence-import.json: environment must be the hosted-runner kind on macos-latest or windows-latest'
+      )
     }
-    if (Object.hasOwn(evidenceImport, 'qa_host_label')) problems.push('M2-0008.evidence-import.json: hosted-live must not carry a QA host label')
+    if (Object.hasOwn(evidenceImport, 'qa_host_label'))
+      problems.push('M2-0008.evidence-import.json: hosted-live must not carry a QA host label')
     if (evidenceImport.artifact_sha256 !== environment.artifact_sha256) {
       problems.push('M2-0008.evidence-import.json: artifact_sha256 must match environment.json')
     }
@@ -878,8 +975,10 @@ export function m2_0008BundleProblems(bundlePath) {
     problems.push('node-options-fuse.json: node_options_fuse must be recorded')
   }
   if (fifo?.kind !== 'fifo') problems.push('fifo-fixtures.json: kind must be fifo')
-  if (!Number.isInteger(fifo?.count) || fifo.count < 6) problems.push('fifo-fixtures.json: at least six FIFO fixtures are required')
-  if (!Array.isArray(fifo?.fixtures) || fifo.fixtures.length < 6) problems.push('fifo-fixtures.json: fixtures array is incomplete')
+  if (!Number.isInteger(fifo?.count) || fifo.count < 6)
+    problems.push('fifo-fixtures.json: at least six FIFO fixtures are required')
+  if (!Array.isArray(fifo?.fixtures) || fifo.fixtures.length < 6)
+    problems.push('fifo-fixtures.json: fixtures array is incomplete')
   if (Array.isArray(fifo?.fixtures)) {
     if (!fifo.fixtures.some((fixture) => String(fixture.path ?? '').endsWith('.brain/index.json'))) {
       problems.push('fifo-fixtures.json: missing blocked .brain/index.json fixture')
@@ -896,7 +995,8 @@ export function m2_0008BundleProblems(bundlePath) {
   if (!Array.isArray(blockers?.blockers)) problems.push('external-blockers.json: blockers array is required')
   if (Array.isArray(blockers?.blockers)) {
     for (const blocker of blockers.blockers) {
-      if (blocker.status !== 'BLOCKED_EXTERNAL') problems.push('external-blockers.json: blockers must be BLOCKED_EXTERNAL')
+      if (blocker.status !== 'BLOCKED_EXTERNAL')
+        problems.push('external-blockers.json: blockers must be BLOCKED_EXTERNAL')
       if (typeof blocker.unblock_step !== 'string' || blocker.unblock_step.trim() === '') {
         problems.push('external-blockers.json: every blocker needs an unblock_step')
       }
@@ -905,8 +1005,13 @@ export function m2_0008BundleProblems(bundlePath) {
   if (typeof diagnosticReports?.consented !== 'boolean') {
     problems.push('diagnostic-reports.json: consented must be recorded')
   }
-  if (typeof diagnosticReports?.filter !== 'string' || !/Metis\/AskToto process names or sampled process ids only/.test(diagnosticReports.filter)) {
-    problems.push('DiagnosticReports collection filter must be restricted to Metis/AskToto process names or sampled process ids')
+  if (
+    typeof diagnosticReports?.filter !== 'string' ||
+    !/Metis\/AskToto process names or sampled process ids only/.test(diagnosticReports.filter)
+  ) {
+    problems.push(
+      'DiagnosticReports collection filter must be restricted to Metis/AskToto process names or sampled process ids'
+    )
   }
   if (!Array.isArray(diagnosticReports?.copied)) problems.push('diagnostic-reports.json: copied must be an array')
 
@@ -982,7 +1087,8 @@ export function m2_0194BundleProblems(bundlePath) {
     problems.push('environment.json: mode must be hosted-live or dry-run')
   }
   const dryRun = environment?.dry_run === 1 || environment?.dry_run === true || environment?.mode === 'dry-run'
-  if (!dryRun && environment?.mode !== 'hosted-live') problems.push('environment.json: live M2-0194 bundles must record mode hosted-live')
+  if (!dryRun && environment?.mode !== 'hosted-live')
+    problems.push('environment.json: live M2-0194 bundles must record mode hosted-live')
   if (!dryRun && !['macos-dmg', 'windows-setup'].includes(environment?.installed_variant)) {
     problems.push('environment.json: installed_variant must be macos-dmg or windows-setup')
   }
@@ -991,7 +1097,8 @@ export function m2_0194BundleProblems(bundlePath) {
     problems.push('external-blockers.json: blockers array is required')
   } else {
     for (const blocker of blockers.blockers) {
-      if (blocker.status !== 'BLOCKED_EXTERNAL') problems.push('external-blockers.json: blockers must be BLOCKED_EXTERNAL')
+      if (blocker.status !== 'BLOCKED_EXTERNAL')
+        problems.push('external-blockers.json: blockers must be BLOCKED_EXTERNAL')
       if (typeof blocker.unblock_step !== 'string' || blocker.unblock_step.trim() === '') {
         problems.push('external-blockers.json: every blocker needs an unblock_step')
       }
@@ -1026,15 +1133,24 @@ export function m2_0194BundleProblems(bundlePath) {
         if (!sample || sample.sampled !== false || !/sampling unavailable/.test(sample.reason ?? '')) {
           problems.push(`matrix.jsonl: ${row} must record why Windows hosted-live did not sample processes`)
         }
-      } else if (!sample || sample.sampled !== true || sample.main_sample !== true || !(sample.renderer_samples >= 1) ||
-          sample.renderers_selected_by !== '--type=renderer') {
+      } else if (
+        !sample ||
+        sample.sampled !== true ||
+        sample.main_sample !== true ||
+        !(sample.renderer_samples >= 1) ||
+        sample.renderers_selected_by !== '--type=renderer'
+      ) {
         problems.push(`matrix.jsonl: ${row} must have main and role-selected renderer samples`)
       }
     }
     if (hostedWindows) {
-      const macActivate = rows.find((entry) => entry.row === 'row-3-macos-activate' && Object.hasOwn(entry, 'operator_result'))
+      const macActivate = rows.find(
+        (entry) => entry.row === 'row-3-macos-activate' && Object.hasOwn(entry, 'operator_result')
+      )
       if (macActivate?.status !== 'not-applicable' || !/macOS-only/.test(macActivate.reason ?? '')) {
-        problems.push('matrix.jsonl: row-3-macos-activate must be not-applicable on windows-latest with an exact reason')
+        problems.push(
+          'matrix.jsonl: row-3-macos-activate must be not-applicable on windows-latest with an exact reason'
+        )
       }
     }
   }
@@ -1042,13 +1158,18 @@ export function m2_0194BundleProblems(bundlePath) {
   const stallExcerptRows = []
   for (const [excerpt, file] of Object.entries(EXCERPT_FILES)) {
     for (const row of jsonlRows(join(root, file), problems, file)) {
-      if (excerptOf(row.event) !== excerpt) problems.push(`${file}: event ${JSON.stringify(row.event)} does not belong in the ${excerpt} excerpt`)
+      if (excerptOf(row.event) !== excerpt)
+        problems.push(`${file}: event ${JSON.stringify(row.event)} does not belong in the ${excerpt} excerpt`)
       if (row.event === 'app.stall' || row.event === 'app.stall.sampled') stallExcerptRows.push(row)
       for (const [key, value] of Object.entries(row)) {
         if (key === 'event') continue
         if (typeof value === 'number' && Number.isFinite(value)) continue
-        if (typeof value === 'string' && /^(reason|status|result|outcome|sidecar|name|phase|source|kind)$/.test(key) &&
-            /^[A-Za-z0-9._:-]{1,96}$/.test(value)) continue
+        if (
+          typeof value === 'string' &&
+          /^(reason|status|result|outcome|sidecar|name|phase|source|kind)$/.test(key) &&
+          /^[A-Za-z0-9._:-]{1,96}$/.test(value)
+        )
+          continue
         problems.push(`${file}: ${key} is not an allowed content-free attribution field`)
       }
     }
@@ -1062,15 +1183,19 @@ export function m2_0194BundleProblems(bundlePath) {
     const key = stallKey(excerpt)
     const count = stallEntryCounts.get(key) ?? 0
     if (count <= 0) {
-      problems.push(`${STALLS_FILE}: missing entry for stall excerpt tMs=${excerpt.tMs ?? 'null'} stalledMs=${excerpt.stalledMs ?? 'null'}`)
+      problems.push(
+        `${STALLS_FILE}: missing entry for stall excerpt tMs=${excerpt.tMs ?? 'null'} stalledMs=${excerpt.stalledMs ?? 'null'}`
+      )
     } else {
       stallEntryCounts.set(key, count - 1)
     }
   }
   for (const stall of stalls) {
     if (!nonEmptyString(stall.row)) problems.push(`${STALLS_FILE}: every stall needs a row`)
-    if (!(stall.tMs === null || typeof stall.tMs === 'number')) problems.push(`${STALLS_FILE}: tMs must be numeric or null`)
-    if (!(stall.stalledMs === null || typeof stall.stalledMs === 'number')) problems.push(`${STALLS_FILE}: stalledMs must be numeric or null`)
+    if (!(stall.tMs === null || typeof stall.tMs === 'number'))
+      problems.push(`${STALLS_FILE}: tMs must be numeric or null`)
+    if (!(stall.stalledMs === null || typeof stall.stalledMs === 'number'))
+      problems.push(`${STALLS_FILE}: stalledMs must be numeric or null`)
     if (!(stall.bundle === null || (typeof stall.bundle === 'string' && STALL_BUNDLE_NAME.test(stall.bundle)))) {
       problems.push(`${STALLS_FILE}: bundle must be null or a stall bundle file name`)
     }
@@ -1087,10 +1212,12 @@ export function m2_0194BundleProblems(bundlePath) {
     }
     if (stall.status === 'FAIL') {
       if (!nonEmptyString(stall.error_class)) problems.push(`${STALLS_FILE}: FAIL entries need an error_class`)
-      if (!dryRun && environment?.host?.label !== 'windows-latest') problems.push(`${STALLS_FILE}: live macOS stall entries must have a nearest main-thread sample`)
+      if (!dryRun && environment?.host?.label !== 'windows-latest')
+        problems.push(`${STALLS_FILE}: live macOS stall entries must have a nearest main-thread sample`)
     }
     if (stall.status === 'NOT_APPLICABLE') {
-      if (environment?.host?.label !== 'windows-latest') problems.push(`${STALLS_FILE}: NOT_APPLICABLE sampling is only valid on windows-latest`)
+      if (environment?.host?.label !== 'windows-latest')
+        problems.push(`${STALLS_FILE}: NOT_APPLICABLE sampling is only valid on windows-latest`)
       if (!nonEmptyString(stall.reason)) problems.push(`${STALLS_FILE}: NOT_APPLICABLE entries need a reason`)
     }
   }
@@ -1158,7 +1285,8 @@ export function m2_0195BundleProblems(bundlePath) {
   if (environment?.ticket !== 'M2-0195') problems.push('environment.json: ticket must be M2-0195')
   if (environment?.version !== '1.9.6') problems.push('environment.json: version must be 1.9.6')
   if (environment?.platform !== 'win32') problems.push('environment.json: platform must be win32')
-  if (environment?.host?.label !== 'windows-latest') problems.push('environment.json: hosted row must record host.label windows-latest')
+  if (environment?.host?.label !== 'windows-latest')
+    problems.push('environment.json: hosted row must record host.label windows-latest')
   if (typeof environment?.artifact_sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(environment.artifact_sha256)) {
     problems.push('environment.json: artifact_sha256 must be a lowercase sha256')
   }
@@ -1184,7 +1312,8 @@ export function m2_0195BundleProblems(bundlePath) {
     for (const id of M2_0195_MANAGED_ROWS) {
       const row = rowsById.get(id)
       if (!row) continue
-      if (row.status !== 'BLOCKED_EXTERNAL') problems.push(`baseline.json: ${id} must be BLOCKED_EXTERNAL until the managed laptop runs`)
+      if (row.status !== 'BLOCKED_EXTERNAL')
+        problems.push(`baseline.json: ${id} must be BLOCKED_EXTERNAL until the managed laptop runs`)
       if (typeof row.unblock !== 'string' || row.unblock.trim().length < 20) {
         problems.push(`baseline.json: ${id} needs an exact unblock step`)
       }
@@ -1196,10 +1325,17 @@ export function m2_0195BundleProblems(bundlePath) {
     problems.push('external-blockers.json: blockers array is required')
   } else {
     for (const blocker of blockers.blockers) {
-      if (blocker.status !== 'BLOCKED_EXTERNAL') problems.push('external-blockers.json: blockers must be BLOCKED_EXTERNAL')
-      if (typeof blocker.unblock_step !== 'string' || !/managed Windows 11/.test(blocker.unblock_step) ||
-          !/OneDrive Files On-Demand/.test(blocker.unblock_step) || !/EDR/.test(blocker.unblock_step)) {
-        problems.push('external-blockers.json: managed-laptop unblock step must name Windows 11, EDR and OneDrive Files On-Demand')
+      if (blocker.status !== 'BLOCKED_EXTERNAL')
+        problems.push('external-blockers.json: blockers must be BLOCKED_EXTERNAL')
+      if (
+        typeof blocker.unblock_step !== 'string' ||
+        !/managed Windows 11/.test(blocker.unblock_step) ||
+        !/OneDrive Files On-Demand/.test(blocker.unblock_step) ||
+        !/EDR/.test(blocker.unblock_step)
+      ) {
+        problems.push(
+          'external-blockers.json: managed-laptop unblock step must name Windows 11, EDR and OneDrive Files On-Demand'
+        )
       }
     }
   }
@@ -1232,17 +1368,27 @@ const GATE_ID_RE = /^[a-z0-9][a-z0-9._-]*$/
 const SHA1_RE = /^[0-9a-f]{40}$/
 const SHA256_RE = /^[0-9a-f]{64}$/
 const isProgramRelPath = (value) =>
-  nonEmptyString(value) && !value.startsWith('/') && !value.includes('\\') &&
+  nonEmptyString(value) &&
+  !value.startsWith('/') &&
+  !value.includes('\\') &&
   value.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..')
 
 function gateRowProblems(row, where) {
   if (!isPlainObject(row)) return [`${where}: expected an object`]
-  const problems = Object.keys(row).filter((key) => !GATE_ROW_KEYS.has(key)).map((key) => `${where}.${key}: unexpected key`)
+  const problems = Object.keys(row)
+    .filter((key) => !GATE_ROW_KEYS.has(key))
+    .map((key) => `${where}.${key}: unexpected key`)
   if (!TICKET_RE.test(row.ticket ?? '')) problems.push(`${where}.ticket: expected an id like M2-0046`)
-  if (!EVIDENCE_LEVELS.includes(row.level)) problems.push(`${where}.level: expected one of ${EVIDENCE_LEVELS.join(', ')}`)
+  if (!EVIDENCE_LEVELS.includes(row.level))
+    problems.push(`${where}.level: expected one of ${EVIDENCE_LEVELS.join(', ')}`)
   if (!GATE_BYTES.includes(row.bytes)) problems.push(`${where}.bytes: expected one of ${GATE_BYTES.join(', ')}`)
   if (!GATE_ACCEPT.includes(row.accept)) problems.push(`${where}.accept: expected one of ${GATE_ACCEPT.join(', ')}`)
-  if (!Array.isArray(row.hosts) || row.hosts.length === 0 || !row.hosts.every(nonEmptyString) || new Set(row.hosts).size !== row.hosts.length) {
+  if (
+    !Array.isArray(row.hosts) ||
+    row.hosts.length === 0 ||
+    !row.hosts.every(nonEmptyString) ||
+    new Set(row.hosts).size !== row.hosts.length
+  ) {
     problems.push(`${where}.hosts: expected a non-empty array of distinct host labels`)
   }
   if ('match' in row && !nonEmptyString(row.match)) problems.push(`${where}.match: expected a non-empty string`)
@@ -1268,10 +1414,13 @@ function gateAmbiguityProblems(rows) {
   }
   for (const [key, siblings] of byKey) {
     if (siblings.length < 2) continue
-    const ambiguous = siblings.some((row) => row.match === undefined) ||
+    const ambiguous =
+      siblings.some((row) => row.match === undefined) ||
       siblings.some((row, i) => siblings.some((other, j) => i !== j && other.match.includes(row.match)))
     if (ambiguous) {
-      problems.push(`gates: rows ${siblings.map((row) => row.id).join(', ')} share ${key}; each needs a match that no sibling's contains`)
+      problems.push(
+        `gates: rows ${siblings.map((row) => row.id).join(', ')} share ${key}; each needs a match that no sibling's contains`
+      )
     }
   }
   return problems
@@ -1282,10 +1431,21 @@ function provenanceShapeProblems(provenance) {
   const problems = []
   if (!SHA1_RE.test(provenance.commit ?? '')) problems.push('provenance.commit: expected 40 lowercase hex characters')
   if (!nonEmptyString(provenance.version)) problems.push('provenance.version: expected a non-empty string')
-  if (!(Number.isInteger(provenance.run?.id) && provenance.run.id > 0)) problems.push('provenance.run.id: expected a positive integer')
+  if (!(Number.isInteger(provenance.run?.id) && provenance.run.id > 0))
+    problems.push('provenance.run.id: expected a positive integer')
   const builds = Array.isArray(provenance.builds) ? provenance.builds : null
-  if (!builds || !builds.every((build) => isPlainObject(build) && nonEmptyString(build.variant) && Array.isArray(build.assets) &&
-      build.assets.every((asset) => isPlainObject(asset) && nonEmptyString(asset.name) && SHA256_RE.test(asset.sha256 ?? '')))) {
+  if (
+    !builds ||
+    !builds.every(
+      (build) =>
+        isPlainObject(build) &&
+        nonEmptyString(build.variant) &&
+        Array.isArray(build.assets) &&
+        build.assets.every(
+          (asset) => isPlainObject(asset) && nonEmptyString(asset.name) && SHA256_RE.test(asset.sha256 ?? '')
+        )
+    )
+  ) {
     problems.push('provenance.builds: expected [{ variant, assets: [{ name, sha256 }] }]')
   }
   return problems
@@ -1301,7 +1461,8 @@ export function releaseInputProblems(gates, provenance, ledger) {
   if (!isPlainObject(gates)) {
     problems.push('gates: expected an object')
   } else {
-    if (gates.schema !== RELEASE_GATES_SCHEMA) problems.push(`gates.schema: expected the number ${RELEASE_GATES_SCHEMA}`)
+    if (gates.schema !== RELEASE_GATES_SCHEMA)
+      problems.push(`gates.schema: expected the number ${RELEASE_GATES_SCHEMA}`)
     if (!nonEmptyString(gates.version)) problems.push('gates.version: expected a non-empty string')
     const rows = Array.isArray(gates.rows) ? gates.rows : []
     if (rows.length === 0) problems.push('gates.rows: expected a non-empty array')
@@ -1309,15 +1470,20 @@ export function releaseInputProblems(gates, provenance, ledger) {
     problems.push(...rowProblems)
 
     const sample = gates.sample
-    if (!isPlainObject(sample) || !TICKET_RE.test(sample.population_of ?? '') || !isProgramRelPath(sample.path) ||
-        !(typeof sample.fraction === 'number' && sample.fraction > 0 && sample.fraction <= 1)) {
+    if (
+      !isPlainObject(sample) ||
+      !TICKET_RE.test(sample.population_of ?? '') ||
+      !isProgramRelPath(sample.path) ||
+      !(typeof sample.fraction === 'number' && sample.fraction > 0 && sample.fraction <= 1)
+    ) {
       problems.push('gates.sample: expected { id, population_of: M2-####, fraction in (0, 1], path: program-relative }')
     }
     if (!isPlainObject(gates.accepted)) problems.push('gates.accepted: expected { id }')
 
     const ids = [...rows.map((row) => row?.id), sample?.id, gates.accepted?.id]
     for (const id of ids) {
-      if (typeof id !== 'string' || !GATE_ID_RE.test(id)) problems.push(`gates: row id ${JSON.stringify(id)} must be a lowercase label`)
+      if (typeof id !== 'string' || !GATE_ID_RE.test(id))
+        problems.push(`gates: row id ${JSON.stringify(id)} must be a lowercase label`)
     }
     for (const id of new Set(ids.filter((id, i) => typeof id === 'string' && ids.indexOf(id) !== i))) {
       problems.push(`gates: duplicate row id ${id}`)
@@ -1341,7 +1507,10 @@ function statesGate(text, id) {
 
 function selectsRecord(row, host, record) {
   if (record.evidence_level !== row.level || record.environment?.host !== host) return false
-  return row.match === undefined || [record.output?.path, record.command].some((value) => typeof value === 'string' && value.includes(row.match))
+  return (
+    row.match === undefined ||
+    [record.output?.path, record.command].some((value) => typeof value === 'string' && value.includes(row.match))
+  )
 }
 
 /** Why `record` does not bind to the bytes `row` requires, or null when it does. */
@@ -1350,10 +1519,13 @@ function bindingProblem(record, row, candidate) {
   if (runnerLabel) return `is a ${runnerLabel} record with no ci_run_id`
   if (row.bytes === 'baseline') {
     if (record.artifact_sha256 == null) return 'has no artifact_sha256'
-    return row.sha256.includes(record.artifact_sha256) ? null : `names sha256 ${record.artifact_sha256}, not one of the baseline sha256s`
+    return row.sha256.includes(record.artifact_sha256)
+      ? null
+      : `names sha256 ${record.artifact_sha256}, not one of the baseline sha256s`
   }
   if (record.build_run_id == null) return 'has no build_run_id (required on a candidate-bound row at every level)'
-  if (record.build_run_id !== candidate.runId) return `is bound to run ${record.build_run_id}, not the candidate (run ${candidate.runId})`
+  if (record.build_run_id !== candidate.runId)
+    return `is bound to run ${record.build_run_id}, not the candidate (run ${candidate.runId})`
   if (record.artifact_sha256 == null) return 'has no artifact_sha256 (required on a candidate-bound row at every level)'
   if (candidate.bytes[row.bytes].has(record.artifact_sha256)) return null
   const other = GATE_BYTES.find((bytes) => bytes !== row.bytes && candidate.bytes[bytes]?.has(record.artifact_sha256))
@@ -1365,10 +1537,12 @@ function bindingProblem(record, row, candidate) {
 /** One gate row on one host: the governing record and why the row is unmet (null when met). */
 function gateRowOnHost(row, host, records, candidate) {
   const record = records.filter((entry) => selectsRecord(row, host, entry)).at(-1)
-  if (!record) return { record, problem: `no ${row.level} record${row.match === undefined ? '' : ` matching "${row.match}"`}` }
+  if (!record)
+    return { record, problem: `no ${row.level} record${row.match === undefined ? '' : ` matching "${row.match}"`}` }
   const binding = bindingProblem(record, row, candidate)
   if (binding) return { record, problem: `the latest ${row.level} record ${binding}` }
-  if (row.accept === 'PASS' && record.result !== 'PASS') return { record, problem: `the latest ${row.level} record is ${record.result}, not PASS` }
+  if (row.accept === 'PASS' && record.result !== 'PASS')
+    return { record, problem: `the latest ${row.level} record is ${record.result}, not PASS` }
   return { record, problem: null }
 }
 
@@ -1414,14 +1588,25 @@ function sampleProblem(spec, { provenance, recordsByTicket, readSample, ledgerAt
  * missing release-file item, and one report line per REPORT row and host.
  * @returns {{problems: string[], reports: string[]}}
  */
-export function releaseProblems({ version, gates, provenance, ledger, recordsByTicket, notesPath, notesText, readSample, ledgerAt }) {
+export function releaseProblems({
+  version,
+  gates,
+  provenance,
+  ledger,
+  recordsByTicket,
+  notesPath,
+  notesText,
+  readSample,
+  ledgerAt
+}) {
   const problems = []
   const reports = []
   const runId = provenance.run.id
   const promotable = promotableAssets(provenance)
-  const assetsOf = (isPromotable) => provenance.builds
-    .filter((build) => VARIANTS[build.variant]?.promotable === isPromotable)
-    .flatMap((build) => build.assets.map((asset) => asset.sha256))
+  const assetsOf = (isPromotable) =>
+    provenance.builds
+      .filter((build) => VARIANTS[build.variant]?.promotable === isPromotable)
+      .flatMap((build) => build.assets.map((asset) => asset.sha256))
   const candidate = { runId, bytes: { promotable: new Set(assetsOf(true)), 'qa-identity': new Set(assetsOf(false)) } }
 
   if (provenance.version !== version) problems.push(`provenance: version ${provenance.version} is not ${version}`)
@@ -1436,7 +1621,9 @@ export function releaseProblems({ version, gates, provenance, ledger, recordsByT
       if (row.accept === 'REPORT') {
         reports.push(`REPORT ${label}: ${problem ?? `met (${record.result})`}`)
       } else if (problem && !stated) {
-        problems.push(`${label}: ${problem}${row.accept === 'PASS_OR_STATED' ? `, and the release file has no gate:${row.id} line` : ''}`)
+        problems.push(
+          `${label}: ${problem}${row.accept === 'PASS_OR_STATED' ? `, and the release file has no gate:${row.id} line` : ''}`
+        )
       }
     }
   }
@@ -1444,10 +1631,14 @@ export function releaseProblems({ version, gates, provenance, ledger, recordsByT
   const sample = sampleProblem(gates.sample, { provenance, recordsByTicket, readSample, ledgerAt })
   if (sample) problems.push(`${gates.sample.id} [re-execution sample of ${gates.sample.population_of}]: ${sample}`)
 
-  const releaseTickets = ledger.tickets.filter((ticket) => Array.isArray(ticket?.scope_paths) && ticket.scope_paths.includes(notesPath))
+  const releaseTickets = ledger.tickets.filter(
+    (ticket) => Array.isArray(ticket?.scope_paths) && ticket.scope_paths.includes(notesPath)
+  )
   if (basename(notesPath) !== `${version}.md`) problems.push(`release file: ${notesPath} is not named ${version}.md`)
   if (releaseTickets.length !== 1) {
-    problems.push(`${gates.accepted.id}: expected exactly one ledger ticket whose scope_paths include ${notesPath}, found ${releaseTickets.length}`)
+    problems.push(
+      `${gates.accepted.id}: expected exactly one ledger ticket whose scope_paths include ${notesPath}, found ${releaseTickets.length}`
+    )
   } else {
     const releaseTicket = releaseTickets[0].id
     const accepted = latestByLevel(recordsByTicket.get(releaseTicket) ?? []).get('ACCEPTED')
@@ -1467,12 +1658,14 @@ export function releaseProblems({ version, gates, provenance, ledger, recordsByT
   }
 
   if (!mentions(notesText, String(runId))) problems.push(`release file: does not name the candidate run ${runId}`)
-  if (!mentions(notesText, provenance.commit)) problems.push(`release file: does not name the commit ${provenance.commit}`)
+  if (!mentions(notesText, provenance.commit))
+    problems.push(`release file: does not name the commit ${provenance.commit}`)
   for (const asset of promotable) {
     if (!mentions(notesText, asset.sha256)) problems.push(`release file: does not name ${asset.name} (${asset.sha256})`)
   }
   for (const heading of ['Residual risks', 'Deferred']) {
-    if (!new RegExp(`^#{1,6}[ \\t]+${heading}[ \\t]*#*[ \\t]*$`, 'm').test(notesText)) problems.push(`release file: missing the heading "${heading}"`)
+    if (!new RegExp(`^#{1,6}[ \\t]+${heading}[ \\t]*#*[ \\t]*$`, 'm').test(notesText))
+      problems.push(`release file: missing the heading "${heading}"`)
   }
 
   return { problems, reports }
@@ -1510,20 +1703,28 @@ function releaseMain(values) {
     notesText,
     readSample: (path) => JSON.parse(readFileSync(join(program.programRoot, ...path.split('/')), 'utf8')),
     // The ledger's own repository history; ledger_commit is 40-hex (checked first), never an option.
-    ledgerAt: (commit) => JSON.parse(execFileSync('git', ['-C', dirname(ledgerPath), 'show', `${commit}:./${basename(ledgerPath)}`], {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024
-    }))
+    ledgerAt: (commit) =>
+      JSON.parse(
+        execFileSync('git', ['-C', dirname(ledgerPath), 'show', `${commit}:./${basename(ledgerPath)}`], {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+          maxBuffer: 64 * 1024 * 1024
+        })
+      )
   })
   for (const line of reports) console.log(line)
   if (problems.length > 0) {
     for (const problem of problems) console.error(`- ${problem}`)
     process.exit(1)
   }
-  console.log(`release ${values.release}: OK, ${gates.rows.length} gate rows, the re-execution sample, the acceptance and the release file are met`)
+  console.log(
+    `release ${values.release}: OK, ${gates.rows.length} gate rows, the re-execution sample, the acceptance and the release file are met`
+  )
 }
 
 async function main() {
-  const usage = 'usage: check.mjs --ledger <path>  |  check.mjs --pr-event <path>  |  check.mjs --ticket M2-0008|M2-0194|M2-0195 [--bundle <path>]  |  ' +
+  const usage =
+    'usage: check.mjs --ledger <path>  |  check.mjs --pr-event <path>  |  check.mjs --ticket M2-0008|M2-0194|M2-0195 [--bundle <path>]  |  ' +
     'check.mjs --ticket M2-0198 [--record <path>]  |  ' +
     'check.mjs --release <version> --gates <gates.json> --provenance <provenance.json> --ledger <tickets.json> --notes <release notes .md>'
   let values
@@ -1552,8 +1753,11 @@ async function main() {
   const hasPrEvent = typeof values['pr-event'] === 'string'
   const hasTicket = typeof values.ticket === 'string'
   const hasReleaseInput = ['gates', 'provenance', 'notes'].some((flag) => values[flag] !== undefined)
-  if ([hasLedger, hasPrEvent, hasTicket, hasRelease].filter(Boolean).length !== 1 || (hasReleaseInput && !hasRelease) ||
-      values.release === '') {
+  if (
+    [hasLedger, hasPrEvent, hasTicket, hasRelease].filter(Boolean).length !== 1 ||
+    (hasReleaseInput && !hasRelease) ||
+    values.release === ''
+  ) {
     return usageExit(usage)
   }
 
@@ -1608,7 +1812,8 @@ async function main() {
       'M2-0194': { check: m2_0194BundleProblems, defaultBundle: M2_0194_DEFAULT_BUNDLE },
       'M2-0195': { check: m2_0195BundleProblems, defaultBundle: M2_0195_DEFAULT_BUNDLE }
     }[values.ticket]
-    if (!checker) return usageExit('only --ticket M2-0008, M2-0194, M2-0195 and M2-0198 are supported in this public-repo checker')
+    if (!checker)
+      return usageExit('only --ticket M2-0008, M2-0194, M2-0195 and M2-0198 are supported in this public-repo checker')
     const bundle = values.bundle ?? checker.defaultBundle
     const problems = checker.check(resolve(bundle))
     if (problems.length > 0) {
@@ -1630,7 +1835,9 @@ async function main() {
   const prNumber = event.pull_request?.number
   const repoFullName = event.repository?.full_name
   if (!headSha || !prNumber || !repoFullName) {
-    return usageExit('pr-event: the event is missing pull_request.head.sha, pull_request.number or repository.full_name')
+    return usageExit(
+      'pr-event: the event is missing pull_request.head.sha, pull_request.number or repository.full_name'
+    )
   }
 
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')

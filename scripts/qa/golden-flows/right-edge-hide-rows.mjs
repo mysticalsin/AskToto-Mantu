@@ -146,10 +146,28 @@ export function rightEdgeStateMismatches(observation, state, layout) {
   const expected = rightEdgeExpectedRects(win.workArea)
   const checks =
     state === 'revealed'
-      ? { bounds: rectMatches(win.bounds, expected.drawer), opacity: win.opacity === 1, clickThrough: win.clickThrough === false, drawer: page.drawer === true }
+      ? {
+          bounds: rectMatches(win.bounds, expected.drawer),
+          opacity: win.opacity === 1,
+          clickThrough: win.clickThrough === false,
+          drawer: page.drawer === true
+        }
       : layout === 'hide'
-        ? { insideWorkArea: insideWorkArea(win.bounds, win.workArea), drawer: !page.drawer, bounds: rightEdgeHideParkMatches(win.bounds, expected.band), opacity: win.opacity === 0, clickThrough: win.clickThrough === true }
-        : { insideWorkArea: insideWorkArea(win.bounds, win.workArea), drawer: !page.drawer, bounds: rectMatches(win.bounds, expected.tab), opacity: win.opacity === 1, clickThrough: win.clickThrough === false, rail: page.rail === true }
+        ? {
+            insideWorkArea: insideWorkArea(win.bounds, win.workArea),
+            drawer: !page.drawer,
+            bounds: rightEdgeHideParkMatches(win.bounds, expected.band),
+            opacity: win.opacity === 0,
+            clickThrough: win.clickThrough === true
+          }
+        : {
+            insideWorkArea: insideWorkArea(win.bounds, win.workArea),
+            drawer: !page.drawer,
+            bounds: rectMatches(win.bounds, expected.tab),
+            opacity: win.opacity === 1,
+            clickThrough: win.clickThrough === false,
+            rail: page.rail === true
+          }
   return Object.keys(checks).filter((key) => !checks[key])
 }
 
@@ -451,7 +469,9 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     const parked = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', layout), 5_000)
     if (!parked.ok) {
       const missed = rightEdgeStateMismatches(parked.observed, 'parked', layout).join(',')
-      throw new Error(`could not park right-edge ${layout} (missed: ${missed}): ${JSON.stringify(summarize(parked.observed))}`)
+      throw new Error(
+        `could not park right-edge ${layout} (missed: ${missed}): ${JSON.stringify(summarize(parked.observed))}`
+      )
     }
     return parked.observed
   }
@@ -461,7 +481,9 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     const revealed = await waitUntil((o) => rightEdgeStateMatches(o, 'revealed'), 3_000)
     if (!revealed.ok) {
       const missed = rightEdgeStateMismatches(revealed.observed, 'revealed').join(',')
-      throw new Error(`the right-edge band did not reveal the drawer (missed: ${missed}): ${JSON.stringify(summarize(revealed.observed))}`)
+      throw new Error(
+        `the right-edge band did not reveal the drawer (missed: ${missed}): ${JSON.stringify(summarize(revealed.observed))}`
+      )
     }
     return revealed.observed
   }
@@ -470,12 +492,22 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
   const step = async (id, fn) => {
     try {
       const outcome = await fn()
-      complete(id, { status: outcome.status ?? (outcome.pass ? 'PASS' : 'FAIL'), evidence: outcome.evidence, unblock: outcome.unblock ?? (outcome.pass ? null : 'Inspect the packaged-smoke artifact; the RE-HIDE evidence shows the observed window and page state.') })
+      complete(id, {
+        status: outcome.status ?? (outcome.pass ? 'PASS' : 'FAIL'),
+        evidence: outcome.evidence,
+        unblock:
+          outcome.unblock ??
+          (outcome.pass
+            ? null
+            : 'Inspect the packaged-smoke artifact; the RE-HIDE evidence shows the observed window and page state.')
+      })
     } catch (err) {
       complete(id, {
         status: 'FAIL',
         evidence: null,
-        unblock: `Inspect the packaged-smoke artifact; RE-HIDE scenario failed: ${String(err?.message ?? err).split('\n')[0].slice(0, 700)}`
+        unblock: `Inspect the packaged-smoke artifact; RE-HIDE scenario failed: ${String(err?.message ?? err)
+          .split('\n')[0]
+          .slice(0, 700)}`
       })
     }
   }
@@ -490,7 +522,10 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     // Main must have revealed by 400 ms; the page may take one more paint to mount the drawer.
     const mainRevealed = rightEdgeStateMatches({ ...at400, page: { ...at400.page, drawer: true } }, 'revealed')
     const settled = await waitUntil((o) => rightEdgeStateMatches(o, 'revealed'), 1_000)
-    return { pass: mainRevealed && settled.ok, evidence: { parked: summarize(parked), at400ms: summarize(at400), settled: summarize(settled.observed) } }
+    return {
+      pass: mainRevealed && settled.ok,
+      evidence: { parked: summarize(parked), at400ms: summarize(at400), settled: summarize(settled.observed) }
+    }
   })
 
   await step('RE-HIDE-2-inset-stays-parked', async () => {
@@ -500,7 +535,10 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     await wait(600)
     const after = await observe()
     const unchanged = rectMatches(after.win.bounds, parked.win.bounds, 0)
-    return { pass: unchanged && rightEdgeStateMatches(after, 'parked', 'hide'), evidence: { parked: summarize(parked), after600ms: summarize(after) } }
+    return {
+      pass: unchanged && rightEdgeStateMatches(after, 'parked', 'hide'),
+      evidence: { parked: summarize(parked), after600ms: summarize(after) }
+    }
   })
 
   await step('RE-HIDE-3-draft-hide-and-escape', async () => {
@@ -523,7 +561,13 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     await composer().fill('')
     return {
       pass: hideVisible && byControl.ok && keptAfterControl && byEscape.ok && keptAfterEscape,
-      evidence: { hideVisibleWithDraft: hideVisible, parkedByControl: byControl.ok, draftKeptAfterControl: keptAfterControl, parkedByEscape: byEscape.ok, draftKeptAfterEscape: keptAfterEscape }
+      evidence: {
+        hideVisibleWithDraft: hideVisible,
+        parkedByControl: byControl.ok,
+        draftKeptAfterControl: keptAfterControl,
+        parkedByEscape: byEscape.ok,
+        draftKeptAfterEscape: keptAfterEscape
+      }
     }
   })
 
@@ -563,7 +607,10 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
       const parked = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', layout), 3_000)
       await bridge('toggle')
       const revealed = await waitUntil((o) => rightEdgeStateMatches(o, 'revealed') && o.page.composerFocused, 3_000)
-      const autoParked = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', layout), RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS + 5_000)
+      const autoParked = await waitUntil(
+        (o) => rightEdgeStateMatches(o, 'parked', layout),
+        RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS + 5_000
+      )
       return {
         pass: parked.ok && revealed.ok && autoParked.ok,
         evidence: {
@@ -582,7 +629,10 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     const island = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', 'island'), 3_000)
     await setLayout('hide')
     const hide = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', 'hide'), 3_000)
-    return { pass: island.ok && hide.ok, evidence: { island: summarize(island.observed), hide: summarize(hide.observed) } }
+    return {
+      pass: island.ok && hide.ok,
+      evidence: { island: summarize(island.observed), hide: summarize(hide.observed) }
+    }
   })
 
   const blurPage = () => page.evaluate(() => document.activeElement?.blur?.())
@@ -596,7 +646,11 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     const after = await observe()
     return {
       pass: revealed.page.composerFocused === false && after.page.composerFocused === false,
-      evidence: { revealed: summarize(revealed), composerFocusedAtReveal: revealed.page.composerFocused, composerFocusedAfter300ms: after.page.composerFocused }
+      evidence: {
+        revealed: summarize(revealed),
+        composerFocusedAtReveal: revealed.page.composerFocused,
+        composerFocusedAfter300ms: after.page.composerFocused
+      }
     }
   })
 
@@ -606,7 +660,14 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     await blurPage()
     await bridge('toggle')
     const revealed = await waitUntil((o) => rightEdgeStateMatches(o, 'revealed') && o.page.composerFocused, 3_000)
-    return { pass: revealed.ok, evidence: { revealed: summarize(revealed.observed), composerFocused: revealed.observed.page.composerFocused, ms: revealed.ms } }
+    return {
+      pass: revealed.ok,
+      evidence: {
+        revealed: summarize(revealed.observed),
+        composerFocused: revealed.observed.page.composerFocused,
+        ms: revealed.ms
+      }
+    }
   })
 
   // RE-P01 (the D2 amendment): a click into an empty composer is a keystroke. The pointer then leaves: the
@@ -630,7 +691,12 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     const heldForPin = parkedAfterMs >= RIGHT_EDGE_TYPING_PIN_MS - 500
     return {
       pass: heldOpen && parked.ok && heldForPin,
-      evidence: { heldOpenAfterLeave: heldOpen, held: summarize(held), parked: summarize(parked.observed), parkedAfterMs }
+      evidence: {
+        heldOpenAfterLeave: heldOpen,
+        held: summarize(held),
+        parked: summarize(parked.observed),
+        parkedAfterMs
+      }
     }
   })
 
@@ -704,10 +770,13 @@ export async function inspectorClient(wsUrl) {
     const id = nextId++
     const answer = new Promise((resolve) => pending.set(id, resolve))
     socket.send(JSON.stringify({ id, method, params }))
-    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error(`main-process ${method} timed out`)), 10_000))
+    const timeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`main-process ${method} timed out`)), 10_000)
+    )
     const message = await Promise.race([answer, timeout])
     if (message.error) throw new Error(message.error.message)
-    if (message.result?.exceptionDetails) throw new Error(message.result.exceptionDetails.exception?.description ?? message.result.exceptionDetails.text)
+    if (message.result?.exceptionDetails)
+      throw new Error(message.result.exceptionDetails.exception?.description ?? message.result.exceptionDetails.text)
     return message.result
   }
   let nextEvaluation = 1
@@ -761,7 +830,11 @@ export async function runPackagedRightEdgeHideRows({ port, inspectPort, rows }) 
     inspector = await mainInspector(inspectPort)
   } catch (err) {
     for (const row of rows) {
-      Object.assign(row, { status: 'FAIL', evidence: null, unblock: `Inspect the packaged-smoke artifact; ${err?.message ?? String(err)}` })
+      Object.assign(row, {
+        status: 'FAIL',
+        evidence: null,
+        unblock: `Inspect the packaged-smoke artifact; ${err?.message ?? String(err)}`
+      })
     }
     return
   }
