@@ -3,6 +3,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 
 export const PARKED_BOUNDS = { width: 8, height: 2 }
 export const PARK_CHECK_INTERVAL_MS = 60_000
+export const PARK_BOUNDS_SIGNAL = 'renderer window.screenX/screenY/outerWidth/outerHeight'
 
 export class ParkPreconditionError extends Error {
   constructor(message, details = {}) {
@@ -22,6 +23,21 @@ export function parkVerdict(bounds, observedAtMs = Date.now()) {
     observedAt: new Date(observedAtMs).toISOString(),
     bounds,
     parked: isParkedBounds(bounds)
+  }
+}
+
+export async function evaluatedOverlayBounds(page) {
+  const raw = await page.evaluate(() => ({
+    left: window.screenX,
+    top: window.screenY,
+    width: window.outerWidth,
+    height: window.outerHeight
+  }))
+  return {
+    left: Number.isFinite(raw?.left) ? raw.left : null,
+    top: Number.isFinite(raw?.top) ? raw.top : null,
+    width: Number.isFinite(raw?.width) ? raw.width : null,
+    height: Number.isFinite(raw?.height) ? raw.height : null
   }
 }
 
@@ -64,22 +80,9 @@ export async function createCdpParkChecker(cdpUrl) {
   const { chromium } = await import('playwright')
   const browser = await chromium.connectOverCDP(cdpUrl, { timeout: 30_000 })
   const page = await overlayPage(browser)
-  const session = await page.context().newCDPSession(page)
   return {
     async check(now = Date.now()) {
-      const target = await session.send('Browser.getWindowForTarget')
-      const result = await session.send('Browser.getWindowBounds', { windowId: target.windowId })
-      const raw = result.bounds ?? {}
-      return parkVerdict(
-        {
-          left: raw.left ?? null,
-          top: raw.top ?? null,
-          width: raw.width ?? null,
-          height: raw.height ?? null,
-          windowState: raw.windowState ?? null
-        },
-        now
-      )
+      return parkVerdict(await evaluatedOverlayBounds(page), now)
     },
     async close() {
       await browser.close().catch(() => {})
@@ -116,7 +119,7 @@ export async function monitorParkedIdle({
     await sleepFn(Math.max(0, Math.min(next, end) - now()))
   }
   return {
-    boundsSignal: 'Browser.getWindowForTarget/getWindowBounds',
+    boundsSignal: PARK_BOUNDS_SIGNAL,
     expectedBounds: PARKED_BOUNDS,
     checks,
     summary: summarizeParkChecks(checks)

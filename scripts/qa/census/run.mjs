@@ -13,17 +13,25 @@ import {
   defaultOutputPath,
   openNdjsonWriter,
   proveLocalTtftEvidenceFromArtifact,
+  rendererProbeFailureMessage,
   rendererScenarioProbeSource,
   resolveInstallTarget,
   resolveProductVersion,
   streamCensus,
+  validateTraceProfileCompatibility,
   validateState,
   validateStatePrecondition,
   windowsWorkingSetEvidenceFromArtifact,
   writeJson
 } from './lib.mjs'
 import { writeAuditCounts } from './audit-counts.mjs'
-import { PARKED_BOUNDS, ParkPreconditionError, createCdpParkChecker, summarizeParkChecks } from './park.mjs'
+import {
+  PARKED_BOUNDS,
+  PARK_BOUNDS_SIGNAL,
+  ParkPreconditionError,
+  createCdpParkChecker,
+  summarizeParkChecks
+} from './park.mjs'
 
 function usage() {
   return `Usage:
@@ -84,7 +92,8 @@ function readArgs(argv) {
     else if (arg === '--cdp-url') args.cdpUrl = next()
     else if (arg === '--trace-scenario') args.traceScenarios.push(next())
     else if (arg === '--ttft-output') args.ttftOutput = next()
-    else if (arg === '--ttft-ms') throw new Error('--ttft-ms is not accepted; pass --ttft-output from scripts/prove-local-ttft.mjs')
+    else if (arg === '--ttft-ms')
+      throw new Error('--ttft-ms is not accepted; pass --ttft-output from scripts/prove-local-ttft.mjs')
     else if (arg === '--windows-working-set-artifact') args.windowsWorkingSetArtifact = next()
     else if (arg === '--product-version') args.productVersion = next()
     else if (arg === '--precondition-evidence') args.preconditionEvidence = next()
@@ -129,13 +138,24 @@ function readProfileManifest(profile) {
   }
 }
 
+function readProfileSettings(profile) {
+  try {
+    return JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8'))
+  } catch (error) {
+    throw new Error(`trace scenarios require a readable profile settings.json: ${error?.message ?? error}`)
+  }
+}
+
 export function validateParkedIdleProfile(profile) {
   if (!profile) throw new ParkPreconditionError('parked-idle requires --profile or METIS_QA_PROFILE')
   const manifest = readProfileManifest(profile)
   if (manifest?.layout !== 'hide') {
-    throw new ParkPreconditionError(`parked-idle requires profile manifest layout "hide"; observed "${manifest?.layout ?? 'unknown'}"`, {
-      layout: manifest?.layout ?? null
-    })
+    throw new ParkPreconditionError(
+      `parked-idle requires profile manifest layout "hide"; observed "${manifest?.layout ?? 'unknown'}"`,
+      {
+        layout: manifest?.layout ?? null
+      }
+    )
   }
   return manifest
 }
@@ -154,7 +174,13 @@ export function pointerMoveCommand(platform, position) {
   }
   if (platform === 'win32') {
     return {
-      executable: join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+      executable: join(
+        process.env.SystemRoot || 'C:\\Windows',
+        'System32',
+        'WindowsPowerShell',
+        'v1.0',
+        'powershell.exe'
+      ),
       args: [
         '-NoProfile',
         '-NonInteractive',
@@ -192,7 +218,7 @@ export function parkedIdlePreconditionFailureReport({
 }) {
   const failedParkedIdle = {
     ...(parkedIdle ?? {}),
-    boundsSignal: 'Browser.getWindowForTarget/getWindowBounds',
+    boundsSignal: PARK_BOUNDS_SIGNAL,
     expectedBounds: PARKED_BOUNDS,
     checks: [firstCheck],
     summary: summarizeParkChecks([firstCheck])
@@ -232,53 +258,73 @@ async function findOverlayPage(browser) {
   return null
 }
 
-async function captureRendererTrace({ cdpUrl, scenarios, outputDir }) {
+export async function captureRendererTrace({
+  cdpUrl,
+  scenarios,
+  outputDir,
+  connectOverCDP,
+  sleepFn = sleep,
+  now = () => new Date().toISOString()
+}) {
   if (!cdpUrl || scenarios.length === 0) return { captured: false, scenarios: [] }
-  const { chromium } = await import('playwright')
-  const browser = await chromium.connectOverCDP(cdpUrl, { timeout: 30_000 })
+  const connect =
+    connectOverCDP ??
+    (async (url, options) => {
+      const { chromium } = await import('playwright')
+      return chromium.connectOverCDP(url, options)
+    })
+  const browser = await connect(cdpUrl, { timeout: 30_000 })
   const captured = []
+  const failures = []
   try {
     let page = null
     const deadline = Date.now() + 30_000
     while (!page && Date.now() < deadline) {
       page = await findOverlayPage(browser)
-      if (!page) await sleep(500)
+      if (!page) await sleepFn(500)
     }
     if (!page) throw new Error('no overlay renderer exposing window.toto')
 
     for (const scenario of scenarios) {
       if (!REQUIRED_TRACE_SCENARIOS.includes(scenario)) throw new Error(`unknown trace scenario: ${scenario}`)
       const proof = await page.evaluate(rendererScenarioProbeSource(scenario))
-      if (!proof?.ok) throw new Error(`renderer trace scenario is not established: ${scenario}`)
       const proofPath = join(outputDir, `${scenario}.proof.json`)
       writeJson(proofPath, {
         scenario,
-        observedAt: new Date().toISOString(),
+        observedAt: now(),
         proof
       })
-      const session = await page.context().newCDPSession(page)
-      await session.send('Tracing.start', {
-        categories: 'devtools.timeline,disabled-by-default-devtools.timeline,blink.user_timing,gpu',
-        transferMode: 'ReturnAsStream'
-      })
-      await sleep(10_000)
-      const complete = new Promise((resolve) => {
-        session.once('Tracing.tracingComplete', resolve)
-      })
-      await session.send('Tracing.end')
-      const event = await complete
-      let trace = ''
-      let eof = false
-      while (!eof) {
-        const chunk = await session.send('IO.read', { handle: event.stream })
-        trace += chunk.data ?? ''
-        eof = Boolean(chunk.eof)
+      try {
+        if (!proof?.ok) throw new Error(rendererProbeFailureMessage(scenario, proof))
+        const session = await page.context().newCDPSession(page)
+        await session.send('Tracing.start', {
+          categories: 'devtools.timeline,disabled-by-default-devtools.timeline,blink.user_timing,gpu',
+          transferMode: 'ReturnAsStream'
+        })
+        await sleepFn(10_000)
+        const complete = new Promise((resolve) => {
+          session.once('Tracing.tracingComplete', resolve)
+        })
+        await session.send('Tracing.end')
+        const event = await complete
+        let trace = ''
+        let eof = false
+        while (!eof) {
+          const chunk = await session.send('IO.read', { handle: event.stream })
+          trace += chunk.data ?? ''
+          eof = Boolean(chunk.eof)
+        }
+        await session.send('IO.close', { handle: event.stream }).catch(() => {})
+        const path = join(outputDir, `${scenario}.trace.json`)
+        mkdirSync(dirname(path), { recursive: true })
+        writeJson(path, JSON.parse(trace))
+        captured.push({ scenario, path, proofPath })
+      } catch (error) {
+        failures.push(`${error?.message ?? error}; proof: ${proofPath}`)
       }
-      await session.send('IO.close', { handle: event.stream }).catch(() => {})
-      const path = join(outputDir, `${scenario}.trace.json`)
-      mkdirSync(dirname(path), { recursive: true })
-      writeJson(path, JSON.parse(trace))
-      captured.push({ scenario, path, proofPath })
+    }
+    if (failures.length > 0) {
+      throw new Error(`renderer trace capture failed for ${failures.length} scenario(s): ${failures.join(' | ')}`)
     }
   } finally {
     await browser.close().catch(() => {})
@@ -312,6 +358,13 @@ async function main() {
   if (args.auditCounts && !profile) throw new Error('--audit-counts requires --profile or METIS_QA_PROFILE')
   if (!(checkpointMinutes > 0)) throw new Error('--checkpoint-minutes must be positive')
   if (state === 'parked-idle') validateParkedIdleProfile(profile)
+  if (args.traceScenarios.length > 0) {
+    if (!profile) throw new Error('trace scenarios require --profile or METIS_QA_PROFILE')
+    validateTraceProfileCompatibility({
+      profileSettings: readProfileSettings(profile),
+      scenarios: args.traceScenarios
+    })
+  }
 
   validateStatePrecondition({
     state,
@@ -365,7 +418,15 @@ async function main() {
       if (!firstCheck.parked) {
         writeJson(
           output,
-          parkedIdlePreconditionFailureReport({ parkedIdle, firstCheck, productVersion, platform, state, seconds, mainPid })
+          parkedIdlePreconditionFailureReport({
+            parkedIdle,
+            firstCheck,
+            productVersion,
+            platform,
+            state,
+            seconds,
+            mainPid
+          })
         )
         await checker.close()
         checker = null
@@ -375,7 +436,7 @@ async function main() {
       }
       parkedIdle = {
         ...(parkedIdle ?? {}),
-        boundsSignal: 'Browser.getWindowForTarget/getWindowBounds',
+        boundsSignal: PARK_BOUNDS_SIGNAL,
         expectedBounds: PARKED_BOUNDS,
         checks: [firstCheck]
       }
@@ -442,7 +503,8 @@ if (isMainModule(import.meta.url, process.argv[1])) {
   main().catch((error) => {
     console.error(`[census] ${error?.message ?? error}`)
     if (error instanceof ParkPreconditionError) {
-      if (error.details && Object.keys(error.details).length > 0) console.error(`[census] ${JSON.stringify(error.details)}`)
+      if (error.details && Object.keys(error.details).length > 0)
+        console.error(`[census] ${JSON.stringify(error.details)}`)
       process.exitCode = 2
     } else {
       process.exitCode = 1

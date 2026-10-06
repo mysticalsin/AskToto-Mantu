@@ -1,4 +1,15 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, lazy, Suspense, startTransition } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  lazy,
+  Suspense,
+  startTransition
+} from 'react'
 import { Bar } from './components/Bar'
 /** FITO-185-J: sync OnboardingV2 — exclusive Act 1 must not wait on a lazy chunk (DemoScene stays lazy inside Experience). */
 import { OnboardingV2 } from './components/OnboardingExperience'
@@ -9,10 +20,7 @@ import { RightEdgeReader, RightEdgeReaderDetails, RightEdgeReaderTranscript, rea
 import type { RightEdgeReaderKind, RightEdgeReaderScrollMemory } from './components/right-edge/RightEdgeReader'
 import { rightEdgeStrings } from './lib/right-edge/strings'
 import { Panel } from './components/Panel'
-import {
-  isOnboardingBoot,
-  provisionalOnboardingSettings
-} from './lib/onboarding-boot'
+import { isOnboardingBoot, provisionalOnboardingSettings } from './lib/onboarding-boot'
 import { installOnboardingAudioLockHooks, lockOnboardingAudio } from './lib/onboarding-music'
 // Heavy, rarely-first views are code-split so they don't weigh down the overlay's startup. Answer and
 // Copilot pull in Markdown.tsx -> streamdown + shiki/core, which have no reason to parse/execute before
@@ -67,11 +75,7 @@ import { resolveOverlayPresentation } from '@shared/overlay-presentation'
 import type { RightEdgeSurface, RightEdgeSurfaceState } from '@shared/right-edge-state'
 import { createAttentionLatch, useRightEdgePins } from './lib/right-edge/pins'
 import type { RendererView } from '@shared/renderer-view'
-import {
-  decideCircleRestMinimize,
-  parseOverlayOrbStyle,
-  type OverlayOrbStyle
-} from '@shared/overlay-orb'
+import { decideCircleRestMinimize, parseOverlayOrbStyle, type OverlayOrbStyle } from '@shared/overlay-orb'
 import { resolveOrbMood } from './lib/bar-pill-orb'
 import {
   CIRCLE_REST_COLLAPSE_MS,
@@ -106,13 +110,26 @@ import {
 import { playCue, playClick, setSoundsEnabled } from './lib/sound'
 import { DEFAULT_SHORTCUTS, ASK_MEMORY_IDLE_MS } from '@shared/ipc'
 import { applyCaveman, DEFAULT_ASK_CAVEMAN } from '@shared/caveman-ask'
-import type { HotkeyAction, TranscriptLine, ConversationMode, ChatTurn, LicenseGateVerdict, MetisCommandState } from '@shared/ipc'
+import type {
+  HotkeyAction,
+  TranscriptLine,
+  ConversationMode,
+  ChatTurn,
+  LicenseGateVerdict,
+  MetisCommandState
+} from '@shared/ipc'
 import type { RecapStatus } from '@shared/recap-status'
 import { HOTKEY_ACTIONS } from '@shared/ipc'
 import { useTapControl } from './lib/tap/tap-control'
 import type { TapProfile } from './lib/tap/classify'
 import { PROVIDERS, isDustReady, isSpotlightRefReady, providerBaseUrl, requiresUserBaseUrl } from '@shared/providers'
-import { ASSIST_PROMPT, buildNoDecisionPrompt, EMAIL_RECAP_PROMPT, COLD_CALL_COACHING_PROMPT, BOOK_MEETING_PROMPT } from '@shared/prompts'
+import {
+  ASSIST_PROMPT,
+  buildNoDecisionPrompt,
+  EMAIL_RECAP_PROMPT,
+  COLD_CALL_COACHING_PROMPT,
+  BOOK_MEETING_PROMPT
+} from '@shared/prompts'
 import { isScreenCapturePermissionError } from '@shared/screen-capture'
 import { detectNoDecisionEnding } from '@shared/wrapup'
 import { transcriptStateKey } from '@shared/hash'
@@ -164,7 +181,8 @@ const withContext = (q: string, transcript: string): string =>
   `${q}\n\nUse this live conversation transcript as context (THEM = the other person, YOU = me):\n"""\n${transcript.slice(-3000)}\n"""${GUARD_LINE}`
 
 // Soft, dismissible notice text for a multi-monitor screen-capture mismatch (see hasDisplayMismatch below).
-const CAPTURE_DISPLAY_MISMATCH_NOTICE = 'Captured a different monitor than your cursor, so that may not be the right screen.'
+const CAPTURE_DISPLAY_MISMATCH_NOTICE =
+  'Captured a different monitor than your cursor, so that may not be the right screen.'
 // Soft, dismissible notice for a screen ask that reached the model WITHOUT the screen (MQA-180). The fast
 // path sends an intent flag and main injects its own on-device description; a Retry / "Go deeper" replay
 // re-sends that flag long after the description expired, so the answer is text-only. Same voice as the
@@ -245,9 +263,8 @@ export function saveFailureReason(err: unknown): string {
 }
 
 // Dev-only visual seed for screenshots (?demo=answer|copilot|settings|onboarding|review). No-op in prod.
-const DEMO = import.meta.env.DEV && typeof location !== 'undefined'
-  ? new URLSearchParams(location.search).get('demo')
-  : null
+const DEMO =
+  import.meta.env.DEV && typeof location !== 'undefined' ? new URLSearchParams(location.search).get('demo') : null
 const DEMO_ANSWER = `## Quicksort in TypeScript
 
 \`\`\`ts
@@ -278,10 +295,13 @@ const DEMO_SUG = `**Say this:** "At Mantu I led the Métis build, a Cluely-class
 export function App(): JSX.Element {
   const autoResizeRoot = useAutoResize() // callback ref — tracks the live root across view switches
   const rootElementRef = useRef<HTMLElement | null>(null)
-  const setRoot = useCallback((el: HTMLElement | null) => {
-    rootElementRef.current = el
-    autoResizeRoot(el)
-  }, [autoResizeRoot])
+  const setRoot = useCallback(
+    (el: HTMLElement | null) => {
+      rootElementRef.current = el
+      autoResizeRoot(el)
+    },
+    [autoResizeRoot]
+  )
 
   // Single window-drag instance for post-onboarding surfaces (loading strip, sign-in, bar/panel).
   // Exclusive onboarding must NOT spread this — click-hold cannot drag the stage off-screen.
@@ -293,7 +313,16 @@ export function App(): JSX.Element {
   }, [])
   const windowDrag = useWindowDrag(onWindowDragStart, { noTouch: true })
 
-  const { settings, bootError: settingsBootError, patch, saveKey, recoverEncryptedProfile, clearKey, testKey, refresh } = useSettings()
+  const {
+    settings,
+    bootError: settingsBootError,
+    patch,
+    saveKey,
+    recoverEncryptedProfile,
+    clearKey,
+    testKey,
+    refresh
+  } = useSettings()
   // This is deliberately an opaque main-owned capability. Until main provides a verified allowlisted
   // consequence, the right edge lets the user cancel it but will never invite confirmation blind.
   const [commandState, setCommandState] = useState<MetisCommandState>({ proposalId: null })
@@ -338,16 +367,19 @@ export function App(): JSX.Element {
     const timer = window.setTimeout(() => {
       if (!cancelled) setLicenseGate(failOpen)
     }, 5000)
-    void window.toto.licenseGate().then(
-      (v) => {
-        if (!cancelled) setLicenseGate(v)
-      },
-      () => {
-        if (!cancelled) setLicenseGate(failOpen)
-      }
-    ).finally(() => {
-      window.clearTimeout(timer)
-    })
+    void window.toto
+      .licenseGate()
+      .then(
+        (v) => {
+          if (!cancelled) setLicenseGate(v)
+        },
+        () => {
+          if (!cancelled) setLicenseGate(failOpen)
+        }
+      )
+      .finally(() => {
+        window.clearTimeout(timer)
+      })
     return () => {
       cancelled = true
       window.clearTimeout(timer)
@@ -364,8 +396,7 @@ export function App(): JSX.Element {
   // FITO-185-X: mid-wait Reload on post-onboarding Loading strip (hooks must stay above early returns).
   useEffect(() => {
     const pendingLicense = licenseEnforced && licenseGate == null
-    const onStrip =
-      DEMO == null && !isOnboardingBoot(settings) && (auth.status == null || pendingLicense) && !bootError
+    const onStrip = DEMO == null && !isOnboardingBoot(settings) && (auth.status == null || pendingLicense) && !bootError
     if (!onStrip) {
       setBootSlow(false)
       return
@@ -661,7 +692,9 @@ export function App(): JSX.Element {
   // actually stops, so the status line under the banner is true in both directions.
   const [saveGaveUp, setSaveGaveUp] = useState(false)
   const MAX_SAVE_RETRIES = 5
-  const [updateReady, setUpdateReady] = useState<{ open: boolean; version?: string; notes?: string; percent?: number }>({ open: false })
+  const [updateReady, setUpdateReady] = useState<{ open: boolean; version?: string; notes?: string; percent?: number }>(
+    { open: false }
+  )
   const [newMeetingToast, setNewMeetingToast] = useState(false)
   const [visibilityToast, setVisibilityToast] = useState<VisibilityToastState>(null)
 
@@ -711,11 +744,14 @@ export function App(): JSX.Element {
     view,
     capturing
   })
-  const autoHideForced = overlayHoverForced({
-    updateReady: updateReady.open,
-    toast: newMeetingToast || consentReminderOpen || !!visibilityToast || !!openMeetingError || !!operatorGateNotice,
-    typedInput: input.trim().length > 0
-  }) || rightEdgePins.length > 0 || rightEdgeReaderWanted
+  const autoHideForced =
+    overlayHoverForced({
+      updateReady: updateReady.open,
+      toast: newMeetingToast || consentReminderOpen || !!visibilityToast || !!openMeetingError || !!operatorGateNotice,
+      typedInput: input.trim().length > 0
+    }) ||
+    rightEdgePins.length > 0 ||
+    rightEdgeReaderWanted
   const [autoHide, dispatchAutoHide] = useReducer(reduceAutoHide, autoHideSetting, initialAutoHideState)
   // The user may hand a right-edge session to the standalone Intelligence window while a draft or an
   // important notice keeps the generic auto-hide machine forced open. Keep that state and the draft
@@ -744,7 +780,9 @@ export function App(): JSX.Element {
   const imeComposing = rightEdgePins.includes('ime')
   const closeRightEdgeDock = useCallback((): void => {
     if (imeComposing) return // the IME owns the keyboard until it commits or cancels
-    rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'explicit-close' })
+    rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, {
+      type: 'explicit-close'
+    })
     forceParkAfterHideRef.current = true
     setRightEdgeDockDismissed(true)
     dispatchAutoHide({ type: 'collapse-now' })
@@ -826,12 +864,9 @@ export function App(): JSX.Element {
   const [circleRestSpring, setCircleRestSpring] = useState<CircleRestSpring>('idle')
   // Hide pad / island peek only when fully parked. Bar stays mounted during the spring (in / out).
   // Hide keeps Bar mounted (park is window size only). Island may swap to OverlayPeek.
-  const overlayPeeked = (edgeDockParked && overlaySpring === 'rest') || overlayShowPeek(
-    overlayIdle,
-    overlaySurfaceRevealed,
-    overlaySpring,
-    overlayRestsHidden(overlayLayout)
-  )
+  const overlayPeeked =
+    (edgeDockParked && overlaySpring === 'rest') ||
+    overlayShowPeek(overlayIdle, overlaySurfaceRevealed, overlaySpring, overlayRestsHidden(overlayLayout))
   // Set by a page pointer-enter on the parked rest (the Island tab); cleared by its reveal or an explicit open.
   const rightEdgePointerRevealRef = useRef(false)
   const rightEdgePinsRef = useRef(rightEdgePins)
@@ -841,7 +876,8 @@ export function App(): JSX.Element {
   const wasRevealedRef = useRef(overlaySurfaceRevealed)
   const overlayRevealedRef = useRef(overlaySurfaceRevealed)
   overlayRevealedRef.current = overlaySurfaceRevealed
-  useLayoutEffect(() => { // in the reveal's own commit: the first painted frame is the in-spring at opacity 0
+  useLayoutEffect(() => {
+    // in the reveal's own commit: the first painted frame is the in-spring at opacity 0
     if (!overlayIdle) {
       setOverlaySpring('rest')
       springIdleRef.current = false
@@ -893,7 +929,9 @@ export function App(): JSX.Element {
     return () => window.clearTimeout(t)
   }, [overlaySpring, parkCurrentOverlayAfterHide])
   const revealOverlay = useCallback(() => {
-    rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'explicit-reveal' })
+    rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, {
+      type: 'explicit-reveal'
+    })
     rightEdgePointerRevealRef.current = false
     setRightEdgeDockDismissed(false)
     dispatchAutoHide({ type: 'pointer-enter' })
@@ -905,13 +943,20 @@ export function App(): JSX.Element {
     revealOverlay()
     setCollapsed(false)
   })
-  const [navigationGuardRequest, setNavigationGuardRequest] = useState<NavigationGuardRequest | null>(() => navigationGuard.current())
-  useEffect(() => navigationGuard.subscribe(() => setNavigationGuardRequest(navigationGuard.current())), [navigationGuard])
+  const [navigationGuardRequest, setNavigationGuardRequest] = useState<NavigationGuardRequest | null>(() =>
+    navigationGuard.current()
+  )
+  useEffect(
+    () => navigationGuard.subscribe(() => setNavigationGuardRequest(navigationGuard.current())),
+    [navigationGuard]
+  )
   const overlayPeekedRef = useRef(overlayPeeked)
   overlayPeekedRef.current = overlayPeeked
   const onOverlayPointerEnter = useCallback(() => {
     if (rightEdgePresentation) {
-      const nextLock = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'renderer-pointer-enter' })
+      const nextLock = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, {
+        type: 'renderer-pointer-enter'
+      })
       rightEdgeDismissalLockRef.current = nextLock
       if (nextLock !== 'open') return
       setRightEdgeDockDismissed(false)
@@ -940,9 +985,15 @@ export function App(): JSX.Element {
         // An explicit close is authoritative until the pointer truly leaves and re-enters the parked
         // rail. The cursor watcher is still sampling the vanished drawer at this point, so treating this
         // message as a new enter produces the visible close → reopen flash reported in device QA.
-        if (rightEdgePresentation && shouldIgnoreRightEdgeNativeHover(rightEdgeDismissalLockRef.current, d.restoredFromParkedRail)) return
+        if (
+          rightEdgePresentation &&
+          shouldIgnoreRightEdgeNativeHover(rightEdgeDismissalLockRef.current, d.restoredFromParkedRail)
+        )
+          return
         if (rightEdgePresentation && d.restoredFromParkedRail) {
-          rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'native-hover-restored' })
+          rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, {
+            type: 'native-hover-restored'
+          })
         }
         // Main restores the native drawer before it emits this fallback hover signal. Mirror the
         // ordinary pointer-enter path here so a deliberately parked edge dock cannot leave a
@@ -994,13 +1045,17 @@ export function App(): JSX.Element {
   useEffect(() => {
     const pins = rightEdgePinsKey ? (rightEdgePinsKey.split(',') as typeof rightEdgePins) : []
     const contentHeight = rootElementRef.current?.scrollHeight ?? 0
-    void window.toto.reportRightEdgeState?.({ surface: reportedSurface, contentHeight, pins }).then(setRightEdgeSurface, () => undefined)
+    void window.toto
+      .reportRightEdgeState?.({ surface: reportedSurface, contentHeight, pins })
+      .then(setRightEdgeSurface, () => undefined)
   }, [reportedSurface, rightEdgePinsKey, settings?.overlayPlacement, settings?.overlayLayout])
   // An attention item reveals the parked dock once per item, past an explicit Hide's dismissal lock.
   const attentionDueRef = useRef(createAttentionLatch())
   useEffect(() => {
     if (!rightEdgePresentation || !attentionDueRef.current(commandState.proposalId)) return
-    rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'explicit-reveal' })
+    rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, {
+      type: 'explicit-reveal'
+    })
     setRightEdgeDockDismissed(false)
     dispatchAutoHide({ type: 'reveal-now' })
   }, [commandState.proposalId, rightEdgePresentation])
@@ -1034,7 +1089,8 @@ export function App(): JSX.Element {
     if (viewRef.current !== 'review' || !reviewDirtyRef.current.dirty) return true
     const choice = await navigationGuard.request({
       title: 'Save recap changes?',
-      message: 'You have unsaved edits in this recap. Save them before leaving, discard them, or cancel to keep editing.',
+      message:
+        'You have unsaved edits in this recap. Save them before leaving, discard them, or cancel to keep editing.',
       saveLabel: 'Save',
       discardLabel: 'Discard',
       cancelLabel: 'Cancel',
@@ -1044,13 +1100,19 @@ export function App(): JSX.Element {
     if (choice === 'save') return reviewDirtyRef.current.save ? reviewDirtyRef.current.save() : false
     return true
   }, [navigationGuard])
-  const guardReviewNav = useCallback((proceed: () => void): void => {
-    void (async () => {
-      if (!(await confirmReviewNavigation())) return
-      proceed()
-    })()
-  }, [confirmReviewNavigation])
-  const approveReviewNav = useCallback(async (): Promise<boolean> => confirmReviewNavigation(), [confirmReviewNavigation])
+  const guardReviewNav = useCallback(
+    (proceed: () => void): void => {
+      void (async () => {
+        if (!(await confirmReviewNavigation())) return
+        proceed()
+      })()
+    },
+    [confirmReviewNavigation]
+  )
+  const approveReviewNav = useCallback(
+    async (): Promise<boolean> => confirmReviewNavigation(),
+    [confirmReviewNavigation]
+  )
   // Set by endReview() while waiting for listen.stop()'s asynchronous terminal drain before the recap is
   // generated. Healthy queued windows commit first; a no-progress expiry instead leaves an incomplete
   // warning on listen.error — terminal does not itself guarantee a complete transcript. See maybeFireRecap.
@@ -1206,7 +1268,13 @@ export function App(): JSX.Element {
     const id = String(meetingStartRef.current)
     const action = recapPersistAction(
       answerId
-        ? { id: answerId, text: answerText, streaming: answerStreaming, error: answerError, completion: answerCompletion }
+        ? {
+            id: answerId,
+            text: answerText,
+            streaming: answerStreaming,
+            error: answerError,
+            completion: answerCompletion
+          }
         : null,
       liveRecapTargetRef.current ? { ...liveRecapTargetRef.current, file: savedPath } : null,
       id
@@ -2220,9 +2288,15 @@ export function App(): JSX.Element {
           offErr()
           resolve(value)
         }
-        const offDelta = window.toto.onDelta((d) => { if (d.id === id) text += d.text })
-        const offDone = window.toto.onDone((d) => { if (d.id === id) finish(text.trim()) })
-        const offErr = window.toto.onError((e) => { if (e.id === id) finish('') })
+        const offDelta = window.toto.onDelta((d) => {
+          if (d.id === id) text += d.text
+        })
+        const offDone = window.toto.onDone((d) => {
+          if (d.id === id) finish(text.trim())
+        })
+        const offErr = window.toto.onError((e) => {
+          if (e.id === id) finish('')
+        })
         window.toto
           .ask({
             id,
@@ -2262,7 +2336,11 @@ export function App(): JSX.Element {
           `one short line each, never invent):\n${wins}`
       }
     }
-    const baseDustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
+    const baseDustReady = isDustReady(
+      settings?.hasKeys ?? {},
+      settings?.dustWorkspaceId ?? '',
+      settings?.providerModels ?? {}
+    )
     const prompt =
       EMAIL_RECAP_PROMPT +
       '\n\nWrite the email in the SAME LANGUAGE as the summary below; do not translate it.' +
@@ -2290,7 +2368,11 @@ export function App(): JSX.Element {
   const generateBookMeetings = useCallback(() => {
     const notes = coaching.answer?.text ?? ''
     if (!notes.trim()) return
-    const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
+    const dustReady = isDustReady(
+      settings?.hasKeys ?? {},
+      settings?.dustWorkspaceId ?? '',
+      settings?.providerModels ?? {}
+    )
     const prompt = BOOK_MEETING_PROMPT + `\n\nCoaching notes:\n${notes}`
     if (dustReady) booking.run({ mode: 'answer', prompt, providerOverride: 'dust' })
     else booking.run({ mode: 'answer', prompt })
@@ -2311,110 +2393,112 @@ export function App(): JSX.Element {
     void listen.setLanguage(settings?.asrLanguage ?? 'auto')
   }, [listen.listening, listen.setLanguage, settings?.asrLanguage])
 
-  const startListen = useCallback((rescueExisting = true) => {
-    // PLAN.md P2.2b #2: Listen is Operator-gated. Checked synchronously against the already-synced
-    // `settings` object (never a fresh IPC round trip) so a refusal costs zero latency on the same-turn
-    // capture path below (MQA-285) — an allowed seat pays nothing extra, a refused one never touches the
-    // mic. Only gated when Operator is actually configured; an unconfigured seat behaves exactly as
-    // before this feature existed.
-    const operatorConfigured = settings?.operatorConfigured === true
-    const snapshot: OperatorEntitlementSnapshot | null = settings?.operatorEntitlementsAt
-      ? {
-          tier: settings.operatorTier ?? null,
-          entitlements: settings.operatorEntitlements ?? emptyOperatorEntitlements(),
-          at: settings.operatorEntitlementsAt
-        }
-      : null
-    const gate = operatorGate('listen', operatorConfigured, snapshot)
-    if (!gate.allowed) {
-      setOperatorGateNotice(gate.reason || 'Listen is not available.')
-      return
-    }
-    stoppingRef.current = false // a fresh session can be stopped again — clear any latch left by the last one
-    writeupSpansRef.current.reset() // spans belong to the Stop of the session being left, never the next one
-    // A rapid Stop -> New meeting can start a fresh session while the previous endReview's recap is still
-    // waiting on that old session's drain (pendingRecapRef) — drop it so it can't fire into (or read the
-    // transcript of) the session that's about to start.
-    pendingRecapRef.current = false
-    setRecapSkipped(false)
-    // A previous session's transcript can still be sitting unsaved in listen state (ASR crash tore the
-    // session down; a failed recap was abandoned). listen.clear() below would wipe it — rescue first.
-    // Idempotent via savedRef, so normally-saved meetings never double-save. Ref-indirected because
-    // saveMeetingNow is defined later in this component.
-    if (rescueExisting && !listen.listening && listen.lines.length) {
-      cancelledRef.current = true
-      beginOwnedMeetingExit(
-        ask.cancel,
-        (snapshot) => { void persistLiveMeetingOnExitRef.current?.(snapshot) }
-      )
-    }
-    // The rescue above captured the old owner synchronously. Nothing from it may attach to the meeting
-    // whose start id is about to replace it.
-    liveRecapTargetRef.current = null
-    setView('copilot')
-    setCollapsed(false)
-    meetingStartRef.current = nextMeetingStart(meetingStartRef.current)
-    meetingPauseRef.current = freshMeetingPauseClock()
-    savedRef.current = ''
-    setSavedPath(null)
-    savingPromiseRef.current = null // this meeting hasn't autosaved yet — don't let a PRIOR meeting's
-    // already-settled save promise be read as if it belonged to this one (see its own declaration comment).
-    setSaveError(null)
-    setSaveAttempts(0)
-    setSaveGaveUp(false)
-    listen.clear()
-    suggest.clear()
-    followup.clear() // a new meeting is about to be viewed — a stale draft from whatever was reviewed
-    // before must never carry over and render/send as this meeting's follow-up (see followup's own
-    // declaration comment above).
-    coaching.clear() // same reasoning — a prior cold call's coaching notes must never bleed into this one
-    booking.clear()
-    // A new meeting is the natural conversation boundary (main resets the Dust conversation on
-    // listening:on for the same reason) — ad-hoc Q&A from before the meeting must not ride into
-    // mid-meeting asks/fact-checks via these refs.
-    historyRef.current = []
-    copilotHistoryRef.current = []
-    pendingUserRef.current = null
-    // A new meeting always starts the LIVE transcript panel from the persisted default — this only seeds
-    // the ephemeral per-session state (transcriptShown), it never writes back to settings.showLiveTranscript
-    // (see that state's own comment for why: it's a saved preference, not per-session state).
-    setTranscriptShown(settings?.showLiveTranscript ?? false)
-    if (settings?.playListenChime ?? true) playListenChime()
-    {
-      const profile = resolveEnterpriseLiveProfile(settings?.enterpriseLive)
-      const useCloud = shouldUseCloudSttEngine(profile, settings?.cloudSttProvider)
-      void listen.start(
-        settings?.audioSource ?? 'both',
-        settings?.asrQuality ?? 'best',
-        useCloud ? 'cloud' : (settings?.asrEngine ?? 'parakeet'),
-        settings?.asrLanguage ?? 'auto',
-        meetingStartRef.current
-      )
-    }
-  }, [
-    listen.listening,
-    listen.lines,
-    listen.clear,
-    listen.start,
-    ask.cancel,
-    suggest.clear,
-    followup.clear,
-    coaching.clear,
-    booking.clear,
-    settings?.audioSource,
-    settings?.asrQuality,
-    settings?.asrEngine,
-    settings?.asrLanguage,
-    settings?.enterpriseLive,
-    settings?.cloudSttProvider,
-    settings?.playListenChime,
-    settings?.showLiveTranscript,
-    settings?.operatorUrl,
-    settings?.operatorConfigured,
-    settings?.operatorTier,
-    settings?.operatorEntitlements,
-    settings?.operatorEntitlementsAt
-  ])
+  const startListen = useCallback(
+    (rescueExisting = true) => {
+      // PLAN.md P2.2b #2: Listen is Operator-gated. Checked synchronously against the already-synced
+      // `settings` object (never a fresh IPC round trip) so a refusal costs zero latency on the same-turn
+      // capture path below (MQA-285) — an allowed seat pays nothing extra, a refused one never touches the
+      // mic. Only gated when Operator is actually configured; an unconfigured seat behaves exactly as
+      // before this feature existed.
+      const operatorConfigured = settings?.operatorConfigured === true
+      const snapshot: OperatorEntitlementSnapshot | null = settings?.operatorEntitlementsAt
+        ? {
+            tier: settings.operatorTier ?? null,
+            entitlements: settings.operatorEntitlements ?? emptyOperatorEntitlements(),
+            at: settings.operatorEntitlementsAt
+          }
+        : null
+      const gate = operatorGate('listen', operatorConfigured, snapshot)
+      if (!gate.allowed) {
+        setOperatorGateNotice(gate.reason || 'Listen is not available.')
+        return
+      }
+      stoppingRef.current = false // a fresh session can be stopped again — clear any latch left by the last one
+      writeupSpansRef.current.reset() // spans belong to the Stop of the session being left, never the next one
+      // A rapid Stop -> New meeting can start a fresh session while the previous endReview's recap is still
+      // waiting on that old session's drain (pendingRecapRef) — drop it so it can't fire into (or read the
+      // transcript of) the session that's about to start.
+      pendingRecapRef.current = false
+      setRecapSkipped(false)
+      // A previous session's transcript can still be sitting unsaved in listen state (ASR crash tore the
+      // session down; a failed recap was abandoned). listen.clear() below would wipe it — rescue first.
+      // Idempotent via savedRef, so normally-saved meetings never double-save. Ref-indirected because
+      // saveMeetingNow is defined later in this component.
+      if (rescueExisting && !listen.listening && listen.lines.length) {
+        cancelledRef.current = true
+        beginOwnedMeetingExit(ask.cancel, (snapshot) => {
+          void persistLiveMeetingOnExitRef.current?.(snapshot)
+        })
+      }
+      // The rescue above captured the old owner synchronously. Nothing from it may attach to the meeting
+      // whose start id is about to replace it.
+      liveRecapTargetRef.current = null
+      setView('copilot')
+      setCollapsed(false)
+      meetingStartRef.current = nextMeetingStart(meetingStartRef.current)
+      meetingPauseRef.current = freshMeetingPauseClock()
+      savedRef.current = ''
+      setSavedPath(null)
+      savingPromiseRef.current = null // this meeting hasn't autosaved yet — don't let a PRIOR meeting's
+      // already-settled save promise be read as if it belonged to this one (see its own declaration comment).
+      setSaveError(null)
+      setSaveAttempts(0)
+      setSaveGaveUp(false)
+      listen.clear()
+      suggest.clear()
+      followup.clear() // a new meeting is about to be viewed — a stale draft from whatever was reviewed
+      // before must never carry over and render/send as this meeting's follow-up (see followup's own
+      // declaration comment above).
+      coaching.clear() // same reasoning — a prior cold call's coaching notes must never bleed into this one
+      booking.clear()
+      // A new meeting is the natural conversation boundary (main resets the Dust conversation on
+      // listening:on for the same reason) — ad-hoc Q&A from before the meeting must not ride into
+      // mid-meeting asks/fact-checks via these refs.
+      historyRef.current = []
+      copilotHistoryRef.current = []
+      pendingUserRef.current = null
+      // A new meeting always starts the LIVE transcript panel from the persisted default — this only seeds
+      // the ephemeral per-session state (transcriptShown), it never writes back to settings.showLiveTranscript
+      // (see that state's own comment for why: it's a saved preference, not per-session state).
+      setTranscriptShown(settings?.showLiveTranscript ?? false)
+      if (settings?.playListenChime ?? true) playListenChime()
+      {
+        const profile = resolveEnterpriseLiveProfile(settings?.enterpriseLive)
+        const useCloud = shouldUseCloudSttEngine(profile, settings?.cloudSttProvider)
+        void listen.start(
+          settings?.audioSource ?? 'both',
+          settings?.asrQuality ?? 'best',
+          useCloud ? 'cloud' : (settings?.asrEngine ?? 'parakeet'),
+          settings?.asrLanguage ?? 'auto',
+          meetingStartRef.current
+        )
+      }
+    },
+    [
+      listen.listening,
+      listen.lines,
+      listen.clear,
+      listen.start,
+      ask.cancel,
+      suggest.clear,
+      followup.clear,
+      coaching.clear,
+      booking.clear,
+      settings?.audioSource,
+      settings?.asrQuality,
+      settings?.asrEngine,
+      settings?.asrLanguage,
+      settings?.enterpriseLive,
+      settings?.cloudSttProvider,
+      settings?.playListenChime,
+      settings?.showLiveTranscript,
+      settings?.operatorUrl,
+      settings?.operatorConfigured,
+      settings?.operatorTier,
+      settings?.operatorEntitlements,
+      settings?.operatorEntitlementsAt
+    ]
+  )
 
   // Fires the deferred post-meeting recap once listen.stop() reaches its terminal drain state and
   // listen.listening flips false. Healthy queued windows have committed at that point; a no-progress
@@ -2429,7 +2513,11 @@ export function App(): JSX.Element {
   const generateColdCallCoaching = useCallback(() => {
     const tx = listen.text()
     if (!tx.trim()) return
-    const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
+    const dustReady = isDustReady(
+      settings?.hasKeys ?? {},
+      settings?.dustWorkspaceId ?? '',
+      settings?.providerModels ?? {}
+    )
     coaching.run({
       mode: 'answer',
       prompt: COLD_CALL_COACHING_PROMPT + `\n\nTranscript (THEM = the prospect, YOU = me):\n"""\n${tx}\n"""`,
@@ -2453,8 +2541,7 @@ export function App(): JSX.Element {
     // Skip it and let Review show a neutral "connect a provider" affordance instead (recapUnavailable).
     // Local-summary readiness (and the fallback safety net) count too — import already honored them;
     // live stop used to skip and leave Notes empty when only Métis Local was ready.
-    const canSummarize =
-      !!settings?.providerReady || !!settings?.localSummaryReady || !!settings?.localFallbackReady
+    const canSummarize = !!settings?.providerReady || !!settings?.localSummaryReady || !!settings?.localFallbackReady
     const spans = writeupSpansRef.current
     const markSaved = (path: string | null): void => {
       if (path) spans.mark('stop_to_transcript_saved')
@@ -2480,11 +2567,14 @@ export function App(): JSX.Element {
     // always fire mode:'recap' (think tier, out of local scope), so Routing mode → Local / Local summaries
     // never actually ran on-device for the post-meeting notes. Import already picks summary when local.
     const preferLocalSummary =
-      !!settings?.localSummaryReady ||
-      (!settings?.providerReady && !!settings?.localFallbackReady)
+      !!settings?.localSummaryReady || (!settings?.providerReady && !!settings?.localFallbackReady)
     // Cascade into Dust whenever it's configured — UNLESS local summary is the intended path
     // (mirrors Summarize quick action). Dust override used to silently beat Local on every stop.
-    const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
+    const dustReady = isDustReady(
+      settings?.hasKeys ?? {},
+      settings?.dustWorkspaceId ?? '',
+      settings?.providerModels ?? {}
+    )
     setRecapSaveError(null)
     const runId = ask.run({
       mode: preferLocalSummary ? 'summary' : 'recap',
@@ -2651,16 +2741,16 @@ export function App(): JSX.Element {
         action,
         path: pendingSave ? pendingSave.then((path) => path ?? knownPath) : Promise.resolve(knownPath),
         isPersisted: () => !!actionKey && liveRecapWritesRef.current.has(actionKey),
-        markPersisted: () => { if (actionKey) liveRecapWritesRef.current.add(actionKey) },
+        markPersisted: () => {
+          if (actionKey) liveRecapWritesRef.current.add(actionKey)
+        },
         create: (text, recapStatus) => saveMeetingNow(lines, started, text, maxAttempts, recapStatus),
         update: (path, text, recapStatus) => window.toto.recallUpdateRecap(path, text, recapStatus),
         coordinator: recapWriteCoordinatorRef.current
       })
       if (result.kind !== 'updated' || !action) return
-      if (
-        result.outcome.status === 'current' &&
-        ('error' in result.outcome || !result.outcome.value.ok)
-      ) liveRecapWritesRef.current.delete(actionKey)
+      if (result.outcome.status === 'current' && ('error' in result.outcome || !result.outcome.value.ok))
+        liveRecapWritesRef.current.delete(actionKey)
       const currentTarget = liveRecapTargetRef.current
       if (
         String(meetingStartRef.current) !== ownerId ||
@@ -2668,12 +2758,11 @@ export function App(): JSX.Element {
         currentTarget.ownerId !== ownerId ||
         currentTarget.runId !== action.runId ||
         result.outcome.status !== 'current'
-      ) return
+      )
+        return
       if ('error' in result.outcome) {
         setRecapSaveError(
-          result.outcome.error instanceof Error
-            ? result.outcome.error.message
-            : 'Could not save the generated summary.'
+          result.outcome.error instanceof Error ? result.outcome.error.message : 'Could not save the generated summary.'
         )
       } else if (!result.outcome.value.ok) {
         setRecapSaveError(result.outcome.value.error || 'Could not save the generated summary.')
@@ -2699,10 +2788,9 @@ export function App(): JSX.Element {
   // to miss on a misclick mid-call — so surface a brief toast confirming what just happened.
   const newMeeting = useCallback(() => {
     cancelledRef.current = true
-    beginOwnedMeetingExit(
-      ask.cancel,
-      (snapshot) => { void persistAndRetireLiveMeeting(snapshot) }
-    )
+    beginOwnedMeetingExit(ask.cancel, (snapshot) => {
+      void persistAndRetireLiveMeeting(snapshot)
+    })
     startListen(false)
     setNewMeetingToast(true)
   }, [ask.cancel, persistAndRetireLiveMeeting, startListen])
@@ -2872,15 +2960,12 @@ export function App(): JSX.Element {
   // Stabilized Bar callbacks (previously fresh inline arrow functions on every render) — a prerequisite
   // for React.memo(Bar) to actually skip re-renders; an unstable prop defeats memo's shallow comparison
   // regardless of how many other props are stable.
-  const onTogglePause = useCallback(
-    () => {
-      if (!listen.listening) return
-      if (listen.paused) listen.resume()
-      else listen.pause()
-      meetingPauseRef.current = setMeetingPaused(meetingPauseRef.current, !listen.paused, Date.now())
-    },
-    [listen.listening, listen.paused, listen.resume, listen.pause]
-  )
+  const onTogglePause = useCallback(() => {
+    if (!listen.listening) return
+    if (listen.paused) listen.resume()
+    else listen.pause()
+    meetingPauseRef.current = setMeetingPaused(meetingPauseRef.current, !listen.paused, Date.now())
+  }, [listen.listening, listen.paused, listen.resume, listen.pause])
   const onSetMode = useCallback((m: ConversationMode) => void patch({ mode: m }), [patch])
   const onToggleThinking = useCallback(() => {
     void patch({ thinkingMode: settings?.thinkingMode === 'always' ? 'auto' : 'always' })
@@ -2998,9 +3083,12 @@ export function App(): JSX.Element {
       // Prefer local summary when ready (parity with live stop + Summarize). Always mode:'recap' used to
       // force think-tier cloud and skip Métis Local entirely.
       const preferLocalSummary =
-        !!settings?.localSummaryReady ||
-        (!settings?.providerReady && !!settings?.localFallbackReady)
-      const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
+        !!settings?.localSummaryReady || (!settings?.providerReady && !!settings?.localFallbackReady)
+      const dustReady = isDustReady(
+        settings?.hasKeys ?? {},
+        settings?.dustWorkspaceId ?? '',
+        settings?.providerModels ?? {}
+      )
       setRecapSaveError(null) // a retry must not carry the previous attempt's write failure on screen
       // Snapshot BEFORE run() — see recapGenPrevTextRef's comment above.
       recapGenPrevTextRef.current = recapGenAnswerRef.current?.text ?? ''
@@ -3064,7 +3152,8 @@ export function App(): JSX.Element {
             recapGenRunIdRef.current !== owningId ||
             recapGenTarget?.ownerId !== action.ownerId ||
             recapGenTarget.runId !== owningId
-          ) return
+          )
+            return
           if ('error' in outcome) throw outcome.error
           const r = outcome.value
           // recallUpdateRecap RESOLVES with {ok:false} for every real failure (file locked by OneDrive/AV,
@@ -3081,9 +3170,7 @@ export function App(): JSX.Element {
           // this effect started — the user may have opened a DIFFERENT one while the write was in flight,
           // and a stale closure here would paint THIS text onto THAT meeting instead.
           setPastMeeting((prev) =>
-            prev && prev.file === action.file
-              ? { ...prev, recap: action.text, recapStatus: action.recapStatus }
-              : prev
+            prev && prev.file === action.file ? { ...prev, recap: action.text, recapStatus: action.recapStatus } : prev
           )
           // Only release the target if a NEWER generation hasn't already taken it over — that one owns it
           // now and must not have it wiped out from under it by this older run settling late.
@@ -3130,35 +3217,38 @@ export function App(): JSX.Element {
 
   // Open a saved meeting from History as a read-only recap (Cluely recap detail) via the recall:read IPC.
   // A caller that shows the failure itself (a History row's explicit download) passes `reportError`.
-  const openPastMeeting = useCallback(async (file: string, reportError?: (message: string) => void) => {
-    setOpenMeetingError(null)
-    followup.clear() // the viewed meeting is about to change — a stale draft from whatever was reviewed
-    // before must never carry over and render/send as THIS meeting's follow-up (see followup's own
-    // declaration comment above; this is the CRITICAL cross-meeting leak's primary repro path).
-    const r = await window.toto.recallRead(file)
-    if (!r.ok) {
-      // recallRead already returns an exact, actionable message (not found / undecryptable on this
-      // device / invalid name) — surface it instead of leaving the click looking completely dead.
-      if (reportError) reportError(r.error || 'Could not open that meeting.')
-      else setOpenMeetingError(r.error || 'Could not open that meeting.')
-      return
-    }
-    setOpenMeetingError(null)
-    setPastMeeting({
-      file,
-      title: r.title || 'Meeting',
-      date: r.startedAt ? new Date(r.startedAt).toLocaleString() : '',
-      recap: r.recap || '',
-      recapStatus: r.recapStatus,
-      lines: r.lines || [],
-      startedAt: r.startedAt || 0,
-      durationMs: r.durationMs,
-      confidential: !!r.confidential,
-      crmPushedKey: r.crmPushedKey
-    })
-    setView('review')
-    setCollapsed(false)
-  }, [followup.clear])
+  const openPastMeeting = useCallback(
+    async (file: string, reportError?: (message: string) => void) => {
+      setOpenMeetingError(null)
+      followup.clear() // the viewed meeting is about to change — a stale draft from whatever was reviewed
+      // before must never carry over and render/send as THIS meeting's follow-up (see followup's own
+      // declaration comment above; this is the CRITICAL cross-meeting leak's primary repro path).
+      const r = await window.toto.recallRead(file)
+      if (!r.ok) {
+        // recallRead already returns an exact, actionable message (not found / undecryptable on this
+        // device / invalid name) — surface it instead of leaving the click looking completely dead.
+        if (reportError) reportError(r.error || 'Could not open that meeting.')
+        else setOpenMeetingError(r.error || 'Could not open that meeting.')
+        return
+      }
+      setOpenMeetingError(null)
+      setPastMeeting({
+        file,
+        title: r.title || 'Meeting',
+        date: r.startedAt ? new Date(r.startedAt).toLocaleString() : '',
+        recap: r.recap || '',
+        recapStatus: r.recapStatus,
+        lines: r.lines || [],
+        startedAt: r.startedAt || 0,
+        durationMs: r.durationMs,
+        confidential: !!r.confidential,
+        crmPushedKey: r.crmPushedKey
+      })
+      setView('review')
+      setCollapsed(false)
+    },
+    [followup.clear]
+  )
 
   // Cluely "Resume session": re-enter the meeting live, seeding the copilot's multi-turn memory with the
   // prior recap so follow-ups keep continuity. (The live transcript hook owns its own lines, so earlier
@@ -3211,7 +3301,9 @@ export function App(): JSX.Element {
         // A summoned right-edge dock opens at once with the composer focused, even after an explicit Hide.
         if (rightEdgePresentation) {
           setRightEdgeReaderRequest(null)
-          rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'explicit-reveal' })
+          rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, {
+            type: 'explicit-reveal'
+          })
           setRightEdgeDockDismissed(false)
           dispatchAutoHide({ type: 'reveal-now' })
         }
@@ -3230,7 +3322,9 @@ export function App(): JSX.Element {
     // `reveal-now` is intentionally immediate: a parked right-edge sidecar must open for a keyboard
     // summon instead of waiting for hover dwell.
     else if (a === 'metis-command') {
-      rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'metis-command' })
+      rightEdgeDismissalLockRef.current = reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, {
+        type: 'metis-command'
+      })
       setRightEdgeDockDismissed(false)
       dispatchAutoHide({ type: 'reveal-now' })
       setCollapsed(false)
@@ -3264,9 +3358,7 @@ export function App(): JSX.Element {
   // or turning the feature off all resolve it on the next render with no callback to wire.
   const tapMismatch = tapProfileMismatch(tapCfg, settings?.micDeviceId)
   useTapControl({
-    active: Boolean(
-      tapCfg?.enabled && tapCfg.profile && (!tapCfg.armOnlyWhileListening || listen.listening)
-    ),
+    active: Boolean(tapCfg?.enabled && tapCfg.profile && (!tapCfg.armOnlyWhileListening || listen.listening)),
     profile: (tapCfg?.profile as TapProfile | null) ?? null,
     micDeviceId: settings?.micDeviceId || undefined,
     sensitivity: tapCfg?.sensitivity ?? 0.5,
@@ -3284,72 +3376,72 @@ export function App(): JSX.Element {
   const escapeRef = useRef<() => void>(() => {})
   escapeRef.current = (): void => {
     void (async () => {
-    // The Reader's ladder: an open confirm sheet closes first, then a stream stops, then a field drops focus,
-    // then the Reader parks (the next explicit reveal restores it at its scroll position).
-    if (rightEdgeReaderShown && navigationGuardRequest) {
-      navigationGuard.choose('cancel', navigationGuardRequest.id)
-      return
-    }
-    // A live stream takes top priority (see the precedence comment above) — checked BEFORE the typing-blur
-    // branch below, because the ask input keeps focus after Enter-submit (submit clears its value but never
-    // blurs). Without this ordering the first Esc during a stream only drops focus/the caret and the answer
-    // keeps streaming; only a second Esc (once focus has moved off the input) would reach onStop().
-    if (ask.answer?.streaming || suggest.answer?.streaming) {
-      onStop()
-      return
-    }
-    // While typing, Escape just drops focus from the field — it should never collapse/hide the overlay.
-    const el = document.activeElement as HTMLElement | null
-    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
-      el.blur()
-      return
-    }
-    if (rightEdgeReaderShown) {
-      hideRightEdgeReader()
-      return
-    }
-    // From the minimized pill, Escape expands back to the full widget (the natural "back out" step).
-    if (minimized) {
-      unminimize()
-      return
-    }
-    if (view !== 'answer') {
-      // Leaving the post-meeting Review must not drag the recap into the idle widget answer slot, nor
-      // leave a past-meeting snapshot that would later be mistaken for the next live recap.
-      if (view === 'review') {
-        // Same gate Review's own in-panel exits (Resume / New meeting / Recent meetings) already run
-        // before navigating away from an unsaved recap edit — Escape was the one exit that could bypass
-        // it, since its only prior guard was activeElement being an INPUT/TEXTAREA (missed focus sitting
-        // on the Save/Cancel buttons, or anywhere else). Bail out and keep Review open if the user cancels.
-        if (!(await confirmReviewNavigation())) return
-        // Escaping a Review whose recap failed (or was cancelled) previously orphaned the transcript —
-        // it existed only in listen state and the next session start wiped it. Rescue it on the way
-        // out; idempotent via savedRef when the recap auto-save already landed. Past-meeting Reviews
-        // (pastMeeting set) are already on disk — only a LIVE session's review needs the rescue.
-        if (!pastMeeting && listen.lines.length) {
-          const recapSnapshot = ask.cancel()
-          void persistAndRetireLiveMeeting(recapSnapshot)
-          liveRecapTargetRef.current = null
-        }
-        ask.clear()
-        suggest.clear()
-        // A past meeting opened from History returns there on Escape — matching the Review "Done" button's
-        // own onDone, which calls setView('history') for pastMeeting. A live session's just-ended Review has
-        // no "came from" surface to return to, so it falls through to the idle bar as before.
-        const returnTo = pastMeeting ? 'history' : 'answer'
-        setPastMeeting(null)
-        setView(returnTo)
+      // The Reader's ladder: an open confirm sheet closes first, then a stream stops, then a field drops focus,
+      // then the Reader parks (the next explicit reveal restores it at its scroll position).
+      if (rightEdgeReaderShown && navigationGuardRequest) {
+        navigationGuard.choose('cancel', navigationGuardRequest.id)
         return
       }
-      setView('answer')
-    } else if (!collapsed) {
-      setCollapsed(true)
-    } else if (rightEdgePresentation) {
-      // A hidden right-edge window would reopen from the band; park it like the dock's Hide control.
-      closeRightEdgeDock()
-    } else {
-      void window.toto.hide()
-    }
+      // A live stream takes top priority (see the precedence comment above) — checked BEFORE the typing-blur
+      // branch below, because the ask input keeps focus after Enter-submit (submit clears its value but never
+      // blurs). Without this ordering the first Esc during a stream only drops focus/the caret and the answer
+      // keeps streaming; only a second Esc (once focus has moved off the input) would reach onStop().
+      if (ask.answer?.streaming || suggest.answer?.streaming) {
+        onStop()
+        return
+      }
+      // While typing, Escape just drops focus from the field — it should never collapse/hide the overlay.
+      const el = document.activeElement as HTMLElement | null
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
+        el.blur()
+        return
+      }
+      if (rightEdgeReaderShown) {
+        hideRightEdgeReader()
+        return
+      }
+      // From the minimized pill, Escape expands back to the full widget (the natural "back out" step).
+      if (minimized) {
+        unminimize()
+        return
+      }
+      if (view !== 'answer') {
+        // Leaving the post-meeting Review must not drag the recap into the idle widget answer slot, nor
+        // leave a past-meeting snapshot that would later be mistaken for the next live recap.
+        if (view === 'review') {
+          // Same gate Review's own in-panel exits (Resume / New meeting / Recent meetings) already run
+          // before navigating away from an unsaved recap edit — Escape was the one exit that could bypass
+          // it, since its only prior guard was activeElement being an INPUT/TEXTAREA (missed focus sitting
+          // on the Save/Cancel buttons, or anywhere else). Bail out and keep Review open if the user cancels.
+          if (!(await confirmReviewNavigation())) return
+          // Escaping a Review whose recap failed (or was cancelled) previously orphaned the transcript —
+          // it existed only in listen state and the next session start wiped it. Rescue it on the way
+          // out; idempotent via savedRef when the recap auto-save already landed. Past-meeting Reviews
+          // (pastMeeting set) are already on disk — only a LIVE session's review needs the rescue.
+          if (!pastMeeting && listen.lines.length) {
+            const recapSnapshot = ask.cancel()
+            void persistAndRetireLiveMeeting(recapSnapshot)
+            liveRecapTargetRef.current = null
+          }
+          ask.clear()
+          suggest.clear()
+          // A past meeting opened from History returns there on Escape — matching the Review "Done" button's
+          // own onDone, which calls setView('history') for pastMeeting. A live session's just-ended Review has
+          // no "came from" surface to return to, so it falls through to the idle bar as before.
+          const returnTo = pastMeeting ? 'history' : 'answer'
+          setPastMeeting(null)
+          setView(returnTo)
+          return
+        }
+        setView('answer')
+      } else if (!collapsed) {
+        setCollapsed(true)
+      } else if (rightEdgePresentation) {
+        // A hidden right-edge window would reopen from the band; park it like the dock's Hide control.
+        closeRightEdgeDock()
+      } else {
+        void window.toto.hide()
+      }
     })()
   }
   useEffect(() => {
@@ -3376,7 +3468,9 @@ export function App(): JSX.Element {
   }, [view])
 
   useEffect(() => {
-    const offReady = window.toto.onUpdateReady((d) => setUpdateReady({ open: true, version: d?.version, notes: d?.notes }))
+    const offReady = window.toto.onUpdateReady((d) =>
+      setUpdateReady({ open: true, version: d?.version, notes: d?.notes })
+    )
     // Show a "Downloading… X%" state while the update downloads; once it's ready (version set), keep that.
     const offProgress = window.toto.onUpdateProgress((d) =>
       setUpdateReady((prev) => (prev.version ? prev : { open: true, percent: d?.percent }))
@@ -3474,7 +3568,11 @@ export function App(): JSX.Element {
         // Métis Local already wins this request at the routing layer (localPrimary outranks cliPrimary),
         // so forcing providerOverride:'dust' here would silently override that choice with a cloud round
         // trip the user didn't ask for.
-        const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
+        const dustReady = isDustReady(
+          settings?.hasKeys ?? {},
+          settings?.dustWorkspaceId ?? '',
+          settings?.providerModels ?? {}
+        )
         const id = ask.run({
           mode: 'summary',
           transcript,
@@ -3530,8 +3628,10 @@ export function App(): JSX.Element {
   // minimizeForIntelligence directly: that only collapses the overlay and would falsely imply a dashboard
   // opened. Keeping the IPC and failure normalization in App lets the compact dock remain presentation-only.
   const openIntelligenceDashboard = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
-    if (capturing || capturingRef.current) return { ok: false, error: 'Wait for screen capture to finish before opening Mantu Intelligence.' }
-    if (!(await approveReviewNav())) return { ok: false, error: 'Save or discard the recap before opening Mantu Intelligence.' }
+    if (capturing || capturingRef.current)
+      return { ok: false, error: 'Wait for screen capture to finish before opening Mantu Intelligence.' }
+    if (!(await approveReviewNav()))
+      return { ok: false, error: 'Save or discard the recap before opening Mantu Intelligence.' }
     try {
       const result = await window.toto.brainOpenDashboard()
       if (!result.ok) return { ok: false, error: result.error || 'Could not open Mantu Intelligence.' }
@@ -3579,7 +3679,21 @@ export function App(): JSX.Element {
         onOpenMeeting={(file) => void openPastMeeting(file)}
       />
     )
-  }, [settings, refresh, patch, saveKey, recoverEncryptedProfile, clearKey, testKey, settingsInitialTab, settingsNotice, quitApp, logOut, navigationGuard, openPastMeeting])
+  }, [
+    settings,
+    refresh,
+    patch,
+    saveKey,
+    recoverEncryptedProfile,
+    clearKey,
+    testKey,
+    settingsInitialTab,
+    settingsNotice,
+    quitApp,
+    logOut,
+    navigationGuard,
+    openPastMeeting
+  ])
   const historyBody = useMemo(
     () => (
       <RecallView
@@ -3646,7 +3760,23 @@ export function App(): JSX.Element {
       />
     ),
     // autosaveWarn was MISSING from the old shared dep array — a latent stale-warning bug the split fixes.
-    [listen.lines, suggest.answer, showSpec, speculative.answer, mode, listen.listening, listen.loading, listen.loadingPct, listen.error, captureError, autosaveWarn, settings?.showLiveTranscript, settings?.profile, endReview, transcriptShown]
+    [
+      listen.lines,
+      suggest.answer,
+      showSpec,
+      speculative.answer,
+      mode,
+      listen.listening,
+      listen.loading,
+      listen.loadingPct,
+      listen.error,
+      captureError,
+      autosaveWarn,
+      settings?.showLiveTranscript,
+      settings?.profile,
+      endReview,
+      transcriptShown
+    ]
   )
   const reviewBody = useMemo(() => {
     // Two sources: a just-ended live session (ask.answer recap + live lines), or a past meeting opened
@@ -3663,7 +3793,13 @@ export function App(): JSX.Element {
     const recapGenIsCurrent = recapGen.answer?.id === recapGenRunIdRef.current
     const recapGenAwaitingFirstToken =
       recapGenIsCurrent && !!recapGen.answer?.streaming && recapGen.answer?.text === recapGenPrevTextRef.current
-    const recapGenPending: AnswerState = { id: recapGenRunIdRef.current, text: '', streaming: true, error: null, prompt: '' }
+    const recapGenPending: AnswerState = {
+      id: recapGenRunIdRef.current,
+      text: '',
+      streaming: true,
+      error: null,
+      prompt: ''
+    }
     const recapGenLive = recapGenIsCurrent && !recapGenAwaitingFirstToken ? recapGen.answer : recapGenPending
     // A settle with no error and no text (a hollow completion) is functionally a failure — give it the
     // same readable-message + Retry treatment as a real error instead of leaving a dead spinner up.
@@ -3672,8 +3808,10 @@ export function App(): JSX.Element {
         ? { ...recapGenLive, error: 'Recap came back empty. Try again.' }
         : recapGenLive
     const displayedRecapStatus: RecapStatus | undefined = generatingThisPm
-      ? recapGenDisplay?.completion === 'incomplete' ? 'incomplete' : undefined
-      : pm?.recapStatus ?? (!pm && ask.answer?.completion === 'incomplete' ? 'incomplete' : undefined)
+      ? recapGenDisplay?.completion === 'incomplete'
+        ? 'incomplete'
+        : undefined
+      : (pm?.recapStatus ?? (!pm && ask.answer?.completion === 'incomplete' ? 'incomplete' : undefined))
     return (
       <Review
         mode={mode}
@@ -3700,8 +3838,20 @@ export function App(): JSX.Element {
         followupDraft={followup.answer}
         winsToggle={spotlightRefReady ? { on: includeWins, onToggle: setIncludeWins } : undefined}
         onGenerateFollowup={generateFollowup}
-        onGenerateRecap={pm ? () => { if (requireProvider('summary')) generateSavedRecap(pm.file, pm.lines, pm.recap) } : undefined}
-        onRetryRecap={pm ? () => { if (requireProvider('summary')) generateSavedRecap(pm.file, pm.lines, pm.recap) } : retryLiveRecap}
+        onGenerateRecap={
+          pm
+            ? () => {
+                if (requireProvider('summary')) generateSavedRecap(pm.file, pm.lines, pm.recap)
+              }
+            : undefined
+        }
+        onRetryRecap={
+          pm
+            ? () => {
+                if (requireProvider('summary')) generateSavedRecap(pm.file, pm.lines, pm.recap)
+              }
+            : retryLiveRecap
+        }
         mcpConnections={settings?.mcpConnections ?? []}
         finishingTranscript={listen.listening}
         onOpenFolder={async () => {
@@ -3729,11 +3879,7 @@ export function App(): JSX.Element {
               }
             : undefined
         }
-        onRecapSaved={
-          pm
-            ? (recap) => setPastMeeting((prev) => (prev ? { ...prev, recap } : prev))
-            : undefined
-        }
+        onRecapSaved={pm ? (recap) => setPastMeeting((prev) => (prev ? { ...prev, recap } : prev)) : undefined}
         onUpdateRecap={updateRecapManually}
         onDone={
           pm
@@ -3757,7 +3903,38 @@ export function App(): JSX.Element {
         }
       />
     )
-  }, [pastMeeting, recapGenTarget, recapGen.answer, ask.answer, listen.lines, savedPath, saveError, saveAttempts, saveGaveUp, settings?.showFullTranscriptInReview, settings?.mcpConnections, followup.answer, generateFollowup, requireProvider, generateSavedRecap, retryLiveRecap, manualSave, discardMeeting, resumePastMeeting, openPastMeeting, reset, recapSkipped, openSettings, mode, coaching.answer, generateColdCallCoaching, booking.answer, generateBookMeetings, updateRecapManually, navigationGuard])
+  }, [
+    pastMeeting,
+    recapGenTarget,
+    recapGen.answer,
+    ask.answer,
+    listen.lines,
+    savedPath,
+    saveError,
+    saveAttempts,
+    saveGaveUp,
+    settings?.showFullTranscriptInReview,
+    settings?.mcpConnections,
+    followup.answer,
+    generateFollowup,
+    requireProvider,
+    generateSavedRecap,
+    retryLiveRecap,
+    manualSave,
+    discardMeeting,
+    resumePastMeeting,
+    openPastMeeting,
+    reset,
+    recapSkipped,
+    openSettings,
+    mode,
+    coaching.answer,
+    generateColdCallCoaching,
+    booking.answer,
+    generateBookMeetings,
+    updateRecapManually,
+    navigationGuard
+  ])
   const answerBody = useMemo(() => {
     if (!(capturing || captureError || ask.answer)) return null
     // While a new screen capture is in flight (capturing), force the streaming/empty display even when
@@ -3771,7 +3948,7 @@ export function App(): JSX.Element {
         // the prior turn's thumbs-up/down (`rated`) + copy/save flash state bleed onto the new answer,
         // corrupting feedback telemetry. (capturing has no id yet → stable 'pending' until the run lands.)
         key={ask.answer?.id ?? 'pending'}
-        text={capturing ? '' : ask.answer?.text ?? ''}
+        text={capturing ? '' : (ask.answer?.text ?? '')}
         streaming={capturing || (ask.answer?.streaming ?? false)}
         error={ask.answer?.error ?? null}
         captureNotice={captureError}
@@ -3795,7 +3972,15 @@ export function App(): JSX.Element {
   }, [capturing, captureError, ask.answer, retryAnswer, goDeeper, captureAccel, rightEdgePresentation])
   // Demo overrides (DEMO is a build/query-time constant, so these memos are inert in real sessions).
   const demoBody = useMemo(() => {
-    if (DEMO === 'answer') return <Answer text={DEMO_ANSWER} streaming={false} error={null} variant={rightEdgePresentation ? 'sidecar' : 'default'} />
+    if (DEMO === 'answer')
+      return (
+        <Answer
+          text={DEMO_ANSWER}
+          streaming={false}
+          error={null}
+          variant={rightEdgePresentation ? 'sidecar' : 'default'}
+        />
+      )
     if (DEMO === 'copilot')
       return (
         <Copilot
@@ -3816,8 +4001,7 @@ export function App(): JSX.Element {
   const body: JSX.Element | null =
     DEMO === 'answer' || DEMO === 'copilot' || DEMO === 'history'
       ? demoBody
-      : overlayShowsSettingsSheet(view === 'settings' || DEMO === 'settings' ? 'settings' : view, minimized) &&
-          settings
+      : overlayShowsSettingsSheet(view === 'settings' || DEMO === 'settings' ? 'settings' : view, minimized) && settings
         ? settingsBody
         : view === 'history'
           ? historyBody
@@ -3866,7 +4050,13 @@ export function App(): JSX.Element {
     if (view === 'settings') {
       return (
         <div ref={setRoot} {...windowDrag} className="flex h-full min-h-0 w-full flex-col gap-2 p-1.5">
-          <Suspense fallback={<div className="cl-root flex min-h-0 flex-1 rounded-2xl p-6"><AgentStatus kind="loading" size="hero" /></div>}>
+          <Suspense
+            fallback={
+              <div className="cl-root flex min-h-0 flex-1 rounded-2xl p-6">
+                <AgentStatus kind="loading" size="hero" />
+              </div>
+            }
+          >
             {settingsBody}
           </Suspense>
         </div>
@@ -3893,10 +4083,15 @@ export function App(): JSX.Element {
     // Keep onboarding fail-closed, but make recovery explicit and never expose the native error text.
     if (auth.status === null && auth.bootError) {
       return (
-        <div ref={setRoot} className="onboard-exclusive-lock flex h-full min-h-0 w-full items-center justify-center p-6">
+        <div
+          ref={setRoot}
+          className="onboard-exclusive-lock flex h-full min-h-0 w-full items-center justify-center p-6"
+        >
           <Panel>
             <div className="flex max-w-sm flex-col items-center gap-3 px-4 py-5 text-center">
-              <h1 className="m-0 text-[18px] font-semibold text-[color:var(--color-ink)]">Métis needs to check access</h1>
+              <h1 className="m-0 text-[18px] font-semibold text-[color:var(--color-ink)]">
+                Métis needs to check access
+              </h1>
               <p className="m-0 text-[12px] leading-snug text-[color:var(--color-ink-3)]">
                 Your setup is still here. Retry the secure access check, or reload Métis if it keeps failing.
               </p>
@@ -3924,7 +4119,13 @@ export function App(): JSX.Element {
     if (view === 'settings' && settings) {
       return (
         <div ref={setRoot} className="onboard-exclusive-lock flex h-full min-h-0 w-full flex-col gap-2 p-1.5">
-          <Suspense fallback={<div className="cl-root flex min-h-0 flex-1 rounded-2xl p-6"><AgentStatus kind="loading" size="hero" /></div>}>
+          <Suspense
+            fallback={
+              <div className="cl-root flex min-h-0 flex-1 rounded-2xl p-6">
+                <AgentStatus kind="loading" size="hero" />
+              </div>
+            }
+          >
             {settingsBody}
           </Suspense>
         </div>
@@ -3958,9 +4159,7 @@ export function App(): JSX.Element {
       return (
         <div ref={setRoot} {...windowDrag} className="w-full p-1.5">
           <div className="glass flex w-full flex-col gap-2 rounded-2xl px-4 py-3.5 text-center">
-            <span className="font-ui text-[13px] font-medium text-[color:var(--color-ink)]">
-              Métis couldn’t start
-            </span>
+            <span className="font-ui text-[13px] font-medium text-[color:var(--color-ink)]">Métis couldn’t start</span>
             <span className="font-ui text-[11.5px] leading-snug text-[color:var(--color-ink-3)]">
               {/* Attribute to whichever subsystem actually failed — settingsBootError takes priority in
                   the ?? above, so mirror that same check here instead of hardcoding "settings" copy. */}
@@ -4087,14 +4286,19 @@ export function App(): JSX.Element {
         // extra room the halo would be clipped at the window edge into a flat band. Widen the transparent
         // margin only while invisible; the resting/visible overlay keeps its tight p-1.5. Settings is
         // opaque glass, so skip the 20px stealth pad that crushed the scroll surface.
-        overlayPeeked ? 'p-0' : rightEdgeDockVisible ? 'p-0' : overlayShowsSettingsSheet(view, minimized) ? 'p-1.5' : (settings?.contentProtection ?? true) && !minimized ? 'p-5 stealth-glow' : 'p-1.5',
+        overlayPeeked
+          ? 'p-0'
+          : rightEdgeDockVisible
+            ? 'p-0'
+            : overlayShowsSettingsSheet(view, minimized)
+              ? 'p-1.5'
+              : (settings?.contentProtection ?? true) && !minimized
+                ? 'p-5 stealth-glow'
+                : 'p-1.5',
         showListeningChrome ? 'listening' : ''
       ].join(' ')}
     >
-      <ConfirmSheet
-        request={navigationGuardRequest}
-        onChoose={(choice, id) => navigationGuard.choose(choice, id)}
-      />
+      <ConfirmSheet request={navigationGuardRequest} onChoose={(choice, id) => navigationGuard.choose(choice, id)} />
       {(() => {
         const toasts = (
           <>
@@ -4135,7 +4339,12 @@ export function App(): JSX.Element {
         // bare-fragment render.
         const widen =
           minimized &&
-          (updateReady.open || newMeetingToast || consentReminderOpen || !!visibilityToast || !!openMeetingError || !!operatorGateNotice)
+          (updateReady.open ||
+            newMeetingToast ||
+            consentReminderOpen ||
+            !!visibilityToast ||
+            !!openMeetingError ||
+            !!operatorGateNotice)
         return (
           <div
             data-hug-width={widen || undefined}
@@ -4172,8 +4381,12 @@ export function App(): JSX.Element {
           <div
             hidden={rightEdgeReaderShown || undefined}
             className={[
-              overlayIdle ? overlaySpringClassName(overlaySpring, rightEdgePresentation ? 'right' : 'top') : circleRestSpringClassName(circleRestSpring),
-              overlayIdle && !rightEdgePresentation ? overlayHideParkedClassName(overlaySpring, overlaySurfaceRevealed, overlayRestsHidden(overlayLayout)) : '',
+              overlayIdle
+                ? overlaySpringClassName(overlaySpring, rightEdgePresentation ? 'right' : 'top')
+                : circleRestSpringClassName(circleRestSpring),
+              overlayIdle && !rightEdgePresentation
+                ? overlayHideParkedClassName(overlaySpring, overlaySurfaceRevealed, overlayRestsHidden(overlayLayout))
+                : '',
               // The drawer's own position is absolute. Keep this animation host full-height too so
               // percentage heights resolve to the 360×560 native sidecar rather than its empty flow box.
               rightEdgeDockVisible ? 'h-full' : ''
@@ -4192,102 +4405,104 @@ export function App(): JSX.Element {
               if (circleRestSpring === 'collapse') commitCircleRestMinimize()
             }}
           >
-          {/* One dock element in one tree position, parked or revealed: flipping `open` never re-mounts it. */}
-          {rightEdgeDockVisible ? (
-            <RightEdgeSidecar
-              open={!overlayPeeked}
-              onOpen={revealOverlay}
-              onClose={closeRightEdgeDock}
-              canClose={rightEdgeDockVisible}
-              focusSignal={focusSignal}
-              commandState={commandState}
-              value={input}
-              onChange={setInput}
-              onSubmit={submit}
-              onStop={onStop}
-              onComposerActivity={rightEdge.noteComposerActivity}
-              onComposingChange={rightEdge.setComposing}
-              busy={capturing || ask.answer?.streaming === true || suggest.answer?.streaming === true}
-              stoppable={ask.answer?.streaming === true || suggest.answer?.streaming === true}
-              body={barBody}
-              listening={listen.listening}
-              paused={listen.paused}
-              startedAt={meetingStartRef.current}
-              pausedMs={meetingPauseRef.current.pausedMs}
-              pausedAt={meetingPauseRef.current.pausedAt}
-              onToggleListen={toggleListen}
-              onTogglePause={onTogglePause}
-              onTranscript={toggleTranscript}
-              transcriptShown={view === 'copilot' && !collapsed && transcriptShown}
-              capturing={capturing}
-              onCapture={capture}
-              onOpenIntelligence={openIntelligenceDashboard}
-              onSpotlightRef={spotlightRef}
-              spotlightReady={spotlightRefReady}
-              onHistory={onBarHistory}
-              liveNotice={listen.error}
-              onSettings={onBarSettings}
-              onOpenReader={openRightEdgeReader}
-              detailsAvailable={commandState.proposalId !== null || readerDetailErrors.length > 0}
-              readerStrings={rightEdgeCopy}
-            />
-          ) : rightEdgePresentation ? null : <Bar
-            value={input}
-            onChange={setInput}
-            onSubmit={submit}
-            onStop={onStop}
-            busy={(ask.answer?.streaming || suggest.answer?.streaming) ?? false}
-            listening={showListeningChrome}
-            onToggleListen={toggleListen}
-            paused={listen.paused}
-            captureDegraded={listen.captureDegraded}
-            captureHealth={listen.captureHealth}
-            noSpeechWarning={listen.noSpeechWarning}
-            recognizerStatus={listen.recognizerStatus}
-            onTogglePause={onTogglePause}
-            onCapture={capture}
-            capturing={capturing}
-            captureAccel={captureAccel}
-            mode={mode}
-            onSetMode={onSetMode}
-            hasAnswer={hasAnswer}
-            body={barBody}
-            onBack={hasAnswer ? clearAnswer : undefined}
-            screenCapturedAt={ctxCapturedAt}
-            onTranscript={toggleTranscript}
-            transcriptShown={view === 'copilot' && !collapsed && transcriptShown}
-            onNewMeeting={newMeeting}
-            customModes={settings?.customModes}
-            canPrewarm={!!settings?.visionAvailable && (settings?.screenAsk ?? true)}
-            thinkingOn={settings?.thinkingMode === 'always'}
-            onToggleThinking={onToggleThinking}
-            onSpotlightRef={spotlightRef}
-            spotlightReady={isSpotlightRefReady(
-              settings?.hasKeys ?? {},
-              settings?.dustWorkspaceId ?? '',
-              settings?.providerModelsSpotlightRef ?? {},
-              null
+            {/* One dock element in one tree position, parked or revealed: flipping `open` never re-mounts it. */}
+            {rightEdgeDockVisible ? (
+              <RightEdgeSidecar
+                open={!overlayPeeked}
+                onOpen={revealOverlay}
+                onClose={closeRightEdgeDock}
+                canClose={rightEdgeDockVisible}
+                focusSignal={focusSignal}
+                commandState={commandState}
+                value={input}
+                onChange={setInput}
+                onSubmit={submit}
+                onStop={onStop}
+                onComposerActivity={rightEdge.noteComposerActivity}
+                onComposingChange={rightEdge.setComposing}
+                busy={capturing || ask.answer?.streaming === true || suggest.answer?.streaming === true}
+                stoppable={ask.answer?.streaming === true || suggest.answer?.streaming === true}
+                body={barBody}
+                listening={listen.listening}
+                paused={listen.paused}
+                startedAt={meetingStartRef.current}
+                pausedMs={meetingPauseRef.current.pausedMs}
+                pausedAt={meetingPauseRef.current.pausedAt}
+                onToggleListen={toggleListen}
+                onTogglePause={onTogglePause}
+                onTranscript={toggleTranscript}
+                transcriptShown={view === 'copilot' && !collapsed && transcriptShown}
+                capturing={capturing}
+                onCapture={capture}
+                onOpenIntelligence={openIntelligenceDashboard}
+                onSpotlightRef={spotlightRef}
+                spotlightReady={spotlightRefReady}
+                onHistory={onBarHistory}
+                liveNotice={listen.error}
+                onSettings={onBarSettings}
+                onOpenReader={openRightEdgeReader}
+                detailsAvailable={commandState.proposalId !== null || readerDetailErrors.length > 0}
+                readerStrings={rightEdgeCopy}
+              />
+            ) : rightEdgePresentation ? null : (
+              <Bar
+                value={input}
+                onChange={setInput}
+                onSubmit={submit}
+                onStop={onStop}
+                busy={(ask.answer?.streaming || suggest.answer?.streaming) ?? false}
+                listening={showListeningChrome}
+                onToggleListen={toggleListen}
+                paused={listen.paused}
+                captureDegraded={listen.captureDegraded}
+                captureHealth={listen.captureHealth}
+                noSpeechWarning={listen.noSpeechWarning}
+                recognizerStatus={listen.recognizerStatus}
+                onTogglePause={onTogglePause}
+                onCapture={capture}
+                capturing={capturing}
+                captureAccel={captureAccel}
+                mode={mode}
+                onSetMode={onSetMode}
+                hasAnswer={hasAnswer}
+                body={barBody}
+                onBack={hasAnswer ? clearAnswer : undefined}
+                screenCapturedAt={ctxCapturedAt}
+                onTranscript={toggleTranscript}
+                transcriptShown={view === 'copilot' && !collapsed && transcriptShown}
+                onNewMeeting={newMeeting}
+                customModes={settings?.customModes}
+                canPrewarm={!!settings?.visionAvailable && (settings?.screenAsk ?? true)}
+                thinkingOn={settings?.thinkingMode === 'always'}
+                onToggleThinking={onToggleThinking}
+                onSpotlightRef={spotlightRef}
+                spotlightReady={isSpotlightRefReady(
+                  settings?.hasKeys ?? {},
+                  settings?.dustWorkspaceId ?? '',
+                  settings?.providerModelsSpotlightRef ?? {},
+                  null
+                )}
+                onHistory={onBarHistory}
+                onSettings={onBarSettings}
+                onMinimize={onBarMinimize}
+                canMinimize={canMinimize}
+                orbStyle={overlayOrbStyle}
+                orbMood={resolveOrbMood({
+                  factcheck: ask.answer?.kind === 'factcheck' && !!ask.answer?.streaming,
+                  thinking: !!(ask.answer?.streaming || suggest.answer?.streaming)
+                })}
+                stealth={settings?.contentProtection ?? true}
+                onToggleStealth={onToggleStealth}
+                stealthLocked={stealthLocked}
+                startedAt={meetingStartRef.current}
+                pausedMs={meetingPauseRef.current.pausedMs}
+                pausedAt={meetingPauseRef.current.pausedAt}
+                panelOpen={panelOpen}
+                onTogglePanel={onTogglePanel}
+                canTogglePanel={canTogglePanel}
+                focusSignal={focusSignal}
+              />
             )}
-            onHistory={onBarHistory}
-            onSettings={onBarSettings}
-            onMinimize={onBarMinimize}
-            canMinimize={canMinimize}
-            orbStyle={overlayOrbStyle}
-            orbMood={resolveOrbMood({
-              factcheck: ask.answer?.kind === 'factcheck' && !!ask.answer?.streaming,
-              thinking: !!(ask.answer?.streaming || suggest.answer?.streaming)
-            })}
-            stealth={settings?.contentProtection ?? true}
-            onToggleStealth={onToggleStealth}
-            stealthLocked={stealthLocked}
-            startedAt={meetingStartRef.current}
-            pausedMs={meetingPauseRef.current.pausedMs}
-            pausedAt={meetingPauseRef.current.pausedAt}
-            panelOpen={panelOpen}
-            onTogglePanel={onTogglePanel}
-            canTogglePanel={canTogglePanel}
-            focusSignal={focusSignal}
-          />}
           </div>
           {/* Main sized the window to readerRect before reporting the 'reader' surface; the Reader fades in. */}
           {rightEdgeReaderShown && rightEdgeReaderKind !== null ? (
@@ -4329,7 +4544,10 @@ export function App(): JSX.Element {
                   active. Copilot already renders the same `listen.error` text inline among its chips, so skip
                   it there to avoid showing the same note twice; every other view has no other place for it. */}
               {showWideMeetingChrome && listen.error && view !== 'copilot' && (
-                <div title={listen.error ?? undefined} className="fade-up rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-1.5 text-[11px] leading-snug text-[var(--color-danger)] line-clamp-2">
+                <div
+                  title={listen.error ?? undefined}
+                  className="fade-up rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-1.5 text-[11px] leading-snug text-[var(--color-danger)] line-clamp-2"
+                >
                   {listen.error}
                 </div>
               )}
@@ -4369,8 +4587,8 @@ export function App(): JSX.Element {
                   one-off event, it's a standing state that lasts until the user recalibrates. */}
               {tapMismatch && view !== 'settings' && (
                 <div className="fade-up rounded-xl border border-[var(--color-warn)]/30 bg-[var(--color-warn)]/10 px-3 py-1.5 text-[11px] leading-snug text-[color:var(--color-warn)]">
-                  Desk Tap Control is paused. It was calibrated on a different microphone. Recalibrate it in
-                  Settings → Audio.
+                  Desk Tap Control is paused. It was calibrated on a different microphone. Recalibrate it in Settings →
+                  Audio.
                 </div>
               )}
               {/* MQA-053 / MQA-059: the ACTIVE provider's credential stopped working and cross-provider
@@ -4384,30 +4602,38 @@ export function App(): JSX.Element {
                   limits" already promises to ride out automatically, and nagging about those would train the
                   user to ignore this. Not dismissible — it is a standing state, not an event, and it clears
                   itself the moment that provider answers again or its key is changed. */}
-              {settings && view !== 'settings' && !showListeningChrome && (() => {
-                const dead = (settings.unhealthyProviders ?? []).find(
-                  (u) => u.provider === settings.provider && (u.reason === 'auth' || u.reason === 'quota-exhausted')
-                )
-                if (!dead) return null
-                const label = PROVIDERS[settings.provider]?.label ?? settings.provider
-                const isCli = PROVIDERS[settings.provider]?.kind === 'cli'
-                const what =
-                  dead.reason === 'quota-exhausted'
-                    ? `${label} is out of credit`
-                    : isCli
-                      ? `Your ${label} session was rejected`
-                      : `Your ${label} key was rejected`
-                const remedy = dead.reason === 'quota-exhausted' ? 'Top it up or switch provider' : isCli ? 'Reconnect it' : 'Update it'
-                return (
-                  <button
-                    type="button"
-                    onClick={() => openSettings('ai', `${what}. Métis is answering with another provider meanwhile.`)}
-                    className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[var(--color-warn)]/30 bg-[var(--color-warn)]/10 px-3 py-1.5 text-[11px] font-medium text-[color:var(--color-warn)]"
-                  >
-                    {what}. Métis is using another provider. {remedy} in Settings → AI.
-                  </button>
-                )
-              })()}
+              {settings &&
+                view !== 'settings' &&
+                !showListeningChrome &&
+                (() => {
+                  const dead = (settings.unhealthyProviders ?? []).find(
+                    (u) => u.provider === settings.provider && (u.reason === 'auth' || u.reason === 'quota-exhausted')
+                  )
+                  if (!dead) return null
+                  const label = PROVIDERS[settings.provider]?.label ?? settings.provider
+                  const isCli = PROVIDERS[settings.provider]?.kind === 'cli'
+                  const what =
+                    dead.reason === 'quota-exhausted'
+                      ? `${label} is out of credit`
+                      : isCli
+                        ? `Your ${label} session was rejected`
+                        : `Your ${label} key was rejected`
+                  const remedy =
+                    dead.reason === 'quota-exhausted'
+                      ? 'Top it up or switch provider'
+                      : isCli
+                        ? 'Reconnect it'
+                        : 'Update it'
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => openSettings('ai', `${what}. Métis is answering with another provider meanwhile.`)}
+                      className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[var(--color-warn)]/30 bg-[var(--color-warn)]/10 px-3 py-1.5 text-[11px] font-medium text-[color:var(--color-warn)]"
+                    >
+                      {what}. Métis is using another provider. {remedy} in Settings → AI.
+                    </button>
+                  )
+                })()}
               {/* Wave 2 — one-shot failover chip (docs/PROVIDER-ROUTING-POLICY.md). Distinct from the standing
                   dead-key banner above: this is an EVENT (primary hopped once), dismissible, and clears via
                   dismissFailoverNotice so it never nags every poll. */}
@@ -4416,66 +4642,94 @@ export function App(): JSX.Element {
                 view !== 'settings' &&
                 !showListeningChrome &&
                 (() => {
-                const hop = settings.lastFailover!
-                const fromLabel = PROVIDERS[hop.from as keyof typeof PROVIDERS]?.label ?? hop.from
-                const toLabel = PROVIDERS[hop.to as keyof typeof PROVIDERS]?.label ?? hop.to
-                return (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setFailoverDismissedAt(hop.at)
-                      void window.toto.dismissFailoverNotice().then(() => refresh()).catch(() => {})
-                    }}
-                    className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-white/15 bg-white/[0.06] px-3 py-1.5 text-[11px] font-medium text-[color:var(--color-ink-2)]"
-                  >
-                    Switched from {fromLabel} to {toLabel}
-                    {hop.reason === 'exhausted' ? ' (quota)' : ''}. Tap to dismiss.
-                  </button>
-                )
-              })()}
+                  const hop = settings.lastFailover!
+                  const fromLabel = PROVIDERS[hop.from as keyof typeof PROVIDERS]?.label ?? hop.from
+                  const toLabel = PROVIDERS[hop.to as keyof typeof PROVIDERS]?.label ?? hop.to
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFailoverDismissedAt(hop.at)
+                        void window.toto
+                          .dismissFailoverNotice()
+                          .then(() => refresh())
+                          .catch(() => {})
+                      }}
+                      className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-white/15 bg-white/[0.06] px-3 py-1.5 text-[11px] font-medium text-[color:var(--color-ink-2)]"
+                    >
+                      Switched from {fromLabel} to {toLabel}
+                      {hop.reason === 'exhausted' ? ' (quota)' : ''}. Tap to dismiss.
+                    </button>
+                  )
+                })()}
               {/* Suppressed once the on-device safety net can answer: this CTA asks for an API key, and a user
                   running Métis Local with no cloud provider does not need one — that install is finished, not
                   half-configured. Telling them to "Add your Cloudflare API key" while the local model answers
                   every question is the app contradicting itself. Same flag the requireProvider gate reads. */}
-              {settings && !rightEdgeDockVisible && !settings.providerReady && !settings.localFallbackReady && !nudgeExpired && view !== 'settings' && !showListeningChrome && (() => {
-                const activeDef = PROVIDERS[settings.provider]
-                // MQA-216: same three cases as requireProvider above, in the same order. Reading a saved key
-                // as proof of an org policy made the CTA tell a Cloudflare user to "switch to an approved
-                // provider" when all they were missing was the Worker URL their operator sends separately.
-                const blockedByOrg = !!settings.allowedProviders && !settings.allowedProviders.includes(settings.provider)
-                const needsEndpoint =
-                  requiresUserBaseUrl(settings.provider) && !providerBaseUrl(settings.provider, settings).trim()
-                const cta = activeDef.kind === 'cli'
-                  ? `Connect ${activeDef.label} in Settings`
-                  : blockedByOrg
-                    ? 'Switch to an approved provider'
+              {settings &&
+                !rightEdgeDockVisible &&
+                !settings.providerReady &&
+                !settings.localFallbackReady &&
+                !nudgeExpired &&
+                view !== 'settings' &&
+                !showListeningChrome &&
+                (() => {
+                  const activeDef = PROVIDERS[settings.provider]
+                  // MQA-216: same three cases as requireProvider above, in the same order. Reading a saved key
+                  // as proof of an org policy made the CTA tell a Cloudflare user to "switch to an approved
+                  // provider" when all they were missing was the Worker URL their operator sends separately.
+                  const blockedByOrg =
+                    !!settings.allowedProviders && !settings.allowedProviders.includes(settings.provider)
+                  const needsEndpoint =
+                    requiresUserBaseUrl(settings.provider) && !providerBaseUrl(settings.provider, settings).trim()
+                  const cta =
+                    activeDef.kind === 'cli'
+                      ? `Connect ${activeDef.label} in Settings`
+                      : blockedByOrg
+                        ? 'Switch to an approved provider'
+                        : needsEndpoint
+                          ? `Add your ${activeDef.label} endpoint URL`
+                          : `Add your ${activeDef.label} API key`
+                  const notice = blockedByOrg
+                    ? 'Your organization restricts which providers you can use. Switch to an approved provider here.'
                     : needsEndpoint
-                      ? `Add your ${activeDef.label} endpoint URL`
-                      : `Add your ${activeDef.label} API key`
-                const notice = blockedByOrg
-                  ? "Your organization restricts which providers you can use. Switch to an approved provider here."
-                  : needsEndpoint
-                    ? `No endpoint URL set for ${activeDef.label}. Open Settings → Advanced and add it.`
-                    : 'Add an API key or connect a provider here to ask questions.'
-                return (
-                  <button
-                    type="button"
-                    onClick={() => openSettings('ai', notice)}
-                    className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[var(--color-accent)]/30 bg-[var(--color-accent)] px-3 py-1.5 text-[11px] font-medium text-white hover:brightness-110"
-                  >
-                    {cta}
-                  </button>
-                )
-              })()}
-              {isPanelBody && panelOpen &&
-                (overlayShowsSettingsSheet(view === 'settings' || DEMO === 'settings' ? 'settings' : view, minimized) ? (
+                      ? `No endpoint URL set for ${activeDef.label}. Open Settings → Advanced and add it.`
+                      : 'Add an API key or connect a provider here to ask questions.'
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => openSettings('ai', notice)}
+                      className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[var(--color-accent)]/30 bg-[var(--color-accent)] px-3 py-1.5 text-[11px] font-medium text-white hover:brightness-110"
+                    >
+                      {cta}
+                    </button>
+                  )
+                })()}
+              {isPanelBody &&
+                panelOpen &&
+                (overlayShowsSettingsSheet(
+                  view === 'settings' || DEMO === 'settings' ? 'settings' : view,
+                  minimized
+                ) ? (
                   // Settings is its own self-contained panel — render directly under the bar (bar stays on top).
-                  <Suspense fallback={<div className="cl-root flex min-h-0 flex-1 rounded-2xl p-6"><AgentStatus kind="loading" size="hero" /></div>}>
+                  <Suspense
+                    fallback={
+                      <div className="cl-root flex min-h-0 flex-1 rounded-2xl p-6">
+                        <AgentStatus kind="loading" size="hero" />
+                      </div>
+                    }
+                  >
                     <div className="flex min-h-0 flex-1 flex-col">{body}</div>
                   </Suspense>
                 ) : (
                   <Panel>
-                    <Suspense fallback={<div className="p-4"><AgentStatus kind="loading" size="hero" /></div>}>
+                    <Suspense
+                      fallback={
+                        <div className="p-4">
+                          <AgentStatus kind="loading" size="hero" />
+                        </div>
+                      }
+                    >
                       {body}
                     </Suspense>
                   </Panel>

@@ -3,7 +3,13 @@ import type { RightEdgePin, RightEdgeSurfaceState } from '@shared/right-edge-sta
 import { RE_BLUR_TOGGLE_GRACE_MS } from '@shared/right-edge-timing'
 import { createRightEdgeSession } from './right-edge-session'
 
-const REST: RightEdgeSurfaceState = { surface: 'rest', restKind: 'none', edgeClass: 'W', cardMaxHeight: 392, slotMax: 236 }
+const REST: RightEdgeSurfaceState = {
+  surface: 'rest',
+  restKind: 'none',
+  edgeClass: 'W',
+  cardMaxHeight: 392,
+  slotMax: 236
+}
 
 function session() {
   let current = REST

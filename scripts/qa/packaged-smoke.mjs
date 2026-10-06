@@ -60,7 +60,11 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { attach, freeLoopbackPort, killOwned, ownedCensus, runProcess, sleep } from './lib/app-driver.mjs'
-import { initialNavigationGuardRows, runPackagedNavigationGuardRows, withOverlayPage } from './golden-flows/navigation-guard-rows.mjs'
+import {
+  initialNavigationGuardRows,
+  runPackagedNavigationGuardRows,
+  withOverlayPage
+} from './golden-flows/navigation-guard-rows.mjs'
 import { initialOverlayStabilityRows, runPackagedOverlayStabilityRows } from './golden-flows/overlay-stability-rows.mjs'
 import { initialRightEdgeHideRows, runPackagedRightEdgeHideRows } from './golden-flows/right-edge-hide-rows.mjs'
 import { initialRvRows, RV_BOOT_ROW_ID, runPackagedRvRows } from './golden-flows/reveal-rows.mjs'
@@ -101,7 +105,15 @@ export {
   rightEdgeStateMismatches,
   runRightEdgeHideRows
 } from './golden-flows/right-edge-hide-rows.mjs'
-export { RV_BOOT_ROW_ID, RV_SCENARIOS, auditDiagnostic, buildWindowsShortcutLauncher, initialRvRows, isPassingRevealEvidence, runRevealRow } from './golden-flows/reveal-rows.mjs'
+export {
+  RV_BOOT_ROW_ID,
+  RV_SCENARIOS,
+  auditDiagnostic,
+  buildWindowsShortcutLauncher,
+  initialRvRows,
+  isPassingRevealEvidence,
+  runRevealRow
+} from './golden-flows/reveal-rows.mjs'
 export { isOverlayUrl, parseAuditLog, waitUntilParked } from './golden-flows/smoke-support.mjs'
 
 const READY_TIMEOUT_MS = 150_000 // a cold first launch on a hosted runner; the same budget as check-packaged-launch
@@ -129,7 +141,9 @@ function hasEvent(records, event) {
 }
 
 function rowIsTerminal(row) {
-  return row.status === 'PASS' || row.status === 'FAIL' || row.status === 'BLOCKED_EXTERNAL' || row.status === 'PRECONDITION'
+  return (
+    row.status === 'PASS' || row.status === 'FAIL' || row.status === 'BLOCKED_EXTERNAL' || row.status === 'PRECONDITION'
+  )
 }
 
 /** One failure code per defect, evaluated in a fixed order; `result` is `'pass'` only when none fire. */
@@ -142,19 +156,25 @@ export function smokeVerdict(observation) {
   fail('install_root_busy', observation.installRootBusy)
   fail('launch_failed', observation.launchFailed)
   fail('smoke_error', observation.error)
-  fail('app_reported_crash', hasEvent(observation.audit, 'app.crash') || hasEvent(observation.audit, 'app.unresponsive'))
+  fail(
+    'app_reported_crash',
+    hasEvent(observation.audit, 'app.crash') || hasEvent(observation.audit, 'app.unresponsive')
+  )
   fail('exited_early', observation.exitedEarly)
   fail('renderer_not_ready', observation.mainPid !== null && observation.readyMs === null && !observation.exitedEarly)
   fail(
     'census_vacuous',
     observation.ownedAtQuit !== null &&
-      (!observation.ownedAtQuit.some((entry) => entry.pid === observation.mainPid) || observation.ownedAtQuit.length < 2)
+      (!observation.ownedAtQuit.some((entry) => entry.pid === observation.mainPid) ||
+        observation.ownedAtQuit.length < 2)
   )
   fail('quit_request_failed', observation.quitRequested && !observation.quitDelivered)
   fail('quit_timeout', observation.quitDelivered && observation.exit === null)
   fail(
     'exit_not_clean',
-    observation.quitDelivered && observation.exit !== null && (observation.exit.code !== 0 || observation.exit.signal !== null)
+    observation.quitDelivered &&
+      observation.exit !== null &&
+      (observation.exit.code !== 0 || observation.exit.signal !== null)
   )
   fail(
     'shutdown_not_recorded',
@@ -163,10 +183,7 @@ export function smokeVerdict(observation) {
       (!hasEvent(observation.audit, 'app.shutdown.clean') || observation.marker !== true)
   )
   fail('processes_survived', observation.survivors !== null && observation.survivors.length > 0)
-  fail(
-    'rv_reopen_failed',
-    Array.isArray(observation.rv) && observation.rv.some((row) => row.status === 'FAIL')
-  )
+  fail('rv_reopen_failed', Array.isArray(observation.rv) && observation.rv.some((row) => row.status === 'FAIL'))
   fail(
     'rv_reopen_incomplete',
     observation.readyMs !== null &&
@@ -224,7 +241,9 @@ export function smokeReport(observation) {
     schema: 1,
     result,
     failures,
-    app: started ? { version: started.version ?? null, platform: started.platform ?? null, arch: started.arch ?? null } : null,
+    app: started
+      ? { version: started.version ?? null, platform: started.platform ?? null, arch: started.arch ?? null }
+      : null,
     events,
     timingsMs: {
       ready: observation.readyMs,
@@ -247,7 +266,6 @@ export function smokeReport(observation) {
   }
 }
 
-
 /**
  * Pure verdict of the LaunchServices cold-launch row. `precondition` is a reason string when the runner
  * could not deliver the profile env or the CDP port through LaunchServices; the row is then PRECONDITION
@@ -259,7 +277,11 @@ export function bootLaunchActivateVerdict(observation) {
     return { status: 'PRECONDITION', failures: [], reason: observation.precondition }
   }
   if (observation.rendererReady !== true) {
-    return { status: 'PRECONDITION', failures: [], reason: 'app.renderer.ready was not observed after the LaunchServices launch' }
+    return {
+      status: 'PRECONDITION',
+      failures: [],
+      reason: 'app.renderer.ready was not observed after the LaunchServices launch'
+    }
   }
   const failures = []
   if (observation.activateReveals !== 0) failures.push('activate_reveal_during_boot')
@@ -278,7 +300,9 @@ function auditRecords(auditLogPath) {
 }
 
 async function bootObservation({ port, auditLogPath }) {
-  const activateReveals = auditRecords(auditLogPath).filter((r) => r.event === 'reveal' && r.reason === 'activate').length
+  const activateReveals = auditRecords(auditLogPath).filter(
+    (r) => r.event === 'reveal' && r.reason === 'activate'
+  ).length
   return withOverlayPage(port, async (page, browser) => {
     const size = await page.evaluate(() => ({ width: window.outerWidth, height: window.outerHeight }))
     const otherPages = browser
@@ -308,7 +332,13 @@ async function runBootLaunchActivateRow({ target, installRoot, platform, rows })
   const launchctlKeys = []
   let port = null
   let method = null
-  const observation = { precondition: null, rendererReady: false, activateReveals: null, parked: null, settingsOpened: null }
+  const observation = {
+    precondition: null,
+    rendererReady: false,
+    activateReveals: null,
+    parked: null,
+    settingsOpened: null
+  }
   try {
     seedOnboardedProfile(profile)
     port = await freeLoopbackPort()
@@ -319,11 +349,13 @@ async function runBootLaunchActivateRow({ target, installRoot, platform, rows })
       method = 'launchctl-setenv'
       const set = await runProcess('launchctl', ['setenv', 'ASKTOTO_USERDATA', profile], 10_000)
       if (set.error || set.code !== 0) {
-        observation.precondition = 'neither open --env nor launchctl setenv could pass the profile env through LaunchServices'
+        observation.precondition =
+          'neither open --env nor launchctl setenv could pass the profile env through LaunchServices'
       } else {
         launchctlKeys.push('ASKTOTO_USERDATA')
         launched = await runProcess('open', ['-a', target, ...appArgs], 20_000)
-        if (launched.error || launched.code !== 0) observation.precondition = 'open could not launch the app with the CDP port'
+        if (launched.error || launched.code !== 0)
+          observation.precondition = 'open could not launch the app with the CDP port'
       }
     }
 
@@ -334,7 +366,8 @@ async function runBootLaunchActivateRow({ target, installRoot, platform, rows })
       }
       observation.rendererReady = hasEvent(parseAuditLog(readAuditLog(auditLogPath)), 'app.renderer.ready')
       if (!observation.rendererReady) {
-        observation.precondition = 'the app never reported app.renderer.ready in the isolated profile, so the profile env did not reach it'
+        observation.precondition =
+          'the app never reported app.renderer.ready in the isolated profile, so the profile env did not reach it'
       }
     }
 
@@ -355,7 +388,10 @@ async function runBootLaunchActivateRow({ target, installRoot, platform, rows })
       /* not reachable: the owned-process sweep below ends it */
     }
     const quitDeadline = Date.now() + BOOT_QUIT_TIMEOUT_MS
-    while (Date.now() < quitDeadline && ownedProcesses(listProcesses(platform), { mainPid: null, installRoot, platform }).length > 0) {
+    while (
+      Date.now() < quitDeadline &&
+      ownedProcesses(listProcesses(platform), { mainPid: null, installRoot, platform }).length > 0
+    ) {
       await sleep(CENSUS_POLL_MS)
     }
     killOwned(ownedProcesses(listProcesses(platform), { mainPid: null, installRoot, platform }))
@@ -368,7 +404,9 @@ async function runBootLaunchActivateRow({ target, installRoot, platform, rows })
   }
 
   const verdict = bootLaunchActivateVerdict(observation)
-  console.error(`[packaged-smoke] ${RV_BOOT_ROW_ID} ${verdict.status} ${JSON.stringify({ method, failures: verdict.failures, reason: verdict.reason })}`)
+  console.error(
+    `[packaged-smoke] ${RV_BOOT_ROW_ID} ${verdict.status} ${JSON.stringify({ method, failures: verdict.failures, reason: verdict.reason })}`
+  )
   completeRvRow(rows, RV_BOOT_ROW_ID, {
     status: verdict.status,
     evidence: {
@@ -382,7 +420,8 @@ async function runBootLaunchActivateRow({ target, installRoot, platform, rows })
     unblock:
       verdict.status === 'PASS'
         ? null
-        : verdict.reason ?? 'Inspect the packaged-smoke artifact: the launch activate revealed the window, left it unparked or opened Settings.'
+        : (verdict.reason ??
+          'Inspect the packaged-smoke artifact: the launch activate revealed the window, left it unparked or opened Settings.')
   })
 }
 
@@ -531,7 +570,10 @@ async function main() {
 
     const exitInfo = { settled: false, code: null, signal: null }
     const launchStartMs = Date.now()
-    child = spawn(executable, [`--remote-debugging-port=${port}`, `--inspect=127.0.0.1:${inspectPort}`], { env, stdio: 'ignore' })
+    child = spawn(executable, [`--remote-debugging-port=${port}`, `--inspect=127.0.0.1:${inspectPort}`], {
+      env,
+      stdio: 'ignore'
+    })
     child.once('error', (err) => {
       observation.launchFailed = true
       console.error(`[packaged-smoke] spawn error: ${err?.message ?? err}`)
