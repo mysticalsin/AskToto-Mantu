@@ -57,14 +57,12 @@ describe('right-edge dock', () => {
       target: { value: 'Turn this into next steps' }
     })
     let prevented = false
-    ;(
-      input!.props.onKeyDown as (event: {
-        key: string
-        shiftKey: boolean
-        nativeEvent: { isComposing: boolean }
-        preventDefault: () => void
-      }) => void
-    )({
+    ;(input!.props.onKeyDown as (event: {
+      key: string
+      shiftKey: boolean
+      nativeEvent: { isComposing: boolean }
+      preventDefault: () => void
+    }) => void)({
       key: 'Enter',
       shiftKey: false,
       nativeEvent: { isComposing: false },
@@ -77,14 +75,12 @@ describe('right-edge dock', () => {
     expect(prevented).toBe(true)
     expect(submissions).toBe(1)
 
-    ;(
-      input!.props.onKeyDown as (event: {
-        key: string
-        shiftKey: boolean
-        nativeEvent: { isComposing: boolean }
-        preventDefault: () => void
-      }) => void
-    )({
+    ;(input!.props.onKeyDown as (event: {
+      key: string
+      shiftKey: boolean
+      nativeEvent: { isComposing: boolean }
+      preventDefault: () => void
+    }) => void)({
       key: 'Enter',
       shiftKey: false,
       nativeEvent: { isComposing: true },
@@ -228,21 +224,11 @@ describe('right-edge dock', () => {
     }
 
     expect(visibleNotice('Mic silent · check input')).toBe('Mic silent · check input')
-    expect(visibleNotice('Microphone input stopped (device disconnected or sleep); reconnecting automatically…')).toBe(
-      'Mic lost · reconnecting'
-    )
-    expect(visibleNotice('Could not start the microphone. Check Windows microphone access.')).toBe(
-      'Mic unavailable · check access'
-    )
-    expect(visibleNotice("Couldn't start the microphone. Check Microphone access in System Settings.")).toBe(
-      'Mic unavailable · check access'
-    )
-    expect(visibleNotice('Microphone unavailable. Listening to system audio only.')).toBe(
-      'Mic unavailable · system audio only'
-    )
-    expect(visibleNotice('System audio needs Screen Recording permission. Listening to microphone only.')).toBe(
-      'System audio needs Screen Recording permission. Listening to microphone only.'
-    )
+    expect(visibleNotice('Microphone input stopped (device disconnected or sleep); reconnecting automatically…')).toBe('Mic lost · reconnecting')
+    expect(visibleNotice('Could not start the microphone. Check Windows microphone access.')).toBe('Mic unavailable · check access')
+    expect(visibleNotice("Couldn't start the microphone. Check Microphone access in System Settings.")).toBe('Mic unavailable · check access')
+    expect(visibleNotice('Microphone unavailable. Listening to system audio only.')).toBe('Mic unavailable · system audio only')
+    expect(visibleNotice('System audio needs Screen Recording permission. Listening to microphone only.')).toBe('System audio needs Screen Recording permission. Listening to microphone only.')
   })
 
   it('does not expose an inert dismissal control while the dock must remain open', () => {
@@ -268,15 +254,7 @@ describe('right-edge dock', () => {
     // Owner report: with a draft, a live meeting, a toast or a capture the dock had no Close and no Escape.
     for (const props of [{ value: 'Draft kept on Hide' }, { listening: true, onToggleListen: () => undefined }]) {
       const markup = renderToStaticMarkup(
-        <RightEdgeSidecar
-          open
-          canClose
-          onOpen={() => undefined}
-          onClose={() => undefined}
-          onChange={() => undefined}
-          onSubmit={() => undefined}
-          {...props}
-        />
+        <RightEdgeSidecar open canClose onOpen={() => undefined} onClose={() => undefined} onChange={() => undefined} onSubmit={() => undefined} {...props} />
       )
       expect(markup).toContain('aria-label="Hide Métis"')
       expect(markup).toContain('title="Hide"')
@@ -288,9 +266,7 @@ describe('right-edge dock', () => {
     expect(dockEscapeHides({ key: 'Escape', isComposing: false }, false)).toBe(false)
     expect(dockEscapeHides({ key: 'Enter', isComposing: false }, true)).toBe(false)
     // The dock is always able to park while it is shown; closeRightEdgeDock keeps the draft.
-    expect(app).toMatch(
-      /const closeRightEdgeDock = useCallback\(\(\): void => \{[\s\S]*?if \(!overlayIdle\) parkCurrentOverlayAfterHide\(\)/
-    )
+    expect(app).toMatch(/const closeRightEdgeDock = useCallback\(\(\): void => \{[\s\S]*?if \(!overlayIdle\) parkCurrentOverlayAfterHide\(\)/)
     expect(e2eSmoke).toContain('right-edge Hide control parks the dock and keeps the draft')
   })
 
@@ -341,9 +317,7 @@ describe('right-edge dock', () => {
     }
     expect(app.match(/meetingPauseRef\.current = freshMeetingPauseClock\(\)/g)).toHaveLength(2)
     expect(app).toContain('meetingPauseRef.current = setMeetingPaused(meetingPauseRef.current')
-    expect(app).toMatch(
-      /const toggleTranscript = useCallback\(\(\) => \{\s*if \(view !== 'copilot' \|\| collapsed\) \{\s*setTranscriptShown\(true\)\s*setCollapsed\(false\)\s*setView\('copilot'\)/
-    )
+    expect(app).toMatch(/const toggleTranscript = useCallback\(\(\) => \{\s*if \(view !== 'copilot' \|\| collapsed\) \{\s*setTranscriptShown\(true\)\s*setCollapsed\(false\)\s*setView\('copilot'\)/)
     expect(app).toContain('const openIntelligenceDashboard = useCallback')
     expect(app).toContain('window.toto.brainOpenDashboard()')
     expect(app).toContain('minimizeForIntelligence()')
@@ -382,9 +356,7 @@ describe('right-edge dock', () => {
     expect(app).toMatch(/overlayPeeked \? 'p-0' : rightEdgeDockVisible \? 'p-0' : overlayShowsSettingsSheet/)
     expect(app).toContain('settings && !rightEdgeDockVisible && !settings.providerReady')
     expect(app).toMatch(/rightEdgeDockVisible \? 'h-full' : ''/)
-    expect(app).toMatch(
-      /rightEdgeDockVisible \? \(\s*<RightEdgeSidecar[\s\S]*?\) : rightEdgePresentation \? null : <Bar/
-    )
+    expect(app).toMatch(/rightEdgeDockVisible \? \(\s*<RightEdgeSidecar[\s\S]*?\) : rightEdgePresentation \? null : <Bar/)
     expect(sidecar).not.toMatch(/window\.toto\.resize/)
     expect(sidecar).toContain('tabIndex={open ? -1 : 0}')
     expect(sidecar).toContain('aria-hidden={open || undefined}')
@@ -411,16 +383,10 @@ describe('right-edge dock', () => {
     expect(sidecar).toContain("return 'Mic silent · check input'")
     expect(sidecar).toContain("return 'Transcription repair'")
     expect(css).not.toMatch(/@keyframes right-edge-sidecar-zone-in/)
-    const rightEdgeSpring = css.slice(
-      css.indexOf('@keyframes overlay-spring-in-right'),
-      css.indexOf('@keyframes overlay-spring-out-right')
-    )
+    const rightEdgeSpring = css.slice(css.indexOf('@keyframes overlay-spring-in-right'), css.indexOf('@keyframes overlay-spring-out-right'))
     expect(rightEdgeSpring).toContain('transform: translateX(10px);')
     expect(rightEdgeSpring).not.toContain('scale(')
-    const onboardingEdgePreviewSpring = css.slice(
-      css.indexOf('@keyframes onboard-edge-preview-in'),
-      css.indexOf('.overlay-spring {')
-    )
+    const onboardingEdgePreviewSpring = css.slice(css.indexOf('@keyframes onboard-edge-preview-in'), css.indexOf('.overlay-spring {'))
     expect(onboardingEdgePreviewSpring).toContain('transform: translateX(12px);')
     expect(onboardingEdgePreviewSpring).not.toContain('scale(')
     expect(css).toMatch(/\.right-edge-sidecar__answer \{[\s\S]*?width: 100%/)
@@ -437,23 +403,13 @@ describe('right-edge dock', () => {
     expect(app).toContain("reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'explicit-close' })")
     expect(app).toContain("type: 'park-settled'")
     expect(app).toContain("railHovering: rootElementRef.current?.matches(':hover') === true")
-    expect(app).toContain(
-      'shouldIgnoreRightEdgeNativeHover(rightEdgeDismissalLockRef.current, d.restoredFromParkedRail)'
-    )
-    expect(app).toMatch(
-      /reduceRightEdgeDismissalLock\(\s*rightEdgeDismissalLockRef\.current,\s*\{ type: 'native-hover-restored' \}\s*\)/
-    )
-    expect(app).toMatch(
-      /const onOverlayPointerEnter = useCallback\(\(\) => \{[\s\S]*?reduceRightEdgeDismissalLock\([\s\S]*?\{ type: 'renderer-pointer-enter' \}/
-    )
+    expect(app).toContain('shouldIgnoreRightEdgeNativeHover(rightEdgeDismissalLockRef.current, d.restoredFromParkedRail)')
+    expect(app).toMatch(/reduceRightEdgeDismissalLock\(\s*rightEdgeDismissalLockRef\.current,\s*\{ type: 'native-hover-restored' \}\s*\)/)
+    expect(app).toMatch(/const onOverlayPointerEnter = useCallback\(\(\) => \{[\s\S]*?reduceRightEdgeDismissalLock\([\s\S]*?\{ type: 'renderer-pointer-enter' \}/)
     expect(app).toMatch(/if \(nextLock !== 'open'\) return\s+setRightEdgeDockDismissed\(false\)/)
     expect(app).not.toContain("if (nextLock === 'open') setRightEdgeDockDismissed(false)")
-    expect(app).toMatch(
-      /const onOverlayPointerLeave = useCallback\(\(\) => \{[\s\S]*?const previousLock = rightEdgeDismissalLockRef\.current[\s\S]*?reduceRightEdgeDismissalLock\(previousLock, \{ type: 'renderer-pointer-leave' \}\)[\s\S]*?previousLock === 'closing' && nextLock === 'closing'/
-    )
-    expect(app).toMatch(
-      /else if \(a === 'metis-command'\) \{[\s\S]*?reduceRightEdgeDismissalLock\(rightEdgeDismissalLockRef\.current, \{ type: 'metis-command' \}\)/
-    )
+    expect(app).toMatch(/const onOverlayPointerLeave = useCallback\(\(\) => \{[\s\S]*?const previousLock = rightEdgeDismissalLockRef\.current[\s\S]*?reduceRightEdgeDismissalLock\(previousLock, \{ type: 'renderer-pointer-leave' \}\)[\s\S]*?previousLock === 'closing' && nextLock === 'closing'/)
+    expect(app).toMatch(/else if \(a === 'metis-command'\) \{[\s\S]*?reduceRightEdgeDismissalLock\(rightEdgeDismissalLockRef\.current, \{ type: 'metis-command' \}\)/)
     expect(app).toMatch(/\{showWideMeetingChrome && \(\s*<QuickActions/)
     expect(app).toMatch(/\{showWideMeetingChrome && listen\.error/)
     expect(e2eSmoke).toContain('verifyRightEdgeReferenceLayout')
@@ -494,10 +450,8 @@ describe('right-edge dock', () => {
     const cursorHover = app.slice(cursorHoverAt, cursorHoverAt + 1400)
 
     expect(cursorHover).toContain('if (d.hovering)')
-    expect(cursorHover).toContain(
-      'shouldIgnoreRightEdgeNativeHover(rightEdgeDismissalLockRef.current, d.restoredFromParkedRail)'
-    )
-    expect(cursorHover).toContain('reduceRightEdgeDismissalLock(')
+    expect(cursorHover).toContain('shouldIgnoreRightEdgeNativeHover(rightEdgeDismissalLockRef.current, d.restoredFromParkedRail)')
+    expect(cursorHover).toContain("reduceRightEdgeDismissalLock(")
     expect(cursorHover).toContain("{ type: 'native-hover-restored' }")
     expect(cursorHover).toContain('setRightEdgeDockDismissed(false)')
     expect(cursorHover).toContain("dispatchAutoHide({ type: 'reveal-now' })")
@@ -510,54 +464,34 @@ describe('right-edge dock', () => {
     const cursorHover = app.slice(cursorHoverAt, cursorHoverAt + 2400)
     // Hide keeps its drawer mounted while the page is collapsed: a main park must render the rail even when
     // the page had already collapsed, or the parked window holds an open drawer.
-    expect(cursorHover).toMatch(
-      /if \(d\.parked && rightEdgePresentation\) \{\s*wasRevealedRef\.current = false\s*setRightEdgeDockDismissed\(true\)\s*setOverlaySpring\('rest'\)/
-    )
+    expect(cursorHover).toMatch(/if \(d\.parked && rightEdgePresentation\) \{\s*wasRevealedRef\.current = false\s*setRightEdgeDockDismissed\(true\)\s*setOverlaySpring\('rest'\)/)
     expect(cursorHover).not.toContain('d.parked && rightEdgePresentation && overlayRevealedRef.current')
     const askAt = app.indexOf("if (a === 'ask') {")
     const ask = app.slice(askAt, askAt + 800)
     expect(ask).toContain('setFocusSignal((x) => x + 1)')
-    expect(ask).toMatch(
-      /if \(rightEdgePresentation\) \{[\s\S]*?\{ type: 'explicit-reveal' \}[\s\S]*?setRightEdgeDockDismissed\(false\)[\s\S]*?dispatchAutoHide\(\{ type: 'reveal-now' \}\)/
-    )
+    expect(ask).toMatch(/if \(rightEdgePresentation\) \{[\s\S]*?\{ type: 'explicit-reveal' \}[\s\S]*?setRightEdgeDockDismissed\(false\)[\s\S]*?dispatchAutoHide\(\{ type: 'reveal-now' \}\)/)
     expect(sidecar).toContain('}, [open, focusSignal])')
-    expect(app).toMatch(
-      /\} else if \(rightEdgePresentation\) \{\s*\/\/[^\n]*\n\s*closeRightEdgeDock\(\)\s*\} else \{\s*void window\.toto\.hide\(\)/
-    )
+    expect(app).toMatch(/\} else if \(rightEdgePresentation\) \{\s*\/\/[^\n]*\n\s*closeRightEdgeDock\(\)\s*\} else \{\s*void window\.toto\.hide\(\)/)
   })
 
   it('guards a dirty recap before it launches and collapses for the standalone Intelligence dashboard', () => {
-    expect(app).toMatch(
-      /const approveReviewNav = useCallback\(async \(\): Promise<boolean> => confirmReviewNavigation\(\), \[confirmReviewNavigation\]\)/
-    )
-    expect(app).toMatch(
-      /const openIntelligenceDashboard = useCallback\(async[\s\S]*?if \(!\(await approveReviewNav\(\)\)\) return/
-    )
-    expect(app).toContain('Save or discard the recap before opening Mantu Intelligence.')
+    expect(app).toMatch(/const approveReviewNav = useCallback\(async \(\): Promise<boolean> => confirmReviewNavigation\(\), \[confirmReviewNavigation\]\)/)
+    expect(app).toMatch(/const openIntelligenceDashboard = useCallback\(async[\s\S]*?if \(!\(await approveReviewNav\(\)\)\) return/)
+    expect(app).toContain("Save or discard the recap before opening Mantu Intelligence.")
     expect(app).toMatch(/window\.toto\.brainOpenDashboard\(\)[\s\S]*?minimizeForIntelligence\(\)/)
-    expect(app).toMatch(
-      /const closeRightEdgeDock = useCallback\(\(\): void => \{[\s\S]*?forceParkAfterHideRef\.current = true[\s\S]*?dispatchAutoHide\(\{ type: 'collapse-now' \}\)/
-    )
-    expect(app).toMatch(
-      /const minimizeForIntelligence = useCallback\(\(\): void => \{[\s\S]*?if \(rightEdgePresentation\) closeRightEdgeDock\(\)/
-    )
+    expect(app).toMatch(/const closeRightEdgeDock = useCallback\(\(\): void => \{[\s\S]*?forceParkAfterHideRef\.current = true[\s\S]*?dispatchAutoHide\(\{ type: 'collapse-now' \}\)/)
+    expect(app).toMatch(/const minimizeForIntelligence = useCallback\(\(\): void => \{[\s\S]*?if \(rightEdgePresentation\) closeRightEdgeDock\(\)/)
     expect(app).toContain('const [rightEdgeDockDismissed, setRightEdgeDockDismissed] = useState(false)')
-    expect(app).toMatch(
-      /const overlaySurfaceRevealed = rightEdgePresentation && rightEdgeDockDismissed \? false : overlayRevealed/
-    )
+    expect(app).toMatch(/const overlaySurfaceRevealed = rightEdgePresentation && rightEdgeDockDismissed \? false : overlayRevealed/)
     expect(app).toMatch(/const edgeDockParked = rightEdgePresentation && rightEdgeDockDismissed/)
     expect(app).toMatch(/const overlayPeeked = \(edgeDockParked && overlaySpring === 'rest'\) \|\| overlayShowPeek/)
-    expect(app).toMatch(
-      /const revealOverlay = useCallback\(\(\) => \{[\s\S]*?reduceRightEdgeDismissalLock\(rightEdgeDismissalLockRef\.current, \{ type: 'explicit-reveal' \}\)[\s\S]*?setRightEdgeDockDismissed\(false\)/
-    )
+    expect(app).toMatch(/const revealOverlay = useCallback\(\(\) => \{[\s\S]*?reduceRightEdgeDismissalLock\(rightEdgeDismissalLockRef\.current, \{ type: 'explicit-reveal' \}\)[\s\S]*?setRightEdgeDockDismissed\(false\)/)
   })
 
   it('does not hand off to Intelligence while a screen capture is still active', () => {
     expect(sidecar).toMatch(/if \(!onOpenIntelligence \|\| capturing \|\| intelligence\.status === 'opening'\) return/)
     expect(sidecar).toMatch(/disabled=\{intelligence\.status === 'opening' \|\| capturing\}/)
-    expect(app).toMatch(
-      /const openIntelligenceDashboard = useCallback\(async[\s\S]*?if \(capturing \|\| capturingRef\.current\) return \{ ok: false, error: 'Wait for screen capture to finish before opening Mantu Intelligence\.' \}/
-    )
+    expect(app).toMatch(/const openIntelligenceDashboard = useCallback\(async[\s\S]*?if \(capturing \|\| capturingRef\.current\) return \{ ok: false, error: 'Wait for screen capture to finish before opening Mantu Intelligence\.' \}/)
   })
 })
 
@@ -631,19 +565,11 @@ async function bundleK01Harness(): Promise<{ js: string; css: string }> {
         load: (id: string) => (id === K01_HARNESS_ID ? K01_HARNESS : null)
       }
     ],
-    build: {
-      write: false,
-      minify: false,
-      cssCodeSplit: false,
-      rollupOptions: { input: K01_HARNESS_ID, output: { format: 'iife', inlineDynamicImports: true } }
-    }
+    build: { write: false, minify: false, cssCodeSplit: false, rollupOptions: { input: K01_HARNESS_ID, output: { format: 'iife', inlineDynamicImports: true } } }
   })) as Rollup.RollupOutput | Rollup.RollupOutput[]
   const files = (Array.isArray(output) ? output : [output]).flatMap((result) => result.output)
   return {
-    js: files
-      .filter((file): file is Rollup.OutputChunk => file.type === 'chunk')
-      .map((chunk) => chunk.code)
-      .join('\n'),
+    js: files.filter((file): file is Rollup.OutputChunk => file.type === 'chunk').map((chunk) => chunk.code).join('\n'),
     css: files
       .filter((file): file is Rollup.OutputAsset => file.type === 'asset' && file.fileName.endsWith('.css'))
       .map((asset) => String(asset.source))
@@ -667,15 +593,11 @@ describe('RE-K01: right-edge keyboard and IME in Chromium (D4, D10, D11)', () =>
   /** Renders the patch; true when the composer holds focus in the same task. */
   const setDock = (patch: { open?: boolean; focusSignal?: number }): Promise<boolean> =>
     page.evaluate((p) => (window as unknown as { __k01: K01 }).__k01.set(p), patch)
-  const composerFocused = (): Promise<boolean> =>
-    page.evaluate(() => (window as unknown as { __k01: K01 }).__k01.composerFocused())
+  const composerFocused = (): Promise<boolean> => page.evaluate(() => (window as unknown as { __k01: K01 }).__k01.composerFocused())
   const blur = (): Promise<void> => page.evaluate(() => (window as unknown as { __k01: K01 }).__k01.blur())
   const log = (): Promise<K01Log> => page.evaluate(() => (window as unknown as { __k01: K01 }).__k01.log)
   const imeKey = (selector: string, key: string, kind: 'composing' | '229'): Promise<void> =>
-    page.evaluate(
-      ([s, k, c]) => (window as unknown as { __k01: K01 }).__k01.imeKey(s, k, c as 'composing' | '229'),
-      [selector, key, kind]
-    )
+    page.evaluate(([s, k, c]) => (window as unknown as { __k01: K01 }).__k01.imeKey(s, k, c as 'composing' | '229'), [selector, key, kind])
 
   beforeAll(async () => {
     const { js, css } = await bundleK01Harness()
