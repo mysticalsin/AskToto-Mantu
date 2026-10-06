@@ -141,21 +141,21 @@ describe('M2-0415 Windows baseline workflow lane', () => {
   it('is dispatchable without pull_request and guarded to main on a hosted Windows runner', () => {
     expect(workflowEvents()).toEqual(['workflow_call', 'workflow_dispatch'])
     const baseline = jobBlock('baseline')
-    expect(baseline).toContain("runs-on: windows-latest")
+    expect(baseline).toContain('runs-on: windows-latest')
     expect(baseline).toContain("if: github.ref == 'refs/heads/main'")
     expect(baseline).not.toContain('pull_request')
   })
 
   it('installs the published 1.9.6 artifact before measuring with the baseline harness', () => {
     const baseline = jobBlock('baseline')
-    expect(workflow).toContain("default: v1.9.6-unsigned")
-    expect(baseline).toContain("gh release download $env:RELEASE_TAG")
-    expect(baseline).toContain("node scripts/qa/verify-sha256sums.mjs release-artifact $sums")
-    expect(baseline).toContain("Start-Process -FilePath $setup.FullName")
-    expect(baseline).toContain("./scripts/qa/windows/baseline.ps1")
-    expect(baseline).toContain("-Artifact $env:WINDOWS_BASELINE_SHA256")
-    expect(baseline).toContain("-App \"$env:RUNNER_TEMP\\windows-baseline-install\\Metis.exe\"")
-    expect(baseline).toContain("node scripts/evidence/check.mjs --ticket M2-0195 --bundle baseline-output")
+    expect(workflow).toContain('default: v1.9.6-unsigned')
+    expect(baseline).toContain('gh release download $env:RELEASE_TAG')
+    expect(baseline).toContain('node scripts/qa/verify-sha256sums.mjs release-artifact $sums')
+    expect(baseline).toContain('Start-Process -FilePath $setup.FullName')
+    expect(baseline).toContain('./scripts/qa/windows/baseline.ps1')
+    expect(baseline).toContain('-Artifact $env:WINDOWS_BASELINE_SHA256')
+    expect(baseline).toContain('-App "$env:RUNNER_TEMP\\windows-baseline-install\\Metis.exe"')
+    expect(baseline).toContain('node scripts/evidence/check.mjs --ticket M2-0195 --bundle baseline-output')
   })
 
   it('uploads the content-free baseline rows for the lead to file as private evidence', () => {

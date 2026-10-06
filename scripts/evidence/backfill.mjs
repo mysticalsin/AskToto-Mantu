@@ -97,7 +97,10 @@ export function resolveBackfill(ledger, recordsByTicket, options = {}) {
       .map((level) => {
         const record = latest.get(level)
         if (record && record.result === 'PASS') return null
-        return { level, reason: record ? 'latest verified record is not PASS' : 'no verified PR evidence found for this level' }
+        return {
+          level,
+          reason: record ? 'latest verified record is not PASS' : 'no verified PR evidence found for this level'
+        }
       })
       .filter((gap) => gap !== null)
 
@@ -118,7 +121,13 @@ export function resolveBackfill(ledger, recordsByTicket, options = {}) {
     if (ticketGaps.length > 0) {
       const targetStatus = targetStatusForGap(ticket, latest)
       for (const { level, reason, target_status: targetStatusOverride } of ticketGaps) {
-        gaps.push({ ticket: ticket.id, status: ticket.status, level, reason, target_status: targetStatusOverride ?? targetStatus })
+        gaps.push({
+          ticket: ticket.id,
+          status: ticket.status,
+          level,
+          reason,
+          target_status: targetStatusOverride ?? targetStatus
+        })
       }
     }
   }
@@ -163,27 +172,33 @@ function leadActionReadme({ backfilled, gaps, legacyFixFiled = [] }) {
 
   if (backfilled.size > 0) {
     lines.push('## LEAD_ACTION: file these records')
-    lines.push('For each ticket below, append its records/<id>.jsonl lines to the private evidence store\'s matching file.')
+    lines.push(
+      "For each ticket below, append its records/<id>.jsonl lines to the private evidence store's matching file."
+    )
     for (const id of [...backfilled.keys()].sort()) lines.push(`- ${id}: records/${id}.jsonl`)
     lines.push('')
   }
 
   if (legacyFixFiled.length > 0) {
     lines.push('## LEAD_ACTION: file OD-65 legacy fix exemptions')
-    lines.push('These fix tickets have verified LOCALLY_TESTED evidence without red-before repro and are filed under the OD-65 legacy exemption.')
+    lines.push(
+      'These fix tickets have verified LOCALLY_TESTED evidence without red-before repro and are filed under the OD-65 legacy exemption.'
+    )
     for (const id of legacyFixFiled) lines.push(`- ${id}: OD-65 legacy fix exemption`)
     lines.push('')
   }
 
   if (gaps.length > 0) {
     lines.push('## LEAD_ACTION: revert tickets with no verified evidence for a required level')
-    lines.push('Acceptance requires reverting each ticket below to the target status shown for it in ledger/tickets.json.')
+    lines.push(
+      'Acceptance requires reverting each ticket below to the target status shown for it in ledger/tickets.json.'
+    )
     lines.push(
       'Note: the wired.client/contract_fake and repro.test existence checks above ran against this ' +
-      'checkout\'s current HEAD, not each PR\'s own commit, so a path renamed after a PR merged can show up ' +
-      'as a gap here even though the PR\'s evidence was valid when it merged. That only ever reopens a ' +
-      'ticket, never falsely closes one — before reverting, check whether a gap\'s wired/repro path used to ' +
-      'exist under a different name.'
+        "checkout's current HEAD, not each PR's own commit, so a path renamed after a PR merged can show up " +
+        "as a gap here even though the PR's evidence was valid when it merged. That only ever reopens a " +
+        "ticket, never falsely closes one — before reverting, check whether a gap's wired/repro path used to " +
+        'exist under a different name.'
     )
     const byTicket = new Map()
     for (const gap of gaps) {
@@ -201,8 +216,8 @@ function leadActionReadme({ backfilled, gaps, legacyFixFiled = [] }) {
   lines.push('## LEAD_ACTION: re-verify M2-0047 and M2-0144 against their own acceptance')
   lines.push(
     'These two are known already-visible false closures. Check gaps.jsonl for M2-0047 and M2-0144 ' +
-    'above; whether or not they appear there, re-read each against its own acceptance criteria and ' +
-    'record any unmet line as NOT_MET with the ticket that now owns it.'
+      'above; whether or not they appear there, re-read each against its own acceptance criteria and ' +
+      'record any unmet line as NOT_MET with the ticket that now owns it.'
   )
   lines.push('')
 
@@ -211,19 +226,19 @@ function leadActionReadme({ backfilled, gaps, legacyFixFiled = [] }) {
   if (earliest) {
     lines.push(
       `Run \`node scripts/evidence/sample.mjs --ledger <private ledger path> --since ${earliest} ` +
-      '--seed <gate commit sha>` against the filed records above and record the result.'
+        '--seed <gate commit sha>` against the filed records above and record the result.'
     )
     lines.push(
       `--since must be at or before ${earliest} (the oldest recorded_at among the back-filled records, ` +
-      'printed above) — for example the program start. sample.mjs\'s closedSince keeps only tickets whose ' +
-      'newest record is at or after --since, and every back-filled record keeps its original PR ' +
-      'recorded_at; a later --since (such as the previous gate date) would silently drop the whole ' +
-      'back-filled set from the sample.'
+        "printed above) — for example the program start. sample.mjs's closedSince keeps only tickets whose " +
+        'newest record is at or after --since, and every back-filled record keeps its original PR ' +
+        'recorded_at; a later --since (such as the previous gate date) would silently drop the whole ' +
+        'back-filled set from the sample.'
     )
   } else {
     lines.push(
       'Run `node scripts/evidence/sample.mjs --ledger <private ledger path> --since <program start> ' +
-      '--seed <gate commit sha>` against the filed records above and record the result.'
+        '--seed <gate commit sha>` against the filed records above and record the result.'
     )
   }
   lines.push('')
@@ -267,7 +282,8 @@ async function main() {
       'legacy-fix': { type: 'string' }
     }
   })
-  if (!values.ledger) return usageExit('usage: backfill.mjs --ledger <path> --repo <owner/name> [--out <dir>] [--token <token>]')
+  if (!values.ledger)
+    return usageExit('usage: backfill.mjs --ledger <path> --repo <owner/name> [--out <dir>] [--token <token>]')
   if (!values.repo) return usageExit('backfill.mjs: --repo is required, e.g. --repo mysticalsin/AskToto-Mantu')
 
   let ledger
@@ -300,7 +316,9 @@ async function main() {
   const outDir = resolve(values.out ?? DEFAULT_OUT)
   writeBackfill(outDir, result)
 
-  console.log(`evidence backfill: ${result.backfilled.size} ticket(s) backfilled, ${result.gaps.length} gap(s) -> ${outDir}`)
+  console.log(
+    `evidence backfill: ${result.backfilled.size} ticket(s) backfilled, ${result.gaps.length} gap(s) -> ${outDir}`
+  )
   // A gap is an expected outcome of this tool (a ticket needing lead review), not a tool failure: the
   // job stays green and the artifact + this line carry the gap count for the lead to act on.
 }
