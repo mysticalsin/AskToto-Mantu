@@ -22,8 +22,7 @@ import { describe, expect, it } from 'vitest'
  * Pinned as source text (this repo's established structural-proof pattern) because the regression is a
  * CSS/markup shape, not a pure function.
  */
-const read = (...p: string[]): string =>
-  readFileSync(join(__dirname, ...p), 'utf8').replace(/\r\n/g, '\n')
+const read = (...p: string[]): string => readFileSync(join(__dirname, ...p), 'utf8').replace(/\r\n/g, '\n')
 
 const css = readAppCss()
 const barSrc = read('components', 'Bar.tsx')
@@ -56,6 +55,6 @@ describe('MQA-272 — the invisible-state overlay shows a multi-colour glow, not
   })
 
   it('the overlay root widens its margin while invisible so the halo is not clipped by the window', () => {
-    expect(appSrc).toMatch(/contentProtection[^\n]*stealth-glow/)
+    expect(appSrc).toMatch(/\(settings\?\.contentProtection \?\? true\) && !minimized\s*\?\s*'p-5 stealth-glow'/)
   })
 })

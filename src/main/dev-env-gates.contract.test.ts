@@ -12,13 +12,15 @@ import { devEnv, isPackagedBuild } from './dev-env'
 // the established pattern (index-audit-fixes.contract.test.ts, c-main-fixes.contract.test.ts) lifts the
 // real expression out of the source and EXECUTES it with injected collaborators, so these assertions
 // exercise the shipped logic rather than its shape.
+import { sourceIndexOf } from '../../scripts/lib/source-layout'
+
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 
 /** Slice the source from `from` up to (excluding) the next occurrence of `to`. */
 function sliceBetween(from: string, to: string): string {
-  const start = indexSrc.indexOf(from)
+  const start = sourceIndexOf(indexSrc, from)
   expect(start, `marker not found: ${from}`).toBeGreaterThan(-1)
-  const end = indexSrc.indexOf(to, start)
+  const end = sourceIndexOf(indexSrc, to, start + 1)
   expect(end, `end marker not found after ${from}: ${to}`).toBeGreaterThan(-1)
   return indexSrc.slice(start, end)
 }
@@ -129,7 +131,11 @@ describe('MQA-167 — the destructive self-test suite must not run in a packaged
       async (out: string) => {
         ran.push(out)
       },
-      { quit: () => { quit += 1 } },
+      {
+        quit: () => {
+          quit += 1
+        }
+      },
       console,
       false,
       () => {}

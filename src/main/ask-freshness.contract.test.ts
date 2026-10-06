@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { BaseSettingsSchema, DEFAULT_SETTINGS, ASK_MEMORY_IDLE_MS } from '@shared/ipc'
 import { isTransient } from './llm/retry'
 import { createListeningStateHandler } from './listening-state-ipc'
+import { sourceIndexOf } from '../../scripts/lib/source-layout'
 
 // Source-contract lock for Tony's 2026-08-04 requirement: a plain typed/screen question asked OUTSIDE a
 // live meeting must not inherit the previous question's Q&A ("it uses the old conversation info in the
@@ -26,7 +27,7 @@ describe('fresh-question boundary at the askStart choke point', () => {
   })
 
   it('the gate targets exactly the plain interactive surface: answer/vision, no overrides, not listening', () => {
-    const start = indexSrc.indexOf('// Fresh-question boundary (see the state block above)')
+    const start = sourceIndexOf(indexSrc, '// Fresh-question boundary (see the state block above)')
     expect(start).toBeGreaterThan(-1)
     const body = indexSrc.slice(start, start + 1200)
     expect(body).toMatch(/req\.mode === 'answer' \|\| req\.mode === 'vision'/)
@@ -36,7 +37,10 @@ describe('fresh-question boundary at the askStart choke point', () => {
   })
 
   it('the gate clears BOTH carriers together — renderer history and the server-side Dust conversation', () => {
-    const start = indexSrc.indexOf('if (!s.askFollowUpMemory || Date.now() - lastPlainAskAt > ASK_MEMORY_IDLE_MS) {')
+    const start = sourceIndexOf(
+      indexSrc,
+      'if (!s.askFollowUpMemory || Date.now() - lastPlainAskAt > ASK_MEMORY_IDLE_MS) {'
+    )
     expect(start).toBeGreaterThan(-1)
     const body = indexSrc.slice(start, start + 200)
     expect(body).toMatch(/req\.history = \[\]/)
@@ -50,7 +54,7 @@ describe('fresh-question boundary at the askStart choke point', () => {
   })
 
   it('listeningState keeps the boundary suspended during a live meeting', async () => {
-    const start = indexSrc.indexOf('ipcMain.handle(IPC.listeningState')
+    const start = sourceIndexOf(indexSrc, 'ipcMain.handle(IPC.listeningState')
     expect(start).toBeGreaterThan(-1)
     expect(indexSrc.slice(start, start + 500)).toMatch(/setListeningActive,/)
 
@@ -59,7 +63,9 @@ describe('fresh-question boundary at the askStart choke point', () => {
       assertMainWindow: () => {},
       requireAuth: () => true,
       acceptTransition: () => true,
-      setListeningActive: (on) => { listeningActive = on },
+      setListeningActive: (on) => {
+        listeningActive = on
+      },
       setTrayRecording: () => {},
       setRecordingPowerSaveBlock: () => {},
       onMeetingStart: () => {},
@@ -75,7 +81,7 @@ describe('fresh-question boundary at the askStart choke point', () => {
   })
 
   it('IPC.askResetContext resets the Dust conversation — "New chat" is no longer a no-op for Dust users', () => {
-    const start = indexSrc.indexOf('ipcMain.handle(IPC.askResetContext')
+    const start = sourceIndexOf(indexSrc, 'ipcMain.handle(IPC.askResetContext')
     expect(start).toBeGreaterThan(-1)
     const body = indexSrc.slice(start, start + 300)
     expect(body).toMatch(/resetDustConversation\(\)/)
@@ -85,7 +91,10 @@ describe('fresh-question boundary at the askStart choke point', () => {
 
 describe('review fixes (2026-08-04) stay wired', () => {
   it('flipping askFollowUpMemory is a conversation boundary in MAIN (Dust conversation + idle clock)', () => {
-    const start = indexSrc.indexOf("if ('askFollowUpMemory' in p && next.askFollowUpMemory !== cur.askFollowUpMemory) {")
+    const start = sourceIndexOf(
+      indexSrc,
+      "if ('askFollowUpMemory' in p && next.askFollowUpMemory !== cur.askFollowUpMemory) {"
+    )
     expect(start).toBeGreaterThan(-1)
     const body = indexSrc.slice(start, start + 200)
     expect(body).toMatch(/resetDustConversation\(\)/)
@@ -93,7 +102,7 @@ describe('review fixes (2026-08-04) stay wired', () => {
   })
 
   it('flipping askFollowUpMemory clears the RENDERER history refs (pre-opt-in Q&A never surfaces)', () => {
-    const start = appSrc.indexOf('// Flipping follow-up memory is itself a conversation boundary')
+    const start = sourceIndexOf(appSrc, '// Flipping follow-up memory is itself a conversation boundary')
     expect(start).toBeGreaterThan(-1)
     const body = appSrc.slice(start, start + 700)
     expect(body).toMatch(/historyRef\.current = \[\]/)
@@ -102,7 +111,7 @@ describe('review fixes (2026-08-04) stay wired', () => {
   })
 
   it("screen-ask's stay-fast branch re-captures when history would be wiped (memory off or idle-expired)", () => {
-    const start = appSrc.indexOf('const memoryLive =')
+    const start = sourceIndexOf(appSrc, 'const memoryLive =')
     expect(start).toBeGreaterThan(-1)
     const body = appSrc.slice(start, start + 400)
     expect(body).toMatch(/settings\?\.askFollowUpMemory \?\? false/)
@@ -118,18 +127,18 @@ describe('review fixes (2026-08-04) stay wired', () => {
 
 describe('renderer clears its own carriers at every conversation boundary', () => {
   it('reset() (New chat / Cmd+Shift+R) also resets the main-owned Dust conversation', () => {
-    const start = appSrc.indexOf('const reset = useCallback(() => {')
+    const start = sourceIndexOf(appSrc, 'const reset = useCallback(() => {')
     expect(start).toBeGreaterThan(-1)
-    const body = appSrc.slice(start, appSrc.indexOf('}, [', start))
+    const body = appSrc.slice(start, sourceIndexOf(appSrc, '}, [', start))
     expect(body).toMatch(/historyRef\.current = \[\]/)
     expect(body).toMatch(/copilotHistoryRef\.current = \[\]/)
     expect(body).toMatch(/window\.toto\.resetAskContext\(\)/)
   })
 
   it('startListen() clears ad-hoc history so pre-meeting Q&A never rides into mid-meeting asks', () => {
-    const start = appSrc.indexOf('const startListen = useCallback(')
+    const start = sourceIndexOf(appSrc, 'const startListen = useCallback(')
     expect(start).toBeGreaterThan(-1)
-    const body = appSrc.slice(start, appSrc.indexOf('}, [', start))
+    const body = appSrc.slice(start, sourceIndexOf(appSrc, '}, [', start))
     expect(body).toMatch(/historyRef\.current = \[\]/)
     expect(body).toMatch(/copilotHistoryRef\.current = \[\]/)
   })
@@ -152,7 +161,9 @@ describe('key-exhaustion failover classification (the "Kimi maxed out → next k
 
   it('the pre-token failover seam hands ANY exhausted-retry error to the next provider', () => {
     // F3 hedge: this call now also forwards the optional race context (undefined outside a hedged ask).
-    expect(indexSrc).toMatch(/if \(!gotToken && provider !== 'local' && failover\(attempted\.concat\(provider\), undefined, race\)\) return/)
+    expect(indexSrc).toMatch(
+      /if \(!gotToken && provider !== 'local' && failover\(attempted\.concat\(provider\), undefined, race\)\) return/
+    )
   })
 
   it('the reasoning-only-no-answer case (Kimi burning its budget on thinking) stays pre-token → fails over', () => {
@@ -183,9 +194,7 @@ describe('onboarding fires the real OS permission flow proactively (max legitima
   it('macOS: setup-scene mount triggers the mic prompt + screen TCC registration without a button press', () => {
     // Normalize CRLF so a 4k window is the same on Windows checkout as on Ubuntu.
     const src = onboardingSrc.replace(/\r\n/g, '\n')
-    expect(src).toMatch(
-      /if \(scene !== 'setup'\) return[\s\S]{0,5000}?window\.toto\.requestPermissionsUpfront\(\)/
-    )
+    expect(src).toMatch(/if \(scene !== 'setup'\) return[\s\S]{0,5000}?window\.toto\.requestPermissionsUpfront\(\)/)
   })
 
   it('Windows: mic consent resolves via a renderer getUserMedia probe (main has no ask API off darwin)', () => {

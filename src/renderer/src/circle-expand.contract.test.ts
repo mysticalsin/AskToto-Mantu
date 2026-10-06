@@ -30,9 +30,7 @@ describe('circle-expand: click Expand Métis must not snap back', () => {
     expect(decideCircleRestMinimize(expandedJarvis)).toBe('stay')
     expect(decideCircleRestMinimize({ ...expandedJarvis, style: 'jakub' })).toBe('stay')
     expect(decideCircleRestMinimize({ ...expandedJarvis, styleChanged: true })).toBe('minimize')
-    expect(decideCircleRestMinimize({ ...expandedJarvis, minimized: true, styleChanged: true })).toBe(
-      'stay'
-    )
+    expect(decideCircleRestMinimize({ ...expandedJarvis, minimized: true, styleChanged: true })).toBe('stay')
     expect(
       decideCircleRestMinimize({
         layout: 'bar',
@@ -52,13 +50,25 @@ describe('circle-expand: click Expand Métis must not snap back', () => {
   it('Expand Métis click on Jarvis/ObsidianOrb activates when dragMoved is false', () => {
     let n = 0
     expect(pillClickShouldExpand(false)).toBe(true)
-    expect(runOrbPillActivate({ enableDrag: true, dragMoved: false, onActivate: () => { n++ } })).toBe(
-      true
-    )
+    expect(
+      runOrbPillActivate({
+        enableDrag: true,
+        dragMoved: false,
+        onActivate: () => {
+          n++
+        }
+      })
+    ).toBe(true)
     expect(n).toBe(1)
-    expect(runOrbPillActivate({ enableDrag: true, dragMoved: true, onActivate: () => { n++ } })).toBe(
-      false
-    )
+    expect(
+      runOrbPillActivate({
+        enableDrag: true,
+        dragMoved: true,
+        onActivate: () => {
+          n++
+        }
+      })
+    ).toBe(false)
     expect(n).toBe(1)
     expect(orb).toMatch(/runOrbPillActivate\(\{ enableDrag, dragMoved: dragMovedRef\.current, onActivate \}\)/)
     expect(pill).toMatch(/onActivate=\{onExpand\}/)
@@ -99,7 +109,7 @@ describe('circle-expand: click Expand Métis must not snap back', () => {
     expect(app).toMatch(/window\.toto\.minimize\(true\)\.then/)
     expect(app).toMatch(/if \(overlayIdle\)/)
     expect(app).toMatch(
-      /overlayIdle \? overlaySpringClassName\(overlaySpring, rightEdgePresentation \? 'right' : 'top'\) : circleRestSpringClassName\(circleRestSpring\)/
+      /overlayIdle\s*\?\s*overlaySpringClassName\(overlaySpring, rightEdgePresentation \? 'right' : 'top'\)\s*:\s*circleRestSpringClassName\(circleRestSpring\)/
     )
   })
 
