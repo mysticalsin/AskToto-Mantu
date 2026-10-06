@@ -11,7 +11,6 @@ import {
   WINDOW_MEASURED_REPEATS,
   WINDOW_STAGE_BUDGET_MS,
   WINDOW_VARIANTS,
-  WINDOW_CONSTRUCTION_ROOT_CAUSE,
   bootStagesFromAudit,
   buildLaunchFailureReport,
   buildReport,
@@ -589,132 +588,7 @@ describe('windowConstructionGate (M2-0519)', () => {
       { name: 'st-1.json', report: { harness: 'ST-1', row: 'none' } }
     ])
     expect(gate).toMatchObject({ pass: true, budgetMs: 250, failures: [] })
-    expect(gate.rootCause).toEqual(WINDOW_CONSTRUCTION_ROOT_CAUSE)
-    expect(gate.rootCause).toMatchObject({
-      classification: 'LAUNCH_VARIANCE',
-      evidenceRuns: ['36999698235', '37071491310', '37156371974'],
-      evidence: [{ run: '36999698235' }, { run: '37071491310' }, { run: '37156371974' }],
-      baseline: {
-        since: 'OD-42',
-        failedRuns: 3,
-        completeRuns: 39,
-        overBudgetOpaqueLaunches: 3,
-        opaqueLaunches: 78,
-        opaqueConstructMedianMs: 119,
-        opaqueConstructP95Ms: 184
-      },
-      leadAction: expect.stringContaining('st-1-macos-window/st1-report/window-gate.json')
-    })
-    // 37080909059 is not a QA candidate run, so it is no evidence of this gate.
-    expect(JSON.stringify(gate.rootCause)).not.toContain('37080909059')
-    expect(gate.rootCause.fix).toContain('the 250 ms gate remains unchanged')
     expect(gate.remeasured).toEqual([])
-    expect(gate.rootCause.leadAction).toContain('dispatch qa-candidate three times on m2/integration-equivalent bytes')
-    expect(gate.rootCause.leadAction).toContain('pass: true with budgetMs: 250 each time')
-    expect(JSON.stringify(gate.rootCause)).not.toContain('harness-cold-first-measured-launch')
-    expect(JSON.stringify(gate.rootCause)).not.toContain('"over 250"')
-    // The per-launch numbers transcribed from each run's st-1-macos-window artifact (window-shipped-*.json).
-    expect(gate.rootCause.evidence).toMatchObject([
-      {
-        run: '36999698235',
-        measured: [
-          {
-            launch: 'window-shipped-opaque-1',
-            chrome: 'opaque',
-            constructMs: 351.9,
-            prewarmMs: 142.4,
-            witness: { loopP99Ms: 15.254, loopMaxMs: 41.55, writeMaxMs: 6.154, cpuBusyMaxPct: 85.2 }
-          },
-          {
-            launch: 'window-shipped-opaque-2',
-            chrome: 'opaque',
-            constructMs: 124.5,
-            prewarmMs: 68,
-            witness: { loopP99Ms: 15.933, loopMaxMs: 43.713, writeMaxMs: 51.805, cpuBusyMaxPct: 84.7 }
-          },
-          {
-            launch: 'window-shipped-transparent-1',
-            chrome: 'transparent',
-            constructMs: 107.7,
-            prewarmMs: 37.7,
-            witness: { loopP99Ms: 14.86, loopMaxMs: 41.517, writeMaxMs: 15.329, cpuBusyMaxPct: 76.7 }
-          },
-          {
-            launch: 'window-shipped-transparent-2',
-            chrome: 'transparent',
-            constructMs: 86.9,
-            prewarmMs: 24.8,
-            witness: { loopP99Ms: 14.5, loopMaxMs: 43.024, writeMaxMs: 4.847, cpuBusyMaxPct: 76.8 }
-          }
-        ]
-      },
-      {
-        run: '37071491310',
-        measured: [
-          {
-            launch: 'window-shipped-opaque-1',
-            chrome: 'opaque',
-            constructMs: 171.7,
-            prewarmMs: 81.7,
-            witness: { loopP99Ms: 15.778, loopMaxMs: 66.093, writeMaxMs: 19.925, cpuBusyMaxPct: 88.5 }
-          },
-          {
-            launch: 'window-shipped-opaque-2',
-            chrome: 'opaque',
-            constructMs: 88.2,
-            prewarmMs: 364.4,
-            witness: { loopP99Ms: 15.696, loopMaxMs: 67.437, writeMaxMs: 4.966, cpuBusyMaxPct: 55.2 }
-          },
-          {
-            launch: 'window-shipped-transparent-1',
-            chrome: 'transparent',
-            constructMs: 90.8,
-            prewarmMs: 31.7,
-            witness: { loopP99Ms: 14.049, loopMaxMs: 20.021, writeMaxMs: 18.772, cpuBusyMaxPct: 81.7 }
-          },
-          {
-            launch: 'window-shipped-transparent-2',
-            chrome: 'transparent',
-            constructMs: 74.4,
-            prewarmMs: 37.4,
-            witness: { loopP99Ms: 14.418, loopMaxMs: 31.031, writeMaxMs: 7.85, cpuBusyMaxPct: 59.2 }
-          }
-        ]
-      },
-      {
-        run: '37156371974',
-        measured: [
-          {
-            launch: 'window-shipped-opaque-1',
-            chrome: 'opaque',
-            constructMs: 254.8,
-            prewarmMs: 145.4,
-            witness: { loopP99Ms: 19.333, loopMaxMs: 67.961, writeMaxMs: 32.638, cpuBusyMaxPct: 97.7 }
-          },
-          {
-            launch: 'window-shipped-opaque-2',
-            chrome: 'opaque',
-            constructMs: 117.2,
-            prewarmMs: 54,
-            witness: { loopP99Ms: 15.827, loopMaxMs: 63.537, writeMaxMs: 4.528, cpuBusyMaxPct: 76.2 }
-          },
-          {
-            launch: 'window-shipped-transparent-1',
-            chrome: 'transparent',
-            constructMs: 85.8,
-            prewarmMs: 35.8,
-            witness: { loopP99Ms: 14.426, loopMaxMs: 33.587, writeMaxMs: 7.9, cpuBusyMaxPct: 76 }
-          },
-          {
-            launch: 'window-shipped-transparent-2',
-            chrome: 'transparent',
-            constructMs: 108.5,
-            prewarmMs: 55.9,
-            witness: { loopP99Ms: 15.0, loopMaxMs: 185.205, writeMaxMs: 26.132, cpuBusyMaxPct: 83.6 }
-          }
-        ]
-      }
-    ])
     expect(gate.rows).toEqual([
       {
         report: 'window-shipped-opaque-1/a.json',
@@ -1196,9 +1070,23 @@ describe('windowConstructionGate: one in-job re-measure per chrome (OD-66)', () 
 
   it('replays runs 37156371974 and 37071491310 from their recorded launches: red alone, green on one same-chrome re-measure', () => {
     /** The run's shipped launches in plan order, from the recorded per-launch numbers, after the two warm-ups. */
+    const recorded: Record<string, Record<string, { chrome: string; prewarmMs: number; constructMs: number }>> = {
+      // Per-launch numbers transcribed from each run's st-1-macos-window artifact (window-shipped-*.json).
+      '37156371974': {
+        'window-shipped-opaque-1': { chrome: 'opaque', prewarmMs: 145.4, constructMs: 254.8 },
+        'window-shipped-opaque-2': { chrome: 'opaque', prewarmMs: 54, constructMs: 117.2 },
+        'window-shipped-transparent-1': { chrome: 'transparent', prewarmMs: 35.8, constructMs: 85.8 },
+        'window-shipped-transparent-2': { chrome: 'transparent', prewarmMs: 55.9, constructMs: 108.5 }
+      },
+      '37071491310': {
+        'window-shipped-opaque-1': { chrome: 'opaque', prewarmMs: 81.7, constructMs: 171.7 },
+        'window-shipped-opaque-2': { chrome: 'opaque', prewarmMs: 364.4, constructMs: 88.2 },
+        'window-shipped-transparent-1': { chrome: 'transparent', prewarmMs: 31.7, constructMs: 90.8 },
+        'window-shipped-transparent-2': { chrome: 'transparent', prewarmMs: 37.4, constructMs: 74.4 }
+      }
+    }
     const recordedRun = (run: string) => {
-      const evidence = WINDOW_CONSTRUCTION_ROOT_CAUSE.evidence.find((entry) => entry.run === run)
-      const byLaunch = new Map(evidence!.measured.map((entry) => [entry.launch, entry]))
+      const byLaunch = new Map(Object.entries(recorded[run]))
       return [
         launch('window-warmup-shipped-opaque', { ...windowReport('shipped', false, 40, 900, 1), warmup: true }),
         launch('window-warmup-shipped-transparent', { ...windowReport('shipped', true, 30, 600, 2), warmup: true }),

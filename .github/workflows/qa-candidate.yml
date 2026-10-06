@@ -1040,6 +1040,7 @@ jobs:
               "${warmup_args[@]}" \
               --report-dir "st1-report/$run" \
               --out "st1-report/$run/$run.json" \
+              </dev/null \
               || echo "::warning::$run ended without PASS; its report says why."
           done
       # OD-66: one in-job re-measure per chrome replaces the whole-check re-run. After every planned launch, the plan
