@@ -18,7 +18,15 @@ const wa = (width: number, height: number, x = 0, y = 0): Rect => ({ x, y, width
 const bottom = (r: Rect): number => r.y + r.height
 const right = (r: Rect): number => r.x + r.width
 
-function store(options: { anchors?: Record<string, number>; legacy?: Record<string, number>; locked?: string[]; live?: boolean; failWrites?: boolean } = {}) {
+function store(
+  options: {
+    anchors?: Record<string, number>
+    legacy?: Record<string, number>
+    locked?: string[]
+    live?: boolean
+    failWrites?: boolean
+  } = {}
+) {
   const anchors: Record<string, number> = { ...options.anchors }
   const legacy: Record<string, number> = { ...options.legacy }
   const saves: Array<Record<string, number>> = []
@@ -46,7 +54,14 @@ describe('right-edge anchor store (M2-0202 spec v3 §2)', () => {
 
   it('RE-G04: the converted anchor matches the tab main placed for every legacy normalized Y', () => {
     for (const area of [wa(853, 432), wa(1024, 528), wa(1440, 875, 0, 25), wa(1920, 1040, -1920, 0)]) {
-      const metrics: DisplayMetrics = { bounds: area, workArea: area, hasNotch: false, notchWidth: 0, menuBarHeight: 0, source: 'heuristic' }
+      const metrics: DisplayMetrics = {
+        bounds: area,
+        workArea: area,
+        hasNotch: false,
+        notchWidth: 0,
+        menuBarHeight: 0,
+        source: 'heuristic'
+      }
       for (let legacy = 0; legacy <= 1.0001; legacy += 0.05) {
         // The legacy oracle: the 52x52 tab main placed for that stored normalized Y, and its centre.
         const legacyCentre = rightEdgePosition(52, 52, metrics, legacy).y + 26
@@ -95,7 +110,9 @@ describe('right-edge anchor store (M2-0202 spec v3 §2)', () => {
 
   it('without a display key or anything stored, the anchor is the default', () => {
     expect(store().edge.fraction(DISPLAY)).toBe(RIGHT_EDGE_DEFAULT_ANCHOR)
-    expect(store({ anchors: { 'display:0': 0.9 } }).edge.fraction({ id: 0, workArea: DISPLAY.workArea })).toBe(RIGHT_EDGE_DEFAULT_ANCHOR)
+    expect(store({ anchors: { 'display:0': 0.9 } }).edge.fraction({ id: 0, workArea: DISPLAY.workArea })).toBe(
+      RIGHT_EDGE_DEFAULT_ANCHOR
+    )
   })
 
   it('a drag moves every rect at once and persists the clamped fraction once, after the drag settles', () => {
