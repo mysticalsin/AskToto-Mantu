@@ -102,7 +102,10 @@ jobs:
             cloudflare-proxy/vitest.config.ts \
             operator/scripts/vitest.config.ts \
             operator/vitest.config.ts \
+            src/main/graphify.test.ts \
             src/main/test-hermetic-home.test.ts \
+            src/main/transcripts.test.ts \
+            src/main/update-persistence.test.ts \
             vitest.config.ts
           # Applied second: its vitest.config.ts hunk is written against the M2-0001 result.
           apply_overlay m2-0190 "$HARNESS_COMMIT_2" \
