@@ -523,13 +523,39 @@ jobs:
         with:
           name: candidate-provenance
           path: provenance
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      # The owner Mac has intermittently received a truncated candidate zip while download-artifact
+      # still reported success. Verify, and on a failed byte check re-download once and verify again;
+      # the retry verify has no continue-on-error, so a second bad download still fails the job.
+      - id: download1
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         env:
           TMPDIR: ${{ runner.temp }}
         with:
           name: candidate-mac-qa-identity
           path: assets
       - name: Verify every byte against the provenance
+        id: verify1
+        continue-on-error: true
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
+      - name: Re-download the candidate after a failed byte check
+        if: steps.verify1.outcome != 'success'
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          echo "::warning::st1-mac-fifo: candidate-mac-qa-identity failed the provenance byte check on attempt 1 (download outcome: ${{ steps.download1.outcome }}); removing assets and downloading attempt 2."
+          rm -rf assets
+      - if: steps.verify1.outcome != 'success'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        env:
+          TMPDIR: ${{ runner.temp }}
+        with:
+          name: candidate-mac-qa-identity
+          path: assets
+      - name: Verify every byte against the provenance (retry)
+        if: steps.verify1.outcome != 'success'
         env:
           TMPDIR: ${{ runner.temp }}
         run: bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
@@ -745,13 +771,39 @@ jobs:
         with:
           name: candidate-provenance
           path: provenance
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      # The owner Mac has intermittently received a truncated candidate zip while download-artifact
+      # still reported success. Verify, and on a failed byte check re-download once and verify again;
+      # the retry verify has no continue-on-error, so a second bad download still fails the job.
+      - id: download1
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         env:
           TMPDIR: ${{ runner.temp }}
         with:
           name: candidate-mac-qa-identity
           path: assets
       - name: Verify every byte against the provenance
+        id: verify1
+        continue-on-error: true
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
+      - name: Re-download the candidate after a failed byte check
+        if: steps.verify1.outcome != 'success'
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          echo "::warning::st1-mac-control: candidate-mac-qa-identity failed the provenance byte check on attempt 1 (download outcome: ${{ steps.download1.outcome }}); removing assets and downloading attempt 2."
+          rm -rf assets
+      - if: steps.verify1.outcome != 'success'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        env:
+          TMPDIR: ${{ runner.temp }}
+        with:
+          name: candidate-mac-qa-identity
+          path: assets
+      - name: Verify every byte against the provenance (retry)
+        if: steps.verify1.outcome != 'success'
         env:
           TMPDIR: ${{ runner.temp }}
         run: bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity

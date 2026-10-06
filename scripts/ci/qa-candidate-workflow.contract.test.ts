@@ -181,7 +181,8 @@ describe('QA candidate workflow: which refs and versions may build (M2-0499)', (
     for (const [name, block] of jobBlocks) {
       const jobIf = /^    if: (.*)$/m.exec(block)?.[1] ?? ''
       expect(jobIf, `${name} job condition`).not.toMatch(/github\.ref/)
-      if (name !== 'guard') expect(block, `${name} names a ref`).not.toMatch(/refs\/heads\/|github\.ref\b|github\.base_ref/)
+      if (name !== 'guard')
+        expect(block, `${name} names a ref`).not.toMatch(/refs\/heads\/|github\.ref\b|github\.base_ref/)
     }
     expect(guard).toContain('refs/heads/')
   })
@@ -289,7 +290,9 @@ describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
     for (const name of strictJobs) {
       const jobSteps = steps(name)
       const checkout = jobSteps.findIndex((step) => step.includes('actions/checkout@'))
-      const probe = jobSteps.findIndex((step) => step.includes('name: Prove owner-account sandbox denies private state'))
+      const probe = jobSteps.findIndex((step) =>
+        step.includes('name: Prove owner-account sandbox denies private state')
+      )
       const setup = jobSteps.findIndex((step) => step.includes('actions/setup-node@'))
       const download = jobSteps.findIndex((step) => step.includes('actions/download-artifact@'))
 
@@ -358,7 +361,9 @@ exit 1
       expect(result.status).toBe(0)
       expect(result.stdout).toContain(`${bashPath(join(home, 'Library', 'CloudStorage'))} exists -> denied`)
       expect(result.stdout).toContain(`${bashPath(join(home, 'Library', 'Keychains'))} exists -> denied`)
-      expect(result.stdout).toContain(`${bashPath(join(home, 'Library', 'Application Support', 'Metis'))} absent -> denied`)
+      expect(result.stdout).toContain(
+        `${bashPath(join(home, 'Library', 'Application Support', 'Metis'))} absent -> denied`
+      )
       const wrapperLog = readFileSync(log, 'utf8')
       expect(wrapperLog).toContain(`/bin/ls -ld ${bashPath(join(home, 'Library', 'CloudStorage'))}`)
       expect(wrapperLog).toContain(`/bin/ls -ld ${bashPath(join(home, 'Library', 'Keychains'))}`)
@@ -406,7 +411,9 @@ exit 1
       })
 
       expect(result.status).toBe(1)
-      expect(result.stdout).toContain(`::error::owner-account sandbox allowed creating absent protected path ${bashPath(allowedPath)}`)
+      expect(result.stdout).toContain(
+        `::error::owner-account sandbox allowed creating absent protected path ${bashPath(allowedPath)}`
+      )
       expect(existsSync(allowedPath)).toBe(false)
     } finally {
       rmSync(sandbox, { recursive: true, force: true })
@@ -470,6 +477,64 @@ exit 1
       expect(cleanup).toContain('security delete-generic-password -s "asktoto-qa Safe Storage" || true')
     }
   })
+
+  it('re-downloads and re-verifies the candidate once after a failed byte check, and fails hard on a second bad download', () => {
+    const verifyRun =
+      'run: bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity\n'
+    const retryIf = "        if: steps.verify1.outcome != 'success'\n"
+    const pinnedDownload = /uses: (actions\/download-artifact@[0-9a-f]{40}) # v\S+/
+    for (const name of strictJobs) {
+      const jobSteps = steps(name)
+      const isCandidateDownload = (step: string) =>
+        step.includes('actions/download-artifact@') &&
+        step.includes('name: candidate-mac-qa-identity\n') &&
+        step.includes('path: assets\n')
+
+      const download1 = jobSteps.findIndex((step) => isCandidateDownload(step) && step.includes('id: download1\n'))
+      const verify1 = jobSteps.findIndex((step) => step.includes('name: Verify every byte against the provenance\n'))
+      const wipe = jobSteps.findIndex((step) =>
+        step.includes('name: Re-download the candidate after a failed byte check\n')
+      )
+      const download2 = jobSteps.findIndex((step, i) => i > download1 && isCandidateDownload(step))
+      const verify2 = jobSteps.findIndex((step) =>
+        step.includes('name: Verify every byte against the provenance (retry)\n')
+      )
+      const measure = jobSteps.findIndex((step) => step.includes('scripts/qa/st-1.mjs'))
+
+      expect(download1, `${name} first download`).toBeGreaterThan(-1)
+      expect([download1, verify1, wipe, download2, verify2, measure], `${name} step order`).toEqual(
+        [...[download1, verify1, wipe, download2, verify2, measure]].sort((a, b) => a - b)
+      )
+      expect(new Set([download1, verify1, wipe, download2, verify2, measure]).size, `${name} distinct steps`).toBe(6)
+
+      // The first attempt may fail without failing the job; the condition only reads the verify outcome.
+      expect(jobSteps[download1]).toMatch(/^ {8}continue-on-error: true$/m)
+      expect(jobSteps[download1]).not.toMatch(/^ {8}if:/m)
+      expect(jobSteps[verify1]).toContain('id: verify1\n')
+      expect(jobSteps[verify1]).toMatch(/^ {8}continue-on-error: true$/m)
+      expect(jobSteps[verify1]).toContain(verifyRun)
+
+      // The retry runs only when the first byte check failed, and starts from an empty assets directory.
+      expect(jobSteps[wipe]).toContain(retryIf)
+      expect(jobSteps[wipe]).toMatch(/::warning::[^\n]*attempt 1[^\n]*attempt 2/)
+      expect(jobSteps[wipe]).toMatch(/^ {10}rm -rf assets$/m)
+      expect(jobSteps[wipe]).not.toMatch(/rm -rf (?!assets$)/m)
+      expect(jobSteps[download2]).toContain(retryIf)
+      expect(jobSteps[download2]).not.toContain('continue-on-error')
+      expect(pinnedDownload.exec(jobSteps[download2])?.[1]).toBe(pinnedDownload.exec(jobSteps[download1])?.[1])
+
+      // The retry verify is the same command and nothing softens it: a second bad download fails the job.
+      expect(jobSteps[verify2]).toContain(retryIf)
+      expect(jobSteps[verify2]).toContain(verifyRun)
+      expect(jobSteps[verify2]).not.toContain('continue-on-error')
+    }
+
+    // Hosted jobs keep their single, hard verify.
+    for (const [name, block] of jobBlocks) {
+      if (strictJobs.includes(name)) continue
+      expect(block, `${name} carries the owner-Mac retry`).not.toContain('steps.verify1')
+    }
+  })
 })
 
 describe('QA candidate workflow: the shipped window gate (M2-0519)', () => {
@@ -495,10 +560,14 @@ describe('QA candidate workflow: the shipped window gate (M2-0519)', () => {
 
   it('runs one marked shipped warm-up per chrome before any measured repeats', () => {
     const measure = steps('st1-mac-window').find((step) => step.includes('--purpose window-construction')) ?? ''
-    expect(measure.indexOf('run="window-warmup-shipped-$chrome"')).toBeLessThan(measure.indexOf('for repeat in 1 2; do'))
+    expect(measure.indexOf('run="window-warmup-shipped-$chrome"')).toBeLessThan(
+      measure.indexOf('for repeat in 1 2; do')
+    )
     expect(measure).toContain('--window-warmup')
     expect(measure).toContain('--window-variant shipped')
-    expect(measure).toContain('if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi')
+    expect(measure).toContain(
+      'if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi'
+    )
   })
 
   it('keeps measured report-only window variants before measured shipped rows', () => {
