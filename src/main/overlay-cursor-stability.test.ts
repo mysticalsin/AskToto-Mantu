@@ -204,7 +204,7 @@ function nativeHover(
   const pageRevealHandler = lift('function revealTopCenterHoverInPage(): void {', 'const revealController')
   // M2-0202 S3: the right-edge open rect (the Reader or the drawer), the show/hide toggle and the blur park.
   const boundsHandler = lift(
-    "function rightEdgeBounds(surface: 'open' | 'rest', display: Electron.Display, layout: OverlayLayout = liveOverlayLayout()): Electron.Rectangle {",
+    "function rightEdgeBounds(\n  surface: 'open' | 'rest',\n  display: Electron.Display,\n  layout: OverlayLayout = liveOverlayLayout()\n): Electron.Rectangle {",
     '/** The only writer of right-edge window bounds',
     'function rightEdgeBounds(surface, display, layout = liveOverlayLayout()) {'
   )

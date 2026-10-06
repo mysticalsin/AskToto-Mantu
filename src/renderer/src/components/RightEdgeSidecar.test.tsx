@@ -180,9 +180,11 @@ describe('right-edge dock', () => {
     // App hands the dock the summary on the right edge, the Bar the full body elsewhere, and the Reader the full
     // answer body.
     expect(app).toMatch(
-      /const barBody = !answerView \|\| collapsed \? undefined\s+: !rightEdgePresentation \? body\s+: islandAnswer \? <RightEdgeAnswerSummary /
+      /const barBody =\s*!answerView \|\| collapsed \? undefined\s*: !rightEdgePresentation \? \(?\s*body\s*\)?\s*: islandAnswer \? \(?\s*<RightEdgeAnswerSummary\s/
     )
-    expect(app).toContain("rightEdgeReaderKind === 'answer' ? (answerView ? body : answerBody)")
+    expect(app).toMatch(
+      /rightEdgeReaderKind === 'answer' \?\s*\(\s*answerView \?\s*\(?\s*body\s*\)?\s*:\s*\(?\s*answerBody\s*\)?\s*\)/
+    )
   })
 
   it('previews the first readable answer line as plain text, never a code fence or a table row', () => {
