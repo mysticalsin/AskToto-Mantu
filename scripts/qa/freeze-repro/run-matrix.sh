@@ -128,7 +128,7 @@ run_with_timeout() {
   "$@" &
   local pid=$!
   local elapsed=0
-  while kill -0 "$pid" >/dev/null 2>&1; do
+  while jobs -r -p | grep -Fx "$pid" >/dev/null 2>&1; do
     if (( elapsed >= seconds )); then
       kill "$pid" >/dev/null 2>&1 || true
       wait "$pid" >/dev/null 2>&1 || true
@@ -259,10 +259,271 @@ launch_app() {
 
 stop_app() {
   if [[ -n "${APP_PID:-}" ]]; then
-    kill "$APP_PID" >/dev/null 2>&1 || true
-    wait "$APP_PID" >/dev/null 2>&1 || true
+    terminate_app_job "$APP_PID" 50 50 || true
     APP_PID=""
   fi
+}
+
+stop_second_instance() {
+  STOP_SECOND_INSTANCE_STATUS=not-needed
+  if [[ -n "${SECOND_INSTANCE_PID:-}" ]]; then
+    local pid=$SECOND_INSTANCE_PID waited=0 stopped=false
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+      STOP_SECOND_INSTANCE_STATUS=already-exited
+      SECOND_INSTANCE_PID=""
+      return 0
+    fi
+    kill "$pid" >/dev/null 2>&1 || true
+    while (( waited < 10 )); do
+      if ! kill -0 "$pid" >/dev/null 2>&1; then
+        stopped=true
+        break
+      fi
+      sleep 0.2
+      waited=$((waited + 1))
+    done
+    if [[ "$stopped" == true ]]; then
+      STOP_SECOND_INSTANCE_STATUS=stopped
+    else
+      kill -KILL "$pid" >/dev/null 2>&1 || true
+      sleep 0.2
+      if ! kill -0 "$pid" >/dev/null 2>&1; then
+        STOP_SECOND_INSTANCE_STATUS=killed
+      elif ! app_job_running "$pid"; then
+        # `open -n` creates a sibling process, not a shell job. On CI a just-killed non-child can be
+        # observable by kill -0 briefly; do not wait on it as though this shell owned it.
+        STOP_SECOND_INSTANCE_STATUS=stopped
+      else
+        STOP_SECOND_INSTANCE_STATUS=kill-sent-still-running
+      fi
+    fi
+    app_job_running "$pid" && wait "$pid" >/dev/null 2>&1 || true
+    SECOND_INSTANCE_PID=""
+  fi
+}
+
+app_job_running() {
+  local pid=$1
+  [[ -n "$pid" ]] || return 1
+  kill -0 "$pid" >/dev/null 2>&1 || return 1
+  jobs -r -p | grep -Fx "$pid" >/dev/null 2>&1
+}
+
+terminate_app_job() {
+  local pid=$1
+  local term_wait_loops=${2:-50}
+  local kill_wait_loops=${3:-50}
+  local waited=0
+  [[ -n "$pid" ]] || return 0
+  kill "$pid" >/dev/null 2>&1 || true
+  while (( waited < term_wait_loops )); do
+    if ! kill -0 "$pid" >/dev/null 2>&1 || ! app_job_running "$pid"; then
+      break
+    fi
+    sleep 0.2
+    waited=$((waited + 1))
+  done
+  if kill -0 "$pid" >/dev/null 2>&1; then
+    kill -KILL "$pid" >/dev/null 2>&1 || true
+    waited=0
+    while (( waited < kill_wait_loops )); do
+      if ! kill -0 "$pid" >/dev/null 2>&1 || ! app_job_running "$pid"; then
+        break
+      fi
+      sleep 0.2
+      waited=$((waited + 1))
+    done
+  fi
+  if kill -0 "$pid" >/dev/null 2>&1 && app_job_running "$pid"; then
+    return 1
+  fi
+  wait "$pid" >/dev/null 2>&1 || true
+  return 0
+}
+
+signal_name_for_status() {
+  local status=$1
+  local signal_number=$((status - 128))
+  case "$signal_number" in
+    1) printf 'HUP' ;;
+    2) printf 'INT' ;;
+    3) printf 'QUIT' ;;
+    6) printf 'ABRT' ;;
+    9) printf 'KILL' ;;
+    15) printf 'TERM' ;;
+    *) kill -l "$signal_number" 2>/dev/null || printf '%s' "$signal_number" ;;
+  esac
+}
+
+record_main_exit_observation() {
+  local row=$1
+  local pid=$2
+  local when=$3
+  local observed_exit_by_ms status exit_code_json signal_json wait_status_unavailable_json
+  PROCESS_OBSERVATION_JSON=""
+  [[ -n "$pid" ]] || return 1
+  app_job_running "$pid" && return 1
+  observed_exit_by_ms=$(epoch_ms)
+  status=0
+  wait "$pid" >/dev/null 2>&1 || status=$?
+  exit_code_json=null
+  signal_json=null
+  wait_status_unavailable_json=false
+  if (( status >= 128 )); then
+    signal_json=$(json_string "$(signal_name_for_status "$status")")
+  elif (( status == 127 )); then
+    wait_status_unavailable_json=true
+  else
+    exit_code_json=$status
+  fi
+  PROCESS_OBSERVATION_JSON="{\"row\":$(json_string "$row"),\"event\":\"main_exited\",\"main_pid\":$pid,\"observed_exit_by_ms\":$observed_exit_by_ms,\"observed_ms\":$observed_exit_by_ms,\"when\":$(json_string "$when"),\"wait_status\":$status,\"wait_status_unavailable\":$wait_status_unavailable_json,\"exit_code\":$exit_code_json,\"signal\":$signal_json}"
+  append_jsonl "$OUT/matrix.jsonl" "$PROCESS_OBSERVATION_JSON"
+  if [[ "${APP_PID:-}" == "$pid" ]]; then
+    APP_PID=""
+  fi
+  return 0
+}
+
+pid_in_list() {
+  local needle=$1 pid
+  while IFS= read -r pid; do
+    [[ "$pid" != "$needle" ]] || return 0
+  done
+  return 1
+}
+
+descendant_pids() {
+  local parent=$1
+  [[ -n "$parent" ]] || return 0
+  local max_depth=${M2_0008_DESCENDANT_MAX_DEPTH:-32}
+  [[ "$max_depth" =~ ^[0-9]+$ ]] || max_depth=32
+  local -a queue=("$parent")
+  local -a depths=(0)
+  local visited=$'\n'"$parent"$'\n'
+  local index=0 current depth child
+  while (( index < ${#queue[@]} )); do
+    current=${queue[$index]}
+    depth=${depths[$index]}
+    index=$((index + 1))
+    (( depth < max_depth )) || continue
+    for child in $("$PGREP_BIN" -P "$current" 2>/dev/null || true); do
+      [[ "$child" =~ ^[0-9]+$ ]] || continue
+      [[ "$child" != "$current" ]] || continue
+      case "$visited" in
+        *$'\n'"$child"$'\n'*) continue ;;
+      esac
+      visited+="$child"$'\n'
+      printf '%s\n' "$child"
+      queue+=("$child")
+      depths+=($((depth + 1)))
+    done
+  done
+}
+
+command_is_exe_invocation() {
+  local pid=$1 command
+  command=$("$PS_BIN" -ww -o command= -p "$pid" 2>/dev/null || true)
+  [[ "$command" == "$EXE" || "$command" == "$EXE "* ]]
+  local matched=$?
+  if (( matched == 0 )); then
+    return 0
+  fi
+  local command_slash=${command//\\//}
+  local exe_slash=${EXE//\\//}
+  [[ "$command_slash" == "$exe_slash" || "$command_slash" == "$exe_slash "* ]]
+  matched=$?
+  if (( matched == 0 )); then
+    return 0
+  fi
+  if command -v cygpath >/dev/null 2>&1; then
+    local exe_unix
+    exe_unix=$(cygpath -u "$EXE" 2>/dev/null || true)
+    [[ -n "$exe_unix" && ( "$command_slash" == "$exe_unix" || "$command_slash" == "$exe_unix "* ) ]]
+    return $?
+  fi
+  return 1
+}
+
+matching_second_instance_candidates() {
+  local first_pid=$1
+  local descendants=${2:-}
+  local pid
+  local exe_base
+  exe_base=$(basename "$EXE")
+  [[ -n "$descendants" ]] || descendants=$(descendant_pids "$first_pid")
+  for pid in $("$PGREP_BIN" -f "$exe_base" 2>/dev/null || true); do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    [[ "$pid" != "$$" ]] || continue
+    [[ "$pid" != "${BASHPID:-$$}" ]] || continue
+    [[ "$pid" != "$first_pid" ]] || continue
+    ! printf '%s\n' "$descendants" | pid_in_list "$pid" || continue
+    command_is_exe_invocation "$pid" || continue
+    printf '%s\n' "$pid"
+  done
+}
+
+find_second_instance_pid() {
+  local first_pid=$1
+  local before_pids=${2:-}
+  local descendants=${3:-}
+  local pid
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] || continue
+    ! printf '%s\n' "$before_pids" | pid_in_list "$pid" || continue
+    printf '%s\n' "$pid"
+    return 0
+  done < <(matching_second_instance_candidates "$first_pid" "$descendants")
+  return 1
+}
+
+find_second_instance_pid_during_settle() {
+  local first_pid=$1
+  local before_pids=${2:-}
+  local descendants=${3:-}
+  local max_loops=$((REOPEN_SETTLE_SECONDS * 5))
+  local waited=0 found=""
+  (( max_loops > 0 )) || max_loops=1
+  while (( waited < max_loops )); do
+    found=$(find_second_instance_pid "$first_pid" "$before_pids" "$descendants" || true)
+    if [[ -n "$found" ]]; then
+      printf '%s' "$found"
+      return 0
+    fi
+    sleep 0.2
+    waited=$((waited + 1))
+  done
+  return 1
+}
+
+finish_second_instance_launcher() {
+  local pid=$1 waited=0 status=0
+  SECOND_LAUNCH_STATUS=open-exited-zero
+  [[ -n "$pid" ]] || return 0
+  while app_job_running "$pid" && (( waited < 10 )); do
+    sleep 0.2
+    waited=$((waited + 1))
+  done
+  if app_job_running "$pid"; then
+    kill "$pid" >/dev/null 2>&1 || true
+    SECOND_LAUNCH_STATUS=open-still-running
+  fi
+  if ! wait "$pid" >/dev/null 2>&1; then
+    status=$?
+    [[ "$SECOND_LAUNCH_STATUS" == open-still-running ]] || SECOND_LAUNCH_STATUS="open-exited-$status"
+  fi
+}
+
+ensure_app_for_row() {
+  local row=$1
+  local pid=${APP_PID:-}
+  if [[ -n "$pid" ]] && app_job_running "$pid"; then
+    return 0
+  fi
+  if [[ -n "$pid" ]]; then
+    record_main_exit_observation "$row" "$pid" "before-row" >/dev/null 2>&1 || true
+  fi
+  launch_app "$PROFILE"
+  append_jsonl "$OUT/matrix.jsonl" "{\"row\":$(json_string "$row"),\"event\":\"app_relaunched\",\"reason\":\"no-live-main-before-row\",\"main_pid\":$APP_PID}"
 }
 
 # Renderers are chosen by process role (Chromium's --type=renderer switch), never by child order: the
@@ -288,11 +549,21 @@ sample_app() {
     append_jsonl "$OUT/matrix.jsonl" "{\"row\":$(json_string "$row"),\"sampled\":false,\"reason\":\"dry-run-or-no-app\"}"
     return
   fi
+  local sample_pid_value=$APP_PID
+  if ! app_job_running "$sample_pid_value"; then
+    record_main_exit_observation "$row" "$sample_pid_value" "before-sampling" >/dev/null 2>&1 || true
+    append_jsonl "$OUT/matrix.jsonl" "{\"row\":$(json_string "$row"),\"sampled\":false,\"main_pid\":$sample_pid_value,\"reason\":\"main-exited\",\"main_exited\":${PROCESS_OBSERVATION_JSON:-null}}"
+    return
+  fi
   local main_sampled=true
-  printf '%s\n' "$APP_PID" >> "$OUT/app-pids.txt"
+  printf '%s\n' "$sample_pid_value" >> "$OUT/app-pids.txt"
   local main_sample_start_ms
   main_sample_start_ms=$(epoch_ms)
-  if ! sample_pid "$APP_PID" "$row-main"; then
+  if ! sample_pid "$sample_pid_value" "$row-main"; then
+    if record_main_exit_observation "$row" "$sample_pid_value" "during-main-sample"; then
+      append_jsonl "$OUT/matrix.jsonl" "{\"row\":$(json_string "$row"),\"sampled\":false,\"main_pid\":$sample_pid_value,\"reason\":\"main-exited\",\"main_exited\":$PROCESS_OBSERVATION_JSON}"
+      return
+    fi
     main_sampled=false
     SAMPLE_FAILURES=$((SAMPLE_FAILURES + 1))
   else
@@ -308,11 +579,15 @@ sample_app() {
     else
       SAMPLE_FAILURES=$((SAMPLE_FAILURES + 1))
     fi
-  done < <(renderer_pids "$APP_PID")
+  done < <(renderer_pids "$sample_pid_value")
   if (( renderer_successes == 0 )); then
+    if record_main_exit_observation "$row" "$sample_pid_value" "during-renderer-sample"; then
+      append_jsonl "$OUT/matrix.jsonl" "{\"row\":$(json_string "$row"),\"sampled\":false,\"main_pid\":$sample_pid_value,\"reason\":\"main-exited\",\"main_sample\":$main_sampled,\"renderer_attempts\":$renderer_attempts,\"renderer_samples\":$renderer_successes,\"main_exited\":$PROCESS_OBSERVATION_JSON}"
+      return
+    fi
     SAMPLE_FAILURES=$((SAMPLE_FAILURES + 1))
   fi
-  append_jsonl "$OUT/matrix.jsonl" "{\"row\":$(json_string "$row"),\"sampled\":$([[ "$main_sampled" == true && "$renderer_successes" -gt 0 ]] && printf true || printf false),\"main_pid\":$APP_PID,\"main_sample\":$main_sampled,\"renderer_attempts\":$renderer_attempts,\"renderer_samples\":$renderer_successes,\"renderers_selected_by\":\"--type=renderer\"}"
+  append_jsonl "$OUT/matrix.jsonl" "{\"row\":$(json_string "$row"),\"sampled\":$([[ "$main_sampled" == true && "$renderer_successes" -gt 0 ]] && printf true || printf false),\"main_pid\":$sample_pid_value,\"main_sample\":$main_sampled,\"renderer_attempts\":$renderer_attempts,\"renderer_samples\":$renderer_successes,\"renderers_selected_by\":\"--type=renderer\"}"
 }
 
 write_launch_plan() {
@@ -788,7 +1063,7 @@ hosted_row() {
 # interrupt below therefore still hits a FIFO-blocked read.
 hold_fifo_writers() {
   local states="$FIFO_HOLD_DIR/states"
-  perl -e '
+  M2_0008_FIFO_HOLD_SECONDS="${M2_0008_CONTRACT_FIFO_HOLD_SECONDS:-300}" perl -e '
     use Fcntl qw(O_WRONLY O_NONBLOCK);
     my $out = shift @ARGV;
     my (@held, $states);
@@ -800,8 +1075,8 @@ hold_fifo_writers() {
     print $fh $states;
     close $fh;
     rename("$out.part", $out) or exit 2;
-    sleep 3600;
-  ' "$states" "${FIFO_FIXTURES[@]}" &
+    sleep $ENV{M2_0008_FIFO_HOLD_SECONDS};
+  ' "$states" "${FIFO_FIXTURES[@]}" >/dev/null 2>&1 &
   FIFO_HOLDER_PID=$!
   local waited=0
   while [[ ! -f "$states" ]] && (( waited < 20 )); do
@@ -825,15 +1100,14 @@ release_fifo_writers() {
   fi
 }
 
-# Runs after every automatic row has been sampled: SIGTERM to main while the FIFO reads are held blocked,
-# then whether it exits within 10 s. Either outcome is an observation; only a signal that could not be sent
-# leaves the interrupt not exercised.
+# SIGTERM to main while the FIFO reads are held blocked, then whether it exits within 10 s. Either outcome
+# is an observation; only a signal that could not be sent leaves the interrupt not exercised.
 hosted_process_signal() {
   hold_fifo_writers
   local result="not-exercised" exited=false waited=0
   if [[ -n "${APP_PID:-}" ]] && kill -TERM "$APP_PID" >/dev/null 2>&1; then
     while (( waited < 10 )); do
-      if ! kill -0 "$APP_PID" >/dev/null 2>&1; then
+      if ! app_job_running "$APP_PID"; then
         exited=true
         break
       fi
@@ -846,7 +1120,7 @@ hosted_process_signal() {
       result="observed"
       kill -KILL "$APP_PID" >/dev/null 2>&1 || true
     fi
-    wait "$APP_PID" >/dev/null 2>&1 || true
+    terminate_app_job "$APP_PID" 0 50 || true
     APP_PID=""
   fi
   release_fifo_writers
@@ -870,6 +1144,9 @@ run_hosted_live_matrix() {
     "blocked .brain/index.json left in place for ${BRAIN_POLL_WAIT_SECONDS}s (longer than one 2s brainStatus poll), then cdp Runtime.evaluate window.toto.brainStatus()" ok \
     ",\"brain_status_poll_wait_seconds\":$BRAIN_POLL_WAIT_SECONDS"
 
+  hosted_process_signal
+  ensure_app_for_row "row-3-macos-activate"
+
   reopen_status=ok
   ROW_WINDOW_STARTED_MS=$(epoch_ms)
   "$OPEN_BIN" "$APP" >/dev/null 2>&1 || reopen_status="open-failed"
@@ -877,18 +1154,59 @@ run_hosted_live_matrix() {
   hosted_row "row-3-macos-activate" none "open <app>" "$reopen_status"
 
   reopen_status=ok
+  local first_pid=${APP_PID:-}
+  local first_state_before=not-running first_state_after=not-running second_launch_status=open-exited-zero relaunched_after_first_exit=false row4_extra
+  local second_instance_pids_before=""
+  local first_descendant_pids=""
+  local second_state=not-found second_pid_json=null second_stop_status=not-needed
+  local second_launcher_pid=""
+  if [[ -n "$first_pid" ]] && app_job_running "$first_pid"; then
+    first_state_before=running
+  fi
   # The second instance gets the same profile, so the app's single-instance lock hands it to the first.
+  first_descendant_pids=$(descendant_pids "$first_pid")
+  second_instance_pids_before=$(matching_second_instance_candidates "$first_pid" "$first_descendant_pids")
   ROW_WINDOW_STARTED_MS=$(epoch_ms)
-  "$OPEN_BIN" -n --env "ASKTOTO_USERDATA=$PROFILE" "$APP" --args "--user-data-dir=$PROFILE" >/dev/null 2>&1 || reopen_status="open-failed"
-  sleep "$REOPEN_SETTLE_SECONDS"
-  hosted_row "row-4-second-instance-reopen" none "open -n --env ASKTOTO_USERDATA=<profile> <app> --args --user-data-dir=<profile>" "$reopen_status"
+  "$OPEN_BIN" -n --env "ASKTOTO_USERDATA=$PROFILE" "$APP" --args "--user-data-dir=$PROFILE" >/dev/null 2>&1 &
+  second_launcher_pid=$!
+  SECOND_INSTANCE_PID=$(find_second_instance_pid_during_settle "$first_pid" "$second_instance_pids_before" "$first_descendant_pids" || true)
+  if [[ -n "$SECOND_INSTANCE_PID" ]]; then
+    second_pid_json=$SECOND_INSTANCE_PID
+    if kill -0 "$SECOND_INSTANCE_PID" >/dev/null 2>&1; then
+      second_state=running
+      stop_second_instance
+      second_stop_status=$STOP_SECOND_INSTANCE_STATUS
+    else
+      second_state=exited
+      SECOND_INSTANCE_PID=""
+      second_stop_status=already-exited
+    fi
+  fi
+  finish_second_instance_launcher "$second_launcher_pid"
+  second_launch_status=$SECOND_LAUNCH_STATUS
+  if [[ "$second_launch_status" != open-exited-zero ]]; then
+    reopen_status="open-failed"
+  fi
+  first_state_after=$first_state_before
+  if [[ -n "$first_pid" ]] && record_main_exit_observation "row-4-second-instance-reopen" "$first_pid" "after-second-instance-launch"; then
+    first_state_after=main-exited
+    if [[ -n "${SECOND_INSTANCE_PID:-}" ]]; then
+      stop_second_instance
+      second_stop_status=$STOP_SECOND_INSTANCE_STATUS
+    fi
+    ensure_app_for_row "row-4-second-instance-reopen"
+    relaunched_after_first_exit=true
+  elif [[ -n "${APP_PID:-}" ]] && app_job_running "$APP_PID"; then
+    first_state_after=running
+  fi
+  row4_extra=",\"first_instance\":{\"pid\":${first_pid:-null},\"state_before_second_launch\":$(json_string "$first_state_before"),\"state_after_second_launch\":$(json_string "$first_state_after")},\"second_instance\":{\"launch_status\":$(json_string "$second_launch_status"),\"method\":\"open -n\",\"pid\":$second_pid_json,\"state\":$(json_string "$second_state"),\"state_at_settle\":$(json_string "$second_state"),\"stop_status\":$(json_string "$second_stop_status")},\"relaunched_after_first_exit\":$relaunched_after_first_exit"
+  hosted_row "row-4-second-instance-reopen" none "open -n --env ASKTOTO_USERDATA=<profile> <app> --args --user-data-dir=<profile>" "$reopen_status" "$row4_extra"
 
   record_blocked_row "row-5-dataless-brain-idle" ',"automatic":false,"fixture":"dataless-brain-index"'
   record_blocked_row "row-9-network-off-flapping" ',"automatic":false,"fixture":"dataless-meeting"'
 
   record_blocked_interrupt "network-off"
   record_blocked_interrupt "file-provider-cancel"
-  hosted_process_signal
 }
 
 run_windows_hosted_live_matrix() {
@@ -1063,6 +1381,10 @@ fi
 [[ "$CDP_PORT" =~ ^[1-9][0-9]*$ && "$OBSERVE_TIMEOUT_MS" =~ ^[1-9][0-9]*$ ]] || fail "contract overrides must be positive integers"
 # Each observation makes at most three bounded evaluations per page plus the target list.
 OBSERVE_WALL_SECONDS=$(( OBSERVE_TIMEOUT_MS * 6 / 1000 + 10 ))
+if [[ "${M2_0008_CONTRACT_ALLOW_NON_DARWIN:-0}" == 1 ]]; then
+  OBSERVE_WALL_SECONDS=${M2_0008_CONTRACT_OBSERVE_WALL_SECONDS:-$(( OBSERVE_TIMEOUT_MS / 1000 + 8 ))}
+fi
+[[ "$OBSERVE_WALL_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail "contract observer wall timeout must be a positive integer"
 SYMPTOM_ROWS=""
 HOSTED_CONCLUSION=""
 FIFO_HOLDER_PID=""
@@ -1153,6 +1475,7 @@ PROFILE=$(mktemp -d "${TMPDIR:-/tmp}/metis-m2-0008-profile-XXXXXX")
 IDLE_PROFILE=$(mktemp -d "${TMPDIR:-/tmp}/metis-m2-0008-idle-profile-XXXXXX")
 FIFO_HOLD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/metis-m2-0008-fifo-hold-XXXXXX")
 cleanup() {
+  stop_second_instance
   stop_app
   release_fifo_writers
   local item
