@@ -3363,7 +3363,11 @@ function overlayHoverRestRect(layout: OverlayLayout, display: Electron.Display):
 
 /** Right-edge bounds at the display's anchor: open, the Reader while the page has it pending, otherwise the
  *  legacy drawer; at rest the Hide band or the Island tab. */
-function rightEdgeBounds(surface: 'open' | 'rest', display: Electron.Display, layout: OverlayLayout = liveOverlayLayout()): Electron.Rectangle {
+function rightEdgeBounds(
+  surface: 'open' | 'rest',
+  display: Electron.Display,
+  layout: OverlayLayout = liveOverlayLayout()
+): Electron.Rectangle {
   if (surface === 'open') return rightEdgeAnchors.rect(rightEdgeSession.readerPending() ? 'reader' : 'open', display)
   return rightEdgeAnchors.rect(parkLayoutForDisplay(layout, display) === 'hide' ? 'band' : 'tab', display)
 }
