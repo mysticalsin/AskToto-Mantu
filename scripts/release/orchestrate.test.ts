@@ -78,15 +78,17 @@ describe('M2-0054 release orchestrator', () => {
   })
 
   it('formats dry-run and executed step reports with the same diagnostic fields', () => {
-    expect(formatStepResult({
-      index: 1,
-      total: 2,
-      name: 'Fixture',
-      exitCode: 0,
-      durationMs: 12,
-      command: 'node fixture.mjs',
-      dryRun: false
-    })).toBe('[release:ok] step=1/2 name="Fixture" exitCode=0 durationMs=12 command="node fixture.mjs"')
+    expect(
+      formatStepResult({
+        index: 1,
+        total: 2,
+        name: 'Fixture',
+        exitCode: 0,
+        durationMs: 12,
+        command: 'node fixture.mjs',
+        dryRun: false
+      })
+    ).toBe('[release:ok] step=1/2 name="Fixture" exitCode=0 durationMs=12 command="node fixture.mjs"')
   })
 })
 
@@ -108,15 +110,21 @@ describe('release plan invariants', () => {
     expect(stepIndex(commands, 'scripts/check-cloudflare-key-valid.mjs')).toBeLessThan(pack)
     expect(stepIndex(commands, 'scripts/check-provisioned-secrets.mjs --profile release')).toBeLessThan(pack)
     expect(stepIndex(commands, 'scripts/verify-signing.mjs')).toBeGreaterThan(pack)
-    expect(stepIndex(commands, 'scripts/check-packaged-launch.mjs release/win-unpacked/Metis.exe')).toBeGreaterThan(pack)
+    expect(stepIndex(commands, 'scripts/check-packaged-launch.mjs release/win-unpacked/Metis.exe')).toBeGreaterThan(
+      pack
+    )
   })
 
   it('keeps platform-specific Electron Builder configuration in the release targets', () => {
-    expect(commandText('win').join('\n')).toContain('electron-builder --config electron-builder.win.yml --win nsis --x64')
+    expect(commandText('win').join('\n')).toContain(
+      'electron-builder --config electron-builder.win.yml --win nsis --x64'
+    )
     expect(commandText('win-store').join('\n')).toContain(
       'electron-builder --config electron-builder.win.yml --win appx --x64'
     )
     expect(commandText('mas').join('\n')).toContain('scripts/provision-electron-dist.mjs --platform=mas arm64')
-    expect(commandText('mas').join('\n')).toContain('electron-builder --mac mas --arm64 -c.electronDist=resources/electron-dist')
+    expect(commandText('mas').join('\n')).toContain(
+      'electron-builder --mac mas --arm64 -c.electronDist=resources/electron-dist'
+    )
   })
 })
