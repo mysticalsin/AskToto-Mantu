@@ -131,7 +131,11 @@ export function legacyDrawerRect(wa: Rect, a: number): Rect {
   const height = Math.min(RIGHT_EDGE_DRAWER_MAX_HEIGHT, wa.height - RIGHT_EDGE_MARGIN_PX * 2)
   return {
     x: right(wa) - RIGHT_EDGE_MARGIN_PX - RIGHT_EDGE_DRAWER_WIDTH,
-    y: clamp(a - RIGHT_EDGE_CARD_ANCHOR_OFFSET_PX, wa.y + RIGHT_EDGE_MARGIN_PX, bottom(wa) - RIGHT_EDGE_MARGIN_PX - height),
+    y: clamp(
+      a - RIGHT_EDGE_CARD_ANCHOR_OFFSET_PX,
+      wa.y + RIGHT_EDGE_MARGIN_PX,
+      bottom(wa) - RIGHT_EDGE_MARGIN_PX - height
+    ),
     width: RIGHT_EDGE_DRAWER_WIDTH,
     height
   }
@@ -161,7 +165,12 @@ export function revealBand(wa: Rect, a: number, edgeX?: number): Rect {
   const top = Math.max(cardTop(wa, a, tallest), wa.y + RIGHT_EDGE_BAND_CORNER_PX)
   const end = Math.min(cardTop(wa, a, tallest) + tallest, bottom(wa) - RIGHT_EDGE_BAND_CORNER_PX)
   const edge = edgeOf(wa, edgeX)
-  return { x: edge - RIGHT_EDGE_REVEAL_BAND_PX, y: top, width: RIGHT_EDGE_REVEAL_BAND_PX, height: Math.max(0, end - top) }
+  return {
+    x: edge - RIGHT_EDGE_REVEAL_BAND_PX,
+    y: top,
+    width: RIGHT_EDGE_REVEAL_BAND_PX,
+    height: Math.max(0, end - top)
+  }
 }
 
 /** 'none' is M2-0428's Hide park (the invisible band); 'handle' is the 24x72 rest window centred on A. */
@@ -220,7 +229,12 @@ export function holdRegion(
   options: { gracePx: number; edgeX?: number; corridor?: Rect | null }
 ): Rect[] {
   const edge = edgeOf(wa, options.edgeX)
-  const toEdge = { x: openRect.x, y: openRect.y, width: Math.max(openRect.width, edge - openRect.x), height: openRect.height }
+  const toEdge = {
+    x: openRect.x,
+    y: openRect.y,
+    width: Math.max(openRect.width, edge - openRect.x),
+    height: openRect.height
+  }
   const region = [toEdge, revealBand(wa, a, edge)]
   if (options.corridor) region.push(options.corridor)
   return region.map((rect) => grow(rect, options.gracePx))

@@ -26,31 +26,45 @@ const OV_TRANSPARENT_READBACK = new Set(['#000000', '#00000000'])
 const OV_REST_BACKGROUND = '#00000000'
 
 export function initialOverlayStabilityRows() {
-  return OVERLAY_STABILITY_SCENARIOS.map((scenario) => ({ id: scenario.id, status: 'PENDING', evidence: null, unblock: null }))
+  return OVERLAY_STABILITY_SCENARIOS.map((scenario) => ({
+    id: scenario.id,
+    status: 'PENDING',
+    evidence: null,
+    unblock: null
+  }))
 }
 
 export function overlayStablePath(displayBounds, workArea) {
   const centerX = workArea.x + Math.round(workArea.width / 2)
   const minFromCenter = OV_NOTCH_HALF_WIDTH + OV_NOTCH_CLEARANCE
-  const outsideNotch = (x) => (Math.abs(x - centerX) >= minFromCenter ? x : centerX + (x < centerX ? -minFromCenter : minFromCenter))
+  const outsideNotch = (x) =>
+    Math.abs(x - centerX) >= minFromCenter ? x : centerX + (x < centerX ? -minFromCenter : minFromCenter)
   const onDisplay = (x) => Math.min(displayBounds.x + displayBounds.width - 1, Math.max(displayBounds.x, x))
   const right = displayBounds.x + displayBounds.width
   const bandY = workArea.y + Math.round(workArea.height * 0.35)
   return [
     ...OV_MENU_BAR_STOPS_X.map((x) => ({
       label: `menu-bar-${x}`,
-      point: { x: onDisplay(outsideNotch(displayBounds.x + Math.round((x * displayBounds.width) / OV_REFERENCE_WIDTH))), y: displayBounds.y + 8 },
+      point: {
+        x: onDisplay(outsideNotch(displayBounds.x + Math.round((x * displayBounds.width) / OV_REFERENCE_WIDTH))),
+        y: displayBounds.y + 8
+      },
       ms: OV_STOP_MS
     })),
     { label: 'right-edge-band', point: { x: right - 1, y: bandY }, ms: OV_STOP_MS },
     { label: 'right-edge-approach', point: { x: right - 200, y: bandY }, ms: OV_STOP_MS },
     { label: 'desktop-center', point: { x: centerX, y: workArea.y + Math.round(workArea.height / 2) }, ms: OV_STOP_MS },
-    { label: 'desktop-bottom-left', point: { x: workArea.x + 40, y: workArea.y + workArea.height - 40 }, ms: OV_STOP_MS }
+    {
+      label: 'desktop-bottom-left',
+      point: { x: workArea.x + 40, y: workArea.y + workArea.height - 40 },
+      ms: OV_STOP_MS
+    }
   ]
 }
 
 const sameRect = (a, b) => a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
-const sameSize = (a, b, tolerance = 2) => Math.abs(a.width - b.width) <= tolerance && Math.abs(a.height - b.height) <= tolerance
+const sameSize = (a, b, tolerance = 2) =>
+  Math.abs(a.width - b.width) <= tolerance && Math.abs(a.height - b.height) <= tolerance
 const surfaceShown = (state) => state.visible && state.opacity > 0
 
 export function overlaySurfaceChanges(events) {
@@ -64,13 +78,19 @@ export function overlaySurfaceChanges(events) {
   }
   return {
     changes: events.filter(
-      (e) => !sameRect(e.before.bounds, e.after.bounds) || e.before.opacity !== e.after.opacity || e.before.visible !== e.after.visible
+      (e) =>
+        !sameRect(e.before.bounds, e.after.bounds) ||
+        e.before.opacity !== e.after.opacity ||
+        e.before.visible !== e.after.visible
     ).length,
     reveals,
     parks,
-    opacityBeforeTarget: events.filter((e) => e.after.visible && e.after.opacity === 1 && !sameSize(e.after.bounds, target.get(e.turn))).length,
+    opacityBeforeTarget: events.filter(
+      (e) => e.after.visible && e.after.opacity === 1 && !sameSize(e.after.bounds, target.get(e.turn))
+    ).length,
     slabBeforeResize: events.filter(
-      (e) => e.call === 'setBackgroundColor' && e.arg !== OV_REST_BACKGROUND && !sameSize(e.after.bounds, target.get(e.turn))
+      (e) =>
+        e.call === 'setBackgroundColor' && e.arg !== OV_REST_BACKGROUND && !sameSize(e.after.bounds, target.get(e.turn))
     ).length
   }
 }
@@ -120,7 +140,15 @@ const MAIN_OV_BACKGROUND = `(() => {
  * applySettingsSurface's resize and background order, not only the renderer's view switch; it resolves false
  * when that entry is unavailable. Rows never throw.
  */
-export async function runOverlayStabilityRows({ page, main, openSettings, rows, flashCount = () => 0, wait = sleep, pathMs = OV_STABLE_PATH_MS }) {
+export async function runOverlayStabilityRows({
+  page,
+  main,
+  openSettings,
+  rows,
+  flashCount = () => 0,
+  wait = sleep,
+  pathMs = OV_STABLE_PATH_MS
+}) {
   const complete = (id, patch) => {
     const row = rows.find((entry) => entry.id === id)
     if (row) Object.assign(row, patch)
@@ -141,16 +169,33 @@ export async function runOverlayStabilityRows({ page, main, openSettings, rows, 
   const step = async (id, fn) => {
     try {
       const outcome = await fn()
-      complete(id, { status: outcome.pass ? 'PASS' : 'FAIL', evidence: outcome.evidence, unblock: outcome.pass ? null : 'Inspect the packaged-smoke artifact; the OV evidence shows the recorded native surface calls.' })
+      complete(id, {
+        status: outcome.pass ? 'PASS' : 'FAIL',
+        evidence: outcome.evidence,
+        unblock: outcome.pass
+          ? null
+          : 'Inspect the packaged-smoke artifact; the OV evidence shows the recorded native surface calls.'
+      })
     } catch (err) {
-      complete(id, { status: 'FAIL', evidence: null, unblock: `Inspect the packaged-smoke artifact; OV scenario failed: ${String(err?.message ?? err).split('\n')[0].slice(0, 700)}` })
+      complete(id, {
+        status: 'FAIL',
+        evidence: null,
+        unblock: `Inspect the packaged-smoke artifact; OV scenario failed: ${String(err?.message ?? err)
+          .split('\n')[0]
+          .slice(0, 700)}`
+      })
     }
   }
 
   await main(MAIN_RE_HIDE_SHIM)
   const first = await snapshot()
   if (!first) {
-    for (const row of rows) complete(row.id, { status: 'FAIL', evidence: null, unblock: 'Inspect the packaged-smoke artifact; overlay window not found in the main process.' })
+    for (const row of rows)
+      complete(row.id, {
+        status: 'FAIL',
+        evidence: null,
+        unblock: 'Inspect the packaged-smoke artifact; overlay window not found in the main process.'
+      })
     return
   }
   const { displayBounds, workArea } = first
@@ -160,14 +205,23 @@ export async function runOverlayStabilityRows({ page, main, openSettings, rows, 
 
   await step('OV-STABLE', async () => {
     await setCursor(away)
-    await page.evaluate(pinnedBridgeCall, ['setSettings', [{ overlayPlacement: 'top-center', overlayLayout: 'hide', autoHideOverlay: true }]])
+    await page.evaluate(pinnedBridgeCall, [
+      'setSettings',
+      [{ overlayPlacement: 'top-center', overlayLayout: 'hide', autoHideOverlay: true }]
+    ])
     const settingsDeadline = Date.now() + 10_000
     let applied = false
     while (!applied && Date.now() < settingsDeadline) {
-      applied = await page.evaluate(async () => {
-        const settings = await window.toto.getSettings()
-        return settings.overlayPlacement === 'top-center' && settings.overlayLayout === 'hide' && settings.autoHideOverlay === true
-      }).catch(() => false)
+      applied = await page
+        .evaluate(async () => {
+          const settings = await window.toto.getSettings()
+          return (
+            settings.overlayPlacement === 'top-center' &&
+            settings.overlayLayout === 'hide' &&
+            settings.autoHideOverlay === true
+          )
+        })
+        .catch(() => false)
       if (!applied) await wait(100)
     }
     if (!applied) throw new Error('top-center Hide settings were not applied')
@@ -219,7 +273,12 @@ export async function runOverlayStabilityRows({ page, main, openSettings, rows, 
         stops: path.map((stop) => ({ label: stop.label, point: stop.point, ms: stop.ms })),
         path: pathSurface,
         flashesOnPath,
-        notchHover: { point: notch, revealedAfterMs: revealed.ok ? revealed.ms : null, parkedAfterLeaveMs: parkedAgain.ok ? parkedAgain.ms : null, ...hoverSurface }
+        notchHover: {
+          point: notch,
+          revealedAfterMs: revealed.ok ? revealed.ms : null,
+          parkedAfterLeaveMs: parkedAgain.ok ? parkedAgain.ms : null,
+          ...hoverSurface
+        }
       }
     }
   })
@@ -229,7 +288,8 @@ export async function runOverlayStabilityRows({ page, main, openSettings, rows, 
     await main(MAIN_OV_RECORDER)
     const before = await main(MAIN_OV_BACKGROUND)
     await main(mainOvRecording(true))
-    if (!(await openSettings())) throw new Error('the Metis tray was not found to open Settings through the main process')
+    if (!(await openSettings()))
+      throw new Error('the Metis tray was not found to open Settings through the main process')
     const sections = page.locator('[aria-label="Settings sections"]')
     await sections.waitFor({ state: 'visible', timeout: 10_000 })
     await wait(500)
@@ -253,7 +313,9 @@ export async function runOverlayStabilityRows({ page, main, openSettings, rows, 
         afterSettingsClose: after,
         slabBeforeResize: surface.slabBeforeResize,
         opacityBeforeTarget: surface.opacityBeforeTarget,
-        calls: events.slice(0, 60).map((e) => ({ turn: e.turn, call: e.call, arg: e.arg, bounds: e.after.bounds, opacity: e.after.opacity }))
+        calls: events
+          .slice(0, 60)
+          .map((e) => ({ turn: e.turn, call: e.call, arg: e.arg, bounds: e.after.bounds, opacity: e.after.opacity }))
       }
     }
   })
@@ -267,11 +329,16 @@ export async function runPackagedOverlayStabilityRows({ port, inspectPort, audit
     inspector = await mainInspector(inspectPort)
   } catch (err) {
     for (const row of rows) {
-      Object.assign(row, { status: 'FAIL', evidence: null, unblock: `Inspect the packaged-smoke artifact; ${err?.message ?? String(err)}` })
+      Object.assign(row, {
+        status: 'FAIL',
+        evidence: null,
+        unblock: `Inspect the packaged-smoke artifact; ${err?.message ?? String(err)}`
+      })
     }
     return
   }
-  const flashCount = () => parseAuditLog(readAuditLog(auditLogPath)).filter((record) => record.event === 'overlay.flash').length
+  const flashCount = () =>
+    parseAuditLog(readAuditLog(auditLogPath)).filter((record) => record.event === 'overlay.flash').length
   try {
     await withOverlayPage(port, (page) =>
       runOverlayStabilityRows({ page, main: inspector.evaluate, openSettings: inspector.clickTray, rows, flashCount })

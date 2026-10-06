@@ -32,7 +32,12 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { NAVIGATION_GUARD_BOOTSTRAP_PATCH, clickHistory, ensureIdleBar, findOverlayPage } from './golden-flows/navigation-guard-rows.mjs'
+import {
+  NAVIGATION_GUARD_BOOTSTRAP_PATCH,
+  clickHistory,
+  ensureIdleBar,
+  findOverlayPage
+} from './golden-flows/navigation-guard-rows.mjs'
 import { mainInspector } from './golden-flows/right-edge-hide-rows.mjs'
 import { isOverlayUrl, parseAuditLog } from './golden-flows/smoke-support.mjs'
 import { freeLoopbackPort } from './lib/app-driver.mjs'
@@ -91,7 +96,8 @@ function readAudit(profile) {
 async function waitForRendererReady(profile, child) {
   const deadline = Date.now() + READY_TIMEOUT_MS
   while (Date.now() < deadline) {
-    if (child.exitCode !== null || child.signalCode !== null) throw new Error('the app exited before app.renderer.ready')
+    if (child.exitCode !== null || child.signalCode !== null)
+      throw new Error('the app exited before app.renderer.ready')
     if (readAudit(profile).some((record) => record.event === 'app.renderer.ready')) return
     await sleep(250)
   }
@@ -173,15 +179,25 @@ function collectHistoryView(solidLayers) {
   while (root && !(root.classList.contains('h-full') && root.classList.contains('flex-col'))) root = root.parentElement
   const scope = root ? 'history-view' : 'document'
   root = root ?? document.body
-  document.querySelectorAll('[data-history-design-root]').forEach((el) => el.removeAttribute('data-history-design-root'))
+  document
+    .querySelectorAll('[data-history-design-root]')
+    .forEach((el) => el.removeAttribute('data-history-design-root'))
   root.setAttribute('data-history-design-root', '')
   const hides = (value) => value === 'hidden' || value === 'clip'
   const samples = []
   for (const el of [root, ...root.querySelectorAll('*')]) {
-    if (typeof el.checkVisibility === 'function' && !el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) continue
+    if (
+      typeof el.checkVisibility === 'function' &&
+      !el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
+    )
+      continue
     const icon = el instanceof SVGElement && el.getAttribute('role') === 'img' && el.getAttribute('aria-label')
     const placeholder = el instanceof HTMLInputElement && el.placeholder && !el.value
-    const text = [...el.childNodes].filter((node) => node.nodeType === Node.TEXT_NODE).map((node) => node.textContent).join(' ').trim()
+    const text = [...el.childNodes]
+      .filter((node) => node.nodeType === Node.TEXT_NODE)
+      .map((node) => node.textContent)
+      .join(' ')
+      .trim()
     if (!icon && !placeholder && !text) continue
     const r = el.getBoundingClientRect()
     if (r.width === 0 || r.height === 0) continue
@@ -207,13 +223,23 @@ function collectHistoryView(solidLayers) {
       const s = getComputedStyle(node)
       if (hides(s.overflowX) || hides(s.overflowY)) {
         const a = node.getBoundingClientRect()
-        clipAncestor = { left: a.left, right: a.right, top: a.top, bottom: a.bottom, overflowX: s.overflowX, overflowY: s.overflowY, textOverflow: s.textOverflow }
+        clipAncestor = {
+          left: a.left,
+          right: a.right,
+          top: a.top,
+          bottom: a.bottom,
+          overflowX: s.overflowX,
+          overflowY: s.overflowY,
+          textOverflow: s.textOverflow
+        }
         break
       }
     }
     samples.push({
       kind: icon ? 'icon' : placeholder ? 'placeholder' : 'text',
-      label: (icon ? el.getAttribute('aria-label') : placeholder ? `placeholder: ${el.placeholder}` : text).replace(/\s+/g, ' ').slice(0, 60),
+      label: (icon ? el.getAttribute('aria-label') : placeholder ? `placeholder: ${el.placeholder}` : text)
+        .replace(/\s+/g, ' ')
+        .slice(0, 60),
       fg: rgba(placeholder ? getComputedStyle(el, '::placeholder').color : style.color),
       opacity,
       layers,
@@ -242,7 +268,10 @@ function tabStop() {
   const el = document.activeElement
   const root = document.querySelector('[data-history-design-root]')
   if (!el || el === document.body) return null
-  const name = (el.getAttribute('aria-label') || el.textContent || el.getAttribute('title') || '').replace(/\s+/g, ' ').trim().slice(0, 80)
+  const name = (el.getAttribute('aria-label') || el.textContent || el.getAttribute('title') || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80)
   return { name, role: el.getAttribute('role') || el.tagName.toLowerCase(), inView: Boolean(root && root.contains(el)) }
 }
 
@@ -274,7 +303,9 @@ async function rolesPresent(page, state) {
 async function waitForRequest(main, before, wait = sleep, label = 'list') {
   const deadline = Date.now() + STATE_TIMEOUT_MS
   while (Date.now() < deadline) {
-    const { requests, requestedAt } = await main('(({ requests, requestedAt }) => ({ requests, requestedAt }))(globalThis.__historyDesign)')
+    const { requests, requestedAt } = await main(
+      '(({ requests, requestedAt }) => ({ requests, requestedAt }))(globalThis.__historyDesign)'
+    )
     if (requests > before) return requestedAt
     await wait(50)
   }
@@ -327,7 +358,8 @@ export async function driveState(page, main, state, realRows, deps = {}) {
   const clickedAt = Date.now()
   await openHistory(page)
   const requestedAt = await waitForRequest(main, before, wait, 'list')
-  const visible = (text, role = null, timeoutMs = STATE_TIMEOUT_MS) => waitForHistoryDesignCue(page, { text, role, timeoutMs })
+  const visible = (text, role = null, timeoutMs = STATE_TIMEOUT_MS) =>
+    waitForHistoryDesignCue(page, { text, role, timeoutMs })
   const drive = { clickedAt, requestedAt }
   if (state.id === 'slow' || state.id === 'unavailable' || state.id === 'failed') {
     const cue = historyDesignCueForState(state.id)
@@ -347,7 +379,10 @@ export async function driveState(page, main, state, realRows, deps = {}) {
   }
   if (state.open) {
     // The explicit open, by keyboard: focus the row's Download action and press Enter.
-    await page.getByRole('button', { name: /^Download and open / }).first().focus()
+    await page
+      .getByRole('button', { name: /^Download and open / })
+      .first()
+      .focus()
     await page.keyboard.press('Enter')
     await visible(state.read === 'failed' ? 'Download failed' : 'Downloading…')
   }
@@ -355,7 +390,9 @@ export async function driveState(page, main, state, realRows, deps = {}) {
 }
 
 async function applyVariant(page, cdp, main, variant) {
-  await main(`(() => { globalThis.__metisReHideElectron.nativeTheme.themeSource = ${JSON.stringify(variant.appearance)}; return true })()`)
+  await main(
+    `(() => { globalThis.__metisReHideElectron.nativeTheme.themeSource = ${JSON.stringify(variant.appearance)}; return true })()`
+  )
   await page.emulateMedia({ colorScheme: variant.appearance, reducedMotion: variant.motion })
   const [r, g, b] = BACKDROPS[variant.appearance]
   await cdp.send('Emulation.setDefaultBackgroundColorOverride', { color: { r, g, b, a: 1 } })
@@ -366,7 +403,17 @@ async function captureState({ page, cdp, main, state, variant, realRows, out }) 
   try {
     return await captureReachedState({ page, cdp, main, state, variant, realRows, out })
   } catch (error) {
-    return { judged: judgeCapture({ state, variant, collected: null, roles: [], tabOrder: null, drive: { error: error.message } }), screenshot: null }
+    return {
+      judged: judgeCapture({
+        state,
+        variant,
+        collected: null,
+        roles: [],
+        tabOrder: null,
+        drive: { error: error.message }
+      }),
+      screenshot: null
+    }
   }
 }
 
@@ -416,7 +463,16 @@ async function captureReachedState({ page, cdp, main, state, variant, realRows, 
     tabOrder = await walkTabOrder(page)
   }
   const judged = judgeCapture({ state, variant, collected, roles, tabOrder, drive })
-  return { judged: { ...judged, scope: collected.scope, bannerAfterMs: drive.bannerAfterMs ?? null, capturedAfterMs: drive.capturedAfterMs, tabOrder }, screenshot }
+  return {
+    judged: {
+      ...judged,
+      scope: collected.scope,
+      bannerAfterMs: drive.bannerAfterMs ?? null,
+      capturedAfterMs: drive.capturedAfterMs,
+      tabOrder
+    },
+    screenshot
+  }
 }
 
 /**
@@ -430,7 +486,12 @@ async function warmUp({ page, cdp, main, realRows }) {
   try {
     await applyVariant(page, cdp, main, variant)
     await driveState(page, main, HISTORY_DESIGN_STATES[0], realRows)
-    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 0, height: 0, deviceScaleFactor: variant.scale, mobile: false })
+    await cdp.send('Emulation.setDeviceMetricsOverride', {
+      width: 0,
+      height: 0,
+      deviceScaleFactor: variant.scale,
+      mobile: false
+    })
     await settleWindow(page)
     await page.screenshot({ scale: 'device' })
   } catch {
@@ -468,11 +529,14 @@ function summaryMarkdown(report) {
     `|---|${variants.map(() => '---').join('|')}|`
   ]
   for (const state of HISTORY_DESIGN_STATES) {
-    const cells = variants.map((id) => report.captures.find((c) => c.state === state.id && c.variant === id)?.verdict ?? 'NOT_RUN')
+    const cells = variants.map(
+      (id) => report.captures.find((c) => c.state === state.id && c.variant === id)?.verdict ?? 'NOT_RUN'
+    )
     lines.push(`| ${state.id} | ${cells.join(' | ')} |`)
   }
   lines.push('', `History transitions recorded by the renderer: ${report.transitions.length}.`, '')
-  for (const capture of report.captures.filter((c) => c.verdict !== 'PASS')) lines.push(`- ${capture.state} / ${capture.variant}: ${capture.problems.join('; ')}`)
+  for (const capture of report.captures.filter((c) => c.verdict !== 'PASS'))
+    lines.push(`- ${capture.state} / ${capture.variant}: ${capture.problems.join('; ')}`)
   for (const row of report.blockedExternal) lines.push(`- ${row.row}: ${row.verdict}. ${row.unblockStep}`)
   return `${lines.join('\n')}\n`
 }
@@ -486,7 +550,11 @@ async function main() {
   mkdirSync(args.out, { recursive: true })
   for (const state of HISTORY_DESIGN_STATES) mkdirSync(join(args.out, state.id), { recursive: true })
   const profile = mkdtempSync(join(tmpdir(), 'metis-history-design-'))
-  writeFileSync(join(profile, 'settings.json'), `${JSON.stringify({ ...NAVIGATION_GUARD_BOOTSTRAP_PATCH, onboardingDoneAt: Date.now() })}\n`, { mode: 0o600 })
+  writeFileSync(
+    join(profile, 'settings.json'),
+    `${JSON.stringify({ ...NAVIGATION_GUARD_BOOTSTRAP_PATCH, onboardingDoneAt: Date.now() })}\n`,
+    { mode: 0o600 }
+  )
   const captures = []
   let harnessError = null
   let child = null
@@ -497,7 +565,11 @@ async function main() {
     const inspectPort = await freeLoopbackPort()
     const env = { ...process.env, ASKTOTO_USERDATA: profile }
     for (const key of Object.keys(env)) if (/_API_KEY$/i.test(key)) delete env[key]
-    child = spawn(executableOf(args.target), [`--remote-debugging-port=${port}`, `--inspect=127.0.0.1:${inspectPort}`], { env, stdio: 'ignore' })
+    child = spawn(
+      executableOf(args.target),
+      [`--remote-debugging-port=${port}`, `--inspect=127.0.0.1:${inspectPort}`],
+      { env, stdio: 'ignore' }
+    )
     child.once('error', (error) => {
       harnessError ??= `spawn failed: ${error.message}`
     })
@@ -514,7 +586,8 @@ async function main() {
     await ensureIdleBar(page)
     await clickHistory(page)
     const realRows = await page.evaluate(() => window.toto.recallList())
-    if (!realRows.some((row) => row.title === SAMPLE_MEETINGS[0])) throw new Error('the saved sample meetings are not listed')
+    if (!realRows.some((row) => row.title === SAMPLE_MEETINGS[0]))
+      throw new Error('the saved sample meetings are not listed')
     await main(INSTALL_FIXTURE_HANDLERS)
     const cdp = await page.context().newCDPSession(page)
     await warmUp({ page, cdp, main, realRows })
@@ -523,7 +596,9 @@ async function main() {
       for (const state of HISTORY_DESIGN_STATES) {
         const { judged, screenshot } = await captureState({ page, cdp, main, state, variant, realRows, out: args.out })
         captures.push({ ...judged, screenshot })
-        console.log(`[history-design] ${state.id} / ${variant.id}: ${judged.verdict}${judged.problems.length ? ` (${judged.problems.join('; ')})` : ''}`)
+        console.log(
+          `[history-design] ${state.id} / ${variant.id}: ${judged.verdict}${judged.problems.length ? ` (${judged.problems.join('; ')})` : ''}`
+        )
       }
     }
     // The product's own Quit; the page may close before this evaluation answers.
@@ -554,13 +629,22 @@ async function main() {
     ticket: 'M2-0032',
     verdict: harnessError ? 'INCOMPLETE' : designVerdict({ captures, transitions, expected }),
     harnessError,
-    app: started ? { version: started.version ?? null, platform: started.platform ?? null, arch: started.arch ?? null } : null,
-    states: HISTORY_DESIGN_STATES.map(({ id, title, list, search, read }) => ({ id, title, list, search: search ?? null, read: read ?? null })),
+    app: started
+      ? { version: started.version ?? null, platform: started.platform ?? null, arch: started.arch ?? null }
+      : null,
+    states: HISTORY_DESIGN_STATES.map(({ id, title, list, search, read }) => ({
+      id,
+      title,
+      list,
+      search: search ?? null,
+      read: read ?? null
+    })),
     variants: DESIGN_VARIANTS,
     backdrops: BACKDROPS,
     sources: {
       rows: 'real meetings saved through window.toto.saveTranscript and listed by the real recallList',
-      fixtures: "slow, failed, cloud-only and unreadable answers served by History's own IPC channels, replaced in main through the inspector"
+      fixtures:
+        "slow, failed, cloud-only and unreadable answers served by History's own IPC channels, replaced in main through the inspector"
     },
     expectedCaptures: expected,
     captures,
@@ -570,7 +654,9 @@ async function main() {
   }
   writeFileSync(join(args.out, 'history-design-report.json'), `${JSON.stringify(report, null, 2)}\n`)
   writeFileSync(join(args.out, 'SUMMARY.md'), summaryMarkdown(report))
-  console.log(`[history-design] ${report.verdict}: ${captures.filter((c) => c.verdict === 'PASS').length}/${expected} captures passed, ${transitions.length} History transitions`)
+  console.log(
+    `[history-design] ${report.verdict}: ${captures.filter((c) => c.verdict === 'PASS').length}/${expected} captures passed, ${transitions.length} History transitions`
+  )
   return report.verdict === 'PASS' ? 0 : 1
 }
 
