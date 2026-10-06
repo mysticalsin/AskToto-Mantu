@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { resolve } from 'node:path'
+import type { Browser, Page } from 'playwright'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   bestNonTextContrastCandidate,
   compositeColors,
@@ -149,5 +151,103 @@ describe('audit summaries', () => {
         clipping: { failures: [] }
       })
     ).toEqual(['clipping', 'nonText'])
+  })
+})
+
+describe('in-page collector', () => {
+  const auditScript = resolve(__dirname, 'capture-audit.mjs')
+  let browser: Browser
+
+  beforeAll(async () => {
+    const { chromium } = await import('playwright')
+    browser = await chromium.launch({ headless: true })
+  })
+
+  afterAll(async () => {
+    await browser?.close()
+  })
+
+  /** Load `body` in a fresh page and install the collector the way capture-states.mjs does. */
+  async function withCollector(body: string, run: (page: Page) => Promise<void>): Promise<void> {
+    const page = await browser.newPage({ viewport: { width: 960, height: 640 } })
+    try {
+      await page.setContent(`<!doctype html><html><head></head><body>${body}</body></html>`, {
+        waitUntil: 'domcontentloaded'
+      })
+      await page.addScriptTag({ path: auditScript, type: 'module' })
+      await page.waitForFunction(() => typeof (globalThis as any).__DESIGN_CAPTURE_AUDIT__?.collect === 'function')
+      await run(page)
+    } finally {
+      await page.close()
+    }
+  }
+
+  // The tests tsconfig has no DOM lib: reach the page's globals through globalThis, which is window there.
+  const collect = (page: Page): Promise<any> =>
+    page.evaluate(() => (globalThis as any).__DESIGN_CAPTURE_AUDIT__.collect())
+
+  /** The active element as `body` or `tag#id`. */
+  const activeElement = (page: Page): Promise<string> =>
+    page.evaluate(() => {
+      const active = (globalThis as any).document.activeElement
+      if (!active) return 'none'
+      const tag = active.tagName.toLowerCase()
+      return active.id ? `${tag}#${active.id}` : tag
+    })
+
+  it('fails an empty page as a vacuous audit instead of passing it', async () => {
+    await withCollector('', async (page) => {
+      const audit = await collect(page)
+      expect(audit.text.checked).toBe(0)
+      expect(audit.clipping.checked).toBe(0)
+      expect(audit.text.failures).toContainEqual(expect.objectContaining({ kind: 'vacuous-audit' }))
+      expect(audit.clipping.failures).toContainEqual(expect.objectContaining({ kind: 'vacuous-audit' }))
+      expect(audit.pass).toBe(false)
+    })
+  })
+
+  it('lists text over a gradient as unverifiable and never as a pass', async () => {
+    await withCollector(
+      '<p style="color:#000;background:#fff">Plain sample</p>' +
+        '<div style="background-image:linear-gradient(#ffffff, #000000)"><p style="color:#000">Gradient sample</p></div>',
+      async (page) => {
+        const audit = await collect(page)
+        // The plain text is measured, so the vacuity guard is not what fails this state.
+        expect(audit.text.checked).toBe(1)
+        expect(audit.text.failures).toEqual([])
+        expect(audit.clipping.failures).toEqual([])
+        expect(audit.unverifiable).toEqual([
+          expect.objectContaining({ tag: 'p', kind: 'text', reason: 'background-image' })
+        ])
+        expect(audit.pass).toBe(false)
+      }
+    )
+  })
+
+  it('leaves nothing focused after measuring focus indicators on a freshly loaded page', async () => {
+    await withCollector(
+      '<p style="color:#000">Label</p>' +
+        '<button id="first" style="border:1px solid #000;color:#000;background:#fff">One</button>' +
+        '<button id="last" style="border:1px solid #000;color:#000;background:#fff">Two</button>',
+      async (page) => {
+        expect(await activeElement(page)).toBe('body')
+        const audit = await collect(page)
+        expect(audit.nonText.checked).toBeGreaterThan(0)
+        expect(await activeElement(page)).toBe('body')
+      }
+    )
+  })
+
+  it('gives focus back to the control that had it before the audit', async () => {
+    await withCollector(
+      '<p style="color:#000">Label</p>' +
+        '<input id="field" style="border:1px solid #000;color:#000;background:#fff" />' +
+        '<button id="last" style="border:1px solid #000;color:#000;background:#fff">Two</button>',
+      async (page) => {
+        await page.focus('#field')
+        await collect(page)
+        expect(await activeElement(page)).toBe('input#field')
+      }
+    )
   })
 })

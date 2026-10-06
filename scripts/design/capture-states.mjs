@@ -125,6 +125,9 @@ try {
       try {
         await page.goto(`${pageUrl}?state=${encodeURIComponent(state)}`)
         await waitForStateReady(page, state)
+        // Screenshot first: the audit focuses controls to measure focus indicators, and must never be able to
+        // perturb the evidence image.
+        const screenshot = await cdp.send('Page.captureScreenshot', captureScreenshotRequest(VIEWPORT, row.scale))
         let audit
         try {
           audit = await collectAudit(page)
@@ -132,7 +135,6 @@ try {
           audit = auditErrorResult('collector', errorMessage(error))
           failures.push(`${file}: collector failed: ${errorMessage(error)}`)
         }
-        const screenshot = await cdp.send('Page.captureScreenshot', captureScreenshotRequest(VIEWPORT, row.scale))
         writeFileSync(path, Buffer.from(screenshot.data, 'base64'))
         const bytes = readFileSync(path)
         assertPngSize(bytes, VIEWPORT, row.scale, file)

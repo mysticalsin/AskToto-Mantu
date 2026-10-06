@@ -257,6 +257,20 @@ describe('design-capture workflow', () => {
   })
 })
 
+describe('capture driver', () => {
+  // capture-states.mjs launches Electron at import, so its evidence-loop order is pinned on the source text.
+  const driver = read('scripts/design/capture-states.mjs')
+
+  it('takes each evidence screenshot before the audit collector can focus controls', () => {
+    const evidenceLoop = driver.slice(driver.indexOf('for (const row of captureMatrix())'))
+    const screenshot = evidenceLoop.indexOf("cdp.send('Page.captureScreenshot'")
+    const audit = evidenceLoop.indexOf('await collectAudit(page)')
+    expect(screenshot).toBeGreaterThan(-1)
+    expect(audit).toBeGreaterThan(-1)
+    expect(screenshot).toBeLessThan(audit)
+  })
+})
+
 describe('png size check', () => {
   const png = (width: number, height: number): Buffer => {
     const b = Buffer.alloc(24)

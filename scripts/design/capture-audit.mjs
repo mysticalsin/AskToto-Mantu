@@ -368,12 +368,28 @@ function collectNonTextContrast(result, elements) {
         })
       }
     }
-    if (previousActive && previousActive !== element && typeof previousActive.focus === 'function') {
-      previousActive.focus({ preventScroll: true })
-    } else if (document.activeElement === element && typeof element.blur === 'function') {
-      element.blur()
-    }
+    restoreFocus(previousActive)
   }
+}
+
+/**
+ * Put focus back where it was before a control was focused for measurement. A freshly loaded page has
+ * <body> (or nothing) active, and <body> is not focusable, so calling body.focus() would leave the measured
+ * control focused and its focus ring in the evidence; blur whatever is active instead.
+ */
+function restoreFocus(previousActive) {
+  if (document.activeElement === previousActive) return
+  const restorable =
+    previousActive &&
+    previousActive !== document.body &&
+    previousActive !== document.documentElement &&
+    typeof previousActive.focus === 'function'
+  if (restorable) {
+    previousActive.focus({ preventScroll: true })
+    if (document.activeElement === previousActive) return
+  }
+  const active = document.activeElement
+  if (active && active !== document.body && typeof active.blur === 'function') active.blur()
 }
 
 function collectClipping(result, elements) {
