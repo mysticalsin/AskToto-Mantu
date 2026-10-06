@@ -322,7 +322,9 @@ export function fixtureAnswersForState(state, realRows, nowMs = Date.now()) {
 export async function waitForRequest(main, channel, before, wait = sleep) {
   const deadline = Date.now() + STATE_TIMEOUT_MS
   while (Date.now() < deadline) {
-    const { requests, requestedAt } = await main('(({ requests, requestedAt }) => ({ requests, requestedAt }))(globalThis.__historyDesign)')
+    const { requests, requestedAt } = await main(
+      '(({ requests, requestedAt }) => ({ requests, requestedAt }))(globalThis.__historyDesign)'
+    )
     if ((requests?.[channel] ?? 0) > before) return requestedAt?.[channel] ?? 0
     await wait(50)
   }
@@ -466,7 +468,8 @@ export async function driveState(page, main, state, realRows, deps = {}) {
       }
     })
   }
-  const visible = (text, role = null, timeoutMs = STATE_TIMEOUT_MS) => waitForHistoryDesignCue(page, { text, role, timeoutMs })
+  const visible = (text, role = null, timeoutMs = STATE_TIMEOUT_MS) =>
+    waitForHistoryDesignCue(page, { text, role, timeoutMs })
   const drive = {
     clickedAt,
     requestedAt,
@@ -659,7 +662,12 @@ export async function warmUp({ page, cdp, main, realRows, deps = {} }) {
   try {
     await applyVariant(page, cdp, main, variant)
     await driveState(page, main, HISTORY_DESIGN_STATES[0], realRows, deps)
-    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 0, height: 0, deviceScaleFactor: variant.scale, mobile: false })
+    await cdp.send('Emulation.setDeviceMetricsOverride', {
+      width: 0,
+      height: 0,
+      deviceScaleFactor: variant.scale,
+      mobile: false
+    })
     await settleWindow(page)
     await page.screenshot({ scale: 'device' })
   } catch {
