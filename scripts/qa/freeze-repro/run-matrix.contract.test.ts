@@ -5,13 +5,14 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync
 } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo, Socket } from 'node:net'
 import { tmpdir } from 'node:os'
-import { delimiter, dirname, join } from 'node:path'
+import { delimiter, dirname, join, relative } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { WebSocketServer } from 'ws'
 import { describe, expect, it } from 'vitest'
@@ -180,12 +181,19 @@ function hostedWindowsStubs(root: string, { secondLaunchFails = false } = {}) {
   const app = join(root, 'Metis.exe')
   const launchLog = join(root, 'metis-launches.txt')
   const launchCount = join(root, 'metis-launch-count.txt')
+  const nodeOptionsLog = join(root, 'node-options.txt')
   const forbiddenLog = join(root, 'forbidden-tools.txt')
   writeExecutable(
     app,
     [
       '#!/usr/bin/env bash',
-      'for arg in "$@"; do [ "$arg" = "-e" ] && exit 0; done',
+      'for arg in "$@"; do',
+      '  if [ "$arg" = "-e" ]; then',
+      `    printf '%s\\n' "$NODE_OPTIONS" > '${bashPath(nodeOptionsLog)}'`,
+      '    [ -z "${M2_0008_NODE_OPTIONS_MARKER:-}" ] || printf loaded > "$M2_0008_NODE_OPTIONS_MARKER"',
+      '    exit 0',
+      '  fi',
+      'done',
       `count=0; [ ! -f '${bashPath(launchCount)}' ] || count=$(cat '${bashPath(launchCount)}')`,
       'count=$((count + 1))',
       `printf '%s\\n' "$count" > '${bashPath(launchCount)}'`,
@@ -201,7 +209,18 @@ function hostedWindowsStubs(root: string, { secondLaunchFails = false } = {}) {
       `#!/usr/bin/env bash\nprintf '%s\\n' '${tool}' >> '${bashPath(forbiddenLog)}'\nexit 42\n`
     )
   }
-  return { app, bin, launchLog, forbiddenLog }
+  writeExecutable(
+    join(bin, 'cygpath'),
+    [
+      '#!/usr/bin/env bash',
+      '[ "${1:-}" != "-w" ] || shift',
+      'path=${1:-}',
+      'path=${path//\\//\\\\}',
+      'printf \'C:\\\\hosted%s\\n\' "$path"',
+      ''
+    ].join('\n')
+  )
+  return { app, bin, launchLog, nodeOptionsLog, forbiddenLog }
 }
 
 function hostedEnv(
@@ -242,6 +261,7 @@ function hostedWindowsEnv(
     M2_0008_CONTRACT_LAUNCH_SETTLE_SECONDS: '1',
     M2_0008_CONTRACT_POLL_WAIT_SECONDS: '1',
     M2_0008_CONTRACT_REOPEN_SETTLE_SECONDS: '1',
+    M2_0008_CONTRACT_CYGPATH_BIN: bashPath(join(stubs.bin, 'cygpath')),
     M2_0008_CONTRACT_CDP_PORT: String(port),
     ...extra
   }
@@ -615,6 +635,61 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
       expect(diagnosticReports).toContain('"copied":[')
     } finally {
       rmSync(out, { recursive: true, force: true })
+    }
+  })
+
+  it('passes an absolute quoted fuse probe path when --out is relative', () => {
+    const root = mkdtempSync(join(tmpdir(), 'm2-0557-fuse-contract-'))
+    const out = join(root, 'relative bundle')
+    const outArg = relative(process.cwd(), out)
+    const app = join(root, 'Metis')
+    const nodeOptionsLog = join(root, 'node-options.txt')
+    const requirePathLog = join(root, 'require-path.txt')
+    try {
+      expect(outArg.startsWith('/')).toBe(false)
+      writeExecutable(
+        app,
+        [
+          '#!/usr/bin/env bash',
+          `printf '%s\\n' "$NODE_OPTIONS" > '${bashPath(nodeOptionsLog)}'`,
+          'require_path=${NODE_OPTIONS#--require \\"}',
+          'require_path=${require_path%\\"}',
+          `printf '%s\\n' "$require_path" > '${bashPath(requirePathLog)}'`,
+          'probe_file=${require_path//\\\\\\\\/\\\\}',
+          '[ -f "$probe_file" ] || exit 42',
+          'printf loaded > "$M2_0008_NODE_OPTIONS_MARKER"',
+          ''
+        ].join('\n')
+      )
+
+      const result = spawnSync(
+        'bash',
+        [SCRIPT, '--artifact', SHA, '--build-run-id', '123', '--out', outArg, '--app', app, '--dry-run'],
+        {
+          encoding: 'utf8',
+          timeout: 30_000
+        }
+      )
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)
+      const nodeOptions = readFileSync(nodeOptionsLog, 'utf8').trim()
+      expect(nodeOptions).not.toContain(`--require ${outArg}`)
+      const requirePath = readFileSync(requirePathLog, 'utf8').trim()
+      if (process.platform === 'win32') {
+        expect(nodeOptions).toMatch(/^--require "[A-Z]:\\\\/)
+        expect(nodeOptions).toContain('\\\\fuse-probe\\\\node-options-probe.cjs"')
+        expect(requirePath).toMatch(/^[A-Z]:\\\\/)
+        expect(requirePath).toContain('\\\\fuse-probe\\\\node-options-probe.cjs')
+      } else {
+        expect(nodeOptions).toMatch(/^--require "\//)
+        expect(nodeOptions).toContain('/fuse-probe/node-options-probe.cjs"')
+        expect(requirePath).toBe(join(realpathSync(out), 'fuse-probe', 'node-options-probe.cjs'))
+      }
+      expect(JSON.parse(readFileSync(join(out, 'node-options-fuse.json'), 'utf8'))).toMatchObject({
+        node_options_fuse: 'ENABLED'
+      })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
     }
   })
 })
@@ -1010,6 +1085,9 @@ describe('M2-0463 Windows hosted-live mode', () => {
 
       const environment = JSON.parse(readFileSync(join(out, 'environment.json'), 'utf8'))
       expect(environment).toMatchObject({ mode: 'hosted-live', host: { label: 'windows-latest' } })
+      const nodeOptions = readFileSync(stubs.nodeOptionsLog, 'utf8').trim()
+      expect(nodeOptions).toMatch(/^--require "C:\\\\hosted\\\\/)
+      expect(nodeOptions).toContain('\\\\fuse-probe\\\\node-options-probe.cjs"')
       const evidenceImport = JSON.parse(readFileSync(join(out, 'M2-0008.evidence-import.json'), 'utf8'))
       expect(evidenceImport).toMatchObject({
         mode: 'hosted-live',
