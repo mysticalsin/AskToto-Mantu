@@ -1,5 +1,18 @@
-import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react'
-import { AudioLines, Brain, ChevronRight, CornerDownLeft, FileSearch, Image, LoaderCircle, Pause, Play, Settings, Square, X } from 'lucide-react'
+import { useLayoutEffect, useRef, useState, type ReactNode, type Ref } from 'react'
+import {
+  AudioLines,
+  Brain,
+  ChevronRight,
+  CornerDownLeft,
+  FileSearch,
+  Image,
+  LoaderCircle,
+  Pause,
+  Play,
+  Settings,
+  Square,
+  X
+} from 'lucide-react'
 import type { MetisCommandState } from '@shared/ipc'
 import { RIGHT_EDGE_DRAWER_WIDTH, RIGHT_EDGE_TAB_WIDTH } from '@shared/right-edge-geometry'
 import { ElapsedClock } from './Bar'
@@ -18,6 +31,10 @@ export interface SidecarChatProps {
   /** Existing answer content, supplied by App rather than recreated in the dock. */
   body?: ReactNode
   inputRef?: Ref<HTMLInputElement>
+  /** A keystroke or a pointerdown in the composer: the typing pin (lib/right-edge/pins.ts). */
+  onComposerActivity?: () => void
+  /** An IME composition started or ended in the composer: the ime pin. */
+  onComposingChange?: (composing: boolean) => void
 }
 
 /**
@@ -31,7 +48,9 @@ export function SidecarChat({
   onStop,
   busy = false,
   stoppable = false,
-  inputRef
+  inputRef,
+  onComposerActivity,
+  onComposingChange
 }: SidecarChatProps): JSX.Element {
   const available = typeof onChange === 'function' && typeof onSubmit === 'function'
   const submit = (): void => {
@@ -54,9 +73,19 @@ export function SidecarChat({
         className="right-edge-sidecar__chat-input no-drag"
         disabled={!available || busy}
         onChange={(event) => onChange?.(event.target.value)}
+        onPointerDown={onComposerActivity}
+        onCompositionStart={() => onComposingChange?.(true)}
+        onCompositionEnd={() => onComposingChange?.(false)}
         onKeyDown={(event) => {
-          // IME uses Enter to commit a composition. Sending then would discard the user's in-progress text.
-          if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+          onComposerActivity?.()
+          // D10: IME uses Enter to commit a composition (isComposing, or keyCode 229 on the keydown it consumes).
+          // Sending then would discard the user's in-progress text.
+          if (
+            event.key === 'Enter' &&
+            !event.shiftKey &&
+            !event.nativeEvent.isComposing &&
+            event.nativeEvent.keyCode !== 229
+          ) {
             event.preventDefault()
             submit()
           }
@@ -72,7 +101,15 @@ export function SidecarChat({
         disabled={!available || (busy && !stoppable)}
         onClick={busy && stoppable ? onStop : undefined}
       >
-        {busy ? (stoppable ? <X size={16} strokeWidth={1.9} /> : <LoaderCircle size={16} strokeWidth={1.9} className="right-edge-sidecar__spin" />) : <CornerDownLeft size={16} strokeWidth={1.9} />}
+        {busy ? (
+          stoppable ? (
+            <X size={16} strokeWidth={1.9} />
+          ) : (
+            <LoaderCircle size={16} strokeWidth={1.9} className="right-edge-sidecar__spin" />
+          )
+        ) : (
+          <CornerDownLeft size={16} strokeWidth={1.9} />
+        )}
       </button>
     </form>
   )
@@ -110,7 +147,9 @@ function DockAction({
       onClick={onClick}
       title={status ? `${label}: ${status}` : label}
     >
-      <span className="right-edge-sidecar__action-icon" aria-hidden="true">{children}</span>
+      <span className="right-edge-sidecar__action-icon" aria-hidden="true">
+        {children}
+      </span>
       <span className="right-edge-sidecar__action-assist">{status ? `${label}: ${status}` : label}</span>
     </button>
   )
@@ -121,7 +160,8 @@ function compactLiveNotice(notice: string): string {
   if (/^mic silent\b/i.test(message)) return 'Mic silent · check input'
   if (/^microphone input stopped\b/i.test(message)) return 'Mic lost · reconnecting'
   if (/^could(?: not|n['’]t) start the microphone\b/i.test(message)) return 'Mic unavailable · check access'
-  if (/^microphone unavailable\. listening to system audio only\./i.test(message)) return 'Mic unavailable · system audio only'
+  if (/^microphone unavailable\. listening to system audio only\./i.test(message))
+    return 'Mic unavailable · system audio only'
   if (/built-in transcription files/i.test(notice)) return 'Transcription repair'
   return notice
 }
@@ -187,7 +227,9 @@ export function RightEdgeSidecar({
   spotlightReady = false,
   onHistory,
   liveNotice,
-  onSettings
+  onSettings,
+  onComposerActivity,
+  onComposingChange
 }: {
   open: boolean
   onOpen: () => void
@@ -198,18 +240,25 @@ export function RightEdgeSidecar({
   focusSignal?: number
   /** Opaque state only. Main has not supplied a verified action preview in this version. */
   commandState?: MetisCommandState
-} & SidecarChatProps & RightEdgeDockActions): JSX.Element {
+} & SidecarChatProps &
+  RightEdgeDockActions): JSX.Element {
   const [pendingCancel, setPendingCancel] = useState<{
     proposalId: string | null
     status: 'idle' | 'cancelling' | 'cancelled' | 'unavailable'
   }>({ proposalId: null, status: 'idle' })
-  const [intelligence, setIntelligence] = useState<{ status: 'idle' | 'opening' | 'error'; error?: string }>({ status: 'idle' })
+  const [intelligence, setIntelligence] = useState<{ status: 'idle' | 'opening' | 'error'; error?: string }>({
+    status: 'idle'
+  })
   const composerRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    if (!open) return
-    const frame = window.requestAnimationFrame(() => composerRef.current?.focus())
-    return () => window.cancelAnimationFrame(frame)
+  // D4: an explicit open (a summon bumps focusSignal; a click on the rail tab) focuses the composer in the
+  // commit that opens the drawer, never a frame later. A hover reveal opens it without moving focus.
+  const focusedSignalRef = useRef(focusSignal)
+  const tabOpenRef = useRef(false)
+  useLayoutEffect(() => {
+    if (!open || (focusedSignalRef.current === focusSignal && !tabOpenRef.current)) return
+    focusedSignalRef.current = focusSignal
+    tabOpenRef.current = false
+    composerRef.current?.focus()
   }, [open, focusSignal])
 
   const cancelPendingCommand = (): void => {
@@ -240,17 +289,31 @@ export function RightEdgeSidecar({
     commandState.proposalId !== null && pendingCancel.proposalId === commandState.proposalId
       ? pendingCancel.status
       : 'idle'
-  const status = capturing ? 'Capturing screen' : listening ? (paused ? 'Paused' : 'Listening') : busy ? 'Thinking' : 'Ready'
+  const status = capturing
+    ? 'Capturing screen'
+    : listening
+      ? paused
+        ? 'Paused'
+        : 'Listening'
+      : busy
+        ? 'Thinking'
+        : 'Ready'
 
   return (
-    <div className={'right-edge-sidecar' + (open ? ' right-edge-sidecar--open' : '')}>
+    <div
+      className={'right-edge-sidecar' + (open ? ' right-edge-sidecar--open' : '')}
+      data-re-surface={open ? 'island' : 'rest'}
+    >
       <button
         type="button"
         aria-label="Open Métis"
         aria-expanded={open}
         aria-hidden={open || undefined}
         tabIndex={open ? -1 : 0}
-        onClick={onOpen}
+        onClick={() => {
+          tabOpenRef.current = true
+          onOpen()
+        }}
         className="right-edge-sidecar__tab no-drag focus-ring"
         style={{ width: RIGHT_EDGE_TAB_WIDTH }}
       >
@@ -265,7 +328,9 @@ export function RightEdgeSidecar({
         className="right-edge-sidecar__drawer"
         style={{ maxWidth: RIGHT_EDGE_DRAWER_WIDTH }}
         onKeyDown={(event) => {
-          if (dockEscapeHides({ key: event.key, isComposing: event.nativeEvent.isComposing }, canClose)) {
+          // D11: Escape during an IME composition cancels the composition; the IME keeps it.
+          const isComposing = event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229
+          if (dockEscapeHides({ key: event.key, isComposing }, canClose)) {
             event.preventDefault()
             event.stopPropagation()
             close()
@@ -276,7 +341,13 @@ export function RightEdgeSidecar({
           <header className="right-edge-sidecar__header">
             <span className="right-edge-sidecar__header-leading">
               {canClose ? (
-                <button type="button" aria-label="Hide Métis" title="Hide" onClick={close} className="right-edge-sidecar__header-back no-drag focus-ring">
+                <button
+                  type="button"
+                  aria-label="Hide Métis"
+                  title="Hide"
+                  onClick={close}
+                  className="right-edge-sidecar__header-back no-drag focus-ring"
+                >
                   <ChevronRight size={18} strokeWidth={1.9} aria-hidden="true" />
                 </button>
               ) : null}
@@ -325,7 +396,9 @@ export function RightEdgeSidecar({
               <div className="right-edge-sidecar__answer">{body}</div>
             ) : (
               <div className="right-edge-sidecar__empty">
-                <span className="right-edge-sidecar__empty-mark"><MantuMark size={22} round /></span>
+                <span className="right-edge-sidecar__empty-mark">
+                  <MantuMark size={22} round />
+                </span>
                 <p>Ready when you are</p>
                 <span>Ask Métis, capture your screen, or start a meeting.</span>
               </div>
@@ -342,7 +415,11 @@ export function RightEdgeSidecar({
                   disabled={capturing}
                   active={capturing}
                 >
-                  {capturing ? <LoaderCircle size={17} strokeWidth={1.9} className="right-edge-sidecar__spin" /> : <Image size={17} strokeWidth={1.9} />}
+                  {capturing ? (
+                    <LoaderCircle size={17} strokeWidth={1.9} className="right-edge-sidecar__spin" />
+                  ) : (
+                    <Image size={17} strokeWidth={1.9} />
+                  )}
                 </DockAction>
               ) : null}
               {onSpotlightRef ? (
@@ -366,15 +443,18 @@ export function RightEdgeSidecar({
                   onClick={openIntelligence}
                   disabled={intelligence.status === 'opening' || capturing}
                 >
-                  {intelligence.status === 'opening' ? <LoaderCircle size={17} strokeWidth={1.9} className="right-edge-sidecar__spin" /> : <Brain size={17} strokeWidth={1.9} />}
+                  {intelligence.status === 'opening' ? (
+                    <LoaderCircle size={17} strokeWidth={1.9} className="right-edge-sidecar__spin" />
+                  ) : (
+                    <Brain size={17} strokeWidth={1.9} />
+                  )}
                 </DockAction>
               ) : null}
-              {!listening && onToggleListen ? <span className="right-edge-sidecar__action-divider" aria-hidden="true" /> : null}
               {!listening && onToggleListen ? (
-                <DockAction
-                  label="Start listening"
-                  onClick={onToggleListen}
-                >
+                <span className="right-edge-sidecar__action-divider" aria-hidden="true" />
+              ) : null}
+              {!listening && onToggleListen ? (
+                <DockAction label="Start listening" onClick={onToggleListen}>
                   <AudioLines size={17} strokeWidth={1.9} />
                 </DockAction>
               ) : null}
@@ -402,9 +482,17 @@ export function RightEdgeSidecar({
             </div>
           </div>
 
-          {intelligence.status === 'error' ? <p className="right-edge-sidecar__notice" role="status">{intelligence.error}</p> : null}
+          {intelligence.status === 'error' ? (
+            <p className="right-edge-sidecar__notice" role="status">
+              {intelligence.error}
+            </p>
+          ) : null}
           {commandState.proposalId ? (
-            <section className="right-edge-sidecar__pending" aria-label="Pending command without a verified preview" role="status">
+            <section
+              className="right-edge-sidecar__pending"
+              aria-label="Pending command without a verified preview"
+              role="status"
+            >
               <p>A pending external action has no verified summary. It cannot be approved here.</p>
               <button
                 type="button"
@@ -429,6 +517,8 @@ export function RightEdgeSidecar({
               busy={busy}
               stoppable={stoppable}
               inputRef={composerRef}
+              onComposerActivity={onComposerActivity}
+              onComposingChange={onComposingChange}
             />
           </div>
         </div>

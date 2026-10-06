@@ -10,7 +10,14 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { pickReadyProvider, detectHint, licenseErrorMessage, SETTINGS_CONTENT_SCROLL_CLASS, settingsScrollClipsOverflowX } from './Settings'
+import { sourceIndexOf } from '../../../../scripts/lib/source-layout'
+import {
+  pickReadyProvider,
+  detectHint,
+  licenseErrorMessage,
+  SETTINGS_CONTENT_SCROLL_CLASS,
+  settingsScrollClipsOverflowX
+} from './Settings'
 import { licenseErrorMessage as onboardingLicenseErrorMessage } from './OnboardingExperience'
 import { licenseErrorMessage as gateLicenseErrorMessage } from './LicenseGate'
 
@@ -38,7 +45,10 @@ const sourceFiles = [
   ...listSources(join(rendererSrc, 'ui'))
 ]
 const source = sourceFiles
-  .map((file) => `// FILE: ${relative(rendererSrc, file).replace(/\\/g, '/')}\n${readFileSync(file, 'utf8').replace(/\r\n/g, '\n')}`)
+  .map(
+    (file) =>
+      `// FILE: ${relative(rendererSrc, file).replace(/\\/g, '/')}\n${readFileSync(file, 'utf8').replace(/\r\n/g, '\n')}`
+  )
   .join('\n')
 
 describe('legacy licence activation errors', () => {
@@ -58,9 +68,9 @@ describe('legacy licence activation errors', () => {
 
 // Returns the source slice from `startAnchor` up to (not including) the first `endMarker` found after it.
 function blockAfter(startAnchor: string, endMarker: string): string {
-  const start = source.indexOf(startAnchor)
+  const start = sourceIndexOf(source, startAnchor)
   if (start === -1) throw new Error(`Settings.contract.test.ts anchor not found (source moved?): ${startAnchor}`)
-  const end = source.indexOf(endMarker, start)
+  const end = sourceIndexOf(source, endMarker, start + 1)
   if (end === -1) throw new Error(`Settings.contract.test.ts end marker not found after anchor: ${endMarker}`)
   return source.slice(start, end)
 }
@@ -120,7 +130,9 @@ describe('Local AI distinguishes bundled compact weights from optional downloads
   })
 
   it('an available model remains visibly inactive while Local AI is off', () => {
-    expect(copy).toMatch(/!settings\.localLlm\.enabled\s*\? 'Available on this device\. Local AI is off\. Enable it to use this model\.'/)
+    expect(copy).toMatch(
+      /!settings\.localLlm\.enabled\s*\? 'Available on this device\. Local AI is off\. Enable it to use this model\.'/
+    )
   })
 
   it('a disk or RAM skip is a named refusal with Retry, not a silent idle', () => {
@@ -146,7 +158,7 @@ describe('Local AI distinguishes bundled compact weights from optional downloads
   })
 })
 
-describe("runtime status line reads the true tri-state, not a boolean (finding 2)", () => {
+describe('runtime status line reads the true tri-state, not a boolean (finding 2)', () => {
   const block = blockAfter('settings.localRuntimeState', '</div>')
 
   it('the not-running branch no longer promises an unconditional automatic restart', () => {
@@ -194,11 +206,14 @@ describe('disconnectDust() clears dustTokenMintedAt (finding 4)', () => {
 describe('the Custom provider tile can actually be selected (finding 5)', () => {
   const block = blockAfter('{shown.map((id) => (', '))}\n          </div>')
 
-  it("seeds a valid https:// customBaseUrl alongside provider:'custom' so SettingsSchema's refine " +
-      '(provider !== \'custom\' || /^https:\\/\\//i.test(customBaseUrl)) does not revert the write', () => {
-    expect(block).toMatch(/id === 'custom'/)
-    expect(block).toMatch(/customBaseUrl:\s*'https:\/\//)
-  })
+  it(
+    "seeds a valid https:// customBaseUrl alongside provider:'custom' so SettingsSchema's refine " +
+      "(provider !== 'custom' || /^https:\\/\\//i.test(customBaseUrl)) does not revert the write",
+    () => {
+      expect(block).toMatch(/id === 'custom'/)
+      expect(block).toMatch(/customBaseUrl:\s*'https:\/\//)
+    }
+  )
 
   it('does not touch customBaseUrl when one is already a valid https:// URL (no clobbering a real endpoint)', () => {
     expect(block).toMatch(/!\/\^https:\\\/\\\/\/i\.test\(settings\.customBaseUrl\)/)
@@ -345,7 +360,9 @@ describe('MQA-062 — CLI Integration verifies the real session when the panel o
   it('runs once per mount — the ref is set before the await, not after', () => {
     const body = block()
     expect(body).toMatch(/if \(sessionCheckedRef\.current\) return/)
-    expect(body.indexOf('sessionCheckedRef.current = true')).toBeLessThan(body.indexOf('window.toto.cliVerifySessions()'))
+    expect(body.indexOf('sessionCheckedRef.current = true')).toBeLessThan(
+      body.indexOf('window.toto.cliVerifySessions()')
+    )
     expect(body).toMatch(/\}, \[\]\)/) // mount-only, like the Dust probe above it
   })
 })
@@ -378,7 +395,7 @@ describe('CLI Integration copy — managed install, not npm i -g', () => {
 describe('Set up automatically shows an honest status chip', () => {
   const cli = (): string => blockAfter('function CliIntegration(', '\n// FILE: features/settings/CalendarTab.tsx')
   const install = (): string =>
-    blockAfter('const runInstall = async (id: \'claude-cli\' | \'codex-cli\')', 'const connect = async')
+    blockAfter("const runInstall = async (id: 'claude-cli' | 'codex-cli')", 'const connect = async')
 
   it('keeps Set up automatically and walks install → login → Connected', () => {
     const body = cli()
@@ -570,7 +587,9 @@ describe('Dust instant validate proves a live connection', () => {
 describe('Settings placement-aware overlay controls', () => {
   it('places position first and resolves Bar rest from the normalized placement', () => {
     expect(source).toMatch(/overlayShowsBarRestPicker/)
-    expect(source).toMatch(/resolveOverlayPresentation\(\{ layout: settings\.overlayLayout, placement: settings\.overlayPlacement \}\)\.layout/)
+    expect(source).toMatch(
+      /resolveOverlayPresentation\(\{ layout: settings\.overlayLayout, placement: settings\.overlayPlacement \}\)\.layout/
+    )
     expect(source).toMatch(/persistOverlayPlacement\(id, settings\.overlayLayout, patch\)/)
     expect(source).toMatch(/OverlayOrbPicker/)
     expect(source).toMatch(/overlayOrbStyle: id/)
@@ -607,8 +626,12 @@ describe('Settings from M scrolls the full surface', () => {
 describe('Settings scroll root clips sideways overflow (Win Audio / AI)', () => {
   it('the scroll-class helper rejects overflow-x auto/scroll/visible and requires hidden/clip', () => {
     expect(settingsScrollClipsOverflowX(SETTINGS_CONTENT_SCROLL_CLASS)).toBe(true)
-    expect(settingsScrollClipsOverflowX('cl-content scroll-thin min-h-0 flex-1 overflow-y-auto overflow-x-hidden')).toBe(true)
-    expect(settingsScrollClipsOverflowX('cl-content scroll-thin min-h-0 flex-1 overflow-y-auto overflow-x-clip')).toBe(true)
+    expect(
+      settingsScrollClipsOverflowX('cl-content scroll-thin min-h-0 flex-1 overflow-y-auto overflow-x-hidden')
+    ).toBe(true)
+    expect(settingsScrollClipsOverflowX('cl-content scroll-thin min-h-0 flex-1 overflow-y-auto overflow-x-clip')).toBe(
+      true
+    )
     // The pre-fix class: overflow-y-auto alone computes overflow-x: auto (CSS pairing).
     expect(settingsScrollClipsOverflowX('cl-content scroll-thin min-h-0 flex-1 overflow-y-auto')).toBe(false)
     expect(settingsScrollClipsOverflowX('cl-content overflow-y-auto overflow-x-auto')).toBe(false)
@@ -658,7 +681,7 @@ describe('Operator control plane lives on Cloudflare, not in Settings', () => {
     expect(source).not.toMatch(/local analytics page that pretends/)
     expect(source).not.toMatch(/DAU/)
     expect(source).not.toMatch(/cache hit rate/)
-    const operator = blockAfter('title="Operator"', '\n            {tab === \'meetings\'')
+    const operator = blockAfter('title="Operator"', "\n            {tab === 'meetings'")
     expect(operator).not.toMatch(/—/)
     expect(operator).not.toMatch(/I am an AI|as an AI|AI assistant/i)
   })
@@ -681,7 +704,6 @@ describe('locked mode skills — Settings has no editor for shipped skill files'
     expect(personalize).toMatch(/patch\(\{ modePrompts:/)
     expect(source).not.toMatch(/modeSkills/)
     expect(source).not.toMatch(/skillsRoot/)
-
   })
 })
 
@@ -729,7 +751,10 @@ describe('M2-0412 fleet model policy — "managed by your organization" banner',
   })
 
   it('also surfaces the stt and localModel capabilities as managed banners in their split settings sections', () => {
-    const localBanner = blockAfter('const localModelPolicy = settings.modelPolicyCapabilities.localModel', '{/* CLI Integration')
+    const localBanner = blockAfter(
+      'const localModelPolicy = settings.modelPolicyCapabilities.localModel',
+      '{/* CLI Integration'
+    )
     expect(localBanner).toMatch(/localModelPolicy &&/)
     expect(localBanner).toMatch(/MODEL_POLICY_CAPABILITY_LABELS\.localModel/)
     const sttBanner = blockAfter('const sttPolicy = settings.modelPolicyCapabilities.stt', '<Section title="Listen to"')

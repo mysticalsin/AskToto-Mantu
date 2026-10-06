@@ -44,11 +44,11 @@
     "src/main/brain/store.ts": 1190,
     "src/main/cli.ts": 1690,
     "src/main/import-jobs.ts": 1198,
-    "src/main/index.ts": 9933,
+    "src/main/index.ts": 10365,
     "src/main/store.ts": 1364,
     "src/main/transcripts.ts": 1210,
-    "src/renderer/src/App.tsx": 4331,
-    "src/renderer/src/components/Bar.tsx": 898,
+    "src/renderer/src/App.tsx": 4610,
+    "src/renderer/src/components/Bar.tsx": 962,
     "src/renderer/src/components/BrainRecordPage.tsx": 831,
     "src/renderer/src/components/BrainView.tsx": 1445,
     "src/renderer/src/components/Onboarding.tsx": 1000,
@@ -60,7 +60,7 @@
     "src/renderer/src/features/settings/DustSetup.tsx": 980,
     "src/renderer/src/features/settings/SettingsRoot.tsx": 1246,
     "src/renderer/src/lib/listen.ts": 3144,
-    "src/shared/ipc.ts": 2450
+    "src/shared/ipc.ts": 2473
   },
   "FF-05a": {
     "src/main/apple-speech.ts": 2,
