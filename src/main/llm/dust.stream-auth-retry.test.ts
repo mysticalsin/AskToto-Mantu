@@ -7,6 +7,8 @@ vi.mock('electron', () => ({ app: { getPath: () => '/tmp' } }))
 vi.mock('../auth', () => ({ authStatus: () => ({ email: null, name: null }) }))
 vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLog: vi.fn() }))
 
+type WaitHandlers = { onDone: ReturnType<typeof vi.fn>; onError: ReturnType<typeof vi.fn> }
+
 const calls = {
   create: 0,
   post: 0,
@@ -112,7 +114,7 @@ describe('Dust auth retry after stream-start 401', () => {
     failFirstStream = true
     const opts = baseOpts()
     streamDust(opts)
-    await waitDone(opts.handlers)
+    await waitDone(opts.handlers as unknown as WaitHandlers)
 
     expect(calls.create).toBe(1)
     expect(calls.post).toBe(0)

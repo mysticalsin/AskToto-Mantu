@@ -53,6 +53,7 @@
  * Usage: node scripts/check-audit.mjs   (exit 0 = clean or excused-only; 1 = real findings)
  */
 import { execSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 
 const PRUNED_PREFIXES = [
   'node_modules/@dust-tt/client/node_modules/@modelcontextprotocol/sdk',
@@ -60,9 +61,108 @@ const PRUNED_PREFIXES = [
   'node_modules/@dust-tt/client/node_modules/ip-address'
 ]
 
+const REVIEWED_FIXED_FINDINGS = {
+  '@dust-tt/client': {
+    nodes: ['node_modules/@dust-tt/client'],
+    fixed: [
+      ['node_modules/@modelcontextprotocol/sdk', '@modelcontextprotocol/sdk', '1.26.0'],
+      ['node_modules/fast-uri', 'fast-uri', '3.1.2']
+    ]
+  },
+  '@huggingface/transformers': {
+    nodes: ['node_modules/@huggingface/transformers'],
+    fixed: [['node_modules/sharp', 'sharp', '0.35.4']]
+  },
+  '@modelcontextprotocol/sdk': {
+    nodes: ['node_modules/@modelcontextprotocol/sdk'],
+    fixed: [
+      ['node_modules/@modelcontextprotocol/sdk', '@modelcontextprotocol/sdk', '1.26.0'],
+      ['node_modules/fast-uri', 'fast-uri', '3.1.2']
+    ]
+  },
+  sharp: {
+    nodes: ['node_modules/sharp'],
+    fixed: [['node_modules/sharp', 'sharp', '0.35.4']]
+  }
+}
+
+const lock = JSON.parse(readFileSync(new URL('../package-lock.json', import.meta.url), 'utf8'))
+
 function isPrunedNode(node) {
   if (node.includes('\\') || node.split('/').some((part) => part === '.' || part === '..')) return false
   return PRUNED_PREFIXES.some((prefix) => node === prefix || node.startsWith(`${prefix}/`))
+}
+
+function versionParts(version) {
+  return String(version).split(/[.-]/).map((part) => (/^\d+$/.test(part) ? Number(part) : part))
+}
+
+function compareVersions(a, b) {
+  const left = versionParts(a)
+  const right = versionParts(b)
+  for (let i = 0; i < Math.max(left.length, right.length); i++) {
+    const x = left[i] ?? 0
+    const y = right[i] ?? 0
+    if (typeof x === 'number' && typeof y === 'number' && x !== y) return x > y ? 1 : -1
+    const sx = String(x)
+    const sy = String(y)
+    if (sx !== sy) return sx > sy ? 1 : -1
+  }
+  return 0
+}
+
+function versionSatisfiesComparator(version, comparator) {
+  const match = /^(<=|>=|<|>|=)?\s*v?([0-9]+(?:\.[0-9]+){0,2})$/.exec(comparator.trim())
+  if (!match) return true
+  const op = match[1] ?? '='
+  const cmp = compareVersions(version, match[2])
+  if (op === '<') return cmp < 0
+  if (op === '<=') return cmp <= 0
+  if (op === '>') return cmp > 0
+  if (op === '>=') return cmp >= 0
+  return cmp === 0
+}
+
+function versionSatisfiesRange(version, range) {
+  if (typeof range !== 'string' || range.trim() === '') return true
+  return range.split(/\s+/).every((part) => part === '||' ? false : versionSatisfiesComparator(version, part))
+}
+
+function collectViaEntries(name, vulnerabilities, seen = new Set()) {
+  if (seen.has(name)) return []
+  seen.add(name)
+  const entry = vulnerabilities[name]
+  if (!isRecord(entry) || !Array.isArray(entry.via)) return []
+  const out = []
+  for (const via of entry.via) {
+    out.push(via)
+    if (typeof via === 'string') out.push(...collectViaEntries(via, vulnerabilities, seen))
+    else if (isRecord(via) && typeof via.name === 'string') out.push(...collectViaEntries(via.name, vulnerabilities, seen))
+  }
+  return out
+}
+
+function advisoryRangeExcludesInstalled(entry, review) {
+  const packageName = entry.dependency ?? entry.name
+  const range = entry.range
+  if (typeof packageName !== 'string' || typeof range !== 'string' || range.trim() === '') return false
+  const fixed = review.fixed.find(([, fixedPackageName]) => fixedPackageName === packageName)
+  if (!fixed) return false
+  const [node, , fixedFloor] = fixed
+  const installedVersion = lock.packages?.[node]?.version
+  return typeof installedVersion === 'string' &&
+    compareVersions(installedVersion, fixedFloor) >= 0 &&
+    !versionSatisfiesRange(installedVersion, range)
+}
+
+function isReviewedFixedFinding(name, vulnerability, vulnerabilities) {
+  const review = REVIEWED_FIXED_FINDINGS[name]
+  if (!review) return false
+  const nodes = Array.isArray(vulnerability.nodes) ? vulnerability.nodes : []
+  if (nodes.length === 0 || !nodes.every((node) => review.nodes.includes(node))) return false
+  const advisoryEntries = collectViaEntries(name, vulnerabilities)
+    .filter((entry) => isRecord(entry) && typeof entry.range === 'string' && entry.range.trim() !== '')
+  return advisoryEntries.length > 0 && advisoryEntries.every((entry) => advisoryRangeExcludesInstalled(entry, review))
 }
 
 let raw
@@ -112,7 +212,7 @@ for (const [name, v] of Object.entries(report.vulnerabilities ?? {})) {
   if (v.severity !== 'high' && v.severity !== 'critical') continue
   const nodes = Array.isArray(v.nodes) ? v.nodes : []
   const fullyInsideDustBundle = nodes.length > 0 && nodes.every(isPrunedNode)
-  if (fullyInsideDustBundle) excused.push(`${name} (${v.severity})`)
+  if (fullyInsideDustBundle || isReviewedFixedFinding(name, v, report.vulnerabilities)) excused.push(`${name} (${v.severity})`)
   else bad.push(`${name} (${v.severity}) at ${nodes.join(', ') || '(no path reported)'}`)
 }
 
