@@ -12,12 +12,13 @@ import { createListeningStateHandler } from './listening-state-ipc'
 // (IPC.askStart), where both are cleared in the same breath. attempt()/the gate are nested closures over
 // the per-request IPC handler and are never unit-tested directly (no index.test.ts exists — same rationale
 // as pinned-agent-boundary.contract.test.ts), so the invariant is pinned here against the actual source.
-const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
-const appSrc = readFileSync(join(__dirname, '..', 'renderer', 'src', 'App.tsx'), 'utf8')
+const readSource = (...parts: string[]): string => readFileSync(join(...parts), 'utf8').replace(/\r\n/g, '\n')
+const indexSrc = readSource(__dirname, 'index.ts')
+const appSrc = readSource(__dirname, '..', 'renderer', 'src', 'App.tsx')
 const onboardingSrc = readFileSync(
   join(__dirname, '..', 'renderer', 'src', 'components', 'OnboardingExperience.tsx'),
   'utf8'
-)
+).replace(/\r\n/g, '\n')
 
 describe('fresh-question boundary at the askStart choke point', () => {
   it('askFollowUpMemory defaults to OFF — every plain question starts clean unless the user opts in', () => {

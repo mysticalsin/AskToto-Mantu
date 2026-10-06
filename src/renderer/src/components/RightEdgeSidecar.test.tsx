@@ -10,14 +10,15 @@ import react from '@vitejs/plugin-react'
 import { RIGHT_EDGE_DRAWER_WIDTH, RIGHT_EDGE_TAB_WIDTH } from '@shared/right-edge-geometry'
 import { RightEdgeSidecar, SidecarChat, dockEscapeHides } from './RightEdgeSidecar'
 
-const sidecar = readFileSync(join(__dirname, './RightEdgeSidecar.tsx'), 'utf8')
-const answer = readFileSync(join(__dirname, './Answer.tsx'), 'utf8')
-const app = readFileSync(join(__dirname, '../App.tsx'), 'utf8')
+const readSource = (...parts: string[]): string => readFileSync(join(...parts), 'utf8').replace(/\r\n/g, '\n')
+const sidecar = readSource(__dirname, './RightEdgeSidecar.tsx')
+const answer = readSource(__dirname, './Answer.tsx')
+const app = readSource(__dirname, '../App.tsx')
 const css = readAppCss()
 const e2eSmoke = [
-  readFileSync(join(__dirname, '../../../../scripts/e2e-smoke.mjs'), 'utf8'),
-  readFileSync(join(__dirname, '../../../../scripts/qa/golden-flows/onboarding-flows.mjs'), 'utf8'),
-  readFileSync(join(__dirname, '../../../../scripts/qa/golden-flows/sidecar-flow.mjs'), 'utf8')
+  readSource(__dirname, '../../../../scripts/e2e-smoke.mjs'),
+  readSource(__dirname, '../../../../scripts/qa/golden-flows/onboarding-flows.mjs'),
+  readSource(__dirname, '../../../../scripts/qa/golden-flows/sidecar-flow.mjs')
 ].join('\n')
 
 function findElement(node: ReactNode, type: string): ReactElement<Record<string, unknown>> | null {
@@ -556,7 +557,7 @@ describe('right-edge dock', () => {
     expect(sidecar).toMatch(/if \(!onOpenIntelligence \|\| capturing \|\| intelligence\.status === 'opening'\) return/)
     expect(sidecar).toMatch(/disabled=\{intelligence\.status === 'opening' \|\| capturing\}/)
     expect(app).toMatch(
-      /const openIntelligenceDashboard = useCallback\(async[\s\S]*?if \(capturing \|\| capturingRef\.current\) return \{ ok: false, error: 'Wait for screen capture to finish before opening Mantu Intelligence\.' \}/
+      /const openIntelligenceDashboard = useCallback\(async[\s\S]*?if \(capturing \|\| capturingRef\.current\)\s*return \{ ok: false, error: 'Wait for screen capture to finish before opening Mantu Intelligence\.' \}/
     )
   })
 })
