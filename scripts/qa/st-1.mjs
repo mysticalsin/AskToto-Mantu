@@ -90,6 +90,7 @@ import {
   bootStagesFromAudit,
   buildLaunchFailureReport,
   buildReport,
+  candidateArgv,
   candidateEnv,
   countStorageSaturations,
   cpuBusyPct,
@@ -298,7 +299,7 @@ function placeDatalessFixtures(root, cloudDir) {
  *  ready to stop it — before calling inspectorUrl, so every way that wait can end still leaves the child
  *  killable by the caller's cleanup. */
 function spawnCandidate(exe, profile, windowVariant) {
-  return spawn(exe, ['--inspect=127.0.0.1:0'], {
+  return spawn(exe, candidateArgv(process.env), {
     env: candidateEnv(process.env, profile, windowVariant),
     stdio: ['ignore', 'ignore', 'pipe'],
     detached: process.platform !== 'win32'
@@ -882,7 +883,7 @@ async function main() {
   let cleanupError = null
   const reportPath = args.out ?? join(reportDir, `${reportBase}.json`)
   const currentReport = () => {
-    const common = { row: args.fixtures, installer: basename(args.installer), candidate, fixtures, purpose, windowVariant, windowWarmup }
+    const common = { row: args.fixtures, installer: basename(args.installer), candidate, fixtures, purpose, windowVariant, windowWarmup, env: process.env }
     if (launchFailure) return buildLaunchFailureReport({ ...common, reason: launchFailure })
     return buildReport({
       ...common,

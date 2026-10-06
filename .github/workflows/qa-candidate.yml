@@ -30,6 +30,7 @@ on:
       - scripts/hermetic/prove-owner-sandbox.sh
       - scripts/hermetic/run-under-owner-sandbox.sh
       - scripts/hermetic/owner-account.sb
+      - scripts/hermetic/owner-runner.sb
       # The boot path ST-1 measures (M2-0433), so every fix slice on it gets a QA self-test.
       - src/main/boot-tray.ts
       - src/main/boot-window-rendering.ts
@@ -314,7 +315,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.22.3
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
           pattern: build-*
           path: builds
@@ -345,11 +346,11 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.22.3
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
           name: candidate-provenance
           path: provenance
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
           name: candidate-${{ matrix.variant }}
           path: assets
@@ -430,11 +431,11 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.22.3
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
           name: candidate-provenance
           path: provenance
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
           name: candidate-win
           path: assets
@@ -508,7 +509,7 @@ jobs:
           TMPDIR: ${{ runner.temp }}
         with:
           persist-credentials: false
-      - name: Prove owner-account sandbox denies private state
+      - name: Prove owner-runner sandbox denies private state
         env:
           TMPDIR: ${{ runner.temp }}
         run: bash scripts/hermetic/prove-owner-sandbox.sh
@@ -517,13 +518,13 @@ jobs:
           TMPDIR: ${{ runner.temp }}
         with:
           node-version: 22.22.3
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         env:
           TMPDIR: ${{ runner.temp }}
         with:
           name: candidate-provenance
           path: provenance
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         env:
           TMPDIR: ${{ runner.temp }}
         with:
@@ -532,11 +533,16 @@ jobs:
       - name: Verify every byte against the provenance
         env:
           TMPDIR: ${{ runner.temp }}
+          OWNER_SANDBOX_PROFILE: owner-runner.sb
         run: bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
       - name: Measure packaged stall resilience
         continue-on-error: true
         env:
           TMPDIR: ${{ runner.temp }}
+          ASKTOTO_LOCAL_KEYSTORE: 1
+          ASKTOTO_QA_MOCK_KEYCHAIN: 1
+          ST1_CHROMIUM_SANDBOX: off
+          OWNER_SANDBOX_PROFILE: owner-runner.sb
         run: |
           mkdir -p st1-report
           installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
@@ -563,7 +569,16 @@ jobs:
             "$HOME/Library/Preferences/com.mantu.asktoto.qa.plist" \
             "$HOME/Library/Saved Application State/com.mantu.asktoto.qa.savedState" \
             "$HOME/Library/Caches/com.mantu.asktoto.qa"
-          security delete-generic-password -s "asktoto-qa Safe Storage" || true
+      - name: Prove QA identity did not touch the login keychain
+        if: always()
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          if security find-generic-password -s "asktoto-qa Safe Storage" >/dev/null 2>&1; then
+            echo "::error::QA identity created a login-keychain Safe Storage item."
+            exit 1
+          fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         env:
@@ -596,15 +611,15 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.22.3
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
           name: candidate-provenance
           path: provenance
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
           name: candidate-mac-qa-identity
           path: assets
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
           name: candidate-mac
           path: assets-mac
@@ -730,7 +745,7 @@ jobs:
           TMPDIR: ${{ runner.temp }}
         with:
           persist-credentials: false
-      - name: Prove owner-account sandbox denies private state
+      - name: Prove owner-runner sandbox denies private state
         env:
           TMPDIR: ${{ runner.temp }}
         run: bash scripts/hermetic/prove-owner-sandbox.sh
@@ -739,13 +754,13 @@ jobs:
           TMPDIR: ${{ runner.temp }}
         with:
           node-version: 22.22.3
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         env:
           TMPDIR: ${{ runner.temp }}
         with:
           name: candidate-provenance
           path: provenance
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         env:
           TMPDIR: ${{ runner.temp }}
         with:
@@ -754,11 +769,16 @@ jobs:
       - name: Verify every byte against the provenance
         env:
           TMPDIR: ${{ runner.temp }}
+          OWNER_SANDBOX_PROFILE: owner-runner.sb
         run: bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
       - name: Measure the packaged app with no fixture
         continue-on-error: true
         env:
           TMPDIR: ${{ runner.temp }}
+          ASKTOTO_LOCAL_KEYSTORE: 1
+          ASKTOTO_QA_MOCK_KEYCHAIN: 1
+          ST1_CHROMIUM_SANDBOX: off
+          OWNER_SANDBOX_PROFILE: owner-runner.sb
         run: |
           mkdir -p st1-report
           installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
@@ -785,7 +805,16 @@ jobs:
             "$HOME/Library/Preferences/com.mantu.asktoto.qa.plist" \
             "$HOME/Library/Saved Application State/com.mantu.asktoto.qa.savedState" \
             "$HOME/Library/Caches/com.mantu.asktoto.qa"
-          security delete-generic-password -s "asktoto-qa Safe Storage" || true
+      - name: Prove QA identity did not touch the login keychain
+        if: always()
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          if security find-generic-password -s "asktoto-qa Safe Storage" >/dev/null 2>&1; then
+            echo "::error::QA identity created a login-keychain Safe Storage item."
+            exit 1
+          fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         env:
@@ -793,7 +822,7 @@ jobs:
         with:
           name: st-1-macos-control
           path: st1-report/
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
 
   # The History row (M2-0193): History open and search against the FIFO fixtures, each answering with a
@@ -814,11 +843,11 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.22.3
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
           name: candidate-provenance
           path: provenance
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
           name: candidate-mac-qa-identity
           path: assets
@@ -927,11 +956,11 @@ jobs:
           cache: npm
       # Only so the capture's playwright import resolves. This job never builds the app.
       - run: npm ci
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
           name: candidate-provenance
           path: provenance
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
           name: candidate-mac
           path: assets
@@ -993,11 +1022,11 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.22.3
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
           name: candidate-provenance
           path: provenance
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
           name: candidate-mac-qa-identity
           path: assets
@@ -1070,7 +1099,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
           name: candidate-provenance
           path: provenance
