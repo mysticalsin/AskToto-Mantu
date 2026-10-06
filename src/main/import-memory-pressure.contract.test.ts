@@ -1,22 +1,22 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { flattenSource } from '../../scripts/lib/source-layout'
+import { flattenSource, sourceIndexOf } from '../../scripts/lib/source-layout'
 
 const index = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const screenPreprocess = readFileSync(join(__dirname, 'screen-preprocess.ts'), 'utf8')
 
 function between(source: string, start: string, end: string): string {
-  const from = source.indexOf(start)
-  const to = source.indexOf(end, from + start.length)
+  const from = sourceIndexOf(source, start)
+  const to = sourceIndexOf(source, end, from + 1)
   expect(from).toBeGreaterThanOrEqual(0)
   expect(to).toBeGreaterThan(from)
   return source.slice(from, to)
 }
 
 function expectBefore(source: string, first: string, second: string): void {
-  const firstIndex = source.indexOf(first)
-  const secondIndex = source.indexOf(second)
+  const firstIndex = sourceIndexOf(source, first)
+  const secondIndex = sourceIndexOf(source, second)
   expect(firstIndex).toBeGreaterThanOrEqual(0)
   expect(secondIndex).toBeGreaterThanOrEqual(0)
   expect(firstIndex).toBeLessThan(secondIndex)

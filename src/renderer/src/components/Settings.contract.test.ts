@@ -10,6 +10,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { describe, it, expect } from 'vitest'
+import { sourceIndexOf } from '../../../../scripts/lib/source-layout'
 import { pickReadyProvider, detectHint, licenseErrorMessage, SETTINGS_CONTENT_SCROLL_CLASS, settingsScrollClipsOverflowX } from './Settings'
 import { licenseErrorMessage as onboardingLicenseErrorMessage } from './OnboardingExperience'
 import { licenseErrorMessage as gateLicenseErrorMessage } from './LicenseGate'
@@ -58,9 +59,9 @@ describe('legacy licence activation errors', () => {
 
 // Returns the source slice from `startAnchor` up to (not including) the first `endMarker` found after it.
 function blockAfter(startAnchor: string, endMarker: string): string {
-  const start = source.indexOf(startAnchor)
+  const start = sourceIndexOf(source, startAnchor)
   if (start === -1) throw new Error(`Settings.contract.test.ts anchor not found (source moved?): ${startAnchor}`)
-  const end = source.indexOf(endMarker, start)
+  const end = sourceIndexOf(source, endMarker, start + 1)
   if (end === -1) throw new Error(`Settings.contract.test.ts end marker not found after anchor: ${endMarker}`)
   return source.slice(start, end)
 }

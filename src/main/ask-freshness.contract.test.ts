@@ -27,7 +27,7 @@ describe('fresh-question boundary at the askStart choke point', () => {
   })
 
   it('the gate targets exactly the plain interactive surface: answer/vision, no overrides, not listening', () => {
-    const start = indexSrc.indexOf('// Fresh-question boundary (see the state block above)')
+    const start = sourceIndexOf(indexSrc, '// Fresh-question boundary (see the state block above)')
     expect(start).toBeGreaterThan(-1)
     const body = indexSrc.slice(start, start + 1200)
     expect(body).toMatch(/req\.mode === 'answer' \|\| req\.mode === 'vision'/)
@@ -37,7 +37,10 @@ describe('fresh-question boundary at the askStart choke point', () => {
   })
 
   it('the gate clears BOTH carriers together — renderer history and the server-side Dust conversation', () => {
-    const start = indexSrc.indexOf('if (!s.askFollowUpMemory || Date.now() - lastPlainAskAt > ASK_MEMORY_IDLE_MS) {')
+    const start = sourceIndexOf(
+      indexSrc,
+      'if (!s.askFollowUpMemory || Date.now() - lastPlainAskAt > ASK_MEMORY_IDLE_MS) {'
+    )
     expect(start).toBeGreaterThan(-1)
     const body = indexSrc.slice(start, start + 200)
     expect(body).toMatch(/req\.history = \[\]/)
@@ -78,7 +81,7 @@ describe('fresh-question boundary at the askStart choke point', () => {
   })
 
   it('IPC.askResetContext resets the Dust conversation — "New chat" is no longer a no-op for Dust users', () => {
-    const start = indexSrc.indexOf('ipcMain.handle(IPC.askResetContext')
+    const start = sourceIndexOf(indexSrc, 'ipcMain.handle(IPC.askResetContext')
     expect(start).toBeGreaterThan(-1)
     const body = indexSrc.slice(start, start + 300)
     expect(body).toMatch(/resetDustConversation\(\)/)
@@ -88,7 +91,8 @@ describe('fresh-question boundary at the askStart choke point', () => {
 
 describe('review fixes (2026-08-04) stay wired', () => {
   it('flipping askFollowUpMemory is a conversation boundary in MAIN (Dust conversation + idle clock)', () => {
-    const start = indexSrc.indexOf(
+    const start = sourceIndexOf(
+      indexSrc,
       "if ('askFollowUpMemory' in p && next.askFollowUpMemory !== cur.askFollowUpMemory) {"
     )
     expect(start).toBeGreaterThan(-1)
@@ -98,7 +102,7 @@ describe('review fixes (2026-08-04) stay wired', () => {
   })
 
   it('flipping askFollowUpMemory clears the RENDERER history refs (pre-opt-in Q&A never surfaces)', () => {
-    const start = appSrc.indexOf('// Flipping follow-up memory is itself a conversation boundary')
+    const start = sourceIndexOf(appSrc, '// Flipping follow-up memory is itself a conversation boundary')
     expect(start).toBeGreaterThan(-1)
     const body = appSrc.slice(start, start + 700)
     expect(body).toMatch(/historyRef\.current = \[\]/)
@@ -107,7 +111,7 @@ describe('review fixes (2026-08-04) stay wired', () => {
   })
 
   it("screen-ask's stay-fast branch re-captures when history would be wiped (memory off or idle-expired)", () => {
-    const start = appSrc.indexOf('const memoryLive =')
+    const start = sourceIndexOf(appSrc, 'const memoryLive =')
     expect(start).toBeGreaterThan(-1)
     const body = appSrc.slice(start, start + 400)
     expect(body).toMatch(/settings\?\.askFollowUpMemory \?\? false/)
@@ -123,18 +127,18 @@ describe('review fixes (2026-08-04) stay wired', () => {
 
 describe('renderer clears its own carriers at every conversation boundary', () => {
   it('reset() (New chat / Cmd+Shift+R) also resets the main-owned Dust conversation', () => {
-    const start = appSrc.indexOf('const reset = useCallback(() => {')
+    const start = sourceIndexOf(appSrc, 'const reset = useCallback(() => {')
     expect(start).toBeGreaterThan(-1)
-    const body = appSrc.slice(start, appSrc.indexOf('}, [', start))
+    const body = appSrc.slice(start, sourceIndexOf(appSrc, '}, [', start))
     expect(body).toMatch(/historyRef\.current = \[\]/)
     expect(body).toMatch(/copilotHistoryRef\.current = \[\]/)
     expect(body).toMatch(/window\.toto\.resetAskContext\(\)/)
   })
 
   it('startListen() clears ad-hoc history so pre-meeting Q&A never rides into mid-meeting asks', () => {
-    const start = appSrc.indexOf('const startListen = useCallback(')
+    const start = sourceIndexOf(appSrc, 'const startListen = useCallback(')
     expect(start).toBeGreaterThan(-1)
-    const body = appSrc.slice(start, appSrc.indexOf('}, [', start))
+    const body = appSrc.slice(start, sourceIndexOf(appSrc, '}, [', start))
     expect(body).toMatch(/historyRef\.current = \[\]/)
     expect(body).toMatch(/copilotHistoryRef\.current = \[\]/)
   })

@@ -21,6 +21,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
+import { sourceIndexOf, sourceSnippet } from '../../../scripts/lib/source-layout'
 
 const source = readFileSync(join(__dirname, 'App.tsx'), 'utf8')
 
@@ -28,7 +29,7 @@ const source = readFileSync(join(__dirname, 'App.tsx'), 'utf8')
 // (e.g. "" for a bare call, or "'suggest'" for a scoped one). Throws loudly if the anchor or the call
 // itself has gone missing, so a rename shows up as a broken test rather than a silently-skipped one.
 function requireProviderArgAfter(anchor: string): string {
-  const idx = source.indexOf(anchor)
+  const idx = sourceIndexOf(source, anchor)
   if (idx === -1) throw new Error(`App.local-gates.test.ts anchor not found (source moved?): ${anchor}`)
   const rest = source.slice(idx)
   const m = rest.match(/requireProvider\(([^)]*)\)/)
@@ -40,8 +41,8 @@ describe('No-Decision Honk gate (H2)', () => {
   // Isolate the effect body that actually fires the honk: from the introducing comment to the closing
   // of its useEffect. `}, [listen.lines])` is unique in the file (the honk's transcript-driven re-fire
   // is the only effect keyed on exactly that dependency array), so it's a stable end anchor.
-  const honkStart = source.indexOf('// No-Decision Honk')
-  const honkEnd = source.indexOf('}, [listen.lines])', honkStart)
+  const honkStart = sourceIndexOf(source, '// No-Decision Honk')
+  const honkEnd = sourceIndexOf(source, '}, [listen.lines])', honkStart)
 
   it('anchors are present (source has not drifted out from under this test)', () => {
     expect(honkStart).toBeGreaterThan(-1)
@@ -161,7 +162,7 @@ describe('QuickActions and gate reachability for a zero-API-key install', () => 
   it('the safety net enables EVERY chip, unconditioned on kind', () => {
     // Fact-check and Explain fire answer mode, which the floor serves. Leaving them dim on a local-only
     // install refused a request main would have taken, and the tooltip told the user to go get a key.
-    expect(qaSrc).toMatch(/const localServes =\s*\n\s*localFallbackReady \|\|/)
+    expect(qaSrc).toMatch(sourceSnippet('const localServes = localFallbackReady ||'))
   })
 
   it('the per-task flags stay narrow — only the two in-scope chips', () => {
@@ -180,7 +181,7 @@ describe('QuickActions and gate reachability for a zero-API-key install', () => 
   })
 
   it('requireProvider still honours each per-task useFor toggle', () => {
-    expect(appSrc).toMatch(/local === 'suggest'\s*\n\s*\? settings\?\.localSuggestReady/)
+    expect(appSrc).toMatch(sourceSnippet("local === 'suggest' ? settings?.localSuggestReady"))
     expect(appSrc).toMatch(/\? settings\?\.localSummaryReady/)
     expect(appSrc).toMatch(/\? settings\?\.localVisionReady/)
   })
@@ -195,9 +196,9 @@ describe('QuickActions and gate reachability for a zero-API-key install', () => 
 // Returns the source between two anchors (end exclusive), throwing loudly if either anchor has gone
 // missing so a rename/reorder shows up as a broken test rather than a silently-skipped one.
 function blockBetween(startAnchor: string, endAnchor: string): string {
-  const start = source.indexOf(startAnchor)
+  const start = sourceIndexOf(source, startAnchor)
   if (start === -1) throw new Error(`App.local-gates.test.ts anchor not found (source moved?): ${startAnchor}`)
-  const end = source.indexOf(endAnchor, start)
+  const end = sourceIndexOf(source, endAnchor, start + 1)
   if (end === -1) throw new Error(`App.local-gates.test.ts end anchor not found after start: ${endAnchor}`)
   return source.slice(start, end)
 }
@@ -282,16 +283,16 @@ describe("Summarize screen-route mirrors askScreen's actual vision gate (finding
   // requireProviderArgAfter('summarize') anchors on the literal "kind === 'summarize'" text — reuse the
   // same anchor here, sliced up to the route computation, to isolate ONLY the summarize branch's
   // canUseScreen (explain's own separate canUseScreen, asserted below, must keep the broader flag).
-  const summarizeIdx = source.indexOf("kind === 'summarize'")
+  const summarizeIdx = sourceIndexOf(source, "kind === 'summarize'")
   // canUseScreen here is now a multi-line Boolean(...), so grab the whole block up to the route decision.
   const summarizeCanUseScreenBlock = source.slice(
     summarizeIdx,
-    source.indexOf('const route = chooseQuickActionRoute', summarizeIdx)
+    sourceIndexOf(source, 'const route = chooseQuickActionRoute', summarizeIdx)
   )
 
-  const explainIdx = source.indexOf("kind === 'explain'")
+  const explainIdx = sourceIndexOf(source, "kind === 'explain'")
   const explainCanUseScreenLine = source
-    .slice(explainIdx, source.indexOf('const route = chooseQuickActionRoute', explainIdx))
+    .slice(explainIdx, sourceIndexOf(source, 'const route = chooseQuickActionRoute', explainIdx))
     .split('\n')
     .find((l) => l.includes('const canUseScreen'))
 
@@ -312,7 +313,7 @@ describe("Summarize screen-route mirrors askScreen's actual vision gate (finding
   })
 
   it('keeps the local screen-summary prompt on the base tier without transcript-driven escalation', () => {
-    const summarizeBlock = source.slice(summarizeIdx, source.indexOf("kind === 'summarize'", summarizeIdx + 1))
+    const summarizeBlock = source.slice(summarizeIdx, sourceIndexOf(source, "kind === 'summarize'", summarizeIdx + 1))
     expect(summarizeBlock).toMatch(/settings\?\.localVisionReady\s*\?\s*LOCAL_SCREEN_SUMMARY_PROMPT/)
   })
 })

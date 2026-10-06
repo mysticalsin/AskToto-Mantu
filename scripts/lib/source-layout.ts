@@ -22,6 +22,7 @@ export function sourceSnippet(snippet: string): RegExp {
       .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       .replace(/\\\./g, '\\s*\\.')
       .replace(/\\\(/g, '\\(\\s*')
+      .replace(/\\\[/g, '\\[\\s*')
       .replace(/\\\{/g, '\\{\\s*')
       .replace(/,/g, ',\\s*')
       .replace(/\\\|\\\|/g, '\\|\\|\\s*')
@@ -35,6 +36,18 @@ export function sourceIndexOf(source: string, snippet: string, fromIndex = 0): n
   const search = fromIndex > 0 ? source.slice(fromIndex) : source
   const match = sourceSnippet(snippet).exec(search)
   return match ? match.index + fromIndex : -1
+}
+
+/** `lastIndexOf` that finds a snippet even when Biome has rewrapped it. */
+export function sourceLastIndexOf(source: string, snippet: string): number {
+  const copy = new RegExp(sourceSnippet(snippet).source, 'g')
+  let last = -1
+  let match: RegExpExecArray | null
+  while ((match = copy.exec(source))) {
+    last = match.index
+    if (match[0].length === 0) copy.lastIndex += 1
+  }
+  return last
 }
 
 /** Slice `source` from `from` up to (excluding) the next `to`, ignoring wrapping. */

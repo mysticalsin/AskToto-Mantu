@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { sourceIndexOf } from '../../scripts/lib/source-layout'
 
 const main = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const preload = readFileSync(join(__dirname, '../preload/index.ts'), 'utf8')
@@ -8,9 +9,9 @@ const ipc = readFileSync(join(__dirname, '../shared/ipc.ts'), 'utf8')
 const app = readFileSync(join(__dirname, '../renderer/src/App.tsx'), 'utf8')
 
 function between(source: string, start: string, end: string): string {
-  const from = source.indexOf(start)
+  const from = sourceIndexOf(source, start)
   expect(from, `missing start marker: ${start}`).toBeGreaterThan(-1)
-  const to = source.indexOf(end, from)
+  const to = sourceIndexOf(source, end, from + 1)
   expect(to, `missing end marker: ${end}`).toBeGreaterThan(-1)
   return source.slice(from, to)
 }

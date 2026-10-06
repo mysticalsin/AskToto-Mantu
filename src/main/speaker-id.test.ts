@@ -418,7 +418,7 @@ describe('speaker:embed — the Whisper-engine speaker-embedding tap (contract)'
   })
 
   it('the handler returns a best-effort { name?, echo? } shape, gated on Float32Array + size, and flags echo', () => {
-    const start = indexSrc.indexOf('ipcMain.handle(IPC.speakerEmbed')
+    const start = sourceIndexOf(indexSrc, 'ipcMain.handle(IPC.speakerEmbed')
     expect(start).toBeGreaterThan(-1)
     const body = indexSrc.slice(start, start + 2500)
     expect(body).toMatch(/if \(!\(p\?\.samples instanceof Float32Array\)\) return \{\}/)
@@ -439,7 +439,7 @@ describe('speaker:embed — the Whisper-engine speaker-embedding tap (contract)'
       'ipcMain.handle(IPC.appleSpeechFeed',
       'ipcMain.handle(IPC.speakerEmbed'
     ]) {
-      const start = indexSrc.indexOf(marker)
+      const start = sourceIndexOf(indexSrc, marker)
       expect(start, marker).toBeGreaterThan(-1)
       const body = indexSrc.slice(start, start + 2500)
       expect(body).toMatch(/const speakerKey = captureLiveSpeakerKey\(p\.startedAt\)/)

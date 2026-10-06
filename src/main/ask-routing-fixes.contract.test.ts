@@ -9,6 +9,7 @@ import { readDeal, writeDeal, setDealOutcome, slugify } from './brain/store'
 import { renameEntity, readAliasMap, resolveEntitySlug } from './brain/corrections'
 import { settleCommitment } from './brain/ingest'
 import { useStorageForTests } from './infra/storage/meetings-storage'
+import { sourceIndexOf } from '../../scripts/lib/source-layout'
 
 vi.mock('electron')
 
@@ -22,7 +23,7 @@ const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
  *  regions matched below contain no unbalanced brace in a string or comment (template-literal `${…}`
  *  spans are balanced by construction), so a plain depth counter is exact here. */
 function blockAfter(source: string, marker: string): string {
-  const at = source.indexOf(marker)
+  const at = sourceIndexOf(source, marker)
   expect(at, `marker not found: ${marker}`).toBeGreaterThan(-1)
   const open = source.indexOf('{', at)
   let depth = 0
@@ -55,7 +56,7 @@ describe('MQA-009 — a fact-check ask still receives screenContext', () => {
   it("the injector's own guard admits a fact-check ask and still excludes non-answer / non-screen asks", () => {
     // Evaluates the guard condition lifted verbatim out of index.ts, so a future edit that re-adds a
     // fact-check exclusion to the moved block fails here rather than silently at runtime.
-    const injectorAt = indexSrc.indexOf('const ctx = screenPreprocess.currentFreshContext()')
+    const injectorAt = sourceIndexOf(indexSrc, 'const ctx = screenPreprocess.currentFreshContext()')
     expect(injectorAt).toBeGreaterThan(-1)
     const condition = [...indexSrc.slice(0, injectorAt).matchAll(/if \(([^\n]*)\) \{/g)].pop()?.[1]
     expect(condition, 'no if-guard found above the screen injector').toBeTruthy()

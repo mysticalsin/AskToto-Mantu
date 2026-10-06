@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { sourceIndexOf } from '../../../scripts/lib/source-layout'
 
 // Normalize CRLF → LF (same rationale as App.capture-permission.test.ts): Windows checkouts would
 // otherwise break any anchor whose newline sits mid-string.
@@ -32,8 +33,8 @@ describe('mic-only capture degradation stays visible', () => {
   it('mid-session recovery of the them channel clears the start-time mic-only note (was left stuck)', () => {
     // recoverSystemAudio used to match only THEM_LOST_MSG on success, so a mid-meeting Screen Recording
     // grant left "System audio needs Screen Recording permission…" showing for the rest of the session.
-    const recoverStart = listen.indexOf('recoverSystemAudioRef.current = async')
-    const recoverEnd = listen.indexOf('devicechange', recoverStart)
+    const recoverStart = sourceIndexOf(listen, 'recoverSystemAudioRef.current = async')
+    const recoverEnd = sourceIndexOf(listen, 'devicechange', recoverStart)
     const recoverBlock = listen.slice(recoverStart, recoverEnd)
     expect(recoverStart).toBeGreaterThan(-1)
     expect(recoverBlock).toMatch(
@@ -48,8 +49,8 @@ describe('mic-only capture degradation stays visible', () => {
     // Degradation retains priority, but the tooltip starts with its note and appends safe mic and
     // recognizer facts; paused capture intentionally omits every live-status detail.
     const heardLiveChip = bar.slice(
-      bar.indexOf('/* "Heard live" chip'),
-      bar.indexOf('className={[', bar.indexOf('/* "Heard live" chip'))
+      sourceIndexOf(bar, '/* "Heard live" chip'),
+      sourceIndexOf(bar, 'className={[', sourceIndexOf(bar, '/* "Heard live" chip'))
     )
     expect(heardLiveChip).toMatch(
       /title=\{\s*!props\.paused\s*\?\s*\[\s*props\.captureDegraded\?\.note \?\? null,[\s\S]*?Live microphone: \$\{props\.captureHealth\.selectionOutcome\}[\s\S]*?Transcription: \$\{props\.recognizerStatus\.model[\s\S]*?\]\s*\.filter\(Boolean\)[\s\S]*?:\s*undefined\s*\}/

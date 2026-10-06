@@ -13,14 +13,15 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { sourceIndexOf } from '../../../../scripts/lib/source-layout'
 
 const SRC = readFileSync(join(__dirname, 'listen.ts'), 'utf8').replace(/\r\n/g, '\n')
 const APP = readFileSync(join(__dirname, '..', 'App.tsx'), 'utf8').replace(/\r\n/g, '\n')
 
 function blockBetween(src: string, from: string, to: string): string {
-  const start = src.indexOf(from)
+  const start = sourceIndexOf(src, from)
   expect(start, `marker not found: ${from}`).toBeGreaterThan(-1)
-  const end = src.indexOf(to, start)
+  const end = sourceIndexOf(src, to, start + 1)
   expect(end, `end marker not found after ${from}: ${to}`).toBeGreaterThan(-1)
   return src.slice(start, end)
 }

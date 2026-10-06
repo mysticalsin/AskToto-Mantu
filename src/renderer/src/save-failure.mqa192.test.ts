@@ -20,6 +20,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
+import { sourceIndexOf } from '../../../scripts/lib/source-layout'
 import { saveFailureReason } from './App'
 import { saveStatusLine } from './components/Review'
 
@@ -28,9 +29,9 @@ const appSource = readFileSync(join(__dirname, 'App.tsx'), 'utf8').replace(/\r\n
 const reviewSource = readFileSync(join(__dirname, 'components', 'Review.tsx'), 'utf8').replace(/\r\n/g, '\n')
 
 function blockBetween(source: string, start: string, end: string): string {
-  const from = source.indexOf(start)
+  const from = sourceIndexOf(source, start)
   if (from === -1) throw new Error(`save-failure.mqa192 anchor not found (source moved?): ${start}`)
-  const to = source.indexOf(end, from + start.length)
+  const to = sourceIndexOf(source, end, from + 1)
   if (to === -1) throw new Error(`save-failure.mqa192 end anchor not found after "${start}": ${end}`)
   return source.slice(from, to)
 }

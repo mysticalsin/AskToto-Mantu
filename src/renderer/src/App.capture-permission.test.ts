@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { sourceIndexOf, sourceLastIndexOf } from '../../../scripts/lib/source-layout'
 
 // Normalize CRLF → LF: on a Windows checkout these files have \r\n endings, and an anchor whose
 // newline sits mid-string (e.g. "suggest.run({\n      mode: 'answer'") would never match "…({\r\n…".
@@ -13,15 +14,15 @@ describe('screen-capture permission recovery', () => {
     // text ask.run below — there is nothing to answer without the screen, and it must not become an
     // unannounced provider request. The guard is now conditional on allowTextFallback (see the typed-chat
     // test below), so it must appear BEFORE the fallback ask.run and gate on !opts?.allowTextFallback.
-    const catchStart = app.indexOf('const needsScreenPermission = isScreenCapturePermissionError(raw)')
-    const catchEnd = app.indexOf('} finally {', catchStart)
+    const catchStart = sourceIndexOf(app, 'const needsScreenPermission = isScreenCapturePermissionError(raw)')
+    const catchEnd = sourceIndexOf(app, '} finally {', catchStart)
     const catchBlock = app.slice(catchStart, catchEnd)
 
     expect(catchStart).toBeGreaterThan(-1)
     expect(catchEnd).toBeGreaterThan(catchStart)
     const guard = 'if (needsScreenPermission && !opts?.allowTextFallback) return null'
-    expect(catchBlock.indexOf(guard)).toBeGreaterThan(-1)
-    expect(catchBlock.indexOf(guard)).toBeLessThan(catchBlock.indexOf("ask.run({ mode: 'answer'"))
+    expect(sourceIndexOf(catchBlock, guard)).toBeGreaterThan(-1)
+    expect(sourceIndexOf(catchBlock, guard)).toBeLessThan(sourceIndexOf(catchBlock, "ask.run({ mode: 'answer'"))
   })
 
   it('MQA-236: a TYPED question never routes through askScreen — screen intent is always explicit', () => {
@@ -32,8 +33,8 @@ describe('screen-capture permission recovery', () => {
     // left in submit is the blank-Enter "look at my screen", which is a deliberate screen gesture. The
     // permission-denied class the old pin protected (typed chat swallowed by the screen notice) is now
     // structurally impossible — a typed ask never touches the capture path at all.
-    const submitStart = app.indexOf('const submit = useCallback')
-    const submitEnd = app.indexOf('const factCheck = useCallback', submitStart)
+    const submitStart = sourceIndexOf(app, 'const submit = useCallback')
+    const submitEnd = sourceIndexOf(app, 'const factCheck = useCallback', submitStart)
     const submitBlock = app.slice(submitStart, submitEnd)
     expect(submitStart).toBeGreaterThan(-1)
     // No typed-question askScreen call survives …
@@ -49,10 +50,12 @@ describe('screen-capture permission recovery', () => {
     // The catch block sets captureError before the guard, so a text fallback answer renders WITH the amber
     // "Screen Recording is off" notice above it. That keeps the substitution announced, satisfying the
     // original privacy intent while unblocking chat.
-    const catchStart = app.indexOf('const needsScreenPermission = isScreenCapturePermissionError(raw)')
-    const catchBlock = app.slice(catchStart, app.indexOf('} finally {', catchStart))
-    expect(catchBlock.indexOf('setCaptureError(')).toBeGreaterThan(-1)
-    expect(catchBlock.indexOf('setCaptureError(')).toBeLessThan(catchBlock.indexOf('if (needsScreenPermission &&'))
+    const catchStart = sourceIndexOf(app, 'const needsScreenPermission = isScreenCapturePermissionError(raw)')
+    const catchBlock = app.slice(catchStart, sourceIndexOf(app, '} finally {', catchStart))
+    expect(sourceIndexOf(catchBlock, 'setCaptureError(')).toBeGreaterThan(-1)
+    expect(sourceIndexOf(catchBlock, 'setCaptureError(')).toBeLessThan(
+      sourceIndexOf(catchBlock, 'if (needsScreenPermission &&')
+    )
   })
 
   it('makes the capture notice dismissible so a declined permission never wedges the UI', () => {
@@ -66,15 +69,17 @@ describe('screen-capture permission recovery', () => {
   })
 
   it('does not turn a Windows screen-permission failure during Assist into a transcript-only suggestion', () => {
-    const assistStart = app.indexOf('const assist = useCallback')
-    const assistEnd = app.indexOf('const submit = useCallback', assistStart)
+    const assistStart = sourceIndexOf(app, 'const assist = useCallback')
+    const assistEnd = sourceIndexOf(app, 'const submit = useCallback', assistStart)
     const assistBlock = app.slice(assistStart, assistEnd)
-    const permissionIndex = assistBlock.indexOf('const needsScreenPermission = isScreenCapturePermissionError(raw)')
-    const fallbackIndex = assistBlock.lastIndexOf("suggest.run({\n      mode: 'answer'")
+    const permissionIndex = sourceIndexOf(assistBlock, 'const needsScreenPermission = isScreenCapturePermissionError(raw)')
+    const fallbackIndex = sourceLastIndexOf(assistBlock, "suggest.run({ mode: 'answer'")
 
     expect(permissionIndex).toBeGreaterThan(-1)
-    expect(assistBlock.indexOf('if (needsScreenPermission) return', permissionIndex)).toBeGreaterThan(permissionIndex)
-    expect(assistBlock.indexOf('if (needsScreenPermission) return', permissionIndex)).toBeLessThan(fallbackIndex)
+    expect(sourceIndexOf(assistBlock, 'if (needsScreenPermission) return', permissionIndex)).toBeGreaterThan(
+      permissionIndex
+    )
+    expect(sourceIndexOf(assistBlock, 'if (needsScreenPermission) return', permissionIndex)).toBeLessThan(fallbackIndex)
   })
 
   it('offers a direct Screen Recording settings action in the screen-failure banner', () => {
@@ -104,7 +109,7 @@ describe('MQA-236 (part 2) - nothing captures a frame without a screen gesture',
 
   it('signing in never captures a frame either', () => {
     // The old post-sign-in prewarmCapture() call took a screenshot the instant auth completed.
-    const at = mainSrc.indexOf('MQA-236: no prewarmCapture() here anymore')
+    const at = sourceIndexOf(mainSrc, 'MQA-236: no prewarmCapture() here anymore')
     expect(at).toBeGreaterThan(-1)
     const signin = mainSrc.slice(at - 200, at + 400)
     expect(signin).not.toMatch(/^\s*prewarmCapture\(\)/m)
