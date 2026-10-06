@@ -1,8 +1,18 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
-import { delimiter, dirname, join } from 'node:path'
+import { delimiter, dirname, join, relative } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { WebSocketServer } from 'ws'
 import { describe, expect, it } from 'vitest'
@@ -12,7 +22,12 @@ import { m2_0008BundleProblems, m2_0194BundleProblems } from '../../evidence/che
 
 const SCRIPT = 'scripts/qa/freeze-repro/run-matrix.sh'
 const SHA = 'a'.repeat(64)
-const AUTOMATIC_ROWS = ['row-1-history-open', 'row-2-brain-status-blocked-brain', 'row-3-macos-activate', 'row-4-second-instance-reopen']
+const AUTOMATIC_ROWS = [
+  'row-1-history-open',
+  'row-2-brain-status-blocked-brain',
+  'row-3-macos-activate',
+  'row-4-second-instance-reopen'
+]
 // The stub app's children, in pgrep order: three helpers before the one renderer, so first-three-children
 // selection would never sample the renderer.
 const CHILD_ROLES: Record<string, string> = {
@@ -28,17 +43,31 @@ const writeExecutable = (path: string, body: string): void => {
   writeFileSync(path, body, 'utf8')
   chmodSync(path, 0o700)
 }
-const jsonl = (path: string): Json[] => readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line))
+const jsonl = (path: string): Json[] =>
+  readFileSync(path, 'utf8')
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
 
 /** A DevTools endpoint with one page that exposes the preload bridge. `hangHistory` never answers the
  *  row-1 recallList drive, the way a main process pinned on a FIFO read never answers. */
-async function fakeDevTools({ hangHistory = false, visible = true } = {}): Promise<{ port: number; close: () => Promise<void> }> {
+async function fakeDevTools({
+  hangHistory = false,
+  visible = true
+} = {}): Promise<{ port: number; close: () => Promise<void> }> {
   const server: Server = createServer((request, response) => {
     const { port } = server.address() as AddressInfo
     response.setHeader('content-type', 'application/json')
-    response.end(JSON.stringify(request.url === '/json/list'
-      ? [{ type: 'service_worker' }, { type: 'page', webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/1` }]
-      : []))
+    response.end(
+      JSON.stringify(
+        request.url === '/json/list'
+          ? [
+              { type: 'service_worker' },
+              { type: 'page', webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/1` }
+            ]
+          : []
+      )
+    )
   })
   const sockets = new WebSocketServer({ server })
   sockets.on('connection', (socket) => {
@@ -53,11 +82,12 @@ async function fakeDevTools({ hangHistory = false, visible = true } = {}): Promi
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   return {
     port: (server.address() as AddressInfo).port,
-    close: () => new Promise<void>((resolve) => {
-      for (const client of sockets.clients) client.terminate()
-      sockets.close()
-      server.close(() => resolve())
-    })
+    close: () =>
+      new Promise<void>((resolve) => {
+        for (const client of sockets.clients) client.terminate()
+        sockets.close()
+        server.close(() => resolve())
+      })
   }
 }
 
@@ -70,14 +100,21 @@ async function unusedPort(): Promise<number> {
 }
 
 /** Runs the script with stdin closed (the pipe is ended before the script can read it). */
-function runClosedStdin(args: string[], env: NodeJS.ProcessEnv): Promise<{ status: number | null; stdout: string; stderr: string }> {
+function runClosedStdin(
+  args: string[],
+  env: NodeJS.ProcessEnv
+): Promise<{ status: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const child = spawn('bash', [SCRIPT, ...args], { env, stdio: ['pipe', 'pipe', 'pipe'] })
     child.stdin.end()
     let stdout = ''
     let stderr = ''
-    child.stdout.on('data', (chunk) => { stdout += String(chunk) })
-    child.stderr.on('data', (chunk) => { stderr += String(chunk) })
+    child.stdout.on('data', (chunk) => {
+      stdout += String(chunk)
+    })
+    child.stderr.on('data', (chunk) => {
+      stderr += String(chunk)
+    })
     const timer = setTimeout(() => child.kill('SIGKILL'), 110_000)
     child.on('close', (status) => {
       clearTimeout(timer)
@@ -94,21 +131,27 @@ function hostedStubs(root: string, { sampleFails = false } = {}) {
   const sampleLog = join(root, 'sampled-pids.txt')
   const openLog = join(root, 'open-calls.txt')
   writeExecutable(app, '#!/usr/bin/env bash\nfor arg in "$@"; do [ "$arg" = "-e" ] && exit 0; done\nexec sleep 120\n')
-  writeExecutable(join(root, 'sample'), sampleFails
-    ? '#!/usr/bin/env bash\nexit 1\n'
-    : `#!/usr/bin/env bash\nprintf '%s\\n' "$1" >> '${bashPath(sampleLog)}'\nprintf 'Sampling process %s for 10 seconds\\nBinary: %s/Applications/Metis.app\\n' "$1" "$HOME" > "$4"\n`)
+  writeExecutable(
+    join(root, 'sample'),
+    sampleFails
+      ? '#!/usr/bin/env bash\nexit 1\n'
+      : `#!/usr/bin/env bash\nprintf '%s\\n' "$1" >> '${bashPath(sampleLog)}'\nprintf 'Sampling process %s for 10 seconds\\nBinary: %s/Applications/Metis.app\\n' "$1" "$HOME" > "$4"\n`
+  )
   writeExecutable(join(root, 'open'), `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> '${bashPath(openLog)}'\n`)
   writeExecutable(join(bin, 'pgrep'), `#!/usr/bin/env bash\nprintf '%s\\n' ${Object.keys(CHILD_ROLES).join(' ')}\n`)
-  writeExecutable(join(bin, 'ps'), [
-    '#!/usr/bin/env bash',
-    'pid=""',
-    'while [ $# -gt 0 ]; do [ "$1" = "-p" ] && pid=$2; shift; done',
-    'case "$pid" in',
-    ...Object.entries(CHILD_ROLES).map(([pid, command]) => `  ${pid}) printf '%s\\n' '${command}' ;;`),
-    '  *) exit 1 ;;',
-    'esac',
-    ''
-  ].join('\n'))
+  writeExecutable(
+    join(bin, 'ps'),
+    [
+      '#!/usr/bin/env bash',
+      'pid=""',
+      'while [ $# -gt 0 ]; do [ "$1" = "-p" ] && pid=$2; shift; done',
+      'case "$pid" in',
+      ...Object.entries(CHILD_ROLES).map(([pid, command]) => `  ${pid}) printf '%s\\n' '${command}' ;;`),
+      '  *) exit 1 ;;',
+      'esac',
+      ''
+    ].join('\n')
+  )
   return { app, bin, sampleLog, openLog }
 }
 
@@ -118,25 +161,54 @@ function hostedWindowsStubs(root: string, { secondLaunchFails = false } = {}) {
   const app = join(root, 'Metis.exe')
   const launchLog = join(root, 'metis-launches.txt')
   const launchCount = join(root, 'metis-launch-count.txt')
+  const nodeOptionsLog = join(root, 'node-options.txt')
   const forbiddenLog = join(root, 'forbidden-tools.txt')
-  writeExecutable(app, [
-    '#!/usr/bin/env bash',
-    'for arg in "$@"; do [ "$arg" = "-e" ] && exit 0; done',
-    `count=0; [ ! -f '${bashPath(launchCount)}' ] || count=$(cat '${bashPath(launchCount)}')`,
-    'count=$((count + 1))',
-    `printf '%s\\n' "$count" > '${bashPath(launchCount)}'`,
-    `printf '%s\\n' "$*" >> '${bashPath(launchLog)}'`,
-    secondLaunchFails ? '[ "$count" -ne 2 ] || exit 17' : ':',
-    'exec sleep 120',
-    ''
-  ].join('\n'))
+  writeExecutable(
+    app,
+    [
+      '#!/usr/bin/env bash',
+      'for arg in "$@"; do',
+      '  if [ "$arg" = "-e" ]; then',
+      `    printf '%s\\n' "$NODE_OPTIONS" > '${bashPath(nodeOptionsLog)}'`,
+      '    [ -z "${M2_0008_NODE_OPTIONS_MARKER:-}" ] || printf loaded > "$M2_0008_NODE_OPTIONS_MARKER"',
+      '    exit 0',
+      '  fi',
+      'done',
+      `count=0; [ ! -f '${bashPath(launchCount)}' ] || count=$(cat '${bashPath(launchCount)}')`,
+      'count=$((count + 1))',
+      `printf '%s\\n' "$count" > '${bashPath(launchCount)}'`,
+      `printf '%s\\n' "$*" >> '${bashPath(launchLog)}'`,
+      secondLaunchFails ? '[ "$count" -ne 2 ] || exit 17' : ':',
+      'exec sleep 120',
+      ''
+    ].join('\n')
+  )
   for (const tool of ['pgrep', 'sample']) {
-    writeExecutable(join(bin, tool), `#!/usr/bin/env bash\nprintf '%s\\n' '${tool}' >> '${bashPath(forbiddenLog)}'\nexit 42\n`)
+    writeExecutable(
+      join(bin, tool),
+      `#!/usr/bin/env bash\nprintf '%s\\n' '${tool}' >> '${bashPath(forbiddenLog)}'\nexit 42\n`
+    )
   }
-  return { app, bin, launchLog, forbiddenLog }
+  writeExecutable(
+    join(bin, 'cygpath'),
+    [
+      '#!/usr/bin/env bash',
+      '[ "${1:-}" != "-w" ] || shift',
+      'path=${1:-}',
+      'path=${path//\\//\\\\}',
+      'printf \'C:\\\\hosted%s\\n\' "$path"',
+      ''
+    ].join('\n')
+  )
+  return { app, bin, launchLog, nodeOptionsLog, forbiddenLog }
 }
 
-function hostedEnv(root: string, stubs: ReturnType<typeof hostedStubs>, port: number, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+function hostedEnv(
+  root: string,
+  stubs: ReturnType<typeof hostedStubs>,
+  port: number,
+  extra: NodeJS.ProcessEnv = {}
+): NodeJS.ProcessEnv {
   return {
     ...process.env,
     PATH: [stubs.bin, dirname(process.execPath), process.env.PATH ?? ''].join(delimiter),
@@ -156,7 +228,11 @@ function hostedEnv(root: string, stubs: ReturnType<typeof hostedStubs>, port: nu
   }
 }
 
-function hostedWindowsEnv(stubs: ReturnType<typeof hostedWindowsStubs>, port: number, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+function hostedWindowsEnv(
+  stubs: ReturnType<typeof hostedWindowsStubs>,
+  port: number,
+  extra: NodeJS.ProcessEnv = {}
+): NodeJS.ProcessEnv {
   return {
     ...process.env,
     PATH: [stubs.bin, dirname(process.execPath), process.env.PATH ?? ''].join(delimiter),
@@ -165,22 +241,36 @@ function hostedWindowsEnv(stubs: ReturnType<typeof hostedWindowsStubs>, port: nu
     M2_0008_CONTRACT_LAUNCH_SETTLE_SECONDS: '1',
     M2_0008_CONTRACT_POLL_WAIT_SECONDS: '1',
     M2_0008_CONTRACT_REOPEN_SETTLE_SECONDS: '1',
+    M2_0008_CONTRACT_CYGPATH_BIN: bashPath(join(stubs.bin, 'cygpath')),
     M2_0008_CONTRACT_CDP_PORT: String(port),
     ...extra
   }
 }
 
-const hostedArgs = (out: string, app: string): string[] =>
-  ['--hosted-live', '--artifact', SHA, '--build-run-id', '123', '--app', app, '--out', out]
+const hostedArgs = (out: string, app: string): string[] => [
+  '--hosted-live',
+  '--artifact',
+  SHA,
+  '--build-run-id',
+  '123',
+  '--app',
+  app,
+  '--out',
+  out
+]
 
 describe('M2-0008 freeze reproduction matrix harness', () => {
   it('dry-run creates the content-free matrix bundle and all required OS-fixture evidence files', () => {
     const out = mkdtempSync(join(tmpdir(), 'm2-0008-freeze-contract-'))
     try {
-      const result = spawnSync('bash', [SCRIPT, '--artifact', SHA, '--build-run-id', '123', '--out', out, '--dry-run'], {
-        encoding: 'utf8',
-        timeout: 30_000
-      })
+      const result = spawnSync(
+        'bash',
+        [SCRIPT, '--artifact', SHA, '--build-run-id', '123', '--out', out, '--dry-run'],
+        {
+          encoding: 'utf8',
+          timeout: 30_000
+        }
+      )
 
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)
       expect(result.stdout).toContain(out)
@@ -190,7 +280,9 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
       expect(readFileSync(join(out, 'external-blockers.json'), 'utf8')).toContain('"BLOCKED_EXTERNAL"')
       expect(readFileSync(join(out, 'launch-plan.json'), 'utf8')).toContain('"electron_user_data_dir_switch":true')
       expect(readFileSync(join(out, 'diagnostic-reports.json'), 'utf8')).toContain('"consented":false')
-      expect(readFileSync(join(out, 'diagnostic-reports.json'), 'utf8')).toContain('Metis/AskToto process names or sampled process ids only')
+      expect(readFileSync(join(out, 'diagnostic-reports.json'), 'utf8')).toContain(
+        'Metis/AskToto process names or sampled process ids only'
+      )
       expect(readFileSync(join(out, 'M2-0008.lead-action.md'), 'utf8')).toContain('LEAD_ACTION:')
       expect(readFileSync(join(out, 'M2-0008.lead-action.md'), 'utf8')).toContain('OBSERVED')
       expect(readFileSync(join(out, 'M2-0008.lead-action.md'), 'utf8')).toContain('DERIVED')
@@ -247,21 +339,32 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
     try {
       writeFileSync(app, '#!/usr/bin/env bash\nexit 0\n', 'utf8')
       chmodSync(app, 0o700)
-      const result = spawnSync('bash', [
-        SCRIPT,
-        '--artifact', SHA,
-        '--build-run-id', '123',
-        '--out', out,
-        '--app', app,
-        '--profile-template', profile,
-        '--implementer-session-id', 'impl-1',
-        '--validator-session-id', 'valid-1',
-        '--qa-account'
-      ], {
-        encoding: 'utf8',
-        env: { ...process.env, M2_0008_CONTRACT_ALLOW_NON_DARWIN: '1' },
-        timeout: 30_000
-      })
+      const result = spawnSync(
+        'bash',
+        [
+          SCRIPT,
+          '--artifact',
+          SHA,
+          '--build-run-id',
+          '123',
+          '--out',
+          out,
+          '--app',
+          app,
+          '--profile-template',
+          profile,
+          '--implementer-session-id',
+          'impl-1',
+          '--validator-session-id',
+          'valid-1',
+          '--qa-account'
+        ],
+        {
+          encoding: 'utf8',
+          env: { ...process.env, M2_0008_CONTRACT_ALLOW_NON_DARWIN: '1' },
+          timeout: 30_000
+        }
+      )
       expect(result.status).toBe(2)
       expect(result.stderr).toContain('--dataless-brain-index is required')
     } finally {
@@ -280,37 +383,54 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
     const brainIndex = join(fixtureRoot, 'index.json')
     const meeting = join(fixtureRoot, 'meeting.md')
     try {
-      writeFileSync(app, '#!/usr/bin/env bash\nfor arg in "$@"; do [ "$arg" = "-e" ] && exit 0; done\nsleep 120\n', 'utf8')
+      writeFileSync(
+        app,
+        '#!/usr/bin/env bash\nfor arg in "$@"; do [ "$arg" = "-e" ] && exit 0; done\nsleep 120\n',
+        'utf8'
+      )
       chmodSync(app, 0o700)
       writeFileSync(brainIndex, '{}\n', 'utf8')
       writeFileSync(meeting, '# synthetic\n', 'utf8')
       writeFileSync(fakeStat, '#!/usr/bin/env bash\nprintf "1073741824\\n"\n', 'utf8')
       chmodSync(fakeStat, 0o700)
 
-      const result = spawnSync('bash', [
-        SCRIPT,
-        '--artifact', SHA,
-        '--build-run-id', '123',
-        '--out', out,
-        '--app', app,
-        '--profile-template', profile,
-        '--dataless-brain-index', brainIndex,
-        '--dataless-meeting', meeting,
-        '--implementer-session-id', 'impl-1',
-        '--validator-session-id', 'valid-1',
-        '--qa-account'
-      ], {
-        encoding: 'utf8',
-        input: '\n\n\n\n\n\n\n\n\n',
-        env: {
-          ...process.env,
-          PATH: `${pathRoot}:${process.env.PATH ?? ''}`,
-          M2_0008_CONTRACT_ALLOW_NON_DARWIN: '1',
-          M2_0008_CONTRACT_IDLE_SECONDS: '1',
-          M2_0008_CONTRACT_LAUNCH_SETTLE_SECONDS: '1'
-        },
-        timeout: 45_000
-      })
+      const result = spawnSync(
+        'bash',
+        [
+          SCRIPT,
+          '--artifact',
+          SHA,
+          '--build-run-id',
+          '123',
+          '--out',
+          out,
+          '--app',
+          app,
+          '--profile-template',
+          profile,
+          '--dataless-brain-index',
+          brainIndex,
+          '--dataless-meeting',
+          meeting,
+          '--implementer-session-id',
+          'impl-1',
+          '--validator-session-id',
+          'valid-1',
+          '--qa-account'
+        ],
+        {
+          encoding: 'utf8',
+          input: '\n\n\n\n\n\n\n\n\n',
+          env: {
+            ...process.env,
+            PATH: `${pathRoot}:${process.env.PATH ?? ''}`,
+            M2_0008_CONTRACT_ALLOW_NON_DARWIN: '1',
+            M2_0008_CONTRACT_IDLE_SECONDS: '1',
+            M2_0008_CONTRACT_LAUNCH_SETTLE_SECONDS: '1'
+          },
+          timeout: 45_000
+        }
+      )
 
       expect(result.status).toBe(2)
       expect(result.stderr).toContain('required main and renderer samples')
@@ -345,37 +465,54 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
     const brainIndex = join(fixtureRoot, 'index.json')
     const meeting = join(fixtureRoot, 'meeting.md')
     try {
-      writeFileSync(app, '#!/usr/bin/env bash\nfor arg in "$@"; do [ "$arg" = "-e" ] && exit 0; done\nsleep 120\n', 'utf8')
+      writeFileSync(
+        app,
+        '#!/usr/bin/env bash\nfor arg in "$@"; do [ "$arg" = "-e" ] && exit 0; done\nsleep 120\n',
+        'utf8'
+      )
       chmodSync(app, 0o700)
       writeFileSync(brainIndex, '{}\n', 'utf8')
       writeFileSync(meeting, '# synthetic\n', 'utf8')
       writeFileSync(fakeStat, '#!/usr/bin/env bash\nprintf "1073741824\\n"\n', 'utf8')
       chmodSync(fakeStat, 0o700)
 
-      const result = spawnSync('bash', [
-        SCRIPT,
-        '--artifact', SHA,
-        '--build-run-id', '123',
-        '--out', out,
-        '--app', app,
-        '--profile-template', profile,
-        '--dataless-brain-index', brainIndex,
-        '--dataless-meeting', meeting,
-        '--implementer-session-id', 'impl-1',
-        '--validator-session-id', 'valid-1',
-        '--qa-account'
-      ], {
-        encoding: 'utf8',
-        input: '\n\n\n\n\n\n\n\n\n',
-        env: {
-          ...process.env,
-          PATH: `${pathRoot}:${process.env.PATH ?? ''}`,
-          M2_0008_CONTRACT_ALLOW_NON_DARWIN: '1',
-          M2_0008_CONTRACT_IDLE_SECONDS: '1',
-          M2_0008_CONTRACT_LAUNCH_SETTLE_SECONDS: '1'
-        },
-        timeout: 45_000
-      })
+      const result = spawnSync(
+        'bash',
+        [
+          SCRIPT,
+          '--artifact',
+          SHA,
+          '--build-run-id',
+          '123',
+          '--out',
+          out,
+          '--app',
+          app,
+          '--profile-template',
+          profile,
+          '--dataless-brain-index',
+          brainIndex,
+          '--dataless-meeting',
+          meeting,
+          '--implementer-session-id',
+          'impl-1',
+          '--validator-session-id',
+          'valid-1',
+          '--qa-account'
+        ],
+        {
+          encoding: 'utf8',
+          input: '\n\n\n\n\n\n\n\n\n',
+          env: {
+            ...process.env,
+            PATH: `${pathRoot}:${process.env.PATH ?? ''}`,
+            M2_0008_CONTRACT_ALLOW_NON_DARWIN: '1',
+            M2_0008_CONTRACT_IDLE_SECONDS: '1',
+            M2_0008_CONTRACT_LAUNCH_SETTLE_SECONDS: '1'
+          },
+          timeout: 45_000
+        }
+      )
 
       expect(result.status).toBe(2)
       expect(result.stderr).toContain('required matrix rows exercised')
@@ -397,27 +534,43 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
   it('--candidate-run emits an M2-0194 attribution bundle that check.mjs accepts', () => {
     const out = mkdtempSync(join(tmpdir(), 'm2-0194-freeze-contract-'))
     try {
-      const run = spawnSync('bash', [SCRIPT, '--artifact', SHA, '--build-run-id', '123', '--candidate-run', '456', '--out', out, '--dry-run'], {
-        encoding: 'utf8',
-        timeout: 30_000
-      })
+      const run = spawnSync(
+        'bash',
+        [SCRIPT, '--artifact', SHA, '--build-run-id', '123', '--candidate-run', '456', '--out', out, '--dry-run'],
+        {
+          encoding: 'utf8',
+          timeout: 30_000
+        }
+      )
       expect(run.status, `${run.stdout}\n${run.stderr}`).toBe(0)
 
-      const environment = JSON.parse(readFileSync(join(out, 'environment.json'), 'utf8')) as { ticket: string; candidate_run: string }
+      const environment = JSON.parse(readFileSync(join(out, 'environment.json'), 'utf8')) as {
+        ticket: string
+        candidate_run: string
+      }
       expect(environment.ticket).toBe('M2-0194')
       expect(environment.candidate_run).toBe('456')
       const leadAction = readFileSync(join(out, 'M2-0194.lead-action.md'), 'utf8')
       expect(leadAction).toContain('LOCALLY_TESTED')
       expect(leadAction).not.toContain('LIVE_VERIFIED')
-      for (const file of ['stall-excerpt.jsonl', 'sampler-excerpt.jsonl', 'reveal-excerpt.jsonl', 'sidecar-excerpt.jsonl']) {
+      for (const file of [
+        'stall-excerpt.jsonl',
+        'sampler-excerpt.jsonl',
+        'reveal-excerpt.jsonl',
+        'sidecar-excerpt.jsonl'
+      ]) {
         expect(readFileSync(join(out, file), 'utf8')).toBe('')
       }
       expect(JSON.parse(readFileSync(join(out, 'stall-bundle-names.json'), 'utf8'))).toEqual({ names: [] })
 
-      const check = spawnSync(process.execPath, ['scripts/evidence/check.mjs', '--ticket', 'M2-0194', '--bundle', out], {
-        encoding: 'utf8',
-        timeout: 30_000
-      })
+      const check = spawnSync(
+        process.execPath,
+        ['scripts/evidence/check.mjs', '--ticket', 'M2-0194', '--bundle', out],
+        {
+          encoding: 'utf8',
+          timeout: 30_000
+        }
+      )
       expect(check.status, `${check.stdout}\n${check.stderr}`).toBe(0)
       expect(check.stdout).toContain('M2-0194 bundle: OK')
     } finally {
@@ -428,10 +581,14 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
   it('rejects a --candidate-run that is not a run id', () => {
     const out = mkdtempSync(join(tmpdir(), 'm2-0194-freeze-contract-'))
     try {
-      const result = spawnSync('bash', [SCRIPT, '--artifact', SHA, '--build-run-id', '123', '--candidate-run', 'abc', '--out', out, '--dry-run'], {
-        encoding: 'utf8',
-        timeout: 30_000
-      })
+      const result = spawnSync(
+        'bash',
+        [SCRIPT, '--artifact', SHA, '--build-run-id', '123', '--candidate-run', 'abc', '--out', out, '--dry-run'],
+        {
+          encoding: 'utf8',
+          timeout: 30_000
+        }
+      )
       expect(result.status).toBe(2)
       expect(result.stderr).toContain('--candidate-run must be a positive integer')
     } finally {
@@ -442,10 +599,14 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
   it('collects DiagnosticReports only with explicit consent and process-scoped matching', () => {
     const out = mkdtempSync(join(tmpdir(), 'm2-0008-freeze-contract-'))
     try {
-      const result = spawnSync('bash', [SCRIPT, '--artifact', SHA, '--build-run-id', '123', '--out', out, '--dry-run', '--collect-diagnostic-reports'], {
-        encoding: 'utf8',
-        timeout: 30_000
-      })
+      const result = spawnSync(
+        'bash',
+        [SCRIPT, '--artifact', SHA, '--build-run-id', '123', '--out', out, '--dry-run', '--collect-diagnostic-reports'],
+        {
+          encoding: 'utf8',
+          timeout: 30_000
+        }
+      )
 
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)
       const diagnosticReports = readFileSync(join(out, 'diagnostic-reports.json'), 'utf8')
@@ -454,6 +615,61 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
       expect(diagnosticReports).toContain('"copied":[')
     } finally {
       rmSync(out, { recursive: true, force: true })
+    }
+  })
+
+  it('passes an absolute quoted fuse probe path when --out is relative', () => {
+    const root = mkdtempSync(join(tmpdir(), 'm2-0557-fuse-contract-'))
+    const out = join(root, 'relative bundle')
+    const outArg = relative(process.cwd(), out)
+    const app = join(root, 'Metis')
+    const nodeOptionsLog = join(root, 'node-options.txt')
+    const requirePathLog = join(root, 'require-path.txt')
+    try {
+      expect(outArg.startsWith('/')).toBe(false)
+      writeExecutable(
+        app,
+        [
+          '#!/usr/bin/env bash',
+          `printf '%s\\n' "$NODE_OPTIONS" > '${bashPath(nodeOptionsLog)}'`,
+          'require_path=${NODE_OPTIONS#--require \\"}',
+          'require_path=${require_path%\\"}',
+          `printf '%s\\n' "$require_path" > '${bashPath(requirePathLog)}'`,
+          'probe_file=${require_path//\\\\\\\\/\\\\}',
+          '[ -f "$probe_file" ] || exit 42',
+          'printf loaded > "$M2_0008_NODE_OPTIONS_MARKER"',
+          ''
+        ].join('\n')
+      )
+
+      const result = spawnSync(
+        'bash',
+        [SCRIPT, '--artifact', SHA, '--build-run-id', '123', '--out', outArg, '--app', app, '--dry-run'],
+        {
+          encoding: 'utf8',
+          timeout: 30_000
+        }
+      )
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)
+      const nodeOptions = readFileSync(nodeOptionsLog, 'utf8').trim()
+      expect(nodeOptions).not.toContain(`--require ${outArg}`)
+      const requirePath = readFileSync(requirePathLog, 'utf8').trim()
+      if (process.platform === 'win32') {
+        expect(nodeOptions).toMatch(/^--require "[A-Z]:\\\\/)
+        expect(nodeOptions).toContain('\\\\fuse-probe\\\\node-options-probe.cjs"')
+        expect(requirePath).toMatch(/^[A-Z]:\\\\/)
+        expect(requirePath).toContain('\\\\fuse-probe\\\\node-options-probe.cjs')
+      } else {
+        expect(nodeOptions).toMatch(/^--require "\//)
+        expect(nodeOptions).toContain('/fuse-probe/node-options-probe.cjs"')
+        expect(requirePath).toBe(join(realpathSync(out), 'fuse-probe', 'node-options-probe.cjs'))
+      }
+      expect(JSON.parse(readFileSync(join(out, 'node-options-fuse.json'), 'utf8'))).toMatchObject({
+        node_options_fuse: 'ENABLED'
+      })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
     }
   })
 })
@@ -479,16 +695,40 @@ describe('M2-0462 hosted-live mode', () => {
         expect(recorded?.observation, row).toMatchObject({
           operator_result: 'pass',
           symptom_observed: false,
-          cdp: { reachable: true, renderer_round_trip: 'answered', main_answered: true, window_visible: true, window_visible_observed_by: 'cdp:document.visibilityState' }
+          cdp: {
+            reachable: true,
+            renderer_round_trip: 'answered',
+            main_answered: true,
+            window_visible: true,
+            window_visible_observed_by: 'cdp:document.visibilityState'
+          }
         })
         const sample = matrix.find((entry) => entry.row === row && 'sampled' in entry)
-        expect(sample, row).toMatchObject({ sampled: true, main_sample: true, renderer_attempts: 1, renderer_samples: 1, renderers_selected_by: '--type=renderer' })
+        expect(sample, row).toMatchObject({
+          sampled: true,
+          main_sample: true,
+          renderer_attempts: 1,
+          renderer_samples: 1,
+          renderers_selected_by: '--type=renderer'
+        })
         expect(existsSync(join(out, 'samples', `${row}-renderer-9004.sample.txt`)), row).toBe(true)
       }
-      expect(matrix.find((entry) => entry.row === 'row-1-history-open' && 'observation' in entry)?.observation.cdp.drive).toBe('answered')
-      expect(matrix.find((entry) => entry.row === 'row-2-brain-status-blocked-brain' && 'observation' in entry)?.brain_status_poll_wait_seconds).toBe(1)
+      expect(
+        matrix.find((entry) => entry.row === 'row-1-history-open' && 'observation' in entry)?.observation.cdp.drive
+      ).toBe('answered')
+      expect(
+        matrix.find((entry) => entry.row === 'row-2-brain-status-blocked-brain' && 'observation' in entry)
+          ?.brain_status_poll_wait_seconds
+      ).toBe(1)
       for (const row of ['row-5-dataless-brain-idle', 'row-9-network-off-flapping']) {
-        expect(matrix.find((entry) => entry.row === row), row).toMatchObject({ status: 'BLOCKED_EXTERNAL', automatic: false, unblock_step: expect.stringContaining('test cloud-file account') })
+        expect(
+          matrix.find((entry) => entry.row === row),
+          row
+        ).toMatchObject({
+          status: 'BLOCKED_EXTERNAL',
+          automatic: false,
+          unblock_step: expect.stringContaining('test cloud-file account')
+        })
       }
 
       const sampled = readFileSync(stubs.sampleLog, 'utf8').split(/\r?\n/).filter(Boolean)
@@ -507,23 +747,46 @@ describe('M2-0462 hosted-live mode', () => {
       expect(opens[1]).toMatch(/^-n --env ASKTOTO_USERDATA=.+ --args --user-data-dir=.+/)
 
       const interrupts = jsonl(join(out, 'interrupt-results.jsonl'))
-      expect(interrupts.map((entry) => entry.interrupt).sort()).toEqual(['file-provider-cancel', 'network-off', 'process-signal'])
-      expect(interrupts.find((entry) => entry.interrupt === 'process-signal')).toMatchObject({ automatic: true, result: 'pass', signal: 'TERM', exited_within_10s: true })
+      expect(interrupts.map((entry) => entry.interrupt).sort()).toEqual([
+        'file-provider-cancel',
+        'network-off',
+        'process-signal'
+      ])
+      expect(interrupts.find((entry) => entry.interrupt === 'process-signal')).toMatchObject({
+        automatic: true,
+        result: 'pass',
+        signal: 'TERM',
+        exited_within_10s: true
+      })
       for (const interrupt of ['network-off', 'file-provider-cancel']) {
-        expect(interrupts.find((entry) => entry.interrupt === interrupt), interrupt).toMatchObject({ status: 'BLOCKED_EXTERNAL', unblock_step: expect.stringContaining('D-9') })
+        expect(
+          interrupts.find((entry) => entry.interrupt === interrupt),
+          interrupt
+        ).toMatchObject({ status: 'BLOCKED_EXTERNAL', unblock_step: expect.stringContaining('D-9') })
       }
 
       const environment = JSON.parse(readFileSync(join(out, 'environment.json'), 'utf8'))
-      expect(environment).toMatchObject({ mode: 'hosted-live', dry_run: 0, profile_template_used: 'no', host: { label: 'macos-latest' } })
+      expect(environment).toMatchObject({
+        mode: 'hosted-live',
+        dry_run: 0,
+        profile_template_used: 'no',
+        host: { label: 'macos-latest' }
+      })
       expect(environment.host.os_version).toEqual(expect.any(String))
       expect(environment.host.arch).toEqual(expect.any(String))
-      expect(JSON.parse(readFileSync(join(out, 'node-options-fuse.json'), 'utf8')).node_options_fuse).not.toBe('NOT_EXERCISED')
+      expect(JSON.parse(readFileSync(join(out, 'node-options-fuse.json'), 'utf8')).node_options_fuse).not.toBe(
+        'NOT_EXERCISED'
+      )
       const fifo = JSON.parse(readFileSync(join(out, 'fifo-fixtures.json'), 'utf8'))
       expect(fifo.count).toBeGreaterThanOrEqual(6)
       expect(fifo.fixtures.some((fixture: Json) => fixture.path === 'Métis Meetings/.brain/index.json')).toBe(true)
       expect(fifo.fixtures.every((fixture: Json) => typeof fixture.opened_by_1_9_6 === 'boolean')).toBe(true)
       const blockers = JSON.parse(readFileSync(join(out, 'external-blockers.json'), 'utf8'))
-      expect(blockers.blockers[0]).toMatchObject({ status: 'BLOCKED_EXTERNAL', rows: ['row-5-dataless-brain-idle', 'row-9-network-off-flapping'], interrupts: ['network-off', 'file-provider-cancel'] })
+      expect(blockers.blockers[0]).toMatchObject({
+        status: 'BLOCKED_EXTERNAL',
+        rows: ['row-5-dataless-brain-idle', 'row-9-network-off-flapping'],
+        interrupts: ['network-off', 'file-provider-cancel']
+      })
 
       const summary = JSON.parse(readFileSync(join(out, 'hosted-live-summary.json'), 'utf8'))
       expect(summary).toMatchObject({ mode: 'hosted-live', reproduced: false, symptom_rows: [] })
@@ -566,7 +829,9 @@ describe('M2-0462 hosted-live mode', () => {
         output: { path: 'evidence/outputs/M2-0008/matrix.jsonl', sha256: evidenceImport.matrix_sha256 }
       }
       expect(recordProblems(liveRecord)).toEqual([])
-      expect(recordProblems({ ...liveRecord, environment: { kind: 'hosted-runner', host: 'qa-mac-1' } }).join('\n')).toContain('environment.host')
+      expect(
+        recordProblems({ ...liveRecord, environment: { kind: 'hosted-runner', host: 'qa-mac-1' } }).join('\n')
+      ).toContain('environment.host')
 
       expect(m2_0008BundleProblems(out)).toEqual([])
     } finally {
@@ -581,12 +846,19 @@ describe('M2-0462 hosted-live mode', () => {
     const devtools = await fakeDevTools({ hangHistory: true })
     try {
       const stubs = hostedStubs(root)
-      const result = await runClosedStdin(hostedArgs(out, stubs.app),
-        hostedEnv(root, stubs, devtools.port, { M2_0008_CONTRACT_OBSERVE_TIMEOUT_MS: '5000' }))
+      const result = await runClosedStdin(
+        hostedArgs(out, stubs.app),
+        hostedEnv(root, stubs, devtools.port, { M2_0008_CONTRACT_OBSERVE_TIMEOUT_MS: '5000' })
+      )
 
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)
-      const row1 = jsonl(join(out, 'matrix.jsonl')).find((entry) => entry.row === 'row-1-history-open' && 'operator_result' in entry)
-      expect(row1).toMatchObject({ operator_result: 'observed', observation: { symptom_observed: true, reason: 'round-trip-timeout', cdp: { drive: 'timeout' } } })
+      const row1 = jsonl(join(out, 'matrix.jsonl')).find(
+        (entry) => entry.row === 'row-1-history-open' && 'operator_result' in entry
+      )
+      expect(row1).toMatchObject({
+        operator_result: 'observed',
+        observation: { symptom_observed: true, reason: 'round-trip-timeout', cdp: { drive: 'timeout' } }
+      })
       const summary = JSON.parse(readFileSync(join(out, 'hosted-live-summary.json'), 'utf8'))
       expect(summary).toMatchObject({ reproduced: true, symptom_rows: ['row-1-history-open'] })
       expect(summary.conclusion).toMatch(/^reproduced:/)
@@ -639,11 +911,17 @@ describe('M2-0462 hosted-live mode', () => {
       expect(result.stderr).not.toContain('result for')
       const matrix = jsonl(join(out, 'matrix.jsonl'))
       for (const row of AUTOMATIC_ROWS) {
-        expect(matrix.find((entry) => entry.row === row && 'operator_result' in entry), row)
-          .toMatchObject({ operator_result: 'not-exercised', observation: { reason: 'devtools-unreachable' } })
+        expect(
+          matrix.find((entry) => entry.row === row && 'operator_result' in entry),
+          row
+        ).toMatchObject({ operator_result: 'not-exercised', observation: { reason: 'devtools-unreachable' } })
       }
       const evidenceImport = JSON.parse(readFileSync(join(out, 'M2-0008.evidence-import.json'), 'utf8'))
-      expect(evidenceImport).toMatchObject({ result: 'FAIL', matrix_result_failures: AUTOMATIC_ROWS.length, interrupt_result_failures: 0 })
+      expect(evidenceImport).toMatchObject({
+        result: 'FAIL',
+        matrix_result_failures: AUTOMATIC_ROWS.length,
+        interrupt_result_failures: 0
+      })
       expect(JSON.parse(readFileSync(join(out, 'hosted-live-summary.json'), 'utf8')).conclusion).toMatch(/^incomplete:/)
       expect(m2_0008BundleProblems(out).join('\n')).toContain('must be an automatic row that was exercised')
     } finally {
@@ -661,7 +939,10 @@ describe('M2-0462 hosted-live mode', () => {
 
       expect(result.status).toBe(2)
       expect(result.stderr).toContain('required main and renderer samples')
-      expect(JSON.parse(readFileSync(join(out, 'M2-0008.evidence-import.json'), 'utf8'))).toMatchObject({ result: 'FAIL', exit_code: 2 })
+      expect(JSON.parse(readFileSync(join(out, 'M2-0008.evidence-import.json'), 'utf8'))).toMatchObject({
+        result: 'FAIL',
+        exit_code: 2
+      })
       expect(m2_0008BundleProblems(out).join('\n')).toContain('must have main and role-selected renderer samples')
     } finally {
       await devtools.close()
@@ -674,23 +955,43 @@ describe('M2-0462 hosted-live mode', () => {
     const out = join(root, 'bundle')
     try {
       const env = { ...process.env, M2_0008_CONTRACT_ALLOW_NON_DARWIN: '1' }
-      const both = spawnSync('bash', [SCRIPT, '--hosted-live', '--dry-run', '--artifact', SHA, '--build-run-id', '123', '--app', root, '--out', out], { encoding: 'utf8', env, timeout: 30_000 })
+      const both = spawnSync(
+        'bash',
+        [SCRIPT, '--hosted-live', '--dry-run', '--artifact', SHA, '--build-run-id', '123', '--app', root, '--out', out],
+        { encoding: 'utf8', env, timeout: 30_000 }
+      )
       expect(both.status).toBe(2)
       expect(both.stderr).toContain('--hosted-live and --dry-run are mutually exclusive')
 
-      const template = spawnSync('bash', [SCRIPT, ...hostedArgs(out, root), '--profile-template', root], { encoding: 'utf8', env, timeout: 30_000 })
+      const template = spawnSync('bash', [SCRIPT, ...hostedArgs(out, root), '--profile-template', root], {
+        encoding: 'utf8',
+        env,
+        timeout: 30_000
+      })
       expect(template.status).toBe(2)
       expect(template.stderr).toContain('--profile-template is not accepted')
 
-      const dataless = spawnSync('bash', [SCRIPT, ...hostedArgs(out, root), '--dataless-brain-index', root], { encoding: 'utf8', env, timeout: 30_000 })
+      const dataless = spawnSync('bash', [SCRIPT, ...hostedArgs(out, root), '--dataless-brain-index', root], {
+        encoding: 'utf8',
+        env,
+        timeout: 30_000
+      })
       expect(dataless.status).toBe(2)
       expect(dataless.stderr).toContain('rows 5 and 9 are BLOCKED_EXTERNAL')
 
-      const host = spawnSync('bash', [SCRIPT, ...hostedArgs(out, root), '--qa-host-label', 'qa-mac-1'], { encoding: 'utf8', env, timeout: 30_000 })
+      const host = spawnSync('bash', [SCRIPT, ...hostedArgs(out, root), '--qa-host-label', 'qa-mac-1'], {
+        encoding: 'utf8',
+        env,
+        timeout: 30_000
+      })
       expect(host.status).toBe(2)
       expect(host.stderr).toContain('macos-latest or windows-latest')
 
-      const noApp = spawnSync('bash', [SCRIPT, '--hosted-live', '--artifact', SHA, '--build-run-id', '123', '--out', out], { encoding: 'utf8', env, timeout: 30_000 })
+      const noApp = spawnSync(
+        'bash',
+        [SCRIPT, '--hosted-live', '--artifact', SHA, '--build-run-id', '123', '--out', out],
+        { encoding: 'utf8', env, timeout: 30_000 }
+      )
       expect(noApp.status).toBe(2)
       expect(noApp.stderr).toContain('--app is required')
     } finally {
@@ -720,20 +1021,37 @@ describe('M2-0463 Windows hosted-live mode', () => {
       expect(launches.every((line) => line.includes('--remote-debugging-port='))).toBe(true)
 
       const matrix = jsonl(join(out, 'matrix.jsonl'))
-      expect(matrix.find((entry) => entry.row === 'row-1-history-open' && 'operator_result' in entry))
-        .toMatchObject({ automatic: true, operator_result: 'pass', drive_method: expect.stringContaining('window.toto.recallList()') })
-      expect(matrix.find((entry) => entry.row === 'row-4-second-instance-reopen' && 'operator_result' in entry))
-        .toMatchObject({ automatic: true, operator_result: 'pass', drive_method: expect.stringContaining('re-launch Metis.exe') })
-      expect(matrix.find((entry) => entry.row === 'row-3-macos-activate'))
-        .toMatchObject({ operator_result: 'not-applicable', reason: expect.stringContaining('macOS-only') })
-      expect(matrix.find((entry) => entry.row === 'row-2-brain-status-blocked-brain'))
-        .toMatchObject({ status: 'BLOCKED_EXTERNAL', unblock_step: expect.stringContaining('FIFO') })
+      expect(matrix.find((entry) => entry.row === 'row-1-history-open' && 'operator_result' in entry)).toMatchObject({
+        automatic: true,
+        operator_result: 'pass',
+        drive_method: expect.stringContaining('window.toto.recallList()')
+      })
+      expect(
+        matrix.find((entry) => entry.row === 'row-4-second-instance-reopen' && 'operator_result' in entry)
+      ).toMatchObject({
+        automatic: true,
+        operator_result: 'pass',
+        drive_method: expect.stringContaining('re-launch Metis.exe')
+      })
+      expect(matrix.find((entry) => entry.row === 'row-3-macos-activate')).toMatchObject({
+        operator_result: 'not-applicable',
+        reason: expect.stringContaining('macOS-only')
+      })
+      expect(matrix.find((entry) => entry.row === 'row-2-brain-status-blocked-brain')).toMatchObject({
+        status: 'BLOCKED_EXTERNAL',
+        unblock_step: expect.stringContaining('FIFO')
+      })
       for (const row of ['row-5-dataless-brain-idle', 'row-9-network-off-flapping']) {
-        expect(matrix.find((entry) => entry.row === row), row).toMatchObject({ status: 'BLOCKED_EXTERNAL' })
+        expect(
+          matrix.find((entry) => entry.row === row),
+          row
+        ).toMatchObject({ status: 'BLOCKED_EXTERNAL' })
       }
       for (const row of ['row-1-history-open', 'row-4-second-instance-reopen']) {
-        expect(matrix.find((entry) => entry.row === row && 'sampled' in entry), row)
-          .toMatchObject({ sampled: false, reason: expect.stringContaining('sampling unavailable') })
+        expect(
+          matrix.find((entry) => entry.row === row && 'sampled' in entry),
+          row
+        ).toMatchObject({ sampled: false, reason: expect.stringContaining('sampling unavailable') })
       }
 
       const summary = JSON.parse(readFileSync(join(out, 'hosted-live-summary.json'), 'utf8'))
@@ -747,6 +1065,9 @@ describe('M2-0463 Windows hosted-live mode', () => {
 
       const environment = JSON.parse(readFileSync(join(out, 'environment.json'), 'utf8'))
       expect(environment).toMatchObject({ mode: 'hosted-live', host: { label: 'windows-latest' } })
+      const nodeOptions = readFileSync(stubs.nodeOptionsLog, 'utf8').trim()
+      expect(nodeOptions).toMatch(/^--require "C:\\\\hosted\\\\/)
+      expect(nodeOptions).toContain('\\\\fuse-probe\\\\node-options-probe.cjs"')
       const evidenceImport = JSON.parse(readFileSync(join(out, 'M2-0008.evidence-import.json'), 'utf8'))
       expect(evidenceImport).toMatchObject({
         mode: 'hosted-live',
@@ -779,8 +1100,9 @@ describe('M2-0463 Windows hosted-live mode', () => {
       expect(existsSync(stubs.forbiddenLog)).toBe(false)
 
       const matrix = jsonl(join(out, 'matrix.jsonl'))
-      expect(matrix.find((entry) => entry.row === 'row-4-second-instance-reopen' && 'operator_result' in entry))
-        .toMatchObject({ automatic: true, operator_result: 'not-exercised', precondition: 'relaunch-failed' })
+      expect(
+        matrix.find((entry) => entry.row === 'row-4-second-instance-reopen' && 'operator_result' in entry)
+      ).toMatchObject({ automatic: true, operator_result: 'not-exercised', precondition: 'relaunch-failed' })
 
       const evidenceImport = JSON.parse(readFileSync(join(out, 'M2-0008.evidence-import.json'), 'utf8'))
       expect(evidenceImport).toMatchObject({
@@ -807,12 +1129,33 @@ describe('M2-0462 cdp-observe derivation', () => {
   }
 
   it('derives pass, observed and not-exercised from observations only', () => {
-    expect(deriveRowResult('row-1-history-open', { ...answered, drive: 'answered' })).toMatchObject({ operator_result: 'pass', symptom_observed: false })
-    expect(deriveRowResult('row-1-history-open', { ...answered, drive: 'timeout' })).toMatchObject({ operator_result: 'observed', symptom_observed: true })
-    expect(deriveRowResult('row-2-brain-status-blocked-brain', { ...answered, main_round_trip: 'timeout', main_answered: false })).toMatchObject({ operator_result: 'observed' })
-    expect(deriveRowResult('row-3-macos-activate', { ...answered, window_visible: false })).toMatchObject({ operator_result: 'observed', reason: 'no-visible-window' })
-    expect(deriveRowResult('row-1-history-open', { ...answered, window_visible: false })).toMatchObject({ operator_result: 'pass' })
-    expect(deriveRowResult('row-4-second-instance-reopen', { ...answered, reachable: false, page_targets: 0 })).toMatchObject({ operator_result: 'not-exercised' })
-    expect(deriveRowResult('row-1-history-open', { ...answered, main_round_trip: 'no-bridge', drive: 'no-bridge' })).toMatchObject({ operator_result: 'not-exercised' })
+    expect(deriveRowResult('row-1-history-open', { ...answered, drive: 'answered' })).toMatchObject({
+      operator_result: 'pass',
+      symptom_observed: false
+    })
+    expect(deriveRowResult('row-1-history-open', { ...answered, drive: 'timeout' })).toMatchObject({
+      operator_result: 'observed',
+      symptom_observed: true
+    })
+    expect(
+      deriveRowResult('row-2-brain-status-blocked-brain', {
+        ...answered,
+        main_round_trip: 'timeout',
+        main_answered: false
+      })
+    ).toMatchObject({ operator_result: 'observed' })
+    expect(deriveRowResult('row-3-macos-activate', { ...answered, window_visible: false })).toMatchObject({
+      operator_result: 'observed',
+      reason: 'no-visible-window'
+    })
+    expect(deriveRowResult('row-1-history-open', { ...answered, window_visible: false })).toMatchObject({
+      operator_result: 'pass'
+    })
+    expect(
+      deriveRowResult('row-4-second-instance-reopen', { ...answered, reachable: false, page_targets: 0 })
+    ).toMatchObject({ operator_result: 'not-exercised' })
+    expect(
+      deriveRowResult('row-1-history-open', { ...answered, main_round_trip: 'no-bridge', drive: 'no-bridge' })
+    ).toMatchObject({ operator_result: 'not-exercised' })
   })
 })
