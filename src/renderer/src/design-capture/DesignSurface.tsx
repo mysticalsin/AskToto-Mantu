@@ -1,10 +1,4 @@
-import {
-  DESIGN_STATES,
-  SAMPLE_ANSWER,
-  SAMPLE_QUESTION,
-  SAMPLE_REVIEW,
-  type DesignState
-} from './states'
+import { DESIGN_STATES, SAMPLE_ANSWER, SAMPLE_QUESTION, SAMPLE_REVIEW, type DesignState } from './states'
 
 function Bar({ phase }: { phase: 'idle' | 'listening' }): JSX.Element {
   return (
