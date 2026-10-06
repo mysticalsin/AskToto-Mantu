@@ -320,7 +320,11 @@ const SHA256 = /^[0-9a-f]{64}$/
 
 function scenarioEntry(scenario) {
   const entry = Object.hasOwn(SCENARIOS, scenario) ? SCENARIOS[scenario] : undefined
-  if (!entry) throw new Error(`Unknown scenario ${JSON.stringify(scenario)}; expected one of ${Object.keys(SCENARIOS).join(', ')}.`)
+  if (!entry) {
+    throw new Error(
+      `Unknown scenario ${JSON.stringify(scenario)}; expected one of ${Object.keys(SCENARIOS).join(', ')}.`
+    )
+  }
   return entry
 }
 
@@ -425,7 +429,9 @@ export function prepareProfile({ scenario, platform, appDataDir }) {
   if (target.isolatedProfiles) return null
   if (target.profileLayout) {
     const profile = join(process.cwd(), 'candidate-scenario', 'profile')
-    if (existsSync(profile)) throw new Error('The idle-soak profile directory already exists; the profile is not fresh.')
+    if (existsSync(profile)) {
+      throw new Error('The idle-soak profile directory already exists; the profile is not fresh.')
+    }
     writeRepresentativeProfile(profile, undefined, { layout: target.profileLayout })
     return join(profile, 'resource-census-profile.json')
   }
@@ -515,14 +521,18 @@ function assessScenarioReport({ scenario, platform, report }) {
 export function scenarioCommand({ scenario, platform, installer, sha256, outDir, app }) {
   const target = platformEntry(scenario, platform)
   if (target.installerSuffix && !installer.toLowerCase().endsWith(target.installerSuffix)) {
-    throw new Error(`${scenario} installs a ${target.installerSuffix} installer; the selected installer is ${basename(installer)}.`)
+    throw new Error(
+      `${scenario} installs a ${target.installerSuffix} installer; the selected installer is ${basename(installer)}.`
+    )
   }
   const argv = [target.script, ...target.args({ installer, sha256, report: join(outDir, target.report).replaceAll('\\', '/'), app })]
   if (argv.some((arg) => typeof arg !== 'string' || arg === '')) {
     throw new Error(`The ${scenario} command is missing an argument; pass the installed app with --app.`)
   }
   const absolute = argv.filter((arg) => isAbsolute(arg) || /^[A-Za-z]:[\\/]/.test(arg))
-  if (absolute.length) throw new Error(`The scenario command must use repository-relative paths; got ${absolute.length} absolute.`)
+  if (absolute.length) {
+    throw new Error(`The scenario command must use repository-relative paths; got ${absolute.length} absolute.`)
+  }
   return argv
 }
 

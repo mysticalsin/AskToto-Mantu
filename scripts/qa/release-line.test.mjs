@@ -131,7 +131,10 @@ test('promotion accepts a main candidate, and release/1.9.x only with a version 
   assert.deepEqual(candidateBranchProblems({ branch: 'main', version: '1.9.7', ...BEFORE }), [])
   assert.deepEqual(candidateBranchProblems({ branch: 'release/1.9.x', version: '1.9.7-hotfix.1', ...AFTER }), [])
   const promoted = candidateBranchProblems({ branch: 'release/1.9.x', version: '1.9.7', ...AFTER })
-  assert.ok(promoted.some((p) => p.includes('already promoted')), promoted.join('|'))
+  assert.ok(
+    promoted.some((p) => p.includes('already promoted')),
+    promoted.join('|')
+  )
   assert.notDeepEqual(candidateBranchProblems({ branch: 'release/1.9.x', version: '1.9.7-hotfix.1', ...BEFORE }), [])
 })
 
@@ -151,7 +154,18 @@ function runCandidateCli({ branch, version }) {
     writeFileSync(join(dir, 'releases.txt'), AFTER.publishedReleases.join('\n'))
     return spawnSync(
       process.execPath,
-      [MODULE_PATH, 'candidate', '--branch', branch, '--package', join(dir, 'provenance.json'), '--tags', join(dir, 'tags.txt'), '--releases', join(dir, 'releases.txt')],
+      [
+        MODULE_PATH,
+        'candidate',
+        '--branch',
+        branch,
+        '--package',
+        join(dir, 'provenance.json'),
+        '--tags',
+        join(dir, 'tags.txt'),
+        '--releases',
+        join(dir, 'releases.txt')
+      ],
       { encoding: 'utf8' }
     )
   } finally {

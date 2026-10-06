@@ -498,7 +498,10 @@ test('a PASS record for one promotable asset never covers a different asset or p
     problems = evidenceProblems(sameAssetTwice, provenance)
     assert.equal(problems.length, covered.length)
     for (const asset of covered) {
-      assert.ok(problems.some((p) => p.includes(asset.name)), `expected a problem naming ${asset.name}`)
+      assert.ok(
+        problems.some((p) => p.includes(asset.name)),
+        `expected a problem naming ${asset.name}`
+      )
     }
 
     // The macOS QA-identity build is built and tested but never shipped: a PASS record naming its
@@ -513,7 +516,10 @@ test('a PASS record for one promotable asset never covers a different asset or p
     problems = evidenceProblems(qaOnly, provenance)
     assert.equal(problems.length, assets.length + 1)
     for (const asset of assets) {
-      assert.ok(problems.some((p) => p.includes(asset.name)), `expected a problem naming ${asset.name}`)
+      assert.ok(
+        problems.some((p) => p.includes(asset.name)),
+        `expected a problem naming ${asset.name}`
+      )
     }
   } finally {
     cleanup(root)

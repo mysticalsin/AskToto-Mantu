@@ -87,7 +87,9 @@ function resolveSigning(platform, env) {
   const identity = env.ASKTOTO_MAC_SIGN_IDENTITY
   if (!identity) return { mode: 'ad-hoc' }
   if (!/^[0-9A-Fa-f]{40}$/.test(identity)) {
-    throw new Error(`ASKTOTO_MAC_SIGN_IDENTITY is not a 40-character certificate fingerprint: ${JSON.stringify(identity)}`)
+    throw new Error(
+      `ASKTOTO_MAC_SIGN_IDENTITY is not a 40-character certificate fingerprint: ${JSON.stringify(identity)}`
+    )
   }
   return { mode: 'qa-identity', certificate_sha1: identity.toLowerCase() }
 }
