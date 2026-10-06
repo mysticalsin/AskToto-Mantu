@@ -223,7 +223,16 @@ export function countStorageSaturations(mainLogText) {
 
 /** Whether this sample should schedule the next History probe. Pure so idle rows can prove when History is
  *  untouched, including a delayed mode that opens it only after the idle measurement window. */
-export function shouldProbeHistory({ historyMode = 'on', historyRunning, historyAnswered = false, tMs, historyLastMs, fromMs, everyMs, retryUntilMs = Infinity }) {
+export function shouldProbeHistory({
+  historyMode = 'on',
+  historyRunning,
+  historyAnswered = false,
+  tMs,
+  historyLastMs,
+  fromMs,
+  everyMs,
+  retryUntilMs = Infinity
+}) {
   if (historyMode === 'off' || historyRunning) return false
   if (historyMode === 'after-idle' && historyAnswered) return false
   return tMs >= fromMs && tMs <= retryUntilMs && tMs - historyLastMs >= everyMs
@@ -255,10 +264,15 @@ export function syntheticDatalessPlan() {
   const pad = (n) => String(n).padStart(2, '0')
   const meeting = (i, tag) => `2026-${pad(1 + Math.floor(i / 28))}-${pad((i % 28) + 1)}_090000-st1-${tag}.md`
   const local = Array.from({ length: SYNTHETIC_LOCAL_MEETINGS }, (_, i) => meeting(i, 'local'))
-  const meetingFifos = Array.from({ length: SYNTHETIC_FIFO_MEETINGS }, (_, i) => meeting(SYNTHETIC_LOCAL_MEETINGS + i, 'cloud-only'))
+  const meetingFifos = Array.from({ length: SYNTHETIC_FIFO_MEETINGS }, (_, i) =>
+    meeting(SYNTHETIC_LOCAL_MEETINGS + i, 'cloud-only')
+  )
   const brainFifos = [
     '.brain/index.json',
-    ...Array.from({ length: SYNTHETIC_BRAIN_ENTITY_FIFOS }, (_, i) => `.brain/entities/${i % 2 === 0 ? 'person' : 'org'}/st1-cloud-only-${i + 1}.json`)
+    ...Array.from(
+      { length: SYNTHETIC_BRAIN_ENTITY_FIFOS },
+      (_, i) => `.brain/entities/${i % 2 === 0 ? 'person' : 'org'}/st1-cloud-only-${i + 1}.json`
+    )
   ]
   return {
     local,
@@ -293,9 +307,12 @@ export function runPurpose({ purpose, windowVariant }) {
     if (windowVariant !== undefined) return { error: `--window-variant needs --purpose ${WINDOW_CONSTRUCTION}` }
     return { purpose: 'st-1', windowVariant: 'shipped' }
   }
-  if (purpose !== WINDOW_CONSTRUCTION) return { error: `--purpose must be ${WINDOW_CONSTRUCTION}, got ${JSON.stringify(purpose)}` }
+  if (purpose !== WINDOW_CONSTRUCTION)
+    return { error: `--purpose must be ${WINDOW_CONSTRUCTION}, got ${JSON.stringify(purpose)}` }
   if (!WINDOW_VARIANTS.includes(windowVariant)) {
-    return { error: `--window-variant must be one of ${WINDOW_VARIANTS.join(', ')}, got ${JSON.stringify(windowVariant)}` }
+    return {
+      error: `--window-variant must be one of ${WINDOW_VARIANTS.join(', ')}, got ${JSON.stringify(windowVariant)}`
+    }
   }
   return { purpose, windowVariant }
 }
@@ -338,12 +355,24 @@ export const WINDOW_CONSTRUCTION_ROOT_CAUSE = {
 /** The CI launch order for window construction. The shipped warm-up launches keep the original first-run
  * profile setup ahead of the measured rotation; measured repeats stay interleaved by repeat, variant and chrome,
  * with shipped measured last in each repeat. */
-export function windowConstructionPlan({ variants = WINDOW_MEASURED_VARIANT_ORDER, chromes = WINDOW_CHROMES, repeats = WINDOW_MEASURED_REPEATS } = {}) {
+export function windowConstructionPlan({
+  variants = WINDOW_MEASURED_VARIANT_ORDER,
+  chromes = WINDOW_CHROMES,
+  repeats = WINDOW_MEASURED_REPEATS
+} = {}) {
   const repeatNumbers = Array.from({ length: repeats }, (_, i) => i + 1)
   return [
     ...chromes.map((chrome) => ({ name: `window-warmup-shipped-${chrome}`, variant: 'shipped', chrome, warmup: true })),
     ...repeatNumbers.flatMap((repeat) =>
-      variants.flatMap((variant) => chromes.map((chrome) => ({ name: `window-${variant}-${chrome}-${repeat}`, variant, chrome, repeat, warmup: false })))
+      variants.flatMap((variant) =>
+        chromes.map((chrome) => ({
+          name: `window-${variant}-${chrome}-${repeat}`,
+          variant,
+          chrome,
+          repeat,
+          warmup: false
+        }))
+      )
     )
   ]
 }
@@ -358,17 +387,20 @@ function windowLaunchStageRows(reports) {
   return reports.flatMap(({ name, report }) => {
     if (report?.purpose !== WINDOW_CONSTRUCTION) return []
     const stages = Array.isArray(report.bootStages?.stages) ? report.bootStages.stages : []
-    const launchVariant = report.windowVariant ?? stages.find((entry) => typeof entry.windowVariant === 'string')?.windowVariant ?? null
+    const launchVariant =
+      report.windowVariant ?? stages.find((entry) => typeof entry.windowVariant === 'string')?.windowVariant ?? null
     if (stages.length === 0) {
-      return [{
-        report: name,
-        launch: launchNameFromReportPath(name),
-        variant: launchVariant,
-        warmup: report.warmup === true,
-        stage: null,
-        chrome: null,
-        ms: null
-      }]
+      return [
+        {
+          report: name,
+          launch: launchNameFromReportPath(name),
+          variant: launchVariant,
+          warmup: report.warmup === true,
+          stage: null,
+          chrome: null,
+          ms: null
+        }
+      ]
     }
     return stages.map((entry) => {
       const chrome = entry.transparent === true ? 'transparent' : entry.transparent === false ? 'opaque' : null
@@ -389,17 +421,15 @@ function windowLaunchSummaries(rows) {
   const launches = new Map()
   for (const row of rows) {
     const key = row.launch
-    const launch =
-      launches.get(key) ??
-      {
-        launch: row.launch,
-        variant: row.variant,
-        chrome: row.chrome,
-        warmup: row.warmup,
-        stages: [],
-        gatedStages: [],
-        maxStageMs: null
-      }
+    const launch = launches.get(key) ?? {
+      launch: row.launch,
+      variant: row.variant,
+      chrome: row.chrome,
+      warmup: row.warmup,
+      stages: [],
+      gatedStages: [],
+      maxStageMs: null
+    }
     if (launch.chrome === null && row.chrome !== null) launch.chrome = row.chrome
     const stage = { stage: row.stage, ms: row.ms }
     launch.stages.push(stage)
@@ -439,7 +469,14 @@ export function windowConstructionGate(reports, budgetMs = WINDOW_STAGE_BUDGET_M
       for (const entry of found) {
         const chrome = entry.transparent === true ? 'transparent' : entry.transparent === false ? 'opaque' : null
         if (chrome) chromes.add(chrome)
-        rows.push({ report: name, launch: launchNameFromReportPath(name), variant: report.windowVariant ?? null, stage, chrome, ms: entry.ms })
+        rows.push({
+          report: name,
+          launch: launchNameFromReportPath(name),
+          variant: report.windowVariant ?? null,
+          stage,
+          chrome,
+          ms: entry.ms
+        })
         if (typeof entry.ms !== 'number') failures.push(`${name}: ${stage} has no measured ms`)
         else if (entry.ms >= budgetMs) failures.push(`${name}: ${stage} ${entry.ms} ms >= ${budgetMs} ms`)
         if (!chrome) failures.push(`${name}: ${stage} does not say which chrome it built`)
@@ -485,7 +522,9 @@ export function bootStagesFromAudit(auditText, spawnedWallMs) {
       ts: record.ts,
       ...(typeof record.transparent === 'boolean' ? { transparent: record.transparent } : {}),
       ...(typeof record.windowVariant === 'string' ? { windowVariant: record.windowVariant } : {}),
-      ...(typeof spawnedWallMs === 'number' && Number.isFinite(endedAt) ? { sinceSpawnMs: endedAt - spawnedWallMs } : {})
+      ...(typeof spawnedWallMs === 'number' && Number.isFinite(endedAt)
+        ? { sinceSpawnMs: endedAt - spawnedWallMs }
+        : {})
     })
   }
   return stages
@@ -499,7 +538,10 @@ export function cpuBusyPct(previous, current) {
   if (!previous || !current) return null
   let busy = 0
   let total = 0
-  for (const [snapshot, sign] of [[current, 1], [previous, -1]]) {
+  for (const [snapshot, sign] of [
+    [current, 1],
+    [previous, -1]
+  ]) {
     for (const cpu of snapshot) {
       for (const [name, value] of Object.entries(cpu.times)) {
         total += sign * value
@@ -544,7 +586,9 @@ function fifoRefusalEvidence(row, measured, evidence, fixtures, fixtureCounts) {
   const probes = historyProbes(measured)
   const requiredUnavailableRows = fifoMeetingFixtures(row, fixtures, fixtureCounts, evidence)
   const answered = probes.filter((entry) => !entry.hung && !entry.error)
-  const brainStatusAnswered = answered.some((entry) => settledWithin(entry.calls?.brainStatus, Number.POSITIVE_INFINITY))
+  const brainStatusAnswered = answered.some((entry) =>
+    settledWithin(entry.calls?.brainStatus, Number.POSITIVE_INFINITY)
+  )
   const unavailableRows = maxNumber(answered.map((entry) => entry.unavailable ?? entry.notDownloaded))
   const matchingProbe = answered.find(
     (entry) =>
@@ -622,11 +666,18 @@ function callStats(probes, name) {
  */
 function historyChecks(row, measured, probes) {
   const listUsable = (entry) =>
-    settledWithin(entry.calls?.recallList, HISTORY_BUDGET_MS) && entry.rows >= 1 && (row !== 'dataless' || entry.notDownloaded >= 1)
+    settledWithin(entry.calls?.recallList, HISTORY_BUDGET_MS) &&
+    entry.rows >= 1 &&
+    (row !== 'dataless' || entry.notDownloaded >= 1)
   const searchUsable = (entry) =>
-    settledWithin(entry.calls?.recallSearch, HISTORY_BUDGET_MS) && typeof entry.hits === 'number' && (row !== 'fifo' || entry.hits >= 1)
+    settledWithin(entry.calls?.recallSearch, HISTORY_BUDGET_MS) &&
+    typeof entry.hits === 'number' &&
+    (row !== 'fifo' || entry.hits >= 1)
   return [
-    { name: `first-list < ${HISTORY_FIRST_LIST_MS}`, pass: settledWithin(probes[0]?.calls?.recallList, HISTORY_FIRST_LIST_MS) },
+    {
+      name: `first-list < ${HISTORY_FIRST_LIST_MS}`,
+      pass: settledWithin(probes[0]?.calls?.recallList, HISTORY_FIRST_LIST_MS)
+    },
     { name: `list < ${HISTORY_BUDGET_MS}`, pass: probes.length > 0 && probes.every(listUsable) },
     { name: `search < ${HISTORY_BUDGET_MS}`, pass: probes.length > 0 && probes.every(searchUsable) },
     { name: 'loop-p99 < 50', pass: measured.loop?.p99Ms < 50 }
@@ -703,7 +754,17 @@ export function evaluateCriteria(row, measured, evidence, { history = false } = 
 /** A report with an empty measurement; `measure` fills it in place, so a partial report can be written at
  *  any moment. */
 export function emptyRun() {
-  return { poolSize: null, setupAtMs: null, samples: [], late: [], history: [], errors: [], profiler: null, loop: null, witnessLoop: null }
+  return {
+    poolSize: null,
+    setupAtMs: null,
+    samples: [],
+    late: [],
+    history: [],
+    errors: [],
+    profiler: null,
+    loop: null,
+    witnessLoop: null
+  }
 }
 
 /**
@@ -735,7 +796,9 @@ export function buildReport({
   const refusalEvidence = fifoRefusalEvidence(row, measured, evidence, fixtures, fixtureCounts)
   // The control row has nothing to exercise: its verdict is the criteria alone.
   const exercised = refusalEvidence?.exercised ?? (row === 'none' || evidence?.exercised)
-  const openedNonRegularFixture = criteria.some((criterion) => criterion.name === 'non-regular-fixtures-unopened' && !criterion.pass)
+  const openedNonRegularFixture = criteria.some(
+    (criterion) => criterion.name === 'non-regular-fixtures-unopened' && !criterion.pass
+  )
   // OD-43/M2-0534: after-idle rows must resolve to PASS or FAIL; missing refusal proof is a row failure.
   const delayedHistoryFailed = historyMode === 'after-idle' && refusalEvidence && !refusalEvidence.exercised
   const verdict = !complete
@@ -747,7 +810,9 @@ export function buildReport({
         : criteria.every((c) => c.pass)
           ? 'PASS'
           : 'FAIL'
-  const timeline = [...measured.samples, ...measured.late.map((entry) => ({ ...entry, late: true }))].sort((a, b) => a.tMs - b.tMs)
+  const timeline = [...measured.samples, ...measured.late.map((entry) => ({ ...entry, late: true }))].sort(
+    (a, b) => a.tMs - b.tMs
+  )
   return {
     harness: 'ST-1',
     ...(purpose === WINDOW_CONSTRUCTION ? { purpose, st1Evidence: false, windowVariant } : {}),
@@ -774,7 +839,15 @@ export function buildReport({
       ? { fixtureKind: 'synthetic-dataless', fixtureCounts, sfDatalessSet: evidence?.sfDatalessSet ?? null }
       : {}),
     ...(row === 'dataless' ? { stillDataless: evidence?.stillDataless ?? null } : {}),
-    ...(history ? { historySummary: historySummary(measured, { row, complete, storageSaturations: attribution.storageSaturations }) } : {}),
+    ...(history
+      ? {
+          historySummary: historySummary(measured, {
+            row,
+            complete,
+            storageSaturations: attribution.storageSaturations
+          })
+        }
+      : {}),
     criteria,
     verdict,
     complete,
@@ -813,7 +886,16 @@ export function writeJsonToStdout(value, stdout = process.stdout) {
 
 /** The launch itself never reached a candidate to measure: a genuine FAIL (inspector: false), never a
  *  skipped row. A window-construction launch is marked as in buildReport. */
-export function buildLaunchFailureReport({ row, installer, candidate, fixtures, reason, purpose = 'st-1', windowVariant = 'shipped', windowWarmup = false }) {
+export function buildLaunchFailureReport({
+  row,
+  installer,
+  candidate,
+  fixtures,
+  reason,
+  purpose = 'st-1',
+  windowVariant = 'shipped',
+  windowWarmup = false
+}) {
   return {
     harness: 'ST-1',
     ...(purpose === WINDOW_CONSTRUCTION ? { purpose, st1Evidence: false, windowVariant } : {}),

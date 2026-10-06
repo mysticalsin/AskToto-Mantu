@@ -43,7 +43,8 @@ import {
 const evaluateGlobally = (expression: string): unknown => (0, eval)(expression)
 const globals = globalThis as unknown as Record<string, Record<string, unknown> | undefined>
 const pending = (): Record<string, unknown> | undefined => globals[PENDING_GLOBAL]
-const workflowText = () => readFileSync(join(process.cwd(), '.github', 'workflows', 'qa-candidate.yml'), 'utf8').replace(/\r\n/g, '\n')
+const workflowText = () =>
+  readFileSync(join(process.cwd(), '.github', 'workflows', 'qa-candidate.yml'), 'utf8').replace(/\r\n/g, '\n')
 
 const candidate = { build_run_id: 1, artifact_sha256: 'a'.repeat(64) }
 const goodSample = (tMs: number) => ({ tMs, writeMs: 2, lookupMs: 1, loopMaxSinceLastMs: 12, resources: {} })
@@ -152,7 +153,10 @@ describe('pinnedExpression', () => {
       throw new TypeError('testEnabled is not a function')
     }) as unknown as typeof setTimeout
     try {
-      await expect(evaluateGlobally(pinnedExpression('timer-6', '41 + 1', 1_000))).resolves.toEqual({ ok: true, value: 42 })
+      await expect(evaluateGlobally(pinnedExpression('timer-6', '41 + 1', 1_000))).resolves.toEqual({
+        ok: true,
+        value: 42
+      })
     } finally {
       globalThis.setTimeout = originalSetTimeout
     }
@@ -165,7 +169,8 @@ describe('pinnedExpression', () => {
 
 describe('sampleExpression', () => {
   it('carries a pre-sample boot block into sample 0 through the whole-run max', async () => {
-    const originalGetBuiltinModule = (process as unknown as { getBuiltinModule?: (name: string) => unknown }).getBuiltinModule
+    const originalGetBuiltinModule = (process as unknown as { getBuiltinModule?: (name: string) => unknown })
+      .getBuiltinModule
     const installSampleHarness = ({
       sinceMaxNs = 0,
       runMaxNs = 0,
@@ -254,7 +259,8 @@ describe('sampleExpression', () => {
       })
       expect(unchangedRunMaxReset).toHaveBeenCalledTimes(1)
     } finally {
-      ;(process as unknown as { getBuiltinModule?: (name: string) => unknown }).getBuiltinModule = originalGetBuiltinModule
+      ;(process as unknown as { getBuiltinModule?: (name: string) => unknown }).getBuiltinModule =
+        originalGetBuiltinModule
       delete (globalThis as Record<string, unknown>).__st1
       delete (globalThis as Record<string, unknown>).__st1lastRunLoopMaxMs
     }
@@ -298,7 +304,12 @@ describe('recordSample', () => {
     const witness = { loopMaxSinceLastMs: 310, writeMs: 4, cpuBusyPct: 97.5 }
     const run = emptyRun()
     recordSample(run, 1_000, { ok: true, value: { writeMs: 2, lookupMs: 1 }, elapsedMs: 40 }, { ...bounds, witness })
-    recordSample(run, 2_000, { ok: true, value: { writeMs: 900, lookupMs: 1 }, elapsedMs: 1_600 }, { ...bounds, witness })
+    recordSample(
+      run,
+      2_000,
+      { ok: true, value: { writeMs: 900, lookupMs: 1 }, elapsedMs: 1_600 },
+      { ...bounds, witness }
+    )
     recordSample(run, 3_000, { ok: false, timedOut: true, elapsedMs: 7_000 }, { ...bounds, witness })
     expect(run.samples).toEqual([{ tMs: 1_000, writeMs: 2, lookupMs: 1, answeredMs: 40, witness }])
     expect(run.late).toEqual([
@@ -312,33 +323,85 @@ describe('bootStagesFromAudit (M2-0515)', () => {
   it('lifts every app.boot.stage record out of the audit trail in order, rounds ms and skips other events and torn lines', () => {
     const text = [
       JSON.stringify({ ts: '2026-09-29T10:00:00.000Z', seq: 1, event: 'app.started', bootId: 'b' }),
-      JSON.stringify({ ts: '2026-09-29T10:00:00.400Z', seq: 2, event: 'app.boot.stage', bootId: 'b', stage: 'createWindow.construct', ms: 170.26, transparent: true }),
-      JSON.stringify({ ts: '2026-09-29T10:00:00.520Z', seq: 3, event: 'app.boot.stage', bootId: 'b', stage: 'createWindow.firstShow', ms: 12 }),
+      JSON.stringify({
+        ts: '2026-09-29T10:00:00.400Z',
+        seq: 2,
+        event: 'app.boot.stage',
+        bootId: 'b',
+        stage: 'createWindow.construct',
+        ms: 170.26,
+        transparent: true
+      }),
+      JSON.stringify({
+        ts: '2026-09-29T10:00:00.520Z',
+        seq: 3,
+        event: 'app.boot.stage',
+        bootId: 'b',
+        stage: 'createWindow.firstShow',
+        ms: 12
+      }),
       // A foreign record that only mentions the event name, and a torn last line.
       JSON.stringify({ ts: '2026-09-29T10:00:00.600Z', seq: 4, event: 'app.stall', phase: 'app.boot.stage' }),
-      JSON.stringify({ ts: '2026-09-29T10:00:01.000Z', seq: 5, event: 'app.boot.stage', bootId: 'b', stage: 'createTray.newTray', ms: 312 }),
+      JSON.stringify({
+        ts: '2026-09-29T10:00:01.000Z',
+        seq: 5,
+        event: 'app.boot.stage',
+        bootId: 'b',
+        stage: 'createTray.newTray',
+        ms: 312
+      }),
       '{"ts":"2026-09-29T10:00:01.100Z","event":"app.boot.stage","stage":"createTray.attach',
       ''
     ].join('\n')
     expect(bootStagesFromAudit(text, Date.parse('2026-09-29T10:00:00.000Z'))).toEqual([
-      { stage: 'createWindow.construct', ms: 170.3, ts: '2026-09-29T10:00:00.400Z', transparent: true, sinceSpawnMs: 400 },
+      {
+        stage: 'createWindow.construct',
+        ms: 170.3,
+        ts: '2026-09-29T10:00:00.400Z',
+        transparent: true,
+        sinceSpawnMs: 400
+      },
       { stage: 'createWindow.firstShow', ms: 12, ts: '2026-09-29T10:00:00.520Z', sinceSpawnMs: 520 },
       { stage: 'createTray.newTray', ms: 312, ts: '2026-09-29T10:00:01.000Z', sinceSpawnMs: 1_000 }
     ])
   })
 
   it('leaves sinceSpawnMs out without a spawn time, and ms null when the record has none', () => {
-    const text = JSON.stringify({ ts: '2026-09-29T10:00:00.400Z', event: 'app.boot.stage', stage: 'createTray.loadIcon' })
-    expect(bootStagesFromAudit(text)).toEqual([{ stage: 'createTray.loadIcon', ms: null, ts: '2026-09-29T10:00:00.400Z' }])
+    const text = JSON.stringify({
+      ts: '2026-09-29T10:00:00.400Z',
+      event: 'app.boot.stage',
+      stage: 'createTray.loadIcon'
+    })
+    expect(bootStagesFromAudit(text)).toEqual([
+      { stage: 'createTray.loadIcon', ms: null, ts: '2026-09-29T10:00:00.400Z' }
+    ])
   })
 
   it('keeps the variant a window stage was built under, and the navigation stage (M2-0516)', () => {
     const text = [
-      JSON.stringify({ ts: '2026-09-29T10:00:00.400Z', event: 'app.boot.stage', stage: 'createWindow.construct', ms: 760, transparent: false, windowVariant: 'spellcheck-off' }),
-      JSON.stringify({ ts: '2026-09-29T10:00:00.450Z', event: 'app.boot.stage', stage: 'createWindow.navigate', ms: 31.04 })
+      JSON.stringify({
+        ts: '2026-09-29T10:00:00.400Z',
+        event: 'app.boot.stage',
+        stage: 'createWindow.construct',
+        ms: 760,
+        transparent: false,
+        windowVariant: 'spellcheck-off'
+      }),
+      JSON.stringify({
+        ts: '2026-09-29T10:00:00.450Z',
+        event: 'app.boot.stage',
+        stage: 'createWindow.navigate',
+        ms: 31.04
+      })
     ].join('\n')
     expect(bootStagesFromAudit(text)).toEqual([
-      { stage: 'createWindow.construct', ms: 760, ts: '2026-09-29T10:00:00.400Z', transparent: false, windowVariant: 'spellcheck-off' },
+      {
+        stage: 'createWindow.construct',
+        ms: 760,
+        ts: '2026-09-29T10:00:00.400Z',
+        transparent: false,
+        windowVariant: 'spellcheck-off'
+      },
       { stage: 'createWindow.navigate', ms: 31, ts: '2026-09-29T10:00:00.450Z' }
     ])
   })
@@ -358,12 +421,24 @@ describe('window-construction runs (M2-0516)', () => {
     expect(plan).toHaveLength(2 + WINDOW_VARIANTS.length * WINDOW_CHROMES.length * WINDOW_MEASURED_REPEATS)
     expect(warmups).toHaveLength(WINDOW_CHROMES.length)
     expect(measured).toHaveLength(WINDOW_VARIANTS.length * WINDOW_CHROMES.length * WINDOW_MEASURED_REPEATS)
-    expect(plan[0]).toEqual({ name: 'window-warmup-shipped-opaque', variant: 'shipped', chrome: 'opaque', warmup: true })
-    expect(plan[1]).toEqual({ name: 'window-warmup-shipped-transparent', variant: 'shipped', chrome: 'transparent', warmup: true })
+    expect(plan[0]).toEqual({
+      name: 'window-warmup-shipped-opaque',
+      variant: 'shipped',
+      chrome: 'opaque',
+      warmup: true
+    })
+    expect(plan[1]).toEqual({
+      name: 'window-warmup-shipped-transparent',
+      variant: 'shipped',
+      chrome: 'transparent',
+      warmup: true
+    })
     expect(warmups.every((warmup) => plan.indexOf(warmup) < plan.findIndex((entry) => !entry.warmup))).toBe(true)
     expect([...WINDOW_MEASURED_VARIANT_ORDER].sort()).toEqual([...WINDOW_VARIANTS].sort())
     for (const warmup of warmups) {
-      const firstMeasured = plan.findIndex((entry) => !entry.warmup && entry.variant === warmup.variant && entry.chrome === warmup.chrome)
+      const firstMeasured = plan.findIndex(
+        (entry) => !entry.warmup && entry.variant === warmup.variant && entry.chrome === warmup.chrome
+      )
       expect(firstMeasured).toBeGreaterThan(plan.indexOf(warmup))
     }
     expect(windowConstructionPlan().map((entry) => entry.name)).toEqual([
@@ -387,10 +462,12 @@ describe('window-construction runs (M2-0516)', () => {
       'window-shipped-transparent-2'
     ])
     for (const repeat of [1, 2]) {
-      expect(measured.filter((entry) => entry.name.endsWith(`-${repeat}`)).slice(-2).map((entry) => entry.name)).toEqual([
-        `window-shipped-opaque-${repeat}`,
-        `window-shipped-transparent-${repeat}`
-      ])
+      expect(
+        measured
+          .filter((entry) => entry.name.endsWith(`-${repeat}`))
+          .slice(-2)
+          .map((entry) => entry.name)
+      ).toEqual([`window-shipped-opaque-${repeat}`, `window-shipped-transparent-${repeat}`])
     }
   })
 
@@ -407,7 +484,9 @@ describe('window-construction runs (M2-0516)', () => {
 
   it('makes a run without a purpose an ST-1 run on the shipped window, and refuses a variant there', () => {
     expect(runPurpose({})).toEqual({ purpose: 'st-1', windowVariant: 'shipped' })
-    expect(runPurpose({ windowVariant: 'paint-when-hidden' }).error).toMatch(/--window-variant needs --purpose window-construction/)
+    expect(runPurpose({ windowVariant: 'paint-when-hidden' }).error).toMatch(
+      /--window-variant needs --purpose window-construction/
+    )
   })
 
   it('takes a window-construction run with one known variant, and refuses an unknown purpose or variant', () => {
@@ -416,10 +495,16 @@ describe('window-construction runs (M2-0516)', () => {
       windowVariant: 'prewarm-spellchecker'
     })
     // M2-0519: the view prewarm ships, so it is no longer a variant of its own.
-    expect(runPurpose({ purpose: 'window-construction', windowVariant: 'prewarm-view' }).error).toMatch(/got "prewarm-view"/)
+    expect(runPurpose({ purpose: 'window-construction', windowVariant: 'prewarm-view' }).error).toMatch(
+      /got "prewarm-view"/
+    )
     expect(runPurpose({ purpose: 'window-construction' }).error).toMatch(/--window-variant must be one of shipped, /)
-    expect(runPurpose({ purpose: 'window-construction', windowVariant: 'transparent' }).error).toMatch(/got "transparent"/)
-    expect(runPurpose({ purpose: 'st-2', windowVariant: 'shipped' }).error).toMatch(/--purpose must be window-construction/)
+    expect(runPurpose({ purpose: 'window-construction', windowVariant: 'transparent' }).error).toMatch(
+      /got "transparent"/
+    )
+    expect(runPurpose({ purpose: 'st-2', windowVariant: 'shipped' }).error).toMatch(
+      /--purpose must be window-construction/
+    )
   })
 
   it('always sets the variant for the candidate, so an inherited value never reaches an ST-1 run', () => {
@@ -429,9 +514,19 @@ describe('window-construction runs (M2-0516)', () => {
 
   it('marks its report and launch failure as never ST-1 evidence, whatever the verdict; an ST-1 report carries no mark', () => {
     const built = report({ purpose: 'window-construction', windowVariant: 'spellcheck-off' })
-    expect(built).toMatchObject({ purpose: 'window-construction', st1Evidence: false, windowVariant: 'spellcheck-off', verdict: 'PASS' })
+    expect(built).toMatchObject({
+      purpose: 'window-construction',
+      st1Evidence: false,
+      windowVariant: 'spellcheck-off',
+      verdict: 'PASS'
+    })
     const warmup = report({ purpose: 'window-construction', windowVariant: 'shipped', windowWarmup: true })
-    expect(warmup).toMatchObject({ purpose: 'window-construction', st1Evidence: false, windowVariant: 'shipped', warmup: true })
+    expect(warmup).toMatchObject({
+      purpose: 'window-construction',
+      st1Evidence: false,
+      windowVariant: 'shipped',
+      warmup: true
+    })
     const failed = buildLaunchFailureReport({
       row: 'none',
       installer: 'Metis-QA.zip',
@@ -441,7 +536,12 @@ describe('window-construction runs (M2-0516)', () => {
       purpose: 'window-construction',
       windowVariant: 'prewarm-view'
     })
-    expect(failed).toMatchObject({ purpose: 'window-construction', st1Evidence: false, windowVariant: 'prewarm-view', verdict: 'FAIL' })
+    expect(failed).toMatchObject({
+      purpose: 'window-construction',
+      st1Evidence: false,
+      windowVariant: 'prewarm-view',
+      verdict: 'FAIL'
+    })
     for (const st1 of [report({ purpose: 'st-1', windowVariant: 'shipped' }), report()]) {
       expect(st1).not.toHaveProperty('purpose')
       expect(st1).not.toHaveProperty('st1Evidence')
@@ -480,7 +580,10 @@ describe('windowConstructionGate (M2-0519)', () => {
   it('passes when every shipped prewarm and construct is under 250 ms in both chromes, ignoring other stages and variants', () => {
     const gate = windowConstructionGate([
       ...passing,
-      { name: 'window-spellcheck-off-opaque-1/a.json', report: windowReport('spellcheck-off', [stage('createWindow.construct', 900, false)]) },
+      {
+        name: 'window-spellcheck-off-opaque-1/a.json',
+        report: windowReport('spellcheck-off', [stage('createWindow.construct', 900, false)])
+      },
       { name: 'st-1.json', report: { harness: 'ST-1', row: 'none' } }
     ])
     expect(gate).toMatchObject({ pass: true, budgetMs: 250, failures: [] })
@@ -498,8 +601,22 @@ describe('windowConstructionGate (M2-0519)', () => {
     expect(JSON.stringify(gate.rootCause)).not.toContain('harness-cold-first-measured-launch')
     expect(JSON.stringify(gate.rootCause)).not.toContain('"over 250"')
     expect(gate.rows).toEqual([
-      { report: 'window-shipped-opaque-1/a.json', launch: 'window-shipped-opaque-1', variant: 'shipped', stage: 'createWindow.prewarm', chrome: 'opaque', ms: 12 },
-      { report: 'window-shipped-opaque-1/a.json', launch: 'window-shipped-opaque-1', variant: 'shipped', stage: 'createWindow.construct', chrome: 'opaque', ms: 111 },
+      {
+        report: 'window-shipped-opaque-1/a.json',
+        launch: 'window-shipped-opaque-1',
+        variant: 'shipped',
+        stage: 'createWindow.prewarm',
+        chrome: 'opaque',
+        ms: 12
+      },
+      {
+        report: 'window-shipped-opaque-1/a.json',
+        launch: 'window-shipped-opaque-1',
+        variant: 'shipped',
+        stage: 'createWindow.construct',
+        chrome: 'opaque',
+        ms: 111
+      },
       {
         report: 'window-shipped-transparent-1/a.json',
         launch: 'window-shipped-transparent-1',
@@ -549,80 +666,82 @@ describe('windowConstructionGate (M2-0519)', () => {
         }
       ])
     )
-    expect(gate.launches).toEqual(expect.arrayContaining([
-      {
-        report: 'window-shipped-opaque-1/a.json',
-        launch: 'window-shipped-opaque-1',
-        variant: 'shipped',
-        warmup: false,
-        stage: 'createWindow.prewarm',
-        chrome: 'opaque',
-        ms: 12
-      },
-      {
-        report: 'window-shipped-opaque-1/a.json',
-        launch: 'window-shipped-opaque-1',
-        variant: 'shipped',
-        warmup: false,
-        stage: 'createWindow.construct',
-        chrome: 'opaque',
-        ms: 111
-      },
-      {
-        report: 'window-shipped-opaque-1/a.json',
-        launch: 'window-shipped-opaque-1',
-        variant: 'shipped',
-        warmup: false,
-        stage: 'createWindow.navigate',
-        chrome: null,
-        ms: 400
-      },
-      {
-        report: 'window-shipped-opaque-1/a.json',
-        launch: 'window-shipped-opaque-1',
-        variant: 'shipped',
-        warmup: false,
-        stage: 'createWindow.firstShow',
-        chrome: null,
-        ms: 30
-      },
-      {
-        report: 'window-shipped-opaque-1/a.json',
-        launch: 'window-shipped-opaque-1',
-        variant: 'shipped',
-        warmup: false,
-        stage: 'createTray.newTray',
-        chrome: null,
-        ms: 900
-      },
-      {
-        report: 'window-shipped-transparent-1/a.json',
-        launch: 'window-shipped-transparent-1',
-        variant: 'shipped',
-        warmup: false,
-        stage: 'createWindow.prewarm',
-        chrome: 'transparent',
-        ms: 9
-      },
-      {
-        report: 'window-shipped-transparent-1/a.json',
-        launch: 'window-shipped-transparent-1',
-        variant: 'shipped',
-        warmup: false,
-        stage: 'createWindow.construct',
-        chrome: 'transparent',
-        ms: 93
-      },
-      {
-        report: 'window-spellcheck-off-opaque-1/a.json',
-        launch: 'window-spellcheck-off-opaque-1',
-        variant: 'spellcheck-off',
-        warmup: false,
-        stage: 'createWindow.construct',
-        chrome: 'opaque',
-        ms: 900
-      }
-    ]))
+    expect(gate.launches).toEqual(
+      expect.arrayContaining([
+        {
+          report: 'window-shipped-opaque-1/a.json',
+          launch: 'window-shipped-opaque-1',
+          variant: 'shipped',
+          warmup: false,
+          stage: 'createWindow.prewarm',
+          chrome: 'opaque',
+          ms: 12
+        },
+        {
+          report: 'window-shipped-opaque-1/a.json',
+          launch: 'window-shipped-opaque-1',
+          variant: 'shipped',
+          warmup: false,
+          stage: 'createWindow.construct',
+          chrome: 'opaque',
+          ms: 111
+        },
+        {
+          report: 'window-shipped-opaque-1/a.json',
+          launch: 'window-shipped-opaque-1',
+          variant: 'shipped',
+          warmup: false,
+          stage: 'createWindow.navigate',
+          chrome: null,
+          ms: 400
+        },
+        {
+          report: 'window-shipped-opaque-1/a.json',
+          launch: 'window-shipped-opaque-1',
+          variant: 'shipped',
+          warmup: false,
+          stage: 'createWindow.firstShow',
+          chrome: null,
+          ms: 30
+        },
+        {
+          report: 'window-shipped-opaque-1/a.json',
+          launch: 'window-shipped-opaque-1',
+          variant: 'shipped',
+          warmup: false,
+          stage: 'createTray.newTray',
+          chrome: null,
+          ms: 900
+        },
+        {
+          report: 'window-shipped-transparent-1/a.json',
+          launch: 'window-shipped-transparent-1',
+          variant: 'shipped',
+          warmup: false,
+          stage: 'createWindow.prewarm',
+          chrome: 'transparent',
+          ms: 9
+        },
+        {
+          report: 'window-shipped-transparent-1/a.json',
+          launch: 'window-shipped-transparent-1',
+          variant: 'shipped',
+          warmup: false,
+          stage: 'createWindow.construct',
+          chrome: 'transparent',
+          ms: 93
+        },
+        {
+          report: 'window-spellcheck-off-opaque-1/a.json',
+          launch: 'window-spellcheck-off-opaque-1',
+          variant: 'spellcheck-off',
+          warmup: false,
+          stage: 'createWindow.construct',
+          chrome: 'opaque',
+          ms: 900
+        }
+      ])
+    )
   })
 
   it('uses the launch report variant for per-launch diagnostics when a stage payload disagrees', () => {
@@ -630,7 +749,9 @@ describe('windowConstructionGate (M2-0519)', () => {
       ...passing,
       {
         name: 'window-spellcheck-off-opaque-1/a.json',
-        report: windowReport('spellcheck-off', [{ ...stage('createWindow.construct', 900, false), windowVariant: 'shipped' }])
+        report: windowReport('spellcheck-off', [
+          { ...stage('createWindow.construct', 900, false), windowVariant: 'shipped' }
+        ])
       }
     ])
 
@@ -658,7 +779,10 @@ describe('windowConstructionGate (M2-0519)', () => {
       { name: 't.json', report: shipped(true, 9, 595) }
     ])
     expect(gate.pass).toBe(false)
-    expect(gate.failures).toEqual(['o.json: createWindow.prewarm 250 ms >= 250 ms', 't.json: createWindow.construct 595 ms >= 250 ms'])
+    expect(gate.failures).toEqual([
+      'o.json: createWindow.prewarm 250 ms >= 250 ms',
+      't.json: createWindow.construct 595 ms >= 250 ms'
+    ])
   })
 
   it('fails a shipped report missing a gated stage, a launch without boot stages, and a stage without ms or chrome', () => {
@@ -667,7 +791,10 @@ describe('windowConstructionGate (M2-0519)', () => {
       { name: 'no-prewarm.json', report: windowReport('shipped', [stage('createWindow.construct', 100, false)]) },
       { name: 'launch-failed.json', report: windowReport('shipped', null) },
       { name: 'no-ms.json', report: shipped(true, null, 100) },
-      { name: 'no-chrome.json', report: windowReport('shipped', [stage('createWindow.prewarm', 5), stage('createWindow.construct', 100, true)]) }
+      {
+        name: 'no-chrome.json',
+        report: windowReport('shipped', [stage('createWindow.prewarm', 5), stage('createWindow.construct', 100, true)])
+      }
     ])
     expect(gate.pass).toBe(false)
     expect(gate.failures).toEqual([
@@ -700,7 +827,9 @@ describe('windowConstructionGate (M2-0519)', () => {
   it('fails when a chrome was never measured, and when there is no shipped report at all', () => {
     expect(windowConstructionGate([passing[0]]).failures).toEqual(['no shipped transparent window was measured'])
     expect(windowConstructionGate([]).failures).toEqual(['no shipped window-construction report'])
-    const variantsOnly = windowConstructionGate([{ name: 'v.json', report: windowReport('prewarm-spellchecker', [stage('createWindow.construct', 100, false)]) }])
+    const variantsOnly = windowConstructionGate([
+      { name: 'v.json', report: windowReport('prewarm-spellchecker', [stage('createWindow.construct', 100, false)]) }
+    ])
     expect(variantsOnly).toMatchObject({ pass: false, failures: ['no shipped window-construction report'] })
   })
 
@@ -723,7 +852,11 @@ describe('windowConstructionGate (M2-0519)', () => {
 })
 
 describe('cpuBusyPct (M2-0515)', () => {
-  const core = (user: number, nice: number, sys: number, idle: number, irq: number) => ({ model: 'x', speed: 1, times: { user, nice, sys, idle, irq } })
+  const core = (user: number, nice: number, sys: number, idle: number, irq: number) => ({
+    model: 'x',
+    speed: 1,
+    times: { user, nice, sys, idle, irq }
+  })
 
   it('is user + nice + sys + irq over all time since the previous snapshot, summed over every core', () => {
     const previous = [core(100, 0, 50, 850, 0), core(200, 0, 0, 800, 0)]
@@ -761,7 +894,11 @@ describe('witnessSummary (M2-0515)', () => {
 
 describe('historyEntry', () => {
   it('records a History round trip that never settled as hung, with how long it was waited for', () => {
-    expect(historyEntry(25_000, { ok: false, timedOut: true, elapsedMs: 10_004.4 })).toEqual({ tMs: 25_000, hung: true, ms: 10_004 })
+    expect(historyEntry(25_000, { ok: false, timedOut: true, elapsedMs: 10_004.4 })).toEqual({
+      tMs: 25_000,
+      hung: true,
+      ms: 10_004
+    })
   })
 
   it('records a settled round trip with its in-app latency', () => {
@@ -769,7 +906,11 @@ describe('historyEntry', () => {
   })
 
   it('records a failed probe and a skipped probe as they are', () => {
-    expect(historyEntry(35_000, { ok: false, error: 'boom', elapsedMs: 2 })).toEqual({ tMs: 35_000, error: 'boom', ms: 2 })
+    expect(historyEntry(35_000, { ok: false, error: 'boom', elapsedMs: 2 })).toEqual({
+      tMs: 35_000,
+      error: 'boom',
+      ms: 2
+    })
     expect(historyEntry(40_000, { ok: true, value: { skipped: 'no window' }, elapsedMs: 2 })).toEqual({
       tMs: 40_000,
       skipped: 'no window'
@@ -778,7 +919,14 @@ describe('historyEntry', () => {
 })
 
 describe('shouldProbeHistory', () => {
-  const due = { historyMode: 'on', historyRunning: null, tMs: 20_000, historyLastMs: -Infinity, fromMs: 20_000, everyMs: 5_000 }
+  const due = {
+    historyMode: 'on',
+    historyRunning: null,
+    tMs: 20_000,
+    historyLastMs: -Infinity,
+    fromMs: 20_000,
+    everyMs: 5_000
+  }
 
   it('schedules the first due History probe only when History is on and idle', () => {
     expect(shouldProbeHistory(due)).toBe(true)
@@ -804,14 +952,24 @@ describe('shouldProbeHistory', () => {
 
 describe('historyProbeWindow', () => {
   it('starts after-idle History from the end of the measured idle window, then bounds retries from that start', () => {
-    expect(historyProbeWindow({ historyMode: 'after-idle', nowMs: 12_345, minutes: 5, defaultFromMs: 20_000, retryMs: 60_000 })).toEqual({
+    expect(
+      historyProbeWindow({
+        historyMode: 'after-idle',
+        nowMs: 12_345,
+        minutes: 5,
+        defaultFromMs: 20_000,
+        retryMs: 60_000
+      })
+    ).toEqual({
       fromMs: 312_345,
       retryUntilMs: 372_345
     })
   })
 
   it('keeps the regular History window unchanged', () => {
-    expect(historyProbeWindow({ historyMode: 'on', nowMs: 12_345, minutes: 5, defaultFromMs: 20_000, retryMs: 60_000 })).toEqual({
+    expect(
+      historyProbeWindow({ historyMode: 'on', nowMs: 12_345, minutes: 5, defaultFromMs: 20_000, retryMs: 60_000 })
+    ).toEqual({
       fromMs: 20_000,
       retryUntilMs: Infinity
     })
@@ -826,7 +984,10 @@ describe('evaluateCriteria', () => {
   })
 
   it('adds still-dataless for the dataless row only', () => {
-    expect(evaluateCriteria('dataless', emptyRun(), { stillDataless: true }).at(-1)).toEqual({ name: 'still-dataless', pass: true })
+    expect(evaluateCriteria('dataless', emptyRun(), { stillDataless: true }).at(-1)).toEqual({
+      name: 'still-dataless',
+      pass: true
+    })
     expect(evaluateCriteria('fifo', emptyRun(), {}).map((c) => c.name)).not.toContain('still-dataless')
   })
 })
@@ -848,11 +1009,19 @@ describe('buildReport', () => {
   it('fails a complete run on any failing criterion', () => {
     const built = report({ measured: { ...emptyRun(), samples: [goodSample(1_000)], loop: { p99Ms: 12, maxMs: 460 } } })
     expect(built.verdict).toBe('FAIL')
-    expect(built.criteria.find((c: { name: string }) => c.name === 'loop-max < 250')).toEqual({ name: 'loop-max < 250', pass: false })
+    expect(built.criteria.find((c: { name: string }) => c.name === 'loop-max < 250')).toEqual({
+      name: 'loop-max < 250',
+      pass: false
+    })
   })
 
   it('counts late samples, lists them in the timeline and fails no-late-samples', () => {
-    const measured = { ...emptyRun(), samples: [goodSample(1_000)], late: [{ tMs: 2_000, hung: true }], loop: { p99Ms: 1, maxMs: 1 } }
+    const measured = {
+      ...emptyRun(),
+      samples: [goodSample(1_000)],
+      late: [{ tMs: 2_000, hung: true }],
+      loop: { p99Ms: 1, maxMs: 1 }
+    }
     const built = report({ measured })
     expect(built.lateSamples).toBe(1)
     expect(built.timeline).toEqual([goodSample(1_000), { tMs: 2_000, hung: true, late: true }])
@@ -920,7 +1089,12 @@ describe('buildReport', () => {
     const built = report({
       row: 'fifo',
       fixtures: ['one.md', 'two.md'],
-      measured: { ...emptyRun(), samples: [goodSample(1_000)], loop: { p99Ms: 12, maxMs: 40 }, history: [{ tMs: 20_000, skipped: 'no window' }] },
+      measured: {
+        ...emptyRun(),
+        samples: [goodSample(1_000)],
+        loop: { p99Ms: 12, maxMs: 40 },
+        history: [{ tMs: 20_000, skipped: 'no window' }]
+      },
       evidence: { fixturesOpened: [], fifoMeetingFixtures: 2 }
     })
     expect(built.verdict).toBe('NOT_EXERCISED')
@@ -949,17 +1123,35 @@ describe('buildReport', () => {
   })
 
   it('reports the main.log offset or the reason it is unknown', () => {
-    expect(report({ attribution: { mainLog: { path: 'x', fromByte: 5, exactLaunchOffset: false }, appEvidence: null } }).mainLog).toEqual({
+    expect(
+      report({ attribution: { mainLog: { path: 'x', fromByte: 5, exactLaunchOffset: false }, appEvidence: null } })
+        .mainLog
+    ).toEqual({
       fromByte: 5,
       exactLaunchOffset: false
     })
-    expect(report({ attribution: { mainLog: { error: 'no require' }, appEvidence: null } }).mainLog).toEqual({ error: 'no require' })
+    expect(report({ attribution: { mainLog: { error: 'no require' }, appEvidence: null } }).mainLog).toEqual({
+      error: 'no require'
+    })
   })
 
   it('reports when Profiler.start was requested and answered without changing the verdict', () => {
     const plain = report()
-    const profiler = { requestedAtMs: 615, answeredAtMs: 694, startedAtMs: 694, stoppedAtMs: 300_000, file: 'st-1.cpuprofile' }
-    const withProfiler = report({ measured: { ...emptyRun(), samples: [goodSample(1_000), goodSample(2_000)], loop: { p99Ms: 12, maxMs: 40 }, profiler } })
+    const profiler = {
+      requestedAtMs: 615,
+      answeredAtMs: 694,
+      startedAtMs: 694,
+      stoppedAtMs: 300_000,
+      file: 'st-1.cpuprofile'
+    }
+    const withProfiler = report({
+      measured: {
+        ...emptyRun(),
+        samples: [goodSample(1_000), goodSample(2_000)],
+        loop: { p99Ms: 12, maxMs: 40 },
+        profiler
+      }
+    })
     expect(withProfiler.cpuProfile).toEqual(profiler)
     expect(withProfiler.criteria).toEqual(plain.criteria)
     expect(withProfiler.verdict).toBe(plain.verdict)
@@ -1002,7 +1194,11 @@ describe('buildReport', () => {
       expect(withWitness.criteria).toEqual(without.criteria)
       expect(withWitness.verdict).toBe(without.verdict)
       expect(withWitness.bootStages).toEqual(bootStages)
-      expect(withWitness.witness).toEqual({ loop: { p99Ms: 30, maxMs: 2_500 }, write: { maxMs: 900 }, cpuBusyMaxPct: 100 })
+      expect(withWitness.witness).toEqual({
+        loop: { p99Ms: 30, maxMs: 2_500 },
+        write: { maxMs: 900 },
+        cpuBusyMaxPct: 100
+      })
       expect(withWitness.timeline.every((entry: { witness?: unknown }) => entry.witness === witness)).toBe(true)
       expect(without.bootStages).toBeNull()
       verdicts.push(withWitness.verdict)
@@ -1047,10 +1243,18 @@ describe('the History row (M2-0193)', () => {
     hits: 4,
     ...extra
   })
-  const historyRun = (history: unknown[]) => ({ ...emptyRun(), samples: [goodSample(1_000)], loop: { p99Ms: 12, maxMs: 40 }, history })
+  const historyRun = (history: unknown[]) => ({
+    ...emptyRun(),
+    samples: [goodSample(1_000)],
+    loop: { p99Ms: 12, maxMs: 40 },
+    history
+  })
   const historyCriteria = (history: unknown[], row = 'fifo') =>
     Object.fromEntries(
-      evaluateCriteria(row, historyRun(history), { stillDataless: true }, { history: true }).map((c) => [c.name, c.pass])
+      evaluateCriteria(row, historyRun(history), { stillDataless: true }, { history: true }).map((c) => [
+        c.name,
+        c.pass
+      ])
     )
 
   it('fails History open on a fast empty list, and search on the FIFO row on a fast empty result', () => {
@@ -1068,7 +1272,9 @@ describe('the History row (M2-0193)', () => {
       'history-search < 2000': true
     })
     expect(historyCriteria([open(20_000, 30, { notDownloaded: 0 })], 'dataless')['history-open < 2000']).toBe(false)
-    expect(historyCriteria([open(20_000, 30, { rows: 0, notDownloaded: 0 })], 'dataless')['history-open < 2000']).toBe(false)
+    expect(historyCriteria([open(20_000, 30, { rows: 0, notDownloaded: 0 })], 'dataless')['history-open < 2000']).toBe(
+      false
+    )
   })
 
   it('passes when every probe, the first included, opens and searches with a usable list within 2 s', () => {
@@ -1097,12 +1303,18 @@ describe('the History row (M2-0193)', () => {
 
   it('fails every History criterion when no probe reached a window, ignoring skipped probes otherwise', () => {
     const none = historyCriteria([{ tMs: 20_000, skipped: 'no window' }])
-    expect(none).toMatchObject({ 'history-probed': false, 'history-open < 2000': false, 'history-search < 2000': false })
+    expect(none).toMatchObject({
+      'history-probed': false,
+      'history-open < 2000': false,
+      'history-search < 2000': false
+    })
     expect(historyCriteria([{ tMs: 20_000, skipped: 'no window' }, open(25_000, 30)])['history-open < 2000']).toBe(true)
   })
 
   it('adds no History criterion without --history', () => {
-    expect(evaluateCriteria('fifo', historyRun([open(20_000, 9_000)]), {}).map((c) => c.name)).not.toContain('history-open < 2000')
+    expect(evaluateCriteria('fifo', historyRun([open(20_000, 9_000)]), {}).map((c) => c.name)).not.toContain(
+      'history-open < 2000'
+    )
     expect(report({ measured: historyRun([open(20_000, 9_000)]) }).verdict).toBe('PASS')
   })
 
@@ -1140,7 +1352,12 @@ describe('the History row (M2-0193)', () => {
       storageSaturations: null,
       firstListCause: 'main-log-unread'
     })
-    const built = report({ row: 'fifo', history: true, measured, evidence: { fixturesOpened: [], fifoMeetingFixtures: 5 } })
+    const built = report({
+      row: 'fifo',
+      history: true,
+      measured,
+      evidence: { fixturesOpened: [], fifoMeetingFixtures: 5 }
+    })
     expect(built.historyRow).toBe(true)
     expect(built.historySummary?.firstOpenMs).toBe(2_050)
     expect(built.exerciseEvidence).toMatchObject({ exercised: true, unavailableRows: 5, brainStatusAnswered: true })
@@ -1149,7 +1366,14 @@ describe('the History row (M2-0193)', () => {
       pass: true
     })
     expect(built.verdict).toBe('FAIL')
-    expect(report({ row: 'fifo', history: true, measured: refusedRun(0), evidence: { fixturesOpened: [], fifoMeetingFixtures: 0 } }).verdict).toBe('PASS')
+    expect(
+      report({
+        row: 'fifo',
+        history: true,
+        measured: refusedRun(0),
+        evidence: { fixturesOpened: [], fifoMeetingFixtures: 0 }
+      }).verdict
+    ).toBe('PASS')
     expect(report().historySummary).toBeUndefined()
   })
 })
@@ -1157,7 +1381,14 @@ describe('the History row (M2-0193)', () => {
 describe('timedCallsExpression (M2-0512)', () => {
   it('times every call on its own and records a value, a failure or a hang, never rejecting', async () => {
     const outcomes = (await evaluateGlobally(
-      timedCallsExpression({ answered: 'Promise.resolve(3)', failed: 'Promise.reject(new Error("refused"))', hung: 'new Promise(() => {})' }, 50)
+      timedCallsExpression(
+        {
+          answered: 'Promise.resolve(3)',
+          failed: 'Promise.reject(new Error("refused"))',
+          hung: 'new Promise(() => {})'
+        },
+        50
+      )
     )) as Record<string, { ms: number; value?: unknown; error?: string; hung?: boolean }>
     expect(Object.keys(outcomes)).toEqual(['answered', 'failed', 'hung'])
     expect(outcomes.answered).toEqual({ ms: expect.any(Number), value: 3 })
@@ -1201,15 +1432,24 @@ describe('the History row per call (M2-0512)', () => {
       elapsedMs: 0,
       value: {
         ms: Math.max(calls.list?.ms ?? 30, calls.brain?.ms ?? 5) + 3,
-        open: { recallList: calls.list ?? { ms: 30, value: { rows: 6, notDownloaded: 4 } }, brainStatus: calls.brain ?? { ms: 5, value: true } },
+        open: {
+          recallList: calls.list ?? { ms: 30, value: { rows: 6, notDownloaded: 4 } },
+          brainStatus: calls.brain ?? { ms: 5, value: true }
+        },
         searchMs: (calls.search?.ms ?? 40) + 2,
         search: calls.search ?? { ms: 40, value: 4 }
       }
     })
   const list = (ms: number, value = { rows: 6, notDownloaded: 4 }) => ({ list: { ms, value } })
-  const run = (history: unknown[], p99Ms = 12) => ({ ...emptyRun(), samples: [goodSample(1_000)], loop: { p99Ms, maxMs: 40 }, history })
+  const run = (history: unknown[], p99Ms = 12) => ({
+    ...emptyRun(),
+    samples: [goodSample(1_000)],
+    loop: { p99Ms, maxMs: 40 },
+    history
+  })
   type Options = { row?: string; complete?: boolean; storageSaturations?: number | null }
-  const summary = (history: unknown[], options: Options = {}) => historySummary(run(history), { row: 'fifo', ...options })
+  const summary = (history: unknown[], options: Options = {}) =>
+    historySummary(run(history), { row: 'fifo', ...options })
   const checks = (history: unknown[], options: Options = {}) =>
     Object.fromEntries(summary(history, options).checks.map((c: { name: string; pass: boolean }) => [c.name, c.pass]))
 
@@ -1235,13 +1475,21 @@ describe('the History row per call (M2-0512)', () => {
     expect(failedList).toMatchObject({ error: 'boom', calls: { recallList: { ms: 12, error: 'boom' } } })
     expect(failedList.rows).toBeUndefined()
     const hungSearch = probe(20_000, { search: { ms: 4_000, hung: true } })
-    expect(hungSearch).toMatchObject({ searchError: 'no answer within 4000 ms', calls: { recallSearch: { ms: 4_000, hung: true } } })
+    expect(hungSearch).toMatchObject({
+      searchError: 'no answer within 4000 ms',
+      calls: { recallSearch: { ms: 4_000, hung: true } }
+    })
     expect(hungSearch.hits).toBeUndefined()
     expect(probe(20_000, { search: { ms: 9, error: 'index gone' } })).toMatchObject({ searchError: 'index gone' })
   })
 
   it('gives firstMs and p50/p95/max per call by nearest rank', () => {
-    const calls = summary([probe(20_000, list(100)), probe(25_000, list(30)), probe(30_000, list(20)), probe(35_000, list(40))]).calls
+    const calls = summary([
+      probe(20_000, list(100)),
+      probe(25_000, list(30)),
+      probe(30_000, list(20)),
+      probe(35_000, list(40))
+    ]).calls
     expect(calls.recallList).toEqual({ calls: 4, unsettled: 0, firstMs: 100, p50Ms: 30, p95Ms: 100, maxMs: 100 })
     expect(calls.brainStatus).toMatchObject({ calls: 4, firstMs: 5, maxMs: 5 })
     expect(calls.recallSearch).toMatchObject({ calls: 4, firstMs: 40, p50Ms: 40 })
@@ -1252,7 +1500,10 @@ describe('the History row per call (M2-0512)', () => {
     const slow = [probe(20_000, list(250)), probe(25_000)]
     expect(checks(slow)['first-list < 250']).toBe(false)
     expect(summary(slow)).toMatchObject({ verdict: 'FAIL', firstListCause: 'main-log-unread' })
-    expect(summary(slow, { storageSaturations: 2 })).toMatchObject({ storageSaturations: 2, firstListCause: 'admission-saturated' })
+    expect(summary(slow, { storageSaturations: 2 })).toMatchObject({
+      storageSaturations: 2,
+      firstListCause: 'admission-saturated'
+    })
     expect(summary(slow, { storageSaturations: 0 }).firstListCause).toBe('unattributed')
   })
 
@@ -1263,12 +1514,17 @@ describe('the History row per call (M2-0512)', () => {
     expect(checks([probe(20_000), probe(25_000, { search: { ms: 2_000, value: 1 } })])['search < 2000']).toBe(false)
     expect(checks([probe(20_000), probe(25_000, list(30, { rows: 0, notDownloaded: 0 }))])['list < 2000']).toBe(false)
     expect(checks([probe(20_000), probe(25_000, { search: { ms: 30, value: 0 } })])['search < 2000']).toBe(false)
-    expect(checks([probe(20_000, list(30, { rows: 6, notDownloaded: 0 }))], { row: 'dataless' })['list < 2000']).toBe(false)
+    expect(checks([probe(20_000, list(30, { rows: 6, notDownloaded: 0 }))], { row: 'dataless' })['list < 2000']).toBe(
+      false
+    )
   })
 
   it('fails on main-loop p99 at 50 ms and passes below it', () => {
     expect(historySummary(run([probe(20_000)], 49.9), { row: 'fifo' }).verdict).toBe('PASS')
-    expect(historySummary(run([probe(20_000)], 50), { row: 'fifo' })).toMatchObject({ verdict: 'FAIL', firstListCause: null })
+    expect(historySummary(run([probe(20_000)], 50), { row: 'fifo' })).toMatchObject({
+      verdict: 'FAIL',
+      firstListCause: null
+    })
   })
 
   it('fails every check on an empty probe set, with no first-call cause to name', () => {
@@ -1279,13 +1535,21 @@ describe('the History row per call (M2-0512)', () => {
         firstListCause: null,
         calls: { recallList: { calls: 0, firstMs: null, p50Ms: null, p95Ms: null, maxMs: null } }
       })
-      expect(checks(history)).toEqual({ 'first-list < 250': false, 'list < 2000': false, 'search < 2000': false, 'loop-p99 < 50': true })
+      expect(checks(history)).toEqual({
+        'first-list < 250': false,
+        'list < 2000': false,
+        'search < 2000': false,
+        'loop-p99 < 50': true
+      })
     }
   })
 
   it('fails on a hung probe, whether the whole round trip or one call hung', () => {
     const wholeHung = [{ tMs: 20_000, hung: true, ms: 10_000 }, probe(25_000)]
-    expect(summary(wholeHung, { storageSaturations: 1 })).toMatchObject({ verdict: 'FAIL', firstListCause: 'admission-saturated' })
+    expect(summary(wholeHung, { storageSaturations: 1 })).toMatchObject({
+      verdict: 'FAIL',
+      firstListCause: 'admission-saturated'
+    })
     expect(summary(wholeHung).calls.recallList).toMatchObject({ calls: 1, firstMs: null })
     const listHung = [probe(20_000, { list: { ms: 4_000, hung: true } }), probe(25_000)]
     expect(checks(listHung)).toMatchObject({ 'first-list < 250': false, 'list < 2000': false, 'search < 2000': true })
@@ -1306,8 +1570,20 @@ describe('the History row per call (M2-0512)', () => {
     })
     expect(built.verdict).toBe('PASS')
     expect(built.criteria.map((c: { name: string }) => c.name)).not.toContain('first-list < 250')
-    expect(built.historySummary).toMatchObject({ verdict: 'FAIL', storageSaturations: 3, firstListCause: 'admission-saturated' })
-    expect(report({ row: 'fifo', history: true, measured: slowFirst, evidence: { fixturesOpened: [], fifoMeetingFixtures: 0 }, complete: false }).historySummary?.verdict).toBe('INCOMPLETE')
+    expect(built.historySummary).toMatchObject({
+      verdict: 'FAIL',
+      storageSaturations: 3,
+      firstListCause: 'admission-saturated'
+    })
+    expect(
+      report({
+        row: 'fifo',
+        history: true,
+        measured: slowFirst,
+        evidence: { fixturesOpened: [], fifoMeetingFixtures: 0 },
+        complete: false
+      }).historySummary?.verdict
+    ).toBe('INCOMPLETE')
   })
 
   it('counts the admission saturation lines of a main.log', () => {
@@ -1319,7 +1595,13 @@ describe('the History row per call (M2-0512)', () => {
 
 describe('buildLaunchFailureReport', () => {
   it('fails on the inspector criterion', () => {
-    const built = buildLaunchFailureReport({ row: 'fifo', installer: 'Metis-QA.zip', candidate, fixtures: [1, 2, 3], reason: 'no inspector' })
+    const built = buildLaunchFailureReport({
+      row: 'fifo',
+      installer: 'Metis-QA.zip',
+      candidate,
+      fixtures: [1, 2, 3],
+      reason: 'no inspector'
+    })
     expect(built.verdict).toBe('FAIL')
     expect(built.criteria).toEqual([{ name: 'inspector', pass: false }])
     expect(built.fixtures).toBe(3)
@@ -1368,9 +1650,12 @@ describe('synthetic-dataless and history reports', () => {
   })
 
   it('uses the fifo row refused-without-opening rule and the same timing criteria', () => {
-    expect(synthetic({ measured: { ...refusedRun(5) }, evidence: { fixturesOpened: [], fifoMeetingFixtures: 6, sfDatalessSet: false } }).verdict).toBe(
-      'NOT_EXERCISED'
-    )
+    expect(
+      synthetic({
+        measured: { ...refusedRun(5) },
+        evidence: { fixturesOpened: [], fifoMeetingFixtures: 6, sfDatalessSet: false }
+      }).verdict
+    ).toBe('NOT_EXERCISED')
     expect(synthetic().criteria.slice(0, report().criteria.length)).toEqual(report().criteria)
     expect(synthetic({ measured: { ...refusedRun(6), loop: { p99Ms: 12, maxMs: 460 } } }).verdict).toBe('FAIL')
   })
@@ -1379,7 +1664,9 @@ describe('synthetic-dataless and history reports', () => {
     expect(report().historyMode).toBe('on')
     expect(report({ historyMode: 'off' }).historyMode).toBe('off')
     expect(report({ historyMode: 'off' }).history).toEqual([])
-    expect(report({ row: 'fifo', measured: refusedRun(0), evidence: { fixturesOpened: [], fifoMeetingFixtures: 0 } })).not.toHaveProperty('fixtureKind')
+    expect(
+      report({ row: 'fifo', measured: refusedRun(0), evidence: { fixturesOpened: [], fifoMeetingFixtures: 0 } })
+    ).not.toHaveProperty('fixtureKind')
     expect(report()).not.toHaveProperty('sfDatalessSet')
   })
 
