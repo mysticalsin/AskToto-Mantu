@@ -160,7 +160,8 @@ async function verifyCandidate(installerPath, provenancePath) {
   const asset = provenance.builds.flatMap((build) => build.assets).find((candidate) => candidate.name === name)
   if (!asset) throw new Error(`no asset named ${name} in ${provenancePath}`)
   const actual = await sha256File(installerPath)
-  if (actual !== asset.sha256) throw new Error(`sha256 mismatch for ${name}: provenance says ${asset.sha256}, file is ${actual}`)
+  if (actual !== asset.sha256)
+    throw new Error(`sha256 mismatch for ${name}: provenance says ${asset.sha256}, file is ${actual}`)
   return { build_run_id: provenance.run.id, artifact_sha256: actual }
 }
 
@@ -197,7 +198,9 @@ function prepareProfile(profileTemplate) {
 function placeFifoFixtures(root, count) {
   mkdirSync(join(root, '.brain', 'entities', 'person'), { recursive: true })
   const targets = [
-    ...Array.from({ length: Math.max(0, count - 2) }, (_, i) => join(root, `2026-01-${String(i + 1).padStart(2, '0')}_090000-st1-fifo.md`)),
+    ...Array.from({ length: Math.max(0, count - 2) }, (_, i) =>
+      join(root, `2026-01-${String(i + 1).padStart(2, '0')}_090000-st1-fifo.md`)
+    ),
     join(root, '.brain', 'index.json'),
     join(root, '.brain', 'entities', 'person', 'st1-fifo.json')
   ]
@@ -263,7 +266,12 @@ function datalessFlagsMac(paths) {
 function datalessFlagsWindows(paths) {
   const output = execFileSync(
     WIN_POWERSHELL,
-    ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(WIN_ATTRIBUTES_SCRIPT, 'utf16le').toString('base64')],
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-EncodedCommand',
+      Buffer.from(WIN_ATTRIBUTES_SCRIPT, 'utf16le').toString('base64')
+    ],
     { input: Buffer.from(paths.join('\0'), 'utf8'), encoding: 'utf8' }
   )
   const words = JSON.parse(output)
@@ -506,7 +514,13 @@ async function startProfiler(cdp, sinceSpawn) {
       ? { requestedAtMs, answeredAtMs, startedAtMs: null, running: false, error: 'Profiler.start did not answer' }
       : { requestedAtMs, answeredAtMs, startedAtMs: answeredAtMs, running: true }
   } catch (error) {
-    return { requestedAtMs, answeredAtMs: requestedAtMs === null ? null : sinceSpawn(), startedAtMs: null, running: false, error: error.message }
+    return {
+      requestedAtMs,
+      answeredAtMs: requestedAtMs === null ? null : sinceSpawn(),
+      startedAtMs: null,
+      running: false,
+      error: error.message
+    }
   }
 }
 
@@ -631,7 +645,11 @@ async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, 
     // is taken at the sample instant and never delays the app sample.
     const sampleWitness = await Promise.resolve().then(() => witness.sample())
     const outcome = await answer
-    recordSample(run, tMs, outcome, { lateAfterMs: EVALUATE_TIMEOUT_MS, boundMs: SAMPLE_TIMEOUT_MS, witness: sampleWitness })
+    recordSample(run, tMs, outcome, {
+      lateAfterMs: EVALUATE_TIMEOUT_MS,
+      boundMs: SAMPLE_TIMEOUT_MS,
+      witness: sampleWitness
+    })
     await new Promise((resolve) => setTimeout(resolve, SAMPLE_INTERVAL_MS))
   }
   await historyRunning
@@ -704,7 +722,9 @@ function readBootStages(profile, spawnedWallMs) {
     const logs = join(profile, 'logs')
     const names = existsSync(logs) ? readdirSync(logs).filter((entry) => /^audit.*\.log$/.test(entry)) : []
     names.sort((a, b) => (a === 'audit.log') - (b === 'audit.log') || a.localeCompare(b))
-    return { stages: names.flatMap((name) => bootStagesFromAudit(readFileSync(join(logs, name), 'utf8'), spawnedWallMs)) }
+    return {
+      stages: names.flatMap((name) => bootStagesFromAudit(readFileSync(join(logs, name), 'utf8'), spawnedWallMs))
+    }
   } catch (error) {
     return { error: error.message }
   }
@@ -735,7 +755,8 @@ function collectExercisedEvidence(kind, fixtures, mainLogPath, mainLogOffset, ro
     return kind === 'fifo' ? evidence : { ...evidence, sfDatalessSet: datalessFlags(fixtures).some(Boolean) }
   }
   const stillDataless = datalessFlags(fixtures).every(Boolean)
-  const mainLogTail = mainLogPath && existsSync(mainLogPath) ? readFileSync(mainLogPath, 'utf8').slice(mainLogOffset) : ''
+  const mainLogTail =
+    mainLogPath && existsSync(mainLogPath) ? readFileSync(mainLogPath, 'utf8').slice(mainLogOffset) : ''
   return { exercised: mainLogTail.includes('[dataless] probed'), stillDataless }
 }
 
@@ -780,7 +801,10 @@ function readWindowReports(dir) {
     for (const file of readdirSync(join(dir, run.name))) {
       if (!file.endsWith('.json')) continue
       try {
-        reports.push({ name: join(run.name, file), report: JSON.parse(readFileSync(join(dir, run.name, file), 'utf8')) })
+        reports.push({
+          name: join(run.name, file),
+          report: JSON.parse(readFileSync(join(dir, run.name, file), 'utf8'))
+        })
       } catch {
         /* not a report */
       }
@@ -791,13 +815,19 @@ function readWindowReports(dir) {
 
 /** The window-construction gate over a report directory: 0 when it passes, 1 when it fails. */
 function gateWindow(dir, out) {
-  const gate = { harness: 'ST-1', gate: 'window-construction', ...windowConstructionGate(existsSync(dir) ? readWindowReports(dir) : []) }
+  const gate = {
+    harness: 'ST-1',
+    gate: 'window-construction',
+    ...windowConstructionGate(existsSync(dir) ? readWindowReports(dir) : [])
+  }
   if (out) {
     mkdirSync(dirname(out), { recursive: true })
     writeFileSync(out, `${JSON.stringify(gate, null, 2)}\n`)
   }
   console.log(JSON.stringify(gate, null, 2))
-  console.error(`[st-1] window gate skipped ${gate.skippedWarmups} warm-up launch${gate.skippedWarmups === 1 ? '' : 'es'}`)
+  console.error(
+    `[st-1] window gate skipped ${gate.skippedWarmups} warm-up launch${gate.skippedWarmups === 1 ? '' : 'es'}`
+  )
   for (const entry of gate.remeasured) {
     console.log(
       `::warning::ST-1 window gate accepted ${entry.launch} ${entry.stage} ${entry.ms} ms on re-measure ${entry.remeasure} at ${entry.remeasureMs} ms (OD-66)`
@@ -834,19 +864,33 @@ async function main() {
     return gateWindow(args.gateWindow, args.out)
   }
   if (!args.installer || !args.provenance || !args.fixtures) {
-    console.error('usage: node scripts/qa/st-1.mjs --installer <path> --provenance <path> --fixtures fifo|dataless|synthetic-dataless|none [options]')
+    console.error(
+      'usage: node scripts/qa/st-1.mjs --installer <path> --provenance <path> --fixtures fifo|dataless|synthetic-dataless|none [options]'
+    )
     return 2
   }
   if (!FIXTURE_KINDS.includes(args.fixtures)) {
-    console.error(`[st-1] FAIL — --fixtures must be fifo, dataless, synthetic-dataless or none, got ${JSON.stringify(args.fixtures)}`)
+    console.error(
+      `[st-1] FAIL — --fixtures must be fifo, dataless, synthetic-dataless or none, got ${JSON.stringify(args.fixtures)}`
+    )
     return 2
   }
   if ((args.fixtures === 'fifo' || args.fixtures === 'synthetic-dataless') && process.platform === 'win32') {
-    console.error(`[st-1] FAIL — Windows has no FIFOs; --fixtures ${args.fixtures} is unavailable, use --fixtures dataless`)
+    console.error(
+      `[st-1] FAIL — Windows has no FIFOs; --fixtures ${args.fixtures} is unavailable, use --fixtures dataless`
+    )
     return 2
   }
-  if (args.history !== undefined && args.history !== 'true' && args.history !== 'on' && args.history !== 'off' && args.history !== 'after-idle') {
-    console.error(`[st-1] FAIL — --history must be a bare flag, on, off or after-idle, got ${JSON.stringify(args.history)}`)
+  if (
+    args.history !== undefined &&
+    args.history !== 'true' &&
+    args.history !== 'on' &&
+    args.history !== 'off' &&
+    args.history !== 'after-idle'
+  ) {
+    console.error(
+      `[st-1] FAIL — --history must be a bare flag, on, off or after-idle, got ${JSON.stringify(args.history)}`
+    )
     return 2
   }
   const history = args.history === 'true'
@@ -920,7 +964,16 @@ async function main() {
   let cleanupError = null
   const reportPath = args.out ?? join(reportDir, `${reportBase}.json`)
   const currentReport = () => {
-    const common = { row: args.fixtures, installer: basename(args.installer), candidate, fixtures, purpose, windowVariant, windowWarmup, windowRemeasures }
+    const common = {
+      row: args.fixtures,
+      installer: basename(args.installer),
+      candidate,
+      fixtures,
+      purpose,
+      windowVariant,
+      windowWarmup,
+      windowRemeasures
+    }
     if (launchFailure) return buildLaunchFailureReport({ ...common, reason: launchFailure })
     return buildReport({
       ...common,
