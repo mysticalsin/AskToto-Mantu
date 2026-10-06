@@ -16,7 +16,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
-import { CLOSED, IN_HOUSE, githubApi, prProblems } from './check.mjs'
+import { CLOSED, IN_HOUSE, githubApi, prProblems, readLegacyTicketList } from './check.mjs'
 import { latestByLevel, recordsInPrBody } from './record.mjs'
 
 export const DEFAULT_OUT = 'out/evidence-backfill'
@@ -78,12 +78,15 @@ function targetStatusForGap(ticket, latest) {
  * and a gap entry for every required level that still has none.
  * @param {object} ledger
  * @param {Map<string, object[]>} recordsByTicket
- * @returns {{ backfilled: Map<string, object[]>, gaps: {ticket: string, status: string, level: string, reason: string, target_status: string}[] }}
+ * @param {{legacyFixTickets?: Set<string>}} options
+ * @returns {{ backfilled: Map<string, object[]>, gaps: {ticket: string, status: string, level: string, reason: string, target_status: string}[], legacyFixFiled: string[] }}
  */
-export function resolveBackfill(ledger, recordsByTicket) {
+export function resolveBackfill(ledger, recordsByTicket, options = {}) {
   const tickets = (Array.isArray(ledger?.tickets) ? ledger.tickets : []).filter((t) => CLOSED.has(t?.status))
   const backfilled = new Map()
   const gaps = []
+  const legacyFixFiled = []
+  const legacyFixTickets = options.legacyFixTickets ?? new Set()
 
   for (const ticket of tickets) {
     const records = recordsByTicket.get(ticket.id) ?? []
@@ -94,19 +97,42 @@ export function resolveBackfill(ledger, recordsByTicket) {
       .map((level) => {
         const record = latest.get(level)
         if (record && record.result === 'PASS') return null
-        return { level, reason: record ? 'latest verified record is not PASS' : 'no verified PR evidence found for this level' }
+        return {
+          level,
+          reason: record ? 'latest verified record is not PASS' : 'no verified PR evidence found for this level'
+        }
       })
       .filter((gap) => gap !== null)
 
+    const localRecord = latest.get('LOCALLY_TESTED')
+    const needsRedBefore = ticket.type === 'fix' && (ticket.required_evidence ?? []).includes('LOCALLY_TESTED')
+    if (needsRedBefore && localRecord?.result === 'PASS' && !localRecord.repro) {
+      if (legacyFixTickets.has(ticket.id)) {
+        legacyFixFiled.push(ticket.id)
+      } else {
+        ticketGaps.push({
+          level: 'LOCALLY_TESTED',
+          reason: 'latest verified record has no red-before repro',
+          target_status: 'IN_PROGRESS'
+        })
+      }
+    }
+
     if (ticketGaps.length > 0) {
       const targetStatus = targetStatusForGap(ticket, latest)
-      for (const { level, reason } of ticketGaps) {
-        gaps.push({ ticket: ticket.id, status: ticket.status, level, reason, target_status: targetStatus })
+      for (const { level, reason, target_status: targetStatusOverride } of ticketGaps) {
+        gaps.push({
+          ticket: ticket.id,
+          status: ticket.status,
+          level,
+          reason,
+          target_status: targetStatusOverride ?? targetStatus
+        })
       }
     }
   }
 
-  return { backfilled, gaps }
+  return { backfilled, gaps, legacyFixFiled: [...new Set(legacyFixFiled)].sort() }
 }
 
 function jsonlLine(record) {
@@ -134,32 +160,45 @@ export function earliestRecordedAt(backfilled) {
   return earliest
 }
 
-function leadActionReadme({ backfilled, gaps }) {
+function leadActionReadme({ backfilled, gaps, legacyFixFiled = [] }) {
   const lines = [
     '# M2-0238 evidence back-fill',
     '',
     'Generated output, not a program document. File it into the private evidence store; do not commit it here.',
     '',
-    `Back-filled tickets: ${backfilled.size}. Gaps: ${gaps.length}.`,
+    `Back-filled tickets: ${backfilled.size}. Gaps: ${gaps.length}. OD-65 legacy fix exemptions filed: ${legacyFixFiled.length}.`,
     ''
   ]
 
   if (backfilled.size > 0) {
     lines.push('## LEAD_ACTION: file these records')
-    lines.push('For each ticket below, append its records/<id>.jsonl lines to the private evidence store\'s matching file.')
+    lines.push(
+      "For each ticket below, append its records/<id>.jsonl lines to the private evidence store's matching file."
+    )
     for (const id of [...backfilled.keys()].sort()) lines.push(`- ${id}: records/${id}.jsonl`)
+    lines.push('')
+  }
+
+  if (legacyFixFiled.length > 0) {
+    lines.push('## LEAD_ACTION: file OD-65 legacy fix exemptions')
+    lines.push(
+      'These fix tickets have verified LOCALLY_TESTED evidence without red-before repro and are filed under the OD-65 legacy exemption.'
+    )
+    for (const id of legacyFixFiled) lines.push(`- ${id}: OD-65 legacy fix exemption`)
     lines.push('')
   }
 
   if (gaps.length > 0) {
     lines.push('## LEAD_ACTION: revert tickets with no verified evidence for a required level')
-    lines.push('Acceptance requires reverting each ticket below to the target status shown for it in ledger/tickets.json.')
+    lines.push(
+      'Acceptance requires reverting each ticket below to the target status shown for it in ledger/tickets.json.'
+    )
     lines.push(
       'Note: the wired.client/contract_fake and repro.test existence checks above ran against this ' +
-      'checkout\'s current HEAD, not each PR\'s own commit, so a path renamed after a PR merged can show up ' +
-      'as a gap here even though the PR\'s evidence was valid when it merged. That only ever reopens a ' +
-      'ticket, never falsely closes one — before reverting, check whether a gap\'s wired/repro path used to ' +
-      'exist under a different name.'
+        "checkout's current HEAD, not each PR's own commit, so a path renamed after a PR merged can show up " +
+        "as a gap here even though the PR's evidence was valid when it merged. That only ever reopens a " +
+        "ticket, never falsely closes one — before reverting, check whether a gap's wired/repro path used to " +
+        'exist under a different name.'
     )
     const byTicket = new Map()
     for (const gap of gaps) {
@@ -177,8 +216,8 @@ function leadActionReadme({ backfilled, gaps }) {
   lines.push('## LEAD_ACTION: re-verify M2-0047 and M2-0144 against their own acceptance')
   lines.push(
     'These two are known already-visible false closures. Check gaps.jsonl for M2-0047 and M2-0144 ' +
-    'above; whether or not they appear there, re-read each against its own acceptance criteria and ' +
-    'record any unmet line as NOT_MET with the ticket that now owns it.'
+      'above; whether or not they appear there, re-read each against its own acceptance criteria and ' +
+      'record any unmet line as NOT_MET with the ticket that now owns it.'
   )
   lines.push('')
 
@@ -187,19 +226,19 @@ function leadActionReadme({ backfilled, gaps }) {
   if (earliest) {
     lines.push(
       `Run \`node scripts/evidence/sample.mjs --ledger <private ledger path> --since ${earliest} ` +
-      '--seed <gate commit sha>` against the filed records above and record the result.'
+        '--seed <gate commit sha>` against the filed records above and record the result.'
     )
     lines.push(
       `--since must be at or before ${earliest} (the oldest recorded_at among the back-filled records, ` +
-      'printed above) — for example the program start. sample.mjs\'s closedSince keeps only tickets whose ' +
-      'newest record is at or after --since, and every back-filled record keeps its original PR ' +
-      'recorded_at; a later --since (such as the previous gate date) would silently drop the whole ' +
-      'back-filled set from the sample.'
+        "printed above) — for example the program start. sample.mjs's closedSince keeps only tickets whose " +
+        'newest record is at or after --since, and every back-filled record keeps its original PR ' +
+        'recorded_at; a later --since (such as the previous gate date) would silently drop the whole ' +
+        'back-filled set from the sample.'
     )
   } else {
     lines.push(
       'Run `node scripts/evidence/sample.mjs --ledger <private ledger path> --since <program start> ' +
-      '--seed <gate commit sha>` against the filed records above and record the result.'
+        '--seed <gate commit sha>` against the filed records above and record the result.'
     )
   }
   lines.push('')
@@ -208,14 +247,14 @@ function leadActionReadme({ backfilled, gaps }) {
 }
 
 /**
- * @param {{ledger: object, prs: {number: number, headSha: string, body: string, mergedAt: string}[], github: ReturnType<typeof githubApi>, fileExists: (path: string) => boolean}} args
+ * @param {{ledger: object, prs: {number: number, headSha: string, body: string, mergedAt: string}[], github: ReturnType<typeof githubApi>, fileExists: (path: string) => boolean, legacyFixTickets?: Set<string>}} args
  */
-export async function buildBackfill({ ledger, prs, github, fileExists }) {
+export async function buildBackfill({ ledger, prs, github, fileExists, legacyFixTickets = new Set() }) {
   const { recordsByTicket } = await verifiedRecordsByTicket(prs, { github, fileExists })
-  return resolveBackfill(ledger, recordsByTicket)
+  return resolveBackfill(ledger, recordsByTicket, { legacyFixTickets })
 }
 
-export function writeBackfill(outDir, { backfilled, gaps }) {
+export function writeBackfill(outDir, { backfilled, gaps, legacyFixFiled = [] }) {
   const recordsDir = join(outDir, 'records')
   mkdirSync(recordsDir, { recursive: true })
 
@@ -225,7 +264,7 @@ export function writeBackfill(outDir, { backfilled, gaps }) {
   }
 
   writeFileSync(join(outDir, 'gaps.jsonl'), gaps.map(jsonlLine).join(''))
-  writeFileSync(join(outDir, 'README.md'), leadActionReadme({ backfilled, gaps }))
+  writeFileSync(join(outDir, 'README.md'), leadActionReadme({ backfilled, gaps, legacyFixFiled }))
 }
 
 function usageExit(message) {
@@ -239,10 +278,12 @@ async function main() {
       ledger: { type: 'string' },
       repo: { type: 'string' },
       out: { type: 'string' },
-      token: { type: 'string' }
+      token: { type: 'string' },
+      'legacy-fix': { type: 'string' }
     }
   })
-  if (!values.ledger) return usageExit('usage: backfill.mjs --ledger <path> --repo <owner/name> [--out <dir>] [--token <token>]')
+  if (!values.ledger)
+    return usageExit('usage: backfill.mjs --ledger <path> --repo <owner/name> [--out <dir>] [--token <token>]')
   if (!values.repo) return usageExit('backfill.mjs: --repo is required, e.g. --repo mysticalsin/AskToto-Mantu')
 
   let ledger
@@ -256,6 +297,13 @@ async function main() {
   const fileExists = (path) => existsSync(join(repoRoot, ...path.split('/')))
   const token = values.token ?? process.env.GITHUB_TOKEN
   const github = githubApi(values.repo, token)
+  const programRoot = resolve(dirname(resolve(values.ledger)), '..')
+  const legacyFix = readLegacyTicketList(
+    values['legacy-fix'] ? resolve(values['legacy-fix']) : join(programRoot, 'evidence', 'legacy-fix.json'),
+    'OD-65',
+    'evidence/legacy-fix.json'
+  )
+  if (legacyFix.problems.length > 0) return usageExit(legacyFix.problems.join('\n'))
 
   let prs
   try {
@@ -264,11 +312,13 @@ async function main() {
     return usageExit(`could not list merged pull requests: ${error.message}`)
   }
 
-  const result = await buildBackfill({ ledger, prs, github, fileExists })
+  const result = await buildBackfill({ ledger, prs, github, fileExists, legacyFixTickets: legacyFix.tickets })
   const outDir = resolve(values.out ?? DEFAULT_OUT)
   writeBackfill(outDir, result)
 
-  console.log(`evidence backfill: ${result.backfilled.size} ticket(s) backfilled, ${result.gaps.length} gap(s) -> ${outDir}`)
+  console.log(
+    `evidence backfill: ${result.backfilled.size} ticket(s) backfilled, ${result.gaps.length} gap(s) -> ${outDir}`
+  )
   // A gap is an expected outcome of this tool (a ticket needing lead review), not a tool failure: the
   // job stays green and the artifact + this line carry the gap count for the lead to act on.
 }
