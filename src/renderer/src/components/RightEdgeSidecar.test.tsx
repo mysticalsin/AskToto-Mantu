@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
+import { flattenSource } from '../../../../scripts/lib/source-layout'
 import { Children, isValidElement, type ReactElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -379,11 +380,13 @@ describe('right-edge dock', () => {
     // The drawer is absolutely positioned, so its host must own the native sidecar height. Otherwise
     // the root hugs a sibling setup CTA and clips the dock to a thin strip at the top of the window.
     expect(app).toMatch(/rightEdgeDockVisible \? 'h-full min-h-0' : ''/)
-    expect(app).toMatch(/overlayPeeked \? 'p-0' : rightEdgeDockVisible \? 'p-0' : overlayShowsSettingsSheet/)
-    expect(app).toContain('settings && !rightEdgeDockVisible && !settings.providerReady')
+    expect(app).toMatch(
+      /overlayPeeked\s*\?\s*'p-0'\s*:\s*rightEdgeDockVisible\s*\?\s*'p-0'\s*:\s*overlayShowsSettingsSheet/
+    )
+    expect(flattenSource(app)).toContain(flattenSource('settings && !rightEdgeDockVisible && !settings.providerReady'))
     expect(app).toMatch(/rightEdgeDockVisible \? 'h-full' : ''/)
     expect(app).toMatch(
-      /rightEdgeDockVisible \? \(\s*<RightEdgeSidecar[\s\S]*?\) : rightEdgePresentation \? null : <Bar/
+      /rightEdgeDockVisible\s*\?\s*\(\s*<RightEdgeSidecar[\s\S]*?\)\s*:\s*rightEdgePresentation\s*\?\s*null\s*:\s*\(?\s*<Bar/
     )
     expect(sidecar).not.toMatch(/window\.toto\.resize/)
     expect(sidecar).toContain('tabIndex={open ? -1 : 0}')
@@ -434,17 +437,19 @@ describe('right-edge dock', () => {
     expect(app).toContain("variant={rightEdgePresentation ? 'sidecar' : 'default'}")
     expect(app).toContain('const showWideMeetingChrome = showListeningChrome && !rightEdgeDockVisible')
     expect(app).toContain("const rightEdgeDismissalLockRef = useRef<RightEdgeDismissalLockState>('open')")
-    expect(app).toContain("reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'explicit-close' })")
+    expect(flattenSource(app)).toContain(
+      flattenSource("reduceRightEdgeDismissalLock(rightEdgeDismissalLockRef.current, { type: 'explicit-close' })")
+    )
     expect(app).toContain("type: 'park-settled'")
     expect(app).toContain("railHovering: rootElementRef.current?.matches(':hover') === true")
     expect(app).toContain(
       'shouldIgnoreRightEdgeNativeHover(rightEdgeDismissalLockRef.current, d.restoredFromParkedRail)'
     )
     expect(app).toMatch(
-      /reduceRightEdgeDismissalLock\(\s*rightEdgeDismissalLockRef\.current,\s*\{ type: 'native-hover-restored' \}\s*\)/
+      /reduceRightEdgeDismissalLock\(\s*rightEdgeDismissalLockRef\.current,\s*\{\s*type:\s*'native-hover-restored'\s*\}/
     )
     expect(app).toMatch(
-      /const onOverlayPointerEnter = useCallback\(\(\) => \{[\s\S]*?reduceRightEdgeDismissalLock\([\s\S]*?\{ type: 'renderer-pointer-enter' \}/
+      /const onOverlayPointerEnter = useCallback\(\(\) => \{[\s\S]*?reduceRightEdgeDismissalLock\([\s\S]*?\{\s*type:\s*'renderer-pointer-enter'\s*\}/
     )
     expect(app).toMatch(/if \(nextLock !== 'open'\) return\s+setRightEdgeDockDismissed\(false\)/)
     expect(app).not.toContain("if (nextLock === 'open') setRightEdgeDockDismissed(false)")
@@ -452,7 +457,7 @@ describe('right-edge dock', () => {
       /const onOverlayPointerLeave = useCallback\(\(\) => \{[\s\S]*?const previousLock = rightEdgeDismissalLockRef\.current[\s\S]*?reduceRightEdgeDismissalLock\(previousLock, \{ type: 'renderer-pointer-leave' \}\)[\s\S]*?previousLock === 'closing' && nextLock === 'closing'/
     )
     expect(app).toMatch(
-      /else if \(a === 'metis-command'\) \{[\s\S]*?reduceRightEdgeDismissalLock\(rightEdgeDismissalLockRef\.current, \{ type: 'metis-command' \}\)/
+      /else if \(a === 'metis-command'\) \{[\s\S]*?reduceRightEdgeDismissalLock\(rightEdgeDismissalLockRef\.current,\s*\{\s*type:\s*'metis-command'\s*\}/
     )
     expect(app).toMatch(/\{showWideMeetingChrome && \(\s*<QuickActions/)
     expect(app).toMatch(/\{showWideMeetingChrome && listen\.error/)
@@ -498,7 +503,7 @@ describe('right-edge dock', () => {
       'shouldIgnoreRightEdgeNativeHover(rightEdgeDismissalLockRef.current, d.restoredFromParkedRail)'
     )
     expect(cursorHover).toContain('reduceRightEdgeDismissalLock(')
-    expect(cursorHover).toContain("{ type: 'native-hover-restored' }")
+    expect(flattenSource(cursorHover)).toContain(flattenSource("{ type: 'native-hover-restored' }"))
     expect(cursorHover).toContain('setRightEdgeDockDismissed(false)')
     expect(cursorHover).toContain("dispatchAutoHide({ type: 'reveal-now' })")
   })
@@ -518,7 +523,7 @@ describe('right-edge dock', () => {
     const ask = app.slice(askAt, askAt + 800)
     expect(ask).toContain('setFocusSignal((x) => x + 1)')
     expect(ask).toMatch(
-      /if \(rightEdgePresentation\) \{[\s\S]*?\{ type: 'explicit-reveal' \}[\s\S]*?setRightEdgeDockDismissed\(false\)[\s\S]*?dispatchAutoHide\(\{ type: 'reveal-now' \}\)/
+      /if \(rightEdgePresentation\) \{[\s\S]*?\{\s*type:\s*'explicit-reveal'\s*\}[\s\S]*?setRightEdgeDockDismissed\(false\)[\s\S]*?dispatchAutoHide\(\{\s*type:\s*'reveal-now'\s*\}\)/
     )
     expect(sidecar).toContain('}, [open, focusSignal])')
     expect(app).toMatch(
@@ -528,10 +533,10 @@ describe('right-edge dock', () => {
 
   it('guards a dirty recap before it launches and collapses for the standalone Intelligence dashboard', () => {
     expect(app).toMatch(
-      /const approveReviewNav = useCallback\(async \(\): Promise<boolean> => confirmReviewNavigation\(\), \[confirmReviewNavigation\]\)/
+      /const approveReviewNav = useCallback\([\s\S]*?async \(\): Promise<boolean> => confirmReviewNavigation\(\),[\s\S]*?\[confirmReviewNavigation\]/
     )
     expect(app).toMatch(
-      /const openIntelligenceDashboard = useCallback\(async[\s\S]*?if \(!\(await approveReviewNav\(\)\)\) return/
+      /const openIntelligenceDashboard = useCallback\(async[\s\S]*?if \(!\(await approveReviewNav\(\)\)\)\s*return/
     )
     expect(app).toContain('Save or discard the recap before opening Mantu Intelligence.')
     expect(app).toMatch(/window\.toto\.brainOpenDashboard\(\)[\s\S]*?minimizeForIntelligence\(\)/)
@@ -546,9 +551,11 @@ describe('right-edge dock', () => {
       /const overlaySurfaceRevealed = rightEdgePresentation && rightEdgeDockDismissed \? false : overlayRevealed/
     )
     expect(app).toMatch(/const edgeDockParked = rightEdgePresentation && rightEdgeDockDismissed/)
-    expect(app).toMatch(/const overlayPeeked = \(edgeDockParked && overlaySpring === 'rest'\) \|\| overlayShowPeek/)
     expect(app).toMatch(
-      /const revealOverlay = useCallback\(\(\) => \{[\s\S]*?reduceRightEdgeDismissalLock\(rightEdgeDismissalLockRef\.current, \{ type: 'explicit-reveal' \}\)[\s\S]*?setRightEdgeDockDismissed\(false\)/
+      /const overlayPeeked =\s*\(edgeDockParked && overlaySpring === 'rest'\) \|\|[\s\S]*?overlayShowPeek/
+    )
+    expect(app).toMatch(
+      /const revealOverlay = useCallback\(\(\) => \{[\s\S]*?reduceRightEdgeDismissalLock\(rightEdgeDismissalLockRef\.current,\s*\{\s*type:\s*'explicit-reveal'\s*\}[\s\S]*?setRightEdgeDockDismissed\(false\)/
     )
   })
 
@@ -556,7 +563,7 @@ describe('right-edge dock', () => {
     expect(sidecar).toMatch(/if \(!onOpenIntelligence \|\| capturing \|\| intelligence\.status === 'opening'\) return/)
     expect(sidecar).toMatch(/disabled=\{intelligence\.status === 'opening' \|\| capturing\}/)
     expect(app).toMatch(
-      /const openIntelligenceDashboard = useCallback\(async[\s\S]*?if \(capturing \|\| capturingRef\.current\) return \{ ok: false, error: 'Wait for screen capture to finish before opening Mantu Intelligence\.' \}/
+      /const openIntelligenceDashboard = useCallback\(async[\s\S]*?if \(capturing \|\| capturingRef\.current\)\s*return \{\s*ok:\s*false,\s*error:\s*'Wait for screen capture to finish before opening Mantu Intelligence\.'\s*\}/
     )
   })
 })

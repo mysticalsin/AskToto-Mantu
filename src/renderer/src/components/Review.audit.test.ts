@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
+import { sourceIndexOf } from '../../../../scripts/lib/source-layout'
 import {
   displayedRecapText,
   crmPushDone,
@@ -241,9 +242,9 @@ describe('crmPushKey / seedCrmPushed — a push survives a relaunch (MQA-092)', 
 describe('the deferred CRM marker — a push that beat its own autosave (MQA-092)', () => {
   const source = readFileSync(join(__dirname, 'Review.tsx'), 'utf8').replace(/\r\n/g, '\n')
   const between = (start: string, end: string): string => {
-    const from = source.indexOf(start)
+    const from = sourceIndexOf(source, start)
     expect(from, `anchor moved: ${start}`).toBeGreaterThan(-1)
-    const to = source.indexOf(end, from + start.length)
+    const to = sourceIndexOf(source, end, from + 1)
     expect(to, `end anchor moved: ${end}`).toBeGreaterThan(-1)
     return source.slice(from, to)
   }
@@ -277,7 +278,10 @@ describe('Review.tsx — ClickUp create-task destination (CLICKUP-PUSH.md)', () 
     expect(src).toMatch(/Task in \$\{clickupDestName\}/)
     expect(src).toMatch(/toolName: 'clickup_create_task'/)
     expect(src).not.toMatch(/attach_task_file/)
-    const clickupBranch = src.slice(src.indexOf("conn.kind === 'clickup' ? ("), src.indexOf("conn.kind === 'clickup' ? (") + 900)
+    const clickupBranch = src.slice(
+      src.indexOf("conn.kind === 'clickup' ? ("),
+      src.indexOf("conn.kind === 'clickup' ? (") + 900
+    )
     expect(clickupBranch).toMatch(/Task in/)
     expect(clickupBranch).not.toMatch(/project ID/)
   })

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createAsrModelProtocolHandler } from './asr-model-protocol'
+import { sourceIndexOf } from '../../scripts/lib/source-layout'
 
 /**
  * Source-contract tests for the C_Main fix batch (main/index.ts + main/store.ts wiring gaps). Same
@@ -15,7 +16,7 @@ const source = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g
 
 describe('finding 1: "settings" hotkey is registered, not just bindable', () => {
   it('shortcutActions includes a settings entry wired to sendHotkey', () => {
-    const start = source.indexOf('const shortcutActions: Record<string, () => void> = {')
+    const start = sourceIndexOf(source, 'const shortcutActions: Record<string, () => void> = {')
     const end = source.indexOf('\n}', start)
     expect(start).toBeGreaterThan(-1)
     const body = source.slice(start, end)
@@ -25,15 +26,15 @@ describe('finding 1: "settings" hotkey is registered, not just bindable', () => 
 
 describe('findings 2 & 4: visionAvailable consults per-agent Dust vision, not the static flag', () => {
   it("resolves Dust's selected agent through the helper used by visionAvailable", () => {
-    const helperStart = source.indexOf('const providerVisionReady =')
-    const helperEnd = source.indexOf('const providerReady =', helperStart)
+    const helperStart = sourceIndexOf(source, 'const providerVisionReady =')
+    const helperEnd = sourceIndexOf(source, 'const providerReady =', helperStart)
     expect(helperStart).toBeGreaterThan(-1)
     expect(helperEnd).toBeGreaterThan(helperStart)
     const helper = source.slice(helperStart, helperEnd)
     expect(helper).toMatch(/p === 'dust'\s*\? dustSelectedAgentVision\(s\.providerModels\.dust\)/)
 
-    const start = source.indexOf('visionAvailable:')
-    const end = source.indexOf('|| localVisionReady', start)
+    const start = sourceIndexOf(source, 'visionAvailable:')
+    const end = sourceIndexOf(source, '|| localVisionReady', start)
     expect(start).toBeGreaterThan(-1)
     expect(end).toBeGreaterThan(start)
     const body = source.slice(start, end)
@@ -46,7 +47,7 @@ describe('findings 2 & 4: visionAvailable consults per-agent Dust vision, not th
 
 describe('finding 5: cliPrimary is filtered by the org allowlist', () => {
   it('pickWorkingCliPrimary receives the org allowlist so a blocked CLI cannot win', () => {
-    const start = source.indexOf('const cliPrimary =')
+    const start = sourceIndexOf(source, 'const cliPrimary =')
     expect(start).toBeGreaterThan(-1)
     const body = source.slice(start, start + 300)
     expect(body).toMatch(/pickWorkingCliPrimary\(\{/)
@@ -58,10 +59,10 @@ describe('finding 5: cliPrimary is filtered by the org allowlist', () => {
 })
 
 describe('finding 6: ffmpeg import decoder is killed on ASR/transcription failure', () => {
-  it("onError cancels the decoder (from the ffmpegDecoders map) before deleting the map entry", () => {
-    const start = source.indexOf("onError: async (error) => {")
+  it('onError cancels the decoder (from the ffmpegDecoders map) before deleting the map entry', () => {
+    const start = sourceIndexOf(source, 'onError: async (error) => {')
     expect(start).toBeGreaterThan(-1)
-    const end = source.indexOf('}', source.indexOf('failDecoder', start))
+    const end = source.indexOf('}', sourceIndexOf(source, 'failDecoder', start))
     const body = source.slice(start, end)
     const cancelIdx = body.indexOf('ffmpegDecoders.get(job.jobId)?.cancel()')
     const deleteIdx = body.indexOf('ffmpegDecoders.delete(job.jobId)')
@@ -74,7 +75,7 @@ describe('finding 6: ffmpeg import decoder is killed on ASR/transcription failur
 
 describe('finding 8: duplicate global-hotkey accelerators are surfaced, not silently dropped', () => {
   it('registerShortcuts tracks claimed accelerators and pushes a duplicate into shortcutFailures', () => {
-    const start = source.indexOf('function registerShortcuts(): void {')
+    const start = sourceIndexOf(source, 'function registerShortcuts(): void {')
     const end = source.indexOf('\n}', start)
     expect(start).toBeGreaterThan(-1)
     const body = source.slice(start, end)
@@ -95,7 +96,7 @@ describe('finding 8: duplicate global-hotkey accelerators are surfaced, not sile
 describe('emergency force quit remains available when the renderer is wedged', () => {
   it('registers Ctrl+Cmd+Esc on macOS outside user-configurable shortcuts', () => {
     expect(source).toMatch(/const EMERGENCY_FORCE_QUIT_ACCELERATOR = 'Command\+Control\+Escape'/)
-    const start = source.indexOf('function registerEmergencyForceQuitShortcut(): boolean {')
+    const start = sourceIndexOf(source, 'function registerEmergencyForceQuitShortcut(): boolean {')
     const end = source.indexOf('\n}', start)
     expect(start).toBeGreaterThan(-1)
     const body = source.slice(start, end)
@@ -103,26 +104,28 @@ describe('emergency force quit remains available when the renderer is wedged', (
     expect(body).toMatch(/globalShortcut\.register\(EMERGENCY_FORCE_QUIT_ACCELERATOR, forceQuitMétis\)/)
     expect(source).toMatch(/function shortcutClaimKey\(accel: string\): string/)
     expect(source).toMatch(/const claimKey = shortcutClaimKey\(accel\)/)
-    expect(source).toMatch(/claimedBy\.set\(shortcutClaimKey\(EMERGENCY_FORCE_QUIT_ACCELERATOR\), 'emergency-force-quit'\)/)
+    expect(source).toMatch(
+      /claimedBy\.set\(shortcutClaimKey\(EMERGENCY_FORCE_QUIT_ACCELERATOR\), 'emergency-force-quit'\)/
+    )
     expect(source).toMatch(/label: 'Force Quit Métis'/)
   })
 })
 
 describe('finding 9: renderer crash recovery on the main overlay window', () => {
-  it("render-process-gone is registered unconditionally (not gated behind ASKTOTO_DEBUG_RENDERER)", () => {
+  it('render-process-gone is registered unconditionally (not gated behind ASKTOTO_DEBUG_RENDERER)', () => {
     // The overlay's own render-process-gone listener (not the hidden decoder window's, which is a
     // separate, pre-existing listener earlier in the file) must sit OUTSIDE the ASKTOTO_DEBUG_RENDERER
     // block so it's active in a packaged/production build, not just a debug one.
-    const debugBlockStart = source.indexOf('if (process.env.ASKTOTO_DEBUG_RENDERER) {')
+    const debugBlockStart = sourceIndexOf(source, 'if (process.env.ASKTOTO_DEBUG_RENDERER) {')
     const debugBlockEnd = source.indexOf('\n  }', debugBlockStart)
-    const listenerIdx = source.indexOf("win.webContents.on('render-process-gone'", debugBlockEnd)
+    const listenerIdx = sourceIndexOf(source, "win.webContents.on('render-process-gone'", debugBlockEnd)
     expect(debugBlockStart).toBeGreaterThan(-1)
     expect(listenerIdx).toBeGreaterThan(-1)
     expect(listenerIdx).toBeGreaterThan(debugBlockEnd) // registered after (outside) the debug-only block
   })
 
   it('logs to mainLog + auditLog and reloads the window content instead of leaving it blank', () => {
-    const listenerStart = source.indexOf("win.webContents.on('render-process-gone', (_e, details) => {")
+    const listenerStart = sourceIndexOf(source, "win.webContents.on('render-process-gone', (_e, details) => {")
     expect(listenerStart).toBeGreaterThan(-1)
     const listenerEnd = source.indexOf('\n  })', listenerStart)
     const body = source.slice(listenerStart, listenerEnd)
@@ -136,7 +139,7 @@ describe('finding 9: renderer crash recovery on the main overlay window', () => 
 
 describe('finding 7: brain:rebuildAll stays guarded (assessed, not modified)', () => {
   it('the handler requires both assertMainWindow and requireAuth before purging', () => {
-    const start = source.indexOf('ipcMain.handle(IPC.brainRebuildAll,')
+    const start = sourceIndexOf(source, 'ipcMain.handle(IPC.brainRebuildAll,')
     expect(start).toBeGreaterThan(-1)
     const end = source.indexOf('\n  })', start)
     const body = source.slice(start, end)
@@ -164,10 +167,13 @@ describe('packaged offline ASR protocol', () => {
   // generic "TypeError: Failed to fetch" before the caller ever sees the real status — reproduced even on
   // the trivial "unknown host" 403 branch, not just a real file read.
   it('the registered ASR handler returns CORS headers on invalid-origin failures too', async () => {
-    expect(source).toMatch(/protocol\.handle\('asr-model', createAsrModelProtocolHandler\(/)
+    expect(source).toMatch(/protocol\.handle\(\s*'asr-model',\s*createAsrModelProtocolHandler\(/)
     const handle = createAsrModelProtocolHandler({
-      resourcesRoot: __dirname, userModelsRoot: __dirname,
-      readLocal: async () => { throw new Error('Invalid hosts must not read any file') }
+      resourcesRoot: __dirname,
+      userModelsRoot: __dirname,
+      readLocal: async () => {
+        throw new Error('Invalid hosts must not read any file')
+      }
     })
     const response = await handle({ url: 'asr-model://forbidden/private.json' })
     expect(response.status).toBe(403)
