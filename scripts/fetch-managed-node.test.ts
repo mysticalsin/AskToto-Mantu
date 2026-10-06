@@ -32,7 +32,9 @@ function fixture(includeNode = true) {
   writeFileSync(join(dest, 'lib', 'node_modules', 'corepack', 'removed-in-new-runtime.js'), 'old')
   writeFileSync(join(dest, '.node-version'), '22.22.3\n')
   return {
-    root, archive, dest,
+    root,
+    archive,
+    dest,
     spec: {
       file,
       sha256: createHash('sha256').update(readFileSync(archive)).digest('hex'),
@@ -54,8 +56,9 @@ describe('MQA-314: managed Node provisioning', () => {
 
   it('rejects an archive hash mismatch without modifying the previous runtime', () => {
     const { archive, dest, spec } = fixture()
-    expect(() => provisionManagedNodeArchive(archive, dest, { ...spec, sha256: '0'.repeat(64) }, '24.21.0'))
-      .toThrow(/sha256/)
+    expect(() => provisionManagedNodeArchive(archive, dest, { ...spec, sha256: '0'.repeat(64) }, '24.21.0')).toThrow(
+      /sha256/
+    )
     expect(readFileSync(join(dest, '.node-version'), 'utf8')).toBe('22.22.3\n')
     expect(readdirSync(dirname(dest))).toEqual(['darwin-arm64'])
   })
@@ -89,7 +92,9 @@ describe('managed Node download on a CI runner', () => {
       if (calls > 1) return httpGet(target, callback)
       const failing = new EventEmitter() as EventEmitter & { destroy: () => void }
       failing.destroy = () => {}
-      setImmediate(() => failing.emit('error', Object.assign(new Error('getaddrinfo ENOTFOUND nodejs.org'), { code: 'ENOTFOUND' })))
+      setImmediate(() =>
+        failing.emit('error', Object.assign(new Error('getaddrinfo ENOTFOUND nodejs.org'), { code: 'ENOTFOUND' }))
+      )
       return failing
     }) as never
     try {
@@ -128,7 +133,12 @@ describe('managed Node download on a CI runner', () => {
     const requestGet = (() => {
       throw new Error('no request expected')
     }) as never
-    await fetchVerifiedArchive('http://127.0.0.1:9/node.tar.gz', archive, createHash('sha256').update(body).digest('hex'), { requestGet })
+    await fetchVerifiedArchive(
+      'http://127.0.0.1:9/node.tar.gz',
+      archive,
+      createHash('sha256').update(body).digest('hex'),
+      { requestGet }
+    )
     expect(readFileSync(archive)).toEqual(body)
   })
 })
