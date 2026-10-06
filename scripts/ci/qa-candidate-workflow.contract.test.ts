@@ -536,6 +536,14 @@ exit 1
       expect(block, `${name} carries the owner-Mac retry`).not.toContain('steps.verify1')
     }
   })
+
+  it('gives each owner-Mac job time for two candidate downloads plus its measurement', () => {
+    // One owner-Mac candidate download took 6-10 min on 2026-10-06 (run 37522538424); with the retry the
+    // control job spent 16 min downloading and the old 20-minute limit cancelled it 4 min into the measurement.
+    for (const name of strictJobs) {
+      expect(jobBlocks.get(name), `${name} timeout`).toMatch(/^ {4}timeout-minutes: 45$/m)
+    }
+  })
 })
 
 describe('QA candidate workflow: the shipped window gate (M2-0519)', () => {
