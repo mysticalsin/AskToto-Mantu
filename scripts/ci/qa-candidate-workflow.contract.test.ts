@@ -566,6 +566,8 @@ describe('QA candidate workflow: the shipped window gate (M2-0519)', () => {
       'if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi'
     )
     expect(remeasure).toContain('--report-dir "st1-report/$run"')
+    // The launch must not drain the plan the while-read loop is still reading.
+    expect(remeasure).toContain('--out "st1-report/$run/$run.json" \\\n              </dev/null \\\n')
     expect(remeasure).not.toContain('--window-warmup')
     // A re-measure that cannot launch leaves the slow launch's failure standing; the gate step decides the job.
     expect(remeasure).toMatch(/^        continue-on-error: true$/m)
