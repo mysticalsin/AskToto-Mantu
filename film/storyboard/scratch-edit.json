@@ -10,6 +10,7 @@
     { "id": "S05", "scene_id": "LF-04" },
     { "id": "S06", "scene_id": "LF-05" },
     { "id": "S07", "scene_id": "LF-06" },
-    { "id": "S08", "non_product": "NP-04" }
+    { "id": "S08", "scene_id": "LF-07" },
+    { "id": "S09", "scene_id": "LF-08" }
   ]
 }
