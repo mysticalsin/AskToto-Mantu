@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { BaseSettingsSchema, DEFAULT_SETTINGS, ASK_MEMORY_IDLE_MS } from '@shared/ipc'
 import { isTransient } from './llm/retry'
 import { createListeningStateHandler } from './listening-state-ipc'
+import { sourceIndexOf } from '../../scripts/lib/source-layout'
 
 // Source-contract lock for Tony's 2026-08-04 requirement: a plain typed/screen question asked OUTSIDE a
 // live meeting must not inherit the previous question's Q&A ("it uses the old conversation info in the
@@ -50,7 +51,7 @@ describe('fresh-question boundary at the askStart choke point', () => {
   })
 
   it('listeningState keeps the boundary suspended during a live meeting', async () => {
-    const start = indexSrc.indexOf('ipcMain.handle(IPC.listeningState')
+    const start = sourceIndexOf(indexSrc, 'ipcMain.handle(IPC.listeningState')
     expect(start).toBeGreaterThan(-1)
     expect(indexSrc.slice(start, start + 500)).toMatch(/setListeningActive,/)
 
@@ -59,7 +60,9 @@ describe('fresh-question boundary at the askStart choke point', () => {
       assertMainWindow: () => {},
       requireAuth: () => true,
       acceptTransition: () => true,
-      setListeningActive: (on) => { listeningActive = on },
+      setListeningActive: (on) => {
+        listeningActive = on
+      },
       setTrayRecording: () => {},
       setRecordingPowerSaveBlock: () => {},
       onMeetingStart: () => {},
@@ -85,7 +88,9 @@ describe('fresh-question boundary at the askStart choke point', () => {
 
 describe('review fixes (2026-08-04) stay wired', () => {
   it('flipping askFollowUpMemory is a conversation boundary in MAIN (Dust conversation + idle clock)', () => {
-    const start = indexSrc.indexOf("if ('askFollowUpMemory' in p && next.askFollowUpMemory !== cur.askFollowUpMemory) {")
+    const start = indexSrc.indexOf(
+      "if ('askFollowUpMemory' in p && next.askFollowUpMemory !== cur.askFollowUpMemory) {"
+    )
     expect(start).toBeGreaterThan(-1)
     const body = indexSrc.slice(start, start + 200)
     expect(body).toMatch(/resetDustConversation\(\)/)
@@ -152,7 +157,9 @@ describe('key-exhaustion failover classification (the "Kimi maxed out → next k
 
   it('the pre-token failover seam hands ANY exhausted-retry error to the next provider', () => {
     // F3 hedge: this call now also forwards the optional race context (undefined outside a hedged ask).
-    expect(indexSrc).toMatch(/if \(!gotToken && provider !== 'local' && failover\(attempted\.concat\(provider\), undefined, race\)\) return/)
+    expect(indexSrc).toMatch(
+      /if \(!gotToken && provider !== 'local' && failover\(attempted\.concat\(provider\), undefined, race\)\) return/
+    )
   })
 
   it('the reasoning-only-no-answer case (Kimi burning its budget on thinking) stays pre-token → fails over', () => {
@@ -183,9 +190,7 @@ describe('onboarding fires the real OS permission flow proactively (max legitima
   it('macOS: setup-scene mount triggers the mic prompt + screen TCC registration without a button press', () => {
     // Normalize CRLF so a 4k window is the same on Windows checkout as on Ubuntu.
     const src = onboardingSrc.replace(/\r\n/g, '\n')
-    expect(src).toMatch(
-      /if \(scene !== 'setup'\) return[\s\S]{0,5000}?window\.toto\.requestPermissionsUpfront\(\)/
-    )
+    expect(src).toMatch(/if \(scene !== 'setup'\) return[\s\S]{0,5000}?window\.toto\.requestPermissionsUpfront\(\)/)
   })
 
   it('Windows: mic consent resolves via a renderer getUserMedia probe (main has no ask API off darwin)', () => {

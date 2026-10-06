@@ -78,7 +78,10 @@ describe('MQA-037 — the retry idle cap is a network diagnostic and must not sh
 
 describe('MQA-038 — a renderer crash re-syncs the renderer-owned meeting state', () => {
   const handler = (): string =>
-    sliceBetween("win.webContents.on('render-process-gone', (_e, details) => {", 'const rendererUrl = overlayRendererUrl()')
+    sliceBetween(
+      "win.webContents.on('render-process-gone', (_e, details) => {",
+      'const rendererUrl = overlayRendererUrl()'
+    )
 
   it('resets the fresh-question boundary so a later plain ask cannot inherit the dead meeting', () => {
     const body = handler()
@@ -141,7 +144,10 @@ describe('MQA-056 — imported-recap falls back to the on-device model as a last
 
 describe('MQA-062 — a dead CLI session stops reporting itself as connected', () => {
   const onError = (): string =>
-    sliceBetween('const failAttempt = (message: string): void => {', 'win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })')
+    sliceBetween(
+      'const failAttempt = (message: string): void => {',
+      'win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })'
+    )
 
   it('retires the CLI connection on the SAME pre-token seam that records the auth verdict', () => {
     // Must run before the pre-token failover line, or the very case that matters — a dead CLI silently
@@ -168,7 +174,9 @@ describe('MQA-062 — a dead CLI session stops reporting itself as connected', (
 
   it('names the real remedy instead of sending CLI users to re-enter an API key they never had', () => {
     const body = onError()
-    expect(body).toMatch(/def\.kind === 'cli' && isAuthFailure\(message\)\s*\n\s*\? `\$\{def\.label\} is no longer signed in\./)
+    expect(body).toMatch(
+      /def\.kind === 'cli' && isAuthFailure\(message\)\s*\n\s*\? `\$\{def\.label\} is no longer signed in\./
+    )
     expect(body).toMatch(/Settings → CLI Integration/)
   })
 
@@ -205,12 +213,16 @@ describe('MQA-062 — a dead CLI session stops reporting itself as connected', (
     // body's rejection reaches onFatal, which writes a crash-*.log and an `app.crash` audit line for
     // something that crashed nothing.
     const body = sweep()
-    expect(body).toMatch(/try \{[\s\S]*\} catch \(error\) \{[\s\S]*mainLog\.warn\('\[cli\] session verification could not complete:'/)
+    expect(body).toMatch(
+      /try \{[\s\S]*\} catch \(error\) \{[\s\S]*mainLog\.warn\(\s*'\[cli\] session verification could not complete:'/
+    )
     expect(indexSrc).toMatch(/void verifyCliSessions\(\)/)
   })
 
   it('runs once at launch, next to the CLI prewarm that already reads the same flags', () => {
-    expect(indexSrc).toMatch(/if \(s0\.cliConnected\['claude-cli'\] \|\| s0\.cliConnected\['codex-cli'\]\) \{[\s\S]{0,400}?void verifyCliSessions\(\)/)
+    expect(indexSrc).toMatch(
+      /if \(s0\.cliConnected\['claude-cli'\] \|\| s0\.cliConnected\['codex-cli'\]\) \{[\s\S]{0,400}?void verifyCliSessions\(\)/
+    )
   })
 
   it('gates the renderer-facing verify handler like every other settings-WRITING handler (MQA-129)', () => {
@@ -236,7 +248,10 @@ describe('M2-0533 — login item status is cached and refreshed off the boot pat
   })
 
   it('the OS refresh is isolated in the cache refresh helper', () => {
-    const helper = sliceBetween('function refreshLoginItemOpenAtLoginCache(): boolean | null {', 'const publicLoginItemOpenAtLogin')
+    const helper = sliceBetween(
+      'function refreshLoginItemOpenAtLoginCache(): boolean | null {',
+      'const publicLoginItemOpenAtLogin'
+    )
     expect(helper).toMatch(/app\.getLoginItemSettings\(\)\.openAtLogin/)
   })
 })
@@ -264,7 +279,9 @@ describe('MQA-066 — the enforced-but-unconfigured wall has exactly one way out
   })
 
   it('audits the write, like every other settings mutation', () => {
-    expect(carveOut()).toMatch(/auditLog\('settings\.changed', \{ keys: Object\.keys\(bootstrap\), reason: 'sso_bootstrap' \}\)/)
+    expect(carveOut()).toMatch(
+      /auditLog\('settings\.changed', \{ keys: Object\.keys\(bootstrap\), reason: 'sso_bootstrap' \}\)/
+    )
   })
 })
 
@@ -286,13 +303,14 @@ describe('MQA-092 — the durable CRM-push marker is written behind the same gat
 describe('MQA-064 — a failed MCP key write reaches the user instead of wedging the card', () => {
   it('routes the thrown, user-authored diagnostic through the {ok,error} channel the card renders', () => {
     const handler = sliceBetween('ipcMain.handle(IPC.mcpSaveConnection', 'ipcMain.handle(IPC.mcpDisconnect')
-    expect(handler).toMatch(/try \{\s*\n\s*setMcpApiKey\(connectionId, apiKey\)/)
-    expect(handler).toMatch(/return \{ ok: false as const, error: error instanceof Error \? error\.message :/)
+    expect(handler).toMatch(/try \{\s*setMcpApiKey\(connectionId, apiKey\)/)
+    expect(handler).toMatch(/return \{\s*ok: false as const,\s*error: error instanceof Error \? error\.message :/)
   })
 })
 
 describe('MQA-070 — turning encryption ON while publishing is on asks for the same consent', () => {
-  const settingsSet = (): string => sliceBetween('ipcMain.handle(IPC.settingsSet', 'const next = setSettingsWithSpeakerPolicy(p)')
+  const settingsSet = (): string =>
+    sliceBetween('ipcMain.handle(IPC.settingsSet', 'const next = setSettingsWithSpeakerPolicy(p)')
 
   it('gates the encryption OFF->ON edge, not only the publish OFF->ON edge', () => {
     const body = settingsSet()
@@ -321,12 +339,12 @@ describe('MQA-075 — the confidential flag reports the republish that actually 
 
   it('awaits publishAll inside the handler instead of detaching it', () => {
     const body = handler()
-    expect(body).toMatch(/try \{\s*\n\s*await publishAll\(s\)\s*\n\s*\} catch \(error\) \{/)
+    expect(body).toMatch(/try \{\s*await publishAll\(s\)\s*\} catch \(error\) \{/)
     expect(body).not.toMatch(/void publishAll\(/)
   })
 
   it('stops asserting exclusion took effect when the republish failed', () => {
-    expect(handler()).toMatch(/ok: false,\s*\n\s*error: 'Flag saved, but the published pages could not be updated/)
+    expect(handler()).toMatch(/ok: false,\s*error:\s*'Flag saved, but the published pages could not be updated/)
   })
 
   it('the sibling fire-and-forget republish in settingsSet can no longer fake a crash report', () => {
@@ -376,7 +394,10 @@ describe('MQA-081 — a wrong-monitor capture is flagged and keyed to the displa
 
 describe('MQA-090 — the hidden-window decoder reaps a finished job before refusing the next one', () => {
   it('mirrors the ffmpeg branch: a terminal job cannot block the next FIFO job with a false "already active"', () => {
-    const beforeGuard = sliceBetween('  if (ffmpeg) {', '  if (decoderWin && !decoderWin.isDestroyed()) throw new Error')
+    const beforeGuard = sliceBetween(
+      '  if (ffmpeg) {',
+      '  if (decoderWin && !decoderWin.isDestroyed()) throw new Error'
+    )
     expect(beforeGuard).toMatch(
       /if \(decoderWin && !decoderWin\.isDestroyed\(\) && decoderJobId && decoderJobId !== job\.jobId\) \{/
     )
@@ -386,7 +407,10 @@ describe('MQA-090 — the hidden-window decoder reaps a finished job before refu
   })
 
   it('still refuses a genuinely live decoder', () => {
-    const guard = sliceBetween('  if (decoderWin && !decoderWin.isDestroyed()) throw new Error', '  decoderJobId = job.jobId')
+    const guard = sliceBetween(
+      '  if (decoderWin && !decoderWin.isDestroyed()) throw new Error',
+      '  decoderJobId = job.jobId'
+    )
     expect(guard).toMatch(/Another audio decoder is already active\./)
   })
 })

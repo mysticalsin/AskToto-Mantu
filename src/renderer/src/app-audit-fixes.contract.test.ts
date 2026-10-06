@@ -56,7 +56,10 @@ describe('MQA-066 — Settings is reachable from behind the sign-in wall', () =>
   })
 
   it('renders Settings in place of the wall, the way the onboarding gate already does', () => {
-    const wall = blockBetween('// Azure AD gate — blocks all use when SSO is configured OR enforced', 'const panelOpen = (body != null && !collapsed)')
+    const wall = blockBetween(
+      '// Azure AD gate — blocks all use when SSO is configured OR enforced',
+      'const panelOpen = (body != null && !collapsed)'
+    )
     expect(code(wall)).toMatch(/if \(view === 'settings'\) \{/)
     expect(code(wall)).toMatch(/\{settingsBody\}/)
     // The wall itself still renders for every other view — this is an escape, not a removal.
@@ -64,15 +67,20 @@ describe('MQA-066 — Settings is reachable from behind the sign-in wall', () =>
   })
 
   it('hands the wall a route to the screen its own remedy names', () => {
-    const wall = blockBetween('// Azure AD gate — blocks all use when SSO is configured OR enforced', 'const panelOpen = (body != null && !collapsed)')
+    const wall = blockBetween(
+      '// Azure AD gate — blocks all use when SSO is configured OR enforced',
+      'const panelOpen = (body != null && !collapsed)'
+    )
     // Calendar, not Account: the Entra client/tenant/domain fields live on the Calendar tab, and there is
     // no Account tab at all — the old copy pointed at a screen that does not exist.
     expect(code(wall)).toMatch(/onOpenSettings=\{\(\) =>\s*\n?\s*openSettings\('calendar'/)
   })
 
   it("lets 'settings' — and only 'settings' — through the sign-in hotkey gate", () => {
-    const gate = blockBetween('const onboardingGate = DEMO == null', 'if (a !== \'hide\' && minimized)')
-    expect(code(gate)).toMatch(/if \(a !== 'hide' && \(onboardingGate \|\| \(signInGate && a !== 'settings'\)\)\) return/)
+    const gate = blockBetween('const onboardingGate = DEMO == null', "if (a !== 'hide' && minimized)")
+    expect(code(gate)).toMatch(
+      /if \(a !== 'hide' && \(onboardingGate \|\| \(signInGate && a !== 'settings'\)\)\) return/
+    )
     // Onboarding keeps the stricter rule: there the widget genuinely is not usable yet.
     expect(code(gate)).not.toMatch(/onboardingGate && a !== 'settings'/)
   })
@@ -227,7 +235,7 @@ describe('MQA-083 / MQA-158 — a mic change no longer kills Desk Tap Control si
   it('renders a recalibrate prompt naming where to do it', () => {
     expect(source).toMatch(/\{tapMismatch && view !== 'settings' && \(/)
     expect(source).toMatch(/Desk Tap Control is paused/)
-    expect(source).toMatch(/Recalibrate it in\n\s*Settings → Audio\./)
+    expect(source).toMatch(/Recalibrate it in\s+Settings →\s*Audio\./)
   })
 })
 

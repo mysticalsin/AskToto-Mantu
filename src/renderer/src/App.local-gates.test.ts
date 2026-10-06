@@ -89,10 +89,13 @@ describe('requireProvider(local?) call-site contract (H1)', () => {
     expect(requireProviderArgAfter('const answerNow = useCallback(')).toBe("'suggest'")
   })
 
-  it("onQuickAction's summarize branch always fires ask.run({ mode: 'summary' }) on its only non-screen, " +
-      "non-error path -> requireProvider('summary')", () => {
-    expect(requireProviderArgAfter("kind === 'summarize'")).toBe("'summary'")
-  })
+  it(
+    "onQuickAction's summarize branch always fires ask.run({ mode: 'summary' }) on its only non-screen, " +
+      "non-error path -> requireProvider('summary')",
+    () => {
+      expect(requireProviderArgAfter("kind === 'summarize'")).toBe("'summary'")
+    }
+  )
 
   it('assist can fall through to suggest.run({ mode: "answer" }) (capture failure / screenAsk off) -> stays bare', () => {
     expect(requireProviderArgAfter('const assist = useCallback(')).toBe('')
@@ -117,15 +120,15 @@ describe('requireProvider(local?) call-site contract (H1)', () => {
     expect(source).toMatch(/route\.transport === 'text' && !requireProvider\(\)/)
   })
 
-  it("onQuickAction's explain branch only ever fires mode \"answer\" directly -> stays bare", () => {
+  it('onQuickAction\'s explain branch only ever fires mode "answer" directly -> stays bare', () => {
     expect(requireProviderArgAfter("kind === 'explain'")).toBe('')
   })
 
-  it('onGenerateRecap fires generateSavedRecap (local-capable summary) -> requireProvider(\'summary\')', () => {
+  it("onGenerateRecap fires generateSavedRecap (local-capable summary) -> requireProvider('summary')", () => {
     expect(requireProviderArgAfter('onGenerateRecap=')).toBe("'summary'")
   })
 
-  it('onRetryRecap fires generateSavedRecap (local-capable summary) -> requireProvider(\'summary\')', () => {
+  it("onRetryRecap fires generateSavedRecap (local-capable summary) -> requireProvider('summary')", () => {
     expect(requireProviderArgAfter('onRetryRecap=')).toBe("'summary'")
   })
 })
@@ -185,7 +188,7 @@ describe('QuickActions and gate reachability for a zero-API-key install', () => 
   it('the "add an API key" CTA is suppressed once the on-device model can answer', () => {
     // Not cosmetic: this banner is the app's own statement that it is not yet usable. Showing it to a
     // user whose local model answers every question is the app contradicting itself.
-    expect(appSrc).toMatch(/!settings\.providerReady && !settings\.localFallbackReady && !nudgeExpired/)
+    expect(appSrc).toMatch(/!settings\.providerReady &&\s*!settings\.localFallbackReady &&\s*!nudgeExpired/)
   })
 })
 
@@ -208,7 +211,10 @@ describe('CRITICAL: follow-up draft cross-meeting leak (finding 6)', () => {
   // generated for meeting A can render/send as meeting B's follow-up.
   const startListenBlock = blockBetween('const startListen = useCallback(', 'const endReview = useCallback(')
   const resetBlock = blockBetween('const reset = useCallback(', 'const discardMeeting = useCallback(')
-  const openPastMeetingBlock = blockBetween('const openPastMeeting = useCallback(', 'const resumePastMeeting = useCallback(')
+  const openPastMeetingBlock = blockBetween(
+    'const openPastMeeting = useCallback(',
+    'const resumePastMeeting = useCallback('
+  )
 
   it('startListen (New meeting / toggle-listen / resume) clears followup', () => {
     expect(startListenBlock).toMatch(/followup\.clear\(\)/)
@@ -224,7 +230,10 @@ describe('CRITICAL: follow-up draft cross-meeting leak (finding 6)', () => {
 })
 
 describe('Disregard-vs-autosave race (finding 7)', () => {
-  const autosaveBlock = blockBetween('// auto-save the meeting to the OneDrive folder', '// record a completed Ask turn')
+  const autosaveBlock = blockBetween(
+    '// auto-save the meeting to the OneDrive folder',
+    '// record a completed Ask turn'
+  )
   const discardBlock = blockBetween('const discardMeeting = useCallback(', 'const clearAnswer = useCallback(')
   const startListenBlock = blockBetween('const startListen = useCallback(', 'const endReview = useCallback(')
 
@@ -241,7 +250,7 @@ describe('Disregard-vs-autosave race (finding 7)', () => {
     expect(discardBlock).toMatch(/savingPromiseRef\.current \? await savingPromiseRef\.current : null/)
   })
 
-  it('startListen resets savingPromiseRef so a prior meeting\'s settled promise can never leak into the next', () => {
+  it("startListen resets savingPromiseRef so a prior meeting's settled promise can never leak into the next", () => {
     expect(startListenBlock).toMatch(/savingPromiseRef\.current = null/)
   })
 })
@@ -269,7 +278,7 @@ describe('Fact-check leftover-transcript fallthrough (finding 2)', () => {
   })
 })
 
-describe('Summarize screen-route mirrors askScreen\'s actual vision gate (finding 3)', () => {
+describe("Summarize screen-route mirrors askScreen's actual vision gate (finding 3)", () => {
   // requireProviderArgAfter('summarize') anchors on the literal "kind === 'summarize'" text — reuse the
   // same anchor here, sliced up to the route computation, to isolate ONLY the summarize branch's
   // canUseScreen (explain's own separate canUseScreen, asserted below, must keep the broader flag).
@@ -293,10 +302,12 @@ describe('Summarize screen-route mirrors askScreen\'s actual vision gate (findin
     expect(summarizeCanUseScreenBlock).toMatch(
       /settings\?\.providerReady \|\| settings\?\.localVisionReady \|\| settings\?\.localFallbackReady/
     )
-    expect(summarizeCanUseScreenBlock).not.toMatch(/canUseScreen = Boolean\(\(settings\?\.screenAsk \?\? true\) && settings\?\.visionAvailable/)
+    expect(summarizeCanUseScreenBlock).not.toMatch(
+      /canUseScreen = Boolean\(\(settings\?\.screenAsk \?\? true\) && settings\?\.visionAvailable/
+    )
   })
 
-  it('explain\'s canUseScreen is untouched (still the broader settings.visionAvailable)', () => {
+  it("explain's canUseScreen is untouched (still the broader settings.visionAvailable)", () => {
     expect(explainCanUseScreenLine).toMatch(/settings\?\.visionAvailable/)
   })
 
@@ -307,10 +318,7 @@ describe('Summarize screen-route mirrors askScreen\'s actual vision gate (findin
 })
 
 describe('Speculative (showSpec) suggestion stays until click or a new question (finding 4)', () => {
-  const machineryBlock = blockBetween(
-    '// Instant-suggestion machinery',
-    'const whatNext = useCallback('
-  )
+  const machineryBlock = blockBetween('// Instant-suggestion machinery', 'const whatNext = useCallback(')
 
   it('does not arm a TTL or max-age timer on showSpec or suggest.answer', () => {
     expect(source).not.toMatch(/SUGGESTION_TTL_MS/)
@@ -338,7 +346,10 @@ describe('Retry button hidden when nothing is retryable (finding 1)', () => {
 })
 
 describe('openPastMeeting surfaces recallRead failures instead of a silent dead-end (finding 5)', () => {
-  const openPastMeetingBlock = blockBetween('const openPastMeeting = useCallback(', 'const resumePastMeeting = useCallback(')
+  const openPastMeetingBlock = blockBetween(
+    'const openPastMeeting = useCallback(',
+    'const resumePastMeeting = useCallback('
+  )
 
   it('a failed recallRead sets a visible error instead of bare-returning', () => {
     expect(openPastMeetingBlock).toMatch(/if \(!r\.ok\) \{/)

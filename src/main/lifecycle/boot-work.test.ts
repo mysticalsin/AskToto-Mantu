@@ -10,7 +10,9 @@ vi.mock('../mac-helper', () => ({ macStatFlagsSpawnSpec: vi.fn(() => null) }))
 import { auditLog, mainLog } from '../logger'
 import { createBootWork, type BootWorkWindow } from './boot-work'
 
-function fakeWindow(opts: { visible?: boolean; destroyed?: boolean } = {}): EventEmitter & BootWorkWindow & { show(): void } {
+function fakeWindow(
+  opts: { visible?: boolean; destroyed?: boolean } = {}
+): EventEmitter & BootWorkWindow & { show(): void } {
   const win = new EventEmitter() as EventEmitter & BootWorkWindow & { show(): void }
   let visible = opts.visible ?? false
   win.isDestroyed = () => opts.destroyed ?? false
@@ -251,11 +253,13 @@ describe('boot wiring in index.ts (M2-0518)', () => {
   ])('starts %s at launch only through the boot-work queue', (name) => {
     expect(whenReady).toHaveLength(1)
     expect(bootCallback).toBeDefined()
-    const references = findAll(bootCallback!, (node) =>
-      ts.isIdentifier(node) &&
-      node.text === name &&
-      !(ts.isVariableDeclaration(node.parent) && node.parent.name === node) &&
-      !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node)
+    const references = findAll(
+      bootCallback!,
+      (node) =>
+        ts.isIdentifier(node) &&
+        node.text === name &&
+        !(ts.isVariableDeclaration(node.parent) && node.parent.name === node) &&
+        !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node)
     )
     expect(references.length, `${name} is never started at launch`).toBeGreaterThan(0)
     for (const reference of references) {
@@ -267,7 +271,7 @@ describe('boot wiring in index.ts (M2-0518)', () => {
   it('primes the ASR bundled-status probe only through the boot-work queue', () => {
     expect(bootCallback).toBeDefined()
     const bootText = bootCallback!.getText(indexSource)
-    expect(bootText).toMatch(/bootWork\.run\('primeAsrBundledStatus', \(\) => \{ asrBundledReady\(\) \}\)/)
+    expect(bootText).toMatch(/bootWork\.run\('primeAsrBundledStatus', \(\) => \{\s*asrBundledReady\(\)\s*\}\)/)
     const asrIpcBeforePrime = bootText.slice(0, bootText.indexOf("bootWork.run('primeAsrBundledStatus'"))
     expect(asrIpcBeforePrime).not.toMatch(/\basrManifestComplete\(/)
     expect(asrIpcBeforePrime).not.toMatch(/\bimportAsrAssetsReady\(/)
@@ -280,7 +284,9 @@ describe('boot wiring in index.ts (M2-0518)', () => {
       (node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'createWindow'
     )
     expect(createWindow).toBeDefined()
-    const holds = findAll(createWindow!, (node) => isCallTo(node, 'holdAppSuspensionWhileVisible')) as ts.CallExpression[]
+    const holds = findAll(createWindow!, (node) =>
+      isCallTo(node, 'holdAppSuspensionWhileVisible')
+    ) as ts.CallExpression[]
     expect(holds).toHaveLength(1)
     expect(holds[0].arguments[1].getText(indexSource)).toBe('powerSaveBlocker')
   })

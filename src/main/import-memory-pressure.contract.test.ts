@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { flattenSource } from '../../scripts/lib/source-layout'
 
 const index = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const screenPreprocess = readFileSync(join(__dirname, 'screen-preprocess.ts'), 'utf8')
@@ -27,17 +28,25 @@ describe('import-memory pressure contract', () => {
     const earlyEnsure = between(index, 'Overlap local sidecar start', '// Receipt Mode:')
     const bootWarm = between(index, 'const warmLocalIfReady = (): void => {', "bootWork.run('provisionLocalModel'")
     const backgroundVlm = between(screenPreprocess, 'if (!text) {', 'if (!text) return')
-    const backgroundVlmStart = between(screenPreprocess, 'async function describeOnce', 'async function describeForWindow')
+    const backgroundVlmStart = between(
+      screenPreprocess,
+      'async function describeOnce',
+      'async function describeForWindow'
+    )
 
     expectBefore(rendererPrewarm, 'speculativeLocalWorkAllowed()', 'void prewarmLocal(')
     expectBefore(earlyEnsure, 'speculativeLocalWorkAllowed()', 'ensureLocalRuntimeStarted(')
     expectBefore(bootWarm, 'speculativeLocalWorkAllowed()', 'void prewarmLocal(')
     expectBefore(backgroundVlm, 'allowSpeculativeLocalWork?.() === false', 'describeOnce(shot.image)')
-    expect(rendererPrewarm).toContain(
-      'prewarmLocal(s.localLlm.modelId, buildPrewarmMessages(parsed.data.text, s), speculativeLocalWorkAllowed)'
+    expect(flattenSource(rendererPrewarm)).toContain(
+      flattenSource(
+        'prewarmLocal(s.localLlm.modelId, buildPrewarmMessages(parsed.data.text, s), speculativeLocalWorkAllowed)'
+      )
     )
-    expect(bootWarm).toContain(
-      "prewarmLocal(cur.localLlm.modelId, buildPrewarmMessages('warm', cur), speculativeLocalWorkAllowed)"
+    expect(flattenSource(bootWarm)).toContain(
+      flattenSource(
+        "prewarmLocal(cur.localLlm.modelId, buildPrewarmMessages('warm', cur), speculativeLocalWorkAllowed)"
+      )
     )
     expect(earlyEnsure).toContain(
       "ensureLocalRuntimeStarted(s.localLlm.modelId, req.mode === 'vision', speculativeLocalWorkAllowed)"

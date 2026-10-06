@@ -87,14 +87,19 @@ describe('screen-capture permission recovery', () => {
 describe('MQA-236 (part 2) - nothing captures a frame without a screen gesture', () => {
   const CRLF = new RegExp(String.fromCharCode(13) + String.fromCharCode(10), 'g')
   const bar = readFileSync(join(__dirname, 'components', 'Bar.tsx'), 'utf8').replace(CRLF, String.fromCharCode(10))
-  const mainSrc = readFileSync(join(__dirname, '..', '..', 'main', 'index.ts'), 'utf8').replace(CRLF, String.fromCharCode(10))
+  const mainSrc = readFileSync(join(__dirname, '..', '..', 'main', 'index.ts'), 'utf8').replace(
+    CRLF,
+    String.fromCharCode(10)
+  )
 
   it('focusing the ask input never pre-warms capture (prewarmCapture takes a REAL frame)', () => {
     expect(bar).not.toMatch(/onFocus=\{[^}]*prewarmCapture/)
   })
 
   it('the warm rides hovering the Capture tool - the one place intent is signalled before the click', () => {
-    expect(bar).toMatch(/onMouseEnter=\{\(\) => \{ if \(props\.canPrewarm\) void window\.toto\.prewarmCapture\(\) \}\}/)
+    expect(bar).toMatch(
+      /onMouseEnter=\{\(\) => \{\s*if \(props\.canPrewarm\) void window\.toto\.prewarmCapture\(\)\s*\}\}/
+    )
   })
 
   it('signing in never captures a frame either', () => {

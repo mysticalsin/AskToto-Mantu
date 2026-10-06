@@ -58,8 +58,8 @@ describe('finding 5: cliPrimary is filtered by the org allowlist', () => {
 })
 
 describe('finding 6: ffmpeg import decoder is killed on ASR/transcription failure', () => {
-  it("onError cancels the decoder (from the ffmpegDecoders map) before deleting the map entry", () => {
-    const start = source.indexOf("onError: async (error) => {")
+  it('onError cancels the decoder (from the ffmpegDecoders map) before deleting the map entry', () => {
+    const start = source.indexOf('onError: async (error) => {')
     expect(start).toBeGreaterThan(-1)
     const end = source.indexOf('}', source.indexOf('failDecoder', start))
     const body = source.slice(start, end)
@@ -103,13 +103,15 @@ describe('emergency force quit remains available when the renderer is wedged', (
     expect(body).toMatch(/globalShortcut\.register\(EMERGENCY_FORCE_QUIT_ACCELERATOR, forceQuitMétis\)/)
     expect(source).toMatch(/function shortcutClaimKey\(accel: string\): string/)
     expect(source).toMatch(/const claimKey = shortcutClaimKey\(accel\)/)
-    expect(source).toMatch(/claimedBy\.set\(shortcutClaimKey\(EMERGENCY_FORCE_QUIT_ACCELERATOR\), 'emergency-force-quit'\)/)
+    expect(source).toMatch(
+      /claimedBy\.set\(shortcutClaimKey\(EMERGENCY_FORCE_QUIT_ACCELERATOR\), 'emergency-force-quit'\)/
+    )
     expect(source).toMatch(/label: 'Force Quit Métis'/)
   })
 })
 
 describe('finding 9: renderer crash recovery on the main overlay window', () => {
-  it("render-process-gone is registered unconditionally (not gated behind ASKTOTO_DEBUG_RENDERER)", () => {
+  it('render-process-gone is registered unconditionally (not gated behind ASKTOTO_DEBUG_RENDERER)', () => {
     // The overlay's own render-process-gone listener (not the hidden decoder window's, which is a
     // separate, pre-existing listener earlier in the file) must sit OUTSIDE the ASKTOTO_DEBUG_RENDERER
     // block so it's active in a packaged/production build, not just a debug one.
@@ -164,10 +166,13 @@ describe('packaged offline ASR protocol', () => {
   // generic "TypeError: Failed to fetch" before the caller ever sees the real status — reproduced even on
   // the trivial "unknown host" 403 branch, not just a real file read.
   it('the registered ASR handler returns CORS headers on invalid-origin failures too', async () => {
-    expect(source).toMatch(/protocol\.handle\('asr-model', createAsrModelProtocolHandler\(/)
+    expect(source).toMatch(/protocol\.handle\(\s*'asr-model',\s*createAsrModelProtocolHandler\(/)
     const handle = createAsrModelProtocolHandler({
-      resourcesRoot: __dirname, userModelsRoot: __dirname,
-      readLocal: async () => { throw new Error('Invalid hosts must not read any file') }
+      resourcesRoot: __dirname,
+      userModelsRoot: __dirname,
+      readLocal: async () => {
+        throw new Error('Invalid hosts must not read any file')
+      }
     })
     const response = await handle({ url: 'asr-model://forbidden/private.json' })
     expect(response.status).toBe(403)

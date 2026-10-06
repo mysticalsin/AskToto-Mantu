@@ -13,6 +13,7 @@ vi.mock('./logger', () => ({
 }))
 
 import { createSpeakerId, isEchoBleed } from './speaker-id'
+import { sourceIndexOf } from '../../scripts/lib/source-layout'
 
 /** Fake extractor: derives the "embedding" from the first sample value — window [v, ...] becomes a
  *  one-hot-ish vector along axis v, so tests choose voices by constructing windows. */
@@ -245,7 +246,12 @@ describe('echo defense — operator buffer + THEM-window echo detection', () => 
 
   it('drops a label result that resolves after resetSession instead of mutating the next session', async () => {
     let resolve!: (embedding: Float32Array) => void
-    const compute = vi.fn(() => new Promise<Float32Array>((done) => { resolve = done }))
+    const compute = vi.fn(
+      () =>
+        new Promise<Float32Array>((done) => {
+          resolve = done
+        })
+    )
     const id = createSpeakerId({
       createExtractor: () => ({ compute }),
       storePath: () => join(dir, 'voiceprints.json')
@@ -263,7 +269,10 @@ describe('echo defense — operator buffer + THEM-window echo detection', () => 
     const pending: Array<(embedding: Float32Array) => void> = []
     const id = createSpeakerId({
       createExtractor: () => ({
-        compute: () => new Promise<Float32Array>((resolve) => { pending.push(resolve) })
+        compute: () =>
+          new Promise<Float32Array>((resolve) => {
+            pending.push(resolve)
+          })
       }),
       storePath: () => join(dir, 'voiceprints.json'),
       canSaveVoiceprints: () => true
@@ -296,7 +305,10 @@ describe('echo defense — operator buffer + THEM-window echo detection', () => 
     const pending: Array<(embedding: Float32Array) => void> = []
     const id = createSpeakerId({
       createExtractor: () => ({
-        compute: () => new Promise<Float32Array>((resolve) => { pending.push(resolve) })
+        compute: () =>
+          new Promise<Float32Array>((resolve) => {
+            pending.push(resolve)
+          })
       }),
       storePath: () => join(dir, 'voiceprints.json'),
       canSaveVoiceprints: () => true
@@ -324,7 +336,10 @@ describe('echo defense — operator buffer + THEM-window echo detection', () => 
       createExtractor: () => ({
         compute: () => {
           calls++
-          if (calls === 1) return new Promise<Float32Array>((resolve) => { resolveStale = resolve })
+          if (calls === 1)
+            return new Promise<Float32Array>((resolve) => {
+              resolveStale = resolve
+            })
           return Promise.resolve(Float32Array.from([0, 1, 0]))
         }
       }),
@@ -419,7 +434,11 @@ describe('speaker:embed — the Whisper-engine speaker-embedding tap (contract)'
   })
 
   it('awaits every live native-dependent speaker call and marks the import owner', () => {
-    for (const marker of ['ipcMain.handle(IPC.parakeetFeed', 'ipcMain.handle(IPC.appleSpeechFeed', 'ipcMain.handle(IPC.speakerEmbed']) {
+    for (const marker of [
+      'ipcMain.handle(IPC.parakeetFeed',
+      'ipcMain.handle(IPC.appleSpeechFeed',
+      'ipcMain.handle(IPC.speakerEmbed'
+    ]) {
       const start = indexSrc.indexOf(marker)
       expect(start, marker).toBeGreaterThan(-1)
       const body = indexSrc.slice(start, start + 2500)
@@ -439,7 +458,7 @@ describe('speaker:embed — the Whisper-engine speaker-embedding tap (contract)'
 
   it('the preload bridges it with the same {samples, speaker} payload shape as parakeetFeed', () => {
     expect(preloadSrc).toMatch(
-      /speakerEmbed: \(samples: Float32Array, speaker: string, startedAt\?: number\): Promise<\{ name\?: string; echo\?: boolean \}> =>[\s\S]*ipcRenderer\.invoke\(IPC\.speakerEmbed, \{ samples, speaker, startedAt \}\)/
+      /speakerEmbed:\s*\(\s*samples: Float32Array,\s*speaker: string,\s*startedAt\?: number\s*\):\s*Promise<\{ name\?: string; echo\?: boolean \}>\s*=>[\s\S]*ipcRenderer\.invoke\(IPC\.speakerEmbed, \{ samples, speaker, startedAt \}\)/
     )
   })
 })
@@ -454,7 +473,7 @@ describe('real sherpa integration (soft-skip when model/addon absent)', () => {
     }
     // No injected extractor: createSpeakerId builds the real sherpa one (repo-root model resolution).
     const id = createSpeakerId({ storePath: () => join(dir, 'voiceprints.json') })
-    if (!await id.available()) {
+    if (!(await id.available())) {
       console.warn('[speaker-id it] skipped — sherpa addon unavailable on this machine')
       return
     }
@@ -479,14 +498,14 @@ describe('the meeting-start boundary resets speaker session labels (MQA-043)', (
   const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 
   it('calls resetSession() at the listeningState meeting-start boundary', () => {
-    const start = indexSrc.indexOf('ipcMain.handle(IPC.listeningState')
+    const start = sourceIndexOf(indexSrc, 'ipcMain.handle(IPC.listeningState')
     expect(start).toBeGreaterThan(-1)
     const body = indexSrc.slice(start, start + 2500)
     expect(body).toMatch(/onMeetingStart:\s*\(\)\s*=>\s*\{[\s\S]{0,1600}?speakerIdInstance\?\.resetSession\(\)/)
   })
 
   it('resets it alongside the Dust conversation — one boundary, not two competing ones', () => {
-    const start = indexSrc.indexOf('ipcMain.handle(IPC.listeningState')
+    const start = sourceIndexOf(indexSrc, 'ipcMain.handle(IPC.listeningState')
     const body = indexSrc.slice(start, start + 2500)
     expect(body).toMatch(
       /onMeetingStart:\s*\(\)\s*=>[\s\S]{0,2000}(?:resetDustConversation\(\)[\s\S]{0,2000}speakerIdInstance\?\.resetSession\(\)|speakerIdInstance\?\.resetSession\(\)[\s\S]{0,2000}resetDustConversation\(\))/
