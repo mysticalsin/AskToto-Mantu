@@ -16,9 +16,22 @@ const BEFORE = { feedTags: ['v1.9.5', 'v1.9.6'], publishedReleases: ['v1.9.5', '
 const AFTER = { feedTags: ['v1.9.6', 'v1.9.7'], publishedReleases: ['v1.9.6', 'v1.9.7'] }
 
 test('main accepts 1.9.7 while the retired v1.9.8 draft exists', () => {
-  const problems = versionForRefProblems({ ref: MAIN_REF, version: '1.9.7', ...BEFORE, publishedReleases: [...BEFORE.publishedReleases] })
+  const problems = versionForRefProblems({
+    ref: MAIN_REF,
+    version: '1.9.7',
+    ...BEFORE,
+    publishedReleases: [...BEFORE.publishedReleases]
+  })
   assert.deepEqual(problems, [])
-  assert.deepEqual(versionForRefProblems({ ref: MAIN_REF, version: '1.9.7', feedTags: [...BEFORE.feedTags, 'v1.9.8'], publishedReleases: BEFORE.publishedReleases }), [])
+  assert.deepEqual(
+    versionForRefProblems({
+      ref: MAIN_REF,
+      version: '1.9.7',
+      feedTags: [...BEFORE.feedTags, 'v1.9.8'],
+      publishedReleases: BEFORE.publishedReleases
+    }),
+    []
+  )
 })
 
 test('main accepts the PD-08 beta and rc sequence', () => {
@@ -36,7 +49,10 @@ test('main refuses other prerelease shapes', () => {
 test('1.9.8 is refused on every ref', () => {
   for (const ref of [MAIN_REF, HOTFIX_REF]) {
     const problems = versionForRefProblems({ ref, version: '1.9.8', ...AFTER })
-    assert.ok(problems.some((p) => p.includes('retired')), `${ref}: ${problems.join('|')}`)
+    assert.ok(
+      problems.some((p) => p.includes('retired')),
+      `${ref}: ${problems.join('|')}`
+    )
   }
 })
 
@@ -47,7 +63,10 @@ test('release/1.9.x accepts 1.9.7-hotfix.1 once v1.9.7 is published', () => {
 
 test('release/1.9.x refuses 1.9.7 as already promoted', () => {
   const problems = versionForRefProblems({ ref: HOTFIX_REF, version: '1.9.7', ...AFTER })
-  assert.ok(problems.some((p) => p.includes('already promoted')), problems.join('|'))
+  assert.ok(
+    problems.some((p) => p.includes('already promoted')),
+    problems.join('|')
+  )
 })
 
 test('release/1.9.x refuses versions outside the hotfix scheme', () => {
@@ -58,25 +77,44 @@ test('release/1.9.x refuses versions outside the hotfix scheme', () => {
 
 test('a hotfix before v1.9.7 is published is refused, and a draft v1.9.7 does not count', () => {
   const problems = versionForRefProblems({ ref: HOTFIX_REF, version: '1.9.7-hotfix.1', ...BEFORE })
-  assert.ok(problems.some((p) => p.includes('v1.9.7 is not a published feed release')), problems.join('|'))
+  assert.ok(
+    problems.some((p) => p.includes('v1.9.7 is not a published feed release')),
+    problems.join('|')
+  )
 })
 
 test('an existing tag is never reused, on either ref', () => {
-  const tags = { feedTags: [...AFTER.feedTags, 'v1.9.7-hotfix.1', 'v2.0.0-beta.1'], publishedReleases: [...AFTER.publishedReleases] }
-  assert.ok(versionForRefProblems({ ref: HOTFIX_REF, version: '1.9.7-hotfix.1', ...tags }).some((p) => p.includes('never reused')))
-  assert.ok(versionForRefProblems({ ref: MAIN_REF, version: '2.0.0-beta.1', ...tags }).some((p) => p.includes('never reused')))
+  const tags = {
+    feedTags: [...AFTER.feedTags, 'v1.9.7-hotfix.1', 'v2.0.0-beta.1'],
+    publishedReleases: [...AFTER.publishedReleases]
+  }
+  assert.ok(
+    versionForRefProblems({ ref: HOTFIX_REF, version: '1.9.7-hotfix.1', ...tags }).some((p) =>
+      p.includes('never reused')
+    )
+  )
+  assert.ok(
+    versionForRefProblems({ ref: MAIN_REF, version: '2.0.0-beta.1', ...tags }).some((p) => p.includes('never reused'))
+  )
   assert.ok(versionForRefProblems({ ref: MAIN_REF, version: '1.9.6', ...tags }).some((p) => p.includes('never reused')))
 })
 
 test('a release without a tag entry still blocks reuse of its version', () => {
-  const problems = versionForRefProblems({ ref: MAIN_REF, version: '1.9.6', feedTags: [], publishedReleases: ['v1.9.6'] })
+  const problems = versionForRefProblems({
+    ref: MAIN_REF,
+    version: '1.9.6',
+    feedTags: [],
+    publishedReleases: ['v1.9.6']
+  })
   assert.ok(problems.some((p) => p.includes('never reused')))
 })
 
 test('any other ref is refused with an error naming both allowed refs', () => {
   const problems = versionForRefProblems({ ref: 'refs/heads/feature/x', version: '1.9.7', ...AFTER })
   assert.equal(problems.length, 1)
-  assert.ok(problems[0].includes(MAIN_REF) && problems[0].includes(HOTFIX_REF) && problems[0].includes('refs/heads/feature/x'))
+  assert.ok(
+    problems[0].includes(MAIN_REF) && problems[0].includes(HOTFIX_REF) && problems[0].includes('refs/heads/feature/x')
+  )
 })
 
 function runCli({ ref, version, tags, releases, extra = [] }) {
@@ -183,7 +221,22 @@ test('the candidate CLI passes a legal hotfix and fails 1.9.7 on release/1.9.x a
 })
 
 test('the CLI fails on unreadable inputs unless report-only, and rejects a bad command', () => {
-  const missing = spawnSync(process.execPath, [MODULE_PATH, 'check', '--ref', MAIN_REF, '--package', '/nonexistent/package.json', '--tags', '/nonexistent/t', '--releases', '/nonexistent/r'], { encoding: 'utf8' })
+  const missing = spawnSync(
+    process.execPath,
+    [
+      MODULE_PATH,
+      'check',
+      '--ref',
+      MAIN_REF,
+      '--package',
+      '/nonexistent/package.json',
+      '--tags',
+      '/nonexistent/t',
+      '--releases',
+      '/nonexistent/r'
+    ],
+    { encoding: 'utf8' }
+  )
   assert.equal(missing.status, 1)
   assert.equal(spawnSync(process.execPath, [MODULE_PATH, 'bogus'], { encoding: 'utf8' }).status, 2)
 })

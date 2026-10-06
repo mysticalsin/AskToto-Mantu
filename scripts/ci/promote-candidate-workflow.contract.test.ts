@@ -3,9 +3,15 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const root = join(__dirname, '..', '..')
-const workflow = readFileSync(join(root, '.github', 'workflows', 'promote-candidate.yml'), 'utf8').replace(/\r\n/g, '\n')
+const workflow = readFileSync(join(root, '.github', 'workflows', 'promote-candidate.yml'), 'utf8').replace(
+  /\r\n/g,
+  '\n'
+)
 
-const steps = workflow.slice(workflow.indexOf('\n    steps:\n')).split(/^(?=      - )/m).slice(1)
+const steps = workflow
+  .slice(workflow.indexOf('\n    steps:\n'))
+  .split(/^(?=      - )/m)
+  .slice(1)
 const step = (needle: string): string => {
   const found = steps.find((s) => s.includes(needle))
   expect(found, `step not found: ${needle}`).toBeDefined()
@@ -14,7 +20,9 @@ const step = (needle: string): string => {
 
 describe('Promote candidate workflow: main and release/1.9.x candidates (M2-0500)', () => {
   it('still promotes only from a dispatch on refs/heads/main, in this repository', () => {
-    expect(workflow).toMatch(/^    if: github\.repository == 'mysticalsin\/AskToto-Mantu' && github\.ref == 'refs\/heads\/main'$/m)
+    expect(workflow).toMatch(
+      /^    if: github\.repository == 'mysticalsin\/AskToto-Mantu' && github\.ref == 'refs\/heads\/main'$/m
+    )
     expect(workflow.match(/github\.ref\b/g)).toHaveLength(1)
   })
 

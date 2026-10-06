@@ -51,12 +51,23 @@ const successfulDispatch = {
 describe('candidateRunProblems (the run guard)', () => {
   it('accepts a completed, successful workflow_dispatch run of qa-candidate.yml on main', () => {
     expect(candidateRunProblems(successfulDispatch, '4242')).toEqual([])
-    expect(candidateRunProblems({ ...successfulDispatch, path: '.github/workflows/qa-candidate.yml@refs/heads/main' }, 4242)).toEqual([])
+    expect(
+      candidateRunProblems({ ...successfulDispatch, path: '.github/workflows/qa-candidate.yml@refs/heads/main' }, 4242)
+    ).toEqual([])
   })
 
   it('accepts a completed, successful workflow_dispatch run of qa-candidate.yml on release/1.9.x', () => {
     expect(candidateRunProblems({ ...successfulDispatch, head_branch: 'release/1.9.x' }, '4242')).toEqual([])
-    expect(candidateRunProblems({ ...successfulDispatch, path: '.github/workflows/qa-candidate.yml@refs/heads/release/1.9.x', head_branch: 'release/1.9.x' }, 4242)).toEqual([])
+    expect(
+      candidateRunProblems(
+        {
+          ...successfulDispatch,
+          path: '.github/workflows/qa-candidate.yml@refs/heads/release/1.9.x',
+          head_branch: 'release/1.9.x'
+        },
+        4242
+      )
+    ).toEqual([])
   })
 
   it('refuses a pull-request self-test candidate', () => {
@@ -71,7 +82,9 @@ describe('candidateRunProblems (the run guard)', () => {
       'Run 4242 is .github/workflows/build.yml, not .github/workflows/qa-candidate.yml.'
     ])
     expect(candidateRunProblems({ ...successfulDispatch, head_branch: 'release' }, 4242)).toHaveLength(1)
-    expect(candidateRunProblems({ ...successfulDispatch, status: 'in_progress', conclusion: null }, 4242)).toHaveLength(2)
+    expect(candidateRunProblems({ ...successfulDispatch, status: 'in_progress', conclusion: null }, 4242)).toHaveLength(
+      2
+    )
     expect(candidateRunProblems({ ...successfulDispatch, conclusion: 'failure' }, 4242)).toEqual([
       'Run 4242 concluded failure, not success.'
     ])
@@ -122,13 +135,17 @@ describe('the scenario registry', () => {
     expect(resolveScenario({ scenario: 'ex-suite', sha256: { mac: MAC_SHA } })).toEqual({
       mac: { variant: 'mac', artifact: 'candidate-mac', sha256: MAC_SHA }
     })
-    expect(() => resolveScenario({ scenario: 'ex-suite', sha256: { mac: MAC_SHA, win: MAC_SHA } })).toThrow(/does not run on win/)
+    expect(() => resolveScenario({ scenario: 'ex-suite', sha256: { mac: MAC_SHA, win: MAC_SHA } })).toThrow(
+      /does not run on win/
+    )
     expect(outcomeForExit('ex-suite', 2)).toBe('PRECONDITION')
   })
 
   it('runs ex-suite --packaged on the installed app, relative to the checkout, with 3 launches, and only from a DMG', () => {
     const base = { scenario: 'ex-suite', platform: 'mac', sha256: MAC_SHA, outDir: 'candidate-scenario' }
-    expect(scenarioCommand({ ...base, installer: 'assets/Metis-1.0.0.dmg', app: '../../_temp/candidate-install/Metis.app' })).toEqual([
+    expect(
+      scenarioCommand({ ...base, installer: 'assets/Metis-1.0.0.dmg', app: '../../_temp/candidate-install/Metis.app' })
+    ).toEqual([
       'scripts/qa/ex-suite.mjs',
       '--packaged',
       '../../_temp/candidate-install/Metis.app',
@@ -136,11 +153,13 @@ describe('the scenario registry', () => {
       '--relaunches',
       '3'
     ])
-    expect(() => scenarioCommand({ ...base, installer: 'assets/Metis-1.0.0.zip', app: 'Metis.app' })).toThrow(/installs a \.dmg installer/)
-    expect(() => scenarioCommand({ ...base, installer: 'assets/Metis-1.0.0.dmg' })).toThrow(/needs the installed app/)
-    expect(() => scenarioCommand({ ...base, installer: 'assets/Metis-1.0.0.dmg', app: '/tmp/candidate-install/Metis.app' })).toThrow(
-      /repository-relative/
+    expect(() => scenarioCommand({ ...base, installer: 'assets/Metis-1.0.0.zip', app: 'Metis.app' })).toThrow(
+      /installs a \.dmg installer/
     )
+    expect(() => scenarioCommand({ ...base, installer: 'assets/Metis-1.0.0.dmg' })).toThrow(/needs the installed app/)
+    expect(() =>
+      scenarioCommand({ ...base, installer: 'assets/Metis-1.0.0.dmg', app: '/tmp/candidate-install/Metis.app' })
+    ).toThrow(/repository-relative/)
   })
 
   it('declares stall-sampler on macOS, installing promotable DMG bytes and using the 15 s stop', () => {
@@ -210,7 +229,13 @@ describe('the scenario registry', () => {
       '60'
     ])
     expect(() =>
-      scenarioCommand({ scenario: 'renderer-kill', platform: 'mac', installer: 'assets/Metis-1.0.0.zip', sha256: MAC_SHA, outDir: 'candidate-scenario' })
+      scenarioCommand({
+        scenario: 'renderer-kill',
+        platform: 'mac',
+        installer: 'assets/Metis-1.0.0.zip',
+        sha256: MAC_SHA,
+        outDir: 'candidate-scenario'
+      })
     ).toThrow(/installs a \.dmg installer/)
   })
 
@@ -293,20 +318,40 @@ describe('the scenario registry', () => {
   })
 
   it('requires the sha256 inputs a scenario needs and refuses any it does not use', () => {
-    expect(resolveScenario({ scenario: 'fault-fatal-relaunch', sha256: { mac: ` ${MAC_SHA.toUpperCase()}\n`, win: '' } })).toEqual({
-      mac: { variant: 'mac-qa-identity', artifact: 'candidate-mac-qa-identity', sha256: MAC_SHA, timeoutMinutes: 60, stepTimeoutMinutes: 40 }
+    expect(
+      resolveScenario({ scenario: 'fault-fatal-relaunch', sha256: { mac: ` ${MAC_SHA.toUpperCase()}\n`, win: '' } })
+    ).toEqual({
+      mac: {
+        variant: 'mac-qa-identity',
+        artifact: 'candidate-mac-qa-identity',
+        sha256: MAC_SHA,
+        timeoutMinutes: 60,
+        stepTimeoutMinutes: 40
+      }
     })
-    expect(() => resolveScenario({ scenario: 'fault-fatal-relaunch', sha256: { mac: '' } })).toThrow(/mac_sha256 is required/)
-    expect(() => resolveScenario({ scenario: 'fault-fatal-relaunch', sha256: { mac: 'v1.9.6' } })).toThrow(/mac_sha256 is required/)
+    expect(() => resolveScenario({ scenario: 'fault-fatal-relaunch', sha256: { mac: '' } })).toThrow(
+      /mac_sha256 is required/
+    )
+    expect(() => resolveScenario({ scenario: 'fault-fatal-relaunch', sha256: { mac: 'v1.9.6' } })).toThrow(
+      /mac_sha256 is required/
+    )
     expect(() => resolveScenario({ scenario: 'fault-fatal-relaunch', sha256: { mac: MAC_SHA, win: MAC_SHA } })).toThrow(
       /win_sha256 is set, but fault-fatal-relaunch does not run on win/
     )
     expect(resolveScenario({ scenario: 'stall-sampler', sha256: { mac: STALL_SHA, win: '' } })).toEqual({
       mac: { variant: 'mac', artifact: 'candidate-mac', sha256: STALL_SHA, timeoutMinutes: 60, stepTimeoutMinutes: 40 }
     })
-    expect(() => resolveScenario({ scenario: 'idle-soak', sha256: { mac: IDLE_SHA, win: '' } })).toThrow(/win_sha256 is required/)
+    expect(() => resolveScenario({ scenario: 'idle-soak', sha256: { mac: IDLE_SHA, win: '' } })).toThrow(
+      /win_sha256 is required/
+    )
     expect(resolveScenario({ scenario: 'idle-soak', sha256: { mac: IDLE_SHA, win: WIN_SHA } })).toEqual({
-      mac: { variant: 'mac', artifact: 'candidate-mac', sha256: IDLE_SHA, timeoutMinutes: 355, stepTimeoutMinutes: 340 },
+      mac: {
+        variant: 'mac',
+        artifact: 'candidate-mac',
+        sha256: IDLE_SHA,
+        timeoutMinutes: 355,
+        stepTimeoutMinutes: 340
+      },
       win: { variant: 'win', artifact: 'candidate-win', sha256: WIN_SHA, timeoutMinutes: 355, stepTimeoutMinutes: 340 }
     })
     expect(() => resolveScenario({ scenario: 'hk-m', sha256: { mac: MAC_SHA } })).toThrow(/Unknown scenario "hk-m"/)
@@ -335,8 +380,18 @@ describe('the scenario registry', () => {
     expect(scenario.exits).toEqual({ 0: 'PASS', 1: 'FAIL', 2: 'PRECONDITION' })
     expect(Object.keys(scenario.platforms)).toEqual(['mac', 'win'])
     const { mac, win } = scenario.platforms
-    expect(mac).toMatchObject({ variant: 'mac', artifact: 'candidate-mac', report: 'sidecar-boot-reaper.json', isolatedProfiles: true })
-    expect(win).toMatchObject({ variant: 'win', artifact: 'candidate-win', report: 'sidecar-boot-reaper.json', isolatedProfiles: true })
+    expect(mac).toMatchObject({
+      variant: 'mac',
+      artifact: 'candidate-mac',
+      report: 'sidecar-boot-reaper.json',
+      isolatedProfiles: true
+    })
+    expect(win).toMatchObject({
+      variant: 'win',
+      artifact: 'candidate-win',
+      report: 'sidecar-boot-reaper.json',
+      isolatedProfiles: true
+    })
     for (const target of [mac, win]) {
       expect(target.script).toBe('scripts/qa/sidecar-boot-reaper.mjs')
       expect(existsSync(join(root, target.script))).toBe(true)
@@ -348,8 +403,12 @@ describe('the scenario registry', () => {
   })
 
   it('requires both the DMG and the Setup sha256 for sidecar-boot-reaper and switches both jobs on', () => {
-    expect(() => resolveScenario({ scenario: 'sidecar-boot-reaper', sha256: { mac: MAC_SHA } })).toThrow(/win_sha256 is required/)
-    expect(() => resolveScenario({ scenario: 'sidecar-boot-reaper', sha256: { win: WIN_SHA } })).toThrow(/mac_sha256 is required/)
+    expect(() => resolveScenario({ scenario: 'sidecar-boot-reaper', sha256: { mac: MAC_SHA } })).toThrow(
+      /win_sha256 is required/
+    )
+    expect(() => resolveScenario({ scenario: 'sidecar-boot-reaper', sha256: { win: WIN_SHA } })).toThrow(
+      /mac_sha256 is required/
+    )
     const plan = resolveScenario({ scenario: 'sidecar-boot-reaper', sha256: { mac: MAC_SHA, win: WIN_SHA } })
     expect(plan).toEqual({
       mac: { variant: 'mac', artifact: 'candidate-mac', sha256: MAC_SHA, timeoutMinutes: 60, stepTimeoutMinutes: 40 },
@@ -363,19 +422,37 @@ describe('the scenario registry', () => {
 
   it('runs the reaper on the installed app with --require-real-llama on macOS only', () => {
     const base = { scenario: 'sidecar-boot-reaper', sha256: MAC_SHA, outDir: 'candidate-scenario' }
-    expect(scenarioCommand({ ...base, platform: 'mac', installer: 'assets/Metis-1.0.0.dmg', app: '../../_temp/candidate-install/Metis.app' })).toEqual([
+    expect(
+      scenarioCommand({
+        ...base,
+        platform: 'mac',
+        installer: 'assets/Metis-1.0.0.dmg',
+        app: '../../_temp/candidate-install/Metis.app'
+      })
+    ).toEqual([
       'scripts/qa/sidecar-boot-reaper.mjs',
       '../../_temp/candidate-install/Metis.app',
       'candidate-scenario/sidecar-boot-reaper.json',
       '--require-real-llama'
     ])
-    expect(scenarioCommand({ ...base, platform: 'win', installer: 'assets/Metis-Setup-1.0.0.exe', app: '../../_temp/candidate-install/Metis.exe' })).toEqual([
+    expect(
+      scenarioCommand({
+        ...base,
+        platform: 'win',
+        installer: 'assets/Metis-Setup-1.0.0.exe',
+        app: '../../_temp/candidate-install/Metis.exe'
+      })
+    ).toEqual([
       'scripts/qa/sidecar-boot-reaper.mjs',
       '../../_temp/candidate-install/Metis.exe',
       'candidate-scenario/sidecar-boot-reaper.json'
     ])
-    expect(() => scenarioCommand({ ...base, platform: 'mac', installer: 'assets/Metis-1.0.0.dmg' })).toThrow(/pass the installed app with --app/)
-    expect(() => scenarioCommand({ ...base, platform: 'win', installer: 'a.exe', app: 'D:\\a\\_temp\\Metis.exe' })).toThrow(/repository-relative/)
+    expect(() => scenarioCommand({ ...base, platform: 'mac', installer: 'assets/Metis-1.0.0.dmg' })).toThrow(
+      /pass the installed app with --app/
+    )
+    expect(() =>
+      scenarioCommand({ ...base, platform: 'win', installer: 'a.exe', app: 'D:\\a\\_temp\\Metis.exe' })
+    ).toThrow(/repository-relative/)
     expect(outcomeForExit('sidecar-boot-reaper', 2)).toBe('PRECONDITION')
     expect(outcomeForExit('sidecar-boot-reaper', 0)).toBe('PASS')
   })
@@ -388,8 +465,19 @@ describe('the scenario registry', () => {
     expect(Object.keys(scenario.platforms)).toEqual(['mac', 'win'])
     expect(scenario.reportAssessment).toBe('packaged-smoke')
     const { mac, win } = scenario.platforms
-    expect(mac).toMatchObject({ variant: 'mac', artifact: 'candidate-mac', installerKind: 'mac-dmg', report: 'packaged-smoke.json', isolatedProfiles: true })
-    expect(win).toMatchObject({ variant: 'win', artifact: 'candidate-win', report: 'packaged-smoke.json', isolatedProfiles: true })
+    expect(mac).toMatchObject({
+      variant: 'mac',
+      artifact: 'candidate-mac',
+      installerKind: 'mac-dmg',
+      report: 'packaged-smoke.json',
+      isolatedProfiles: true
+    })
+    expect(win).toMatchObject({
+      variant: 'win',
+      artifact: 'candidate-win',
+      report: 'packaged-smoke.json',
+      isolatedProfiles: true
+    })
     for (const target of [mac, win]) {
       expect(target.script).toBe('scripts/qa/packaged-smoke.mjs')
       expect(existsSync(join(root, target.script))).toBe(true)
@@ -404,17 +492,33 @@ describe('the scenario registry', () => {
 
   it('runs packaged-lifecycle through packaged-smoke on the installed app', () => {
     const base = { scenario: 'packaged-lifecycle', sha256: MAC_SHA, outDir: 'candidate-scenario' }
-    expect(scenarioCommand({ ...base, platform: 'mac', installer: 'assets/Metis-1.0.0.dmg', app: '../../_temp/candidate-install/Metis.app' })).toEqual([
+    expect(
+      scenarioCommand({
+        ...base,
+        platform: 'mac',
+        installer: 'assets/Metis-1.0.0.dmg',
+        app: '../../_temp/candidate-install/Metis.app'
+      })
+    ).toEqual([
       'scripts/qa/packaged-smoke.mjs',
       '../../_temp/candidate-install/Metis.app',
       'candidate-scenario/packaged-smoke.json'
     ])
-    expect(scenarioCommand({ ...base, platform: 'win', installer: 'assets/Metis-Setup-1.0.0.exe', app: '../../_temp/candidate-install/Metis.exe' })).toEqual([
+    expect(
+      scenarioCommand({
+        ...base,
+        platform: 'win',
+        installer: 'assets/Metis-Setup-1.0.0.exe',
+        app: '../../_temp/candidate-install/Metis.exe'
+      })
+    ).toEqual([
       'scripts/qa/packaged-smoke.mjs',
       '../../_temp/candidate-install/Metis.exe',
       'candidate-scenario/packaged-smoke.json'
     ])
-    expect(() => scenarioCommand({ ...base, platform: 'mac', installer: 'assets/Metis-1.0.0.dmg' })).toThrow(/pass the installed app with --app/)
+    expect(() => scenarioCommand({ ...base, platform: 'mac', installer: 'assets/Metis-1.0.0.dmg' })).toThrow(
+      /pass the installed app with --app/
+    )
   })
 })
 
@@ -432,7 +536,9 @@ describe('System Events GUI scripting grants (grant-gui)', () => {
   })
 
   it("reads the executable path from lsof's first name record", () => {
-    expect(executableFromLsof('p41\nftxt\nn/opt/runner/bin/Runner.Worker\nftxt\nn/usr/lib/dyld\n')).toBe('/opt/runner/bin/Runner.Worker')
+    expect(executableFromLsof('p41\nftxt\nn/opt/runner/bin/Runner.Worker\nftxt\nn/usr/lib/dyld\n')).toBe(
+      '/opt/runner/bin/Runner.Worker'
+    )
     expect(executableFromLsof('p41\n')).toBeNull()
   })
 
@@ -446,7 +552,8 @@ describe('System Events GUI scripting grants (grant-gui)', () => {
       expect(line).toMatch(/^INSERT OR REPLACE INTO access \(service, client, client_type, auth_value, auth_reason, /)
       expect(line).toMatch(/VALUES \('kTCCServiceAccessibility', '\/.*', 1, 2, 4, 1, 0, 'UNUSED', 0, /)
     }
-    for (const line of user) expect(line).toMatch(/VALUES \('kTCCServiceAppleEvents', '\/.*', 1, 2, 3, 1, 0, 'com\.apple\.systemevents', 0, /)
+    for (const line of user)
+      expect(line).toMatch(/VALUES \('kTCCServiceAppleEvents', '\/.*', 1, 2, 3, 1, 0, 'com\.apple\.systemevents', 0, /)
     expect(grants.system).toContain("'/opt/it''s/agent'")
     expect(TCC_DATABASES.system).toBe('/Library/Application Support/com.apple.TCC/TCC.db')
     expect(TCC_DATABASES.user.startsWith('/')).toBe(false)
@@ -487,15 +594,21 @@ describe('installer selection through candidate-installer', () => {
     writeFileSync(join(dir, 'Metis-1.0.0.zip'), 'idle soak zip bytes')
     const plan = resolveScenario({ scenario: 'idle-soak', sha256: { mac: IDLE_SHA, win: WIN_SHA } })
     expect(await selectCandidateInstaller(dir, plan.mac.sha256, 'mac-dmg')).toBe(join(dir, 'Metis-1.0.0.dmg'))
-    await expect(selectCandidateInstaller(dir, sha('idle soak zip bytes'), 'mac-dmg')).rejects.toThrow(/No installer matches/)
+    await expect(selectCandidateInstaller(dir, sha('idle soak zip bytes'), 'mac-dmg')).rejects.toThrow(
+      /No installer matches/
+    )
   })
 
   it('selects the Setup, never the Portable, for the idle-soak win leg', async () => {
     writeFileSync(join(dir, 'Metis-Setup-1.0.0.exe'), 'setup bytes')
     writeFileSync(join(dir, 'Metis-Portable-1.0.0.exe'), 'portable bytes')
     const plan = resolveScenario({ scenario: 'idle-soak', sha256: { mac: IDLE_SHA, win: WIN_SHA } })
-    expect(await selectCandidateInstaller(dir, plan.win.sha256, installerKindForScenario('idle-soak', 'win'))).toBe(join(dir, 'Metis-Setup-1.0.0.exe'))
-    await expect(selectCandidateInstaller(dir, sha('portable bytes'), installerKindForScenario('idle-soak', 'win'))).rejects.toThrow(/No installer matches/)
+    expect(await selectCandidateInstaller(dir, plan.win.sha256, installerKindForScenario('idle-soak', 'win'))).toBe(
+      join(dir, 'Metis-Setup-1.0.0.exe')
+    )
+    await expect(
+      selectCandidateInstaller(dir, sha('portable bytes'), installerKindForScenario('idle-soak', 'win'))
+    ).rejects.toThrow(/No installer matches/)
   })
 
   it('selects the Setup, never the Portable, for the sidecar-boot-reaper win leg', async () => {
@@ -509,12 +622,12 @@ describe('installer selection through candidate-installer', () => {
   it('selects the DMG, never the ZIP, for the packaged-lifecycle mac leg', async () => {
     writeFileSync(join(dir, 'Metis-1.0.0.dmg'), 'dmg bytes')
     writeFileSync(join(dir, 'Metis-1.0.0.zip'), 'zip bytes')
-    expect(await selectCandidateInstaller(dir, sha('dmg bytes'), installerKindForScenario('packaged-lifecycle', 'mac'))).toBe(
-      join(dir, 'Metis-1.0.0.dmg')
-    )
-    await expect(selectCandidateInstaller(dir, sha('zip bytes'), installerKindForScenario('packaged-lifecycle', 'mac'))).rejects.toThrow(
-      /No installer matches/
-    )
+    expect(
+      await selectCandidateInstaller(dir, sha('dmg bytes'), installerKindForScenario('packaged-lifecycle', 'mac'))
+    ).toBe(join(dir, 'Metis-1.0.0.dmg'))
+    await expect(
+      selectCandidateInstaller(dir, sha('zip bytes'), installerKindForScenario('packaged-lifecycle', 'mac'))
+    ).rejects.toThrow(/No installer matches/)
   })
 })
 
@@ -559,13 +672,14 @@ describe('the fresh profile', () => {
         layout: 'hide',
         localLlm: { enabled: true, modelId: 'qwen3.5-0.8b' }
       })
-      expect(() => prepareProfile({ scenario: 'idle-soak', platform: 'win', appDataDir: appData })).toThrow(/idle-soak profile directory already exists/)
+      expect(() => prepareProfile({ scenario: 'idle-soak', platform: 'win', appDataDir: appData })).toThrow(
+        /idle-soak profile directory already exists/
+      )
     } finally {
       process.chdir(cwd)
       rmSync(scratch, { recursive: true, force: true })
     }
   })
-
 
   it('refuses a QA userData directory that already exists', () => {
     mkdirSync(join(appData, 'asktoto-qa'))
@@ -599,7 +713,12 @@ describe('the fresh profile', () => {
 
 describe('packaged-smoke row verdict extraction', () => {
   const passRows = (ids: readonly string[]) =>
-    ids.map((id) => ({ id, status: 'PASS' as string, evidence: { observed: true } as { observed: boolean } | null, unblock: null as string | null }))
+    ids.map((id) => ({
+      id,
+      status: 'PASS' as string,
+      evidence: { observed: true } as { observed: boolean } | null,
+      unblock: null as string | null
+    }))
   const macPassReport = () => ({
     schema: 1,
     result: 'pass',
@@ -646,12 +765,19 @@ describe('packaged-smoke row verdict extraction', () => {
   it('fails the lane assessment when a required RV row is missing', () => {
     const report = macPassReport()
     report.rv = report.rv.filter((row) => row.id !== 'RV-2-macos-open-new-instance')
-    expect(assessPackagedSmokeReport(report, 'mac').problems).toContain('RV-2-macos-open-new-instance is missing from packaged-smoke rv rows.')
+    expect(assessPackagedSmokeReport(report, 'mac').problems).toContain(
+      'RV-2-macos-open-new-instance is missing from packaged-smoke rv rows.'
+    )
   })
 
   it('keeps BLOCKED_EXTERNAL non-RV rows as not-covered residuals without failing RV coverage', () => {
     const report = macPassReport()
-    report.rightEdgeHide.push({ id: 'RE-HIDE-3-meeting-hide', status: 'BLOCKED_EXTERNAL', evidence: null, unblock: 'Run with a permitted microphone.' })
+    report.rightEdgeHide.push({
+      id: 'RE-HIDE-3-meeting-hide',
+      status: 'BLOCKED_EXTERNAL',
+      evidence: null,
+      unblock: 'Run with a permitted microphone.'
+    })
     expect(assessPackagedSmokeReport(report, 'mac')).toMatchObject({
       problems: [],
       notCovered: [{ row: 'RE-HIDE-3-meeting-hide', reason: 'Run with a permitted microphone.' }]
@@ -660,11 +786,19 @@ describe('packaged-smoke row verdict extraction', () => {
 
   it('fails the lane assessment when an extra RV row is BLOCKED_EXTERNAL', () => {
     const report = macPassReport()
-    report.rv.push({ id: 'RV-5-boot', status: 'BLOCKED_EXTERNAL', evidence: null, unblock: 'Dispatch the boot proof on hosted runners.' })
+    report.rv.push({
+      id: 'RV-5-boot',
+      status: 'BLOCKED_EXTERNAL',
+      evidence: null,
+      unblock: 'Dispatch the boot proof on hosted runners.'
+    })
     const assessment = assessPackagedSmokeReport(report, 'mac')
     expect(assessment.problems).toContain('RV-5-boot is BLOCKED_EXTERNAL, not PASS.')
     expect(assessment.problems).not.toEqual([])
-    expect(assessment.notCovered).toContainEqual({ row: 'RV-5-boot', reason: 'Dispatch the boot proof on hosted runners.' })
+    expect(assessment.notCovered).toContainEqual({
+      row: 'RV-5-boot',
+      reason: 'Dispatch the boot proof on hosted runners.'
+    })
   })
 })
 
@@ -696,13 +830,23 @@ describe('contentProblems (the content-free gate)', () => {
   })
 
   it('flags the runner account name where it names an identity', () => {
-    for (const text of ['/private/var/qa-account/x', '~qa-account', 'qa-account@host', '{"user":"qa-account"}', 'D:\\qa-account\\x']) {
+    for (const text of [
+      '/private/var/qa-account/x',
+      '~qa-account',
+      'qa-account@host',
+      '{"user":"qa-account"}',
+      'D:\\qa-account\\x'
+    ]) {
       expect(contentProblems(text, { account }), text).toEqual(['runner account name'])
     }
   })
 
   it('passes content-free text, including the hosted-runner kind when the account is runner', () => {
-    expect(contentProblems('{"environment":{"kind":"hosted-runner"},"runner_image":{"label":"macos-latest"}}', { account: 'runner' })).toEqual([])
+    expect(
+      contentProblems('{"environment":{"kind":"hosted-runner"},"runner_image":{"label":"macos-latest"}}', {
+        account: 'runner'
+      })
+    ).toEqual([])
     expect(contentProblems('grant Accessibility to the runner (M2-0007)', { account: 'runner' })).toEqual([])
     expect(contentProblems('{"phases":[{"survivors":[],"strays":[]}],"result":"PASS"}', { account })).toEqual([])
   })
@@ -712,7 +856,10 @@ describe('contentProblems (the content-free gate)', () => {
     try {
       writeFileSync(join(dir, 'lane.json'), '{"outcome":"PASS"}')
       writeFileSync(join(dir, 'report.json'), '{"path":"/Users/someone/x","by":"someone@example.org"}')
-      expect(scanUploadDir(dir, { account })).toEqual(['report.json: macOS user home path', 'report.json: email address'])
+      expect(scanUploadDir(dir, { account })).toEqual([
+        'report.json: macOS user home path',
+        'report.json: email address'
+      ])
       expect(existsSync(join(dir, 'report.json'))).toBe(false)
       expect(existsSync(join(dir, 'lane.json'))).toBe(true)
       expect(scanUploadDir(join(dir, 'missing'), { account })).toEqual([])
@@ -757,10 +904,17 @@ describe('lane.json', () => {
       '--out',
       'candidate-scenario/fault-fatal-relaunch.json'
     ])
-    const absolute = { scenario: 'fault-fatal-relaunch', platform: 'mac', sha256: MAC_SHA, outDir: 'candidate-scenario' }
+    const absolute = {
+      scenario: 'fault-fatal-relaunch',
+      platform: 'mac',
+      sha256: MAC_SHA,
+      outDir: 'candidate-scenario'
+    }
     expect(() => scenarioCommand({ ...absolute, installer: '/tmp/Metis-QA.zip' })).toThrow(/repository-relative/)
     expect(() => scenarioCommand({ ...absolute, installer: 'C:\\temp\\Metis-QA.zip' })).toThrow(/repository-relative/)
-    expect(() => scenarioCommand({ ...absolute, platform: 'win', installer: 'assets/x.exe' })).toThrow(/does not run on win/)
+    expect(() => scenarioCommand({ ...absolute, platform: 'win', installer: 'assets/x.exe' })).toThrow(
+      /does not run on win/
+    )
   })
 
   it('runs the stall sampler proof against the installed app with a 15 s stop', () => {
@@ -981,7 +1135,11 @@ describe('lane.json', () => {
         hostFloorOverride: true,
         hostMemory: { totalBytes: 7_516_192_768 },
         memory: { judgedMetric: 'physFootprintBytes', workingSetReported: false, workingSetJudged: false },
-        modelState: { llamaServerRan: false, sidecarSupervisorRan: false, note: 'llama-server never ran during the leg; the growth rule was still judged' }
+        modelState: {
+          llamaServerRan: false,
+          sidecarSupervisorRan: false,
+          note: 'llama-server never ran during the leg; the growth rule was still judged'
+        }
       }
     })
     expect(lane).toMatchObject({
@@ -1029,7 +1187,11 @@ describe('lane.json', () => {
         rule: { id: 'IDLE-GROWTH-1', rulesSha256: 'b'.repeat(64) },
         hoursMeasured: 5.49,
         parkedCoverage: 0.97,
-        displayAwake: { recorded: true, command: 'SetThreadExecutionState ES_CONTINUOUS|ES_SYSTEM_REQUIRED|ES_DISPLAY_REQUIRED', pid: 456 },
+        displayAwake: {
+          recorded: true,
+          command: 'SetThreadExecutionState ES_CONTINUOUS|ES_SYSTEM_REQUIRED|ES_DISPLAY_REQUIRED',
+          pid: 456
+        },
         hostFloorOverride: true,
         hostMemory: { totalBytes: 7_516_192_768 },
         memory: { judgedMetric: 'privateBytes', workingSetReported: true, workingSetJudged: false },
@@ -1047,7 +1209,9 @@ describe('lane.json', () => {
       outcome: 'PASS',
       memory: { judgedMetric: 'privateBytes', workingSetReported: true, workingSetJudged: false }
     })
-    expect(lane.command).toBe('node scripts/qa/soak/idle-soak.mjs --app candidate-install/Metis.exe --profile candidate-scenario/profile --hours 5.5 --out candidate-scenario')
+    expect(lane.command).toBe(
+      'node scripts/qa/soak/idle-soak.mjs --app candidate-install/Metis.exe --profile candidate-scenario/profile --hours 5.5 --out candidate-scenario'
+    )
     expect(contentProblems(JSON.stringify(lane), { account: 'runneradmin' })).toEqual([])
   })
 
@@ -1097,7 +1261,9 @@ describe('lane.json', () => {
         row_verdicts: {
           rv: [{ id: 'RV-2-macos-open-new-instance', status: 'FAIL' }],
           hist: [{ id: 'HIST-clean-bar-open', status: 'PASS' }],
-          re_hide: [{ id: 'RE-HIDE-3-meeting-hide', status: 'BLOCKED_EXTERNAL', unblock: 'Run with a permitted microphone.' }]
+          re_hide: [
+            { id: 'RE-HIDE-3-meeting-hide', status: 'BLOCKED_EXTERNAL', unblock: 'Run with a permitted microphone.' }
+          ]
         },
         notCovered: [{ row: 'RE-HIDE-3-meeting-hide', reason: 'Run with a permitted microphone.' }]
       }
@@ -1114,7 +1280,9 @@ describe('lane.json', () => {
       row_verdicts: {
         rv: [{ id: 'RV-2-macos-open-new-instance', status: 'FAIL' }],
         hist: [{ id: 'HIST-clean-bar-open', status: 'PASS' }],
-        re_hide: [{ id: 'RE-HIDE-3-meeting-hide', status: 'BLOCKED_EXTERNAL', unblock: 'Run with a permitted microphone.' }]
+        re_hide: [
+          { id: 'RE-HIDE-3-meeting-hide', status: 'BLOCKED_EXTERNAL', unblock: 'Run with a permitted microphone.' }
+        ]
       },
       not_covered: [{ row: 'RE-HIDE-3-meeting-hide', reason: 'Run with a permitted microphone.' }]
     })
@@ -1192,19 +1360,32 @@ describe('candidate-scenarios.mjs run', () => {
       [
         'scripts/qa/candidate-scenarios.mjs',
         'run',
-        '--scenario', 'fault-fatal-relaunch',
-        '--platform', 'mac',
-        '--installer', `${scratch}/assets/Metis-QA-1.0.0.zip`.replaceAll('\\', '/'),
-        '--sha256', sha('other bytes'),
-        '--provenance', join(scratch, 'provenance.json'),
-        '--candidate-run', '4242',
-        '--out', outDir
+        '--scenario',
+        'fault-fatal-relaunch',
+        '--platform',
+        'mac',
+        '--installer',
+        `${scratch}/assets/Metis-QA-1.0.0.zip`.replaceAll('\\', '/'),
+        '--sha256',
+        sha('other bytes'),
+        '--provenance',
+        join(scratch, 'provenance.json'),
+        '--candidate-run',
+        '4242',
+        '--out',
+        outDir
       ],
       { cwd: root, encoding: 'utf8', env: { ...process.env, GITHUB_STEP_SUMMARY: '', GITHUB_RUN_ID: '5151' } }
     )
     expect(child.status).toBe(1)
     const lane = JSON.parse(readFileSync(join(root, outDir, 'lane.json'), 'utf8'))
-    expect(lane).toMatchObject({ exit_code: 2, outcome: 'PRECONDITION', build_run_id: 4242, ci_run_id: 5151, report: null })
+    expect(lane).toMatchObject({
+      exit_code: 2,
+      outcome: 'PRECONDITION',
+      build_run_id: 4242,
+      ci_run_id: 5151,
+      report: null
+    })
     expect(lane.detail).toMatch(/^\[fault-fatal-relaunch\] (This proof runs on macOS only\.|Zip sha256 mismatch)/)
     expect(child.stdout).toContain('::warning title=fault-fatal-relaunch PRECONDITION (not PASS)::')
   })
@@ -1220,25 +1401,51 @@ describe('candidate-scenarios.mjs run', () => {
       [
         'scripts/qa/candidate-scenarios.mjs',
         'run',
-        '--scenario', 'ex-suite',
-        '--platform', 'mac',
-        '--installer', `${scratch}/assets/Metis-1.0.0.dmg`.replaceAll('\\', '/'),
-        '--sha256', MAC_SHA,
-        '--provenance', join(scratch, 'provenance.json'),
-        '--candidate-run', '4242',
-        '--out', outDir,
-        '--app', join(root, scratch, 'install', 'Metis.app')
+        '--scenario',
+        'ex-suite',
+        '--platform',
+        'mac',
+        '--installer',
+        `${scratch}/assets/Metis-1.0.0.dmg`.replaceAll('\\', '/'),
+        '--sha256',
+        MAC_SHA,
+        '--provenance',
+        join(scratch, 'provenance.json'),
+        '--candidate-run',
+        '4242',
+        '--out',
+        outDir,
+        '--app',
+        join(root, scratch, 'install', 'Metis.app')
       ],
-      { cwd: root, encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: 'true', GITHUB_STEP_SUMMARY: '', GITHUB_RUN_ID: '5151' } }
+      {
+        cwd: root,
+        encoding: 'utf8',
+        env: { ...process.env, GITHUB_ACTIONS: 'true', GITHUB_STEP_SUMMARY: '', GITHUB_RUN_ID: '5151' }
+      }
     )
     expect(child.status).toBe(1)
     const lane = JSON.parse(readFileSync(join(root, outDir, 'lane.json'), 'utf8'))
-    expect(lane).toMatchObject({ scenario: 'ex-suite', ticket: 'M2-0033', variant: 'mac', exit_code: 2, outcome: 'PRECONDITION', report: 'ex-suite.json' })
+    expect(lane).toMatchObject({
+      scenario: 'ex-suite',
+      ticket: 'M2-0033',
+      variant: 'mac',
+      exit_code: 2,
+      outcome: 'PRECONDITION',
+      report: 'ex-suite.json'
+    })
     expect(lane.command).toBe(
       `node scripts/qa/ex-suite.mjs --packaged ${scratch.replaceAll('\\', '/')}/install/Metis.app ${outDir}/ex-suite.json --relaunches 3`
     )
-    expect(lane.detail).toMatch(/^\[ex-suite\] PRECONDITION: (The packaged EX suite runs on macOS only\.|The installed app is not a \.app bundle\.)/)
+    expect(lane.detail).toMatch(
+      /^\[ex-suite\] PRECONDITION: (The packaged EX suite runs on macOS only\.|The installed app is not a \.app bundle\.)/
+    )
     const report = JSON.parse(readFileSync(join(root, outDir, 'ex-suite.json'), 'utf8'))
-    expect(report).toMatchObject({ ticket: 'M2-0033', result: 'PRECONDITION', exitCode: 2, control: { status: 'BLOCKED_EXTERNAL' } })
+    expect(report).toMatchObject({
+      ticket: 'M2-0033',
+      result: 'PRECONDITION',
+      exitCode: 2,
+      control: { status: 'BLOCKED_EXTERNAL' }
+    })
   })
 })

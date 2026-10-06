@@ -41,7 +41,9 @@ export function versionForRefProblems({ ref, version, feedTags, publishedRelease
     }
   } else {
     if (version === PROMOTED_BASE) {
-      problems.push(`version ${PROMOTED_BASE} is already promoted: ${HOTFIX_REF} builds hotfixes as ${PROMOTED_BASE}-hotfix.N.`)
+      problems.push(
+        `version ${PROMOTED_BASE} is already promoted: ${HOTFIX_REF} builds hotfixes as ${PROMOTED_BASE}-hotfix.N.`
+      )
     } else if (!HOTFIX_VERSION.test(version)) {
       problems.push(`version ${version} on ${HOTFIX_REF} must be ${PROMOTED_BASE}-hotfix.N with N >= 1.`)
     }
@@ -63,12 +65,18 @@ export function versionForRefProblems({ ref, version, feedTags, publishedRelease
 export function candidateBranchProblems({ branch, version, feedTags, publishedReleases }) {
   const ref = `refs/heads/${branch}`
   if (ref === MAIN_REF) return []
-  if (ref !== HOTFIX_REF) return [`candidate branch ${branch} may not be promoted: only main and ${HOTFIX_REF.slice('refs/heads/'.length)} may.`]
+  if (ref !== HOTFIX_REF)
+    return [
+      `candidate branch ${branch} may not be promoted: only main and ${HOTFIX_REF.slice('refs/heads/'.length)} may.`
+    ]
   return versionForRefProblems({ ref, version, feedTags, publishedReleases })
 }
 
 function lines(path) {
-  return readFileSync(path, 'utf8').split('\n').map((line) => line.trim()).filter(Boolean)
+  return readFileSync(path, 'utf8')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
 }
 
 function flagValue(args, name) {
@@ -98,7 +106,10 @@ function main(argv) {
   try {
     const { version } = JSON.parse(readFileSync(packagePath, 'utf8'))
     const input = { version, feedTags: lines(tagsPath), publishedReleases: lines(releasesPath) }
-    problems = command === 'check' ? versionForRefProblems({ ref, ...input }) : candidateBranchProblems({ branch: ref, ...input })
+    problems =
+      command === 'check'
+        ? versionForRefProblems({ ref, ...input })
+        : candidateBranchProblems({ branch: ref, ...input })
   } catch (error) {
     problems = [`could not read the check's inputs: ${error.message}`]
   }

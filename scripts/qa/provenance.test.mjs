@@ -112,11 +112,18 @@ function passEvidenceFor(provenance, assets) {
   return assets.map((asset) => passEvidenceLine(provenance, asset.sha256)).join('')
 }
 
-test('stage moves exactly the variant\'s installers and records size and sha256', async () => {
+test("stage moves exactly the variant's installers and records size and sha256", async () => {
   const { root, releaseDir } = fixture()
   try {
     const outDir = join(root, 'out')
-    const record = await stageBuild({ variant: 'mac', repoRoot: root, releaseDir, outDir, env: env(), nodeVersion: NODE_VERSION })
+    const record = await stageBuild({
+      variant: 'mac',
+      repoRoot: root,
+      releaseDir,
+      outDir,
+      env: env(),
+      nodeVersion: NODE_VERSION
+    })
     for (const name of VARIANTS.mac.assets(VERSION)) {
       const staged = join(outDir, 'assets', name)
       assert.ok(existsSync(staged), `${name} was not staged`)
@@ -150,7 +157,10 @@ test('a D-34 hotfix version stages the same asset names under the hotfix version
     for (const name of VARIANTS.mac.assets(hotfix)) writeFileSync(join(releaseDir, name), `content of ${name}\n`)
     const outDir = join(root, 'candidate')
     await stageBuild({ variant: 'mac', repoRoot: root, releaseDir, outDir, env: env(), nodeVersion: NODE_VERSION })
-    assert.deepEqual(readdirSync(join(outDir, 'assets')).sort(), ['Metis-1.9.7-hotfix.1.dmg', 'Metis-1.9.7-hotfix.1.zip'])
+    assert.deepEqual(readdirSync(join(outDir, 'assets')).sort(), [
+      'Metis-1.9.7-hotfix.1.dmg',
+      'Metis-1.9.7-hotfix.1.zip'
+    ])
   } finally {
     cleanup(root)
   }
@@ -161,12 +171,27 @@ test('stage records the runner image, Node, Electron, electron-builder and per-f
   try {
     const outDir = join(root, 'out')
     const e = env()
-    const record = await stageBuild({ variant: 'mac-qa-identity', repoRoot: root, releaseDir, outDir, env: e, nodeVersion: NODE_VERSION })
-    assert.deepEqual(record.runner, { os: e.RUNNER_OS, arch: e.RUNNER_ARCH, image: e.ImageOS, image_version: e.ImageVersion })
+    const record = await stageBuild({
+      variant: 'mac-qa-identity',
+      repoRoot: root,
+      releaseDir,
+      outDir,
+      env: e,
+      nodeVersion: NODE_VERSION
+    })
+    assert.deepEqual(record.runner, {
+      os: e.RUNNER_OS,
+      arch: e.RUNNER_ARCH,
+      image: e.ImageOS,
+      image_version: e.ImageVersion
+    })
     assert.equal(record.node, NODE_VERSION)
     assert.equal(record.electron, '43.6.0')
     assert.equal(record.electron_builder, '26.15.3')
-    assert.deepEqual(record.builder_config.map((c) => c.path), VARIANTS['mac-qa-identity'].configs)
+    assert.deepEqual(
+      record.builder_config.map((c) => c.path),
+      VARIANTS['mac-qa-identity'].configs
+    )
     for (const config of record.builder_config) {
       assert.equal(config.sha256, sha256(readFileSync(join(root, config.path))))
     }
@@ -218,7 +243,14 @@ test('stage refuses a build without the runner image', async () => {
   try {
     const outDir = join(root, 'out')
     await assert.rejects(
-      stageBuild({ variant: 'win', repoRoot: root, releaseDir, outDir, env: env({ ImageOS: '' }), nodeVersion: NODE_VERSION }),
+      stageBuild({
+        variant: 'win',
+        repoRoot: root,
+        releaseDir,
+        outDir,
+        env: env({ ImageOS: '' }),
+        nodeVersion: NODE_VERSION
+      }),
       (error) => error.message.includes('ImageOS')
     )
     assert.equal(existsSync(outDir), false)
@@ -297,7 +329,10 @@ test('assemble binds every build to one commit and run and lists every asset in 
     assert.equal(provenance.version, VERSION)
     assert.equal(provenance.run.id, Number(e.GITHUB_RUN_ID))
     assert.equal(provenance.run.url, `${e.GITHUB_SERVER_URL}/${e.GITHUB_REPOSITORY}/actions/runs/${e.GITHUB_RUN_ID}`)
-    assert.deepEqual(provenance.builds.map((b) => b.variant), ['mac', 'mac-qa-identity', 'win'])
+    assert.deepEqual(
+      provenance.builds.map((b) => b.variant),
+      ['mac', 'mac-qa-identity', 'win']
+    )
     for (const build of provenance.builds) {
       assert.equal(Object.hasOwn(build, 'commit'), false)
       assert.equal(Object.hasOwn(build, 'version'), false)
@@ -307,7 +342,10 @@ test('assemble binds every build to one commit and run and lists every asset in 
     const lines = sums.split('\n').filter(Boolean)
     assert.equal(lines.length, allAssets.length)
     const sortedNames = [...allAssets].sort((a, b) => a.name.localeCompare(b.name)).map((a) => a.name)
-    assert.deepEqual(lines.map((l) => l.split('  ')[1]), sortedNames)
+    assert.deepEqual(
+      lines.map((l) => l.split('  ')[1]),
+      sortedNames
+    )
     for (const line of lines) assert.match(line, /^[0-9a-f]{64}  \S+$/)
   } finally {
     cleanup(root)
@@ -319,20 +357,32 @@ test('assemble refuses a missing or duplicated variant, a foreign commit and mis
   try {
     const { records, env: e } = await stageAll(root, releaseDir)
 
-    assert.throws(() => assembleProvenance(records.slice(1), e), (error) => error.message.includes('missing variant: mac'))
-    assert.throws(() => assembleProvenance([...records, records[0]], e), (error) => error.message.includes('duplicate variant: mac'))
+    assert.throws(
+      () => assembleProvenance(records.slice(1), e),
+      (error) => error.message.includes('missing variant: mac')
+    )
+    assert.throws(
+      () => assembleProvenance([...records, records[0]], e),
+      (error) => error.message.includes('duplicate variant: mac')
+    )
 
     const foreignCommit = records.map((r, i) => (i === 0 ? { ...r, commit: 'b'.repeat(40) } : r))
-    assert.throws(() => assembleProvenance(foreignCommit, e), (error) => error.message.includes('commit'))
+    assert.throws(
+      () => assembleProvenance(foreignCommit, e),
+      (error) => error.message.includes('commit')
+    )
 
     const mismatchedVersion = records.map((r, i) => (i === 0 ? { ...r, version: '9.9.9' } : r))
-    assert.throws(() => assembleProvenance(mismatchedVersion, e), (error) => error.message.includes('version'))
+    assert.throws(
+      () => assembleProvenance(mismatchedVersion, e),
+      (error) => error.message.includes('version')
+    )
   } finally {
     cleanup(root)
   }
 })
 
-test('assemble refuses builds that disagree on a shared config path\'s sha256', async () => {
+test("assemble refuses builds that disagree on a shared config path's sha256", async () => {
   const { root, releaseDir } = fixture()
   try {
     const { records, env: e } = await stageAll(root, releaseDir)
@@ -411,7 +461,9 @@ test('evidence needs a PASS record bound to this run for every promotable asset'
     // An empty file leaves every promotable asset uncovered, and the refusal names each one.
     assert.deepEqual(
       evidenceProblems('', provenance),
-      assets.map((asset) => `no PASS record bound to run ${provenance.run.id} covers ${asset.name} (sha256 ${asset.sha256})`)
+      assets.map(
+        (asset) => `no PASS record bound to run ${provenance.run.id} covers ${asset.name} (sha256 ${asset.sha256})`
+      )
     )
     // A file holding only line endings is the same as empty: zero records, not one blank record.
     assert.deepEqual(evidenceProblems('\n\n', provenance), evidenceProblems('', provenance))
@@ -436,7 +488,13 @@ test('evidence problems name the line', async () => {
     const assets = promotableAssets(provenance)
     const sha = assets[0].sha256
     const good = (overrides = {}) =>
-      JSON.stringify({ ticket: 'M2-0028', result: 'PASS', build_run_id: provenance.run.id, artifact_sha256: sha, ...overrides })
+      JSON.stringify({
+        ticket: 'M2-0028',
+        result: 'PASS',
+        build_run_id: provenance.run.id,
+        artifact_sha256: sha,
+        ...overrides
+      })
     // Full coverage of every promotable asset (including a valid PASS for `sha`), so each case below
     // pairs one defective line with otherwise-complete evidence: coverage can add nothing, and the
     // defective line must be the only problem — catching a defect that emits extra or duplicate lines.
@@ -597,7 +655,10 @@ test('prepare-release publishes only the shipping installers with SHA256SUMS.txt
     }
 
     const notes = readFileSync(join(outDir, 'notes.md'), 'utf8')
-    assert.ok(notes.includes(sha256(readFileSync(evidencePath))), 'notes.md must hash the raw evidence bytes, not the decoded string')
+    assert.ok(
+      notes.includes(sha256(readFileSync(evidencePath))),
+      'notes.md must hash the raw evidence bytes, not the decoded string'
+    )
   } finally {
     cleanup(root)
   }
@@ -649,7 +710,8 @@ test('prepare-release refuses unbound provenance or refused evidence and moves n
         candidateCommit: wrongCommit,
         env: e
       }),
-      (error) => error.message === `provenance commit ${provenance.commit} does not match the candidate commit ${wrongCommit}`
+      (error) =>
+        error.message === `provenance commit ${provenance.commit} does not match the candidate commit ${wrongCommit}`
     )
     assert.equal(existsSync(join(outDir2, 'upload')), false)
 
@@ -740,7 +802,9 @@ test('release notes state version, commit, candidate run, promotion run, not-Lat
     // Only a release/1.9.x candidate is named a hotfix; main (the default) and any other branch add no line.
     const hotfixLine = `a hotfix of 1.9.7 built from release/1.9.x at commit \`${provenance.commit}\``
     assert.ok(!notes.includes('hotfix of 1.9.7'))
-    assert.ok(!releaseNotes({ provenance, evidence, promotionRunUrl, candidateBranch: 'main' }).includes('hotfix of 1.9.7'))
+    assert.ok(
+      !releaseNotes({ provenance, evidence, promotionRunUrl, candidateBranch: 'main' }).includes('hotfix of 1.9.7')
+    )
     const hotfixNotes = releaseNotes({ provenance, evidence, promotionRunUrl, candidateBranch: 'release/1.9.x' })
     assert.ok(hotfixNotes.includes(hotfixLine))
     assert.equal(hotfixNotes.split('hotfix of 1.9.7').length - 1, 1)
@@ -754,13 +818,17 @@ test('check-release accepts matching digests and refuses a missing, extra, resiz
     { name: 'Metis-1.9.7.dmg', size: 100, sha256: sha256('a') },
     { name: 'Metis-1.9.7.zip', size: 200, sha256: sha256('b') }
   ]
-  const uploadedFor = (m) => m.map((a) => ({ name: a.name, size: a.size, state: 'uploaded', digest: `sha256:${a.sha256}` }))
+  const uploadedFor = (m) =>
+    m.map((a) => ({ name: a.name, size: a.size, state: 'uploaded', digest: `sha256:${a.sha256}` }))
 
   assert.deepEqual(uploadProblems(manifest, uploadedFor(manifest)), [])
 
   assert.equal(uploadProblems(manifest, uploadedFor(manifest).slice(1)).length, 1)
 
-  const extra = [...uploadedFor(manifest), { name: 'surprise.txt', size: 5, state: 'uploaded', digest: `sha256:${sha256('c')}` }]
+  const extra = [
+    ...uploadedFor(manifest),
+    { name: 'surprise.txt', size: 5, state: 'uploaded', digest: `sha256:${sha256('c')}` }
+  ]
   assert.equal(uploadProblems(manifest, extra).length, 1)
 
   const resized = uploadedFor(manifest)
@@ -797,7 +865,10 @@ test('the CLI stages, assembles, verifies and prepares a release end to end', as
     const recordsDir = join(root, 'records')
     mkdirSync(recordsDir, { recursive: true })
     for (const variant of Object.keys(VARIANTS)) {
-      writeFileSync(join(recordsDir, `build-${variant}.json`), readFileSync(join(root, 'staged', variant, `build-${variant}.json`)))
+      writeFileSync(
+        join(recordsDir, `build-${variant}.json`),
+        readFileSync(join(root, 'staged', variant, `build-${variant}.json`))
+      )
     }
 
     const assembleResult = run(['assemble', 'records', 'provenance'])
@@ -814,7 +885,12 @@ test('the CLI stages, assembles, verifies and prepares a release end to end', as
     const flipped = Buffer.from(original)
     flipped[0] ^= 0xff
     writeFileSync(assetPath, flipped)
-    const corruptedVerify = run(['verify', join('provenance', 'provenance.json'), join('staged', 'mac', 'assets'), 'mac'])
+    const corruptedVerify = run([
+      'verify',
+      join('provenance', 'provenance.json'),
+      join('staged', 'mac', 'assets'),
+      'mac'
+    ])
     assert.equal(corruptedVerify.status, 1)
     writeFileSync(assetPath, original)
 

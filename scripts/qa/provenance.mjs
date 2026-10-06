@@ -13,7 +13,16 @@
 // stageBuild, assembleProvenance and prepareRelease throw an Error listing every problem, one per line,
 // and leave the filesystem untouched when they throw.
 import { createHash } from 'node:crypto'
-import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import {
+  createReadStream,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  writeFileSync
+} from 'node:fs'
 import { basename, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -44,7 +53,9 @@ export const PROMOTABLE_VARIANTS = Object.keys(VARIANTS).filter((variant) => VAR
 /** Every asset a provenance's promotable builds produced, in build order. Never includes the QA-identity
  *  build: it is built but never shipped, so evidence naming it never counts toward promotion. */
 export function promotableAssets(provenance) {
-  return provenance.builds.filter((build) => PROMOTABLE_VARIANTS.includes(build.variant)).flatMap((build) => build.assets)
+  return provenance.builds
+    .filter((build) => PROMOTABLE_VARIANTS.includes(build.variant))
+    .flatMap((build) => build.assets)
 }
 
 /** Streaming sha256, so a multi-GB installer is never read fully into memory. */
@@ -196,7 +207,8 @@ export function assembleProvenance(records, env) {
   const problems = []
 
   const sha = env.GITHUB_SHA ?? ''
-  if (!/^[0-9a-f]{40}$/.test(sha)) problems.push(`GITHUB_SHA is not a 40-character lowercase commit hash: ${JSON.stringify(sha)}`)
+  if (!/^[0-9a-f]{40}$/.test(sha))
+    problems.push(`GITHUB_SHA is not a 40-character lowercase commit hash: ${JSON.stringify(sha)}`)
   const runId = Number(env.GITHUB_RUN_ID)
   if (!Number.isInteger(runId) || runId <= 0) {
     problems.push(`GITHUB_RUN_ID is not a positive integer: ${JSON.stringify(env.GITHUB_RUN_ID)}`)
@@ -420,7 +432,16 @@ ${rows}
  * Never builds. Proves the candidate's provenance and the promotion evidence, then stages exactly the
  * promotable bytes plus SHA256SUMS.txt and the original provenance.json bytes for upload.
  */
-export async function prepareRelease({ provenancePath, evidencePath, downloadsDir, outDir, candidateRun, candidateCommit, candidateBranch, env }) {
+export async function prepareRelease({
+  provenancePath,
+  evidencePath,
+  downloadsDir,
+  outDir,
+  candidateRun,
+  candidateCommit,
+  candidateBranch,
+  env
+}) {
   const provenanceBytes = readFileSync(provenancePath)
   const provenance = JSON.parse(provenanceBytes.toString('utf8'))
   const evidenceBytes = readFileSync(evidencePath)
@@ -520,7 +541,14 @@ async function main(argv) {
       case 'stage': {
         const [variant, releaseDir, outDir] = rest
         if (!variant || !releaseDir || !outDir) return usage()
-        await stageBuild({ variant, repoRoot: process.cwd(), releaseDir, outDir, env: process.env, nodeVersion: process.version })
+        await stageBuild({
+          variant,
+          repoRoot: process.cwd(),
+          releaseDir,
+          outDir,
+          env: process.env,
+          nodeVersion: process.version
+        })
         break
       }
       case 'assemble': {
@@ -549,7 +577,16 @@ async function main(argv) {
         const candidateCommit = flagValue(flags, '--candidate-commit')
         const candidateBranch = flagValue(flags, '--candidate-branch')
         if (!candidateRun || !candidateCommit) return usage()
-        await prepareRelease({ provenancePath, evidencePath, downloadsDir, outDir, candidateRun, candidateCommit, candidateBranch, env: process.env })
+        await prepareRelease({
+          provenancePath,
+          evidencePath,
+          downloadsDir,
+          outDir,
+          candidateRun,
+          candidateCommit,
+          candidateBranch,
+          env: process.env
+        })
         break
       }
       case 'check-release': {
