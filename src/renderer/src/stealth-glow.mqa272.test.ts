@@ -55,6 +55,6 @@ describe('MQA-272 — the invisible-state overlay shows a multi-colour glow, not
   })
 
   it('the overlay root widens its margin while invisible so the halo is not clipped by the window', () => {
-    expect(appSrc).toMatch(/contentProtection[\s\S]*?stealth-glow/)
+    expect(appSrc).toMatch(/\(settings\?\.contentProtection \?\? true\) && !minimized\s*\?\s*'p-5 stealth-glow'/)
   })
 })
