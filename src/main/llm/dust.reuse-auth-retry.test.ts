@@ -7,6 +7,11 @@ vi.mock('electron', () => ({ app: { getPath: () => '/tmp' } }))
 vi.mock('../auth', () => ({ authStatus: () => ({ email: null, name: null }) }))
 vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLog: vi.fn() }))
 
+type MockStreamHandlers = {
+  onDone: ReturnType<typeof vi.fn>
+  onError: ReturnType<typeof vi.fn>
+}
+
 const calls = { create: 0, post: 0, get: 0 }
 const postConvIds: string[] = []
 const apiKeysUsed: string[] = []
@@ -75,7 +80,7 @@ function baseOpts(overrides: Partial<Parameters<typeof streamDust>[0]> = {}): Pa
   } as Parameters<typeof streamDust>[0]
 }
 
-async function waitDone(handlers: { onDone: ReturnType<typeof vi.fn>; onError: ReturnType<typeof vi.fn> }): Promise<void> {
+async function waitDone(handlers: MockStreamHandlers): Promise<void> {
   for (let i = 0; i < 500; i++) {
     if (handlers.onDone.mock.calls.length) return
     if (handlers.onError.mock.calls.length) throw new Error(String(handlers.onError.mock.calls[0][0]))
@@ -100,7 +105,7 @@ describe('Dust 401 self-heal on the conversation-reuse path', () => {
     // 1. First ask of the meeting — creates + caches conv-1.
     const opts1 = baseOpts()
     streamDust(opts1)
-    await waitDone(opts1.handlers)
+    await waitDone(opts1.handlers as unknown as MockStreamHandlers)
     expect(calls.create).toBe(1)
 
     // 2. Token expires mid-meeting. Next ask hits the reuse path and gets the 401.
@@ -110,7 +115,7 @@ describe('Dust 401 self-heal on the conversation-reuse path', () => {
       .mockResolvedValue({ apiKey: 'fresh-key', workspaceId: 'ws-1' })
     const opts2 = baseOpts({ refreshDustAuth })
     streamDust(opts2)
-    await waitDone(opts2.handlers)
+    await waitDone(opts2.handlers as unknown as MockStreamHandlers)
 
     // The refresh DID fire (self-heal engaged):
     expect(refreshDustAuth).toHaveBeenCalledTimes(1)
@@ -122,7 +127,7 @@ describe('Dust 401 self-heal on the conversation-reuse path', () => {
     // The next ask continues in the same meeting conversation, not a replacement conversation.
     const opts3 = baseOpts({ apiKey: 'fresh-key' })
     streamDust(opts3)
-    await waitDone(opts3.handlers)
+    await waitDone(opts3.handlers as unknown as MockStreamHandlers)
     expect(postConvIds[postConvIds.length - 1]).toBe('conv-1')
   })
 })

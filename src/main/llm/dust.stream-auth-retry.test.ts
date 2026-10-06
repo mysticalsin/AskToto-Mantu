@@ -7,6 +7,11 @@ vi.mock('electron', () => ({ app: { getPath: () => '/tmp' } }))
 vi.mock('../auth', () => ({ authStatus: () => ({ email: null, name: null }) }))
 vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLog: vi.fn() }))
 
+type MockStreamHandlers = {
+  onDone: ReturnType<typeof vi.fn>
+  onError: ReturnType<typeof vi.fn>
+}
+
 const calls = {
   create: 0,
   post: 0,
@@ -82,10 +87,7 @@ function baseOpts(overrides: Partial<Parameters<typeof streamDust>[0]> = {}): Pa
   } as Parameters<typeof streamDust>[0]
 }
 
-async function waitDone(handlers: {
-  onDone: ReturnType<typeof vi.fn>
-  onError: ReturnType<typeof vi.fn>
-}): Promise<void> {
+async function waitDone(handlers: MockStreamHandlers): Promise<void> {
   for (let i = 0; i < 500; i++) {
     if (handlers.onDone.mock.calls.length) return
     if (handlers.onError.mock.calls.length) throw new Error(String(handlers.onError.mock.calls[0][0]))
@@ -112,7 +114,7 @@ describe('Dust auth retry after stream-start 401', () => {
     failFirstStream = true
     const opts = baseOpts()
     streamDust(opts)
-    await waitDone(opts.handlers)
+    await waitDone(opts.handlers as unknown as MockStreamHandlers)
 
     expect(calls.create).toBe(1)
     expect(calls.post).toBe(0)
