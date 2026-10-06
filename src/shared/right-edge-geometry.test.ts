@@ -19,12 +19,24 @@ import {
   revealBand,
   revealCorridor,
   rightEdgeAnchorLocked,
+  RIGHT_EDGE_ISLAND_CHROME_PX,
+  RIGHT_EDGE_MIN_WORK_AREA,
+  islandSlotMax,
+  rightEdgeFits,
   type Rect
 } from './right-edge-geometry'
+import { RE_TYPING_PIN_MS, RIGHT_EDGE_TIMINGS, RIGHT_EDGE_TIMING_RANGES } from './right-edge-timing'
 
 const wa = (width: number, height: number, x = 0, y = 0): Rect => ({ x, y, width, height })
 /** The three floor sizes (spec v3 §7) plus the macOS row and two common desktops. */
-const SIZES: Rect[] = [wa(853, 432), wa(853, 440), wa(1024, 528), wa(1280, 626, 0, 25), wa(1440, 875, 0, 25), wa(1920, 1032)]
+const SIZES: Rect[] = [
+  wa(853, 432),
+  wa(853, 440),
+  wa(1024, 528),
+  wa(1280, 626, 0, 25),
+  wa(1440, 875, 0, 25),
+  wa(1920, 1032)
+]
 const FRACTIONS = [0, 0.05, 0.15, 0.33, 0.5, 0.8, 1]
 /** A leave grace like main's cursor-watch one; the hold-region invariants hold for any non-negative grace. */
 const GRACE_PX = 8
@@ -32,7 +44,12 @@ const bottom = (r: Rect): number => r.y + r.height
 const right = (r: Rect): number => r.x + r.width
 
 function insideInset(r: Rect, area: Rect, inset: number): boolean {
-  return r.x >= area.x + inset && r.y >= area.y + inset && right(r) <= right(area) - inset && bottom(r) <= bottom(area) - inset
+  return (
+    r.x >= area.x + inset &&
+    r.y >= area.y + inset &&
+    right(r) <= right(area) - inset &&
+    bottom(r) <= bottom(area) - inset
+  )
 }
 
 function pointsOf(r: Rect): Array<{ x: number; y: number }> {
@@ -69,7 +86,8 @@ describe('right-edge geometry authority (spec v3 §2)', () => {
         const a = anchorY(area, f)
         expect(a).toBeGreaterThanOrEqual(area.y + 84)
         expect(a).toBeLessThanOrEqual(bottom(area) - 84)
-        for (const content of [0, 240, 400, 10_000]) expect(insideInset(islandRect(area, a, content), area, 12)).toBe(true)
+        for (const content of [0, 240, 400, 10_000])
+          expect(insideInset(islandRect(area, a, content), area, 12)).toBe(true)
         expect(insideInset(legacyDrawerRect(area, a), area, 12)).toBe(true)
         expect(insideInset(legacyTabRect(area, a), area, 12)).toBe(true)
         expect(insideInset(readerRect(area), area, 12)).toBe(true)
@@ -145,10 +163,17 @@ describe('right-edge geometry authority (spec v3 §2)', () => {
     expect(rightEdgeAnchorLocked(['overlayRightEdgeYByDisplay'])).toBe(true)
     expect(rightEdgeAnchorLocked(['overlayRightEdgeAnchorByDisplay'])).toBe(true)
     expect(rightEdgeAnchorLocked(['overlayLayout'])).toBe(false)
-    const managed = resolveRightEdgeAnchor({ workArea: area, anchor: 0.9, legacyY: 0.2, lockedKeys: ['overlayRightEdgeYByDisplay'] })
+    const managed = resolveRightEdgeAnchor({
+      workArea: area,
+      anchor: 0.9,
+      legacyY: 0.2,
+      lockedKeys: ['overlayRightEdgeYByDisplay']
+    })
     expect(managed.persist).toBe(false)
     expect(anchorY(area, managed.f)).toBe(anchorY(area, resolveRightEdgeAnchor({ workArea: area, legacyY: 0.2 }).f))
-    expect(resolveRightEdgeAnchor({ workArea: area, legacyY: 0.2, lockedKeys: ['overlayRightEdgeAnchorByDisplay'] }).persist).toBe(false)
+    expect(
+      resolveRightEdgeAnchor({ workArea: area, legacyY: 0.2, lockedKeys: ['overlayRightEdgeAnchorByDisplay'] }).persist
+    ).toBe(false)
   })
 
   it('RE-G05: the reveal band is [wa.y+48, wa.bottom−48] for every A and never changes with content', () => {
@@ -177,9 +202,11 @@ describe('right-edge geometry authority (spec v3 §2)', () => {
         const a = anchorY(area, f)
         for (const open of [legacyDrawerRect(area, a), islandRect(area, a, 200), islandRect(area, a, 10_000)]) {
           const region = holdRegion(area, open, a, { gracePx: GRACE_PX })
-          for (const point of [...pointsOf(open), ...pointsOf(revealBand(area, a))]) expect(pointInRegion(point, region)).toBe(true)
+          for (const point of [...pointsOf(open), ...pointsOf(revealBand(area, a))])
+            expect(pointInRegion(point, region)).toBe(true)
           // The strip between the open rect and the edge holds too: no gap the leave rule can fall into.
-          for (let x = right(open); x < right(area); x += 1) expect(pointInRegion({ x, y: open.y + 10 }, region)).toBe(true)
+          for (let x = right(open); x < right(area); x += 1)
+            expect(pointInRegion({ x, y: open.y + 10 }, region)).toBe(true)
           // Well left of the open rect, away from the band, is outside.
           expect(pointInRegion({ x: open.x - 40, y: open.y + 10 }, region)).toBe(false)
         }
@@ -199,7 +226,10 @@ describe('right-edge geometry authority (spec v3 §2)', () => {
         let missedWithout = false
         // 800 ms of 24 ms watch ticks along the diagonal.
         for (let t = 0; t <= 800; t += 24) {
-          const point = { x: Math.round(reveal.x + ((target.x - reveal.x) * t) / 800), y: Math.round(reveal.y + ((target.y - reveal.y) * t) / 800) }
+          const point = {
+            x: Math.round(reveal.x + ((target.x - reveal.x) * t) / 800),
+            y: Math.round(reveal.y + ((target.y - reveal.y) * t) / 800)
+          }
           expect(pointInRegion(point, withCorridor)).toBe(true)
           if (!pointInRegion(point, without)) missedWithout = true
         }
@@ -243,5 +273,36 @@ describe('right-edge geometry authority (spec v3 §2)', () => {
     expect(readerRect(wa(853, 432))).toEqual({ x: 853 - 12 - 720, y: 12, width: 720, height: 408 })
     expect(readerRect(wa(1440, 875, 0, 25))).toEqual({ x: 1440 - 12 - 720, y: 37, width: 720, height: 851 })
     expect(readerRect(wa(600, 700))).toEqual({ x: 12, y: 12, width: 576, height: 676 })
+  })
+})
+
+describe('right-edge fit and timing (M2-0202 S2)', () => {
+  it('RE-G09: a work area under 432 tall or 384 wide does not fit the right edge; 853x432 does', () => {
+    expect(RIGHT_EDGE_MIN_WORK_AREA).toEqual({ width: 384, height: 432 })
+    for (const area of SIZES) expect(rightEdgeFits(area), `${area.width}x${area.height}`).toBe(true)
+    expect(rightEdgeFits(wa(853, 432))).toBe(true)
+    expect(rightEdgeFits(wa(384, 432))).toBe(true)
+    expect(rightEdgeFits(wa(853, 431))).toBe(false)
+    expect(rightEdgeFits(wa(383, 900))).toBe(false)
+    expect(rightEdgeFits(wa(360, 864))).toBe(false)
+  })
+
+  it('the content slot is H_max less the island chrome at every floor size', () => {
+    expect(islandSlotMax(wa(853, 432))).toBe(392 - RIGHT_EDGE_ISLAND_CHROME_PX)
+    expect(islandSlotMax(wa(853, 440))).toBe(400 - RIGHT_EDGE_ISLAND_CHROME_PX)
+    expect(islandSlotMax(wa(1024, 528))).toBe(488 - RIGHT_EDGE_ISLAND_CHROME_PX)
+    for (const area of SIZES) expect(islandSlotMax(area)).toBeGreaterThan(0)
+  })
+
+  it('RE-T01: every right-edge timing constant lies inside its kit §5.4 range', () => {
+    const names = Object.keys(RIGHT_EDGE_TIMING_RANGES) as Array<keyof typeof RIGHT_EDGE_TIMING_RANGES>
+    expect(Object.keys(RIGHT_EDGE_TIMINGS).sort()).toEqual([...names].sort())
+    for (const name of names) {
+      const [min, max] = RIGHT_EDGE_TIMING_RANGES[name]
+      expect(RIGHT_EDGE_TIMINGS[name], name).toBeGreaterThanOrEqual(min)
+      expect(RIGHT_EDGE_TIMINGS[name], name).toBeLessThanOrEqual(max)
+    }
+    // The click-into-an-empty-composer hold of RE-P01.
+    expect(RE_TYPING_PIN_MS).toBe(8000)
   })
 })
