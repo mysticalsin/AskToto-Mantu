@@ -384,15 +384,20 @@ export function ensureSharedFinalSigtermRow(rows, profileMode, reason) {
 // A killed app can still land a late write in its temp dir while it is removed. That is a cleanup problem, not an
 // owned-process leak: retry, then record a warning. It never throws and never changes a scenario result.
 export const cleanupWarnings = []
+const CLEANUP_REMOVE_OPTIONS = { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }
 
 export function removeTempDir(dir, warnings = cleanupWarnings, remove = rmSync) {
-  try {
-    remove(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
-    return true
-  } catch (error) {
-    warnings.push({ code: error?.code ?? 'UNKNOWN', message: error instanceof Error ? error.message : String(error) })
-    return false
+  let lastError = null
+  for (let attempt = 0; attempt <= CLEANUP_REMOVE_OPTIONS.maxRetries; attempt += 1) {
+    try {
+      remove(dir, CLEANUP_REMOVE_OPTIONS)
+      return true
+    } catch (error) {
+      lastError = error
+    }
   }
+  warnings.push({ code: lastError?.code ?? 'UNKNOWN', message: lastError instanceof Error ? lastError.message : String(lastError) })
+  return false
 }
 
 function stopUnrelatedFixture(fixture) {
