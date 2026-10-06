@@ -34,7 +34,10 @@ function bounded(promise, ms) {
     timer = setTimeout(() => resolve({ outcome: 'timeout' }), ms)
   })
   return Promise.race([
-    promise.then((value) => ({ outcome: 'answered', value }), () => ({ outcome: 'error' })),
+    promise.then(
+      (value) => ({ outcome: 'answered', value }),
+      () => ({ outcome: 'error' })
+    ),
     timeout
   ]).finally(() => clearTimeout(timer))
 }
@@ -64,7 +67,13 @@ function cdpClient(wsUrl) {
     await ready
     const id = nextId++
     const answer = new Promise((resolve) => pending.set(id, resolve))
-    socket.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression, awaitPromise: true, returnByValue: true } }))
+    socket.send(
+      JSON.stringify({
+        id,
+        method: 'Runtime.evaluate',
+        params: { expression, awaitPromise: true, returnByValue: true }
+      })
+    )
     const message = await answer
     if (message.error || message.result?.exceptionDetails) throw new Error('evaluation failed')
     return message.result?.result?.value
@@ -95,7 +104,10 @@ export async function observe({ port, drive, timeoutMs }) {
     window_visible: null,
     window_visible_observed_by: VISIBILITY_OBSERVED_BY
   }
-  const list = await bounded(fetch(`http://127.0.0.1:${port}/json/list`).then((response) => response.json()), timeoutMs)
+  const list = await bounded(
+    fetch(`http://127.0.0.1:${port}/json/list`).then((response) => response.json()),
+    timeoutMs
+  )
   cdp.devtools_http = list.outcome
   if (list.outcome === 'timeout') {
     cdp.reachable = true
@@ -103,7 +115,9 @@ export async function observe({ port, drive, timeoutMs }) {
   }
   if (list.outcome !== 'answered' || !Array.isArray(list.value)) return cdp
   cdp.reachable = true
-  const pages = list.value.filter((target) => target?.type === 'page' && typeof target.webSocketDebuggerUrl === 'string')
+  const pages = list.value.filter(
+    (target) => target?.type === 'page' && typeof target.webSocketDebuggerUrl === 'string'
+  )
   cdp.page_targets = pages.length
 
   const clients = []
@@ -184,9 +198,17 @@ async function main() {
   })
   const port = Number(values.port)
   const timeoutMs = Number(values['timeout-ms'])
-  if (!Number.isInteger(port) || port <= 0 || !Number.isInteger(timeoutMs) || timeoutMs <= 0 ||
-      !values.row || !Object.hasOwn(DRIVE_EXPRESSIONS, values.drive)) {
-    console.error('usage: cdp-observe.mjs --port <n> --row <row id> --drive none|history|brain-status [--timeout-ms <n>]')
+  if (
+    !Number.isInteger(port) ||
+    port <= 0 ||
+    !Number.isInteger(timeoutMs) ||
+    timeoutMs <= 0 ||
+    !values.row ||
+    !Object.hasOwn(DRIVE_EXPRESSIONS, values.drive)
+  ) {
+    console.error(
+      'usage: cdp-observe.mjs --port <n> --row <row id> --drive none|history|brain-status [--timeout-ms <n>]'
+    )
     process.exit(2)
   }
   const cdp = await observe({ port, drive: values.drive, timeoutMs })
