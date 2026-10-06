@@ -25,7 +25,13 @@ import {
   writeJson
 } from './lib.mjs'
 import { writeAuditCounts } from './audit-counts.mjs'
-import { PARKED_BOUNDS, PARK_BOUNDS_SIGNAL, ParkPreconditionError, createCdpParkChecker, summarizeParkChecks } from './park.mjs'
+import {
+  PARKED_BOUNDS,
+  PARK_BOUNDS_SIGNAL,
+  ParkPreconditionError,
+  createCdpParkChecker,
+  summarizeParkChecks
+} from './park.mjs'
 
 function usage() {
   return `Usage:
@@ -86,7 +92,8 @@ function readArgs(argv) {
     else if (arg === '--cdp-url') args.cdpUrl = next()
     else if (arg === '--trace-scenario') args.traceScenarios.push(next())
     else if (arg === '--ttft-output') args.ttftOutput = next()
-    else if (arg === '--ttft-ms') throw new Error('--ttft-ms is not accepted; pass --ttft-output from scripts/prove-local-ttft.mjs')
+    else if (arg === '--ttft-ms')
+      throw new Error('--ttft-ms is not accepted; pass --ttft-output from scripts/prove-local-ttft.mjs')
     else if (arg === '--windows-working-set-artifact') args.windowsWorkingSetArtifact = next()
     else if (arg === '--product-version') args.productVersion = next()
     else if (arg === '--precondition-evidence') args.preconditionEvidence = next()
@@ -143,9 +150,12 @@ export function validateParkedIdleProfile(profile) {
   if (!profile) throw new ParkPreconditionError('parked-idle requires --profile or METIS_QA_PROFILE')
   const manifest = readProfileManifest(profile)
   if (manifest?.layout !== 'hide') {
-    throw new ParkPreconditionError(`parked-idle requires profile manifest layout "hide"; observed "${manifest?.layout ?? 'unknown'}"`, {
-      layout: manifest?.layout ?? null
-    })
+    throw new ParkPreconditionError(
+      `parked-idle requires profile manifest layout "hide"; observed "${manifest?.layout ?? 'unknown'}"`,
+      {
+        layout: manifest?.layout ?? null
+      }
+    )
   }
   return manifest
 }
@@ -164,7 +174,13 @@ export function pointerMoveCommand(platform, position) {
   }
   if (platform === 'win32') {
     return {
-      executable: join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+      executable: join(
+        process.env.SystemRoot || 'C:\\Windows',
+        'System32',
+        'WindowsPowerShell',
+        'v1.0',
+        'powershell.exe'
+      ),
       args: [
         '-NoProfile',
         '-NonInteractive',
@@ -402,7 +418,15 @@ async function main() {
       if (!firstCheck.parked) {
         writeJson(
           output,
-          parkedIdlePreconditionFailureReport({ parkedIdle, firstCheck, productVersion, platform, state, seconds, mainPid })
+          parkedIdlePreconditionFailureReport({
+            parkedIdle,
+            firstCheck,
+            productVersion,
+            platform,
+            state,
+            seconds,
+            mainPid
+          })
         )
         await checker.close()
         checker = null
@@ -479,7 +503,8 @@ if (isMainModule(import.meta.url, process.argv[1])) {
   main().catch((error) => {
     console.error(`[census] ${error?.message ?? error}`)
     if (error instanceof ParkPreconditionError) {
-      if (error.details && Object.keys(error.details).length > 0) console.error(`[census] ${JSON.stringify(error.details)}`)
+      if (error.details && Object.keys(error.details).length > 0)
+        console.error(`[census] ${JSON.stringify(error.details)}`)
       process.exitCode = 2
     } else {
       process.exitCode = 1
