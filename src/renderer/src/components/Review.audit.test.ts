@@ -278,7 +278,10 @@ describe('Review.tsx — ClickUp create-task destination (CLICKUP-PUSH.md)', () 
     expect(src).toMatch(/Task in \$\{clickupDestName\}/)
     expect(src).toMatch(/toolName: 'clickup_create_task'/)
     expect(src).not.toMatch(/attach_task_file/)
-    const clickupBranch = src.slice(src.indexOf("conn.kind === 'clickup' ? ("), src.indexOf("conn.kind === 'clickup' ? (") + 900)
+    const clickupBranch = src.slice(
+      src.indexOf("conn.kind === 'clickup' ? ("),
+      src.indexOf("conn.kind === 'clickup' ? (") + 900
+    )
     expect(clickupBranch).toMatch(/Task in/)
     expect(clickupBranch).not.toMatch(/project ID/)
   })

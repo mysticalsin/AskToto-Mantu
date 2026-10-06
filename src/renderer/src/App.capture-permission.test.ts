@@ -72,7 +72,10 @@ describe('screen-capture permission recovery', () => {
     const assistStart = sourceIndexOf(app, 'const assist = useCallback')
     const assistEnd = sourceIndexOf(app, 'const submit = useCallback', assistStart)
     const assistBlock = app.slice(assistStart, assistEnd)
-    const permissionIndex = sourceIndexOf(assistBlock, 'const needsScreenPermission = isScreenCapturePermissionError(raw)')
+    const permissionIndex = sourceIndexOf(
+      assistBlock,
+      'const needsScreenPermission = isScreenCapturePermissionError(raw)'
+    )
     const fallbackIndex = sourceLastIndexOf(assistBlock, "suggest.run({ mode: 'answer'")
 
     expect(permissionIndex).toBeGreaterThan(-1)

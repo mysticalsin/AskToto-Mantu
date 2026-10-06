@@ -41,7 +41,7 @@ function code(block: string): string {
 // Blocks are resolved inside each test, never at module scope: a missing anchor must fail the ONE link it
 // belongs to, rather than collapsing the whole file into a single collection error that hides which part of
 // the chain regressed.
-describe('MQA-030 — a keyless profile\'s auto-saved transcript is reachable by Disregard', () => {
+describe("MQA-030 — a keyless profile's auto-saved transcript is reachable by Disregard", () => {
   it('the no-provider branch saves through the live saver, not the fire-and-forget leave-path saver', () => {
     // canSummarize covers providerReady OR local summary/fallback readiness — keyless still hits this
     // branch when none of those are true.
@@ -53,13 +53,19 @@ describe('MQA-030 — a keyless profile\'s auto-saved transcript is reachable by
   })
 
   it('saveMeetingNow resolves to the path it wrote so a live caller can pin it', () => {
-    const saveMeetingNowBlock = blockBetween('const saveMeetingNow = useCallback(', '// Same durable save, but for a meeting')
+    const saveMeetingNowBlock = blockBetween(
+      'const saveMeetingNow = useCallback(',
+      '// Same durable save, but for a meeting'
+    )
     expect(saveMeetingNowBlock).toMatch(/\): Promise<string \| null> =>/)
     expect(saveMeetingNowBlock).toMatch(/const r = await window\.toto\.saveTranscript\(payload\)\s+return r\.path/)
   })
 
   it('the live saver publishes the save through savingPromiseRef and the live session state', () => {
-    const liveSaverBlock = blockBetween('const saveLiveMeetingNow = useCallback(', 'saveLiveMeetingNowRef.current = saveLiveMeetingNow')
+    const liveSaverBlock = blockBetween(
+      'const saveLiveMeetingNow = useCallback(',
+      'saveLiveMeetingNowRef.current = saveLiveMeetingNow'
+    )
     expect(liveSaverBlock).toMatch(/savingPromiseRef\.current = p/)
     expect(liveSaverBlock).toMatch(/savedRef\.current = String\(started\)/)
     expect(liveSaverBlock).toMatch(/setSavedPath\(path\)/)

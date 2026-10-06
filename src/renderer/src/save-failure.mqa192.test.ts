@@ -73,7 +73,7 @@ describe('MQA-192 — a failed transcript save says what went wrong and what to 
   })
 
   it('separates a full disk, a locked file and a missing folder', () => {
-    const full = saveFailureReason(new Error("ENOSPC: no space left on device, write"))
+    const full = saveFailureReason(new Error('ENOSPC: no space left on device, write'))
     const busy = saveFailureReason(new Error("EBUSY: resource busy or locked, rename '/x/y.md.tmp' -> '/x/y.md'"))
     const gone = saveFailureReason(new Error("ENOENT: no such file or directory, open '/x/y.md.tmp'"))
     expect(full).toMatch(/disk is full|free up/i)
@@ -84,7 +84,9 @@ describe('MQA-192 — a failed transcript save says what went wrong and what to 
 
   it('keeps the operating system’s own words for a cause it cannot diagnose — vaguer would be less true', () => {
     const reason = saveFailureReason(
-      new Error("Error invoking remote method 'transcript:save': Error: EROFS: read-only file system, open '/x/y.md.tmp'")
+      new Error(
+        "Error invoking remote method 'transcript:save': Error: EROFS: read-only file system, open '/x/y.md.tmp'"
+      )
     )
     expect(reason).toBe("EROFS: read-only file system, open '/x/y.md.tmp'")
   })
@@ -136,11 +138,7 @@ describe('MQA-192 — wiring', () => {
 
   it('a new meeting clears the give-up along with the rest of the save state', () => {
     const body = code(
-      blockBetween(
-        appSource,
-        "savingPromiseRef.current = null // this meeting hasn't autosaved yet",
-        'listen.clear()'
-      )
+      blockBetween(appSource, "savingPromiseRef.current = null // this meeting hasn't autosaved yet", 'listen.clear()')
     )
     expect(body).toMatch(/setSaveAttempts\(0\)/)
     expect(body).toMatch(/setSaveGaveUp\(false\)/)
