@@ -16,7 +16,14 @@ import { OnboardingV2 } from './components/OnboardingExperience'
 import { ControlPill } from './components/ControlPill'
 import { OverlayPeek } from './components/OverlayPeek'
 import { RightEdgeAnswerSummary, RightEdgeSidecar, type SidecarReaderTarget } from './components/RightEdgeSidecar'
-import { RightEdgeReader, RightEdgeReaderDetails, RightEdgeReaderTranscript, readerKindForView, rightEdgeDetailErrors, rightEdgeReaderTone } from './components/right-edge/RightEdgeReader'
+import {
+  RightEdgeReader,
+  RightEdgeReaderDetails,
+  RightEdgeReaderTranscript,
+  readerKindForView,
+  rightEdgeDetailErrors,
+  rightEdgeReaderTone
+} from './components/right-edge/RightEdgeReader'
 import type { RightEdgeReaderKind, RightEdgeReaderScrollMemory } from './components/right-edge/RightEdgeReader'
 import { rightEdgeStrings } from './lib/right-edge/strings'
 import { Panel } from './components/Panel'
@@ -722,9 +729,8 @@ export function App(): JSX.Element {
   const [rightEdgeReaderRequest, setRightEdgeReaderRequest] = useState<SidecarReaderTarget | null>(null)
   const [rightEdgeReaderSuspended, setRightEdgeReaderSuspended] = useState(false)
   // Settings keeps its own surface: an open Reader request waits under it.
-  const rightEdgeReaderKind: RightEdgeReaderKind | null = rightEdgePresentation && view !== 'settings'
-    ? rightEdgeReaderRequest ?? readerKindForView(view)
-    : null
+  const rightEdgeReaderKind: RightEdgeReaderKind | null =
+    rightEdgePresentation && view !== 'settings' ? (rightEdgeReaderRequest ?? readerKindForView(view)) : null
   const rightEdgeReaderWanted = rightEdgeReaderKind !== null && !rightEdgeReaderSuspended
   const rightEdgeReaderKindRef = useRef(rightEdgeReaderKind)
   rightEdgeReaderKindRef.current = rightEdgeReaderKind
@@ -1013,7 +1019,13 @@ export function App(): JSX.Element {
     })
   }, [rightEdgePresentation])
   // Main gates its parks on these pins and answers with its surface; a settings change re-reads it.
-  const reportedSurface = rightEdgePresentation ? (overlayPeeked ? 'rest' : rightEdgeReaderWanted ? 'reader' : 'island') : 'top-center'
+  const reportedSurface = rightEdgePresentation
+    ? overlayPeeked
+      ? 'rest'
+      : rightEdgeReaderWanted
+        ? 'reader'
+        : 'island'
+    : 'top-center'
   // Main decides what a reveal opens. It opens the Reader only when the Reader was open at the park; when it
   // opens the island while the page still holds a Reader, the Reader waits for an explicit open.
   const previousRightEdgeSurfaceRef = useRef<RightEdgeSurface | null>(null)
@@ -1022,7 +1034,8 @@ export function App(): JSX.Element {
     const next = rightEdgeSurface?.surface ?? null
     previousRightEdgeSurfaceRef.current = next
     if (next === 'reader') setRightEdgeReaderSuspended(false)
-    else if (previous === 'rest' && next === 'island' && rightEdgeReaderKindRef.current !== null) setRightEdgeReaderSuspended(true)
+    else if (previous === 'rest' && next === 'island' && rightEdgeReaderKindRef.current !== null)
+      setRightEdgeReaderSuspended(true)
   }, [rightEdgeSurface])
   // Navigating to a full view is an explicit open of its Reader.
   useEffect(() => {
@@ -4212,17 +4225,30 @@ export function App(): JSX.Element {
   // On the right edge the dock holds a one-line summary of the answer or suggestion, never the full body: that
   // mounts only in the Reader (RE-L05), which the dock's Open ↗ opens.
   const islandAnswer =
-    DEMO === 'answer' ? { text: DEMO_ANSWER, streaming: false, error: null }
-    : DEMO === 'copilot' ? { text: DEMO_SUG, streaming: false, error: null }
-    : view === 'copilot' ? suggest.answer
-    : capturing ? { text: '', streaming: true, error: null }
-    : ask.answer ? { text: ask.answer.text, streaming: ask.answer.streaming, error: ask.answer.error ?? captureError }
-    : captureError ? { text: '', streaming: false, error: captureError }
-    : null
-  const barBody = !answerView || collapsed ? undefined
-    : !rightEdgePresentation ? body
-    : islandAnswer ? <RightEdgeAnswerSummary text={islandAnswer.text} streaming={islandAnswer.streaming} error={islandAnswer.error} strings={rightEdgeCopy} />
-    : undefined
+    DEMO === 'answer'
+      ? { text: DEMO_ANSWER, streaming: false, error: null }
+      : DEMO === 'copilot'
+        ? { text: DEMO_SUG, streaming: false, error: null }
+        : view === 'copilot'
+          ? suggest.answer
+          : capturing
+            ? { text: '', streaming: true, error: null }
+            : ask.answer
+              ? { text: ask.answer.text, streaming: ask.answer.streaming, error: ask.answer.error ?? captureError }
+              : captureError
+                ? { text: '', streaming: false, error: captureError }
+                : null
+  const barBody =
+    !answerView || collapsed ? undefined : !rightEdgePresentation ? (
+      body
+    ) : islandAnswer ? (
+      <RightEdgeAnswerSummary
+        text={islandAnswer.text}
+        streaming={islandAnswer.streaming}
+        error={islandAnswer.error}
+        strings={rightEdgeCopy}
+      />
+    ) : undefined
   // On the right edge the full views are Readers (RightEdgeReader), never a panel under the dock.
   const isPanelBody = body != null && !answerView && !(rightEdgePresentation && readerKindForView(view) !== null)
   // Edge chrome is for the compact Ask/Copilot surface only. Full product views (Settings, History,
@@ -4250,16 +4276,36 @@ export function App(): JSX.Element {
   const showWideMeetingChrome = showListeningChrome && !rightEdgeDockVisible
   // The Reader's approval and error Details, and its header status (the attention tone while an action waits).
   const readerDetailErrors = rightEdgeDetailErrors(ask.answer?.error, captureError, listen.error, openMeetingError)
-  const readerTone = rightEdgeReaderTone({ attention: !!commandState.proposalId, thinking: !!(capturing || ask.answer?.streaming || suggest.answer?.streaming), listening: showListeningChrome, paused: listen.paused })
+  const readerTone = rightEdgeReaderTone({
+    attention: !!commandState.proposalId,
+    thinking: !!(capturing || ask.answer?.streaming || suggest.answer?.streaming),
+    listening: showListeningChrome,
+    paused: listen.paused
+  })
   const rightEdgeReaderBody =
-    rightEdgeReaderKind === 'answer' ? (answerView ? body : answerBody)
-    : rightEdgeReaderKind === 'transcript' ? <RightEdgeReaderTranscript lines={listen.lines} strings={rightEdgeCopy} youLabel={micSpeakerLabel(settings?.profile)} />
-    : rightEdgeReaderKind === 'details' ? <RightEdgeReaderDetails commandState={commandState} errors={readerDetailErrors} strings={rightEdgeCopy} />
-    : rightEdgeReaderKind === 'history' ? historyBody
-    : rightEdgeReaderKind === 'review' ? reviewBody
-    : rightEdgeReaderKind === 'agenda' ? agendaBody
-    : rightEdgeReaderKind === 'brain' ? brainBody
-    : null
+    rightEdgeReaderKind === 'answer' ? (
+      answerView ? (
+        body
+      ) : (
+        answerBody
+      )
+    ) : rightEdgeReaderKind === 'transcript' ? (
+      <RightEdgeReaderTranscript
+        lines={listen.lines}
+        strings={rightEdgeCopy}
+        youLabel={micSpeakerLabel(settings?.profile)}
+      />
+    ) : rightEdgeReaderKind === 'details' ? (
+      <RightEdgeReaderDetails commandState={commandState} errors={readerDetailErrors} strings={rightEdgeCopy} />
+    ) : rightEdgeReaderKind === 'history' ? (
+      historyBody
+    ) : rightEdgeReaderKind === 'review' ? (
+      reviewBody
+    ) : rightEdgeReaderKind === 'agenda' ? (
+      agendaBody
+    ) : rightEdgeReaderKind === 'brain' ? (
+      brainBody
+    ) : null
 
   return (
     // Root drag is withheld while minimized: ControlPill (rendered below) arms its OWN drag instance on
@@ -4511,9 +4557,16 @@ export function App(): JSX.Element {
               strings={rightEdgeCopy}
               tone={readerTone}
               onAttention={() => openRightEdgeReader('details')}
-              meeting={showListeningChrome && meetingStartRef.current > 0
-                ? { startedAt: meetingStartRef.current, paused: listen.paused, pausedMs: meetingPauseRef.current.pausedMs, pausedAt: meetingPauseRef.current.pausedAt }
-                : null}
+              meeting={
+                showListeningChrome && meetingStartRef.current > 0
+                  ? {
+                      startedAt: meetingStartRef.current,
+                      paused: listen.paused,
+                      pausedMs: meetingPauseRef.current.pausedMs,
+                      pausedAt: meetingPauseRef.current.pausedAt
+                    }
+                  : null
+              }
               consentDot={showListeningChrome}
               onBack={leaveRightEdgeReader}
               onHide={hideRightEdgeReader}
