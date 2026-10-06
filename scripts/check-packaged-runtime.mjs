@@ -659,7 +659,7 @@ if (target === 'mac') {
 
 const { qaIdentity } = assertQaFaultHookMatchesIdentity(join(resourcesRoot, 'app.asar'))
 console.log(
-  `[check:packaged-runtime] OK ${qaIdentity ? 'the QA-identity package carries' : 'the shipping package lacks'} the QA fault hook`
+  `[check:packaged-runtime] OK ${qaIdentity ? 'the QA-identity package carries' : 'the shipping package lacks'} the QA fault hook and QA capture hook`
 )
 
 console.log(
