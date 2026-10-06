@@ -109,8 +109,8 @@ describe('resource census representative profile generator', () => {
       placement: 'right-edge'
     })
     const defaultSha = withProfile((root) => writeRepresentativeProfile(root).manifest.sha256)
-    const explicitDefaultSha = withProfile((root) =>
-      writeRepresentativeProfile(root, undefined, { placement: 'right-edge' }).manifest.sha256
+    const explicitDefaultSha = withProfile(
+      (root) => writeRepresentativeProfile(root, undefined, { placement: 'right-edge' }).manifest.sha256
     )
 
     expect(readArgs(['/tmp/profile'])).toEqual({ layout: 'bar', placement: 'right-edge', profileDir: '/tmp/profile' })

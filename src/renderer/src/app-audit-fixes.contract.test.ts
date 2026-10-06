@@ -17,6 +17,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
+import { sourceIndexOf, sourceSnippet } from '../../../scripts/lib/source-layout'
 import { meetingSaveIsRedundant, tapProfileMismatch } from './App'
 
 // Normalize CRLF → LF: this is a Windows checkout, so any anchor whose newline sits mid-string would
@@ -25,9 +26,9 @@ const source = readFileSync(join(__dirname, 'App.tsx'), 'utf8').replace(/\r\n/g,
 
 /** Source slice from `start` up to (excluding) the next `end`. Throws loudly if either anchor moved. */
 function blockBetween(start: string, end: string): string {
-  const from = source.indexOf(start)
+  const from = sourceIndexOf(source, start)
   if (from === -1) throw new Error(`app-audit-fixes.contract.test.ts anchor not found (source moved?): ${start}`)
-  const to = source.indexOf(end, from + start.length)
+  const to = sourceIndexOf(source, end, from + 1)
   if (to === -1) throw new Error(`app-audit-fixes.contract.test.ts end anchor not found after "${start}": ${end}`)
   return source.slice(from, to)
 }
@@ -48,15 +49,18 @@ function code(block: string): string {
 // auth.test.ts and index-audit-fixes.contract.test.ts), so the renderer half below completes it.
 describe('MQA-066 — Settings is reachable from behind the sign-in wall', () => {
   it('puts a resolved SSO sign-in gate before onboarding so blocked settings writes cannot masquerade as completion', () => {
-    const sso = source.indexOf('// Azure AD gate — blocks all use when SSO is configured OR enforced')
-    const onboarding = source.indexOf('// Onboarding gate FIRST')
+    const sso = sourceIndexOf(source, '// Azure AD gate — blocks all use when SSO is configured OR enforced')
+    const onboarding = sourceIndexOf(source, '// Onboarding gate FIRST')
     expect(sso).toBeGreaterThan(-1)
     expect(onboarding).toBeGreaterThan(-1)
     expect(sso).toBeLessThan(onboarding)
   })
 
   it('renders Settings in place of the wall, the way the onboarding gate already does', () => {
-    const wall = blockBetween('// Azure AD gate — blocks all use when SSO is configured OR enforced', 'const panelOpen = (body != null && !collapsed)')
+    const wall = blockBetween(
+      '// Azure AD gate — blocks all use when SSO is configured OR enforced',
+      'const panelOpen = (body != null && !collapsed)'
+    )
     expect(code(wall)).toMatch(/if \(view === 'settings'\) \{/)
     expect(code(wall)).toMatch(/\{settingsBody\}/)
     // The wall itself still renders for every other view — this is an escape, not a removal.
@@ -64,15 +68,20 @@ describe('MQA-066 — Settings is reachable from behind the sign-in wall', () =>
   })
 
   it('hands the wall a route to the screen its own remedy names', () => {
-    const wall = blockBetween('// Azure AD gate — blocks all use when SSO is configured OR enforced', 'const panelOpen = (body != null && !collapsed)')
+    const wall = blockBetween(
+      '// Azure AD gate — blocks all use when SSO is configured OR enforced',
+      'const panelOpen = (body != null && !collapsed)'
+    )
     // Calendar, not Account: the Entra client/tenant/domain fields live on the Calendar tab, and there is
     // no Account tab at all — the old copy pointed at a screen that does not exist.
     expect(code(wall)).toMatch(/onOpenSettings=\{\(\) =>\s*\n?\s*openSettings\('calendar'/)
   })
 
   it("lets 'settings' — and only 'settings' — through the sign-in hotkey gate", () => {
-    const gate = blockBetween('const onboardingGate = DEMO == null', 'if (a !== \'hide\' && minimized)')
-    expect(code(gate)).toMatch(/if \(a !== 'hide' && \(onboardingGate \|\| \(signInGate && a !== 'settings'\)\)\) return/)
+    const gate = blockBetween('const onboardingGate = DEMO == null', "if (a !== 'hide' && minimized)")
+    expect(code(gate)).toMatch(
+      /if \(a !== 'hide' && \(onboardingGate \|\| \(signInGate && a !== 'settings'\)\)\) return/
+    )
     // Onboarding keeps the stricter rule: there the widget genuinely is not usable yet.
     expect(code(gate)).not.toMatch(/onboardingGate && a !== 'settings'/)
   })
@@ -227,7 +236,7 @@ describe('MQA-083 / MQA-158 — a mic change no longer kills Desk Tap Control si
   it('renders a recalibrate prompt naming where to do it', () => {
     expect(source).toMatch(/\{tapMismatch && view !== 'settings' && \(/)
     expect(source).toMatch(/Desk Tap Control is paused/)
-    expect(source).toMatch(/Recalibrate it in\n\s*Settings → Audio\./)
+    expect(source).toMatch(/Recalibrate it in\s+Settings →\s*Audio\./)
   })
 })
 
@@ -258,7 +267,7 @@ describe('MQA-099 — the double-capture guard is armed, not just cleared', () =
 
   it('drops `capturing` from the callback deps so the guard cannot go stale', () => {
     expect(source).toMatch(
-      /\[ask\.run, requireProvider, settings\?\.backgroundScreenContext, settings\?\.providerReady, listen\]/
+      sourceSnippet('[ask.run, requireProvider, settings?.backgroundScreenContext, settings?.providerReady, listen]')
     )
   })
 })

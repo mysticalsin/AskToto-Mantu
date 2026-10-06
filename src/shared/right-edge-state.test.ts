@@ -6,11 +6,23 @@ describe('right-edge IPC contract (M2-0202 S2)', () => {
   it('names both channels and exactly nine pins', () => {
     expect(IPC.rightEdgeState).toBe('right-edge:state')
     expect(IPC.rightEdgeSurface).toBe('right-edge:surface')
-    expect(RIGHT_EDGE_PINS).toEqual(['user', 'typing', 'ime', 'menu', 'drag', 'dialog', 'approval', 'execution', 'outcome'])
+    expect(RIGHT_EDGE_PINS).toEqual([
+      'user',
+      'typing',
+      'ime',
+      'menu',
+      'drag',
+      'dialog',
+      'approval',
+      'execution',
+      'outcome'
+    ])
   })
 
   it('accepts a well-formed state report and refuses anything else', () => {
-    expect(RightEdgeStateSchema.safeParse({ surface: 'island', contentHeight: 320, pins: ['typing', 'ime'] }).success).toBe(true)
+    expect(
+      RightEdgeStateSchema.safeParse({ surface: 'island', contentHeight: 320, pins: ['typing', 'ime'] }).success
+    ).toBe(true)
     expect(RightEdgeStateSchema.safeParse({ surface: 'top-center', contentHeight: 0, pins: [] }).success).toBe(true)
     for (const bad of [
       { surface: 'dock', contentHeight: 0, pins: [] },
@@ -26,7 +38,8 @@ describe('right-edge IPC contract (M2-0202 S2)', () => {
   })
 
   it('the park gate: any pin refuses the pointer leave-park and the auto-park; an explicit Hide yields only to an IME', () => {
-    for (const cause of ['pointer-leave', 'auto-park', 'explicit'] as const) expect(rightEdgeParkAllowed([], cause)).toBe(true)
+    for (const cause of ['pointer-leave', 'auto-park', 'explicit'] as const)
+      expect(rightEdgeParkAllowed([], cause)).toBe(true)
     for (const pin of RIGHT_EDGE_PINS) {
       expect(rightEdgeParkAllowed([pin], 'pointer-leave'), pin).toBe(false)
       expect(rightEdgeParkAllowed([pin], 'auto-park'), pin).toBe(false)
