@@ -73,7 +73,10 @@ function syntheticMeetings() {
     const subject = SUBJECTS[index % SUBJECTS.length]
     const outcome = OUTCOMES[(index + 2) % OUTCOMES.length]
     const concern = CONCERNS[(index + 4) % CONCERNS.length]
-    const stamp = new Date(startedAt).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z')
+    const stamp = new Date(startedAt)
+      .toISOString()
+      .replace(/[-:]/g, '')
+      .replace(/\.\d{3}Z$/, 'Z')
     return {
       file: `${stamp.slice(0, 8)}_${stamp.slice(9, 15)}-synthetic-census-${String(index + 1).padStart(2, '0')}.md`,
       title: `Synthetic census meeting ${String(index + 1).padStart(2, '0')}`,
@@ -238,12 +241,24 @@ export function writeRepresentativeProfile(profileDir, now = SYNTHETIC_STARTED_A
     utimesSync(path, new Date(startedAt), new Date(startedAt))
     meetings.push({ ...meeting, path, startedAt })
   }
-  writeFileSync(join(settings.meetingsFolder, 'index.md'), meetings.map((meeting) => `- [[${meeting.file}|${meeting.title}]]`).join('\n') + '\n')
+  writeFileSync(
+    join(settings.meetingsFolder, 'index.md'),
+    meetings.map((meeting) => `- [[${meeting.file}|${meeting.title}]]`).join('\n') + '\n'
+  )
   const index = brainIndex(meetings, now)
   writeFileSync(join(brainDir, 'index.json'), `${JSON.stringify(index, null, 2)}\n`, { mode: 0o600 })
   const profileManifest = manifest({ settings, index, meetings })
-  writeFileSync(join(root, 'resource-census-profile.json'), `${JSON.stringify(profileManifest, null, 2)}\n`, { mode: 0o600 })
-  return { profileDir: root, meetingsFolder: settings.meetingsFolder, settings, meetings, brainIndex: index, manifest: profileManifest }
+  writeFileSync(join(root, 'resource-census-profile.json'), `${JSON.stringify(profileManifest, null, 2)}\n`, {
+    mode: 0o600
+  })
+  return {
+    profileDir: root,
+    meetingsFolder: settings.meetingsFolder,
+    settings,
+    meetings,
+    brainIndex: index,
+    manifest: profileManifest
+  }
 }
 
 function usage() {
