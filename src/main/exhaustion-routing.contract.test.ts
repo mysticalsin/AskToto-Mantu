@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { sourceIndexOf, sourceSnippet } from '../../scripts/lib/source-layout'
 
 /**
  * Source contract for the OmniRoute resilience integration in askStart — the wiring that turns "you ran
@@ -29,7 +30,9 @@ describe('exhaustion is classified first and drives a kind-aware cooldown', () =
   })
 
   it('a rate-limit records a timed back-off, honoring the server Retry-After', () => {
-    expect(indexSrc).toMatch(/if \(exhaustion\.kind === 'rate-limit'\) recordRateLimited\(provider, exhaustion\.retryAfterMs\)/)
+    expect(indexSrc).toMatch(
+      /if \(exhaustion\.kind === 'rate-limit'\) recordRateLimited\(provider, exhaustion\.retryAfterMs\)/
+    )
   })
 
   it('credit/usage-cap exhaustion is recorded as exhausted (long / reset-aware cooldown), not as a dead key', () => {
@@ -55,7 +58,9 @@ describe('the retry vs fail-over decision respects the exhaustion kind', () => {
   })
 
   it('a rate-limit whose window is longer than a live ask can wait fails straight over instead', () => {
-    expect(indexSrc).toMatch(/rateLimitTooLongToWait = rateLimitWaitMs != null && rateLimitWaitMs > MAX_ASK_RETRY_WAIT_MS/)
+    expect(indexSrc).toMatch(
+      /rateLimitTooLongToWait = rateLimitWaitMs != null && rateLimitWaitMs > MAX_ASK_RETRY_WAIT_MS/
+    )
     expect(indexSrc).toMatch(/!rateLimitTooLongToWait/)
   })
 
@@ -87,11 +92,13 @@ describe('the backup chain: free-first ordering + the on-device answer floor', (
   })
 
   it('pickFailover floats free-tier providers ahead only when preferFree is set', () => {
-    expect(indexSrc).toMatch(/if \(preferFree\) return \(PROVIDERS\[a\]\.freeTier \? 0 : 1\) - \(PROVIDERS\[b\]\.freeTier \? 0 : 1\)/)
+    expect(indexSrc).toMatch(
+      /if \(preferFree\) return \(PROVIDERS\[a\]\.freeTier \? 0 : 1\) - \(PROVIDERS\[b\]\.freeTier \? 0 : 1\)/
+    )
   })
 
   it('the on-device answer floor is the DEAD-LAST hop, after even a cooling cloud provider', () => {
-    const pf = indexSrc.slice(indexSrc.indexOf('const coolingResort = order.find(eligible)'))
+    const pf = indexSrc.slice(sourceIndexOf(indexSrc, 'const coolingResort = order.find(eligible)'))
     const coolingIdx = pf.indexOf('if (coolingResort) return coolingResort')
     const floorIdx = pf.indexOf('localAnswerFloorEligibleFor(req, s, allowed)) return')
     const nullIdx = pf.indexOf('return null')
@@ -114,12 +121,16 @@ describe('the backup chain: free-first ordering + the on-device answer floor', (
     // Anchored on the zero-config net's own comment: `if (attempted.length === 0)` appears more than
     // once in askStart, and this is the branch that decides between local and the setup error.
     const anchor = 'Zero-config safety net (localLlm.fallback)'
-    expect(indexSrc.indexOf(anchor), 'seam anchor not found (source moved?)').toBeGreaterThan(-1)
-    const firstAttempt = indexSrc.slice(indexSrc.indexOf(anchor))
-    const seam = firstAttempt.slice(0, firstAttempt.indexOf('} else if'))
-    expect(seam).toMatch(/localAnswerFloorEligibleFor\(req, s, allowed\) &&\s*\n\s*failover\(attempted\.concat\(provider\), undefined, race\)/)
+    expect(sourceIndexOf(indexSrc, anchor), 'seam anchor not found (source moved?)').toBeGreaterThan(-1)
+    const firstAttempt = indexSrc.slice(sourceIndexOf(indexSrc, anchor))
+    const seam = firstAttempt.slice(0, sourceIndexOf(firstAttempt, '} else if'))
+    expect(seam).toMatch(
+      sourceSnippet(
+        'localAnswerFloorEligibleFor(req, s, allowed) && failover(attempted.concat(provider), undefined, race)'
+      )
+    )
     // Still gated on the same pinned-agent rule as the in-scope net beside it.
-    expect(seam).toMatch(/allowCrossProviderFailover\(req\) &&\s*\n\s*localAnswerFloorEligibleFor/)
+    expect(seam).toMatch(sourceSnippet('allowCrossProviderFailover(req) && localAnswerFloorEligibleFor'))
     // And it must sit AFTER the in-scope net, so an in-scope mode keeps taking the direct local hop.
     expect(seam.indexOf('localFallbackEligibleFor')).toBeLessThan(seam.indexOf('localAnswerFloorEligibleFor'))
   })
@@ -129,7 +140,10 @@ describe('the backup chain: free-first ordering + the on-device answer floor', (
     // chain, an answer-mode failover to the floor was rejected with the "uses your cloud provider" message
     // instead of answering on-device. Both seams must agree on the floor.
     // localPrimaryEligibleFor (routingMode-aware) replaced bare localEligibleFor at this seam.
-    const chain = indexSrc.slice(indexSrc.indexOf('const ineligible ='), indexSrc.indexOf('const ineligible =') + 700)
+    const chain = indexSrc.slice(
+      sourceIndexOf(indexSrc, 'const ineligible ='),
+      sourceIndexOf(indexSrc, 'const ineligible =') + 700
+    )
     expect(chain).toMatch(/localPrimaryEligibleFor\(req, s, tier, allowed\) \|\|/)
     expect(chain).toMatch(/localFallbackEligibleFor\(req, s, tier, allowed\) \|\|/)
     expect(chain).toMatch(/localAnswerFloorEligibleFor\(req, s, allowed\)/)
@@ -138,11 +152,15 @@ describe('the backup chain: free-first ordering + the on-device answer floor', (
 
 describe('budget pre-emption skips a provider before it 429s (fail-open)', () => {
   it('folds isBudgetExhausted into the healthy filter, gated on the setting', () => {
-    expect(indexSrc).toMatch(/const budgetBlocked = \(p: ProviderId\): boolean => s\.resilience\.budgetPreempt && isBudgetExhausted\(p\)/)
+    expect(indexSrc).toMatch(
+      /const budgetBlocked = \(p: ProviderId\): boolean => s\.resilience\.budgetPreempt && isBudgetExhausted\(p\)/
+    )
     expect(indexSrc).toMatch(/eligible\(p\) && !isCoolingDown\(p\) && !budgetBlocked\(p\)/)
   })
 
   it('skips a budget-exhausted primary at the entry point too', () => {
-    expect(indexSrc).toMatch(/isCoolingDown\(primary\) \|\| \(s\.resilience\.budgetPreempt && isBudgetExhausted\(primary\)\)/)
+    expect(indexSrc).toMatch(
+      /isCoolingDown\(primary\) \|\| \(s\.resilience\.budgetPreempt && isBudgetExhausted\(primary\)\)/
+    )
   })
 })

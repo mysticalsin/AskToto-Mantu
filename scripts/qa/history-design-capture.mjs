@@ -31,7 +31,13 @@ import { spawn } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import { NAVIGATION_GUARD_BOOTSTRAP_PATCH, clickHistory, ensureIdleBar, findOverlayPage } from './golden-flows/navigation-guard-rows.mjs'
+import { pathToFileURL } from 'node:url'
+import {
+  NAVIGATION_GUARD_BOOTSTRAP_PATCH,
+  clickHistory,
+  ensureIdleBar,
+  findOverlayPage
+} from './golden-flows/navigation-guard-rows.mjs'
 import { mainInspector } from './golden-flows/right-edge-hide-rows.mjs'
 import { isOverlayUrl, parseAuditLog } from './golden-flows/smoke-support.mjs'
 import { freeLoopbackPort } from './lib/app-driver.mjs'
@@ -41,9 +47,11 @@ import {
   BLOCKED_EXTERNAL_ROWS,
   DESIGN_VARIANTS,
   HISTORY_DESIGN_STATES,
+  HISTORY_DEGRADED_MS,
   IPC_CHANNELS,
   KEYBOARD_VARIANT_ID,
   designVerdict,
+  deviceMetricsForVariant,
   historyTransitions,
   judgeCapture,
   listAnswer,
@@ -51,7 +59,7 @@ import {
 } from './lib/history-design.mjs'
 
 const READY_TIMEOUT_MS = 150_000
-const STATE_TIMEOUT_MS = 10_000
+export const STATE_TIMEOUT_MS = 10_000
 const SETTLE_TIMEOUT_MS = 1_000
 const QUIT_TIMEOUT_MS = 30_000
 const TAB_STOPS_MAX = 80
@@ -88,7 +96,8 @@ function readAudit(profile) {
 async function waitForRendererReady(profile, child) {
   const deadline = Date.now() + READY_TIMEOUT_MS
   while (Date.now() < deadline) {
-    if (child.exitCode !== null || child.signalCode !== null) throw new Error('the app exited before app.renderer.ready')
+    if (child.exitCode !== null || child.signalCode !== null)
+      throw new Error('the app exited before app.renderer.ready')
     if (readAudit(profile).some((record) => record.event === 'app.renderer.ready')) return
     await sleep(250)
   }
@@ -170,15 +179,25 @@ function collectHistoryView(solidLayers) {
   while (root && !(root.classList.contains('h-full') && root.classList.contains('flex-col'))) root = root.parentElement
   const scope = root ? 'history-view' : 'document'
   root = root ?? document.body
-  document.querySelectorAll('[data-history-design-root]').forEach((el) => el.removeAttribute('data-history-design-root'))
+  document
+    .querySelectorAll('[data-history-design-root]')
+    .forEach((el) => el.removeAttribute('data-history-design-root'))
   root.setAttribute('data-history-design-root', '')
   const hides = (value) => value === 'hidden' || value === 'clip'
   const samples = []
   for (const el of [root, ...root.querySelectorAll('*')]) {
-    if (typeof el.checkVisibility === 'function' && !el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) continue
+    if (
+      typeof el.checkVisibility === 'function' &&
+      !el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
+    )
+      continue
     const icon = el instanceof SVGElement && el.getAttribute('role') === 'img' && el.getAttribute('aria-label')
     const placeholder = el instanceof HTMLInputElement && el.placeholder && !el.value
-    const text = [...el.childNodes].filter((node) => node.nodeType === Node.TEXT_NODE).map((node) => node.textContent).join(' ').trim()
+    const text = [...el.childNodes]
+      .filter((node) => node.nodeType === Node.TEXT_NODE)
+      .map((node) => node.textContent)
+      .join(' ')
+      .trim()
     if (!icon && !placeholder && !text) continue
     const r = el.getBoundingClientRect()
     if (r.width === 0 || r.height === 0) continue
@@ -204,13 +223,23 @@ function collectHistoryView(solidLayers) {
       const s = getComputedStyle(node)
       if (hides(s.overflowX) || hides(s.overflowY)) {
         const a = node.getBoundingClientRect()
-        clipAncestor = { left: a.left, right: a.right, top: a.top, bottom: a.bottom, overflowX: s.overflowX, overflowY: s.overflowY, textOverflow: s.textOverflow }
+        clipAncestor = {
+          left: a.left,
+          right: a.right,
+          top: a.top,
+          bottom: a.bottom,
+          overflowX: s.overflowX,
+          overflowY: s.overflowY,
+          textOverflow: s.textOverflow
+        }
         break
       }
     }
     samples.push({
       kind: icon ? 'icon' : placeholder ? 'placeholder' : 'text',
-      label: (icon ? el.getAttribute('aria-label') : placeholder ? `placeholder: ${el.placeholder}` : text).replace(/\s+/g, ' ').slice(0, 60),
+      label: (icon ? el.getAttribute('aria-label') : placeholder ? `placeholder: ${el.placeholder}` : text)
+        .replace(/\s+/g, ' ')
+        .slice(0, 60),
       fg: rgba(placeholder ? getComputedStyle(el, '::placeholder').color : style.color),
       opacity,
       layers,
@@ -239,7 +268,10 @@ function tabStop() {
   const el = document.activeElement
   const root = document.querySelector('[data-history-design-root]')
   if (!el || el === document.body) return null
-  const name = (el.getAttribute('aria-label') || el.textContent || el.getAttribute('title') || '').replace(/\s+/g, ' ').trim().slice(0, 80)
+  const name = (el.getAttribute('aria-label') || el.textContent || el.getAttribute('title') || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80)
   return { name, role: el.getAttribute('role') || el.tagName.toLowerCase(), inView: Boolean(root && root.contains(el)) }
 }
 
@@ -267,26 +299,53 @@ async function rolesPresent(page, state) {
   return results
 }
 
-/** Waits for History's next list request; returns when main received it (the same wall clock as this process). */
-async function waitForRequest(main, before) {
+/** Waits for History's next fixture-backed request; returns when main received it. */
+async function waitForRequest(main, before, wait = sleep, label = 'list') {
   const deadline = Date.now() + STATE_TIMEOUT_MS
   while (Date.now() < deadline) {
-    const { requests, requestedAt } = await main('(({ requests, requestedAt }) => ({ requests, requestedAt }))(globalThis.__historyDesign)')
+    const { requests, requestedAt } = await main(
+      '(({ requests, requestedAt }) => ({ requests, requestedAt }))(globalThis.__historyDesign)'
+    )
     if (requests > before) return requestedAt
-    await sleep(50)
+    await wait(50)
   }
-  throw new Error('History did not request its list')
+  throw new Error(`History did not request its ${label}`)
+}
+
+/**
+ * Waits for the visual cue needed before capture. Accessibility roles are still checked afterwards by
+ * rolesPresent/judgeCapture.
+ * @param {import('playwright').Page} page
+ * @param {{ text: string, role?: string | null, timeoutMs?: number }} cue
+ */
+export async function waitForHistoryDesignCue(page, { text, role = null, timeoutMs = STATE_TIMEOUT_MS }) {
+  const locator = role ? page.getByRole(role).filter({ hasText: text }) : page.getByText(text)
+  await locator.first().waitFor({ timeout: timeoutMs })
+}
+
+const HISTORY_DESIGN_CUE_BY_STATE = Object.freeze({
+  slow: Object.freeze({ text: 'OneDrive is slow to answer', role: 'status' }),
+  'slow-with-rows': Object.freeze({ text: 'OneDrive is slow to answer', role: 'status' }),
+  failed: Object.freeze({ text: 'Could not load your meetings', role: 'alert' }),
+  unavailable: Object.freeze({ text: 'could not be read right now', role: 'status' })
+})
+
+function historyDesignCueForState(stateId) {
+  return HISTORY_DESIGN_CUE_BY_STATE[stateId] ?? null
 }
 
 /**
  * Puts History into `state` from a fresh open; returns when the open was clicked, when History's list
- * request reached main, and how it went. The renderer arms its HISTORY_DEGRADED_MS notice when it sends
- * that request, so the loading capture's budget starts there, not at the harness's click.
+ * or search request reached main, and how it went. Slow degraded waits are anchored to the request that
+ * arms the renderer's HISTORY_DEGRADED_MS notice, so hosted-runner click/type latency cannot consume it.
  */
-async function driveState(page, main, state, realRows) {
+export async function driveState(page, main, state, realRows, deps = {}) {
+  const wait = deps.wait ?? sleep
+  const ensureIdle = deps.ensureIdleBar ?? ensureIdleBar
+  const openHistory = deps.clickHistory ?? clickHistory
   // Bar History ignores a toggle within 400 ms of the last one; a fast capture can end inside that window.
-  await sleep(450)
-  await ensureIdleBar(page)
+  await wait(450)
+  await ensureIdle(page)
   const now = Date.now()
   await main(`(() => {
     const s = globalThis.__historyDesign
@@ -297,27 +356,33 @@ async function driveState(page, main, state, realRows) {
   })()`)
   const before = await main('globalThis.__historyDesign.requests')
   const clickedAt = Date.now()
-  await clickHistory(page)
-  const requestedAt = await waitForRequest(main, before)
-  const visible = (text, role) => (role ? page.getByRole(role).filter({ hasText: text }) : page.getByText(text)).first().waitFor({ timeout: STATE_TIMEOUT_MS })
+  await openHistory(page)
+  const requestedAt = await waitForRequest(main, before, wait, 'list')
+  const visible = (text, role = null, timeoutMs = STATE_TIMEOUT_MS) =>
+    waitForHistoryDesignCue(page, { text, role, timeoutMs })
   const drive = { clickedAt, requestedAt }
   if (state.id === 'slow' || state.id === 'unavailable' || state.id === 'failed') {
-    const [text, role] =
-      state.id === 'slow' ? ['OneDrive is slow to answer', 'status'] : state.id === 'failed' ? ['Could not load your meetings', 'alert'] : ['could not be read right now', 'status']
-    await visible(text, role)
+    const cue = historyDesignCueForState(state.id)
+    await visible(cue.text, cue.role)
     drive.bannerAfterMs = Date.now() - clickedAt
   } else if (state.id === 'slow-with-rows') {
     await visible(SAMPLE_MEETINGS[0])
+    const beforeSearch = await main('globalThis.__historyDesign.requests')
     const typedAt = Date.now()
     await page.getByLabel('Search past meetings').fill('planning')
-    await visible('OneDrive is slow to answer', 'status')
+    drive.requestedAt = await waitForRequest(main, beforeSearch, wait, 'search')
+    const cue = historyDesignCueForState(state.id)
+    await visible(cue.text, cue.role)
     drive.bannerAfterMs = Date.now() - typedAt
   } else if (state.list !== 'pending') {
     await visible(state.list === 'rows+notDownloaded' ? 'Not downloaded' : SAMPLE_MEETINGS[0])
   }
   if (state.open) {
     // The explicit open, by keyboard: focus the row's Download action and press Enter.
-    await page.getByRole('button', { name: /^Download and open / }).first().focus()
+    await page
+      .getByRole('button', { name: /^Download and open / })
+      .first()
+      .focus()
     await page.keyboard.press('Enter')
     await visible(state.read === 'failed' ? 'Download failed' : 'Downloading…')
   }
@@ -325,7 +390,9 @@ async function driveState(page, main, state, realRows) {
 }
 
 async function applyVariant(page, cdp, main, variant) {
-  await main(`(() => { globalThis.__metisReHideElectron.nativeTheme.themeSource = ${JSON.stringify(variant.appearance)}; return true })()`)
+  await main(
+    `(() => { globalThis.__metisReHideElectron.nativeTheme.themeSource = ${JSON.stringify(variant.appearance)}; return true })()`
+  )
   await page.emulateMedia({ colorScheme: variant.appearance, reducedMotion: variant.motion })
   const [r, g, b] = BACKDROPS[variant.appearance]
   await cdp.send('Emulation.setDefaultBackgroundColorOverride', { color: { r, g, b, a: 1 } })
@@ -336,7 +403,17 @@ async function captureState({ page, cdp, main, state, variant, realRows, out }) 
   try {
     return await captureReachedState({ page, cdp, main, state, variant, realRows, out })
   } catch (error) {
-    return { judged: judgeCapture({ state, variant, collected: null, roles: [], tabOrder: null, drive: { error: error.message } }), screenshot: null }
+    return {
+      judged: judgeCapture({
+        state,
+        variant,
+        collected: null,
+        roles: [],
+        tabOrder: null,
+        drive: { error: error.message }
+      }),
+      screenshot: null
+    }
   }
 }
 
@@ -360,13 +437,14 @@ async function settleWindow(page) {
 }
 
 async function captureReachedState({ page, cdp, main, state, variant, realRows, out }) {
-  const drive = await driveState(page, main, state, realRows)
   const screenshot = join(state.id, `${variant.id}.png`)
+  let drive
   let collected
   // Width and height 0 leave the viewport the real window's, so the app's own content sizing still
   // applies at 2x (layout there can differ by a few pixels); only the device scale factor is emulated.
-  await cdp.send('Emulation.setDeviceMetricsOverride', { width: 0, height: 0, deviceScaleFactor: variant.scale, mobile: false })
+  await cdp.send('Emulation.setDeviceMetricsOverride', deviceMetricsForVariant(variant))
   try {
+    drive = await driveState(page, main, state, realRows)
     await settleWindow(page)
     await page.screenshot({ path: join(out, screenshot), scale: 'device' })
     drive.capturedAfterMs = Date.now() - drive.requestedAt
@@ -385,7 +463,16 @@ async function captureReachedState({ page, cdp, main, state, variant, realRows, 
     tabOrder = await walkTabOrder(page)
   }
   const judged = judgeCapture({ state, variant, collected, roles, tabOrder, drive })
-  return { judged: { ...judged, scope: collected.scope, bannerAfterMs: drive.bannerAfterMs ?? null, capturedAfterMs: drive.capturedAfterMs, tabOrder }, screenshot }
+  return {
+    judged: {
+      ...judged,
+      scope: collected.scope,
+      bannerAfterMs: drive.bannerAfterMs ?? null,
+      capturedAfterMs: drive.capturedAfterMs,
+      tabOrder
+    },
+    screenshot
+  }
 }
 
 /**
@@ -399,7 +486,12 @@ async function warmUp({ page, cdp, main, realRows }) {
   try {
     await applyVariant(page, cdp, main, variant)
     await driveState(page, main, HISTORY_DESIGN_STATES[0], realRows)
-    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 0, height: 0, deviceScaleFactor: variant.scale, mobile: false })
+    await cdp.send('Emulation.setDeviceMetricsOverride', {
+      width: 0,
+      height: 0,
+      deviceScaleFactor: variant.scale,
+      mobile: false
+    })
     await settleWindow(page)
     await page.screenshot({ scale: 'device' })
   } catch {
@@ -437,11 +529,14 @@ function summaryMarkdown(report) {
     `|---|${variants.map(() => '---').join('|')}|`
   ]
   for (const state of HISTORY_DESIGN_STATES) {
-    const cells = variants.map((id) => report.captures.find((c) => c.state === state.id && c.variant === id)?.verdict ?? 'NOT_RUN')
+    const cells = variants.map(
+      (id) => report.captures.find((c) => c.state === state.id && c.variant === id)?.verdict ?? 'NOT_RUN'
+    )
     lines.push(`| ${state.id} | ${cells.join(' | ')} |`)
   }
   lines.push('', `History transitions recorded by the renderer: ${report.transitions.length}.`, '')
-  for (const capture of report.captures.filter((c) => c.verdict !== 'PASS')) lines.push(`- ${capture.state} / ${capture.variant}: ${capture.problems.join('; ')}`)
+  for (const capture of report.captures.filter((c) => c.verdict !== 'PASS'))
+    lines.push(`- ${capture.state} / ${capture.variant}: ${capture.problems.join('; ')}`)
   for (const row of report.blockedExternal) lines.push(`- ${row.row}: ${row.verdict}. ${row.unblockStep}`)
   return `${lines.join('\n')}\n`
 }
@@ -455,7 +550,11 @@ async function main() {
   mkdirSync(args.out, { recursive: true })
   for (const state of HISTORY_DESIGN_STATES) mkdirSync(join(args.out, state.id), { recursive: true })
   const profile = mkdtempSync(join(tmpdir(), 'metis-history-design-'))
-  writeFileSync(join(profile, 'settings.json'), `${JSON.stringify({ ...NAVIGATION_GUARD_BOOTSTRAP_PATCH, onboardingDoneAt: Date.now() })}\n`, { mode: 0o600 })
+  writeFileSync(
+    join(profile, 'settings.json'),
+    `${JSON.stringify({ ...NAVIGATION_GUARD_BOOTSTRAP_PATCH, onboardingDoneAt: Date.now() })}\n`,
+    { mode: 0o600 }
+  )
   const captures = []
   let harnessError = null
   let child = null
@@ -466,7 +565,11 @@ async function main() {
     const inspectPort = await freeLoopbackPort()
     const env = { ...process.env, ASKTOTO_USERDATA: profile }
     for (const key of Object.keys(env)) if (/_API_KEY$/i.test(key)) delete env[key]
-    child = spawn(executableOf(args.target), [`--remote-debugging-port=${port}`, `--inspect=127.0.0.1:${inspectPort}`], { env, stdio: 'ignore' })
+    child = spawn(
+      executableOf(args.target),
+      [`--remote-debugging-port=${port}`, `--inspect=127.0.0.1:${inspectPort}`],
+      { env, stdio: 'ignore' }
+    )
     child.once('error', (error) => {
       harnessError ??= `spawn failed: ${error.message}`
     })
@@ -483,7 +586,8 @@ async function main() {
     await ensureIdleBar(page)
     await clickHistory(page)
     const realRows = await page.evaluate(() => window.toto.recallList())
-    if (!realRows.some((row) => row.title === SAMPLE_MEETINGS[0])) throw new Error('the saved sample meetings are not listed')
+    if (!realRows.some((row) => row.title === SAMPLE_MEETINGS[0]))
+      throw new Error('the saved sample meetings are not listed')
     await main(INSTALL_FIXTURE_HANDLERS)
     const cdp = await page.context().newCDPSession(page)
     await warmUp({ page, cdp, main, realRows })
@@ -492,7 +596,9 @@ async function main() {
       for (const state of HISTORY_DESIGN_STATES) {
         const { judged, screenshot } = await captureState({ page, cdp, main, state, variant, realRows, out: args.out })
         captures.push({ ...judged, screenshot })
-        console.log(`[history-design] ${state.id} / ${variant.id}: ${judged.verdict}${judged.problems.length ? ` (${judged.problems.join('; ')})` : ''}`)
+        console.log(
+          `[history-design] ${state.id} / ${variant.id}: ${judged.verdict}${judged.problems.length ? ` (${judged.problems.join('; ')})` : ''}`
+        )
       }
     }
     // The product's own Quit; the page may close before this evaluation answers.
@@ -506,7 +612,7 @@ async function main() {
     console.error(`[history-design] ${error.stack ?? error.message}`)
   } finally {
     await browser?.close().catch(() => undefined)
-    inspector?.close()
+    await inspector?.close()
     if (child) {
       const deadline = Date.now() + QUIT_TIMEOUT_MS
       while (child.exitCode === null && child.signalCode === null && Date.now() < deadline) await sleep(250)
@@ -523,13 +629,22 @@ async function main() {
     ticket: 'M2-0032',
     verdict: harnessError ? 'INCOMPLETE' : designVerdict({ captures, transitions, expected }),
     harnessError,
-    app: started ? { version: started.version ?? null, platform: started.platform ?? null, arch: started.arch ?? null } : null,
-    states: HISTORY_DESIGN_STATES.map(({ id, title, list, search, read }) => ({ id, title, list, search: search ?? null, read: read ?? null })),
+    app: started
+      ? { version: started.version ?? null, platform: started.platform ?? null, arch: started.arch ?? null }
+      : null,
+    states: HISTORY_DESIGN_STATES.map(({ id, title, list, search, read }) => ({
+      id,
+      title,
+      list,
+      search: search ?? null,
+      read: read ?? null
+    })),
     variants: DESIGN_VARIANTS,
     backdrops: BACKDROPS,
     sources: {
       rows: 'real meetings saved through window.toto.saveTranscript and listed by the real recallList',
-      fixtures: "slow, failed, cloud-only and unreadable answers served by History's own IPC channels, replaced in main through the inspector"
+      fixtures:
+        "slow, failed, cloud-only and unreadable answers served by History's own IPC channels, replaced in main through the inspector"
     },
     expectedCaptures: expected,
     captures,
@@ -539,14 +654,18 @@ async function main() {
   }
   writeFileSync(join(args.out, 'history-design-report.json'), `${JSON.stringify(report, null, 2)}\n`)
   writeFileSync(join(args.out, 'SUMMARY.md'), summaryMarkdown(report))
-  console.log(`[history-design] ${report.verdict}: ${captures.filter((c) => c.verdict === 'PASS').length}/${expected} captures passed, ${transitions.length} History transitions`)
+  console.log(
+    `[history-design] ${report.verdict}: ${captures.filter((c) => c.verdict === 'PASS').length}/${expected} captures passed, ${transitions.length} History transitions`
+  )
   return report.verdict === 'PASS' ? 0 : 1
 }
 
-main().then(
-  (code) => process.exit(code),
-  (error) => {
-    console.error(`[history-design] ${error.stack ?? error.message}`)
-    process.exit(1)
-  }
-)
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().then(
+    (code) => process.exit(code),
+    (error) => {
+      console.error(`[history-design] ${error.stack ?? error.message}`)
+      process.exit(1)
+    }
+  )
+}
