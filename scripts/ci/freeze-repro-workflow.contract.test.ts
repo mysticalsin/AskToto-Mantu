@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { candidateRunProblems } from '../qa/candidate-scenarios.mjs'
 
 const root = join(__dirname, '..', '..')
 const workflow = readFileSync(join(root, '.github', 'workflows', 'freeze-repro.yml'), 'utf8').replace(/\r\n/g, '\n')
@@ -39,10 +40,12 @@ describe('M2-0008 freeze repro workflow', () => {
 
   it('covers hosted macOS and Windows artifact extraction paths', () => {
     expect(workflow).toContain('runs-on: macos-latest')
-    expect(workflow).toContain("gh release download \"$RELEASE_TAG\" --repo \"$RELEASE_REPO\" --pattern 'Metis-*.dmg'")
+    expect(workflow).toContain('gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern \'Metis-*.dmg\'')
     expect(workflow).toContain('hdiutil attach')
     expect(workflow).toContain('runs-on: windows-latest')
-    expect(workflow).toContain("gh release download \"$RELEASE_TAG\" --repo \"$RELEASE_REPO\" --pattern 'Metis-Setup-*.exe'")
+    expect(workflow).toContain(
+      'gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern \'Metis-Setup-*.exe\''
+    )
     expect(workflow).toContain('Start-Process')
   })
 
@@ -93,27 +96,66 @@ describe('M2-0008 freeze repro workflow', () => {
 })
 
 describe('M2-0194 QA candidate mode of the freeze repro workflow', () => {
-  it('takes a qa-candidate run id and downloads that run\'s provenance and installer with read-only permissions', () => {
+  it("takes a qa-candidate run id and downloads that run's provenance and installer with read-only permissions", () => {
     expect(workflow).toMatch(/\n {6}candidate_run:\n {8}description: >-\n[\s\S]*?required: false/)
     expect(workflow).toMatch(/permissions:\n {2}contents: read\n {2}actions: read\n/)
-    expect(workflow).toContain('gh run download "$CANDIDATE_RUN" --repo "$GITHUB_REPOSITORY" --name candidate-provenance')
+    expect(workflow).toContain(
+      'gh run download "$CANDIDATE_RUN" --repo "$GITHUB_REPOSITORY" --name candidate-provenance'
+    )
     expect(workflow).toContain('--name candidate-mac')
     expect(workflow).toContain('--name candidate-win')
     expect(workflow.match(/node scripts\/qa\/provenance\.mjs verify /g)).toHaveLength(2)
     expect(workflow).not.toContain('secrets.')
   })
 
-  it('refuses candidate runs that are not successful workflow_dispatch qa-candidate.yml runs on main before download', () => {
-    expect(workflow.match(/gh api "repos\/\$GITHUB_REPOSITORY\/actions\/runs\/\$CANDIDATE_RUN"/g)).toHaveLength(2)
-    expect(workflow.match(/path: "\.github\/workflows\/qa-candidate\.yml"/g)).toHaveLength(2)
-    expect(workflow.match(/event: "workflow_dispatch"/g)).toHaveLength(2)
-    expect(workflow.match(/head_branch: "main"/g)).toHaveLength(2)
-    expect(workflow.match(/status: "completed"/g)).toHaveLength(2)
-    expect(workflow.match(/conclusion: "success"/g)).toHaveLength(2)
+  it('refuses candidate runs that are not successful workflow_dispatch qa-candidate.yml runs on main or release/1.9.x before download', () => {
+    // M2-0500: both jobs use the shared candidate guard (candidateRunProblems), not a main-only copy.
+    const guardStep = 'Refuse anything but a qa-candidate run on main or release/1.9.x before downloading artifacts'
+    expect(
+      workflow.match(
+        /gh api "repos\/\$GITHUB_REPOSITORY\/actions\/runs\/\$CANDIDATE_RUN" > "\$RUNNER_TEMP\/candidate-run\.json"/g
+      )
+    ).toHaveLength(2)
+    expect(
+      workflow.match(
+        /node scripts\/qa\/candidate-scenarios\.mjs guard "\$RUNNER_TEMP\/candidate-run\.json" "\$CANDIDATE_RUN"/g
+      )
+    ).toHaveLength(2)
+    expect(workflow).not.toMatch(/head_branch:\s*"main"/)
+    expect(workflow).not.toContain('Refuse non-main qa-candidate runs')
     const mac = workflow.slice(workflow.indexOf('  macos:'), workflow.indexOf('  windows:'))
     const win = workflow.slice(workflow.indexOf('  windows:'))
-    expect(mac.indexOf('Refuse non-main qa-candidate runs')).toBeLessThan(mac.indexOf('Download the QA candidate macOS installer'))
-    expect(win.indexOf('Refuse non-main qa-candidate runs')).toBeLessThan(win.indexOf('Download the QA candidate Windows installer'))
+    for (const job of [mac, win]) {
+      expect(job.indexOf('actions/checkout@')).toBeLessThan(job.indexOf(guardStep))
+      const step = job.slice(job.indexOf(guardStep), job.indexOf('      - name: Download the QA candidate'))
+      expect(step).toContain("if: inputs.candidate_run != ''")
+      expect(step).toContain('node scripts/qa/candidate-scenarios.mjs guard')
+    }
+    expect(mac.indexOf(guardStep)).toBeLessThan(mac.indexOf('Download the QA candidate macOS installer'))
+    expect(win.indexOf(guardStep)).toBeLessThan(win.indexOf('Download the QA candidate Windows installer'))
+  })
+
+  it('the shared guard accepts main and release/1.9.x qa-candidate dispatches and refuses any other branch', () => {
+    const successful = {
+      id: 4242,
+      path: '.github/workflows/qa-candidate.yml',
+      event: 'workflow_dispatch',
+      head_branch: 'main',
+      status: 'completed',
+      conclusion: 'success'
+    }
+    expect(candidateRunProblems(successful, '4242')).toEqual([])
+    expect(candidateRunProblems({ ...successful, head_branch: 'release/1.9.x' }, '4242')).toEqual([])
+    expect(candidateRunProblems({ ...successful, head_branch: 'release/1.9.y' }, '4242')).toHaveLength(1)
+    expect(candidateRunProblems({ ...successful, head_branch: 'feature/hotfix' }, '4242')).toHaveLength(1)
+    expect(
+      candidateRunProblems({ ...successful, head_branch: 'release/1.9.x', event: 'pull_request' }, '4242')
+    ).toHaveLength(1)
+    expect(
+      candidateRunProblems({ ...successful, head_branch: 'release/1.9.x', conclusion: 'failure' }, '4242')
+    ).toHaveLength(1)
+    expect(candidateRunProblems({ ...successful, status: 'in_progress' }, '4242')).toHaveLength(1)
+    expect(candidateRunProblems({ ...successful, path: '.github/workflows/build.yml' }, '4242')).toHaveLength(1)
   })
 
   it('checks the candidate hash before anything is installed, and fails the job on a mismatch', () => {
@@ -129,7 +171,9 @@ describe('M2-0194 QA candidate mode of the freeze repro workflow', () => {
   it('emits and checks the M2-0194 bundle only in candidate mode and keeps the main-only guard', () => {
     expect(workflow.match(/--candidate-run "\$CANDIDATE_RUN"/g)).toHaveLength(2)
     expect(workflow.match(/--build-run-id "\$CANDIDATE_RUN"/g)).toHaveLength(2)
-    expect(workflow.match(/node scripts\/evidence\/check\.mjs --ticket M2-0194 --bundle out\/m2-0194-freeze-repro/g)).toHaveLength(2)
+    expect(
+      workflow.match(/node scripts\/evidence\/check\.mjs --ticket M2-0194 --bundle out\/m2-0194-freeze-repro/g)
+    ).toHaveLength(2)
     expect(workflow).toContain('name: m2-0194-freeze-repro-macos')
     expect(workflow).toContain('name: m2-0194-freeze-repro-windows')
     expect(workflow.match(/if: inputs\.candidate_run == ''/g)).toHaveLength(2)
