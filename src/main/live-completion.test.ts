@@ -14,7 +14,7 @@ import { ThinkStripper } from './llm/think-strip'
 import { classifyExhaustion } from './llm/exhaustion'
 import { isProxyOperatorFault, isTransient, nextBackoff, stripProxyFaultMarker } from './llm/retry'
 import type { StreamHandle, StreamHandlers, StreamOptions } from './llm/shared'
-import { pathTagForSeatProvider } from './operator-ingest'
+import { pathTagForSeatProvider } from './features/operator/operator-ingest'
 
 const source = ts.createSourceFile('index.ts', readFileSync(join(__dirname, 'index.ts'), 'utf8'), ts.ScriptTarget.Latest, true)
 let attemptBody: ts.Block | undefined

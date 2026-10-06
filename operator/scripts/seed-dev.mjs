@@ -5,7 +5,7 @@
  * emails, a spread of license states, ~300 asks over N days with question types, recaps, listen
  * events, and CRM rows.
  *
- * HMAC signing mirrors src/shared/operator-hmac.ts + src/main/operator-hmac-sign.ts exactly
+ * HMAC signing mirrors src/shared/operator-hmac.ts + src/main/features/operator/operator-hmac-sign.ts exactly
  * (canonical string `${ts}.${nonce}.${deviceId}.${sha256Hex(body)}`, HMAC-SHA256 hex) so these
  * requests are indistinguishable from a real desktop seat to operator/src/hmac.ts.
  *

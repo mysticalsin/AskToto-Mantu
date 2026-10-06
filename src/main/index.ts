@@ -190,7 +190,7 @@ import {
   narrowAllowedForCapability,
   resolveLocalSpeechPackPolicy,
   resolveManagedModel
-} from './model-policy-client'
+} from './features/operator/model-policy-client'
 import { localModelAllowedByPolicy } from '@shared/model-policy'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import { registerWriteupIpc } from './ipc/writeup'
@@ -203,8 +203,13 @@ import { registerHistoryTraceIpc } from './ipc/history-trace-ipc'
 import { configureSidecarRegistry, createSidecarRegistry } from './infra/process/registry'
 import { runBootSidecarReaper } from './infra/process/reaper'
 import { startAvailableMemorySampler } from './infra/scheduler/memory-sampler'
-import { createSpeakerId, type SpeakerEnrollmentSnapshot, type SpeakerId, type SpeakerLabel } from './speaker-id'
-import { releaseSpeakerEmbedding, killSpeakerEmbeddingHostForQuit } from './speaker-embedding-client'
+import {
+  createSpeakerId,
+  type SpeakerEnrollmentSnapshot,
+  type SpeakerId,
+  type SpeakerLabel
+} from './features/speaker/speaker-id'
+import { releaseSpeakerEmbedding, killSpeakerEmbeddingHostForQuit } from './features/speaker/speaker-embedding-client'
 import {
   clampAxis,
   clampAxisMargin,
@@ -659,15 +664,15 @@ import {
   recordOperatorCrmSend,
   recordOperatorRating,
   startOperatorRuntime
-} from './operator-ingest'
+} from './features/operator/operator-ingest'
 import { classifyQuestionType } from '@shared/question-type'
 import { BoundedSet } from './bounded-set'
 import { installEgressGuard } from './net/egress-guard'
-import { buildCrmIngestEvent, meetingFileHash, shouldIngestCrm } from './operator-crm'
-import { startOperatorOverlayPoll } from './operator-overlay'
-import { activateOperatorLicenseToken } from './operator-license-activate'
-import { operatorGate } from './operator-entitlements-state'
-import { operatorIntegrationsSnapshot, registeredOperatorMcpServers } from './operator-integrations'
+import { buildCrmIngestEvent, meetingFileHash, shouldIngestCrm } from './features/operator/operator-crm'
+import { startOperatorOverlayPoll } from './features/operator/operator-overlay'
+import { activateOperatorLicenseToken } from './features/operator/operator-license-activate'
+import { operatorGate } from './features/operator/operator-entitlements-state'
+import { operatorIntegrationsSnapshot, registeredOperatorMcpServers } from './features/operator/operator-integrations'
 import { initLogging, mainLog, auditLog, auditLogPath } from './logger'
 import { CommandControl } from './command-control'
 import { executeDesktopAction } from './desktop-adapters'
@@ -685,8 +690,8 @@ import {
   ensureHighTierAsrModel,
   isHighTierAsrModelReady,
   removeHighTierAsrModel
-} from './asr-model-download'
-import { asrModelBytes } from './asr-model-manifest'
+} from './infra/asr/asr-model-download'
+import { asrModelBytes } from './infra/asr/asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
 import {
@@ -739,7 +744,7 @@ import {
   parakeetRelease,
   parakeetAddonError,
   killParakeetHostForQuit
-} from './parakeet'
+} from './infra/parakeet/parakeet'
 import { createListeningStateHandler } from './listening-state-ipc'
 import { appleSpeechLocale, appleSpeechTranscribe } from './apple-speech'
 import {
@@ -792,7 +797,7 @@ import {
   asrAssetsStatusSnapshot,
   importAsrAssetsReady,
   userDataAsrRoot
-} from './asr-bundled-ensure'
+} from './infra/asr/asr-bundled-ensure'
 import { EncryptedImportJobStore } from './import-job-store'
 import { allowsSpeculativeLocalWork } from './import-memory-pressure'
 import { bundledFfmpegPath, startFfmpegDecode, type FfmpegDecoder } from './ffmpeg-decoder'
@@ -833,17 +838,17 @@ import { initAutoUpdate, checkForUpdateNow, startUpdateDownload } from './update
 import { runSelfTest, redirectSelfTestUserData } from './selftest'
 import { devEnv, devToolsEnabled } from './dev-env'
 import { readEvalMetrics, aggregateMetrics } from './metrics'
-import { importDustCliSession, refreshDustCliSession } from './dustcli'
-import { ensureManagedDustCli } from './dust-cli-chat'
+import { importDustCliSession, refreshDustCliSession } from './features/dust/dustcli'
+import { ensureManagedDustCli } from './features/dust/dust-cli-chat'
 import {
   beginDustDeviceLogin,
   pollDustDeviceLoginOnce,
   listDustWorkspacesForToken,
   completeDustOAuthLogin,
   refreshDustOAuthSession
-} from './dust-oauth'
-import { asrManifestComplete } from './asr-manifest'
-import { createAsrModelProtocolHandler } from './asr-model-protocol'
+} from './features/dust/dust-oauth'
+import { asrManifestComplete } from './infra/asr/asr-manifest'
+import { createAsrModelProtocolHandler } from './infra/asr/asr-model-protocol'
 import { detectCli, setupCli, installCli, loginCli, prewarmCli, checkCliSession, connectCliSession } from './cli'
 import { connectMcp, pushToMcp } from './mcp/mcpClient'
 import { resolveWriteTargets } from './mcp/write-tools'
@@ -879,7 +884,7 @@ import {
   memberLicenseStatus,
   noteQualifyingUse,
   verifyCachedMemberLicense
-} from './license'
+} from './infra/license/license'
 import {
   setMcpApiKey,
   getMcpApiKey,

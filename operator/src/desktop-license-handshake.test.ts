@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { OPERATOR_LICENSE_HEADER } from '@shared/operator-hmac'
-import { hashOperatorId, operatorHmacHeaders } from '../../src/main/operator-hmac-sign'
+import { hashOperatorId, operatorHmacHeaders } from '../../src/main/features/operator/operator-hmac-sign'
 import { handleRequest, type Env } from './index'
 import { memoryStore } from './store'
 import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY } from './test-fixtures'

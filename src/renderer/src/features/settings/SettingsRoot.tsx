@@ -93,7 +93,7 @@ import { AiSection } from './AiSection'
 import { PROFILE_CREDENTIAL_STORE, isProfileUnlockError } from './credential-store'
 import { pickReadyProvider } from './provider-readiness'
 import { isWindows } from '../../lib/keys'
-import { haltAllOnboardingAudio, unlockOnboardingAudio } from '../../lib/onboarding-music'
+import { haltAllOnboardingAudio, unlockOnboardingAudio } from '../onboarding/onboarding-music'
 
 // Kept importable from here: its focused tests and callers predate the move to features/settings.
 export { pickReadyProvider }

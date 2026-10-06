@@ -10,8 +10,8 @@ import { attachScreenshot, type DustFileContentFragment } from './dust-attachmen
 import { redactSecrets } from '@shared/redact'
 import { dustAgentUnavailableMessage } from '@shared/quick-actions'
 import { DUST_SPOTLIGHT_REF_AGENT_ID } from '@shared/ipc'
-import { runManagedDustChat, projectNameForDataAndAiAsk } from '../dust-cli-chat'
-import { fetchDustProjects, matchDataAndAiProjects } from '../dust-projects'
+import { runManagedDustChat, projectNameForDataAndAiAsk } from '../features/dust/dust-cli-chat'
+import { fetchDustProjects, matchDataAndAiProjects } from '../features/dust/dust-projects'
 
 /**
  * Logger for the @dust-tt/client. It logs several EXPECTED, already-handled conditions straight to

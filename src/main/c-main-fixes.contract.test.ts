@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createAsrModelProtocolHandler } from './asr-model-protocol'
+import { createAsrModelProtocolHandler } from './infra/asr/asr-model-protocol'
 import { sourceIndexOf } from '../../scripts/lib/source-layout'
 
 /**

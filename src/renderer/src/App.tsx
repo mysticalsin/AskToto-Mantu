@@ -17,8 +17,11 @@ import { ControlPill } from './components/ControlPill'
 import { OverlayPeek } from './components/OverlayPeek'
 import { RightEdgeSidecar } from './components/RightEdgeSidecar'
 import { Panel } from './components/Panel'
-import { isOnboardingBoot, provisionalOnboardingSettings } from './lib/onboarding-boot'
-import { installOnboardingAudioLockHooks, lockOnboardingAudio } from './lib/onboarding-music'
+import {
+  isOnboardingBoot,
+  provisionalOnboardingSettings
+} from './features/onboarding/onboarding-boot'
+import { installOnboardingAudioLockHooks, lockOnboardingAudio } from './features/onboarding/onboarding-music'
 // Heavy, rarely-first views are code-split so they don't weigh down the overlay's startup. Answer and
 // Copilot pull in Markdown.tsx -> streamdown + shiki/core, which have no reason to parse/execute before
 // the user has asked anything — deferring them keeps that weight out of the eager boot chunk.
@@ -148,7 +151,7 @@ import {
   transcriptHasContent
 } from '@shared/quick-actions'
 import { micSpeakerLabel } from '@shared/speaker-names'
-import { onboardingLaunchFromSearch } from './lib/onboarding-launch'
+import { onboardingLaunchFromSearch } from './features/onboarding/onboarding-launch'
 
 function recapWriteKey(ownerId: string, runId: string): string {
   return `${ownerId}\u0000${runId}`

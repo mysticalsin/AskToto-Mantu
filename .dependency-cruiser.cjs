@@ -15,7 +15,9 @@ const TEST_FILE = '\\.(test|spec)\\.tsx?$'
 // electron.vite.config.ts, the scripts of src/renderer/{index,decoder}.html, and the
 // `new Worker(new URL(...))` target in listen.ts.
 const ENTRY_POINTS = [
-  '^src/main/(index|parakeet-asr-host|parakeet-extract-host|speaker-embedding-host|whisper-asr-host)\\.ts$',
+  '^src/main/(index|whisper-asr-host)\\.ts$',
+  '^src/main/infra/parakeet/(parakeet-asr-host|parakeet-extract-host)\\.ts$',
+  '^src/main/features/speaker/speaker-embedding-host\\.ts$',
   '^src/preload/(index|intelligence|import-decoder)\\.ts$',
   '^src/renderer/src/(main\\.tsx|import-decoder\\.ts|design-capture/main\\.tsx)$',
   '^src/renderer/src/lib/whisper\\.worker\\.ts$',
