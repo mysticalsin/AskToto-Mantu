@@ -104,12 +104,16 @@ async function waitForRendererReady(profile, child) {
 }
 
 /**
- * Why a pending capture could miss its cue (M2-0550), recorded in the report. CI: run 37443712731 (#366),
- * slow / light-1x-reduced-motion failed with "state not reached" after 11.0 s (450 ms toggle guard, then the
- * 10 s cue wait) although its list request had reached main; the same state passed in the other 7 variants.
+ * Why a pending capture could miss its cue (M2-0550), recorded in the report. CI on m2/integration's harness:
+ * run 37443712731 (#366) failed slow / light-1x-reduced-motion after 11.0 s (450 ms toggle guard, then the
+ * 10 s cue wait) although its list request had reached main; run 37444948019 (#470) passed that capture and
+ * failed the next one, slow-with-rows, the same way. Every other capture passed in both, including both slow
+ * states in the three later reduced-motion passes. History has no reduced-motion dependency (RecallView and
+ * history/list-status.ts never read it, and overlay-motion.ts reads matchMedia without a listener), so
+ * the variant is where main's GC happened to land, not a cause.
  */
 export const PENDING_ANSWER_ROOT_CAUSE =
-  "A pending fixture answered History's request with an unreferenced `new Promise(() => {})`. Electron's ipcMain.handle awaits the handler's result in an async frame that is the only holder of the invoke's reply channel (lib/browser/api/web-contents.ts, '-ipc-invoke'); with nothing else referencing the promise, a main-process garbage collection frees that frame and the channel, and the channel's destructor rejects the renderer's ipcRenderer.invoke with 'reply was never sent' (shell/browser/api/electron_api_web_contents.cc, ReplyChannel). RecallView's catch then moves the list to 'failed' before HISTORY_DEGRADED_MS, so the 'OneDrive is slow to answer' status never renders and driveState's cue wait times out (state not reached). Whether a collection lands inside that 2 s window depends on main's GC schedule, which is why one pending capture failed (slow / light-1x-reduced-motion in run 37443712731, slow-with-rows / light-1x-reduced-motion in the ticket) while the same state passed elsewhere. The fix parks every pending answer in globalThis.__historyDesign.parked so it stays reachable, and forces HeapProfiler.collectGarbage after each pending request reaches main, so a fixture that lets an answer be collected fails every pending capture instead of one by GC timing."
+  "A pending fixture answered History's request with an unreferenced `new Promise(() => {})`. Electron's ipcMain.handle awaits the handler's result in an async frame that is the only holder of the invoke's reply channel (lib/browser/api/web-contents.ts, '-ipc-invoke'); with nothing else referencing the promise, a main-process garbage collection frees that frame and the channel, and the channel's destructor rejects the renderer's ipcRenderer.invoke with 'reply was never sent' (shell/browser/api/electron_api_web_contents.cc, ReplyChannel). RecallView's catch then moves the list to 'failed' before HISTORY_DEGRADED_MS, so the 'OneDrive is slow to answer' status never renders and driveState's cue wait times out (state not reached). Whether a collection lands inside that 2 s window depends on main's GC schedule, which is why the miss moves between pending captures (slow / light-1x-reduced-motion in run 37443712731, slow-with-rows / light-1x-reduced-motion in run 37444948019) while the same states pass in every other variant. The fix parks every pending answer in globalThis.__historyDesign.parked so it stays reachable, and forces HeapProfiler.collectGarbage after each pending request reaches main, so a fixture that lets an answer be collected fails every pending capture instead of one by GC timing."
 
 /**
  * Replaces History's list, search and explicit-open handlers with fixtures driven by __historyDesign. A

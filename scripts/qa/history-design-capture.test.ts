@@ -196,10 +196,13 @@ describe('History design matrix (M2-0032)', () => {
     expect(sender.send).toHaveBeenCalledWith(IPC_CHANNELS.recallHydration, { file: 'sample.md', state: 'hydrating' })
   })
 
-  it("keeps a pending list answer's Electron reply channel alive through a main-process GC, so the slow cue can render", async () => {
+  it('keeps every pending answer of every capture in matrix order (incl. motion -> first reduced-motion pass) alive through main-process GCs', async () => {
     // Models Electron's ipcMain.handle: an async frame awaits the handler's answer and is the only holder of
     // the invoke's reply channel; if the channel is collected unanswered, the renderer's invoke rejects with
-    // 'reply was never sent' and History shows 'failed' instead of 'OneDrive is slow to answer'.
+    // 'reply was never sent' and History shows 'failed' instead of 'OneDrive is slow to answer'. CI saw that
+    // miss on whichever pending capture met a main GC (slow in run 37443712731, slow-with-rows in run
+    // 37444948019, both light-1x-reduced-motion), so this drives the whole matrix in the harness's order and
+    // forces a GC inside every capture instead of pinning one state or variant.
     const handlers = new Map<string, (...args: never[]) => unknown>()
     ;(globalThis as typeof globalThis & { __metisReHideElectron?: unknown }).__metisReHideElectron = {
       ipcMain: {
@@ -208,7 +211,6 @@ describe('History design matrix (M2-0032)', () => {
       }
     }
     expect(eval(INSTALL_FIXTURE_HANDLERS)).toBe(true)
-    eval(`(() => { globalThis.__historyDesign.list = { kind: 'pending' } })()`)
 
     const neverSent: string[] = []
     const registry = new FinalizationRegistry((label: string) => neverSent.push(label))
@@ -223,19 +225,49 @@ describe('History design matrix (M2-0032)', () => {
         }
       })()
     }
-    invoke('fixture list', handlers.get(IPC_CHANNELS.recallList)! as () => unknown)
+    const channel = (name: string) => handlers.get(name)! as (...args: unknown[]) => unknown
+    const sender = { send: () => undefined }
+    const gc = exposedGc()
+    const pending: string[] = []
+    for (const variant of DESIGN_VARIANTS) {
+      for (const state of HISTORY_DESIGN_STATES) {
+        const capture = `${state.id} / ${variant.id}`
+        const fixtures = fixtureAnswersForState(state, [{ title: 'Quarterly planning sample' }], 0)
+        eval(`(() => {
+          const s = globalThis.__historyDesign
+          s.list = ${JSON.stringify(fixtures.list)}
+          s.search = ${JSON.stringify(fixtures.search)}
+          s.read = ${JSON.stringify(fixtures.read)}
+        })()`)
+        invoke(`${capture}: list`, () => channel(IPC_CHANNELS.recallList)())
+        if (fixtures.list.kind === 'pending') pending.push(`${capture}: list`)
+        if (state.search) {
+          invoke(`${capture}: search`, () => channel(IPC_CHANNELS.recallSearch)())
+          if (fixtures.search.kind === 'pending') pending.push(`${capture}: search`)
+        }
+        if (state.open) {
+          invoke(`${capture}: read`, () => channel(IPC_CHANNELS.recallRead)({ sender }, 'sample.md'))
+          if (fixtures.read === 'hydrating') pending.push(`${capture}: read`)
+        }
+        gc()
+      }
+    }
     // Control: the same frame awaiting an unreferenced pending promise must be collected, or this model
     // could not tell a parked answer from a collected one.
     invoke('unparked control', () => new Promise(() => {}))
-
-    const gc = exposedGc()
     for (let round = 0; round < 50 && !neverSent.includes('unparked control'); round++) {
       gc()
       await new Promise((resolve) => setTimeout(resolve, 10))
     }
 
+    expect(pending).toEqual(
+      expect.arrayContaining([
+        'slow / light-1x-reduced-motion: list',
+        'slow-with-rows / light-1x-reduced-motion: search'
+      ])
+    )
+    expect(pending).toHaveLength(4 * DESIGN_VARIANTS.length)
     expect(neverSent).toEqual(['unparked control'])
-    expect(eval('globalThis.__historyDesign.requests.list')).toBe(1)
   })
 
   it('forces main-process garbage collection after a pending list request reaches main', async () => {
