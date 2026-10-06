@@ -11,7 +11,11 @@ import type { RightEdgeSession } from '../island/right-edge-session'
 
 type AssertMainWindow = (event: Electron.IpcMainInvokeEvent) => void
 
-export function registerRightEdgeIpc(assertMainWindow: AssertMainWindow, session: RightEdgeSession, current: () => RightEdgeSurfaceState): void {
+export function registerRightEdgeIpc(
+  assertMainWindow: AssertMainWindow,
+  session: RightEdgeSession,
+  current: () => RightEdgeSurfaceState
+): void {
   const watched = new WeakSet<WebContents>()
   // The page whose report the session holds; a replaced window's teardown never clears its successor's pins.
   let owner: WebContents | null = null

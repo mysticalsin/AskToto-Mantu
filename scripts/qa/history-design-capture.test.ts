@@ -40,7 +40,15 @@ function textSample(overrides: Record<string, unknown> = {}) {
     fontSizePx: 13,
     fontWeight: 400,
     rect: { left: 10, right: 110, top: 10, bottom: 30 },
-    box: { overflowX: 'visible', overflowY: 'visible', textOverflow: 'clip', scrollWidth: 100, clientWidth: 100, scrollHeight: 20, clientHeight: 20 },
+    box: {
+      overflowX: 'visible',
+      overflowY: 'visible',
+      textOverflow: 'clip',
+      scrollWidth: 100,
+      clientWidth: 100,
+      scrollHeight: 20,
+      clientHeight: 20
+    },
     clipAncestor: null,
     ...overrides
   }
@@ -75,7 +83,9 @@ describe('History design matrix (M2-0032)', () => {
     for (const appearance of ['light', 'dark']) {
       for (const scale of [1, 2]) {
         for (const motion of ['no-preference', 'reduce']) {
-          expect(DESIGN_VARIANTS.filter((v) => v.appearance === appearance && v.scale === scale && v.motion === motion)).toHaveLength(1)
+          expect(
+            DESIGN_VARIANTS.filter((v) => v.appearance === appearance && v.scale === scale && v.motion === motion)
+          ).toHaveLength(1)
         }
       }
     }
@@ -95,7 +105,8 @@ describe('History design matrix (M2-0032)', () => {
       'download-failed',
       'unavailable'
     ])
-    const names = (id: string) => HISTORY_DESIGN_STATES.find((s) => s.id === id)!.roles.map((r) => ('name' in r ? r.name : undefined))
+    const names = (id: string) =>
+      HISTORY_DESIGN_STATES.find((s) => s.id === id)!.roles.map((r) => ('name' in r ? r.name : undefined))
     expect(names('not-downloaded')).toContain(NOT_DOWNLOADED_TEXT)
     expect(names('unavailable')).toContain(UNAVAILABLE_TEXT)
   })
@@ -114,7 +125,9 @@ describe('History design matrix (M2-0032)', () => {
   it('answers the list with the real rows, plus one flagged row where the state needs it', () => {
     const real = [{ file: 'a.md', title: 'A', date: '', mode: 'general', durationMin: 1, participants: [] }]
     expect(listAnswer('rows', real, 0)).toEqual({ kind: 'rows', rows: real })
-    const cloud = listAnswer('rows+notDownloaded', real, 0) as { rows: { notDownloaded?: boolean; unavailable?: boolean }[] }
+    const cloud = listAnswer('rows+notDownloaded', real, 0) as {
+      rows: { notDownloaded?: boolean; unavailable?: boolean }[]
+    }
     expect(cloud.rows.slice(0, 1)).toEqual(real)
     expect(cloud.rows.filter((row) => row.notDownloaded)).toHaveLength(1)
     const unreadable = listAnswer('rows+unavailable', real, 0) as { rows: { unavailable?: boolean }[] }
@@ -669,7 +682,10 @@ describe('WCAG AA contrast (judgeContrast)', () => {
 
   it('needs 4.5:1 for body text, so #777 on white fails and #767676 passes', () => {
     const layers = [[255, 255, 255, 1]]
-    expect(judgeContrast(textSample({ fg: [119, 119, 119, 1], layers }), WHITE)).toMatchObject({ status: 'fail', required: 4.5 })
+    expect(judgeContrast(textSample({ fg: [119, 119, 119, 1], layers }), WHITE)).toMatchObject({
+      status: 'fail',
+      required: 4.5
+    })
     expect(judgeContrast(textSample({ fg: [118, 118, 118, 1], layers }), WHITE)).toMatchObject({ status: 'pass' })
   })
 
@@ -677,10 +693,16 @@ describe('WCAG AA contrast (judgeContrast)', () => {
     const layers = [[255, 255, 255, 1]]
     const grey = [140, 140, 140, 1] // about 3.4:1 on white
     expect(judgeContrast(textSample({ fg: grey, layers }), WHITE).status).toBe('fail')
-    expect(judgeContrast(textSample({ fg: grey, layers, fontSizePx: 24 }), WHITE)).toMatchObject({ status: 'pass', required: 3 })
+    expect(judgeContrast(textSample({ fg: grey, layers, fontSizePx: 24 }), WHITE)).toMatchObject({
+      status: 'pass',
+      required: 3
+    })
     expect(judgeContrast(textSample({ fg: grey, layers, fontSizePx: 19, fontWeight: 700 }), WHITE).status).toBe('pass')
     expect(judgeContrast(textSample({ fg: grey, layers, fontSizePx: 19, fontWeight: 400 }), WHITE).status).toBe('fail')
-    expect(judgeContrast(textSample({ kind: 'icon', fg: grey, layers }), WHITE)).toMatchObject({ status: 'pass', required: 3 })
+    expect(judgeContrast(textSample({ kind: 'icon', fg: grey, layers }), WHITE)).toMatchObject({
+      status: 'pass',
+      required: 3
+    })
   })
 
   it('composites translucent glass over the backdrop, so light ink on thin glass fails over a white desktop', () => {
@@ -701,8 +723,12 @@ describe('WCAG AA contrast (judgeContrast)', () => {
       [127, 0, 218, 0.18]
     ]
     for (const backdrop of [BACKDROPS.light, BACKDROPS.dark]) {
-      expect(judgeContrast(textSample({ fg: [166, 77, 255, 1], layers, fontSizePx: 11, fontWeight: 600 }), backdrop).status).toBe('fail')
-      expect(judgeContrast(textSample({ fg: [179, 136, 240, 1], layers, fontSizePx: 11, fontWeight: 600 }), backdrop).status).toBe('pass')
+      expect(
+        judgeContrast(textSample({ fg: [166, 77, 255, 1], layers, fontSizePx: 11, fontWeight: 600 }), backdrop).status
+      ).toBe('fail')
+      expect(
+        judgeContrast(textSample({ fg: [179, 136, 240, 1], layers, fontSizePx: 11, fontWeight: 600 }), backdrop).status
+      ).toBe('pass')
     }
   })
 
@@ -723,17 +749,23 @@ describe('glass background layers (solidGradientLayers)', () => {
   // Enough of a CSS colour parser for computed rgb()/rgba() values.
   const toRgba = (css: string): number[] => {
     if (css === 'transparent') return [0, 0, 0, 0]
-    const [r, g, b, a = 1] = css.replace(/^rgba?\(|\)$/g, '').split(',').map(Number)
+    const [r, g, b, a = 1] = css
+      .replace(/^rgba?\(|\)$/g, '')
+      .split(',')
+      .map(Number)
     return [r, g, b, a]
   }
 
   it("reduces the overlay glass's linear-gradient(c, c) fills to their colours, topmost first", () => {
-    const glass = 'linear-gradient(rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.04)), linear-gradient(rgba(40, 30, 60, 0.6), rgba(40, 30, 60, 0.6))'
+    const glass =
+      'linear-gradient(rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.04)), linear-gradient(rgba(40, 30, 60, 0.6), rgba(40, 30, 60, 0.6))'
     expect(solidGradientLayers(glass, toRgba)).toEqual([
       [255, 255, 255, 0.04],
       [40, 30, 60, 0.6]
     ])
-    expect(solidGradientLayers('linear-gradient(90deg, rgb(1, 2, 3) 0%, rgb(1, 2, 3) 100%)', toRgba)).toEqual([[1, 2, 3, 1]])
+    expect(solidGradientLayers('linear-gradient(90deg, rgb(1, 2, 3) 0%, rgb(1, 2, 3) 100%)', toRgba)).toEqual([
+      [1, 2, 3, 1]
+    ])
   })
 
   it('reads a whole colour function with nested parentheses as one colour (calc() alpha, color-mix)', () => {
@@ -754,7 +786,8 @@ describe('glass background layers (solidGradientLayers)', () => {
   it("skips the empty image of the glass's final colour-only layer (computed as `none`)", () => {
     // `background: linear-gradient(tint), linear-gradient(fill), var(--glass-scrim-bar)` computes its
     // background-image with one entry per layer; the last layer is only a colour, so its image is `none`.
-    const glass = 'linear-gradient(rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.06)), linear-gradient(rgba(28, 11, 52, 0.8), rgba(28, 11, 52, 0.8)), none'
+    const glass =
+      'linear-gradient(rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.06)), linear-gradient(rgba(28, 11, 52, 0.8), rgba(28, 11, 52, 0.8)), none'
     expect(solidGradientLayers(glass, toRgba)).toEqual([
       [255, 255, 255, 0.06],
       [28, 11, 52, 0.8]
@@ -769,7 +802,10 @@ describe('glass background layers (solidGradientLayers)', () => {
 
   it('names the background it could not read in the indeterminate reason', () => {
     const sample = textSample({ bgImage: 'conic-gradient(red, blue)' })
-    expect(judgeContrast(sample, BLACK)).toEqual({ status: 'indeterminate', reason: 'background image or gradient behind the text: conic-gradient(red, blue)' })
+    expect(judgeContrast(sample, BLACK)).toEqual({
+      status: 'indeterminate',
+      reason: 'background image or gradient behind the text: conic-gradient(red, blue)'
+    })
   })
 
   it('has no layers for none, and gives up on a real gradient or an image', () => {
@@ -786,21 +822,50 @@ describe('clipping (judgeClipping)', () => {
   })
 
   it('fails text cut off without an ellipsis, and reports an ellipsis truncation without failing it', () => {
-    const box = { overflowX: 'hidden', overflowY: 'visible', textOverflow: 'clip', scrollWidth: 180, clientWidth: 100, scrollHeight: 20, clientHeight: 20 }
+    const box = {
+      overflowX: 'hidden',
+      overflowY: 'visible',
+      textOverflow: 'clip',
+      scrollWidth: 180,
+      clientWidth: 100,
+      scrollHeight: 20,
+      clientHeight: 20
+    }
     expect(judgeClipping(textSample({ box }), viewport).failures).toEqual(['clipped-x'])
-    expect(judgeClipping(textSample({ box: { ...box, textOverflow: 'ellipsis' } }), viewport)).toEqual({ failures: [], truncated: true })
-    expect(judgeClipping(textSample({ box: { ...box, scrollWidth: 100, overflowY: 'hidden', scrollHeight: 40 } }), viewport).failures).toEqual(['clipped-y'])
+    expect(judgeClipping(textSample({ box: { ...box, textOverflow: 'ellipsis' } }), viewport)).toEqual({
+      failures: [],
+      truncated: true
+    })
+    expect(
+      judgeClipping(textSample({ box: { ...box, scrollWidth: 100, overflowY: 'hidden', scrollHeight: 40 } }), viewport)
+        .failures
+    ).toEqual(['clipped-y'])
   })
 
   it('fails text partly outside the window', () => {
-    expect(judgeClipping(textSample({ rect: { left: 350, right: 420, top: 0, bottom: 20 } }), viewport).failures).toEqual(['outside-window'])
+    expect(
+      judgeClipping(textSample({ rect: { left: 350, right: 420, top: 0, bottom: 20 } }), viewport).failures
+    ).toEqual(['outside-window'])
   })
 
   it('fails text partly outside an ancestor that hides overflow, unless that ancestor ellipsizes; ignores text it hides entirely', () => {
-    const clipAncestor = { left: 0, right: 80, top: 0, bottom: 100, overflowX: 'hidden', overflowY: 'hidden', textOverflow: 'clip' }
+    const clipAncestor = {
+      left: 0,
+      right: 80,
+      top: 0,
+      bottom: 100,
+      overflowX: 'hidden',
+      overflowY: 'hidden',
+      textOverflow: 'clip'
+    }
     expect(judgeClipping(textSample({ clipAncestor }), viewport).failures).toEqual(['clipped-by-ancestor'])
-    expect(judgeClipping(textSample({ clipAncestor: { ...clipAncestor, textOverflow: 'ellipsis' } }), viewport)).toEqual({ failures: [], truncated: true })
-    expect(judgeClipping(textSample({ clipAncestor, rect: { left: 90, right: 150, top: 10, bottom: 30 } }), viewport).failures).toEqual([])
+    expect(
+      judgeClipping(textSample({ clipAncestor: { ...clipAncestor, textOverflow: 'ellipsis' } }), viewport)
+    ).toEqual({ failures: [], truncated: true })
+    expect(
+      judgeClipping(textSample({ clipAncestor, rect: { left: 90, right: 150, top: 10, bottom: 30 } }), viewport)
+        .failures
+    ).toEqual([])
   })
 })
 
@@ -812,18 +877,26 @@ describe('one capture (judgeCapture) and the report verdict (designVerdict)', ()
   const tabOrder = [{ name: 'Download and open Weekly sync', role: 'button' }]
 
   it('passes a state whose text, roles and keyboard actions all check out', () => {
-    expect(judgeCapture({ state: notDownloaded, variant: dark, collected, roles, tabOrder, drive: {} })).toMatchObject({ verdict: 'PASS', problems: [] })
+    expect(judgeCapture({ state: notDownloaded, variant: dark, collected, roles, tabOrder, drive: {} })).toMatchObject({
+      verdict: 'PASS',
+      problems: []
+    })
   })
 
   it('fails on a contrast failure, a clipped element, a missing role or an action Tab cannot reach', () => {
     const faint = { viewport, samples: [textSample({ fg: [30, 30, 30, 1] })] }
-    expect(judgeCapture({ state: notDownloaded, variant: dark, collected: faint, roles, tabOrder, drive: {} }).contrast.failures).toHaveLength(1)
+    expect(
+      judgeCapture({ state: notDownloaded, variant: dark, collected: faint, roles, tabOrder, drive: {} }).contrast
+        .failures
+    ).toHaveLength(1)
     const clipped = { viewport, samples: [textSample({ rect: { left: -20, right: 50, top: 0, bottom: 20 } })] }
-    expect(judgeCapture({ state: notDownloaded, variant: dark, collected: clipped, roles, tabOrder, drive: {} }).verdict).toBe('FAIL')
+    expect(
+      judgeCapture({ state: notDownloaded, variant: dark, collected: clipped, roles, tabOrder, drive: {} }).verdict
+    ).toBe('FAIL')
     const noIcon = roles.map((role) => (role.role === 'img' ? { ...role, found: false } : role))
-    expect(judgeCapture({ state: notDownloaded, variant: dark, collected, roles: noIcon, tabOrder, drive: {} }).missingRoles).toEqual([
-      { role: 'img', name: NOT_DOWNLOADED_TEXT, text: undefined }
-    ])
+    expect(
+      judgeCapture({ state: notDownloaded, variant: dark, collected, roles: noIcon, tabOrder, drive: {} }).missingRoles
+    ).toEqual([{ role: 'img', name: NOT_DOWNLOADED_TEXT, text: undefined }])
     const unreachable = judgeCapture({ state: notDownloaded, variant: dark, collected, roles, tabOrder: [], drive: {} })
     expect(unreachable.verdict).toBe('FAIL')
     expect(unreachable.missingKeyboard).toHaveLength(1)
@@ -832,14 +905,43 @@ describe('one capture (judgeCapture) and the report verdict (designVerdict)', ()
   it('judges the same text against each appearance backdrop', () => {
     const light = DESIGN_VARIANTS.find((v) => v.id === 'light-1x-motion')!
     const thin = { viewport, samples: [textSample({ fg: [255, 255, 255, 0.74], layers: [[20, 20, 30, 0.2]] })] }
-    expect(judgeCapture({ state: notDownloaded, variant: dark, collected: thin, roles, tabOrder, drive: {} }).verdict).toBe('PASS')
-    expect(judgeCapture({ state: notDownloaded, variant: light, collected: thin, roles, tabOrder, drive: {} }).verdict).toBe('FAIL')
+    expect(
+      judgeCapture({ state: notDownloaded, variant: dark, collected: thin, roles, tabOrder, drive: {} }).verdict
+    ).toBe('PASS')
+    expect(
+      judgeCapture({ state: notDownloaded, variant: light, collected: thin, roles, tabOrder, drive: {} }).verdict
+    ).toBe('FAIL')
   })
 
   it(`fails a loading capture taken at or after ${HISTORY_DEGRADED_MS} ms, and a state that was never reached`, () => {
-    expect(judgeCapture({ state: loading, variant: dark, collected, roles: [], tabOrder: null, drive: { capturedAfterMs: 600 } }).verdict).toBe('PASS')
-    expect(judgeCapture({ state: loading, variant: dark, collected, roles: [], tabOrder: null, drive: { capturedAfterMs: 2000 } }).verdict).toBe('FAIL')
-    const unreached = judgeCapture({ state: loading, variant: dark, collected: null, roles: [], tabOrder: null, drive: { error: 'History did not request its list' } })
+    expect(
+      judgeCapture({
+        state: loading,
+        variant: dark,
+        collected,
+        roles: [],
+        tabOrder: null,
+        drive: { capturedAfterMs: 600 }
+      }).verdict
+    ).toBe('PASS')
+    expect(
+      judgeCapture({
+        state: loading,
+        variant: dark,
+        collected,
+        roles: [],
+        tabOrder: null,
+        drive: { capturedAfterMs: 2000 }
+      }).verdict
+    ).toBe('FAIL')
+    const unreached = judgeCapture({
+      state: loading,
+      variant: dark,
+      collected: null,
+      roles: [],
+      tabOrder: null,
+      drive: { error: 'History did not request its list' }
+    })
     expect(unreached.problems).toContain('state not reached: History did not request its list')
   })
 
@@ -865,6 +967,11 @@ describe('one capture (judgeCapture) and the report verdict (designVerdict)', ()
   })
 
   it('reports the real cloud row as BLOCKED_EXTERNAL with an unblock step', () => {
-    expect(BLOCKED_EXTERNAL_ROWS).toEqual([expect.objectContaining({ verdict: 'BLOCKED_EXTERNAL', unblockStep: expect.stringContaining('scripts/qa/st-1.mjs') })])
+    expect(BLOCKED_EXTERNAL_ROWS).toEqual([
+      expect.objectContaining({
+        verdict: 'BLOCKED_EXTERNAL',
+        unblockStep: expect.stringContaining('scripts/qa/st-1.mjs')
+      })
+    ])
   })
 })
