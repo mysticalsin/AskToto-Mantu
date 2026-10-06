@@ -22,6 +22,7 @@ on:
     paths:
       - .github/workflows/qa-candidate.yml
       - build/qa-identity.electron-builder.yml
+      - scripts/build/electron-fuses.mjs
       - scripts/qa/provenance.mjs
       - scripts/qa/release-line.mjs
       - scripts/qa/st-1.mjs
@@ -140,8 +141,12 @@ jobs:
         include:
           - variant: mac
             script: dist
+            app: release/mac-universal/Metis.app
+            builder-config: electron-builder.yml
           - variant: mac-qa-identity
             script: dist:qa-identity
+            app: release/mac-universal/Metis QA.app
+            builder-config: build/qa-identity.electron-builder.yml
     steps:
       - name: Build once
         run: |
@@ -218,6 +223,20 @@ jobs:
           echo "ASKTOTO_MAC_SIGN_IDENTITY=$fingerprint" >> "$GITHUB_ENV"
       - name: Build the ${{ matrix.variant }} installers
         run: npm run ${{ matrix.script }}
+      # M2-0558: the candidate's fuses are the ones its builder config declares (the QA identity keeps --inspect).
+      - name: Check the packaged Electron fuses against ${{ matrix.builder-config }}
+        id: fuses
+        env:
+          APP: ${{ matrix.app }}
+          BUILDER_CONFIG: ${{ matrix.builder-config }}
+        run: node scripts/build/electron-fuses.mjs check "$APP" --config "$BUILDER_CONFIG" --out "$RUNNER_TEMP/electron-fuses"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always() && steps.fuses.outcome != 'skipped'
+        with:
+          name: electron-fuses-${{ matrix.variant }}
+          path: ${{ runner.temp }}/electron-fuses/
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
       - name: Refuse any installer over GitHub's per-asset limit
         run: npm run check:release
         env:
@@ -282,6 +301,16 @@ jobs:
       # No signing secret reaches this job, so electron-builder leaves both installers unsigned.
       - name: Build the win installers
         run: npm run dist:win
+      - name: Check the packaged Electron fuses against electron-builder.win.yml
+        id: fuses
+        run: node scripts/build/electron-fuses.mjs check release/win-unpacked/Metis.exe --config electron-builder.win.yml --out "$RUNNER_TEMP/electron-fuses"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always() && steps.fuses.outcome != 'skipped'
+        with:
+          name: electron-fuses-win
+          path: ${{ runner.temp }}/electron-fuses/
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
       - name: Refuse any installer over GitHub's per-asset limit
         run: npm run check:release
         env:
@@ -953,6 +982,15 @@ jobs:
           ditto "$volume/$bundle" "$target/$bundle"
           hdiutil detach "$volume" > /dev/null
           echo "app=$target/$bundle" >> "$GITHUB_OUTPUT"
+      # The capture serves History's fixtures by replacing its IPC handlers in main through --inspect, which the
+      # promotable DMG's fuses turn off (M2-0558). Turn it on in this installed copy only and re-seal it ad hoc;
+      # the DMG itself was verified byte for byte above.
+      - name: Turn the inspect fuse on in the installed capture copy
+        env:
+          APP: ${{ steps.install.outputs.app }}
+        run: |
+          node scripts/build/electron-fuses.mjs set "$APP" enableNodeCliInspectArguments=true
+          codesign --force --deep --sign - --preserve-metadata=entitlements,flags,runtime "$APP"
       - name: Capture every History state in every variant and check contrast and clipping
         timeout-minutes: 20
         env:
@@ -1083,7 +1121,7 @@ jobs:
             "harness": "ST-1-W",
             "verdict": "BLOCKED_EXTERNAL",
             "reason": "Requires a managed Windows QA laptop or hosted account with real cloud-provider dataless placeholders.",
-            "unblockStep": "Run scripts/qa/st-1.mjs against the verified candidate installer on the managed Windows QA laptop with --fixtures dataless, --cloud-dir pointing at evicted placeholder files, --main-log pointing at the candidate main log, --minutes 5, and upload the JSON report.",
+            "unblockStep": "On the managed Windows QA laptop, install the verified candidate installer, turn the inspect fuse on in that installed copy with node scripts/build/electron-fuses.mjs set <installed Metis.exe> enableNodeCliInspectArguments=true (shipped builds turn it off, M2-0558), then run scripts/qa/st-1.mjs with --fixtures dataless, --cloud-dir pointing at evicted placeholder files, --main-log pointing at the candidate main log, --exe pointing at the installed Metis.exe, --minutes 5, and upload the JSON report.",
             "provenanceArtifact": "candidate-provenance"
           }
           '@ | Set-Content -NoNewline st1-report/st-1-windows-blocked.json
@@ -1094,7 +1132,7 @@ jobs:
             "historyRow": true,
             "verdict": "BLOCKED_EXTERNAL",
             "reason": "Requires a managed Windows QA laptop or hosted account with real cloud-provider dataless placeholders.",
-            "unblockStep": "Run scripts/qa/st-1.mjs against the verified candidate installer on the managed Windows QA laptop with --fixtures dataless --history, --cloud-dir pointing at evicted placeholder files, --main-log pointing at the candidate main log, --exe pointing at the installed Metis.exe, --minutes 3, and upload the JSON report.",
+            "unblockStep": "On the managed Windows QA laptop, install the verified candidate installer, turn the inspect fuse on in that installed copy with node scripts/build/electron-fuses.mjs set <installed Metis.exe> enableNodeCliInspectArguments=true (shipped builds turn it off, M2-0558), then run scripts/qa/st-1.mjs with --fixtures dataless --history, --cloud-dir pointing at evicted placeholder files, --main-log pointing at the candidate main log, --exe pointing at the installed Metis.exe, --minutes 3, and upload the JSON report.",
             "provenanceArtifact": "candidate-provenance"
           }
           '@ | Set-Content -NoNewline st1-report/st-1-windows-history-blocked.json

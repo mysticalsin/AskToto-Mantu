@@ -9,6 +9,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readdirSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { flipFusesConfig } from './build/electron-fuses.mjs'
 
 const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = join(SCRIPTS_DIR, '..')
@@ -150,6 +151,11 @@ export default async function afterPack(context) {
   if (isMac && !isUniversalSubBuild && process.env.ASKTOTO_ADHOC_SIGN === '1') {
     const identity = process.env.ASKTOTO_MAC_SIGN_IDENTITY || '-'
     const app = join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`)
+    // electron-builder flips the declared electronFuses only after this hook returns, which would rewrite
+    // the Electron Framework after the seal below and break it. Flip them first so the signature covers the
+    // final bytes; electron-builder's own later pass then rewrites identical bytes.
+    const fuses = context.packager.config?.electronFuses
+    if (fuses) await context.packager.addElectronFuses(context, flipFusesConfig(fuses))
     console.log(`  • afterPack: applying complete ${identity === '-' ? 'ad-hoc' : 'QA identity'} signature to ${app}`)
     execFileSync(
       'codesign',

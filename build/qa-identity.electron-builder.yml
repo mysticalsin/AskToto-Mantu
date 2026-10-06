@@ -12,6 +12,10 @@ productName: Metis QA
 # the safeStorage Keychain service "asktoto-qa Safe Storage", never the live install's "asktoto".
 extraMetadata:
   name: asktoto-qa
+# Only difference from the shipped fuses: the QA driver (ST-1 and the other inspector-driven harnesses)
+# measures inside main through `--inspect`. Every other fuse is inherited; this variant is never published.
+electronFuses:
+  enableNodeCliInspectArguments: true
 mac:
   artifactName: Metis-QA-${version}.${ext}
   extendInfo:
