@@ -4294,9 +4294,7 @@ class PrivateViewBlockedError extends Error {
   }
 }
 
-async function getScreenshot(
-  phase?: string
-): Promise<{
+async function getScreenshot(phase?: string): Promise<{
   image: string
   width: number
   height: number
