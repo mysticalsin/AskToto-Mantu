@@ -11,7 +11,6 @@ import {
   WINDOW_MEASURED_REPEATS,
   WINDOW_STAGE_BUDGET_MS,
   WINDOW_VARIANTS,
-  WINDOW_CONSTRUCTION_ROOT_CAUSE,
   bootStagesFromAudit,
   buildLaunchFailureReport,
   buildReport,
@@ -587,19 +586,6 @@ describe('windowConstructionGate (M2-0519)', () => {
       { name: 'st-1.json', report: { harness: 'ST-1', row: 'none' } }
     ])
     expect(gate).toMatchObject({ pass: true, budgetMs: 250, failures: [] })
-    expect(gate.rootCause).toEqual(WINDOW_CONSTRUCTION_ROOT_CAUSE)
-    expect(gate.rootCause).toMatchObject({
-      classification: 'UNKNOWN',
-      evidence: [
-        { run: '36999698235', measured: [] },
-        { run: '37080909059', measured: [] }
-      ],
-      leadAction: expect.stringContaining('st-1-macos-window/st1-report/window-gate.json')
-    })
-    expect(gate.rootCause.leadAction).toContain('dispatch qa-candidate three times on m2/integration-equivalent bytes')
-    expect(gate.rootCause.leadAction).toContain('pass: true with budgetMs: 250 each time')
-    expect(JSON.stringify(gate.rootCause)).not.toContain('harness-cold-first-measured-launch')
-    expect(JSON.stringify(gate.rootCause)).not.toContain('"over 250"')
     expect(gate.rows).toEqual([
       {
         report: 'window-shipped-opaque-1/a.json',

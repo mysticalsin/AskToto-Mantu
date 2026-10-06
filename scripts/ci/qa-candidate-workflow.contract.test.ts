@@ -506,6 +506,8 @@ describe('QA candidate workflow: the shipped window gate (M2-0519)', () => {
     expect(measure).toContain('node scripts/qa/st-1.mjs --print-window-plan > st1-report/window-plan.json')
     expect(measure).toContain("jq -c '.[]' st1-report/window-plan.json | while read -r launch; do")
     expect(measure).toContain('run=$(jq -r \'.name\' <<<"$launch")')
+    // node must not read the plan loop's stdin, or it would swallow the remaining launches.
+    expect(measure).toContain('--out "st1-report/$run/$run.json" \\\n              </dev/null \\\n')
     expect(measure).toContain('--window-warmup')
     expect(measure).toContain('if [ "$warmup" = true ]; then warmup_args=(--window-warmup); fi')
     expect(measure).toContain('--window-variant "$variant"')

@@ -1038,6 +1038,7 @@ jobs:
               "${warmup_args[@]}" \
               --report-dir "st1-report/$run" \
               --out "st1-report/$run/$run.json" \
+              </dev/null \
               || echo "::warning::$run ended without PASS; its report says why."
           done
       - name: Gate the shipped window (createWindow.prewarm and createWindow.construct < 250 ms in both chromes)

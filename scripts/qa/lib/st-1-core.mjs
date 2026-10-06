@@ -330,28 +330,6 @@ export const WINDOW_STAGE_BUDGET_MS = 250
 /** The boot stages the window-construction gate holds to its budget. */
 export const GATED_WINDOW_STAGES = ['createWindow.prewarm', 'createWindow.construct']
 
-/** The window gate carries the CI run IDs that triggered this ticket, but not a cause until the artifacts give
- *  per-launch, per-stage numbers. A summary like "over 250" is not a measurement and must not become evidence. */
-export const WINDOW_CONSTRUCTION_ROOT_CAUSE = {
-  classification: 'UNKNOWN',
-  evidenceRuns: ['36999698235', '37080909059'],
-  evidence: [
-    {
-      run: '36999698235',
-      measured: [],
-      summary: 'no artifact-backed per-launch stage timings are recorded in this source revision'
-    },
-    {
-      run: '37080909059',
-      measured: [],
-      summary: 'the cited threshold result is not a numeric per-launch stage measurement'
-    }
-  ],
-  fix: 'unresolved until artifact-backed numbers identify a harness step or an app first-window cost; the 250 ms gate remains unchanged',
-  leadAction:
-    'LEAD_ACTION: read qa-candidate runs 36999698235 and 37080909059, artifact st-1-macos-window/st1-report/window-gate.json plus st1-report/window-*/window-*.json; record every launch, variant, chrome, warmup flag, stage and numeric ms before classifying the cause; then dispatch qa-candidate three times on m2/integration-equivalent bytes and confirm st-1-macos-window/st1-report/window-gate.json has pass: true with budgetMs: 250 each time'
-}
-
 /** The CI launch order for window construction. The shipped warm-up launches keep the original first-run
  * profile setup ahead of the measured rotation; measured repeats stay interleaved by repeat, variant and chrome,
  * with shipped measured last in each repeat. */
@@ -490,7 +468,6 @@ export function windowConstructionGate(reports, budgetMs = WINDOW_STAGE_BUDGET_M
     pass: failures.length === 0,
     budgetMs,
     skippedWarmups: warmups.length,
-    rootCause: WINDOW_CONSTRUCTION_ROOT_CAUSE,
     launches,
     launchSummaries: windowLaunchSummaries(launches),
     rows,
