@@ -764,7 +764,7 @@ export async function inspectorClient(wsUrl) {
     return message.result
   }
   const evaluate = async (expression) =>
-    (await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }))?.result?.value
+    (await send('Runtime.evaluate', { expression, returnByValue: true }))?.result?.value
   const collectGarbage = async () => {
     await send('HeapProfiler.collectGarbage')
     return true
