@@ -40,7 +40,8 @@ const RENDERER_SRC = resolve(__dirname, '../..')
 
 function compiledAppCss(): string {
   const files = existsSync(ASSETS) ? readdirSync(ASSETS).filter((name) => /^index-.*\.css$/.test(name)) : []
-  if (files.length === 0) throw new Error(`no compiled index-*.css under ${ASSETS}: run \`npm run build\` before the layout tests`)
+  if (files.length === 0)
+    throw new Error(`no compiled index-*.css under ${ASSETS}: run \`npm run build\` before the layout tests`)
   return files.map((name) => readFileSync(join(ASSETS, name), 'utf8')).join('\n')
 }
 
@@ -80,7 +81,9 @@ function viewFixture(view: string, rows: number): ReactNode {
     createElement(
       'div',
       { className: 'scroll-thin max-h-32 overflow-y-auto' },
-      Array.from({ length: rows }, (_, i) => createElement('p', { key: i, className: 'm-0' }, `Row ${i} ${words(12, 'entry')}`))
+      Array.from({ length: rows }, (_, i) =>
+        createElement('p', { key: i, className: 'm-0' }, `Row ${i} ${words(12, 'entry')}`)
+      )
     ),
     createElement('pre', null, `const synthetic = "${'x'.repeat(240)}"`)
   )
@@ -134,7 +137,11 @@ const ROWS: Row[] = [
     tone: 'ready',
     strings: EN,
     long: false,
-    body: createElement(RightEdgeReaderDetails, { commandState: NO_COMMAND, errors: [words(60, 'failure')], strings: EN })
+    body: createElement(RightEdgeReaderDetails, {
+      commandState: NO_COMMAND,
+      errors: [words(60, 'failure')],
+      strings: EN
+    })
   },
   {
     id: 'live meeting + pending approval',
@@ -143,7 +150,11 @@ const ROWS: Row[] = [
     strings: EN,
     long: false,
     meeting: MEETING,
-    body: createElement(RightEdgeReaderDetails, { commandState: PENDING, errors: [words(20, 'microphone')], strings: EN })
+    body: createElement(RightEdgeReaderDetails, {
+      commandState: PENDING,
+      errors: [words(20, 'microphone')],
+      strings: EN
+    })
   },
   {
     id: 'live meeting + pending approval (FR)',
@@ -173,12 +184,19 @@ function rowMarkup(row: Row): string {
   )
   const sheet = row.sheet
     ? createElement(ConfirmSheet, {
-        request: { id: 1, title: 'Save recap changes?', message: 'You have unsaved edits to this recap.', destructive: true },
+        request: {
+          id: 1,
+          title: 'Save recap changes?',
+          message: 'You have unsaved edits to this recap.',
+          destructive: true
+        },
         onChoose: () => undefined
       })
     : null
   // The App root on the right edge: `relative flex w-full flex-col gap-2 h-full min-h-0 p-0`.
-  return renderToStaticMarkup(createElement('div', { className: 'relative flex h-full min-h-0 w-full flex-col gap-2 p-0' }, sheet, reader))
+  return renderToStaticMarkup(
+    createElement('div', { className: 'relative flex h-full min-h-0 w-full flex-col gap-2 p-0' }, sheet, reader)
+  )
 }
 
 /** The overlay page: the compiled stylesheet makes html, body and #root fill the native window. */
@@ -217,7 +235,10 @@ interface Probe {
 const probe = (page: Page, sheet: boolean): Promise<Probe> =>
   page.evaluate((sheetOpen: boolean) => {
     const label = (el: Element): string => {
-      const cls = typeof el.className === 'string' && el.className ? `.${el.className.trim().split(/\s+/).slice(0, 2).join('.')}` : ''
+      const cls =
+        typeof el.className === 'string' && el.className
+          ? `.${el.className.trim().split(/\s+/).slice(0, 2).join('.')}`
+          : ''
       return `${el.tagName.toLowerCase()}${cls} "${(el.textContent ?? '').trim().slice(0, 32)}"`
     }
     const reader = document.querySelector('[data-re-surface="reader"]')
@@ -239,11 +260,14 @@ const probe = (page: Page, sheet: boolean): Promise<Probe> =>
       if (r.width === 0 && r.height === 0) continue
       const hides = (v: string): boolean => v === 'hidden' || v === 'clip'
       if (hides(s.overflowX) && el.scrollWidth > el.clientWidth + 1) clipped.push(`clipped-x ${label(el)}`)
-      if (el !== scroller && hides(s.overflowY) && el.scrollHeight > el.clientHeight + 1) clipped.push(`clipped-y ${label(el)}`)
+      if (el !== scroller && hides(s.overflowY) && el.scrollHeight > el.clientHeight + 1)
+        clipped.push(`clipped-y ${label(el)}`)
       if (r.left < -1 || r.right > window.innerWidth + 1) outside.push(label(el))
     }
     const texts = inside
-      .filter((el) => Array.from(el.childNodes).some((n) => n.nodeType === 3 && (n.textContent ?? '').trim().length > 0))
+      .filter((el) =>
+        Array.from(el.childNodes).some((n) => n.nodeType === 3 && (n.textContent ?? '').trim().length > 0)
+      )
       .filter((el) => {
         const r = el.getBoundingClientRect()
         return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility === 'visible'
@@ -273,7 +297,9 @@ const probe = (page: Page, sheet: boolean): Promise<Probe> =>
         }
       })
     const controls = reader
-      ? Array.from(reader.querySelectorAll('.re-reader__header button, [data-re-reader-jump], .re-reader__details button'))
+      ? Array.from(
+          reader.querySelectorAll('.re-reader__header button, [data-re-reader-jump], .re-reader__details button')
+        )
       : []
     const targets = controls.map((el) => {
       const r = el.getBoundingClientRect()
@@ -283,7 +309,8 @@ const probe = (page: Page, sheet: boolean): Promise<Probe> =>
     const header = reader ? Array.from(reader.querySelectorAll('.re-reader__header > *')) : []
     const headerAfterScroll = header.map((el) => {
       const r = el.getBoundingClientRect()
-      const inView = r.top >= -1 && r.left >= -1 && r.bottom <= window.innerHeight + 1 && r.right <= window.innerWidth + 1
+      const inView =
+        r.top >= -1 && r.left >= -1 && r.bottom <= window.innerHeight + 1 && r.right <= window.innerWidth + 1
       const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
       return { label: label(el), inView, onTop: sheetOpen || (hit !== null && (hit === el || el.contains(hit))) }
     })
@@ -306,7 +333,9 @@ const probe = (page: Page, sheet: boolean): Promise<Probe> =>
       })),
       timer: reader !== null && reader.querySelector('.re-reader__header [data-re-reader-timer]') !== null,
       consentDot: reader !== null && reader.querySelector('[data-re-reader-timer] [data-re-consent-dot]') !== null,
-      attention: reader !== null && reader.querySelector('.re-reader__header button[data-re-status][data-re-tone="attention"]') !== null
+      attention:
+        reader !== null &&
+        reader.querySelector('.re-reader__header button[data-re-status][data-re-tone="attention"]') !== null
     }
   }, sheet)
 
@@ -361,7 +390,10 @@ describe('right-edge Reader pure parts (M2-0202 S3)', () => {
     expect(parseCssColor('rgba(255, 255, 255, 0.5)')).toEqual([255, 255, 255, 0.5])
     expect(parseCssColor('rgb(22 22 27 / 50%)')).toEqual([22, 22, 27, 0.5])
     expect(parseCssColor('color(srgb 1 1 1)')).toBeNull()
-    expect(textContrast([255, 255, 255, 1], [[0, 0, 0, 0.5]], [255, 255, 255])).toBeCloseTo(contrastRatio([255, 255, 255], [128, 128, 128]), 1)
+    expect(textContrast([255, 255, 255, 1], [[0, 0, 0, 0.5]], [255, 255, 255])).toBeCloseTo(
+      contrastRatio([255, 255, 255], [128, 128, 128]),
+      1
+    )
     expect(requiredContrast({ fontSizePx: 13, fontWeight: 400 })).toBe(4.5)
     expect(requiredContrast({ fontSizePx: 19, fontWeight: 700 })).toBe(3)
     expect(requiredContrast({ fontSizePx: 24, fontWeight: 400 })).toBe(3)
@@ -405,7 +437,10 @@ describe('right-edge Reader layout at readerRect on the compiled stylesheet (M2-
           if (row.long) expect(p.scrollerOverflows, `${where}: the long fixture scrolls in the one scroller`).toBe(true)
           // RE-L05: the full views mount under the Reader, and no island is rendered beside it.
           expect(p.island, where).toBe(0)
-          expect(p.views.every((v) => v.inReader), where).toBe(true)
+          expect(
+            p.views.every((v) => v.inReader),
+            where
+          ).toBe(true)
           // (c)
           expect(p.clipped, where).toEqual([])
           expect(p.outside, where).toEqual([])
@@ -485,7 +520,10 @@ async function bundleHarness(): Promise<{ js: string; css: string }> {
     }
   })) as Rollup.RollupOutput | Rollup.RollupOutput[]
   const files = (Array.isArray(output) ? output : [output]).flatMap((result) => result.output)
-  const js = files.filter((file): file is Rollup.OutputChunk => file.type === 'chunk').map((chunk) => chunk.code).join('\n')
+  const js = files
+    .filter((file): file is Rollup.OutputChunk => file.type === 'chunk')
+    .map((chunk) => chunk.code)
+    .join('\n')
   const css = files
     .filter((file): file is Rollup.OutputAsset => file.type === 'asset' && file.fileName.endsWith('.css'))
     .map((asset) => String(asset.source))
@@ -516,7 +554,8 @@ describe('right-edge Reader behaviour (M2-0202 S3)', () => {
 
   const set = (patch: { mounted?: boolean; kind?: string; count?: number }): Promise<void> =>
     page.evaluate((next) => (window as unknown as { __reader: { set(p: object): void } }).__reader.set(next), patch)
-  const frames = (): Promise<void> => page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))))
+  const frames = (): Promise<void> =>
+    page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))))
   const scroll = (): Promise<{ top: number; end: boolean; jump: boolean }> =>
     page.evaluate(() => {
       const el = document.querySelector<HTMLElement>('[data-re-reader-scroll]')!
