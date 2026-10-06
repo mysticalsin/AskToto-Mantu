@@ -2898,6 +2898,9 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // `closed` fires after BrowserWindow.destroy() has torn down WebContents. Cache the numeric owner
   // while it is valid; touching `self.webContents` from the callback throws and falsely crashes Métis.
   const selfWebContentsId = self.webContents.id
+  win.on('blur', () => {
+    if (win === self) parkRightEdgeReaderOnBlur()
+  })
   win.on('closed', () => {
     clearCompletedOnboardingExitFallback(self)
     // Import jobs belong to main plus the hidden decoder window, so closing the overlay never abandons
@@ -3358,13 +3361,14 @@ function overlayHoverRestRect(layout: OverlayLayout, display: Electron.Display):
   )
 }
 
-/** Right-edge bounds at the display's anchor: the legacy drawer, or at rest the Hide band or the Island tab. */
+/** Right-edge bounds at the display's anchor: open, the Reader while the page has it pending, otherwise the
+ *  legacy drawer; at rest the Hide band or the Island tab. */
 function rightEdgeBounds(
   surface: 'open' | 'rest',
   display: Electron.Display,
   layout: OverlayLayout = liveOverlayLayout()
 ): Electron.Rectangle {
-  if (surface === 'open') return rightEdgeAnchors.rect('open', display)
+  if (surface === 'open') return rightEdgeAnchors.rect(rightEdgeSession.readerPending() ? 'reader' : 'open', display)
   return rightEdgeAnchors.rect(parkLayoutForDisplay(layout, display) === 'hide' ? 'band' : 'tab', display)
 }
 
@@ -3428,6 +3432,12 @@ function tickOverlayCursorWatch(): void {
     stopOverlayCursorWatch()
     return
   }
+  // The Reader is a document the user opened (spec v3 §6): no leave-park, unhovered auto-park or dwell park
+  // applies to it. It parks only on an explicit Hide, Escape, the hotkey, the tray or a window blur.
+  if (!islandResting && rightEdgeSession.readerPending()) {
+    overlayCursorWatchEnteredAt = null
+    return
+  }
   // A parked Settings-tall ghost heals here. If the heal was refused because the
   // pointer is in the top-edge strip, fall through: that pointer is a hover, so
   // reveal instead of stalling on the ghost until the mouse leaves.
@@ -3474,6 +3484,9 @@ function tickOverlayCursorWatch(): void {
   if (step.action === 'restore') {
     const restoredFromParkedRail = islandResting
     cancelOverlayLeavePark()
+    // A pointer reveal opens the island, never a parked Reader: the Reader ignores the pointer, so it would
+    // stay open with nothing to park it. The page keeps the Reader for the next explicit reveal.
+    if (placement === 'right-edge' && restoredFromParkedRail) rightEdgeSession.noteIslandReveal()
     restoreBarWidth()
     // A band reveal holds the corridor from where the pointer revealed it until the pointer reaches the drawer.
     if (placement === 'right-edge' && restoredFromParkedRail) rightEdgeAnchors.noteReveal(cursor.y)
@@ -3884,8 +3897,28 @@ const rightEdgeSession = createRightEdgeSession({
     if (win && !win.isDestroyed()) win.webContents.send(IPC.rightEdgeSurface, surface)
   },
   onPinsCleared: scheduleOverlayLeavePark,
+  onReaderChange: applyRightEdgeReaderBounds,
   log: (line) => mainLog.info(line)
 })
+
+/** The open page moved between the island and the Reader: its window takes the new surface's rect first, and
+ *  the page crossfades once its report is answered (spec v3 §6). A parked window keeps its rest. */
+function applyRightEdgeReaderBounds(reader: boolean): void {
+  if (reader) cancelOverlayLeavePark()
+  if (!win || win.isDestroyed() || islandResting || settingsSurfaceOpen) return
+  const display = screen.getDisplayMatching(win.getBounds())
+  if (resolvedOverlayPlacementForDisplay(display) === 'right-edge') applyRightEdgeBounds('open', display)
+}
+
+/** A window blur parks an open Reader, like an explicit Hide. A tray click blurs the window first, so the tray
+ *  toggle that follows within RE_BLUR_TOGGLE_GRACE_MS is that Hide (toggleOverlayVisibility). */
+function parkRightEdgeReaderOnBlur(): void {
+  if (!win || win.isDestroyed() || islandResting || !rightEdgeSession.readerPending()) return
+  if (!parkOverlayAfterHideSpring(true)) return
+  rightEdgeSession.noteBlurPark(performance.now())
+  startOverlayCursorWatch()
+  noteOverlay('toggle')
+}
 
 function currentRightEdgeSurface(): RightEdgeSurfaceState {
   const display = win && !win.isDestroyed() ? screen.getDisplayMatching(win.getBounds()) : screen.getPrimaryDisplay()
@@ -3895,7 +3928,7 @@ function currentRightEdgeSurface(): RightEdgeSurfaceState {
     .map((other) => other.bounds)
   const metrics = getDisplayMetrics(display)
   const anchor = rightEdgeAnchors.fraction(display)
-  return rightEdgeSurfaceState({
+  const state = rightEdgeSurfaceState({
     placement: liveOverlayPlacement(),
     layout: liveOverlayLayout(),
     resting: islandResting,
@@ -3903,6 +3936,7 @@ function currentRightEdgeSurface(): RightEdgeSurfaceState {
     otherDisplays: others,
     anchor
   })
+  return state.surface === 'island' && rightEdgeSession.readerPending() ? { ...state, surface: 'reader' } : state
 }
 
 const overlayRevealLog = createOverlayRevealLog({
@@ -3971,6 +4005,8 @@ function sendHotkey(action: HotkeyAction): void {
     return
   }
   if (!w.isVisible() || islandResting) {
+    // The ask hotkey opens the composer, so it reveals the island even over a parked Reader.
+    if (action === 'ask' && islandResting) rightEdgeSession.noteIslandReveal()
     reveal('hotkey', { focus: action === 'ask' })
   }
   w.webContents.send(IPC.hotkey, action)
@@ -4698,6 +4734,8 @@ function toggleOverlayVisibility(reason: Extract<RevealReason, 'hotkey' | 'tray'
   const hadNoWindow = !win || win.isDestroyed()
   const w = ensureWindow()
   if (!w) return
+  // The tray click that sent this toggle blurred the window first, and that blur already parked the Reader.
+  if (islandResting && rightEdgeSession.toggleAbsorbedByBlur(reason, performance.now())) return
   if (!hadNoWindow && w.isVisible() && !islandResting) {
     // A hidden right-edge window reopens from the band on the next dwell. Park it instead: the forced park
     // latches until the pointer leaves the band. An IME composition refuses it and the window stays.
@@ -4711,9 +4749,11 @@ function toggleOverlayVisibility(reason: Extract<RevealReason, 'hotkey' | 'tray'
     if (overlayUsesHover(liveOverlayLayout())) startOverlayCursorWatch()
   } else {
     // Revealing via the show/hide hotkey always opens the ask input right after — the same deliberate,
-    // user-initiated focus grab as sendHotkey('ask'). See showForAsk's doc comment.
+    // user-initiated focus grab as sendHotkey('ask'). See showForAsk's doc comment. A Reader that was open
+    // at the park is restored instead, at its scroll position: it has no ask input to open.
+    const restoresReader = rightEdgeSession.readerPending()
     reveal(reason, { focus: true })
-    w.webContents.send(IPC.hotkey, 'ask')
+    if (!restoresReader) w.webContents.send(IPC.hotkey, 'ask')
   }
 }
 
