@@ -64,6 +64,81 @@ describe('dependency audit gate report integrity', () => {
     expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining('[check:audit] OK'))
   })
 
+  it('allows a reviewed npm meta-finding when the lockfile has the fixed sharp version', async () => {
+    const report = cleanReport()
+    report.vulnerabilities = {
+      sharp: {
+        severity: 'high',
+        nodes: ['node_modules/sharp'],
+        via: [{ name: 'sharp', dependency: 'sharp', severity: 'high', range: '<0.35.4' }]
+      },
+      '@huggingface/transformers': {
+        severity: 'high',
+        nodes: ['node_modules/@huggingface/transformers'],
+        via: ['sharp']
+      }
+    }
+    report.metadata.vulnerabilities.high = 2
+    report.metadata.vulnerabilities.total = 2
+    await runReport(report)
+    expect(process.exit).not.toHaveBeenCalled()
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('excused 2'))
+  })
+
+  it('keeps blocking reviewed packages when the advisory range still includes the installed version', async () => {
+    const report = cleanReport()
+    report.vulnerabilities = {
+      sharp: {
+        severity: 'high',
+        nodes: ['node_modules/sharp'],
+        via: [{ name: 'sharp', dependency: 'sharp', severity: 'high', range: '<0.35.5' }]
+      }
+    }
+    report.metadata.vulnerabilities.high = 1
+    report.metadata.vulnerabilities.total = 1
+    await runReport(report)
+    expect(process.exit).toHaveBeenCalledWith(1)
+  })
+
+  it('does not excuse a reviewed meta-package when another ranged advisory is not accounted for', async () => {
+    const report = cleanReport()
+    report.vulnerabilities = {
+      '@modelcontextprotocol/sdk': {
+        severity: 'high',
+        nodes: ['node_modules/@modelcontextprotocol/sdk'],
+        via: [
+          { name: 'fast-uri', dependency: 'fast-uri', severity: 'high', range: '<3.1.2' },
+          { name: 'unknown-runtime', dependency: 'unknown-runtime', severity: 'high', range: '<9.9.9' }
+        ]
+      }
+    }
+    report.metadata.vulnerabilities.high = 1
+    report.metadata.vulnerabilities.total = 1
+    await runReport(report)
+    expect(process.exit).toHaveBeenCalledWith(1)
+  })
+
+  it('allows reviewed MCP meta-findings only when the vulnerable transitive is fixed in the lockfile', async () => {
+    const report = cleanReport()
+    report.vulnerabilities = {
+      '@modelcontextprotocol/sdk': {
+        severity: 'high',
+        nodes: ['node_modules/@modelcontextprotocol/sdk'],
+        via: [{ name: 'fast-uri', dependency: 'fast-uri', severity: 'high', range: '<3.1.2' }]
+      },
+      '@dust-tt/client': {
+        severity: 'high',
+        nodes: ['node_modules/@dust-tt/client'],
+        via: ['@modelcontextprotocol/sdk']
+      }
+    }
+    report.metadata.vulnerabilities.high = 2
+    report.metadata.vulnerabilities.total = 2
+    await runReport(report)
+    expect(process.exit).not.toHaveBeenCalled()
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('excused 2'))
+  })
+
   it.each([
     'node_modules/@dust-tt/client/node_modules/runtime-package',
     'node_modules/@dust-tt/client/node_modules/ip-address-extra',
