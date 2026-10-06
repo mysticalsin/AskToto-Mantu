@@ -284,6 +284,22 @@ export const MAIN_CURSOR_READS = '(() => globalThis.__metisReHide.cursorReads)()
 /** Main reads the pointer once per cursor-watch tick, so two reads prove at least one tick sampled it. */
 export const CURSOR_SAMPLED_READS = 2
 
+export const MAIN_INSPECTOR_PENDING_GLOBAL = '__metisMainInspectorPending'
+
+/** Runtime.evaluate can lose an unreferenced awaited promise on long Windows smoke rows. Keep it reachable
+ * from the inspected main process until the evaluation settles. */
+export function mainInspectorExpression(key, expression) {
+  return `(() => {
+  const pending = (globalThis.${MAIN_INSPECTOR_PENDING_GLOBAL} ??= {})
+  const source = ${JSON.stringify(expression)}
+  const run = Promise.resolve()
+    .then(() => (0, eval)(source))
+    .finally(() => { delete pending[${JSON.stringify(key)}] })
+  pending[${JSON.stringify(key)}] = run
+  return run
+})()`
+}
+
 export function rightEdgePageChromeState({ rootOpen, drawerAriaHidden, tabAriaExpanded }) {
   const drawer = rootOpen === true && drawerAriaHidden !== 'true'
   return { drawer, rail: !drawer && tabAriaExpanded === 'false' }
@@ -763,8 +779,9 @@ export async function inspectorClient(wsUrl) {
       throw new Error(message.result.exceptionDetails.exception?.description ?? message.result.exceptionDetails.text)
     return message.result
   }
+  let nextEvaluation = 1
   const evaluate = async (expression) =>
-    (await send('Runtime.evaluate', { expression, returnByValue: true }))?.result?.value
+    (await send('Runtime.evaluate', { expression: mainInspectorExpression(`main-${nextEvaluation++}`, expression), awaitPromise: true, returnByValue: true }))?.result?.value
   const close = () => {
     if (socket.readyState === WebSocket.CLOSED) return Promise.resolve()
     return new Promise((resolve) => {

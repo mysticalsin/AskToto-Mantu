@@ -36,6 +36,7 @@ import {
   OV_STABLE_PATH_MS,
   overlayStablePath,
   overlaySurfaceChanges,
+  mainInspectorExpression,
   pinnedBridgeCall,
   rightEdgeExpectedRects,
   rightEdgeHideParkMatches,
@@ -1848,6 +1849,42 @@ describe('pinnedBridgeCall (M2-0519)', () => {
     } finally {
       Object.defineProperty(globalThis, 'window', { configurable: true, value: undefined })
       delete scope.__metisSmokeBridgePending
+    }
+  })
+})
+
+describe('mainInspectorExpression (M2-0541 CI feedback)', () => {
+  const scope = globalThis as unknown as { __metisMainInspectorPending?: Record<string, Promise<unknown>> }
+  const evaluateGlobally = (expression: string): unknown => (0, eval)(expression)
+
+  it('keeps a main-process inspector promise reachable until it settles', async () => {
+    let settle: (value: unknown) => void = () => undefined
+    ;(globalThis as unknown as { __metisInspectorHeld?: Promise<unknown> }).__metisInspectorHeld = new Promise((resolve) => {
+      settle = resolve
+    })
+
+    try {
+      const call = evaluateGlobally(mainInspectorExpression('ov-stable', 'globalThis.__metisInspectorHeld')) as Promise<unknown>
+      expect(scope.__metisMainInspectorPending?.['ov-stable']).toBe(call)
+      settle({ ok: true })
+      await expect(call).resolves.toEqual({ ok: true })
+      expect(scope.__metisMainInspectorPending).toEqual({})
+    } finally {
+      delete (globalThis as unknown as { __metisInspectorHeld?: Promise<unknown> }).__metisInspectorHeld
+      delete scope.__metisMainInspectorPending
+    }
+  })
+
+  it('supports statement programs and still releases rejected evaluations', async () => {
+    try {
+      await expect(evaluateGlobally(mainInspectorExpression('throws', 'globalThis.__metisInspectorValue = 42; throw new Error("boom")'))).rejects.toThrow(
+        'boom'
+      )
+      expect((globalThis as unknown as { __metisInspectorValue?: number }).__metisInspectorValue).toBe(42)
+      expect(scope.__metisMainInspectorPending).toEqual({})
+    } finally {
+      delete (globalThis as unknown as { __metisInspectorValue?: number }).__metisInspectorValue
+      delete scope.__metisMainInspectorPending
     }
   })
 })

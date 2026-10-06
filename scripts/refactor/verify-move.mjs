@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 
 const repoRoot = resolve(fileURLToPath(new URL('../..', import.meta.url)))
 const DEFAULT_OUTPUT_DIR = 'out/refactor/verify-move'
+const DEFAULT_GIT_OUTPUT_MAX_BUFFER_BYTES = 64 * 1024 * 1024
 
 export function normalizeImportPaths(source) {
   return source
@@ -284,7 +285,32 @@ function regexLiteralEnd(source, start) {
 }
 
 function git(args, options = {}) {
-  return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8', ...options })
+  const maxBuffer = gitOutputMaxBufferBytes()
+  try {
+    return execFileSync('git', args, {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      maxBuffer,
+      ...options
+    })
+  } catch (error) {
+    if (error?.code === 'ENOBUFS') {
+      throw new Error(`verify-move: git output exceeded ${formatBytes(maxBuffer)} limit while running git ${args.join(' ')}`)
+    }
+    throw error
+  }
+}
+
+function gitOutputMaxBufferBytes() {
+  const configured = Number(process.env.VERIFY_MOVE_GIT_OUTPUT_MAX_BYTES)
+  if (Number.isSafeInteger(configured) && configured > 0) return configured
+  return DEFAULT_GIT_OUTPUT_MAX_BUFFER_BYTES
+}
+
+function formatBytes(bytes) {
+  if (bytes % (1024 * 1024) === 0) return `${bytes / 1024 / 1024} MiB`
+  if (bytes % 1024 === 0) return `${bytes / 1024} KiB`
+  return `${bytes} bytes`
 }
 
 function usageError(message) {
