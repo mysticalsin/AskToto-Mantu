@@ -47,7 +47,6 @@ import {
   BLOCKED_EXTERNAL_ROWS,
   DESIGN_VARIANTS,
   HISTORY_DESIGN_STATES,
-  HISTORY_DEGRADED_MS,
   IPC_CHANNELS,
   KEYBOARD_VARIANT_ID,
   designVerdict,
@@ -104,16 +103,43 @@ async function waitForRendererReady(profile, child) {
   throw new Error(`no app.renderer.ready within ${READY_TIMEOUT_MS} ms`)
 }
 
-/** Replaces History's list, search and explicit-open handlers with fixtures driven by __historyDesign. */
-const INSTALL_FIXTURE_HANDLERS = `(() => {
+/**
+ * Why a pending capture could miss its cue (M2-0550), recorded in the report. CI on m2/integration's harness:
+ * run 37443712731 (#366) failed slow / light-1x-reduced-motion after 11.0 s (450 ms toggle guard, then the
+ * 10 s cue wait) although its list request had reached main; run 37444948019 (#470) passed that capture and
+ * failed the next one, slow-with-rows, the same way. Every other capture passed in both, including both slow
+ * states in the three later reduced-motion passes. History has no reduced-motion dependency (RecallView and
+ * history/list-status.ts never read it, and overlay-motion.ts reads matchMedia without a listener), so
+ * the variant is where main's GC happened to land, not a cause.
+ */
+export const PENDING_ANSWER_ROOT_CAUSE =
+  "A pending fixture answered History's request with an unreferenced `new Promise(() => {})`. Electron's ipcMain.handle awaits the handler's result in an async frame that is the only holder of the invoke's reply channel (lib/browser/api/web-contents.ts, '-ipc-invoke'); with nothing else referencing the promise, a main-process garbage collection frees that frame and the channel, and the channel's destructor rejects the renderer's ipcRenderer.invoke with 'reply was never sent' (shell/browser/api/electron_api_web_contents.cc, ReplyChannel). RecallView's catch then moves the list to 'failed' before HISTORY_DEGRADED_MS, so the 'OneDrive is slow to answer' status never renders and driveState's cue wait times out (state not reached). Whether a collection lands inside that 2 s window depends on main's GC schedule, which is why the miss moves between pending captures (slow / light-1x-reduced-motion in run 37443712731, slow-with-rows / light-1x-reduced-motion in run 37444948019) while the same states pass in every other variant. The fix parks every pending answer in globalThis.__historyDesign.parked so it stays reachable, and forces HeapProfiler.collectGarbage after each pending request reaches main, so a fixture that lets an answer be collected fails every pending capture instead of one by GC timing."
+
+/**
+ * Replaces History's list, search and explicit-open handlers with fixtures driven by __historyDesign. A
+ * pending answer is parked (kept reachable) for the app's lifetime: see PENDING_ANSWER_ROOT_CAUSE.
+ */
+export const INSTALL_FIXTURE_HANDLERS = `(() => {
   const { ipcMain } = globalThis.__metisReHideElectron
   const C = ${JSON.stringify(IPC_CHANNELS)}
   const error = ${JSON.stringify(DOWNLOAD_ERROR)}
-  const state = (globalThis.__historyDesign = { list: { kind: 'rows', rows: [] }, search: { kind: 'rows', rows: [] }, read: 'hydrating', requests: 0, requestedAt: 0 })
-  const answer = (spec) => {
-    state.requests++
-    state.requestedAt = Date.now()
-    if (spec.kind === 'pending') return new Promise(() => {})
+  const state = (globalThis.__historyDesign = {
+    list: { kind: 'rows', rows: [] },
+    search: { kind: 'rows', rows: [] },
+    read: 'hydrating',
+    parked: [],
+    requests: { list: 0, search: 0 },
+    requestedAt: { list: 0, search: 0 }
+  })
+  const park = () => {
+    const pending = new Promise(() => {})
+    state.parked.push(pending)
+    return pending
+  }
+  const answer = (channel, spec) => {
+    state.requests[channel]++
+    state.requestedAt[channel] = Date.now()
+    if (spec.kind === 'pending') return park()
     if (spec.kind === 'failed') return Promise.reject(new Error('History design fixture: the source failed'))
     return Promise.resolve(spec.rows)
   }
@@ -121,13 +147,13 @@ const INSTALL_FIXTURE_HANDLERS = `(() => {
   const explicitOpen = (e, file, failedAnswer) => {
     const key = String(file ?? '')
     e.sender.send(C.recallHydration, { file: key, state: 'hydrating' })
-    if (state.read === 'hydrating') return new Promise(() => {})
+    if (state.read === 'hydrating') return park()
     setTimeout(() => e.sender.send(C.recallHydration, { file: key, state: 'failed', error }), 50)
     return failedAnswer
   }
   for (const name of [C.recallList, C.recallSearch, C.recallRead, C.recallOpen]) ipcMain.removeHandler(name)
-  ipcMain.handle(C.recallList, () => answer(state.list))
-  ipcMain.handle(C.recallSearch, () => answer(state.search))
+  ipcMain.handle(C.recallList, () => answer('list', state.list))
+  ipcMain.handle(C.recallSearch, () => answer('search', state.search))
   ipcMain.handle(C.recallRead, (e, file) => explicitOpen(e, file, { ok: false, error }))
   ipcMain.handle(C.recallOpen, (e, file) => explicitOpen(e, file, error))
   return true
@@ -299,17 +325,59 @@ async function rolesPresent(page, state) {
   return results
 }
 
-/** Waits for History's next fixture-backed request; returns when main received it. */
-async function waitForRequest(main, before, wait = sleep, label = 'list') {
+export function fixtureAnswersForState(state, realRows, nowMs = Date.now()) {
+  return {
+    list: listAnswer(state.list, realRows, nowMs),
+    search: listAnswer(state.search ?? state.list, realRows, nowMs),
+    read: state.read ?? 'hydrating'
+  }
+}
+
+/** Waits for History's next fixture-backed request on one channel; returns when main received it. */
+export async function waitForRequest(main, channel, before, wait = sleep) {
   const deadline = Date.now() + STATE_TIMEOUT_MS
   while (Date.now() < deadline) {
     const { requests, requestedAt } = await main(
       '(({ requests, requestedAt }) => ({ requests, requestedAt }))(globalThis.__historyDesign)'
     )
-    if (requests > before) return requestedAt
+    if ((requests?.[channel] ?? 0) > before) return requestedAt?.[channel] ?? 0
     await wait(50)
   }
-  throw new Error(`History did not request its ${label}`)
+  throw new Error(`History did not request its ${channel}`)
+}
+
+async function forceMainGarbage(main) {
+  if (typeof main.collectGarbage !== 'function') throw new Error('main-process garbage collection is not available')
+  await main.collectGarbage()
+}
+
+async function locatorVisible(locator) {
+  try {
+    return await locator.first().isVisible({ timeout: 500 })
+  } catch {
+    return false
+  }
+}
+
+function throwWithDrive(error, drive) {
+  if (error && typeof error === 'object') error.drive = drive
+  throw error
+}
+
+async function historySearchValue(locator) {
+  if (typeof locator.inputValue === 'function') return locator.inputValue({ timeout: STATE_TIMEOUT_MS })
+  if (typeof locator.evaluate === 'function') return locator.evaluate((input) => input.value)
+  return ''
+}
+
+async function clearHistorySearch(page) {
+  const input = page.getByLabel('Search past meetings')
+  if ((await historySearchValue(input)) !== '') await input.fill('')
+}
+
+async function historyRequestCounts(main) {
+  const requests = await main('({ ...globalThis.__historyDesign.requests })')
+  return { list: requests?.list ?? 0, search: requests?.search ?? 0 }
 }
 
 /**
@@ -336,44 +404,150 @@ function historyDesignCueForState(stateId) {
 
 /**
  * Puts History into `state` from a fresh open; returns when the open was clicked, when History's list
- * or search request reached main, and how it went. Slow degraded waits are anchored to the request that
- * arms the renderer's HISTORY_DEGRADED_MS notice, so hosted-runner click/type latency cannot consume it.
+ * or search request reached main, and how it went. The cue wait stays bounded by STATE_TIMEOUT_MS; drive
+ * timings are emitted so CI artifacts can explain any first-capture miss without extending that wait.
  */
 export async function driveState(page, main, state, realRows, deps = {}) {
   const wait = deps.wait ?? sleep
   const ensureIdle = deps.ensureIdleBar ?? ensureIdleBar
   const openHistory = deps.clickHistory ?? clickHistory
+  const driveStartedAt = Date.now()
   // Bar History ignores a toggle within 400 ms of the last one; a fast capture can end inside that window.
   await wait(450)
+  const toggleGuardSettledAt = Date.now()
+  // ensureIdleBar owns the close-before-arm invariant: if History is already mounted, close it and wait
+  // through the toolbar's toggle guard before fixtures are changed and the next open requests fresh data.
   await ensureIdle(page)
+  const idleSettledAt = Date.now()
+  const searchInput = page.getByLabel('Search past meetings')
+  const closedBeforeArm = !(await locatorVisible(searchInput))
+  const closeCheckedAt = Date.now()
+  if (!closedBeforeArm) {
+    throwWithDrive(new Error('History was still open before fixture arm'), {
+      closedBeforeArm,
+      timingsMs: {
+        toggleGuard: toggleGuardSettledAt - driveStartedAt,
+        ensureIdle: idleSettledAt - toggleGuardSettledAt,
+        closeCheck: closeCheckedAt - idleSettledAt
+      }
+    })
+  }
   const now = Date.now()
+  const fixtures = fixtureAnswersForState(state, realRows, now)
   await main(`(() => {
     const s = globalThis.__historyDesign
-    s.list = ${JSON.stringify(listAnswer(state.list, realRows, now))}
-    s.search = ${JSON.stringify(state.search ? listAnswer(state.search, realRows, now) : listAnswer('rows', realRows, now))}
-    s.read = ${JSON.stringify(state.read ?? 'hydrating')}
+    s.list = ${JSON.stringify(fixtures.list)}
+    s.search = ${JSON.stringify(fixtures.search)}
+    s.read = ${JSON.stringify(fixtures.read)}
     return true
   })()`)
-  const before = await main('globalThis.__historyDesign.requests')
+  const armedAt = Date.now()
+  const beforeList = await main('globalThis.__historyDesign.requests.list')
   const clickedAt = Date.now()
   await openHistory(page)
-  const requestedAt = await waitForRequest(main, before, wait, 'list')
+  const reopenedQuery = await historySearchValue(searchInput)
+  if (reopenedQuery.trim()) {
+    throwWithDrive(new Error('History reopened with a non-empty search query'), {
+      clickedAt,
+      closedBeforeArm,
+      requestChannels: {
+        list: { before: beforeList, answered: false },
+        search: null
+      },
+      timingsMs: {
+        toggleGuard: toggleGuardSettledAt - driveStartedAt,
+        ensureIdle: idleSettledAt - toggleGuardSettledAt,
+        closeCheck: closeCheckedAt - idleSettledAt,
+        armFixture: armedAt - closeCheckedAt,
+        openToListRequest: null
+      }
+    })
+  }
+  let requestedAt
+  try {
+    requestedAt = await waitForRequest(main, 'list', beforeList, wait)
+  } catch (error) {
+    throwWithDrive(error, {
+      clickedAt,
+      closedBeforeArm,
+      requestChannels: {
+        list: { before: beforeList, answered: false },
+        search: null
+      },
+      timingsMs: {
+        toggleGuard: toggleGuardSettledAt - driveStartedAt,
+        ensureIdle: idleSettledAt - toggleGuardSettledAt,
+        closeCheck: closeCheckedAt - idleSettledAt,
+        armFixture: armedAt - closeCheckedAt,
+        openToListRequest: null
+      }
+    })
+  }
   const visible = (text, role = null, timeoutMs = STATE_TIMEOUT_MS) =>
     waitForHistoryDesignCue(page, { text, role, timeoutMs })
-  const drive = { clickedAt, requestedAt }
+  const drive = {
+    clickedAt,
+    requestedAt,
+    closedBeforeArm,
+    requestChannels: {
+      list: { before: beforeList, answered: true, requestedAt },
+      search: null
+    },
+    timingsMs: {
+      toggleGuard: toggleGuardSettledAt - driveStartedAt,
+      ensureIdle: idleSettledAt - toggleGuardSettledAt,
+      closeCheck: closeCheckedAt - idleSettledAt,
+      armFixture: armedAt - closeCheckedAt,
+      openToListRequest: requestedAt - clickedAt
+    }
+  }
+  if (fixtures.list.kind === 'pending') {
+    try {
+      await forceMainGarbage(main)
+    } catch (error) {
+      throwWithDrive(error, drive)
+    }
+  }
   if (state.id === 'slow' || state.id === 'unavailable' || state.id === 'failed') {
     const cue = historyDesignCueForState(state.id)
-    await visible(cue.text, cue.role)
-    drive.bannerAfterMs = Date.now() - clickedAt
+    try {
+      await visible(cue.text, cue.role)
+    } catch (error) {
+      throwWithDrive(error, drive)
+    }
+    const cueAt = Date.now()
+    drive.bannerAfterMs = cueAt - clickedAt
+    drive.timingsMs.listRequestToCue = cueAt - requestedAt
   } else if (state.id === 'slow-with-rows') {
     await visible(SAMPLE_MEETINGS[0])
-    const beforeSearch = await main('globalThis.__historyDesign.requests')
+    const beforeSearch = await main('globalThis.__historyDesign.requests.search')
     const typedAt = Date.now()
-    await page.getByLabel('Search past meetings').fill('planning')
-    drive.requestedAt = await waitForRequest(main, beforeSearch, wait, 'search')
+    await searchInput.fill('planning')
+    try {
+      drive.requestedAt = await waitForRequest(main, 'search', beforeSearch, wait)
+    } catch (error) {
+      drive.requestChannels.search = { before: beforeSearch, answered: false }
+      throwWithDrive(error, drive)
+    }
+    drive.requestChannels.search = { before: beforeSearch, answered: true, requestedAt: drive.requestedAt }
+    drive.timingsMs.listRequestToSearchFill = typedAt - requestedAt
+    drive.timingsMs.searchFillToSearchRequest = drive.requestedAt - typedAt
+    if (fixtures.search.kind === 'pending') {
+      try {
+        await forceMainGarbage(main)
+      } catch (error) {
+        throwWithDrive(error, drive)
+      }
+    }
     const cue = historyDesignCueForState(state.id)
-    await visible(cue.text, cue.role)
-    drive.bannerAfterMs = Date.now() - typedAt
+    try {
+      await visible(cue.text, cue.role)
+    } catch (error) {
+      throwWithDrive(error, drive)
+    }
+    const cueAt = Date.now()
+    drive.bannerAfterMs = cueAt - typedAt
+    drive.timingsMs.searchRequestToCue = cueAt - drive.requestedAt
   } else if (state.list !== 'pending') {
     await visible(state.list === 'rows+notDownloaded' ? 'Not downloaded' : SAMPLE_MEETINGS[0])
   }
@@ -384,6 +558,13 @@ export async function driveState(page, main, state, realRows, deps = {}) {
       .first()
       .focus()
     await page.keyboard.press('Enter')
+    if (fixtures.read === 'hydrating') {
+      try {
+        await forceMainGarbage(main)
+      } catch (error) {
+        throwWithDrive(error, drive)
+      }
+    }
     await visible(state.read === 'failed' ? 'Download failed' : 'Downloading…')
   }
   return drive
@@ -403,15 +584,18 @@ async function captureState({ page, cdp, main, state, variant, realRows, out }) 
   try {
     return await captureReachedState({ page, cdp, main, state, variant, realRows, out })
   } catch (error) {
+    const drive = { ...(error.drive ?? {}), error: error.message }
+    const judged = judgeCapture({ state, variant, collected: null, roles: [], tabOrder: null, drive })
     return {
-      judged: judgeCapture({
-        state,
-        variant,
-        collected: null,
-        roles: [],
-        tabOrder: null,
-        drive: { error: error.message }
-      }),
+      judged: {
+        ...judged,
+        bannerAfterMs: drive.bannerAfterMs ?? null,
+        capturedAfterMs: drive.capturedAfterMs,
+        driveTimingsMs: drive.timingsMs,
+        requestChannels: drive.requestChannels,
+        closedBeforeArm: drive.closedBeforeArm ?? null,
+        tabOrder: null
+      },
       screenshot: null
     }
   }
@@ -436,7 +620,7 @@ async function settleWindow(page) {
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
 }
 
-async function captureReachedState({ page, cdp, main, state, variant, realRows, out }) {
+export async function captureReachedState({ page, cdp, main, state, variant, realRows, out, deps = {} }) {
   const screenshot = join(state.id, `${variant.id}.png`)
   let drive
   let collected
@@ -444,48 +628,55 @@ async function captureReachedState({ page, cdp, main, state, variant, realRows, 
   // applies at 2x (layout there can differ by a few pixels); only the device scale factor is emulated.
   await cdp.send('Emulation.setDeviceMetricsOverride', deviceMetricsForVariant(variant))
   try {
-    drive = await driveState(page, main, state, realRows)
+    drive = await driveState(page, main, state, realRows, deps)
     await settleWindow(page)
     await page.screenshot({ path: join(out, screenshot), scale: 'device' })
+    drive.requestCounts = { screenshot: await historyRequestCounts(main) }
     drive.capturedAfterMs = Date.now() - drive.requestedAt
+    drive.timingsMs.requestToCapture = drive.capturedAfterMs
     collected = await page.evaluate(`(${collectHistoryView})(${solidGradientLayers})`)
-  } finally {
-    await cdp.send('Emulation.clearDeviceMetricsOverride')
-  }
-  const roles = await rolesPresent(page, state)
-  let tabOrder = null
-  if (variant.id === KEYBOARD_VARIANT_ID) {
-    try {
-      writeFileSync(join(out, state.id, 'aria.yml'), await page.locator('[data-history-design-root]').ariaSnapshot())
-    } catch (error) {
-      writeFileSync(join(out, state.id, 'aria.yml'), `# accessibility snapshot failed: ${error.message}\n`)
+    const roles = await rolesPresent(page, state)
+    drive.requestCounts.rolesCheck = await historyRequestCounts(main)
+    let tabOrder = null
+    if (variant.id === KEYBOARD_VARIANT_ID) {
+      try {
+        writeFileSync(join(out, state.id, 'aria.yml'), await page.locator('[data-history-design-root]').ariaSnapshot())
+      } catch (error) {
+        writeFileSync(join(out, state.id, 'aria.yml'), `# accessibility snapshot failed: ${error.message}\n`)
+      }
+      tabOrder = await walkTabOrder(page)
     }
-    tabOrder = await walkTabOrder(page)
-  }
-  const judged = judgeCapture({ state, variant, collected, roles, tabOrder, drive })
-  return {
-    judged: {
-      ...judged,
-      scope: collected.scope,
-      bannerAfterMs: drive.bannerAfterMs ?? null,
-      capturedAfterMs: drive.capturedAfterMs,
-      tabOrder
-    },
-    screenshot
+    const judged = judgeCapture({ state, variant, collected, roles, tabOrder, drive })
+    return {
+      judged: {
+        ...judged,
+        scope: collected.scope,
+        bannerAfterMs: drive.bannerAfterMs ?? null,
+        capturedAfterMs: drive.capturedAfterMs,
+        driveTimingsMs: drive.timingsMs,
+        requestChannels: drive.requestChannels,
+        requestCounts: drive.requestCounts,
+        closedBeforeArm: drive.closedBeforeArm,
+        tabOrder
+      },
+      screenshot
+    }
+  } finally {
+    if (state.id === 'slow-with-rows') await clearHistorySearch(page).catch(() => undefined)
+    await cdp.send('Emulation.clearDeviceMetricsOverride')
   }
 }
 
 /**
- * One unjudged pass of the run's first capture. The first fixture-driven History open, device-metrics
- * override and screenshot pay one-time costs (window resize, screenshot pipeline start-up) that would
- * otherwise land inside the loading capture's HISTORY_DEGRADED_MS budget; nothing from this pass is
- * written or judged, and a failure here is left for the real capture to report.
+ * One unjudged pass through the first fixture-driven History open, device-metrics override and screenshot.
+ * It pays cold renderer costs before the judged matrix; nothing from this pass is written or judged, and a
+ * failure here is left for the real capture to report.
  */
-async function warmUp({ page, cdp, main, realRows }) {
+export async function warmUp({ page, cdp, main, realRows, deps = {} }) {
   const [variant] = DESIGN_VARIANTS
   try {
     await applyVariant(page, cdp, main, variant)
-    await driveState(page, main, HISTORY_DESIGN_STATES[0], realRows)
+    await driveState(page, main, HISTORY_DESIGN_STATES[0], realRows, deps)
     await cdp.send('Emulation.setDeviceMetricsOverride', {
       width: 0,
       height: 0,
@@ -576,6 +767,7 @@ async function main() {
     await waitForRendererReady(profile, child)
     inspector = await mainInspector(inspectPort)
     const main = inspector.evaluate
+    main.collectGarbage = inspector.collectGarbage
     browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout: 30_000 })
     const page = await findOverlayPage(browser, 30_000)
     if (!isOverlayUrl(page.url())) throw new Error('the attached page is not the overlay')
@@ -646,6 +838,9 @@ async function main() {
       fixtures:
         "slow, failed, cloud-only and unreadable answers served by History's own IPC channels, replaced in main through the inspector"
     },
+    rootCause: PENDING_ANSWER_ROOT_CAUSE,
+    guard:
+      'After each pending fixture request reaches main, the harness forces HeapProfiler.collectGarbage through the main-process inspector; a collectable pending answer fails the capture instead of being hidden by timing.',
     expectedCaptures: expected,
     captures,
     transitions,

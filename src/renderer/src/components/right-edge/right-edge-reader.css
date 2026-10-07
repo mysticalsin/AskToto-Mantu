@@ -1,0 +1,248 @@
+/* Right-edge Reader (M2-0202, spec v3 §6): the opaque document surface at readerRect. It is always dark, like
+   the rest of the overlay, so the full views it hosts keep the contrast they were designed for. Its one
+   scroller is .re-reader__scroll; nothing else in it scrolls. */
+.re-reader {
+  --re-reader-bg: rgb(22 22 27);
+  --re-reader-raise: rgb(34 34 41);
+  --re-reader-ink: var(--color-ink);
+  --re-reader-ink-2: var(--color-ink-2);
+  --re-reader-line: rgba(255, 255, 255, 0.14);
+  --re-reader-accent: rgb(196 178 255);
+  --re-reader-on-accent: rgb(22 14 44);
+  --re-reader-attention: rgb(255 200 110);
+  --re-reader-live: rgb(255 122 128);
+  --re-reader-ready: rgb(120 220 160);
+  --re-reader-target: 32px;
+  --re-reader-radius: 16px;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--re-reader-line);
+  border-radius: var(--re-reader-radius);
+  background: var(--re-reader-bg);
+  color: var(--re-reader-ink);
+  font-size: 13px;
+  line-height: 1.5;
+  animation: re-reader-in var(--re-reader-fade-ms, 120ms) ease-out both;
+}
+
+@keyframes re-reader-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .re-reader {
+    animation: none;
+  }
+}
+
+.re-reader__header {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--re-reader-line);
+}
+
+.re-reader__title {
+  flex: 1 1 8ch;
+  min-width: 0;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.re-reader__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: var(--re-reader-target);
+  min-height: var(--re-reader-target);
+  padding: 0 10px;
+  border: 1px solid var(--re-reader-line);
+  border-radius: 999px;
+  background: var(--re-reader-raise);
+  color: var(--re-reader-ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.re-reader__button:hover {
+  border-color: var(--re-reader-accent);
+}
+
+.re-reader__button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.re-reader__timer {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--re-reader-target);
+}
+
+.re-reader__consent {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--re-reader-live);
+}
+
+.re-reader__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--re-reader-target);
+  color: var(--re-reader-ink-2);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.re-reader__status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--re-reader-ready);
+}
+
+.re-reader__status[data-re-tone='thinking'] .re-reader__status-dot {
+  background: var(--re-reader-accent);
+}
+
+.re-reader__status[data-re-tone='listening'] .re-reader__status-dot {
+  background: var(--re-reader-live);
+}
+
+.re-reader__status[data-re-tone='paused'] .re-reader__status-dot {
+  background: var(--re-reader-ink-2);
+}
+
+.re-reader__status[data-re-tone='attention'] {
+  border-color: var(--re-reader-attention);
+  color: var(--re-reader-attention);
+}
+
+.re-reader__status[data-re-tone='attention'] .re-reader__status-dot {
+  background: var(--re-reader-attention);
+}
+
+.re-reader__scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+}
+
+.re-reader__scroll:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -2px;
+}
+
+/* A hosted view's own scroll box (History's list, Agenda's tab panel, Review's capped excerpts) grows into
+   the Reader's scroller instead of scrolling inside it. Unlayered, so it wins over the utility layer. */
+.re-reader__scroll :where(.overflow-auto, .overflow-y-auto, .overflow-y-scroll, .overflow-scroll, .overflow-x-auto, .overflow-x-scroll) {
+  overflow: visible;
+  max-height: none;
+}
+
+/* Code wraps in the Reader: a sideways scroller would be a second scroll container. */
+.re-reader__scroll :where(pre) {
+  overflow: visible;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.re-reader__content {
+  padding: 12px 14px 20px;
+  overflow-wrap: anywhere;
+}
+
+.re-reader__empty {
+  margin: 0;
+  color: var(--re-reader-ink-2);
+}
+
+.re-reader__transcript {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.re-reader__line {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.re-reader__line[data-provisional] {
+  opacity: 0.6;
+}
+
+.re-reader__speaker {
+  color: var(--re-reader-ink-2);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.re-reader__details {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.re-reader__detail {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--re-reader-line);
+  border-radius: 12px;
+  background: var(--re-reader-raise);
+}
+
+.re-reader__detail p {
+  margin: 0;
+}
+
+.re-reader__detail-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.re-reader__detail[data-re-detail='approval'] .re-reader__detail-title {
+  color: var(--re-reader-attention);
+}
+
+.re-reader__jump {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  border-color: transparent;
+  background: var(--re-reader-accent);
+  color: var(--re-reader-on-accent);
+}

@@ -146,7 +146,7 @@ no manual seeding step for this one, unlike the ffmpeg sidecar above.
   shared source gate `release-quality` through their build job. A platform whose build fails, or whose signing
   inputs are missing, is not published for that tag.
 - `scripts/publish-release.mjs` publishes one platform's exact asset set (macOS: DMG, ZIP, their blockmaps,
-  `latest-mac.yml`; Windows: Setup EXE, its blockmap, Portable EXE, `latest.yml`) after checking the update
+  `latest-mac.yml`; Windows: Setup EXE, its blockmap, `latest.yml`) after checking the update
   metadata against the bytes. The first platform for a tag goes to a fresh draft, is read back (asset set and
   GitHub's sha256 digest of every asset), then becomes public and Latest. The second platform joins that public
   release: installers first, then, only once GitHub's digests of those installers match, its update metadata.
@@ -181,6 +181,8 @@ Windows releases are not deferred or allowed to publish unsigned. The tagged wor
 unless `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD`, and `WIN_CSC_EXPECTED_SUBJECT` are provisioned, then
 verifies that the Authenticode certificate subject or common name matches that expected value exactly.
 Unsigned Windows candidates reach people only as owner-channel prereleases (`docs/SIGNING.md`).
+`Metis-Portable-*.exe` is built only for QA launch coverage, never promoted or published as a customer
+release asset, because it has no auto-update channel.
 
 ## Store Release Commands
 
