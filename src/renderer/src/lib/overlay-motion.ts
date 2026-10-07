@@ -49,23 +49,13 @@ export function overlayShowPeek(
 }
 
 /**
- * Whether the overlay shows its parked rest (the right-edge rail or band, or the top-center Island peek).
- * The right-edge dock stays mounted in every layout, so the keep-Ask-mounted exception applies only at the
- * top center: on the right edge, Hide rests closed exactly when Island does. Otherwise a page mouse-enter that
- * clears the dismissal without a reveal leaves the drawer rendered over main's parked hide band (RE-HIDE-7).
+ * Whether a parked overlay keeps the Ask bar mounted instead of showing its peek. Only top-center Hide does:
+ * the right-edge dock stays mounted in every layout, so there Hide rests closed exactly when Island does.
+ * Otherwise a page mouse-enter that clears the dismissal without a reveal leaves the drawer rendered over
+ * main's parked hide band (RE-HIDE-7).
  */
-export function overlayPeekedState(state: {
-  rightEdge: boolean
-  dockDismissed: boolean
-  idle: boolean
-  revealed: boolean
-  spring: OverlaySpring
-  restsHidden: boolean
-}): boolean {
-  return (
-    (state.rightEdge && state.dockDismissed && state.spring === 'rest') ||
-    overlayShowPeek(state.idle, state.revealed, state.spring, !state.rightEdge && state.restsHidden)
-  )
+export function overlayKeepsAskMounted(rightEdge: boolean, restsHidden: boolean): boolean {
+  return !rightEdge && restsHidden
 }
 
 export function overlaySpringClassName(spring: OverlaySpring, edge: OverlayEdge = 'top'): string {
