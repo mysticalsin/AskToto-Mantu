@@ -47,7 +47,9 @@ function buildTool(args, options = {}) {
 function releasePrerequisites(platform) {
   const mac = platform === 'mac'
   return [
-    ...(platform === 'win' ? [nodeScript('scripts/check-build-host.mjs', ['win'], { name: 'Check Windows build host' })] : []),
+    ...(platform === 'win'
+      ? [nodeScript('scripts/check-build-host.mjs', ['win'], { name: 'Check Windows build host' })]
+      : []),
     nodeScript('scripts/embed-cloudflare-key.mjs', [], { name: 'Embed Cloudflare key' }),
     nodeScript('scripts/check-cloudflare-key-valid.mjs', [], { name: 'Validate embedded Cloudflare key' }),
     ...(mac
@@ -74,7 +76,9 @@ function releasePrerequisites(platform) {
     nodeScript('scripts/check-local-model.mjs', [], { name: 'Check local model' }),
     ...(mac ? [npmRun('check:xcode', { name: 'Check Xcode tools' })] : []),
     nodeScript('scripts/check-release-secrets.mjs', [platform], { name: `Check ${platform} release secrets` }),
-    nodeScript('scripts/check-provisioned-secrets.mjs', ['--profile', 'release'], { name: 'Check provisioned release secrets' }),
+    nodeScript('scripts/check-provisioned-secrets.mjs', ['--profile', 'release'], {
+      name: 'Check provisioned release secrets'
+    }),
     npmRun('check:release', { name: 'Check release metadata' }),
     nodeScript('scripts/fetch-speaker-model.mjs', [], { name: 'Fetch speaker model' }),
     nodeScript('scripts/fetch-models.mjs', [], { name: 'Fetch ASR models' }),
@@ -86,36 +90,55 @@ const releasePlans = {
   mac: [
     ...releasePrerequisites('mac'),
     npmRun('build', { name: 'Build desktop app', env: { ASKTOTO_MAC_UNIVERSAL: '1' } }),
-    buildTool(['--mac', '--universal', '-c.npmRebuild=false', '-c.electronDist=resources/electron-dist', '--publish', 'never'], {
-      name: 'Package mac universal app',
-      env: { ASKTOTO_MAC_ARCHES: 'arm64,x64' }
-    }),
-    nodeScript('scripts/check-packaged-runtime.mjs', ['mac', '--arches=arm64,x64', '--macho-arches=arm64,x64', '--post-sign'], {
-      name: 'Check mac packaged runtime'
-    }),
+    buildTool(
+      ['--mac', '--universal', '-c.npmRebuild=false', '-c.electronDist=resources/electron-dist', '--publish', 'never'],
+      {
+        name: 'Package mac universal app',
+        env: { ASKTOTO_MAC_ARCHES: 'arm64,x64' }
+      }
+    ),
+    nodeScript(
+      'scripts/check-packaged-runtime.mjs',
+      ['mac', '--arches=arm64,x64', '--macho-arches=arm64,x64', '--post-sign'],
+      {
+        name: 'Check mac packaged runtime'
+      }
+    ),
     nodeScript('scripts/check-update-metadata.mjs', ['release/latest-mac.yml'], { name: 'Check mac update metadata' }),
     nodeScript('scripts/verify-signing.mjs', ['--require-notarized'], { name: 'Verify mac signing and notarization' }),
     nodeScript('scripts/check-packaged-launch.mjs', ['release/mac-universal/Metis.app'], {
       name: 'Launch mac package',
       env: { ASKTOTO_MAC_LAUNCH_GATE: '1' }
     }),
-    nodeScript('scripts/check-embedded-cloudflare-key.mjs', ['release/mac-universal'], { name: 'Check embedded key in mac package' })
+    nodeScript('scripts/check-embedded-cloudflare-key.mjs', ['release/mac-universal'], {
+      name: 'Check embedded key in mac package'
+    })
   ],
   win: [
     ...releasePrerequisites('win'),
     npmRun('build', { name: 'Build desktop app' }),
-    buildTool(['--config', 'electron-builder.win.yml', '--win', '--x64', '--publish', 'never'], { name: 'Package Windows app' }),
-    nodeScript('scripts/check-packaged-runtime.mjs', ['win', '--post-sign'], { name: 'Check Windows packaged runtime' }),
+    buildTool(['--config', 'electron-builder.win.yml', '--win', 'nsis', '--x64', '--publish', 'never'], {
+      name: 'Package Windows app'
+    }),
+    nodeScript('scripts/check-packaged-runtime.mjs', ['win', '--post-sign'], {
+      name: 'Check Windows packaged runtime'
+    }),
     nodeScript('scripts/check-update-metadata.mjs', ['release/latest.yml'], { name: 'Check Windows update metadata' }),
     nodeScript('scripts/verify-signing.mjs', [], { name: 'Verify Windows signing' }),
-    nodeScript('scripts/check-packaged-launch.mjs', ['release/win-unpacked/Metis.exe'], { name: 'Launch Windows package' }),
+    nodeScript('scripts/check-packaged-launch.mjs', ['release/win-unpacked/Metis.exe'], {
+      name: 'Launch Windows package'
+    }),
     nodeScript('scripts/check-packaged-asr.mjs', [], { name: 'Check Windows packaged ASR' }),
-    nodeScript('scripts/check-embedded-cloudflare-key.mjs', ['release'], { name: 'Check embedded key in Windows package' })
+    nodeScript('scripts/check-embedded-cloudflare-key.mjs', ['release'], {
+      name: 'Check embedded key in Windows package'
+    })
   ],
   mas: [
     nodeScript('scripts/check-ffmpeg-sidecar.mjs', ['mac', 'arm64'], { name: 'Check MAS ffmpeg sidecar' }),
     nodeScript('scripts/check-sherpa-platform.mjs', ['mac', 'arm64'], { name: 'Check MAS Sherpa' }),
-    nodeScript('scripts/provision-electron-dist.mjs', ['--platform=mas', 'arm64'], { name: 'Provision MAS Electron distribution' }),
+    nodeScript('scripts/provision-electron-dist.mjs', ['--platform=mas', 'arm64'], {
+      name: 'Provision MAS Electron distribution'
+    }),
     nodeScript('scripts/fetch-llama-server.mjs', ['mac'], { name: 'Fetch mac llama sidecar' }),
     nodeScript('scripts/check-llama-sidecar.mjs', ['mac'], { name: 'Check mac llama sidecar' }),
     nodeScript('scripts/build-mac-helper.mjs', [], { name: 'Build mac helper' }),
@@ -124,14 +147,27 @@ const releasePlans = {
     nodeScript('scripts/check-local-model.mjs', [], { name: 'Check local model' }),
     npmRun('check:xcode', { name: 'Check Xcode tools' }),
     nodeScript('scripts/check-release-secrets.mjs', ['mas'], { name: 'Check MAS release secrets' }),
-    nodeScript('scripts/check-provisioned-secrets.mjs', ['--profile', 'release'], { name: 'Check provisioned release secrets' }),
+    nodeScript('scripts/check-provisioned-secrets.mjs', ['--profile', 'release'], {
+      name: 'Check provisioned release secrets'
+    }),
     nodeScript('scripts/fetch-speaker-model.mjs', [], { name: 'Fetch speaker model' }),
     nodeScript('scripts/fetch-models.mjs', [], { name: 'Fetch ASR models' }),
     npmRun('build:intelligence', { name: 'Build Intelligence bundle' }),
     npmRun('build', { name: 'Build desktop app' }),
-    buildTool(['--mac', 'mas', '--arm64', '-c.electronDist=resources/electron-dist', '--publish', 'never', `-c.mas.provisioningProfile=${process.env.MAS_PROVISIONING_PROFILE ?? ''}`], {
-      name: 'Package MAS app'
-    })
+    buildTool(
+      [
+        '--mac',
+        'mas',
+        '--arm64',
+        '-c.electronDist=resources/electron-dist',
+        '--publish',
+        'never',
+        `-c.mas.provisioningProfile=${process.env.MAS_PROVISIONING_PROFILE ?? ''}`
+      ],
+      {
+        name: 'Package MAS app'
+      }
+    )
   ],
   'win-store': [
     nodeScript('scripts/check-ffmpeg-sidecar.mjs', ['win'], { name: 'Check Windows ffmpeg sidecar' }),
@@ -141,14 +177,28 @@ const releasePlans = {
     nodeScript('scripts/fetch-local-model.mjs', [], { name: 'Fetch local model' }),
     nodeScript('scripts/check-local-model.mjs', [], { name: 'Check local model' }),
     nodeScript('scripts/check-release-secrets.mjs', ['win-store'], { name: 'Check Windows Store release secrets' }),
-    nodeScript('scripts/check-provisioned-secrets.mjs', ['--profile', 'release'], { name: 'Check provisioned release secrets' }),
+    nodeScript('scripts/check-provisioned-secrets.mjs', ['--profile', 'release'], {
+      name: 'Check provisioned release secrets'
+    }),
     nodeScript('scripts/fetch-speaker-model.mjs', [], { name: 'Fetch speaker model' }),
     nodeScript('scripts/fetch-models.mjs', [], { name: 'Fetch ASR models' }),
     npmRun('build:intelligence', { name: 'Build Intelligence bundle' }),
     npmRun('build', { name: 'Build desktop app' }),
-    buildTool(['--config', 'electron-builder.win.yml', '--win', 'appx', '--x64', '--publish', 'never', '-c.directories.output=release-appx'], {
-      name: 'Package Windows Store app'
-    })
+    buildTool(
+      [
+        '--config',
+        'electron-builder.win.yml',
+        '--win',
+        'appx',
+        '--x64',
+        '--publish',
+        'never',
+        '-c.directories.output=release-appx'
+      ],
+      {
+        name: 'Package Windows Store app'
+      }
+    )
   ]
 }
 
@@ -232,29 +282,33 @@ async function runPlan(target, options = {}) {
     const step = steps[index]
     const command = formatCommand(step)
     if (options.dryRun) {
-      log(formatStepResult({
-        index: index + 1,
-        total: steps.length,
-        name: step.name,
-        exitCode: 'not-run',
-        durationMs: 0,
-        command,
-        dryRun: true
-      }))
+      log(
+        formatStepResult({
+          index: index + 1,
+          total: steps.length,
+          name: step.name,
+          exitCode: 'not-run',
+          durationMs: 0,
+          command,
+          dryRun: true
+        })
+      )
       continue
     }
 
     log(`[release:start] step=${index + 1}/${steps.length} name="${step.name}" command="${command}"`)
     const result = await runStep(step, env, runner)
-    log(formatStepResult({
-      index: index + 1,
-      total: steps.length,
-      name: step.name,
-      exitCode: result.exitCode,
-      durationMs: result.durationMs,
-      command,
-      dryRun: false
-    }))
+    log(
+      formatStepResult({
+        index: index + 1,
+        total: steps.length,
+        name: step.name,
+        exitCode: result.exitCode,
+        durationMs: result.durationMs,
+        command,
+        dryRun: false
+      })
+    )
     if (result.error) {
       console.error(`[release:error] ${result.error.message}`)
       return result.exitCode

@@ -765,6 +765,10 @@ export async function inspectorClient(wsUrl) {
   }
   const evaluate = async (expression) =>
     (await send('Runtime.evaluate', { expression, returnByValue: true }))?.result?.value
+  const collectGarbage = async () => {
+    await send('HeapProfiler.collectGarbage')
+    return true
+  }
   const close = () => {
     if (socket.readyState === WebSocket.CLOSED) return Promise.resolve()
     return new Promise((resolve) => {
@@ -772,7 +776,7 @@ export async function inspectorClient(wsUrl) {
       socket.close()
     })
   }
-  return { send, evaluate, close }
+  return { send, evaluate, collectGarbage, close }
 }
 
 /** Minimal Chrome DevTools Protocol client for the main process's Node inspector. */
@@ -789,7 +793,7 @@ export async function mainInspector(inspectPort) {
     if (!wsUrl) await sleep(250)
   }
   if (!wsUrl) throw new Error('no main-process inspector: the EnableNodeCliInspectArguments fuse may be off')
-  const { send, evaluate, close } = await inspectorClient(wsUrl)
+  const { send, evaluate, collectGarbage, close } = await inspectorClient(wsUrl)
   // The app holds its Tray in a module-local binding, so find the live instance on the heap and emit the same
   // 'click' the OS delivers: its listener is the product's own Settings entry (sendHotkey('settings')).
   const clickTray = async () => {
@@ -804,7 +808,7 @@ export async function mainInspector(inspectPort) {
     return clicked?.result?.value === true
   }
   await evaluate("globalThis.__metisReHideElectron = process.mainModule.require('electron'); true")
-  return { evaluate, clickTray, close }
+  return { evaluate, collectGarbage, clickTray, close }
 }
 
 export async function runPackagedRightEdgeHideRows({ port, inspectPort, rows }) {

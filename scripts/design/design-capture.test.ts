@@ -1,23 +1,32 @@
 import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import type { Browser } from 'playwright'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { DESIGN_CAPTURE_ENTRY, rendererInputs } from './renderer-inputs'
 import {
   MOTIONS,
   SCALES,
   THEMES,
   buildManifest,
+  captureDeviceMetrics,
   captureFileName,
   captureMatrix,
+  captureScreenshotRequest,
   assertPngSize,
   pngSize,
   sha256Hex
 } from './capture-manifest.mjs'
-import { DESIGN_STATES, DESIGN_STATE_IDS, resolveDesignState } from '../../src/renderer/src/design-capture/states'
+import { AUDIT_STANDARD, contrastRatio } from './capture-audit.mjs'
+import {
+  AUDIT_NEGATIVE_CONTROL_STATE,
+  DESIGN_STATES,
+  DESIGN_STATE_IDS,
+  resolveDesignState,
+  resolveDesignStateIncludingQa
+} from '../../src/renderer/src/design-capture/states'
 
 const root = resolve(__dirname, '..', '..')
-const read = (...parts: string[]): string =>
-  readFileSync(join(root, ...parts), 'utf8').replace(/\r\n/g, '\n')
+const read = (...parts: string[]): string => readFileSync(join(root, ...parts), 'utf8').replace(/\r\n/g, '\n')
 
 /** The `- 'pattern'` entries of every `files:` list in a packaging config, whatever its indent. */
 function fileLists(config: string): string[][] {
@@ -42,7 +51,10 @@ function excludes(list: string[], path: string): boolean {
   return list
     .filter((entry) => entry.startsWith('!'))
     .some((entry) => {
-      const pattern = entry.slice(1).replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*')
+      const pattern = entry
+        .slice(1)
+        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+        .replace(/\*/g, '[^/]*')
       return new RegExp(`^${pattern}$`).test(path)
     })
 }
@@ -96,9 +108,65 @@ describe('design states', () => {
     expect(resolveDesignState('')).toBeUndefined()
     expect(resolveDesignState('?state=nope')).toBeUndefined()
   })
+
+  it('keeps the QA audit negative control out of evidence state ids', () => {
+    expect(DESIGN_STATE_IDS).not.toContain(AUDIT_NEGATIVE_CONTROL_STATE.id)
+    expect(resolveDesignState(`?state=${AUDIT_NEGATIVE_CONTROL_STATE.id}`)).toBeUndefined()
+    expect(resolveDesignStateIncludingQa(`?state=${AUDIT_NEGATIVE_CONTROL_STATE.id}`)).toBe(
+      AUDIT_NEGATIVE_CONTROL_STATE
+    )
+  })
+})
+
+describe('audit negative-control CSS', () => {
+  let browser: Browser
+
+  beforeAll(async () => {
+    const { chromium } = await import('playwright')
+    browser = await chromium.launch({ headless: true })
+  })
+
+  afterAll(async () => {
+    await browser?.close()
+  })
+
+  it('keeps the low-contrast text color active in both capture themes', async () => {
+    const styles = `${read('src/renderer/src/tokens.css')}\n${read('src/renderer/src/design-capture/capture.css')}`
+
+    for (const colorScheme of ['light', 'dark'] as const) {
+      const page = await browser.newPage({ colorScheme, viewport: { width: 960, height: 640 } })
+      try {
+        await page.setContent(
+          `<!doctype html><html class="design-capture"><head><style>${styles}</style></head><body><div id="root"><div class="dc-card dc-audit-negative"><p class="dc-audit-negative-text">Contrast guard sample</p></div></div></body></html>`,
+          { waitUntil: 'domcontentloaded' }
+        )
+        const computed = await page.locator('.dc-audit-negative-text').evaluate((element: any) => {
+          const view = element.ownerDocument.defaultView
+          const text = view.getComputedStyle(element)
+          const card = view.getComputedStyle(element.closest('.dc-audit-negative'))
+          return { color: text.color, background: card.backgroundColor }
+        })
+        expect(computed, colorScheme).toEqual({
+          color: 'rgb(119, 119, 119)',
+          background: 'rgb(255, 255, 255)'
+        })
+        expect(contrastRatio(computed.color, computed.background), colorScheme).toBeLessThan(4.5)
+      } finally {
+        await page.close()
+      }
+    }
+  })
 })
 
 describe('capture matrix and manifest', () => {
+  const cleanAudit = {
+    pass: true,
+    text: { checked: 1, failures: [] },
+    nonText: { checked: 1, failures: [] },
+    clipping: { checked: 1, failures: [] },
+    unverifiable: []
+  }
+
   it('covers light/dark x 1x/2x x reduced motion exactly once each', () => {
     const rows = captureMatrix()
     expect(rows).toHaveLength(THEMES.length * SCALES.length * MOTIONS.length)
@@ -121,7 +189,18 @@ describe('capture matrix and manifest', () => {
     const manifest = buildManifest({
       commit: 'abc123',
       platform: 'darwin',
-      shots: [{ state: 'bar-idle', theme: 'light', scale: 1, motion: 'no-preference', file: 'a.png', bytes }]
+      shots: [
+        {
+          state: 'bar-idle',
+          theme: 'light',
+          scale: 1,
+          motion: 'no-preference',
+          file: 'a.png',
+          bytes,
+          audit: cleanAudit
+        }
+      ],
+      negativeControl: { detected: true, kinds: ['clipping', 'nonText', 'text'] }
     })
     expect(manifest.commit).toBe('abc123')
     expect(manifest.entries).toEqual([
@@ -131,14 +210,64 @@ describe('capture matrix and manifest', () => {
         scale: 1,
         motion: 'no-preference',
         file: 'a.png',
-        sha256: sha256Hex(bytes)
+        sha256: sha256Hex(bytes),
+        audit: cleanAudit
       }
     ])
     expect(manifest.entries[0].sha256).toMatch(/^[0-9a-f]{64}$/)
+    expect(manifest.audit).toMatchObject({
+      standard: AUDIT_STANDARD,
+      failures: 0,
+      text: { checked: 1, failures: 0 },
+      nonText: { checked: 1, failures: 0 },
+      clipping: { checked: 1, failures: 0 },
+      unverifiable: 0,
+      negativeControl: { detected: true, kinds: ['clipping', 'nonText', 'text'] }
+    })
   })
 
   it('marks only reduced-motion shots as reproducible', () => {
-    expect(buildManifest({ commit: 'abc123', platform: 'darwin', shots: [] }).reproducibleMotions).toEqual(['reduce'])
+    expect(
+      buildManifest({
+        commit: 'abc123',
+        platform: 'darwin',
+        shots: [],
+        negativeControl: { detected: true, kinds: ['clipping', 'nonText', 'text'] }
+      }).reproducibleMotions
+    ).toEqual(['reduce'])
+  })
+})
+
+describe('design-capture workflow', () => {
+  const workflow = read('.github/workflows/design-capture.yml')
+
+  it('runs on pull requests to integration when design-capture paths change and keeps dispatch support', () => {
+    expect(workflow).toContain('  pull_request:\n    branches: [m2/integration]\n    paths:')
+    expect(workflow).toContain('      - src/renderer/src/design-capture/**')
+    expect(workflow).toContain('      - scripts/design/**')
+    expect(workflow).toContain('      - .github/workflows/design-capture.yml')
+    expect(workflow).toContain('  workflow_dispatch:')
+    expect(workflow).not.toMatch(/\n  push:/)
+  })
+
+  it('captures on pull_request and always uploads the manifest artifact', () => {
+    expect(workflow).not.toContain("if: github.event_name == 'workflow_dispatch'")
+    expect(workflow).toContain('if: always()')
+    expect(workflow).toContain('node scripts/design/capture-states.mjs out-design-capture')
+  })
+})
+
+describe('capture driver', () => {
+  // capture-states.mjs launches Electron at import, so its evidence-loop order is pinned on the source text.
+  const driver = read('scripts/design/capture-states.mjs')
+
+  it('takes each evidence screenshot before the audit collector can focus controls', () => {
+    const evidenceLoop = driver.slice(driver.indexOf('for (const row of captureMatrix())'))
+    const screenshot = evidenceLoop.indexOf("cdp.send('Page.captureScreenshot'")
+    const audit = evidenceLoop.indexOf('await collectAudit(page)')
+    expect(screenshot).toBeGreaterThan(-1)
+    expect(audit).toBeGreaterThan(-1)
+    expect(screenshot).toBeLessThan(audit)
   })
 })
 
@@ -159,6 +288,29 @@ describe('png size check', () => {
   it('accepts a shot at scale x viewport and rejects a silent 1x capture as 2x', () => {
     expect(() => assertPngSize(png(1920, 1280), viewport, 2, 'a.png')).not.toThrow()
     expect(() => assertPngSize(png(960, 640), viewport, 2, 'a.png')).toThrow(/expected 1920x1280, got 960x640/)
+  })
+
+  it('requests a CDP screenshot clip scaled to the expected output pixels', () => {
+    expect(captureScreenshotRequest(viewport, 2)).toEqual({
+      format: 'png',
+      fromSurface: true,
+      clip: {
+        x: 0,
+        y: 0,
+        width: 960,
+        height: 640,
+        scale: 2
+      }
+    })
+  })
+
+  it('pins CDP device metrics to the capture viewport and leaves output scaling to the screenshot clip', () => {
+    expect(captureDeviceMetrics(viewport)).toEqual({
+      width: 960,
+      height: 640,
+      deviceScaleFactor: 1,
+      mobile: false
+    })
   })
 
   it('rejects bytes that are not a PNG', () => {
