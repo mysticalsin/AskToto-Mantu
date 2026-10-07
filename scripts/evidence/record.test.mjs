@@ -239,6 +239,34 @@ test('R6f metis-owner-mac records need ci_run_id at runner levels only', () => {
   assertProblem(recordProblems(locallyTested({ environment: ownerRunner })), "environment.kind: expected 'ci'")
 })
 
+test('R6g deployed-service records use registered service hosts and ci_run_id at service levels', () => {
+  const service = { kind: 'deployed-service', host: 'operator-staging' }
+  assert.deepEqual(recordProblems(hostConfigured({ environment: service, ci_run_id: 303 })), [])
+  assert.deepEqual(recordProblems(liveVerified({ environment: service, ci_run_id: 303 })), [])
+  assert.deepEqual(recordProblems(measured({ environment: service, ci_run_id: 303 })), [])
+
+  for (const [level, build] of [['HOST_CONFIGURED', hostConfigured], ['LIVE_VERIFIED', liveVerified], ['MEASURED', measured]]) {
+    assertProblem(
+      recordProblems(build({ environment: service })),
+      `ci_run_id: required for a deployed-service ${level} record`
+    )
+  }
+
+  for (const host of ['ubuntu-latest', 'macos-latest']) {
+    assertProblem(
+      recordProblems(hostConfigured({ environment: { kind: 'deployed-service', host }, ci_run_id: 303 })),
+      'environment.host',
+      'deployed-service',
+      'must not name a runner label'
+    )
+  }
+
+  assertProblem(
+    recordProblems(locallyTested({ environment: service })),
+    "environment.kind: expected 'ci'"
+  )
+})
+
 test('R6d the other kinds keep the generic host-label rule', () => {
   assert.deepEqual(
     recordProblems(hostConfigured({ environment: { kind: 'windows-runner', host: 'windows-latest' } })),

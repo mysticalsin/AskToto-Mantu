@@ -1857,6 +1857,26 @@ test('H1 a LIVE_VERIFIED requirement closes on a hosted-runner record and not on
   assertProblem(ledgerProblems(ci.ledger, ci.recordsByTicket), 'M2-0001', 'LIVE_VERIFIED')
 })
 
+test('H1b a HOST_CONFIGURED requirement closes on a deployed-service record and not on a ci record', () => {
+  const requirement = { id: 'M2-0001', status: 'DONE', required_evidence: ['HOST_CONFIGURED'] }
+  const hostRecord = (environment) => record({
+    evidence_level: 'HOST_CONFIGURED',
+    environment,
+    command: 'node scripts/evidence/check-service.mjs',
+    output: { path: 'evidence/raw/M2-0001/service.json', sha256: 'a'.repeat(64) }
+  })
+
+  const deployed = programWithRecords([hostRecord({ kind: 'deployed-service', host: 'operator-staging' })], requirement)
+  assert.deepEqual(deployed.problems, [])
+  assert.equal(deployed.recordsByTicket.get('M2-0001')?.length, 1)
+  assert.deepEqual(ledgerProblems(deployed.ledger, deployed.recordsByTicket), [])
+
+  const ci = programWithRecords([hostRecord({ kind: 'ci', host: 'ubuntu-latest' })], requirement)
+  assertProblem(ci.problems, "must not be 'ci'", 'HOST_CONFIGURED')
+  assert.equal(ci.recordsByTicket.has('M2-0001'), false)
+  assertProblem(ledgerProblems(ci.ledger, ci.recordsByTicket), 'M2-0001', 'HOST_CONFIGURED')
+})
+
 test('H2 --pr-event accepts a hosted-runner LIVE_VERIFIED block without resolving ci_run_id as a Build & Test run', async () => {
   const rec = liveRecord({ kind: 'hosted-runner', host: 'windows-latest' })
   const problems = await prProblems({
@@ -2427,6 +2447,24 @@ test('R3d --release: a metis-owner-mac ACCEPTED row still needs ci_run_id', () =
     OWNER_MAC_RUNNER_HOST,
     `${OWNER_MAC_RUNNER_HOST} record with no ci_run_id`
   )
+})
+
+test('R3e --release: a deployed-service record without ci_run_id does not meet a row', () => {
+  const c = releaseCase()
+  c.gates.rows = [{
+    id: 'operator-staging',
+    ticket: 'M2-0187',
+    level: 'HOST_CONFIGURED',
+    bytes: 'promotable',
+    hosts: ['operator-staging'],
+    accept: 'PASS'
+  }]
+  const { ci_run_id: _dropped, ...withoutRun } = boundRecord('M2-0187', 'operator-staging', SHA_MAC, {
+    evidence_level: 'HOST_CONFIGURED',
+    environment: { kind: 'deployed-service', host: 'operator-staging' }
+  })
+  setRecords(c, 'M2-0187', [withoutRun])
+  assertOnlyProblem(releaseOf(c).problems, 'operator-staging', 'deployed-service record with no ci_run_id')
 })
 
 test('R4 --release: QA-identity bytes do not meet a row that requires promotable bytes', () => {
