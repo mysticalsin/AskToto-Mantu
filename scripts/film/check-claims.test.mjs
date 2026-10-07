@@ -60,9 +60,9 @@ test('the committed storyboard package passes against the claim register', () =>
 
 test("the resolved scratch edit skips cut scenes and follows each scene's active variant", () => {
   const { timeline, duration_seconds: total } = validate()
-  assert.ok(!timeline.some((entry) => entry.scene_id === 'LF-07'))
+  assert.ok(!timeline.some((entry) => entry.scene_id === 'LF-04' || entry.scene_id === 'LF-05'))
   assert.ok(
-    timeline.some((entry) => entry.scene_id === 'LF-05' && entry.source === 'SH-03C'),
+    timeline.some((entry) => entry.scene_id === 'LF-03' && entry.source === 'SH-03C'),
     'the hindsight beat plays its concept form while the register says concept'
   )
   assert.equal(total, timeline.at(-1).end)
@@ -83,9 +83,9 @@ test('every register scene needs a storyboard entry with live, concept and cut v
 
 test('the active variant must follow the register state', () => {
   const failures = failuresOf(({ register: changed }) => {
-    changed.storyboard_scenes.find((scene) => scene.id === 'LF-05').state = 'cut'
+    changed.storyboard_scenes.find((scene) => scene.id === 'LF-03').state = 'cut'
   })
-  assert.match(failures, /LF-05 active variant concept does not match register state cut/)
+  assert.match(failures, /LF-03 active variant concept does not match register state cut/)
 })
 
 test("a concept variant carries the register's visible label", () => {
@@ -109,10 +109,10 @@ test('forbidden claim phrases are rejected in storyboard treatments', () => {
 test('the hindsight scene is prepared in a live and a concept shot, the live one gated on LIVE_VERIFIED', () => {
   const dropped = failuresOf(({ json, save }) => {
     const shots = json(SHOT_LIST)
-    shots.shots = shots.shots.filter((shot) => !(shot.scene_id === 'LF-05' && shot.form === 'live'))
+    shots.shots = shots.shots.filter((shot) => !(shot.scene_id === 'LF-03' && shot.form === 'live'))
     save(SHOT_LIST, shots)
   })
-  assert.match(dropped, /LF-05 has no live shot/)
+  assert.match(dropped, /LF-03 has no live shot/)
   const ungated = failuresOf(({ json, save }) => {
     const shots = json(SHOT_LIST)
     shots.shots.find((shot) => shot.id === 'SH-03L').required_evidence_level = 'DESIGNED'
