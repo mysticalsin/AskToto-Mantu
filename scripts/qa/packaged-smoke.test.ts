@@ -17,6 +17,7 @@ import {
   buildWindowsShortcutLauncher,
   NAVIGATION_GUARD_BOOTSTRAP_PATCH,
   LATE_NATIVE_FRAME_HOLD_MS,
+  RIGHT_EDGE_LATCH_RELEASE_SAMPLE_MS,
   childPidReserved,
   computeCleanupTargets,
   framesAboveWorkArea,
@@ -1084,6 +1085,11 @@ describe('right-edge Hide rows (RE-HIDE)', () => {
     })
     expect(failed.pass).toBe(false)
     expect(failed.evidence.framesAboveWorkArea).toEqual([badFrame])
+  })
+
+  it('holds the RE-HIDE explicit-close cursor away long enough for main to sample the leave', () => {
+    expect(RIGHT_EDGE_LATCH_RELEASE_SAMPLE_MS).toBeGreaterThanOrEqual(500)
+    expect(RIGHT_EDGE_LATCH_RELEASE_SAMPLE_MS).toBeLessThanOrEqual(1000)
   })
 })
 

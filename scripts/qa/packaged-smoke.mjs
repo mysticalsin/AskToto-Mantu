@@ -93,6 +93,7 @@ export {
 export {
   RIGHT_EDGE_HIDE_SCENARIOS,
   LATE_NATIVE_FRAME_HOLD_MS,
+  RIGHT_EDGE_LATCH_RELEASE_SAMPLE_MS,
   framesAboveWorkArea,
   initialRightEdgeHideRows,
   rightEdgePageChromeState,
