@@ -12,7 +12,7 @@ import MetisKit
 @main
 struct MetisApp: App {
     @State private var controller: MeetingController
-    @State private var modelPolicyRuntime = ModelPolicyRuntime(client: MetisApp.makeModelPolicyClient())
+    @State private var modelPolicyRuntime = ModelPolicyRuntime(client: OperatorProvisioning.makeModelPolicyClient())
 
     init() {
         let c = MeetingController()
@@ -37,10 +37,13 @@ struct MetisApp: App {
         #endif
     }
 
-    // MARK: Fleet model policy (M2-0412)
+}
 
-    /// Existing Operator URL/secret provisioning keys. The poller below is real and tested; it starts
-    /// fetching and enforcing the fleet policy the moment these values exist.
+// MARK: Fleet model policy (M2-0412)
+
+/// Existing Operator provisioning keys and native client wiring. This lives outside `MetisApp` so the
+/// sendable fetch/secret closures do not capture SwiftUI App main-actor-isolated static members.
+private enum OperatorProvisioning {
     static let operatorURLDefaultsKey = "metis.operatorURL"
     static let operatorIngestSecretDefaultsKey = "metis.operatorIngestSecret"
     private static let operatorDeviceInstallIDDefaultsKey = "metis.operatorDeviceInstallID"
@@ -55,7 +58,7 @@ struct MetisApp: App {
         return fresh
     }
 
-    private static func makeModelPolicyClient() -> ModelPolicyClient {
+    static func makeModelPolicyClient() -> ModelPolicyClient {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Metis", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -100,12 +103,12 @@ struct RootView: View {
         .task {
             // M2-0412: start the fleet model policy poller for the app's lifetime. It fetches at launch
             // and re-polls every <=60s once the existing Operator URL/secret values are provisioned.
-            guard let urlString = UserDefaults.standard.string(forKey: MetisApp.operatorURLDefaultsKey),
+            guard let urlString = UserDefaults.standard.string(forKey: OperatorProvisioning.operatorURLDefaultsKey),
                   let operatorURL = URL(string: urlString)
             else { return }
             let url = ModelPolicy.endpointURL(operatorBaseURL: operatorURL)
             await modelPolicyRuntime.start(url: url) {
-                UserDefaults.standard.string(forKey: MetisApp.operatorIngestSecretDefaultsKey)
+                UserDefaults.standard.string(forKey: OperatorProvisioning.operatorIngestSecretDefaultsKey)
             }
         }
     }
