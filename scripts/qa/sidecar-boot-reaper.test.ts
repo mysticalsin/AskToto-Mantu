@@ -14,6 +14,7 @@ import {
   registryHasSpawnedPid,
   summarizeProof,
   topLevelFailureReport,
+  waitForRegisteredSpawn,
   waitForSpawnedRegistry
 } from './sidecar-boot-reaper.mjs'
 
@@ -68,6 +69,43 @@ describe('sidecar boot reaper proof helpers', () => {
     })
 
     expect(result).toEqual({ found: true, waitedMs: 6_000 })
+  })
+
+  it('follows the llama-server the registry records when the app spawned more than one (two sidecar.spawn events)', async () => {
+    // Packaged smoke on #441 and #548: the proof took the first llama-server descendant, the registry recorded
+    // the second, and the exact-pid wait timed out at 120 s although the identity record had landed.
+    let elapsed = 0
+    const result = await waitForRegisteredSpawn({
+      livePids: () => [60867, 60901],
+      timeoutMs: 120_000,
+      intervalMs: 1_000,
+      now: () => elapsed,
+      sleepFn: async (ms: number) => {
+        elapsed += ms
+      },
+      readRegistry: () => (elapsed >= 2_000 ? [{ kind: 'spawned', name: 'llama-server', pid: 60901 }] : [])
+    })
+
+    expect(result).toEqual({ found: true, pid: 60901, waitedMs: 2_000 })
+  })
+
+  it('never accepts a registered pid that is no longer a live llama-server, and times out without one', async () => {
+    let elapsed = 0
+    const result = await waitForRegisteredSpawn({
+      livePids: () => [60867],
+      timeoutMs: 5_000,
+      intervalMs: 1_000,
+      now: () => elapsed,
+      sleepFn: async (ms: number) => {
+        elapsed += ms
+      },
+      readRegistry: () => [
+        { kind: 'spawned', name: 'llama-server', pid: 60901 },
+        { kind: 'intent', name: 'llama-server', pid: 60867 }
+      ]
+    })
+
+    expect(result).toEqual({ found: false, pid: null, waitedMs: 6_000 })
   })
 
   it('can accept an orphan already reaped before the second boot audit becomes observable', () => {

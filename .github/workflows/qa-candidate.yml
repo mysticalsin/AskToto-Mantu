@@ -523,7 +523,7 @@ jobs:
     needs: provenance
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, macOS, ARM64, metis-owner-mac]
-    timeout-minutes: 20
+    timeout-minutes: 45
     continue-on-error: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -546,13 +546,40 @@ jobs:
         with:
           name: candidate-provenance
           path: provenance
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      # The owner Mac has intermittently received a truncated candidate zip while download-artifact
+      # still reported success. Verify, and on a failed byte check re-download once and verify again;
+      # the retry verify has no continue-on-error, so a second bad download still fails the job.
+      - id: download1
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         env:
           TMPDIR: ${{ runner.temp }}
         with:
           name: candidate-mac-qa-identity
           path: assets
       - name: Verify every byte against the provenance
+        id: verify1
+        continue-on-error: true
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
+      - name: Re-download the candidate after a failed byte check
+        if: steps.verify1.outcome != 'success'
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          echo "::warning::st1-mac-fifo: candidate-mac-qa-identity failed the provenance byte check on attempt 1 (download outcome: ${{ steps.download1.outcome }}); removing assets and downloading attempt 2."
+          rm -rf assets
+      - name: Download the candidate again (attempt 2)
+        if: steps.verify1.outcome != 'success'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        env:
+          TMPDIR: ${{ runner.temp }}
+        with:
+          name: candidate-mac-qa-identity
+          path: assets
+      - name: Verify every byte against the provenance (retry)
+        if: steps.verify1.outcome != 'success'
         env:
           TMPDIR: ${{ runner.temp }}
         run: bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
@@ -745,7 +772,7 @@ jobs:
     needs: provenance
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, macOS, ARM64, metis-owner-mac]
-    timeout-minutes: 20
+    timeout-minutes: 45
     continue-on-error: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -768,13 +795,40 @@ jobs:
         with:
           name: candidate-provenance
           path: provenance
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      # The owner Mac has intermittently received a truncated candidate zip while download-artifact
+      # still reported success. Verify, and on a failed byte check re-download once and verify again;
+      # the retry verify has no continue-on-error, so a second bad download still fails the job.
+      - id: download1
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         env:
           TMPDIR: ${{ runner.temp }}
         with:
           name: candidate-mac-qa-identity
           path: assets
       - name: Verify every byte against the provenance
+        id: verify1
+        continue-on-error: true
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
+      - name: Re-download the candidate after a failed byte check
+        if: steps.verify1.outcome != 'success'
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          echo "::warning::st1-mac-control: candidate-mac-qa-identity failed the provenance byte check on attempt 1 (download outcome: ${{ steps.download1.outcome }}); removing assets and downloading attempt 2."
+          rm -rf assets
+      - name: Download the candidate again (attempt 2)
+        if: steps.verify1.outcome != 'success'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        env:
+          TMPDIR: ${{ runner.temp }}
+        with:
+          name: candidate-mac-qa-identity
+          path: assets
+      - name: Verify every byte against the provenance (retry)
+        if: steps.verify1.outcome != 'success'
         env:
           TMPDIR: ${{ runner.temp }}
         run: bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
@@ -997,13 +1051,17 @@ jobs:
 
   # Window-construction measurement (M2-0516), never ST-1 evidence: short launches (--purpose
   # window-construction, st1Evidence: false) that build the boot window under each QA-identity rendering variant,
-  # in both chromes, twice, interleaved, all on this one runner so the numbers compare. A first-run profile builds
+  # in both chromes, twice, interleaved on this one runner so the numbers compare. A first-run profile builds
   # the opaque exclusive onboarding window; an onboarded bar profile builds the transparent overlay. Each report's
   # bootStages carries createWindow.prewarm and createWindow.construct (with the chrome and variant built),
   # createWindow.navigate and createWindow.firstShow. The other variants stay report-only; the shipped window is
   # gated (M2-0519): the job fails unless every shipped createWindow.prewarm and createWindow.construct is present
-  # and under 250 ms in both chromes. OD-42: each chrome gets one marked warm-up launch before any measured
-  # repeat, and the gate skips those warm-up reports.
+  # and under 250 ms in both chromes.
+  # OD-42: each chrome gets one marked shipped warm-up launch before any measured repeat, and the gate skips those
+  # warm-up reports. The two marked shipped warm-up launches run before any measured repeat. Shipped is measured last
+  # in each repeat while keeping per-launch, per-stage timings in the uploaded st1-report artifact.
+  # OD-66: a single slow shipped launch is re-measured once in the same chrome inside this job; window-gate.json lists
+  # every accepted one under remeasured, and the gate annotates each with a warning.
   st1-mac-window:
     name: ST-1 window construction per variant and chrome (shipped gated < 250 ms)
     needs: provenance
@@ -1037,12 +1095,45 @@ jobs:
           fi
           # The durable settings of a user who finished onboarding with the bar layout (plain JSON is a supported read path).
           printf '{"onboardingDone":true,"onboardingDoneAt":%s000,"recordingConsent":true,"overlayLayout":"bar","autoHideOverlay":false}\n' "$(date +%s)" > onboarded-profile/settings.json
-          # The first launch on a fresh hosted runner can pay one-time Electron/macOS warm-up costs.
-          # Keep that launch explicit and marked so the strict shipped gate measures the steady boot path only.
-          for chrome in opaque transparent; do
+          # The shared ST-1 plan emits every launch so the gate artifact records per-launch, per-stage timings.
+          node scripts/qa/st-1.mjs --print-window-plan > st1-report/window-plan.json
+          jq -c '.[]' st1-report/window-plan.json | while read -r launch; do
+            variant=$(jq -r '.variant' <<<"$launch")
+            chrome=$(jq -r '.chrome' <<<"$launch")
+            run=$(jq -r '.name' <<<"$launch")
+            warmup=$(jq -r '.warmup' <<<"$launch")
+            template=()
+            warmup_args=()
+            if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi
+            if [ "$warmup" = true ]; then warmup_args=(--window-warmup); fi
+            node scripts/qa/st-1.mjs \
+              --installer "$installer" \
+              --provenance provenance/provenance.json \
+              --fixtures none \
+              "${template[@]}" \
+              --minutes 0.5 \
+              --purpose window-construction \
+              --window-variant "$variant" \
+              "${warmup_args[@]}" \
+              --report-dir "st1-report/$run" \
+              --out "st1-report/$run/$run.json" \
+              </dev/null \
+              || echo "::warning::$run ended without PASS; its report says why."
+          done
+      # OD-66: one in-job re-measure per chrome replaces the whole-check re-run. After every planned launch, the plan
+      # names each chrome whose only over-budget measured shipped launch failed on budget alone; it is [] when no
+      # shipped launch reached 250 ms, so no launch is added. The gate accepts a re-measure only under 250 ms.
+      - name: Re-measure a single slow shipped launch per chrome (OD-66)
+        continue-on-error: true
+        run: |
+          installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
+          node scripts/qa/st-1.mjs --print-window-remeasure-plan st1-report > st1-report/window-remeasure-plan.json
+          jq -c '.[]' st1-report/window-remeasure-plan.json | while read -r launch; do
+            chrome=$(jq -r '.chrome' <<<"$launch")
+            run=$(jq -r '.name' <<<"$launch")
+            remeasures=$(jq -r '.remeasures' <<<"$launch")
             template=()
             if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi
-            run="window-warmup-shipped-$chrome"
             node scripts/qa/st-1.mjs \
               --installer "$installer" \
               --provenance provenance/provenance.json \
@@ -1051,30 +1142,11 @@ jobs:
               --minutes 0.5 \
               --purpose window-construction \
               --window-variant shipped \
-              --window-warmup \
+              --window-remeasures "$remeasures" \
               --report-dir "st1-report/$run" \
               --out "st1-report/$run/$run.json" \
+              </dev/null \
               || echo "::warning::$run ended without PASS; its report says why."
-          done
-          for repeat in 1 2; do
-            for variant in spellcheck-off paint-when-hidden prewarm-spellchecker shipped; do
-              for chrome in opaque transparent; do
-                template=()
-                if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi
-                run="window-$variant-$chrome-$repeat"
-                node scripts/qa/st-1.mjs \
-                  --installer "$installer" \
-                  --provenance provenance/provenance.json \
-                  --fixtures none \
-                  "${template[@]}" \
-                  --minutes 0.5 \
-                  --purpose window-construction \
-                  --window-variant "$variant" \
-                  --report-dir "st1-report/$run" \
-                  --out "st1-report/$run/$run.json" \
-                  || echo "::warning::$run ended without PASS; its report says why."
-              done
-            done
           done
       - name: Gate the shipped window (createWindow.prewarm and createWindow.construct < 250 ms in both chromes)
         if: always()
