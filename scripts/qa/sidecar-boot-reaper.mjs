@@ -456,6 +456,30 @@ export async function waitForSpawnedRegistry({
   }
 }
 
+/**
+ * The first live llama-server pid that the registry records as spawned. The app may spawn llama-server more than
+ * once during prewarm (two sidecar.spawn events), so the proof follows whichever live process carries the identity
+ * record instead of guessing the first descendant it saw.
+ */
+export async function waitForRegisteredSpawn({
+  readRegistry,
+  livePids,
+  timeoutMs,
+  intervalMs = POLL_MS,
+  now = Date.now,
+  sleepFn = sleep
+}) {
+  const startedAt = now()
+  const deadline = startedAt + timeoutMs
+  for (;;) {
+    const records = readRegistry()
+    const pid = livePids().find((candidate) => registryHasSpawnedPid(records, candidate))
+    if (pid !== undefined) return { found: true, pid, waitedMs: now() - startedAt }
+    if (now() > deadline) return { found: false, pid: null, waitedMs: now() - startedAt }
+    await sleepFn(intervalMs)
+  }
+}
+
 async function connectAndFindTotoPage(port) {
   return waitFor(
     async () => {
@@ -773,20 +797,26 @@ async function runRealLlamaProof({ installRoot, executable }) {
     observation.timingsMs.firstReady = Date.now() - firstStartedAt
 
     const llamaStartedAt = Date.now()
-    const llama = await prewarmAndFindLlama(firstPort, first.pid, installRoot)
-    if (!llama) throw new Precondition(REAL_LLAMA_UNBLOCK)
-    observation.pids.sidecar = llama.pid
-    observation.pids.orphan = llama.pid
+    const firstLlama = await prewarmAndFindLlama(firstPort, first.pid, installRoot)
+    if (!firstLlama) throw new Precondition(REAL_LLAMA_UNBLOCK)
+    observation.pids.sidecar = firstLlama.pid
+    observation.pids.orphan = firstLlama.pid
     observation.timingsMs.llamaStarted = Date.now() - llamaStartedAt
     observation.timingsMs.sidecarStarted = observation.timingsMs.llamaStarted
-    const registry = await waitForSpawnedRegistry({
+    const registry = await waitForRegisteredSpawn({
       readRegistry: () => readSidecarRegistry(profile),
-      pid: llama.pid,
+      livePids: () =>
+        descendantsOf(psRows(), first.pid)
+          .filter((proc) => classify(proc.command, installRoot) === 'llama-server')
+          .map((proc) => proc.pid),
       timeoutMs: LLAMA_TIMEOUT_MS,
       intervalMs: POLL_MS
     })
     observation.timingsMs.registryWrite = registry.waitedMs
     if (!registry.found) throw new Failure('llama-server spawned identity registry did not land before hard kill')
+    const llama = { pid: registry.pid }
+    observation.pids.sidecar = llama.pid
+    observation.pids.orphan = llama.pid
     observation.processes.beforeKill = roleCounts(
       ownedProcesses(listProcesses(process.platform), { mainPid: first.pid, installRoot, platform: process.platform })
     )
