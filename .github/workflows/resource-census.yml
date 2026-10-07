@@ -225,6 +225,15 @@ jobs:
             --trace-scenario parked-bar-orb \
             --trace-scenario backdrop-filter \
             --trace-scenario threejs-obsidian-orb
+      - name: Measure first-inference census state
+        env:
+          METIS_QA_HOST_FLOOR_OVERRIDE: '1'
+        run: |
+          node scripts/qa/census/first-inference.mjs \
+            --app "$RUNNER_TEMP/resource-census-install/Metis.app" \
+            --profile "$RUNNER_TEMP/metis-census-profile" \
+            --seconds 300 \
+            --output census-output/darwin-first-inference.json
       - name: Compare with baseline run
         if: always() && inputs.baseline_run != '' && steps.source.outputs.source != ''
         env:
@@ -261,7 +270,12 @@ jobs:
               commit: process.env.SOURCE_COMMIT || null,
               artifactFileName: process.env.ARTIFACT_NAME || null,
               artifact_sha256: process.env.ARTIFACT_SHA256 || null,
-              hostFloorOverride: false,
+              hostFloorOverride: {
+                'cold-start': false,
+                'settled-idle': false,
+                'parked-idle': false,
+                'first-inference': true
+              },
               hostMemoryBytes: totalmem()
             };
             writeFileSync('census-output/run-identity.json', JSON.stringify(record, null, 2) + '\n');
@@ -414,6 +428,15 @@ jobs:
             --seconds 300 \
             --app "$RUNNER_TEMP/resource-census-install/Metis.exe" \
             --output census-output/win32-parked-idle.json
+      - name: Measure first-inference census state
+        env:
+          METIS_QA_HOST_FLOOR_OVERRIDE: '1'
+        run: |
+          node scripts/qa/census/first-inference.mjs \
+            --app "$RUNNER_TEMP/resource-census-install/Metis.exe" \
+            --profile "$RUNNER_TEMP/metis-census-profile" \
+            --seconds 300 \
+            --output census-output/win32-first-inference.json
       - name: Compare with baseline run
         if: always() && inputs.baseline_run != '' && steps.source.outputs.source != ''
         env:
@@ -450,7 +473,12 @@ jobs:
               commit: process.env.SOURCE_COMMIT || null,
               artifactFileName: process.env.ARTIFACT_NAME || null,
               artifact_sha256: process.env.ARTIFACT_SHA256 || null,
-              hostFloorOverride: false,
+              hostFloorOverride: {
+                'cold-start': false,
+                'settled-idle': false,
+                'parked-idle': false,
+                'first-inference': true
+              },
               hostMemoryBytes: totalmem()
             };
             writeFileSync('census-output/run-identity.json', JSON.stringify(record, null, 2) + '\n');
