@@ -44,7 +44,9 @@ export function createSidecarFlow(ctx) {
       return window.toto.getSettings()
     })
     if (!settings.providerReady || settings.provider !== 'openai') {
-      throw new Error(`Could not prepare the isolated sidecar response fixture: ${JSON.stringify({ provider: settings.provider, providerReady: settings.providerReady })}`)
+      throw new Error(
+        `Could not prepare the isolated sidecar response fixture: ${JSON.stringify({ provider: settings.provider, providerReady: settings.providerReady })}`
+      )
     }
     // useSettings refreshes after the main-process settings change. Trigger its normal focus refresh and
     // wait long enough for the React gate to observe the disposable ready provider before pressing Enter.
@@ -66,10 +68,24 @@ export function createSidecarFlow(ctx) {
       const answer = document.querySelector('.right-edge-sidecar__answer')
       const composer = document.querySelector('.right-edge-sidecar__composer')
       const drawerScroll = document.querySelector('.right-edge-sidecar__drawer-scroll')
-      if (!(drawer instanceof HTMLElement) || !(body instanceof HTMLElement) || !(answer instanceof HTMLElement) || !(composer instanceof HTMLElement) || !(drawerScroll instanceof HTMLElement)) return null
+      if (
+        !(drawer instanceof HTMLElement) ||
+        !(body instanceof HTMLElement) ||
+        !(answer instanceof HTMLElement) ||
+        !(composer instanceof HTMLElement) ||
+        !(drawerScroll instanceof HTMLElement)
+      )
+        return null
       const rect = (element) => {
         const value = element.getBoundingClientRect()
-        return { top: value.top, right: value.right, bottom: value.bottom, left: value.left, width: value.width, height: value.height }
+        return {
+          top: value.top,
+          right: value.right,
+          bottom: value.bottom,
+          left: value.left,
+          width: value.width,
+          height: value.height
+        }
       }
       return {
         drawer: rect(drawer),
@@ -77,16 +93,37 @@ export function createSidecarFlow(ctx) {
         answer: { ...rect(answer), clientWidth: answer.clientWidth, scrollWidth: answer.scrollWidth },
         composer: rect(composer),
         drawerScroll: { clientWidth: drawerScroll.clientWidth, scrollWidth: drawerScroll.scrollWidth },
-        code: [...answer.querySelectorAll('pre')].map((pre) => ({ clientWidth: pre.clientWidth, scrollWidth: pre.scrollWidth })),
-        table: [...answer.querySelectorAll('table')].map((table) => ({ clientWidth: table.clientWidth, scrollWidth: table.scrollWidth }))
+        code: [...answer.querySelectorAll('pre')].map((pre) => ({
+          clientWidth: pre.clientWidth,
+          scrollWidth: pre.scrollWidth
+        })),
+        table: [...answer.querySelectorAll('table')].map((table) => ({
+          clientWidth: table.clientWidth,
+          scrollWidth: table.scrollWidth
+        }))
       }
     })
-    const horizontalOverflow = layout && [layout.body, layout.answer, layout.drawerScroll, ...layout.table].some((element) => element.scrollWidth > element.clientWidth + 1)
-    const composerAnchored = layout && layout.composer.bottom >= layout.drawer.bottom - 15 && layout.composer.top > layout.body.bottom
+    const horizontalOverflow =
+      layout &&
+      [layout.body, layout.answer, layout.drawerScroll, ...layout.table].some(
+        (element) => element.scrollWidth > element.clientWidth + 1
+      )
+    const composerAnchored =
+      layout && layout.composer.bottom >= layout.drawer.bottom - 15 && layout.composer.top > layout.body.bottom
     if (!layout || horizontalOverflow || !composerAnchored) {
-      throw new Error(`Long sidecar response escaped its reading surface: ${JSON.stringify({ layout, horizontalOverflow, composerAnchored })}`)
+      throw new Error(
+        `Long sidecar response escaped its reading surface: ${JSON.stringify({ layout, horizontalOverflow, composerAnchored })}`
+      )
     }
     ok('long sidecar answer wraps prose and tables while the composer remains anchored')
+    // RE-L05 (M2-0202): the island holds a one-line summary; the code block and the table mount only in the Reader.
+    if (layout.code.length > 0 || layout.table.length > 0) {
+      throw new Error(
+        `The right-edge island mounted the full answer: ${JSON.stringify({ code: layout.code, table: layout.table })}`
+      )
+    }
+    await ctx.win.locator('[data-re-open-reader="answer"]').waitFor({ state: 'visible', timeout: 5_000 })
+    ok('right-edge island summarises the long answer and offers Open ↗ into the Reader')
   }
 
   return { verifyLongSidecarResponse }
