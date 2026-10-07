@@ -1,8 +1,13 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { sourceIndexOf } from '../../scripts/lib/source-layout'
 import * as cursorWatch from './island/cursor-watch'
-import { CURSOR_LEAVE_GRACE_PX, RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS, TOP_CENTER_REVEAL_DWELL_MS } from './island/cursor-watch'
+import {
+  CURSOR_LEAVE_GRACE_PX,
+  RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS,
+  TOP_CENTER_REVEAL_DWELL_MS
+} from './island/cursor-watch'
 import {
   clampHeight as islandClampHeight,
   hoverRestTop,
@@ -23,6 +28,10 @@ import {
   rememberBarContentHeight
 } from '@shared/overlay-chrome'
 import { createRightEdgeAnchors } from './island/right-edge-anchor'
+import { createRightEdgeSession } from './island/right-edge-session'
+import { RIGHT_EDGE_PINS, type RightEdgePin } from '@shared/right-edge-state'
+import { readerRect } from '@shared/right-edge-geometry'
+import { RE_BLUR_TOGGLE_GRACE_MS } from '@shared/right-edge-timing'
 
 const source = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
 
@@ -39,15 +48,17 @@ const DISPLAY: DisplayMetrics = {
  * IPC and timer side effects are substituted; hit testing and the watcher's state transitions are real.
  * The default fixture is the established top-edge Hide; `rightEdge` runs the same handler for a
  * right-edge Hide parked as its reveal band (or revealed as its drawer). */
-function nativeHover(options: {
-  rightEdge?: { resting: boolean; latched?: boolean; unhoveredRevealAt?: number | null }
-} = {}) {
+function nativeHover(
+  options: { rightEdge?: { resting: boolean; latched?: boolean; unhoveredRevealAt?: number | null } } = {}
+) {
   const display = DISPLAY
   const rightEdge = options.rightEdge
   const placement = rightEdge ? 'right-edge' : 'top-center'
   const band = hoverWatchRestRect('hide', display, 'right-edge')
   const parked = rightEdge ? band : { x: 896, y: 0, width: 8, height: 2 }
-  const revealed = rightEdge ? rightEdgeSidecarBounds(display, { open: true }) : { x: 460, y: 39, width: 880, height: 120 }
+  const revealed = rightEdge
+    ? rightEdgeSidecarBounds(display, { open: true })
+    : { x: 460, y: 39, width: 880, height: 120 }
   let bounds: Rect = rightEdge && !rightEdge.resting ? revealed : parked
   let cursor = { x: 900, y: 600 }
   let now = 0
@@ -58,6 +69,9 @@ function nativeHover(options: {
   const noted: string[] = []
   /** Every bounds write the lifted moveBy / resizeTo make. */
   const setBoundsCalls: Rect[] = []
+  /** The reveal controller's reasons and the hotkey actions sent to the page (the lifted toggle, M2-0202 S3). */
+  const reveals: string[] = []
+  const hotkeys: string[] = []
   const win = {
     isDestroyed: () => false,
     isVisible: () => true,
@@ -67,7 +81,13 @@ function nativeHover(options: {
       setBoundsCalls.push({ ...next })
     },
     setMinimumSize: () => {},
-    showInactive: () => {}
+    showInactive: () => {},
+    hide: () => {},
+    webContents: {
+      send: (_channel: string, action: string) => {
+        hotkeys.push(action)
+      }
+    }
   }
   const deps = {
     ...cursorWatch,
@@ -85,13 +105,32 @@ function nativeHover(options: {
     overlayHoverRestRect: (layout: 'hide') => hoverWatchRestRect(layout, display, placement),
     hoverWatchRestRect,
     isIncompleteAskReveal,
-    cancelOverlayLeavePark: () => { parkPending = false },
-    scheduleOverlayLeavePark: () => { parkPending = true },
-    notifyOverlayCursorHover: (hovering: boolean) => { notifications.push(hovering) },
-    restoreWindow: () => { bounds = revealed; restoreCount++; return revealed.width },
+    cancelOverlayLeavePark: () => {
+      parkPending = false
+    },
+    scheduleOverlayLeavePark: () => {
+      parkPending = true
+    },
+    notifyOverlayCursorHover: (hovering: boolean) => {
+      notifications.push(hovering)
+    },
+    // `next` is the lifted rightEdgeBounds('open') on the right edge: the legacy drawer (equal to `revealed`
+    // at the default anchor), or readerRect while the page holds a Reader.
+    restoreWindow: (next?: Rect) => {
+      bounds = next ?? revealed
+      restoreCount++
+      return bounds.width
+    },
+    noteReveal: (reason: string) => {
+      reveals.push(reason)
+    },
+    IPC: { hotkey: 'hotkey' },
+    parkLayoutForDisplay: (layout: string) => layout,
     mainLog: { info: () => {} },
     // Reveal/park cause logging (M2-0431) has no OS side effect; overlay-reveal-log.test.ts covers the log itself.
-    noteOverlay: (cause: string) => { noted.push(cause) },
+    noteOverlay: (cause: string) => {
+      noted.push(cause)
+    },
     // The lifted moveBy / resizeTo (a drag and the renderer's content resize) substitute the same OS side
     // effects; their placement math is the shipped geometry.
     ensureWindow: () => win,
@@ -115,7 +154,9 @@ function nativeHover(options: {
     overlayUsesHover,
     parkedOverlayBounds: () => parked,
     applyOverlaySurfaceChrome: () => {},
-    commitParkedOverlayBounds: (park: Rect) => { bounds = park },
+    commitParkedOverlayBounds: (park: Rect) => {
+      bounds = park
+    },
     applyHideClickThrough: () => {},
     startOverlayCursorWatch: () => {},
     // The right-edge hold region (M2-0202) is the real anchor store at the default anchor, nothing persisted.
@@ -126,23 +167,56 @@ function nativeHover(options: {
       rightEdgeLive: () => true,
       warn: () => {},
       later: () => {}
+    }),
+    // The park gate (M2-0202) is the real session; a refused leave-park retries through the real schedule.
+    rightEdgeSession: createRightEdgeSession({
+      surface: () => ({ surface: 'island', restKind: 'none', edgeClass: 'W', cardMaxHeight: 0, slotMax: 0 }),
+      send: () => {},
+      onPinsCleared: () => {
+        parkPending = true
+      }
     })
   }
   // Lifts one shipped function, dropping only its TypeScript parameter and return annotations.
   const lift = (signature: string, stop: string, jsSignature = signature.replace(/\): \w+ \{$/, ') {')): string => {
-    const begin = source.indexOf(signature)
-    const end = source.indexOf(stop, begin)
+    const begin = sourceIndexOf(source, signature)
+    const end = sourceIndexOf(source, stop, begin)
     expect(begin).toBeGreaterThan(-1)
     expect(end).toBeGreaterThan(begin)
     return source.slice(begin, end).replace(signature, jsSignature)
   }
   const handler = lift('function tickOverlayCursorWatch(): void {', 'function notifyOverlayCursorHover')
-  const parkHandler = lift('function parkOverlayAfterHideSpring(force = false): boolean {', 'function applyHideClickThrough')
+  const parkHandler = lift(
+    'function parkOverlayAfterHideSpring(force = false): boolean {',
+    'function applyHideClickThrough'
+  )
   const layoutChangeHandler = lift('function parkOverlayForLayoutChange(): void {', '/** Pin the overlay')
-  const moveHandler = lift('function moveBy(dx: number, dy: number): void {', '/**\n * Keep the overlay reachable', 'function moveBy(dx, dy) {')
-  const resizeHandler = lift('function resizeTo(height: number): void {', '/** Collapse to / expand', 'function resizeTo(height) {')
+  const moveHandler = lift(
+    'function moveBy(dx: number, dy: number): void {',
+    '/**\n * Keep the overlay reachable',
+    'function moveBy(dx, dy) {'
+  )
+  const resizeHandler = lift(
+    'function resizeTo(height: number): void {',
+    '/** Collapse to / expand',
+    'function resizeTo(height) {'
+  )
   const pageRevealHandler = lift('function revealTopCenterHoverInPage(): void {', 'const revealController')
-  const build = new Function(...Object.keys(deps), `
+  // M2-0202 S3: the right-edge open rect (the Reader or the drawer), the show/hide toggle and the blur park.
+  const boundsHandler = lift(
+    "function rightEdgeBounds(\n  surface: 'open' | 'rest',\n  display: Electron.Display,\n  layout: OverlayLayout = liveOverlayLayout()\n): Electron.Rectangle {",
+    '/** The only writer of right-edge window bounds',
+    'function rightEdgeBounds(surface, display, layout = liveOverlayLayout()) {'
+  )
+  const toggleHandler = lift(
+    "function toggleOverlayVisibility(reason: Extract<RevealReason, 'hotkey' | 'tray'>): void {",
+    'const shortcutActions',
+    'function toggleOverlayVisibility(reason) {'
+  )
+  const blurHandler = lift('function parkRightEdgeReaderOnBlur(): void {', 'function currentRightEdgeSurface')
+  const build = new Function(
+    ...Object.keys(deps),
+    `
     let islandResting = ${rightEdge ? rightEdge.resting : true};
     let settingsSurfaceOpen = false;
     let isMinimized = false;
@@ -155,25 +229,36 @@ function nativeHover(options: {
     let lastBarHeight = 120;
     let userAnchorY = 0;
     let overlayCursorWatchTimer = 1;
-    function restoreBarWidth() { overlayParkLatched = false; islandResting = false; currentWidth = restoreWindow(); }
+    function restoreBarWidth() {
+      overlayParkLatched = false;
+      islandResting = false;
+      currentWidth = restoreWindow(${rightEdge ? "rightEdgeBounds('open', screen.getDisplayMatching(win.getBounds()))" : ''});
+    }
     ${handler}
     ${parkHandler}
     ${layoutChangeHandler}
     ${moveHandler}
     ${resizeHandler}
     ${pageRevealHandler}
+    ${boundsHandler}
+    ${toggleHandler}
+    ${blurHandler}
     // The reveal controller's restoreInteractiveLayout (a hotkey, tray or relaunch reveal) for this placement.
     function summon() { restoreBarWidth(); revealTopCenterHoverInPage(); }
-    return { tick: tickOverlayCursorWatch, park: parkOverlayAfterHideSpring, layoutChangePark: parkOverlayForLayoutChange, moveBy, resizeTo, summon };
-  `) as (...args: unknown[]) => {
+    function reveal(reason) { noteReveal(reason); summon(); }
+    return { tick: tickOverlayCursorWatch, park: parkOverlayAfterHideSpring, layoutChangePark: parkOverlayForLayoutChange, moveBy, resizeTo, summon, toggle: toggleOverlayVisibility, blur: parkRightEdgeReaderOnBlur };
+  `
+  ) as (...args: unknown[]) => {
     tick: () => void
     park: (force?: boolean) => boolean
     layoutChangePark: () => void
     moveBy: (dx: number, dy: number) => void
     resizeTo: (height: number) => void
     summon: () => void
+    toggle: (reason: 'hotkey' | 'tray') => void
+    blur: () => void
   }
-  const { tick, park, layoutChangePark, moveBy, resizeTo, summon } = build(...Object.values(deps))
+  const { tick, park, layoutChangePark, moveBy, resizeTo, summon, toggle, blur } = build(...Object.values(deps))
   return {
     tick(at: number, y: number): void {
       now = at
@@ -191,6 +276,32 @@ function nativeHover(options: {
       cursor = point
       expect(park(true)).toBe(true)
     },
+    /** A park request: `force` is an explicit Hide, otherwise the page's park after its exit spring. */
+    parkAt(at: number, point: { x: number; y: number }, force: boolean): boolean {
+      now = at
+      cursor = point
+      return park(force)
+    },
+    /** The page's IPC.rightEdgeState report with these pins. */
+    pin(pins: RightEdgePin[]): void {
+      deps.rightEdgeSession.report({ surface: 'island', contentHeight: 0, pins })
+    },
+    /** The page's IPC.rightEdgeState report of the surface it renders (M2-0202 S3). */
+    report(surface: 'island' | 'reader' | 'rest', pins: RightEdgePin[] = []): void {
+      deps.rightEdgeSession.report({ surface, contentHeight: 0, pins })
+    },
+    /** The window lost focus, with the pointer at `point`. */
+    blurAt(at: number, point: { x: number; y: number }): void {
+      now = at
+      cursor = point
+      blur()
+    },
+    /** The show/hide toggle from the hotkey or the tray. */
+    toggleAt(at: number, reason: 'hotkey' | 'tray'): void {
+      now = at
+      toggle(reason)
+    },
+    readerPending: () => deps.rightEdgeSession.readerPending(),
     /** The settings-driven re-park after a layout switch (Hide ↔ Island), with the pointer at `point`. */
     layoutChangeAt(at: number, point: { x: number; y: number }): void {
       now = at
@@ -213,7 +324,16 @@ function nativeHover(options: {
     },
     band,
     revealed,
-    state: () => ({ bounds, parkPending, restoreCount, notifications: [...notifications], setBoundsCalls: [...setBoundsCalls], noted: [...noted] })
+    state: () => ({
+      bounds,
+      parkPending,
+      restoreCount,
+      notifications: [...notifications],
+      setBoundsCalls: [...setBoundsCalls],
+      noted: [...noted],
+      reveals: [...reveals],
+      hotkeys: [...hotkeys]
+    })
   }
 }
 
@@ -272,7 +392,12 @@ describe('MQA-298 native overlay hover stability', () => {
 
 describe('M2-0431 top-center Hide stability (owner decision OD-23: the notch area only)', () => {
   /** Rest `ms` at `point`, one 24 ms watch tick at a time, starting at `from`. Returns the next tick time. */
-  const dwell = (hover: ReturnType<typeof nativeHover>, from: number, point: { x: number; y: number }, ms: number): number => {
+  const dwell = (
+    hover: ReturnType<typeof nativeHover>,
+    from: number,
+    point: { x: number; y: number },
+    ms: number
+  ): number => {
     let at = from
     for (; at <= from + ms; at += 24) hover.tickAt(at, point)
     return at
@@ -285,7 +410,13 @@ describe('M2-0431 top-center Hide stability (owner decision OD-23: the notch are
   it('400 ms stops on menu-bar items outside the notch area never reveal, notify or move the window', () => {
     const hover = nativeHover()
     let at = 0
-    for (const stop of [{ x: 24, y: 12 }, { x: 1253, y: 27 }, { x: 1770, y: 8 }, { x: 24, y: 38 }, { x: 1770, y: 0 }]) {
+    for (const stop of [
+      { x: 24, y: 12 },
+      { x: 1253, y: 27 },
+      { x: 1770, y: 8 },
+      { x: 24, y: 38 },
+      { x: 1770, y: 0 }
+    ]) {
       at = dwell(hover, at, stop, 400)
       at = dwell(hover, at, { x: 900, y: 600 }, 48)
     }
@@ -493,6 +624,49 @@ describe('right-edge Hide native watch', () => {
     expect(hover.state().parkPending).toBe(false)
   })
 
+  it('RE-P01: while a pin holds the dock, the pointer leaving is reported but never parks it; clearing the pins parks', () => {
+    // The owner's D2 path: click into an empty composer (the typing pin), then move the pointer away.
+    const hover = nativeHover({ rightEdge: { resting: true } })
+    const inBand = { x: edge, y: hover.band.y + Math.round(hover.band.height / 2) }
+    const away = { x: 400, y: 500 }
+    let at = 0
+    for (; at <= 400 && hover.state().restoreCount === 0; at += 24) hover.tickAt(at, inBand)
+    expect(hover.state().restoreCount).toBe(1)
+    hover.pin(['typing'])
+    hover.tickAt(at, away)
+    expect(hover.state().notifications).toEqual([true, false])
+    expect(hover.state().parkPending).toBe(false)
+    // The page's own park after its exit spring is refused as well, and the window stays open.
+    expect(hover.parkAt(at + 24, away, false)).toBe(false)
+    for (let t = at + 48; t <= at + 8_000; t += 24) hover.tickAt(t, away)
+    expect(hover.state().parkPending).toBe(false)
+    expect(hover.state().bounds).toEqual(hover.revealed)
+    // The pin expires (the page reports no pins): the refused leave-park runs.
+    hover.pin([])
+    expect(hover.state().parkPending).toBe(true)
+  })
+
+  it('RE-P01: the unhovered auto-park waits while a pin is set and fires once the pins clear', () => {
+    const hover = nativeHover({ rightEdge: { resting: false, unhoveredRevealAt: 0 } })
+    const away = { x: 400, y: 500 }
+    hover.pin(['approval'])
+    let at = 0
+    for (; at <= RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS + 2_000; at += 24) hover.tickAt(at, away)
+    expect(hover.state().notifications).toEqual([])
+    hover.pin([])
+    hover.tickAt(at, away)
+    expect(hover.state().notifications).toEqual([false])
+  })
+
+  it('RE-P01: an explicit Hide parks under every pin except an IME composition', () => {
+    for (const pin of RIGHT_EDGE_PINS) {
+      const hover = nativeHover({ rightEdge: { resting: false } })
+      hover.pin([pin])
+      expect(hover.parkAt(0, { x: 400, y: 500 }, true), pin).toBe(pin !== 'ime')
+      expect(hover.state().bounds, pin).toEqual(pin === 'ime' ? hover.revealed : hover.band)
+    }
+  })
+
   it('a pointer that visits the unhovered reveal hands it to the ordinary leave → park rule', () => {
     const hover = nativeHover({ rightEdge: { resting: false, unhoveredRevealAt: 0 } })
     hover.tickAt(24, { x: hover.revealed.x + 20, y: hover.revealed.y + 20 })
@@ -501,5 +675,84 @@ describe('right-edge Hide native watch', () => {
     expect(hover.state().parkPending).toBe(true)
     for (let at = 72; at <= RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS + 100; at += 24) hover.tickAt(at, { x: 400, y: 500 })
     expect(hover.state().notifications).toEqual([true, false])
+  })
+})
+
+describe('right-edge Reader (M2-0202 S3, RE-P01 Reader rows)', () => {
+  const edge = DISPLAY.bounds.x + DISPLAY.bounds.width - 1
+  const away = { x: 400, y: 500 }
+  const READER = readerRect(DISPLAY.workArea)
+
+  it('while the Reader is open the watch stands down: no leave, no unhovered auto-park, no dwell park', () => {
+    const hover = nativeHover({ rightEdge: { resting: false, unhoveredRevealAt: 0 } })
+    hover.report('reader')
+    for (let at = 0; at <= RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS + 8_000; at += 24) hover.tickAt(at, away)
+    expect(hover.state().notifications).toEqual([])
+    expect(hover.state().parkPending).toBe(false)
+    expect(hover.state().setBoundsCalls).toEqual([])
+    // The page's own pointer park after its exit spring is refused too, and a pin clearing never parks it.
+    expect(hover.parkAt(9_000, away, false)).toBe(false)
+    hover.report('reader', ['typing'])
+    hover.report('reader')
+    expect(hover.state().parkPending).toBe(false)
+    expect(hover.state().bounds).toEqual(hover.revealed)
+  })
+
+  it('the explicit Hide parks the Reader and the next hotkey toggle restores it, without the ask input', () => {
+    const hover = nativeHover({ rightEdge: { resting: false } })
+    hover.report('reader')
+    hover.hideAt(0, away)
+    expect(hover.state().bounds).toEqual(hover.band)
+    hover.report('rest')
+    hover.toggleAt(2_000, 'hotkey')
+    expect(hover.state().reveals).toEqual(['hotkey'])
+    expect(hover.state().bounds).toEqual(READER)
+    expect(hover.state().hotkeys).toEqual([])
+  })
+
+  it('blur, then the hotkey within 500 ms → Reader restored', () => {
+    const hover = nativeHover({ rightEdge: { resting: false } })
+    hover.report('reader')
+    hover.blurAt(1_000, away)
+    expect(hover.state().bounds).toEqual(hover.band)
+    hover.report('rest')
+    expect(hover.readerPending()).toBe(true)
+    hover.toggleAt(1_000 + RE_BLUR_TOGGLE_GRACE_MS - 100, 'hotkey')
+    expect(hover.state().reveals).toEqual(['hotkey'])
+    expect(hover.state().bounds).toEqual(READER)
+  })
+
+  it('blur, then a tray toggle within the grace is that same Hide; a later tray toggle restores the Reader', () => {
+    const hover = nativeHover({ rightEdge: { resting: false } })
+    hover.report('reader')
+    hover.blurAt(1_000, away)
+    hover.report('rest')
+    hover.toggleAt(1_000 + RE_BLUR_TOGGLE_GRACE_MS - 100, 'tray')
+    expect(hover.state().reveals).toEqual([])
+    expect(hover.state().bounds).toEqual(hover.band)
+    hover.toggleAt(1_000 + RE_BLUR_TOGGLE_GRACE_MS + 400, 'tray')
+    expect(hover.state().reveals).toEqual(['tray'])
+    expect(hover.state().bounds).toEqual(READER)
+  })
+
+  it('a blur with the island open (no Reader) parks nothing', () => {
+    const hover = nativeHover({ rightEdge: { resting: false } })
+    hover.report('island')
+    hover.blurAt(1_000, away)
+    expect(hover.state().bounds).toEqual(hover.revealed)
+  })
+
+  it('a pointer on the band reveals the island over a parked Reader, which then follows the ordinary leave rule', () => {
+    const hover = nativeHover({ rightEdge: { resting: false } })
+    hover.report('reader')
+    hover.hideAt(0, away)
+    hover.report('rest')
+    const inBand = { x: edge, y: hover.band.y + Math.round(hover.band.height / 2) }
+    let at = 1_000
+    for (; at <= 1_400 && hover.state().restoreCount === 0; at += 24) hover.tickAt(at, inBand)
+    expect(hover.state().bounds).toEqual(hover.revealed)
+    expect(hover.readerPending()).toBe(false)
+    hover.tickAt(at + 24, away)
+    expect(hover.state().parkPending).toBe(true)
   })
 })

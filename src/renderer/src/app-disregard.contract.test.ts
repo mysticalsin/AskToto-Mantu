@@ -17,14 +17,15 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
+import { sourceIndexOf } from '../../../scripts/lib/source-layout'
 
 const source = readFileSync(join(__dirname, 'App.tsx'), 'utf8')
 
 /** Source slice from `start` up to (excluding) the next `end`. Throws loudly if either anchor moved. */
 function blockBetween(start: string, end: string): string {
-  const from = source.indexOf(start)
+  const from = sourceIndexOf(source, start)
   if (from === -1) throw new Error(`app-disregard.contract.test.ts anchor not found (source moved?): ${start}`)
-  const to = source.indexOf(end, from + start.length)
+  const to = sourceIndexOf(source, end, from + 1)
   if (to === -1) throw new Error(`app-disregard.contract.test.ts end anchor not found after "${start}": ${end}`)
   return source.slice(from, to)
 }
@@ -40,7 +41,7 @@ function code(block: string): string {
 // Blocks are resolved inside each test, never at module scope: a missing anchor must fail the ONE link it
 // belongs to, rather than collapsing the whole file into a single collection error that hides which part of
 // the chain regressed.
-describe('MQA-030 — a keyless profile\'s auto-saved transcript is reachable by Disregard', () => {
+describe("MQA-030 — a keyless profile's auto-saved transcript is reachable by Disregard", () => {
   it('the no-provider branch saves through the live saver, not the fire-and-forget leave-path saver', () => {
     // canSummarize covers providerReady OR local summary/fallback readiness — keyless still hits this
     // branch when none of those are true.
@@ -52,13 +53,19 @@ describe('MQA-030 — a keyless profile\'s auto-saved transcript is reachable by
   })
 
   it('saveMeetingNow resolves to the path it wrote so a live caller can pin it', () => {
-    const saveMeetingNowBlock = blockBetween('const saveMeetingNow = useCallback(', '// Same durable save, but for a meeting')
+    const saveMeetingNowBlock = blockBetween(
+      'const saveMeetingNow = useCallback(',
+      '// Same durable save, but for a meeting'
+    )
     expect(saveMeetingNowBlock).toMatch(/\): Promise<string \| null> =>/)
-    expect(saveMeetingNowBlock).toMatch(/const r = await window\.toto\.saveTranscript\(payload\)\s*\n\s*return r\.path/)
+    expect(saveMeetingNowBlock).toMatch(/const r = await window\.toto\.saveTranscript\(payload\)\s+return r\.path/)
   })
 
   it('the live saver publishes the save through savingPromiseRef and the live session state', () => {
-    const liveSaverBlock = blockBetween('const saveLiveMeetingNow = useCallback(', 'saveLiveMeetingNowRef.current = saveLiveMeetingNow')
+    const liveSaverBlock = blockBetween(
+      'const saveLiveMeetingNow = useCallback(',
+      'saveLiveMeetingNowRef.current = saveLiveMeetingNow'
+    )
     expect(liveSaverBlock).toMatch(/savingPromiseRef\.current = p/)
     expect(liveSaverBlock).toMatch(/savedRef\.current = String\(started\)/)
     expect(liveSaverBlock).toMatch(/setSavedPath\(path\)/)

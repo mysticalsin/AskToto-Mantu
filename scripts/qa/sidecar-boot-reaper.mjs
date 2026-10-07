@@ -134,7 +134,13 @@ function readSidecarRegistry(profile) {
 
 function eventCounts(records) {
   const counts = {}
-  for (const event of ['app.started', 'app.renderer.ready', 'sidecar.spawn', 'sidecar.reaped', 'sidecar.reap.skipped']) {
+  for (const event of [
+    'app.started',
+    'app.renderer.ready',
+    'sidecar.spawn',
+    'sidecar.reaped',
+    'sidecar.reap.skipped'
+  ]) {
     counts[event] = records.filter((record) => record.event === event).length
   }
   return counts
@@ -163,7 +169,11 @@ export function observedReapedOrphan(records, pid, alive = processAlive) {
 /** The legacy rule's own audit for `pid`: a registry reap of the same pid never counts for this row. */
 export function observedLegacyReap(records, pid, alive = processAlive) {
   const reaped = records.some(
-    (entry) => entry.event === 'sidecar.reaped' && entry.name === 'llama-server' && entry.reason === 'legacy-orphan' && entry.pid === pid
+    (entry) =>
+      entry.event === 'sidecar.reaped' &&
+      entry.name === 'llama-server' &&
+      entry.reason === 'legacy-orphan' &&
+      entry.pid === pid
   )
   return reaped && !alive(pid)
 }
@@ -293,7 +303,10 @@ function identityArgsMatchFingerprint(args, expected) {
 function appendRegistryRecord(profile, sessionId, record) {
   const runDir = join(profile, 'run')
   mkdirSync(runDir, { recursive: true, mode: 0o700 })
-  appendFileSync(join(runDir, `sidecars-${sessionId}.json`), `${JSON.stringify(record)}\n`, { encoding: 'utf8', mode: 0o600 })
+  appendFileSync(join(runDir, `sidecars-${sessionId}.json`), `${JSON.stringify(record)}\n`, {
+    encoding: 'utf8',
+    mode: 0o600
+  })
 }
 
 function recordSpawnedStandIn(profile, sessionId, name, child, executable, args, installRoot) {
@@ -311,7 +324,8 @@ function recordSpawnedStandIn(profile, sessionId, name, child, executable, args,
   if (!identity) throw new Failure('stand-in sidecar identity was unavailable')
   if (identity.pid !== pid) throw new Failure('stand-in sidecar identity pid mismatch')
   if (identity.exeRealpath !== exeRealpath) throw new Failure('stand-in sidecar identity executable mismatch')
-  if (!identityArgsMatchFingerprint(identity.args, argsFingerprint(args))) throw new Failure('stand-in sidecar identity argv mismatch')
+  if (!identityArgsMatchFingerprint(identity.args, argsFingerprint(args)))
+    throw new Failure('stand-in sidecar identity argv mismatch')
   appendRegistryRecord(profile, sessionId, {
     kind: 'spawned',
     sessionId,
@@ -379,7 +393,10 @@ export function launchEnv(baseEnv, profile, { hostFloorOverride = false, extraEn
 }
 
 function launch(executable, profile, port, options) {
-  return spawn(executable, [`--remote-debugging-port=${port}`], { env: launchEnv(process.env, profile, options), stdio: 'ignore' })
+  return spawn(executable, [`--remote-debugging-port=${port}`], {
+    env: launchEnv(process.env, profile, options),
+    stdio: 'ignore'
+  })
 }
 
 /** Host memory as the runner reports it: hw.memsize (macOS), os.totalmem and os.freemem, in bytes. */
@@ -422,26 +439,71 @@ async function waitFor(predicate, timeoutMs, intervalMs = POLL_MS) {
   }
 }
 
+export async function waitForSpawnedRegistry({
+  readRegistry,
+  pid,
+  timeoutMs,
+  intervalMs = POLL_MS,
+  now = Date.now,
+  sleepFn = sleep
+}) {
+  const startedAt = now()
+  const deadline = startedAt + timeoutMs
+  for (;;) {
+    if (registryHasSpawnedPid(readRegistry(), pid)) return { found: true, waitedMs: now() - startedAt }
+    if (now() > deadline) return { found: false, waitedMs: now() - startedAt }
+    await sleepFn(intervalMs)
+  }
+}
+
+/**
+ * The first live llama-server pid that the registry records as spawned. The app may spawn llama-server more than
+ * once during prewarm (two sidecar.spawn events), so the proof follows whichever live process carries the identity
+ * record instead of guessing the first descendant it saw.
+ */
+export async function waitForRegisteredSpawn({
+  readRegistry,
+  livePids,
+  timeoutMs,
+  intervalMs = POLL_MS,
+  now = Date.now,
+  sleepFn = sleep
+}) {
+  const startedAt = now()
+  const deadline = startedAt + timeoutMs
+  for (;;) {
+    const records = readRegistry()
+    const pid = livePids().find((candidate) => registryHasSpawnedPid(records, candidate))
+    if (pid !== undefined) return { found: true, pid, waitedMs: now() - startedAt }
+    if (now() > deadline) return { found: false, pid: null, waitedMs: now() - startedAt }
+    await sleepFn(intervalMs)
+  }
+}
+
 async function connectAndFindTotoPage(port) {
-  return waitFor(async () => {
-    let browser
-    try {
-      browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`)
-      for (const context of browser.contexts()) {
-        for (const page of context.pages()) {
-          try {
-            if (await page.evaluate(() => typeof window.toto !== 'undefined')) return { browser, page }
-          } catch {
-            /* page navigated or is not the app page */
+  return waitFor(
+    async () => {
+      let browser
+      try {
+        browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`)
+        for (const context of browser.contexts()) {
+          for (const page of context.pages()) {
+            try {
+              if (await page.evaluate(() => typeof window.toto !== 'undefined')) return { browser, page }
+            } catch {
+              /* page navigated or is not the app page */
+            }
           }
         }
+        await browser.close()
+      } catch {
+        if (browser) await browser.close().catch(() => {})
       }
-      await browser.close()
-    } catch {
-      if (browser) await browser.close().catch(() => {})
-    }
-    return undefined
-  }, READY_TIMEOUT_MS, 500)
+      return undefined
+    },
+    READY_TIMEOUT_MS,
+    500
+  )
 }
 
 async function waitForRendererReady(profile) {
@@ -456,10 +518,16 @@ async function prewarmAndFindLlama(port, mainPid, bundle) {
   } finally {
     await found.browser.close().catch(() => {})
   }
-  return waitFor(() => {
-    const descendants = descendantsOf(psRows(), mainPid).filter((proc) => classify(proc.command, bundle) === 'llama-server')
-    return descendants[0]
-  }, LLAMA_TIMEOUT_MS, 500)
+  return waitFor(
+    () => {
+      const descendants = descendantsOf(psRows(), mainPid).filter(
+        (proc) => classify(proc.command, bundle) === 'llama-server'
+      )
+      return descendants[0]
+    },
+    LLAMA_TIMEOUT_MS,
+    500
+  )
 }
 
 function killBestEffort(pid) {
@@ -515,6 +583,7 @@ function initialRealLlamaObservation() {
   const observation = initialObservation('real-llama-server')
   observation.supervision = REAL_LLAMA_SUPERVISION
   observation.timingsMs.llamaStarted = null
+  observation.timingsMs.registryWrite = null
   observation.pids.orphan = null
   return observation
 }
@@ -544,8 +613,10 @@ export function summarizeProof(report) {
 
 function failureLabel(error) {
   if (error instanceof Precondition || error instanceof Failure) return error.message
-  if (error && typeof error === 'object' && typeof error.code === 'string' && error.code.trim()) return `unexpected-error:${error.code}`
-  if (error && typeof error === 'object' && typeof error.name === 'string' && error.name.trim()) return `unexpected-error:${error.name}`
+  if (error && typeof error === 'object' && typeof error.code === 'string' && error.code.trim())
+    return `unexpected-error:${error.code}`
+  if (error && typeof error === 'object' && typeof error.name === 'string' && error.name.trim())
+    return `unexpected-error:${error.name}`
   return 'unexpected-error'
 }
 
@@ -576,7 +647,11 @@ async function runStandInProof({ installRoot, executable }) {
   const observation = initialObservation('stand-in-registry')
 
   try {
-    const busy = ownedProcesses(listProcesses(process.platform), { mainPid: null, installRoot, platform: process.platform })
+    const busy = ownedProcesses(listProcesses(process.platform), {
+      mainPid: null,
+      installRoot,
+      platform: process.platform
+    })
     if (busy.length > 0) throw new Precondition('install root already has resident processes')
 
     const firstPort = await freeLoopbackPort()
@@ -590,15 +665,27 @@ async function runStandInProof({ installRoot, executable }) {
     const sidecarStartedAt = Date.now()
     const standInArgs = ['-e', 'setInterval(() => {}, 1000)']
     standIn = spawn(process.execPath, standInArgs, { stdio: 'ignore' })
-    const identity = await waitFor(() => {
-      try {
-        return standIn?.pid
-          ? recordSpawnedStandIn(profile, 'stand-in', 'llama-server', standIn, process.execPath, standInArgs, installRoot)
-          : null
-      } catch {
-        return null
-      }
-    }, 5_000, POLL_MS)
+    const identity = await waitFor(
+      () => {
+        try {
+          return standIn?.pid
+            ? recordSpawnedStandIn(
+                profile,
+                'stand-in',
+                'llama-server',
+                standIn,
+                process.execPath,
+                standInArgs,
+                installRoot
+              )
+            : null
+        } catch {
+          return null
+        }
+      },
+      5_000,
+      POLL_MS
+    )
     if (!identity) throw new Failure('stand-in sidecar spawned identity registry did not land before hard kill')
     observation.pids.sidecar = standIn.pid
     observation.timingsMs.sidecarStarted = Date.now() - sidecarStartedAt
@@ -614,25 +701,35 @@ async function runStandInProof({ installRoot, executable }) {
     observation.pids.secondMain = second.pid ?? null
     if (!second.pid) throw new Failure('second main pid was unavailable')
 
-    const secondBoot = await waitFor(() => {
-      const audit = readAudit(profile)
-      const reason = observedReapedOrphan(audit, standIn.pid)
-      if (reason) {
-        observation.reapedReason = reason
-        return { alreadyReaped: true }
-      }
-      if (hasAtLeastEvent(audit, 'app.started', 2)) return { alreadyReaped: false }
-      return false
-    }, READY_TIMEOUT_MS, POLL_MS)
+    const secondBoot = await waitFor(
+      () => {
+        const audit = readAudit(profile)
+        const reason = observedReapedOrphan(audit, standIn.pid)
+        if (reason) {
+          observation.reapedReason = reason
+          return { alreadyReaped: true }
+        }
+        if (hasAtLeastEvent(audit, 'app.started', 2)) return { alreadyReaped: false }
+        return false
+      },
+      READY_TIMEOUT_MS,
+      POLL_MS
+    )
     if (!secondBoot) throw new Failure('second launch did not record app.started before the boot timeout')
 
     const reaperStartedAt = Date.now()
-    const reaped = secondBoot.alreadyReaped || await waitFor(() => {
-      const reason = observedReapedOrphan(readAudit(profile), standIn.pid)
-      if (!reason) return false
-      observation.reapedReason = reason
-      return true
-    }, REAPER_BOUND_MS, POLL_MS)
+    const reaped =
+      secondBoot.alreadyReaped ||
+      (await waitFor(
+        () => {
+          const reason = observedReapedOrphan(readAudit(profile), standIn.pid)
+          if (!reason) return false
+          observation.reapedReason = reason
+          return true
+        },
+        REAPER_BOUND_MS,
+        POLL_MS
+      ))
     observation.timingsMs.reaped = reaped ? (secondBoot.alreadyReaped ? 0 : Date.now() - reaperStartedAt) : null
     observation.events = eventCounts(readAudit(profile))
     observation.processes.afterReaper = roleCounts(
@@ -684,7 +781,11 @@ async function runRealLlamaProof({ installRoot, executable }) {
   observation.hostMemory = hostMemoryFacts()
 
   try {
-    const busy = ownedProcesses(listProcesses(process.platform), { mainPid: null, installRoot, platform: process.platform })
+    const busy = ownedProcesses(listProcesses(process.platform), {
+      mainPid: null,
+      installRoot,
+      platform: process.platform
+    })
     if (busy.length > 0) throw new Precondition('install root already has resident processes')
 
     const firstPort = await freeLoopbackPort()
@@ -696,21 +797,37 @@ async function runRealLlamaProof({ installRoot, executable }) {
     observation.timingsMs.firstReady = Date.now() - firstStartedAt
 
     const llamaStartedAt = Date.now()
-    const llama = await prewarmAndFindLlama(firstPort, first.pid, installRoot)
-    if (!llama) throw new Precondition(REAL_LLAMA_UNBLOCK)
-    const registered = await waitFor(() => registryHasSpawnedPid(readSidecarRegistry(profile), llama.pid), 5_000, POLL_MS)
-    if (!registered) throw new Failure('llama-server spawned identity registry did not land before hard kill')
+    const firstLlama = await prewarmAndFindLlama(firstPort, first.pid, installRoot)
+    if (!firstLlama) throw new Precondition(REAL_LLAMA_UNBLOCK)
+    observation.pids.sidecar = firstLlama.pid
+    observation.pids.orphan = firstLlama.pid
+    observation.timingsMs.llamaStarted = Date.now() - llamaStartedAt
+    observation.timingsMs.sidecarStarted = observation.timingsMs.llamaStarted
+    const registry = await waitForRegisteredSpawn({
+      readRegistry: () => readSidecarRegistry(profile),
+      livePids: () =>
+        descendantsOf(psRows(), first.pid)
+          .filter((proc) => classify(proc.command, installRoot) === 'llama-server')
+          .map((proc) => proc.pid),
+      timeoutMs: LLAMA_TIMEOUT_MS,
+      intervalMs: POLL_MS
+    })
+    observation.timingsMs.registryWrite = registry.waitedMs
+    if (!registry.found) throw new Failure('llama-server spawned identity registry did not land before hard kill')
+    const llama = { pid: registry.pid }
     observation.pids.sidecar = llama.pid
     observation.pids.orphan = llama.pid
-    observation.timingsMs.sidecarStarted = Date.now() - llamaStartedAt
-    observation.timingsMs.llamaStarted = observation.timingsMs.sidecarStarted
     observation.processes.beforeKill = roleCounts(
       ownedProcesses(listProcesses(process.platform), { mainPid: first.pid, installRoot, platform: process.platform })
     )
 
     killBestEffort(first.pid)
     await waitFor(() => !processAlive(first.pid), 10_000, POLL_MS)
-    const orphaned = await waitFor(() => psRows().some((proc) => proc.pid === llama.pid && proc.ppid === 1), 5_000, POLL_MS)
+    const orphaned = await waitFor(
+      () => psRows().some((proc) => proc.pid === llama.pid && proc.ppid === 1),
+      5_000,
+      POLL_MS
+    )
     if (!orphaned) throw new Failure('llama-server did not become a launchd orphan after SIGKILL')
 
     const secondPort = await freeLoopbackPort()
@@ -718,25 +835,35 @@ async function runRealLlamaProof({ installRoot, executable }) {
     observation.pids.secondMain = second.pid ?? null
     if (!second.pid) throw new Failure('second main pid was unavailable')
 
-    const secondBoot = await waitFor(() => {
-      const audit = readAudit(profile)
-      const reason = observedReapedOrphan(audit, llama.pid)
-      if (reason) {
-        observation.reapedReason = reason
-        return { alreadyReaped: true }
-      }
-      if (hasAtLeastEvent(audit, 'app.started', 2)) return { alreadyReaped: false }
-      return false
-    }, READY_TIMEOUT_MS, POLL_MS)
+    const secondBoot = await waitFor(
+      () => {
+        const audit = readAudit(profile)
+        const reason = observedReapedOrphan(audit, llama.pid)
+        if (reason) {
+          observation.reapedReason = reason
+          return { alreadyReaped: true }
+        }
+        if (hasAtLeastEvent(audit, 'app.started', 2)) return { alreadyReaped: false }
+        return false
+      },
+      READY_TIMEOUT_MS,
+      POLL_MS
+    )
     if (!secondBoot) throw new Failure('second launch did not record app.started before the boot timeout')
 
     const reaperStartedAt = Date.now()
-    const reaped = secondBoot.alreadyReaped || await waitFor(() => {
-      const reason = observedReapedOrphan(readAudit(profile), llama.pid)
-      if (!reason) return false
-      observation.reapedReason = reason
-      return true
-    }, REAPER_BOUND_MS, POLL_MS)
+    const reaped =
+      secondBoot.alreadyReaped ||
+      (await waitFor(
+        () => {
+          const reason = observedReapedOrphan(readAudit(profile), llama.pid)
+          if (!reason) return false
+          observation.reapedReason = reason
+          return true
+        },
+        REAPER_BOUND_MS,
+        POLL_MS
+      ))
     observation.timingsMs.reaped = reaped ? (secondBoot.alreadyReaped ? 0 : Date.now() - reaperStartedAt) : null
     observation.events = eventCounts(readAudit(profile))
     observation.processes.afterReaper = roleCounts(
@@ -777,7 +904,8 @@ async function seedPinnedModel(bundledDir, dir) {
     if (!existsSync(source)) throw new Precondition(LEGACY_ORPHAN_UNBLOCK)
     const copy = join(dir, asset.file)
     copyFileSync(source, copy)
-    if ((await sha256File(copy)) !== asset.sha256) throw new Failure('seeded model copy does not match the local-model manifest')
+    if ((await sha256File(copy)) !== asset.sha256)
+      throw new Failure('seeded model copy does not match the local-model manifest')
   }
 }
 
@@ -786,10 +914,14 @@ async function seedPinnedModel(bundledDir, dir) {
  * exactly like a llama-server whose Métis main died. Returns its pid.
  */
 function spawnLaunchdOrphan(executable, args) {
-  const stdout = execFileSync('/bin/sh', ['-c', '"$0" "$@" </dev/null >/dev/null 2>&1 & echo $!', executable, ...args], {
-    encoding: 'utf8',
-    timeout: 5_000
-  })
+  const stdout = execFileSync(
+    '/bin/sh',
+    ['-c', '"$0" "$@" </dev/null >/dev/null 2>&1 & echo $!', executable, ...args],
+    {
+      encoding: 'utf8',
+      timeout: 5_000
+    }
+  )
   const pid = Number(stdout.trim())
   if (!Number.isSafeInteger(pid) || pid <= 1) throw new Failure('harness llama-server pid was unavailable')
   return pid
@@ -826,7 +958,11 @@ async function runLegacyOrphanProof({ installRoot, executable }) {
   let controlPid = null
 
   try {
-    const busy = ownedProcesses(listProcesses(process.platform), { mainPid: null, installRoot, platform: process.platform })
+    const busy = ownedProcesses(listProcesses(process.platform), {
+      mainPid: null,
+      installRoot,
+      platform: process.platform
+    })
     if (busy.length > 0) throw new Precondition('install root already has resident processes')
 
     const llamaServer = join(installRoot, 'Contents', 'Resources', 'llama', 'mac', process.arch, 'llama-server')
@@ -850,12 +986,20 @@ async function runLegacyOrphanProof({ installRoot, executable }) {
     controlPid = spawnLaunchdOrphan(llamaServer, harnessLlamaArgs(join(bundledModelDir, 'model.gguf'), controlPort))
     observation.pids.control = controlPid
 
-    const orphaned = await waitFor(() => {
-      const rows = psRows()
-      return [orphanPid, controlPid].every((pid) => rows.some((proc) => proc.pid === pid && proc.ppid === 1))
-    }, 5_000, POLL_MS)
+    const orphaned = await waitFor(
+      () => {
+        const rows = psRows()
+        return [orphanPid, controlPid].every((pid) => rows.some((proc) => proc.pid === pid && proc.ppid === 1))
+      },
+      5_000,
+      POLL_MS
+    )
     if (!orphaned) throw new Failure('harness llama-server processes did not become launchd orphans')
-    const healthy = await waitFor(async () => (await llamaHealthy(orphanPort)) && (await llamaHealthy(controlPort)), LLAMA_TIMEOUT_MS, 500)
+    const healthy = await waitFor(
+      async () => (await llamaHealthy(orphanPort)) && (await llamaHealthy(controlPort)),
+      LLAMA_TIMEOUT_MS,
+      500
+    )
     if (!healthy) throw new Failure('harness llama-server processes did not become healthy')
     observation.timingsMs.orphansHealthy = Date.now() - orphansStartedAt
     await sleep(START_ORDER_GAP_MS)
@@ -866,17 +1010,23 @@ async function runLegacyOrphanProof({ installRoot, executable }) {
     observation.pids.main = app.pid ?? null
     if (!app.pid) throw new Failure('main pid was unavailable')
 
-    const boot = await waitFor(() => {
-      const audit = readAudit(profile)
-      if (observedLegacyReap(audit, orphanPid)) return { alreadyReaped: true }
-      if (hasAtLeastEvent(audit, 'app.started', 1)) return { alreadyReaped: false }
-      return false
-    }, READY_TIMEOUT_MS, POLL_MS)
+    const boot = await waitFor(
+      () => {
+        const audit = readAudit(profile)
+        if (observedLegacyReap(audit, orphanPid)) return { alreadyReaped: true }
+        if (hasAtLeastEvent(audit, 'app.started', 1)) return { alreadyReaped: false }
+        return false
+      },
+      READY_TIMEOUT_MS,
+      POLL_MS
+    )
     if (!boot) throw new Failure('launch did not record app.started before the boot timeout')
     observation.timingsMs.appStarted = Date.now() - appStartedAt
 
     const reaperStartedAt = Date.now()
-    const reaped = boot.alreadyReaped || await waitFor(() => observedLegacyReap(readAudit(profile), orphanPid), REAPER_BOUND_MS, POLL_MS)
+    const reaped =
+      boot.alreadyReaped ||
+      (await waitFor(() => observedLegacyReap(readAudit(profile), orphanPid), REAPER_BOUND_MS, POLL_MS))
     const reapedMs = reaped ? (boot.alreadyReaped ? 0 : Date.now() - reaperStartedAt) : null
     await sleep(REAPER_PASS_SETTLE_MS)
 
@@ -950,7 +1100,9 @@ export function parseCliArgs(argv) {
   const flags = argv.filter((arg) => arg.startsWith('--'))
   const unknown = flags.filter((flag) => flag !== REQUIRE_REAL_LLAMA_FLAG)
   if (positional.length !== 2 || unknown.length > 0) {
-    throw new Precondition(`usage: node scripts/qa/sidecar-boot-reaper.mjs <installed app> <report.json> [${REQUIRE_REAL_LLAMA_FLAG}]`)
+    throw new Precondition(
+      `usage: node scripts/qa/sidecar-boot-reaper.mjs <installed app> <report.json> [${REQUIRE_REAL_LLAMA_FLAG}]`
+    )
   }
   return { target: positional[0], reportPath: positional[1], requireRealLlama: flags.includes(REQUIRE_REAL_LLAMA_FLAG) }
 }
@@ -989,7 +1141,9 @@ async function main() {
   const code = exitCodeFor(report, { requireRealLlama })
   if (code === 2) {
     for (const proof of requiredRealLlamaRows(report).filter((row) => row.result !== 'pass')) {
-      console.error(`[sidecar-boot-reaper] ${proof.kind} proof is BLOCKED_EXTERNAL under ${REQUIRE_REAL_LLAMA_FLAG}: ${proof.unblock}`)
+      console.error(
+        `[sidecar-boot-reaper] ${proof.kind} proof is BLOCKED_EXTERNAL under ${REQUIRE_REAL_LLAMA_FLAG}: ${proof.unblock}`
+      )
     }
   }
   process.exit(code)

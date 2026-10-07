@@ -17,6 +17,10 @@ export const RIGHT_EDGE_HIDE_SCENARIOS = Object.freeze([
   { id: 'RE-HIDE-6-toggle-reveals-hide', layout: 'hide' },
   { id: 'RE-HIDE-6-toggle-reveals-island', layout: 'island' },
   { id: 'RE-HIDE-7-layout-change-chrome', layout: 'hide' },
+  // M2-0202 S2: the legacy D4 rows and the RE-P01 composer hold.
+  { id: 'RE-K01-D4-edge-reveal-keeps-focus', layout: 'hide' },
+  { id: 'RE-K01-D4-toggle-focuses-composer', layout: 'hide' },
+  { id: 'RE-P01-composer-click-holds-then-parks', layout: 'hide' },
   { id: 'RE-HIDE-3-meeting-hide', layout: 'hide' },
   { id: 'RE-HIDE-4-island-meeting-leave-parks', layout: 'island' }
 ])
@@ -37,6 +41,8 @@ const RIGHT_EDGE = Object.freeze({
 })
 /** Right-edge only (src/main/island/cursor-watch.ts RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS). */
 const RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS = 3000
+/** Mirrors src/shared/right-edge-timing.ts RE_TYPING_PIN_MS; a unit test holds the two equal. */
+export const RIGHT_EDGE_TYPING_PIN_MS = 8000
 // Hold the parked band long enough for a late native frame change to land inside RE-HIDE-3's assertion.
 export const LATE_NATIVE_FRAME_HOLD_MS = 500
 const MEETING_UNBLOCK =
@@ -140,10 +146,28 @@ export function rightEdgeStateMismatches(observation, state, layout) {
   const expected = rightEdgeExpectedRects(win.workArea)
   const checks =
     state === 'revealed'
-      ? { bounds: rectMatches(win.bounds, expected.drawer), opacity: win.opacity === 1, clickThrough: win.clickThrough === false, drawer: page.drawer === true }
+      ? {
+          bounds: rectMatches(win.bounds, expected.drawer),
+          opacity: win.opacity === 1,
+          clickThrough: win.clickThrough === false,
+          drawer: page.drawer === true
+        }
       : layout === 'hide'
-        ? { insideWorkArea: insideWorkArea(win.bounds, win.workArea), drawer: !page.drawer, bounds: rightEdgeHideParkMatches(win.bounds, expected.band), opacity: win.opacity === 0, clickThrough: win.clickThrough === true }
-        : { insideWorkArea: insideWorkArea(win.bounds, win.workArea), drawer: !page.drawer, bounds: rectMatches(win.bounds, expected.tab), opacity: win.opacity === 1, clickThrough: win.clickThrough === false, rail: page.rail === true }
+        ? {
+            insideWorkArea: insideWorkArea(win.bounds, win.workArea),
+            drawer: !page.drawer,
+            bounds: rightEdgeHideParkMatches(win.bounds, expected.band),
+            opacity: win.opacity === 0,
+            clickThrough: win.clickThrough === true
+          }
+        : {
+            insideWorkArea: insideWorkArea(win.bounds, win.workArea),
+            drawer: !page.drawer,
+            bounds: rectMatches(win.bounds, expected.tab),
+            opacity: win.opacity === 1,
+            clickThrough: win.clickThrough === false,
+            rail: page.rail === true
+          }
   return Object.keys(checks).filter((key) => !checks[key])
 }
 
@@ -265,42 +289,51 @@ export function rightEdgePageChromeState({ rootOpen, drawerAriaHidden, tabAriaEx
   return { drawer, rail: !drawer && tabAriaExpanded === 'false' }
 }
 
+/**
+ * Page chrome from the `data-re-surface` hook the right-edge root carries (M2-0202): the open drawer while it
+ * reads 'island' and the drawer is not aria-hidden, the rest (the rail tab, or under Hide the band) while it
+ * reads 'rest'. No surface means no right-edge root is mounted.
+ */
+export function rightEdgePageSurfaceState({ surface, drawerAriaHidden }) {
+  const drawer = surface === 'island' && drawerAriaHidden !== 'true'
+  return { drawer, rail: !drawer && surface === 'rest' }
+}
+
 async function rightEdgePageState(page) {
-  return page.evaluate(() => {
-    const input = document.querySelector('.right-edge-sidecar__chat-input')
-    const root = document.querySelector('.right-edge-sidecar')
-    const drawerElement = document.querySelector('.right-edge-sidecar__drawer')
-    const tab = document.querySelector('.right-edge-sidecar__tab')
-    const rootOpen = root?.classList.contains('right-edge-sidecar--open') === true
-    const drawerAriaHidden = drawerElement?.getAttribute('aria-hidden') ?? null
-    const tabAriaExpanded = tab?.getAttribute('aria-expanded') ?? null
-    const drawer = rootOpen === true && drawerAriaHidden !== 'true'
-    const rail = !drawer && tabAriaExpanded === 'false'
+  const raw = await page.evaluate(() => {
+    const root = document.querySelector('[data-re-surface]')
+    const input = root?.querySelector('input[aria-label="Ask Métis anything"]') ?? null
+    const drawerElement = root?.querySelector('[role="complementary"]') ?? null
     return {
-      dock: root !== null,
-      drawer,
-      rail: tab !== null && rail,
+      surface: root?.getAttribute('data-re-surface') ?? null,
+      drawerAriaHidden: drawerElement?.getAttribute('aria-hidden') ?? null,
       hideControl: document.querySelector('button[aria-label="Hide Métis"]') !== null,
       meetingLive: document.querySelector('[aria-label="Meeting controls"]') !== null,
       composerFocused: input !== null && document.activeElement === input,
       draft: input instanceof HTMLInputElement ? input.value : null
     }
   })
+  const { surface, drawerAriaHidden, ...rest } = raw
+  return { dock: surface !== null, ...rightEdgePageSurfaceState({ surface, drawerAriaHidden }), ...rest }
 }
 
 /**
  * Runs inside the overlay page (page.evaluate(pinnedBridgeCall, [method, args])): awaits
- * window.toto[method](...args) while a global Set pins the bridged promise for Playwright.
+ * window.toto[method](...args) while a global Set pins both the app bridge promise and the outer
+ * evaluation task. CDP can collect an unreferenced awaited promise on slow runners.
  */
-export async function pinnedBridgeCall([method, args]) {
+export function pinnedBridgeCall([method, args]) {
   const pending = (globalThis.__metisSmokeBridgePending ??= new Set())
   const call = window.toto[method](...args)
   pending.add(call)
-  try {
-    await call
-  } finally {
-    pending.delete(call)
-  }
+  const task = Promise.resolve(call)
+    .then(() => undefined)
+    .finally(() => {
+      pending.delete(call)
+      pending.delete(task)
+    })
+  pending.add(task)
+  return task
 }
 
 /** Content-free evidence: geometry kind and chrome flags only, never page text. */
@@ -420,7 +453,9 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     const parked = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', layout), 5_000)
     if (!parked.ok) {
       const missed = rightEdgeStateMismatches(parked.observed, 'parked', layout).join(',')
-      throw new Error(`could not park right-edge ${layout} (missed: ${missed}): ${JSON.stringify(summarize(parked.observed))}`)
+      throw new Error(
+        `could not park right-edge ${layout} (missed: ${missed}): ${JSON.stringify(summarize(parked.observed))}`
+      )
     }
     return parked.observed
   }
@@ -430,7 +465,9 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     const revealed = await waitUntil((o) => rightEdgeStateMatches(o, 'revealed'), 3_000)
     if (!revealed.ok) {
       const missed = rightEdgeStateMismatches(revealed.observed, 'revealed').join(',')
-      throw new Error(`the right-edge band did not reveal the drawer (missed: ${missed}): ${JSON.stringify(summarize(revealed.observed))}`)
+      throw new Error(
+        `the right-edge band did not reveal the drawer (missed: ${missed}): ${JSON.stringify(summarize(revealed.observed))}`
+      )
     }
     return revealed.observed
   }
@@ -439,12 +476,22 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
   const step = async (id, fn) => {
     try {
       const outcome = await fn()
-      complete(id, { status: outcome.status ?? (outcome.pass ? 'PASS' : 'FAIL'), evidence: outcome.evidence, unblock: outcome.unblock ?? (outcome.pass ? null : 'Inspect the packaged-smoke artifact; the RE-HIDE evidence shows the observed window and page state.') })
+      complete(id, {
+        status: outcome.status ?? (outcome.pass ? 'PASS' : 'FAIL'),
+        evidence: outcome.evidence,
+        unblock:
+          outcome.unblock ??
+          (outcome.pass
+            ? null
+            : 'Inspect the packaged-smoke artifact; the RE-HIDE evidence shows the observed window and page state.')
+      })
     } catch (err) {
       complete(id, {
         status: 'FAIL',
         evidence: null,
-        unblock: `Inspect the packaged-smoke artifact; RE-HIDE scenario failed: ${String(err?.message ?? err).split('\n')[0].slice(0, 700)}`
+        unblock: `Inspect the packaged-smoke artifact; RE-HIDE scenario failed: ${String(err?.message ?? err)
+          .split('\n')[0]
+          .slice(0, 700)}`
       })
     }
   }
@@ -459,7 +506,10 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     // Main must have revealed by 400 ms; the page may take one more paint to mount the drawer.
     const mainRevealed = rightEdgeStateMatches({ ...at400, page: { ...at400.page, drawer: true } }, 'revealed')
     const settled = await waitUntil((o) => rightEdgeStateMatches(o, 'revealed'), 1_000)
-    return { pass: mainRevealed && settled.ok, evidence: { parked: summarize(parked), at400ms: summarize(at400), settled: summarize(settled.observed) } }
+    return {
+      pass: mainRevealed && settled.ok,
+      evidence: { parked: summarize(parked), at400ms: summarize(at400), settled: summarize(settled.observed) }
+    }
   })
 
   await step('RE-HIDE-2-inset-stays-parked', async () => {
@@ -469,7 +519,10 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     await wait(600)
     const after = await observe()
     const unchanged = rectMatches(after.win.bounds, parked.win.bounds, 0)
-    return { pass: unchanged && rightEdgeStateMatches(after, 'parked', 'hide'), evidence: { parked: summarize(parked), after600ms: summarize(after) } }
+    return {
+      pass: unchanged && rightEdgeStateMatches(after, 'parked', 'hide'),
+      evidence: { parked: summarize(parked), after600ms: summarize(after) }
+    }
   })
 
   await step('RE-HIDE-3-draft-hide-and-escape', async () => {
@@ -492,7 +545,13 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     await composer().fill('')
     return {
       pass: hideVisible && byControl.ok && keptAfterControl && byEscape.ok && keptAfterEscape,
-      evidence: { hideVisibleWithDraft: hideVisible, parkedByControl: byControl.ok, draftKeptAfterControl: keptAfterControl, parkedByEscape: byEscape.ok, draftKeptAfterEscape: keptAfterEscape }
+      evidence: {
+        hideVisibleWithDraft: hideVisible,
+        parkedByControl: byControl.ok,
+        draftKeptAfterControl: keptAfterControl,
+        parkedByEscape: byEscape.ok,
+        draftKeptAfterEscape: keptAfterEscape
+      }
     }
   })
 
@@ -532,7 +591,10 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
       const parked = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', layout), 3_000)
       await bridge('toggle')
       const revealed = await waitUntil((o) => rightEdgeStateMatches(o, 'revealed') && o.page.composerFocused, 3_000)
-      const autoParked = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', layout), RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS + 5_000)
+      const autoParked = await waitUntil(
+        (o) => rightEdgeStateMatches(o, 'parked', layout),
+        RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS + 5_000
+      )
       return {
         pass: parked.ok && revealed.ok && autoParked.ok,
         evidence: {
@@ -551,7 +613,75 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     const island = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', 'island'), 3_000)
     await setLayout('hide')
     const hide = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', 'hide'), 3_000)
-    return { pass: island.ok && hide.ok, evidence: { island: summarize(island.observed), hide: summarize(hide.observed) } }
+    return {
+      pass: island.ok && hide.ok,
+      evidence: { island: summarize(island.observed), hide: summarize(hide.observed) }
+    }
+  })
+
+  const blurPage = () => page.evaluate(() => document.activeElement?.blur?.())
+
+  // D4: a hover reveal is not an explicit open, so it never takes focus from what the user was typing in.
+  await step('RE-K01-D4-edge-reveal-keeps-focus', async () => {
+    await park('hide')
+    await blurPage()
+    const revealed = await revealAtEdge()
+    await wait(300)
+    const after = await observe()
+    return {
+      pass: revealed.page.composerFocused === false && after.page.composerFocused === false,
+      evidence: {
+        revealed: summarize(revealed),
+        composerFocusedAtReveal: revealed.page.composerFocused,
+        composerFocusedAfter300ms: after.page.composerFocused
+      }
+    }
+  })
+
+  // D4: the toggle is an explicit open: the composer has focus when the drawer is revealed.
+  await step('RE-K01-D4-toggle-focuses-composer', async () => {
+    await park('hide')
+    await blurPage()
+    await bridge('toggle')
+    const revealed = await waitUntil((o) => rightEdgeStateMatches(o, 'revealed') && o.page.composerFocused, 3_000)
+    return {
+      pass: revealed.ok,
+      evidence: {
+        revealed: summarize(revealed.observed),
+        composerFocused: revealed.observed.page.composerFocused,
+        ms: revealed.ms
+      }
+    }
+  })
+
+  // RE-P01 (the D2 amendment): a click into an empty composer is a keystroke. The pointer then leaves: the
+  // typing pin holds the dock open RIGHT_EDGE_TYPING_PIN_MS, then it parks. Unpinned, the same leave parks
+  // within about 1.3 s (RE-HIDE-4).
+  await step('RE-P01-composer-click-holds-then-parks', async () => {
+    await park('hide')
+    const revealed = await revealAtEdge()
+    await composer().fill('')
+    await composer().click({ timeout: 5_000 })
+    const clickedAt = Date.now()
+    // Let the page report the pin to main before the pointer leaves.
+    await wait(150)
+    await leaveTo(awayPoint(revealed.win), 100)
+    await wait(2_000)
+    const held = await observe()
+    const heldOpen = rightEdgeStateMatches(held, 'revealed')
+    const parked = await waitUntil((o) => rightEdgeStateMatches(o, 'parked', 'hide'), RIGHT_EDGE_TYPING_PIN_MS + 4_000)
+    const parkedAfterMs = Date.now() - clickedAt
+    // A 500 ms allowance below the pin covers the click's own round trip before clickedAt was read.
+    const heldForPin = parkedAfterMs >= RIGHT_EDGE_TYPING_PIN_MS - 500
+    return {
+      pass: heldOpen && parked.ok && heldForPin,
+      evidence: {
+        heldOpenAfterLeave: heldOpen,
+        held: summarize(held),
+        parked: summarize(parked.observed),
+        parkedAfterMs
+      }
+    }
   })
 
   // Meeting rows run last: a started meeting changes the page for everything after it.
@@ -599,20 +729,13 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
   await setCursor(null).catch(() => undefined)
 }
 
-/** Minimal Chrome DevTools Protocol client for the main process's Node inspector. */
-export async function mainInspector(inspectPort) {
-  const deadline = Date.now() + 30_000
-  let wsUrl = null
-  while (!wsUrl && Date.now() < deadline) {
-    try {
-      const targets = await (await fetch(`http://127.0.0.1:${inspectPort}/json/list`)).json()
-      wsUrl = targets.find((target) => typeof target.webSocketDebuggerUrl === 'string')?.webSocketDebuggerUrl ?? null
-    } catch {
-      /* the inspector is not listening yet */
-    }
-    if (!wsUrl) await sleep(250)
-  }
-  if (!wsUrl) throw new Error('no main-process inspector: the EnableNodeCliInspectArguments fuse may be off')
+/**
+ * Minimal Chrome DevTools Protocol client. `evaluate` accepts synchronous expressions only: V8 15.0 in
+ * Electron 43 holds an awaited non-promise result only weakly, so a main-process GC can answer
+ * "Promise was collected". A Promise result comes back as {}; async callers should use st-1-core.mjs
+ * `pinnedExpression`.
+ */
+export async function inspectorClient(wsUrl) {
   const socket = new WebSocket(wsUrl)
   const pending = new Map()
   let nextId = 1
@@ -631,14 +754,46 @@ export async function mainInspector(inspectPort) {
     const id = nextId++
     const answer = new Promise((resolve) => pending.set(id, resolve))
     socket.send(JSON.stringify({ id, method, params }))
-    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error(`main-process ${method} timed out`)), 10_000))
+    const timeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`main-process ${method} timed out`)), 10_000)
+    )
     const message = await Promise.race([answer, timeout])
     if (message.error) throw new Error(message.error.message)
-    if (message.result?.exceptionDetails) throw new Error(message.result.exceptionDetails.exception?.description ?? message.result.exceptionDetails.text)
+    if (message.result?.exceptionDetails)
+      throw new Error(message.result.exceptionDetails.exception?.description ?? message.result.exceptionDetails.text)
     return message.result
   }
   const evaluate = async (expression) =>
-    (await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }))?.result?.value
+    (await send('Runtime.evaluate', { expression, returnByValue: true }))?.result?.value
+  const collectGarbage = async () => {
+    await send('HeapProfiler.collectGarbage')
+    return true
+  }
+  const close = () => {
+    if (socket.readyState === WebSocket.CLOSED) return Promise.resolve()
+    return new Promise((resolve) => {
+      socket.addEventListener('close', () => resolve(), { once: true })
+      socket.close()
+    })
+  }
+  return { send, evaluate, collectGarbage, close }
+}
+
+/** Minimal Chrome DevTools Protocol client for the main process's Node inspector. */
+export async function mainInspector(inspectPort) {
+  const deadline = Date.now() + 30_000
+  let wsUrl = null
+  while (!wsUrl && Date.now() < deadline) {
+    try {
+      const targets = await (await fetch(`http://127.0.0.1:${inspectPort}/json/list`)).json()
+      wsUrl = targets.find((target) => typeof target.webSocketDebuggerUrl === 'string')?.webSocketDebuggerUrl ?? null
+    } catch {
+      /* the inspector is not listening yet */
+    }
+    if (!wsUrl) await sleep(250)
+  }
+  if (!wsUrl) throw new Error('no main-process inspector: the EnableNodeCliInspectArguments fuse may be off')
+  const { send, evaluate, collectGarbage, close } = await inspectorClient(wsUrl)
   // The app holds its Tray in a module-local binding, so find the live instance on the heap and emit the same
   // 'click' the OS delivers: its listener is the product's own Settings entry (sendHotkey('settings')).
   const clickTray = async () => {
@@ -653,7 +808,7 @@ export async function mainInspector(inspectPort) {
     return clicked?.result?.value === true
   }
   await evaluate("globalThis.__metisReHideElectron = process.mainModule.require('electron'); true")
-  return { evaluate, clickTray, close: () => socket.close() }
+  return { evaluate, collectGarbage, clickTray, close }
 }
 
 export async function runPackagedRightEdgeHideRows({ port, inspectPort, rows }) {
@@ -662,13 +817,17 @@ export async function runPackagedRightEdgeHideRows({ port, inspectPort, rows }) 
     inspector = await mainInspector(inspectPort)
   } catch (err) {
     for (const row of rows) {
-      Object.assign(row, { status: 'FAIL', evidence: null, unblock: `Inspect the packaged-smoke artifact; ${err?.message ?? String(err)}` })
+      Object.assign(row, {
+        status: 'FAIL',
+        evidence: null,
+        unblock: `Inspect the packaged-smoke artifact; ${err?.message ?? String(err)}`
+      })
     }
     return
   }
   try {
     await withOverlayPage(port, (page) => runRightEdgeHideRows({ page, main: inspector.evaluate, rows }))
   } finally {
-    inspector.close()
+    await inspector.close()
   }
 }

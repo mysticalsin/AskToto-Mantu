@@ -21,7 +21,19 @@ import {
   systemPreferences
 } from 'electron'
 import { join, basename, dirname, resolve } from 'node:path'
-import { readFileSync, existsSync, writeFileSync, readdirSync, unlinkSync, createReadStream, statSync, renameSync, rmdirSync, mkdirSync, copyFileSync } from 'node:fs'
+import {
+  readFileSync,
+  existsSync,
+  writeFileSync,
+  readdirSync,
+  unlinkSync,
+  createReadStream,
+  statSync,
+  renameSync,
+  rmdirSync,
+  mkdirSync,
+  copyFileSync
+} from 'node:fs'
 
 // DevTools stay reachable only where dev-env permits them; packaged builds ignore ASKTOTO_DEVTOOLS.
 const DEVTOOLS_ENABLED = devToolsEnabled()
@@ -172,7 +184,13 @@ import {
   portalFundedCloudflareModel,
   workingCliOrder
 } from '@shared/ask-routing'
-import { getActiveModelPolicy, modelPolicyCapabilitiesForSettings, narrowAllowedForCapability, resolveLocalSpeechPackPolicy, resolveManagedModel } from './model-policy-client'
+import {
+  getActiveModelPolicy,
+  modelPolicyCapabilitiesForSettings,
+  narrowAllowedForCapability,
+  resolveLocalSpeechPackPolicy,
+  resolveManagedModel
+} from './model-policy-client'
 import { localModelAllowedByPolicy } from '@shared/model-policy'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import { registerWriteupIpc } from './ipc/writeup'
@@ -185,12 +203,7 @@ import { registerHistoryTraceIpc } from './ipc/history-trace-ipc'
 import { configureSidecarRegistry, createSidecarRegistry } from './infra/process/registry'
 import { runBootSidecarReaper } from './infra/process/reaper'
 import { startAvailableMemorySampler } from './infra/scheduler/memory-sampler'
-import {
-  createSpeakerId,
-  type SpeakerEnrollmentSnapshot,
-  type SpeakerId,
-  type SpeakerLabel
-} from './speaker-id'
+import { createSpeakerId, type SpeakerEnrollmentSnapshot, type SpeakerId, type SpeakerLabel } from './speaker-id'
 import { releaseSpeakerEmbedding, killSpeakerEmbeddingHostForQuit } from './speaker-embedding-client'
 import {
   clampAxis,
@@ -211,6 +224,7 @@ import {
   overlayRestSize,
   overlayPlacementPosition,
   rightEdgeParkLayout,
+  rightEdgeSurfaceState,
   rightAnchoredParkPosition,
   resolveOverlayPlacement,
   parkAfterExclusiveOnboarding,
@@ -222,7 +236,13 @@ import {
   topClamp
 } from './island/geometry'
 import { observeExclusiveBounds } from './island/exclusive-bounds-repair'
-import { applyRestChrome, fitSettingsSurface, openOverlaySettingsSurface, revealOverlaySurface, skipUnchangedChrome } from './island/overlay-surface'
+import {
+  applyRestChrome,
+  fitSettingsSurface,
+  openOverlaySettingsSurface,
+  revealOverlaySurface,
+  skipUnchangedChrome
+} from './island/overlay-surface'
 import { createOverlayRevealLog, type OverlayTransitionCause } from './island/overlay-reveal-log'
 import {
   OVERLAY_REST_BACKGROUND,
@@ -232,6 +252,9 @@ import {
 } from '@shared/settings-bounds'
 import { ONBOARDING_AUDIO_LOCK_EVENT } from '@shared/onboarding-audio'
 import { createRightEdgeAnchors } from './island/right-edge-anchor'
+import { createRightEdgeSession } from './island/right-edge-session'
+import type { RightEdgeSurfaceState } from '@shared/right-edge-state'
+import { registerRightEdgeIpc } from './ipc/right-edge-ipc'
 import {
   CURSOR_WATCH_INTERVAL_MS,
   OVERLAY_LEAVE_PARK_MS,
@@ -261,11 +284,7 @@ import {
   rememberBarContentHeight,
   type OverlayLayout
 } from '@shared/overlay-chrome'
-import {
-  minimizedCircleRestBounds,
-  overlayOrbRestIsCircle,
-  parseOverlayOrbStyle
-} from '@shared/overlay-orb'
+import { minimizedCircleRestBounds, overlayOrbRestIsCircle, parseOverlayOrbStyle } from '@shared/overlay-orb'
 import { parseOverlayPlacement, type OverlayPlacement } from '@shared/overlay-placement'
 import { resolveOverlayPresentation } from '@shared/overlay-presentation'
 
@@ -342,7 +361,7 @@ function completeLiveSpeakerReceipt(startedAt: number): void {
     disposeSpeakerKey(receipt.key)
   }
 
-  void backfillSpeakerNames(receipt.savedFile, snapshot ?? undefined).catch(error => {
+  void backfillSpeakerNames(receipt.savedFile, snapshot ?? undefined).catch((error) => {
     warnSpeakerFailure('post-save speaker backfill failed', error)
   })
 }
@@ -427,8 +446,12 @@ function discardActiveLiveSpeakerSession(): void {
 }
 
 function validImportSpeakerAttempt(attempt: ImportSpeakerAttempt): boolean {
-  return typeof attempt?.jobId === 'string' && attempt.jobId.length > 0 &&
-    Number.isSafeInteger(attempt.attemptId) && attempt.attemptId > 0
+  return (
+    typeof attempt?.jobId === 'string' &&
+    attempt.jobId.length > 0 &&
+    Number.isSafeInteger(attempt.attemptId) &&
+    attempt.attemptId > 0
+  )
 }
 
 function beginImportSpeakers(attempt: ImportSpeakerAttempt): boolean {
@@ -561,7 +584,7 @@ import {
   resumeBackfillIfPending,
   reconcileMeetingsInBackground,
   settleCommitment,
-  startRebuild,
+  startRebuild
 } from './brain/ingest'
 import { startIntelligencePass } from './brain/intelligence-pass'
 import { runConsolidationIfDue } from './brain/consolidate'
@@ -617,7 +640,13 @@ import { buildBrainContext } from './brain/context'
 import { buildSystem, buildSystemParts } from './personas'
 import { applyCaveman } from '@shared/caveman-ask'
 import { isBuiltinConversationMode, isModeSkillIntegrityError } from '@shared/mode-skills'
-import { isOpenAICloudCacheEligible, operatorUrlConfigured, promptCacheKey as makePromptCacheKey, resolveOperatorBaseUrl, resolveOperatorCredential } from '@shared/operator'
+import {
+  isOpenAICloudCacheEligible,
+  operatorUrlConfigured,
+  promptCacheKey as makePromptCacheKey,
+  resolveOperatorBaseUrl,
+  resolveOperatorCredential
+} from '@shared/operator'
 import { cloudflareConnectTarget } from './cloudflare-connect'
 import { loadVerifiedSkill, setModeSkillsOverlayRoot, skillLockHashForMode } from './mode-skills'
 import {
@@ -625,7 +654,8 @@ import {
   confirmOperatorLicenseConnection,
   acceptOperatorHeartbeat,
   operatorFundedProviders,
-  recordOperatorAsk, pathTagForSeatProvider,
+  recordOperatorAsk,
+  pathTagForSeatProvider,
   recordOperatorCrmSend,
   recordOperatorRating,
   startOperatorRuntime
@@ -642,7 +672,13 @@ import { initLogging, mainLog, auditLog, auditLogPath } from './logger'
 import { CommandControl } from './command-control'
 import { executeDesktopAction } from './desktop-adapters'
 import { ensureMetisCommandRuntime } from './metis-command-register'
-import { consumeSecurityLimit, RATE_LIMIT_USER_MESSAGE, shouldSampleIpcDeny, takeHotPath, type SecurityLimitBucket } from './security-limits'
+import {
+  consumeSecurityLimit,
+  RATE_LIMIT_USER_MESSAGE,
+  shouldSampleIpcDeny,
+  takeHotPath,
+  type SecurityLimitBucket
+} from './security-limits'
 import { safeMeetingBasename } from './meeting-path'
 import {
   asrModelDownloadState,
@@ -653,9 +689,27 @@ import {
 import { asrModelBytes } from './asr-model-manifest'
 import { hasHighMemoryWhisperImportHeadroom } from '@shared/asr-hardware-preference'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
-import { buildTrayInStages, createSingleFlight, formatTrayAccelerator, loadPresizedTrayIcon, scheduleTrayAfterFirstPaint, trayIconPaths, yieldToEventLoop } from './boot-tray'
-import { BOOT_WINDOW_OPTIONS, BOOT_WINDOW_VARIANT, takeBootWindowPrewarmMs, yieldBeforeBootWindow } from './boot-window-rendering'
-import { isBootFirstShowDeferred, navigateWindow, scheduleCurrentFirstShow, withBootFirstShowDeferred } from './lifecycle/first-show'
+import {
+  buildTrayInStages,
+  createSingleFlight,
+  formatTrayAccelerator,
+  loadPresizedTrayIcon,
+  scheduleTrayAfterFirstPaint,
+  trayIconPaths,
+  yieldToEventLoop
+} from './boot-tray'
+import {
+  BOOT_WINDOW_OPTIONS,
+  BOOT_WINDOW_VARIANT,
+  takeBootWindowPrewarmMs,
+  yieldBeforeBootWindow
+} from './boot-window-rendering'
+import {
+  isBootFirstShowDeferred,
+  navigateWindow,
+  scheduleCurrentFirstShow,
+  withBootFirstShowDeferred
+} from './lifecycle/first-show'
 import { createBootWork, type BootWork } from './lifecycle/boot-work'
 import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
 import { startRunObservability, timeBootStage, type RunObservability } from './infra/observability/run-observability'
@@ -759,11 +813,7 @@ import {
 import { meetingOpenTarget, readSavedMeeting } from './history-actions'
 import { getPlatformPermissions, probeScreenCapture, noteScreenCaptureOutcome } from './platform-perms'
 import { collectVisionStream, runScreenCaptureCheck } from './screen-capture-check'
-import {
-  VISION_CHECK_PROMPT,
-  VISION_CHECK_SYSTEM,
-  isApiVisionCandidate
-} from '@shared/screen-capture-check'
+import { VISION_CHECK_PROMPT, VISION_CHECK_SYSTEM, isApiVisionCandidate } from '@shared/screen-capture-check'
 import { listMeetings, searchMeetingsLatest } from './history-read'
 import {
   listMeetingsNeedingRecap,
@@ -855,14 +905,7 @@ import {
   tryAcquirePlaneTokenLock,
   releasePlaneTokenLock
 } from './mcp/planeOAuth'
-import {
-  graphifyStatus,
-  buildGraph,
-  relatedNotes,
-  graphHtml,
-  scheduleRebuild,
-  purgeGraphArtifacts
-} from './graphify'
+import { graphifyStatus, buildGraph, relatedNotes, graphHtml, scheduleRebuild, purgeGraphArtifacts } from './graphify'
 import { SaveMeetingSchema, SaveNoteSchema, stripProvisionalLines } from '@shared/ipc'
 import {
   PROVIDERS,
@@ -883,7 +926,11 @@ import { isSafeAccelerator } from '@shared/accelerator'
 import { formatResetPhrase } from '@shared/reset-time'
 import { applySpeakerNames, clusterNamePairsFromAlignment } from '@shared/transcript-align'
 import { freezeAsciiUserAgent } from './app-user-agent'
-import { importEmbeddedCloudflareKey, embeddedCloudflareKeyAvailable, restoreEmbeddedCloudflareKey } from './embedded-cloudflare-key'
+import {
+  importEmbeddedCloudflareKey,
+  embeddedCloudflareKeyAvailable,
+  restoreEmbeddedCloudflareKey
+} from './embedded-cloudflare-key'
 
 /**
  * Builds the `refreshDustAuth` callback a Dust-routed stream/recap call hands to createStream — branches
@@ -1115,10 +1162,7 @@ function setCloudSttIpcOwner(owner: CloudSttIpcOwner | null): void {
 }
 
 /** Only the renderer that opened the current live-STT session may receive its tail callbacks. */
-function isCurrentCloudSttOwner(
-  owner: CloudSttIpcOwner,
-  sender: { id: number; isDestroyed: () => boolean }
-): boolean {
+function isCurrentCloudSttOwner(owner: CloudSttIpcOwner, sender: { id: number; isDestroyed: () => boolean }): boolean {
   return (
     cloudSttIpcOwner === owner &&
     win?.webContents === sender &&
@@ -1205,7 +1249,8 @@ let decoderWin: BrowserWindow | null = null
 let decoderJobId: string | null = null
 let decoderExpectedUrl = ''
 let closingDecoderJobId: string | null = null
-let sourceAck: { jobId: string; resolve: () => void; reject: (error: Error) => void; timer: NodeJS.Timeout } | null = null
+let sourceAck: { jobId: string; resolve: () => void; reject: (error: Error) => void; timer: NodeJS.Timeout } | null =
+  null
 let decoderReady: { resolve: () => void; reject: (error: Error) => void; timer: NodeJS.Timeout } | null = null
 const ffmpegDecoders = new Map<string, FfmpegDecoder>()
 
@@ -1329,7 +1374,9 @@ function publishImportJob(job: ImportJob): void {
     notifiedImportJobs.add(job.jobId)
     const notification = new Notification({
       title: 'Import complete',
-      body: job.recapError ? `${job.title} transcript is ready. Summary needs a retry.` : `${job.title} transcript and summary are ready.`
+      body: job.recapError
+        ? `${job.title} transcript is ready. Summary needs a retry.`
+        : `${job.title} transcript and summary are ready.`
     })
     notification.on('click', () => {
       reveal('notification-click', { focus: false })
@@ -1427,7 +1474,8 @@ function bundledImportFfmpeg(): string | null {
 }
 
 async function sendSourceChunk(jobId: string, bytes: Uint8Array, done: boolean): Promise<void> {
-  if (!decoderWin || decoderWin.isDestroyed() || decoderJobId !== jobId) throw new Error('Import decoder is unavailable.')
+  if (!decoderWin || decoderWin.isDestroyed() || decoderJobId !== jobId)
+    throw new Error('Import decoder is unavailable.')
   await new Promise<void>((resolveAck, rejectAck) => {
     const timer = setTimeout(() => {
       if (sourceAck?.jobId === jobId) sourceAck = null
@@ -1546,7 +1594,8 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
     decoderExpectedUrl = ''
     rejectSourceAck(new Error('Import decoder closed.'))
     rejectDecoderReady(new Error('Import decoder closed.'))
-    if (closedJobId && closingDecoderJobId !== closedJobId) void importJobs?.failDecoder(closedJobId, 'Audio decoder stopped unexpectedly.')
+    if (closedJobId && closingDecoderJobId !== closedJobId)
+      void importJobs?.failDecoder(closedJobId, 'Audio decoder stopped unexpectedly.')
     closingDecoderJobId = null
   })
   active.webContents.on('render-process-gone', () => {
@@ -1615,10 +1664,7 @@ async function runImportPolish(lines: TranscriptLine[]): Promise<TranscriptLine[
     ? localReady
       ? (['local'] as ProviderId[])
       : []
-    : [
-        ...(cloudReady ? [settings.provider] : []),
-        ...(localReady ? (['local'] as ProviderId[]) : [])
-      ]
+    : [...(cloudReady ? [settings.provider] : []), ...(localReady ? (['local'] as ProviderId[]) : [])]
   if (!candidates.length) return lines
 
   const out = [...lines]
@@ -1656,9 +1702,18 @@ async function runImportPolish(lines: TranscriptLine[]): Promise<TranscriptLine[
         : applyInteractiveGuardrail(
             provider,
             'base',
-            resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'base', settings.providerModelsDeep) || def.defaultModel
+            resolveModelTier(
+              provider,
+              settings.providerModels,
+              settings.providerModelsThinking,
+              'base',
+              settings.providerModelsDeep
+            ) || def.defaultModel
           )
-      const model = !local && def.kind !== 'cli' ? resolveManagedModel(settings, 'recap', provider, preManagedModel) : preManagedModel
+      const model =
+        !local && def.kind !== 'cli'
+          ? resolveManagedModel(settings, 'recap', provider, preManagedModel)
+          : preManagedModel
       try {
         const raw = await new Promise<string>((resolvePolish, rejectPolish) => {
           let text = ''
@@ -1690,7 +1745,9 @@ async function runImportPolish(lines: TranscriptLine[]): Promise<TranscriptLine[
         })
         const cleaned = parsePolishResponse(raw, batch.length)
         if (cleaned) return cleaned
-        mainLog.warn(`[polish] ${provider} answered but the response did not parse (len ${raw.length}): ${raw.slice(0, 160)}`)
+        mainLog.warn(
+          `[polish] ${provider} answered but the response did not parse (len ${raw.length}): ${raw.slice(0, 160)}`
+        )
       } catch (e) {
         mainLog.warn(`[polish] ${provider} failed: ${e instanceof Error ? e.message : String(e)}`)
       }
@@ -1744,17 +1801,23 @@ async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
 }
 
 function wireIntelligenceIndexWork(): void {
-  setIntelligenceIndexWork((reason) => startIntelligenceWork({
-    list: listMeetingsNeedingRecap,
-    generate: (meeting) => runImportedRecap({
-      jobId: `index-${meeting.file}`,
-      lines: meeting.lines,
-      mode: meeting.mode
-    } as ImportJob),
-    save: (file, recap, status) => updateMeetingRecap(getSettings(), file, recap, status),
-    backfill: requestBackfillRun,
-    logFailure: (error) => mainLog.error('[intelligence-index] recap failed:', error)
-  }, reason))
+  setIntelligenceIndexWork((reason) =>
+    startIntelligenceWork(
+      {
+        list: listMeetingsNeedingRecap,
+        generate: (meeting) =>
+          runImportedRecap({
+            jobId: `index-${meeting.file}`,
+            lines: meeting.lines,
+            mode: meeting.mode
+          } as ImportJob),
+        save: (file, recap, status) => updateMeetingRecap(getSettings(), file, recap, status),
+        backfill: requestBackfillRun,
+        logFailure: (error) => mainLog.error('[intelligence-index] recap failed:', error)
+      },
+      reason
+    )
+  )
 }
 
 function initializeImportJobs(): void {
@@ -1766,7 +1829,10 @@ function initializeImportJobs(): void {
       // This is the actual decoder-admission point, not setup or queue time. Reserve the optional tier
       // only when its full digest verification and current hardware gate both pass; otherwise select base.
       let highTierVerified = false
-      if (getSettings().asrEngine !== 'parakeet' && hasHighMemoryWhisperImportHeadroom(memory.totalMemoryBytes, memory.freeMemoryBytes)) {
+      if (
+        getSettings().asrEngine !== 'parakeet' &&
+        hasHighMemoryWhisperImportHeadroom(memory.totalMemoryBytes, memory.freeMemoryBytes)
+      ) {
         try {
           highTierVerified = await isHighTierAsrModelReady()
         } catch {
@@ -1814,7 +1880,9 @@ function initializeImportJobs(): void {
         // addons — e.g. sharp ships per-OS binaries); Parakeet's sherpa addon is provisioned per target
         // by the build gates, so it is the reliable floor. One warn, then degrade — worse language
         // routing beats a dead import.
-        mainLog.warn(`[import] whisper transcriber unavailable, falling back to Parakeet: ${err instanceof Error ? err.message : String(err)}`)
+        mainLog.warn(
+          `[import] whisper transcriber unavailable, falling back to Parakeet: ${err instanceof Error ? err.message : String(err)}`
+        )
         await ensureParakeetModel()
         return parakeetTranscribe(samples)
       }
@@ -1856,9 +1924,7 @@ function initializeImportJobs(): void {
       // down out from under that owner; if listening begins during release, the generation gate makes
       // the first live request wait for the exact old child exit before starting a replacement.
       if (!listeningActive) {
-        void parakeetRelease().catch((e) =>
-          mainLog.error('[parakeet] import-idle release failed:', e)
-        )
+        void parakeetRelease().catch((e) => mainLog.error('[parakeet] import-idle release failed:', e))
         void releaseSpeakerEmbedding('import').catch((e) =>
           mainLog.error('[speaker-embedding] import-idle release failed:', e)
         )
@@ -1886,8 +1952,7 @@ function initializeImportJobs(): void {
     newId: () => randomBytes(16).toString('hex'),
     concurrency: MAX_CONCURRENT_DECODES
   })
-  const speechPackBlocked =
-    resolveLocalSpeechPackPolicy(getSettings(), getAdminLocalSpeechPackPolicy()) === 'blocked'
+  const speechPackBlocked = resolveLocalSpeechPackPolicy(getSettings(), getAdminLocalSpeechPackPolicy()) === 'blocked'
   if (!speechPackBlocked) {
     void ensureImportAsrAssets((pct) => {
       publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
@@ -1985,7 +2050,10 @@ async function verifyCliSessions(now = Date.now()): Promise<void> {
         mainLog.warn(`[cli] ${provider} is no longer signed in — marking it disconnected`)
       }
     } catch (error) {
-      mainLog.warn('[cli] session verification could not complete:', error instanceof Error ? error.message : String(error))
+      mainLog.warn(
+        '[cli] session verification could not complete:',
+        error instanceof Error ? error.message : String(error)
+      )
     }
   })().finally(() => {
     cliSessionSweep = null
@@ -1996,7 +2064,11 @@ async function verifyCliSessions(now = Date.now()): Promise<void> {
 let loginItemOpenAtLoginCache: boolean | null = null
 
 function refreshLoginItemOpenAtLoginCache(): boolean | null {
-  try { return (loginItemOpenAtLoginCache = app.getLoginItemSettings().openAtLogin) } catch { return null }
+  try {
+    return (loginItemOpenAtLoginCache = app.getLoginItemSettings().openAtLogin)
+  } catch {
+    return null
+  }
 }
 
 const publicLoginItemOpenAtLogin = (s: Settings): boolean => loginItemOpenAtLoginCache ?? s.launchAtLogin
@@ -2024,10 +2096,18 @@ function publicSettings(): PublicSettings {
   const allowed = narrowAllowedForCapability(s, getAllowedProviders(), 'askChat', [...CLI_PROVIDER_IDS, 'local'])
   const funded = operatorFundedProviders()
   const managedVisionReady = (p: ProviderId): boolean =>
-    !hasApiKey(p) && funded.includes(p) && !!operatorVisionModel(p, resolveModelTier(p, s.providerModels, s.providerModelsThinking, 'base', s.providerModelsDeep))
-  const providerVisionReady = (p: ProviderId): boolean => p === 'dust'
-    ? dustSelectedAgentVision(s.providerModels.dust)
-    : hasApiKey(p) || PROVIDERS[p].kind === 'cli' ? PROVIDERS[p].vision : managedVisionReady(p)
+    !hasApiKey(p) &&
+    funded.includes(p) &&
+    !!operatorVisionModel(
+      p,
+      resolveModelTier(p, s.providerModels, s.providerModelsThinking, 'base', s.providerModelsDeep)
+    )
+  const providerVisionReady = (p: ProviderId): boolean =>
+    p === 'dust'
+      ? dustSelectedAgentVision(s.providerModels.dust)
+      : hasApiKey(p) || PROVIDERS[p].kind === 'cli'
+        ? PROVIDERS[p].vision
+        : managedVisionReady(p)
   const providerReady =
     ((!allowed || allowed.includes(s.provider)) &&
       (activeDef.kind === 'cli'
@@ -2099,15 +2179,15 @@ function publicSettings(): PublicSettings {
         (p) =>
           providerVisionReady(p) &&
           (!allowed || allowed.includes(p)) &&
-          (PROVIDERS[p].kind === 'cli'
-            ? !!s.cliConnected[p]
-            : hasApiKey(p) || operatorFundedProviders().includes(p)) &&
+          (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : hasApiKey(p) || operatorFundedProviders().includes(p)) &&
           // A key alone is not reachability. Cloudflare (and custom) answer at an endpoint the operator
           // supplies, so a stored METIS_PROXY_KEY with no Worker URL yet is a provider that can never be
           // reached — and advertising vision on it makes the app CAPTURE THE USER'S SCREEN, and prewarm
           // more captures, for a request that cannot be sent. Same gate providerReady already applies.
           (managedVisionReady(p) || !requiresUserBaseUrl(p) || !!providerBaseUrl(p, s))
-      ) || localVisionReady || localFallbackReady,
+      ) ||
+      localVisionReady ||
+      localFallbackReady,
     localReady,
     localSuggestReady,
     localSummaryReady,
@@ -2284,7 +2364,11 @@ function replaceTransparentOverlayWithExclusiveOnboarding(): void {
   try {
     createWindow(replacementDisplay)
     const replacement = win as BrowserWindow | null
-    if (!replacement || replacement.isDestroyed() || !coversExclusiveOnboardingDisplay(replacement, replacementDisplay)) {
+    if (
+      !replacement ||
+      replacement.isDestroyed() ||
+      !coversExclusiveOnboardingDisplay(replacement, replacementDisplay)
+    ) {
       throw new Error('Opaque onboarding replacement did not cover the display.')
     }
   } catch {
@@ -2399,7 +2483,8 @@ function ensureExclusiveBoundsEventGuard(w: BrowserWindow, displayId: number): v
   stopExclusiveBoundsEventGuard()
   const stop = observeExclusiveBounds(w, {
     expected: () => {
-      const display = screen.getAllDisplays().find(candidate => candidate.id === displayId) ?? screen.getPrimaryDisplay()
+      const display =
+        screen.getAllDisplays().find((candidate) => candidate.id === displayId) ?? screen.getPrimaryDisplay()
       return exclusiveOnboardingBounds(display.bounds, display.workArea)
     },
     ownsDisplay: () => onboardingExclusiveLive() && !overlayWindowTransparent && win === w
@@ -2455,7 +2540,8 @@ function armExclusiveBoundsWatch(w: BrowserWindow, displayId: number): void {
       stopExclusiveBoundsWatch()
       return
     }
-    const display = screen.getAllDisplays().find(candidate => candidate.id === displayId) ?? screen.getPrimaryDisplay()
+    const display =
+      screen.getAllDisplays().find((candidate) => candidate.id === displayId) ?? screen.getPrimaryDisplay()
     const stage = exclusiveOnboardingBounds(display.bounds, display.workArea)
     try {
       if (hasExclusiveOnboardingBounds(w.getBounds(), stage)) {
@@ -2557,14 +2643,15 @@ function exitExclusiveOnboardingStage(): void {
   const display = screen.getDisplayMatching(win.getBounds())
   const layout = liveOverlayLayout()
   // The right edge rests through the geometry authority; every other placement takes the onboarding park.
-  const park = resolvedOverlayPlacementForDisplay(display) === 'right-edge'
-    ? rightEdgeBounds('rest', display, layout)
-    : parkAfterExclusiveOnboarding(
-      parkLayoutForDisplay(layout, display),
-      getDisplayMetrics(display),
-      ISLAND_TOP_MARGIN,
-      liveOverlayPlacement()
-    )
+  const park =
+    resolvedOverlayPlacementForDisplay(display) === 'right-edge'
+      ? rightEdgeBounds('rest', display, layout)
+      : parkAfterExclusiveOnboarding(
+          parkLayoutForDisplay(layout, display),
+          getDisplayMetrics(display),
+          ISLAND_TOP_MARGIN,
+          liveOverlayPlacement()
+        )
   currentWidth = park.width
   islandResting = overlayUsesHover(layout)
   userAnchorY = park.y
@@ -2593,15 +2680,18 @@ function armCompletedOnboardingExitFallback(overlay: BrowserWindow): void {
   const timer = setTimeout(() => {
     if (completedOnboardingExitFallback !== fallback) return
     completedOnboardingExitFallback = null
-    if (!shouldRecoverCompletedOnboardingExit({
-      sameOverlay: win === overlay,
-      overlayDestroyed: overlay.isDestroyed(),
-      onboardingLive: onboardingExclusiveLive(),
-      overlayTransparent: overlayWindowTransparent,
-      listeningActive,
-      audioArmed,
-      cloudSttActive: cloudSttIpcOwner !== null
-    })) return
+    if (
+      !shouldRecoverCompletedOnboardingExit({
+        sameOverlay: win === overlay,
+        overlayDestroyed: overlay.isDestroyed(),
+        onboardingLive: onboardingExclusiveLive(),
+        overlayTransparent: overlayWindowTransparent,
+        listeningActive,
+        audioArmed,
+        cloudSttActive: cloudSttIpcOwner !== null
+      })
+    )
+      return
     postOnboardingDestination = 'answer'
     mainLog.warn('[onboarding] renderer missed completion handoff; recovering completed setup')
     auditLog('app.recovery', { kind: 'onboarding-completion-handoff' })
@@ -2637,8 +2727,14 @@ function createWindow(targetDisplay?: Electron.Display): void {
       audit: auditLog,
       powerMonitor,
       stallWatchCommand: macStallWatchCommand(),
-      deferStallSamplerStart: (start) => { bootWorkGate ? bootWorkGate.run('startStallSampler', start) : setImmediate(start) },
-      deps: { scheduleFlush: (flush) => { bootWorkGate ? bootWorkGate.run('flushBootStages', flush) : setImmediate(flush) } }
+      deferStallSamplerStart: (start) => {
+        bootWorkGate ? bootWorkGate.run('startStallSampler', start) : setImmediate(start)
+      },
+      deps: {
+        scheduleFlush: (flush) => {
+          bootWorkGate ? bootWorkGate.run('flushBootStages', flush) : setImmediate(flush)
+        }
+      }
     })
     settlePriorExit(observability.priorShutdown)
     emittedAppStarted = true
@@ -2725,9 +2821,16 @@ function createWindow(targetDisplay?: Electron.Display): void {
     },
     ...BOOT_WINDOW_OPTIONS.window // M2-0516: a QA-identity-only variant's values; none in every shipping build
   })
-  observability?.recordBootStage('createWindow.construct', performance.now() - constructStartedMs, { transparent: chrome.transparent, windowVariant: BOOT_WINDOW_VARIANT })
+  observability?.recordBootStage('createWindow.construct', performance.now() - constructStartedMs, {
+    transparent: chrome.transparent,
+    windowVariant: BOOT_WINDOW_VARIANT
+  })
   const prewarmMs = takeBootWindowPrewarmMs() // M2-0519: the boot prewarm ran before observability started; recorded once
-  if (prewarmMs !== null) observability?.recordBootStage('createWindow.prewarm', prewarmMs, { transparent: chrome.transparent, windowVariant: BOOT_WINDOW_VARIANT })
+  if (prewarmMs !== null)
+    observability?.recordBootStage('createWindow.prewarm', prewarmMs, {
+      transparent: chrome.transparent,
+      windowVariant: BOOT_WINDOW_VARIANT
+    })
   ensureMetisCommandRuntime({
     getSettings,
     commandControl,
@@ -2735,32 +2838,40 @@ function createWindow(targetDisplay?: Electron.Display): void {
   })
 
   try {
-  // Frameless transparent windows on darwin still inherit an OS min (~44). Hide park is 8×2.
-  try { win.setMinimumSize(1, 1) } catch { /* headless */ }
-  if (onboardingLive) applyExclusiveOnboardingStage(win, placementDisplay)
-  applyOverlayAlwaysOnTop(win)
-  // FITO-185-Z: show exclusive NOW (ctor show:true + activating show). The no-JS Act1
-  // shell (poster CSS + Métis + Next) is in index.html — never hide-for-seconds.
-  // FITO-185-T: activating show (not showInactive) so Act 1 is not behind Finder.
-  // M2-0031: a boot window built hidden takes this same show in the next task (scheduleCurrentFirstShow below).
-  if (onboardingLive && !deferFirstShow) {
-    try { showForExclusiveOnboarding(win) } catch { /* headless */ }
-  }
-  // Apply the same capture-protection decision during onboarding and normal overlay use.
-  win.setContentProtection(contentProtectionOn())
-  // Island/bar overlay stays out of Mission Control; exclusive Act 1 must remain findable.
-  win.setHiddenInMissionControl?.(!onboardingLive)
-  // Windows: the constructor's skipTaskbar:true is not durable — Electron/Windows re-adds the taskbar
-  // button after certain show/restore/focus transitions (long-standing upstream quirk). Re-assert on
-  // every transition that can resurrect it so the overlay NEVER appears in the taskbar (Tony, 2026-07-16:
-  // an overlay in the taskbar is pointless). Tray remains the discoverable affordance.
-  if (process.platform === 'win32') {
-    const overlay = win // capture THIS instance — the module-level `win` binding is reassignable
-    const reassertSkipTaskbar = (): void => overlay.setSkipTaskbar(true)
-    overlay.on('show', reassertSkipTaskbar)
-    overlay.on('restore', reassertSkipTaskbar)
-    overlay.on('focus', reassertSkipTaskbar)
-  }
+    // Frameless transparent windows on darwin still inherit an OS min (~44). Hide park is 8×2.
+    try {
+      win.setMinimumSize(1, 1)
+    } catch {
+      /* headless */
+    }
+    if (onboardingLive) applyExclusiveOnboardingStage(win, placementDisplay)
+    applyOverlayAlwaysOnTop(win)
+    // FITO-185-Z: show exclusive NOW (ctor show:true + activating show). The no-JS Act1
+    // shell (poster CSS + Métis + Next) is in index.html — never hide-for-seconds.
+    // FITO-185-T: activating show (not showInactive) so Act 1 is not behind Finder.
+    // M2-0031: a boot window built hidden takes this same show in the next task (scheduleCurrentFirstShow below).
+    if (onboardingLive && !deferFirstShow) {
+      try {
+        showForExclusiveOnboarding(win)
+      } catch {
+        /* headless */
+      }
+    }
+    // Apply the same capture-protection decision during onboarding and normal overlay use.
+    win.setContentProtection(contentProtectionOn())
+    // Island/bar overlay stays out of Mission Control; exclusive Act 1 must remain findable.
+    win.setHiddenInMissionControl?.(!onboardingLive)
+    // Windows: the constructor's skipTaskbar:true is not durable — Electron/Windows re-adds the taskbar
+    // button after certain show/restore/focus transitions (long-standing upstream quirk). Re-assert on
+    // every transition that can resurrect it so the overlay NEVER appears in the taskbar (Tony, 2026-07-16:
+    // an overlay in the taskbar is pointless). Tray remains the discoverable affordance.
+    if (process.platform === 'win32') {
+      const overlay = win // capture THIS instance — the module-level `win` binding is reassignable
+      const reassertSkipTaskbar = (): void => overlay.setSkipTaskbar(true)
+      overlay.on('show', reassertSkipTaskbar)
+      overlay.on('restore', reassertSkipTaskbar)
+      overlay.on('focus', reassertSkipTaskbar)
+    }
   } catch (e) {
     // A throw here (rare GPU/compositor-specific native call failure) previously left `win` pointing at a
     // half-configured, never-loaded BrowserWindow that ensureWindow() would treat as healthy forever — it
@@ -2787,6 +2898,9 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // `closed` fires after BrowserWindow.destroy() has torn down WebContents. Cache the numeric owner
   // while it is valid; touching `self.webContents` from the callback throws and falsely crashes Métis.
   const selfWebContentsId = self.webContents.id
+  win.on('blur', () => {
+    if (win === self) parkRightEdgeReaderOnBlur()
+  })
   win.on('closed', () => {
     clearCompletedOnboardingExitFallback(self)
     // Import jobs belong to main plus the hidden decoder window, so closing the overlay never abandons
@@ -2930,15 +3044,17 @@ function createWindow(targetDisplay?: Electron.Display): void {
               }
             : undefined,
           copyDiagnostics: () =>
-            clipboard.writeText(formatRenderLoopDiagnostics({
-              version: app.getVersion(),
-              platform: process.platform,
-              arch: process.arch,
-              packaged: app.isPackaged,
-              reason: details.reason,
-              exitCode: details.exitCode,
-              at: new Date().toISOString()
-            }))
+            clipboard.writeText(
+              formatRenderLoopDiagnostics({
+                version: app.getVersion(),
+                platform: process.platform,
+                arch: process.arch,
+                packaged: app.isPackaged,
+                reason: details.reason,
+                exitCode: details.exitCode,
+                at: new Date().toISOString()
+              })
+            )
         }
       ).catch((err) => mainLog.warn('[render-loop-halted] dialog failed:', err))
       return
@@ -2953,24 +3069,38 @@ function createWindow(targetDisplay?: Electron.Display): void {
   postOnboardingDestination = 'answer'
   // M2-0516: boot's window navigates in its own task, after the constructor's and before its first show's; every
   // other caller navigates here (lifecycle/first-show.ts). `win` inside is the window being navigated.
-  navigateWindow(deferFirstShow, win, () => win, (win) => timeBootStage(observability, 'createWindow.navigate', () => {
-    // Bounded launch evidence only. Normal onboarding never serializes renderer state to disk.
-    if (process.env.ASKTOTO_MAC_LAUNCH_GATE === '1') {
-      bindAct1DomProbe(win.webContents, {
-        expectedUrl: rendererUrl,
-        outPath: join(app.getPath('userData'), 'logs', 'act1-dom.json'),
-        audit: (summary) => auditLog('app.act1.dom', summary)
-      })
-    }
-    // MQA-318 / M2-0006: unconditional — never gated on ASKTOTO_MAC_LAUNCH_GATE, unlike bindAct1DomProbe
-    // above. A session with app.started but no renderer.ready must always be visible in the audit log.
-    bindReadinessThenNavigate(win, rendererUrl, () => {
-      auditLog('app.renderer.ready', { version: app.getVersion(), platform: process.platform, arch: process.arch })
-    })
-  }), (e) => mainLog.error('[createWindow] boot navigation failed:', e))
+  navigateWindow(
+    deferFirstShow,
+    win,
+    () => win,
+    (win) =>
+      timeBootStage(observability, 'createWindow.navigate', () => {
+        // Bounded launch evidence only. Normal onboarding never serializes renderer state to disk.
+        if (process.env.ASKTOTO_MAC_LAUNCH_GATE === '1') {
+          bindAct1DomProbe(win.webContents, {
+            expectedUrl: rendererUrl,
+            outPath: join(app.getPath('userData'), 'logs', 'act1-dom.json'),
+            audit: (summary) => auditLog('app.act1.dom', summary)
+          })
+        }
+        // MQA-318 / M2-0006: unconditional — never gated on ASKTOTO_MAC_LAUNCH_GATE, unlike bindAct1DomProbe
+        // above. A session with app.started but no renderer.ready must always be visible in the audit log.
+        bindReadinessThenNavigate(win, rendererUrl, () => {
+          auditLog('app.renderer.ready', { version: app.getVersion(), platform: process.platform, arch: process.arch })
+        })
+      }),
+    (e) => mainLog.error('[createWindow] boot navigation failed:', e)
+  )
   // Both keep the ctor show:true activation (focus + front): exclusive via FITO-185-T, the overlay via show().
-  if (deferFirstShow) scheduleCurrentFirstShow(win, () => win, (firstShown) => timeBootStage(observability, 'createWindow.firstShow', () =>
-    onboardingLive ? showForExclusiveOnboarding(firstShown) : firstShown.isVisible() || firstShown.show()))
+  if (deferFirstShow)
+    scheduleCurrentFirstShow(
+      win,
+      () => win,
+      (firstShown) =>
+        timeBootStage(observability, 'createWindow.firstShow', () =>
+          onboardingLive ? showForExclusiveOnboarding(firstShown) : firstShown.isVisible() || firstShown.show()
+        )
+    )
   const overlay = win
   let exclusiveRevealed = false
   const revealExclusiveWhenPainted = (): void => {
@@ -3004,11 +3134,9 @@ function createWindow(targetDisplay?: Electron.Display): void {
     if (exclusiveRevealed || win !== overlay || overlay.isDestroyed()) return
     // Always reassert show for exclusive — never wait on img.complete.
     revealExclusiveWhenPainted()
-    void overlay.webContents
-      .executeJavaScript(ACT1_SHELL_READY, true)
-      .catch(() => {
-        /* about:blank / destroyed */
-      })
+    void overlay.webContents.executeJavaScript(ACT1_SHELL_READY, true).catch(() => {
+      /* about:blank / destroyed */
+    })
   }
   overlay.webContents.on('dom-ready', () => {
     pollAct1Paint()
@@ -3173,8 +3301,12 @@ function resolvedOverlayPlacementForDisplay(display: Electron.Display): OverlayP
 
 /** Per-display right-edge anchor (right-edge-anchor.ts); every right-edge rect follows it. */
 const rightEdgeAnchors = createRightEdgeAnchors({
-  stored: () => ({ anchors: getSettings().overlayRightEdgeAnchorByDisplay, legacy: getSettings().overlayRightEdgeYByDisplay }),
-  saveAnchors: (anchors) => setSettings({ overlayRightEdgeAnchorByDisplay: { ...getSettings().overlayRightEdgeAnchorByDisplay, ...anchors } }),
+  stored: () => ({
+    anchors: getSettings().overlayRightEdgeAnchorByDisplay,
+    legacy: getSettings().overlayRightEdgeYByDisplay
+  }),
+  saveAnchors: (anchors) =>
+    setSettings({ overlayRightEdgeAnchorByDisplay: { ...getSettings().overlayRightEdgeAnchorByDisplay, ...anchors } }),
   lockedKeys: getLockedKeys,
   rightEdgeLive: () => liveOverlayPlacement() === 'right-edge',
   warn: (message, error) => mainLog.warn(`[overlay-placement] ${message}`, error),
@@ -3202,7 +3334,10 @@ function overlayPositionForDisplay(
 /** Parked chrome on `display`: Hide shows the Island rail where a display continues past the right edge. */
 function parkLayoutForDisplay(layout: OverlayLayout, display: Electron.Display): OverlayLayout {
   if (layout !== 'hide' || resolvedOverlayPlacementForDisplay(display) !== 'right-edge') return layout
-  const others = screen.getAllDisplays().filter((other) => other.id !== display.id).map((other) => other.bounds)
+  const others = screen
+    .getAllDisplays()
+    .filter((other) => other.id !== display.id)
+    .map((other) => other.bounds)
   return rightEdgeParkLayout(layout, getDisplayMetrics(display), others, rightEdgeAnchors.fraction(display))
 }
 
@@ -3226,22 +3361,32 @@ function overlayHoverRestRect(layout: OverlayLayout, display: Electron.Display):
   )
 }
 
-/** Right-edge bounds at the display's anchor: the legacy drawer, or at rest the Hide band or the Island tab. */
-function rightEdgeBounds(surface: 'open' | 'rest', display: Electron.Display, layout: OverlayLayout = liveOverlayLayout()): Electron.Rectangle {
-  if (surface === 'open') return rightEdgeAnchors.rect('open', display)
+/** Right-edge bounds at the display's anchor: open, the Reader while the page has it pending, otherwise the
+ *  legacy drawer; at rest the Hide band or the Island tab. */
+function rightEdgeBounds(
+  surface: 'open' | 'rest',
+  display: Electron.Display,
+  layout: OverlayLayout = liveOverlayLayout()
+): Electron.Rectangle {
+  if (surface === 'open') return rightEdgeAnchors.rect(rightEdgeSession.readerPending() ? 'reader' : 'open', display)
   return rightEdgeAnchors.rect(parkLayoutForDisplay(layout, display) === 'hide' ? 'band' : 'tab', display)
 }
 
 /** The only writer of right-edge window bounds (M2-0202 D8c): every right-edge path sets bounds here, from
  *  rightEdgeBounds, so open, rest and band agree on one anchor. A rest the OS widened keeps its right edge. */
-function applyRightEdgeBounds(surface: 'open' | 'rest', display: Electron.Display, layout: OverlayLayout = liveOverlayLayout()): Electron.Rectangle {
+function applyRightEdgeBounds(
+  surface: 'open' | 'rest',
+  display: Electron.Display,
+  layout: OverlayLayout = liveOverlayLayout()
+): Electron.Rectangle {
   const rect = rightEdgeBounds(surface, display, layout)
   currentWidth = rect.width
   userAnchorY = rect.y
   if (!win || win.isDestroyed()) return rect
   if (surface === 'open') {
     const b = win.getBounds()
-    if (b.x !== rect.x || b.y !== rect.y || b.width !== rect.width || b.height !== rect.height) win.setBounds(rect, false)
+    if (b.x !== rect.x || b.y !== rect.y || b.width !== rect.width || b.height !== rect.height)
+      win.setBounds(rect, false)
     return rect
   }
   win.setBounds(rect, false)
@@ -3285,6 +3430,12 @@ function startOverlayCursorWatch(): void {
 function tickOverlayCursorWatch(): void {
   if (!win || win.isDestroyed() || !overlayCursorWatchWanted()) {
     stopOverlayCursorWatch()
+    return
+  }
+  // The Reader is a document the user opened (spec v3 §6): no leave-park, unhovered auto-park or dwell park
+  // applies to it. It parks only on an explicit Hide, Escape, the hotkey, the tray or a window blur.
+  if (!islandResting && rightEdgeSession.readerPending()) {
+    overlayCursorWatchEnteredAt = null
     return
   }
   // A parked Settings-tall ghost heals here. If the heal was refused because the
@@ -3333,6 +3484,9 @@ function tickOverlayCursorWatch(): void {
   if (step.action === 'restore') {
     const restoredFromParkedRail = islandResting
     cancelOverlayLeavePark()
+    // A pointer reveal opens the island, never a parked Reader: the Reader ignores the pointer, so it would
+    // stay open with nothing to park it. The page keeps the Reader for the next explicit reveal.
+    if (placement === 'right-edge' && restoredFromParkedRail) rightEdgeSession.noteIslandReveal()
     restoreBarWidth()
     // A band reveal holds the corridor from where the pointer revealed it until the pointer reaches the drawer.
     if (placement === 'right-edge' && restoredFromParkedRail) rightEdgeAnchors.noteReveal(cursor.y)
@@ -3352,12 +3506,16 @@ function tickOverlayCursorWatch(): void {
     // Renderer spring may park first. Main parks at OVERLAY_LEAVE_PARK_MS so a
     // missed overlayParkAfterHide cannot leave 880×120 up (Ultron c74e389).
     notifyOverlayCursorHover(false)
-    scheduleOverlayLeavePark()
+    if (placement !== 'right-edge' || rightEdgeSession.parkAllowed('pointer-leave')) scheduleOverlayLeavePark()
     mainLog.info(
       `[overlay-watch] leave cursor=(${cursor.x},${cursor.y}) bar=${bounds.width}x${bounds.height}@(${bounds.x},${bounds.y}) park in ${OVERLAY_LEAVE_PARK_MS}ms`
     )
-  } else if (step.action === 'leave-ignored' && rightEdgeUnhoveredRevealAt !== null &&
-    performance.now() - rightEdgeUnhoveredRevealAt >= RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS) {
+  } else if (
+    step.action === 'leave-ignored' &&
+    rightEdgeUnhoveredRevealAt !== null &&
+    performance.now() - rightEdgeUnhoveredRevealAt >= RIGHT_EDGE_UNHOVERED_REVEAL_GRACE_MS &&
+    rightEdgeSession.parkAllowed('auto-park')
+  ) {
     // Revealed without the pointer, which stayed away: report a leave; the page's grace parks unless forced.
     rightEdgeUnhoveredRevealAt = null
     notifyOverlayCursorHover(false)
@@ -3451,6 +3609,12 @@ function parkOverlayAfterHideSpring(force = false): boolean {
   // remains inside the disappearing drawer until after the exit spring, so refusing to park would leave
   // a 360px transparent hit target on screen despite the renderer showing only the 52px rail.
   if (!force && pointerInIslandOrBar()) return false
+  if (
+    !islandResting &&
+    resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(win.getBounds())) === 'right-edge' &&
+    !rightEdgeSession.parkAllowed(force ? 'explicit' : 'pointer-leave')
+  )
+    return false
   cancelOverlayLeavePark()
   const layout = liveOverlayLayout()
   if (!overlayUsesHover(layout)) return false
@@ -3543,13 +3707,7 @@ function anchorTopCenter(): void {
     return
   }
   const b = win.getBounds()
-  const { x, y } = overlayPositionForDisplay(
-    b.width,
-    b.height,
-    liveOverlayLayout(),
-    display,
-    ISLAND_TOP_MARGIN
-  )
+  const { x, y } = overlayPositionForDisplay(b.width, b.height, liveOverlayLayout(), display, ISLAND_TOP_MARGIN)
   userAnchorY = y // resizeTo slides against this, so a growing bar returns to the top edge when it shrinks
   win.setBounds({ x, y, width: b.width, height: b.height }, false)
 }
@@ -3585,7 +3743,8 @@ function restoreBarWidth(): void {
     let revealedHeight = overlayUsesHover(layout)
       ? askRevealHeight({ currentHeight: b.height, lastBarHeight, minReveal: ASK_REVEAL_MIN_HEIGHT_PX })
       : rememberBarContentHeight(Math.max(lastBarHeight, BAR_HEIGHT), BAR_IDLE_HEIGHT_PX)
-    if (isSettingsTallHeight(revealedHeight)) revealedHeight = overlayUsesHover(layout) ? ASK_REVEAL_MIN_HEIGHT_PX : BAR_IDLE_HEIGHT_PX
+    if (isSettingsTallHeight(revealedHeight))
+      revealedHeight = overlayUsesHover(layout) ? ASK_REVEAL_MIN_HEIGHT_PX : BAR_IDLE_HEIGHT_PX
     const wasBarWidth = currentWidth === BAR_WIDTH
     currentWidth = BAR_WIDTH
     const y = topClamp(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
@@ -3635,7 +3794,11 @@ function applySettingsSurface(): void {
     /* headless */
   }
   const display = screen.getDisplayMatching(win.getBounds())
-  const rect = fitSettingsSurface(settingsOpenRect(getDisplayMetrics(display), ISLAND_TOP_MARGIN), display.workArea.height, BAR_MIN_HEIGHT)
+  const rect = fitSettingsSurface(
+    settingsOpenRect(getDisplayMetrics(display), ISLAND_TOP_MARGIN),
+    display.workArea.height,
+    BAR_MIN_HEIGHT
+  )
   openOverlaySettingsSurface(win, rect, applyOverlaySurfaceChrome)
   applyHideClickThrough()
 }
@@ -3702,7 +3865,12 @@ function setWindowMode(): void {
   win.setBounds({ ...position, width: currentWidth, height: nextHeight }, false)
 }
 
-const reveals = createRevealTrace({ audit: auditLog, window: () => win, layout: liveOverlayLayout, parked: () => islandResting })
+const reveals = createRevealTrace({
+  audit: auditLog,
+  window: () => win,
+  layout: liveOverlayLayout,
+  parked: () => islandResting
+})
 
 /** Self-heal a null `win` (e.g. a one-time createWindow() throw during boot) by retrying the window
  *  creation once at call time, instead of leaving window-dependent hotkeys dead for the process
@@ -3722,16 +3890,73 @@ function ensureWindow(): BrowserWindow | null {
   })
 }
 
-const overlayRevealLog = createOverlayRevealLog({ now: () => performance.now(), log: (line) => mainLog.info(line), audit: auditLog })
+/** The page's right-edge surface and pins (right-edge-session.ts); a leave-park the pins refused retries once they clear. */
+const rightEdgeSession = createRightEdgeSession({
+  surface: currentRightEdgeSurface,
+  send: (surface) => {
+    if (win && !win.isDestroyed()) win.webContents.send(IPC.rightEdgeSurface, surface)
+  },
+  onPinsCleared: scheduleOverlayLeavePark,
+  onReaderChange: applyRightEdgeReaderBounds,
+  log: (line) => mainLog.info(line)
+})
+
+/** The open page moved between the island and the Reader: its window takes the new surface's rect first, and
+ *  the page crossfades once its report is answered (spec v3 §6). A parked window keeps its rest. */
+function applyRightEdgeReaderBounds(reader: boolean): void {
+  if (reader) cancelOverlayLeavePark()
+  if (!win || win.isDestroyed() || islandResting || settingsSurfaceOpen) return
+  const display = screen.getDisplayMatching(win.getBounds())
+  if (resolvedOverlayPlacementForDisplay(display) === 'right-edge') applyRightEdgeBounds('open', display)
+}
+
+/** A window blur parks an open Reader, like an explicit Hide. A tray click blurs the window first, so the tray
+ *  toggle that follows within RE_BLUR_TOGGLE_GRACE_MS is that Hide (toggleOverlayVisibility). */
+function parkRightEdgeReaderOnBlur(): void {
+  if (!win || win.isDestroyed() || islandResting || !rightEdgeSession.readerPending()) return
+  if (!parkOverlayAfterHideSpring(true)) return
+  rightEdgeSession.noteBlurPark(performance.now())
+  startOverlayCursorWatch()
+  noteOverlay('toggle')
+}
+
+function currentRightEdgeSurface(): RightEdgeSurfaceState {
+  const display = win && !win.isDestroyed() ? screen.getDisplayMatching(win.getBounds()) : screen.getPrimaryDisplay()
+  const others = screen
+    .getAllDisplays()
+    .filter((other) => other.id !== display.id)
+    .map((other) => other.bounds)
+  const metrics = getDisplayMetrics(display)
+  const anchor = rightEdgeAnchors.fraction(display)
+  const state = rightEdgeSurfaceState({
+    placement: liveOverlayPlacement(),
+    layout: liveOverlayLayout(),
+    resting: islandResting,
+    metrics,
+    otherDisplays: others,
+    anchor
+  })
+  return state.surface === 'island' && rightEdgeSession.readerPending() ? { ...state, surface: 'reader' } : state
+}
+
+const overlayRevealLog = createOverlayRevealLog({
+  now: () => performance.now(),
+  log: (line) => mainLog.info(line),
+  audit: auditLog
+})
 
 /** M2-0431: called after anything that may reveal or park the overlay. It reads the window's actual state, so
  *  a refused or repeated action logs nothing; a transition is logged with its cause, and a reveal that parks
  *  within 2 s with no click or keypress is audited as overlay.flash. */
 function noteOverlay(cause: OverlayTransitionCause): void {
   if (!win || win.isDestroyed()) return
+  rightEdgeSession.push()
   const b = win.getBounds()
   const c = screen.getCursorScreenPoint()
-  const context = { placement: resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(b)), layout: liveOverlayLayout() }
+  const context = {
+    placement: resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(b)),
+    layout: liveOverlayLayout()
+  }
   const detail = `bounds=${b.width}x${b.height}@(${b.x},${b.y}) cursor=(${c.x},${c.y})`
   if (islandResting || !win.isVisible()) overlayRevealLog.parked(cause, context, detail)
   else overlayRevealLog.revealed(cause, context, detail)
@@ -3780,6 +4005,8 @@ function sendHotkey(action: HotkeyAction): void {
     return
   }
   if (!w.isVisible() || islandResting) {
+    // The ask hotkey opens the composer, so it reveals the island even over a parked Reader.
+    if (action === 'ask' && islandResting) rightEdgeSession.noteIslandReveal()
     reveal('hotkey', { focus: action === 'ask' })
   }
   w.webContents.send(IPC.hotkey, action)
@@ -3850,7 +4077,8 @@ function legacyReveal(reason: RevealReason, options: { focus: boolean }): void {
 /** A keyboard/tray/relaunch reveal of the right-edge dock opens the page's drawer too (never a stretched
  *  rail) and parks again once the pointer stays away. Top-center reveals are unchanged. */
 function revealRightEdgeDockInPage(): void {
-  if (!win || win.isDestroyed() || islandResting || settingsSurfaceOpen || !overlayUsesHover(liveOverlayLayout())) return
+  if (!win || win.isDestroyed() || islandResting || settingsSurfaceOpen || !overlayUsesHover(liveOverlayLayout()))
+    return
   if (resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(win.getBounds())) !== 'right-edge') return
   if (!overlayCursorWatchTimer) startOverlayCursorWatch()
   overlayCursorWatchHovering = false
@@ -3860,7 +4088,8 @@ function revealRightEdgeDockInPage(): void {
 
 /** Keyboard/tray/relaunch reveal of top-center Hide/Island: the page paints it; main holds it until a pointer visits and leaves. */
 function revealTopCenterHoverInPage(): void {
-  if (!win || win.isDestroyed() || islandResting || settingsSurfaceOpen || !overlayUsesHover(liveOverlayLayout())) return
+  if (!win || win.isDestroyed() || islandResting || settingsSurfaceOpen || !overlayUsesHover(liveOverlayLayout()))
+    return
   if (resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(win.getBounds())) === 'right-edge') return
   if (!overlayCursorWatchTimer) startOverlayCursorWatch()
   notifyOverlayCursorHover(true)
@@ -3917,8 +4146,10 @@ function handleSmokeReopenProbe(commandLine: readonly string[]): boolean {
   if (process.env.ASKTOTO_SMOKE_REOPEN_PROBE !== '1') return false
   const action = commandLine
     .map((arg) => arg.match(/^--metis-smoke-reopen=(park-window|hide-window|tray-show)$/)?.[1])
-    .find((value): value is 'park-window' | 'hide-window' | 'tray-show' =>
-      value === 'park-window' || value === 'hide-window' || value === 'tray-show')
+    .find(
+      (value): value is 'park-window' | 'hide-window' | 'tray-show' =>
+        value === 'park-window' || value === 'hide-window' || value === 'tray-show'
+    )
   if (!action) return false
 
   const w = ensureWindow()
@@ -3951,7 +4182,9 @@ let fatalHandled = false
 function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown): void {
   // M2-0429: a refused macOS capture, already audited as capture.failed by its caller — not a crash.
   if (kind === 'unhandledRejection' && isOrphanScreenSourcesRejection(err, process.platform)) {
-    return void mainLog.warn('[capture] desktopCapturer rejected a screen-source request (Screen Recording not in effect)')
+    return void mainLog.warn(
+      '[capture] desktopCapturer rejected a screen-source request (Screen Recording not in effect)'
+    )
   }
   const detail = err instanceof Error ? err.stack || err.message : String(err)
   persistCrash(kind, detail, err instanceof Error ? err.message : String(err))
@@ -3986,7 +4219,14 @@ async function showFatalDialog(): Promise<void> {
 // ~150-450ms capture cost again. 4s covers hover→click and shortcut→Enter without showing a visibly stale
 // frame; Private View / display-id checks still refuse a bad send.
 const CAPTURE_TTL_MS = 4000
-let shotCache: { image: string; width: number; height: number; dispId: number; displayMismatch: boolean; ts: number } | null = null
+let shotCache: {
+  image: string
+  width: number
+  height: number
+  dispId: number
+  displayMismatch: boolean
+  ts: number
+} | null = null
 type CapturedScreen = { image: string; width: number; height: number; dispId: number; displayMismatch: boolean }
 
 async function captureScreenshotOnce(displayId: number): Promise<CapturedScreen> {
@@ -4016,7 +4256,9 @@ async function captureScreenshotOnce(displayId: number): Promise<CapturedScreen>
     isUsableScreenSource,
     {
       onError: (error, attempt) =>
-        mainLog.warn(`[capture] getSources failed (attempt ${attempt}): ${error instanceof Error ? error.message : String(error)}`)
+        mainLog.warn(
+          `[capture] getSources failed (attempt ${attempt}): ${error instanceof Error ? error.message : String(error)}`
+        )
     }
   )
   // Match the source to the display under the cursor. With one available source it is necessarily the
@@ -4088,7 +4330,14 @@ class PrivateViewBlockedError extends Error {
   }
 }
 
-async function getScreenshot(phase?: string): Promise<{ image: string; width: number; height: number; capturedAt: number; dispId: number; displayMismatch: boolean }> {
+async function getScreenshot(phase?: string): Promise<{
+  image: string
+  width: number
+  height: number
+  capturedAt: number
+  dispId: number
+  displayMismatch: boolean
+}> {
   // Private View promises Métis won't look at (or send) the screen while it's on — that has to mean
   // this app's own capture pipeline refuses to run, not just that OTHER apps can't screen-share our window
   // (that's the separate, still-active setContentProtection() call on the BrowserWindow itself).
@@ -4128,12 +4377,18 @@ async function getScreenshot(phase?: string): Promise<{ image: string; width: nu
   // cached and sent to the model — breaking the Private View guarantee on a mid-capture toggle.
   if (privateViewOn()) {
     // Audit like the pre-check (this path used to throw traceless); `at` distinguishes the race.
-    if (phase !== 'prewarm') auditLog('capture.blocked', { reason: 'private_view', at: 'post_capture', ...(phase ? { phase } : {}) })
+    if (phase !== 'prewarm')
+      auditLog('capture.blocked', { reason: 'private_view', at: 'post_capture', ...(phase ? { phase } : {}) })
     throw new PrivateViewBlockedError()
   }
   const capturedAt = Date.now()
   shotCache = { ...shot, ts: capturedAt }
-  auditLog('capture.screen', { width: shot.width, height: shot.height, bytes: shot.image.length, ...(phase ? { phase } : {}) })
+  auditLog('capture.screen', {
+    width: shot.width,
+    height: shot.height,
+    bytes: shot.image.length,
+    ...(phase ? { phase } : {})
+  })
   // dispId is the monitor this frame is really OF. Callers that cache a DERIVED artifact (the background
   // screen description) need it: the capture always follows the cursor, which an alt-tab does not move,
   // so without it a cached description cannot tell it is about a monitor the user has looked away from.
@@ -4158,8 +4413,7 @@ function visionCheckContextFromSettings(): import('@shared/screen-capture-check'
     localWeightsReady = false
   }
   const provider = s.provider
-  const visionOk =
-    provider === 'dust' ? dustSelectedAgentVision(s.providerModels['dust']) : PROVIDERS[provider].vision
+  const visionOk = provider === 'dust' ? dustSelectedAgentVision(s.providerModels['dust']) : PROVIDERS[provider].vision
   const configured =
     provider === 'local'
       ? false
@@ -4227,13 +4481,8 @@ function askVisionForScreenCheck(backend: 'local' | 'api', image: string): Promi
       : applyInteractiveGuardrail(
           provider,
           'base',
-          resolveModelTier(
-            provider,
-            s.providerModels,
-            s.providerModelsThinking,
-            'base',
-            s.providerModelsDeep
-          ) || def.fastModel
+          resolveModelTier(provider, s.providerModels, s.providerModelsThinking, 'base', s.providerModelsDeep) ||
+            def.fastModel
         )
   const model = def.kind === 'cli' ? preManagedModel : resolveManagedModel(s, 'askChat', provider, preManagedModel)
   return collectVisionStream((handlers) =>
@@ -4295,9 +4544,7 @@ const screenPreprocess: ScreenPreprocess = createScreenPreprocess({
   // macOS: never let this background loop be the thing that asks for Screen Recording at boot.
   // Undefined off darwin: Windows has no queryable screen grant and its capture prompts nothing.
   screenCaptureGranted:
-    process.platform === 'darwin'
-      ? () => systemPreferences.getMediaAccessStatus('screen') === 'granted'
-      : undefined,
+    process.platform === 'darwin' ? () => systemPreferences.getMediaAccessStatus('screen') === 'granted' : undefined,
   log: (level, message) => (level === 'warn' ? mainLog.warn(message) : mainLog.info(message)),
   audit: (event, data) => auditLog(event as Parameters<typeof auditLog>[0], data)
 })
@@ -4455,8 +4702,7 @@ function registerScreenListeners(): void {
     // hanging off the bottom of the remaining screen with resizable:false and no in-app fix.
     // Hide hairline (2px) must survive this clamp — BAR_MIN_HEIGHT 44 is a sliver (Tony 8×44).
     const height = clampHeight(b.height, wa.height)
-    const visible =
-      b.x + b.width > wa.x && b.x < wa.x + wa.width && b.y + b.height > wa.y && b.y < wa.y + wa.height
+    const visible = b.x + b.width > wa.x && b.x < wa.x + wa.width && b.y + b.height > wa.y && b.y < wa.y + wa.height
     if (visible) {
       // Still (partly) on a real display — leave it where the user put it, sliding up only as far as the
       // newly clamped height needs to sit inside the work area (same slide resizeTo does).
@@ -4488,20 +4734,26 @@ function toggleOverlayVisibility(reason: Extract<RevealReason, 'hotkey' | 'tray'
   const hadNoWindow = !win || win.isDestroyed()
   const w = ensureWindow()
   if (!w) return
+  // The tray click that sent this toggle blurred the window first, and that blur already parked the Reader.
+  if (islandResting && rightEdgeSession.toggleAbsorbedByBlur(reason, performance.now())) return
   if (!hadNoWindow && w.isVisible() && !islandResting) {
     // A hidden right-edge window reopens from the band on the next dwell. Park it instead: the forced park
-    // latches until the pointer leaves the band.
+    // latches until the pointer leaves the band. An IME composition refuses it and the window stays.
     const rightEdge = resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(w.getBounds())) === 'right-edge'
-    if (overlayUsesHover(liveOverlayLayout()) && rightEdge && parkOverlayAfterHideSpring(true)) return startOverlayCursorWatch()
+    if (overlayUsesHover(liveOverlayLayout()) && rightEdge && parkOverlayAfterHideSpring(true))
+      return startOverlayCursorWatch()
+    if (overlayUsesHover(liveOverlayLayout()) && rightEdge && !rightEdgeSession.parkAllowed('explicit')) return
     w.hide()
     // Tray Hide is not the rest sensor. Keep the top-edge watch armed so
     // mouse-at-top can showInactive without hunting Show Métis.
     if (overlayUsesHover(liveOverlayLayout())) startOverlayCursorWatch()
   } else {
     // Revealing via the show/hide hotkey always opens the ask input right after — the same deliberate,
-    // user-initiated focus grab as sendHotkey('ask'). See showForAsk's doc comment.
+    // user-initiated focus grab as sendHotkey('ask'). See showForAsk's doc comment. A Reader that was open
+    // at the park is restored instead, at its scroll position: it has no ask input to open.
+    const restoresReader = rightEdgeSession.readerPending()
     reveal(reason, { focus: true })
-    w.webContents.send(IPC.hotkey, 'ask')
+    if (!restoresReader) w.webContents.send(IPC.hotkey, 'ask')
   }
 }
 
@@ -4566,7 +4818,8 @@ function registerEmergencyForceQuitShortcut(): boolean {
   if (process.platform !== 'darwin') return false
   try {
     const registered = globalShortcut.register(EMERGENCY_FORCE_QUIT_ACCELERATOR, forceQuitMétis)
-    if (!registered) mainLog.warn(`[shortcuts] failed to register emergency force quit: ${EMERGENCY_FORCE_QUIT_ACCELERATOR}`)
+    if (!registered)
+      mainLog.warn(`[shortcuts] failed to register emergency force quit: ${EMERGENCY_FORCE_QUIT_ACCELERATOR}`)
     return registered
   } catch (e) {
     mainLog.warn(`[shortcuts] invalid emergency force-quit accelerator: ${EMERGENCY_FORCE_QUIT_ACCELERATOR}`, e)
@@ -4582,8 +4835,15 @@ function shortcutClaimKey(accel: string): string {
     .split('+')
     .map((part) => {
       const token = part.trim().toLowerCase()
-      if (token === 'command' || token === 'cmd' || token === 'meta' || token === 'super' ||
-        token === 'commandorcontrol' || token === 'cmdorctrl') return 'command'
+      if (
+        token === 'command' ||
+        token === 'cmd' ||
+        token === 'meta' ||
+        token === 'super' ||
+        token === 'commandorcontrol' ||
+        token === 'cmdorctrl'
+      )
+        return 'command'
       if (token === 'control' || token === 'ctrl') return 'control'
       if (token === 'escape' || token === 'esc') return 'escape'
       return token
@@ -4688,7 +4948,11 @@ function startMeetingNotifier(): void {
         events = calendarCache.events
       } else if (requireAuth()) {
         let tz = 'UTC'
-        try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' } catch { /* keep UTC */ }
+        try {
+          tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+        } catch {
+          /* keep UTC */
+        }
         const res = await calendarToday(tz)
         if (res.ok && res.events) {
           calendarCache = { events: res.events, ts: Date.now() }
@@ -4709,7 +4973,7 @@ function startMeetingNotifier(): void {
         // poll slipped past the 30 s interval (e.g. T=91 s then T=59 s skips the window entirely).
         const msUntil = startMs - now
         if (msUntil < -30_000) continue // event started > 30 s ago — too late to notify
-        if (msUntil > 60_000) continue  // event is still > 60 s away — not yet due
+        if (msUntil > 60_000) continue // event is still > 60 s away — not yet due
         // prevPollMs=0 means this is the first poll ever; treat prevMsUntil as ∞ so we fire immediately
         // if an event is already within 60 s.
         const prevMsUntil = prevPollMs > 0 ? startMs - prevPollMs : Number.POSITIVE_INFINITY
@@ -4752,19 +5016,30 @@ function buildTrayMenu(): Menu {
     { label: label('Show / Hide', 'hide'), click: () => toggleVisible('tray') },
     // sendHotkey() already reveals the window itself (non-activating — see showForAsk's doc comment)
     // when it isn't visible, so no separate show call is needed (or wanted) here.
-    { label: 'Settings…', click: () => {
-      sendHotkey('settings')
-    } },
+    {
+      label: 'Settings…',
+      click: () => {
+        sendHotkey('settings')
+      }
+    },
     { label: label('Listen / Stop listening', 'toggle-listen'), click: () => sendHotkey('toggle-listen') },
-    { label: "Today's agenda", click: () => {
-      sendHotkey('agenda')
-    } },
+    {
+      label: "Today's agenda",
+      click: () => {
+        sendHotkey('agenda')
+      }
+    },
     { label: label('New', 'reset'), click: () => sendHotkey('reset') },
     { type: 'separator' },
-    { label: 'Copy diagnostics summary', click: () => void copyDiagnosticsSummary({
-      auditTrailPath: auditLogPath(),
-      identity: { version: app.getVersion(), platform: process.platform, arch: process.arch },
-      writeText: (text) => clipboard.writeText(text) }) },
+    {
+      label: 'Copy diagnostics summary',
+      click: () =>
+        void copyDiagnosticsSummary({
+          auditTrailPath: auditLogPath(),
+          identity: { version: app.getVersion(), platform: process.platform, arch: process.arch },
+          writeText: (text) => clipboard.writeText(text)
+        })
+    },
     {
       label: 'Restart Métis window',
       enabled: !captureActiveForWindowRestart(),
@@ -4787,23 +5062,28 @@ function createTray(): void {
   // menu-bar item and orphans the first Tray. A build still in flight counts as created (startTrayBuild ignores it).
   if (tray && !tray.isDestroyed()) return
   const iconPaths = trayIconPaths(app.isPackaged ? process.resourcesPath : join(__dirname, '../../build'))
-  startTrayBuild(() => buildTrayInStages<Electron.NativeImage, Menu>({
-    loadIcon: (time) => loadPresizedTrayIcon(nativeImage, iconPaths, process.platform, time),
-    create: (img) => { tray = new Tray(img) },
-    decorate(img) {
-      if (!tray) return
-      const emptyIcon = img.isEmpty()
-      // FITO-185-F: darwin always gets a title (a title-less LSUIElement item gave kAXErrorCannotComplete).
-      if (process.platform === 'darwin') tray.setTitle(' ◉ Métis')
-      tray.setToolTip('Métis')
-      // Menu-bar / tray logo click is the Settings entry Tony uses. applySettingsSurface runs inside sendHotkey.
-      tray.on('click', () => sendHotkey('settings'))
-      auditLog('tray.created', { emptyIcon })
-    },
-    buildMenu: buildTrayMenu, attachMenu: (menu) => tray?.setContextMenu(menu),
-    time: (label, fn) => timeBootStage(observability, label, fn),
-    fail: (e) => auditLog('tray.failed', { message: e instanceof Error ? e.message : String(e) })
-  }))
+  startTrayBuild(() =>
+    buildTrayInStages<Electron.NativeImage, Menu>({
+      loadIcon: (time) => loadPresizedTrayIcon(nativeImage, iconPaths, process.platform, time),
+      create: (img) => {
+        tray = new Tray(img)
+      },
+      decorate(img) {
+        if (!tray) return
+        const emptyIcon = img.isEmpty()
+        // FITO-185-F: darwin always gets a title (a title-less LSUIElement item gave kAXErrorCannotComplete).
+        if (process.platform === 'darwin') tray.setTitle(' ◉ Métis')
+        tray.setToolTip('Métis')
+        // Menu-bar / tray logo click is the Settings entry Tony uses. applySettingsSurface runs inside sendHotkey.
+        tray.on('click', () => sendHotkey('settings'))
+        auditLog('tray.created', { emptyIcon })
+      },
+      buildMenu: buildTrayMenu,
+      attachMenu: (menu) => tray?.setContextMenu(menu),
+      time: (label, fn) => timeBootStage(observability, label, fn),
+      fail: (e) => auditLog('tray.failed', { message: e instanceof Error ? e.message : String(e) })
+    })
+  )
 }
 
 /** Rebuild the tray's context menu after a shortcut rebind. createTray() only builds the menu once at
@@ -5044,6 +5324,7 @@ function registerIpc(): void {
   })
   // Open the Privacy pane, and the M2-0429 Screen Recording Repair / "It's already on" / Show in Finder.
   registerScreenPermissionIpc(assertMainWindow)
+  registerRightEdgeIpc(assertMainWindow, rightEdgeSession, currentRightEdgeSurface)
   // Front-load the OS permission prompts during onboarding (macOS only) so the first real meeting
   // isn't interrupted by them. Serial, and only for permissions not yet granted: mic has a direct
   // prompt API; Screen Recording has none, but a 1px desktopCapturer probe registers the app with
@@ -5277,13 +5558,23 @@ function registerIpc(): void {
       // The renderer may choose an address, never move a stored credential to that address.
       // Require deliberate re-entry/verification for the new service, as with managed MCP endpoints.
       Object.assign(p, {
-        operatorLicenseToken: '', operatorLicenseJti: '', operatorLicenseLast4: '', operatorLicenseExpiresAt: null,
+        operatorLicenseToken: '',
+        operatorLicenseJti: '',
+        operatorLicenseLast4: '',
+        operatorLicenseExpiresAt: null,
         operatorIngestSecret: ''
       })
     }
-    if (('operatorUrl' in p && p.operatorUrl !== cur.operatorUrl) ||
-        ('operatorIngestSecret' in p && p.operatorIngestSecret !== cur.operatorIngestSecret)) {
-      Object.assign(p, { operatorTier: null, operatorEntitlements: null, operatorEntitlementsAt: 0, operatorIntegrationsVersion: 0 })
+    if (
+      ('operatorUrl' in p && p.operatorUrl !== cur.operatorUrl) ||
+      ('operatorIngestSecret' in p && p.operatorIngestSecret !== cur.operatorIngestSecret)
+    ) {
+      Object.assign(p, {
+        operatorTier: null,
+        operatorEntitlements: null,
+        operatorEntitlementsAt: 0,
+        operatorIntegrationsVersion: 0
+      })
     }
     const next = setSettingsWithSpeakerPolicy(p)
     auditLog('settings.changed', { keys: Object.keys(p) })
@@ -5369,7 +5660,9 @@ function registerIpc(): void {
     // never fetch optional LLM weights automatically; mandatory transcription is a separate path.
     if (next.localLlm.enabled && (!cur.localLlm.enabled || cur.localLlm.modelId !== next.localLlm.modelId)) {
       void provisionLocalModel(next.localLlm, getAllowedProviders(), ensureLocalModel)
-        .then((ready) => { if (ready) refreshScreenPreprocess() })
+        .then((ready) => {
+          if (ready) refreshScreenPreprocess()
+        })
         .catch((e) => mainLog.warn('[settings] local model provisioning failed:', e))
     }
     // At-rest encryption just turned on → purge any previously-built CLEARTEXT knowledge graph so it
@@ -5433,9 +5726,7 @@ function registerIpc(): void {
       defaultId: 1,
       cancelId: 1
     }
-    const { response } = win
-      ? await dialog.showMessageBox(win, dialogOpts)
-      : await dialog.showMessageBox(dialogOpts)
+    const { response } = win ? await dialog.showMessageBox(win, dialogOpts) : await dialog.showMessageBox(dialogOpts)
     if (response !== 0) return { ok: false, canceled: true }
     try {
       const archive = archiveEncryptedProfile()
@@ -5465,7 +5756,10 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     if (operatorActivationInFlight) return { ok: false, error: 'A licence check is already in progress.' }
-    const raw = payload && typeof payload === 'object' && 'licenseKey' in (payload as object) ? (payload as { licenseKey: unknown }).licenseKey : payload
+    const raw =
+      payload && typeof payload === 'object' && 'licenseKey' in (payload as object)
+        ? (payload as { licenseKey: unknown }).licenseKey
+        : payload
     const token = typeof raw === 'string' ? raw.trim() : ''
     operatorActivationInFlight = true
     try {
@@ -5488,13 +5782,18 @@ function registerIpc(): void {
       const result = activateOperatorLicenseToken(token)
       if (!result.ok) return result
       const candidate = {
-        ...getSettings(), operatorLicenseToken: token,
-        operatorLicenseJti: result.jti!, operatorLicenseLast4: result.last4!
+        ...getSettings(),
+        operatorLicenseToken: token,
+        operatorLicenseJti: result.jti!,
+        operatorLicenseLast4: result.last4!
       }
       const connection = await confirmOperatorLicenseConnection(candidate)
       if (!connection.ok) return { ok: false, error: connection.error }
       if (resolveOperatorBaseUrl(candidate) !== resolveOperatorBaseUrl(getSettings())) {
-        return { ok: false, error: 'The Operator address changed during verification. Please activate your licence again.' }
+        return {
+          ok: false,
+          error: 'The Operator address changed during verification. Please activate your licence again.'
+        }
       }
       setSettings({
         operatorLicenseToken: token,
@@ -5513,7 +5812,10 @@ function registerIpc(): void {
       auditLog('operator.license.activated', { jti: result.jti })
       return result
     } catch {
-      return { ok: false, error: 'Métis could not save your licence. Check that its data folder is writable and try again.' }
+      return {
+        ok: false,
+        error: 'Métis could not save your licence. Check that its data folder is writable and try again.'
+      }
     } finally {
       operatorActivationInFlight = false
     }
@@ -5752,8 +6054,16 @@ function registerIpc(): void {
       // dust-oauth.ts's completeDustOAuthLogin, CLI at dustImportCli), so this value is inert until then.
       setSettings({ dustSessionOrigin: 'cli', dustTokenMintedAt: 0 })
     }
-    auditLog('key.removed', { provider: parsed.provider, ...(parsed.provider === 'dust' ? { dustRefreshRemoved } : {}) })
-    return { hasKeys: hasKeysMap(), ...(dustRefreshRemoved ? {} : { error: "Removed the Dust key, but its saved sign-in file couldn't be deleted — remove it manually." }) }
+    auditLog('key.removed', {
+      provider: parsed.provider,
+      ...(parsed.provider === 'dust' ? { dustRefreshRemoved } : {})
+    })
+    return {
+      hasKeys: hasKeysMap(),
+      ...(dustRefreshRemoved
+        ? {}
+        : { error: "Removed the Dust key, but its saved sign-in file couldn't be deleted — remove it manually." })
+    }
   })
 
   ipcMain.handle(IPC.testApiKey, (e, payload: unknown) => {
@@ -5791,7 +6101,11 @@ function registerIpc(): void {
         const s = await refreshDustCliSession()
         if (!s.ok || !s.token || !s.workspaceId) return r
         setApiKey('dust', s.token)
-        setSettings({ dustWorkspaceId: s.workspaceId, dustBaseUrl: s.baseUrl || 'https://dust.tt', dustTokenMintedAt: Date.now() })
+        setSettings({
+          dustWorkspaceId: s.workspaceId,
+          dustBaseUrl: s.baseUrl || 'https://dust.tt',
+          dustTokenMintedAt: Date.now()
+        })
       }
       return await listDustAgents()
     }
@@ -5808,7 +6122,8 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const s = await refreshDustCliSession()
-    if (!s.ok || !s.token || !s.workspaceId) return { ok: false, error: s.error, accessDenied: s.accessDenied, incomplete: s.incomplete }
+    if (!s.ok || !s.token || !s.workspaceId)
+      return { ok: false, error: s.error, accessDenied: s.accessDenied, incomplete: s.incomplete }
     setApiKey('dust', s.token)
     setSettings({
       dustWorkspaceId: s.workspaceId,
@@ -5992,7 +6307,9 @@ function registerIpc(): void {
     setSettings({ mcpConnections: upsertClickupDestination(s.mcpConnections, list) })
   }
 
-  async function discoverListForClickup(conn: McpConnection): Promise<{ ok: true; list: ClickupList } | { ok: false; error: string }> {
+  async function discoverListForClickup(
+    conn: McpConnection
+  ): Promise<{ ok: true; list: ClickupList } | { ok: false; error: string }> {
     const apiKey = getMcpApiKey(conn.id)
     return discoverClickupList({
       tools: conn.tools,
@@ -6080,9 +6397,13 @@ function registerIpc(): void {
   // not next to that tick, because retryOutboundAction and mcpLabelFor above are this function's own
   // locals — pulling the timer out to whenReady's scope would mean hoisting both to module scope for no
   // real benefit.
-  trackTimer(setInterval(() => {
-    void pushQueue.processDue(retryOutboundAction).catch((e) => mainLog.warn('[mcp-push-queue] processDue tick failed:', e))
-  }, 60 * 1000))
+  trackTimer(
+    setInterval(() => {
+      void pushQueue
+        .processDue(retryOutboundAction)
+        .catch((e) => mainLog.warn('[mcp-push-queue] processDue tick failed:', e))
+    }, 60 * 1000)
+  )
 
   // Test connection: connects + authenticates + lists tools, persists NOTHING (mirrors BidStack's own
   // "Test endpoint" button). Lets the user verify before committing an endpoint/key to disk.
@@ -6154,7 +6475,10 @@ function registerIpc(): void {
         }
       }
     } catch (error) {
-      return { ok: false as const, error: error instanceof Error ? error.message : `Could not store the ${label} API key.` }
+      return {
+        ok: false as const,
+        error: error instanceof Error ? error.message : `Could not store the ${label} API key.`
+      }
     }
     auditLog('mcp.connected', { connectionId, tools: (r.tools ?? []).length })
     return r
@@ -6203,7 +6527,8 @@ function registerIpc(): void {
     // Wave 4 / QA defense-in-depth: never push confidential meetings. Prefer disk frontmatter over the
     // renderer flag — a buggy UI could omit args.confidential. Unreadable files fail closed.
     const diskConfidential = meetingFile ? await isMeetingConfidentialOnDisk(s, meetingFile) : false
-    const argConfidential = args && typeof args === 'object' && (args as { confidential?: unknown }).confidential === true
+    const argConfidential =
+      args && typeof args === 'object' && (args as { confidential?: unknown }).confidential === true
     if (diskConfidential || argConfidential) {
       auditLog('mcp.push.skipped_confidential', {
         connectionId,
@@ -6214,7 +6539,10 @@ function registerIpc(): void {
     }
     const conn = s.mcpConnections.find((c) => c.id === connectionId)
     if (!conn || !conn.connected || !conn.endpointUrl || !hasMcpApiKey(connectionId)) {
-      return { ok: false, error: `${mcpLabelFor(connectionId)} is not connected. Set it up in Settings → Mantu Intelligence first.` }
+      return {
+        ok: false,
+        error: `${mcpLabelFor(connectionId)} is not connected. Set it up in Settings → Mantu Intelligence first.`
+      }
     }
     let clickupList: ClickupList | undefined
     if (connectionId === 'clickup') {
@@ -6245,7 +6573,11 @@ function registerIpc(): void {
     // before surfacing reconnect-required, gated on the SAME single-flight lock the interactive OAuth
     // flow uses (see clickupOAuth.ts) so a background refresh here and a user-initiated Reconnect in
     // Settings can never both persist tokens at once.
-    if (!r.ok && (conn.kind === 'clickup' || conn.kind === 'plane') && /401|403|unauthor|forbidden/i.test(r.error || '')) {
+    if (
+      !r.ok &&
+      (conn.kind === 'clickup' || conn.kind === 'plane') &&
+      /401|403|unauthor|forbidden/i.test(r.error || '')
+    ) {
       const acquire = conn.kind === 'clickup' ? tryAcquireClickupTokenLock : tryAcquirePlaneTokenLock
       const release = conn.kind === 'clickup' ? releaseClickupTokenLock : releasePlaneTokenLock
       const refresh = conn.kind === 'clickup' ? refreshClickupToken : refreshPlaneToken
@@ -6299,7 +6631,8 @@ function registerIpc(): void {
       appendTimeSavedEvent({
         kind: 'mcp-push',
         estimatedMinutes: estimateMcpPushMinutes(),
-        connector: connectionId === 'bidstack' || connectionId === 'plane' || connectionId === 'clickup' ? connectionId : 'none',
+        connector:
+          connectionId === 'bidstack' || connectionId === 'plane' || connectionId === 'clickup' ? connectionId : 'none',
         ids: { tool: toolName }
       })
     }
@@ -6357,7 +6690,10 @@ function registerIpc(): void {
         return { ...r, clickupListId: dest.list.id, clickupListName: dest.list.name }
       }
     } catch (error) {
-      return { ok: false as const, error: error instanceof Error ? error.message : 'Could not store the ClickUp connection.' }
+      return {
+        ok: false as const,
+        error: error instanceof Error ? error.message : 'Could not store the ClickUp connection.'
+      }
     }
     auditLog('mcp.connected', { connectionId: 'clickup', tools: (r.tools ?? []).length })
     return r
@@ -6407,7 +6743,10 @@ function registerIpc(): void {
       }
       setSettings({ mcpConnections: [...s.mcpConnections.filter((c) => c.id !== 'plane'), entry] })
     } catch (error) {
-      return { ok: false as const, error: error instanceof Error ? error.message : 'Could not store the Plane connection.' }
+      return {
+        ok: false as const,
+        error: error instanceof Error ? error.message : 'Could not store the Plane connection.'
+      }
     }
     auditLog('mcp.connected', { connectionId: 'plane', tools: (r.tools ?? []).length })
     return r
@@ -6435,7 +6774,13 @@ function registerIpc(): void {
   // --- Calendar ---
   ipcMain.handle(IPC.timeSavedRead, (e) => {
     assertMainWindow(e)
-    if (!requireAuth()) return { savedMinutes: 0, byKind: { 'note-taking': 0, 'second-brain': 0, 'email-summary': 0, 'mcp-push': 0 }, events: 0, recent: [] }
+    if (!requireAuth())
+      return {
+        savedMinutes: 0,
+        byKind: { 'note-taking': 0, 'second-brain': 0, 'email-summary': 0, 'mcp-push': 0 },
+        events: 0,
+        recent: []
+      }
     return summarizeTimeSaved()
   })
   ipcMain.handle(IPC.timeSavedRecord, (e, payload: unknown) => {
@@ -6505,7 +6850,11 @@ function registerIpc(): void {
   ipcMain.handle(IPC.recallRead, async (e, file: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    return openExplicitly(String(file ?? ''), (event) => e.sender.send(IPC.recallHydration, event), (options) => recallRead(String(file ?? ''), options))
+    return openExplicitly(
+      String(file ?? ''),
+      (event) => e.sender.send(IPC.recallHydration, event),
+      (options) => recallRead(String(file ?? ''), options)
+    )
   })
 
   // Recall export: a user-initiated DECRYPTED markdown copy of ONE saved meeting, so an external tool —
@@ -6618,7 +6967,8 @@ function registerIpc(): void {
       type: 'warning' as const,
       title: 'Delete meeting',
       message: `Delete "${label}"?`,
-      detail: 'This removes the saved transcript, its notes, and its extracted knowledge from this device. This cannot be undone.',
+      detail:
+        'This removes the saved transcript, its notes, and its extracted knowledge from this device. This cannot be undone.',
       buttons: ['Delete', 'Cancel'],
       defaultId: 1,
       cancelId: 1
@@ -6702,7 +7052,10 @@ function registerIpc(): void {
     const s = getSettings()
     const result = await setMeetingConfidential(s, parsed.data.file, parsed.data.confidential)
     if (result.ok) {
-      auditLog('transcript.confidential_set', { file: basename(parsed.data.file), confidential: parsed.data.confidential })
+      auditLog('transcript.confidential_set', {
+        file: basename(parsed.data.file),
+        confidential: parsed.data.confidential
+      })
       // MQA-075: the republish IS the enforcement — the wiki is static markdown, so until it regenerates
       // the meeting's title/TL;DR/decisions/deal facts are still on every published page. Fired detached
       // it could fail (a locked wiki file, an EPERM mkdir) while this handler had already returned ok, so
@@ -6715,7 +7068,8 @@ function registerIpc(): void {
         mainLog.error(`[confidential] republish failed: ${error instanceof Error ? error.message : String(error)}`)
         return {
           ok: false,
-          error: 'Flag saved, but the published pages could not be updated — this meeting may still appear in your published wiki. Try again.'
+          error:
+            'Flag saved, but the published pages could not be updated — this meeting may still appear in your published wiki. Try again.'
         }
       }
     }
@@ -6782,7 +7136,12 @@ function registerIpc(): void {
     // ingest does; it falls back to slugify(name) when there is no alias, so un-renamed deals are
     // unaffected (MQA-013).
     const s = getSettings()
-    const r = await settleCommitment(s, resolveEntitySlug(readAliasMap(s), 'deal', deal), text, status as 'open' | 'kept' | 'broken')
+    const r = await settleCommitment(
+      s,
+      resolveEntitySlug(readAliasMap(s), 'deal', deal),
+      text,
+      status as 'open' | 'kept' | 'broken'
+    )
     if (r.ok) {
       await markBrainChanged(getSettings())
       auditLog('brain.commitment.settled', { status })
@@ -6836,14 +7195,16 @@ function registerIpc(): void {
       return {
         ...result,
         ok: false,
-        error: 'Deleted the transcripts, but the Mantu Intelligence data could not be fully removed. Close anything using the meetings folder, then try again.'
+        error:
+          'Deleted the transcripts, but the Mantu Intelligence data could not be fully removed. Close anything using the meetings folder, then try again.'
       }
     }
     if (!wiki.ok) {
       return {
         ...result,
         ok: false,
-        error: 'Deleted the transcripts, but the published wiki pages could not be removed. Close anything using the meetings folder, then try again.'
+        error:
+          'Deleted the transcripts, but the published wiki pages could not be removed. Close anything using the meetings folder, then try again.'
       }
     }
     return result
@@ -6950,9 +7311,7 @@ function registerIpc(): void {
     // An opaque capture identity scopes delayed force-stops to the session that requested them.
     // Keep the bound modest because this comes from the renderer IPC boundary.
     const captureId =
-      typeof p.captureId === 'string' && p.captureId.length > 0 && p.captureId.length <= 128
-        ? p.captureId
-        : undefined
+      typeof p.captureId === 'string' && p.captureId.length > 0 && p.captureId.length <= 128 ? p.captureId : undefined
     const owner: CloudSttIpcOwner = {
       webContentsId: e.sender.id,
       generation: ++cloudSttIpcGeneration,
@@ -7039,7 +7398,12 @@ function registerIpc(): void {
   ipcMain.handle(IPC.cloudSttSetSonioxKey, (e, payload: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { hasKeys: hasKeysMap() }
-    const key = typeof payload === 'string' ? payload : typeof (payload as { key?: unknown })?.key === 'string' ? (payload as { key: string }).key : ''
+    const key =
+      typeof payload === 'string'
+        ? payload
+        : typeof (payload as { key?: unknown })?.key === 'string'
+          ? (payload as { key: string }).key
+          : ''
     setSonioxApiKey(key)
     auditLog(key.trim() ? 'key.set' : 'key.removed', { provider: 'soniox' })
     return { hasKeys: hasKeysMap() }
@@ -7093,7 +7457,9 @@ function registerIpc(): void {
     const allowed = getAllowedProviders()
     if (allowed && !allowed.includes('local')) return { ok: false }
     void provisionLocalModel(getSettings().localLlm, allowed, ensureLocalModel, 'explicit')
-      .then((ready) => { if (ready) refreshScreenPreprocess() })
+      .then((ready) => {
+        if (ready) refreshScreenPreprocess()
+      })
       .catch((err) => mainLog.warn('[localModels:ensure] provisioning failed:', err))
     return { ok: true }
   })
@@ -7139,7 +7505,8 @@ function registerIpc(): void {
     if (
       !speculativeLocalWorkAllowed() ||
       !localPrewarmEligible(s, getAllowedProviders(), publicSettings().providerReady, undefined, purpose)
-    ) return
+    )
+      return
     // Warm the EXACT same [system, user] prefix a real suggest request sends (F4 hardening) — built by
     // the SAME helper (llm/prewarm.ts) a unit test cross-checks against buildSystem()/userText() directly,
     // so any future drift between the live suggest path and what prewarm warms fails a test.
@@ -7154,8 +7521,9 @@ function registerIpc(): void {
       void prewarmLocal(s.localLlm.modelId, summaryMessages, speculativeLocalWorkAllowed, 'summary').catch(warmFailed)
       return
     }
-    void prewarmLocal(s.localLlm.modelId, buildPrewarmMessages(parsed.data.text, s), speculativeLocalWorkAllowed)
-      .catch(warmFailed)
+    void prewarmLocal(s.localLlm.modelId, buildPrewarmMessages(parsed.data.text, s), speculativeLocalWorkAllowed).catch(
+      warmFailed
+    )
   })
   registerWriteupIpc(assertMainWindow)
 
@@ -7190,10 +7558,7 @@ function registerIpc(): void {
   // single ask choke point so every renderer surface (typed ask, screen ask, fact-check) gets the same rule.
   ipcMain.handle(IPC.askStart, (e, raw) => {
     assertMainWindow(e)
-    const id =
-      raw && typeof raw === 'object' && 'id' in (raw as object)
-        ? String((raw as { id: unknown }).id)
-        : ''
+    const id = raw && typeof raw === 'object' && 'id' in (raw as object) ? String((raw as { id: unknown }).id) : ''
     if (!requireAuth()) {
       win?.webContents.send(IPC.streamError, {
         id,
@@ -7202,998 +7567,1012 @@ function registerIpc(): void {
       return
     }
     try {
-    const req = AskStartSchema.parse(raw)
-    // MQA-182: Private View means Métis does not look at OR SEND your screen — and an already-captured
-    // frame is still your screen. The renderer keeps the last vision request verbatim so Retry / "Go
-    // deeper" can replay it (state.ts lastReqRef), and that replay used to reach the provider minutes
-    // after the user flipped the switch. getScreenshot() re-checks the switch after its own async
-    // capture for exactly this reason (see its post-capture check); every path that can send a frame has
-    // to re-check it at SEND time, and this handler is the trust boundary the renderer cannot bypass.
-    // Keyed on the payload, not the mode: the schema permits an image on a non-vision mode too.
-    if (req.image && privateViewOn()) {
-      auditLog('capture.blocked', { reason: 'private_view', at: 'ask' })
-      win?.webContents.send(IPC.streamError, { id: req.id, message: PRIVATE_VIEW_BLOCKED_MESSAGE })
-      return
-    }
-    // PLAN.md P2.2b #2: recap generation is Operator-gated (a Métis Light seat's license may not
-    // include it). Only mode:'recap' is checked here — answer/vision/suggest/summary stay ungated by
-    // this call, and an unconfigured seat is never gated at all (operatorGate's own contract).
-    if (req.mode === 'recap') {
-      const gate = operatorGate('recap')
-      if (!gate.allowed) {
-        auditLog('operator.gate.blocked', { feature: 'recap' })
-        win?.webContents.send(IPC.streamError, { id: req.id, message: gate.reason || 'Recap is not available.' })
+      const req = AskStartSchema.parse(raw)
+      // MQA-182: Private View means Métis does not look at OR SEND your screen — and an already-captured
+      // frame is still your screen. The renderer keeps the last vision request verbatim so Retry / "Go
+      // deeper" can replay it (state.ts lastReqRef), and that replay used to reach the provider minutes
+      // after the user flipped the switch. getScreenshot() re-checks the switch after its own async
+      // capture for exactly this reason (see its post-capture check); every path that can send a frame has
+      // to re-check it at SEND time, and this handler is the trust boundary the renderer cannot bypass.
+      // Keyed on the payload, not the mode: the schema permits an image on a non-vision mode too.
+      if (req.image && privateViewOn()) {
+        auditLog('capture.blocked', { reason: 'private_view', at: 'ask' })
+        win?.webContents.send(IPC.streamError, { id: req.id, message: PRIVATE_VIEW_BLOCKED_MESSAGE })
         return
       }
-    }
-    let s = getSettings()
-    // Ask caveman register: `/caveman lite|full|ultra…`, "stop caveman", "normal mode".
-    // Persist in the existing settings store, strip the command from the question the model sees.
-    if ((req.mode === 'answer' || req.mode === 'vision') && req.kind !== 'factcheck') {
-      const caveman = applyCaveman(req.prompt, s.askCaveman)
-      if (caveman.changed) s = setSettings({ askCaveman: caveman.next })
-      req.prompt = caveman.visiblePrompt
-      if (caveman.changed && !req.prompt.trim() && !req.image && !req.wantsScreenContext) {
-        win?.webContents.send(IPC.streamDone, { id: req.id })
-        return
-      }
-    }
-    // Fresh-question boundary (see the state block above): a plain interactive ask outside a live meeting
-    // starts clean unless the user opted into follow-up memory — and even then the memory expires after
-    // ASK_MEMORY_IDLE_MS of inactivity. Pinned/cascaded requests (agentOverride / providerOverride —
-    // Spotlight Ref, follow-up drafting, recap cascades) and mid-meeting asks keep their deliberate
-    // continuity; recap/suggest/summary modes never carried ad-hoc chat history to begin with.
-    if (
-      (req.mode === 'answer' || req.mode === 'vision') &&
-      !req.agentOverride &&
-      !req.providerOverride &&
-      !listeningActive
-    ) {
-      if (!s.askFollowUpMemory || Date.now() - lastPlainAskAt > ASK_MEMORY_IDLE_MS) {
-        req.history = []
-        resetDustConversation()
-      }
-      lastPlainAskAt = Date.now()
-    }
-    // Local-first redaction (brief section I): strip high-confidence secrets from the captured transcript
-    // before it leaves the device for a cloud model. Only the auto-captured transcript — never the user's
-    // own typed prompt, and never the locally-saved meeting file (which keeps the verbatim original).
-    if (s.redactSensitive && req.transcript) req.transcript = redactSecrets(req.transcript)
-    // screenContext is a MAIN-ONLY field (like brainContext): never trust a value the renderer sent. Clear
-    // it unconditionally after parse, then set it below strictly from main's own on-device screen cache.
-    req.screenContext = undefined
-    // req.redactPrompt is set by callers whose "prompt" is itself transcript-derived rather than user-typed
-    // (e.g. fact-check's transcript-fallback ask, which stuffs the transcript tail into prompt when there's
-    // no typed claim) — redact it the same way so a secret-shaped pattern in that fallback text isn't sent
-    // to the provider. Typed-claim fact-check asks never set this flag, so normal prompts are untouched.
-    if (s.redactSensitive && req.redactPrompt) req.prompt = redactSecrets(req.prompt)
-    // Overlap local sidecar start with the sync brain stamp below — when local will serve (or hedge),
-    // kicking ensure NOW hides cold-load behind Receipt Mode work instead of serializing after it. This
-    // overlap remains optional and defers under import pressure; the later user-requested route is ungated.
-    if (speculativeLocalWorkAllowed() && localPrewarmEligible(s, getAllowedProviders(), publicSettings().providerReady)) {
-      void ensureLocalRuntimeStarted(s.localLlm.modelId, req.mode === 'vision', speculativeLocalWorkAllowed).catch((err) =>
-        mainLog.warn('[local] early ensure failed', err instanceof Error ? err.message : String(err))
-      )
-    }
-    // Receipt Mode: ground a typed answer in the user's own past meetings. Match the brain against the
-    // question (which already carries the live transcript tail via the renderer's withContext) and inject
-    // the relevant, meeting-cited slice per-turn. Answer mode only — never the latency-critical spoken
-    // suggest line or the screen-only vision turn. Best-effort: a brain read must never block an answer.
-    // Excludes fact-check (mode:'answer', kind:'factcheck'): personas.ts strips GROUNDING_RAIL for it
-    // (its contract is a VERDICT-only response), so injecting brainContext here would add citable
-    // material with no citation/anti-fabrication guardrail attached — gate identically to the rail.
-    if (req.mode === 'answer' && req.kind !== 'factcheck') {
-      try {
-        const hit = buildBrainContext(s, `${req.prompt}\n${req.transcript ?? ''}`)
-        req.brainContext = hit.block || undefined
-      } catch (err) {
-        console.warn('[brain] context assembly failed', err)
-      }
-    }
-    // Screen fast-path (M13): the renderer asked to answer from the pre-analyzed on-device screen context.
-    // Inject main's OWN cached description (re-validated for freshness/window match), plus a short recent-
-    // conversation tail so the answer fuses what's on screen with what's being said. Best-effort: if the
-    // cache went stale between the renderer's screen:context probe and now, answer from the prompt alone.
-    // Deliberately a SIBLING of the brainContext gate above, not nested in it: the fact-check exclusion is
-    // scoped to brainContext (missing GROUNDING_RAIL), while this block carries its own untrusted-data
-    // guard (llm/shared.ts screenContextBlock). Nested, "fact-check what's on my screen" reached the model
-    // with zero screen data — a verdict about a screen it never saw (MQA-009).
-    if (req.mode === 'answer' && req.wantsScreenContext) {
-      try {
-        const ctx = screenPreprocess.currentFreshContext()
-        if (ctx?.description) {
-          // Same local-first redaction contract as the transcript above (review finding): on macOS the
-          // description can be a VERBATIM OCR extract of the screen — an open password manager or API
-          // key must be stripped before this text reaches a cloud answer provider. The tail is already
-          // redacted (req.transcript was, at parse time).
-          const description = s.redactSensitive ? redactSecrets(ctx.description) : ctx.description
-          const tail = (req.transcript ?? '').slice(-1500).trim()
-          req.screenContext = tail
-            ? `${description}\n\nRecent conversation (most recent speech):\n${tail}`
-            : description
+      // PLAN.md P2.2b #2: recap generation is Operator-gated (a Métis Light seat's license may not
+      // include it). Only mode:'recap' is checked here — answer/vision/suggest/summary stay ungated by
+      // this call, and an unconfigured seat is never gated at all (operatorGate's own contract).
+      if (req.mode === 'recap') {
+        const gate = operatorGate('recap')
+        if (!gate.allowed) {
+          auditLog('operator.gate.blocked', { feature: 'recap' })
+          win?.webContents.send(IPC.streamError, { id: req.id, message: gate.reason || 'Recap is not available.' })
+          return
         }
-      } catch (err) {
-        mainLog.warn(`[screen-preprocess] context injection failed: ${err instanceof Error ? err.message : String(err)}`)
       }
-    }
-    // MQA-180: the injection above is best-effort, and on a REPLAY it usually finds nothing — Retry / "Go
-    // deeper" re-send the renderer's intent flag verbatim (state.ts lastReqRef) long after the cached
-    // description expired, the user changed windows, or Private View went on. The renderer set its
-    // "Viewed screen" badge from that intent flag alone, so an ask that reached the provider with zero
-    // screen data still rendered as grounded. Main is the only side that knows what actually went out:
-    // report the verdict on stream:meta. `undefined` for every other ask — main has no verdict there and
-    // the renderer keeps what run() set (a vision ask carries its own image).
-    const screenGrounded =
-      req.mode === 'answer' && req.wantsScreenContext ? !!req.screenContext : undefined
-    // M2-0412: the fleet model policy narrows the org allowlist for ask/chat; CLI providers and 'local'
-    // are governed by their own connect/routing toggles and never narrowed.
-    const allowed = narrowAllowedForCapability(s, getAllowedProviders(), 'askChat', [...CLI_PROVIDER_IDS, 'local'])
-
-    // Screen-vision capability. Static per provider, EXCEPT Dust: its ability to read a screenshot depends
-    // on the selected agent's underlying model (it uploads the shot as a content fragment), so consult the
-    // per-agent capability instead of the static flag. Everything else uses PROVIDERS[p].vision.
-    const providerVisionOk = (p: ProviderId): boolean => {
-      if (p === 'dust') return dustSelectedAgentVision(s.providerModels['dust'])
-      if (!getApiKey(p) && operatorFundedProviders().includes(p)) {
-        return !!operatorVisionModel(p, resolveModelTier(p, s.providerModels, s.providerModelsThinking, routeTier(req, s.thinkingMode), s.providerModelsDeep))
-      }
-      return PROVIDERS[p].vision
-    }
-
-    // MQA-228: the "can't read screenshots" advice must name a provider the user is actually ALLOWED to
-    // switch to. The static "Switch to Claude or GPT" wording sent org-policy users at providers the
-    // allowlist blocks — following the advice dead-ended on the approved-provider-list error. Prefer a
-    // target that is already keyed/CLI-connected (immediately actionable), else any allowed vision-capable
-    // provider; when the policy leaves none at all, say THAT instead of advising an impossible switch.
-    // 'local' is excluded as a switch target: when it was eligible, the fallback path already answered
-    // before this message could surface, so naming it here would always be advice that just failed.
-    const visionSwitchAdvice = (blocked: ProviderId): string => {
-      const candidates = (Object.keys(PROVIDERS) as ProviderId[]).filter(
-        (p) => p !== blocked && p !== 'local' && providerVisionOk(p) && (!allowed || allowed.includes(p))
-      )
-      const ready = candidates.find((p) =>
-        PROVIDERS[p].kind === 'cli'
-          ? !!s.cliConnected[p]
-          : getApiKey(p).length > 0 || operatorFundedProviders().includes(p)
-      )
-      const target = ready ?? candidates[0]
-      if (target)
-        return `Switch to ${PROVIDERS[target].label} in Settings, or ask without a screen capture.`
-      return allowed
-        ? "Your organization's approved providers can't read screenshots — ask without a screen capture."
-        : 'Ask without a screen capture.'
-    }
-
-    // Pick the next eligible keyed provider not yet tried — the waterfall target when the primary (e.g.
-    // Dust) can't answer. Pure (no side effect) so the retry gate can cheaply ask "is there anywhere to
-    // fall over to?" before deciding how long to keep retrying a dead primary.
-    const pickFailover = (tried: ProviderId[], preferFree = false): ProviderId | null => {
-      // A request pinned to a specific Dust agent (Spotlight Ref) has NO valid failover target — no other
-      // provider hosts that managed agent, so falling over would silently answer from the active generic
-      // provider (e.g. Kimi) with a reply that never touched the agent. Returning null here suppresses
-      // failover at BOTH seams that consult pickFailover (the retry-budget sizing and the pre-token
-      // failover line), letting the flow fall through to the reconnect-Dust message instead.
-      if (!allowCrossProviderFailover(req)) return null
-      const tier = routeTier(req, s.thinkingMode)
-      // MQA-269: a user-authored chain IS the priority. When present it replaces both sort keys —
-      // providerPriority's CLI bucket-swap and preferFree's free-tier float — because both exist to GUESS
-      // an order the user has now stated outright. Silently re-sorting a chain the user typed is the
-      // failure mode this field exists to end; preferFree in particular would reorder it at exactly the
-      // moment the order matters most (the primary just ran out). Providers not in the chain are appended
-      // after it, still in declaration order — a chain is a preference, not an allowlist, so a key added
-      // later remains a reachable backup without re-editing the chain.
-      // Ids are filtered through PROVIDERS so a stale profile naming a retired provider cannot crash, and
-      // deduped so a hand-edited settings file cannot make one provider eat two attempts.
-      const userOrder = s.providerFallbackOrder.filter(
-        (p, i, a) => p in PROVIDERS && a.indexOf(p) === i
-      ) as ProviderId[]
-      const all = Object.keys(PROVIDERS) as ProviderId[]
-      // Candidate order (no chain) honors the CLI-vs-API priority: when 'cli', CLI-kind providers sort
-      // first so a failover reaches for another local CLI before a metered API. V8's Array.sort is
-      // stable, so equal-rank providers keep their PROVIDERS declaration order; 'api' (default) leaves
-      // the order unchanged. `preferFree` (set when the primary just ran OUT of credit/tokens, gated on
-      // resilience.preferFreeOnExhaustion) adds a secondary key that floats free-tier providers ahead of
-      // paid ones — "prefer a free backup when the paid one is spent" — without touching the normal order.
-      const order = userOrder.length
-        ? [...userOrder, ...all.filter((p) => !userOrder.includes(p))]
-        : all.slice().sort((a, b) => {
-            const cliRank =
-              s.providerPriority === 'cli'
-                ? (PROVIDERS[a].kind === 'cli' ? 0 : 1) - (PROVIDERS[b].kind === 'cli' ? 0 : 1)
-                : 0
-            if (cliRank !== 0) return cliRank
-            if (preferFree) return (PROVIDERS[a].freeTier ? 0 : 1) - (PROVIDERS[b].freeTier ? 0 : 1)
-            return 0
-          })
-      const eligible = (p: ProviderId): boolean => {
-        if (tried.includes(p)) return false
-        // Dust is retrieval only. Never a general-chat failover unless this ask was pinned to Dust.
-        if (isDustChatForbidden(p, req.providerOverride === 'dust')) return false
-        // Métis Local: routingMode-aware primary eligibility (localPrimaryEligibleFor) so Routing mode
-        // → Local can fail over / serve without per-mode useFor toggles. 'api' mode keeps local out of
-        // the healthy mid-walk (fallback/floor still catch last-resort below). Out-of-scope modes
-        // (answer/recap) stay ineligible here — same PLAN.md §4.3 both-gates contract.
-        if (p === 'local') {
-          if (resolveRoutingMode(s) === 'api') return false
-          return localPrimaryEligibleFor(req, s, tier, allowed)
+      let s = getSettings()
+      // Ask caveman register: `/caveman lite|full|ultra…`, "stop caveman", "normal mode".
+      // Persist in the existing settings store, strip the command from the question the model sees.
+      if ((req.mode === 'answer' || req.mode === 'vision') && req.kind !== 'factcheck') {
+        const caveman = applyCaveman(req.prompt, s.askCaveman)
+        if (caveman.changed) s = setSettings({ askCaveman: caveman.next })
+        req.prompt = caveman.visiblePrompt
+        if (caveman.changed && !req.prompt.trim() && !req.image && !req.wantsScreenContext) {
+          win?.webContents.send(IPC.streamDone, { id: req.id })
+          return
         }
-        return (
-          (!allowed || allowed.includes(p)) &&
-          (PROVIDERS[p].kind === 'cli'
-            ? !!s.cliConnected[p]
-            : getApiKey(p).length > 0 || operatorFundedProviders().includes(p)) &&
-          // A provider whose endpoint the USER supplies (Custom, Cloudflare's operator Worker) is only a
-          // candidate once it actually has one. Cloudflare ships a default model, so without this check a
-          // key alone would make it eligible and the walk would hand the request to streamOpenAI with no
-          // baseURL — where the SDK's own default is api.openai.com. Failing the candidate here keeps the
-          // walk moving to a provider that CAN answer instead of burning the attempt on a guard error.
-          ((!getApiKey(p) && operatorFundedProviders().includes(p)) || !requiresUserBaseUrl(p) || !!providerBaseUrl(p, s)) &&
-          (req.mode !== 'vision' || providerVisionOk(p)) &&
-          // CLI providers (e.g. codex-cli) may have no configured model at all — attempt() below
-          // already exempts kind==='cli' from the "no model" ineligibility check (the CLI just uses
-          // its own default), so a failover candidate must be exempted the same way or a fully
-          // default-configured CLI provider can never be selected.
-          (PROVIDERS[p].kind === 'cli' ||
-            !!resolveModelTier(p, s.providerModels, s.providerModelsThinking, tier, s.providerModelsDeep))
+      }
+      // Fresh-question boundary (see the state block above): a plain interactive ask outside a live meeting
+      // starts clean unless the user opted into follow-up memory — and even then the memory expires after
+      // ASK_MEMORY_IDLE_MS of inactivity. Pinned/cascaded requests (agentOverride / providerOverride —
+      // Spotlight Ref, follow-up drafting, recap cascades) and mid-meeting asks keep their deliberate
+      // continuity; recap/suggest/summary modes never carried ad-hoc chat history to begin with.
+      if (
+        (req.mode === 'answer' || req.mode === 'vision') &&
+        !req.agentOverride &&
+        !req.providerOverride &&
+        !listeningActive
+      ) {
+        if (!s.askFollowUpMemory || Date.now() - lastPlainAskAt > ASK_MEMORY_IDLE_MS) {
+          req.history = []
+          resetDustConversation()
+        }
+        lastPlainAskAt = Date.now()
+      }
+      // Local-first redaction (brief section I): strip high-confidence secrets from the captured transcript
+      // before it leaves the device for a cloud model. Only the auto-captured transcript — never the user's
+      // own typed prompt, and never the locally-saved meeting file (which keeps the verbatim original).
+      if (s.redactSensitive && req.transcript) req.transcript = redactSecrets(req.transcript)
+      // screenContext is a MAIN-ONLY field (like brainContext): never trust a value the renderer sent. Clear
+      // it unconditionally after parse, then set it below strictly from main's own on-device screen cache.
+      req.screenContext = undefined
+      // req.redactPrompt is set by callers whose "prompt" is itself transcript-derived rather than user-typed
+      // (e.g. fact-check's transcript-fallback ask, which stuffs the transcript tail into prompt when there's
+      // no typed claim) — redact it the same way so a secret-shaped pattern in that fallback text isn't sent
+      // to the provider. Typed-claim fact-check asks never set this flag, so normal prompts are untouched.
+      if (s.redactSensitive && req.redactPrompt) req.prompt = redactSecrets(req.prompt)
+      // Overlap local sidecar start with the sync brain stamp below — when local will serve (or hedge),
+      // kicking ensure NOW hides cold-load behind Receipt Mode work instead of serializing after it. This
+      // overlap remains optional and defers under import pressure; the later user-requested route is ungated.
+      if (
+        speculativeLocalWorkAllowed() &&
+        localPrewarmEligible(s, getAllowedProviders(), publicSettings().providerReady)
+      ) {
+        void ensureLocalRuntimeStarted(s.localLlm.modelId, req.mode === 'vision', speculativeLocalWorkAllowed).catch(
+          (err) => mainLog.warn('[local] early ensure failed', err instanceof Error ? err.message : String(err))
         )
       }
-      // Budget pre-emption (resilience.budgetPreempt): skip a provider whose live rate-limit headers say it
-      // is about to 429 (usage-headroom.ts). Fail-open — unknown headroom never demotes — and folded into
-      // the `healthy` filter ONLY, so a budget-blocked provider is still reachable as the last resort below.
-      const budgetBlocked = (p: ProviderId): boolean => s.resilience.budgetPreempt && isBudgetExhausted(p)
-      // OPERATOR.md order 2: the other connected CLI is next after last-clicked quota / rate limit.
-      const cliNext = workingCliOrder({
+      // Receipt Mode: ground a typed answer in the user's own past meetings. Match the brain against the
+      // question (which already carries the live transcript tail via the renderer's withContext) and inject
+      // the relevant, meeting-cited slice per-turn. Answer mode only — never the latency-critical spoken
+      // suggest line or the screen-only vision turn. Best-effort: a brain read must never block an answer.
+      // Excludes fact-check (mode:'answer', kind:'factcheck'): personas.ts strips GROUNDING_RAIL for it
+      // (its contract is a VERDICT-only response), so injecting brainContext here would add citable
+      // material with no citation/anti-fabrication guardrail attached — gate identically to the rail.
+      if (req.mode === 'answer' && req.kind !== 'factcheck') {
+        try {
+          const hit = buildBrainContext(s, `${req.prompt}\n${req.transcript ?? ''}`)
+          req.brainContext = hit.block || undefined
+        } catch (err) {
+          console.warn('[brain] context assembly failed', err)
+        }
+      }
+      // Screen fast-path (M13): the renderer asked to answer from the pre-analyzed on-device screen context.
+      // Inject main's OWN cached description (re-validated for freshness/window match), plus a short recent-
+      // conversation tail so the answer fuses what's on screen with what's being said. Best-effort: if the
+      // cache went stale between the renderer's screen:context probe and now, answer from the prompt alone.
+      // Deliberately a SIBLING of the brainContext gate above, not nested in it: the fact-check exclusion is
+      // scoped to brainContext (missing GROUNDING_RAIL), while this block carries its own untrusted-data
+      // guard (llm/shared.ts screenContextBlock). Nested, "fact-check what's on my screen" reached the model
+      // with zero screen data — a verdict about a screen it never saw (MQA-009).
+      if (req.mode === 'answer' && req.wantsScreenContext) {
+        try {
+          const ctx = screenPreprocess.currentFreshContext()
+          if (ctx?.description) {
+            // Same local-first redaction contract as the transcript above (review finding): on macOS the
+            // description can be a VERBATIM OCR extract of the screen — an open password manager or API
+            // key must be stripped before this text reaches a cloud answer provider. The tail is already
+            // redacted (req.transcript was, at parse time).
+            const description = s.redactSensitive ? redactSecrets(ctx.description) : ctx.description
+            const tail = (req.transcript ?? '').slice(-1500).trim()
+            req.screenContext = tail
+              ? `${description}\n\nRecent conversation (most recent speech):\n${tail}`
+              : description
+          }
+        } catch (err) {
+          mainLog.warn(
+            `[screen-preprocess] context injection failed: ${err instanceof Error ? err.message : String(err)}`
+          )
+        }
+      }
+      // MQA-180: the injection above is best-effort, and on a REPLAY it usually finds nothing — Retry / "Go
+      // deeper" re-send the renderer's intent flag verbatim (state.ts lastReqRef) long after the cached
+      // description expired, the user changed windows, or Private View went on. The renderer set its
+      // "Viewed screen" badge from that intent flag alone, so an ask that reached the provider with zero
+      // screen data still rendered as grounded. Main is the only side that knows what actually went out:
+      // report the verdict on stream:meta. `undefined` for every other ask — main has no verdict there and
+      // the renderer keeps what run() set (a vision ask carries its own image).
+      const screenGrounded = req.mode === 'answer' && req.wantsScreenContext ? !!req.screenContext : undefined
+      // M2-0412: the fleet model policy narrows the org allowlist for ask/chat; CLI providers and 'local'
+      // are governed by their own connect/routing toggles and never narrowed.
+      const allowed = narrowAllowedForCapability(s, getAllowedProviders(), 'askChat', [...CLI_PROVIDER_IDS, 'local'])
+
+      // Screen-vision capability. Static per provider, EXCEPT Dust: its ability to read a screenshot depends
+      // on the selected agent's underlying model (it uploads the shot as a content fragment), so consult the
+      // per-agent capability instead of the static flag. Everything else uses PROVIDERS[p].vision.
+      const providerVisionOk = (p: ProviderId): boolean => {
+        if (p === 'dust') return dustSelectedAgentVision(s.providerModels['dust'])
+        if (!getApiKey(p) && operatorFundedProviders().includes(p)) {
+          return !!operatorVisionModel(
+            p,
+            resolveModelTier(
+              p,
+              s.providerModels,
+              s.providerModelsThinking,
+              routeTier(req, s.thinkingMode),
+              s.providerModelsDeep
+            )
+          )
+        }
+        return PROVIDERS[p].vision
+      }
+
+      // MQA-228: the "can't read screenshots" advice must name a provider the user is actually ALLOWED to
+      // switch to. The static "Switch to Claude or GPT" wording sent org-policy users at providers the
+      // allowlist blocks — following the advice dead-ended on the approved-provider-list error. Prefer a
+      // target that is already keyed/CLI-connected (immediately actionable), else any allowed vision-capable
+      // provider; when the policy leaves none at all, say THAT instead of advising an impossible switch.
+      // 'local' is excluded as a switch target: when it was eligible, the fallback path already answered
+      // before this message could surface, so naming it here would always be advice that just failed.
+      const visionSwitchAdvice = (blocked: ProviderId): string => {
+        const candidates = (Object.keys(PROVIDERS) as ProviderId[]).filter(
+          (p) => p !== blocked && p !== 'local' && providerVisionOk(p) && (!allowed || allowed.includes(p))
+        )
+        const ready = candidates.find((p) =>
+          PROVIDERS[p].kind === 'cli'
+            ? !!s.cliConnected[p]
+            : getApiKey(p).length > 0 || operatorFundedProviders().includes(p)
+        )
+        const target = ready ?? candidates[0]
+        if (target) return `Switch to ${PROVIDERS[target].label} in Settings, or ask without a screen capture.`
+        return allowed
+          ? "Your organization's approved providers can't read screenshots — ask without a screen capture."
+          : 'Ask without a screen capture.'
+      }
+
+      // Pick the next eligible keyed provider not yet tried — the waterfall target when the primary (e.g.
+      // Dust) can't answer. Pure (no side effect) so the retry gate can cheaply ask "is there anywhere to
+      // fall over to?" before deciding how long to keep retrying a dead primary.
+      const pickFailover = (tried: ProviderId[], preferFree = false): ProviderId | null => {
+        // A request pinned to a specific Dust agent (Spotlight Ref) has NO valid failover target — no other
+        // provider hosts that managed agent, so falling over would silently answer from the active generic
+        // provider (e.g. Kimi) with a reply that never touched the agent. Returning null here suppresses
+        // failover at BOTH seams that consult pickFailover (the retry-budget sizing and the pre-token
+        // failover line), letting the flow fall through to the reconnect-Dust message instead.
+        if (!allowCrossProviderFailover(req)) return null
+        const tier = routeTier(req, s.thinkingMode)
+        // MQA-269: a user-authored chain IS the priority. When present it replaces both sort keys —
+        // providerPriority's CLI bucket-swap and preferFree's free-tier float — because both exist to GUESS
+        // an order the user has now stated outright. Silently re-sorting a chain the user typed is the
+        // failure mode this field exists to end; preferFree in particular would reorder it at exactly the
+        // moment the order matters most (the primary just ran out). Providers not in the chain are appended
+        // after it, still in declaration order — a chain is a preference, not an allowlist, so a key added
+        // later remains a reachable backup without re-editing the chain.
+        // Ids are filtered through PROVIDERS so a stale profile naming a retired provider cannot crash, and
+        // deduped so a hand-edited settings file cannot make one provider eat two attempts.
+        const userOrder = s.providerFallbackOrder.filter(
+          (p, i, a) => p in PROVIDERS && a.indexOf(p) === i
+        ) as ProviderId[]
+        const all = Object.keys(PROVIDERS) as ProviderId[]
+        // Candidate order (no chain) honors the CLI-vs-API priority: when 'cli', CLI-kind providers sort
+        // first so a failover reaches for another local CLI before a metered API. V8's Array.sort is
+        // stable, so equal-rank providers keep their PROVIDERS declaration order; 'api' (default) leaves
+        // the order unchanged. `preferFree` (set when the primary just ran OUT of credit/tokens, gated on
+        // resilience.preferFreeOnExhaustion) adds a secondary key that floats free-tier providers ahead of
+        // paid ones — "prefer a free backup when the paid one is spent" — without touching the normal order.
+        const order = userOrder.length
+          ? [...userOrder, ...all.filter((p) => !userOrder.includes(p))]
+          : all.slice().sort((a, b) => {
+              const cliRank =
+                s.providerPriority === 'cli'
+                  ? (PROVIDERS[a].kind === 'cli' ? 0 : 1) - (PROVIDERS[b].kind === 'cli' ? 0 : 1)
+                  : 0
+              if (cliRank !== 0) return cliRank
+              if (preferFree) return (PROVIDERS[a].freeTier ? 0 : 1) - (PROVIDERS[b].freeTier ? 0 : 1)
+              return 0
+            })
+        const eligible = (p: ProviderId): boolean => {
+          if (tried.includes(p)) return false
+          // Dust is retrieval only. Never a general-chat failover unless this ask was pinned to Dust.
+          if (isDustChatForbidden(p, req.providerOverride === 'dust')) return false
+          // Métis Local: routingMode-aware primary eligibility (localPrimaryEligibleFor) so Routing mode
+          // → Local can fail over / serve without per-mode useFor toggles. 'api' mode keeps local out of
+          // the healthy mid-walk (fallback/floor still catch last-resort below). Out-of-scope modes
+          // (answer/recap) stay ineligible here — same PLAN.md §4.3 both-gates contract.
+          if (p === 'local') {
+            if (resolveRoutingMode(s) === 'api') return false
+            return localPrimaryEligibleFor(req, s, tier, allowed)
+          }
+          return (
+            (!allowed || allowed.includes(p)) &&
+            (PROVIDERS[p].kind === 'cli'
+              ? !!s.cliConnected[p]
+              : getApiKey(p).length > 0 || operatorFundedProviders().includes(p)) &&
+            // A provider whose endpoint the USER supplies (Custom, Cloudflare's operator Worker) is only a
+            // candidate once it actually has one. Cloudflare ships a default model, so without this check a
+            // key alone would make it eligible and the walk would hand the request to streamOpenAI with no
+            // baseURL — where the SDK's own default is api.openai.com. Failing the candidate here keeps the
+            // walk moving to a provider that CAN answer instead of burning the attempt on a guard error.
+            ((!getApiKey(p) && operatorFundedProviders().includes(p)) ||
+              !requiresUserBaseUrl(p) ||
+              !!providerBaseUrl(p, s)) &&
+            (req.mode !== 'vision' || providerVisionOk(p)) &&
+            // CLI providers (e.g. codex-cli) may have no configured model at all — attempt() below
+            // already exempts kind==='cli' from the "no model" ineligibility check (the CLI just uses
+            // its own default), so a failover candidate must be exempted the same way or a fully
+            // default-configured CLI provider can never be selected.
+            (PROVIDERS[p].kind === 'cli' ||
+              !!resolveModelTier(p, s.providerModels, s.providerModelsThinking, tier, s.providerModelsDeep))
+          )
+        }
+        // Budget pre-emption (resilience.budgetPreempt): skip a provider whose live rate-limit headers say it
+        // is about to 429 (usage-headroom.ts). Fail-open — unknown headroom never demotes — and folded into
+        // the `healthy` filter ONLY, so a budget-blocked provider is still reachable as the last resort below.
+        const budgetBlocked = (p: ProviderId): boolean => s.resilience.budgetPreempt && isBudgetExhausted(p)
+        // OPERATOR.md order 2: the other connected CLI is next after last-clicked quota / rate limit.
+        const cliNext = workingCliOrder({
+          cliConnected: s.cliConnected,
+          lastClickedCli: s.lastClickedCli,
+          allowed
+        }).find((p) => eligible(p) && !isCoolingDown(p) && !budgetBlocked(p))
+        if (cliNext) return cliNext
+        const fundedNext = operatorFundedProviders().find(
+          (p) =>
+            p in PROVIDERS &&
+            eligible(p as ProviderId) &&
+            !isCoolingDown(p as ProviderId) &&
+            !budgetBlocked(p as ProviderId)
+        )
+        if (fundedNext) return fundedNext as ProviderId
+        // MQA-003: prefer a provider whose credentials have NOT just been rejected and that has budget left.
+        const healthy = order.find((p) => eligible(p) && !isCoolingDown(p) && !budgetBlocked(p))
+        if (healthy) return healthy
+        // MQA-113: the on-device fallback is preferred over a provider that is currently cooling down. The
+        // first unhealthy provider is skipped above, but a SECOND (or Nth) simultaneously-cooling cloud
+        // provider used to be returned by the old "?? order.find(eligible)" last resort — so every ask
+        // re-walked a known-dead provider (deepseek down AND nvidia down → nvidia retried forever) instead
+        // of going straight to local. Local is the honest next hop when all cloud is cooling.
+        if (!tried.includes('local') && localFallbackEligibleFor(req, s, tier, allowed)) return 'local'
+        // Near-last resort: a cooling cloud/CLI provider is still better than dead-ending with an error when
+        // local cannot serve this request in-scope. A cooling provider is demoted, never removed — one
+        // revoked key must not lock a user out of their only provider, and a rate-limit may recover mid-walk.
+        const coolingResort = order.find(eligible)
+        if (coolingResort) return coolingResort
+        // The ABSOLUTE floor (the "worst case, no API needed" guarantee): on-device answers even an
+        // out-of-scope mode (answer/recap) when literally nothing else can — every cloud/CLI route exhausted
+        // or unconfigured, and the request is outside local's normal suggest/summary/vision scope. Dead last,
+        // AFTER even a cooling cloud provider that might recover, so it never preempts a real answer.
+        if (!tried.includes('local') && localAnswerFloorEligibleFor(req, s, allowed)) return 'local'
+        return null
+      }
+      // F3 hedge: which race (if any) this call is part of, and which of the two legs it is. See hedge.ts's
+      // HedgeRace doc comment for the full contract.
+      type AttemptRace = { gate: HedgeRace; leg: HedgeLeg }
+      // MQA-161: every provider the PRIMARY leg has actually reached, in order. A leg that fails over keeps
+      // its leg identity, so picking the backup against the id the primary STARTED on would let the hedge
+      // race the provider the primary just moved to — pickFailover is pure, so with identical inputs it
+      // returns exactly that provider: one ask, two byte-identical billed requests (prompt, transcript and,
+      // on a vision ask, the whole screenshot), both sharing a single failure mode. The hedge exists to buy
+      // provider diversity, so it must exclude the whole chain, not one id.
+      const primaryChain: ProviderId[] = []
+
+      // Find the next eligible keyed provider not yet tried and start it — for failover when the primary
+      // can't answer (Dust down → your configured Claude/GPT key takes over). `preferFree` floats free-tier
+      // backups ahead when the just-failed provider ran out of credit/tokens (resilience.preferFreeOnExhaustion).
+      // `race`, when present, is forwarded unchanged — a hedged leg's own failover cascade stays part of the
+      // SAME leg (see AttemptRace's doc comment on attempt() below).
+      const failover = (tried: ProviderId[], preferFree = false, race?: AttemptRace): boolean => {
+        const next = pickFailover(tried, preferFree)
+        if (!next) return false
+        // Wave 2 — record the hop for the one-shot UI chip (docs/PROVIDER-ROUTING-POLICY.md). Only fire
+        // when we actually start a different provider; a no-op return above leaves the notice untouched.
+        const from = tried.length ? tried[tried.length - 1]! : 'unknown'
+        if (from !== next) {
+          lastFailoverNotice = {
+            from,
+            to: next,
+            at: Date.now(),
+            reason: preferFree ? 'exhausted' : 'failover'
+          }
+          auditLog('provider.failover', { from, to: next, reason: lastFailoverNotice.reason })
+        }
+        attempt(next, tried, 0, race)
+        return true
+      }
+
+      // Validate a provider, start the stream, and on a PRE-token (TTFT) failure retry the same provider
+      // (transient errors) then fall over to the next one. `retryCount` tracks same-provider transient
+      // retries; failover resets it (each provider gets its own retry budget).
+      const MAX_TRANSIENT_RETRIES = 3
+      // The longest a rate-limit Retry-After we will WAIT OUT in place during a live ask. Beyond this we fail
+      // straight over to the backup rather than freezing the answer — the whole point of "always a backup".
+      const MAX_ASK_RETRY_WAIT_MS = 12_000
+      // F3 hedge (main/llm/hedge.ts): `race` is set ONLY when this whole request is being hedge-raced (see
+      // the primary dispatch at the bottom of this handler). It rides through every recursive attempt() call
+      // this closure makes — the same-provider retry timer AND every failover() call — so a hedged leg's
+      // entire retry/failover cascade stays gated behind the SAME race the whole way down: once the other
+      // leg wins, every handler below (onDelta/onDone/onError) checks race.gate.isLoser(race.leg) first and
+      // silently returns, so a losing leg's own cascading retries can never reach the renderer.
+      const attempt = (provider: ProviderId, attempted: ProviderId[], retryCount = 0, race?: AttemptRace): void => {
+        // Recorded on ENTRY, before any eligibility work: a provider the primary merely bounced off is still
+        // one the hedge must not duplicate.
+        if (race?.leg === 'primary' && !primaryChain.includes(provider)) primaryChain.push(provider)
+        const def = PROVIDERS[provider]
+        if (allowed && !allowed.includes(provider)) {
+          auditLog('provider.blocked', { provider })
+          if (attempted.length === 0) {
+            // Name an actual next step, not just what's wrong: prefer an approved provider that's already
+            // keyed/CLI-connected (so "switch to X" is immediately actionable), falling back to just naming
+            // the first approved provider when none of them are configured yet.
+            const approvedCandidates = allowed
+              .filter((p) => p !== provider)
+              .map((p) => ({ id: p as ProviderId, def: PROVIDERS[p as ProviderId] as ProviderDef | undefined }))
+              .filter((c): c is { id: ProviderId; def: ProviderDef } => !!c.def)
+            const readyApproved = approvedCandidates.find((c) =>
+              c.def.kind === 'cli' ? !!s.cliConnected[c.id] : getApiKey(c.id).length > 0
+            )
+            const approvedLabel = (readyApproved ?? approvedCandidates[0])?.def.label
+            // F3 hedge: this leg is out — only actually surface an error once EVERY leg of the race
+            // (including a backup that hasn't started yet) is confirmed dead. See HedgeRace.markDead.
+            if (!race || race.gate.markDead(race.leg) === 'surface') {
+              win?.webContents.send(IPC.streamError, {
+                id: req.id,
+                message: approvedLabel
+                  ? `${def.label} is not on your organization's approved provider list. Switch to ${approvedLabel} in Settings.`
+                  : `${def.label} is not on your organization's approved provider list.`
+              })
+            }
+          } else if (!failover(attempted.concat(provider), undefined, race)) {
+            if (!race || race.gate.markDead(race.leg) === 'surface') {
+              win?.webContents.send(IPC.streamError, { id: req.id, message: 'No approved provider could answer.' })
+            }
+          }
+          return
+        }
+        // Métis Local is keyless: its per-session sidecar key lives only in local-runtime.ts memory, never
+        // on disk (getApiKey('local') always resolves empty, by design — see store.ts's ENV_VAR entry).
+        // Operator-funded providers are also keyless on the seat — the Worker holds the raw LLM key.
+        const key = provider === 'local' ? localRuntime.sessionKey() : getApiKey(provider)
+        const viaOperator =
+          provider !== 'local' && def.kind !== 'cli' && !key && operatorFundedProviders().includes(provider)
+        const operatorTransport = viaOperator ? operatorAskTransport(s) : null
+        const tier = routeTier(req, s.thinkingMode)
+        // Métis Local's "model" is the local-models.ts manifest id the sidecar loads — settings.localLlm.
+        // modelId, NOT the generic per-provider tier resolution (which would otherwise fall back to
+        // PROVIDERS.local.fastModel regardless of the installer-owned model selected in settings).
+        let model =
+          provider === 'local'
+            ? s.localLlm.modelId
+            : req.agentOverride && provider === 'dust'
+              ? req.agentOverride
+              : resolveModelTier(provider, s.providerModels, s.providerModelsThinking, tier, s.providerModelsDeep)
+        if (viaOperator && provider === 'cloudflare') {
+          model = portalFundedCloudflareModel(tier)
+        }
+        if (viaOperator && req.image) model = operatorVisionModel(provider, model) ?? model
+        // Guardrail (per Tony): CLI is Sonnet-only, Anthropic base/think are pinned to Haiku/Sonnet — both
+        // regardless of what routeTier or a user's providerModels override picked. Opus stays reachable only
+        // through the Graph pipeline (brain/ingest.ts, graphify.ts), which never calls this function.
+        model = applyInteractiveGuardrail(provider, tier, model)
+        // M2-0412: once the guardrail's own hard pins are applied, let the fleet policy pin the final
+        // model for a provider it governs (cloud API providers only — CLI kind and 'local' pass through
+        // unchanged, see narrowAllowedForCapability above for why).
+        if (def.kind !== 'cli' && provider !== 'local') {
+          model = resolveManagedModel(s, 'askChat', provider, model)
+        }
+        // Dust interactive speed pin: think/deep Dust AGENTS run server-side orchestration before their
+        // first token (measured 6.6-28.3s TTFT vs ~2.6s for the base agent) — unusable mid-conversation.
+        // Interactive asks (chat/vision/suggest) always use the base agent; recaps, summaries, background
+        // jobs, and explicit agentOverride (Spotlight Ref) keep the think/deep agents where depth > speed.
+        if (
+          provider === 'dust' &&
+          !req.agentOverride &&
+          (req.mode === 'answer' || req.mode === 'vision' || req.mode === 'suggest')
+        ) {
+          model = (s.providerModels['dust'] || '').trim() || model
+        }
+        // Where this attempt will actually send the request: the user's endpoint for the providers that
+        // require one (Custom, Cloudflare's operator Worker), the user's Dust region, else the registry's
+        // built-in. Resolved BEFORE the eligibility chain because a missing user endpoint is an eligibility
+        // failure, not a stream failure.
+        const baseURL = providerBaseUrl(provider, s)
+        // Métis Local: accept localPrimaryEligibleFor (routingMode-aware) plus the unchanged fallback/floor
+        // nets. Opted-in vision stays local at every tier so prompt complexity cannot silently turn a
+        // screenshot into a cloud upload.
+        const ineligible =
+          provider === 'local'
+            ? localPrimaryEligibleFor(req, s, tier, allowed) ||
+              localFallbackEligibleFor(req, s, tier, allowed) ||
+              // The answer-mode floor: pickFailover routes here when every cloud/CLI route is exhausted for an
+              // out-of-scope mode (answer/recap). attempt() must accept it too, or the floor pickFailover
+              // offered would be bounced right back with the "uses your cloud provider" message.
+              localAnswerFloorEligibleFor(req, s, allowed)
+              ? ''
+              : localVisionRequired
+                ? 'Métis Local could not process this screenshot on this device. Nothing was sent to a cloud provider. Open Settings → AI → Local AI to see whether the on-device model is ready.'
+                : 'Métis Local handles live suggestions, summaries and screenshots — this request type uses your cloud provider.'
+            : def.kind === 'cli' && !s.cliConnected[provider]
+              ? `${def.label} is not connected. Open Settings → CLI Integration to set it up.`
+              : viaOperator && !operatorTransport
+                ? 'Operator is not reachable. Check Operator URL in Settings.'
+                : def.kind !== 'cli' && !key && !viaOperator
+                  ? `No API key for ${def.label}. Open Settings (gear) and add it.`
+                  : def.kind !== 'cli' && !model
+                    ? provider === 'dust'
+                      ? `No ${tier === 'think' ? 'thinking' : 'base'} Dust agent set. Open Settings → Connect Dust and pick your agents.`
+                      : `No model set for ${def.label}. Pick a model in Settings.`
+                    : // Endpoint-is-yours providers (Custom, Cloudflare's operator-deployed Worker) cannot be
+                      // reached without a URL. Say so HERE, where the message is actionable and the flow can
+                      // still fail over, rather than letting streamOpenAI's own guard surface it mid-stream.
+                      !viaOperator && def.kind !== 'cli' && requiresUserBaseUrl(provider) && !baseURL
+                      ? `No endpoint URL set for ${def.label}. Open Settings → Advanced and add it.`
+                      : req.mode === 'vision' && !providerVisionOk(provider)
+                        ? `${def.label} can't read screenshots. ${visionSwitchAdvice(provider)}`
+                        : provider === 'dust' && !s.dustWorkspaceId
+                          ? 'Add your Dust workspace ID in Settings → AI → Dust setup.'
+                          : ''
+        if (ineligible) {
+          // Vision turn, but the active provider can't read images (e.g. Dust agents). Transparently fail
+          // over to a configured vision-capable provider (Claude/GPT) so a user who captured their screen
+          // still gets an answer — `failover` only picks a provider that has both a key and a model. Surface
+          // the error only when NO vision-capable provider is set up.
+          const visionGap = req.mode === 'vision' && !providerVisionOk(provider)
+          if (visionGap && failover(attempted.concat(provider), undefined, race)) return
+          if (attempted.length === 0) {
+            // Zero-config safety net (localLlm.fallback): the very FIRST provider can't even start — no
+            // key, CLI not connected, Dust half-configured. Historically this surfaced the setup error
+            // immediately (no failover on a first-attempt ineligibility, unlike runtime failures). With a
+            // provisioned on-device model and fallback on, answer the in-scope ask locally instead: a
+            // fresh zero-API-key install gets a working assistant, and Settings still shows the real
+            // setup state. Out-of-scope modes (answer/recap) fail exactly as before —
+            // localFallbackEligibleFor enforces the same v1 mode scope as every other local gate.
+            // allowCrossProviderFailover: a request pinned to one managed Dust agent (agentOverride) has
+            // no honest substitute — same suppression pickFailover applies at the other two seams. Today's
+            // sole agentOverride caller uses mode:'answer' (out of local scope anyway), but the pinned
+            // contract must hold at THIS seam by construction, not by coincidence of that caller's mode.
+            if (
+              provider !== 'local' &&
+              allowCrossProviderFailover(req) &&
+              localFallbackEligibleFor(req, s, tier, allowed)
+            ) {
+              attempt('local', attempted.concat(provider), 0, race)
+              return
+            }
+            // Out-of-scope modes (answer, recap) used to stop right here and surface "No API key for X.
+            // Open Settings (gear) and add it." — even with a provisioned on-device model and the safety
+            // net on. That is the single most common thing anyone asks Métis (type a question), so a user
+            // who had deliberately turned the local model ON and added no key was told the app could not
+            // answer, while the model that could sat idle on their disk. The absolute floor
+            // (localAnswerFloorEligibleFor) exists precisely for this case and attempt()'s own eligibility
+            // chain above already accepts it — only this seam never offered it.
+            //
+            // Routed through failover() rather than jumping straight to 'local' so the floor keeps its
+            // rank: pickFailover places it DEAD LAST, after every keyed provider and even a cooling one,
+            // so a user whose ACTIVE provider is merely misconfigured still gets their other key (or the
+            // actionable setup error), not a silently weaker on-device answer. Gated on the floor being
+            // genuinely available so an install without local behaves exactly as it did before.
+            if (
+              provider !== 'local' &&
+              allowCrossProviderFailover(req) &&
+              localAnswerFloorEligibleFor(req, s, allowed) &&
+              failover(attempted.concat(provider), undefined, race)
+            ) {
+              return
+            }
+            if (!race || race.gate.markDead(race.leg) === 'surface') {
+              win?.webContents.send(IPC.streamError, { id: req.id, message: ineligible })
+            }
+          } else if (!failover(attempted.concat(provider), undefined, race)) {
+            if (!race || race.gate.markDead(race.leg) === 'surface') {
+              win?.webContents.send(IPC.streamError, { id: req.id, message: ineligible })
+            }
+          }
+          return
+        }
+        auditLog('provider.request', { provider, model, mode: req.mode, tier, retry: attempted.length > 0 })
+        // Tell the waiting UI WHO is answering ("Asking your Dust agent…") — re-sent on retry/failover so
+        // the display follows the live attempt. Metadata only (provider id + tier), never the model/agent id.
+        // A leg that has already lost the race says nothing: its announcement would overwrite the winner's.
+        if (!race || !race.gate.isLoser(race.leg)) {
+          win?.webContents.send(IPC.streamMeta, { id: req.id, provider, tier, usedScreen: screenGrounded })
+        }
+        // Per-tier idle budget: a live suggest gives up fast to stay real-time; recaps + deep answers get the
+        // full headroom. Bounds time-to-first-token and triggers failover when a provider stalls before a token.
+        const baseIdleMs =
+          req.mode === 'suggest'
+            ? 15_000
+            : req.mode === 'recap' || req.mode === 'summary'
+              ? 120_000
+              : tier === 'deep'
+                ? 120_000
+                : tier === 'think'
+                  ? 90_000
+                  : req.mode === 'vision'
+                    ? 60_000
+                    : 45_000
+        // Each failover attempt re-derives a fresh, full idle budget with no shared cross-provider deadline —
+        // on a silent-drop offline network (captive portal / dead-gateway WiFi that accepts the connection
+        // then black-holes packets) that compounds into N x the base budget of blank spinner before the user
+        // sees any error. Retries (attempted.length > 0) get a much shorter cap: a healthy provider still
+        // answers well inside it, while a silent-drop network surfaces the "Connection error." in seconds.
+        // MQA-037: the cap is a NETWORK diagnostic, so it must never apply to Métis Local — a 127.0.0.1
+        // sidecar cannot be a silent-drop victim, and the zero-config safety net always reaches it with
+        // attempted.length >= 1 (the preceding step was an in-memory config check that never opened a
+        // socket). Without this exemption a warm-sidecar summary/vision fallback got 20s of prefill budget
+        // for the same work the identical useFor-driven request gets 120s/60s for, and local has no
+        // failover to rescue it.
+        const RETRY_IDLE_CAP_MS = 20_000
+        // MQA-006: a COLD Métis Local request must first load ~730 MB of GGUF weights off disk before it can
+        // emit a token — routinely longer than the 15s suggest budget and longer than the retry cap, so the
+        // first on-device answer after launch (exactly what a zero-API-key install gets) died with "Stream
+        // timed out" while the model was still loading correctly. The floor applies only while the sidecar
+        // is not yet running: once warm, local is fast and keeps the normal, tighter budgets. This is a
+        // load allowance, not a licence to hang — a genuinely stuck sidecar still aborts, just later.
+        const LOCAL_COLD_START_IDLE_MS = 90_000
+        const localColdStart = provider === 'local' && !localRuntime.isRunning()
+        const idleMs = localColdStart
+          ? Math.max(baseIdleMs, LOCAL_COLD_START_IDLE_MS)
+          : attempted.length > 0 && provider !== 'local'
+            ? Math.min(baseIdleMs, RETRY_IDLE_CAP_MS)
+            : baseIdleMs
+        const startedAt = Date.now()
+        let gotToken = false
+        let ttftMs: number | undefined
+        // Strips a reasoning model's inline <think>…</think> out of the answer stream (llm/think-strip.ts).
+        // One per attempt: each leg/retry is its own stream, and the stripper carries position state.
+        // Sitting here rather than in a provider strategy is the point — every provider funnels through
+        // this one onDelta, so the guarantee holds for cloud, CLI, Dust, a custom endpoint and on-device
+        // alike, instead of being re-implemented per strategy and drifting.
+        const think = new ThinkStripper()
+        // Every visible token goes through here. `gotToken` deliberately tracks VISIBLE output, not raw
+        // deltas: a model part-way through a think block has not answered yet, so it must not win the
+        // hedge race, stop the MQA-020 empty-answer failover, or report a TTFT it hasn't earned. The
+        // provider's own stall watchdog still sees the raw deltas, so a long think can't trip a timeout.
+        const paint = (text: string): void => {
+          if (!text) return
+          if (!gotToken) {
+            ttftMs = Date.now() - startedAt
+            // Tokens are flowing, so these credentials demonstrably work — clear any prior auth
+            // verdict (MQA-003/MQA-004) rather than leaving a stale "broken" mark on a live provider.
+            recordSuccess(provider)
+            // F3 hedge: this leg's first token is its bid to win — aborts whatever the other leg is doing.
+            if (race) {
+              race.gate.declareWinner(race.leg)
+              // Re-assert WHO actually answered. Both legs announce themselves when they start, so if
+              // the backup started second and the primary then won, the UI's last streamMeta named the
+              // loser — the answer would be attributed to a provider that produced none of it.
+              win?.webContents.send(IPC.streamMeta, { id: req.id, provider, tier, usedScreen: screenGrounded })
+            }
+          }
+          gotToken = true
+          win?.webContents.send(IPC.streamDelta, { id: req.id, text })
+        }
+        // Both transport errors and explicit incomplete terminals share the same retry/hedge policy.
+        const failAttempt = (message: string): void => {
+          if (race && race.gate.isLoser(race.leg)) return
+          if (!race) streams.delete(req.id)
+          auditLog('provider.failed', { provider, gotToken, retry: retryCount })
+          // "You ran out" — a rate limit (429), spent credit, or a Claude Pro / Codex subscription
+          // usage-cap — is NOT a dead key, and each needs its own cooldown + message. Classify it FIRST
+          // (exhaustion.ts), so a rate-limited Claude backs off for its Retry-After window, an out-of-
+          // credit key demotes for ~1h instead of being re-tried as primary every ask, and a spent
+          // subscription window demotes until its reset. This is the OmniRoute integration: the circuit
+          // breaker now remembers token/credit exhaustion, not only credential rejections.
+          const exhaustion: ExhaustionSignal | null =
+            !gotToken && provider !== 'local' ? classifyExhaustion(message) : null
+          if (exhaustion) {
+            if (exhaustion.kind === 'rate-limit') recordRateLimited(provider, exhaustion.retryAfterMs)
+            else
+              recordExhausted(provider, exhaustion.kind, {
+                retryAfterMs: exhaustion.retryAfterMs,
+                resetAt: exhaustion.resetAt,
+                message: String(message)
+              })
+          }
+          // MQA-003/MQA-004: remember a CREDENTIAL rejection (not a transport blip) so routing can stop
+          // re-paying this provider's round trip on every subsequent ask, and so Settings can finally
+          // tell the user their key stopped working instead of reporting it ready forever.
+          // MQA-101: Dust's own auth-rejection wording drifts across API versions and the current
+          // "does not have a valid authenticated credential" phrasing carries no 401 digits, so the
+          // generic isAuthFailure misses it — the circuit breaker never trips for a genuinely dead Dust
+          // session. dust.ts already maintains the broadened matcher for exactly this; use it for Dust.
+          // Gated on !exhaustion so a "403 insufficient_quota" is not double-counted as a dead key, AND on
+          // provider !== 'local' — the on-device model has no credentials to reject, and a local runtime
+          // error whose text happens to match isAuthFailure (e.g. an EACCES "permission denied" from a
+          // file lock re-hashing the model) must NOT cool 'local' down. If it did, the skip-cooling-primary
+          // fast path would swap a privacy-pinned local vision request onto a cloud provider — uploading a
+          // screenshot the user pinned to on-device-only. Local failures are handled by local-runtime.ts's
+          // own restart budget, never by this credential breaker.
+          const isCredentialRejection =
+            !exhaustion &&
+            provider !== 'local' &&
+            (provider === 'dust' ? isDustAuthError({ message }) : isAuthFailure(message))
+          if (!gotToken && isCredentialRejection) recordAuthFailure(provider, String(message))
+          // Do NOT retire a CLI for a usage-cap: a spent Claude Pro / Codex window is a TEMPORARY lockout
+          // that refills at a known time, not a dead login — retiring it would force a needless re-login.
+          // Only a genuine auth failure retires the CLI.
+          if (!gotToken && !exhaustion) retireCli(provider, message)
+          // Pre-token transient failure (dropped socket, 5xx, 429, DNS blip): retry the SAME provider
+          // with bounded backoff before switching. `gotToken` guards it — once tokens are on the wire
+          // we never re-run. A cancel handle keeps an abort during the backoff wait from firing the retry.
+          // Waterfall: when another configured provider can take over (e.g. Dust down but a Claude/GPT key
+          // is set), cap same-provider retries at ONE so the API answers in seconds instead of after the
+          // full ~30s of retrying a dead primary. With nowhere to fall over to, keep the full retry budget.
+          // A request routed to Métis Local stays on-device. Cloud providers may waterfall into another
+          // configured provider, but a local failure must be surfaced to the user instead of silently
+          // uploading the transcript/screenshot they explicitly chose to process locally.
+          // (pickFailover may also name 'local' here — a sole cloud provider that transport-fails now
+          // retries once and then answers on-device instead of burning the full ~30s retry budget.)
+          const hasFailoverTarget = provider !== 'local' && !!pickFailover(attempted.concat(provider))
+          const retryBudget = hasFailoverTarget ? 1 : MAX_TRANSIENT_RETRIES
+          // A rate-limit is retryable IN PLACE only if the server's window is short enough to wait inside
+          // a live ask — a 5-minute Retry-After means "go to the backup now", not "freeze the UI". A hard
+          // exhaustion (credit/usage-cap) is NEVER retried in place: money and subscription windows do not
+          // return on a sub-second backoff, so we fail straight over.
+          const rateLimitWaitMs =
+            exhaustion?.kind === 'rate-limit' && exhaustion.retryAfterMs != null ? exhaustion.retryAfterMs : null
+          const rateLimitTooLongToWait = rateLimitWaitMs != null && rateLimitWaitMs > MAX_ASK_RETRY_WAIT_MS
+          const hardExhaustion = exhaustion != null && exhaustion.kind !== 'rate-limit'
+          if (
+            !gotToken &&
+            retryCount < retryBudget &&
+            isTransient(message) &&
+            !hardExhaustion &&
+            !rateLimitTooLongToWait
+          ) {
+            const delayMs = nextBackoff(retryCount, { retryAfterMs: rateLimitWaitMs ?? undefined })
+            auditLog('provider.retry', { provider, attempt: retryCount + 1, delayMs })
+            const timer = setTimeout(() => attempt(provider, attempted, retryCount + 1, race), delayMs)
+            // Under a race the combined abort registration set up before either leg started already
+            // covers cancellation (see the hedge dispatch below) — track this timer there instead of
+            // overwriting it, so cancelling mid-backoff still clears the pending retry.
+            if (race) race.gate.addCleanup(() => clearTimeout(timer))
+            else streams.set(req.id, { abort: () => clearTimeout(timer) })
+            return
+          }
+          // Retries exhausted or non-transient: fall over to another provider (pre-token only). When the
+          // just-failed provider ran OUT (credit/tokens/usage-cap), prefer a free-tier backup or local.
+          const preferFree = exhaustion != null && s.resilience.preferFreeOnExhaustion
+          if (!gotToken && provider !== 'local' && failover(attempted.concat(provider), preferFree, race)) return
+          // Replace raw client transport strings ("Unexpected network error from DustAPI: fetch failed")
+          // with a clean message; keep the Dust-auth one-click reconnect path; else pass the message.
+          // Reaching here means failover found NO backup — so an exhaustion message names the limit and
+          // the fix (add a provider / add credit / wait for the reset) instead of a misleading
+          // "Connection issue" (the old bug: a 429 was reported as a network fault) or a raw provider
+          // string like "Claude AI usage limit reached|1754160000".
+          const friendly = exhaustion
+            ? exhaustion.kind === 'rate-limit'
+              ? `${def.label} is rate-limited right now and no backup is configured. Add another provider in Settings → AI, or wait a moment and try again.`
+              : exhaustion.kind === 'usage-cap'
+                ? `${def.label} hit its usage limit${
+                    exhaustion.resetAt ? ` (${formatResetPhrase(exhaustion.resetAt)})` : ''
+                  }. Add another provider in Settings → AI to keep going.`
+                : `${def.label} is out of credit. Add credit or switch providers in Settings → AI.`
+            : // A gateway between Métis and the model can fail for a reason only its OPERATOR can
+              // clear — a dead account token, a half-deployed Worker. Those arrive as a 502/503, which
+              // matches isTransient below, so without this branch the user is told to check their
+              // network while the real cause is a secret on the proxy. The proxy marks exactly those
+              // (and deliberately NOT its transient upstream blips, which SHOULD retry), so the marker
+              // is the signal that this sentence is already the actionable one — pass it through
+              // rather than replacing it. Ahead of isTransient because 502 matches both.
+              isProxyOperatorFault(message)
+              ? stripProxyFaultMarker(message)
+              : isTransient(message)
+                ? "Connection issue — couldn't reach the provider after retrying. Check your network and try again."
+                : // MQA-101: use dust.ts's maintained matcher, not a second copy of the phrasing regex —
+                  // the inline copy missed the current "authenticated credential" wording, so a dead Dust
+                  // session surfaced its raw 401 instead of this reconnect prompt.
+                  provider === 'dust' && isDustAuthError({ message })
+                  ? 'Your Dust session expired and could not refresh automatically. Open Settings and reconnect Dust once.'
+                  : // MQA-062: a CLI provider has no API key to "re-enter" — sending the user to Settings →
+                    // AI for a key that does not exist is an actively wrong remedy. Name the real fix: sign
+                    // the CLI back in and reconnect it (retireCli has already retired the stale flag).
+                    def.kind === 'cli' && isAuthFailure(message)
+                    ? `${def.label} is no longer signed in. Sign in to the CLI again, then reconnect it in Settings → CLI Integration.`
+                    : // MQA-005: a credential rejection used to fall through as the provider's raw string —
+                      // users saw literally "403 status code (no body)", which names neither the problem nor
+                      // the fix. Say which provider failed and where to go, matching the no-key path's copy.
+                      isAuthFailure(message)
+                      ? `${def.label} rejected your API key (it may have been revoked, expired, or disabled). Open Settings → AI to re-enter it.`
+                      : message
+          if (!race || race.gate.markDead(race.leg) === 'surface') {
+            // Terminal for the whole race, so release the COMBINED abort registration too. The non-race
+            // path already deleted its entry at the top of onError; without this the map kept the
+            // HedgeRace and both handles alive for every hedged ask that ended in an error.
+            if (race) streams.delete(req.id)
+            // The renderer retains partial deltas on error. Visible length is not proof of
+            // completion: never turn a truncated/error response into a successful result.
+            win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })
+          }
+        }
+        const systemParts = buildSystemParts(
+          req,
+          s.mode,
+          s.profile,
+          s.modePrompts,
+          s.contextDocs[s.mode] || [],
+          s.outputLanguage,
+          s.summaryLanguage,
+          s.systemPrompt,
+          s.askCaveman
+        )
+        const handle = createStream({
+          providerId: provider,
+          kind: def.kind,
+          apiKey: viaOperator ? '' : key,
+          viaOperator,
+          operatorTransport: operatorTransport ?? undefined,
+          baseURL,
+          workspaceId: s.dustWorkspaceId,
+          // Dust OAuth tokens (imported from the local CLI) expire after ~1h. On a pre-token 401 the
+          // stream asks for fresh creds: re-mint via the CLI, persist them, and replay once — so an
+          // expired token self-heals invisibly instead of surfacing an error.
+          refreshDustAuth: provider === 'dust' ? makeRefreshDustAuth(s) : undefined,
+          model,
+          temperature: s.temperature,
+          // Reasoning-by-default models (Kimi, DeepSeek V4) burn hidden tokens and stall a 15s live-suggest
+          // budget unless told otherwise — providers.ts reasoningEffortFor decides per provider AND tier;
+          // undefined for every other provider, so their request bodies stay byte-identical.
+          reasoningEffort: reasoningEffortFor(provider, tier, s.thinkingMode === 'always'),
+          idleMs,
+          systemParts,
+          system: systemParts.cachedPrefix + systemParts.volatile,
+          promptCacheKey: isOpenAICloudCacheEligible(provider, def.kind, false)
+            ? makePromptCacheKey(s.mode, skillLockHashForMode(s.mode))
+            : undefined,
+          req,
+          handlers: {
+            onDelta: (text) => {
+              // F3 hedge: a leg that already lost the race is aborted, but a chunk already in flight when
+              // abort() fires can still reach here once — swallow it rather than let two legs both paint.
+              if (race && race.gate.isLoser(race.leg)) return
+              paint(think.push(text))
+            },
+            onDone: (u, completion) => {
+              if (race && race.gate.isLoser(race.leg)) return
+              // Release whatever the stripper is still holding: a tail that could have been a partial tag,
+              // or — only when the answer would otherwise be blank — an unterminated think block. Must run
+              // BEFORE the !gotToken check below, or a response that was entirely one unclosed think block
+              // would be judged content-less and fail over despite having something to show.
+              paint(think.flush())
+              // Terminal transport delivery is not necessarily a completed answer (token ceiling,
+              // unexpected EOF, etc.). Keep partial output, but never count it as delivered success.
+              // Do not expose the raw provider-controlled reason in feedback or audit logs.
+              if (completion?.status === 'incomplete') {
+                failAttempt('The provider stopped before completing the response. Try again.')
+                return
+              }
+              if (!race) streams.delete(req.id)
+              // MQA-020 (belt-and-braces half): a provider that completes with ZERO content deltas has not
+              // answered — the user gets a blank bubble and the waterfall stops, because "done" reads as
+              // success. The known instance was claude-cli settling an `is_error: true` terminal line as
+              // success (fixed at source in llm/cli.ts), but ANY strategy that reaches onDone pre-token has
+              // the same effect, so treat it as a pre-token failure here and let the normal failover run.
+              // Only for cloud/CLI: a local no-output must surface rather than silently upload the request.
+              if (!gotToken && provider !== 'local' && failover(attempted.concat(provider), undefined, race)) return
+              // …and when that failover finds NOTHING left to try, this leg is finished without ever having
+              // answered. Falling through to the success path below would be wrong twice over: under a race
+              // it deletes the COMBINED abort registration (see the hedge dispatch) while the other leg is
+              // still streaming — orphaning it past a user cancel, since askCancel then finds no entry — and
+              // it ends the ask with a blank streamDone, the very MQA-020 empty bubble the branch above
+              // exists to prevent. Die quietly if the other leg can still answer; otherwise surface a real
+              // error, exactly as the local branch below does.
+              if (!gotToken && provider !== 'local') {
+                if (race && race.gate.markDead(race.leg) !== 'surface') return
+                if (race) streams.delete(req.id)
+                win?.webContents.send(IPC.streamError, {
+                  id: req.id,
+                  message:
+                    'That provider returned an empty answer, and there was no other provider to try. Check your providers in Settings.'
+                })
+                return
+              }
+              // MQA-102: the cloud/CLI branch above is deliberately gated `provider !== 'local'`, so a LOCAL
+              // completion with zero content deltas used to fall straight through to streamDone — the exact
+              // blank-bubble MQA-020 fixed for cloud/CLI, still live for the on-device last resort (the
+              // "my key died" end state, where local is what answers). Surface it as an actionable error
+              // instead. No failover: a local failure must never silently upload the request to cloud.
+              if (!gotToken && provider === 'local') {
+                if (!race || race.gate.markDead(race.leg) === 'surface') {
+                  if (race) streams.delete(req.id) // terminal for the race — same release as the error path
+                  win?.webContents.send(IPC.streamError, {
+                    id: req.id,
+                    message:
+                      'Métis Local produced no answer — try again, or add a cloud provider in Settings for longer questions.'
+                  })
+                }
+                return
+              }
+              // Latency + token telemetry (metadata only) — feeds the p50/p95 latency + cost evals (H/D/F).
+              auditLog('provider.request', {
+                provider,
+                model,
+                mode: req.mode,
+                tier,
+                phase: 'done',
+                ttftMs,
+                totalMs: Date.now() - startedAt,
+                inputTokens: u.inputTokens,
+                outputTokens: u.outputTokens,
+                cacheRead: u.cacheRead,
+                cacheWrite: u.cacheWrite,
+                cacheUncached: u.cacheUncached,
+                cacheStatus: u.cacheStatus,
+                cacheTtl: u.cacheTtl
+              })
+              // Record every completed model request, including live suggestions and meeting recaps.
+              // The mode distinguishes background work from a user question; only metrics and a local
+              // closed-taxonomy classification cross the Operator ingest boundary, never prompt content.
+              let skillId: string | undefined
+              let skillVersion: string | undefined
+              if (req.mode === 'answer' || req.mode === 'vision') {
+                try {
+                  const skill = loadVerifiedSkill(isBuiltinConversationMode(s.mode) ? s.mode : 'humanizer')
+                  skillId = skill.id
+                  skillVersion = skill.version
+                } catch {
+                  /* integrity errors already fail closed on the ask path */
+                }
+              }
+              void recordOperatorAsk(s, {
+                id: req.id,
+                mode: req.mode,
+                skillId,
+                skillVersion,
+                provider,
+                model,
+                ttftMs,
+                totalMs: Date.now() - startedAt,
+                inputTokens: u.inputTokens,
+                outputTokens: u.outputTokens,
+                cacheRead: u.cacheRead,
+                cacheWrite: u.cacheWrite,
+                cacheUncached: u.cacheUncached,
+                cacheStatus: u.cacheStatus,
+                cacheTtl: u.cacheTtl,
+                outcome: 'answered',
+                // Do not pass the prompt to telemetry. Empty/background prompts remain honestly 'unknown'.
+                questionType: classifyQuestionType(req.prompt, { vision: req.mode === 'vision' }),
+                vision: req.mode === 'vision',
+                pathTag: pathTagForSeatProvider(provider, viaOperator)
+              })
+              // The winning leg's success is the whole race's terminal outcome — drop the combined abort
+              // registration set up before either leg started (see the hedge dispatch below).
+              if (race) streams.delete(req.id)
+              win?.webContents.send(IPC.streamDone, { id: req.id, ...u })
+              // Act 5 trial hook (MQA-281): the ONE seam that fires on a real, successfully-delivered
+              // result (gotToken is guaranteed true above) — never on install/launch. Cheap no-op unless
+              // this is the very first qualifying (suggest/summary/recap) result this install has ever
+              // produced; the demo-tagged check is belt-and-suspenders (see noteQualifyingUse's header).
+              noteQualifyingUse(req.mode, req.prompt, req.transcript)
+            },
+            onError: failAttempt
+          }
+        })
+        if (race) race.gate.setHandle(race.leg, handle)
+        else streams.set(req.id, handle)
+      }
+
+      // OPERATOR.md: a connected working CLI wins every user question (last-clicked primary).
+      // req.providerOverride still wins (Dust retrieval / Spotlight Ref).
+      const cliPrimary = pickWorkingCliPrimary({
         cliConnected: s.cliConnected,
         lastClickedCli: s.lastClickedCli,
         allowed
-      }).find((p) => eligible(p) && !isCoolingDown(p) && !budgetBlocked(p))
-      if (cliNext) return cliNext
-      const fundedNext = operatorFundedProviders().find(
-        (p) =>
-          p in PROVIDERS &&
-          eligible(p as ProviderId) &&
-          !isCoolingDown(p as ProviderId) &&
-          !budgetBlocked(p as ProviderId)
+      })
+      const operatorRoute = nextAskRoute({
+        cliConnected: s.cliConnected,
+        lastClickedCli: s.lastClickedCli,
+        allowed,
+        fundedProviders: operatorFundedProviders()
+      })
+      const routedActive =
+        !cliPrimary && operatorRoute.tier === 'operator' && operatorRoute.provider in PROVIDERS
+          ? (operatorRoute.provider as ProviderId)
+          : s.provider
+      // Métis Local outranks cliPrimary (but never providerOverride): an in-scope suggest/summary/vision ask
+      // routes to the on-device model first whenever it's eligible right now (PLAN.md §4.3 "Routing
+      // precedence, explicit") — see local-routing.ts's pickPrimaryProvider for the exact precedence rule.
+      // localPrimaryEligibleFor (not the bare localEligibleFor) layers Wave 2's routingMode on top: 'api'
+      // forces this false so local can never win the first-attempt pick, 'local' relaxes the per-mode
+      // useFor toggle, 'auto' is byte-identical to the old localEligibleFor call.
+      const localPrimaryEligible = localPrimaryEligibleFor(req, s, routeTier(req, s.thinkingMode), allowed)
+      const localVisionRequired = localVisionPrivacyRequired(req, s)
+      const primary = pickPrimaryProvider(
+        req.providerOverride,
+        localPrimaryEligible,
+        cliPrimary,
+        routedActive,
+        localVisionRequired
       )
-      if (fundedNext) return fundedNext as ProviderId
-      // MQA-003: prefer a provider whose credentials have NOT just been rejected and that has budget left.
-      const healthy = order.find((p) => eligible(p) && !isCoolingDown(p) && !budgetBlocked(p))
-      if (healthy) return healthy
-      // MQA-113: the on-device fallback is preferred over a provider that is currently cooling down. The
-      // first unhealthy provider is skipped above, but a SECOND (or Nth) simultaneously-cooling cloud
-      // provider used to be returned by the old "?? order.find(eligible)" last resort — so every ask
-      // re-walked a known-dead provider (deepseek down AND nvidia down → nvidia retried forever) instead
-      // of going straight to local. Local is the honest next hop when all cloud is cooling.
-      if (!tried.includes('local') && localFallbackEligibleFor(req, s, tier, allowed)) return 'local'
-      // Near-last resort: a cooling cloud/CLI provider is still better than dead-ending with an error when
-      // local cannot serve this request in-scope. A cooling provider is demoted, never removed — one
-      // revoked key must not lock a user out of their only provider, and a rate-limit may recover mid-walk.
-      const coolingResort = order.find(eligible)
-      if (coolingResort) return coolingResort
-      // The ABSOLUTE floor (the "worst case, no API needed" guarantee): on-device answers even an
-      // out-of-scope mode (answer/recap) when literally nothing else can — every cloud/CLI route exhausted
-      // or unconfigured, and the request is outside local's normal suggest/summary/vision scope. Dead last,
-      // AFTER even a cooling cloud provider that might recover, so it never preempts a real answer.
-      if (!tried.includes('local') && localAnswerFloorEligibleFor(req, s, allowed)) return 'local'
-      return null
-    }
-    // F3 hedge: which race (if any) this call is part of, and which of the two legs it is. See hedge.ts's
-    // HedgeRace doc comment for the full contract.
-    type AttemptRace = { gate: HedgeRace; leg: HedgeLeg }
-    // MQA-161: every provider the PRIMARY leg has actually reached, in order. A leg that fails over keeps
-    // its leg identity, so picking the backup against the id the primary STARTED on would let the hedge
-    // race the provider the primary just moved to — pickFailover is pure, so with identical inputs it
-    // returns exactly that provider: one ask, two byte-identical billed requests (prompt, transcript and,
-    // on a vision ask, the whole screenshot), both sharing a single failure mode. The hedge exists to buy
-    // provider diversity, so it must exclude the whole chain, not one id.
-    const primaryChain: ProviderId[] = []
+      // MQA-003: when the primary's credentials were just rejected — OR its live budget is nearly spent
+      // (resilience.budgetPreempt) — start at the next eligible provider instead of re-paying its round trip
+      // on every ask (measured 6.5–9.3s wasted against a 15s live-suggest budget). It stays in `attempted` so
+      // the walk never circles back to it. pickFailover returns null for a pinned Dust-agent request, so a
+      // pinned ask is never silently substituted.
+      const primaryUnavailable = isCoolingDown(primary) || (s.resilience.budgetPreempt && isBudgetExhausted(primary))
+      const skipDeadPrimary = primaryUnavailable ? pickFailover([primary]) : null
 
-    // Find the next eligible keyed provider not yet tried and start it — for failover when the primary
-    // can't answer (Dust down → your configured Claude/GPT key takes over). `preferFree` floats free-tier
-    // backups ahead when the just-failed provider ran out of credit/tokens (resilience.preferFreeOnExhaustion).
-    // `race`, when present, is forwarded unchanged — a hedged leg's own failover cascade stays part of the
-    // SAME leg (see AttemptRace's doc comment on attempt() below).
-    const failover = (tried: ProviderId[], preferFree = false, race?: AttemptRace): boolean => {
-      const next = pickFailover(tried, preferFree)
-      if (!next) return false
-      // Wave 2 — record the hop for the one-shot UI chip (docs/PROVIDER-ROUTING-POLICY.md). Only fire
-      // when we actually start a different provider; a no-op return above leaves the notice untouched.
-      const from = tried.length ? tried[tried.length - 1]! : 'unknown'
-      if (from !== next) {
-        lastFailoverNotice = {
-          from,
-          to: next,
-          at: Date.now(),
-          reason: preferFree ? 'exhausted' : 'failover'
-        }
-        auditLog('provider.failover', { from, to: next, reason: lastFailoverNotice.reason })
-      }
-      attempt(next, tried, 0, race)
-      return true
-    }
-
-    // Validate a provider, start the stream, and on a PRE-token (TTFT) failure retry the same provider
-    // (transient errors) then fall over to the next one. `retryCount` tracks same-provider transient
-    // retries; failover resets it (each provider gets its own retry budget).
-    const MAX_TRANSIENT_RETRIES = 3
-    // The longest a rate-limit Retry-After we will WAIT OUT in place during a live ask. Beyond this we fail
-    // straight over to the backup rather than freezing the answer — the whole point of "always a backup".
-    const MAX_ASK_RETRY_WAIT_MS = 12_000
-    // F3 hedge (main/llm/hedge.ts): `race` is set ONLY when this whole request is being hedge-raced (see
-    // the primary dispatch at the bottom of this handler). It rides through every recursive attempt() call
-    // this closure makes — the same-provider retry timer AND every failover() call — so a hedged leg's
-    // entire retry/failover cascade stays gated behind the SAME race the whole way down: once the other
-    // leg wins, every handler below (onDelta/onDone/onError) checks race.gate.isLoser(race.leg) first and
-    // silently returns, so a losing leg's own cascading retries can never reach the renderer.
-    const attempt = (provider: ProviderId, attempted: ProviderId[], retryCount = 0, race?: AttemptRace): void => {
-      // Recorded on ENTRY, before any eligibility work: a provider the primary merely bounced off is still
-      // one the hedge must not duplicate.
-      if (race?.leg === 'primary' && !primaryChain.includes(provider)) primaryChain.push(provider)
-      const def = PROVIDERS[provider]
-      if (allowed && !allowed.includes(provider)) {
-        auditLog('provider.blocked', { provider })
-        if (attempted.length === 0) {
-          // Name an actual next step, not just what's wrong: prefer an approved provider that's already
-          // keyed/CLI-connected (so "switch to X" is immediately actionable), falling back to just naming
-          // the first approved provider when none of them are configured yet.
-          const approvedCandidates = allowed
-            .filter((p) => p !== provider)
-            .map((p) => ({ id: p as ProviderId, def: PROVIDERS[p as ProviderId] as ProviderDef | undefined }))
-            .filter((c): c is { id: ProviderId; def: ProviderDef } => !!c.def)
-          const readyApproved = approvedCandidates.find((c) =>
-            c.def.kind === 'cli' ? !!s.cliConnected[c.id] : getApiKey(c.id).length > 0
-          )
-          const approvedLabel = (readyApproved ?? approvedCandidates[0])?.def.label
-          // F3 hedge: this leg is out — only actually surface an error once EVERY leg of the race
-          // (including a backup that hasn't started yet) is confirmed dead. See HedgeRace.markDead.
-          if (!race || race.gate.markDead(race.leg) === 'surface') {
-            win?.webContents.send(IPC.streamError, {
-              id: req.id,
-              message: approvedLabel
-                ? `${def.label} is not on your organization's approved provider list. Switch to ${approvedLabel} in Settings.`
-                : `${def.label} is not on your organization's approved provider list.`
-            })
-          }
-        } else if (!failover(attempted.concat(provider), undefined, race)) {
-          if (!race || race.gate.markDead(race.leg) === 'surface') {
-            win?.webContents.send(IPC.streamError, { id: req.id, message: 'No approved provider could answer.' })
-          }
-        }
-        return
-      }
-      // Métis Local is keyless: its per-session sidecar key lives only in local-runtime.ts memory, never
-      // on disk (getApiKey('local') always resolves empty, by design — see store.ts's ENV_VAR entry).
-      // Operator-funded providers are also keyless on the seat — the Worker holds the raw LLM key.
-      const key = provider === 'local' ? localRuntime.sessionKey() : getApiKey(provider)
-      const viaOperator =
-        provider !== 'local' &&
-        def.kind !== 'cli' &&
-        !key &&
-        operatorFundedProviders().includes(provider)
-      const operatorTransport = viaOperator ? operatorAskTransport(s) : null
-      const tier = routeTier(req, s.thinkingMode)
-      // Métis Local's "model" is the local-models.ts manifest id the sidecar loads — settings.localLlm.
-      // modelId, NOT the generic per-provider tier resolution (which would otherwise fall back to
-      // PROVIDERS.local.fastModel regardless of the installer-owned model selected in settings).
-      let model =
-        provider === 'local'
-          ? s.localLlm.modelId
-          : req.agentOverride && provider === 'dust'
-            ? req.agentOverride
-            : resolveModelTier(provider, s.providerModels, s.providerModelsThinking, tier, s.providerModelsDeep)
-      if (viaOperator && provider === 'cloudflare') {
-        model = portalFundedCloudflareModel(tier)
-      }
-      if (viaOperator && req.image) model = operatorVisionModel(provider, model) ?? model
-      // Guardrail (per Tony): CLI is Sonnet-only, Anthropic base/think are pinned to Haiku/Sonnet — both
-      // regardless of what routeTier or a user's providerModels override picked. Opus stays reachable only
-      // through the Graph pipeline (brain/ingest.ts, graphify.ts), which never calls this function.
-      model = applyInteractiveGuardrail(provider, tier, model)
-      // M2-0412: once the guardrail's own hard pins are applied, let the fleet policy pin the final
-      // model for a provider it governs (cloud API providers only — CLI kind and 'local' pass through
-      // unchanged, see narrowAllowedForCapability above for why).
-      if (def.kind !== 'cli' && provider !== 'local') {
-        model = resolveManagedModel(s, 'askChat', provider, model)
-      }
-      // Dust interactive speed pin: think/deep Dust AGENTS run server-side orchestration before their
-      // first token (measured 6.6-28.3s TTFT vs ~2.6s for the base agent) — unusable mid-conversation.
-      // Interactive asks (chat/vision/suggest) always use the base agent; recaps, summaries, background
-      // jobs, and explicit agentOverride (Spotlight Ref) keep the think/deep agents where depth > speed.
-      if (
-        provider === 'dust' &&
-        !req.agentOverride &&
-        (req.mode === 'answer' || req.mode === 'vision' || req.mode === 'suggest')
-      ) {
-        model = (s.providerModels['dust'] || '').trim() || model
-      }
-      // Where this attempt will actually send the request: the user's endpoint for the providers that
-      // require one (Custom, Cloudflare's operator Worker), the user's Dust region, else the registry's
-      // built-in. Resolved BEFORE the eligibility chain because a missing user endpoint is an eligibility
-      // failure, not a stream failure.
-      const baseURL = providerBaseUrl(provider, s)
-      // Métis Local: accept localPrimaryEligibleFor (routingMode-aware) plus the unchanged fallback/floor
-      // nets. Opted-in vision stays local at every tier so prompt complexity cannot silently turn a
-      // screenshot into a cloud upload.
-      const ineligible =
-        provider === 'local'
-          ? localPrimaryEligibleFor(req, s, tier, allowed) ||
-            localFallbackEligibleFor(req, s, tier, allowed) ||
-            // The answer-mode floor: pickFailover routes here when every cloud/CLI route is exhausted for an
-            // out-of-scope mode (answer/recap). attempt() must accept it too, or the floor pickFailover
-            // offered would be bounced right back with the "uses your cloud provider" message.
-            localAnswerFloorEligibleFor(req, s, allowed)
-            ? ''
-            : localVisionRequired
-              ? 'Métis Local could not process this screenshot on this device. Nothing was sent to a cloud provider. Open Settings → AI → Local AI to see whether the on-device model is ready.'
-              : 'Métis Local handles live suggestions, summaries and screenshots — this request type uses your cloud provider.'
-          : def.kind === 'cli' && !s.cliConnected[provider]
-            ? `${def.label} is not connected. Open Settings → CLI Integration to set it up.`
-            : viaOperator && !operatorTransport
-              ? 'Operator is not reachable. Check Operator URL in Settings.'
-              : def.kind !== 'cli' && !key && !viaOperator
-              ? `No API key for ${def.label}. Open Settings (gear) and add it.`
-              : def.kind !== 'cli' && !model
-                ? provider === 'dust'
-                  ? `No ${tier === 'think' ? 'thinking' : 'base'} Dust agent set. Open Settings → Connect Dust and pick your agents.`
-                  : `No model set for ${def.label}. Pick a model in Settings.`
-                : // Endpoint-is-yours providers (Custom, Cloudflare's operator-deployed Worker) cannot be
-                  // reached without a URL. Say so HERE, where the message is actionable and the flow can
-                  // still fail over, rather than letting streamOpenAI's own guard surface it mid-stream.
-                  !viaOperator && def.kind !== 'cli' && requiresUserBaseUrl(provider) && !baseURL
-                  ? `No endpoint URL set for ${def.label}. Open Settings → Advanced and add it.`
-                  : req.mode === 'vision' && !providerVisionOk(provider)
-                    ? `${def.label} can't read screenshots. ${visionSwitchAdvice(provider)}`
-                    : provider === 'dust' && !s.dustWorkspaceId
-                      ? 'Add your Dust workspace ID in Settings → AI → Dust setup.'
-                      : ''
-      if (ineligible) {
-        // Vision turn, but the active provider can't read images (e.g. Dust agents). Transparently fail
-        // over to a configured vision-capable provider (Claude/GPT) so a user who captured their screen
-        // still gets an answer — `failover` only picks a provider that has both a key and a model. Surface
-        // the error only when NO vision-capable provider is set up.
-        const visionGap = req.mode === 'vision' && !providerVisionOk(provider)
-        if (visionGap && failover(attempted.concat(provider), undefined, race)) return
-        if (attempted.length === 0) {
-          // Zero-config safety net (localLlm.fallback): the very FIRST provider can't even start — no
-          // key, CLI not connected, Dust half-configured. Historically this surfaced the setup error
-          // immediately (no failover on a first-attempt ineligibility, unlike runtime failures). With a
-          // provisioned on-device model and fallback on, answer the in-scope ask locally instead: a
-          // fresh zero-API-key install gets a working assistant, and Settings still shows the real
-          // setup state. Out-of-scope modes (answer/recap) fail exactly as before —
-          // localFallbackEligibleFor enforces the same v1 mode scope as every other local gate.
-          // allowCrossProviderFailover: a request pinned to one managed Dust agent (agentOverride) has
-          // no honest substitute — same suppression pickFailover applies at the other two seams. Today's
-          // sole agentOverride caller uses mode:'answer' (out of local scope anyway), but the pinned
-          // contract must hold at THIS seam by construction, not by coincidence of that caller's mode.
-          if (
-            provider !== 'local' &&
-            allowCrossProviderFailover(req) &&
-            localFallbackEligibleFor(req, s, tier, allowed)
-          ) {
-            attempt('local', attempted.concat(provider), 0, race)
-            return
-          }
-          // Out-of-scope modes (answer, recap) used to stop right here and surface "No API key for X.
-          // Open Settings (gear) and add it." — even with a provisioned on-device model and the safety
-          // net on. That is the single most common thing anyone asks Métis (type a question), so a user
-          // who had deliberately turned the local model ON and added no key was told the app could not
-          // answer, while the model that could sat idle on their disk. The absolute floor
-          // (localAnswerFloorEligibleFor) exists precisely for this case and attempt()'s own eligibility
-          // chain above already accepts it — only this seam never offered it.
-          //
-          // Routed through failover() rather than jumping straight to 'local' so the floor keeps its
-          // rank: pickFailover places it DEAD LAST, after every keyed provider and even a cooling one,
-          // so a user whose ACTIVE provider is merely misconfigured still gets their other key (or the
-          // actionable setup error), not a silently weaker on-device answer. Gated on the floor being
-          // genuinely available so an install without local behaves exactly as it did before.
-          if (
-            provider !== 'local' &&
-            allowCrossProviderFailover(req) &&
-            localAnswerFloorEligibleFor(req, s, allowed) &&
-            failover(attempted.concat(provider), undefined, race)
-          ) {
-            return
-          }
-          if (!race || race.gate.markDead(race.leg) === 'surface') {
-            win?.webContents.send(IPC.streamError, { id: req.id, message: ineligible })
-          }
-        } else if (!failover(attempted.concat(provider), undefined, race)) {
-          if (!race || race.gate.markDead(race.leg) === 'surface') {
-            win?.webContents.send(IPC.streamError, { id: req.id, message: ineligible })
-          }
-        }
-        return
-      }
-      auditLog('provider.request', { provider, model, mode: req.mode, tier, retry: attempted.length > 0 })
-      // Tell the waiting UI WHO is answering ("Asking your Dust agent…") — re-sent on retry/failover so
-      // the display follows the live attempt. Metadata only (provider id + tier), never the model/agent id.
-      // A leg that has already lost the race says nothing: its announcement would overwrite the winner's.
-      if (!race || !race.gate.isLoser(race.leg)) {
-        win?.webContents.send(IPC.streamMeta, { id: req.id, provider, tier, usedScreen: screenGrounded })
-      }
-      // Per-tier idle budget: a live suggest gives up fast to stay real-time; recaps + deep answers get the
-      // full headroom. Bounds time-to-first-token and triggers failover when a provider stalls before a token.
-      const baseIdleMs =
-        req.mode === 'suggest'
-          ? 15_000
-          : req.mode === 'recap' || req.mode === 'summary'
-            ? 120_000
-            : tier === 'deep'
-              ? 120_000
-              : tier === 'think'
-                ? 90_000
-                : req.mode === 'vision'
-                  ? 60_000
-                  : 45_000
-      // Each failover attempt re-derives a fresh, full idle budget with no shared cross-provider deadline —
-      // on a silent-drop offline network (captive portal / dead-gateway WiFi that accepts the connection
-      // then black-holes packets) that compounds into N x the base budget of blank spinner before the user
-      // sees any error. Retries (attempted.length > 0) get a much shorter cap: a healthy provider still
-      // answers well inside it, while a silent-drop network surfaces the "Connection error." in seconds.
-      // MQA-037: the cap is a NETWORK diagnostic, so it must never apply to Métis Local — a 127.0.0.1
-      // sidecar cannot be a silent-drop victim, and the zero-config safety net always reaches it with
-      // attempted.length >= 1 (the preceding step was an in-memory config check that never opened a
-      // socket). Without this exemption a warm-sidecar summary/vision fallback got 20s of prefill budget
-      // for the same work the identical useFor-driven request gets 120s/60s for, and local has no
-      // failover to rescue it.
-      const RETRY_IDLE_CAP_MS = 20_000
-      // MQA-006: a COLD Métis Local request must first load ~730 MB of GGUF weights off disk before it can
-      // emit a token — routinely longer than the 15s suggest budget and longer than the retry cap, so the
-      // first on-device answer after launch (exactly what a zero-API-key install gets) died with "Stream
-      // timed out" while the model was still loading correctly. The floor applies only while the sidecar
-      // is not yet running: once warm, local is fast and keeps the normal, tighter budgets. This is a
-      // load allowance, not a licence to hang — a genuinely stuck sidecar still aborts, just later.
-      const LOCAL_COLD_START_IDLE_MS = 90_000
-      const localColdStart = provider === 'local' && !localRuntime.isRunning()
-      const idleMs = localColdStart
-        ? Math.max(baseIdleMs, LOCAL_COLD_START_IDLE_MS)
-        : attempted.length > 0 && provider !== 'local'
-          ? Math.min(baseIdleMs, RETRY_IDLE_CAP_MS)
-          : baseIdleMs
-      const startedAt = Date.now()
-      let gotToken = false
-      let ttftMs: number | undefined
-      // Strips a reasoning model's inline <think>…</think> out of the answer stream (llm/think-strip.ts).
-      // One per attempt: each leg/retry is its own stream, and the stripper carries position state.
-      // Sitting here rather than in a provider strategy is the point — every provider funnels through
-      // this one onDelta, so the guarantee holds for cloud, CLI, Dust, a custom endpoint and on-device
-      // alike, instead of being re-implemented per strategy and drifting.
-      const think = new ThinkStripper()
-      // Every visible token goes through here. `gotToken` deliberately tracks VISIBLE output, not raw
-      // deltas: a model part-way through a think block has not answered yet, so it must not win the
-      // hedge race, stop the MQA-020 empty-answer failover, or report a TTFT it hasn't earned. The
-      // provider's own stall watchdog still sees the raw deltas, so a long think can't trip a timeout.
-      const paint = (text: string): void => {
-        if (!text) return
-        if (!gotToken) {
-          ttftMs = Date.now() - startedAt
-          // Tokens are flowing, so these credentials demonstrably work — clear any prior auth
-          // verdict (MQA-003/MQA-004) rather than leaving a stale "broken" mark on a live provider.
-          recordSuccess(provider)
-          // F3 hedge: this leg's first token is its bid to win — aborts whatever the other leg is doing.
-          if (race) {
-            race.gate.declareWinner(race.leg)
-            // Re-assert WHO actually answered. Both legs announce themselves when they start, so if
-            // the backup started second and the primary then won, the UI's last streamMeta named the
-            // loser — the answer would be attributed to a provider that produced none of it.
-            win?.webContents.send(IPC.streamMeta, { id: req.id, provider, tier, usedScreen: screenGrounded })
-          }
-        }
-        gotToken = true
-        win?.webContents.send(IPC.streamDelta, { id: req.id, text })
-      }
-      // Both transport errors and explicit incomplete terminals share the same retry/hedge policy.
-      const failAttempt = (message: string): void => {
-        if (race && race.gate.isLoser(race.leg)) return
-        if (!race) streams.delete(req.id)
-        auditLog('provider.failed', { provider, gotToken, retry: retryCount })
-        // "You ran out" — a rate limit (429), spent credit, or a Claude Pro / Codex subscription
-        // usage-cap — is NOT a dead key, and each needs its own cooldown + message. Classify it FIRST
-        // (exhaustion.ts), so a rate-limited Claude backs off for its Retry-After window, an out-of-
-        // credit key demotes for ~1h instead of being re-tried as primary every ask, and a spent
-        // subscription window demotes until its reset. This is the OmniRoute integration: the circuit
-        // breaker now remembers token/credit exhaustion, not only credential rejections.
-        const exhaustion: ExhaustionSignal | null =
-          !gotToken && provider !== 'local' ? classifyExhaustion(message) : null
-        if (exhaustion) {
-          if (exhaustion.kind === 'rate-limit') recordRateLimited(provider, exhaustion.retryAfterMs)
-          else
-            recordExhausted(provider, exhaustion.kind, {
-              retryAfterMs: exhaustion.retryAfterMs,
-              resetAt: exhaustion.resetAt,
-              message: String(message)
-            })
-        }
-        // MQA-003/MQA-004: remember a CREDENTIAL rejection (not a transport blip) so routing can stop
-        // re-paying this provider's round trip on every subsequent ask, and so Settings can finally
-        // tell the user their key stopped working instead of reporting it ready forever.
-        // MQA-101: Dust's own auth-rejection wording drifts across API versions and the current
-        // "does not have a valid authenticated credential" phrasing carries no 401 digits, so the
-        // generic isAuthFailure misses it — the circuit breaker never trips for a genuinely dead Dust
-        // session. dust.ts already maintains the broadened matcher for exactly this; use it for Dust.
-        // Gated on !exhaustion so a "403 insufficient_quota" is not double-counted as a dead key, AND on
-        // provider !== 'local' — the on-device model has no credentials to reject, and a local runtime
-        // error whose text happens to match isAuthFailure (e.g. an EACCES "permission denied" from a
-        // file lock re-hashing the model) must NOT cool 'local' down. If it did, the skip-cooling-primary
-        // fast path would swap a privacy-pinned local vision request onto a cloud provider — uploading a
-        // screenshot the user pinned to on-device-only. Local failures are handled by local-runtime.ts's
-        // own restart budget, never by this credential breaker.
-        const isCredentialRejection =
-          !exhaustion &&
-          provider !== 'local' &&
-          (provider === 'dust' ? isDustAuthError({ message }) : isAuthFailure(message))
-        if (!gotToken && isCredentialRejection) recordAuthFailure(provider, String(message))
-        // Do NOT retire a CLI for a usage-cap: a spent Claude Pro / Codex window is a TEMPORARY lockout
-        // that refills at a known time, not a dead login — retiring it would force a needless re-login.
-        // Only a genuine auth failure retires the CLI.
-        if (!gotToken && !exhaustion) retireCli(provider, message)
-        // Pre-token transient failure (dropped socket, 5xx, 429, DNS blip): retry the SAME provider
-        // with bounded backoff before switching. `gotToken` guards it — once tokens are on the wire
-        // we never re-run. A cancel handle keeps an abort during the backoff wait from firing the retry.
-        // Waterfall: when another configured provider can take over (e.g. Dust down but a Claude/GPT key
-        // is set), cap same-provider retries at ONE so the API answers in seconds instead of after the
-        // full ~30s of retrying a dead primary. With nowhere to fall over to, keep the full retry budget.
-        // A request routed to Métis Local stays on-device. Cloud providers may waterfall into another
-        // configured provider, but a local failure must be surfaced to the user instead of silently
-        // uploading the transcript/screenshot they explicitly chose to process locally.
-        // (pickFailover may also name 'local' here — a sole cloud provider that transport-fails now
-        // retries once and then answers on-device instead of burning the full ~30s retry budget.)
-        const hasFailoverTarget = provider !== 'local' && !!pickFailover(attempted.concat(provider))
-        const retryBudget = hasFailoverTarget ? 1 : MAX_TRANSIENT_RETRIES
-        // A rate-limit is retryable IN PLACE only if the server's window is short enough to wait inside
-        // a live ask — a 5-minute Retry-After means "go to the backup now", not "freeze the UI". A hard
-        // exhaustion (credit/usage-cap) is NEVER retried in place: money and subscription windows do not
-        // return on a sub-second backoff, so we fail straight over.
-        const rateLimitWaitMs =
-          exhaustion?.kind === 'rate-limit' && exhaustion.retryAfterMs != null
-            ? exhaustion.retryAfterMs
-            : null
-        const rateLimitTooLongToWait = rateLimitWaitMs != null && rateLimitWaitMs > MAX_ASK_RETRY_WAIT_MS
-        const hardExhaustion = exhaustion != null && exhaustion.kind !== 'rate-limit'
-        if (
-          !gotToken &&
-          retryCount < retryBudget &&
-          isTransient(message) &&
-          !hardExhaustion &&
-          !rateLimitTooLongToWait
-        ) {
-          const delayMs = nextBackoff(retryCount, { retryAfterMs: rateLimitWaitMs ?? undefined })
-          auditLog('provider.retry', { provider, attempt: retryCount + 1, delayMs })
-          const timer = setTimeout(() => attempt(provider, attempted, retryCount + 1, race), delayMs)
-          // Under a race the combined abort registration set up before either leg started already
-          // covers cancellation (see the hedge dispatch below) — track this timer there instead of
-          // overwriting it, so cancelling mid-backoff still clears the pending retry.
-          if (race) race.gate.addCleanup(() => clearTimeout(timer))
-          else streams.set(req.id, { abort: () => clearTimeout(timer) })
-          return
-        }
-        // Retries exhausted or non-transient: fall over to another provider (pre-token only). When the
-        // just-failed provider ran OUT (credit/tokens/usage-cap), prefer a free-tier backup or local.
-        const preferFree = exhaustion != null && s.resilience.preferFreeOnExhaustion
-        if (!gotToken && provider !== 'local' && failover(attempted.concat(provider), preferFree, race)) return
-        // Replace raw client transport strings ("Unexpected network error from DustAPI: fetch failed")
-        // with a clean message; keep the Dust-auth one-click reconnect path; else pass the message.
-        // Reaching here means failover found NO backup — so an exhaustion message names the limit and
-        // the fix (add a provider / add credit / wait for the reset) instead of a misleading
-        // "Connection issue" (the old bug: a 429 was reported as a network fault) or a raw provider
-        // string like "Claude AI usage limit reached|1754160000".
-        const friendly = exhaustion
-          ? exhaustion.kind === 'rate-limit'
-            ? `${def.label} is rate-limited right now and no backup is configured. Add another provider in Settings → AI, or wait a moment and try again.`
-            : exhaustion.kind === 'usage-cap'
-              ? `${def.label} hit its usage limit${
-                  exhaustion.resetAt
-                    ? ` (${formatResetPhrase(exhaustion.resetAt)})`
-                    : ''
-                }. Add another provider in Settings → AI to keep going.`
-              : `${def.label} is out of credit. Add credit or switch providers in Settings → AI.`
-          : // A gateway between Métis and the model can fail for a reason only its OPERATOR can
-            // clear — a dead account token, a half-deployed Worker. Those arrive as a 502/503, which
-            // matches isTransient below, so without this branch the user is told to check their
-            // network while the real cause is a secret on the proxy. The proxy marks exactly those
-            // (and deliberately NOT its transient upstream blips, which SHOULD retry), so the marker
-            // is the signal that this sentence is already the actionable one — pass it through
-            // rather than replacing it. Ahead of isTransient because 502 matches both.
-            isProxyOperatorFault(message)
-            ? stripProxyFaultMarker(message)
-            : isTransient(message)
-              ? "Connection issue — couldn't reach the provider after retrying. Check your network and try again."
-            : // MQA-101: use dust.ts's maintained matcher, not a second copy of the phrasing regex —
-              // the inline copy missed the current "authenticated credential" wording, so a dead Dust
-              // session surfaced its raw 401 instead of this reconnect prompt.
-              provider === 'dust' && isDustAuthError({ message })
-              ? 'Your Dust session expired and could not refresh automatically. Open Settings and reconnect Dust once.'
-              : // MQA-062: a CLI provider has no API key to "re-enter" — sending the user to Settings →
-                // AI for a key that does not exist is an actively wrong remedy. Name the real fix: sign
-                // the CLI back in and reconnect it (retireCli has already retired the stale flag).
-                def.kind === 'cli' && isAuthFailure(message)
-                ? `${def.label} is no longer signed in. Sign in to the CLI again, then reconnect it in Settings → CLI Integration.`
-                : // MQA-005: a credential rejection used to fall through as the provider's raw string —
-                  // users saw literally "403 status code (no body)", which names neither the problem nor
-                  // the fix. Say which provider failed and where to go, matching the no-key path's copy.
-                  isAuthFailure(message)
-                  ? `${def.label} rejected your API key (it may have been revoked, expired, or disabled). Open Settings → AI to re-enter it.`
-                  : message
-        if (!race || race.gate.markDead(race.leg) === 'surface') {
-          // Terminal for the whole race, so release the COMBINED abort registration too. The non-race
-          // path already deleted its entry at the top of onError; without this the map kept the
-          // HedgeRace and both handles alive for every hedged ask that ended in an error.
-          if (race) streams.delete(req.id)
-          // The renderer retains partial deltas on error. Visible length is not proof of
-          // completion: never turn a truncated/error response into a successful result.
-          win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })
-        }
-      }
-      const systemParts = buildSystemParts(req, s.mode, s.profile, s.modePrompts, s.contextDocs[s.mode] || [], s.outputLanguage, s.summaryLanguage, s.systemPrompt, s.askCaveman)
-      const handle = createStream({
-        providerId: provider,
-        kind: def.kind,
-        apiKey: viaOperator ? '' : key,
-        viaOperator,
-        operatorTransport: operatorTransport ?? undefined,
-        baseURL,
-        workspaceId: s.dustWorkspaceId,
-        // Dust OAuth tokens (imported from the local CLI) expire after ~1h. On a pre-token 401 the
-        // stream asks for fresh creds: re-mint via the CLI, persist them, and replay once — so an
-        // expired token self-heals invisibly instead of surfacing an error.
-        refreshDustAuth: provider === 'dust' ? makeRefreshDustAuth(s) : undefined,
-        model,
-        temperature: s.temperature,
-        // Reasoning-by-default models (Kimi, DeepSeek V4) burn hidden tokens and stall a 15s live-suggest
-        // budget unless told otherwise — providers.ts reasoningEffortFor decides per provider AND tier;
-        // undefined for every other provider, so their request bodies stay byte-identical.
-        reasoningEffort: reasoningEffortFor(provider, tier, s.thinkingMode === 'always'),
-        idleMs,
-        systemParts,
-        system: systemParts.cachedPrefix + systemParts.volatile,
-        promptCacheKey: isOpenAICloudCacheEligible(provider, def.kind, false)
-          ? makePromptCacheKey(s.mode, skillLockHashForMode(s.mode))
-          : undefined,
-        req,
-        handlers: {
-          onDelta: (text) => {
-            // F3 hedge: a leg that already lost the race is aborted, but a chunk already in flight when
-            // abort() fires can still reach here once — swallow it rather than let two legs both paint.
-            if (race && race.gate.isLoser(race.leg)) return
-            paint(think.push(text))
-          },
-          onDone: (u, completion) => {
-            if (race && race.gate.isLoser(race.leg)) return
-            // Release whatever the stripper is still holding: a tail that could have been a partial tag,
-            // or — only when the answer would otherwise be blank — an unterminated think block. Must run
-            // BEFORE the !gotToken check below, or a response that was entirely one unclosed think block
-            // would be judged content-less and fail over despite having something to show.
-            paint(think.flush())
-            // Terminal transport delivery is not necessarily a completed answer (token ceiling,
-            // unexpected EOF, etc.). Keep partial output, but never count it as delivered success.
-            // Do not expose the raw provider-controlled reason in feedback or audit logs.
-            if (completion?.status === 'incomplete') {
-              failAttempt('The provider stopped before completing the response. Try again.')
-              return
-            }
-            if (!race) streams.delete(req.id)
-            // MQA-020 (belt-and-braces half): a provider that completes with ZERO content deltas has not
-            // answered — the user gets a blank bubble and the waterfall stops, because "done" reads as
-            // success. The known instance was claude-cli settling an `is_error: true` terminal line as
-            // success (fixed at source in llm/cli.ts), but ANY strategy that reaches onDone pre-token has
-            // the same effect, so treat it as a pre-token failure here and let the normal failover run.
-            // Only for cloud/CLI: a local no-output must surface rather than silently upload the request.
-            if (!gotToken && provider !== 'local' && failover(attempted.concat(provider), undefined, race)) return
-            // …and when that failover finds NOTHING left to try, this leg is finished without ever having
-            // answered. Falling through to the success path below would be wrong twice over: under a race
-            // it deletes the COMBINED abort registration (see the hedge dispatch) while the other leg is
-            // still streaming — orphaning it past a user cancel, since askCancel then finds no entry — and
-            // it ends the ask with a blank streamDone, the very MQA-020 empty bubble the branch above
-            // exists to prevent. Die quietly if the other leg can still answer; otherwise surface a real
-            // error, exactly as the local branch below does.
-            if (!gotToken && provider !== 'local') {
-              if (race && race.gate.markDead(race.leg) !== 'surface') return
-              if (race) streams.delete(req.id)
-              win?.webContents.send(IPC.streamError, {
-                id: req.id,
-                message: 'That provider returned an empty answer, and there was no other provider to try. Check your providers in Settings.'
-              })
-              return
-            }
-            // MQA-102: the cloud/CLI branch above is deliberately gated `provider !== 'local'`, so a LOCAL
-            // completion with zero content deltas used to fall straight through to streamDone — the exact
-            // blank-bubble MQA-020 fixed for cloud/CLI, still live for the on-device last resort (the
-            // "my key died" end state, where local is what answers). Surface it as an actionable error
-            // instead. No failover: a local failure must never silently upload the request to cloud.
-            if (!gotToken && provider === 'local') {
-              if (!race || race.gate.markDead(race.leg) === 'surface') {
-                if (race) streams.delete(req.id) // terminal for the race — same release as the error path
-                win?.webContents.send(IPC.streamError, {
-                  id: req.id,
-                  message: 'Métis Local produced no answer — try again, or add a cloud provider in Settings for longer questions.'
-                })
-              }
-              return
-            }
-            // Latency + token telemetry (metadata only) — feeds the p50/p95 latency + cost evals (H/D/F).
-            auditLog('provider.request', {
-              provider,
-              model,
-              mode: req.mode,
-              tier,
-              phase: 'done',
-              ttftMs,
-              totalMs: Date.now() - startedAt,
-              inputTokens: u.inputTokens,
-              outputTokens: u.outputTokens,
-              cacheRead: u.cacheRead,
-              cacheWrite: u.cacheWrite,
-              cacheUncached: u.cacheUncached,
-              cacheStatus: u.cacheStatus,
-              cacheTtl: u.cacheTtl
-            })
-            // Record every completed model request, including live suggestions and meeting recaps.
-            // The mode distinguishes background work from a user question; only metrics and a local
-            // closed-taxonomy classification cross the Operator ingest boundary, never prompt content.
-            let skillId: string | undefined
-            let skillVersion: string | undefined
-            if (req.mode === 'answer' || req.mode === 'vision') {
-              try {
-                const skill = loadVerifiedSkill(isBuiltinConversationMode(s.mode) ? s.mode : 'humanizer')
-                skillId = skill.id
-                skillVersion = skill.version
-              } catch {
-                /* integrity errors already fail closed on the ask path */
-              }
-            }
-            void recordOperatorAsk(s, {
-              id: req.id,
-              mode: req.mode,
-              skillId,
-              skillVersion,
-              provider,
-              model,
-              ttftMs,
-              totalMs: Date.now() - startedAt,
-              inputTokens: u.inputTokens,
-              outputTokens: u.outputTokens,
-              cacheRead: u.cacheRead,
-              cacheWrite: u.cacheWrite,
-              cacheUncached: u.cacheUncached,
-              cacheStatus: u.cacheStatus,
-              cacheTtl: u.cacheTtl,
-              outcome: 'answered',
-              // Do not pass the prompt to telemetry. Empty/background prompts remain honestly 'unknown'.
-              questionType: classifyQuestionType(req.prompt, { vision: req.mode === 'vision' }),
-              vision: req.mode === 'vision',
-              pathTag: pathTagForSeatProvider(provider, viaOperator)
-            })
-            // The winning leg's success is the whole race's terminal outcome — drop the combined abort
-            // registration set up before either leg started (see the hedge dispatch below).
-            if (race) streams.delete(req.id)
-            win?.webContents.send(IPC.streamDone, { id: req.id, ...u })
-            // Act 5 trial hook (MQA-281): the ONE seam that fires on a real, successfully-delivered
-            // result (gotToken is guaranteed true above) — never on install/launch. Cheap no-op unless
-            // this is the very first qualifying (suggest/summary/recap) result this install has ever
-            // produced; the demo-tagged check is belt-and-suspenders (see noteQualifyingUse's header).
-            noteQualifyingUse(req.mode, req.prompt, req.transcript)
-          },
-          onError: failAttempt
-        }
-      })
-      if (race) race.gate.setHandle(race.leg, handle)
-      else streams.set(req.id, handle)
-    }
-
-    // OPERATOR.md: a connected working CLI wins every user question (last-clicked primary).
-    // req.providerOverride still wins (Dust retrieval / Spotlight Ref).
-    const cliPrimary = pickWorkingCliPrimary({
-      cliConnected: s.cliConnected,
-      lastClickedCli: s.lastClickedCli,
-      allowed
-    })
-    const operatorRoute = nextAskRoute({
-      cliConnected: s.cliConnected,
-      lastClickedCli: s.lastClickedCli,
-      allowed,
-      fundedProviders: operatorFundedProviders()
-    })
-    const routedActive =
-      !cliPrimary && operatorRoute.tier === 'operator' && operatorRoute.provider in PROVIDERS
-        ? (operatorRoute.provider as ProviderId)
-        : s.provider
-    // Métis Local outranks cliPrimary (but never providerOverride): an in-scope suggest/summary/vision ask
-    // routes to the on-device model first whenever it's eligible right now (PLAN.md §4.3 "Routing
-    // precedence, explicit") — see local-routing.ts's pickPrimaryProvider for the exact precedence rule.
-    // localPrimaryEligibleFor (not the bare localEligibleFor) layers Wave 2's routingMode on top: 'api'
-    // forces this false so local can never win the first-attempt pick, 'local' relaxes the per-mode
-    // useFor toggle, 'auto' is byte-identical to the old localEligibleFor call.
-    const localPrimaryEligible = localPrimaryEligibleFor(req, s, routeTier(req, s.thinkingMode), allowed)
-    const localVisionRequired = localVisionPrivacyRequired(req, s)
-    const primary = pickPrimaryProvider(
-      req.providerOverride,
-      localPrimaryEligible,
-      cliPrimary,
-      routedActive,
-      localVisionRequired
-    )
-    // MQA-003: when the primary's credentials were just rejected — OR its live budget is nearly spent
-    // (resilience.budgetPreempt) — start at the next eligible provider instead of re-paying its round trip
-    // on every ask (measured 6.5–9.3s wasted against a 15s live-suggest budget). It stays in `attempted` so
-    // the walk never circles back to it. pickFailover returns null for a pinned Dust-agent request, so a
-    // pinned ask is never silently substituted.
-    const primaryUnavailable =
-      isCoolingDown(primary) || (s.resilience.budgetPreempt && isBudgetExhausted(primary))
-    const skipDeadPrimary = primaryUnavailable ? pickFailover([primary]) : null
-
-    // F3 hedge: a fresh, base-tier interactive ask (answer/vision/suggest) races a backup provider
-    // against the primary if the primary hasn't produced a token within HEDGE_DELAY_MS — see
-    // main/llm/hedge.ts's HedgeRace for the full contract. Scoped to a genuinely fresh first attempt
-    // (never a preempted-primary substitution) and to requests that could actually fail over at all
-    // (a pinned Dust-agent ask has nothing valid to race against).
-    const hedgeEligible =
-      s.resilience.hedge &&
-      !skipDeadPrimary &&
-      // MQA-147: never race a LOCAL primary. The hedge leg is a fresh dispatch, not a failover out of the
-      // local leg, so neither `provider !== 'local'` failover guard ever sees it — a screenshot the user
-      // pinned to on-device (localVisionPrivacyRequired) was POSTed to a keyed cloud provider 3s in, and a
-      // local no-output silently uploaded the request instead of surfacing. This one conjunct subsumes the
-      // vision pin (pickPrimaryProvider returns 'local' whenever it is set) and closes the same hole for an
-      // in-scope local suggest. Without a race, the local leg's own terminals run un-suppressed, so the
-      // "Nothing was sent to a cloud provider" message is actually delivered rather than markDead-swallowed.
-      primary !== 'local' &&
-      routeTier(req, s.thinkingMode) === 'base' &&
-      (req.mode === 'answer' || req.mode === 'vision' || req.mode === 'suggest') &&
-      allowCrossProviderFailover(req)
-    if (hedgeEligible) {
-      const race = new HedgeRace()
-      // TRUE RACE (Tony's call): ANY cloud/CLI provider — Cloudflare or otherwise — and the on-device
-      // model start TOGETHER and
-      // the fastest answer wins. HEDGE_DELAY_MS exists to stop a merely-slow PAID primary being billed
-      // twice for one ask, but an on-device backup has no per-request cost and no quota, so that head
-      // start would be pure latency whenever the cloud turns out to be the slower of the two. Quality is
-      // preserved because HedgeRace declares the winner on FIRST TOKEN, not on start order — a healthy
-      // cloud provider that answers faster still wins and still serves its answer; local only takes the
-      // ask when it genuinely gets there first, which is the cloud-is-slow / cloud-is-down case.
-      // This early pick decides the DELAY only: startHedgeLeg re-picks the provider at fire time against
-      // the live primaryChain, so a primary that fails over in the meantime is still excluded correctly.
-      const hedgeDelayMs =
-        pickFailover([primary]) === 'local'
-          ? 0
-          : req.mode === 'suggest'
-            ? HEDGE_DELAY_SUGGEST_MS
-            : HEDGE_DELAY_MS
-      let hedgeTimer: NodeJS.Timeout | null = setTimeout(() => {
-        hedgeTimer = null
-        startHedgeLeg()
-      }, hedgeDelayMs)
-      // ONE launcher behind both triggers: the HEDGE_DELAY_MS timer (a primary that is merely slow) and
-      // HedgeRace's own early pull-forward (a primary already dead — nothing left to give it time for).
-      // race.markHedgeStarted() makes whichever fires second a no-op.
-      function startHedgeLeg(): void {
-        if (race.isDecided()) return
-        // Snapshot, not the live array: primaryChain keeps growing under the primary leg while the hedge
-        // runs, and `attempted` rides into every recursive attempt() this leg makes. Passing it on means the
-        // hedge's OWN failover cascade also refuses to walk back onto a provider the primary already holds.
-        const tried = primaryChain.slice()
-        const backup = pickFailover(tried)
-        if (!backup) {
-          race.markHedgeUnavailable()
-          return
-        }
-        race.markHedgeStarted()
-        if (hedgeTimer) {
-          clearTimeout(hedgeTimer)
+      // F3 hedge: a fresh, base-tier interactive ask (answer/vision/suggest) races a backup provider
+      // against the primary if the primary hasn't produced a token within HEDGE_DELAY_MS — see
+      // main/llm/hedge.ts's HedgeRace for the full contract. Scoped to a genuinely fresh first attempt
+      // (never a preempted-primary substitution) and to requests that could actually fail over at all
+      // (a pinned Dust-agent ask has nothing valid to race against).
+      const hedgeEligible =
+        s.resilience.hedge &&
+        !skipDeadPrimary &&
+        // MQA-147: never race a LOCAL primary. The hedge leg is a fresh dispatch, not a failover out of the
+        // local leg, so neither `provider !== 'local'` failover guard ever sees it — a screenshot the user
+        // pinned to on-device (localVisionPrivacyRequired) was POSTed to a keyed cloud provider 3s in, and a
+        // local no-output silently uploaded the request instead of surfacing. This one conjunct subsumes the
+        // vision pin (pickPrimaryProvider returns 'local' whenever it is set) and closes the same hole for an
+        // in-scope local suggest. Without a race, the local leg's own terminals run un-suppressed, so the
+        // "Nothing was sent to a cloud provider" message is actually delivered rather than markDead-swallowed.
+        primary !== 'local' &&
+        routeTier(req, s.thinkingMode) === 'base' &&
+        (req.mode === 'answer' || req.mode === 'vision' || req.mode === 'suggest') &&
+        allowCrossProviderFailover(req)
+      if (hedgeEligible) {
+        const race = new HedgeRace()
+        // TRUE RACE (Tony's call): ANY cloud/CLI provider — Cloudflare or otherwise — and the on-device
+        // model start TOGETHER and
+        // the fastest answer wins. HEDGE_DELAY_MS exists to stop a merely-slow PAID primary being billed
+        // twice for one ask, but an on-device backup has no per-request cost and no quota, so that head
+        // start would be pure latency whenever the cloud turns out to be the slower of the two. Quality is
+        // preserved because HedgeRace declares the winner on FIRST TOKEN, not on start order — a healthy
+        // cloud provider that answers faster still wins and still serves its answer; local only takes the
+        // ask when it genuinely gets there first, which is the cloud-is-slow / cloud-is-down case.
+        // This early pick decides the DELAY only: startHedgeLeg re-picks the provider at fire time against
+        // the live primaryChain, so a primary that fails over in the meantime is still excluded correctly.
+        const hedgeDelayMs =
+          pickFailover([primary]) === 'local' ? 0 : req.mode === 'suggest' ? HEDGE_DELAY_SUGGEST_MS : HEDGE_DELAY_MS
+        let hedgeTimer: NodeJS.Timeout | null = setTimeout(() => {
           hedgeTimer = null
+          startHedgeLeg()
+        }, hedgeDelayMs)
+        // ONE launcher behind both triggers: the HEDGE_DELAY_MS timer (a primary that is merely slow) and
+        // HedgeRace's own early pull-forward (a primary already dead — nothing left to give it time for).
+        // race.markHedgeStarted() makes whichever fires second a no-op.
+        function startHedgeLeg(): void {
+          if (race.isDecided()) return
+          // Snapshot, not the live array: primaryChain keeps growing under the primary leg while the hedge
+          // runs, and `attempted` rides into every recursive attempt() this leg makes. Passing it on means the
+          // hedge's OWN failover cascade also refuses to walk back onto a provider the primary already holds.
+          const tried = primaryChain.slice()
+          const backup = pickFailover(tried)
+          if (!backup) {
+            race.markHedgeUnavailable()
+            return
+          }
+          race.markHedgeStarted()
+          if (hedgeTimer) {
+            clearTimeout(hedgeTimer)
+            hedgeTimer = null
+          }
+          attempt(backup, tried, 0, { gate: race, leg: 'hedge' })
         }
-        attempt(backup, tried, 0, { gate: race, leg: 'hedge' })
+        race.setHedgeStarter(startHedgeLeg)
+        streams.set(req.id, {
+          abort: () => {
+            if (hedgeTimer) clearTimeout(hedgeTimer)
+            race.abortAll()
+          }
+        })
+        attempt(primary, [], 0, { gate: race, leg: 'primary' })
+      } else {
+        attempt(skipDeadPrimary ?? primary, skipDeadPrimary ? [primary] : [])
       }
-      race.setHedgeStarter(startHedgeLeg)
-      streams.set(req.id, {
-        abort: () => {
-          if (hedgeTimer) clearTimeout(hedgeTimer)
-          race.abortAll()
-        }
-      })
-      attempt(primary, [], 0, { gate: race, leg: 'primary' })
-    } else {
-      attempt(skipDeadPrimary ?? primary, skipDeadPrimary ? [primary] : [])
-    }
     } catch (err) {
       win?.webContents.send(IPC.streamError, {
         id,
@@ -8271,7 +8650,7 @@ function registerIpc(): void {
     // active saves remain claimed so text-only backfill cannot erase the original cluster-label join.
     // Unmatched/legacy saves keep the existing fire-and-forget text-name improvement, without enrollment.
     if (!recordLiveSpeakerSave(m.startedAt, r.path)) {
-      void backfillSpeakerNames(r.path).catch(error => {
+      void backfillSpeakerNames(r.path).catch((error) => {
         warnSpeakerFailure('post-save text backfill failed', error)
       })
     }
@@ -8344,7 +8723,9 @@ function registerIpc(): void {
     const failureDetails = ingestFailureDetails(idx)
     return {
       meetings: Object.values(idx.ingested).filter((v) => v.ok).length,
-      ingestedFiles: Object.entries(idx.ingested).filter(([, v]) => v.ok).map(([file]) => file),
+      ingestedFiles: Object.entries(idx.ingested)
+        .filter(([, v]) => v.ok)
+        .map(([file]) => file),
       // 6d: failing-source filenames, the failed-side counterpart to ingestedFiles above — lets a
       // per-meeting indicator (indexed/pending/failed) be derived without a second, heavier IPC call.
       // Pending (deferred for consolidation) is NOT a failure — same discriminator ingestFailureCounts
@@ -8496,7 +8877,11 @@ function registerIpc(): void {
     const parsed = SetDealOutcomePayloadSchema.safeParse(raw)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
     const s = getSettings()
-    const updated = await setDealOutcome(s, resolveEntitySlug(readAliasMap(s), 'deal', parsed.data.dealSlug), parsed.data.outcome)
+    const updated = await setDealOutcome(
+      s,
+      resolveEntitySlug(readAliasMap(s), 'deal', parsed.data.dealSlug),
+      parsed.data.outcome
+    )
     if (!updated) return { ok: false, error: 'Deal not found.' }
     await markBrainChanged(getSettings())
     auditLog('brain.deal.outcome', { outcome: parsed.data.outcome })
@@ -8577,7 +8962,9 @@ function registerIpc(): void {
     // mutation) for the kind/fromId/intoId this hook needs to know which wiki pages to republish once
     // both entities are restored. unmergeEntities re-derives the same entry internally to do the actual
     // restore; this is a second, harmless read of the same journal.
-    const journalEntry = readCorrectionsJournal(s).find((en) => en.kind === 'entity_merge' && en.seq === parsed.data.targetSeq)
+    const journalEntry = readCorrectionsJournal(s).find(
+      (en) => en.kind === 'entity_merge' && en.seq === parsed.data.targetSeq
+    )
     const r = await unmergeEntities(s, parsed.data)
     if (r.ok) {
       await markBrainChanged(s)
@@ -8854,14 +9241,23 @@ function registerIpc(): void {
     // file does — this one was the one exception.
     const dialogOwner = win ?? undefined
     const r = dialogOwner
-      ? await dialog.showSaveDialog(dialogOwner, { defaultPath: `${safeName}.pdf`, filters: [{ name: 'PDF', extensions: ['pdf'] }] })
+      ? await dialog.showSaveDialog(dialogOwner, {
+          defaultPath: `${safeName}.pdf`,
+          filters: [{ name: 'PDF', extensions: ['pdf'] }]
+        })
       : await dialog.showSaveDialog({ defaultPath: `${safeName}.pdf`, filters: [{ name: 'PDF', extensions: ['pdf'] }] })
     if (r.canceled || !r.filePath) return { ok: false as const }
     const html = recapMarkdownToHtml(md, input?.title)
     const pdfWin = new BrowserWindow({
       title: 'Métis',
       show: false,
-      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, devTools: DEVTOOLS_ENABLED, webSecurity: true }
+      webPreferences: {
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+        devTools: DEVTOOLS_ENABLED,
+        webSecurity: true
+      }
     })
     try {
       await pdfWin.loadURL('data:text/html;charset=UTF-8,' + encodeURIComponent(html))
@@ -8970,7 +9366,11 @@ function registerIpc(): void {
     // which would execute a .command/.app/.exe. Mirror deleteMeeting()/debriefSave()'s .md guard.
     if (!safeName) return ''
     // Encrypted transcripts are unreadable in an editor — the target is a decrypted temp copy instead.
-    const target = await openExplicitly(safeName, (event) => e.sender.send(IPC.recallHydration, event), (options) => meetingOpenTarget(folder, safeName, options))
+    const target = await openExplicitly(
+      safeName,
+      (event) => e.sender.send(IPC.recallHydration, event),
+      (options) => meetingOpenTarget(folder, safeName, options)
+    )
     if (!target.ok) return target.error
     auditLog('recall.open', { encrypted: target.encrypted })
     return shell.openPath(target.path)
@@ -8992,36 +9392,39 @@ function registerIpc(): void {
   })
 
   // --- Listening state (tray icon + Dust conversation reset + power-save block) ---
-  ipcMain.handle(IPC.listeningState, createListeningStateHandler({
-    assertMainWindow,
-    requireAuth,
-    acceptTransition: acceptLiveSpeakerTransition,
-    setListeningActive,
-    setTrayRecording,
-    setRecordingPowerSaveBlock,
-    releaseParakeet: parakeetRelease,
-    releaseSpeakerEmbedding: () => releaseSpeakerEmbedding('live'),
-    onMeetingStart: () => {
-      if (speakerIdProcessingEnabled()) {
-        speakerIdInstance?.resetSession()
+  ipcMain.handle(
+    IPC.listeningState,
+    createListeningStateHandler({
+      assertMainWindow,
+      requireAuth,
+      acceptTransition: acceptLiveSpeakerTransition,
+      setListeningActive,
+      setTrayRecording,
+      setRecordingPowerSaveBlock,
+      releaseParakeet: parakeetRelease,
+      releaseSpeakerEmbedding: () => releaseSpeakerEmbedding('live'),
+      onMeetingStart: () => {
+        if (speakerIdProcessingEnabled()) {
+          speakerIdInstance?.resetSession()
+        }
+        // A new meeting starting is the one clean boundary for Dust conversation continuity — everything
+        // from here until the NEXT meeting starts shares one conversation (see resetDustConversation).
+        resetDustConversation()
+        // Pre-create the new meeting's conversation in the background (fire-and-forget) so the FIRST
+        // quick action / ask of the meeting doesn't pay the createConversation round trip. Keyed to the
+        // base agent — the interactive speed pin in attempt() routes all mid-meeting asks there.
+        const s = getSettings()
+        const dustKey = getApiKey('dust')
+        const baseAgent = (s.providerModels['dust'] || '').trim()
+        if (dustKey && s.dustWorkspaceId && baseAgent) {
+          void prewarmDustConversation(
+            { apiKey: dustKey, workspaceId: s.dustWorkspaceId, baseURL: s.dustBaseUrl },
+            baseAgent
+          )
+        }
       }
-      // A new meeting starting is the one clean boundary for Dust conversation continuity — everything
-      // from here until the NEXT meeting starts shares one conversation (see resetDustConversation).
-      resetDustConversation()
-      // Pre-create the new meeting's conversation in the background (fire-and-forget) so the FIRST
-      // quick action / ask of the meeting doesn't pay the createConversation round trip. Keyed to the
-      // base agent — the interactive speed pin in attempt() routes all mid-meeting asks there.
-      const s = getSettings()
-      const dustKey = getApiKey('dust')
-      const baseAgent = (s.providerModels['dust'] || '').trim()
-      if (dustKey && s.dustWorkspaceId && baseAgent) {
-        void prewarmDustConversation(
-          { apiKey: dustKey, workspaceId: s.dustWorkspaceId, baseURL: s.dustBaseUrl },
-          baseAgent
-        )
-      }
-    }
-  }))
+    })
+  )
 
   // --- Window management ---
   ipcMain.handle(IPC.windowResize, (e, payload: { height: number; width?: number }) => {
@@ -9046,9 +9449,7 @@ function registerIpc(): void {
       const nextWidth = overlayHugNextWidth({
         reportedWidth: payload.width,
         maxWidth: BAR_WIDTH,
-        circleRest:
-          isMinimized &&
-          overlayOrbRestIsCircle(layout, parseOverlayOrbStyle(getSettings().overlayOrbStyle))
+        circleRest: isMinimized && overlayOrbRestIsCircle(layout, parseOverlayOrbStyle(getSettings().overlayOrbStyle))
       })
       const rest = overlayRestSize(layout)
       // Revealed Hide/Island keeps BAR_WIDTH. Hug 120 + height 44 was the Ultron Show Métis stub.
@@ -9066,8 +9467,7 @@ function registerIpc(): void {
     // Same finite-number guard as width: a NaN/Infinity height from a renderer layout glitch would
     // otherwise reach resizeTo's Math.round/min/max unclamped, poisoning them to NaN and making
     // win.setBounds throw or leave the window in a broken size. Fall back to BAR_HEIGHT instead.
-    const height =
-      typeof payload?.height === 'number' && Number.isFinite(payload.height) ? payload.height : BAR_HEIGHT
+    const height = typeof payload?.height === 'number' && Number.isFinite(payload.height) ? payload.height : BAR_HEIGHT
     resizeTo(height)
   })
   ipcMain.handle(IPC.windowMode, (e, mode: unknown) => {
@@ -9192,7 +9592,9 @@ function registerIpc(): void {
     const rawBody = typeof input?.body === 'string' ? input.body : ''
     const MAX_BODY = 1500
     const truncated = rawBody.length > MAX_BODY
-    const body = truncated ? rawBody.slice(0, MAX_BODY) + '\n\n[Truncated — full text copied to your clipboard.]' : rawBody
+    const body = truncated
+      ? rawBody.slice(0, MAX_BODY) + '\n\n[Truncated — full text copied to your clipboard.]'
+      : rawBody
     if (truncated) clipboard.writeText(rawBody)
     void shell.openExternal(`mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`)
     return { truncated }
@@ -9218,647 +9620,717 @@ if (!app.requestSingleInstanceLock()) {
     reveal('second-instance', { focus: true })
     if (typeof handleSmokeReopenProbe === 'function') handleSmokeReopenProbe(commandLine)
   })
-  app.whenReady().then(async () => {
-  initLogging() // route main-process logs to a rotated file before anything else can fail
-  const bootWork = createBootWork() // M2-0031: non-first-paint fs work starts after the first show, under the pool cap
-  bootWorkGate = bootWork
-  configureSidecarRegistry(createSidecarRegistry(app.getPath('userData')))
-  // M2-0518: child processes first paint does not need; the reaper spares this launch's own sidecars, the memory gate reads freemem() meanwhile.
-  bootWork.run('runBootSidecarReaper', () => runBootSidecarReaper(app.getPath('userData')))
-  bootWork.run('startAvailableMemorySampler', () => { startAvailableMemorySampler() }) // M2-0430: vm_stat reading for the local-model memory gate
-  // M2-0033: unattended model work waits for the maintenance gate.
-  startMaintenanceGate({ interactiveActive: () => localRuntime.activeStreams() + fmRuntime.activeStreams() > 0 })
-  app.on('web-contents-created', (_event, contents) => {
-    contents.on('input-event', (_inputEvent, input) => {
-      noteUserInput(input.type)
-      // M2-0431: a click or keypress in the overlay makes its reveal deliberate, never an overlay.flash.
-      if (win && !win.isDestroyed() && contents === win.webContents) overlayRevealLog.input(input.type)
-    })
-  })
-  // FITO-185-Z / AA: exclusive Act1 must appear ≤300ms from process start. Do not await
-  // proxy/CLI/key seeding before first paint — hoist IPC+window for wiped-profile exclusive (tray: M2-0422).
-  // Call registerIpc/createWindow directly (runStep/clearBootWatchOnce are declared later in this whenReady callback — "used before declaration").
-  // Later boot still runs createWindow idempotently (early return if win exists).
-  if (onboardingExclusiveLive()) {
-    try {
-      registerIpc()
-      await yieldBeforeBootWindow() // M2-0031: IPC registration, window construction and first show are separate tasks
-      withBootFirstShowDeferred(createWindow)
-    } catch (e) {
-      mainLog.warn('[boot] FITO-185-Z early exclusive window failed:', e)
-    }
-  }
-  await installProxyAwareFetch() // route provider fetch through the env/OS proxy so Dust etc. work behind a corporate proxy
-  // Managed egressAllowlist (docs/NETWORK-EGRESS.md): when IT names the hosts this seat may reach, refuse
-  // every other host on both network stacks. Best-effort like the proxy install: a failure here must not
-  // block boot, and an absent key changes nothing.
-  try {
-    installEgressGuard(getEgressAllowlist())
-  } catch (e) {
-    mainLog.warn('[net] egress guard not installed:', e)
-  }
-  // Warm the CLI binary cache at boot when a CLI provider is connected, so the session's FIRST CLI ask
-  // doesn't stall on the login-shell PATH lookup (it only ran on sign-in before — i.e. once ever).
-  // M2-0518: both spawn child processes, so they start behind the first show.
-  bootWork.run('warmCliSessions', () => {
-    const s0 = getSettings()
-    if (s0.cliConnected['claude-cli'] || s0.cliConnected['codex-cli']) {
-      prewarmCli()
-      // MQA-062: and check the session those flags claim, once per launch. A `claude logout` between
-      // runs otherwise leaves the app asserting a provider it cannot use until the first ask fails.
-      void verifyCliSessions()
-    }
-  })
-  // Seed an optional installer-embedded Cloudflare proxy key, once per profile, so a fresh install of
-  // the default provider can answer with zero paste-a-key setup when the operator chose to embed one.
-  // See embedded-cloudflare-key.ts — a no-op when no bundle was packaged.
-  // M2-0518: the first-launch seed decrypts the bundle and writes the keystore, so it starts behind the first show;
-  // the renderer then re-reads settings, so a seeded provider shows as ready without a relaunch.
-  bootWork.run('importEmbeddedCloudflareKey', () => {
-    importEmbeddedCloudflareKey()
-    notifySettingsChanged()
-  })
-  {
-    setModeSkillsOverlayRoot(join(app.getPath('userData'), 'skills-overrides'))
-    const boot = getSettings()
-    if (!boot.operatorUrl && process.env.METIS_OPERATOR_URL && /^https:\/\//i.test(process.env.METIS_OPERATOR_URL)) {
-      setSettings({ operatorUrl: process.env.METIS_OPERATOR_URL.trim() })
-    }
-    if (!boot.operatorIngestSecret && process.env.METIS_OPERATOR_INGEST_SECRET) {
-      setSettings({ operatorIngestSecret: process.env.METIS_OPERATOR_INGEST_SECRET })
-    }
-  }
-  // Optional Local AI provisions only after opt-in and only when org policy permits it. Keep the
-  // selected model (including an explicitly smaller one), and never delay startup for its download.
-  // The downloader retains RAM/disk/hash gates. Transcription assets are provisioned independently.
-  {
-    // Warm only an eligible, downloaded model. Re-read opt-in and policy because either can change
-    // while provisioning is in flight. Startup never waits for this optional work.
-    const warmLocalIfReady = (): void => {
-      try {
-        const cur = getSettings()
-        if (!speculativeLocalWorkAllowed()) return
-        if (!localPrewarmEligible(cur, getAllowedProviders(), publicSettings().providerReady)) return
-        if (!localModelDownloaded(cur.localLlm.modelId)) return
-        void prewarmLocal(cur.localLlm.modelId, buildPrewarmMessages('warm', cur), speculativeLocalWorkAllowed).catch((e) =>
-          mainLog.warn('[boot] local prewarm failed:', e instanceof Error ? e.message : String(e))
-        )
-      } catch (e) {
-        mainLog.warn('[boot] local prewarm skipped:', e instanceof Error ? e.message : String(e))
+  app
+    .whenReady()
+    .then(async () => {
+      initLogging() // route main-process logs to a rotated file before anything else can fail
+      const bootWork = createBootWork() // M2-0031: non-first-paint fs work starts after the first show, under the pool cap
+      bootWorkGate = bootWork
+      configureSidecarRegistry(createSidecarRegistry(app.getPath('userData')))
+      // M2-0518: child processes first paint does not need; the reaper spares this launch's own sidecars, the memory gate reads freemem() meanwhile.
+      bootWork.run('runBootSidecarReaper', () => runBootSidecarReaper(app.getPath('userData')))
+      bootWork.run('startAvailableMemorySampler', () => {
+        startAvailableMemorySampler()
+      }) // M2-0430: vm_stat reading for the local-model memory gate
+      // M2-0033: unattended model work waits for the maintenance gate.
+      startMaintenanceGate({ interactiveActive: () => localRuntime.activeStreams() + fmRuntime.activeStreams() > 0 })
+      app.on('web-contents-created', (_event, contents) => {
+        contents.on('input-event', (_inputEvent, input) => {
+          noteUserInput(input.type)
+          // M2-0431: a click or keypress in the overlay makes its reveal deliberate, never an overlay.flash.
+          if (win && !win.isDestroyed() && contents === win.webContents) overlayRevealLog.input(input.type)
+        })
+      })
+      // FITO-185-Z / AA: exclusive Act1 must appear ≤300ms from process start. Do not await
+      // proxy/CLI/key seeding before first paint — hoist IPC+window for wiped-profile exclusive (tray: M2-0422).
+      // Call registerIpc/createWindow directly (runStep/clearBootWatchOnce are declared later in this whenReady callback — "used before declaration").
+      // Later boot still runs createWindow idempotently (early return if win exists).
+      if (onboardingExclusiveLive()) {
+        try {
+          registerIpc()
+          await yieldBeforeBootWindow() // M2-0031: IPC registration, window construction and first show are separate tasks
+          withBootFirstShowDeferred(createWindow)
+        } catch (e) {
+          mainLog.warn('[boot] FITO-185-Z early exclusive window failed:', e)
+        }
       }
-    }
-    // The warm is unattended model work: it waits for the maintenance gate, so it never starts in the boot quiet period.
-    // M2-0518: provisioning stats, hashes and downloads model files, so it starts behind the first show.
-    bootWork.run('provisionLocalModel', () => provisionLocalModel(getSettings().localLlm, getAllowedProviders(), ensureLocalModel)
-      .then((ready) => {
-        if (!ready) return
-        refreshScreenPreprocess()
+      await installProxyAwareFetch() // route provider fetch through the env/OS proxy so Dust etc. work behind a corporate proxy
+      // Managed egressAllowlist (docs/NETWORK-EGRESS.md): when IT names the hosts this seat may reach, refuse
+      // every other host on both network stacks. Best-effort like the proxy install: a failure here must not
+      // block boot, and an absent key changes nothing.
+      try {
+        installEgressGuard(getEgressAllowlist())
+      } catch (e) {
+        mainLog.warn('[net] egress guard not installed:', e)
+      }
+      // Warm the CLI binary cache at boot when a CLI provider is connected, so the session's FIRST CLI ask
+      // doesn't stall on the login-shell PATH lookup (it only ran on sign-in before — i.e. once ever).
+      // M2-0518: both spawn child processes, so they start behind the first show.
+      bootWork.run('warmCliSessions', () => {
+        const s0 = getSettings()
+        if (s0.cliConnected['claude-cli'] || s0.cliConnected['codex-cli']) {
+          prewarmCli()
+          // MQA-062: and check the session those flags claim, once per launch. A `claude logout` between
+          // runs otherwise leaves the app asserting a provider it cannot use until the first ask fails.
+          void verifyCliSessions()
+        }
+      })
+      // Seed an optional installer-embedded Cloudflare proxy key, once per profile, so a fresh install of
+      // the default provider can answer with zero paste-a-key setup when the operator chose to embed one.
+      // See embedded-cloudflare-key.ts — a no-op when no bundle was packaged.
+      // M2-0518: the first-launch seed decrypts the bundle and writes the keystore, so it starts behind the first show;
+      // the renderer then re-reads settings, so a seeded provider shows as ready without a relaunch.
+      bootWork.run('importEmbeddedCloudflareKey', () => {
+        importEmbeddedCloudflareKey()
+        notifySettingsChanged()
+      })
+      {
+        setModeSkillsOverlayRoot(join(app.getPath('userData'), 'skills-overrides'))
+        const boot = getSettings()
+        if (
+          !boot.operatorUrl &&
+          process.env.METIS_OPERATOR_URL &&
+          /^https:\/\//i.test(process.env.METIS_OPERATOR_URL)
+        ) {
+          setSettings({ operatorUrl: process.env.METIS_OPERATOR_URL.trim() })
+        }
+        if (!boot.operatorIngestSecret && process.env.METIS_OPERATOR_INGEST_SECRET) {
+          setSettings({ operatorIngestSecret: process.env.METIS_OPERATOR_INGEST_SECRET })
+        }
+      }
+      // Optional Local AI provisions only after opt-in and only when org policy permits it. Keep the
+      // selected model (including an explicitly smaller one), and never delay startup for its download.
+      // The downloader retains RAM/disk/hash gates. Transcription assets are provisioned independently.
+      {
+        // Warm only an eligible, downloaded model. Re-read opt-in and policy because either can change
+        // while provisioning is in flight. Startup never waits for this optional work.
+        const warmLocalIfReady = (): void => {
+          try {
+            const cur = getSettings()
+            if (!speculativeLocalWorkAllowed()) return
+            if (!localPrewarmEligible(cur, getAllowedProviders(), publicSettings().providerReady)) return
+            if (!localModelDownloaded(cur.localLlm.modelId)) return
+            void prewarmLocal(
+              cur.localLlm.modelId,
+              buildPrewarmMessages('warm', cur),
+              speculativeLocalWorkAllowed
+            ).catch((e) => mainLog.warn('[boot] local prewarm failed:', e instanceof Error ? e.message : String(e)))
+          } catch (e) {
+            mainLog.warn('[boot] local prewarm skipped:', e instanceof Error ? e.message : String(e))
+          }
+        }
+        // The warm is unattended model work: it waits for the maintenance gate, so it never starts in the boot quiet period.
+        // M2-0518: provisioning stats, hashes and downloads model files, so it starts behind the first show.
+        bootWork.run('provisionLocalModel', () =>
+          provisionLocalModel(getSettings().localLlm, getAllowedProviders(), ensureLocalModel)
+            .then((ready) => {
+              if (!ready) return
+              refreshScreenPreprocess()
+              void runAsMaintenance(warmLocalIfReady)
+            })
+            .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
+        )
         void runAsMaintenance(warmLocalIfReady)
-      })
-      .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e)))
-    void runAsMaintenance(warmLocalIfReady)
-  }
-  // Windows toast attribution: a process's AppUserModelID must match the installed shortcut's AUMID
-  // (electron-builder sets it to appId) or Windows silently drops native Notifications — which breaks
-  // the meeting-reminder toast for portable-build and launch-at-login users (no shortcut in the launch
-  // path). Set it to the exact appId, before createTray/createWindow/any Notification.
-  if (process.platform === 'win32') app.setAppUserModelId('com.mantu.asktoto')
-  // Windows CreateProcess searches the current working directory for a bare-name child executable
-  // before it searches PATH — if AskToto is ever launched from an attacker-writable cwd, a planted
-  // binary (uv/python/npm/where/tar/cmd, etc.) could get executed by any later spawn. Move cwd to our
-  // own userData dir (always exists at startup; nothing in the app relies on process.cwd()) before any
-  // spawn/createTray/createWindow happens, so that class of attack has nothing left to land in.
-  if (process.platform === 'win32') {
-    try { process.chdir(app.getPath('userData')) } catch { /* best-effort */ }
-  }
-  bootWork.run('reconcileLaunchAtLogin', () => {
-    try {
-      if (reconcileLaunchAtLogin()) notifySettingsChanged()
-    } catch { /* best-effort — never block startup */ }
-  })
-  // Unpackaged (dev/QA) runs show Electron's default icon in the Dock — brand them with the Mantu M so
-  // a dev window is never mistaken for "the Electron thing". Packaged builds get build/icon.png baked
-  // in by electron-builder (mac .icns / win .ico) and don't need this.
-  if (process.platform === 'darwin' && !app.isPackaged) {
-    try { app.dock?.setIcon(join(__dirname, '../../build/icon.png')) } catch { /* cosmetic only */ }
-  }
-  // Prune stale crash logs to the most recent 5 (best-effort; filenames sort lexicographically by ts, then
-  // by persistCrash's per-process tie-breaker suffix — both fixed-width-enough within a run to sort right).
-  try {
-    const ud = app.getPath('userData')
-    const crashLogs = readdirSync(ud)
-      .filter((f) => /^crash-\d+-\d+\.log$/.test(f))
-      .sort()
-    for (const f of crashLogs.slice(0, Math.max(0, crashLogs.length - 5))) {
-      try { unlinkSync(join(ud, f)) } catch { /* ignore */ }
-    }
-  } catch { /* best-effort — never block startup */ }
-  // MQA-175: the JS-level handlers below cannot see every death. A native C++ exception — Chromium's
-  // OSCrypt raising std::out_of_range on a sync-mangled encrypted file, the shape that killed six
-  // consecutive launches of the shipped 1.5.4 Windows build — unwinds past V8 entirely, so nothing in
-  // this process ever runs again: no crash-*.log, no audit line, no window, no dialog. Only the NEXT
-  // launch can report it, and only if this one left a mark before doing the dangerous work.
-  const earlyDeath = beginBootWatch(app.getPath('userData'), app.getVersion())
-  // FITO-185-B: keep the process unsuspended until the 15s endBootWatch / will-quit clear runs.
-  setBootPowerSaveBlock(true)
-  // FITO-185-G-SHOW / G-TIMER: idempotent sentinel clear. Purpose of boot-incomplete is early death
-  // BEFORE ready; once createWindow+registerIpc completed we are past the kill zone. Brain work stays
-  // on the 15s timer (power-save still held until then). Multiple callers race safely.
-  let bootWatchClosed = false
-  const clearBootWatchOnce = (reason: string): void => {
-    if (bootWatchClosed) return
-    bootWatchClosed = true
-    bootWork.run('clearBootWatch', () => {
-      try {
-        endBootWatch(app.getPath('userData'))
-        auditLog('app.boot.watch_cleared', { earlyDeath: Boolean(earlyDeath), reason })
-      } catch (e) {
-        mainLog.warn('[boot] clearBootWatchOnce failed:', e)
       }
-    })
-  }
-  if (earlyDeath) persistCrash('boot-early-death', describeEarlyDeath(earlyDeath), 'previous launch died before boot completed')
-  // Never let an unhandled error crash the overlay silently — log to file, audit, write a crash dump, and
-  // (for a fatal exception) offer a one-time relaunch while defaulting to keep-alive.
-  process.on('uncaughtException', (err) => onFatal('uncaughtException', err))
-  process.on('unhandledRejection', (reason) => onFatal('unhandledRejection', reason))
-  // QA-identity builds only (compiled out of every other bundle): the packaged exit-path proof sends SIGUSR2
-  // to raise a real uncaughtException through onFatal.
-  if (QA_IDENTITY_BUILD) installQaFaultHook()
-  // devEnv(ASKTOTO_SELFTEST) keeps self-test out of packaged builds; runSelfTest() itself refuses to run
-  // unless userData is exactly the throwaway directory redirectSelfTestUserData() created (M2-0004).
-  const selfTestOut = devEnv('ASKTOTO_SELFTEST')
-  if (selfTestOut) {
-    try {
-      await runSelfTest(selfTestOut)
-    } catch (e) {
-      console.error('selftest failed', e)
-    }
-    app.quit()
-    return
-  }
-  if (!app.isPackaged) loadDotEnv() // dev convenience only; never read a stray .env in production
-  // Remove decrypted-transcript temp copies orphaned by a previous hard-kill after first show; the sweep
-  // can touch the profile filesystem and first paint does not depend on it.
-  bootWork.run('sweepStaleTempFiles', sweepStaleTempFiles)
-  // Promote any orphaned crash-recovery drafts into real meetings BEFORE the retention sweep, so a
-  // recovered meeting is visible in History and immediately subject to the same retention policy.
-  // M2-0518: both read (and decrypt) the meetings root, so they start behind the first show, in this order.
-  bootWork.run('recoverOrphanDrafts', () => recoverOrphanDrafts(getSettings()).then((r) => {
-    if (r.recovered > 0) auditLog('transcript.recovered', { recovered: r.recovered })
-  }).catch(() => { /* best-effort — never block startup */ }))
-  // Auto-delete meetings past the configured retention window (off by default — see transcriptRetentionDays).
-  // Runs at launch AND every 6 hours after: this overlay realistically stays up for weeks, so a launch-only
-  // sweep silently stopped enforcing retention the day after boot (storage-limitation promise broken).
-  const runRetentionSweep = (): Promise<void> =>
-    sweepExpiredMeetings(getSettings().transcriptRetentionDays).then((r) => {
-      if (r.deleted > 0) {
-        auditLog('transcript.deleted', { bulk: true, expired: true, deleted: r.deleted })
-        // Deliberately not awaited (the sweep must not hold the interval), but the rejection is observed:
-        // `void` attaches no handler, so a transient index.json write failure would escape as an
-        // unhandledRejection and write a crash-*.log + an app.crash audit line for something that never
-        // crashed — same shape as MQA-075. The refresh flag is re-requested by the 60s reconcile tick.
-        void requestSourceRefresh(getSettings()).catch((e) =>
-          mainLog.warn('[brain] source refresh after retention sweep failed:', e instanceof Error ? e.message : String(e))
+      // Windows toast attribution: a process's AppUserModelID must match the installed shortcut's AUMID
+      // (electron-builder sets it to appId) or Windows silently drops native Notifications — which breaks
+      // the meeting-reminder toast for portable-build and launch-at-login users (no shortcut in the launch
+      // path). Set it to the exact appId, before createTray/createWindow/any Notification.
+      if (process.platform === 'win32') app.setAppUserModelId('com.mantu.asktoto')
+      // Windows CreateProcess searches the current working directory for a bare-name child executable
+      // before it searches PATH — if AskToto is ever launched from an attacker-writable cwd, a planted
+      // binary (uv/python/npm/where/tar/cmd, etc.) could get executed by any later spawn. Move cwd to our
+      // own userData dir (always exists at startup; nothing in the app relies on process.cwd()) before any
+      // spawn/createTray/createWindow happens, so that class of attack has nothing left to land in.
+      if (process.platform === 'win32') {
+        try {
+          process.chdir(app.getPath('userData'))
+        } catch {
+          /* best-effort */
+        }
+      }
+      bootWork.run('reconcileLaunchAtLogin', () => {
+        try {
+          if (reconcileLaunchAtLogin()) notifySettingsChanged()
+        } catch {
+          /* best-effort — never block startup */
+        }
+      })
+      // Unpackaged (dev/QA) runs show Electron's default icon in the Dock — brand them with the Mantu M so
+      // a dev window is never mistaken for "the Electron thing". Packaged builds get build/icon.png baked
+      // in by electron-builder (mac .icns / win .ico) and don't need this.
+      if (process.platform === 'darwin' && !app.isPackaged) {
+        try {
+          app.dock?.setIcon(join(__dirname, '../../build/icon.png'))
+        } catch {
+          /* cosmetic only */
+        }
+      }
+      // Prune stale crash logs to the most recent 5 (best-effort; filenames sort lexicographically by ts, then
+      // by persistCrash's per-process tie-breaker suffix — both fixed-width-enough within a run to sort right).
+      try {
+        const ud = app.getPath('userData')
+        const crashLogs = readdirSync(ud)
+          .filter((f) => /^crash-\d+-\d+\.log$/.test(f))
+          .sort()
+        for (const f of crashLogs.slice(0, Math.max(0, crashLogs.length - 5))) {
+          try {
+            unlinkSync(join(ud, f))
+          } catch {
+            /* ignore */
+          }
+        }
+      } catch {
+        /* best-effort — never block startup */
+      }
+      // MQA-175: the JS-level handlers below cannot see every death. A native C++ exception — Chromium's
+      // OSCrypt raising std::out_of_range on a sync-mangled encrypted file, the shape that killed six
+      // consecutive launches of the shipped 1.5.4 Windows build — unwinds past V8 entirely, so nothing in
+      // this process ever runs again: no crash-*.log, no audit line, no window, no dialog. Only the NEXT
+      // launch can report it, and only if this one left a mark before doing the dangerous work.
+      const earlyDeath = beginBootWatch(app.getPath('userData'), app.getVersion())
+      // FITO-185-B: keep the process unsuspended until the 15s endBootWatch / will-quit clear runs.
+      setBootPowerSaveBlock(true)
+      // FITO-185-G-SHOW / G-TIMER: idempotent sentinel clear. Purpose of boot-incomplete is early death
+      // BEFORE ready; once createWindow+registerIpc completed we are past the kill zone. Brain work stays
+      // on the 15s timer (power-save still held until then). Multiple callers race safely.
+      let bootWatchClosed = false
+      const clearBootWatchOnce = (reason: string): void => {
+        if (bootWatchClosed) return
+        bootWatchClosed = true
+        bootWork.run('clearBootWatch', () => {
+          try {
+            endBootWatch(app.getPath('userData'))
+            auditLog('app.boot.watch_cleared', { earlyDeath: Boolean(earlyDeath), reason })
+          } catch (e) {
+            mainLog.warn('[boot] clearBootWatchOnce failed:', e)
+          }
+        })
+      }
+      if (earlyDeath)
+        persistCrash('boot-early-death', describeEarlyDeath(earlyDeath), 'previous launch died before boot completed')
+      // Never let an unhandled error crash the overlay silently — log to file, audit, write a crash dump, and
+      // (for a fatal exception) offer a one-time relaunch while defaulting to keep-alive.
+      process.on('uncaughtException', (err) => onFatal('uncaughtException', err))
+      process.on('unhandledRejection', (reason) => onFatal('unhandledRejection', reason))
+      // QA-identity builds only (compiled out of every other bundle): the packaged exit-path proof sends SIGUSR2
+      // to raise a real uncaughtException through onFatal.
+      if (QA_IDENTITY_BUILD) installQaFaultHook()
+      // devEnv(ASKTOTO_SELFTEST) keeps self-test out of packaged builds; runSelfTest() itself refuses to run
+      // unless userData is exactly the throwaway directory redirectSelfTestUserData() created (M2-0004).
+      const selfTestOut = devEnv('ASKTOTO_SELFTEST')
+      if (selfTestOut) {
+        try {
+          await runSelfTest(selfTestOut)
+        } catch (e) {
+          console.error('selftest failed', e)
+        }
+        app.quit()
+        return
+      }
+      if (!app.isPackaged) loadDotEnv() // dev convenience only; never read a stray .env in production
+      // Remove decrypted-transcript temp copies orphaned by a previous hard-kill after first show; the sweep
+      // can touch the profile filesystem and first paint does not depend on it.
+      bootWork.run('sweepStaleTempFiles', sweepStaleTempFiles)
+      // Promote any orphaned crash-recovery drafts into real meetings BEFORE the retention sweep, so a
+      // recovered meeting is visible in History and immediately subject to the same retention policy.
+      // M2-0518: both read (and decrypt) the meetings root, so they start behind the first show, in this order.
+      bootWork.run('recoverOrphanDrafts', () =>
+        recoverOrphanDrafts(getSettings())
+          .then((r) => {
+            if (r.recovered > 0) auditLog('transcript.recovered', { recovered: r.recovered })
+          })
+          .catch(() => {
+            /* best-effort — never block startup */
+          })
+      )
+      // Auto-delete meetings past the configured retention window (off by default — see transcriptRetentionDays).
+      // Runs at launch AND every 6 hours after: this overlay realistically stays up for weeks, so a launch-only
+      // sweep silently stopped enforcing retention the day after boot (storage-limitation promise broken).
+      const runRetentionSweep = (): Promise<void> =>
+        sweepExpiredMeetings(getSettings().transcriptRetentionDays)
+          .then((r) => {
+            if (r.deleted > 0) {
+              auditLog('transcript.deleted', { bulk: true, expired: true, deleted: r.deleted })
+              // Deliberately not awaited (the sweep must not hold the interval), but the rejection is observed:
+              // `void` attaches no handler, so a transient index.json write failure would escape as an
+              // unhandledRejection and write a crash-*.log + an app.crash audit line for something that never
+              // crashed — same shape as MQA-075. The refresh flag is re-requested by the 60s reconcile tick.
+              void requestSourceRefresh(getSettings()).catch((e) =>
+                mainLog.warn(
+                  '[brain] source refresh after retention sweep failed:',
+                  e instanceof Error ? e.message : String(e)
+                )
+              )
+            }
+          })
+          .catch(() => {
+            /* best-effort — never block startup or the interval */
+          })
+      bootWork.run('runRetentionSweep', runRetentionSweep)
+      trackTimer(setInterval(() => void runRetentionSweep(), 6 * 60 * 60 * 1000))
+      // Guarded like the neighboring dock.setIcon / crash-log pruning below — a throw here must never abort
+      // createTray/registerShortcuts/createWindow further down the boot sequence.
+      if (process.platform === 'darwin') {
+        try {
+          app.dock?.hide()
+        } catch {
+          /* best-effort — never block startup */
+        }
+      }
+
+      // Boot each subsystem in its own try/catch so a failure in one can't silently abort the rest. Defined
+      // here (ahead of its call sites) so the display-media/permission/asr-model registrations immediately
+      // below — previously registered unguarded — run inside it too: a throw during any of those must not
+      // take out createTray/registerShortcuts/createWindow further down the boot sequence.
+      const runStep = (name: string, fn: () => void): void => {
+        const run = (): void => {
+          try {
+            fn()
+          } catch (e) {
+            // console.error is a no-op in a packaged GUI build with no console — route to the real sinks so a
+            // boot-step failure is actually diagnosable and shows up in the audit trail.
+            mainLog.error(`[boot] ${name} failed:`, e)
+            auditLog('app.error.boot_step', { step: name, message: e, recoveryStatus: 'continued' })
+          }
+        }
+        // M2-0006: timePhase measures how long this step actually took, so a late app.stall tick can name
+        // whichever one really blocked it. Boot steps run synchronously back to back with no await between
+        // them, so no tick can ever fire in the middle of that sequence — only measured duration, never call
+        // order, tells them apart. observability is still null for every boot step ahead of createWindow
+        // (it starts inside createWindow itself); those run un-timed since no heartbeat exists yet to blame.
+        if (observability) observability.timePhase(name, run)
+        else run()
+      }
+
+      // System-audio loopback: when the renderer calls getDisplayMedia for audio,
+      // hand back the system audio loopback device (the "Them" channel) only.
+      // Screenshot capture uses desktopCapturer directly, so no video track is ever returned here.
+      runStep('initScreenPermission', screenPerm.initScreenPermission)
+      runStep('setDisplayMediaHandler', () => {
+        session.defaultSession.setDisplayMediaRequestHandler(
+          async (request, callback) => {
+            // Electron validates the callback argument against the request: denying a request that asked for
+            // video (our renderer requests a 1fps video track to bootstrap the macOS ScreenCaptureKit session
+            // for audio loopback) with callback({}) makes Electron throw "Video was requested, but no video
+            // stream was provided". Because this handler is async, that throw escapes as an unhandledRejection.
+            // Wrap every callback call: the deny still reaches the renderer (its getDisplayMedia rejects and
+            // listen.ts falls back to mic-only), we just don't let the validation throw crash the main process.
+            const respond = (spec: Parameters<typeof callback>[0]): void => {
+              try {
+                callback(spec)
+              } catch (err) {
+                mainLog.warn(`[display-media] callback rejected: ${err instanceof Error ? err.message : String(err)}`)
+              }
+            }
+            try {
+              await handleDisplayMedia(request, respond)
+            } catch (err) {
+              // Absolute backstop: nothing in the loopback grant path may escape as an unhandledRejection.
+              mainLog.warn(`[display-media] handler error: ${err instanceof Error ? err.message : String(err)}`)
+              respond({})
+            }
+          },
+          { useSystemPicker: false }
+        )
+
+        async function handleDisplayMedia(
+          request: Parameters<
+            NonNullable<Parameters<typeof session.defaultSession.setDisplayMediaRequestHandler>[0]>
+          >[0],
+          callback: Parameters<
+            NonNullable<Parameters<typeof session.defaultSession.setDisplayMediaRequestHandler>[0]>
+          >[1]
+        ): Promise<void> {
+          const frame = request.frame
+          const mainFrame = win?.webContents.mainFrame
+          const origin = request.securityOrigin
+          const mainUrl = win?.webContents.getURL() ?? ''
+          let expectedOrigin = ''
+          try {
+            expectedOrigin = new URL(mainUrl).origin
+          } catch {
+            expectedOrigin = mainUrl
+          }
+          const isMainFrame = !!frame && frame === mainFrame
+          // In the PACKAGED app the renderer is loaded from file://, whose origin is the opaque string
+          // "null" (from new URL(...).origin) while the request reports securityOrigin "file:///". Without
+          // this case the check denied EVERY system-audio request in production. The real identity guard is
+          // isMainFrame (frame === the main window's frame); the origin match is defense-in-depth.
+          const isFileOrigin = origin.startsWith('file://')
+          const originOk =
+            !mainUrl || origin === expectedOrigin || origin === mainUrl || (expectedOrigin === 'null' && isFileOrigin)
+          if (process.env.ASKTOTO_DEBUG) {
+            console.log('[display-media]', {
+              origin,
+              expectedOrigin,
+              frameUrl: frame?.url,
+              mainUrl,
+              mainFrame: isMainFrame,
+              originOk,
+              audioRequested: request.audioRequested,
+              videoRequested: request.videoRequested,
+              armed: audioArmed
+            })
+          }
+          if (!audioArmed) {
+            callback({}) // deny unless the user explicitly started Listen
+            return
+          }
+          if (!isMainFrame || !originOk) {
+            callback({}) // deny requests from unexpected origins or subframes
+            return
+          }
+          if (!request.audioRequested) {
+            callback({}) // must be an audio (loopback) request
+            return
+          }
+          // Windows loopback doesn't bind audio to a video stream the way macOS's ScreenCaptureKit does
+          // (see the comment below) — listen.ts's isWindows branch requests getDisplayMedia({ audio: true })
+          // with no video key at all, so request.videoRequested is false here. Skip desktopCapturer entirely
+          // in that case: no screen source is grabbed for a request that never wanted one.
+          // CAVEAT: Chromium's support for Windows loopback-audio-without-video hasn't been validated on real
+          // hardware yet. If it turns out a bound video track is still required, listen.ts already retries
+          // with { video: { frameRate: 1 }, audio: true }, which falls through to the video path below.
+          if (!request.videoRequested) {
+            callback({ audio: 'loopback' })
+            return
+          }
+          // macOS binds system-audio loopback to a ScreenCaptureKit screen stream, so the loopback only
+          // starts when a screen video source is attached. We grant one here (gated above on armed +
+          // main-frame + origin); the renderer drops the video track instantly, so no frame is rendered,
+          // saved, or sent. This is the only way to capture the "them" side of a call on macOS.
+          //
+          // getSources can BOTH return empty transiently (fresh grant) AND reject outright with "Failed to
+          // get sources." (a ScreenCaptureKit hiccup, or a Screen Recording grant not in effect). M2-0429: a
+          // capture the diagnosis already knows macOS will refuse is denied before any getSources call, and
+          // every other path retries and never rejects (capture-permissions/loopback-grant.ts). A deny is
+          // callback(null), never callback({}): for a request that asked for video, Electron rejects {} with
+          // "Video was requested, but no video stream was provided". The renderer's getDisplayMedia then rejects
+          // and listen.ts falls back to the microphone with the diagnosis-backed note.
+          const screenSrc = await screenPerm.acquireListenScreenSource()
+          callback(screenSrc ? { video: screenSrc, audio: 'loopback' } : screenPerm.DENY_DISPLAY_MEDIA)
+        }
+      })
+
+      // Deny every web permission by default; only the main window may use media or write sanitized clipboard text.
+      runStep('permissionHandlers', () => {
+        const allowPermission = (wc: Electron.WebContents | null, permission: string): boolean =>
+          (permission === 'media' || permission === 'clipboard-sanitized-write') && !!win && wc === win.webContents
+        session.defaultSession.setPermissionRequestHandler((wc, permission, callback) =>
+          callback(allowPermission(wc, permission))
+        )
+        session.defaultSession.setPermissionCheckHandler((wc, permission) => allowPermission(wc, permission))
+      })
+
+      // Register ASR IPC before protocol.handle/createWindow; the bundled-status probe is primed after first show.
+      runStep('asrAssetsIpc', () => {
+        const REPO_ROOT = join(__dirname, '..', '..')
+        const RES_BASE = app.isPackaged ? process.resourcesPath : join(REPO_ROOT, 'resources')
+        let asrBundledCache: boolean | null = null
+        let readAsrBundledStatus = (): boolean => false
+        const asrBundledReady = (): boolean => {
+          if (asrBundledCache === null) asrBundledCache = readAsrBundledStatus()
+          return asrBundledCache
+        }
+        bootWork.run('primeAsrBundledStatus', () => {
+          asrBundledReady()
+        })
+        readAsrBundledStatus = (): boolean => (app.isPackaged ? importAsrAssetsReady() : asrManifestComplete(RES_BASE))
+        const safeHandle = (channel: string, listener: (...args: any[]) => unknown): void => {
+          try {
+            ipcMain.removeHandler(channel)
+          } catch {
+            /* first registration */
+          }
+          ipcMain.handle(channel, listener as never)
+        }
+        safeHandle(IPC.asrBundled, (e) => {
+          if (isRecentlyRetiredOverlaySender(e)) return true
+          assertMainWindow(e)
+          return asrBundledReady()
+        })
+        safeHandle(IPC.asrAssetsStatus, (e) => {
+          assertMainWindow(e)
+          return asrAssetsStatusSnapshot()
+        })
+        safeHandle(IPC.asrAssetsEnsure, async (e) => {
+          assertMainWindow(e)
+          if (resolveLocalSpeechPackPolicy(getSettings(), getAdminLocalSpeechPackPolicy()) === 'blocked')
+            return asrAssetsStatusSnapshot()
+          try {
+            await ensureImportAsrAssets((pct) => {
+              publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
+            })
+          } catch (err) {
+            mainLog.warn('[asr-assets] ensure failed:', err instanceof Error ? err.message : err)
+            publishAsrAssetsProgress()
+          }
+          return asrAssetsStatusSnapshot()
+        })
+      })
+
+      runStep('asrModelProtocol', () => {
+        const REPO_ROOT = join(__dirname, '..', '..')
+        const RES_BASE = app.isPackaged ? process.resourcesPath : join(REPO_ROOT, 'resources')
+        protocol.handle(
+          'asr-model',
+          createAsrModelProtocolHandler({
+            resourcesRoot: RES_BASE,
+            userModelsRoot: app.isPackaged ? undefined : userDataAsrRoot(),
+            readLocal: (url) => net.fetch(url)
+          })
+        )
+      })
+
+      // runStep is defined above (ahead of the display-media/permission/asr-model registrations so they can
+      // use it too). From here: stand up the tray + global shortcuts BEFORE the window. If createWindow() ever
+      // throws (transparent / always-on-top windows can fail on some GPU/compositor configs), the user still
+      // keeps a Show/Quit path instead of a hidden, unkillable process — the dock is already hidden and the
+      // taskbar is skipped.
+      // Eagerly refresh the Dust CLI session at launch (Tony: "always stay connected") rather than waiting
+      // for a request to 401 first. Reading the Dust CLI's keychain item from Métis — a different binary
+      // than the `dust`/keytar process that created it — does trigger a one-time macOS "allow access" prompt;
+      // on a real (signed or at least stable) install macOS remembers "Always Allow" for that app identity, so
+      // this costs one prompt ever, not one per restart. Only bothers if Dust was connected before; best-effort
+      // and fully silent on failure — the existing lazy on-401 refresh (refreshDustAuth above) still covers it
+      // if this doesn't run or doesn't succeed.
+      // Skip the eager refresh while the imported token is still fresh (<45 min of its ~1h life): the
+      // keychain read behind refreshDustCliSession can cost a macOS keychain password prompt on builds
+      // whose code identity churns (unsigned dev builds), and a fresh token has nothing to gain from it.
+      // The lazy on-401 refresh (refreshDustAuth above) still self-heals expiry invisibly either way.
+      // MQA-051/MQA-054: that freshness window is the ONLY thing this needs to be gated on. The keep-warm
+      // used to be darwin-only, back when the whole Dust CLI path was — but the prompt cost it was avoiding
+      // does not exist off macOS (dust-secret-store.ts: reading the current user's own credential never
+      // prompts on Windows/Linux) and dustcli.ts already routes the Windows `dust.cmd` shim. Gated to darwin
+      // it left Windows with no proactive re-mint at all, so the ~1h token lapsed and the hookless background
+      // paths (brain ingest, which passes no refreshDustAuth) dead-ended on a 401.
+      const DUST_TOKEN_FRESH_MS = 45 * 60 * 1000
+      const refreshAndPersistDust = (at: string): void => {
+        if (!hasApiKey('dust')) return
+        const current = getSettings()
+        if (Date.now() - current.dustTokenMintedAt <= DUST_TOKEN_FRESH_MS) return
+        // Branches on dustSessionOrigin — see makeRefreshDustAuth's doc comment for why the two refresh paths
+        // must never be mixed for one session.
+        if (current.dustSessionOrigin === 'oauth') {
+          void refreshDustOAuthSession()
+            .then((fresh) => {
+              if (fresh.ok) auditLog('dust.token.refreshed', { at })
+            })
+            .catch(() => {
+              /* best-effort — the lazy on-401 refresh in dust.ts still covers this */
+            })
+          return
+        }
+        void refreshDustCliSession()
+          .then((fresh) => {
+            if (!fresh.ok || !fresh.token || !fresh.workspaceId) return
+            setApiKey('dust', fresh.token)
+            setSettings({
+              dustWorkspaceId: fresh.workspaceId,
+              dustBaseUrl: fresh.baseUrl || 'https://dust.tt',
+              dustTokenMintedAt: Date.now()
+            })
+            auditLog('dust.token.refreshed', { at })
+          })
+          .catch(() => {
+            /* best-effort — the lazy on-401 refresh in dust.ts still covers this */
+          })
+      }
+      // Wrapped in runStep: refreshAndPersistDust does synchronous work (getSettings, hasApiKey) before its
+      // async refreshDustCliSession() call, so an unguarded throw here would abort createTray/registerShortcuts/
+      // createWindow below it — a startup Dust-refresh hiccup must never take down window creation.
+      runStep('refreshDustSession', () => refreshAndPersistDust('startup'))
+      // Keep the session warm for the app's whole lifetime: re-mint whenever the token passes 45 min of
+      // its ~1h life, so it never expires mid-meeting and the user never sees a Dust reconnect. The
+      // single-flight guard inside refreshDustCliSession makes this safe alongside the on-401 path.
+      trackTimer(setInterval(() => refreshAndPersistDust('interval'), 10 * 60 * 1000))
+
+      // License re-validation, same fire-and-forget lifetime interval as the Dust keep-warm above: skips
+      // entirely unless the gate is actually on and this device is currently activated, so an unlicensed
+      // build (the shipped default) never touches the network here. For an always-on machine that's
+      // offline for days, this is what lands a revocation within half a day instead of waiting for the
+      // renderer's own once-per-launch check (which only runs at the next relaunch).
+      trackTimer(
+        setInterval(
+          () => {
+            if (getSettings().licenseGateEnabled && getSettings().licenseValid) void heartbeat()
+          },
+          12 * 60 * 60 * 1000
+        )
+      )
+
+      // Catch the case where encryption was already on (managed-config or a previous run) with a stale
+      // plaintext graph sitting on disk since before the first settingsGet poll from the renderer.
+      runStep('purgeGraphIfEncryptedAndStale', () => purgeGraphIfEncryptedAndStale('encryption-active-boot'))
+      // FITO-185-X: registerIpc also stays ahead of createWindow — handlers read win/tray lazily at
+      // invocation time, and first paint must not race loadURL before settings/auth IPC exists.
+      runStep('registerShortcuts', registerShortcuts)
+      // FITO-185-X: registerIpc BEFORE createWindow/loadURL so getSettings/authStatus/licenseGate
+      // handlers exist before the renderer can invoke. FITO-185-H put IPC immediately after createWindow
+      // (ahead of preprocess) but loadURL still raced first paint — that strand is the post-boot
+      // "Loading" strip Tony still hits when exclusive exits or settings IPC is late.
+      runStep('registerIpc', registerIpc)
+      clearBootWatchOnce('registerIpc')
+      await yieldBeforeBootWindow() // M2-0422: window construction is its own task
+      withBootFirstShowDeferred(() => runStep('createWindow', createWindow))
+      scheduleTrayAfterFirstPaint(win, () => runStep('createTray', createTray))
+      bootWork.releaseAfterFirstShow(win)
+      revealController.markBootComplete()
+      // FITO-185-G-SHOW: createWindow completed → past kill zone; clear sentinel (brain stays on 15s).
+      clearBootWatchOnce('createWindow')
+      // FITO-185-G-TIMER: also setImmediate + unlock-screen so App Nap / locked-screen cannot leave
+      // boot-incomplete stuck when the 15s timer is deferred.
+      setImmediate(() => clearBootWatchOnce('setImmediate'))
+      try {
+        powerMonitor.on('unlock-screen', () => clearBootWatchOnce('unlock-screen'))
+      } catch (e) {
+        mainLog.warn('[boot] powerMonitor unlock-screen hook failed:', e)
+      }
+      await yieldToEventLoop() // M2-0422: post-window boot steps are a separate task
+      // screen-preprocess documents refresh() as "Call on startup and after settings change" — only the second
+      // half was ever wired, so an opted-in user got a dead fast path (and a silent cloud image upload on every
+      // screen ask) for the whole session after each relaunch (MQA-178). Deliberately AFTER createWindow+registerIpc:
+      // the eligibility read drags in the local-model trust probe, which must not sit on the first-paint path;
+      // IPC must be live first so the renderer's getSettings() is not blocked waiting on preprocess.
+      // Silent on macOS by construction: eligibility now requires the Screen Recording grant to ALREADY exist
+      // (screenCaptureGranted above), so this reconcile can never be what raises the TCC prompt (MQA-209).
+      bootWork.run('refreshScreenPreprocess', () => runStep('refreshScreenPreprocess', refreshScreenPreprocess))
+      // Synchronous OneDrive fs work (mkdir + two writeFileSync on first run) that nothing needs before the first show:
+      // saveMeeting/saveNote create the folder themselves on first use.
+      bootWork.run('ensureMeetingsFolder', () =>
+        runStep('ensureMeetingsFolder', () => ensureMeetingsFolder(getSettings()))
+      )
+      runStep('initializeImportJobs', initializeImportJobs)
+      startOperatorRuntime(() => getSettings(), operatorRuntimeHooks())
+      startOperatorOverlayPoll(() => getSettings())
+      // Import checkpoints are encrypted and main-owned. Resume after IPC registration so the hidden decoder
+      // can safely report chunks as soon as it starts, without delaying first paint.
+      const recoverImports = (): Promise<unknown> | undefined => {
+        if (!requireAuth()) {
+          setTimeout(recoverImports, 1000)
+          return undefined
+        }
+        return importJobs?.recover().catch((error) => mainLog.warn('[import-jobs] recovery failed:', error))
+      }
+      bootWork.run('recoverImports', recoverImports)
+      runStep('registerScreenListeners', registerScreenListeners)
+      // Notch/menu-bar metrics for the island top clamp (MQA-275) — invalidate-on-topology-change, same
+      // event set registerScreenListeners just subscribed to, plus powerMonitor resume (a notch MacBook can
+      // wake docked to a different external display than it slept on). macOS-only signal; a no-op elsewhere.
+      runStep('registerDisplayMetricsInvalidation', registerDisplayMetricsInvalidation)
+      // Windows-only and queued post-show: on macOS this probe raises TCC and belongs in onboarding.
+      if (process.platform === 'win32') {
+        bootWork.run('probeScreenCapture', () =>
+          runStep('probeScreenCapture', () => {
+            void probeScreenCapture().catch(() => false)
+          })
         )
       }
-    }).catch(() => { /* best-effort — never block startup or the interval */ })
-  bootWork.run('runRetentionSweep', runRetentionSweep)
-  trackTimer(setInterval(() => void runRetentionSweep(), 6 * 60 * 60 * 1000))
-  // Guarded like the neighboring dock.setIcon / crash-log pruning below — a throw here must never abort
-  // createTray/registerShortcuts/createWindow further down the boot sequence.
-  if (process.platform === 'darwin') {
-    try {
-      app.dock?.hide()
-    } catch { /* best-effort — never block startup */ }
-  }
-
-  // Boot each subsystem in its own try/catch so a failure in one can't silently abort the rest. Defined
-  // here (ahead of its call sites) so the display-media/permission/asr-model registrations immediately
-  // below — previously registered unguarded — run inside it too: a throw during any of those must not
-  // take out createTray/registerShortcuts/createWindow further down the boot sequence.
-  const runStep = (name: string, fn: () => void): void => {
-    const run = (): void => {
-      try {
-        fn()
-      } catch (e) {
-        // console.error is a no-op in a packaged GUI build with no console — route to the real sinks so a
-        // boot-step failure is actually diagnosable and shows up in the audit trail.
-        mainLog.error(`[boot] ${name} failed:`, e)
-        auditLog('app.error.boot_step', { step: name, message: e, recoveryStatus: 'continued' })
-      }
-    }
-    // M2-0006: timePhase measures how long this step actually took, so a late app.stall tick can name
-    // whichever one really blocked it. Boot steps run synchronously back to back with no await between
-    // them, so no tick can ever fire in the middle of that sequence — only measured duration, never call
-    // order, tells them apart. observability is still null for every boot step ahead of createWindow
-    // (it starts inside createWindow itself); those run un-timed since no heartbeat exists yet to blame.
-    if (observability) observability.timePhase(name, run)
-    else run()
-  }
-
-  // System-audio loopback: when the renderer calls getDisplayMedia for audio,
-  // hand back the system audio loopback device (the "Them" channel) only.
-  // Screenshot capture uses desktopCapturer directly, so no video track is ever returned here.
-  runStep('initScreenPermission', screenPerm.initScreenPermission)
-  runStep('setDisplayMediaHandler', () => {
-  session.defaultSession.setDisplayMediaRequestHandler(
-    async (request, callback) => {
-      // Electron validates the callback argument against the request: denying a request that asked for
-      // video (our renderer requests a 1fps video track to bootstrap the macOS ScreenCaptureKit session
-      // for audio loopback) with callback({}) makes Electron throw "Video was requested, but no video
-      // stream was provided". Because this handler is async, that throw escapes as an unhandledRejection.
-      // Wrap every callback call: the deny still reaches the renderer (its getDisplayMedia rejects and
-      // listen.ts falls back to mic-only), we just don't let the validation throw crash the main process.
-      const respond = (spec: Parameters<typeof callback>[0]): void => {
+      runStep('resumeScreenRepair', screenPerm.resumeScreenRepairOnBoot) // M2-0429: the boot half of a Repair
+      runStep('startMeetingNotifier', startMeetingNotifier)
+      runStep('initAutoUpdate', () => initAutoUpdate(() => win))
+      // Resume durable live/backfill work and reconcile OneDrive-synced meeting files after first paint.
+      // Directory scans, rather than fs.watch, are deliberate: Files On-Demand and Windows sync do not
+      // reliably emit every watcher event. A one-minute cadence keeps Intelligence current without
+      // depending on cloud-sync events; provider-free runs only repair already-saved local extractions.
+      const BRAIN_RECONCILE_MS = 60 * 1000
+      setTimeout(() => {
+        // MQA-175: this timer is the boot step an unreadable `.brain` kills — it is the first thing after
+        // launch that decrypts index.json. When the previous run died before boot completed, this launch
+        // deliberately does not walk back into it: the brain resume and its reconcile interval are skipped
+        // for this session only, so the user reaches a working app instead of a sixth silent vanish. The
+        // watch is cleared in `finally` either way (FITO-185-E), so a throw from any brain step cannot leave
+        // boot-incomplete.json stuck for the next launch.
         try {
-          callback(spec)
-        } catch (err) {
-          mainLog.warn(`[display-media] callback rejected: ${err instanceof Error ? err.message : String(err)}`)
+          if (earlyDeath) {
+            mainLog.warn(
+              `[boot] safe start — skipping the brain backfill/reconcile resume: ${describeEarlyDeath(earlyDeath)}`
+            )
+            auditLog('app.error.early_death', { consecutive: earlyDeath.consecutive, recoveryStatus: 'safe_start' })
+          } else {
+            // Per-step isolation: one failing resume must not skip the remaining boot work or the finally clear.
+            try {
+              bootWork.run('resumeBackfillIfPending', () =>
+                resumeBackfillIfPending().catch((e) => mainLog.warn('[boot] resumeBackfillIfPending failed:', e))
+              )
+            } catch (e) {
+              mainLog.warn('[boot] resumeBackfillIfPending failed:', e)
+            }
+            try {
+              bootWork.run('reconcileMeetingsInBackground', () =>
+                reconcileMeetingsInBackground().catch((e) =>
+                  mainLog.warn('[boot] reconcileMeetingsInBackground failed:', e)
+                )
+              )
+            } catch (e) {
+              mainLog.warn('[boot] reconcileMeetingsInBackground failed:', e)
+            }
+            // Registered here rather than alongside the timer so safe start skips the recurring brain work too,
+            // not just the single resume — the reconcile tick reads the same index.json.
+            trackTimer(
+              setInterval(() => {
+                void reconcileMeetingsInBackground().catch((e) => mainLog.warn('[brain] reconcile tick failed:', e))
+              }, BRAIN_RECONCILE_MS)
+            )
+            // Product cadence is three named slots (06:00, 12:00, 18:00 America/Toronto), not an hourly
+            // consolidation poll. Catch up if Métis was closed across a slot; then arm the next timeout.
+            try {
+              wireIntelligenceIndexWork()
+            } catch (e) {
+              mainLog.warn('[boot] wireIntelligenceIndexWork failed:', e)
+            }
+            try {
+              bootWork.run('catchUpIntelligenceIndexIfNeeded', () =>
+                catchUpIntelligenceIndexIfNeeded().catch((e) =>
+                  mainLog.error('[intelligence-index] launch catch-up failed:', e)
+                )
+              )
+            } catch (e) {
+              mainLog.warn('[boot] catchUpIntelligenceIndexIfNeeded failed:', e)
+            }
+            try {
+              scheduleIntelligenceIndex(trackTimer)
+            } catch (e) {
+              mainLog.warn('[boot] scheduleIntelligenceIndex failed:', e)
+            }
+            // Consolidation runs once per launch; the named slots own the recurring pass. Both are automatic triggers (infra/scheduler/policy.ts).
+            try {
+              bootWork.run('runConsolidationIfDue', () =>
+                runConsolidationIfDue().catch((e) => mainLog.warn('[brain] demoted consolidation check failed:', e))
+              )
+            } catch (e) {
+              mainLog.warn('[boot] runConsolidationIfDue failed:', e)
+            }
+          }
+        } finally {
+          // Power-save stays until here so the 15s brain step is not App-Napped; sentinel may already
+          // have been cleared earlier (G-SHOW/G-TIMER) — clearBootWatchOnce is idempotent.
+          setBootPowerSaveBlock(false)
+          clearBootWatchOnce('mqa-175')
         }
-      }
-      try {
-        await handleDisplayMedia(request, respond)
-      } catch (err) {
-        // Absolute backstop: nothing in the loopback grant path may escape as an unhandledRejection.
-        mainLog.warn(`[display-media] handler error: ${err instanceof Error ? err.message : String(err)}`)
-        respond({})
-      }
-    },
-    { useSystemPicker: false }
-  )
+      }, 15_000)
 
-  async function handleDisplayMedia(
-    request: Parameters<NonNullable<Parameters<typeof session.defaultSession.setDisplayMediaRequestHandler>[0]>>[0],
-    callback: Parameters<NonNullable<Parameters<typeof session.defaultSession.setDisplayMediaRequestHandler>[0]>>[1]
-  ): Promise<void> {
-      const frame = request.frame
-      const mainFrame = win?.webContents.mainFrame
-      const origin = request.securityOrigin
-      const mainUrl = win?.webContents.getURL() ?? ''
-      let expectedOrigin = ''
-      try {
-        expectedOrigin = new URL(mainUrl).origin
-      } catch {
-        expectedOrigin = mainUrl
-      }
-      const isMainFrame = !!frame && frame === mainFrame
-      // In the PACKAGED app the renderer is loaded from file://, whose origin is the opaque string
-      // "null" (from new URL(...).origin) while the request reports securityOrigin "file:///". Without
-      // this case the check denied EVERY system-audio request in production. The real identity guard is
-      // isMainFrame (frame === the main window's frame); the origin match is defense-in-depth.
-      const isFileOrigin = origin.startsWith('file://')
-      const originOk =
-        !mainUrl || origin === expectedOrigin || origin === mainUrl || (expectedOrigin === 'null' && isFileOrigin)
-      if (process.env.ASKTOTO_DEBUG) {
-        console.log('[display-media]', {
-          origin,
-          expectedOrigin,
-          frameUrl: frame?.url,
-          mainUrl,
-          mainFrame: isMainFrame,
-          originOk,
-          audioRequested: request.audioRequested,
-          videoRequested: request.videoRequested,
-          armed: audioArmed
-        })
-      }
-      if (!audioArmed) {
-        callback({}) // deny unless the user explicitly started Listen
-        return
-      }
-      if (!isMainFrame || !originOk) {
-        callback({}) // deny requests from unexpected origins or subframes
-        return
-      }
-      if (!request.audioRequested) {
-        callback({}) // must be an audio (loopback) request
-        return
-      }
-      // Windows loopback doesn't bind audio to a video stream the way macOS's ScreenCaptureKit does
-      // (see the comment below) — listen.ts's isWindows branch requests getDisplayMedia({ audio: true })
-      // with no video key at all, so request.videoRequested is false here. Skip desktopCapturer entirely
-      // in that case: no screen source is grabbed for a request that never wanted one.
-      // CAVEAT: Chromium's support for Windows loopback-audio-without-video hasn't been validated on real
-      // hardware yet. If it turns out a bound video track is still required, listen.ts already retries
-      // with { video: { frameRate: 1 }, audio: true }, which falls through to the video path below.
-      if (!request.videoRequested) {
-        callback({ audio: 'loopback' })
-        return
-      }
-      // macOS binds system-audio loopback to a ScreenCaptureKit screen stream, so the loopback only
-      // starts when a screen video source is attached. We grant one here (gated above on armed +
-      // main-frame + origin); the renderer drops the video track instantly, so no frame is rendered,
-      // saved, or sent. This is the only way to capture the "them" side of a call on macOS.
-      //
-      // getSources can BOTH return empty transiently (fresh grant) AND reject outright with "Failed to
-      // get sources." (a ScreenCaptureKit hiccup, or a Screen Recording grant not in effect). M2-0429: a
-      // capture the diagnosis already knows macOS will refuse is denied before any getSources call, and
-      // every other path retries and never rejects (capture-permissions/loopback-grant.ts). A deny is
-      // callback(null), never callback({}): for a request that asked for video, Electron rejects {} with
-      // "Video was requested, but no video stream was provided". The renderer's getDisplayMedia then rejects
-      // and listen.ts falls back to the microphone with the diagnosis-backed note.
-      const screenSrc = await screenPerm.acquireListenScreenSource()
-      callback(screenSrc ? { video: screenSrc, audio: 'loopback' } : screenPerm.DENY_DISPLAY_MEDIA)
-  }
-  })
-
-  // Deny every web permission by default; only the main window may use media or write sanitized clipboard text.
-  runStep('permissionHandlers', () => {
-    const allowPermission = (wc: Electron.WebContents | null, permission: string): boolean =>
-      (permission === 'media' || permission === 'clipboard-sanitized-write') && !!win && wc === win.webContents
-    session.defaultSession.setPermissionRequestHandler((wc, permission, callback) =>
-      callback(allowPermission(wc, permission))
-    )
-    session.defaultSession.setPermissionCheckHandler((wc, permission) => allowPermission(wc, permission))
-  })
-
-  // Register ASR IPC before protocol.handle/createWindow; the bundled-status probe is primed after first show.
-  runStep('asrAssetsIpc', () => {
-    const REPO_ROOT = join(__dirname, '..', '..')
-    const RES_BASE = app.isPackaged ? process.resourcesPath : join(REPO_ROOT, 'resources')
-    let asrBundledCache: boolean | null = null
-    let readAsrBundledStatus = (): boolean => false
-    const asrBundledReady = (): boolean => {
-      if (asrBundledCache === null) asrBundledCache = readAsrBundledStatus()
-      return asrBundledCache
-    }
-    bootWork.run('primeAsrBundledStatus', () => { asrBundledReady() })
-    readAsrBundledStatus = (): boolean => app.isPackaged ? importAsrAssetsReady() : asrManifestComplete(RES_BASE)
-    const safeHandle = (channel: string, listener: (...args: any[]) => unknown): void => {
-      try {
-        ipcMain.removeHandler(channel)
-      } catch {
-        /* first registration */
-      }
-      ipcMain.handle(channel, listener as never)
-    }
-    safeHandle(IPC.asrBundled, (e) => {
-      if (isRecentlyRetiredOverlaySender(e)) return true
-      assertMainWindow(e)
-      return asrBundledReady()
-    })
-    safeHandle(IPC.asrAssetsStatus, (e) => {
-      assertMainWindow(e)
-      return asrAssetsStatusSnapshot()
-    })
-    safeHandle(IPC.asrAssetsEnsure, async (e) => {
-      assertMainWindow(e)
-      if (resolveLocalSpeechPackPolicy(getSettings(), getAdminLocalSpeechPackPolicy()) === 'blocked') return asrAssetsStatusSnapshot()
-      try {
-        await ensureImportAsrAssets((pct) => {
-          publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
-        })
-      } catch (err) {
-        mainLog.warn('[asr-assets] ensure failed:', err instanceof Error ? err.message : err)
-        publishAsrAssetsProgress()
-      }
-      return asrAssetsStatusSnapshot()
-    })
-  })
-
-  runStep('asrModelProtocol', () => {
-    const REPO_ROOT = join(__dirname, '..', '..')
-    const RES_BASE = app.isPackaged
-      ? process.resourcesPath
-      : join(REPO_ROOT, 'resources')
-    protocol.handle('asr-model', createAsrModelProtocolHandler({
-      resourcesRoot: RES_BASE,
-      userModelsRoot: app.isPackaged ? undefined : userDataAsrRoot(),
-      readLocal: (url) => net.fetch(url)
-    }))
-  })
-
-  // runStep is defined above (ahead of the display-media/permission/asr-model registrations so they can
-  // use it too). From here: stand up the tray + global shortcuts BEFORE the window. If createWindow() ever
-  // throws (transparent / always-on-top windows can fail on some GPU/compositor configs), the user still
-  // keeps a Show/Quit path instead of a hidden, unkillable process — the dock is already hidden and the
-  // taskbar is skipped.
-  // Eagerly refresh the Dust CLI session at launch (Tony: "always stay connected") rather than waiting
-  // for a request to 401 first. Reading the Dust CLI's keychain item from Métis — a different binary
-  // than the `dust`/keytar process that created it — does trigger a one-time macOS "allow access" prompt;
-  // on a real (signed or at least stable) install macOS remembers "Always Allow" for that app identity, so
-  // this costs one prompt ever, not one per restart. Only bothers if Dust was connected before; best-effort
-  // and fully silent on failure — the existing lazy on-401 refresh (refreshDustAuth above) still covers it
-  // if this doesn't run or doesn't succeed.
-  // Skip the eager refresh while the imported token is still fresh (<45 min of its ~1h life): the
-  // keychain read behind refreshDustCliSession can cost a macOS keychain password prompt on builds
-  // whose code identity churns (unsigned dev builds), and a fresh token has nothing to gain from it.
-  // The lazy on-401 refresh (refreshDustAuth above) still self-heals expiry invisibly either way.
-  // MQA-051/MQA-054: that freshness window is the ONLY thing this needs to be gated on. The keep-warm
-  // used to be darwin-only, back when the whole Dust CLI path was — but the prompt cost it was avoiding
-  // does not exist off macOS (dust-secret-store.ts: reading the current user's own credential never
-  // prompts on Windows/Linux) and dustcli.ts already routes the Windows `dust.cmd` shim. Gated to darwin
-  // it left Windows with no proactive re-mint at all, so the ~1h token lapsed and the hookless background
-  // paths (brain ingest, which passes no refreshDustAuth) dead-ended on a 401.
-  const DUST_TOKEN_FRESH_MS = 45 * 60 * 1000
-  const refreshAndPersistDust = (at: string): void => {
-    if (!hasApiKey('dust')) return
-    const current = getSettings()
-    if (Date.now() - current.dustTokenMintedAt <= DUST_TOKEN_FRESH_MS) return
-    // Branches on dustSessionOrigin — see makeRefreshDustAuth's doc comment for why the two refresh paths
-    // must never be mixed for one session.
-    if (current.dustSessionOrigin === 'oauth') {
-      void refreshDustOAuthSession()
-        .then((fresh) => {
-          if (fresh.ok) auditLog('dust.token.refreshed', { at })
-        })
-        .catch(() => {
-          /* best-effort — the lazy on-401 refresh in dust.ts still covers this */
-        })
-      return
-    }
-    void refreshDustCliSession()
-      .then((fresh) => {
-        if (!fresh.ok || !fresh.token || !fresh.workspaceId) return
-        setApiKey('dust', fresh.token)
-        setSettings({
-          dustWorkspaceId: fresh.workspaceId,
-          dustBaseUrl: fresh.baseUrl || 'https://dust.tt',
-          dustTokenMintedAt: Date.now()
-        })
-        auditLog('dust.token.refreshed', { at })
+      app.on('activate', () => {
+        reveal('activate', { focus: true })
+        // Bar dock click still opens Settings. Hide/Island launch must stay parked
+        // 8×2 — Ultron fresh userdata was 880×1017 Settings / Expand Métis.
+        try {
+          if (getSettings().onboardingDone && overlayActivateOpensSettings(liveOverlayLayout())) {
+            sendHotkey('settings')
+          }
+        } catch {
+          /* settings store not ready */
+        }
       })
-      .catch(() => {
-        /* best-effort — the lazy on-401 refresh in dust.ts still covers this */
-      })
-  }
-  // Wrapped in runStep: refreshAndPersistDust does synchronous work (getSettings, hasApiKey) before its
-  // async refreshDustCliSession() call, so an unguarded throw here would abort createTray/registerShortcuts/
-  // createWindow below it — a startup Dust-refresh hiccup must never take down window creation.
-  runStep('refreshDustSession', () => refreshAndPersistDust('startup'))
-  // Keep the session warm for the app's whole lifetime: re-mint whenever the token passes 45 min of
-  // its ~1h life, so it never expires mid-meeting and the user never sees a Dust reconnect. The
-  // single-flight guard inside refreshDustCliSession makes this safe alongside the on-401 path.
-  trackTimer(setInterval(() => refreshAndPersistDust('interval'), 10 * 60 * 1000))
-
-  // License re-validation, same fire-and-forget lifetime interval as the Dust keep-warm above: skips
-  // entirely unless the gate is actually on and this device is currently activated, so an unlicensed
-  // build (the shipped default) never touches the network here. For an always-on machine that's
-  // offline for days, this is what lands a revocation within half a day instead of waiting for the
-  // renderer's own once-per-launch check (which only runs at the next relaunch).
-  trackTimer(
-    setInterval(
-      () => {
-        if (getSettings().licenseGateEnabled && getSettings().licenseValid) void heartbeat()
-      },
-      12 * 60 * 60 * 1000
-    )
-  )
-
-  // Catch the case where encryption was already on (managed-config or a previous run) with a stale
-  // plaintext graph sitting on disk since before the first settingsGet poll from the renderer.
-  runStep('purgeGraphIfEncryptedAndStale', () => purgeGraphIfEncryptedAndStale('encryption-active-boot'))
-  // FITO-185-X: registerIpc also stays ahead of createWindow — handlers read win/tray lazily at
-  // invocation time, and first paint must not race loadURL before settings/auth IPC exists.
-  runStep('registerShortcuts', registerShortcuts)
-  // FITO-185-X: registerIpc BEFORE createWindow/loadURL so getSettings/authStatus/licenseGate
-  // handlers exist before the renderer can invoke. FITO-185-H put IPC immediately after createWindow
-  // (ahead of preprocess) but loadURL still raced first paint — that strand is the post-boot
-  // "Loading" strip Tony still hits when exclusive exits or settings IPC is late.
-  runStep('registerIpc', registerIpc)
-  clearBootWatchOnce('registerIpc')
-  await yieldBeforeBootWindow() // M2-0422: window construction is its own task
-  withBootFirstShowDeferred(() => runStep('createWindow', createWindow))
-  scheduleTrayAfterFirstPaint(win, () => runStep('createTray', createTray))
-  bootWork.releaseAfterFirstShow(win)
-  revealController.markBootComplete()
-  // FITO-185-G-SHOW: createWindow completed → past kill zone; clear sentinel (brain stays on 15s).
-  clearBootWatchOnce('createWindow')
-  // FITO-185-G-TIMER: also setImmediate + unlock-screen so App Nap / locked-screen cannot leave
-  // boot-incomplete stuck when the 15s timer is deferred.
-  setImmediate(() => clearBootWatchOnce('setImmediate'))
-  try {
-    powerMonitor.on('unlock-screen', () => clearBootWatchOnce('unlock-screen'))
-  } catch (e) {
-    mainLog.warn('[boot] powerMonitor unlock-screen hook failed:', e)
-  }
-  await yieldToEventLoop() // M2-0422: post-window boot steps are a separate task
-  // screen-preprocess documents refresh() as "Call on startup and after settings change" — only the second
-  // half was ever wired, so an opted-in user got a dead fast path (and a silent cloud image upload on every
-  // screen ask) for the whole session after each relaunch (MQA-178). Deliberately AFTER createWindow+registerIpc:
-  // the eligibility read drags in the local-model trust probe, which must not sit on the first-paint path;
-  // IPC must be live first so the renderer's getSettings() is not blocked waiting on preprocess.
-  // Silent on macOS by construction: eligibility now requires the Screen Recording grant to ALREADY exist
-  // (screenCaptureGranted above), so this reconcile can never be what raises the TCC prompt (MQA-209).
-  bootWork.run('refreshScreenPreprocess', () => runStep('refreshScreenPreprocess', refreshScreenPreprocess))
-  // Synchronous OneDrive fs work (mkdir + two writeFileSync on first run) that nothing needs before the first show:
-  // saveMeeting/saveNote create the folder themselves on first use.
-  bootWork.run('ensureMeetingsFolder', () => runStep('ensureMeetingsFolder', () => ensureMeetingsFolder(getSettings())))
-  runStep('initializeImportJobs', initializeImportJobs)
-  startOperatorRuntime(() => getSettings(), operatorRuntimeHooks())
-  startOperatorOverlayPoll(() => getSettings())
-  // Import checkpoints are encrypted and main-owned. Resume after IPC registration so the hidden decoder
-  // can safely report chunks as soon as it starts, without delaying first paint.
-  const recoverImports = (): Promise<unknown> | undefined => {
-    if (!requireAuth()) {
-      setTimeout(recoverImports, 1000)
-      return undefined
-    }
-    return importJobs?.recover().catch((error) => mainLog.warn('[import-jobs] recovery failed:', error))
-  }
-  bootWork.run('recoverImports', recoverImports)
-  runStep('registerScreenListeners', registerScreenListeners)
-  // Notch/menu-bar metrics for the island top clamp (MQA-275) — invalidate-on-topology-change, same
-  // event set registerScreenListeners just subscribed to, plus powerMonitor resume (a notch MacBook can
-  // wake docked to a different external display than it slept on). macOS-only signal; a no-op elsewhere.
-  runStep('registerDisplayMetricsInvalidation', registerDisplayMetricsInvalidation)
-  // Windows-only and queued post-show: on macOS this probe raises TCC and belongs in onboarding.
-  if (process.platform === 'win32') {
-    bootWork.run('probeScreenCapture', () => runStep('probeScreenCapture', () => {
-      void probeScreenCapture().catch(() => false)
-    }))
-  }
-  runStep('resumeScreenRepair', screenPerm.resumeScreenRepairOnBoot) // M2-0429: the boot half of a Repair
-  runStep('startMeetingNotifier', startMeetingNotifier)
-  runStep('initAutoUpdate', () => initAutoUpdate(() => win))
-  // Resume durable live/backfill work and reconcile OneDrive-synced meeting files after first paint.
-  // Directory scans, rather than fs.watch, are deliberate: Files On-Demand and Windows sync do not
-  // reliably emit every watcher event. A one-minute cadence keeps Intelligence current without
-  // depending on cloud-sync events; provider-free runs only repair already-saved local extractions.
-  const BRAIN_RECONCILE_MS = 60 * 1000
-  setTimeout(() => {
-    // MQA-175: this timer is the boot step an unreadable `.brain` kills — it is the first thing after
-    // launch that decrypts index.json. When the previous run died before boot completed, this launch
-    // deliberately does not walk back into it: the brain resume and its reconcile interval are skipped
-    // for this session only, so the user reaches a working app instead of a sixth silent vanish. The
-    // watch is cleared in `finally` either way (FITO-185-E), so a throw from any brain step cannot leave
-    // boot-incomplete.json stuck for the next launch.
-    try {
-      if (earlyDeath) {
-        mainLog.warn(`[boot] safe start — skipping the brain backfill/reconcile resume: ${describeEarlyDeath(earlyDeath)}`)
-        auditLog('app.error.early_death', { consecutive: earlyDeath.consecutive, recoveryStatus: 'safe_start' })
-      } else {
-        // Per-step isolation: one failing resume must not skip the remaining boot work or the finally clear.
-        try {
-          bootWork.run('resumeBackfillIfPending', () => resumeBackfillIfPending().catch((e) => mainLog.warn('[boot] resumeBackfillIfPending failed:', e)))
-        } catch (e) {
-          mainLog.warn('[boot] resumeBackfillIfPending failed:', e)
-        }
-        try {
-          bootWork.run('reconcileMeetingsInBackground', () => reconcileMeetingsInBackground().catch((e) => mainLog.warn('[boot] reconcileMeetingsInBackground failed:', e)))
-        } catch (e) {
-          mainLog.warn('[boot] reconcileMeetingsInBackground failed:', e)
-        }
-        // Registered here rather than alongside the timer so safe start skips the recurring brain work too,
-        // not just the single resume — the reconcile tick reads the same index.json.
-        trackTimer(setInterval(() => {
-          void reconcileMeetingsInBackground().catch((e) => mainLog.warn('[brain] reconcile tick failed:', e))
-        }, BRAIN_RECONCILE_MS))
-        // Product cadence is three named slots (06:00, 12:00, 18:00 America/Toronto), not an hourly
-        // consolidation poll. Catch up if Métis was closed across a slot; then arm the next timeout.
-        try {
-          wireIntelligenceIndexWork()
-        } catch (e) {
-          mainLog.warn('[boot] wireIntelligenceIndexWork failed:', e)
-        }
-        try {
-          bootWork.run('catchUpIntelligenceIndexIfNeeded', () => catchUpIntelligenceIndexIfNeeded().catch((e) => mainLog.error('[intelligence-index] launch catch-up failed:', e)))
-        } catch (e) {
-          mainLog.warn('[boot] catchUpIntelligenceIndexIfNeeded failed:', e)
-        }
-        try {
-          scheduleIntelligenceIndex(trackTimer)
-        } catch (e) {
-          mainLog.warn('[boot] scheduleIntelligenceIndex failed:', e)
-        }
-        // Consolidation runs once per launch; the named slots own the recurring pass. Both are automatic triggers (infra/scheduler/policy.ts).
-        try {
-          bootWork.run('runConsolidationIfDue', () => runConsolidationIfDue().catch((e) => mainLog.warn('[brain] demoted consolidation check failed:', e)))
-        } catch (e) {
-          mainLog.warn('[boot] runConsolidationIfDue failed:', e)
-        }
-      }
-    } finally {
-      // Power-save stays until here so the 15s brain step is not App-Napped; sentinel may already
-      // have been cleared earlier (G-SHOW/G-TIMER) — clearBootWatchOnce is idempotent.
-      setBootPowerSaveBlock(false)
-      clearBootWatchOnce('mqa-175')
-    }
-  }, 15_000)
-
-  app.on('activate', () => {
-    reveal('activate', { focus: true })
-    // Bar dock click still opens Settings. Hide/Island launch must stay parked
-    // 8×2 — Ultron fresh userdata was 880×1017 Settings / Expand Métis.
-    try {
-      if (
-        getSettings().onboardingDone &&
-        overlayActivateOpensSettings(liveOverlayLayout())
-      ) {
-        sendHotkey('settings')
-      }
-    } catch {
-      /* settings store not ready */
-    }
-  })
-  }).catch((e) => {
-    // console.error is a no-op in a packaged GUI build with no console — route to the real sinks (same
-    // redact-before-log discipline as onFatal) so a boot failure is actually diagnosable and audited.
-    const detail = e instanceof Error ? e.stack || e.message : String(e)
-    mainLog.error('[boot] Métis startup failed:', redactSecrets(detail))
-    auditLog('app.crash', crashDetail('boot', { message: redactSecrets(e instanceof Error ? e.message : String(e)) }))
-  })
+    })
+    .catch((e) => {
+      // console.error is a no-op in a packaged GUI build with no console — route to the real sinks (same
+      // redact-before-log discipline as onFatal) so a boot failure is actually diagnosable and audited.
+      const detail = e instanceof Error ? e.stack || e.message : String(e)
+      mainLog.error('[boot] Métis startup failed:', redactSecrets(detail))
+      auditLog('app.crash', crashDetail('boot', { message: redactSecrets(e instanceof Error ? e.message : String(e)) }))
+    })
 }
 
 app.on('window-all-closed', () => {

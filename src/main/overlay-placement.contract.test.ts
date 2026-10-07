@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { transformWithEsbuild } from 'vite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { sourceIndexOf } from '../../scripts/lib/source-layout'
 import {
   clampAxis,
   clampAxisMargin,
@@ -31,6 +32,7 @@ import {
   legacyDrawerRect,
   legacyTabCentreY,
   legacyTabRect,
+  readerRect,
   revealBand,
   type Rect as EdgeRect
 } from '@shared/right-edge-geometry'
@@ -54,9 +56,9 @@ const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 /** Slice the source from `from` up to (excluding) the next occurrence of `to`. Sliced inside each test so
  *  one drifted marker reports as its own failure instead of aborting collection for the whole file. */
 function sliceBetween(from: string, to: string): string {
-  const start = indexSrc.indexOf(from)
+  const start = sourceIndexOf(indexSrc, from)
   expect(start, `marker not found: ${from}`).toBeGreaterThan(-1)
-  const end = indexSrc.indexOf(to, start)
+  const end = sourceIndexOf(indexSrc, to, start + 1)
   expect(end, `end marker not found after ${from}: ${to}`).toBeGreaterThan(-1)
   return indexSrc.slice(start, end)
 }
@@ -301,9 +303,7 @@ describe('MQA-197 — the overlay height is re-clamped whenever it changes displ
   it('MQA-197 — restoring the bar cannot re-apply a height measured on a taller display', async () => {
     // setWindowMode writes lastBarHeight straight back; the renderer fires windowMode('bar') on every
     // mount (including the reload after a renderer crash), which can land after the overlay has moved.
-    const region = await toJs(
-      sliceBetween('function setWindowMode(): void {', '/** Self-heal a null `win`')
-    )
+    const region = await toJs(sliceBetween('function setWindowMode(): void {', '/** Self-heal a null `win`'))
     const preamble = [
       'const { screen, clampHeight, recenterXForWidth, rememberBarContentHeight } = stubs',
       'let current = { x: 0, y: 0, width: 880, height: 400 }',
@@ -363,6 +363,7 @@ describe('M2-0202 RE-G10 — right-edge window bounds have one writer', () => {
     fire: (event: string) => void
     run: Record<string, (...args: unknown[]) => unknown>
     setResting: (resting: boolean) => void
+    setReader: (pending: boolean) => void
   }
 
   afterEach(() => vi.useRealTimers())
@@ -389,6 +390,7 @@ describe('M2-0202 RE-G10 — right-edge window bounds have one writer', () => {
     let displays = options.displays
     let current: EdgeRect = options.start ?? { x: 0, y: 0, width: 4, height: 4 }
     let depth = 0
+    let readerPending = false
     const writes: Write[] = []
     const listeners: Record<string, () => void> = {}
     const handlers: Record<string, (...args: unknown[]) => unknown> = {}
@@ -399,8 +401,16 @@ describe('M2-0202 RE-G10 — right-edge window bounds have one writer', () => {
     }
     const settingsWrites: Array<Record<string, unknown>> = []
     const overlap = (a: EdgeRect, b: EdgeRect): number =>
-      Math.max(0, Math.min(right(a), right(b)) - Math.max(a.x, b.x)) * Math.max(0, Math.min(bottom(a), bottom(b)) - Math.max(a.y, b.y))
-    const metrics = (d: Display): DisplayMetrics => ({ bounds: d.bounds, workArea: d.workArea, hasNotch: false, notchWidth: 0, menuBarHeight: 0, source: 'heuristic' })
+      Math.max(0, Math.min(right(a), right(b)) - Math.max(a.x, b.x)) *
+      Math.max(0, Math.min(bottom(a), bottom(b)) - Math.max(a.y, b.y))
+    const metrics = (d: Display): DisplayMetrics => ({
+      bounds: d.bounds,
+      workArea: d.workArea,
+      hasNotch: false,
+      notchWidth: 0,
+      menuBarHeight: 0,
+      source: 'heuristic'
+    })
     const win = {
       isDestroyed: () => false,
       isVisible: () => true,
@@ -424,14 +434,22 @@ describe('M2-0202 RE-G10 — right-edge window bounds have one writer', () => {
     const stubs = {
       win,
       screen: {
-        getDisplayMatching: (rect: EdgeRect) => displays.reduce((best, d) => (overlap(rect, d.workArea) > overlap(rect, best.workArea) ? d : best), displays[0]),
+        getDisplayMatching: (rect: EdgeRect) =>
+          displays.reduce(
+            (best, d) => (overlap(rect, d.workArea) > overlap(rect, best.workArea) ? d : best),
+            displays[0]
+          ),
         getAllDisplays: () => displays,
         getCursorScreenPoint: () => ({ x: 0, y: 0 }),
         on: (event: string, fn: () => void) => {
           listeners[event] = fn
         }
       },
-      ipcMain: { handle: (channel: string, fn: (...args: unknown[]) => unknown) => { handlers[channel] = fn } },
+      ipcMain: {
+        handle: (channel: string, fn: (...args: unknown[]) => unknown) => {
+          handlers[channel] = fn
+        }
+      },
       IPC: { windowResize: 'window:resize' },
       assertMainWindow: () => {},
       getSettings: () => settings,
@@ -441,6 +459,7 @@ describe('M2-0202 RE-G10 — right-edge window bounds have one writer', () => {
       },
       getLockedKeys: () => options.lockedKeys ?? [],
       createRightEdgeAnchors,
+      rightEdgeSession: { readerPending: () => readerPending },
       mainLog: { warn: () => {}, info: () => {} },
       liveOverlayPlacement: () => 'right-edge',
       liveOverlayLayout: () => options.layout ?? 'hide',
@@ -467,8 +486,12 @@ describe('M2-0202 RE-G10 — right-edge window bounds have one writer', () => {
       BAR_IDLE_HEIGHT_PX: 84,
       BAR_HEIGHT: 120,
       OVERLAY_REST_BACKGROUND: '#00000000',
-      enterDepth: () => { depth += 1 },
-      leaveDepth: () => { depth -= 1 }
+      enterDepth: () => {
+        depth += 1
+      },
+      leaveDepth: () => {
+        depth -= 1
+      }
     }
     const body = [
       `const { ${Object.keys(stubs).join(', ')} } = stubs`,
@@ -494,6 +517,9 @@ describe('M2-0202 RE-G10 — right-edge window bounds have one writer', () => {
       ...built,
       run: { ...built.run, windowResize: (payload: unknown) => handlers['window:resize']({}, payload) },
       bounds: () => ({ ...current }),
+      setReader: (pending) => {
+        readerPending = pending
+      },
       writes,
       settings,
       settingsWrites,
@@ -533,7 +559,9 @@ describe('M2-0202 RE-G10 — right-edge window bounds have one writer', () => {
     // Persisted once, after the drag settles, as the anchor fraction; the legacy key is untouched.
     expect(h.settingsWrites).toEqual([])
     vi.advanceTimersByTime(350)
-    expect(h.settingsWrites).toEqual([{ overlayRightEdgeAnchorByDisplay: { [overlayDisplayKey(1) as string]: anchorFraction(area, a + 70) } }])
+    expect(h.settingsWrites).toEqual([
+      { overlayRightEdgeAnchorByDisplay: { [overlayDisplayKey(1) as string]: anchorFraction(area, a + 70) } }
+    ])
     expect(h.settings.overlayRightEdgeYByDisplay).toEqual({})
     // A display change re-anchors the rest, then the open drawer, at the stored anchor on the new work area.
     const smaller: Display = { id: 1, bounds: wa(1024, 576), workArea: wa(1024, 528) }
@@ -555,12 +583,28 @@ describe('M2-0202 RE-G10 — right-edge window bounds have one writer', () => {
     expect(h.writes.every((write) => write.insideApply)).toBe(true)
   })
 
+  it('a pending Reader opens at readerRect and parks to the same rest, through the same writer (spec v3 §6)', async () => {
+    const h = await harness({ displays: [DISPLAY], layout: 'island' })
+    h.setReader(true)
+    h.run.restoreBarWidth()
+    expect(h.bounds()).toEqual(readerRect(DISPLAY.workArea))
+    h.setResting(true)
+    h.run.commitParkedOverlayBounds(h.run.parkedOverlayBounds('island', DISPLAY))
+    expect(h.bounds()).toEqual(legacyTabRect(DISPLAY.workArea, anchorY(DISPLAY.workArea)))
+    h.setReader(false)
+    h.setResting(false)
+    h.run.restoreBarWidth()
+    expect(h.bounds()).toEqual(legacyDrawerRect(DISPLAY.workArea, anchorY(DISPLAY.workArea)))
+    expect(h.writes.filter((write) => !write.insideApply)).toEqual([])
+  })
+
   it('windowResize and resizeTo never change right-edge bounds', async () => {
     const h = await harness({ displays: [DISPLAY], layout: 'island' })
     h.run.restoreBarWidth()
     const open = h.bounds()
     const before = h.writes.length
-    for (const payload of [{ height: 900 }, { height: 40, width: 220 }, { height: Number.NaN }]) h.run.windowResize(payload)
+    for (const payload of [{ height: 900 }, { height: 40, width: 220 }, { height: Number.NaN }])
+      h.run.windowResize(payload)
     h.run.resizeTo(900)
     expect(h.writes.length).toBe(before)
     expect(h.bounds()).toEqual(open)
@@ -568,7 +612,12 @@ describe('M2-0202 RE-G10 — right-edge window bounds have one writer', () => {
 
   it('RE-G04: a legacy-only display converts on its first resolve, and a display absent at upgrade on first attach', async () => {
     const legacy = { 'display:1': 0.5, 'display:2': 0.25 }
-    const h = await harness({ displays: [DISPLAY], layout: 'island', resting: true, settings: { overlayRightEdgeYByDisplay: legacy } })
+    const h = await harness({
+      displays: [DISPLAY],
+      layout: 'island',
+      resting: true,
+      settings: { overlayRightEdgeYByDisplay: legacy }
+    })
     h.run.commitParkedOverlayBounds(h.run.parkedOverlayBounds('island', DISPLAY))
     const tab = h.bounds()
     expect(Math.abs(tab.y + tab.height / 2 - legacyTabCentreY(DISPLAY.workArea, 0.5))).toBeLessThanOrEqual(1)
@@ -579,7 +628,9 @@ describe('M2-0202 RE-G10 — right-edge window bounds have one writer', () => {
     h.fire('display-removed')
     expect(Object.keys(h.settings.overlayRightEdgeAnchorByDisplay as object).sort()).toEqual(['display:1', 'display:2'])
     const secondTab = h.bounds()
-    expect(Math.abs(secondTab.y + secondTab.height / 2 - legacyTabCentreY(second.workArea, 0.25))).toBeLessThanOrEqual(1)
+    expect(Math.abs(secondTab.y + secondTab.height / 2 - legacyTabCentreY(second.workArea, 0.25))).toBeLessThanOrEqual(
+      1
+    )
     // Each display migrated exactly once; the legacy key stays read-only.
     expect(h.settingsWrites).toHaveLength(2)
     expect(h.settings.overlayRightEdgeYByDisplay).toEqual(legacy)
