@@ -6,6 +6,8 @@ import * as fmRuntime from './fm-runtime'
 import { streamOpenAI } from './openai'
 import type { HkMRamFloorOverride } from '../qa-hk-m'
 import { type StreamOptions, type StreamHandle, errMsg } from './shared'
+import { LOCAL_CHARS_PER_TOKEN } from './local-constants'
+export { LOCAL_CHARS_PER_TOKEN } from './local-constants'
 
 // Local completions are task-shaped, not generic 4k-token chat turns. These bounds preserve the current
 // spoken-suggestion (~15–40 seconds), tight-summary, and screen-help contracts. Character ceilings are
@@ -14,10 +16,6 @@ import { type StreamOptions, type StreamHandle, errMsg } from './shared'
 export const LOCAL_OUTPUT_TOKEN_BUDGETS = Object.freeze({ suggest: 96, summary: 512, vision: 384 })
 const LOCAL_SYSTEM_CHAR_CAP = 40_000 // matches personas.ts contextBlock's existing imported-context cap
 const LOCAL_SUMMARY_TRANSCRIPT_CHAR_CAP = 80_000
-
-/** Conservative characters per token for sizing a request against a context window. English transcripts
- *  run about four; three leaves room for names, numbers and accented text. */
-export const LOCAL_CHARS_PER_TOKEN = 3
 
 /** Apple's on-device model context window (prompt plus answer). */
 export const FM_CONTEXT_TOKENS = 4096

@@ -29,6 +29,9 @@ export type Band = z.infer<typeof BandSchema>
 export const SourceUseSchema = z.enum(['eligible', 'employment', 'unknown'])
 export type SourceUse = z.infer<typeof SourceUseSchema>
 
+export const BrainIngestFailureReasonSchema = z.enum(['context_overflow', 'provider_error', 'unavailable'])
+export type BrainIngestFailureReason = z.infer<typeof BrainIngestFailureReasonSchema>
+
 /** Deal velocity: a hard calendar commitment beats soft organizational intent; absence is a valid answer. */
 export const VelocitySchema = z.object({
   signal: z.enum(['hard-calendar-gate', 'soft-organizational-gate', 'no-hard-date-found']),
@@ -499,6 +502,8 @@ export const BrainIndexSchema = z.object({
     /** True once `attempts` reaches MAX_INGEST_ATTEMPTS (infra/scheduler/policy.ts). Automatic triggers
      *  never requeue it; only an explicit user Retry revives it. */
     exhausted: z.boolean().optional(),
+    /** Machine-readable failure class for the last failed extraction attempt. */
+    reason: BrainIngestFailureReasonSchema.optional(),
     /** Set when this device could not read the source (a cloud-only placeholder, a lock, a vanished or
      *  undecryptable file). Such a failure spends no attempt; automatic scans retry once the file's ctime
      *  differs from `changedAtMs`. Replaced by the next outcome. */
@@ -594,7 +599,7 @@ export interface BrainStatus {
   /** Per-file detail (file/error/exhausted) for up to 20 currently-failing sources — the file-and-reason
    *  counterpart to `failedFiles` above, deliberately bounded so a large ledger never ships whole over
    *  IPC. Powers the failed-row tooltip (RecallView) and the expandable failure detail (BrainView). */
-  failedDetails?: { file: string; error: string; exhausted: boolean }[]
+  failedDetails?: { file: string; error: string; exhausted: boolean; reason?: BrainIngestFailureReason }[]
   /** True from "a backfill was requested" until the queue fully drains (see ingest.ts's `backfillRequested`
    *  index flag) — lets a per-meeting indicator distinguish "queued, not yet attempted" (pending) from a
    *  source with no ingest activity at all. */

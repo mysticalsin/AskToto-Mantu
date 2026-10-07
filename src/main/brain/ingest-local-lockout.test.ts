@@ -24,7 +24,8 @@ vi.mock('../llm/local-routing', () => ({ localBaseReady: localBaseReadyMock }))
 // exact condition under test. Mock getState so a test can put the runtime into that state deterministically
 // without spawning a real llama-server; activeStreams is only read by the yield heuristic (0 is inert here).
 const localRuntimeStateMock = vi.hoisted(() => vi.fn<() => string>(() => 'stopped'))
-vi.mock('../llm/local-runtime', () => ({
+vi.mock('../llm/local-runtime', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../llm/local-runtime')>()),
   getState: localRuntimeStateMock,
   activeStreams: () => 0
 }))

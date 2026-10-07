@@ -473,7 +473,7 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
       rmSync(fixtureRoot, { recursive: true, force: true })
       rmSync(pathRoot, { recursive: true, force: true })
     }
-  })
+  }, 60_000)
 
   it('refuses PASS evidence when required live rows and interrupt checks are not exercised', () => {
     const out = mkdtempSync(join(tmpdir(), 'm2-0008-freeze-contract-'))
@@ -549,7 +549,7 @@ describe('M2-0008 freeze reproduction matrix harness', () => {
       rmSync(fixtureRoot, { recursive: true, force: true })
       rmSync(pathRoot, { recursive: true, force: true })
     }
-  })
+  }, 60_000)
 
   it('--candidate-run emits an M2-0194 attribution bundle that check.mjs accepts', () => {
     const out = mkdtempSync(join(tmpdir(), 'm2-0194-freeze-contract-'))

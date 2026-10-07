@@ -16,6 +16,7 @@ import {
   type MeetingRef,
   type BrainGraph,
   type BrainIndex,
+  type BrainIngestFailureReason,
   type Confidence,
   type ProvenanceState,
   type ProvenantField,
@@ -33,13 +34,17 @@ import { narrowAllowedForCapability, resolveManagedModel } from '../model-policy
 import { localBaseReady } from '../llm/local-routing'
 import { intelligenceNoProviderMessage, intelligenceRequiresLocal } from '@shared/intelligence-pass'
 import { verifyIntegrity } from '../llm/local-models'
-import { getState as localRuntimeState, activeStreams as localActiveStreams } from '../llm/local-runtime'
 import { parse, readMeetingFields } from '../features/meetings/meeting-document'
-import { isLocalPreemption, localSlotTokens, whenLocalInteractiveIdle } from '../llm/local'
 import {
-  EXTRACTION_REMINDER, ExtractionDoesNotFitError, LOCAL_EXTRACTION_OUTPUT_TOKENS, MIN_LOCAL_WINDOW_CHARS,
-  assertLocalWindowsFit, fitWindowChars, isContextOverflow
-} from './local-extraction-fit'
+  getState as localRuntimeState,
+  activeStreams as localActiveStreams,
+  assertLocalExtractionWindowsFit as assertRuntimeLocalExtractionWindowsFit,
+  fitLocalExtractionWindowChars,
+  isLocalContextOverflow,
+  LocalContextOverflowError,
+  LOCAL_EXTRACTION_OUTPUT_TOKENS
+} from '../llm/local-runtime'
+import { isLocalPreemption, localSlotTokens, whenLocalInteractiveIdle } from '../llm/local'
 import {
   scanMeetingSources,
   sourceVersions,
@@ -420,42 +425,54 @@ export function extractJsonObject(raw: string): string {
 export const buildExtractionSystem = (extra = ''): string =>
   INJECTION_GUARD.trimStart() + '\n\n' + BRAIN_EXTRACTION_PROMPT + extra
 
-// ── Windowed extraction (Task MI-4, kills D2 — the old hard 24k truncation) ──────────────────────────
+// ── Windowed extraction ─────────────────────────────────────────────────────
 
-// Same size as the old hardcoded `.slice(0, 24000)` — a transcript at or under this length takes the
-// EXACT single-completion-call path it always has (see splitIntoWindows's own byte-identity guarantee).
 const WINDOW_SIZE = 24000
-// ~1k of trailing context carried into the next window so a fact split across a window boundary (a
-// number stated in one line, its supporting clause in the next) still has a chance to align in EITHER
-// window — small relative to WINDOW_SIZE, so it never meaningfully multiplies completion-call volume.
 const WINDOW_OVERLAP = 1000
+const EXTRACTION_REMINDER = '\n\nREMINDER: your ENTIRE reply must be one valid JSON object. No fences, no prose.'
+const MIN_LOCAL_WINDOW_CHARS = 1000, MAX_LOCAL_WINDOWS = 12
 
-/** The largest window (chars) whose local extraction request fits a slot of `slotTokens` (INV-FIT in
- *  local-extraction-fit.ts), capped at WINDOW_SIZE. */
-export function localExtractionWindowChars(slotTokens: number): number {
-  return fitWindowChars(slotTokens, buildExtractionSystem(EXTRACTION_REMINDER).length, WINDOW_SIZE)
+export class ExtractionDoesNotFitError extends LocalContextOverflowError {
+  constructor() { super(); this.name = 'ExtractionDoesNotFitError' }
 }
 
-/** Window size for this route: fitted to the local slot when Métis Local is asked first, else WINDOW_SIZE.
- *  `local` says whether the size came from the slot, which is what makes a context overflow permanent. */
+function assertLocalWindowsFit(size: number, windows: readonly string[]): void {
+  try {
+    assertRuntimeLocalExtractionWindowsFit(size, MIN_LOCAL_WINDOW_CHARS, MAX_LOCAL_WINDOWS, windows)
+  } catch (error) {
+    throw error instanceof LocalContextOverflowError ? new ExtractionDoesNotFitError() : error
+  }
+}
+
+function isContextOverflow(error: unknown): boolean {
+  return error instanceof LocalContextOverflowError || isLocalContextOverflow(error)
+}
+
+export const fitWindowChars = (slotTokens: number, systemChars: number, maxChars: number): number =>
+  fitLocalExtractionWindowChars(slotTokens, systemChars, maxChars)
+
+export const localExtractionWindowChars = (slotTokens: number): number =>
+  fitWindowChars(slotTokens, buildExtractionSystem(EXTRACTION_REMINDER).length, WINDOW_SIZE)
+
 function extractionWindowSize(s: Settings, route: IngestRoute): { size: number; local: boolean } {
   const first = pickProviderCandidates(s, route)[0]
   if (first?.provider !== 'local') return { size: WINDOW_SIZE, local: false }
-  let slotTokens: number
   try {
-    slotTokens = localSlotTokens(first.model)
+    return { size: localExtractionWindowChars(localSlotTokens(first.model)), local: true }
   } catch {
-    // An unknown persisted model id: the local call itself reports that, so size as before.
     return { size: WINDOW_SIZE, local: false }
   }
-  return { size: localExtractionWindowChars(slotTokens), local: true }
 }
 
-/** Split `text` into sequential windows of at most `size` chars, cut at line boundaries so a window
- *  never splits a transcript line, with `overlap` chars of trailing context carried into the next
- *  window. Returns `[text]` UNCHANGED when `text.length <= size` — the single-window path every
- *  transcript at or under the threshold takes, byte-identical to pre-MI-4 behavior (a 1-element array's
- *  `.join()` below reproduces `text` exactly, so no downstream branching is needed for that case). */
+function classifyIngestFailure(error: unknown, unreadable: boolean): BrainIngestFailureReason {
+  if (unreadable) return 'unavailable'
+  if (isContextOverflow(error)) return 'context_overflow'
+  const message = error instanceof Error ? error.message : String(error)
+  if (/no configured ai provider|unavailable|not available|missing|not found/i.test(message)) return 'unavailable'
+  return 'provider_error'
+}
+
+/** Split into line-preserving windows with overlap. Text at or under `size` returns unchanged. */
 export function splitIntoWindows(text: string, size = WINDOW_SIZE, overlap = WINDOW_OVERLAP): string[] {
   if (text.length <= size) return [text]
   const lines = text.split('\n')
@@ -475,15 +492,8 @@ export function splitIntoWindows(text: string, size = WINDOW_SIZE, overlap = WIN
         ov.unshift(cur[j])
         ovLen += cur[j].length + 1
       }
-      // MQA-017: `i` only advances on the push path below, so the reseeded window MUST be able to accept
-      // this line — otherwise the same branch fires again on the same `i`, pushes an identical window,
-      // and reseeds identical state forever: an infinite loop that grows `windows` without bound and
-      // wedges the main process (this runs synchronously on it, via extractMeeting). Reachable whenever
-      // one line's overlap seed plus the next line exceeds `size` — e.g. two adjacent very long lines.
-      // Dropping the overlap guarantees forward progress: with an empty `cur` the guard below is false,
-      // so the line is always consumed, and a single line longer than `size` becomes its own oversized
-      // window rather than looping. Losing overlap context on that boundary is the correct trade against
-      // hanging the app.
+      // MQA-017: the reseeded window must accept this line or the same `i` loops forever.
+      // Drop overlap on that boundary so long adjacent lines still make forward progress.
       if (ovLen + lineLen > size) {
         cur = []
         curLen = 0
@@ -718,11 +728,7 @@ async function extractMeeting(
 
   const runWindow = async (window: string): Promise<MeetingExtraction> => {
     const user = `Meeting transcript (file: ${basename(sourceFile)}):\n\n"""\n${window}\n"""`
-    // Set by attempt() the moment runCompletion returns text, independent of whether that text then
-    // parses — so a parse failure's reinforcement retry (below) can pin itself to the SAME provider that
-    // produced the bad output. Stays undefined only when runCompletion itself never got any text back
-    // (every eligible candidate failed on transport), in which case the retry falls through to a fresh
-    // failover walk instead — same as a first attempt.
+    // Set once text returns so a parse retry stays on the same provider; transport failures keep failover.
     let servedBy: ProviderId | undefined
     const attempt = async (extra: string, pin?: ProviderId): Promise<MeetingExtraction> => {
       const { text, provider } = await runCompletion(
@@ -739,35 +745,27 @@ async function extractMeeting(
     try {
       return await attempt('')
     } catch (e) {
-      // A request the model's context cannot hold fails identically with a reminder appended.
       if (isContextOverflow(e)) throw e
-      // One reinforcement retry — malformed JSON is the dominant failure mode, not content. Cross-
-      // provider failover for TRANSPORT failures already happened inside runCompletion; this retry is
-      // deliberately same-provider (servedBy) so a parse-failure reminder never turns into an accidental
-      // provider switch — that's the failover walk's job, not this one's.
+      // One same-provider reinforcement retry; transport failover already happened inside runCompletion.
       mainLog.warn('[brain] first extraction attempt failed, retrying once:', e instanceof Error ? e.message : e)
       return attempt(EXTRACTION_REMINDER, servedBy)
     }
   }
 
-  // Sequential, not concurrent — see the module doc / windowing comments: EXTRACT_CONCURRENCY governs
-  // how many DIFFERENT FILES extract at once, never how many windows of the SAME file run at once.
+  // Sequential per file; EXTRACT_CONCURRENCY is for different files, not windows of one meeting.
   const results: MeetingExtraction[] = []
   for (const w of windows) {
     try {
       results.push(await runWindow(w))
     } catch (e) {
-      // The estimate fitted the slot but the tokenizer did not (dense non-Latin text): same outcome as a
-      // meeting that never fitted. Overflow on a cloud-sized window stays an ordinary, backed-off failure.
+      // Dense text can still beat the estimate; local overflow is permanent for this runtime slot.
       if (fit.local && isContextOverflow(e)) throw new ExtractionDoesNotFitError()
       throw e
     }
   }
 
   const combined = combineWindowExtractions(results)
-  // For a single window this is `windows[0]` unchanged (Array.prototype.join on a 1-element array
-  // returns that element verbatim, no separator inserted) — the exact text the (sole) completion call
-  // saw, preserving byte-identical single-window verification behavior.
+  // A one-window join returns the exact text the single completion saw.
   const preparedText = windows.join('\n')
   return { extraction: verifyExtraction(combined, preparedText), preparedText }
 }
@@ -1696,7 +1694,7 @@ function redactPathsInError(error: string): string {
 export function ingestFailureDetails(
   idx: BrainIndex,
   limit = 20
-): { file: string; error: string; exhausted: boolean }[] {
+): { file: string; error: string; exhausted: boolean; reason?: BrainIngestFailureReason }[] {
   return Object.entries(idx.ingested)
     .filter(([, record]) => !record.ok && !isPendingIngestRecord(record))
     .sort(([, a], [, b]) => b.at - a.at)
@@ -1704,7 +1702,8 @@ export function ingestFailureDetails(
     .map(([file, record]) => ({
       file,
       error: redactPathsInError(record.error ?? 'Unknown error'),
-      exhausted: !!record.exhausted
+      exhausted: !!record.exhausted,
+      ...(record.reason ? { reason: record.reason } : {})
     }))
 }
 
@@ -1910,6 +1909,7 @@ async function finishJob(result: JobResult): Promise<void> {
           at: now,
           ok: false,
           error: e instanceof Error ? e.message : String(e),
+          reason: classifyIngestFailure(e, !result.ok && result.unreadable),
           ...(version ? { sourceVersion: version } : {}),
           ...retryStateAfterFailure(previous, {
             unreadable: !result.ok && result.unreadable,

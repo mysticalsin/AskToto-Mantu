@@ -21,6 +21,8 @@ import { observeSidecar } from '../infra/observability/sidecar-events'
 import { errMsg } from './shared'
 import { recordSidecarIntent, recordSidecarSpawned, recordSidecarSupervisedSpawned } from '../infra/process/registry'
 import { markSidecarProcessUsable, spawnSidecarProcess, stopSidecarProcess } from '../infra/process/supervisor'
+import { LOCAL_CHARS_PER_TOKEN } from './local-constants'
+export { LOCAL_CHARS_PER_TOKEN } from './local-constants'
 
 export type LlamaPlatform = 'mac' | 'win'
 export type WinVariant = 'vulkan' | 'cpu'
@@ -158,6 +160,38 @@ export interface SpawnArgsInput {
  * "Stream timed out — no response from the model." Callers use this to route elsewhere instead of waiting.
  */
 export const LOCAL_PARALLEL_SLOTS = 2
+
+export const LOCAL_EXTRACTION_OUTPUT_TOKENS = 1536
+const EXTRACTION_USER_OVERHEAD_CHARS = 512
+const CONTEXT_MARGIN_TOKENS = 256
+
+/** Largest extraction window whose prompt, transcript window and reserved answer fit one runtime slot. */
+export function fitLocalExtractionWindowChars(slotTokens: number, systemChars: number, maxChars: number): number {
+  const promptTokens = Math.ceil((systemChars + EXTRACTION_USER_OVERHEAD_CHARS) / LOCAL_CHARS_PER_TOKEN)
+  const windowTokens = slotTokens - LOCAL_EXTRACTION_OUTPUT_TOKENS - CONTEXT_MARGIN_TOKENS - promptTokens
+  return Math.min(maxChars, Math.max(0, windowTokens * LOCAL_CHARS_PER_TOKEN))
+}
+
+export class LocalContextOverflowError extends Error {
+  constructor() {
+    super(
+      'This meeting does not fit the on-device model\'s context on this Mac, so it was not indexed. ' +
+      'Select Retry after closing other apps, or index it with a cloud provider.'
+    )
+    this.name = 'LocalContextOverflowError'
+  }
+}
+
+export function assertLocalExtractionWindowsFit(size: number, minSize: number, maxWindows: number, windows: readonly string[]): void {
+  if (size < minSize || windows.length > maxWindows || windows.some((w) => w.length > size)) {
+    throw new LocalContextOverflowError()
+  }
+}
+
+export function isLocalContextOverflow(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /exceeds the available context size/i.test(message)
+}
 
 /** True when every sidecar slot is already serving a stream, so a new one would only queue. */
 export function atCapacity(): boolean {
