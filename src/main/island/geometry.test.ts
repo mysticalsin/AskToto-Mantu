@@ -29,6 +29,7 @@ import {
   overlayRestSize,
   isForbiddenMidFlowCard,
   shouldIgnoreResizeWhilePeekResting,
+  shouldParkHoverRestAfterLayoutChange,
   shouldParkHoverRestAfterLeavingSurface,
   OVERLAY_HIDE_TARGET,
   OVERLAY_HIDE_PARK,
@@ -519,6 +520,41 @@ describe('after exclusive exit — park peek/hide, never 880×816', () => {
     expect(shouldParkHoverRestAfterLeavingSurface({ layout: 'island', pointerInIslandOrBar: false })).toBe(true)
     expect(shouldParkHoverRestAfterLeavingSurface({ layout: 'hide', pointerInIslandOrBar: true })).toBe(false)
     expect(shouldParkHoverRestAfterLeavingSurface({ layout: 'bar', pointerInIslandOrBar: false })).toBe(false)
+  })
+
+  it('right-edge layout changes re-park a resting Hide or Island even under the pointer', () => {
+    expect(
+      shouldParkHoverRestAfterLayoutChange({
+        layout: 'hide',
+        placement: 'right-edge',
+        resting: true,
+        pointerInIslandOrBar: true
+      })
+    ).toBe(true)
+    expect(
+      shouldParkHoverRestAfterLayoutChange({
+        layout: 'island',
+        placement: 'right-edge',
+        resting: true,
+        pointerInIslandOrBar: true
+      })
+    ).toBe(true)
+    expect(
+      shouldParkHoverRestAfterLayoutChange({
+        layout: 'hide',
+        placement: 'top-center',
+        resting: true,
+        pointerInIslandOrBar: true
+      })
+    ).toBe(false)
+    expect(
+      shouldParkHoverRestAfterLayoutChange({
+        layout: 'bar',
+        placement: 'right-edge',
+        resting: true,
+        pointerInIslandOrBar: false
+      })
+    ).toBe(false)
   })
 
   it('peek constants match the CSS hide-target and island capsule', () => {

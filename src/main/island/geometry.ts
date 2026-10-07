@@ -1,18 +1,4 @@
-/**
- * island/geometry.ts — pure overlay positioning math (MQA-275 / Phase 1 of the Métis × Vibe-Island
- * rebuild). NO Electron imports here on purpose: every function takes plain numbers/rects and returns
- * plain numbers/rects, so it is directly unit-testable (geometry.test.ts) without booting Electron or
- * lifting source slices out of index.ts (the pattern overlay-placement.contract.test.ts had to use
- * before this module existed).
- *
- * index.ts stays the ONLY module that calls `screen.getDisplayMatching` / `win.setBounds` — it resolves
- * the live Electron `Display` (and, on macOS, the notch metrics from `island/metrics.ts`) and hands the
- * plain numbers in here. This module never decides which surface to show (that is Phase 2's renderer
- * state machine); it only answers "given this content size and this display, where do the bounds go?".
- *
- * See docs/plans/metis-vibe-island-rebuild.plan.md §2.1 ("one source of truth per concern") and §2.4
- * (notch awareness) for the fuller architecture this is Phase 1 of.
- */
+/** Pure overlay positioning math. Electron-facing display/window calls stay in index.ts. */
 
 import type { OverlayLayout } from '@shared/overlay-chrome'
 import { overlayUsesHover } from '@shared/overlay-chrome'
@@ -772,6 +758,24 @@ export function shouldParkHoverRestAfterLeavingSurface(input: {
   pointerInIslandOrBar: boolean
 }): boolean {
   return overlayUsesHover(input.layout) && !input.pointerInIslandOrBar
+}
+
+/**
+ * A right-edge rest has chrome-specific native bounds (Hide band vs Island tab). While already parked, a
+ * Hide/Island layout switch must re-apply those bounds even if the pointer is inside the current rest.
+ */
+export function shouldParkHoverRestAfterLayoutChange(input: {
+  layout: OverlayLayout
+  placement: OverlayPlacement
+  resting: boolean
+  pointerInIslandOrBar: boolean
+}): boolean {
+  if (!overlayUsesHover(input.layout)) return false
+  if (input.placement === 'right-edge' && input.resting) return true
+  return shouldParkHoverRestAfterLeavingSurface({
+    layout: input.layout,
+    pointerInIslandOrBar: input.pointerInIslandOrBar
+  })
 }
 
 /**

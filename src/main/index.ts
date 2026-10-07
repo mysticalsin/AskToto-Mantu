@@ -232,6 +232,7 @@ import {
   hideParkWindowOpacity,
   settingsOpenRect,
   shouldIgnoreResizeWhilePeekResting,
+  shouldParkHoverRestAfterLayoutChange,
   shouldParkHoverRestAfterLeavingSurface,
   topClamp
 } from './island/geometry'
@@ -5595,10 +5596,13 @@ function registerIpc(): void {
           // Switching to Hide/Island must park. A leftover Circle pill or Settings-tall
           // ghost was Ultron 880×1017 + Expand Métis. Keep a real Settings panel open.
           isMinimized = false
+          const display = screen.getDisplayMatching(win.getBounds())
           if (
             !settingsSurfaceOpen &&
-            shouldParkHoverRestAfterLeavingSurface({
+            shouldParkHoverRestAfterLayoutChange({
               layout,
+              placement: resolvedOverlayPlacementForDisplay(display),
+              resting: islandResting,
               pointerInIslandOrBar: pointerInIslandOrBar({ ignoreWindow: true })
             })
           ) {
@@ -10336,7 +10340,6 @@ if (!app.requestSingleInstanceLock()) {
 app.on('window-all-closed', () => {
   // Overlay app: stay alive in tray; quit only via tray/menu.
 })
-
 // Tray "Quit AskToto" (and any other path that calls app.quit() directly, e.g. Cmd+Q on macOS) used to
 // tear the process down with zero drain: the in-progress meeting's transcript lives only in renderer
 // React state, written to disk solely by a 60s autosave interval, so a graceful-looking Quit could lose
@@ -10358,7 +10361,6 @@ app.on('before-quit', (e) => {
   }
   setTimeout(() => app.quit(), 2000)
 })
-
 app.on('will-quit', () => {
   // The renderer may already be unavailable during shutdown; main owns the socket and must still stop it.
   invalidateCloudSttOwner()
@@ -10385,8 +10387,7 @@ app.on('will-quit', () => {
     }
   }
   if (notifTimer) clearInterval(notifTimer)
-  // Cancel every tracked background poller FIRST, before the network stack is torn down — a Dust-refresh
-  // or reconcile interval firing a resolve mid-teardown is the shutdown-race SIGTRAP class.
+  // Cancel tracked background pollers before network teardown; late Dust refreshes caused shutdown SIGTRAPs.
   for (const t of backgroundTimers) {
     try {
       clearInterval(t)
@@ -10395,8 +10396,7 @@ app.on('will-quit', () => {
     }
   }
   backgroundTimers.length = 0
-  // M2-0006: last, so it only fires once every other teardown step above has run. This is the one signal
-  // that distinguishes THIS quit from a hard kill on the next boot's app.started.prevShutdown.
+  // M2-0006: last; distinguishes THIS quit from a hard kill on the next boot's app.started.prevShutdown.
   try {
     observability?.shutdownClean(process.uptime())
   } catch (e) {
