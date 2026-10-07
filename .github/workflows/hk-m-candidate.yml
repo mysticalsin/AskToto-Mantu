@@ -49,7 +49,15 @@ jobs:
             echo "::error::HK-M candidate evidence must be dispatched from refs/heads/main."
             exit 1
           fi
-      - name: The candidate is a successful qa-candidate.yml dispatch on main
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      # M2-0500: the shared candidate guard (scripts/qa/candidate-scenarios.mjs candidateRunProblems) accepts only a
+      # completed, successful workflow_dispatch run of qa-candidate.yml on main or release/1.9.x.
+      - name: The candidate is a successful qa-candidate.yml dispatch on main or release/1.9.x
         env:
           GH_TOKEN: ${{ github.token }}
           CANDIDATE_RUN: ${{ inputs.candidate_run }}
@@ -59,8 +67,7 @@ jobs:
             exit 1
           fi
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN" > candidate-run.json
-          jq -e '.path == ".github/workflows/qa-candidate.yml" and .event == "workflow_dispatch" and .head_branch == "main" and .status == "completed" and .conclusion == "success"' candidate-run.json > /dev/null \
-            || { echo "::error::candidate_run must be a completed, successful workflow_dispatch run of .github/workflows/qa-candidate.yml on main."; exit 1; }
+          node scripts/qa/candidate-scenarios.mjs guard candidate-run.json "$CANDIDATE_RUN"
 
   hk-m:
     name: HK-M 20 cycles fresh profile (macOS)

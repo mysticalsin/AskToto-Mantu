@@ -48,6 +48,16 @@ export function overlayShowPeek(
   return idle && !revealed && spring === 'rest'
 }
 
+/**
+ * Whether a parked overlay keeps the Ask bar mounted instead of showing its peek. Only top-center Hide does:
+ * the right-edge dock stays mounted in every layout, so there Hide rests closed exactly when Island does.
+ * Otherwise a page mouse-enter that clears the dismissal without a reveal leaves the drawer rendered over
+ * main's parked hide band (RE-HIDE-7).
+ */
+export function overlayKeepsAskMounted(rightEdge: boolean, restsHidden: boolean): boolean {
+  return !rightEdge && restsHidden
+}
+
 export function overlaySpringClassName(spring: OverlaySpring, edge: OverlayEdge = 'top'): string {
   const anchor = edge === 'right' ? ' overlay-spring--edge-right' : ''
   if (spring === 'in') return `overlay-spring overlay-spring--in${anchor} w-full`

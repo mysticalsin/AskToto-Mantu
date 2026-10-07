@@ -99,6 +99,40 @@ body {
   font: inherit;
   font-weight: 600;
 }
+.dc-error button:focus {
+  outline: 2px solid var(--dc-ink);
+  outline-offset: 2px;
+}
+
+.dc-audit-negative {
+  background: rgb(255 255 255);
+  color: rgb(27 21 36);
+}
+.dc-audit-negative .dc-audit-negative-text {
+  color: rgb(119 119 119);
+}
+.dc-audit-negative-control {
+  display: block;
+  box-sizing: border-box;
+  width: 28px;
+  height: 28px;
+  margin: 8px 0;
+  border: 2px solid rgb(255 255 255);
+  border-radius: 6px;
+  background: rgb(255 255 255);
+}
+.dc-audit-negative-control:focus {
+  outline: 2px solid rgb(255 255 255);
+  outline-offset: 2px;
+}
+.dc-audit-negative-clipped {
+  display: block;
+  width: 32px;
+  overflow: hidden;
+  color: rgb(27 21 36);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 @keyframes dc-pulse {
   50% {

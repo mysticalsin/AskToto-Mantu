@@ -24,9 +24,9 @@ function isCloudSyncedWorkspace(path) {
 // Finder/OneDrive metadata can be reapplied between afterPack's xattr cleanup
 // and codesign verification. Package in a local filesystem for cloud-synced
 // checkouts; CI and ordinary local repos retain the canonical release/ output.
-const outDir = process.env.ASKTOTO_INSTALLER_OUTPUT_DIR || (
-  isCloudSyncedWorkspace(process.cwd()) ? join(tmpdir(), 'metis-installers') : 'release'
-)
+const outDir =
+  process.env.ASKTOTO_INSTALLER_OUTPUT_DIR ||
+  (isCloudSyncedWorkspace(process.cwd()) ? join(tmpdir(), 'metis-installers') : 'release')
 
 function run(cmd, args, opts = {}) {
   console.log(`\n> ${[cmd, ...args].join(' ')}`)
@@ -70,18 +70,22 @@ function printInstallHelp(files) {
   const hasStore = installers.some((name) => /\.(appx|msix|pkg)$/i.test(name))
   console.log('\nHow to install:')
   if (hasMac) console.log('  macOS: open the .dmg, drag Métis to Applications, then open Métis.')
-  if (hasWin) console.log('  Windows: run Metis-Setup-*.exe. Use Metis-Portable-*.exe for no-install testing.')
+  if (hasWin)
+    console.log(
+      '  Windows: run Metis-Setup-*.exe. Metis-Portable-*.exe is QA-only, never auto-updates, and is not a customer release asset.'
+    )
   if (hasStore) console.log('  Store package: upload the .pkg/.appx/.msix through the relevant store dashboard.')
   if (hasMac && process.env.ASKTOTO_SIGN_INSTALLER !== '1') {
     console.log('\nNote: local macOS installers use a complete ad-hoc signature, not Developer ID/notarization.')
-    console.log('Set ASKTOTO_SIGN_INSTALLER=1 with signing inputs, or use the tagged release workflow for customer builds.')
+    console.log(
+      'Set ASKTOTO_SIGN_INSTALLER=1 with signing inputs, or use the tagged release workflow for customer builds.'
+    )
   }
 }
 
 const requestedTargets = targetsFor(target)
-const verifyWindowsSignature = process.env.ASKTOTO_SIGN_INSTALLER === '1' || Boolean(
-  process.env.WIN_CSC_LINK || process.env.CSC_LINK
-)
+const verifyWindowsSignature =
+  process.env.ASKTOTO_SIGN_INSTALLER === '1' || Boolean(process.env.WIN_CSC_LINK || process.env.CSC_LINK)
 
 if (target === 'all' && platform() !== 'darwin' && platform() !== 'win32') {
   console.error('Cross-platform installer builds should run on macOS or Windows, or use GitHub Actions.')
@@ -128,15 +132,26 @@ run('node', ['scripts/check-local-model.mjs'])
 run('node', ['scripts/fetch-speaker-model.mjs'])
 run('node', ['scripts/fetch-models.mjs'])
 run('npm', ['run', 'build:intelligence'])
-run('npm', ['run', 'build'], requestedTargets.includes('mac') ? {
-  env: { ...process.env, ASKTOTO_MAC_UNIVERSAL: '1' }
-} : {})
+run(
+  'npm',
+  ['run', 'build'],
+  requestedTargets.includes('mac')
+    ? {
+        env: { ...process.env, ASKTOTO_MAC_UNIVERSAL: '1' }
+      }
+    : {}
+)
 
 for (const t of requestedTargets) {
   if (t === 'mac') {
     const args = withOutputDir([
-      'electron-builder', '--mac', '--universal', '-c.npmRebuild=false',
-      '-c.electronDist=resources/electron-dist', '--publish', 'never'
+      'electron-builder',
+      '--mac',
+      '--universal',
+      '-c.npmRebuild=false',
+      '-c.electronDist=resources/electron-dist',
+      '--publish',
+      'never'
     ])
     const options = { env: { ...process.env, ASKTOTO_MAC_ARCHES: 'arm64,x64' } }
     if (process.env.ASKTOTO_SIGN_INSTALLER !== '1') {
@@ -145,23 +160,37 @@ for (const t of requestedTargets) {
     }
     run('npx', args, options)
     const appDir = join(outDir, 'mac-universal', 'Metis.app')
-    run('node', ['scripts/check-packaged-runtime.mjs', 'mac', join(appDir, 'Contents', 'Resources'), '--arches=arm64,x64', '--macho-arches=arm64,x64', '--post-sign'])
+    run('node', [
+      'scripts/check-packaged-runtime.mjs',
+      'mac',
+      join(appDir, 'Contents', 'Resources'),
+      '--arches=arm64,x64',
+      '--macho-arches=arm64,x64',
+      '--post-sign'
+    ])
     run('node', ['scripts/check-update-metadata.mjs', join(outDir, 'latest-mac.yml')])
-    run('node', ['scripts/verify-signing.mjs', outDir, ...(process.env.ASKTOTO_SIGN_INSTALLER === '1' ? ['--require-notarized'] : [])])
+    run('node', [
+      'scripts/verify-signing.mjs',
+      outDir,
+      ...(process.env.ASKTOTO_SIGN_INSTALLER === '1' ? ['--require-notarized'] : [])
+    ])
     run('node', ['scripts/check-packaged-launch.mjs', appDir], {
       env: { ...process.env, ASKTOTO_MAC_LAUNCH_GATE: '1' }
     })
   }
   if (t === 'win') {
-    run('npx', withOutputDir([
-      'electron-builder',
-      '--config',
-      'electron-builder.win.yml',
-      '--win',
-      '--x64',
-      '--publish',
-      'never'
-    ]))
+    run(
+      'npx',
+      withOutputDir([
+        'electron-builder',
+        '--config',
+        'electron-builder.win.yml',
+        '--win',
+        '--x64',
+        '--publish',
+        'never'
+      ])
+    )
     run('node', ['scripts/check-packaged-runtime.mjs', 'win', join(outDir, 'win-unpacked', 'resources'), '--post-sign'])
     run('node', ['scripts/check-update-metadata.mjs', join(outDir, 'latest.yml')])
     if (verifyWindowsSignature) run('node', ['scripts/verify-signing.mjs', outDir])

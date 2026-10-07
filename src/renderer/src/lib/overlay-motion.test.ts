@@ -7,6 +7,7 @@ import {
   OVERLAY_PARK_FALLBACK_MS,
   OVERLAY_REVEAL_MS,
   overlayHideParkedClassName,
+  overlayKeepsAskMounted,
   overlayShouldParkNow,
   overlayShowPeek,
   overlaySpringAfterHide,
@@ -51,6 +52,23 @@ describe('overlay hide/reveal spring timings', () => {
     expect(overlaySpringClassName('in', 'right')).toMatch(/overlay-spring--edge-right/)
     expect(overlaySpringClassName('out', 'right')).toMatch(/overlay-spring--edge-right/)
     expect(overlaySpringClassName('settled', 'right')).toMatch(/overlay-spring--edge-right/)
+  })
+
+  it('a right-edge Hide dock rests closed when idle and unrevealed, even after a pointer-enter cleared the dismissal', () => {
+    // Packaged smoke RE-HIDE-7: after Island -> Hide, a page mouse-enter cleared the dismissal without a
+    // reveal; main had parked the window on the 4 px band, yet the drawer stayed rendered (drawer: true).
+    expect(overlayShowPeek(true, false, 'rest', overlayKeepsAskMounted(true, true))).toBe(true)
+    // Hide and Island agree on the right edge for every idle / revealed / spring combination.
+    for (const idle of [true, false])
+      for (const revealed of [true, false])
+        for (const spring of ['rest', 'in', 'settled', 'out'] as const)
+          expect(overlayShowPeek(idle, revealed, spring, overlayKeepsAskMounted(true, true))).toBe(
+            overlayShowPeek(idle, revealed, spring, overlayKeepsAskMounted(true, false))
+          )
+    // Top-center Hide still keeps the Ask bar mounted: it never swaps to the peek.
+    expect(overlayKeepsAskMounted(false, true)).toBe(true)
+    expect(overlayShowPeek(true, false, 'rest', overlayKeepsAskMounted(false, true))).toBe(false)
+    expect(overlayShowPeek(true, false, 'rest', overlayKeepsAskMounted(false, false))).toBe(true)
   })
 
   it('M2-0431: a parked Hide paints nothing, and only while it rests parked', () => {

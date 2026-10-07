@@ -133,10 +133,14 @@ export const SCENARIOS = Object.freeze({
         artifact: 'candidate-mac',
         script: 'scripts/qa/soak/idle-soak.mjs',
         args: ({ app, report }) => [
-          '--app', app,
-          '--profile', 'candidate-scenario/profile',
-          '--hours', '5.5',
-          '--out', 'candidate-scenario',
+          '--app',
+          app,
+          '--profile',
+          'candidate-scenario/profile',
+          '--hours',
+          '5.5',
+          '--out',
+          'candidate-scenario',
           ...(process.env.SOAK_DEADLINE_EPOCH_MS ? ['--deadline-epoch-ms', process.env.SOAK_DEADLINE_EPOCH_MS] : [])
         ],
         report: 'idle-soak.json',
@@ -161,10 +165,14 @@ export const SCENARIOS = Object.freeze({
         artifact: 'candidate-win',
         script: 'scripts/qa/soak/idle-soak.mjs',
         args: ({ app, report }) => [
-          '--app', app,
-          '--profile', 'candidate-scenario/profile',
-          '--hours', '5.5',
-          '--out', 'candidate-scenario',
+          '--app',
+          app,
+          '--profile',
+          'candidate-scenario/profile',
+          '--hours',
+          '5.5',
+          '--out',
+          'candidate-scenario',
           ...(process.env.SOAK_DEADLINE_EPOCH_MS ? ['--deadline-epoch-ms', process.env.SOAK_DEADLINE_EPOCH_MS] : [])
         ],
         report: 'idle-soak.json',
@@ -209,8 +217,14 @@ export const SCENARIOS = Object.freeze({
         report: 'sidecar-boot-reaper.json',
         isolatedProfiles: true,
         notCovered: Object.freeze([
-          Object.freeze({ row: 'realLlama', reason: 'The real llama-server proof runs on macOS only; the report marks it BLOCKED_EXTERNAL.' }),
-          Object.freeze({ row: 'legacyOrphan', reason: 'The legacy-orphan proof runs on macOS only; the report marks it BLOCKED_EXTERNAL.' })
+          Object.freeze({
+            row: 'realLlama',
+            reason: 'The real llama-server proof runs on macOS only; the report marks it BLOCKED_EXTERNAL.'
+          }),
+          Object.freeze({
+            row: 'legacyOrphan',
+            reason: 'The legacy-orphan proof runs on macOS only; the report marks it BLOCKED_EXTERNAL.'
+          })
         ])
       })
     })
@@ -258,7 +272,16 @@ export const SCENARIOS = Object.freeze({
         installerKind: 'mac-dmg',
         installerSuffix: '.dmg',
         script: 'scripts/qa/renderer-kill.mjs',
-        args: ({ installer, sha256, report }) => [installer, report, '--sha256', sha256, '--times', '4', '--window', '60'],
+        args: ({ installer, sha256, report }) => [
+          installer,
+          report,
+          '--sha256',
+          sha256,
+          '--times',
+          '4',
+          '--window',
+          '60'
+        ],
         report: 'renderer-kill.json',
         isolatedProfiles: true,
         // It finds the halted dialog and clicks its Quit button through System Events, so the lane
@@ -285,13 +308,19 @@ export function ancestorPids(psText, pid) {
     if (match) parent.set(Number(match[1]), Number(match[2]))
   }
   const chain = []
-  for (let current = pid; current > 1 && !chain.includes(current); current = parent.get(current) ?? 0) chain.push(current)
+  for (let current = pid; current > 1 && !chain.includes(current); current = parent.get(current) ?? 0)
+    chain.push(current)
   return chain
 }
 
 /** The executable path in `lsof -a -p <pid> -d txt -Fn` output: its first name record. */
 export function executableFromLsof(text) {
-  return String(text ?? '').split('\n').find((line) => line.startsWith('n/'))?.slice(1) ?? null
+  return (
+    String(text ?? '')
+      .split('\n')
+      .find((line) => line.startsWith('n/'))
+      ?.slice(1) ?? null
+  )
 }
 
 /**
@@ -320,7 +349,11 @@ const SHA256 = /^[0-9a-f]{64}$/
 
 function scenarioEntry(scenario) {
   const entry = Object.hasOwn(SCENARIOS, scenario) ? SCENARIOS[scenario] : undefined
-  if (!entry) throw new Error(`Unknown scenario ${JSON.stringify(scenario)}; expected one of ${Object.keys(SCENARIOS).join(', ')}.`)
+  if (!entry) {
+    throw new Error(
+      `Unknown scenario ${JSON.stringify(scenario)}; expected one of ${Object.keys(SCENARIOS).join(', ')}.`
+    )
+  }
   return entry
 }
 
@@ -342,10 +375,13 @@ export function resolveScenario({ scenario, sha256 }) {
   /** @type {Record<string, { variant: string, artifact: string, sha256: string, timeoutMinutes: number, stepTimeoutMinutes: number }>} */
   const plan = {}
   for (const platform of PLATFORMS) {
-    const given = String(sha256[platform] ?? '').trim().toLowerCase()
+    const given = String(sha256[platform] ?? '')
+      .trim()
+      .toLowerCase()
     const target = entry.platforms[platform]
     if (!target) {
-      if (given) problems.push(`${platform}_sha256 is set, but ${scenario} does not run on ${platform}; leave it empty.`)
+      if (given)
+        problems.push(`${platform}_sha256 is set, but ${scenario} does not run on ${platform}; leave it empty.`)
       continue
     }
     if (!SHA256.test(given)) {
@@ -391,20 +427,27 @@ export function resolveOutputs(plan) {
 
 /**
  * Decides from the Actions API run JSON (GET repos/{repo}/actions/runs/{id}) whether a run may be measured:
- * only a completed, successful workflow_dispatch run of qa-candidate.yml on main. A pull-request self-test
- * candidate is refused, since its bytes are a PR merge commit and can never be promoted.
+ * only a completed, successful workflow_dispatch run of qa-candidate.yml on main or release/1.9.x. A
+ * pull-request self-test candidate is refused, since its bytes are a PR merge commit and can never be promoted.
  * Returns the problems; empty means the run is a candidate.
  */
+export const CANDIDATE_RUN_BRANCHES = Object.freeze(['main', 'release/1.9.x'])
+
 export function candidateRunProblems(run, candidateRun) {
   if (typeof run !== 'object' || run === null) return ['The run JSON is not an object.']
   const problems = []
   if (String(run.id) !== String(candidateRun)) problems.push(`The API returned run ${run.id}, not ${candidateRun}.`)
   const path = String(run.path ?? '').replace(/@.*$/, '')
-  if (path !== QA_CANDIDATE_WORKFLOW) problems.push(`Run ${candidateRun} is ${path || 'no workflow'}, not ${QA_CANDIDATE_WORKFLOW}.`)
+  if (path !== QA_CANDIDATE_WORKFLOW)
+    problems.push(`Run ${candidateRun} is ${path || 'no workflow'}, not ${QA_CANDIDATE_WORKFLOW}.`)
   if (run.event !== 'workflow_dispatch') {
-    problems.push(`Run ${candidateRun} was triggered by ${run.event}, not workflow_dispatch; a pull-request self-test is never a candidate.`)
+    problems.push(
+      `Run ${candidateRun} was triggered by ${run.event}, not workflow_dispatch; a pull-request self-test is never a candidate.`
+    )
   }
-  if (run.head_branch !== 'main') problems.push(`Run ${candidateRun} ran on ${run.head_branch}, not main.`)
+  if (!CANDIDATE_RUN_BRANCHES.includes(run.head_branch)) {
+    problems.push(`Run ${candidateRun} ran on ${run.head_branch}, not ${CANDIDATE_RUN_BRANCHES.join(' or ')}.`)
+  }
   if (run.status !== 'completed') problems.push(`Run ${candidateRun} is ${run.status}, not completed.`)
   if (run.conclusion !== 'success') problems.push(`Run ${candidateRun} concluded ${run.conclusion}, not success.`)
   return problems
@@ -421,7 +464,9 @@ export function prepareProfile({ scenario, platform, appDataDir }) {
   if (target.isolatedProfiles) return null
   if (target.profileLayout) {
     const profile = join(process.cwd(), 'candidate-scenario', 'profile')
-    if (existsSync(profile)) throw new Error('The idle-soak profile directory already exists; the profile is not fresh.')
+    if (existsSync(profile)) {
+      throw new Error('The idle-soak profile directory already exists; the profile is not fresh.')
+    }
     writeRepresentativeProfile(profile, undefined, { layout: target.profileLayout })
     return join(profile, 'resource-census-profile.json')
   }
@@ -511,14 +556,21 @@ function assessScenarioReport({ scenario, platform, report }) {
 export function scenarioCommand({ scenario, platform, installer, sha256, outDir, app }) {
   const target = platformEntry(scenario, platform)
   if (target.installerSuffix && !installer.toLowerCase().endsWith(target.installerSuffix)) {
-    throw new Error(`${scenario} installs a ${target.installerSuffix} installer; the selected installer is ${basename(installer)}.`)
+    throw new Error(
+      `${scenario} installs a ${target.installerSuffix} installer; the selected installer is ${basename(installer)}.`
+    )
   }
-  const argv = [target.script, ...target.args({ installer, sha256, report: join(outDir, target.report).replaceAll('\\', '/'), app })]
+  const argv = [
+    target.script,
+    ...target.args({ installer, sha256, report: join(outDir, target.report).replaceAll('\\', '/'), app })
+  ]
   if (argv.some((arg) => typeof arg !== 'string' || arg === '')) {
     throw new Error(`The ${scenario} command is missing an argument; pass the installed app with --app.`)
   }
   const absolute = argv.filter((arg) => isAbsolute(arg) || /^[A-Za-z]:[\\/]/.test(arg))
-  if (absolute.length) throw new Error(`The scenario command must use repository-relative paths; got ${absolute.length} absolute.`)
+  if (absolute.length) {
+    throw new Error(`The scenario command must use repository-relative paths; got ${absolute.length} absolute.`)
+  }
   return argv
 }
 
@@ -571,11 +623,16 @@ export function laneRecord({
     ...(scenarioEntry(scenario).reportAssessment && !reportWritten ? [`${target.report} was not written.`] : []),
     ...(reportAssessment?.problems ?? [])
   ]
-  const reportOutcome = target.outcomeFromReport && typeof reportData?.outcome === 'string' ? reportData.outcome : mappedOutcome
+  const reportOutcome =
+    target.outcomeFromReport && typeof reportData?.outcome === 'string' ? reportData.outcome : mappedOutcome
   const outcome = reportOutcome === 'PASS' && assessmentProblems.length ? 'FAIL' : reportOutcome
   const host = RUNNER_LABELS[platform]
   const reportFields = target.laneReportFields
-    ? Object.fromEntries(target.laneReportFields.filter((key) => reportData && Object.hasOwn(reportData, key)).map((key) => [key, reportData[key]]))
+    ? Object.fromEntries(
+        target.laneReportFields
+          .filter((key) => reportData && Object.hasOwn(reportData, key))
+          .map((key) => [key, reportData[key]])
+      )
     : {}
   const notCovered = [
     ...(target.notCovered ?? []).map(({ row, reason }) => ({ row, reason })),
@@ -611,7 +668,10 @@ export function laneSummary(lane) {
     ['outcome', lane.outcome],
     ['scenario', lane.scenario],
     ['platform', lane.platform],
-    ['runner', `${lane.runner_image.label} (${lane.runner_image.image_os ?? '?'} ${lane.runner_image.image_version ?? '?'})`],
+    [
+      'runner',
+      `${lane.runner_image.label} (${lane.runner_image.image_os ?? '?'} ${lane.runner_image.image_version ?? '?'})`
+    ],
     ['build_run_id', lane.build_run_id],
     ['commit', lane.commit],
     ['variant', lane.variant],
@@ -667,7 +727,10 @@ export function contentProblems(text, { account }) {
   const name = String(account ?? '').trim()
   if (name) {
     const token = escapeRegExp(name)
-    const identity = new RegExp(`[/\\\\~]${token}(?![A-Za-z0-9._-])|(?<![A-Za-z0-9._-])${token}[@/\\\\]|["']${token}["']`, 'i')
+    const identity = new RegExp(
+      `[/\\\\~]${token}(?![A-Za-z0-9._-])|(?<![A-Za-z0-9._-])${token}[@/\\\\]|["']${token}["']`,
+      'i'
+    )
     if (identity.test(text)) problems.push('runner account name')
   }
   return problems
@@ -708,7 +771,13 @@ function required(values, name) {
 }
 
 function lastLine(text) {
-  return String(text ?? '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1) ?? ''
+  return (
+    String(text ?? '')
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .at(-1) ?? ''
+  )
 }
 
 /** Authorises System Events GUI scripting for this job's process chain, node and osascript, when the
@@ -749,9 +818,17 @@ function run(values) {
 
   const argv = scenarioCommand({ scenario, platform, installer, sha256, outDir, app })
   mkdirSync(outDir, { recursive: true })
-  const child = spawnSync(process.execPath, argv, { stdio: ['ignore', 'inherit', 'pipe'], encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+  const child = spawnSync(process.execPath, argv, {
+    stdio: ['ignore', 'inherit', 'pipe'],
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024
+  })
   process.stderr.write(child.stderr ?? '')
-  const detail = child.signal ? `terminated by ${child.signal}` : child.error ? child.error.message : lastLine(child.stderr)
+  const detail = child.signal
+    ? `terminated by ${child.signal}`
+    : child.error
+      ? child.error.message
+      : lastLine(child.stderr)
   const reportPath = join(outDir, target.report)
   const reportWritten = existsSync(reportPath)
   let reportData = null
@@ -761,7 +838,11 @@ function run(values) {
       reportData = JSON.parse(readFileSync(reportPath, 'utf8'))
       reportAssessment = assessScenarioReport({ scenario, platform, report: reportData })
     } catch (error) {
-      reportAssessment = { problems: [`${target.report} could not be parsed: ${error.message}`], row_verdicts: undefined, notCovered: [] }
+      reportAssessment = {
+        problems: [`${target.report} could not be parsed: ${error.message}`],
+        row_verdicts: undefined,
+        notCovered: []
+      }
     }
   }
 
@@ -805,7 +886,9 @@ function main(argv) {
       if (!runJson || !candidateRun) throw new Error('usage: guard <run.json> <candidate_run>')
       const problems = candidateRunProblems(JSON.parse(readFileSync(runJson, 'utf8')), candidateRun)
       if (problems.length) throw new Error(problems.join('\n'))
-      console.log(`Run ${candidateRun} is a successful ${QA_CANDIDATE_WORKFLOW} dispatch on main.`)
+      console.log(
+        `Run ${candidateRun} is a successful ${QA_CANDIDATE_WORKFLOW} dispatch on ${CANDIDATE_RUN_BRANCHES.join(' or ')}.`
+      )
       return 0
     }
     case 'profile': {
@@ -816,8 +899,14 @@ function main(argv) {
         platform,
         appDataDir: platform === 'mac' ? join(homedir(), 'Library', 'Application Support') : null
       })
-      if (platformEntry(scenario, platform).isolatedProfiles) console.log('The scenario runs the app only on its own isolated profiles.')
-      else console.log(settings ? 'Fresh profile seeded with the scenario settings.' : 'Fresh profile; the scenario seeds no settings.')
+      if (platformEntry(scenario, platform).isolatedProfiles)
+        console.log('The scenario runs the app only on its own isolated profiles.')
+      else
+        console.log(
+          settings
+            ? 'Fresh profile seeded with the scenario settings.'
+            : 'Fresh profile; the scenario seeds no settings.'
+        )
       return 0
     }
     case 'grant-gui':
@@ -831,7 +920,8 @@ function main(argv) {
       const [dir] = positional
       if (!dir) throw new Error('usage: scan <dir> --account <runner account>')
       const problems = scanUploadDir(dir, { account: required(values, 'account') })
-      for (const problem of problems) console.log(`::error title=Content-free gate::${problem} (file removed from the upload)`)
+      for (const problem of problems)
+        console.log(`::error title=Content-free gate::${problem} (file removed from the upload)`)
       return problems.length ? 1 : 0
     }
     default:
