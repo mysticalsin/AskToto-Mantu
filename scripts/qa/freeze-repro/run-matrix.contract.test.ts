@@ -88,8 +88,6 @@ async function fakeDevTools({
         sockets.close()
         server.close(() => resolve())
       })
-<<<<<<< HEAD
-=======
   }
 }
 
@@ -110,7 +108,6 @@ async function hangingDevToolsList(): Promise<{ port: number; close: () => Promi
         for (const socket of sockets) socket.destroy()
         server.close(() => resolve())
       })
->>>>>>> origin/m2/integration
   }
 }
 
@@ -1180,8 +1177,6 @@ describe('M2-0462 cdp-observe derivation', () => {
     expect(
       deriveRowResult('row-1-history-open', { ...answered, main_round_trip: 'no-bridge', drive: 'no-bridge' })
     ).toMatchObject({ operator_result: 'not-exercised' })
-<<<<<<< HEAD
-=======
   })
 
   it('treats a DevTools HTTP timeout as an observed freeze', async () => {
@@ -1198,6 +1193,5 @@ describe('M2-0462 cdp-observe derivation', () => {
     } finally {
       await devtools.close()
     }
->>>>>>> origin/m2/integration
   })
 })
