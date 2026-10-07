@@ -46,14 +46,25 @@
  *       --fixtures fifo|dataless|synthetic-dataless|none [--history [on|off|after-idle]] [--count 6]
  *       [--cloud-dir <folder of evicted files>] [--main-log <main.log>] [--exe <installed executable>]
  *       [--profile-template <userData dir>] [--minutes 5] [--out <report.json>] [--report-dir <dir>]
+<<<<<<< HEAD
  *       [--purpose window-construction --window-variant <variant> [--window-warmup]]
  *       --print-window-plan
+=======
+ *       [--purpose window-construction --window-variant <variant> [--window-warmup | --window-remeasures <launch>]]
+ *       --print-window-plan
+ *       --print-window-remeasure-plan <report dir>
+>>>>>>> origin/m2/integration
  *
  * `--purpose window-construction` marks a short launch made only to measure the boot window's constructor under
  * one QA-identity rendering variant (shipped, spellcheck-off, paint-when-hidden, prewarm-spellchecker), passed to
  * the candidate as METIS_QA_WINDOW_VARIANT. Its report says `st1Evidence: false` and is never ST-1 evidence.
  * A `--window-warmup` window-construction launch is also marked `warmup: true`; `--gate-window` skips those
  * rows and reports how many it skipped. Every other run launches the shipped variant.
+ *
+ * OD-66: `--print-window-remeasure-plan <dir>` launches nothing: it reads the planned window-construction reports one
+ * folder below `<dir>` and prints one shipped re-measure launch per chrome whose only over-budget measured shipped
+ * launch failed on budget alone (`[]` when no shipped launch reached 250 ms). A `--window-remeasures <launch>` run
+ * is that re-measure: a measured shipped launch whose report names the launch under `remeasures`.
  *
  * Every in-app wait is bounded and every failure to answer is recorded in the report's `errors` (step, tMs,
  * message) while the run continues: only the criteria decide PASS or FAIL. The report is rewritten every
@@ -62,8 +73,9 @@
  *
  * `--gate-window <dir> [--out <gate.json>]` launches nothing: it reads every window-construction report one folder
  * below `<dir>` and applies the window-construction gate (M2-0519): every shipped createWindow.prewarm and
- * createWindow.construct, in both chromes, present and under 250 ms. It prints and writes the gate, and exits 1
- * when the gate fails.
+ * createWindow.construct, in both chromes, present and under 250 ms, or decided by one accepted same-chrome
+ * re-measure (OD-66). It prints and writes the gate, prints one `::warning::` annotation per remeasured entry, and
+ * exits 1 when the gate fails.
  *
  * Exit codes: 0 PASS, 1 FAIL, NOT_EXERCISED or INCOMPLETE, 2 usage.
  */
@@ -109,6 +121,11 @@ import {
   timedCallsExpression,
   windowConstructionGate,
   windowConstructionPlan,
+<<<<<<< HEAD
+=======
+  windowRemeasureArg,
+  windowRemeasurePlan,
+>>>>>>> origin/m2/integration
   withTimeout,
   writeJsonToStdout
 } from './lib/st-1-core.mjs'
@@ -819,6 +836,14 @@ function gateWindow(dir, out) {
   console.error(
     `[st-1] window gate skipped ${gate.skippedWarmups} warm-up launch${gate.skippedWarmups === 1 ? '' : 'es'}`
   )
+<<<<<<< HEAD
+=======
+  for (const entry of gate.remeasured) {
+    console.log(
+      `::warning::ST-1 window gate accepted ${entry.launch} ${entry.stage} ${entry.ms} ms on re-measure ${entry.remeasure} at ${entry.remeasureMs} ms (OD-66)`
+    )
+  }
+>>>>>>> origin/m2/integration
   for (const failure of gate.failures) console.error(`[st-1] window gate FAIL — ${failure}`)
   return gate.pass ? 0 : 1
 }
@@ -833,6 +858,18 @@ async function main() {
     await writeJsonToStdout(windowConstructionPlan())
     return 0
   }
+<<<<<<< HEAD
+=======
+  if (args.printWindowRemeasurePlan !== undefined) {
+    if (args.printWindowRemeasurePlan === 'true') {
+      console.error('usage: node scripts/qa/st-1.mjs --print-window-remeasure-plan <report dir>')
+      return 2
+    }
+    const dir = args.printWindowRemeasurePlan
+    await writeJsonToStdout(windowRemeasurePlan(existsSync(dir) ? readWindowReports(dir) : []))
+    return 0
+  }
+>>>>>>> origin/m2/integration
   if (args.gateWindow !== undefined) {
     if (args.gateWindow === 'true') {
       console.error('usage: node scripts/qa/st-1.mjs --gate-window <report dir> [--out <gate.json>]')
@@ -890,6 +927,11 @@ async function main() {
     console.error('[st-1] FAIL — --window-warmup needs --purpose window-construction')
     return 2
   }
+  const { remeasures: windowRemeasures, error: remeasureError } = windowRemeasureArg(args)
+  if (remeasureError) {
+    console.error(`[st-1] FAIL — ${remeasureError}`)
+    return 2
+  }
   const minutes = Number(args.minutes)
   if (!Number.isFinite(minutes) || minutes <= 0) {
     console.error(`[st-1] FAIL — --minutes must be a positive number, got ${JSON.stringify(args.minutes)}`)
@@ -943,7 +985,12 @@ async function main() {
       fixtures,
       purpose,
       windowVariant,
+<<<<<<< HEAD
       windowWarmup
+=======
+      windowWarmup,
+      windowRemeasures
+>>>>>>> origin/m2/integration
     }
     if (launchFailure) return buildLaunchFailureReport({ ...common, reason: launchFailure })
     return buildReport({

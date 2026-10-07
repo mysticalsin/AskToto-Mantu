@@ -618,6 +618,11 @@ describe('right-edge dock', () => {
     expect(app).toMatch(
       /const overlayPeeked =\s*\(edgeDockParked && overlaySpring === 'rest'\) \|\|[\s\S]*?overlayShowPeek/
     )
+    // RE-HIDE-7: a right-edge Hide rests closed like Island; only top-center Hide keeps the Ask bar mounted.
+    expect(app).toMatch(
+      /const keepAskMounted = overlayKeepsAskMounted\(rightEdgePresentation, overlayRestsHidden\(overlayLayout\)\)/
+    )
+    expect(app).toMatch(/overlayShowPeek\(overlayIdle, overlaySurfaceRevealed, overlaySpring, keepAskMounted\)/)
     expect(app).toMatch(
       /const revealOverlay = useCallback\(\(\) => \{[\s\S]*?reduceRightEdgeDismissalLock\(rightEdgeDismissalLockRef\.current,\s*\{\s*type:\s*'explicit-reveal'\s*\}[\s\S]*?setRightEdgeDockDismissed\(false\)/
     )
