@@ -33,12 +33,7 @@ export const PLATFORMS = Object.freeze({
     label: 'Windows',
     other: 'mac',
     metadata: 'latest.yml',
-    artifacts: (version) => [
-      `Metis-Setup-${version}.exe`,
-      `Metis-Setup-${version}.exe.blockmap`,
-      `Metis-Portable-${version}.exe`,
-      'latest.yml'
-    ]
+    artifacts: (version) => [`Metis-Setup-${version}.exe`, `Metis-Setup-${version}.exe.blockmap`, 'latest.yml']
   })
 })
 
@@ -178,18 +173,7 @@ export function ghFeed({ repo, token }) {
     },
     createDraft(tag) {
       runGh(
-        [
-          'release',
-          'create',
-          tag,
-          '--repo',
-          repo,
-          '--draft',
-          '--title',
-          `Métis ${tag}`,
-          '--notes',
-          RELEASE_NOTES
-        ],
+        ['release', 'create', tag, '--repo', repo, '--draft', '--title', `Métis ${tag}`, '--notes', RELEASE_NOTES],
         token
       )
       const release = api.releasesTagged(tag).find((candidate) => candidate.draft)
@@ -200,7 +184,21 @@ export function ghFeed({ repo, token }) {
       runGh(['release', 'upload', tag, ...paths, '--repo', repo], token)
     },
     publish(id) {
-      runGh(['api', `repos/${repo}/releases/${id}`, '--method', 'PATCH', '-F', 'draft=false', '-F', 'prerelease=false', '-f', 'make_latest=true'], token)
+      runGh(
+        [
+          'api',
+          `repos/${repo}/releases/${id}`,
+          '--method',
+          'PATCH',
+          '-F',
+          'draft=false',
+          '-F',
+          'prerelease=false',
+          '-f',
+          'make_latest=true'
+        ],
+        token
+      )
     },
     deleteDraft(id) {
       runGh(['api', `repos/${repo}/releases/${id}`, '--method', 'DELETE'], token)
@@ -216,7 +214,9 @@ export function ghFeed({ repo, token }) {
 async function readBundle(platform, version, bundleDir) {
   const absoluteDir = resolve(bundleDir)
   const names = existsSync(absoluteDir)
-    ? readdirSync(absoluteDir).filter((name) => lstatSync(join(absoluteDir, name)).isFile()).sort()
+    ? readdirSync(absoluteDir)
+        .filter((name) => lstatSync(join(absoluteDir, name)).isFile())
+        .sort()
     : []
   const problems = bundleProblems(platform, version, names)
   if (problems.length) throw new Error(problems.join('\n'))
@@ -243,7 +243,10 @@ function digestProblems(release, manifest) {
 
 function createRelease({ tag, feed, bundle, repo = '<the feed>' }) {
   let draft = feed.createDraft(tag)
-  feed.upload(tag, bundle.manifest.map((asset) => asset.path))
+  feed.upload(
+    tag,
+    bundle.manifest.map((asset) => asset.path)
+  )
   draft = feed.release(draft.id)
   // A fresh draft must contain exactly this platform's upload set before it can go public.
   const problems = uploadProblems(bundle.manifest, draft.assets)
@@ -260,7 +263,10 @@ function joinRelease({ platform, tag, feed, release, bundle }) {
   const metadata = PLATFORMS[platform].metadata
   const installers = bundle.manifest.filter((asset) => asset.name !== metadata)
   const metadataAsset = bundle.manifest.find((asset) => asset.name === metadata)
-  feed.upload(tag, installers.map((asset) => asset.path))
+  feed.upload(
+    tag,
+    installers.map((asset) => asset.path)
+  )
   let refreshed = feed.release(release.id)
   const problems = digestProblems(refreshed, installers)
   if (problems.length) throw new Error(problems.join('\n'))
@@ -289,7 +295,9 @@ export async function publishPlatform({ platform, tag, bundleDir, feed, repo = '
     const fresh = feed.release(plan.release.id)
     const names = fresh.assets.map((asset) => asset.name)
     if (!fresh.draft || !isWithinBothPlatforms(names, expectedOwn, expectedOther)) {
-      throw new Error(`Refusing to replace ${PLATFORMS[platform].label} ${version}: the release is no longer a replaceable leftover draft.`)
+      throw new Error(
+        `Refusing to replace ${PLATFORMS[platform].label} ${version}: the release is no longer a replaceable leftover draft.`
+      )
     }
     feed.deleteDraft(plan.release.id)
     return createRelease({ tag, feed, bundle, repo })
@@ -314,7 +322,7 @@ async function main() {
       ? `${PLATFORMS[platform].label} ${tag} published to ${repo} as a new Latest release.`
       : result.action === 'complete'
         ? `${PLATFORMS[platform].label} ${tag} is already published on ${repo}; nothing to do.`
-      : `${PLATFORMS[platform].label} ${tag} joined the public release on ${repo}.`
+        : `${PLATFORMS[platform].label} ${tag} joined the public release on ${repo}.`
   console.log(message)
 }
 
