@@ -32,6 +32,7 @@ import {
   legacyDrawerRect,
   legacyTabCentreY,
   legacyTabRect,
+  readerRect,
   revealBand,
   type Rect as EdgeRect
 } from '@shared/right-edge-geometry'
@@ -362,6 +363,7 @@ describe('M2-0202 RE-G10 — right-edge window bounds have one writer', () => {
     fire: (event: string) => void
     run: Record<string, (...args: unknown[]) => unknown>
     setResting: (resting: boolean) => void
+    setReader: (pending: boolean) => void
   }
 
   afterEach(() => vi.useRealTimers())
@@ -388,6 +390,7 @@ describe('M2-0202 RE-G10 — right-edge window bounds have one writer', () => {
     let displays = options.displays
     let current: EdgeRect = options.start ?? { x: 0, y: 0, width: 4, height: 4 }
     let depth = 0
+    let readerPending = false
     const writes: Write[] = []
     const listeners: Record<string, () => void> = {}
     const handlers: Record<string, (...args: unknown[]) => unknown> = {}
@@ -456,6 +459,7 @@ describe('M2-0202 RE-G10 — right-edge window bounds have one writer', () => {
       },
       getLockedKeys: () => options.lockedKeys ?? [],
       createRightEdgeAnchors,
+      rightEdgeSession: { readerPending: () => readerPending },
       mainLog: { warn: () => {}, info: () => {} },
       liveOverlayPlacement: () => 'right-edge',
       liveOverlayLayout: () => options.layout ?? 'hide',
@@ -513,6 +517,9 @@ describe('M2-0202 RE-G10 — right-edge window bounds have one writer', () => {
       ...built,
       run: { ...built.run, windowResize: (payload: unknown) => handlers['window:resize']({}, payload) },
       bounds: () => ({ ...current }),
+      setReader: (pending) => {
+        readerPending = pending
+      },
       writes,
       settings,
       settingsWrites,
@@ -574,6 +581,21 @@ describe('M2-0202 RE-G10 — right-edge window bounds have one writer', () => {
     h.run.commitParkedOverlayBounds(h.run.parkedOverlayBounds('hide', DISPLAY))
     expect(h.bounds()).toEqual(revealBand(DISPLAY.workArea, anchorY(DISPLAY.workArea)))
     expect(h.writes.every((write) => write.insideApply)).toBe(true)
+  })
+
+  it('a pending Reader opens at readerRect and parks to the same rest, through the same writer (spec v3 §6)', async () => {
+    const h = await harness({ displays: [DISPLAY], layout: 'island' })
+    h.setReader(true)
+    h.run.restoreBarWidth()
+    expect(h.bounds()).toEqual(readerRect(DISPLAY.workArea))
+    h.setResting(true)
+    h.run.commitParkedOverlayBounds(h.run.parkedOverlayBounds('island', DISPLAY))
+    expect(h.bounds()).toEqual(legacyTabRect(DISPLAY.workArea, anchorY(DISPLAY.workArea)))
+    h.setReader(false)
+    h.setResting(false)
+    h.run.restoreBarWidth()
+    expect(h.bounds()).toEqual(legacyDrawerRect(DISPLAY.workArea, anchorY(DISPLAY.workArea)))
+    expect(h.writes.filter((write) => !write.insideApply)).toEqual([])
   })
 
   it('windowResize and resizeTo never change right-edge bounds', async () => {

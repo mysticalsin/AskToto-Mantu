@@ -25,9 +25,9 @@ describe('installer branding', () => {
     expect(overlay).toContain('extends: ./electron-builder.yml')
     expect(overlay).toContain('productName: Métis')
     expect(overlay).toContain('executableName: Metis')
-    expect(overlay).toContain("!node_modules/sherpa-onnx-darwin-*{,/**/*}")
-    expect(overlay).toContain("!node_modules/sherpa-onnx-linux-*{,/**/*}")
-    expect(overlay).toContain("!node_modules/@img/sharp-linux-*{,/**/*}")
+    expect(overlay).toContain('!node_modules/sherpa-onnx-darwin-*{,/**/*}')
+    expect(overlay).toContain('!node_modules/sherpa-onnx-linux-*{,/**/*}')
+    expect(overlay).toContain('!node_modules/@img/sharp-linux-*{,/**/*}')
 
     for (const script of ['dist:win', 'dist:win:appx']) {
       expect(pkg.scripts[script]).toContain('--config electron-builder.win.yml')
@@ -92,9 +92,7 @@ describe('deterministic packaging toolchain', () => {
       'node scripts/prune-dust-bundle.mjs && node scripts/ensure-electron-runtime.mjs'
     )
     for (const dependency of ['@modelcontextprotocol/sdk', 'express-rate-limit', 'ip-address']) {
-      expect(builderConfig).toContain(
-        `!node_modules/@dust-tt/client/node_modules/${dependency}{,/**/*}`
-      )
+      expect(builderConfig).toContain(`!node_modules/@dust-tt/client/node_modules/${dependency}{,/**/*}`)
     }
   })
 
@@ -214,6 +212,12 @@ describe('direct release signing gates', () => {
   it('verifies produced signatures in both direct release commands', () => {
     expect(releaseCommands('mac').join('\n')).toContain('scripts/verify-signing.mjs --require-notarized')
     expect(releaseCommands('win').join('\n')).toContain('scripts/verify-signing.mjs')
+  })
+
+  it('Windows public release packaging requests only the updating NSIS installer', () => {
+    const commands = releaseCommands('win').join('\n')
+    expect(commands).toContain('electron-builder --config electron-builder.win.yml --win nsis --x64 --publish never')
+    expect(commands).not.toContain('electron-builder --config electron-builder.win.yml --win --x64')
   })
 
   it('refuses macOS release when Developer ID or notarization inputs are missing, including in CI', () => {
