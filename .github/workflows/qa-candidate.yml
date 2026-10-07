@@ -1060,11 +1060,8 @@ jobs:
   # OD-42: each chrome gets one marked shipped warm-up launch before any measured repeat, and the gate skips those
   # warm-up reports. The two marked shipped warm-up launches run before any measured repeat. Shipped is measured last
   # in each repeat while keeping per-launch, per-stage timings in the uploaded st1-report artifact.
-<<<<<<< HEAD
-=======
   # OD-66: a single slow shipped launch is re-measured once in the same chrome inside this job; window-gate.json lists
   # every accepted one under remeasured, and the gate annotates each with a warning.
->>>>>>> origin/m2/integration
   st1-mac-window:
     name: ST-1 window construction per variant and chrome (shipped gated < 250 ms)
     needs: provenance
@@ -1105,8 +1102,6 @@ jobs:
             chrome=$(jq -r '.chrome' <<<"$launch")
             run=$(jq -r '.name' <<<"$launch")
             warmup=$(jq -r '.warmup' <<<"$launch")
-<<<<<<< HEAD
-=======
             template=()
             warmup_args=()
             if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi
@@ -1137,14 +1132,8 @@ jobs:
             chrome=$(jq -r '.chrome' <<<"$launch")
             run=$(jq -r '.name' <<<"$launch")
             remeasures=$(jq -r '.remeasures' <<<"$launch")
->>>>>>> origin/m2/integration
             template=()
-            warmup_args=()
             if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi
-<<<<<<< HEAD
-            if [ "$warmup" = true ]; then warmup_args=(--window-warmup); fi
-=======
->>>>>>> origin/m2/integration
             node scripts/qa/st-1.mjs \
               --installer "$installer" \
               --provenance provenance/provenance.json \
@@ -1152,13 +1141,8 @@ jobs:
               "${template[@]}" \
               --minutes 0.5 \
               --purpose window-construction \
-<<<<<<< HEAD
-              --window-variant "$variant" \
-              "${warmup_args[@]}" \
-=======
               --window-variant shipped \
               --window-remeasures "$remeasures" \
->>>>>>> origin/m2/integration
               --report-dir "st1-report/$run" \
               --out "st1-report/$run/$run.json" \
               </dev/null \

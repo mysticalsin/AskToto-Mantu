@@ -3,11 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
-<<<<<<< HEAD
-import { windowConstructionPlan } from '../qa/lib/st-1-core.mjs'
-=======
 import { windowConstructionPlan, windowRemeasurePlan } from '../qa/lib/st-1-core.mjs'
->>>>>>> origin/m2/integration
 
 const root = join(__dirname, '..', '..')
 const workflow = readFileSync(join(root, '.github', 'workflows', 'qa-candidate.yml'), 'utf8').replace(/\r\n/g, '\n')
@@ -613,8 +609,6 @@ describe('QA candidate workflow: the shipped window gate (M2-0519)', () => {
     expect(measure).toContain('warmup=$(jq -r \'.warmup\' <<<"$launch")')
     expect(measure).toContain('variant=$(jq -r \'.variant\' <<<"$launch")')
     expect(measure).toContain('chrome=$(jq -r \'.chrome\' <<<"$launch")')
-<<<<<<< HEAD
-=======
   })
 
   it('re-measures a single slow shipped launch per chrome after the measured plan and before the gate (OD-66)', () => {
@@ -666,6 +660,5 @@ describe('QA candidate workflow: the shipped window gate (M2-0519)', () => {
       windowRemeasurePlan([fast('window-shipped-opaque-1', false), fast('window-shipped-transparent-1', true)])
     ).toEqual([])
     expect(windowRemeasurePlan([])).toEqual([])
->>>>>>> origin/m2/integration
   })
 })

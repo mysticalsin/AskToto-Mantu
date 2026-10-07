@@ -459,28 +459,6 @@ export function windowConstructionGate(reports, budgetMs = WINDOW_STAGE_BUDGET_M
   const { planned, shipped, remeasures } = windowGateReports(reports)
   const warmups = planned.filter(({ report }) => report.warmup === true)
   if (shipped.length === 0) failures.push('no shipped window-construction report')
-<<<<<<< HEAD
-  for (const { name, report } of shipped) {
-    const stages = Array.isArray(report.bootStages?.stages) ? report.bootStages.stages : []
-    for (const stage of GATED_WINDOW_STAGES) {
-      const found = stages.filter((entry) => entry.stage === stage)
-      if (found.length === 0) failures.push(`${name}: ${stage} missing`)
-      for (const entry of found) {
-        const chrome = entry.transparent === true ? 'transparent' : entry.transparent === false ? 'opaque' : null
-        if (chrome) chromes.add(chrome)
-        rows.push({
-          report: name,
-          launch: launchNameFromReportPath(name),
-          variant: report.windowVariant ?? null,
-          stage,
-          chrome,
-          ms: entry.ms
-        })
-        if (typeof entry.ms !== 'number') failures.push(`${name}: ${stage} has no measured ms`)
-        else if (entry.ms >= budgetMs) failures.push(`${name}: ${stage} ${entry.ms} ms >= ${budgetMs} ms`)
-        if (!chrome) failures.push(`${name}: ${stage} does not say which chrome it built`)
-      }
-=======
   const checked = shipped.map(({ name, report }) => gatedStageChecks(name, report, budgetMs))
   const accepted = acceptedRemeasures(checked, remeasures, planned, budgetMs)
   for (const launch of checked) {
@@ -499,7 +477,6 @@ export function windowConstructionGate(reports, budgetMs = WINDOW_STAGE_BUDGET_M
         remeasure: remeasure.launch,
         remeasureMs: remeasure.rows.find((row) => row.stage === stage).ms
       })
->>>>>>> origin/m2/integration
     }
   }
   rows.push(...accepted.rows)
@@ -514,10 +491,6 @@ export function windowConstructionGate(reports, budgetMs = WINDOW_STAGE_BUDGET_M
     launches,
     launchSummaries: windowLaunchSummaries(launches),
     rows,
-<<<<<<< HEAD
-    failures
-  }
-=======
     remeasured,
     failures
   }
@@ -639,7 +612,6 @@ export function windowRemeasurePlan(reports, budgetMs = WINDOW_STAGE_BUDGET_MS) 
       remeasures: launch
     })
   )
->>>>>>> origin/m2/integration
 }
 
 /** The app's own native boot stage timings (tray stages, window construction, navigation and first show): every
@@ -1031,13 +1003,9 @@ export function writeJsonToStdout(value, stdout = process.stdout) {
 }
 
 /** The launch itself never reached a candidate to measure: a genuine FAIL (inspector: false), never a
-<<<<<<< HEAD
- *  skipped row. A window-construction launch is marked as in buildReport. */
-=======
  *  skipped row. A window-construction launch is marked as in buildReport.
  * @param {{ row: string, installer: string, candidate: { build_run_id: unknown, artifact_sha256: unknown }, fixtures: unknown[],
  *   reason: string, purpose?: string, windowVariant?: string, windowWarmup?: boolean, windowRemeasures?: string | null }} args */
->>>>>>> origin/m2/integration
 export function buildLaunchFailureReport({
   row,
   installer,
@@ -1046,12 +1014,8 @@ export function buildLaunchFailureReport({
   reason,
   purpose = 'st-1',
   windowVariant = 'shipped',
-<<<<<<< HEAD
-  windowWarmup = false
-=======
   windowWarmup = false,
   windowRemeasures = null
->>>>>>> origin/m2/integration
 }) {
   return {
     harness: 'ST-1',
