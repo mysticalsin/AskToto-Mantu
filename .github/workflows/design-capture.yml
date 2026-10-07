@@ -2,22 +2,23 @@ name: Design capture
 
 # Renders every state in the design-capture list (src/renderer/src/design-capture) in the real Electron
 # renderer on the hosted macOS and Windows runners: light and dark, 1x and 2x, motion and reduced motion.
-# Each job uploads the PNGs with manifest.json (state id, sha256, commit) as an artifact; the lead files
-# that evidence.
+# Each job uploads the PNGs with manifest.json (state id, sha256, commit and WCAG/clipping audit summary)
+# as an artifact even when the audit fails; the lead files that evidence.
 #
 # The current states are pipeline placeholders. BLOCKED_EXTERNAL: the M2-0201 prototype state ids come from
 # the program tracker and replace them one to one before the artifact is filed as M2-0201 evidence.
 #
-# On demand only: gh workflow run design-capture.yml --ref <branch>. The QA-only renderer entry is built
-# here with METIS_DESIGN_CAPTURE=1 and is excluded from every installer (electron-builder*.yml), so this
-# job's build is never a release artifact. Never on tags.
-# The pull_request trigger on this file's own path only registers the workflow with GitHub (M2-0501):
-# the run it creates skips the job and uses no runner minutes.
-run-name: ${{ github.event_name == 'pull_request' && 'Design capture (registration)' || 'Design capture' }}
+# Runs on demand and on pull requests to m2/integration that touch the capture surface, driver or workflow.
+# The QA-only renderer entry is built here with METIS_DESIGN_CAPTURE=1 and is excluded from every installer
+# (electron-builder*.yml), so this job's build is never a release artifact. Never on push or tags.
+run-name: Design capture
 
 on:
   pull_request:
+    branches: [m2/integration]
     paths:
+      - src/renderer/src/design-capture/**
+      - scripts/design/**
       - .github/workflows/design-capture.yml
   workflow_dispatch:
 
@@ -34,7 +35,6 @@ defaults:
 
 jobs:
   capture:
-    if: github.event_name == 'workflow_dispatch'
     name: Capture (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -58,6 +58,7 @@ jobs:
       - name: Capture every state
         run: node scripts/design/capture-states.mjs out-design-capture
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
         with:
           name: design-capture-${{ runner.os }}
           path: out-design-capture/

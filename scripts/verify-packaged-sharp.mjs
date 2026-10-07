@@ -8,21 +8,31 @@ import { getRawHeader } from '@electron/asar'
 import { readFileSync, readdirSync } from 'node:fs'
 import { basename, join } from 'node:path'
 
-const SHARP_VERSION = '0.35.4'
-const LIBVIPS_VERSION = '1.3.3'
-const VIPS_VERSION = '8.18.6'
-const HEIF_VERSION = '1.23.2'
+const SHARP_VERSION = '0.35.5'
+const LIBVIPS_VERSION = '1.3.4'
+const VIPS_VERSION = '8.18.7'
+const HEIF_VERSION = '1.23.5'
 
-export async function verifyPackagedSharp(
-  { repoRoot, resourcesRoot, target, arches, postSign = false },
-  checks
-) {
+export async function verifyPackagedSharp({ repoRoot, resourcesRoot, target, arches, postSign = false }, checks) {
   const {
-    requireDirectory, requireRegularFile, inventoryTree, inventoryFromFiles, requireExactInventory,
-    requireSameFile, assertEqual, electronBuilderPackageJson, verifyMachOArches, verifyPeX64
+    requireDirectory,
+    requireRegularFile,
+    inventoryTree,
+    inventoryFromFiles,
+    requireExactInventory,
+    requireSameFile,
+    assertEqual,
+    electronBuilderPackageJson,
+    verifyMachOArches,
+    verifyPeX64
   } = checks
-  if (!['mac', 'win'].includes(target) || !Array.isArray(arches) || !arches.length ||
-      arches.some((arch) => !['arm64', 'x64'].includes(arch)) || new Set(arches).size !== arches.length) {
+  if (
+    !['mac', 'win'].includes(target) ||
+    !Array.isArray(arches) ||
+    !arches.length ||
+    arches.some((arch) => !['arm64', 'x64'].includes(arch)) ||
+    new Set(arches).size !== arches.length
+  ) {
     throw new Error('Sharp gate requires a supported target and distinct arm64/x64 architectures')
   }
   const sourceRoot = join(repoRoot, 'node_modules')
@@ -30,7 +40,14 @@ export async function verifyPackagedSharp(
   const unpacked = join(resourcesRoot, 'app.asar.unpacked')
   const packagedRoot = join(unpacked, 'node_modules')
   // Checking package roots alone would follow a junction/symlink in one of these ancestors.
-  for (const path of [sourceRoot, join(sourceRoot, '@img'), resourcesRoot, unpacked, packagedRoot, join(packagedRoot, '@img')]) {
+  for (const path of [
+    sourceRoot,
+    join(sourceRoot, '@img'),
+    resourcesRoot,
+    unpacked,
+    packagedRoot,
+    join(packagedRoot, '@img')
+  ]) {
     requireDirectory(path)
   }
   requireRegularFile(archive)
@@ -55,7 +72,8 @@ export async function verifyPackagedSharp(
     for (const [name, entry] of Object.entries(node.files || {})) {
       const path = [...parts, name]
       const key = path.join('/')
-      const sharpRoot = (name === 'sharp' && parts.at(-1) === 'node_modules') ||
+      const sharpRoot =
+        (name === 'sharp' && parts.at(-1) === 'node_modules') ||
         (name.startsWith('sharp-') && parts.at(-1) === '@img' && parts.at(-2) === 'node_modules')
       if (sharpRoot && !expected.has(key.replace(/^node_modules\//, ''))) {
         throw new Error(`Sharp unexpected or nested ASAR package: ${key}`)
@@ -100,9 +118,12 @@ export async function verifyPackagedSharp(
     manifests.set(name, manifest)
   }
   const core = manifests.get('sharp')
-  if (core.main !== './dist/index.cjs' || core.module !== './dist/index.mjs' ||
-      core.exports?.['.']?.require?.default !== './dist/index.cjs' ||
-      core.exports?.['.']?.import?.default !== './dist/index.mjs') {
+  if (
+    core.main !== './dist/index.cjs' ||
+    core.module !== './dist/index.mjs' ||
+    core.exports?.['.']?.require?.default !== './dist/index.cjs' ||
+    core.exports?.['.']?.import?.default !== './dist/index.mjs'
+  ) {
     throw new Error('Sharp core loader exports differ from the reviewed CJS/ESM entrypoints')
   }
   for (const [name, version] of expected) {
@@ -133,18 +154,24 @@ export async function verifyPackagedSharp(
   async function verifyTree(name, reviewedFiles, nativeFiles = [], arch) {
     const source = join(sourceRoot, name)
     const packaged = join(packagedRoot, name)
-    const sourceFiles = sourceInventory(name, source).filter((file) =>
-      !file.endsWith('/') && basename(file).toLowerCase() !== 'readme.md' &&
-      // Pinned electron-builder excludes these core-only source files, but retains .h/.d.cts/.d.mts.
-      !(name === 'sharp' && (file.endsWith('.cc') || file.endsWith('.d.ts') || basename(file) === 'binding.gyp'))
+    const sourceFiles = sourceInventory(name, source).filter(
+      (file) =>
+        !file.endsWith('/') &&
+        basename(file).toLowerCase() !== 'readme.md' &&
+        // Pinned electron-builder excludes these core-only source files, but retains .h/.d.cts/.d.mts.
+        !(name === 'sharp' && (file.endsWith('.cc') || file.endsWith('.d.ts') || basename(file) === 'binding.gyp'))
     )
     if (name === 'sharp' && sourceFiles.some((file) => /\.(?:node|dll|dylib|exe)$/i.test(file))) {
       throw new Error('Sharp core has unexpected native files; only reviewed platform packages may carry native code')
     }
-    if (reviewedFiles) assertEqual(sourceFiles, [...reviewedFiles].sort(), `Sharp ${name} source inventory is not reviewed`)
+    if (reviewedFiles)
+      assertEqual(sourceFiles, [...reviewedFiles].sort(), `Sharp ${name} source inventory is not reviewed`)
     requireExactInventory(packaged, inventoryFromFiles(sourceFiles), `Sharp ${name}`)
     const prefix = `node_modules/${name}/`
-    const visibleFiles = [...archiveEntries].filter(([path, entry]) => path.startsWith(prefix) && !entry.files).map(([path]) => path.slice(prefix.length)).sort()
+    const visibleFiles = [...archiveEntries]
+      .filter(([path, entry]) => path.startsWith(prefix) && !entry.files)
+      .map(([path]) => path.slice(prefix.length))
+      .sort()
     assertEqual(visibleFiles, sourceFiles, `Sharp ${name} ASAR inventory mismatch`)
     for (const file of sourceFiles) {
       const from = join(source, file)
@@ -163,7 +190,11 @@ export async function verifyPackagedSharp(
         // Verified against the actual pinned builder output: core contributor metadata is
         // removed by cleanupPackageJson. All retained fields still require exact equality.
         if (name === 'sharp') delete expectedManifest.contributors
-        assertEqual(readJson(to), expectedManifest, `Sharp ${name} package.json differs from electron-builder's reviewed projection`)
+        assertEqual(
+          readJson(to),
+          expectedManifest,
+          `Sharp ${name} package.json differs from electron-builder's reviewed projection`
+        )
       } else {
         await requireSameFile(from, to, { verifyHash: !signedNative })
       }
@@ -188,7 +219,8 @@ export async function verifyPackagedSharp(
     assertEqual(manifest.os, [platform], `Sharp ${name} platform metadata mismatch`)
     assertEqual(manifest.cpu, [arch], `Sharp ${name} architecture metadata mismatch`)
     const vipsName = `@img/sharp-libvips-darwin-${arch}`
-    const loader = (target === 'mac' ? `try { require.resolve('${vipsName}/binary'); } catch {}\n` : '') +
+    const loader =
+      (target === 'mac' ? `try { require.resolve('${vipsName}/binary'); } catch {}\n` : '') +
       `module.exports = require('./${nodeFile}');`
     requireRegularFile(join(sourceRoot, name, 'index.cjs'))
     if (readFileSync(join(sourceRoot, name, 'index.cjs'), 'utf8').trim() !== loader) {
@@ -206,12 +238,24 @@ export async function verifyPackagedSharp(
       await verifyTree(name, addonFiles, [nodeFile], arch)
       const vipsManifest = manifests.get(vipsName)
       const dylib = `lib/libvips-cpp.${VIPS_VERSION}.dylib`
-      assertEqual(vipsManifest.exports, {
-        './lib': './lib/index.js', './package': './package.json', './versions': './versions.json', './binary': `./${dylib}`
-      }, `Sharp ${vipsName} exports differ from the reviewed targets`)
+      assertEqual(
+        vipsManifest.exports,
+        {
+          './lib': './lib/index.js',
+          './package': './package.json',
+          './versions': './versions.json',
+          './binary': `./${dylib}`
+        },
+        `Sharp ${vipsName} exports differ from the reviewed targets`
+      )
       assertEqual(vipsManifest.os, ['darwin'], `Sharp ${vipsName} platform metadata mismatch`)
       assertEqual(vipsManifest.cpu, [arch], `Sharp ${vipsName} architecture metadata mismatch`)
-      await verifyTree(vipsName, ['package.json', 'versions.json', 'lib/index.js', 'lib/glib-2.0/include/glibconfig.h', dylib], [dylib], arch)
+      await verifyTree(
+        vipsName,
+        ['package.json', 'versions.json', 'lib/index.js', 'lib/glib-2.0/include/glibconfig.h', dylib],
+        [dylib],
+        arch
+      )
       versionsName = vipsName
     }
     const versions = readJson(join(packagedRoot, versionsName, 'versions.json'))
