@@ -46,14 +46,9 @@
  *       --fixtures fifo|dataless|synthetic-dataless|none [--history [on|off|after-idle]] [--count 6]
  *       [--cloud-dir <folder of evicted files>] [--main-log <main.log>] [--exe <installed executable>]
  *       [--profile-template <userData dir>] [--minutes 5] [--out <report.json>] [--report-dir <dir>]
-<<<<<<< HEAD
- *       [--purpose window-construction --window-variant <variant> [--window-warmup]]
- *       --print-window-plan
-=======
  *       [--purpose window-construction --window-variant <variant> [--window-warmup | --window-remeasures <launch>]]
  *       --print-window-plan
  *       --print-window-remeasure-plan <report dir>
->>>>>>> origin/m2/integration
  *
  * `--purpose window-construction` marks a short launch made only to measure the boot window's constructor under
  * one QA-identity rendering variant (shipped, spellcheck-off, paint-when-hidden, prewarm-spellchecker), passed to
@@ -121,11 +116,8 @@ import {
   timedCallsExpression,
   windowConstructionGate,
   windowConstructionPlan,
-<<<<<<< HEAD
-=======
   windowRemeasureArg,
   windowRemeasurePlan,
->>>>>>> origin/m2/integration
   withTimeout,
   writeJsonToStdout
 } from './lib/st-1-core.mjs'
@@ -836,14 +828,11 @@ function gateWindow(dir, out) {
   console.error(
     `[st-1] window gate skipped ${gate.skippedWarmups} warm-up launch${gate.skippedWarmups === 1 ? '' : 'es'}`
   )
-<<<<<<< HEAD
-=======
   for (const entry of gate.remeasured) {
     console.log(
       `::warning::ST-1 window gate accepted ${entry.launch} ${entry.stage} ${entry.ms} ms on re-measure ${entry.remeasure} at ${entry.remeasureMs} ms (OD-66)`
     )
   }
->>>>>>> origin/m2/integration
   for (const failure of gate.failures) console.error(`[st-1] window gate FAIL — ${failure}`)
   return gate.pass ? 0 : 1
 }
@@ -858,8 +847,6 @@ async function main() {
     await writeJsonToStdout(windowConstructionPlan())
     return 0
   }
-<<<<<<< HEAD
-=======
   if (args.printWindowRemeasurePlan !== undefined) {
     if (args.printWindowRemeasurePlan === 'true') {
       console.error('usage: node scripts/qa/st-1.mjs --print-window-remeasure-plan <report dir>')
@@ -869,7 +856,6 @@ async function main() {
     await writeJsonToStdout(windowRemeasurePlan(existsSync(dir) ? readWindowReports(dir) : []))
     return 0
   }
->>>>>>> origin/m2/integration
   if (args.gateWindow !== undefined) {
     if (args.gateWindow === 'true') {
       console.error('usage: node scripts/qa/st-1.mjs --gate-window <report dir> [--out <gate.json>]')
@@ -985,12 +971,8 @@ async function main() {
       fixtures,
       purpose,
       windowVariant,
-<<<<<<< HEAD
-      windowWarmup
-=======
       windowWarmup,
       windowRemeasures
->>>>>>> origin/m2/integration
     }
     if (launchFailure) return buildLaunchFailureReport({ ...common, reason: launchFailure })
     return buildReport({
