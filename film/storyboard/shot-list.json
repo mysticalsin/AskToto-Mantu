@@ -10,7 +10,7 @@
   "shots": [
     {
       "id": "SH-01L",
-      "scene_id": "LF-01",
+      "scene_id": "LF-03",
       "form": "live",
       "duration_seconds": 6,
       "framing": "Full-screen 3840x2160 capture, overlay docked at the top edge beside a synthetic meeting workspace.",
@@ -20,7 +20,7 @@
     },
     {
       "id": "SH-01C",
-      "scene_id": "LF-01",
+      "scene_id": "LF-03",
       "form": "concept",
       "duration_seconds": 6,
       "framing": "Designed render at 3840x2160 with the same layout as SH-01L.",
@@ -30,7 +30,7 @@
     },
     {
       "id": "SH-02L",
-      "scene_id": "LF-02",
+      "scene_id": "LF-04",
       "form": "live",
       "duration_seconds": 8,
       "framing": "Full-screen capture with the overlay and its notes panel in frame.",
@@ -40,7 +40,7 @@
     },
     {
       "id": "SH-02C",
-      "scene_id": "LF-02",
+      "scene_id": "LF-04",
       "form": "concept",
       "duration_seconds": 8,
       "framing": "Designed render with a synthetic dialogue strip beside a notes panel.",
@@ -50,7 +50,7 @@
     },
     {
       "id": "SH-03L",
-      "scene_id": "LF-03",
+      "scene_id": "LF-05",
       "form": "live",
       "duration_seconds": 8,
       "framing": "Full-screen capture with the Hindsight panel open over the synthetic workspace.",
@@ -60,7 +60,7 @@
     },
     {
       "id": "SH-03C",
-      "scene_id": "LF-03",
+      "scene_id": "LF-05",
       "form": "concept",
       "duration_seconds": 8,
       "framing": "Designed render of the Hindsight panel with the same layout as SH-03L.",

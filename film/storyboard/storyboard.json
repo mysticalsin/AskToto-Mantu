@@ -47,6 +47,50 @@
       "variants": {
         "live": {
           "available": true,
+          "treatment": "Use only footage captured from a verified build.",
+          "source": { "kind": "scene", "ref": "NP-01" }
+        },
+        "concept": {
+          "available": true,
+          "treatment": "Abstract title footage opens the film, carrying the visible concept label for the whole scene.",
+          "label": "Concept UI sequence",
+          "source": { "kind": "scene", "ref": "NP-01" }
+        },
+        "cut": {
+          "available": true,
+          "treatment": "Remove the scene and bridge with abstract title footage.",
+          "bridge": "NP-02"
+        }
+      }
+    },
+    {
+      "scene_id": "LF-02",
+      "active_variant": "concept",
+      "variants": {
+        "live": {
+          "available": true,
+          "treatment": "Use only with a live verified receipt for the exact reconstructed meeting setup.",
+          "source": { "kind": "scene", "ref": "NP-03" }
+        },
+        "concept": {
+          "available": true,
+          "treatment": "A neutral reconstructed meeting-problem card carries the visible reconstruction label.",
+          "label": "Reconstruction",
+          "source": { "kind": "scene", "ref": "NP-03" }
+        },
+        "cut": {
+          "available": true,
+          "treatment": "Replace the scene with a neutral title card.",
+          "bridge": "NP-03"
+        }
+      }
+    },
+    {
+      "scene_id": "LF-03",
+      "active_variant": "concept",
+      "variants": {
+        "live": {
+          "available": true,
           "treatment": "Rc1 capture of the slim overlay beside a synthetic meeting workspace; used only after a packaged-app QA receipt proves the exact captured state.",
           "source": { "kind": "shot", "ref": "SH-01L" }
         },
@@ -64,7 +108,7 @@
       }
     },
     {
-      "scene_id": "LF-02",
+      "scene_id": "LF-04",
       "active_variant": "concept",
       "variants": {
         "live": {
@@ -86,7 +130,7 @@
       }
     },
     {
-      "scene_id": "LF-03",
+      "scene_id": "LF-05",
       "active_variant": "concept",
       "variants": {
         "live": {
@@ -108,60 +152,65 @@
       }
     },
     {
-      "scene_id": "LF-04",
-      "active_variant": "cut",
-      "variants": {
-        "live": {
-          "available": false,
-          "reason": "The exact verified privacy sentence and its evidence do not exist yet; the live form is written only after they do."
-        },
-        "concept": {
-          "available": false,
-          "reason": "No concept privacy line is allowed."
-        },
-        "cut": {
-          "available": true,
-          "treatment": "Cut the privacy line; the edit closes the gap with no bridge.",
-          "bridge": null
-        }
-      }
-    },
-    {
-      "scene_id": "LF-05",
-      "active_variant": "cut",
-      "variants": {
-        "live": {
-          "available": false,
-          "reason": "Comparative slices need M2-0185 qualification with final signed Windows and native Mac QA receipts, which are absent."
-        },
-        "concept": {
-          "available": false,
-          "reason": "No comparative concept line is allowed."
-        },
-        "cut": {
-          "available": true,
-          "treatment": "Cut the comparative beat; the edit closes the gap with no bridge.",
-          "bridge": null
-        }
-      }
-    },
-    {
       "scene_id": "LF-06",
-      "active_variant": "live",
+      "active_variant": "concept",
       "variants": {
         "live": {
           "available": true,
-          "treatment": "Process diagram of the pinned render path, shown as render-path proof only.",
+          "treatment": "Use only after a packaged app QA receipt proves the exact captured state.",
           "source": { "kind": "scene", "ref": "NP-05" }
         },
         "concept": {
-          "available": false,
-          "reason": "The card is already a process diagram and makes no product claim, so a concept form would add nothing."
+          "available": true,
+          "treatment": "Process diagram of the pinned render path, shown as render-path proof only and carrying the visible concept label.",
+          "label": "Concept UI sequence",
+          "source": { "kind": "scene", "ref": "NP-05" }
         },
         "cut": {
           "available": true,
           "treatment": "Remove the card; the edit closes the gap with no bridge.",
           "bridge": null
+        }
+      }
+    },
+    {
+      "scene_id": "LF-07",
+      "active_variant": "cut",
+      "variants": {
+        "live": {
+          "available": false,
+          "reason": "Use only for platforms with release evidence on file."
+        },
+        "concept": {
+          "available": false,
+          "reason": "No concept platform line is allowed."
+        },
+        "cut": {
+          "available": true,
+          "treatment": "Cut the platform beat.",
+          "bridge": null
+        }
+      }
+    },
+    {
+      "scene_id": "LF-08",
+      "active_variant": "concept",
+      "variants": {
+        "live": {
+          "available": true,
+          "treatment": "Use only text backed by verified claims.",
+          "source": { "kind": "scene", "ref": "NP-04" }
+        },
+        "concept": {
+          "available": true,
+          "treatment": "A closing title card ends the film, carrying the visible concept title-card label.",
+          "label": "Concept title card",
+          "source": { "kind": "scene", "ref": "NP-04" }
+        },
+        "cut": {
+          "available": true,
+          "treatment": "Replace with a neutral end card.",
+          "bridge": "NP-04"
         }
       }
     }
