@@ -143,6 +143,11 @@ export function parseProveLocalTtftOutcome(text) {
   const timeout = /prewarm timed out after (\d+)ms \(limit (\d+)ms\)/.exec(output)
   if (timeout) return { outcome: 'TIMEOUT', prewarmElapsedMs: Number(timeout[1]), prewarmTimeoutMs: Number(timeout[2]) }
   const warm = /^warm TTFT:\s*(\d+)\s*ms\s*$/im.exec(output)
+  const suggestNoFirstToken = /warm suggest produced no first token within (\d+) ms/.exec(output)
+  if (suggestNoFirstToken) {
+    return { outcome: 'FAIL', reason: 'suggest-timeout', suggestTimeoutMs: Number(suggestNoFirstToken[1]) }
+  }
+  const suggestTimedOutAfterToken = /warm suggest stream timed out after (\d+) ms after first token/.exec(output)
   if (/\[prove-local-ttft\]\s+FAIL|FAILED:/i.test(output)) {
     const health = /healthy on \S+ after (\d+)ms/.exec(output)
     const prewarm = /prewarm \(cold prefill\):\s*(\d+)\s*ms/.exec(output)
@@ -150,12 +155,17 @@ export function parseProveLocalTtftOutcome(text) {
       outcome: 'FAIL',
       ...(health ? { healthMs: Number(health[1]) } : {}),
       ...(prewarm ? { prewarmColdPrefillMs: Number(prewarm[1]) } : {}),
+      ...(suggestTimedOutAfterToken ? { reason: 'suggest-timeout', suggestTimeoutMs: Number(suggestTimedOutAfterToken[1]) } : {}),
       ...(warm ? { warmTtftMs: Number(warm[1]) } : {})
     }
   }
   // A run cut off before any verdict (no warm TTFT, no FAIL line) is still a measured non-PASS outcome.
   if (!warm) return { outcome: 'INCOMPLETE' }
-  return { outcome: 'PASS', warmTtftMs: parseProveLocalTtftOutput(output) }
+  return {
+    outcome: suggestTimedOutAfterToken ? 'FAIL' : 'PASS',
+    ...(suggestTimedOutAfterToken ? { reason: 'suggest-timeout', suggestTimeoutMs: Number(suggestTimedOutAfterToken[1]) } : {}),
+    warmTtftMs: parseProveLocalTtftOutput(output)
+  }
 }
 
 export function proveLocalTtftEvidenceFromArtifact(path, { cwd = process.cwd() } = {}) {

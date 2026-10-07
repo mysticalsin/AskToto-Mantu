@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
-import { prewarmCall } from './prove-local-ttft.mjs'
+import { prewarmCall, streamedSuggestCall } from './prove-local-ttft.mjs'
 
 let server: Server | undefined
 
@@ -39,5 +39,38 @@ describe('prove-local-ttft prewarm', () => {
 
     expect(result.timedOut).toBeUndefined()
     expect(result.timings).toEqual({ prompt_n: 12 })
+  })
+})
+
+describe('prove-local-ttft streamed suggest', () => {
+  it('reports a timeout before the first content delta without throwing', async () => {
+    const baseUrl = await listen((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      // keep the stream open past the client timeout
+    })
+
+    const result = (await streamedSuggestCall(baseUrl, 'key', [], 100)) as Record<string, unknown> & { ms: number }
+
+    expect(result).toMatchObject({ timedOut: true, reason: 'suggest-timeout', timeoutMs: 100 })
+    expect(result.ttftMs).toBeUndefined()
+    expect(result.ms).toBeGreaterThanOrEqual(90)
+  })
+
+  it('keeps the measured first-token time when the stream later times out', async () => {
+    const baseUrl = await listen((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      res.write('data: {"choices":[{"delta":{"content":"hello"}}]}\n\n')
+      // keep the stream open past the client timeout
+    })
+
+    const result = (await streamedSuggestCall(baseUrl, 'key', [], 100)) as Record<string, unknown> & { ttftMs: number }
+
+    expect(result).toMatchObject({
+      timedOut: true,
+      reason: 'suggest-timeout',
+      timeoutMs: 100,
+      outputChars: 5
+    })
+    expect(result.ttftMs).toBeGreaterThanOrEqual(0)
   })
 })
