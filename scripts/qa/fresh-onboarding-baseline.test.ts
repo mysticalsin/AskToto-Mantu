@@ -9,6 +9,7 @@ import {
   createLatchedActionCall,
   createFreshOnboardingReport,
   findFreshOnboardingPage,
+  freshOnboardingIdentityFailure,
   identityBindingProblems,
   identityProblems,
   isStrictSemver,
@@ -91,6 +92,41 @@ describe('fresh onboarding baseline report', () => {
     )
   })
 
+  it.each([
+    'cdp-attach-failed',
+    'main-inspector-attach-failed',
+    'profile-mismatch',
+    'runtime-version-mismatch',
+    'profile-and-runtime-version-mismatch'
+  ])('retains the closed pre-UI failure %s without qualifying the flow', (failure) => {
+    const report = createFreshOnboardingReport({
+      outcome: 'FAIL',
+      identity: IDENTITY,
+      assertions: ASSERTION_IDS.map((id) => ({
+        id,
+        status: id === 'teardown-acknowledged' ? 'PASS' : 'NOT_RUN'
+      })),
+      failure,
+      teardown: 'ACKNOWLEDGED'
+    })
+    expect(reportProblems(report)).toEqual([])
+    expect(assessFreshOnboardingReport(report, expected, { requirePass: false }).problems).toEqual([])
+    expect(assessFreshOnboardingReport(report, expected).problems).toEqual(['OUTCOME_NOT_PASS'])
+    expect(reportProblems({ ...report, outcome: 'PASS' })).toContain('PASS_SEMANTICS_INVALID')
+    expect(reportProblems({ ...report, outcome: 'PRECONDITION' })).toContain('PRECONDITION_SEMANTICS_INVALID')
+    expect(reportProblems({ ...report, teardown: 'UNACKNOWLEDGED' })).toContain('TEARDOWN_ASSERTION_INVALID')
+    const wrongHarness = { ...expected, harnessCommit: 'd'.repeat(40) }
+    expect(assessFreshOnboardingReport(report, wrongHarness, { requirePass: false }).problems).toContain(
+      'IDENTITY_HARNESS_COMMIT_MISMATCH'
+    )
+  })
+
+  it('rejects arbitrary diagnostic text instead of extending the upload surface', () => {
+    for (const failure of ['arbitrary diagnostic text', 'cdp-attach-failed\nextra', 'profile-home-mismatch']) {
+      expect(reportProblems({ ...passingReport(), outcome: 'FAIL', failure })).toContain('REPORT_FAILURE_INVALID')
+    }
+  })
+
   it('rejects unknown report fields, reordered assertion rows and identity mismatches', () => {
     const unknown = { ...passingReport(), diagnostics: 'must-not-upload' }
     expect(reportProblems(unknown)).toContain('REPORT_KEYS_INVALID')
@@ -125,6 +161,20 @@ describe('fresh onboarding baseline report', () => {
     expect(identityBindingProblems(IDENTITY)).toEqual([])
     expect(identityBindingProblems({ ...IDENTITY, candidate_run: null })).toEqual(['IDENTITY_INCOMPLETE'])
   })
+})
+
+describe('fresh onboarding runtime identity diagnostics', () => {
+  it.each([
+    { profileMatches: true, versionMatches: true, failure: 'none' },
+    { profileMatches: false, versionMatches: true, failure: 'profile-mismatch' },
+    { profileMatches: true, versionMatches: false, failure: 'runtime-version-mismatch' },
+    { profileMatches: false, versionMatches: false, failure: 'profile-and-runtime-version-mismatch' }
+  ])(
+    'maps profile=$profileMatches version=$versionMatches to $failure',
+    ({ profileMatches, versionMatches, failure }) => {
+      expect(freshOnboardingIdentityFailure(profileMatches, versionMatches)).toBe(failure)
+    }
+  )
 })
 
 describe('fresh onboarding archive identity', () => {
