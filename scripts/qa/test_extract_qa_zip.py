@@ -351,16 +351,20 @@ class ExtractionTests(unittest.TestCase):
         return code, json.loads(raw)
 
     def test_combined_cli_revalidates_binding_once_and_scopes_unknown_metadata(self):
-        self.download_fixture([(ROOT + "/a", b"payload", FILE)])
+        from test_qa_bundle_identity import bundle_rows
+        rows = bundle_rows()
+        self.download_fixture(rows)
         with patch.object(subject, "inventory_download", wraps=inventory.inventory_download) as call:
             code, report = self.cli()
         self.assertEqual(code, 0)
         self.assertEqual(call.call_count, 1)
         self.assertEqual(report["status"], "PASS")
+        self.assertEqual(report["scope"], "ARCHIVE_AND_QA_IDENTITY_ONLY")
         self.assertEqual(report["metadataInventory"]["localHeaders"], "NOT_INSPECTED")
         self.assertEqual(report["extraction"]["localHeaders"], "PASS")
-        self.assertEqual(report["extraction"]["actualBytes"], 7)
-        self.assertEqual(report["appIdentity"], "NOT_ASSESSED")
+        self.assertEqual(report["extraction"]["actualBytes"], sum(len(row[1]) for row in rows))
+        self.assertEqual(report["appIdentity"]["status"], "PASS")
+        self.assertEqual(report["appIdentity"]["appleParserAgreement"], "NOT_RUN")
         self.assertEqual(report["appLaunch"], "NOT_RUN")
         self.assertEqual((self.root / "candidate.zip").stat().st_size,
                          report["metadataInventory"]["innerArchive"]["size"])
@@ -375,9 +379,19 @@ class ExtractionTests(unittest.TestCase):
         self.assertFalse(list(self.root.glob(subject.STAGE_PREFIX + "*")))
 
     def test_report_collision_preserves_existing_report_and_removes_new_stage(self):
-        self.download_fixture([(ROOT + "/a", b"payload", FILE)])
+        from test_qa_bundle_identity import bundle_rows
+        self.download_fixture(bundle_rows())
         (self.root / "inventory.json").write_text('{"existing":true}')
-        code, report = self.cli()
+        attempted = []
+        real_write = subject.write_report
+        def write(root, report):
+            attempted.append(json.loads(json.dumps(report)))
+            return real_write(root, report)
+        with patch.object(subject, "write_report", side_effect=write):
+            code, report = self.cli()
+        self.assertEqual(len(attempted), 2)
+        self.assertEqual(attempted[0]["status"], "PASS")
+        self.assertEqual(attempted[0]["appIdentity"]["status"], "PASS")
         self.assertEqual(code, 1)
         self.assertEqual(report, {"existing": True})
         self.assertFalse(list(self.root.glob(subject.STAGE_PREFIX + "*")))

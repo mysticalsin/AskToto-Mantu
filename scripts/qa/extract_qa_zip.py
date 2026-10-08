@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded hosted archive validation; never app identity, admission or launch proof."""
+"""Bounded hosted archive and QA identity validation; never app launch proof."""
 
 import contextlib
 import json
@@ -21,12 +21,13 @@ from inventory_qa_zip import (
     MAX_REPORT, MIB, QA_ROOT, REPOSITORY, InventoryError, archive, exclusive,
     inventory_download, owned_root, remaining, require,
 )
+from qa_bundle_identity import IDENTITY_ERRORS, verify_qa_identity
 
 MAX_OUTPUT = 4 * 1024 * MIB
 MAX_RESOLVE_OPERATIONS = 1_000_000
 MAX_EXPANSIONS = 32
 STAGE_PREFIX = "qa-extracted."
-ERROR_CODES = INVENTORY_ERRORS | frozenset("""ARCHIVE_LIMIT PATH_INVALID ROOT_INVALID
+ERROR_CODES = INVENTORY_ERRORS | IDENTITY_ERRORS | frozenset("""ARCHIVE_LIMIT PATH_INVALID ROOT_INVALID
 PATH_COLLISION ENTRY_TYPE ENTRY_MODE ENTRY_ENCODING DIRECTORY_PAYLOAD EXTRA_UNSUPPORTED
 LOCAL_HEADER LOCAL_NAME LOCAL_FIELDS LOCAL_RANGE LOCAL_OVERLAP LINK_LIMIT LINK_TARGET
 LINK_ESCAPE LINK_DANGLING LINK_INTERMEDIATE LINK_CYCLE LINK_EXPANSIONS LINK_OPERATIONS
@@ -323,10 +324,10 @@ def write_report(root, report):
 def cli(argv, env):
     root = None
     stage = None
-    report = {"schema": 1, "status": "FAIL", "scope": "ARCHIVE_VALIDATION_ONLY",
+    report = {"schema": 1, "status": "FAIL", "scope": "ARCHIVE_AND_QA_IDENTITY_ONLY",
               "metadataInventory": {"status": "NOT_COMPLETED"},
               "extraction": {"localHeaders": "NOT_RUN", "linkGraph": "NOT_RUN", "materialization": "NOT_RUN"},
-              "appIdentity": "NOT_ASSESSED", "appLaunch": "NOT_RUN"}
+              "appIdentity": {"status": "NOT_RUN"}, "appLaunch": "NOT_RUN"}
     try:
         require(sys.platform == "linux" and sys.version_info[:2] == (3, 12)
                 and env.get("GITHUB_ACTIONS") == "true" and env.get("RUNNER_ENVIRONMENT") == "github-hosted"
@@ -343,6 +344,8 @@ def cli(argv, env):
             root = owned_root(argv[0], env["RUNNER_TEMP"])
             report["metadataInventory"] = inventory_download(root, env, deadline)
             stage, _ = extract_archive(root, env["RUNNER_TEMP"], deadline, report["extraction"])
+            report["appIdentity"] = {"status": "FAIL"}
+            report["appIdentity"] = verify_qa_identity(stage, deadline)
             report["status"] = "PASS"
             write_report(root, report)
         print("QA_ARCHIVE_VALIDATION_PASS")

@@ -9,6 +9,8 @@ on:
       - scripts/qa/test_inventory_qa_zip.py
       - scripts/qa/extract_qa_zip.py
       - scripts/qa/test_extract_qa_zip.py
+      - scripts/qa/qa_bundle_identity.py
+      - scripts/qa/test_qa_bundle_identity.py
       - .github/workflows/qa-zip-inventory.yml
 
 permissions:
@@ -36,6 +38,8 @@ jobs:
             /usr/bin/python3.12 -B scripts/qa/test_inventory_qa_zip.py
           env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" TMPDIR="$RUNNER_TEMP" \
             /usr/bin/python3.12 -B scripts/qa/test_extract_qa_zip.py
+          env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" TMPDIR="$RUNNER_TEMP" \
+            /usr/bin/python3.12 -B scripts/qa/test_qa_bundle_identity.py
       - name: Download and bind the two retained outer artifacts
         id: download
         timeout-minutes: 18
