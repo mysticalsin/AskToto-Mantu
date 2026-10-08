@@ -16,16 +16,14 @@
  * The identical omission was still sitting in local-runtime.concurrency.test.ts, 20 times, when this gate
  * was written — a mocked spawn meant no runtime ever read the bad value, so only a typecheck could see it.
  *
- * WHY A RATCHET RATHER THAN ZERO
+ * WHY THE RATCHET REMAINS AT ZERO
  *
- * 139 errors remain, and the overwhelming majority are vitest mock-typing noise (`MockInstance`,
- * `Procedure`, `delete` on a non-optional field) — churn with no defect behind it. Blocking the build on
- * all of them would mean either a very large mechanical change landing in one go, or the gate being
- * switched off, and a gate that gets switched off protects nothing.
+ * The historical mock-typing debt has been paid down. The accepted count is now zero; it must never
+ * increase. A compiler launch failure, interruption or inconsistent result is not evidence of zero
+ * diagnostics, so execution outcome is checked independently of the parsed diagnostic count.
  *
- * So: the count may fall and may not rise. New test code is typechecked from today; the existing noise is
- * paid down whenever someone is in the area. Lower the baseline whenever you fix some — the gate tells you
- * the new number, and REFUSES to pass while the baseline is stale, so it cannot drift upward unnoticed.
+ * The stale-baseline check remains covered with a positive synthetic fixture. This keeps the original
+ * ratchet contract explicit without restoring headroom to the real repository.
  *
  * Run: `npm run typecheck:tests`.
  */
@@ -55,22 +53,37 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
  * 2026-09-28: 16 → 12 after the current integration merge removed four more stale test-type errors.
  * 2026-09-28: 12 → 7 after this merge resolution revealed five more errors already gone.
  * 2026-09-30: 7 → 5 after CI proved one stale error was gone and M2-0510 typed the managed Dust mock.
+ * 2026-10-08: 5 → 0 by retaining production callback and PathLike signatures in the remaining test mocks.
  */
-const BASELINE = 5
+const BASELINE = 0
 
 let output = ''
+let compilerSucceeded = false
+let diagnosticExit = false
 try {
   output = execFileSync(
     process.execPath,
-    [join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'), '--noEmit', '-p', join(repoRoot, 'tsconfig.tests.json')],
-    { encoding: 'utf8', cwd: repoRoot }
+    [
+      join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
+      '--noEmit',
+      '-p',
+      join(repoRoot, 'tsconfig.tests.json')
+    ],
+    { encoding: 'utf8', stdio: 'pipe', cwd: repoRoot }
   )
+  compilerSucceeded = true
 } catch (e) {
   output = `${e.stdout ?? ''}${e.stderr ?? ''}`
+  diagnosticExit = (e.status === 1 || e.status === 2) && e.signal == null && e.code == null
 }
 
 const lines = output.split(/\r?\n/).filter((l) => / error TS\d+: /.test(l))
 const count = lines.length
+
+if (compilerSucceeded ? count !== 0 : !diagnosticExit || count === 0) {
+  console.error('[check:test-types] FAIL — compiler execution did not produce a valid typecheck result.')
+  process.exit(1)
+}
 
 if (count > BASELINE) {
   const byFile = new Map()
