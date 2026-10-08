@@ -42,7 +42,7 @@ struct MetisApp: App {
     /// Existing Operator URL/secret provisioning keys. The poller below is real and tested; it starts
     /// fetching and enforcing the fleet policy the moment these values exist.
     static let operatorURLDefaultsKey = "metis.operatorURL"
-    static let operatorIngestSecretDefaultsKey = "metis.operatorIngestSecret"
+    nonisolated static let operatorIngestSecretDefaultsKey = "metis.operatorIngestSecret"
     private static let operatorDeviceInstallIDDefaultsKey = "metis.operatorDeviceInstallID"
 
     /// A stable per-installation id (not a real hardware machine id — this app has no such reader yet):
@@ -64,7 +64,8 @@ struct MetisApp: App {
             guard let secret = UserDefaults.standard.string(forKey: operatorIngestSecretDefaultsKey), !secret.isEmpty else {
                 throw URLError(.userAuthenticationRequired)
             }
-            let deviceId = OperatorDeviceAuth.hashDeviceId(operatorDeviceInstallID())
+            let installID = await operatorDeviceInstallID()
+            let deviceId = OperatorDeviceAuth.hashDeviceId(installID)
             var request = URLRequest(url: url)
             for (field, value) in OperatorDeviceAuth.headers(secret: secret, deviceId: deviceId, body: "") {
                 request.setValue(value, forHTTPHeaderField: field)
