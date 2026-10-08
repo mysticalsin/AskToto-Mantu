@@ -30,6 +30,11 @@ const FRESH_PROFILE_KEYS = ['root', 'home', 'userProfile', 'appData', 'localAppD
 /** @typedef {{ newBrowserCDPSession: () => Promise<CdpBrowserSession>, close: () => Promise<unknown> | unknown }}
  *   CdpBrowserTransport */
 /** @typedef {(endpoint: string, timeoutMs?: number) => Promise<CdpBrowserTransport>} CdpConnector */
+/** @typedef {'cdp-attach-failed' | 'cdp-endpoint-deadline' | 'cdp-transport-timeout' |
+ *   'cdp-session-or-process-info-invalid' | 'cdp-browser-pid-mismatch'} ClosedCdpFailure */
+/** @typedef {{ browser: CdpBrowserTransport | null, transportUncertain: boolean,
+ *   lateRelease: ((releaseTimeoutMs: number) => Promise<boolean>) | null, failure: ClosedCdpFailure | null }}
+ *   OwnedCdpAttachment */
 /** @typedef {{ ok?: boolean, json: () => Promise<unknown> }} InspectorDiscoveryResponse */
 /** @typedef {(url: string, init: { signal: AbortSignal }) => Promise<InspectorDiscoveryResponse>} InspectorFetch */
 /** @typedef {{ close: () => Promise<unknown> | unknown }} ReleasableTransport */
@@ -315,11 +320,12 @@ async function attachWithLateCleanup(open, close, timeoutMs, message) {
   }
 }
 
-function browserOwnsExpectedMain(answer, childPid) {
+function browserMainOwnership(answer, childPid) {
   const processInfo = answer?.processInfo
-  if (!Array.isArray(processInfo)) return false
+  if (!Array.isArray(processInfo)) return 'invalid'
   const browserEntries = processInfo.filter((entry) => isPlainRecord(entry) && entry.type === 'browser')
-  return browserEntries.length === 1 && Number.isSafeInteger(browserEntries[0].id) && browserEntries[0].id === childPid
+  if (browserEntries.length !== 1 || !Number.isSafeInteger(browserEntries[0].id)) return 'invalid'
+  return browserEntries[0].id === childPid ? 'match' : 'pid-mismatch'
 }
 
 /**
@@ -328,16 +334,19 @@ function browserOwnsExpectedMain(answer, childPid) {
  */
 /**
  * @param {{ endpoint: string, childPid: number, timeoutMs: number, connect?: CdpConnector }} options
+ * @returns {Promise<OwnedCdpAttachment>}
  */
 export async function attachOwnedCdp({ endpoint, childPid, timeoutMs, connect = attach }) {
   if (typeof endpoint !== 'string' || !endpoint || !Number.isSafeInteger(childPid) || childPid <= 1) {
-    return { browser: null, transportUncertain: false, lateRelease: null }
+    return { browser: null, transportUncertain: false, lateRelease: null, failure: 'cdp-attach-failed' }
   }
   const deadline = performance.now() + timeoutMs
   const remaining = () => Math.max(0, deadline - performance.now())
   for (;;) {
     const attachRemaining = remaining()
-    if (attachRemaining <= 0) return { browser: null, transportUncertain: false, lateRelease: null }
+    if (attachRemaining <= 0) {
+      return { browser: null, transportUncertain: false, lateRelease: null, failure: 'cdp-endpoint-deadline' }
+    }
     const attachment = await attachWithLateCleanup(
       () => connect(endpoint, remaining()),
       (browser, closeTimeoutMs) => closeTransport(browser, closeTimeoutMs),
@@ -346,10 +355,17 @@ export async function attachOwnedCdp({ endpoint, childPid, timeoutMs, connect = 
     )
     if (!attachment.transport) {
       if (attachment.uncertain) {
-        return { browser: null, transportUncertain: true, lateRelease: attachment.lateRelease }
+        return {
+          browser: null,
+          transportUncertain: true,
+          lateRelease: attachment.lateRelease,
+          failure: 'cdp-transport-timeout'
+        }
       }
       const afterAttach = remaining()
-      if (afterAttach <= 0) return { browser: null, transportUncertain: false, lateRelease: null }
+      if (afterAttach <= 0) {
+        return { browser: null, transportUncertain: false, lateRelease: null, failure: 'cdp-endpoint-deadline' }
+      }
       await sleep(Math.min(100, afterAttach))
       continue
     }
@@ -358,7 +374,12 @@ export async function attachOwnedCdp({ endpoint, childPid, timeoutMs, connect = 
       const sessionRemaining = remaining()
       if (sessionRemaining <= 0) {
         const released = await closeTransport(browser, 1)
-        return { browser: null, transportUncertain: !released, lateRelease: attachment.lateRelease }
+        return {
+          browser: null,
+          transportUncertain: !released,
+          lateRelease: attachment.lateRelease,
+          failure: 'cdp-session-or-process-info-invalid'
+        }
       }
       const session = await boundedCall(
         () => browser.newBrowserCDPSession(),
@@ -368,7 +389,12 @@ export async function attachOwnedCdp({ endpoint, childPid, timeoutMs, connect = 
       const processRemaining = remaining()
       if (processRemaining <= 0) {
         const released = await closeTransport(browser, 1)
-        return { browser: null, transportUncertain: !released, lateRelease: attachment.lateRelease }
+        return {
+          browser: null,
+          transportUncertain: !released,
+          lateRelease: attachment.lateRelease,
+          failure: 'cdp-session-or-process-info-invalid'
+        }
       }
       const answer = await boundedCall(
         () => session.send('SystemInfo.getProcessInfo'),
@@ -378,16 +404,32 @@ export async function attachOwnedCdp({ endpoint, childPid, timeoutMs, connect = 
       const afterProcess = remaining()
       if (afterProcess <= 0) {
         const released = await closeTransport(browser, 1)
-        return { browser: null, transportUncertain: !released, lateRelease: attachment.lateRelease }
+        return {
+          browser: null,
+          transportUncertain: !released,
+          lateRelease: attachment.lateRelease,
+          failure: 'cdp-session-or-process-info-invalid'
+        }
       }
-      if (!browserOwnsExpectedMain(answer, childPid)) {
+      const ownership = browserMainOwnership(answer, childPid)
+      if (ownership !== 'match') {
         const released = await closeTransport(browser, afterProcess)
-        return { browser: null, transportUncertain: !released, lateRelease: attachment.lateRelease }
+        return {
+          browser: null,
+          transportUncertain: !released,
+          lateRelease: attachment.lateRelease,
+          failure: ownership === 'pid-mismatch' ? 'cdp-browser-pid-mismatch' : 'cdp-session-or-process-info-invalid'
+        }
       }
-      return { browser, transportUncertain: false, lateRelease: attachment.lateRelease }
+      return { browser, transportUncertain: false, lateRelease: attachment.lateRelease, failure: null }
     } catch {
       const released = await closeTransport(browser, Math.max(1, remaining()))
-      return { browser: null, transportUncertain: !released, lateRelease: attachment.lateRelease }
+      return {
+        browser: null,
+        transportUncertain: !released,
+        lateRelease: attachment.lateRelease,
+        failure: 'cdp-session-or-process-info-invalid'
+      }
     }
   }
 }

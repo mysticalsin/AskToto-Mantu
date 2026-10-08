@@ -257,7 +257,7 @@ describe('owned direct-launch endpoint handshakes', () => {
       timeoutMs: 1_000,
       connect: async () => browser
     })
-    expect(result).toMatchObject({ browser, transportUncertain: false })
+    expect(result).toMatchObject({ browser, transportUncertain: false, failure: null })
     expect(session.send).toHaveBeenCalledWith('SystemInfo.getProcessInfo')
     expect(close).not.toHaveBeenCalled()
   })
@@ -277,9 +277,80 @@ describe('owned direct-launch endpoint handshakes', () => {
         return browser
       }
     })
-    expect(result).toMatchObject({ browser, transportUncertain: false })
+    expect(result).toMatchObject({ browser, transportUncertain: false, failure: null })
     expect(attempts).toBe(2)
     expect(close).not.toHaveBeenCalled()
+  })
+
+  it('keeps invalid CDP attach input on the generic fallback without connecting', async () => {
+    const connect = vi.fn(async () => {
+      throw new Error('must not connect')
+    })
+    const result = await attachOwnedCdp({
+      endpoint: '',
+      childPid: 42,
+      timeoutMs: 1_000,
+      connect
+    })
+    expect(result).toMatchObject({
+      browser: null,
+      transportUncertain: false,
+      failure: 'cdp-attach-failed'
+    })
+    expect(connect).not.toHaveBeenCalled()
+  })
+
+  it('classifies a rejected CDP endpoint only after its shared deadline', async () => {
+    const now = vi
+      .spyOn(performance, 'now')
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(11)
+    try {
+      const result = await attachOwnedCdp({
+        endpoint: 'http://127.0.0.1:9222',
+        childPid: 42,
+        timeoutMs: 10,
+        connect: async () => {
+          throw new Error('synthetic endpoint rejection')
+        }
+      })
+      expect(result).toMatchObject({
+        browser: null,
+        transportUncertain: false,
+        failure: 'cdp-endpoint-deadline'
+      })
+    } finally {
+      now.mockRestore()
+    }
+  })
+
+  it('classifies a late CDP transport while retaining its owned release', async () => {
+    const close = vi.fn(async () => true)
+    const session = { send: vi.fn(async () => ({ processInfo: [{ type: 'browser', id: 42 }] })) }
+    const browser = { newBrowserCDPSession: vi.fn(async () => session), close }
+    const deferred: { resolve?: (value: typeof browser) => void } = {}
+    const result = await attachOwnedCdp({
+      endpoint: 'http://127.0.0.1:9222',
+      childPid: 42,
+      timeoutMs: 20,
+      connect: () =>
+        new Promise<typeof browser>((resolve) => {
+          deferred.resolve = resolve
+        })
+    })
+    expect(result).toMatchObject({
+      browser: null,
+      transportUncertain: true,
+      failure: 'cdp-transport-timeout'
+    })
+    const release = result.lateRelease
+    const resolveConnect = deferred.resolve
+    if (!release || !resolveConnect) throw new Error('expected owned late release')
+    resolveConnect(browser)
+    await expect(release(1_000)).resolves.toBe(true)
+    expect(close).toHaveBeenCalledTimes(1)
   })
 
   it('rejects a CDP ownership response that settles after its monotonic deadline', async () => {
@@ -301,19 +372,46 @@ describe('owned direct-launch endpoint handshakes', () => {
         timeoutMs: 10,
         connect: async () => browser
       })
-      expect(result).toMatchObject({ browser: null, transportUncertain: false })
+      expect(result).toMatchObject({
+        browser: null,
+        transportUncertain: false,
+        failure: 'cdp-session-or-process-info-invalid'
+      })
       expect(close).toHaveBeenCalledTimes(1)
     } finally {
       now.mockRestore()
     }
   })
 
-  it('closes a foreign or ambiguous CDP transport instead of accepting its pages', async () => {
-    const close = vi.fn(async () => false)
+  it('closes the transport when CDP session creation rejects', async () => {
+    const close = vi.fn(async () => true)
+    const browser = {
+      newBrowserCDPSession: async () => {
+        throw new Error('synthetic session rejection')
+      },
+      close
+    }
+    const result = await attachOwnedCdp({
+      endpoint: 'http://127.0.0.1:9222',
+      childPid: 42,
+      timeoutMs: 1_000,
+      connect: async () => browser
+    })
+    expect(result).toMatchObject({
+      browser: null,
+      transportUncertain: false,
+      failure: 'cdp-session-or-process-info-invalid'
+    })
+    expect(close).toHaveBeenCalledTimes(1)
+  })
+
+  it('closes the transport when CDP process-info request rejects', async () => {
+    const close = vi.fn(async () => true)
     const browser = {
       newBrowserCDPSession: async () => ({
-        processInfo: null,
-        send: async () => ({ processInfo: [{ type: 'browser', id: 42 }, { type: 'browser' }] })
+        send: async () => {
+          throw new Error('synthetic process-info rejection')
+        }
       }),
       close
     }
@@ -323,8 +421,87 @@ describe('owned direct-launch endpoint handshakes', () => {
       timeoutMs: 1_000,
       connect: async () => browser
     })
-    expect(result.browser).toBeNull()
-    expect(result.transportUncertain).toBe(true)
+    expect(result).toMatchObject({
+      browser: null,
+      transportUncertain: false,
+      failure: 'cdp-session-or-process-info-invalid'
+    })
+    expect(close).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['absent process info', {}],
+    ['non-array process info', { processInfo: {} }],
+    ['empty process info', { processInfo: [] }],
+    [
+      'multiple browser processes',
+      {
+        processInfo: [
+          { type: 'browser', id: 42 },
+          { type: 'browser', id: 42 }
+        ]
+      }
+    ],
+    ['non-safe-integer browser id', { processInfo: [{ type: 'browser', id: 42.5 }] }]
+  ])('closes a CDP transport with %s without accepting its pages', async (_case, answer) => {
+    const close = vi.fn(async () => true)
+    const browser = {
+      newBrowserCDPSession: async () => ({ send: async () => answer }),
+      close
+    }
+    const result = await attachOwnedCdp({
+      endpoint: 'http://127.0.0.1:9222',
+      childPid: 42,
+      timeoutMs: 1_000,
+      connect: async () => browser
+    })
+    expect(result).toMatchObject({
+      browser: null,
+      transportUncertain: false,
+      failure: 'cdp-session-or-process-info-invalid'
+    })
+    expect(close).toHaveBeenCalledTimes(1)
+  })
+
+  it('retains transport uncertainty when an invalid CDP transport cannot close', async () => {
+    const close = vi.fn(async () => false)
+    const browser = {
+      newBrowserCDPSession: async () => ({ send: async () => ({ processInfo: [] }) }),
+      close
+    }
+    const result = await attachOwnedCdp({
+      endpoint: 'http://127.0.0.1:9222',
+      childPid: 42,
+      timeoutMs: 1_000,
+      connect: async () => browser
+    })
+    expect(result).toMatchObject({
+      browser: null,
+      transportUncertain: true,
+      failure: 'cdp-session-or-process-info-invalid'
+    })
+    expect(close).toHaveBeenCalledTimes(1)
+  })
+
+  it('closes a structurally valid CDP browser whose pid differs from the owned child', async () => {
+    const close = vi.fn(async () => true)
+    const browser = {
+      newBrowserCDPSession: async () => ({
+        send: async () => ({ processInfo: [{ type: 'browser', id: 43 }] })
+      }),
+      close
+    }
+    const result = await attachOwnedCdp({
+      endpoint: 'http://127.0.0.1:9222',
+      childPid: 42,
+      timeoutMs: 1_000,
+      connect: async () => browser
+    })
+    expect(result).toMatchObject({
+      browser: null,
+      transportUncertain: false,
+      failure: 'cdp-browser-pid-mismatch'
+    })
     expect(close).toHaveBeenCalledTimes(1)
   })
 
