@@ -93,6 +93,7 @@ import { cpus, tmpdir } from 'node:os'
 import { basename, dirname, join, relative } from 'node:path'
 import { monitorEventLoopDelay } from 'node:perf_hooks'
 import { sha256File } from './provenance.mjs'
+import { queryMainLogPath } from './lib/main-log-query.mjs'
 import { createFifo, releaseFifo } from './fixtures/fifo.mjs'
 import {
   bootStagesFromAudit,
@@ -440,18 +441,6 @@ const SETUP = `(() => {
 
 const SUMMARY = '({ p99Ms: __st1.percentile(99) / 1e6, maxMs: __st1.max / 1e6 })'
 
-/** Where the candidate's electron-log main.log lives: app.getPath('logs'), which ASKTOTO_USERDATA does
- *  not relocate on macOS. */
-const MAIN_LOG_PATH = `(() => {
-  const load = process.mainModule?.require
-  if (typeof load !== 'function') return { error: 'process.mainModule.require is unavailable in the compiled main' }
-  try {
-    return { path: load('node:path').join(load('electron').app.getPath('logs'), 'main.log') }
-  } catch (error) {
-    return { error: String(error?.message ?? error) }
-  }
-})()`
-
 /** History's open: recallList and brainStatus started together, as History does, each timed on its own. */
 const HISTORY_OPEN_CALLS = timedCallsExpression(
   {
@@ -666,7 +655,7 @@ async function measure(cdp, run, { profile, minutes, spawnedAt, cpuProfilePath, 
  *  known is the best offset, and boot lines before SETUP may be missing. */
 async function locateMainLog(cdp, spawnedWallMs) {
   try {
-    const answer = await cdp.evaluate(MAIN_LOG_PATH, MAIN_LOG_QUERY_TIMEOUT_MS)
+    const answer = await queryMainLogPath(cdp, MAIN_LOG_QUERY_TIMEOUT_MS)
     if (answer.late) return { error: 'the main.log path query did not answer' }
     if (answer.value.error) return { error: answer.value.error }
     const path = answer.value.path
