@@ -3,7 +3,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFile
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   hoverWatchRestRect,
   parkAfterExclusiveOnboarding,
@@ -1327,17 +1327,33 @@ describe('navigation view readiness', () => {
       { ...reviewReady, backVisible: false, titleVisible: false },
       { ...reviewReady, titleVisible: false }
     ]
+    let observations = 0
+    let now = 0
     const page = {
-      evaluate: async () => snapshots.shift() ?? { ...reviewReady, titleVisible: false }
+      evaluate: async () => {
+        observations++
+        return snapshots.shift() ?? { ...reviewReady, titleVisible: false }
+      }
     }
-
-    await expect(
-      waitForNavigationView(
-        page,
-        { view: 'review', title: 'Smoke navigation beta' },
-        { timeoutMs: 5, pollMs: 1, wait: async () => undefined }
-      )
-    ).rejects.toThrow(/review view was not reached: target review was not visible/)
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      await expect(
+        waitForNavigationView(
+          page,
+          { view: 'review', title: 'Smoke navigation beta' },
+          {
+            timeoutMs: 5,
+            pollMs: 1,
+            wait: async (ms: number) => {
+              now += ms
+            }
+          }
+        )
+      ).rejects.toThrow(/review view was not reached: target review was not visible/)
+      expect(observations).toBe(5)
+    } finally {
+      clock.mockRestore()
+    }
   })
 
   it('waits for the requested Review title before returning to the requested History row', async () => {
