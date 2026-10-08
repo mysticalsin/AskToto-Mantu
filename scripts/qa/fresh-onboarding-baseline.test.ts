@@ -6,6 +6,7 @@ import {
   FRESH_ONBOARDING_SCHEMA,
   NOT_COVERED,
   assessFreshOnboardingReport,
+  cdpAttachFailure,
   createLatchedActionCall,
   createFreshOnboardingReport,
   findFreshOnboardingPage,
@@ -37,6 +38,13 @@ const expected = {
   harnessCommit: IDENTITY.harness_commit,
   platform: IDENTITY.platform
 } as const
+
+const CLOSED_CDP_FAILURES = [
+  'cdp-endpoint-deadline',
+  'cdp-transport-timeout',
+  'cdp-session-or-process-info-invalid',
+  'cdp-browser-pid-mismatch'
+] as const
 
 function passingReport() {
   return createFreshOnboardingReport({
@@ -94,6 +102,7 @@ describe('fresh onboarding baseline report', () => {
 
   it.each([
     'cdp-attach-failed',
+    ...CLOSED_CDP_FAILURES,
     'main-inspector-attach-failed',
     'profile-mismatch',
     'runtime-version-mismatch',
@@ -121,8 +130,23 @@ describe('fresh onboarding baseline report', () => {
     )
   })
 
+  it('maps only fixed CDP attachment reasons into the report vocabulary', () => {
+    for (const failure of CLOSED_CDP_FAILURES) {
+      expect(cdpAttachFailure(failure)).toBe(failure)
+    }
+    expect(cdpAttachFailure('cdp-attach-failed')).toBe('cdp-attach-failed')
+    for (const failure of [undefined, null, {}, 'synthetic endpoint error', 'cdp-endpoint-deadline\nextra']) {
+      expect(cdpAttachFailure(failure)).toBe('cdp-attach-failed')
+    }
+  })
+
   it('rejects arbitrary diagnostic text instead of extending the upload surface', () => {
-    for (const failure of ['arbitrary diagnostic text', 'cdp-attach-failed\nextra', 'profile-home-mismatch']) {
+    for (const failure of [
+      'arbitrary diagnostic text',
+      'cdp-attach-failed\nextra',
+      'cdp-endpoint-deadline\nextra',
+      'profile-home-mismatch'
+    ]) {
       expect(reportProblems({ ...passingReport(), outcome: 'FAIL', failure })).toContain('REPORT_FAILURE_INVALID')
     }
   })
