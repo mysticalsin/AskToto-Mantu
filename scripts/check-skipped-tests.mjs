@@ -20,10 +20,11 @@
  *     answer that was written down by whoever skipped it;
  *   - a skip that no longer happens fails too, so the baseline cannot rot upward-of-reality.
  *
- * Run: `npm run check:skips` (needs a vitest JSON report; it produces one if absent).
+ * Run: `npm run check:skips [root-report.json]`. With no report argument it produces its own report;
+ * a supplied report is evidence from a completed root run and must be complete and successful.
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
@@ -126,27 +127,132 @@ if (allowed === undefined) {
   process.exit(1)
 }
 
-let reportPath = process.argv[2]
-let tmp
-if (!reportPath || !existsSync(reportPath)) {
-  tmp = mkdtempSync(join(tmpdir(), 'metis-skips-'))
-  reportPath = join(tmp, 'report.json')
-  try {
-    execFileSync(process.execPath, [join(repoRoot, 'node_modules', 'vitest', 'vitest.mjs'), 'run', '--reporter=json', `--outputFile=${reportPath}`], {
-      cwd: repoRoot,
-      stdio: 'ignore'
-    })
-  } catch {
-    /* a failing suite still writes the report; the suite's own gate reports that */
-  }
-}
+const REQUIRED_SUMMARY_COUNTS = [
+  'numTotalTestSuites',
+  'numPassedTestSuites',
+  'numFailedTestSuites',
+  'numPendingTestSuites',
+  'numTotalTests',
+  'numPassedTests',
+  'numFailedTests',
+  'numPendingTests',
+  'numTodoTests'
+]
+const ASSERTION_STATUSES = new Set(['passed', 'failed', 'pending', 'skipped', 'todo'])
 
-if (!existsSync(reportPath)) {
-  console.error('[check:skips] FAIL — no vitest JSON report was produced, so nothing was measured.')
+function failReport(label) {
+  console.error(`[check:skips] FAIL ${label}`)
   process.exit(1)
 }
 
-const report = JSON.parse(readFileSync(reportPath, 'utf8'))
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isCount(value) {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
+function readJsonReport(reportPath) {
+  let text
+  try {
+    text = readFileSync(reportPath, 'utf8')
+  } catch {
+    failReport('[report:unreadable]')
+  }
+
+  let report
+  try {
+    report = JSON.parse(text)
+  } catch {
+    failReport('[report:malformed]')
+  }
+  if (!isRecord(report)) failReport('[report:invalid]')
+  return report
+}
+
+function validateSuppliedReport(report) {
+  for (const key of REQUIRED_SUMMARY_COUNTS) {
+    if (!isCount(report[key])) failReport('[report:invalid]')
+  }
+
+  if (report.success !== true || report.numFailedTests !== 0 || report.numFailedTestSuites !== 0) {
+    failReport('[report:failed]')
+  }
+
+  if (
+    !Array.isArray(report.testResults) ||
+    report.testResults.length === 0 ||
+    report.numTotalTestSuites === 0 ||
+    report.numTotalTests === 0
+  ) {
+    failReport('[report:incomplete]')
+  }
+
+  const suiteTotal = report.numPassedTestSuites + report.numFailedTestSuites + report.numPendingTestSuites
+  if (suiteTotal !== report.numTotalTestSuites) failReport('[report:incomplete]')
+
+  let assertions = 0
+  for (const file of report.testResults) {
+    if (!isRecord(file) || !Array.isArray(file.assertionResults)) {
+      failReport('[report:incomplete]')
+    }
+    if (file.status === 'failed') failReport('[report:failed]')
+    if (file.status !== 'passed') failReport('[report:invalid]')
+
+    for (const assertion of file.assertionResults) {
+      if (!isRecord(assertion) || typeof assertion.status !== 'string' || !ASSERTION_STATUSES.has(assertion.status)) {
+        failReport('[report:invalid]')
+      }
+      if (assertion.status === 'failed') failReport('[report:failed]')
+      assertions += 1
+    }
+  }
+
+  if (assertions !== report.numTotalTests) failReport('[report:incomplete]')
+}
+
+const reportArgs = process.argv.slice(2)
+if (reportArgs.length > 1) failReport('[report:arguments]')
+
+const suppliedReport = reportArgs.length === 1
+let reportPath
+let tmp
+let report
+if (suppliedReport) {
+  reportPath = reportArgs[0]
+  if (!reportPath) failReport('[report:missing]')
+  let metadata
+  try {
+    metadata = lstatSync(reportPath)
+  } catch {
+    failReport('[report:missing]')
+  }
+  if (!metadata.isFile()) failReport('[report:not-file]')
+  report = readJsonReport(reportPath)
+  validateSuppliedReport(report)
+} else {
+  tmp = mkdtempSync(join(tmpdir(), 'metis-skips-'))
+  reportPath = join(tmp, 'report.json')
+  try {
+    execFileSync(
+      process.execPath,
+      [join(repoRoot, 'node_modules', 'vitest', 'vitest.mjs'), 'run', '--reporter=json', `--outputFile=${reportPath}`],
+      {
+        cwd: repoRoot,
+        stdio: 'ignore'
+      }
+    )
+  } catch {
+    /* a failing suite still writes the report; the suite's own gate reports that */
+  }
+  if (!existsSync(reportPath)) {
+    console.error('[check:skips] FAIL — no vitest JSON report was produced, so nothing was measured.')
+    process.exit(1)
+  }
+  report = readJsonReport(reportPath)
+}
+
 const skipped = []
 for (const file of report.testResults ?? []) {
   for (const t of file.assertionResults ?? []) {
