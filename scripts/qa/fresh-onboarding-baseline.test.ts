@@ -169,12 +169,13 @@ describe('fresh onboarding runtime identity diagnostics', () => {
     { profileMatches: false, versionMatches: true, failure: 'profile-mismatch' },
     { profileMatches: true, versionMatches: false, failure: 'runtime-version-mismatch' },
     { profileMatches: false, versionMatches: false, failure: 'profile-and-runtime-version-mismatch' }
-  ])(
-    'maps profile=$profileMatches version=$versionMatches to $failure',
-    ({ profileMatches, versionMatches, failure }) => {
-      expect(freshOnboardingIdentityFailure(profileMatches, versionMatches)).toBe(failure)
-    }
-  )
+  ])('maps profile=$profileMatches version=$versionMatches to $failure', ({
+    profileMatches,
+    versionMatches,
+    failure
+  }) => {
+    expect(freshOnboardingIdentityFailure(profileMatches, versionMatches)).toBe(failure)
+  })
 })
 
 describe('fresh onboarding archive identity', () => {
