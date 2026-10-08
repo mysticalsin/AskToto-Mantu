@@ -291,9 +291,9 @@ describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
 
   it('tests the direct owner-route refusal in an independent blocking hosted job', () => {
     const canary = readFileSync(join(root, '.github/workflows/isolation-canary.yml'), 'utf8').replace(/\r\n/g, '\n')
-    const block = canary.split(/\n(?= {2}[A-Za-z_][A-Za-z0-9_-]*:)/).find((entry) =>
-      entry.startsWith('  owner-route-hold:\n')
-    )
+    const block = canary
+      .split(/\n(?= {2}[A-Za-z_][A-Za-z0-9_-]*:)/)
+      .find((entry) => entry.startsWith('  owner-route-hold:\n'))
     expect(block).toBeDefined()
     expect(block).toMatch(/^ {4}runs-on: ubuntu-latest$/m)
     expect(block).toMatch(/^ {4}timeout-minutes: 5$/m)

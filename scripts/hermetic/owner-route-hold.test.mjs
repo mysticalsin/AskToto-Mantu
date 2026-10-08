@@ -49,19 +49,23 @@ for (const profile of [undefined, 'owner-account.sb', 'owner-runner.sb', 'invali
           const sentinel = join(temp, 'cleanup-sentinel')
           writeFileSync(sentinel, 'preserve synthetic state')
           const before = readdirSync(root, { recursive: true }).sort()
-          const result = invoke(cleanup ? ['--cleanup-owned-temp'] : child, {
-            ...(profile === undefined ? {} : { OWNER_SANDBOX_PROFILE: profile }),
-            OWNER_SANDBOX_ROUTE: 'owner',
-            OWNER_SANDBOX_ENTERED: '1',
-            OWNER_SANDBOX_ENTERED_PROFILE: 'owner-runner.sb',
-            OWNER_SANDBOX_ALLOW_OWNER: '1',
-            GITHUB_ACTIONS: 'true',
-            RUNNER_ENVIRONMENT: 'self-hosted',
-            GITHUB_JOB: 'st1-mac-fifo',
-            GITHUB_RUN_ID: '123',
-            GITHUB_RUN_ATTEMPT: '1',
-            ...(validRoots ? { HOME: home, RUNNER_TEMP: temp, GITHUB_WORKSPACE: root } : {})
-          }, root)
+          const result = invoke(
+            cleanup ? ['--cleanup-owned-temp'] : child,
+            {
+              ...(profile === undefined ? {} : { OWNER_SANDBOX_PROFILE: profile }),
+              OWNER_SANDBOX_ROUTE: 'owner',
+              OWNER_SANDBOX_ENTERED: '1',
+              OWNER_SANDBOX_ENTERED_PROFILE: 'owner-runner.sb',
+              OWNER_SANDBOX_ALLOW_OWNER: '1',
+              GITHUB_ACTIONS: 'true',
+              RUNNER_ENVIRONMENT: 'self-hosted',
+              GITHUB_JOB: 'st1-mac-fifo',
+              GITHUB_RUN_ID: '123',
+              GITHUB_RUN_ATTEMPT: '1',
+              ...(validRoots ? { HOME: home, RUNNER_TEMP: temp, GITHUB_WORKSPACE: root } : {})
+            },
+            root
+          )
           assert.equal(result.error, undefined)
           assert.equal(result.signal, null)
           assert.equal(result.status, 2)
@@ -82,10 +86,14 @@ for (const profile of [undefined, 'owner-account.sb', 'owner-runner.sb', 'invali
 }
 
 test('the actual hosted-fixture route still reaches the Darwin guard on Linux', () => {
-  const result = invoke(['/bin/true'], {
-    OWNER_SANDBOX_PROFILE: 'owner-runner.sb',
-    OWNER_SANDBOX_ROUTE: 'hosted-fixture'
-  }, dirname(wrapper))
+  const result = invoke(
+    ['/bin/true'],
+    {
+      OWNER_SANDBOX_PROFILE: 'owner-runner.sb',
+      OWNER_SANDBOX_ROUTE: 'hosted-fixture'
+    },
+    dirname(wrapper)
+  )
   assert.equal(result.error, undefined)
   assert.equal(result.signal, null)
   assert.equal(result.status, 2)
