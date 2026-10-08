@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
 import type { AddressInfo, Socket } from 'node:net'
 import { clearTimeout as realClearTimeout, setTimeout as realSetTimeout } from 'node:timers'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from 'vitest'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { inspectorClient } from '../golden-flows/right-edge-hide-rows.mjs'
 
@@ -104,7 +104,7 @@ async function rejected(outcome: ReturnType<typeof observe>) {
 type Request = { id: number; method: string; params?: Record<string, unknown> }
 type Mode = 'websocket' | 'stall-upgrade' | 'refuse-upgrade' | 'no-close-ack'
 const cleanups: Array<() => Promise<void>> = []
-let clearedTimers: ReturnType<typeof vi.spyOn>
+let clearedTimers: MockInstance<typeof globalThis.clearTimeout>
 
 beforeEach(() => {
   // This spy forwards real clears. Fixture deadlines use the original timer functions directly.
