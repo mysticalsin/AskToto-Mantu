@@ -391,16 +391,17 @@ export function launchIsolationReport(plan, observation, requested) {
     brokerLookupDenial: observation.brokerLookupDenial ?? null,
     identity: observation.identity ?? null,
     admittedArguments: plan ? [...plan.argv] : null,
-    configuredStorage: plan ? {
-      mockKeychain: plan.requested.mockKeychain,
-      localKeystore: plan.requested.localKeystore,
-      initialization: 'not-observed'
-    } : null,
+    configuredStorage: plan
+      ? {
+          mockKeychain: plan.requested.mockKeychain,
+          localKeystore: plan.requested.localKeystore,
+          initialization: 'not-observed'
+        }
+      : null,
     spawnAttempted: observation.spawnAttempted === true,
     processSpawned: observation.processSpawned === true,
     inspectorConnected: observation.inspectorConnected === true,
-    chromiumSandboxDisabledAtSpawn:
-      observation.processSpawned === true && plan?.requested.chromiumSandbox === 'off'
+    chromiumSandboxDisabledAtSpawn: observation.processSpawned === true && plan?.requested.chromiumSandbox === 'off'
   }
 }
 

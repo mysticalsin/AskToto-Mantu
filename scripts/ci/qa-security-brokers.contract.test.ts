@@ -30,8 +30,13 @@ function job(source: string, name: string) {
 }
 
 describe('Security broker isolation wiring [M2-0538]', () => {
-  it.each(['st1-mac-fifo', 'st1-mac-control'])('binds pre/post and each actual %s launch to the pinned probe', (name) => {
-    const steps = job(workflow, name).split(/^(?= {6}- )/m).slice(1)
+  it.each([
+    'st1-mac-fifo',
+    'st1-mac-control'
+  ])('binds pre/post and each actual %s launch to the pinned probe', (name) => {
+    const steps = job(workflow, name)
+      .split(/^(?= {6}- )/m)
+      .slice(1)
     const one = (pattern: RegExp) => {
       const matches = steps.filter((step) => pattern.test(step))
       expect(matches).toHaveLength(1)
@@ -48,7 +53,9 @@ describe('Security broker isolation wiring [M2-0538]', () => {
       expect(step).toContain('BASH_ENV: /dev/null')
       expect(step).toContain('ENV: /dev/null')
       expect(step).toContain('OWNER_SANDBOX_PROFILE: owner-runner.sb')
-      expect(step).toContain('/bin/bash scripts/hermetic/run-under-owner-sandbox.sh /bin/bash --noprofile --norc scripts/hermetic/verify-security-brokers.sh')
+      expect(step).toContain(
+        '/bin/bash scripts/hermetic/run-under-owner-sandbox.sh /bin/bash --noprofile --norc scripts/hermetic/verify-security-brokers.sh'
+      )
       expect(step).not.toContain('QA_SERVICE_ABSENT')
     }
     expect(after.indexOf('[ "${actual%% *}" = "$QA_CHECK_SHA256" ]')).toBeGreaterThan(0)
@@ -89,7 +96,9 @@ describe('Security broker isolation wiring [M2-0538]', () => {
     expect(validate).toBeGreaterThan(0)
     expect(observe).toBeGreaterThan(validate)
     expect(timed).toBeGreaterThan(observe)
-    expect(main).toContain('if (planned.restricted) launchObservation.brokerLookupDenial = observeSecurityBrokers(launchEnv)')
+    expect(main).toContain(
+      'if (planned.restricted) launchObservation.brokerLookupDenial = observeSecurityBrokers(launchEnv)'
+    )
   })
 
   it('runs independent hosted filesystem and broker proofs without report-only or change-skip policies', () => {

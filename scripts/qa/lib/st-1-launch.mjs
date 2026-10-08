@@ -22,8 +22,11 @@ export const BROKER_PROBE_OUTPUT = `${BROKERS.map((name) => `${name} 1100 0\n`).
 
 export function requireBrokerDenial(result) {
   if (
-    result.error || result.signal || result.status !== 0 ||
-    result.stdout !== BROKER_PROBE_OUTPUT || result.stderr !== ''
+    result.error ||
+    result.signal ||
+    result.status !== 0 ||
+    result.stdout !== BROKER_PROBE_OUTPUT ||
+    result.stderr !== ''
   ) {
     throw new Error('Security broker lookup denial not established')
   }
@@ -35,23 +38,32 @@ export function observeSecurityBrokers(env, spawnProbe = spawnSync) {
   const probe = env.QA_CHECK_PATH
   const digest = env.QA_CHECK_SHA256
   const root = env.OWNER_SANDBOX_JOB_ROOT
-  const expectedRoot = env.RUNNER_TEMP && join(
-    env.RUNNER_TEMP,
-    `metis-owner-${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}-${env.GITHUB_JOB}`
-  )
+  const expectedRoot =
+    env.RUNNER_TEMP &&
+    join(env.RUNNER_TEMP, `metis-owner-${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}-${env.GITHUB_JOB}`)
   if (
-    !control || !root || root !== expectedRoot || !isAbsolute(control) || !isAbsolute(root) ||
-    realpathSync(control) !== control || realpathSync(root) !== root ||
-    dirname(dirname(control)) !== root || !/^invocation\.[A-Za-z0-9]+$/.test(basename(dirname(control))) ||
+    !control ||
+    !root ||
+    root !== expectedRoot ||
+    !isAbsolute(control) ||
+    !isAbsolute(root) ||
+    realpathSync(control) !== control ||
+    realpathSync(root) !== root ||
+    dirname(dirname(control)) !== root ||
+    !/^invocation\.[A-Za-z0-9]+$/.test(basename(dirname(control))) ||
     !/^broker-control\.[A-Za-z0-9]+$/.test(basename(control)) ||
-    probe !== join(control, 'check-security-brokers') || !/^[a-f0-9]{64}$/.test(digest ?? '')
+    probe !== join(control, 'check-security-brokers') ||
+    !/^[a-f0-9]{64}$/.test(digest ?? '')
   ) {
     throw new Error('invalid pinned Security broker probe configuration')
   }
   const info = lstatSync(probe)
   if (
-    !info.isFile() || info.isSymbolicLink() || info.nlink !== 1 ||
-    (process.getuid && info.uid !== process.getuid()) || realpathSync(probe) !== probe ||
+    !info.isFile() ||
+    info.isSymbolicLink() ||
+    info.nlink !== 1 ||
+    (process.getuid && info.uid !== process.getuid()) ||
+    realpathSync(probe) !== probe ||
     createHash('sha256').update(readFileSync(probe)).digest('hex') !== digest
   ) {
     throw new Error('Security broker probe identity or digest mismatch')
@@ -97,9 +109,7 @@ export async function verifyCandidate(installerPath, provenancePath) {
   const provenance = JSON.parse(readFileSync(provenancePath, 'utf8'))
   const name = basename(installerPath)
   const matches = provenance.builds.flatMap((build) =>
-    build.assets
-      .filter((asset) => asset.name === name)
-      .map((asset) => ({ asset, variant: build.variant }))
+    build.assets.filter((asset) => asset.name === name).map((asset) => ({ asset, variant: build.variant }))
   )
   if (matches.length !== 1) {
     throw new Error(`expected one provenance asset named ${name}, found ${matches.length}`)
@@ -189,10 +199,9 @@ export function observeCanary(env, io = { readFileSync, openSync, closeSync }) {
     throw new Error('missing wrapper-owned canary configuration')
   }
   const root = env.OWNER_SANDBOX_JOB_ROOT
-  const expected = env.RUNNER_TEMP && join(
-    env.RUNNER_TEMP,
-    `metis-owner-${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}-${env.GITHUB_JOB}`
-  )
+  const expected =
+    env.RUNNER_TEMP &&
+    join(env.RUNNER_TEMP, `metis-owner-${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}-${env.GITHUB_JOB}`)
   if (
     !root ||
     root !== expected ||
