@@ -40,9 +40,9 @@ describe('owned ST-1 termination', () => {
 
   it('does not signal a pre-exited root with a surviving or reused numeric group', async () => {
     const signal = vi.fn(() => true)
-    await expect(
-      stopOwnedChild({ ...child(), exitCode: 0 }, { platform: 'linux', signal })
-    ).resolves.toEqual(failed('group-still-present'))
+    await expect(stopOwnedChild({ ...child(), exitCode: 0 }, { platform: 'linux', signal })).resolves.toEqual(
+      failed('group-still-present')
+    )
     expect(signal.mock.calls).toEqual([[-fixturePid, 0]])
   })
 
@@ -153,9 +153,9 @@ describe('owned ST-1 termination', () => {
 
   it('refuses an already exited Windows root without invoking taskkill', async () => {
     const taskkill = vi.fn()
-    await expect(
-      stopOwnedChild({ ...child(), exitCode: 0 }, { platform: 'win32', taskkill })
-    ).resolves.toEqual(failed('root-exit-unobserved'))
+    await expect(stopOwnedChild({ ...child(), exitCode: 0 }, { platform: 'win32', taskkill })).resolves.toEqual(
+      failed('root-exit-unobserved')
+    )
     expect(taskkill).not.toHaveBeenCalled()
   })
 
@@ -187,19 +187,19 @@ describe('owned ST-1 termination', () => {
     expect(signal).not.toHaveBeenCalled()
   })
 
-  it.each(['C:\\untrusted\\taskkill.exe', '\\\\untrusted\\share\\taskkill.exe'])(
-    'cannot substitute a caller-selected executable: %s',
-    async (taskkillPath) => {
-      const owned = child()
-      const unsupported = { taskkillPath }
-      const taskkill = vi.fn((_path: string) => {
-        owned.exitCode = 0
-      })
-      await expect(stopOwnedChild(owned, { ...unsupported, platform: 'win32', taskkill })).resolves.toEqual(ack)
-      expect(taskkill).toHaveBeenCalledTimes(1)
-      expect(taskkill.mock.calls[0]?.[0]).toBe(WIN_TASKKILL)
-    }
-  )
+  it.each([
+    'C:\\untrusted\\taskkill.exe',
+    '\\\\untrusted\\share\\taskkill.exe'
+  ])('cannot substitute a caller-selected executable: %s', async (taskkillPath) => {
+    const owned = child()
+    const unsupported = { taskkillPath }
+    const taskkill = vi.fn((_path: string) => {
+      owned.exitCode = 0
+    })
+    await expect(stopOwnedChild(owned, { ...unsupported, platform: 'win32', taskkill })).resolves.toEqual(ack)
+    expect(taskkill).toHaveBeenCalledTimes(1)
+    expect(taskkill.mock.calls[0]?.[0]).toBe(WIN_TASKKILL)
+  })
 
   it('refuses a relative system-root target before invoking any executable', async () => {
     vi.stubEnv('SystemRoot', 'relative-system-root')
@@ -212,33 +212,33 @@ describe('owned ST-1 termination', () => {
     expect(taskkill).not.toHaveBeenCalled()
   })
 
-  it.each([false, true])(
-    'never acknowledges a probe completed after the deadline (pre-exited: %s)',
-    async (preExited) => {
-      const owned = { ...child(), exitCode: preExited ? 0 : null }
-      let clock = 0
-      const signal = vi.fn((_pid: number, kind: number | string) => {
-        if (kind === 0 && (preExited || clock > 0)) {
-          clock = 60
-          owned.exitCode = 0
-          throw missing()
+  it.each([
+    false,
+    true
+  ])('never acknowledges a probe completed after the deadline (pre-exited: %s)', async (preExited) => {
+    const owned = { ...child(), exitCode: preExited ? 0 : null }
+    let clock = 0
+    const signal = vi.fn((_pid: number, kind: number | string) => {
+      if (kind === 0 && (preExited || clock > 0)) {
+        clock = 60
+        owned.exitCode = 0
+        throw missing()
+      }
+      return true
+    })
+    await expect(
+      stopOwnedChild(owned, {
+        platform: 'linux',
+        signal,
+        timeoutMs: 60,
+        now: () => clock,
+        sleep: async (ms: number) => {
+          clock += ms
         }
-        return true
       })
-      await expect(
-        stopOwnedChild(owned, {
-          platform: 'linux',
-          signal,
-          timeoutMs: 60,
-          now: () => clock,
-          sleep: async (ms: number) => {
-            clock += ms
-          }
-        })
-      ).resolves.toEqual(failed('deadline-expired'))
-      if (preExited) expect(signal.mock.calls).toEqual([[-fixturePid, 0]])
-    }
-  )
+    ).resolves.toEqual(failed('deadline-expired'))
+    if (preExited) expect(signal.mock.calls).toEqual([[-fixturePid, 0]])
+  })
 })
 
 describe('closed teardown receipt', () => {

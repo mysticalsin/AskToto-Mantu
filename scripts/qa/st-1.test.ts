@@ -1974,18 +1974,21 @@ describe('buildLaunchFailureReport', () => {
 })
 
 describe('ST-1 teardown is a prerequisite for a final report', () => {
-  it.each([undefined, null, {}, { state: 'pending' }, { state: 'acknowledged', private: 'must not escape' }])(
-    'fails closed on a missing or malformed receipt: %j',
-    (teardown) => {
-      const built = report({ teardown })
-      expect(built).toMatchObject({
-        complete: false,
-        verdict: 'INCOMPLETE',
-        teardown: { state: 'unacknowledged', reason: 'invalid-receipt' }
-      })
-      expect(JSON.stringify(built)).not.toContain('must not escape')
-    }
-  )
+  it.each([
+    undefined,
+    null,
+    {},
+    { state: 'pending' },
+    { state: 'acknowledged', private: 'must not escape' }
+  ])('fails closed on a missing or malformed receipt: %j', (teardown) => {
+    const built = report({ teardown })
+    expect(built).toMatchObject({
+      complete: false,
+      verdict: 'INCOMPLETE',
+      teardown: { state: 'unacknowledged', reason: 'invalid-receipt' }
+    })
+    expect(JSON.stringify(built)).not.toContain('must not escape')
+  })
 
   it('preserves measured criteria and the original error but cannot pass unsafe teardown', () => {
     const built = report({

@@ -1043,9 +1043,7 @@ async function main() {
     }
     cdp?.close()
     try {
-      teardown = normalizeTeardown(
-        child ? await stopOwnedChild(child) : { state: 'acknowledged' }
-      )
+      teardown = normalizeTeardown(child ? await stopOwnedChild(child) : { state: 'acknowledged' })
     } catch {
       teardown = normalizeTeardown(null)
     }

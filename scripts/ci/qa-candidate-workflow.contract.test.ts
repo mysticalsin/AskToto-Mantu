@@ -588,7 +588,7 @@ describe('QA candidate owned-process acknowledgement', () => {
       expect(step).toMatch(/^        continue-on-error: true$/m)
     }
     expect(measure).toContain('type == "array" and length > 0')
-    expect(remeasure).toContain("jq -e 'type == \"array\"' st1-report/window-remeasure-plan.json")
+    expect(remeasure).toContain('jq -e \'type == "array"\' st1-report/window-remeasure-plan.json')
   })
 
   it('evaluates both real jq receipt predicates against safe, unsafe and corrupt final reports', () => {

@@ -903,7 +903,7 @@ export function buildReport({
   attribution,
   complete,
   harnessError,
-  teardown = null,
+  teardown = /** @type {unknown} */ (null),
   historyMode = 'on',
   fixtureCounts = null,
   purpose = 'st-1',
