@@ -83,6 +83,7 @@ globalThis.fetch = async (endpoint, options) => {
 
 function run(fixture: Fixture = {}) {
   const root = mkdtempSync(join(tmpdir(), `metis-cf-probe-${SENTINEL}-`))
+  const repository = join(root, '__fixtures__')
   const write = (path: string, text: string) => {
     const target = join(root, path)
     mkdirSync(dirname(target), { recursive: true })
@@ -93,8 +94,8 @@ function run(fixture: Fixture = {}) {
     const temp = join(root, 'tmp')
     mkdirSync(home)
     mkdirSync(temp)
-    mkdirSync(join(root, 'scripts'))
-    copyFileSync(GATE, join(root, 'scripts', 'check-cloudflare-key-valid.mjs'))
+    mkdirSync(join(repository, 'scripts'), { recursive: true })
+    copyFileSync(GATE, join(repository, 'scripts', 'check-cloudflare-key-valid.mjs'))
     const request = {
       endpoint: `${fixture.route === 'direct' ? DIRECT : WORKER}/chat/completions`,
       method: 'POST',
@@ -107,7 +108,7 @@ function run(fixture: Fixture = {}) {
     if (fixture.credential === 'malformed-payload') payload = `{${SENTINEL}}`
     if (fixture.credential === 'empty') payload = JSON.stringify({ token: 42 })
     write(
-      'fixture.json',
+      '__fixtures__/fixture.json',
       JSON.stringify({
         ...fixture,
         status: fixture.status ?? 200,
@@ -118,7 +119,7 @@ function run(fixture: Fixture = {}) {
       })
     )
     write(
-      'evidence.json',
+      '__fixtures__/evidence.json',
       JSON.stringify({
         preloadLoaded: false,
         decryptCalls: 0,
@@ -128,26 +129,28 @@ function run(fixture: Fixture = {}) {
         bodyReads: 0
       })
     )
-    write('fixture-runtime.mjs', RUNTIME)
-    write('scripts/lib/embedded-cloudflare-crypto.mjs', CRYPTO)
-    write('preload.mjs', PRELOAD)
+    write('__fixtures__/fixture-runtime.mjs', RUNTIME)
+    write('__fixtures__/scripts/lib/embedded-cloudflare-crypto.mjs', CRYPTO)
+    write('__fixtures__/preload.mjs', PRELOAD)
     if (fixture.credential !== 'keyless') {
       write(
-        'build/cloudflare-embed/key.json',
+        '__fixtures__/build/cloudflare-embed/key.json',
         fixture.credential === 'malformed-bundle' ? SENTINEL : JSON.stringify(BLOB)
       )
     }
-    if (fixture.missing !== 'endpoint') write('src/shared/ipc.ts', `export const METIS_WORKER_URL = '${WORKER}'\n`)
-    if (fixture.missing !== 'model') write('src/shared/providers.ts', `defaultModel: '${MODEL}'\n`)
+    if (fixture.missing !== 'endpoint') {
+      write('__fixtures__/src/shared/ipc.ts', `export const METIS_WORKER_URL = '${WORKER}'\n`)
+    }
+    if (fixture.missing !== 'model') write('__fixtures__/src/shared/providers.ts', `defaultModel: '${MODEL}'\n`)
     const result = spawnSync(
       process.execPath,
       [
         '--import',
-        pathToFileURL(join(root, 'preload.mjs')).href,
-        join(root, 'scripts', 'check-cloudflare-key-valid.mjs')
+        pathToFileURL(join(repository, 'preload.mjs')).href,
+        join(repository, 'scripts', 'check-cloudflare-key-valid.mjs')
       ],
       {
-        cwd: root,
+        cwd: repository,
         env: {
           HOME: home,
           USERPROFILE: home,
@@ -167,7 +170,7 @@ function run(fixture: Fixture = {}) {
     )
     expect(result.error, 'synthetic CLI child must complete within its bound').toBeUndefined()
     expect(result.signal).toBeNull()
-    const evidence = JSON.parse(readFileSync(join(root, 'evidence.json'), 'utf8')) as Evidence
+    const evidence = JSON.parse(readFileSync(join(repository, 'evidence.json'), 'utf8')) as Evidence
     expect(evidence.preloadLoaded).toBe(true)
     expect(evidence.cryptoValid).toBe(true)
     expect(evidence.requestValid).toBe(true)
@@ -215,15 +218,16 @@ describe('MQA-254 — the embedded Cloudflare key must be provably accepted befo
     expectSafeDiagnostic(r)
   })
 
-  it.each(['malformed-bundle', 'malformed-payload', 'decrypt-error'] as const)(
-    'reports %s without exception text or credential material',
-    (credential) => {
-      const r = run({ credential })
-      expect(r.code).toBe(1)
-      expect(r.out).toMatch(/could not be read\/decrypted/)
-      expectSafeDiagnostic(r)
-    }
-  )
+  it.each([
+    'malformed-bundle',
+    'malformed-payload',
+    'decrypt-error'
+  ] as const)('reports %s without exception text or credential material', (credential) => {
+    const r = run({ credential })
+    expect(r.code).toBe(1)
+    expect(r.out).toMatch(/could not be read\/decrypted/)
+    expectSafeDiagnostic(r)
+  })
 
   it('rejects a decrypted payload without a usable credential', () => {
     const r = run({ credential: 'empty' })
