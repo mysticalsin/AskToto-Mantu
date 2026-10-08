@@ -1,0 +1,75 @@
+name: QA ZIP metadata inventory
+
+# Inspection only: no install, app launch, rebuild, release or owner-account execution.
+on:
+  push:
+    branches: ['**']
+    paths:
+      - scripts/qa/inventory_qa_zip.py
+      - scripts/qa/test_inventory_qa_zip.py
+      - .github/workflows/qa-zip-inventory.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    if: github.repository == 'mysticalsin/AskToto-Mantu' && github.ref_type == 'branch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Test with synthetic ZIP bytes only
+        timeout-minutes: 3
+        run: >-
+          env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" TMPDIR="$RUNNER_TEMP"
+          /usr/bin/python3.12 -B scripts/qa/test_inventory_qa_zip.py
+      - name: Download and bind the two retained outer artifacts
+        id: download
+        timeout-minutes: 18
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" TMPDIR="$RUNNER_TEMP" \
+            GH_TOKEN="$GH_TOKEN" GITHUB_OUTPUT="$GITHUB_OUTPUT" \
+            GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
+            GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GITHUB_SHA="$GITHUB_SHA" \
+            GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
+            RUNNER_TEMP="$RUNNER_TEMP" \
+            /usr/bin/python3.12 -B scripts/qa/inventory_qa_zip.py download
+      - name: Inventory central metadata and bounded link traits without a token
+        timeout-minutes: 5
+        env:
+          WORK_ROOT: ${{ steps.download.outputs.root }}
+        run: |
+          env -i PATH=/usr/bin:/bin HOME="$WORK_ROOT" TMPDIR="$WORK_ROOT" \
+            GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
+            GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GITHUB_SHA="$GITHUB_SHA" \
+            GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
+            RUNNER_TEMP="$RUNNER_TEMP" \
+            /usr/bin/python3.12 -B scripts/qa/inventory_qa_zip.py inventory "$WORK_ROOT"
+      - name: Upload aggregate report only
+        if: always() && steps.download.outputs.root != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: qa-zip-metadata-inventory
+          path: ${{ steps.download.outputs.root }}/inventory.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove only the owned inventory directory
+        if: always() && steps.download.outputs.root != ''
+        env:
+          WORK_ROOT: ${{ steps.download.outputs.root }}
+        run: |
+          env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" TMPDIR="$RUNNER_TEMP" \
+            GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
+            GITHUB_REPOSITORY="$GITHUB_REPOSITORY" RUNNER_TEMP="$RUNNER_TEMP" \
+            /usr/bin/python3.12 -B scripts/qa/inventory_qa_zip.py cleanup "$WORK_ROOT"
