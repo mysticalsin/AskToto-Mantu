@@ -9,7 +9,10 @@ const project = read('native-app', 'project.yml')
 
 function nativeJob(): string {
   const lines = workflow.split('\n')
-  expect(lines.filter((line) => line === '  native:'), 'one native build job').toHaveLength(1)
+  expect(
+    lines.filter((line) => line === '  native:'),
+    'one native build job'
+  ).toHaveLength(1)
   const start = lines.indexOf('  native:')
   const end = lines.findIndex((line, index) => index > start && /^ {2}[A-Za-z0-9_-]+:/.test(line))
   return lines.slice(start, end === -1 ? undefined : end).join('\n')
@@ -18,7 +21,10 @@ function nativeJob(): string {
 function appBuildStep(job: string): string {
   const lines = job.split('\n')
   const header = '      - name: Build the native App (macOS)'
-  expect(lines.filter((line) => line === header), 'one native App build step').toHaveLength(1)
+  expect(
+    lines.filter((line) => line === header),
+    'one native App build step'
+  ).toHaveLength(1)
   const start = lines.indexOf(header)
   const end = lines.findIndex((line, index) => index > start && /^ {6}- /.test(line))
   return lines.slice(start, end === -1 ? undefined : end).join('\n')
@@ -38,7 +44,10 @@ describe('native App build failure gate', () => {
   it('runs the real unsigned macOS Debug build without masking its exit status', () => {
     const job = nativeJob()
     const step = appBuildStep(job)
-    const command = step.match(/^ {8}run: \|\n([\s\S]*)$/m)?.[1]?.replace(/\s*\\\n\s*/g, ' ').trim()
+    const command = step
+      .match(/^ {8}run: \|\n([\s\S]*)$/m)?.[1]
+      ?.replace(/\s*\\\n\s*/g, ' ')
+      .trim()
 
     expect(job).toMatch(/^ {4}runs-on: macos-latest$/m)
     expect(step).toMatch(/^ {8}working-directory: native-app$/m)
