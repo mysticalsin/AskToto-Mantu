@@ -196,9 +196,8 @@ describe('ST-1 restricted launch admission [M2-0538]', () => {
     const env = canaryEnv()
     expect(observeCanary(env, deniedIO)).toEqual({ readDenied: true, writeDenied: true })
     expect(() => observeCanary(env)).toThrow('permission denial')
-    expect(() => observeCanary(env, { ...deniedIO, readFileSync: () => Buffer.from('readable') })).toThrow(
-      'permission denial'
-    )
+    const readable = (() => Buffer.from('readable')) as typeof readFileSync
+    expect(() => observeCanary(env, { ...deniedIO, readFileSync: readable })).toThrow('permission denial')
     expect(() => observeCanary(env, { ...deniedIO, openSync: () => 1 })).toThrow('permission denial')
     expect(() => observeCanary(env, { ...deniedIO, openSync: () => 1, closeSync: permission })).toThrow('denied')
     expect(() => observeCanary({ ...env, RUNNER_TEMP: undefined }, deniedIO)).toThrow('canonical')
@@ -285,6 +284,7 @@ describe('packaged identity before restricted launch [M2-0538]', () => {
         env: {},
         exe: fixture.exe,
         unzipDir: fixture.root,
+        canaryIO: undefined,
         readBundleId: () => 'com.mantu.asktoto.qa'
       })
     ).toThrow('identity mismatch')
@@ -301,6 +301,7 @@ describe('packaged identity before restricted launch [M2-0538]', () => {
         env: {},
         exe: fixture.exe,
         unzipDir: fixture.root,
+        canaryIO: undefined,
         readBundleId: () => 'com.mantu.asktoto.qa'
       })
     ).toThrow('identity mismatch')

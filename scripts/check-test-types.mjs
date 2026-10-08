@@ -89,6 +89,9 @@ if (count > BASELINE) {
     console.error(`    ${String(n).padStart(4)}  ${file}`)
   }
   console.error('')
+  console.error('  Compiler diagnostics (first 20):')
+  for (const line of lines.slice(0, 20)) console.error(`    ${line}`)
+  console.error('')
   console.error('  Fix the new errors. Do NOT raise the baseline.')
   process.exit(1)
 }
