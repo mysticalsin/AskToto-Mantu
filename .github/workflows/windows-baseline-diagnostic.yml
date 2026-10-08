@@ -1,0 +1,29 @@
+name: Windows baseline write diagnostic
+
+# Diagnostic-only branch: no application, installer, credentials or owner-machine execution.
+on:
+  push:
+    branches: [fix/windows-baseline-diagnostic-20261008]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-baseline-diagnostic-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  diagnostic:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Verify the bounded diagnostic and synthetic negative controls
+        run: node --test scripts/qa/windows/diagnose-baseline-write.test.mjs
+      - name: Observe nine fixed attempts without erasing failures
+        run: node scripts/qa/windows/diagnose-baseline-write.mjs
