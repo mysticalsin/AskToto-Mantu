@@ -107,22 +107,19 @@ describe('Dust auth retry after stream-start 401', () => {
     failFirstStream = false
   })
 
-  it(
-    'reuses the created message without a duplicate post, and retries the stream attach with FRESH credentials',
-    async () => {
-      failFirstStream = true
-      const opts = baseOpts()
-      streamDust(opts)
-      await waitDone(opts.handlers)
+  it('reuses the created message without a duplicate post, and retries the stream attach with FRESH credentials', async () => {
+    failFirstStream = true
+    const opts = baseOpts()
+    streamDust(opts)
+    await waitDone(opts.handlers)
 
-      expect(calls.create).toBe(1)
-      expect(calls.post).toBe(0)
-      expect(calls.createdContents).toHaveLength(1)
+    expect(calls.create).toBe(1)
+    expect(calls.post).toBe(0)
+    expect(calls.createdContents).toHaveLength(1)
 
-      // The first stream attach used the stale key and 401'd; the retry must use the refreshed one —
-      // not silently replay the same stale credential (which would just 401 again).
-      expect(calls.stream).toBe(2)
-      expect(calls.streamApiKeys).toEqual(['stale-key', 'fresh-key'])
-    }
-  )
+    // The first stream attach used the stale key and 401'd; the retry must use the refreshed one —
+    // not silently replay the same stale credential (which would just 401 again).
+    expect(calls.stream).toBe(2)
+    expect(calls.streamApiKeys).toEqual(['stale-key', 'fresh-key'])
+  })
 })
