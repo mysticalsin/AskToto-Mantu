@@ -1438,32 +1438,38 @@ describe('buildReport', () => {
       expect(built.lateSamples).toBe(2)
     })
 
-    it.each([undefined, null, '900', -1, NaN, Infinity, -Infinity, false])(
-      'ignores invalid values independently without coercion: %s',
-      (invalid) => {
-        const built = report({
-          measured: {
-            ...emptyRun(),
-            late: [
-              { tMs: 1_000, writeMs: invalid, lookupMs: 7 },
-              { tMs: 2_000, writeMs: 5, lookupMs: invalid },
-              { tMs: 3_000, hung: true }
-            ]
-          }
-        })
-        expect(built.allResponseIo).toEqual({
-          write: { maxMs: 5, observedSamples: 1 },
-          lookup: { maxMs: 7, observedSamples: 1 }
-        })
-        const onlyInvalid = report({
-          measured: { ...emptyRun(), late: [{ tMs: 1_000, writeMs: invalid, lookupMs: invalid }] }
-        })
-        expect(onlyInvalid.allResponseIo).toEqual({
-          write: { maxMs: null, observedSamples: 0 },
-          lookup: { maxMs: null, observedSamples: 0 }
-        })
-      }
-    )
+    it.each([
+      undefined,
+      null,
+      '900',
+      -1,
+      NaN,
+      Infinity,
+      -Infinity,
+      false
+    ])('ignores invalid values independently without coercion: %s', (invalid) => {
+      const built = report({
+        measured: {
+          ...emptyRun(),
+          late: [
+            { tMs: 1_000, writeMs: invalid, lookupMs: 7 },
+            { tMs: 2_000, writeMs: 5, lookupMs: invalid },
+            { tMs: 3_000, hung: true }
+          ]
+        }
+      })
+      expect(built.allResponseIo).toEqual({
+        write: { maxMs: 5, observedSamples: 1 },
+        lookup: { maxMs: 7, observedSamples: 1 }
+      })
+      const onlyInvalid = report({
+        measured: { ...emptyRun(), late: [{ tMs: 1_000, writeMs: invalid, lookupMs: invalid }] }
+      })
+      expect(onlyInvalid.allResponseIo).toEqual({
+        write: { maxMs: null, observedSamples: 0 },
+        lookup: { maxMs: null, observedSamples: 0 }
+      })
+    })
 
     it('counts zero as observed and preserves null when no duration was measured', () => {
       const measured = {
