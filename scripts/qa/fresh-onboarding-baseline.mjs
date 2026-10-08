@@ -60,6 +60,11 @@ const FAILURES = new Set([
   'app-identity-rejected',
   'profile-rejected',
   'launch-failed',
+  'cdp-attach-failed',
+  'main-inspector-attach-failed',
+  'profile-mismatch',
+  'runtime-version-mismatch',
+  'profile-and-runtime-version-mismatch',
   'action-timeout',
   'action-failed',
   'assertion-failed',
@@ -90,6 +95,17 @@ const SEMVER = new RegExp(
 )
 const ACTION_TIMEOUT_MS = 15_000
 const RELEASE_TIMEOUT_MS = 5_000
+
+/** Classify only the two booleans already validated by the fixed main-process observation.
+ * @param {boolean} profileMatches
+ * @param {boolean} versionMatches
+ */
+export function freshOnboardingIdentityFailure(profileMatches, versionMatches) {
+  if (!profileMatches && !versionMatches) return 'profile-and-runtime-version-mismatch'
+  if (!profileMatches) return 'profile-mismatch'
+  if (!versionMatches) return 'runtime-version-mismatch'
+  return 'none'
+}
 
 /** @typedef {{ isFile: () => boolean, isSymbolicLink: () => boolean, size: number }} PackagedAsarStat */
 /** @typedef {{ extractFile: (archive: string, entry: string) => Buffer | Uint8Array | string }} PackagedAsar */
@@ -795,7 +811,7 @@ async function execute(argv) {
     if (attachedCdp.lateRelease) state.lateReleases.push(attachedCdp.lateRelease)
     state.browser = attachedCdp.browser
     verifyLaunch()
-    if (!attachedCdp.browser) throw finiteError('action-failed')
+    if (!attachedCdp.browser) throw finiteError('cdp-attach-failed')
 
     const attachedInspector = await attachOwnedMainInspector({
       inspectPort: launch.inspectPort,
@@ -808,10 +824,14 @@ async function execute(argv) {
     if (attachedInspector.lateRelease) state.lateReleases.push(attachedInspector.lateRelease)
     state.inspector = attachedInspector.inspector
     verifyLaunch()
-    if (!attachedInspector.inspector || !attachedInspector.observation) throw finiteError('action-failed')
-    if (!attachedInspector.observation.profileMatches || !attachedInspector.observation.versionMatches) {
-      throw finiteError('assertion-failed')
+    if (!attachedInspector.inspector || !attachedInspector.observation) {
+      throw finiteError('main-inspector-attach-failed')
     }
+    const identityFailure = freshOnboardingIdentityFailure(
+      attachedInspector.observation.profileMatches,
+      attachedInspector.observation.versionMatches
+    )
+    if (identityFailure !== 'none') throw finiteError(identityFailure)
 
     const win = await findFreshOnboardingPage({
       browser: state.browser,
