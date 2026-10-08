@@ -69,9 +69,11 @@ describe('owned ST-1 termination', () => {
     const signal = vi.fn(() => {
       throw Object.assign(new Error('private stderr /owner/profile'), { code })
     })
-    const result = await stopOwnedChild(child(), { platform: 'darwin', signal })
+    const sleep = vi.fn(async (_ms: number) => {})
+    const result = await stopOwnedChild(child(), { platform: 'darwin', signal, sleep })
     expect(result).toEqual(groupDiagnosticFailure(reason, 'initial-group-probe', false, false))
     expect(signal.mock.calls).toEqual([[-fixturePid, 0]])
+    expect(sleep).not.toHaveBeenCalled()
     expect(JSON.stringify(result)).not.toContain('private stderr /owner/profile')
   })
 
@@ -83,12 +85,14 @@ describe('owned ST-1 termination', () => {
       if (kind === 'SIGKILL') throw Object.assign(new Error('private kill output /owner/profile'), { code })
       return true
     })
-    const result = await stopOwnedChild(child(), { platform: 'darwin', signal })
+    const sleep = vi.fn(async (_ms: number) => {})
+    const result = await stopOwnedChild(child(), { platform: 'darwin', signal, sleep })
     expect(result).toEqual(groupDiagnosticFailure(reason, 'group-kill', false, true))
     expect(signal.mock.calls).toEqual([
       [-fixturePid, 0],
       [-fixturePid, 'SIGKILL']
     ])
+    expect(sleep).not.toHaveBeenCalled()
     expect(JSON.stringify(result)).not.toContain('private kill output /owner/profile')
   })
 
@@ -100,33 +104,253 @@ describe('owned ST-1 termination', () => {
       if (probes === 1) throw missing()
       throw Object.assign(new Error('private later probe /owner/profile'), { code: 'EPERM' })
     })
-    const result = await stopOwnedChild(child(), { platform: 'darwin', signal })
+    const sleep = vi.fn(async (_ms: number) => {})
+    const result = await stopOwnedChild(child(), { platform: 'darwin', signal, sleep })
     expect(result).toEqual(groupDiagnosticFailure('group-probe-permission', 'post-kill-group-probe', false, false))
     expect(signal.mock.calls).toEqual([
       [-fixturePid, 0],
       [-fixturePid, 0]
     ])
+    expect(sleep).not.toHaveBeenCalled()
     expect(JSON.stringify(result)).not.toContain('private later probe /owner/profile')
   })
 
-  it('snapshots an observed root exit at a later group probe without changing the kill sequence', async () => {
+  it.each([
+    false,
+    true
+  ])('fails closed when eligible Darwin permission probes persist (root exit: %s)', async (rootExitObserved) => {
     const owned = child()
+    let clock = 0
     let probes = 0
     const signal = vi.fn((_pid: number, kind: number | string) => {
       if (kind === 'SIGKILL') return true
       probes += 1
       if (probes === 1) return true
-      owned.signalCode = 'SIGKILL'
+      if (rootExitObserved) owned.signalCode = 'SIGKILL'
       throw Object.assign(new Error('private post-kill probe /owner/profile'), { code: 'EPERM' })
     })
-    const result = await stopOwnedChild(owned, { platform: 'darwin', signal })
-    expect(result).toEqual(groupDiagnosticFailure('group-probe-permission', 'post-kill-group-probe', true, true))
+    const sleep = vi.fn(async (ms: number) => {
+      clock += ms
+    })
+    const result = await stopOwnedChild(owned, {
+      platform: 'darwin',
+      signal,
+      now: () => clock,
+      sleep,
+      timeoutMs: 60
+    })
+    expect(result).toEqual(
+      groupDiagnosticFailure('group-probe-permission', 'post-kill-group-probe', rootExitObserved, true)
+    )
+    expect(signal.mock.calls).toEqual([
+      [-fixturePid, 0],
+      [-fixturePid, 'SIGKILL'],
+      [-fixturePid, 0],
+      [-fixturePid, 0],
+      [-fixturePid, 0]
+    ])
+    expect(sleep.mock.calls).toEqual([[25], [25], [10]])
+    expect(JSON.stringify(result)).not.toContain('private post-kill probe /owner/profile')
+  })
+
+  it('does not grace-poll a Linux post-kill permission probe', async () => {
+    let probes = 0
+    const signal = vi.fn((_pid: number, kind: number | string) => {
+      if (kind === 'SIGKILL') return true
+      probes += 1
+      if (probes === 1) return true
+      throw Object.assign(new Error('private Linux permission /owner/profile'), { code: 'EPERM' })
+    })
+    const sleep = vi.fn(async (_ms: number) => {})
+    const result = await stopOwnedChild(child(), { platform: 'linux', signal, sleep })
+    expect(result).toEqual(groupDiagnosticFailure('group-probe-permission', 'post-kill-group-probe', false, true))
     expect(signal.mock.calls).toEqual([
       [-fixturePid, 0],
       [-fixturePid, 'SIGKILL'],
       [-fixturePid, 0]
     ])
-    expect(JSON.stringify(result)).not.toContain('private post-kill probe /owner/profile')
+    expect(sleep).not.toHaveBeenCalled()
+    expect(JSON.stringify(result)).not.toContain('private Linux permission /owner/profile')
+  })
+
+  it('does not grace-poll a Darwin post-kill generic probe error', async () => {
+    let probes = 0
+    const signal = vi.fn((_pid: number, kind: number | string) => {
+      if (kind === 'SIGKILL') return true
+      probes += 1
+      if (probes === 1) return true
+      throw Object.assign(new Error('private generic probe /owner/profile'), { code: 'EIO' })
+    })
+    const sleep = vi.fn(async (_ms: number) => {})
+    const result = await stopOwnedChild(child(), { platform: 'darwin', signal, sleep })
+    expect(result).toEqual(groupDiagnosticFailure('group-probe-error', 'post-kill-group-probe', false, true))
+    expect(signal.mock.calls).toEqual([
+      [-fixturePid, 0],
+      [-fixturePid, 'SIGKILL'],
+      [-fixturePid, 0]
+    ])
+    expect(sleep).not.toHaveBeenCalled()
+    expect(JSON.stringify(result)).not.toContain('private generic probe /owner/profile')
+  })
+
+  it('acknowledges only after a later Darwin ESRCH and an observed owned-root exit', async () => {
+    const owned = child()
+    let clock = 0
+    let probes = 0
+    const signal = vi.fn((_pid: number, kind: number | string) => {
+      if (kind === 'SIGKILL') return true
+      probes += 1
+      if (probes === 1) return true
+      if (probes === 2) throw Object.assign(new Error('private permission /owner/profile'), { code: 'EPERM' })
+      owned.exitCode = 0
+      throw missing()
+    })
+    const sleep = vi.fn(async (ms: number) => {
+      clock += ms
+    })
+    await expect(
+      stopOwnedChild(owned, { platform: 'darwin', signal, now: () => clock, sleep, timeoutMs: 60 })
+    ).resolves.toEqual(ack)
+    expect(signal.mock.calls).toEqual([
+      [-fixturePid, 0],
+      [-fixturePid, 'SIGKILL'],
+      [-fixturePid, 0],
+      [-fixturePid, 0]
+    ])
+    expect(sleep.mock.calls).toEqual([[25]])
+  })
+
+  it('uses the most recent in-budget present probe when its following sleep reaches the deadline', async () => {
+    let clock = 0
+    let probes = 0
+    let sleeps = 0
+    const signal = vi.fn((_pid: number, kind: number | string) => {
+      if (kind === 'SIGKILL') return true
+      probes += 1
+      if (probes === 1) return true
+      if (probes === 2) throw Object.assign(new Error('private permission /owner/profile'), { code: 'EPERM' })
+      return true
+    })
+    const sleep = vi.fn(async (ms: number) => {
+      sleeps += 1
+      clock += sleeps === 1 ? ms : 60 - clock
+    })
+    await expect(
+      stopOwnedChild(child(), { platform: 'darwin', signal, now: () => clock, sleep, timeoutMs: 60 })
+    ).resolves.toEqual(failed('group-still-present'))
+    expect(signal.mock.calls).toEqual([
+      [-fixturePid, 0],
+      [-fixturePid, 'SIGKILL'],
+      [-fixturePid, 0],
+      [-fixturePid, 0]
+    ])
+    expect(sleep.mock.calls).toEqual([[25], [25]])
+  })
+
+  it('fails immediately when a generic probe error follows an eligible Darwin permission probe', async () => {
+    let clock = 0
+    let probes = 0
+    const signal = vi.fn((_pid: number, kind: number | string) => {
+      if (kind === 'SIGKILL') return true
+      probes += 1
+      if (probes === 1) return true
+      if (probes === 2) throw Object.assign(new Error('private permission /owner/profile'), { code: 'EPERM' })
+      throw Object.assign(new Error('private generic probe /owner/profile'), { code: 'EIO' })
+    })
+    const sleep = vi.fn(async (ms: number) => {
+      clock += ms
+    })
+    const result = await stopOwnedChild(child(), {
+      platform: 'darwin',
+      signal,
+      now: () => clock,
+      sleep,
+      timeoutMs: 60
+    })
+    expect(result).toEqual(groupDiagnosticFailure('group-probe-error', 'post-kill-group-probe', false, true))
+    expect(signal.mock.calls).toEqual([
+      [-fixturePid, 0],
+      [-fixturePid, 'SIGKILL'],
+      [-fixturePid, 0],
+      [-fixturePid, 0]
+    ])
+    expect(sleep.mock.calls).toEqual([[25]])
+    expect(JSON.stringify(result)).not.toContain('private generic probe /owner/profile')
+  })
+
+  it('preserves deadline-first failure when a Darwin permission probe consumes the budget', async () => {
+    let clock = 0
+    let probes = 0
+    const signal = vi.fn((_pid: number, kind: number | string) => {
+      if (kind === 'SIGKILL') return true
+      probes += 1
+      if (probes === 1) return true
+      clock = 60
+      throw Object.assign(new Error('private deadline probe /owner/profile'), { code: 'EPERM' })
+    })
+    const sleep = vi.fn(async (_ms: number) => {})
+    await expect(
+      stopOwnedChild(child(), { platform: 'darwin', signal, now: () => clock, sleep, timeoutMs: 60 })
+    ).resolves.toEqual(failed('deadline-expired'))
+    expect(signal.mock.calls).toEqual([
+      [-fixturePid, 0],
+      [-fixturePid, 'SIGKILL'],
+      [-fixturePid, 0]
+    ])
+    expect(sleep).not.toHaveBeenCalled()
+  })
+
+  it('does not acknowledge Darwin group absence without an observed owned-root exit', async () => {
+    let clock = 0
+    let probes = 0
+    const signal = vi.fn((_pid: number, kind: number | string) => {
+      if (kind === 'SIGKILL') return true
+      probes += 1
+      if (probes === 1) return true
+      if (probes === 2) throw Object.assign(new Error('private permission /owner/profile'), { code: 'EPERM' })
+      throw missing()
+    })
+    const sleep = vi.fn(async (ms: number) => {
+      clock += ms
+    })
+    await expect(
+      stopOwnedChild(child(), { platform: 'darwin', signal, now: () => clock, sleep, timeoutMs: 60 })
+    ).resolves.toEqual(failed('root-exit-unobserved'))
+    expect(signal.mock.calls).toEqual([
+      [-fixturePid, 0],
+      [-fixturePid, 'SIGKILL'],
+      [-fixturePid, 0],
+      [-fixturePid, 0],
+      [-fixturePid, 0]
+    ])
+    expect(sleep.mock.calls).toEqual([[25], [25], [10]])
+  })
+
+  it('can acknowledge after a SIGKILL ESRCH attempt only with later absence and owned-root exit', async () => {
+    const owned = child()
+    let clock = 0
+    let probes = 0
+    const signal = vi.fn((_pid: number, kind: number | string) => {
+      if (kind === 'SIGKILL') throw missing()
+      probes += 1
+      if (probes === 1) return true
+      if (probes === 2) throw Object.assign(new Error('private permission /owner/profile'), { code: 'EPERM' })
+      owned.exitCode = 0
+      throw missing()
+    })
+    const sleep = vi.fn(async (ms: number) => {
+      clock += ms
+    })
+    await expect(
+      stopOwnedChild(owned, { platform: 'darwin', signal, now: () => clock, sleep, timeoutMs: 60 })
+    ).resolves.toEqual(ack)
+    expect(signal.mock.calls).toEqual([
+      [-fixturePid, 0],
+      [-fixturePid, 'SIGKILL'],
+      [-fixturePid, 0],
+      [-fixturePid, 0]
+    ])
+    expect(sleep.mock.calls).toEqual([[25]])
   })
 
   it('waits for root exit even when the group is already absent', async () => {

@@ -179,11 +179,18 @@ export async function stopOwnedChild(
   while (remaining() > 0) {
     group = probe()
     if (remaining() <= 0) return unacknowledged('deadline-expired')
+    if (group === 'group-probe-permission' && platform === 'darwin' && groupKillInvoked) {
+      await pause()
+      continue
+    }
     if (group !== 'present' && group !== 'absent') {
       return groupFailure(group, 'post-kill-group-probe', groupKillInvoked)
     }
     if (group === 'absent' && exited(child)) return acknowledged()
     await pause()
+  }
+  if (group === 'group-probe-permission' && platform === 'darwin' && groupKillInvoked) {
+    return groupFailure(group, 'post-kill-group-probe', groupKillInvoked)
   }
   return unacknowledged(group === 'present' ? 'group-still-present' : 'root-exit-unobserved')
 }
