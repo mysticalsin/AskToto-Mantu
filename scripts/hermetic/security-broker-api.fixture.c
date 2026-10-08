@@ -2,6 +2,7 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <Security/Security.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,6 +23,18 @@ static int fail_status(const char *stage, OSStatus status) {
     return 2;
 }
 
+enum default_metadata_state {
+    DEFAULT_METADATA_ERROR,
+    DEFAULT_METADATA_PRESENT,
+    DEFAULT_METADATA_NOT_CONFIGURED
+};
+
+static enum default_metadata_state classify_default_metadata(OSStatus status, bool has_reference) {
+    if (status == errSecSuccess && has_reference) return DEFAULT_METADATA_PRESENT;
+    if (status == errSecNoDefaultKeychain && !has_reference) return DEFAULT_METADATA_NOT_CONFIGURED;
+    return DEFAULT_METADATA_ERROR;
+}
+
 static int metadata(void) {
     CFArrayRef search = NULL;
     SecKeychainRef current = NULL;
@@ -29,16 +42,19 @@ static int metadata(void) {
     if (status != errSecSuccess) return fail_status("metadata-search-list", status);
     if (!search) return fail_stage("metadata-search-list-null");
     status = SecKeychainCopyDefault(&current);
-    if (status != errSecSuccess) {
+    enum default_metadata_state state = classify_default_metadata(status, current != NULL);
+    if (state == DEFAULT_METADATA_ERROR) {
+        if (current) CFRelease(current);
         CFRelease(search);
         return fail_status("metadata-default", status);
     }
-    if (!current) {
+    if (state == DEFAULT_METADATA_NOT_CONFIGURED &&
+        printf("-1:DEFAULT_NOT_CONFIGURED:%d\n", (int)status) < 0) {
         CFRelease(search);
-        return fail_stage("metadata-default-null");
+        return fail_stage("metadata-output");
     }
     CFIndex count = CFArrayGetCount(search);
-    for (CFIndex i = -1; i < count; i++) {
+    for (CFIndex i = state == DEFAULT_METADATA_PRESENT ? -1 : 0; i < count; i++) {
         SecKeychainRef keychain = i == -1 ? current : (SecKeychainRef)CFArrayGetValueAtIndex(search, i);
         char path[4096];
         UInt32 length = sizeof(path);
@@ -49,7 +65,7 @@ static int metadata(void) {
         path[length] = '\0';
         if (printf("%ld:%s\n", (long)i, path) < 0) return fail_stage("metadata-output");
     }
-    CFRelease(current);
+    if (current) CFRelease(current);
     CFRelease(search);
     return fflush(stdout) == 0 ? 0 : fail_stage("metadata-flush");
 }

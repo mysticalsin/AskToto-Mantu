@@ -80,6 +80,11 @@ echo 'HOSTED_API_PROOF compile-fixture'
   -framework Security -framework CoreFoundation "$source_root/scripts/hermetic/security-broker-api.fixture.c" \
   -o "$fixture/security-api-fixture"
 api="$fixture/security-api-fixture"
+echo 'HOSTED_API_PROOF compile-metadata-classifier-test'
+/usr/bin/xcrun clang -std=c11 -fno-modules -Wno-deprecated-declarations -Wall -Wextra -Werror \
+  -framework Security -framework CoreFoundation "$source_root/scripts/hermetic/security-broker-metadata.fixture.test.c" \
+  -o "$fixture/security-metadata-test"
+"$fixture/security-metadata-test"
 echo 'HOSTED_API_PROOF metadata-before'
 "$api" --metadata > "$fixture/metadata-before"
 echo 'HOSTED_API_PROOF unwrapped-positive'
