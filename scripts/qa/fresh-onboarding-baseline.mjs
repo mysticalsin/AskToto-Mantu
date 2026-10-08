@@ -52,6 +52,12 @@ const NOT_COVERED_KEYS = ['row', 'reason']
 const OUTCOMES = new Set(['PASS', 'FAIL', 'PRECONDITION'])
 const ASSERTION_STATUSES = new Set(['PASS', 'FAIL', 'NOT_RUN'])
 const TEARDOWN_STATES = new Set(['ACKNOWLEDGED', 'UNACKNOWLEDGED', 'NOT_ATTEMPTED'])
+const CLOSED_CDP_FAILURES = Object.freeze([
+  'cdp-endpoint-deadline',
+  'cdp-transport-timeout',
+  'cdp-session-or-process-info-invalid',
+  'cdp-browser-pid-mismatch'
+])
 const FAILURES = new Set([
   'none',
   'invalid-arguments',
@@ -61,6 +67,7 @@ const FAILURES = new Set([
   'profile-rejected',
   'launch-failed',
   'cdp-attach-failed',
+  ...CLOSED_CDP_FAILURES,
   'main-inspector-attach-failed',
   'profile-mismatch',
   'runtime-version-mismatch',
@@ -73,6 +80,14 @@ const FAILURES = new Set([
   'profile-cleanup-failed',
   'harness-error'
 ])
+
+/**
+ * Return only an approved content-free CDP failure literal for the report.
+ * @param {unknown} failure
+ */
+export function cdpAttachFailure(failure) {
+  return typeof failure === 'string' && CLOSED_CDP_FAILURES.includes(failure) ? failure : 'cdp-attach-failed'
+}
 const PRECONDITION_FAILURES = new Set([
   'invalid-arguments',
   'provenance-rejected',
@@ -811,7 +826,7 @@ async function execute(argv) {
     if (attachedCdp.lateRelease) state.lateReleases.push(attachedCdp.lateRelease)
     state.browser = attachedCdp.browser
     verifyLaunch()
-    if (!attachedCdp.browser) throw finiteError('cdp-attach-failed')
+    if (!attachedCdp.browser) throw finiteError(cdpAttachFailure(attachedCdp.failure))
 
     const attachedInspector = await attachOwnedMainInspector({
       inspectPort: launch.inspectPort,
