@@ -202,6 +202,34 @@ jobs:
       - name: Positive control — reading a repository file still works under the profile
         run: bash scripts/hermetic/run-under-owner-sandbox.sh cat AGENTS.md > /dev/null
 
+  owner-runner-synthetic:
+    name: Strict owner profile with synthetic data only
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Prove real Seatbelt data and runner-control boundaries
+        run: bash scripts/hermetic/prove-owner-runner-synthetic.sh
+
+  owner-security-brokers:
+    name: Security broker denial with hosted synthetic controls
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Prove actual broker lookup and synthetic API boundaries
+        run: bash scripts/hermetic/prove-security-brokers-synthetic.sh
+
   honeypot-check-fails-closed:
     name: honeypot.sh check fails closed (hermetic)
     runs-on: ubuntu-latest

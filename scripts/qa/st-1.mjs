@@ -92,19 +92,27 @@ import { writeFile } from 'node:fs/promises'
 import { cpus, tmpdir } from 'node:os'
 import { basename, dirname, join, relative } from 'node:path'
 import { monitorEventLoopDelay } from 'node:perf_hooks'
-import { sha256File } from './provenance.mjs'
+import {
+  observeSecurityBrokers,
+  trackCandidateSpawn,
+  trackInspectorConnection,
+  validateRestrictedExecutable,
+  verifyCandidate
+} from './lib/st-1-launch.mjs'
 import { createFifo, releaseFifo } from './fixtures/fifo.mjs'
 import {
   bootStagesFromAudit,
   buildLaunchFailureReport,
   buildReport,
   candidateEnv,
+  candidateLaunchPlan,
   countStorageSaturations,
   cpuBusyPct,
   emptyRun,
   failureRecord,
   historyEntry,
   historyProbeWindow,
+  launchIsolationReport,
   parseArgs,
   pinnedExpression,
   recordSample,
@@ -153,31 +161,24 @@ const MAIN_LOG_QUERY_TIMEOUT_MS = 10_000
 /** What the History row searches for: any query exercises the whole search path over every row. */
 const HISTORY_SEARCH_QUERY = 'st1'
 
-/** Binds the installer's bytes to the CI run that produced them (M2-0002). Throws on any mismatch. */
-async function verifyCandidate(installerPath, provenancePath) {
-  const provenance = JSON.parse(readFileSync(provenancePath, 'utf8'))
-  const name = basename(installerPath)
-  const asset = provenance.builds.flatMap((build) => build.assets).find((candidate) => candidate.name === name)
-  if (!asset) throw new Error(`no asset named ${name} in ${provenancePath}`)
-  const actual = await sha256File(installerPath)
-  if (actual !== asset.sha256)
-    throw new Error(`sha256 mismatch for ${name}: provenance says ${asset.sha256}, file is ${actual}`)
-  return { build_run_id: provenance.run.id, artifact_sha256: actual }
-}
-
 /** The installed executable to launch, and the directory (if any) to remove afterward. */
 function resolveExecutable(installerPath, exeArg) {
   if (exeArg) return { exe: exeArg, unzipDir: null }
   if (process.platform === 'darwin' && installerPath.endsWith('.zip')) {
     const unzipDir = mkdtempSync(join(tmpdir(), 'st1-unzip-'))
-    execFileSync('ditto', ['-x', '-k', installerPath, unzipDir])
-    const apps = execFileSync('find', [unzipDir, '-maxdepth', '1', '-name', '*.app'], { encoding: 'utf8' })
-      .trim()
-      .split('\n')
-      .filter(Boolean)
-    if (apps.length !== 1) throw usageError(`expected exactly one *.app in ${installerPath}, found ${apps.length}`)
-    const app = apps[0]
-    return { exe: join(app, 'Contents', 'MacOS', basename(app, '.app')), unzipDir }
+    try {
+      execFileSync('ditto', ['-x', '-k', installerPath, unzipDir])
+      const apps = execFileSync('find', [unzipDir, '-maxdepth', '1', '-name', '*.app'], { encoding: 'utf8' })
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+      if (apps.length !== 1) throw usageError(`expected exactly one *.app in ${installerPath}, found ${apps.length}`)
+      const app = apps[0]
+      return { exe: join(app, 'Contents', 'MacOS', basename(app, '.app')), unzipDir }
+    } catch (error) {
+      rmSync(unzipDir, { recursive: true, force: true })
+      throw error
+    }
   }
   throw usageError('--exe is required on this platform (Windows needs the installed Metis.exe from a verified setup)')
 }
@@ -316,9 +317,9 @@ function placeDatalessFixtures(root, cloudDir) {
  *  surface later, as an 'error' event): the caller must take ownership of the returned child — and be
  *  ready to stop it — before calling inspectorUrl, so every way that wait can end still leaves the child
  *  killable by the caller's cleanup. */
-function spawnCandidate(exe, profile, windowVariant) {
-  return spawn(exe, ['--inspect=127.0.0.1:0'], {
-    env: candidateEnv(process.env, profile, windowVariant),
+function spawnCandidate(exe, profile, windowVariant, argv, env) {
+  return spawn(exe, argv, {
+    env: candidateEnv(env, profile, windowVariant),
     stdio: ['ignore', 'ignore', 'pipe'],
     detached: process.platform !== 'win32'
   })
@@ -364,8 +365,9 @@ async function inspectorUrl(child) {
 }
 
 /** A minimal Chrome DevTools Protocol client: any method, and Runtime.evaluate, each with an answer budget. */
-function cdpClient(wsUrl) {
+function cdpClient(wsUrl, observation) {
   const socket = new WebSocket(wsUrl)
+  trackInspectorConnection(socket, observation)
   const pending = new Map()
   let nextId = 1
   socket.addEventListener('message', (event) => {
@@ -957,6 +959,21 @@ async function main() {
   let bootStages = null
   let storageSaturations = null
   let spawnedWallMs = null
+  const launchEnv = Object.freeze({ ...process.env })
+  const requestedIsolation = Object.freeze({
+    mockKeychain: launchEnv.ST1_USE_MOCK_KEYCHAIN ?? '0',
+    chromiumSandbox: launchEnv.ST1_CHROMIUM_SANDBOX ?? 'on',
+    localKeystore: launchEnv.ASKTOTO_LOCAL_KEYSTORE ?? '0'
+  })
+  let launchPlan = null
+  const launchObservation = {
+    canary: null,
+    brokerLookupDenial: null,
+    identity: null,
+    spawnAttempted: false,
+    processSpawned: false,
+    inspectorConnected: false
+  }
   // The runner witness's probe write, on the temp volume the profile is created on.
   const witnessFile = join(tmpdir(), `st1-witness-${process.pid}.txt`)
   let complete = false
@@ -972,7 +989,8 @@ async function main() {
       purpose,
       windowVariant,
       windowWarmup,
-      windowRemeasures
+      windowRemeasures,
+      isolation: launchIsolationReport(launchPlan, launchObservation, requestedIsolation)
     }
     if (launchFailure) return buildLaunchFailureReport({ ...common, reason: launchFailure })
     return buildReport({
@@ -998,8 +1016,14 @@ async function main() {
   }
   const partialReports = setInterval(writeReport, PARTIAL_REPORT_EVERY_MS)
   try {
+    const planned = candidateLaunchPlan({ env: launchEnv, platform: process.platform, usesExe: !!args.exe, candidate })
     const resolved = resolveExecutable(args.installer, args.exe)
     unzipDir = resolved.unzipDir
+    const validated = validateRestrictedExecutable({ ...resolved, plan: planned, env: launchEnv })
+    launchObservation.canary = validated?.canary ?? null
+    launchObservation.identity = validated?.identity ?? null
+    if (planned.restricted) launchObservation.brokerLookupDenial = observeSecurityBrokers(launchEnv)
+    launchPlan = planned
     profile = prepareProfile(args.profileTemplate)
     root = join(profile, 'Métis Meetings')
 
@@ -1020,7 +1044,9 @@ async function main() {
     // instead of a detached, unkillable process.
     spawnedWallMs = Date.now()
     const spawnedAt = performance.now()
-    child = spawnCandidate(resolved.exe, profile, windowVariant)
+    launchObservation.spawnAttempted = true
+    child = spawnCandidate(resolved.exe, profile, windowVariant, launchPlan.argv, launchEnv)
+    trackCandidateSpawn(child, launchObservation)
     let wsUrl
     try {
       wsUrl = await inspectorUrl(child)
@@ -1029,7 +1055,7 @@ async function main() {
     }
 
     if (wsUrl) {
-      cdp = cdpClient(wsUrl)
+      cdp = cdpClient(wsUrl, launchObservation)
       const cpuProfilePath = join(reportDir, `${reportBase}.cpuprofile`)
       // Asked alongside SETUP, not after the run: when this launch did not create main.log, the size now
       // is the offset.
@@ -1043,6 +1069,7 @@ async function main() {
     }
   } catch (error) {
     harnessError = error.message
+    if (!launchObservation.processSpawned) launchFailure = error.message
     throw error
   } finally {
     clearInterval(partialReports)

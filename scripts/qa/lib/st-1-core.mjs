@@ -339,6 +339,71 @@ export function candidateEnv(env, profile, windowVariant) {
   return { ...env, ASKTOTO_USERDATA: profile, METIS_QA_WINDOW_VARIANT: windowVariant }
 }
 
+/** Restricted compatibility flags are exclusive to the reviewed owner QA route. */
+export function candidateLaunchPlan({ env, platform, usesExe, candidate }) {
+  const mock = env.ST1_USE_MOCK_KEYCHAIN
+  const chromium = env.ST1_CHROMIUM_SANDBOX
+  if (![undefined, '0', '1'].includes(mock)) throw new Error('invalid ST1_USE_MOCK_KEYCHAIN')
+  if (![undefined, 'on', 'off'].includes(chromium)) throw new Error('invalid ST1_CHROMIUM_SANDBOX')
+  if (chromium === 'off' && mock !== '1') throw new Error('no-sandbox requires mock-keychain')
+  const restricted = mock === '1' || chromium === 'off'
+  if (restricted) {
+    if (
+      platform !== 'darwin' ||
+      usesExe ||
+      env.GITHUB_ACTIONS !== 'true' ||
+      env.RUNNER_ENVIRONMENT !== 'self-hosted' ||
+      env.OWNER_SANDBOX_ROUTE !== 'owner' ||
+      env.ASKTOTO_LOCAL_KEYSTORE !== '1' ||
+      !['st1-mac-fifo', 'st1-mac-control'].includes(env.GITHUB_JOB) ||
+      env.OWNER_SANDBOX_ENTERED !== '1' ||
+      env.OWNER_SANDBOX_ENTERED_PROFILE !== 'owner-runner.sb'
+    ) {
+      throw new Error('restricted flags require the wrapped owner macOS installer route')
+    }
+    if (candidate?.variant !== 'mac-qa-identity' || !/^[a-f0-9]{64}$/.test(candidate?.artifact_sha256 ?? '')) {
+      throw new Error('restricted flags require unique verified QA-identity provenance')
+    }
+  }
+  return Object.freeze({
+    restricted,
+    requested: Object.freeze({
+      mockKeychain: mock === '1',
+      chromiumSandbox: chromium ?? 'on',
+      localKeystore: env.ASKTOTO_LOCAL_KEYSTORE === '1'
+    }),
+    wrapperReportedProfile: env.OWNER_SANDBOX_ENTERED_PROFILE ?? null,
+    argv: Object.freeze([
+      '--inspect=127.0.0.1:0',
+      ...(mock === '1' ? ['--use-mock-keychain'] : []),
+      ...(chromium === 'off' ? ['--no-sandbox'] : [])
+    ])
+  })
+}
+
+/** Configuration, narrow observed denial and process lifecycle are separate evidence. */
+export function launchIsolationReport(plan, observation, requested) {
+  return {
+    requested,
+    admitted: plan !== null,
+    wrapperReportedProfile: plan?.wrapperReportedProfile ?? null,
+    canary: observation.canary ?? null,
+    brokerLookupDenial: observation.brokerLookupDenial ?? null,
+    identity: observation.identity ?? null,
+    admittedArguments: plan ? [...plan.argv] : null,
+    configuredStorage: plan ? {
+      mockKeychain: plan.requested.mockKeychain,
+      localKeystore: plan.requested.localKeystore,
+      initialization: 'not-observed'
+    } : null,
+    spawnAttempted: observation.spawnAttempted === true,
+    processSpawned: observation.processSpawned === true,
+    inspectorConnected: observation.inspectorConnected === true,
+    chromiumSandboxDisabledAtSpawn:
+      observation.processSpawned === true && plan?.requested.chromiumSandbox === 'off'
+  }
+}
+
 /** The window-construction gate's budget (M2-0519): every shipped createWindow.prewarm and createWindow.construct
  *  stays under it, in both chromes. */
 export const WINDOW_STAGE_BUDGET_MS = 250
@@ -907,7 +972,8 @@ export function buildReport({
   purpose = 'st-1',
   windowVariant = 'shipped',
   windowWarmup = false,
-  windowRemeasures = null
+  windowRemeasures = null,
+  isolation = null
 }) {
   const criteria = evaluateCriteria(row, measured, evidence, { history })
   const refusalEvidence = fifoRefusalEvidence(row, measured, evidence, fixtures, fixtureCounts)
@@ -932,6 +998,7 @@ export function buildReport({
   )
   return {
     harness: 'ST-1',
+    ...(isolation ? { isolation } : {}),
     ...(purpose === WINDOW_CONSTRUCTION ? { purpose, st1Evidence: false, windowVariant } : {}),
     ...(purpose === WINDOW_CONSTRUCTION && windowWarmup ? { warmup: true } : {}),
     ...(purpose === WINDOW_CONSTRUCTION && windowRemeasures ? { remeasures: windowRemeasures } : {}),
@@ -1005,7 +1072,7 @@ export function writeJsonToStdout(value, stdout = process.stdout) {
 /** The launch itself never reached a candidate to measure: a genuine FAIL (inspector: false), never a
  *  skipped row. A window-construction launch is marked as in buildReport.
  * @param {{ row: string, installer: string, candidate: { build_run_id: unknown, artifact_sha256: unknown }, fixtures: unknown[],
- *   reason: string, purpose?: string, windowVariant?: string, windowWarmup?: boolean, windowRemeasures?: string | null }} args */
+ *   reason: string, purpose?: string, windowVariant?: string, windowWarmup?: boolean, windowRemeasures?: string | null, isolation?: object | null }} args */
 export function buildLaunchFailureReport({
   row,
   installer,
@@ -1015,10 +1082,12 @@ export function buildLaunchFailureReport({
   purpose = 'st-1',
   windowVariant = 'shipped',
   windowWarmup = false,
-  windowRemeasures = null
+  windowRemeasures = null,
+  isolation = null
 }) {
   return {
     harness: 'ST-1',
+    ...(isolation ? { isolation } : {}),
     ...(purpose === WINDOW_CONSTRUCTION ? { purpose, st1Evidence: false, windowVariant } : {}),
     ...(purpose === WINDOW_CONSTRUCTION && windowWarmup ? { warmup: true } : {}),
     ...(purpose === WINDOW_CONSTRUCTION && windowRemeasures ? { remeasures: windowRemeasures } : {}),

@@ -13,6 +13,24 @@ if [ "${GITHUB_ACTIONS:-}" = "true" ] && { [ -n "${PROVE_OWNER_SANDBOX_WRAPPER:-
 fi
 
 SANDBOX_WRAPPER="${PROVE_OWNER_SANDBOX_WRAPPER:-scripts/hermetic/run-under-owner-sandbox.sh}"
+if [ "${OWNER_SANDBOX_PROFILE:-owner-account.sb}" = owner-runner.sb ]; then
+  # Only owned synthetic state is touched on the owner route. The exhaustive protected-root
+  # content/creation matrix runs separately on a hosted synthetic HOME.
+  exec bash "$SANDBOX_WRAPPER" /bin/bash --noprofile --norc -eu -c '
+    error="$TMPDIR/probe-error"
+    if /bin/cat "$OWNER_SANDBOX_CANARY" 2> "$error"; then
+      echo "owner-runner probe: canary read unexpectedly succeeded" >&2; exit 1
+    fi
+    /usr/bin/grep -q "Operation not permitted" "$error"
+    if { printf forbidden >> "$OWNER_SANDBOX_CANARY"; } 2> "$error"; then
+      echo "owner-runner probe: canary write unexpectedly succeeded" >&2; exit 1
+    fi
+    /usr/bin/grep -q "Operation not permitted" "$error"
+    printf allowed > "$TMPDIR/positive-control"
+    /bin/cat "$TMPDIR/positive-control" > /dev/null
+    echo "owner-runner.sb: owned canary read/write denied; owned temp writes allowed"
+  '
+fi
 PROBE_OUT="$RUNNER_TEMP/sandbox-probe.out"
 PROBE_ERR="$RUNNER_TEMP/sandbox-probe.err"
 existing_count=0

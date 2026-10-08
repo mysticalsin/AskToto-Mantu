@@ -534,7 +534,27 @@ jobs:
       - name: Prove owner-account sandbox denies private state
         env:
           TMPDIR: ${{ runner.temp }}
+          OWNER_SANDBOX_PROFILE: owner-runner.sb
+          OWNER_SANDBOX_ROUTE: owner
         run: bash scripts/hermetic/prove-owner-sandbox.sh
+      - name: Establish Security broker lookup denial without querying keychains
+        id: qa_keychain_before
+        shell: /bin/bash --noprofile --norc -euo pipefail {0}
+        env:
+          TMPDIR: ${{ runner.temp }}
+          OWNER_SANDBOX_PROFILE: owner-runner.sb
+          OWNER_SANDBOX_ROUTE: owner
+          BASH_ENV: /dev/null
+          ENV: /dev/null
+          PATH: /usr/bin:/bin:/usr/sbin:/sbin
+        run: |
+          control=$(/bin/bash scripts/hermetic/run-under-owner-sandbox.sh /bin/bash --noprofile --norc scripts/hermetic/prepare-security-brokers.sh)
+          check_path="$control/check-security-brokers"
+          check_sha256=$(/usr/bin/shasum -a 256 "$check_path")
+          check_sha256="${check_sha256%% *}"
+          OWNER_QA_CONTROL_DIR="$control" QA_CHECK_PATH="$check_path" QA_CHECK_SHA256="$check_sha256" \
+            /bin/bash scripts/hermetic/run-under-owner-sandbox.sh /bin/bash --noprofile --norc scripts/hermetic/verify-security-brokers.sh
+          printf 'control_dir=%s\ncheck_path=%s\ncheck_sha256=%s\n' "$control" "$check_path" "$check_sha256" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         env:
           TMPDIR: ${{ runner.temp }}
@@ -562,6 +582,9 @@ jobs:
         continue-on-error: true
         env:
           TMPDIR: ${{ runner.temp }}
+          OWNER_SANDBOX_PROFILE: owner-runner.sb
+          OWNER_SANDBOX_ROUTE: owner
+          OWNER_QA_CONTROL_DIR: ${{ steps.qa_keychain_before.outputs.control_dir }}
         run: bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
       - name: Re-download the candidate after a failed byte check
         if: steps.verify1.outcome != 'success'
@@ -582,11 +605,22 @@ jobs:
         if: steps.verify1.outcome != 'success'
         env:
           TMPDIR: ${{ runner.temp }}
+          OWNER_SANDBOX_PROFILE: owner-runner.sb
+          OWNER_SANDBOX_ROUTE: owner
+          OWNER_QA_CONTROL_DIR: ${{ steps.qa_keychain_before.outputs.control_dir }}
         run: bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
       - name: Measure packaged stall resilience
         continue-on-error: true
         env:
           TMPDIR: ${{ runner.temp }}
+          OWNER_SANDBOX_PROFILE: owner-runner.sb
+          OWNER_SANDBOX_ROUTE: owner
+          OWNER_QA_CONTROL_DIR: ${{ steps.qa_keychain_before.outputs.control_dir }}
+          ST1_USE_MOCK_KEYCHAIN: '1'
+          ST1_CHROMIUM_SANDBOX: off
+          ASKTOTO_LOCAL_KEYSTORE: '1'
+          QA_CHECK_PATH: ${{ steps.qa_keychain_before.outputs.check_path }}
+          QA_CHECK_SHA256: ${{ steps.qa_keychain_before.outputs.check_sha256 }}
         run: |
           mkdir -p st1-report
           installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
@@ -600,20 +634,40 @@ jobs:
             --fixtures fifo \
             --minutes 5 \
             --out st1-report/st-1-macos-fifo.json
+      - name: Recheck Security broker denial with the original pinned probe
+        id: qa_keychain_after
+        if: always() && steps.qa_keychain_before.outcome == 'success'
+        shell: /bin/bash --noprofile --norc -euo pipefail {0}
+        env:
+          TMPDIR: ${{ runner.temp }}
+          BASH_ENV: /dev/null
+          ENV: /dev/null
+          PATH: /usr/bin:/bin:/usr/sbin:/sbin
+          OWNER_SANDBOX_PROFILE: owner-runner.sb
+          OWNER_SANDBOX_ROUTE: owner
+          OWNER_QA_CONTROL_DIR: ${{ steps.qa_keychain_before.outputs.control_dir }}
+          QA_CHECK_PATH: ${{ steps.qa_keychain_before.outputs.check_path }}
+          QA_CHECK_SHA256: ${{ steps.qa_keychain_before.outputs.check_sha256 }}
+        run: |
+          [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ && "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ && "$GITHUB_JOB" =~ ^[A-Za-z0-9_-]+$ ]]
+          job_root="$RUNNER_TEMP/metis-owner-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB"
+          [[ "$OWNER_QA_CONTROL_DIR" =~ ^"$job_root"/invocation\.[A-Za-z0-9]+/broker-control\.[A-Za-z0-9]+$ ]]
+          [ "$QA_CHECK_PATH" = "$OWNER_QA_CONTROL_DIR/check-security-brokers" ]
+          [ "$(cd "$OWNER_QA_CONTROL_DIR" && pwd -P)" = "$OWNER_QA_CONTROL_DIR" ]
+          [ -f "$QA_CHECK_PATH" ] && [ ! -L "$QA_CHECK_PATH" ]
+          [ "$(/usr/bin/stat -f %u "$QA_CHECK_PATH")" = "$(/usr/bin/id -u)" ]
+          [ "$(/usr/bin/stat -f %l "$QA_CHECK_PATH")" = 1 ]
+          [[ "$QA_CHECK_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          actual=$(/usr/bin/shasum -a 256 "$QA_CHECK_PATH")
+          [ "${actual%% *}" = "$QA_CHECK_SHA256" ]
+          /bin/bash scripts/hermetic/run-under-owner-sandbox.sh /bin/bash --noprofile --norc scripts/hermetic/verify-security-brokers.sh
       - name: Remove ST-1 temporary state
         if: always()
         env:
           TMPDIR: ${{ runner.temp }}
-        run: |
-          rm -rf \
-            "$RUNNER_TEMP"/metis-st1-* \
-            "$RUNNER_TEMP"/st1-unzip-* \
-            "$RUNNER_TEMP"/st1-witness-* \
-            "$HOME/Library/Logs/asktoto-qa" \
-            "$HOME/Library/Preferences/com.mantu.asktoto.qa.plist" \
-            "$HOME/Library/Saved Application State/com.mantu.asktoto.qa.savedState" \
-            "$HOME/Library/Caches/com.mantu.asktoto.qa"
-          security delete-generic-password -s "asktoto-qa Safe Storage" || true
+          OWNER_SANDBOX_PROFILE: owner-runner.sb
+          OWNER_SANDBOX_ROUTE: owner
+        run: bash scripts/hermetic/run-under-owner-sandbox.sh --cleanup-owned-temp
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         env:
@@ -783,7 +837,27 @@ jobs:
       - name: Prove owner-account sandbox denies private state
         env:
           TMPDIR: ${{ runner.temp }}
+          OWNER_SANDBOX_PROFILE: owner-runner.sb
+          OWNER_SANDBOX_ROUTE: owner
         run: bash scripts/hermetic/prove-owner-sandbox.sh
+      - name: Establish Security broker lookup denial without querying keychains
+        id: qa_keychain_before
+        shell: /bin/bash --noprofile --norc -euo pipefail {0}
+        env:
+          TMPDIR: ${{ runner.temp }}
+          OWNER_SANDBOX_PROFILE: owner-runner.sb
+          OWNER_SANDBOX_ROUTE: owner
+          BASH_ENV: /dev/null
+          ENV: /dev/null
+          PATH: /usr/bin:/bin:/usr/sbin:/sbin
+        run: |
+          control=$(/bin/bash scripts/hermetic/run-under-owner-sandbox.sh /bin/bash --noprofile --norc scripts/hermetic/prepare-security-brokers.sh)
+          check_path="$control/check-security-brokers"
+          check_sha256=$(/usr/bin/shasum -a 256 "$check_path")
+          check_sha256="${check_sha256%% *}"
+          OWNER_QA_CONTROL_DIR="$control" QA_CHECK_PATH="$check_path" QA_CHECK_SHA256="$check_sha256" \
+            /bin/bash scripts/hermetic/run-under-owner-sandbox.sh /bin/bash --noprofile --norc scripts/hermetic/verify-security-brokers.sh
+          printf 'control_dir=%s\ncheck_path=%s\ncheck_sha256=%s\n' "$control" "$check_path" "$check_sha256" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         env:
           TMPDIR: ${{ runner.temp }}
@@ -811,6 +885,9 @@ jobs:
         continue-on-error: true
         env:
           TMPDIR: ${{ runner.temp }}
+          OWNER_SANDBOX_PROFILE: owner-runner.sb
+          OWNER_SANDBOX_ROUTE: owner
+          OWNER_QA_CONTROL_DIR: ${{ steps.qa_keychain_before.outputs.control_dir }}
         run: bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
       - name: Re-download the candidate after a failed byte check
         if: steps.verify1.outcome != 'success'
@@ -831,11 +908,22 @@ jobs:
         if: steps.verify1.outcome != 'success'
         env:
           TMPDIR: ${{ runner.temp }}
+          OWNER_SANDBOX_PROFILE: owner-runner.sb
+          OWNER_SANDBOX_ROUTE: owner
+          OWNER_QA_CONTROL_DIR: ${{ steps.qa_keychain_before.outputs.control_dir }}
         run: bash scripts/hermetic/run-under-owner-sandbox.sh node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
       - name: Measure the packaged app with no fixture
         continue-on-error: true
         env:
           TMPDIR: ${{ runner.temp }}
+          OWNER_SANDBOX_PROFILE: owner-runner.sb
+          OWNER_SANDBOX_ROUTE: owner
+          OWNER_QA_CONTROL_DIR: ${{ steps.qa_keychain_before.outputs.control_dir }}
+          ST1_USE_MOCK_KEYCHAIN: '1'
+          ST1_CHROMIUM_SANDBOX: off
+          ASKTOTO_LOCAL_KEYSTORE: '1'
+          QA_CHECK_PATH: ${{ steps.qa_keychain_before.outputs.check_path }}
+          QA_CHECK_SHA256: ${{ steps.qa_keychain_before.outputs.check_sha256 }}
         run: |
           mkdir -p st1-report
           installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
@@ -849,20 +937,40 @@ jobs:
             --fixtures none \
             --minutes 5 \
             --out st1-report/st-1-macos-none.json
+      - name: Recheck Security broker denial with the original pinned probe
+        id: qa_keychain_after
+        if: always() && steps.qa_keychain_before.outcome == 'success'
+        shell: /bin/bash --noprofile --norc -euo pipefail {0}
+        env:
+          TMPDIR: ${{ runner.temp }}
+          BASH_ENV: /dev/null
+          ENV: /dev/null
+          PATH: /usr/bin:/bin:/usr/sbin:/sbin
+          OWNER_SANDBOX_PROFILE: owner-runner.sb
+          OWNER_SANDBOX_ROUTE: owner
+          OWNER_QA_CONTROL_DIR: ${{ steps.qa_keychain_before.outputs.control_dir }}
+          QA_CHECK_PATH: ${{ steps.qa_keychain_before.outputs.check_path }}
+          QA_CHECK_SHA256: ${{ steps.qa_keychain_before.outputs.check_sha256 }}
+        run: |
+          [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ && "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ && "$GITHUB_JOB" =~ ^[A-Za-z0-9_-]+$ ]]
+          job_root="$RUNNER_TEMP/metis-owner-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB"
+          [[ "$OWNER_QA_CONTROL_DIR" =~ ^"$job_root"/invocation\.[A-Za-z0-9]+/broker-control\.[A-Za-z0-9]+$ ]]
+          [ "$QA_CHECK_PATH" = "$OWNER_QA_CONTROL_DIR/check-security-brokers" ]
+          [ "$(cd "$OWNER_QA_CONTROL_DIR" && pwd -P)" = "$OWNER_QA_CONTROL_DIR" ]
+          [ -f "$QA_CHECK_PATH" ] && [ ! -L "$QA_CHECK_PATH" ]
+          [ "$(/usr/bin/stat -f %u "$QA_CHECK_PATH")" = "$(/usr/bin/id -u)" ]
+          [ "$(/usr/bin/stat -f %l "$QA_CHECK_PATH")" = 1 ]
+          [[ "$QA_CHECK_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          actual=$(/usr/bin/shasum -a 256 "$QA_CHECK_PATH")
+          [ "${actual%% *}" = "$QA_CHECK_SHA256" ]
+          /bin/bash scripts/hermetic/run-under-owner-sandbox.sh /bin/bash --noprofile --norc scripts/hermetic/verify-security-brokers.sh
       - name: Remove ST-1 temporary state
         if: always()
         env:
           TMPDIR: ${{ runner.temp }}
-        run: |
-          rm -rf \
-            "$RUNNER_TEMP"/metis-st1-* \
-            "$RUNNER_TEMP"/st1-unzip-* \
-            "$RUNNER_TEMP"/st1-witness-* \
-            "$HOME/Library/Logs/asktoto-qa" \
-            "$HOME/Library/Preferences/com.mantu.asktoto.qa.plist" \
-            "$HOME/Library/Saved Application State/com.mantu.asktoto.qa.savedState" \
-            "$HOME/Library/Caches/com.mantu.asktoto.qa"
-          security delete-generic-password -s "asktoto-qa Safe Storage" || true
+          OWNER_SANDBOX_PROFILE: owner-runner.sb
+          OWNER_SANDBOX_ROUTE: owner
+        run: bash scripts/hermetic/run-under-owner-sandbox.sh --cleanup-owned-temp
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         env:

@@ -467,15 +467,12 @@ exit 1
 
       const cleanup = steps(name).find((step) => step.includes('name: Remove ST-1 temporary state')) ?? ''
       expect(cleanup).toMatch(/^        if: always\(\)$/m)
-      expect(cleanup).toContain('rm -rf')
-      expect(cleanup).toContain('"$RUNNER_TEMP"/metis-st1-*')
-      expect(cleanup).toContain('"$RUNNER_TEMP"/st1-unzip-*')
-      expect(cleanup).toContain('"$RUNNER_TEMP"/st1-witness-*')
-      expect(cleanup).toContain('"$HOME/Library/Logs/asktoto-qa"')
-      expect(cleanup).toContain('"$HOME/Library/Preferences/com.mantu.asktoto.qa.plist"')
-      expect(cleanup).toContain('"$HOME/Library/Saved Application State/com.mantu.asktoto.qa.savedState"')
-      expect(cleanup).toContain('"$HOME/Library/Caches/com.mantu.asktoto.qa"')
-      expect(cleanup).toContain('security delete-generic-password -s "asktoto-qa Safe Storage" || true')
+      expect(cleanup).toContain('OWNER_SANDBOX_PROFILE: owner-runner.sb')
+      expect(cleanup).toContain('run: bash scripts/hermetic/run-under-owner-sandbox.sh --cleanup-owned-temp')
+      expect(cleanup).not.toMatch(/\$HOME|delete-generic-password|rm -rf/)
+      const postcheck = steps(name).find((step) => step.includes('id: qa_keychain_after')) ?? ''
+      expect(postcheck).toContain("if: always() && steps.qa_keychain_before.outcome == 'success'")
+      expect(steps(name).indexOf(postcheck)).toBeLessThan(steps(name).indexOf(cleanup))
     }
   })
 
