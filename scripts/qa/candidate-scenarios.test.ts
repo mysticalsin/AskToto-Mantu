@@ -1,6 +1,16 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -16,6 +26,9 @@ import {
   candidateRunProblems,
   contentProblems,
   executableFromLsof,
+  freshOnboardingChildEnv,
+  freshOnboardingLane,
+  freshOnboardingScanContext,
   guiScriptingGrants,
   installerKindForScenario,
   laneAnnotation,
@@ -25,9 +38,11 @@ import {
   prepareProfile,
   resolveOutputs,
   resolveScenario,
+  scanFreshOnboardingOutput,
   scanUploadDir,
   scenarioCommand
 } from './candidate-scenarios.mjs'
+import { NOT_COVERED } from './fresh-onboarding-baseline.mjs'
 import { LOCAL_LLM_SETTINGS } from './lib/local-llm-settings.mjs'
 import { VARIANTS } from './provenance.mjs'
 
@@ -38,6 +53,295 @@ const STALL_SHA = sha('promotable dmg bytes')
 const IDLE_SHA = sha('idle soak dmg bytes')
 const WIN_SHA = sha('setup bytes')
 const COMMIT = 'a'.repeat(40)
+
+const freshIdentity = {
+  candidate_run: 4242,
+  producer_commit: COMMIT,
+  installer_sha256: MAC_SHA,
+  version: '1.9.7',
+  harness_commit: 'b'.repeat(40),
+  platform: 'darwin'
+}
+const freshReport = () => ({
+  schema: 'metis.fresh-onboarding-baseline.v1',
+  outcome: 'PASS',
+  identity: { ...freshIdentity },
+  assertions: [
+    'hermetic-fresh-profile',
+    'pre-setup-boundary',
+    'opaque-full-display',
+    'native-display-bounds',
+    'right-edge-visible',
+    'right-edge-persisted',
+    'bar-absent',
+    'placement-to-appearance',
+    'teardown-acknowledged'
+  ].map((id) => ({ id, status: 'PASS' })),
+  failure: 'none',
+  teardown: 'ACKNOWLEDGED',
+  not_covered: NOT_COVERED
+})
+
+describe('fresh onboarding fixed-schema support evidence', () => {
+  it('allows only platform runtime inputs into the runner, never GitHub command files or credentials', () => {
+    const safe = { Path: 'fixture-bin', SystemRoot: 'fixture-system', LANG: 'C', TEMP: 'fixture-temp' }
+    const env = {
+      ...safe,
+      GITHUB_OUTPUT: 'private-output',
+      GITHUB_STEP_SUMMARY: 'private-summary',
+      GITHUB_ENV: 'private-env',
+      GITHUB_PATH: 'private-path',
+      GITHUB_STATE: 'private-state',
+      GITHUB_TOKEN: 'synthetic-secret',
+      github_output: 'private-lowercase-output',
+      GH_TOKEN: 'synthetic-secret',
+      API_KEY: 'synthetic-secret',
+      NODE_OPTIONS: 'private-debug',
+      ASKTOTO_USERDATA: 'private-profile',
+      HOME: 'private-home',
+      CI: 'true',
+      DISPLAY: 'private-display',
+      XAUTHORITY: 'private-auth',
+      TMP: undefined
+    }
+    expect(freshOnboardingChildEnv(env)).toEqual(safe)
+    expect(env).toHaveProperty('GITHUB_OUTPUT', 'private-output')
+    const source = readFileSync(join(root, 'scripts/qa/candidate-scenarios.mjs'), 'utf8')
+    const branch = source.slice(
+      source.indexOf('if (scenario === FRESH_ONBOARDING_SCENARIO) {', source.indexOf('function run(values)'))
+    )
+    expect(branch).toContain("stdio: 'ignore'")
+    expect(branch).toContain('timeout: 240_000')
+    expect(branch).toContain('env: freshOnboardingChildEnv(process.env)')
+  })
+
+  const scanContext = { identity: freshIdentity, ciRun: 5151, laneWritten: true }
+  const scan = (dir: string) => scanFreshOnboardingOutput(dir, scanContext)
+  const laneInput = (reportData: unknown = freshReport()) => ({
+    platform: 'mac',
+    env: { GITHUB_RUN_ID: '5151', GITHUB_SHA: freshIdentity.harness_commit },
+    provenance: { commit: COMMIT, version: '1.9.7', run: { id: 4242 } },
+    candidateRun: '4242',
+    sha256: MAC_SHA,
+    exitCode: 0,
+    reportWritten: true,
+    reportData
+  })
+  const dirs: string[] = []
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+  })
+  const outputs = () => {
+    const dir = mkdtempSync(join(tmpdir(), 'metis-fresh-output-'))
+    dirs.push(dir)
+    writeFileSync(join(dir, 'fresh-onboarding-baseline.json'), JSON.stringify(freshReport()))
+    writeFileSync(join(dir, 'lane.json'), JSON.stringify(freshOnboardingLane(laneInput())))
+    return dir
+  }
+
+  it.each([
+    '1.2.3-.',
+    '1.2.3-a..b',
+    '1.2.3-01',
+    '01.2.3',
+    '1.02.3',
+    '1.2.03',
+    undefined,
+    null,
+    123,
+    '',
+    `1.2.3+${'a'.repeat(60)}`
+  ])('rejects noncanonical or overlong candidate versions at both lane boundaries: %s', (version) => {
+    const report = { ...freshReport(), identity: { ...freshIdentity, version } }
+    const input = { ...laneInput(report), provenance: { ...laneInput().provenance, version } }
+    const lane = freshOnboardingLane(input)
+    expect(lane).toMatchObject({ outcome: 'FAIL', detail: 'invalid-context', identity: { version: null } })
+    const context = freshOnboardingScanContext({ ...input, laneWritten: true })
+    expect(context?.identity.version).toBeNull()
+    expect(scanFreshOnboardingOutput(outputs(), context)).toEqual(['output-context-invalid'])
+  })
+
+  it.each([
+    '0.0.0',
+    '2.0.0-rc.1',
+    '2.0.0-01a+build.007',
+    '2.0.0+007'
+  ])('retains the exact valid prerelease/build identity: %s', (version) => {
+    const report = { ...freshReport(), identity: { ...freshIdentity, version } }
+    const input = { ...laneInput(report), provenance: { ...laneInput().provenance, version } }
+    const lane = freshOnboardingLane(input)
+    expect(lane).toMatchObject({ outcome: 'PASS', detail: 'none', identity: { version } })
+    const context = freshOnboardingScanContext({ ...input, laneWritten: true })
+    expect(context?.identity.version).toBe(version)
+    const dir = outputs()
+    writeFileSync(join(dir, 'fresh-onboarding-baseline.json'), JSON.stringify(report))
+    writeFileSync(join(dir, 'lane.json'), JSON.stringify(lane))
+    expect(scanFreshOnboardingOutput(dir, context)).toEqual([])
+  })
+
+  it('rejects foreign-run provenance even when its commit, version and installer identity match', () => {
+    const input = { ...laneInput(), laneWritten: true }
+    expect(freshOnboardingScanContext(input)).toEqual(scanContext)
+    const dir = outputs()
+    for (const run of [{ id: 4243 }, {}]) {
+      const context = freshOnboardingScanContext({
+        ...input,
+        provenance: { ...input.provenance, run }
+      })
+      expect(context).toBeUndefined()
+      expect(scanFreshOnboardingOutput(dir, context)).toEqual(['output-context-invalid'])
+    }
+  })
+
+  it('requires matching identities, PASS assertions and a successful child; does not copy raw metadata', () => {
+    const lane = freshOnboardingLane(laneInput())
+    expect(lane.outcome).toBe('PASS')
+    expect(lane).toMatchObject({ support_only: true, identity: freshIdentity, ci_run_id: 5151, detail: 'none' })
+    const injected = freshOnboardingLane({
+      ...laneInput(),
+      detail: 'private fixture',
+      argv: ['private fixture']
+    } as any)
+    expect(JSON.stringify(injected)).not.toContain('private fixture')
+    expect(injected).not.toHaveProperty('command')
+    expect(injected).not.toHaveProperty('runner_image')
+    expect(freshOnboardingLane({ ...laneInput(), exitCode: 1 }).outcome).toBe('FAIL')
+    expect(freshOnboardingLane({ ...laneInput(), exitCode: null }).outcome).toBe('FAIL')
+    expect(freshOnboardingLane({ ...laneInput(), reportWritten: false }).detail).toBe('report-missing')
+    expect(freshOnboardingLane(laneInput(null)).outcome).toBe('FAIL')
+    expect(freshOnboardingLane({ ...laneInput(), env: {} }).detail).toBe('invalid-context')
+  })
+
+  it.each([
+    'candidate_run',
+    'producer_commit',
+    'installer_sha256',
+    'version',
+    'harness_commit',
+    'platform'
+  ])('rejects a foreign report %s even when the process exits zero', (field) => {
+    const report = freshReport()
+    Object.assign(report.identity, { [field]: field === 'candidate_run' ? 4243 : 'foreign' })
+    expect(freshOnboardingLane(laneInput(report)).outcome).toBe('FAIL')
+  })
+
+  it('rejects absent/duplicate assertions, unacknowledged cleanup and unknown report fields', () => {
+    for (const report of [
+      { ...freshReport(), assertions: [] },
+      { ...freshReport(), teardown: 'UNACKNOWLEDGED' },
+      { ...freshReport(), diagnostics: 'private fixture' },
+      { ...freshReport(), outcome: 'invented-success' }
+    ]) {
+      expect(freshOnboardingLane(laneInput(report)).outcome).toBe('FAIL')
+    }
+    const duplicate = freshReport()
+    duplicate.assertions[1] = duplicate.assertions[0]
+    expect(freshOnboardingLane(laneInput(duplicate)).outcome).toBe('FAIL')
+  })
+
+  it.each(['FAIL', 'PRECONDITION'])('retains a valid bound %s report without mislabeling it rejected', (outcome) => {
+    const report = {
+      ...freshReport(),
+      outcome,
+      failure: outcome === 'FAIL' ? 'action-timeout' : 'installer-hash-mismatch',
+      teardown: outcome === 'FAIL' ? 'ACKNOWLEDGED' : 'NOT_ATTEMPTED',
+      assertions: freshReport().assertions.map((row) => ({
+        ...row,
+        status: outcome === 'PRECONDITION' ? 'NOT_RUN' : row.id === 'right-edge-persisted' ? 'FAIL' : 'PASS'
+      }))
+    }
+    const input = { ...laneInput(report), exitCode: outcome === 'FAIL' ? 1 : 2 }
+    const lane = freshOnboardingLane(input)
+    expect(lane.outcome).toBe(outcome)
+    expect(lane.detail).toBe('scenario-failed')
+    const dir = outputs()
+    writeFileSync(join(dir, 'fresh-onboarding-baseline.json'), JSON.stringify(report))
+    writeFileSync(join(dir, 'lane.json'), JSON.stringify(lane))
+    expect(scan(dir)).toEqual([])
+    report.identity.candidate_run = 4243
+    const foreign = freshOnboardingLane({ ...input, reportData: report })
+    expect(foreign.outcome).toBe('FAIL')
+    expect(foreign.detail).toBe('report-rejected')
+  })
+
+  it('admits only the two exact, schema-validated, bound JSON files', () => {
+    const dir = outputs()
+    expect(scan(dir)).toEqual([])
+    expect(
+      scanUploadDir(dir, {
+        account: 'runner',
+        scenario: 'fresh-onboarding-baseline',
+        freshContext: scanContext
+      })
+    ).toEqual([])
+    writeFileSync(join(dir, 'unexpected.txt'), 'private fixture')
+    expect(scan(dir)).toEqual(['output-file-list-invalid'])
+    expect(existsSync(join(dir, 'unexpected.txt'))).toBe(true)
+  })
+
+  it.each([
+    'malformed',
+    'extra-field',
+    'oversize',
+    'wrong-binding',
+    'hardlink',
+    'symlink'
+  ])('withholds %s output without echoing raw diagnostic contents', (kind) => {
+    const dir = outputs()
+    const path = join(dir, 'fresh-onboarding-baseline.json')
+    if (kind === 'malformed') writeFileSync(path, 'private fixture: not JSON')
+    if (kind === 'extra-field') writeFileSync(path, JSON.stringify({ ...freshReport(), secret: 'private fixture' }))
+    if (kind === 'oversize') writeFileSync(path, 'x'.repeat(65_537))
+    if (kind === 'wrong-binding') {
+      const report = freshReport()
+      report.identity.candidate_run = 4243
+      writeFileSync(path, JSON.stringify(report))
+    }
+    if (kind === 'hardlink' || kind === 'symlink') {
+      const external = mkdtempSync(join(tmpdir(), 'metis-fresh-link-'))
+      dirs.push(external)
+      if (kind === 'hardlink') linkSync(path, join(external, 'linked.json'))
+      else {
+        rmSync(path)
+        symlinkSync(external, path, 'junction')
+      }
+    }
+    const problems = scan(dir)
+    expect(problems.length).toBeGreaterThan(0)
+    expect(JSON.stringify(problems)).not.toContain('private fixture')
+    expect(JSON.stringify(problems)).not.toContain(dir)
+  })
+
+  it('does not authorize a coordinated foreign report and lane, or a matching pair not written by the parent', () => {
+    const dir = outputs()
+    expect(scanFreshOnboardingOutput(dir)).toEqual(['output-context-invalid'])
+    expect(scanFreshOnboardingOutput(dir, { ...scanContext, laneWritten: false })).toEqual(['output-context-invalid'])
+    const foreign = freshReport()
+    foreign.identity.candidate_run = 4243
+    const foreignLane = freshOnboardingLane({
+      ...laneInput(foreign),
+      candidateRun: '4243',
+      provenance: { commit: COMMIT, version: '1.9.7', run: { id: 4243 } }
+    })
+    expect(foreignLane.outcome).toBe('PASS')
+    writeFileSync(join(dir, 'fresh-onboarding-baseline.json'), JSON.stringify(foreign))
+    writeFileSync(join(dir, 'lane.json'), JSON.stringify(foreignLane))
+    expect(scan(dir)).toEqual(['output-binding-invalid'])
+  })
+
+  it('rejects mismatched non-PASS outcome and exit records instead of trusting their labels', () => {
+    const dir = outputs()
+    const lane = freshOnboardingLane(laneInput())
+    for (const changed of [
+      { ...lane, outcome: 'FAIL', detail: 'scenario-failed', exit_code: 1 },
+      { ...lane, outcome: 'PRECONDITION', detail: 'report-rejected', exit_code: 2 },
+      { ...lane, exit_code: null }
+    ]) {
+      writeFileSync(join(dir, 'lane.json'), JSON.stringify(changed))
+      expect(scan(dir)).toEqual(['output-outcome-invalid'])
+    }
+  })
+})
 
 const successfulDispatch = {
   id: 4242,
@@ -102,7 +406,8 @@ describe('the scenario registry', () => {
       'idle-soak',
       'sidecar-boot-reaper',
       'packaged-lifecycle',
-      'renderer-kill'
+      'renderer-kill',
+      'fresh-onboarding-baseline'
     ])
     const mac = SCENARIOS['fault-fatal-relaunch'].platforms.mac
     expect(Object.keys(SCENARIOS['fault-fatal-relaunch'].platforms)).toEqual(['mac'])
@@ -139,6 +444,66 @@ describe('the scenario registry', () => {
       /does not run on win/
     )
     expect(outcomeForExit('ex-suite', 2)).toBe('PRECONDITION')
+  })
+
+  it('keeps fresh onboarding manual, with exact variants and no seeded settings or GUI grants', () => {
+    const entry = SCENARIOS['fresh-onboarding-baseline']
+    expect(entry.ticket).toBe('M2-0456')
+    expect(entry.qaOnlyHook).toBe(false)
+    expect(entry.reportAssessment).toBe('fresh-onboarding-baseline')
+    expect(Object.keys(entry.platforms)).toEqual(['mac', 'win'])
+    for (const platform of ['mac', 'win'] as const) {
+      const target = entry.platforms[platform]
+      expect(target.variant).toBe(platform)
+      expect(target.artifact).toBe(`candidate-${platform}`)
+      expect(target.script).toBe('scripts/qa/fresh-onboarding-baseline.mjs')
+      expect(target.report).toBe('fresh-onboarding-baseline.json')
+      expect(target.isolatedProfiles).toBe(true)
+      expect('settings' in target).toBe(false)
+      expect('guiScripting' in target).toBe(false)
+      expect(prepareProfile({ scenario: 'fresh-onboarding-baseline', platform, appDataDir: null })).toBeNull()
+    }
+    expect(installerKindForScenario('fresh-onboarding-baseline', 'mac')).toBe('mac-dmg')
+    expect(installerKindForScenario('fresh-onboarding-baseline', 'win')).toBe('win')
+    expect(candidateRunProblems({ ...successfulDispatch, event: 'pull_request' }, 4242)).not.toEqual([])
+  })
+
+  it.each([
+    ['mac', 'darwin', 'assets/Metis-1.9.7.dmg', 'candidate-install/Metis.app'],
+    ['win', 'win32', 'assets/Metis-Setup-1.9.7.exe', '../../_temp/candidate-install/Metis.exe']
+  ])('binds fresh onboarding argv to installer, provenance and harness on %s', (platform, host, installer, app) => {
+    const input = {
+      scenario: 'fresh-onboarding-baseline',
+      platform,
+      installer,
+      app,
+      sha256: MAC_SHA,
+      outDir: 'candidate-scenario',
+      provenancePath: 'provenance/provenance.json',
+      candidateRun: '4242',
+      harnessCommit: COMMIT
+    }
+    expect(scenarioCommand(input)).toEqual([
+      'scripts/qa/fresh-onboarding-baseline.mjs',
+      '--app',
+      app,
+      '--installer',
+      installer,
+      '--sha256',
+      MAC_SHA,
+      '--provenance',
+      'provenance/provenance.json',
+      '--candidate-run',
+      '4242',
+      '--harness-commit',
+      COMMIT,
+      '--platform',
+      host,
+      '--out',
+      'candidate-scenario/fresh-onboarding-baseline.json'
+    ])
+    expect(() => scenarioCommand({ ...input, harnessCommit: undefined })).toThrow()
+    expect(() => scenarioCommand({ ...input, provenancePath: '/private/provenance.json' })).toThrow(/relative/)
   })
 
   it('runs ex-suite --packaged on the installed app, relative to the checkout, with 3 launches, and only from a DMG', () => {

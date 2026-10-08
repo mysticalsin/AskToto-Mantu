@@ -46,6 +46,7 @@ on:
           - sidecar-boot-reaper
           - packaged-lifecycle
           - renderer-kill
+          - fresh-onboarding-baseline
       mac_sha256:
         description: sha256 of the macOS installer the scenario installs (empty when it does not run on macOS)
         required: false
@@ -220,13 +221,28 @@ jobs:
         id: scan
         if: always()
         continue-on-error: true
-        run: node scripts/qa/candidate-scenarios.mjs scan "$OUT" --account "$(id -un)"
+        env:
+          FRESH_LANE_WRITTEN: ${{ steps.scenario.outputs.fresh_lane_written }}
+        run: >
+          node scripts/qa/candidate-scenarios.mjs scan "$OUT" --account "$(id -un)" --scenario "$SCENARIO"
+          --platform mac --candidate-run "$CANDIDATE_RUN" --sha256 "$INSTALLER_SHA256"
+          --provenance provenance/provenance.json --lane-written "$FRESH_LANE_WRITTEN"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: always()
+        if: always() && inputs.scenario != 'fresh-onboarding-baseline'
         with:
           name: candidate-scenario-${{ inputs.scenario }}-mac
           path: candidate-scenario/
           if-no-files-found: warn
+          retention-days: 30
+      - name: Upload only validated fresh-onboarding JSON
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always() && inputs.scenario == 'fresh-onboarding-baseline' && steps.scan.outcome == 'success'
+        with:
+          name: candidate-scenario-${{ inputs.scenario }}-mac
+          path: |
+            candidate-scenario/fresh-onboarding-baseline.json
+            candidate-scenario/lane.json
+          if-no-files-found: error
           retention-days: 30
       - name: Fail unless the scenario passed and every file was content-free
         if: always() && (steps.scenario.outcome != 'success' || steps.scan.outcome != 'success')
@@ -326,13 +342,28 @@ jobs:
         id: scan
         if: always()
         continue-on-error: true
-        run: node scripts/qa/candidate-scenarios.mjs scan "$OUT" --account "$(id -un)"
+        env:
+          FRESH_LANE_WRITTEN: ${{ steps.scenario.outputs.fresh_lane_written }}
+        run: >
+          node scripts/qa/candidate-scenarios.mjs scan "$OUT" --account "$(id -un)" --scenario "$SCENARIO"
+          --platform win --candidate-run "$CANDIDATE_RUN" --sha256 "$INSTALLER_SHA256"
+          --provenance provenance/provenance.json --lane-written "$FRESH_LANE_WRITTEN"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: always()
+        if: always() && inputs.scenario != 'fresh-onboarding-baseline'
         with:
           name: candidate-scenario-${{ inputs.scenario }}-win
           path: candidate-scenario/
           if-no-files-found: warn
+          retention-days: 30
+      - name: Upload only validated fresh-onboarding JSON
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always() && inputs.scenario == 'fresh-onboarding-baseline' && steps.scan.outcome == 'success'
+        with:
+          name: candidate-scenario-${{ inputs.scenario }}-win
+          path: |
+            candidate-scenario/fresh-onboarding-baseline.json
+            candidate-scenario/lane.json
+          if-no-files-found: error
           retention-days: 30
       - name: Fail unless the scenario passed and every file was content-free
         if: always() && (steps.scenario.outcome != 'success' || steps.scan.outcome != 'success')
