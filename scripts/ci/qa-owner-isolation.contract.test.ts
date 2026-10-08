@@ -2,7 +2,10 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-const workflow = readFileSync(join(__dirname, '../../.github/workflows/qa-candidate.yml'), 'utf8').replace(/\r\n/g, '\n')
+const workflow = readFileSync(join(__dirname, '../../.github/workflows/qa-candidate.yml'), 'utf8').replace(
+  /\r\n/g,
+  '\n'
+)
 const ownerJobs = ['st1-mac-fifo', 'st1-mac-control'] as const
 const jobs = new Map(
   workflow
@@ -22,7 +25,9 @@ function steps(name: string): string[] {
 
 function stepWith(all: string[], property: string, value: string): string {
   const matches = all.filter((step) =>
-    step.split('\n').some((line) => line === `      - ${property}: ${value}` || line === `        ${property}: ${value}`)
+    step
+      .split('\n')
+      .some((line) => line === `      - ${property}: ${value}` || line === `        ${property}: ${value}`)
   )
   expect(matches, `exactly one step with ${property}: ${value}`).toHaveLength(1)
   return matches[0]
@@ -56,16 +61,16 @@ describe('owner QA isolation workflow admission [M2-0538]', () => {
       }
     })
 
-    it.each(['Verify every byte against the provenance', 'Verify every byte against the provenance (retry)'])(
-      'isolates the individual %s step',
-      (stepName) => {
-        const step = stepWith(steps(name), 'name', stepName)
-        strictProfile(step)
-        expect(step).toMatch(
-          /^ {8}run: bash scripts\/hermetic\/run-under-owner-sandbox\.sh node scripts\/qa\/provenance\.mjs verify provenance\/provenance\.json assets mac-qa-identity$/m
-        )
-      }
-    )
+    it.each([
+      'Verify every byte against the provenance',
+      'Verify every byte against the provenance (retry)'
+    ])('isolates the individual %s step', (stepName) => {
+      const step = stepWith(steps(name), 'name', stepName)
+      strictProfile(step)
+      expect(step).toMatch(
+        /^ {8}run: bash scripts\/hermetic\/run-under-owner-sandbox\.sh node scripts\/qa\/provenance\.mjs verify provenance\/provenance\.json assets mac-qa-identity$/m
+      )
+    })
 
     it('isolates the packaged measurement rather than only its provenance check', () => {
       const measurements = steps(name).filter((step) =>
