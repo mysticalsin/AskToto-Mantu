@@ -790,7 +790,12 @@ describe('recoverOrphanDrafts (crash-recovery promotion)', () => {
 })
 
 describe('parseRecapMarkdown', () => {
-  it.each(['constructor', '__proto__', '__definegetter__', 'hasownproperty'])('keeps the unknown heading %s as text, never an inherited alias', (heading) => {
+  it.each([
+    'constructor',
+    '__proto__',
+    '__definegetter__',
+    'hasownproperty'
+  ])('keeps the unknown heading %s as text, never an inherited alias', (heading) => {
     expect(recapSectionKey(heading)).toBe(heading)
   })
 
