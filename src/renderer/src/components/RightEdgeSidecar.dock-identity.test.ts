@@ -235,7 +235,7 @@ describe('right-edge dock renders as one element (M2-0431)', () => {
         ({ width, height }) => {
           const root = document.getElementById('root')
           if (!(root instanceof HTMLElement)) throw new Error('Missing synthetic root.')
-          root.style.position = 'absolute'
+          root.style.position = 'fixed'
           root.style.left = '0'
           root.style.top = '0'
           root.style.width = `${width}px`
