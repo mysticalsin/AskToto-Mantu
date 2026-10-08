@@ -56,12 +56,13 @@ try {
   if (typeof payload === 'string' && payload.trim().startsWith('{')) {
     const obj = JSON.parse(payload)
     proxyKey = typeof obj?.token === 'string' ? obj.token : ''
-    embeddedBaseUrl = typeof obj?.baseUrl === 'string' && obj.baseUrl.trim() ? obj.baseUrl.trim().replace(/\/+$/, '') : null
+    embeddedBaseUrl =
+      typeof obj?.baseUrl === 'string' && obj.baseUrl.trim() ? obj.baseUrl.trim().replace(/\/+$/, '') : null
   } else {
     proxyKey = payload
   }
-} catch (e) {
-  console.error(`[check:cf-key] FAIL — build/cloudflare-embed/key.json could not be read/decrypted: ${e.message}`)
+} catch {
+  console.error('[check:cf-key] FAIL — build/cloudflare-embed/key.json could not be read/decrypted.')
   console.error('[check:cf-key]   It must be the encrypted blob written by scripts/embed-cloudflare-key.mjs.')
   process.exit(1)
 }
@@ -75,13 +76,15 @@ if (typeof proxyKey !== 'string' || !proxyKey.trim()) {
 // (read from source, never duplicated here). Validating a different endpoint than users hit proves nothing.
 let baseForProbe = embeddedBaseUrl
 if (!baseForProbe) {
-  const ipc = readFileSync(join(repoRoot, 'src', 'shared', 'ipc.ts'), 'utf8')
-  const urlMatch = ipc.match(/export const METIS_WORKER_URL = '([^']+)'/)
-  if (!urlMatch) {
+  try {
+    const ipc = readFileSync(join(repoRoot, 'src', 'shared', 'ipc.ts'), 'utf8')
+    const urlMatch = ipc.match(/export const METIS_WORKER_URL = '([^']+)'/)
+    if (!urlMatch) throw new Error('missing Worker endpoint')
+    baseForProbe = urlMatch[1].replace(/\/+$/, '')
+  } catch {
     console.error('[check:cf-key] FAIL — could not read METIS_WORKER_URL from src/shared/ipc.ts.')
     process.exit(1)
   }
-  baseForProbe = urlMatch[1].replace(/\/+$/, '')
 }
 const endpoint = `${baseForProbe}/chat/completions`
 
@@ -95,7 +98,13 @@ function defaultCloudflareModel(repoRoot) {
   return m[1]
 }
 
-const MODEL = defaultCloudflareModel(repoRoot)
+let MODEL
+try {
+  MODEL = defaultCloudflareModel(repoRoot)
+} catch {
+  console.error('[check:cf-key] FAIL — could not read the Cloudflare defaultModel from src/shared/providers.ts.')
+  process.exit(1)
+}
 
 const controller = new AbortController()
 const timer = setTimeout(() => controller.abort(), 45_000)
@@ -109,9 +118,9 @@ try {
     // prove the Worker is up without proving this key is accepted, which is the entire question.
     body: JSON.stringify({ model: MODEL, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 })
   })
-} catch (e) {
+} catch {
   clearTimeout(timer)
-  console.error(`[check:cf-key] FAIL — could not reach the Worker at ${endpoint}: ${e.message}`)
+  console.error('[check:cf-key] FAIL — could not reach the Worker.')
   console.error('[check:cf-key]   A key that cannot be verified must not ship: onboarding would report the')
   console.error('[check:cf-key]   provider ready and the first question would fail with no way to diagnose it.')
   process.exit(1)
@@ -121,7 +130,7 @@ clearTimeout(timer)
 if (res.status === 401 || res.status === 403) {
   console.error(`[check:cf-key] FAIL — the Worker REJECTED the embedded key (HTTP ${res.status}).`)
   console.error('')
-  console.error('  The key exists locally but is not in the Worker\'s METIS_PROXY_KEYS, so every fresh')
+  console.error("  The key exists locally but is not in the Worker's METIS_PROXY_KEYS, so every fresh")
   console.error('  install would finish onboarding "configured" and then 401 on the first question.')
   console.error('')
   console.error('  Provision it (the value is in build/cloudflare-embed/key.json):')
@@ -133,11 +142,11 @@ if (res.status === 401 || res.status === 403) {
 }
 
 if (!res.ok) {
-  // Not an auth failure — the key is accepted but something else is wrong upstream. Still refuse: the
-  // promise being made to the user is "this works out of the box", and it demonstrably does not.
-  const body = await res.text().catch(() => '')
-  console.error(`[check:cf-key] FAIL — Worker answered HTTP ${res.status} for an accepted key: ${body.slice(0, 200)}`)
+  // A non-2xx reply does not prove authentication succeeded. Never read or log an untrusted body here.
+  console.error(`[check:cf-key] FAIL — Worker answered HTTP ${res.status}; the credential could not be verified.`)
   process.exit(1)
 }
 
-console.log(`[check:cf-key] OK — the Worker accepted the embedded key (HTTP ${res.status}); a fresh install needs no pasted key.`)
+console.log(
+  `[check:cf-key] OK — the Worker accepted the embedded key (HTTP ${res.status}); a fresh install needs no pasted key.`
+)
