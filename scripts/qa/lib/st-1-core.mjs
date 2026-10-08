@@ -884,6 +884,23 @@ export function emptyRun() {
   }
 }
 
+/** Report-only observed I/O, including late responses. Missing durations are unknown, not zero. */
+function allResponseIoSummary(timeline) {
+  const summarize = (key) => {
+    /** @type {number | null} */
+    let maxMs = null
+    let observedSamples = 0
+    for (const entry of timeline) {
+      const ms = entry?.[key]
+      if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) continue
+      maxMs = maxMs === null ? ms : Math.max(maxMs, ms)
+      observedSamples += 1
+    }
+    return { maxMs, observedSamples }
+  }
+  return { write: summarize('writeMs'), lookup: summarize('lookupMs') }
+}
+
 /**
  * The ST-1 report. `complete` is false for the periodic partial report and for a run the harness itself
  * could not finish (`harnessError`); either has verdict INCOMPLETE, because a measurement that stopped
@@ -952,8 +969,10 @@ export function buildReport({
     samples: measured.samples.length,
     lateSamples: measured.late.length,
     loop: measured.loop,
+    // Existing maxima and I/O criteria cover timely responses only; retain their compatibility.
     write: { maxMs: Math.max(0, ...measured.samples.map((s) => s.writeMs)) },
     lookup: { maxMs: Math.max(0, ...measured.samples.map((s) => s.lookupMs)) },
+    allResponseIo: allResponseIoSummary(timeline),
     exercised: refusalEvidence?.exercised ?? evidence?.exercised ?? null,
     ...(refusalEvidence ? { exerciseEvidence: refusalEvidence } : {}),
     ...(row === 'fifo' || row === 'synthetic-dataless' ? { fixturesOpened: evidence?.fixturesOpened ?? null } : {}),
@@ -1038,6 +1057,7 @@ export function buildLaunchFailureReport({
     build_run_id: candidate.build_run_id,
     artifact_sha256: candidate.artifact_sha256,
     fixtures: fixtures.length,
+    allResponseIo: allResponseIoSummary([]),
     exercised: false,
     criteria: [{ name: 'inspector', pass: false }],
     reason,
