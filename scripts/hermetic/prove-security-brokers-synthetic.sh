@@ -75,13 +75,17 @@ wrapper="$original_wrapper"
 
 # Actual Security API calls operate only on new, disposable hosted paths. Never delete items or
 # change global keychain configuration. Observe metadata before/after without restoring it.
+echo 'HOSTED_API_PROOF compile-fixture'
 /usr/bin/xcrun clang -std=c11 -fno-modules -Wno-deprecated-declarations -Wall -Wextra -Werror \
   -framework Security -framework CoreFoundation "$source_root/scripts/hermetic/security-broker-api.fixture.c" \
   -o "$fixture/security-api-fixture"
 api="$fixture/security-api-fixture"
+echo 'HOSTED_API_PROOF metadata-before'
 "$api" --metadata > "$fixture/metadata-before"
+echo 'HOSTED_API_PROOF unwrapped-positive'
 "$api" "$fixture/unwrapped-private.keychain-db" > "$fixture/api-positive"
 /usr/bin/grep -qx 'SYNTHETIC_API add 0' "$fixture/api-positive"
+echo 'HOSTED_API_PROOF strict-negative'
 if run /bin/bash -c 'printf writable > "$TMPDIR/api-baseline"; exec "$1" "$TMPDIR/wrapped-private.keychain-db"' _ "$api" > "$fixture/api-denied"; then
   echo 'FAIL: strict profile allowed the synthetic Security API operation' >&2; exit 1
 else status=$?; fi
@@ -100,6 +104,7 @@ for service in "${services[@]}"; do
 done
 export GITHUB_WORKSPACE="$api_permissive"
 wrapper="$api_permissive/scripts/hermetic/run-under-owner-sandbox.sh"
+echo 'HOSTED_API_PROOF same-policy-without-broker-rules'
 run /bin/bash -c 'printf writable > "$TMPDIR/api-baseline"; exec "$1" "$TMPDIR/unblocked-private.keychain-db"' _ "$api" > "$fixture/api-policy-positive"
 /usr/bin/grep -qx 'SYNTHETIC_API add 0' "$fixture/api-policy-positive"
 export GITHUB_WORKSPACE="$original_workspace"
@@ -110,6 +115,7 @@ printf 'Strict API observation: '
 /bin/cat "$fixture/api-denied"
 printf 'Same strict policy without broker rules: '
 /bin/cat "$fixture/api-policy-positive"
+echo 'HOSTED_API_PROOF metadata-after'
 "$api" --metadata > "$fixture/metadata-after"
 /usr/bin/cmp -s "$fixture/metadata-before" "$fixture/metadata-after"
 run /bin/bash scripts/hermetic/verify-security-brokers.sh

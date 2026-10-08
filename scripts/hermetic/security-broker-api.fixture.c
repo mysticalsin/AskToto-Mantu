@@ -12,36 +12,59 @@ static void expired(int signal_number) {
     _exit(124);
 }
 
+static int fail_stage(const char *stage) {
+    fprintf(stderr, "HOSTED_API_STAGE %s failed\n", stage);
+    return 2;
+}
+
+static int fail_status(const char *stage, OSStatus status) {
+    fprintf(stderr, "HOSTED_API_STAGE %s status %d\n", stage, (int)status);
+    return 2;
+}
+
 static int metadata(void) {
     CFArrayRef search = NULL;
     SecKeychainRef current = NULL;
-    if (SecKeychainCopySearchList(&search) != errSecSuccess || !search ||
-        SecKeychainCopyDefault(&current) != errSecSuccess || !current) return 2;
+    OSStatus status = SecKeychainCopySearchList(&search);
+    if (status != errSecSuccess) return fail_status("metadata-search-list", status);
+    if (!search) return fail_stage("metadata-search-list-null");
+    status = SecKeychainCopyDefault(&current);
+    if (status != errSecSuccess) {
+        CFRelease(search);
+        return fail_status("metadata-default", status);
+    }
+    if (!current) {
+        CFRelease(search);
+        return fail_stage("metadata-default-null");
+    }
     CFIndex count = CFArrayGetCount(search);
     for (CFIndex i = -1; i < count; i++) {
         SecKeychainRef keychain = i == -1 ? current : (SecKeychainRef)CFArrayGetValueAtIndex(search, i);
         char path[4096];
         UInt32 length = sizeof(path);
-        if (!keychain || SecKeychainGetPath(keychain, &length, path) != errSecSuccess ||
-            length >= sizeof(path)) return 2;
+        if (!keychain) return fail_stage("metadata-entry-null");
+        status = SecKeychainGetPath(keychain, &length, path);
+        if (status != errSecSuccess) return fail_status("metadata-path", status);
+        if (length >= sizeof(path)) return fail_stage("metadata-path-length");
         path[length] = '\0';
-        printf("%ld:%s\n", (long)i, path);
+        if (printf("%ld:%s\n", (long)i, path) < 0) return fail_stage("metadata-output");
     }
     CFRelease(current);
     CFRelease(search);
-    return fflush(stdout) == 0 ? 0 : 2;
+    return fflush(stdout) == 0 ? 0 : fail_stage("metadata-flush");
 }
 
 int main(int argc, char **argv) {
     const char *hosted = getenv("RUNNER_ENVIRONMENT");
     const char *actions = getenv("GITHUB_ACTIONS");
     if (argc != 2 || !hosted || strcmp(hosted, "github-hosted") ||
-        !actions || strcmp(actions, "true") || signal(SIGALRM, expired) == SIG_ERR) return 2;
+        !actions || strcmp(actions, "true")) return fail_stage("hosted-admission");
+    if (signal(SIGALRM, expired) == SIG_ERR) return fail_stage("alarm-handler");
     alarm(10);
     OSStatus status = SecKeychainSetUserInteractionAllowed(false);
-    if (status != errSecSuccess) return 2;
+    if (status != errSecSuccess) return fail_status("disable-interaction", status);
     if (strcmp(argv[1], "--metadata") == 0) return metadata();
-    if (argv[1][0] != '/') return 2;
+    if (argv[1][0] != '/') return fail_stage("fixture-path");
     SecKeychainRef keychain = NULL;
     const char password[] = "synthetic-private-fixture-only";
     status = SecKeychainCreate(argv[1], (UInt32)strlen(password), password, false, NULL, &keychain);
@@ -50,12 +73,12 @@ int main(int argc, char **argv) {
         const void *keys[] = {kSecClass, kSecAttrService, kSecAttrAccount, kSecValueData, kSecUseKeychain};
         const UInt8 bytes[] = "synthetic";
         CFDataRef data = CFDataCreate(NULL, bytes, sizeof(bytes) - 1);
-        if (!data) return 2;
+        if (!data) return fail_stage("value-allocation");
         const void *values[] = {kSecClassGenericPassword, CFSTR("metis-hosted-broker-proof"),
                                CFSTR("synthetic"), data, keychain};
         CFDictionaryRef item = CFDictionaryCreate(NULL, keys, values, 5,
                                                   &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-        if (!item) return 2;
+        if (!item) return fail_stage("item-allocation");
         status = SecItemAdd(item, NULL);
         stage = "add";
         CFRelease(item);
@@ -63,6 +86,8 @@ int main(int argc, char **argv) {
     }
     if (keychain) CFRelease(keychain);
     alarm(0);
-    printf("SYNTHETIC_API %s %d\n", stage, (int)status);
+    if (printf("SYNTHETIC_API %s %d\n", stage, (int)status) < 0 || fflush(stdout) != 0) {
+        return fail_stage("api-output");
+    }
     return status == errSecSuccess ? 0 : 3;
 }
