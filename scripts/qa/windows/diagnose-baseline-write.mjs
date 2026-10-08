@@ -404,7 +404,9 @@ function main() {
     requireHostedWindows()
     if (process.argv.length !== 2) throw new Error('NO_ARGUMENTS_ALLOWED')
     report.workflow = workflowIdentity(process.env)
-    report.baselineSha256 = createHash('sha256').update(readFileSync(join(ROOT, BASELINE))).digest('hex')
+    report.baselineSha256 = createHash('sha256')
+      .update(readFileSync(join(ROOT, BASELINE)))
+      .digest('hex')
     sandbox = createHermeticSandbox()
     const env = mergedEnv(hermeticEnv(sandbox))
     const matrix = runMatrix((mode, round, timeoutMs) => {

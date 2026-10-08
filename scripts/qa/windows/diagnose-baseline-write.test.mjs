@@ -258,9 +258,16 @@ Start-Sleep -Seconds 30
 })
 
 test('real output overflow is bounded and never copied into the public result', () => {
-  const f = fixture(`[Console]::Out.Write('${MARKER}' * 20_000)\nexit 0`)
+  const f = fixture(`
+$payload = '${MARKER}' * 20000
+$bytes = [Text.Encoding]::UTF8.GetByteCount($payload)
+[IO.File]::WriteAllText((Join-Path $OutDir 'payload-bytes'), [string]$bytes)
+[Console]::Out.Write($payload)
+exit 0`)
   try {
-    const { result } = f.run()
+    const { outDir, result } = f.run()
+    const payloadBytes = Number(readFileSync(join(outDir, 'payload-bytes'), 'utf8'))
+    assert.equal(payloadBytes, Buffer.byteLength(MARKER.repeat(20_000)))
     assert.equal(result.failure, 'OUTPUT_LIMIT')
     assert.equal(result.ok, false)
     assert.equal(JSON.stringify(result).includes(MARKER), false)
