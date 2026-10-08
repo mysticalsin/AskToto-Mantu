@@ -49,10 +49,14 @@ describe('withTimeout', () => {
 describe('boundedCall', () => {
   it('does not invoke work until the bounded call begins', async () => {
     const calls: string[] = []
-    const result = await boundedCall(() => {
-      calls.push('run')
-      return Promise.resolve('done')
-    }, 1_000, 'bounded')
+    const result = await boundedCall(
+      () => {
+        calls.push('run')
+        return Promise.resolve('done')
+      },
+      1_000,
+      'bounded'
+    )
     expect(result).toBe('done')
     expect(calls).toEqual(['run'])
   })
@@ -558,9 +562,9 @@ describe('owned direct-launch endpoint handshakes', () => {
 
 describe('disposeFreshOnboardingTransports', () => {
   it('preserves an explicit false close receipt from an owned transport', async () => {
-    await expect(
-      disposeFreshOnboardingTransports({ inspector: { close: async () => false } }, 1_000)
-    ).resolves.toBe(false)
+    await expect(disposeFreshOnboardingTransports({ inspector: { close: async () => false } }, 1_000)).resolves.toBe(
+      false
+    )
   })
 })
 

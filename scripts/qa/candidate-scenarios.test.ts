@@ -161,21 +161,23 @@ describe('fresh onboarding fixed-schema support evidence', () => {
     expect(scanFreshOnboardingOutput(outputs(), context)).toEqual(['output-context-invalid'])
   })
 
-  it.each(['0.0.0', '2.0.0-rc.1', '2.0.0-01a+build.007', '2.0.0+007'])(
-    'retains the exact valid prerelease/build identity: %s',
-    (version) => {
-      const report = { ...freshReport(), identity: { ...freshIdentity, version } }
-      const input = { ...laneInput(report), provenance: { ...laneInput().provenance, version } }
-      const lane = freshOnboardingLane(input)
-      expect(lane).toMatchObject({ outcome: 'PASS', detail: 'none', identity: { version } })
-      const context = freshOnboardingScanContext({ ...input, laneWritten: true })
-      expect(context?.identity.version).toBe(version)
-      const dir = outputs()
-      writeFileSync(join(dir, 'fresh-onboarding-baseline.json'), JSON.stringify(report))
-      writeFileSync(join(dir, 'lane.json'), JSON.stringify(lane))
-      expect(scanFreshOnboardingOutput(dir, context)).toEqual([])
-    }
-  )
+  it.each([
+    '0.0.0',
+    '2.0.0-rc.1',
+    '2.0.0-01a+build.007',
+    '2.0.0+007'
+  ])('retains the exact valid prerelease/build identity: %s', (version) => {
+    const report = { ...freshReport(), identity: { ...freshIdentity, version } }
+    const input = { ...laneInput(report), provenance: { ...laneInput().provenance, version } }
+    const lane = freshOnboardingLane(input)
+    expect(lane).toMatchObject({ outcome: 'PASS', detail: 'none', identity: { version } })
+    const context = freshOnboardingScanContext({ ...input, laneWritten: true })
+    expect(context?.identity.version).toBe(version)
+    const dir = outputs()
+    writeFileSync(join(dir, 'fresh-onboarding-baseline.json'), JSON.stringify(report))
+    writeFileSync(join(dir, 'lane.json'), JSON.stringify(lane))
+    expect(scanFreshOnboardingOutput(dir, context)).toEqual([])
+  })
 
   it('rejects foreign-run provenance even when its commit, version and installer identity match', () => {
     const input = { ...laneInput(), laneWritten: true }
@@ -210,14 +212,18 @@ describe('fresh onboarding fixed-schema support evidence', () => {
     expect(freshOnboardingLane({ ...laneInput(), env: {} }).detail).toBe('invalid-context')
   })
 
-  it.each(['candidate_run', 'producer_commit', 'installer_sha256', 'version', 'harness_commit', 'platform'])(
-    'rejects a foreign report %s even when the process exits zero',
-    (field) => {
-      const report = freshReport()
-      Object.assign(report.identity, { [field]: field === 'candidate_run' ? 4243 : 'foreign' })
-      expect(freshOnboardingLane(laneInput(report)).outcome).toBe('FAIL')
-    }
-  )
+  it.each([
+    'candidate_run',
+    'producer_commit',
+    'installer_sha256',
+    'version',
+    'harness_commit',
+    'platform'
+  ])('rejects a foreign report %s even when the process exits zero', (field) => {
+    const report = freshReport()
+    Object.assign(report.identity, { [field]: field === 'candidate_run' ? 4243 : 'foreign' })
+    expect(freshOnboardingLane(laneInput(report)).outcome).toBe('FAIL')
+  })
 
   it('rejects absent/duplicate assertions, unacknowledged cleanup and unknown report fields', () => {
     for (const report of [
@@ -273,41 +279,43 @@ describe('fresh onboarding fixed-schema support evidence', () => {
     expect(existsSync(join(dir, 'unexpected.txt'))).toBe(true)
   })
 
-  it.each(['malformed', 'extra-field', 'oversize', 'wrong-binding', 'hardlink', 'symlink'])(
-    'withholds %s output without echoing raw diagnostic contents',
-    (kind) => {
-      const dir = outputs()
-      const path = join(dir, 'fresh-onboarding-baseline.json')
-      if (kind === 'malformed') writeFileSync(path, 'private fixture: not JSON')
-      if (kind === 'extra-field') writeFileSync(path, JSON.stringify({ ...freshReport(), secret: 'private fixture' }))
-      if (kind === 'oversize') writeFileSync(path, 'x'.repeat(65_537))
-      if (kind === 'wrong-binding') {
-        const report = freshReport()
-        report.identity.candidate_run = 4243
-        writeFileSync(path, JSON.stringify(report))
-      }
-      if (kind === 'hardlink' || kind === 'symlink') {
-        const external = mkdtempSync(join(tmpdir(), 'metis-fresh-link-'))
-        dirs.push(external)
-        if (kind === 'hardlink') linkSync(path, join(external, 'linked.json'))
-        else {
-          rmSync(path)
-          symlinkSync(external, path, 'junction')
-        }
-      }
-      const problems = scan(dir)
-      expect(problems.length).toBeGreaterThan(0)
-      expect(JSON.stringify(problems)).not.toContain('private fixture')
-      expect(JSON.stringify(problems)).not.toContain(dir)
+  it.each([
+    'malformed',
+    'extra-field',
+    'oversize',
+    'wrong-binding',
+    'hardlink',
+    'symlink'
+  ])('withholds %s output without echoing raw diagnostic contents', (kind) => {
+    const dir = outputs()
+    const path = join(dir, 'fresh-onboarding-baseline.json')
+    if (kind === 'malformed') writeFileSync(path, 'private fixture: not JSON')
+    if (kind === 'extra-field') writeFileSync(path, JSON.stringify({ ...freshReport(), secret: 'private fixture' }))
+    if (kind === 'oversize') writeFileSync(path, 'x'.repeat(65_537))
+    if (kind === 'wrong-binding') {
+      const report = freshReport()
+      report.identity.candidate_run = 4243
+      writeFileSync(path, JSON.stringify(report))
     }
-  )
+    if (kind === 'hardlink' || kind === 'symlink') {
+      const external = mkdtempSync(join(tmpdir(), 'metis-fresh-link-'))
+      dirs.push(external)
+      if (kind === 'hardlink') linkSync(path, join(external, 'linked.json'))
+      else {
+        rmSync(path)
+        symlinkSync(external, path, 'junction')
+      }
+    }
+    const problems = scan(dir)
+    expect(problems.length).toBeGreaterThan(0)
+    expect(JSON.stringify(problems)).not.toContain('private fixture')
+    expect(JSON.stringify(problems)).not.toContain(dir)
+  })
 
   it('does not authorize a coordinated foreign report and lane, or a matching pair not written by the parent', () => {
     const dir = outputs()
     expect(scanFreshOnboardingOutput(dir)).toEqual(['output-context-invalid'])
-    expect(scanFreshOnboardingOutput(dir, { ...scanContext, laneWritten: false })).toEqual([
-      'output-context-invalid'
-    ])
+    expect(scanFreshOnboardingOutput(dir, { ...scanContext, laneWritten: false })).toEqual(['output-context-invalid'])
     const foreign = freshReport()
     foreign.identity.candidate_run = 4243
     const foreignLane = freshOnboardingLane({

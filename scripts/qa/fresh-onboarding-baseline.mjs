@@ -95,6 +95,46 @@ const RELEASE_TIMEOUT_MS = 5_000
 /** @typedef {{ extractFile: (archive: string, entry: string) => Buffer | Uint8Array | string }} PackagedAsar */
 /** @typedef {{ target: { installRoot: string, executable: string }, platform: string,
  *   loadAsar?: () => Promise<PackagedAsar>, lstat?: (path: string) => PackagedAsarStat }} PackagedAsarVersionOptions */
+/**
+ * @typedef {{
+ *   candidate_run: number | null,
+ *   producer_commit: string | null,
+ *   installer_sha256: string | null,
+ *   version: string | null,
+ *   harness_commit: string | null,
+ *   platform: 'darwin' | 'win32' | null
+ * }} FreshOnboardingIdentity
+ */
+/**
+ * @typedef {{
+ *   candidateRun: number,
+ *   commit: string,
+ *   sha256: string,
+ *   version: string,
+ *   harnessCommit: string,
+ *   platform: 'darwin' | 'win32'
+ * }} FreshOnboardingExpectedIdentity
+ */
+/** @typedef {{ id: string, status: string }} FreshOnboardingAssertion */
+/**
+ * @typedef {{
+ *   outcome?: string,
+ *   identity?: FreshOnboardingIdentity,
+ *   assertions?: FreshOnboardingAssertion[],
+ *   failure?: string,
+ *   teardown?: string
+ * }} FreshOnboardingReportOptions
+ */
+/** @typedef {{ requirePass?: boolean }} FreshOnboardingAssessmentOptions */
+/** @typedef {{ pid?: number }} FreshOnboardingTeardownChild */
+/**
+ * @typedef {{
+ *   child?: FreshOnboardingTeardownChild | null,
+ *   stop?: (child: FreshOnboardingTeardownChild) => Promise<unknown> | unknown,
+ *   normalize?: (value: unknown) => unknown,
+ *   dispose?: () => Promise<boolean> | boolean
+ * }} FreshOnboardingTeardownOptions
+ */
 
 const plainRecord = (value) => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
@@ -267,7 +307,11 @@ function expectedIdentityProblems(expected) {
 }
 
 /** Assess a content-free report against the exact expected candidate identity. This accepts valid FAIL and
- * PRECONDITION reports when requirePass is false, so the upload scanner can distinguish schema validity from PASS. */
+ * PRECONDITION reports when requirePass is false, so the upload scanner can distinguish schema validity from PASS.
+ * @param {unknown} report
+ * @param {FreshOnboardingExpectedIdentity | undefined} [expected]
+ * @param {FreshOnboardingAssessmentOptions} [options]
+ */
 export function assessFreshOnboardingReport(report, expected = undefined, { requirePass = true } = {}) {
   const problems = reportProblems(report)
   if (!problems.length) {
@@ -299,7 +343,9 @@ export function assessFreshOnboardingReport(report, expected = undefined, { requ
   return { problems, notCovered: NOT_COVERED, row_verdicts: rows }
 }
 
-/** Construct only the closed report shape. Callers cannot add arbitrary diagnostic fields through this helper. */
+/** Construct only the closed report shape. Callers cannot add arbitrary diagnostic fields through this helper.
+ * @param {FreshOnboardingReportOptions} [options]
+ */
 export function createFreshOnboardingReport({
   outcome = 'PRECONDITION',
   identity = emptyIdentity(),
@@ -320,7 +366,9 @@ export function createFreshOnboardingReport({
   }
 }
 
-/** Mandatory shutdown ordering: acknowledge the owned child before touching Playwright transport. */
+/** Mandatory shutdown ordering: acknowledge the owned child before touching Playwright transport.
+ * @param {FreshOnboardingTeardownOptions} options
+ */
 export async function teardownThenDispose({ child, stop, normalize, dispose }) {
   // A launch timeout can still leave an Electron process running after Playwright's promise races its host budget.
   // Without the exact child receipt, neither a signal nor transport close is safe enough to infer ownership.
@@ -553,11 +601,12 @@ export function createLatchedActionCall(boundedCall, timeoutMs, message = 'fresh
     try {
       return await boundedCall(operation, budget, message)
     } catch (error) {
-      failure = error?.failure && FAILURES.has(error.failure)
-        ? error.failure
-        : error?.message === message
-          ? 'action-timeout'
-          : 'action-failed'
+      failure =
+        error?.failure && FAILURES.has(error.failure)
+          ? error.failure
+          : error?.message === message
+            ? 'action-timeout'
+            : 'action-failed'
       throw finiteError(failure)
     }
   }
@@ -575,8 +624,8 @@ export async function findFreshOnboardingPage({ browser, call, timeoutMs, verify
         if (remaining <= 0) throw finiteError('action-timeout')
         const ready = await call(
           () =>
-            page.evaluate(() =>
-              Boolean(document.querySelector('.onboard-stage')) && typeof window.toto?.getSettings === 'function'
+            page.evaluate(
+              () => Boolean(document.querySelector('.onboard-stage')) && typeof window.toto?.getSettings === 'function'
             ),
           remaining
         )
@@ -699,16 +748,8 @@ async function execute(argv) {
     const environment = strictLaunchEnvironment(process.env, state.profile, args.platform)
     let launch
     try {
-      const cdpPort = await boundedCall(
-        () => freeLoopbackPort(),
-        ACTION_TIMEOUT_MS,
-        'fresh-action-timeout'
-      )
-      const inspectPort = await boundedCall(
-        () => freeLoopbackPort(),
-        ACTION_TIMEOUT_MS,
-        'fresh-action-timeout'
-      )
+      const cdpPort = await boundedCall(() => freeLoopbackPort(), ACTION_TIMEOUT_MS, 'fresh-action-timeout')
+      const inspectPort = await boundedCall(() => freeLoopbackPort(), ACTION_TIMEOUT_MS, 'fresh-action-timeout')
       if (cdpPort === inspectPort) throw new Error('loopback-port-collision')
       state.launchAttempted = true
       launch = launchPackagedCdp({

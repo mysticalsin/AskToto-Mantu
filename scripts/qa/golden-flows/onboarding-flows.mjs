@@ -69,18 +69,21 @@ export function createOnboardingFlows(ctx) {
   }
 
   async function verifyNativeRightEdgeBounds(open, phase) {
-    const geometry = await waitFor(async () => {
-      const candidate = await overlayWindowGeometry()
-      if (!candidate) return null
-      const expected = rightEdgeExpectedSize(candidate.workArea, open)
-      const edgeGap = candidate.workArea.x + candidate.workArea.width - (candidate.bounds.x + candidate.bounds.width)
-      const correctSize = candidate.bounds.width === expected.width && candidate.bounds.height === expected.height
-      const correctRightEdge = Math.abs(edgeGap - RIGHT_EDGE_MARGIN_PX) <= 2
-      const inWorkArea =
-        candidate.bounds.y >= candidate.workArea.y &&
-        candidate.bounds.y + candidate.bounds.height <= candidate.workArea.y + candidate.workArea.height
-      return correctSize && correctRightEdge && inWorkArea ? candidate : null
-    }, `Right-edge native window did not reach its ${open ? '360px drawer' : '52px rail'} bounds after ${phase}.`)
+    const geometry = await waitFor(
+      async () => {
+        const candidate = await overlayWindowGeometry()
+        if (!candidate) return null
+        const expected = rightEdgeExpectedSize(candidate.workArea, open)
+        const edgeGap = candidate.workArea.x + candidate.workArea.width - (candidate.bounds.x + candidate.bounds.width)
+        const correctSize = candidate.bounds.width === expected.width && candidate.bounds.height === expected.height
+        const correctRightEdge = Math.abs(edgeGap - RIGHT_EDGE_MARGIN_PX) <= 2
+        const inWorkArea =
+          candidate.bounds.y >= candidate.workArea.y &&
+          candidate.bounds.y + candidate.bounds.height <= candidate.workArea.y + candidate.workArea.height
+        return correctSize && correctRightEdge && inWorkArea ? candidate : null
+      },
+      `Right-edge native window did not reach its ${open ? '360px drawer' : '52px rail'} bounds after ${phase}.`
+    )
 
     const expected = rightEdgeExpectedSize(geometry.workArea, open)
     ok(`right-edge native ${open ? 'drawer' : 'rail'} bounds are ${expected.width}×${expected.height} after ${phase}`)
@@ -256,31 +259,27 @@ export function createOnboardingFlows(ctx) {
       return {
         previewWidth: previewRect.width,
         previewBottom: previewRect.bottom,
-        rail: rail instanceof HTMLElement
-          ? {
-              width: rail.getBoundingClientRect().width,
-              right: rail.getBoundingClientRect().right,
-              bottom: rail.getBoundingClientRect().bottom
-            }
-          : null,
+        rail:
+          rail instanceof HTMLElement
+            ? {
+                width: rail.getBoundingClientRect().width,
+                right: rail.getBoundingClientRect().right,
+                bottom: rail.getBoundingClientRect().bottom
+              }
+            : null,
         drawerWidth: drawerRect.width,
         drawerRight: drawerRect.right,
         drawerBottom: drawerRect.bottom,
         previewRight: previewRect.right
       }
     })
-    if (
-      !previewMetrics ||
-      (expectedLayout === 'island' && (!previewMetrics.rail || previewMetrics.rail.width > 12))
-    ) {
+    if (!previewMetrics || (expectedLayout === 'island' && (!previewMetrics.rail || previewMetrics.rail.width > 12))) {
       throw new Error(`Right-edge Island preview did not render its compact rail: ${JSON.stringify(previewMetrics)}`)
     }
     if (previewMetrics.drawerWidth > previewMetrics.previewWidth * 0.42) {
       throw new Error(`Right-edge preview drawer is too wide: ${JSON.stringify(previewMetrics)}`)
     }
-    if (
-      Math.abs(previewMetrics.drawerRight - previewMetrics.previewRight) > 1
-    ) {
+    if (Math.abs(previewMetrics.drawerRight - previewMetrics.previewRight) > 1) {
       throw new Error(`Right-edge preview is not anchored to the preview edge: ${JSON.stringify(previewMetrics)}`)
     }
     if (
@@ -366,11 +365,7 @@ export function createOnboardingFlows(ctx) {
           style.opacity !== '0' &&
           rect.width > 0 &&
           rect.height > 0,
-        withinViewport:
-          rect.top >= 0 &&
-          rect.left >= 0 &&
-          rect.right <= window.innerWidth &&
-          rect.bottom <= window.innerHeight,
+        withinViewport: rect.top >= 0 && rect.left >= 0 && rect.right <= window.innerWidth && rect.bottom <= window.innerHeight,
         rect: {
           top: rect.top,
           left: rect.left,
@@ -476,7 +471,7 @@ export function createOnboardingFlows(ctx) {
       // Hidden scenes remain mounted between the staged onboarding acts. A locator count alone can see
       // the future Appearance card before its controls are actionable, so use its rendered visibility
       // to decide when this scenario may select its presentation.
-      if (!testedAppearance && await rightEdge.isVisible().catch(() => false)) {
+      if (!testedAppearance && (await rightEdge.isVisible().catch(() => false))) {
         if (presentation.startsWith('right-edge')) await selectAppearanceAndRightEdge()
         else await selectAppearanceAndBar()
         testedAppearance = true
@@ -494,7 +489,7 @@ export function createOnboardingFlows(ctx) {
       // The no-JS Act 1 shell remains in the document after React takes over; its hidden Next must
       // never win the generic walk over the visible scene's real CTA.
       const primary = ctx.win.locator('button.onboard-cta:visible:not([disabled])').last()
-      if (!await primary.count()) {
+      if (!(await primary.count())) {
         throw new Error(`Onboarding has no enabled primary action after: ${trail.join(' → ') || '(start)'}`)
       }
       const label = ((await primary.innerText()).trim() || 'Continue').slice(0, 48)
@@ -715,7 +710,7 @@ export function createOnboardingFlows(ctx) {
     const composer = ctx.win.getByRole('textbox', { name: 'Ask Métis anything' })
     await composer.waitFor({ state: 'visible', timeout: 8_000 })
     await composer.fill('Draft without sending')
-    if (await composer.inputValue() !== 'Draft without sending') {
+    if ((await composer.inputValue()) !== 'Draft without sending') {
       throw new Error('Right-edge composer did not retain typed text.')
     }
     ok('right-edge sidecar exposes a compact editable composer')
@@ -727,7 +722,7 @@ export function createOnboardingFlows(ctx) {
     await verifyNativeRightEdgeBounds(false, 'hiding the dock with a draft')
     await tab.click({ timeout: 5_000 })
     await composer.waitFor({ state: 'visible', timeout: 8_000 })
-    if (await composer.inputValue() !== 'Draft without sending') {
+    if ((await composer.inputValue()) !== 'Draft without sending') {
       throw new Error('Hiding the right-edge dock discarded the draft.')
     }
     ok('right-edge Hide control parks the dock and keeps the draft')
@@ -757,7 +752,14 @@ export function createOnboardingFlows(ctx) {
     // Settings is a full surface. Returning to a hover-driven right edge is allowed to park at its
     // rail; both the open drawer and the accessible rail are valid recovery states.
     const restored = await waitFor(async () => {
-      if (await ctx.win.getByRole('complementary', { name: 'Métis' }).isVisible().catch(() => false)) return 'drawer'
+      if (
+        await ctx.win
+          .getByRole('complementary', { name: 'Métis' })
+          .isVisible()
+          .catch(() => false)
+      ) {
+        return 'drawer'
+      }
       const rail = ctx.win.getByRole('button', { name: 'Open Métis' }).first()
       return (await rail.isVisible().catch(() => false)) && (await rail.getAttribute('aria-expanded')) === 'false'
         ? 'rail'

@@ -114,6 +114,7 @@ function requiredEnvironmentPath(paths, key) {
 /**
  * Return the only environment a fresh packaged probe may pass into Electron. In particular this never copies
  * GitHub/provider credentials, debug switches, inherited Métis overrides or the owner's profile paths.
+ * @returns {NodeJS.ProcessEnv}
  */
 export function strictLaunchEnvironment(baseEnvironment, paths, platform = process.platform) {
   if (!['darwin', 'win32'].includes(platform)) throw new Error('strict environment supports darwin and win32 only.')
@@ -413,11 +414,7 @@ async function discoverInspectorUrl(inspectPort, deadline, fetchImpl) {
     if (!response || response.ok === false) return { kind: 'waiting' }
     const bodyRemaining = Math.max(0, deadline - performance.now())
     if (bodyRemaining <= 0) return { kind: 'waiting' }
-    const targets = await boundedCall(
-      () => response.json(),
-      bodyRemaining,
-      'fresh-main-inspector-discovery-timeout'
-    )
+    const targets = await boundedCall(() => response.json(), bodyRemaining, 'fresh-main-inspector-discovery-timeout')
     if (!Array.isArray(targets)) return { kind: 'invalid' }
     const endpoints = targets
       .map((target) => (isPlainRecord(target) ? target.webSocketDebuggerUrl : null))
@@ -475,11 +472,7 @@ async function openInspectorSocket(endpoint, timeoutMs, WebSocketClass) {
     const lateRelease = async (releaseTimeoutMs) => {
       try {
         return (
-          (await boundedCall(
-            () => startRelease(),
-            releaseTimeoutMs,
-            'fresh-main-inspector-release-timeout'
-          )) === true
+          (await boundedCall(() => startRelease(), releaseTimeoutMs, 'fresh-main-inspector-release-timeout')) === true
         )
       } catch {
         return false
@@ -711,10 +704,7 @@ export async function attachOwnedMainInspector({
         const released = await inspector.close(Math.max(1, observationRemaining))
         return { inspector: null, observation: null, transportUncertain: !released, lateRelease: null }
       }
-      const result = await inspector.observe(
-        { childPid, expectedPaths, expectedVersion },
-        observationRemaining
-      )
+      const result = await inspector.observe({ childPid, expectedPaths, expectedVersion }, observationRemaining)
       const afterObservation = Math.max(0, deadline - performance.now())
       if (afterObservation <= 0) {
         const released = await inspector.close(1)

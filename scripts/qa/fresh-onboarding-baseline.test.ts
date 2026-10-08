@@ -182,14 +182,11 @@ describe('fresh onboarding archive identity', () => {
 describe('fresh onboarding baseline bounded actions', () => {
   it('latches a timed-out action before a later action can begin', async () => {
     const calls: string[] = []
-    const call = createLatchedActionCall(
-      async (operation: () => Promise<unknown>) => {
-        calls.push('bound')
-        await operation()
-        throw new Error('fresh-action-timeout')
-      },
-      1
-    )
+    const call = createLatchedActionCall(async (operation: () => Promise<unknown>) => {
+      calls.push('bound')
+      await operation()
+      throw new Error('fresh-action-timeout')
+    }, 1)
 
     await expect(
       call(async () => {
@@ -502,28 +499,23 @@ describe('fresh onboarding baseline import safety', () => {
     expect(flow).not.toContain('requestPermissions')
   })
 
-  it(
-    'records a launch attempt before awaiting the app and preserves its failure through unacknowledged teardown',
-    () => {
-      const source = readFileSync(new URL('./fresh-onboarding-baseline.mjs', import.meta.url), 'utf8')
-      expect(source.indexOf('state.launchAttempted = true')).toBeLessThan(
-        source.indexOf('launch = launchPackagedCdp')
-      )
-      expect(source.indexOf('stopOwnedChild')).toBeLessThan(source.indexOf('disposeFreshOnboardingTransports'))
+  it('records a launch attempt before awaiting the app and preserves its failure through unacknowledged teardown', () => {
+    const source = readFileSync(new URL('./fresh-onboarding-baseline.mjs', import.meta.url), 'utf8')
+    expect(source.indexOf('state.launchAttempted = true')).toBeLessThan(source.indexOf('launch = launchPackagedCdp'))
+    expect(source.indexOf('stopOwnedChild')).toBeLessThan(source.indexOf('disposeFreshOnboardingTransports'))
 
-      const report = createFreshOnboardingReport({
-        outcome: 'FAIL',
-        identity: IDENTITY,
-        assertions: ASSERTION_IDS.map((id) => ({
-          id,
-          status: id === 'teardown-acknowledged' ? 'FAIL' : 'NOT_RUN'
-        })),
-        failure: 'launch-failed',
-        teardown: 'UNACKNOWLEDGED'
-      })
-      expect(reportProblems(report)).toEqual([])
-      expect(report.failure).toBe('launch-failed')
-      expect(report.teardown).toBe('UNACKNOWLEDGED')
-    }
-  )
+    const report = createFreshOnboardingReport({
+      outcome: 'FAIL',
+      identity: IDENTITY,
+      assertions: ASSERTION_IDS.map((id) => ({
+        id,
+        status: id === 'teardown-acknowledged' ? 'FAIL' : 'NOT_RUN'
+      })),
+      failure: 'launch-failed',
+      teardown: 'UNACKNOWLEDGED'
+    })
+    expect(reportProblems(report)).toEqual([])
+    expect(report.failure).toBe('launch-failed')
+    expect(report.teardown).toBe('UNACKNOWLEDGED')
+  })
 })
