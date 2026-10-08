@@ -1,14 +1,25 @@
 import { EventEmitter } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
-import { ASK_REVEAL_MIN_HEIGHT_PX, BAR_IDLE_HEIGHT_PX, WINDOW_RESIZE_HUG_FLOOR_PX } from '../../../src/shared/overlay-chrome'
 import {
+  ASK_REVEAL_MIN_HEIGHT_PX,
+  BAR_IDLE_HEIGHT_PX,
+  WINDOW_RESIZE_HUG_FLOOR_PX
+} from '../../../src/shared/overlay-chrome'
+import {
+  boundedCall,
   childHasExited,
   closeApp,
+  attachOwnedCdp,
+  attachOwnedMainInspector,
+  disposeFreshOnboardingTransports,
   findPage,
   killOwned,
+  launchPackagedCdp,
   overlayChromeGeometry,
   ownedCensus,
+  packagedLaunchFailed,
   readNumericConstants,
+  strictLaunchEnvironment,
   waitFor,
   withTimeout
 } from './app-driver.mjs'
@@ -32,6 +43,524 @@ describe('withTimeout', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('boundedCall', () => {
+  it('does not invoke work until the bounded call begins', async () => {
+    const calls: string[] = []
+    const result = await boundedCall(() => {
+      calls.push('run')
+      return Promise.resolve('done')
+    }, 1_000, 'bounded')
+    expect(result).toBe('done')
+    expect(calls).toEqual(['run'])
+  })
+
+  it('rejects an unsettled operation within the caller budget', async () => {
+    await expect(boundedCall(() => new Promise(() => {}), 20, 'bounded action timed out')).rejects.toThrow(
+      'bounded action timed out'
+    )
+  })
+})
+
+describe('strictLaunchEnvironment', () => {
+  const hermetic = {
+    home: '/tmp/metis/home',
+    userProfile: '/tmp/metis/user',
+    appData: '/tmp/metis/appdata',
+    localAppData: '/tmp/metis/localappdata',
+    temp: '/tmp/metis/temp',
+    userData: '/tmp/metis/userdata'
+  }
+
+  it('keeps only allowlisted OS values and overrides every profile/temp path', () => {
+    const env = strictLaunchEnvironment(
+      {
+        PATH: '/usr/bin',
+        LANG: 'en_CA.UTF-8',
+        GITHUB_TOKEN: 'secret',
+        GITHUB_OUTPUT: '/runner/output',
+        GITHUB_STEP_SUMMARY: '/runner/summary',
+        OPENAI_API_KEY: 'secret',
+        METIS_QA_HOST_FLOOR_OVERRIDE: '1',
+        ASKTOTO_USERDATA: '/owner/profile',
+        HOME: '/owner/home'
+      },
+      hermetic,
+      'darwin'
+    )
+    expect(env).toMatchObject({
+      PATH: '/usr/bin',
+      LANG: 'en_CA.UTF-8',
+      HOME: hermetic.home,
+      USERPROFILE: hermetic.userProfile,
+      APPDATA: hermetic.appData,
+      LOCALAPPDATA: hermetic.localAppData,
+      TMPDIR: hermetic.temp,
+      TMP: hermetic.temp,
+      TEMP: hermetic.temp,
+      ASKTOTO_USERDATA: hermetic.userData
+    })
+    for (const key of [
+      'GITHUB_TOKEN',
+      'GITHUB_OUTPUT',
+      'GITHUB_STEP_SUMMARY',
+      'OPENAI_API_KEY',
+      'METIS_QA_HOST_FLOOR_OVERRIDE'
+    ]) {
+      expect(env).not.toHaveProperty(key)
+    }
+  })
+
+  it('normalizes the Windows PATH spelling without copying both variants', () => {
+    const env = strictLaunchEnvironment(
+      { Path: 'C:\\Windows\\System32', GITHUB_SHA: 'a'.repeat(40) },
+      hermetic,
+      'win32'
+    )
+    expect(env.PATH).toBe('C:\\Windows\\System32')
+    expect(env).not.toHaveProperty('Path')
+    expect(env).not.toHaveProperty('GITHUB_SHA')
+  })
+})
+
+describe('launchPackagedCdp', () => {
+  const environment = { PATH: '/usr/bin', HOME: '/tmp/metis' }
+
+  function child(pid = 42) {
+    return Object.assign(new EventEmitter(), {
+      pid,
+      exitCode: null as number | null,
+      signalCode: null as string | null
+    })
+  }
+
+  it('captures the exact child and error/exit latches before any endpoint await', () => {
+    const spawned = child()
+    let spawnArguments: unknown[] | null = null
+    const spawnProcess = (...arguments_: unknown[]) => {
+      spawnArguments = arguments_
+      return spawned
+    }
+    const launch = launchPackagedCdp({
+      executablePath: '/Applications/Metis.app/Contents/MacOS/Metis',
+      env: environment,
+      cdpPort: 9222,
+      inspectPort: 9223,
+      platform: 'darwin',
+      spawnProcess
+    })
+
+    expect(launch.child).toBe(spawned)
+    expect(launch.cdpEndpoint).toBe('http://127.0.0.1:9222')
+    expect(spawnArguments).toEqual([
+      '/Applications/Metis.app/Contents/MacOS/Metis',
+      ['--remote-debugging-port=9222', '--inspect=127.0.0.1:9223'],
+      expect.objectContaining({ detached: true, windowsHide: true, stdio: 'ignore', env: environment })
+    ])
+    expect(packagedLaunchFailed(spawned, launch.latches)).toBe(false)
+    spawned.emit('error', new Error('synthetic'))
+    expect(packagedLaunchFailed(spawned, launch.latches)).toBe(true)
+  })
+
+  it('retains an early child exit even when no spawn error arrives', () => {
+    const spawned = child()
+    const launch = launchPackagedCdp({
+      executablePath: '/Applications/Metis.app/Contents/MacOS/Metis',
+      env: environment,
+      cdpPort: 9222,
+      inspectPort: 9223,
+      platform: 'darwin',
+      spawnProcess: () => spawned
+    })
+    spawned.exitCode = 1
+    spawned.emit('exit', 1, null)
+    expect(launch.latches).toEqual({ spawnError: false, exited: true })
+    expect(packagedLaunchFailed(spawned, launch.latches)).toBe(true)
+  })
+
+  it('uses a non-detached Windows child and rejects colliding ports before spawn', () => {
+    const spawned = child()
+    const spawnCalls: unknown[][] = []
+    const spawnProcess = (...arguments_: unknown[]) => {
+      spawnCalls.push(arguments_)
+      return spawned
+    }
+    launchPackagedCdp({
+      executablePath: 'C:\\Program Files\\Metis\\Metis.exe',
+      env: environment,
+      cdpPort: 9222,
+      inspectPort: 9223,
+      platform: 'win32',
+      spawnProcess
+    })
+    expect(spawnCalls[0][2]).toMatchObject({ detached: false })
+    expect(() =>
+      launchPackagedCdp({
+        executablePath: '/Applications/Metis.app/Contents/MacOS/Metis',
+        env: environment,
+        cdpPort: 9222,
+        inspectPort: 9222,
+        platform: 'darwin',
+        spawnProcess
+      })
+    ).toThrow('distinct positive loopback ports')
+    expect(spawnCalls).toHaveLength(1)
+  })
+})
+
+describe('owned direct-launch endpoint handshakes', () => {
+  it('accepts only one browser process with the captured child id', async () => {
+    const close = vi.fn(async () => undefined)
+    const session = { send: vi.fn(async () => ({ processInfo: [{ type: 'browser', id: 42 }] })) }
+    const browser = { newBrowserCDPSession: vi.fn(async () => session), close }
+    const result = await attachOwnedCdp({
+      endpoint: 'http://127.0.0.1:9222',
+      childPid: 42,
+      timeoutMs: 1_000,
+      connect: async () => browser
+    })
+    expect(result).toMatchObject({ browser, transportUncertain: false })
+    expect(session.send).toHaveBeenCalledWith('SystemInfo.getProcessInfo')
+    expect(close).not.toHaveBeenCalled()
+  })
+
+  it('retries a safely rejected CDP endpoint before its one bounded deadline', async () => {
+    const close = vi.fn(async () => undefined)
+    const session = { send: vi.fn(async () => ({ processInfo: [{ type: 'browser', id: 42 }] })) }
+    const browser = { newBrowserCDPSession: vi.fn(async () => session), close }
+    let attempts = 0
+    const result = await attachOwnedCdp({
+      endpoint: 'http://127.0.0.1:9222',
+      childPid: 42,
+      timeoutMs: 1_000,
+      connect: async () => {
+        attempts += 1
+        if (attempts === 1) throw new Error('not-ready')
+        return browser
+      }
+    })
+    expect(result).toMatchObject({ browser, transportUncertain: false })
+    expect(attempts).toBe(2)
+    expect(close).not.toHaveBeenCalled()
+  })
+
+  it('rejects a CDP ownership response that settles after its monotonic deadline', async () => {
+    const now = vi
+      .spyOn(performance, 'now')
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(11)
+    try {
+      const close = vi.fn(async () => true)
+      const session = { send: vi.fn(async () => ({ processInfo: [{ type: 'browser', id: 42 }] })) }
+      const browser = { newBrowserCDPSession: vi.fn(async () => session), close }
+      const result = await attachOwnedCdp({
+        endpoint: 'http://127.0.0.1:9222',
+        childPid: 42,
+        timeoutMs: 10,
+        connect: async () => browser
+      })
+      expect(result).toMatchObject({ browser: null, transportUncertain: false })
+      expect(close).toHaveBeenCalledTimes(1)
+    } finally {
+      now.mockRestore()
+    }
+  })
+
+  it('closes a foreign or ambiguous CDP transport instead of accepting its pages', async () => {
+    const close = vi.fn(async () => false)
+    const browser = {
+      newBrowserCDPSession: async () => ({
+        processInfo: null,
+        send: async () => ({ processInfo: [{ type: 'browser', id: 42 }, { type: 'browser' }] })
+      }),
+      close
+    }
+    const result = await attachOwnedCdp({
+      endpoint: 'http://127.0.0.1:9222',
+      childPid: 42,
+      timeoutMs: 1_000,
+      connect: async () => browser
+    })
+    expect(result.browser).toBeNull()
+    expect(result.transportUncertain).toBe(true)
+    expect(close).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps main inspection fixed, synchronous, and bound to the exact child', async () => {
+    const messages: unknown[] = []
+    class FakeSocket extends EventEmitter {
+      readyState = 0
+      constructor() {
+        super()
+        queueMicrotask(() => this.emit('open'))
+      }
+      addEventListener(name: string, listener: (...args: unknown[]) => void) {
+        this.on(name, listener)
+      }
+      send(raw: string) {
+        const request = JSON.parse(raw)
+        messages.push(request)
+        queueMicrotask(() =>
+          this.emit('message', {
+            data: JSON.stringify({
+              id: request.id,
+              result: {
+                result: { value: { profileMatches: true, versionMatches: true, nativeFullDisplay: true } }
+              }
+            })
+          })
+        )
+      }
+      close() {
+        this.readyState = 3
+        this.emit('close')
+      }
+    }
+    const result = await attachOwnedMainInspector({
+      inspectPort: 9223,
+      childPid: 42,
+      expectedPaths: {
+        root: '/tmp/profile',
+        home: '/tmp/profile/home',
+        userProfile: '/tmp/profile/userprofile',
+        appData: '/tmp/profile/appdata',
+        localAppData: '/tmp/profile/localappdata',
+        temp: '/tmp/profile/tmp',
+        userData: '/tmp/profile/userdata'
+      },
+      expectedVersion: '1.9.7',
+      timeoutMs: 1_000,
+      fetchImpl: async () => ({ ok: true, json: async () => [{ webSocketDebuggerUrl: 'ws://127.0.0.1:9223/a' }] }),
+      WebSocketClass: FakeSocket
+    })
+    expect(result.observation).toEqual({ profileMatches: true, versionMatches: true, nativeFullDisplay: true })
+    expect(messages).toEqual([
+      expect.objectContaining({
+        method: 'Runtime.evaluate',
+        params: expect.objectContaining({ returnByValue: true, expression: expect.stringContaining('process.pid') })
+      })
+    ])
+    expect((messages[0] as { params: Record<string, unknown> }).params).not.toHaveProperty('awaitPromise')
+    if (!result.inspector) throw new Error('expected attached inspector')
+    await expect(result.inspector.close()).resolves.toBe(true)
+  })
+
+  it('retries only the fixed loader-unavailable response and closes a malformed observation', async () => {
+    const responses = [
+      { retry: 'loader-unavailable' },
+      { profileMatches: true, versionMatches: true, nativeFullDisplay: false }
+    ]
+    const sockets: Array<{ closed: boolean }> = []
+    class RetryingSocket extends EventEmitter {
+      readyState = 0
+      closed = false
+      constructor() {
+        super()
+        sockets.push(this)
+        queueMicrotask(() => this.emit('open'))
+      }
+      addEventListener(name: string, listener: (...args: unknown[]) => void) {
+        this.on(name, listener)
+      }
+      send(raw: string) {
+        const request = JSON.parse(raw)
+        const value = responses.shift()
+        queueMicrotask(() =>
+          this.emit('message', { data: JSON.stringify({ id: request.id, result: { result: { value } } }) })
+        )
+      }
+      close() {
+        this.closed = true
+        this.readyState = 3
+        this.emit('close')
+      }
+    }
+    const result = await attachOwnedMainInspector({
+      inspectPort: 9223,
+      childPid: 42,
+      expectedPaths: {
+        root: '/tmp/profile',
+        home: '/tmp/profile/home',
+        userProfile: '/tmp/profile/userprofile',
+        appData: '/tmp/profile/appdata',
+        localAppData: '/tmp/profile/localappdata',
+        temp: '/tmp/profile/tmp',
+        userData: '/tmp/profile/userdata'
+      },
+      expectedVersion: '1.9.7',
+      timeoutMs: 1_000,
+      fetchImpl: async () => ({ ok: true, json: async () => [{ webSocketDebuggerUrl: 'ws://127.0.0.1:9223/a' }] }),
+      WebSocketClass: RetryingSocket
+    })
+    expect(result.observation).toEqual({ profileMatches: true, versionMatches: true, nativeFullDisplay: false })
+    if (!result.inspector) throw new Error('expected attached inspector')
+    await expect(result.inspector.close()).resolves.toBe(true)
+    expect(sockets[0].closed).toBe(true)
+  })
+
+  it('fails closed and releases the socket when the fixed observation is not one of its exact shapes', async () => {
+    let closed = false
+    class InvalidSocket extends EventEmitter {
+      readyState = 0
+      constructor() {
+        super()
+        queueMicrotask(() => this.emit('open'))
+      }
+      addEventListener(name: string, listener: (...args: unknown[]) => void) {
+        this.on(name, listener)
+      }
+      send(raw: string) {
+        const request = JSON.parse(raw)
+        queueMicrotask(() =>
+          this.emit('message', {
+            data: JSON.stringify({ id: request.id, result: { result: { value: { extra: true } } } })
+          })
+        )
+      }
+      close() {
+        closed = true
+        this.readyState = 3
+        this.emit('close')
+      }
+    }
+    const result = await attachOwnedMainInspector({
+      inspectPort: 9223,
+      childPid: 42,
+      expectedPaths: {
+        root: '/tmp/profile',
+        home: '/tmp/profile/home',
+        userProfile: '/tmp/profile/userprofile',
+        appData: '/tmp/profile/appdata',
+        localAppData: '/tmp/profile/localappdata',
+        temp: '/tmp/profile/tmp',
+        userData: '/tmp/profile/userdata'
+      },
+      expectedVersion: '1.9.7',
+      timeoutMs: 1_000,
+      fetchImpl: async () => ({ ok: true, json: async () => [{ webSocketDebuggerUrl: 'ws://127.0.0.1:9223/a' }] }),
+      WebSocketClass: InvalidSocket
+    })
+    expect(result).toMatchObject({ inspector: null, observation: null, transportUncertain: false })
+    expect(closed).toBe(true)
+  })
+
+  it('rejects a fixed inspection result that settles after its monotonic deadline', async () => {
+    const now = vi
+      .spyOn(performance, 'now')
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(11)
+    let closed = false
+    class LateSocket extends EventEmitter {
+      readyState = 0
+      constructor() {
+        super()
+        queueMicrotask(() => this.emit('open'))
+      }
+      addEventListener(name: string, listener: (...args: unknown[]) => void) {
+        this.on(name, listener)
+      }
+      send(raw: string) {
+        const request = JSON.parse(raw)
+        queueMicrotask(() =>
+          this.emit('message', {
+            data: JSON.stringify({
+              id: request.id,
+              result: {
+                result: { value: { profileMatches: true, versionMatches: true, nativeFullDisplay: true } }
+              }
+            })
+          })
+        )
+      }
+      close() {
+        closed = true
+        this.readyState = 3
+        this.emit('close')
+      }
+    }
+    try {
+      const result = await attachOwnedMainInspector({
+        inspectPort: 9223,
+        childPid: 42,
+        expectedPaths: {
+          root: '/tmp/profile',
+          home: '/tmp/profile/home',
+          userProfile: '/tmp/profile/userprofile',
+          appData: '/tmp/profile/appdata',
+          localAppData: '/tmp/profile/localappdata',
+          temp: '/tmp/profile/tmp',
+          userData: '/tmp/profile/userdata'
+        },
+        expectedVersion: '1.9.7',
+        timeoutMs: 10,
+        fetchImpl: async () => ({ ok: true, json: async () => [{ webSocketDebuggerUrl: 'ws://127.0.0.1:9223/a' }] }),
+        WebSocketClass: LateSocket
+      })
+      expect(result).toMatchObject({ inspector: null, observation: null, transportUncertain: false })
+      expect(closed).toBe(true)
+    } finally {
+      now.mockRestore()
+    }
+  })
+
+  it('keeps an opening inspector socket unacknowledged until its tracked close receipt resolves', async () => {
+    let closed = false
+    class ErrorSocket extends EventEmitter {
+      readyState = 0
+      constructor() {
+        super()
+        queueMicrotask(() => this.emit('error', new Error('synthetic')))
+      }
+      addEventListener(name: string, listener: (...args: unknown[]) => void) {
+        this.on(name, listener)
+      }
+      send(_raw: string) {}
+      close() {
+        closed = true
+        this.readyState = 3
+        this.emit('close')
+      }
+    }
+    const result = await attachOwnedMainInspector({
+      inspectPort: 9223,
+      childPid: 42,
+      expectedPaths: {
+        root: '/tmp/profile',
+        home: '/tmp/profile/home',
+        userProfile: '/tmp/profile/userprofile',
+        appData: '/tmp/profile/appdata',
+        localAppData: '/tmp/profile/localappdata',
+        temp: '/tmp/profile/tmp',
+        userData: '/tmp/profile/userdata'
+      },
+      expectedVersion: '1.9.7',
+      timeoutMs: 1_000,
+      fetchImpl: async () => ({ ok: true, json: async () => [{ webSocketDebuggerUrl: 'ws://127.0.0.1:9223/a' }] }),
+      WebSocketClass: ErrorSocket
+    })
+    expect(result).toMatchObject({ inspector: null, observation: null, transportUncertain: true })
+    if (!result.lateRelease) throw new Error('expected tracked late release')
+    await expect(result.lateRelease(1_000)).resolves.toBe(true)
+    expect(closed).toBe(true)
+  })
+})
+
+describe('disposeFreshOnboardingTransports', () => {
+  it('preserves an explicit false close receipt from an owned transport', async () => {
+    await expect(
+      disposeFreshOnboardingTransports({ inspector: { close: async () => false } }, 1_000)
+    ).resolves.toBe(false)
   })
 })
 

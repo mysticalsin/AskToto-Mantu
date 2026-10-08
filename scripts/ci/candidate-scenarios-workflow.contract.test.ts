@@ -74,6 +74,7 @@ describe('candidate-scenarios.yml', () => {
     const options = block(scenario, '        options:', 8).map((line) => line.trim().replace(/^- /, ''))
     expect(options).toEqual(Object.keys(SCENARIOS))
     expect(options).toContain('renderer-kill')
+    expect(options).toContain('fresh-onboarding-baseline')
   })
 
   it('reads contents and actions only, uses no secrets, and pins every action by full SHA', () => {
@@ -268,12 +269,37 @@ describe('candidate-scenarios.yml', () => {
       stepIndex(mac, 'candidate-scenarios.mjs run')
     )
     expect(upload).toBeGreaterThan(stepIndex(mac, 'candidate-scenarios.mjs scan'))
-    expect(mac).toHaveLength(upload + 2)
-    const verdict = mac[upload + 1]
+    expect(mac).toHaveLength(upload + 3)
+    const verdict = mac[upload + 2]
     expect(verdict).toContain(
       "if: always() && (steps.scenario.outcome != 'success' || steps.scan.outcome != 'success')"
     )
     expect(verdict).toContain('exit 1')
+  })
+
+  it('isolates fresh-onboarding uploads behind the strict scan and exactly two JSON paths', () => {
+    for (const platform of ['mac', 'win']) {
+      const all = steps(platform)
+      const scan = all[stepIndex(all, 'candidate-scenarios.mjs scan')]
+      expect(scan).toContain('--scenario "$SCENARIO"')
+      expect(scan).toContain(`--platform ${platform} --candidate-run "$CANDIDATE_RUN" --sha256 "$INSTALLER_SHA256"`)
+      expect(scan).toContain('--provenance provenance/provenance.json --lane-written "$FRESH_LANE_WRITTEN"')
+      expect(scan).toContain('FRESH_LANE_WRITTEN: ${{ steps.scenario.outputs.fresh_lane_written }}')
+      const uploads = all.filter((step) => step.includes('actions/upload-artifact@'))
+      expect(uploads).toHaveLength(2)
+      expect(uploads[0]).toContain("if: always() && inputs.scenario != 'fresh-onboarding-baseline'")
+      expect(uploads[0]).toContain('path: candidate-scenario/')
+      expect(uploads[1]).toContain(
+        "if: always() && inputs.scenario == 'fresh-onboarding-baseline' && steps.scan.outcome == 'success'"
+      )
+      expect(uploads[1]).toContain(
+        'path: |\n            candidate-scenario/fresh-onboarding-baseline.json\n            candidate-scenario/lane.json'
+      )
+      expect(uploads[1]).toContain('if-no-files-found: error')
+      expect(uploads[1]).not.toContain('path: candidate-scenario/\n')
+      expect(all.at(-1)).toContain("steps.scenario.outcome != 'success' || steps.scan.outcome != 'success'")
+      expect(all.at(-1)).toContain('exit 1')
+    }
   })
 
   it('offers idle-soak and sidecar-boot-reaper from the registry', () => {
@@ -372,8 +398,8 @@ describe('candidate-scenarios.yml', () => {
       stepIndex(win, 'candidate-scenarios.mjs run')
     )
     expect(upload).toBeGreaterThan(stepIndex(win, 'candidate-scenarios.mjs scan'))
-    expect(win).toHaveLength(upload + 2)
-    expect(win[upload + 1]).toContain(
+    expect(win).toHaveLength(upload + 3)
+    expect(win[upload + 2]).toContain(
       "if: always() && (steps.scenario.outcome != 'success' || steps.scan.outcome != 'success')"
     )
   })

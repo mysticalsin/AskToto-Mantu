@@ -60,7 +60,10 @@ export function createOnboardingFlows(ctx) {
     return open
       ? {
           width: RIGHT_EDGE_DRAWER.width,
-          height: Math.min(RIGHT_EDGE_DRAWER.height, Math.max(RIGHT_EDGE_TAB.height, workArea.height - RIGHT_EDGE_MARGIN_PX * 2))
+          height: Math.min(
+            RIGHT_EDGE_DRAWER.height,
+            Math.max(RIGHT_EDGE_TAB.height, workArea.height - RIGHT_EDGE_MARGIN_PX * 2)
+          )
         }
       : RIGHT_EDGE_TAB
   }
@@ -73,7 +76,9 @@ export function createOnboardingFlows(ctx) {
       const edgeGap = candidate.workArea.x + candidate.workArea.width - (candidate.bounds.x + candidate.bounds.width)
       const correctSize = candidate.bounds.width === expected.width && candidate.bounds.height === expected.height
       const correctRightEdge = Math.abs(edgeGap - RIGHT_EDGE_MARGIN_PX) <= 2
-      const inWorkArea = candidate.bounds.y >= candidate.workArea.y && candidate.bounds.y + candidate.bounds.height <= candidate.workArea.y + candidate.workArea.height
+      const inWorkArea =
+        candidate.bounds.y >= candidate.workArea.y &&
+        candidate.bounds.y + candidate.bounds.height <= candidate.workArea.y + candidate.workArea.height
       return correctSize && correctRightEdge && inWorkArea ? candidate : null
     }, `Right-edge native window did not reach its ${open ? '360px drawer' : '52px rail'} bounds after ${phase}.`)
 
@@ -93,7 +98,12 @@ export function createOnboardingFlows(ctx) {
   }
 
   function sameBounds(actual, expected) {
-    return actual.x === expected.x && actual.y === expected.y && actual.width === expected.width && actual.height === expected.height
+    return (
+      actual.x === expected.x &&
+      actual.y === expected.y &&
+      actual.width === expected.width &&
+      actual.height === expected.height
+    )
   }
 
   /**
@@ -149,7 +159,10 @@ export function createOnboardingFlows(ctx) {
       )
     })
     if (!successor) {
-      throw new Error(`The transparent Settings overlay closed without an opaque full-display successor on its own display: ${JSON.stringify(trace)}`)
+      throw new Error(
+        'The transparent Settings overlay closed without an opaque full-display successor on its own display: ' +
+          JSON.stringify(trace)
+      )
     }
     ok('Settings replay closes only after its opaque full-display successor is visible')
   }
@@ -256,7 +269,10 @@ export function createOnboardingFlows(ctx) {
         previewRight: previewRect.right
       }
     })
-    if (!previewMetrics || (expectedLayout === 'island' && (!previewMetrics.rail || previewMetrics.rail.width > 12))) {
+    if (
+      !previewMetrics ||
+      (expectedLayout === 'island' && (!previewMetrics.rail || previewMetrics.rail.width > 12))
+    ) {
       throw new Error(`Right-edge Island preview did not render its compact rail: ${JSON.stringify(previewMetrics)}`)
     }
     if (previewMetrics.drawerWidth > previewMetrics.previewWidth * 0.42) {
@@ -267,16 +283,26 @@ export function createOnboardingFlows(ctx) {
     ) {
       throw new Error(`Right-edge preview is not anchored to the preview edge: ${JSON.stringify(previewMetrics)}`)
     }
-    if (expectedLayout === 'island' && (!previewMetrics.rail || Math.abs(previewMetrics.rail.right - previewMetrics.previewRight) > 1)) {
-      throw new Error(`Right-edge Island preview rail is not anchored to the preview edge: ${JSON.stringify(previewMetrics)}`)
+    if (
+      expectedLayout === 'island' &&
+      (!previewMetrics.rail || Math.abs(previewMetrics.rail.right - previewMetrics.previewRight) > 1)
+    ) {
+      throw new Error(
+        `Right-edge Island preview rail is not anchored to the preview edge: ${JSON.stringify(previewMetrics)}`
+      )
     }
     if (
       (previewMetrics.rail && previewMetrics.rail.bottom > previewMetrics.previewBottom + 1) ||
       previewMetrics.drawerBottom > previewMetrics.previewBottom + 1
     ) {
-      throw new Error(`Right-edge preview is clipped inside the compact onboarding surface: ${JSON.stringify(previewMetrics)}`)
+      throw new Error(
+        `Right-edge preview is clipped inside the compact onboarding surface: ${JSON.stringify(previewMetrics)}`
+      )
     }
-    ok(`right-edge ${expectedLayout} onboarding preview stays compact and expands from its ${expectedLayout === 'hide' ? 'edge zone' : 'rail'}`)
+    ok(
+      `right-edge ${expectedLayout} onboarding preview stays compact and expands from its ` +
+        (expectedLayout === 'hide' ? 'edge zone' : 'rail')
+    )
     await screenshot(screenshotName)
 
     await preview.hover({ position: { x: 8, y: 8 }, timeout: 5_000 })
@@ -292,7 +318,10 @@ export function createOnboardingFlows(ctx) {
     await ctx.win.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
     await assertOpaqueOnboardingStage('after the next compositor frame')
     await assertExclusiveOnboardingNativeBounds('after Continue to appearance')
-    await ctx.win.locator('[data-onboard-appearance-step="appearance"]').first().waitFor({ state: 'visible', timeout: 5_000 })
+    await ctx.win
+      .locator('[data-onboard-appearance-step="appearance"]')
+      .first()
+      .waitFor({ state: 'visible', timeout: 5_000 })
     await screenshot('02-placement-to-appearance-transition')
   }
 
@@ -315,7 +344,11 @@ export function createOnboardingFlows(ctx) {
           }
         })
       )
-      return options.find((option) => option.visible && option.text.toLocaleLowerCase().startsWith(name.toLocaleLowerCase())) || null
+      return (
+        options.find(
+          (option) => option.visible && option.text.toLocaleLowerCase().startsWith(name.toLocaleLowerCase())
+        ) || null
+      )
     }, `Onboarding did not render a visible ${name} choice.`)
     return radios.nth(match.index)
   }
@@ -327,14 +360,32 @@ export function createOnboardingFlows(ctx) {
       const rect = element.getBoundingClientRect()
       const style = getComputedStyle(element)
       return {
-        visible: style.visibility !== 'hidden' && style.display !== 'none' && style.opacity !== '0' && rect.width > 0 && rect.height > 0,
-        withinViewport: rect.top >= 0 && rect.left >= 0 && rect.right <= window.innerWidth && rect.bottom <= window.innerHeight,
-        rect: { top: rect.top, left: rect.left, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height },
+        visible:
+          style.visibility !== 'hidden' &&
+          style.display !== 'none' &&
+          style.opacity !== '0' &&
+          rect.width > 0 &&
+          rect.height > 0,
+        withinViewport:
+          rect.top >= 0 &&
+          rect.left >= 0 &&
+          rect.right <= window.innerWidth &&
+          rect.bottom <= window.innerHeight,
+        rect: {
+          top: rect.top,
+          left: rect.left,
+          right: rect.right,
+          bottom: rect.bottom,
+          width: rect.width,
+          height: rect.height
+        },
         viewport: { width: window.innerWidth, height: window.innerHeight }
       }
     })
     if (!visible.visible || !visible.withinViewport) {
-      throw new Error(`Right edge choice is not visible in the full-display onboarding viewport: ${JSON.stringify(visible)}`)
+      throw new Error(
+        `Right edge choice is not visible in the full-display onboarding viewport: ${JSON.stringify(visible)}`
+      )
     }
     ok('Right edge choice stays visible on the full-display onboarding viewport')
 
@@ -346,7 +397,9 @@ export function createOnboardingFlows(ctx) {
     // settings snapshot. Keep the check beyond that asynchronous window, not just on click.
     await delay(1_000)
     const selected = await rightEdge.getAttribute('aria-checked')
-    if (selected !== 'true') throw new Error('Right edge was written to settings but the selected control did not update.')
+    if (selected !== 'true') {
+      throw new Error('Right edge was written to settings but the selected control did not update.')
+    }
     if (await ctx.win.getByRole('radio', { name: /^Bar\b/i }).count()) {
       throw new Error('Right edge still exposed the horizontal Bar choice.')
     }
@@ -358,7 +411,10 @@ export function createOnboardingFlows(ctx) {
     await verifyRightEdgeOnboardingPreview('hide', '02-right-edge-hidden-preview-hover')
     const backToPosition = ctx.win.getByRole('button', { name: 'Back to position', exact: true }).last()
     await backToPosition.click({ timeout: 5_000 })
-    await ctx.win.locator('[data-onboard-appearance-step="position"]').first().waitFor({ state: 'visible', timeout: 5_000 })
+    await ctx.win
+      .locator('[data-onboard-appearance-step="position"]')
+      .first()
+      .waitFor({ state: 'visible', timeout: 5_000 })
 
     // Now exercise the regression path: an expanded top Island must reset to a rail at right edge,
     // never paint one stale drawer frame before its hover interaction begins.
@@ -376,7 +432,10 @@ export function createOnboardingFlows(ctx) {
       'Top-center Island preview did not expand before the placement switch.'
     )
     await ctx.win.getByRole('button', { name: 'Back to position', exact: true }).last().click({ timeout: 5_000 })
-    await ctx.win.locator('[data-onboard-appearance-step="position"]').first().waitFor({ state: 'visible', timeout: 5_000 })
+    await ctx.win
+      .locator('[data-onboard-appearance-step="position"]')
+      .first()
+      .waitFor({ state: 'visible', timeout: 5_000 })
     const rightEdgeAgain = await visibleOnboardingRadio('Right edge')
     await rightEdgeAgain.click({ timeout: 5_000 })
     await settingsMatch({ overlayLayout: 'island', overlayPlacement: 'right-edge' })
@@ -475,9 +534,15 @@ export function createOnboardingFlows(ctx) {
     const expectedX = geometry.workArea.x + geometry.workArea.width - geometry.bounds.width - 12
     const edgeGap = geometry.workArea.x + geometry.workArea.width - (geometry.bounds.x + geometry.bounds.width)
     if (Math.abs(geometry.bounds.x - expectedX) > 2 || Math.abs(edgeGap - 12) > 2) {
-      throw new Error(`Right-edge overlay is not anchored to the work-area edge: ${JSON.stringify({ ...geometry, expectedX, edgeGap })}`)
+      throw new Error(
+        'Right-edge overlay is not anchored to the work-area edge: ' +
+          JSON.stringify({ ...geometry, expectedX, edgeGap })
+      )
     }
-    if (geometry.bounds.y < geometry.workArea.y || geometry.bounds.y + geometry.bounds.height > geometry.workArea.y + geometry.workArea.height) {
+    if (
+      geometry.bounds.y < geometry.workArea.y ||
+      geometry.bounds.y + geometry.bounds.height > geometry.workArea.y + geometry.workArea.height
+    ) {
       throw new Error(`Right-edge overlay is vertically outside its work area: ${JSON.stringify(geometry)}`)
     }
     ok('right-edge overlay recreated after onboarding')
@@ -496,7 +561,10 @@ export function createOnboardingFlows(ctx) {
     await ctx.win.getByRole('button', { name: 'Settings', exact: true }).click({ timeout: 5_000 })
     await ctx.win.locator('[aria-label="Settings sections"]').waitFor({ state: 'visible', timeout: 8_000 })
     if (expectedPlacement === 'Top center') {
-      if (await ctx.win.getByRole('complementary', { name: 'Métis' }).count() || await ctx.win.getByRole('button', { name: 'Open Métis' }).count()) {
+      if (
+        (await ctx.win.getByRole('complementary', { name: 'Métis' }).count()) ||
+        (await ctx.win.getByRole('button', { name: 'Open Métis' }).count())
+      ) {
         throw new Error('Top-center Settings rendered right-edge dock chrome.')
       }
     }
@@ -518,11 +586,25 @@ export function createOnboardingFlows(ctx) {
       const header = document.querySelector('.right-edge-sidecar__header')
       const rail = document.querySelector('[data-right-edge-action-rail="true"]')
       const composer = document.querySelector('.right-edge-sidecar__composer')
-      if (!(drawer instanceof HTMLElement) || !(header instanceof HTMLElement) || !(rail instanceof HTMLElement) || !(composer instanceof HTMLElement)) return null
+      if (
+        !(drawer instanceof HTMLElement) ||
+        !(header instanceof HTMLElement) ||
+        !(rail instanceof HTMLElement) ||
+        !(composer instanceof HTMLElement)
+      ) {
+        return null
+      }
 
       const rect = (element) => {
         const value = element.getBoundingClientRect()
-        return { top: value.top, right: value.right, bottom: value.bottom, left: value.left, width: value.width, height: value.height }
+        return {
+          top: value.top,
+          right: value.right,
+          bottom: value.bottom,
+          left: value.left,
+          width: value.width,
+          height: value.height
+        }
       }
       return {
         drawer: rect(drawer),
@@ -536,15 +618,33 @@ export function createOnboardingFlows(ctx) {
       }
     })
 
-    const expectedActions = ['Capture screen', 'Spotlight Ref', 'Open settings', 'Mantu Intelligence', 'Start listening', 'Open History']
+    const expectedActions = [
+      'Capture screen',
+      'Spotlight Ref',
+      'Open settings',
+      'Mantu Intelligence',
+      'Start listening',
+      'Open History'
+    ]
     const actualActions = new Set(layout?.actions.map((action) => action.label))
-    const actionTopSpread = layout ? Math.max(...layout.actions.map((action) => action.top)) - Math.min(...layout.actions.map((action) => action.top)) : Number.POSITIVE_INFINITY
+    const actionTopSpread = layout
+      ? Math.max(...layout.actions.map((action) => action.top)) -
+        Math.min(...layout.actions.map((action) => action.top))
+      : Number.POSITIVE_INFINITY
     const missingActions = expectedActions.filter((label) => !actualActions.has(label))
-    const composerAnchored = layout && layout.composer.bottom >= layout.drawer.bottom - 15 && layout.composer.top > layout.rail.bottom
-    const hasStableSections = layout && layout.header.top >= layout.drawer.top && layout.header.bottom <= layout.rail.top && layout.rail.bottom <= layout.composer.top
+    const composerAnchored =
+      layout && layout.composer.bottom >= layout.drawer.bottom - 15 && layout.composer.top > layout.rail.bottom
+    const hasStableSections =
+      layout &&
+      layout.header.top >= layout.drawer.top &&
+      layout.header.bottom <= layout.rail.top &&
+      layout.rail.bottom <= layout.composer.top
 
     if (!layout || missingActions.length || actionTopSpread > 2 || !composerAnchored || !hasStableSections) {
-      throw new Error(`right-edge action rail did not keep every action on one compact row: ${JSON.stringify({ layout, missingActions, actionTopSpread, composerAnchored, hasStableSections })}`)
+      throw new Error(
+        'right-edge action rail did not keep every action on one compact row: ' +
+          JSON.stringify({ layout, missingActions, actionTopSpread, composerAnchored, hasStableSections })
+      )
     }
     ok('right-edge reference layout keeps actions in a compact icon rail and composer anchored')
   }
@@ -600,7 +700,12 @@ export function createOnboardingFlows(ctx) {
     // The dock deliberately carries an eight-pixel breathing margin within its fixed native host.
     // Its useful surface must still be essentially the full host height; otherwise a layout sibling
     // has collapsed it back to the thin parked rail shown in the regression report.
-    if (!expanded || expanded.drawer.width < 336 || nativeHeight < expanded.viewport.height * 0.95 || expanded.drawer.height < expanded.viewport.height * 0.95) {
+    if (
+      !expanded ||
+      expanded.drawer.width < 336 ||
+      nativeHeight < expanded.viewport.height * 0.95 ||
+      expanded.drawer.height < expanded.viewport.height * 0.95
+    ) {
       throw new Error(`Right-edge drawer did not occupy its native surface: ${JSON.stringify(expanded)}`)
     }
     ok('right-edge drawer fills its native sidecar surface')
@@ -629,7 +734,14 @@ export function createOnboardingFlows(ctx) {
     await composer.fill('')
     await screenshot('03-right-edge-sidecar-expanded')
     await verifyLongSidecarResponse(composer)
-    for (const label of ['Start listening', 'Capture screen', 'Mantu Intelligence', 'Spotlight Ref', 'Open settings', 'Open History']) {
+    for (const label of [
+      'Start listening',
+      'Capture screen',
+      'Mantu Intelligence',
+      'Spotlight Ref',
+      'Open settings',
+      'Open History'
+    ]) {
       await ctx.win.getByRole('button', { name: label }).waitFor({ state: 'visible', timeout: 8_000 })
     }
     ok('right-edge sidecar exposes its real action routes')
@@ -647,7 +759,9 @@ export function createOnboardingFlows(ctx) {
     const restored = await waitFor(async () => {
       if (await ctx.win.getByRole('complementary', { name: 'Métis' }).isVisible().catch(() => false)) return 'drawer'
       const rail = ctx.win.getByRole('button', { name: 'Open Métis' }).first()
-      return (await rail.isVisible().catch(() => false)) && (await rail.getAttribute('aria-expanded')) === 'false' ? 'rail' : null
+      return (await rail.isVisible().catch(() => false)) && (await rail.getAttribute('aria-expanded')) === 'false'
+        ? 'rail'
+        : null
     }, 'Closing Settings did not restore an accessible right-edge entry point.')
     if (restored === 'rail') {
       await ctx.win.getByRole('button', { name: 'Open Métis' }).first().click({ timeout: 5_000 })
@@ -733,7 +847,10 @@ export function createOnboardingFlows(ctx) {
 
   async function verifyBarSurface() {
     await ctx.win.getByRole('textbox', { name: 'Ask Métis anything' }).waitFor({ state: 'visible', timeout: 12_000 })
-    if (await ctx.win.getByRole('complementary', { name: 'Métis' }).count() || await ctx.win.getByRole('button', { name: 'Open Métis' }).count()) {
+    if (
+      (await ctx.win.getByRole('complementary', { name: 'Métis' }).count()) ||
+      (await ctx.win.getByRole('button', { name: 'Open Métis' }).count())
+    ) {
       throw new Error('Top-center presentation rendered right-edge dock chrome.')
     }
     const geometry = await waitFor(async () => {
@@ -751,10 +868,16 @@ export function createOnboardingFlows(ctx) {
     ok(`top-center native Bar is centered at ${geometry.bounds.x},${geometry.bounds.y}`)
     ok('top-center idle bar rendered')
 
-    if (await ctx.win.getByRole('button', { name: /^History\b/i }).count()) ok('top-center bar toolbar rendered')
-    else throw new Error('No History control in the top-center Bar presentation.')
-    if (await ctx.win.getByRole('button', { name: /^Spotlight Ref\b/i }).count()) ok('Spotlight Ref control rendered in the Bar')
-    else throw new Error('No Spotlight Ref control in the top-center Bar presentation.')
+    if (await ctx.win.getByRole('button', { name: /^History\b/i }).count()) {
+      ok('top-center bar toolbar rendered')
+    } else {
+      throw new Error('No History control in the top-center Bar presentation.')
+    }
+    if (await ctx.win.getByRole('button', { name: /^Spotlight Ref\b/i }).count()) {
+      ok('Spotlight Ref control rendered in the Bar')
+    } else {
+      throw new Error('No Spotlight Ref control in the top-center Bar presentation.')
+    }
     await screenshot('03-top-center-bar-idle')
     await verifyIdlePanels('Top center')
   }
@@ -770,4 +893,136 @@ export function createOnboardingFlows(ctx) {
     replayOnboardingAndVerifyFullDisplay,
     verifyBarSurface
   }
+}
+
+function freshBaselineError(code) {
+  const error = new Error(code)
+  error.code = code
+  return error
+}
+
+async function waitForFreshBaselineCondition(ctx, check) {
+  const deadline = performance.now() + ctx.timeoutMs
+  for (;;) {
+    const remaining = deadline - performance.now()
+    if (remaining <= 0) return false
+    const value = await ctx.call(() => check(remaining), remaining)
+    const afterCheck = deadline - performance.now()
+    if (afterCheck <= 0) return false
+    if (value) return true
+    await delay(Math.min(100, Math.max(1, afterCheck)))
+  }
+}
+
+/**
+ * Bounded, no-capture pre-Setup slice for the hosted fresh-onboarding investigation. It deliberately stops at
+ * Appearance: no Setup controls, permissions, provider settings, finish action, replay or screenshots are touched.
+ * `call` must bound every Playwright/Electron promise and turn a timeout into the runner's finite failure code.
+ */
+export async function runFreshOnboardingBaselineFlow(ctx) {
+  const require = (id, value) => {
+    ctx.mark(id, value ? 'PASS' : 'FAIL')
+    if (!value) throw freshBaselineError('ASSERTION_FAILED')
+  }
+  const stage = ctx.win.locator('.onboard-stage').first()
+  await ctx.call(() => stage.waitFor({ state: 'visible', timeout: ctx.timeoutMs }))
+
+  const opaqueAndFullDisplay = () =>
+    stage.evaluate((element) => {
+      const style = getComputedStyle(element)
+      const rect = element.getBoundingClientRect()
+      const masked = [style.getPropertyValue('mask-image'), style.getPropertyValue('-webkit-mask-image')]
+        .map((value) => value.trim())
+        .some((value) => value && value !== 'none')
+      return (
+        style.backgroundColor === 'rgb(5, 1, 10)' &&
+        style.opacity === '1' &&
+        style.animationName === 'none' &&
+        !masked &&
+        rect.left <= 0 &&
+        rect.top <= 0 &&
+        rect.right >= window.innerWidth &&
+        rect.bottom >= window.innerHeight
+      )
+    })
+
+  const nativeFullDisplay = (timeoutMs) => ctx.nativeFullDisplay(timeoutMs)
+
+  const opaqueBefore = await waitForFreshBaselineCondition(ctx, opaqueAndFullDisplay)
+  const nativeBefore = await waitForFreshBaselineCondition(ctx, nativeFullDisplay)
+  require('opaque-full-display', opaqueBefore)
+  require('native-display-bounds', nativeBefore)
+
+  const heroNext = ctx.win.getByRole('button', { name: 'Next', exact: true })
+  await ctx.call(() => heroNext.waitFor({ state: 'visible', timeout: ctx.timeoutMs }))
+  await ctx.call(() => heroNext.click({ timeout: ctx.timeoutMs }))
+
+  const problemContinue = ctx.win.getByRole('button', { name: 'Continue', exact: true })
+  await ctx.call(() => problemContinue.waitFor({ state: 'visible', timeout: ctx.timeoutMs }))
+  await ctx.call(() => problemContinue.click({ timeout: ctx.timeoutMs }))
+
+  const revealSetup = ctx.win.getByRole('button', { name: 'Set me up', exact: true })
+  await ctx.call(() => revealSetup.waitFor({ state: 'visible', timeout: ctx.timeoutMs }))
+  await ctx.call(() => revealSetup.click({ timeout: ctx.timeoutMs }))
+  const position = ctx.win.locator('[data-onboard-appearance-step="position"]').first()
+  await ctx.call(() => position.waitFor({ state: 'visible', timeout: ctx.timeoutMs }))
+
+  const radios = ctx.win.locator('button[role="radio"]')
+  const rightEdgeIndex = await ctx.call(() =>
+    radios.evaluateAll((elements) =>
+      elements.findIndex((element) => {
+        const rect = element.getBoundingClientRect()
+        const style = getComputedStyle(element)
+        return (
+          (element.textContent || '').trim().toLocaleLowerCase().startsWith('right edge') &&
+          style.visibility !== 'hidden' &&
+          style.display !== 'none' &&
+          style.opacity !== '0' &&
+          rect.width > 0 &&
+          rect.height > 0 &&
+          rect.top >= 0 &&
+          rect.left >= 0 &&
+          rect.right <= window.innerWidth &&
+          rect.bottom <= window.innerHeight
+        )
+      })
+    )
+  )
+  require('right-edge-visible', rightEdgeIndex >= 0)
+  const rightEdge = radios.nth(rightEdgeIndex)
+  await ctx.call(() => rightEdge.click({ timeout: ctx.timeoutMs }))
+  const persisted = await waitForFreshBaselineCondition(ctx, () =>
+    ctx.win.evaluate(async () => {
+      const settings = await window.toto.getSettings()
+      return settings.overlayLayout === 'hide' && settings.overlayPlacement === 'right-edge'
+    })
+  )
+  require('right-edge-persisted', persisted)
+
+  const continueButton = ctx.win.getByRole('button', { name: 'Continue to appearance', exact: true }).last()
+  await ctx.call(() => continueButton.waitFor({ state: 'visible', timeout: ctx.timeoutMs }))
+  await ctx.call(() => continueButton.click({ timeout: ctx.timeoutMs }))
+  const appearance = ctx.win.locator('[data-onboard-appearance-step="appearance"]').first()
+  await ctx.call(() => appearance.waitFor({ state: 'visible', timeout: ctx.timeoutMs }))
+  const barAbsent = (await ctx.call(() => ctx.win.getByRole('radio', { name: /^Bar\b/i }).count())) === 0
+  require('bar-absent', barAbsent)
+  const opaqueAfter = await waitForFreshBaselineCondition(ctx, opaqueAndFullDisplay)
+  const nativeAfter = await waitForFreshBaselineCondition(ctx, nativeFullDisplay)
+  require('placement-to-appearance', opaqueAfter && nativeAfter)
+  const stillAtAppearanceBeforeSetup = await ctx.call(() =>
+    appearance.evaluate(async (element) => {
+      const rect = element.getBoundingClientRect()
+      const style = getComputedStyle(element)
+      const visible =
+        style.visibility !== 'hidden' &&
+        style.display !== 'none' &&
+        style.opacity !== '0' &&
+        rect.width > 0 &&
+        rect.height > 0
+      if (!visible || !window.toto?.getSettings) return false
+      const settings = await window.toto.getSettings()
+      return settings.onboardingDone === false
+    })
+  )
+  require('pre-setup-boundary', stillAtAppearanceBeforeSetup)
 }

@@ -4,8 +4,8 @@
 // them. SCENARIOS below is the single source of truth: the workflow's scenario choices equal its keys, and
 // the lane reads the platforms, variant, artifact, command and report of a scenario only from here.
 //
-// Every file the lane uploads is content-free (contentProblems), and lane.json uses the evidence-record
-// field names (scripts/evidence/record.mjs), so the lead copies them into a record unchanged.
+// Legacy lanes use contentProblems and evidence-record field names. The support-only fresh-onboarding
+// lane uses a separate closed JSON schema and exact upload whitelist; it is not ticket acceptance.
 //
 //   node scripts/qa/candidate-scenarios.mjs resolve --scenario <s> [--mac-sha256 <hex>] [--win-sha256 <hex>]
 //   node scripts/qa/candidate-scenarios.mjs guard <run.json> <candidate_run>
@@ -17,11 +17,26 @@
 //   node scripts/qa/candidate-scenarios.mjs scan <dir> --account <runner account>
 // Node builtins only, so the guard job needs no npm ci.
 import { execFileSync, spawnSync } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  appendFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, isAbsolute, join, relative } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { writeRepresentativeProfile } from './census/profile.mjs'
+import {
+  NOT_COVERED,
+  assessFreshOnboardingReport,
+  isStrictSemver,
+  reportProblems
+} from './fresh-onboarding-baseline.mjs'
 import { LOCAL_LLM_SETTINGS } from './lib/local-llm-settings.mjs'
 import { VARIANTS } from './provenance.mjs'
 
@@ -34,6 +49,257 @@ export const RUNNER_LABELS = Object.freeze({ mac: 'macos-latest', win: 'windows-
 /** userData directory name per installed variant: Electron takes it from the packaged package.json name,
  *  which build/qa-identity.electron-builder.yml sets to asktoto-qa for the QA identity. */
 export const PROFILE_DIRS = Object.freeze({ mac: 'asktoto', 'mac-qa-identity': 'asktoto-qa' })
+
+export const FRESH_ONBOARDING_SCENARIO = 'fresh-onboarding-baseline'
+const FRESH_LANE_SCHEMA = 'metis.fresh-onboarding-lane.v1'
+const FRESH_REPORT = 'fresh-onboarding-baseline.json'
+const FRESH_DETAILS = new Set(['none', 'invalid-context', 'report-missing', 'report-rejected', 'scenario-failed'])
+
+/** The runner cannot write GitHub command files or inherit provider credentials and debug overrides. */
+export function freshOnboardingChildEnv(env) {
+  const allowed = new Set([
+    'PATH',
+    'LANG',
+    'LC_ALL',
+    'LC_CTYPE',
+    'SYSTEMROOT',
+    'WINDIR',
+    'COMSPEC',
+    'PATHEXT',
+    'PROGRAMDATA',
+    'PROGRAMFILES',
+    'PROGRAMFILES(X86)',
+    'COMMONPROGRAMFILES',
+    'COMMONPROGRAMFILES(X86)',
+    'PROCESSOR_ARCHITECTURE',
+    'PROCESSOR_ARCHITEW6432',
+    'OS',
+    'TMPDIR',
+    'TMP',
+    'TEMP'
+  ])
+  return Object.fromEntries(
+    Object.entries(env).filter(([key, value]) => allowed.has(key.toUpperCase()) && typeof value === 'string')
+  )
+}
+
+const positiveRunId = (value) => {
+  const number = Number(value)
+  return /^[1-9]\d*$/.test(String(value)) && Number.isSafeInteger(number) ? number : null
+}
+const canonical = (value, pattern) =>
+  typeof value === 'string' && value.length <= 64 && pattern.test(value) ? value : null
+
+function freshIdentity({ provenance, candidateRun, sha256, env, platform }) {
+  return {
+    candidate_run: positiveRunId(candidateRun),
+    producer_commit: canonical(provenance?.commit, /^[0-9a-f]{40}$/),
+    installer_sha256: canonical(sha256, /^[0-9a-f]{64}$/),
+    version: isStrictSemver(provenance?.version) && provenance.version.length <= 64 ? provenance.version : null,
+    harness_commit: canonical(env?.GITHUB_SHA, /^[0-9a-f]{40}$/),
+    platform: platform === 'mac' ? 'darwin' : platform === 'win' ? 'win32' : null
+  }
+}
+
+const expectedFreshIdentity = (identity) => ({
+  candidateRun: identity.candidate_run,
+  commit: identity.producer_commit,
+  sha256: identity.installer_sha256,
+  version: identity.version,
+  harnessCommit: identity.harness_commit,
+  platform: identity.platform
+})
+
+/** Build independent scan context only from provenance for the candidate run selected by the workflow. */
+export function freshOnboardingScanContext({ platform, provenance, candidateRun, sha256, env, laneWritten }) {
+  const run = positiveRunId(candidateRun)
+  if (!run || positiveRunId(provenance?.run?.id) !== run) return undefined
+  return {
+    identity: freshIdentity({ platform, provenance, candidateRun, sha256, env }),
+    ciRun: positiveRunId(env?.GITHUB_RUN_ID),
+    laneWritten: laneWritten === true
+  }
+}
+
+/** Support-only lane: deliberately does not copy arbitrary commands, runner metadata or child output. */
+export function freshOnboardingLane({
+  platform,
+  env,
+  provenance,
+  candidateRun,
+  sha256,
+  exitCode,
+  reportWritten,
+  reportData
+}) {
+  const identity = freshIdentity({ platform, env, provenance, candidateRun, sha256 })
+  const ciRun = positiveRunId(env?.GITHUB_RUN_ID)
+  const invalidContext =
+    !ciRun ||
+    Object.values(identity).some((value) => value === null) ||
+    String(provenance?.run?.id) !== String(candidateRun)
+  const schemaValid = reportWritten && reportProblems(reportData).length === 0
+  const boundReport =
+    schemaValid &&
+    assessFreshOnboardingReport(reportData, expectedFreshIdentity(identity), {
+      requirePass: false
+    }).problems.length === 0
+  const outcome =
+    !invalidContext && exitCode === 0 && boundReport && reportData.outcome === 'PASS'
+      ? 'PASS'
+      : !invalidContext && exitCode === 2 && boundReport && reportData.outcome === 'PRECONDITION'
+        ? 'PRECONDITION'
+        : 'FAIL'
+  return {
+    schema: FRESH_LANE_SCHEMA,
+    scenario: FRESH_ONBOARDING_SCENARIO,
+    support_only: true,
+    identity,
+    ci_run_id: ciRun,
+    exit_code: [0, 1, 2].includes(exitCode) ? exitCode : null,
+    outcome,
+    report: schemaValid ? FRESH_REPORT : null,
+    detail:
+      outcome === 'PASS'
+        ? 'none'
+        : invalidContext
+          ? 'invalid-context'
+          : !reportWritten
+            ? 'report-missing'
+            : !boundReport
+              ? 'report-rejected'
+              : 'scenario-failed',
+    not_covered: NOT_COVERED
+  }
+}
+
+const exactKeys = (value, keys) =>
+  value &&
+  typeof value === 'object' &&
+  !Array.isArray(value) &&
+  Object.keys(value).length === keys.length &&
+  keys.every((key) => Object.hasOwn(value, key))
+
+function freshLaneProblems(lane) {
+  const keys = [
+    'schema',
+    'scenario',
+    'support_only',
+    'identity',
+    'ci_run_id',
+    'exit_code',
+    'outcome',
+    'report',
+    'detail',
+    'not_covered'
+  ]
+  if (!exactKeys(lane, keys)) return ['lane-schema-invalid']
+  const normalized = freshIdentity({
+    platform: lane.identity?.platform === 'darwin' ? 'mac' : lane.identity?.platform === 'win32' ? 'win' : null,
+    provenance: { commit: lane.identity?.producer_commit, version: lane.identity?.version },
+    candidateRun: lane.identity?.candidate_run,
+    sha256: lane.identity?.installer_sha256,
+    env: { GITHUB_SHA: lane.identity?.harness_commit }
+  })
+  if (
+    !exactKeys(lane.identity, Object.keys(normalized)) ||
+    !Object.entries(normalized).every(([key, value]) => lane.identity[key] === value) ||
+    lane.schema !== FRESH_LANE_SCHEMA ||
+    lane.scenario !== FRESH_ONBOARDING_SCENARIO ||
+    lane.support_only !== true ||
+    (lane.ci_run_id !== null && positiveRunId(lane.ci_run_id) !== lane.ci_run_id) ||
+    ![0, 1, 2, null].includes(lane.exit_code) ||
+    !['PASS', 'FAIL', 'PRECONDITION'].includes(lane.outcome) ||
+    ![FRESH_REPORT, null].includes(lane.report) ||
+    !FRESH_DETAILS.has(lane.detail) ||
+    JSON.stringify(lane.not_covered) !== JSON.stringify(NOT_COVERED)
+  ) {
+    return ['lane-schema-invalid']
+  }
+  return []
+}
+
+/** Only these two bounded, regular, nonlinked JSON outputs can pass the new scenario's upload gate.
+ * @param {string} dir
+ * @param {{ identity: any, ciRun: number | null, laneWritten: boolean } | undefined} context */
+export function scanFreshOnboardingOutput(dir, context = undefined) {
+  try {
+    if (
+      context?.laneWritten !== true ||
+      !positiveRunId(context?.ciRun) ||
+      !context?.identity ||
+      Object.values(context.identity).some((value) => value === null)
+    ) {
+      return ['output-context-invalid']
+    }
+    const root = lstatSync(dir)
+    if (!root.isDirectory() || root.isSymbolicLink()) return ['output-directory-invalid']
+    const names = readdirSync(dir)
+    if (names.length !== 2 || ![FRESH_REPORT, 'lane.json'].every((name) => names.includes(name))) {
+      return ['output-file-list-invalid']
+    }
+    const read = (name) => {
+      const path = join(dir, name)
+      const stat = lstatSync(path)
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 65_536) {
+        throw new Error('invalid-output')
+      }
+      return JSON.parse(readFileSync(path, 'utf8'))
+    }
+    const report = read(FRESH_REPORT)
+    const lane = read('lane.json')
+    if (reportProblems(report).length || freshLaneProblems(lane).length) return ['output-schema-invalid']
+    if (
+      lane.report !== FRESH_REPORT ||
+      lane.ci_run_id !== context.ciRun ||
+      !exactKeys(lane.identity, Object.keys(context.identity)) ||
+      !Object.entries(context.identity).every(([key, value]) => lane.identity[key] === value)
+    ) {
+      return ['output-binding-invalid']
+    }
+    const assessment = assessFreshOnboardingReport(report, expectedFreshIdentity(context.identity), {
+      requirePass: lane.outcome === 'PASS'
+    })
+    if (assessment.problems.length) return ['output-binding-invalid']
+    const expectedExit = { PASS: 0, FAIL: 1, PRECONDITION: 2 }[report.outcome]
+    if (lane.outcome !== report.outcome || lane.exit_code !== expectedExit) return ['output-outcome-invalid']
+    if (lane.outcome === 'PASS' && (lane.exit_code !== 0 || !lane.ci_run_id || lane.detail !== 'none')) {
+      return ['output-outcome-invalid']
+    }
+    return []
+  } catch {
+    return ['output-unreadable']
+  }
+}
+
+function freshOnboardingArgs(host, { app, installer, sha256, report, provenancePath, candidateRun, harnessCommit }) {
+  if (
+    !app ||
+    !provenancePath ||
+    !/^[1-9]\d*$/.test(String(candidateRun)) ||
+    !/^[0-9a-f]{40}$/.test(harnessCommit ?? '')
+  ) {
+    throw new Error('Fresh onboarding needs an installed app, provenance, candidate run and harness commit.')
+  }
+  return [
+    '--app',
+    app,
+    '--installer',
+    installer,
+    '--sha256',
+    sha256,
+    '--provenance',
+    provenancePath,
+    '--candidate-run',
+    String(candidateRun),
+    '--harness-commit',
+    harnessCommit,
+    '--platform',
+    host,
+    '--out',
+    report
+  ]
+}
 
 export const PACKAGED_LIFECYCLE_RV_ROWS = Object.freeze({
   mac: Object.freeze([
@@ -287,6 +553,38 @@ export const SCENARIOS = Object.freeze({
         // It finds the halted dialog and clicks its Quit button through System Events, so the lane
         // authorises GUI scripting (grant-gui) before it runs.
         guiScripting: true
+      })
+    })
+  }),
+  // Supporting pre-Setup assertions only: not the full visual/completion acceptance of M2-0456.
+  'fresh-onboarding-baseline': Object.freeze({
+    ticket: 'M2-0456',
+    qaOnlyHook: false,
+    reportAssessment: 'fresh-onboarding-baseline',
+    exits: Object.freeze({ 0: 'PASS', 1: 'FAIL', 2: 'PRECONDITION' }),
+    platforms: Object.freeze({
+      mac: Object.freeze({
+        variant: 'mac',
+        artifact: 'candidate-mac',
+        installerKind: 'mac-dmg',
+        installerSuffix: '.dmg',
+        script: 'scripts/qa/fresh-onboarding-baseline.mjs',
+        args: (options) => freshOnboardingArgs('darwin', options),
+        report: 'fresh-onboarding-baseline.json',
+        isolatedProfiles: true,
+        timeoutMinutes: 20,
+        stepTimeoutMinutes: 5
+      }),
+      win: Object.freeze({
+        variant: 'win',
+        artifact: 'candidate-win',
+        installerSuffix: '.exe',
+        script: 'scripts/qa/fresh-onboarding-baseline.mjs',
+        args: (options) => freshOnboardingArgs('win32', options),
+        report: 'fresh-onboarding-baseline.json',
+        isolatedProfiles: true,
+        timeoutMinutes: 20,
+        stepTimeoutMinutes: 5
       })
     })
   })
@@ -544,16 +842,28 @@ export function assessPackagedSmokeReport(report, platform) {
   return { problems, row_verdicts, notCovered }
 }
 
-function assessScenarioReport({ scenario, platform, report }) {
+export function assessScenarioReport({ scenario, platform, report, expected = undefined }) {
   const entry = scenarioEntry(scenario)
   if (entry.reportAssessment === 'packaged-smoke') return assessPackagedSmokeReport(report, platform)
+  if (entry.reportAssessment === FRESH_ONBOARDING_SCENARIO) return assessFreshOnboardingReport(report, expected)
   return { problems: [], row_verdicts: undefined, notCovered: [] }
 }
 
 /** The argv (after `node`) that runs a scenario. Every argument is repository-relative, so the recorded
  *  command never names the runner's home or temp directory.
- *  @param {{ scenario: string, platform: string, installer: string, sha256: string, outDir: string, app?: string }} options */
-export function scenarioCommand({ scenario, platform, installer, sha256, outDir, app }) {
+ *  @param {{ scenario: string, platform: string, installer: string, sha256: string, outDir: string, app?: string,
+ *    provenancePath?: string, candidateRun?: string, harnessCommit?: string }} options */
+export function scenarioCommand({
+  scenario,
+  platform,
+  installer,
+  sha256,
+  outDir,
+  app,
+  provenancePath,
+  candidateRun,
+  harnessCommit
+}) {
   const target = platformEntry(scenario, platform)
   if (target.installerSuffix && !installer.toLowerCase().endsWith(target.installerSuffix)) {
     throw new Error(
@@ -562,7 +872,15 @@ export function scenarioCommand({ scenario, platform, installer, sha256, outDir,
   }
   const argv = [
     target.script,
-    ...target.args({ installer, sha256, report: join(outDir, target.report).replaceAll('\\', '/'), app })
+    ...target.args({
+      installer,
+      sha256,
+      report: join(outDir, target.report).replaceAll('\\', '/'),
+      app,
+      provenancePath,
+      candidateRun,
+      harnessCommit
+    })
   ]
   if (argv.some((arg) => typeof arg !== 'string' || arg === '')) {
     throw new Error(`The ${scenario} command is missing an argument; pass the installed app with --app.`)
@@ -736,9 +1054,11 @@ export function contentProblems(text, { account }) {
   return problems
 }
 
-/** Scans every file under `dir` and deletes each one that breaks a content rule, so it is never uploaded.
- *  Returns the problems as `<file>: <rule>` lines. */
-export function scanUploadDir(dir, { account }) {
+/** Legacy lanes delete files breaking a content rule; the fresh lane instead validates its exact output pair.
+ * @param {string} dir
+ * @param {{ account: string, scenario?: string, freshContext?: any }} options */
+export function scanUploadDir(dir, { account, scenario = undefined, freshContext = undefined }) {
+  if (scenario === FRESH_ONBOARDING_SCENARIO) return scanFreshOnboardingOutput(dir, freshContext)
   const problems = []
   if (!existsSync(dir)) return problems
   for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
@@ -816,8 +1136,55 @@ function run(values) {
   // to the working directory so the command stays free of absolute paths.
   const app = values.app ? relative(process.cwd(), values.app).replaceAll('\\', '/') : undefined
 
-  const argv = scenarioCommand({ scenario, platform, installer, sha256, outDir, app })
+  const argv = scenarioCommand({
+    scenario,
+    platform,
+    installer,
+    sha256,
+    outDir,
+    app,
+    provenancePath: values.provenance,
+    candidateRun,
+    harnessCommit: process.env.GITHUB_SHA
+  })
   mkdirSync(outDir, { recursive: true })
+  if (scenario === FRESH_ONBOARDING_SCENARIO) {
+    // No raw child stream/error reaches public logs or the support-only lane record.
+    // A forced runner timeout is FAIL, never an owned-app shutdown acknowledgement or profile-cleanup receipt.
+    const child = spawnSync(process.execPath, argv, {
+      stdio: 'ignore',
+      timeout: 240_000,
+      env: freshOnboardingChildEnv(process.env)
+    })
+    const reportPath = join(outDir, target.report)
+    let reportData = null
+    let reportWritten = false
+    try {
+      const stat = lstatSync(reportPath)
+      reportWritten = stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1 && stat.size <= 65_536
+      if (reportWritten) reportData = JSON.parse(readFileSync(reportPath, 'utf8'))
+    } catch {
+      // Missing or malformed output is a fixed failure; never forward JSON parser details.
+    }
+    const lane = freshOnboardingLane({
+      platform,
+      env: process.env,
+      provenance,
+      candidateRun,
+      sha256,
+      exitCode: child.status,
+      reportWritten,
+      reportData
+    })
+    writeFileSync(join(outDir, 'lane.json'), `${JSON.stringify(lane, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
+    if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, 'fresh_lane_written=true\n')
+    const summary =
+      `### Fresh onboarding support probe: ${lane.outcome}\n\nResult: ${lane.detail}. ` +
+      'Full onboarding and visual acceptance are not covered.\n'
+    if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary)
+    console.log(`fresh-onboarding-baseline: ${lane.outcome} (${lane.detail})`)
+    return lane.outcome === 'PASS' ? 0 : 1
+  }
   const child = spawnSync(process.execPath, argv, {
     stdio: ['ignore', 'inherit', 'pipe'],
     encoding: 'utf8',
@@ -919,9 +1286,27 @@ function main(argv) {
     case 'scan': {
       const [dir] = positional
       if (!dir) throw new Error('usage: scan <dir> --account <runner account>')
-      const problems = scanUploadDir(dir, { account: required(values, 'account') })
-      for (const problem of problems)
-        console.log(`::error title=Content-free gate::${problem} (file removed from the upload)`)
+      const freshContext =
+        values.scenario === FRESH_ONBOARDING_SCENARIO
+          ? freshOnboardingScanContext({
+              platform: required(values, 'platform'),
+              provenance: JSON.parse(readFileSync(required(values, 'provenance'), 'utf8')),
+              candidateRun: required(values, 'candidate-run'),
+              sha256: required(values, 'sha256'),
+              env: process.env,
+              laneWritten: values['lane-written'] === 'true'
+            })
+          : undefined
+      const problems = scanUploadDir(dir, {
+        account: required(values, 'account'),
+        scenario: values.scenario,
+        freshContext
+      })
+      for (const problem of problems) {
+        const action =
+          values.scenario === FRESH_ONBOARDING_SCENARIO ? 'upload withheld' : 'file removed from the upload'
+        console.log(`::error title=Content-free gate::${problem} (${action})`)
+      }
       return problems.length ? 1 : 0
     }
     default:
@@ -933,7 +1318,11 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   try {
     process.exitCode = main(process.argv.slice(2))
   } catch (error) {
-    console.error(`::error::${error.message.replaceAll('\n', '%0A')}`)
+    const scenarioIndex = process.argv.indexOf('--scenario')
+    const fresh = scenarioIndex >= 0 && process.argv[scenarioIndex + 1] === FRESH_ONBOARDING_SCENARIO
+    console.error(
+      fresh ? '::error::fresh-onboarding-baseline: lane-failed' : `::error::${error.message.replaceAll('\n', '%0A')}`
+    )
     process.exitCode = 1
   }
 }
