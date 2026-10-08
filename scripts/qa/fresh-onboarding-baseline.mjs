@@ -15,7 +15,7 @@ import {
   writeFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, dirname, isAbsolute, join, relative, resolve, win32 } from 'node:path'
+import { basename, dirname, isAbsolute, join, posix, relative, resolve, win32 } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 export const FRESH_ONBOARDING_SCHEMA = 'metis.fresh-onboarding-baseline.v1'
@@ -504,7 +504,7 @@ export function packagedAsarPath(target, platform) {
   if (!plainRecord(target) || typeof target.installRoot !== 'string' || typeof target.executable !== 'string') {
     throw new Error('packaged target is invalid')
   }
-  if (platform === 'darwin') return join(target.installRoot, 'Contents', 'Resources', 'app.asar')
+  if (platform === 'darwin') return posix.join(target.installRoot, 'Contents', 'Resources', 'app.asar')
   if (platform === 'win32') return win32.join(win32.dirname(target.executable), 'resources', 'app.asar')
   throw new Error('packaged target platform is unsupported')
 }

@@ -365,7 +365,8 @@ export function createOnboardingFlows(ctx) {
           style.opacity !== '0' &&
           rect.width > 0 &&
           rect.height > 0,
-        withinViewport: rect.top >= 0 && rect.left >= 0 && rect.right <= window.innerWidth && rect.bottom <= window.innerHeight,
+        withinViewport:
+          rect.top >= 0 && rect.left >= 0 && rect.right <= window.innerWidth && rect.bottom <= window.innerHeight,
         rect: {
           top: rect.top,
           left: rect.left,
