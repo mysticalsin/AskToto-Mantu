@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { resolve } from 'node:path'
-import type { Browser, Page } from 'playwright'
+import type { Browser, JSHandle, Page } from 'playwright'
 import { build, type Rollup } from 'vite'
 import react from '@vitejs/plugin-react'
 
@@ -217,14 +217,24 @@ describe('right-edge dock renders as one element (M2-0431)', () => {
         root: root.getAttribute('style')
       }
     })
+    const fixtureMarginStyleMarker = 'right-edge-sidecar-notice-margin-fixture'
+    let fixtureMarginStyle: JSHandle<HTMLStyleElement> | null = null
+    let bodyFailed = false
+    let bodyFailure: unknown = undefined
+    const failures: unknown[] = []
+    const attemptCleanup = async (cleanup: () => Promise<void>): Promise<void> => {
+      try {
+        await cleanup()
+      } catch (error) {
+        failures.push(error)
+      }
+    }
     const setFixtureGeometry = async (width: number, height: number): Promise<void> => {
       await page.setViewportSize({ width, height })
       await page.evaluate(
         ({ width, height }) => {
           const root = document.getElementById('root')
           if (!(root instanceof HTMLElement)) throw new Error('Missing synthetic root.')
-          document.documentElement.style.margin = '0'
-          document.body.style.margin = '0'
           root.style.position = 'absolute'
           root.style.left = '0'
           root.style.top = '0'
@@ -280,6 +290,14 @@ describe('right-edge dock renders as one element (M2-0431)', () => {
       })
 
     try {
+      fixtureMarginStyle = await page.evaluateHandle((marker) => {
+        if (document.getElementById(marker) !== null) throw new Error('Fixture margin style marker already exists.')
+        const style = document.createElement('style')
+        style.id = marker
+        style.textContent = 'html, body { margin: 0; }'
+        document.head.append(style)
+        return style
+      }, fixtureMarginStyleMarker)
       await setFixtureGeometry(52, 52)
       await setDock({ open: false, answer: false, liveNotice: exactNotice })
       const parked = await inspectNotice()
@@ -355,25 +373,43 @@ describe('right-edge dock renders as one element (M2-0431)', () => {
       })
       expect(await page.locator('.right-edge-sidecar__status-notice').isVisible()).toBe(false)
       expect(await page.getByRole('status').count()).toBe(0)
+    } catch (error) {
+      bodyFailed = true
+      bodyFailure = error
     } finally {
-      try {
+      if (bodyFailed) failures.push(bodyFailure)
+      await attemptCleanup(async () => {
         await setDock({ open: false, answer: false, liveNotice: null })
-      } finally {
-        try {
-          await page.setViewportSize(originalViewport)
-        } finally {
-          await page.evaluate((styles) => {
-            const root = document.getElementById('root')
-            if (!(root instanceof HTMLElement)) throw new Error('Missing synthetic root.')
-            const restore = (element: HTMLElement, style: string | null): void => {
-              if (style === null) element.removeAttribute('style')
-              else element.setAttribute('style', style)
-            }
-            restore(document.documentElement, styles.html)
-            restore(document.body, styles.body)
-            restore(root, styles.root)
-          }, originalStyles)
-        }
+      })
+      await attemptCleanup(async () => {
+        await page.setViewportSize(originalViewport)
+      })
+      await attemptCleanup(async () => {
+        if (fixtureMarginStyle === null) return
+        await fixtureMarginStyle.evaluate((style, marker) => {
+          if (
+            style.id !== marker ||
+            style.textContent !== 'html, body { margin: 0; }' ||
+            style.parentElement !== document.head
+          ) {
+            throw new Error('Owned fixture margin style was replaced or detached.')
+          }
+          style.remove()
+        }, fixtureMarginStyleMarker)
+      })
+      await attemptCleanup(async () => {
+        if (fixtureMarginStyle === null) return
+        await fixtureMarginStyle.dispose()
+      })
+      await attemptCleanup(async () => {
+        await page.evaluate((style) => {
+          const root = document.getElementById('root')
+          if (!(root instanceof HTMLElement)) throw new Error('Missing synthetic root.')
+          if (style === null) root.removeAttribute('style')
+          else root.setAttribute('style', style)
+        }, originalStyles.root)
+      })
+      await attemptCleanup(async () => {
         const restoredStyles = await page.evaluate(() => {
           const root = document.getElementById('root')
           if (!(root instanceof HTMLElement)) throw new Error('Missing synthetic root.')
@@ -384,8 +420,21 @@ describe('right-edge dock renders as one element (M2-0431)', () => {
           }
         })
         expect(restoredStyles).toEqual(originalStyles)
+      })
+      await attemptCleanup(async () => {
         expect(page.viewportSize()).toEqual(originalViewport)
-      }
+      })
+      await attemptCleanup(async () => {
+        const markerRemains = await page.evaluate(
+          (marker) => document.getElementById(marker) !== null,
+          fixtureMarginStyleMarker
+        )
+        expect(markerRemains).toBe(false)
+      })
+    }
+    if (failures.length === 1) throw failures[0]
+    if (failures.length > 1) {
+      throw new AggregateError(failures, 'Right-edge notice check collected multiple failures.')
     }
   })
 })
