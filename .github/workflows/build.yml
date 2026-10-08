@@ -111,6 +111,31 @@ jobs:
       # scripts/color-literal-baseline.json, and design tokens live only in tokens.css.
       - run: npm run check:colors
 
+  owned-termination:
+    name: Owned process termination (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      # This job has no other workload: VM disposal contains a failed/cancelled fixture,
+      # but never qualifies cleanup or changes its result to PASS.
+      - name: Verify one owned root and descendant
+        timeout-minutes: 1
+        env:
+          METIS_FIXTURE_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: node scripts/qa/lib/st-1-termination.integration.mjs
+
   native:
     needs: changes
     if: needs.changes.outputs.native == 'true'
