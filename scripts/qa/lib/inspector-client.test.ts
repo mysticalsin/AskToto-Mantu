@@ -292,16 +292,17 @@ describe('inspectorClient transport lifecycle', { timeout: 15_000 }, () => {
     await within(client.close(), 'graceful close')
   })
 
-  it.each(['connectTimeoutMs', 'requestTimeoutMs', 'closeTimeoutMs'] as const)(
-    'rejects invalid %s budgets without opening a connection',
-    async (option) => {
-      const server = await fixture()
-      for (const value of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
-        await rejected(observe(connect(server.url, { ...BUDGETS, [option]: value })))
-      }
-      expect(server.connectionCount()).toBe(0)
+  it.each([
+    'connectTimeoutMs',
+    'requestTimeoutMs',
+    'closeTimeoutMs'
+  ] as const)('rejects invalid %s budgets without opening a connection', async (option) => {
+    const server = await fixture()
+    for (const value of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      await rejected(observe(connect(server.url, { ...BUDGETS, [option]: value })))
     }
-  )
+    expect(server.connectionCount()).toBe(0)
+  })
 
   it('rejects a refused HTTP upgrade and releases the connection', async () => {
     const server = await fixture('refuse-upgrade')
@@ -391,23 +392,26 @@ describe('inspectorClient transport lifecycle', { timeout: 15_000 }, () => {
     await within(client.close(), 'graceful close')
   })
 
-  it.each(['json', 'shape', 'id', 'binary', 'wire-frame'] as const)(
-    'fails the connection for a malformed %s response',
-    async (kind) => {
-      const server = await fixture()
-      // An ignored protocol error must not pass later because an unrelated request timer expires.
-      const client = await connect(server.url, { ...BUDGETS, requestTimeoutMs: 10_000 })
-      const pending = await pendingPair(client, server)
-      const [request] = await server.requests(2)
-      const peer = await server.peer()
-      if (kind === 'json') peer.send('{')
-      if (kind === 'shape') peer.send(JSON.stringify({ id: request.id }))
-      if (kind === 'id') peer.send(JSON.stringify({ id: String(request.id), result: {} }))
-      if (kind === 'binary') peer.send(Buffer.from(JSON.stringify({ id: request.id, result: {} })))
-      if (kind === 'wire-frame') server.writeFrame(Buffer.from([0x83, 0x00])) // Reserved opcode, real socket error.
-      await expectTerminal(client, server, pending)
-    }
-  )
+  it.each([
+    'json',
+    'shape',
+    'id',
+    'binary',
+    'wire-frame'
+  ] as const)('fails the connection for a malformed %s response', async (kind) => {
+    const server = await fixture()
+    // An ignored protocol error must not pass later because an unrelated request timer expires.
+    const client = await connect(server.url, { ...BUDGETS, requestTimeoutMs: 10_000 })
+    const pending = await pendingPair(client, server)
+    const [request] = await server.requests(2)
+    const peer = await server.peer()
+    if (kind === 'json') peer.send('{')
+    if (kind === 'shape') peer.send(JSON.stringify({ id: request.id }))
+    if (kind === 'id') peer.send(JSON.stringify({ id: String(request.id), result: {} }))
+    if (kind === 'binary') peer.send(Buffer.from(JSON.stringify({ id: request.id, result: {} })))
+    if (kind === 'wire-frame') server.writeFrame(Buffer.from([0x83, 0x00])) // Reserved opcode, real socket error.
+    await expectTerminal(client, server, pending)
+  })
 
   it('rejects pending and future requests after abrupt peer disconnection', async () => {
     const server = await fixture()
@@ -441,19 +445,19 @@ describe('inspectorClient transport lifecycle', { timeout: 15_000 }, () => {
     await within(client.close(), 'already gracefully closed')
   })
 
-  it.each(['deadline', 'abnormal-peer-close'] as const)(
-    'does not report graceful cleanup after %s',
-    async (failure) => {
-      const server = await fixture('no-close-ack')
-      const client = await connect(server.url, BUDGETS)
-      const closing = observe(client.close())
-      const frame = await server.frame()
-      expect(frame[0] & 0x0f).toBe(8)
-      if (failure === 'abnormal-peer-close') server.destroy()
-      await rejected(closing)
-      await server.disconnected()
-      await rejected(observe(client.send('Runtime.afterClose')))
-      await rejected(observe(client.close()))
-    }
-  )
+  it.each([
+    'deadline',
+    'abnormal-peer-close'
+  ] as const)('does not report graceful cleanup after %s', async (failure) => {
+    const server = await fixture('no-close-ack')
+    const client = await connect(server.url, BUDGETS)
+    const closing = observe(client.close())
+    const frame = await server.frame()
+    expect(frame[0] & 0x0f).toBe(8)
+    if (failure === 'abnormal-peer-close') server.destroy()
+    await rejected(closing)
+    await server.disconnected()
+    await rejected(observe(client.send('Runtime.afterClose')))
+    await rejected(observe(client.close()))
+  })
 })

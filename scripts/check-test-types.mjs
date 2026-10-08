@@ -62,7 +62,12 @@ let output = ''
 try {
   output = execFileSync(
     process.execPath,
-    [join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'), '--noEmit', '-p', join(repoRoot, 'tsconfig.tests.json')],
+    [
+      join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
+      '--noEmit',
+      '-p',
+      join(repoRoot, 'tsconfig.tests.json')
+    ],
     { encoding: 'utf8', cwd: repoRoot }
   )
 } catch (e) {
@@ -88,6 +93,9 @@ if (count > BASELINE) {
   for (const [file, n] of [...byFile.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)) {
     console.error(`    ${String(n).padStart(4)}  ${file}`)
   }
+  console.error('')
+  console.error('  Compiler diagnostics (first 20):')
+  for (const line of lines.slice(0, 20)) console.error(`    ${line}`)
   console.error('')
   console.error('  Fix the new errors. Do NOT raise the baseline.')
   process.exit(1)
