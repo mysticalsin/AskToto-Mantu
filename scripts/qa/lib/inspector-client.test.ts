@@ -126,6 +126,7 @@ async function fixture(mode: Mode = 'websocket') {
   const websocket = new WebSocketServer({ noServer: true })
   const sockets = new Set<Socket>()
   const upgraded = deferred<void>()
+  const clientEnded = deferred<void>()
   const disconnected = deferred<void>()
   const peer = deferred<WebSocket>()
   const frame = deferred<Buffer>()
@@ -143,6 +144,13 @@ async function fixture(mode: Mode = 'websocket') {
   })
   server.on('upgrade', (request, socket, head) => {
     upgraded.resolve()
+    if (mode === 'stall-upgrade' || mode === 'no-close-ack') {
+      // HTTP upgrade leaves a half-open socket. Finish the raw peer only after actual client EOF.
+      socket.once('end', () => {
+        clientEnded.resolve()
+        socket.end()
+      })
+    }
     if (mode === 'stall-upgrade') {
       socket.resume()
       return
@@ -194,6 +202,7 @@ async function fixture(mode: Mode = 'websocket') {
     url: `ws://127.0.0.1:${address.port}/inspector`,
     peer: () => within(peer.promise, 'WebSocket handshake'),
     upgraded: () => within(upgraded.promise, 'HTTP upgrade request'),
+    clientEnded: () => within(clientEnded.promise, 'raw peer observes actual client TCP EOF'),
     disconnected: () => within(disconnected.promise, 'client closes its actual TCP socket'),
     frame: () => within(frame.promise, 'client sends a close frame'),
     connectionCount: () => connections,
@@ -317,6 +326,7 @@ describe('inspectorClient transport lifecycle', { timeout: 15_000 }, () => {
     const connection = observe(connect(server.url, { ...BUDGETS, connectTimeoutMs: 250 }))
     await server.upgraded()
     expect((await rejected(connection)).message).toMatch(/connect.*(timeout|timed out|deadline)/i)
+    await server.clientEnded()
     await server.disconnected()
   })
 
@@ -335,6 +345,7 @@ describe('inspectorClient transport lifecycle', { timeout: 15_000 }, () => {
     await server.upgraded()
     controller.abort()
     expect((await rejected(connection)).message).toMatch(/abort/i)
+    await server.clientEnded()
     await server.disconnected()
   })
 
@@ -456,6 +467,7 @@ describe('inspectorClient transport lifecycle', { timeout: 15_000 }, () => {
     expect(frame[0] & 0x0f).toBe(8)
     if (failure === 'abnormal-peer-close') server.destroy()
     await rejected(closing)
+    if (failure === 'deadline') await server.clientEnded()
     await server.disconnected()
     await rejected(observe(client.send('Runtime.afterClose')))
     await rejected(observe(client.close()))
