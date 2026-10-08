@@ -56,7 +56,7 @@ const baseSettings = (): Settings =>
   ({
     meetingsFolder: '',
     autoSaveTranscripts: true
-  } as Settings)
+  }) as Settings
 
 describe('MQA-245 — a diarization cluster label is not wrapped in the generic role label', () => {
   it('renders "Speaker 1:", never "Speaker (Speaker 1):"', () => {
@@ -207,9 +207,7 @@ describe('transcripts', () => {
     expect(decrypted).toContain('CONFIDENTIAL-DEAL-XYZ')
     expect(decrypted).toContain('TOP-SECRET-RECAP')
     // The plaintext index.md must not leak the meeting title in encrypted mode (no row appended).
-    const idx = readdirSync(folder).includes('index.md')
-      ? readFileSync(join(folder, 'index.md'), 'utf8')
-      : ''
+    const idx = readdirSync(folder).includes('index.md') ? readFileSync(join(folder, 'index.md'), 'utf8') : ''
     expect(idx).not.toContain('Secret board meeting')
   })
 
@@ -479,7 +477,11 @@ describe('appendDebrief (90-second off-record layer)', () => {
 
   it('appends the debrief as its own section in the saved meeting', async () => {
     const file = await saved()
-    const r = await appendDebrief(settings, file.split('/').pop()!, 'CFO seemed checked out; champion did the selling for us.')
+    const r = await appendDebrief(
+      settings,
+      file.split('/').pop()!,
+      'CFO seemed checked out; champion did the selling for us.'
+    )
     expect(r.ok).toBe(true)
     const md = readSavedFile(file)
     expect(md).toContain(DEBRIEF_HEADING)
@@ -597,15 +599,18 @@ describe('saveDraftTranscript / clearDraftTranscript (crash-recovery autosave)',
     expect(realFile).not.toContain(files[0])
   })
 
-  it('overwrites the SAME meeting\'s draft on repeated ticks instead of accumulating files', async () => {
+  it("overwrites the SAME meeting's draft on repeated ticks instead of accumulating files", async () => {
     await saveDraftTranscript(settings, meeting)
-    await saveDraftTranscript(settings, { ...meeting, lines: [...meeting.lines, { speaker: 'you', text: 'On track', t: 1_700_000_030_000 }] })
+    await saveDraftTranscript(settings, {
+      ...meeting,
+      lines: [...meeting.lines, { speaker: 'you', text: 'On track', t: 1_700_000_030_000 }]
+    })
     const drafts = readdirSync(folder).filter((f) => f.startsWith('.autosave-draft-'))
     expect(drafts.length).toBe(1)
     expect(readFileSync(join(folder, drafts[0]), 'utf8')).toContain('On track')
   })
 
-  it('does NOT clobber a DIFFERENT (earlier) meeting\'s crash-recovery draft', async () => {
+  it("does NOT clobber a DIFFERENT (earlier) meeting's crash-recovery draft", async () => {
     const crashed: SaveMeeting = { ...meeting, startedAt: 1_600_000_000_000, title: 'Crashed meeting' }
     await saveDraftTranscript(settings, crashed) // meeting A crashed, left its draft on disk
     await saveDraftTranscript(settings, meeting) // meeting B starts later, autosaves its own draft
@@ -613,7 +618,7 @@ describe('saveDraftTranscript / clearDraftTranscript (crash-recovery autosave)',
     expect(drafts.length).toBe(2) // both survive — meeting B's autosave must not overwrite meeting A's
   })
 
-  it('does NOT clobber a different meeting\'s draft when both start within the same wall-clock second', async () => {
+  it("does NOT clobber a different meeting's draft when both start within the same wall-clock second", async () => {
     // stamp()'s HHMMSS has only 1-second resolution — these two startedAt values are 500ms apart but
     // land in the identical second, which used to collide on the same draft filename.
     const meetingA: SaveMeeting = {
@@ -635,7 +640,7 @@ describe('saveDraftTranscript / clearDraftTranscript (crash-recovery autosave)',
     expect(contents.some((c) => c.includes('BBBB content from meeting B'))).toBe(true)
   })
 
-  it('clearDraftTranscript removes only that meeting\'s own draft', async () => {
+  it("clearDraftTranscript removes only that meeting's own draft", async () => {
     const other: SaveMeeting = { ...meeting, startedAt: 1_600_000_000_000 }
     await saveDraftTranscript(settings, meeting)
     await saveDraftTranscript(settings, other)
@@ -785,7 +790,12 @@ describe('recoverOrphanDrafts (crash-recovery promotion)', () => {
 })
 
 describe('parseRecapMarkdown', () => {
-  it.each(['constructor', '__proto__', '__definegetter__', 'hasownproperty'])('keeps the unknown heading %s as text, never an inherited alias', (heading) => {
+  it.each([
+    'constructor',
+    '__proto__',
+    '__definegetter__',
+    'hasownproperty'
+  ])('keeps the unknown heading %s as text, never an inherited alias', (heading) => {
     expect(recapSectionKey(heading)).toBe(heading)
   })
 
@@ -827,16 +837,27 @@ describe('parseRecapMarkdown', () => {
   })
 
   it('recognizes decomposed accents and French next steps without inventing an action from none', () => {
-    const md = '## Re\u0301sume\u0301 : Rien à décider.\n## Prochaines étapes\n- Aucune.\n## Décisions\n- Néant.\n## Questions ouvertes\nAucun.\n'
-    expect(parseRecapMarkdown(md)).toMatchObject({ overview: 'Rien à décider.', actionItems: [], decisions: [], openQuestions: [], markdown: md })
+    const md =
+      '## Re\u0301sume\u0301 : Rien à décider.\n## Prochaines étapes\n- Aucune.\n## Décisions\n- Néant.\n## Questions ouvertes\nAucun.\n'
+    expect(parseRecapMarkdown(md)).toMatchObject({
+      overview: 'Rien à décider.',
+      actionItems: [],
+      decisions: [],
+      openQuestions: [],
+      markdown: md
+    })
     expect(parseRecapMarkdown('## Prochaines étapes\n- Relire le contrat')).toMatchObject({
       actionItems: [{ text: 'Relire le contrat', owner: null, dueDateText: null }]
     })
   })
 
   it('uses a mode Outcome when no standard overview is present without overriding an overview', () => {
-    expect(parseRecapMarkdown('## Outcome: Agreed to review the proposal.').overview).toBe('Agreed to review the proposal.')
-    expect(parseRecapMarkdown('## Overview: Primary overview.\n## Outcome: Additional detail.').overview).toBe('Primary overview.')
+    expect(parseRecapMarkdown('## Outcome: Agreed to review the proposal.').overview).toBe(
+      'Agreed to review the proposal.'
+    )
+    expect(parseRecapMarkdown('## Overview: Primary overview.\n## Outcome: Additional detail.').overview).toBe(
+      'Primary overview.'
+    )
   })
 
   const SAMPLE = [
@@ -933,7 +954,8 @@ describe('parseRecapMarkdown', () => {
     // Renewal"), mirroring the prompt's own template shape. The first live run produced exactly this and
     // title24 came back empty, so the saved file silently fell back to the first-words heuristic name.
     it('parses inline heading content ("## Title: X" on one line), the shape real models emit', () => {
-      const md = '## Title: Renault Contract Renewal\n## Tags: Renault, procurement, contract renewal, data migration, pricing\n## Overview: A working discussion on renewing the contract.'
+      const md =
+        '## Title: Renault Contract Renewal\n## Tags: Renault, procurement, contract renewal, data migration, pricing\n## Overview: A working discussion on renewing the contract.'
       const r = parseRecapMarkdown(md)
       expect(r.title24).toBe('Renault Contract Renewal')
       expect(r.tags).toEqual(['Renault', 'procurement', 'contract renewal', 'data migration', 'pricing'])
@@ -1081,10 +1103,7 @@ Pricing defense for LATAM SAP.
     ].join('\n')
     const r = parseRecapMarkdown(real)
     expect(r.overview).toBe('The team reviewed launch readiness and resolved the pricing question.')
-    expect(r.decisions).toEqual([
-      'Ship the beta to the design partners on Monday',
-      'Lock pricing at $49/mo'
-    ])
+    expect(r.decisions).toEqual(['Ship the beta to the design partners on Monday', 'Lock pricing at $49/mo'])
     expect(r.actionItems).toEqual([
       { text: 'Draft the partner email', owner: 'Priya', dueDateText: null },
       { text: 'Update the pricing page', owner: 'Marco', dueDateText: null },
@@ -1150,7 +1169,7 @@ describe('old-meeting Keychain recovery (T7): allowKeychainRecovery + self-heali
     // node:fs/promises.rename mock (vi.restoreAllMocks() doesn't undo .mockImplementation() on a
     // factory-vended vi.fn() — only on a real vi.spyOn) — re-establish the real-rename default so
     // saveMeeting below isn't sabotaged by a prior test's leftover override.
-    vi.mocked(renameAsync).mockImplementation(async (src: string, dest: string) => renameSync(src, dest))
+    vi.mocked(renameAsync).mockImplementation(async (src, dest) => renameSync(src, dest))
     // decryptToTemp writes its plaintext copy under app.getPath('temp') — route that to a real,
     // per-test directory instead of the shared default mock path, which nothing here creates on disk.
     // Sandboxed per-run (see __mocks__/electron.ts) rather than a hardcoded literal — only `temp` matters
@@ -1266,9 +1285,7 @@ describe('copy-forward: pre-rebrand "AskToto Meetings" sibling folder (T7 7c)', 
     expect(existsSync(join(folder, 'README.md'))).toBe(false) // bookkeeping files never copied
     expect(existsSync(join(folder, 'index.md'))).toBe(false)
     // Source untouched — copy-forward never deletes or modifies the original.
-    expect(readdirSync(legacy).sort()).toEqual(
-      ['README.md', 'already-there.md', 'index.md', 'kept-meeting.md'].sort()
-    )
+    expect(readdirSync(legacy).sort()).toEqual(['README.md', 'already-there.md', 'index.md', 'kept-meeting.md'].sort())
     expect(readFileSync(join(legacy, 'kept-meeting.md'), 'utf8')).toBe('LEGACY-CONTENT-A')
   })
 
