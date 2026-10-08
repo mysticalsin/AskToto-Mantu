@@ -145,7 +145,7 @@ describe('strictLaunchEnvironment', () => {
   })
 
   it.each(Object.keys(hermetic))('still rejects the missing owned path %s on both platforms', (key) => {
-    for (const platform of ['darwin', 'win32']) {
+    for (const platform of ['darwin', 'win32'] as const) {
       for (const value of [undefined, '']) {
         expect(() => strictLaunchEnvironment({}, { ...hermetic, [key]: value }, platform)).toThrow(
           `strict environment needs ${key}.`
