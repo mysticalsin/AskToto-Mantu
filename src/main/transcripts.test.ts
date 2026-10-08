@@ -258,10 +258,9 @@ describe('transcripts', () => {
     )
     const decipher = createDecipheriv('aes-256-gcm', contentKey, Buffer.from(env.iv as string, 'base64'))
     decipher.setAuthTag(Buffer.from(env.tag as string, 'base64'))
-    const recovered = Buffer.concat([
-      decipher.update(Buffer.from(env.ct as string, 'base64')),
-      decipher.final()
-    ]).toString('utf8')
+    const recovered = Buffer.concat([decipher.update(Buffer.from(env.ct as string, 'base64')), decipher.final()]).toString(
+      'utf8'
+    )
     expect(recovered).toContain('ESCROW-RECOVERABLE-SECRET')
     expect(readSavedFile(file)).toContain('ESCROW-RECOVERABLE-SECRET') // local decrypt still works too
   })
@@ -269,30 +268,33 @@ describe('transcripts', () => {
   // MQA-153 — escrow decides WHO can decrypt every future transcript, and the process environment is
   // writable by anything running as the user (HKCU\Environment, `launchctl setenv`) exactly like the
   // per-user managed-config tier this function already refuses to read. The env tier is the DEV tier.
-  it('MQA-153 — a packaged build ignores ASKTOTO_ESCROW_PUBKEY so a planted env key cannot escrow transcripts', async () => {
-    const { publicKey } = generateKeyPairSync('rsa', {
-      modulusLength: 2048,
-      publicKeyEncoding: { type: 'spki', format: 'pem' },
-      privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
-    })
-    process.env.ASKTOTO_ESCROW_PUBKEY = publicKey
-    ;(app as unknown as { isPackaged: boolean }).isPackaged = true
-    try {
-      const enc = { ...settings, encryptTranscripts: true } as Settings
-      const file = await saveMeeting(enc, {
-        title: 'Planted escrow key',
-        mode: 'meeting',
-        startedAt: 1_700_000_000_000,
-        lines: [{ speaker: 'them', text: 'NOT-ESCROWED-SECRET', t: 1_700_000_000_000 }],
-        recap: ''
+  it(
+    'MQA-153 — a packaged build ignores ASKTOTO_ESCROW_PUBKEY so a planted env key cannot escrow transcripts',
+    async () => {
+      const { publicKey } = generateKeyPairSync('rsa', {
+        modulusLength: 2048,
+        publicKeyEncoding: { type: 'spki', format: 'pem' },
+        privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
       })
-      const env = parseEnvelope(file)
-      expect(env.kEscrow).toBeUndefined() // no attacker-recoverable wrap written
-      expect(typeof env.kLocal).toBe('string') // saving still succeeds, local-only (no regression)
-    } finally {
-      delete (app as unknown as { isPackaged?: boolean }).isPackaged
+      process.env.ASKTOTO_ESCROW_PUBKEY = publicKey
+      ;(app as unknown as { isPackaged: boolean }).isPackaged = true
+      try {
+        const enc = { ...settings, encryptTranscripts: true } as Settings
+        const file = await saveMeeting(enc, {
+          title: 'Planted escrow key',
+          mode: 'meeting',
+          startedAt: 1_700_000_000_000,
+          lines: [{ speaker: 'them', text: 'NOT-ESCROWED-SECRET', t: 1_700_000_000_000 }],
+          recap: ''
+        })
+        const env = parseEnvelope(file)
+        expect(env.kEscrow).toBeUndefined() // no attacker-recoverable wrap written
+        expect(typeof env.kLocal).toBe('string') // saving still succeeds, local-only (no regression)
+      } finally {
+        delete (app as unknown as { isPackaged?: boolean }).isPackaged
+      }
     }
-  })
+  )
 
   it('still decrypts a legacy v1 (safeStorage-direct) file for backward compatibility', () => {
     const plain = '# Legacy transcript\n\nV1-SECRET-PAYLOAD\n'
@@ -479,7 +481,11 @@ describe('appendDebrief (90-second off-record layer)', () => {
 
   it('appends the debrief as its own section in the saved meeting', async () => {
     const file = await saved()
-    const r = await appendDebrief(settings, file.split('/').pop()!, 'CFO seemed checked out; champion did the selling for us.')
+    const r = await appendDebrief(
+      settings,
+      file.split('/').pop()!,
+      'CFO seemed checked out; champion did the selling for us.'
+    )
     expect(r.ok).toBe(true)
     const md = readSavedFile(file)
     expect(md).toContain(DEBRIEF_HEADING)
@@ -498,33 +504,36 @@ describe('appendDebrief (90-second off-record layer)', () => {
     expect(md.match(new RegExp(DEBRIEF_HEADING.replace(/[()]/g, '\\$&'), 'g'))).toHaveLength(1)
   })
 
-  it('a debrief containing its own "## " heading line round-trips without corrupting the rest of the file, and a re-save still replaces exactly one debrief', async () => {
-    const file = await saved()
-    const name = file.split('/').pop()!
-    const sneaky = 'CFO seemed distracted.\n## Sneaky heading\nAlso send the follow-up email.'
-    await appendDebrief(settings, name, sneaky)
-    let md = readSavedFile(file)
-    // The rest of the document (written before the debrief) must survive untouched.
-    expect(md).toContain('## Full transcript')
-    expect(md).toContain('the price is high')
-    // The debrief's own content — including the heading-shaped line — must all be present...
-    expect(md).toContain('CFO seemed distracted.')
-    expect(md).toContain('Sneaky heading')
-    expect(md).toContain('Also send the follow-up email.')
-    // ...but the embedded "## " line must never be mistaken for a real section boundary: exactly two
-    // real "## " headings exist in the whole file (Full transcript, Debrief), not a phantom third one.
-    expect(md.match(/^## /gm)?.length).toBe(2)
+  it(
+    'a debrief containing its own "## " heading line round-trips without corrupting the rest of the file, and a re-save still replaces exactly one debrief',
+    async () => {
+      const file = await saved()
+      const name = file.split('/').pop()!
+      const sneaky = 'CFO seemed distracted.\n## Sneaky heading\nAlso send the follow-up email.'
+      await appendDebrief(settings, name, sneaky)
+      let md = readSavedFile(file)
+      // The rest of the document (written before the debrief) must survive untouched.
+      expect(md).toContain('## Full transcript')
+      expect(md).toContain('the price is high')
+      // The debrief's own content — including the heading-shaped line — must all be present...
+      expect(md).toContain('CFO seemed distracted.')
+      expect(md).toContain('Sneaky heading')
+      expect(md).toContain('Also send the follow-up email.')
+      // ...but the embedded "## " line must never be mistaken for a real section boundary: exactly two
+      // real "## " headings exist in the whole file (Full transcript, Debrief), not a phantom third one.
+      expect(md.match(/^## /gm)?.length).toBe(2)
 
-    // A second save must still replace the whole debrief cleanly, with no stale tail leaking through.
-    await appendDebrief(settings, name, 'Totally new, unrelated second read.')
-    md = readSavedFile(file)
-    expect(md).not.toContain('Sneaky heading')
-    expect(md).not.toContain('CFO seemed distracted')
-    expect(md).not.toContain('follow-up email')
-    expect(md).toContain('Totally new, unrelated second read.')
-    expect(md.match(new RegExp(DEBRIEF_HEADING.replace(/[()]/g, '\\$&'), 'g'))).toHaveLength(1)
-    expect(md.match(/^## /gm)?.length).toBe(2)
-  })
+      // A second save must still replace the whole debrief cleanly, with no stale tail leaking through.
+      await appendDebrief(settings, name, 'Totally new, unrelated second read.')
+      md = readSavedFile(file)
+      expect(md).not.toContain('Sneaky heading')
+      expect(md).not.toContain('CFO seemed distracted')
+      expect(md).not.toContain('follow-up email')
+      expect(md).toContain('Totally new, unrelated second read.')
+      expect(md.match(new RegExp(DEBRIEF_HEADING.replace(/[()]/g, '\\$&'), 'g'))).toHaveLength(1)
+      expect(md.match(/^## /gm)?.length).toBe(2)
+    }
+  )
 
   it('refuses missing files and non-transcript files, and stays inside the meetings folder', async () => {
     expect((await appendDebrief(settings, 'nope.md', 'x')).ok).toBe(false)
@@ -599,7 +608,10 @@ describe('saveDraftTranscript / clearDraftTranscript (crash-recovery autosave)',
 
   it('overwrites the SAME meeting\'s draft on repeated ticks instead of accumulating files', async () => {
     await saveDraftTranscript(settings, meeting)
-    await saveDraftTranscript(settings, { ...meeting, lines: [...meeting.lines, { speaker: 'you', text: 'On track', t: 1_700_000_030_000 }] })
+    await saveDraftTranscript(settings, {
+      ...meeting,
+      lines: [...meeting.lines, { speaker: 'you', text: 'On track', t: 1_700_000_030_000 }]
+    })
     const drafts = readdirSync(folder).filter((f) => f.startsWith('.autosave-draft-'))
     expect(drafts.length).toBe(1)
     expect(readFileSync(join(folder, drafts[0]), 'utf8')).toContain('On track')
@@ -693,26 +705,29 @@ describe('recoverOrphanDrafts (crash-recovery promotion)', () => {
     expect(content).toContain('(recovered)')
   })
 
-  it('running recovery twice on the same still-orphaned draft never creates a duplicate meeting (idempotent)', async () => {
-    await saveDraftTranscript(settings, meeting)
-    const r1 = await recoverOrphanDrafts(settings)
-    expect(r1.recovered).toBe(1)
-    const afterFirst = promotedFiles()
-    expect(afterFirst.length).toBe(1)
+  it(
+    'running recovery twice on the same still-orphaned draft never creates a duplicate meeting (idempotent)',
+    async () => {
+      await saveDraftTranscript(settings, meeting)
+      const r1 = await recoverOrphanDrafts(settings)
+      expect(r1.recovered).toBe(1)
+      const afterFirst = promotedFiles()
+      expect(afterFirst.length).toBe(1)
 
-    // Simulate the exact failure mode this guards against: the promoted copy already exists on disk
-    // (written by the run above) but a draft with the SAME derived filename shows up again — the real
-    // trigger is unlinkSync throwing right after a successful writeSaved, which leaves the original
-    // draft in place; recreating it here reproduces the same on-disk shape without needing to mock fs.
-    await saveDraftTranscript(settings, meeting)
-    expect(draftFiles().length).toBe(1)
-    const r2 = await recoverOrphanDrafts(settings)
-    expect(r2.recovered).toBe(0) // already-promoted draft is skipped, not re-counted
-    const afterSecond = promotedFiles()
-    expect(afterSecond.length).toBe(1) // still exactly one meeting — no "-recovered-2.md" duplicate
-    expect(afterSecond).toEqual(afterFirst) // the same single file, not a new copy
-    expect(draftFiles().length).toBe(0) // the stale draft was still cleaned up on this second run
-  })
+      // Simulate the exact failure mode this guards against: the promoted copy already exists on disk
+      // (written by the run above) but a draft with the SAME derived filename shows up again — the real
+      // trigger is unlinkSync throwing right after a successful writeSaved, which leaves the original
+      // draft in place; recreating it here reproduces the same on-disk shape without needing to mock fs.
+      await saveDraftTranscript(settings, meeting)
+      expect(draftFiles().length).toBe(1)
+      const r2 = await recoverOrphanDrafts(settings)
+      expect(r2.recovered).toBe(0) // already-promoted draft is skipped, not re-counted
+      const afterSecond = promotedFiles()
+      expect(afterSecond.length).toBe(1) // still exactly one meeting — no "-recovered-2.md" duplicate
+      expect(afterSecond).toEqual(afterFirst) // the same single file, not a new copy
+      expect(draftFiles().length).toBe(0) // the stale draft was still cleaned up on this second run
+    }
+  )
 
   it('adds the recovered meeting to index.md in plaintext mode, mirroring saveMeeting', async () => {
     await saveDraftTranscript(settings, meeting) // settings.encryptTranscripts is unset/false here
@@ -785,9 +800,12 @@ describe('recoverOrphanDrafts (crash-recovery promotion)', () => {
 })
 
 describe('parseRecapMarkdown', () => {
-  it.each(['constructor', '__proto__', '__definegetter__', 'hasownproperty'])('keeps the unknown heading %s as text, never an inherited alias', (heading) => {
-    expect(recapSectionKey(heading)).toBe(heading)
-  })
+  it.each(['constructor', '__proto__', '__definegetter__', 'hasownproperty'])(
+    'keeps the unknown heading %s as text, never an inherited alias',
+    (heading) => {
+      expect(recapSectionKey(heading)).toBe(heading)
+    }
+  )
 
   it('keeps French sections in the same structured fields without translating their content', () => {
     const md = [
@@ -827,16 +845,27 @@ describe('parseRecapMarkdown', () => {
   })
 
   it('recognizes decomposed accents and French next steps without inventing an action from none', () => {
-    const md = '## Re\u0301sume\u0301 : Rien à décider.\n## Prochaines étapes\n- Aucune.\n## Décisions\n- Néant.\n## Questions ouvertes\nAucun.\n'
-    expect(parseRecapMarkdown(md)).toMatchObject({ overview: 'Rien à décider.', actionItems: [], decisions: [], openQuestions: [], markdown: md })
+    const md =
+      '## Re\u0301sume\u0301 : Rien à décider.\n## Prochaines étapes\n- Aucune.\n## Décisions\n- Néant.\n## Questions ouvertes\nAucun.\n'
+    expect(parseRecapMarkdown(md)).toMatchObject({
+      overview: 'Rien à décider.',
+      actionItems: [],
+      decisions: [],
+      openQuestions: [],
+      markdown: md
+    })
     expect(parseRecapMarkdown('## Prochaines étapes\n- Relire le contrat')).toMatchObject({
       actionItems: [{ text: 'Relire le contrat', owner: null, dueDateText: null }]
     })
   })
 
   it('uses a mode Outcome when no standard overview is present without overriding an overview', () => {
-    expect(parseRecapMarkdown('## Outcome: Agreed to review the proposal.').overview).toBe('Agreed to review the proposal.')
-    expect(parseRecapMarkdown('## Overview: Primary overview.\n## Outcome: Additional detail.').overview).toBe('Primary overview.')
+    expect(parseRecapMarkdown('## Outcome: Agreed to review the proposal.').overview).toBe(
+      'Agreed to review the proposal.'
+    )
+    expect(parseRecapMarkdown('## Overview: Primary overview.\n## Outcome: Additional detail.').overview).toBe(
+      'Primary overview.'
+    )
   })
 
   const SAMPLE = [
@@ -933,7 +962,8 @@ describe('parseRecapMarkdown', () => {
     // Renewal"), mirroring the prompt's own template shape. The first live run produced exactly this and
     // title24 came back empty, so the saved file silently fell back to the first-words heuristic name.
     it('parses inline heading content ("## Title: X" on one line), the shape real models emit', () => {
-      const md = '## Title: Renault Contract Renewal\n## Tags: Renault, procurement, contract renewal, data migration, pricing\n## Overview: A working discussion on renewing the contract.'
+      const md =
+        '## Title: Renault Contract Renewal\n## Tags: Renault, procurement, contract renewal, data migration, pricing\n## Overview: A working discussion on renewing the contract.'
       const r = parseRecapMarkdown(md)
       expect(r.title24).toBe('Renault Contract Renewal')
       expect(r.tags).toEqual(['Renault', 'procurement', 'contract renewal', 'data migration', 'pricing'])
@@ -1081,10 +1111,7 @@ Pricing defense for LATAM SAP.
     ].join('\n')
     const r = parseRecapMarkdown(real)
     expect(r.overview).toBe('The team reviewed launch readiness and resolved the pricing question.')
-    expect(r.decisions).toEqual([
-      'Ship the beta to the design partners on Monday',
-      'Lock pricing at $49/mo'
-    ])
+    expect(r.decisions).toEqual(['Ship the beta to the design partners on Monday', 'Lock pricing at $49/mo'])
     expect(r.actionItems).toEqual([
       { text: 'Draft the partner email', owner: 'Priya', dueDateText: null },
       { text: 'Update the pricing page', owner: 'Marco', dueDateText: null },
@@ -1150,7 +1177,7 @@ describe('old-meeting Keychain recovery (T7): allowKeychainRecovery + self-heali
     // node:fs/promises.rename mock (vi.restoreAllMocks() doesn't undo .mockImplementation() on a
     // factory-vended vi.fn() — only on a real vi.spyOn) — re-establish the real-rename default so
     // saveMeeting below isn't sabotaged by a prior test's leftover override.
-    vi.mocked(renameAsync).mockImplementation(async (src: string, dest: string) => renameSync(src, dest))
+    vi.mocked(renameAsync).mockImplementation(async (src, dest) => renameSync(src, dest))
     // decryptToTemp writes its plaintext copy under app.getPath('temp') — route that to a real,
     // per-test directory instead of the shared default mock path, which nothing here creates on disk.
     // Sandboxed per-run (see __mocks__/electron.ts) rather than a hardcoded literal — only `temp` matters
@@ -1190,20 +1217,26 @@ describe('old-meeting Keychain recovery (T7): allowKeychainRecovery + self-heali
     return file
   }
 
-  it('recovery flag off: an old "S:" meeting still fails to decrypt while the local keystore is forced (unchanged bulk-read behavior)', async () => {
-    const file = await writeOldKeychainMeeting()
-    process.env.ASKTOTO_LOCAL_KEYSTORE = '1'
-    // readSavedFile -> decodeSaved never sets allowKeychainRecovery — the bulk list/search path stays
-    // exactly as fail-closed as it is today; 486227d's boot-prompt fix is untouched.
-    expect(readSavedFile(file)).toBe('')
-  })
+  it(
+    'recovery flag off: an old "S:" meeting still fails to decrypt while the local keystore is forced (unchanged bulk-read behavior)',
+    async () => {
+      const file = await writeOldKeychainMeeting()
+      process.env.ASKTOTO_LOCAL_KEYSTORE = '1'
+      // readSavedFile -> decodeSaved never sets allowKeychainRecovery — the bulk list/search path stays
+      // exactly as fail-closed as it is today; 486227d's boot-prompt fix is untouched.
+      expect(readSavedFile(file)).toBe('')
+    }
+  )
 
-  it('recovery flag on + safeStorage available: the explicit single-file Open path recovers the same meeting', async () => {
-    const file = await writeOldKeychainMeeting()
-    process.env.ASKTOTO_LOCAL_KEYSTORE = '1'
-    const tmp = decryptToTemp(file) // the only caller that opts into allowKeychainRecovery
-    expect(readFileSync(tmp, 'utf8')).toContain('OLD-KEYCHAIN-SECRET')
-  })
+  it(
+    'recovery flag on + safeStorage available: the explicit single-file Open path recovers the same meeting',
+    async () => {
+      const file = await writeOldKeychainMeeting()
+      process.env.ASKTOTO_LOCAL_KEYSTORE = '1'
+      const tmp = decryptToTemp(file) // the only caller that opts into allowKeychainRecovery
+      expect(readFileSync(tmp, 'utf8')).toContain('OLD-KEYCHAIN-SECRET')
+    }
+  )
 
   it('a successful recovery rewraps kLocal to "F:" in place, leaving iv/tag/ct byte-identical', async () => {
     const file = await writeOldKeychainMeeting()
@@ -1266,21 +1299,22 @@ describe('copy-forward: pre-rebrand "AskToto Meetings" sibling folder (T7 7c)', 
     expect(existsSync(join(folder, 'README.md'))).toBe(false) // bookkeeping files never copied
     expect(existsSync(join(folder, 'index.md'))).toBe(false)
     // Source untouched — copy-forward never deletes or modifies the original.
-    expect(readdirSync(legacy).sort()).toEqual(
-      ['README.md', 'already-there.md', 'index.md', 'kept-meeting.md'].sort()
-    )
+    expect(readdirSync(legacy).sort()).toEqual(['README.md', 'already-there.md', 'index.md', 'kept-meeting.md'].sort())
     expect(readFileSync(join(legacy, 'kept-meeting.md'), 'utf8')).toBe('LEGACY-CONTENT-A')
   })
 
-  it('runs only once: a file added to the legacy folder after the run-once marker is written is never pulled in', () => {
-    writeFileSync(join(legacy, 'first.md'), 'FIRST')
-    resolveMeetingsFolder(settings) // first call: copies first.md, writes the marker
-    expect(readFileSync(join(folder, 'first.md'), 'utf8')).toBe('FIRST')
+  it(
+    'runs only once: a file added to the legacy folder after the run-once marker is written is never pulled in',
+    () => {
+      writeFileSync(join(legacy, 'first.md'), 'FIRST')
+      resolveMeetingsFolder(settings) // first call: copies first.md, writes the marker
+      expect(readFileSync(join(folder, 'first.md'), 'utf8')).toBe('FIRST')
 
-    writeFileSync(join(legacy, 'second.md'), 'SECOND')
-    resolveMeetingsFolder(settings) // marker already present — must be a no-op
-    expect(existsSync(join(folder, 'second.md'))).toBe(false)
-  })
+      writeFileSync(join(legacy, 'second.md'), 'SECOND')
+      resolveMeetingsFolder(settings) // marker already present — must be a no-op
+      expect(existsSync(join(folder, 'second.md'))).toBe(false)
+    }
+  )
 })
 
 // MQA-111 (docs/qa/BUG-LEDGER.md): duration must be the transcript's own SPAN (last line minus first),

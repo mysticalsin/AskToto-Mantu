@@ -75,10 +75,12 @@ function baseOpts(overrides: Partial<Parameters<typeof streamDust>[0]> = {}): Pa
   } as Parameters<typeof streamDust>[0]
 }
 
-async function waitDone(handlers: { onDone: ReturnType<typeof vi.fn>; onError: ReturnType<typeof vi.fn> }): Promise<void> {
+async function waitDone(handlers: Parameters<typeof streamDust>[0]['handlers']): Promise<void> {
   for (let i = 0; i < 500; i++) {
-    if (handlers.onDone.mock.calls.length) return
-    if (handlers.onError.mock.calls.length) throw new Error(String(handlers.onError.mock.calls[0][0]))
+    if (vi.mocked(handlers.onDone).mock.calls.length) return
+    if (vi.mocked(handlers.onError).mock.calls.length) {
+      throw new Error(String(vi.mocked(handlers.onError).mock.calls[0][0]))
+    }
     await new Promise((r) => setImmediate(r))
   }
   throw new Error(`timed out — calls=${JSON.stringify(calls)}`)
@@ -105,9 +107,7 @@ describe('Dust 401 self-heal on the conversation-reuse path', () => {
 
     // 2. Token expires mid-meeting. Next ask hits the reuse path and gets the 401.
     failNextPostWith401 = true
-    const refreshDustAuth = vi
-      .fn()
-      .mockResolvedValue({ apiKey: 'fresh-key', workspaceId: 'ws-1' })
+    const refreshDustAuth = vi.fn().mockResolvedValue({ apiKey: 'fresh-key', workspaceId: 'ws-1' })
     const opts2 = baseOpts({ refreshDustAuth })
     streamDust(opts2)
     await waitDone(opts2.handlers)

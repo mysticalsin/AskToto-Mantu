@@ -82,13 +82,12 @@ function baseOpts(overrides: Partial<Parameters<typeof streamDust>[0]> = {}): Pa
   } as Parameters<typeof streamDust>[0]
 }
 
-async function waitDone(handlers: {
-  onDone: ReturnType<typeof vi.fn>
-  onError: ReturnType<typeof vi.fn>
-}): Promise<void> {
+async function waitDone(handlers: Parameters<typeof streamDust>[0]['handlers']): Promise<void> {
   for (let i = 0; i < 500; i++) {
-    if (handlers.onDone.mock.calls.length) return
-    if (handlers.onError.mock.calls.length) throw new Error(String(handlers.onError.mock.calls[0][0]))
+    if (vi.mocked(handlers.onDone).mock.calls.length) return
+    if (vi.mocked(handlers.onError).mock.calls.length) {
+      throw new Error(String(vi.mocked(handlers.onError).mock.calls[0][0]))
+    }
     await new Promise((r) => setImmediate(r))
   }
   throw new Error(`timed out — calls=${JSON.stringify(calls)}`)
@@ -108,19 +107,22 @@ describe('Dust auth retry after stream-start 401', () => {
     failFirstStream = false
   })
 
-  it('reuses the created message without a duplicate post, and retries the stream attach with FRESH credentials', async () => {
-    failFirstStream = true
-    const opts = baseOpts()
-    streamDust(opts)
-    await waitDone(opts.handlers)
+  it(
+    'reuses the created message without a duplicate post, and retries the stream attach with FRESH credentials',
+    async () => {
+      failFirstStream = true
+      const opts = baseOpts()
+      streamDust(opts)
+      await waitDone(opts.handlers)
 
-    expect(calls.create).toBe(1)
-    expect(calls.post).toBe(0)
-    expect(calls.createdContents).toHaveLength(1)
+      expect(calls.create).toBe(1)
+      expect(calls.post).toBe(0)
+      expect(calls.createdContents).toHaveLength(1)
 
-    // The first stream attach used the stale key and 401'd; the retry must use the refreshed one —
-    // not silently replay the same stale credential (which would just 401 again).
-    expect(calls.stream).toBe(2)
-    expect(calls.streamApiKeys).toEqual(['stale-key', 'fresh-key'])
-  })
+      // The first stream attach used the stale key and 401'd; the retry must use the refreshed one —
+      // not silently replay the same stale credential (which would just 401 again).
+      expect(calls.stream).toBe(2)
+      expect(calls.streamApiKeys).toEqual(['stale-key', 'fresh-key'])
+    }
+  )
 })
