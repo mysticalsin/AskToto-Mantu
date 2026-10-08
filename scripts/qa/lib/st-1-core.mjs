@@ -9,6 +9,7 @@
  *   { ok: false, timedOut: true }   did not settle within its bound
  *   { ok: false, error }            settled with an error (message string)
  */
+import { normalizeTeardown } from './st-1-termination.mjs'
 
 /** Where in-flight evaluations live inside the candidate, keyed per evaluation. */
 export const PENDING_GLOBAL = '__st1pending'
@@ -902,6 +903,7 @@ export function buildReport({
   attribution,
   complete,
   harnessError,
+  teardown = /** @type {unknown} */ (null),
   historyMode = 'on',
   fixtureCounts = null,
   purpose = 'st-1',
@@ -909,6 +911,8 @@ export function buildReport({
   windowWarmup = false,
   windowRemeasures = null
 }) {
+  const termination = normalizeTeardown(teardown)
+  complete = complete && termination.state === 'acknowledged' && !harnessError
   const criteria = evaluateCriteria(row, measured, evidence, { history })
   const refusalEvidence = fifoRefusalEvidence(row, measured, evidence, fixtures, fixtureCounts)
   // The control row has nothing to exercise: its verdict is the criteria alone.
@@ -969,6 +973,7 @@ export function buildReport({
     criteria,
     verdict,
     complete,
+    teardown: termination,
     ...(harnessError ? { harnessError } : {}),
     // Report-only attribution evidence; no criterion reads it.
     errors: measured.errors,
@@ -1005,18 +1010,22 @@ export function writeJsonToStdout(value, stdout = process.stdout) {
 /** The launch itself never reached a candidate to measure: a genuine FAIL (inspector: false), never a
  *  skipped row. A window-construction launch is marked as in buildReport.
  * @param {{ row: string, installer: string, candidate: { build_run_id: unknown, artifact_sha256: unknown }, fixtures: unknown[],
- *   reason: string, purpose?: string, windowVariant?: string, windowWarmup?: boolean, windowRemeasures?: string | null }} args */
+ *   reason: string, teardown?: unknown, harnessError?: string | null, purpose?: string,
+ *   windowVariant?: string, windowWarmup?: boolean, windowRemeasures?: string | null }} args */
 export function buildLaunchFailureReport({
   row,
   installer,
   candidate,
   fixtures,
   reason,
+  teardown = null,
+  harnessError = null,
   purpose = 'st-1',
   windowVariant = 'shipped',
   windowWarmup = false,
   windowRemeasures = null
 }) {
+  const termination = normalizeTeardown(teardown)
   return {
     harness: 'ST-1',
     ...(purpose === WINDOW_CONSTRUCTION ? { purpose, st1Evidence: false, windowVariant } : {}),
@@ -1032,6 +1041,9 @@ export function buildLaunchFailureReport({
     exercised: false,
     criteria: [{ name: 'inspector', pass: false }],
     reason,
-    verdict: 'FAIL'
+    verdict: termination.state === 'acknowledged' && !harnessError ? 'FAIL' : 'INCOMPLETE',
+    complete: false,
+    teardown: termination,
+    ...(harnessError ? { harnessError } : {})
   }
 }

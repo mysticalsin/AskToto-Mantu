@@ -79,6 +79,7 @@ function report(overrides: Record<string, unknown> = {}) {
     attribution: { mainLog: null, appEvidence: null },
     complete: true,
     harnessError: null,
+    teardown: { state: 'acknowledged' },
     ...overrides
   })
 }
@@ -475,7 +476,9 @@ describe('window-construction runs (M2-0516)', () => {
   it('is the launch order the qa-candidate workflow runs', () => {
     const workflow = workflowText()
     expect(workflow).toContain('node scripts/qa/st-1.mjs --print-window-plan > st1-report/window-plan.json')
-    expect(workflow).toContain("jq -c '.[]' st1-report/window-plan.json | while read -r launch; do")
+    expect(workflow).toContain('while IFS= read -r launch; do')
+    expect(workflow).toContain("done < <(jq -c '.[]' st1-report/window-plan.json)")
+    expect(workflow).not.toContain("jq -c '.[]' st1-report/window-plan.json | while")
     expect(workflow).toContain('run=$(jq -r \'.name\' <<<"$launch")')
     expect(workflow).toContain('if [ "$warmup" = true ]; then warmup_args=(--window-warmup); fi')
     expect(workflow).toContain('The two marked shipped warm-up launches run before any measured repeat')
@@ -534,6 +537,7 @@ describe('window-construction runs (M2-0516)', () => {
       candidate,
       fixtures: [],
       reason: 'no inspector',
+      teardown: { state: 'acknowledged' },
       purpose: 'window-construction',
       windowVariant: 'prewarm-view'
     })
@@ -1200,6 +1204,7 @@ describe('windowConstructionGate: one in-job re-measure per chrome (OD-66)', () 
         candidate,
         fixtures: [],
         reason: 'no inspector',
+        teardown: { state: 'acknowledged' },
         ...shippedRun,
         windowRemeasures: 'window-shipped-opaque-1'
       })
@@ -1961,11 +1966,119 @@ describe('buildLaunchFailureReport', () => {
       installer: 'Metis-QA.zip',
       candidate,
       fixtures: [1, 2, 3],
-      reason: 'no inspector'
+      reason: 'no inspector',
+      teardown: { state: 'acknowledged' }
     })
     expect(built.verdict).toBe('FAIL')
     expect(built.criteria).toEqual([{ name: 'inspector', pass: false }])
     expect(built.fixtures).toBe(3)
+  })
+})
+
+describe('ST-1 teardown is a prerequisite for a final report', () => {
+  it.each([
+    undefined,
+    null,
+    {},
+    { state: 'pending' },
+    { state: 'acknowledged', private: 'must not escape' }
+  ])('fails closed on a missing or malformed receipt: %j', (teardown) => {
+    const built = report({ teardown })
+    expect(built).toMatchObject({
+      complete: false,
+      verdict: 'INCOMPLETE',
+      teardown: { state: 'unacknowledged', reason: 'invalid-receipt' }
+    })
+    expect(JSON.stringify(built)).not.toContain('must not escape')
+  })
+
+  it('preserves measured criteria and the original error but cannot pass unsafe teardown', () => {
+    const built = report({
+      teardown: { state: 'unacknowledged', reason: 'group-still-present' },
+      harnessError: 'original measurement failure'
+    })
+    expect(built.criteria).toEqual(report().criteria)
+    expect(built).toMatchObject({
+      complete: false,
+      verdict: 'INCOMPLETE',
+      harnessError: 'original measurement failure',
+      teardown: { state: 'unacknowledged', reason: 'group-still-present' }
+    })
+  })
+
+  it('preserves a closed group-phase diagnostic through both report builders', () => {
+    const teardown = {
+      state: 'unacknowledged',
+      reason: 'group-probe-permission',
+      diagnostic: {
+        phase: 'post-kill-group-probe',
+        rootExitObserved: true,
+        groupKillInvoked: true
+      }
+    }
+    const measured = report({ teardown, harnessError: 'original measurement failure' })
+    expect(measured.criteria).toEqual(report().criteria)
+    expect(measured).toMatchObject({
+      complete: false,
+      verdict: 'INCOMPLETE',
+      harnessError: 'original measurement failure',
+      teardown
+    })
+
+    const launch = buildLaunchFailureReport({
+      row: 'none',
+      installer: 'Metis-QA.zip',
+      candidate,
+      fixtures: [],
+      reason: 'original inspector failure',
+      harnessError: 'original harness failure',
+      teardown
+    })
+    expect(launch).toMatchObject({
+      complete: false,
+      verdict: 'INCOMPLETE',
+      reason: 'original inspector failure',
+      harnessError: 'original harness failure',
+      teardown
+    })
+    expect(launch.criteria).toEqual([{ name: 'inspector', pass: false }])
+  })
+
+  it('carries the same unsafe receipt through the launch-failure early return', () => {
+    const built = buildLaunchFailureReport({
+      row: 'none',
+      installer: 'Metis-QA.zip',
+      candidate,
+      fixtures: [],
+      reason: 'original inspector failure',
+      harnessError: 'original harness failure',
+      teardown: { state: 'unacknowledged', reason: 'root-exit-unobserved' }
+    })
+    expect(built).toMatchObject({
+      complete: false,
+      verdict: 'INCOMPLETE',
+      reason: 'original inspector failure',
+      harnessError: 'original harness failure',
+      teardown: { state: 'unacknowledged', reason: 'root-exit-unobserved' }
+    })
+    expect(built.criteria).toEqual([{ name: 'inspector', pass: false }])
+  })
+
+  it('does not hide a cleanup/harness failure behind a completed measurement', () => {
+    expect(report({ harnessError: 'cleanup failed' })).toMatchObject({ complete: false, verdict: 'INCOMPLETE' })
+  })
+
+  it('awaits acknowledgement and keeps copying and deletion inside the acknowledged branch', () => {
+    const runner = readFileSync(join(process.cwd(), 'scripts/qa/st-1.mjs'), 'utf8').replace(/\r\n/g, '\n')
+    expect(runner).not.toContain('function stopChild(')
+    expect(runner).toContain('await stopOwnedChild(child)')
+    const gate = runner.slice(runner.indexOf("if (teardown.state !== 'acknowledged')"))
+    expect(gate).toMatch(/complete = false[\s\S]*harnessError \?\?=[\s\S]*} else \{/)
+    const safe = gate.indexOf('} else {')
+    expect(safe).toBeGreaterThan(-1)
+    expect(gate.indexOf('copyAppEvidence(')).toBeGreaterThan(safe)
+    expect(gate.indexOf('cleanup({ kind:')).toBeGreaterThan(safe)
+    expect(gate).toContain('writeReport()')
   })
 })
 

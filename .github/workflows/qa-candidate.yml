@@ -26,6 +26,8 @@ on:
       - scripts/qa/release-line.mjs
       - scripts/qa/st-1.mjs
       - scripts/qa/lib/st-1-core.mjs
+      - scripts/qa/lib/st-1-termination.mjs
+      - scripts/qa/lib/st-1-termination.test.ts
       - scripts/qa/stat-flags-fixture.sh
       - scripts/hermetic/prove-owner-sandbox.sh
       - scripts/hermetic/run-under-owner-sandbox.sh
@@ -1087,6 +1089,7 @@ jobs:
       - name: Verify every byte against the provenance
         run: node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac-qa-identity
       - name: Measure the window constructor per variant and chrome
+        id: window_measure
         continue-on-error: true
         run: |
           mkdir -p st1-report onboarded-profile
@@ -1099,7 +1102,8 @@ jobs:
           printf '{"onboardingDone":true,"onboardingDoneAt":%s000,"recordingConsent":true,"overlayLayout":"bar","autoHideOverlay":false}\n' "$(date +%s)" > onboarded-profile/settings.json
           # The shared ST-1 plan emits every launch so the gate artifact records per-launch, per-stage timings.
           node scripts/qa/st-1.mjs --print-window-plan > st1-report/window-plan.json
-          jq -c '.[]' st1-report/window-plan.json | while read -r launch; do
+          jq -e 'type == "array" and length > 0' st1-report/window-plan.json >/dev/null
+          while IFS= read -r launch; do
             variant=$(jq -r '.variant' <<<"$launch")
             chrome=$(jq -r '.chrome' <<<"$launch")
             run=$(jq -r '.name' <<<"$launch")
@@ -1108,6 +1112,7 @@ jobs:
             warmup_args=()
             if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi
             if [ "$warmup" = true ]; then warmup_args=(--window-warmup); fi
+            status=0
             node scripts/qa/st-1.mjs \
               --installer "$installer" \
               --provenance provenance/provenance.json \
@@ -1120,22 +1125,33 @@ jobs:
               --report-dir "st1-report/$run" \
               --out "st1-report/$run/$run.json" \
               </dev/null \
-              || echo "::warning::$run ended without PASS; its report says why."
-          done
+              || status=$?
+            if ! jq -e 'type == "object" and .harness == "ST-1" and .complete == true and
+              (.verdict == "PASS" or .verdict == "FAIL" or .verdict == "NOT_EXERCISED") and
+              .teardown == {"state":"acknowledged"}' "st1-report/$run/$run.json" >/dev/null 2>&1; then
+              echo "::error::$run is incomplete or has no valid termination acknowledgement; no further launch is safe."
+              exit 1
+            fi
+            if [ "$status" -ne 0 ]; then echo "::warning::$run ended without PASS; its report says why."; fi
+          done < <(jq -c '.[]' st1-report/window-plan.json)
       # OD-66: one in-job re-measure per chrome replaces the whole-check re-run. After every planned launch, the plan
       # names each chrome whose only over-budget measured shipped launch failed on budget alone; it is [] when no
       # shipped launch reached 250 ms, so no launch is added. The gate accepts a re-measure only under 250 ms.
       - name: Re-measure a single slow shipped launch per chrome (OD-66)
+        id: window_remeasure
+        if: always() && steps.window_measure.outcome == 'success'
         continue-on-error: true
         run: |
           installer=$(find assets -maxdepth 1 -name '*.zip' -print -quit)
           node scripts/qa/st-1.mjs --print-window-remeasure-plan st1-report > st1-report/window-remeasure-plan.json
-          jq -c '.[]' st1-report/window-remeasure-plan.json | while read -r launch; do
+          jq -e 'type == "array"' st1-report/window-remeasure-plan.json >/dev/null
+          while IFS= read -r launch; do
             chrome=$(jq -r '.chrome' <<<"$launch")
             run=$(jq -r '.name' <<<"$launch")
             remeasures=$(jq -r '.remeasures' <<<"$launch")
             template=()
             if [ "$chrome" = transparent ]; then template=(--profile-template onboarded-profile); fi
+            status=0
             node scripts/qa/st-1.mjs \
               --installer "$installer" \
               --provenance provenance/provenance.json \
@@ -1148,11 +1164,28 @@ jobs:
               --report-dir "st1-report/$run" \
               --out "st1-report/$run/$run.json" \
               </dev/null \
-              || echo "::warning::$run ended without PASS; its report says why."
-          done
+              || status=$?
+            if ! jq -e 'type == "object" and .harness == "ST-1" and .complete == true and
+              (.verdict == "PASS" or .verdict == "FAIL" or .verdict == "NOT_EXERCISED") and
+              .teardown == {"state":"acknowledged"}' "st1-report/$run/$run.json" >/dev/null 2>&1; then
+              echo "::error::$run is incomplete or has no valid termination acknowledgement; no further launch is safe."
+              exit 1
+            fi
+            if [ "$status" -ne 0 ]; then echo "::warning::$run ended without PASS; its report says why."; fi
+          done < <(jq -c '.[]' st1-report/window-remeasure-plan.json)
       - name: Gate the shipped window (createWindow.prewarm and createWindow.construct < 250 ms in both chromes)
         if: always()
-        run: node scripts/qa/st-1.mjs --gate-window st1-report --out st1-report/window-gate.json
+        env:
+          MEASURE_OUTCOME: ${{ steps.window_measure.outcome }}
+          REMEASURE_OUTCOME: ${{ steps.window_remeasure.outcome }}
+        run: |
+          if [ "$MEASURE_OUTCOME" != success ] || [ "$REMEASURE_OUTCOME" != success ]; then
+            mkdir -p st1-report
+            printf '%s\n' '{"harness":"ST-1-window-gate","verdict":"INCOMPLETE","pass":false,"reason":"window-plan-incomplete"}' > st1-report/window-gate.json
+            echo "::error::Window plan did not finish safely; refusing to gate a partial set."
+            exit 1
+          fi
+          node scripts/qa/st-1.mjs --gate-window st1-report --out st1-report/window-gate.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:

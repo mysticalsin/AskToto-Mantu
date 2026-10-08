@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
-import { windowConstructionPlan, windowRemeasurePlan } from '../qa/lib/st-1-core.mjs'
+import { windowConstructionGate, windowConstructionPlan, windowRemeasurePlan } from '../qa/lib/st-1-core.mjs'
 
 const root = join(__dirname, '..', '..')
 const workflow = readFileSync(join(root, '.github', 'workflows', 'qa-candidate.yml'), 'utf8').replace(/\r\n/g, '\n')
@@ -567,6 +567,156 @@ exit 1
   })
 })
 
+describe('QA candidate owned-process acknowledgement', () => {
+  const windowSteps = steps('st1-mac-window')
+  const measure = windowSteps.find((step) => step.includes('id: window_measure')) ?? ''
+  const remeasure = windowSteps.find((step) => step.includes('id: window_remeasure')) ?? ''
+  const gate = windowSteps.find((step) => step.includes('--gate-window st1-report')) ?? ''
+
+  it('keeps both loop exit statuses and checks a final acknowledged receipt before continuing', () => {
+    for (const step of [measure, remeasure]) {
+      expect(step).toContain('while IFS= read -r launch; do')
+      expect(step).not.toContain('| while')
+      expect(step).toContain('status=0')
+      expect(step).toContain('|| status=$?')
+      expect(step).toContain('if ! jq -e')
+      expect(step).toContain('.teardown == {"state":"acknowledged"}')
+      expect(step).toContain('"st1-report/$run/$run.json" >/dev/null 2>&1; then')
+      expect(step).toContain('no further launch is safe.')
+      expect(step).toMatch(/no further launch is safe\.[\s\S]*exit 1\n/)
+      expect(step).toContain('if [ "$status" -ne 0 ]; then echo "::warning::')
+      expect(step).toMatch(/^        continue-on-error: true$/m)
+    }
+    expect(measure).toContain('type == "array" and length > 0')
+    expect(remeasure).toContain('jq -e \'type == "array"\' st1-report/window-remeasure-plan.json')
+  })
+
+  it('evaluates both real jq receipt predicates against safe, unsafe and corrupt final reports', () => {
+    const safe = { harness: 'ST-1', complete: true, verdict: 'PASS', teardown: { state: 'acknowledged' } }
+    const cases: [string, boolean][] = [
+      [JSON.stringify(safe), true],
+      [JSON.stringify({ ...safe, verdict: 'FAIL' }), true],
+      [JSON.stringify({ ...safe, complete: false, verdict: 'FAIL' }), false],
+      [JSON.stringify({ ...safe, verdict: 'INCOMPLETE' }), false],
+      [JSON.stringify({ ...safe, teardown: { state: 'unacknowledged', reason: 'group-still-present' } }), false],
+      [JSON.stringify({ ...safe, teardown: undefined }), false],
+      [JSON.stringify({ ...safe, teardown: { state: 'unknown' } }), false],
+      [JSON.stringify({ ...safe, teardown: { state: 'acknowledged', extra: true } }), false],
+      [JSON.stringify({ ...safe, complete: undefined }), false],
+      [JSON.stringify({ ...safe, verdict: 'UNKNOWN' }), false],
+      ['{', false],
+      ['', false]
+    ]
+    for (const step of [measure, remeasure]) {
+      const predicate = step.match(/if ! jq -e '([^']+)' "st1-report\/\$run\/\$run.json"/)?.[1]
+      expect(predicate).toBeDefined()
+      for (const [input, pass] of cases) {
+        const result = spawnSync('jq', ['-e', predicate!], { input, encoding: 'utf8', timeout: 5_000 })
+        expect(result.error, 'jq must execute the actual workflow predicate').toBeUndefined()
+        expect(result.status === 0, input).toBe(pass)
+      }
+    }
+  })
+
+  it('rejects an incomplete deciding remeasure even when its window stages would satisfy the stage-only gate', () => {
+    const launch = (name: string, transparent: boolean, ms: number, second: number) => ({
+      name: `${name}/${name}.json`,
+      report: {
+        harness: 'ST-1',
+        purpose: 'window-construction',
+        windowVariant: 'shipped',
+        complete: true,
+        verdict: 'PASS',
+        teardown: { state: 'acknowledged' },
+        bootStages: {
+          stages: ['createWindow.prewarm', 'createWindow.construct'].map((stage) => ({
+            stage,
+            transparent,
+            ms,
+            ts: new Date(second * 1_000).toISOString()
+          }))
+        }
+      }
+    })
+    const slow = launch('window-shipped-opaque-1', false, 300, 1)
+    const transparent = launch('window-shipped-transparent-1', true, 100, 2)
+    const deciding = launch('window-remeasure-shipped-opaque', false, 100, 3)
+    const incomplete = {
+      ...deciding,
+      report: {
+        ...deciding.report,
+        remeasures: 'window-shipped-opaque-1',
+        complete: false,
+        verdict: 'INCOMPLETE',
+        harnessError: 'synthetic cleanup failure'
+      }
+    }
+    // This is deliberately a stage-only evaluator, not a measurement-completeness gate.
+    expect(windowConstructionGate([slow, transparent, incomplete]).pass).toBe(true)
+    for (const step of [measure, remeasure]) {
+      const predicate = step.match(/if ! jq -e '([^']+)' "st1-report\/\$run\/\$run.json"/)?.[1]
+      expect(predicate).toBeDefined()
+      const result = spawnSync('jq', ['-e', predicate!], {
+        input: JSON.stringify(incomplete.report),
+        encoding: 'utf8',
+        timeout: 5_000
+      })
+      expect(result.error).toBeUndefined()
+      expect(result.status).toBe(1)
+    }
+  })
+
+  it('uses outcome rather than continue-on-error conclusion and runs an empty remeasure plan safely', () => {
+    expect(remeasure).toContain("if: always() && steps.window_measure.outcome == 'success'")
+    expect(gate).toContain('MEASURE_OUTCOME: ${{ steps.window_measure.outcome }}')
+    expect(gate).toContain('REMEASURE_OUTCOME: ${{ steps.window_remeasure.outcome }}')
+    expect(gate).toMatch(/^        if: always\(\)$/m)
+    expect(gate).not.toContain('.conclusion')
+    const upload = windowSteps.find((step) => step.includes('name: st-1-macos-window')) ?? ''
+    expect(upload).toContain('if: always()')
+    expect(workflow).toContain('      - scripts/qa/lib/st-1-termination.mjs')
+    expect(workflow).toContain('      - scripts/qa/lib/st-1-termination.test.ts')
+  })
+
+  it.each([
+    ['success', 'success', true],
+    ['failure', 'skipped', false],
+    ['success', 'failure', false],
+    ['', 'success', false]
+  ])('gate outcomes %s/%s cannot bless an unsafe partial set', (first, second, safe) => {
+    const dir = mkdtempSync(join(tmpdir(), 'metis-st1-workflow-'))
+    try {
+      const command = 'node scripts/qa/st-1.mjs --gate-window st1-report --out st1-report/window-gate.json'
+      const shell = gate.split('        run: |\n')[1]?.replace(/^ {10}/gm, '')
+      expect(shell).toContain(command)
+      // Only substitute the final stage evaluator: the actual outcome guard and receipt writer execute.
+      const result = spawnSync(
+        'bash',
+        ['-e', '-o', 'pipefail', '-c', shell!.replace(command, "printf 'gate-called\\n'")],
+        {
+          cwd: dir,
+          env: { ...process.env, MEASURE_OUTCOME: String(first), REMEASURE_OUTCOME: String(second) },
+          encoding: 'utf8',
+          timeout: 5_000
+        }
+      )
+      expect(result.error).toBeUndefined()
+      expect(result.status).toBe(safe ? 0 : 1)
+      expect(result.stdout.includes('gate-called')).toBe(safe)
+      if (!safe) {
+        expect(JSON.parse(readFileSync(join(dir, 'st1-report/window-gate.json'), 'utf8'))).toEqual({
+          harness: 'ST-1-window-gate',
+          verdict: 'INCOMPLETE',
+          pass: false,
+          reason: 'window-plan-incomplete'
+        })
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('QA candidate workflow: the shipped window gate (M2-0519)', () => {
   const block = jobBlocks.get('st1-mac-window') ?? ''
 
@@ -591,7 +741,7 @@ describe('QA candidate workflow: the shipped window gate (M2-0519)', () => {
   it('runs one marked shipped warm-up per chrome before any measured repeats', () => {
     const measure = steps('st1-mac-window').find((step) => step.includes('--purpose window-construction')) ?? ''
     expect(measure).toContain('node scripts/qa/st-1.mjs --print-window-plan > st1-report/window-plan.json')
-    expect(measure).toContain("jq -c '.[]' st1-report/window-plan.json | while read -r launch; do")
+    expect(measure).toContain("done < <(jq -c '.[]' st1-report/window-plan.json)")
     expect(measure).toContain('run=$(jq -r \'.name\' <<<"$launch")')
     // node must not read the plan loop's stdin, or it would swallow the remaining launches.
     expect(measure).toContain('--out "st1-report/$run/$run.json" \\\n              </dev/null \\\n')
@@ -608,7 +758,7 @@ describe('QA candidate workflow: the shipped window gate (M2-0519)', () => {
   it('keeps measured report-only window variants before measured shipped rows', () => {
     const measure = steps('st1-mac-window').find((step) => step.includes('--purpose window-construction')) ?? ''
     expect(measure).toContain('node scripts/qa/st-1.mjs --print-window-plan > st1-report/window-plan.json')
-    expect(measure).toContain("jq -c '.[]' st1-report/window-plan.json | while read -r launch; do")
+    expect(measure).toContain("done < <(jq -c '.[]' st1-report/window-plan.json)")
     const measured = windowConstructionPlan().filter((entry) => !entry.warmup)
     for (const repeat of [1, 2]) {
       const repeatEntries = measured.filter((entry) => entry.name.endsWith(`-${repeat}`))
@@ -644,7 +794,7 @@ describe('QA candidate workflow: the shipped window gate (M2-0519)', () => {
     expect(remeasure).toContain(
       'node scripts/qa/st-1.mjs --print-window-remeasure-plan st1-report > st1-report/window-remeasure-plan.json'
     )
-    expect(remeasure).toContain("jq -c '.[]' st1-report/window-remeasure-plan.json | while read -r launch; do")
+    expect(remeasure).toContain("done < <(jq -c '.[]' st1-report/window-remeasure-plan.json)")
     expect(remeasure).toContain('remeasures=$(jq -r \'.remeasures\' <<<"$launch")')
     expect(remeasure).toContain('--purpose window-construction')
     expect(remeasure).toContain('--window-variant shipped')

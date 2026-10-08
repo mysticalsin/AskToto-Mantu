@@ -94,6 +94,7 @@ import { basename, dirname, join, relative } from 'node:path'
 import { monitorEventLoopDelay } from 'node:perf_hooks'
 import { sha256File } from './provenance.mjs'
 import { queryMainLogPath } from './lib/main-log-query.mjs'
+import { normalizeTeardown, stopOwnedChild } from './lib/st-1-termination.mjs'
 import { createFifo, releaseFifo } from './fixtures/fifo.mjs'
 import {
   bootStagesFromAudit,
@@ -237,7 +238,6 @@ const WIN_PLACEHOLDER_ATTRIBUTES = 0x0000_1000 | 0x0004_0000 | 0x0040_0000
  *  here because this plain script cannot import a TypeScript module. */
 const SYS32 = join(process.env.SystemRoot || process.env.windir || 'C:\\Windows', 'System32')
 const WIN_POWERSHELL = join(SYS32, 'WindowsPowerShell', 'v1.0', 'powershell.exe')
-const WIN_TASKKILL = join(SYS32, 'taskkill.exe')
 
 /** dataless.ts's WIN_ATTRIBUTES_SCRIPT wire protocol: NUL-separated UTF-8 paths on stdin (so the console
  *  code page can never mangle them — this profile's own root is 'Métis Meetings'), one JSON array of
@@ -749,15 +749,6 @@ function collectExercisedEvidence(kind, fixtures, mainLogPath, mainLogOffset, ro
   return { exercised: mainLogTail.includes('[dataless] probed'), stillDataless }
 }
 
-function stopChild(child) {
-  try {
-    if (process.platform === 'win32') execFileSync(WIN_TASKKILL, ['/pid', String(child.pid), '/T', '/F'])
-    else process.kill(-child.pid, 'SIGKILL')
-  } catch {
-    /* already gone */
-  }
-}
-
 /** Tolerates partial state from a failure before everything was created: `root` may never have become a
  *  junction (a usage error can throw right after resolving --cloud-dir but before placing it), and
  *  `profile`/`unzipDir` may still be null if resolveExecutable/prepareProfile never ran. */
@@ -951,6 +942,7 @@ async function main() {
   let complete = false
   let harnessError = null
   let cleanupError = null
+  let teardown = null
   const reportPath = args.out ?? join(reportDir, `${reportBase}.json`)
   const currentReport = () => {
     const common = {
@@ -961,7 +953,9 @@ async function main() {
       purpose,
       windowVariant,
       windowWarmup,
-      windowRemeasures
+      windowRemeasures,
+      teardown,
+      harnessError
     }
     if (launchFailure) return buildLaunchFailureReport({ ...common, reason: launchFailure })
     return buildReport({
@@ -1048,20 +1042,30 @@ async function main() {
       }
     }
     cdp?.close()
-    if (child) stopChild(child)
-    if (child && profile && !launchFailure) {
-      appEvidence = copyAppEvidence(profile, mainLog, join(reportDir, `${reportBase}-app`))
-      bootStages = readBootStages(profile, spawnedWallMs)
-      storageSaturations = readStorageSaturations(mainLog)
-    }
-    // A cleanup failure is rethrown after this block, never from it: a throw inside `finally` would replace
-    // the error that is already propagating.
     try {
-      cleanup({ kind: args.fixtures, root, profile, unzipDir, witnessFile })
-    } catch (error) {
-      cleanupError = error
-      harnessError ??= error.message
-      console.error(`[st-1] cleanup failed: ${error.message}`)
+      teardown = normalizeTeardown(child ? await stopOwnedChild(child) : { state: 'acknowledged' })
+    } catch {
+      teardown = normalizeTeardown(null)
+    }
+    if (teardown.state !== 'acknowledged') {
+      complete = false
+      harnessError ??= 'Owned process termination was not acknowledged; its profile was retained.'
+    } else {
+      // Do not inspect, copy or remove files a still-running candidate may own.
+      if (child && profile && !launchFailure) {
+        appEvidence = copyAppEvidence(profile, mainLog, join(reportDir, `${reportBase}-app`))
+        bootStages = readBootStages(profile, spawnedWallMs)
+        storageSaturations = readStorageSaturations(mainLog)
+      }
+      // Never replace the original failure by throwing from finally.
+      try {
+        cleanup({ kind: args.fixtures, root, profile, unzipDir, witnessFile })
+      } catch (error) {
+        complete = false
+        cleanupError = error
+        harnessError ??= error.message
+        console.error(`[st-1] cleanup failed: ${error.message}`)
+      }
     }
     writeReport()
   }
