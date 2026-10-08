@@ -61,8 +61,6 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     # Windows runners are consistently slower at npm ci + the Electron build than ubuntu.
     timeout-minutes: 30
-    env:
-      METIS_CI_ROOT_REPORT: ${{ runner.temp }}/metis-ci-root-report-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -107,6 +105,8 @@ jobs:
       # sole mode-lock/root/proxy/Operator pipeline and clear only this attempt's report before it starts.
       - name: Run complete test pipeline
         shell: bash
+        env:
+          METIS_CI_ROOT_REPORT: ${{ runner.temp }}/metis-ci-root-report-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
         run: |
           rm -f -- "$METIS_CI_ROOT_REPORT"
           npm test
@@ -115,6 +115,8 @@ jobs:
       # root suite npm test just completed rather than starting a second root Vitest pass.
       - name: Audit declared skips from root report
         shell: bash
+        env:
+          METIS_CI_ROOT_REPORT: ${{ runner.temp }}/metis-ci-root-report-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
         run: npm run check:skips -- "$METIS_CI_ROOT_REPORT"
       # M2-0411: hex colour literals in renderer .css/.tsx may only ratchet down from
       # scripts/color-literal-baseline.json, and design tokens live only in tokens.css.

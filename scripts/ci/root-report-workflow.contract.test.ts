@@ -31,14 +31,17 @@ describe('root Vitest report handoff workflow', () => {
     )
   })
 
-  it('uses one quality-scoped fresh report path tied to this hosted matrix attempt', () => {
+  it('uses the same fresh report path at runner-aware step scope for this matrix attempt', () => {
     const job = qualityJob()
+    const test = namedStep(job, 'Run complete test pipeline')
+    const audit = namedStep(job, 'Audit declared skips from root report')
     const rootReportEnv =
-      '    env:\n' +
-      '      METIS_CI_ROOT_REPORT: ${{ runner.temp }}/metis-ci-root-report-' +
+      '        env:\n' +
+      '          METIS_CI_ROOT_REPORT: ${{ runner.temp }}/metis-ci-root-report-' +
       '${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json'
-    expect(job).toContain(rootReportEnv)
-    expect(workflow.replace(job, '')).not.toContain('METIS_CI_ROOT_REPORT')
+    expect(test).toContain(rootReportEnv)
+    expect(audit).toContain(rootReportEnv)
+    expect(workflow.replace(test, '').replace(audit, '')).not.toContain('METIS_CI_ROOT_REPORT')
   })
 
   it('clears only that report before the unchanged npm test chain and never masks failures', () => {
