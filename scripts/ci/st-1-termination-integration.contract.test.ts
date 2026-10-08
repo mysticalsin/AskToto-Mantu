@@ -8,6 +8,7 @@ const boundaries = vi.hoisted(() => ({ spawn: vi.fn(), stop: vi.fn() }))
 vi.mock('node:child_process', () => ({ spawn: boundaries.spawn }))
 vi.mock('../qa/lib/st-1-termination.mjs', () => ({ stopOwnedChild: boundaries.stop }))
 
+const importProcessCalls = { spawn: boundaries.spawn.mock.calls.length, stop: boundaries.stop.mock.calls.length }
 const root = join(__dirname, '..', '..')
 const read = (path: string): string => readFileSync(join(root, path), 'utf8').replace(/\r\n/g, '\n')
 const source = read('scripts/qa/lib/st-1-termination.integration.mjs')
@@ -204,31 +205,34 @@ describe('hosted owned-termination fixture admission and privacy', () => {
     expect(child.eventNames()).toEqual([])
   })
 
-  it.each(['root-equal', 'owner-equal', 'unsafe', 'fractional', 'wrong-root'])(
-    'rejects %s readiness identity without probing or invoking the helper',
-    async (variant) => {
-      admitHosted()
-      const { child, descendantPid } = ownedFixture()
-      child.send.mockImplementation((message: { nonce: string }) => {
-        const ready = { kind: 'ready', nonce: message.nonce, rootPid: child.pid, descendantPid }
-        if (variant === 'root-equal') ready.descendantPid = child.pid
-        if (variant === 'owner-equal') ready.descendantPid = process.pid
-        if (variant === 'unsafe') ready.descendantPid = 1
-        if (variant === 'fractional') ready.descendantPid = descendantPid + 0.5
-        if (variant === 'wrong-root') ready.rootPid = descendantPid
-        child.connected = false
-        queueMicrotask(() => child.emit('message', ready))
-      })
-      const signal = vi.spyOn(process, 'kill').mockImplementation(() => true)
-      const receipt = await runHostedFixture()
+  it.each([
+    'root-equal',
+    'owner-equal',
+    'unsafe',
+    'fractional',
+    'wrong-root'
+  ])('rejects %s readiness identity without probing or invoking the helper', async (variant) => {
+    admitHosted()
+    const { child, descendantPid } = ownedFixture()
+    child.send.mockImplementation((message: { nonce: string }) => {
+      const ready = { kind: 'ready', nonce: message.nonce, rootPid: child.pid, descendantPid }
+      if (variant === 'root-equal') ready.descendantPid = child.pid
+      if (variant === 'owner-equal') ready.descendantPid = process.pid
+      if (variant === 'unsafe') ready.descendantPid = 1
+      if (variant === 'fractional') ready.descendantPid = descendantPid + 0.5
+      if (variant === 'wrong-root') ready.rootPid = descendantPid
+      child.connected = false
+      queueMicrotask(() => child.emit('message', ready))
+    })
+    const signal = vi.spyOn(process, 'kill').mockImplementation(() => true)
+    const receipt = await runHostedFixture()
 
-      expect(receipt).toMatchObject({ verdict: 'FAIL', reason: 'invalid-readiness', cleanup: 'unacknowledged' })
-      expect(boundaries.stop).not.toHaveBeenCalled()
-      expect(signal).not.toHaveBeenCalled()
-      expect(Object.keys(receipt).sort()).toEqual(['cleanup', 'durationMs', 'platform', 'reason', 'schema', 'verdict'])
-      expect(child.eventNames()).toEqual([])
-    }
-  )
+    expect(receipt).toMatchObject({ verdict: 'FAIL', reason: 'invalid-readiness', cleanup: 'unacknowledged' })
+    expect(boundaries.stop).not.toHaveBeenCalled()
+    expect(signal).not.toHaveBeenCalled()
+    expect(Object.keys(receipt).sort()).toEqual(['cleanup', 'durationMs', 'platform', 'reason', 'schema', 'verdict'])
+    expect(child.eventNames()).toEqual([])
+  })
 
   it.each(['missing', 'extra'])('rejects a readiness response with a %s own field', async (variant) => {
     admitHosted()
@@ -320,8 +324,11 @@ describe('dedicated disposable hosted fixture job', () => {
     expect(job.trim().endsWith('run: node scripts/qa/lib/st-1-termination.integration.mjs')).toBe(true)
   })
 
-  it('keeps real fixture execution outside ordinary tests and calls the actual helper only once', () => {
-    expect(read('vitest.config.ts')).toContain("'scripts/**/*.{test,spec}.{ts,tsx}'")
+  it('does not spawn or stop processes when imported by ordinary tests', () => {
+    expect(importProcessCalls).toEqual({ spawn: 0, stop: 0 })
+  })
+
+  it('guards real fixture execution behind the CLI entrypoint and calls the actual helper only once', () => {
     expect(source).toContain('pathToFileURL(process.argv[1]).href === import.meta.url')
     expect(source.match(/await stopOwnedChild\(child\)/g)).toHaveLength(1)
     expect(source).not.toMatch(/execSync|execFile|spawnSync|console\.|\.kill\([^,]+,\s*['"]SIG/)
