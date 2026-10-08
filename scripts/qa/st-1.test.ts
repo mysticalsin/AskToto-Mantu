@@ -1394,6 +1394,137 @@ describe('buildReport', () => {
     expect(built.verdict).toBe('FAIL')
   })
 
+  describe('allResponseIo', () => {
+    it('adds observed maxima without changing timely-only metrics or a passing verdict', () => {
+      const built = report()
+      expect(built.allResponseIo).toEqual({
+        write: { maxMs: 2, observedSamples: 2 },
+        lookup: { maxMs: 1, observedSamples: 2 }
+      })
+      expect(built.write).toEqual({ maxMs: 2 })
+      expect(built.lookup).toEqual({ maxMs: 1 })
+      expect(built.verdict).toBe('PASS')
+    })
+
+    it('includes independent late maxima without changing criteria, timely metrics or the timeline', () => {
+      const measured = {
+        ...emptyRun(),
+        samples: [goodSample(1_000)],
+        late: [
+          { tMs: 2_000, writeMs: 1_300, lookupMs: 4 },
+          { tMs: 3_000, writeMs: 500, lookupMs: 320 }
+        ],
+        loop: { p99Ms: 12, maxMs: 40 }
+      }
+      const built = report({ measured })
+      expect(built.allResponseIo).toEqual({
+        write: { maxMs: 1_300, observedSamples: 3 },
+        lookup: { maxMs: 320, observedSamples: 3 }
+      })
+      expect(built.write).toEqual({ maxMs: 2 })
+      expect(built.lookup).toEqual({ maxMs: 1 })
+      expect(built.timeline).toEqual([goodSample(1_000), ...measured.late.map((entry) => ({ ...entry, late: true }))])
+      expect(built.criteria).toEqual(evaluateCriteria('none', measured, null))
+      const zeroLateIo = report({
+        measured: { ...measured, late: measured.late.map((entry) => ({ ...entry, writeMs: 0, lookupMs: 0 })) }
+      })
+      expect(built.criteria).toEqual(zeroLateIo.criteria)
+      expect(built.verdict).toBe(zeroLateIo.verdict)
+      expect(built.criteria).toContainEqual({ name: 'async-write < 250', pass: true })
+      expect(built.criteria).toContainEqual({ name: 'dns-lookup < 250', pass: true })
+      expect(built.criteria).toContainEqual({ name: 'no-late-samples', pass: false })
+      expect(built.verdict).toBe('FAIL')
+      expect(built.samples).toBe(1)
+      expect(built.lateSamples).toBe(2)
+    })
+
+    it.each([
+      undefined,
+      null,
+      '900',
+      -1,
+      NaN,
+      Infinity,
+      -Infinity,
+      false
+    ])('ignores invalid values independently without coercion: %s', (invalid) => {
+      const built = report({
+        measured: {
+          ...emptyRun(),
+          late: [
+            { tMs: 1_000, writeMs: invalid, lookupMs: 7 },
+            { tMs: 2_000, writeMs: 5, lookupMs: invalid },
+            { tMs: 3_000, hung: true }
+          ]
+        }
+      })
+      expect(built.allResponseIo).toEqual({
+        write: { maxMs: 5, observedSamples: 1 },
+        lookup: { maxMs: 7, observedSamples: 1 }
+      })
+      const onlyInvalid = report({
+        measured: { ...emptyRun(), late: [{ tMs: 1_000, writeMs: invalid, lookupMs: invalid }] }
+      })
+      expect(onlyInvalid.allResponseIo).toEqual({
+        write: { maxMs: null, observedSamples: 0 },
+        lookup: { maxMs: null, observedSamples: 0 }
+      })
+    })
+
+    it('counts zero as observed and preserves null when no duration was measured', () => {
+      const measured = {
+        ...emptyRun(),
+        samples: [{ ...goodSample(1_000), writeMs: 0, lookupMs: 0 }],
+        loop: { p99Ms: 12, maxMs: 40 }
+      }
+      expect(report({ measured }).allResponseIo).toEqual({
+        write: { maxMs: 0, observedSamples: 1 },
+        lookup: { maxMs: 0, observedSamples: 1 }
+      })
+      const noObservations = {
+        write: { maxMs: null, observedSamples: 0 },
+        lookup: { maxMs: null, observedSamples: 0 }
+      }
+      expect(report({ measured: emptyRun(), complete: false }).allResponseIo).toEqual(noObservations)
+      expect(report({ measured: { ...emptyRun(), late: [{ tMs: 1_000, hung: true }] } }).allResponseIo).toEqual(
+        noObservations
+      )
+    })
+
+    it('exposes late-only durations while keeping legacy zero maxima and failing criteria', () => {
+      const measured = {
+        ...emptyRun(),
+        late: [{ tMs: 1_000, writeMs: 900, lookupMs: 400 }],
+        loop: { p99Ms: 12, maxMs: 40 }
+      }
+      const built = report({ measured })
+      expect(built.allResponseIo).toEqual({
+        write: { maxMs: 900, observedSamples: 1 },
+        lookup: { maxMs: 400, observedSamples: 1 }
+      })
+      expect(built.write).toEqual({ maxMs: 0 })
+      expect(built.lookup).toEqual({ maxMs: 0 })
+      expect(built.criteria).toEqual(evaluateCriteria('none', measured, null))
+      expect(built.criteria).toContainEqual({ name: 'has-samples', pass: false })
+      expect(built.criteria).toContainEqual({ name: 'no-late-samples', pass: false })
+      expect(built.criteria).toContainEqual({ name: 'async-write < 250', pass: true })
+      expect(built.criteria).toContainEqual({ name: 'dns-lookup < 250', pass: true })
+      expect(built.verdict).toBe('FAIL')
+    })
+
+    it.each([
+      { complete: false },
+      { teardown: { state: 'unacknowledged', reason: 'group-still-present' } }
+    ])('keeps available observations without qualifying incomplete runs: %j', (overrides) => {
+      const baseline = report()
+      const built = report(overrides)
+      expect(built.allResponseIo).toEqual(baseline.allResponseIo)
+      expect(built.criteria).toEqual(baseline.criteria)
+      expect(built.complete).toBe(false)
+      expect(built.verdict).toBe('INCOMPLETE')
+    })
+  })
+
   it('reports a partial or crashed run as INCOMPLETE with whatever it measured', () => {
     const partial = report({ complete: false, evidence: null })
     expect(partial.verdict).toBe('INCOMPLETE')
@@ -1972,6 +2103,29 @@ describe('buildLaunchFailureReport', () => {
     expect(built.verdict).toBe('FAIL')
     expect(built.criteria).toEqual([{ name: 'inspector', pass: false }])
     expect(built.fixtures).toBe(3)
+  })
+
+  it.each([
+    { teardown: { state: 'acknowledged' }, verdict: 'FAIL' },
+    { teardown: { state: 'unacknowledged', reason: 'root-exit-unobserved' }, verdict: 'INCOMPLETE' }
+  ])('reports unmeasured I/O consistently without changing launch failure: $verdict', ({ teardown, verdict }) => {
+    const built = buildLaunchFailureReport({
+      row: 'none',
+      installer: 'Metis-QA.zip',
+      candidate,
+      fixtures: [],
+      reason: 'no inspector',
+      teardown
+    })
+    expect(built.allResponseIo).toEqual({
+      write: { maxMs: null, observedSamples: 0 },
+      lookup: { maxMs: null, observedSamples: 0 }
+    })
+    expect(built.allResponseIo).toEqual(report({ measured: emptyRun(), complete: false }).allResponseIo)
+    expect(built.criteria).toEqual([{ name: 'inspector', pass: false }])
+    expect(built.reason).toBe('no inspector')
+    expect(built.complete).toBe(false)
+    expect(built.verdict).toBe(verdict)
   })
 })
 
