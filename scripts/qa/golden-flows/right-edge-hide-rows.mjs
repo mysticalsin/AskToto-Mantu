@@ -7,7 +7,10 @@
  * for a fresh profile (anchor f = 0.15). See the header of ../packaged-smoke.mjs.
  */
 import { sleep } from '../lib/app-driver.mjs'
+import { inspectorClient } from '../lib/inspector-client.mjs'
 import { withOverlayPage } from './navigation-guard-rows.mjs'
+
+export { inspectorClient }
 
 export const RIGHT_EDGE_HIDE_SCENARIOS = Object.freeze([
   { id: 'RE-HIDE-1-edge-reveals', layout: 'hide' },
@@ -727,56 +730,6 @@ export async function runRightEdgeHideRows({ page, main, rows, wait = sleep }) {
     }
   }
   await setCursor(null).catch(() => undefined)
-}
-
-/**
- * Minimal Chrome DevTools Protocol client. `evaluate` accepts synchronous expressions only: V8 15.0 in
- * Electron 43 holds an awaited non-promise result only weakly, so a main-process GC can answer
- * "Promise was collected". A Promise result comes back as {}; async callers should use st-1-core.mjs
- * `pinnedExpression`.
- */
-export async function inspectorClient(wsUrl) {
-  const socket = new WebSocket(wsUrl)
-  const pending = new Map()
-  let nextId = 1
-  socket.addEventListener('message', (event) => {
-    const message = JSON.parse(event.data)
-    const resolve = pending.get(message.id)
-    if (!resolve) return
-    pending.delete(message.id)
-    resolve(message)
-  })
-  await new Promise((resolve, reject) => {
-    socket.addEventListener('open', () => resolve())
-    socket.addEventListener('error', () => reject(new Error('main-process inspector socket failed to connect')))
-  })
-  const send = async (method, params) => {
-    const id = nextId++
-    const answer = new Promise((resolve) => pending.set(id, resolve))
-    socket.send(JSON.stringify({ id, method, params }))
-    const timeout = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error(`main-process ${method} timed out`)), 10_000)
-    )
-    const message = await Promise.race([answer, timeout])
-    if (message.error) throw new Error(message.error.message)
-    if (message.result?.exceptionDetails)
-      throw new Error(message.result.exceptionDetails.exception?.description ?? message.result.exceptionDetails.text)
-    return message.result
-  }
-  const evaluate = async (expression) =>
-    (await send('Runtime.evaluate', { expression, returnByValue: true }))?.result?.value
-  const collectGarbage = async () => {
-    await send('HeapProfiler.collectGarbage')
-    return true
-  }
-  const close = () => {
-    if (socket.readyState === WebSocket.CLOSED) return Promise.resolve()
-    return new Promise((resolve) => {
-      socket.addEventListener('close', () => resolve(), { once: true })
-      socket.close()
-    })
-  }
-  return { send, evaluate, collectGarbage, close }
 }
 
 /** Minimal Chrome DevTools Protocol client for the main process's Node inspector. */
