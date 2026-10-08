@@ -196,7 +196,7 @@ describe('ST-1 restricted launch admission [M2-0538]', () => {
     const env = canaryEnv()
     expect(observeCanary(env, deniedIO)).toEqual({ readDenied: true, writeDenied: true })
     expect(() => observeCanary(env)).toThrow('permission denial')
-    const readable = (() => Buffer.from('readable')) as typeof readFileSync
+    const readable = (() => Buffer.from('readable')) as unknown as typeof readFileSync
     expect(() => observeCanary(env, { ...deniedIO, readFileSync: readable })).toThrow('permission denial')
     expect(() => observeCanary(env, { ...deniedIO, openSync: () => 1 })).toThrow('permission denial')
     expect(() => observeCanary(env, { ...deniedIO, openSync: () => 1, closeSync: permission })).toThrow('denied')

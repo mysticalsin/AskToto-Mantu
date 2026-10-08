@@ -62,7 +62,12 @@ let output = ''
 try {
   output = execFileSync(
     process.execPath,
-    [join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'), '--noEmit', '-p', join(repoRoot, 'tsconfig.tests.json')],
+    [
+      join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
+      '--noEmit',
+      '-p',
+      join(repoRoot, 'tsconfig.tests.json')
+    ],
     { encoding: 'utf8', cwd: repoRoot }
   )
 } catch (e) {

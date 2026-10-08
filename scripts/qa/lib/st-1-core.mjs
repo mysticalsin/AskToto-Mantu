@@ -974,7 +974,7 @@ export function buildReport({
   windowVariant = 'shipped',
   windowWarmup = false,
   windowRemeasures = null,
-  isolation = null
+  isolation = /** @type {object | null} */ (null)
 }) {
   const criteria = evaluateCriteria(row, measured, evidence, { history })
   const refusalEvidence = fifoRefusalEvidence(row, measured, evidence, fixtures, fixtureCounts)
