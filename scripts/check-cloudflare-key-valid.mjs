@@ -56,7 +56,8 @@ try {
   if (typeof payload === 'string' && payload.trim().startsWith('{')) {
     const obj = JSON.parse(payload)
     proxyKey = typeof obj?.token === 'string' ? obj.token : ''
-    embeddedBaseUrl = typeof obj?.baseUrl === 'string' && obj.baseUrl.trim() ? obj.baseUrl.trim().replace(/\/+$/, '') : null
+    embeddedBaseUrl =
+      typeof obj?.baseUrl === 'string' && obj.baseUrl.trim() ? obj.baseUrl.trim().replace(/\/+$/, '') : null
   } else {
     proxyKey = payload
   }
@@ -129,7 +130,7 @@ clearTimeout(timer)
 if (res.status === 401 || res.status === 403) {
   console.error(`[check:cf-key] FAIL — the Worker REJECTED the embedded key (HTTP ${res.status}).`)
   console.error('')
-  console.error('  The key exists locally but is not in the Worker\'s METIS_PROXY_KEYS, so every fresh')
+  console.error("  The key exists locally but is not in the Worker's METIS_PROXY_KEYS, so every fresh")
   console.error('  install would finish onboarding "configured" and then 401 on the first question.')
   console.error('')
   console.error('  Provision it (the value is in build/cloudflare-embed/key.json):')
@@ -146,4 +147,6 @@ if (!res.ok) {
   process.exit(1)
 }
 
-console.log(`[check:cf-key] OK — the Worker accepted the embedded key (HTTP ${res.status}); a fresh install needs no pasted key.`)
+console.log(
+  `[check:cf-key] OK — the Worker accepted the embedded key (HTTP ${res.status}); a fresh install needs no pasted key.`
+)
