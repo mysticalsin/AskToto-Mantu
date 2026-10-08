@@ -1,5 +1,14 @@
 import { execFileSync } from 'node:child_process'
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -30,31 +39,37 @@ function createFixture(errorCount = BASELINE): { root: string; gate: string; inv
 
   const gate = join(scripts, 'check-test-types.mjs')
   copyFileSync(GATE, gate)
-  symlinkSync(
-    join(REPO, 'node_modules'),
-    fixtureNodeModules,
-    process.platform === 'win32' ? 'junction' : 'dir',
-  )
+  symlinkSync(join(REPO, 'node_modules'), fixtureNodeModules, process.platform === 'win32' ? 'junction' : 'dir')
 
   // Exercise the unchanged gate and real compiler, but not the whole checkout from inside Vitest.
   // The dedicated `npm run typecheck` gate still checks every production and test file once. Repeating
   // it three times here competes with parallel tests and exceeds their timeout on both CI platforms.
-  writeFileSync(join(root, 'tsconfig.tests.json'), JSON.stringify({
-    compilerOptions: {
-      noEmit: true,
-      strict: true,
-      skipLibCheck: true,
-      target: 'ES2022',
-      lib: ['ES2022'],
-      types: [],
-    },
-    include: ['./*.test.ts'],
-    exclude: [],
-  }, null, 2))
-  writeFileSync(join(root, 'known-errors.test.ts'), [
-    'export {}',
-    ...Array.from({ length: errorCount }, (_, index) => `const knownError${index}: number = "synthetic baseline"`),
-  ].join('\n'))
+  writeFileSync(
+    join(root, 'tsconfig.tests.json'),
+    JSON.stringify(
+      {
+        compilerOptions: {
+          noEmit: true,
+          strict: true,
+          skipLibCheck: true,
+          target: 'ES2022',
+          lib: ['ES2022'],
+          types: []
+        },
+        include: ['./*.test.ts'],
+        exclude: []
+      },
+      null,
+      2
+    )
+  )
+  writeFileSync(
+    join(root, 'known-errors.test.ts'),
+    [
+      'export {}',
+      ...Array.from({ length: errorCount }, (_, index) => `const knownError${index}: number = "synthetic baseline"`)
+    ].join('\n')
+  )
   writeFileSync(join(root, 'probe-valid.test.ts'), 'export {}\nconst ratchetProbe: number = 1\nvoid ratchetProbe\n')
 
   return { root, gate, invalidProbe: join(root, 'probe-invalid.test.ts') }
@@ -103,7 +118,11 @@ describe('MQA-248 — the test-file typecheck ratchet', () => {
       const increased = runGate(fixture.gate, fixture.root)
       expect(increased.code, increased.out).toBe(1)
       expect(increased.out).toContain(
-        `${baselineCount + 1} type errors in test files, up from the ${baselineCount} baseline`,
+        `${baselineCount + 1} type errors in test files, up from the ${baselineCount} baseline`
+      )
+      expect(increased.out).toContain('Compiler diagnostics (first 20):')
+      expect(increased.out).toContain(
+        "probe-invalid.test.ts(2,7): error TS2322: Type 'string' is not assignable to type 'number'."
       )
       expect(readFileSync(TRACKED_TEST, 'utf8')).toBe(trackedBefore)
     } finally {
@@ -129,6 +148,10 @@ describe('MQA-248 — the test-file typecheck ratchet', () => {
     const pkg = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8')) as { scripts: Record<string, string> }
     expect(pkg.scripts.typecheck).toContain('scripts/check-test-types.mjs')
     expect(pkg.scripts['typecheck:tests']).toBe('node scripts/check-test-types.mjs')
+  })
+
+  it('bounds detailed compiler output to the first 20 diagnostic lines', () => {
+    expect(readFileSync(GATE, 'utf8')).toContain('for (const line of lines.slice(0, 20)) console.error(`    ${line}`)')
   })
 
   it('the config it checks does NOT exclude test files — otherwise it measures nothing', () => {
