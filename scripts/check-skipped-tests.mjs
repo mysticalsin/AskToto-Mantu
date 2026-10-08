@@ -257,7 +257,10 @@ const skipped = []
 for (const file of report.testResults ?? []) {
   for (const t of file.assertionResults ?? []) {
     if (t.status === 'pending' || t.status === 'skipped') {
-      const rel = String(file.name ?? '').split(/[\\/]/).slice(-2).join('/')
+      const rel = String(file.name ?? '')
+        .split(/[\\/]/)
+        .slice(-2)
+        .join('/')
       skipped.push({ id: `${rel} :: ${t.title}`, file: rel })
     }
   }

@@ -9,7 +9,10 @@ const project = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as 
 function qualityJob(): string {
   const lines = workflow.split('\n')
   const header = '  quality:'
-  expect(lines.filter((line) => line === header), 'one quality job').toHaveLength(1)
+  expect(
+    lines.filter((line) => line === header),
+    'one quality job'
+  ).toHaveLength(1)
   const start = lines.indexOf(header)
   const end = lines.findIndex((line, index) => index > start && /^ {2}[A-Za-z0-9_-]+:/.test(line))
   return lines.slice(start, end === -1 ? undefined : end).join('\n')
@@ -18,7 +21,10 @@ function qualityJob(): string {
 function namedStep(job: string, name: string): string {
   const lines = job.split('\n')
   const header = `      - name: ${name}`
-  expect(lines.filter((line) => line === header), `one ${name} step`).toHaveLength(1)
+  expect(
+    lines.filter((line) => line === header),
+    `one ${name} step`
+  ).toHaveLength(1)
   const start = lines.indexOf(header)
   const end = lines.findIndex((line, index) => index > start && /^ {6}- /.test(line))
   return lines.slice(start, end === -1 ? undefined : end).join('\n')
@@ -48,8 +54,10 @@ describe('root Vitest report handoff workflow', () => {
     const job = qualityJob()
     const test = namedStep(job, 'Run complete test pipeline')
 
-    expect(test).toContain('        shell: bash')
-    expect(test).toContain('        run: |\n          rm -f -- "$METIS_CI_ROOT_REPORT"\n          npm test')
+    const cleanup = 'node -e "require(\'node:fs\').rmSync(process.env.METIS_CI_ROOT_REPORT, { force: true })"'
+    expect(test).not.toMatch(/^\s+shell:/m)
+    expect(test).toContain(`        run: |\n          ${cleanup} && npm test`)
+    expect(test.match(/^ {10}.*\bnpm test\b/gm)).toHaveLength(1)
     expect(test).not.toMatch(/continue-on-error|\|\||npx\s+vitest|--reporter/)
     expect(job).not.toMatch(/continue-on-error:\s*true/)
   })
@@ -59,8 +67,8 @@ describe('root Vitest report handoff workflow', () => {
     const test = namedStep(job, 'Run complete test pipeline')
     const audit = namedStep(job, 'Audit declared skips from root report')
 
-    expect(audit).toContain('        shell: bash')
-    expect(audit).toContain('        run: npm run check:skips -- "$METIS_CI_ROOT_REPORT"')
+    expect(audit).not.toMatch(/^\s+shell:/m)
+    expect(audit).toContain('        run: npm run check:skips -- "${{ env.METIS_CI_ROOT_REPORT }}"')
     expect(audit).not.toMatch(/continue-on-error|\|\||npx\s+vitest/)
     expect(job.indexOf(test)).toBeLessThan(job.indexOf(audit))
   })

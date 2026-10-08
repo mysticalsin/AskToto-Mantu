@@ -67,7 +67,7 @@ const incompleteCases: IncompleteCase[] = [
   [
     'nonarray assertionResults',
     (report) => {
-      (report.testResults as Array<Record<string, unknown>>)[0].assertionResults = {}
+      ;(report.testResults as Array<Record<string, unknown>>)[0].assertionResults = {}
     }
   ]
 ]
@@ -89,7 +89,7 @@ function successfulReport(): VitestReport {
     numFailedTests: 0,
     numPendingTests: allowed,
     numTodoTests: 1,
-    testResults: [{ name: '/synthetic/dustcli.test.ts', status: 'passed', assertionResults }]
+    testResults: [{ name: '/synthetic/__fixtures__/dustcli.test.ts', status: 'passed', assertionResults }]
   }
 }
 
@@ -248,21 +248,20 @@ describe('MQA-252 explicit root-report handoff', () => {
     }
   })
 
-  it.each(invalidSummaryCases)(
-    'rejects a %s explicit summary count without starting fallback Vitest',
-    (_kind, value) => {
-      const fixture = createFixture()
-      try {
-        const report = successfulReport()
-        report.numPassedTests = value
-        const reportPath = join(fixture.root, 'invalid-summary.json')
-        writeFileSync(reportPath, JSON.stringify(report))
-        expectExplicitFailure(fixture, run(fixture, [reportPath]), '[report:invalid]')
-      } finally {
-        rmSync(fixture.root, { recursive: true, force: true })
-      }
+  it.each(
+    invalidSummaryCases
+  )('rejects a %s explicit summary count without starting fallback Vitest', (_kind, value) => {
+    const fixture = createFixture()
+    try {
+      const report = successfulReport()
+      report.numPassedTests = value
+      const reportPath = join(fixture.root, 'invalid-summary.json')
+      writeFileSync(reportPath, JSON.stringify(report))
+      expectExplicitFailure(fixture, run(fixture, [reportPath]), '[report:invalid]')
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
     }
-  )
+  })
 
   it('rejects a nonfinite explicit summary count without starting fallback Vitest', () => {
     const fixture = createFixture()
