@@ -106,7 +106,7 @@ function bundleFixture(change = () => {}) {
     'README.md':
       '# M2-0195 Windows 1.9.6 baseline\n\nContent-free artifact bundle for the hosted Windows 1.9.6 baseline. The managed-laptop rows are BLOCKED_EXTERNAL until the standard enterprise Windows 11 laptop with EDR and OneDrive Files On-Demand is available.',
     'M2-0195.lead-action.md':
-      'LEAD_ACTION: File the M2-0195 LIVE_VERIFIED and MEASURED evidence records from this bundle, then ensure every finding is a ticket or an explicit residual in the 1.9.7 release notes.\n\nUse findings-handoff.json as the public artifact index. Do not paste private tracker paths, private finding ids, secrets, account ids, personal emails or meeting content into the public repository.',
+      'LEAD_ACTION: File the M2-0195 LIVE_VERIFIED and MEASURED evidence records from this bundle, then ensure every finding is a ticket or explicit residual in the 1.9.7 release notes.\n\nUse findings-handoff.json as the public artifact index. Do not paste private tracker paths, private finding ids, secrets, account ids, personal emails or meeting content into the public repository.',
     'SHA256SUMS.txt': `${'a'.repeat(64)}  Metis-Setup-1.9.6.exe`
   }
   change(files)
@@ -353,6 +353,42 @@ test('valid synthetic baseline outputs pass independently of the real baseline s
     assert.equal(result.ok, true)
   } finally {
     f.cleanup()
+  }
+})
+
+test('validates the actual static producer handoff and rejects a changed word', () => {
+  const source = readFileSync(new URL('./baseline.ps1', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+  const blocks = [
+    ...source.matchAll(/^@"\n(.*?)\n"@ \| Set-Content -Path \(Join-Path \$OutDir '([^']+)'\) -Encoding utf8$/gms)
+  ]
+  const handoffs = blocks.filter((match) => match[2] === 'M2-0195.lead-action.md')
+  assert.equal(handoffs.length, 1)
+  const actual = handoffs[0][1]
+  assert.equal(actual.includes('$') || actual.includes('`'), false)
+  const changed = actual.replace('or explicit residual', 'or altered residual')
+  assert.notEqual(changed, actual)
+  for (const valid of [true, false]) {
+    const f = bundleFixture((files) => {
+      files['M2-0195.lead-action.md'] = valid ? actual : changed
+    })
+    try {
+      const { result } = f.run()
+      assert.equal(result.status, 0)
+      assert.equal(result.instrumentation, 'CAPTURED')
+      assert.equal(result.failure, valid ? 'NONE' : 'OUTPUT_INVALID')
+      assert.equal(result.ok, valid)
+      assert.deepEqual(result.outputs, {
+        baseline: true,
+        environment: true,
+        externalBlockers: true,
+        findingsHandoff: true,
+        readme: true,
+        handoff: valid,
+        sha256sums: true
+      })
+    } finally {
+      f.cleanup()
+    }
   }
 })
 

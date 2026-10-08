@@ -31,7 +31,7 @@ const UNBLOCK =
 const README = `# M2-0195 Windows 1.9.6 baseline
 
 Content-free artifact bundle for the hosted Windows 1.9.6 baseline. The managed-laptop rows are BLOCKED_EXTERNAL until the standard enterprise Windows 11 laptop with EDR and OneDrive Files On-Demand is available.`
-const LEAD_ACTION = `LEAD_ACTION: File the M2-0195 LIVE_VERIFIED and MEASURED evidence records from this bundle, then ensure every finding is a ticket or an explicit residual in the 1.9.7 release notes.
+const LEAD_ACTION = `LEAD_ACTION: File the M2-0195 LIVE_VERIFIED and MEASURED evidence records from this bundle, then ensure every finding is a ticket or explicit residual in the 1.9.7 release notes.
 
 Use findings-handoff.json as the public artifact index. Do not paste private tracker paths, private finding ids, secrets, account ids, personal emails or meeting content into the public repository.`
 const TYPES = new Set([
