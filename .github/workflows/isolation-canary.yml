@@ -202,6 +202,19 @@ jobs:
       - name: Positive control — reading a repository file still works under the profile
         run: bash scripts/hermetic/run-under-owner-sandbox.sh cat AGENTS.md > /dev/null
 
+  owner-route-hold:
+    name: Owner route refuses before bootstrap (hosted synthetic)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - run: node --test scripts/hermetic/owner-route-hold.test.mjs
+
   owner-runner-synthetic:
     name: Strict owner profile with synthetic data only
     runs-on: macos-latest

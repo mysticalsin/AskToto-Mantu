@@ -146,9 +146,9 @@ describe('qa-candidate smoke jobs write per-asset launch reports (M2-0508)', () 
 const jobsStart = workflow.indexOf('\njobs:\n')
 const jobBlocks = new Map<string, string>()
 {
-  const bodies = workflow.slice(jobsStart + '\njobs:\n'.length).split(/^(?=  [a-z0-9-]+:\n)/m)
+  const bodies = workflow.slice(jobsStart + '\njobs:\n'.length).split(/^(?=  [A-Za-z_][A-Za-z0-9_-]*:\n)/m)
   for (const body of bodies) {
-    const name = /^  ([a-z0-9-]+):\n/.exec(body)?.[1]
+    const name = /^  ([A-Za-z_][A-Za-z0-9_-]*):\n/.exec(body)?.[1]
     if (name) jobBlocks.set(name, body)
   }
 }
@@ -279,12 +279,29 @@ describe('QA candidate strict ST-1 owner-runner rows (M2-0537)', () => {
     expect(job('st1-mac-window')).toMatch(/^    runs-on: macos-latest$/m)
   })
 
-  it('keeps dispatch and same-repository PRs, but refuses fork pull requests before code reaches the owner Mac', () => {
-    for (const name of strictJobs) {
-      expect(job(name)).toMatch(
-        /^    if: github\.event_name != 'pull_request' \|\| github\.event\.pull_request\.head\.repo\.full_name == github\.repository$/m
-      )
+  it('disables every self-hosted job while owner-account isolation is on architectural hold', () => {
+    const nonHosted = [...jobBlocks].filter(
+      ([, block]) => !/^ {4}runs-on: (?:ubuntu|macos|windows)-latest$/m.test(block)
+    )
+    expect(nonHosted.map(([name]) => name)).toEqual(strictJobs)
+    for (const [, block] of nonHosted) {
+      expect(block).toMatch(/^ {4}if: \$\{\{ false \}\}$/m)
     }
+  })
+
+  it('tests the direct owner-route refusal in an independent blocking hosted job', () => {
+    const canary = readFileSync(join(root, '.github/workflows/isolation-canary.yml'), 'utf8').replace(/\r\n/g, '\n')
+    const block = canary.split(/\n(?= {2}[A-Za-z_][A-Za-z0-9_-]*:)/).find((entry) =>
+      entry.startsWith('  owner-route-hold:\n')
+    )
+    expect(block).toBeDefined()
+    expect(block).toMatch(/^ {4}runs-on: ubuntu-latest$/m)
+    expect(block).toMatch(/^ {4}timeout-minutes: 5$/m)
+    expect(block).not.toMatch(/^ {4}(?:if|needs|continue-on-error):/m)
+    expect(block).not.toMatch(/^ {8}(?:if|continue-on-error):/m)
+    expect(block).toContain('persist-credentials: false')
+    expect(block).toContain('node-version: 22.22.3')
+    expect(block).toMatch(/^ {6}- run: node --test scripts\/hermetic\/owner-route-hold\.test\.mjs$/m)
   })
 
   it('proves the owner-account sandbox before Node setup or candidate artifact download', () => {
