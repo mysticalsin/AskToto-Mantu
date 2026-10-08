@@ -101,12 +101,20 @@ jobs:
       # installs the browser without OS packages.
       - name: Install Playwright Chromium
         run: npx playwright install ${{ runner.os == 'Linux' && '--with-deps' || '' }} chromium
-      - run: npm test
+      # The root config adds JSON only when this quality-scoped destination is set. Keep npm test as the
+      # sole mode-lock/root/proxy/Operator pipeline and clear only this attempt's report before it starts.
+      - name: Run complete test pipeline
+        env:
+          METIS_CI_ROOT_REPORT: ${{ runner.temp }}/metis-ci-root-report-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
+        run: |
+          node -e "require('node:fs').rmSync(process.env.METIS_CI_ROOT_REPORT, { force: true })" && npm test
       # MQA-252 (M2-0048): every skipped test must be declared and stay within its per-OS baseline, so a
-      # newly-skipped test fails the build instead of quietly joining the pile. Runs its own vitest pass
-      # (scripts/check-skipped-tests.mjs collects a fresh JSON report) against the same checkout npm test
-      # just verified.
-      - run: npm run check:skips
+      # newly-skipped test fails the build instead of quietly joining the pile. Audit the JSON from the
+      # root suite npm test just completed rather than starting a second root Vitest pass.
+      - name: Audit declared skips from root report
+        env:
+          METIS_CI_ROOT_REPORT: ${{ runner.temp }}/metis-ci-root-report-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
+        run: npm run check:skips -- "${{ env.METIS_CI_ROOT_REPORT }}"
       # M2-0411: hex colour literals in renderer .css/.tsx may only ratchet down from
       # scripts/color-literal-baseline.json, and design tokens live only in tokens.css.
       - run: npm run check:colors

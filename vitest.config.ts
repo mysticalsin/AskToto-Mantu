@@ -37,6 +37,19 @@ const hermeticHomeEnv = hermeticEnv(sandbox, {
   PLAYWRIGHT_BROWSERS_PATH: playwrightBrowsersPath(homedir())
 })
 
+// Quality CI supplies a unique runner-temp destination for the root suite only. Configuring custom
+// reporters replaces Vitest's defaults, so retain readable output and GitHub annotations alongside JSON.
+// With no destination this object is empty, leaving local reporter behavior exactly as Vitest configures it.
+const ciRootReportPath = process.env.METIS_CI_ROOT_REPORT?.trim()
+const ciRootReporterOptions = ciRootReportPath
+  ? {
+      reporters: process.env.GITHUB_ACTIONS
+        ? ['default', 'json', 'github-actions']
+        : ['default', 'json'],
+      outputFile: { json: ciRootReportPath }
+    }
+  : {}
+
 // A `#!/usr/bin/env node` shebang is valid in a file Node's own loader reads directly, but esbuild's
 // transform (which Vitest runs on served modules) PRESERVES it, and Vitest then evaluates the
 // transformed source as a module — where a leading `#!` is an "Invalid or unexpected token".
@@ -96,6 +109,7 @@ const vitestConfig = defineConfig({
     testTimeout: 30_000,
     hookTimeout: 30_000,
     env: hermeticHomeEnv,
+    ...ciRootReporterOptions,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],
