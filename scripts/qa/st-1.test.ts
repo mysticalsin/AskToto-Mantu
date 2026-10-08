@@ -2006,6 +2006,44 @@ describe('ST-1 teardown is a prerequisite for a final report', () => {
     })
   })
 
+  it('preserves a closed group-phase diagnostic through both report builders', () => {
+    const teardown = {
+      state: 'unacknowledged',
+      reason: 'group-probe-permission',
+      diagnostic: {
+        phase: 'post-kill-group-probe',
+        rootExitObserved: true,
+        groupKillInvoked: true
+      }
+    }
+    const measured = report({ teardown, harnessError: 'original measurement failure' })
+    expect(measured.criteria).toEqual(report().criteria)
+    expect(measured).toMatchObject({
+      complete: false,
+      verdict: 'INCOMPLETE',
+      harnessError: 'original measurement failure',
+      teardown
+    })
+
+    const launch = buildLaunchFailureReport({
+      row: 'none',
+      installer: 'Metis-QA.zip',
+      candidate,
+      fixtures: [],
+      reason: 'original inspector failure',
+      harnessError: 'original harness failure',
+      teardown
+    })
+    expect(launch).toMatchObject({
+      complete: false,
+      verdict: 'INCOMPLETE',
+      reason: 'original inspector failure',
+      harnessError: 'original harness failure',
+      teardown
+    })
+    expect(launch.criteria).toEqual([{ name: 'inspector', pass: false }])
+  })
+
   it('carries the same unsafe receipt through the launch-failure early return', () => {
     const built = buildLaunchFailureReport({
       row: 'none',

@@ -21,20 +21,65 @@ const REASONS = new Set([
   'group-probe-permission',
   'group-probe-error'
 ])
-const unacknowledged = (reason) => ({ state: 'unacknowledged', reason })
+const GROUP_FAILURE_REASONS = new Set(['group-probe-permission', 'group-probe-error'])
+const GROUP_FAILURE_PHASES = new Set(['initial-group-probe', 'group-kill', 'post-kill-group-probe'])
+const unacknowledged = (reason, diagnostic) =>
+  diagnostic ? { state: 'unacknowledged', reason, diagnostic } : { state: 'unacknowledged', reason }
 const acknowledged = () => ({ state: 'acknowledged' })
+
+const plainRecord = (value) => {
+  if (!value || typeof value !== 'object') return false
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
+
+const hasExactKeys = (keys, expected) => {
+  return keys.length === expected.length && expected.every((key) => keys.includes(key))
+}
+
+const hasExactOwnKeys = (value, expected) => hasExactKeys(Reflect.ownKeys(value), expected)
+
+const normalizeGroupDiagnostic = (value) => {
+  if (!plainRecord(value) || !hasExactOwnKeys(value, ['phase', 'rootExitObserved', 'groupKillInvoked'])) return null
+  const phase = value.phase
+  const rootExitObserved = value.rootExitObserved
+  const groupKillInvoked = value.groupKillInvoked
+  if (
+    !GROUP_FAILURE_PHASES.has(phase) ||
+    typeof rootExitObserved !== 'boolean' ||
+    typeof groupKillInvoked !== 'boolean'
+  ) {
+    return null
+  }
+  return {
+    phase,
+    rootExitObserved,
+    groupKillInvoked
+  }
+}
 
 /** A content-free receipt; never copy OS messages, process paths or arbitrary fields into a report. */
 export function normalizeTeardown(value) {
   try {
-    if (!value || typeof value !== 'object') return unacknowledged('invalid-receipt')
-    const prototype = Object.getPrototypeOf(value)
-    if (prototype !== Object.prototype && prototype !== null) return unacknowledged('invalid-receipt')
+    if (!plainRecord(value)) return unacknowledged('invalid-receipt')
     const keys = Reflect.ownKeys(value)
-    if (!keys.includes('state')) return unacknowledged('invalid-receipt')
-    if (value.state === 'acknowledged' && keys.length === 1) return acknowledged()
-    if (value.state === 'unacknowledged' && REASONS.has(value.reason) && keys.length === 2 && keys.includes('reason')) {
-      return unacknowledged(value.reason)
+    const acknowledgedReceipt = hasExactKeys(keys, ['state'])
+    const legacyUnacknowledgedReceipt = hasExactKeys(keys, ['state', 'reason'])
+    const groupDiagnosticReceipt = hasExactKeys(keys, ['state', 'reason', 'diagnostic'])
+    if (!acknowledgedReceipt && !legacyUnacknowledgedReceipt && !groupDiagnosticReceipt) {
+      return unacknowledged('invalid-receipt')
+    }
+    const state = value.state
+    if (acknowledgedReceipt && state === 'acknowledged') return acknowledged()
+    if (!legacyUnacknowledgedReceipt && !groupDiagnosticReceipt) return unacknowledged('invalid-receipt')
+    const reason = value.reason
+    if (legacyUnacknowledgedReceipt && state === 'unacknowledged' && REASONS.has(reason)) {
+      return unacknowledged(reason)
+    }
+    if (groupDiagnosticReceipt && state === 'unacknowledged' && GROUP_FAILURE_REASONS.has(reason)) {
+      const diagnosticValue = value.diagnostic
+      const diagnostic = normalizeGroupDiagnostic(diagnosticValue)
+      if (diagnostic) return unacknowledged(reason, diagnostic)
     }
   } catch {
     // A malformed receipt is not permission to clean up or launch again.
@@ -104,25 +149,39 @@ export async function stopOwnedChild(
       return error?.code === 'EPERM' ? 'group-probe-permission' : 'group-probe-error'
     }
   }
+  const groupFailure = (reason, phase, groupKillInvoked) =>
+    unacknowledged(reason, {
+      phase,
+      rootExitObserved: exited(child),
+      groupKillInvoked
+    })
+  let groupKillInvoked = false
   let group = probe()
   if (remaining() <= 0) return unacknowledged('deadline-expired')
-  if (group !== 'present' && group !== 'absent') return unacknowledged(group)
+  if (group !== 'present' && group !== 'absent') return groupFailure(group, 'initial-group-probe', groupKillInvoked)
   // Never kill a possibly reused PGID after the owned root has already exited.
   if (exited(child)) return group === 'absent' ? acknowledged() : unacknowledged('group-still-present')
   if (group === 'present') {
     if (remaining() <= 0) return unacknowledged('group-still-present')
     try {
+      groupKillInvoked = true
       signal(-pid, 'SIGKILL')
     } catch (error) {
       if (error?.code !== 'ESRCH') {
-        return unacknowledged(error?.code === 'EPERM' ? 'group-probe-permission' : 'group-probe-error')
+        return groupFailure(
+          error?.code === 'EPERM' ? 'group-probe-permission' : 'group-probe-error',
+          'group-kill',
+          groupKillInvoked
+        )
       }
     }
   }
   while (remaining() > 0) {
     group = probe()
     if (remaining() <= 0) return unacknowledged('deadline-expired')
-    if (group !== 'present' && group !== 'absent') return unacknowledged(group)
+    if (group !== 'present' && group !== 'absent') {
+      return groupFailure(group, 'post-kill-group-probe', groupKillInvoked)
+    }
     if (group === 'absent' && exited(child)) return acknowledged()
     await pause()
   }
