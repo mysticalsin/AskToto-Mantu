@@ -10,6 +10,13 @@ if [ "$#" -lt 1 ]; then
   exit 2
 fi
 
+# Owner admission is held independently of the selected profile, including legacy and cleanup routes.
+# Hosted synthetic proofs remain available; they do not qualify this route for personal-device use.
+if [ "${OWNER_SANDBOX_ROUTE:-}" = owner ]; then
+  echo 'owner-runner sandbox: owner route disabled: architectural isolation hold' >&2
+  exit 2
+fi
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ "${OWNER_SANDBOX_PROFILE:-owner-account.sb}" = owner-account.sb ]; then
   exec sandbox-exec -f "$HERE/owner-account.sb" -D HOME="$HOME" "$@"

@@ -521,7 +521,8 @@ jobs:
   st1-mac-fifo:
     name: ST-1 fifo stall row (macOS)
     needs: provenance
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Architectural HOLD: hosted proof has not established owner-data filesystem isolation.
+    if: ${{ false }}
     runs-on: [self-hosted, macOS, ARM64, metis-owner-mac]
     timeout-minutes: 45
     continue-on-error: true
@@ -824,7 +825,8 @@ jobs:
   st1-mac-control:
     name: ST-1 control (no fixtures)
     needs: provenance
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Architectural HOLD: hosted proof has not established owner-data filesystem isolation.
+    if: ${{ false }}
     runs-on: [self-hosted, macOS, ARM64, metis-owner-mac]
     timeout-minutes: 45
     continue-on-error: true
