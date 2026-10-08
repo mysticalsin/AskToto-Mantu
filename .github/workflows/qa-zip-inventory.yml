@@ -1,4 +1,4 @@
-name: QA ZIP metadata inventory
+name: QA ZIP archive validation
 
 # Inspection only: no install, app launch, rebuild, release or owner-account execution.
 on:
@@ -7,6 +7,8 @@ on:
     paths:
       - scripts/qa/inventory_qa_zip.py
       - scripts/qa/test_inventory_qa_zip.py
+      - scripts/qa/extract_qa_zip.py
+      - scripts/qa/test_extract_qa_zip.py
       - .github/workflows/qa-zip-inventory.yml
 
 permissions:
@@ -29,9 +31,11 @@ jobs:
           persist-credentials: false
       - name: Test with synthetic ZIP bytes only
         timeout-minutes: 3
-        run: >-
-          env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" TMPDIR="$RUNNER_TEMP"
-          /usr/bin/python3.12 -B scripts/qa/test_inventory_qa_zip.py
+        run: |
+          env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" TMPDIR="$RUNNER_TEMP" \
+            /usr/bin/python3.12 -B scripts/qa/test_inventory_qa_zip.py
+          env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" TMPDIR="$RUNNER_TEMP" \
+            /usr/bin/python3.12 -B scripts/qa/test_extract_qa_zip.py
       - name: Download and bind the two retained outer artifacts
         id: download
         timeout-minutes: 18
@@ -45,8 +49,8 @@ jobs:
             GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
             RUNNER_TEMP="$RUNNER_TEMP" \
             /usr/bin/python3.12 -B scripts/qa/inventory_qa_zip.py download
-      - name: Inventory central metadata and bounded link traits without a token
-        timeout-minutes: 5
+      - name: Validate and extract the bounded QA archive without a token
+        timeout-minutes: 12
         env:
           WORK_ROOT: ${{ steps.download.outputs.root }}
         run: |
@@ -55,7 +59,7 @@ jobs:
             GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GITHUB_SHA="$GITHUB_SHA" \
             GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
             RUNNER_TEMP="$RUNNER_TEMP" \
-            /usr/bin/python3.12 -B scripts/qa/inventory_qa_zip.py inventory "$WORK_ROOT"
+            /usr/bin/python3.12 -B scripts/qa/extract_qa_zip.py "$WORK_ROOT"
       - name: Upload aggregate report only
         if: always() && steps.download.outputs.root != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
