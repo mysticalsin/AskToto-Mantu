@@ -476,7 +476,9 @@ describe('window-construction runs (M2-0516)', () => {
   it('is the launch order the qa-candidate workflow runs', () => {
     const workflow = workflowText()
     expect(workflow).toContain('node scripts/qa/st-1.mjs --print-window-plan > st1-report/window-plan.json')
-    expect(workflow).toContain("jq -c '.[]' st1-report/window-plan.json | while read -r launch; do")
+    expect(workflow).toContain('while IFS= read -r launch; do')
+    expect(workflow).toContain("done < <(jq -c '.[]' st1-report/window-plan.json)")
+    expect(workflow).not.toContain("jq -c '.[]' st1-report/window-plan.json | while")
     expect(workflow).toContain('run=$(jq -r \'.name\' <<<"$launch")')
     expect(workflow).toContain('if [ "$warmup" = true ]; then warmup_args=(--window-warmup); fi')
     expect(workflow).toContain('The two marked shipped warm-up launches run before any measured repeat')
