@@ -127,6 +127,38 @@ describe('strictLaunchEnvironment', () => {
     expect(env).not.toHaveProperty('Path')
     expect(env).not.toHaveProperty('GITHUB_SHA')
   })
+
+  it.each([undefined, '/inherited/native-home'])('isolates the Darwin native home override %s', (inherited) => {
+    const base = { HOME: '/inherited/home', CFFIXED_USER_HOME: inherited }
+    const snapshot = { ...base }
+    const env = strictLaunchEnvironment(base, hermetic, 'darwin')
+    expect(env.CFFIXED_USER_HOME).toBe(hermetic.home)
+    expect(env.HOME).toBe(hermetic.home)
+    expect(base).toEqual(snapshot)
+  })
+
+  it('does not pass a native Mac home override to Windows', () => {
+    const base = { CFFIXED_USER_HOME: '/inherited/native-home' }
+    const env = strictLaunchEnvironment(base, hermetic, 'win32')
+    expect(env).not.toHaveProperty('CFFIXED_USER_HOME')
+    expect(base).toEqual({ CFFIXED_USER_HOME: '/inherited/native-home' })
+  })
+
+  it.each(Object.keys(hermetic))('still rejects the missing owned path %s on both platforms', (key) => {
+    for (const platform of ['darwin', 'win32']) {
+      for (const value of [undefined, '']) {
+        expect(() => strictLaunchEnvironment({}, { ...hermetic, [key]: value }, platform)).toThrow(
+          `strict environment needs ${key}.`
+        )
+      }
+    }
+  })
+
+  it('still rejects unsupported platforms', () => {
+    expect(() => strictLaunchEnvironment({}, hermetic, 'linux')).toThrow(
+      'strict environment supports darwin and win32 only.'
+    )
+  })
 })
 
 describe('launchPackagedCdp', () => {
