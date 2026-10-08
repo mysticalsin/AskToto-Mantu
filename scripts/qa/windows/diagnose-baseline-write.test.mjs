@@ -539,6 +539,7 @@ test('the real CLI retains six synthetic failures, reports nine attempts and rem
     assert.equal(child.stdout.includes(f.home), false)
     const report = JSON.parse(child.stdout)
     assert.equal(report.outcome, 'DIAGNOSTIC_FAILED')
+    assert.equal(report.fullSuiteConcurrency, 'NOT_MEASURED')
     assert.equal(report.attempts.length, 9)
     assert.equal(report.attempts.filter((attempt) => attempt.ok).length, 3)
     assert.equal(report.attempts.filter((attempt) => attempt.status === 7).length, 6)

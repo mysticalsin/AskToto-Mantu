@@ -397,7 +397,7 @@ function main() {
     schema: 1,
     outcome: 'HARNESS_FAILURE',
     cleanup: 'NOT_CREATED',
-    fullSuiteConcurrency: 'NOT_REPRODUCED',
+    fullSuiteConcurrency: 'NOT_MEASURED',
     ok: false
   }
   try {
