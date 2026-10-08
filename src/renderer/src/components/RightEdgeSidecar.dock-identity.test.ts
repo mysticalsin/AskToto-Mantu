@@ -22,7 +22,7 @@ import ${modulePath('styles/right-edge-sidecar.css')}
 
 const AnswerBody = () => createElement('div', { className: 'develop-in' }, 'Synthetic dock answer.')
 const root = createRoot(document.getElementById('root'))
-let state = { open: false, answer: false }
+let state = { open: false, answer: false, liveNotice: null }
 const render = () => flushSync(() => root.render(createElement(RightEdgeSidecar, {
   open: state.open,
   onOpen: () => {},
@@ -30,7 +30,8 @@ const render = () => flushSync(() => root.render(createElement(RightEdgeSidecar,
   value: '',
   onChange: () => {},
   onSubmit: () => {},
-  body: state.answer ? createElement(AnswerBody) : null
+  body: state.answer ? createElement(AnswerBody) : null,
+  liveNotice: state.liveNotice
 })))
 window.__dock = { set: (patch) => { state = { ...state, ...patch }; render() } }
 render()
@@ -60,7 +61,10 @@ async function bundleHarness(): Promise<{ js: string; css: string }> {
     }
   })) as Rollup.RollupOutput | Rollup.RollupOutput[]
   const files = (Array.isArray(output) ? output : [output]).flatMap((result) => result.output)
-  const js = files.filter((file): file is Rollup.OutputChunk => file.type === 'chunk').map((chunk) => chunk.code).join('\n')
+  const js = files
+    .filter((file): file is Rollup.OutputChunk => file.type === 'chunk')
+    .map((chunk) => chunk.code)
+    .join('\n')
   const css = files
     .filter((file): file is Rollup.OutputAsset => file.type === 'asset' && file.fileName.endsWith('.css'))
     .map((asset) => String(asset.source))
@@ -87,7 +91,9 @@ describe('right-edge dock renders as one element (M2-0431)', () => {
     const { chromium } = await import('playwright')
     browser = await chromium.launch({ headless: true })
     page = await browser.newPage({ viewport: { width: 360, height: 560 } })
-    await page.setContent(`<!doctype html><html><head><meta charset="utf-8"><style>${css}</style></head><body><div id="root" style="position:relative;width:360px;height:560px"></div></body></html>`)
+    await page.setContent(
+      `<!doctype html><html><head><meta charset="utf-8"><style>${css}</style></head><body><div id="root" style="position:relative;width:360px;height:560px"></div></body></html>`
+    )
     await page.addScriptTag({ content: `window.toto = {};\n${js}` })
     await page.waitForSelector('.right-edge-sidecar')
   }, 120_000)
@@ -96,7 +102,7 @@ describe('right-edge dock renders as one element (M2-0431)', () => {
     await browser?.close()
   })
 
-  const setDock = (patch: { open?: boolean; answer?: boolean }): Promise<void> =>
+  const setDock = (patch: { open?: boolean; answer?: boolean; liveNotice?: string | null }): Promise<void> =>
     page.evaluate((next) => (window as unknown as { __dock: { set(p: object): void } }).__dock.set(next), patch)
 
   const probe = (): Promise<DockProbe> =>
@@ -120,7 +126,11 @@ describe('right-edge dock renders as one element (M2-0431)', () => {
     // Parked first, exactly as a right-edge dock boots; record the nodes and count every answer mount.
     await page.evaluate(() => {
       const w = window as unknown as { __first: Record<string, Element | null>; __answerMounts: number }
-      w.__first = { root: document.querySelector('.right-edge-sidecar'), drawer: document.querySelector('.right-edge-sidecar__drawer'), answer: null }
+      w.__first = {
+        root: document.querySelector('.right-edge-sidecar'),
+        drawer: document.querySelector('.right-edge-sidecar__drawer'),
+        answer: null
+      }
       w.__answerMounts = 0
       new MutationObserver((records) => {
         for (const record of records) {
@@ -136,20 +146,48 @@ describe('right-edge dock renders as one element (M2-0431)', () => {
     })
 
     const parked = await probe()
-    expect(parked).toMatchObject({ sameRoot: true, sameDrawer: true, open: false, drawerVisibility: 'hidden', drawerAriaHidden: 'true' })
+    expect(parked).toMatchObject({
+      sameRoot: true,
+      sameDrawer: true,
+      open: false,
+      drawerVisibility: 'hidden',
+      drawerAriaHidden: 'true'
+    })
 
     await setDock({ open: true })
     await setDock({ answer: true })
     const answered = await probe()
-    expect(answered).toMatchObject({ sameRoot: true, sameDrawer: true, sameAnswer: true, answerMounts: 1, open: true, drawerVisibility: 'visible', drawerAriaHidden: null })
+    expect(answered).toMatchObject({
+      sameRoot: true,
+      sameDrawer: true,
+      sameAnswer: true,
+      answerMounts: 1,
+      open: true,
+      drawerVisibility: 'visible',
+      drawerAriaHidden: null
+    })
 
     for (let cycle = 1; cycle <= 3; cycle++) {
       await setDock({ open: false })
       const whileParked = await probe()
-      expect(whileParked, `park ${cycle}`).toMatchObject({ sameRoot: true, sameDrawer: true, sameAnswer: true, answerMounts: 1, open: false, drawerVisibility: 'hidden' })
+      expect(whileParked, `park ${cycle}`).toMatchObject({
+        sameRoot: true,
+        sameDrawer: true,
+        sameAnswer: true,
+        answerMounts: 1,
+        open: false,
+        drawerVisibility: 'hidden'
+      })
       await setDock({ open: true })
       const revealed = await probe()
-      expect(revealed, `reveal ${cycle}`).toMatchObject({ sameRoot: true, sameDrawer: true, sameAnswer: true, answerMounts: 1, open: true, drawerVisibility: 'visible' })
+      expect(revealed, `reveal ${cycle}`).toMatchObject({
+        sameRoot: true,
+        sameDrawer: true,
+        sameAnswer: true,
+        answerMounts: 1,
+        open: true,
+        drawerVisibility: 'visible'
+      })
     }
   })
 
@@ -162,5 +200,192 @@ describe('right-edge dock renders as one element (M2-0431)', () => {
     expect(await page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? null)).toBe('Open Métis')
     await setDock({ open: true })
     expect(await page.getByRole('complementary', { name: 'Métis' }).count()).toBe(1)
+  })
+
+  it('keeps a live microphone notice hidden on the parked rail and ellipsized in the open drawer', async () => {
+    const exactNotice = 'Mic silent · check input'
+    const longNotice =
+      'The selected microphone input remains unavailable after reconnecting, so review device access and choose a working source before continuing.'
+    const originalViewport = page.viewportSize()
+    if (!originalViewport) throw new Error('Expected the synthetic page to have a viewport.')
+    const originalStyles = await page.evaluate(() => {
+      const root = document.getElementById('root')
+      if (!(root instanceof HTMLElement)) throw new Error('Missing synthetic root.')
+      return {
+        html: document.documentElement.getAttribute('style'),
+        body: document.body.getAttribute('style'),
+        root: root.getAttribute('style')
+      }
+    })
+    const setFixtureGeometry = async (width: number, height: number): Promise<void> => {
+      await page.setViewportSize({ width, height })
+      await page.evaluate(
+        ({ width, height }) => {
+          const root = document.getElementById('root')
+          if (!(root instanceof HTMLElement)) throw new Error('Missing synthetic root.')
+          document.documentElement.style.margin = '0'
+          document.body.style.margin = '0'
+          root.style.position = 'absolute'
+          root.style.left = '0'
+          root.style.top = '0'
+          root.style.width = `${width}px`
+          root.style.height = `${height}px`
+        },
+        { width, height }
+      )
+    }
+    const inspectNotice = () =>
+      page.evaluate(() => {
+        const root = document.querySelector('.right-edge-sidecar')
+        const drawer = document.querySelector('.right-edge-sidecar__drawer')
+        const notice = document.querySelector('.right-edge-sidecar__status-notice')
+        if (!(root instanceof HTMLElement)) throw new Error('Missing sidecar root.')
+        if (!(drawer instanceof HTMLElement)) throw new Error('Missing sidecar drawer.')
+        if (!(notice instanceof HTMLElement)) throw new Error('Missing sidecar notice.')
+        const rect = (element: HTMLElement) => {
+          const box = element.getBoundingClientRect()
+          return {
+            left: box.left,
+            top: box.top,
+            right: box.right,
+            bottom: box.bottom,
+            width: box.width,
+            height: box.height
+          }
+        }
+        const style = getComputedStyle(notice)
+        return {
+          surface: root.getAttribute('data-re-surface'),
+          root: rect(root),
+          drawer: rect(drawer),
+          notice: rect(notice),
+          drawerVisibility: getComputedStyle(drawer).visibility,
+          drawerAriaHidden: drawer.getAttribute('aria-hidden'),
+          noticeInsideDrawer: drawer.contains(notice),
+          noticeVisibility: style.visibility,
+          noticeAriaLabel: notice.getAttribute('aria-label'),
+          noticeText: notice.textContent,
+          noticeWhiteSpace: style.whiteSpace,
+          noticeOverflow: style.overflow,
+          noticeTextOverflow: style.textOverflow,
+          noticeClientWidth: notice.clientWidth,
+          noticeScrollWidth: notice.scrollWidth,
+          noticeExpectedHeight:
+            Number.parseFloat(style.lineHeight) +
+            Number.parseFloat(style.paddingTop) +
+            Number.parseFloat(style.paddingBottom) +
+            Number.parseFloat(style.borderTopWidth) +
+            Number.parseFloat(style.borderBottomWidth)
+        }
+      })
+
+    try {
+      await setFixtureGeometry(52, 52)
+      await setDock({ open: false, answer: false, liveNotice: exactNotice })
+      const parked = await inspectNotice()
+      expect(parked).toMatchObject({
+        surface: 'rest',
+        root: { left: 0, top: 0, width: 52, height: 52 },
+        drawerVisibility: 'hidden',
+        drawerAriaHidden: 'true',
+        noticeInsideDrawer: true,
+        noticeVisibility: 'hidden',
+        noticeAriaLabel: exactNotice,
+        noticeText: exactNotice
+      })
+      expect(parked.drawer.left).toBeGreaterThanOrEqual(parked.root.left)
+      expect(parked.drawer.right).toBeLessThanOrEqual(parked.root.right)
+      expect(await page.locator('.right-edge-sidecar__status-notice').isVisible()).toBe(false)
+      expect(await page.getByRole('status').count()).toBe(0)
+      expect(await page.getByRole('button', { name: 'Open Métis' }).count()).toBe(1)
+
+      await setFixtureGeometry(360, 560)
+      await setDock({ open: true, liveNotice: exactNotice })
+      const open = await inspectNotice()
+      expect(open).toMatchObject({
+        surface: 'island',
+        drawerVisibility: 'visible',
+        drawerAriaHidden: null,
+        noticeInsideDrawer: true,
+        noticeVisibility: 'visible',
+        noticeAriaLabel: exactNotice,
+        noticeText: exactNotice,
+        noticeWhiteSpace: 'nowrap',
+        noticeOverflow: 'hidden',
+        noticeTextOverflow: 'ellipsis'
+      })
+      expect(open.notice.left).toBeGreaterThanOrEqual(open.drawer.left)
+      expect(open.notice.right).toBeLessThanOrEqual(open.drawer.right)
+      expect(open.notice.top).toBeGreaterThanOrEqual(open.drawer.top)
+      expect(open.notice.bottom).toBeLessThanOrEqual(open.drawer.bottom)
+      expect(Math.abs(open.notice.height - open.noticeExpectedHeight)).toBeLessThanOrEqual(1)
+      expect(await page.getByRole('status', { name: exactNotice }).count()).toBe(1)
+
+      await setDock({ liveNotice: longNotice })
+      const long = await inspectNotice()
+      expect(long).toMatchObject({
+        surface: 'island',
+        drawerVisibility: 'visible',
+        noticeInsideDrawer: true,
+        noticeVisibility: 'visible',
+        noticeAriaLabel: longNotice,
+        noticeText: longNotice,
+        noticeWhiteSpace: 'nowrap',
+        noticeOverflow: 'hidden',
+        noticeTextOverflow: 'ellipsis'
+      })
+      expect(long.notice.left).toBeGreaterThanOrEqual(long.drawer.left)
+      expect(long.notice.right).toBeLessThanOrEqual(long.drawer.right)
+      expect(long.notice.top).toBeGreaterThanOrEqual(long.drawer.top)
+      expect(long.notice.bottom).toBeLessThanOrEqual(long.drawer.bottom)
+      expect(Math.abs(long.notice.height - long.noticeExpectedHeight)).toBeLessThanOrEqual(1)
+      expect(long.noticeScrollWidth).toBeGreaterThan(long.noticeClientWidth)
+      expect(await page.getByRole('status', { name: longNotice }).count()).toBe(1)
+
+      await setDock({ open: false })
+      const parkedAgain = await inspectNotice()
+      expect(parkedAgain).toMatchObject({
+        surface: 'rest',
+        drawerVisibility: 'hidden',
+        drawerAriaHidden: 'true',
+        noticeInsideDrawer: true,
+        noticeVisibility: 'hidden',
+        noticeAriaLabel: longNotice,
+        noticeText: longNotice
+      })
+      expect(await page.locator('.right-edge-sidecar__status-notice').isVisible()).toBe(false)
+      expect(await page.getByRole('status').count()).toBe(0)
+    } finally {
+      try {
+        await setDock({ open: false, answer: false, liveNotice: null })
+      } finally {
+        try {
+          await page.setViewportSize(originalViewport)
+        } finally {
+          await page.evaluate((styles) => {
+            const root = document.getElementById('root')
+            if (!(root instanceof HTMLElement)) throw new Error('Missing synthetic root.')
+            const restore = (element: HTMLElement, style: string | null): void => {
+              if (style === null) element.removeAttribute('style')
+              else element.setAttribute('style', style)
+            }
+            restore(document.documentElement, styles.html)
+            restore(document.body, styles.body)
+            restore(root, styles.root)
+          }, originalStyles)
+        }
+        const restoredStyles = await page.evaluate(() => {
+          const root = document.getElementById('root')
+          if (!(root instanceof HTMLElement)) throw new Error('Missing synthetic root.')
+          return {
+            html: document.documentElement.getAttribute('style'),
+            body: document.body.getAttribute('style'),
+            root: root.getAttribute('style')
+          }
+        })
+        expect(restoredStyles).toEqual(originalStyles)
+        expect(page.viewportSize()).toEqual(originalViewport)
+      }
+    }
   })
 })
