@@ -1,10 +1,14 @@
 name: Metis cloud speaker audio-window RED (temporary)
+run-name: ${{ github.event_name == 'pull_request' && 'Metis cloud speaker audio-window RED (registration)' || 'Metis cloud speaker audio-window RED' }}
 
 # One hosted, synthetic TDD observation. Remove after the observation and no later than
 # 2026-10-11T18:00:00Z. A passing job means the named assertion failed as expected;
 # it is not a passing application test, installed-app test, or release approval.
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/metis-speaker-window-red.yml
 
 permissions:
   contents: read
@@ -15,6 +19,7 @@ concurrency:
 
 jobs:
   observe-red:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
