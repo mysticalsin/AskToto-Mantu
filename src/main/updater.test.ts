@@ -256,6 +256,8 @@ describe('parseLatestRelease — GitHub latest-release payload → UpdateCheckRe
       const result = parseLatestRelease(
         {
           tag_name: 'v2.0.1',
+          draft: false,
+          prerelease: false,
           assets: [
             { name: 'Metis-2.0.1.dmg' },
             { name: 'Metis-Setup-2.0.1.exe' },
