@@ -541,6 +541,21 @@ describe('owned direct-launch endpoint handshakes', () => {
     }
   })
 
+  it('does not begin attachment after a shared monotonic deadline has already expired', async () => {
+    const connect = vi.fn(async () => {
+      throw new Error('must not connect')
+    })
+    const result = await attachOwnedCdp({
+      endpoint: 'http://127.0.0.1:9222',
+      childPid: 42,
+      timeoutMs: 15_000,
+      deadlineMs: performance.now() - 1,
+      connect
+    })
+    expect(result).toMatchObject({ browser: null, failure: 'cdp-endpoint-deadline' })
+    expect(connect).not.toHaveBeenCalled()
+  })
+
   it('classifies a late CDP transport while retaining its owned release', async () => {
     const close = vi.fn(async () => true)
     const session = { send: vi.fn(async () => ({ processInfo: [{ type: 'browser', id: 42 }] })) }
