@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Activate __mocks__/electron.ts — checkForUpdateNow needs app.getVersion() + net.fetch, and outside a
@@ -215,6 +216,58 @@ describe('parseLatestRelease — GitHub latest-release payload → UpdateCheckRe
       restore()
     }
   })
+
+  it.each(['darwin', 'win32'] as const)(
+    'offers a verified manual-install release on %s without updater metadata',
+    (platform) => {
+      const restore = pinPlatform(platform)
+      try {
+        const result = parseLatestRelease(
+          {
+            tag_name: 'v2.0.1',
+            draft: false,
+            prerelease: false,
+            html_url: 'https://github.com/mysticalsin/Metis-Releases/releases/tag/v2.0.1',
+            assets: [
+              { name: 'Metis-2.0.1.dmg' },
+              { name: 'Metis-Setup-2.0.1.exe' },
+              { name: 'SHA256SUMS.txt' },
+              { name: 'provenance.json' }
+            ]
+          },
+          '2.0.0'
+        )
+        expect(result).toMatchObject({
+          ok: true,
+          available: true,
+          manualInstallOnly: true,
+          url: 'https://github.com/mysticalsin/Metis-Releases/releases/tag/v2.0.1'
+        })
+      } finally {
+        restore()
+      }
+    }
+  )
+
+  it('does not mistake a partial unsigned upload for a verified manual-install release', () => {
+    const restore = pinPlatform('win32')
+    try {
+      const result = parseLatestRelease(
+        {
+          tag_name: 'v2.0.1',
+          assets: [
+            { name: 'Metis-2.0.1.dmg' },
+            { name: 'Metis-Setup-2.0.1.exe' },
+            { name: 'SHA256SUMS.txt' }
+          ]
+        },
+        '2.0.0'
+      )
+      expect(result.ok).toBe(false)
+    } finally {
+      restore()
+    }
+  })
 })
 
 describe('checkForUpdateNow — never throws, always a human-readable result', () => {
@@ -416,6 +469,84 @@ describe('startUpdateDownload — Settings "Update now" in-app download guard', 
       expect(pre.started).toBe(false)
       expect(pre.reason).toMatch(/QA-approved/)
     } finally {
+      delete electronApp.isPackaged
+    }
+  })
+
+  it('never self-installs from a package without baked updater metadata, even if Latest has installable metadata', async () => {
+    const electronApp = app as unknown as { isPackaged?: boolean }
+    electronApp.isPackaged = true
+    const restore = pinPlatform('win32')
+    const fake = new FakeAutoUpdater()
+    fake.checkForUpdates.mockResolvedValue({ downloadPromise: Promise.resolve() })
+    const moduleId = require.resolve('electron-updater')
+    const previous = require.cache[moduleId]
+    require.cache[moduleId] = {
+      id: moduleId,
+      filename: moduleId,
+      loaded: true,
+      exports: { autoUpdater: fake }
+    } as never
+    vi.mocked(readFileSync).mockImplementation(() => {
+      throw new Error('ENOENT: no app-update.yml in this package')
+    })
+    vi.mocked(net.fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        tag_name: 'v2.0.1',
+        assets: [{ name: 'Metis-Setup-2.0.1.exe' }, { name: 'latest.yml' }]
+      })
+    } as unknown as Response)
+    try {
+      const result = await startUpdateDownload()
+      expect(result.started).toBe(false)
+      expect(result.reason).toMatch(/manual|download page/i)
+      expect(fake.checkForUpdates).not.toHaveBeenCalled()
+    } finally {
+      restore()
+      vi.mocked(readFileSync).mockImplementation(() => 'provider: github\nowner: mysticalsin\n')
+      if (previous) require.cache[moduleId] = previous
+      else delete require.cache[moduleId]
+      delete electronApp.isPackaged
+    }
+  })
+
+  it('never hands a verified manual-install release to electron-updater, even when this package has updater metadata', async () => {
+    const electronApp = app as unknown as { isPackaged?: boolean }
+    electronApp.isPackaged = true
+    const restore = pinPlatform('win32')
+    const fake = new FakeAutoUpdater()
+    fake.checkForUpdates.mockResolvedValue({ downloadPromise: Promise.resolve() })
+    const moduleId = require.resolve('electron-updater')
+    const previous = require.cache[moduleId]
+    require.cache[moduleId] = {
+      id: moduleId,
+      filename: moduleId,
+      loaded: true,
+      exports: { autoUpdater: fake }
+    } as never
+    vi.mocked(net.fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        tag_name: 'v2.0.1',
+        html_url: 'https://github.com/mysticalsin/Metis-Releases/releases/tag/v2.0.1',
+        assets: [
+          { name: 'Metis-2.0.1.dmg' },
+          { name: 'Metis-Setup-2.0.1.exe' },
+          { name: 'SHA256SUMS.txt' },
+          { name: 'provenance.json' }
+        ]
+      })
+    } as unknown as Response)
+    try {
+      const result = await startUpdateDownload()
+      expect(result.started).toBe(false)
+      expect(result.reason).toMatch(/manual|download page/i)
+      expect(fake.checkForUpdates).not.toHaveBeenCalled()
+    } finally {
+      restore()
+      if (previous) require.cache[moduleId] = previous
+      else delete require.cache[moduleId]
       delete electronApp.isPackaged
     }
   })
