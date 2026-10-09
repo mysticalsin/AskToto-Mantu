@@ -47,6 +47,7 @@ on:
           - packaged-lifecycle
           - renderer-kill
           - fresh-onboarding-baseline
+          - hosted-startup-tls
       mac_sha256:
         description: sha256 of the macOS installer the scenario installs (empty when it does not run on macOS)
         required: false
@@ -89,6 +90,7 @@ jobs:
       win_sha256: ${{ steps.resolve.outputs.win_sha256 }}
       win_timeout_minutes: ${{ steps.resolve.outputs.win_timeout_minutes }}
       win_step_timeout_minutes: ${{ steps.resolve.outputs.win_step_timeout_minutes }}
+      producer_commit: ${{ steps.candidate.outputs.producer_commit }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -105,6 +107,7 @@ jobs:
         run: node scripts/qa/candidate-scenarios.mjs resolve --scenario "$SCENARIO" --mac-sha256 "$MAC_SHA256" --win-sha256 "$WIN_SHA256" >> "$GITHUB_OUTPUT"
       - name: >
           qa-candidate.yml dispatch on main or release/1.9.x
+        id: candidate
         env:
           GH_TOKEN: ${{ github.token }}
           CANDIDATE_RUN: ${{ inputs.candidate_run }}
@@ -115,6 +118,8 @@ jobs:
           fi
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN" > candidate-run.json
           node scripts/qa/candidate-scenarios.mjs guard candidate-run.json "$CANDIDATE_RUN"
+          producer_commit=$(jq -er '.head_sha | select(type == "string" and test("^[0-9a-f]{40}$"))' candidate-run.json)
+          echo "producer_commit=$producer_commit" >> "$GITHUB_OUTPUT"
 
   mac:
     name: ${{ inputs.scenario }} (macOS)
@@ -128,6 +133,7 @@ jobs:
       VARIANT: ${{ needs.guard.outputs.mac_variant }}
       ARTIFACT: ${{ needs.guard.outputs.mac_artifact }}
       INSTALLER_SHA256: ${{ needs.guard.outputs.mac_sha256 }}
+      METIS_CANDIDATE_COMMIT: ${{ needs.guard.outputs.producer_commit }}
       OUT: candidate-scenario
     steps:
       - name: Record the job start time
@@ -223,12 +229,14 @@ jobs:
         continue-on-error: true
         env:
           FRESH_LANE_WRITTEN: ${{ steps.scenario.outputs.fresh_lane_written }}
+          TLS_LANE_WRITTEN: ${{ steps.scenario.outputs.tls_lane_written }}
         run: >
           node scripts/qa/candidate-scenarios.mjs scan "$OUT" --account "$(id -un)" --scenario "$SCENARIO"
           --platform mac --candidate-run "$CANDIDATE_RUN" --sha256 "$INSTALLER_SHA256"
           --provenance provenance/provenance.json --lane-written "$FRESH_LANE_WRITTEN"
+          --tls-lane-written "$TLS_LANE_WRITTEN"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: always() && inputs.scenario != 'fresh-onboarding-baseline'
+        if: always() && inputs.scenario != 'fresh-onboarding-baseline' && inputs.scenario != 'hosted-startup-tls'
         with:
           name: candidate-scenario-${{ inputs.scenario }}-mac
           path: candidate-scenario/
@@ -241,6 +249,16 @@ jobs:
           name: candidate-scenario-${{ inputs.scenario }}-mac
           path: |
             candidate-scenario/fresh-onboarding-baseline.json
+            candidate-scenario/lane.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload only validated hosted-startup TLS JSON
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always() && inputs.scenario == 'hosted-startup-tls' && steps.scan.outcome == 'success'
+        with:
+          name: candidate-scenario-${{ inputs.scenario }}-mac
+          path: |
+            candidate-scenario/hosted-startup-tls.json
             candidate-scenario/lane.json
           if-no-files-found: error
           retention-days: 30

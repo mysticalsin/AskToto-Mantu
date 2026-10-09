@@ -38,6 +38,7 @@ import {
   reportProblems
 } from './fresh-onboarding-baseline.mjs'
 import { LOCAL_LLM_SETTINGS } from './lib/local-llm-settings.mjs'
+import { TLS_REPORT, TLS_SCENARIO, assessHostedTlsReport, bindHostedTlsCandidate } from './hosted-candidate-tls.mjs'
 import { VARIANTS } from './provenance.mjs'
 
 export const LANE_SCHEMA = 1
@@ -301,6 +302,153 @@ function freshOnboardingArgs(host, { app, installer, sha256, report, provenanceP
   ]
 }
 
+/** Support-only context uses the API producer SHA, not an assertion made by the downloaded provenance. */
+export function hostedTlsScanContext({ platform, provenance, candidateRun, sha256, env, laneWritten }) {
+  try {
+    if (platform !== 'mac') return undefined
+    const identity = bindHostedTlsCandidate(provenance, {
+      candidateRun: positiveRunId(candidateRun),
+      producerCommit: env?.METIS_CANDIDATE_COMMIT,
+      harnessCommit: env?.GITHUB_SHA,
+      sha256,
+      installer: `Metis-QA-${provenance?.version}.zip`
+    })
+    const ciRun = positiveRunId(env?.GITHUB_RUN_ID)
+    if (!ciRun) return undefined
+    return { identity, ciRun, laneWritten: laneWritten === true }
+  } catch {
+    return undefined
+  }
+}
+
+export function hostedTlsLane({
+  platform,
+  env,
+  provenance,
+  candidateRun,
+  sha256,
+  exitCode,
+  reportWritten,
+  reportData
+}) {
+  const context = hostedTlsScanContext({ platform, env, provenance, candidateRun, sha256, laneWritten: true })
+  const bound = context && reportWritten && assessHostedTlsReport(reportData, context.identity).length === 0
+  const matches = bound && exitCode === { PASS: 0, FAIL: 1, PRECONDITION: 2 }[reportData.outcome]
+  return {
+    schema: 'metis.hosted-startup-tls-lane.v1',
+    scenario: TLS_SCENARIO,
+    support_only: true,
+    identity: context?.identity ?? null,
+    ci_run_id: context?.ciRun ?? null,
+    outcome: matches ? reportData.outcome : 'FAIL',
+    exit_code: [0, 1, 2].includes(exitCode) ? exitCode : null,
+    report: bound ? TLS_REPORT : null,
+    detail: matches
+      ? reportData.outcome === 'PASS'
+        ? 'none'
+        : 'scenario-failed'
+      : !context
+        ? 'invalid-context'
+        : !reportWritten
+          ? 'report-missing'
+          : 'report-rejected'
+  }
+}
+
+/** Exact output pair only, with fresh-write and API/provenance identity rebinding. No raw-error fallback.
+ * @param {string} dir
+ * @param {{ identity: ReturnType<typeof bindHostedTlsCandidate>, ciRun: number, laneWritten: boolean } | undefined} context
+ */
+export function scanHostedTlsOutput(dir, context = undefined) {
+  try {
+    if (!context?.laneWritten || !positiveRunId(context.ciRun)) return ['output-context-invalid']
+    const root = lstatSync(dir)
+    if (!root.isDirectory() || root.isSymbolicLink()) return ['output-directory-invalid']
+    const names = readdirSync(dir)
+    if (names.length !== 2 || ![TLS_REPORT, 'lane.json'].every((name) => names.includes(name))) {
+      return ['output-file-list-invalid']
+    }
+    const read = (name) => {
+      const path = join(dir, name)
+      const stat = lstatSync(path)
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 65_536) {
+        throw new Error('closed-output-invalid')
+      }
+      return JSON.parse(readFileSync(path, 'utf8'))
+    }
+    const report = read(TLS_REPORT)
+    const lane = read('lane.json')
+    if (assessHostedTlsReport(report, context.identity).length) return ['output-binding-invalid']
+    if (
+      !exactKeys(lane, [
+        'schema',
+        'scenario',
+        'support_only',
+        'identity',
+        'ci_run_id',
+        'outcome',
+        'exit_code',
+        'report',
+        'detail'
+      ]) ||
+      lane.schema !== 'metis.hosted-startup-tls-lane.v1' ||
+      lane.scenario !== TLS_SCENARIO ||
+      lane.support_only !== true ||
+      !exactKeys(lane.identity, Object.keys(context.identity)) ||
+      Object.entries(context.identity).some(([key, value]) => lane.identity[key] !== value) ||
+      lane.ci_run_id !== context.ciRun ||
+      lane.report !== TLS_REPORT ||
+      lane.outcome !== report.outcome ||
+      lane.exit_code !== { PASS: 0, FAIL: 1, PRECONDITION: 2 }[report.outcome] ||
+      lane.detail !== (lane.outcome === 'PASS' ? 'none' : 'scenario-failed')
+    ) {
+      return ['output-schema-invalid']
+    }
+    return []
+  } catch {
+    return ['output-unreadable']
+  }
+}
+
+function hostedTlsArgs({
+  app,
+  installer,
+  sha256,
+  report,
+  provenancePath,
+  candidateRun,
+  harnessCommit,
+  producerCommit
+}) {
+  if (
+    !app ||
+    !provenancePath ||
+    !positiveRunId(candidateRun) ||
+    !/^[0-9a-f]{40}$/.test(harnessCommit ?? '') ||
+    !/^[0-9a-f]{40}$/.test(producerCommit ?? '')
+  ) {
+    throw new Error('TLS support needs a bound candidate context.')
+  }
+  return [
+    '--app',
+    app,
+    '--installer',
+    installer,
+    '--sha256',
+    sha256,
+    '--provenance',
+    provenancePath,
+    '--candidate-run',
+    String(candidateRun),
+    '--producer-commit',
+    producerCommit,
+    '--harness-commit',
+    harnessCommit,
+    '--out',
+    report
+  ]
+}
+
 export const PACKAGED_LIFECYCLE_RV_ROWS = Object.freeze({
   mac: Object.freeze([
     'RV-1-macos-open-activate',
@@ -325,8 +473,8 @@ export const PACKAGED_LIFECYCLE_RV_ROWS = Object.freeze({
  * settings it seeds into the fresh profile. isolatedProfiles marks a script that runs the app only on its own
  * throwaway ASKTOTO_USERDATA profiles, so the default profile is never touched. notCovered lists report rows
  * the platform cannot prove, each with the reason; lane.json carries them as a residual. qaOnlyHook marks a
- * scenario that needs a hook compiled only into QA-identity bytes; every other scenario installs a
- * promotable variant so its records bind to bytes that can ship. installerSuffix, when set, is the only
+ * scenario that needs a hook compiled only into QA-identity bytes. The reason-bound hosted TLS companion
+ * is also QA-only support, without a fault hook; other scenarios install promotable variants. installerSuffix is the only
  * installer kind the scenario accepts; installerKind, when set, is the candidate-installer.mjs selector the
  * install step uses instead of the platform. guiScripting marks a platform entry that drives the app's native UI
  * through System Events.
@@ -582,6 +730,25 @@ export const SCENARIOS = Object.freeze({
         script: 'scripts/qa/fresh-onboarding-baseline.mjs',
         args: (options) => freshOnboardingArgs('win32', options),
         report: 'fresh-onboarding-baseline.json',
+        isolatedProfiles: true,
+        timeoutMinutes: 20,
+        stepTimeoutMinutes: 5
+      })
+    })
+  }),
+  'hosted-startup-tls': Object.freeze({
+    qaOnlyHook: false,
+    qaIdentityReason: 'hosted-startup-tls-support-only',
+    reportAssessment: TLS_SCENARIO,
+    exits: Object.freeze({ 0: 'PASS', 1: 'FAIL', 2: 'PRECONDITION' }),
+    platforms: Object.freeze({
+      mac: Object.freeze({
+        variant: 'mac-qa-identity',
+        artifact: 'candidate-mac-qa-identity',
+        installerSuffix: '.zip',
+        script: 'scripts/qa/hosted-candidate-tls.mjs',
+        args: hostedTlsArgs,
+        report: TLS_REPORT,
         isolatedProfiles: true,
         timeoutMinutes: 20,
         stepTimeoutMinutes: 5
@@ -846,13 +1013,15 @@ export function assessScenarioReport({ scenario, platform, report, expected = un
   const entry = scenarioEntry(scenario)
   if (entry.reportAssessment === 'packaged-smoke') return assessPackagedSmokeReport(report, platform)
   if (entry.reportAssessment === FRESH_ONBOARDING_SCENARIO) return assessFreshOnboardingReport(report, expected)
+  if (entry.reportAssessment === TLS_SCENARIO)
+    return { problems: assessHostedTlsReport(report, expected), notCovered: [] }
   return { problems: [], row_verdicts: undefined, notCovered: [] }
 }
 
 /** The argv (after `node`) that runs a scenario. Every argument is repository-relative, so the recorded
  *  command never names the runner's home or temp directory.
  *  @param {{ scenario: string, platform: string, installer: string, sha256: string, outDir: string, app?: string,
- *    provenancePath?: string, candidateRun?: string, harnessCommit?: string }} options */
+ *    provenancePath?: string, candidateRun?: string, harnessCommit?: string, producerCommit?: string }} options */
 export function scenarioCommand({
   scenario,
   platform,
@@ -862,7 +1031,8 @@ export function scenarioCommand({
   app,
   provenancePath,
   candidateRun,
-  harnessCommit
+  harnessCommit,
+  producerCommit
 }) {
   const target = platformEntry(scenario, platform)
   if (target.installerSuffix && !installer.toLowerCase().endsWith(target.installerSuffix)) {
@@ -879,7 +1049,8 @@ export function scenarioCommand({
       app,
       provenancePath,
       candidateRun,
-      harnessCommit
+      harnessCommit,
+      producerCommit
     })
   ]
   if (argv.some((arg) => typeof arg !== 'string' || arg === '')) {
@@ -1056,9 +1227,13 @@ export function contentProblems(text, { account }) {
 
 /** Legacy lanes delete files breaking a content rule; the fresh lane instead validates its exact output pair.
  * @param {string} dir
- * @param {{ account: string, scenario?: string, freshContext?: any }} options */
-export function scanUploadDir(dir, { account, scenario = undefined, freshContext = undefined }) {
+ * @param {{ account: string, scenario?: string, freshContext?: any, tlsContext?: any }} options */
+export function scanUploadDir(
+  dir,
+  { account, scenario = undefined, freshContext = undefined, tlsContext = undefined }
+) {
   if (scenario === FRESH_ONBOARDING_SCENARIO) return scanFreshOnboardingOutput(dir, freshContext)
+  if (scenario === TLS_SCENARIO) return scanHostedTlsOutput(dir, tlsContext)
   const problems = []
   if (!existsSync(dir)) return problems
   for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
@@ -1145,8 +1320,48 @@ function run(values) {
     app,
     provenancePath: values.provenance,
     candidateRun,
-    harnessCommit: process.env.GITHUB_SHA
+    harnessCommit: process.env.GITHUB_SHA,
+    producerCommit: process.env.METIS_CANDIDATE_COMMIT
   })
+  if (scenario === TLS_SCENARIO) {
+    if (existsSync(outDir)) throw new Error('TLS output must be a fresh directory.')
+    mkdirSync(outDir, { mode: 0o700 })
+    const childEnv = freshOnboardingChildEnv(process.env)
+    // Non-secret immutable runner context is validated by the companion and never inherited by Electron.
+    if (/^[0-9]{8}\.[0-9]{4}\.[0-9]+$/.test(process.env.ImageVersion ?? '')) {
+      childEnv.METIS_TLS_IMAGE_VERSION = process.env.ImageVersion
+    }
+    const child = spawnSync(process.execPath, argv, {
+      stdio: 'ignore',
+      timeout: 240_000,
+      killSignal: 'SIGKILL',
+      env: childEnv
+    })
+    let reportData = null
+    let reportWritten = false
+    try {
+      const path = join(outDir, TLS_REPORT)
+      const stat = lstatSync(path)
+      reportWritten = stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1 && stat.size <= 65_536
+      if (reportWritten) reportData = JSON.parse(readFileSync(path, 'utf8'))
+    } catch {
+      /* Only the fixed lane failure below is public. */
+    }
+    const lane = hostedTlsLane({
+      platform,
+      env: process.env,
+      provenance,
+      candidateRun,
+      sha256,
+      exitCode: child.status,
+      reportWritten,
+      reportData
+    })
+    writeFileSync(join(outDir, 'lane.json'), `${JSON.stringify(lane, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
+    if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, 'tls_lane_written=true\n')
+    console.log(`hosted-startup-tls: ${lane.outcome} (${lane.detail})`)
+    return lane.outcome === 'PASS' ? 0 : 1
+  }
   mkdirSync(outDir, { recursive: true })
   if (scenario === FRESH_ONBOARDING_SCENARIO) {
     // No raw child stream/error reaches public logs or the support-only lane record.
@@ -1300,11 +1515,23 @@ function main(argv) {
       const problems = scanUploadDir(dir, {
         account: required(values, 'account'),
         scenario: values.scenario,
-        freshContext
+        freshContext,
+        tlsContext:
+          values.scenario === TLS_SCENARIO
+            ? hostedTlsScanContext({
+                platform: required(values, 'platform'),
+                provenance: JSON.parse(readFileSync(required(values, 'provenance'), 'utf8')),
+                candidateRun: required(values, 'candidate-run'),
+                sha256: required(values, 'sha256'),
+                env: process.env,
+                laneWritten: values['tls-lane-written'] === 'true'
+              })
+            : undefined
       })
       for (const problem of problems) {
-        const action =
-          values.scenario === FRESH_ONBOARDING_SCENARIO ? 'upload withheld' : 'file removed from the upload'
+        const action = [FRESH_ONBOARDING_SCENARIO, TLS_SCENARIO].includes(values.scenario)
+          ? 'upload withheld'
+          : 'file removed from the upload'
         console.log(`::error title=Content-free gate::${problem} (${action})`)
       }
       return problems.length ? 1 : 0
@@ -1320,8 +1547,13 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   } catch (error) {
     const scenarioIndex = process.argv.indexOf('--scenario')
     const fresh = scenarioIndex >= 0 && process.argv[scenarioIndex + 1] === FRESH_ONBOARDING_SCENARIO
+    const tls = scenarioIndex >= 0 && process.argv[scenarioIndex + 1] === TLS_SCENARIO
     console.error(
-      fresh ? '::error::fresh-onboarding-baseline: lane-failed' : `::error::${error.message.replaceAll('\n', '%0A')}`
+      tls
+        ? '::error::hosted-startup-tls: lane-failed'
+        : fresh
+          ? '::error::fresh-onboarding-baseline: lane-failed'
+          : `::error::${error.message.replaceAll('\n', '%0A')}`
     )
     process.exitCode = 1
   }
