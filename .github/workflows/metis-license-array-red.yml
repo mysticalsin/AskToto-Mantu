@@ -71,11 +71,13 @@ jobs:
             echo 'license-red:FIXTURE_SCOPE_MISMATCH'
             exit 1
           fi
+          for tree in src operator; do
+            if [ "$(git -C base rev-parse "HEAD:$tree")" != "$(git -C fixture rev-parse "HEAD^:$tree")" ]; then
+              echo 'license-red:CONTRACT_STALE'
+              exit 1
+            fi
+          done
           for path in \
-            src/shared/operator-entitlements.ts \
-            operator/src/tiers.ts \
-            operator/src/index.ts \
-            operator/src/store.ts \
             package.json \
             package-lock.json \
             vitest.config.ts \
