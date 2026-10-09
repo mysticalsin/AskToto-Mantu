@@ -132,7 +132,8 @@ const REASONS = [
     why: 'Runs the real Linux system unzip against owned synthetic ZIPs only on hosted GitHub CI. The metadata and report-validation cases in the same file run cross-platform.'
   },
   {
-    match: 'qa/candidate-report-readback.test.ts :: rejects a swapped producer or CI identity inside otherwise valid members',
+    match:
+      'qa/candidate-report-readback.test.ts :: rejects a swapped producer or CI identity inside otherwise valid members',
     exact: true,
     why: 'Runs the real Linux system unzip against owned synthetic ZIPs only on hosted GitHub CI. The metadata and report-validation cases in the same file run cross-platform.'
   }
