@@ -21,7 +21,7 @@ const build = read('.github', 'workflows', 'build.yml')
 const gated: Array<[string, string, string]> = [
   ['isolation-canary', canary, 'metiskit-swift-test'],
   ['isolation-canary', canary, 'owner-sandbox-profile'],
-  ['build', build, 'native'],
+  ['build', build, 'native']
 ]
 
 const dirs: string[] = []
@@ -55,7 +55,7 @@ function decide(dir: string, event: string, ref: string): string {
   writeFileSync(out, '')
   execFileSync('bash', [script], {
     cwd: dir,
-    env: { ...process.env, GITHUB_EVENT_NAME: event, GITHUB_REF: ref, GITHUB_OUTPUT: out },
+    env: { ...process.env, GITHUB_EVENT_NAME: event, GITHUB_REF: ref, GITHUB_OUTPUT: out }
   })
   return readFileSync(out, 'utf8').trim()
 }
@@ -71,10 +71,13 @@ describe('M2-0525 native surface gate', () => {
     'native-app/MetisKit/Package.swift',
     'scripts/hermetic/owner-account.sb',
     'scripts/hermetic/run-swift-tests.sh',
+    'scripts/build-native-mac.mjs',
+    'scripts/verify-native-mac-package.mjs',
+    'package.json',
     'AGENTS.md',
     '.github/workflows/isolation-canary.yml',
     '.github/workflows/build.yml',
-    'scripts/ci/native-changes.sh',
+    'scripts/ci/native-changes.sh'
   ])('runs a ticket-branch push that touches %s', (file) => {
     const dir = repoWithChange([file])
     expect(decide(dir, 'push', 'refs/heads/m2/M2-0525-x')).toBe('native=true')
@@ -86,7 +89,7 @@ describe('M2-0525 native surface gate', () => {
     ['push', 'refs/heads/master'],
     ['push', 'refs/heads/release/1.9.x'],
     ['workflow_dispatch', 'refs/heads/m2/M2-0525-x'],
-    ['pull_request', 'refs/pull/1/merge'],
+    ['pull_request', 'refs/pull/1/merge']
   ])('is always full for %s on %s, even with no native change', (event, ref) => {
     const dir = repoWithChange(['src/renderer/app.css'])
     expect(decide(dir, event, ref)).toBe('native=true')
@@ -106,7 +109,7 @@ describe('M2-0525 native surface gate', () => {
 
   it.each([
     ['isolation-canary', canary],
-    ['build', build],
+    ['build', build]
   ])('%s computes the output in an ubuntu job with a full checkout and no new third-party action', (_n, workflow) => {
     const block = job(workflow, 'changes')
     expect(block).toContain('runs-on: ubuntu-latest')
@@ -145,7 +148,7 @@ describe('M2-0525 native surface gate', () => {
     // Every other job in both workflows keeps no dependency on the gate.
     for (const [workflow, names] of [
       [canary, ['license-server', 'deny-non-loopback', 'honeypot-check-fails-closed']],
-      [build, ['quality', 'lint', 'license-server', 'operator', 'security']],
+      [build, ['quality', 'lint', 'license-server', 'operator', 'security']]
     ] as const) {
       for (const name of names) expect(job(workflow, name)).not.toContain('needs.changes')
     }

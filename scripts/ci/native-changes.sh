@@ -16,6 +16,9 @@ NATIVE_SURFACE=(
   native/
   native-app/
   scripts/hermetic/
+  scripts/build-native-mac.mjs
+  scripts/verify-native-mac-package.mjs
+  package.json
   AGENTS.md
   .github/workflows/isolation-canary.yml
   .github/workflows/build.yml
