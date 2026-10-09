@@ -132,7 +132,7 @@ describe.skipIf(process.platform === 'win32')('Promote candidate job eligibility
   }))
   type Job = (typeof completeJobs)[number]
 
-  function runCandidateGuard(jobs: Job[], totalCount = jobs.length): number | null {
+  function runCandidateGuard(jobs: Job[], totalCount = jobs.length) {
     const run = step('Require a fully successful').split('        run: |\n')[1]
     expect(run, 'candidate guard shell body').toBeDefined()
     const script = run!.replace(/^          /gm, '')
@@ -140,7 +140,16 @@ describe.skipIf(process.platform === 'win32')('Promote candidate job eligibility
     try {
       writeFileSync(
         join(dir, 'gh'),
-        '#!/bin/sh\ncase "$2" in\n  */jobs*) printf %s "$METIS_TEST_JOBS_JSON" ;;\n  *) printf %s "$METIS_TEST_RUN_JSON" ;;\nesac\n',
+        [
+          '#!/bin/sh',
+          '[ "$#" -eq 2 ] && [ "$1" = "api" ] || exit 97',
+          'case "$2" in',
+          '  "repos/mysticalsin/AskToto-Mantu/actions/runs/12345") printf %s "$METIS_TEST_RUN_JSON" ;;',
+          '  "repos/mysticalsin/AskToto-Mantu/actions/runs/12345/jobs?filter=latest&per_page=100") printf %s "$METIS_TEST_JOBS_JSON" ;;',
+          '  *) exit 98 ;;',
+          'esac',
+          ''
+        ].join('\n'),
         { mode: 0o700 }
       )
       const output = join(dir, 'output')
@@ -149,8 +158,10 @@ describe.skipIf(process.platform === 'win32')('Promote candidate job eligibility
         encoding: 'utf8',
         timeout: 5000,
         env: {
-          ...process.env,
-          PATH: `${dir}:${process.env.PATH ?? ''}`,
+          PATH: `${dir}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`,
+          HOME: dir,
+          TMPDIR: dir,
+          LANG: 'C',
           GH_TOKEN: 'synthetic',
           GITHUB_REPOSITORY: 'mysticalsin/AskToto-Mantu',
           GITHUB_OUTPUT: output,
@@ -167,39 +178,50 @@ describe.skipIf(process.platform === 'win32')('Promote candidate job eligibility
         }
       })
       expect(result.error).toBeUndefined()
-      return result.status
+      return result
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
   }
 
+  function expectRejected(jobs: Job[], totalCount = jobs.length): void {
+    const result = runCandidateGuard(jobs, totalCount)
+    expect(result.status).toBe(1)
+    expect(result.signal).toBeNull()
+    expect(result.stderr).toMatch(/::error::.*(?:job|gate)/i)
+    expect(result.stderr).toContain('12345')
+  }
+
   it('accepts a successful candidate with only the two named owner-Mac rows held', () => {
-    expect(runCandidateGuard(completeJobs)).toBe(0)
+    const result = runCandidateGuard(completeJobs)
+    expect(result.status).toBe(0)
+    expect(result.signal).toBeNull()
+    expect(result.stderr).not.toContain('::error::')
   })
 
   it('rejects a skipped required row even when the overall run says success', () => {
     const jobs = completeJobs.map((job) =>
       job.name === 'Record provenance' ? { ...job, conclusion: 'skipped' } : job
     )
-    expect(runCandidateGuard(jobs)).not.toBe(0)
+    expectRejected(jobs)
   })
 
   it('rejects a failed required row, an unknown skipped row, and a missing required row', () => {
     const failed = completeJobs.map((job) =>
       job.name === 'Build win' ? { ...job, conclusion: 'failure' } : job
     )
-    expect(runCandidateGuard(failed)).not.toBe(0)
+    expectRejected(failed)
     const unknownSkip = [...completeJobs, { name: 'Unapproved skipped gate', conclusion: 'skipped' }]
-    expect(runCandidateGuard(unknownSkip)).not.toBe(0)
-    expect(runCandidateGuard(completeJobs.filter((job) => job.name !== 'Record provenance'))).not.toBe(0)
+    expectRejected(unknownSkip)
+    expectRejected(completeJobs.filter((job) => job.name !== 'Record provenance'))
   })
 
   it('rejects a missing held row, a duplicate required row, and a truncated job response', () => {
-    expect(runCandidateGuard(completeJobs.filter((job) => job.name !== 'ST-1 control (no fixtures)'))).not.toBe(0)
+    expectRejected(completeJobs.filter((job) => job.name !== 'ST-1 control (no fixtures)'))
     const duplicate = completeJobs.map((job) =>
       job.name === 'Record provenance' ? { ...job, name: 'Build win' } : job
     )
-    expect(runCandidateGuard(duplicate)).not.toBe(0)
-    expect(runCandidateGuard(completeJobs, completeJobs.length + 1)).not.toBe(0)
+    expectRejected(duplicate)
+    expectRejected(completeJobs, completeJobs.length + 1)
   })
 })
