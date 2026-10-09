@@ -819,7 +819,10 @@ describe('owned direct-launch endpoint handshakes', () => {
       })
       const observed = runInNewContext(expression, { process: { pid: 42, mainModule: { require: load } } })
       expect(observed, label).toEqual(expected)
-      expect(load.mock.calls.map(([name]) => name), label).toEqual(['node:path', 'electron'])
+      expect(
+        load.mock.calls.map(([name]) => name),
+        label
+      ).toEqual(['node:path', 'electron'])
       expect(reads, label).toEqual(
         label === 'ready' ? ['BrowserWindow', 'screen', 'userData', 'home', 'appData', 'temp', 'version'] : []
       )
