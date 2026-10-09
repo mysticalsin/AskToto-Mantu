@@ -1,10 +1,13 @@
 name: Windows CDP environment matrix (temporary)
-run-name: Windows CDP environment matrix (one pinned failed candidate)
+run-name: ${{ github.event_name == 'pull_request' && 'Windows CDP environment matrix (registration)' || 'Windows CDP environment matrix (one pinned failed candidate)' }}
 
 # Diagnostic source only. Remove within 48 hours of first hosted observation; dispatch expires on
 # 2026-10-11T20:00:00Z. Never a replacement for the failed 15-second onboarding acceptance.
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/windows-cdp-env-matrix.yml
 
 permissions:
   contents: read
@@ -20,6 +23,7 @@ defaults:
 
 jobs:
   guard:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
