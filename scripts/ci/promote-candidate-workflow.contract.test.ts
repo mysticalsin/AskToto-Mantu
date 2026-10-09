@@ -30,7 +30,7 @@ describe('M2-0503 promote-candidate residuals input', () => {
     const guard = workflow.indexOf('[ "$PUBLISH" = true ] && [ -z "${RESIDUALS//[[:space:]]/}" ]')
     expect(guard).toBeGreaterThan(-1)
     expect(guard).toBeLessThan(workflow.indexOf('actions/download-artifact'))
-    expect(guard).toBeLessThan(workflow.indexOf('gh release create'))
+    expect(guard).toBeLessThan(workflow.indexOf('node scripts/qa/publish-dual-release.mjs'))
   })
 
   it('passes residuals to prepare-release through env and a file, never interpolated into a shell line', () => {
@@ -60,6 +60,7 @@ describe('Promote candidate workflow: main and release/1.9.x candidates (M2-0500
     expect(jq).toContain('.status == "completed" and .conclusion == "success"')
     expect(jq.match(/head_branch/g)).toHaveLength(2)
     expect(step('Require a fully successful')).toContain('all(.jobs[]; .conclusion == "success")')
+    expect(step('Require a fully successful')).toContain('.total_count == (.jobs | length)')
   })
 
   it('checks the branch and version with release-line.mjs before it downloads any artifact', () => {
@@ -73,14 +74,32 @@ describe('Promote candidate workflow: main and release/1.9.x candidates (M2-0500
 
   it('passes the candidate branch to prepare-release and keeps confirm_version exact, never rebuilding', () => {
     expect(step('prepare-release')).toContain('--candidate-branch "$CANDIDATE_BRANCH"')
-    expect(step('Choose the release tag')).toContain('[ "$CONFIRM" = "$VERSION" ]')
-    expect(step('Choose the release tag')).toContain('echo "tag=v$VERSION"')
+    expect(step('Confirm the candidate version')).toContain('[ "$CONFIRM" = "$VERSION" ]')
+    expect(steps.indexOf(step('Confirm the candidate version'))).toBeLessThan(
+      steps.indexOf(step('node scripts/qa/publish-dual-release.mjs'))
+    )
     expect(workflow).not.toMatch(/npm (?:ci|run)|electron-builder /)
   })
 
-  it('still publishes a prerelease that is never Latest, with no latest*.yml or blockmap', () => {
-    expect(step('gh release create')).toContain('--draft --prerelease --latest=false')
-    expect(step('Publish the prerelease')).toContain('-F prerelease=true -f make_latest=false')
-    expect(step('gh release create')).toContain('"$RUNNER_TEMP"/promotion/upload/*')
+  it('delegates publication and cleanup to the tested dual-repository state machine after staging', () => {
+    const publish = step('node scripts/qa/publish-dual-release.mjs')
+    expect(steps.indexOf(publish)).toBeGreaterThan(steps.indexOf(step('prepare-release')))
+    expect(publish).toContain('GH_TOKEN: ${{ secrets.GH_TOKEN }}')
+    expect(publish).toContain('VERSION: ${{ steps.stage.outputs.version }}')
+    expect(publish).toContain('CANDIDATE_COMMIT: ${{ steps.candidate.outputs.commit }}')
+    expect(publish).toContain('CANDIDATE_RUN: ${{ inputs.candidate_run_id }}')
+    expect(publish).toContain('PUBLISH: ${{ inputs.publish }}')
+    expect(publish).toContain('PROMOTION_DIRECTORY: ${{ runner.temp }}/promotion')
+    expect(workflow.match(/node scripts\/qa\/publish-dual-release\.mjs/g)).toHaveLength(1)
+    expect(workflow).not.toMatch(/gh release (?:create|view)|gh api -X (?:PATCH|DELETE)|promotion\/upload\/\*/)
+  })
+
+  it('retains only the closed receipt, even on failure, without adding a publication cleanup step', () => {
+    const receipt = step('Retain the closed promotion receipt')
+    expect(receipt).toContain('if: always()')
+    expect(receipt).toContain('path: ${{ runner.temp }}/promotion-receipt.json')
+    expect(receipt).toContain('retention-days: 7')
+    expect(receipt).not.toContain('GH_TOKEN')
+    expect(steps.indexOf(receipt)).toBeGreaterThan(steps.indexOf(step('node scripts/qa/publish-dual-release.mjs')))
   })
 })
