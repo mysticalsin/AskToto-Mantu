@@ -37,30 +37,53 @@ const FINAL_MS = 45_000
 const MAX_OUTPUT_BYTES = 4_096
 const SNAPSHOT_KEYS = ['process', 'window_post_deadline', 'audit', 'protocol_shape', 'host_loop_lag']
 const VARIANT_KEYS = [
-  'environment', 'cdp_15s', 'cdp_45s', 'inspector_15s', 'inspector_45s',
-  'at_15s', 'at_45s', 'teardown', 'transport_release'
+  'environment',
+  'cdp_15s',
+  'cdp_45s',
+  'inspector_15s',
+  'inspector_45s',
+  'at_15s',
+  'at_45s',
+  'teardown',
+  'transport_release'
 ]
 const REPORT_KEYS = ['schema', 'diagnostic_only', 'original_acceptance', 'identity', 'variants']
 const IDENTITY_KEYS = ['candidate_run', 'installer_sha256', 'producer_commit', 'harness_commit', 'version']
 const CDP = new Set([
-  'OWNED', 'DEADLINE', 'ATTACH_FAILED', 'TRANSPORT_TIMEOUT',
-  'PROCESS_INFO_INVALID', 'PID_MISMATCH', 'PROCESS_EXITED'
+  'OWNED',
+  'DEADLINE',
+  'ATTACH_FAILED',
+  'TRANSPORT_TIMEOUT',
+  'PROCESS_INFO_INVALID',
+  'PID_MISMATCH',
+  'PROCESS_EXITED'
 ])
 const INSPECTOR = new Set([
-  'OWNED_MATCH', 'OWNED_PROFILE_MISMATCH', 'OWNED_VERSION_MISMATCH',
-  'OWNED_BOTH_MISMATCH', 'UNAVAILABLE', 'TRANSPORT_UNCERTAIN', 'PROCESS_EXITED'
+  'OWNED_MATCH',
+  'OWNED_PROFILE_MISMATCH',
+  'OWNED_VERSION_MISMATCH',
+  'OWNED_BOTH_MISMATCH',
+  'UNAVAILABLE',
+  'TRANSPORT_UNCERTAIN',
+  'PROCESS_EXITED'
 ])
 const PROCESS = new Set(['RUNNING', 'EXITED'])
 const WINDOW_QUERY_RESULT = new Set(['NORMAL_TITLE', 'ERROR_TITLE', 'OTHER_TITLE', 'NO_MAIN_WINDOW', 'QUERY_FAILED'])
 const WINDOW = new Set([
-  'POST_DEADLINE_NORMAL_TITLE', 'POST_DEADLINE_ERROR_TITLE', 'POST_DEADLINE_OTHER_TITLE',
-  'POST_DEADLINE_NO_MAIN_WINDOW', 'POST_DEADLINE_QUERY_FAILED',
-  'EXITED_BEFORE_QUERY', 'EXITED_DURING_QUERY'
+  'POST_DEADLINE_NORMAL_TITLE',
+  'POST_DEADLINE_ERROR_TITLE',
+  'POST_DEADLINE_OTHER_TITLE',
+  'POST_DEADLINE_NO_MAIN_WINDOW',
+  'POST_DEADLINE_QUERY_FAILED',
+  'EXITED_BEFORE_QUERY',
+  'EXITED_DURING_QUERY'
 ])
 const AUDIT = new Set(['READY', 'NOT_OBSERVED', 'INVALID'])
 const ENDPOINT = new Set([
-  'BOTH_PROTOCOL_SHAPES_OBSERVED', 'CDP_PROTOCOL_SHAPE_OBSERVED',
-  'INSPECTOR_PROTOCOL_SHAPE_OBSERVED', 'NOT_OBSERVED'
+  'BOTH_PROTOCOL_SHAPES_OBSERVED',
+  'CDP_PROTOCOL_SHAPE_OBSERVED',
+  'INSPECTOR_PROTOCOL_SHAPE_OBSERVED',
+  'NOT_OBSERVED'
 ])
 const LAG = new Set(['LT_250_MS', '250_TO_999_MS', 'GE_1000_MS', 'UNKNOWN'])
 const TEARDOWN = new Set(['ACKNOWLEDGED', 'UNACKNOWLEDGED'])
@@ -115,11 +138,16 @@ export function classifyCdp(result, settledAt, deadline, processExited = false) 
   if (processExited) return 'PROCESS_EXITED'
   if (result?.browser && result.failure === null) return settledAt < deadline ? 'OWNED' : 'DEADLINE'
   switch (result?.failure) {
-    case 'cdp-endpoint-deadline': return 'DEADLINE'
-    case 'cdp-transport-timeout': return 'TRANSPORT_TIMEOUT'
-    case 'cdp-session-or-process-info-invalid': return 'PROCESS_INFO_INVALID'
-    case 'cdp-browser-pid-mismatch': return 'PID_MISMATCH'
-    default: return 'ATTACH_FAILED'
+    case 'cdp-endpoint-deadline':
+      return 'DEADLINE'
+    case 'cdp-transport-timeout':
+      return 'TRANSPORT_TIMEOUT'
+    case 'cdp-session-or-process-info-invalid':
+      return 'PROCESS_INFO_INVALID'
+    case 'cdp-browser-pid-mismatch':
+      return 'PID_MISMATCH'
+    default:
+      return 'ATTACH_FAILED'
   }
 }
 
@@ -137,7 +165,8 @@ export function classifyInspector(result, settledAt, deadline, processExited = f
     observation.profileMask > 15 ||
     observation.profileMatches !== (observation.profileMask === 0) ||
     typeof observation.versionMatches !== 'boolean'
-  ) return 'UNAVAILABLE'
+  )
+    return 'UNAVAILABLE'
   if (!observation.profileMatches && !observation.versionMatches) return 'OWNED_BOTH_MISMATCH'
   if (!observation.profileMatches) return 'OWNED_PROFILE_MISMATCH'
   if (!observation.versionMatches) return 'OWNED_VERSION_MISMATCH'
@@ -184,32 +213,54 @@ export function reportProblems(report) {
     report.schema !== SCHEMA ||
     report.diagnostic_only !== true ||
     report.original_acceptance !== 'FAIL_CDP_DEADLINE_8_NOT_RUN'
-  ) problems.push('REPORT_IDENTITY')
-  if (!exact(report.identity, IDENTITY_KEYS) ||
-      report.identity.candidate_run !== PIN.candidateRun ||
-      report.identity.installer_sha256 !== PIN.installerSha256 ||
-      report.identity.producer_commit !== PIN.producerCommit ||
-      report.identity.version !== PIN.version ||
-      !HASH40.test(report.identity.harness_commit)) problems.push('CANDIDATE_IDENTITY')
-  if (!Array.isArray(report.variants) || report.variants.length !== 2 ||
-      report.variants[0]?.environment !== 'STRICT' || report.variants[1]?.environment !== 'OS_SUPERSET') {
+  )
+    problems.push('REPORT_IDENTITY')
+  if (
+    !exact(report.identity, IDENTITY_KEYS) ||
+    report.identity.candidate_run !== PIN.candidateRun ||
+    report.identity.installer_sha256 !== PIN.installerSha256 ||
+    report.identity.producer_commit !== PIN.producerCommit ||
+    report.identity.version !== PIN.version ||
+    !HASH40.test(report.identity.harness_commit)
+  )
+    problems.push('CANDIDATE_IDENTITY')
+  if (
+    !Array.isArray(report.variants) ||
+    report.variants.length !== 2 ||
+    report.variants[0]?.environment !== 'STRICT' ||
+    report.variants[1]?.environment !== 'OS_SUPERSET'
+  ) {
     problems.push('VARIANT_ORDER')
   }
   for (const variant of Array.isArray(report.variants) ? report.variants : []) {
-    if (!exact(variant, VARIANT_KEYS)) { problems.push('VARIANT_SHAPE'); continue }
+    if (!exact(variant, VARIANT_KEYS)) {
+      problems.push('VARIANT_SHAPE')
+      continue
+    }
     if (
       ![variant.cdp_15s, variant.cdp_45s].every((value) => CDP.has(value)) ||
       ![variant.inspector_15s, variant.inspector_45s].every((value) => INSPECTOR.has(value))
-    ) problems.push('ATTACH_STATUS')
+    )
+      problems.push('ATTACH_STATUS')
     if (
       !TEARDOWN.has(variant.teardown) ||
       !RELEASE.has(variant.transport_release) ||
       (variant.teardown !== 'ACKNOWLEDGED' && variant.transport_release === 'RELEASED')
-    ) problems.push('RELEASE_ORDER')
+    )
+      problems.push('RELEASE_ORDER')
     for (const snap of [variant.at_15s, variant.at_45s]) {
-      if (!exact(snap, SNAPSHOT_KEYS)) { problems.push('SNAPSHOT_SHAPE'); continue }
-      if (!PROCESS.has(snap.process) || !WINDOW.has(snap.window_post_deadline) || !AUDIT.has(snap.audit) ||
-          !ENDPOINT.has(snap.protocol_shape) || !LAG.has(snap.host_loop_lag)) problems.push('SNAPSHOT_STATUS')
+      if (!exact(snap, SNAPSHOT_KEYS)) {
+        problems.push('SNAPSHOT_SHAPE')
+        continue
+      }
+      if (
+        !PROCESS.has(snap.process) ||
+        !WINDOW.has(snap.window_post_deadline) ||
+        !AUDIT.has(snap.audit) ||
+        !ENDPOINT.has(snap.protocol_shape) ||
+        !LAG.has(snap.host_loop_lag)
+      )
+        problems.push('SNAPSHOT_STATUS')
     }
   }
   return problems
@@ -249,7 +300,9 @@ function lagMonitor() {
       if (delay >= 1_000) return 'GE_1000_MS'
       return delay >= 250 ? '250_TO_999_MS' : 'LT_250_MS'
     },
-    close() { clearInterval(timer) }
+    close() {
+      clearInterval(timer)
+    }
   }
 }
 
@@ -293,7 +346,11 @@ async function waitUntil(deadline) {
 }
 
 function auditStatus(audit) {
-  try { return audit.read() ? 'READY' : 'NOT_OBSERVED' } catch { return 'INVALID' }
+  try {
+    return audit.read() ? 'READY' : 'NOT_OBSERVED'
+  } catch {
+    return 'INVALID'
+  }
 }
 
 function retain(state, result) {
@@ -316,9 +373,10 @@ async function runVariant(target, provenance, environment) {
   let result = null
   let failure = false
   try {
-    const env = environment === 'STRICT'
-      ? strictLaunchEnvironment(process.env, paths, 'win32')
-      : osSupersetLaunchEnvironment(process.env, paths)
+    const env =
+      environment === 'STRICT'
+        ? strictLaunchEnvironment(process.env, paths, 'win32')
+        : osSupersetLaunchEnvironment(process.env, paths)
     const cdpPort = await boundedCall(() => freeLoopbackPort(), FIRST_MS, 'port-budget')
     const inspectPort = await boundedCall(() => freeLoopbackPort(), FIRST_MS, 'port-budget')
     if (cdpPort === inspectPort) throw new Error('port-collision')
@@ -359,13 +417,25 @@ async function runVariant(target, provenance, environment) {
         host_loop_lag: lagStatus
       }
     })
-    const firstCdp = captureSettledAttachment(attachOwnedCdp({
-      endpoint: launch.cdpEndpoint, childPid: pid, timeoutMs: FIRST_MS, deadlineMs: firstDeadline
-    }), () => childExited(launch))
-    const firstInspector = captureSettledAttachment(attachOwnedMainInspector({
-      inspectPort, childPid: pid, expectedPaths: paths,
-      expectedVersion: provenance.version, timeoutMs: FIRST_MS
-    }), () => childExited(launch))
+    const firstCdp = captureSettledAttachment(
+      attachOwnedCdp({
+        endpoint: launch.cdpEndpoint,
+        childPid: pid,
+        timeoutMs: FIRST_MS,
+        deadlineMs: firstDeadline
+      }),
+      () => childExited(launch)
+    )
+    const firstInspector = captureSettledAttachment(
+      attachOwnedMainInspector({
+        inspectPort,
+        childPid: pid,
+        expectedPaths: paths,
+        expectedVersion: provenance.version,
+        timeoutMs: FIRST_MS
+      }),
+      () => childExited(launch)
+    )
     const [cdp15, inspector15] = await Promise.all([firstCdp, firstInspector])
     retain(state, cdp15.value)
     retain(state, inspector15.value)
@@ -375,21 +445,36 @@ async function runVariant(target, provenance, environment) {
     if (remaining > 0 && !childExited(launch)) {
       const tasks = []
       if (!state.browser && !cdp15.value?.transportUncertain) {
-        tasks.push(captureSettledAttachment(attachOwnedCdp({
-          endpoint: launch.cdpEndpoint, childPid: pid, timeoutMs: remaining, deadlineMs: finalDeadline
-        }), () => childExited(launch)).then((receipt) => {
-          lateCdp = receipt
-          retain(state, receipt.value)
-        }))
+        tasks.push(
+          captureSettledAttachment(
+            attachOwnedCdp({
+              endpoint: launch.cdpEndpoint,
+              childPid: pid,
+              timeoutMs: remaining,
+              deadlineMs: finalDeadline
+            }),
+            () => childExited(launch)
+          ).then((receipt) => {
+            lateCdp = receipt
+            retain(state, receipt.value)
+          })
+        )
       }
       if (!state.inspector && !inspector15.value?.transportUncertain) {
-        tasks.push(captureSettledAttachment(attachOwnedMainInspector({
-          inspectPort, childPid: pid, expectedPaths: paths,
-          expectedVersion: provenance.version, timeoutMs: remaining
-        }), () => childExited(launch)).then((receipt) => {
-          lateInspector = receipt
-          retain(state, receipt.value)
-        }))
+        tasks.push(
+          captureSettledAttachment(
+            attachOwnedMainInspector({
+              inspectPort,
+              childPid: pid,
+              expectedPaths: paths,
+              expectedVersion: provenance.version,
+              timeoutMs: remaining
+            }),
+            () => childExited(launch)
+          ).then((receipt) => {
+            lateInspector = receipt
+            retain(state, receipt.value)
+          })
       }
       await Promise.all(tasks)
     }
@@ -443,16 +528,28 @@ async function runHosted(app, installer) {
   const runner = process.env.RUNNER_TEMP
   const expectedApp = join(runner ?? '', 'candidate-install', 'Metis.exe')
   const installerPath = resolve(installer)
-  if (process.platform !== 'win32' || !runner || !isAbsolute(runner) || !isAbsolute(app) ||
-      resolve(app) !== resolve(expectedApp) || dirname(installerPath) !== resolve('assets') ||
-      basename(installerPath) !== PIN.installerName) throw new Error('invalid-hosted-input')
+  if (
+    process.platform !== 'win32' ||
+    !runner ||
+    !isAbsolute(runner) ||
+    !isAbsolute(app) ||
+    resolve(app) !== resolve(expectedApp) ||
+    dirname(installerPath) !== resolve('assets') ||
+    basename(installerPath) !== PIN.installerName
+  )
+    throw new Error('invalid-hosted-input')
   const stat = lstatSync(installerPath)
   if (!stat.isFile() || stat.isSymbolicLink() || (await sha256File(installerPath)) !== PIN.installerSha256) {
     throw new Error('installer-rejected')
   }
   const provenance = JSON.parse(readFileSync(join('provenance', 'provenance.json'), 'utf8'))
-  if (provenance?.run?.id !== PIN.candidateRun || provenance.commit !== PIN.producerCommit ||
-      provenance.version !== PIN.version || !Array.isArray(provenance.builds)) throw new Error('provenance-rejected')
+  if (
+    provenance?.run?.id !== PIN.candidateRun ||
+    provenance.commit !== PIN.producerCommit ||
+    provenance.version !== PIN.version ||
+    !Array.isArray(provenance.builds)
+  )
+    throw new Error('provenance-rejected')
   const assets = provenance.builds
     .filter((item) => item?.variant === 'win' && Array.isArray(item.assets))
     .flatMap((item) => item.assets)

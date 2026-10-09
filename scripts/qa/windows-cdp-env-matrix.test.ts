@@ -105,7 +105,11 @@ describe('hosted Windows CDP environment matrix', () => {
   it('preserves an owned on-time attach when the process exits while a peer attach is still pending', async () => {
     let exited = false
     const owned = { browser: { close() {} }, failure: null }
-    const settled = await captureSettledAttachment(Promise.resolve(owned), () => exited, () => 14_999)
+    const settled = await captureSettledAttachment(
+      Promise.resolve(owned),
+      () => exited,
+      () => 14_999
+    )
     exited = true
     expect(settled.exitedAtSettle).toBe(false)
     expect(classifyCdp(settled.value, settled.settledAt, 15_000, settled.exitedAtSettle)).toBe('OWNED')
@@ -128,16 +132,30 @@ describe('hosted Windows CDP environment matrix', () => {
     }
     expect(cdpByDeadline(cdp, null, 'EXITED', 45_000)).toBe('OWNED')
     expect(inspectorByDeadline(inspector, null, 'EXITED', 45_000)).toBe('OWNED_MATCH')
-    expect(cdpByDeadline({
-      value: { browser: null, failure: 'cdp-endpoint-deadline' },
-      settledAt: 15_000,
-      exitedAtSettle: false
-    }, null, 'EXITED', 45_000)).toBe('PROCESS_EXITED')
-    expect(inspectorByDeadline({
-      value: { inspector: null, observation: null },
-      settledAt: 15_000,
-      exitedAtSettle: false
-    }, null, 'EXITED', 45_000)).toBe('PROCESS_EXITED')
+    expect(
+      cdpByDeadline(
+        {
+          value: { browser: null, failure: 'cdp-endpoint-deadline' },
+          settledAt: 15_000,
+          exitedAtSettle: false
+        },
+        null,
+        'EXITED',
+        45_000
+      )
+    ).toBe('PROCESS_EXITED')
+    expect(
+      inspectorByDeadline(
+        {
+          value: { inspector: null, observation: null },
+          settledAt: 15_000,
+          exitedAtSettle: false
+        },
+        null,
+        'EXITED',
+        45_000
+      )
+    ).toBe('PROCESS_EXITED')
   })
 
   it('does not rewrite a running-at-45 snapshot when a late attach settles after exit', () => {
@@ -167,8 +185,7 @@ describe('hosted Windows CDP environment matrix', () => {
     expect(cdpByDeadline(firstCdp, lateCdp, 'RUNNING', 45_000)).toBe('DEADLINE')
     expect(inspectorByDeadline(firstInspector, lateInspector, 'RUNNING', 45_000)).toBe('UNAVAILABLE')
     expect(cdpByDeadline({ ...lateCdp, settledAt: 15_001 }, null, 'RUNNING', 15_000)).toBe('DEADLINE')
-    expect(inspectorByDeadline({ ...lateInspector, settledAt: 15_001 }, null, 'RUNNING', 15_000))
-      .toBe('UNAVAILABLE')
+    expect(inspectorByDeadline({ ...lateInspector, settledAt: 15_001 }, null, 'RUNNING', 15_000)).toBe('UNAVAILABLE')
   })
 
   it('labels window queries as post-deadline and never queries an already exited or recycled PID', async () => {
@@ -177,17 +194,22 @@ describe('hosted Windows CDP environment matrix', () => {
       latches: { spawnError: false, exited: false }
     }
     let calls = 0
-    const query = async () => { calls += 1; return 'NORMAL_TITLE' }
+    const query = async () => {
+      calls += 1
+      return 'NORMAL_TITLE'
+    }
     expect(await sampleWindowAfterDeadline(launch, query)).toBe('POST_DEADLINE_NORMAL_TITLE')
     expect(calls).toBe(1)
     launch.latches.exited = true
     expect(await sampleWindowAfterDeadline(launch, query)).toBe('EXITED_BEFORE_QUERY')
     expect(calls).toBe(1)
     launch.latches.exited = false
-    expect(await sampleWindowAfterDeadline(launch, async () => {
-      launch.latches.exited = true
-      return 'NORMAL_TITLE'
-    })).toBe('EXITED_DURING_QUERY')
+    expect(
+      await sampleWindowAfterDeadline(launch, async () => {
+        launch.latches.exited = true
+        return 'NORMAL_TITLE'
+      })
+    ).toBe('EXITED_DURING_QUERY')
   })
 
   it('requires an owned inspector observation and treats deadline or profile mismatch as diagnostic', () => {
@@ -197,13 +219,27 @@ describe('hosted Windows CDP environment matrix', () => {
     }
     expect(classifyInspector(attached, 14_999, 15_000)).toBe('OWNED_MATCH')
     expect(classifyInspector(attached, 15_000, 15_000)).toBe('UNAVAILABLE')
-    expect(classifyInspector({
-      ...attached,
-      observation: { ...attached.observation, profileMask: 1 }
-    }, 1, 15_000)).toBe('UNAVAILABLE')
-    expect(classifyInspector({
-      inspector: null, observation: null, transportUncertain: true
-    }, 1, 15_000)).toBe('TRANSPORT_UNCERTAIN')
+    expect(
+      classifyInspector(
+        {
+          ...attached,
+          observation: { ...attached.observation, profileMask: 1 }
+        },
+        1,
+        15_000
+      )
+    ).toBe('UNAVAILABLE')
+    expect(
+      classifyInspector(
+        {
+          inspector: null,
+          observation: null,
+          transportUncertain: true
+        },
+        1,
+        15_000
+      )
+    ).toBe('TRANSPORT_UNCERTAIN')
   })
 
   it('accepts only the pinned fixed-enum diagnostic report and never a 2.0 acceptance claim', () => {
@@ -211,18 +247,30 @@ describe('hosted Windows CDP environment matrix', () => {
     expect(reportProblems(valid)).toEqual([])
     expect(reportProblems({ ...valid, original_acceptance: 'PASS' })).not.toEqual([])
     expect(reportProblems({ ...valid, variants: [...valid.variants, variant('STRICT')] })).not.toEqual([])
-    expect(reportProblems({
-      ...valid,
-      variants: [variant('STRICT'), { ...variant('OS_SUPERSET'), raw_window_title: 'private' }]
-    })).not.toEqual([])
-    expect(reportProblems({
-      ...valid,
-      variants: [variant('STRICT'), {
-        ...variant('OS_SUPERSET'), transport_release: 'RELEASED', teardown: 'UNACKNOWLEDGED'
-      }]
-    })).not.toEqual([])
-    expect(reportProblems({
-      ...valid, identity: { ...valid.identity, installer_sha256: '0'.repeat(64) }
-    })).not.toEqual([])
+    expect(
+      reportProblems({
+        ...valid,
+        variants: [variant('STRICT'), { ...variant('OS_SUPERSET'), raw_window_title: 'private' }]
+      })
+    ).not.toEqual([])
+    expect(
+      reportProblems({
+        ...valid,
+        variants: [
+          variant('STRICT'),
+          {
+            ...variant('OS_SUPERSET'),
+            transport_release: 'RELEASED',
+            teardown: 'UNACKNOWLEDGED'
+          }
+        ]
+      })
+    ).not.toEqual([])
+    expect(
+      reportProblems({
+        ...valid,
+        identity: { ...valid.identity, installer_sha256: '0'.repeat(64) }
+      })
+    ).not.toEqual([])
   })
 })
