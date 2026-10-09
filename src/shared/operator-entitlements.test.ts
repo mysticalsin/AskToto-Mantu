@@ -68,6 +68,33 @@ describe('parseOperatorIntegrationsVersion', () => {
 })
 
 describe('parseOperatorHeartbeatEntitlements', () => {
+  it('grants only known names from the Worker heartbeat entitlement list', () => {
+    const parsed = parseOperatorHeartbeatEntitlements({
+      ok: true,
+      approved: true,
+      tier: 'metis',
+      entitlements: ['ask', 'operator_keys', 'future_feature', '__proto__'],
+      integrationsVersion: 2
+    })
+    expect(parsed.entitlements).toEqual({ ...emptyOperatorEntitlements(), ask: true, operator_keys: true })
+    expect(parsed.integrationsVersion).toBe(2)
+  })
+  it('does not grant any feature from an unknown or malformed Worker entitlement list', () => {
+    const parsed = parseOperatorHeartbeatEntitlements({
+      tier: 'metis',
+      entitlements: ['future_feature', '__proto__', 1, { operator_keys: true }],
+      integrationsVersion: 0
+    })
+    expect(parsed.entitlements).toEqual(emptyOperatorEntitlements())
+  })
+  it('continues to honor legacy boolean-keyed heartbeat entitlement objects', () => {
+    const parsed = parseOperatorHeartbeatEntitlements({
+      tier: 'metis',
+      entitlements: { ask: true, operator_keys: true, listen: 'true' },
+      integrationsVersion: 1
+    })
+    expect(parsed.entitlements).toEqual({ ...emptyOperatorEntitlements(), ask: true, operator_keys: true })
+  })
   it('parses a well-formed heartbeat body', () => {
     const parsed = parseOperatorHeartbeatEntitlements({
       tier: 'metis-light',
