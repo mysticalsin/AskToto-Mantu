@@ -145,7 +145,7 @@ export function strictLaunchEnvironment(baseEnvironment, paths, platform = proce
   const userData = requiredEnvironmentPath(paths, 'userData')
   return {
     ...env,
-    ...(platform === 'darwin' ? { CFFIXED_USER_HOME: home } : {}),
+    ...(platform === 'darwin' ? { CFFIXED_USER_HOME: home, MAC_CHROMIUM_TMPDIR: temp } : {}),
     HOME: home,
     USERPROFILE: userProfile,
     APPDATA: appData,
