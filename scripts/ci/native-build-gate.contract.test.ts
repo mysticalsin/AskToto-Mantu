@@ -30,6 +30,14 @@ function appBuildStep(job: string): string {
   return lines.slice(start, end === -1 ? undefined : end).join('\n')
 }
 
+function targetBlock(name: string): string {
+  const targets = project.split(/^targets:\n/m)[1]?.split(/^\S/m)[0] ?? ''
+  const blocks = targets.split(/^(?= {2}\S)/m)
+  const matches = blocks.filter((block) => block.startsWith(`  ${name}:\n`))
+  expect(matches, `one ${name} target`).toHaveLength(1)
+  return matches[0]!
+}
+
 describe('native App build failure gate', () => {
   it('fails the workflow when the native App build fails', () => {
     const job = nativeJob()
@@ -52,6 +60,7 @@ describe('native App build failure gate', () => {
     expect(job).toMatch(/^ {4}runs-on: macos-latest$/m)
     expect(step).toMatch(/^ {8}working-directory: native-app$/m)
     expect(step).not.toMatch(/^ {8}(?:if|shell):/m)
+    expect(project).toContain('schemes:\n  Metis:\n    build:\n      targets:\n        Metis: all\n')
     expect(command).toBe(
       'xcodebuild -project Metis.xcodeproj -scheme Metis -configuration Debug ' +
         "-destination 'generic/platform=macOS' CODE_SIGNING_ALLOWED=NO build"
@@ -59,8 +68,58 @@ describe('native App build failure gate', () => {
   })
 
   it('keeps Swift 6 and complete strict concurrency enabled for the App target', () => {
-    expect(project.match(/^ {8}SWIFT_VERSION:.*$/gm)).toEqual(['        SWIFT_VERSION: "6.0"'])
-    expect(project.match(/^ {8}SWIFT_STRICT_CONCURRENCY:.*$/gm)).toEqual(['        SWIFT_STRICT_CONCURRENCY: complete'])
+    const app = targetBlock('Metis')
+    expect(app.match(/^ {8}SWIFT_VERSION:.*$/gm)).toEqual(['        SWIFT_VERSION: "6.0"'])
+    expect(app.match(/^ {8}SWIFT_STRICT_CONCURRENCY:.*$/gm)).toEqual(['        SWIFT_STRICT_CONCURRENCY: complete'])
+  })
+})
+
+describe('native hosted persistence tests', () => {
+  it('compiles the production store into a hostless strict Swift 6 test target', () => {
+    const target = targetBlock('MetisPersistenceTests')
+    expect(target).toContain('    type: bundle.unit-test\n    platform: macOS')
+    expect(target.match(/^ {6}- path: .*$/gm)).toEqual([
+      '      - path: App/Store/PersistedModels.swift',
+      '      - path: Tests/MeetingPersistenceTests.swift'
+    ])
+    expect(target).toContain('    dependencies:\n      - package: MetisKit\n')
+    expect(target.match(/^ {8}SWIFT_VERSION:.*$/gm)).toEqual(['        SWIFT_VERSION: "6.0"'])
+    expect(target.match(/^ {8}SWIFT_STRICT_CONCURRENCY:.*$/gm)).toEqual(['        SWIFT_STRICT_CONCURRENCY: complete'])
+    expect(target).not.toMatch(/TEST_HOST|BUNDLE_LOADER|target: Metis\b|MetisApp\.swift/)
+    expect(project).toContain('      targets:\n        - MetisPersistenceTests\n')
+  })
+
+  it('runs blocking XCTest under an owned hosted home before the unchanged app builds', () => {
+    const job = nativeJob()
+    const matches = job
+      .split(/^(?=      - )/m)
+      .filter((step) => step.startsWith('      - name: Test native meeting persistence\n'))
+    expect(matches).toHaveLength(1)
+    const step = matches[0]!
+    expect(step).toContain('working-directory: native-app')
+    expect(step).toContain('test "$CI" = true')
+    expect(step).toContain('test "$GITHUB_ACTIONS" = true')
+    expect(step).toContain('mktemp -d "$RUNNER_TEMP/metis-persistence-home-XXXXXX"')
+    expect(step).toContain('metis_test_root="$(cd "$metis_test_root" && pwd -P)"')
+    for (const key of ['HOME', 'CFFIXED_USER_HOME', 'METIS_TEST_HOME']) {
+      expect(step).toContain(`export ${key}="$metis_test_root"`)
+      expect(step).toContain(`export TEST_RUNNER_${key}="$metis_test_root"`)
+    }
+    expect(step).toContain('export TMPDIR="$metis_test_root/tmp"')
+    expect(step).toContain('export TEST_RUNNER_TMPDIR="$metis_test_root/tmp"')
+    for (const key of ['CI', 'GITHUB_ACTIONS', 'RUNNER_TEMP']) {
+      expect(step).toContain(`export TEST_RUNNER_${key}="$${key}"`)
+    }
+    const command = step.replace(/\s*\\\n\s*/g, ' ')
+    expect(command).toContain(
+      'xcodebuild test -project Metis.xcodeproj -scheme MetisPersistenceTests -configuration Debug ' +
+        "-destination 'platform=macOS' -derivedDataPath \"$metis_test_root/DerivedData\" " +
+        '-resultBundlePath "$metis_test_root/PersistenceTests.xcresult" CODE_SIGNING_ALLOWED=NO'
+    )
+    expect(step).not.toMatch(/continue-on-error|\|\|\s*true|^ {8}if:|rm -rf|open -[an]|\.app\/Contents\/MacOS\//m)
+    expect(job).toContain('Generate the Xcode project')
+    expect(job.indexOf('Generate the Xcode project')).toBeLessThan(job.indexOf(step))
+    expect(job.indexOf(step)).toBeLessThan(job.indexOf('Build the native App (macOS)'))
   })
 })
 

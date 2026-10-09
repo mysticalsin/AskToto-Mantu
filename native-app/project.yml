@@ -56,3 +56,29 @@ targets:
         # the two-sided macOS copilot) is TCC-managed with no Info.plist usage key — the OS shows its own
         # prompt when ScreenCaptureKit first runs; onboarding explains it before that happens.
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Métis converts meeting audio to text on-device so it can suggest what to say and summarize the call."
+  MetisPersistenceTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: App/Store/PersistedModels.swift
+      - path: Tests/MeetingPersistenceTests.swift
+    dependencies:
+      - package: MetisKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mantu.metis.persistence-tests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+schemes:
+  Metis:
+    build:
+      targets:
+        Metis: all
+  MetisPersistenceTests:
+    build:
+      targets:
+        MetisPersistenceTests: [test]
+    test:
+      targets:
+        - MetisPersistenceTests

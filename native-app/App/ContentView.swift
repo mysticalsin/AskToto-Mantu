@@ -8,7 +8,6 @@ import MetisKit
 /// with working/error states, and save-to-history on stop. History and Settings open as sheets.
 struct ContentView: View {
     @Bindable var controller: MeetingController
-    @Environment(\.modelContext) private var modelContext
 
     @State private var draft = ""
     @State private var draftIsMe = true
@@ -16,6 +15,9 @@ struct ContentView: View {
     @State private var summary: MeetingSummaryText?
     @State private var steps: [String] = []
     @State private var working = false
+    @State private var activeAction: UUID?
+    @State private var activeActionRevision: UUID?
+    @State private var viewedMeetingID: UUID?
     @State private var errorText: String?
     @State private var micStatus: PermissionStatus = .unknown
     @State private var showHistory = false
@@ -42,6 +44,16 @@ struct ContentView: View {
         .task { micStatus = await permissions.status(.microphone) }
         .sheet(isPresented: $showHistory) { HistoryView() }
         .sheet(isPresented: $showSettings) { SettingsView() }
+        .onChange(of: controller.actionRevision) { _, _ in
+            if activeActionRevision != controller.actionRevision {
+                activeAction = nil
+                activeActionRevision = nil
+                working = false
+            }
+        }
+        .onChange(of: controller.meeting.id) { _, _ in
+            synchronizeMeeting()
+        }
     }
 
     private var header: some View {
@@ -59,11 +71,12 @@ struct ContentView: View {
             Button { showSettings = true } label: { Image(systemName: "gearshape") }
                 .buttonStyle(.plain).help("Settings")
             Button(action: toggleRecording) {
-                Label(controller.isRecording ? "Stop" : "Record",
-                      systemImage: controller.isRecording ? "stop.fill" : "record.circle")
+                Label(controller.needsSaveRetry ? "Retry save" : controller.isRecording ? "Stop" : "Record",
+                      systemImage: controller.needsSaveRetry ? "arrow.clockwise" : controller.isRecording ? "stop.fill" : "record.circle")
             }
             .buttonStyle(.borderedProminent)
             .tint(controller.isRecording ? .red : MetisTheme.accent)
+            .disabled(controller.isTransitioning || !controller.isPersistenceReady)
         }
         .foregroundStyle(.white.opacity(0.85))
     }
@@ -128,19 +141,29 @@ struct ContentView: View {
                 .textFieldStyle(.roundedBorder).onSubmit(addLine)
             Button("Add", action: addLine).disabled(draft.isEmpty)
         }
+        .disabled(controller.isTransitioning || controller.needsSaveRetry)
     }
 
     private var actions: some View {
         HStack {
-            Button("What to say next") { run { suggestion = try await controller.suggestion() } }
-            Button("Summarize") { run { summary = try await controller.summaryText() } }
-            Button("Next steps") { run { steps = try await controller.nextSteps() } }
+            Button("What to say next") {
+                run({ try await controller.suggestion() }, apply: { suggestion = $0 })
+            }
+            Button("Summarize") {
+                run({ try await controller.summaryText() }, apply: { summary = $0 })
+            }
+            Button("Next steps") {
+                run({ try await controller.nextSteps() }, apply: { steps = $0 })
+            }
             if working { ProgressView().controlSize(.small).padding(.leading, 4) }
         }
-        .disabled(working || controller.meeting.lines.isEmpty)
+        .disabled(working || controller.meeting.lines.isEmpty || controller.isTransitioning || controller.needsSaveRetry)
     }
 
     @ViewBuilder private var results: some View {
+        if let message = controller.operationError?.errorDescription {
+            Text(message).font(.caption).foregroundStyle(.orange)
+        }
         if let errorText {
             Text(errorText).font(.caption).foregroundStyle(.orange)
         }
@@ -180,31 +203,72 @@ struct ContentView: View {
 
     private func toggleRecording() {
         Task {
-            if controller.isRecording {
-                try? await controller.stopRecording()
-                MeetingStore.save(controller.meeting, summary: summary, into: modelContext)
-                controller.reset()
-                suggestion = ""; summary = nil; steps = []; errorText = nil
-            } else {
-                try? await controller.startRecording()
-                micStatus = await permissions.status(.microphone)
+            do {
+                if controller.isRecording || controller.needsSaveRetry {
+                    try await controller.stopRecording()
+                } else {
+                    try await controller.startRecording()
+                    let revision = controller.actionRevision
+                    let status = await permissions.status(.microphone)
+                    if controller.acceptsAction(revision) { micStatus = status }
+                }
+            } catch {
+                // The shared controller exposes the fixed stop/save error and retains the transcript.
+                // Do not clear results or replace its error with an unfiltered platform exception.
             }
         }
     }
 
     private func addLine() {
         guard !draft.isEmpty else { return }
-        controller.append(TranscriptLine(speaker: draftIsMe ? .me : .them, text: draft, at: Date()))
-        draft = ""
+        if controller.append(TranscriptLine(speaker: draftIsMe ? .me : .them, text: draft, at: Date())) {
+            draft = ""
+        }
     }
 
-    private func run(_ op: @escaping @MainActor () async throws -> Void) {
+    private func run<Result: Sendable>(
+        _ op: @escaping @MainActor () async throws -> Result,
+        apply: @escaping @MainActor (Result) -> Void
+    ) {
+        synchronizeMeeting()
+        let revision = controller.actionRevision
+        guard !working, controller.acceptsAction(revision) else { return }
+        let meetingID = controller.meeting.id
+        let action = UUID()
+        activeAction = action
+        activeActionRevision = revision
         working = true
         errorText = nil
-        Task {
-            defer { working = false }
-            do { try await op() }
-            catch { errorText = "That didn't work: \(error.localizedDescription)" }
+        let isCurrent = {
+            activeAction == action && controller.meeting.id == meetingID && controller.acceptsAction(revision)
         }
+        Task {
+            defer {
+                if isCurrent() {
+                    working = false
+                    activeAction = nil
+                    activeActionRevision = nil
+                }
+            }
+            do {
+                let result = try await op()
+                if isCurrent() { apply(result) }
+            } catch {
+                if isCurrent() { errorText = "That action could not finish. Please try again." }
+            }
+        }
+    }
+
+    /// Also called before starting an action, so a delayed onChange cannot clear that newer action.
+    private func synchronizeMeeting() {
+        guard viewedMeetingID != controller.meeting.id else { return }
+        viewedMeetingID = controller.meeting.id
+        activeAction = nil
+        activeActionRevision = nil
+        working = false
+        suggestion = ""
+        summary = nil
+        steps = []
+        errorText = nil
     }
 }

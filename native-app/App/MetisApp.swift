@@ -16,7 +16,6 @@ struct MetisApp: App {
 
     init() {
         let c = MeetingController()
-        MeetingActionsRegistry.shared = c // App Intents perform() bodies drive THIS controller
         AudioCapture.wire(into: c)         // inject platform audio start/stop (mic; + loopback on macOS)
         _controller = State(initialValue: c)
     }
@@ -81,6 +80,7 @@ struct MetisApp: App {
 struct RootView: View {
     let controller: MeetingController
     let modelPolicyRuntime: ModelPolicyRuntime
+    @Environment(\.modelContext) private var modelContext
     @AppStorage("metis.onboardingDoneAt") private var onboardingDoneAt: Double = 0
 
     var body: some View {
@@ -99,6 +99,11 @@ struct RootView: View {
         }
         .animation(.easeInOut(duration: 0.5), value: onboardingDoneAt == 0)
         .task {
+            let container = modelContext.container
+            controller.bindPersistence { meeting, summary in
+                try MeetingStore.save(meeting, summary: summary, into: container)
+            }
+            MeetingActionsRegistry.shared = controller
             // M2-0412: start the fleet model policy poller for the app's lifetime. It fetches at launch
             // and re-polls every <=60s once the existing Operator URL/secret values are provisioned.
             guard let urlString = UserDefaults.standard.string(forKey: MetisApp.operatorURLDefaultsKey),
@@ -117,11 +122,19 @@ struct RootView: View {
 private struct MenuBarControls: View {
     @Bindable var controller: MeetingController
     var body: some View {
-        Button(controller.isRecording ? "Stop Recording" : "Start Recording") {
+        Button(controller.needsSaveRetry ? "Retry save" : controller.isRecording ? "Stop Recording" : "Start Recording") {
             Task {
-                if controller.isRecording { try? await controller.stopRecording() }
-                else { try? await controller.startRecording() }
+                do {
+                    if controller.isRecording || controller.needsSaveRetry { try await controller.stopRecording() }
+                    else { try await controller.startRecording() }
+                } catch {
+                    // Shared fixed error below; never acknowledge a failed stop/save or discard its data.
+                }
             }
+        }
+        .disabled(controller.isTransitioning || !controller.isPersistenceReady)
+        if let message = controller.operationError?.errorDescription {
+            Text(message).foregroundStyle(.orange)
         }
         Divider()
         Text(controller.intelligenceAvailable ? "On-device AI ready" : "Basic mode")
