@@ -752,6 +752,29 @@ describe('live audio transport identity', () => {
     expect(window.toto.setListeningState).toHaveBeenLastCalledWith(false, 123)
   })
 
+  it('names an older cloud final from its own audio after a newer remote window arrives', async () => {
+    let onFinal: ((line: { id: string; speaker: 'you' | 'them'; text: string; name: string }) => void) | null = null
+    vi.mocked(window.toto.onCloudSttFinal).mockImplementation((cb) => {
+      onFinal = cb
+      return () => void (onFinal = null)
+    })
+    vi.mocked(window.toto.speakerEmbed).mockImplementation(async (audio) => ({
+      name: audio[0] < 0.5 ? 'Ava' : 'Blair'
+    }))
+
+    await start('cloud', 123)
+    const remote = worklets.at(-1)!
+    remote.emit({ audio: Float32Array.from([0.2]), partial: false })
+    await settle()
+    remote.emit({ audio: Float32Array.from([0.8]), partial: false })
+    await settle()
+    expect(window.toto.cloudSttPush).toHaveBeenCalledTimes(2)
+
+    onFinal?.({ id: 'older-final', speaker: 'them', text: 'Synthetic first turn.', name: 'Speaker 1' })
+    await settle()
+    expect(render('cloud').text()).toBe('THEM (Ava): Synthetic first turn.')
+  })
+
   it('a superseded cloud push cannot hold the next meeting Stop hostage', async () => {
     let resolveOldPush!: () => void
     vi.mocked(window.toto.cloudSttPush).mockImplementationOnce(
