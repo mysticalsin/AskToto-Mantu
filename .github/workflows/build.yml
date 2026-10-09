@@ -434,9 +434,8 @@ jobs:
       # other). Ubuntu-only, no separate Windows leg needed: this `security` job already runs on
       # ubuntu-latest alone, and GitHub's ubuntu-latest runners ship Docker preinstalled.
       #
-      # Pinned to the exact image digest verified locally (docker pull zricethezav/gitleaks:v8.30.1 ==
-      # sha256:c00b6bd0…8abbb7f), not `:latest` — a mutable tag is a supply-chain risk this gate exists to
-      # guard against, so it does not carry one itself.
+      # Pinned to the exact v8.30.1 OCI digest on the official GHCR registry, not `:latest`.
+      # GHCR avoids Docker Hub's unauthenticated pull-rate limit without changing the scanner image.
       #
       # actions/checkout above uses its default shallow (depth-1) clone, so gitleaks scans the ONE commit
       # this push/PR actually introduces, not the repo's full history on every run — that is the tree-state
@@ -449,7 +448,7 @@ jobs:
       - name: Gitleaks secret scan (repo-wide)
         run: |
           docker run --rm -v "$PWD:/repo" -w /repo \
-            zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
             detect --source=/repo --config=/repo/.gitleaks.toml --redact -v --no-banner --exit-code=1
       # Canary per file class (M2-0259). .gitleaks.toml carries no path exemptions, so a secret in a test
       # file, QA script, doc, fixture or generated asset must fail the scan. This step proves it: it plants
@@ -469,7 +468,7 @@ jobs:
             printf 'const token = "%s"\n' "$canary" > "$dir/$rel"
             set +e
             report="$(docker run --rm -v "$PWD/.gitleaks.toml:/cfg/.gitleaks.toml:ro" -v "$dir:/canary" \
-              zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+              ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
               detect --no-git --source=/canary --config=/cfg/.gitleaks.toml --redact -v --no-banner --exit-code=1 2>&1)"
             status=$?
             set -e
