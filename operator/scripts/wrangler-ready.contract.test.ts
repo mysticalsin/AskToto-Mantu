@@ -112,18 +112,18 @@ describe('owned Wrangler startup', () => {
     expectClean(child)
   })
 
-  it.each(['not json', JSON.stringify({ event: 'DEV_SERVER_READY', ip: '127.0.0.1', port: 0 })])(
-    'fails closed on malformed readiness without probing another endpoint: %s',
-    async (message) => {
-      const checkHealth = vi.fn(async () => true)
-      const { child, promise } = start(checkHealth)
-      const rejected = expect(promise).rejects.toThrow('Invalid Wrangler readiness message')
-      child.emit('message', message)
-      await rejected
-      expect(checkHealth).not.toHaveBeenCalled()
-      expectClean(child)
-    }
-  )
+  it.each([
+    'not json',
+    JSON.stringify({ event: 'DEV_SERVER_READY', ip: '127.0.0.1', port: 0 })
+  ])('fails closed on malformed readiness without probing another endpoint: %s', async (message) => {
+    const checkHealth = vi.fn(async () => true)
+    const { child, promise } = start(checkHealth)
+    const rejected = expect(promise).rejects.toThrow('Invalid Wrangler readiness message')
+    child.emit('message', message)
+    await rejected
+    expect(checkHealth).not.toHaveBeenCalled()
+    expectClean(child)
+  })
 
   it('keeps the 500ms interval after an unhealthy response or a rejected request', async () => {
     const checkHealth = vi.fn(async (_base: string, _signal: AbortSignal) => false)
