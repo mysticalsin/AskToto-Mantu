@@ -165,7 +165,7 @@ describe('MQA-252 explicit root-report handoff', () => {
       const report = successfulReport()
       report.testResults[0].assertionResults.splice(1, 1)
       report.testResults.push({
-        name: '/synthetic/qa/retained-profile-analysis.test.ts',
+        name: '/synthetic/__fixtures__/qa/retained-profile-analysis.test.ts',
         status: 'passed',
         assertionResults: [{ status: 'pending', title }]
       })

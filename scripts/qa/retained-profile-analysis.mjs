@@ -419,7 +419,10 @@ export function manifestNames(listing, selected) {
     )
     seen.add(name.toLowerCase())
   }
-  requireValue(selected.every((name) => names.filter((n) => n === name).length === 1), 'manifest-invalid')
+  requireValue(
+    selected.every((name) => names.filter((n) => n === name).length === 1),
+    'manifest-invalid'
+  )
   return names
 }
 
@@ -868,8 +871,7 @@ const SAMPLE_NUMBERS = [
 const sampleValid = (s) =>
   s === null || (exact(s, SAMPLE_NUMBERS) && SAMPLE_NUMBERS.every((key) => s[key] === null || finite(s[key])))
 const nullableNumber = (n) => n === null || finite(n)
-const intervalValid = (a) =>
-  a === null || (Array.isArray(a) && a.length === 2 && a.every(finite) && a[0] <= a[1])
+const intervalValid = (a) => a === null || (Array.isArray(a) && a.length === 2 && a.every(finite) && a[0] <= a[1])
 const countsValid = (cells) =>
   Array.isArray(cells) &&
   cells.length === CATEGORIES.length &&
@@ -1008,9 +1010,7 @@ async function analyzeSource(s, dir, deadline, token) {
     verifyArchiveBytes(archive, a)
     const path = join(dir, `${a.id}.zip`)
     writeFileSync(path, archive, { flag: 'wx', mode: 0o600 })
-    selected.push(
-      await readMembers(path, a === s.history ? CAPS : { 'provenance.json': 64 * 1024 }, a, dir, deadline)
-    )
+    selected.push(await readMembers(path, a === s.history ? CAPS : { 'provenance.json': 64 * 1024 }, a, dir, deadline))
   }
   const [provenance, history] = selected
   verifyProvenance(provenance['provenance.json'].value, s)

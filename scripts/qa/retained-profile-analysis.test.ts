@@ -610,9 +610,9 @@ describe('bounded GitHub transport', () => {
     const fetchFn = vi.fn().mockResolvedValue(new Response(secret))
     await expect(getBytes('runs/1', { cap: 1, deadline: budget(), token: secret, fetchFn })).rejects.toThrow()
     await expect(getBytes('../secrets', { cap: 1, deadline: budget(), token: secret, fetchFn })).rejects.toThrow()
-    await expect(
-      getBytes('artifacts/1/zip', { cap: 1, deadline: budget(), token: secret, fetchFn })
-    ).rejects.toThrow('redirect-invalid')
+    await expect(getBytes('artifacts/1/zip', { cap: 1, deadline: budget(), token: secret, fetchFn })).rejects.toThrow(
+      'redirect-invalid'
+    )
     const redirect = vi
       .fn()
       .mockImplementation(

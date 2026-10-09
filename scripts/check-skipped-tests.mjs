@@ -115,7 +115,8 @@ const REASONS = [
     why: "Drives the real POSIX login shell ($SHELL -lc) that resolveBin's mac/Linux branch shells out through (M2-0147). Windows has no equivalent shell-resolution path; that side is covered by cli-win.test.ts."
   },
   {
-    match: 'qa/retained-profile-analysis.test.ts :: verifies selected bytes, CRC failure and policy rejection without extracting files',
+    match:
+      'qa/retained-profile-analysis.test.ts :: verifies selected bytes, CRC failure and policy rejection without extracting files',
     exact: true,
     why: 'Runs the real Linux system unzip against owned synthetic ZIPs only on hosted GitHub CI. Windows/macOS and off-hosted Linux cannot qualify this native route; the same file runs pure identity, schema, transport and child-lifecycle tests cross-platform.'
   }
