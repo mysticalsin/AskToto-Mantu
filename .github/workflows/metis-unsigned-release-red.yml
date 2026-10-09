@@ -1,0 +1,172 @@
+name: Metis unsigned release contract RED (temporary)
+run-name: ${{ github.event_name == 'pull_request' && 'Metis unsigned release RED (registration)' || 'Metis unsigned release RED' }}
+
+# Disposable TDD evidence only. Remove after the single hosted observation and no later than
+# 2026-10-12T18:00:00Z. A green workflow means one named synthetic assertion failed exactly as
+# expected; it does not mean candidate promotion, installers, or the release passed acceptance.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/metis-unsigned-release-red.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: metis-unsigned-release-red
+  cancel-in-progress: false
+
+jobs:
+  observe-red:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Refuse a foreign repository, event or branch
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$EVENT_NAME" != workflow_dispatch ] || [ "$REPOSITORY" != mysticalsin/AskToto-Mantu ] || [ "$REF" != refs/heads/main ]; then
+            echo 'unsigned-release-red:WRONG_DISPATCH'
+            exit 1
+          fi
+      - name: Enforce the temporary workflow expiry
+        shell: bash
+        run: |
+          if (( $(date -u +%s) >= $(date -ud '2026-10-12T18:00:00Z' +%s) )); then
+            echo 'unsigned-release-red:EXPIRED'
+            exit 1
+          fi
+      - name: Checkout the dispatched main commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          path: base
+          persist-credentials: false
+      - name: Checkout the pinned, test-only fixture commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: 9625b6aa1f15f85fa7c86e28d4641e633a044657
+          path: fixture
+          fetch-depth: 7
+          persist-credentials: false
+      - name: Refuse stale or mutated fixture inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture_sha='9625b6aa1f15f85fa7c86e28d4641e633a044657'
+          fixture_tree='aa7887c409de7dac99ce5d604c852d8aa378fb83'
+          fixture_parent='d49111427ea22e24c2f6ebe07872cf7a7c537381'
+          fixture_base='41d94bb80b0d8694755aa444d1d1073603db3713'
+          if [ "$(git -C base rev-parse HEAD 2>/dev/null)" != "$GITHUB_SHA" ]; then
+            echo 'unsigned-release-red:BASE_MISMATCH'
+            exit 1
+          fi
+          if [ "$(git -C fixture rev-parse HEAD 2>/dev/null)" != "$fixture_sha" ] ||
+             [ "$(git -C fixture rev-parse HEAD^{tree} 2>/dev/null)" != "$fixture_tree" ]; then
+            echo 'unsigned-release-red:FIXTURE_MISMATCH'
+            exit 1
+          fi
+          if [ "$(git -C fixture rev-parse HEAD^ 2>/dev/null)" != "$fixture_parent" ] ||
+             [ "$(git -C fixture rev-parse HEAD~6 2>/dev/null)" != "$fixture_base" ]; then
+            echo 'unsigned-release-red:PARENT_MISMATCH'
+            exit 1
+          fi
+          expected_paths=$'scripts/ci/promote-candidate-workflow.contract.test.ts\nscripts/ci/qa-candidate-workflow.contract.test.ts\nsrc/main/updater.test.ts\nsrc/renderer/src/components/Settings.contract.test.ts'
+          if [ "$(git -C fixture diff --name-only "$fixture_base" HEAD 2>/dev/null)" != "$expected_paths" ]; then
+            echo 'unsigned-release-red:FIXTURE_SCOPE_MISMATCH'
+            exit 1
+          fi
+          for tree in scripts src; do
+            if [ "$(git -C base rev-parse "HEAD:$tree")" != "$(git -C fixture rev-parse "$fixture_base:$tree")" ]; then
+              echo 'unsigned-release-red:CONTRACT_STALE'
+              exit 1
+            fi
+          done
+          for path in \
+            .github/workflows/qa-candidate.yml \
+            .github/workflows/promote-candidate.yml \
+            .github/workflows/release.yml \
+            package.json \
+            package-lock.json \
+            electron.vite.config.ts \
+            vitest.config.ts \
+            tsconfig.tests.json; do
+            if ! cmp -s "base/$path" "fixture/$path"; then
+              echo 'unsigned-release-red:CONTRACT_STALE'
+              exit 1
+            fi
+          done
+          echo 'unsigned-release-red:FIXTURE_PINNED'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Install and typecheck the test fixture
+        working-directory: fixture
+        shell: bash
+        run: |
+          if ! npm ci --no-audit --no-fund > "$RUNNER_TEMP/unsigned-release-red-npm.log" 2>&1; then
+            echo 'unsigned-release-red:INSTALL_FAILED'
+            exit 1
+          fi
+          if ! npm run typecheck:tests > "$RUNNER_TEMP/unsigned-release-red-types.log" 2>&1; then
+            echo 'unsigned-release-red:TYPECHECK_FAILED'
+            exit 1
+          fi
+          echo 'unsigned-release-red:TEST_TYPES_CLEAN'
+      - name: Classify only the named candidate-gate RED assertion
+        working-directory: fixture
+        shell: bash
+        run: |
+          set +e
+          NO_COLOR=1 FORCE_COLOR=0 ./node_modules/.bin/vitest run \
+            scripts/ci/promote-candidate-workflow.contract.test.ts \
+            -t 'accepts a successful candidate with only the two named owner-Mac rows held' \
+            --reporter=json \
+            > "$RUNNER_TEMP/unsigned-release-red-vitest.json" \
+            2> "$RUNNER_TEMP/unsigned-release-red-vitest.stderr"
+          test_exit=$?
+          set -e
+          if [ "$test_exit" -ne 1 ]; then
+            echo 'unsigned-release-red:UNEXPECTED_EXIT'
+            exit 1
+          fi
+          VITEST_REPORT="$RUNNER_TEMP/unsigned-release-red-vitest.json" node <<'NODE'
+          const { readFileSync } = require('node:fs')
+          let report
+          try {
+            report = JSON.parse(readFileSync(process.env.VITEST_REPORT, 'utf8'))
+          } catch {
+            console.error('unsigned-release-red:REPORT_INVALID')
+            process.exit(1)
+          }
+          const target = 'accepts a successful candidate with only the two named owner-Mac rows held'
+          const suites = report.testResults
+          const assertions = Array.isArray(suites) && suites.length === 1 &&
+            Array.isArray(suites[0].assertionResults) ? suites[0].assertionResults : []
+          const ran = assertions.filter((assertion) => assertion.status === 'failed' || assertion.status === 'passed')
+          const failure = ran[0]
+          const message = failure?.failureMessages?.[0]
+          if (
+            report.success === false &&
+            report.numFailedTests === 1 &&
+            report.numPassedTests === 0 &&
+            suites?.length === 1 &&
+            suites[0].name?.endsWith('/scripts/ci/promote-candidate-workflow.contract.test.ts') &&
+            ran.length === 1 &&
+            failure.status === 'failed' &&
+            failure.title === target &&
+            failure.failureMessages?.length === 1 &&
+            typeof message === 'string' &&
+            /^AssertionError: expected 1 to be \+?0/.test(message)
+          ) {
+            console.log('unsigned-release-red:EXPECTED_ASSERTION_FAILURE')
+          } else {
+            console.error('unsigned-release-red:UNEXPECTED_TEST_RESULT')
+            process.exit(1)
+          }
+          NODE
