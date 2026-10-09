@@ -109,6 +109,11 @@ describe('native hosted Release ZIP baseline', () => {
       "if: success() && steps.native_release.outcome == 'success' && steps.native_source_after.outcome == 'success'"
     )
     expect(verify).toContain('node scripts/verify-native-mac-package.mjs verify')
+    expect(verify).toContain('NATIVE_METADATA: ${{ steps.native_paths.outputs.metadata }}')
+    expect(verify).toContain(
+      'run: |\n          node scripts/verify-native-mac-package.mjs verify\n          cat "$NATIVE_METADATA"\n'
+    )
+    expect(verify).not.toMatch(/\|\|\s*true|continue-on-error|^ {8}shell:/m)
     expect(upload).toContain("if: success() && steps.native_verify.outcome == 'success'")
     expect(upload).toContain('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02')
     expect(upload).toContain('if-no-files-found: error')

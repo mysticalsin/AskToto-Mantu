@@ -580,7 +580,12 @@ async function main() {
         metadata: join(paths.report, 'native-package.json')
       }
       if (Object.values(outputs).some((value) => /[\r\n]/.test(value))) throw new Error('WORKFLOW_OUTPUT_INVALID')
-      appendFileSync(process.env.GITHUB_OUTPUT, `${Object.entries(outputs).map(([k, v]) => `${k}=${v}`).join('\n')}\n`)
+      appendFileSync(
+        process.env.GITHUB_OUTPUT,
+        `${Object.entries(outputs)
+          .map(([k, v]) => `${k}=${v}`)
+          .join('\n')}\n`
+      )
     } catch (error) {
       try {
         cleanupWorkspace(workspace, runnerTemp, source)

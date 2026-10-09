@@ -200,7 +200,10 @@ jobs:
         env:
           NATIVE_PACKAGE_ROOT: ${{ steps.native_paths.outputs.root }}
           NATIVE_PACKAGE_OWNER: ${{ steps.native_paths.outputs.owner_digest }}
-        run: node scripts/verify-native-mac-package.mjs verify
+          NATIVE_METADATA: ${{ steps.native_paths.outputs.metadata }}
+        run: |
+          node scripts/verify-native-mac-package.mjs verify
+          cat "$NATIVE_METADATA"
       - name: Upload native package baseline
         if: success() && steps.native_verify.outcome == 'success'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
