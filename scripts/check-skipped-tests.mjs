@@ -113,12 +113,19 @@ const REASONS = [
   {
     match: 'cli-resolve-bin.test.ts',
     why: "Drives the real POSIX login shell ($SHELL -lc) that resolveBin's mac/Linux branch shells out through (M2-0147). Windows has no equivalent shell-resolution path; that side is covered by cli-win.test.ts."
+  },
+  {
+    match: 'qa/retained-profile-analysis.test.ts :: verifies selected bytes, CRC failure and policy rejection without extracting files',
+    exact: true,
+    why: 'Runs the real Linux system unzip against owned synthetic ZIPs only on hosted GitHub CI. Windows/macOS and off-hosted Linux cannot qualify this native route; the same file runs pure identity, schema, transport and child-lifecycle tests cross-platform.'
   }
 ]
 
 /** Skips accepted on this platform. Each accepted skip is a platform-bound test with a REASON above.
  *  Lower it when a skip is retired; never raise it for an undeclared skip. */
-const BASELINE = { win32: 34, darwin: 2, linux: 28 }
+const hostedCi = process.env.CI === 'true' && process.env.GITHUB_ACTIONS === 'true'
+const BASELINE = { win32: 35, darwin: 3, linux: hostedCi ? 28 : 29 }
+const reasonFor = (id) => REASONS.find((reason) => (reason.exact ? id === reason.match : id.includes(reason.match)))
 
 const platform = process.platform
 const allowed = BASELINE[platform]
@@ -283,7 +290,7 @@ if (skipped.length < allowed) {
   )
 }
 
-const unexplained = skipped.filter((s) => !REASONS.some((r) => s.id.includes(r.match)))
+const unexplained = skipped.filter((s) => !reasonFor(s.id))
 for (const s of unexplained) {
   problems.push(`no declared reason for: ${s.id}`)
 }
@@ -301,6 +308,6 @@ console.log(`[check:skips] OK — ${skipped.length} skipped on ${platform}, all 
 const byFile = new Map()
 for (const s of skipped) byFile.set(s.file, (byFile.get(s.file) ?? 0) + 1)
 for (const [file, n] of byFile) {
-  const reason = REASONS.find((r) => file.includes(r.match))
-  console.log(`    ${String(n).padStart(2)}  ${file} — ${reason.why.split('.')[0]}.`)
+  const reasons = new Set(skipped.filter((s) => s.file === file).map((s) => reasonFor(s.id).why.split('.')[0]))
+  console.log(`    ${String(n).padStart(2)}  ${file} — ${[...reasons].join('; ')}.`)
 }
