@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Activate __mocks__/electron.ts — checkForUpdateNow needs app.getVersion() + net.fetch, and outside a
@@ -389,22 +390,36 @@ function pinPlatform(value: NodeJS.Platform): () => void {
 
 describe('startUpdateDownload — Settings "Update now" in-app download guard', () => {
   let restorePlatform: () => void
+  const proc = process as NodeJS.Process & { resourcesPath?: string }
+  let previousResourcesPath: string | undefined
+  let previousPortable: string | undefined
 
   beforeEach(() => {
     restorePlatform = pinPlatform('linux')
+    previousResourcesPath = proc.resourcesPath
+    proc.resourcesPath = 'C:/synthetic-metis-resources'
+    previousPortable = process.env.PORTABLE_EXECUTABLE_FILE
+    delete process.env.PORTABLE_EXECUTABLE_FILE
     vi.mocked(readTrustedAdminManaged).mockReturnValue(null)
+    vi.mocked(readFileSync).mockReset().mockImplementation(() => 'provider: github\nowner: mysticalsin\n')
+    vi.mocked(net.fetch).mockReset()
     delete (process as unknown as { windowsStore?: boolean }).windowsStore
   })
 
   afterEach(() => {
     restorePlatform()
+    if (previousResourcesPath === undefined) Reflect.deleteProperty(proc, 'resourcesPath')
+    else proc.resourcesPath = previousResourcesPath
+    if (previousPortable === undefined) delete process.env.PORTABLE_EXECUTABLE_FILE
+    else process.env.PORTABLE_EXECUTABLE_FILE = previousPortable
+    vi.mocked(readFileSync).mockReset().mockImplementation(() => 'provider: github\nowner: mysticalsin\n')
+    vi.mocked(net.fetch).mockReset()
   })
 
   it('starts an in-app macOS download only after the notarized release feed confirms complete Mac assets', async () => {
     const electronApp = app as unknown as { isPackaged?: boolean }
     electronApp.isPackaged = true
     const restore = pinPlatform('darwin')
-    vi.mocked(net.fetch).mockClear()
     vi.mocked(net.fetch).mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -426,6 +441,43 @@ describe('startUpdateDownload — Settings "Update now" in-app download guard', 
     try {
       const r = await startUpdateDownload()
       expect(r).toEqual({ started: true })
+      expect(readFileSync).toHaveBeenCalledWith(join(proc.resourcesPath!, 'app-update.yml'), 'utf8')
+      expect(net.fetch).toHaveBeenCalledTimes(1)
+      expect(fake.checkForUpdates).toHaveBeenCalledTimes(1)
+    } finally {
+      restore()
+      if (previous) require.cache[moduleId] = previous
+      else delete require.cache[moduleId]
+      delete electronApp.isPackaged
+    }
+  })
+
+  it('still starts an in-app Windows download when the package and Latest carry required updater metadata', async () => {
+    const electronApp = app as unknown as { isPackaged?: boolean }
+    electronApp.isPackaged = true
+    const restore = pinPlatform('win32')
+    vi.mocked(net.fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        tag_name: 'v99.0.0',
+        draft: false,
+        prerelease: false,
+        assets: [{ name: 'Metis-Setup-99.0.0.exe' }, { name: 'latest.yml' }]
+      })
+    } as unknown as Response)
+    const fake = new FakeAutoUpdater()
+    fake.checkForUpdates.mockResolvedValue({ downloadPromise: Promise.resolve() })
+    const moduleId = require.resolve('electron-updater')
+    const previous = require.cache[moduleId]
+    require.cache[moduleId] = {
+      id: moduleId,
+      filename: moduleId,
+      loaded: true,
+      exports: { autoUpdater: fake }
+    } as never
+    try {
+      expect(await startUpdateDownload()).toEqual({ started: true })
+      expect(readFileSync).toHaveBeenCalledWith(join(proc.resourcesPath!, 'app-update.yml'), 'utf8')
       expect(net.fetch).toHaveBeenCalledTimes(1)
       expect(fake.checkForUpdates).toHaveBeenCalledTimes(1)
     } finally {
@@ -473,7 +525,7 @@ describe('startUpdateDownload — Settings "Update now" in-app download guard', 
     }
   })
 
-  it('never self-installs from a package without baked updater metadata, even if Latest has installable metadata', async () => {
+  it('never contacts Latest or self-installs from a package without baked updater metadata', async () => {
     const electronApp = app as unknown as { isPackaged?: boolean }
     electronApp.isPackaged = true
     const restore = pinPlatform('win32')
@@ -487,24 +539,20 @@ describe('startUpdateDownload — Settings "Update now" in-app download guard', 
       loaded: true,
       exports: { autoUpdater: fake }
     } as never
-    vi.mocked(readFileSync).mockImplementation(() => {
+    const updateConfigPath = join(proc.resourcesPath!, 'app-update.yml')
+    vi.mocked(readFileSync).mockImplementation((path) => {
+      if (String(path) !== updateConfigPath) throw new Error('Unexpected metadata path')
       throw new Error('ENOENT: no app-update.yml in this package')
     })
-    vi.mocked(net.fetch).mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        tag_name: 'v2.0.1',
-        assets: [{ name: 'Metis-Setup-2.0.1.exe' }, { name: 'latest.yml' }]
-      })
-    } as unknown as Response)
     try {
       const result = await startUpdateDownload()
       expect(result.started).toBe(false)
       expect(result.reason).toMatch(/manual|download page/i)
+      expect(readFileSync).toHaveBeenCalledWith(updateConfigPath, 'utf8')
+      expect(net.fetch).not.toHaveBeenCalled()
       expect(fake.checkForUpdates).not.toHaveBeenCalled()
     } finally {
       restore()
-      vi.mocked(readFileSync).mockImplementation(() => 'provider: github\nowner: mysticalsin\n')
       if (previous) require.cache[moduleId] = previous
       else delete require.cache[moduleId]
       delete electronApp.isPackaged
@@ -548,6 +596,60 @@ describe('startUpdateDownload — Settings "Update now" in-app download guard', 
       if (previous) require.cache[moduleId] = previous
       else delete require.cache[moduleId]
       delete electronApp.isPackaged
+    }
+  })
+})
+
+describe('manual-only package silent update behavior', () => {
+  it('does not wire or start electron-updater when app-update.yml is absent at boot', () => {
+    const electronApp = app as unknown as { isPackaged?: boolean }
+    const proc = process as NodeJS.Process & { resourcesPath?: string; windowsStore?: boolean }
+    const previousResourcesPath = proc.resourcesPath
+    const previousWindowsStore = proc.windowsStore
+    const previousPortable = process.env.PORTABLE_EXECUTABLE_FILE
+    const restore = pinPlatform('win32')
+    const fake = new FakeAutoUpdater()
+    const moduleId = require.resolve('electron-updater')
+    const previousModule = require.cache[moduleId]
+    const updateConfigPath = join('C:/synthetic-metis-resources', 'app-update.yml')
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    electronApp.isPackaged = true
+    proc.resourcesPath = 'C:/synthetic-metis-resources'
+    Reflect.deleteProperty(proc, 'windowsStore')
+    delete process.env.PORTABLE_EXECUTABLE_FILE
+    vi.mocked(readTrustedAdminManaged).mockReturnValue(null)
+    vi.mocked(net.fetch).mockReset()
+    vi.mocked(app.on).mockClear()
+    vi.mocked(readFileSync).mockReset().mockImplementation((path) => {
+      if (String(path) !== updateConfigPath) throw new Error('Unexpected metadata path')
+      throw new Error('ENOENT: no app-update.yml in this package')
+    })
+    require.cache[moduleId] = {
+      id: moduleId,
+      filename: moduleId,
+      loaded: true,
+      exports: { autoUpdater: fake }
+    } as never
+    try {
+      initAutoUpdate(() => null)
+      expect(readFileSync).toHaveBeenCalledWith(updateConfigPath, 'utf8')
+      expect(net.fetch).not.toHaveBeenCalled()
+      expect(fake.checkForUpdates).not.toHaveBeenCalled()
+      expect(app.on).not.toHaveBeenCalledWith('will-quit', expect.any(Function))
+    } finally {
+      restore()
+      if (previousResourcesPath === undefined) Reflect.deleteProperty(proc, 'resourcesPath')
+      else proc.resourcesPath = previousResourcesPath
+      if (previousWindowsStore === undefined) Reflect.deleteProperty(proc, 'windowsStore')
+      else proc.windowsStore = previousWindowsStore
+      if (previousPortable === undefined) delete process.env.PORTABLE_EXECUTABLE_FILE
+      else process.env.PORTABLE_EXECUTABLE_FILE = previousPortable
+      vi.mocked(readFileSync).mockReset().mockImplementation(() => 'provider: github\nowner: mysticalsin\n')
+      vi.mocked(net.fetch).mockReset()
+      if (previousModule) require.cache[moduleId] = previousModule
+      else delete require.cache[moduleId]
+      delete electronApp.isPackaged
+      vi.useRealTimers()
     }
   })
 })

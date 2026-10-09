@@ -449,6 +449,31 @@ describe('MQA-164 — a failed update download leaves the Settings row with a wa
   })
 })
 
+describe('unsigned manual-only release CTA', () => {
+  const block = (): string => blockAfter('function UpdatesSection(', '\n// FILE: features/settings/TapControlCard.tsx')
+
+  it('does not offer Download & install for a manual-only release', () => {
+    const section = block()
+    const start = section.indexOf('{result?.ok && result.available && phase === \'idle\'')
+    const end = section.indexOf("{phase === 'downloading'", start)
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+    const autoButton = section.slice(start, end)
+    expect(autoButton).toMatch(/!result\.manualInstallOnly/)
+  })
+
+  it('offers the verified release page as the primary manual installer action', () => {
+    const section = block().replace(/^\s*\/\/.*$/gm, '')
+    const start = section.indexOf('{result?.ok && result.available && result.manualInstallOnly')
+    expect(start).toBeGreaterThan(-1)
+    const end = section.indexOf(')}', start)
+    expect(end).toBeGreaterThan(start)
+    const manualAction = section.slice(start, end + 2)
+    expect(manualAction).toMatch(/<a[\s\S]*?href=\{result\.url\}/)
+    expect(manualAction).toMatch(/(?:Download|Open)[^<]*(?:installer|release)/i)
+  })
+})
+
 describe('Set up Dust installs the managed CLI, then signs in', () => {
   it('startDustOAuth calls dustInstallCli before dustLoginBegin', () => {
     const body = blockAfter('const startDustOAuth = async', 'useEffect(() => {')
