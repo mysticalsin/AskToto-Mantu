@@ -21,11 +21,16 @@ function fakeRequests(routes: Record<string, Route>) {
     destroy: ReturnType<typeof vi.fn>
     responseDestroy?: ReturnType<typeof vi.fn>
   }> = []
-  const request = (options: Record<string, unknown>, receive: (response: EventEmitter & {
-    statusCode: number
-    headers: Record<string, string>
-    destroy: ReturnType<typeof vi.fn>
-  }) => void) => {
+  const request = (
+    options: Record<string, unknown>,
+    receive: (
+      response: EventEmitter & {
+        statusCode: number
+        headers: Record<string, string>
+        destroy: ReturnType<typeof vi.fn>
+      }
+    ) => void
+  ) => {
     const outgoing = new EventEmitter() as EventEmitter & { end: () => void; destroy: ReturnType<typeof vi.fn> }
     outgoing.destroy = vi.fn()
     const entry = {

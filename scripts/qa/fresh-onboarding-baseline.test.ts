@@ -202,9 +202,7 @@ describe('fresh onboarding baseline report', () => {
     expect(reportProblems({ ...failed, cdp_diagnostic: 'private endpoint content' })).toContain(
       'CDP_DIAGNOSTIC_INVALID'
     )
-    expect(reportProblems({ ...failed, cdp_diagnostic: { cdp: 'NOT_OBSERVED' } })).toContain(
-      'CDP_DIAGNOSTIC_INVALID'
-    )
+    expect(reportProblems({ ...failed, cdp_diagnostic: { cdp: 'NOT_OBSERVED' } })).toContain('CDP_DIAGNOSTIC_INVALID')
     expect(reportProblems({ ...failed, cdp_diagnostic: 'NOT_OBSERVED', extra: 'private endpoint content' })).toContain(
       'REPORT_KEYS_INVALID'
     )
