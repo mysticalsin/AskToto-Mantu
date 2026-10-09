@@ -1,5 +1,7 @@
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 
 const root = join(__dirname, '..', '..')
@@ -59,8 +61,6 @@ describe('Promote candidate workflow: main and release/1.9.x candidates (M2-0500
     expect(jq).toContain('(.head_branch == "main" or .head_branch == "release/1.9.x")')
     expect(jq).toContain('.status == "completed" and .conclusion == "success"')
     expect(jq.match(/head_branch/g)).toHaveLength(2)
-    expect(step('Require a fully successful')).toContain('all(.jobs[]; .conclusion == "success")')
-    expect(step('Require a fully successful')).toContain('.total_count == (.jobs | length)')
   })
 
   it('checks the branch and version with release-line.mjs before it downloads any artifact', () => {
@@ -101,5 +101,105 @@ describe('Promote candidate workflow: main and release/1.9.x candidates (M2-0500
     expect(receipt).toContain('retention-days: 7')
     expect(receipt).not.toContain('GH_TOKEN')
     expect(steps.indexOf(receipt)).toBeGreaterThan(steps.indexOf(step('node scripts/qa/publish-dual-release.mjs')))
+  })
+})
+
+// The actual qa-candidate dispatch has 13 successful jobs and exactly two intentionally held
+// owner-Mac rows. Run the workflow's own guard against synthetic GitHub API replies so a change
+// to its shell policy, not a reimplementation in this test, determines promotion eligibility.
+describe.skipIf(process.platform === 'win32')('Promote candidate job eligibility', () => {
+  const expectedJobs = [
+    'Check what this run may build',
+    'Build mac',
+    'Build win',
+    'Build mac-qa-identity',
+    'Record provenance',
+    'ST-1 History row (macOS)',
+    'ST-1 window construction per variant and chrome (shipped gated < 250 ms)',
+    'History design evidence (macOS)',
+    'ST-1 synthetic dataless row and stat-flags (macOS)',
+    'Install and launch mac by sha256',
+    'ST-1-W external unblock record',
+    'Install and launch win by sha256',
+    'Install and launch mac-qa-identity by sha256',
+    'ST-1 control (no fixtures)',
+    'ST-1 fifo stall row (macOS)'
+  ]
+  const heldJobs = new Set(['ST-1 control (no fixtures)', 'ST-1 fifo stall row (macOS)'])
+  const completeJobs = expectedJobs.map((name) => ({
+    name,
+    conclusion: heldJobs.has(name) ? 'skipped' : 'success'
+  }))
+  type Job = (typeof completeJobs)[number]
+
+  function runCandidateGuard(jobs: Job[], totalCount = jobs.length): number | null {
+    const run = step('Require a fully successful').split('        run: |\n')[1]
+    expect(run, 'candidate guard shell body').toBeDefined()
+    const script = run!.replace(/^          /gm, '')
+    const dir = mkdtempSync(join(tmpdir(), 'metis-candidate-eligibility-'))
+    try {
+      writeFileSync(
+        join(dir, 'gh'),
+        '#!/bin/sh\ncase "$2" in\n  */jobs*) printf %s "$METIS_TEST_JOBS_JSON" ;;\n  *) printf %s "$METIS_TEST_RUN_JSON" ;;\nesac\n',
+        { mode: 0o700 }
+      )
+      const output = join(dir, 'output')
+      writeFileSync(output, '')
+      const result = spawnSync('bash', ['-e', '-o', 'pipefail', '-c', script], {
+        encoding: 'utf8',
+        timeout: 5000,
+        env: {
+          ...process.env,
+          PATH: `${dir}:${process.env.PATH ?? ''}`,
+          GH_TOKEN: 'synthetic',
+          GITHUB_REPOSITORY: 'mysticalsin/AskToto-Mantu',
+          GITHUB_OUTPUT: output,
+          RUN_ID: '12345',
+          METIS_TEST_RUN_JSON: JSON.stringify({
+            path: '.github/workflows/qa-candidate.yml',
+            event: 'workflow_dispatch',
+            head_branch: 'main',
+            head_sha: 'a'.repeat(40),
+            status: 'completed',
+            conclusion: 'success'
+          }),
+          METIS_TEST_JOBS_JSON: JSON.stringify({ total_count: totalCount, jobs })
+        }
+      })
+      expect(result.error).toBeUndefined()
+      return result.status
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+
+  it('accepts a successful candidate with only the two named owner-Mac rows held', () => {
+    expect(runCandidateGuard(completeJobs)).toBe(0)
+  })
+
+  it('rejects a skipped required row even when the overall run says success', () => {
+    const jobs = completeJobs.map((job) =>
+      job.name === 'Record provenance' ? { ...job, conclusion: 'skipped' } : job
+    )
+    expect(runCandidateGuard(jobs)).not.toBe(0)
+  })
+
+  it('rejects a failed required row, an unknown skipped row, and a missing required row', () => {
+    const failed = completeJobs.map((job) =>
+      job.name === 'Build win' ? { ...job, conclusion: 'failure' } : job
+    )
+    expect(runCandidateGuard(failed)).not.toBe(0)
+    const unknownSkip = [...completeJobs, { name: 'Unapproved skipped gate', conclusion: 'skipped' }]
+    expect(runCandidateGuard(unknownSkip)).not.toBe(0)
+    expect(runCandidateGuard(completeJobs.filter((job) => job.name !== 'Record provenance'))).not.toBe(0)
+  })
+
+  it('rejects a missing held row, a duplicate required row, and a truncated job response', () => {
+    expect(runCandidateGuard(completeJobs.filter((job) => job.name !== 'ST-1 control (no fixtures)'))).not.toBe(0)
+    const duplicate = completeJobs.map((job) =>
+      job.name === 'Record provenance' ? { ...job, name: 'Build win' } : job
+    )
+    expect(runCandidateGuard(duplicate)).not.toBe(0)
+    expect(runCandidateGuard(completeJobs, completeJobs.length + 1)).not.toBe(0)
   })
 })
