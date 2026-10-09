@@ -165,6 +165,28 @@ jobs:
       - name: Generate the Xcode project
         working-directory: native-app
         run: xcodegen generate
+      - name: Test native meeting persistence
+        working-directory: native-app
+        run: |
+          test "$CI" = true
+          test "$GITHUB_ACTIONS" = true
+          metis_test_root="$(mktemp -d "$RUNNER_TEMP/metis-persistence-home-XXXXXX")"
+          metis_test_root="$(cd "$metis_test_root" && pwd -P)"
+          mkdir "$metis_test_root/tmp"
+          export HOME="$metis_test_root"
+          export CFFIXED_USER_HOME="$metis_test_root"
+          export METIS_TEST_HOME="$metis_test_root"
+          export TMPDIR="$metis_test_root/tmp"
+          export TEST_RUNNER_HOME="$metis_test_root"
+          export TEST_RUNNER_CFFIXED_USER_HOME="$metis_test_root"
+          export TEST_RUNNER_METIS_TEST_HOME="$metis_test_root"
+          export TEST_RUNNER_TMPDIR="$metis_test_root/tmp"
+          export TEST_RUNNER_CI="$CI"
+          export TEST_RUNNER_GITHUB_ACTIONS="$GITHUB_ACTIONS"
+          export TEST_RUNNER_RUNNER_TEMP="$RUNNER_TEMP"
+          xcodebuild test -project Metis.xcodeproj -scheme MetisPersistenceTests -configuration Debug \
+            -destination 'platform=macOS' -derivedDataPath "$metis_test_root/DerivedData" \
+            -resultBundlePath "$metis_test_root/PersistenceTests.xcresult" CODE_SIGNING_ALLOWED=NO
       # Same flags as scripts/build-native-mac.mjs, minus signing. Compilation is blocking;
       # MetisKit tests alone do not compile the SwiftUI App target.
       - name: Build the native App (macOS)
