@@ -335,14 +335,16 @@ function browserMainOwnership(answer, childPid) {
  * malformed protocol response, or delayed attach is a closed failure. The helper never signals any endpoint PID.
  */
 /**
- * @param {{ endpoint: string, childPid: number, timeoutMs: number, connect?: CdpConnector }} options
+ * @param {{ endpoint: string, childPid: number, timeoutMs: number, deadlineMs?: number,
+ *   connect?: CdpConnector }} options
  * @returns {Promise<OwnedCdpAttachment>}
  */
-export async function attachOwnedCdp({ endpoint, childPid, timeoutMs, connect = attach }) {
+export async function attachOwnedCdp({ endpoint, childPid, timeoutMs, deadlineMs, connect = attach }) {
   if (typeof endpoint !== 'string' || !endpoint || !Number.isSafeInteger(childPid) || childPid <= 1) {
     return { browser: null, transportUncertain: false, lateRelease: null, failure: 'cdp-attach-failed' }
   }
-  const deadline = performance.now() + timeoutMs
+  // A shared observer may start just before this call; its deadline can only shorten, never extend, this budget.
+  const deadline = Math.min(performance.now() + timeoutMs, Number.isFinite(deadlineMs) ? deadlineMs : Infinity)
   const remaining = () => Math.max(0, deadline - performance.now())
   for (;;) {
     const attachRemaining = remaining()

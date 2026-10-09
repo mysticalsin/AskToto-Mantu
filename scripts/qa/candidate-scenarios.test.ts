@@ -67,7 +67,7 @@ const freshIdentity = {
   platform: 'darwin'
 }
 const freshReport = () => ({
-  schema: 'metis.fresh-onboarding-baseline.v1',
+  schema: 'metis.fresh-onboarding-baseline.v2',
   outcome: 'PASS',
   identity: { ...freshIdentity },
   assertions: [
@@ -83,6 +83,7 @@ const freshReport = () => ({
   ].map((id) => ({ id, status: 'PASS' })),
   failure: 'none',
   teardown: 'ACKNOWLEDGED',
+  cdp_diagnostic: 'NOT_APPLICABLE',
   not_covered: NOT_COVERED
 })
 
@@ -266,6 +267,35 @@ describe('fresh onboarding fixed-schema support evidence', () => {
     const foreign = freshOnboardingLane({ ...input, reportData: report })
     expect(foreign.outcome).toBe('FAIL')
     expect(foreign.detail).toBe('report-rejected')
+  })
+
+  it('keeps a bound Windows deadline diagnostic in the two-file upload without promoting it to PASS', () => {
+    const report = {
+      ...freshReport(),
+      identity: { ...freshIdentity, installer_sha256: WIN_SHA, platform: 'win32' },
+      outcome: 'FAIL',
+      failure: 'cdp-endpoint-deadline',
+      assertions: freshReport().assertions.map((row) => ({
+        ...row,
+        status: row.id === 'teardown-acknowledged' ? 'PASS' : 'NOT_RUN'
+      })),
+      cdp_diagnostic: 'BOTH_PROTOCOL_SHAPES_OBSERVED'
+    }
+    const input = { ...laneInput(report), platform: 'win', sha256: WIN_SHA, exitCode: 1 }
+    const lane = freshOnboardingLane(input)
+    expect(lane).toMatchObject({ outcome: 'FAIL', detail: 'scenario-failed', support_only: true })
+    const context = freshOnboardingScanContext({ ...input, laneWritten: true })
+    const dir = outputs()
+    writeFileSync(join(dir, 'fresh-onboarding-baseline.json'), JSON.stringify(report))
+    writeFileSync(join(dir, 'lane.json'), JSON.stringify(lane))
+    expect(scanFreshOnboardingOutput(dir, context)).toEqual([])
+    for (const diagnostic of ['NOT_APPLICABLE', 'private diagnostic']) {
+      writeFileSync(
+        join(dir, 'fresh-onboarding-baseline.json'),
+        JSON.stringify({ ...report, cdp_diagnostic: diagnostic })
+      )
+      expect(scanFreshOnboardingOutput(dir, context).length).toBeGreaterThan(0)
+    }
   })
 
   it('admits only the two exact, schema-validated, bound JSON files', () => {
