@@ -97,6 +97,7 @@ describe('Windows CDP diagnostic spike', () => {
         transportUncertain: false,
         lateRelease: null
       }),
+      observeProtocols: () => null,
       stop: async () => {
         teardownOrder.push('stop-owned-child')
         return { state: 'acknowledged' }
@@ -134,6 +135,7 @@ describe('Windows CDP diagnostic spike', () => {
         inspectorCalls++
         return { inspector: null, observation: null, transportUncertain: false, lateRelease: null }
       },
+      observeProtocols: () => null,
       stop: async () => ({ state: 'acknowledged' }),
       normalize: (value: unknown) => value,
       dispose: async () => true
@@ -163,6 +165,7 @@ describe('Windows CDP diagnostic spike', () => {
           transportUncertain: false,
           lateRelease: null
         }),
+        observeProtocols: () => null,
         stop: async () => ({ state: 'acknowledged' }),
         normalize: (value: unknown) => value,
         dispose: async () => true
@@ -192,6 +195,7 @@ describe('Windows CDP diagnostic spike', () => {
         transportUncertain: false,
         lateRelease: null
       }),
+      observeProtocols: () => null,
       stop: async () => ({ state: 'unacknowledged', reason: 'root-exit-unobserved' }),
       normalize: (value: unknown) => value,
       dispose: async () => {
