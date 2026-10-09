@@ -17,7 +17,3 @@ export const AGENT_STATUS = {
 } as const satisfies Record<string, { caption: string; state: OrbState }>
 
 export type AgentStatusKind = keyof typeof AGENT_STATUS
-
-export function agentStatusFor(kind: AgentStatusKind): { caption: string; state: OrbState } {
-  return AGENT_STATUS[kind]
-}
