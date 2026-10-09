@@ -1,9 +1,9 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { rmSync } from 'node:fs'
-import { createServer } from 'node:net'
 import { resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createHermeticSandbox, hermeticWranglerEnv, mergedEnv } from '../../scripts/hermetic/sandbox-env.mjs'
+import { waitForWranglerReady } from './wrangler-ready.mjs'
 
 // M2-0103 — the staging contract lane that needs no Cloudflare account. `migrate.mjs --local` builds the
 // schema in a throwaway local D1, then `wrangler dev --local --env staging` serves the staging
@@ -18,32 +18,6 @@ const MIGRATE = resolve(OPERATOR_DIR, 'scripts', 'migrate.mjs')
 const DENY_NON_LOOPBACK = resolve(REPO_ROOT, 'scripts', 'hermetic', 'deny-non-loopback.cjs')
 // A throwaway value that only exists for this local Worker; it is not a credential for anything.
 const LOCAL_INGEST_SECRET = 'local-contract-lane-secret'
-
-function freePort(): Promise<number> {
-  return new Promise((resolvePort, reject) => {
-    const server = createServer()
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address() as { port: number }
-      server.close(() => resolvePort(port))
-    })
-  })
-}
-
-async function waitForHealth(base: string, dev: ChildProcess, output: () => string): Promise<void> {
-  const deadline = Date.now() + 90_000
-  while (Date.now() < deadline) {
-    if (dev.exitCode !== null) throw new Error(`wrangler dev exited early (${dev.exitCode}):\n${output()}`)
-    try {
-      const res = await fetch(`${base}/health`)
-      if (res.status === 200) return
-    } catch {
-      // not listening yet
-    }
-    await new Promise((r) => setTimeout(r, 500))
-  }
-  throw new Error(`wrangler dev never became healthy:\n${output()}`)
-}
 
 describe.skipIf(process.platform === 'win32')('local staging contract lane (no Cloudflare credentials)', () => {
   let sandbox: ReturnType<typeof createHermeticSandbox>
@@ -66,8 +40,7 @@ describe.skipIf(process.platform === 'win32')('local staging contract lane (no C
     expect(migrate.stderr, migrate.stdout).not.toContain('HERMETIC_NETWORK_DENIED')
     expect(migrate.status, `${migrate.stdout}\n${migrate.stderr}`).toBe(0)
 
-    const port = await freePort()
-    base = `http://127.0.0.1:${port}`
+    const deadline = performance.now() + 90_000
     dev = spawn(
       process.execPath,
       [
@@ -79,7 +52,7 @@ describe.skipIf(process.platform === 'win32')('local staging contract lane (no C
         '--ip',
         '127.0.0.1',
         '--port',
-        String(port),
+        '0',
         '--inspector-port',
         '0',
         '--persist-to',
@@ -87,11 +60,23 @@ describe.skipIf(process.platform === 'win32')('local staging contract lane (no C
         '--var',
         `OPERATOR_INGEST_SECRET:${LOCAL_INGEST_SECRET}`
       ],
-      { cwd: OPERATOR_DIR, env, stdio: ['ignore', 'pipe', 'pipe'] }
+      { cwd: OPERATOR_DIR, env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] }
     )
+    const readiness = waitForWranglerReady(dev, {
+      deadline,
+      checkHealth: async (endpoint, signal) => {
+        const res = await fetch(`${endpoint}/health`, { signal })
+        await res.body?.cancel()
+        return res.status === 200
+      }
+    })
     dev.stdout?.on('data', (chunk) => (devOutput += chunk))
     dev.stderr?.on('data', (chunk) => (devOutput += chunk))
-    await waitForHealth(base, dev, () => devOutput)
+    try {
+      base = await readiness
+    } catch (error) {
+      throw new Error(`wrangler dev never became healthy:\n${devOutput}`, { cause: error })
+    }
   }, 300_000)
 
   afterAll(() => {
