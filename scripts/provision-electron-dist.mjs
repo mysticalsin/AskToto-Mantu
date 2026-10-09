@@ -60,9 +60,7 @@ const PLATFORMS = ['darwin', 'mas']
 const platformFlag = argv.find((a) => a.startsWith('--platform='))
 const PLATFORM = platformFlag ? platformFlag.slice('--platform='.length) : 'darwin'
 if (!PLATFORMS.includes(PLATFORM)) {
-  console.error(
-    `provision-electron-dist: unknown --platform "${PLATFORM}" — expected one of: ${PLATFORMS.join(', ')}`
-  )
+  console.error(`provision-electron-dist: unknown --platform "${PLATFORM}" — expected one of: ${PLATFORMS.join(', ')}`)
   process.exit(1)
 }
 
@@ -74,7 +72,7 @@ function electronVersion() {
 
 function fetchStream(url, redirectsLeft = 5) {
   return new Promise((resolve, reject) => {
-    const req = httpsGet(url, (res) => {
+    const req = httpsGet(url, { timeout: REQUEST_TIMEOUT_MS }, (res) => {
       const status = res.statusCode ?? 0
       if (status >= 300 && status < 400 && res.headers.location) {
         res.resume()
