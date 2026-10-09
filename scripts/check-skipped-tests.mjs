@@ -136,25 +136,13 @@ const REASONS = [
       'qa/candidate-report-readback.test.ts :: rejects a swapped producer or CI identity inside otherwise valid members',
     exact: true,
     why: 'Runs the real Linux system unzip against owned synthetic ZIPs only on hosted GitHub CI. The metadata and report-validation cases in the same file run cross-platform.'
-  },
-  {
-    match:
-      'qa/windows-cdp-diagnostic-readback.test.ts :: reads exactly one regular capped member from matching ZIP bytes',
-    exact: true,
-    why: 'Runs the real Linux system unzip against an owned synthetic ZIP only on hosted GitHub CI. Pinned metadata and status-validation cases in the same file run cross-platform.'
-  },
-  {
-    match:
-      'qa/windows-cdp-diagnostic-readback.test.ts :: rejects extra, traversing, link, oversized, corrupt and untrusted members without echoing them',
-    exact: true,
-    why: 'Runs the real Linux system unzip against owned adversarial ZIPs only on hosted GitHub CI. Other platforms cannot qualify this native archive route.'
   }
 ]
 
 /** Skips accepted on this platform. Each accepted skip is a platform-bound test with a REASON above.
  *  Lower it when a skip is retired; never raise it for an undeclared skip. */
 const hostedCi = process.env.CI === 'true' && process.env.GITHUB_ACTIONS === 'true'
-const BASELINE = { win32: 40, darwin: 8, linux: hostedCi ? 28 : 34 }
+const BASELINE = { win32: 38, darwin: 6, linux: hostedCi ? 28 : 32 }
 const reasonFor = (id) => REASONS.find((reason) => (reason.exact ? id === reason.match : id.includes(reason.match)))
 
 const platform = process.platform
