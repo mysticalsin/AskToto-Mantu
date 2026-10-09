@@ -81,12 +81,27 @@ jobs:
             echo 'unsigned-release-red:FIXTURE_SCOPE_MISMATCH'
             exit 1
           fi
-          for tree in scripts src; do
-            if [ "$(git -C base rev-parse "HEAD:$tree")" != "$(git -C fixture rev-parse "$fixture_base:$tree")" ]; then
+          if [ "$(git -C base rev-parse HEAD:src)" != "$(git -C fixture rev-parse "$fixture_base:src")" ]; then
+            echo 'unsigned-release-red:CONTRACT_STALE'
+            exit 1
+          fi
+          # #584 added only a Windows diagnostic source/test under scripts. Keep every pre-existing
+          # script byte-identical to the pinned fixture base; refuse any other new script path.
+          fixture_scripts=$(mktemp)
+          base_scripts=$(mktemp)
+          git -C fixture ls-tree -r --name-only "$fixture_base" -- scripts | LC_ALL=C sort > "$fixture_scripts"
+          git -C base ls-tree -r --name-only HEAD -- scripts | LC_ALL=C sort > "$base_scripts"
+          expected_new_scripts=$'scripts/qa/windows-cdp-env-matrix.mjs\nscripts/qa/windows-cdp-env-matrix.test.ts'
+          if [ "$(comm -13 "$fixture_scripts" "$base_scripts")" != "$expected_new_scripts" ]; then
+            echo 'unsigned-release-red:CONTRACT_STALE'
+            exit 1
+          fi
+          while IFS= read -r path; do
+            if [ "$(git -C base rev-parse "HEAD:$path" 2>/dev/null)" != "$(git -C fixture rev-parse "$fixture_base:$path" 2>/dev/null)" ]; then
               echo 'unsigned-release-red:CONTRACT_STALE'
               exit 1
             fi
-          done
+          done < "$fixture_scripts"
           for path in \
             .github/workflows/qa-candidate.yml \
             .github/workflows/promote-candidate.yml \
