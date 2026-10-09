@@ -475,6 +475,7 @@ async function runVariant(target, provenance, environment) {
             lateInspector = receipt
             retain(state, receipt.value)
           })
+        )
       }
       await Promise.all(tasks)
     }
