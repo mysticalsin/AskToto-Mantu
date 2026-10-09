@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { posix } from 'node:path'
+import { runInNewContext } from 'node:vm'
 import { describe, expect, it, vi } from 'vitest'
 import {
   ASK_REVEAL_MIN_HEIGHT_PX,
@@ -763,11 +764,81 @@ describe('owned direct-launch endpoint handshakes', () => {
     expect((messages[0] as { params: Record<string, unknown> }).params).not.toHaveProperty('awaitPromise')
     if (!result.inspector) throw new Error('expected attached inspector')
     await expect(result.inspector.close()).resolves.toBe(true)
+
+    const expression = (messages[0] as { params: Record<string, unknown> }).params.expression
+    if (typeof expression !== 'string') throw new Error('expected fixed observation expression')
+    const readinessCases: Array<{ label: string; readiness?: unknown; expected: object }> = [
+      { label: 'false', readiness: () => false, expected: { retry: 'app-not-ready' } },
+      { label: 'truthy string', readiness: () => 'true', expected: { retry: 'app-not-ready' } },
+      { label: 'truthy number', readiness: () => 1, expected: { retry: 'app-not-ready' } },
+      { label: 'null', readiness: () => null, expected: { retry: 'app-not-ready' } },
+      { label: 'undefined', readiness: () => undefined, expected: { retry: 'app-not-ready' } },
+      { label: 'missing method', expected: { failed: true } },
+      { label: 'non-callable method', readiness: true, expected: { failed: true } },
+      {
+        label: 'throwing method',
+        readiness: () => {
+          throw new Error('synthetic readiness failure')
+        },
+        expected: { failed: true }
+      },
+      {
+        label: 'ready',
+        readiness: () => true,
+        expected: { profileMatches: true, profileMask: 0, versionMatches: true, nativeFullDisplay: true }
+      }
+    ]
+    for (const { label, readiness, expected } of readinessCases) {
+      const reads: string[] = []
+      const app: Record<string, unknown> = {
+        ...freshProfileApp(observedFreshProfile([true, true, true, true]), reads),
+        getVersion() {
+          reads.push('version')
+          return '1.9.7'
+        }
+      }
+      if (label !== 'missing method') app.isReady = readiness
+      const bounds = { x: 0, y: 0, width: 1_280, height: 720 }
+      const electron = {
+        app,
+        get BrowserWindow() {
+          reads.push('BrowserWindow')
+          return {
+            getAllWindows: () => [{ id: 1, isDestroyed: () => false, isVisible: () => true, getBounds: () => bounds }]
+          }
+        },
+        get screen() {
+          reads.push('screen')
+          return { getDisplayMatching: () => ({ bounds }) }
+        }
+      }
+      const load = vi.fn((name: string) => {
+        if (name === 'node:path') return posix
+        if (name === 'electron') return electron
+        throw new Error('unexpected synthetic module')
+      })
+      const observed = runInNewContext(expression, { process: { pid: 42, mainModule: { require: load } } })
+      expect(observed, label).toEqual(expected)
+      expect(load.mock.calls.map(([name]) => name), label).toEqual(['node:path', 'electron'])
+      expect(reads, label).toEqual(
+        label === 'ready' ? ['BrowserWindow', 'screen', 'userData', 'home', 'appData', 'temp', 'version'] : []
+      )
+    }
+    const unownedLoad = vi.fn(() => {
+      throw new Error('unowned loader must not run')
+    })
+    expect(runInNewContext(expression, { process: { pid: 43, mainModule: { require: unownedLoad } } })).toEqual({
+      owner: false
+    })
+    expect(unownedLoad).not.toHaveBeenCalled()
+    expect(runInNewContext(expression, { process: { pid: 42, mainModule: {} } })).toEqual({
+      retry: 'loader-unavailable'
+    })
   })
 
-  it('retries only the fixed loader-unavailable response and closes a malformed observation', async () => {
+  it.each(['loader-unavailable', 'app-not-ready'])('retries exact %s on one socket', async (retry) => {
     const responses = [
-      { retry: 'loader-unavailable' },
+      { retry },
       { profileMatches: true, profileMask: 0, versionMatches: true, nativeFullDisplay: false }
     ]
     const sockets: Array<{ closed: boolean }> = []
@@ -822,11 +893,16 @@ describe('owned direct-launch endpoint handshakes', () => {
     })
     if (!result.inspector) throw new Error('expected attached inspector')
     await expect(result.inspector.close()).resolves.toBe(true)
+    expect(sockets).toHaveLength(1)
+    expect(responses).toHaveLength(0)
     expect(sockets[0].closed).toBe(true)
   })
 
   it.each([
     ['has an unknown shape', { extra: true }],
+    ['has an unknown retry', { retry: 'unknown' }],
+    ['has an app-not-ready retry with extra fields', { retry: 'app-not-ready', extra: true }],
+    ['has a loader retry with extra fields', { retry: 'loader-unavailable', extra: true }],
     ['omits the required profile mask', { profileMatches: true, versionMatches: true, nativeFullDisplay: false }],
     [
       'contradicts the all-pass mask',
@@ -884,6 +960,66 @@ describe('owned direct-launch endpoint handshakes', () => {
     })
     expect(result).toMatchObject({ inspector: null, observation: null, transportUncertain: false })
     expect(closed).toBe(true)
+  })
+
+  it.each(['never-ready', 'ready-after-deadline'])('bounds %s to the existing deadline', async (scenario) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    let clock = 0
+    const now = vi.spyOn(performance, 'now').mockImplementation(() => clock)
+    let requests = 0
+    let closed = false
+    class ReadinessSocket extends EventEmitter {
+      readyState = 0
+      constructor() {
+        super()
+        queueMicrotask(() => this.emit('open'))
+      }
+      addEventListener(name: string, listener: (...args: unknown[]) => void) {
+        this.on(name, listener)
+      }
+      send(raw: string) {
+        const request = JSON.parse(raw)
+        requests += 1
+        const lateReady = scenario === 'ready-after-deadline' && requests === 2
+        if (lateReady) clock = 1_001
+        const value = lateReady
+          ? { profileMatches: true, profileMask: 0, versionMatches: true, nativeFullDisplay: true }
+          : { retry: 'app-not-ready' }
+        queueMicrotask(() =>
+          this.emit('message', {
+            data: JSON.stringify({ id: request.id, result: { result: { value } } })
+          })
+        )
+      }
+      close() {
+        closed = true
+        this.readyState = 3
+        this.emit('close')
+      }
+    }
+    try {
+      const pending = attachOwnedMainInspector({
+        inspectPort: 9223,
+        childPid: 42,
+        expectedPaths: FRESH_PROFILE_PATHS,
+        expectedVersion: '1.9.7',
+        timeoutMs: 1_000,
+        fetchImpl: async () => ({ ok: true, json: async () => [{ webSocketDebuggerUrl: 'ws://127.0.0.1:9223/a' }] }),
+        WebSocketClass: ReadinessSocket
+      })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(requests).toBe(1)
+      if (scenario === 'never-ready') clock = 1_000
+      await vi.advanceTimersByTimeAsync(100)
+      const result = await pending
+      expect(result).toMatchObject({ inspector: null, observation: null, transportUncertain: false })
+      expect(requests).toBe(scenario === 'never-ready' ? 1 : 2)
+      expect(closed).toBe(true)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      now.mockRestore()
+      vi.useRealTimers()
+    }
   })
 
   it('rejects a fixed inspection result that settles after its monotonic deadline', async () => {
