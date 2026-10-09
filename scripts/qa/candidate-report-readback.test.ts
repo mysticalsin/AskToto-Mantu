@@ -23,7 +23,7 @@ const expectedIdentity = {
   installer_sha256: PIN.installerSha,
   version: '1.9.7',
   harness_commit: PIN.head,
-  platform: 'win32'
+  platform: 'win32' as const
 }
 const report = () =>
   createFreshOnboardingReport({
@@ -131,9 +131,11 @@ function storedZip(entries: { name: string; body: string; mode?: number }[], bad
   return Buffer.concat([...locals, directory, end])
 }
 
-const entries = (r = report(), l = lane()) => [
-  { name: 'fresh-onboarding-baseline.json', body: JSON.stringify(r) },
-  { name: 'lane.json', body: JSON.stringify(l) }
+// Negative fixtures intentionally contain invalid report/lane shapes. Serialize unknown input here;
+// the production reader must reject those bytes through its own closed schemas.
+const entries = (r: unknown = report(), l: unknown = lane()) => [
+  { name: 'fresh-onboarding-baseline.json', body: JSON.stringify(r) ?? 'null' },
+  { name: 'lane.json', body: JSON.stringify(l) ?? 'null' }
 ]
 const archivePin = (bytes: Buffer) => ({
   size: bytes.length,
