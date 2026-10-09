@@ -7,7 +7,7 @@ import Foundation
 // the actual recording/meeting store the `perform()` bodies drive (wired via the AppActions protocol so
 // the package stays free of app-target types).
 
-/// The app target conforms a controller to this and installs it at launch, so intents can drive real
+/// The app target installs its controller after binding persistence, so intents can drive real
 /// recording/summarize actions without the package importing app internals.
 ///
 /// Defined OUTSIDE the `canImport(AppIntents)` gate below: `MeetingController` conforms to it
@@ -35,8 +35,13 @@ private func actions() throws -> MeetingActions {
 
 public enum MetisIntentError: Error, CustomLocalizedStringResourceConvertible {
     case notReady
+    case meetingOperation(MeetingOperationError)
     public var localizedStringResource: LocalizedStringResource {
-        switch self { case .notReady: return "Métis isn't ready yet. Open the app once, then try again." }
+        switch self {
+        case .notReady: return "Métis isn't ready yet. Open the app once, then try again."
+        case .meetingOperation(let error):
+            return LocalizedStringResource(stringLiteral: error.errorDescription ?? "The meeting operation could not finish.")
+        }
     }
 }
 
@@ -55,8 +60,13 @@ public struct ToggleRecordingIntent: AppIntent {
 
     @MainActor
     public func perform() async throws -> some IntentResult & ProvidesDialog {
-        if record { try await actions().startRecording(); return .result(dialog: "Recording started.") }
-        try await actions().stopRecording(); return .result(dialog: "Recording stopped.")
+        do {
+            if record { try await actions().startRecording(); return .result(dialog: "Recording started.") }
+            try await actions().stopRecording()
+            return .result(dialog: "Recording stopped. Any collected transcript was saved.")
+        } catch let error as MeetingOperationError {
+            throw MetisIntentError.meetingOperation(error)
+        }
     }
 }
 

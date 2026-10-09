@@ -39,24 +39,48 @@ final class StoredMeeting {
 
 @MainActor
 enum MeetingStore {
-    /// Persist a finished meeting. Returns nil (no-op) for an empty meeting so a Record tapped by mistake
-    /// never litters the history with blank rows.
-    @discardableResult
-    static func save(_ meeting: Meeting, summary: MeetingSummaryText?, into context: ModelContext) -> StoredMeeting? {
-        guard !meeting.lines.isEmpty else { return nil }
-        let data = (try? JSONEncoder().encode(meeting.lines)) ?? Data()
+    enum SaveError: Error { case duplicateMeeting }
+
+    /// Acknowledges only an explicit save. Each attempt owns its rollback scope, never History's context.
+    static func save(
+        _ meeting: Meeting,
+        summary: MeetingSummaryText?,
+        into container: ModelContainer,
+        commit: @MainActor (ModelContext) throws -> Void = { try $0.save() }
+    ) throws {
+        guard !meeting.lines.isEmpty else { return }
+        let data = try JSONEncoder().encode(meeting.lines)
         let headline = summary?.headline.isEmpty == false ? summary?.headline : nil
-        let stored = StoredMeeting(
-            meetingID: meeting.id,
-            title: meeting.title,
-            startedAt: meeting.startedAt,
-            endedAt: meeting.endedAt ?? Date(),
-            lineCount: meeting.lines.count,
-            summaryHeadline: headline,
-            linesData: data
-        )
-        context.insert(stored)
-        try? context.save()
-        return stored
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let meetingID = meeting.id
+        var descriptor = FetchDescriptor<StoredMeeting>(predicate: #Predicate { $0.meetingID == meetingID })
+        descriptor.fetchLimit = 2
+        do {
+            let matches = try context.fetch(descriptor)
+            guard matches.count < 2 else { throw SaveError.duplicateMeeting }
+            if let stored = matches.first {
+                stored.title = meeting.title
+                stored.startedAt = meeting.startedAt
+                stored.endedAt = meeting.endedAt
+                stored.lineCount = meeting.lines.count
+                stored.summaryHeadline = headline
+                stored.linesData = data
+            } else {
+                context.insert(StoredMeeting(
+                    meetingID: meeting.id,
+                    title: meeting.title,
+                    startedAt: meeting.startedAt,
+                    endedAt: meeting.endedAt,
+                    lineCount: meeting.lines.count,
+                    summaryHeadline: headline,
+                    linesData: data
+                ))
+            }
+            try commit(context)
+        } catch {
+            context.rollback()
+            throw error
+        }
     }
 }
