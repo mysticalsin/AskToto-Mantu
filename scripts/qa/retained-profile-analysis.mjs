@@ -528,9 +528,24 @@ function canaryZip(entries, badCrc = false) {
   return Buffer.concat([...locals, directory, end])
 }
 
+/** @param {unknown} bytes */
+export function verifyUnzipVersion(bytes) {
+  try {
+    if (!Buffer.isBuffer(bytes) || bytes.length === 0 || bytes.length > 8192) {
+      throw new DiagnosticFailure('canary-failed')
+    }
+    text(bytes)
+    const end = bytes.indexOf(0x0a)
+    const expected = Buffer.from('UnZip 6.00 of 20 April 2009, by Debian. Original by Info-ZIP.')
+    requireValue(end > 0 && bytes.subarray(0, end).equals(expected), 'canary-failed')
+  } catch {
+    fail('canary-failed')
+  }
+}
+
 export async function nativeCanary(dir, deadline) {
   const version = await runUnzip(['-v'], { cwd: dir, cap: 8192, deadline })
-  requireValue(text(version).startsWith('UnZip 6.00 of 20 April 2009, by Info-ZIP.'), 'canary-failed')
+  verifyUnzipVersion(version)
   const clean = [
     { name: 'canary.json', body: '{"ok":true}' },
     { name: 'ignored.txt', body: 'not selected' }

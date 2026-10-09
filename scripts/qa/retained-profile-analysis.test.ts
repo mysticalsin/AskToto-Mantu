@@ -20,7 +20,8 @@ import {
   verifyArtifact,
   verifyJob,
   verifyProvenance,
-  verifyRun
+  verifyRun,
+  verifyUnzipVersion
 } from './retained-profile-analysis.mjs'
 
 const source = SOURCES[0]
@@ -205,6 +206,44 @@ describe('fixed retained source custody', () => {
     expect(() => verifyArchiveBytes(Buffer.alloc(0), expected)).not.toThrow()
     expect(() => verifyArchiveBytes(Buffer.from(secret), expected)).toThrow('archive-mismatch')
     expect(() => verifyArchiveBytes(Buffer.alloc(0), { ...expected, sha: source.history.sha })).toThrow()
+  })
+})
+
+describe('exact native unzip version line', () => {
+  const line = 'UnZip 6.00 of 20 April 2009, by Debian. Original by Info-ZIP.'
+
+  it('accepts only the complete source-backed LF line with private valid UTF-8 details', () => {
+    expect(() => verifyUnzipVersion(Buffer.from(`${line}\n`))).not.toThrow()
+    expect(() => verifyUnzipVersion(Buffer.from(`${line}\n\n${secret}\n`))).not.toThrow()
+    const prefix = Buffer.from(`${line}\n`)
+    const maxOutput = Buffer.concat([prefix, Buffer.alloc(8192 - prefix.length, 0x61)])
+    expect(() => verifyUnzipVersion(maxOutput)).not.toThrow()
+  })
+
+  const rejected: [string, Buffer][] = [
+    ['wrong version', Buffer.from(`${line.replace('6.00', '6.01')}\n`)],
+    ['wrong date', Buffer.from(`${line.replace('2009', '2020')}\n`)],
+    ['wrong vendor', Buffer.from(`${line.replace('Debian', 'Unknown')}\n`)],
+    ['wrong case', Buffer.from(`${line.toLowerCase()}\n`)],
+    ['prefix', Buffer.from(`prefix${line}\n`)],
+    ['suffix', Buffer.from(`${line}suffix\n`)],
+    ['leading whitespace', Buffer.from(` ${line}\n`)],
+    ['BOM', Buffer.from(`\uFEFF${line}\n`)],
+    ['CRLF', Buffer.from(`${line}\r\n`)],
+    ['missing LF', Buffer.from(line)],
+    ['empty', Buffer.alloc(0)],
+    ['truncated', Buffer.from('UnZip 6.00\n')],
+    ['invalid UTF-8', Buffer.from([0xff, 0x0a])],
+    ['invalid UTF-8 details', Buffer.concat([Buffer.from(`${line}\n`), Buffer.from([0xff])])],
+    ['oversize', Buffer.concat([Buffer.from(`${line}\n`), Buffer.alloc(8192 - line.length, 0x61)])]
+  ]
+  it.each(rejected)('rejects %s without exposing tool output', (_label, bytes) => {
+    expect(() => verifyUnzipVersion(bytes)).toThrow('canary-failed')
+  })
+
+  it('rejects non-Buffer input with the same closed error', () => {
+    expect(() => verifyUnzipVersion(`${line}\n`)).toThrow('canary-failed')
+    expect(() => verifyUnzipVersion(null)).toThrow('canary-failed')
   })
 })
 
