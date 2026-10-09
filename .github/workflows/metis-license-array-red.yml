@@ -1,0 +1,164 @@
+name: Metis license entitlement array RED (temporary)
+
+# Disposable, read-only TDD evidence. Remove after the single hosted observation and no later
+# than 2026-10-11T18:00:00Z. A passing job means the one named synthetic assertion failed in
+# the expected way; it does not mean the application, license, or release passed acceptance.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: metis-license-array-red
+  cancel-in-progress: false
+
+jobs:
+  observe-red:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Refuse a foreign repository, event or branch
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$EVENT_NAME" != workflow_dispatch ] || [ "$REPOSITORY" != mysticalsin/AskToto-Mantu ] || [ "$REF" != refs/heads/main ]; then
+            echo 'license-red:WRONG_DISPATCH'
+            exit 1
+          fi
+      - name: Enforce the temporary workflow expiry
+        shell: bash
+        run: |
+          if (( $(date -u +%s) >= $(date -ud '2026-10-11T18:00:00Z' +%s) )); then
+            echo 'license-red:EXPIRED'
+            exit 1
+          fi
+      - name: Checkout the dispatched main commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          path: base
+          persist-credentials: false
+      - name: Checkout the pinned, test-only fixture commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: 761b4a5abfe1208fcc3d87913ce4c7e4b70ec89a
+          path: fixture
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Refuse stale or mutated fixture inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture_sha='761b4a5abfe1208fcc3d87913ce4c7e4b70ec89a'
+          fixture_parent='554ffa2eac1b16537ef40082df755352ce9e576a'
+          if [ "$(git -C base rev-parse HEAD 2>/dev/null)" != "$GITHUB_SHA" ]; then
+            echo 'license-red:BASE_MISMATCH'
+            exit 1
+          fi
+          if [ "$(git -C fixture rev-parse HEAD 2>/dev/null)" != "$fixture_sha" ]; then
+            echo 'license-red:FIXTURE_MISMATCH'
+            exit 1
+          fi
+          if [ "$(git -C fixture rev-parse HEAD^ 2>/dev/null)" != "$fixture_parent" ]; then
+            echo 'license-red:PARENT_MISMATCH'
+            exit 1
+          fi
+          if [ "$(git -C fixture diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null)" != 'src/shared/operator-entitlements.test.ts' ]; then
+            echo 'license-red:FIXTURE_SCOPE_MISMATCH'
+            exit 1
+          fi
+          for path in \
+            src/shared/operator-entitlements.ts \
+            operator/src/tiers.ts \
+            operator/src/index.ts \
+            operator/src/store.ts \
+            package.json \
+            package-lock.json \
+            vitest.config.ts \
+            tsconfig.tests.json \
+            scripts/check-test-types.mjs; do
+            if ! cmp -s "base/$path" "fixture/$path"; then
+              echo 'license-red:CONTRACT_STALE'
+              exit 1
+            fi
+          done
+          if ! cmp -s base/src/shared/operator-entitlements.test.ts <(git -C fixture show HEAD^:src/shared/operator-entitlements.test.ts 2>/dev/null); then
+            echo 'license-red:TEST_BASE_STALE'
+            exit 1
+          fi
+          echo 'license-red:FIXTURE_PINNED'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Install and typecheck the test fixture
+        working-directory: fixture
+        shell: bash
+        run: |
+          if ! npm ci --no-audit --no-fund > "$RUNNER_TEMP/license-red-npm.log" 2>&1; then
+            echo 'license-red:INSTALL_FAILED'
+            exit 1
+          fi
+          if ! npm run typecheck:tests > "$RUNNER_TEMP/license-red-types.log" 2>&1; then
+            echo 'license-red:TYPECHECK_FAILED'
+            exit 1
+          fi
+          echo 'license-red:TEST_TYPES_CLEAN'
+      - name: Classify only the named, expected RED assertion
+        working-directory: fixture
+        shell: bash
+        run: |
+          set +e
+          NO_COLOR=1 FORCE_COLOR=0 ./node_modules/.bin/vitest run \
+            src/shared/operator-entitlements.test.ts \
+            -t 'grants only known names from the Worker heartbeat entitlement list' \
+            --reporter=json \
+            > "$RUNNER_TEMP/license-red-vitest.json" \
+            2> "$RUNNER_TEMP/license-red-vitest.stderr"
+          test_exit=$?
+          set -e
+          if [ "$test_exit" -ne 1 ]; then
+            echo 'license-red:UNEXPECTED_EXIT'
+            exit 1
+          fi
+          VITEST_REPORT="$RUNNER_TEMP/license-red-vitest.json" node <<'NODE'
+          const { readFileSync } = require('node:fs')
+          let report
+          try {
+            report = JSON.parse(readFileSync(process.env.VITEST_REPORT, 'utf8'))
+          } catch {
+            console.error('license-red:REPORT_INVALID')
+            process.exit(1)
+          }
+          const target = 'grants only known names from the Worker heartbeat entitlement list'
+          const suites = report.testResults
+          const assertions = Array.isArray(suites) && suites.length === 1 &&
+            Array.isArray(suites[0].assertionResults) ? suites[0].assertionResults : []
+          const ran = assertions.filter((assertion) => assertion.status === 'failed' || assertion.status === 'passed')
+          const failure = ran[0]
+          const message = failure?.failureMessages?.[0]
+          if (
+            report.success === false &&
+            report.numFailedTests === 1 &&
+            report.numPassedTests === 0 &&
+            suites?.length === 1 &&
+            suites[0].name?.endsWith('/src/shared/operator-entitlements.test.ts') &&
+            ran.length === 1 &&
+            failure.status === 'failed' &&
+            failure.title === target &&
+            failure.failureMessages?.length === 1 &&
+            typeof message === 'string' &&
+            /^AssertionError: expected /.test(message) &&
+            message.includes('to deeply equal') &&
+            message.includes('ask') &&
+            message.includes('operator_keys')
+          ) {
+            console.log('license-red:EXPECTED_ASSERTION_FAILURE')
+          } else {
+            console.error('license-red:UNEXPECTED_TEST_RESULT')
+            process.exit(1)
+          }
+          NODE
