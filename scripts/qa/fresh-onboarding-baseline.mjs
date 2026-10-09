@@ -18,7 +18,7 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, posix, relative, resolve, win32 } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-export const FRESH_ONBOARDING_SCHEMA = 'metis.fresh-onboarding-baseline.v1'
+export const FRESH_ONBOARDING_SCHEMA = 'metis.fresh-onboarding-baseline.v2'
 export const ASSERTION_IDS = Object.freeze([
   'hermetic-fresh-profile',
   'pre-setup-boundary',
@@ -44,7 +44,16 @@ export const NOT_COVERED = Object.freeze([
 ])
 
 const REPORT_FILE = 'fresh-onboarding-baseline.json'
-const REPORT_KEYS = ['schema', 'outcome', 'identity', 'assertions', 'failure', 'teardown', 'not_covered']
+const REPORT_KEYS = [
+  'schema',
+  'outcome',
+  'identity',
+  'assertions',
+  'failure',
+  'teardown',
+  'cdp_diagnostic',
+  'not_covered'
+]
 const IDENTITY_KEYS = ['candidate_run', 'producer_commit', 'installer_sha256', 'version', 'harness_commit', 'platform']
 const EXPECTED_IDENTITY_KEYS = ['candidateRun', 'commit', 'sha256', 'version', 'harnessCommit', 'platform']
 const ASSERTION_KEYS = ['id', 'status']
@@ -52,6 +61,13 @@ const NOT_COVERED_KEYS = ['row', 'reason']
 const OUTCOMES = new Set(['PASS', 'FAIL', 'PRECONDITION'])
 const ASSERTION_STATUSES = new Set(['PASS', 'FAIL', 'NOT_RUN'])
 const TEARDOWN_STATES = new Set(['ACKNOWLEDGED', 'UNACKNOWLEDGED', 'NOT_ATTEMPTED'])
+const CDP_DIAGNOSTICS = new Set([
+  'NOT_APPLICABLE',
+  'NOT_OBSERVED',
+  'CDP_PROTOCOL_SHAPE_OBSERVED',
+  'INSPECTOR_PROTOCOL_SHAPE_OBSERVED',
+  'BOTH_PROTOCOL_SHAPES_OBSERVED'
+])
 const CLOSED_CDP_FAILURES = Object.freeze([
   'cdp-endpoint-deadline',
   'cdp-transport-timeout',
@@ -188,7 +204,8 @@ export function freshOnboardingIdentityFailure(profileMatches, profileMask, vers
  *   identity?: FreshOnboardingIdentity,
  *   assertions?: FreshOnboardingAssertion[],
  *   failure?: string,
- *   teardown?: string
+ *   teardown?: string,
+ *   cdp_diagnostic?: string
  * }} FreshOnboardingReportOptions
  */
 /** @typedef {{ requirePass?: boolean }} FreshOnboardingAssessmentOptions */
@@ -329,6 +346,11 @@ function reportSemanticProblems(report) {
   ) {
     problems.push('TEARDOWN_ASSERTION_INVALID')
   }
+  const eligible =
+    report.identity.platform === 'win32' && report.outcome === 'FAIL' && report.failure === 'cdp-endpoint-deadline'
+  if (eligible ? report.cdp_diagnostic === 'NOT_APPLICABLE' : report.cdp_diagnostic !== 'NOT_APPLICABLE') {
+    problems.push('CDP_DIAGNOSTIC_SEMANTICS_INVALID')
+  }
   return problems
 }
 
@@ -344,6 +366,7 @@ export function reportProblems(report) {
     problems.push(...assertionProblems(value.assertions))
     if (!FAILURES.has(value.failure)) problems.push('REPORT_FAILURE_INVALID')
     if (!TEARDOWN_STATES.has(value.teardown)) problems.push('REPORT_TEARDOWN_INVALID')
+    if (!CDP_DIAGNOSTICS.has(value.cdp_diagnostic)) problems.push('CDP_DIAGNOSTIC_INVALID')
     problems.push(...notCoveredProblems(value.not_covered))
     if (problems.length) return problems
     return reportSemanticProblems(value)
@@ -417,7 +440,8 @@ export function createFreshOnboardingReport({
   identity = emptyIdentity(),
   assertions = initialAssertions(),
   failure = 'invalid-arguments',
-  teardown = 'NOT_ATTEMPTED'
+  teardown = 'NOT_ATTEMPTED',
+  cdp_diagnostic = 'NOT_APPLICABLE'
 } = {}) {
   return {
     schema: FRESH_ONBOARDING_SCHEMA,
@@ -428,6 +452,7 @@ export function createFreshOnboardingReport({
       : assertions,
     failure,
     teardown,
+    cdp_diagnostic,
     not_covered: cloneNotCovered()
   }
 }
@@ -746,6 +771,8 @@ async function execute(argv) {
     ownershipCaptured: false,
     transportReleased: false,
     transportUncertain: false,
+    cdpDiagnostic: 'NOT_APPLICABLE',
+    protocolObserver: null,
     lateReleases: [],
     stopOwnedChild: null,
     normalizeTeardown: null,
@@ -791,8 +818,9 @@ async function execute(argv) {
       throw finiteError('profile-rejected', 'PRECONDITION')
     }
 
-    const [appDriver, onboardingFlow, termination] = await Promise.all([
+    const [appDriver, endpointObservation, onboardingFlow, termination] = await Promise.all([
       import('./lib/app-driver.mjs'),
+      import('./lib/endpoint-observation.mjs'),
       import('./golden-flows/onboarding-flows.mjs'),
       import('./lib/st-1-termination.mjs')
     ])
@@ -807,14 +835,16 @@ async function execute(argv) {
       strictLaunchEnvironment
     } = appDriver
     const { runFreshOnboardingBaselineFlow } = onboardingFlow
+    const { observeLoopbackProtocols } = endpointObservation
     const { normalizeTeardown, stopOwnedChild } = termination
     state.disposeFreshOnboardingTransports = disposeFreshOnboardingTransports
     state.normalizeTeardown = normalizeTeardown
     state.stopOwnedChild = stopOwnedChild
     const environment = strictLaunchEnvironment(process.env, state.profile, args.platform)
     let launch
+    let cdpPort
     try {
-      const cdpPort = await boundedCall(() => freeLoopbackPort(), ACTION_TIMEOUT_MS, 'fresh-action-timeout')
+      cdpPort = await boundedCall(() => freeLoopbackPort(), ACTION_TIMEOUT_MS, 'fresh-action-timeout')
       const inspectPort = await boundedCall(() => freeLoopbackPort(), ACTION_TIMEOUT_MS, 'fresh-action-timeout')
       if (cdpPort === inspectPort) throw new Error('loopback-port-collision')
       state.launchAttempted = true
@@ -852,16 +882,31 @@ async function execute(argv) {
       return value
     }
 
+    const cdpDeadline = performance.now() + ACTION_TIMEOUT_MS
+    if (args.platform === 'win32') {
+      state.protocolObserver = observeLoopbackProtocols({
+        cdpPort,
+        inspectPort: launch.inspectPort,
+        deadline: cdpDeadline
+      })
+    }
     const attachedCdp = await attachOwnedCdp({
       endpoint: launch.cdpEndpoint,
       childPid: state.child.pid,
-      timeoutMs: ACTION_TIMEOUT_MS
+      timeoutMs: ACTION_TIMEOUT_MS,
+      deadlineMs: cdpDeadline
     })
+    const cdpObservation = state.protocolObserver?.cancel()
+    state.protocolObserver = null
     state.transportUncertain ||= attachedCdp.transportUncertain
     if (attachedCdp.lateRelease) state.lateReleases.push(attachedCdp.lateRelease)
     state.browser = attachedCdp.browser
     verifyLaunch()
-    if (!attachedCdp.browser) throw finiteError(cdpAttachFailure(attachedCdp.failure))
+    if (!attachedCdp.browser) {
+      const failure = cdpAttachFailure(attachedCdp.failure)
+      if (args.platform === 'win32' && failure === 'cdp-endpoint-deadline') state.cdpDiagnostic = cdpObservation
+      throw finiteError(failure)
+    }
 
     const attachedInspector = await attachOwnedMainInspector({
       inspectPort: launch.inspectPort,
@@ -926,6 +971,8 @@ async function execute(argv) {
     if (state.failure === 'none') state.failure = mapFlowFailure(error)
     state.outcome = error?.outcome === 'PRECONDITION' ? 'PRECONDITION' : 'FAIL'
   } finally {
+    state.protocolObserver?.cancel()
+    state.protocolObserver = null
     if (state.launchAttempted) {
       const result = await teardownThenDispose({
         child: state.ownershipCaptured ? state.child : null,
@@ -968,7 +1015,8 @@ async function main(argv) {
     identity: state.identity,
     assertions: state.assertions,
     failure: state.failure,
-    teardown: state.teardown
+    teardown: state.teardown,
+    cdp_diagnostic: state.cdpDiagnostic
   })
   if (!state.output) return { exitCode: 1, outcome: 'FAIL', failure: 'report-write-failed' }
   try {

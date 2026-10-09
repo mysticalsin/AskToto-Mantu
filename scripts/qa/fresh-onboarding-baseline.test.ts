@@ -80,6 +80,7 @@ describe('fresh onboarding baseline report', () => {
   it('keeps the report entirely finite and content-free', () => {
     const report = passingReport()
     expect(report.schema).toBe(FRESH_ONBOARDING_SCHEMA)
+    expect(report.cdp_diagnostic).toBe('NOT_APPLICABLE')
     expect(report.not_covered).toEqual(NOT_COVERED)
     expect(reportProblems(report)).toEqual([])
     expect(assessFreshOnboardingReport(report, expected)).toEqual({
@@ -170,6 +171,52 @@ describe('fresh onboarding baseline report', () => {
     ]) {
       expect(reportProblems({ ...passingReport(), outcome: 'FAIL', failure })).toContain('REPORT_FAILURE_INVALID')
     }
+  })
+
+  it('accepts protocol-shape observations only for a failed Windows endpoint deadline', () => {
+    const failed = createFreshOnboardingReport({
+      outcome: 'FAIL',
+      identity: { ...IDENTITY, platform: 'win32' },
+      assertions: ASSERTION_IDS.map((id) => ({
+        id,
+        status: id === 'teardown-acknowledged' ? 'PASS' : 'NOT_RUN'
+      })),
+      failure: 'cdp-endpoint-deadline',
+      teardown: 'ACKNOWLEDGED',
+      cdp_diagnostic: 'NOT_OBSERVED'
+    })
+    for (const diagnostic of [
+      'NOT_OBSERVED',
+      'CDP_PROTOCOL_SHAPE_OBSERVED',
+      'INSPECTOR_PROTOCOL_SHAPE_OBSERVED',
+      'BOTH_PROTOCOL_SHAPES_OBSERVED'
+    ]) {
+      expect(reportProblems({ ...failed, cdp_diagnostic: diagnostic })).toEqual([])
+      expect(assessFreshOnboardingReport({ ...failed, cdp_diagnostic: diagnostic }, undefined).problems).toEqual([
+        'OUTCOME_NOT_PASS'
+      ])
+    }
+    expect(reportProblems({ ...failed, cdp_diagnostic: 'NOT_APPLICABLE' })).toContain(
+      'CDP_DIAGNOSTIC_SEMANTICS_INVALID'
+    )
+    expect(reportProblems({ ...failed, cdp_diagnostic: 'private endpoint content' })).toContain(
+      'CDP_DIAGNOSTIC_INVALID'
+    )
+    expect(reportProblems({ ...failed, cdp_diagnostic: { cdp: 'NOT_OBSERVED' } })).toContain(
+      'CDP_DIAGNOSTIC_INVALID'
+    )
+    expect(reportProblems({ ...failed, cdp_diagnostic: 'NOT_OBSERVED', extra: 'private endpoint content' })).toContain(
+      'REPORT_KEYS_INVALID'
+    )
+    expect(reportProblems({ ...failed, outcome: 'PASS' })).toContain('CDP_DIAGNOSTIC_SEMANTICS_INVALID')
+    expect(reportProblems({ ...failed, failure: 'cdp-transport-timeout' })).toContain(
+      'CDP_DIAGNOSTIC_SEMANTICS_INVALID'
+    )
+    expect(reportProblems({ ...failed, identity: IDENTITY })).toContain('CDP_DIAGNOSTIC_SEMANTICS_INVALID')
+    expect(reportProblems({ ...failed, cdp_diagnostic: undefined })).toContain('CDP_DIAGNOSTIC_INVALID')
+    expect(reportProblems({ ...failed, schema: 'metis.fresh-onboarding-baseline.v1' })).toContain(
+      'REPORT_SCHEMA_INVALID'
+    )
   })
 
   it('rejects unknown report fields, reordered assertion rows and identity mismatches', () => {
