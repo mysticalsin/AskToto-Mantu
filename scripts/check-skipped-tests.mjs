@@ -119,13 +119,29 @@ const REASONS = [
       'qa/retained-profile-analysis.test.ts :: verifies selected bytes, CRC failure and policy rejection without extracting files',
     exact: true,
     why: 'Runs the real Linux system unzip against owned synthetic ZIPs only on hosted GitHub CI. Windows/macOS and off-hosted Linux cannot qualify this native route; the same file runs pure identity, schema, transport and child-lifecycle tests cross-platform.'
+  },
+  {
+    match: 'qa/candidate-report-readback.test.ts :: reads only the two regular JSON members from an exact digest',
+    exact: true,
+    why: 'Runs the real Linux system unzip against owned synthetic ZIPs only on hosted GitHub CI. The metadata and report-validation cases in the same file run cross-platform.'
+  },
+  {
+    match:
+      'qa/candidate-report-readback.test.ts :: rejects extra, traversal, case-collision, link, oversized, corrupt CRC and malformed members',
+    exact: true,
+    why: 'Runs the real Linux system unzip against owned synthetic ZIPs only on hosted GitHub CI. The metadata and report-validation cases in the same file run cross-platform.'
+  },
+  {
+    match: 'qa/candidate-report-readback.test.ts :: rejects a swapped producer or CI identity inside otherwise valid members',
+    exact: true,
+    why: 'Runs the real Linux system unzip against owned synthetic ZIPs only on hosted GitHub CI. The metadata and report-validation cases in the same file run cross-platform.'
   }
 ]
 
 /** Skips accepted on this platform. Each accepted skip is a platform-bound test with a REASON above.
  *  Lower it when a skip is retired; never raise it for an undeclared skip. */
 const hostedCi = process.env.CI === 'true' && process.env.GITHUB_ACTIONS === 'true'
-const BASELINE = { win32: 35, darwin: 3, linux: hostedCi ? 28 : 29 }
+const BASELINE = { win32: 38, darwin: 6, linux: hostedCi ? 28 : 32 }
 const reasonFor = (id) => REASONS.find((reason) => (reason.exact ? id === reason.match : id.includes(reason.match)))
 
 const platform = process.platform
