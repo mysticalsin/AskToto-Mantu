@@ -78,6 +78,8 @@ const hasFreshProfilePaths = (value) => {
   return Boolean(paths && FRESH_PROFILE_KEYS.every((key) => typeof paths[key] === 'string' && paths[key]))
 }
 
+const isFreshProfileMask = (value) => Number.isSafeInteger(value) && value >= 0 && value < 16
+
 /** Reject with `message` if `operation` has not settled within `timeoutMs`. The timer never outlives it. */
 export function withTimeout(operation, timeoutMs, message) {
   let timer
@@ -119,7 +121,7 @@ function requiredEnvironmentPath(paths, key) {
 /**
  * Return the only environment a fresh packaged probe may pass into Electron. In particular this never copies
  * GitHub/provider credentials, debug switches, inherited Métis overrides or the owner's profile paths.
- * @returns {NodeJS.ProcessEnv}
+ * @returns {Record<string, string>}
  */
 export function strictLaunchEnvironment(baseEnvironment, paths, platform = process.platform) {
   if (!['darwin', 'win32'].includes(platform)) throw new Error('strict environment supports darwin and win32 only.')
@@ -548,6 +550,53 @@ async function openInspectorSocket(endpoint, timeoutMs, WebSocketClass) {
   })
 }
 
+/**
+ * Capture each fixed profile path once and classify only its finite isolation result. This is embedded unchanged in
+ * the owned main-process observation, so synthetic tests exercise the same comparison as the inspector.
+ * @param {{ getPath: (name: string) => unknown }} app
+ * @param {{ relative: (from: string, to: string) => string, sep: string,
+ *   isAbsolute: (value: string) => boolean }} path
+ * @param {{ root?: unknown, userData?: unknown }} expectedPaths
+ * @returns {{ profileMatches: boolean, profileMask: number } | null}
+ */
+export function freshProfileObservation(app, path, expectedPaths) {
+  try {
+    if (
+      typeof app?.getPath !== 'function' ||
+      typeof path?.relative !== 'function' ||
+      typeof path?.isAbsolute !== 'function' ||
+      typeof path?.sep !== 'string' ||
+      typeof expectedPaths?.root !== 'string' ||
+      !expectedPaths.root ||
+      typeof expectedPaths.userData !== 'string' ||
+      !expectedPaths.userData
+    ) {
+      return null
+    }
+    const userData = app.getPath('userData')
+    const home = app.getPath('home')
+    const appData = app.getPath('appData')
+    const temp = app.getPath('temp')
+    if (![userData, home, appData, temp].every((value) => typeof value === 'string' && value)) {
+      return null
+    }
+    const within = (value) => {
+      const relative = path.relative(expectedPaths.root, value)
+      return (
+        relative === '' || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative))
+      )
+    }
+    const profileMask =
+      (userData === expectedPaths.userData ? 0 : 1) |
+      (within(home) ? 0 : 2) |
+      (within(appData) ? 0 : 4) |
+      (within(temp) ? 0 : 8)
+    return { profileMatches: profileMask === 0, profileMask }
+  } catch {
+    return null
+  }
+}
+
 function freshMainObservationExpression({ childPid, expectedPaths, expectedVersion }) {
   const expected = JSON.stringify({ childPid, paths: expectedPaths, version: expectedVersion })
   return `(() => {
@@ -558,14 +607,8 @@ function freshMainObservationExpression({ childPid, expectedPaths, expectedVersi
     try {
       const path = load('node:path')
       const { app, BrowserWindow, screen } = load('electron')
-      const within = (value) => {
-        if (typeof value !== 'string' || !value) return false
-        const relative = path.relative(expected.paths.root, value)
-        return (
-          relative === '' ||
-          (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative))
-        )
-      }
+      const profile = (${freshProfileObservation.toString()})(app, path, expected.paths)
+      if (!profile) return { failed: true }
       const visible = BrowserWindow.getAllWindows()
         .filter((candidate) => !candidate.isDestroyed() && candidate.isVisible())
         .sort((left, right) => right.id - left.id)[0]
@@ -580,11 +623,7 @@ function freshMainObservationExpression({ childPid, expectedPaths, expectedVersi
           bounds.height === display.height
       }
       return {
-        profileMatches:
-          app.getPath('userData') === expected.paths.userData &&
-          within(app.getPath('home')) &&
-          within(app.getPath('appData')) &&
-          within(app.getPath('temp')),
+        ...profile,
         versionMatches: app.getVersion() === expected.version,
         nativeFullDisplay
       }
@@ -599,10 +638,17 @@ function exactObservation(value) {
   if (retry?.retry === 'loader-unavailable') return { kind: 'retry' }
   const owner = snapshotExactRecord(value, ['owner'])
   if (owner && owner.owner === false) return { kind: 'failed' }
-  const observation = snapshotExactRecord(value, ['profileMatches', 'versionMatches', 'nativeFullDisplay'])
+  const observation = snapshotExactRecord(value, [
+    'profileMatches',
+    'profileMask',
+    'versionMatches',
+    'nativeFullDisplay'
+  ])
   if (
     observation &&
     typeof observation.profileMatches === 'boolean' &&
+    isFreshProfileMask(observation.profileMask) &&
+    observation.profileMatches === (observation.profileMask === 0) &&
     typeof observation.versionMatches === 'boolean' &&
     typeof observation.nativeFullDisplay === 'boolean'
   ) {

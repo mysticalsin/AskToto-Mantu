@@ -58,6 +58,24 @@ const CLOSED_CDP_FAILURES = Object.freeze([
   'cdp-session-or-process-info-invalid',
   'cdp-browser-pid-mismatch'
 ])
+export const FRESH_PROFILE_FAILURES = Object.freeze([
+  'none',
+  'profile-user-data-mismatch',
+  'profile-home-mismatch',
+  'profile-user-data-home-mismatch',
+  'profile-app-data-mismatch',
+  'profile-user-data-app-data-mismatch',
+  'profile-home-app-data-mismatch',
+  'profile-user-data-home-app-data-mismatch',
+  'profile-temp-mismatch',
+  'profile-user-data-temp-mismatch',
+  'profile-home-temp-mismatch',
+  'profile-user-data-home-temp-mismatch',
+  'profile-app-data-temp-mismatch',
+  'profile-user-data-app-data-temp-mismatch',
+  'profile-home-app-data-temp-mismatch',
+  'profile-user-data-home-app-data-temp-mismatch'
+])
 const FAILURES = new Set([
   'none',
   'invalid-arguments',
@@ -70,6 +88,7 @@ const FAILURES = new Set([
   ...CLOSED_CDP_FAILURES,
   'main-inspector-attach-failed',
   'profile-mismatch',
+  ...FRESH_PROFILE_FAILURES.slice(1),
   'runtime-version-mismatch',
   'profile-and-runtime-version-mismatch',
   'action-timeout',
@@ -111,13 +130,29 @@ const SEMVER = new RegExp(
 const ACTION_TIMEOUT_MS = 15_000
 const RELEASE_TIMEOUT_MS = 5_000
 
-/** Classify only the two booleans already validated by the fixed main-process observation.
- * @param {boolean} profileMatches
- * @param {boolean} versionMatches
+/** Classify only the fixed profile mask and version boolean validated by the owned main-process observation.
+ * @param {unknown} profileMatches
+ * @param {unknown} profileMask
+ * @param {unknown} versionMatches
  */
-export function freshOnboardingIdentityFailure(profileMatches, versionMatches) {
+export function freshOnboardingIdentityFailure(profileMatches, profileMask, versionMatches) {
+  const profileFailure =
+    typeof profileMask === 'number' &&
+    Number.isSafeInteger(profileMask) &&
+    profileMask >= 0 &&
+    profileMask < FRESH_PROFILE_FAILURES.length
+      ? FRESH_PROFILE_FAILURES[profileMask]
+      : null
+  if (
+    typeof profileMatches !== 'boolean' ||
+    typeof versionMatches !== 'boolean' ||
+    !profileFailure ||
+    profileMatches !== (profileMask === 0)
+  ) {
+    return null
+  }
   if (!profileMatches && !versionMatches) return 'profile-and-runtime-version-mismatch'
-  if (!profileMatches) return 'profile-mismatch'
+  if (!profileMatches) return profileFailure
   if (!versionMatches) return 'runtime-version-mismatch'
   return 'none'
 }
@@ -844,8 +879,10 @@ async function execute(argv) {
     }
     const identityFailure = freshOnboardingIdentityFailure(
       attachedInspector.observation.profileMatches,
+      attachedInspector.observation.profileMask,
       attachedInspector.observation.versionMatches
     )
+    if (!identityFailure) throw finiteError('main-inspector-attach-failed')
     if (identityFailure !== 'none') throw finiteError(identityFailure)
 
     const win = await findFreshOnboardingPage({

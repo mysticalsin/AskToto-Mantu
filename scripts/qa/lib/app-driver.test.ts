@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import { posix } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import {
   ASK_REVEAL_MIN_HEIGHT_PX,
@@ -13,6 +14,7 @@ import {
   attachOwnedMainInspector,
   disposeFreshOnboardingTransports,
   findPage,
+  freshProfileObservation,
   killOwned,
   launchPackagedCdp,
   overlayChromeGeometry,
@@ -25,6 +27,56 @@ import {
 } from './app-driver.mjs'
 
 const ROOT = '/opt/smoke/Metis.app'
+
+const FRESH_PROFILE_PATHS = {
+  root: '/tmp/profile',
+  home: '/tmp/profile/home',
+  userProfile: '/tmp/profile/userprofile',
+  appData: '/tmp/profile/appdata',
+  localAppData: '/tmp/profile/localappdata',
+  temp: '/tmp/profile/tmp',
+  userData: '/tmp/profile/userdata'
+} as const
+
+const FRESH_PROFILE_CASES = [
+  { label: 'all match', matches: [true, true, true, true], profileMask: 0 },
+  { label: 'userData differs', matches: [false, true, true, true], profileMask: 1 },
+  { label: 'home differs', matches: [true, false, true, true], profileMask: 2 },
+  { label: 'userData and home differ', matches: [false, false, true, true], profileMask: 3 },
+  { label: 'appData differs', matches: [true, true, false, true], profileMask: 4 },
+  { label: 'userData and appData differ', matches: [false, true, false, true], profileMask: 5 },
+  { label: 'home and appData differ', matches: [true, false, false, true], profileMask: 6 },
+  { label: 'userData home and appData differ', matches: [false, false, false, true], profileMask: 7 },
+  { label: 'temp differs', matches: [true, true, true, false], profileMask: 8 },
+  { label: 'userData and temp differ', matches: [false, true, true, false], profileMask: 9 },
+  { label: 'home and temp differ', matches: [true, false, true, false], profileMask: 10 },
+  { label: 'userData home and temp differ', matches: [false, false, true, false], profileMask: 11 },
+  { label: 'appData and temp differ', matches: [true, true, false, false], profileMask: 12 },
+  { label: 'userData appData and temp differ', matches: [false, true, false, false], profileMask: 13 },
+  { label: 'home appData and temp differ', matches: [true, false, false, false], profileMask: 14 },
+  { label: 'all differ', matches: [false, false, false, false], profileMask: 15 }
+] as const
+
+const FRESH_PROFILE_KEYS = ['userData', 'home', 'appData', 'temp'] as const
+
+type FreshProfileKey = (typeof FRESH_PROFILE_KEYS)[number]
+
+function observedFreshProfile([userData, home, appData, temp]: readonly boolean[]) {
+  const matches = { userData, home, appData, temp }
+  return Object.fromEntries(
+    FRESH_PROFILE_KEYS.map((key) => [key, matches[key] ? FRESH_PROFILE_PATHS[key] : `/tmp/outside/${key}`])
+  ) as Record<FreshProfileKey, string>
+}
+
+function freshProfileApp(values: Record<FreshProfileKey, unknown>, reads: string[], throwOn?: FreshProfileKey) {
+  return {
+    getPath(key: string) {
+      reads.push(key)
+      if (key === throwOn) throw new Error('synthetic getter failure')
+      return values[key as FreshProfileKey]
+    }
+  }
+}
 
 describe('withTimeout', () => {
   it('resolves with the operation result', async () => {
@@ -161,6 +213,107 @@ describe('strictLaunchEnvironment', () => {
   })
 })
 
+describe('freshProfileObservation', () => {
+  it.each(FRESH_PROFILE_CASES)('keeps the exact profile mask when $label', ({ matches, profileMask }) => {
+    const reads: string[] = []
+    const observation = freshProfileObservation(
+      freshProfileApp(observedFreshProfile(matches), reads),
+      posix,
+      FRESH_PROFILE_PATHS
+    )
+
+    expect(observation).toEqual({ profileMatches: profileMask === 0, profileMask })
+    expect(reads).toEqual(FRESH_PROFILE_KEYS)
+  })
+
+  it('uses raw userData equality without normalizing a lexically different value', () => {
+    const reads: string[] = []
+    const observation = freshProfileObservation(
+      freshProfileApp(
+        {
+          userData: `${FRESH_PROFILE_PATHS.userData}/`,
+          home: FRESH_PROFILE_PATHS.home,
+          appData: FRESH_PROFILE_PATHS.appData,
+          temp: FRESH_PROFILE_PATHS.temp
+        },
+        reads
+      ),
+      posix,
+      FRESH_PROFILE_PATHS
+    )
+
+    expect(observation).toEqual({ profileMatches: false, profileMask: 1 })
+    expect(reads).toEqual(FRESH_PROFILE_KEYS)
+  })
+
+  it('keeps lexical aliases outside the generated root without normalizing them', () => {
+    const paths = {
+      ...FRESH_PROFILE_PATHS,
+      root: '/var/fixture',
+      home: '/var/fixture/home',
+      appData: '/var/fixture/appdata',
+      temp: '/var/fixture/tmp',
+      userData: '/var/fixture/userdata'
+    }
+    const reads: string[] = []
+    const observation = freshProfileObservation(
+      freshProfileApp(
+        {
+          userData: paths.userData,
+          home: '/private/var/fixture/home',
+          appData: paths.appData,
+          temp: paths.temp
+        },
+        reads
+      ),
+      posix,
+      paths
+    )
+
+    expect(observation).toEqual({ profileMatches: false, profileMask: 2 })
+    expect(reads).toEqual(FRESH_PROFILE_KEYS)
+  })
+
+  it.each([
+    { label: 'empty appData', key: 'appData', value: '' },
+    { label: 'non-string temp', key: 'temp', value: null }
+  ])('fails closed for $label', ({ key, value }) => {
+    const reads: string[] = []
+    const values: Record<FreshProfileKey, unknown> = {
+      userData: FRESH_PROFILE_PATHS.userData,
+      home: FRESH_PROFILE_PATHS.home,
+      appData: FRESH_PROFILE_PATHS.appData,
+      temp: FRESH_PROFILE_PATHS.temp
+    }
+    values[key as FreshProfileKey] = value
+
+    expect(freshProfileObservation(freshProfileApp(values, reads), posix, FRESH_PROFILE_PATHS)).toBeNull()
+    expect(reads).toEqual(FRESH_PROFILE_KEYS)
+  })
+
+  it('fails closed when one captured path getter throws', () => {
+    const reads: string[] = []
+
+    expect(
+      freshProfileObservation(
+        freshProfileApp(
+          {
+            userData: FRESH_PROFILE_PATHS.userData,
+            home: FRESH_PROFILE_PATHS.home,
+            appData: FRESH_PROFILE_PATHS.appData,
+            temp: FRESH_PROFILE_PATHS.temp
+          },
+          reads,
+          'home'
+        ),
+        posix,
+        FRESH_PROFILE_PATHS
+      )
+    ).toBeNull()
+    expect(reads).toEqual(['userData', 'home'])
+  })
+})
+
 describe('launchPackagedCdp', () => {
   const environment = { PATH: '/usr/bin', HOME: '/tmp/metis' }
 
@@ -214,6 +367,47 @@ describe('launchPackagedCdp', () => {
     spawned.emit('exit', 1, null)
     expect(launch.latches).toEqual({ spawnError: false, exited: true })
     expect(packagedLaunchFailed(spawned, launch.latches)).toBe(true)
+  })
+
+  it('passes the strict Darwin profile environment to the direct child', () => {
+    const spawned = child()
+    let childEnvironment: Record<string, string> | null = null
+    const environment = strictLaunchEnvironment(
+      {
+        PATH: '/usr/bin',
+        HOME: '/owner/home',
+        CFFIXED_USER_HOME: '/owner/native-home',
+        ASKTOTO_USERDATA: '/owner/userdata'
+      },
+      FRESH_PROFILE_PATHS,
+      'darwin'
+    )
+
+    launchPackagedCdp({
+      executablePath: '/Applications/Metis.app/Contents/MacOS/Metis',
+      env: environment,
+      cdpPort: 9222,
+      inspectPort: 9223,
+      platform: 'darwin',
+      spawnProcess: (...arguments_: unknown[]) => {
+        childEnvironment = (arguments_[2] as { env: Record<string, string> }).env
+        return spawned
+      }
+    })
+
+    expect(childEnvironment).toEqual(
+      expect.objectContaining({
+        CFFIXED_USER_HOME: FRESH_PROFILE_PATHS.home,
+        HOME: FRESH_PROFILE_PATHS.home,
+        USERPROFILE: FRESH_PROFILE_PATHS.userProfile,
+        APPDATA: FRESH_PROFILE_PATHS.appData,
+        LOCALAPPDATA: FRESH_PROFILE_PATHS.localAppData,
+        TMPDIR: FRESH_PROFILE_PATHS.temp,
+        TMP: FRESH_PROFILE_PATHS.temp,
+        TEMP: FRESH_PROFILE_PATHS.temp,
+        ASKTOTO_USERDATA: FRESH_PROFILE_PATHS.userData
+      })
+    )
   })
 
   it('uses a non-detached Windows child and rejects colliding ports before spawn', () => {
@@ -524,7 +718,9 @@ describe('owned direct-launch endpoint handshakes', () => {
             data: JSON.stringify({
               id: request.id,
               result: {
-                result: { value: { profileMatches: true, versionMatches: true, nativeFullDisplay: true } }
+                result: {
+                  value: { profileMatches: true, profileMask: 0, versionMatches: true, nativeFullDisplay: true }
+                }
               }
             })
           })
@@ -552,7 +748,12 @@ describe('owned direct-launch endpoint handshakes', () => {
       fetchImpl: async () => ({ ok: true, json: async () => [{ webSocketDebuggerUrl: 'ws://127.0.0.1:9223/a' }] }),
       WebSocketClass: FakeSocket
     })
-    expect(result.observation).toEqual({ profileMatches: true, versionMatches: true, nativeFullDisplay: true })
+    expect(result.observation).toEqual({
+      profileMatches: true,
+      profileMask: 0,
+      versionMatches: true,
+      nativeFullDisplay: true
+    })
     expect(messages).toEqual([
       expect.objectContaining({
         method: 'Runtime.evaluate',
@@ -567,7 +768,7 @@ describe('owned direct-launch endpoint handshakes', () => {
   it('retries only the fixed loader-unavailable response and closes a malformed observation', async () => {
     const responses = [
       { retry: 'loader-unavailable' },
-      { profileMatches: true, versionMatches: true, nativeFullDisplay: false }
+      { profileMatches: true, profileMask: 0, versionMatches: true, nativeFullDisplay: false }
     ]
     const sockets: Array<{ closed: boolean }> = []
     class RetryingSocket extends EventEmitter {
@@ -584,9 +785,11 @@ describe('owned direct-launch endpoint handshakes', () => {
       send(raw: string) {
         const request = JSON.parse(raw)
         const value = responses.shift()
-        queueMicrotask(() =>
-          this.emit('message', { data: JSON.stringify({ id: request.id, result: { result: { value } } }) })
-        )
+        queueMicrotask(() => {
+          this.emit('message', {
+            data: JSON.stringify({ id: request.id, result: { result: { value } } })
+          })
+        })
       }
       close() {
         this.closed = true
@@ -611,13 +814,33 @@ describe('owned direct-launch endpoint handshakes', () => {
       fetchImpl: async () => ({ ok: true, json: async () => [{ webSocketDebuggerUrl: 'ws://127.0.0.1:9223/a' }] }),
       WebSocketClass: RetryingSocket
     })
-    expect(result.observation).toEqual({ profileMatches: true, versionMatches: true, nativeFullDisplay: false })
+    expect(result.observation).toEqual({
+      profileMatches: true,
+      profileMask: 0,
+      versionMatches: true,
+      nativeFullDisplay: false
+    })
     if (!result.inspector) throw new Error('expected attached inspector')
     await expect(result.inspector.close()).resolves.toBe(true)
     expect(sockets[0].closed).toBe(true)
   })
 
-  it('fails closed and releases the socket when the fixed observation is not one of its exact shapes', async () => {
+  it.each([
+    ['has an unknown shape', { extra: true }],
+    ['omits the required profile mask', { profileMatches: true, versionMatches: true, nativeFullDisplay: false }],
+    [
+      'contradicts the all-pass mask',
+      { profileMatches: true, profileMask: 1, versionMatches: true, nativeFullDisplay: false }
+    ],
+    [
+      'contradicts the zero mask',
+      { profileMatches: false, profileMask: 0, versionMatches: true, nativeFullDisplay: false }
+    ],
+    [
+      'uses an unknown profile mask',
+      { profileMatches: false, profileMask: 16, versionMatches: true, nativeFullDisplay: false }
+    ]
+  ])('fails closed and releases the socket when the fixed observation %s', async (_label, value) => {
     let closed = false
     class InvalidSocket extends EventEmitter {
       readyState = 0
@@ -632,7 +855,7 @@ describe('owned direct-launch endpoint handshakes', () => {
         const request = JSON.parse(raw)
         queueMicrotask(() =>
           this.emit('message', {
-            data: JSON.stringify({ id: request.id, result: { result: { value: { extra: true } } } })
+            data: JSON.stringify({ id: request.id, result: { result: { value } } })
           })
         )
       }
@@ -690,7 +913,9 @@ describe('owned direct-launch endpoint handshakes', () => {
             data: JSON.stringify({
               id: request.id,
               result: {
-                result: { value: { profileMatches: true, versionMatches: true, nativeFullDisplay: true } }
+                result: {
+                  value: { profileMatches: true, profileMask: 0, versionMatches: true, nativeFullDisplay: true }
+                }
               }
             })
           })
