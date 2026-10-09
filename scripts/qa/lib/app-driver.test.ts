@@ -197,6 +197,24 @@ describe('strictLaunchEnvironment', () => {
     expect(base).toEqual({ CFFIXED_USER_HOME: '/inherited/native-home' })
   })
 
+  it.each([undefined, '/inherited/native-temp'])('isolates the Darwin native temp override %s', (inherited) => {
+    const base = inherited === undefined ? {} : { MAC_CHROMIUM_TMPDIR: inherited }
+    const snapshot = { ...base }
+    const paths = { ...hermetic }
+    const env = strictLaunchEnvironment(base, paths, 'darwin')
+    expect(env.MAC_CHROMIUM_TMPDIR).toBe(hermetic.temp)
+    expect(env.CFFIXED_USER_HOME).toBe(hermetic.home)
+    expect(base).toEqual(snapshot)
+    expect(paths).toEqual(hermetic)
+  })
+
+  it('does not pass a native Mac temp override to Windows', () => {
+    const base = { MAC_CHROMIUM_TMPDIR: '/inherited/native-temp' }
+    const env = strictLaunchEnvironment(base, hermetic, 'win32')
+    expect(env).not.toHaveProperty('MAC_CHROMIUM_TMPDIR')
+    expect(base).toEqual({ MAC_CHROMIUM_TMPDIR: '/inherited/native-temp' })
+  })
+
   it.each(Object.keys(hermetic))('still rejects the missing owned path %s on both platforms', (key) => {
     for (const platform of ['darwin', 'win32'] as const) {
       for (const value of [undefined, '']) {
@@ -378,6 +396,7 @@ describe('launchPackagedCdp', () => {
         PATH: '/usr/bin',
         HOME: '/owner/home',
         CFFIXED_USER_HOME: '/owner/native-home',
+        MAC_CHROMIUM_TMPDIR: '/owner/native-temp',
         ASKTOTO_USERDATA: '/owner/userdata'
       },
       FRESH_PROFILE_PATHS,
@@ -399,6 +418,7 @@ describe('launchPackagedCdp', () => {
     expect(childEnvironment).toEqual(
       expect.objectContaining({
         CFFIXED_USER_HOME: FRESH_PROFILE_PATHS.home,
+        MAC_CHROMIUM_TMPDIR: FRESH_PROFILE_PATHS.temp,
         HOME: FRESH_PROFILE_PATHS.home,
         USERPROFILE: FRESH_PROFILE_PATHS.userProfile,
         APPDATA: FRESH_PROFILE_PATHS.appData,

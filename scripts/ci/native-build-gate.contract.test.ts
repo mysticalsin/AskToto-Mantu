@@ -63,3 +63,78 @@ describe('native App build failure gate', () => {
     expect(project.match(/^ {8}SWIFT_STRICT_CONCURRENCY:.*$/gm)).toEqual(['        SWIFT_STRICT_CONCURRENCY: complete'])
   })
 })
+
+describe('native hosted Release ZIP baseline', () => {
+  const namedStep = (name: string): string => {
+    const step = nativeJob()
+      .split(/^(?=      - )/m)
+      .find((candidate) => candidate.startsWith(`      - name: ${name}\n`))
+    expect(step, `native step ${name}`).toBeDefined()
+    return step!
+  }
+
+  it('preserves both existing test commands and the Debug build before the Release baseline', () => {
+    const job = nativeJob()
+    expect(job).toContain('run: bash scripts/hermetic/run-swift-tests.sh native-app/MetisKit')
+    expect(job).toContain('run: bash native/mac-helper/Tests/run-helper-tests.sh')
+    expect(job).toMatch(/^ {4}timeout-minutes: 30$/m)
+    expect(job.indexOf('Build the native App (macOS)')).toBeLessThan(job.indexOf('Allocate native package workspace'))
+    expect(job).not.toMatch(/continue-on-error:\s*true/)
+  })
+
+  it('allocates owned directories and keeps pre/post source guards separate from the unchanged builder', () => {
+    const job = nativeJob()
+    const allocate = namedStep('Allocate native package workspace')
+    const before = namedStep('Require clean native project before Release')
+    const build = namedStep('Build native Release ZIP')
+    const after = namedStep('Require clean native project after Release')
+    expect(allocate).toContain('node scripts/verify-native-mac-package.mjs prepare')
+    expect(build).toContain('node scripts/build-native-mac.mjs --out-dir "$NATIVE_OUTPUT"')
+    expect(build).toContain('NATIVE_OUTPUT: ${{ steps.native_paths.outputs.output }}')
+    for (const guard of [before, after]) {
+      expect(guard).toContain('git diff --exit-code -- native-app/project.yml')
+      expect(guard).toContain('git diff --cached --exit-code -- native-app/project.yml')
+    }
+    expect(after).toMatch(/^ {8}if: always\(\)$/m)
+    expect(job.indexOf(allocate)).toBeLessThan(job.indexOf(before))
+    expect(job.indexOf(before)).toBeLessThan(job.indexOf(build))
+    expect(job.indexOf(build)).toBeLessThan(job.indexOf(after))
+    expect(build).not.toMatch(/\|\|\s*true|continue-on-error|xcodebuild/)
+  })
+
+  it('verifies only after builder and post-source guard success, then uploads exactly two named files', () => {
+    const verify = namedStep('Verify native Release ZIP without launching')
+    const upload = namedStep('Upload native package baseline')
+    expect(verify).toContain(
+      "if: success() && steps.native_release.outcome == 'success' && steps.native_source_after.outcome == 'success'"
+    )
+    expect(verify).toContain('node scripts/verify-native-mac-package.mjs verify')
+    expect(verify).toContain('NATIVE_METADATA: ${{ steps.native_paths.outputs.metadata }}')
+    expect(verify).toContain(
+      'run: |\n          node scripts/verify-native-mac-package.mjs verify\n          cat "$NATIVE_METADATA"\n'
+    )
+    expect(verify).not.toMatch(/\|\|\s*true|continue-on-error|^ {8}shell:/m)
+    expect(upload).toContain("if: success() && steps.native_verify.outcome == 'success'")
+    expect(upload).toContain('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02')
+    expect(upload).toContain('if-no-files-found: error')
+    expect(upload).toContain('retention-days: 3')
+    expect(upload).toContain('compression-level: 0')
+    expect(upload).toContain(
+      'path: |\n            ${{ steps.native_paths.outputs.zip }}\n' +
+        '            ${{ steps.native_paths.outputs.metadata }}'
+    )
+    expect(upload).not.toContain('*')
+  })
+
+  it('always cleans only the allocated workspace after upload without launching or publishing', () => {
+    const job = nativeJob()
+    const cleanup = namedStep('Clean owned native package workspace')
+    expect(cleanup).toContain("if: always() && steps.native_paths.outputs.root != ''")
+    expect(cleanup).toContain('NATIVE_PACKAGE_ROOT: ${{ steps.native_paths.outputs.root }}')
+    expect(cleanup).toContain('NATIVE_PACKAGE_OWNER: ${{ steps.native_paths.outputs.owner_digest }}')
+    expect(cleanup).toContain('node scripts/verify-native-mac-package.mjs cleanup')
+    expect(job.indexOf(cleanup)).toBeGreaterThan(job.indexOf(namedStep('Upload native package baseline')))
+    expect(job).not.toMatch(/gh release|git push|open -[an]|\.app\/Contents\/MacOS\//)
+    expect(job).not.toContain('rm -rf')
+  })
+})
