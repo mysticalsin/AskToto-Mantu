@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { runFreshOnboardingBaselineFlow } from './golden-flows/onboarding-flows.mjs'
 import {
   ASSERTION_IDS,
+  FRESH_PROFILE_FAILURES,
   FRESH_ONBOARDING_SCHEMA,
   NOT_COVERED,
   assessFreshOnboardingReport,
@@ -44,6 +45,25 @@ const CLOSED_CDP_FAILURES = [
   'cdp-transport-timeout',
   'cdp-session-or-process-info-invalid',
   'cdp-browser-pid-mismatch'
+] as const
+
+const PROFILE_FAILURES = [
+  'none',
+  'profile-user-data-mismatch',
+  'profile-home-mismatch',
+  'profile-user-data-home-mismatch',
+  'profile-app-data-mismatch',
+  'profile-user-data-app-data-mismatch',
+  'profile-home-app-data-mismatch',
+  'profile-user-data-home-app-data-mismatch',
+  'profile-temp-mismatch',
+  'profile-user-data-temp-mismatch',
+  'profile-home-temp-mismatch',
+  'profile-user-data-home-temp-mismatch',
+  'profile-app-data-temp-mismatch',
+  'profile-user-data-app-data-temp-mismatch',
+  'profile-home-app-data-temp-mismatch',
+  'profile-user-data-home-app-data-temp-mismatch'
 ] as const
 
 function passingReport() {
@@ -105,6 +125,7 @@ describe('fresh onboarding baseline report', () => {
     ...CLOSED_CDP_FAILURES,
     'main-inspector-attach-failed',
     'profile-mismatch',
+    ...PROFILE_FAILURES.slice(1),
     'runtime-version-mismatch',
     'profile-and-runtime-version-mismatch'
   ])('retains the closed pre-UI failure %s without qualifying the flow', (failure) => {
@@ -145,7 +166,7 @@ describe('fresh onboarding baseline report', () => {
       'arbitrary diagnostic text',
       'cdp-attach-failed\nextra',
       'cdp-endpoint-deadline\nextra',
-      'profile-home-mismatch'
+      'profile-unknown-mismatch'
     ]) {
       expect(reportProblems({ ...passingReport(), outcome: 'FAIL', failure })).toContain('REPORT_FAILURE_INVALID')
     }
@@ -188,17 +209,49 @@ describe('fresh onboarding baseline report', () => {
 })
 
 describe('fresh onboarding runtime identity diagnostics', () => {
+  it('uses the exact fixed table rather than collapsing failed components', () => {
+    expect(FRESH_PROFILE_FAILURES).toEqual(PROFILE_FAILURES)
+  })
+
+  it.each(PROFILE_FAILURES.map((failure, profileMask) => ({ failure, profileMask })))(
+    'maps every valid profile mask to its fixed profile-only failure',
+    ({ failure, profileMask }) => {
+      expect(freshOnboardingIdentityFailure(profileMask === 0, profileMask, true)).toBe(failure)
+    }
+  )
+
+  it.each(PROFILE_FAILURES.map((_, profileMask) => profileMask))(
+    'retains version precedence for profile mask %s',
+    (profileMask) => {
+      expect(freshOnboardingIdentityFailure(profileMask === 0, profileMask, false)).toBe(
+        profileMask === 0 ? 'runtime-version-mismatch' : 'profile-and-runtime-version-mismatch'
+      )
+    }
+  )
+
   it.each([
-    { profileMatches: true, versionMatches: true, failure: 'none' },
-    { profileMatches: false, versionMatches: true, failure: 'profile-mismatch' },
-    { profileMatches: true, versionMatches: false, failure: 'runtime-version-mismatch' },
-    { profileMatches: false, versionMatches: false, failure: 'profile-and-runtime-version-mismatch' }
-  ])('maps profile=$profileMatches version=$versionMatches to $failure', ({
-    profileMatches,
-    versionMatches,
-    failure
-  }) => {
-    expect(freshOnboardingIdentityFailure(profileMatches, versionMatches)).toBe(failure)
+    { profileMatches: true, profileMask: 1, versionMatches: true },
+    { profileMatches: false, profileMask: 0, versionMatches: true },
+    { profileMatches: false, profileMask: -1, versionMatches: true },
+    { profileMatches: false, profileMask: 16, versionMatches: true },
+    { profileMatches: false, profileMask: 1.5, versionMatches: true },
+    { profileMatches: false, profileMask: null, versionMatches: true },
+    { profileMatches: false, profileMask: 1, versionMatches: null }
+  ])('fails closed for invalid or contradictory identity data', ({ profileMatches, profileMask, versionMatches }) => {
+    expect(freshOnboardingIdentityFailure(profileMatches, profileMask, versionMatches)).toBeNull()
+  })
+
+  it('continues to accept legacy aggregate profile reports as failures', () => {
+    const legacy = createFreshOnboardingReport({
+      outcome: 'FAIL',
+      identity: IDENTITY,
+      assertions: ASSERTION_IDS.map((id) => ({ id, status: id === 'teardown-acknowledged' ? 'PASS' : 'NOT_RUN' })),
+      failure: 'profile-mismatch',
+      teardown: 'ACKNOWLEDGED'
+    })
+    expect(reportProblems(legacy)).toEqual([])
+    expect(assessFreshOnboardingReport(legacy, expected, { requirePass: false }).problems).toEqual([])
+    expect(assessFreshOnboardingReport(legacy, expected).problems).toEqual(['OUTCOME_NOT_PASS'])
   })
 })
 
