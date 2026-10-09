@@ -606,7 +606,10 @@ function freshMainObservationExpression({ childPid, expectedPaths, expectedVersi
     if (typeof load !== 'function') return { retry: 'loader-unavailable' }
     try {
       const path = load('node:path')
-      const { app, BrowserWindow, screen } = load('electron')
+      const electron = load('electron')
+      const { app } = electron
+      if (app.isReady() !== true) return { retry: 'app-not-ready' }
+      const { BrowserWindow, screen } = electron
       const profile = (${freshProfileObservation.toString()})(app, path, expected.paths)
       if (!profile) return { failed: true }
       const visible = BrowserWindow.getAllWindows()
@@ -635,7 +638,7 @@ function freshMainObservationExpression({ childPid, expectedPaths, expectedVersi
 
 function exactObservation(value) {
   const retry = snapshotExactRecord(value, ['retry'])
-  if (retry?.retry === 'loader-unavailable') return { kind: 'retry' }
+  if (retry?.retry === 'loader-unavailable' || retry?.retry === 'app-not-ready') return { kind: 'retry' }
   const owner = snapshotExactRecord(value, ['owner'])
   if (owner && owner.owner === false) return { kind: 'failed' }
   const observation = snapshotExactRecord(value, [
