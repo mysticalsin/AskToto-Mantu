@@ -105,6 +105,11 @@ jobs:
              grep -Fq 'Executed 2 tests, with 2 failures' "$output"; then
             echo 'native-draft-red:EXPECTED_TWO_ASSERTIONS'
           else
-            echo 'native-draft-red:UNEXPECTED_TEST_RESULT'
+            failed_checks=()
+            [ "$result" -eq 1 ] || failed_checks+=(exit)
+            grep -Fq 'A line must not be displayed before a durable draft acknowledges it' "$output" || failed_checks+=(manual)
+            grep -Fq 'A streamed line must not be displayed before a durable draft acknowledges it' "$output" || failed_checks+=(stream)
+            grep -Fq 'Executed 2 tests, with 2 failures' "$output" || failed_checks+=(summary)
+            printf 'native-draft-red:UNEXPECTED_TEST_RESULT:%s\n' "$(IFS=,; echo "${failed_checks[*]}")"
             exit 1
           fi
