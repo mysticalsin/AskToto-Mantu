@@ -3,9 +3,21 @@ import { chromium } from 'playwright'
 import { buildDashboard, buildLiveSnapshot, ONLINE_MS } from './dashboard'
 import { renderRealtime } from './render/pages/realtime'
 import { CONSOLE_JS } from './spa/client.generated'
-import { memoryStore, type SeatRow } from './store'
+import { memoryStore, type OperatorStore, type SeatRow } from './store'
 
 const NOW = 1_800_000_000_000
+let pulseSequence = 0
+
+async function heartbeat(store: OperatorStore, deviceId: string, country: string | null, ts: number): Promise<void> {
+  await store.recordPulseSession({
+    id: `synthetic-pulse-${++pulseSequence}`,
+    device_id: deviceId,
+    ts,
+    kind: 'heartbeat',
+    country,
+    city: null
+  }, { os: 'darwin', app_version: '2.0.0' })
+}
 
 function seat(device_id: string, country: string | null, last_seen: number, city = 'SyntheticCityAlpha'): SeatRow {
   return {
@@ -44,6 +56,10 @@ describe('Operator realtime map country-only contract', () => {
     await store.upsertSeat(seat('ca-expired', 'CA', NOW - ONLINE_MS))
     await store.upsertSeat(seat('us-live', 'US', NOW))
     await store.upsertSeat(seat('unknown-live', null, NOW))
+    await heartbeat(store, 'ca-live', 'CA', NOW - ONLINE_MS + 1)
+    await heartbeat(store, 'ca-expired', 'CA', NOW - ONLINE_MS)
+    await heartbeat(store, 'us-live', 'US', NOW)
+    await heartbeat(store, 'unknown-live', null, NOW)
 
     const dashboard = await buildDashboard(store, 'owner@example.test', NOW)
     expect(dashboard.kpis.live).toBe(3)
@@ -58,11 +74,34 @@ describe('Operator realtime map country-only contract', () => {
   it('moves a device after a new heartbeat without retaining a ghost in its previous country', async () => {
     const store = memoryStore()
     await store.upsertSeat(seat('moving', 'CA', NOW - 30_000))
+    await heartbeat(store, 'moving', 'CA', NOW - 30_000)
     await store.upsertSeat(seat('moving', 'US', NOW))
+    await heartbeat(store, 'moving', 'US', NOW)
     await store.upsertSeat(seat('moving', 'US', NOW))
+    await heartbeat(store, 'moving', 'US', NOW)
 
     const dashboard = await buildDashboard(store, 'owner@example.test', NOW)
     expect(dashboard.map.countries).toEqual([{ iso: 'US', devices: 1 }])
+  })
+
+  it('does not reuse old seat geography when the latest live heartbeat has no country', async () => {
+    const store = memoryStore()
+    await store.upsertSeat(seat('traveler', 'CA', NOW))
+    await heartbeat(store, 'traveler', 'CA', NOW - 30_000)
+    await heartbeat(store, 'traveler', null, NOW)
+
+    const dashboard = await buildDashboard(store, 'owner@example.test', NOW)
+    expect(dashboard.map.countries).toEqual([])
+  })
+
+  it('excludes a device when equally recent heartbeats disagree about its country', async () => {
+    const store = memoryStore()
+    await store.upsertSeat(seat('tie', 'CA', NOW))
+    await heartbeat(store, 'tie', 'CA', NOW)
+    await heartbeat(store, 'tie', 'US', NOW)
+
+    const dashboard = await buildDashboard(store, 'owner@example.test', NOW)
+    expect(dashboard.map.countries).toEqual([])
   })
 
   it('sends country totals in the live-poll map payload without seat-level coordinates', async () => {
@@ -71,6 +110,10 @@ describe('Operator realtime map country-only contract', () => {
     await store.upsertSeat(seat('us-live', 'US', NOW - 1, 'SyntheticCityBeta'))
     await store.upsertSeat(seat('ca-expired', 'CA', NOW - ONLINE_MS, 'SyntheticCityGamma'))
     await store.upsertSeat(seat('unknown-live', null, NOW))
+    await heartbeat(store, 'ca-live', 'CA', NOW - 1)
+    await heartbeat(store, 'us-live', 'US', NOW - 1)
+    await heartbeat(store, 'ca-expired', 'CA', NOW - ONLINE_MS)
+    await heartbeat(store, 'unknown-live', null, NOW)
 
     const snapshot = await buildLiveSnapshot(store, NOW)
     const map = (snapshot as unknown as { map?: { countries: Array<{ iso: string; devices: number }> } }).map
@@ -86,6 +129,8 @@ describe('Operator realtime map country-only contract', () => {
     const store = memoryStore()
     await store.upsertSeat(seat('ca-a', 'CA', NOW, 'SyntheticCityAlpha'))
     await store.upsertSeat(seat('ca-b', 'CA', NOW, 'SyntheticCityBeta'))
+    await heartbeat(store, 'ca-a', 'CA', NOW)
+    await heartbeat(store, 'ca-b', 'CA', NOW)
     const dashboard = await buildDashboard(store, 'owner@example.test', NOW)
     const html = renderRealtime(dashboard, { now: NOW, theme: 'dark' })
     const map = worldMap(html)
@@ -103,10 +148,15 @@ describe('Operator realtime map country-only contract', () => {
     const store = memoryStore()
     await store.upsertSeat(seat('moving-a', 'CA', NOW, 'SyntheticCityAlpha'))
     await store.upsertSeat(seat('moving-b', 'CA', NOW, 'SyntheticCityBeta'))
+    await heartbeat(store, 'moving-a', 'CA', NOW)
+    await heartbeat(store, 'moving-b', 'CA', NOW)
     const initial = await buildDashboard(store, 'owner@example.test', NOW)
     await store.upsertSeat(seat('moving-a', 'US', NOW + 1))
     await store.upsertSeat(seat('moving-b', 'US', NOW + 1))
     await store.upsertSeat(seat('new-c', 'US', NOW + 1, 'SyntheticCityGamma'))
+    await heartbeat(store, 'moving-a', 'US', NOW + 1)
+    await heartbeat(store, 'moving-b', 'US', NOW + 1)
+    await heartbeat(store, 'new-c', 'US', NOW + 1)
     const next = await buildLiveSnapshot(store, NOW + 1)
 
     const browser = await chromium.launch({ headless: true })
