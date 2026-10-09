@@ -60,9 +60,7 @@ const PLATFORMS = ['darwin', 'mas']
 const platformFlag = argv.find((a) => a.startsWith('--platform='))
 const PLATFORM = platformFlag ? platformFlag.slice('--platform='.length) : 'darwin'
 if (!PLATFORMS.includes(PLATFORM)) {
-  console.error(
-    `provision-electron-dist: unknown --platform "${PLATFORM}" — expected one of: ${PLATFORMS.join(', ')}`
-  )
+  console.error(`provision-electron-dist: unknown --platform "${PLATFORM}" — expected one of: ${PLATFORMS.join(', ')}`)
   process.exit(1)
 }
 
