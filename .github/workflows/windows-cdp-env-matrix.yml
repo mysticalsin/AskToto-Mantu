@@ -1,0 +1,127 @@
+name: Windows CDP environment matrix (temporary)
+run-name: Windows CDP environment matrix (one pinned failed candidate)
+
+# Diagnostic source only. Remove within 48 hours of first hosted observation; dispatch expires on
+# 2026-10-11T20:00:00Z. Never a replacement for the failed 15-second onboarding acceptance.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: windows-cdp-env-matrix
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Refuse expiry, foreign candidate or modified producer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != 'workflow_dispatch' ] ||
+             [ "$GITHUB_REPOSITORY" != 'mysticalsin/AskToto-Mantu' ] ||
+             [ "$GITHUB_REF" != 'refs/heads/main' ]; then
+            echo '::error::Temporary diagnostic only runs on protected main in the pinned repository.'
+            exit 1
+          fi
+          if [ "$(date -u +%s)" -ge "$(date -u -d '2026-10-11T20:00:00Z' +%s)" ]; then
+            echo '::error::Temporary diagnostic expired.'
+            exit 1
+          fi
+          if ! gh api "repos/$GITHUB_REPOSITORY/actions/runs/37771807736" > candidate-run.json 2>/dev/null; then
+            echo '::error::Pinned candidate unavailable.'
+            exit 1
+          fi
+          if ! node scripts/qa/candidate-scenarios.mjs guard candidate-run.json 37771807736 >/dev/null 2>&1; then
+            echo '::error::Pinned candidate failed existing guard.'
+            exit 1
+          fi
+          if [ "$(jq -r .head_sha candidate-run.json)" != '2d4ebe7b6698f78abcb74dc426867d95d96e4268' ]; then
+            echo '::error::Pinned producer commit changed.'
+            exit 1
+          fi
+
+  observe:
+    needs: guard
+    if: github.event_name == 'workflow_dispatch' && needs.guard.result == 'success'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - name: Download only pinned candidate provenance and Windows Setup
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh run download 37771807736 --repo "$GITHUB_REPOSITORY" --name candidate-provenance --dir provenance >/dev/null 2>&1; then
+            echo '::error::Pinned provenance unavailable.'
+            exit 1
+          fi
+          if ! gh run download 37771807736 --repo "$GITHUB_REPOSITORY" --name candidate-win --dir assets >/dev/null 2>&1; then
+            echo '::error::Pinned Windows artifact unavailable.'
+            exit 1
+          fi
+      - name: Verify immutable provenance and select only pinned Setup bytes
+        id: installer
+        run: |
+          if ! node scripts/qa/provenance.mjs verify provenance/provenance.json assets win >/dev/null 2>&1; then
+            echo '::error::Pinned provenance verification failed.'
+            exit 1
+          fi
+          installer=$(node scripts/qa/candidate-installer.mjs assets a5459e1f5137710b3f249a21ae372c13395f083a45319a0bd3f8fce7a44d6ff1 win 2>/dev/null) || {
+            echo '::error::Pinned Setup bytes unavailable.'
+            exit 1
+          }
+          if [ "$(node -p "require('node:path').basename(process.argv[1])" "$installer")" != 'Metis-Setup-1.9.7.exe' ]; then
+            echo '::error::Pinned Setup filename rejected.'
+            exit 1
+          fi
+          echo 'path=assets/Metis-Setup-1.9.7.exe' >> "$GITHUB_OUTPUT"
+      - name: Install pinned Setup in a fresh hosted directory
+        id: install
+        shell: pwsh
+        env:
+          INSTALLER: ${{ steps.installer.outputs.path }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          try {
+            $target = Join-Path $env:RUNNER_TEMP 'candidate-install'
+            if (Test-Path $target) { throw 'not-fresh' }
+            New-Item -ItemType Directory -Path $target | Out-Null
+            $setup = (Resolve-Path $env:INSTALLER).Path
+            $install = Start-Process -FilePath $setup -ArgumentList '/S', "/D=$target" -Wait -PassThru
+            if ($install.ExitCode -ne 0) { throw 'setup-failed' }
+            $app = Join-Path $target 'Metis.exe'
+            if (-not (Test-Path $app)) { throw 'app-missing' }
+            Add-Content -Path $env:GITHUB_OUTPUT -Value "app=$app"
+          } catch {
+            Write-Error 'Pinned Setup install failed without an owned app.' -ErrorAction Continue
+            exit 1
+          }
+      - name: Compare strict and OS-superset fresh launches with fixed enums only
+        timeout-minutes: 5
+        env:
+          APP: ${{ steps.install.outputs.app }}
+          INSTALLER: ${{ steps.installer.outputs.path }}
+        run: node scripts/qa/windows-cdp-env-matrix.mjs --app "$APP" --installer "$INSTALLER"
