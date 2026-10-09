@@ -269,8 +269,8 @@ describe('candidate-scenarios.yml', () => {
       stepIndex(mac, 'candidate-scenarios.mjs run')
     )
     expect(upload).toBeGreaterThan(stepIndex(mac, 'candidate-scenarios.mjs scan'))
-    expect(mac).toHaveLength(upload + 3)
-    const verdict = mac[upload + 2]
+    expect(mac).toHaveLength(upload + 4)
+    const verdict = mac[upload + 3]
     expect(verdict).toContain(
       "if: always() && (steps.scenario.outcome != 'success' || steps.scan.outcome != 'success')"
     )
@@ -286,7 +286,7 @@ describe('candidate-scenarios.yml', () => {
       expect(scan).toContain('--provenance provenance/provenance.json --lane-written "$FRESH_LANE_WRITTEN"')
       expect(scan).toContain('FRESH_LANE_WRITTEN: ${{ steps.scenario.outputs.fresh_lane_written }}')
       const uploads = all.filter((step) => step.includes('actions/upload-artifact@'))
-      expect(uploads).toHaveLength(2)
+      expect(uploads).toHaveLength(platform === 'mac' ? 3 : 2)
       expect(uploads[0]).toContain("if: always() && inputs.scenario != 'fresh-onboarding-baseline'")
       expect(uploads[0]).toContain('path: candidate-scenario/')
       expect(uploads[1]).toContain(
@@ -300,6 +300,28 @@ describe('candidate-scenarios.yml', () => {
       expect(all.at(-1)).toContain("steps.scenario.outcome != 'success' || steps.scan.outcome != 'success'")
       expect(all.at(-1)).toContain('exit 1')
     }
+  })
+
+  it('binds the Mac-only TLS probe to the API producer commit and whitelists only its closed JSON pair', () => {
+    const guard = steps('guard')[stepIndex(steps('guard'), 'candidate-scenarios.mjs guard')]
+    expect(guard).toContain('id: candidate')
+    expect(guard).toContain(
+      'jq -er \'.head_sha | select(type == "string" and test("^[0-9a-f]{40}$"))\' candidate-run.json'
+    )
+    expect(guard.indexOf('candidate-scenarios.mjs guard')).toBeLessThan(guard.indexOf('producer_commit='))
+    expect(job('guard')).toContain('      producer_commit: ${{ steps.candidate.outputs.producer_commit }}')
+    expect(job('mac')).toContain('      METIS_CANDIDATE_COMMIT: ${{ needs.guard.outputs.producer_commit }}')
+    expect(job('win').join('\n')).not.toContain('METIS_CANDIDATE_COMMIT')
+    const mac = steps('mac')
+    const uploads = mac.filter((step) => step.includes('actions/upload-artifact@'))
+    expect(uploads[0]).toContain("inputs.scenario != 'hosted-startup-tls'")
+    expect(uploads[2]).toContain("inputs.scenario == 'hosted-startup-tls' && steps.scan.outcome == 'success'")
+    expect(uploads[2]).toContain('candidate-scenario/hosted-startup-tls.json\n            candidate-scenario/lane.json')
+    expect(uploads[2]).toContain('if-no-files-found: error')
+    expect(mac[stepIndex(mac, 'candidate-scenarios.mjs scan')]).toContain(
+      'TLS_LANE_WRITTEN: ${{ steps.scenario.outputs.tls_lane_written }}'
+    )
+    expect(mac[stepIndex(mac, 'candidate-scenarios.mjs scan')]).toContain('--tls-lane-written "$TLS_LANE_WRITTEN"')
   })
 
   it('offers idle-soak and sidecar-boot-reaper from the registry', () => {

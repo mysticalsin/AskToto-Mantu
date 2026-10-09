@@ -29,6 +29,8 @@ import {
   freshOnboardingChildEnv,
   freshOnboardingLane,
   freshOnboardingScanContext,
+  hostedTlsLane,
+  hostedTlsScanContext,
   guiScriptingGrants,
   installerKindForScenario,
   laneAnnotation,
@@ -39,10 +41,12 @@ import {
   resolveOutputs,
   resolveScenario,
   scanFreshOnboardingOutput,
+  scanHostedTlsOutput,
   scanUploadDir,
   scenarioCommand
 } from './candidate-scenarios.mjs'
 import { NOT_COVERED } from './fresh-onboarding-baseline.mjs'
+import { createHostedTlsReport, TLS_ROWS } from './hosted-candidate-tls.mjs'
 import { LOCAL_LLM_SETTINGS } from './lib/local-llm-settings.mjs'
 import { VARIANTS } from './provenance.mjs'
 
@@ -407,7 +411,8 @@ describe('the scenario registry', () => {
       'sidecar-boot-reaper',
       'packaged-lifecycle',
       'renderer-kill',
-      'fresh-onboarding-baseline'
+      'fresh-onboarding-baseline',
+      'hosted-startup-tls'
     ])
     const mac = SCENARIOS['fault-fatal-relaunch'].platforms.mac
     expect(Object.keys(SCENARIOS['fault-fatal-relaunch'].platforms)).toEqual(['mac'])
@@ -611,7 +616,16 @@ describe('the scenario registry', () => {
         expect(variant, `${name} ${platform}`).toBeDefined()
         expect(variant.platform).toBe(platform)
         expect(target.artifact).toBe(`candidate-${target.variant}`)
-        expect(variant.promotable).toBe(!scenario.qaOnlyHook)
+        if (name === 'hosted-startup-tls') {
+          expect(scenario.qaOnlyHook).toBe(false)
+          expect('qaIdentityReason' in scenario && scenario.qaIdentityReason).toBe('hosted-startup-tls-support-only')
+          expect(platform).toBe('mac')
+          expect(target.variant).toBe('mac-qa-identity')
+          expect(variant.promotable).toBe(false)
+        } else {
+          expect('qaIdentityReason' in scenario).toBe(false)
+          expect(variant.promotable).toBe(!scenario.qaOnlyHook)
+        }
       }
     }
   })
@@ -884,6 +898,83 @@ describe('the scenario registry', () => {
     expect(() => scenarioCommand({ ...base, platform: 'mac', installer: 'assets/Metis-1.0.0.dmg' })).toThrow(
       /pass the installed app with --app/
     )
+  })
+})
+
+describe('hosted startup TLS support-only lane', () => {
+  const env = { GITHUB_SHA: 'b'.repeat(40), GITHUB_RUN_ID: '99', METIS_CANDIDATE_COMMIT: COMMIT }
+  const provenance = {
+    schema: 1,
+    repository: 'mysticalsin/AskToto-Mantu',
+    commit: COMMIT,
+    version: '1.9.7',
+    run: { id: 4242 },
+    builds: [
+      {
+        variant: 'mac-qa-identity',
+        artifact: 'candidate-mac-qa-identity',
+        electron: '43.6.0',
+        assets: [{ name: 'Metis-QA-1.9.7.zip', size: 42, sha256: MAC_SHA }]
+      }
+    ]
+  }
+  it('offers Mac QA ZIP only, without GUI grants, seeds, a fault-hook claim or Windows fallback', () => {
+    const entry = SCENARIOS['hosted-startup-tls']
+    expect(Object.keys(entry.platforms)).toEqual(['mac'])
+    expect(entry.platforms.mac).toMatchObject({
+      variant: 'mac-qa-identity',
+      isolatedProfiles: true,
+      installerSuffix: '.zip',
+      timeoutMinutes: 20,
+      stepTimeoutMinutes: 5
+    })
+    expect(entry.platforms.mac).not.toHaveProperty('guiScripting')
+    expect(entry.platforms.mac).not.toHaveProperty('settings')
+    expect(() => resolveScenario({ scenario: 'hosted-startup-tls', sha256: { mac: MAC_SHA, win: WIN_SHA } })).toThrow()
+    const argv = scenarioCommand({
+      scenario: 'hosted-startup-tls',
+      platform: 'mac',
+      installer: 'assets/Metis-QA-1.9.7.zip',
+      sha256: MAC_SHA,
+      outDir: 'candidate-scenario',
+      app: 'candidate-install/Metis QA.app',
+      provenancePath: 'provenance/provenance.json',
+      candidateRun: '4242',
+      harnessCommit: env.GITHUB_SHA,
+      producerCommit: COMMIT
+    })
+    expect(argv).toContain('--producer-commit')
+    expect(argv).toContain(COMMIT)
+    expect(argv).not.toContain('--platform')
+  })
+
+  it('scans exactly the two closed, freshly written files against the workflow producer commit', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'metis-tls-lane-'))
+    try {
+      const report = createHostedTlsReport({ ...freshIdentity })
+      report.outcome = 'PASS'
+      report.failure = 'none'
+      report.teardown = 'ACKNOWLEDGED'
+      report.cleanup = 'REMOVED'
+      report.tool = { sha256: 'd'.repeat(64), version: '3.6.4', image: '20260907.0351.1', arch: 'arm64' }
+      report.rows = TLS_ROWS.map((id: string) => ({ id, status: 'PASS' }))
+      const input = { platform: 'mac', env, provenance, candidateRun: '4242', sha256: MAC_SHA }
+      const lane = hostedTlsLane({ ...input, exitCode: 0, reportWritten: true, reportData: report })
+      expect(lane.outcome).toBe('PASS')
+      writeFileSync(join(dir, 'hosted-startup-tls.json'), JSON.stringify(report))
+      writeFileSync(join(dir, 'lane.json'), JSON.stringify(lane))
+      const context = hostedTlsScanContext({ ...input, laneWritten: true })
+      if (!context) throw new Error('Expected a bound hosted TLS context')
+      expect(scanHostedTlsOutput(dir, context)).toEqual([])
+      expect(scanHostedTlsOutput(dir, { ...context, laneWritten: false })).not.toEqual([])
+      expect(
+        hostedTlsScanContext({ ...input, env: { ...env, METIS_CANDIDATE_COMMIT: 'e'.repeat(40) }, laneWritten: true })
+      ).toBeUndefined()
+      writeFileSync(join(dir, 'audit.log'), 'private')
+      expect(scanHostedTlsOutput(dir, context)).toEqual(['output-file-list-invalid'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 

@@ -6,7 +6,8 @@ import { describe, expect, it } from 'vitest'
 
 const REPO = join(__dirname, '..')
 const CHECKER = join(REPO, 'scripts', 'check-skipped-tests.mjs')
-const BASELINE: Record<string, number> = { win32: 34, darwin: 2, linux: 28 }
+const hostedCi = process.env.CI === 'true' && process.env.GITHUB_ACTIONS === 'true'
+const BASELINE: Record<string, number> = { win32: 35, darwin: 3, linux: hostedCi ? 28 : 29 }
 const allowed = BASELINE[process.platform]
 if (allowed === undefined) throw new Error(`No synthetic skip baseline for ${process.platform}`)
 
@@ -70,6 +71,11 @@ const incompleteCases: IncompleteCase[] = [
       ;(report.testResults as Array<Record<string, unknown>>)[0].assertionResults = {}
     }
   ]
+]
+
+const nativeCanarySkipCases: Array<[string, boolean]> = [
+  ['verifies selected bytes, CRC failure and policy rejection without extracting files', true],
+  ['verifies selected bytes, CRC failure and policy rejection without extracting files extra', false]
 ]
 
 function successfulReport(): VitestReport {
@@ -153,6 +159,56 @@ function expectExplicitFailure(fixture: Fixture, result: RunResult, label: strin
 }
 
 describe('MQA-252 explicit root-report handoff', () => {
+  it.each(nativeCanarySkipCases)('requires the exact native canary skip title: %s', (title, accepted) => {
+    const fixture = createFixture()
+    try {
+      const report = successfulReport()
+      report.testResults[0].assertionResults.splice(1, 1)
+      report.testResults.push({
+        name: '/synthetic/__fixtures__/qa/retained-profile-analysis.test.ts',
+        status: 'passed',
+        assertionResults: [{ status: 'pending', title }]
+      })
+      report.numTotalTestSuites += 1
+      report.numPassedTestSuites += 1
+      const reportPath = join(fixture.root, 'native-canary.json')
+      writeFileSync(reportPath, JSON.stringify(report))
+      const result = run(fixture, [reportPath])
+      if (accepted) {
+        expect(result.code, result.output).toBe(0)
+        expect(result.output).toContain('Runs the real Linux system unzip')
+        expect(existsSync(fixture.sentinel)).toBe(false)
+      } else {
+        expectExplicitFailure(fixture, result, 'no declared reason for:')
+      }
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  })
+
+  it.each([-1, 1])('rejects a declared skip count differing by %s without slack', (difference) => {
+    const fixture = createFixture()
+    try {
+      const report = successfulReport()
+      if (difference > 0) {
+        report.testResults[0].assertionResults.push({ status: 'pending', title: 'extra declared skip' })
+      } else {
+        report.testResults[0].assertionResults.splice(1, 1)
+      }
+      report.numPendingTests += difference
+      report.numTotalTests += difference
+      const reportPath = join(fixture.root, 'skip-count.json')
+      writeFileSync(reportPath, JSON.stringify(report))
+      expectExplicitFailure(
+        fixture,
+        run(fixture, [reportPath]),
+        difference > 0 ? 'above the declared baseline' : 'BELOW the baseline'
+      )
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  })
+
   it('accepts complete successful supplied evidence without starting fallback Vitest', () => {
     const fixture = createFixture()
     try {
