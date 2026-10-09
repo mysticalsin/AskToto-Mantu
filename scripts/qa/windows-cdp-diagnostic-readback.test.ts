@@ -157,10 +157,12 @@ describe('one pinned diagnostic artifact', () => {
       [`artifacts/${PIN.artifact.id}/zip`, PIN.artifact.size]
     ])
     const rejected: string[] = []
-    await expect(loadPinnedEvidence(async (route: string) => {
-      rejected.push(route)
-      return Buffer.from(JSON.stringify({ ...run(), head_sha: secret }))
-    })).rejects.toThrow()
+    await expect(
+      loadPinnedEvidence(async (route: string) => {
+        rejected.push(route)
+        return Buffer.from(JSON.stringify({ ...run(), head_sha: secret }))
+      })
+    ).rejects.toThrow()
     expect(rejected).toEqual([`runs/${PIN.run}`])
   })
 
