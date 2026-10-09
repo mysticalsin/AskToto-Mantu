@@ -1,0 +1,170 @@
+name: Metis cloud speaker audio-window RED (temporary)
+run-name: ${{ github.event_name == 'pull_request' && 'Metis cloud speaker audio-window RED (registration)' || 'Metis cloud speaker audio-window RED' }}
+
+# One hosted, synthetic TDD observation. Remove after the observation and no later than
+# 2026-10-11T18:00:00Z. A passing job means the named assertion failed as expected;
+# it is not a passing application test, installed-app test, or release approval.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/metis-speaker-window-red.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: metis-speaker-window-red
+  cancel-in-progress: false
+
+jobs:
+  observe-red:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Refuse a foreign repository, event or branch
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$EVENT_NAME" != workflow_dispatch ] || [ "$REPOSITORY" != mysticalsin/AskToto-Mantu ] || [ "$REF" != refs/heads/main ]; then
+            echo 'speaker-red:WRONG_DISPATCH'
+            exit 1
+          fi
+      - name: Enforce the temporary workflow expiry
+        shell: bash
+        run: |
+          if (( $(date -u +%s) >= $(date -ud '2026-10-11T18:00:00Z' +%s) )); then
+            echo 'speaker-red:EXPIRED'
+            exit 1
+          fi
+      - name: Checkout the dispatched main commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          path: base
+          persist-credentials: false
+      - name: Checkout the pinned, test-only fixture commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: c2aa82b87e90de77925698c4be9790b67252b1df
+          path: fixture
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Refuse stale or mutated fixture inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture_sha='c2aa82b87e90de77925698c4be9790b67252b1df'
+          fixture_parent='d2d572cf7ea10f1b2f44b0b4a17606f81c5e0904'
+          if [ "$(git -C base rev-parse HEAD 2>/dev/null)" != "$GITHUB_SHA" ]; then
+            echo 'speaker-red:BASE_MISMATCH'
+            exit 1
+          fi
+          if [ "$(git -C fixture rev-parse HEAD 2>/dev/null)" != "$fixture_sha" ]; then
+            echo 'speaker-red:FIXTURE_MISMATCH'
+            exit 1
+          fi
+          if [ "$(git -C fixture rev-parse HEAD^ 2>/dev/null)" != "$fixture_parent" ]; then
+            echo 'speaker-red:PARENT_MISMATCH'
+            exit 1
+          fi
+          if [ "$(git -C fixture diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null)" != 'src/renderer/src/lib/listen.stop-drain.test.ts' ]; then
+            echo 'speaker-red:FIXTURE_SCOPE_MISMATCH'
+            exit 1
+          fi
+          if [ "$(git -C base rev-parse HEAD:src)" != "$(git -C fixture rev-parse HEAD^:src)" ]; then
+            echo 'speaker-red:CONTRACT_STALE'
+            exit 1
+          fi
+          for path in \
+            package.json \
+            package-lock.json \
+            vitest.config.ts \
+            tsconfig.tests.json \
+            scripts/check-test-types.mjs; do
+            if ! cmp -s "base/$path" "fixture/$path"; then
+              echo 'speaker-red:CONTRACT_STALE'
+              exit 1
+            fi
+          done
+          if ! cmp -s base/src/renderer/src/lib/listen.stop-drain.test.ts <(git -C fixture show HEAD^:src/renderer/src/lib/listen.stop-drain.test.ts 2>/dev/null); then
+            echo 'speaker-red:TEST_BASE_STALE'
+            exit 1
+          fi
+          echo 'speaker-red:FIXTURE_PINNED'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Install and typecheck the test fixture
+        working-directory: fixture
+        shell: bash
+        run: |
+          if ! npm ci --no-audit --no-fund > "$RUNNER_TEMP/speaker-red-npm.log" 2>&1; then
+            echo 'speaker-red:INSTALL_FAILED'
+            exit 1
+          fi
+          if ! npm run typecheck:tests > "$RUNNER_TEMP/speaker-red-types.log" 2>&1; then
+            echo 'speaker-red:TYPECHECK_FAILED'
+            exit 1
+          fi
+          echo 'speaker-red:TEST_TYPES_CLEAN'
+      - name: Classify only the named, expected RED assertion
+        working-directory: fixture
+        shell: bash
+        run: |
+          set +e
+          NO_COLOR=1 FORCE_COLOR=0 ./node_modules/.bin/vitest run \
+            src/renderer/src/lib/listen.stop-drain.test.ts \
+            -t 'names an older cloud final from its own audio after a newer remote window arrives' \
+            --reporter=json \
+            > "$RUNNER_TEMP/speaker-red-vitest.json" \
+            2> "$RUNNER_TEMP/speaker-red-vitest.stderr"
+          test_exit=$?
+          set -e
+          if [ "$test_exit" -ne 1 ]; then
+            echo 'speaker-red:UNEXPECTED_EXIT'
+            exit 1
+          fi
+          VITEST_REPORT="$RUNNER_TEMP/speaker-red-vitest.json" node <<'NODE'
+          const { readFileSync } = require('node:fs')
+          let report
+          try {
+            report = JSON.parse(readFileSync(process.env.VITEST_REPORT, 'utf8'))
+          } catch {
+            console.error('speaker-red:REPORT_INVALID')
+            process.exit(1)
+          }
+          const target = 'names an older cloud final from its own audio after a newer remote window arrives'
+          const suites = report.testResults
+          const assertions = Array.isArray(suites) && suites.length === 1 &&
+            Array.isArray(suites[0].assertionResults) ? suites[0].assertionResults : []
+          const ran = assertions.filter((assertion) => assertion.status === 'failed' || assertion.status === 'passed')
+          const failure = ran[0]
+          const message = failure?.failureMessages?.[0]
+          if (
+            report.success === false &&
+            report.numFailedTests === 1 &&
+            report.numPassedTests === 0 &&
+            suites?.length === 1 &&
+            suites[0].name?.endsWith('/src/renderer/src/lib/listen.stop-drain.test.ts') &&
+            ran.length === 1 &&
+            failure.status === 'failed' &&
+            failure.title === target &&
+            failure.failureMessages?.length === 1 &&
+            typeof message === 'string' &&
+            /^AssertionError: expected /.test(message) &&
+            message.includes('to be') &&
+            message.includes('Ava') &&
+            message.includes('Blair') &&
+            message.includes('Synthetic first turn.')
+          ) {
+            console.log('speaker-red:EXPECTED_ASSERTION_FAILURE')
+          } else {
+            console.error('speaker-red:UNEXPECTED_TEST_RESULT')
+            process.exit(1)
+          }
+          NODE
