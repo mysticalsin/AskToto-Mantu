@@ -152,6 +152,8 @@ export function bindHostedTlsCandidate(provenance, context) {
   return identity
 }
 
+/** @typedef {{ sha256: string, version: string, image: string, arch: string }} HostedTlsToolReceipt */
+
 export function createHostedTlsReport(identity) {
   return {
     schema: 'metis.hosted-startup-tls.v1',
@@ -163,7 +165,7 @@ export function createHostedTlsReport(identity) {
     rows: TLS_ROWS.map((id) => ({ id, status: 'NOT_RUN' })),
     teardown: 'NOT_ATTEMPTED',
     cleanup: 'NOT_CREATED',
-    tool: null,
+    tool: /** @type {HostedTlsToolReceipt | null} */ (null),
     residuals: { ...TLS_RESIDUALS }
   }
 }
@@ -366,7 +368,10 @@ export function createAuditMonitor(userData) {
         }
         const latest = lstatSync(path)
         if (
-          latest.dev !== identity.dev || latest.ino !== identity.ino || latest.nlink !== 1 || latest.size < bytes.length
+          latest.dev !== identity.dev ||
+          latest.ino !== identity.ino ||
+          latest.nlink !== 1 ||
+          latest.size < bytes.length
         ) {
           fail('audit-failed')
         }

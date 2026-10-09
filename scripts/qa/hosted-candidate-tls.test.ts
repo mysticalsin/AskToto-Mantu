@@ -293,32 +293,34 @@ describe('owned fixture tool settlement', () => {
     expect(stop).toHaveBeenCalledTimes(1)
   })
 
-  it.each(['nonzero', 'signal', 'child-error', 'stream-error'])(
-    'keeps %s failed after cleanup settles',
-    async (kind) => {
-      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
-      const child = fakeChild()
-      const stop = vi.fn(async () => ({ state: 'acknowledged' }))
-      const promise = runFixtureTool('version', {
-        cwd: '/synthetic',
-        env: {},
-        deadline: performance.now() + 20_000,
-        spawn: () => child,
-        stop
-      })
-      child.stdout.write('private output')
-      child.exitCode = kind === 'nonzero' ? 1 : 0
-      child.signalCode = kind === 'signal' ? 'SIGTERM' : null
-      if (kind === 'child-error') child.emit('error', new Error('private error'))
-      if (kind === 'stream-error') child.stdout.emit('error', new Error('private stream error'))
-      child.emit('exit', child.exitCode, child.signalCode)
-      child.emit('close', child.exitCode, child.signalCode)
-      await vi.advanceTimersByTimeAsync(25)
-      expect(await promise).toEqual({ ok: false, cleanup: true, output: '' })
-      expect(stop).toHaveBeenCalledTimes(1)
-      expect(vi.getTimerCount()).toBe(0)
-    }
-  )
+  it.each([
+    'nonzero',
+    'signal',
+    'child-error',
+    'stream-error'
+  ])('keeps %s failed after cleanup settles', async (kind) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    const child = fakeChild()
+    const stop = vi.fn(async () => ({ state: 'acknowledged' }))
+    const promise = runFixtureTool('version', {
+      cwd: '/synthetic',
+      env: {},
+      deadline: performance.now() + 20_000,
+      spawn: () => child,
+      stop
+    })
+    child.stdout.write('private output')
+    child.exitCode = kind === 'nonzero' ? 1 : 0
+    child.signalCode = kind === 'signal' ? 'SIGTERM' : null
+    if (kind === 'child-error') child.emit('error', new Error('private error'))
+    if (kind === 'stream-error') child.stdout.emit('error', new Error('private stream error'))
+    child.emit('exit', child.exitCode, child.signalCode)
+    child.emit('close', child.exitCode, child.signalCode)
+    await vi.advanceTimersByTimeAsync(25)
+    expect(await promise).toEqual({ ok: false, cleanup: true, output: '' })
+    expect(stop).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
+  })
 
   it('does not turn a missing spawn receipt or exhausted reserve into success', async () => {
     const spawn = vi.fn(() => {
@@ -371,9 +373,9 @@ describe('installed QA bundle admission', () => {
   })
   it('retains the executable-bit guard and uses real mode by default on every test host', async () => {
     const data = fixture()
-    await expect(
-      verifyHostedApp(data, data.id, data.producer, { ...data, modeOf: () => 0o644 })
-    ).rejects.toThrow('app-rejected')
+    await expect(verifyHostedApp(data, data.id, data.producer, { ...data, modeOf: () => 0o644 })).rejects.toThrow(
+      'app-rejected'
+    )
     const checked = verifyHostedApp(data, data.id, data.producer, { cwd: data.cwd, loadAsar: data.loadAsar })
     if (lstatSync(data.executable).mode & 0o111) await expect(checked).resolves.toBe(data.executable)
     else await expect(checked).rejects.toThrow('app-rejected')

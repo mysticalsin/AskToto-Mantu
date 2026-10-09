@@ -306,7 +306,7 @@ describe('candidate-scenarios.yml', () => {
     const guard = steps('guard')[stepIndex(steps('guard'), 'candidate-scenarios.mjs guard')]
     expect(guard).toContain('id: candidate')
     expect(guard).toContain(
-      "jq -er '.head_sha | select(type == \"string\" and test(\"^[0-9a-f]{40}$\"))' candidate-run.json"
+      'jq -er \'.head_sha | select(type == "string" and test("^[0-9a-f]{40}$"))\' candidate-run.json'
     )
     expect(guard.indexOf('candidate-scenarios.mjs guard')).toBeLessThan(guard.indexOf('producer_commit='))
     expect(job('guard')).toContain('      producer_commit: ${{ steps.candidate.outputs.producer_commit }}')

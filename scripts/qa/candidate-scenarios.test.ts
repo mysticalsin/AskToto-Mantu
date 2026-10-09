@@ -964,6 +964,7 @@ describe('hosted startup TLS support-only lane', () => {
       writeFileSync(join(dir, 'hosted-startup-tls.json'), JSON.stringify(report))
       writeFileSync(join(dir, 'lane.json'), JSON.stringify(lane))
       const context = hostedTlsScanContext({ ...input, laneWritten: true })
+      if (!context) throw new Error('Expected a bound hosted TLS context')
       expect(scanHostedTlsOutput(dir, context)).toEqual([])
       expect(scanHostedTlsOutput(dir, { ...context, laneWritten: false })).not.toEqual([])
       expect(

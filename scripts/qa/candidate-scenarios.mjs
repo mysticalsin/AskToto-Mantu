@@ -321,7 +321,16 @@ export function hostedTlsScanContext({ platform, provenance, candidateRun, sha25
   }
 }
 
-export function hostedTlsLane({ platform, env, provenance, candidateRun, sha256, exitCode, reportWritten, reportData }) {
+export function hostedTlsLane({
+  platform,
+  env,
+  provenance,
+  candidateRun,
+  sha256,
+  exitCode,
+  reportWritten,
+  reportData
+}) {
   const context = hostedTlsScanContext({ platform, env, provenance, candidateRun, sha256, laneWritten: true })
   const bound = context && reportWritten && assessHostedTlsReport(reportData, context.identity).length === 0
   const matches = bound && exitCode === { PASS: 0, FAIL: 1, PRECONDITION: 2 }[reportData.outcome]
@@ -346,7 +355,10 @@ export function hostedTlsLane({ platform, env, provenance, candidateRun, sha256,
   }
 }
 
-/** Exact output pair only, with fresh-write and API/provenance identity rebinding. No raw-error fallback. */
+/** Exact output pair only, with fresh-write and API/provenance identity rebinding. No raw-error fallback.
+ * @param {string} dir
+ * @param {{ identity: ReturnType<typeof bindHostedTlsCandidate>, ciRun: number, laneWritten: boolean } | undefined} context
+ */
 export function scanHostedTlsOutput(dir, context = undefined) {
   try {
     if (!context?.laneWritten || !positiveRunId(context.ciRun)) return ['output-context-invalid']
@@ -398,7 +410,16 @@ export function scanHostedTlsOutput(dir, context = undefined) {
   }
 }
 
-function hostedTlsArgs({ app, installer, sha256, report, provenancePath, candidateRun, harnessCommit, producerCommit }) {
+function hostedTlsArgs({
+  app,
+  installer,
+  sha256,
+  report,
+  provenancePath,
+  candidateRun,
+  harnessCommit,
+  producerCommit
+}) {
   if (
     !app ||
     !provenancePath ||
@@ -992,7 +1013,8 @@ export function assessScenarioReport({ scenario, platform, report, expected = un
   const entry = scenarioEntry(scenario)
   if (entry.reportAssessment === 'packaged-smoke') return assessPackagedSmokeReport(report, platform)
   if (entry.reportAssessment === FRESH_ONBOARDING_SCENARIO) return assessFreshOnboardingReport(report, expected)
-  if (entry.reportAssessment === TLS_SCENARIO) return { problems: assessHostedTlsReport(report, expected), notCovered: [] }
+  if (entry.reportAssessment === TLS_SCENARIO)
+    return { problems: assessHostedTlsReport(report, expected), notCovered: [] }
   return { problems: [], row_verdicts: undefined, notCovered: [] }
 }
 
@@ -1206,7 +1228,10 @@ export function contentProblems(text, { account }) {
 /** Legacy lanes delete files breaking a content rule; the fresh lane instead validates its exact output pair.
  * @param {string} dir
  * @param {{ account: string, scenario?: string, freshContext?: any, tlsContext?: any }} options */
-export function scanUploadDir(dir, { account, scenario = undefined, freshContext = undefined, tlsContext = undefined }) {
+export function scanUploadDir(
+  dir,
+  { account, scenario = undefined, freshContext = undefined, tlsContext = undefined }
+) {
   if (scenario === FRESH_ONBOARDING_SCENARIO) return scanFreshOnboardingOutput(dir, freshContext)
   if (scenario === TLS_SCENARIO) return scanHostedTlsOutput(dir, tlsContext)
   const problems = []
@@ -1504,10 +1529,9 @@ function main(argv) {
             : undefined
       })
       for (const problem of problems) {
-        const action =
-          [FRESH_ONBOARDING_SCENARIO, TLS_SCENARIO].includes(values.scenario)
-            ? 'upload withheld'
-            : 'file removed from the upload'
+        const action = [FRESH_ONBOARDING_SCENARIO, TLS_SCENARIO].includes(values.scenario)
+          ? 'upload withheld'
+          : 'file removed from the upload'
         console.log(`::error title=Content-free gate::${problem} (${action})`)
       }
       return problems.length ? 1 : 0
