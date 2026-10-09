@@ -147,25 +147,26 @@ jobs:
           const ran = assertions.filter((assertion) => assertion.status === 'failed' || assertion.status === 'passed')
           const failure = ran[0]
           const message = failure?.failureMessages?.[0]
-          if (
-            report.success === false &&
-            report.numFailedTests === 1 &&
-            report.numPassedTests === 0 &&
-            suites?.length === 1 &&
-            suites[0].name?.endsWith('/src/shared/operator-entitlements.test.ts') &&
-            ran.length === 1 &&
-            failure.status === 'failed' &&
-            failure.title === target &&
-            failure.failureMessages?.length === 1 &&
-            typeof message === 'string' &&
-            /^AssertionError: expected /.test(message) &&
-            message.includes('to deeply equal') &&
-            message.includes('ask') &&
-            message.includes('operator_keys')
-          ) {
+          const checks = {
+            failedReport: report.success === false,
+            oneFailedTest: report.numFailedTests === 1,
+            noPassedTests: report.numPassedTests === 0,
+            oneSuite: suites?.length === 1,
+            pinnedSuite: suites?.[0]?.name?.endsWith('/src/shared/operator-entitlements.test.ts') === true,
+            oneExecutedAssertion: ran.length === 1,
+            failedAssertion: failure?.status === 'failed',
+            pinnedTitle: failure?.title === target,
+            oneFailureMessage: failure?.failureMessages?.length === 1,
+            assertionError: typeof message === 'string' && /^AssertionError: expected /.test(message),
+            deepEquality: typeof message === 'string' && message.includes('to deeply equal'),
+            askGrant: typeof message === 'string' && message.includes('ask'),
+            operatorKeysGrant: typeof message === 'string' && message.includes('operator_keys')
+          }
+          if (Object.values(checks).every(Boolean)) {
             console.log('license-red:EXPECTED_ASSERTION_FAILURE')
           } else {
-            console.error('license-red:UNEXPECTED_TEST_RESULT')
+            // Fixed predicate names only: never print the test report, assertion values or stack.
+            console.error(`license-red:UNEXPECTED_TEST_RESULT:${Object.entries(checks).filter(([, ok]) => !ok).map(([name]) => name).join(',')}`)
             process.exit(1)
           }
           NODE
