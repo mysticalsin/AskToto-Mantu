@@ -200,7 +200,10 @@ describe('dual repository promotion', () => {
     expect(deletions.map((call) => call.route)).toEqual(['releases/10', 'releases/20'])
     for (const [index, event] of h.events.entries()) {
       if (event.call?.method !== 'DELETE') continue
-      const prior = h.events.slice(0, index).reverse().find((item) => item.call)
+      const prior = h.events
+        .slice(0, index)
+        .reverse()
+        .find((item) => item.call)
       expect(prior?.call).toEqual({ repository: event.call.repository, route: event.call.route })
     }
   })
@@ -373,48 +376,51 @@ describe('dual repository promotion', () => {
     expect(writes(h).some((call) => call.method === 'PATCH' || call.asset)).toBe(false)
   })
 
-  it.each([{ id: '10' }, { id: 10, draft: false }, { id: 10, tag_name: 'different' }])(
-    'does not claim ownership from a malformed create acknowledgement: %j',
-    async (override) => {
-      const h = harness({
-        request: (call) =>
-          call.method === 'POST' && call.route === 'releases'
-            ? { status: 201, data: { ...call.json, ...override } }
-            : undefined
-      })
-      const result = await run(h)
-      expect(result.code).toBe('release-identity')
-      expect(receiptOf(result).targets[0]).toMatchObject({ release_id: null, state: 'unknown' })
-      expect(writes(h)).toHaveLength(1)
-    }
-  )
+  it.each([
+    { id: '10' },
+    { id: 10, draft: false },
+    { id: 10, tag_name: 'different' }
+  ])('does not claim ownership from a malformed create acknowledgement: %j', async (override) => {
+    const h = harness({
+      request: (call) =>
+        call.method === 'POST' && call.route === 'releases'
+          ? { status: 201, data: { ...call.json, ...override } }
+          : undefined
+    })
+    const result = await run(h)
+    expect(result.code).toBe('release-identity')
+    expect(receiptOf(result).targets[0]).toMatchObject({ release_id: null, state: 'unknown' })
+    expect(writes(h)).toHaveLength(1)
+  })
 
-  it.each(['first-create', 'second-create', 'uploaded', 'before-patch'])(
-    'preserves drafts after receipt failure: %s',
-    async (when) => {
-      const h = harness({
-        persist: (receipt) => {
-          const targets = receipt.targets
-          const fail =
-            when === 'first-create'
-              ? targets[0]?.state === 'draft'
-              : when === 'second-create'
-                ? targets[1]?.state === 'draft'
-                : when === 'uploaded'
-                  ? targets.some((target) => target.state === 'uploaded')
-                  : receipt.publication_attempted === true
-          if (fail) throw new Error('synthetic receipt failure')
-        }
-      })
-      const result = await run(h)
-      expect(result.ok).toBe(false)
-      expect(result.code).toBe('receipt-write-failed')
-      const failedIndex = h.events.findLastIndex((event) => event.kind === 'receipt')
-      expect(h.events.slice(failedIndex + 1).filter((event) => event.call?.method)).toEqual([])
-      expect(writes(h).some((call) => call.method === 'PATCH' || call.method === 'DELETE')).toBe(false)
-      expect(h.releases.size).toBe(when === 'first-create' ? 1 : 2)
-    }
-  )
+  it.each([
+    'first-create',
+    'second-create',
+    'uploaded',
+    'before-patch'
+  ])('preserves drafts after receipt failure: %s', async (when) => {
+    const h = harness({
+      persist: (receipt) => {
+        const targets = receipt.targets
+        const fail =
+          when === 'first-create'
+            ? targets[0]?.state === 'draft'
+            : when === 'second-create'
+              ? targets[1]?.state === 'draft'
+              : when === 'uploaded'
+                ? targets.some((target) => target.state === 'uploaded')
+                : receipt.publication_attempted === true
+        if (fail) throw new Error('synthetic receipt failure')
+      }
+    })
+    const result = await run(h)
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('receipt-write-failed')
+    const failedIndex = h.events.reduce((last, event, index) => (event.kind === 'receipt' ? index : last), -1)
+    expect(h.events.slice(failedIndex + 1).filter((event) => event.call?.method)).toEqual([])
+    expect(writes(h).some((call) => call.method === 'PATCH' || call.method === 'DELETE')).toBe(false)
+    expect(h.releases.size).toBe(when === 'first-create' ? 1 : 2)
+  })
 
   it('retains the primary upload error and a separate cleanup error', async () => {
     const h = harness({
@@ -428,35 +434,37 @@ describe('dual repository promotion', () => {
     expect(JSON.stringify(result)).not.toContain('must not escape')
   })
 
-  it.each(['digest', 'size', 'state', 'duplicate'])(
-    'rejects uploaded asset %s mismatch before publication',
-    async (field) => {
-      const h = harness({
-        request: (call) => {
-          if (call.method || !call.route.includes('/assets?')) return undefined
-          const asset = {
-            id: 1,
-            name: manifest[0].name,
-            size: 5,
-            digest: `sha256:${manifest[0].sha256}`,
-            state: 'uploaded'
-          }
-          const changed =
-            field === 'digest'
-              ? { ...asset, digest: `sha256:${'0'.repeat(64)}` }
-              : field === 'size'
-                ? { ...asset, size: 6 }
-                : { ...asset, state: 'starter' }
-          return {
-            status: 200,
-            data: !call.route.endsWith('page=1') ? [] : field === 'duplicate' ? [asset, asset] : [changed]
-          }
+  it.each([
+    'digest',
+    'size',
+    'state',
+    'duplicate'
+  ])('rejects uploaded asset %s mismatch before publication', async (field) => {
+    const h = harness({
+      request: (call) => {
+        if (call.method || !call.route.includes('/assets?')) return undefined
+        const asset = {
+          id: 1,
+          name: manifest[0].name,
+          size: 5,
+          digest: `sha256:${manifest[0].sha256}`,
+          state: 'uploaded'
         }
-      })
-      expect((await run(h)).ok).toBe(false)
-      expect(writes(h).some((call) => call.method === 'PATCH')).toBe(false)
-    }
-  )
+        const changed =
+          field === 'digest'
+            ? { ...asset, digest: `sha256:${'0'.repeat(64)}` }
+            : field === 'size'
+              ? { ...asset, size: 6 }
+              : { ...asset, state: 'starter' }
+        return {
+          status: 200,
+          data: !call.route.endsWith('page=1') ? [] : field === 'duplicate' ? [asset, asset] : [changed]
+        }
+      }
+    })
+    expect((await run(h)).ok).toBe(false)
+    expect(writes(h).some((call) => call.method === 'PATCH')).toBe(false)
+  })
 
   it('rechecks tags after upload and refuses a changed source commit before publication', async () => {
     const h = harness({
@@ -469,63 +477,66 @@ describe('dual repository promotion', () => {
     expect(writes(h).some((call) => call.method === 'PATCH')).toBe(false)
   })
 
-  it.each(['body', 'name', 'draft', 'tag_name'])(
-    'rechecks draft %s after upload and does not delete a changed identity',
-    async (field) => {
-      const h = harness({
-        request: (call) => {
-          if (call.asset && call.repository === FEED) {
-            h.releases.get(SOURCE)![field] = field === 'draft' ? false : 'changed'
-          }
-          return undefined
+  it.each([
+    'body',
+    'name',
+    'draft',
+    'tag_name'
+  ])('rechecks draft %s after upload and does not delete a changed identity', async (field) => {
+    const h = harness({
+      request: (call) => {
+        if (call.asset && call.repository === FEED) {
+          h.releases.get(SOURCE)![field] = field === 'draft' ? false : 'changed'
         }
-      })
-      const result = await run(h)
-      expect(result.ok).toBe(false)
-      expect(writes(h).some((call) => call.method === 'PATCH')).toBe(false)
-      expect(writes(h).some((call) => call.method === 'DELETE' && call.repository === SOURCE)).toBe(false)
-    }
-  )
+        return undefined
+      }
+    })
+    const result = await run(h)
+    expect(result.ok).toBe(false)
+    expect(writes(h).some((call) => call.method === 'PATCH')).toBe(false)
+    expect(writes(h).some((call) => call.method === 'DELETE' && call.repository === SOURCE)).toBe(false)
+  })
 
-  it.each([SOURCE, FEED])(
-    'preserves both releases after an ambiguous publication response on %s',
-    async (repository) => {
-      const h = harness({
-        request: (call) => {
-          if (call.method === 'PATCH' && call.repository === repository) throw new Error('lost response')
-          return undefined
-        }
-      })
-      const result = await run(h)
-      expect(result.ok).toBe(false)
-      expect(receiptOf(result).outcome).toBe('partial-or-unknown')
-      expect(result.urls).toEqual([])
-      expect(h.releases.size).toBe(2)
-      expect(writes(h).some((call) => call.method === 'DELETE')).toBe(false)
-      expect(writes(h).filter((call) => call.method === 'PATCH')).toHaveLength(repository === SOURCE ? 1 : 2)
-    }
-  )
+  it.each([
+    SOURCE,
+    FEED
+  ])('preserves both releases after an ambiguous publication response on %s', async (repository) => {
+    const h = harness({
+      request: (call) => {
+        if (call.method === 'PATCH' && call.repository === repository) throw new Error('lost response')
+        return undefined
+      }
+    })
+    const result = await run(h)
+    expect(result.ok).toBe(false)
+    expect(receiptOf(result).outcome).toBe('partial-or-unknown')
+    expect(result.urls).toEqual([])
+    expect(h.releases.size).toBe(2)
+    expect(writes(h).some((call) => call.method === 'DELETE')).toBe(false)
+    expect(writes(h).filter((call) => call.method === 'PATCH')).toHaveLength(repository === SOURCE ? 1 : 2)
+  })
 
-  it.each(['latest-auth', 'tag', 'assets'])(
-    'does not claim delivery after failed published readback: %s',
-    async (mode) => {
-      const h = harness({
-        request: (call) => {
-          if (h.releases.get(FEED)?.draft !== false) return undefined
-          if (mode === 'latest-auth' && call.route === 'releases/latest') return { status: 403, data: null }
-          if (mode === 'tag' && call.route.startsWith('commits/refs')) {
-            return { status: 200, data: { sha: 'c'.repeat(40) } }
-          }
-          if (mode === 'assets' && call.route.includes('/assets?')) return { status: 200, data: [] }
-          return undefined
+  it.each([
+    'latest-auth',
+    'tag',
+    'assets'
+  ])('does not claim delivery after failed published readback: %s', async (mode) => {
+    const h = harness({
+      request: (call) => {
+        if (h.releases.get(FEED)?.draft !== false) return undefined
+        if (mode === 'latest-auth' && call.route === 'releases/latest') return { status: 403, data: null }
+        if (mode === 'tag' && call.route.startsWith('commits/refs')) {
+          return { status: 200, data: { sha: 'c'.repeat(40) } }
         }
-      })
-      const result = await run(h)
-      expect(result.ok).toBe(false)
-      expect(result.urls).toEqual([])
-      expect(writes(h).some((call) => call.method === 'DELETE')).toBe(false)
-    }
-  )
+        if (mode === 'assets' && call.route.includes('/assets?')) return { status: 200, data: [] }
+        return undefined
+      }
+    })
+    const result = await run(h)
+    expect(result.ok).toBe(false)
+    expect(result.urls).toEqual([])
+    expect(writes(h).some((call) => call.method === 'DELETE')).toBe(false)
+  })
 })
 
 const temporaryDirectories: string[] = []
@@ -650,15 +661,16 @@ describe('fixed GitHub transport', () => {
     expect(fake.observed).toHaveLength(1)
   })
 
-  it.each(['https://other.invalid/', '../other', 'releases#fragment'])(
-    'rejects route escape %s before HTTP',
-    async (route) => {
-      const fake = fakeHttp()
-      const request = createGitHubTransport({ token: 'synthetic-token', stageDir: '', requestImpl: fake.request })
-      await expect(request({ repository: SOURCE, route })).rejects.toThrow('transport-input')
-      expect(fake.observed).toEqual([])
-    }
-  )
+  it.each([
+    'https://other.invalid/',
+    '../other',
+    'releases#fragment'
+  ])('rejects route escape %s before HTTP', async (route) => {
+    const fake = fakeHttp()
+    const request = createGitHubTransport({ token: 'synthetic-token', stageDir: '', requestImpl: fake.request })
+    await expect(request({ repository: SOURCE, route })).rejects.toThrow('transport-input')
+    expect(fake.observed).toEqual([])
+  })
 
   it('rejects a different repository and bounds JSON responses', async () => {
     const fake = fakeHttp(200, 'x'.repeat(2 * 1024 * 1024 + 1))
