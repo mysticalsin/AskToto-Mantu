@@ -13,7 +13,7 @@ const inspectorBody = JSON.stringify([
   { type: 'node', webSocketDebuggerUrl: `ws://127.0.0.1:${INSPECT_PORT}/foreign-fixture` }
 ])
 
-type Route = { status: number; body?: string; hang?: boolean; contentLength?: number }
+type Route = { status: number; body?: string; hang?: boolean; contentLength?: number; errorCode?: string }
 
 function fakeRequests(routes: Record<string, Route>) {
   const seen: Array<{
@@ -42,6 +42,10 @@ function fakeRequests(routes: Record<string, Route>) {
       queueMicrotask(() => {
         const route = routes[String(options.path)]
         if (route?.hang) return
+        if (route?.errorCode) {
+          outgoing.emit('error', Object.assign(new Error('private transport detail'), { code: route.errorCode }))
+          return
+        }
         const incoming = new EventEmitter() as EventEmitter & {
           statusCode: number
           headers: Record<string, string>
@@ -94,6 +98,7 @@ describe('bounded unowned endpoint protocol observation', () => {
     await observer.settled
     const diagnostic = observer.cancel()
     expect(diagnostic).toBe('BOTH_PROTOCOL_SHAPES_OBSERVED')
+    expect(observer.cdpHttpStage()).toBe('VALID_200_SHAPE_OBSERVED')
     expect(JSON.stringify({ cdp_diagnostic: diagnostic })).not.toContain(privateMarker)
     expect(seen.map((entry) => entry.options.path).sort()).toEqual(['/json/list', '/json/version'])
     for (const { options, destroy } of seen) {
@@ -119,6 +124,7 @@ describe('bounded unowned endpoint protocol observation', () => {
     const diagnostic = observer.cancel()
     await observer.settled
     expect(diagnostic).toBe('NOT_OBSERVED')
+    expect(observer.cdpHttpStage()).toBe('NON_200_OBSERVED')
     expect(JSON.stringify({ cdp_diagnostic: diagnostic })).not.toContain(privateMarker)
     expect(seen.every(({ destroy }) => destroy.mock.calls.length > 0)).toBe(true)
   })
@@ -153,6 +159,25 @@ describe('bounded unowned endpoint protocol observation', () => {
     })
     await new Promise((resolve) => setImmediate(resolve))
     expect(observer.cancel()).toBe('INSPECTOR_PROTOCOL_SHAPE_OBSERVED')
+    expect(observer.cdpHttpStage()).toBe('INVALID_200_SHAPE_OBSERVED')
+    await observer.settled
+  })
+
+  it('reports a refused CDP connection without returning the transport error or private response', async () => {
+    const { request } = fakeRequests({
+      '/json/version': { status: 0, errorCode: 'ECONNREFUSED' },
+      '/json/list': { status: 200, body: inspectorBody }
+    })
+    const observer = observeLoopbackProtocols({
+      cdpPort: CDP_PORT,
+      inspectPort: INSPECT_PORT,
+      deadline: performance.now() + 1_000,
+      request
+    })
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(observer.cancel()).toBe('INSPECTOR_PROTOCOL_SHAPE_OBSERVED')
+    expect(observer.cdpHttpStage()).toBe('REFUSED_OBSERVED')
+    expect(JSON.stringify({ cdp_http: observer.cdpHttpStage() })).not.toContain('private transport detail')
     await observer.settled
   })
 
@@ -170,6 +195,23 @@ describe('bounded unowned endpoint protocol observation', () => {
     await observer.settled
     expect(observer.cancel()).toBe('NOT_OBSERVED')
     expect(seen.every(({ destroy }) => destroy.mock.calls.length > 0)).toBe(true)
+  })
+
+  it('labels a bounded silent CDP HTTP request without promoting it to a protocol observation', async () => {
+    const { request } = fakeRequests({
+      '/json/version': { status: 200, hang: true },
+      '/json/list': { status: 200, body: inspectorBody }
+    })
+    const observer = observeLoopbackProtocols({
+      cdpPort: CDP_PORT,
+      inspectPort: INSPECT_PORT,
+      deadline: performance.now() + 1_000,
+      request
+    })
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    expect(observer.cdpHttpStage()).toBe('TIMEOUT_OBSERVED')
+    expect(observer.cancel()).toBe('INSPECTOR_PROTOCOL_SHAPE_OBSERVED')
+    await observer.settled
   })
 
   it('destroys an oversized streamed body even when the peer omits Content-Length', async () => {

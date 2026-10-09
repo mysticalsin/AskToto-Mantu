@@ -737,6 +737,7 @@ describe('owned direct-launch endpoint handshakes', () => {
 
   it('keeps main inspection fixed, synchronous, and bound to the exact child', async () => {
     const messages: unknown[] = []
+    const stages: string[] = []
     class FakeSocket extends EventEmitter {
       readyState = 0
       constructor() {
@@ -782,8 +783,10 @@ describe('owned direct-launch endpoint handshakes', () => {
       expectedVersion: '1.9.7',
       timeoutMs: 1_000,
       fetchImpl: async () => ({ ok: true, json: async () => [{ webSocketDebuggerUrl: 'ws://127.0.0.1:9223/a' }] }),
-      WebSocketClass: FakeSocket
+      WebSocketClass: FakeSocket,
+      onStage: (stage: string) => stages.push(stage)
     })
+    expect(stages).toEqual(['DISCOVERY_READY', 'SOCKET_OPEN', 'OBSERVATION_OWNED'])
     expect(result.observation).toEqual({
       profileMatches: true,
       profileMask: 0,
@@ -956,6 +959,7 @@ describe('owned direct-launch endpoint handshakes', () => {
     ]
   ])('fails closed and releases the socket when the fixed observation %s', async (_label, value) => {
     let closed = false
+    const stages: string[] = []
     class InvalidSocket extends EventEmitter {
       readyState = 0
       constructor() {
@@ -994,9 +998,11 @@ describe('owned direct-launch endpoint handshakes', () => {
       expectedVersion: '1.9.7',
       timeoutMs: 1_000,
       fetchImpl: async () => ({ ok: true, json: async () => [{ webSocketDebuggerUrl: 'ws://127.0.0.1:9223/a' }] }),
-      WebSocketClass: InvalidSocket
+      WebSocketClass: InvalidSocket,
+      onStage: (stage: string) => stages.push(stage)
     })
     expect(result).toMatchObject({ inspector: null, observation: null, transportUncertain: false })
+    expect(stages).toEqual(['DISCOVERY_READY', 'SOCKET_OPEN', 'OBSERVATION_FAILED'])
     expect(closed).toBe(true)
   })
 

@@ -9,6 +9,7 @@ import {
   classifyInspector,
   inspectorByDeadline,
   osSupersetLaunchEnvironment,
+  queryWindowStatus,
   reportProblems,
   sampleWindowAfterDeadline
 } from './windows-cdp-env-matrix.mjs'
@@ -28,6 +29,8 @@ const snapshot = () => ({
   window_post_deadline: 'POST_DEADLINE_NORMAL_TITLE',
   audit: 'READY',
   protocol_shape: 'INSPECTOR_PROTOCOL_SHAPE_OBSERVED',
+  cdp_http_interval: 'REFUSED_OBSERVED',
+  inspector_attach_stage: 'DISCOVERY_WAITING',
   host_loop_lag: 'LT_250_MS'
 })
 
@@ -200,6 +203,9 @@ describe('hosted Windows CDP environment matrix', () => {
     }
     expect(await sampleWindowAfterDeadline(launch, query)).toBe('POST_DEADLINE_NORMAL_TITLE')
     expect(calls).toBe(1)
+    expect(await sampleWindowAfterDeadline(launch, async () => 'QUERY_SHELL_MISSING')).toBe(
+      'POST_DEADLINE_QUERY_SHELL_MISSING'
+    )
     launch.latches.exited = true
     expect(await sampleWindowAfterDeadline(launch, query)).toBe('EXITED_BEFORE_QUERY')
     expect(calls).toBe(1)
@@ -210,6 +216,25 @@ describe('hosted Windows CDP environment matrix', () => {
         return 'NORMAL_TITLE'
       })
     ).toBe('EXITED_DURING_QUERY')
+  })
+
+  it('classifies only fixed PowerShell query failure stages without returning error text', async () => {
+    const failed = (code: string, killed = false) => async () => {
+      throw Object.assign(new Error('PRIVATE_QUERY_FAILURE'), { code, killed })
+    }
+    const root = 'C:\\Windows'
+    expect(await queryWindowStatus(101, failed('ENOENT'), root)).toBe('QUERY_SHELL_MISSING')
+    expect(await queryWindowStatus(101, failed('ETIMEDOUT', true), root)).toBe('QUERY_TIMEOUT')
+    expect(await queryWindowStatus(101, failed('OTHER'), root)).toBe('QUERY_SHELL_FAILED')
+    expect(await queryWindowStatus(101, async () => ({ stdout: 'QUERY_PROCESS_LOOKUP_FAILED\n', stderr: '' }), root)).toBe(
+      'QUERY_PROCESS_LOOKUP_FAILED'
+    )
+    expect(await queryWindowStatus(101, async () => ({ stdout: 'PRIVATE_QUERY_FAILURE', stderr: '' }), root)).toBe(
+      'QUERY_OUTPUT_INVALID'
+    )
+    expect(await queryWindowStatus(101, async () => ({ stdout: 'NORMAL_TITLE\n', stderr: '' }), 'relative')).toBe(
+      'QUERY_SHELL_PATH_INVALID'
+    )
   })
 
   it('requires an owned inspector observation and treats deadline or profile mismatch as diagnostic', () => {
@@ -272,5 +297,23 @@ describe('hosted Windows CDP environment matrix', () => {
         identity: { ...valid.identity, installer_sha256: '0'.repeat(64) }
       })
     ).not.toEqual([])
+    expect(
+      reportProblems({
+        ...valid,
+        variants: [
+          variant('STRICT'),
+          { ...variant('OS_SUPERSET'), at_15s: { ...snapshot(), cdp_http_interval: 'PRIVATE_RESPONSE_BODY' } }
+        ]
+      })
+    ).toContain('SNAPSHOT_STATUS')
+    expect(
+      reportProblems({
+        ...valid,
+        variants: [
+          variant('STRICT'),
+          { ...variant('OS_SUPERSET'), at_15s: { ...snapshot(), inspector_attach_stage: 'PRIVATE_SOCKET_URL' } }
+        ]
+      })
+    ).toContain('SNAPSHOT_STATUS')
   })
 })
