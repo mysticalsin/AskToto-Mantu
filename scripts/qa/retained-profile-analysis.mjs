@@ -487,7 +487,7 @@ async function readMembers(path, caps, expected, dir, deadline) {
 }
 
 // Tiny stored ZIP producer for synthetic canaries only; never used to parse retained data.
-export function canaryZip(entries, badCrc = false) {
+function canaryZip(entries, badCrc = false) {
   const locals = []
   const central = []
   let offset = 0
