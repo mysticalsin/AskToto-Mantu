@@ -172,6 +172,55 @@ jobs:
         run: |
           xcodebuild -project Metis.xcodeproj -scheme Metis -configuration Debug \
             -destination 'generic/platform=macOS' CODE_SIGNING_ALLOWED=NO build
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      # Static same-job package evidence only: this never launches or publishes the native app.
+      - name: Allocate native package workspace
+        id: native_paths
+        run: node scripts/verify-native-mac-package.mjs prepare
+      - name: Require clean native project before Release
+        run: |
+          git diff --exit-code -- native-app/project.yml
+          git diff --cached --exit-code -- native-app/project.yml
+      - name: Build native Release ZIP
+        id: native_release
+        env:
+          NATIVE_OUTPUT: ${{ steps.native_paths.outputs.output }}
+        run: node scripts/build-native-mac.mjs --out-dir "$NATIVE_OUTPUT"
+      - name: Require clean native project after Release
+        id: native_source_after
+        if: always()
+        run: |
+          git diff --exit-code -- native-app/project.yml
+          git diff --cached --exit-code -- native-app/project.yml
+      - name: Verify native Release ZIP without launching
+        id: native_verify
+        if: success() && steps.native_release.outcome == 'success' && steps.native_source_after.outcome == 'success'
+        env:
+          NATIVE_PACKAGE_ROOT: ${{ steps.native_paths.outputs.root }}
+          NATIVE_PACKAGE_OWNER: ${{ steps.native_paths.outputs.owner_digest }}
+          NATIVE_METADATA: ${{ steps.native_paths.outputs.metadata }}
+        run: |
+          node scripts/verify-native-mac-package.mjs verify
+          cat "$NATIVE_METADATA"
+      - name: Upload native package baseline
+        if: success() && steps.native_verify.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: metis-native-package-baseline
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+          path: |
+            ${{ steps.native_paths.outputs.zip }}
+            ${{ steps.native_paths.outputs.metadata }}
+      - name: Clean owned native package workspace
+        if: always() && steps.native_paths.outputs.root != ''
+        env:
+          NATIVE_PACKAGE_ROOT: ${{ steps.native_paths.outputs.root }}
+          NATIVE_PACKAGE_OWNER: ${{ steps.native_paths.outputs.owner_digest }}
+        run: node scripts/verify-native-mac-package.mjs cleanup
 
   lint:
     # Minimal correctness lint plus a format check, on the files this branch changes (M2-0052). Biome comes
