@@ -1,0 +1,42 @@
+name: Retained profile analysis
+run-name: ${{ github.event_name == 'pull_request' && 'Retained profile analysis (registration)' || 'Retained profile analysis (diagnostic only)' }}
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/retained-profile-analysis.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: retained-profile-analysis
+  cancel-in-progress: false
+
+jobs:
+  analyze:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Analyze only fixed retained evidence
+        id: analysis
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/qa/retained-profile-analysis.mjs
+      - name: Upload the closed diagnostic summary
+        if: success() && steps.analysis.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: retained-profile-summary
+          path: retained-profile-summary.json
+          if-no-files-found: error
+          retention-days: 7
