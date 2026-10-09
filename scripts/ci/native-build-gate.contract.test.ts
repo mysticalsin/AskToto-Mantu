@@ -113,7 +113,7 @@ describe('native hosted persistence tests', () => {
     const command = step.replace(/\s*\\\n\s*/g, ' ')
     expect(command).toContain(
       'xcodebuild test -project Metis.xcodeproj -scheme MetisPersistenceTests -configuration Debug ' +
-        "-destination 'platform=macOS' -derivedDataPath \"$metis_test_root/DerivedData\" " +
+        '-destination \'platform=macOS\' -derivedDataPath "$metis_test_root/DerivedData" ' +
         '-resultBundlePath "$metis_test_root/PersistenceTests.xcresult" CODE_SIGNING_ALLOWED=NO'
     )
     expect(step).not.toMatch(/continue-on-error|\|\|\s*true|^ {8}if:|rm -rf|open -[an]|\.app\/Contents\/MacOS\//m)
