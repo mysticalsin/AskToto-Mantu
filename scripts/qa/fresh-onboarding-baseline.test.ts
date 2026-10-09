@@ -213,21 +213,19 @@ describe('fresh onboarding runtime identity diagnostics', () => {
     expect(FRESH_PROFILE_FAILURES).toEqual(PROFILE_FAILURES)
   })
 
-  it.each(PROFILE_FAILURES.map((failure, profileMask) => ({ failure, profileMask })))(
-    'maps every valid profile mask to its fixed profile-only failure',
-    ({ failure, profileMask }) => {
-      expect(freshOnboardingIdentityFailure(profileMask === 0, profileMask, true)).toBe(failure)
-    }
-  )
+  it.each(
+    PROFILE_FAILURES.map((failure, profileMask) => ({ failure, profileMask }))
+  )('maps every valid profile mask to its fixed profile-only failure', ({ failure, profileMask }) => {
+    expect(freshOnboardingIdentityFailure(profileMask === 0, profileMask, true)).toBe(failure)
+  })
 
-  it.each(PROFILE_FAILURES.map((_, profileMask) => profileMask))(
-    'retains version precedence for profile mask %s',
-    (profileMask) => {
-      expect(freshOnboardingIdentityFailure(profileMask === 0, profileMask, false)).toBe(
-        profileMask === 0 ? 'runtime-version-mismatch' : 'profile-and-runtime-version-mismatch'
-      )
-    }
-  )
+  it.each(
+    PROFILE_FAILURES.map((_, profileMask) => profileMask)
+  )('retains version precedence for profile mask %s', (profileMask) => {
+    expect(freshOnboardingIdentityFailure(profileMask === 0, profileMask, false)).toBe(
+      profileMask === 0 ? 'runtime-version-mismatch' : 'profile-and-runtime-version-mismatch'
+    )
+  })
 
   it.each([
     { profileMatches: true, profileMask: 1, versionMatches: true },

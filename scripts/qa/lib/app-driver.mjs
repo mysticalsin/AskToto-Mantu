@@ -121,7 +121,7 @@ function requiredEnvironmentPath(paths, key) {
 /**
  * Return the only environment a fresh packaged probe may pass into Electron. In particular this never copies
  * GitHub/provider credentials, debug switches, inherited Métis overrides or the owner's profile paths.
- * @returns {NodeJS.ProcessEnv}
+ * @returns {Record<string, string>}
  */
 export function strictLaunchEnvironment(baseEnvironment, paths, platform = process.platform) {
   if (!['darwin', 'win32'].includes(platform)) throw new Error('strict environment supports darwin and win32 only.')
@@ -583,8 +583,7 @@ export function freshProfileObservation(app, path, expectedPaths) {
     const within = (value) => {
       const relative = path.relative(expectedPaths.root, value)
       return (
-        relative === '' ||
-        (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative))
+        relative === '' || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative))
       )
     }
     const profileMask =
