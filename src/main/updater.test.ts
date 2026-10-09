@@ -219,7 +219,7 @@ describe('parseLatestRelease — GitHub latest-release payload → UpdateCheckRe
   })
 
   it.each(['darwin', 'win32'] as const)(
-    'offers a verified manual-install release on %s without updater metadata',
+    'offers a complete manual-install asset set on %s without updater metadata',
     (platform) => {
       const restore = pinPlatform(platform)
       try {
@@ -250,7 +250,7 @@ describe('parseLatestRelease — GitHub latest-release payload → UpdateCheckRe
     }
   )
 
-  it('does not mistake a partial unsigned upload for a verified manual-install release', () => {
+  it('does not mistake a partial unsigned upload for a complete manual-install asset set', () => {
     const restore = pinPlatform('win32')
     try {
       const result = parseLatestRelease(
@@ -488,6 +488,31 @@ describe('startUpdateDownload — Settings "Update now" in-app download guard', 
     }
   })
 
+  it('refuses in-place installation from a baked manual-only package before reading even a valid updater feed', async () => {
+    const electronApp = app as unknown as { isPackaged?: boolean }
+    electronApp.isPackaged = true
+    const restore = pinPlatform('win32')
+    vi.stubGlobal('__METIS_MANUAL_ONLY_UPDATE__', true)
+    const fake = new FakeAutoUpdater()
+    const moduleId = require.resolve('electron-updater')
+    const previous = require.cache[moduleId]
+    require.cache[moduleId] = { id: moduleId, filename: moduleId, loaded: true, exports: { autoUpdater: fake } } as never
+    try {
+      const result = await startUpdateDownload()
+      expect(result.started).toBe(false)
+      expect(result.reason).toMatch(/manual|download page/i)
+      expect(readFileSync).not.toHaveBeenCalled()
+      expect(net.fetch).not.toHaveBeenCalled()
+      expect(fake.checkForUpdates).not.toHaveBeenCalled()
+    } finally {
+      restore()
+      vi.unstubAllGlobals()
+      if (previous) require.cache[moduleId] = previous
+      else delete require.cache[moduleId]
+      delete electronApp.isPackaged
+    }
+  })
+
   it('does not start a download outside the installed app (app.isPackaged false in test)', async () => {
     const r = await startUpdateDownload()
     expect(r.started).toBe(false)
@@ -559,7 +584,7 @@ describe('startUpdateDownload — Settings "Update now" in-app download guard', 
     }
   })
 
-  it('never hands a verified manual-install release to electron-updater, even when this package has updater metadata', async () => {
+  it('never hands a complete manual-install release asset set to electron-updater, even when this package has updater metadata', async () => {
     const electronApp = app as unknown as { isPackaged?: boolean }
     electronApp.isPackaged = true
     const restore = pinPlatform('win32')
@@ -601,6 +626,70 @@ describe('startUpdateDownload — Settings "Update now" in-app download guard', 
 })
 
 describe('manual-only package silent update behavior', () => {
+  it('bakes the manual-only flag into the main process at build time, independent of runtime environment', async () => {
+    const fs = await vi.importActual<typeof import('node:fs')>('node:fs')
+    const config = fs.readFileSync(join(__dirname, '../../electron.vite.config.ts'), 'utf8')
+    const mainConfig = config.slice(config.indexOf('  main: {'), config.indexOf('  preload: {'))
+    expect(config).toMatch(/const MANUAL_ONLY_UPDATE = process\.env\.METIS_MANUAL_ONLY_UPDATE === '1'/)
+    expect(mainConfig).toMatch(/__METIS_MANUAL_ONLY_UPDATE__:\s*JSON\.stringify\(MANUAL_ONLY_UPDATE\)/)
+  })
+
+  it('never starts the silent updater when the baked channel is manual-only, even if updater metadata is present', () => {
+    const electronApp = app as unknown as { isPackaged?: boolean }
+    const proc = process as NodeJS.Process & { resourcesPath?: string; windowsStore?: boolean }
+    const previousResourcesPath = proc.resourcesPath
+    const previousWindowsStore = proc.windowsStore
+    const previousPortable = process.env.PORTABLE_EXECUTABLE_FILE
+    const restore = pinPlatform('win32')
+    const fake = new FakeAutoUpdater()
+    const moduleId = require.resolve('electron-updater')
+    const previousModule = require.cache[moduleId]
+    const updateConfigPath = join('C:/synthetic-metis-resources', 'app-update.yml')
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    vi.stubGlobal('__METIS_MANUAL_ONLY_UPDATE__', true)
+    electronApp.isPackaged = true
+    proc.resourcesPath = 'C:/synthetic-metis-resources'
+    Reflect.deleteProperty(proc, 'windowsStore')
+    delete process.env.PORTABLE_EXECUTABLE_FILE
+    vi.mocked(readTrustedAdminManaged).mockReturnValue(null)
+    vi.mocked(net.fetch).mockReset()
+    vi.mocked(app.on).mockClear()
+    vi.mocked(readFileSync).mockReset().mockImplementation((path) => {
+      if (String(path) !== updateConfigPath) throw new Error('Unexpected metadata path')
+      return 'provider: github\nowner: mysticalsin\n'
+    })
+    require.cache[moduleId] = {
+      id: moduleId,
+      filename: moduleId,
+      loaded: true,
+      exports: { autoUpdater: fake }
+    } as never
+    try {
+      initAutoUpdate(() => null)
+      expect(readFileSync).not.toHaveBeenCalled()
+      expect(net.fetch).not.toHaveBeenCalled()
+      expect(fake.checkForUpdates).not.toHaveBeenCalled()
+      expect(fake.listenerCount('update-available')).toBe(0)
+      expect(app.on).not.toHaveBeenCalledWith('will-quit', expect.any(Function))
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      restore()
+      vi.unstubAllGlobals()
+      if (previousResourcesPath === undefined) Reflect.deleteProperty(proc, 'resourcesPath')
+      else proc.resourcesPath = previousResourcesPath
+      if (previousWindowsStore === undefined) Reflect.deleteProperty(proc, 'windowsStore')
+      else proc.windowsStore = previousWindowsStore
+      if (previousPortable === undefined) delete process.env.PORTABLE_EXECUTABLE_FILE
+      else process.env.PORTABLE_EXECUTABLE_FILE = previousPortable
+      vi.mocked(readFileSync).mockReset().mockImplementation(() => 'provider: github\nowner: mysticalsin\n')
+      vi.mocked(net.fetch).mockReset()
+      if (previousModule) require.cache[moduleId] = previousModule
+      else delete require.cache[moduleId]
+      delete electronApp.isPackaged
+      vi.useRealTimers()
+    }
+  })
+
   it('does not wire or start electron-updater when app-update.yml is absent at boot', () => {
     const electronApp = app as unknown as { isPackaged?: boolean }
     const proc = process as NodeJS.Process & { resourcesPath?: string; windowsStore?: boolean }

@@ -462,7 +462,7 @@ describe('unsigned manual-only release CTA', () => {
     expect(autoButton).toMatch(/!result\.manualInstallOnly/)
   })
 
-  it('offers the verified release page as the primary manual installer action', () => {
+  it('offers the release page as the primary manual installer action', () => {
     const section = block().replace(/^\s*\/\/.*$/gm, '')
     const start = section.indexOf('{result?.ok && result.available && result.manualInstallOnly')
     expect(start).toBeGreaterThan(-1)

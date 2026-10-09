@@ -28,6 +28,25 @@ function jobContinueOnError(block: string): string | undefined {
   return block.match(/^ {4}continue-on-error: (.+)$/m)?.[1]
 }
 
+describe('Unsigned candidate manual-only update channel', () => {
+  it('bakes the manual-only flag only into the promotable Mac and Windows candidate builds', () => {
+    const mac = jobBlock('build-mac')
+    const win = jobBlock('build-win')
+    expect(mac).toMatch(
+      /- name: Build the \$\{\{ matrix\.variant \}\} installers\n        env:\n          METIS_MANUAL_ONLY_UPDATE: \$\{\{ matrix\.variant == 'mac' && '1' \|\| '0' \}\}\n        run: npm run \$\{\{ matrix\.script \}\}/
+    )
+    expect(win).toMatch(
+      /- name: Build the win installers\n        env:\n          METIS_MANUAL_ONLY_UPDATE: '1'\n        run: npm run dist:win/
+    )
+
+    const signedRelease = readFileSync(join(root, '.github', 'workflows', 'release.yml'), 'utf8')
+    const scripts = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).scripts as Record<string, string>
+    expect(signedRelease).not.toContain('METIS_MANUAL_ONLY_UPDATE')
+    expect(scripts.dist).not.toContain('METIS_MANUAL_ONLY_UPDATE')
+    expect(scripts['dist:win']).not.toContain('METIS_MANUAL_ONLY_UPDATE')
+  })
+})
+
 describe('QA candidate job st1-mac-dataless-synthetic (M2-0505, OD-36)', () => {
   const job = jobBlock('st1-mac-dataless-synthetic')
 
