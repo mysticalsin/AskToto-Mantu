@@ -127,13 +127,19 @@ describe('Operator realtime map country-only contract', () => {
       const svg = page.locator('[data-map-svg]')
       const box = await svg.boundingBox()
       if (!box) throw new Error('Realtime map SVG has no viewport')
+      const viewport = page.locator('[data-viewport]')
+      const zoomPosition = await viewport.getAttribute('transform')
+      expect(zoomPosition).not.toBe('translate(0,0) scale(1)')
+      const zoomTranslation = zoomPosition?.match(/^translate\(([^)]+)\)/)?.[1]
+      expect(zoomTranslation).toBeTruthy()
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
       await page.mouse.down()
       await page.mouse.move(box.x + box.width / 2 + 50, box.y + box.height / 2 + 25, { steps: 3 })
       await page.mouse.up()
-      const viewport = page.locator('[data-viewport]')
       const position = await viewport.getAttribute('transform')
-      expect(position).not.toBe('translate(0,0) scale(1)')
+      const panTranslation = position?.match(/^translate\(([^)]+)\)/)?.[1]
+      expect(panTranslation).toBeTruthy()
+      expect(panTranslation).not.toBe(zoomTranslation)
 
       await page.evaluate((body) => {
         ;(window as typeof window & { resolveMetisPoll?: (body: unknown) => void }).resolveMetisPoll?.(body)
