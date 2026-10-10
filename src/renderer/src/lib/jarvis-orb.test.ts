@@ -66,6 +66,7 @@ describe('Jarvis particle orb (Bar Circle / second pill)', () => {
     expect(picker).toMatch(/<ObsidianOrb/)
     expect(picker).toMatch(/preview/)
     expect(picker).not.toMatch(/overlay-orb-diagram__jarvis--live/)
+    expect(css).not.toMatch(/overlay-orb-diagram__jarvis--live/)
   })
 
   it('maps product mood onto idle / listening / thinking', () => {
