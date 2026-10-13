@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { syncNativeMarketingVersion, xcodebuildSigningArgs } from './build-native-mac.mjs'
+import { syncNativeMarketingVersion, xcodebuildBuildArgs, xcodebuildSigningArgs } from './build-native-mac.mjs'
 
 const scratch: string[] = []
 afterEach(() => {
@@ -41,5 +41,33 @@ describe('xcodebuildSigningArgs', () => {
       'CODE_SIGNING_REQUIRED=YES'
     ])
     expect(() => xcodebuildSigningArgs('Developer ID Application: Example')).toThrow(/Developer ID/)
+  })
+})
+
+describe('xcodebuildBuildArgs', () => {
+  it('uses quiet mode so CI logs retain the actual compiler diagnostics', () => {
+    const args = xcodebuildBuildArgs({
+      project: '/repo/Metis.xcodeproj',
+      derivedData: '/tmp/derived',
+      signingIdentity: '-'
+    })
+    expect(args).toEqual([
+      '-quiet',
+      '-project',
+      '/repo/Metis.xcodeproj',
+      '-scheme',
+      'Metis',
+      '-configuration',
+      'Release',
+      '-destination',
+      'generic/platform=macOS',
+      '-derivedDataPath',
+      '/tmp/derived',
+      'CODE_SIGN_IDENTITY=-',
+      'CODE_SIGNING_ALLOWED=YES',
+      'CODE_SIGNING_REQUIRED=NO',
+      'ONLY_ACTIVE_ARCH=NO',
+      'build'
+    ])
   })
 })

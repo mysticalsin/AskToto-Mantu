@@ -101,6 +101,25 @@ export function xcodebuildSigningArgs(signingIdentity = process.env.ASKTOTO_MAC_
   ]
 }
 
+export function xcodebuildBuildArgs({ project, derivedData, signingIdentity } = {}) {
+  return [
+    '-quiet',
+    '-project',
+    project,
+    '-scheme',
+    'Metis',
+    '-configuration',
+    'Release',
+    '-destination',
+    'generic/platform=macOS',
+    '-derivedDataPath',
+    derivedData,
+    ...xcodebuildSigningArgs(signingIdentity),
+    'ONLY_ACTIVE_ARCH=NO',
+    'build'
+  ]
+}
+
 function findBuiltAppSync(derivedData) {
   const candidates = [
     join(derivedData, 'Build/Products/Release/Metis.app'),
@@ -149,21 +168,7 @@ export function buildNativeMac({ outDir = join(REPO_ROOT, 'release'), version = 
     // generic/platform=macOS builds a runnable .app without needing a live Mac destination UUID.
     run(
       'xcodebuild',
-      [
-        '-project',
-        project,
-        '-scheme',
-        'Metis',
-        '-configuration',
-        'Release',
-        '-destination',
-        'generic/platform=macOS',
-        '-derivedDataPath',
-        derivedData,
-        ...xcodebuildSigningArgs(signingIdentity),
-        'ONLY_ACTIVE_ARCH=NO',
-        'build'
-      ],
+      xcodebuildBuildArgs({ project, derivedData, signingIdentity }),
       { cwd: NATIVE_ROOT }
     )
 
