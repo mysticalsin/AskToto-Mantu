@@ -346,6 +346,15 @@ export function loopbackDebuggerWebSocket(value, port) {
   return url.href
 }
 
+export function electronLaunchArgs(port) {
+  if (!Number.isSafeInteger(port) || port < 1024 || port > 65_535) {
+    throw new Error('invalid-port')
+  }
+  // Electron treats the first positional argument as the app path. Keep Chromium switches ahead
+  // of it so both Windows and macOS parse the debugging options as Electron switches.
+  return [`--remote-debugging-address=${LOOPBACK_HOST}`, `--remote-debugging-port=${port}`, '.']
+}
+
 async function waitForCdpEndpoint({ port, child, launchFailed, timeoutMs }) {
   const endpoint = `http://${LOOPBACK_HOST}:${port}/json/version`
   const deadline = Date.now() + timeoutMs
@@ -528,7 +537,7 @@ async function main() {
 
     appChild = spawn(
       executable,
-      ['.', `--remote-debugging-address=${LOOPBACK_HOST}`, `--remote-debugging-port=${options.port}`],
+      electronLaunchArgs(options.port),
       { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' }
     )
     appChild.stdout?.on('data', (chunk) => {

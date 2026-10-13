@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   failureClass,
+  electronLaunchArgs,
   loopbackDebuggerWebSocket,
   safeCommandEvidence,
   safeStartupEvidence
@@ -25,6 +26,16 @@ describe('loopbackDebuggerWebSocket', () => {
 
   it('rejects malformed discovery output', () => {
     expect(() => loopbackDebuggerWebSocket(undefined, 9222)).toThrow('cdp-websocket-url-invalid')
+  })
+})
+
+describe('electronLaunchArgs', () => {
+  it('places loopback debugging switches before Electron’s app path', () => {
+    expect(electronLaunchArgs(9222)).toEqual([
+      '--remote-debugging-address=127.0.0.1',
+      '--remote-debugging-port=9222',
+      '.'
+    ])
   })
 })
 
