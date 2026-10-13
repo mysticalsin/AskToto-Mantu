@@ -90,7 +90,8 @@ describe('safeStartupEvidence', () => {
       diagnosticCodes: [],
       diagnosticHints: [],
       diagnosticTerms: [],
-      diagnosticModules: []
+      diagnosticModules: [],
+      diagnosticModuleKind: 'other-startup-error'
     })
   })
 
@@ -142,5 +143,14 @@ describe('safeStartupEvidence', () => {
         ['@private/fixture', 'electron']
       ).diagnosticModules
     ).toEqual(['@private/fixture'])
+  })
+
+  it('classifies local module failures without retaining their path', () => {
+    const report = safeStartupEvidence(
+      { stdout: '', stderr: "Error: Cannot find module '../private/main.js'\n    at Module._resolveFilename" },
+      { exitCode: null, signalCode: null }
+    )
+    expect(report.diagnosticModuleKind).toBe('relative-app-module')
+    expect(report.diagnosticModules).toEqual([])
   })
 })

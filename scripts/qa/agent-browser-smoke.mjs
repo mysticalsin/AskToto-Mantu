@@ -264,15 +264,30 @@ function safeStartupTerms(output) {
 }
 
 function safeStartupModuleNames(output, knownModules) {
+  const specifier = safeMissingModuleSpecifier(output)
+  if (!specifier) return []
+  return knownModules
+    .filter((name) => typeof name === 'string' && name && (specifier === name || specifier.startsWith(`${name}/`)))
+    .slice(0, 8)
+}
+
+function safeStartupModuleKind(output, knownModules) {
+  const specifier = safeMissingModuleSpecifier(output)
+  if (!specifier) return 'other-startup-error'
+  if (safeStartupModuleNames(output, knownModules).length > 0) return 'declared-dependency'
+  if (/^(?:[a-z]:[\\/]|\\\\|\/)/i.test(specifier)) return 'absolute-app-path'
+  if (specifier.startsWith('.')) return 'relative-app-module'
+  if (specifier.startsWith('node:')) return 'node-builtin'
+  return 'undeclared-package'
+}
+
+function safeMissingModuleSpecifier(output) {
   const prelude = []
   for (const line of (typeof output === 'string' ? output : '').split(/\r?\n/)) {
     if (/^\s*at\s/.test(line) || prelude.length >= 6) break
-    prelude.push(line.toLowerCase())
+    prelude.push(line)
   }
-  const text = prelude.join('\n')
-  return [
-    ...new Set(knownModules.filter((name) => typeof name === 'string' && name && text.includes(name.toLowerCase())))
-  ].slice(0, 8)
+  return prelude.join('\n').match(/Cannot find (?:module|package)\s+['"]([^'"]+)['"]/i)?.[1] ?? null
 }
 
 export function safeCommandEvidence(result, args) {
@@ -298,7 +313,8 @@ export function safeStartupEvidence(output, child, knownModules = []) {
     diagnosticCodes: safeDiagnosticCodes(output.stderr ?? ''),
     diagnosticHints: safeDiagnosticHints(output.stderr ?? ''),
     diagnosticTerms: safeStartupTerms(output.stderr ?? ''),
-    diagnosticModules: safeStartupModuleNames(output.stderr ?? '', knownModules)
+    diagnosticModules: safeStartupModuleNames(output.stderr ?? '', knownModules),
+    diagnosticModuleKind: safeStartupModuleKind(output.stderr ?? '', knownModules)
   }
 }
 
