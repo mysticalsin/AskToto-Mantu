@@ -68,10 +68,7 @@ describe('safeCommandEvidence', () => {
 describe('safeStartupEvidence', () => {
   it('reports exit state and output sizes without retaining startup text', () => {
     expect(
-      safeStartupEvidence(
-        { stdout: 'synthetic stdout', stderr: 'synthetic stderr' },
-        { exitCode: 1, signalCode: null }
-      )
+      safeStartupEvidence({ stdout: 'synthetic stdout', stderr: 'synthetic stderr' }, { exitCode: 1, signalCode: null })
     ).toEqual({ exitCode: 1, signal: null, stdoutBytes: 16, stderrBytes: 16 })
   })
 })
