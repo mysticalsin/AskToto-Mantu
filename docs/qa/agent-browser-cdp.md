@@ -4,7 +4,7 @@ Métis's hosted Agent Browser lane builds the current worktree on disposable mac
 
 This lane supplements the existing Playwright lifecycle suite. It is a quick DOM and diagnostic smoke, not proof of audio capture, installer behavior, native Mac history, or physical-device quality.
 
-Windows CI also runs a readable-main diagnostic build beside the normal bytecode build. It disables main-process bytecode only in that disposable smoke runner so a startup failure can be attributed to bytecode loading or the application main process. This diagnostic build is never packaged or released and does not change the production configuration.
+Windows CI also runs a readable-main diagnostic build beside the normal bytecode build, with temporary source maps to pinpoint app-local startup exceptions. It disables main-process bytecode only in that disposable smoke runner so a startup failure can be attributed to bytecode loading or the application main process. This diagnostic build is never packaged or released and does not change the production configuration.
 
 ## Run an isolated agent session
 

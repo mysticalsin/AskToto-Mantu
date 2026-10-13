@@ -630,6 +630,7 @@ async function main() {
   }
   const profile = makeIsolatedProfile()
   const env = strictLaunchEnvironment(process.env, profile.paths)
+  if (process.env.METIS_QA_STARTUP_SOURCEMAP === '1') env.NODE_OPTIONS = '--enable-source-maps'
   const session = `metis-worktree-${options.port}`
   const report = {
     schemaVersion: 1,

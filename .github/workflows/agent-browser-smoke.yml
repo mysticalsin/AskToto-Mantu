@@ -29,12 +29,15 @@ jobs:
           - os: macos-latest
             runtime: bytecode
             disable_main_bytecode: false
+            enable_source_maps: false
           - os: windows-latest
             runtime: bytecode
             disable_main_bytecode: false
+            enable_source_maps: false
           - os: windows-latest
             runtime: readable-main-diagnostic
             disable_main_bytecode: true
+            enable_source_maps: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -48,6 +51,7 @@ jobs:
         run: npm run build
         env:
           ASKTOTO_MAC_UNIVERSAL: ${{ matrix.disable_main_bytecode && '1' || '0' }}
+          METIS_QA_STARTUP_SOURCEMAP: ${{ matrix.enable_source_maps && '1' || '0' }}
       # Agent Browser v0.39.0 requires Node >=24. Keep it out of Métis's Node 22 runtime and lockfile.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
