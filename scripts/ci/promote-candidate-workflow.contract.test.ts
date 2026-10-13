@@ -7,6 +7,11 @@ const workflow = readFileSync(join(root, '.github', 'workflows', 'promote-candid
   /\r\n/g,
   '\n'
 )
+const candidateWorkflow = readFileSync(join(root, '.github', 'workflows', 'qa-candidate.yml'), 'utf8').replace(
+  /\r\n/g,
+  '\n'
+)
+const candidateJobsGate = readFileSync(join(root, 'scripts', 'qa', 'candidate-jobs.mjs'), 'utf8')
 
 const steps = workflow
   .slice(workflow.indexOf('\n    steps:\n'))
@@ -45,6 +50,13 @@ describe('M2-0503 promote-candidate residuals input', () => {
 })
 
 describe('Promote candidate workflow: main and release/1.9.x candidates (M2-0500)', () => {
+  it('keeps the deferred diagnostic job names aligned with the qa-candidate workflow', () => {
+    for (const name of ['ST-1 control (no fixtures)', 'ST-1 fifo stall row (macOS)']) {
+      expect(candidateWorkflow).toContain(`name: ${name}`)
+      expect(candidateJobsGate).toContain(`'${name}'`)
+    }
+  })
+
   it('still promotes only from a dispatch on refs/heads/main, in this repository', () => {
     expect(workflow).toMatch(
       /^    if: github\.repository == 'mysticalsin\/AskToto-Mantu' && github\.ref == 'refs\/heads\/main'$/m

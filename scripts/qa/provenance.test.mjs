@@ -145,7 +145,7 @@ test('candidate dry runs do not require a release residual disclosure', () => {
 })
 
 test('candidate promotion rejects deferred diagnostics on any other run or commit', () => {
-  const residuals = `Not run: ${DEFERRED_OWNER_DIAGNOSTICS[0]}`
+  const residuals = `Not run: \`${DEFERRED_OWNER_DIAGNOSTICS[0]}\``
   for (const { candidateRunId, candidateCommit } of [
     { candidateRunId: '38413517358', candidateCommit: APPROVED_DEFERRED_CANDIDATE.commit },
     { candidateRunId: APPROVED_DEFERRED_CANDIDATE.runId, candidateCommit: 'a'.repeat(40) }
@@ -159,7 +159,7 @@ test('candidate promotion rejects deferred diagnostics on any other run or commi
 })
 
 test('candidate promotion rejects a failed owner diagnostic', () => {
-  const residuals = `Not run: ${DEFERRED_OWNER_DIAGNOSTICS[0]}`
+  const residuals = `Not run: \`${DEFERRED_OWNER_DIAGNOSTICS[0]}\``
   const problems = candidateJobProblems(candidateJobs(['failure', 'success', 'success']), residuals, {
     candidateRunId: APPROVED_DEFERRED_CANDIDATE.runId,
     candidateCommit: APPROVED_DEFERRED_CANDIDATE.commit
