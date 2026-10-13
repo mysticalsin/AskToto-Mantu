@@ -132,16 +132,22 @@ function runCli(cliPath, session, args, env, timeoutMs = COMMAND_TIMEOUT_MS) {
   })
 }
 
-function failureClass(result) {
+export function failureClass(result) {
   const text = `${result.stdout}\n${result.stderr}`.toLowerCase()
   if (/no page found|no page target/.test(text)) return 'no-page-target'
+  if (
+    /daemon process exited during startup|daemon failed to start|failed to start daemon|failed to connect:/.test(text)
+  ) {
+    return 'session-daemon-failure'
+  }
   const isCdpFailure = /econnrefused|failed to connect via cdp|websocket|cdp.*timeout|connection.*refused/.test(text)
   if (isCdpFailure) return 'cdp-connection'
   if (/unknown command|unexpected argument|invalid argument|usage:/.test(text)) return 'cli-usage-error'
   const isNativeBinaryFailure =
     /no binary found|unsupported platform|error executing binary|cannot make binary executable/.test(text)
   if (isNativeBinaryFailure) return 'native-binary-start-failure'
-  if (/failed to start daemon|daemon.*error|socket.*error/.test(text)) return 'session-daemon-failure'
+  if (/browser (?:has been |is )?closed|target closed/.test(text)) return 'browser-target-closed'
+  if (/failed to launch|browser launch failed|could not launch/.test(text)) return 'browser-launch-failure'
   if (result.cleanupComplete === false) return 'process-cleanup-incomplete'
   if (result.timedOut) return 'command-timeout'
   if (result.failedToStart) return 'command-not-started'
@@ -409,6 +415,7 @@ async function main() {
     agentBrowserProcessesCleaned: true,
     preexistingOwnedProcessCount: 0,
     agentBrowserDiagnostic: null,
+    agentBrowserCleanupDiagnostic: null,
     startupDiagnostic: null,
     failure: null
   }
@@ -423,7 +430,7 @@ async function main() {
   const ownedAtLaunch = new Map()
   let launchFailed = false
   const runAgentBrowser = async (args, timeoutMs = COMMAND_TIMEOUT_MS, recordFailure = true) => {
-    const result = await runCli(cliPath, session, ['--cdp', cdpWebSocketUrl, ...args], env, timeoutMs)
+    const result = await runCli(cliPath, session, ['--debug', '--cdp', cdpWebSocketUrl, ...args], env, timeoutMs)
     if (result.cleanupComplete === false) report.agentBrowserProcessesCleaned = false
     if (recordFailure && result.code !== 0) report.agentBrowserDiagnostic = failureClass(result)
     return result
@@ -525,6 +532,7 @@ async function main() {
       if (close.code !== 0) {
         report.agentBrowserProcessesCleaned = false
         agentBrowserCloseFailure = failureClass(close)
+        report.agentBrowserCleanupDiagnostic = agentBrowserCloseFailure
       }
     }
     if (ownedBrowser && !leaveRunning) {

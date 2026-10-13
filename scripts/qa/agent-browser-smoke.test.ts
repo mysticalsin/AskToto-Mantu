@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { loopbackDebuggerWebSocket } from './agent-browser-smoke.mjs'
+import { failureClass, loopbackDebuggerWebSocket } from './agent-browser-smoke.mjs'
 
 describe('loopbackDebuggerWebSocket', () => {
   it('accepts the browser WebSocket advertised by the isolated Electron CDP endpoint', () => {
-    expect(
-      loopbackDebuggerWebSocket('ws://127.0.0.1:9222/devtools/browser/0123456789abcdef', 9222)
-    ).toBe('ws://127.0.0.1:9222/devtools/browser/0123456789abcdef')
+    expect(loopbackDebuggerWebSocket('ws://127.0.0.1:9222/devtools/browser/0123456789abcdef', 9222)).toBe(
+      'ws://127.0.0.1:9222/devtools/browser/0123456789abcdef'
+    )
   })
 
   it.each([
@@ -20,5 +20,18 @@ describe('loopbackDebuggerWebSocket', () => {
 
   it('rejects malformed discovery output', () => {
     expect(() => loopbackDebuggerWebSocket(undefined, 9222)).toThrow('cdp-websocket-url-invalid')
+  })
+})
+
+describe('failureClass', () => {
+  it.each([
+    ['daemon startup errors', 'Daemon process exited during startup: runtime error', 'session-daemon-failure'],
+    ['daemon connection errors', 'Failed to connect: Connection refused', 'session-daemon-failure'],
+    ['CDP connection errors', 'Failed to connect via CDP', 'cdp-connection'],
+    ['CLI syntax errors', 'Unknown command: invalid', 'cli-usage-error']
+  ])('maps %s to a fixed diagnostic category', (_reason, stderr, expected) => {
+    expect(
+      failureClass({ stdout: '', stderr, timedOut: false, failedToStart: false, cleanupComplete: true })
+    ).toBe(expected)
   })
 })
