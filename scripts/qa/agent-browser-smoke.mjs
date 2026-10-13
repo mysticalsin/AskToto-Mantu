@@ -83,7 +83,8 @@ function makeIsolatedProfile() {
     appData: join(root, 'appdata'),
     localAppData: join(root, 'localappdata'),
     temp: join(root, 'temp'),
-    userData: join(root, 'userdata')
+    userData: join(root, 'userdata'),
+    agentBrowserSocketDir: join(root, 'ab')
   }
   for (const path of Object.values(paths)) mkdirSync(path, { recursive: true, mode: 0o700 })
   writeFileSync(
@@ -289,6 +290,7 @@ function printManualSessionInstructions({ cliPath, profilePaths, session, cdpWeb
     USERPROFILE: profilePaths.userProfile,
     APPDATA: profilePaths.appData,
     LOCALAPPDATA: profilePaths.localAppData,
+    AGENT_BROWSER_SOCKET_DIR: profilePaths.agentBrowserSocketDir,
     TMPDIR: profilePaths.temp,
     TMP: profilePaths.temp,
     TEMP: profilePaths.temp,
@@ -500,7 +502,14 @@ async function main() {
   const ownedAtLaunch = new Map()
   let launchFailed = false
   const runAgentBrowser = async (args, timeoutMs = COMMAND_TIMEOUT_MS, recordFailure = true) => {
-    const result = await runCli(cliPath, session, ['--debug', '--cdp', cdpWebSocketUrl, ...args], env, timeoutMs)
+    const agentBrowserEnv = { ...env, AGENT_BROWSER_SOCKET_DIR: profile.paths.agentBrowserSocketDir }
+    const result = await runCli(
+      cliPath,
+      session,
+      ['--debug', '--cdp', cdpWebSocketUrl, ...args],
+      agentBrowserEnv,
+      timeoutMs
+    )
     if (result.cleanupComplete === false) report.agentBrowserProcessesCleaned = false
     if (recordFailure && result.code !== 0) {
       report.agentBrowserDiagnostic = failureClass(result)
