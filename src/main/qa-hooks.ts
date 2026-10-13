@@ -13,7 +13,13 @@ import { bundledFfmpegPath, startFfmpegDecode } from './ffmpeg-decoder'
 import { ensureLocalRuntimeStarted } from './llm/local'
 import * as localRuntime from './llm/local-runtime'
 import { recordSidecarIntent } from './infra/process/registry'
-import { armQaHostFloorOverride, hkMScenarioFromEnv, hkMSetupFailedDetail, productionHkMDeps, runHkMScenario } from './qa-hk-m'
+import {
+  armQaHostFloorOverride,
+  hkMScenarioFromEnv,
+  hkMSetupFailedDetail,
+  productionHkMDeps,
+  runHkMScenario
+} from './qa-hk-m'
 
 export { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-identity'
 
