@@ -5,7 +5,8 @@ import {
   electronLaunchArgs,
   loopbackDebuggerWebSocket,
   safeCommandEvidence,
-  safeStartupEvidence
+  safeStartupEvidence,
+  selectSmokeDriver
 } from './agent-browser-smoke.mjs'
 
 describe('agentBrowserBinaryName', () => {
@@ -19,6 +20,21 @@ describe('agentBrowserBinaryName', () => {
 
   it('rejects hosts without a checksum-pinned native binary', () => {
     expect(() => agentBrowserBinaryName('win32', 'arm64')).toThrow('agent-browser-platform-not-pinned')
+  })
+})
+
+describe('selectSmokeDriver', () => {
+  it('uses Agent Browser CLI on macOS and Playwright CDP on Windows', () => {
+    expect(selectSmokeDriver('darwin')).toBe('agent-browser-cli')
+    expect(selectSmokeDriver('win32')).toBe('playwright-cdp')
+  })
+
+  it('does not silently select a driver for an unsupported host', () => {
+    expect(() => selectSmokeDriver('linux')).toThrow('unsupported-host')
+  })
+
+  it('rejects a driver that does not match the platform adapter', () => {
+    expect(() => selectSmokeDriver('win32', 'agent-browser-cli')).toThrow('smoke-driver-platform-mismatch')
   })
 })
 

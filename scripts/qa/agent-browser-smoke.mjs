@@ -33,6 +33,7 @@ function argValue(args, name) {
 
 function parseOptions(args) {
   const port = Number(argValue(args, '--port'))
+  const driver = argValue(args, '--driver')
   const packageDir =
     argValue(args, '--agent-browser-package') ??
     join(ROOT, 'scripts', 'qa', 'agent-browser-package', 'node_modules', 'agent-browser')
@@ -40,12 +41,23 @@ function parseOptions(args) {
   if (!Number.isSafeInteger(port) || port < 1024 || port > 65_535) {
     throw new Error('invalid-port')
   }
+  if (driver !== null && !['agent-browser-cli', 'playwright-cdp'].includes(driver)) {
+    throw new Error('smoke-driver-invalid')
+  }
   return {
     port,
+    driver,
     packageDir: resolve(packageDir),
     report: report ? resolve(report) : null,
     keepOpen: args.includes('--keep-open')
   }
+}
+
+export function selectSmokeDriver(platform, requested = null) {
+  const expected = platform === 'darwin' ? 'agent-browser-cli' : platform === 'win32' ? 'playwright-cdp' : null
+  if (!expected) throw new Error('unsupported-host')
+  if (requested !== null && requested !== expected) throw new Error('smoke-driver-platform-mismatch')
+  return expected
 }
 
 function requiredFile(path, label) {
@@ -655,8 +667,8 @@ async function stopOwnedProcessTree({ child, ownedAtLaunch, report }) {
 
 async function main() {
   const options = parseOptions(process.argv.slice(2))
-  if (!['darwin', 'win32'].includes(process.platform)) throw new Error('unsupported-host')
-  const cliPath = packageCli(options.packageDir)
+  const driver = selectSmokeDriver(process.platform, options.driver)
+  const cliPath = driver === 'agent-browser-cli' ? packageCli(options.packageDir) : null
   const executable = electronExecutable()
   const appManifest = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
   const appVersion = appManifest.version
@@ -682,17 +694,18 @@ async function main() {
   if (process.env.METIS_QA_STARTUP_SOURCEMAP === '1') env.NODE_OPTIONS = '--enable-source-maps'
   const session = `metis-worktree-${options.port}`
   const report = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     result: 'FAIL',
     appVersion,
-    agentBrowserVersion: AGENT_BROWSER_VERSION,
+    automationDriver: driver,
+    agentBrowserVersion: driver === 'agent-browser-cli' ? AGENT_BROWSER_VERSION : null,
     platform: process.platform,
     cdpHost: LOOPBACK_HOST,
     cdpPort: options.port,
     appEntry,
     ownedTargetVerified: false,
-    composerVisibleInSnapshot: false,
-    diagnosticCommandsSucceeded: { pageErrors: false, console: false, networkRequests: false },
+    composerVisibleInDom: false,
+    diagnosticAccessVerified: { pageErrors: false, console: false, networkRequests: false },
     cleanShutdown: false,
     ownedProcessesCleaned: false,
     agentBrowserProcessesCleaned: true,
@@ -709,6 +722,7 @@ async function main() {
   let appChild = null
   let appOutput = { stdout: '', stderr: '' }
   let ownedBrowser = null
+  let appPage = null
   let connected = false
   let leaveRunning = false
   let cdpWebSocketUrl = null
@@ -717,13 +731,7 @@ async function main() {
   let launchFailed = false
   const runAgentBrowser = async (args, timeoutMs = COMMAND_TIMEOUT_MS, recordFailure = true) => {
     const agentBrowserEnv = { ...env, AGENT_BROWSER_SOCKET_DIR: profile.paths.agentBrowserSocketDir }
-    const result = await runCli(
-      cliPath,
-      session,
-      ['--debug', ...args],
-      agentBrowserEnv,
-      timeoutMs
-    )
+    const result = await runCli(cliPath, session, ['--debug', ...args], agentBrowserEnv, timeoutMs)
     if (result.cleanupComplete === false) report.agentBrowserProcessesCleaned = false
     if (recordFailure && result.code !== 0) {
       report.agentBrowserDiagnostic = failureClass(result)
@@ -781,29 +789,41 @@ async function main() {
     ownedBrowser = attachment.browser
     report.ownedTargetVerified = true
 
-    const connection = await runAgentBrowser(['connect', cdpWebSocketUrl])
-    if (connection.code !== 0) throw new Error(`agent-browser-connect-${failureClass(connection)}`)
-    connected = true
+    const appPages = ownedBrowser.contexts().flatMap((context) => context.pages())
+    appPage = appPages.find((page) => page.url().startsWith('file:')) ?? appPages[0] ?? null
+    if (!appPage) throw new Error('electron-renderer-page-unavailable')
 
-    let snapshot
-    const deadline = Date.now() + START_TIMEOUT_MS
-    do {
-      snapshot = await runAgentBrowser(['snapshot', '-i'])
-      if (snapshot.code !== 0) throw new Error(`agent-browser-snapshot-${failureClass(snapshot)}`)
-      if (hasComposerTextbox(snapshot.stdout)) break
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, 1_000))
-    } while (Date.now() < deadline && appChild.exitCode === null && appChild.signalCode === null)
-    report.composerVisibleInSnapshot = hasComposerTextbox(snapshot.stdout)
-    if (!report.composerVisibleInSnapshot) throw new Error('composer-not-found-in-dom-snapshot')
+    if (driver === 'agent-browser-cli') {
+      const connection = await runAgentBrowser(['connect', cdpWebSocketUrl])
+      if (connection.code !== 0) throw new Error(`agent-browser-connect-${failureClass(connection)}`)
+      connected = true
 
-    for (const [name, args] of [
-      ['pageErrors', ['errors']],
-      ['console', ['console']],
-      ['networkRequests', ['network', 'requests']]
-    ]) {
-      const result = await runAgentBrowser(args)
-      if (result.code !== 0) throw new Error(`agent-browser-${name}-${failureClass(result)}`)
-      report.diagnosticCommandsSucceeded[name] = true
+      let snapshot
+      const deadline = Date.now() + START_TIMEOUT_MS
+      do {
+        snapshot = await runAgentBrowser(['snapshot', '-i'])
+        if (snapshot.code !== 0) throw new Error(`agent-browser-snapshot-${failureClass(snapshot)}`)
+        if (hasComposerTextbox(snapshot.stdout)) break
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 1_000))
+      } while (Date.now() < deadline && appChild.exitCode === null && appChild.signalCode === null)
+      report.composerVisibleInDom = hasComposerTextbox(snapshot.stdout)
+      if (!report.composerVisibleInDom) throw new Error('composer-not-found-in-dom-snapshot')
+
+      for (const [name, args] of [
+        ['pageErrors', ['errors']],
+        ['console', ['console']],
+        ['networkRequests', ['network', 'requests']]
+      ]) {
+        const result = await runAgentBrowser(args)
+        if (result.code !== 0) throw new Error(`agent-browser-${name}-${failureClass(result)}`)
+        report.diagnosticAccessVerified[name] = true
+      }
+    } else {
+      const composer = appPage.locator('input[aria-label="Ask Métis anything"]:visible')
+      await composer.first().waitFor({ state: 'visible', timeout: START_TIMEOUT_MS })
+      report.composerVisibleInDom = (await composer.count()) > 0
+      if (!report.composerVisibleInDom) throw new Error('composer-not-found-in-dom')
+      report.diagnosticAccessVerified = await verifyPlaywrightDiagnostics(ownedBrowser, options.port)
     }
 
     report.result = 'PASS'
@@ -812,7 +832,11 @@ async function main() {
       console.log(
         `[agent-browser-smoke] isolated Métis session ready at ${LOOPBACK_HOST}:${options.port}; press Ctrl+C here when finished.`
       )
-      printManualSessionInstructions({ cliPath, profilePaths: profile.paths, session, cdpWebSocketUrl })
+      if (driver === 'agent-browser-cli') {
+        printManualSessionInstructions({ cliPath, profilePaths: profile.paths, session, cdpWebSocketUrl })
+      } else {
+        console.log('[agent-browser-smoke] Windows uses the verified Playwright CDP adapter for DOM and diagnostics.')
+      }
       await waitForInterrupt()
       leaveRunning = false
     }
@@ -841,10 +865,8 @@ async function main() {
     }
     if (ownedBrowser && !leaveRunning) {
       try {
-        const pages = ownedBrowser.contexts().flatMap((context) => context.pages())
-        const page = pages[0]
-        if (page) {
-          const quitRequested = await page.evaluate(() => {
+        if (appPage) {
+          const quitRequested = await appPage.evaluate(() => {
             if (!window.toto || typeof window.toto.quit !== 'function') return false
             void window.toto.quit()
             return true
@@ -888,6 +910,52 @@ async function main() {
 
 function hasComposerTextbox(snapshot) {
   return /\btextbox\b[^\n]*(?:ask métis|ask anything about)/i.test(snapshot)
+}
+
+async function verifyPlaywrightDiagnostics(browser, port) {
+  const context = browser.contexts()[0]
+  if (!context) throw new Error('playwright-default-context-unavailable')
+  const diagnosticPage = await context.newPage()
+  const result = { pageErrors: false, console: false, networkRequests: false }
+  const probeUrl = `http://${LOOPBACK_HOST}:${port}/json/version`
+  const pageErrorProbe = 'metis-qa-pageerror-probe'
+  const consoleProbe = 'metis-qa-console-probe'
+  let sawPageError = false
+  let sawConsole = false
+  let sawRequest = false
+
+  diagnosticPage.on('pageerror', (error) => {
+    if (error.message === pageErrorProbe) sawPageError = true
+  })
+  diagnosticPage.on('console', (message) => {
+    if (message.type() === 'debug' && message.text() === consoleProbe) sawConsole = true
+  })
+  diagnosticPage.on('request', (request) => {
+    if (request.url() === probeUrl) sawRequest = true
+  })
+
+  try {
+    const html = `<script>
+      console.debug(${JSON.stringify(consoleProbe)});
+      fetch(${JSON.stringify(probeUrl)}, { mode: 'no-cors', cache: 'no-store' }).catch(() => {});
+      setTimeout(() => { throw new Error(${JSON.stringify(pageErrorProbe)}); }, 0);
+    </script>`
+    await diagnosticPage.goto(`data:text/html,${encodeURIComponent(html)}`, {
+      waitUntil: 'load',
+      timeout: COMMAND_TIMEOUT_MS
+    })
+    const deadline = Date.now() + COMMAND_TIMEOUT_MS
+    while (Date.now() < deadline && !(sawPageError && sawConsole && sawRequest)) {
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 50))
+    }
+    result.pageErrors = sawPageError
+    result.console = sawConsole
+    result.networkRequests = sawRequest
+    if (!Object.values(result).every(Boolean)) throw new Error('playwright-diagnostic-event-unverified')
+    return result
+  } finally {
+    await diagnosticPage.close().catch(() => {})
+  }
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
