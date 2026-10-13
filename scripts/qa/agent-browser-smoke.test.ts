@@ -89,7 +89,8 @@ describe('safeStartupEvidence', () => {
       stderrBytes: 16,
       diagnosticCodes: [],
       diagnosticHints: [],
-      diagnosticTerms: []
+      diagnosticTerms: [],
+      diagnosticModules: []
     })
   })
 
@@ -127,5 +128,19 @@ describe('safeStartupEvidence', () => {
         { exitCode: null, signalCode: null }
       ).diagnosticTerms
     ).toEqual(['error', 'failed', 'to', 'load', 'app', 'at', 'path', 'from', 'module', 'node', 'electron'])
+  })
+
+  it('reports only known dependency names from the pre-stack error text', () => {
+    expect(
+      safeStartupEvidence(
+        {
+          stdout: '',
+          stderr: `Error: Cannot find module '@private/fixture'; required from C:\\private\\customer\\app.js
+    at Module._resolveFilename`
+        },
+        { exitCode: null, signalCode: null },
+        ['@private/fixture', 'electron']
+      ).diagnosticModules
+    ).toEqual(['@private/fixture'])
   })
 })

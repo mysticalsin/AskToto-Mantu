@@ -263,6 +263,20 @@ function safeStartupTerms(output) {
   return terms
 }
 
+function safeStartupModuleNames(output, knownModules) {
+  const prelude = []
+  for (const line of (typeof output === 'string' ? output : '').split(/\r?\n/)) {
+    if (/^\s*at\s/.test(line) || prelude.length >= 6) break
+    prelude.push(line.toLowerCase())
+  }
+  const text = prelude.join('\n')
+  return [
+    ...new Set(
+      knownModules.filter((name) => typeof name === 'string' && name && text.includes(name.toLowerCase()))
+    )
+  ].slice(0, 8)
+}
+
 export function safeCommandEvidence(result, args) {
   const operation = ['snapshot', 'errors', 'console', 'network', 'close'].includes(args[0]) ? args[0] : 'other'
   return {
@@ -277,7 +291,7 @@ export function safeCommandEvidence(result, args) {
   }
 }
 
-export function safeStartupEvidence(output, child) {
+export function safeStartupEvidence(output, child, knownModules = []) {
   return {
     exitCode: Number.isInteger(child?.exitCode) ? child.exitCode : null,
     signal: typeof child?.signalCode === 'string' ? child.signalCode : null,
@@ -285,7 +299,8 @@ export function safeStartupEvidence(output, child) {
     stderrBytes: Buffer.byteLength(output.stderr ?? ''),
     diagnosticCodes: safeDiagnosticCodes(output.stderr ?? ''),
     diagnosticHints: safeDiagnosticHints(output.stderr ?? ''),
-    diagnosticTerms: safeStartupTerms(output.stderr ?? '')
+    diagnosticTerms: safeStartupTerms(output.stderr ?? ''),
+    diagnosticModules: safeStartupModuleNames(output.stderr ?? '', knownModules)
   }
 }
 
@@ -544,6 +559,11 @@ async function main() {
   const executable = electronExecutable()
   const appManifest = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
   const appVersion = appManifest.version
+  const knownModules = [
+    ...Object.keys(appManifest.dependencies ?? {}),
+    ...Object.keys(appManifest.optionalDependencies ?? {}),
+    ...Object.keys(appManifest.devDependencies ?? {})
+  ]
   const appMainPath = typeof appManifest.main === 'string' ? resolve(ROOT, appManifest.main) : null
   const appMainRelative = appMainPath ? relative(ROOT, appMainPath) : null
   const appMainInsideWorktree =
@@ -695,7 +715,7 @@ async function main() {
     report.failure = error instanceof Error ? error.message.replace(/[^a-z0-9-]/gi, '').slice(0, 80) : 'unknown-failure'
     if (report.failure === 'cdp-endpoint-timeout' || report.failure === 'electron-exited-before-cdp-ready') {
       report.startupDiagnostic = startupDiagnostic(`${appOutput.stdout}\n${appOutput.stderr}`)
-      report.startupEvidence = safeStartupEvidence(appOutput, appChild)
+      report.startupEvidence = safeStartupEvidence(appOutput, appChild, knownModules)
     }
   } finally {
     if (appChild?.pid && !leaveRunning) {
