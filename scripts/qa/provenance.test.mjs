@@ -35,11 +35,7 @@ import {
   releaseNotes,
   uploadProblems
 } from './provenance.mjs'
-import {
-  APPROVED_DEFERRED_CANDIDATE,
-  DEFERRED_OWNER_DIAGNOSTICS,
-  candidateJobProblems
-} from './candidate-jobs.mjs'
+import { APPROVED_DEFERRED_CANDIDATE, DEFERRED_OWNER_DIAGNOSTICS, candidateJobProblems } from './candidate-jobs.mjs'
 
 const MODULE_PATH = fileURLToPath(new URL('./provenance.mjs', import.meta.url))
 const VERSION = '1.9.7'

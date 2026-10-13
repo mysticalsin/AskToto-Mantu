@@ -2,10 +2,7 @@ import { readFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
 /** Only these two owner-Mac diagnostics may be deferred for the approved owner-channel prerelease. */
-export const DEFERRED_OWNER_DIAGNOSTICS = Object.freeze([
-  'ST-1 control (no fixtures)',
-  'ST-1 fifo stall row (macOS)'
-])
+export const DEFERRED_OWNER_DIAGNOSTICS = Object.freeze(['ST-1 control (no fixtures)', 'ST-1 fifo stall row (macOS)'])
 
 // One-time, user-approved owner-channel exception. Keep the scope tied to the exact tested candidate.
 export const APPROVED_DEFERRED_CANDIDATE = Object.freeze({
