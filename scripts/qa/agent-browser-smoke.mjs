@@ -271,9 +271,7 @@ function safeStartupModuleNames(output, knownModules) {
   }
   const text = prelude.join('\n')
   return [
-    ...new Set(
-      knownModules.filter((name) => typeof name === 'string' && name && text.includes(name.toLowerCase()))
-    )
+    ...new Set(knownModules.filter((name) => typeof name === 'string' && name && text.includes(name.toLowerCase())))
   ].slice(0, 8)
 }
 
