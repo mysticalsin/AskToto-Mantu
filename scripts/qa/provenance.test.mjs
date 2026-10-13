@@ -35,6 +35,7 @@ import {
   releaseNotes,
   uploadProblems
 } from './provenance.mjs'
+import { APPROVED_DEFERRED_CANDIDATE, DEFERRED_OWNER_DIAGNOSTICS, candidateJobProblems } from './candidate-jobs.mjs'
 
 const MODULE_PATH = fileURLToPath(new URL('./provenance.mjs', import.meta.url))
 const VERSION = '1.9.7'
@@ -43,6 +44,145 @@ const NODE_VERSION = 'v22.22.3'
 function sha256(data) {
   return createHash('sha256').update(data).digest('hex')
 }
+
+function candidateJobs(conclusions = ['success', 'success', 'success']) {
+  const names = [...DEFERRED_OWNER_DIAGNOSTICS, 'Build mac']
+  return {
+    total_count: names.length,
+    jobs: names.map((name, index) => ({ name, conclusion: conclusions[index] }))
+  }
+}
+
+test('candidate promotion accepts all-success jobs without a deferral note', () => {
+  assert.deepEqual(candidateJobProblems(candidateJobs()), [])
+})
+
+test('candidate promotion accepts only the two named skipped owner diagnostics when disclosed', () => {
+  const residuals = DEFERRED_OWNER_DIAGNOSTICS.map((name) => `- **Not run:** \`${name}\``).join('\n')
+  assert.deepEqual(
+    candidateJobProblems(candidateJobs(['skipped', 'skipped', 'success']), residuals, {
+      candidateRunId: APPROVED_DEFERRED_CANDIDATE.runId,
+      candidateCommit: APPROVED_DEFERRED_CANDIDATE.commit
+    }),
+    []
+  )
+})
+
+test('candidate promotion rejects an unrelated skipped job', () => {
+  const jobs = candidateJobs(['success', 'success', 'skipped'])
+  assert.ok(candidateJobProblems(jobs).some((problem) => problem.includes('unexpected skipped job: Build mac')))
+})
+
+test('candidate promotion rejects skipped owner diagnostics without explicit residual disclosure', () => {
+  const problems = candidateJobProblems(
+    candidateJobs(['skipped', 'success', 'success']),
+    'Owner tests were unavailable.',
+    {
+      candidateRunId: APPROVED_DEFERRED_CANDIDATE.runId,
+      candidateCommit: APPROVED_DEFERRED_CANDIDATE.commit
+    }
+  )
+  assert.ok(
+    problems.some((problem) => problem.includes(`must name ${DEFERRED_OWNER_DIAGNOSTICS[0]} and say it was not run`))
+  )
+})
+
+test('candidate promotion rejects unrelated not-run text when skipped diagnostics are described as passed', () => {
+  const residuals = `${DEFERRED_OWNER_DIAGNOSTICS.join(' and ')} passed on the owner Mac. Notarization smoke not run.`
+  const problems = candidateJobProblems(candidateJobs(['skipped', 'skipped', 'success']), residuals, {
+    candidateRunId: APPROVED_DEFERRED_CANDIDATE.runId,
+    candidateCommit: APPROVED_DEFERRED_CANDIDATE.commit
+  })
+  for (const name of DEFERRED_OWNER_DIAGNOSTICS) {
+    assert.ok(problems.some((problem) => problem.includes(`must name ${name} and say it was not run`)))
+  }
+})
+
+test('candidate promotion requires the not-run label to introduce the named diagnostic', () => {
+  const residuals = `Not run: notarization smoke. ${DEFERRED_OWNER_DIAGNOSTICS.join(' and ')} passed on the owner Mac.`
+  const problems = candidateJobProblems(candidateJobs(['skipped', 'skipped', 'success']), residuals, {
+    candidateRunId: APPROVED_DEFERRED_CANDIDATE.runId,
+    candidateCommit: APPROVED_DEFERRED_CANDIDATE.commit
+  })
+  for (const name of DEFERRED_OWNER_DIAGNOSTICS) {
+    assert.ok(problems.some((problem) => problem.includes(`must name ${name} and say it was not run`)))
+  }
+})
+
+test('candidate promotion rejects contradictory text on a skipped-diagnostic disclosure line', () => {
+  const residuals = `- **Not run:** \`${DEFERRED_OWNER_DIAGNOSTICS[0]}\` — it actually passed`
+  const problems = candidateJobProblems(candidateJobs(['skipped', 'success', 'success']), residuals, {
+    candidateRunId: APPROVED_DEFERRED_CANDIDATE.runId,
+    candidateCommit: APPROVED_DEFERRED_CANDIDATE.commit
+  })
+  assert.ok(
+    problems.some((problem) => problem.includes(`must name ${DEFERRED_OWNER_DIAGNOSTICS[0]} and say it was not run`))
+  )
+})
+
+test('candidate promotion rejects partial disclosure when both diagnostics were skipped', () => {
+  const residuals = `Not run: \`${DEFERRED_OWNER_DIAGNOSTICS[0]}\``
+  const problems = candidateJobProblems(candidateJobs(['skipped', 'skipped', 'success']), residuals, {
+    candidateRunId: APPROVED_DEFERRED_CANDIDATE.runId,
+    candidateCommit: APPROVED_DEFERRED_CANDIDATE.commit
+  })
+  assert.ok(
+    problems.some((problem) => problem.includes(`must name ${DEFERRED_OWNER_DIAGNOSTICS[1]} and say it was not run`))
+  )
+})
+
+test('candidate dry runs do not require a release residual disclosure', () => {
+  assert.deepEqual(
+    candidateJobProblems(candidateJobs(['skipped', 'skipped', 'success']), '', {
+      requireDisclosure: false,
+      candidateRunId: APPROVED_DEFERRED_CANDIDATE.runId,
+      candidateCommit: APPROVED_DEFERRED_CANDIDATE.commit
+    }),
+    []
+  )
+})
+
+test('candidate promotion rejects deferred diagnostics on any other run or commit', () => {
+  const residuals = `Not run: \`${DEFERRED_OWNER_DIAGNOSTICS[0]}\``
+  for (const { candidateRunId, candidateCommit } of [
+    { candidateRunId: '38413517358', candidateCommit: APPROVED_DEFERRED_CANDIDATE.commit },
+    { candidateRunId: APPROVED_DEFERRED_CANDIDATE.runId, candidateCommit: 'a'.repeat(40) }
+  ]) {
+    const problems = candidateJobProblems(candidateJobs(['skipped', 'success', 'success']), residuals, {
+      candidateRunId,
+      candidateCommit
+    })
+    assert.ok(problems.some((problem) => problem.includes('outside the one-time approved candidate')))
+  }
+})
+
+test('candidate promotion rejects a failed owner diagnostic', () => {
+  const residuals = `Not run: \`${DEFERRED_OWNER_DIAGNOSTICS[0]}\``
+  const problems = candidateJobProblems(candidateJobs(['failure', 'success', 'success']), residuals, {
+    candidateRunId: APPROVED_DEFERRED_CANDIDATE.runId,
+    candidateCommit: APPROVED_DEFERRED_CANDIDATE.commit
+  })
+  assert.ok(
+    problems.some((problem) => problem.includes(`job did not succeed: ${DEFERRED_OWNER_DIAGNOSTICS[0]} (failure)`))
+  )
+})
+
+test('candidate promotion rejects missing, duplicate, or incomplete job records', () => {
+  const missing = candidateJobs().jobs.slice(1)
+  const missingProblems = candidateJobProblems({ total_count: missing.length, jobs: missing })
+  assert.ok(missingProblems.some((problem) => problem.includes('required owner diagnostic is missing')))
+
+  const duplicate = candidateJobs()
+  duplicate.jobs.push({ ...duplicate.jobs[0] })
+  duplicate.total_count = duplicate.jobs.length
+  const duplicateProblems = candidateJobProblems(duplicate)
+  assert.ok(duplicateProblems.some((problem) => problem.includes('duplicated')))
+
+  const incomplete = candidateJobs()
+  incomplete.total_count += 1
+  const incompleteProblems = candidateJobProblems(incomplete)
+  assert.ok(incompleteProblems.some((problem) => problem.includes('incomplete')))
+})
 
 /** A temp repo root holding everything stageBuild reads: package.json, the two dependency versions
  *  stageBuild inspects, every builder-config file each variant extends, and release/ pre-populated
