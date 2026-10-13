@@ -109,6 +109,17 @@ test('candidate promotion requires the not-run label to introduce the named diag
   }
 })
 
+test('candidate promotion rejects contradictory text on a skipped-diagnostic disclosure line', () => {
+  const residuals = `- **Not run:** \`${DEFERRED_OWNER_DIAGNOSTICS[0]}\` — it actually passed`
+  const problems = candidateJobProblems(candidateJobs(['skipped', 'success', 'success']), residuals, {
+    candidateRunId: APPROVED_DEFERRED_CANDIDATE.runId,
+    candidateCommit: APPROVED_DEFERRED_CANDIDATE.commit
+  })
+  assert.ok(
+    problems.some((problem) => problem.includes(`must name ${DEFERRED_OWNER_DIAGNOSTICS[0]} and say it was not run`))
+  )
+})
+
 test('candidate promotion rejects partial disclosure when both diagnostics were skipped', () => {
   const residuals = `Not run: \`${DEFERRED_OWNER_DIAGNOSTICS[0]}\``
   const problems = candidateJobProblems(candidateJobs(['skipped', 'skipped', 'success']), residuals, {
