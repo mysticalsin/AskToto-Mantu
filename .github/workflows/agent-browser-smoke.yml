@@ -19,13 +19,22 @@ concurrency:
 
 jobs:
   smoke:
-    name: Agent Browser smoke (${{ matrix.os }})
+    name: Agent Browser smoke (${{ matrix.os }}, ${{ matrix.runtime }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        include:
+          - os: macos-latest
+            runtime: bytecode
+            disable_main_bytecode: false
+          - os: windows-latest
+            runtime: bytecode
+            disable_main_bytecode: false
+          - os: windows-latest
+            runtime: readable-main-diagnostic
+            disable_main_bytecode: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -37,6 +46,8 @@ jobs:
       - run: npm ci
       - name: Build the worktree's Electron app
         run: npm run build
+        env:
+          ASKTOTO_MAC_UNIVERSAL: ${{ matrix.disable_main_bytecode && '1' || '0' }}
       # Agent Browser v0.39.0 requires Node >=24. Keep it out of Métis's Node 22 runtime and lockfile.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -54,7 +65,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: agent-browser-smoke-${{ matrix.os }}-${{ github.run_id }}
+          name: agent-browser-smoke-${{ matrix.os }}-${{ matrix.runtime }}-${{ github.run_id }}
           path: ${{ runner.temp }}/agent-browser-report.json
           if-no-files-found: ignore
           retention-days: 7
