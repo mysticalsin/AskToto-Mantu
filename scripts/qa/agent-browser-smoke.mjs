@@ -53,6 +53,11 @@ function parseOptions(args) {
   }
 }
 
+/**
+ * @param {string} platform
+ * @param {string | null} [requested]
+ * @returns {'agent-browser-cli' | 'playwright-cdp'}
+ */
 export function selectSmokeDriver(platform, requested = null) {
   const expected = platform === 'darwin' ? 'agent-browser-cli' : platform === 'win32' ? 'playwright-cdp' : null
   if (!expected) throw new Error('unsupported-host')
@@ -479,8 +484,7 @@ function childHasExited(child) {
   return child.exitCode !== null || child.signalCode !== null
 }
 
-function shellQuote(value, platform) {
-  if (platform === 'win32') return `'${String(value).replaceAll("'", "''")}'`
+function shellQuote(value) {
   return `'${String(value).replaceAll("'", "'\\''")}'`
 }
 
@@ -494,20 +498,11 @@ function printManualSessionInstructions({ cliPath, profilePaths, session, cdpWeb
     TMPDIR: profilePaths.temp,
     TMP: profilePaths.temp,
     TEMP: profilePaths.temp,
-    ...(process.platform === 'darwin'
-      ? { CFFIXED_USER_HOME: profilePaths.home, MAC_CHROMIUM_TMPDIR: profilePaths.temp }
-      : {})
+    CFFIXED_USER_HOME: profilePaths.home,
+    MAC_CHROMIUM_TMPDIR: profilePaths.temp
   }
-  const assignments = Object.entries(paths).map(([key, value]) =>
-    process.platform === 'win32'
-      ? `$env:${key} = ${shellQuote(value, process.platform)}`
-      : `export ${key}=${shellQuote(value, process.platform)}`
-  )
-  const command =
-    process.platform === 'win32'
-      ? `& ${shellQuote(cliPath, process.platform)}`
-      : shellQuote(cliPath, process.platform)
-  const commandPrefix = [command, '--session', shellQuote(session, process.platform)].join(' ')
+  const assignments = Object.entries(paths).map(([key, value]) => `export ${key}=${shellQuote(value)}`)
+  const commandPrefix = `${shellQuote(cliPath)} --session ${shellQuote(session)}`
   console.log(
     '[agent-browser-smoke] In a second shell in this worktree, paste the following to share this isolated session:'
   )
@@ -731,6 +726,7 @@ async function main() {
   let launchFailed = false
   const runAgentBrowser = async (args, timeoutMs = COMMAND_TIMEOUT_MS, recordFailure = true) => {
     const agentBrowserEnv = { ...env, AGENT_BROWSER_SOCKET_DIR: profile.paths.agentBrowserSocketDir }
+    if (!cliPath) throw new Error('agent-browser-cli-unavailable')
     const result = await runCli(cliPath, session, ['--debug', ...args], agentBrowserEnv, timeoutMs)
     if (result.cleanupComplete === false) report.agentBrowserProcessesCleaned = false
     if (recordFailure && result.code !== 0) {
@@ -823,7 +819,7 @@ async function main() {
       await composer.first().waitFor({ state: 'visible', timeout: START_TIMEOUT_MS })
       report.composerVisibleInDom = (await composer.count()) > 0
       if (!report.composerVisibleInDom) throw new Error('composer-not-found-in-dom')
-      report.diagnosticAccessVerified = await verifyPlaywrightDiagnostics(ownedBrowser, options.port)
+      report.diagnosticAccessVerified = await verifyPlaywrightDiagnostics(appPage)
     }
 
     report.result = 'PASS'
@@ -912,38 +908,53 @@ function hasComposerTextbox(snapshot) {
   return /\btextbox\b[^\n]*(?:ask métis|ask anything about)/i.test(snapshot)
 }
 
-async function verifyPlaywrightDiagnostics(browser, port) {
-  const context = browser.contexts()[0]
-  if (!context) throw new Error('playwright-default-context-unavailable')
-  const diagnosticPage = await context.newPage()
+async function verifyPlaywrightDiagnostics(page) {
   const result = { pageErrors: false, console: false, networkRequests: false }
-  const probeUrl = `http://${LOOPBACK_HOST}:${port}/json/version`
+  const appUrl = page.url()
   const pageErrorProbe = 'metis-qa-pageerror-probe'
   const consoleProbe = 'metis-qa-console-probe'
   let sawPageError = false
   let sawConsole = false
   let sawRequest = false
 
-  diagnosticPage.on('pageerror', (error) => {
+  const onPageError = (error) => {
     if (error.message === pageErrorProbe) sawPageError = true
-  })
-  diagnosticPage.on('console', (message) => {
+  }
+  const onConsole = (message) => {
     if (message.type() === 'debug' && message.text() === consoleProbe) sawConsole = true
-  })
-  diagnosticPage.on('request', (request) => {
-    if (request.url() === probeUrl) sawRequest = true
-  })
+  }
+  const onRequest = (request) => {
+    if (request.url() === appUrl) sawRequest = true
+  }
+  page.on('pageerror', onPageError)
+  page.on('console', onConsole)
+  page.on('request', onRequest)
 
   try {
-    const html = `<script>
-      console.debug(${JSON.stringify(consoleProbe)});
-      fetch(${JSON.stringify(probeUrl)}, { mode: 'no-cors', cache: 'no-store' }).catch(() => {});
-      setTimeout(() => { throw new Error(${JSON.stringify(pageErrorProbe)}); }, 0);
-    </script>`
-    await diagnosticPage.goto(`data:text/html,${encodeURIComponent(html)}`, {
-      waitUntil: 'load',
-      timeout: COMMAND_TIMEOUT_MS
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: COMMAND_TIMEOUT_MS })
+    await page.locator('input[aria-label="Ask Métis anything"]:visible').first().waitFor({
+      state: 'visible',
+      timeout: START_TIMEOUT_MS
     })
+    await page.evaluate(
+      ({ errorProbe, debugProbe }) => {
+        window.addEventListener(
+          'error',
+          (event) => {
+            if (event.message === errorProbe) {
+              event.preventDefault()
+              event.stopImmediatePropagation()
+            }
+          },
+          { capture: true, once: true }
+        )
+        console.debug(debugProbe)
+        window.setTimeout(() => {
+          throw new Error(errorProbe)
+        }, 0)
+      },
+      { errorProbe: pageErrorProbe, debugProbe: consoleProbe }
+    )
     const deadline = Date.now() + COMMAND_TIMEOUT_MS
     while (Date.now() < deadline && !(sawPageError && sawConsole && sawRequest)) {
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 50))
@@ -954,7 +965,9 @@ async function verifyPlaywrightDiagnostics(browser, port) {
     if (!Object.values(result).every(Boolean)) throw new Error('playwright-diagnostic-event-unverified')
     return result
   } finally {
-    await diagnosticPage.close().catch(() => {})
+    page.off('pageerror', onPageError)
+    page.off('console', onConsole)
+    page.off('request', onRequest)
   }
 }
 
