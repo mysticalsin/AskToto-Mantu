@@ -542,7 +542,20 @@ async function main() {
   if (!['darwin', 'win32'].includes(process.platform)) throw new Error('unsupported-host')
   const cliPath = packageCli(options.packageDir)
   const executable = electronExecutable()
-  const { version: appVersion } = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
+  const appManifest = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
+  const appVersion = appManifest.version
+  const appMainPath = typeof appManifest.main === 'string' ? resolve(ROOT, appManifest.main) : null
+  const appMainRelative = appMainPath ? relative(ROOT, appMainPath) : null
+  const appMainInsideWorktree =
+    appMainRelative !== null &&
+    appMainRelative !== '..' &&
+    !appMainRelative.startsWith(`..${sep}`) &&
+    !isAbsolute(appMainRelative)
+  const appEntry = {
+    mainConfigured: typeof appManifest.main === 'string' && appManifest.main.length > 0,
+    mainInsideWorktree: appMainInsideWorktree,
+    mainEntryExists: appMainInsideWorktree && existsSync(appMainPath)
+  }
   const profile = makeIsolatedProfile()
   const env = strictLaunchEnvironment(process.env, profile.paths)
   const session = `metis-worktree-${options.port}`
@@ -554,6 +567,7 @@ async function main() {
     platform: process.platform,
     cdpHost: LOOPBACK_HOST,
     cdpPort: options.port,
+    appEntry,
     ownedTargetVerified: false,
     composerVisibleInSnapshot: false,
     diagnosticCommandsSucceeded: { pageErrors: false, console: false, networkRequests: false },
@@ -596,6 +610,7 @@ async function main() {
     return result
   }
   try {
+    if (!appEntry.mainEntryExists) throw new Error('electron-main-entry-unavailable')
     const existing = ownedProcesses(listOwnedProcessTable(), {
       mainPid: null,
       installRoot: ROOT,
