@@ -173,6 +173,29 @@ function safeDiagnosticCodes(output) {
   return [...codes]
 }
 
+function safeDiagnosticHints(output) {
+  const text = typeof output === 'string' ? output.toLowerCase() : ''
+  const hints = [
+    ['daemon', /\bdaemon\b/],
+    ['cdp', /\bcdp\b/],
+    ['websocket', /web\s?socket/],
+    ['connection', /connect(?:ion)?/],
+    ['socket', /\bsocket\b/],
+    ['browser', /\bbrowser\b/],
+    ['page-target', /\b(?:page|target|tab)\b/],
+    ['timeout', /\b(?:timeout|timed out)\b/],
+    ['permission', /\b(?:permission|denied)\b/],
+    ['module', /\b(?:module|package|import)\b/],
+    ['configuration', /\b(?:config|configuration|option)\b/],
+    ['protocol', /\bprotocol\b/],
+    ['not-found', /\b(?:not found|missing|does not exist)\b/],
+    ['closed', /\b(?:closed|exited)\b/],
+    ['invalid-input', /\b(?:parse|invalid|malformed)\b/],
+    ['panic', /\bpanic\b/]
+  ]
+  return hints.filter(([, pattern]) => pattern.test(text)).map(([hint]) => hint)
+}
+
 export function safeCommandEvidence(result, args) {
   const operation = ['snapshot', 'errors', 'console', 'network', 'close'].includes(args[0]) ? args[0] : 'other'
   return {
@@ -181,6 +204,7 @@ export function safeCommandEvidence(result, args) {
     stdoutBytes: Buffer.byteLength(result.stdout ?? ''),
     stderrBytes: Buffer.byteLength(result.stderr ?? ''),
     diagnosticCodes: safeDiagnosticCodes(`${result.stdout ?? ''}\n${result.stderr ?? ''}`),
+    diagnosticHints: safeDiagnosticHints(`${result.stdout ?? ''}\n${result.stderr ?? ''}`),
     timedOut: Boolean(result.timedOut),
     cleanupComplete: result.cleanupComplete !== false
   }
@@ -192,7 +216,8 @@ export function safeStartupEvidence(output, child) {
     signal: typeof child?.signalCode === 'string' ? child.signalCode : null,
     stdoutBytes: Buffer.byteLength(output.stdout ?? ''),
     stderrBytes: Buffer.byteLength(output.stderr ?? ''),
-    diagnosticCodes: safeDiagnosticCodes(`${output.stdout ?? ''}\n${output.stderr ?? ''}`)
+    diagnosticCodes: safeDiagnosticCodes(`${output.stdout ?? ''}\n${output.stderr ?? ''}`),
+    diagnosticHints: safeDiagnosticHints(`${output.stdout ?? ''}\n${output.stderr ?? ''}`)
   }
 }
 

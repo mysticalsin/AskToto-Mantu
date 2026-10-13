@@ -60,6 +60,7 @@ describe('safeCommandEvidence', () => {
       stdoutBytes: 17,
       stderrBytes: 22,
       diagnosticCodes: [],
+      diagnosticHints: [],
       timedOut: false,
       cleanupComplete: true
     })
@@ -70,7 +71,14 @@ describe('safeStartupEvidence', () => {
   it('reports exit state and output sizes without retaining startup text', () => {
     expect(
       safeStartupEvidence({ stdout: 'synthetic stdout', stderr: 'synthetic stderr' }, { exitCode: 1, signalCode: null })
-    ).toEqual({ exitCode: 1, signal: null, stdoutBytes: 16, stderrBytes: 16, diagnosticCodes: [] })
+    ).toEqual({
+      exitCode: 1,
+      signal: null,
+      stdoutBytes: 16,
+      stderrBytes: 16,
+      diagnosticCodes: [],
+      diagnosticHints: []
+    })
   })
 
   it('extracts only standard runtime error codes from startup text', () => {
@@ -80,5 +88,14 @@ describe('safeStartupEvidence', () => {
         { exitCode: 1, signalCode: null }
       ).diagnosticCodes
     ).toEqual(['ERR_MODULE_NOT_FOUND', 'TYPEERROR', 'OS ERROR 2'])
+  })
+
+  it('reduces textual diagnostics to a fixed set of non-content hints', () => {
+    expect(
+      safeStartupEvidence(
+        { stdout: '', stderr: 'Failed to connect to daemon via WebSocket: target closed' },
+        { exitCode: 1, signalCode: null }
+      ).diagnosticHints
+    ).toEqual(['daemon', 'websocket', 'connection', 'page-target', 'closed'])
   })
 })
