@@ -493,19 +493,14 @@ function printManualSessionInstructions({ cliPath, profilePaths, session, cdpWeb
   )
   const command =
     process.platform === 'win32'
-      ? `& ${shellQuote(process.execPath, process.platform)} ${shellQuote(cliPath, process.platform)}`
-      : `${shellQuote(process.execPath, process.platform)} ${shellQuote(cliPath, process.platform)}`
-  const commandPrefix = [
-    command,
-    '--session',
-    shellQuote(session, process.platform),
-    '--cdp',
-    shellQuote(cdpWebSocketUrl, process.platform)
-  ].join(' ')
+      ? `& ${shellQuote(cliPath, process.platform)}`
+      : shellQuote(cliPath, process.platform)
+  const commandPrefix = [command, '--session', shellQuote(session, process.platform)].join(' ')
   console.log(
     '[agent-browser-smoke] In a second shell in this worktree, paste the following to share this isolated session:'
   )
-  console.log([...assignments, `${commandPrefix} snapshot -i`].join('\n'))
+  const connectCommand = `${commandPrefix} connect ${shellQuote(cdpWebSocketUrl, process.platform)}`
+  console.log([...assignments, connectCommand, `${commandPrefix} snapshot -i`].join('\n'))
   console.log(
     `[agent-browser-smoke] Then use the same command prefix with console, errors, or network requests. ` +
       `Session ${session} is isolated to this worktree and will be deleted when this launcher stops.`
@@ -725,7 +720,7 @@ async function main() {
     const result = await runCli(
       cliPath,
       session,
-      ['--debug', '--cdp', cdpWebSocketUrl, ...args],
+      ['--debug', ...args],
       agentBrowserEnv,
       timeoutMs
     )
@@ -786,7 +781,10 @@ async function main() {
     ownedBrowser = attachment.browser
     report.ownedTargetVerified = true
 
+    const connection = await runAgentBrowser(['connect', cdpWebSocketUrl])
+    if (connection.code !== 0) throw new Error(`agent-browser-connect-${failureClass(connection)}`)
     connected = true
+
     let snapshot
     const deadline = Date.now() + START_TIMEOUT_MS
     do {
