@@ -154,6 +154,25 @@ export function failureClass(result) {
   return 'command-failed'
 }
 
+function safeDiagnosticCodes(output) {
+  const text = typeof output === 'string' ? output : ''
+  const patterns = [
+    /\bERR_[A-Z0-9_]+\b/gi,
+    /\bE(?:ACCES|BADF|BUSY|EXIST|INVAL|ISDIR|MFILE|NOENT|NOMEM|NOTDIR|NOTEMPTY|NOTSUP|PERM|PIPE|ROFS|XDEV)\b/g,
+    /\bE(?:ADDRINUSE|ADDRNOTAVAIL|CONNREFUSED|CONNRESET|NETUNREACH|TIMEDOUT)\b/g,
+    /\b(?:Type|Reference|Syntax|Range|Aggregate|URI)Error\b/g,
+    /\b(?:os|win32) error \d+\b/gi
+  ]
+  const codes = new Set()
+  for (const pattern of patterns) {
+    for (const [code] of text.matchAll(pattern)) {
+      codes.add(code.toUpperCase())
+      if (codes.size === 8) return [...codes]
+    }
+  }
+  return [...codes]
+}
+
 export function safeCommandEvidence(result, args) {
   const operation = ['snapshot', 'errors', 'console', 'network', 'close'].includes(args[0]) ? args[0] : 'other'
   return {
@@ -161,6 +180,7 @@ export function safeCommandEvidence(result, args) {
     exitCode: Number.isInteger(result.code) ? result.code : null,
     stdoutBytes: Buffer.byteLength(result.stdout ?? ''),
     stderrBytes: Buffer.byteLength(result.stderr ?? ''),
+    diagnosticCodes: safeDiagnosticCodes(`${result.stdout ?? ''}\n${result.stderr ?? ''}`),
     timedOut: Boolean(result.timedOut),
     cleanupComplete: result.cleanupComplete !== false
   }
@@ -171,7 +191,8 @@ export function safeStartupEvidence(output, child) {
     exitCode: Number.isInteger(child?.exitCode) ? child.exitCode : null,
     signal: typeof child?.signalCode === 'string' ? child.signalCode : null,
     stdoutBytes: Buffer.byteLength(output.stdout ?? ''),
-    stderrBytes: Buffer.byteLength(output.stderr ?? '')
+    stderrBytes: Buffer.byteLength(output.stderr ?? ''),
+    diagnosticCodes: safeDiagnosticCodes(`${output.stdout ?? ''}\n${output.stderr ?? ''}`)
   }
 }
 

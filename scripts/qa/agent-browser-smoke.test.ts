@@ -59,6 +59,7 @@ describe('safeCommandEvidence', () => {
       exitCode: 1,
       stdoutBytes: 17,
       stderrBytes: 22,
+      diagnosticCodes: [],
       timedOut: false,
       cleanupComplete: true
     })
@@ -69,6 +70,15 @@ describe('safeStartupEvidence', () => {
   it('reports exit state and output sizes without retaining startup text', () => {
     expect(
       safeStartupEvidence({ stdout: 'synthetic stdout', stderr: 'synthetic stderr' }, { exitCode: 1, signalCode: null })
-    ).toEqual({ exitCode: 1, signal: null, stdoutBytes: 16, stderrBytes: 16 })
+    ).toEqual({ exitCode: 1, signal: null, stdoutBytes: 16, stderrBytes: 16, diagnosticCodes: [] })
+  })
+
+  it('extracts only standard runtime error codes from startup text', () => {
+    expect(
+      safeStartupEvidence(
+        { stdout: 'TypeError: ignored detail', stderr: 'ERR_MODULE_NOT_FOUND (os error 2)' },
+        { exitCode: 1, signalCode: null }
+      ).diagnosticCodes
+    ).toEqual(['ERR_MODULE_NOT_FOUND', 'TYPEERROR', 'OS ERROR 2'])
   })
 })
