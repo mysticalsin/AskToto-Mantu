@@ -177,20 +177,16 @@ describe('safeStartupEvidence', () => {
         },
         { exitCode: null, signalCode: null }
       ).diagnosticTerms
-    ).toEqual([
-      'app',
-      'threw',
-      'an',
-      'error',
-      'during',
-      'load',
-      'error',
-      'failed',
-      'to',
-      'set',
-      'path',
-      'to'
-    ])
+    ).toEqual(['app', 'threw', 'an', 'error', 'during', 'load', 'error', 'failed', 'to', 'set', 'path', 'to'])
+    expect(
+      safeStartupEvidence(
+        {
+          stdout: '',
+          stderr: 'Error: Failed to get path C:\\private\\secret\n    at SecretModule.load'
+        },
+        { exitCode: null, signalCode: null }
+      ).diagnosticTerms
+    ).toEqual(['error', 'failed', 'to', 'get', 'path'])
   })
 
   it('reports only known dependency names from the pre-stack error text', () => {
