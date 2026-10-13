@@ -1,0 +1,60 @@
+name: Agent Browser smoke
+
+# A small, isolated Electron/CDP lane for every branch. It tests the built app on disposable hosted
+# Mac and Windows machines. It never enables debugging in shipped product startup code.
+on:
+  push:
+    branches: ['**']
+    tags-ignore: ['v*', 'ffmpeg-sidecar-*']
+  pull_request:
+    branches: [main, master, m2/integration]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number)) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Agent Browser smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - name: Build the worktree's Electron app
+        run: npm run build
+      # Agent Browser v0.39.0 requires Node >=24. Keep it out of Métis's Node 22 runtime and lockfile.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.21.0
+      - name: Install locked Agent Browser package without lifecycle scripts
+        run: npm ci --prefix scripts/qa/agent-browser-package --ignore-scripts --no-audit --no-fund
+      - name: Install verified Agent Browser native executable
+        run: node scripts/qa/install-agent-browser-binary.mjs --agent-browser-package scripts/qa/agent-browser-package/node_modules/agent-browser
+      - name: Launch a fresh profile and check owned CDP, DOM, and diagnostic command access
+        run: >-
+          node scripts/qa/agent-browser-smoke.mjs
+          --port 9222
+          --report "${{ runner.temp }}/agent-browser-report.json"
+      - name: Upload content-free smoke report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: agent-browser-smoke-${{ matrix.os }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/agent-browser-report.json
+          if-no-files-found: ignore
+          retention-days: 7

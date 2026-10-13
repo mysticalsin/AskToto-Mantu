@@ -1,0 +1,9 @@
+{
+  "name": "metis-agent-browser-qa",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Isolated, QA-only Vercel Agent Browser dependency for Métis",
+  "dependencies": {
+    "agent-browser": "0.39.0"
+  }
+}
