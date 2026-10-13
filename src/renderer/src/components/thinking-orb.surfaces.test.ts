@@ -10,7 +10,6 @@ const SURFACES = [
   'IntelligenceUpdateButton.tsx',
   'BrainRecordPage.tsx',
   'Bar.tsx',
-  'ControlBar.tsx',
   'AgendaView.tsx',
   'SignInWall.tsx',
   'LicenseGate.tsx',
