@@ -535,11 +535,13 @@ async function main() {
     report.preexistingOwnedProcessCount = existing.length
     if (existing.length > 0) throw new Error('worktree-app-already-running')
 
-    appChild = spawn(
-      executable,
-      electronLaunchArgs(options.port),
-      { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' }
-    )
+    appChild = spawn(executable, electronLaunchArgs(options.port), {
+      cwd: ROOT,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      detached: process.platform !== 'win32'
+    })
     appChild.stdout?.on('data', (chunk) => {
       appOutput.stdout = appendBounded(appOutput.stdout, chunk)
     })
