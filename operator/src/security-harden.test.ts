@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { handleRequest, type Env } from './index'
 import { hmacHex, verifyIngestHmac } from './hmac'
 import { sha256Hex } from './crypto'
-import { verifyAccessJwt } from './access'
+import { mintSessionToken, SESSION_COOKIE, verifyAccessJwt } from './access'
 import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
 import { memoryStore } from './store'
 import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY, syntheticProviderKey } from './test-fixtures'
@@ -16,6 +16,8 @@ import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY,
  */
 
 const NOW = 1_725_000_000_000
+const SESSION_SECRET = 'synthetic-operator-session-secret'
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000
 
 function env(overrides: Partial<Env> = {}): Env {
   return {
@@ -187,6 +189,116 @@ describe('Cloudflare Access JWT fallback checks the time claims', () => {
     await verifyAccessJwt(mint({ ...good, iss: fresh }), fresh, AUD, NOW)
     await verifyAccessJwt(mint({ ...good, iss: fresh }), fresh, AUD, NOW + 1000)
     expect(f).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('Operator app sessions have an absolute 12-hour lifetime', () => {
+  const sessionIat = NOW - 2 * 60 * 60 * 1000
+
+  async function existingSession(): Promise<string> {
+    return mintSessionToken('owner@example.test', sessionIat, SESSION_SECRET)
+  }
+
+  function sessionEnv(): Env {
+    return env({ OPERATOR_SESSION_SECRET: SESSION_SECRET })
+  }
+
+  it('keeps the original token in cookie fallback, JSON, and X-Metis-Session after one hour', async () => {
+    const store = memoryStore()
+    const token = await existingSession()
+    const res = await handleRequest(
+      new Request('https://operator.test/session', {
+        headers: {
+          cookie: `${SESSION_COOKIE}=${encodeURIComponent(token)}`,
+          'x-metis-session-fresh': 'true'
+        }
+      }),
+      sessionEnv(),
+      {},
+      { store, now: NOW }
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('X-Metis-Session')).toBe(token)
+    expect(res.headers.get('Set-Cookie')).toBeNull()
+    expect(res.headers.get('cache-control')).toBe('no-store')
+    expect(await res.json()).toEqual({ ok: true, session: token })
+    expect(token.split('|').slice(0, 3)).toEqual(['v1', String(sessionIat), 'owner@example.test'])
+  })
+
+  it('keeps the original token for Bearer fallback and returns it in X-Metis-Session', async () => {
+    const store = memoryStore()
+    const token = await existingSession()
+    const res = await handleRequest(
+      new Request('https://operator.test/v1/admin/health.json', {
+        headers: {
+          authorization: `Bearer ${token}`,
+          'x-metis-session-fresh': 'true'
+        }
+      }),
+      sessionEnv(),
+      {},
+      { store, now: NOW }
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('X-Metis-Session')).toBe(token)
+    expect(res.headers.get('Set-Cookie')).toBeNull()
+    expect(res.headers.get('cache-control')).toBe('no-store')
+  })
+
+  it('accepts cookie and Bearer sessions until one millisecond before expiry, then rejects at the deadline', async () => {
+    const token = await existingSession()
+    const transports = [
+      {
+        name: 'cookie',
+        headers: { cookie: `${SESSION_COOKIE}=${encodeURIComponent(token)}` }
+      },
+      { name: 'Bearer', headers: { authorization: `Bearer ${token}` } }
+    ]
+
+    for (const transport of transports) {
+      const store = memoryStore()
+      const beforeExpiry = await handleRequest(
+        new Request('https://operator.test/v1/admin/health.json', { headers: transport.headers }),
+        sessionEnv(),
+        {},
+        { store, now: sessionIat + SESSION_TTL_MS - 1 }
+      )
+      expect(beforeExpiry.status, transport.name).toBe(200)
+      expect(beforeExpiry.headers.get('X-Metis-Session'), transport.name).toBe(token)
+
+      const atExpiry = await handleRequest(
+        new Request('https://operator.test/v1/admin/health.json', { headers: transport.headers }),
+        sessionEnv(),
+        {},
+        { store, now: sessionIat + SESSION_TTL_MS }
+      )
+      expect(atExpiry.status, transport.name).toBe(401)
+      expect(atExpiry.headers.get('X-Metis-Session'), transport.name).toBeNull()
+    }
+  })
+
+  it('lets a newly verified Access identity mint a new 12-hour session', async () => {
+    const store = memoryStore()
+    const oldToken = await existingSession()
+    const res = await handleRequest(
+      new Request('https://operator.test/', {
+        headers: { cookie: `${SESSION_COOKIE}=${encodeURIComponent(oldToken)}` }
+      }),
+      sessionEnv(),
+      { access: ownerAccess },
+      { store, now: NOW }
+    )
+    const token = res.headers.get('X-Metis-Session') || ''
+    const cookie = res.headers.get('Set-Cookie') || ''
+
+    expect(res.status).toBe(200)
+    expect(token).not.toBe(oldToken)
+    expect(token.split('|').slice(0, 3)).toEqual(['v1', String(NOW), 'owner@example.test'])
+    expect(cookie).toContain(`${SESSION_COOKIE}=`)
+    expect(cookie).toContain('Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=43200')
+    expect(res.headers.get('cache-control')).toBe('no-store')
   })
 })
 
