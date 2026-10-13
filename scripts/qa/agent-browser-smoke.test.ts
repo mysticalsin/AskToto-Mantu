@@ -31,10 +31,10 @@ describe('loopbackDebuggerWebSocket', () => {
 
 describe('electronLaunchArgs', () => {
   it('places loopback debugging switches before Electron’s app path', () => {
-    expect(electronLaunchArgs(9222)).toEqual([
+    expect(electronLaunchArgs(9222, 'C:\\worktree')).toEqual([
       '--remote-debugging-address=127.0.0.1',
       '--remote-debugging-port=9222',
-      '.'
+      'C:\\worktree'
     ])
   })
 })
