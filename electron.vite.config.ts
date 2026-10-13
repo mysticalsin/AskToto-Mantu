@@ -44,6 +44,9 @@ export default defineConfig({
     build: {
       // bytecode: true everywhere EXCEPT the mac universal package — see the MQA-207 note above.
       bytecode: !MAC_UNIVERSAL,
+      // A readable Windows CI diagnostic maps startup stacks to their original source without changing
+      // packaged builds. The diagnostic workflow never packages or releases this output.
+      sourcemap: process.env.METIS_QA_STARTUP_SOURCEMAP === '1',
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'src/main/index.ts'),
