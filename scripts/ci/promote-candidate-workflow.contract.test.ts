@@ -34,8 +34,8 @@ describe('M2-0503 promote-candidate residuals input', () => {
   })
 
   it('passes residuals to prepare-release through env and a file, never interpolated into a shell line', () => {
-    expect(workflow.match(/RESIDUALS: \$\{\{ inputs\.residuals \}\}/g)).toHaveLength(2)
-    expect(workflow.match(/inputs\.residuals/g)).toHaveLength(2)
+    expect(workflow.match(/RESIDUALS: \$\{\{ inputs\.residuals \}\}/g)).toHaveLength(3)
+    expect(workflow.match(/inputs\.residuals/g)).toHaveLength(3)
     expect(workflow).toContain('printf \'%s\' "$RESIDUALS" > "$RUNNER_TEMP/residuals.md"')
     expect(workflow).toContain('--residuals-file "$RUNNER_TEMP/residuals.md"')
     for (const line of workflow.split('\n')) {
