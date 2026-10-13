@@ -154,6 +154,27 @@ export function failureClass(result) {
   return 'command-failed'
 }
 
+export function safeCommandEvidence(result, args) {
+  const operation = ['snapshot', 'errors', 'console', 'network', 'close'].includes(args[0]) ? args[0] : 'other'
+  return {
+    operation,
+    exitCode: Number.isInteger(result.code) ? result.code : null,
+    stdoutBytes: Buffer.byteLength(result.stdout ?? ''),
+    stderrBytes: Buffer.byteLength(result.stderr ?? ''),
+    timedOut: Boolean(result.timedOut),
+    cleanupComplete: result.cleanupComplete !== false
+  }
+}
+
+export function safeStartupEvidence(output, child) {
+  return {
+    exitCode: Number.isInteger(child?.exitCode) ? child.exitCode : null,
+    signal: typeof child?.signalCode === 'string' ? child.signalCode : null,
+    stdoutBytes: Buffer.byteLength(output.stdout ?? ''),
+    stderrBytes: Buffer.byteLength(output.stderr ?? '')
+  }
+}
+
 async function stopCliProcessTree(child) {
   if (!child?.pid || child.pid <= 1) return childHasExited(child)
 
@@ -415,8 +436,11 @@ async function main() {
     agentBrowserProcessesCleaned: true,
     preexistingOwnedProcessCount: 0,
     agentBrowserDiagnostic: null,
+    agentBrowserCommandEvidence: null,
     agentBrowserCleanupDiagnostic: null,
+    agentBrowserCleanupEvidence: null,
     startupDiagnostic: null,
+    startupEvidence: null,
     failure: null
   }
 
@@ -432,7 +456,10 @@ async function main() {
   const runAgentBrowser = async (args, timeoutMs = COMMAND_TIMEOUT_MS, recordFailure = true) => {
     const result = await runCli(cliPath, session, ['--debug', '--cdp', cdpWebSocketUrl, ...args], env, timeoutMs)
     if (result.cleanupComplete === false) report.agentBrowserProcessesCleaned = false
-    if (recordFailure && result.code !== 0) report.agentBrowserDiagnostic = failureClass(result)
+    if (recordFailure && result.code !== 0) {
+      report.agentBrowserDiagnostic = failureClass(result)
+      report.agentBrowserCommandEvidence = safeCommandEvidence(result, args)
+    }
     return result
   }
   try {
@@ -518,6 +545,7 @@ async function main() {
     report.failure = error instanceof Error ? error.message.replace(/[^a-z0-9-]/gi, '').slice(0, 80) : 'unknown-failure'
     if (report.failure === 'cdp-endpoint-timeout' || report.failure === 'electron-exited-before-cdp-ready') {
       report.startupDiagnostic = startupDiagnostic(`${appOutput.stdout}\n${appOutput.stderr}`)
+      report.startupEvidence = safeStartupEvidence(appOutput, appChild)
     }
   } finally {
     if (appChild?.pid && !leaveRunning) {
@@ -533,6 +561,7 @@ async function main() {
         report.agentBrowserProcessesCleaned = false
         agentBrowserCloseFailure = failureClass(close)
         report.agentBrowserCleanupDiagnostic = agentBrowserCloseFailure
+        report.agentBrowserCleanupEvidence = safeCommandEvidence(close, ['close'])
       }
     }
     if (ownedBrowser && !leaveRunning) {

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { failureClass, loopbackDebuggerWebSocket } from './agent-browser-smoke.mjs'
+import {
+  failureClass,
+  loopbackDebuggerWebSocket,
+  safeCommandEvidence,
+  safeStartupEvidence
+} from './agent-browser-smoke.mjs'
 
 describe('loopbackDebuggerWebSocket', () => {
   it('accepts the browser WebSocket advertised by the isolated Electron CDP endpoint', () => {
@@ -30,8 +35,43 @@ describe('failureClass', () => {
     ['CDP connection errors', 'Failed to connect via CDP', 'cdp-connection'],
     ['CLI syntax errors', 'Unknown command: invalid', 'cli-usage-error']
   ])('maps %s to a fixed diagnostic category', (_reason, stderr, expected) => {
+    expect(failureClass({ stdout: '', stderr, timedOut: false, failedToStart: false, cleanupComplete: true })).toBe(
+      expected
+    )
+  })
+})
+
+describe('safeCommandEvidence', () => {
+  it('keeps only fixed operation and byte-count evidence, never command output', () => {
     expect(
-      failureClass({ stdout: '', stderr, timedOut: false, failedToStart: false, cleanupComplete: true })
-    ).toBe(expected)
+      safeCommandEvidence(
+        {
+          code: 1,
+          stdout: 'private page text',
+          stderr: 'browser-specific error',
+          timedOut: false,
+          cleanupComplete: true
+        },
+        ['snapshot', '-i']
+      )
+    ).toEqual({
+      operation: 'snapshot',
+      exitCode: 1,
+      stdoutBytes: 17,
+      stderrBytes: 22,
+      timedOut: false,
+      cleanupComplete: true
+    })
+  })
+})
+
+describe('safeStartupEvidence', () => {
+  it('reports exit state and output sizes without retaining startup text', () => {
+    expect(
+      safeStartupEvidence(
+        { stdout: 'synthetic stdout', stderr: 'synthetic stderr' },
+        { exitCode: 1, signalCode: null }
+      )
+    ).toEqual({ exitCode: 1, signal: null, stdoutBytes: 16, stderrBytes: 16 })
   })
 })
