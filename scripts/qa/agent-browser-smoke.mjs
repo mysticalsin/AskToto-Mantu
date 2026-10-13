@@ -204,8 +204,8 @@ export function safeCommandEvidence(result, args) {
     exitCode: Number.isInteger(result.code) ? result.code : null,
     stdoutBytes: Buffer.byteLength(result.stdout ?? ''),
     stderrBytes: Buffer.byteLength(result.stderr ?? ''),
-    diagnosticCodes: safeDiagnosticCodes(`${result.stdout ?? ''}\n${result.stderr ?? ''}`),
-    diagnosticHints: safeDiagnosticHints(`${result.stdout ?? ''}\n${result.stderr ?? ''}`),
+    diagnosticCodes: safeDiagnosticCodes(result.stderr ?? ''),
+    diagnosticHints: safeDiagnosticHints(result.stderr ?? ''),
     timedOut: Boolean(result.timedOut),
     cleanupComplete: result.cleanupComplete !== false
   }
@@ -217,8 +217,8 @@ export function safeStartupEvidence(output, child) {
     signal: typeof child?.signalCode === 'string' ? child.signalCode : null,
     stdoutBytes: Buffer.byteLength(output.stdout ?? ''),
     stderrBytes: Buffer.byteLength(output.stderr ?? ''),
-    diagnosticCodes: safeDiagnosticCodes(`${output.stdout ?? ''}\n${output.stderr ?? ''}`),
-    diagnosticHints: safeDiagnosticHints(`${output.stdout ?? ''}\n${output.stderr ?? ''}`)
+    diagnosticCodes: safeDiagnosticCodes(output.stderr ?? ''),
+    diagnosticHints: safeDiagnosticHints(output.stderr ?? '')
   }
 }
 

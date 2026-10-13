@@ -60,7 +60,7 @@ describe('safeCommandEvidence', () => {
       stdoutBytes: 17,
       stderrBytes: 22,
       diagnosticCodes: [],
-      diagnosticHints: [],
+      diagnosticHints: ['browser'],
       timedOut: false,
       cleanupComplete: true
     })
@@ -87,7 +87,7 @@ describe('safeStartupEvidence', () => {
         { stdout: 'TypeError: ignored detail', stderr: 'ERR_MODULE_NOT_FOUND (os error 2)' },
         { exitCode: 1, signalCode: null }
       ).diagnosticCodes
-    ).toEqual(['ERR_MODULE_NOT_FOUND', 'TYPEERROR', 'OS ERROR 2'])
+    ).toEqual(['ERR_MODULE_NOT_FOUND', 'OS ERROR 2'])
   })
 
   it('reduces textual diagnostics to a fixed set of non-content hints', () => {
