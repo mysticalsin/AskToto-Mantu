@@ -197,6 +197,52 @@ function safeDiagnosticHints(output) {
   return hints.filter(([, pattern]) => pattern.test(text)).map(([hint]) => hint)
 }
 
+function safeStartupTerms(output) {
+  const terms = new Set()
+  const allowlist = new Set([
+    'app',
+    'application',
+    'asar',
+    'binary',
+    'cannot',
+    'could',
+    'crash',
+    'electron',
+    'error',
+    'exception',
+    'failed',
+    'fatal',
+    'file',
+    'find',
+    'found',
+    'import',
+    'load',
+    'loaded',
+    'loading',
+    'main',
+    'missing',
+    'module',
+    'native',
+    'node',
+    'not',
+    'package',
+    'path',
+    'preload',
+    'process',
+    'renderer',
+    'require',
+    'script',
+    'startup',
+    'unable',
+    'undefined'
+  ])
+  for (const match of (typeof output === 'string' ? output.toLowerCase() : '').matchAll(/[a-z]+/g)) {
+    if (allowlist.has(match[0])) terms.add(match[0])
+    if (terms.size === 12) break
+  }
+  return [...terms]
+}
+
 export function safeCommandEvidence(result, args) {
   const operation = ['snapshot', 'errors', 'console', 'network', 'close'].includes(args[0]) ? args[0] : 'other'
   return {
@@ -218,7 +264,8 @@ export function safeStartupEvidence(output, child) {
     stdoutBytes: Buffer.byteLength(output.stdout ?? ''),
     stderrBytes: Buffer.byteLength(output.stderr ?? ''),
     diagnosticCodes: safeDiagnosticCodes(output.stderr ?? ''),
-    diagnosticHints: safeDiagnosticHints(output.stderr ?? '')
+    diagnosticHints: safeDiagnosticHints(output.stderr ?? ''),
+    diagnosticTerms: safeStartupTerms(output.stderr ?? '')
   }
 }
 

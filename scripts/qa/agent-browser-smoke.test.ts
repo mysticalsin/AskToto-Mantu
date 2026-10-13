@@ -88,7 +88,8 @@ describe('safeStartupEvidence', () => {
       stdoutBytes: 16,
       stderrBytes: 16,
       diagnosticCodes: [],
-      diagnosticHints: []
+      diagnosticHints: [],
+      diagnosticTerms: []
     })
   })
 
@@ -108,5 +109,14 @@ describe('safeStartupEvidence', () => {
         { exitCode: 1, signalCode: null }
       ).diagnosticHints
     ).toEqual(['daemon', 'websocket', 'connection', 'page-target', 'closed'])
+  })
+
+  it('keeps only allowlisted startup terms and never emits paths or arbitrary text', () => {
+    expect(
+      safeStartupEvidence(
+        { stdout: '', stderr: "Error: Cannot find module '/private/customer-data/secret.js'" },
+        { exitCode: null, signalCode: null }
+      ).diagnosticTerms
+    ).toEqual(['error', 'cannot', 'find', 'module'])
   })
 })
