@@ -8,10 +8,10 @@
  *        [--report <path>] [--keep-open]
  */
 
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, isAbsolute, join, resolve, sep, relative } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { attachOwnedCdp, killOwned, strictLaunchEnvironment, waitForChildExit } from './lib/app-driver.mjs'
 import { listProcesses, ownedProcesses, survivors } from './owned-processes.mjs'
@@ -28,17 +28,24 @@ const STARTUP_OUTPUT_LIMIT = 8_192
 
 function argValue(args, name) {
   const index = args.indexOf(name)
-  return index < 0 ? null : args[index + 1] ?? null
+  return index < 0 ? null : (args[index + 1] ?? null)
 }
 
 function parseOptions(args) {
   const port = Number(argValue(args, '--port'))
-  const packageDir = argValue(args, '--agent-browser-package') ?? join(ROOT, 'scripts', 'qa', 'agent-browser-package', 'node_modules', 'agent-browser')
+  const packageDir =
+    argValue(args, '--agent-browser-package') ??
+    join(ROOT, 'scripts', 'qa', 'agent-browser-package', 'node_modules', 'agent-browser')
   const report = argValue(args, '--report')
   if (!Number.isSafeInteger(port) || port < 1024 || port > 65_535) {
     throw new Error('invalid-port')
   }
-  return { port, packageDir: resolve(packageDir), report: report ? resolve(report) : null, keepOpen: args.includes('--keep-open') }
+  return {
+    port,
+    packageDir: resolve(packageDir),
+    report: report ? resolve(report) : null,
+    keepOpen: args.includes('--keep-open')
+  }
 }
 
 function requiredFile(path, label) {
@@ -93,11 +100,13 @@ function runCli(cliPath, session, args, env, timeoutMs = COMMAND_TIMEOUT_MS) {
       cwd: ROOT,
       env,
       windowsHide: true,
+      detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe']
     })
     let stdout = ''
     let stderr = ''
     let settled = false
+    let timedOut = false
     const finish = (result) => {
       if (settled) return
       settled = true
@@ -111,10 +120,14 @@ function runCli(cliPath, session, args, env, timeoutMs = COMMAND_TIMEOUT_MS) {
     child.stdout.on('data', collect('stdout'))
     child.stderr.on('data', collect('stderr'))
     child.once('error', () => finish({ code: null, timedOut: false, stdout, stderr, failedToStart: true }))
-    child.once('exit', (code) => finish({ code, timedOut: false, stdout, stderr, failedToStart: false }))
+    child.once('close', (code) => {
+      if (!timedOut) finish({ code, timedOut: false, stdout, stderr, failedToStart: false, cleanupComplete: true })
+    })
     const timer = setTimeout(() => {
-      child.kill('SIGKILL')
-      finish({ code: null, timedOut: true, stdout, stderr, failedToStart: false })
+      timedOut = true
+      void stopCliProcessTree(child).then((cleanupComplete) =>
+        finish({ code: null, timedOut: true, stdout, stderr, failedToStart: false, cleanupComplete })
+      )
     }, timeoutMs)
   })
 }
@@ -122,10 +135,56 @@ function runCli(cliPath, session, args, env, timeoutMs = COMMAND_TIMEOUT_MS) {
 function failureClass(result) {
   const text = `${result.stdout}\n${result.stderr}`.toLowerCase()
   if (/no page found|no page target/.test(text)) return 'no-page-target'
-  if (/econnrefused|websocket|cdp.*timeout|connection.*refused/.test(text)) return 'cdp-connection'
+  const isCdpFailure = /econnrefused|failed to connect via cdp|websocket|cdp.*timeout|connection.*refused/.test(text)
+  if (isCdpFailure) return 'cdp-connection'
+  if (/unknown command|unexpected argument|invalid argument|usage:/.test(text)) return 'cli-usage-error'
+  const isNativeBinaryFailure =
+    /no binary found|unsupported platform|error executing binary|cannot make binary executable/.test(text)
+  if (isNativeBinaryFailure) return 'native-binary-start-failure'
+  if (/failed to start daemon|daemon.*error|socket.*error/.test(text)) return 'session-daemon-failure'
+  if (result.cleanupComplete === false) return 'process-cleanup-incomplete'
   if (result.timedOut) return 'command-timeout'
   if (result.failedToStart) return 'command-not-started'
   return 'command-failed'
+}
+
+async function stopCliProcessTree(child) {
+  if (!child?.pid || child.pid <= 1) return childHasExited(child)
+
+  let signalAccepted = false
+  if (process.platform === 'win32') {
+    const windowsRoot = process.env.SystemRoot || process.env.SYSTEMROOT || 'C:\\Windows'
+    try {
+      execFileSync(join(windowsRoot, 'System32', 'taskkill.exe'), ['/PID', String(child.pid), '/T', '/F'], {
+        stdio: 'ignore',
+        timeout: 3_000,
+        windowsHide: true
+      })
+      signalAccepted = true
+    } catch {
+      // A failed tree kill is not treated as cleanup success, even if the wrapper itself exits.
+    }
+  } else {
+    try {
+      // CLI wrapper and native executable share the isolated process group created by detached spawn.
+      process.kill(-child.pid, 'SIGKILL')
+      signalAccepted = true
+    } catch (error) {
+      signalAccepted = error?.code === 'ESRCH'
+    }
+  }
+
+  await waitForChildExit(child, 3_000).catch(() => {})
+  if (!signalAccepted || !childHasExited(child)) return false
+  if (process.platform !== 'win32') {
+    try {
+      process.kill(-child.pid, 0)
+      return false
+    } catch (error) {
+      return error?.code === 'ESRCH'
+    }
+  }
+  return true
 }
 
 function writeReport(path, report) {
@@ -151,7 +210,7 @@ function shellQuote(value, platform) {
   return `'${String(value).replaceAll("'", "'\\''")}'`
 }
 
-function printManualSessionInstructions({ cliPath, profilePaths, session }) {
+function printManualSessionInstructions({ cliPath, profilePaths, session, cdpWebSocketUrl }) {
   const paths = {
     HOME: profilePaths.home,
     USERPROFILE: profilePaths.userProfile,
@@ -169,12 +228,47 @@ function printManualSessionInstructions({ cliPath, profilePaths, session }) {
       ? `$env:${key} = ${shellQuote(value, process.platform)}`
       : `export ${key}=${shellQuote(value, process.platform)}`
   )
-  const command = process.platform === 'win32'
-    ? `& ${shellQuote(process.execPath, process.platform)} ${shellQuote(cliPath, process.platform)}`
-    : `${shellQuote(process.execPath, process.platform)} ${shellQuote(cliPath, process.platform)}`
-  console.log('[agent-browser-smoke] In a second shell in this worktree, paste the following to share this isolated session:')
-  console.log([...assignments, `${command} --session ${session} snapshot -i`].join('\n'))
-  console.log(`[agent-browser-smoke] Then use the same command prefix with console, errors, or network requests. Session ${session} is isolated to this worktree and will be deleted when this launcher stops.`)
+  const command =
+    process.platform === 'win32'
+      ? `& ${shellQuote(process.execPath, process.platform)} ${shellQuote(cliPath, process.platform)}`
+      : `${shellQuote(process.execPath, process.platform)} ${shellQuote(cliPath, process.platform)}`
+  const commandPrefix = [
+    command,
+    '--session',
+    shellQuote(session, process.platform),
+    '--cdp',
+    shellQuote(cdpWebSocketUrl, process.platform)
+  ].join(' ')
+  console.log(
+    '[agent-browser-smoke] In a second shell in this worktree, paste the following to share this isolated session:'
+  )
+  console.log([...assignments, `${commandPrefix} snapshot -i`].join('\n'))
+  console.log(
+    `[agent-browser-smoke] Then use the same command prefix with console, errors, or network requests. ` +
+      `Session ${session} is isolated to this worktree and will be deleted when this launcher stops.`
+  )
+}
+
+export function loopbackDebuggerWebSocket(value, port) {
+  let url
+  try {
+    url = new URL(value)
+  } catch {
+    throw new Error('cdp-websocket-url-invalid')
+  }
+  if (
+    url.protocol !== 'ws:' ||
+    url.hostname !== LOOPBACK_HOST ||
+    url.port !== String(port) ||
+    !/^\/devtools\/browser\/[^/]+$/.test(url.pathname) ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error('cdp-websocket-url-not-loopback')
+  }
+  return url.href
 }
 
 async function waitForCdpEndpoint({ port, child, launchFailed, timeoutMs }) {
@@ -184,15 +278,20 @@ async function waitForCdpEndpoint({ port, child, launchFailed, timeoutMs }) {
     if (launchFailed() || childHasExited(child)) throw new Error('electron-exited-before-cdp-ready')
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), 1_000)
+    let response = null
     try {
-      const response = await fetch(endpoint, { signal: controller.signal, redirect: 'error' })
-      await response.body?.cancel()
-      if (response.ok) return
+      response = await fetch(endpoint, { signal: controller.signal, redirect: 'error' })
     } catch {
       // The app has not opened its loopback endpoint yet. Recheck the owned child before retrying.
     } finally {
       clearTimeout(timer)
     }
+    if (response?.ok) {
+      const discovery = await response.json().catch(() => null)
+      if (!discovery) throw new Error('cdp-discovery-response-invalid')
+      return loopbackDebuggerWebSocket(discovery.webSocketDebuggerUrl, port)
+    }
+    await response?.body?.cancel()
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 200))
   }
   throw new Error('cdp-endpoint-timeout')
@@ -225,8 +324,15 @@ function appendBounded(current, chunk) {
 function startupDiagnostic(output) {
   const text = output.toLowerCase()
   if (/eaddrinuse|address already in use|only one usage of each socket address/.test(text)) return 'port-in-use'
-  if (/cannot find module|err_module_not_found|module_not_found/.test(text)) return 'module-load-failure'
+  if (/cannot find module|err_module_not_found|module_not_found/.test(text)) return 'module-resolution-failure'
   if (/not a valid win32 application|bad cpu type|image not found/.test(text)) return 'runtime-load-failure'
+  if (/eacces|eperm|access is denied|permission denied/.test(text)) return 'startup-permission-failure'
+  if (/eexist|profile.*in use|user data directory.*already in use/.test(text)) return 'profile-initialization-failure'
+  if (/err_dlopen_failed|failed to load.*\.node|could not load.*dll|module could not be found/.test(text)) {
+    return 'native-module-load-failure'
+  }
+  if (/uncaught exception|unhandled exception/.test(text)) return 'uncaught-startup-exception'
+  if (/failed to load.*(?:electron|app)|cannot load.*(?:electron|app)/.test(text)) return 'app-entry-load-failure'
   if (/uncaught exception|fatal error|error:/.test(text)) return 'startup-error-output'
   return output ? 'startup-output-present' : 'no-startup-output'
 }
@@ -274,7 +380,8 @@ async function stopOwnedProcessTree({ child, ownedAtLaunch, report }) {
   }
 
   report.ownedProcessesCleaned = false
-  if (!report.failure) report.failure = remaining.length > 0 ? 'owned-process-cleanup-incomplete' : 'process-census-unavailable'
+  if (!report.failure)
+    report.failure = remaining.length > 0 ? 'owned-process-cleanup-incomplete' : 'process-census-unavailable'
 }
 
 async function main() {
@@ -299,7 +406,9 @@ async function main() {
     diagnosticCommandsSucceeded: { pageErrors: false, console: false, networkRequests: false },
     cleanShutdown: false,
     ownedProcessesCleaned: false,
+    agentBrowserProcessesCleaned: true,
     preexistingOwnedProcessCount: 0,
+    agentBrowserDiagnostic: null,
     startupDiagnostic: null,
     failure: null
   }
@@ -309,10 +418,22 @@ async function main() {
   let ownedBrowser = null
   let connected = false
   let leaveRunning = false
+  let cdpWebSocketUrl = null
+  let agentBrowserCloseFailure = null
   const ownedAtLaunch = new Map()
   let launchFailed = false
+  const runAgentBrowser = async (args, timeoutMs = COMMAND_TIMEOUT_MS, recordFailure = true) => {
+    const result = await runCli(cliPath, session, ['--cdp', cdpWebSocketUrl, ...args], env, timeoutMs)
+    if (result.cleanupComplete === false) report.agentBrowserProcessesCleaned = false
+    if (recordFailure && result.code !== 0) report.agentBrowserDiagnostic = failureClass(result)
+    return result
+  }
   try {
-    const existing = ownedProcesses(listOwnedProcessTable(), { mainPid: null, installRoot: ROOT, platform: process.platform })
+    const existing = ownedProcesses(listOwnedProcessTable(), {
+      mainPid: null,
+      installRoot: ROOT,
+      platform: process.platform
+    })
     report.preexistingOwnedProcessCount = existing.length
     if (existing.length > 0) throw new Error('worktree-app-already-running')
 
@@ -334,7 +455,7 @@ async function main() {
     if (!firstOwnershipSnapshot.some((entry) => entry.pid === appChild.pid)) {
       throw new Error('electron-process-not-observed')
     }
-    await waitForCdpEndpoint({
+    cdpWebSocketUrl = await waitForCdpEndpoint({
       port: options.port,
       child: appChild,
       launchFailed: () => launchFailed,
@@ -355,17 +476,14 @@ async function main() {
     report.ownedTargetVerified = true
 
     connected = true
-    const connect = await runCli(cliPath, session, ['connect', String(options.port)], env)
-    if (connect.code !== 0) throw new Error(`agent-browser-connect-${failureClass(connect)}`)
-
     let snapshot
     const deadline = Date.now() + START_TIMEOUT_MS
     do {
-      snapshot = await runCli(cliPath, session, ['snapshot', '-i'], env)
-      if (snapshot.code === 0 && hasComposerTextbox(snapshot.stdout)) break
+      snapshot = await runAgentBrowser(['snapshot', '-i'])
+      if (snapshot.code !== 0) throw new Error(`agent-browser-snapshot-${failureClass(snapshot)}`)
+      if (hasComposerTextbox(snapshot.stdout)) break
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 1_000))
     } while (Date.now() < deadline && appChild.exitCode === null && appChild.signalCode === null)
-    if (snapshot?.code !== 0) throw new Error(`agent-browser-snapshot-${failureClass(snapshot)}`)
     report.composerVisibleInSnapshot = hasComposerTextbox(snapshot.stdout)
     if (!report.composerVisibleInSnapshot) throw new Error('composer-not-found-in-dom-snapshot')
 
@@ -374,7 +492,7 @@ async function main() {
       ['console', ['console']],
       ['networkRequests', ['network', 'requests']]
     ]) {
-      const result = await runCli(cliPath, session, args, env)
+      const result = await runAgentBrowser(args)
       if (result.code !== 0) throw new Error(`agent-browser-${name}-${failureClass(result)}`)
       report.diagnosticCommandsSucceeded[name] = true
     }
@@ -382,8 +500,10 @@ async function main() {
     report.result = 'PASS'
     if (options.keepOpen) {
       leaveRunning = true
-      console.log(`[agent-browser-smoke] isolated Métis session ready at ${LOOPBACK_HOST}:${options.port}; press Ctrl+C here when finished.`)
-      printManualSessionInstructions({ cliPath, profilePaths: profile.paths, session })
+      console.log(
+        `[agent-browser-smoke] isolated Métis session ready at ${LOOPBACK_HOST}:${options.port}; press Ctrl+C here when finished.`
+      )
+      printManualSessionInstructions({ cliPath, profilePaths: profile.paths, session, cdpWebSocketUrl })
       await waitForInterrupt()
       leaveRunning = false
     }
@@ -398,6 +518,13 @@ async function main() {
         captureOwnedProcesses(ownedAtLaunch, appChild.pid)
       } catch {
         // stopOwnedProcessTree records an incomplete census if it cannot refresh the ownership snapshot.
+      }
+    }
+    if (connected && !leaveRunning) {
+      const close = await runAgentBrowser(['close'], 10_000, false)
+      if (close.code !== 0) {
+        report.agentBrowserProcessesCleaned = false
+        agentBrowserCloseFailure = failureClass(close)
       }
     }
     if (ownedBrowser && !leaveRunning) {
@@ -421,23 +548,24 @@ async function main() {
       await ownedBrowser.close().catch(() => {})
     }
 
-    if (connected && !leaveRunning) {
-      const close = await runCli(cliPath, session, ['close'], env, 10_000)
-      // When the app's own quit path has already closed its CDP endpoint, the CLI's close may report
-      // that its target is gone. That is expected cleanup, not a second smoke failure.
-      if (close.code !== 0 && report.result === 'PASS' && !report.cleanShutdown) {
-        report.result = 'FAIL'
-        report.failure = `agent-browser-close-${failureClass(close)}`
-      }
-    }
-
     if (appChild && !leaveRunning) {
       await stopOwnedProcessTree({ child: appChild, ownedAtLaunch, report })
     }
     if (!leaveRunning) rmSync(profile.root, { recursive: true, force: true })
-    if (report.result === 'PASS' && (!report.cleanShutdown || !report.ownedProcessesCleaned)) {
+    if (report.result === 'PASS' && agentBrowserCloseFailure) {
       report.result = 'FAIL'
-      report.failure = report.cleanShutdown ? 'owned-process-cleanup-incomplete' : 'app-clean-quit-not-observed'
+      report.failure = `agent-browser-close-${agentBrowserCloseFailure}`
+    }
+    if (
+      report.result === 'PASS' &&
+      (!report.cleanShutdown || !report.ownedProcessesCleaned || !report.agentBrowserProcessesCleaned)
+    ) {
+      report.result = 'FAIL'
+      report.failure = !report.cleanShutdown
+        ? 'app-clean-quit-not-observed'
+        : !report.agentBrowserProcessesCleaned
+          ? 'agent-browser-process-cleanup-incomplete'
+          : 'owned-process-cleanup-incomplete'
     }
     writeReport(options.report, report)
     console.log(`[agent-browser-smoke] ${JSON.stringify(report)}`)
