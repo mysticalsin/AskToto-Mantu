@@ -12,9 +12,9 @@ export const APPROVED_DEFERRED_CANDIDATE = Object.freeze({
 
 /**
  * Validate the complete jobs response from a qa-candidate run.
- * A skipped diagnostic is accepted only when its exact name and the words "not run" appear in the
- * release residuals. Every other job must succeed. The caller separately proves the workflow run
- * itself completed successfully on an allowed branch.
+ * A skipped diagnostic is accepted only when its exact name and the words "not run" appear on the
+ * same release-residual line. Every other job must succeed. The caller separately proves the workflow
+ * run itself completed successfully on an allowed branch.
  */
 export function candidateJobProblems(
   result,
@@ -71,7 +71,10 @@ export function candidateJobProblems(
       problems.push(`owner diagnostic skip is outside the one-time approved candidate: ${job.name}`)
       continue
     }
-    if (requireDisclosure && (!residuals.includes(job.name) || !/\bnot run\b/i.test(residuals))) {
+    const disclosed = residuals
+      .split(/\r?\n/)
+      .some((line) => line.includes(job.name) && /\bnot run\b/i.test(line))
+    if (requireDisclosure && !disclosed) {
       problems.push(`release residuals must name ${job.name} and say it was not run`)
     }
   }

@@ -87,6 +87,30 @@ test('candidate promotion rejects skipped owner diagnostics without explicit res
   )
 })
 
+test('candidate promotion rejects unrelated not-run text when skipped diagnostics are described as passed', () => {
+  const residuals = `${DEFERRED_OWNER_DIAGNOSTICS.join(' and ')} passed on the owner Mac. Notarization smoke not run.`
+  const problems = candidateJobProblems(candidateJobs(['skipped', 'skipped', 'success']), residuals, {
+    candidateRunId: APPROVED_DEFERRED_CANDIDATE.runId,
+    candidateCommit: APPROVED_DEFERRED_CANDIDATE.commit
+  })
+  for (const name of DEFERRED_OWNER_DIAGNOSTICS) {
+    assert.ok(problems.some((problem) => problem.includes(`must name ${name} and say it was not run`)))
+  }
+})
+
+test('candidate promotion rejects partial disclosure when both diagnostics were skipped', () => {
+  const residuals = `Not run: ${DEFERRED_OWNER_DIAGNOSTICS[0]}`
+  const problems = candidateJobProblems(candidateJobs(['skipped', 'skipped', 'success']), residuals, {
+    candidateRunId: APPROVED_DEFERRED_CANDIDATE.runId,
+    candidateCommit: APPROVED_DEFERRED_CANDIDATE.commit
+  })
+  assert.ok(
+    problems.some((problem) =>
+      problem.includes(`must name ${DEFERRED_OWNER_DIAGNOSTICS[1]} and say it was not run`)
+    )
+  )
+})
+
 test('candidate dry runs do not require a release residual disclosure', () => {
   assert.deepEqual(
     candidateJobProblems(candidateJobs(['skipped', 'skipped', 'success']), '', {
