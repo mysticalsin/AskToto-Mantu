@@ -1,11 +1,26 @@
 import { describe, expect, it } from 'vitest'
 import {
+  agentBrowserBinaryName,
   failureClass,
   electronLaunchArgs,
   loopbackDebuggerWebSocket,
   safeCommandEvidence,
   safeStartupEvidence
 } from './agent-browser-smoke.mjs'
+
+describe('agentBrowserBinaryName', () => {
+  it.each([
+    ['darwin', 'arm64', 'agent-browser-darwin-arm64'],
+    ['darwin', 'x64', 'agent-browser-darwin-x64'],
+    ['win32', 'x64', 'agent-browser-win32-x64.exe']
+  ])('selects the pinned native binary for %s-%s', (platform, arch, expected) => {
+    expect(agentBrowserBinaryName(platform, arch)).toBe(expected)
+  })
+
+  it('rejects hosts without a checksum-pinned native binary', () => {
+    expect(() => agentBrowserBinaryName('win32', 'arm64')).toThrow('agent-browser-platform-not-pinned')
+  })
+})
 
 describe('loopbackDebuggerWebSocket', () => {
   it('accepts the browser WebSocket advertised by the isolated Electron CDP endpoint', () => {

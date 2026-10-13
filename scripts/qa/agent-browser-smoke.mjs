@@ -9,7 +9,7 @@
  */
 
 import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -65,7 +65,25 @@ function packageCli(packageDir) {
   const cliPath = resolve(packageDir, bin)
   const rel = relative(packageDir, cliPath)
   if (!rel || rel === '..' || rel.startsWith(`..${sep}`)) throw new Error('agent-browser-bin-outside-package')
-  return cliPath
+  const binaryPath = resolve(dirname(cliPath), agentBrowserBinaryName(process.platform, process.arch))
+  const binaryRel = relative(packageDir, binaryPath)
+  if (!binaryRel || binaryRel === '..' || binaryRel.startsWith(`..${sep}`)) {
+    throw new Error('agent-browser-binary-outside-package')
+  }
+  const binary = lstatSync(requiredFile(binaryPath, 'agent-browser-native-binary'))
+  if (!binary.isFile() || binary.isSymbolicLink()) throw new Error('agent-browser-binary-not-regular-file')
+  return binaryPath
+}
+
+export function agentBrowserBinaryName(platform, arch) {
+  const binaries = {
+    'darwin-arm64': 'agent-browser-darwin-arm64',
+    'darwin-x64': 'agent-browser-darwin-x64',
+    'win32-x64': 'agent-browser-win32-x64.exe'
+  }
+  const name = binaries[`${platform}-${arch}`]
+  if (!name) throw new Error('agent-browser-platform-not-pinned')
+  return name
 }
 
 function electronExecutable() {
@@ -97,7 +115,7 @@ function makeIsolatedProfile() {
 
 function runCli(cliPath, session, args, env, timeoutMs = COMMAND_TIMEOUT_MS) {
   return new Promise((resolveResult) => {
-    const child = spawn(process.execPath, [cliPath, '--session', session, ...args], {
+    const child = spawn(cliPath, ['--session', session, ...args], {
       cwd: ROOT,
       env,
       windowsHide: true,
