@@ -119,4 +119,13 @@ describe('safeStartupEvidence', () => {
       ).diagnosticTerms
     ).toEqual(['error', 'cannot', 'find', 'module'])
   })
+
+  it('preserves diagnostic word order while stripping startup paths', () => {
+    expect(
+      safeStartupEvidence(
+        { stdout: '', stderr: "Error: Failed to load app at path 'C:\\private\\secret' from module 'node:electron'" },
+        { exitCode: null, signalCode: null }
+      ).diagnosticTerms
+    ).toEqual(['error', 'failed', 'to', 'load', 'app', 'at', 'path', 'from', 'module', 'node', 'electron'])
+  })
 })

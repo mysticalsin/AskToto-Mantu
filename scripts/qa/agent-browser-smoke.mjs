@@ -198,15 +198,23 @@ function safeDiagnosticHints(output) {
 }
 
 function safeStartupTerms(output) {
-  const terms = new Set()
   const allowlist = new Set([
+    'a',
+    'after',
+    'and',
     'app',
     'application',
     'asar',
+    'at',
     'binary',
+    'be',
+    'because',
     'cannot',
     'could',
     'crash',
+    'did',
+    'does',
+    'during',
     'electron',
     'error',
     'exception',
@@ -215,7 +223,11 @@ function safeStartupTerms(output) {
     'file',
     'find',
     'found',
+    'from',
+    'has',
+    'in',
     'import',
+    'is',
     'load',
     'loaded',
     'loading',
@@ -225,6 +237,7 @@ function safeStartupTerms(output) {
     'native',
     'node',
     'not',
+    'of',
     'package',
     'path',
     'preload',
@@ -232,15 +245,22 @@ function safeStartupTerms(output) {
     'renderer',
     'require',
     'script',
-    'startup',
+    'the',
+    'this',
+    'to',
     'unable',
-    'undefined'
+    'startup',
+    'undefined',
+    'was',
+    'while',
+    'with'
   ])
+  const terms = []
   for (const match of (typeof output === 'string' ? output.toLowerCase() : '').matchAll(/[a-z]+/g)) {
-    if (allowlist.has(match[0])) terms.add(match[0])
-    if (terms.size === 12) break
+    if (allowlist.has(match[0])) terms.push(match[0])
+    if (terms.length === 32) break
   }
-  return [...terms]
+  return terms
 }
 
 export function safeCommandEvidence(result, args) {
