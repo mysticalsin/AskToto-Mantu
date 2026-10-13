@@ -281,6 +281,42 @@ function safeStartupModuleKind(output, knownModules) {
   return 'undeclared-package'
 }
 
+function safeStartupErrorKind(output) {
+  const text = typeof output === 'string' ? output.toLowerCase() : ''
+  if (/cacheddatarejected|invalid or incompatible cached data/.test(text)) return 'incompatible-bytecode'
+  if (/err_dlopen_failed|failed to load.*\.node|could not load.*dll|module could not be found/.test(text)) {
+    return 'native-runtime-load-failure'
+  }
+  if (/cannot find module|cannot find package|err_module_not_found|module_not_found/.test(text)) {
+    return 'module-resolution-failure'
+  }
+  if (/app threw an error during load/.test(text)) return 'main-process-exception'
+  if (/\bsyntaxerror\b/.test(text)) return 'javascript-syntax-error'
+  if (/\breferenceerror\b/.test(text)) return 'javascript-reference-error'
+  if (/\btypeerror\b/.test(text)) return 'javascript-type-error'
+  return 'other-startup-error'
+}
+
+function safeStartupSourceFrames(output, knownModules, projectRoot = ROOT) {
+  const root = projectRoot.replace(/\\/g, '/').replace(/\/+$/, '')
+  const rootPrefix = `${root.toLowerCase()}/`
+  const known = new Set(knownModules)
+  const frames = []
+  for (const line of (typeof output === 'string' ? output : '').split(/\r?\n/)) {
+    const file = line.match(/\((.+):\d+:\d+\)\s*$/)?.[1]
+    if (!file) continue
+    const normalized = file.replace(/\\/g, '/')
+    if (!normalized.toLowerCase().startsWith(rootPrefix)) continue
+    const relativePath = normalized.slice(rootPrefix.length)
+    if (/^(?:out|src)\/main\/.+\.(?:c?js|mjs|jsc|ts)$/i.test(relativePath)) frames.push(relativePath)
+    const packageName = relativePath.match(/^node_modules\/(?:(@[^/]+\/[^/]+)|([^/]+))\//)
+    const moduleName = packageName?.[1] ?? packageName?.[2]
+    if (moduleName && known.has(moduleName)) frames.push(moduleName)
+    if (frames.length >= 5) break
+  }
+  return [...new Set(frames)]
+}
+
 function safeMissingModuleSpecifier(output) {
   const prelude = []
   for (const line of (typeof output === 'string' ? output : '').split(/\r?\n/)) {
@@ -304,7 +340,7 @@ export function safeCommandEvidence(result, args) {
   }
 }
 
-export function safeStartupEvidence(output, child, knownModules = []) {
+export function safeStartupEvidence(output, child, knownModules = [], projectRoot = ROOT) {
   return {
     exitCode: Number.isInteger(child?.exitCode) ? child.exitCode : null,
     signal: typeof child?.signalCode === 'string' ? child.signalCode : null,
@@ -314,7 +350,9 @@ export function safeStartupEvidence(output, child, knownModules = []) {
     diagnosticHints: safeDiagnosticHints(output.stderr ?? ''),
     diagnosticTerms: safeStartupTerms(output.stderr ?? ''),
     diagnosticModules: safeStartupModuleNames(output.stderr ?? '', knownModules),
-    diagnosticModuleKind: safeStartupModuleKind(output.stderr ?? '', knownModules)
+    diagnosticModuleKind: safeStartupModuleKind(output.stderr ?? '', knownModules),
+    diagnosticErrorKind: safeStartupErrorKind(output.stderr ?? ''),
+    diagnosticSourceFrames: safeStartupSourceFrames(output.stderr ?? '', knownModules, projectRoot)
   }
 }
 

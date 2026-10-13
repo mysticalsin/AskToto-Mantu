@@ -91,7 +91,9 @@ describe('safeStartupEvidence', () => {
       diagnosticHints: [],
       diagnosticTerms: [],
       diagnosticModules: [],
-      diagnosticModuleKind: 'other-startup-error'
+      diagnosticModuleKind: 'other-startup-error',
+      diagnosticErrorKind: 'other-startup-error',
+      diagnosticSourceFrames: []
     })
   })
 
@@ -152,5 +154,25 @@ describe('safeStartupEvidence', () => {
     )
     expect(report.diagnosticModuleKind).toBe('relative-app-module')
     expect(report.diagnosticModules).toEqual([])
+  })
+
+  it('reports only worktree source and declared package frames from main-process failures', () => {
+    const report = safeStartupEvidence(
+      {
+        stdout: '',
+        stderr: [
+          'App threw an error during load',
+          'TypeError: synthetic startup failure',
+          '    at Object.start (/safe/worktree/src/main/index.ts:1:1)',
+          '    at Object.fixture (/safe/worktree/node_modules/@private/fixture/index.js:2:3)',
+          '    at Object.private (/external/user/private.js:3:4)'
+        ].join('\n')
+      },
+      { exitCode: null, signalCode: null },
+      ['@private/fixture'],
+      '/safe/worktree'
+    )
+    expect(report.diagnosticErrorKind).toBe('main-process-exception')
+    expect(report.diagnosticSourceFrames).toEqual(['src/main/index.ts', '@private/fixture'])
   })
 })
