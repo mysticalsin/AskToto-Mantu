@@ -127,9 +127,7 @@ test('candidate promotion rejects partial disclosure when both diagnostics were 
     candidateCommit: APPROVED_DEFERRED_CANDIDATE.commit
   })
   assert.ok(
-    problems.some((problem) =>
-      problem.includes(`must name ${DEFERRED_OWNER_DIAGNOSTICS[1]} and say it was not run`)
-    )
+    problems.some((problem) => problem.includes(`must name ${DEFERRED_OWNER_DIAGNOSTICS[1]} and say it was not run`))
   )
 })
 
