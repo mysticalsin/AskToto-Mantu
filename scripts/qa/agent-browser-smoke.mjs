@@ -201,6 +201,7 @@ function safeStartupTerms(output) {
   const allowlist = new Set([
     'a',
     'after',
+    'an',
     'and',
     'app',
     'application',
@@ -215,6 +216,7 @@ function safeStartupTerms(output) {
     'did',
     'does',
     'during',
+    'exists',
     'electron',
     'error',
     'exception',
@@ -224,6 +226,7 @@ function safeStartupTerms(output) {
     'find',
     'found',
     'from',
+    'function',
     'has',
     'in',
     'import',
@@ -236,18 +239,27 @@ function safeStartupTerms(output) {
     'module',
     'native',
     'node',
+    'null',
     'not',
     'of',
     'package',
     'path',
     'preload',
+    'properties',
+    'property',
     'process',
+    'read',
+    'reference',
     'renderer',
     'require',
     'script',
     'the',
     'this',
     'to',
+    'threw',
+    'specified',
+    'syntax',
+    'type',
     'unable',
     'startup',
     'undefined',
@@ -255,8 +267,13 @@ function safeStartupTerms(output) {
     'while',
     'with'
   ])
+  const prelude = []
+  for (const line of (typeof output === 'string' ? output : '').split(/\r?\n/)) {
+    if (/^\s*at\s/.test(line) || prelude.length >= 6) break
+    prelude.push(line)
+  }
   const terms = []
-  for (const match of (typeof output === 'string' ? output.toLowerCase() : '').matchAll(/[a-z]+/g)) {
+  for (const match of prelude.join('\n').toLowerCase().matchAll(/[a-z]+/g)) {
     if (allowlist.has(match[0])) terms.push(match[0])
     if (terms.length === 32) break
   }

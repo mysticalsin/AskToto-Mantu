@@ -133,6 +133,37 @@ describe('safeStartupEvidence', () => {
     ).toEqual(['error', 'failed', 'to', 'load', 'app', 'at', 'path', 'from', 'module', 'node', 'electron'])
   })
 
+  it('limits startup terms to the pre-stack error message', () => {
+    expect(
+      safeStartupEvidence(
+        {
+          stdout: '',
+          stderr: [
+            'App threw an error during load',
+            'Error: The specified path could not be found',
+            '    at SecretModule.load'
+          ].join('\n')
+        },
+        { exitCode: null, signalCode: null }
+      ).diagnosticTerms
+    ).toEqual([
+      'app',
+      'threw',
+      'an',
+      'error',
+      'during',
+      'load',
+      'error',
+      'the',
+      'specified',
+      'path',
+      'could',
+      'not',
+      'be',
+      'found'
+    ])
+  })
+
   it('reports only known dependency names from the pre-stack error text', () => {
     expect(
       safeStartupEvidence(
