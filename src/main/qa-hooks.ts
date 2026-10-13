@@ -19,8 +19,9 @@ export { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-identity'
 
 // M2-0482: the QA RAM-floor override is decided once, at import, before index.ts consults any floor. It reads the
 // launch env, not app.getPath('userData'), so it does not depend on index.ts's later setPath. Electron's default
-// userData is appData/<app name>; the gate stays off unless the packaged app runs on a different, isolated profile.
-armQaHostFloorOverride(process.env, app.isPackaged, join(app.getPath('appData'), app.getName()))
+// userData is appData/<app name>; resolve that path only when the packaged-only override can use it.
+const defaultUserDataPath = app.isPackaged ? join(app.getPath('appData'), app.getName()) : ''
+armQaHostFloorOverride(process.env, app.isPackaged, defaultUserDataPath)
 
 const hkMScenario = hkMScenarioFromEnv(process.env, app.isPackaged)
 if (hkMScenario) {
