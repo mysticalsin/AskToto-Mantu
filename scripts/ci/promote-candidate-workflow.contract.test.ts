@@ -52,15 +52,21 @@ describe('Promote candidate workflow: main and release/1.9.x candidates (M2-0500
     expect(workflow.match(/github\.ref\b/g)).toHaveLength(1)
   })
 
-  it('accepts a completed successful workflow_dispatch qa-candidate run whose head_branch is main or release/1.9.x, and no other', () => {
-    const jq = /jq -e '(\.path == [^\n]*)' <<<"\$run"/.exec(step('Require a fully successful'))?.[1] ?? ''
+  it('checks the successful workflow_dispatch candidate and accounts for every job', () => {
+    const check = step('Require a successful qa-candidate run and account for every job')
+    const jq = /jq -e '(\.path == [^\n]*)' <<<"\$run"/.exec(check)?.[1] ?? ''
     expect(jq).toContain('.path == ".github/workflows/qa-candidate.yml"')
     expect(jq).toContain('.event == "workflow_dispatch"')
     expect(jq).toContain('(.head_branch == "main" or .head_branch == "release/1.9.x")')
     expect(jq).toContain('.status == "completed" and .conclusion == "success"')
     expect(jq.match(/head_branch/g)).toHaveLength(2)
-    expect(step('Require a fully successful')).toContain('all(.jobs[]; .conclusion == "success")')
-    expect(step('Require a fully successful')).toContain('.total_count == (.jobs | length)')
+    expect(check).toContain('.total_count == (.jobs | length)')
+    expect(check).toContain('node scripts/qa/candidate-jobs.mjs \\')
+    expect(check).toContain('"$RUNNER_TEMP/candidate-jobs.json" "$RUNNER_TEMP/residuals.md" \\')
+    expect(check).toContain('"$RUN_ID" "$commit" "${disclosure_flag[@]}"')
+    expect(check).toContain('RESIDUALS: ${{ inputs.residuals }}')
+    expect(check).toContain('if [ "$PUBLISH" = true ]; then disclosure_flag+=(--require-disclosure); fi')
+    expect(check).not.toContain('all(.jobs[]; .conclusion == "success")')
   })
 
   it('checks the branch and version with release-line.mjs before it downloads any artifact', () => {
