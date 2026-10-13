@@ -164,6 +164,35 @@ describe('safeStartupEvidence', () => {
     ])
   })
 
+  it('retains safe startup operation terms without exposing path values', () => {
+    expect(
+      safeStartupEvidence(
+        {
+          stdout: '',
+          stderr: [
+            'App threw an error during load',
+            'Error: Failed to set path to C:\\private\\secret',
+            '    at SecretModule.load'
+          ].join('\n')
+        },
+        { exitCode: null, signalCode: null }
+      ).diagnosticTerms
+    ).toEqual([
+      'app',
+      'threw',
+      'an',
+      'error',
+      'during',
+      'load',
+      'error',
+      'failed',
+      'to',
+      'set',
+      'path',
+      'to'
+    ])
+  })
+
   it('reports only known dependency names from the pre-stack error text', () => {
     expect(
       safeStartupEvidence(

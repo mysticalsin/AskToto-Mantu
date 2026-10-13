@@ -200,6 +200,7 @@ function safeDiagnosticHints(output) {
 function safeStartupTerms(output) {
   const allowlist = new Set([
     'a',
+    'access',
     'after',
     'an',
     'and',
@@ -212,6 +213,7 @@ function safeStartupTerms(output) {
     'because',
     'cannot',
     'could',
+    'create',
     'crash',
     'did',
     'does',
@@ -250,9 +252,11 @@ function safeStartupTerms(output) {
     'process',
     'read',
     'reference',
+    'resolve',
     'renderer',
     'require',
     'script',
+    'set',
     'the',
     'this',
     'to',
@@ -265,7 +269,8 @@ function safeStartupTerms(output) {
     'undefined',
     'was',
     'while',
-    'with'
+    'with',
+    'write'
   ])
   const prelude = []
   for (const line of (typeof output === 'string' ? output : '').split(/\r?\n/)) {
@@ -273,7 +278,10 @@ function safeStartupTerms(output) {
     prelude.push(line)
   }
   const terms = []
-  for (const match of prelude.join('\n').toLowerCase().matchAll(/[a-z]+/g)) {
+  for (const match of prelude
+    .join('\n')
+    .toLowerCase()
+    .matchAll(/[a-z]+/g)) {
     if (allowlist.has(match[0])) terms.push(match[0])
     if (terms.length === 32) break
   }
