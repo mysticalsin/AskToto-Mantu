@@ -11,7 +11,7 @@
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve, sep, relative } from 'node:path'
+import { dirname, isAbsolute, join, resolve, sep, relative } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { attachOwnedCdp, killOwned, strictLaunchEnvironment, waitForChildExit } from './lib/app-driver.mjs'
 import { listProcesses, ownedProcesses, survivors } from './owned-processes.mjs'
@@ -24,6 +24,7 @@ const COMMAND_TIMEOUT_MS = 25_000
 const CHILD_STOP_TIMEOUT_MS = 10_000
 const PROCESS_CLEANUP_TIMEOUT_MS = 10_000
 const LOOPBACK_HOST = '127.0.0.1'
+const STARTUP_OUTPUT_LIMIT = 8_192
 
 function argValue(args, name) {
   const index = args.indexOf(name)
@@ -202,10 +203,32 @@ function mergeOwnedProcesses(target, entries) {
 }
 
 function captureOwnedProcesses(target, childPid) {
-  const table = listProcesses(process.platform)
+  const table = listOwnedProcessTable()
   const current = ownedProcesses(table, { mainPid: childPid, installRoot: ROOT, platform: process.platform })
   mergeOwnedProcesses(target, current)
   return current
+}
+
+function listOwnedProcessTable() {
+  // If macOS `ps comm` returns only a basename, resolving it against this cwd could falsely claim
+  // that the current worktree owns an unrelated process. Keep the row for PID-tree ownership, but only
+  // absolute executable paths can prove root residency.
+  return listProcesses(process.platform).map((entry) =>
+    entry.exe !== null && !isAbsolute(entry.exe) ? { ...entry, exe: null } : entry
+  )
+}
+
+function appendBounded(current, chunk) {
+  return (current + chunk.toString('utf8')).slice(-STARTUP_OUTPUT_LIMIT)
+}
+
+function startupDiagnostic(output) {
+  const text = output.toLowerCase()
+  if (/eaddrinuse|address already in use|only one usage of each socket address/.test(text)) return 'port-in-use'
+  if (/cannot find module|err_module_not_found|module_not_found/.test(text)) return 'module-load-failure'
+  if (/not a valid win32 application|bad cpu type|image not found/.test(text)) return 'runtime-load-failure'
+  if (/uncaught exception|fatal error|error:/.test(text)) return 'startup-error-output'
+  return output ? 'startup-output-present' : 'no-startup-output'
 }
 
 async function stopOwnedProcessTree({ child, ownedAtLaunch, report }) {
@@ -235,7 +258,7 @@ async function stopOwnedProcessTree({ child, ownedAtLaunch, report }) {
   let remaining = []
   while (Date.now() < deadline) {
     try {
-      const table = listProcesses(process.platform)
+      const table = listOwnedProcessTable()
       remaining = survivors([...owned.values()], table, { installRoot: ROOT, platform: process.platform })
       if (remaining.length === 0) {
         report.ownedProcessesCleaned = censusAvailable
@@ -276,24 +299,34 @@ async function main() {
     diagnosticCommandsSucceeded: { pageErrors: false, console: false, networkRequests: false },
     cleanShutdown: false,
     ownedProcessesCleaned: false,
+    preexistingOwnedProcessCount: 0,
+    startupDiagnostic: null,
     failure: null
   }
 
   let appChild = null
+  let appOutput = { stdout: '', stderr: '' }
   let ownedBrowser = null
   let connected = false
   let leaveRunning = false
   const ownedAtLaunch = new Map()
   let launchFailed = false
   try {
-    const existing = ownedProcesses(listProcesses(process.platform), { mainPid: null, installRoot: ROOT, platform: process.platform })
+    const existing = ownedProcesses(listOwnedProcessTable(), { mainPid: null, installRoot: ROOT, platform: process.platform })
+    report.preexistingOwnedProcessCount = existing.length
     if (existing.length > 0) throw new Error('worktree-app-already-running')
 
     appChild = spawn(
       executable,
       ['.', `--remote-debugging-address=${LOOPBACK_HOST}`, `--remote-debugging-port=${options.port}`],
-      { cwd: ROOT, env, stdio: 'ignore', windowsHide: true, detached: process.platform !== 'win32' }
+      { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' }
     )
+    appChild.stdout?.on('data', (chunk) => {
+      appOutput.stdout = appendBounded(appOutput.stdout, chunk)
+    })
+    appChild.stderr?.on('data', (chunk) => {
+      appOutput.stderr = appendBounded(appOutput.stderr, chunk)
+    })
     appChild.once('error', () => {
       launchFailed = true
     })
@@ -356,6 +389,9 @@ async function main() {
     }
   } catch (error) {
     report.failure = error instanceof Error ? error.message.replace(/[^a-z0-9-]/gi, '').slice(0, 80) : 'unknown-failure'
+    if (report.failure === 'cdp-endpoint-timeout' || report.failure === 'electron-exited-before-cdp-ready') {
+      report.startupDiagnostic = startupDiagnostic(`${appOutput.stdout}\n${appOutput.stderr}`)
+    }
   } finally {
     if (appChild?.pid && !leaveRunning) {
       try {
