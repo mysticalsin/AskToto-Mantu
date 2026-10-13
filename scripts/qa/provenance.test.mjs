@@ -58,7 +58,7 @@ test('candidate promotion accepts all-success jobs without a deferral note', () 
 })
 
 test('candidate promotion accepts only the two named skipped owner diagnostics when disclosed', () => {
-  const residuals = `Not run: ${DEFERRED_OWNER_DIAGNOSTICS.map((name) => `\`${name}\``).join(' and ')}`
+  const residuals = DEFERRED_OWNER_DIAGNOSTICS.map((name) => `- **Not run:** \`${name}\``).join('\n')
   assert.deepEqual(
     candidateJobProblems(candidateJobs(['skipped', 'skipped', 'success']), residuals, {
       candidateRunId: APPROVED_DEFERRED_CANDIDATE.runId,
@@ -98,8 +98,19 @@ test('candidate promotion rejects unrelated not-run text when skipped diagnostic
   }
 })
 
+test('candidate promotion requires the not-run label to introduce the named diagnostic', () => {
+  const residuals = `Not run: notarization smoke. ${DEFERRED_OWNER_DIAGNOSTICS.join(' and ')} passed on the owner Mac.`
+  const problems = candidateJobProblems(candidateJobs(['skipped', 'skipped', 'success']), residuals, {
+    candidateRunId: APPROVED_DEFERRED_CANDIDATE.runId,
+    candidateCommit: APPROVED_DEFERRED_CANDIDATE.commit
+  })
+  for (const name of DEFERRED_OWNER_DIAGNOSTICS) {
+    assert.ok(problems.some((problem) => problem.includes(`must name ${name} and say it was not run`)))
+  }
+})
+
 test('candidate promotion rejects partial disclosure when both diagnostics were skipped', () => {
-  const residuals = `Not run: ${DEFERRED_OWNER_DIAGNOSTICS[0]}`
+  const residuals = `Not run: \`${DEFERRED_OWNER_DIAGNOSTICS[0]}\``
   const problems = candidateJobProblems(candidateJobs(['skipped', 'skipped', 'success']), residuals, {
     candidateRunId: APPROVED_DEFERRED_CANDIDATE.runId,
     candidateCommit: APPROVED_DEFERRED_CANDIDATE.commit
