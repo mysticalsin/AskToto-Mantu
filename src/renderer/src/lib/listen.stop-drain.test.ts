@@ -545,8 +545,8 @@ describe('live audio transport identity', () => {
     expect(streams.map(({ kind }) => kind)).toEqual(['system'])
 
     render('parakeet')
-    host.rerunEffect(1)
-    await vi.advanceTimersByTimeAsync(3_000)
+    mediaDeviceListeners.devicechange?.()
+    await vi.advanceTimersByTimeAsync(800)
     await settle()
     expect(streams.map(({ kind }) => kind)).toEqual(['system', 'system'])
     expect(moduleLoads).toBe(1)
@@ -672,6 +672,7 @@ describe('live audio transport identity', () => {
     expect(track.onended).toBeTypeOf('function')
 
     api.stop()
+    await vi.advanceTimersByTimeAsync(sealMode.delayMs)
     await settle()
 
     expect(track.stop).toHaveBeenCalledOnce()
@@ -1558,7 +1559,7 @@ describe('broker cloud speech Listen lifecycle', () => {
     const api = renderBroker()
     await api.start('mic', 'fast', 'cloud', 'English', 123, brokerConsent)
     await settle()
-    expect(api.capturing).toBe(true)
+    expect(renderBroker().capturing).toBe(true)
     expect(window.toto.cloudSttStart).not.toHaveBeenCalled()
 
     api.pause()
@@ -1663,7 +1664,7 @@ describe('broker cloud speech Listen lifecycle', () => {
     expect(window.toto.cloudSpeechStart).toHaveBeenCalledOnce()
 
     releaseFinish()
-    await settle()
+    await vi.waitFor(() => expect(window.toto.cloudSpeechStart).toHaveBeenCalledTimes(2))
     api = renderBroker()
     expect(window.toto.cloudSpeechStart).toHaveBeenCalledTimes(2)
     expect(api.capturing).toBe(true)
@@ -1723,7 +1724,7 @@ describe('broker cloud speech Listen lifecycle', () => {
       maxSampleOffsetExclusive: CLOUD_SPEECH_CAPTURE_CEILING_MAX_SAMPLES
     }
     for (const listener of cloudSpeechListeners) listener(ceiling)
-    await settle()
+    await vi.waitFor(() => expect(window.toto.cloudSpeechFinish).toHaveBeenCalledOnce())
     expect(window.toto.cloudSpeechFinish).toHaveBeenCalledOnce()
     expect(renderBroker()).toMatchObject({ listening: true, capturing: true, ready: true })
     expect(streams[0]?.track.stop).not.toHaveBeenCalled()
@@ -1791,7 +1792,7 @@ describe('broker cloud speech Listen lifecycle', () => {
       maxSampleOffsetExclusive: CLOUD_SPEECH_CAPTURE_CEILING_MAX_SAMPLES
     }
     for (const listener of cloudSpeechListeners) listener(ceiling)
-    await settle()
+    await vi.waitFor(() => expect(renderBroker()).toMatchObject({ listening: false, capturing: false, ready: false }))
 
     api = renderBroker()
     expect(api).toMatchObject({ listening: false, capturing: false, ready: false })
