@@ -824,20 +824,13 @@ describe('speech relay on pinned hosted workerd', () => {
             reject(new Error('Route B emitted an invalid protocol message'))
             return
           }
-          if (events.length < 8) {
+          if (value.type === 'transcript' && events.length < 8) {
             events.push({
               type: value.type,
               sequence: value.sequence,
               segmentIndex: value.segmentIndex,
               revision: value.revision,
-              final: value.final,
-              reason: value.reason,
-              tail: value.tail,
-              closeConfirmed: value.closeConfirmed,
-              lastSequence: value.lastSequence,
-              captureGeneration: value.captureGeneration,
-              track: value.track,
-              streamEpoch: value.streamEpoch
+              final: value.final
             })
           }
           if (value.type === 'terminal') resolve(value)
@@ -875,9 +868,27 @@ describe('speech relay on pinned hosted workerd', () => {
         events,
         providerState
       )
-      expect(terminalValue, `Route B bounded lifecycle diagnostic: ${JSON.stringify(diagnostic)}`).toMatchObject({
-        ...PROTOCOL_FIXTURE.events.terminal,
-        sessionId: created.sessionId
+      const terminalSummary = {
+        type: terminalValue.type,
+        reason: terminalValue.reason,
+        tail: terminalValue.tail,
+        closeConfirmed: terminalValue.closeConfirmed,
+        lastSequence: terminalValue.lastSequence,
+        captureGeneration: terminalValue.captureGeneration,
+        track: terminalValue.track,
+        streamEpoch: terminalValue.streamEpoch,
+        sessionIdMatches: terminalValue.sessionId === created.sessionId
+      }
+      expect(terminalSummary, `Route B bounded lifecycle diagnostic: ${JSON.stringify(diagnostic)}`).toEqual({
+        type: 'terminal',
+        reason: 'normal',
+        tail: 'complete',
+        closeConfirmed: true,
+        lastSequence: 2,
+        captureGeneration,
+        track: 'microphone',
+        streamEpoch: grant.streamEpoch,
+        sessionIdMatches: true
       })
       const diagnosticMessage = `Route B bounded lifecycle diagnostic: ${JSON.stringify(diagnostic)}`
       expect(events, diagnosticMessage).toEqual(
