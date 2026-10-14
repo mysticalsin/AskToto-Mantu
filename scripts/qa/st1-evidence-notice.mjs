@@ -2,7 +2,9 @@
 // Publish a bounded, privacy-safe summary of a strict hosted ST-1 report as a GitHub notice.
 // This output is diagnostic only; the workflow's existing jq predicate remains the gate.
 import { createHash } from 'node:crypto'
-import { readFileSync, statSync } from 'node:fs'
+import { closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, readSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const MAX_REPORT_BYTES = 4 * 1024 * 1024
 const MAX_PROVENANCE_BYTES = 4 * 1024 * 1024
@@ -48,20 +50,68 @@ function finiteNumber(value) {
 }
 
 function boundedJson(path, limit) {
-  let size
+  let descriptor
   try {
-    size = statSync(path).size
-  } catch {
-    return { reason: 'report_missing' }
-  }
-  if (!Number.isSafeInteger(size) || size < 0 || size > limit) return { reason: 'report_too_large' }
-  try {
-    const bytes = readFileSync(path)
-    if (bytes.byteLength > limit) return { reason: 'report_too_large' }
+    let beforePath
+    try {
+      beforePath = lstatSync(path, { bigint: true })
+    } catch (error) {
+      return { reason: error?.code === 'ENOENT' ? 'report_missing' : 'report_unreadable' }
+    }
+    if (!beforePath.isFile()) return { reason: 'report_unreadable' }
+    if (beforePath.size > BigInt(limit)) return { reason: 'report_too_large' }
+
+    const flags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0)
+    descriptor = openSync(path, flags)
+    const beforeFile = fstatSync(descriptor, { bigint: true })
+    if (!beforeFile.isFile() || !sameFileSnapshot(beforePath, beforeFile)) {
+      return { reason: 'report_unreadable' }
+    }
+
+    const buffer = Buffer.alloc(limit + 1)
+    let bytesRead = 0
+    while (bytesRead < buffer.length) {
+      const count = readSync(descriptor, buffer, bytesRead, buffer.length - bytesRead, bytesRead)
+      if (count === 0) break
+      bytesRead += count
+      if (bytesRead > limit) return { reason: 'report_too_large' }
+    }
+
+    const afterFile = fstatSync(descriptor, { bigint: true })
+    const afterPath = lstatSync(path, { bigint: true })
+    if (
+      !afterFile.isFile() ||
+      !afterPath.isFile() ||
+      !sameFileSnapshot(beforeFile, afterFile) ||
+      !sameFileSnapshot(afterFile, afterPath) ||
+      BigInt(bytesRead) !== afterFile.size
+    ) {
+      return { reason: 'report_unreadable' }
+    }
+
+    const bytes = buffer.subarray(0, bytesRead)
     return { bytes, sha256: createHash('sha256').update(bytes).digest('hex') }
   } catch {
     return { reason: 'report_unreadable' }
+  } finally {
+    if (descriptor !== undefined) {
+      try {
+        closeSync(descriptor)
+      } catch {
+        // A close failure is not safe to expose; the report is still never trusted by the gate.
+      }
+    }
   }
+}
+
+function sameFileSnapshot(left, right) {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  )
 }
 
 function parseJson(bytes) {
@@ -97,7 +147,8 @@ function contextFrom(env, provenance, row) {
   )
     return undefined
 
-  const qaBuilds = provenance.builds?.filter((build) => build?.variant === 'mac-qa-identity') ?? []
+  if (!Array.isArray(provenance?.builds)) return undefined
+  const qaBuilds = provenance.builds.filter((build) => build?.variant === 'mac-qa-identity')
   if (qaBuilds.length !== 1 || !Array.isArray(qaBuilds[0].assets) || qaBuilds[0].assets.length !== 1) return undefined
   const asset = qaBuilds[0].assets[0]
   if (
@@ -222,7 +273,7 @@ export function createNotice({ argv, env = process.env }) {
   return summary
 }
 
-if (process.argv[1]?.endsWith('/st1-evidence-notice.mjs')) {
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const notice = createNotice({ argv: process.argv.slice(2) })
   process.stdout.write(`${annotationMessage(notice)}\n`)
 }

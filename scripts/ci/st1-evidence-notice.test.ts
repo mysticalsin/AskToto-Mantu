@@ -100,7 +100,7 @@ describe('strict ST-1 GitHub notice serializer', () => {
         openedFixtureCount: { actual: 0, limit: 0 }
       }
     })
-    expect(notice.criteria).toContainEqual({ name: 'loop-p99 < 50', passed: false })
+    expect('criteria' in notice ? notice.criteria : undefined).toContainEqual({ name: 'loop-p99 < 50', passed: false })
     expect(notice.reportSha256).toBe(createHash('sha256').update(input.reportText).digest('hex'))
     const serialized = JSON.stringify(notice)
     expect(serialized).not.toContain('private')
