@@ -702,6 +702,7 @@ describe('QA candidate binds hosted ST-1 provenance before measurement', () => {
       expect(binding).not.toMatch(/^        if:/m)
       expect(binding).not.toMatch(/^        continue-on-error:/m)
       expect(binding).not.toMatch(/secrets\.|inputs\.|github\.event\./)
+      expect(binding).toContain('provenance/provenance.json > /dev/null 2>&1')
       for (const key of ['GITHUB_REPOSITORY', 'GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT']) {
         expect(binding).toContain(`"$${key}"`)
       }
