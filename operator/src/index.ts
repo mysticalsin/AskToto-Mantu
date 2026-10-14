@@ -30,6 +30,15 @@ import { matchRoute } from './routes/registry'
 import './routes'
 import { computeIntegrationsVersion, handleIntegrationsSeat } from './routes/integrations-seat'
 import { handleModelPolicyFetch } from './routes/model-policy'
+import {
+  handleSpeechCapabilities,
+  handleSpeechSessionCancel,
+  handleSpeechSessionCreate,
+  handleSpeechSessionStatus
+} from './routes/speech-session'
+import { handleSpeechTrackOpen, SPEECH_TRACK_DESCRIPTOR_HEADER, SPEECH_TRACK_GRANT_HEADER } from './routes/speech-track'
+import { SpeechSessionDurableObject } from './speech/relay-session'
+import { readSpeechBody } from './speech/contracts'
 import { pruneRetention } from './retention'
 import { d1SchemaStatus } from './routes/admin-core'
 import { looksLikeSecret } from './redact'
@@ -41,10 +50,19 @@ import { handleMcpGateway, mcpGatewayConnectionId } from './routes/mcp-gateway'
 import { parseAskPathTag } from './ask-meter'
 import { projectAskMode, projectAskModel, projectAskTelemetry } from './privacy'
 import { handleUse, readUseBody } from './use'
-import { OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
+import {
+  hmacSha256B64url,
+  operatorLicenseCanonical,
+  operatorLicenseLast4,
+  parseOperatorLicense,
+  timingSafeEqualStr
+} from '../../src/shared/operator-license'
+import { OPERATOR_HMAC_HEADERS, OPERATOR_LICENSE_HEADER } from '../../src/shared/operator-hmac'
+import { timingSafeEqualHex, verifyIngestHmac } from './hmac'
 import type { AdminCtx, Env, HandleOpts } from './routes/admin-ctx'
 
 export type { Env, HandleOpts } from './routes/admin-ctx'
+export { SpeechSessionDurableObject }
 
 const RATE_WINDOW_MS = 60_000
 /** Per-route HMAC buckets: heartbeats and manifest pulls are cheap and frequent by nature but never need
@@ -91,6 +109,39 @@ function deviceSuppliedId(raw: unknown): string {
 function redactedPreview(mode: string | undefined, questionType: QuestionType): string {
   const label = QUESTION_TYPE_LABELS[questionType]
   return mode ? `${mode} ask · ${label}` : `Ask · ${label}`
+}
+
+/** Revoked or expired credentials may authenticate only owner-scoped speech cleanup/status. The
+ * token must still be an issued, originally device-bound licence, and the body HMAC/nonce checks
+ * remain identical. The route then binds the requested session to that old device+licence pair. */
+async function verifySpeechCleanupRequest(
+  request: Request,
+  bodyText: string,
+  secret: string,
+  store: OperatorStore,
+  now: number
+): Promise<Awaited<ReturnType<typeof verifyDeviceRequest>>> {
+  const token = request.headers.get(OPERATOR_LICENSE_HEADER)?.trim() ?? ''
+  const parsed = parseOperatorLicense(token)
+  const deviceId = request.headers.get(OPERATOR_HMAC_HEADERS.device) ?? ''
+  if (!parsed || !deviceId || !secret.trim())
+    return { ok: false, status: 401, error: 'speech cleanup authentication required', code: 'license-required' }
+  const [issued, expectedSignature] = await Promise.all([
+    store.getIssuedLicense(parsed.jti),
+    hmacSha256B64url(secret.trim(), operatorLicenseCanonical(parsed.jti, parsed.iat, parsed.exp))
+  ])
+  if (
+    !issued ||
+    issued.iat !== parsed.iat ||
+    issued.exp !== parsed.exp ||
+    issued.activated_device !== deviceId ||
+    !timingSafeEqualHex(issued.key_hash, await sha256Hex(token)) ||
+    !timingSafeEqualStr(parsed.sig, expectedSignature)
+  )
+    return { ok: false, status: 401, error: 'speech cleanup authentication required', code: 'license-required' }
+  const hmac = await verifyIngestHmac(request, bodyText, token, now, (nonce) => store.takeNonce(nonce, now))
+  if (!hmac.ok) return hmac
+  return { ...hmac, license: { jti: parsed.jti, last4: operatorLicenseLast4(token) } }
 }
 
 function questionTypeFromBody(body: Record<string, unknown>): QuestionType {
@@ -226,6 +277,20 @@ async function lastCronAt(store: OperatorStore): Promise<number | null> {
 
 async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: HandleOpts = {}): Promise<Response> {
   const url = new URL(request.url)
+  const speechCancelMatch =
+    /^\/v1\/speech\/sessions\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/cancel$/i.exec(
+      url.pathname
+    )
+  const speechStatusMatch =
+    /^\/v1\/speech\/sessions\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/status$/i.exec(
+      url.pathname
+    )
+  const speechCreate = url.pathname === '/v1/speech/sessions'
+  const speechCapabilities = url.pathname === '/v1/speech/capability'
+  const speechTrackMatch =
+    /^\/v1\/speech\/sessions\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/tracks\/(microphone|system)$/i.exec(
+      url.pathname
+    )
   // The Worker never constructs an ephemeral store: without a D1 binding it refuses to serve (a tests-only
   // `opts.store` is the one injection seam), so an unbound deploy can never look live.
   const store = opts.store ?? (env.DB ? d1Store(env.DB) : null)
@@ -304,19 +369,121 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
     url.pathname === '/v1/use' ||
     url.pathname === '/v1/ask' ||
     url.pathname === '/v1/integrations' ||
-    url.pathname === '/v1/model-policy'
+    url.pathname === '/v1/model-policy' ||
+    speechCapabilities ||
+    speechCreate ||
+    speechCancelMatch !== null ||
+    speechStatusMatch !== null ||
+    speechTrackMatch !== null
   ) {
-    const bodyText =
-      request.method === 'GET'
-        ? ''
-        : url.pathname === '/v1/ask' || url.pathname === '/v1/use'
-          ? await readUseBody(request)
-          : await request.text()
-    if (bodyText === null) {
-      return json({ ok: false, error: 'Request is too large. Capture a smaller region or start a new Ask.' }, 413)
+    if ((speechCreate || speechCancelMatch || speechStatusMatch) && request.method !== 'POST')
+      return json({ ok: false, error: 'method not allowed' }, 405)
+    if (speechCapabilities && request.method !== 'POST') return json({ ok: false, error: 'method not allowed' }, 405)
+    if (speechTrackMatch && request.method !== 'GET') return json({ ok: false, error: 'method not allowed' }, 405)
+    if (
+      (speechCreate || speechCancelMatch || speechStatusMatch || speechCapabilities) &&
+      !/^application\/json(?:\s*;|$)/i.test(request.headers.get('content-type') ?? '')
+    ) {
+      return json({ ok: false, code: 'INVALID_REQUEST', error: 'Speech requests must use application/json.' }, 415)
     }
-    const hmac = await verifyDeviceRequest(request, bodyText, env.OPERATOR_INGEST_SECRET, store, now)
+    if (
+      (speechCapabilities || speechCreate || speechCancelMatch || speechStatusMatch || speechTrackMatch) &&
+      request.headers.get(OPERATOR_LICENSE_HEADER) === null
+    ) {
+      return json({ ok: false, code: 'license-required', error: 'A per-device licence is required.' }, 401)
+    }
+    if (speechTrackMatch) {
+      const descriptor = request.headers.get(SPEECH_TRACK_DESCRIPTOR_HEADER) ?? ''
+      const grant = request.headers.get(SPEECH_TRACK_GRANT_HEADER) ?? ''
+      if (
+        request.headers.get('upgrade')?.toLowerCase() !== 'websocket' ||
+        descriptor.length > 2_048 ||
+        !/^[A-Za-z0-9_-]{43}$/.test(grant)
+      ) {
+        return json({ ok: false, code: 'GRANT_REJECTED' }, 403)
+      }
+    }
+    const signedSpeechControl = speechCreate || speechCancelMatch || speechStatusMatch || speechCapabilities
+    const bodyText = speechTrackMatch
+      ? (request.headers.get(SPEECH_TRACK_DESCRIPTOR_HEADER) ?? '')
+      : request.method === 'GET'
+        ? ''
+        : signedSpeechControl
+          ? await readSpeechBody(request)
+          : url.pathname === '/v1/ask' || url.pathname === '/v1/use'
+            ? await readUseBody(request)
+            : await request.text()
+    if (bodyText === null) {
+      return json(
+        {
+          ok: false,
+          error:
+            speechCreate || speechCancelMatch || speechStatusMatch || speechCapabilities || speechTrackMatch
+              ? 'Speech request is too large.'
+              : 'Request is too large. Capture a smaller region or start a new Ask.'
+        },
+        413
+      )
+    }
+    const hmac =
+      (speechCancelMatch || speechStatusMatch) !== null
+        ? await verifySpeechCleanupRequest(request, bodyText, env.OPERATOR_INGEST_SECRET, store, now)
+        : await verifyDeviceRequest(request, bodyText, env.OPERATOR_INGEST_SECRET, store, now)
     if (!hmac.ok) return json({ ok: false, error: hmac.error, ...(hmac.code ? { code: hmac.code } : {}) }, hmac.status)
+    if (speechCapabilities || speechCreate || speechCancelMatch || speechStatusMatch || speechTrackMatch) {
+      // A valid fleet HMAC proves a shared secret, not the licensed device principal this paid route needs.
+      if (!hmac.license)
+        return json({ ok: false, code: 'license-required', error: 'A per-device licence is required.' }, 401)
+      // This advisory issuance throttle runs only after the signed per-device licence was verified.
+      // Cancellation stays reachable so clients can release their own unused reservation.
+      if (
+        (speechCreate || speechTrackMatch) &&
+        (await store.hitRate(`speech:${hmac.deviceId}`, now, RATE_WINDOW_MS, 10))
+      ) {
+        return json({ ok: false, error: 'rate limited', retryAfterMs: RATE_WINDOW_MS }, 429)
+      }
+      const speechDevice = { deviceId: hmac.deviceId, licenseJti: hmac.license.jti }
+      if (speechCreate) {
+        return handleSpeechSessionCreate({ store, env, opts, bodyText, now, device: speechDevice })
+      }
+      if (speechCapabilities) {
+        if (await store.hitRate(`speech-capabilities:${hmac.deviceId}`, now, RATE_WINDOW_MS, 60))
+          return json({ ok: false, error: 'rate limited', retryAfterMs: RATE_WINDOW_MS }, 429)
+        return handleSpeechCapabilities({ store, env, opts, bodyText, now, device: speechDevice })
+      }
+      if (speechStatusMatch) {
+        return handleSpeechSessionStatus({
+          store,
+          env,
+          bodyText,
+          urlSessionId: (speechStatusMatch[1] ?? '').toLowerCase(),
+          now,
+          device: speechDevice
+        })
+      }
+      if (speechTrackMatch) {
+        return handleSpeechTrackOpen({
+          request,
+          store,
+          env,
+          opts,
+          now,
+          device: speechDevice,
+          sessionId: (speechTrackMatch[1] ?? '').toLowerCase(),
+          track: speechTrackMatch[2] ?? '',
+          descriptorText: bodyText,
+          grant: request.headers.get(SPEECH_TRACK_GRANT_HEADER)
+        })
+      }
+      return handleSpeechSessionCancel({
+        store,
+        env,
+        bodyText,
+        urlSessionId: (speechCancelMatch?.[1] ?? '').toLowerCase(),
+        now,
+        device: speechDevice
+      })
+    }
     const bucket = rateBucketFor(url.pathname)
     if (bucket && (await store.hitRate(`${bucket.key}:${hmac.deviceId}`, now, RATE_WINDOW_MS, bucket.max))) {
       return json({ ok: false, error: 'rate limited', retryAfterMs: RATE_WINDOW_MS }, 429)

@@ -272,4 +272,142 @@ CREATE TABLE IF NOT EXISTS integration_grants (
   ts INTEGER NOT NULL
 );
 
+-- Durable speech-session reservations are server policy only. Audio and transcripts are never stored here.
+CREATE TABLE IF NOT EXISTS speech_sessions (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  audience TEXT NOT NULL,
+  license_jti TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  capture_generation INTEGER NOT NULL CHECK (capture_generation > 0),
+  route_id TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  config_version TEXT NOT NULL,
+  language TEXT,
+  status TEXT NOT NULL CHECK (status IN ('active', 'cancelled', 'expired')),
+  track_count INTEGER NOT NULL CHECK (track_count BETWEEN 1 AND 2),
+  reserved_ms INTEGER NOT NULL CHECK (reserved_ms >= 0),
+  settled_ms INTEGER NOT NULL DEFAULT 0 CHECK (settled_ms >= 0),
+  consent_issued_at INTEGER NOT NULL,
+  consent_expires_at INTEGER NOT NULL,
+  consented_tracks_json TEXT NOT NULL,
+  policy_version TEXT NOT NULL,
+  implementation_revision TEXT NOT NULL,
+  route_evidence_id TEXT NOT NULL,
+  evidence_expires_at INTEGER NOT NULL,
+  stop_requested_at INTEGER,
+  terminal_at INTEGER,
+  terminal_reason TEXT CHECK (terminal_reason IN ('normal', 'cancelled', 'lease-expired', 'upstream-error', 'client-disconnected', 'limit', 'revoked', 'unknown')),
+  budget_window_start INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  grant_expires_at INTEGER NOT NULL,
+  lease_expires_at INTEGER NOT NULL,
+  license_expires_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS speech_sessions_active_tenant ON speech_sessions(tenant_id, audience, status, lease_expires_at);
+CREATE INDEX IF NOT EXISTS speech_sessions_budget ON speech_sessions(tenant_id, audience, budget_window_start);
+CREATE INDEX IF NOT EXISTS speech_sessions_principal ON speech_sessions(license_jti, device_id, status);
+
+CREATE TABLE IF NOT EXISTS speech_grants (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  tenant_id TEXT NOT NULL,
+  audience TEXT NOT NULL,
+  license_jti TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  track TEXT NOT NULL CHECK (track IN ('microphone', 'system')),
+  capture_generation INTEGER NOT NULL CHECK (capture_generation > 0),
+  route_id TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  config_version TEXT NOT NULL,
+  stream_epoch INTEGER NOT NULL CHECK (stream_epoch > 0),
+  language TEXT,
+  issued_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  redeemed_at INTEGER,
+  revoked_at INTEGER,
+  UNIQUE(session_id, track)
+);
+
+CREATE INDEX IF NOT EXISTS speech_grants_session ON speech_grants(session_id, revoked_at, redeemed_at);
+CREATE INDEX IF NOT EXISTS speech_grants_principal ON speech_grants(tenant_id, audience, license_jti, device_id);
+
+CREATE TABLE IF NOT EXISTS speech_capture_epochs (
+  tenant_id TEXT NOT NULL,
+  audience TEXT NOT NULL,
+  license_jti TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  capture_generation INTEGER NOT NULL CHECK (capture_generation > 0),
+  track TEXT NOT NULL CHECK (track IN ('microphone', 'system')),
+  last_epoch INTEGER NOT NULL CHECK (last_epoch > 0),
+  expires_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (tenant_id, audience, license_jti, device_id, capture_generation, track)
+);
+CREATE INDEX IF NOT EXISTS speech_capture_epochs_expiry ON speech_capture_epochs(tenant_id, audience, expires_at);
+
+-- Relay lifecycle contains bounded accounting metadata only; no audio, transcript, provider body or close text.
+CREATE TABLE IF NOT EXISTS speech_streams (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  grant_id TEXT NOT NULL UNIQUE,
+  tenant_id TEXT NOT NULL,
+  audience TEXT NOT NULL,
+  license_jti TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  track TEXT NOT NULL CHECK (track IN ('microphone', 'system')),
+  capture_generation INTEGER NOT NULL CHECK (capture_generation > 0),
+  stream_epoch INTEGER NOT NULL CHECK (stream_epoch > 0),
+  route_id TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  config_version TEXT NOT NULL,
+  policy_version TEXT NOT NULL,
+  implementation_revision TEXT NOT NULL,
+  transport_attempted_at INTEGER,
+  opened_at INTEGER,
+  stop_requested_at INTEGER,
+  finish_requested_at INTEGER,
+  provider_complete_at INTEGER,
+  close_confirmed_at INTEGER,
+  settled_at INTEGER,
+  input_bytes INTEGER NOT NULL DEFAULT 0 CHECK (input_bytes >= 0),
+  input_messages INTEGER NOT NULL DEFAULT 0 CHECK (input_messages >= 0),
+  output_bytes INTEGER NOT NULL DEFAULT 0 CHECK (output_bytes >= 0),
+  output_messages INTEGER NOT NULL DEFAULT 0 CHECK (output_messages >= 0),
+  last_sequence INTEGER NOT NULL DEFAULT 0 CHECK (last_sequence >= 0),
+  tail_status TEXT CHECK (tail_status IN ('complete', 'incomplete')),
+  terminal_reason TEXT CHECK (terminal_reason IN ('normal', 'cancelled', 'lease-expired', 'upstream-error', 'client-disconnected', 'limit', 'revoked', 'unknown')),
+  created_at INTEGER NOT NULL,
+  UNIQUE(session_id, track, stream_epoch)
+);
+CREATE INDEX IF NOT EXISTS speech_streams_active ON speech_streams(tenant_id, audience, session_id, close_confirmed_at);
+CREATE INDEX IF NOT EXISTS speech_streams_principal ON speech_streams(license_jti, device_id, transport_attempted_at, close_confirmed_at);
+
+-- Owner-reviewed route evidence stores immutable references/digests, never the artifacts or credentials themselves.
+CREATE TABLE IF NOT EXISTS speech_route_evidence (
+  id TEXT PRIMARY KEY,
+  evidence_key TEXT NOT NULL UNIQUE,
+  tenant_id TEXT NOT NULL,
+  audience TEXT NOT NULL,
+  deployment_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  gateway_id TEXT NOT NULL,
+  route_id TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  config_version TEXT NOT NULL,
+  policy_version TEXT NOT NULL,
+  implementation_revision TEXT NOT NULL,
+  reviewer_email TEXT NOT NULL,
+  imported_by TEXT NOT NULL,
+  evidence_refs_json TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  version INTEGER NOT NULL CHECK (version > 0),
+  created_at INTEGER NOT NULL,
+  revoked_at INTEGER,
+  revoked_by TEXT
+);
+CREATE INDEX IF NOT EXISTS speech_evidence_lookup ON speech_route_evidence(tenant_id, audience, deployment_id, route_id, config_version, implementation_revision, expires_at, revoked_at);
+
 CREATE INDEX IF NOT EXISTS integration_grants_integration_ts ON integration_grants(integration_id, ts);

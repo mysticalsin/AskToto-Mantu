@@ -9,11 +9,13 @@ import type { CfGeo } from '../geo'
 import type { AccessCtx } from '../access'
 import type { D1DatabaseLike } from '../d1'
 import type { OperatorStore } from '../store'
+import type { SpeechPolicyEvidence } from '../speech/policy'
+import type { SpeechReadinessEnv } from '../speech/readiness'
 import { missingCloudflareOverview, pullCloudflareOverview, type CloudflareOverview } from '../cloudflare'
 import { activeCloudflareAccount } from '../keys'
 import { looksLikeSecret } from '../redact'
 
-export interface Env {
+export interface Env extends SpeechReadinessEnv {
   DB?: D1DatabaseLike
   /** Workers Static Assets binding (plan D5, B8): fonts, flags and connector logos. */
   ASSETS?: { fetch(request: Request): Promise<Response> }
@@ -35,6 +37,31 @@ export interface Env {
   CF_OAUTH_AUTHORIZE_URL?: string
   CF_OAUTH_TOKEN_URL?: string
   CF_ACCOUNT_ID?: string
+  /** Speech broker deployment policy. Missing values fail closed; never set from request fields. */
+  SPEECH_TENANT_ID?: string
+  SPEECH_AUDIENCE?: string
+  SPEECH_POLICY_VERSION?: string
+  SPEECH_ROUTE_ID?: string
+  SPEECH_MODEL_ID?: string
+  SPEECH_CONFIG_VERSION?: string
+  SPEECH_ALLOWED_LANGUAGES?: string
+  SPEECH_MAX_CONCURRENT_SESSIONS?: string
+  SPEECH_MAX_CONCURRENT_TRACKS?: string
+  SPEECH_BUDGET_WINDOW_MS?: string
+  SPEECH_BUDGET_MAX_MS?: string
+  SPEECH_MAX_SESSION_MS?: string
+  SPEECH_DEPLOYMENT_ID?: string
+  SPEECH_GATEWAY_ID?: string
+  SPEECH_IMPLEMENTATION_REVISION?: string
+  SPEECH_GATEWAY_MANAGEMENT_TOKEN?: string
+  SPEECH_GATEWAY_RUN_TOKEN?: string
+  SPEECH_DEEPGRAM_API_KEY?: string
+  SPEECH_SESSION_DO?: SpeechSessionDurableObjectNamespace
+}
+
+export interface SpeechSessionDurableObjectNamespace {
+  idFromName(name: string): unknown
+  get(id: unknown): { fetch(request: Request): Promise<Response> }
 }
 
 export interface HandleOpts {
@@ -44,6 +71,8 @@ export interface HandleOpts {
   geo?: CfGeo
   cfFetch?: typeof fetch
   providerFetch?: typeof fetch
+  /** Internal CI injection only; no Worker production handler supplies synthetic route evidence. */
+  speechPolicyEvidence?: SpeechPolicyEvidence
 }
 
 export type AdminCtx = {

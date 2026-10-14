@@ -17,7 +17,15 @@ import { LICENSES_EMPTY, parseApproval } from '../fleet'
 import { mintOperatorLicense } from '../licenses/generate'
 import { renderConsole } from '../ui'
 import { defineRoute } from './registry'
-import { auditLog, cloudflareForDashboard, keyFlags, param, safeAuditText, stripSecrets, type AdminCtx } from './admin-ctx'
+import {
+  auditLog,
+  cloudflareForDashboard,
+  keyFlags,
+  param,
+  safeAuditText,
+  stripSecrets,
+  type AdminCtx
+} from './admin-ctx'
 import { readThemeCookie } from '../theme-preference'
 import { readOperatorSettings } from './settings-store'
 import { projectAskTelemetry } from '../privacy'
@@ -30,7 +38,9 @@ async function valueSettings(ctx: AdminCtx): Promise<{ hourlyRate: number | null
 
 /** M2-0412: the fleet model policy slice for the Models page, same "route computes it, buildDashboard
  *  just carries it" convention as valueSettings above. */
-async function modelPolicyForDashboard(ctx: AdminCtx): Promise<{ policy: Awaited<ReturnType<typeof readModelPolicy>>; isOwner: boolean }> {
+async function modelPolicyForDashboard(
+  ctx: AdminCtx
+): Promise<{ policy: Awaited<ReturnType<typeof readModelPolicy>>; isOwner: boolean }> {
   return { policy: await readModelPolicy(ctx.env.DB), isOwner: isOwnerEmail(ctx.email, ctx.env) }
 }
 
@@ -56,7 +66,12 @@ export const EXPECTED_D1_TABLES = [
   'integrations',
   'integration_grants',
   'operator_settings',
-  'model_policy'
+  'model_policy',
+  'speech_sessions',
+  'speech_grants',
+  'speech_streams',
+  'speech_route_evidence',
+  'speech_capture_epochs'
 ] as const
 
 const PLACEHOLDER_DIFF_RE = /^#\s*unified diff against .+\n#\s*edit, then approve\. push is a separate click\.$/i
@@ -107,7 +122,10 @@ async function skillDecision(request: Request, ctx: AdminCtx, id: string, action
   if (row.status !== 'approved') return json({ ok: false, error: 'approve first' }, 400)
   const source = typeof body.body === 'string' ? body.body : row.diff
   if (isPlaceholderDiff(source)) {
-    return json({ ok: false, error: 'skill body is still the placeholder; edit it before pushing', code: 'placeholder-diff' }, 400)
+    return json(
+      { ok: false, error: 'skill body is still the placeholder; edit it before pushing', code: 'placeholder-diff' },
+      400
+    )
   }
   if (!ctx.env.OPERATOR_SKILL_PRIVATE_KEY) return json({ ok: false, error: 'skill signing key missing' }, 500)
   const nextVersion = bump(row.from_version)
@@ -158,7 +176,19 @@ async function healthPayload(env: AdminCtx['env']): Promise<Record<string, unkno
  *  tables but never ran the alter step reports its absent columns as `table.column` in `missing`.
  *  `migrate.contract.test.ts` asserts this list covers every `ADD COLUMN` in `schema-alter.sql`. */
 export const EXPECTED_D1_COLUMNS: Readonly<Record<string, readonly string[]>> = {
-  seats: ['country', 'city', 'region', 'lat', 'lon', 'last_index_at', 'hostname', 'sso_email', 'license', 'approval', 'license_jti'],
+  seats: [
+    'country',
+    'city',
+    'region',
+    'lat',
+    'lon',
+    'last_index_at',
+    'hostname',
+    'sso_email',
+    'license',
+    'approval',
+    'license_jti'
+  ],
   pulses: ['region'],
   crm_sends: ['meeting_hash', 'attempt', 'latency_ms', 'remote_id', 'remote_url', 'action'],
   issued_licenses: ['group_id', 'tier', 'member', 'activated_device', 'activated_at'],
@@ -175,10 +205,59 @@ export const EXPECTED_D1_COLUMNS: Readonly<Record<string, readonly string[]>> = 
     'last_test_json',
     'last_test_at',
     'notes'
+  ],
+  speech_sessions: [
+    'tenant_id',
+    'audience',
+    'license_jti',
+    'device_id',
+    'capture_generation',
+    'route_id',
+    'model_id',
+    'config_version',
+    'language',
+    'status',
+    'track_count',
+    'reserved_ms',
+    'settled_ms',
+    'budget_window_start',
+    'grant_expires_at',
+    'lease_expires_at',
+    'license_expires_at',
+    'consent_issued_at',
+    'consent_expires_at',
+    'consented_tracks_json',
+    'policy_version',
+    'implementation_revision',
+    'route_evidence_id',
+    'evidence_expires_at',
+    'stop_requested_at',
+    'terminal_at',
+    'terminal_reason'
+  ],
+  speech_grants: [
+    'token_hash',
+    'tenant_id',
+    'audience',
+    'license_jti',
+    'device_id',
+    'track',
+    'capture_generation',
+    'route_id',
+    'model_id',
+    'config_version',
+    'language',
+    'issued_at',
+    'expires_at',
+    'redeemed_at',
+    'revoked_at',
+    'stream_epoch'
   ]
 }
 
-export async function d1SchemaStatus(db: D1DatabaseLike | undefined): Promise<{ ok: boolean; tables: string[]; missing: string[] }> {
+export async function d1SchemaStatus(
+  db: D1DatabaseLike | undefined
+): Promise<{ ok: boolean; tables: string[]; missing: string[] }> {
   if (!db) return { ok: true, tables: [], missing: [] }
   const tables: string[] = []
   const missing: string[] = []
@@ -256,7 +335,15 @@ export function registerAdminCoreRoutes(): void {
     auth: 'admin',
     handler: async (request, ctx) => {
       const nonce = newCspNonce()
-      const dash = await buildDashboard(ctx.store, ctx.email, ctx.now, keyFlags(ctx.env), await cloudflareForDashboard(ctx.store, ctx.env, ctx.opts, ctx.now), await valueSettings(ctx), await modelPolicyForDashboard(ctx))
+      const dash = await buildDashboard(
+        ctx.store,
+        ctx.email,
+        ctx.now,
+        keyFlags(ctx.env),
+        await cloudflareForDashboard(ctx.store, ctx.env, ctx.opts, ctx.now),
+        await valueSettings(ctx),
+        await modelPolicyForDashboard(ctx)
+      )
       return html(renderConsole(dash, { theme: readThemeCookie(request), nonce }), { nonce })
     }
   })
@@ -267,7 +354,15 @@ export function registerAdminCoreRoutes(): void {
     handler: async (_request, ctx) =>
       json(
         stripSecrets(
-          await buildDashboard(ctx.store, ctx.email, ctx.now, keyFlags(ctx.env), await cloudflareForDashboard(ctx.store, ctx.env, ctx.opts, ctx.now), await valueSettings(ctx), await modelPolicyForDashboard(ctx))
+          await buildDashboard(
+            ctx.store,
+            ctx.email,
+            ctx.now,
+            keyFlags(ctx.env),
+            await cloudflareForDashboard(ctx.store, ctx.env, ctx.opts, ctx.now),
+            await valueSettings(ctx),
+            await modelPolicyForDashboard(ctx)
+          )
         )
       )
   })
@@ -287,7 +382,8 @@ export function registerAdminCoreRoutes(): void {
     method: 'GET',
     pattern: '/v1/admin/keys',
     auth: 'admin',
-    handler: async (_request, ctx) => json(stripSecrets({ ok: true, ...(await listKeysJson(ctx.store, keyFlags(ctx.env))) }))
+    handler: async (_request, ctx) =>
+      json(stripSecrets({ ok: true, ...(await listKeysJson(ctx.store, keyFlags(ctx.env))) }))
   })
   defineRoute<AdminCtx>({
     method: 'POST',
@@ -297,7 +393,11 @@ export function registerAdminCoreRoutes(): void {
       const body = (await request.json().catch(() => ({}))) as Record<string, unknown>
       const fetchImpl = ctx.opts.cfFetch ?? ctx.opts.providerFetch ?? fetch
       const written = await writeVaultKey(ctx.store, ctx.env, ctx.email, ctx.now, body, fetchImpl)
-      if (!written.ok) return json({ ok: false, error: written.error, ...(written.code ? { code: written.code } : {}) }, written.status)
+      if (!written.ok)
+        return json(
+          { ok: false, error: written.error, ...(written.code ? { code: written.code } : {}) },
+          written.status
+        )
       return json(written)
     }
   })
@@ -368,7 +468,9 @@ export function registerAdminCoreRoutes(): void {
     handler: async (request, ctx) => {
       const body = (await request.json().catch(() => ({}))) as { skillId?: string }
       const skillId = body.skillId || 'general'
-      const asks = (await ctx.store.listAsks(80)).map(projectAskTelemetry).filter((a) => a.mode === skillId || a.skill_id === skillId)
+      const asks = (await ctx.store.listAsks(80))
+        .map(projectAskTelemetry)
+        .filter((a) => a.mode === skillId || a.skill_id === skillId)
       const evidence: string[] = []
       const fromVersion = asks.find((a) => a.skill_version)?.skill_version || '1.1.0'
       const id = crypto.randomUUID()
@@ -479,6 +581,7 @@ export function registerAdminCoreRoutes(): void {
     method: 'POST',
     pattern: /^\/v1\/admin\/licenses\/(?<id>[^/]+)\/(?<action>approve|revoke)$/,
     auth: 'admin',
-    handler: async (_request, ctx, match) => licenseOrSeatAction(ctx, param(match, 'id'), match.params.action as 'approve' | 'revoke')
+    handler: async (_request, ctx, match) =>
+      licenseOrSeatAction(ctx, param(match, 'id'), match.params.action as 'approve' | 'revoke')
   })
 }
