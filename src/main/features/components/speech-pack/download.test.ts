@@ -73,6 +73,17 @@ describe('downloadVerified', () => {
     expect(from).toBeLessThanOrEqual(cut)
   })
 
+  it('discards partial bytes owned by a prior service session before a new explicit request', async () => {
+    const partial = join(dir, 'model.bin.partial')
+    writeFileSync(partial, body.subarray(0, 50_000))
+    writeFileSync(`${partial}.json`, JSON.stringify({ validator: '"v1"', scope: 'previous-process' }))
+    server = await serve(rangeHandler(body))
+    await downloadVerified({ ...request(`${server.base}/pin/model.bin`), resumeScope: 'current-process' }, deps())
+    expect(server.requests).toHaveLength(1)
+    expect(server.requests[0].headers.range).toBeUndefined()
+    expect(readFileSync(join(dir, 'model.bin'))).toEqual(body)
+  })
+
   it('restarts only this file when the server ignores Range', async () => {
     server = await serve(rangeHandler(body, { cutFirstAt: 60_000, ignoreRange: true }))
     await downloadVerified(request(`${server.base}/pin/model.bin`), deps())
@@ -479,5 +490,47 @@ describe('downloadVerified', () => {
     const err = await failure(downloadVerified(request(`${server.base}/x/resolve/main/model.bin`), deps()))
     expect(err.kind).toBe('http')
     expect(server.requests).toHaveLength(0)
+  })
+
+  it('stops before another response read or write when the local model policy is revoked', async () => {
+    let authorized = true
+    let consumedBytes = 0
+    let cancelled = false
+    let reads = 0
+    const fetch = (async () =>
+      new Response(
+        new ReadableStream<Uint8Array>(
+          {
+            pull(controller) {
+              reads++
+              if (reads === 1) controller.enqueue(body.subarray(0, 32_000))
+              else controller.enqueue(body.subarray(32_000, 64_000))
+            },
+            cancel() {
+              cancelled = true
+            }
+          },
+          { highWaterMark: 0 }
+        ),
+        { status: 200, headers: { etag: '"policy-v1"' } }
+      )) as typeof globalThis.fetch
+    const err = await failure(
+      downloadVerified(
+        {
+          ...request('https://example.com/pinned/model.bin'),
+          authorize: () => authorized,
+          onProgress: (n) => {
+            consumedBytes = n
+            if (n > 0) authorized = false
+          }
+        },
+        deps({ fetch })
+      )
+    )
+    expect(err.kind).toBe('policy')
+    expect(consumedBytes).toBe(32_000)
+    expect(readFileSync(join(dir, 'model.bin.partial')).length).toBe(32_000)
+    expect(existsSync(join(dir, 'model.bin'))).toBe(false)
+    expect(cancelled).toBe(true)
   })
 })

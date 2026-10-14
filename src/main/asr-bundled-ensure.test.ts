@@ -22,6 +22,7 @@ import { ASR_REQUIRED_FILES } from './asr-manifest'
 import {
   ASR_ASSETS_MISSING,
   ASR_PACKAGED_ASSETS_MISSING,
+  asrModelProtocolSpeechPackOptions,
   PARAKEET_MODEL_NAME,
   PARAKEET_REQUIRED_FILES,
   type AsrEnsureTestHooks,
@@ -29,6 +30,7 @@ import {
   WHISPER_FLOOR_REQUIRED_FILES,
   ensureImportAsrAssets,
   ensureParakeetAssets,
+  ensureWhisperFloorAssets,
   fetchBundleResponse,
   importAsrAssetsReady,
   asrAssetsStatusSnapshot,
@@ -67,22 +69,24 @@ describe('asr-bundled-ensure', () => {
   it('treats an empty resources dir as not ready and copies via the ensure hooks', async () => {
     expect(importAsrAssetsReady()).toBe(false)
     const progress: number[] = []
-    setAsrEnsureTestHooks(withTestResources({
-      fetchParakeet: async (dest, onProgress) => {
-        mkdirSync(dest, { recursive: true })
-        for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(dest, name), 'p')
-        onProgress?.(100)
-      },
-      fetchWhisperFloor: async (dest, onProgress) => {
-        const dir = join(dest, ...WHISPER_FLOOR_ID.split('/'))
-        for (const rel of WHISPER_FLOOR_REQUIRED_FILES) {
-          const file = join(dir, rel)
-          mkdirSync(join(file, '..'), { recursive: true })
-          writeFileSync(file, 'w')
+    setAsrEnsureTestHooks(
+      withTestResources({
+        fetchParakeet: async (dest, onProgress) => {
+          mkdirSync(dest, { recursive: true })
+          for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(dest, name), 'p')
+          onProgress?.(100)
+        },
+        fetchWhisperFloor: async (dest, onProgress) => {
+          const dir = join(dest, ...WHISPER_FLOOR_ID.split('/'))
+          for (const rel of WHISPER_FLOOR_REQUIRED_FILES) {
+            const file = join(dir, rel)
+            mkdirSync(join(file, '..'), { recursive: true })
+            writeFileSync(file, 'w')
+          }
+          onProgress?.(100)
         }
-        onProgress?.(100)
-      }
-    }))
+      })
+    )
     await ensureImportAsrAssets((pct) => progress.push(pct))
     expect(parakeetFilesReady(join(paths.userData, 'asr-models', 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8'))).toBe(
       true
@@ -124,6 +128,47 @@ describe('asr-bundled-ensure', () => {
     })
   })
 
+  it('keeps full as the legacy profile and requires an explicit lean pack without automatic downloads', async () => {
+    paths.isPackaged = true
+    const fetchParakeet = vi.fn()
+    const fetchWhisperFloor = vi.fn()
+    setAsrEnsureTestHooks(withTestResources({ fetchParakeet, fetchWhisperFloor, selectedAsrEngine: () => 'whisper' }))
+    expect(asrAssetsStatusSnapshot()).toMatchObject({
+      ready: false,
+      status: 'error',
+      error: ASR_PACKAGED_ASSETS_MISSING
+    })
+    expect(fetchParakeet).not.toHaveBeenCalled()
+    expect(fetchWhisperFloor).not.toHaveBeenCalled()
+    expect(net.fetch).not.toHaveBeenCalled()
+
+    writeFileSync(join(paths.resources, 'speech-pack-profile.json'), JSON.stringify({ schema: 1, profile: 'lean' }))
+    expect(asrAssetsStatusSnapshot()).toMatchObject({
+      ready: false,
+      status: 'error',
+      reason: 'lean-pack-not-installed'
+    })
+    expect(asrModelProtocolSpeechPackOptions()).toEqual({ useOnlySpeechPackModels: true })
+    await expect(ensureImportAsrAssets()).rejects.toMatchObject({ code: 'ASR_SPEECH_PACK_NOT_READY' })
+    await expect(ensureWhisperFloorAssets()).rejects.toMatchObject({ code: 'ASR_SPEECH_PACK_NOT_READY' })
+    expect(fetchParakeet).not.toHaveBeenCalled()
+    expect(fetchWhisperFloor).not.toHaveBeenCalled()
+    expect(net.fetch).not.toHaveBeenCalled()
+  })
+
+  it('fails closed on an invalid packaged profile, including the protocol route', async () => {
+    paths.isPackaged = true
+    writeFileSync(
+      join(paths.resources, 'speech-pack-profile.json'),
+      JSON.stringify({ schema: 1, profile: 'lean', extra: true })
+    )
+    setAsrEnsureTestHooks(withTestResources({ selectedAsrEngine: () => 'whisper' }))
+    expect(asrAssetsStatusSnapshot()).toMatchObject({ ready: false, reason: 'invalid-profile' })
+    expect(asrModelProtocolSpeechPackOptions()).toEqual({ useOnlySpeechPackModels: true })
+    await expect(ensureImportAsrAssets()).rejects.toMatchObject({ reason: 'invalid-profile' })
+    expect(net.fetch).not.toHaveBeenCalled()
+  })
+
   it('does not report a packaged ASR bundle ready when a required runtime manifest file is missing', async () => {
     paths.isPackaged = true
     const parakeet = join(paths.resources, 'asr', PARAKEET_MODEL_NAME)
@@ -160,28 +205,30 @@ describe('asr-bundled-ensure', () => {
 
   it('keeps the extraction phase visible at the 69% onboarding handoff', async () => {
     let duringExtraction: ReturnType<typeof asrAssetsStatusSnapshot> | undefined
-    setAsrEnsureTestHooks(withTestResources({
-      fetchParakeet: async (dest, onProgress) => {
-        // The production downloader has just completed the archive transfer and is about to extract.
-        // Until the production callback accepts its phase label, the old code surfaces this as generic
-        // "Getting transcription files…", which reads like a frozen download.
-        ;(onProgress as unknown as ((pct: number, label: string) => void) | undefined)?.(
-          92,
-          'Preparing transcription files…'
-        )
-        duringExtraction = asrAssetsStatusSnapshot()
-        mkdirSync(dest, { recursive: true })
-        for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(dest, name), 'p')
-      },
-      fetchWhisperFloor: async (dest) => {
-        const dir = join(dest, ...WHISPER_FLOOR_ID.split('/'))
-        for (const rel of WHISPER_FLOOR_REQUIRED_FILES) {
-          const file = join(dir, rel)
-          mkdirSync(join(file, '..'), { recursive: true })
-          writeFileSync(file, 'w')
+    setAsrEnsureTestHooks(
+      withTestResources({
+        fetchParakeet: async (dest, onProgress) => {
+          // The production downloader has just completed the archive transfer and is about to extract.
+          // Until the production callback accepts its phase label, the old code surfaces this as generic
+          // "Getting transcription files…", which reads like a frozen download.
+          ;(onProgress as unknown as ((pct: number, label: string) => void) | undefined)?.(
+            92,
+            'Preparing transcription files…'
+          )
+          duringExtraction = asrAssetsStatusSnapshot()
+          mkdirSync(dest, { recursive: true })
+          for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(dest, name), 'p')
+        },
+        fetchWhisperFloor: async (dest) => {
+          const dir = join(dest, ...WHISPER_FLOOR_ID.split('/'))
+          for (const rel of WHISPER_FLOOR_REQUIRED_FILES) {
+            const file = join(dir, rel)
+            mkdirSync(join(file, '..'), { recursive: true })
+            writeFileSync(file, 'w')
+          }
         }
-      }
-    }))
+      })
+    )
 
     await ensureImportAsrAssets()
 
@@ -203,23 +250,25 @@ describe('asr-bundled-ensure', () => {
       startedFetch = resolve
     })
     let parakeetFetches = 0
-    setAsrEnsureTestHooks(withTestResources({
-      fetchParakeet: async (dest) => {
-        parakeetFetches += 1
-        startedFetch()
-        await fetchGate
-        mkdirSync(dest, { recursive: true })
-        for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(dest, name), 'p')
-      },
-      fetchWhisperFloor: async (dest) => {
-        const dir = join(dest, ...WHISPER_FLOOR_ID.split('/'))
-        for (const rel of WHISPER_FLOOR_REQUIRED_FILES) {
-          const file = join(dir, rel)
-          mkdirSync(join(file, '..'), { recursive: true })
-          writeFileSync(file, 'w')
+    setAsrEnsureTestHooks(
+      withTestResources({
+        fetchParakeet: async (dest) => {
+          parakeetFetches += 1
+          startedFetch()
+          await fetchGate
+          mkdirSync(dest, { recursive: true })
+          for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(dest, name), 'p')
+        },
+        fetchWhisperFloor: async (dest) => {
+          const dir = join(dest, ...WHISPER_FLOOR_ID.split('/'))
+          for (const rel of WHISPER_FLOOR_REQUIRED_FILES) {
+            const file = join(dir, rel)
+            mkdirSync(join(file, '..'), { recursive: true })
+            writeFileSync(file, 'w')
+          }
         }
-      }
-    }))
+      })
+    )
 
     const direct = ensureParakeetAssets()
     await fetchStarted
@@ -265,7 +314,11 @@ describe('asr-bundled-ensure', () => {
         })
       )
       .mockResolvedValueOnce(ok)
-    const landed = await fetchBundleResponse('https://github.com/x/model.tar.bz2', new AbortController().signal, fetchImpl)
+    const landed = await fetchBundleResponse(
+      'https://github.com/x/model.tar.bz2',
+      new AbortController().signal,
+      fetchImpl
+    )
     expect(landed.status).toBe(200)
     expect(fetchImpl).toHaveBeenCalledTimes(2)
 
