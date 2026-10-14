@@ -490,12 +490,13 @@ jobs:
           New-Item -ItemType Directory -Force $portableArchive, $portablePayload | Out-Null
           & 7z x $portable.FullName "-o$portableArchive" -y | Out-Null
           if ($LASTEXITCODE -ne 0) { throw 'Could not extract the exact Portable artifact.' }
-          $appArchive = Get-ChildItem $portableArchive -Recurse -Filter 'app-*.7z' | Select-Object -First 1
-          if ($null -eq $appArchive) { throw 'The Portable artifact contains no app payload archive.' }
+          $appArchives = @(Get-ChildItem $portableArchive -Recurse -Filter 'app-64.7z')
+          if ($appArchives.Count -ne 1) { throw "Expected exactly one app-64.7z in the Portable artifact; found $($appArchives.Count)." }
+          $appArchive = $appArchives[0]
           & 7z x $appArchive.FullName "-o$portablePayload" -y | Out-Null
           if ($LASTEXITCODE -ne 0) { throw 'Could not extract the Portable app payload.' }
-          $portableExe = Get-ChildItem $portablePayload -Recurse -Filter Metis.exe | Select-Object -First 1
-          if ($null -eq $portableExe) { throw 'The Portable payload contains no Metis.exe.' }
+          $portableExe = Get-Item (Join-Path $portablePayload 'Metis.exe') -ErrorAction SilentlyContinue
+          if ($null -eq $portableExe) { throw 'The Portable payload contains no root Metis.exe.' }
           $launches = @(
             @{ Installer = $setup; Exe = (Join-Path $target 'Metis.exe'); AsrExe = (Join-Path $target 'Metis.exe'); Source = 'installed-setup'; Assets = $setupAssets },
             @{ Installer = $portable; Exe = $portable.FullName; AsrExe = $portableExe.FullName; Source = 'portable-payload'; Assets = $portableAssets }
@@ -519,6 +520,12 @@ jobs:
           $failed = $false
           foreach ($asset in $assets) {
             $expectedSource = if ($asset.name -like 'Metis-Portable-*') { 'portable-payload' } else { 'installed-setup' }
+            $expectedExecutable = if ($expectedSource -eq 'portable-payload') {
+              Join-Path $env:RUNNER_TEMP 'portable-payload/Metis.exe'
+            } else {
+              Join-Path $env:RUNNER_TEMP 'installed/Metis.exe'
+            }
+            $expectedExecutableSha256 = (Get-FileHash -Algorithm SHA256 $expectedExecutable).Hash.ToLowerInvariant()
             $path = "launch-reports/$($asset.name).launch.json"
             $report = if (Test-Path $path) { Get-Content $path -Raw | ConvertFrom-Json } else { $null }
             if ($null -eq $report -or $report.installer -ne $asset.name -or $report.verdict -ne 'PASS' -or $report.artifact_sha256 -ne $asset.sha256) {
@@ -534,6 +541,7 @@ jobs:
               $report.artifact_sha256 -ne $asset.sha256 -or
               $report.candidate_run -ne [string]$provenance.run.id -or
               $report.executable_source -ne $expectedSource -or
+              $report.executable_sha256 -ne $expectedExecutableSha256 -or
               $report.engines.whisper.job_state -ne 'done' -or
               $report.engines.parakeet.job_state -ne 'done' -or
               $report.engines.whisper.readback_ok -ne $true -or

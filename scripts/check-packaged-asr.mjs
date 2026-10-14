@@ -45,7 +45,7 @@
  * Default target: release/win-unpacked/Metis.exe
  */
 import { _electron as electron } from 'playwright'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
@@ -76,6 +76,7 @@ const candidateRun = flag('--candidate-run')
 const executableSource = flag('--executable-source')
 const startedAt = Date.now()
 const engineReports = {}
+let executableSha256
 const SAPI_SYNTH_TIMEOUT_MS = 180_000
 const PHRASE = 'The quarterly revenue target is seven million dollars'
 const ENGINES = ['whisper', 'parakeet']
@@ -166,7 +167,7 @@ console.log(`[check:packaged-asr] launching ${target}`)
 console.log(`[check:packaged-asr]   isolated profile: ${userData}`)
 
 let app
-function writeAcceptanceReport(verdict, failure = null) {
+function writeAcceptanceReport(verdict, failureCode = null) {
   if (reportPath === undefined) return
   if (!installer) throw new Error('--report requires --installer')
   if (!/^[0-9a-f]{64}$/i.test(artifactSha256 ?? '')) {
@@ -187,14 +188,36 @@ function writeAcceptanceReport(verdict, failure = null) {
         candidate_run: candidateRun,
         executable: basename(target),
         executable_source: executableSource,
+        executable_sha256: executableSha256,
         engines: engineReports,
-        failure,
+        failure_code: failureCode,
         elapsed_ms: Date.now() - startedAt
       },
       null,
       2
     )}\n`
   )
+}
+function classifyFailure(reason) {
+  if (reason.includes('failed to launch under Playwright') || reason.includes('no renderer window')) {
+    return 'launch-failed'
+  }
+  if (reason.includes('asrEngine did not stick')) return 'settings-mismatch'
+  if (reason.includes('importAudioPick()')) return 'picker-failed'
+  if (reason.includes('importAudioStart()')) return 'job-start-failed'
+  if (reason.includes('job disappeared')) return 'job-missing'
+  if (reason.includes('job failed')) return 'job-failed'
+  if (reason.includes('did not finish within')) return 'job-timeout'
+  if (reason.includes('no saved meeting file')) return 'saved-file-missing'
+  if (reason.includes('could not be read back')) return 'readback-failed'
+  if (reason.includes('no transcript lines')) return 'transcript-empty'
+  if (reason.includes('acceptance report')) return 'report-write-failed'
+  return 'native-evidence-failed'
+}
+async function sha256File(path) {
+  const hash = createHash('sha256')
+  for await (const chunk of createReadStream(path)) hash.update(chunk)
+  return hash.digest('hex')
 }
 function killApp() {
   try {
@@ -224,7 +247,7 @@ function safeRmSync(path) {
 async function fail(reason) {
   console.error(`[check:packaged-asr] FAIL — ${reason}`)
   try {
-    writeAcceptanceReport('FAIL', reason)
+    writeAcceptanceReport('FAIL', classifyFailure(reason))
   } catch (error) {
     console.error(
       `[check:packaged-asr] FAIL — could not write the acceptance report: ${error instanceof Error ? error.message : String(error)}`
@@ -243,6 +266,7 @@ async function fail(reason) {
 }
 
 async function main() {
+  executableSha256 = await sha256File(target)
   try {
     app = await electron.launch({ executablePath: target, env })
     await app.evaluate(installAsrObserver)
