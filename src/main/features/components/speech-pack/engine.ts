@@ -61,6 +61,7 @@ import {
   type InstallDirectoryOwners,
   type RollbackOwnership
 } from './activation-rollback'
+import { resolveSpeechPackInstallAdmission, type SpeechPackInstallAdmission } from './install-admission'
 
 export const DISK_HEADROOM_BYTES = 512 * 1024 * 1024
 export const EMIT_INTERVAL_MS = 250
@@ -121,6 +122,8 @@ export interface SpeechPackEngineOptions {
   ) => boolean
   /** Distinguishes an in-process pause/resume from stale partial data left by a prior launch. */
   resumeScope?: string
+  /** Opaque admission captured by the main service after current explicit-consent checks. */
+  installAdmission?: (componentId: SpeechPackComponentId, transaction: symbol) => SpeechPackInstallAdmission | null
 }
 
 export interface SpeechPackEngine {
@@ -333,6 +336,11 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     forceRepair: boolean,
     transaction: symbol
   ): Promise<void> {
+    const admission = options.installAdmission?.(c.id, transaction)
+    if (options.installAdmission && !admission)
+      throw new SpeechPackError('policy', 'explicit install admission is unavailable')
+    const currentAdmission = admission ? resolveSpeechPackInstallAdmission(admission, c.id, transaction) : null
+    await currentAdmission?.assertCurrentAsync()
     const initialDirectories = await captureInstallDirectories(c)
     await assertExistingOwnedPaths(c)
     const previousMarker = await readMarkerSnapshot(c)

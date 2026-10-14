@@ -34,6 +34,7 @@ import { runSpeechPackSelfTest } from './self-test'
 import type { PriorReadyMarker } from './activation-authority'
 import type { PackageRuntimeContract } from './package-contract'
 import { resolveOptionalRuntimeReadiness, runtimeIdsForEngine, runtimeIdsForLocalLlm } from './runtime-components'
+import { createSpeechPackInstallAdmission, type SpeechPackInstallAdmission } from './install-admission'
 
 export interface SpeechPackServiceOptions {
   resourcesRoot: string
@@ -128,6 +129,10 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
   >()
   const rollbackMarkerIdentity = new WeakMap<object, string | null>()
   const pendingAdmissions = new Map<SpeechPackComponentId, symbol>()
+  const installAdmissions = new Map<
+    SpeechPackComponentId,
+    { readonly transaction: symbol; readonly admission: SpeechPackInstallAdmission }
+  >()
   let authorityRevision = 0
   let captureActive = false
   let closing = false
@@ -224,6 +229,10 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       selfTest: runSpeechPackSelfTest,
       components,
       resumeScope,
+      installAdmission: (id, transaction) => {
+        const current = installAdmissions.get(id)
+        return current?.transaction === transaction ? current.admission : null
+      },
       authorizeTransfer: (id) => {
         const authority = activeAuthority.get(id)
         return Boolean(
@@ -271,6 +280,7 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       authorizeRollbackCurrent: (id, marker, transaction) =>
         rollbackTicket(id, marker, transaction) !== null && (options.rollbackAuthorityCurrent?.() ?? true),
       onTransactionSettled: (id, transaction) => {
+        if (installAdmissions.get(id)?.transaction === transaction) installAdmissions.delete(id)
         if (rollbackAuthority.get(id)?.transaction !== transaction) return
         rollbackAuthority.delete(id)
         activity.delete(id)
@@ -669,6 +679,36 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       selectionIdentity: record.selectionIdentity,
       captureIdentity: record.captureIdentity
     })
+    const admissionCurrent = (): boolean => {
+      const authority = activeAuthority.get(component.id)
+      return Boolean(
+        !closing &&
+          record.authorityRevision === authorityRevision &&
+          rollbackAuthority.get(component.id) === rollbackTicket &&
+          authority &&
+          authority.policyIdentity === record.policyIdentity &&
+          authority.selectionIdentity === record.selectionIdentity &&
+          authority.captureIdentity === record.captureIdentity &&
+          selectedId(options.selectedEngine()) === component.id &&
+          currentSelectionIdentity() === record.selectionIdentity &&
+          currentPolicyIdentity() === record.policyIdentity &&
+          policyAllows() &&
+          !isCaptureActive() &&
+          currentCaptureIdentity() === record.captureIdentity
+      )
+    }
+    const admission = createSpeechPackInstallAdmission({
+      operation: request.action,
+      componentId: component.id,
+      manifestIdentity: record.plan.missingComponents[0].manifestIdentity,
+      resourcePolicyIdentity: record.policyIdentity,
+      transaction,
+      assertCurrent: admissionCurrent,
+      async refreshCurrent() {
+        return (await refreshAuthority()) && admissionCurrent()
+      }
+    })
+    installAdmissions.set(component.id, { transaction, admission })
     currentProgress = {
       componentId: component.id,
       manifestIdentity: record.plan.missingComponents[0].manifestIdentity,
@@ -695,6 +735,7 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     if (request.action === 'pause' || request.action === 'cancel') {
       authorityRevision += 1
       pendingAdmissions.delete(component.id)
+      installAdmissions.delete(component.id)
       if (!engine) return result({ ok: true })
       if (request.action === 'pause') engine.pause(component.id)
       else engine.cancel(component.id)
@@ -722,6 +763,7 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       for (const id of activity) engine?.cancel(id)
       activity.clear()
       activeAuthority.clear()
+      installAdmissions.clear()
     },
     selectionChanged(): void {
       const nextEngine = options.selectedEngine()
@@ -734,6 +776,7 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       for (const id of activity) engine?.cancel(id)
       activity.clear()
       activeAuthority.clear()
+      installAdmissions.clear()
     },
     captureActivityChanged(active: boolean): void {
       if (captureActive !== active) {
@@ -749,6 +792,7 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       authorityRevision += 1
       installPlans.clear()
       pendingAdmissions.clear()
+      installAdmissions.clear()
       if (engine) for (const component of components) engine.cancel(component.id)
       activity.clear()
       activeAuthority.clear()

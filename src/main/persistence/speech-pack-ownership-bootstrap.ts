@@ -14,8 +14,7 @@ import {
 import {
   SPEECH_PACK_COMPONENTS,
   componentBytes,
-  type SpeechPackComponent,
-  type SpeechPackComponentId
+  type SpeechPackComponent
 } from '../features/components/speech-pack/manifest'
 import { componentManifestIdentity } from '../features/components/speech-pack/resolver'
 import { captureMainSpeechPackPurposeRoot } from './main-bootstrap-lifecycle'
@@ -29,6 +28,10 @@ import {
   getMeetingSpeechReadLimitBytes,
   isMeetingSpeechPersistenceConfigured
 } from '../features/meetings/meeting-speech'
+import {
+  assertCurrentSpeechPackInstallAdmission,
+  type CurrentSpeechPackInstallAdmission
+} from '../features/components/speech-pack/install-admission'
 
 export interface SpeechPackOwnershipSession {
   readonly store: SpeechPackOwnershipStore
@@ -117,28 +120,23 @@ function createPlans(
   return { staging, active, archiveWork }
 }
 
-/** Opens a purpose-bound receipt registry only from the captured first-show main action lease. */
-export async function openSpeechPackOwnershipSession(input: {
-  readonly componentId: SpeechPackComponentId
-  readonly operation: 'install'
-  /** Exact policy generation captured by the explicit consent admission. */
-  readonly resourcePolicyIdentity: string
-}): Promise<SpeechPackOwnershipSession> {
+/** Opens a purpose-bound receipt registry only from a current service-issued install admission. */
+export async function openSpeechPackOwnershipSession(
+  admission: CurrentSpeechPackInstallAdmission
+): Promise<SpeechPackOwnershipSession> {
+  await assertCurrentSpeechPackInstallAdmission(admission)
   if (
-    input.operation !== 'install' ||
-    !['asr.whisper-base-q8', 'asr.parakeet-tdt-0.6b-v3-int8'].includes(input.componentId)
+    (admission.operation !== 'install' && admission.operation !== 'repair') ||
+    !['asr.whisper-base-q8', 'asr.parakeet-tdt-0.6b-v3-int8'].includes(admission.componentId)
   )
     throw new Error('Speech-pack ownership requires an admitted component install operation')
-  if (
-    typeof input.resourcePolicyIdentity !== 'string' ||
-    input.resourcePolicyIdentity.length === 0 ||
-    Buffer.byteLength(input.resourcePolicyIdentity) > 4096
-  ) {
+  if (Buffer.byteLength(admission.resourcePolicyIdentity) > 4096) {
     throw new Error('Speech-pack ownership requires a current resource policy identity')
   }
-  const component = SPEECH_PACK_COMPONENTS.find((candidate) => candidate.id === input.componentId)
+  const component = SPEECH_PACK_COMPONENTS.find((candidate) => candidate.id === admission.componentId)
   if (!component) throw new Error('Speech-pack ownership component is not in the compiled catalog')
   const lease = await captureMainSpeechPackPurposeRoot('create')
+  await assertCurrentSpeechPackInstallAdmission(admission)
   const createRegistry = lease.keyRootFresh
   const storeMode = createRegistry ? 'create-explicit' : 'open-existing'
   let key: SpeechPackReceiptKeyHandle | null = null
@@ -148,6 +146,7 @@ export async function openSpeechPackOwnershipSession(input: {
   try {
     lease.scope.assertCurrent()
     await lease.scope.assertPhysicalCurrent()
+    await assertCurrentSpeechPackInstallAdmission(admission)
     if (!isMeetingSpeechPersistenceConfigured()) {
       throw new Error('The main speech persistence worker is unavailable for protected speech-pack ownership.')
     }
@@ -163,6 +162,7 @@ export async function openSpeechPackOwnershipSession(input: {
       ? await keys.createForExplicitInstall(lease.scope, lease.keyRegistryRoot)
       : await keys.openExistingForRecovery(lease.scope, lease.keyRegistryRoot)
     lease.scope.assertCurrent()
+    await assertCurrentSpeechPackInstallAdmission(admission)
     backend = await createSpeechPackRegistryBackend({
       scope: lease.scope,
       root: lease.keyPurposeRoot,
@@ -170,6 +170,7 @@ export async function openSpeechPackOwnershipSession(input: {
       mode: storeMode,
       assertMainInstanceCurrentSync: lease.scope.assertCurrent
     })
+    await assertCurrentSpeechPackInstallAdmission(admission)
     const store = await createSpeechPackOwnershipStore({
       binding: {
         profileNamespace: lease.scope.profileNamespace,
@@ -181,8 +182,10 @@ export async function openSpeechPackOwnershipSession(input: {
       backend,
       mode: storeMode
     })
+    await assertCurrentSpeechPackInstallAdmission(admission)
     planIssuer = createRuntimePayloadPlanIssuer()
-    const plans = createPlans(planIssuer, component, input.resourcePolicyIdentity)
+    const plans = createPlans(planIssuer, component, admission.resourcePolicyIdentity)
+    await assertCurrentSpeechPackInstallAdmission(admission)
     let disposal: Promise<void> | null = null
     return Object.freeze({
       store,
