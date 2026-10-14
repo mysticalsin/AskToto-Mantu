@@ -308,6 +308,7 @@ export function hostedTlsScanContext({ platform, provenance, candidateRun, sha25
     if (platform !== 'mac') return undefined
     const identity = bindHostedTlsCandidate(provenance, {
       candidateRun: positiveRunId(candidateRun),
+      candidateAttempt: positiveRunId(env?.METIS_CANDIDATE_RUN_ATTEMPT),
       producerCommit: env?.METIS_CANDIDATE_COMMIT,
       harnessCommit: env?.GITHUB_SHA,
       sha256,
@@ -417,6 +418,7 @@ function hostedTlsArgs({
   report,
   provenancePath,
   candidateRun,
+  candidateAttempt,
   harnessCommit,
   producerCommit
 }) {
@@ -424,6 +426,7 @@ function hostedTlsArgs({
     !app ||
     !provenancePath ||
     !positiveRunId(candidateRun) ||
+    !positiveRunId(candidateAttempt) ||
     !/^[0-9a-f]{40}$/.test(harnessCommit ?? '') ||
     !/^[0-9a-f]{40}$/.test(producerCommit ?? '')
   ) {
@@ -440,6 +443,8 @@ function hostedTlsArgs({
     provenancePath,
     '--candidate-run',
     String(candidateRun),
+    '--candidate-attempt',
+    String(candidateAttempt),
     '--producer-commit',
     producerCommit,
     '--harness-commit',
@@ -902,6 +907,9 @@ export function candidateRunProblems(run, candidateRun) {
   if (typeof run !== 'object' || run === null) return ['The run JSON is not an object.']
   const problems = []
   if (String(run.id) !== String(candidateRun)) problems.push(`The API returned run ${run.id}, not ${candidateRun}.`)
+  if (!Number.isSafeInteger(run.run_attempt) || run.run_attempt < 1) {
+    problems.push(`Run ${candidateRun} has no valid run_attempt in the API response.`)
+  }
   const path = String(run.path ?? '').replace(/@.*$/, '')
   if (path !== QA_CANDIDATE_WORKFLOW)
     problems.push(`Run ${candidateRun} is ${path || 'no workflow'}, not ${QA_CANDIDATE_WORKFLOW}.`)
@@ -1021,7 +1029,8 @@ export function assessScenarioReport({ scenario, platform, report, expected = un
 /** The argv (after `node`) that runs a scenario. Every argument is repository-relative, so the recorded
  *  command never names the runner's home or temp directory.
  *  @param {{ scenario: string, platform: string, installer: string, sha256: string, outDir: string, app?: string,
- *    provenancePath?: string, candidateRun?: string, harnessCommit?: string, producerCommit?: string }} options */
+ *    provenancePath?: string, candidateRun?: string, candidateAttempt?: number, harnessCommit?: string,
+ *    producerCommit?: string }} options */
 export function scenarioCommand({
   scenario,
   platform,
@@ -1031,6 +1040,7 @@ export function scenarioCommand({
   app,
   provenancePath,
   candidateRun,
+  candidateAttempt,
   harnessCommit,
   producerCommit
 }) {
@@ -1049,6 +1059,7 @@ export function scenarioCommand({
       app,
       provenancePath,
       candidateRun,
+      candidateAttempt,
       harnessCommit,
       producerCommit
     })
@@ -1063,10 +1074,24 @@ export function scenarioCommand({
   return argv
 }
 
-/** The provenance must be the candidate run's own: build_run_id and commit are taken from it. */
-export function assertCandidateProvenance(provenance, candidateRun) {
+/**
+ * The provenance must be the candidate run's own: build_run_id and commit are taken from it.
+ * @param {number | undefined} [candidateAttempt]
+ */
+export function assertCandidateProvenance(provenance, candidateRun, candidateAttempt = undefined) {
   if (String(provenance?.run?.id) !== String(candidateRun)) {
     throw new Error(`provenance run ${provenance?.run?.id} is not the candidate run ${candidateRun}.`)
+  }
+  if (candidateAttempt !== undefined) {
+    if (!Number.isSafeInteger(candidateAttempt) || candidateAttempt < 1) {
+      throw new Error('candidate run attempt is invalid.')
+    }
+    if (!Number.isSafeInteger(provenance?.run?.attempt) || provenance.run.attempt < 1) {
+      throw new Error('provenance run attempt is missing or invalid.')
+    }
+    if (provenance.run.attempt !== candidateAttempt) {
+      throw new Error('provenance run attempt does not match the candidate Actions API attempt.')
+    }
   }
 }
 
@@ -1304,9 +1329,10 @@ function run(values) {
   const sha256 = required(values, 'sha256').trim().toLowerCase()
   const outDir = required(values, 'out')
   const candidateRun = required(values, 'candidate-run')
+  const candidateAttempt = positiveRunId(process.env.METIS_CANDIDATE_RUN_ATTEMPT)
   const provenance = JSON.parse(readFileSync(required(values, 'provenance'), 'utf8'))
   const target = platformEntry(scenario, platform)
-  assertCandidateProvenance(provenance, candidateRun)
+  assertCandidateProvenance(provenance, candidateRun, candidateAttempt)
   // The installed app sits outside the checkout (under the runner's temp directory); it is recorded relative
   // to the working directory so the command stays free of absolute paths.
   const app = values.app ? relative(process.cwd(), values.app).replaceAll('\\', '/') : undefined
@@ -1320,6 +1346,7 @@ function run(values) {
     app,
     provenancePath: values.provenance,
     candidateRun,
+    candidateAttempt,
     harnessCommit: process.env.GITHUB_SHA,
     producerCommit: process.env.METIS_CANDIDATE_COMMIT
   })

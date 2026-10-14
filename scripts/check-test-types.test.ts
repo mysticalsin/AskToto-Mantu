@@ -228,6 +228,7 @@ describe('MQA-248 — the test-file typecheck ratchet', () => {
       const r = runGate(fixture.gate, fixture.root)
       expect(r.code, r.out).toBe(1)
       expect(r.out).toContain('1 type errors in test files, up from the 0 baseline')
+      expect(r.out).toContain(`Compiler diagnostics:\n    ${DIAGNOSTIC}`)
       expect(r.out).not.toContain(COMPILER_FAILURE)
       expect(r.out).not.toContain('[check:test-types] OK')
     } finally {

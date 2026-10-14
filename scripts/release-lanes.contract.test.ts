@@ -10,6 +10,7 @@ interface Job {
   concurrency: { group: string; cancelInProgress: boolean } | null
   uploads: string[]
   downloads: string[]
+  commands: string[]
 }
 
 interface WorkflowModel {
@@ -43,7 +44,16 @@ function parseNeeds(value: string, job: string): string[] {
 function parseWorkflow(source: string): WorkflowModel {
   const lines = source.replace(/\r\n/g, '\n').split('\n')
   const jobs: Record<string, Job> = {}
-  const allowedJobKeys = new Set(['name', 'if', 'needs', 'runs-on', 'timeout-minutes', 'strategy', 'concurrency', 'steps'])
+  const allowedJobKeys = new Set([
+    'name',
+    'if',
+    'needs',
+    'runs-on',
+    'timeout-minutes',
+    'strategy',
+    'concurrency',
+    'steps'
+  ])
   let manualDryRunInput = false
   let inJobs = false
   let inWorkflowDispatch = false
@@ -106,7 +116,7 @@ function parseWorkflow(source: string): WorkflowModel {
     const jobHeader = line.match(/^  ([a-z][a-z0-9-]*):$/)
     if (jobHeader) {
       currentJob = jobHeader[1]
-      jobs[currentJob] = { condition: null, needs: [], concurrency: null, uploads: [], downloads: [] }
+      jobs[currentJob] = { condition: null, needs: [], concurrency: null, uploads: [], downloads: [], commands: [] }
       currentAction = null
       waitingForArtifactName = false
       continue
@@ -130,6 +140,9 @@ function parseWorkflow(source: string): WorkflowModel {
       waitingForArtifactName = false
       continue
     }
+
+    const command = line.match(/^        run:\s*(.*)$/)
+    if (command) jobs[currentJob].commands.push(command[1].trim())
 
     if (line.match(/^      - uses:\s*actions\/upload-artifact@/)) {
       currentAction = 'upload'
@@ -242,13 +255,18 @@ describe('release.yml independent platform publication lanes (M2-0053)', () => {
     expect(Object.keys(jobs).sort()).toEqual([...DRY_RUN, ...DECISION, ...SHARED, ...MAC, ...WIN].sort())
   })
 
-  it('the computed release decision stands alone: it needs no job and gates no publication (M2-0171)', () => {
+  it('the computed release decision runs independently and gates both publishers (M2-0171)', () => {
     const { jobs } = modelReleaseWorkflow()
     expect(jobs['release-decision'].condition).toBe("github.event_name == 'push'")
     expect(jobs['release-decision'].needs).toEqual([])
     expect(jobs['release-decision'].uploads).toEqual(['release-decision'])
-    for (const [name, job] of Object.entries(jobs)) {
-      expect(job.needs, `${name} must not wait on the decision`).not.toContain('release-decision')
+    expect(jobs['release-decision'].commands).toContain(
+      'node scripts/release/decide.mjs --commit "$GITHUB_SHA" --ledger program/ledger/tickets.json --matrix program/traceability/matrix.json --out out/release-decision'
+    )
+    expect(jobs['publish-macos'].needs).toContain('release-decision')
+    expect(jobs['publish-windows'].needs).toContain('release-decision')
+    for (const name of ['release-quality', 'release-macos', 'release-windows']) {
+      expect(jobs[name].needs, `${name} must build independently of the decision`).not.toContain('release-decision')
     }
   })
 
@@ -290,10 +308,25 @@ describe('release.yml independent platform publication lanes (M2-0053)', () => {
     expect(running.has('publish-windows')).toBe(false)
   })
 
-  it('each publish job stands on exactly its own build and the shared gate', () => {
+  it('a failing release decision prevents both platform publishers', () => {
     const { jobs } = modelReleaseWorkflow()
-    expect([...ancestors(jobs, 'publish-macos')].sort()).toEqual(['release-macos', 'release-quality'])
-    expect([...ancestors(jobs, 'publish-windows')].sort()).toEqual(['release-quality', 'release-windows'])
+    const running = jobsThatRun(jobs, 'release-decision')
+    expect(running.has('publish-macos')).toBe(false)
+    expect(running.has('publish-windows')).toBe(false)
+  })
+
+  it('each publish job stands on its own build, the shared source gate and release decision', () => {
+    const { jobs } = modelReleaseWorkflow()
+    expect([...ancestors(jobs, 'publish-macos')].sort()).toEqual([
+      'release-decision',
+      'release-macos',
+      'release-quality'
+    ])
+    expect([...ancestors(jobs, 'publish-windows')].sort()).toEqual([
+      'release-decision',
+      'release-quality',
+      'release-windows'
+    ])
   })
 
   it('each publish job consumes only its own platform bytes', () => {
