@@ -339,7 +339,7 @@ describe('cloud speech capture controller', () => {
     expect(onFailure).toHaveBeenCalledTimes(1)
     expect(next.events.size).toBe(0)
     startResult.resolve(started())
-    expect(await starting).toMatchObject({ ok: false, code: 'CLOSED' })
+    expect(await starting).toMatchObject({ ok: false, code: 'QUEUE_LIMIT' })
     await vi.waitFor(() => expect(next.bridge.cloudSpeechCancel).toHaveBeenCalledWith({ captureId, captureGeneration }))
     next.instance.dispose()
   })
@@ -388,9 +388,53 @@ describe('cloud speech capture controller', () => {
     expect(onFailure).toHaveBeenCalledTimes(1)
     expect(next.events.size).toBe(0)
     startResult.resolve(started())
-    expect(await starting).toMatchObject({ ok: false, code: 'CLOSED' })
+    expect(await starting).toMatchObject({ ok: false, code: 'QUEUE_LIMIT' })
     await vi.waitFor(() => expect(next.bridge.cloudSpeechCancel).toHaveBeenCalledWith({ captureId, captureGeneration }))
     expect(applied).not.toHaveBeenCalled()
+    next.instance.dispose()
+  })
+
+  it('bounds startup activation when applying an early event stalls', async () => {
+    const onFailure = vi.fn()
+    const applyResult = deferred<void>()
+    const applyStarted = deferred<void>()
+    const next = controller({
+      deadlineMs: 50,
+      onFailure,
+      applyEvent: () => {
+        applyStarted.resolve()
+        return applyResult.promise
+      }
+    })
+    const startResult = deferred<unknown>()
+    next.bridge.cloudSpeechStart = vi.fn(() => startResult.promise)
+    const starting = next.instance.start()
+    await vi.waitFor(() => expect(next.bridge.cloudSpeechStart).toHaveBeenCalledTimes(1))
+    const stream = { generation: captureGeneration, track: 'microphone' as const, epoch: 3 }
+    for (const listener of next.events)
+      listener({
+        type: 'segment',
+        captureId,
+        captureGeneration,
+        sequence: 1,
+        segment: {
+          stream,
+          engine: 'cloudflare-nova3',
+          index: 1,
+          revision: 1,
+          final: true,
+          text: 'startup application stalls',
+          startMs: 0,
+          endMs: 10
+        }
+      })
+    startResult.resolve(started())
+    await applyStarted.promise
+
+    expect(await starting).toMatchObject({ ok: false, code: 'TIMEOUT' })
+    expect(onFailure).toHaveBeenCalledWith('TIMEOUT')
+    await vi.waitFor(() => expect(next.bridge.cloudSpeechCancel).toHaveBeenCalledWith({ captureId, captureGeneration }))
+    applyResult.resolve()
     next.instance.dispose()
   })
 
