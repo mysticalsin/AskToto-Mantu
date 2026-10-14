@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { CloudSpeechSettingsSchema, DEFAULT_CLOUD_SPEECH_SETTINGS } from './broker-speech-settings'
 import type { ProviderId } from './providers'
 import { LocalVisionEvidenceSchema } from './local-ai'
 import { EntityKindSchema } from './brain'
@@ -1191,24 +1192,7 @@ export const BaseSettingsSchema = z.object({
   // NOTE: this zod default is effectively dead — store.ts layers DEFAULT_SETTINGS under the user file
   // before parsing, so the key is always present. Keep both declarations identical so neither lies.
   asrEngine: z.enum(['whisper', 'parakeet', 'apple']).default('parakeet'),
-  /**
-   * Managed enterprise-live profile (1.9.1). Trusted via managed-config defaults / org policy.
-   * CLOUD_ONLY disables local STT fallback; summaryOnly omits fresh Full transcript sections.
-   */
-  enterpriseLive: z
-    .object({
-      managed: z.boolean().default(false),
-      inferenceMode: z.enum(['legacy', 'cloud-only']).default('legacy'),
-      summaryOnly: z.boolean().default(false)
-    })
-    .default({ managed: false, inferenceMode: 'legacy', summaryOnly: false }),
-  /**
-   * Cloud speech provider for managed enterprise-live Listen.
-   * Under CLOUD_ONLY, Settings + Listen treat unconfigured as Cloudflare Nova-3
-   * (see shared/cloud-stt-provider.ts). Soniox is selectable when approved.
-   * Legacy profiles keep on-device asrEngine; this field stays unconfigured.
-   */
-  cloudSttProvider: z.enum(['cloudflare-nova3', 'soniox', 'unconfigured']).default('unconfigured'),
+  ...CloudSpeechSettingsSchema.shape,
   /**
    * Cloudflare AI Gateway id for Nova-3 live WS (Operator verifyDefaultGatewayPrivacy uses `default`).
    * Blank → resolveCloudSttGatewayId falls through env then `default`. Not a secret.
@@ -1749,8 +1733,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showFullTranscriptInReview: false,
   asrQuality: 'best',
   asrEngine: 'parakeet',
-  enterpriseLive: { managed: false, inferenceMode: 'legacy', summaryOnly: false },
-  cloudSttProvider: 'unconfigured',
+  ...DEFAULT_CLOUD_SPEECH_SETTINGS,
   cfAiGatewayId: '',
   cloudflareAccountId: '',
   asrLanguage: 'auto',
