@@ -150,9 +150,15 @@ export class SpeechPolicyAuthority {
   private activeScopeKey: string | null = null
   private identityEpoch = 0
   private proofListener: SpeechPolicyProofListener | null = null
+  private readonly additionalProofListeners = new Set<SpeechPolicyProofListener>()
 
   setProofListener(listener: SpeechPolicyProofListener | null): void {
     this.proofListener = listener
+  }
+
+  addProofListener(listener: SpeechPolicyProofListener): () => void {
+    this.additionalProofListeners.add(listener)
+    return () => this.additionalProofListeners.delete(listener)
   }
 
   observeIdentity(identity: SpeechPolicyIdentity | null): number {
@@ -351,6 +357,7 @@ export class SpeechPolicyAuthority {
     this.activeScopeKey = null
     this.identityEpoch = 0
     this.proofListener = null
+    this.additionalProofListeners.clear()
   }
 
   private compareAndRecord(
@@ -389,6 +396,13 @@ export class SpeechPolicyAuthority {
       this.proofListener?.(event)
     } catch {
       // Runtime retirement is a one-way notification and cannot make policy acceptance fail.
+    }
+    for (const listener of this.additionalProofListeners) {
+      try {
+        listener(event)
+      } catch {
+        // Additional retirement observers cannot make policy acceptance fail.
+      }
     }
   }
 }

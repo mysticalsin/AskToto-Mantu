@@ -214,8 +214,14 @@ async function requestHost(
       generation = current?.state === 'active' ? current : null
       if (!generation) {
         const modelPath = lease ? lease.modelFile('speaker.embedding', 'speaker/embedding.onnx') : request.model
-        generation = spawnGeneration(lease, modelPath)
-        transferred = true
+        await lease?.verifyCurrentBytes()
+        if (ownerEpoch[owner] !== admittedEpoch) throw new Error('Speaker embedding processing was cancelled.')
+        if (releaseGate) throw new Error('Speaker embedding host is releasing.')
+        generation = current?.state === 'active' ? current : null
+        if (!generation) {
+          generation = spawnGeneration(lease, modelPath)
+          transferred = true
+        }
       }
     } finally {
       if (!transferred) await lease?.release()

@@ -16,11 +16,28 @@ type Owner = {
   navigation: number
   subscribed: boolean
   retired?: boolean
-  readonly pending: Map<string, AbortController>
+  readonly pending: Map<string, { readonly controller: AbortController; readonly settled: Promise<void> }>
   readonly hosts: Map<string, RuntimeWhisperHost>
 }
 const MAX_RUNTIME_WORKER_HOSTS = 2
 const MAX_RUNTIME_WORKER_PENDING = 2
+const OWNER_SETTLEMENT_MS = 15_000
+
+function bounded<T>(promise: Promise<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('RUNTIME_WORKER_OWNER_UNSETTLED')), OWNER_SETTLEMENT_MS)
+    promise.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error: unknown) => {
+        clearTimeout(timer)
+        reject(error)
+      }
+    )
+  })
+}
 
 function snapshot(value: Authority): string {
   if (
@@ -72,15 +89,13 @@ export function registerRuntimeWhisperWorkerIpc(options: {
   const revokeOwner = async (owner: Owner): Promise<void> => {
     owner.identity = randomBytes(16).toString('hex')
     owner.navigation += 1
-    for (const pending of owner.pending.values()) pending.abort(new Error('RUNTIME_WORKER_REVOKED'))
+    for (const pending of owner.pending.values()) pending.controller.abort(new Error('RUNTIME_WORKER_REVOKED'))
+    await bounded(Promise.all([...owner.pending.values()].map((pending) => pending.settled)).then(() => undefined))
     await Promise.all(
       [...owner.hosts].map(async ([requestId, host]) => {
-        try {
-          await host.stop()
-          if (owner.hosts.get(requestId) === host) owner.hosts.delete(requestId)
-        } catch {
-          // Preserve the owner and its lease until the real renderer exit is observed.
-        }
+        await host.stop()
+        await bounded(host.settled)
+        if (owner.hosts.get(requestId) === host) owner.hosts.delete(requestId)
       })
     )
     pruneOwner(owner)
@@ -155,7 +170,12 @@ export function registerRuntimeWhisperWorkerIpc(options: {
     )
       return { ok: false }
     const controller = new AbortController()
-    context.owner.pending.set(requestId, controller)
+    let resolvePending!: () => void
+    const settled = new Promise<void>((resolvePromise) => {
+      resolvePending = resolvePromise
+    })
+    const pending = { controller, settled }
+    context.owner.pending.set(requestId, pending)
     let lease: RuntimeFeatureLease | null = null
     let host: RuntimeWhisperHost | null = null
     try {
@@ -182,7 +202,7 @@ export function registerRuntimeWhisperWorkerIpc(options: {
       retainHostUntilSettled(context.owner, requestId, host)
       lease = null // the host owns the lease until its observed renderer-process exit
       await assertCurrent()
-      if (context.owner.pending.get(requestId) !== controller) throw new Error('RUNTIME_WORKER_CANCELLED')
+      if (context.owner.pending.get(requestId) !== pending) throw new Error('RUNTIME_WORKER_CANCELLED')
       const frame = event.senderFrame
       if (!frame) throw new Error('RUNTIME_WORKER_CALLER_STALE')
       frame.postMessage('metis-runtime-worker-port', { requestId }, [host.uiPort])
@@ -194,17 +214,15 @@ export function registerRuntimeWhisperWorkerIpc(options: {
         retainHostUntilSettled(context.owner, requestId, host)
       }
       if (host) {
-        try {
-          await host.stop()
-          if (context.owner.hosts.get(requestId) === host) context.owner.hosts.delete(requestId)
-        } catch {
-          // Retain the lease-owning host record when its renderer exit is uncertain.
-        }
+        await host.stop()
+        await bounded(host.settled)
+        if (context.owner.hosts.get(requestId) === host) context.owner.hosts.delete(requestId)
       }
       if (lease) await lease.release()
       return { ok: false }
     } finally {
-      if (context.owner.pending.get(requestId) === controller) context.owner.pending.delete(requestId)
+      if (context.owner.pending.get(requestId) === pending) context.owner.pending.delete(requestId)
+      resolvePending()
       pruneOwner(context.owner)
     }
   })
@@ -214,7 +232,7 @@ export function registerRuntimeWhisperWorkerIpc(options: {
     const parsed = CloseRequest.safeParse(input)
     if (!parsed.success) return { ok: false }
     const { requestId } = parsed.data
-    context.owner.pending.get(requestId)?.abort(new Error('RUNTIME_WORKER_CANCELLED'))
+    context.owner.pending.get(requestId)?.controller.abort(new Error('RUNTIME_WORKER_CANCELLED'))
     const host = context.owner.hosts.get(requestId)
     if (!host) return { ok: true }
     try {
@@ -230,16 +248,17 @@ export function registerRuntimeWhisperWorkerIpc(options: {
     }
   })
 
-  let cleaned = false
+  let handlersRemoved = false
   return {
     async revokeAll(): Promise<void> {
       await Promise.all([...liveOwners].map((owner) => revokeOwner(owner)))
     },
     async cleanup(): Promise<void> {
-      if (cleaned) return
-      cleaned = true
-      options.ipcMain.removeHandler(IPC.runtimeWhisperWorkerOpen)
-      options.ipcMain.removeHandler(IPC.runtimeWhisperWorkerClose)
+      if (!handlersRemoved) {
+        handlersRemoved = true
+        options.ipcMain.removeHandler(IPC.runtimeWhisperWorkerOpen)
+        options.ipcMain.removeHandler(IPC.runtimeWhisperWorkerClose)
+      }
       await Promise.all([...liveOwners].map((owner) => revokeOwner(owner)))
     }
   }

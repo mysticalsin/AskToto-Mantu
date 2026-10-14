@@ -13,8 +13,8 @@
  */
 import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { constants as fsConstants } from 'node:fs'
-import { lstat, mkdir, open, readFile, rename, rm, stat, statfs, unlink, writeFile } from 'node:fs/promises'
+import { constants as fsConstants, type BigIntStats } from 'node:fs'
+import { lstat, mkdir, open, rename, rm, stat, statfs, unlink, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { isHtmlContentType, looksLikeAccessRedirect, looksLikeHtmlBytes } from '../../../../shared/bundle-response'
 import { SpeechPackError } from './errors'
@@ -407,6 +407,48 @@ export async function sizeOf(path: string): Promise<number> {
   }
 }
 
+async function readBoundedResumeMetadata(path: string, maxBytes: number): Promise<string> {
+  const handle = await open(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0))
+  try {
+    const before = await handle.stat({ bigint: true })
+    const named = await lstat(path, { bigint: true })
+    const sameVersion = (left: BigIntStats, right: BigIntStats): boolean =>
+      left.dev === right.dev &&
+      left.ino === right.ino &&
+      left.mode === right.mode &&
+      left.nlink === right.nlink &&
+      left.size === right.size &&
+      left.mtimeNs === right.mtimeNs &&
+      left.ctimeNs === right.ctimeNs &&
+      left.birthtimeNs === right.birthtimeNs
+    if (
+      !before.isFile() ||
+      before.nlink !== 1n ||
+      before.size > BigInt(maxBytes) ||
+      !named.isFile() ||
+      named.nlink !== 1n ||
+      !sameVersion(before, named)
+    ) {
+      throw new Error('RUNTIME_RESUME_METADATA_INVALID')
+    }
+    const bytes = Buffer.allocUnsafe(maxBytes + 1)
+    let offset = 0
+    while (offset < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, offset)
+      if (bytesRead === 0) break
+      offset += bytesRead
+    }
+    const after = await handle.stat({ bigint: true })
+    const namedAfter = await lstat(path, { bigint: true })
+    if (offset > maxBytes || !sameVersion(before, after) || !sameVersion(before, namedAfter)) {
+      throw new Error('RUNTIME_RESUME_METADATA_CHANGED')
+    }
+    return bytes.subarray(0, offset).toString('utf8')
+  } finally {
+    await handle.close().catch(() => undefined)
+  }
+}
+
 function parseRetryAfter(value: string | null, now = Date.now()): number {
   if (!value) return 0
   const seconds = Number(value)
@@ -466,7 +508,10 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
   let validator: string | null = null
   let storedScope: string | undefined
   try {
-    const metadata = JSON.parse(await readFile(meta, 'utf8')) as { validator?: string; scope?: string }
+    const metadata = JSON.parse(await readBoundedResumeMetadata(meta, 16 * 1024)) as {
+      validator?: string
+      scope?: string
+    }
     validator = metadata.validator ?? null
     storedScope = metadata.scope
   } catch {

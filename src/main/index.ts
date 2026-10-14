@@ -4604,6 +4604,7 @@ function refreshScreenPreprocess(): void {
 function revokePrivilegedSurface(): void {
   refreshScreenPreprocess() // stops the watcher child, the 6s tick and the cached description
   invalidateCloudSttOwner() // closes authenticated live-speech sockets and invalidates their callbacks
+  void runtimeConsumers?.revokeWhisper().catch((error: unknown) => mainLog.warn('[runtime] revoke failed:', error))
   if (!requireAuth()) closeIntelligenceWindow()
 }
 setSessionClearedHandler(commandControl.wrapLifecycleListener('auth_session_cleared', revokePrivilegedSurface))

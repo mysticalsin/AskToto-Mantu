@@ -22,6 +22,54 @@ function sha256(bytes: Uint8Array | string): string {
   return createHash('sha256').update(bytes).digest('hex')
 }
 
+function sameFileVersion(a: BigIntStats | null, b: BigIntStats | null): boolean {
+  return a === null || b === null
+    ? a === b
+    : a.dev === b.dev &&
+        a.ino === b.ino &&
+        a.mode === b.mode &&
+        a.nlink === b.nlink &&
+        a.uid === b.uid &&
+        a.gid === b.gid &&
+        a.rdev === b.rdev &&
+        a.size === b.size &&
+        a.blocks === b.blocks &&
+        a.mtimeNs === b.mtimeNs &&
+        a.ctimeNs === b.ctimeNs &&
+        a.birthtimeNs === b.birthtimeNs
+}
+
+async function fileVersion(path: string): Promise<BigIntStats | null> {
+  try {
+    const value = await lstat(path, { bigint: true })
+    if (!value.isFile() || value.isSymbolicLink() || value.nlink !== 1n) {
+      throw new Error('RUNTIME_INSTALL_POINTER_INVALID')
+    }
+    return value
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  }
+}
+
+type DirectoryIdentity = Pick<BigIntStats, 'dev' | 'ino' | 'birthtimeNs'>
+
+async function directoryIdentity(path: string): Promise<DirectoryIdentity> {
+  const value = await lstat(path, { bigint: true })
+  if (!value.isDirectory() || value.isSymbolicLink()) throw new Error('RUNTIME_INSTALL_DIRECTORY_INVALID')
+  return { dev: value.dev, ino: value.ino, birthtimeNs: value.birthtimeNs }
+}
+
+function sameDirectoryIdentity(expected: DirectoryIdentity, actual: BigIntStats): boolean {
+  return (
+    actual.isDirectory() &&
+    !actual.isSymbolicLink() &&
+    expected.dev === actual.dev &&
+    expected.ino === actual.ino &&
+    expected.birthtimeNs === actual.birthtimeNs
+  )
+}
+
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
   if (value !== null && typeof value === 'object') {
@@ -59,7 +107,9 @@ async function ensureOwnedDirectory(path: string): Promise<string> {
 }
 
 async function readPinnedFile(path: string, max: number): Promise<Buffer> {
-  if (!constants.O_NOFOLLOW || !constants.O_NONBLOCK) throw new Error('RUNTIME_SAFE_FILE_OPEN_UNAVAILABLE')
+  if (process.platform !== 'win32' && (!constants.O_NOFOLLOW || !constants.O_NONBLOCK)) {
+    throw new Error('RUNTIME_SAFE_FILE_OPEN_UNAVAILABLE')
+  }
   const handle = await open(path, constants.O_RDONLY | SAFE_FLAGS)
   try {
     const before = await handle.stat({ bigint: true })
@@ -141,11 +191,15 @@ async function writeExclusive(path: string, data: Uint8Array, mode: number): Pro
   }
 }
 
-async function writeBytesAtomic(path: string, bytes: Uint8Array, beforeRename: () => void): Promise<void> {
+async function writeBytesAtomic(
+  path: string,
+  bytes: Uint8Array,
+  beforeRename: () => Promise<void> | void
+): Promise<void> {
   const temp = `${path}.${randomBytes(16).toString('hex')}.tmp`
   await writeExclusive(temp, bytes, 0o600)
   try {
-    beforeRename()
+    await beforeRename()
     await rename(temp, path)
   } catch (error) {
     await rm(temp, { force: true }).catch(() => undefined)
@@ -153,25 +207,35 @@ async function writeBytesAtomic(path: string, bytes: Uint8Array, beforeRename: (
   }
 }
 
-async function removeOwnedTree(root: string, path: string): Promise<void> {
+async function removeOwnedTree(root: string, path: string, expectedRoot: DirectoryIdentity): Promise<void> {
   const canonicalRoot = await realpath(root)
   const canonical = await realpath(path)
   const rel = relative(canonicalRoot, canonical)
   if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || resolve(path) !== canonical) {
     throw new Error('RUNTIME_INSTALL_CLEANUP_ESCAPE')
   }
-  const makeWritable = async (directory: string): Promise<void> => {
+  const makeWritable = async (directory: string, expected: DirectoryIdentity): Promise<void> => {
+    if (!sameDirectoryIdentity(expected, await lstat(directory, { bigint: true }))) {
+      throw new Error('RUNTIME_INSTALL_CLEANUP_OWNER_CHANGED')
+    }
     await chmod(directory, 0o700)
     for (const name of await readdir(directory)) {
       const child = join(directory, name)
-      const item = await lstat(child)
+      const item = await lstat(child, { bigint: true })
       if (item.isSymbolicLink()) throw new Error('RUNTIME_INSTALL_LINK_REJECTED')
-      if (item.isDirectory()) await makeWritable(child)
-      else if (item.isFile() && item.nlink === 1) await chmod(child, 0o600)
-      else throw new Error('RUNTIME_INSTALL_SPECIAL_FILE')
+      if (item.isDirectory()) {
+        await makeWritable(child, { dev: item.dev, ino: item.ino, birthtimeNs: item.birthtimeNs })
+      } else if (item.isFile() && item.nlink === 1n) {
+        const current = await lstat(child, { bigint: true })
+        if (!sameFileVersion(item, current)) throw new Error('RUNTIME_INSTALL_CLEANUP_OWNER_CHANGED')
+        await chmod(child, 0o600)
+      } else throw new Error('RUNTIME_INSTALL_SPECIAL_FILE')
     }
   }
-  await makeWritable(canonical)
+  await makeWritable(canonical, expectedRoot)
+  if (!sameDirectoryIdentity(expectedRoot, await lstat(canonical, { bigint: true }))) {
+    throw new Error('RUNTIME_INSTALL_CLEANUP_OWNER_CHANGED')
+  }
   await rm(canonical, { recursive: true, force: true })
 }
 
@@ -207,10 +271,62 @@ async function freezeTree(root: string, check: () => Promise<void>): Promise<voi
   await check()
 }
 
+export async function verifyStagedPayloads(
+  stage: string,
+  inventories: readonly RuntimeInventoryV1[],
+  check: () => Promise<void>
+): Promise<void> {
+  for (const inventory of inventories) {
+    const root = join(stage, 'artifacts', inventory.artifactId)
+    const expected = new Map(inventory.files.map((file) => [file.path, file]))
+    const directories = new Set<string>()
+    for (const path of expected.keys()) {
+      const pieces = path.split('/')
+      for (let index = 1; index < pieces.length; index++) directories.add(pieces.slice(0, index).join('/'))
+    }
+    const found = new Set<string>()
+    const folded = new Set<string>()
+    const visit = async (directory: string, prefix: string): Promise<void> => {
+      for (const name of await readdir(directory)) {
+        await check()
+        const path = prefix ? `${prefix}/${name}` : name
+        const full = join(directory, name)
+        const stat = await lstat(full)
+        if (stat.isSymbolicLink()) throw new Error('RUNTIME_STAGED_LINK_REJECTED')
+        if (stat.isDirectory()) {
+          if (!directories.has(path)) throw new Error('RUNTIME_STAGED_EXTRA_DIRECTORY')
+          await visit(full, path)
+          continue
+        }
+        const pin = expected.get(path)
+        const key = path.toLowerCase()
+        if (!stat.isFile() || stat.nlink !== 1 || !pin || folded.has(key)) {
+          throw new Error('RUNTIME_STAGED_FILE_CLOSURE_MISMATCH')
+        }
+        folded.add(key)
+        found.add(path)
+        if (stat.size !== pin.bytes || ((stat.mode & 0o111) !== 0) !== pin.executable) {
+          throw new Error('RUNTIME_STAGED_FILE_PIN_MISMATCH')
+        }
+        const digest = pin.bytes === 0 ? sha256(Buffer.alloc(0)) : await hashPinnedArchive(full, pin.bytes)
+        if (digest !== pin.sha256) throw new Error('RUNTIME_STAGED_FILE_PIN_MISMATCH')
+      }
+    }
+    await visit(root, '')
+    if (found.size !== expected.size) throw new Error('RUNTIME_STAGED_FILE_CLOSURE_MISMATCH')
+  }
+}
+
 function rowsFor(rowIds: readonly string[], rows: readonly RuntimeCatalogRow[]): RuntimeCatalogRow[] {
   const selected = rowIds.map((id) => rows.find((row) => row.artifactId === id))
   if (selected.some((row) => !row)) throw new Error('RUNTIME_PLAN_CATALOG_CHANGED')
   return selected as RuntimeCatalogRow[]
+}
+
+function retainedExecutionSettlement(error: unknown): Promise<void> | null {
+  if (!error || typeof error !== 'object' || !('settled' in error)) return null
+  const settled = (error as { settled?: unknown }).settled
+  return settled instanceof Promise ? settled : null
 }
 
 export interface RuntimeInstallTransactionInput {
@@ -314,17 +430,21 @@ export function createRuntimeInstaller(options: {
     })
     const stage = join(stagingRoot, randomBytes(24).toString('hex'))
     await mkdir(stage)
+    const stageIdentity = await directoryIdentity(stage)
     const stageCanonical = await realpath(stage)
     if (stageCanonical !== stage) throw new Error('RUNTIME_INSTALL_DIRECTORY_INVALID')
     await check()
     const inventories: RuntimeInventoryV1[] = []
     let complete = false
     let retainStaging = false
+    const retainedExecution: { settlement: Promise<void> | null } = { settlement: null }
     let retainPublishedGeneration = false
     let publishedGeneration: string | null = null
     let temporaryPointer: string | null = null
     const priorPointerPath = join(activeRoot, `${input.feature}.json`)
     let priorPointer: Buffer | null = null
+    let priorPointerVersion: BigIntStats | null = null
+    let finalPointerVersion: BigIntStats | null = null
     let finalPointerBytes: Buffer | null = null
     try {
       const trustRoot = await readPinnedFile(
@@ -450,6 +570,8 @@ export function createRuntimeInstaller(options: {
       }
       await check()
       const targetGeneration = join(generationsRoot, generation)
+      await freezeTree(stage, check)
+      await verifyStagedPayloads(stage, inventories, check)
       try {
         await options.selfTest({
           feature: input.feature,
@@ -465,16 +587,22 @@ export function createRuntimeInstaller(options: {
       } catch (error) {
         if (error && typeof error === 'object' && 'retainStaging' in error && error.retainStaging === true) {
           retainStaging = true
+          retainedExecution.settlement = retainedExecutionSettlement(error) ?? new Promise<void>(() => undefined)
         }
         throw error
       }
       await check()
-      await freezeTree(stage, check)
-      await check()
+      priorPointerVersion = await fileVersion(priorPointerPath)
       try {
         priorPointer = await readPinnedFile(priorPointerPath, 64 * 1024)
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      }
+      if (
+        (priorPointer === null) !== (priorPointerVersion === null) ||
+        !sameFileVersion(priorPointerVersion, await fileVersion(priorPointerPath))
+      ) {
+        throw new Error('RUNTIME_INSTALL_POINTER_CHANGED')
       }
       const finalGeneration = {
         schemaVersion: 1,
@@ -505,8 +633,13 @@ export function createRuntimeInstaller(options: {
       await writeExclusive(temporaryPointer, finalPointer, 0o600)
       await check()
       input.assertCurrentSync()
+      if (!sameFileVersion(priorPointerVersion, await fileVersion(priorPointerPath))) {
+        throw new Error('RUNTIME_INSTALL_POINTER_CHANGED')
+      }
       await rename(temporaryPointer, priorPointerPath)
       temporaryPointer = null
+      finalPointerVersion = await fileVersion(priorPointerPath)
+      if (!finalPointerVersion) throw new Error('RUNTIME_INSTALL_POINTER_PUBLISH_FAILED')
       try {
         await syncDirectory(activeRoot)
         await check()
@@ -521,11 +654,19 @@ export function createRuntimeInstaller(options: {
             throw error
           }
         }
-        if (current?.equals(finalPointer)) {
-          await check()
-          if (priorPointer) await writeBytesAtomic(priorPointerPath, priorPointer, input.assertCurrentSync)
-          else {
-            input.assertCurrentSync()
+        const pointerVersion = await fileVersion(priorPointerPath)
+        if (current?.equals(finalPointer) && sameFileVersion(finalPointerVersion, pointerVersion)) {
+          const assertPublishedPointerStillOwned = async (): Promise<void> => {
+            const bytes = await readPinnedFile(priorPointerPath, 64 * 1024)
+            const version = await fileVersion(priorPointerPath)
+            if (!bytes.equals(finalPointer) || !sameFileVersion(finalPointerVersion, version)) {
+              throw new Error('RUNTIME_INSTALL_ROLLBACK_POINTER_CHANGED')
+            }
+          }
+          if (priorPointer) {
+            await writeBytesAtomic(priorPointerPath, priorPointer, assertPublishedPointerStillOwned)
+          } else {
+            await assertPublishedPointerStillOwned()
             await rm(priorPointerPath, { force: true })
           }
           await syncDirectory(activeRoot)
@@ -539,7 +680,12 @@ export function createRuntimeInstaller(options: {
     } finally {
       if (!complete) {
         if (temporaryPointer) await rm(temporaryPointer, { force: true }).catch(() => undefined)
-        if (!retainStaging) await removeOwnedTree(stagingRoot, stage).catch(() => undefined)
+        if (!retainStaging) await removeOwnedTree(stagingRoot, stage, stageIdentity).catch(() => undefined)
+        else if (retainedExecution.settlement) {
+          void retainedExecution.settlement
+            .then(() => removeOwnedTree(stagingRoot, stage, stageIdentity))
+            .catch(() => undefined)
+        }
         if (publishedGeneration && !retainPublishedGeneration && finalPointerBytes) {
           try {
             const current = await readPinnedFile(join(activeRoot, `${input.feature}.json`), 64 * 1024)
@@ -551,7 +697,7 @@ export function createRuntimeInstaller(options: {
             }
           }
           if (!retainPublishedGeneration)
-            await removeOwnedTree(generationsRoot, publishedGeneration).catch(() => undefined)
+            await removeOwnedTree(generationsRoot, publishedGeneration, stageIdentity).catch(() => undefined)
         }
       }
     }
@@ -560,10 +706,18 @@ export function createRuntimeInstaller(options: {
     async install(input: RuntimeInstallTransactionInput) {
       if (installing.has(input.feature)) throw new Error('RUNTIME_INSTALL_ALREADY_ACTIVE')
       installing.add(input.feature)
+      let retainSlot = false
       try {
         return await installOnce(input)
+      } catch (error) {
+        const settled = retainedExecutionSettlement(error)
+        if (settled) {
+          retainSlot = true
+          void settled.then(() => installing.delete(input.feature)).catch(() => undefined)
+        }
+        throw error
       } finally {
-        installing.delete(input.feature)
+        if (!retainSlot) installing.delete(input.feature)
       }
     }
   })

@@ -143,7 +143,9 @@ export async function extractRuntimeTarGzip(
 ): Promise<readonly RuntimeExtractedFile[]> {
   const noFollow = constants.O_NOFOLLOW ?? 0
   const nonBlock = constants.O_NONBLOCK ?? 0
-  if (!noFollow || !nonBlock) throw new Error('RUNTIME_ARCHIVE_SAFE_OPEN_UNAVAILABLE')
+  if (process.platform !== 'win32' && (!noFollow || !nonBlock)) {
+    throw new Error('RUNTIME_ARCHIVE_SAFE_OPEN_UNAVAILABLE')
+  }
   const archive = await open(archivePath, constants.O_RDONLY | noFollow | nonBlock)
   let opened: BigIntStats
   let pathBefore: BigIntStats

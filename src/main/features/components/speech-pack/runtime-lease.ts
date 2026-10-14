@@ -12,6 +12,7 @@ import { lstat, open, stat } from 'node:fs/promises'
 import { delimiter, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 import { app } from 'electron'
 import type { OptionalRuntimeTarget } from './runtime-components'
+import { readBoundedAppAsarMember } from './runtime-app-asar'
 
 export type RuntimeFeatureId = 'offline-asr' | 'speaker-embedding' | 'local-llm'
 export type RuntimeEntryRole =
@@ -53,6 +54,8 @@ export interface VerifiedRuntimeGeneration {
   /** Only paths represented in the reviewed runtime inventory may be served to an approved renderer. */
   readonly rendererFiles: Readonly<Record<string, string>>
   readonly rendererPins: Readonly<Record<string, { readonly bytes: number; readonly sha256: string }>>
+  /** Revalidates the complete physical inventory immediately before native or renderer execution. */
+  readonly verifyCurrentBytes: () => Promise<void>
   /** Provider owns the store reference and releases it only after the last shared lease exits. */
   readonly release: () => void | Promise<void>
 }
@@ -72,6 +75,7 @@ export interface RuntimeFeatureLease {
   readonly generationIdentity: string
   readonly catalogIdentity: string
   readonly target: OptionalRuntimeTarget
+  verifyCurrentBytes(): Promise<void>
   loaderDirectories(): readonly string[]
   entry(role: RuntimeEntryRole): string
   model(id: RuntimeModelId): string
@@ -155,7 +159,7 @@ export async function initializeRuntimeHostEnvironment(): Promise<void> {
   windowsRootsPromise = (async () => {
     const manifestPath = join(app.getAppPath(), 'out', 'main', 'win-os-roots.manifest.json')
     const helperPath = join(process.resourcesPath, 'win-os-roots', 'osroots.exe')
-    const manifestBytes = await readBoundedHelperFile(manifestPath, WINDOWS_ROOT_MANIFEST_MAX_BYTES)
+    const manifestBytes = await readBoundedAppAsarMember(manifestPath, WINDOWS_ROOT_MANIFEST_MAX_BYTES)
     const helperBytes = await readBoundedHelperFile(helperPath, WINDOWS_ROOT_HELPER_MAX_BYTES)
     let manifest: unknown
     try {
@@ -425,6 +429,7 @@ function validateGeneration(
     typeof generation.rootDir !== 'string' ||
     !isAbsolute(generation.rootDir) ||
     typeof generation.release !== 'function' ||
+    typeof generation.verifyCurrentBytes !== 'function' ||
     !generation.entries ||
     !generation.models ||
     !Array.isArray(generation.nativeLibraryDirs) ||
@@ -588,6 +593,11 @@ export async function createRuntimeFeatureLeaseForVerifiedGeneration(
     generationIdentity: generation.generationIdentity,
     catalogIdentity: generation.catalogIdentity,
     target: Object.freeze({ ...generation.target }),
+    verifyCurrentBytes: async () => {
+      if (released) throw new Error('Optional runtime lease has been released.')
+      await generation.verifyCurrentBytes()
+      if (released) throw new Error('Optional runtime lease has been released.')
+    },
     loaderDirectories: () => {
       if (released) throw new Error('Optional runtime lease has been released.')
       return Object.freeze(generation.nativeLibraryDirs.map((path) => absoluteOwnedPath(generation.rootDir, path)))
@@ -689,6 +699,11 @@ export async function acquireFeatureRuntime(
     generationIdentity: generation.generationIdentity,
     catalogIdentity: generation.catalogIdentity,
     target: Object.freeze({ ...generation.target }),
+    verifyCurrentBytes: async () => {
+      if (released) throw new Error('Optional runtime lease has been released.')
+      await generation.verifyCurrentBytes()
+      if (released) throw new Error('Optional runtime lease has been released.')
+    },
     loaderDirectories: () => {
       if (released) throw new Error('Optional runtime lease has been released.')
       return Object.freeze(generation.nativeLibraryDirs.map((path) => absoluteOwnedPath(generation.rootDir, path)))

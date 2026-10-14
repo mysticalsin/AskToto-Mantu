@@ -13,7 +13,7 @@ import {
   type RuntimeModelId,
   type VerifiedRuntimeGeneration
 } from './runtime-lease'
-import type { RuntimeInstallSelfTest } from './runtime-installer'
+import { verifyStagedPayloads, type RuntimeInstallSelfTest } from './runtime-installer'
 import { createRuntimeWhisperHost, RetainedRuntimeWhisperHostError } from './runtime-worker-host'
 import type { RuntimeFeatureId } from './runtime-lease'
 import type { OptionalRuntimeTarget } from './runtime-components'
@@ -25,9 +25,11 @@ type Response = { type?: string; id?: string | number; text?: unknown; message?:
 
 class RetainedRuntimeCandidateSelfTestError extends Error {
   readonly retainStaging = true
+  readonly settled: Promise<void>
 
-  constructor(cause: unknown) {
+  constructor(cause: unknown, settled: Promise<void>) {
     super('RUNTIME_SELF_TEST_EXIT_UNOBSERVED', { cause })
+    this.settled = settled
   }
 }
 
@@ -121,6 +123,7 @@ function verifiedGeneration(input: Parameters<RuntimeInstallSelfTest>[0]): Verif
     catalogIdentity: input.catalogIdentity,
     target: Object.freeze({ ...input.target }),
     rootDir: input.stagedRoot,
+    verifyCurrentBytes: () => verifyStagedPayloads(input.stagedRoot, input.inventories, input.assertCurrent),
     entries: Object.freeze(entries),
     models: Object.freeze(models),
     nativeLibraryDirs: Object.freeze([...nativeDirs]),
@@ -180,6 +183,8 @@ async function utilitySelfTest(input: {
   if (input.signal.aborted) throw input.signal.reason ?? new Error('RUNTIME_SELF_TEST_CANCELLED')
   const pcm = parseFixturePcm(fixture)
   await input.assertCurrent()
+  await input.lease.verifyCurrentBytes()
+  await input.assertCurrent()
   if (input.signal.aborted) throw input.signal.reason ?? new Error('RUNTIME_SELF_TEST_CANCELLED')
   const child = utilityProcess.fork(input.lease.entry(input.role), [], {
     serviceName: `metis-runtime-selftest-${input.role}`,
@@ -230,7 +235,7 @@ async function utilitySelfTest(input: {
       exitUnconfirmed = true
     }
   }
-  if (exitUnconfirmed) throw new RetainedRuntimeCandidateSelfTestError(failure)
+  if (exitUnconfirmed) throw new RetainedRuntimeCandidateSelfTestError(failure, exited)
   if (failure) throw failure
 }
 
@@ -332,7 +337,9 @@ async function testRendererWhisper(
   try {
     host = await createRuntimeWhisperHost({ lease, assertCurrent, assertAudioCurrent: assertCurrent })
   } catch (error) {
-    if (error instanceof RetainedRuntimeWhisperHostError) throw new RetainedRuntimeCandidateSelfTestError(error)
+    if (error instanceof RetainedRuntimeWhisperHostError) {
+      throw new RetainedRuntimeCandidateSelfTestError(error, error.host.settled)
+    }
     throw error
   }
   let failure: unknown
@@ -371,7 +378,7 @@ async function testRendererWhisper(
   try {
     await host.stop()
   } catch (error) {
-    throw new RetainedRuntimeCandidateSelfTestError(error)
+    throw new RetainedRuntimeCandidateSelfTestError(error, host.settled)
   }
   if (failure) throw failure
 }
@@ -386,6 +393,8 @@ async function testLlama(
   const model = lease.modelFile(modelId, 'model.gguf')
   const key = randomBytes(32).toString('hex')
   if (signal.aborted) throw signal.reason ?? new Error('RUNTIME_SELF_TEST_CANCELLED')
+  await assertCurrent()
+  await lease.verifyCurrentBytes()
   await assertCurrent()
   if (signal.aborted) throw signal.reason ?? new Error('RUNTIME_SELF_TEST_CANCELLED')
   const child: ChildProcess = spawn(
@@ -481,7 +490,7 @@ async function testLlama(
       exitUnconfirmed = true
     }
   }
-  if (exitUnconfirmed) throw new RetainedRuntimeCandidateSelfTestError(failure)
+  if (exitUnconfirmed) throw new RetainedRuntimeCandidateSelfTestError(failure, exited)
   if (failure) throw failure
 }
 
@@ -512,7 +521,13 @@ export const runRuntimeCandidateSelfTest: RuntimeInstallSelfTest = async (input)
     }
     await input.assertCurrent()
   } catch (error) {
-    if (error instanceof RetainedRuntimeCandidateSelfTestError) retained = true
+    if (error instanceof RetainedRuntimeCandidateSelfTestError) {
+      retained = true
+      throw new RetainedRuntimeCandidateSelfTestError(
+        error,
+        error.settled.then(() => lease.release())
+      )
+    }
     throw error
   } finally {
     if (!retained) await lease.release()

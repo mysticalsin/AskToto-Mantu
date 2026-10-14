@@ -185,6 +185,9 @@ async function createHost(): Promise<UtilityProcess> {
       const approvedModelsPath = runtimeLease ? runtimeLease.model('asr.whisper-base-q8') : await modelsDir()
       if (!importTierAdmissionActive) throw new Error('Whisper helper was released before transcription started.')
       if (admissionVersion !== importTierAdmissionVersion) continue
+      await runtimeLease?.verifyCurrentBytes()
+      if (!importTierAdmissionActive) throw new Error('Whisper helper was released before transcription started.')
+      if (admissionVersion !== importTierAdmissionVersion) continue
       const child = forkHost(tierAdmission, approvedModelsPath, runtimeLease, () => {
         leaseTransferred = true
       })

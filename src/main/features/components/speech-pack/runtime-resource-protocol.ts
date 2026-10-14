@@ -5,6 +5,8 @@ import type { RuntimeFeatureLease, VerifiedRuntimeResourcePin } from './runtime-
 
 const BLOCK = 64 * 1024
 const MAX_RESOURCE_BYTES = 10_000_000_000
+const MAX_PENDING_REQUESTS = 16
+const MAX_ACTIVE_STREAMS = 8
 
 export type HostAsset = {
   readonly bytes: Uint8Array
@@ -81,8 +83,7 @@ async function openVerifiedResource(
   signal: AbortSignal
 ) {
   if (
-    !constants.O_NOFOLLOW ||
-    !constants.O_NONBLOCK ||
+    (process.platform !== 'win32' && (!constants.O_NOFOLLOW || !constants.O_NONBLOCK)) ||
     !Number.isSafeInteger(pin.bytes) ||
     pin.bytes < 0 ||
     pin.bytes > MAX_RESOURCE_BYTES ||
@@ -152,6 +153,7 @@ export function createRuntimeResourceProtocol(options: {
   }
   const streams = new Set<LiveStream>()
   let active = true
+  let revokePromise: Promise<void> | null = null
   let pendingRequests = 0
   let requestWaiters: (() => void)[] = []
   const assertLive = async (): Promise<void> => {
@@ -161,6 +163,9 @@ export function createRuntimeResourceProtocol(options: {
   }
 
   const handleRequest = async (request: Request): Promise<Response> => {
+    if (pendingRequests > MAX_PENDING_REQUESTS || streams.size > MAX_ACTIVE_STREAMS) {
+      return new Response(null, { status: 429, headers: { 'Cache-Control': 'no-store' } })
+    }
     if (!active || (request.method !== 'GET' && request.method !== 'HEAD')) return new Response(null, { status: 404 })
     const rawPath = /^metis-runtime:\/\/[^/]+(\/[^?#]*)/.exec(request.url)?.[1]
     if (
@@ -321,6 +326,9 @@ export function createRuntimeResourceProtocol(options: {
   }
 
   const handle = async (request: Request): Promise<Response> => {
+    if (!active || pendingRequests >= MAX_PENDING_REQUESTS || streams.size >= MAX_ACTIVE_STREAMS) {
+      return new Response(null, { status: 429, headers: { 'Cache-Control': 'no-store' } })
+    }
     pendingRequests += 1
     try {
       return await handleRequest(request)
@@ -335,14 +343,17 @@ export function createRuntimeResourceProtocol(options: {
 
   return Object.freeze({
     handle,
-    async revoke(): Promise<void> {
-      if (!active) return
+    revoke(): Promise<void> {
+      if (revokePromise) return revokePromise
       active = false
-      await Promise.all([...streams].map((stream) => stream.cancel()))
-      if (pendingRequests > 0) {
-        await new Promise<void>((resolve) => requestWaiters.push(resolve))
-      }
-      await Promise.all([...streams].map((stream) => stream.settled))
+      revokePromise = (async () => {
+        await Promise.all([...streams].map((stream) => stream.cancel()))
+        if (pendingRequests > 0) {
+          await new Promise<void>((resolve) => requestWaiters.push(resolve))
+        }
+        await Promise.all([...streams].map((stream) => stream.settled))
+      })()
+      return revokePromise
     }
   })
 }

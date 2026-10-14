@@ -3,6 +3,7 @@ import { constants } from 'node:fs'
 import { lstat, open } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
 import { BrowserWindow, MessageChannelMain, app, session, webContents } from 'electron'
+import { isWhisperLanguageName } from '@shared/lang-id'
 import { createRuntimeResourceProtocol, type HostAsset } from './runtime-resource-protocol'
 import type { RuntimeFeatureLease } from './runtime-lease'
 
@@ -12,23 +13,31 @@ const HOST_STOP = 'metis-runtime-host-stop'
 const MAX_HOST_ASSETS_BYTES = 4 * 1024 * 1024
 const STOP_BARRIER_MS = 15_000
 
+function validWhisperLanguage(value: unknown): value is string {
+  return value === 'auto' || (typeof value === 'string' && isWhisperLanguageName(value))
+}
+
 let hostAssetsPromise: Promise<Readonly<Record<string, HostAsset>>> | null = null
 
 async function readBoundedHostAsset(path: string): Promise<Buffer> {
-  if (!constants.O_NOFOLLOW || !constants.O_NONBLOCK) throw new Error('RUNTIME_HOST_ASSET_OPEN_UNAVAILABLE')
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+  const appRoot = resolve(app.getAppPath())
+  const absolute = resolve(path)
+  const rel = relative(appRoot, absolute)
+  if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || absolute !== path) {
+    throw new Error('RUNTIME_HOST_ASSET_PATH_INVALID')
+  }
+  const named = await lstat(absolute)
+  if (!named.isFile() || named.isSymbolicLink() || named.size < 1 || named.size > MAX_HOST_ASSETS_BYTES) {
+    throw new Error('RUNTIME_HOST_ASSET_INVALID')
+  }
+  const handle = await open(absolute, constants.O_RDONLY)
   try {
     const before = await handle.stat({ bigint: true })
-    const named = await lstat(path, { bigint: true })
     if (
       !before.isFile() ||
-      before.nlink !== 1n ||
       before.size < 1n ||
       before.size > BigInt(MAX_HOST_ASSETS_BYTES) ||
-      !named.isFile() ||
-      named.nlink !== 1n ||
-      named.ino !== before.ino ||
-      named.dev !== before.dev
+      named.size !== Number(before.size)
     ) {
       throw new Error('RUNTIME_HOST_ASSET_INVALID')
     }
@@ -44,7 +53,7 @@ async function readBoundedHostAsset(path: string): Promise<Buffer> {
       position += bytesRead
     }
     const after = await handle.stat({ bigint: true })
-    const namedAfter = await lstat(path, { bigint: true })
+    const namedAfter = await lstat(absolute)
     if (
       total > MAX_HOST_ASSETS_BYTES ||
       BigInt(total) !== before.size ||
@@ -53,11 +62,9 @@ async function readBoundedHostAsset(path: string): Promise<Buffer> {
       after.size !== before.size ||
       after.mtimeNs !== before.mtimeNs ||
       after.ctimeNs !== before.ctimeNs ||
-      namedAfter.ino !== before.ino ||
-      namedAfter.dev !== before.dev ||
-      namedAfter.size !== before.size ||
-      namedAfter.mtimeNs !== before.mtimeNs ||
-      namedAfter.ctimeNs !== before.ctimeNs
+      !namedAfter.isFile() ||
+      namedAfter.isSymbolicLink() ||
+      namedAfter.size !== Number(before.size)
     ) {
       throw new Error('RUNTIME_HOST_ASSET_CHANGED')
     }
@@ -181,6 +188,8 @@ export async function createRuntimeWhisperHost(input: {
   hostAssetsPromise ??= readHostAssets()
   const hostAssets = await hostAssetsPromise
   await input.assertCurrent()
+  await input.lease.verifyCurrentBytes()
+  await input.assertCurrent()
 
   const hostSession = session.fromPartition(`metis-runtime-${token}`, { cache: false })
   const resource = createRuntimeResourceProtocol({
@@ -254,6 +263,10 @@ export async function createRuntimeWhisperHost(input: {
   let uiPortForClose: Electron.MessagePortMain | null = uiPort
   let acceptingMessages = true
   let pendingAudio = 0
+  let pendingAudioBytes = 0
+  let pendingControl = 0
+  const pendingAudioSizes: number[] = []
+  let messageWork = Promise.resolve()
   let stopPromise: Promise<void> | null = null
   let workerStarted = false
   let isolatedRendererProcess = false
@@ -343,8 +356,7 @@ export async function createRuntimeWhisperHost(input: {
       if (
         Object.keys(message).some((key) => !['type', 'quality', 'language', 'resetFollow', 'bundled'].includes(key)) ||
         (message.quality !== undefined && message.quality !== 'best' && message.quality !== 'fast') ||
-        (message.language !== undefined &&
-          (typeof message.language !== 'string' || !/^(?:auto|[a-z]{2,3})$/.test(message.language))) ||
+        (message.language !== undefined && !validWhisperLanguage(message.language)) ||
         (message.resetFollow !== undefined && typeof message.resetFollow !== 'boolean') ||
         (message.bundled !== undefined && typeof message.bundled !== 'boolean')
       )
@@ -352,11 +364,7 @@ export async function createRuntimeWhisperHost(input: {
       return { message: structuredClone(value), bytes: 0, audio: false }
     }
     if (message.type === 'pinLanguage') {
-      if (
-        Object.keys(message).sort().join(',') !== 'language,type' ||
-        typeof message.language !== 'string' ||
-        !/^(?:auto|[a-z]{2,3})$/.test(message.language)
-      )
+      if (Object.keys(message).sort().join(',') !== 'language,type' || !validWhisperLanguage(message.language))
         return null
       return { message: structuredClone(value), bytes: 0, audio: false }
     }
@@ -380,7 +388,9 @@ export async function createRuntimeWhisperHost(input: {
     const copied = new Float32Array(audio)
     return { message: { ...message, audio: copied }, bytes: copied.byteLength, audio: true }
   }
-  const safeHostResponse = (value: unknown): { message: unknown; audioSettled: boolean } | null => {
+  const safeHostResponse = (
+    value: unknown
+  ): { message: unknown; audioSettled: boolean; controlSettled: boolean; terminalFailure: boolean } | null => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null
     const message = value as Record<string, unknown>
     if (
@@ -390,7 +400,7 @@ export async function createRuntimeWhisperHost(input: {
       (message.requestedQuality === 'best' || message.requestedQuality === 'fast') &&
       typeof message.qualityDegraded === 'boolean'
     ) {
-      return { message: structuredClone(value), audioSettled: false }
+      return { message: structuredClone(value), audioSettled: false, controlSettled: true, terminalFailure: false }
     }
     if (
       message.type === 'progress' &&
@@ -399,7 +409,7 @@ export async function createRuntimeWhisperHost(input: {
       (message.pct as number) >= 0 &&
       (message.pct as number) <= 100
     ) {
-      return { message: structuredClone(value), audioSettled: false }
+      return { message: structuredClone(value), audioSettled: false, controlSettled: false, terminalFailure: false }
     }
     if (
       message.type === 'text' &&
@@ -409,7 +419,7 @@ export async function createRuntimeWhisperHost(input: {
       (message.speaker === 'you' || message.speaker === 'them') &&
       typeof message.partial === 'boolean'
     ) {
-      return { message: structuredClone(value), audioSettled: true }
+      return { message: structuredClone(value), audioSettled: true, controlSettled: false, terminalFailure: false }
     }
     if (
       message.type === 'error' &&
@@ -418,30 +428,88 @@ export async function createRuntimeWhisperHost(input: {
       message.message.length <= 512 &&
       (message.speaker === 'you' || message.speaker === 'them')
     ) {
-      return { message: structuredClone(value), audioSettled: true }
+      return { message: structuredClone(value), audioSettled: true, controlSettled: false, terminalFailure: false }
+    }
+    if (message.type === 'control-settled' && Object.keys(message).join(',') === 'type') {
+      return { message: null, audioSettled: false, controlSettled: true, terminalFailure: false }
+    }
+    if (
+      message.type === 'error' &&
+      Object.keys(message).sort().join(',') === 'message,type' &&
+      message.message === 'The offline speech runtime could not start.'
+    ) {
+      return {
+        message: { type: 'error', message: 'The offline speech runtime could not start.' },
+        audioSettled: false,
+        controlSettled: true,
+        terminalFailure: true
+      }
     }
     return null
   }
   uiBridgePort.on('message', (event) => {
-    void (async () => {
-      if (!acceptingMessages) return
-      const parsed = validUiMessage(event.data)
-      if (!parsed) throw new Error('RUNTIME_HOST_INPUT_INVALID')
-      if (parsed.audio && pendingAudio >= 2) {
+    if (!acceptingMessages) return
+    const raw = event.data && typeof event.data === 'object' ? (event.data as Record<string, unknown>) : null
+    const isAudio = raw?.type === 'audio'
+    const rawAudio = raw?.audio
+    const reservationBytes = isAudio && rawAudio instanceof Float32Array ? rawAudio.byteLength : 0
+    if (isAudio) {
+      if (
+        !(rawAudio instanceof Float32Array) ||
+        pendingAudio >= 2 ||
+        pendingAudioBytes + reservationBytes > 2 * 480_000 * Float32Array.BYTES_PER_ELEMENT
+      ) {
         uiBridgePort.postMessage({
           type: 'error',
           message: 'The offline speech runtime is busy.',
-          speaker: (event.data as { speaker: string }).speaker
+          speaker: raw?.speaker === 'them' ? 'them' : 'you'
         })
         return
       }
-      await (parsed.audio ? input.assertAudioCurrent() : input.assertCurrent())
-      if (!acceptingMessages) return
-      if (parsed.audio) pendingAudio += 1
-      hostBridgePort.postMessage(parsed.message)
-    })().catch(() => {
+      pendingAudio += 1
+      pendingAudioBytes += reservationBytes
+    } else {
+      if (pendingControl >= 1) {
+        uiBridgePort.postMessage({ type: 'error', message: 'The offline speech runtime is busy.', speaker: 'you' })
+        return
+      }
+      pendingControl += 1
+    }
+    let reservationHeld = true
+    const releaseReservation = (): void => {
+      if (!reservationHeld) return
+      reservationHeld = false
+      if (isAudio) {
+        pendingAudio = Math.max(0, pendingAudio - 1)
+        pendingAudioBytes = Math.max(0, pendingAudioBytes - reservationBytes)
+      } else {
+        pendingControl = Math.max(0, pendingControl - 1)
+      }
+    }
+    const parsed = validUiMessage(event.data)
+    if (!parsed) {
+      releaseReservation()
       void stop().catch(() => undefined)
-    })
+      return
+    }
+    messageWork = messageWork
+      .then(async () => {
+        if (!acceptingMessages) {
+          releaseReservation()
+          return
+        }
+        await (parsed.audio ? input.assertAudioCurrent() : input.assertCurrent())
+        if (!acceptingMessages) {
+          releaseReservation()
+          return
+        }
+        if (parsed.audio) pendingAudioSizes.push(parsed.bytes)
+        hostBridgePort.postMessage(parsed.message)
+      })
+      .catch(() => {
+        releaseReservation()
+        void stop().catch(() => undefined)
+      })
   })
   hostBridgePort.on('message', (event) => {
     const safe = safeHostResponse(event.data)
@@ -449,11 +517,21 @@ export async function createRuntimeWhisperHost(input: {
       void stop().catch(() => undefined)
       return
     }
-    if (safe.audioSettled) pendingAudio = Math.max(0, pendingAudio - 1)
+    if (safe.audioSettled) {
+      const completedBytes = pendingAudioSizes.shift()
+      if (completedBytes !== undefined) {
+        pendingAudio = Math.max(0, pendingAudio - 1)
+        pendingAudioBytes = Math.max(0, pendingAudioBytes - completedBytes)
+      }
+    }
+    if (safe.controlSettled) pendingControl = Math.max(0, pendingControl - 1)
     if (!acceptingMessages) return
     void input
       .assertCurrent()
-      .then(() => uiBridgePort.postMessage(safe.message))
+      .then(() => {
+        if (safe.message !== null) uiBridgePort.postMessage(safe.message)
+        if (safe.terminalFailure) void stop().catch(() => undefined)
+      })
       .catch(() => {
         void stop().catch(() => undefined)
       })

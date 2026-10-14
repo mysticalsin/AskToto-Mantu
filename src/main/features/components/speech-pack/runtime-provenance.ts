@@ -614,7 +614,7 @@ function assertAuthenticatedIdentity(signer: unknown, row: RuntimeCatalogRow): v
     throw new Error('RUNTIME_CERTIFICATE_IDENTITY_UNSUPPORTED')
   }
   const claims = new Map<string, string>()
-  const required = new Set(Object.values(OID))
+  const required = new Set<string>(Object.values(OID))
   for (const raw of identity.oids) {
     const extension = record(raw)
     const oid = extension && record(extension.oid)

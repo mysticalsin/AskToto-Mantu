@@ -2,6 +2,7 @@ type WhisperMessageEvent = (event: MessageEvent) => void
 type WhisperErrorEvent = (event: ErrorEvent) => void
 
 import { METIS_PACKAGE_PROFILE } from '@shared/package-profile'
+import { isWhisperLanguageName } from '@shared/lang-id'
 import { ensureWhisperWorkerProfile } from './whisper-profile-admission'
 
 export function createWhisperWorker(): Worker {
@@ -120,7 +121,8 @@ export function createRuntimeWhisperWorkerProxy(): Worker {
             ) ||
             (record.quality !== undefined && record.quality !== 'fast' && record.quality !== 'best') ||
             (record.language !== undefined &&
-              (typeof record.language !== 'string' || !/^(?:auto|[a-z]{2,3})$/.test(record.language))) ||
+              (typeof record.language !== 'string' ||
+                (record.language !== 'auto' && !isWhisperLanguageName(record.language)))) ||
             (record.resetFollow !== undefined && typeof record.resetFollow !== 'boolean') ||
             (record.bundled !== undefined && typeof record.bundled !== 'boolean')
           ) {
@@ -131,7 +133,7 @@ export function createRuntimeWhisperWorkerProxy(): Worker {
           if (
             Object.keys(record).sort().join(',') !== 'language,type' ||
             typeof record.language !== 'string' ||
-            !/^(?:auto|[a-z]{2,3})$/.test(record.language)
+            (record.language !== 'auto' && !isWhisperLanguageName(record.language))
           ) {
             fail()
             return

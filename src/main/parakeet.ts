@@ -225,6 +225,12 @@ async function activeGeneration(
     }
     if (!prepared) throw new Error('Parakeet host preparation was not completed.')
     try {
+      await prepared.lease?.verifyCurrentBytes()
+      assertCurrentOperation(revision)
+      if (releaseGate || blockedRelease) {
+        await prepared.lease?.release()
+        continue
+      }
       return spawnGeneration(prepared.files, prepared.lease)
     } catch (error) {
       await prepared.lease?.release()

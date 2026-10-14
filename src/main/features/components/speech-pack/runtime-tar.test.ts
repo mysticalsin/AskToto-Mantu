@@ -2,7 +2,6 @@ import { gzipSync } from 'node:zlib'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { constants } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { assertRuntimeFileClosure } from './runtime-provenance'
 import { extractRuntimeTarGzip } from './runtime-tar'
@@ -68,7 +67,7 @@ async function extract(
 }
 
 describe('strict optional runtime tar closure', () => {
-  it.skipIf(!constants.O_NOFOLLOW || !constants.O_NONBLOCK)('accepts a normalized file member', async () => {
+  it('accepts a normalized file member', async () => {
     const bytes = Buffer.from('signed payload')
     const extracted = await extract([{ path: 'runtime/host.js', bytes }])
     expect(extracted).toEqual([
@@ -89,31 +88,25 @@ describe('strict optional runtime tar closure', () => {
     ).not.toThrow()
   })
 
-  it.skipIf(!constants.O_NOFOLLOW || !constants.O_NONBLOCK)(
-    'rejects traversal and non-regular tar members',
-    async () => {
-      await expect(extract([{ path: '../outside', bytes: Buffer.from('x') }])).rejects.toThrow('RUNTIME_TAR_INVALID')
-      await expect(extract([{ path: 'runtime/link', bytes: Buffer.alloc(0), type: 0x32 }])).rejects.toThrow(
-        'RUNTIME_TAR_INVALID'
-      )
-    }
-  )
+  it('rejects traversal and non-regular tar members', async () => {
+    await expect(extract([{ path: '../outside', bytes: Buffer.from('x') }])).rejects.toThrow('RUNTIME_TAR_INVALID')
+    await expect(extract([{ path: 'runtime/link', bytes: Buffer.alloc(0), type: 0x32 }])).rejects.toThrow(
+      'RUNTIME_TAR_INVALID'
+    )
+  })
 
-  it.skipIf(!constants.O_NOFOLLOW || !constants.O_NONBLOCK)(
-    'rejects duplicate and case-colliding inventory membership',
-    async () => {
-      const first = Buffer.from('first')
-      const second = Buffer.from('second')
-      const extracted = await extract([
-        { path: 'Runtime/host.js', bytes: first },
-        { path: 'runtime/host.js', bytes: second }
-      ])
-      const inventory = {
-        files: extracted.map(({ path, bytes, sha256, executable }) => ({ path, bytes, sha256, executable }))
-      }
-      expect(() => assertRuntimeFileClosure(inventory as never, extracted)).toThrow(
-        'RUNTIME_ARCHIVE_FILE_CLOSURE_MISMATCH'
-      )
+  it('rejects duplicate and case-colliding inventory membership', async () => {
+    const first = Buffer.from('first')
+    const second = Buffer.from('second')
+    const extracted = await extract([
+      { path: 'Runtime/host.js', bytes: first },
+      { path: 'runtime/host.js', bytes: second }
+    ])
+    const inventory = {
+      files: extracted.map(({ path, bytes, sha256, executable }) => ({ path, bytes, sha256, executable }))
     }
-  )
+    expect(() => assertRuntimeFileClosure(inventory as never, extracted)).toThrow(
+      'RUNTIME_ARCHIVE_FILE_CLOSURE_MISMATCH'
+    )
+  })
 })

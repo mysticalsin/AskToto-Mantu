@@ -179,7 +179,9 @@ function parsePointer(bytes: Uint8Array, feature: RuntimeFeatureId): ActiveGener
 }
 
 async function readBoundedRegular(path: string, maxBytes: number): Promise<Buffer> {
-  if (!NOFOLLOW || !NONBLOCK) throw new Error('RUNTIME_SAFE_FILE_OPEN_UNAVAILABLE')
+  if (process.platform !== 'win32' && (!NOFOLLOW || !NONBLOCK)) {
+    throw new Error('RUNTIME_SAFE_FILE_OPEN_UNAVAILABLE')
+  }
   const handle = await open(path, constants.O_RDONLY | NOFOLLOW | NONBLOCK)
   try {
     const before = await handle.stat({ bigint: true })
@@ -273,6 +275,14 @@ async function assertEvidenceClosure(evidenceRoot: string): Promise<void> {
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1n) {
       throw new Error('RUNTIME_EVIDENCE_FILE_INVALID')
     }
+  }
+}
+
+async function assertExactDirectories(root: string, names: readonly string[]): Promise<void> {
+  const actual = (await readdir(root)).sort()
+  const expected = [...names].sort()
+  if (actual.length !== expected.length || actual.some((name, index) => name !== expected[index])) {
+    throw new Error('RUNTIME_GENERATION_DIRECTORY_CLOSURE_MISMATCH')
   }
 }
 
@@ -543,11 +553,16 @@ export function createRuntimeGenerationProvider(options: RuntimeGenerationProvid
       )
         return null
       const generationRoot = await assertOwnedDirectory(join(storeRoot, 'generations', pointer.generationIdentity))
+      const artifactParent = await assertOwnedDirectory(join(generationRoot, 'artifacts'))
+      const evidenceParent = await assertOwnedDirectory(join(generationRoot, 'evidence'))
+      await assertExactDirectories(artifactParent, pointer.artifactIds)
+      await assertExactDirectories(evidenceParent, pointer.artifactIds)
       const entries: Partial<Record<RuntimeEntryRole, string>> = {}
       const models: Partial<Record<LeaseModelId, { root: string; members: string[] }>> = {}
       const nativeDirectories = new Set<string>()
       const rendererFiles: Record<string, string> = {}
       const rendererPins: Record<string, { bytes: number; sha256: string }> = {}
+      const physicalClosures: Array<{ root: string; evidenceRoot: string; inventory: RuntimeInventoryV1 }> = []
       const seenRoles = new Set<string>()
       const seenModels = new Set<string>()
       const addRendererFile = (
@@ -595,6 +610,7 @@ export function createRuntimeGenerationProvider(options: RuntimeGenerationProvid
         )
         assertRuntimeFileClosure(inventory, extracted)
         await assertInstalledClosure(artifactRoot, inventory, signal)
+        physicalClosures.push({ root: artifactRoot, evidenceRoot, inventory })
         for (const [role, rel] of Object.entries(inventory.entrypoints)) {
           if (!closure.roles.includes(role as RuntimeEntryRole)) continue
           if (seenRoles.has(role)) throw new Error('RUNTIME_FEATURE_ROLE_COLLISION')
@@ -656,6 +672,24 @@ export function createRuntimeGenerationProvider(options: RuntimeGenerationProvid
         (await assertOwnedDirectory(join(storeRoot, 'generations', pointer.generationIdentity))) !== generationRoot
       )
         return null
+      const verifyCurrentBytes = async (): Promise<void> => {
+        if (
+          (await assertOwnedDirectory(join(storeRoot, 'active'))) !== activeRoot ||
+          (await assertOwnedDirectory(join(storeRoot, 'generations', pointer.generationIdentity))) !== generationRoot ||
+          (await assertOwnedDirectory(join(generationRoot, 'artifacts'))) !== artifactParent ||
+          (await assertOwnedDirectory(join(generationRoot, 'evidence'))) !== evidenceParent
+        ) {
+          throw new Error('RUNTIME_GENERATION_ROOT_CHANGED')
+        }
+        await assertExactDirectories(artifactParent, pointer.artifactIds)
+        await assertExactDirectories(evidenceParent, pointer.artifactIds)
+        for (const closure of physicalClosures) {
+          await assertInstalledClosure(closure.root, closure.inventory)
+          await assertEvidenceClosure(closure.evidenceRoot)
+        }
+        const currentPointer = await readBoundedRegular(join(activeRoot, `${feature}.json`), MAX_POINTER_BYTES)
+        if (!currentPointer.equals(pointerBytes)) throw new Error('RUNTIME_ACTIVE_POINTER_CHANGED')
+      }
       references.set(pointer.generationIdentity, (references.get(pointer.generationIdentity) ?? 0) + 1)
       let released = false
       return Object.freeze({
@@ -663,6 +697,7 @@ export function createRuntimeGenerationProvider(options: RuntimeGenerationProvid
         catalogIdentity,
         target: Object.freeze({ ...target }),
         rootDir: generationRoot,
+        verifyCurrentBytes,
         entries: Object.freeze(entries),
         models: Object.freeze(models),
         nativeLibraryDirs: Object.freeze([...nativeDirectories]),

@@ -1,3 +1,5 @@
+import { isWhisperLanguageName } from '@shared/lang-id'
+
 type HostConfig = {
   readonly type: 'configure'
   readonly token: string
@@ -22,7 +24,8 @@ type WorkerRequest =
     }
 
 const SAFE_RELATIVE = /^[A-Za-z0-9._@+-]+(?:\/[A-Za-z0-9._@+-]+)*$/
-const LANGUAGE = /^(?:auto|[a-z]{2,3})$/
+const validLanguage = (value: unknown): value is string =>
+  value === 'auto' || (typeof value === 'string' && isWhisperLanguageName(value))
 const MAX_AUDIO_SAMPLES = 480_000
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -56,14 +59,14 @@ function validateRequest(value: unknown): value is WorkerRequest {
       return false
     return (
       (value.quality === undefined || value.quality === 'best' || value.quality === 'fast') &&
-      (value.language === undefined || (typeof value.language === 'string' && LANGUAGE.test(value.language))) &&
+      (value.language === undefined || validLanguage(value.language)) &&
       (value.resetFollow === undefined || typeof value.resetFollow === 'boolean') &&
       (value.bundled === undefined || typeof value.bundled === 'boolean') &&
       value.runtimeBase === undefined
     )
   }
   if (value.type === 'pinLanguage') {
-    return exactKeys(value, ['type', 'language']) && typeof value.language === 'string' && LANGUAGE.test(value.language)
+    return exactKeys(value, ['type', 'language']) && validLanguage(value.language)
   }
   if (value.type === 'audio') {
     return (
@@ -104,11 +107,16 @@ function sanitizeResponse(value: unknown): unknown | null {
   ) {
     return { type: 'text', text: value.text, speaker: value.speaker, partial: value.partial === true }
   }
-  if (value.type === 'error' && (value.speaker === 'you' || value.speaker === 'them')) {
-    return {
-      type: 'error',
-      message: 'Part of the audio could not be transcribed. Transcription is continuing.',
-      speaker: value.speaker
+  if (value.type === 'error') {
+    if (value.speaker === 'you' || value.speaker === 'them') {
+      return {
+        type: 'error',
+        message: 'Part of the audio could not be transcribed. Transcription is continuing.',
+        speaker: value.speaker
+      }
+    }
+    if (typeof value.message === 'string') {
+      return { type: 'error', message: 'The offline speech runtime could not start.' }
     }
   }
   if (value.type === 'log') return null
@@ -175,6 +183,7 @@ function attachPort(received: MessagePort): void {
           }
         : event.data
     worker.postMessage(message, event.data.type === 'audio' ? [event.data.audio.buffer] : [])
+    if (event.data.type === 'pinLanguage') port?.postMessage({ type: 'control-settled' })
   }
   port.onmessageerror = stop
   port.start()

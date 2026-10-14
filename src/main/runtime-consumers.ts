@@ -1,8 +1,17 @@
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
+import type { Settings } from '@shared/ipc'
 import { localModelAllowedByPolicy } from '@shared/model-policy'
-import { getActiveModelPolicy, getSpeechPolicyAuthorityStatus } from './model-policy-client'
-import { getPublishedSettingsObservation, getSettingsObservationEpoch } from './settings-observation'
+import {
+  getActiveModelPolicy,
+  getSpeechPolicyAuthorityStatus,
+  observeSpeechPolicyProofRevocations
+} from './model-policy-client'
+import {
+  getPublishedSettingsObservation,
+  getSettingsObservationEpoch,
+  observeSettingsAuthorityChanges
+} from './settings-observation'
 import {
   getLocalModelProvisioningIdentity,
   getSpeechPackPolicyIdentity,
@@ -166,6 +175,8 @@ export function registerRuntimeConsumers(options: {
     },
     plans: installService
   }).cleanup
+  let stopAuthorityObservation = (): void => undefined
+  let stopPolicyObservation = (): void => undefined
   const whisper = registerRuntimeWhisperWorkerIpc({
     ipcMain: options.ipcMain,
     assertMainWindow: options.assertMainWindow,
@@ -207,10 +218,35 @@ export function registerRuntimeConsumers(options: {
   })
   const consumers = {
     installService,
-    installCleanup,
+    installCleanup: () => {
+      installCleanup()
+      stopAuthorityObservation()
+      stopPolicyObservation()
+    },
     whisperCleanup: whisper.cleanup,
     revokeWhisper: whisper.revokeAll
   }
+  const current = getPublishedSettingsObservation()
+  const authorityKey = (settings: Settings): string => {
+    const policy = getSpeechPolicyAuthorityStatus(settings)
+    return `${settings.asrEngine}:${settings.speakerId.enabled}:${policy.identity}:${getSpeechPackPolicyIdentity()}`
+  }
+  let observedAuthority = current?.readable ? authorityKey(current.settings) : null
+  stopAuthorityObservation = observeSettingsAuthorityChanges((observation) => {
+    if (!observation.readable) {
+      observedAuthority = null
+      void consumers.revokeWhisper().catch((error: unknown) => options.warn(String(error)))
+      return
+    }
+    const next = authorityKey(observation.settings)
+    if (observedAuthority !== null && observedAuthority !== next) {
+      void consumers.revokeWhisper().catch((error: unknown) => options.warn(String(error)))
+    }
+    observedAuthority = next
+  })
+  stopPolicyObservation = observeSpeechPolicyProofRevocations(() => {
+    void consumers.revokeWhisper().catch((error: unknown) => options.warn(String(error)))
+  })
   registerRuntimeConsumerShutdown(app, () => consumers, options.warn)
   return consumers
 }

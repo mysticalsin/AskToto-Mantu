@@ -108,6 +108,16 @@ describe('Windows optional-host system loader roots', () => {
       rendererFiles[path] = path
       rendererPins[path] = { bytes: 10, sha256: 'e'.repeat(64) }
     }
+    let verificationCount = 0
+    let holdVerification = false
+    let releaseVerification!: () => void
+    let enterVerification!: () => void
+    const verificationGate = new Promise<void>((resolveGate) => {
+      releaseVerification = resolveGate
+    })
+    const verificationEntered = new Promise<void>((resolveEntered) => {
+      enterVerification = resolveEntered
+    })
     const generation: VerifiedRuntimeGeneration = {
       generationIdentity: 'b'.repeat(64),
       catalogIdentity: 'c'.repeat(64),
@@ -118,6 +128,13 @@ describe('Windows optional-host system loader roots', () => {
       nativeLibraryDirs: ['native'],
       rendererFiles,
       rendererPins,
+      verifyCurrentBytes: async () => {
+        verificationCount += 1
+        if (holdVerification) {
+          enterVerification()
+          await verificationGate
+        }
+      },
       release: async () => undefined
     }
     configureRuntimeLeaseProvider({ acquire: async () => generation })
@@ -133,6 +150,20 @@ describe('Windows optional-host system loader roots', () => {
     )
     expect(lease.rendererFile('worker/index.js')).toBe(resolve('/owned/runtime-generation/worker/index.js'))
     expect(lease.rendererModelRoot('asr.whisper-base-q8')).toBe('models/whisper')
+    holdVerification = true
+    let verificationSettled = false
+    const verification = lease.verifyCurrentBytes().then(() => {
+      verificationSettled = true
+    })
+    await verificationEntered
+    expect(verificationSettled).toBe(false)
+    releaseVerification()
+    await verification
+    expect(verificationSettled).toBe(true)
+    holdVerification = false
+    await lease.verifyCurrentBytes()
+    expect(verificationCount).toBe(2)
     await lease.release()
+    await expect(lease.verifyCurrentBytes()).rejects.toThrow('Optional runtime lease has been released.')
   })
 })

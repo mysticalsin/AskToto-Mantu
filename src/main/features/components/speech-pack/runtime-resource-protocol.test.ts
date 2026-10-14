@@ -81,7 +81,10 @@ describe('private runtime resource protocol', () => {
     await protocol.handle(new Request(`metis-runtime://${TOKEN}/runtime/runtime/worker.bin`))
     await readEntered
     let revoked = false
-    const revocation = protocol.revoke().then(() => {
+    const firstRevoke = protocol.revoke()
+    const secondRevoke = protocol.revoke()
+    expect(secondRevoke).toBe(firstRevoke)
+    const revocation = firstRevoke.then(() => {
       revoked = true
     })
     await Promise.resolve()
