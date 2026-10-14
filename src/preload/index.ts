@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import { createCloudSpeechPreloadApi } from './cloud-speech'
 import type { CloudSttStartResult } from '../shared/cloud-stt-start'
 import {
   IPC,
@@ -91,6 +92,7 @@ function sub<T>(channel: string, cb: (payload: T) => void): Unsub {
 }
 
 const api = {
+  ...createCloudSpeechPreloadApi(ipcRenderer),
   getSettings: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.settingsGet),
   onSettingsChanged: (cb: () => void): Unsub => sub(IPC.settingsChanged, cb),
   /** Wave 2 — dismiss the one-shot last-failover chip after the user has seen it. */
