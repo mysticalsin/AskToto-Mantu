@@ -334,6 +334,36 @@ describe('cloud speech capture controller', () => {
     next.instance.dispose()
   })
 
+  it('shortens an in-flight user Stop to the original ceiling deadline without sealing again', async () => {
+    vi.useFakeTimers()
+    let clock = 0
+    const onFailure = vi.fn()
+    const next = controller({ onFailure, now: () => clock })
+    expect((await next.instance.start()).ok).toBe(true)
+    const port = new FakePort()
+    expect(next.instance.attachTrack('microphone', port as unknown as MessagePort, 0)).toBe(true)
+    const stopping = next.instance.stop()
+    await vi.waitFor(() => expect(port.sent).toHaveLength(1))
+    const ceiling: CloudSpeechCaptureCeilingEvent = {
+      type: 'capture-ceiling',
+      captureId,
+      captureGeneration,
+      ceilingId: '00000000-0000-4000-8000-000000000710',
+      maxSampleOffsetExclusive: 230_400_000
+    }
+    for (const listener of next.events) listener(ceiling)
+    await vi.advanceTimersByTimeAsync(4_999)
+    clock = 4_999
+    expect(onFailure).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    clock = 5_000
+    await expect(stopping).resolves.toMatchObject({ ok: false, code: 'TIMEOUT' })
+    expect(onFailure).toHaveBeenCalledWith('TIMEOUT')
+    expect(port.sent).toHaveLength(1)
+    expect(next.finish).not.toHaveBeenCalled()
+    next.instance.dispose()
+  })
+
   it('converts each genuine Float32 frame once to explicit little-endian PCM and translates the capture offset', async () => {
     const { instance, frame } = controller()
     expect((await instance.start()).ok).toBe(true)
