@@ -370,35 +370,45 @@ async function startApp(executable, qaRoot, profile, installRoot, launchRecords)
   let browser = null
   try {
     rememberOwnedProcesses(ownership, true)
-    browser = await waitFor(async () => {
-      if (packagedLaunchFailed(launched.child, launched.latches))
-        throw new Error('packaged process exited before CDP attached')
-      rememberOwnedProcesses(ownership)
-      const attachment = await attachOwnedCdp({
-        endpoint: launched.cdpEndpoint,
-        childPid: launched.child.pid,
-        timeoutMs: 1_500
-      })
-      ownership.transportUncertain ||= attachment.transportUncertain
-      if (attachment.lateRelease) ownership.lateReleases.push(attachment.lateRelease)
-      if (attachment.browser) {
-        ownership.browser = attachment.browser
-        return attachment.browser
-      }
-      if (attachment.failure === 'cdp-endpoint-deadline') return null
+    browser = await waitFor(
+      async () => {
+        if (packagedLaunchFailed(launched.child, launched.latches))
+          throw new Error('packaged process exited before CDP attached')
+        rememberOwnedProcesses(ownership)
+        const attachment = await attachOwnedCdp({
+          endpoint: launched.cdpEndpoint,
+          childPid: launched.child.pid,
+          timeoutMs: 1_500
+        })
+        ownership.transportUncertain ||= attachment.transportUncertain
+        if (attachment.lateRelease) ownership.lateReleases.push(attachment.lateRelease)
+        if (attachment.browser) {
+          ownership.browser = attachment.browser
+          return attachment.browser
+        }
+        if (attachment.failure === 'cdp-endpoint-deadline') return null
         throw new Error(`owned CDP attach failed: ${attachment.failure ?? 'unknown failure'}`)
-    }, 'packaged app did not expose loopback CDP', 60_000, 250)
-    const page = await waitFor(async () => {
-      for (const candidate of findPages(browser)) {
-        try {
-          if (
-            await candidate.evaluate(() => Boolean(window.toto && typeof window.toto.getSettings === 'function'))
-          )
-            return candidate
-        } catch { /* renderer still booting */ }
-      }
-      return null
-    }, 'packaged app never exposed its window.toto bridge', 60_000, 250)
+      },
+      'packaged app did not expose loopback CDP',
+      60_000,
+      250
+    )
+    const page = await waitFor(
+      async () => {
+        for (const candidate of findPages(browser)) {
+          try {
+            if (await candidate.evaluate(() => Boolean(window.toto && typeof window.toto.getSettings === 'function')))
+              return candidate
+          } catch {
+            /* renderer still booting */
+          }
+        }
+        return null
+      },
+      'packaged app never exposed its window.toto bridge',
+      60_000,
+      250
+    )
     return { ...launched, browser, page, profile, qaRoot, ownership }
   } catch (error) {
     const treeExited = await stopOwnedProcessTree(ownership)
@@ -428,7 +438,9 @@ async function stopApp(app) {
       await window.toto.quit()
       return true
     })
-  } catch { /* process exit may close CDP before reply */ }
+  } catch {
+    /* process exit may close CDP before reply */
+  }
   await waitForChildExit(app.child, 30_000)
   const treeExited = await stopOwnedProcessTree(app.ownership)
   const transportReleased = treeExited ? await releaseOwnedTransports(app.ownership) : false
@@ -513,32 +525,20 @@ async function runUpgrade({
   let overallError = null
   const safeRoots = disposableRootsAreSafe(installRoot, runnerRoot, reportPath)
   try {
-    if (process.platform !== 'win32')
-      throw new Error('This acceptance harness must run on a hosted Windows runner.')
+    if (process.platform !== 'win32') throw new Error('This acceptance harness must run on a hosted Windows runner.')
     if (!safeRoots)
       throw new Error(
         'disposable install/profile roots must be separate RUNNER_TEMP children, and the report must be outside both.'
       )
     const baselineHash = hashFile(baselineInstaller)
     report.baseline.sha256 = baselineHash
-    record(
-      checks,
-      'baseline_installer_identity',
-      baselineHash === BASELINE.sha256,
-      `sha256=${baselineHash}`
-    )
+    record(checks, 'baseline_installer_identity', baselineHash === BASELINE.sha256, `sha256=${baselineHash}`)
     if (baselineHash !== BASELINE.sha256)
       throw new Error('downloaded baseline installer is not the pinned public 1.9.6 byte set')
 
     const run = JSON.parse(readFileSync(identityPath, 'utf8'))
     const provenance = JSON.parse(readFileSync(provenancePath, 'utf8'))
-    const identity = verifyCandidateIdentity(
-      run,
-      provenance,
-      candidateRun,
-      candidateCommit,
-      candidateRef
-    )
+    const identity = verifyCandidateIdentity(run, provenance, candidateRun, candidateCommit, candidateRef)
     const candidateHash = hashFile(candidateInstaller)
     report.candidate.sha256 = candidateHash
     record(
@@ -552,9 +552,7 @@ async function runUpgrade({
       identity.commit !== candidateCommit ||
       identity.attempt !== Number(candidateAttempt)
     ) {
-      throw new Error(
-        'candidate installer/run identity differs from the caller-pinned artifact identity'
-      )
+      throw new Error('candidate installer/run identity differs from the caller-pinned artifact identity')
     }
 
     mkdirSync(runnerRoot, { recursive: true })
@@ -581,47 +579,52 @@ async function runUpgrade({
       installRoot,
       launchRecords
     )
-    const settings = await appCall(activeApp, async (synthetic) => {
-      const initial = await window.toto.getSettings()
-      const saved = await window.toto.setSettings({
-        onboardingDone: true,
-        encryptTranscripts: true,
-        providerPriority: 'api',
-        temperature: 0.42,
-        // Keep this hosted fixture from sending its synthetic transcript to any provider.
-        brainConsolidation: { enabled: true, maxPassesPerDay: 2, preferLocal: true },
-        graphifyEnabled: false,
-        graphifyAutoRebuild: false
-      })
-      const keyResult = await window.toto.setApiKey('openai', synthetic.apiKey)
-      const meeting = await window.toto.saveTranscript({
-        title: synthetic.meetingTitle,
-        mode: 'general',
-        startedAt: 1792000000000,
-        durationMs: 64000,
-        lines: [{ speaker: 'you', text: synthetic.meetingLine, t: 1792000002000 }],
-        recap: 'Synthetic encrypted recap 495a'
-      })
-      const note = await window.toto.saveNote({
-        title: synthetic.noteTitle, mode: 'general',
-        question: synthetic.noteQuestion, answer: synthetic.noteAnswer
-      })
-      return {
-        initialVersion: initial.version ?? null,
-        saved: {
-          onboardingDone: saved.onboardingDone,
-          encryptTranscripts: saved.encryptTranscripts,
-          temperature: saved.temperature,
-        providersBlocked:
-          Array.isArray(saved.allowedProviders) && saved.allowedProviders.length === 0
-        },
-        hasOpenAi: keyResult.hasKeys?.openai === true,
-        hasKeysOpenAi: saved.hasKeys?.openai === true,
-        meetingPath: meeting.path,
-        notePath: note.path,
-        after: await window.toto.getSettings()
-      }
-    }, SYNTHETIC)
+    const settings = await appCall(
+      activeApp,
+      async (synthetic) => {
+        const initial = await window.toto.getSettings()
+        const saved = await window.toto.setSettings({
+          onboardingDone: true,
+          encryptTranscripts: true,
+          providerPriority: 'api',
+          temperature: 0.42,
+          // Keep this hosted fixture from sending its synthetic transcript to any provider.
+          brainConsolidation: { enabled: true, maxPassesPerDay: 2, preferLocal: true },
+          graphifyEnabled: false,
+          graphifyAutoRebuild: false
+        })
+        const keyResult = await window.toto.setApiKey('openai', synthetic.apiKey)
+        const meeting = await window.toto.saveTranscript({
+          title: synthetic.meetingTitle,
+          mode: 'general',
+          startedAt: 1792000000000,
+          durationMs: 64000,
+          lines: [{ speaker: 'you', text: synthetic.meetingLine, t: 1792000002000 }],
+          recap: 'Synthetic encrypted recap 495a'
+        })
+        const note = await window.toto.saveNote({
+          title: synthetic.noteTitle,
+          mode: 'general',
+          question: synthetic.noteQuestion,
+          answer: synthetic.noteAnswer
+        })
+        return {
+          initialVersion: initial.version ?? null,
+          saved: {
+            onboardingDone: saved.onboardingDone,
+            encryptTranscripts: saved.encryptTranscripts,
+            temperature: saved.temperature,
+            providersBlocked: Array.isArray(saved.allowedProviders) && saved.allowedProviders.length === 0
+          },
+          hasOpenAi: keyResult.hasKeys?.openai === true,
+          hasKeysOpenAi: saved.hasKeys?.openai === true,
+          meetingPath: meeting.path,
+          notePath: note.path,
+          after: await window.toto.getSettings()
+        }
+      },
+      SYNTHETIC
+    )
     record(
       checks,
       'baseline_install_version',
