@@ -2,7 +2,7 @@ import { lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readManagedSpeechProviders } from './managed-speech-providers'
+import { readManagedSpeechPolicy, readManagedSpeechProviders } from './managed-speech-providers'
 
 const openRace = vi.hoisted(() => ({ failPath: '', attempts: 0 }))
 
@@ -144,6 +144,68 @@ describe('readManagedSpeechProviders', () => {
     expect(await readManagedSpeechProviders(userPath, adminPath, readTrustedAdminBytes)).toEqual({
       state: 'valid',
       providers: ['cloudflare-nova3']
+    })
+  })
+})
+
+describe('readManagedSpeechPolicy', () => {
+  it('resolves provider and egress keys independently with admin precedence and explicit empty deny', async () => {
+    const { userPath, adminPath } = policyFiles()
+    writeFileSync(
+      userPath,
+      JSON.stringify({
+        allowedProviders: ['deepgram-nova3'],
+        egressAllowlist: ['operator.example', '*.speech.example']
+      })
+    )
+    writeFileSync(adminPath, JSON.stringify({ allowedProviders: [], lockedKeys: ['provider'] }))
+    const readTrustedAdminBytes = vi.fn((path: string) => readFileSync(path))
+
+    expect(await readManagedSpeechPolicy(userPath, adminPath, readTrustedAdminBytes)).toEqual({
+      state: 'valid',
+      providers: { state: 'valid', providers: [] },
+      egressAllowlist: ['operator.example', '*.speech.example']
+    })
+    expect(readTrustedAdminBytes).toHaveBeenCalledTimes(1)
+    expect(readTrustedAdminBytes).toHaveBeenCalledWith(adminPath)
+  })
+
+  it('distinguishes absent policy from explicit deny-all', async () => {
+    const { userPath, adminPath } = policyFiles()
+    writeFileSync(userPath, JSON.stringify({ lockedKeys: [] }))
+    expect(await readManagedSpeechPolicy(userPath, adminPath, () => null)).toEqual({ state: 'absent' })
+
+    writeFileSync(adminPath, JSON.stringify({ egressAllowlist: [] }))
+    expect(await readManagedSpeechPolicy(userPath, adminPath, (path) => readFileSync(path))).toEqual({
+      state: 'valid',
+      providers: { state: 'absent' },
+      egressAllowlist: []
+    })
+  })
+
+  it('fails closed for a malformed present egress key instead of widening it to unrestricted', async () => {
+    const { userPath, adminPath } = policyFiles()
+    writeFileSync(userPath, JSON.stringify({ allowedProviders: ['deepgram-nova3'], egressAllowlist: ['ok.example'] }))
+    writeFileSync(adminPath, JSON.stringify({ egressAllowlist: ['valid.example', 5] }))
+
+    expect(await readManagedSpeechPolicy(userPath, adminPath, (path) => readFileSync(path))).toEqual({
+      state: 'invalid'
+    })
+    // The legacy API remains provider-only and keeps its historical result contract.
+    expect(await readManagedSpeechProviders(userPath, adminPath, (path) => readFileSync(path))).toEqual({
+      state: 'valid',
+      providers: ['deepgram-nova3']
+    })
+  })
+
+  it('treats an explicit admin egress list as overriding the user key, including empty deny', async () => {
+    const { userPath, adminPath } = policyFiles()
+    writeFileSync(userPath, JSON.stringify({ egressAllowlist: ['user.example'] }))
+    writeFileSync(adminPath, JSON.stringify({ egressAllowlist: [] }))
+    expect(await readManagedSpeechPolicy(userPath, adminPath, (path) => readFileSync(path))).toEqual({
+      state: 'valid',
+      providers: { state: 'absent' },
+      egressAllowlist: []
     })
   })
 })
