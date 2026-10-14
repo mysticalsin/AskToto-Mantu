@@ -1,0 +1,21 @@
+{
+  "schema": "metis-persistence-profiles/v1",
+  "catalogVersion": 1,
+  "profiles": [{
+    "id": "standard", "label": "Standard", "evidence": "PROPOSED",
+    "supported": { "targets": [
+      { "platform": "win32", "arch": "x64", "node": null, "v8": null, "modules": null, "electron": "43.6.0" },
+      { "platform": "darwin", "arch": "x64", "node": null, "v8": null, "modules": null, "electron": "43.6.0" },
+      { "platform": "darwin", "arch": "arm64", "node": null, "v8": null, "modules": null, "electron": "43.6.0" },
+      { "platform": "linux", "arch": "x64", "node": null, "v8": null, "modules": null, "electron": "43.6.0" }
+    ] },
+    "implementationSha256": null,
+    "speech": { "maxRecords": 65536, "maxWords": 1048576, "maxFieldBytes": 24576, "maxRecordBytes": 262144, "maxPayloadBytes": 134217728 },
+    "legacy": { "decodedBytes": 268435456, "physicalBytes": 536870912, "descriptorBytes": 16384 },
+    "journal": { "recordMetadataBytes": 4096, "canonicalWrapperBytes": 1024, "indexEntryBytes": 1024, "manifestBytes": 16384 },
+    "worker": { "inputBytes": 1048576, "outputBytes": 1048576, "operationDeadlineMs": 60000, "shutdownDeadlineMs": 5000 },
+    "consumers": { "transferChunkBytes": 65536, "pageRecords": 64, "pageBytes": 1048576, "residentBytes": 134217728, "pendingWindowBytes": 65536, "exportOverlapBytes": 16777216, "graphifyStageBytes": 67108864 },
+    "derived": { "physicalRecordBytes": 266284, "canonicalTotalBytes": 201326592, "journalBytes": 539770880, "stagingBytes": 1834582016 },
+    "qualification": { "state": "PROPOSED", "reportSha256": null }
+  }]
+}
