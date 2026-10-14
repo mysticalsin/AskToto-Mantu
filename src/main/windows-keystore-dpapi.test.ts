@@ -129,7 +129,7 @@ describe('packaged macOS keystore — local override cannot create a raw AES key
     } = await import('./secrets')
 
     expect(process.env.ASKTOTO_LOCAL_KEYSTORE).toBe('1')
-    expect(startupSource).not.toMatch(/process\.env\.ASKTOTO_LOCAL_KEYSTORE\s*=/)
+    expect(startupSource).not.toMatch(/process\.env\.ASKTOTO_LOCAL_KEYSTORE\s*(?:\?\?|\|\||&&)?=/)
     expect(useFileBackend()).toBe(true)
     expect(electron.safeStorage.isEncryptionAvailable).not.toHaveBeenCalled()
     expect(() => encryptSecret('profile data')).toThrow(MacKeychainUnlockRequiredError)
