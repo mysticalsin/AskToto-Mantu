@@ -55,7 +55,7 @@ function createdSession(configVersion = 'config-r1', policyVersion = 'policy-r1'
       },
       grants: [{ track: 'microphone' as const, streamEpoch: 3, token: 'A'.repeat(43) }]
     }
-  } as unknown as Awaited<ReturnType<SpeechBrokerClient['createSession']>>
+  } satisfies Awaited<ReturnType<SpeechBrokerClient['createSession']>>
 }
 
 function readyCapability() {
@@ -545,6 +545,10 @@ describe('cloud speech main IPC authority boundary', () => {
     h.client.status = vi.fn(async (sessionId: string) => ({
       ok: true as const,
       value: {
+        ok: true as const,
+        protocolVersion: 1 as const,
+        sessionId,
+        cancellationRequested: sessionId !== candidateId,
         captureGeneration: 7,
         status: sessionId === candidateId ? ('active' as const) : ('cancelled' as const),
         tracks: [
