@@ -26,7 +26,6 @@ const REJECTED_AT: Record<string, Array<string | number>> = {
   'capture.fallback-engine-key.json': [],
   'capture.generation-zero.json': ['generation'],
   'capture.generation-unsafe-integer.json': ['generation'],
-  'capture.generation-infinite.json': ['generation'],
   'capture.no-requested-track.json': ['requestedTracks'],
   'capture.requested-twice.json': ['requestedTracks', 1],
   'capture.unknown-track.json': ['requestedTracks', 0],
@@ -36,10 +35,15 @@ const REJECTED_AT: Record<string, Array<string | number>> = {
   'segment.revision-zero.json': ['revision'],
   'segment.revision-unsafe-integer.json': ['revision'],
   'segment.offset-unsafe-integer.json': ['startMs'],
-  'segment.offset-infinite.json': ['startMs'],
   'stream.epoch-zero.json': ['epoch'],
   'stream.epoch-unsafe-integer.json': ['epoch'],
   'stream.fractional-generation.json': ['generation']
+}
+
+/** Infinity can trigger more than one Zod numeric check at the same field path. */
+const NONFINITE_REJECTED_AT: Record<string, Array<string | number>> = {
+  'capture.generation-infinite.json': ['generation'],
+  'segment.offset-infinite.json': ['startMs']
 }
 
 type Fixture = { file: string; schema: ZodTypeAny; value: unknown }
@@ -57,7 +61,9 @@ function loadFixtures(kind: 'golden' | 'negative'): Fixture[] {
 }
 
 const golden = loadFixtures('golden')
-const negative = loadFixtures('negative')
+const negativeFixtures = loadFixtures('negative')
+const nonfinite = negativeFixtures.filter((fixture) => fixture.file in NONFINITE_REJECTED_AT)
+const negative = negativeFixtures.filter((fixture) => !(fixture.file in NONFINITE_REJECTED_AT))
 
 function goldenValue(file: string): unknown {
   const fixture = golden.find((candidate) => candidate.file === file)
@@ -100,4 +106,19 @@ describe('speech contract: negative fixtures', () => {
       expect(result.error?.issues.map((issue) => issue.path)).toEqual([REJECTED_AT[file]])
     }
   )
+})
+
+describe('speech contract: non-finite numeric fixtures', () => {
+  it('keeps non-finite cases separate from the single-issue negative fixtures', () => {
+    expect(nonfinite.map((fixture) => fixture.file)).toEqual(Object.keys(NONFINITE_REJECTED_AT).sort())
+  })
+
+  it.each(nonfinite.map((fixture) => [fixture.file, fixture] as const))('%s is rejected at its numeric field', (file, fixture) => {
+    const result = fixture.schema.safeParse(fixture.value)
+    expect(result.success).toBe(false)
+    const expectedPath = NONFINITE_REJECTED_AT[file]
+    const issuePaths = result.error?.issues.map((issue) => issue.path) ?? []
+    expect(issuePaths.length).toBeGreaterThan(0)
+    expect(issuePaths.every((path) => JSON.stringify(path) === JSON.stringify(expectedPath))).toBe(true)
+  })
 })
