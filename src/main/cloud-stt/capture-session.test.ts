@@ -14,7 +14,13 @@ function acknowledgement(event: CloudSpeechEpochTransitionEvent): CloudSpeechEpo
 
 describe('main speech capture transition owner', () => {
   it('requires the exact applied receipt, keeps one prior receipt for retries, and rejects conflicting receipts', async () => {
-    const h = new MainSpeechCaptureSession({ captureId, captureGeneration: 7, tracks: ['microphone'], startedAt: 10 })
+    const h = new MainSpeechCaptureSession({
+      captureId,
+      captureGeneration: 7,
+      tracks: ['microphone'],
+      startedAt: 10,
+      monotonicNow: () => 0
+    })
     const { event: closed, applied: waiting } = h.beginTransition(
       'closed',
       [{ track: 'microphone', previousEpoch: 3, lastSequence: 8 }],
@@ -43,7 +49,13 @@ describe('main speech capture transition owner', () => {
   })
 
   it('pairs opened receipts only with the acknowledged closed inventory and strictly newer epochs', async () => {
-    const h = new MainSpeechCaptureSession({ captureId, captureGeneration: 2, tracks: ['microphone'], startedAt: 0 })
+    const h = new MainSpeechCaptureSession({
+      captureId,
+      captureGeneration: 2,
+      tracks: ['microphone'],
+      startedAt: 0,
+      monotonicNow: () => 0
+    })
     const { event: closed, applied } = h.beginTransition(
       'closed',
       [{ track: 'microphone', previousEpoch: 4, lastSequence: 12 }],

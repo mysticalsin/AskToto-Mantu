@@ -598,6 +598,88 @@ describe('cloud speech main IPC authority boundary', () => {
     expect(releaseCaptureOwner).not.toHaveBeenCalledWith(expect.objectContaining({ captureId }))
   })
 
+  it('buffers candidate transcripts until the exact opened receipt is applied', async () => {
+    const timers: Array<{ callback: () => void; delay: number }> = []
+    const h = makeHarness(undefined, undefined, (callback, delay) => {
+      timers.push({ callback, delay })
+      return () => undefined
+    })
+    const oldSession = readyRelay()
+    const candidateId = 'c3d23d44-347c-490c-841b-0ff31facbc7e'
+    const candidateSession = readyRelay(candidateId, [{ track: 'microphone', streamEpoch: 4 }])
+    let onTranscript: ((event: unknown, context: unknown) => void) | undefined
+    relayHarness.create.mockImplementation(
+      async (options: {
+        onAllocated?: (id: string) => void
+        onTranscript?: (event: unknown, context: unknown) => void
+      }) => {
+        options.onAllocated?.(oldSession.identity.sessionId)
+        onTranscript = options.onTranscript
+        return { ok: true, value: oldSession }
+      }
+    )
+    const candidateAllocation = createdSession()
+    candidateAllocation.value.sessionId = candidateId
+    h.client.createSession = vi.fn(async () => candidateAllocation) as FakeClient['createSession']
+    ;(oldSession as unknown as { renew: () => Promise<unknown> }).renew = vi.fn(async () => {
+      const created = await h.client.createSession({ operation: 'create-session' })
+      if (!created.ok) throw new Error('candidate allocation failed')
+      return { ok: true, value: candidateSession }
+    })
+
+    await expect(h.invoke(CLOUD_SPEECH_IPC.start, [request])).resolves.toMatchObject({ ok: true })
+    timers[0]!.callback()
+    await vi.waitFor(() => expect(timers.length).toBeGreaterThanOrEqual(3))
+    timers[timers.length - 1]!.callback()
+    await vi.waitFor(() =>
+      expect(h.sender.send.mock.calls.some((call) => (call[1] as { type?: string }).type === 'epoch-transition')).toBe(
+        true
+      )
+    )
+    const transitions = () =>
+      h.sender.send.mock.calls
+        .map((call) => call[1] as Record<string, unknown>)
+        .filter((value) => value.type === 'epoch-transition')
+    const closed = transitions()[0]!
+    await h.invoke(CLOUD_SPEECH_IPC.transitionAck, [{ ...closed, type: 'epoch-transition-ack' }])
+    await vi.waitFor(() => expect(transitions()).toHaveLength(2))
+    const opened = transitions()[1]!
+    expect(opened.stage).toBe('opened')
+
+    onTranscript?.(
+      {
+        protocolVersion: 1,
+        sessionId: candidateId,
+        captureGeneration: 7,
+        track: 'microphone',
+        streamEpoch: 4,
+        type: 'transcript',
+        sequence: 1,
+        segmentIndex: 1,
+        revision: 1,
+        text: 'candidate transcript',
+        startMs: 0,
+        endMs: 50,
+        final: true
+      },
+      { timeBase: 'stream', firstCaptureSampleOffset: 0, sessionId: candidateId }
+    )
+    expect(h.sender.send.mock.calls.some((call) => (call[1] as { type?: string }).type === 'segment')).toBe(false)
+    expect(candidateSession.cancel).not.toHaveBeenCalled()
+
+    await h.invoke(CLOUD_SPEECH_IPC.transitionAck, [{ ...opened, type: 'epoch-transition-ack' }])
+    await vi.waitFor(() =>
+      expect(
+        h.sender.send.mock.calls.some(
+          (call) =>
+            (call[1] as { type?: string; segment?: { stream?: { epoch?: number } } }).type === 'segment' &&
+            (call[1] as { segment?: { stream?: { epoch?: number } } }).segment?.stream?.epoch === 4
+        )
+      ).toBe(true)
+    )
+    expect(candidateSession.cancel).not.toHaveBeenCalled()
+  })
+
   it('bounds overlapping start records while predecessor closure is unresolved', async () => {
     const h = makeHarness()
     const session = readyRelay()
