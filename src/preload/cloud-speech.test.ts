@@ -138,7 +138,7 @@ describe('cloud speech preload boundary', () => {
     })
 
     for (const mismatchedIdentity of [
-      { captureId: 'c1f85141-fcfe-4bac-9d96-658fce84ca87', captureGeneration },
+      { captureId: 'c1f85141-fcfe-4bac-9d96-658fce84ca87', captureGeneration: capture.generation },
       { captureId, captureGeneration: captureGeneration + 1 }
     ]) {
       fixture.invoke.mockResolvedValueOnce({
@@ -152,6 +152,21 @@ describe('cloud speech preload boundary', () => {
         code: 'TRANSPORT'
       })
     }
+
+    fixture.invoke.mockResolvedValueOnce({
+      ok: true,
+      captureId,
+      captureGeneration: capture.generation,
+      ceilingId: event.ceilingId,
+      tracks: [
+        acknowledgement.tracks[0],
+        { ...acknowledgement.tracks[1], finalSampleOffset: acknowledgement.tracks[1].finalSampleOffset + 2 }
+      ]
+    })
+    await expect(api.cloudSpeechAckCaptureCeiling(acknowledgement)).resolves.toMatchObject({
+      ok: false,
+      code: 'TRANSPORT'
+    })
 
     const invokeCount = fixture.invoke.mock.calls.length
     await expect(
