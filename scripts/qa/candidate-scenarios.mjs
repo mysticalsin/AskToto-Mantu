@@ -1074,7 +1074,10 @@ export function scenarioCommand({
   return argv
 }
 
-/** The provenance must be the candidate run's own: build_run_id and commit are taken from it. */
+/**
+ * The provenance must be the candidate run's own: build_run_id and commit are taken from it.
+ * @param {number | undefined} [candidateAttempt]
+ */
 export function assertCandidateProvenance(provenance, candidateRun, candidateAttempt = undefined) {
   if (String(provenance?.run?.id) !== String(candidateRun)) {
     throw new Error(`provenance run ${provenance?.run?.id} is not the candidate run ${candidateRun}.`)
