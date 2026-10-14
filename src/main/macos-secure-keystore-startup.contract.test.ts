@@ -107,6 +107,48 @@ describe('packaged macOS secure-keystore startup', () => {
     expect(safeStorage.decryptString).not.toHaveBeenCalled()
   })
 
+  it('drops a cached auth session and retries disk after unlock authorization is reset', () => {
+    const sessionBytes = Buffer.from('existing-encrypted-session')
+    const readSession = vi.fn(() => {
+      const bytes = sessionBytes
+      if (bytes.toString() !== 'existing-encrypted-session') throw new Error('session bytes changed')
+      return { accessToken: 'cached-session' }
+    })
+    let loaded = false
+    let session: { accessToken: string } | null = null
+    const loadSession = createAuthSessionLoader<{ accessToken: string; at?: number }>({
+      isLoaded: () => loaded,
+      setLoaded: (value) => (loaded = value),
+      getSession: () => session,
+      setSession: (value) => (session = value),
+      readSession,
+      path: () => '/profile/auth-session.bin',
+      readFile: vi.fn(() => sessionBytes),
+      writeFile: vi.fn(),
+      clearExpiredSession: vi.fn()
+    })
+
+    authorizeMacKeychainUnlock()
+    loadSession()
+    expect(session).toEqual({ accessToken: 'cached-session' })
+    expect(loaded).toBe(true)
+    expect(readSession).toHaveBeenCalledOnce()
+
+    resetMacKeychainUnlockAuthorization()
+    loadSession()
+
+    expect(session).toBeNull()
+    expect(loaded).toBe(false)
+    expect(readSession).toHaveBeenCalledOnce()
+    expect(sessionBytes.toString()).toBe('existing-encrypted-session')
+
+    authorizeMacKeychainUnlock()
+    loadSession()
+    expect(session).toEqual({ accessToken: 'cached-session' })
+    expect(loaded).toBe(true)
+    expect(readSession).toHaveBeenCalledTimes(2)
+  })
+
   it('fails closed on auth-session Keychain denial and retries successfully without losing bytes', () => {
     const source = Buffer.from('encrypted-auth-session')
     const decryptSafeStorage = vi

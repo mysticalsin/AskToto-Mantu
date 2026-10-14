@@ -196,6 +196,11 @@ function loadKey({
   /** Explicit user write only: may ask the original Keychain to unwrap a legacy wrapped key. */
   allowKeychainMigration?: boolean
 }): Buffer {
+  // Cached key material is still Keychain-backed authority on packaged macOS. A prior partial
+  // unlock may have populated this cache before another credential failed and revoked consent.
+  // Re-check authorization before the fast path so that stale in-memory key bytes cannot bypass
+  // the visible unlock flow.
+  requireMacKeychainUnlock()
   if (_key) return _key
 
   const p = join(app.getPath('userData'), KEY_FILE)
@@ -208,7 +213,6 @@ function loadKey({
   // explain what happened. The forced local keystore is deliberately independent of that OS service.
   // Existing and fresh packaged Mac profiles both cross the visible consent surface first. This
   // guard must precede even safeStorage.isEncryptionAvailable(), which can itself raise a prompt.
-  requireMacKeychainUnlock()
   const keychainAvailable = !localKeystoreForced && isKeychainAvailable()
   // Packaged macOS must not silently fall back to persisting a raw AES key when Keychain is absent.
   // In particular, do not replace an existing wrapped key or create a new key under this condition.

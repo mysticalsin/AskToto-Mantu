@@ -133,6 +133,23 @@ describe('packaged macOS Keychain unlock', () => {
     expect(readFileSync(join(userData, 'secret-key.bin')).toString('utf8')).toMatch(/^wrapped:/)
   })
 
+  it('requires a fresh visible unlock before using a cached key after authorization is reset', () => {
+    authorizeMacKeychainUnlock()
+    const ciphertext = encryptSecret('already unlocked profile data')
+    const keyFile = join(userData, 'secret-key.bin')
+    const wrappedKey = readFileSync(keyFile)
+    const encryptCalls = (safeStorage.encryptString as ReturnType<typeof vi.fn>).mock.calls.length
+    const decryptCalls = (safeStorage.decryptString as ReturnType<typeof vi.fn>).mock.calls.length
+
+    resetMacKeychainUnlockAuthorization()
+
+    expect(() => encryptSecret('must remain locked')).toThrow(MAC_KEYCHAIN_UNLOCK_REQUIRED_PREFIX)
+    expect(() => decryptSecret(ciphertext)).toThrow(MAC_KEYCHAIN_UNLOCK_REQUIRED_PREFIX)
+    expect(readFileSync(keyFile)).toEqual(wrappedKey)
+    expect(safeStorage.encryptString).toHaveBeenCalledTimes(encryptCalls)
+    expect(safeStorage.decryptString).toHaveBeenCalledTimes(decryptCalls)
+  })
+
   it('does not let the local-keystore environment override create a packaged Mac raw key', () => {
     process.env.ASKTOTO_LOCAL_KEYSTORE = '1'
     expect(() => encryptSecret('settings write')).toThrow(MAC_KEYCHAIN_UNLOCK_REQUIRED_PREFIX)

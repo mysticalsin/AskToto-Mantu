@@ -76,26 +76,30 @@ export function createAuthSessionLoader<T extends { at?: number }>(options: {
   setLoaded: (loaded: boolean) => void
   getSession: () => T | null
   setSession: (session: T | null) => void
+  readSession?: () => T | null
   path: () => string
   readFile: (path: string) => Buffer
   writeFile: (path: string, data: Buffer, options: { mode: number }) => void
   clearExpiredSession: () => void
 }): () => void {
   return () => {
-    if (options.isLoaded()) return
     const packagedMac = app.isPackaged && process.platform === 'darwin'
     if (packagedMac && !isMacKeychainUnlockAuthorized()) {
       options.setSession(null)
+      options.setLoaded(false)
       return
     }
+    if (options.isLoaded()) return
     try {
       options.setSession(
-        readAuthSessionFile({
-          path: options.path(),
-          readFile: options.readFile,
-          writeFile: options.writeFile,
-          packagedMac
-        })
+        options.readSession
+          ? options.readSession()
+          : readAuthSessionFile({
+              path: options.path(),
+              readFile: options.readFile,
+              writeFile: options.writeFile,
+              packagedMac
+            })
       )
     } catch (error) {
       options.setSession(null)
