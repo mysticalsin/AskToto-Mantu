@@ -142,6 +142,8 @@ async function downloadOne(
   }
   arm(REQUEST_TIMEOUT_MS, `${file}: request timeout for ${spec.url}`)
 
+  let output: ReturnType<typeof createWriteStream> | undefined
+  let outputClosed: Promise<void> | undefined
   try {
     const res = await fetchFollowingRedirects(spec.url, ctrl.signal)
     if (!res.ok) throw new Error(`${file}: HTTP ${res.status} for ${spec.url}`)
@@ -151,27 +153,52 @@ async function downloadOne(
     const header = res.headers.get('content-length')
     const declared = header === null ? Number.NaN : Number(header)
     if (Number.isFinite(declared) && declared !== spec.bytes) {
-      throw new Error(`${file}: server declared ${declared} bytes, expected ${spec.bytes}`)
+      const error = new Error(`${file}: server declared ${declared} bytes, expected ${spec.bytes}`)
+      ctrl.abort(error)
+      await res.body?.cancel(error).catch(() => {})
+      throw error
     }
     if (!res.body) throw new Error(`${file}: response carried no body`)
 
     // `getReader()` rather than async iteration: it is the one traversal API every ReadableStream
     // implementation exposes, and it is what cli-installer.ts's download already uses.
     const reader = res.body.getReader()
+    let receivedBytes = 0
+    let completed = false
+    const writer = createWriteStream(partial, { autoClose: true, emitClose: true })
+    output = writer
+    // Install this before pipeline starts: it may reject on a source error before the async fs.open
+    // behind WriteStream completes. Removing the partial before 'close' can let that late open recreate it.
+    outputClosed = new Promise<void>((resolve) => writer.once('close', resolve))
     arm(IDLE_TIMEOUT_MS, `${file}: stalled mid-download`)
     await pipeline(
       (async function* () {
-        for (;;) {
-          const { done, value } = await reader.read()
-          if (done) return
-          if (!value) continue
-          arm(IDLE_TIMEOUT_MS, `${file}: stalled mid-download`)
-          onChunk(value.byteLength)
-          yield value
+        try {
+          for (;;) {
+            const { done, value } = await reader.read()
+            if (done) {
+              completed = true
+              return
+            }
+            if (!value) continue
+            if (receivedBytes + value.byteLength > spec.bytes) {
+              const error = new Error(`${file}: response exceeded pinned ${spec.bytes} bytes`)
+              ctrl.abort(error)
+              throw error
+            }
+            receivedBytes += value.byteLength
+            arm(IDLE_TIMEOUT_MS, `${file}: stalled mid-download`)
+            onChunk(value.byteLength)
+            yield value
+          }
+        } finally {
+          if (!completed) await reader.cancel().catch(() => {})
+          reader.releaseLock()
         }
       })(),
-      createWriteStream(partial)
+      writer
     )
+    await outputClosed
 
     const size = statSync(partial).size
     if (size !== spec.bytes) throw new Error(`${file}: got ${size} bytes, expected ${spec.bytes}`)
@@ -183,6 +210,10 @@ async function downloadOne(
     renameSync(partial, dest)
   } catch (err) {
     ctrl.abort()
+    if (output && outputClosed) {
+      output.destroy()
+      await outputClosed
+    }
     rmSync(partial, { force: true })
     throw err
   } finally {
@@ -262,9 +293,6 @@ async function run(modelId: string): Promise<boolean> {
   auditLog('local.model.download_start', { modelId, files: missing.map((f) => f.key) })
 
   for (const f of missing) {
-    // A stale file that failed verification must go before we refetch, so a crash between the two
-    // never leaves a bad file sitting where a later run would trust its presence.
-    rmSync(f.dest, { force: true })
     const base = received
     let lastErr: unknown
     let ok = false

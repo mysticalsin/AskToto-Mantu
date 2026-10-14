@@ -98,7 +98,7 @@
     "src/main/license/device.ts": 2,
     "src/main/license/install.ts": 5,
     "src/main/license/secret-store.ts": 7,
-    "src/main/llm/local-model-download.ts": 7,
+    "src/main/llm/local-model-download.ts": 6,
     "src/main/llm/local-models.ts": 4,
     "src/main/llm/local-routing.ts": 1,
     "src/main/llm/local-runtime.ts": 2,
