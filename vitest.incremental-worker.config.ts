@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { createHermeticSandbox, hermeticEnv } from './scripts/hermetic/sandbox-env.mjs'
 
 const root = dirname(fileURLToPath(import.meta.url))
-const electronWorkerCase = 'src/main/infra/process/incremental-meeting-speech-worker.integration.electron-case.ts'
+const electronWorkerCase = 'scripts/qa/fixtures/incremental-meeting-speech-worker.integration.electron-case.ts'
 const sandbox = createHermeticSandbox()
 
 export default defineConfig({

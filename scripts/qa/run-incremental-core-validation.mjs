@@ -28,7 +28,7 @@ const testFilesByPlatform = {
 if (!Object.hasOwn(testFilesByPlatform, process.platform))
   throw new Error(`Incremental core qualification does not support ${process.platform}.`)
 const testFiles = testFilesByPlatform[process.platform]
-const electronTest = 'src/main/infra/process/incremental-meeting-speech-worker.integration.electron-case.ts'
+const electronTest = 'scripts/qa/fixtures/incremental-meeting-speech-worker.integration.electron-case.ts'
 const electronBinary =
   process.platform === 'win32'
     ? join(root, 'node_modules', 'electron', 'dist', 'electron.exe')
