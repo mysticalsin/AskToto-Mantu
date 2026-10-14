@@ -339,6 +339,42 @@ describe('speech-pack engine', () => {
         expect(packMatches(c, join(root, WHISPER, '1'))).toBe(true)
         expect(existsSync(marker(WHISPER))).toBe(true)
       })
+
+      it('keeps the previous directory available for cancellation after the marker check', async () => {
+        server = await serveFiles()
+        const c = whisper(server.base)
+        const first = make([c])
+        first.enqueue([WHISPER])
+        await first.whenIdle()
+        rmSync(marker(WHISPER))
+
+        let entered = false
+        let releaseGate!: () => void
+        const gate = new Promise<void>((resolve) => {
+          releaseGate = resolve
+        })
+        let replacing!: ReturnType<typeof make>
+        replacing = make([c], {
+          onActivationStep: async (step) => {
+            if ((step as string) === 'ready-check') {
+              entered = true
+              await gate
+            }
+          }
+        })
+        replacing.enqueue([WHISPER])
+        try {
+          await vi.waitFor(() => expect(entered).toBe(true))
+          replacing.cancel(WHISPER)
+        } finally {
+          releaseGate()
+        }
+        await replacing.whenIdle()
+        expect(replacing.getState(WHISPER)).toEqual({ status: 'error', kind: 'cancelled' })
+        expect(packMatches(c, join(root, WHISPER, '1'))).toBe(true)
+        expect(existsSync(marker(WHISPER))).toBe(true)
+        expect(readdirSync(join(root, WHISPER)).some((name) => name.includes('.old-'))).toBe(false)
+      })
     })
   })
 
