@@ -52,4 +52,3 @@ describe('MQA-245 — a diarization cluster label is not wrapped in the generic 
     expect(hit[0]).toMatchObject({ speaker: 'unknown', name: 'Speaker 1', text: 'an older saved line' })
   })
 })
-
