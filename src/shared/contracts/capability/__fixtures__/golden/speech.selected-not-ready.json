@@ -1,0 +1,7 @@
+{
+  "capability": "speech",
+  "selected": "cloudflare-nova3",
+  "allowed": ["cloudflare-nova3", "parakeet", "whisper"],
+  "ready": ["parakeet"],
+  "status": { "state": "not-ready", "reason": "unreachable" }
+}

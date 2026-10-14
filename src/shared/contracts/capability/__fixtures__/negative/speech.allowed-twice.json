@@ -1,0 +1,7 @@
+{
+  "capability": "speech",
+  "selected": "parakeet",
+  "allowed": ["parakeet", "parakeet"],
+  "ready": ["parakeet"],
+  "status": { "state": "ready" }
+}

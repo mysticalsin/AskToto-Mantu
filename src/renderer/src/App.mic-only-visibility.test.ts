@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, expectTypeOf, it } from 'vitest'
+import type { CaptureDegraded as CaptureStateDegraded } from './lib/listen-capture-state'
+import type { CaptureDegraded } from './lib/listen'
 import { sourceIndexOf } from '../../../scripts/lib/source-layout'
 
 // Normalize CRLF → LF (same rationale as App.capture-permission.test.ts): Windows checkouts would
@@ -17,16 +19,20 @@ const settingsUi = readFileSync(join(__dirname, 'features', 'settings', 'AudioTa
 // These anchors pin the persistent-chrome visibility that fixed it.
 describe('mic-only capture degradation stays visible', () => {
   it('useListen exposes a structured captureDegraded state, permission-classified for the them side', () => {
-    expect(listen).toMatch(/export interface CaptureDegraded/)
+    expectTypeOf<CaptureDegraded>().toEqualTypeOf<CaptureStateDegraded>()
+    expect(listen).toMatch(
+      /export type \{ CaptureDegraded, CaptureHealth, CaptureSelectionOutcome \} from '\.\/listen-capture-state'/
+    )
     expect(listen).toMatch(/captureDegraded: CaptureDegraded \| null/)
     // Set from the start()-time soft note, with the Screen-Recording cause carried as `permission`.
-    expect(listen).toMatch(/side: micOk \? 'them' : 'you', note, permission: micOk && isSysPermDenied/)
+    expect(listen).toMatch(/const micCaptured = capturedTracks\.includes\('microphone'\)/)
+    expect(listen).toMatch(/side: micCaptured \? 'them' : 'you', note, permission: micCaptured && isSysPermDenied/)
     // Reset on every fresh start and on final teardown — a stale flag must not leak across sessions.
     expect(listen).toMatch(
-      /error: null,\n {10}captureDegraded: null,\n {10}captureHealth: null,\n {10}noSpeechWarning: false,[\s\S]*?listening: true,\n {10}paused: false/
+      /error: null,\s+captureDegraded: null,\s+captureHealth: null,\s+noSpeechWarning: false,[\s\S]*?listening: true,\s+capturing: false,\s+paused: false/
     )
     expect(listen).toMatch(
-      /listening: false,\n {12}capturing: false,\n {12}paused: false,\n {12}loading: false,\n {12}error,\n {12}captureDegraded: null,\n {12}captureHealth: null/
+      /listening: false,\s+capturing: false,\s+paused: false,\s+loading: false,\s+error,\s+captureDegraded: null,\s+captureHealth: null/
     )
   })
 

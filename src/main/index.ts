@@ -751,7 +751,7 @@ import {
 import { cloudSttRequestBelongsToOwner, replaceCloudSttSessionIfCurrent } from './cloud-stt/session-replacement'
 import { resolveCloudSttGatewayId } from './cloud-stt/credentials'
 import { resolveEnterpriseLiveProfile } from '../shared/enterprise-live-profile'
-import { effectiveCloudSttProvider, enforceSttPolicy } from '../shared/cloud-stt-provider'
+import { cloudSttStartAcknowledgement, resolveCloudSttStartProvider } from '../shared/cloud-stt-start'
 import { shouldRecoverCompletedOnboardingExit } from './onboarding-exit-fallback'
 
 import {
@@ -7304,10 +7304,7 @@ function registerIpc(): void {
     // Provider authority is settings/profile only. The renderer may report its UI selection but cannot
     // redirect a live audio stream to another backend by supplying `payload.provider`.
     // M2-0412: the fleet policy's `stt` entry narrows this at session start only; live sessions are never rewritten.
-    const provider = enforceSttPolicy(
-      getActiveModelPolicy(settings),
-      effectiveCloudSttProvider(profile, settings.cloudSttProvider)
-    )
+    const provider = resolveCloudSttStartProvider(getActiveModelPolicy(settings), profile, settings.cloudSttProvider)
     // An opaque capture identity scopes delayed force-stops to the session that requested them.
     // Keep the bound modest because this comes from the renderer IPC boundary.
     const captureId =
@@ -7357,7 +7354,7 @@ function registerIpc(): void {
     if (!result.ok && cloudSttIpcOwner === owner) {
       setCloudSttIpcOwner(null)
     }
-    return result
+    return cloudSttStartAcknowledgement(result, provider)
   })
   ipcMain.handle(IPC.cloudSttStop, async (e, payload: unknown) => {
     assertMainWindow(e)

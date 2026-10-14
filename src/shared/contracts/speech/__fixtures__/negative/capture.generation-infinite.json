@@ -1,0 +1,6 @@
+{
+  "generation": 1e309,
+  "engine": "deepgram-nova3",
+  "requestedTracks": ["microphone"],
+  "capturedTracks": ["microphone"]
+}

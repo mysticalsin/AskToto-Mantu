@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import type { CloudSttStartResult } from '../shared/cloud-stt-start'
 import {
   IPC,
   type AskStart,
@@ -228,7 +229,7 @@ const api = {
     profileName?: string
     meetingId?: string
     captureId?: string
-  }): Promise<{ ok: boolean; error?: string; code?: string }> => ipcRenderer.invoke(IPC.cloudSttStart, opts),
+  }): Promise<CloudSttStartResult> => ipcRenderer.invoke(IPC.cloudSttStart, opts),
   cloudSttStop: (opts?: { force?: boolean; captureId?: string }): Promise<{ timedOut: boolean }> =>
     ipcRenderer.invoke(IPC.cloudSttStop, opts),
   cloudSttPush: (samples: Float32Array, speaker: 'you' | 'them', captureId?: string): Promise<void> =>
