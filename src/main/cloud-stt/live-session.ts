@@ -16,11 +16,7 @@ import {
   normalizeSonioxMessage,
   type CloudSttScope
 } from './adapter'
-import {
-  resolveCloudSttCredentials,
-  type CloudSttResolvedCreds,
-  CLOUD_STT_CREDENTIALS_MISSING
-} from './credentials'
+import { resolveCloudSttCredentials, type CloudSttResolvedCreds, CLOUD_STT_CREDENTIALS_MISSING } from './credentials'
 import { float32ToPcm16le } from './pcm'
 import {
   mapCloudFinalsToLines,
@@ -69,6 +65,12 @@ type TrackSession = {
 
 export type CloudSttLiveStopResult = { timedOut: boolean }
 
+// Hard per-track queue ceiling: one accepted 30-second PCM16 frame is 960,000 bytes. This bounds queued
+// memory; it is not a latency target.
+const MAX_OUTBOUND_BUFFERED_PCM_BYTES = 1024 * 1024
+const OUTBOUND_QUEUE_OVERFLOW_ERROR =
+  'Cloud STT transcription stopped because the network send queue exceeded its limit.'
+
 function novaTerminalEvidence(message: unknown): boolean {
   if (!message || typeof message !== 'object') return false
   const candidate = message as { type?: unknown }
@@ -102,6 +104,7 @@ export class CloudSttLiveSession {
   private resolveGracefulClose: ((result: CloudSttLiveStopResult) => void) | null = null
   private gracefulCloseTimer: ReturnType<typeof setTimeout> | null = null
   private closedStatusSent = false
+  private outboundQueueOverflow = false
 
   constructor(opts: CloudSttLiveStartOpts, handlers: CloudSttLiveHandlers) {
     this.opts = opts
@@ -152,6 +155,16 @@ export class CloudSttLiveSession {
     const track = this.tracks.get(channel)
     if (!track?.open || track.ws.readyState !== this.Ws.OPEN) return
     if (!samples.length || samples.length > 16_000 * 30) return
+    const bufferedAmount = track.ws.bufferedAmount
+    const prospectivePcmBytes = samples.byteLength / 2
+    if (
+      !Number.isFinite(bufferedAmount) ||
+      bufferedAmount < 0 ||
+      bufferedAmount + prospectivePcmBytes > MAX_OUTBOUND_BUFFERED_PCM_BYTES
+    ) {
+      this.stopForOutboundQueueOverflow()
+      return
+    }
     const pcm = float32ToPcm16le(samples)
     try {
       track.ws.send(pcm)
@@ -190,7 +203,7 @@ export class CloudSttLiveSession {
    * prevents a broken provider connection from keeping capture shutdown alive indefinitely.
    */
   closeGracefully(timeoutMs = 5_000): Promise<CloudSttLiveStopResult> {
-    if (this.closed) return Promise.resolve({ timedOut: false })
+    if (this.closed) return Promise.resolve({ timedOut: this.outboundQueueOverflow })
     if (this.gracefulClose) return this.gracefulClose
 
     this.closing = true
@@ -207,10 +220,13 @@ export class CloudSttLiveSession {
     // Install the deadline before asking a provider to flush. Some implementations can synchronously
     // deliver the terminal result from send(); completeGracefulClose() must be able to clear this timer
     // instead of leaving a live handle behind after an already-complete stop.
-    this.gracefulCloseTimer = setTimeout(() => {
-      if (!this.closing || this.closed) return
-      this.completeGracefulClose(true)
-    }, Math.max(1, Math.min(timeoutMs, 15_000)))
+    this.gracefulCloseTimer = setTimeout(
+      () => {
+        if (!this.closing || this.closed) return
+        this.completeGracefulClose(true)
+      },
+      Math.max(1, Math.min(timeoutMs, 15_000))
+    )
 
     for (const track of tracks) {
       if (track.ws.readyState === this.Ws.OPEN) {
@@ -349,6 +365,8 @@ export class CloudSttLiveSession {
           settled = true
           clearTimeout(timer)
           reject(new Error(`Cloud STT ${kind} WebSocket error: ${err?.message || 'unknown'}`))
+        } else if (this.closed) {
+          return
         } else if (this.closing) {
           this.acknowledgeTrackClose(track, track.terminalReceived)
         } else {
@@ -390,10 +408,10 @@ export class CloudSttLiveSession {
     const scope = this.scope(channel)
     try {
       if (kind === 'nova') {
-        const norm = normalizeNova3ResultsMessage(
-          parsed as Parameters<typeof normalizeNova3ResultsMessage>[0],
-          { scope, messageSequence: seq }
-        )
+        const norm = normalizeNova3ResultsMessage(parsed as Parameters<typeof normalizeNova3ResultsMessage>[0], {
+          scope,
+          messageSequence: seq
+        })
         if (norm.interimText) this.handlers.onInterim?.(channel, norm.interimText)
         for (const line of mapCloudFinalsToLines(norm.finals, channel, {
           profile: this.opts.profile
@@ -446,9 +464,7 @@ export class CloudSttLiveSession {
     track.closeAcknowledged = true
     if (terminalEvidence) track.terminalReceived = true
     if ([...this.tracks.values()].every((candidate) => candidate.closeAcknowledged)) {
-      this.completeGracefulClose(
-        ![...this.tracks.values()].every((candidate) => candidate.terminalReceived)
-      )
+      this.completeGracefulClose(![...this.tracks.values()].every((candidate) => candidate.terminalReceived))
     }
   }
 
@@ -469,6 +485,30 @@ export class CloudSttLiveSession {
     }
     this.finishGracefulClose({ timedOut })
     this.signalClosed()
+  }
+
+  private stopForOutboundQueueOverflow(): void {
+    if (this.closed) return
+    this.closed = true
+    this.closing = false
+    this.outboundQueueOverflow = true
+    this.clearGracefulCloseTimer()
+    const tracks = [...this.tracks.values()]
+    this.tracks.clear()
+    for (const track of tracks) {
+      try {
+        track.ws.terminate()
+      } catch {
+        try {
+          track.ws.close()
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    this.finishGracefulClose({ timedOut: true })
+    this.signalClosed()
+    this.handlers.onError?.(OUTBOUND_QUEUE_OVERFLOW_ERROR)
   }
 
   private finishGracefulClose(result: CloudSttLiveStopResult): void {
@@ -522,9 +562,7 @@ export async function startCloudSttLive(
   if (pending === session) pending = null
   if (!result.ok || generation !== activeGeneration) {
     session.close()
-    return result.ok
-      ? { ok: false, error: 'Cloud STT session was replaced.', code: 'STALE' }
-      : result
+    return result.ok ? { ok: false, error: 'Cloud STT session was replaced.', code: 'STALE' } : result
   }
   active = session
   return result

@@ -26,12 +26,27 @@
  * transcribed by the floor model, as before", never "the app is worse than it was".
  */
 import { createHash } from 'node:crypto'
-import { createReadStream, createWriteStream, existsSync, mkdirSync, renameSync, rmSync, statSync, statfsSync } from 'node:fs'
+import {
+  createReadStream,
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  statfsSync
+} from 'node:fs'
 import { pipeline } from 'node:stream/promises'
 import { dirname, join } from 'node:path'
 import { app, net } from 'electron'
 import { mainLog } from './logger'
-import { HIGH_TIER_ASR_MODEL, asrModelBytes, asrModelFileUrl, type AsrModelFile, type AsrModelSpec } from './asr-model-manifest'
+import {
+  HIGH_TIER_ASR_MODEL,
+  asrModelBytes,
+  asrModelFileUrl,
+  type AsrModelFile,
+  type AsrModelSpec
+} from './asr-model-manifest'
 
 /** Same headroom rule and rationale as the LLM downloader — see assertRoomFor there. */
 const DISK_HEADROOM_BYTES = 512 * 1024 * 1024
@@ -120,7 +135,12 @@ function assertRoomForAll(bytes: number, dir: string): void {
   )
 }
 
-async function downloadOne(spec: AsrModelSpec, file: AsrModelFile, dest: string, onChunk: (n: number) => void): Promise<void> {
+async function downloadOne(
+  spec: AsrModelSpec,
+  file: AsrModelFile,
+  dest: string,
+  onChunk: (n: number) => void
+): Promise<void> {
   mkdirSync(dirname(dest), { recursive: true })
   const partial = `${dest}.partial`
   rmSync(partial, { force: true })
@@ -133,6 +153,8 @@ async function downloadOne(spec: AsrModelSpec, file: AsrModelFile, dest: string,
   }
   arm(REQUEST_TIMEOUT_MS, `${file.path}: request timeout`)
 
+  let output: ReturnType<typeof createWriteStream> | undefined
+  let outputClosed: Promise<void> | undefined
   try {
     const url = asrModelFileUrl(spec, file)
     const res = await net.fetch(url, { signal: ctrl.signal })
@@ -142,36 +164,67 @@ async function downloadOne(spec: AsrModelSpec, file: AsrModelFile, dest: string,
     const header = res.headers.get('content-length')
     const declared = header === null ? Number.NaN : Number(header)
     if (Number.isFinite(declared) && declared !== file.bytes) {
-      throw new Error(`${file.path}: server declared ${declared} bytes, expected ${file.bytes}`)
+      const error = new Error(`${file.path}: server declared ${declared} bytes, expected ${file.bytes}`)
+      ctrl.abort(error)
+      await res.body?.cancel(error).catch(() => {})
+      throw error
     }
     if (!res.body) throw new Error(`${file.path}: response carried no body`)
 
     const reader = res.body.getReader()
+    let receivedBytes = 0
+    let completed = false
+    const writer = createWriteStream(partial, { autoClose: true, emitClose: true })
+    output = writer
+    // A source error can reject pipeline before WriteStream's asynchronous fs.open finishes. Wait for
+    // 'close' before removing the partial, so a late open cannot recreate it after cleanup.
+    outputClosed = new Promise<void>((resolve) => writer.once('close', resolve))
     arm(IDLE_TIMEOUT_MS, `${file.path}: stalled mid-download`)
     await pipeline(
       (async function* () {
-        for (;;) {
-          const { done, value } = await reader.read()
-          if (done) return
-          if (!value) continue
-          arm(IDLE_TIMEOUT_MS, `${file.path}: stalled mid-download`)
-          onChunk(value.byteLength)
-          yield value
+        try {
+          for (;;) {
+            const { done, value } = await reader.read()
+            if (done) {
+              completed = true
+              return
+            }
+            if (!value) continue
+            if (receivedBytes + value.byteLength > file.bytes) {
+              const error = new Error(`${file.path}: response exceeded pinned ${file.bytes} bytes`)
+              ctrl.abort(error)
+              throw error
+            }
+            receivedBytes += value.byteLength
+            arm(IDLE_TIMEOUT_MS, `${file.path}: stalled mid-download`)
+            onChunk(value.byteLength)
+            yield value
+          }
+        } finally {
+          if (!completed) await reader.cancel().catch(() => {})
+          reader.releaseLock()
         }
       })(),
-      createWriteStream(partial)
+      writer
     )
+    await outputClosed
 
     const size = statSync(partial).size
     if (size !== file.bytes) throw new Error(`${file.path}: got ${size} bytes, expected ${file.bytes}`)
     const digest = await sha256Of(partial)
     if (digest !== file.sha256) {
-      throw new Error(`${file.path}: sha256 ${digest.slice(0, 12)}… does not match the pinned ${file.sha256.slice(0, 12)}…`)
+      throw new Error(
+        `${file.path}: sha256 ${digest.slice(0, 12)}… does not match the pinned ${file.sha256.slice(0, 12)}…`
+      )
     }
     // Only now may it exist under its real name.
     renameSync(partial, dest)
   } catch (err) {
     ctrl.abort()
+    if (output && outputClosed) {
+      output.destroy()
+      await outputClosed
+    }
     rmSync(partial, { force: true })
     throw err
   } finally {
