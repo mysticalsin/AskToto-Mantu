@@ -24,6 +24,7 @@ import {
   killOwned,
   strictLaunchEnvironment
 } from './lib/app-driver.mjs'
+import { listProcesses, survivors } from './owned-processes.mjs'
 import { stopOwnedChild } from './lib/st-1-termination.mjs'
 import { directoryProblems, provenanceProblems, sha256File } from './provenance.mjs'
 
@@ -425,6 +426,21 @@ function recordRow(report, id, status, code = null) {
   if (row) Object.assign(row, { status, code })
 }
 
+export function markExecutionFailure(report, id, code) {
+  recordRow(report, id, 'FAIL', code)
+}
+
+export function finalizeManualRollbackResult(report, executionFailed) {
+  report.windows.status =
+    !executionFailed &&
+    report.rows.filter((row) => row.id !== 'cleanup').every((row) => row.status === 'PASS') &&
+    report.cleanup.status === 'ACKNOWLEDGED'
+      ? 'PASS'
+      : 'FAIL'
+  report.outcome = report.windows.status === 'PASS' ? 'PARTIAL_BLOCKED' : 'FAIL'
+  return report.windows.status
+}
+
 function failureCode(error) {
   const code = error?.code
   return typeof code === 'string' && /^[a-z0-9-]{1,64}$/.test(code) ? code : 'runner-failed'
@@ -614,7 +630,22 @@ async function openPackagedApp(exe, env, installRoot, userData) {
   }
 }
 
-async function stopPackagedApp(session) {
+function rememberOwnedProcesses(registry, mainPid, installRoot) {
+  const owned = ownedCensus({ platform: 'win32', mainPid, installRoot }).owned
+  for (const entry of owned) registry.set(`${entry.pid}:${entry.startedMs}`, entry)
+  return owned
+}
+
+function currentOwnedSurvivors(registry, installRoot) {
+  return survivors([...registry.values()], listProcesses('win32'), { installRoot, platform: 'win32' })
+}
+
+async function stopPackagedApp(session, registry) {
+  try {
+    rememberOwnedProcesses(registry, session.child.pid, session.installRoot)
+  } catch {
+    fail('owned-process-census-unavailable')
+  }
   let quitRequested = false
   let transportClosed = false
   try {
@@ -622,6 +653,11 @@ async function stopPackagedApp(session) {
     quitRequested = true
   } catch {
     /* A failed renderer path is handled by the owned-process stop below. */
+  }
+  try {
+    rememberOwnedProcesses(registry, session.child.pid, session.installRoot)
+  } catch {
+    fail('owned-process-census-unavailable')
   }
   try {
     transportClosed = (await session.browser.close()) !== false
@@ -634,17 +670,26 @@ async function stopPackagedApp(session) {
     if (receipt.state !== 'acknowledged') fail('app-teardown-unacknowledged')
     exited = await waitForChildExit(session.child, 5_000)
   }
-  let census = ownedCensus({ platform: 'win32', mainPid: session.child.pid, installRoot: session.installRoot })
-  if (census.owned.length) {
-    killOwned(census.owned)
+  let owned = []
+  try {
+    owned = rememberOwnedProcesses(registry, session.child.pid, session.installRoot)
+  } catch {
+    fail('owned-process-census-unavailable')
+  }
+  if (owned.length) {
+    killOwned(owned)
     const deadline = Date.now() + 5_000
     while (Date.now() < deadline) {
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 100))
-      census = ownedCensus({ platform: 'win32', mainPid: session.child.pid, installRoot: session.installRoot })
-      if (!census.owned.length) break
+      try {
+        owned = rememberOwnedProcesses(registry, session.child.pid, session.installRoot)
+      } catch {
+        fail('owned-process-census-unavailable')
+      }
+      if (!owned.length) break
     }
   }
-  if (!quitRequested || !transportClosed || !exited || census.owned.length) fail('app-teardown-unacknowledged')
+  if (!quitRequested || !transportClosed || !exited || owned.length) fail('app-teardown-unacknowledged')
   return true
 }
 
@@ -765,6 +810,8 @@ async function runManualRollback(args) {
   const report = createManualRollbackReport()
   let isolatedRoot = null
   let appSession = null
+  const ownedProcessRegistry = new Map()
+  let executionFailed = false
   let installRootRemoved = false
   let profileRemoved = false
   let inputRemoved = false
@@ -820,6 +867,7 @@ async function runManualRollback(args) {
 
     activeRow = 'baseline-encrypted-profile'
     appSession = await openPackagedApp(join(paths.installRoot, 'Metis.exe'), env, paths.installRoot, paths.userData)
+    rememberOwnedProcesses(ownedProcessRegistry, appSession.child.pid, appSession.installRoot)
     if (appSession.version !== '1.9.6') fail('baseline-app-version-mismatch')
     const settingsUpdate = await appSession.page.evaluate(async (meetingsFolder) => {
       const next = await window.toto.setSettings({
@@ -868,13 +916,14 @@ async function runManualRollback(args) {
     markPhase(report, 'baseline', '1.9.6', baselineRead)
     report.windows.meeting_count = 1
     recordRow(report, 'baseline-encrypted-profile', 'PASS')
-    await stopPackagedApp(appSession)
+    await stopPackagedApp(appSession, ownedProcessRegistry)
     appSession = null
 
     activeRow = 'candidate-upgrade-readback'
     const candidateInstall = await installSetup(args.candidateInstaller, paths.installRoot)
     if (candidateInstall.code !== 0 || candidateInstall.timedOut) fail('candidate-install-failed')
     appSession = await openPackagedApp(join(paths.installRoot, 'Metis.exe'), env, paths.installRoot, paths.userData)
+    rememberOwnedProcesses(ownedProcessRegistry, appSession.child.pid, appSession.installRoot)
     if (appSession.version !== TARGET_VERSION) fail('candidate-app-version-mismatch')
     const candidateRead = await verifyApplicationState(appSession, {
       meetingsFolder: paths.meetingsFolder,
@@ -884,7 +933,7 @@ async function runManualRollback(args) {
     })
     markPhase(report, 'candidate', TARGET_VERSION, candidateRead)
     recordRow(report, 'candidate-upgrade-readback', 'PASS')
-    await stopPackagedApp(appSession)
+    await stopPackagedApp(appSession, ownedProcessRegistry)
     appSession = null
 
     activeRow = 'manual-baseline-reinstall'
@@ -895,6 +944,7 @@ async function runManualRollback(args) {
     recordRow(report, 'manual-baseline-reinstall', 'PASS')
     activeRow = 'rollback-encrypted-profile-readback'
     appSession = await openPackagedApp(join(paths.installRoot, 'Metis.exe'), env, paths.installRoot, paths.userData)
+    rememberOwnedProcesses(ownedProcessRegistry, appSession.child.pid, appSession.installRoot)
     if (appSession.version !== '1.9.6') fail('rollback-app-version-mismatch')
     const rollbackRead = await verifyApplicationState(appSession, {
       meetingsFolder: paths.meetingsFolder,
@@ -906,31 +956,39 @@ async function runManualRollback(args) {
     report.windows.exact_meeting_bytes_preserved = rollbackRead.meetingHash === initialMeetingHash
     if (!report.windows.exact_meeting_bytes_preserved) fail('rollback-bytes-not-preserved')
     recordRow(report, 'rollback-encrypted-profile-readback', 'PASS')
-    await stopPackagedApp(appSession)
+    await stopPackagedApp(appSession, ownedProcessRegistry)
     appSession = null
     activeRow = 'cleanup'
     recordRow(report, 'cleanup', 'PASS')
   } catch (error) {
     const code = failureCode(error)
-    const active = report.rows.find((row) => row.id === activeRow)
-    if (active && active.status !== 'PASS') recordRow(report, activeRow, 'FAIL', code)
+    executionFailed = true
+    markExecutionFailure(report, activeRow, code)
     report.outcome = 'FAIL'
   } finally {
     if (appSession) {
       try {
-        await stopPackagedApp(appSession)
+        await stopPackagedApp(appSession, ownedProcessRegistry)
         appSession = null
       } catch {
+        executionFailed = true
+        markExecutionFailure(report, activeRow, 'app-teardown-unacknowledged')
         ownedProcessesGone = false
       }
     }
     if (isolatedRoot) {
       const paths = workspacePaths(isolatedRoot)
       try {
-        const census = ownedCensus({ platform: 'win32', mainPid: null, installRoot: paths.installRoot })
-        if (census.owned.length) killOwned(census.owned)
-        const remaining = ownedCensus({ platform: 'win32', mainPid: null, installRoot: paths.installRoot })
-        ownedProcessesGone = remaining.owned.length === 0
+        rememberOwnedProcesses(ownedProcessRegistry, null, paths.installRoot)
+        let remaining = currentOwnedSurvivors(ownedProcessRegistry, paths.installRoot)
+        const deadline = Date.now() + 5_000
+        while (Date.now() < deadline) {
+          if (remaining.length) killOwned(remaining)
+          await new Promise((resolveDelay) => setTimeout(resolveDelay, 100))
+          rememberOwnedProcesses(ownedProcessRegistry, null, paths.installRoot)
+          remaining = currentOwnedSurvivors(ownedProcessRegistry, paths.installRoot)
+        }
+        ownedProcessesGone = remaining.length === 0
       } catch {
         ownedProcessesGone = false
       }
@@ -972,12 +1030,7 @@ async function runManualRollback(args) {
       recordRow(report, 'cleanup', 'FAIL', 'cleanup-unacknowledged')
       report.outcome = 'FAIL'
     }
-    report.windows.status =
-      report.rows.filter((row) => row.id !== 'cleanup').every((row) => row.status === 'PASS') &&
-      report.cleanup.status === 'ACKNOWLEDGED'
-        ? 'PASS'
-        : 'FAIL'
-    report.outcome = report.windows.status === 'PASS' ? 'PARTIAL_BLOCKED' : 'FAIL'
+    finalizeManualRollbackResult(report, executionFailed)
     report.macos.candidate_dmg_sha256 = report.identity?.macos_dmg_sha256 ?? null
     try {
       mkdirSync(dirname(outputPath), { recursive: true })

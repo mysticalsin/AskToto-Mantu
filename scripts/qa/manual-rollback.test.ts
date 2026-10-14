@@ -8,6 +8,8 @@ import {
   baselineReleaseProblems,
   candidateBindingProblems,
   createManualRollbackReport,
+  finalizeManualRollbackResult,
+  markExecutionFailure,
   manualRollbackReportProblems
 } from './manual-rollback.mjs'
 import { VARIANTS } from './provenance.mjs'
@@ -177,6 +179,29 @@ describe('manual rollback provenance and report contracts', () => {
     expect(manualRollbackReportProblems(null as never, expected)).toContain('report-shape-invalid')
   })
 
+  it('keeps a final shutdown failure from being masked by a successful profile readback', () => {
+    const report = passingReport()
+    markExecutionFailure(report, 'rollback-encrypted-profile-readback', 'app-teardown-unacknowledged')
+
+    expect(report.rows.find((row) => row.id === 'rollback-encrypted-profile-readback')).toMatchObject({
+      status: 'FAIL',
+      code: 'app-teardown-unacknowledged'
+    })
+    expect(finalizeManualRollbackResult(report, false)).toBe('FAIL')
+    expect(report.outcome).toBe('FAIL')
+    expect(manualRollbackReportProblems(report, expected)).toContain(
+      'row-not-passing:rollback-encrypted-profile-readback'
+    )
+  })
+
+  it('fails final status when execution failed even if every report row and cleanup are marked passing', () => {
+    const report = passingReport()
+
+    expect(finalizeManualRollbackResult(report, true)).toBe('FAIL')
+    expect(report.outcome).toBe('FAIL')
+    expect(manualRollbackReportProblems(report, expected)).toContain('windows-not-passing')
+  })
+
   it('keeps the lane manual, hosted, attempt-bound, and separate from the upgrade scenario registry', () => {
     const workflow = readFileSync(new URL('../../.github/workflows/manual-rollback.yml', import.meta.url), 'utf8')
     expect(workflow).toContain('workflow_dispatch:')
@@ -188,6 +213,16 @@ describe('manual rollback provenance and report contracts', () => {
     expect(workflow).toContain('manual-rollback.mjs verify')
     expect(workflow).toContain('Metis-Setup-1.9.6.exe')
     expect(workflow).not.toContain('candidate-scenarios')
+  })
+
+  it('captures launch-time process identities and checks survivors through teardown before cleanup', () => {
+    const runner = readFileSync(new URL('./manual-rollback.mjs', import.meta.url), 'utf8')
+    expect(runner).toContain(
+      'rememberOwnedProcesses(ownedProcessRegistry, appSession.child.pid, appSession.installRoot)'
+    )
+    expect(runner).toContain('survivors([...registry.values()], listProcesses')
+    expect(runner).toContain('currentOwnedSurvivors(ownedProcessRegistry, paths.installRoot)')
+    expect(runner).toContain('ownedProcessesGone = remaining.length === 0')
   })
 
   it('emits only content-free recovery metadata and never records synthetic note or transcript text', () => {
