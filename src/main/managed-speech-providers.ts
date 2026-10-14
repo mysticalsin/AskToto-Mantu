@@ -49,8 +49,10 @@ async function readBoundedRegularFile(path: string): Promise<FileRead> {
   let handle: FileHandle
   try {
     handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
-  } catch (error) {
-    return errorCode(error) === 'ENOENT' ? { state: 'missing' } : { state: 'invalid' }
+  } catch {
+    // The first lstat already observed a configured file. Disappearance or replacement after
+    // that point is a race and must not turn a restriction into an unrestricted absence.
+    return { state: 'invalid' }
   }
 
   try {
@@ -85,8 +87,8 @@ async function readBoundedRegularFile(path: string): Promise<FileRead> {
       return { state: 'invalid' }
 
     return { state: 'present', bytes: Buffer.from(buffer.subarray(0, total)) }
-  } catch (error) {
-    return errorCode(error) === 'ENOENT' ? { state: 'missing' } : { state: 'invalid' }
+  } catch {
+    return { state: 'invalid' }
   } finally {
     try {
       await handle.close()
