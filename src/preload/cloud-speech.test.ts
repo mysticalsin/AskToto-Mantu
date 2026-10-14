@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   CLOUD_SPEECH_IPC,
   type CloudSpeechEvent,
+  type CloudSpeechCaptureCeilingEvent,
+  type CloudSpeechCaptureCeilingAck,
   type CloudSpeechEpochTransitionAck,
   type CloudSpeechEpochTransitionEvent,
   type CloudSpeechFinishRequest,
@@ -55,6 +57,57 @@ function pcmFrame(pcm16le = new ArrayBuffer(3_200)) {
 }
 
 describe('cloud speech preload boundary', () => {
+  it('delivers an exact ceiling event and accepts only its matching sealed-frontier acknowledgement', async () => {
+    const fixture = makeRenderer()
+    const event: CloudSpeechCaptureCeilingEvent = {
+      type: 'capture-ceiling',
+      captureId,
+      captureGeneration: capture.generation,
+      ceilingId: '00000000-0000-4000-8000-000000000704',
+      maxSampleOffsetExclusive: 230_400_000
+    }
+    const api = createCloudSpeechPreloadApi(fixture.renderer)
+    const received: CloudSpeechEvent[] = []
+    api.onCloudSpeechEvent(captureId, capture.generation, (value) => received.push(value))
+    fixture.listeners.get(CLOUD_SPEECH_IPC.event)?.({}, event)
+    expect(received).toEqual([event])
+
+    const acknowledgement: CloudSpeechCaptureCeilingAck = {
+      type: 'capture-ceiling-ack',
+      captureId,
+      captureGeneration: capture.generation,
+      ceilingId: event.ceilingId,
+      tracks: [{ track: 'microphone', finalSequence: 20, finalSampleOffset: 32_000 }]
+    }
+    fixture.invoke.mockResolvedValueOnce({
+      ok: true,
+      captureId,
+      captureGeneration: capture.generation,
+      ceilingId: event.ceilingId,
+      tracks: acknowledgement.tracks
+    })
+    await expect(api.cloudSpeechAckCaptureCeiling(acknowledgement)).resolves.toEqual({
+      ok: true,
+      captureId,
+      captureGeneration: capture.generation,
+      ceilingId: event.ceilingId,
+      tracks: acknowledgement.tracks
+    })
+    expect(fixture.invoke).toHaveBeenCalledWith(CLOUD_SPEECH_IPC.ceilingAck, acknowledgement)
+
+    fixture.invoke.mockResolvedValueOnce({
+      ok: true,
+      captureId,
+      captureGeneration: capture.generation,
+      ceilingId: '00000000-0000-4000-8000-000000000705',
+      tracks: acknowledgement.tracks
+    })
+    await expect(api.cloudSpeechAckCaptureCeiling(acknowledgement)).resolves.toMatchObject({
+      ok: false,
+      code: 'TRANSPORT'
+    })
+  })
+
   it('does not invoke main for an invalid request and validates successful responses', async () => {
     const fixture = makeRenderer()
     fixture.invoke.mockResolvedValueOnce({
