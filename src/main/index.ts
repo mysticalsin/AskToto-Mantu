@@ -10373,12 +10373,9 @@ app.on(
     } catch (e) {
       mainLog.warn('[will-quit] endBootWatch failed', e)
     }
-    // will-quit can fire BEFORE the app ever finished becoming ready — a quit requested during the async
-    // startup sequence, an automation/Playwright app.close(), or an early abort. Calling globalShortcut in
-    // that window throws "globalShortcut cannot be used before the app is ready" as an UNCAUGHT exception
-    // (the observed crash), and there is nothing registered to unregister anyway — so gate it on isReady().
-    // Each cleanup step is independent (its own try), so one throw never skips the rest. Owned sidecars are
-    // already stopped: installExitPaths registered the first will-quit listener (lifecycle/exit-paths.ts).
+    // will-quit may fire before readiness (startup abort or automation close); globalShortcut cannot be used then.
+    // Unregister only after readiness; cleanup steps handle errors independently, after owned sidecars stop.
+    // installExitPaths in lifecycle/exit-paths.ts registers the listener that stops owned sidecars first.
     if (app.isReady()) {
       try {
         globalShortcut.unregisterAll()
