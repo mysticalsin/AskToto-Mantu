@@ -328,19 +328,40 @@ describe('bounded incremental meeting append journal', () => {
     })
     await expect(words.appender.append(recordJson, 1)).resolves.toEqual({ status: 'refused', reason: 'LIMIT' })
 
-    const payloadLimits = { ...limits, maxPayloadBytes: 250 }
-    const payload = fixture({
-      limits: payloadLimits,
-      initial: snapshot({
-        acceptedRevision: 1,
-        durableRevision: 1,
-        recordCount: 1,
-        wordCount: 0,
-        linePayloadBytes: canonical().linePayloadBytes,
-        storedBytes: canonical().canonicalByteLength
-      })
+    const payloadRecord = canonical()
+    const nextPayloadBytes = provenancePayloadBytes(2, 2 * payloadRecord.linePayloadBytes)
+    const payloadLimits = { ...limits, maxPayloadBytes: nextPayloadBytes - 1 }
+    expect(provenancePayloadBytes(1, payloadRecord.linePayloadBytes)).toBeLessThanOrEqual(payloadLimits.maxPayloadBytes)
+    expect(nextPayloadBytes).toBe(payloadLimits.maxPayloadBytes + 1)
+    const oneRecordSnapshot = snapshot({
+      acceptedRevision: 1,
+      durableRevision: 1,
+      recordCount: 1,
+      wordCount: 0,
+      linePayloadBytes: payloadRecord.linePayloadBytes,
+      storedBytes: payloadRecord.canonicalByteLength
     })
+    const payload = fixture({ limits: payloadLimits, initial: oneRecordSnapshot })
     await expect(payload.appender.append(recordJson, 1)).resolves.toEqual({ status: 'refused', reason: 'LIMIT' })
+
+    expect(nextPayloadBytes).toBeLessThanOrEqual(250)
+    const underBudget = fixture({ limits: { ...limits, maxPayloadBytes: 250 }, initial: oneRecordSnapshot })
+    await expect(underBudget.appender.append(recordJson, 1)).resolves.toEqual({
+      status: 'durable',
+      revision: 2,
+      duplicate: false
+    })
+    expect(underBudget.commitCalls()).toBe(1)
+    expect(underBudget.readSnapshot()).toEqual(
+      snapshot({
+        acceptedRevision: 2,
+        durableRevision: 2,
+        recordCount: 2,
+        wordCount: 0,
+        linePayloadBytes: 2 * payloadRecord.linePayloadBytes,
+        storedBytes: 2 * payloadRecord.canonicalByteLength
+      })
+    )
 
     const disk = fixture({
       initial: snapshot({
