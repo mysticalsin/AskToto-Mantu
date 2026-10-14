@@ -843,11 +843,11 @@ describe('cloud speech capture controller', () => {
       stage: 'opened',
       streams: [{ track: 'microphone', previousEpoch: 3, nextEpoch: 15, lastSequence: 0 }]
     }
-    for (const listener of next.events) listener(terminal)
+    for (const listener of fakes.events) listener(terminal)
     await vi.waitFor(() => expect(applied).toEqual([terminal]))
-    for (const listener of next.events) listener(closed)
+    for (const listener of fakes.events) listener(closed)
     await vi.waitFor(() => expect(fakes.bridge.cloudSpeechAckEpochTransition).toHaveBeenCalledTimes(1))
-    for (const listener of next.events) listener(opened)
+    for (const listener of fakes.events) listener(opened)
     await vi.waitFor(() => expect(fakes.bridge.cloudSpeechAckEpochTransition).toHaveBeenCalledTimes(2))
     const successor: CloudSpeechEvent = {
       type: 'segment',
@@ -865,7 +865,7 @@ describe('cloud speech capture controller', () => {
         endMs: 20
       }
     }
-    for (const listener of next.events) listener(successor)
+    for (const listener of fakes.events) listener(successor)
     await Promise.resolve()
     expect(applied).toEqual([terminal])
     openedAck.resolve({
