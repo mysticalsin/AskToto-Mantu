@@ -2,13 +2,20 @@ import { describe, expect, it, vi } from 'vitest'
 import { createSpeechPackBridge } from './speech-pack'
 import { IPC } from '../shared/ipc'
 
-const request = { componentId: 'asr.whisper-base-q8' as const, action: 'download' as const, manifestIdentity: 'a'.repeat(64) }
+const request = {
+  componentId: 'asr.whisper-base-q8' as const,
+  action: 'download' as const,
+  manifestIdentity: 'a'.repeat(64)
+}
 
 describe('speech-pack preload boundary', () => {
   it('rejects invalid requests before invoking main', async () => {
     const invoke = vi.fn()
     const bridge = createSpeechPackBridge({ invoke, subscribe: vi.fn() })
-    expect(await bridge.speechPackAction({ ...request, url: 'https://example.com' } as typeof request)).toEqual({ ok: false, reason: 'invalid-request' })
+    expect(await bridge.speechPackAction({ ...request, url: 'https://example.com' } as typeof request)).toEqual({
+      ok: false,
+      reason: 'invalid-request'
+    })
     expect(invoke).not.toHaveBeenCalled()
   })
 
@@ -31,13 +38,22 @@ describe('speech-pack preload boundary', () => {
   it('filters malformed progress and preserves unsubscribe ownership', () => {
     let receive: (value: unknown) => void = () => {}
     const unsubscribe = vi.fn()
-    const subscribe = vi.fn((_channel: string, callback: (value: unknown) => void) => { receive = callback; return unsubscribe })
+    const subscribe = vi.fn((_channel: string, callback: (value: unknown) => void) => {
+      receive = callback
+      return unsubscribe
+    })
     const bridge = createSpeechPackBridge({ invoke: vi.fn(), subscribe })
     const listener = vi.fn()
     const stop = bridge.onSpeechPackProgress(listener)
     receive({ ...request, state: 'downloading', bytesDone: 1, bytesTotal: 10 })
     expect(listener).not.toHaveBeenCalled()
-    const progress = { componentId: request.componentId, manifestIdentity: request.manifestIdentity, state: 'downloading', bytesDone: 1, bytesTotal: 10 }
+    const progress = {
+      componentId: request.componentId,
+      manifestIdentity: request.manifestIdentity,
+      state: 'downloading',
+      bytesDone: 1,
+      bytesTotal: 10
+    }
     receive(progress)
     expect(listener).toHaveBeenCalledWith(progress)
     stop()
