@@ -340,6 +340,45 @@ afterEach(() => {
 })
 
 describe('live audio transport identity', () => {
+  it('tracks committed microphone capture through recovery, pause, resume, and graceful Stop', async () => {
+    let resolveRecovery!: (stream: MediaStream) => void
+    let micAcquisitions = 0
+    getUserMediaImpl = () => {
+      micAcquisitions += 1
+      return micAcquisitions === 1
+        ? Promise.resolve(makeStream('mic'))
+        : new Promise((resolve) => void (resolveRecovery = resolve))
+    }
+    let api = render('parakeet')
+    await api.start('mic', 'fast', 'parakeet', 'English', 123)
+    expect(render('parakeet').capturing).toBe(true)
+    expect(streams).toHaveLength(1)
+
+    const originalTrack = streams[0].track
+    originalTrack.readyState = 'ended'
+    originalTrack.onended?.()
+    await settle()
+    expect(render('parakeet').capturing).toBe(false)
+    expect(micAcquisitions).toBe(2)
+
+    resolveRecovery(makeStream('mic'))
+    await settle()
+    api = render('parakeet')
+    expect(api.capturing).toBe(true)
+    const openedStreamCount = streams.length
+
+    api.pause()
+    expect(render('parakeet')).toMatchObject({ capturing: true, paused: true })
+    await vi.advanceTimersByTimeAsync(100)
+    render('parakeet').resume()
+    expect(render('parakeet')).toMatchObject({ capturing: true, paused: false })
+    expect(streams).toHaveLength(openedStreamCount)
+
+    render('parakeet').stop()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(render('parakeet').capturing).toBe(false)
+  })
+
   it('publishes the ready worker fallback and live language change as actual recognizer state', async () => {
     let api = render('whisper')
     await api.start('mic', 'fast', 'whisper', 'French', 123)

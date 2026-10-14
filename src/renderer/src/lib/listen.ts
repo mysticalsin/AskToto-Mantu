@@ -28,6 +28,27 @@ import { transcriptToText } from './transcript'
 import { shouldUseBundledAsr } from './asr-offline'
 import { withDiagnosedThemNote } from './screen-permission-copy'
 import { sysRetryDelayMs } from './loopback-retry'
+import {
+  captureHealthForTrack,
+  captureHealthIfCurrent,
+  createListenCaptureState,
+  degradedAfterMicRecovery,
+  listenSpeechEngine,
+  micSelectionOutcome,
+  sameCaptureHealth,
+  shouldShowNoSpeechWarning,
+  themRecoveryFailureIsNoop
+} from './listen-capture-state'
+import type { CaptureDegraded, CaptureHealth, CaptureSelectionOutcome } from './listen-capture-state'
+export {
+  captureHealthForTrack,
+  captureHealthIfCurrent,
+  degradedAfterMicRecovery,
+  micSelectionOutcome,
+  shouldShowNoSpeechWarning,
+  themRecoveryFailureIsNoop
+} from './listen-capture-state'
+export type { CaptureDegraded, CaptureHealth, CaptureSelectionOutcome } from './listen-capture-state'
 export { sysRetryDelayMs }
 
 const SR = 16000
@@ -386,6 +407,7 @@ export function isQuestion(t: string): boolean {
 }
 
 interface Channel {
+  admissionEpoch: number
   ctx: AudioContext
   src: MediaStreamAudioSourceNode
   worklet: AudioWorkletNode
@@ -415,44 +437,6 @@ function settleStopCallbacks(operation: StopDrainOperation): void {
       console.warn('[listen] stop drain callback failed:', error)
     }
   }
-}
-
-/** A capture side the session REQUESTED but is NOT currently hearing, while Listen stays active
- *  ('them' = system-audio loopback / the remote side, 'you' = the microphone). Exposed as its own
- *  structured field — separate from the sticky `error` note, which only renders inside the Copilot
- *  body and later transient notes may overwrite — so persistent chrome (the Bar's "Heard live" chip,
- *  the minimized control pill) can show a truthful degraded state for the entire mic-only stretch.
- *  Tony sat through a whole meeting on 2026-07-20 with Screen Recording off and only found out from
- *  the unusable transcript: the red rec-dot and "Heard live" chip kept claiming everything was fine. */
-export interface CaptureDegraded {
-  side: 'you' | 'them'
-  /** Full platform-aware explanation (used as tooltip copy) — the note text shown when the state was set. */
-  note: string
-  /** True when the cause is the macOS Screen Recording permission ('them' only). */
-  permission: boolean
-  repair?: boolean // M2-0429: the grant belongs to another build or copy, so the Bar chip offers Repair
-}
-
-export type CaptureSelectionOutcome = 'system-default' | 'requested-device' | 'fallback-default' | 'unavailable'
-
-export function micSelectionOutcome(
-  requestedDevice: boolean,
-  usedFallback: boolean,
-  unavailable = false
-): CaptureSelectionOutcome {
-  if (unavailable) return 'unavailable'
-  if (!requestedDevice) return 'system-default'
-  return usedFallback ? 'fallback-default' : 'requested-device'
-}
-
-/** Privacy-safe, current-session facts from the actual active microphone track. */
-export interface CaptureHealth {
-  requestedDevice: boolean
-  selectionOutcome: CaptureSelectionOutcome
-  inputSampleRate: number | null
-  inputChannelCount: number | null
-  processingSampleRate: 16000
-  trackState: 'connected' | 'ended' | 'unavailable'
 }
 
 export interface RecognizerStatus {
@@ -491,111 +475,6 @@ export function recognizerStatusFor(
     : pinnedLanguage
       ? { engine, model, languageMode: 'pinned', language: pinnedLanguage, requestedLanguage: null }
       : { engine, model, languageMode: 'detecting', language: null, requestedLanguage: null }
-}
-
-export function shouldShowNoSpeechWarning(
-  currentEpoch: number,
-  eventEpoch: number,
-  captureHealth: CaptureHealth | null,
-  speechAdmitted: boolean,
-  captureDegraded: CaptureDegraded | null
-): boolean {
-  return (
-    currentEpoch === eventEpoch &&
-    captureHealth?.trackState === 'connected' &&
-    !speechAdmitted &&
-    captureDegraded === null
-  )
-}
-
-type CaptureTrack = Pick<MediaStreamTrack, 'readyState' | 'getSettings'>
-
-function safeTrackNumber(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
-}
-
-export function captureHealthForTrack(
-  track: CaptureTrack | null,
-  requestedDevice: boolean,
-  selectionOutcome: CaptureSelectionOutcome
-): CaptureHealth {
-  if (!track) {
-    return {
-      requestedDevice,
-      selectionOutcome,
-      inputSampleRate: null,
-      inputChannelCount: null,
-      processingSampleRate: 16000,
-      trackState: 'unavailable'
-    }
-  }
-  let settings: MediaTrackSettings = {}
-  try {
-    settings = track.getSettings()
-  } catch {
-    // The health DTO must never turn a browser-specific settings read into a capture failure.
-  }
-  return {
-    requestedDevice,
-    selectionOutcome,
-    inputSampleRate: safeTrackNumber(settings.sampleRate),
-    inputChannelCount: safeTrackNumber(settings.channelCount),
-    processingSampleRate: 16000,
-    trackState: track.readyState === 'ended' ? 'ended' : 'connected'
-  }
-}
-
-/** Keep asynchronous capture/recovery events from publishing into a replacement session. */
-export function captureHealthIfCurrent<T>(currentEpoch: number, eventEpoch: number, current: T, next: T): T {
-  return currentEpoch === eventEpoch ? next : current
-}
-
-function sameCaptureHealth(left: CaptureHealth | null, right: CaptureHealth | null): boolean {
-  return (
-    left === right ||
-    (left !== null &&
-      right !== null &&
-      left.requestedDevice === right.requestedDevice &&
-      left.selectionOutcome === right.selectionOutcome &&
-      left.inputSampleRate === right.inputSampleRate &&
-      left.inputChannelCount === right.inputChannelCount &&
-      left.processingSampleRate === right.processingSampleRate &&
-      left.trackState === right.trackState)
-  )
-}
-
-/**
- * Exported for unit testing — the pure decision behind recoverMic's success path (see useListen below).
- * `captureDegraded` is ONE slot but both sides can be degraded at once: on a mic-only session (Screen
- * Recording denied) a mic drop overwrites the 'them' entry with {side:'you'}, and the recovery ~200ms
- * later cleared the slot outright — so the Bar's chip went back to the confident red "Heard live" while
- * the remote half of the meeting was still not being captured and never would be (MQA-156), which is the
- * exact 2026-07-20 failure this field exists to prevent. A mic recovery may therefore only retire the
- * 'you' entry: while the session still wants system audio and has no 'them' channel, the remembered
- * 'them' cause — which carries the specific Screen-Recording copy and `permission` — is exposed again.
- */
-export function degradedAfterMicRecovery(
-  current: CaptureDegraded | null,
-  themDegraded: CaptureDegraded | null,
-  wantsSystem: boolean,
-  hasThemChannel: boolean
-): CaptureDegraded | null {
-  if (current?.side !== 'you') return current
-  return wantsSystem && !hasThemChannel ? themDegraded : null
-}
-
-/**
- * A failed 'them' re-acquire only ever RAISES: the sticky note when there is none, and the degradation
- * entry when there is none (an existing one carries the more specific start-time cause, e.g. the
- * Screen-Recording copy, and must survive). So once both are set the write is a no-op — and it must then
- * leave the state object alone rather than spreading a value-identical copy: the Windows retry above runs
- * on a repeating cadence for the whole meeting, and every spread re-rendered the entire App tree.
- */
-export function themRecoveryFailureIsNoop(
-  error: string | null,
-  captureDegraded: CaptureDegraded | null
-): boolean {
-  return error !== null && captureDegraded !== null
 }
 
 export interface ListenApi {
@@ -844,6 +723,8 @@ export function useListen(
   const stopFlushAckRef = useRef<((speaker: Speaker, requestId: string) => void) | null>(null)
   const nextStopRequestRef = useRef(1)
   const sessionEpochRef = useRef(0) // incremented each start(); drain/finishTeardown bails if epoch changed
+  const captureStateRef = useRef(createListenCaptureState())
+  const captureStateFailureRef = useRef<((epoch: number) => void) | null>(null)
   // The actual track object is session-local opaque identity only. It is never exposed in state, IPC,
   // telemetry, or persistence; public state contains only CaptureHealth's safe numeric/status fields.
   const activeMicTrackRef = useRef<MediaStreamTrack | null>(null)
@@ -862,6 +743,31 @@ export function useListen(
   const liveRef = useRef(false) // true only between start() and stop() — guards stale results
   function captureAdmissionIsOpen(epoch: number): boolean {
     return liveRef.current && !stoppingRef.current && sessionEpochRef.current === epoch
+  }
+  function publishCaptureState(epoch: number): boolean {
+    const result = captureStateRef.current.snapshot(epoch)
+    if (!result.ok) {
+      if (result.reason === 'invalid-state') captureStateFailureRef.current?.(epoch)
+      return false
+    }
+    const capturing = result.state.capturedTracks.length > 0
+    setState((current) => (current.capturing === capturing ? current : { ...current, capturing }))
+    return capturing
+  }
+  function updateCaptureTrack(epoch: number, speaker: Speaker, captured: boolean): boolean {
+    const track = speaker === 'you' ? 'microphone' : 'system'
+    const result = captureStateRef.current.setCaptured(epoch, track, captured)
+    if (!result.ok) {
+      if (result.reason === 'invalid-state') captureStateFailureRef.current?.(epoch)
+      return false
+    }
+    publishCaptureState(epoch)
+    return true
+  }
+  function updateCaptureEngine(epoch: number, engine: string): boolean {
+    const result = captureStateRef.current.setEngine(epoch, engine)
+    if (!result.ok && result.reason === 'invalid-state') captureStateFailureRef.current?.(epoch)
+    return result.ok
   }
   const publishCaptureHealth = useCallback((epoch: number, health: CaptureHealth): void => {
     if (sessionEpochRef.current !== epoch) return
@@ -1511,6 +1417,7 @@ export function useListen(
       themRunRef.current = '' // crash wipes the in-progress 'them' question turn (parity with stop()/start())
       closeChannel('you')
       closeChannel('them')
+      captureStateRef.current.clear(sessionEpochRef.current)
       if (ownedSession) void window.toto.setListeningState(false, startedAt).catch(() => {})
       setState((s) => ({
         ...s,
@@ -1551,6 +1458,7 @@ export function useListen(
       return
     }
     console.warn(`[listen] ${failedEngine} failing repeatedly — switching to Whisper for the rest of this session`)
+    if (!updateCaptureEngine(epoch, 'whisper')) return
     engineRef.current = 'whisper'
     readyRef.current = false
     parakeetFailures.current = 0
@@ -1837,8 +1745,17 @@ export function useListen(
           pushAudio(sp, data.audio, !!data.partial, channelStartedAt)
         }
       }
-      const ch: Channel = { ctx, src, worklet, stream, gain: gain ?? undefined, limiter: limiter ?? undefined }
+      const ch: Channel = {
+        admissionEpoch,
+        ctx,
+        src,
+        worklet,
+        stream,
+        gain: gain ?? undefined,
+        limiter: limiter ?? undefined
+      }
       channels.current[sp] = ch
+      if (!updateCaptureTrack(admissionEpoch, sp, true)) return false
       if (sp === 'you' && micCapture) {
         activeMicTrackRef.current = micCapture.track
         publishCaptureHealth(admissionEpoch, micCapture.health)
@@ -2158,6 +2075,21 @@ export function useListen(
             return
           }
         }
+        const cloudProvider =
+          engine === 'cloud'
+            ? effectiveCloudSttProvider(enterpriseLiveRef.current ?? {}, cloudSttProviderRef.current)
+            : undefined
+        if (!listenSpeechEngine(engine, cloudProvider)) {
+          setState((s) => ({
+            ...s,
+            listening: false,
+            capturing: false,
+            loading: false,
+            ready: false,
+            error: 'The selected speech engine is not configured.'
+          }))
+          return
+        }
         // Capture the caller's requested quality up front, unconditional of which engine ends up running
         // this session — fallBackToWhisper and armNetworkRetry's retry() (both able to fire well after this
         // start() call returns) read requestedQualityRef instead of loadedQualityRef, which stays null for
@@ -2223,6 +2155,24 @@ export function useListen(
           readyRef.current = false
         }
         const myEpoch = ++sessionEpochRef.current
+        const captureStart = captureStateRef.current.begin({
+          generation: myEpoch,
+          source,
+          engine,
+          cloudProvider
+        })
+        if (!captureStart.ok) {
+          liveRef.current = false
+          setState((s) => ({
+            ...s,
+            listening: false,
+            capturing: false,
+            loading: false,
+            ready: false,
+            error: 'Capture state could not be validated; Listen stopped.'
+          }))
+          return
+        }
         // This identity lets a failed capture tear down only its own asynchronous cloud start.  A
         // force-stop can otherwise arrive in main before cloudSttStart has installed an owner, then
         // accidentally stop a later Listen session when the old start finally resolves.
@@ -2265,6 +2215,7 @@ export function useListen(
           noSpeechWarning: false,
           recognizerStatus: recognizerStatusFor(engine, null, language, null),
           listening: true,
+          capturing: false,
           paused: false
         }))
         // MQA-285: same-turn capture. Kick getUserMedia BEFORE any await so the click gesture still
@@ -2288,10 +2239,7 @@ export function useListen(
             loadedQualityRef.current = null
             readyRef.current = false
             engineRef.current = 'cloud'
-            const provider = effectiveCloudSttProvider(
-              enterpriseLiveRef.current ?? {},
-              cloudSttProviderRef.current
-            )
+            const provider = cloudProvider
             console.info(
               '[listen] cloud STT session planned:',
               provider,
@@ -2427,6 +2375,7 @@ export function useListen(
                 return
               }
               console.warn('[listen] parakeet unavailable, using whisper:', (e as Error)?.message)
+              if (!updateCaptureEngine(myEpoch, 'whisper')) return
               engineRef.current = 'whisper'
             }
           }
@@ -2568,6 +2517,14 @@ export function useListen(
             /abort/i.test(sysErr.message ?? ''))
 
         if (!captureAdmissionIsOpen(myEpoch)) return
+        const currentCapture = captureStateRef.current.snapshot(myEpoch)
+        if (!currentCapture.ok) {
+          if (currentCapture.reason === 'invalid-state') captureStateFailureRef.current?.(myEpoch)
+          return
+        }
+        const capturedTracks = currentCapture.state.capturedTracks
+        const micCaptured = capturedTracks.includes('microphone')
+        const sysCaptured = capturedTracks.includes('system')
         if (!micOk && !sysOk) {
           let msg: string
           if (source === 'system') {
@@ -2591,29 +2548,36 @@ export function useListen(
           // (or a retry) should still be instant. Unmount is the only teardown of the worker.
           return
         }
+        if (!capturedTracks.length) {
+          failAdmittedCapture('No requested audio track opened. Listen stopped.', {
+            forceCloudStop: engineRef.current === 'cloud',
+            cloudCaptureId: engineRef.current === 'cloud' ? cloudCaptureId : undefined
+          })
+          return
+        }
 
         // At least one side is live → we ARE listening. Surface a soft note if the other side is missing.
         let note: string | null = null
-        if (source === 'both' && micOk && !sysOk) {
+        if (source === 'both' && micCaptured && !sysCaptured) {
           note = isWindows
             ? 'System audio unavailable. Listening to your microphone only. Check that the meeting plays through your default output device.'
             : isSysPermDenied
               ? 'System audio needs Screen Recording permission. Listening to microphone only; grant it in System Settings → Privacy & Security → Screen Recording, then restart Listen.'
               : 'System audio unavailable. Listening to your microphone only. Grant Screen Recording to hear the other side.'
-        } else if (source === 'both' && !micOk && sysOk) {
+        } else if (source === 'both' && !micCaptured && sysCaptured) {
           note = 'Microphone unavailable. Listening to system audio only.'
         }
         // Keep the missing-side diagnosis in compact chrome, independently of the Copilot error banner.
-        // note is non-null only for both-source capture with exactly one side up; micOk identifies that side.
+        // note is non-null only for both-source capture with exactly one side up; micCaptured identifies that side.
         const captureDegraded: CaptureDegraded | null = note
-          ? { side: micOk ? 'them' : 'you', note, permission: micOk && isSysPermDenied }
+          ? { side: micCaptured ? 'them' : 'you', note, permission: micCaptured && isSysPermDenied }
           : null
         themDegradedRef.current = captureDegraded?.side === 'them' ? captureDegraded : null
         // Capture is confirmed now; consent/recording indicators must not use optimistic listening alone.
         // Preserve Whisper failure/retry state reported while capture acquisition was pending.
         if (!captureAdmissionIsOpen(myEpoch)) return
         setState((s) => ({
-          ...s, captureDegraded, listening: true, capturing: true,
+          ...s, captureDegraded, listening: true, capturing: capturedTracks.length > 0,
           error: engineRef.current === 'whisper' ? s.error ?? note : note,
           loading: !readyRef.current && (engineRef.current !== 'whisper' || s.error === null || s.loading)
         }))
@@ -2644,6 +2608,7 @@ export function useListen(
     ch.stream.getTracks().forEach((t) => t.stop())
     void ch.ctx.close().catch(() => {})
     delete channels.current[sp]
+    updateCaptureTrack(ch.admissionEpoch, sp, false)
   }, [])
 
   /**
@@ -2672,6 +2637,7 @@ export function useListen(
       disarmNetworkRetry()
       closeChannel('you')
       closeChannel('them')
+      captureStateRef.current.clear(sessionEpochRef.current)
       if (options.forceCloudStop) {
         cloudSttFinalizingRef.current = false
         cloudSttUnsubRef.current?.()
@@ -2701,6 +2667,10 @@ export function useListen(
     },
     [clearProvisional, closeChannel, disarmNetworkRetry]
   )
+  captureStateFailureRef.current = (epoch): void => {
+    if (!captureAdmissionIsOpen(epoch)) return
+    failAdmittedCapture('Capture state could not be validated; Listen stopped.')
+  }
 
   // Suspending each open channel's AudioContext (rather than closing it) halts the worklet's audio-render
   // callback entirely — no new windows reach pushAudio — while leaving the MediaStream tracks alive. That
@@ -2867,6 +2837,7 @@ export function useListen(
         themRunRef.current = ''
         closeChannel('you')
         closeChannel('them')
+        captureStateRef.current.clear(myEpoch)
         const completeStop = (finalizeIncomplete = false): void => {
           if (
             sessionEpochRef.current !== myEpoch ||
@@ -3042,6 +3013,7 @@ export function useListen(
       disarmNetworkRetry()
       closeChannel('you')
       closeChannel('them')
+      captureStateRef.current.clear(sessionEpochRef.current)
       cloudSttUnsubRef.current?.()
       cloudSttUnsubRef.current = null
       if (cloudCaptureIdRef.current === cloudCaptureId) cloudCaptureIdRef.current = null
