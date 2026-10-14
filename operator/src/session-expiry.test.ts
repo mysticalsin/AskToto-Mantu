@@ -1,13 +1,16 @@
-import { describe, expect, it } from 'vitest'
+import { createSign, generateKeyPairSync } from 'node:crypto'
+import { describe, expect, it, vi } from 'vitest'
 import { mintSessionToken, SESSION_COOKIE, verifySessionToken } from './access'
 import { handleRequest, type Env } from './index'
 import { memoryStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY } from './test-fixtures'
+import { TEST_ADMIN_EMAILS, TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_VAULT_KEY } from './test-fixtures'
 
 const NOW = 1_725_000_000_000
 const HOUR_MS = 60 * 60 * 1000
 const SESSION_TTL_MS = 12 * HOUR_MS
 const SESSION_SECRET = 'synthetic-operator-session-secret'
+const ACCESS_TEAM_DOMAIN = 'https://session-expiry-test.cloudflareaccess.com'
+const ACCESS_AUD = 'session-expiry-test-audience'
 const sessionIat = NOW - 2 * HOUR_MS
 
 function sessionEnv(): Env {
@@ -17,7 +20,9 @@ function sessionEnv(): Env {
     OPERATOR_SESSION_SECRET: SESSION_SECRET,
     ADMIN_EMAILS: TEST_ADMIN_EMAILS,
     OPERATOR_SKILL_PRIVATE_KEY: 'unused',
-    OPERATOR_VAULT_KEY: TEST_VAULT_KEY
+    OPERATOR_VAULT_KEY: TEST_VAULT_KEY,
+    TEAM_DOMAIN: ACCESS_TEAM_DOMAIN,
+    POLICY_AUD: ACCESS_AUD
   }
 }
 
@@ -40,6 +45,25 @@ async function request(
 }
 
 const ownerAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
+
+function expiredAccessJwt(now: number): { token: string; jwk: JsonWebKey & { kid: string } } {
+  const pair = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  const jwk = { ...(pair.publicKey.export({ format: 'jwk' }) as JsonWebKey), kid: 'expired-session-test' }
+  const encode = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url')
+  const header = encode({ alg: 'RS256', kid: jwk.kid })
+  const payload = encode({
+    aud: ACCESS_AUD,
+    email: 'owner@example.test',
+    exp: Math.floor(now / 1000) - 1,
+    iss: ACCESS_TEAM_DOMAIN,
+    iat: Math.floor(now / 1000) - 60
+  })
+  const signature = createSign('RSA-SHA256')
+    .update(`${header}.${payload}`)
+    .sign(pair.privateKey)
+    .toString('base64url')
+  return { token: `${header}.${payload}.${signature}`, jwk }
+}
 
 describe('Operator app sessions have an absolute 12-hour lifetime', () => {
   it('preserves the original issue time through a rolling /session cookie and Bearer chain', async () => {
@@ -108,6 +132,35 @@ describe('Operator app sessions have an absolute 12-hour lifetime', () => {
     )
     expect(atExpiry.status).toBe(401)
     expect(atExpiry.headers.get('X-Metis-Session')).toBeNull()
+  })
+
+  it('falls back from an expired Access JWT without extending the app session deadline', async () => {
+    const token = await existingSession()
+    const access = expiredAccessJwt(sessionIat + SESSION_TTL_MS - 1)
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ keys: [access.jwk] })))
+    const lastSignatureCharacter = access.token[access.token.length - 1]
+    const invalidSignatureJwt = `${access.token.slice(0, -1)}${lastSignatureCharacter === 'A' ? 'B' : 'A'}`
+
+    try {
+      for (const accessJwt of [access.token, invalidSignatureJwt]) {
+        const headers = {
+          cookie: `${SESSION_COOKIE}=${encodeURIComponent(token)}`,
+          'cf-access-jwt-assertion': accessJwt
+        }
+        const beforeExpiry = await request('/session', headers, sessionIat + SESSION_TTL_MS - 1)
+        expect(beforeExpiry.status).toBe(200)
+        expect(beforeExpiry.headers.get('X-Metis-Session')).toBe(token)
+        expect(beforeExpiry.headers.get('Set-Cookie')).toBeNull()
+        expect(await beforeExpiry.json()).toEqual({ ok: true, session: token })
+
+        const atExpiry = await request('/session', headers, sessionIat + SESSION_TTL_MS)
+        expect(atExpiry.status).toBe(401)
+        expect(atExpiry.headers.get('X-Metis-Session')).toBeNull()
+        expect(atExpiry.headers.get('Set-Cookie')).toBeNull()
+      }
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('lets a freshly verified allowlisted Access identity mint a new 12-hour session', async () => {
