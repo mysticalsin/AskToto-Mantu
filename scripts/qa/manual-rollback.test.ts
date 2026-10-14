@@ -11,6 +11,7 @@ import {
   createAttachmentReceipt,
   createManualRollbackReport,
   finalizeManualRollbackResult,
+  markAttachmentTransportClosed,
   markExecutionFailure,
   manualRollbackReportProblems,
   releaseAttachmentReceipt
@@ -230,6 +231,10 @@ describe('manual rollback provenance and report contracts', () => {
   })
 
   it('retains an uncertain attach receipt until a late transport release is acknowledged', async () => {
+    const unresolved = createAttachmentReceipt(null)
+    expect(await releaseAttachmentReceipt(unresolved)).toBe(false)
+    expect(unresolved.released).toBe(false)
+
     let attempts = 0
     const receipt = createAttachmentReceipt({
       transportUncertain: true,
@@ -241,6 +246,20 @@ describe('manual rollback provenance and report contracts', () => {
 
     expect(await releaseAttachmentReceipt(receipt)).toBe(false)
     expect(receipt.released).toBe(false)
+    expect(await releaseAttachmentReceipt(receipt)).toBe(true)
+    expect(receipt.released).toBe(true)
+  })
+
+  it('does not acknowledge a live browser transport until close succeeds', async () => {
+    const receipt = createAttachmentReceipt({
+      browser: {},
+      transportUncertain: false,
+      lateRelease: null
+    })
+
+    expect(await releaseAttachmentReceipt(receipt)).toBe(false)
+    expect(receipt.released).toBe(false)
+    expect(markAttachmentTransportClosed(receipt, true)).toBe(true)
     expect(await releaseAttachmentReceipt(receipt)).toBe(true)
     expect(receipt.released).toBe(true)
   })

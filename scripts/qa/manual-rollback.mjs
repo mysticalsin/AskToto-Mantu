@@ -639,12 +639,30 @@ async function releaseAttachment(attachment, timeoutMs = 5_000) {
 }
 
 export function createAttachmentReceipt(attachment) {
-  return { attachment, released: false }
+  return {
+    attachment,
+    transportClosed: attachment !== null && attachment?.browser == null && attachment?.transportUncertain !== true,
+    released: false
+  }
+}
+
+export function markAttachmentTransportClosed(receipt, closed) {
+  if (!receipt || typeof receipt !== 'object') return false
+  receipt.transportClosed = closed === true
+  return receipt.transportClosed
 }
 
 export async function releaseAttachmentReceipt(receipt, timeoutMs = 5_000) {
   if (!receipt || typeof receipt !== 'object') return false
   if (receipt.released === true) return true
+  if (receipt.transportClosed !== true) {
+    if (!receipt.attachment) return false
+    if (receipt.attachment?.browser != null) return false
+    if (!(await releaseAttachment(receipt.attachment, timeoutMs))) return false
+    receipt.transportClosed = true
+    receipt.released = true
+    return true
+  }
   const released = await releaseAttachment(receipt.attachment, timeoutMs)
   if (released) receipt.released = true
   return released
@@ -664,13 +682,16 @@ async function openPackagedApp(exe, env, installRoot, userData, registry, attach
     } catch {
       fail('owned-process-census-unavailable')
     }
+    attachmentReceipt = createAttachmentReceipt(null)
+    attachmentReceipts.push(attachmentReceipt)
     attachment = await attachOwnedCdp({
       endpoint: launched.cdpEndpoint,
       childPid: launched.child.pid,
       timeoutMs: 90_000
     })
-    attachmentReceipt = createAttachmentReceipt(attachment)
-    attachmentReceipts.push(attachmentReceipt)
+    attachmentReceipt.attachment = attachment
+    attachmentReceipt.transportClosed =
+      attachment.browser == null && attachment.transportUncertain !== true
     if (attachment.transportUncertain === true || !attachment.browser || attachment.failure) {
       fail('app-attach-failed')
     }
@@ -696,6 +717,9 @@ async function openPackagedApp(exe, env, installRoot, userData, registry, attach
       } catch {
         transportClosed = false
       }
+    }
+    if (attachmentReceipt && attachment) {
+      markAttachmentTransportClosed(attachmentReceipt, transportClosed)
     }
     const attachmentReleased = attachmentReceipt
       ? await releaseAttachmentReceipt(attachmentReceipt)
@@ -745,6 +769,7 @@ async function stopPackagedApp(session, registry) {
   } catch {
     transportClosed = false
   }
+  markAttachmentTransportClosed(session.attachmentReceipt, transportClosed)
   let exit = await waitForChildExit(session.child, 30_000)
   let forcedTermination = false
   if (!exit) {
