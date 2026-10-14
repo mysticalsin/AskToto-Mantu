@@ -1,4 +1,5 @@
-import { createSpeechPackService, registerSpeechPackIpc } from './features/components'
+import { createSpeechPackService } from './features/components'
+import { registerSpeechPackIpc } from './ipc/speech-pack-ipc'
 import { startSpeechPackPoll, waitForSpeechPackQuitFlush } from './infra/scheduler/speech-pack-poll'
 
 export function startSpeechPackDesktop(options: {

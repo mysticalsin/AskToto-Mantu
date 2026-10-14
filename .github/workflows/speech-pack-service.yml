@@ -12,6 +12,13 @@ on:
       - src/main/asr-bundled-ensure*
       - src/main/asr-model-protocol*
       - src/main/infra/scheduler/speech-pack-poll.ts
+      - src/main/infra/process/speech-pack-host*
+      - src/main/ipc/asr-assets-ipc*
+      - src/main/ipc/speech-pack-ipc*
+      - src/main/parakeet*
+      - src/main/whisper-import*
+      - src/main/lifecycle/boot-work.test.ts
+      - src/main/main-lifecycle.contract.test.ts
       - src/shared/speech-pack*
       - src/preload/speech-pack*
       - src/renderer/src/features/settings/SpeechPackSection.tsx
@@ -71,7 +78,14 @@ jobs:
             src/main/speech-pack-bootstrap.test.ts \
             src/preload/speech-pack.test.ts \
             src/shared/speech-pack.test.ts \
-            scripts/speech-pack-resources.test.ts
+            scripts/speech-pack-resources.test.ts \
+            src/main/infra/process/speech-pack-host.test.ts \
+            src/main/ipc/asr-assets-ipc.test.ts \
+            src/main/ipc/speech-pack-ipc.test.ts \
+            src/main/parakeet.test.ts \
+            src/main/whisper-import.test.ts \
+            src/main/lifecycle/boot-work.test.ts \
+            src/main/main-lifecycle.contract.test.ts
 
       - name: Verify and summarize the actual shared test report
         if: always()
@@ -125,7 +139,14 @@ jobs:
             'src/main/speech-pack-bootstrap.test.ts',
             'src/preload/speech-pack.test.ts',
             'src/shared/speech-pack.test.ts',
-            'scripts/speech-pack-resources.test.ts'
+            'scripts/speech-pack-resources.test.ts',
+            'src/main/infra/process/speech-pack-host.test.ts',
+            'src/main/ipc/asr-assets-ipc.test.ts',
+            'src/main/ipc/speech-pack-ipc.test.ts',
+            'src/main/parakeet.test.ts',
+            'src/main/whisper-import.test.ts',
+            'src/main/lifecycle/boot-work.test.ts',
+            'src/main/main-lifecycle.contract.test.ts'
           ]
           const missing = required.filter((file) => !files.some((actual) => actual.endsWith(file)))
           console.log(`Shared speech tests: files=${files.length}, total=${total}, assertion_count=${assertionCount}, executed=${passed + failed}, passed=${passed}, failed=${failed}, skipped=${skipped}, suites_passed=${passedSuites}, suites_failed=${failedSuites}, suites_pending=${pendingSuites}`)

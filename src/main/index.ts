@@ -317,6 +317,7 @@ let legacyListeningActive = false
 function setLegacyListeningActive(on: boolean): void {
   if (legacyListeningActive === on) return
   legacyListeningActive = on
+  speechPackDesktop?.refresh()
   rebuildTrayMenu()
 }
 let liveSpeakerStartedAtHighWater = 0
@@ -787,6 +788,7 @@ import {
 } from './brain/intelligence-index'
 import { startIntelligenceWork } from './brain/intelligence-work'
 import { startSpeechPackDesktop } from './speech-pack-bootstrap'
+import { registerAsrAssetsIpc } from './ipc/asr-assets-ipc'
 import {
   ensureImportAsrAssets,
   asrAssetsProgress,
@@ -1162,6 +1164,7 @@ let cloudSttIpcOwner: CloudSttIpcOwner | null = null
 function setCloudSttIpcOwner(owner: CloudSttIpcOwner | null): void {
   if (cloudSttIpcOwner === owner) return
   cloudSttIpcOwner = owner
+  speechPackDesktop?.refresh()
   rebuildTrayMenu()
 }
 
@@ -1199,6 +1202,7 @@ function setListeningActive(on: boolean): void {
 function setAudioArmed(on: boolean): void {
   if (audioArmed === on) return
   audioArmed = on
+  speechPackDesktop?.refresh()
   rebuildTrayMenu()
 }
 
@@ -7223,14 +7227,14 @@ function registerIpc(): void {
     assertMainWindow(e)
     // addonError surfaces WHY the engine isn't ready (native addon missing for this platform/build) as
     // distinct from "bundled model assets missing" — Settings reads this to show an actionable message.
-    return { ready: parakeetModelReady(), addonError: await parakeetAddonError() }
+    return { ready: await parakeetModelReady(), addonError: await parakeetAddonError() }
   })
   ipcMain.handle(IPC.parakeetEnsure, async (e) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false }
     try {
       await ensureParakeetModel((pct) => win?.webContents.send(IPC.parakeetProgress, { pct }))
-      return { ok: parakeetModelReady() }
+      return { ok: await parakeetModelReady() }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
@@ -10042,56 +10046,28 @@ if (!app.requestSingleInstanceLock()) {
             resolveLocalSpeechPackPolicy(getSettings(), getAdminLocalSpeechPackPolicy()) !== 'blocked',
           captureActive: captureActiveForWindowRestart,
           ipcMain,
-          assertMainWindow: (event) => assertMainWindow(event as Electron.IpcMainInvokeEvent),
+          assertMainWindow,
           sendProgress: (progress) => {
             if (win && !win.isDestroyed()) win.webContents.send(IPC.speechPackProgress, progress)
           }
         })
       })
       runStep('asrAssetsIpc', () => {
-        const REPO_ROOT = join(__dirname, '..', '..')
-        const RES_BASE = app.isPackaged ? process.resourcesPath : join(REPO_ROOT, 'resources')
-        let asrBundledCache: boolean | null = null
-        let readAsrBundledStatus = (): boolean => false
-        const asrBundledReady = (): boolean => {
-          if (asrBundledCache === null) asrBundledCache = readAsrBundledStatus()
-          return asrBundledCache
-        }
-        bootWork.run('primeAsrBundledStatus', () => {
-          asrBundledReady()
+        const resourcesRoot = app.isPackaged ? process.resourcesPath : join(__dirname, '..', '..', 'resources')
+        const asrAssetsIpc = registerAsrAssetsIpc({
+          ipcMain,
+          isRecentlyRetiredOverlaySender,
+          assertMainWindow,
+          readBundledStatus: async () => (app.isPackaged ? importAsrAssetsReady() : asrManifestComplete(resourcesRoot)),
+          getStatus: asrAssetsStatusSnapshot,
+          ensureAllowed: () =>
+            resolveLocalSpeechPackPolicy(getSettings(), getAdminLocalSpeechPackPolicy()) !== 'blocked',
+          ensureAssets: ensureImportAsrAssets,
+          getProgress: asrAssetsProgress,
+          publishProgress: publishAsrAssetsProgress,
+          warn: (message, detail) => mainLog.warn(message, detail)
         })
-        readAsrBundledStatus = (): boolean => (app.isPackaged ? importAsrAssetsReady() : asrManifestComplete(RES_BASE))
-        const safeHandle = (channel: string, listener: (...args: any[]) => unknown): void => {
-          try {
-            ipcMain.removeHandler(channel)
-          } catch {
-            /* first registration */
-          }
-          ipcMain.handle(channel, listener as never)
-        }
-        safeHandle(IPC.asrBundled, (e) => {
-          if (isRecentlyRetiredOverlaySender(e)) return true
-          assertMainWindow(e)
-          return asrBundledReady()
-        })
-        safeHandle(IPC.asrAssetsStatus, (e) => {
-          assertMainWindow(e)
-          return asrAssetsStatusSnapshot()
-        })
-        safeHandle(IPC.asrAssetsEnsure, async (e) => {
-          assertMainWindow(e)
-          if (resolveLocalSpeechPackPolicy(getSettings(), getAdminLocalSpeechPackPolicy()) === 'blocked')
-            return asrAssetsStatusSnapshot()
-          try {
-            await ensureImportAsrAssets((pct) => {
-              publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
-            })
-          } catch (err) {
-            mainLog.warn('[asr-assets] ensure failed:', err instanceof Error ? err.message : err)
-            publishAsrAssetsProgress()
-          }
-          return asrAssetsStatusSnapshot()
-        })
+        bootWork.run('primeAsrBundledStatus', () => asrAssetsIpc.primeBundledStatus())
       })
 
       runStep('asrModelProtocol', () => {

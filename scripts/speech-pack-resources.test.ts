@@ -17,8 +17,8 @@ describe('speech-pack installer resources', () => {
       sha256: SELF_TEST_FIXTURE.sha256
     })
   })
-  it('ships an explicit full profile until a separately qualified lean build exists', () => {
-    expect(readSpeechPackProfile(join(root, 'build'), true)).toEqual({ profile: 'full' })
+  it('ships an explicit full profile until a separately qualified lean build exists', async () => {
+    expect(await readSpeechPackProfile(join(root, 'build'), true)).toEqual({ profile: 'full' })
     const config = readFileSync(join(root, 'electron-builder.yml'), 'utf8')
     expect(config).toMatch(/from: build\/speech-pack-profile\.json\s+to: speech-pack-profile\.json/)
     expect(config).toMatch(/from: resources\/speech-pack-fixtures\/en\.wav\s+to: speech-pack-fixtures\/en\.wav/)
