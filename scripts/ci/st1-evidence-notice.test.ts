@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { annotationMessage, createNotice } from '../qa/st1-evidence-notice.mjs'
+import { projectProfilerDiagnostics, sampleDiagnosticTiming } from '../qa/lib/st-1-core.mjs'
 
 const runId = 123456
 const attempt = 2
@@ -86,7 +87,7 @@ function validDiagnostics() {
     profilerCommands: [
       { command: 'enable', requestedAtMs: 30, settledAtMs: 35, status: 'answered' },
       { command: 'set-sampling-interval', requestedAtMs: 36, settledAtMs: 40, status: 'answered' },
-      { command: 'start', requestedAtMs: 41, settledAtMs: 60, status: 'answered' },
+      { command: 'start', requestedAtMs: 490, settledAtMs: 509, status: 'answered' },
       { command: 'stop', requestedAtMs: 1_500, settledAtMs: 1_520, status: 'answered' }
     ],
     samples: [
@@ -118,6 +119,56 @@ function validDiagnostics() {
       }
     ]
   }
+}
+
+function fullProducerDiagnostics() {
+  const setup = { requestedAtMs: 10, settledAtMs: 20, status: 'answered' }
+  const summary = { requestedAtMs: 309_000, settledAtMs: 309_020, status: 'answered' }
+  const timeline = []
+  let previousTiming = null
+  let requestAtMs = 420
+  for (let index = 0; index < 300; index += 1) {
+    const roundTripMs = index === 298 ? 2_000 : 20
+    const timing = {
+      requestedAtMs: requestAtMs,
+      settledAtMs: requestAtMs + roundTripMs,
+      status: 'answered'
+    }
+    const metric = (sampleIndex: number, value: number, fallback = 0) => (index === sampleIndex ? value : fallback)
+    timeline.push({
+      tMs: requestAtMs,
+      ...sampleDiagnosticTiming(timing, previousTiming, setup),
+      loopMaxSinceLastMs: metric(60, 1_700),
+      loopMaxDuringWriteMs: metric(60, 120),
+      writeMs: metric(20, 1_800),
+      lookupMs: metric(40, 1_600),
+      late: index === 298,
+      hung: false,
+      witness: {
+        loopMaxSinceLastMs: index === 60 || index === 298 ? 24 : 3,
+        writeMs: index === 60 || index === 298 ? 5 : 1,
+        cpuBusyPct: index === 60 || index === 298 ? 47 : 12,
+        readRequestedAtMs: requestAtMs,
+        readSettledAtMs: requestAtMs,
+        writeStartedAtMs: requestAtMs,
+        writeSettledAtMs: requestAtMs + 5
+      }
+    })
+    previousTiming = timing
+    requestAtMs = timing.settledAtMs + 1_000
+  }
+  const stopAtMs = requestAtMs - 50
+  return projectProfilerDiagnostics({
+    setup,
+    summary,
+    profilerCommands: [
+      { command: 'enable', requestedAtMs: 20, settledAtMs: 30, status: 'answered' },
+      { command: 'set-sampling-interval', requestedAtMs: 30, settledAtMs: 35, status: 'answered' },
+      { command: 'start', requestedAtMs: 35, settledAtMs: 50, status: 'answered' },
+      { command: 'stop', requestedAtMs: stopAtMs, settledAtMs: stopAtMs + 20, status: 'answered' }
+    ],
+    timeline
+  })
 }
 
 describe('strict ST-1 GitHub notice serializer', () => {
@@ -157,7 +208,7 @@ describe('strict ST-1 GitHub notice serializer', () => {
     expect(createNotice({ argv: input.argv, env })).toMatchObject({
       state: 'available',
       verdict: 'FAIL',
-      diagnostics: { version: 1, state: 'unavailable', reason: 'diagnostics_unavailable' }
+      diagnostics: { version: 2, state: 'unavailable', reason: 'diagnostics_unavailable' }
     })
   })
 
@@ -168,29 +219,89 @@ describe('strict ST-1 GitHub notice serializer', () => {
       state: 'available',
       verdict: 'FAIL',
       diagnostics: {
-        version: 1,
+        version: 2,
         state: 'available',
-        profilerCommands: [{ command: 'enable', requestedAtMs: 30, settledAtMs: 35, status: 'answered' }],
+        setup: [10, 20, 'answered'],
+        summary: [2_000, 2_010, 'answered'],
+        commands: [
+          [0, 30, 35, 'answered'],
+          [1, 36, 40, 'answered'],
+          [2, 490, 509, 'answered']
+        ],
         samples: [
-          expect.objectContaining({
-            selector: 'worst-loop',
-            index: 2,
-            histogram: { lowerBoundMs: 500, upperBoundMs: 1_010, boundsKnown: true },
-            overlaps: {
-              histogram: [{ command: 'start', observedWaitMs: 19, executionBoundKnown: true }],
-              sampleRoundTrip: [],
-              histogramUnknown: false
-            },
-            witness: { loopMaxSinceLastMs: 5, writeMs: 2, cpuBusyPct: 20 }
-          })
+          [
+            'worst-loop',
+            2,
+            1_000,
+            990,
+            1_010,
+            'answered',
+            false,
+            false,
+            [500, 1_010, true],
+            [[2, 19, true]],
+            [],
+            [700, 40, 20, 3, 20],
+            [5, 2, 20]
+          ]
         ]
       }
     })
     const serialized = JSON.stringify(notice)
-    expect(Buffer.byteLength(serialized)).toBeLessThanOrEqual(8 * 1024)
+    expect(Buffer.byteLength(serialized)).toBeLessThanOrEqual(3_500)
     expect(serialized).not.toContain('private')
     expect(serialized).not.toContain('meeting title')
     expect(serialized).not.toContain('resources')
+  })
+
+  it('delivers a full producer-to-notice diagnostic within GitHub annotation limits', () => {
+    const input = fixture({ ...validReport(), samples: 300, profilerDiagnostics: fullProducerDiagnostics() })
+    const notice = createNotice({ argv: input.argv, env })
+    const annotation = annotationMessage(notice)
+    const bytes = Buffer.byteLength(annotation, 'utf8')
+    const parsed = JSON.parse(annotation.slice('::notice::'.length))
+    const diagnostics = parsed.diagnostics as {
+      version: number
+      state: string
+      commands: unknown[]
+      samples: unknown[][]
+    }
+
+    expect(bytes).toBeLessThan(3_500)
+    expect(parsed.reportSha256).toBe(createHash('sha256').update(input.reportText).digest('hex'))
+    expect(parsed.context).toEqual({ runId, attempt, commit, row: 'fifo' })
+    expect(parsed.verdict).toBe('FAIL')
+    expect(parsed.metrics).toMatchObject({
+      lateSampleCount: { actual: 0, limit: 0 },
+      loopMaxMs: { actual: 214, limit: 250 }
+    })
+    expect(diagnostics.version).toBe(2)
+    expect(diagnostics.state).toBe('available')
+    expect(diagnostics.commands).toHaveLength(4)
+    expect(diagnostics.samples.map((sample) => sample[0])).toEqual([
+      'worst-loop',
+      'worst-write',
+      'worst-lookup',
+      'worst-round-trip',
+      'first-late-or-hung'
+    ])
+    expect(diagnostics.samples.map((sample) => sample[1])).toEqual([60, 20, 40, 298, 298])
+    for (const sample of diagnostics.samples) {
+      const metrics = sample[11] as unknown[]
+      expect(metrics).toHaveLength(5)
+      for (const metric of metrics) expect(metric).toEqual(expect.any(Number))
+    }
+    expect(diagnostics.samples[0]?.[11]).toEqual([1_700, 120, 0, 0, 20])
+    expect(diagnostics.samples[0]?.[12]).toEqual([24, 5, 47])
+    expect(diagnostics.samples[4]?.[12]).toEqual([24, 5, 47])
+    const lateHistogram = diagnostics.samples[4]?.[8] as unknown[]
+    expect(lateHistogram).toHaveLength(3)
+    expect(lateHistogram[0]).toEqual(expect.any(Number))
+    expect(lateHistogram[1]).toEqual(expect.any(Number))
+    expect(lateHistogram[2]).toBe(true)
+    expect(JSON.stringify(parsed)).not.toContain('private')
+    expect(JSON.stringify(parsed)).not.toContain('meeting content')
+    expect(JSON.stringify(parsed)).not.toContain(input.reportPath)
   })
 
   it.each([
@@ -243,7 +354,7 @@ describe('strict ST-1 GitHub notice serializer', () => {
     expect(notice).toMatchObject({
       state: 'available',
       verdict: 'FAIL',
-      diagnostics: { version: 1, state: 'unavailable', reason: 'diagnostics_invalid' }
+      diagnostics: { version: 2, state: 'unavailable', reason: 'diagnostics_invalid' }
     })
     expect(JSON.stringify(notice)).not.toContain('private meeting transcript')
     expect(JSON.stringify(notice)).not.toContain(input.reportPath)
@@ -266,14 +377,24 @@ describe('strict ST-1 GitHub notice serializer', () => {
     expect(createNotice({ argv: input.argv, env })).toMatchObject({
       state: 'available',
       diagnostics: {
-        version: 1,
+        version: 2,
         state: 'available',
         setup: null,
         samples: [
-          {
-            histogram: { lowerBoundMs: null, upperBoundMs: null, boundsKnown: false },
-            overlaps: { histogram: [], sampleRoundTrip: [], histogramUnknown: true }
-          }
+          [
+            'worst-loop',
+            2,
+            1_000,
+            990,
+            1_010,
+            'answered',
+            false,
+            false,
+            [null, null, false],
+            [],
+            [],
+            [null, null, 20, 3, 20]
+          ]
         ]
       }
     })
@@ -293,9 +414,9 @@ describe('strict ST-1 GitHub notice serializer', () => {
     const notice = createNotice({ argv: input.argv, env })
     expect(notice).toMatchObject({
       state: 'available',
-      diagnostics: { version: 1, state: 'unavailable', reason: 'diagnostics_too_large' }
+      diagnostics: { version: 2, state: 'unavailable', reason: 'diagnostics_too_large' }
     })
-    expect(Buffer.byteLength(JSON.stringify(notice))).toBeLessThanOrEqual(8 * 1024)
+    expect(Buffer.byteLength(annotationMessage(notice), 'utf8')).toBeLessThan(3_500)
   })
 
   it('emits a fixed typed diagnostic for malformed, missing, oversized, and unknown-criterion reports', () => {
