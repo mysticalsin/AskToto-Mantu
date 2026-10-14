@@ -1,0 +1,16 @@
+{
+  "speech": {
+    "capability": "speech",
+    "selected": "cloudflare-nova3",
+    "allowed": ["cloudflare-nova3"],
+    "ready": [],
+    "status": { "state": "not-ready", "reason": "not-configured" }
+  },
+  "generation": {
+    "capability": "generation",
+    "selected": "cloudflare",
+    "allowed": ["cloudflare"],
+    "ready": ["cloudflare"],
+    "status": { "state": "ready" }
+  }
+}
