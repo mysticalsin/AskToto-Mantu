@@ -92,4 +92,35 @@ describe('cloud speech result epoch tracking', () => {
       tracker.installEpochTransition([{ track: 'microphone', previousEpoch: 3, nextEpoch: 9, lastSequence: 0 }])
     ).toBe(false)
   })
+
+  it.each([
+    { closeConfirmed: false, tail: 'complete' as const, reason: 'close-timeout' as const },
+    { closeConfirmed: true, tail: 'incomplete' as const, reason: 'drain-timeout' as const }
+  ])('does not accept a closed transition without complete confirmed provider closure (%s)', (closure) => {
+    const tracker = createCloudSpeechResultTracker(request)
+    tracker.initialize(started)
+    const terminal = {
+      type: 'terminal' as const,
+      captureId: request.captureId,
+      captureGeneration: 7,
+      stream: { generation: 7, track: 'microphone' as const, epoch: 3 },
+      lastSequence: 0,
+      closeConfirmed: closure.closeConfirmed,
+      tail: closure.tail,
+      reason: closure.reason
+    }
+    const closed = {
+      type: 'epoch-transition' as const,
+      captureId: request.captureId,
+      captureGeneration: 7,
+      transitionId: 9,
+      handoffNonce: '00000000-0000-4000-8000-000000000709',
+      stage: 'closed' as const,
+      streams: [{ track: 'microphone' as const, previousEpoch: 3, lastSequence: 0 }]
+    }
+
+    expect(tracker.validate(terminal, 'cloudflare-nova3')).toEqual(terminal)
+    tracker.markTerminalApplied(terminal.stream)
+    expect(tracker.validate(closed, 'cloudflare-nova3')).toBeNull()
+  })
 })

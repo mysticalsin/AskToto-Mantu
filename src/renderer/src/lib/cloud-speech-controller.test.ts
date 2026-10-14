@@ -276,6 +276,20 @@ describe('cloud speech capture controller', () => {
     next.instance.dispose()
   })
 
+  it('admits the exact last sample but never sends a frame beyond the capture ceiling', async () => {
+    const onFailure = vi.fn()
+    const next = controller({ onFailure })
+    expect((await next.instance.start()).ok).toBe(true)
+    const port = new FakePort()
+    expect(next.instance.attachTrack('microphone', port as unknown as MessagePort, 230_400_000 - 1_600)).toBe(true)
+    port.emit(pcmFrame(1, 0))
+    port.emit(pcmFrame(2, 1_600))
+    await vi.waitFor(() => expect(onFailure).toHaveBeenCalledWith('ORDER'))
+    expect(next.frame).toHaveBeenCalledTimes(1)
+    expect(next.frame.mock.calls[0]?.[0]).toMatchObject({ sampleOffset: 230_398_400 })
+    next.instance.dispose()
+  })
+
   it('joins a ceiling receipt to an already-started user Stop without sealing twice', async () => {
     const next = controller()
     next.finish.mockResolvedValue({
@@ -494,8 +508,7 @@ describe('cloud speech capture controller', () => {
     next.instance.dispose()
   })
 
-  it('gates successor results until the opened epoch inventory is acknowledged', async () => {
-    const onFailure = vi.fn()
+  it('queues successor results until the opened epoch inventory is acknowledged', async () => {
     const applied: CloudSpeechEvent[] = []
     const fakes = fakeBridge()
     const openedAck = deferred<unknown>()
@@ -511,7 +524,7 @@ describe('cloud speech capture controller', () => {
             stage: value.stage
           })
     )
-    const next = controller({ bridge: fakes.bridge, onFailure, applyEvent: async (event) => void applied.push(event) })
+    const next = controller({ bridge: fakes.bridge, applyEvent: async (event) => void applied.push(event) })
     expect((await next.instance.start()).ok).toBe(true)
     const oldStream = { generation: captureGeneration, track: 'microphone' as const, epoch: 3 }
     const terminal: CloudSpeechEvent = {
@@ -544,7 +557,7 @@ describe('cloud speech capture controller', () => {
     }
     for (const event of [terminal, closed, opened]) for (const listener of next.events) listener(event)
     await vi.waitFor(() => expect(fakes.bridge.cloudSpeechAckEpochTransition).toHaveBeenCalledTimes(2))
-    const premature: CloudSpeechEvent = {
+    const successor: CloudSpeechEvent = {
       type: 'segment',
       captureId,
       captureGeneration,
@@ -560,8 +573,9 @@ describe('cloud speech capture controller', () => {
         endMs: 20
       }
     }
-    for (const listener of next.events) listener(premature)
-    await vi.waitFor(() => expect(onFailure).toHaveBeenCalledWith('STALE'))
+    for (const listener of next.events) listener(successor)
+    await Promise.resolve()
+    expect(applied).toEqual([terminal])
     openedAck.resolve({
       ok: true,
       captureId,
@@ -570,7 +584,37 @@ describe('cloud speech capture controller', () => {
       handoffNonce: closed.handoffNonce,
       stage: 'opened'
     })
-    expect(applied).toEqual([terminal])
+    await vi.waitFor(() => expect(applied).toEqual([terminal, successor]))
+    next.instance.dispose()
+  })
+
+  it('does not open a successor after an incomplete or unconfirmed predecessor terminal', async () => {
+    const onFailure = vi.fn()
+    const next = controller({ onFailure })
+    expect((await next.instance.start()).ok).toBe(true)
+    const stream = { generation: captureGeneration, track: 'microphone' as const, epoch: 3 }
+    const terminal: CloudSpeechEvent = {
+      type: 'terminal',
+      captureId,
+      captureGeneration,
+      stream,
+      lastSequence: 0,
+      closeConfirmed: true,
+      tail: 'incomplete',
+      reason: 'drain-timeout'
+    }
+    const closed: CloudSpeechEvent = {
+      type: 'epoch-transition',
+      captureId,
+      captureGeneration,
+      transitionId: 7,
+      handoffNonce: '00000000-0000-4000-8000-000000000707',
+      stage: 'closed',
+      streams: [{ track: 'microphone', previousEpoch: 3, lastSequence: 0 }]
+    }
+    for (const event of [terminal, closed]) for (const listener of next.events) listener(event)
+    await vi.waitFor(() => expect(onFailure).toHaveBeenCalledWith('STALE'))
+    expect(next.acknowledgeEpochTransition).not.toHaveBeenCalled()
     next.instance.dispose()
   })
 
