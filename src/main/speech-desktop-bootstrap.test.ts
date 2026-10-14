@@ -97,11 +97,23 @@ describe('actual speech bootstrap composition', () => {
       await f.bootstrap.prime
       expect(desktop.options?.readState().metadataReady).toBe(true)
       let started!: () => void
-      const metadataStarted = new Promise<void>((resolve) => { started = resolve })
+      const metadataStarted = new Promise<void>((resolve) => {
+        started = resolve
+      })
       let release!: (value: Awaited<ReturnType<typeof f.metadata>>) => void
-      const denied = { durableDeviceId: 'synthetic-persisted-device', managedPolicy: { state: 'invalid' as const }, screenDiagnosisState: 'granted' }
+      const denied = {
+        durableDeviceId: 'synthetic-persisted-device',
+        managedPolicy: { state: 'invalid' as const },
+        screenDiagnosisState: 'granted'
+      }
       f.metadata.mockResolvedValue(denied)
-      f.metadata.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; started() }))
+      f.metadata.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = resolve
+            started()
+          })
+      )
       const preparation = desktop.options!.prepareAuthority!({} as never)
       await metadataStarted
       f.publish({ ...f.settings(), overlayOpacity: 0.6 })

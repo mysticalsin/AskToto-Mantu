@@ -12,8 +12,14 @@ describe('settings publication', () => {
     expect(bus.getPublishedSettingsObservation()).toEqual({ settings: DEFAULT_SETTINGS, readable: true, epoch })
     for (let index = 0; index < 600; index += 1) bus.getPublishedSettingsObservation()
     expect(bus.getSettingsObservationEpoch()).toBe(epoch)
-    bus.observeSettingsSnapshot(() => { throw new Error('synthetic failure') })
-    expect(bus.getPublishedSettingsObservation()).toEqual({ settings: DEFAULT_SETTINGS, readable: false, epoch: epoch + 1 })
+    bus.observeSettingsSnapshot(() => {
+      throw new Error('synthetic failure')
+    })
+    expect(bus.getPublishedSettingsObservation()).toEqual({
+      settings: DEFAULT_SETTINGS,
+      readable: false,
+      epoch: epoch + 1
+    })
   })
 
   it('publishes cache hits without renewing the epoch and respects subscription ownership', async () => {

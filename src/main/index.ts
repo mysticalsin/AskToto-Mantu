@@ -729,6 +729,8 @@ import {
   signOut as authSignOut,
   requireAuth,
   setSessionClearedHandler,
+  resetSpeechAuthProfile,
+  completeSpeechAuthProfileReset,
   ssoBootstrapAllowed
 } from './auth'
 import { calendarToday } from './calendar'
@@ -767,6 +769,8 @@ import type { TranscriptLine } from '@shared/ipc'
 import { assertBrokerSpeechSettingsPatch } from '@shared/broker-speech-settings'
 import { SpeechCaptureGrantRegistry } from './capture-permissions/speech-capture-grant'
 import { registerListenDisplayMedia } from './capture-permissions/listen-display-media'
+import { startSpeechDesktopBootstrap } from './speech-desktop-bootstrap'
+import { speechDesktopBoundaryOptions } from './speech-desktop-boundary'
 import { pickAudioFile, consumePickedAudio, offerAudioPaths } from './import-audio'
 import {
   ImportJobManager,
@@ -1187,9 +1191,14 @@ function isCurrentCloudSttOwner(owner: CloudSttIpcOwner, sender: { id: number; i
 /** Renderer replacement/close is a hard boundary: never leave cloud sockets or old callbacks alive. */
 function invalidateCloudSttOwner(webContentsId?: number): void {
   const context = speechCaptureGrants.getAcceptedListenContext()
-  if (webContentsId === undefined || (context?.webContents as Electron.WebContents | undefined)?.id === webContentsId) {
+  if (
+    webContentsId === undefined ||
+    win?.webContents.id === webContentsId ||
+    (context?.webContents as Electron.WebContents | undefined)?.id === webContentsId
+  ) {
     speechNavigationEpoch += 1
     speechCaptureGrants.invalidateAll()
+    speechDesktop?.invalidate('renderer-navigation')
   }
   if (webContentsId !== undefined && cloudSttIpcOwner?.webContentsId !== webContentsId) return
   cloudSttIpcGeneration += 1
@@ -1202,18 +1211,29 @@ function invalidateCloudSttOwner(webContentsId?: number): void {
 // stuck `listeningActive` disables the boundary for the rest of the app session (MQA-038).
 let listeningActive = false
 let speechPackDesktop: ReturnType<typeof startSpeechPackDesktop> | null = null
+let speechDesktop: ReturnType<typeof startSpeechDesktopBootstrap> | null = null
 
 function setListeningActive(on: boolean): void {
-  if (on && win && !win.isDestroyed() && activeLiveSpeakerStartedAt !== null)
+  if (on && win && !win.isDestroyed() && activeLiveSpeakerStartedAt !== null) {
+    const prior = speechCaptureGrants.getAcceptedListenContext()
+    if (
+      prior &&
+      (prior.webContents !== win.webContents ||
+        prior.frame !== win.webContents.mainFrame ||
+        prior.navigationEpoch !== speechNavigationEpoch ||
+        prior.listenStartedAt !== activeLiveSpeakerStartedAt)
+    )
+      speechDesktop?.runtime.invalidateCurrent()
     speechCaptureGrants.reconcileListenContext({
       webContents: win.webContents,
       frame: win.webContents.mainFrame,
       navigationEpoch: speechNavigationEpoch,
       listenStartedAt: activeLiveSpeakerStartedAt
     })
-  else if (!on) {
+  } else if (!on) {
     const context = speechCaptureGrants.getAcceptedListenContext()
     if (context) speechCaptureGrants.normalStop(context)
+    speechDesktop?.runtime.closeInput()
   }
   if (listeningActive === on) return
   listeningActive = on
@@ -5281,12 +5301,19 @@ let lastAppliedManagedSnapshot: string | null = null
 let applyOperatorCrmRetries: (ids: string[]) => Promise<void> = async () => {}
 
 function notifySettingsChanged(): void {
+  void speechDesktop?.refresh('settings-notification')
   speechPackDesktop?.refresh()
   if (win && !win.isDestroyed()) win.webContents.send(IPC.settingsChanged)
 }
 
-function operatorRuntimeHooks(): { onCrmRetry: (ids: string[]) => Promise<void>; onReadinessChanged: () => void } {
-  return { onCrmRetry: (ids) => applyOperatorCrmRetries(ids), onReadinessChanged: notifySettingsChanged }
+function operatorRuntimeHooks() {
+  return {
+    onCrmRetry: (ids: string[]) => applyOperatorCrmRetries(ids),
+    onReadinessChanged: notifySettingsChanged,
+    beforePolicyRefresh: async () => {
+      await speechDesktop?.refresh('policy-refresh')
+    }
+  }
 }
 
 /** FITO-185-AB: set once registerIpc has installed its handlers, so the exclusive-onboarding
@@ -5297,6 +5324,16 @@ let ipcRegistered = false
 function registerIpc(): void {
   if (ipcRegistered) return
   ipcRegistered = true
+  speechDesktop = startSpeechDesktopBootstrap({
+    ipcMain,
+    assertMainWindow,
+    readListenContext: () => speechCaptureGrants.getAcceptedListenContext(),
+    isListening: () => listeningActive,
+    grants: speechCaptureGrants,
+    platform: process.platform,
+    enabled: () => true,
+    ...speechDesktopBoundaryOptions()
+  })
   // --- Settings & permissions ---
   ipcMain.handle(IPC.settingsGet, (e) => {
     assertMainWindow(e)
@@ -5766,7 +5803,10 @@ function registerIpc(): void {
     const { response } = win ? await dialog.showMessageBox(win, dialogOpts) : await dialog.showMessageBox(dialogOpts)
     if (response !== 0) return { ok: false, canceled: true }
     try {
+      speechDesktop?.invalidate('profile-recovery')
+      resetSpeechAuthProfile()
       const archive = archiveEncryptedProfile()
+      completeSpeechAuthProfileReset()
       auditLog('settings.profile_recovered', { movedFiles: archive.files.length })
       return {
         ok: true,
@@ -6805,8 +6845,9 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.authSignOut, async (e) => {
     assertMainWindow(e)
+    speechDesktop?.invalidate('auth-signout')
+    authSignOut()
     await importJobs?.cancelAll()
-    return authSignOut()
   })
   // --- Calendar ---
   ipcMain.handle(IPC.timeSavedRead, (e) => {
@@ -10287,6 +10328,14 @@ app.on('before-quit', (e) => {
     /* window may already be gone */
   }
   setTimeout(() => app.quit(), 2000)
+})
+
+let speechShutdownDone = false
+app.on('before-quit', (event) => {
+  if (event.defaultPrevented || speechShutdownDone || !speechDesktop) return
+  event.preventDefault()
+  speechShutdownDone = true
+  void speechDesktop.dispose().finally(() => app.quit())
 })
 
 app.on(

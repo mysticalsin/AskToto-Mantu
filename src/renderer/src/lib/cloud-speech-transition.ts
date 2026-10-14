@@ -23,15 +23,18 @@ export function createCloudSpeechTransitionHandler(options: {
       options.invalidate('STALE')
       return
     }
-    const request: CloudSpeechEpochTransitionAck = {
-      type: 'epoch-transition-ack',
+    const identity = {
+      type: 'epoch-transition-ack' as const,
       captureId: event.captureId,
       captureGeneration: event.captureGeneration,
       transitionId: event.transitionId,
-      handoffNonce: event.handoffNonce,
-      stage: event.stage,
-      streams: event.streams
+      handoffNonce: event.handoffNonce
     }
+    // Narrow the stage before pairing it with its exact closed/opened stream inventory.
+    const request: CloudSpeechEpochTransitionAck =
+      event.stage === 'closed'
+        ? { ...identity, stage: event.stage, streams: event.streams }
+        : { ...identity, stage: event.stage, streams: event.streams }
     let raw: unknown
     try {
       raw = await options.boundedCall(
