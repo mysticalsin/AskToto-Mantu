@@ -85,6 +85,7 @@ jobs:
           const total = report.numTotalTests
           const counts = [total, passed, failed, pending, todo]
           const results = report.testResults ?? []
+          const failedSuites = results.filter((result) => result.status !== 'passed').length
           const files = results.map((result) => String(result.name).replace(/\\/g, '/'))
           const required = [
             'src/shared/contracts/speech/speech.contract.test.ts',
@@ -96,9 +97,9 @@ jobs:
             'src/main/features/components/speech-pack/flag.test.ts'
           ]
           const missing = required.filter((file) => !files.some((actual) => actual.endsWith(file)))
-          console.log(`Shared speech tests: files=${files.length}, total=${total}, executed=${passed + failed}, passed=${passed}, failed=${failed}, skipped=${skipped}`)
+          console.log(`Shared speech tests: files=${files.length}, total=${total}, executed=${passed + failed}, passed=${passed}, failed=${failed}, skipped=${skipped}, failed_suites=${failedSuites}`)
           if (!counts.every(Number.isSafeInteger) || counts.some((count) => count < 0) ||
-              results.length !== required.length || missing.length > 0 || total < 1 ||
+              results.length !== required.length || missing.length > 0 || failedSuites > 0 || total < 1 ||
               total !== passed + failed + skipped || failed > 0 || skipped > 0) {
             console.error('Shared speech test report is incomplete or contains failures/skips.')
             process.exit(1)
@@ -167,6 +168,7 @@ jobs:
           const total = report.numTotalTests
           const counts = [total, passed, failed, pending, todo]
           const results = report.testResults ?? []
+          const failedSuites = results.filter((result) => result.status !== 'passed').length
           const files = results.map((result) => String(result.name).replace(/\\/g, '/'))
           const required = [
             'src/speech/grants.test.ts',
@@ -177,9 +179,9 @@ jobs:
             'scripts/migrate-runner.contract.test.ts'
           ]
           const missing = required.filter((file) => !files.some((actual) => actual.endsWith(file)))
-          console.log(`Operator speech tests: files=${files.length}, total=${total}, executed=${passed + failed}, passed=${passed}, failed=${failed}, skipped=${skipped}`)
+          console.log(`Operator speech tests: files=${files.length}, total=${total}, executed=${passed + failed}, passed=${passed}, failed=${failed}, skipped=${skipped}, failed_suites=${failedSuites}`)
           if (!counts.every(Number.isSafeInteger) || counts.some((count) => count < 0) ||
-              results.length !== required.length || missing.length > 0 || total < 1 ||
+              results.length !== required.length || missing.length > 0 || failedSuites > 0 || total < 1 ||
               total !== passed + failed + skipped || failed > 0 || skipped > 0) {
             console.error('Operator speech test report is incomplete or contains failures/skips.')
             process.exit(1)
