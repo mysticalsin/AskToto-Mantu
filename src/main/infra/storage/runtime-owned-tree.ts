@@ -797,6 +797,4 @@ function sameStableIdentityRecord(expected: RuntimeOwnedTreeIdentity, actual: Bi
 }
 
 export { commitRuntimeOwnedTreeMove, prepareRuntimeOwnedTreeMove } from './runtime-owned-tree-move'
-export { openRuntimeOwnedTreeFileSource } from './runtime-owned-tree-source'
-export type { RuntimeOwnedTreeFileSource } from './runtime-owned-tree-source'
 export type { RuntimeOwnedTreeMoveAdmission, RuntimeOwnedTreeMoveResult } from './runtime-owned-tree-move'
