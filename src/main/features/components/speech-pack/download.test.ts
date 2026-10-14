@@ -232,6 +232,17 @@ describe('downloadVerified', () => {
     expect(readFileSync(join(dir, 'model.bin'))).toEqual(body)
   })
 
+  it('does not report an oversized stale partial before discarding it', async () => {
+    server = await serve(rangeHandler(body))
+    const req = request(`${server.base}/pin/model.bin`)
+    writeFileSync(`${req.dest}.partial`, Buffer.alloc(body.length + 1))
+    const progress: number[] = []
+    await downloadVerified({ ...req, onProgress: (n) => progress.push(n) }, deps())
+    expect(progress.every((n) => n <= pin.bytes)).toBe(true)
+    expect(readFileSync(req.dest)).toEqual(body)
+    expect(existsSync(`${req.dest}.partial`)).toBe(false)
+  })
+
   it.each([
     ['missing Content-Length', undefined],
     ['matching Content-Length', '5']

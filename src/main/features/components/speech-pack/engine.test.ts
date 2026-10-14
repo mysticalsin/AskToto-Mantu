@@ -665,6 +665,28 @@ describe('speech-pack engine', () => {
       expect(server.requests).toHaveLength(0)
     })
 
+    it('does not credit a same-size corrupt archive in disk preflight', async () => {
+      server = await serveArchive()
+      const c = archiveComponent(server.base)
+      const archivePath = join(root, '.staging', PARAKEET, 'work', 'archive.download')
+      mkdirSync(join(root, '.staging', PARAKEET, 'work'), { recursive: true })
+      const corruptArchive = Buffer.from(archiveBytes)
+      corruptArchive[0] ^= 0xff
+      writeFileSync(archivePath, corruptArchive)
+      const need = archiveBytes.length + 100_000 + DISK_HEADROOM_BYTES
+      const engine = make([c], { freeBytes: () => need - archiveBytes.length, extractArchive: async () => undefined })
+      engine.enqueue([PARAKEET])
+      await engine.whenIdle()
+      expect(engine.getState(PARAKEET)).toEqual({
+        status: 'error',
+        kind: 'disk',
+        requiredBytes: need,
+        freeBytes: need - archiveBytes.length
+      })
+      expect(server.requests).toHaveLength(0)
+      expect(readFileSync(archivePath)).toEqual(corruptArchive)
+    })
+
     it('refuses an archive pack without a recorded archive pin', async () => {
       const c: SpeechPackComponent = { ...archiveComponent('http://127.0.0.1:1'), source: { kind: 'archive', archive: null, entryPrefix: prefix, extractCapBytes: 1 } }
       const engine = make([c])
