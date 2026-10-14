@@ -69,7 +69,9 @@ export default defineConfig({
           'parakeet-extract-host': resolve(__dirname, 'src/main/parakeet-extract-host.ts'),
           // MQA-234: the whisper utilityProcess child. Its own entry so it never shares a chunk with
           // main — the whole point is that transformers/onnxruntime-node load ONLY in the child.
-          'whisper-asr-host': resolve(__dirname, 'src/main/whisper-asr-host.ts')
+          'whisper-asr-host': resolve(__dirname, 'src/main/whisper-asr-host.ts'),
+          // Large bounded meeting speech codec/AES work runs in this dedicated worker thread.
+          'meeting-speech-worker': resolve(__dirname, 'src/main/meeting-speech-worker.ts')
         }
       }
     },
