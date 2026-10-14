@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   BrokerSpeechSettingsSchema,
   CloudSpeechSettingsSchema,
+  BROKER_SPEECH_SETTINGS_REFUSAL,
   DEFAULT_BROKER_SPEECH_SETTINGS,
   DEFAULT_CLOUD_SPEECH_SETTINGS,
+  BrokerSpeechSettingsLoadSchema,
+  BrokerSpeechSettingsWriteSchema,
   parseBrokerSpeechSettings
 } from './broker-speech-settings'
 import { BaseSettingsSchema, DEFAULT_SETTINGS } from './ipc'
@@ -32,6 +35,7 @@ describe('broker speech settings', () => {
     expect(BrokerSpeechSettingsSchema.parse({ transport: 'legacy', engine: 'unconfigured' })).toEqual(
       DEFAULT_BROKER_SPEECH_SETTINGS
     )
+    expect(BrokerSpeechSettingsWriteSchema.safeParse(BROKER_SPEECH_SETTINGS_REFUSAL).success).toBe(false)
   })
 
   it('refuses malformed explicit values rather than replacing them with the legacy default', () => {
@@ -50,9 +54,12 @@ describe('broker speech settings', () => {
   it('preserves malformed explicit settings through the aggregate settings schema for a fail-closed reader', () => {
     const malformed = { transport: 'broker-v1', engine: 'soniox' }
     const parsed = CloudSpeechSettingsSchema.parse({ brokerSpeech: malformed })
-    expect(parsed.brokerSpeech).toEqual(malformed)
+    expect(parsed.brokerSpeech).toEqual(BROKER_SPEECH_SETTINGS_REFUSAL)
     expect(parseBrokerSpeechSettings(parsed.brokerSpeech)).toEqual({ ok: false, code: 'INVALID_PROFILE' })
     const aggregate = BaseSettingsSchema.parse({ ...DEFAULT_SETTINGS, brokerSpeech: malformed })
-    expect(aggregate.brokerSpeech).toEqual(malformed)
+    expect(aggregate.brokerSpeech).toEqual(BROKER_SPEECH_SETTINGS_REFUSAL)
+    expect(
+      BrokerSpeechSettingsLoadSchema.parse({ transport: 'broker-v1', engine: 'unknown', secret: 'discard-me' })
+    ).toEqual(BROKER_SPEECH_SETTINGS_REFUSAL)
   })
 })
