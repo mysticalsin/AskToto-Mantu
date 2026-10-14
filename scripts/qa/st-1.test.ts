@@ -24,9 +24,11 @@ import {
   historySummary,
   parseArgs,
   pinnedExpression,
+  projectProfilerDiagnostics,
   recordSample,
   releaseExpression,
   sampleExpression,
+  timedInspectorCommand,
   shouldProbeHistory,
   syntheticDatalessPlan,
   runPurpose,
@@ -318,6 +320,197 @@ describe('recordSample', () => {
       { tMs: 2_000, writeMs: 900, lookupMs: 1, answeredMs: 1_600, witness },
       { tMs: 3_000, hung: true, witness }
     ])
+  })
+})
+
+describe('ST-1 profiler timing diagnostics', () => {
+  it('records the existing profiler command calls once, in order, with the same parameters and bounds', async () => {
+    let clock = 100
+    const events: Array<{ method: string; params: unknown; timeoutMs: number }> = []
+    const commands: Array<Record<string, unknown>> = []
+    const send = vi.fn(async (method: string, params: unknown, timeoutMs: number) => {
+      events.push({ method, params, timeoutMs })
+      clock += 5
+      return { late: false, result: { accepted: method } }
+    })
+    const now = () => clock
+
+    for (const [method, params, timeoutMs] of [
+      ['Profiler.enable', {}, 1_000],
+      ['Profiler.setSamplingInterval', { interval: 1_000 }, 1_000],
+      ['Profiler.start', {}, 1_000],
+      ['Profiler.stop', {}, 30_000]
+    ] as const) {
+      const result = await timedInspectorCommand(send, method, params, timeoutMs, now, commands)
+      expect(result).toEqual({ late: false, result: { accepted: method } })
+    }
+
+    expect(send).toHaveBeenCalledTimes(4)
+    expect(events).toEqual([
+      { method: 'Profiler.enable', params: {}, timeoutMs: 1_000 },
+      { method: 'Profiler.setSamplingInterval', params: { interval: 1_000 }, timeoutMs: 1_000 },
+      { method: 'Profiler.start', params: {}, timeoutMs: 1_000 },
+      { method: 'Profiler.stop', params: {}, timeoutMs: 30_000 }
+    ])
+    expect(commands).toEqual([
+      { command: 'enable', requestedAtMs: 100, settledAtMs: 105, status: 'answered' },
+      { command: 'set-sampling-interval', requestedAtMs: 105, settledAtMs: 110, status: 'answered' },
+      { command: 'start', requestedAtMs: 110, settledAtMs: 115, status: 'answered' },
+      { command: 'stop', requestedAtMs: 115, settledAtMs: 120, status: 'answered' }
+    ])
+  })
+
+  it('retains timeout as unknown completion and records errors without raw details', async () => {
+    const commands: Array<Record<string, unknown>> = []
+    let clock = 10
+    const timedOut = await timedInspectorCommand(
+      async () => {
+        clock = 30
+        return { late: true }
+      },
+      'Profiler.start',
+      {},
+      1_000,
+      () => clock,
+      commands
+    )
+    expect(timedOut).toEqual({ late: true })
+    await expect(
+      timedInspectorCommand(
+        async () => {
+          clock = 45
+          throw new Error('private protocol details')
+        },
+        'Profiler.stop',
+        {},
+        30_000,
+        () => clock,
+        commands
+      )
+    ).rejects.toThrow('private protocol details')
+    expect(commands).toEqual([
+      { command: 'start', requestedAtMs: 10, settledAtMs: 30, status: 'timed-out' },
+      { command: 'stop', requestedAtMs: 30, settledAtMs: 45, status: 'error' }
+    ])
+  })
+
+  it('marks profiler start overlap in the first bucket and separates Stop histogram overlap from sample round-trip', () => {
+    const diagnostics = projectProfilerDiagnostics({
+      setup: { requestedAtMs: 40, settledAtMs: 60, status: 'answered' },
+      summary: { requestedAtMs: 1_200, settledAtMs: 1_220, status: 'answered' },
+      profilerCommands: [
+        { command: 'enable', requestedAtMs: 70, settledAtMs: 80, status: 'answered' },
+        { command: 'set-sampling-interval', requestedAtMs: 81, settledAtMs: 90, status: 'answered' },
+        { command: 'start', requestedAtMs: 91, settledAtMs: 130, status: 'answered' },
+        { command: 'stop', requestedAtMs: 700, settledAtMs: 800, status: 'answered' }
+      ],
+      timeline: [
+        {
+          tMs: 500,
+          requestAtMs: 100,
+          settledAtMs: 510,
+          diagnosticStatus: 'answered',
+          histogramLowerBoundMs: 40,
+          histogramUpperBoundMs: 510,
+          histogramBoundsKnown: true,
+          loopMaxSinceLastMs: 600,
+          loopMaxDuringWriteMs: 40,
+          writeMs: 20,
+          lookupMs: 4,
+          answeredMs: 410,
+          witness: { loopMaxSinceLastMs: 5, writeMs: 2, cpuBusyPct: 20 }
+        },
+        {
+          tMs: 1_000,
+          requestAtMs: 900,
+          settledAtMs: 950,
+          diagnosticStatus: 'answered',
+          histogramLowerBoundMs: 100,
+          histogramUpperBoundMs: 950,
+          histogramBoundsKnown: true,
+          loopMaxSinceLastMs: 100,
+          loopMaxDuringWriteMs: 10,
+          writeMs: 30,
+          lookupMs: 3,
+          answeredMs: 50,
+          witness: { loopMaxSinceLastMs: 6, writeMs: 3, cpuBusyPct: 30 }
+        }
+      ]
+    })
+
+    expect(diagnostics.samples).toContainEqual(
+      expect.objectContaining({
+        selector: 'worst-loop',
+        index: 0,
+        overlaps: expect.objectContaining({
+          histogram: expect.arrayContaining([expect.objectContaining({ command: 'start' })]),
+          sampleRoundTrip: expect.arrayContaining([expect.objectContaining({ command: 'start' })])
+        })
+      })
+    )
+    expect(diagnostics.samples).toContainEqual(
+      expect.objectContaining({
+        selector: 'worst-write',
+        index: 1,
+        overlaps: expect.objectContaining({
+          histogram: expect.arrayContaining([expect.objectContaining({ command: 'stop' })]),
+          sampleRoundTrip: []
+        })
+      })
+    )
+  })
+
+  it('retains late and hung worst samples, deterministic first ties, and unknown histogram bounds', () => {
+    const diagnostics = projectProfilerDiagnostics({
+      setup: { requestedAtMs: 0, settledAtMs: 5, status: 'timed-out' },
+      summary: null,
+      profilerCommands: [{ command: 'stop', requestedAtMs: 100, settledAtMs: 110, status: 'timed-out' }],
+      timeline: [
+        {
+          tMs: 100,
+          late: true,
+          requestAtMs: 80,
+          settledAtMs: 120,
+          diagnosticStatus: 'answered',
+          histogramLowerBoundMs: 0,
+          histogramUpperBoundMs: 120,
+          histogramBoundsKnown: false,
+          loopMaxSinceLastMs: 700,
+          writeMs: 900,
+          lookupMs: 20,
+          answeredMs: 40,
+          witness: { loopMaxSinceLastMs: 90, writeMs: 8, cpuBusyPct: 95 }
+        },
+        {
+          tMs: 200,
+          hung: true,
+          requestAtMs: 180,
+          settledAtMs: 1_200,
+          diagnosticStatus: 'timed-out',
+          histogramBoundsKnown: false,
+          loopMaxSinceLastMs: 700,
+          writeMs: 5,
+          lookupMs: 30,
+          witness: { loopMaxSinceLastMs: 100, writeMs: null, cpuBusyPct: 99 }
+        }
+      ]
+    })
+
+    expect(diagnostics.samples).toHaveLength(5)
+    expect(diagnostics.samples.map((entry) => entry.selector)).toEqual([
+      'worst-loop',
+      'worst-write',
+      'worst-lookup',
+      'worst-round-trip',
+      'first-late-or-hung'
+    ])
+    expect(diagnostics.samples[0]).toMatchObject({
+      index: 0,
+      histogram: { boundsKnown: false },
+      witness: { loopMaxSinceLastMs: 90, writeMs: 8, cpuBusyPct: 95 }
+    })
+    expect(diagnostics.samples[1]).toMatchObject({ selector: 'worst-write', index: 0 })
+    expect(diagnostics.samples[4]).toMatchObject({ selector: 'first-late-or-hung', index: 0, late: true })
   })
 })
 

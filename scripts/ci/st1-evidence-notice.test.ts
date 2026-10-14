@@ -78,6 +78,47 @@ function validReport(row = 'fifo') {
   }
 }
 
+function validDiagnostics() {
+  return {
+    version: 1,
+    setup: { requestedAtMs: 10, settledAtMs: 20, status: 'answered' },
+    summary: { requestedAtMs: 2_000, settledAtMs: 2_010, status: 'answered' },
+    profilerCommands: [
+      { command: 'enable', requestedAtMs: 30, settledAtMs: 35, status: 'answered' },
+      { command: 'set-sampling-interval', requestedAtMs: 36, settledAtMs: 40, status: 'answered' },
+      { command: 'start', requestedAtMs: 41, settledAtMs: 60, status: 'answered' },
+      { command: 'stop', requestedAtMs: 1_500, settledAtMs: 1_520, status: 'answered' }
+    ],
+    samples: [
+      {
+        selector: 'worst-loop',
+        index: 2,
+        tMs: 1_000,
+        requestAtMs: 990,
+        settledAtMs: 1_010,
+        status: 'answered',
+        late: false,
+        hung: false,
+        histogram: { lowerBoundMs: 500, upperBoundMs: 1_010, boundsKnown: true },
+        overlaps: {
+          histogram: [{ command: 'start', observedWaitMs: 19, executionBoundKnown: true }],
+          sampleRoundTrip: []
+        },
+        metrics: { loopMaxSinceLastMs: 700, loopMaxDuringWriteMs: 40, writeMs: 20, lookupMs: 3, roundTripMs: 20 },
+        witness: {
+          loopMaxSinceLastMs: 5,
+          writeMs: 2,
+          cpuBusyPct: 20,
+          readRequestedAtMs: 995,
+          readSettledAtMs: 996,
+          writeStartedAtMs: 996,
+          writeSettledAtMs: 999
+        }
+      }
+    ]
+  }
+}
+
 describe('strict ST-1 GitHub notice serializer', () => {
   it('publishes only whitelisted context, criteria, and finite metrics, retaining the actual failed status', () => {
     const input = fixture(validReport())
@@ -108,6 +149,133 @@ describe('strict ST-1 GitHub notice serializer', () => {
     expect(serialized).not.toContain('timeline')
     expect(serialized).not.toContain(installer)
     expect(serialized).not.toContain(artifactSha)
+  })
+
+  it('keeps old reports valid with a fixed diagnostics-unavailable reason', () => {
+    const input = fixture(validReport())
+    expect(createNotice({ argv: input.argv, env })).toMatchObject({
+      state: 'available',
+      verdict: 'FAIL',
+      diagnostics: { version: 1, state: 'unavailable', reason: 'diagnostics_unavailable' }
+    })
+  })
+
+  it('serializes only the closed bounded diagnostic projection', () => {
+    const input = fixture({ ...validReport(), profilerDiagnostics: validDiagnostics() })
+    const notice = createNotice({ argv: input.argv, env })
+    expect(notice).toMatchObject({
+      state: 'available',
+      verdict: 'FAIL',
+      diagnostics: {
+        version: 1,
+        state: 'available',
+        profilerCommands: [{ command: 'enable', requestedAtMs: 30, settledAtMs: 35, status: 'answered' }],
+        samples: [
+          expect.objectContaining({
+            selector: 'worst-loop',
+            index: 2,
+            histogram: { lowerBoundMs: 500, upperBoundMs: 1_010, boundsKnown: true },
+            overlaps: {
+              histogram: [{ command: 'start', observedWaitMs: 19, executionBoundKnown: true }],
+              sampleRoundTrip: []
+            },
+            witness: { loopMaxSinceLastMs: 5, writeMs: 2, cpuBusyPct: 20 }
+          })
+        ]
+      }
+    })
+    const serialized = JSON.stringify(notice)
+    expect(Buffer.byteLength(serialized)).toBeLessThanOrEqual(8 * 1024)
+    expect(serialized).not.toContain('private')
+    expect(serialized).not.toContain('meeting title')
+    expect(serialized).not.toContain('resources')
+  })
+
+  it.each([
+    { ...validDiagnostics(), version: 2 },
+    {
+      ...validDiagnostics(),
+      profilerCommands: [...validDiagnostics().profilerCommands, ...validDiagnostics().profilerCommands.slice(0, 1)]
+    },
+    {
+      ...validDiagnostics(),
+      profilerCommands: [{ ...validDiagnostics().profilerCommands[0], command: 'Profiler.start' }]
+    },
+    { ...validDiagnostics(), profilerCommands: [{ ...validDiagnostics().profilerCommands[0], settledAtMs: 29 }] },
+    { ...validDiagnostics(), samples: Array(6).fill(validDiagnostics().samples[0]) },
+    { ...validDiagnostics(), samples: [{ ...validDiagnostics().samples[0], index: -1 }] },
+    { ...validDiagnostics(), samples: [{ ...validDiagnostics().samples[0], settledAtMs: -1 }] },
+    { ...validDiagnostics(), samples: [{ ...validDiagnostics().samples[0], status: 'unknown' }] },
+    {
+      ...validDiagnostics(),
+      samples: [
+        { ...validDiagnostics().samples[0], histogram: { lowerBoundMs: 500, upperBoundMs: 400, boundsKnown: true } }
+      ]
+    },
+    { ...validDiagnostics(), samples: [{ ...validDiagnostics().samples[0], metrics: { writeMs: Infinity } }] },
+    {
+      ...validDiagnostics(),
+      samples: [
+        {
+          ...validDiagnostics().samples[0],
+          overlaps: {
+            histogram: Array(5).fill({ command: 'start', observedWaitMs: 1, executionBoundKnown: true }),
+            sampleRoundTrip: []
+          }
+        }
+      ]
+    },
+    { ...validDiagnostics(), privateError: 'private meeting transcript' }
+  ])('replaces malformed diagnostic input with a fixed unavailable reason', (diagnostics) => {
+    const input = fixture({ ...validReport(), profilerDiagnostics: diagnostics })
+    const notice = createNotice({ argv: input.argv, env })
+    expect(notice).toMatchObject({
+      state: 'available',
+      verdict: 'FAIL',
+      diagnostics: { version: 1, state: 'unavailable', reason: 'diagnostics_invalid' }
+    })
+    expect(JSON.stringify(notice)).not.toContain('private meeting transcript')
+    expect(JSON.stringify(notice)).not.toContain(input.reportPath)
+  })
+
+  it('accepts absent setup as unknown instead of inventing timing bounds', () => {
+    const diagnostics = {
+      ...validDiagnostics(),
+      setup: null,
+      summary: null,
+      samples: [
+        { ...validDiagnostics().samples[0], histogram: { lowerBoundMs: null, upperBoundMs: null, boundsKnown: false } }
+      ]
+    }
+    const input = fixture({ ...validReport(), profilerDiagnostics: diagnostics })
+    expect(createNotice({ argv: input.argv, env })).toMatchObject({
+      state: 'available',
+      diagnostics: {
+        version: 1,
+        state: 'available',
+        setup: null,
+        samples: [{ histogram: { lowerBoundMs: null, upperBoundMs: null, boundsKnown: false } }]
+      }
+    })
+  })
+
+  it('marks oversized diagnostics unavailable without exceeding the notice size bound', () => {
+    const diagnostics = {
+      ...validDiagnostics(),
+      samples: [
+        {
+          ...validDiagnostics().samples[0],
+          witness: { loopMaxSinceLastMs: 1, writeMs: 2, cpuBusyPct: 3, padding: 'x'.repeat(9_000) }
+        }
+      ]
+    }
+    const input = fixture({ ...validReport(), profilerDiagnostics: diagnostics })
+    const notice = createNotice({ argv: input.argv, env })
+    expect(notice).toMatchObject({
+      state: 'available',
+      diagnostics: { version: 1, state: 'unavailable', reason: 'diagnostics_too_large' }
+    })
+    expect(Buffer.byteLength(JSON.stringify(notice))).toBeLessThanOrEqual(8 * 1024)
   })
 
   it('emits a fixed typed diagnostic for malformed, missing, oversized, and unknown-criterion reports', () => {
