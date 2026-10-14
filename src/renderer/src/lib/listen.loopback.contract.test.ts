@@ -302,10 +302,11 @@ describe('MQA-268: owned audio channels preserve the limiter graph and serialize
       return loads === 1 ? Promise.reject(new Error('worklet load failed')) : Promise.resolve()
     }
     const failed = channels.open('them', fakeStream(fakeTrack()), 1)
-    const recovered = channels.open('them', secondStream, 1)
+    const recoveredStream = fakeStream(fakeTrack())
+    const recovered = channels.open('them', recoveredStream, 1)
     await expect(failed).rejects.toThrow('worklet load failed')
     await expect(recovered).resolves.toBe(true)
-    expect(channels.current.them?.stream).toBe(secondStream)
+    expect(channels.current.them?.stream).toBe(recoveredStream)
   })
 
   it('re-reads the current host after module load before admitting or publishing a channel', async () => {

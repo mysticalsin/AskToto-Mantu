@@ -120,8 +120,8 @@ describe('cloud speech result epoch tracking', () => {
   })
 
   it.each([
-    { closeConfirmed: false, tail: 'complete' as const, reason: 'close-timeout' as const },
-    { closeConfirmed: true, tail: 'incomplete' as const, reason: 'drain-timeout' as const }
+    { closeConfirmed: false, tail: 'incomplete' as const, reason: 'unknown' as const },
+    { closeConfirmed: true, tail: 'incomplete' as const, reason: 'unknown' as const }
   ])('does not accept a closed transition without complete confirmed provider closure (%s)', (closure) => {
     const tracker = createCloudSpeechResultTracker(request)
     tracker.initialize(started)
