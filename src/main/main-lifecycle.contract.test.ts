@@ -232,7 +232,7 @@ describe('MQA-345 — constructor swaps keep the retiring renderer trusted until
 
     const localModels = sliceBetween('ipcMain.handle(IPC.localModelsList', '// Explicit Download/Retry')
     const park = sliceBetween('ipcMain.handle(IPC.overlayParkAfterHide', '// Renderer ErrorBoundary')
-    const bundled = sliceBetween('safeHandle(IPC.asrBundled', 'safeHandle(IPC.asrAssetsStatus')
+    const asrIpc = sliceBetween("runStep('asrAssetsIpc'", "runStep('asrModelProtocol'")
     expect(localModels.indexOf('isRecentlyRetiredOverlaySender(e)')).toBeLessThan(
       localModels.indexOf('assertMainWindow(e)')
     )
@@ -240,14 +240,14 @@ describe('MQA-345 — constructor swaps keep the retiring renderer trusted until
     expect(park.indexOf('isRecentlyRetiredOverlaySender(e)')).toBeLessThan(park.indexOf('assertMainWindow(e)'))
     expect(park).toMatch(/if \(isRecentlyRetiredOverlaySender\(e\)\) return/)
     expect(park).toMatch(/force === true/)
-    expect(bundled.indexOf('isRecentlyRetiredOverlaySender(e)')).toBeLessThan(bundled.indexOf('assertMainWindow(e)'))
-    expect(bundled).toMatch(/if \(isRecentlyRetiredOverlaySender\(e\)\) return true/)
-    expect(indexSrc.match(/isRecentlyRetiredOverlaySender\(e\)/g)).toHaveLength(3)
+    expect(indexSrc.match(/isRecentlyRetiredOverlaySender\(e\)/g)).toHaveLength(2)
 
     expect(localModels).toMatch(/assertMainWindow\(e\)/)
     expect(park).toMatch(/assertMainWindow\(e\)/)
+    expect(asrIpc).toMatch(/registerAsrAssetsIpc/)
+    expect(asrIpc).toMatch(/isRecentlyRetiredOverlaySender/)
+    expect(asrIpc).toMatch(/assertMainWindow/)
     expect(indexSrc).toMatch(/function parkOverlayAfterHideSpring\(force = false\)/)
-    expect(bundled).toMatch(/assertMainWindow\(e\)/)
   })
 
   it('keeps Settings usable if an opaque replay replacement cannot be created', () => {

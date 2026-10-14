@@ -271,7 +271,9 @@ describe('boot wiring in index.ts (M2-0518)', () => {
   it('primes the ASR bundled-status probe only through the boot-work queue', () => {
     expect(bootCallback).toBeDefined()
     const bootText = bootCallback!.getText(indexSource)
-    expect(bootText).toMatch(/bootWork\.run\('primeAsrBundledStatus', \(\) => \{\s*asrBundledReady\(\)\s*\}\)/)
+    expect(bootText).toMatch(
+      /bootWork\.run\('primeAsrBundledStatus', \(\) => \{\s*asrAssetsIpc\.primeBundledStatus\(\)\s*\}\)/
+    )
     const asrIpcBeforePrime = bootText.slice(0, bootText.indexOf("bootWork.run('primeAsrBundledStatus'"))
     expect(asrIpcBeforePrime).not.toMatch(/\basrManifestComplete\(/)
     expect(asrIpcBeforePrime).not.toMatch(/\bimportAsrAssetsReady\(/)
