@@ -7,18 +7,7 @@ const note = (body: string): string =>
 describe('readSavedNote', () => {
   it('returns the saved title, mode, question and answer with authored newlines intact', () => {
     const text = note(
-      [
-        '## Question',
-        '',
-        'First line.',
-        'Second line.',
-        '',
-        '## Answer',
-        '',
-        'Answer.',
-        'Follow-up.',
-        ''
-      ].join('\n')
+      ['## Question', '', 'First line.', 'Second line.', '', '## Answer', '', 'Answer.', 'Follow-up.', ''].join('\n')
     )
     const result = readSavedNote(text, 'fallback.md')
 
