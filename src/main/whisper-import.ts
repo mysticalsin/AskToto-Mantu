@@ -155,11 +155,13 @@ async function createHost(): Promise<UtilityProcess> {
     if (!importTierAdmissionActive) throw new Error('No import decoder admission is active for Whisper.')
     const admissionVersion = importTierAdmissionVersion
     const tierAdmission = await admitHostTierAtStart()
-    const approvedModelsPath = await modelsDir()
     await waitForStoppedHost()
     if (host) return host
-    // A newer import admission or idle release won while the model digest was being checked. Re-read the
-    // policy rather than creating a helper from a stale grant.
+    // Re-resolve the profile and activated path after the old-host exit barrier. A path checked before
+    // that wait is stale authority if selection/profile changes while the old helper is stopping.
+    if (admissionVersion !== importTierAdmissionVersion) continue
+    if (!importTierAdmissionActive) throw new Error('Whisper helper was released before transcription started.')
+    const approvedModelsPath = await modelsDir()
     if (admissionVersion !== importTierAdmissionVersion) continue
     if (!importTierAdmissionActive) throw new Error('Whisper helper was released before transcription started.')
     return forkHost(tierAdmission, approvedModelsPath)

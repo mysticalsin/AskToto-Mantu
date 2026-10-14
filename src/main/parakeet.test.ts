@@ -20,7 +20,12 @@ vi.mock('node:child_process', () => ({ execFile: network.execFile }))
 vi.mock('./logger', () => ({ mainLog: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }))
 
 import { ensureParakeetModel, parakeetModelReady } from './parakeet'
-import { PARAKEET_REQUIRED_FILES, setAsrEnsureTestHooks, type AsrEnsureTestHooks } from './asr-bundled-ensure'
+import {
+  PARAKEET_REQUIRED_FILES,
+  parakeetFilesReady,
+  setAsrEnsureTestHooks,
+  type AsrEnsureTestHooks
+} from './asr-bundled-ensure'
 
 function withTestResources(hooks: Omit<AsrEnsureTestHooks, 'bundledResourceRoot'> = {}): AsrEnsureTestHooks {
   return { ...hooks, bundledResourceRoot: () => paths.resources }
@@ -74,12 +79,12 @@ describe('bundled Parakeet runtime', () => {
     await expect(ensureParakeetModel(progressSpy)).resolves.toBeUndefined()
   })
 
-  it('Access login HTML on disk is not a ready Parakeet model', async () => {
+  it('rejects Access login HTML at the content validation gate before model use', async () => {
     const dir = join(paths.userData, 'asr-models', 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8')
     mkdirSync(dir, { recursive: true })
     const html = '<!DOCTYPE html><html><body>cloudflareaccess.com Sign in</body></html>'
     for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(dir, name), html)
-    await expect(parakeetModelReady()).resolves.toBe(false)
+    await expect(parakeetFilesReady(dir)).resolves.toBe(false)
   })
 
   it('a development fetch failure stays an honest connection error', async () => {
