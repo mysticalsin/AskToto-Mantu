@@ -498,9 +498,11 @@ describe('speech auth lease (auth module authority)', () => {
     ud = mkdtempSync(join(tmpdir(), 'asktoto-speech-auth-lease-'))
     activeProfilePath = ud
     const electron = await import('electron')
-    ;(electron.app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) =>
-      n === 'userData' ? activeProfilePath : join(activeProfilePath, n)
-    )
+    const readProfilePath = (n: string): string => (n === 'userData' ? activeProfilePath : join(activeProfilePath, n))
+    ;(electron.app.getPath as ReturnType<typeof vi.fn>).mockImplementation(readProfilePath)
+    // The cached win-security mock closes over the initially imported Electron app. Keep its policy
+    // path on the same isolated profile as the fresh auth/store modules created by resetModules().
+    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation(readProfilePath)
     saved = {}
     for (const k of AZURE_ENV) {
       saved[k] = process.env[k]
@@ -534,9 +536,9 @@ describe('speech auth lease (auth module authority)', () => {
     // vi.resetModules() also recreates the Electron mock module. Rebind its profile path before loading
     // auth/store so the newly imported modules read the same isolated files the test prepared.
     const electron = await import('electron')
-    ;(electron.app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) =>
-      n === 'userData' ? activeProfilePath : join(activeProfilePath, n)
-    )
+    const readProfilePath = (n: string): string => (n === 'userData' ? activeProfilePath : join(activeProfilePath, n))
+    ;(electron.app.getPath as ReturnType<typeof vi.fn>).mockImplementation(readProfilePath)
+    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation(readProfilePath)
     const auth = await import('./auth')
     const { getSettings } = await import('./store')
     const { readTrustedAdminManagedBytes } = await import('./win-security')
