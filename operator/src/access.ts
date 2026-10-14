@@ -85,14 +85,7 @@ export function adminEmailsFromEnv(env: AdminEnv): readonly string[] | null {
     console.warn('Metis Operator admin access denied: ADMIN_EMAILS binding is missing or empty')
     return null
   }
-  const emails = Array.from(
-    new Set(
-      raw
-        .split(',')
-        .map(normalizeAdminEmail)
-        .filter(Boolean)
-    )
-  )
+  const emails = Array.from(new Set(raw.split(',').map(normalizeAdminEmail).filter(Boolean)))
   if (emails.length === 0) {
     console.warn('Metis Operator admin access denied: ADMIN_EMAILS binding is missing or empty')
     return null
@@ -174,9 +167,6 @@ export function redirectToAccess(request: Request, env: AdminEnv): Response {
 
 /** A session token is valid for at most this long since it was minted. */
 const SESSION_ABSOLUTE_TTL_MS = 12 * 60 * 60 * 1000
-/** The console only re-mints (rotates `iat` and re-sends `Set-Cookie`) when the current token has been
- *  alive longer than this, so an active tab is not writing a fresh cookie on every single request. */
-export const SESSION_REMINT_AFTER_MS = 60 * 60 * 1000
 const SESSION_HKDF_INFO = 'metis-operator-session'
 
 export function clearSessionCookie(): string {
@@ -293,9 +283,8 @@ export async function verifySessionToken(
   const iat = Number(parts[1])
   const email = normalizeAdminEmail(parts[2] || '')
   const sig = (parts[3] || '').toLowerCase()
-  if (!Number.isFinite(iat) || now < iat || now - iat > SESSION_ABSOLUTE_TTL_MS || !isAdminEmail(email, env) || !sig) {
+  if (!Number.isFinite(iat) || now < iat || now >= iat + SESSION_ABSOLUTE_TTL_MS || !isAdminEmail(email, env) || !sig)
     return null
-  }
   const expected = await hmacHex(secret, `metis-operator-session:v1|${iat}|${email}`)
   if (!timingSafeEqualHex(expected, sig)) return null
   return { email, iat }
@@ -372,7 +361,12 @@ async function fetchJwks(teamDomain: string, now: number): Promise<Jwk[] | null>
  * in the past, and `iss` must be the team domain. Any claim failing closes the door; this fallback exists
  * for the JWT header/cookie path only and is never weaker than the `ctx.access` binding check.
  */
-export async function verifyAccessJwt(token: string, teamDomain: string, aud: string, now = Date.now()): Promise<string | null> {
+export async function verifyAccessJwt(
+  token: string,
+  teamDomain: string,
+  aud: string,
+  now = Date.now()
+): Promise<string | null> {
   try {
     const keys = await fetchJwks(teamDomain, now)
     if (!keys) return null

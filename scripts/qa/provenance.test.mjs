@@ -26,6 +26,7 @@ import {
   PROMOTABLE_VARIANTS,
   RESIDUALS_MAX_LENGTH,
   promotableAssets,
+  provenanceProblems,
   stageBuild,
   assembleProvenance,
   sha256Sums,
@@ -72,6 +73,7 @@ function env(overrides = {}) {
   return {
     GITHUB_SHA: 'a'.repeat(40),
     GITHUB_RUN_ID: '42',
+    GITHUB_RUN_ATTEMPT: '1',
     GITHUB_REPOSITORY: 'owner/repo',
     GITHUB_SERVER_URL: 'https://github.com',
     RUNNER_OS: 'macOS',
@@ -199,6 +201,8 @@ test('stage records the runner image, Node, Electron, electron-builder and per-f
     assert.equal(record.node, NODE_VERSION)
     assert.equal(record.electron, '43.6.0')
     assert.equal(record.electron_builder, '26.15.3')
+    assert.equal(record.platform, VARIANTS['mac-qa-identity'].platform)
+    assert.deepEqual(record.run, { id: Number(e.GITHUB_RUN_ID), attempt: Number(e.GITHUB_RUN_ATTEMPT) })
     assert.deepEqual(
       record.builder_config.map((c) => c.path),
       VARIANTS['mac-qa-identity'].configs
@@ -330,15 +334,16 @@ test('stage refuses a malformed signing identity', async () => {
   }
 })
 
-test('assemble binds every build to one commit and run and lists every asset in SHA256SUMS', async () => {
+test('assemble binds every build to one commit, run attempt and platform and lists every asset in SHA256SUMS', async () => {
   const { root, releaseDir } = fixture()
   try {
     const { records, env: e } = await stageAll(root, releaseDir)
     const provenance = assembleProvenance(records, e)
-    assert.equal(provenance.schema, 1)
+    assert.equal(provenance.schema, 2)
     assert.equal(provenance.commit, e.GITHUB_SHA)
     assert.equal(provenance.version, VERSION)
     assert.equal(provenance.run.id, Number(e.GITHUB_RUN_ID))
+    assert.equal(provenance.run.attempt, Number(e.GITHUB_RUN_ATTEMPT))
     assert.equal(provenance.run.url, `${e.GITHUB_SERVER_URL}/${e.GITHUB_REPOSITORY}/actions/runs/${e.GITHUB_RUN_ID}`)
     assert.deepEqual(
       provenance.builds.map((b) => b.variant),
@@ -347,6 +352,8 @@ test('assemble binds every build to one commit and run and lists every asset in 
     for (const build of provenance.builds) {
       assert.equal(Object.hasOwn(build, 'commit'), false)
       assert.equal(Object.hasOwn(build, 'version'), false)
+      assert.equal(Object.hasOwn(build, 'run'), false)
+      assert.equal(build.platform, VARIANTS[build.variant].platform)
     }
     const allAssets = provenance.builds.flatMap((b) => b.assets)
     const sums = sha256Sums(allAssets)
@@ -363,7 +370,7 @@ test('assemble binds every build to one commit and run and lists every asset in 
   }
 })
 
-test('assemble refuses a missing or duplicated variant, a foreign commit and mismatched versions', async () => {
+test('assemble refuses a missing or duplicated variant, a foreign commit or attempt, wrong platform and mismatched versions', async () => {
   const { root, releaseDir } = fixture()
   try {
     const { records, env: e } = await stageAll(root, releaseDir)
@@ -383,11 +390,97 @@ test('assemble refuses a missing or duplicated variant, a foreign commit and mis
       (error) => error.message.includes('commit')
     )
 
+    const foreignAttempt = records.map((r, i) =>
+      i === 0 ? { ...r, run: { ...r.run, attempt: r.run.attempt + 1 } } : r
+    )
+    assert.throws(
+      () => assembleProvenance(foreignAttempt, e),
+      (error) => error.message.includes('attempt')
+    )
+
+    const wrongPlatform = records.map((r, i) => (i === 0 ? { ...r, platform: 'win' } : r))
+    assert.throws(
+      () => assembleProvenance(wrongPlatform, e),
+      (error) => error.message.includes('platform')
+    )
+
     const mismatchedVersion = records.map((r, i) => (i === 0 ? { ...r, version: '9.9.9' } : r))
     assert.throws(
       () => assembleProvenance(mismatchedVersion, e),
       (error) => error.message.includes('version')
     )
+  } finally {
+    cleanup(root)
+  }
+})
+
+test('assemble refuses assets without the exact expected names, byte sizes and sha256 values', async () => {
+  const { root, releaseDir } = fixture()
+  try {
+    const { records, env: e } = await stageAll(root, releaseDir)
+    const shortened = records.map((record, index) =>
+      index === 0 ? { ...record, assets: record.assets.slice(1) } : record
+    )
+    assert.throws(
+      () => assembleProvenance(shortened, e),
+      (error) => error.message.includes('assets')
+    )
+
+    const wrongSize = records.map((record, index) =>
+      index === 0
+        ? {
+            ...record,
+            assets: [{ ...record.assets[0], size: Number.MAX_SAFE_INTEGER + 1 }, ...record.assets.slice(1)]
+          }
+        : record
+    )
+    assert.throws(
+      () => assembleProvenance(wrongSize, e),
+      (error) => error.message.includes('byte size')
+    )
+
+    const wrongHash = records.map((record, index) =>
+      index === 0
+        ? { ...record, assets: [{ ...record.assets[0], sha256: 'not-a-sha256' }, ...record.assets.slice(1)] }
+        : record
+    )
+    assert.throws(
+      () => assembleProvenance(wrongHash, e),
+      (error) => error.message.includes('sha256')
+    )
+
+    const missingAttempt = { ...e }
+    delete missingAttempt.GITHUB_RUN_ATTEMPT
+    assert.throws(
+      () => assembleProvenance(records, missingAttempt),
+      (error) => error.message.includes('GITHUB_RUN_ATTEMPT')
+    )
+  } finally {
+    cleanup(root)
+  }
+})
+
+test('promotion provenance validation requires schema 2, platform, run attempt and closed asset metadata', async () => {
+  const { root, releaseDir } = fixture()
+  try {
+    const { records, env: e } = await stageAll(root, releaseDir)
+    const provenance = assembleProvenance(records, e)
+    assert.deepEqual(provenanceProblems(provenance), [])
+
+    const legacy = { ...provenance, schema: 1 }
+    assert.ok(provenanceProblems(legacy).some((problem) => problem.includes('schema')))
+
+    const wrongPlatform = structuredClone(provenance)
+    wrongPlatform.builds.find((build) => build.variant === 'win').platform = 'mac'
+    assert.ok(provenanceProblems(wrongPlatform).some((problem) => problem.includes('platform')))
+
+    const missingAttempt = structuredClone(provenance)
+    delete missingAttempt.run.attempt
+    assert.ok(provenanceProblems(missingAttempt).some((problem) => problem.includes('run attempt')))
+
+    const badAsset = structuredClone(provenance)
+    badAsset.builds.find((build) => build.variant === 'mac').assets[0].size = -1
+    assert.ok(provenanceProblems(badAsset).some((problem) => problem.includes('byte size')))
   } finally {
     cleanup(root)
   }
@@ -668,6 +761,7 @@ test('prepare-release publishes only the shipping installers with SHA256SUMS.txt
       downloadsDir,
       outDir,
       candidateRun: String(provenance.run.id),
+      candidateAttempt: String(provenance.run.attempt),
       candidateCommit: provenance.commit,
       env: e
     })
@@ -730,12 +824,31 @@ test('prepare-release refuses unbound provenance or refused evidence and moves n
         downloadsDir,
         outDir: outDir1,
         candidateRun: String(wrongRun),
+        candidateAttempt: String(provenance.run.attempt),
         candidateCommit: provenance.commit,
         env: e
       }),
       (error) => error.message === `provenance run ${provenance.run.id} does not match the candidate run ${wrongRun}`
     )
     assert.equal(existsSync(join(outDir1, 'upload')), false)
+
+    const outDirWrongAttempt = join(root, 'promotion-wrong-attempt')
+    const wrongAttempt = provenance.run.attempt + 1
+    const attemptMismatch = `provenance attempt ${provenance.run.attempt} does not match the candidate attempt ${wrongAttempt}`
+    await assert.rejects(
+      prepareRelease({
+        provenancePath,
+        evidencePath,
+        downloadsDir,
+        outDir: outDirWrongAttempt,
+        candidateRun: String(provenance.run.id),
+        candidateAttempt: String(wrongAttempt),
+        candidateCommit: provenance.commit,
+        env: e
+      }),
+      (error) => error.message === attemptMismatch
+    )
+    assert.equal(existsSync(join(outDirWrongAttempt, 'upload')), false)
 
     const outDir2 = join(root, 'promotion-wrong-commit')
     const wrongCommit = 'b'.repeat(40)
@@ -746,6 +859,7 @@ test('prepare-release refuses unbound provenance or refused evidence and moves n
         downloadsDir,
         outDir: outDir2,
         candidateRun: String(provenance.run.id),
+        candidateAttempt: String(provenance.run.attempt),
         candidateCommit: wrongCommit,
         env: e
       }),
@@ -768,6 +882,7 @@ test('prepare-release refuses unbound provenance or refused evidence and moves n
         downloadsDir,
         outDir: outDir3,
         candidateRun: String(provenance.run.id),
+        candidateAttempt: String(provenance.run.attempt),
         candidateCommit: provenance.commit,
         env: e
       }),
@@ -788,6 +903,7 @@ test('prepare-release refuses unbound provenance or refused evidence and moves n
         downloadsDir,
         outDir: outDir4,
         candidateRun: String(provenance.run.id),
+        candidateAttempt: String(provenance.run.attempt),
         candidateCommit: provenance.commit,
         env: e
       }),
@@ -815,6 +931,7 @@ test('release notes state version, commit, candidate run, promotion run, not-Lat
     assert.match(notes, new RegExp(provenance.version.replace(/\./g, '\\.')))
     assert.ok(notes.includes(provenance.commit))
     assert.ok(notes.includes(String(provenance.run.id)))
+    assert.ok(notes.includes(`attempt ${provenance.run.attempt}`))
     assert.ok(notes.includes(provenance.run.url))
     assert.ok(notes.includes(promotionRunUrl))
     // "not Latest" wording: the owner channel and hand-install framing, never auto-update.
@@ -908,6 +1025,7 @@ test('prepare-release renders the residuals into notes.md and refuses empty, ove
         downloadsDir,
         outDir: join(root, name),
         candidateRun: String(provenance.run.id),
+        candidateAttempt: String(provenance.run.attempt),
         candidateCommit: provenance.commit,
         residuals,
         env: e
@@ -1012,6 +1130,12 @@ test('the CLI stages, assembles, verifies and prepares a release end to end', as
     const verifyResult = run(['verify', join('provenance', 'provenance.json'), join('staged', 'mac', 'assets'), 'mac'])
     assert.equal(verifyResult.status, 0, `${verifyResult.stdout}\n${verifyResult.stderr}`)
 
+    const legacyPath = join(root, 'legacy-provenance.json')
+    writeFileSync(legacyPath, JSON.stringify({ ...provenance, schema: 1 }))
+    const legacyVerify = run(['verify', 'legacy-provenance.json', join('staged', 'mac', 'assets'), 'mac'])
+    assert.equal(legacyVerify.status, 1)
+    assert.match(legacyVerify.stderr, /schema 1 is not supported/)
+
     const macAsset = provenance.builds.find((b) => b.variant === 'mac').assets[0]
     const assetPath = join(root, 'staged', 'mac', 'assets', macAsset.name)
     const original = readFileSync(assetPath)
@@ -1040,6 +1164,8 @@ test('the CLI stages, assembles, verifies and prepares a release end to end', as
       'promotion',
       '--candidate-run',
       String(provenance.run.id),
+      '--candidate-attempt',
+      String(provenance.run.attempt),
       '--candidate-commit',
       provenance.commit
     ])

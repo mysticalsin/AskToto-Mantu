@@ -30,6 +30,7 @@ import {
   createHostedTlsReport,
   fixtureToolArguments,
   hostedTlsReportProblems,
+  parseHostedTlsArgs,
   runFixtureTool,
   verifyHostedApp
 } from './hosted-candidate-tls.mjs'
@@ -43,15 +44,16 @@ const identity = {
   platform: 'darwin'
 }
 const provenance = () => ({
-  schema: 1,
+  schema: 2,
   repository: 'mysticalsin/AskToto-Mantu',
-  run: { id: 42 },
+  run: { id: 42, attempt: 1 },
   commit: identity.producer_commit,
   version: identity.version,
   builds: [
     {
       variant: 'mac-qa-identity',
       artifact: 'candidate-mac-qa-identity',
+      platform: 'mac',
       electron: '43.6.0',
       assets: [{ name: 'Metis-QA-1.9.7.zip', size: 12, sha256: identity.installer_sha256 }]
     }
@@ -59,11 +61,32 @@ const provenance = () => ({
 })
 const context = {
   candidateRun: 42,
+  candidateAttempt: 1,
   producerCommit: identity.producer_commit,
   harnessCommit: identity.harness_commit,
   sha256: identity.installer_sha256,
   installer: 'assets/Metis-QA-1.9.7.zip'
 }
+const hostedTlsArgs = [
+  '--app',
+  'candidate-install/Metis QA.app',
+  '--installer',
+  context.installer,
+  '--sha256',
+  context.sha256,
+  '--provenance',
+  'provenance/provenance.json',
+  '--candidate-run',
+  String(context.candidateRun),
+  '--candidate-attempt',
+  String(context.candidateAttempt),
+  '--producer-commit',
+  context.producerCommit,
+  '--harness-commit',
+  context.harnessCommit,
+  '--out',
+  'candidate-scenario/hosted-startup-tls.json'
+]
 const ready = Buffer.from('{"event":"app.renderer.ready"}\n')
 const crash = Buffer.from('{"event":"app.crash"}\n')
 const roots: string[] = []
@@ -78,10 +101,20 @@ afterEach(() => {
 })
 
 describe('hosted TLS immutable support evidence', () => {
+  it('requires the API-derived candidate attempt on the direct CLI and passes it as a number', () => {
+    expect(parseHostedTlsArgs(hostedTlsArgs)).toMatchObject({ candidateRun: 42, candidateAttempt: 1 })
+    const withoutAttempt = hostedTlsArgs.filter((arg) => arg !== '--candidate-attempt' && arg !== '1')
+    expect(() => parseHostedTlsArgs(withoutAttempt)).toThrow()
+    const malformedAttempt = [...hostedTlsArgs]
+    malformedAttempt[malformedAttempt.indexOf('--candidate-attempt') + 1] = '1e0'
+    expect(() => parseHostedTlsArgs(malformedAttempt)).toThrow()
+  })
+
   it('binds only the one QA ZIP to independently provided run and producer commit', () => {
     expect(bindHostedTlsCandidate(provenance(), context)).toEqual(identity)
     for (const changed of [
       { ...context, candidateRun: 43 },
+      { ...context, candidateAttempt: 2 },
       { ...context, producerCommit: 'd'.repeat(40) },
       { ...context, sha256: 'e'.repeat(64) },
       { ...context, installer: 'assets/Metis-1.9.7.dmg' }
