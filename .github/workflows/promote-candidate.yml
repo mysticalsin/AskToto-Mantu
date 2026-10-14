@@ -83,13 +83,20 @@ jobs:
             echo "::error::candidate_run_id must be a workflow run ID."; exit 1
           fi
           run=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID")
-          jq -e '.path == ".github/workflows/qa-candidate.yml" and .event == "workflow_dispatch" and (.head_branch == "main" or .head_branch == "release/1.9.x") and .status == "completed" and .conclusion == "success"' <<<"$run" > /dev/null \
+          jq -e '
+            .path == ".github/workflows/qa-candidate.yml" and
+            .event == "workflow_dispatch" and
+            (.head_branch == "main" or .head_branch == "release/1.9.x") and
+            .status == "completed" and .conclusion == "success" and
+            (.run_attempt | type == "number") and (.run_attempt > 0)
+          ' <<<"$run" > /dev/null \
             || { echo "::error::Run $RUN_ID is not a completed, successful qa-candidate dispatch on main or release/1.9.x."; exit 1; }
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?filter=latest&per_page=100" \
             | jq -e '.total_count > 0 and .total_count == (.jobs | length) and all(.jobs[]; .conclusion == "success")' > /dev/null \
             || { echo "::error::Every job of run $RUN_ID must have succeeded; a skipped gate is not a pass."; exit 1; }
           echo "commit=$(jq -r .head_sha <<<"$run")" >> "$GITHUB_OUTPUT"
           echo "branch=$(jq -r .head_branch <<<"$run")" >> "$GITHUB_OUTPUT"
+          echo "attempt=$(jq -r .run_attempt <<<"$run")" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: candidate-provenance
@@ -126,6 +133,7 @@ jobs:
           EVIDENCE: ${{ inputs.evidence }}
           RESIDUALS: ${{ inputs.residuals }}
           CANDIDATE_RUN: ${{ inputs.candidate_run_id }}
+          CANDIDATE_ATTEMPT: ${{ steps.candidate.outputs.attempt }}
           CANDIDATE_COMMIT: ${{ steps.candidate.outputs.commit }}
           CANDIDATE_BRANCH: ${{ steps.candidate.outputs.branch }}
         run: |
@@ -136,7 +144,8 @@ jobs:
             residuals_flag=(--residuals-file "$RUNNER_TEMP/residuals.md")
           fi
           node scripts/qa/provenance.mjs prepare-release provenance/provenance.json "$RUNNER_TEMP/evidence.jsonl" downloads "$RUNNER_TEMP/promotion" \
-            --candidate-run "$CANDIDATE_RUN" --candidate-commit "$CANDIDATE_COMMIT" --candidate-branch "$CANDIDATE_BRANCH" \
+            --candidate-run "$CANDIDATE_RUN" --candidate-attempt "$CANDIDATE_ATTEMPT" \
+            --candidate-commit "$CANDIDATE_COMMIT" --candidate-branch "$CANDIDATE_BRANCH" \
             "${residuals_flag[@]}"
           echo "version=$(jq -r .version provenance/provenance.json)" >> "$GITHUB_OUTPUT"
       - name: Confirm the candidate version
