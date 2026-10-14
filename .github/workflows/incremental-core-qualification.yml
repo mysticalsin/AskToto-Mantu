@@ -8,6 +8,7 @@ on:
       - package.json
       - package-lock.json
       - vitest.config.ts
+      - vitest.incremental-worker.config.ts
       - scripts/qa/run-incremental-core-validation.mjs
       - src/main/features/meetings/incremental-meeting-*.ts
       - src/main/features/meetings/incremental-record-*.ts
@@ -15,7 +16,7 @@ on:
       - src/main/infra/storage/gateway*
       - src/main/infra/storage/atomic-saved-write*
       - src/main/infra/process/meeting-speech-*
-      - src/main/infra/process/incremental-meeting-speech-worker.integration.test.ts
+      - src/main/infra/process/incremental-meeting-speech-worker.integration.electron-case.ts
       - src/main/meeting-speech-worker.ts
       - src/shared/incremental-meeting.ts
       - src/shared/meeting-speech-contract.ts
