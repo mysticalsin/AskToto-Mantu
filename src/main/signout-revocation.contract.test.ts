@@ -23,7 +23,7 @@ async function writeSessionFile(userData: string, agedMs: number): Promise<void>
   writeFileSync(join(userData, 'auth-session.bin'), encryptSecret(JSON.stringify(session)), { mode: 0o600 })
 }
 
-describe('auth.ts — every session-clearing path runs main\'s revoke', () => {
+describe("auth.ts — every session-clearing path runs main's revoke", () => {
   let userData: string
 
   beforeEach(async () => {
@@ -176,7 +176,10 @@ describe('index.ts — one revoke covers the whole privileged surface', () => {
     expect(revokeBody()).toContain('invalidateCloudSttOwner()')
   })
 
-  it('MQA-154 — the revoke is registered on auth\'s session-cleared hook, not on one IPC handler', () => {
-    expect(indexSrc).toMatch(/setSessionClearedHandler\(revokePrivilegedSurface\)/)
+  it("MQA-154 — the revoke is registered on auth's session-cleared hook, not on one IPC handler", () => {
+    const compactIndexSrc = indexSrc.replace(/\s+/g, '')
+    expect(compactIndexSrc).toContain(
+      "setSessionClearedHandler(commandControl.wrapLifecycleListener('auth_session_cleared',revokePrivilegedSurface))"
+    )
   })
 })

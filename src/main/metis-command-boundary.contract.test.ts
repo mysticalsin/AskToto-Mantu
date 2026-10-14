@@ -37,6 +37,26 @@ describe('Cap2 command authority boundary', () => {
     expect(confirm).not.toContain('request')
   })
 
+  it('requires main-process auth, Listen entitlement and a visible focused command owner at confirmation', () => {
+    const setup = between(
+      main,
+      'const commandControl = new CommandConfirmation({',
+      '// Electron can dispatch an invoke'
+    )
+    expect(setup).toContain('isAuthenticated: requireAuth')
+    expect(setup).toContain("operatorGate('listen').allowed")
+    expect(setup).toContain('getOwner: () => win')
+    expect(setup).toContain('isOnboardingExclusive: () => onboardingExclusiveLive() || islandResting')
+    expect(main).toContain('commandControl.initialize(powerMonitor, initLogging, mainLog)')
+  })
+
+  it('revokes pending authority when the window loses focus, hides, auth clears, locks, or suspends', () => {
+    expect(main).toContain('commandControl.onWindowBlurred(win === self, parkRightEdgeReaderOnBlur)')
+    expect(main).toContain('commandControl.onWindowHidden(win === self)')
+    expect(main).toContain("commandControl.wrapLifecycleListener('auth_session_cleared', revokePrivilegedSurface)")
+    expect(main).toContain("commandControl.wrapLifecycleListener('app_quit', () => {")
+  })
+
   it('revokes command authority when the owning window or renderer is replaced', () => {
     expect(main).toContain('const self = win')
     const closed = between(main, "win.on('closed', () => {", 'win.webContents.setWindowOpenHandler(')
