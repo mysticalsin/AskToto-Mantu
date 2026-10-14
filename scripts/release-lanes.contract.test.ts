@@ -44,7 +44,16 @@ function parseNeeds(value: string, job: string): string[] {
 function parseWorkflow(source: string): WorkflowModel {
   const lines = source.replace(/\r\n/g, '\n').split('\n')
   const jobs: Record<string, Job> = {}
-  const allowedJobKeys = new Set(['name', 'if', 'needs', 'runs-on', 'timeout-minutes', 'strategy', 'concurrency', 'steps'])
+  const allowedJobKeys = new Set([
+    'name',
+    'if',
+    'needs',
+    'runs-on',
+    'timeout-minutes',
+    'strategy',
+    'concurrency',
+    'steps'
+  ])
   let manualDryRunInput = false
   let inJobs = false
   let inWorkflowDispatch = false
