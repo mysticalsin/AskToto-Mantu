@@ -7,11 +7,7 @@ import {
   ONBOARDING_PORTAL_CLOSE_GAIN,
   ONBOARDING_PORTAL_OPEN_GAIN
 } from './onboarding-portal'
-import {
-  ONBOARDING_MUSIC_ENVELOPE_FLOOR,
-  ONBOARDING_MUSIC_GAIN,
-  onboardingMusicLoopEnvelope
-} from './onboarding-music'
+import { ONBOARDING_MUSIC_ENVELOPE_FLOOR, ONBOARDING_MUSIC_GAIN, onboardingMusicLoopEnvelope } from './onboarding-music'
 import {
   APPEAR_OPACITY_FLOOR,
   appearOpacity,
@@ -21,6 +17,7 @@ import {
 } from './onboarding-starfield-spec'
 
 const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
+const welcome = readFileSync(join(__dirname, '../components/OnboardingWelcomeScene.tsx'), 'utf8')
 const demo = readFileSync(join(__dirname, '../components/OnboardingDemoScene.tsx'), 'utf8')
 const engine = readFileSync(join(__dirname, './onboarding-starfield-engine.ts'), 'utf8')
 const css = readAppCss()
@@ -74,7 +71,7 @@ describe('Apple-grade quality bar — PR 66 re-pass', () => {
   })
 
   it('Continue / Next / Set me up sit outside scene-enter on first paint of that act', () => {
-    const hero = actSlice(experience, 'function HeroWelcome', "export type SetupRowState")
+    const hero = actSlice(welcome, 'export function HeroWelcome', 'export function ')
     const nextAt = hero.indexOf('onboard-cta')
     const heroCta = hero.slice(nextAt, hero.indexOf('</button>', nextAt))
     expect(heroCta).toMatch(/\bNext\b/)
@@ -89,7 +86,9 @@ describe('Apple-grade quality bar — PR 66 re-pass', () => {
     expect(problem).toMatch(/scene-enter/)
     expect(problem.search(/>\s*Continue\s*</)).toBeGreaterThan(problem.lastIndexOf('scene-enter'))
 
-    const nextBlock = demo.slice(demo.indexOf('>Next<') > 0 ? demo.indexOf('>Next<') - 400 : demo.search(/>\s*Next\s*</) - 400)
+    const nextBlock = demo.slice(
+      demo.indexOf('>Next<') > 0 ? demo.indexOf('>Next<') - 400 : demo.search(/>\s*Next\s*</) - 400
+    )
     expect(demo).toMatch(/scene-enter/)
     expect(demo.search(/>\s*Next\s*</)).toBeGreaterThan(demo.lastIndexOf('scene-enter', demo.search(/>\s*Next\s*</)))
     expect(demo).toMatch(/>\s*Set me up\s*</)
@@ -98,7 +97,9 @@ describe('Apple-grade quality bar — PR 66 re-pass', () => {
   })
 
   it('portal video keep-alive on hero|problem|reveal; starfield purple/black after Next', () => {
-    expect(experience).toMatch(/\(scene === 'hero' \|\| scene === 'problem' \|\| scene === 'reveal'\) && \(\s*<OnboardingHeroVideo/)
+    expect(experience).toMatch(
+      /\(scene === 'hero' \|\| scene === 'problem' \|\| scene === 'reveal'\) && \(\s*<OnboardingHeroVideo/
+    )
     expect(engine).toMatch(/canvas\.style\.opacity = '0'/)
     expect(engine).toMatch(/setClearColor\(0x05010a/)
     expect(css).toMatch(/\.onboard-starfield canvas \{[\s\S]*?opacity:\s*0/)

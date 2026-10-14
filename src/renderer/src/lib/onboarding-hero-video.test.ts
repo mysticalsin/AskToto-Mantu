@@ -12,6 +12,7 @@ import {
 } from './onboarding-hero-video'
 
 const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
+const welcome = readFileSync(join(__dirname, '../components/OnboardingWelcomeScene.tsx'), 'utf8')
 const css = readAppCss()
 const html = readFileSync(join(__dirname, '../../index.html'), 'utf8')
 
@@ -21,43 +22,45 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(ONBOARDING_HERO_VIDEO_SRC).toMatch(/onboarding-hero-lady-planet/)
     expect(ONBOARDING_HERO_POSTER_SRC).toMatch(/onboarding-hero-poster/)
     expect(ONBOARDING_HERO_VIDEO_REMOTE_SRC).not.toMatch(/hf_20260714_113715_c7e0daa0/)
-    expect(experience).toMatch(/ONBOARDING_HERO_VIDEO_SRC/)
-    expect(experience).toMatch(/muted/)
-    expect(experience).toMatch(/loop/)
-    expect(experience).toMatch(/autoPlay/)
-    expect(experience).toMatch(/preload="auto"/)
+    expect(welcome).toMatch(/ONBOARDING_HERO_VIDEO_SRC/)
+    expect(welcome).toMatch(/muted/)
+    expect(welcome).toMatch(/loop/)
+    expect(welcome).toMatch(/autoPlay/)
+    expect(welcome).toMatch(/preload="auto"/)
     expect(experience).toMatch(/OnboardingHeroVideo/)
-    expect(experience).toMatch(/onboard-hero-poster/)
+    expect(welcome).toMatch(/onboard-hero-poster/)
     expect(css).toMatch(/\.onboard-hero-video\s*\{/)
     expect(css).toMatch(/position:\s*absolute/)
     expect(css).toMatch(/object-fit:\s*cover/)
     expect(css).toMatch(/object-position:\s*center/)
     expect(css).toMatch(/onboard-hero-kenburns/)
     expect(css).toMatch(/\.hero-welcome/)
-    expect(experience).toMatch(/hero-welcome/)
+    expect(welcome).toMatch(/hero-welcome/)
     expect(css).toMatch(/#3a0b6b/)
     expect(css).toMatch(/#7f00da/)
   })
 
   it('keeps the hero video mounted through problem/reveal (FITO-185-P keep-alive)', () => {
     // Unmounting on Next killed atmosphere — lady bed stays through problem|reveal.
-    expect(experience).toMatch(/\(scene === 'hero' \|\| scene === 'problem' \|\| scene === 'reveal'\) && \(\s*<OnboardingHeroVideo/)
+    expect(experience).toMatch(
+      /\(scene === 'hero' \|\| scene === 'problem' \|\| scene === 'reveal'\) && \(\s*<OnboardingHeroVideo/
+    )
     expect(experience).toMatch(/FITO-185-P: keep lady bed through problem\/reveal/)
-    expect(experience).toMatch(/v\?\.pause\(\)/)
+    expect(welcome).toMatch(/current\?\.pause\(\)/)
     const videoRule = css.slice(css.indexOf('.onboard-hero-video video'))
     const videoBlock = videoRule.slice(0, videoRule.indexOf('}', 8) + 1)
     expect(videoBlock).not.toMatch(/filter:/)
   })
 
   it('Next and the Metis Maintainers byline use liquid glass; logo stays Métis; no Skip', () => {
-    expect(experience).toMatch(/onboard-cta no-drag focus-ring/)
-    expect(experience).toMatch(/>\s*Next\s*</)
-    expect(experience).not.toMatch(/Skip the tour/)
-    expect(experience).toMatch(/onboard-glass onboard-glass-chip/)
-    expect(experience).toMatch(/Metis Maintainers/)
-    expect(experience).toMatch(/<MetisMark size=\{96\}/)
-    expect(experience).toMatch(/<span aria-hidden="true">\{WORDMARK\}<\/span>/)
-    expect(experience).not.toMatch(/useScrambleReveal/)
+    expect(welcome).toMatch(/onboard-cta no-drag focus-ring/)
+    expect(welcome).toMatch(/>\s*Next\s*</)
+    expect(welcome).not.toMatch(/Skip the tour/)
+    expect(welcome).toMatch(/onboard-glass onboard-glass-chip/)
+    expect(welcome).toMatch(/Metis Maintainers/)
+    expect(welcome).toMatch(/<MetisMark size=\{96\}/)
+    expect(welcome).toMatch(/<span aria-hidden="true">\{WORDMARK\}<\/span>/)
+    expect(welcome).not.toMatch(/useScrambleReveal/)
     expect(css).toMatch(/\.onboard-glass\s*\{/)
     const glass = css.slice(css.indexOf('.onboard-glass {'), css.indexOf('.onboard-glass::before'))
     expect(glass).toMatch(/backdrop-filter:\s*blur\(12px\)/)
@@ -109,8 +112,13 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     const observed: string[] = []
     function tracked(name: string): HTMLMediaElement {
       return {
-        play() { observed.push(`${name}:play`); return Promise.resolve() },
-        set currentTime(value: number) { observed.push(`${name}:seek:${value}`) }
+        play() {
+          observed.push(`${name}:play`)
+          return Promise.resolve()
+        },
+        set currentTime(value: number) {
+          observed.push(`${name}:seek:${value}`)
+        }
       } as unknown as HTMLMediaElement
     }
     playOnboardingMedia(tracked('video') as HTMLVideoElement, tracked('audio') as HTMLAudioElement, { restart: true })
@@ -130,7 +138,9 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(experience).toMatch(/onboard-mute/)
     expect(experience).not.toMatch(/prefersReducedMotion\(\)[\s\S]{0,80}onboard-mute/)
     const demo = readFileSync(join(__dirname, '../components/OnboardingDemoScene.tsx'), 'utf8')
-    expect(demo).toMatch(/onClick=\{\(\) => \{\s*onPlayVideo\?\.\(\)\s*\n\s*if \(demoNextLeavesTour\(beat\)\) onContinue\(\)/)
+    expect(demo).toMatch(
+      /onClick=\{\(\) => \{\s*onPlayVideo\?\.\(\)\s*\n\s*if \(demoNextLeavesTour\(beat\)\) onContinue\(\)/
+    )
     expect(demo).toMatch(/demoPlaybackAfterNext/)
     expect(demo).toMatch(/setLocalMs\(next\.localMs\)/)
     expect(demo).not.toMatch(/setTimeout\(/)
@@ -149,16 +159,15 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     const appSrc = readFileSync(join(__dirname, '../App.tsx'), 'utf8')
     const heroSrc = readFileSync(join(__dirname, './onboarding-hero-video.ts'), 'utf8')
     expect(appSrc).not.toMatch(/preloadOnboardingHeroVideo/)
-    expect(experience).toMatch(/preload="auto"/)
-    expect(experience).toMatch(/preloadOnboardingHeroVideo\(\)/)
-    expect(experience).toMatch(/el\.load\(\)/)
-    expect(experience).toMatch(/ONBOARDING_HERO_POSTER_SRC/)
-    expect(experience).toMatch(/onboard-hero-poster/)
+    expect(welcome).toMatch(/preload="auto"/)
+    expect(welcome).toMatch(/preloadOnboardingHeroVideo\(\)/)
+    expect(welcome).toMatch(/element\.load\(\)/)
+    expect(welcome).toMatch(/ONBOARDING_HERO_POSTER_SRC/)
+    expect(welcome).toMatch(/onboard-hero-poster/)
     expect(heroSrc).toMatch(/document\.head\.appendChild/)
     expect(heroSrc).toMatch(/onboarding-hero-lady-planet\.mp4/)
     expect(css).toMatch(/position:\s*absolute/)
   })
-
 })
 
 describe('FITO-185-L poster paint contracts', () => {
@@ -166,19 +175,19 @@ describe('FITO-185-L poster paint contracts', () => {
     const heroSrc = readFileSync(join(__dirname, './onboarding-hero-video.ts'), 'utf8')
     expect(heroSrc).toMatch(/import localPosterUrl from '\.\.\/assets\/onboarding-hero-poster\.jpg'/)
     expect(heroSrc).toMatch(/export const ONBOARDING_HERO_POSTER_SRC = localPosterUrl/)
-    expect(experience).toMatch(/<img className="onboard-hero-poster" src=\{ONBOARDING_HERO_POSTER_SRC\}/)
+    expect(welcome).toMatch(/<img\s+className="onboard-hero-poster"\s+src=\{ONBOARDING_HERO_POSTER_SRC\}/)
   })
 })
 
 describe('FITO-185-V hero video ready promotion', () => {
   it('marks ready on canplay/timeupdate/playing and 800ms decode fallback', () => {
-    expect(experience).toMatch(/onCanPlay=\{markReady\}/)
-    expect(experience).toMatch(/onTimeUpdate=\{markReady\}/)
-    expect(experience).toMatch(/onPlaying=\{markReady\}/)
-    expect(experience).toMatch(/onLoadedData=\{markReady\}/)
-    expect(experience).toMatch(/readyState >= 2/)
-    expect(experience).toMatch(/currentTime > 0/)
-    expect(experience).toMatch(/setTimeout\([\s\S]*?800\)/)
+    expect(welcome).toMatch(/onCanPlay=\{markReady\}/)
+    expect(welcome).toMatch(/onTimeUpdate=\{markReady\}/)
+    expect(welcome).toMatch(/onPlaying=\{markReady\}/)
+    expect(welcome).toMatch(/onLoadedData=\{markReady\}/)
+    expect(welcome).toMatch(/current\.readyState >= 2/)
+    expect(welcome).toMatch(/current\.currentTime > 0/)
+    expect(welcome).toMatch(/setTimeout\([\s\S]*?800\)/)
     expect(experience).toMatch(/playOnboardingVideo\(heroVideoRef\.current\)/)
     // Queue the scene first so media startup cannot hold up the visible transition.
     expect(experience).toMatch(
@@ -203,7 +212,7 @@ describe('FITO-185-W packaged hero mp4 plays outside asar', () => {
   })
 
   it('Experience uses resolveOnboardingHeroVideoSrc; builder unpacks **/*.mp4; CTA stays hittable', () => {
-    expect(experience).toMatch(/resolveOnboardingHeroVideoSrc\(ONBOARDING_HERO_VIDEO_SRC\)/)
+    expect(welcome).toMatch(/resolveOnboardingHeroVideoSrc\(ONBOARDING_HERO_VIDEO_SRC\)/)
     const builder = readFileSync(join(__dirname, '../../../../electron-builder.yml'), 'utf8')
     const unpack = builder.slice(builder.indexOf('asarUnpack:'), builder.indexOf('extraResources:'))
     expect(unpack).toMatch(/\*\*\/\*\.mp4/)
@@ -219,19 +228,29 @@ describe('FITO-185-W packaged hero mp4 plays outside asar', () => {
 // R11: optional media may fail, but it cannot swallow a navigation click.
 describe('R11 optional onboarding media failures', () => {
   it('does not throw on a synchronous play failure', () => {
-    const media = { play() { throw new Error('fixture missing media') } } as unknown as HTMLVideoElement
+    const media = {
+      play() {
+        throw new Error('fixture missing media')
+      }
+    } as unknown as HTMLVideoElement
     expect(() => playOnboardingVideo(media, { restart: true })).not.toThrow()
   })
   it('handles rejection before a synchronous seek failure', async () => {
     const media = {
       play: () => Promise.reject(new Error('fixture blocked playback')),
-      set currentTime(_value: number) { throw new Error('fixture not seekable') }
+      set currentTime(_value: number) {
+        throw new Error('fixture not seekable')
+      }
     } as unknown as HTMLVideoElement
     expect(() => playOnboardingVideo(media, { restart: true })).not.toThrow()
     await new Promise<void>((resolve) => setTimeout(resolve, 0))
   })
   it('audio failure cannot prevent an independent video play attempt', () => {
-    const audio = { play() { throw new Error('fixture audio failure') } } as unknown as HTMLAudioElement
+    const audio = {
+      play() {
+        throw new Error('fixture audio failure')
+      }
+    } as unknown as HTMLAudioElement
     const video = { play: vi.fn(() => Promise.resolve()) } as unknown as HTMLVideoElement
     expect(() => playOnboardingMedia(video, audio)).not.toThrow()
     expect(video.play).toHaveBeenCalledOnce()
@@ -256,13 +275,20 @@ describe('R11 repair: two-phase optional media startup', () => {
           }
         } as unknown as HTMLMediaElement
       }
-      expect(() => playOnboardingMedia(media('video') as HTMLVideoElement, media('audio') as HTMLAudioElement, { restart: true })).not.toThrow()
+      expect(() =>
+        playOnboardingMedia(media('video') as HTMLVideoElement, media('audio') as HTMLAudioElement, { restart: true })
+      ).not.toThrow()
       expect(events).toEqual(['audio-play', 'video-play', 'audio-seek', 'video-seek'])
     })
   }
   it('does not seek when restart is false', () => {
     const seek = vi.fn()
-    const video = { play: vi.fn(() => Promise.resolve()), set currentTime(v: number) { seek(v) } } as unknown as HTMLVideoElement
+    const video = {
+      play: vi.fn(() => Promise.resolve()),
+      set currentTime(v: number) {
+        seek(v)
+      }
+    } as unknown as HTMLVideoElement
     playOnboardingMedia(video, null)
     expect(video.play).toHaveBeenCalledOnce()
     expect(seek).not.toHaveBeenCalled()
