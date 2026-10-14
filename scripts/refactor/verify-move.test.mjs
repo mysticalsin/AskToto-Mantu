@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -14,6 +14,7 @@ import {
 } from './verify-move.mjs'
 import { refactorClassification } from './check-pr-classification.mjs'
 import { checkPrKind } from './check-pr-kind.mjs'
+import * as guardTestInventory from './guard-test-inventory.mjs'
 import { compareInventories, countGuardCalls, countTestCases, parseRemovals } from './guard-test-inventory.mjs'
 
 test('normalizes only module specifiers that are import paths', () => {
@@ -327,6 +328,97 @@ test('inventory fails a drop unless each removal is listed with its replacement'
   assert.equal(compareInventories({ base, head, body: listed }).ok, true)
   assert.equal(compareInventories({ base, head: base, body: '' }).ok, true)
   assert.equal(compareInventories({ base, head: { tests: 12, guards: 6 }, body: '' }).ok, true)
+})
+
+function gitFixture(root, args) {
+  return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
+}
+
+function writeFixtureFile(root, path, contents) {
+  const filePath = join(root, path)
+  mkdirSync(filePath.slice(0, filePath.lastIndexOf('/')), { recursive: true })
+  writeFileSync(filePath, contents)
+}
+
+function commitFixture(root, message) {
+  gitFixture(root, ['add', '-A'])
+  gitFixture(root, ['commit', '-m', message])
+  return gitFixture(root, ['rev-parse', 'HEAD'])
+}
+
+function inventoryGitFixture(t) {
+  const root = mkdtempSync(join(tmpdir(), 'guard-test-inventory-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  gitFixture(root, ['init', '-b', 'main'])
+  gitFixture(root, ['config', 'user.name', 'CI fixture'])
+  gitFixture(root, ['config', 'user.email', 'ci-fixture@example.invalid'])
+  writeFixtureFile(root, 'src/guard.ts', 'assertMainWindow(event)\n')
+  writeFixtureFile(root, 'src/baseline.test.ts', "test('baseline', () => {})\n")
+  const common = commitFixture(root, 'common baseline')
+  return { root, common }
+}
+
+test('git inventory compares the PR with its merge base, ignoring tests added only to the advanced base', (t) => {
+  const { root, common } = inventoryGitFixture(t)
+  gitFixture(root, ['switch', '-c', 'pull-request'])
+  writeFixtureFile(root, 'src/pr.test.ts', "test('PR addition', () => {})\n")
+  const head = commitFixture(root, 'add PR test')
+  gitFixture(root, ['switch', 'main'])
+  writeFixtureFile(root, 'src/upstream.test.ts', "test('upstream addition', () => {})\n")
+  const base = commitFixture(root, 'add upstream test')
+
+  const result = guardTestInventory.compareGitInventories({ base, head, body: '', cwd: root })
+
+  assert.equal(gitFixture(root, ['merge-base', base, head]), common)
+  assert.equal(result.ok, true)
+  assert.equal(result.base.tests, 1)
+  assert.equal(result.head.tests, 2)
+})
+
+test('git inventory still requires declarations for PR test and guard removals with an advanced base', (t) => {
+  const { root } = inventoryGitFixture(t)
+  gitFixture(root, ['switch', '-c', 'pull-request'])
+  writeFixtureFile(root, 'src/guard.ts', '')
+  writeFixtureFile(root, 'src/baseline.test.ts', '')
+  const head = commitFixture(root, 'remove test and guard')
+  gitFixture(root, ['switch', 'main'])
+  writeFixtureFile(root, 'src/upstream.test.ts', "test('upstream addition', () => {})\n")
+  const base = commitFixture(root, 'advance base')
+
+  const undeclared = guardTestInventory.compareGitInventories({ base, head, body: '', cwd: root })
+  const declared = guardTestInventory.compareGitInventories({
+    base,
+    head,
+    body: '## Removed guards and tests\n- baseline.test.ts case => replacement test\n- old guard => replacement guard\n',
+    cwd: root
+  })
+
+  assert.equal(undeclared.ok, false)
+  assert.equal(undeclared.test_drop, 1)
+  assert.equal(undeclared.guard_drop, 1)
+  assert.equal(declared.ok, true)
+})
+
+test('git inventory passes unchanged inventories against the same base', (t) => {
+  const { root, common } = inventoryGitFixture(t)
+
+  const result = guardTestInventory.compareGitInventories({ base: common, head: common, body: '', cwd: root })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.test_drop, 0)
+  assert.equal(result.guard_drop, 0)
+})
+
+test('git inventory fails closed for disjoint or unreadable revisions', (t) => {
+  const { root, common } = inventoryGitFixture(t)
+  gitFixture(root, ['switch', '--orphan', 'disjoint'])
+  gitFixture(root, ['rm', '-rf', '.'])
+  writeFixtureFile(root, 'src/other.test.ts', "test('unrelated root', () => {})\n")
+  const disjointHead = commitFixture(root, 'unrelated history')
+
+  assert.throws(() => guardTestInventory.compareGitInventories({ base: common, head: disjointHead, body: '', cwd: root }))
+  assert.throws(() => guardTestInventory.compareGitInventories({ base: 'missing-base-ref', head: common, body: '', cwd: root }))
+  assert.throws(() => guardTestInventory.compareGitInventories({ base: common, head: 'missing-head-ref', body: '', cwd: root }))
 })
 
 test('inventory ignores removals commented out in the template', () => {
