@@ -563,7 +563,7 @@ jobs:
               (.run.id | type == "number" and . >= 1 and . <= 9007199254740991 and floor == . and tostring == $run) and
               (.run.attempt | type == "number" and . >= 1 and . <= 9007199254740991 and floor == . and tostring == $attempt)
             )
-          ' provenance/provenance.json > /dev/null; then
+          ' provenance/provenance.json > /dev/null 2>&1; then
             echo "::error::QA provenance does not match this workflow identity"
             exit 1
           fi
@@ -692,7 +692,7 @@ jobs:
               (.run.id | type == "number" and . >= 1 and . <= 9007199254740991 and floor == . and tostring == $run) and
               (.run.attempt | type == "number" and . >= 1 and . <= 9007199254740991 and floor == . and tostring == $attempt)
             )
-          ' provenance/provenance.json > /dev/null; then
+          ' provenance/provenance.json > /dev/null 2>&1; then
             echo "::error::QA provenance does not match this workflow identity"
             exit 1
           fi
@@ -871,7 +871,7 @@ jobs:
               (.run.id | type == "number" and . >= 1 and . <= 9007199254740991 and floor == . and tostring == $run) and
               (.run.attempt | type == "number" and . >= 1 and . <= 9007199254740991 and floor == . and tostring == $attempt)
             )
-          ' provenance/provenance.json > /dev/null; then
+          ' provenance/provenance.json > /dev/null 2>&1; then
             echo "::error::QA provenance does not match this workflow identity"
             exit 1
           fi
