@@ -124,6 +124,22 @@ describe('speech policy scope high-water authority', () => {
     expect(authority.isCurrent(captured, first)).toBe(false)
   })
 
+  it('hard-invalidates verified proofs, advances pending captures, and preserves scoped high-water', () => {
+    const authority = new SpeechPolicyAuthority()
+    const currentIdentity = identity()
+    expect(authority.acceptManaged(currentIdentity, policy(), NOW, 'revision-1')).toBe('accepted')
+    const pending = authority.capture(currentIdentity)
+    expect(authority.get(currentIdentity, NOW)).not.toBeNull()
+
+    authority.invalidateAll()
+
+    expect(authority.isCurrent(pending, currentIdentity)).toBe(false)
+    expect(authority.get(currentIdentity, NOW)).toBeNull()
+    expect(authority.acceptManaged(currentIdentity, policy(NOW - 1), NOW + 1, 'revision-old')).toBe('lower-version')
+    expect(authority.get(currentIdentity, NOW + 1)).toBeNull()
+    expect(authority.acceptManaged(currentIdentity, policy(), NOW + 2, 'revision-1')).toBe('accepted')
+  })
+
   it('refuses new scopes when the bounded high-water table is full instead of evicting prior versions', () => {
     const authority = new SpeechPolicyAuthority()
     for (let index = 0; index < 32; index++) {
