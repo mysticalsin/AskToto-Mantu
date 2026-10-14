@@ -571,7 +571,7 @@ describe('cloud speech capture controller', () => {
       reason: 'normal',
       tracks: [{ stream, lastSequence: 1, closeConfirmed: true, tail: 'complete', reason: 'normal' }]
     })
-    queueMicrotask(() => {
+    setTimeout(() => {
       for (const listener of events)
         listener({
           type: 'segment',
@@ -589,7 +589,7 @@ describe('cloud speech capture controller', () => {
             endMs: 20
           }
         })
-    })
+    }, 0)
     await applyStarted.promise
     apply.resolve()
 
