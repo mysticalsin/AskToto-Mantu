@@ -245,6 +245,39 @@ export function ensureHighTierAsrModel(spec: AsrModelSpec = HIGH_TIER_ASR_MODEL)
   return inFlight
 }
 
+/** High-tier transfer admission; policy is read at explicit intent and immediately before networking. */
+export async function ensureHighTierAsrModelExplicit(options: {
+  authenticated: boolean
+  runtimeAvailable: () => Promise<boolean>
+  authorityReadable: () => boolean
+  onTransfer: () => void
+}): Promise<boolean> {
+  if (!options.authenticated || !(await options.runtimeAvailable()) || !options.authorityReadable()) return false
+  options.onTransfer()
+  return ensureHighTierAsrModel()
+}
+
+export function registerHighTierAsrModelFetch(options: {
+  ipcMain: Electron.IpcMain
+  channel: string
+  assertMainWindow: (event: Electron.IpcMainInvokeEvent) => void
+  authenticated: () => boolean
+  runtimeAvailable: () => Promise<boolean>
+  authorityReadable: () => boolean
+  onTransfer: () => void
+}): void {
+  options.ipcMain.handle(options.channel, async (event) => {
+    options.assertMainWindow(event)
+    const ok = await ensureHighTierAsrModelExplicit({
+      authenticated: options.authenticated(),
+      runtimeAvailable: options.runtimeAvailable,
+      authorityReadable: options.authorityReadable,
+      onTransfer: options.onTransfer
+    })
+    return { ok }
+  })
+}
+
 async function run(spec: AsrModelSpec): Promise<boolean> {
   if (await isHighTierAsrModelReady(spec)) {
     state = { status: 'ready', progress: 1 }

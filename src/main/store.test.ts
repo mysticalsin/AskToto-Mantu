@@ -132,8 +132,8 @@ describe('store', () => {
     }
   })
 
-  it('projects the fresh lean route, persists it on the first unrelated write, and preserves it after restart', () => {
-    configureFreshLeanSpeechDefaults('lean', verifiedLeanPackage())
+  it('projects the fresh lean route, persists it on the first unrelated write, and preserves it after restart', async () => {
+    await configureFreshLeanSpeechDefaults('lean', verifiedLeanPackage())
     const projected = getSettings()
     expect(projected.brokerSpeech).toEqual({ transport: 'broker-v1', engine: 'cloudflare-nova3' })
     expect(existsSync(join(userData, 'settings.json'))).toBe(false)
@@ -146,27 +146,48 @@ describe('store', () => {
     })
 
     resetSettingsCacheForTests()
-    configureFreshLeanSpeechDefaults('lean', verifiedLeanPackage())
+    await configureFreshLeanSpeechDefaults('lean', verifiedLeanPackage())
     expect(getSettings().brokerSpeech).toEqual(projected.brokerSpeech)
   })
 
-  it('does not derive the fresh lean route for a pre-existing or malformed managed profile', () => {
+  it('does not derive the fresh lean route for a pre-existing or malformed managed profile', async () => {
     writeFileSync(join(userData, 'settings.json'), JSON.stringify({ temperature: 0.42 }), 'utf8')
-    configureFreshLeanSpeechDefaults('lean', verifiedLeanPackage())
+    await configureFreshLeanSpeechDefaults('lean', verifiedLeanPackage())
     expect(getSettings().brokerSpeech).toEqual(DEFAULT_SETTINGS.brokerSpeech)
 
     rmSync(join(userData, 'settings.json'))
     writeFileSync(join(userData, 'secret-key.bin'), 'existing-profile-key', 'utf8')
     resetSettingsCacheForTests()
-    configureFreshLeanSpeechDefaults('lean', verifiedLeanPackage())
+    await configureFreshLeanSpeechDefaults('lean', verifiedLeanPackage())
     expect(getSettings().brokerSpeech).toEqual(DEFAULT_SETTINGS.brokerSpeech)
 
     rmSync(join(userData, 'secret-key.bin'))
     writeFileSync(join(userData, 'managed-config.json'), '{broken', 'utf8')
     resetSettingsCacheForTests()
-    configureFreshLeanSpeechDefaults('lean', verifiedLeanPackage())
+    await configureFreshLeanSpeechDefaults('lean', verifiedLeanPackage())
     expect(getSettings().brokerSpeech).toEqual(DEFAULT_SETTINGS.brokerSpeech)
     expect(getPublishedSettingsObservation()?.readable).toBe(false)
+
+    writeFileSync(join(userData, 'managed-config.json'), JSON.stringify({ locked: null, lockedKeys: [] }), 'utf8')
+    resetSettingsCacheForTests()
+    getSettings()
+    expect(getPublishedSettingsObservation()?.readable).toBe(false)
+  })
+
+  it('does not derive a fresh lean route when a recovered settings profile exists', async () => {
+    writeFileSync(join(userData, 'settings.json.recovered'), 'unreadable profile', 'utf8')
+    await configureFreshLeanSpeechDefaults('lean', verifiedLeanPackage())
+    expect(getSettings().brokerSpeech).toEqual(DEFAULT_SETTINGS.brokerSpeech)
+  })
+
+  it('preserves an explicit broker route on a fresh lean profile', async () => {
+    writeFileSync(
+      join(userData, 'settings.json'),
+      JSON.stringify({ brokerSpeech: { transport: 'broker-v1', engine: 'openai-realtime' } }),
+      'utf8'
+    )
+    await configureFreshLeanSpeechDefaults('lean', verifiedLeanPackage())
+    expect(getSettings().brokerSpeech).toEqual({ transport: 'broker-v1', engine: 'openai-realtime' })
   })
 
   it('advances the opaque speech selection identity on accepted selection changes, including a return', () => {

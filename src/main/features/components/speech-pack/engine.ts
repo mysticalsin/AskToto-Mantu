@@ -98,6 +98,8 @@ export interface SpeechPackEngineOptions {
   onActivationStep?: (step: ActivationStep) => void | Promise<void>
   /** Rechecked between streamed chunks to stop after a consent or local-policy change. */
   authorizeTransfer?: (componentId: SpeechPackComponentId) => boolean
+  /** Forced trust refresh at the reviewed activation boundary; status and chunk polls never call this. */
+  authorizeActivation?: (componentId: SpeechPackComponentId) => boolean | Promise<boolean>
   /** Distinguishes an in-process pause/resume from stale partial data left by a prior launch. */
   resumeScope?: string
 }
@@ -178,6 +180,14 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     if (options.authorizeTransfer?.(c.id) === false) {
       throw new SpeechPackError('policy', 'speech-pack action is no longer authorized')
     }
+  }
+
+  async function assertActivationAuthorized(c: SpeechPackComponent, signal: AbortSignal): Promise<void> {
+    assertAuthorized(c, signal)
+    if ((await options.authorizeActivation?.(c.id)) === false) {
+      throw new SpeechPackError('policy', 'speech-pack activation is no longer authorized')
+    }
+    assertAuthorized(c, signal)
   }
 
   const states = new Map<SpeechPackComponentId, SpeechPackState>(
@@ -654,7 +664,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     if (decoded.trim() === '') throw new SpeechPackError('tamper', 'self-test decoded no text')
     await activationStep('self-tested')
 
-    assertAuthorized(c, signal)
+    await assertActivationAuthorized(c, signal)
     const dest = finalDir(c)
     const aside = `${dest}.old-${Date.now()}`
     const previousMarker = await readMarkerSnapshot(c)
@@ -668,7 +678,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
         await rename(dest, aside)
         movedAside = true
         await activationStep('old-moved-aside')
-        assertAuthorized(c, signal)
+        await assertActivationAuthorized(c, signal)
       }
       await rename(staging, dest)
       promoted = true

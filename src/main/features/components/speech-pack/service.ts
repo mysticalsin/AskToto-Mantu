@@ -44,6 +44,8 @@ export interface SpeechPackServiceOptions {
   policyAllowsTransfer: () => boolean
   /** Stable opaque identity for the effective policy; changes invalidate a reviewed plan. */
   policyIdentity?: () => string
+  /** Force current managed/admin trust only at explicit admission and activation boundaries. */
+  refreshAuthority?: () => boolean | Promise<boolean>
   /** Live authoritative capture state; a throwing getter fails closed. */
   captureActive?: () => boolean
   /** Stable capture epoch identity, including a capture that starts and ends between status polls. */
@@ -152,6 +154,13 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       return null
     }
   }
+  const refreshAuthority = async (): Promise<boolean> => {
+    try {
+      return (await options.refreshAuthority?.()) !== false
+    } catch {
+      return false
+    }
+  }
   let observedSelectionIdentity = currentSelectionIdentity()
 
   const isCaptureActive = (): boolean => {
@@ -184,7 +193,16 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
             selectedId(options.selectedEngine()) === id &&
             currentSelectionIdentity() === authority.selectionIdentity
         )
-      }
+      },
+      authorizeActivation: async (id) =>
+        (await refreshAuthority()) &&
+        Boolean(
+          activeAuthority.has(id) &&
+            activity.has(id) &&
+            policyAllows() &&
+            !isCaptureActive() &&
+            selectedId(options.selectedEngine()) === id
+        )
     })
     unsubscribe = engine.subscribe(({ id, state, freshlyVerified }) => {
       const manifestIdentity = componentManifestIdentity(byId.get(id) as SpeechPackComponent)
@@ -365,6 +383,8 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'stale-manifest' })
     if (sourceHost(component) === null)
       return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'not-configured' })
+    if (!(await refreshAuthority()))
+      return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'policy-blocked' })
     if (closing) return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'busy' })
     if (!featureEnabled()) return SpeechPackPlanPreviewResultSchema.parse({ ok: false, reason: 'disabled' })
     const initiallySelectedEngine = options.selectedEngine()
@@ -473,6 +493,7 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     installPlans.delete(request.planId)
     if (!record || record.expiresAt <= Date.now())
       return SpeechPackActionResultSchema.parse({ ok: false, reason: 'plan-expired' })
+    if (!(await refreshAuthority())) return SpeechPackActionResultSchema.parse({ ok: false, reason: 'policy-blocked' })
     if (record.authorityRevision !== authorityRevision || request.action !== record.plan.action)
       return SpeechPackActionResultSchema.parse({ ok: false, reason: 'stale-plan' })
     if (closing || !featureEnabled()) return SpeechPackActionResultSchema.parse({ ok: false, reason: 'disabled' })
@@ -538,6 +559,16 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     if (pendingAdmissions.has(component.id) || activity.has(component.id)) {
       return SpeechPackActionResultSchema.parse({ ok: false, reason: 'busy' })
     }
+    if (!(await refreshAuthority())) return SpeechPackActionResultSchema.parse({ ok: false, reason: 'policy-blocked' })
+    if (
+      record.authorityRevision !== authorityRevision ||
+      selectedId(options.selectedEngine()) !== component.id ||
+      currentPolicyIdentity() !== record.policyIdentity ||
+      currentSelectionIdentity() !== record.selectionIdentity ||
+      currentCaptureIdentity() !== record.captureIdentity ||
+      isCaptureActive()
+    )
+      return SpeechPackActionResultSchema.parse({ ok: false, reason: 'stale-plan' })
     const instance = getEngine()
     const state = instance.getState(component.id)
     if (

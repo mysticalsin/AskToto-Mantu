@@ -448,6 +448,14 @@ describe('ACL verdict memo — one probe per burst, never across a swap (MQA-028
     expect(probes.count).toBe(1)
   }, 20_000)
 
+  it('forces a new descriptor-bound ACL probe at an explicit authority boundary', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(Date.now())
+    const first = readTrustedAdminManaged(file)
+    expect(readTrustedAdminManaged(file, { freshAuthority: true })).toBe(first)
+    expect(probes.count).toBe(2)
+  }, 20_000)
+
   it('re-probes after a delete-and-replace even with mtime and size forged to match', () => {
     // The attack the old content-metadata cache lost to: a standard user has create/delete on
     // %ProgramData%\Métis, and both mtime and size are theirs to choose on the file they drop in.

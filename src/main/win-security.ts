@@ -17,7 +17,7 @@
 // Both shell out to built-in Windows tools (powershell / icacls); everything is a no-op off win32.
 
 import { execFileSync } from 'node:child_process'
-import { closeSync, fstatSync, openSync, readFileSync, statSync, type Stats } from 'node:fs'
+import { closeSync, fstatSync, openSync, readFileSync, readSync, statSync, type Stats } from 'node:fs'
 import { constants as fsConstants, lstat, open, type FileHandle } from 'node:fs/promises'
 import { join } from 'node:path'
 // Via logger.ts, never `electron-log` directly — see the note on the same import in updater.ts.
@@ -270,8 +270,11 @@ export function trustedAdminManagedPath(): string | null {
  * isAdminManagedTrusted's platform gate). Returns null when absent, unreadable, untrusted, or the
  * path was swapped mid-check.
  */
-export function readTrustedAdminManaged(path: string = adminManagedConfigPath()): string | null {
-  if (process.platform !== 'win32') {
+export function readTrustedAdminManaged(
+  path: string = adminManagedConfigPath(),
+  options: { freshAuthority?: boolean } = {}
+): string | null {
+  if (!options.freshAuthority && process.platform !== 'win32') {
     try {
       return readFileSync(path, 'utf8')
     } catch {
@@ -289,7 +292,15 @@ export function readTrustedAdminManaged(path: string = adminManagedConfigPath())
     const st = fstatSync(fd)
     if (!st.isFile()) return null
 
-    const trusted = aclTrusted(path, st)
+    const trusted =
+      process.platform !== 'win32'
+        ? true
+        : options.freshAuthority
+          ? (() => {
+              const acl = readAcl(path)
+              return acl !== null && evaluateAclTrust(acl)
+            })()
+          : aclTrusted(path, st)
     if (!trusted) {
       warnUntrusted(path)
       return null
@@ -308,7 +319,34 @@ export function readTrustedAdminManaged(path: string = adminManagedConfigPath())
     }
     if (st2.dev !== st.dev || st2.ino !== st.ino) return null
 
-    return readFileSync(fd, 'utf8')
+    if (!options.freshAuthority) return readFileSync(fd, 'utf8')
+    const maxBytes = MAX_TRUSTED_ADMIN_MANAGED_BYTES
+    if (!Number.isSafeInteger(st.size) || st.size < 0 || st.size > maxBytes) return null
+    const buffer = Buffer.alloc(st.size + 1)
+    let total = 0
+    while (total < buffer.length) {
+      const bytesRead = readSync(fd, buffer, total, buffer.length - total, null)
+      if (bytesRead === 0) break
+      total += bytesRead
+    }
+    const after = fstatSync(fd)
+    let pathAfter: ReturnType<typeof statSync>
+    try {
+      pathAfter = statSync(path)
+    } catch {
+      return null
+    }
+    if (
+      total > maxBytes ||
+      total !== st.size ||
+      after.dev !== st.dev ||
+      after.ino !== st.ino ||
+      after.size !== st.size ||
+      pathAfter.dev !== st.dev ||
+      pathAfter.ino !== st.ino
+    )
+      return null
+    return buffer.subarray(0, total).toString('utf8')
   } catch {
     return null
   } finally {

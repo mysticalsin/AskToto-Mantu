@@ -34,7 +34,11 @@ import {
 import { mainLog } from './logger'
 import { extractParakeetArchiveWindows } from './parakeet-extract'
 import { asrManifestComplete } from './asr-manifest'
-import { asrMetadataStatusReady, parakeetMetadataStatusReady } from './asr-metadata-readiness'
+import {
+  asrMetadataStatusReady,
+  parakeetMetadataStatusReady,
+  whisperMetadataStatusReady
+} from './asr-metadata-readiness'
 import { getSettings } from './store'
 import {
   PARAKEET_TDT_V3_INT8,
@@ -378,16 +382,8 @@ export async function asrModelMetadataReadyForEngine(
   if (verifiedProfile === null) return false
   const profile = verifiedProfile === undefined ? await speechPackBuildProfile() : { profile: verifiedProfile }
   if (profile.profile === null) return false
-  if (profile.profile === 'lean') {
-    return (await resolveSelectedSpeechPack(engine)).readiness?.status === 'ready'
-  }
-  if (engine === 'parakeet') {
-    const dir = app.isPackaged ? parakeetBundledDir() : await resolveParakeetDirForProfile(profile)
-    return await parakeetFilesReadyForProfile(dir, profile)
-  }
-  const bundledRoot = join(bundledResourceRoot(), 'models')
-  const modelsRoot = app.isPackaged ? bundledRoot : await resolveWhisperModelsRootForProfile(profile)
-  return (await whisperFloorReadyForProfile(modelsRoot, profile)) && asrManifestComplete(bundledResourceRoot())
+  const options = { ...asrMetadataOptions(profile), selectedEngine: engine }
+  return engine === 'parakeet' ? parakeetMetadataStatusReady(options) : whisperMetadataStatusReady(options)
 }
 
 function asrMetadataOptions(
