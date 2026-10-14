@@ -79,6 +79,10 @@ Separate App Store submission from `native-app/`. Does not use the `Metis-Releas
 - Windows-only bug → `electron-builder.win.yml`, `src/main/win-security.ts`, win branches in `src/main/**`.
 - macOS(Electron)-only bug → `electron-builder.yml` mac section, `native/mac-helper/**`, darwin branches.
 - Cross-platform Electron bug → `src/main/**`, `src/renderer/**`, `src/shared/**`.
+- Saved meetings → `src/main/transcripts.ts` owns writes/encryption and draft lifecycle;
+  `src/main/features/meetings/transcript-format.ts` owns the pure display projection;
+  `src/main/features/meetings/meeting-document.ts` owns frontmatter and recap-section boundaries;
+  `src/main/recall.ts` owns typed History reads and edits.
 - Optional speech models → `src/main/features/components/index.ts` (public service API),
   `src/main/features/components/speech-pack/**` (pinned transfer, activation and readiness),
   `src/main/infra/process/speech-pack-host.ts` (owned utility process), and
