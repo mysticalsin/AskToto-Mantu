@@ -39,7 +39,11 @@ describe('RelayResultSequence', () => {
     expect(results.accept(partial)).toMatchObject({ ok: true })
     expect(results.accept(partial)).toMatchObject({ ok: false, code: 'SEQUENCE' })
     const final = fixture.events.final as Record<string, unknown>
-    expect(results.accept({ ...final, final: false, sequence: 2 })).toMatchObject({ ok: false, code: 'REVISION' })
+    expect(results.accept(final)).toMatchObject({ ok: true })
+    expect(results.accept({ ...final, final: false, sequence: 3, revision: 3 })).toMatchObject({
+      ok: false,
+      code: 'AFTER_FINAL'
+    })
   })
 
   it('rejects unknown payload fields, unsafe time ranges, and terminal sequence mismatches', () => {
