@@ -27,7 +27,7 @@ class MockRelaySocket extends EventEmitter {
   bufferedAmount = 0
   sent: unknown[] = []
   onFinish?: () => void
-  private sentFrames = 0
+  holdBinarySend = false
 
   constructor(url: string, options: unknown, onFinish?: () => void) {
     super()
@@ -46,7 +46,7 @@ class MockRelaySocket extends EventEmitter {
 
   send(data: unknown, _options: unknown, callback?: (error?: Error) => void): void {
     this.sent.push(data)
-    if (data instanceof Uint8Array) this.sentFrames += 1
+    if (data instanceof Uint8Array && this.holdBinarySend) return
     if (data === '{"type":"finish"}') this.onFinish?.()
     callback?.()
   }
@@ -72,7 +72,7 @@ class MockRelaySocket extends EventEmitter {
           captureGeneration: 7,
           track: 'microphone',
           streamEpoch: 11,
-          lastSequence: this.sentFrames,
+          lastSequence: 0,
           closeConfirmed: true,
           tail: 'complete',
           reason: 'normal'
@@ -125,7 +125,7 @@ describe('RelaySpeechSession', () => {
     const stopped = await started.value.finish(500)
     expect(stopped.complete).toBe(true)
     expect(stopped.tracks).toMatchObject([
-      { track: 'microphone', streamEpoch: 11, closeConfirmed: true, tail: 'complete', lastSequence: 1 }
+      { track: 'microphone', streamEpoch: 11, closeConfirmed: true, tail: 'complete', lastSequence: 0 }
     ])
     expect(MockRelaySocket.instances[0].sent[0]).toBeInstanceOf(Uint8Array)
     expect(MockRelaySocket.instances[0].sent[1]).toBe('{"type":"finish"}')
@@ -143,5 +143,22 @@ describe('RelaySpeechSession', () => {
     const stopped = await started.value.finish(50)
     expect(stopped.complete).toBe(false)
     expect(stopped.tracks[0]).toMatchObject({ closeConfirmed: false, tail: 'incomplete' })
+  })
+
+  it('keeps the entire finish path within its deadline when a PCM send acknowledgement hangs', async () => {
+    MockRelaySocket.instances = []
+    const started = await RelaySpeechSession.create({
+      client: makeClient(),
+      createRequest: singleTrackCreateRequest()
+    })
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    MockRelaySocket.instances[0].holdBinarySend = true
+    started.value.pushFrame('microphone', { sequence: 1, sampleOffset: 0, pcm16le: new Uint8Array(3_200) })
+
+    const start = Date.now()
+    const stopped = await started.value.finish(50)
+    expect(Date.now() - start).toBeLessThan(500)
+    expect(stopped).toMatchObject({ complete: false, reason: 'incomplete' })
   })
 })
