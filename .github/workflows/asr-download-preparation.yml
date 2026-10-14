@@ -1,0 +1,84 @@
+name: ASR download preparation
+
+on:
+  push:
+    paths:
+      - .github/workflows/asr-download-preparation.yml
+      - src/main/asr-model-download.ts
+      - src/main/asr-model-download-preparation.test.ts
+      - src/main/asr-model-download-files.test.ts
+      - src/main/ipc/asr-model-download.test.ts
+      - package-lock.json
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: asr-download-preparation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preparation:
+    name: Download preparation (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Select isolated test report path
+        run: echo "REPORT=$RUNNER_TEMP/asr-preparation-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json" >> "$GITHUB_ENV"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Run held preparation, byte verification and IPC authority tests
+        run: >-
+          node node_modules/vitest/vitest.mjs run --maxWorkers=2 --reporter=json --outputFile="$REPORT"
+          src/main/asr-model-download-preparation.test.ts
+          src/main/asr-model-download-files.test.ts
+          src/main/ipc/asr-model-download.test.ts
+      - name: Require complete actual test inventory and no skipped assertions
+        if: always()
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs'
+          const report = JSON.parse(readFileSync(process.env.REPORT, 'utf8'))
+          const required = [
+            'src/main/asr-model-download-preparation.test.ts',
+            'src/main/asr-model-download-files.test.ts',
+            'src/main/ipc/asr-model-download.test.ts'
+          ]
+          const results = report.testResults ?? []
+          const paths = results.map((result) => String(result.name).replaceAll('\\', '/'))
+          const assertions = results.flatMap((result) => result.assertionResults ?? [])
+          const counts = [report.numTotalTests, report.numPassedTests, report.numFailedTests,
+            report.numPendingTests ?? 0, report.numTodoTests ?? 0]
+          const complete = results.length === required.length &&
+            required.every((path) => paths.filter((actual) => actual.endsWith(`/${path}`)).length === 1) &&
+            results.every((result) => result.status === 'passed' && result.assertionResults?.length > 0) &&
+            assertions.every((assertion) => assertion.status === 'passed') &&
+            assertions.length === report.numTotalTests && report.numPassedTests === report.numTotalTests &&
+            counts.every((count) => Number.isSafeInteger(count) && count >= 0) &&
+            report.numTotalTests > 0 && counts.slice(2).every((count) => count === 0)
+          console.log(JSON.stringify({ files: results.length, total: report.numTotalTests,
+            passed: report.numPassedTests, failed: report.numFailedTests,
+            pending: report.numPendingTests, todo: report.numTodoTests }))
+          if (!complete || report.success !== true) throw new Error('ASR_PREPARATION_REPORT_REJECTED')
+          NODE
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: asr-preparation-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.REPORT }}
+          if-no-files-found: error
+          retention-days: 14
