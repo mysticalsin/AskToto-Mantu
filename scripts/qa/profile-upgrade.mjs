@@ -386,7 +386,7 @@ async function startApp(executable, qaRoot, profile, installRoot, launchRecords)
         return attachment.browser
       }
       if (attachment.failure === 'cdp-endpoint-deadline') return null
-      throw new Error(`owned CDP attach failed: ${attachment.failure ?? 'unknown failure'}`)
+        throw new Error(`owned CDP attach failed: ${attachment.failure ?? 'unknown failure'}`)
     }, 'packaged app did not expose loopback CDP', 60_000, 250)
     const page = await waitFor(async () => {
       for (const candidate of findPages(browser)) {
