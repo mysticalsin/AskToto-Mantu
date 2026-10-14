@@ -53,9 +53,7 @@ describe('Cap2 command authority boundary', () => {
   it('revokes pending authority when the window loses focus, hides, auth clears, locks, or suspends', () => {
     expect(main).toContain('commandControl.onWindowBlurred(win === self, parkRightEdgeReaderOnBlur)')
     expect(main).toContain('commandControl.onWindowHidden(win === self)')
-    expect(main).toContain(
-      "commandControl.wrapLifecycleListener('auth_session_cleared', revokePrivilegedSurface)"
-    )
+    expect(main).toContain("commandControl.wrapLifecycleListener('auth_session_cleared', revokePrivilegedSurface)")
     expect(main).toContain("commandControl.wrapLifecycleListener('app_quit', () => {")
   })
 

@@ -104,20 +104,20 @@ describe('CommandConfirmation lifecycle policy', () => {
     expect(execute).toHaveBeenCalledTimes(1)
   })
 
-  it.each(['suspend', 'lock-screen'] as const)(
-    'denies confirmation if %s hook registration fails, even when the other hook succeeds',
-    async (failedEvent) => {
-      const { confirmation, execute } = createConfirmation()
-      initialize(confirmation, new FakePowerMonitor(failedEvent))
-      const proposal = proposalFor(confirmation)
+  it.each([
+    'suspend',
+    'lock-screen'
+  ] as const)('denies confirmation if %s hook registration fails, even when the other hook succeeds', async (failedEvent) => {
+    const { confirmation, execute } = createConfirmation()
+    initialize(confirmation, new FakePowerMonitor(failedEvent))
+    const proposal = proposalFor(confirmation)
 
-      expect(await confirmation.confirm({ ...proposal, webContentsId: 17 })).toEqual({
-        ok: false,
-        reason: 'policy_denied'
-      })
-      expect(execute).not.toHaveBeenCalled()
-    }
-  )
+    expect(await confirmation.confirm({ ...proposal, webContentsId: 17 })).toEqual({
+      ok: false,
+      reason: 'policy_denied'
+    })
+    expect(execute).not.toHaveBeenCalled()
+  })
 
   it.each(['suspend', 'lock-screen'] as const)('revokes a pending proposal on %s', async (event) => {
     const { confirmation, execute } = createConfirmation()

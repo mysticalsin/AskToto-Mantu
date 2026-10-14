@@ -86,10 +86,7 @@ export class CommandConfirmation extends CommandControl {
     }
   }
 
-  private registerLifecycleRevocationHooks(
-    powerMonitor: CommandPowerMonitor,
-    logger: CommandConfirmationLogger
-  ): void {
+  private registerLifecycleRevocationHooks(powerMonitor: CommandPowerMonitor, logger: CommandConfirmationLogger): void {
     let suspendHookRegistered = false
     let lockScreenHookRegistered = false
     try {
