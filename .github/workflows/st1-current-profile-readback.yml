@@ -1,0 +1,43 @@
+name: ST-1 current profile readback
+run-name: ST-1 current profile readback (diagnostic only)
+
+on:
+  push:
+    branches:
+      - m2/M2-0433-st1-current-profile-readback
+    paths:
+      - .github/workflows/st1-current-profile-readback.yml
+      - scripts/qa/st1-current-profile-readback.mjs
+      - scripts/qa/st1-current-profile-readback.node.test.mjs
+      - scripts/qa/st1-current-profile-readback.test.ts
+      - scripts/qa/retained-profile-analysis.mjs
+      - scripts/qa/st1-evidence-notice.mjs
+      - scripts/qa/lib/st-1-termination.mjs
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: st1-current-profile-readback-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  readback:
+    if: github.event_name == 'push' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/m2/M2-0433-st1-current-profile-readback'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+      - name: Run pure readback tests before accessing GitHub artifacts
+        run: node --test scripts/qa/st1-current-profile-readback.node.test.mjs
+      - name: Read the fixed failed ST-1 control artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/qa/st1-current-profile-readback.mjs

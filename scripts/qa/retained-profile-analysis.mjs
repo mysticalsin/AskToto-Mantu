@@ -468,7 +468,7 @@ function ownedArchive(path, expected) {
   verifyArchiveBytes(bytes, expected)
 }
 
-async function readMembers(path, caps, expected, dir, deadline) {
+export async function readMembers(path, caps, expected, dir, deadline) {
   const run = (args, cap) => {
     ownedArchive(path, expected)
     return runUnzip(args, { cwd: dir, cap, deadline })
