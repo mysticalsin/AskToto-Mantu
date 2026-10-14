@@ -752,6 +752,7 @@ import { cloudSttRequestBelongsToOwner, replaceCloudSttSessionIfCurrent } from '
 import { resolveCloudSttGatewayId } from './cloud-stt/credentials'
 import { resolveEnterpriseLiveProfile } from '../shared/enterprise-live-profile'
 import { effectiveCloudSttProvider, enforceSttPolicy } from '../shared/cloud-stt-provider'
+import { cloudSttStartAcknowledgement } from '../shared/cloud-stt-start'
 import { shouldRecoverCompletedOnboardingExit } from './onboarding-exit-fallback'
 
 import {
@@ -7357,7 +7358,7 @@ function registerIpc(): void {
     if (!result.ok && cloudSttIpcOwner === owner) {
       setCloudSttIpcOwner(null)
     }
-    return result
+    return cloudSttStartAcknowledgement(result, provider)
   })
   ipcMain.handle(IPC.cloudSttStop, async (e, payload: unknown) => {
     assertMainWindow(e)
