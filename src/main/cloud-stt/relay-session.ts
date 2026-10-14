@@ -243,7 +243,8 @@ export class RelaySpeechSession {
       }
       let runtime: TrackRuntime | null = null
       const opened = await options.client.openTrack(created.value, grant.track, (socket) => {
-        if (!isCurrent()) throw new Error('stale owner')
+        if (!isCurrent() || session.cancelled || session.startupFailed || session.finishing)
+          throw new Error('stale session')
         runtime = session.makeTrackRuntime(grant.track, grant.streamEpoch, socket)
         session.tracks.set(grant.track, runtime)
         session.attachTrack(runtime)
@@ -257,8 +258,11 @@ export class RelaySpeechSession {
         !activeRuntime ||
         opened.value.readyState !== WebSocket.OPEN ||
         activeRuntime.stopped ||
-        session.startupFailed
+        session.startupFailed ||
+        session.cancelled ||
+        session.finishing
       ) {
+        opened.value.terminate()
         await session.cancel()
         return { ok: false, code: isCurrent() ? 'TRACK_OPEN' : 'CANCELLED' }
       }
@@ -403,6 +407,10 @@ export class RelaySpeechSession {
       frame.pcm16le.byteLength > Math.min(MAX_CLOUD_FRAME_BYTES, this.maxClientFrameBytes)
     )
       return { ok: false, code: 'FRAME' }
+    const nextCaptureSequence = frame.sequence + 1
+    const nextCaptureSampleOffset = frame.sampleOffset + frame.pcm16le.byteLength / 2
+    if (!Number.isSafeInteger(nextCaptureSequence) || !Number.isSafeInteger(nextCaptureSampleOffset))
+      return { ok: false, code: 'ORDER' }
     if (
       runtime.admittedBytes + frame.pcm16le.byteLength > runtime.maxInputBytes ||
       runtime.admittedBytes + frame.pcm16le.byteLength > runtime.maxStreamInputBytes
@@ -423,8 +431,8 @@ export class RelaySpeechSession {
     }
     runtime.admittedBytes += frame.pcm16le.byteLength
     if (runtime.firstCaptureSampleOffset === null) runtime.firstCaptureSampleOffset = frame.sampleOffset
-    runtime.captureNextSequence += 1
-    runtime.captureNextSampleOffset = frame.sampleOffset + frame.pcm16le.byteLength / 2
+    runtime.captureNextSequence = nextCaptureSequence
+    runtime.captureNextSampleOffset = nextCaptureSampleOffset
     runtime.streamNextSequence += 1
     runtime.streamNextSampleOffset += frame.pcm16le.byteLength / 2
     void this.drain(runtime)

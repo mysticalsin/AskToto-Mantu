@@ -71,7 +71,7 @@ export class BoundedRelayPcmQueue {
     this.queue.push({
       sequence: frame.sequence,
       sampleOffset: frame.sampleOffset,
-      pcm16le: frame.pcm16le.slice(),
+      pcm16le: new Uint8Array(frame.pcm16le),
       admittedAt: now
     })
     this.bytes += frame.pcm16le.byteLength

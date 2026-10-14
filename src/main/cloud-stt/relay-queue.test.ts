@@ -41,6 +41,18 @@ describe('BoundedRelayPcmQueue', () => {
     expect(send.mock.calls).toHaveLength(2)
   })
 
+  it('copies Buffer input instead of retaining its aliased slice backing store', async () => {
+    const queue = new BoundedRelayPcmQueue()
+    const source = Buffer.alloc(3_200, 1)
+    expect(queue.enqueue({ sequence: 1, sampleOffset: 0, pcm16le: source })).toEqual({ ok: true })
+    source.fill(2)
+    let firstByte = 0
+    await queue.drain((pcm) => {
+      firstByte = pcm[0]
+    })
+    expect(firstByte).toBe(1)
+  })
+
   it('fails when admitted audio exceeds the two-second age bound before send', async () => {
     const queue = new BoundedRelayPcmQueue()
     queue.enqueue(frame(1), 1_000)

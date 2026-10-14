@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events'
 import { readFileSync } from 'node:fs'
 import WebSocket from 'ws'
 import { describe, expect, it, vi } from 'vitest'
-import { SpeechBrokerClient, type SpeechCreateRequest } from './broker-client'
+import { SpeechBrokerClient, type SpeechCreateRequest, type SpeechTrack } from './broker-client'
 import { RelaySpeechSession } from './relay-session'
 
 const fixture = JSON.parse(readFileSync('scripts/qa/fixtures/speech-relay-protocol-v1.json', 'utf8')) as {
@@ -10,13 +10,17 @@ const fixture = JSON.parse(readFileSync('scripts/qa/fixtures/speech-relay-protoc
 }
 const sessionId = '00000000-0000-4000-8000-000000000101'
 
-function singleTrackCreateRequest(): SpeechCreateRequest {
+function createRequestForTracks(tracks: SpeechTrack[]): SpeechCreateRequest {
   const request = fixture.create.request as unknown as SpeechCreateRequest
   return {
     ...request,
-    tracks: ['microphone'],
-    consent: { ...request.consent, tracks: ['microphone'] }
+    tracks,
+    consent: { ...request.consent, tracks }
   }
+}
+
+function singleTrackCreateRequest(): SpeechCreateRequest {
+  return createRequestForTracks(['microphone'])
 }
 
 class MockRelaySocket extends EventEmitter {
@@ -37,10 +41,12 @@ class MockRelaySocket extends EventEmitter {
     this.options = options
     this.onFinish = onFinish
     MockRelaySocket.instances.push(this)
-    queueMicrotask(() => {
+    const open = (): void => {
       this.readyState = MockRelaySocket.OPEN
       this.emit('open')
-    })
+    }
+    if (url.includes('/tracks/system')) setTimeout(open, 50)
+    else queueMicrotask(open)
   }
 
   url: string
@@ -90,10 +96,10 @@ class MockRelaySocket extends EventEmitter {
   }
 }
 
-function makeClient(afterCreate?: () => void): SpeechBrokerClient {
+function makeClient(afterCreate?: () => void, tracks: SpeechTrack[] = ['microphone']): SpeechBrokerClient {
   const response = {
     ...fixture.create.responseTemplate,
-    grants: [{ track: 'microphone', streamEpoch: 11, token: 'B'.repeat(43) }]
+    grants: tracks.map((track, index) => ({ track, streamEpoch: 11 + index, token: 'B'.repeat(43) }))
   }
   const fetchImpl = vi.fn(async () => {
     afterCreate?.()
@@ -144,6 +150,22 @@ describe('RelaySpeechSession', () => {
     expect(started).toEqual({ ok: false, code: 'CANCELLED' })
     expect(allocatedSessionId).toBe(sessionId)
     expect(MockRelaySocket.instances).toHaveLength(0)
+  })
+
+  it('terminates a late second track when the first socket closes during startup', async () => {
+    MockRelaySocket.instances = []
+    const starting = RelaySpeechSession.create({
+      client: makeClient(undefined, ['microphone', 'system']),
+      createRequest: createRequestForTracks(['microphone', 'system']),
+      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' }
+    })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(MockRelaySocket.instances).toHaveLength(2)
+    MockRelaySocket.instances[0].close()
+    const started = await starting
+    expect(started).toEqual({ ok: false, code: 'TRACK_OPEN' })
+    expect(MockRelaySocket.instances[1].readyState).toBe(3)
+    expect(MockRelaySocket.instances[1].terminated).toBe(true)
   })
 
   it('orders admitted PCM before the finish marker and waits for confirmed terminal closure', async () => {
@@ -369,6 +391,30 @@ describe('RelaySpeechSession', () => {
     expect(stopped.complete).toBe(true)
     expect(MockRelaySocket.instances[0].sent[0]).toBeInstanceOf(Uint8Array)
     expect(MockRelaySocket.instances[0].sent[1]).toBe('{"type":"finish"}')
+  })
+
+  it('rejects a frame that would overflow the capture sample frontier without sending it', async () => {
+    MockRelaySocket.instances = []
+    const started = await RelaySpeechSession.create({
+      client: makeClient(),
+      createRequest: singleTrackCreateRequest(),
+      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' },
+      initialFrontiers: {
+        microphone: { sequence: 1, sampleOffset: Number.MAX_SAFE_INTEGER - 1_000 }
+      }
+    })
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    expect(
+      started.value.pushFrame('microphone', {
+        sequence: 1,
+        sampleOffset: Number.MAX_SAFE_INTEGER - 1_000,
+        pcm16le: new Uint8Array(3_200)
+      })
+    ).toEqual({ ok: false, code: 'ORDER' })
+    expect(MockRelaySocket.instances[0].sent).toHaveLength(0)
+    const stopped = await started.value.finish(500)
+    expect(stopped.complete).toBe(true)
   })
 
   it('stops admission immediately when its owner predicate becomes stale', async () => {
