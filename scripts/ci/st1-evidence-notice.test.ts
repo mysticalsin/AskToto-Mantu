@@ -190,6 +190,23 @@ describe('strict ST-1 GitHub notice serializer', () => {
     expect(failed.stdout).toContain('"reason":"report_malformed"')
     expect(failed.stdout).not.toContain('broken private input')
     expect(failed.stdout).not.toContain(input.reportPath)
+
+    const unknownShape = fixture({
+      ...validReport(),
+      criteria: [{ name: 'unexpected private criterion', pass: false }],
+      errors: [{ message: 'private path /private/meeting-content' }]
+    })
+    const rejected = spawnSync(process.execPath, [script, ...unknownShape.argv], {
+      encoding: 'utf8',
+      env: { ...process.env, ...env }
+    })
+    expect(rejected.error).toBeUndefined()
+    expect(rejected.status).toBe(0)
+    expect(rejected.stderr).toBe('')
+    expect(rejected.stdout).toContain('"reason":"report_schema_invalid"')
+    expect(rejected.stdout).not.toContain('private criterion')
+    expect(rejected.stdout).not.toContain('/private/meeting-content')
+    expect(rejected.stdout).not.toContain(unknownShape.reportPath)
   })
 
   it('rejects mismatched workflow context and escapes annotation control characters', () => {
