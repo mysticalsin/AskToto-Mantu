@@ -26,7 +26,9 @@ export function countGuardCalls(source) {
 // Removals are declared as `- <what was removed> => <its replacement>` lines under the removals heading.
 export function parseRemovals(body) {
   const lines = body.replace(/<!--[\s\S]*?-->/g, '').split(/\r?\n/)
-  const start = lines.findIndex((line) => /^#{1,6}\s+/.test(line) && line.replace(/^#+\s+/, '').trim() === REMOVALS_HEADING)
+  const start = lines.findIndex(
+    (line) => /^#{1,6}\s+/.test(line) && line.replace(/^#+\s+/, '').trim() === REMOVALS_HEADING
+  )
   if (start < 0) return []
   const removals = []
   for (const line of lines.slice(start + 1)) {
@@ -50,26 +52,34 @@ export function compareInventories({ base, head, body }) {
   return { ok: problems.length === 0, base, head, test_drop: testDrop, guard_drop: guardDrop, removals, problems }
 }
 
-function git(args) {
-  return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 })
+function git(args, cwd = repoRoot) {
+  return execFileSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 })
 }
 
-function inventoryAt(rev) {
-  const files = git(['ls-tree', '-r', '--name-only', rev]).split('\n').filter(Boolean)
+function inventoryAt(rev, cwd = repoRoot) {
+  const files = git(['ls-tree', '-r', '--name-only', rev], cwd).split('\n').filter(Boolean)
   const inventory = { tests: 0, guards: 0 }
   for (const path of files) {
     const isTest = TEST_FILE.test(path)
     if (!isTest && !GUARD_FILE.test(path)) continue
-    const source = git(['show', `${rev}:${path}`])
+    const source = git(['show', `${rev}:${path}`], cwd)
     if (isTest) inventory.tests += countTestCases(source)
     else inventory.guards += countGuardCalls(source)
   }
   return inventory
 }
 
+export function compareGitInventories({ base, head, body, cwd = repoRoot }) {
+  const mergeBase = git(['merge-base', base, head], cwd).trim()
+  if (!mergeBase) throw new Error(`Unable to find a merge base for ${base} and ${head}`)
+  return compareInventories({ base: inventoryAt(mergeBase, cwd), head: inventoryAt(head, cwd), body })
+}
+
 function usageError(message) {
   console.error(`guard-test-inventory: ${message}`)
-  console.error('usage: node scripts/refactor/guard-test-inventory.mjs --pr-event <event.json> --base <rev> --head <rev> [--output-dir <dir>]')
+  console.error(
+    'usage: node scripts/refactor/guard-test-inventory.mjs --pr-event <event.json> --base <rev> --head <rev> [--output-dir <dir>]'
+  )
   process.exit(2)
 }
 
@@ -94,7 +104,7 @@ function runCli() {
   const body = JSON.parse(readFileSync(args.prEvent, 'utf8')).pull_request?.body
   if (typeof body !== 'string') usageError('event is missing pull_request.body')
 
-  const result = compareInventories({ base: inventoryAt(args.base), head: inventoryAt(args.head), body })
+  const result = compareGitInventories({ base: args.base, head: args.head, body })
   const outputDir = resolve(repoRoot, args.outputDir)
   mkdirSync(outputDir, { recursive: true })
   const reportPath = join(outputDir, 'inventory.json')
@@ -106,7 +116,9 @@ function runCli() {
     for (const problem of result.problems) console.error(problem)
     process.exit(1)
   }
-  console.log(`Guard and test inventory holds (tests ${result.base.tests} -> ${result.head.tests}, guards ${result.base.guards} -> ${result.head.guards}); report written to ${displayPath}`)
+  console.log(
+    `Guard and test inventory holds (tests ${result.base.tests} -> ${result.head.tests}, guards ${result.base.guards} -> ${result.head.guards}); report written to ${displayPath}`
+  )
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) runCli()
