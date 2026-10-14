@@ -23,6 +23,7 @@ describe('MQA-306 packaged Windows transcription gate', () => {
     expect(source).toMatch(/for \(const engine of ENGINES\)/)
     expect(source).toMatch(/asrEngine: args\.engine/)
     expect(source).toMatch(/window\.toto\.importAudioStart\(token\)/)
+    expect(source).toMatch(/importJobsList\(\)\)\.jobs\.find\(/)
     expect(source).toMatch(/assertPackagedAsrEvidence\(engine,/)
   })
 
