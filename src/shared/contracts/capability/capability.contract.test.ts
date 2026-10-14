@@ -99,12 +99,11 @@ describe('capability contract: negative fixtures', () => {
     expect(negative.map((fixture) => fixture.file)).toEqual(Object.keys(REJECTED_AT).sort())
   })
 
-  it.each(negative.map((fixture) => [fixture.file, fixture] as const))(
-    '%s is rejected at its invariant',
-    (file, fixture) => {
-      const result = fixture.schema.safeParse(fixture.value)
-      expect(result.success).toBe(false)
-      expect(result.error?.issues.map((issue) => issue.path)).toEqual([REJECTED_AT[file]])
-    }
-  )
+  it.each(
+    negative.map((fixture) => [fixture.file, fixture] as const)
+  )('%s is rejected at its invariant', (file, fixture) => {
+    const result = fixture.schema.safeParse(fixture.value)
+    expect(result.success).toBe(false)
+    expect(result.error?.issues.map((issue) => issue.path)).toEqual([REJECTED_AT[file]])
+  })
 })

@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, expectTypeOf, it } from 'vitest'
+import type { CaptureDegraded as CaptureStateDegraded } from './lib/listen-capture-state'
+import type { CaptureDegraded } from './lib/listen'
 import { sourceIndexOf } from '../../../scripts/lib/source-layout'
 
 // Normalize CRLF → LF (same rationale as App.capture-permission.test.ts): Windows checkouts would
@@ -17,7 +19,10 @@ const settingsUi = readFileSync(join(__dirname, 'features', 'settings', 'AudioTa
 // These anchors pin the persistent-chrome visibility that fixed it.
 describe('mic-only capture degradation stays visible', () => {
   it('useListen exposes a structured captureDegraded state, permission-classified for the them side', () => {
-    expect(listen).toMatch(/export interface CaptureDegraded/)
+    expectTypeOf<CaptureDegraded>().toEqualTypeOf<CaptureStateDegraded>()
+    expect(listen).toMatch(
+      /export type \{ CaptureDegraded, CaptureHealth, CaptureSelectionOutcome \} from '\.\/listen-capture-state'/
+    )
     expect(listen).toMatch(/captureDegraded: CaptureDegraded \| null/)
     // Set from the start()-time soft note, with the Screen-Recording cause carried as `permission`.
     expect(listen).toMatch(/side: micOk \? 'them' : 'you', note, permission: micOk && isSysPermDenied/)
