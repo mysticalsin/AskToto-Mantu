@@ -288,4 +288,68 @@ describe('cloud speech preload boundary', () => {
     unsubscribe()
     expect(fixture.removeListener).toHaveBeenCalledWith(CLOUD_SPEECH_IPC.event, listener)
   })
+
+  it('delivers only a closed epoch transition for the subscribed capture and validates its applied acknowledgement', async () => {
+    const fixture = makeRenderer()
+    const transition = {
+      type: 'epoch-transition',
+      captureId,
+      captureGeneration: capture.generation,
+      transitionId: 2,
+      handoffNonce: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      stage: 'closed',
+      streams: [{ track: 'microphone', previousEpoch: 3, lastSequence: 28 }]
+    } as const
+    fixture.invoke.mockResolvedValueOnce({
+      ok: true,
+      captureId,
+      captureGeneration: capture.generation,
+      transitionId: 2,
+      handoffNonce: transition.handoffNonce,
+      stage: 'closed'
+    })
+    const api = createCloudSpeechPreloadApi(fixture.renderer)
+    const received: CloudSpeechEvent[] = []
+    api.onCloudSpeechEvent(captureId, capture.generation, (event) => received.push(event))
+    const listener = fixture.listeners.get(CLOUD_SPEECH_IPC.event)
+    listener?.({}, { ...transition, captureGeneration: capture.generation + 1 })
+    listener?.({}, transition)
+    expect(received).toEqual([transition])
+    await expect(api.cloudSpeechAckEpochTransition({
+      type: 'epoch-transition-ack',
+      captureId,
+      captureGeneration: capture.generation,
+      transitionId: transition.transitionId,
+      handoffNonce: transition.handoffNonce,
+      stage: transition.stage,
+      streams: transition.streams
+    })).resolves.toMatchObject({ ok: true, transitionId: 2, stage: 'closed' })
+    expect(fixture.invoke).toHaveBeenCalledWith(CLOUD_SPEECH_IPC.transitionAck, {
+      type: 'epoch-transition-ack',
+      captureId,
+      captureGeneration: capture.generation,
+      transitionId: 2,
+      handoffNonce: transition.handoffNonce,
+      stage: 'closed',
+      streams: transition.streams
+    })
+
+    fixture.invoke.mockResolvedValueOnce({
+      ok: true,
+      captureId,
+      captureGeneration: capture.generation,
+      transitionId: 3,
+      handoffNonce: transition.handoffNonce,
+      stage: 'closed'
+    })
+    await expect(api.cloudSpeechAckEpochTransition({
+      type: 'epoch-transition-ack',
+      captureId,
+      captureGeneration: capture.generation,
+      transitionId: 2,
+      handoffNonce: transition.handoffNonce,
+      stage: transition.stage,
+      streams: transition.streams
+    })).resolves.toEqual({ ok: false, code: 'TRANSPORT', captureId, captureGeneration: capture.generation })
+  })
 })

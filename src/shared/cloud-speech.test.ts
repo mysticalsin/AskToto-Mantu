@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  CloudSpeechEpochTransitionAckSchema,
+  CloudSpeechEpochTransitionEventSchema,
   CloudSpeechEventSchema,
   CloudSpeechFinishRequestSchema,
   CloudSpeechFinishResultSchema,
@@ -39,6 +41,49 @@ function frame(overrides: Record<string, unknown> = {}): unknown {
 }
 
 describe('cloud speech shared wire contracts', () => {
+  it('binds closed and opened epoch inventories to the exact capture and opaque handoff receipt', () => {
+    const closed = {
+      type: 'epoch-transition',
+      captureId: start.captureId,
+      captureGeneration: capture.generation,
+      transitionId: 4,
+      handoffNonce: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      stage: 'closed',
+      streams: [
+        { track: 'microphone', previousEpoch: 11, lastSequence: 200 },
+        { track: 'system', previousEpoch: 8, lastSequence: 198 }
+      ]
+    }
+    const opened = {
+      ...closed,
+      stage: 'opened',
+      streams: [
+        { track: 'microphone', previousEpoch: 11, nextEpoch: 15, lastSequence: 200 },
+        { track: 'system', previousEpoch: 8, nextEpoch: 10, lastSequence: 198 }
+      ]
+    }
+    expect(CloudSpeechEpochTransitionEventSchema.safeParse(closed).success).toBe(true)
+    expect(CloudSpeechEpochTransitionEventSchema.safeParse(opened).success).toBe(true)
+    expect(CloudSpeechEventSchema.safeParse(closed).success).toBe(true)
+    expect(CloudSpeechEpochTransitionAckSchema.safeParse({
+      ...closed,
+      type: 'epoch-transition-ack'
+    }).success).toBe(true)
+
+    for (const invalid of [
+      { ...closed, streams: [...closed.streams, closed.streams[0]] },
+      { ...closed, streams: [{ ...closed.streams[0], nextEpoch: 12 }] },
+      { ...opened, streams: [{ ...opened.streams[0], nextEpoch: 11 }, opened.streams[1]] },
+      { ...opened, streams: [{ ...opened.streams[0], nextEpoch: 10 }, opened.streams[1]] },
+      { ...closed, transitionId: 0 },
+      { ...closed, handoffNonce: 'not-a-random-nonce' },
+      { ...closed, brokerSessionId: 'server-secret-id' },
+      { ...closed, tracks: ['microphone', 'system'] }
+    ]) {
+      expect(CloudSpeechEpochTransitionEventSchema.safeParse(invalid).success).toBe(false)
+    }
+  })
+
   it('requires strict explicit consent, matching capture identity and a supported cloud engine', () => {
     expect(CloudSpeechStartRequestSchema.safeParse(start).success).toBe(true)
     expect(CloudSpeechStartRequestSchema.safeParse({ ...start, rawToken: 'secret' }).success).toBe(false)
