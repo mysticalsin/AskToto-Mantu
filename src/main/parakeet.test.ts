@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import * as fs from 'node:fs'
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -7,6 +6,18 @@ import { join } from 'node:path'
 const paths = vi.hoisted(() => ({ resources: '', userData: '', isPackaged: false }))
 const network = vi.hoisted(() => ({ httpsGet: vi.fn(), execFile: vi.fn(), fetch: vi.fn() }))
 const nativeHost = vi.hoisted(() => ({ fork: vi.fn() }))
+const modelOpenGuard = vi.hoisted(() => ({ active: false, calls: 0 }))
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return {
+    ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
+      if (modelOpenGuard.active) modelOpenGuard.calls += 1
+      return actual.openSync(...args)
+    }
+  }
+})
 
 vi.mock('electron', () => ({
   app: {
@@ -94,12 +105,13 @@ describe('bundled Parakeet runtime', () => {
 
   it('keeps the Parakeet status probe from opening model files', async () => {
     writeParakeet(join(paths.resources, 'asr', 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8'))
-    const openSync = vi.spyOn(fs, 'openSync')
+    modelOpenGuard.calls = 0
+    modelOpenGuard.active = true
     try {
       await expect(parakeetModelReady()).resolves.toBe(true)
-      expect(openSync).not.toHaveBeenCalled()
+      expect(modelOpenGuard.calls).toBe(0)
     } finally {
-      openSync.mockRestore()
+      modelOpenGuard.active = false
     }
   })
 

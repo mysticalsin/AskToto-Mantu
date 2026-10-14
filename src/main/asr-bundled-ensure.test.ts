@@ -1,11 +1,31 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import * as fs from 'node:fs'
-import * as fsPromises from 'node:fs/promises'
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const paths = vi.hoisted(() => ({ resources: '', userData: '', isPackaged: false }))
+const modelOpenGuard = vi.hoisted(() => ({ active: false, syncCalls: 0, asyncCalls: 0 }))
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return {
+    ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
+      if (modelOpenGuard.active) modelOpenGuard.syncCalls += 1
+      return actual.openSync(...args)
+    }
+  }
+})
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...actual,
+    open: (...args: Parameters<typeof actual.open>) => {
+      if (modelOpenGuard.active) modelOpenGuard.asyncCalls += 1
+      return actual.open(...args)
+    }
+  }
+})
 
 vi.mock('electron', () => ({
   app: {
@@ -369,18 +389,16 @@ describe('asr-bundled-ensure', () => {
       mkdirSync(join(file, '..'), { recursive: true })
       writeFileSync(file, 'model')
     }
-    const open = vi.spyOn(fsPromises, 'open').mockRejectedValue(new Error('status unexpectedly opened a file'))
-    const openSync = vi.spyOn(fs, 'openSync').mockImplementation(() => {
-      throw new Error('status unexpectedly opened a model file')
-    })
+    modelOpenGuard.syncCalls = 0
+    modelOpenGuard.asyncCalls = 0
+    modelOpenGuard.active = true
     try {
       await expect(importAsrAssetsReady()).resolves.toBe(true)
       await expect(asrAssetsStatusSnapshot()).resolves.toMatchObject({ ready: true, status: 'ready' })
-      expect(open).not.toHaveBeenCalled()
-      expect(openSync).not.toHaveBeenCalled()
+      expect(modelOpenGuard.asyncCalls).toBe(0)
+      expect(modelOpenGuard.syncCalls).toBe(0)
     } finally {
-      open.mockRestore()
-      openSync.mockRestore()
+      modelOpenGuard.active = false
     }
   })
 

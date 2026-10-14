@@ -157,13 +157,13 @@ async function createHost(): Promise<UtilityProcess> {
     const tierAdmission = await admitHostTierAtStart()
     await waitForStoppedHost()
     if (host) return host
+    if (!importTierAdmissionActive) throw new Error('Whisper helper was released before transcription started.')
     // Re-resolve the profile and activated path after the old-host exit barrier. A path checked before
     // that wait is stale authority if selection/profile changes while the old helper is stopping.
     if (admissionVersion !== importTierAdmissionVersion) continue
-    if (!importTierAdmissionActive) throw new Error('Whisper helper was released before transcription started.')
     const approvedModelsPath = await modelsDir()
-    if (admissionVersion !== importTierAdmissionVersion) continue
     if (!importTierAdmissionActive) throw new Error('Whisper helper was released before transcription started.')
+    if (admissionVersion !== importTierAdmissionVersion) continue
     return forkHost(tierAdmission, approvedModelsPath)
   }
 }
