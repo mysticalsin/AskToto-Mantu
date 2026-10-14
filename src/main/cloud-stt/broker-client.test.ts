@@ -59,8 +59,37 @@ describe('speech broker client', () => {
     })
 
     const result = await client.capability()
-    expect(result).toMatchObject({ ok: true, value: { ready: true, protocolVersion: 1 } })
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        ready: true,
+        protocolVersion: 1,
+        configVersion: 'fixture-config-a-v1',
+        policyVersion: 'fixture-policy-a-v1'
+      }
+    })
     expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+
+  it('requires bounded route configuration and policy versions in a ready capability', async () => {
+    const ready = fixture.capability.readyResponse as Record<string, unknown>
+    for (const field of ['configVersion', 'policyVersion']) {
+      const response = { ...ready }
+      delete response[field]
+      const client = new SpeechBrokerClient({
+        ...settings,
+        fetchImpl: vi.fn(
+          async () =>
+            new Response(JSON.stringify(response), {
+              status: 200,
+              headers: { 'content-type': 'application/json' }
+            })
+        ) as typeof fetch,
+        now: () => 1_893_456_000_000
+      })
+
+      expect(await client.capability()).toEqual({ ok: false, code: 'SCHEMA' })
+    }
   })
 
   it('does not retry an ambiguous create and rejects unbounded redirect/HTML responses', async () => {

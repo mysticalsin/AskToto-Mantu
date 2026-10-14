@@ -9,6 +9,7 @@ const fixture = JSON.parse(readFileSync('scripts/qa/fixtures/speech-relay-protoc
   create: { request: Record<string, unknown>; responseTemplate: Record<string, unknown> }
 }
 const sessionId = '00000000-0000-4000-8000-000000000101'
+const expectedCapability = { configVersion: 'fixture-config-a-v1', policyVersion: 'fixture-policy-a-v1' }
 
 function createRequestForTracks(tracks: SpeechTrack[]): SpeechCreateRequest {
   const request = fixture.create.request as unknown as SpeechCreateRequest
@@ -96,9 +97,14 @@ class MockRelaySocket extends EventEmitter {
   }
 }
 
-function makeClient(afterCreate?: () => void, tracks: SpeechTrack[] = ['microphone']): SpeechBrokerClient {
+function makeClient(
+  afterCreate?: () => void,
+  tracks: SpeechTrack[] = ['microphone'],
+  versions: { configVersion?: string; policyVersion?: string } = {}
+): SpeechBrokerClient {
   const response = {
     ...fixture.create.responseTemplate,
+    ...versions,
     grants: tracks.map((track, index) => ({ track, streamEpoch: 11 + index, token: 'B'.repeat(43) }))
   }
   const fetchImpl = vi.fn(async () => {
@@ -127,6 +133,18 @@ describe('RelaySpeechSession', () => {
       client: makeClient(),
       createRequest: singleTrackCreateRequest(),
       expectedSelection: { routeId: 'workers-ai-nova3', modelId: '@cf/deepgram/nova-3', language: 'en' }
+    })
+    expect(started).toEqual({ ok: false, code: 'SCHEMA' })
+    expect(MockRelaySocket.instances).toHaveLength(0)
+  })
+
+  it('cancels a create allocation before opening when capability versions changed', async () => {
+    MockRelaySocket.instances = []
+    const started = await RelaySpeechSession.create({
+      client: makeClient(undefined, ['microphone'], { configVersion: 'fixture-config-a-v2' }),
+      createRequest: singleTrackCreateRequest(),
+      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' },
+      expectedCapability
     })
     expect(started).toEqual({ ok: false, code: 'SCHEMA' })
     expect(MockRelaySocket.instances).toHaveLength(0)
