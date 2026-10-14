@@ -1,3 +1,4 @@
+import { unlinkSync, writeFileSync } from 'node:fs'
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -184,5 +185,57 @@ describe('atomic streamed saved write', () => {
     expect(checks.at(-1)).toBe('chunk')
     expect(await readFile(target, 'utf8')).toBe('old')
     expect(await readdir(root)).toEqual([basename(target)])
+  })
+
+  it('cleans its owned temp without waiting for a producer that never returns', async () => {
+    const root = await directory()
+    const target = join(root, 'meeting.md')
+    let checks = 0
+    const source: AsyncIterable<Uint8Array> = {
+      [Symbol.asyncIterator]() {
+        return {
+          next: async () => ({ done: false, value: Uint8Array.from(Buffer.from('x')) }),
+          return: () => new Promise<IteratorResult<Uint8Array>>(() => {})
+        }
+      }
+    }
+    const write = atomicSavedWriteStream(target, source, {
+      ...bounds,
+      beforeChunk: () => {
+        checks += 1
+        if (checks === 2) throw new Error('STALE_OWNER')
+      }
+    })
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    await expect(
+      Promise.race([
+        write,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => reject(new Error('cleanup timed out')), 250)
+        })
+      ])
+    ).rejects.toThrow('STALE_OWNER')
+    clearTimeout(timeout)
+    expect(await readdir(root)).toEqual([])
+  })
+
+  it('does not promote or remove a path swapped for a different temp inode', async () => {
+    const root = await directory()
+    const target = join(root, 'meeting.md')
+    const temp = `${target}.${'ab'.repeat(12)}.tmp`
+    await writeFile(target, 'old')
+
+    await expect(
+      atomicSavedWriteStream(target, byteChunks('new'), {
+        ...bounds,
+        beforeReplace: () => {
+          unlinkSync(temp)
+          writeFileSync(temp, 'foreign replacement')
+        }
+      })
+    ).rejects.toMatchObject({ name: 'TEMP_OWNERSHIP' })
+
+    expect(await readFile(target, 'utf8')).toBe('old')
+    expect(await readFile(temp, 'utf8')).toBe('foreign replacement')
   })
 })
