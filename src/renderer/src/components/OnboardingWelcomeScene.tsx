@@ -41,8 +41,7 @@ export function OnboardingHeroVideo({ videoRef }: { videoRef: Ref<HTMLVideoEleme
     }, 800)
     return () => {
       window.clearTimeout(fallback)
-      const current = typeof videoRef === 'object' && videoRef ? videoRef.current : null
-      current?.pause()
+      element?.pause()
     }
   }, [allowVideo, videoRef])
   return (

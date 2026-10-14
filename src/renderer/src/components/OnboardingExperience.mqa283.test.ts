@@ -24,7 +24,7 @@ describe('MQA-283 — the narrative experience now ends at Ready, not a legacy p
     expect(experienceSrc).toMatch(/<OnboardingExperience/)
   })
 
-  it('OnboardingV2 marks onboardingDone itself inside the experience\'s onDone, not via a provider phase', () => {
+  it("OnboardingV2 marks onboardingDone itself inside the experience's onDone, not via a provider phase", () => {
     expect(experienceSrc).toMatch(/await persistOnboardingCompletion\(\{/)
     expect(experienceSrc).toMatch(/mode, recordingConsent, onboardingDone: true, onboardingDoneAt: Date\.now\(\)/)
     expect(experienceSrc).toMatch(/onCompleted: onDone/)
@@ -47,7 +47,10 @@ describe('MQA-283 — the narrative experience now ends at Ready, not a legacy p
   it('loads the demo with onboarding so Continue never waits on its own chunk', () => {
     expect(experienceSrc).toMatch(/import \{ OnboardingDemoScene \} from '\.\/OnboardingDemoScene'/)
     expect(experienceSrc).not.toMatch(/const OnboardingDemoScene = lazy\(/)
-    const reveal = experienceSrc.slice(experienceSrc.indexOf("{scene === 'reveal'"), experienceSrc.indexOf("{scene === 'setup'"))
+    const reveal = experienceSrc.slice(
+      experienceSrc.indexOf("{scene === 'reveal'"),
+      experienceSrc.indexOf("{scene === 'setup'")
+    )
     expect(reveal).toMatch(/<Suspense/)
     expect(reveal).toMatch(/Continue/)
   })
@@ -58,7 +61,9 @@ describe('MQA-283 — the narrative experience now ends at Ready, not a legacy p
 
   it('license continues into ready, never back into personalize', () => {
     expect(experienceSrc).toMatch(/setScene\(sceneAfterLicense\(\)\)/)
-    expect(experienceSrc).not.toMatch(/ActLicense settings=\{settings\} onContinue=\{\(\) => setScene\('personalize'\)\}/)
+    expect(experienceSrc).not.toMatch(
+      /ActLicense settings=\{settings\} onContinue=\{\(\) => setScene\('personalize'\)\}/
+    )
   })
 
   it('a ready scene renders ActReady, wired to the real finish() and the optional AI-settings link', () => {
@@ -88,14 +93,19 @@ describe('MQA-283 — the narrative experience now ends at Ready, not a legacy p
 
   it('keeps encrypted-profile recovery in the active Ready flow and retries only after it succeeds', () => {
     const v2 = experienceSrc.slice(experienceSrc.indexOf('export function OnboardingV2'))
-    const ready = experienceSrc.slice(experienceSrc.indexOf('function ActReady'), experienceSrc.indexOf('function prefersReducedMotion'))
+    const readyStart = experienceSrc.indexOf('function ActReady')
+    const readyEnd = experienceSrc.indexOf('\nfunction ', readyStart + 1)
+    const ready = experienceSrc.slice(readyStart, readyEnd > readyStart ? readyEnd : undefined)
     expect(v2).toMatch(/recoverEncryptedProfile,\s*patch/)
     expect(v2).toMatch(/recoverEncryptedProfile=\{recoverEncryptedProfile\}/)
     expect(experienceSrc).toMatch(/interface OnboardingExperienceProps[\s\S]*?recoverEncryptedProfile\?:/)
     expect(experienceSrc).toMatch(/recoverEncryptedProfile=\{recoverEncryptedProfile\}/)
+    expect(ready).toMatch(/const recoverProfileAndRetry = async/)
     expect(ready).toMatch(/await recoverEncryptedProfile\(\)/)
     expect(ready).toMatch(/if \(!result\.ok\)/)
-    expect(ready.indexOf('await recoverEncryptedProfile()')).toBeLessThan(ready.indexOf("await attemptFinish('answer')"))
+    expect(ready.indexOf('await recoverEncryptedProfile()')).toBeLessThan(
+      ready.indexOf("const outcome = await attemptFinish('answer')")
+    )
     expect(ready).not.toMatch(/patch\(/)
   })
 
@@ -109,7 +119,7 @@ describe('MQA-283 — the narrative experience now ends at Ready, not a legacy p
     expect(experienceSrc).toMatch(/ONBOARDING_COMPLETION_STALL_MS/)
     expect(experienceSrc).toMatch(/const \[completionStalled, setCompletionStalled\] = useState\(false\)/)
     expect(experienceSrc).toMatch(/setTimeout\(\(\) => setCompletionStalled\(true\), ONBOARDING_COMPLETION_STALL_MS\)/)
-    expect(experienceSrc).toMatch(/Don’t submit it again\. Restart Métis to check the saved result\./)
+    expect(experienceSrc).toMatch(/Don’t submit it again\. Restart Métis to check the\s*saved result\./)
     expect(experienceSrc).toMatch(/window\.toto\.relaunch\(\)/)
     expect(experienceSrc).toMatch(/disabled=\{blocked\}/)
   })
@@ -122,7 +132,7 @@ describe('MQA-283 — Ready\'s honest empty-state line (Métis\'s equivalent of 
   })
 
   it('never claims readiness with no caveat — the honest line always ships alongside the CTA', () => {
-    const readyBlockStart = experienceSrc.indexOf("key=\"ready\"")
+    const readyBlockStart = experienceSrc.indexOf('key="ready"')
     expect(readyBlockStart).toBeGreaterThan(-1)
     const readyBlock = experienceSrc.slice(readyBlockStart, readyBlockStart + 4000)
     expect(readyBlock).toMatch(/TELL_THE_ROOM_READY/)
@@ -162,7 +172,9 @@ describe('MQA-283 — Replay onboarding in Settings re-arms the same gate a firs
     const block = settingsSrc.slice(start, end)
     expect(block).toMatch(/const saved = await patch\(\{ onboardingDone: false \}\)/)
     expect(block).toMatch(/saved\.onboardingDone !== false/)
-    expect(block.indexOf('const saved = await patch({ onboardingDone: false })')).toBeLessThan(block.indexOf('haltAllOnboardingAudio()'))
+    expect(block.indexOf('const saved = await patch({ onboardingDone: false })')).toBeLessThan(
+      block.indexOf('haltAllOnboardingAudio()')
+    )
     expect(block.indexOf('haltAllOnboardingAudio()')).toBeLessThan(block.indexOf('window.toto.onboardingEnter()'))
     expect(block).toMatch(/Métis couldn't start setup again\. Try again\./)
     expect(block).not.toMatch(/onboardingDoneAt/)
