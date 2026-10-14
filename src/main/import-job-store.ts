@@ -10,8 +10,11 @@ import type { ImportHoldInventory, ImportJob, ImportJobStore } from './import-jo
 const MAX_HELD_JOB_IDS = 1_024
 const MAX_HOLD_SCAN_ENTRIES = 4_096
 const MAX_MARKER_BYTES = 256
-const JOB_NAME = /^job-([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.json$/i
-const HOLD_NAME = /^job-([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.hold\.json$/i
+const UUID_JOB_ID_PATTERN = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}'
+const LEGACY_JOB_ID_PATTERN = '[0-9a-f]{32}'
+const JOB_ID_PATTERN = `(?:${UUID_JOB_ID_PATTERN}|${LEGACY_JOB_ID_PATTERN})`
+const JOB_NAME = new RegExp(`^job-(${JOB_ID_PATTERN})\\.json$`)
+const HOLD_NAME = new RegExp(`^job-(${JOB_ID_PATTERN})\\.hold\\.json$`)
 const GLOBAL_HOLD_NAME = 'summary-only-hold-all.json'
 
 interface RootIdentity {
@@ -502,7 +505,7 @@ export class EncryptedImportJobStore implements ImportJobStore {
 }
 
 function isJobId(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+  return new RegExp(`^${JOB_ID_PATTERN}$`).test(value)
 }
 
 function sameFileVersion(
