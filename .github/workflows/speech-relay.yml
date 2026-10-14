@@ -124,6 +124,24 @@ jobs:
             'scripts/migrate-runner.contract.test.ts'
           ]
           const missing = required.filter((file) => !files.some((actual) => actual.endsWith(file)))
+          const summaryCount = (value) => Number.isSafeInteger(value) && value >= 0 ? value : null
+          const outcomes = required.map((file) => {
+            const index = files.findIndex((actual) => actual.endsWith(file))
+            const result = index >= 0 ? results[index] : null
+            const assertions = Array.isArray(result?.assertionResults) ? result.assertionResults : []
+            return {
+              file,
+              status: result?.status === 'passed' ? 'passed' : result ? 'failed' : 'missing',
+              passed: assertions.filter((assertion) => assertion.status === 'passed').length,
+              failed: assertions.filter((assertion) => assertion.status === 'failed').length,
+              pending: assertions.filter((assertion) => assertion.status !== 'passed' && assertion.status !== 'failed').length
+            }
+          })
+          console.log('::notice::' + JSON.stringify({
+            schema: 1, kind: 'speech-relay-test-report',
+            total: summaryCount(total), passed: summaryCount(passed), failed: summaryCount(failed),
+            skipped: summaryCount(skipped), files: outcomes
+          }))
           console.log(`Operator speech tests: files=${files.length}, total=${total}, assertion_count=${assertionCount}, executed=${passed + failed}, passed=${passed}, failed=${failed}, skipped=${skipped}, suites_passed=${passedSuites}, suites_failed=${failedSuites}, suites_pending=${pendingSuites}`)
           if (report.success !== true || !counts.every(Number.isSafeInteger) || counts.some((count) => count < 0) ||
               !suiteCounts.every(Number.isSafeInteger) || suiteCounts.some((count) => count < 0) ||
