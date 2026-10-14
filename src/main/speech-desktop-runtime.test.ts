@@ -136,7 +136,7 @@ describe('speech desktop runtime authority composition', () => {
   it('registers the actual IPC adapter and resolves exact signed-policy route authority from cached inputs', () => {
     const h = makeHarness()
     expect(h.ipcMain.handle).toHaveBeenCalled()
-    expect(h.handlers.size).toBe(7)
+    expect(h.handlers.size).toBe(8)
     const authority = h.runtime.readAuthority(invokeEvent, startRequest())
     expect(authority).toMatchObject({
       enabled: true,
@@ -157,6 +157,48 @@ describe('speech desktop runtime authority composition', () => {
     expect(JSON.stringify(authority)).not.toContain('fleet-secret-is-not-the-seat-credential')
     expect(h.stateReader).toHaveBeenCalled()
     expect(h.policyReader).toHaveBeenCalled()
+  })
+
+  it('keeps service capability available before native capture permission while Start still requires permission', () => {
+    const h = makeHarness({
+      native: { microphone: 'unknown', screenRecording: 'unknown' }
+    })
+    const capability = h.runtime.readAuthority(invokeEvent)
+    expect(capability).toMatchObject({ policyReady: true, captureAllowed: false })
+    const start = h.runtime.readAuthority(invokeEvent, startRequest())
+    expect(start).toMatchObject({ policyReady: true, captureAllowed: false })
+  })
+
+  it('binds finishing authority to the original exact Listen context and denies a newer owner', () => {
+    const h = makeHarness()
+    const owner = {}
+    const accepted = h.runtime.readAuthority(invokeEvent, startRequest(), owner)
+    expect(accepted).toMatchObject({
+      captureAllowed: true,
+      finishAllowed: true,
+      captureContext: {
+        navigationEpoch: context.navigationEpoch,
+        listenStartedAt: context.listenStartedAt
+      }
+    })
+
+    expect(h.grants.normalStop(context)).toBe(true)
+    const normalStop = h.runtime.readAuthority(invokeEvent, startRequest(), owner)
+    expect(normalStop).toMatchObject({
+      captureAllowed: false,
+      finishAllowed: true,
+      captureContext: {
+        navigationEpoch: context.navigationEpoch,
+        listenStartedAt: context.listenStartedAt
+      }
+    })
+
+    const nextContext = { ...context, listenStartedAt: context.listenStartedAt + 1 }
+    expect(h.grants.acceptListenContext(nextContext)).toBe(true)
+    const newerOwner = h.runtime.readAuthority(invokeEvent, startRequest(), owner)
+    expect(newerOwner).toMatchObject({ captureAllowed: true, finishAllowed: true })
+    expect(newerOwner.captureContext?.listenStartedAt).toBe(nextContext.listenStartedAt)
+    expect(newerOwner.captureContext?.listenStartedAt).not.toBe(accepted.captureContext?.listenStartedAt)
   })
 
   it('fails closed while durable identity metadata is still loading and avoids stale policy reads', () => {

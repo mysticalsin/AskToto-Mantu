@@ -85,7 +85,12 @@ function readyCapability() {
   } as unknown as Awaited<ReturnType<FakeClient['capability']>>
 }
 
-function makeHarness(now?: () => number) {
+function makeHarness(
+  now?: () => number,
+  prepareAuthority?: () => Promise<void>,
+  scheduleCaptureDeadline?: (callback: () => void, delayMs: number) => () => void,
+  releaseCaptureOwner?: (owner: object) => void
+) {
   const handlers = new Map<string, Handler>()
   const ipcMain = {
     handle: vi.fn((channel: string, handler: Handler) => handlers.set(channel, handler)),
@@ -139,7 +144,10 @@ function makeHarness(now?: () => number) {
     ipcMain: ipcMain as never,
     assertMainWindow,
     readAuthority,
+    ...(releaseCaptureOwner ? { releaseCaptureOwner } : {}),
     clientFactory,
+    ...(prepareAuthority ? { prepareAuthority } : {}),
+    ...(scheduleCaptureDeadline ? { scheduleCaptureDeadline } : {}),
     ...(now ? { now } : {})
   })
   const invoke = (channel: string, args: unknown[] = [], callerEvent: unknown = event) => {
@@ -257,6 +265,25 @@ describe('cloud speech main IPC authority boundary', () => {
     await expect(starting).resolves.toMatchObject({ ok: false, code: 'CLOSED', captureId, captureGeneration: 7 })
     expect(relayHarness.create).not.toHaveBeenCalled()
     expect(h.client.cancel).not.toHaveBeenCalledWith(expect.anything())
+  })
+
+  it('keeps the exact start owner reserved while cached authority preparation is pending', async () => {
+    let releasePreparation!: () => void
+    const prepareAuthority = vi.fn(() => new Promise<void>((resolve) => (releasePreparation = resolve)))
+    const h = makeHarness(undefined, prepareAuthority)
+    const starting = h.invoke(CLOUD_SPEECH_IPC.start, [request]) as Promise<unknown>
+    await vi.waitFor(() => expect(prepareAuthority).toHaveBeenCalledTimes(1))
+    expect(h.readAuthority).not.toHaveBeenCalled()
+
+    await expect(h.invoke(CLOUD_SPEECH_IPC.cancel, [{ captureId, captureGeneration: 7 }])).resolves.toMatchObject({
+      ok: true,
+      closure: 'unknown'
+    })
+    releasePreparation()
+    await expect(starting).resolves.toMatchObject({ ok: false, code: 'CLOSED', captureId, captureGeneration: 7 })
+    expect(h.readAuthority).not.toHaveBeenCalled()
+    expect(h.client.capability).not.toHaveBeenCalled()
+    expect(relayHarness.create).not.toHaveBeenCalled()
   })
 
   it('binds create to the selected route, actual tracks, approved language and main-stamped consent', async () => {
@@ -527,7 +554,8 @@ describe('cloud speech main IPC authority boundary', () => {
   })
 
   it('rejects wrong capture owners and preserves exact frame frontiers through a normal stop', async () => {
-    const h = makeHarness()
+    const releaseCaptureOwner = vi.fn()
+    const h = makeHarness(undefined, undefined, undefined, releaseCaptureOwner)
     const session = readyRelay()
     relayHarness.create.mockImplementation(async (options: { onAllocated?: (id: string) => void }) => {
       options.onAllocated?.(session.identity.sessionId)
@@ -581,6 +609,107 @@ describe('cloud speech main IPC authority boundary', () => {
     ).resolves.toMatchObject({ ok: false, code: 'ORDER' })
     expect(session.finish).toHaveBeenCalledTimes(1)
     expect(session.cancel).not.toHaveBeenCalled()
+    expect(releaseCaptureOwner).toHaveBeenCalledTimes(1)
+  })
+
+  it('seals the exact four-hour frontier and finishes only after an applied ceiling receipt', async () => {
+    const tasks: Array<{ callback: () => void; delay: number }> = []
+    const h = makeHarness(
+      undefined,
+      undefined,
+      (callback, delay) => {
+        tasks.push({ callback, delay })
+        return () => undefined
+      }
+    )
+    const session = readyRelay(undefined, [{ track: 'microphone', streamEpoch: 3 }], 1)
+    relayHarness.create.mockImplementation(async (options: { onAllocated?: (id: string) => void }) => {
+      options.onAllocated?.(session.identity.sessionId)
+      return { ok: true, value: session }
+    })
+    await expect(h.invoke(CLOUD_SPEECH_IPC.start, [request])).resolves.toMatchObject({ ok: true })
+    await expect(
+      h.invoke(CLOUD_SPEECH_IPC.frame, [
+        {
+          captureId,
+          captureGeneration: 7,
+          track: 'microphone',
+          sequence: 1,
+          sampleOffset: 0,
+          kind: 'sealed-final',
+          pcm16le: new ArrayBuffer(3_200)
+        }
+      ])
+    ).resolves.toMatchObject({ ok: true, nextSampleOffset: 1_600 })
+    const captureDeadline = tasks.find((task) => task.delay === 4 * 60 * 60 * 1_000)
+    expect(captureDeadline).toBeDefined()
+    captureDeadline!.callback()
+    const ceilingEvent = h.sender.send.mock.calls
+      .map((call) => call[1] as { type: string; ceilingId?: string })
+      .find((value) => value.type === 'capture-ceiling')
+    expect(ceilingEvent).toBeDefined()
+    const ack = {
+      type: 'capture-ceiling-ack',
+      captureId,
+      captureGeneration: 7,
+      ceilingId: ceilingEvent!.ceilingId,
+      tracks: [{ track: 'microphone', finalSequence: 1, finalSampleOffset: 1_600 }]
+    }
+    await expect(h.invoke(CLOUD_SPEECH_IPC.ceilingAck, [ack])).resolves.toEqual({
+      ok: true,
+      captureId,
+      captureGeneration: 7,
+      ceilingId: ceilingEvent!.ceilingId,
+      tracks: ack.tracks
+    })
+    expect(session.finish).toHaveBeenCalledTimes(1)
+    await expect(h.invoke(CLOUD_SPEECH_IPC.ceilingAck, [ack])).resolves.toEqual({
+      ok: true,
+      captureId,
+      captureGeneration: 7,
+      ceilingId: ceilingEvent!.ceilingId,
+      tracks: ack.tracks
+    })
+  })
+
+  it('does not route an old microphone owner through a newer accepted Listen context', async () => {
+    const h = makeHarness()
+    const original = {
+      webContents: h.sender,
+      frame: h.mainFrame,
+      navigationEpoch: 3,
+      listenStartedAt: 1_900_000_000_000
+    }
+    h.currentAuthority.value = {
+      ...h.currentAuthority.value,
+      captureContext: original,
+      finishAllowed: true
+    }
+    const session = readyRelay()
+    relayHarness.create.mockImplementation(async (options: { onAllocated?: (id: string) => void }) => {
+      options.onAllocated?.(session.identity.sessionId)
+      return { ok: true, value: session }
+    })
+    await expect(h.invoke(CLOUD_SPEECH_IPC.start, [request])).resolves.toMatchObject({ ok: true })
+    h.currentAuthority.value = {
+      ...h.currentAuthority.value,
+      captureContext: { ...original, listenStartedAt: original.listenStartedAt + 1 },
+      finishAllowed: false
+    }
+    await expect(
+      h.invoke(CLOUD_SPEECH_IPC.frame, [
+        {
+          captureId,
+          captureGeneration: 7,
+          track: 'microphone',
+          sequence: 1,
+          sampleOffset: 0,
+          kind: 'full',
+          pcm16le: new ArrayBuffer(3_200)
+        }
+      ])
+    ).resolves.toMatchObject({ ok: false, code: 'CLOSED' })
+    expect(session.pushFrame).not.toHaveBeenCalled()
   })
 
   it('latches sealed-final per track before admitting another frame', async () => {
