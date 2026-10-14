@@ -9182,10 +9182,20 @@ function registerIpc(): void {
     if (!sources.length) throw new Error(errors[0] || 'Could not start the imports.')
     return (await jobs.startMany(sources)).map(importJobView)
   })
-  ipcMain.handle(IPC.importJobsList, (e) => {
+  ipcMain.handle(IPC.importJobsList, async (e) => {
     assertMainWindow(e)
-    if (!requireAuth()) return []
-    return getImportJobs().list().map(importJobView)
+    if (!requireAuth()) {
+      return {
+        jobs: [],
+        policyBlocked: false,
+        heldJobIds: [],
+        policyHeldJobIds: [],
+        inventoryOverflow: false,
+        policyHoldOverflow: false
+      }
+    }
+    const snapshot = await getImportJobs().snapshot()
+    return { ...snapshot, jobs: snapshot.jobs.map(importJobView) }
   })
   ipcMain.handle(IPC.importJobCancel, async (e, raw) => {
     assertMainWindow(e)

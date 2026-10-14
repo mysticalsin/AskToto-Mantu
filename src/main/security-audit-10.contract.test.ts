@@ -294,7 +294,9 @@ describe('AUDIT-10 extra — XSS / import / webhook', () => {
     expect(start).not.toMatch(/if \(!importJobs\) throw new Error\('Audio import service is unavailable\.'\)/)
 
     const listAndMutations = sliceBetween('ipcMain.handle(IPC.importJobsList', 'ipcMain.on(IPC.importDecoderReady')
-    expect(listAndMutations).toMatch(/if \(!requireAuth\(\)\) return \{[\s\S]*jobs: \[\][\s\S]*policyBlocked: false/)
+    expect(listAndMutations).toMatch(
+      /if \(!requireAuth\(\)\) \{[\s\S]*return \{[\s\S]*jobs: \[\][\s\S]*policyBlocked: false/
+    )
     expect(listAndMutations).toMatch(/heldJobIds: \[\]/)
     expect(listAndMutations).toMatch(/policyHeldJobIds: \[\]/)
     expect(listAndMutations).toMatch(/inventoryOverflow: false/)
