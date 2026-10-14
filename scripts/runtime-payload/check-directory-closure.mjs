@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
@@ -20,6 +20,8 @@ const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex')
 async function metadataFor() {
   const workflow = /^mysticalsin\/AskToto-Mantu\/([a-z0-9./-]+\.yml)@/.exec(process.env.GITHUB_WORKFLOW_REF ?? '')
   if (!workflow) throw new Error('RUNTIME_DIRECTORY_TEST_WORKFLOW_IDENTITY_INVALID')
+  const npmVersion = process.env.RUNTIME_NPM_VERSION ?? ''
+  if (!/^\d+\.\d+\.\d+$/.test(npmVersion)) throw new Error('RUNTIME_DIRECTORY_TEST_NPM_VERSION_INVALID')
   const lockBytes = await readFile(resolve(repository, 'package-lock.json'))
   return {
     schemaVersion: 1,
@@ -55,7 +57,7 @@ async function metadataFor() {
     },
     builder: {
       nodeVersion: process.version,
-      npmVersion: execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim(),
+      npmVersion,
       zlibVersion: process.versions.zlib,
       packages: [{ name: 'electron', version: '43.6.0' }]
     },
@@ -110,7 +112,7 @@ function readTarRows(bytes) {
     const start = offset + 512
     const contents = tar.subarray(start, start + bytes)
     rows.push({ path: prefix ? `${prefix}/${name}` : name, bytes, sha256: sha256(contents) })
-    offset = start + 512 + Math.ceil(bytes / 512) * 512
+    offset = start + Math.ceil(bytes / 512) * 512
   }
   return rows
 }

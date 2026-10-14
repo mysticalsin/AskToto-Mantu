@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
 import { lstat, open, readdir } from 'node:fs/promises'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
-import { bundleFromJSON } from '@sigstore/bundle'
+import { bundleFromJSON, bundleToJSON } from '@sigstore/bundle'
 import { TrustedRoot } from '@sigstore/protobuf-specs'
 import { toSignedEntity, toTrustMaterial, Verifier } from '@sigstore/verify'
 
@@ -215,10 +215,13 @@ function verifyRootPin(catalog, rootBytes, receiptBytes) {
 
 function verifySigner(signer, inventory) {
   const identity = record(record(signer)?.identity)
+  const extensions = identity && record(identity.extensions)
   const expectedSignerUri = `${REPOSITORY_URI}/${WORKFLOW_PATH}@${SOURCE_REF}`
   if (
     !identity ||
-    identity.issuer !== 'https://token.actions.githubusercontent.com' ||
+    !extensions ||
+    !exactKeys(extensions, ['issuer']) ||
+    extensions.issuer !== 'https://token.actions.githubusercontent.com' ||
     identity.subjectAlternativeName !== expectedSignerUri ||
     !Array.isArray(identity.oids)
   )
@@ -227,7 +230,12 @@ function verifySigner(signer, inventory) {
   for (const raw of identity.oids) {
     const extension = record(raw)
     const oid = extension && record(extension.oid)
-    if (!extension || !oid || !Array.isArray(oid.id) || !oid.id.every(Number.isInteger))
+    if (
+      !extension ||
+      !oid ||
+      !Array.isArray(oid.id) ||
+      !oid.id.every((part) => Number.isInteger(part) && part >= 0 && part <= 4_294_967_295)
+    )
       fail('RUNTIME_READBACK_CERTIFICATE_CLAIM_INVALID')
     const id = oid.id.join('.')
     const value = decodeClaim(extension.value)
@@ -248,16 +256,23 @@ function verifySigner(signer, inventory) {
     if (claims.get(oid) !== value) fail('RUNTIME_READBACK_CERTIFICATE_CLAIM_MISMATCH')
 }
 
-function verifyStatement(bundle, archiveName, archiveHash, inventoryName, inventoryHash) {
-  const envelope = record(record(bundle)?.dsseEnvelope)
-  if (!envelope || typeof envelope.payload !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(envelope.payload))
+function dssePayload(bundle) {
+  const content = record(record(bundle)?.content)
+  const envelope = content?.$case === 'dsseEnvelope' ? record(content.dsseEnvelope) : null
+  if (
+    !envelope ||
+    !Buffer.isBuffer(envelope.payload) ||
+    envelope.payload.length < 1 ||
+    envelope.payload.length > 20_000_000
+  )
     fail('RUNTIME_READBACK_ATTESTATION_FORMAT_INVALID')
+  return envelope.payload
+}
+
+function verifyStatement(bundle, archiveName, archiveHash, inventoryName, inventoryHash) {
   let statement
   try {
-    const payload = Buffer.from(envelope.payload, 'base64')
-    if (payload.toString('base64') !== envelope.payload || payload.length < 1 || payload.length > 20_000_000)
-      fail('RUNTIME_READBACK_ATTESTATION_FORMAT_INVALID')
-    statement = record(parseJson(payload, 'RUNTIME_READBACK_ATTESTATION_FORMAT_INVALID'))
+    statement = record(parseJson(dssePayload(bundle), 'RUNTIME_READBACK_ATTESTATION_FORMAT_INVALID'))
   } catch {
     fail('RUNTIME_READBACK_ATTESTATION_FORMAT_INVALID')
   }
@@ -455,6 +470,9 @@ async function verifyTarget(root, target, rootProto) {
   let bundle
   try {
     bundle = bundleFromJSON(bundleJson)
+    const payload = dssePayload(bundle)
+    const roundTrippedBundle = bundleFromJSON(bundleToJSON(bundle))
+    if (!payload.equals(dssePayload(roundTrippedBundle))) fail('RUNTIME_READBACK_BUNDLE_LIBRARY_SHAPE_INVALID')
     const verifier = new Verifier(toTrustMaterial(rootProto), {
       tlogThreshold: 1,
       ctlogThreshold: 1,
