@@ -41,6 +41,7 @@ import {
   WHISPER_BASE_Q8,
   readSpeechPackProfile,
   resolveSpeechPack,
+  legacyRuntimeClosureAvailable,
   type SpeechPackComponentId,
   type SpeechPackReadiness
 } from './features/components'
@@ -328,6 +329,7 @@ export async function asrModelProtocolSpeechPackOptions(): Promise<{
   speechPackModelsRoot?: string
 }> {
   const profile = await speechPackBuildProfile()
+  if (!(await legacyRuntimeClosureAvailable())) return { useOnlySpeechPackModels: true }
   if (profile.profile === 'full' || profile.profile === 'development') return { useOnlySpeechPackModels: false }
   if (profile.profile === null) return { useOnlySpeechPackModels: true }
   const selected = selectedAsrEngine()
@@ -363,6 +365,7 @@ async function importAsrAssetsReadyForProfile(
 
 export async function importAsrAssetsReady(): Promise<boolean> {
   const profile = await speechPackBuildProfile()
+  if (profile.profile === 'lean' && !(await legacyRuntimeClosureAvailable())) return false
   return asrMetadataStatusReady(asrMetadataOptions(profile))
 }
 
@@ -400,7 +403,8 @@ export async function asrAssetsStatusSnapshot(): Promise<AsrAssetsProgress & { r
       reason: 'invalid-profile'
     }
   }
-  const ready = await asrMetadataStatusReady(asrMetadataOptions(profile))
+  const runtimeReady = await legacyRuntimeClosureAvailable()
+  const ready = runtimeReady && (await asrMetadataStatusReady(asrMetadataOptions(profile)))
   if (profile.profile === 'lean' && !ready) {
     return {
       ready: false,
