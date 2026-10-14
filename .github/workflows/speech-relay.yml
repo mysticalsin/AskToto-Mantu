@@ -1,0 +1,146 @@
+name: Speech relay validation
+
+on:
+  push:
+    paths:
+      - .github/workflows/speech-relay.yml
+      - package.json
+      - package-lock.json
+      - operator/src/**
+      - operator/scripts/**
+      - operator/vitest.config.ts
+      - operator/wrangler.jsonc
+      - operator/schema*.sql
+      - src/shared/operator-hmac.ts
+      - src/shared/operator-license.ts
+      - scripts/qa/fixtures/speech-relay-protocol-v1.json
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: speech-relay-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  operator-relay:
+    name: Operator speech relay and workerd (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install locked test dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Run the scoped Operator relay, workerd and migration tests
+        working-directory: operator
+        env:
+          METIS_CI_OPERATOR_REPORT: ${{ runner.temp }}/speech-relay-operator-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
+        run: |
+          node -e "require('node:fs').rmSync(process.env.METIS_CI_OPERATOR_REPORT, { force: true })"
+          node ../node_modules/vitest/vitest.mjs run --config vitest.config.ts --maxWorkers=2 \
+            --reporter=json \
+            --outputFile="$METIS_CI_OPERATOR_REPORT" \
+            src/speech/grants.test.ts \
+            src/speech/policy.test.ts \
+            src/speech/contracts.test.ts \
+            src/speech/limits.test.ts \
+            src/speech/readiness.test.ts \
+            src/speech/transport.test.ts \
+            src/speech/relay-session.test.ts \
+            src/speech/relay-workerd.test.ts \
+            src/routes/speech-session.test.ts \
+            src/routes/speech-track.test.ts \
+            src/routes/admin-speech-evidence.test.ts \
+            src/ai-gateway.privacy.test.ts \
+            src/migrate.contract.test.ts \
+            scripts/migrate-runner.contract.test.ts
+      - name: Verify and summarize the actual Operator test report
+        if: always()
+        env:
+          REPORT: ${{ runner.temp }}/speech-relay-operator-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs')
+          const reportPath = process.env.REPORT
+          if (!fs.existsSync(reportPath)) {
+            console.error('Operator speech Vitest report is missing.')
+            process.exit(1)
+          }
+          const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'))
+          const passed = report.numPassedTests
+          const failed = report.numFailedTests
+          const pending = report.numPendingTests ?? 0
+          const todo = report.numTodoTests ?? 0
+          const skipped = pending + todo
+          const total = report.numTotalTests
+          const counts = [total, passed, failed, pending, todo]
+          const results = report.testResults ?? []
+          const passedSuites = report.numPassedTestSuites
+          const failedSuites = report.numFailedTestSuites
+          const pendingSuites = report.numPendingTestSuites
+          const suiteCounts = [report.numTotalTestSuites, passedSuites, failedSuites, pendingSuites]
+          const assertionCount = results.reduce(
+            (sum, result) => sum + (Array.isArray(result.assertionResults) ? result.assertionResults.length : 0),
+            0
+          )
+          const invalidFiles = results.filter(
+            (result) =>
+              result.status !== 'passed' ||
+              !Array.isArray(result.assertionResults) ||
+              result.assertionResults.length === 0 ||
+              result.assertionResults.some((assertion) => assertion.status !== 'passed')
+          )
+          const files = results.map((result) => String(result.name).replace(/\\/g, '/'))
+          const required = [
+            'src/speech/grants.test.ts',
+            'src/speech/policy.test.ts',
+            'src/speech/contracts.test.ts',
+            'src/speech/limits.test.ts',
+            'src/speech/readiness.test.ts',
+            'src/speech/transport.test.ts',
+            'src/speech/relay-session.test.ts',
+            'src/speech/relay-workerd.test.ts',
+            'src/routes/speech-session.test.ts',
+            'src/routes/speech-track.test.ts',
+            'src/routes/admin-speech-evidence.test.ts',
+            'src/ai-gateway.privacy.test.ts',
+            'src/migrate.contract.test.ts',
+            'scripts/migrate-runner.contract.test.ts'
+          ]
+          const missing = required.filter((file) => !files.some((actual) => actual.endsWith(file)))
+          console.log(`Operator speech tests: files=${files.length}, total=${total}, assertion_count=${assertionCount}, executed=${passed + failed}, passed=${passed}, failed=${failed}, skipped=${skipped}, suites_passed=${passedSuites}, suites_failed=${failedSuites}, suites_pending=${pendingSuites}`)
+          if (report.success !== true || !counts.every(Number.isSafeInteger) || counts.some((count) => count < 0) ||
+              !suiteCounts.every(Number.isSafeInteger) || suiteCounts.some((count) => count < 0) ||
+              results.length !== required.length || missing.length > 0 || invalidFiles.length > 0 ||
+              report.numTotalTestSuites < 1 ||
+              report.numTotalTestSuites !== passedSuites + failedSuites + pendingSuites ||
+              failedSuites !== 0 || pendingSuites !== 0 || passedSuites !== report.numTotalTestSuites ||
+              total < 1 || assertionCount !== total ||
+              total !== passed + failed + skipped || passed !== total || failed > 0 || skipped > 0) {
+            console.error('Operator speech test report is incomplete or contains failures/skips.')
+            process.exit(1)
+          }
+          NODE
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: speech-relay-operator-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/speech-relay-operator-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
+          if-no-files-found: error
+          retention-days: 14
