@@ -41,7 +41,7 @@ export function createCloudSpeechStartupSubscription(
   let buffering = true
   let active = true
   let bufferedBytes = 0
-  const bufferedEvents: CloudSpeechEvent[] = []
+  const bufferedEvents: Array<{ event: CloudSpeechEvent; byteLength: number }> = []
   const unsubscribe = subscribe((raw) => {
     if (!active) return
     if (!buffering) {
@@ -68,16 +68,21 @@ export function createCloudSpeechStartupSubscription(
       onInvalid('QUEUE_LIMIT')
       return
     }
-    bufferedEvents.push(parsed.data)
+    bufferedEvents.push({ event: parsed.data, byteLength })
     bufferedBytes += byteLength
   })
 
   return {
-    activate(): void {
+    async activate(waitForDispatch: () => Promise<void>): Promise<void> {
       if (!active || !buffering) return
-      buffering = false
-      bufferedBytes = 0
-      for (const event of bufferedEvents.splice(0)) dispatch(event)
+      while (active && bufferedEvents.length > 0) {
+        const next = bufferedEvents.shift()
+        if (!next) break
+        bufferedBytes -= next.byteLength
+        dispatch(next.event)
+        await waitForDispatch()
+      }
+      if (active) buffering = false
     },
     close(): void {
       if (!active) return
@@ -86,5 +91,28 @@ export function createCloudSpeechStartupSubscription(
       bufferedBytes = 0
       unsubscribe()
     }
+  }
+}
+
+export async function waitForStartupDispatch(
+  dispatchTail: Promise<void>,
+  deadline: number,
+  now: () => number,
+  onTimeout: () => void
+): Promise<void> {
+  const remaining = deadline - now()
+  if (remaining <= 0) {
+    onTimeout()
+    return
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), remaining)
+  })
+  try {
+    const drained = await Promise.race([dispatchTail.then(() => true), timeout])
+    if (!drained) onTimeout()
+  } finally {
+    if (timer) clearTimeout(timer)
   }
 }

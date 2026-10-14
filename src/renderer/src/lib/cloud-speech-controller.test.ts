@@ -220,6 +220,54 @@ describe('cloud speech capture controller', () => {
     next.instance.dispose()
   })
 
+  it('drains a bounded startup batch through result application without exceeding the live backlog cap', async () => {
+    const applied = vi.fn()
+    const applicationGates: Array<ReturnType<typeof deferred<void>>> = []
+    const next = controller({
+      applyEvent: async () => {
+        const gate = deferred<void>()
+        applicationGates.push(gate)
+        await gate.promise
+        applied()
+      }
+    })
+    const startResult = deferred<unknown>()
+    next.bridge.cloudSpeechStart = vi.fn(() => startResult.promise)
+    const starting = next.instance.start()
+    await vi.waitFor(() => expect(next.bridge.cloudSpeechStart).toHaveBeenCalledTimes(1))
+    const stream = { generation: captureGeneration, track: 'microphone' as const, epoch: 3 }
+    for (let sequence = 1; sequence <= 80; sequence += 1) {
+      const event: CloudSpeechEvent = {
+        type: 'segment',
+        captureId,
+        captureGeneration,
+        sequence,
+        segment: {
+          stream,
+          engine: 'cloudflare-nova3',
+          index: sequence,
+          revision: 1,
+          final: true,
+          text: 'staged startup result',
+          startMs: sequence * 20,
+          endMs: sequence * 20 + 10
+        }
+      }
+      for (const listener of next.events) listener(event)
+    }
+    startResult.resolve(started())
+
+    for (let count = 1; count <= 80; count += 1) {
+      await vi.waitFor(() => expect(applicationGates).toHaveLength(count))
+      expect(applied).toHaveBeenCalledTimes(count - 1)
+      applicationGates[count - 1].resolve()
+    }
+    expect(await starting).toMatchObject({ ok: true })
+    expect(applied).toHaveBeenCalledTimes(80)
+    expect(next.events.size).toBe(1)
+    next.instance.dispose()
+  })
+
   it('discards startup results and unsubscribes when Start fails', async () => {
     const onFailure = vi.fn()
     const applied = vi.fn()
@@ -253,6 +301,96 @@ describe('cloud speech capture controller', () => {
     expect(next.events.size).toBe(0)
     expect(applied).not.toHaveBeenCalled()
     expect(onFailure).toHaveBeenCalledWith('POLICY')
+    next.instance.dispose()
+  })
+
+  it('fails closed at the startup event-count limit and cancels a later successful Start', async () => {
+    const onFailure = vi.fn()
+    const next = controller({ onFailure })
+    const startResult = deferred<unknown>()
+    next.bridge.cloudSpeechStart = vi.fn(() => startResult.promise)
+    const starting = next.instance.start()
+    await vi.waitFor(() => expect(next.bridge.cloudSpeechStart).toHaveBeenCalledTimes(1))
+    expect(next.events.size).toBe(1)
+    const stream = { generation: captureGeneration, track: 'microphone' as const, epoch: 3 }
+    const makeEvent = (sequence: number): CloudSpeechEvent => ({
+      type: 'segment',
+      captureId,
+      captureGeneration,
+      sequence,
+      segment: {
+        stream,
+        engine: 'cloudflare-nova3',
+        index: sequence,
+        revision: 1,
+        final: true,
+        text: 'bounded startup result',
+        startMs: sequence * 20,
+        endMs: sequence * 20 + 10
+      }
+    })
+    for (let sequence = 1; sequence <= 128; sequence += 1) {
+      for (const listener of next.events) listener(makeEvent(sequence))
+    }
+    expect(onFailure).not.toHaveBeenCalled()
+    for (const listener of next.events) listener(makeEvent(129))
+
+    await vi.waitFor(() => expect(onFailure).toHaveBeenCalledWith('QUEUE_LIMIT'))
+    expect(onFailure).toHaveBeenCalledTimes(1)
+    expect(next.events.size).toBe(0)
+    startResult.resolve(started())
+    expect(await starting).toMatchObject({ ok: false, code: 'CLOSED' })
+    await vi.waitFor(() => expect(next.bridge.cloudSpeechCancel).toHaveBeenCalledWith({ captureId, captureGeneration }))
+    next.instance.dispose()
+  })
+
+  it('fails closed at the startup byte limit and does not deliver buffered content', async () => {
+    const onFailure = vi.fn()
+    const applied = vi.fn()
+    const next = controller({ onFailure, applyEvent: async (event) => void applied(event) })
+    const startResult = deferred<unknown>()
+    next.bridge.cloudSpeechStart = vi.fn(() => startResult.promise)
+    const starting = next.instance.start()
+    await vi.waitFor(() => expect(next.bridge.cloudSpeechStart).toHaveBeenCalledTimes(1))
+    const stream = { generation: captureGeneration, track: 'microphone' as const, epoch: 3 }
+    const makeEvent = (sequence: number): CloudSpeechEvent => ({
+      type: 'segment',
+      captureId,
+      captureGeneration,
+      sequence,
+      segment: {
+        stream,
+        engine: 'cloudflare-nova3',
+        index: sequence,
+        revision: 1,
+        final: true,
+        text: 'x'.repeat(4_000),
+        startMs: sequence * 20,
+        endMs: sequence * 20 + 10
+      }
+    })
+    let sequence = 1
+    let bytes = 0
+    while (true) {
+      const event = makeEvent(sequence)
+      const eventBytes = new TextEncoder().encode(JSON.stringify(event)).byteLength
+      if (bytes + eventBytes > 256 * 1024) {
+        for (const listener of next.events) listener(event)
+        break
+      }
+      for (const listener of next.events) listener(event)
+      bytes += eventBytes
+      sequence += 1
+    }
+    expect(sequence).toBeLessThan(128)
+
+    await vi.waitFor(() => expect(onFailure).toHaveBeenCalledWith('QUEUE_LIMIT'))
+    expect(onFailure).toHaveBeenCalledTimes(1)
+    expect(next.events.size).toBe(0)
+    startResult.resolve(started())
+    expect(await starting).toMatchObject({ ok: false, code: 'CLOSED' })
+    await vi.waitFor(() => expect(next.bridge.cloudSpeechCancel).toHaveBeenCalledWith({ captureId, captureGeneration }))
+    expect(applied).not.toHaveBeenCalled()
     next.instance.dispose()
   })
 

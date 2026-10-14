@@ -33,7 +33,7 @@ import {
   createCloudSpeechResultTracker,
   MAX_PENDING_RESULT_APPLICATIONS
 } from './cloud-speech-results'
-import { createCloudSpeechStartupSubscription, selectCloudSpeechStartRoute } from './cloud-speech-startup'
+import * as cloudStartup from './cloud-speech-startup'
 
 export interface CloudSpeechControllerBridge {
   cloudSpeechCapability(): Promise<unknown>
@@ -118,7 +118,7 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
 
   let startPromise: Promise<CloudSpeechStartResult> | null = null
   let started: Extract<CloudSpeechStartResult, { ok: true }> | null = null
-  let startupSubscription: ReturnType<typeof createCloudSpeechStartupSubscription> | null = null
+  let startupSubscription: ReturnType<typeof cloudStartup.createCloudSpeechStartupSubscription> | null = null
   let eventApplyTail = Promise.resolve()
   let pendingEventApplications = 0
   let stopped = false
@@ -519,13 +519,13 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
       try {
         const capabilityResult = await options.bridge.cloudSpeechCapability()
         if (disposed || stopped || failureCode) return failure(failureCode ?? 'CLOSED', request)
-        const route = selectCloudSpeechStartRoute(capabilityResult, request.capture.engine)
+        const route = cloudStartup.selectCloudSpeechStartRoute(capabilityResult, request.capture.engine)
         if (!route.ok) {
           if (route.report) reportFailure(route.code)
           return failure(route.code, request)
         }
         const selected = route.selected
-        startupSubscription = createCloudSpeechStartupSubscription(
+        startupSubscription = cloudStartup.createCloudSpeechStartupSubscription(
           (callback) => options.bridge.onCloudSpeechEvent(request.captureId, request.capture.generation, callback),
           identity(),
           handleEvent,
@@ -568,7 +568,10 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
         }
         started = result
         resultTracker.initialize(result)
-        startupSubscription?.activate()
+        const startupDeadline = now() + deadlineMs
+        await startupSubscription?.activate(() =>
+          cloudStartup.waitForStartupDispatch(eventApplyTail, startupDeadline, now, () => invalidate('TIMEOUT'))
+        )
         if (disposed || stopped || failureCode) return failure(failureCode ?? 'CLOSED', request)
         return result
       } catch {
