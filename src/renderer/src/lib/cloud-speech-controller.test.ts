@@ -416,6 +416,27 @@ describe('cloud speech capture controller', () => {
     instance.dispose()
   })
 
+  it('rejects a full frame after the sealed-final remainder', async () => {
+    const onFailure = vi.fn()
+    const { instance, frame } = controller({ onFailure })
+    await instance.start()
+    const port = new FakePort()
+    instance.attachTrack('microphone', port as unknown as MessagePort, 0)
+    port.onPost = (message) => {
+      const command = message as { type: string; requestId?: string }
+      if (command.type !== 'seal-and-flush' || !command.requestId) return
+      port.emit(pcmFrame(1, 0, 7))
+      port.emit(pcmFrame(2, 7))
+      port.emit({ type: 'flush-ack', requestId: command.requestId, finalSequence: 1, finalSampleOffset: 7 })
+    }
+
+    const result = await instance.stop()
+    expect(result).toMatchObject({ ok: false, code: 'ORDER' })
+    expect(onFailure).toHaveBeenCalledTimes(1)
+    expect(frame).toHaveBeenCalledTimes(1)
+    instance.dispose()
+  })
+
   it('keeps a nonzero track origin out of an empty track finish checkpoint', async () => {
     const { instance, finish } = controller()
     finish.mockResolvedValue(failure('CLOSED'))
@@ -671,6 +692,7 @@ describe('cloud speech capture controller', () => {
         tracks: [
           {
             stream: { generation: captureGeneration, track: 'microphone', epoch: 3 },
+            phase: 'closed',
             lastSequence: 1,
             closeConfirmed: true,
             tail: 'complete',
@@ -689,7 +711,12 @@ describe('cloud speech capture controller', () => {
     }
 
     const result = await instance.stop()
-    expect(result).toMatchObject({ ok: true, complete: false, reason: 'incomplete' })
+    expect(result).toMatchObject({
+      ok: true,
+      complete: false,
+      reason: 'incomplete',
+      tracks: [{ reason: 'unknown', tail: 'incomplete' }]
+    })
     expect(bridge.cloudSpeechStatus).toHaveBeenCalledTimes(1)
     expect(result).toMatchObject({
       tracks: [{ stream: { generation: captureGeneration, track: 'microphone', epoch: 3 }, tail: 'incomplete' }]
