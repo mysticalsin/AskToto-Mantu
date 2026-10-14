@@ -30,6 +30,28 @@ interface TreeMoveState {
   consumed: boolean
 }
 
+export function sameRuntimeMovedTreeManifest(
+  before: RuntimeOwnedTreeManifest,
+  after: RuntimeOwnedTreeManifest
+): boolean {
+  const a = before.root
+  const b = after.root
+  return (
+    a.dev === b.dev &&
+    a.ino === b.ino &&
+    a.birthtimeNs === b.birthtimeNs &&
+    a.mode === b.mode &&
+    a.nlink === b.nlink &&
+    a.uid === b.uid &&
+    a.gid === b.gid &&
+    a.rdev === b.rdev &&
+    a.size === b.size &&
+    a.blocks === b.blocks &&
+    a.mtimeNs === b.mtimeNs &&
+    JSON.stringify(before.entries) === JSON.stringify(after.entries)
+  )
+}
+
 export interface RuntimeOwnedTreeMoveAdmission {
   dispose(): Promise<void>
 }

@@ -28,6 +28,9 @@ import {
   type RuntimeProfileParentPin,
   type RuntimeStableOwner
 } from './runtime-purpose-root'
+import { runtimeOwnedTreeReceipts } from './runtime-owned-tree-state'
+import type { RuntimeOwnedTreeReceipt } from './runtime-owned-tree-record'
+import { sameRuntimeMovedTreeManifest } from './runtime-owned-tree-move'
 
 const MAX_PARENT_CHILDREN = 4096
 const FIXED_PURPOSE = 'metis-speech-pack-payload-root/v1'
@@ -596,6 +599,118 @@ export function runtimeTreeParentRecord(
       )
     )
   })
+}
+
+/** Update both parent pins only from the exact receipt produced by a completed owned tree move. */
+export function runtimeTreeParentAcknowledgeMove(input: {
+  readonly sourcePin: RuntimePackTreeParentPin
+  readonly destinationPin: RuntimePackTreeParentPin
+  readonly sourcePlan: RuntimePayloadWritePlan
+  readonly destinationPlan: RuntimePayloadWritePlan
+  readonly sourceReceipt: RuntimeOwnedTreeReceipt
+  readonly movedReceipt: RuntimeOwnedTreeReceipt
+}): void {
+  const sourcePin = treeParentPins.get(input.sourcePin as object)
+  const destinationPin = treeParentPins.get(input.destinationPin as object)
+  const source = runtimeOwnedTreeReceipts.get(input.sourceReceipt as object)
+  const moved = runtimeOwnedTreeReceipts.get(input.movedReceipt as object)
+  if (
+    !sourcePin ||
+    !destinationPin ||
+    sourcePin.disposed ||
+    destinationPin.disposed ||
+    sourcePin.plan !== input.sourcePlan ||
+    destinationPin.plan !== input.destinationPlan ||
+    sourcePin.namespace !== destinationPin.namespace ||
+    sourcePin.namespace.retired ||
+    !source ||
+    !source.consumed ||
+    !source.disposed ||
+    !moved ||
+    moved.disposed ||
+    moved.consumed ||
+    source.rootPath !== sourcePin.treeRootPath ||
+    moved.rootPath !== destinationPin.treeRootPath ||
+    !sameRuntimeMovedTreeManifest(source.manifest, moved.manifest)
+  ) {
+    throw new Error('RUNTIME_TREE_PARENT_MOVE_RECEIPT_INVALID')
+  }
+  const sourceParent = dirname(source.rootPath)
+  const destinationParent = dirname(moved.rootPath)
+  const sourceName = source.rootPath.slice(sourceParent.length + 1)
+  const destinationName = moved.rootPath.slice(destinationParent.length + 1)
+  const movedDirectories = new Map(moved.snapshot.directories.map((directory) => [directory.path, directory]))
+  const updates: {
+    state: TreeParentPinState
+    directory: ParentDirectoryState
+    version: BigIntStats
+    children: string[]
+  }[] = []
+  for (const pin of [sourcePin, destinationPin]) {
+    for (const directory of pin.parentDirectories) {
+      const actual = movedDirectories.get(directory.path)
+      if (!actual || !sameStableDirectoryOwner(directory.version, actual.version)) {
+        throw new Error('RUNTIME_TREE_PARENT_MOVE_CHANGED')
+      }
+      const expected = [...directory.children]
+      if (directory.path === sourceParent) {
+        const index = expected.indexOf(sourceName)
+        if (index < 0) throw new Error('RUNTIME_TREE_PARENT_MOVE_CHANGED')
+        expected.splice(index, 1)
+      }
+      if (directory.path === destinationParent) {
+        if (expected.includes(destinationName)) throw new Error('RUNTIME_TREE_PARENT_MOVE_CHANGED')
+        expected.push(destinationName)
+      }
+      if (!sameNames(expected, actual.children)) throw new Error('RUNTIME_TREE_PARENT_MOVE_CHANGED')
+      updates.push({ state: pin, directory, version: actual.version, children: [...actual.children] })
+    }
+  }
+  const namespace = sourcePin.namespace
+  const namespaceDirectory = movedDirectories.get(namespace.path)
+  if (namespaceDirectory) {
+    if (!sameStableDirectoryOwner(namespace.rootVersion, namespaceDirectory.version)) {
+      throw new Error('RUNTIME_TREE_PARENT_MOVE_CHANGED')
+    }
+    const expected = [...namespace.rootChildren]
+    if (sourceParent === namespace.path) {
+      const index = expected.indexOf(sourceName)
+      if (index < 0) throw new Error('RUNTIME_TREE_PARENT_MOVE_CHANGED')
+      expected.splice(index, 1)
+    }
+    if (destinationParent === namespace.path) {
+      if (expected.includes(destinationName)) throw new Error('RUNTIME_TREE_PARENT_MOVE_CHANGED')
+      expected.push(destinationName)
+    }
+    if (!sameNames(expected, namespaceDirectory.children)) throw new Error('RUNTIME_TREE_PARENT_MOVE_CHANGED')
+  }
+  namespace.parent.assertCurrentSync()
+  for (const update of updates) {
+    update.directory.version = update.version
+    update.directory.children = update.children
+    update.state.snapshot = replaceDirectory(
+      update.state.snapshot,
+      update.directory.path,
+      update.version,
+      update.children
+    )
+  }
+  if (namespaceDirectory) {
+    namespace.rootVersion = namespaceDirectory.version
+    namespace.rootChildren = [...namespaceDirectory.children]
+    sourcePin.snapshot = replaceDirectory(
+      sourcePin.snapshot,
+      namespace.path,
+      namespace.rootVersion,
+      namespace.rootChildren
+    )
+    destinationPin.snapshot = replaceDirectory(
+      destinationPin.snapshot,
+      namespace.path,
+      namespace.rootVersion,
+      namespace.rootChildren
+    )
+  }
 }
 
 export function runtimeTreeParentDetails(
