@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import { SpeechBrokerClient, normalizeSpeechOperatorOrigin } from './broker-client'
@@ -43,7 +44,7 @@ describe('speech broker client', () => {
   it('signs the exact capability body and validates the closed response schema', async () => {
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       expect(init?.method).toBe('POST')
-      expect(init?.body).toBe(JSON.stringify(fixture.capability.readyResponse && { operation: 'speech-capability' }))
+      expect(init?.body).toBe(JSON.stringify({ operation: 'speech-capability' }))
       expect(new Headers(init?.headers).get('x-metis-license')).toBe(settings.operatorLicenseToken)
       return new Response(JSON.stringify(fixture.capability.readyResponse), {
         status: 200,
@@ -83,6 +84,20 @@ describe('speech broker client', () => {
     expect(await redirect.capability()).toMatchObject({ ok: false, code: 'RESPONSE' })
   })
 
+  it('keeps owner-scoped status available when the seat token has expired', async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+    )
+    const client = new SpeechBrokerClient({
+      ...settings,
+      fetchImpl: fetchImpl as typeof fetch,
+      now: () => 1_900_000_000_000
+    })
+    await client.status('00000000-0000-4000-8000-000000000101')
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(await client.capability()).toMatchObject({ ok: false, code: 'CONFIG' })
+  })
+
   it('keeps the opaque grant out of the WebSocket URL and signs the canonical descriptor', async () => {
     const sessionId = '00000000-0000-4000-8000-000000000101'
     const response = {
@@ -108,12 +123,17 @@ describe('speech broker client', () => {
     const socket = MockWebSocket.instances.at(-1)!
     const url = new URL(socket.url)
     const options = socket.options as { headers: Record<string, string>; followRedirects: boolean; maxPayload: number }
+    const grantDigest = createHash('sha256').update('A'.repeat(43), 'utf8').digest('hex')
+    const expectedDescriptor = JSON.stringify({
+      ...fixture.upgrade.descriptorTemplate,
+      grantDigest
+    })
     expect(url.protocol).toBe('wss:')
     expect(url.search).toBe('')
     expect(socket.url).not.toContain('A'.repeat(43))
     expect(options.headers['x-metis-speech-grant']).toBe('A'.repeat(43))
-    expect(options.headers['x-metis-speech-descriptor']).toContain('"streamEpoch":11')
-    expect(options.headers['x-metis-speech-descriptor']).not.toContain('grantDigest')
+    expect(options.headers['x-metis-speech-descriptor']).toBe(expectedDescriptor)
+    expect(options.headers['x-metis-speech-grant']).not.toBe(url.searchParams.get('grant'))
     expect(options.followRedirects).toBe(false)
     expect(options.maxPayload).toBe(65_536)
   })
