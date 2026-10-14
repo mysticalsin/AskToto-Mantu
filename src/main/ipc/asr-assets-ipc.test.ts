@@ -145,4 +145,29 @@ describe('registerAsrAssetsIpc', () => {
     expect(options.getStatus).toHaveBeenCalledOnce()
     registered.cleanup()
   })
+
+  it('attempts every handler removal and rethrows even an undefined cleanup error', () => {
+    const { options, removeHandler } = makeOptions()
+    const registered = registerAsrAssetsIpc(options)
+    removeHandler.mockImplementationOnce(() => {
+      throw undefined
+    })
+
+    let didThrow = false
+    let thrown: unknown
+    try {
+      registered.cleanup()
+    } catch (error) {
+      didThrow = true
+      thrown = error
+    }
+
+    expect(didThrow).toBe(true)
+    expect(thrown).toBeUndefined()
+    expect(removeHandler.mock.calls.slice(-3).map(([channel]) => channel)).toEqual([
+      IPC.asrBundled,
+      IPC.asrAssetsStatus,
+      IPC.asrAssetsEnsure
+    ])
+  })
 })
