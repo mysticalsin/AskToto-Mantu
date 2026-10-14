@@ -10,7 +10,7 @@
  *     hydrates a file: only an explicit open does (recallRead in recall.ts, meetingOpenTarget).
  *   - A newer search aborts the one still queued at the gateway (searchMeetingsLatest).
  */
-import { publicMeetingText } from './features/meetings/meeting-speech'
+import { projectMeetingSpeech } from './features/meetings/speech-provenance'
 import { join } from 'node:path'
 import { resolveMeetingsFolder, decodeSaved, isEncryptedBytes } from './transcripts'
 import { classifyAll, storageAt } from './infra/storage/meetings-storage'
@@ -225,7 +225,9 @@ async function readMeetingUncached(
     return UNREADABLE
   }
   try {
-    const text = publicMeetingText(decodeSaved(raw.bytes))
+    const projected = projectMeetingSpeech(decodeSaved(raw.bytes))
+    if (!projected.ok) return UNREADABLE
+    const text = projected.publicMarkdown
     if (!text) {
       // decodeSaved returns '' both for "not a meeting file" and for a REAL meeting encrypted at rest
       // that this device's keychain can't decrypt (a different machine/user — see transcripts.ts's
