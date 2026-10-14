@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { FileClass, StorageGateway, StorageStreamResult } from '../../infra/storage/gateway'
+import type { ContentVersion, FileClass, StorageGateway, StorageStreamResult } from '../../infra/storage/gateway'
 import {
   configureMeetingPublicProjectionReader,
   createMeetingPublicProjectionReader,
@@ -31,7 +31,7 @@ function fakeGateway(
     fileClass?: FileClass
     streamResult?: StorageStreamResult
     source?: Uint8Array
-    streamVersion?: typeof version
+    streamVersion?: ContentVersion
   } = {}
 ): StorageGateway {
   const source = options.source ?? new TextEncoder().encode('ordinary md')
@@ -65,7 +65,7 @@ function reader(
     streamResult?: StorageStreamResult
     current?: () => boolean
     rootIdentity?: string
-    streamVersion?: typeof version
+    streamVersion?: ContentVersion
     publicLimit?: number
   } = {}
 ) {
@@ -123,7 +123,9 @@ describe('owned meeting public projection reader', () => {
     expect(admitted.ok).toBe(true)
     if (!admitted.ok) return
     const chunks: Uint8Array[] = []
-    const result = await service.project(owner, admitted.handles[0], async (chunk) => chunks.push(chunk))
+    const result = await service.project(owner, admitted.handles[0], async (chunk) => {
+      chunks.push(chunk)
+    })
     expect(result).toEqual({
       ok: true,
       metadata: {
@@ -140,7 +142,7 @@ describe('owned meeting public projection reader', () => {
   })
 
   it('rejects unsafe paths, duplicate source identities, and unavailable classifications', async () => {
-    const service = reader({ fileClass: { status: 'dataless', version } })
+    const service = reader({ fileClass: { status: 'dataless', version, isSymlink: false, isRegular: true } })
     expect(await service.admit(owner, [{ ...candidate, logicalPath: '../private.md' }])).toEqual({
       ok: false,
       reason: 'UNAVAILABLE'
@@ -157,10 +159,11 @@ describe('owned meeting public projection reader', () => {
     if (!admitted.ok) return
     current = false
     const chunks: Uint8Array[] = []
-    expect(await service.project(owner, admitted.handles[0], (chunk) => chunks.push(chunk))).toEqual({
-      ok: false,
-      reason: 'STALE_OWNER'
-    })
+    expect(
+      await service.project(owner, admitted.handles[0], (chunk) => {
+        chunks.push(chunk)
+      })
+    ).toEqual({ ok: false, reason: 'STALE_OWNER' })
     expect(chunks).toEqual([])
   })
 
