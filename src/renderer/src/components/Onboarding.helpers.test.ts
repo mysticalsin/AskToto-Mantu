@@ -231,7 +231,10 @@ describe('MQA-279 — Act 3 (Config) AI-readiness row must never claim ready bef
 
 describe('Act 3 on-device model row', () => {
   it('does not show loading or block setup when optional local AI is off', () => {
-    const row = localModelRowStatus({ ready: false, unavailableReason: 'not-downloaded', minTotalRamGB: 8 }, false)
+    const row = localModelRowStatus(
+      { ready: false, unavailableReason: 'not-downloaded', minTotalRamGB: 8, downloadProgress: 0 },
+      false
+    )
     expect(row.state).toBe('skipped')
     expect(row.detail).toMatch(/optional.*off/i)
     expect(row.progress).toBeUndefined()
@@ -239,7 +242,7 @@ describe('Act 3 on-device model row', () => {
 
   it('does not claim an organization-restricted model is downloading', () => {
     const row = localModelRowStatus(
-      { ready: false, unavailableReason: 'not-downloaded', minTotalRamGB: 8 },
+      { ready: false, unavailableReason: 'not-downloaded', minTotalRamGB: 8, downloadProgress: 0 },
       true,
       false
     )
@@ -248,7 +251,12 @@ describe('Act 3 on-device model row', () => {
   })
 
   it('uses device-neutral low-memory wording', () => {
-    const row = localModelRowStatus({ ready: false, unavailableReason: 'insufficient-ram', minTotalRamGB: 16 })
+    const row = localModelRowStatus({
+      ready: false,
+      unavailableReason: 'insufficient-ram',
+      minTotalRamGB: 16,
+      downloadProgress: 0
+    })
     expect(row.detail).not.toMatch(/Mac/)
   })
 
@@ -468,7 +476,11 @@ describe('Act 3 — transcription files never skip', () => {
   it('failOpen latches Continue unlocked even while ASR still loading', () => {
     expect(setupAsrBlocksContinue([asrRow('loading')], undefined, true)).toBe(false)
     expect(
-      setupAsrBlocksContinue([asrRow('checking')], { ready: false, status: 'loading', progress: 10, label: 'x' }, true)
+      setupAsrBlocksContinue(
+        [asrRow('checking')],
+        { ready: false, status: 'downloading', progress: 0.1, label: 'x' },
+        true
+      )
     ).toBe(false)
   })
 
