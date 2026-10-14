@@ -47,7 +47,7 @@
     "src/main/import-jobs.ts": 1198,
     "src/main/index.ts": 10402,
     "src/main/store.ts": 1364,
-    "src/main/transcripts.ts": 1210,
+    "src/main/transcripts.ts": 1202,
     "src/renderer/src/App.tsx": 4796,
     "src/renderer/src/components/Bar.tsx": 962,
     "src/renderer/src/components/BrainRecordPage.tsx": 831,
