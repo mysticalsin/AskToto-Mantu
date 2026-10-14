@@ -44,6 +44,20 @@ const host = vi.hoisted(() => {
   }
   return {
     useRef: slot,
+    useMemo<T>(factory: () => T, dependencies?: readonly unknown[]): T {
+      const cached = slot<{ value: T; dependencies: readonly unknown[] | undefined } | undefined>(undefined)
+      const prior = cached.current
+      if (
+        !prior ||
+        !dependencies ||
+        !prior.dependencies ||
+        dependencies.length !== prior.dependencies.length ||
+        dependencies.some((value, index) => !Object.is(value, prior.dependencies?.[index]))
+      ) {
+        cached.current = { value: factory(), dependencies: dependencies ? [...dependencies] : undefined }
+      }
+      return cached.current!.value
+    },
     useState<T>(initial: T): [T, (value: T | ((previous: T) => T)) => void] {
       const state = slot(initial)
       return [
@@ -89,8 +103,8 @@ vi.mock('react', () => ({
   useRef: <T>(initial: T) => host.useRef(initial),
   useState: <T>(initial: T) => host.useState(initial),
   useEffect: (effect: () => void | (() => void)) => host.useEffect(effect),
-  useCallback: <T>(fn: T) => fn,
-  useMemo: <T>(fn: () => T) => fn()
+  useCallback: <T>(fn: T, dependencies?: readonly unknown[]) => host.useMemo(() => fn, dependencies),
+  useMemo: <T>(fn: () => T, dependencies?: readonly unknown[]) => host.useMemo(fn, dependencies)
 }))
 
 type WorkletMessage = {
@@ -386,7 +400,13 @@ beforeEach(() => {
       cloudSttStop: vi.fn(async () => ({ timedOut: false })),
       onCloudSttFinal: vi.fn(() => () => {}),
       onCloudSttError: vi.fn(() => () => {}),
-      cloudSpeechCapability: vi.fn(async () => ({})),
+      cloudSpeechCapability: vi.fn(async () => ({
+        disclosureVersion: 'cloud-speech-v1' as const,
+        selected: { engine: 'deepgram-nova3', routeId: 'deepgram-via-gateway', modelId: 'nova-3' },
+        allowed: [{ engine: 'deepgram-nova3', routeId: 'deepgram-via-gateway', modelId: 'nova-3' }],
+        ready: true,
+        refusal: null
+      })),
       cloudSpeechStart: vi.fn(async (request: CloudSpeechStartRequest) => {
         const streams = request.capture.capturedTracks.map((track) => ({
           generation: request.capture.generation,
@@ -400,7 +420,7 @@ beforeEach(() => {
           captureId: request.captureId,
           captureGeneration: request.capture.generation,
           engine: request.capture.engine,
-          streams,
+          streams: streams.map(({ track, epoch }) => ({ track, streamEpoch: epoch })),
           limits: {
             frameBytes: CLOUD_SPEECH_FULL_FRAME_BYTES,
             maxPendingFrames: CLOUD_SPEECH_MAX_PENDING_FRAMES,
@@ -416,7 +436,7 @@ beforeEach(() => {
         track: frame.track,
         sequence: frame.sequence,
         nextSequence: frame.sequence + 1,
-        nextSampleOffset: frame.sampleOffset + frame.pcm16.byteLength / 2
+        nextSampleOffset: frame.sampleOffset + frame.pcm16le.byteLength / 2
       })),
       cloudSpeechFinish: vi.fn(async (request: CloudSpeechFinishRequest) => ({
         ok: true as const,
@@ -539,8 +559,8 @@ describe('live audio transport identity', () => {
     expect(streams.map(({ kind }) => kind)).toEqual(['system'])
 
     render('parakeet')
-    host.rerunEffect(1)
-    await vi.advanceTimersByTimeAsync(3_000)
+    mediaDeviceListeners.devicechange?.()
+    await vi.advanceTimersByTimeAsync(800)
     await settle()
     expect(streams.map(({ kind }) => kind)).toEqual(['system', 'system'])
     expect(moduleLoads).toBe(1)
@@ -666,6 +686,7 @@ describe('live audio transport identity', () => {
     expect(track.onended).toBeTypeOf('function')
 
     api.stop()
+    await vi.advanceTimersByTimeAsync(sealMode.delayMs)
     await settle()
 
     expect(track.stop).toHaveBeenCalledOnce()
@@ -1552,7 +1573,7 @@ describe('broker cloud speech Listen lifecycle', () => {
     const api = renderBroker()
     await api.start('mic', 'fast', 'cloud', 'English', 123, brokerConsent)
     await settle()
-    expect(api.capturing).toBe(true)
+    expect(renderBroker().capturing).toBe(true)
     expect(window.toto.cloudSttStart).not.toHaveBeenCalled()
 
     api.pause()
@@ -1657,7 +1678,7 @@ describe('broker cloud speech Listen lifecycle', () => {
     expect(window.toto.cloudSpeechStart).toHaveBeenCalledOnce()
 
     releaseFinish()
-    await settle()
+    await vi.waitFor(() => expect(window.toto.cloudSpeechStart).toHaveBeenCalledTimes(2))
     api = renderBroker()
     expect(window.toto.cloudSpeechStart).toHaveBeenCalledTimes(2)
     expect(api.capturing).toBe(true)
@@ -1717,7 +1738,7 @@ describe('broker cloud speech Listen lifecycle', () => {
       maxSampleOffsetExclusive: CLOUD_SPEECH_CAPTURE_CEILING_MAX_SAMPLES
     }
     for (const listener of cloudSpeechListeners) listener(ceiling)
-    await settle()
+    await vi.waitFor(() => expect(window.toto.cloudSpeechFinish).toHaveBeenCalledOnce())
     expect(window.toto.cloudSpeechFinish).toHaveBeenCalledOnce()
     expect(renderBroker()).toMatchObject({ listening: true, capturing: true, ready: true })
     expect(streams[0]?.track.stop).not.toHaveBeenCalled()
@@ -1746,7 +1767,7 @@ describe('broker cloud speech Listen lifecycle', () => {
     expect(streams[0]?.track.stop).not.toHaveBeenCalled()
 
     releaseFinish()
-    await settle()
+    await vi.waitFor(() => expect(renderBroker()).toMatchObject({ listening: false, capturing: false, ready: false }))
     api = renderBroker()
     expect(api).toMatchObject({ listening: false, capturing: false, ready: false })
     expect(api.error).toContain('four-hour capture limit')
@@ -1785,7 +1806,7 @@ describe('broker cloud speech Listen lifecycle', () => {
       maxSampleOffsetExclusive: CLOUD_SPEECH_CAPTURE_CEILING_MAX_SAMPLES
     }
     for (const listener of cloudSpeechListeners) listener(ceiling)
-    await settle()
+    await vi.waitFor(() => expect(renderBroker()).toMatchObject({ listening: false, capturing: false, ready: false }))
 
     api = renderBroker()
     expect(api).toMatchObject({ listening: false, capturing: false, ready: false })

@@ -142,8 +142,8 @@ describe('enterprise-live cloud engine path', () => {
     expect(startBody).toMatch(/if \(engine === 'cloud'\)/)
     expect(startBody).toMatch(/cloud STT session planned/)
     expect(startBody).toMatch(/shouldUseCloudSttEngine/)
-    expect(APP).toMatch(/shouldUseCloudSttEngine/)
-    expect(APP).toMatch(/useCloud \? 'cloud'/)
+    expect(APP).toMatch(/resolveListenEngine\(settings\)/)
+    expect(APP).toMatch(/listen\.start\([\s\S]{0,180}engine/)
   })
 
   it('attaches live cloud WS (cloudSttStart) and streams PCM (cloudSttPush)', () => {

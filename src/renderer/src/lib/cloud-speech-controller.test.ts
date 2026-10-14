@@ -12,6 +12,7 @@ import type {
   CloudSpeechStartResult,
   CloudSpeechStatusResult
 } from '@shared/cloud-speech'
+import { createCloudSpeechCancellation } from './cloud-speech-cancel'
 import { createCloudSpeechController, type CloudSpeechControllerBridge } from './cloud-speech-controller'
 
 const captureId = '9d87dc1a-0a52-4a5e-bbc2-f44320890cd4'
@@ -192,6 +193,217 @@ function controller(
   })
   return { ...fakes, instance }
 }
+
+describe('cloud speech cancellation dispatch', () => {
+  const cancellation = (
+    cloudSpeechCancel: CloudSpeechControllerBridge['cloudSpeechCancel'],
+    now: () => number,
+    isStarted: () => boolean
+  ) =>
+    createCloudSpeechCancellation({
+      request,
+      bridge: { cloudSpeechCancel },
+      now,
+      isStarted,
+      failure
+    })
+
+  it('dispatches one owned cancel after the local deadline is already spent and returns without waiting', async () => {
+    let clock = 50
+    const pendingCancel = deferred<unknown>()
+    const bridgeCancel = vi.fn(() => pendingCancel.promise)
+    const next = cancellation(
+      bridgeCancel,
+      () => clock,
+      () => true
+    )
+
+    await expect(next.cancelBridgeWithin(50)).resolves.toEqual(failure('TIMEOUT'))
+    expect(bridgeCancel).toHaveBeenCalledTimes(1)
+    expect(bridgeCancel).toHaveBeenCalledWith({ captureId, captureGeneration })
+    expect(next.hasPending()).toBe(true)
+
+    clock = 51
+    await expect(next.cancelBridgeWithin(60)).resolves.toEqual(failure('TIMEOUT'))
+    expect(bridgeCancel).toHaveBeenCalledTimes(1)
+    pendingCancel.resolve({ ok: true, captureId, captureGeneration, closure: 'confirmed' })
+    await pendingCancel.promise
+  })
+
+  it('coalesces duplicate cancel requests around one pending owned IPC', async () => {
+    const pendingCancel = deferred<unknown>()
+    const bridgeCancel = vi.fn(() => pendingCancel.promise)
+    const next = cancellation(
+      bridgeCancel,
+      () => 0,
+      () => true
+    )
+    const first = next.cancel(100)
+    const duplicate = next.cancel(100)
+
+    expect(duplicate).toBe(first)
+    expect(bridgeCancel).toHaveBeenCalledTimes(1)
+    pendingCancel.resolve({ ok: true, captureId, captureGeneration, closure: 'confirmed' })
+    await expect(first).resolves.toMatchObject({ ok: true, closure: 'confirmed' })
+    expect(next.hasPending()).toBe(false)
+  })
+
+  it('shortens all coalesced cancel waiters to the earliest caller deadline', async () => {
+    vi.useFakeTimers()
+    let clock = 0
+    const pendingCancel = deferred<unknown>()
+    const bridgeCancel = vi.fn(() => pendingCancel.promise)
+    const next = cancellation(
+      bridgeCancel,
+      () => clock,
+      () => true
+    )
+    const first = next.cancel(100)
+    const duplicate = next.cancel(50)
+
+    expect(duplicate).toBe(first)
+    expect(bridgeCancel).toHaveBeenCalledTimes(1)
+    clock = 50
+    await vi.advanceTimersByTimeAsync(50)
+    await expect(first).resolves.toEqual(failure('TIMEOUT'))
+    expect(bridgeCancel).toHaveBeenCalledTimes(1)
+    pendingCancel.resolve({ ok: true, captureId, captureGeneration, closure: 'confirmed' })
+  })
+
+  it('shortens an existing bridgeWithin wait when a later caller has an earlier deadline', async () => {
+    vi.useFakeTimers()
+    let clock = 0
+    const pendingCancel = deferred<unknown>()
+    const bridgeCancel = vi.fn(() => pendingCancel.promise)
+    const next = cancellation(
+      bridgeCancel,
+      () => clock,
+      () => true
+    )
+    const first = next.cancelBridgeWithin(100)
+    const duplicate = next.cancelBridgeWithin(50)
+
+    clock = 50
+    await vi.advanceTimersByTimeAsync(50)
+    await expect(Promise.all([first, duplicate])).resolves.toEqual([failure('TIMEOUT'), failure('TIMEOUT')])
+    expect(bridgeCancel).toHaveBeenCalledTimes(1)
+    pendingCancel.resolve({ ok: true, captureId, captureGeneration, closure: 'confirmed' })
+  })
+
+  it('lets requested-identity cleanup shorten an already waiting cancellation', async () => {
+    vi.useFakeTimers()
+    let clock = 0
+    const pendingCancel = deferred<unknown>()
+    const bridgeCancel = vi.fn(() => pendingCancel.promise)
+    const next = cancellation(
+      bridgeCancel,
+      () => clock,
+      () => true
+    )
+    const first = next.cancelBridgeWithin(100)
+    const cleanup = next.cancelRequestedIdentity(50)
+
+    clock = 50
+    await vi.advanceTimersByTimeAsync(50)
+    await expect(first).resolves.toEqual(failure('TIMEOUT'))
+    await expect(cleanup).resolves.toBeUndefined()
+    expect(bridgeCancel).toHaveBeenCalledTimes(1)
+    pendingCancel.resolve({ ok: true, captureId, captureGeneration, closure: 'confirmed' })
+  })
+
+  it('consumes a late bridge rejection and reports transport failure when the wait budget remains', async () => {
+    const pendingCancel = deferred<unknown>()
+    const bridgeCancel = vi.fn(() => pendingCancel.promise)
+    const next = cancellation(
+      bridgeCancel,
+      () => 0,
+      () => true
+    )
+    const result = next.cancelBridgeWithin(100)
+
+    pendingCancel.reject(new Error('synthetic cancel rejection'))
+    await expect(result).resolves.toEqual(failure('TRANSPORT'))
+    expect(bridgeCancel).toHaveBeenCalledTimes(1)
+    expect(next.hasPending()).toBe(false)
+  })
+
+  it('consumes a bridge rejection after an expired caller has already received TIMEOUT', async () => {
+    const pendingCancel = deferred<unknown>()
+    const bridgeCancel = vi.fn(() => pendingCancel.promise)
+    const next = cancellation(
+      bridgeCancel,
+      () => 50,
+      () => true
+    )
+
+    await expect(next.cancelBridgeWithin(50)).resolves.toEqual(failure('TIMEOUT'))
+    expect(bridgeCancel).toHaveBeenCalledTimes(1)
+    pendingCancel.reject(new Error('synthetic late cancel rejection'))
+    await vi.waitFor(() => expect(next.hasPending()).toBe(false))
+    expect(bridgeCancel).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses a successful response for a foreign capture identity', async () => {
+    const bridgeCancel = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        captureId: 'f07371f0-8a95-43f6-b98a-ea24db2cb117',
+        captureGeneration: captureGeneration + 1,
+        closure: 'confirmed'
+      })
+    )
+    const next = cancellation(
+      bridgeCancel,
+      () => 0,
+      () => true
+    )
+
+    await expect(next.cancelBridgeWithin(100)).resolves.toEqual(failure('TRANSPORT'))
+    expect(bridgeCancel).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not dispatch when Start has not established an owned capture', async () => {
+    const bridgeCancel = vi.fn(() => Promise.resolve({ ok: true, captureId, captureGeneration, closure: 'confirmed' }))
+    const next = cancellation(
+      bridgeCancel,
+      () => 0,
+      () => false
+    )
+
+    await expect(next.cancelBridgeWithin(100)).resolves.toEqual(failure('CLOSED'))
+    expect(bridgeCancel).not.toHaveBeenCalled()
+    expect(next.hasPending()).toBe(false)
+  })
+
+  it('dispatches requested-identity cleanup after a late successful Start even with no wait budget', async () => {
+    const bridgeCancel = vi.fn(() => Promise.resolve({ ok: true, captureId, captureGeneration, closure: 'unknown' }))
+    const next = cancellation(
+      bridgeCancel,
+      () => 50,
+      () => false
+    )
+
+    await next.cancelRequestedIdentity(50)
+    expect(bridgeCancel).toHaveBeenCalledTimes(1)
+    expect(bridgeCancel).toHaveBeenCalledWith({ captureId, captureGeneration })
+  })
+
+  it('does not send a nonexistent-owner cancel before Start, then cancels a late successful Start', async () => {
+    const { instance, bridge } = controller()
+    const pendingStart = deferred<unknown>()
+    bridge.cloudSpeechStart = vi.fn(() => pendingStart.promise)
+    const start = instance.start()
+
+    await vi.waitFor(() => expect(bridge.cloudSpeechStart).toHaveBeenCalledOnce())
+    await expect(instance.cancel()).resolves.toEqual(failure('CLOSED'))
+    expect(bridge.cloudSpeechCancel).not.toHaveBeenCalled()
+
+    pendingStart.resolve(started())
+    await expect(start).resolves.toEqual(failure('CLOSED'))
+    expect(bridge.cloudSpeechCancel).toHaveBeenCalledOnce()
+    expect(bridge.cloudSpeechCancel).toHaveBeenCalledWith({ captureId, captureGeneration })
+  })
+})
 
 afterEach(() => vi.useRealTimers())
 
@@ -631,7 +843,11 @@ describe('cloud speech capture controller', () => {
       stage: 'opened',
       streams: [{ track: 'microphone', previousEpoch: 3, nextEpoch: 15, lastSequence: 0 }]
     }
-    for (const event of [terminal, closed, opened]) for (const listener of next.events) listener(event)
+    for (const listener of fakes.events) listener(terminal)
+    await vi.waitFor(() => expect(applied).toEqual([terminal]))
+    for (const listener of fakes.events) listener(closed)
+    await vi.waitFor(() => expect(fakes.bridge.cloudSpeechAckEpochTransition).toHaveBeenCalledTimes(1))
+    for (const listener of fakes.events) listener(opened)
     await vi.waitFor(() => expect(fakes.bridge.cloudSpeechAckEpochTransition).toHaveBeenCalledTimes(2))
     const successor: CloudSpeechEvent = {
       type: 'segment',
@@ -649,7 +865,7 @@ describe('cloud speech capture controller', () => {
         endMs: 20
       }
     }
-    for (const listener of next.events) listener(successor)
+    for (const listener of fakes.events) listener(successor)
     await Promise.resolve()
     expect(applied).toEqual([terminal])
     openedAck.resolve({
@@ -1688,11 +1904,17 @@ describe('cloud speech capture controller', () => {
   it('stops within one absolute deadline when a frame ACK never resolves', async () => {
     vi.useFakeTimers()
     const { instance, frame, bridge } = controller({ deadlineMs: 50 })
-    frame.mockReturnValue(new Promise<CloudSpeechFrameResult>(() => {}))
+    const frameEntered = deferred<void>()
+    frame.mockImplementation(() => {
+      frameEntered.resolve(undefined)
+      return new Promise<CloudSpeechFrameResult>(() => {})
+    })
     await instance.start()
     const port = new FakePort()
     instance.attachTrack('microphone', port as unknown as MessagePort, 0)
     port.emit(pcmFrame(1, 0))
+    await frameEntered.promise
+    expect(frame).toHaveBeenCalledOnce()
     const stop = instance.stop()
     await vi.advanceTimersByTimeAsync(50)
     const result = await stop

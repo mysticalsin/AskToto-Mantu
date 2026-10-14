@@ -134,9 +134,11 @@ describe('themDeviceChangeAction — them-side silent-death recovery (MQA-011)',
   it('is wired into the devicechange handler, the probation timer, and the them audio callback', () => {
     // The recovery helper's devicechange/probation effects are exercised through a fake media host in
     // listen.loopback.contract.test.ts; retain the actual Listen callback wiring checks here.
-    expect(listenSrc).toMatch(/recoverMicNow: \(\) => void recoverMicRef\.current\?\.\(\)/)
+    expect(listenSrc).toMatch(
+      /recoverMicNow: \(\) => \{\s*if \(failBrokerAudioRecovery\('microphone'\)\) return\s*void recoverMicRef\.current\?\.\(\)\s*\}/
+    )
     expect(listenSrc).toMatch(/scheduleThemProbation: \(callback, delay\) => \{\s*audioChannels\.clearThemWatchdog\(\)/)
-    expect(listenSrc).toMatch(/audioChannels\.close\('them'\)[\s\S]{0,240}recoverSystemAudioRef\.current/)
+    expect(listenSrc).toMatch(/audioChannels\.close\('them'\)[\s\S]{0,400}recoverSystemAudioRef\.current/)
     // Proof-of-life is recorded per window; nothing heavier than a boolean store on the capture path.
     expect(listenSrc).toMatch(/themWindowSeenRef\.current = true/)
   })
@@ -270,7 +272,7 @@ describe('degradedAfterMicRecovery — a mic recovery must not erase a live them
   it('MQA-156 — is what recoverMic writes, and every them-degradation site remembers its cause', () => {
     // The clear site that used to lie.
     expect(listenSrc).toMatch(
-      /captureDegraded: degradedAfterMicRecovery\(\s*s\.captureDegraded,\s*themDegradedRef\.current,\s*wantsSystemRef\.current,\s*!!channels\.current\.them\s*\)/
+      /captureDegraded: degradedAfterMicRecovery\(\s*state\.captureDegraded,\s*themDegradedRef\.current,\s*wantsSystemRef\.current,\s*!!channels\.current\.them\s*\)/
     )
     // Remembered at the start-time mic-only fallback, at a mid-session 'them' death, and at the
     // probation recycle — and dropped again only once 'them' is genuinely capturing (or a new session).
