@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   RECOVERY_ASSERTIONS,
   RECOVERY_REPORT_SCHEMA,
+  mergeOwnedProcessBaselines,
   packagedRecoveryReportProblems,
   releaseCandidateTransports,
   requestQuitAcknowledgement,
@@ -157,6 +158,7 @@ describe('packaged restart recovery candidate scenario', () => {
       naturalExit: true,
       exitCode: 0,
       signalCode: null,
+      survivorCountAfterGrace: 0,
       survivorCount: 0,
       transportsReleased: true
     }
@@ -164,6 +166,23 @@ describe('packaged restart recovery candidate scenario', () => {
     expect(shutdownVerdict({ ...evidence, quitAcknowledged: false }).clean).toBe(false)
     expect(shutdownVerdict({ ...evidence, exitCode: 1 }).clean).toBe(false)
     expect(shutdownVerdict({ ...evidence, exitCode: null, signalCode: 'SIGTERM' }).clean).toBe(false)
+    expect(
+      shutdownVerdict({ ...evidence, survivorCountAfterGrace: 1, survivorCount: 0 })
+    ).toEqual({ clean: false, teardown: 'ACKNOWLEDGED' })
+  })
+
+  it('preserves launch-time process ownership when quit-time census loses a reparented helper', () => {
+    const launchedMain = { pid: 10, startedMs: 100 }
+    const launchedHelper = { pid: 11, startedMs: 101 }
+    const quitMain = { pid: 10, startedMs: 100, ppid: 1 }
+    const merged = mergeOwnedProcessBaselines(
+      [launchedMain, launchedHelper],
+      [quitMain]
+    )
+
+    expect(merged).toHaveLength(2)
+    expect(merged.map(({ pid, startedMs }) => `${pid}:${startedMs}`)).toEqual(['10:100', '11:101'])
+    expect(merged[0]).toBe(quitMain)
   })
 
   it('does not acknowledge a rejected or timed-out quit request', async () => {
@@ -195,6 +214,7 @@ describe('packaged restart recovery candidate scenario', () => {
         naturalExit: true,
         exitCode: 0,
         signalCode: null,
+        survivorCountAfterGrace: 0,
         survivorCount: 0,
         transportsReleased
       })
