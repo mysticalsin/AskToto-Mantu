@@ -153,7 +153,23 @@ describe('manual rollback provenance and report contracts', () => {
     expect(report.macos.baseline_dmg).toBe('Metis-1.9.6.dmg')
     expect(report.macos.candidate_dmg).toBe('Metis-1.9.7.dmg')
     expect(report.macos.baseline_dmg_sha256).toBe(BASELINE_MACOS_SHA256)
-    expect(report.macos).toMatchObject({ status: 'BLOCKED', execution: 'NEVER_RUN', attempted: false })
+    expect(report.macos).toMatchObject({
+      status: 'BLOCKED',
+      execution: 'NEVER_RUN',
+      attempted: false,
+      reason: 'pre-upgrade-snapshot-required',
+      compatibility: {
+        baseline_source_commit: '2bf21f1ceefe117838325342574b57852e5cadcb',
+        baseline_source_path: 'src/main/index.ts:887',
+        baseline_keystore: 'ASKTOTO_LOCAL_KEYSTORE=1 forces the file backend on Darwin',
+        baseline_key_file_risk: 'secret-key.bin may contain a raw 32-byte key',
+        target_migration: 'PR #614 migrates to wrapped keys and new settings encryption',
+        evidence_level: 'STATIC_ONLY'
+      }
+    })
+    expect(report.macos.unblock).toContain('pre-upgrade snapshot')
+    expect(report.macos.unblock).toContain('staging and atomic rename')
+    expect(report.macos.unblock).toContain('does not prove safe recovery of owner data')
     expect(manualRollbackReportProblems(report, expected)).toEqual([])
 
     const skipped = structuredClone(report)

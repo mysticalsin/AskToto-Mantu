@@ -2,7 +2,8 @@
 // Hosted, disposable Windows exercise of the documented manual recovery path: install the exact
 // 1.9.6 baseline, save one synthetic encrypted meeting, install the exact 1.9.7 candidate over the
 // same app root, then reinstall the pinned 1.9.6 Setup and verify the same profile. The macOS row is
-// deliberately BLOCKED/NEVER_RUN until unsigned-build Keychain identity continuity is proven.
+// BLOCKED/NEVER_RUN because direct downgrade is incompatible with the key/settings migration; it requires
+// a separately qualified pre-upgrade profile snapshot recovery path.
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -75,11 +76,24 @@ const inside = (root, path) => {
   return part === '' || (part !== '..' && !part.startsWith(`..${sep}`) && !isAbsolute(part))
 }
 
-const MACOS_BLOCK_REASON = 'unsigned-keychain-identity'
+const MACOS_BLOCK_REASON = 'pre-upgrade-snapshot-required'
+const MACOS_COMPATIBILITY = Object.freeze({
+  baseline_source_commit: '2bf21f1ceefe117838325342574b57852e5cadcb',
+  baseline_source_path: 'src/main/index.ts:887',
+  baseline_keystore: 'ASKTOTO_LOCAL_KEYSTORE=1 forces the file backend on Darwin',
+  baseline_key_file_risk: 'secret-key.bin may contain a raw 32-byte key',
+  target_migration: 'PR #614 migrates to wrapped keys and new settings encryption',
+  evidence_level: 'STATIC_ONLY'
+})
 const MACOS_UNBLOCK =
-  'Resolve and independently verify safeStorage/Keychain identity continuity for exact unsigned ' +
-  '1.9.7-to-1.9.6 DMG reinstall on a disposable hosted Mac; confirm existing encrypted data remains ' +
-  'readable or provide an explicit recovery path.'
+  'Direct reinstall of stock 1.9.6 after the PR #614 wrapped-key/settings-encryption migration is unsupported. ' +
+  'A separate hosted macOS recovery gate must seed synthetic data under the exact pinned 1.9.6 DMG, stop and ' +
+  'census its processes, snapshot the complete pre-upgrade profile into an encrypted runner-only archive, verify ' +
+  'the exact candidate DMG and observe its migration, reinstall the pinned 1.9.6 DMG, and restore only the ' +
+  'pre-upgrade snapshot through staging and atomic rename. Relaunch 1.9.6 and verify the synthetic settings, ' +
+  'notes, transcript, history, and exact bytes; report candidate-only changes outside the snapshot. Never log or ' +
+  'upload the archive, profile, or any raw key; acknowledge process census, attachment release, and all cleanup. ' +
+  'This synthetic qualification alone does not prove safe recovery of owner data.'
 
 /**
  * @typedef {{
@@ -258,6 +272,7 @@ export function createManualRollbackReport(identity = null) {
       candidate_bytes_verified: false,
       baseline_bytes_verified: false,
       reason: MACOS_BLOCK_REASON,
+      compatibility: MACOS_COMPATIBILITY,
       unblock: MACOS_UNBLOCK
     },
     cleanup: {
@@ -384,6 +399,7 @@ export function manualRollbackReportProblems(report, expected = {}) {
       'candidate_bytes_verified',
       'baseline_bytes_verified',
       'reason',
+      'compatibility',
       'unblock'
     ])
   ) {
@@ -399,6 +415,8 @@ export function manualRollbackReportProblems(report, expected = {}) {
     report.macos.candidate_bytes_verified !== false ||
     report.macos.baseline_bytes_verified !== false ||
     report.macos.reason !== MACOS_BLOCK_REASON ||
+    !exact(report.macos.compatibility, Object.keys(MACOS_COMPATIBILITY)) ||
+    Object.entries(MACOS_COMPATIBILITY).some(([key, value]) => report.macos.compatibility[key] !== value) ||
     report.macos.unblock !== MACOS_UNBLOCK
   ) {
     problems.push('macos-blocker-not-explicit')

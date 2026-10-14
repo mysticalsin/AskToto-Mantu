@@ -3,8 +3,8 @@ name: Manual 1.9.7 rollback
 # Hosted exact-artifact recovery check. This is a manual installer reinstall, not an updater rollback:
 # 1.9.6 Setup seeds synthetic encrypted data, the selected 1.9.7 Setup opens it, then the pinned 1.9.6
 # Setup is reinstalled over the same app directory and must reopen the same data. Windows is exercised
-# on an ephemeral hosted account. macOS unsigned Keychain identity continuity remains explicitly blocked
-# in the report until a disposable hosted Mac proves it safe.
+# on an ephemeral hosted account. Static evidence shows direct macOS downgrade is unsupported after the
+# PR #614 key/settings migration; macOS stays BLOCKED/NEVER_RUN until a separate snapshot-restore lane passes.
 run-name: Manual 1.9.7 rollback ${{ inputs.candidate_run }} attempt ${{ inputs.candidate_attempt }}
 
 on:
