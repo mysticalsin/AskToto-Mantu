@@ -293,7 +293,9 @@ describe('authenticated speech session broker boundary', () => {
       allowed: [{ routeId: TOKEN.routeId, modelId: TOKEN.modelId }],
       ready: true,
       routeId: TOKEN.routeId,
-      modelId: TOKEN.modelId
+      modelId: TOKEN.modelId,
+      configVersion: TOKEN.configVersion,
+      policyVersion: baseEnv.SPEECH_POLICY_VERSION
     })
     expect(fixture.db.prepare('SELECT COUNT(*) AS n FROM speech_sessions').get()).toMatchObject({ n: 0 })
     expect(fixture.db.prepare('SELECT COUNT(*) AS n FROM speech_grants').get()).toMatchObject({ n: 0 })
