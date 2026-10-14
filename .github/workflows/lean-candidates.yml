@@ -31,6 +31,7 @@ jobs:
           npx vitest run
           scripts/lib/package-inventory.test.ts
           scripts/lib/contained-tree-copy.test.ts
+          scripts/lib/runtime-trust-pins.test.ts
           scripts/lib/forbidden-inference-path.test.ts
           scripts/lib/macho-architecture.test.ts
           scripts/lib/lean-checker-args.test.ts
