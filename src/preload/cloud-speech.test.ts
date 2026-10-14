@@ -139,7 +139,7 @@ describe('cloud speech preload boundary', () => {
 
     for (const mismatchedIdentity of [
       { captureId: 'c1f85141-fcfe-4bac-9d96-658fce84ca87', captureGeneration: capture.generation },
-      { captureId, captureGeneration: captureGeneration + 1 }
+      { captureId, captureGeneration: capture.generation + 1 }
     ]) {
       fixture.invoke.mockResolvedValueOnce({
         ok: true,
