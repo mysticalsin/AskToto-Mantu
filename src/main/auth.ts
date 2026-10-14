@@ -5,10 +5,20 @@ import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import type { PublicClientApplication } from '@azure/msal-node'
 import type { AuthStatus, SignInResult } from '@shared/ipc'
-import { getSettings, setSettings } from './store'
+import { setSettings } from './store'
 import { auditLog, mainLog, setAuditActor } from './logger'
 import { useFileBackend, encryptSecret, decryptSecret } from './secrets'
-import { readTrustedAdminManaged } from './win-security'
+import { adminManagedConfigPath, readTrustedAdminManaged } from './win-security'
+import { azureFromManagedContent, leaseEnforced, readSettingsAzure, resolveLeaseConfig, usableAzureConfig, type AzureConfig } from './auth-config'
+import { readSpeechAuthBoundary as readVerifiedSpeechAuthBoundary } from './auth-speech-boundary'
+import {
+  SpeechAuthLeaseController,
+  type SpeechAuthLease,
+  type SpeechAuthLeaseReaders,
+  type SpeechAuthSettingsObservation
+} from './auth-speech-lease'
+
+export type { SpeechAuthLease, SpeechAuthLeaseReaders, SpeechAuthSettingsObservation }
 
 // Scopes requested at sign-in: identity + read-only calendar (so the agenda can be pulled later with no
 // extra consent prompt). Least privilege — Calendars.Read, never ReadWrite.
@@ -31,11 +41,6 @@ const SIGN_IN_SCOPES = ['User.Read', 'Calendars.Read', 'openid', 'profile', 'ema
  * The validated identity is persisted (encrypted) so sign-in survives restarts.
  */
 
-interface AzureConfig {
-  clientId: string
-  tenantId: string
-  allowedDomain: string
-}
 interface Session {
   email: string
   name?: string
@@ -44,144 +49,37 @@ interface Session {
   at: number
 }
 
-// The machine-wide org-policy path + its win32 admin-trust gate live in win-security.ts. On Windows a
-// forged %ProgramData%\Métis\managed-config.json (user-writable by default) is NOT honored, so it
-// cannot redirect SSO to an attacker tenant or force-lock the app.
-
-/** Read an { azure: { clientId, tenantId, allowedDomain } } block from managed-config (admin or per-user). */
-function azureFromManagedContent(raw: string): Partial<AzureConfig> {
-  try {
-    const az = JSON.parse(raw)?.azure
-    if (az?.clientId && az?.tenantId && az?.allowedDomain) {
-      return { clientId: az.clientId, tenantId: az.tenantId, allowedDomain: az.allowedDomain }
-    }
-  } catch {
-    /* not present / unreadable */
-  }
-  return {}
+/** Pure tenant comparison used by the sign-in gate. */
+export function tenantMatches(tid: string, configuredTenantId: string): boolean {
+  return tid.trim().toLowerCase() === configuredTenantId.trim().toLowerCase()
 }
 
 function readManagedAzure(): Partial<AzureConfig> {
-  // Admin/machine policy FIRST so a user-writable per-user file can't override the org tenant lock.
-  // readTrustedAdminManaged() reads through the SAME held fd that verified win32 admin-trust, so the
-  // content read here can't be swapped in after the trust check (see win-security.ts).
   const admin = readTrustedAdminManaged()
   if (admin) {
-    const az = azureFromManagedContent(admin)
-    if (az.clientId) return az
+    const azure = azureFromManagedContent(admin)
+    if (azure.clientId) return azure
   }
   try {
-    const raw = readFileSync(join(app.getPath('userData'), 'managed-config.json'), 'utf8')
-    return azureFromManagedContent(raw)
+    return azureFromManagedContent(readFileSync(join(app.getPath('userData'), 'managed-config.json'), 'utf8'))
   } catch {
     return {}
   }
 }
 
-/**
- * Azure SSO config set by an admin in the in-app Settings (About → Account). These are public
- * identifiers (no secret), so storing them in settings is safe. Lowest precedence — a machine-wide
- * managed-config overrides them, so IT can hard-lock the org tenant without the UI loosening it.
- */
-function readSettingsAzure(): Partial<AzureConfig> {
-  try {
-    const s = getSettings()
-    const clientId = (s.azureClientId || '').trim()
-    const tenantId = (s.azureTenantId || '').trim()
-    const allowedDomain = (s.azureAllowedDomain || '').trim().replace(/^@/, '')
-    if (clientId && tenantId && allowedDomain) return { clientId, tenantId, allowedDomain }
-  } catch {
-    /* settings unreadable — fall through to not-configured */
-  }
-  return {}
-}
-
-// A resolved config value must be free of whitespace/control chars AND URL-structural metacharacters.
-// tenantId flows into the MSAL authority URL `https://login.microsoftonline.com/${tenantId}`, and
-// allowedDomain into the `email.endsWith('@'+allowedDomain)` gate — so a value carrying `/ \ ? # @ :`
-// or whitespace could distort the authority path or the domain-suffix check. Legit values never do:
-// clientId is a GUID, tenantId a GUID (see isPlausibleAzureConfig), allowedDomain a hostname. This is
-// the format validation the self-service Settings path (and the managed/LKG paths) previously lacked.
-function isSafeConfigValue(v: string): boolean {
-  // Positive allowlist: letters, digits, dot, hyphen only. Covers every legit value — clientId
-  // (GUID), tenantId (GUID), allowedDomain (hostname) — while rejecting all
-  // whitespace, control chars, and URL-structural metacharacters (/ \ ? # @ : etc.).
-  return v.length > 0 && v.length <= 253 && /^[A-Za-z0-9.-]+$/.test(v)
-}
-
-// The only tenantId shape this app can actually sign in with. The MSAL authority URL happily accepts
-// the Entra primary domain (`mantu.onmicrosoft.com`) or a multi-tenant alias (`common`/`organizations`/
-// `consumers`), but the runtime gate in signIn() compares against the id-token `tid` claim, which Entra
-// always issues as the tenant GUID — and Métis is deliberately single-tenant (docs/MANTU-IT-REQUEST.md).
-// Anything but the GUID therefore authenticates at Microsoft and is rejected as "outside your
-// organization" on EVERY attempt, while readConfig() still reports the install as configured: the
-// SignInWall replaces the whole app and the Settings ID fields lock behind it, so the typo (or an
-// unedited `REPLACE-WITH-AZURE-TENANT-ID` from build/managed-config.enterprise.example.json) can never
-// be corrected in-app. Subsumes isSafeConfigValue for this field — hex + hyphens only.
-const TENANT_GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
-
-/** Reject a resolved config whose fields aren't structurally plausible before they reach the MSAL
- *  authority / the domain gate. clientId and allowedDomain are only CHARACTER-checked (no whitespace /
- *  URL metachars), so injection-shaped garbage is rejected while GUIDs/hostnames pass; tenantId is held
- *  to the exact GUID shape, because a non-GUID there is not a degraded config but an unrecoverable
- *  lockout (see TENANT_GUID_RE). A tier that fails here is treated as "no config from this tier", which
- *  leaves the install unenforced and usable — the same outcome an unsafe clientId already produced. */
-function isPlausibleAzureConfig(c: AzureConfig): boolean {
-  return isSafeConfigValue(c.clientId) && TENANT_GUID_RE.test(c.tenantId) && isSafeConfigValue(c.allowedDomain)
-}
-
-/** Pure: does the id-token `tid` claim identify the configured tenant? Case-folded because Entra issues
- *  `tid` lowercase while the portal's "Directory (tenant) ID" is routinely pasted uppercase — see the
- *  gate in signIn(). Exported for unit tests (auth.test.ts): reaching that gate otherwise needs a full
- *  interactive MSAL round-trip, and a mismatch here is an unrecoverable lockout, not a retryable error. */
-export function tenantMatches(tid: string, configuredTenantId: string): boolean {
-  return tid.trim().toLowerCase() === configuredTenantId.trim().toLowerCase()
-}
-
-/**
- * Config resolved by precedence: env (dev) → machine-wide managed-config (IT policy) → per-user
- * managed-config → in-app Settings. Env/managed win so an org deployment can't be loosened from the UI;
- * the Settings fallback makes SSO self-serve (dummy-proof) when no policy file is deployed.
- *
- * No side effects here (deliberately): resolving a config value — especially from self-service Settings,
- * which has NO format validation — does not mean SSO is actually usable. The sticky-configured flag is
- * only written by signIn() on a genuine successful interactive sign-in (see writeStickyConfigured call
- * site below); merely typing values into Settings must never trip it, or "Reset SSO" right after would
- * permanently lock the app with no in-app recovery.
- *
- * Lowest-precedence recovery fallback: after a genuine sign-in, the config that actually worked is kept
- * as an LKG record. If Settings is later cleared while enforcement is sticky, LKG keeps sign-in POSSIBLE
- * (so the sticky gate is recoverable, not a brick) — env/managed/Settings all still win above it, and it
- * is only consulted when sticky is set. See the LKG comment block above.
- */
+/** Resolve env, managed policy, Settings, then sticky-only LKG without mutating sticky state. */
 function readConfig(): AzureConfig | null {
-  // A tier "counts" only when it supplies all three fields AND they pass format validation — an
-  // implausible/garbage value (whitespace, URL metachars) is treated as "no config from this tier"
-  // and we fall through, rather than building a poisoned MSAL authority or a broken domain gate.
-  const usable = (c: Partial<AzureConfig>): AzureConfig | null => {
-    if (!c.clientId || !c.tenantId || !c.allowedDomain) return null
-    const cfg = { clientId: c.clientId, tenantId: c.tenantId, allowedDomain: c.allowedDomain }
-    return isPlausibleAzureConfig(cfg) ? cfg : null
-  }
-  const env = usable({
+  const env = usableAzureConfig({
     clientId: process.env.AZURE_CLIENT_ID,
     tenantId: process.env.AZURE_TENANT_ID,
     allowedDomain: process.env.ASKTOTO_ALLOWED_DOMAIN
   })
   if (env) return env
-  const m = usable(readManagedAzure())
-  if (m) return m
-  const s = usable(readSettingsAzure())
-  if (s) return s
-  // Recovery fallback — only after a genuine prior sign-in (sticky set), and only if nothing above
-  // resolved. Makes an enforced-but-Settings-cleared device recoverable instead of a permanent brick.
-  if (isStickyConfigured()) {
-    const l = usable(readLkgConfig())
-    if (l) {
-      return l
-    }
-  }
-  return null
+  const managed = usableAzureConfig(readManagedAzure())
+  if (managed) return managed
+  const settings = usableAzureConfig(readSettingsAzure())
+  if (settings) return settings
+  return isStickyConfigured() ? usableAzureConfig(readLkgConfig()) : null
 }
 
 function sessionPath(): string {
@@ -385,6 +283,58 @@ export async function getGraphToken(scopes: string[]): Promise<string | null> {
 
 let session: Session | null = null
 let loaded = false
+let loadedForUserData: string | null = null
+let speechAuthSessionEpoch = 0
+let speechAuthLeaseController: SpeechAuthLeaseController
+let suspendedSpeechAuthProfilePath: string | null = null
+
+export function invalidateSpeechAuthLease(): void {
+  speechAuthLeaseController.invalidate()
+}
+
+export function configureSpeechAuthLeaseReaders(readers: SpeechAuthLeaseReaders): void {
+  speechAuthLeaseController.configureReaders(readers)
+}
+
+export function resetSpeechAuthLeaseReaders(): void {
+  speechAuthLeaseController.resetReaders()
+}
+
+export function subscribeSpeechAuthLeaseInvalidation(listener: () => void): () => void {
+  return speechAuthLeaseController.subscribe(listener)
+}
+
+export function observeSpeechAuthSettings(
+  observation: SpeechAuthSettingsObservation,
+  policyPathsRevision: string
+): void {
+  speechAuthLeaseController.observeSettings(observation, policyPathsRevision)
+}
+
+export function resetSpeechAuthProfile(): void {
+  invalidateSpeechAuthLease()
+  suspendedSpeechAuthProfilePath = app.getPath('userData')
+  session = null
+  loaded = false
+  loadedForUserData = null
+  speechAuthSessionEpoch += 1
+  try {
+    sessionClearedHandler?.()
+  } catch (e) {
+    mainLog.warn('[auth] session teardown failed:', e instanceof Error ? e.message : String(e))
+  }
+}
+
+/** Call after the profile archive/path switch has completed. This releases the pre-archive reload
+ * suspension so the next boundary can read only the new profile's session file. */
+export function completeSpeechAuthProfileReset(): void {
+  suspendedSpeechAuthProfilePath = null
+  session = null
+  loaded = false
+  loadedForUserData = null
+  speechAuthSessionEpoch += 1
+  invalidateSpeechAuthLease()
+}
 
 // Single-flight guard for interactive sign-in. signIn() binds a loopback HTTP server, opens an external
 // browser, and races to write the session — so concurrent/looping calls (double-clicks, or a misbehaving
@@ -454,6 +404,8 @@ export function setSessionClearedHandler(fn: () => void): void {
 
 /** Drop the current session from memory AND disk (mirrors the stale-domain / sign-out clear path). */
 function clearSession(): void {
+  invalidateSpeechAuthLease()
+  speechAuthSessionEpoch += 1
   session = null
   try {
     if (existsSync(sessionPath())) rmSync(sessionPath())
@@ -574,8 +526,21 @@ function ensureRevalidationTimer(): void {
 }
 
 function loadSession(): void {
-  if (loaded) return
+  const currentUserData = app.getPath('userData')
+  if (suspendedSpeechAuthProfilePath === currentUserData) {
+    loaded = true
+    loadedForUserData = currentUserData
+    session = null
+    return
+  }
+  if (suspendedSpeechAuthProfilePath !== null) suspendedSpeechAuthProfilePath = null
+  if (loaded && loadedForUserData === currentUserData) return
+  if (loaded && loadedForUserData !== currentUserData) {
+    resetSpeechAuthProfile()
+    suspendedSpeechAuthProfilePath = null
+  }
   loaded = true
+  loadedForUserData = currentUserData
   try {
     const buf = readFileSync(sessionPath())
     let json: string | null = null
@@ -618,7 +583,12 @@ function loadSession(): void {
 }
 
 function saveSession(s: Session): void {
+  invalidateSpeechAuthLease()
+  speechAuthSessionEpoch += 1
   session = s
+  suspendedSpeechAuthProfilePath = null
+  loaded = true
+  loadedForUserData = app.getPath('userData')
   // Always persist — the file backend (dev) or safeStorage (prod) guarantees encryption at rest.
   // Without encryption neither was written before; we continue to prefer safeStorage in prod for
   // defence-in-depth, but the file backend removes the "must have keychain" blocker for dev/CI.
@@ -709,23 +679,49 @@ export function isAdminManagedEnforced(): boolean {
   return !!azureFromManagedContent(admin).clientId
 }
 
-/**
- * The trust boundary is the MAIN process, not the renderer. Every privileged IPC handler must call
- * this — a renderer-only gate (the SignInWall) is bypassable via DevTools or a renderer compromise.
- * Default: returns true when sign-in isn't enforced (SSO unconfigured) OR the user is signed in.
- * Fail-closed: with ASKTOTO_REQUIRE_AUTH (env or managed-config), require a signed-in session always.
- *
- * Sticky-configured guard: once a genuine interactive sign-in has succeeded (see writeStickyConfigured
- * in signIn()), requireAuth() treats the device as enforced even if the renderer later clears the
- * in-app Settings azure fields (which would otherwise flip configured→false and open the privileged
- * surface). The sticky flag is cleared only by an authenticated signOut() — never by a renderer
- * settings update, and never by merely resolving (unvalidated) config without ever signing in.
- */
+/** Main-process trust gate; sticky configuration survives Settings edits and clears only on sign-out. */
 export function requireAuth(): boolean {
   const s = authStatus()
   if (authEnforced()) return s.signedIn
   if (isStickyConfigured()) return s.signedIn
   return !s.configured || s.signedIn
+}
+
+speechAuthLeaseController = new SpeechAuthLeaseController({
+  prepareSession: loadSession,
+  readSession: () => session,
+  readSessionEpoch: () => speechAuthSessionEpoch,
+  readProfilePath: () => app.getPath('userData'),
+  readBoundary: (readers) =>
+    readVerifiedSpeechAuthBoundary(readers, {
+      readProfilePath: () => app.getPath('userData'),
+      readAdminPath: adminManagedConfigPath,
+      readSession: () => session,
+      resolveConfig: resolveLeaseConfig,
+      isEnforced: leaseEnforced
+    }),
+  validateSession: (config) => {
+    if (session && expiryReasonAt(session, config, Date.now()) !== null) {
+      clearSession()
+      auditLog('auth.expired', { reason: 'policy' })
+    }
+  },
+  sessionIsValid: (current, config, now) => expiryReasonAt(current, config, now) === null
+})
+
+export function refreshSpeechAuthLease(): Promise<SpeechAuthLease | null> {
+  return speechAuthLeaseController.refresh()
+}
+
+function expiryReasonAt(s: Session, cfg: AzureConfig | null, now: number): 'max_age' | 'domain' | 'tenant' | null {
+  if (!Number.isFinite(s.at) || now < s.at || now - s.at > MAX_SESSION_AGE_MS) return 'max_age'
+  if (cfg && s.domain !== cfg.allowedDomain) return 'domain'
+  if (cfg && (typeof s.tid !== 'string' || !tenantMatches(s.tid, cfg.tenantId))) return 'tenant'
+  return null
+}
+
+export function isSpeechAuthLeaseCurrent(lease: SpeechAuthLease | null): boolean {
+  return speechAuthLeaseController.isCurrent(lease)
 }
 
 /** Bucket a signIn() failure into a small, fixed category for the audit log — never the raw error
@@ -929,6 +925,7 @@ export function resetSelfServeSso(): boolean {
   if (isStickyConfigured()) return false // prior genuine sign-in → LKG recovery exists, not a brick
   const s = readSettingsAzure()
   if (!s.clientId && !s.tenantId && !s.allowedDomain) return false // nothing self-serve to clear
+  invalidateSpeechAuthLease()
   setSettings({ azureClientId: '', azureTenantId: '', azureAllowedDomain: '' })
   // This path writes settings directly (store.setSettings), bypassing the settingsSet IPC handler, so
   // mirror the 'settings.changed' audit that handler would emit — the cleared keys, for parity/traceability.
@@ -975,6 +972,7 @@ export function ssoBootstrapAllowed(): boolean {
 }
 
 export function signOut(): void {
+  invalidateSpeechAuthLease()
   // Load session before clearing so we can detect a genuine (authenticated) sign-out.
   // The sticky-configured flag + LKG recovery config are cleared only when there was a real active
   // session — a bare signOut() call with no session must NOT clear them (prevents an attacker from
