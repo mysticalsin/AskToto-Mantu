@@ -7,6 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BUNDLE_REPAIR } from '@shared/bundle-response'
+import { CaptureSchema } from '@shared/contracts/speech'
 import type { ScreenDiagnosis } from '@shared/screen-permission'
 import { WHISPER_WORKLET_SRC } from './whisper-worklet-src'
 
@@ -314,7 +315,7 @@ beforeEach(() => {
       appleSpeechFeed: vi.fn(async () => ({ text: '', name: undefined })),
       asrBundled: vi.fn(async () => true),
       speakerEmbed: vi.fn(async () => ({})),
-      cloudSttStart: vi.fn(async () => ({ ok: true })),
+      cloudSttStart: vi.fn(async () => ({ ok: true, provider: 'cloudflare-nova3' as const })),
       cloudSttPush: vi.fn(async () => {}),
       cloudSttStop: vi.fn(async () => ({ timedOut: false })),
       onCloudSttFinal: vi.fn(() => () => {}),
@@ -346,6 +347,142 @@ afterEach(() => {
 })
 
 describe('live audio transport identity', () => {
+  it('marks both tracks captured only after both channels commit', async () => {
+    const api = render('parakeet')
+    await api.start('both', 'fast', 'parakeet', 'English', 123)
+    await settle()
+
+    expect(streams.map(({ kind }) => kind)).toEqual(['mic', 'system'])
+    expect(worklets).toHaveLength(2)
+    expect(render('parakeet').capturing).toBe(true)
+  })
+
+  it.each(['mic', 'system'] as const)('keeps capture active when only the %s track is denied', async (denied) => {
+    if (denied === 'mic') {
+      getUserMediaImpl = async () => {
+        throw new Error('microphone denied')
+      }
+    } else {
+      getDisplayMediaImpl = async () => {
+        throw new Error('system audio denied')
+      }
+    }
+    const api = render('parakeet')
+    await api.start('both', 'fast', 'parakeet', 'English', 123)
+    await settle()
+
+    expect(streams.map(({ kind }) => kind)).toEqual(denied === 'mic' ? ['system'] : ['mic'])
+    expect(render('parakeet').capturing).toBe(true)
+  })
+
+  it('clears capture status when both requested tracks are denied', async () => {
+    getUserMediaImpl = async () => {
+      throw new Error('microphone denied')
+    }
+    getDisplayMediaImpl = async () => {
+      throw new Error('system audio denied')
+    }
+    const api = render('parakeet')
+    await api.start('both', 'fast', 'parakeet', 'English', 123)
+    await settle()
+
+    expect(streams).toHaveLength(0)
+    expect(render('parakeet')).toMatchObject({ listening: false, capturing: false })
+  })
+
+  it('keeps a current capture when an old ended callback fires after replacement', async () => {
+    const originalApi = render('parakeet')
+    await originalApi.start('mic', 'fast', 'parakeet', 'English', 123)
+    await settle()
+    const oldTrack = streams[0].track
+    const oldEnded = oldTrack.onended
+    expect(oldEnded).toBeTypeOf('function')
+
+    render('parakeet').stop()
+    await vi.advanceTimersByTimeAsync(1)
+    await settle()
+    const replacementApi = render('parakeet')
+    await replacementApi.start('mic', 'fast', 'parakeet', 'English', 456)
+    await settle()
+
+    oldEnded?.()
+    expect(render('parakeet').capturing).toBe(true)
+    expect(streams.at(-1)?.track.readyState).toBe('live')
+  })
+
+  it('rejects an unconfigured cloud selection without hiding an existing live capture', async () => {
+    const api = render('parakeet')
+    await api.start('mic', 'fast', 'parakeet', 'English', 123)
+    await settle()
+    const openedStreams = streams.length
+    const openedContexts = contexts.length
+
+    await api.start('mic', 'fast', 'cloud', 'English', 456)
+
+    expect(streams).toHaveLength(openedStreams)
+    expect(contexts).toHaveLength(openedContexts)
+    expect(render('parakeet').capturing).toBe(true)
+    expect(window.toto.cloudSttStart).not.toHaveBeenCalled()
+  })
+
+  it('force-stops the matching cloud session when current capture validation fails', async () => {
+    const originalParse = CaptureSchema.safeParse.bind(CaptureSchema)
+    const invalid = originalParse({})
+    const parse = vi.spyOn(CaptureSchema, 'safeParse').mockImplementation((value) => {
+      const capture = value as { capturedTracks?: unknown[] } | null
+      if (capture && Array.isArray(capture.capturedTracks) && capture.capturedTracks.length > 0) {
+        return invalid
+      }
+      return originalParse(value)
+    })
+    try {
+      const api = render('cloud')
+      await api.start('mic', 'fast', 'cloud', 'English', 123)
+      await settle()
+
+      expect(streams[0].track.stop).toHaveBeenCalled()
+      expect(window.toto.cloudSttStop).toHaveBeenCalledWith({ force: true, captureId: 'listen:1' })
+      expect(render('cloud').capturing).toBe(false)
+    } finally {
+      parse.mockRestore()
+    }
+  })
+
+  it('records the provider acknowledged by main rather than the renderer selection', async () => {
+    const originalParse = CaptureSchema.safeParse.bind(CaptureSchema)
+    const parsedEngines: string[] = []
+    const parse = vi.spyOn(CaptureSchema, 'safeParse').mockImplementation((value) => {
+      const capture = value as { engine?: unknown } | null
+      if (capture && typeof capture.engine === 'string') parsedEngines.push(capture.engine)
+      return originalParse(value)
+    })
+    vi.mocked(window.toto.cloudSttStart).mockResolvedValue({
+      ok: true,
+      provider: 'soniox'
+    } as Awaited<ReturnType<typeof window.toto.cloudSttStart>>)
+    try {
+      const api = render('cloud')
+      await api.start('mic', 'fast', 'cloud', 'English', 123)
+      await settle()
+
+      expect(parsedEngines).toContain('soniox')
+      expect(render('cloud').ready).toBe(true)
+    } finally {
+      parse.mockRestore()
+    }
+  })
+
+  it('fails closed and force-stops cloud when start success omits its actual provider', async () => {
+    vi.mocked(window.toto.cloudSttStart).mockResolvedValue({ ok: true })
+    const api = render('cloud')
+    await api.start('mic', 'fast', 'cloud', 'English', 123)
+    await settle()
+
+    expect(streams[0].track.stop).toHaveBeenCalled()
+    expect(window.toto.cloudSttStop).toHaveBeenCalledWith({ force: true, captureId: 'listen:1' })
+    expect(render('cloud')).toMatchObject({ listening: false, capturing: false, ready: false })
+  })
+
   it('tracks committed microphone capture through recovery, pause, resume, and graceful Stop', async () => {
     let resolveRecovery!: (stream: MediaStream) => void
     let micAcquisitions = 0
@@ -478,7 +615,7 @@ describe('live audio transport identity', () => {
   })
 
   it('force-stops a delayed cloud start after both capture sources fail', async () => {
-    let resolveCloudStart!: (result: { ok: true }) => void
+    let resolveCloudStart!: (result: { ok: true; provider: 'cloudflare-nova3' }) => void
     const offFinal = vi.fn()
     const offError = vi.fn()
     vi.mocked(window.toto.cloudSttStart).mockImplementation(
@@ -509,7 +646,7 @@ describe('live audio transport identity', () => {
 
     // This is the dangerous ordering: the renderer has already failed capture, but main accepts the
     // delayed start afterwards.  The acknowledgement must issue a second, identity-scoped close.
-    resolveCloudStart({ ok: true })
+    resolveCloudStart({ ok: true, provider: 'cloudflare-nova3' })
     await settle()
     api = render('cloud')
 
