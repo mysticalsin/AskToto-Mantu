@@ -8,7 +8,14 @@ import {
   serialize,
   setMeetingField
 } from './features/meetings/meeting-document'
-import { resolveMeetingsFolder, decodeSaved, isEncryptedBytes, writeSaved, formatTranscript, DEBRIEF_HEADING } from './transcripts'
+import {
+  resolveMeetingsFolder,
+  decodeSaved,
+  isEncryptedBytes,
+  writeSaved,
+  formatTranscript,
+  DEBRIEF_HEADING
+} from './transcripts'
 import { storageAt } from './infra/storage/meetings-storage'
 import type { HydrationProgress, ReadOptions } from './infra/storage/gateway'
 import { DRAFT_FILENAME, UNREADABLE, isMeetingDocumentType, meetingFiles, readMeetings } from './history-read'
@@ -38,14 +45,20 @@ function recapSectionEndIndex(afterNotesHeading: string, type: string | undefine
   return afterNotesHeading.search(recapSectionEndRe(type))
 }
 
-async function readMeetingBytes(folder: string, file: string): Promise<{ ok: true; bytes: Buffer } | { ok: false; error: string }> {
+async function readMeetingBytes(
+  folder: string,
+  file: string
+): Promise<{ ok: true; bytes: Buffer } | { ok: false; error: string }> {
   const read = await storageAt(folder).read(file)
   if (read.status === 'missing') return { ok: false, error: 'Meeting file not found.' }
   if (read.status !== 'ok') return { ok: false, error: 'Could not read the meeting file.' }
   return { ok: true, bytes: read.bytes }
 }
 
-async function readMeetingText(folder: string, file: string): Promise<{ ok: true; text: string; encrypted: boolean } | { ok: false; error: string }> {
+async function readMeetingText(
+  folder: string,
+  file: string
+): Promise<{ ok: true; text: string; encrypted: boolean } | { ok: false; error: string }> {
   const read = await readMeetingBytes(folder, file)
   if (!read.ok) return read
   const text = decodeSaved(read.bytes)
@@ -65,7 +78,9 @@ export function meetingTextNeedsRecap(text: string): boolean {
   return recap.length === 0
 }
 
-export async function listMeetingsNeedingRecap(): Promise<Array<{ file: string; mode: string; lines: TranscriptLine[] }>> {
+export async function listMeetingsNeedingRecap(): Promise<
+  Array<{ file: string; mode: string; lines: TranscriptLine[] }>
+> {
   const folder = resolveMeetingsFolder(getSettings())
   const files = await meetingFiles(folder)
   const out: Array<{ file: string; mode: string; lines: TranscriptLine[] }> = []
@@ -120,7 +135,9 @@ export async function openExplicitly<T extends { ok: boolean; error?: string }>(
     }
   }
   const safeName = safeMeetingBasename(file)
-  const fileClass = safeName ? (await storageAt(resolveMeetingsFolder(getSettings())).classify([safeName])).get(safeName) : undefined
+  const fileClass = safeName
+    ? (await storageAt(resolveMeetingsFolder(getSettings())).classify([safeName])).get(safeName)
+    : undefined
   if (!fileClass || fileClass.status === 'ok' || fileClass.status === 'missing') return open({ hydrate: false })
   if (hydrating) return { ok: false, error: HYDRATION_BUSY_MSG }
   hydrating = true
@@ -167,11 +184,13 @@ export async function recallRead(
   // verdicts never skip a read: its deadline is shorter than a read's, so 'unknown' can name a local file.
   const fileClass = (await gateway.classify([safeName])).get(safeName)
   if (fileClass?.status === 'missing') return { ok: false, error: 'Meeting file not found.' }
-  if (fileClass && 'isRegular' in fileClass && !fileClass.isRegular) return { ok: false, error: 'Could not read the meeting file.' }
+  if (fileClass && 'isRegular' in fileClass && !fileClass.isRegular)
+    return { ok: false, error: 'Could not read the meeting file.' }
   let read = await gateway.read(safeName)
   // An explicit open (`hydrate`) is the one place a cloud-only file is hydrated: this one file, under a
   // content permit, reporting progress. Listing, search and background passes never do.
-  if (hydrate && (read.status === 'dataless' || read.status === 'unknown')) read = await gateway.read(safeName, { hydrate: true, onProgress })
+  if (hydrate && (read.status === 'dataless' || read.status === 'unknown'))
+    read = await gateway.read(safeName, { hydrate: true, onProgress })
   if (read.status === 'missing') return { ok: false, error: 'Meeting file not found.' }
   if (read.status !== 'ok') {
     return { ok: false, error: 'Could not read the meeting file.' }
@@ -452,7 +471,10 @@ const RECAP_MAX = 20000
 // does NOT collapse newlines or strip headings — unlike a title, the recap IS multi-line markdown with its
 // own "## " sub-headings (Overview / Decisions / Action items …), so that structure must survive editing.
 function sanitizeRecap(s: string): string {
-  return (s || '').replace(/\r\n/g, '\n').replace(/^\uFEFF/, '').slice(0, RECAP_MAX)
+  return (s || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/^\uFEFF/, '')
+    .slice(0, RECAP_MAX)
 }
 
 /**
@@ -517,9 +539,7 @@ export async function updateMeetingRecap(
     const endIdx = recapSectionEndIndex(afterStart, type)
     const head = text.slice(0, bodyStart)
     const tail = endIdx === -1 ? '' : afterStart.slice(endIdx)
-    updated = tail
-      ? `${head}${body}${body ? '\n\n' : ''}${tail}`
-      : `${head}${body}${body ? '\n' : ''}`
+    updated = tail ? `${head}${body}${body ? '\n\n' : ''}${tail}` : `${head}${body}${body ? '\n' : ''}`
   } else {
     // No notes section yet (meeting saved with an empty recap). Insert one immediately before its
     // transcript/retention sibling so recallRead parses it exactly as it would a normally-saved recap.
