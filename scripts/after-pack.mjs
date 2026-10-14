@@ -9,6 +9,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readdirSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { ensureLeanPackageCoreDirectories } from './lib/lean-package-stage.mjs'
 
 const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = join(SCRIPTS_DIR, '..')
@@ -124,6 +125,7 @@ export default async function afterPack(context) {
   }
   if (leanProfile) runtimeCheckArgs.push(`--arch=${arch}`)
   try {
+    if (leanProfile) await ensureLeanPackageCoreDirectories(resourceDir)
     execFileSync(process.execPath, runtimeCheckArgs, { cwd: REPO_ROOT, stdio: 'inherit' })
   } catch (error) {
     // A failed direct Electron Builder invocation otherwise leaves a launchable but incomplete app
