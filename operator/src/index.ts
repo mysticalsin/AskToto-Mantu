@@ -80,7 +80,10 @@ function rateBucketFor(pathname: string): { key: string; max: number } | null {
 /** A device-supplied id (ask or CRM) is stored and later echoed in audit rows and exports, so it is
  *  stripped of control characters, trimmed and capped before use; an empty result gets a fresh UUID. */
 function deviceSuppliedId(raw: unknown): string {
-  const s = String(raw ?? '').replace(/[\r\n\t\x00-\x1f\x7f]/g, ' ').trim().slice(0, 128)
+  const s = String(raw ?? '')
+    .replace(/[\r\n\t\x00-\x1f\x7f]/g, ' ')
+    .trim()
+    .slice(0, 128)
   return s || crypto.randomUUID()
 }
 
@@ -303,13 +306,14 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
     url.pathname === '/v1/integrations' ||
     url.pathname === '/v1/model-policy'
   ) {
-    const bodyText = request.method === 'GET' ? '' :
-      url.pathname === '/v1/ask' || url.pathname === '/v1/use' ? await readUseBody(request) : await request.text()
+    const bodyText =
+      request.method === 'GET'
+        ? ''
+        : url.pathname === '/v1/ask' || url.pathname === '/v1/use'
+          ? await readUseBody(request)
+          : await request.text()
     if (bodyText === null) {
-      return json(
-        { ok: false, error: 'Request is too large. Capture a smaller region or start a new Ask.' },
-        413
-      )
+      return json({ ok: false, error: 'Request is too large. Capture a smaller region or start a new Ask.' }, 413)
     }
     const hmac = await verifyDeviceRequest(request, bodyText, env.OPERATOR_INGEST_SECRET, store, now)
     if (!hmac.ok) return json({ ok: false, error: hmac.error, ...(hmac.code ? { code: hmac.code } : {}) }, hmac.status)
@@ -391,23 +395,31 @@ async function adminRoute(
 }
 
 async function heartbeat(
-  store: OperatorStore, deviceId: string, bodyText: string, now: number, geo: CfGeo, license?: VerifiedDeviceLicense
+  store: OperatorStore,
+  deviceId: string,
+  bodyText: string,
+  now: number,
+  geo: CfGeo,
+  license?: VerifiedDeviceLicense
 ): Promise<Response> {
-  const rawBody = withVerifiedLicense(bodyText ? JSON.parse(bodyText) as Record<string, unknown> : {}, license)
+  const rawBody = withVerifiedLicense(bodyText ? (JSON.parse(bodyText) as Record<string, unknown>) : {}, license)
   const body = projectHeartbeatBody(rawBody)
   const seat = seatFromBody(deviceId, body, now, geo)
   await store.upsertSeat(seat)
   const stored = (await store.getSeat(deviceId)) ?? seat
   const pulseId = crypto.randomUUID()
-  await store.recordPulseSession({
-    id: pulseId,
-    device_id: deviceId,
-    ts: now,
-    kind: 'heartbeat',
-    country: geo.country,
-    city: geo.city,
-    region: geo.region ?? null
-  }, seat)
+  await store.recordPulseSession(
+    {
+      id: pulseId,
+      device_id: deviceId,
+      ts: now,
+      kind: 'heartbeat',
+      country: geo.country,
+      city: geo.city,
+      region: geo.region ?? null
+    },
+    seat
+  )
   await store.insertEvent({
     id: pulseId,
     ts: now,
@@ -552,15 +564,18 @@ async function ingest(
     country: geo.country,
     detail: safeEventDetail(row.mode || row.cache_status || 'ask')
   })
-  await store.recordPulseSession({
-    id: pulseId,
-    device_id: deviceId,
-    ts: row.ts,
-    kind: 'ask',
-    country: geo.country,
-    city: geo.city,
-    region: geo.region ?? null
-  }, seat)
+  await store.recordPulseSession(
+    {
+      id: pulseId,
+      device_id: deviceId,
+      ts: row.ts,
+      kind: 'ask',
+      country: geo.country,
+      city: geo.city,
+      region: geo.region ?? null
+    },
+    seat
+  )
   return json({ ok: true, id })
 }
 

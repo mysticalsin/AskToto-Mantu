@@ -85,14 +85,7 @@ export function adminEmailsFromEnv(env: AdminEnv): readonly string[] | null {
     console.warn('Metis Operator admin access denied: ADMIN_EMAILS binding is missing or empty')
     return null
   }
-  const emails = Array.from(
-    new Set(
-      raw
-        .split(',')
-        .map(normalizeAdminEmail)
-        .filter(Boolean)
-    )
-  )
+  const emails = Array.from(new Set(raw.split(',').map(normalizeAdminEmail).filter(Boolean)))
   if (emails.length === 0) {
     console.warn('Metis Operator admin access denied: ADMIN_EMAILS binding is missing or empty')
     return null

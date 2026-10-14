@@ -46,15 +46,19 @@ async function request(
 
 const ownerAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
-function expiredAccessJwt(now: number): { token: string; jwk: JsonWebKey & { kid: string } } {
+function mintAccessJwt(
+  now: number,
+  exp: number,
+  kid: string
+): { token: string; jwk: JsonWebKey & { kid: string } } {
   const pair = generateKeyPairSync('rsa', { modulusLength: 2048 })
-  const jwk = { ...(pair.publicKey.export({ format: 'jwk' }) as JsonWebKey), kid: 'expired-session-test' }
+  const jwk = { ...(pair.publicKey.export({ format: 'jwk' }) as JsonWebKey), kid }
   const encode = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url')
   const header = encode({ alg: 'RS256', kid: jwk.kid })
   const payload = encode({
     aud: ACCESS_AUD,
     email: 'owner@example.test',
-    exp: Math.floor(now / 1000) - 1,
+    exp,
     iss: ACCESS_TEAM_DOMAIN,
     iat: Math.floor(now / 1000) - 60
   })
@@ -80,11 +84,7 @@ describe('Operator app sessions have an absolute 12-hour lifetime', () => {
         checkpoint.transport === 'cookie'
           ? { cookie: `${SESSION_COOKIE}=${encodeURIComponent(returnedToken)}` }
           : { authorization: `Bearer ${returnedToken}` }
-      const res = await request(
-        '/session',
-        { ...headers, 'x-metis-session-fresh': 'true' },
-        checkpoint.now
-      )
+      const res = await request('/session', { ...headers, 'x-metis-session-fresh': 'true' }, checkpoint.now)
       const responseToken = res.headers.get('X-Metis-Session')
       const verified = await verifySessionToken(responseToken, SESSION_SECRET, checkpoint.now, sessionEnv())
 
@@ -101,11 +101,7 @@ describe('Operator app sessions have an absolute 12-hour lifetime', () => {
   it('accepts a cookie session one millisecond before expiry and rejects it at exactly 12 hours', async () => {
     const token = await existingSession()
     const cookie = `${SESSION_COOKIE}=${encodeURIComponent(token)}`
-    const beforeExpiry = await request(
-      '/v1/admin/health.json',
-      { cookie },
-      sessionIat + SESSION_TTL_MS - 1
-    )
+    const beforeExpiry = await request('/v1/admin/health.json', { cookie }, sessionIat + SESSION_TTL_MS - 1)
     expect(beforeExpiry.status).toBe(200)
     expect(beforeExpiry.headers.get('X-Metis-Session')).toBe(token)
 
@@ -117,37 +113,33 @@ describe('Operator app sessions have an absolute 12-hour lifetime', () => {
   it('accepts a Bearer session one millisecond before expiry and rejects it at exactly 12 hours', async () => {
     const token = await existingSession()
     const authorization = `Bearer ${token}`
-    const beforeExpiry = await request(
-      '/v1/admin/health.json',
-      { authorization },
-      sessionIat + SESSION_TTL_MS - 1
-    )
+    const beforeExpiry = await request('/v1/admin/health.json', { authorization }, sessionIat + SESSION_TTL_MS - 1)
     expect(beforeExpiry.status).toBe(200)
     expect(beforeExpiry.headers.get('X-Metis-Session')).toBe(token)
 
-    const atExpiry = await request(
-      '/v1/admin/health.json',
-      { authorization },
-      sessionIat + SESSION_TTL_MS
-    )
+    const atExpiry = await request('/v1/admin/health.json', { authorization }, sessionIat + SESSION_TTL_MS)
     expect(atExpiry.status).toBe(401)
     expect(atExpiry.headers.get('X-Metis-Session')).toBeNull()
   })
 
-  it('falls back from an expired Access JWT without extending the app session deadline', async () => {
+  it('falls back from invalid or expired Access JWTs without extending the app session deadline', async () => {
     const token = await existingSession()
-    const access = expiredAccessJwt(sessionIat + SESSION_TTL_MS - 1)
-    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ keys: [access.jwk] })))
-    const lastSignatureCharacter = access.token[access.token.length - 1]
-    const invalidSignatureJwt = `${access.token.slice(0, -1)}${lastSignatureCharacter === 'A' ? 'B' : 'A'}`
+    const checkpoint = sessionIat + SESSION_TTL_MS - 1
+    const expiredAccess = mintAccessJwt(checkpoint, Math.floor(checkpoint / 1000) - 1, 'expired-session-test')
+    const liveAccess = mintAccessJwt(checkpoint, Math.floor(checkpoint / 1000) + 60, 'live-session-test')
+    const [header = '', payload = '', signature = ''] = liveAccess.token.split('.')
+    const signatureBytes = Buffer.from(signature, 'base64url')
+    signatureBytes[0] = (signatureBytes[0] ?? 0) ^ 1
+    const invalidSignatureJwt = `${header}.${payload}.${signatureBytes.toString('base64url')}`
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ keys: [expiredAccess.jwk, liveAccess.jwk] })))
 
     try {
-      for (const accessJwt of [access.token, invalidSignatureJwt]) {
+      for (const accessJwt of [expiredAccess.token, invalidSignatureJwt]) {
         const headers = {
           cookie: `${SESSION_COOKIE}=${encodeURIComponent(token)}`,
           'cf-access-jwt-assertion': accessJwt
         }
-        const beforeExpiry = await request('/session', headers, sessionIat + SESSION_TTL_MS - 1)
+        const beforeExpiry = await request('/session', headers, checkpoint)
         expect(beforeExpiry.status).toBe(200)
         expect(beforeExpiry.headers.get('X-Metis-Session')).toBe(token)
         expect(beforeExpiry.headers.get('Set-Cookie')).toBeNull()
