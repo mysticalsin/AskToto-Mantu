@@ -427,6 +427,29 @@ async function verifyTarget(root, target, rootProto, lockSha256) {
           : null
       )
     : []
+  const expectedSourceKeys = [
+    'repositoryUri',
+    'commit',
+    'workflowPath',
+    'workflowCommit',
+    'runId',
+    'attempt',
+    'lockSha256',
+    'ref',
+    'runnerEnvironment'
+  ]
+  const sourceChecks = [
+    ['SOURCE_SHAPE', source !== null && exactKeys(source, expectedSourceKeys)],
+    ['SOURCE_REPOSITORY', source?.repositoryUri === REPOSITORY_URI],
+    ['SOURCE_COMMITS', source?.commit === SOURCE_SHA && source?.workflowCommit === SOURCE_SHA],
+    ['SOURCE_WORKFLOW', source?.workflowPath === WORKFLOW_PATH],
+    ['SOURCE_RUN', source?.runId === RUN_ID && source?.attempt === RUN_ATTEMPT],
+    ['SOURCE_LOCK_FORMAT', typeof source?.lockSha256 === 'string' && /^[a-f0-9]{64}$/.test(source.lockSha256)],
+    ['SOURCE_LOCK_MATCH', source?.lockSha256 === lockSha256],
+    ['SOURCE_REF', source?.ref === SOURCE_REF],
+    ['SOURCE_RUNNER', source?.runnerEnvironment === 'github-hosted'],
+    ['SOURCE_VALIDATION', Boolean(source && validSource(source, lockSha256))]
+  ]
   const inventoryChecks = [
     [
       'SHAPE',
@@ -439,7 +462,7 @@ async function verifyTarget(root, target, rootProto, lockSha256) {
         inventoryTarget?.arch === target.arch &&
         exactKeys(inventory.target, ['platform', 'arch'])
     ],
-    ['SOURCE', Boolean(source && validSource(source, lockSha256))],
+    ...sourceChecks,
     [
       'FILE_COUNTS',
       validFiles && inventory.files.length === candidate.payloadFiles && inventoryFileBytes === candidate.payloadBytes
