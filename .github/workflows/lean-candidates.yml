@@ -37,6 +37,7 @@ jobs:
           scripts/lib/lean-checker-args.test.ts
           scripts/lib/lean-package-stage.test.ts
           scripts/lean-builder-exclusions.test.ts
+          scripts/measure-lean-candidate.test.ts
 
   candidate:
     name: Unsigned ${{ matrix.target }} ${{ matrix.arch }} candidate
