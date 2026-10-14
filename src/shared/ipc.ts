@@ -561,7 +561,7 @@ export type ImportAudioOffer = z.infer<typeof ImportAudioOfferSchema>
 export type { ImportAssetsProgress, AsrAssetsStatus } from './asr-assets'
 
 export type { ImportJobState, ImportJobView, ImportJobsSnapshot, ImportAudioProgress } from './import-jobs'
-export { emptyImportJobsSnapshot, ImportJobIdSchema } from './import-jobs'
+export { ImportJobIdSchema } from './import-jobs'
 
 /** Result of one import-audio:transcribe call. Only `file`/`title`/`lines` are populated on the final
  *  (done) chunk, once the accumulated transcript has actually been saved. */

@@ -37,11 +37,7 @@ import {
 } from './cloud-speech-results'
 import * as cloudStartup from './cloud-speech-startup'
 import { createCloudSpeechTransitionHandler } from './cloud-speech-transition'
-import {
-  bounded as boundedWithClock,
-  boundedCall as boundedCallWithClock,
-  createAdjustableDeadline
-} from './cloud-speech-deadline'
+import { boundedCall as boundedCallWithClock, createAdjustableDeadline } from './cloud-speech-deadline'
 import { cloudSpeechAckMatches } from './cloud-speech-frame-ack'
 import { createCloudSpeechCancellation } from './cloud-speech-cancel'
 import { acknowledgeCaptureCeiling } from './cloud-speech-ceiling-ack'
@@ -363,8 +359,6 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
     return parsed.data
   }
 
-  const bounded = <T>(operation: Promise<T>, deadline: number, timeoutValue: T): Promise<T> =>
-    boundedWithClock(operation, deadline, now, timeoutValue)
   const boundedCall = <T>(operation: () => Promise<T>, deadline: number, timeoutValue: T): Promise<T> =>
     boundedCallWithClock(operation, deadline, now, timeoutValue)
 
@@ -373,7 +367,6 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
     bridge: options.bridge,
     now,
     isStarted: () => started !== null,
-    bounded,
     failure
   })
 

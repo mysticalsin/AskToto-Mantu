@@ -1,9 +1,12 @@
+import { createHash } from 'node:crypto'
+import { createRequire } from 'node:module'
 import {
   existsSync,
   lstatSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync
@@ -18,11 +21,14 @@ vi.mock('node:child_process', () => childProcess)
 import afterPack from './after-pack.mjs'
 import { ensureLeanPackageCoreDirectories } from './lib/lean-package-stage.mjs'
 
+const electronArchiveTools = createRequire(import.meta.url)('app-builder-lib/out/util/electronGet.js')
+
 describe('afterPack Windows runtime verification', () => {
   const temporaryDirectories: string[] = []
 
   afterEach(() => {
     childProcess.execFileSync.mockReset()
+    vi.restoreAllMocks()
     vi.unstubAllEnvs()
     for (const directory of temporaryDirectories.splice(0)) {
       rmSync(directory, { recursive: true, force: true })
@@ -67,7 +73,16 @@ describe('afterPack Windows runtime verification', () => {
     mkdirSync(join(resources, 'ffmpeg', 'win32-x64'), { recursive: true })
     writeFileSync(join(resources, 'ffmpeg', 'win32-x64', 'ffmpeg.exe'), 'test')
     vi.stubEnv('METIS_PACKAGE_PROFILE', 'lean')
+    const archive = Buffer.from(
+      'UEsDBBQAAAAIAAAAIVD0kwwKIQAAAB8AAAAaAAAAcmVzb3VyY2VzL2RlZmF1bHRfYXBwLmFzYXLLL89LTVFwzUlNLinKz1NIS0wuyS+qVChJzS3ISSxJBQBQSwECFAMUAAAACAAAACFQ9JMMCiEAAAAfAAAAGgAAAAAAAAAAAAAAgAEAAAAAcmVzb3VyY2VzL2RlZmF1bHRfYXBwLmFzYXJQSwUGAAAAAAEAAQBIAAAAWQAAAAAA',
+      'base64'
+    )
+    const archivePath = join(appOutDir, 'verified-electron.zip')
+    writeFileSync(archivePath, archive)
+    writeFileSync(join(resources, 'default_app.asar'), 'owned Electron factory template')
+    vi.spyOn(electronArchiveTools, 'downloadElectronArtifactZip').mockResolvedValue(realpathSync(archivePath))
     childProcess.execFileSync.mockImplementation((executable, args) => {
+      expect(existsSync(join(resources, 'default_app.asar'))).toBe(false)
       expect(executable).toBe(process.execPath)
       expect(args).toEqual([
         expect.stringMatching(/check-lean-package\.mjs$/),
@@ -84,7 +99,15 @@ describe('afterPack Windows runtime verification', () => {
       arch: 1,
       electronPlatformName: 'win32',
       appOutDir,
-      packager: { appInfo: { productFilename: 'Metis' } }
+      packager: {
+        appInfo: { productFilename: 'Metis' },
+        config: {
+          electronVersion: '43.6.0',
+          electronDownload: {
+            checksums: { 'electron-v43.6.0-win32-x64.zip': createHash('sha256').update(archive).digest('hex') }
+          }
+        }
+      }
     })
     expect(childProcess.execFileSync).toHaveBeenCalledTimes(1)
   })
@@ -169,6 +192,7 @@ describe('afterPack macOS signature', () => {
 
   afterEach(() => {
     childProcess.execFileSync.mockReset()
+    vi.restoreAllMocks()
     vi.unstubAllEnvs()
     for (const directory of temporaryDirectories.splice(0)) {
       rmSync(directory, { recursive: true, force: true })

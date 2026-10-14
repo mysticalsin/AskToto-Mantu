@@ -38,17 +38,6 @@ export interface ImportJobsSnapshot {
   policyHoldOverflow: boolean
 }
 
-export function emptyImportJobsSnapshot(): ImportJobsSnapshot {
-  return {
-    jobs: [],
-    policyBlocked: false,
-    heldJobIds: [],
-    policyHeldJobIds: [],
-    inventoryOverflow: false,
-    policyHoldOverflow: false
-  }
-}
-
 export const ImportJobIdSchema = z.object({ jobId: z.string().min(1).max(200) })
 
 /** Pushed while a session is transcribing/saving to drive the import progress label. */

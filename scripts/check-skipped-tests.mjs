@@ -79,7 +79,7 @@ const REASONS = [
     why: 'Runs the real Windows PowerShell attribute probe against an NTFS file carrying FILE_ATTRIBUTE_OFFLINE. The binary and the attribute exist only on Windows; the shared wire protocol, decoding and failure policy run on every platform through a stand-in probe.'
   },
   {
-    match: 'gateway.test.ts',
+    match: 'gateway-fifo-posix.test.ts',
     why: 'Pins libuv pool threads with real FIFOs, the kernel-blocking stand-in for a cloud-only read. Windows has no FIFOs; the admission, deadline, sharing and dataless rules run on every platform through an in-memory fs whose calls can be held open.'
   },
   {
@@ -142,7 +142,7 @@ const REASONS = [
 /** Skips accepted on this platform. Each accepted skip is a platform-bound test with a REASON above.
  *  Lower it when a skip is retired; never raise it for an undeclared skip. */
 const hostedCi = process.env.CI === 'true' && process.env.GITHUB_ACTIONS === 'true'
-const BASELINE = { win32: 38, darwin: 6, linux: hostedCi ? 28 : 32 }
+const BASELINE = { win32: 37, darwin: 6, linux: hostedCi ? 28 : 32 }
 const reasonFor = (id) => REASONS.find((reason) => (reason.exact ? id === reason.match : id.includes(reason.match)))
 
 const platform = process.platform

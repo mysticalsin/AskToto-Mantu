@@ -46,8 +46,9 @@ function fakeNode(): FakeNode {
 class FakeAudioContext {
   static instances: FakeAudioContext[] = []
   static addModule: () => Promise<void> = async () => {}
+  static actualSampleRate = 16000
 
-  readonly sampleRate = 16000
+  readonly sampleRate = FakeAudioContext.actualSampleRate
   readonly destination = {}
   readonly audioWorklet = { addModule: (): Promise<void> => FakeAudioContext.addModule() }
   readonly source = fakeNode()
@@ -168,6 +169,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
   FakeAudioContext.instances = []
   FakeAudioContext.addModule = async () => {}
+  FakeAudioContext.actualSampleRate = 16000
   vi.resetModules()
 })
 
@@ -235,6 +237,40 @@ describe('MQA-267: loopback acquisition keeps rendered system audio unprocessed'
 })
 
 describe('MQA-268: owned audio channels preserve the limiter graph and serialized recovery', () => {
+  it('passes the actual source rate to the worklet and admits only 16 kHz audio callbacks', async () => {
+    vi.stubGlobal('AudioContext', FakeAudioContext)
+    vi.stubGlobal('AudioWorkletNode', FakeAudioWorkletNode)
+    FakeAudioContext.actualSampleRate = 48000
+    const host = channelHost()
+    const channels = createListenAudioChannels(() => host)
+
+    await expect(channels.open('you', fakeStream(fakeTrack()), 1)).resolves.toBe(true)
+
+    const context = FakeAudioContext.instances[0]
+    const worklet = channels.current.you?.worklet as unknown as FakeAudioWorkletNode | undefined
+    expect(context?.sampleRate).toBe(48000)
+    expect(worklet?.options.processorOptions).toEqual({ sourceSampleRate: 48000 })
+
+    const audio = new Float32Array([0.25, -0.25])
+    worklet?.port.onmessage?.({ data: { audio } } as MessageEvent)
+    worklet?.port.onmessage?.({ data: { audio, sampleRate: 48000, partial: true } } as MessageEvent)
+    expect(host.onAudio).not.toHaveBeenCalled()
+
+    worklet?.port.onmessage?.({ data: { audio, sampleRate: 16000, partial: true } } as MessageEvent)
+    expect(host.onAudio).toHaveBeenCalledOnce()
+    expect(host.onAudio).toHaveBeenCalledWith('you', audio, true, 10)
+
+    const themStream = fakeStream(fakeTrack())
+    await expect(channels.open('them', themStream, 1)).resolves.toBe(true)
+    const themWorklet = channels.current.them?.worklet as unknown as FakeAudioWorkletNode | undefined
+    const themAudio = new Float32Array([-0.5, 0.5])
+    themWorklet?.port.onmessage?.({ data: { audio: themAudio, sampleRate: 16000, partial: false } } as MessageEvent)
+    expect(host.onAudio).toHaveBeenCalledTimes(2)
+    expect(host.onAudio).toHaveBeenLastCalledWith('them', themAudio, false, 10)
+    channels.close('them')
+    channels.close('you')
+  })
+
   it('connects the system boost through the limiter and disconnects it with the channel', async () => {
     vi.stubGlobal('AudioContext', FakeAudioContext)
     vi.stubGlobal('AudioWorkletNode', FakeAudioWorkletNode)
@@ -268,9 +304,8 @@ describe('MQA-268: owned audio channels preserve the limiter graph and serialize
     const secondStream = fakeStream(fakeTrack())
     const first = channels.open('them', firstStream, 1)
     const second = channels.open('them', secondStream, 1)
-    await Promise.resolve()
+    await vi.waitFor(() => expect(FakeAudioContext.instances).toHaveLength(1))
 
-    expect(FakeAudioContext.instances).toHaveLength(1)
     gate.resolve()
     await expect(first).resolves.toBe(true)
     await expect(second).resolves.toBe(true)
@@ -285,10 +320,11 @@ describe('MQA-268: owned audio channels preserve the limiter graph and serialize
       return loads === 1 ? Promise.reject(new Error('worklet load failed')) : Promise.resolve()
     }
     const failed = channels.open('them', fakeStream(fakeTrack()), 1)
-    const recovered = channels.open('them', secondStream, 1)
+    const recoveredStream = fakeStream(fakeTrack())
+    const recovered = channels.open('them', recoveredStream, 1)
     await expect(failed).rejects.toThrow('worklet load failed')
     await expect(recovered).resolves.toBe(true)
-    expect(channels.current.them?.stream).toBe(secondStream)
+    expect(channels.current.them?.stream).toBe(recoveredStream)
   })
 
   it('re-reads the current host after module load before admitting or publishing a channel', async () => {

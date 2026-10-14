@@ -1,0 +1,298 @@
+name: Listen renderer focused qualification
+
+on:
+  push:
+    branches:
+      - m2/M2-0108-listen-renderer-focused-ci
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: listen-renderer-focused-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  renderer-tests:
+    name: Renderer Listen tests (${{ matrix.os }})
+    if: github.ref == 'refs/heads/m2/M2-0108-listen-renderer-focused-ci'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - name: Initialize bounded report
+        env:
+          REPORT_DIR: ${{ runner.temp }}/listen-renderer-focused-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}
+        run: |
+          mkdir -p "$REPORT_DIR"
+          printf '{"schema":"metis-listen-focused-v1","headSha":"%s","os":"%s","status":"NOT_RUN"}\n' \
+            "$GITHUB_SHA" "$RUNNER_OS" > "$REPORT_DIR/summary.json"
+          printf '{"schema":"metis-listen-focused-failures-v1","headSha":"%s","os":"%s","status":"NOT_RUN","reasonCodes":["TESTS_NOT_RUN"],"cases":[]}\n' \
+            "$GITHUB_SHA" "$RUNNER_OS" > "$REPORT_DIR/failure-report.json"
+      - name: Run the seven focused suites without retries
+        id: focused
+        env:
+          REPORT_DIR: ${{ runner.temp }}/listen-renderer-focused-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}
+        run: |
+          set +e
+          raw_report="$REPORT_DIR/vitest.json"
+          raw_log="$REPORT_DIR/vitest.log"
+          summary="$REPORT_DIR/summary.json"
+          failures="$REPORT_DIR/failure-report.json"
+          NO_COLOR=1 FORCE_COLOR=0 npx vitest run --retry=0 --reporter=json --outputFile="$raw_report" \
+            src/renderer/src/lib/cloud-speech-controller.test.ts \
+            src/renderer/src/lib/cloud-speech-results.test.ts \
+            src/renderer/src/lib/listen.instant-start.contract.test.ts \
+            src/renderer/src/lib/listen.loopback.contract.test.ts \
+            src/renderer/src/lib/listen.pcm-format.contract.test.ts \
+            src/renderer/src/lib/listen.stop-drain.test.ts \
+            src/renderer/src/lib/listen.test.ts > "$raw_log" 2>&1
+          test_exit=$?
+          node - "$raw_report" "$summary" "$failures" "$test_exit" <<'NODE'
+          const { createHash } = require('node:crypto')
+          const { readFileSync, writeFileSync } = require('node:fs')
+          const { relative, resolve } = require('node:path')
+
+          const reportPath = process.argv[2]
+          const summaryPath = process.argv[3]
+          const failuresPath = process.argv[4]
+          const testExitCode = Number(process.argv[5])
+          const requiredFiles = [
+            'src/renderer/src/lib/cloud-speech-controller.test.ts',
+            'src/renderer/src/lib/cloud-speech-results.test.ts',
+            'src/renderer/src/lib/listen.instant-start.contract.test.ts',
+            'src/renderer/src/lib/listen.loopback.contract.test.ts',
+            'src/renderer/src/lib/listen.pcm-format.contract.test.ts',
+            'src/renderer/src/lib/listen.stop-drain.test.ts',
+            'src/renderer/src/lib/listen.test.ts'
+          ].sort()
+          const sourceManifest = createHash('sha256')
+          for (const file of requiredFiles) {
+            const fileHash = createHash('sha256').update(readFileSync(file)).digest('hex')
+            sourceManifest.update(file).update('\0').update(fileHash).update('\n')
+          }
+
+          let report
+          let reportValid = false
+          try {
+            report = JSON.parse(readFileSync(reportPath, 'utf8'))
+            reportValid = typeof report === 'object' && report !== null && !Array.isArray(report)
+          } catch {}
+
+          const testCounterNames = [
+            'numTotalTests', 'numPassedTests', 'numFailedTests', 'numPendingTests', 'numTodoTests'
+          ]
+          const suiteCounterNames = [
+            'numTotalTestSuites', 'numPassedTestSuites', 'numFailedTestSuites', 'numPendingTestSuites'
+          ]
+          const safeCounter = (value) => Number.isSafeInteger(value) && value >= 0
+          const testCountersValid = reportValid && testCounterNames.every((name) => safeCounter(report[name]))
+          const suiteCountersValid = reportValid && suiteCounterNames.every((name) => safeCounter(report[name]))
+          const numeric = (name) => safeCounter(report?.[name]) ? report[name] : null
+          const results = Array.isArray(report?.testResults) ? report.testResults : []
+          const relativeReportPath = (name) => {
+            if (typeof name !== 'string' || name.length === 0) return null
+            return relative(process.cwd(), resolve(name)).replaceAll('\\', '/')
+          }
+          const failureSource = (messages) => {
+            for (const message of messages) {
+              if (typeof message !== 'string') continue
+              const candidates = message.matchAll(
+                /(?:^|[\\/])src[\\/]+renderer[\\/]+src[\\/]+lib[\\/]+([A-Za-z0-9._-]+\.test\.ts):([0-9]+)(?::[0-9]+)?(?=$|[\s)\]])/g
+              )
+              for (const match of candidates) {
+                const file = `src/renderer/src/lib/${match[1]}`
+                const line = Number(match[2])
+                if (expectedSet.has(file) && Number.isSafeInteger(line) && line > 0) return { file, line }
+              }
+            }
+            return { file: null, line: null }
+          }
+          const failureCode = (messages, suiteFailure = false) => {
+            const text = messages.filter((message) => typeof message === 'string').join('\n')
+            if (/\bTimeoutError\b|\bTimed out\b/i.test(text)) return 'TIMEOUT'
+            if (/\bAssertionError\b/.test(text)) return 'ASSERTION_FAILED'
+            if (/\bTypeError\b/.test(text)) return 'TYPE_ERROR'
+            if (/\bReferenceError\b/.test(text)) return 'REFERENCE_ERROR'
+            if (/\bRangeError\b/.test(text)) return 'RANGE_ERROR'
+            if (/\bSyntaxError\b/.test(text)) return 'SYNTAX_ERROR'
+            return suiteFailure ? 'SUITE_SETUP_FAILURE' : 'UNCLASSIFIED_FAILURE'
+          }
+          const safeFailureStatus = (status) => {
+            if (status === 'failed' || status === 'pending' || status === 'todo') return status
+            return 'unknown'
+          }
+          const resultPaths = results.map((result) => relativeReportPath(result?.name))
+          const expectedSet = new Set(requiredFiles)
+          const resultSet = new Set(resultPaths.filter((file) => typeof file === 'string'))
+          const exactInventory = Array.isArray(report?.testResults) &&
+            results.length === requiredFiles.length && resultSet.size === requiredFiles.length &&
+            resultPaths.every((file) => typeof file === 'string' && expectedSet.has(file)) &&
+            requiredFiles.every((file) => resultPaths.filter((actual) => actual === file).length === 1)
+
+          let assertionCount = 0
+          const cases = []
+          for (let index = 0; index < results.length; index += 1) {
+            const result = results[index]
+            const file = resultPaths[index]
+            const assertions = Array.isArray(result?.assertionResults) ? result.assertionResults : []
+            assertionCount += assertions.length
+            const expectedFile = typeof file === 'string' && expectedSet.has(file) ? file : null
+            if (expectedFile && (assertions.length === 0 || result?.status !== 'passed')) {
+              const suiteMessages = typeof result?.message === 'string' ? [result.message] : []
+              const source = failureSource(suiteMessages)
+              cases.push({
+                file: expectedFile,
+                assertionOrdinal: 0,
+                status: assertions.length === 0 ? 'empty' : safeFailureStatus(result?.status),
+                code: failureCode(suiteMessages, true),
+                sourceFile: source.file,
+                line: source.line
+              })
+            }
+            for (let assertionIndex = 0; assertionIndex < assertions.length; assertionIndex += 1) {
+              const assertion = assertions[assertionIndex]
+              if (assertion?.status === 'passed') continue
+              if (!expectedFile) continue
+              const failureMessages = Array.isArray(assertion?.failureMessages) ? assertion.failureMessages : []
+              const source = failureSource(failureMessages)
+              cases.push({
+                file: expectedFile,
+                assertionOrdinal: assertionIndex + 1,
+                status: safeFailureStatus(assertion?.status),
+                code: failureCode(failureMessages),
+                sourceFile: source.file,
+                line: source.line
+              })
+            }
+          }
+
+          const passed = numeric('numPassedTests')
+          const failed = numeric('numFailedTests')
+          const pending = numeric('numPendingTests')
+          const todo = numeric('numTodoTests')
+          const total = numeric('numTotalTests')
+          const skipped = pending === null || todo === null ? null : pending + todo
+          const passedSuites = numeric('numPassedTestSuites')
+          const failedSuites = numeric('numFailedTestSuites')
+          const pendingSuites = numeric('numPendingTestSuites')
+          const totalSuites = numeric('numTotalTestSuites')
+          const testCountsConsistent = testCountersValid &&
+            total === passed + failed + pending + todo && assertionCount === total
+          const suiteCountsConsistent = suiteCountersValid && totalSuites >= requiredFiles.length &&
+            totalSuites === passedSuites + failedSuites + pendingSuites
+          const allSuitesPassed = suiteCountersValid && passedSuites === totalSuites &&
+            failedSuites === 0 && pendingSuites === 0
+          const everyFilePassedNonempty = exactInventory && requiredFiles.every((file) => {
+            const matches = results.filter((result, index) => resultPaths[index] === file)
+            return matches.length === 1 && matches[0].status === 'passed' &&
+              Array.isArray(matches[0].assertionResults) && matches[0].assertionResults.length > 0 &&
+              matches[0].assertionResults.every((assertion) => assertion.status === 'passed')
+          })
+          const reasons = []
+          if (!reportValid) reasons.push('REPORT_MISSING_OR_INVALID')
+          if (!testCountersValid || !suiteCountersValid) reasons.push('COUNTERS_MISSING_OR_INVALID')
+          if (report?.success !== true) reasons.push('REPORT_NOT_SUCCESSFUL')
+          if (!exactInventory) reasons.push('FILE_INVENTORY_MISMATCH')
+          if (!everyFilePassedNonempty) reasons.push('SUITE_NOT_NONEMPTY_ALL_PASSED')
+          if (!testCountsConsistent) reasons.push('TEST_COUNTS_INCONSISTENT')
+          if (!suiteCountsConsistent) reasons.push('SUITE_COUNTS_INCONSISTENT')
+          if (!allSuitesPassed) reasons.push('SUITE_COUNTERS_NONPASS')
+          if (!testCountersValid || skipped !== 0 || failed !== 0 || passed !== total || total <= 0) {
+            reasons.push('FAILURE_OR_SKIP_COUNTS')
+          }
+          if (testExitCode !== 0) reasons.push('VITEST_EXIT_NONZERO')
+          const passedGate = reasons.length === 0
+          const summary = {
+            schema: 'metis-listen-focused-v1',
+            headSha: process.env.GITHUB_SHA,
+            os: process.env.RUNNER_OS,
+            sourceManifestSha256: sourceManifest.digest('hex'),
+            suiteCountExpected: requiredFiles.length,
+            suiteCountObserved: results.length,
+            exactInventory,
+            everyFilePassedNonempty,
+            testCountsConsistent,
+            suiteCountsConsistent,
+            allSuitesPassed,
+            actualTestCount: total,
+            passed,
+            failed,
+            skipped,
+            assertionCount,
+            totalSuites,
+            passedSuites,
+            failedSuites,
+            pendingSuites,
+            retryLimit: 0,
+            noRetries: true,
+            configuredTestTimeoutMs: 30000,
+            configuredHookTimeoutMs: 30000,
+            frameAckDeadlineMs: 50,
+            reportValid,
+            testExitCode,
+            reasonCodes: reasons,
+            status: passedGate ? 'PASS' : 'FAIL'
+          }
+          const retainedCases = cases.slice(0, 50)
+          const failureReport = {
+            schema: 'metis-listen-focused-failures-v1',
+            headSha: process.env.GITHUB_SHA,
+            os: process.env.RUNNER_OS,
+            status: summary.status,
+            reasonCodes: reasons,
+            caseCount: cases.length,
+            caseRecordsRetained: retainedCases.length,
+            cases: retainedCases
+          }
+          writeFileSync(summaryPath, `${JSON.stringify(summary, null, 2)}\n`)
+          writeFileSync(failuresPath, `${JSON.stringify(failureReport, null, 2)}\n`)
+          process.stdout.write(`Listen focused summary: status=${summary.status} suites=${results.length}/${requiredFiles.length} tests=${total ?? 'invalid'} passed=${passed ?? 'invalid'} failed=${failed ?? 'invalid'} skipped=${skipped ?? 'invalid'} assertions=${assertionCount} retries=0 manifest=${summary.sourceManifestSha256}\n`)
+          for (const item of retainedCases.slice(0, 20)) {
+            const source = item.sourceFile && Number.isSafeInteger(item.line) ? `${item.sourceFile}:${item.line}` : 'unavailable'
+            process.stdout.write(`Focused failure: code=${item.code} file=${item.file} assertion=${item.assertionOrdinal} status=${item.status} source=${source}\n`)
+          }
+          if (!passedGate) {
+            process.stdout.write(`::error title=Listen focused qualification failed::${reasons.join(',')} suites=${results.length}/${requiredFiles.length} tests=${total ?? 'invalid'} passed=${passed ?? 'invalid'} failed=${failed ?? 'invalid'} skipped=${skipped ?? 'invalid'}; inspect the retained bounded artifact.\n`)
+            const escapeProperty = (value) => String(value).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A').replace(/:/g, '%3A').replace(/,/g, '%2C')
+            for (const item of retainedCases.slice(0, 20)) {
+              const file = expectedSet.has(item.sourceFile) && Number.isSafeInteger(item.line) && item.line > 0
+                ? item.sourceFile
+                : undefined
+              const line = file ? item.line : undefined
+              const title = escapeProperty(`${item.code}: ${item.file} assertion ${item.assertionOrdinal}`)
+              const location = file && line ? ` file=${escapeProperty(file)},line=${line},title=${title}` : `title=${title}`
+              process.stdout.write(`::error ${location}::Focused test failure code=${item.code} status=${item.status}; details remain in the bounded private artifact.\n`)
+            }
+            process.exitCode = 1
+          }
+          NODE
+          summary_exit=$?
+          if [ "$summary_exit" -ne 0 ] || [ "$test_exit" -ne 0 ]; then
+            if [ -f "$raw_log" ]; then tail -c 65536 "$raw_log" > "$REPORT_DIR/vitest-failure.log"; fi
+          fi
+          cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+          rm -f "$raw_report" "$raw_log"
+          exit "$summary_exit"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: listen-renderer-focused-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/listen-renderer-focused-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}/
+          if-no-files-found: error
+          retention-days: 14

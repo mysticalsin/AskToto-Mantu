@@ -5,6 +5,7 @@ import {
   type CloudSpeechFailure,
   type CloudSpeechStartRequest
 } from '@shared/cloud-speech'
+import { createAdjustableDeadline } from './cloud-speech-deadline'
 import { cloudSpeechIdentityMatches } from './cloud-speech-results'
 
 export function createCloudSpeechCancellation(options: {
@@ -12,64 +13,77 @@ export function createCloudSpeechCancellation(options: {
   bridge: { cloudSpeechCancel(identity: CloudSpeechCancelRequest): Promise<unknown> }
   now(): number
   isStarted(): boolean
-  bounded<T>(operation: Promise<T>, deadline: number, timeoutValue: T): Promise<T>
   failure(code: CloudSpeechFailure['code'], request?: CloudSpeechStartRequest): CloudSpeechFailure
 }) {
   let cancelPromise: Promise<CloudSpeechCancelResult> | null = null
+  let cancelResult: CloudSpeechCancelResult | null = null
+  let cancelWait: Promise<CloudSpeechCancelResult> | null = null
+  const cancelDeadline = createAdjustableDeadline(options.now)
   const identity = () => ({
     captureId: options.request.captureId,
     captureGeneration: options.request.capture.generation
   })
 
   const cancelRequestedIdentity = async (deadline: number): Promise<void> => {
-    if (deadline - options.now() <= 0) return
     try {
-      await options.bounded(options.bridge.cloudSpeechCancel(identity()), deadline, undefined)
+      await waitForCancel(deadline, true)
     } catch {
       // Cleanup is best effort; never replace the original start failure.
     }
   }
 
-  const cancelBridgeWithin = (deadline: number): Promise<CloudSpeechCancelResult> => {
+  const dispatchCancel = (): Promise<CloudSpeechCancelResult> => {
     if (cancelPromise) return cancelPromise
-    const call = (async () => {
-      if (!options.isStarted()) return options.failure('CLOSED', options.request)
-      const remaining = Math.max(0, deadline - options.now())
-      if (remaining <= 0) return options.failure('TIMEOUT', options.request)
-      let pending: Promise<unknown>
-      try {
-        pending = options.bridge.cloudSpeechCancel(identity())
-      } catch {
-        return options.failure('TRANSPORT', options.request)
-      }
-      let timer: ReturnType<typeof setTimeout> | undefined
-      const timeout = new Promise<CloudSpeechFailure>((resolve) => {
-        timer = setTimeout(() => resolve(options.failure('TIMEOUT', options.request)), remaining)
-      })
-      try {
-        const result = await Promise.race([pending, timeout])
+    let pending: Promise<unknown>
+    try {
+      pending = options.bridge.cloudSpeechCancel(identity())
+    } catch {
+      cancelResult = options.failure('TRANSPORT', options.request)
+      cancelPromise = Promise.resolve(cancelResult)
+      return cancelPromise
+    }
+    cancelPromise = Promise.resolve(pending).then(
+      (result) => {
         const parsed = CloudSpeechCancelResultSchema.safeParse(result)
-        return parsed.success && (!parsed.data.ok || cloudSpeechIdentityMatches(parsed.data, options.request))
-          ? parsed.data
-          : options.failure('TRANSPORT', options.request)
-      } catch {
-        return options.failure('TRANSPORT', options.request)
-      } finally {
-        if (timer) clearTimeout(timer)
+        const settledResult =
+          parsed.success && (!parsed.data.ok || cloudSpeechIdentityMatches(parsed.data, options.request))
+            ? parsed.data
+            : options.failure('TRANSPORT', options.request)
+        cancelResult = settledResult
+        return settledResult
+      },
+      () => {
+        const settledResult = options.failure('TRANSPORT', options.request)
+        cancelResult = settledResult
+        return settledResult
       }
-    })()
-    cancelPromise = call
-    return call
-  }
-
-  const cancel = (deadline: number): Promise<CloudSpeechCancelResult> => {
-    if (cancelPromise) return cancelPromise
-    cancelPromise = options
-      .bounded(cancelBridgeWithin(deadline), deadline, options.failure('TIMEOUT', options.request))
-      .then((result) => result)
-      .catch(() => options.failure('TRANSPORT', options.request))
+    )
     return cancelPromise
   }
 
-  return { cancelRequestedIdentity, cancelBridgeWithin, cancel, hasPending: () => cancelPromise !== null }
+  const waitForCancel = (deadline: number, allowUnstarted: boolean): Promise<CloudSpeechCancelResult> => {
+    cancelDeadline.shorten(deadline)
+    if (!allowUnstarted && !options.isStarted() && cancelPromise === null)
+      return Promise.resolve(options.failure('CLOSED', options.request))
+    const operation = cancelPromise ?? dispatchCancel()
+    return cancelDeadline.bounded(operation, deadline, options.failure('TIMEOUT', options.request))
+  }
+
+  const cancelBridgeWithin = (deadline: number): Promise<CloudSpeechCancelResult> => waitForCancel(deadline, false)
+
+  const cancel = (deadline: number): Promise<CloudSpeechCancelResult> => {
+    if (cancelWait) {
+      cancelDeadline.shorten(deadline)
+      return cancelWait
+    }
+    cancelWait = cancelBridgeWithin(deadline)
+    return cancelWait
+  }
+
+  return {
+    cancelRequestedIdentity,
+    cancelBridgeWithin,
+    cancel,
+    hasPending: () => cancelPromise !== null && cancelResult === null
+  }
 }

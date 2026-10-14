@@ -1,5 +1,6 @@
 import type { TranscriptLine } from '@shared/transcript-line'
 import type { SpeechDecoded, SpeechProvenanceLimits } from '@shared/meeting-speech-contract'
+import type { CanonicalIncrementalRecord } from '@shared/incremental-meeting'
 
 export interface MeetingSpeechPolicy {
   limits: SpeechProvenanceLimits
@@ -14,6 +15,7 @@ export type MeetingSpeechOperation =
   | 'decode'
   | 'rewrite'
   | 'project'
+  | 'canonical-record'
   | 'encrypt-v2'
   | 'decrypt-v2'
   | 'rewrap-v2'
@@ -27,6 +29,7 @@ export interface MeetingSpeechRequest {
   readonly input:
     | string
     | TranscriptLine[]
+    | { recordJson: Uint8Array }
     | { text: string; lines: TranscriptLine[] }
     | { content: string; contentKey: Uint8Array; iv: Uint8Array; kLocal: string; kEscrow?: string }
     | { envelopeJson: Uint8Array; contentKey: Uint8Array; kLocal: string }
@@ -34,7 +37,7 @@ export interface MeetingSpeechRequest {
 }
 
 export type MeetingSpeechResult =
-  | { ok: true; value: string | null | Uint8Array | SpeechDecoded }
+  | { ok: true; value: string | null | Uint8Array | SpeechDecoded | CanonicalIncrementalRecord }
   | { ok: false; code: 'INVALID_REQUEST' | 'RESOURCE_LIMIT' | 'CODEC_FAILURE' }
 
 export interface MeetingSpeechReply {
