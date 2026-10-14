@@ -153,6 +153,8 @@ async function downloadOne(
   }
   arm(REQUEST_TIMEOUT_MS, `${file.path}: request timeout`)
 
+  let output: ReturnType<typeof createWriteStream> | undefined
+  let outputClosed: Promise<void> | undefined
   try {
     const url = asrModelFileUrl(spec, file)
     const res = await net.fetch(url, { signal: ctrl.signal })
@@ -172,6 +174,11 @@ async function downloadOne(
     const reader = res.body.getReader()
     let receivedBytes = 0
     let completed = false
+    const writer = createWriteStream(partial, { autoClose: true, emitClose: true })
+    output = writer
+    // A source error can reject pipeline before WriteStream's asynchronous fs.open finishes. Wait for
+    // 'close' before removing the partial, so a late open cannot recreate it after cleanup.
+    outputClosed = new Promise<void>((resolve) => writer.once('close', resolve))
     arm(IDLE_TIMEOUT_MS, `${file.path}: stalled mid-download`)
     await pipeline(
       (async function* () {
@@ -198,8 +205,9 @@ async function downloadOne(
           reader.releaseLock()
         }
       })(),
-      createWriteStream(partial)
+      writer
     )
+    await outputClosed
 
     const size = statSync(partial).size
     if (size !== file.bytes) throw new Error(`${file.path}: got ${size} bytes, expected ${file.bytes}`)
@@ -213,6 +221,10 @@ async function downloadOne(
     renameSync(partial, dest)
   } catch (err) {
     ctrl.abort()
+    if (output && outputClosed) {
+      output.destroy()
+      await outputClosed
+    }
     rmSync(partial, { force: true })
     throw err
   } finally {
