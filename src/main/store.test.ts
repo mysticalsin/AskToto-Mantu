@@ -218,11 +218,11 @@ describe('store', () => {
   it('preserves an explicit broker route on a fresh lean profile', async () => {
     writeFileSync(
       join(userData, 'settings.json'),
-      JSON.stringify({ brokerSpeech: { transport: 'broker-v1', engine: 'openai-realtime' } }),
+      JSON.stringify({ brokerSpeech: { transport: 'broker-v1', engine: 'cloudflare-nova3' } }),
       'utf8'
     )
     await configureFreshLeanSpeechDefaults('lean', verifiedLeanPackage())
-    expect(getSettings().brokerSpeech).toEqual({ transport: 'broker-v1', engine: 'openai-realtime' })
+    expect(getSettings().brokerSpeech).toEqual({ transport: 'broker-v1', engine: 'cloudflare-nova3' })
   })
 
   it('advances the opaque speech selection identity on accepted selection changes, including a return', () => {

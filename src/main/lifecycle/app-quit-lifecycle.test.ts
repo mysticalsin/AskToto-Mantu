@@ -33,6 +33,8 @@ describe('app quit lifecycle', () => {
   it('stops the boot power-save blocker before clearing the watch with current userData', () => {
     const app = new TestApp()
     const cleanupOrder: string[] = []
+    const wrappedNames: string[] = []
+    const invokedNames: string[] = []
     installAppQuitLifecycle(app, {
       speechPackDesktop: () => null,
       quitTrace: createQuitTrace(false, () => undefined),
@@ -50,12 +52,20 @@ describe('app quit lifecycle', () => {
       backgroundTimers: [],
       observability: () => null,
       uptime: () => 1,
-      wrapLifecycleListener: (_name, listener) => listener,
+      wrapLifecycleListener: (name, listener) => {
+        wrappedNames.push(name)
+        return () => {
+          invokedNames.push(name)
+          listener()
+        }
+      },
       warn: () => undefined
     })
 
     app.quit()
 
+    expect(wrappedNames).toEqual(['app_quit'])
+    expect(invokedNames).toEqual(['app_quit'])
     expect(cleanupOrder).toEqual(['power:false', 'watch:/private-test-profile'])
   })
 

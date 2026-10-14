@@ -6,6 +6,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { redactSecrets } from '@shared/redact'
 import { crashDetail } from './infra/observability/crash-taxonomy'
 import { createReloadBudget } from './lifecycle/reload-budget'
+import { createQuitTrace } from './lifecycle/quit-trace'
+import { createFatalHandler } from './lifecycle/fatal-handler'
 import { isOrphanScreenSourcesRejection } from './capture-permissions/loopback-grant'
 
 const indexText = readFileSync(join(__dirname, 'index.ts'), 'utf8')
@@ -50,7 +52,8 @@ function webContentsOnCallback(target: string, eventName: string): ts.Expression
       node.expression.expression.getText(indexSource) === target &&
       node.expression.name.text === 'on' &&
       node.arguments[0]?.getText(indexSource) === `'${eventName}'`
-    ) callback = node.arguments[1]
+    )
+      callback = node.arguments[1]
     ts.forEachChild(node, visit)
   }
   visit(indexSource)
@@ -102,8 +105,9 @@ describe('exclusive onboarding renderer recovery', () => {
     const win = {
       isDestroyed: () => false,
       loadURL,
-      webContents: {}
+      webContents: { id: 1 }
     }
+    const selfOwner = { window: win, webContents: win.webContents, webContentsId: win.webContents.id }
     const showForExclusiveOnboarding = vi.fn()
     const applyExclusiveOnboardingStage = vi.fn(() => true)
     const gone = actualRendererGoneHandler({
@@ -129,9 +133,9 @@ describe('exclusive onboarding renderer recovery', () => {
       currentWidth: 1,
       BAR_WIDTH: 600,
       self: win,
-      // Captured beside `const self = win`, outside this handler: reading self.webContents here would
-      // throw against an already-torn-down WebContents (MQA-340).
-      selfWebContentsId: 1,
+      // Captured beside `const self = win`, outside this handler: the actual cached owner survives
+      // render-process-gone without reading the destroyed BrowserWindow getter (MQA-340).
+      selfOwner,
       commandControl: { revokeForLifecycleEvent },
       responsiveness: { markGone: vi.fn() },
       // M2-0037: within budget — the handler must still reload exactly as before.
@@ -152,7 +156,7 @@ describe('render-process-gone reload budget wiring', () => {
   /** Stubs every scenario below needs; each test supplies `reloadBudget` and overrides only what it tests. */
   function baseGlobals(overrides: Record<string, unknown>) {
     const loadURL = vi.fn(() => Promise.resolve())
-    const win = { isDestroyed: () => false, loadURL, webContents: {} }
+    const win = { isDestroyed: () => false, loadURL, webContents: { id: 1 } }
     const auditLog = vi.fn()
     const mainLog = { error: vi.fn(), warn: vi.fn() }
     const globals: Record<string, unknown> = {
@@ -176,7 +180,7 @@ describe('render-process-gone reload budget wiring', () => {
       currentWidth: 1,
       BAR_WIDTH: 600,
       self: win,
-      selfWebContentsId: 1,
+      selfOwner: { window: win, webContents: win.webContents, webContentsId: 1 },
       commandControl: { revokeForLifecycleEvent: vi.fn() },
       responsiveness: { markGone: vi.fn() },
       win,
@@ -320,50 +324,51 @@ describe('render-process-gone reload budget wiring', () => {
 })
 
 describe('onFatal — async relaunch dialog', () => {
-  /** Lifts `fatalHandled`, `onFatal` and `showFatalDialog` together so `onFatal` closes over the real
-   *  latch and calls the real dialog — a fresh vm context per call, so `fatalHandled` starts false again
-   *  for each test. `persistCrash` is injected rather than lifted: this test is about the async-dialog
-   *  half of the ticket, and persistCrash's own redact/log/write behaviour has its own coverage. */
-  function actualOnFatal(globals: Record<string, unknown>): (kind: 'uncaughtException' | 'unhandledRejection', err: unknown) => void {
-    const fatalHandledDecl = indexSource.statements.find(
-      (node): node is ts.VariableStatement =>
-        ts.isVariableStatement(node) &&
-        node.declarationList.declarations.some(d => ts.isIdentifier(d.name) && d.name.text === 'fatalHandled')
-    )
-    const onFatalDecl = topLevelFunctionDeclaration('onFatal')
-    const showFatalDialogDecl = topLevelFunctionDeclaration('showFatalDialog')
-    expect(fatalHandledDecl, 'Actual source declaration fatalHandled was not found').toBeDefined()
-    expect(onFatalDecl, 'Actual source function onFatal was not found').toBeDefined()
-    expect(showFatalDialogDecl, 'Actual source function showFatalDialog was not found').toBeDefined()
-    if (!fatalHandledDecl || !onFatalDecl || !showFatalDialogDecl) return () => undefined
-    const source = [
-      fatalHandledDecl.getText(indexSource),
-      onFatalDecl.getText(indexSource),
-      showFatalDialogDecl.getText(indexSource),
-      'globalThis.result = onFatal;'
-    ].join('\n')
-    return runSource(source, globals)
+  /** Build the production handler with the same first-fatal latch and real dialog-promise ordering. */
+  function actualOnFatal(
+    globals: Record<string, unknown>
+  ): (kind: 'uncaughtException' | 'unhandledRejection', err: unknown) => void {
+    return createFatalHandler(globals as unknown as Parameters<typeof createFatalHandler>[0]).onFatal
   }
 
   /** A `dialog.showMessageBox` whose promise the test resolves itself, plus the `persistCrash`/`exitAndRelaunch`/`win`
    *  stubs the lifted `onFatal`/`showFatalDialog` need. */
   function pendingDialogGlobals(overrides: Record<string, unknown> = {}) {
     let resolveDialog!: (result: { response: number }) => void
-    const showMessageBox = vi.fn(() => new Promise<{ response: number }>((resolve) => { resolveDialog = resolve }))
+    const showMessageBox = vi.fn(
+      (..._args: unknown[]) =>
+        new Promise<{ response: number }>((resolve) => {
+          resolveDialog = resolve
+        })
+    )
     const persistCrash = vi.fn()
     const win = {}
     const mainLog = { warn: vi.fn() }
+    const quitTrace = overrides.quitTrace ?? createQuitTrace(false, () => undefined)
     const globals: Record<string, unknown> = {
       persistCrash,
       dialog: { showMessageBox },
       exitAndRelaunch: vi.fn(),
+      platform: 'darwin',
+      showMessageBox: (options: unknown) => (win ? showMessageBox(win, options) : showMessageBox(options)),
+      warnCaptureRefusal: () =>
+        mainLog.warn('[capture] desktopCapturer rejected a screen-source request (Screen Recording not in effect)'),
       win,
+      quitTrace,
       isOrphanScreenSourcesRejection,
       mainLog,
       process: { platform: 'darwin' },
       ...overrides
     }
-    return { globals, showMessageBox, persistCrash, win, mainLog, resolve: (response: number) => resolveDialog({ response }) }
+    return {
+      globals,
+      showMessageBox,
+      persistCrash,
+      win,
+      mainLog,
+      quitTrace,
+      resolve: (response: number) => resolveDialog({ response })
+    }
   }
 
   // M2-0429: Electron's own orphan "Failed to get sources." rejection for a refused macOS capture used to
@@ -388,7 +393,10 @@ describe('onFatal — async relaunch dialog', () => {
     // onFatal is synchronous and returns immediately: showFatalDialog only reaches its first `await` after
     // showMessageBox has already been called, so the assertion below runs before that promise settles.
     expect(persistCrash).toHaveBeenCalledExactlyOnceWith('uncaughtException', expect.stringContaining('boom'), 'boom')
-    expect(showMessageBox).toHaveBeenCalledExactlyOnceWith(win, expect.objectContaining({ buttons: ['Relaunch Métis', 'Continue'] }))
+    expect(showMessageBox).toHaveBeenCalledExactlyOnceWith(
+      win,
+      expect.objectContaining({ buttons: ['Relaunch Métis', 'Continue'] })
+    )
   })
 
   it('calls exitAndRelaunch when the user picks "Relaunch Métis" (response 0)', async () => {
@@ -426,13 +434,72 @@ describe('onFatal — async relaunch dialog', () => {
     expect(showMessageBox).toHaveBeenCalledTimes(1)
   })
 
+  it('traces fatal persistence and dialog return without changing the first-fatal branch', async () => {
+    const lines: string[] = []
+    const quitTrace = createQuitTrace(true, (line) => lines.push(line))
+    const { globals, showMessageBox, resolve } = pendingDialogGlobals({ quitTrace })
+    const onFatal = actualOnFatal(globals)
+    quitTrace.requestQuit()
+
+    onFatal('uncaughtException', new Error('first'))
+    onFatal('uncaughtException', new Error('second'))
+
+    expect(showMessageBox).toHaveBeenCalledOnce()
+    expect(lines.map((line) => line.replace('[METIS_QUIT_TRACE] ', ''))).toEqual([
+      'FATAL_UNCAUGHT_DURING_QUIT',
+      'FATAL_PERSIST_RETURNED',
+      'FATAL_FIRST_DIALOG',
+      'FATAL_DIALOG_CALL_ENTER',
+      'FATAL_DIALOG_CALL_RETURNED',
+      'FATAL_UNCAUGHT_DURING_QUIT',
+      'FATAL_PERSIST_RETURNED',
+      'FATAL_ALREADY_HANDLED'
+    ])
+
+    resolve(1)
+    await new Promise((done) => setImmediate(done))
+    expect(lines.at(-1)).toBe('[METIS_QUIT_TRACE] FATAL_DIALOG_SETTLED')
+  })
+
+  it('does not label an ordinary fatal dialog as a quit-phase event', () => {
+    const lines: string[] = []
+    const quitTrace = createQuitTrace(true, (line) => lines.push(line))
+    const { globals, showMessageBox } = pendingDialogGlobals({ quitTrace })
+    const onFatal = actualOnFatal(globals)
+
+    onFatal('uncaughtException', new Error('ordinary runtime failure'))
+
+    expect(showMessageBox).toHaveBeenCalledOnce()
+    expect(lines).toEqual([])
+  })
+
   it('an unhandledRejection persists the crash but never opens the dialog', () => {
     const { globals, showMessageBox, persistCrash } = pendingDialogGlobals()
     const onFatal = actualOnFatal(globals)
 
     onFatal('unhandledRejection', 'a rejected promise reason')
 
-    expect(persistCrash).toHaveBeenCalledExactlyOnceWith('unhandledRejection', 'a rejected promise reason', 'a rejected promise reason')
+    expect(persistCrash).toHaveBeenCalledExactlyOnceWith(
+      'unhandledRejection',
+      'a rejected promise reason',
+      'a rejected promise reason'
+    )
     expect(showMessageBox).not.toHaveBeenCalled()
+  })
+
+  it('records an unhandled rejection during quit without taking the dialog branch', () => {
+    const lines: string[] = []
+    const quitTrace = createQuitTrace(true, (line) => lines.push(line))
+    const { globals, showMessageBox } = pendingDialogGlobals({ quitTrace })
+    const onFatal = actualOnFatal(globals)
+    quitTrace.requestQuit()
+
+    onFatal('unhandledRejection', new Error('private rejection detail'))
+
+    expect(showMessageBox).not.toHaveBeenCalled()
+    expect(lines.map((line) => line.replace('[METIS_QUIT_TRACE] ', ''))).toEqual([
+      'FATAL_REJECTION_DURING_QUIT',
+      'FATAL_PERSIST_RETURNED'
+    ])
   })
 })

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { randomUUID } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -501,7 +502,7 @@ describe('bounded close and successful-save receipt join', () => {
       self: win,
       // Captured beside `const self = win`, outside this handler: the real callback runs after the
       // WebContents is torn down (MQA-340).
-      selfWebContentsId: 1,
+      selfOwner: { window: win, webContents: win.webContents, webContentsId: win.webContents.id },
       commandControl: { revokeForLifecycleEvent },
       responsiveness: { markGone: vi.fn() },
       // M2-0037: within budget — the handler must still reload exactly as before.
@@ -646,6 +647,7 @@ describe('exact import attempt integration', () => {
       },
       EncryptedImportJobStore: class {},
       getSettings: () => ({ asrLanguage: 'auto', asrEngine: 'parakeet', mode: 'meeting' }),
+      randomUUID,
       resetImportLanguageFollow: noop,
       startImportDecoder: noop,
       parakeetTranscribe: noop,

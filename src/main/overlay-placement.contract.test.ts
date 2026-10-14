@@ -104,11 +104,12 @@ describe('MQA-196 — a renderer crash restores the overlay geometry, not just t
       'let handler = null',
       // isDestroyed() -> true stops the handler before the reload, which needs a real BrowserWindow. The
       // reload itself is already pinned by c-main-fixes.contract.test.ts; this is about the reset above it.
-      'const win = { webContents: { on: (evt, fn) => { if (evt === "render-process-gone") handler = fn } }, isDestroyed: () => true }',
+      'const win = { webContents: { id: 1, on: (evt, fn) => { if (evt === "render-process-gone") handler = fn } }, isDestroyed: () => true }',
       'const self = win',
       // Captured beside `const self = win` in main, outside this handler, because the real callback runs
       // after the WebContents is gone (MQA-340).
-      'const selfWebContentsId = 1',
+      'const selfWebContents = self.webContents',
+      'const selfOwner = { window: self, webContents: selfWebContents, webContentsId: selfWebContents.id }',
       'const onboardingExclusiveLive = () => false',
       'const overlayRendererUrl = () => "file:///fixture/renderer/index.html"',
       ''

@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { createQuitTrace, QUIT_TRACE_LIMIT } from './quit-trace'
+import { describe, expect, it, vi } from 'vitest'
+import { createQuitTrace, observeClosedCleanup, QUIT_TRACE_LIMIT } from './quit-trace'
 
 describe('quit trace', () => {
   it('records nested quit calls with fixed caller categories and return order', () => {
@@ -15,6 +15,55 @@ describe('quit trace', () => {
       'QUIT_CALL_RETURNED_PACK_RESUME',
       'QUIT_CALL_RETURNED_IPC'
     ])
+  })
+
+  it('records closed cleanup return and rethrows the same cleanup failure', () => {
+    const lines: string[] = []
+    const trace = createQuitTrace(true, (line) => lines.push(line))
+    const failure = new Error('private cleanup failure')
+
+    observeClosedCleanup(trace, () => undefined)
+    let thrown: unknown
+    try {
+      observeClosedCleanup(trace, () => {
+        throw failure
+      })
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBe(failure)
+    expect(lines.map((line) => line.replace('[METIS_QUIT_TRACE] ', ''))).toEqual([
+      'CLOSED_CLEANUP_ENTER',
+      'CLOSED_CLEANUP_RETURNED',
+      'CLOSED_CLEANUP_ENTER',
+      'CLOSED_CLEANUP_THROWN'
+    ])
+  })
+
+  it('runs closed cleanup once when disabled and when diagnostic writes fail', () => {
+    const disabledWriter = vi.fn()
+    const disabledTrace = createQuitTrace(false, disabledWriter)
+    const disabledCleanup = vi.fn()
+    observeClosedCleanup(disabledTrace, disabledCleanup)
+
+    const failingTrace = createQuitTrace(true, () => {
+      throw new Error('diagnostic writer failure')
+    })
+    const cleanupFailure = new Error('cleanup failure')
+    const failingCleanup = vi.fn(() => {
+      throw cleanupFailure
+    })
+    let thrown: unknown
+    try {
+      observeClosedCleanup(failingTrace, failingCleanup)
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(disabledCleanup).toHaveBeenCalledOnce()
+    expect(disabledWriter).not.toHaveBeenCalled()
+    expect(failingCleanup).toHaveBeenCalledOnce()
+    expect(thrown).toBe(cleanupFailure)
   })
 
   it('keeps the bounded sequence and emits one overflow marker with its count summary', () => {
