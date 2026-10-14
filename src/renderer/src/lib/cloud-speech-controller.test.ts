@@ -14,7 +14,6 @@ import type {
 } from '@shared/cloud-speech'
 import { createCloudSpeechCancellation } from './cloud-speech-cancel'
 import { createCloudSpeechController, type CloudSpeechControllerBridge } from './cloud-speech-controller'
-import { bounded as boundedWithClock } from './cloud-speech-deadline'
 
 const captureId = '9d87dc1a-0a52-4a5e-bbc2-f44320890cd4'
 const captureGeneration = 7
@@ -206,7 +205,6 @@ describe('cloud speech cancellation dispatch', () => {
       bridge: { cloudSpeechCancel },
       now,
       isStarted,
-      bounded: (operation, deadline, timeoutValue) => boundedWithClock(operation, deadline, now, timeoutValue),
       failure
     })
 
@@ -248,6 +246,69 @@ describe('cloud speech cancellation dispatch', () => {
     pendingCancel.resolve({ ok: true, captureId, captureGeneration, closure: 'confirmed' })
     await expect(first).resolves.toMatchObject({ ok: true, closure: 'confirmed' })
     expect(next.hasPending()).toBe(false)
+  })
+
+  it('shortens all coalesced cancel waiters to the earliest caller deadline', async () => {
+    vi.useFakeTimers()
+    let clock = 0
+    const pendingCancel = deferred<unknown>()
+    const bridgeCancel = vi.fn(() => pendingCancel.promise)
+    const next = cancellation(
+      bridgeCancel,
+      () => clock,
+      () => true
+    )
+    const first = next.cancel(100)
+    const duplicate = next.cancel(50)
+
+    expect(duplicate).toBe(first)
+    expect(bridgeCancel).toHaveBeenCalledTimes(1)
+    clock = 50
+    await vi.advanceTimersByTimeAsync(50)
+    await expect(first).resolves.toEqual(failure('TIMEOUT'))
+    expect(bridgeCancel).toHaveBeenCalledTimes(1)
+    pendingCancel.resolve({ ok: true, captureId, captureGeneration, closure: 'confirmed' })
+  })
+
+  it('shortens an existing bridgeWithin wait when a later caller has an earlier deadline', async () => {
+    vi.useFakeTimers()
+    let clock = 0
+    const pendingCancel = deferred<unknown>()
+    const bridgeCancel = vi.fn(() => pendingCancel.promise)
+    const next = cancellation(
+      bridgeCancel,
+      () => clock,
+      () => true
+    )
+    const first = next.cancelBridgeWithin(100)
+    const duplicate = next.cancelBridgeWithin(50)
+
+    clock = 50
+    await vi.advanceTimersByTimeAsync(50)
+    await expect(Promise.all([first, duplicate])).resolves.toEqual([failure('TIMEOUT'), failure('TIMEOUT')])
+    expect(bridgeCancel).toHaveBeenCalledTimes(1)
+    pendingCancel.resolve({ ok: true, captureId, captureGeneration, closure: 'confirmed' })
+  })
+
+  it('lets requested-identity cleanup shorten an already waiting cancellation', async () => {
+    vi.useFakeTimers()
+    let clock = 0
+    const pendingCancel = deferred<unknown>()
+    const bridgeCancel = vi.fn(() => pendingCancel.promise)
+    const next = cancellation(
+      bridgeCancel,
+      () => clock,
+      () => true
+    )
+    const first = next.cancelBridgeWithin(100)
+    const cleanup = next.cancelRequestedIdentity(50)
+
+    clock = 50
+    await vi.advanceTimersByTimeAsync(50)
+    await expect(first).resolves.toEqual(failure('TIMEOUT'))
+    await expect(cleanup).resolves.toBeUndefined()
+    expect(bridgeCancel).toHaveBeenCalledTimes(1)
+    pendingCancel.resolve({ ok: true, captureId, captureGeneration, closure: 'confirmed' })
   })
 
   it('consumes a late bridge rejection and reports transport failure when the wait budget remains', async () => {
@@ -325,6 +386,22 @@ describe('cloud speech cancellation dispatch', () => {
     await next.cancelRequestedIdentity(50)
     expect(bridgeCancel).toHaveBeenCalledTimes(1)
     expect(bridgeCancel).toHaveBeenCalledWith({ captureId, captureGeneration })
+  })
+
+  it('does not send a nonexistent-owner cancel before Start, then cancels a late successful Start', async () => {
+    const { instance, bridge } = controller()
+    const pendingStart = deferred<unknown>()
+    bridge.cloudSpeechStart = vi.fn(() => pendingStart.promise)
+    const start = instance.start()
+
+    await vi.waitFor(() => expect(bridge.cloudSpeechStart).toHaveBeenCalledOnce())
+    await expect(instance.cancel()).resolves.toEqual(failure('CLOSED'))
+    expect(bridge.cloudSpeechCancel).not.toHaveBeenCalled()
+
+    pendingStart.resolve(started())
+    await expect(start).resolves.toEqual(failure('CLOSED'))
+    expect(bridge.cloudSpeechCancel).toHaveBeenCalledOnce()
+    expect(bridge.cloudSpeechCancel).toHaveBeenCalledWith({ captureId, captureGeneration })
   })
 })
 

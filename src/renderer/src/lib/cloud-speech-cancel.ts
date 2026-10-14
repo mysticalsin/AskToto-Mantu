@@ -5,6 +5,7 @@ import {
   type CloudSpeechFailure,
   type CloudSpeechStartRequest
 } from '@shared/cloud-speech'
+import { createAdjustableDeadline } from './cloud-speech-deadline'
 import { cloudSpeechIdentityMatches } from './cloud-speech-results'
 
 export function createCloudSpeechCancellation(options: {
@@ -12,13 +13,12 @@ export function createCloudSpeechCancellation(options: {
   bridge: { cloudSpeechCancel(identity: CloudSpeechCancelRequest): Promise<unknown> }
   now(): number
   isStarted(): boolean
-  bounded<T>(operation: Promise<T>, deadline: number, timeoutValue: T): Promise<T>
   failure(code: CloudSpeechFailure['code'], request?: CloudSpeechStartRequest): CloudSpeechFailure
 }) {
   let cancelPromise: Promise<CloudSpeechCancelResult> | null = null
   let cancelResult: CloudSpeechCancelResult | null = null
   let cancelWait: Promise<CloudSpeechCancelResult> | null = null
-  let cancelDeadline: number | null = null
+  const cancelDeadline = createAdjustableDeadline(options.now)
   const identity = () => ({
     captureId: options.request.captureId,
     captureGeneration: options.request.capture.generation
@@ -62,18 +62,20 @@ export function createCloudSpeechCancellation(options: {
   }
 
   const waitForCancel = (deadline: number, allowUnstarted: boolean): Promise<CloudSpeechCancelResult> => {
+    cancelDeadline.shorten(deadline)
     if (!allowUnstarted && !options.isStarted() && cancelPromise === null)
       return Promise.resolve(options.failure('CLOSED', options.request))
-    cancelDeadline = cancelDeadline === null ? deadline : Math.min(cancelDeadline, deadline)
-    const boundedDeadline = cancelDeadline
     const operation = cancelPromise ?? dispatchCancel()
-    return options.bounded(operation, boundedDeadline, options.failure('TIMEOUT', options.request))
+    return cancelDeadline.bounded(operation, deadline, options.failure('TIMEOUT', options.request))
   }
 
   const cancelBridgeWithin = (deadline: number): Promise<CloudSpeechCancelResult> => waitForCancel(deadline, false)
 
   const cancel = (deadline: number): Promise<CloudSpeechCancelResult> => {
-    if (cancelWait) return cancelWait
+    if (cancelWait) {
+      cancelDeadline.shorten(deadline)
+      return cancelWait
+    }
     cancelWait = cancelBridgeWithin(deadline)
     return cancelWait
   }
