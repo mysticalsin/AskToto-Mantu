@@ -5,7 +5,7 @@ import {
   inspectIncrementalRecordReceipt,
   type IncrementalRecordReceipt,
   type IncrementalRecordReceiptBinding
-} from '../../infra/process/incremental-record-receipt'
+} from './incremental-record-receipt'
 
 export type IncrementalJournalLimits = SpeechProvenanceLimits & { maxJournalBytes: number }
 

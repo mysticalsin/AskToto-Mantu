@@ -4,7 +4,7 @@ import type { SpeechProvenanceLimits } from '@shared/meeting-speech-contract'
 import {
   consumeIncrementalRecordReceipt,
   type IncrementalRecordReceiptBinding
-} from '../../../src/main/infra/process/incremental-record-receipt'
+} from '../../../src/main/features/meetings/incremental-record-receipt'
 import { createMeetingSpeechPersistenceService } from '../../../src/main/infra/process/meeting-speech-host'
 
 const limits: SpeechProvenanceLimits = {

@@ -7,7 +7,7 @@ import { processMeetingSpeechRequest } from '../../meeting-speech-worker'
 import {
   consumeIncrementalRecordReceipt,
   type IncrementalRecordReceiptBinding
-} from './incremental-record-receipt'
+} from '../../features/meetings/incremental-record-receipt'
 
 const policy = {
   limits: { maxRecords: 4, maxWords: 4, maxFieldBytes: 1024, maxRecordBytes: 4096, maxPayloadBytes: 8192 },

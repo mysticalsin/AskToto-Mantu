@@ -8,7 +8,7 @@ import {
   issueIncrementalRecordReceipt,
   type IncrementalRecordReceipt,
   type IncrementalRecordReceiptBinding
-} from './incremental-record-receipt'
+} from '../../features/meetings/incremental-record-receipt'
 import {
   isMeetingSpeechReply,
   type MeetingSpeechFailureCode,
