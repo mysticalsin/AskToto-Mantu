@@ -222,6 +222,16 @@ describe('downloadVerified', () => {
     expect(server.requests).toHaveLength(0)
   })
 
+  it('does not adopt a same-size destination until its digest matches the pin', async () => {
+    server = await serve(rangeHandler(body))
+    const corrupt = Buffer.from(body)
+    corrupt[0] ^= 0xff
+    writeFileSync(join(dir, 'model.bin'), corrupt)
+    await downloadVerified(request(`${server.base}/pin/model.bin`), deps())
+    expect(server.requests).toHaveLength(1)
+    expect(readFileSync(join(dir, 'model.bin'))).toEqual(body)
+  })
+
   it.each([
     ['missing Content-Length', undefined],
     ['matching Content-Length', '5']

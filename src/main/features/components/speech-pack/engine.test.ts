@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { existsSync, linkSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -356,6 +356,10 @@ describe('speech-pack engine', () => {
         const next = make([c])
         await next.initialise()
         expect(asideDirs()).toEqual([])
+        if (step === 'old-moved-aside') {
+          expect(next.getState(WHISPER)).toEqual({ status: 'ready' })
+          expect(packMatches(c, active)).toBe(true)
+        }
         next.enqueue([WHISPER])
         await next.whenIdle()
         expect(next.getState(WHISPER)).toEqual({ status: 'ready' })
@@ -412,6 +416,23 @@ describe('speech-pack engine', () => {
       expect(next.getState(WHISPER)).toEqual({ status: 'not-installed' })
       expect(existsSync(marker(WHISPER))).toBe(false)
       expect(existsSync(join(root, WHISPER, '1'))).toBe(false)
+    })
+
+    it('refetches a same-size corrupt staged file instead of treating its length as verification', async () => {
+      server = await serveFiles()
+      const c = whisper(server.base)
+      const stage = join(root, '.staging', WHISPER, '1')
+      mkdirSync(stage, { recursive: true })
+      const corrupt = Buffer.from(contents['a.bin'])
+      corrupt[0] ^= 0xff
+      writeFileSync(join(stage, 'a.bin'), corrupt)
+
+      const engine = make([c])
+      engine.enqueue([WHISPER])
+      await engine.whenIdle()
+      expect(engine.getState(WHISPER)).toEqual({ status: 'ready' })
+      expect(packMatches(c, join(root, WHISPER, '1'))).toBe(true)
+      expect(server.requests.length).toBeGreaterThan(0)
     })
 
     it('does not trust a corrupt active marker when enqueue is called before initialise', async () => {
@@ -490,6 +511,28 @@ describe('speech-pack engine', () => {
       expect(engine.getState(PARAKEET)).toEqual({ status: 'ready' })
       expect(readdirSync(join(root, PARAKEET, '1'))).toEqual(['p.bin'])
       expect(existsSync(join(root, '.staging', PARAKEET, 'work'))).toBe(false)
+    })
+
+    it('verifies an existing same-size archive before the extractor can consume it', async () => {
+      server = await serveArchive()
+      const archivePath = join(root, '.staging', PARAKEET, 'work', 'archive.download')
+      mkdirSync(join(root, '.staging', PARAKEET, 'work'), { recursive: true })
+      const corruptArchive = Buffer.from(archiveBytes)
+      corruptArchive[0] ^= 0xff
+      writeFileSync(archivePath, corruptArchive)
+      let extractorSawPinnedArchive = false
+      const component = archiveComponent(server.base)
+      const engine = make([component], {
+        extractArchive: async (path, sink) => {
+          extractorSawPinnedArchive = readFileSync(path).equals(archiveBytes)
+          await sink.addFile(`${prefix}/p.bin`, one(contents['p.bin']))
+        }
+      })
+      engine.enqueue([PARAKEET])
+      await engine.whenIdle()
+      expect(extractorSawPinnedArchive).toBe(true)
+      expect(engine.getState(PARAKEET)).toEqual({ status: 'ready' })
+      expect(packMatches(component, join(root, PARAKEET, '1'))).toBe(true)
     })
 
     it('reports tamper when an extracted file does not match its pin', async () => {
@@ -611,7 +654,22 @@ describe('speech-pack engine', () => {
 })
 
 describe('isSafeEntryName', () => {
-  it.each(['../evil', 'a/../../evil', '/abs/path', 'C:/win', 'C:\\win', 'a\\b', '', 'a\0b'])('rejects %j', (name) => {
+  it.each([
+    '../evil',
+    'a/../../evil',
+    '/abs/path',
+    'C:/win',
+    'C:\\win',
+    'a\\b',
+    '',
+    'a\0b',
+    'dir/file:stream',
+    'CON.txt',
+    'nul',
+    'file.',
+    'file ',
+    'dir//file'
+  ])('rejects %j', (name) => {
     expect(isSafeEntryName(name)).toBe(false)
   })
   it.each(['a.bin', 'dir/file.onnx', 'test_wavs/en.wav'])('accepts %j', (name) => {
