@@ -348,13 +348,25 @@ afterEach(() => {
 
 describe('live audio transport identity', () => {
   it('marks both tracks captured only after both channels commit', async () => {
-    const api = render('parakeet')
-    await api.start('both', 'fast', 'parakeet', 'English', 123)
-    await settle()
+    const originalParse = CaptureSchema.safeParse.bind(CaptureSchema)
+    const observedTracks: string[][] = []
+    const parse = vi.spyOn(CaptureSchema, 'safeParse').mockImplementation((value) => {
+      const result = originalParse(value)
+      if (result.success) observedTracks.push(result.data.capturedTracks)
+      return result
+    })
+    try {
+      const api = render('parakeet')
+      await api.start('both', 'fast', 'parakeet', 'English', 123)
+      await settle()
 
-    expect(streams.map(({ kind }) => kind)).toEqual(['mic', 'system'])
-    expect(worklets).toHaveLength(2)
-    expect(render('parakeet').capturing).toBe(true)
+      expect(streams.map(({ kind }) => kind)).toEqual(['mic', 'system'])
+      expect(worklets).toHaveLength(2)
+      expect(observedTracks).toContainEqual(['microphone', 'system'])
+      expect(render('parakeet').capturing).toBe(true)
+    } finally {
+      parse.mockRestore()
+    }
   })
 
   it.each(['mic', 'system'] as const)('keeps capture active when only the %s track is denied', async (denied) => {
@@ -372,7 +384,10 @@ describe('live audio transport identity', () => {
     await settle()
 
     expect(streams.map(({ kind }) => kind)).toEqual(denied === 'mic' ? ['system'] : ['mic'])
-    expect(render('parakeet').capturing).toBe(true)
+    expect(render('parakeet')).toMatchObject({
+      capturing: true,
+      captureDegraded: { side: denied === 'mic' ? 'you' : 'them' }
+    })
   })
 
   it('clears capture status when both requested tracks are denied', async () => {
