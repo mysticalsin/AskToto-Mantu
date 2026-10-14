@@ -102,7 +102,17 @@ describe('SpeechCaptureGrantRegistry', () => {
     if (!pending) return
     registry.recordGrantCallbackResult(pending, owner, { callbackSucceeded: true, audioGranted: true })
     const finishOwner = {}
-    registry.reserveFinishingOwner(owner, finishOwner)
+    expect(
+      registry.authorizeCapturedTracks({
+        context: owner,
+        audioSource: 'system',
+        capturedTracks: ['system'],
+        platform: 'win32',
+        microphonePermission: 'unknown',
+        screenPermission: 'unknown'
+      }).ok
+    ).toBe(true)
+    expect(registry.reserveFinishingOwner(owner, finishOwner)).toBe(true)
     registry.invalidateAll()
     expect(registry.hasIssuedLoopbackGrant(owner)).toBe(false)
     expect(registry.canFinish(finishOwner)).toBe(false)
