@@ -283,7 +283,8 @@ export async function verifySessionToken(
   const iat = Number(parts[1])
   const email = normalizeAdminEmail(parts[2] || '')
   const sig = (parts[3] || '').toLowerCase()
-  if (!Number.isFinite(iat) || now < iat || now >= iat + SESSION_ABSOLUTE_TTL_MS || !isAdminEmail(email, env) || !sig) return null
+  if (!Number.isFinite(iat) || now < iat || now >= iat + SESSION_ABSOLUTE_TTL_MS || !isAdminEmail(email, env) || !sig)
+    return null
   const expected = await hmacHex(secret, `metis-operator-session:v1|${iat}|${email}`)
   if (!timingSafeEqualHex(expected, sig)) return null
   return { email, iat }
