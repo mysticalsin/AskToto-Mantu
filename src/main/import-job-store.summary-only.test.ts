@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Settings, TranscriptLine } from '@shared/ipc'
-import type { ImportJob } from './import-jobs'
+import { ImportJobManager, type ImportJob } from './import-jobs'
 import { EncryptedImportJobStore } from './import-job-store'
 import * as transcripts from './transcripts'
 
@@ -57,7 +57,7 @@ function settings(summaryOnly: boolean): Settings {
   } as Settings
 }
 
-function savedJob(jobId = randomUUID()): ImportJob {
+function savedJob(jobId: string = randomUUID()): ImportJob {
   const lines: TranscriptLine[] = [{ speaker: 'you', text: 'private checkpoint sentinel', t: 1_700_000_000_000 }]
   return {
     jobId,
@@ -84,6 +84,52 @@ afterEach(() => {
 })
 
 describe('summary-only import checkpoint holds', () => {
+  it('keeps legacy 32-hex checkpoints eligible for explicit resume and scoped removal', async () => {
+    const root = join(makeRoot(), 'import-jobs')
+    const store = new EncryptedImportJobStore(() => settings(false), root)
+    const job = savedJob('0123456789abcdef0123456789abcdef')
+    await store.save(job)
+
+    await expect(store.markExistingJobsHeld('restart')).resolves.toMatchObject({
+      jobIds: [job.jobId],
+      inventoryOverflow: false
+    })
+    await expect(store.loadHeld(job.jobId, true)).resolves.toMatchObject({
+      jobId: job.jobId,
+      sourcePath: job.sourcePath,
+      lines: job.lines
+    })
+    await expect(store.loadHeld('A'.repeat(32), true)).rejects.toThrow(/Invalid import identity/)
+    await expect(store.remove('../0123456789abcdef0123456789abcdef')).rejects.toThrow(/Invalid import identity/)
+
+    await store.remove(job.jobId)
+    await expect(store.loadHeld(job.jobId, true)).resolves.toBeUndefined()
+  })
+
+  it('persists a manager-generated UUID through the production encrypted store', async () => {
+    const root = join(makeRoot(), 'import-jobs')
+    const store = new EncryptedImportJobStore(() => settings(false), root)
+    const manager = new ImportJobManager({
+      store,
+      decode: vi.fn(),
+      transcribe: vi.fn(async () => 'recognized speech'),
+      saveMeeting: vi.fn(async () => 'saved-import.md'),
+      enqueueIngest: vi.fn(),
+      generateRecap: vi.fn(async () => undefined),
+      updateRecap: vi.fn(async () => undefined)
+    })
+
+    const job = await manager.start({
+      path: '/private/interview.wav',
+      name: 'interview.wav',
+      sizeBytes: 1_234,
+      mtimeMs: 1_700_000_000_000
+    })
+
+    expect(job.jobId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    await expect(store.list()).resolves.toEqual([expect.objectContaining({ jobId: job.jobId })])
+  })
+
   it('refuses a new checkpoint before creating the import-jobs root', async () => {
     let current = settings(true)
     const root = join(makeRoot(), 'import-jobs')

@@ -38,7 +38,7 @@ import {
 // DevTools stay reachable only where dev-env permits them; packaged builds ignore ASKTOTO_DEVTOOLS.
 const DEVTOOLS_ENABLED = devToolsEnabled()
 import { pathToFileURL } from 'node:url'
-import { randomBytes } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { bindReadinessThenNavigate } from './renderer-readiness'
 import { bindAct1DomProbe } from './act1-dom-probe'
 import {
@@ -2002,7 +2002,7 @@ function initializeImportJobs(): void {
     onChange: publishImportJob,
     onCancel: closeImportDecoder,
     personaMode: () => getSettings().mode,
-    newId: () => randomBytes(16).toString('hex'),
+    newId: randomUUID,
     concurrency: MAX_CONCURRENT_DECODES
   })
   const speechPackBlocked = resolveLocalSpeechPackPolicy(getSettings(), getAdminLocalSpeechPackPolicy()) === 'blocked'
