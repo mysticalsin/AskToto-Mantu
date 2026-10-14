@@ -243,6 +243,36 @@ describe('downloadVerified', () => {
     expect(existsSync(`${req.dest}.partial`)).toBe(false)
   })
 
+  it('cancels and unlocks a response when the partial cannot be opened', async () => {
+    let cancelled = false
+    let body: ReadableStream<Uint8Array>
+    body = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          controller.enqueue(Buffer.from('x'))
+        },
+        cancel() {
+          cancelled = true
+        }
+      },
+      { highWaterMark: 0 }
+    )
+    const fetch = (async () => new Response(body, { status: 200 })) as typeof globalThis.fetch
+    const err = await failure(
+      downloadVerified(
+        {
+          ...request('https://models.example.test/resolve/0123456789abcdef0123456789abcdef01234567/model.bin'),
+          bytes: 1,
+          sha256: sha256Hex(Buffer.from('x'))
+        },
+        deps({ fetch, openFile: async (..._args: Parameters<typeof openAsync>) => { throw new Error('disk failure') } }, { maxAttempts: 1 })
+      )
+    )
+    expect(err.kind).toBe('offline')
+    expect(cancelled).toBe(true)
+    expect(body.locked).toBe(false)
+  })
+
   it.each([
     ['missing Content-Length', undefined],
     ['matching Content-Length', '5']
