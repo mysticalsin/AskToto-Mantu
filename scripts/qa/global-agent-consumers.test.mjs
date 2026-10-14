@@ -88,6 +88,8 @@ function assertExpectedAgent(agent) {
   return agent
 }
 
+let requestPhase = 'bootstrap'
+
 async function main() {
   const mode = process.env.METIS_GA_MODE
   if (mode === 'onnx' || mode === 'onnx-install') {
@@ -138,6 +140,7 @@ async function main() {
 
   const httpsUrl = process.env.METIS_GA_HTTPS_URL
   if (process.env.METIS_GA_ACTION === 'untrusted-tls') {
+    requestPhase = 'https'
     let code = null
     try {
       await requestText(https, httpsUrl)
@@ -149,13 +152,20 @@ async function main() {
     return
   }
 
+  requestPhase = 'http'
   const httpResult = await requestText(http, process.env.METIS_GA_HTTP_URL)
+  requestPhase = 'https'
   const httpsResult = await requestText(https, httpsUrl)
   process.stdout.write('METIS_GA_RESULT=' + JSON.stringify({ initialized: true, http: httpResult, https: httpsResult }) + '\n')
 }
 
 main().catch((error) => {
-  process.stderr.write('METIS_GA_CHILD_FAILURE code=' + (error.code || 'none') + '\n')
+  const safeCodes = new Set([
+    'ERR_TLS_CERT_ALTNAME_INVALID', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+    'SELF_SIGNED_CERT_IN_CHAIN', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EPROTO'
+  ])
+  const code = safeCodes.has(error?.code) ? error.code : 'OTHER'
+  process.stderr.write('METIS_GA_CHILD_FAILURE phase=' + requestPhase + ' code=' + code + '\n')
   process.exitCode = 1
 })
 `
@@ -421,7 +431,14 @@ function runIsolated(consumer, options) {
 
 async function runRequests(consumer, options = {}) {
   const result = await runIsolated(consumer, { noProxy: '192.0.2.99', trustedTls: true, ...options })
-  assert.equal(result.code, 0, 'isolated parent must complete its local HTTP and trusted HTTPS requests')
+  const failure = result.stderr.match(
+    /METIS_GA_CHILD_FAILURE phase=(bootstrap|http|https) code=(ERR_TLS_CERT_ALTNAME_INVALID|DEPTH_ZERO_SELF_SIGNED_CERT|UNABLE_TO_VERIFY_LEAF_SIGNATURE|SELF_SIGNED_CERT_IN_CHAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EPROTO|OTHER)/
+  )
+  assert.equal(
+    result.code,
+    0,
+    `isolated parent must complete local HTTP and trusted HTTPS requests; phase=${failure?.[1] ?? 'UNKNOWN'} code=${failure?.[2] ?? 'UNKNOWN'}`
+  )
   const line = result.stdout.split('\n').find((entry) => entry.startsWith('METIS_GA_RESULT='))
   assert.ok(line, 'isolated parent must return bounded request results')
   return JSON.parse(line.slice('METIS_GA_RESULT='.length))
