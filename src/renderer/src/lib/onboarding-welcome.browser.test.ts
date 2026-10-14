@@ -8,7 +8,8 @@ const HARNESS_ID = '\0onboarding-welcome-harness'
 const rendererRoot = resolve(__dirname, '../..')
 const HARNESS = `
 import { createElement, useRef, useState } from 'react'
-import { createRoot, flushSync } from 'react-dom/client'
+import { createRoot } from 'react-dom/client'
+import { flushSync } from 'react-dom'
 import { HeroWelcome, OnboardingHeroVideo } from '@/components/OnboardingWelcomeScene'
 
 let root
