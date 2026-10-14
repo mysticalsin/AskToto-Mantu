@@ -154,6 +154,7 @@ async function importEvidence(request: Request, ctx: AdminCtx): Promise<Response
       config_version, policy_version, implementation_revision, reviewer_email, imported_by, evidence_refs_json,
       expires_at, version, created_at, revoked_at, revoked_by
     ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL
+    WHERE ? = 0 OR EXISTS (SELECT 1 FROM speech_route_evidence WHERE evidence_key = ?)
     ON CONFLICT(evidence_key) DO UPDATE SET id = excluded.id, reviewer_email = excluded.reviewer_email,
       imported_by = excluded.imported_by, evidence_refs_json = excluded.evidence_refs_json,
       expires_at = excluded.expires_at, version = speech_route_evidence.version + 1,
@@ -177,6 +178,8 @@ async function importEvidence(request: Request, ctx: AdminCtx): Promise<Response
         refs,
         expiresAt,
         ctx.now,
+        Number(expectedVersion),
+        evidenceKey,
         Number(expectedVersion)
       )
       .run()

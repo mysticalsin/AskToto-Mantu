@@ -570,6 +570,7 @@ export async function consumeSpeechGrantForRelay(
           binding.model,
           binding.configVersion,
           binding.streamEpoch ?? 1,
+          binding.language ?? null,
           binding.tenantId,
           binding.audience,
           binding.licenseJti,

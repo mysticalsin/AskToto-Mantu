@@ -240,6 +240,14 @@ describe('D1 speech grants', () => {
       const allocation = await allocateSpeechSession(d1, binding)
       expect(allocation.ok).toBe(true)
       if (!allocation.ok) return
+      expect(
+        await consumeSpeechGrantForRelay(d1, allocation.grants[0].token, {
+          ...relayBinding,
+          sessionId: allocation.sessionId,
+          track: allocation.grants[0].track,
+          language: 'fr'
+        })
+      ).toMatchObject({ ok: false, code: 'GRANT_REJECTED' })
       const consume = await consumeSpeechGrantForRelay(d1, allocation.grants[0].token, {
         ...relayBinding,
         sessionId: allocation.sessionId,
