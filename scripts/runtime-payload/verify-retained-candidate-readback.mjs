@@ -415,32 +415,8 @@ async function verifyTarget(root, target, rootProto, lockSha256) {
       inventoryFileBytes += file.bytes
       return Number.isSafeInteger(inventoryFileBytes)
     })
-  if (
-    !exactKeys(inventory, expectedInventoryKeys) ||
-    inventory.schemaVersion !== 1 ||
-    inventory.kind !== 'runtime' ||
-    inventory.componentId !== candidate.componentId ||
-    inventory.artifactId !== candidate.artifactId ||
-    inventoryTarget?.platform !== target.platform ||
-    inventoryTarget?.arch !== target.arch ||
-    !source ||
-    !validSource(source, lockSha256) ||
-    !validFiles ||
-    inventory.files.length !== candidate.payloadFiles ||
-    inventoryFileBytes !== candidate.payloadBytes ||
-    !exactKeys(inventory.entrypoints, ['llama-server']) ||
-    inventory.entrypoints['llama-server'] !==
-      (target.platform === 'win32' ? 'runtime/llama-server.exe' : 'runtime/llama-server') ||
-    !Array.isArray(inventory.models) ||
-    inventory.models.length !== 0 ||
-    !exactKeys(inventory.directories, []) ||
-    !exactKeys(inventory.target, ['platform', 'arch']) ||
-    !validRuntimeFacts(inventory.runtime) ||
-    !validBuilder(inventory.builder) ||
-    !validNativeReceipts(inventory, target) ||
-    !validFileRows(
-      inventory.files,
-      inventory.files.map((file) =>
+  const expectedFileRows = Array.isArray(inventory.files)
+    ? inventory.files.map((file) =>
         record(file)?.path === 'licenses/llama.cpp-LICENSE.txt'
           ? {
               path: 'licenses/llama.cpp-LICENSE.txt',
@@ -449,13 +425,50 @@ async function verifyTarget(root, target, rootProto, lockSha256) {
               executable: false
             }
           : null
-      ),
-      true
-    ) ||
-    JSON.stringify(inventory.runtime) !== JSON.stringify(candidate.runtime) ||
-    inventory.files.filter((file) => file.path.startsWith('runtime/')).length < 1
-  )
+      )
+    : []
+  const inventoryChecks = [
+    [
+      'SHAPE',
+      exactKeys(inventory, expectedInventoryKeys) &&
+        inventory.schemaVersion === 1 &&
+        inventory.kind === 'runtime' &&
+        inventory.componentId === candidate.componentId &&
+        inventory.artifactId === candidate.artifactId &&
+        inventoryTarget?.platform === target.platform &&
+        inventoryTarget?.arch === target.arch &&
+        exactKeys(inventory.target, ['platform', 'arch'])
+    ],
+    ['SOURCE', Boolean(source && validSource(source, lockSha256))],
+    [
+      'FILE_COUNTS',
+      validFiles && inventory.files.length === candidate.payloadFiles && inventoryFileBytes === candidate.payloadBytes
+    ],
+    [
+      'ENTRYPOINTS',
+      record(inventory.entrypoints) !== null &&
+        exactKeys(inventory.entrypoints, ['llama-server']) &&
+        inventory.entrypoints['llama-server'] ===
+          (target.platform === 'win32' ? 'runtime/llama-server.exe' : 'runtime/llama-server')
+    ],
+    ['MODELS', Array.isArray(inventory.models) && inventory.models.length === 0],
+    ['DIRECTORIES', record(inventory.directories) !== null && exactKeys(inventory.directories, [])],
+    [
+      'RUNTIME',
+      validRuntimeFacts(inventory.runtime) && JSON.stringify(inventory.runtime) === JSON.stringify(candidate.runtime)
+    ],
+    ['BUILDER', validBuilder(inventory.builder)],
+    ['NATIVE_RECEIPTS', Boolean(validNativeReceipts(inventory, target))],
+    ['FILE_ROWS', validFiles && validFileRows(inventory.files, expectedFileRows, true)],
+    ['NATIVE_FILES', validFiles && inventory.files.filter((file) => file.path.startsWith('runtime/')).length >= 1]
+  ]
+  const failedInventoryChecks = inventoryChecks.filter(([, passed]) => !passed).map(([name]) => name)
+  if (failedInventoryChecks.length > 0) {
+    process.stderr.write(
+      `RUNTIME_READBACK_INVENTORY_DIAGNOSTIC target=${target.suffix} failed=${failedInventoryChecks.join(',')}\n`
+    )
     fail('RUNTIME_READBACK_INVENTORY_IDENTITY_INVALID')
+  }
   const archive = await hashStableFile(resolve(base, archiveName), 10_000_000_000, 'RUNTIME_READBACK_ARCHIVE_INVALID')
   if (
     archive.bytes !== candidate.archive.bytes ||
