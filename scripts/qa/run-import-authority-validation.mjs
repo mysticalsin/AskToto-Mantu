@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { isAbsolute, join, parse, relative, resolve, sep } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 const root = process.cwd()
 const reportDirectory = process.env.IMPORT_AUTHORITY_REPORT_DIR
+const runnerTemp = process.env.RUNNER_TEMP
 const testFiles = [
   'src/main/import-job-authority.test.ts',
   'src/main/import-persistence-policy.test.ts',
@@ -21,10 +22,40 @@ const testFiles = [
   'src/main/fresh-lean-speech-defaults.test.ts'
 ]
 
-if (!reportDirectory) throw new Error('Import authority report directory is required.')
-mkdirSync(reportDirectory, { recursive: true })
-const reportPath = join(reportDirectory, 'import-authority-tests.json')
-const statusPath = join(reportDirectory, 'qualification-status.json')
+function isWithin(base, target) {
+  const pathFromBase = relative(base, target)
+  return (
+    pathFromBase !== '' && pathFromBase !== '..' && !pathFromBase.startsWith(`..${sep}`) && !isAbsolute(pathFromBase)
+  )
+}
+
+if (
+  typeof reportDirectory !== 'string' ||
+  reportDirectory.length === 0 ||
+  !isAbsolute(reportDirectory) ||
+  typeof runnerTemp !== 'string' ||
+  runnerTemp.length === 0 ||
+  !isAbsolute(runnerTemp)
+) {
+  console.error('Import authority report directory is missing or not absolute.')
+  process.exit(1)
+}
+
+const resolvedReportDirectory = resolve(reportDirectory)
+const resolvedRunnerTemp = resolve(runnerTemp)
+if (
+  resolvedReportDirectory === parse(resolvedReportDirectory).root ||
+  resolvedReportDirectory === root ||
+  isWithin(root, resolvedReportDirectory) ||
+  !isWithin(resolvedRunnerTemp, resolvedReportDirectory)
+) {
+  console.error('Import authority report directory is outside the allowed runner-temp location.')
+  process.exit(1)
+}
+
+mkdirSync(resolvedReportDirectory, { recursive: true })
+const reportPath = join(resolvedReportDirectory, 'import-authority-tests.json')
+const statusPath = join(resolvedReportDirectory, 'qualification-status.json')
 const status = {
   state: 'running',
   platform: process.platform,
