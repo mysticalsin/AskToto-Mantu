@@ -36,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -111,13 +111,16 @@ jobs:
                 Object.keys(expected).some((key) => entry.manifest?.[key] !== expected[key]) || entry.textBytes !== expected.textBytes)
               throw new Error('Declared resource workload does not match the actual measurement.')
             const numbers = ['privatePayloadBytes', 'encodedTranscriptBytes', 'documentBytes', 'storedBytes', 'fixtureMs', 'codecMs', 'saveMs', 'decryptReadMs', 'recallMs',
+              'draftSaveMs', 'draftReadMs', 'draftDecodeMs', 'draftDocumentBytes', 'draftStoredBytes',
               'rssBefore', 'rssAfter', 'heapBefore', 'heapAfter', 'processMaxRssKiB', 'eventLoopMaxMs', 'eventLoopP99Ms']
             if (numbers.some((key) => typeof entry[key] !== 'number' || !Number.isFinite(entry[key]) || entry[key] < 0) || entry.privatePayloadBytes <= 0 || entry.storedBytes <= 0)
               throw new Error('Resource counters missing, negative or nonfinite.')
-            const integers = ['privatePayloadBytes', 'encodedTranscriptBytes', 'documentBytes', 'storedBytes', 'rssBefore', 'rssAfter', 'heapBefore', 'heapAfter', 'processMaxRssKiB']
+            const integers = ['privatePayloadBytes', 'encodedTranscriptBytes', 'documentBytes', 'storedBytes', 'draftDocumentBytes', 'draftStoredBytes', 'rssBefore', 'rssAfter', 'heapBefore', 'heapAfter', 'processMaxRssKiB']
             if (integers.some((key) => !Number.isSafeInteger(entry[key])) ||
                 entry.privatePayloadBytes >= entry.encodedTranscriptBytes || entry.encodedTranscriptBytes > entry.documentBytes ||
-                (encrypted ? entry.storedBytes <= entry.documentBytes : entry.storedBytes !== entry.documentBytes))
+                entry.encodedTranscriptBytes > entry.draftDocumentBytes ||
+                (encrypted ? (entry.storedBytes <= entry.documentBytes || entry.draftStoredBytes <= entry.draftDocumentBytes) :
+                  (entry.storedBytes !== entry.documentBytes || entry.draftStoredBytes !== entry.draftDocumentBytes)))
               throw new Error('Resource sizes are unsafe or inconsistent with actual storage.')
             const safe = { host: process.platform, encrypted, manifest: expected, memoryScope: 'worker-process-cumulative',
               ...Object.fromEntries(numbers.map((key) => [key, entry[key]])) }

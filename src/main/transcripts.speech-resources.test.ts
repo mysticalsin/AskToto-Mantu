@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { monitorEventLoopDelay, performance } from 'node:perf_hooks'
@@ -7,9 +7,9 @@ import { setImmediate } from 'node:timers/promises'
 import { app } from 'electron'
 import type { SaveMeeting, Settings, TranscriptLine } from '@shared/ipc'
 import { SaveMeetingSchema } from '@shared/ipc'
-import { configureMeetingSpeechLimits } from './features/meetings/meeting-speech'
+import { configureMeetingSpeechLimits, decodeStoredMeetingSpeech } from './features/meetings/meeting-speech'
 import { encodeSpeechTranscript } from './features/meetings/speech-provenance'
-import { readSavedFile, saveMeeting } from './transcripts'
+import { readSavedFile, saveMeeting, saveDraftTranscript } from './transcripts'
 import { recallRead } from './recall'
 import { useStorageForTests } from './infra/storage/meetings-storage'
 
@@ -125,6 +125,23 @@ describe('actual declared speech persistence resource measurements', () => {
       expect(recalled.ok).toBe(true)
       expect(recalled.lines).toEqual(input.lines)
       expect(recalled.speechProvenance).toBe('valid')
+      const draftStart = performance.now()
+      await saveDraftTranscript(settings, input)
+      const draftSaveMs = performance.now() - draftStart
+      const draftNames = readdirSync(folder).filter((name) =>
+        /^\.autosave-draft-\d{4}-\d{2}-\d{2}_\d{6}\.md$/.test(name)
+      )
+      expect(draftNames).toHaveLength(1)
+      const draftFile = join(folder, draftNames[0])
+      const draftRaw = readFileSync(draftFile)
+      const draftReadStart = performance.now()
+      const draftDocument = readSavedFile(draftFile)
+      const draftReadMs = performance.now() - draftReadStart
+      const draftDecodeStart = performance.now()
+      const draftDecoded = decodeStoredMeetingSpeech(draftDocument)
+      const draftDecodeMs = performance.now() - draftDecodeStart
+      expect(draftDecoded.ok && draftDecoded.status).toBe('valid')
+      if (draftDecoded.ok && draftDecoded.status === 'valid') expect(draftDecoded.lines).toEqual(input.lines)
       await setImmediate()
       const after = process.memoryUsage()
       const metrics = {
@@ -144,6 +161,11 @@ describe('actual declared speech persistence resource measurements', () => {
         saveMs,
         decryptReadMs,
         recallMs,
+        draftSaveMs,
+        draftReadMs,
+        draftDecodeMs,
+        draftDocumentBytes: Buffer.byteLength(draftDocument),
+        draftStoredBytes: draftRaw.length,
         rssBefore: before.rss,
         rssAfter: after.rss,
         heapBefore: before.heapUsed,
