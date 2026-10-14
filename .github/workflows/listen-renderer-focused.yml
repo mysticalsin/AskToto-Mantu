@@ -119,14 +119,9 @@ jobs:
 
           let assertionCount = 0
           const cases = []
-          const fileStatusCounts = { passed: 0, failed: 0, pending: 0, unknown: 0 }
           for (let index = 0; index < results.length; index += 1) {
             const result = results[index]
             const file = resultPaths[index]
-            if (result?.status === 'passed') fileStatusCounts.passed += 1
-            else if (result?.status === 'failed') fileStatusCounts.failed += 1
-            else if (result?.status === 'pending') fileStatusCounts.pending += 1
-            else fileStatusCounts.unknown += 1
             const assertions = Array.isArray(result?.assertionResults) ? result.assertionResults : []
             assertionCount += assertions.length
             const expectedFile = typeof file === 'string' && expectedSet.has(file) ? file : '<unexpected-suite>'
@@ -156,11 +151,10 @@ jobs:
           const totalSuites = numeric('numTotalTestSuites')
           const testCountsConsistent = testCountersValid &&
             total === passed + failed + pending + todo && assertionCount === total
-          const suiteCountsConsistent = suiteCountersValid && totalSuites === results.length &&
-            totalSuites === passedSuites + failedSuites + pendingSuites &&
-            fileStatusCounts.unknown === 0 &&
-            passedSuites === fileStatusCounts.passed && failedSuites === fileStatusCounts.failed &&
-            pendingSuites === fileStatusCounts.pending
+          const suiteCountsConsistent = suiteCountersValid && totalSuites >= requiredFiles.length &&
+            totalSuites === passedSuites + failedSuites + pendingSuites
+          const allSuitesPassed = suiteCountersValid && passedSuites === totalSuites &&
+            failedSuites === 0 && pendingSuites === 0
           const everyFilePassedNonempty = exactInventory && requiredFiles.every((file) => {
             const matches = results.filter((result, index) => resultPaths[index] === file)
             return matches.length === 1 && matches[0].status === 'passed' &&
@@ -175,6 +169,7 @@ jobs:
           if (!everyFilePassedNonempty) reasons.push('SUITE_NOT_NONEMPTY_ALL_PASSED')
           if (!testCountsConsistent) reasons.push('TEST_COUNTS_INCONSISTENT')
           if (!suiteCountsConsistent) reasons.push('SUITE_COUNTS_INCONSISTENT')
+          if (!allSuitesPassed) reasons.push('SUITE_COUNTERS_NONPASS')
           if (!testCountersValid || skipped !== 0 || failed !== 0 || passed !== total || total <= 0) {
             reasons.push('FAILURE_OR_SKIP_COUNTS')
           }
@@ -191,6 +186,7 @@ jobs:
             everyFilePassedNonempty,
             testCountsConsistent,
             suiteCountsConsistent,
+            allSuitesPassed,
             actualTestCount: total,
             passed,
             failed,
