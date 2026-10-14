@@ -497,6 +497,8 @@ try {
   await rejected(
     'model-root-is-file',
     async (payloadRoot) => {
+      await mkdir(resolve(payloadRoot, 'licenses'), { recursive: true })
+      await writeFile(resolve(payloadRoot, 'licenses/NOTICE'), 'x')
       await writeFile(resolve(payloadRoot, 'model'), 'not a model directory')
     },
     'RUNTIME_PAYLOAD_MODEL_MEMBER_MISSING'
