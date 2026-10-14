@@ -24,6 +24,7 @@ import type { Track } from '@shared/contracts/speech'
 import {
   convertFloat32ToPcm16le,
   getFixedFloat32View,
+  isSafeNonnegativeInteger,
   parseWorkletPortMessage,
   type FlushAck,
   type WorkletFrame
@@ -93,6 +94,7 @@ type TrackInput = {
 }
 
 const DEFAULT_DEADLINE_MS = 12_000
+const MAX_PENDING_RESULT_APPLICATIONS = 64
 const tracksInOrder: readonly CloudSpeechTrack[] = ['microphone', 'system']
 function createDeferred<T>() {
   let resolve!: (value: T) => void
@@ -102,10 +104,6 @@ function createDeferred<T>() {
     reject = rej
   })
   return { promise, resolve, reject }
-}
-
-function isSafeNonnegativeInteger(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 }
 
 export function createCloudSpeechController(options: CloudSpeechControllerOptions): CloudSpeechController {
@@ -125,6 +123,7 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
   let started: Extract<CloudSpeechStartResult, { ok: true }> | null = null
   let unsubscribeEvents: (() => void) | null = null
   let eventApplyTail = Promise.resolve()
+  let pendingEventApplications = 0
   let stopped = false
   let cancelPromise: Promise<CloudSpeechCancelResult> | null = null
   let stopPromise: Promise<CloudSpeechFinishResult> | null = null
@@ -232,13 +231,17 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
 
   const handleEvent = (raw: unknown): void => {
     if (stopped || disposed || failureCode) return
+    if (pendingEventApplications >= MAX_PENDING_RESULT_APPLICATIONS) {
+      invalidate('QUEUE_LIMIT')
+      return
+    }
     const event = validateEvent(raw)
     if (!event) {
       invalidate('STALE')
       return
     }
     const stream = event.type === 'segment' ? event.segment.stream : event.stream
-    const key = resultTracker.key(stream)
+    pendingEventApplications += 1
     eventApplyTail = eventApplyTail
       .then(async () => {
         if (stopped || disposed || failureCode) return
@@ -247,6 +250,10 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
         notifyApplied()
       })
       .catch(() => invalidate('TRANSPORT'))
+      .finally(() => {
+        pendingEventApplications -= 1
+        notifyApplied()
+      })
   }
 
   const ackMatches = (raw: unknown, frame: CloudSpeechFrame): boolean => {
@@ -740,12 +747,14 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
         if (currentCallbacks === eventApplyTail) break
       }
       if (failureCode) return failure(failureCode, request)
+      if (finishResult.complete && resultTracker.hasUnfinalizedRevisions()) {
+        finishResult = { ...finishResult, complete: false, reason: 'incomplete' }
+      }
       stopped = true
       stopCompleted = true
       unsubscribeEvents?.()
       unsubscribeEvents = null
       for (const input of inputs.values()) detachInput(input, true)
-      if (finishResult.complete) return finishResult
       return finishResult
     })().catch(() => {
       invalidate('TRANSPORT')

@@ -44,6 +44,29 @@ export function createCloudSpeechResultTracker(request: CloudSpeechStartRequest)
   const appliedSequences = new Map<string, number>()
   const expectedFrontiers = new Map<string, number>()
   const terminalStreams = new Set<string>()
+  let unfinalizedSealedStream = false
+
+  const pruneSealedOldEpochs = (): void => {
+    for (const key of [...terminalStreams]) {
+      const separator = key.lastIndexOf(':')
+      const track = key.slice(0, separator) as Track
+      const epoch = Number(key.slice(separator + 1))
+      if ((streams.get(track) ?? 0) <= epoch) continue
+      if ((appliedSequences.get(key) ?? 0) < (seenSequences.get(key) ?? 0)) continue
+      const revisionPrefix = `${request.captureId}:${request.capture.generation}:${track}:${epoch}:`
+      for (const [revisionKey, revision] of revisions) {
+        if (!revisionKey.startsWith(revisionPrefix)) continue
+        if (!revision.final) unfinalizedSealedStream = true
+        revisions.delete(revisionKey)
+      }
+      terminalStreams.delete(key)
+      seenSequences.delete(key)
+      appliedSequences.delete(key)
+      expectedFrontiers.delete(key)
+    }
+  }
+  const hasUnfinalizedRevisions = (): boolean =>
+    unfinalizedSealedStream || [...revisions.values()].some((revision) => !revision.final)
 
   return {
     initialize(result: Extract<CloudSpeechStartResult, { ok: true }>): void {
@@ -71,6 +94,7 @@ export function createCloudSpeechResultTracker(request: CloudSpeechStartRequest)
         const priorKey = `${stream.track}:${currentEpoch}`
         if (stream.epoch !== currentEpoch + 1 || !terminalStreams.has(priorKey)) return null
         streams.set(stream.track, stream.epoch)
+        pruneSealedOldEpochs()
       }
       if (event.type === 'terminal') {
         const key = speechStreamKey(event.stream)
@@ -103,6 +127,7 @@ export function createCloudSpeechResultTracker(request: CloudSpeechStartRequest)
 
     markApplied(stream: SpeechStreamRef, sequence: number): void {
       appliedSequences.set(speechStreamKey(stream), sequence)
+      pruneSealedOldEpochs()
     },
 
     appliedThrough(result: Extract<CloudSpeechFinishResult, { ok: true }>): boolean {
@@ -118,8 +143,10 @@ export function createCloudSpeechResultTracker(request: CloudSpeechStartRequest)
         if ((seenSequences.get(key) ?? 0) > track.lastSequence) return false
         expectedFrontiers.set(key, track.lastSequence)
       }
-      if (result.complete && [...revisions.values()].some((revision) => !revision.final)) return false
+      if (result.complete && hasUnfinalizedRevisions()) return false
       return true
-    }
+    },
+
+    hasUnfinalizedRevisions
   }
 }

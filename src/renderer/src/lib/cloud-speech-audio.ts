@@ -35,7 +35,7 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boo
   return actual.length === keys.length && keys.every((key) => Object.hasOwn(value, key))
 }
 
-function isSafeNonnegativeInteger(value: unknown): value is number {
+export function isSafeNonnegativeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 }
 

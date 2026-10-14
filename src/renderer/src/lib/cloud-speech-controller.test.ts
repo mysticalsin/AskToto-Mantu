@@ -540,6 +540,104 @@ describe('cloud speech capture controller', () => {
     instance.dispose()
   })
 
+  it('downgrades a complete transport finish when its final applied revision is still interim', async () => {
+    const apply = deferred<void>()
+    const applyStarted = deferred<void>()
+    const finishResult = deferred<CloudSpeechFinishResult>()
+    const { instance, events, finish } = controller({
+      applyEvent: () => {
+        applyStarted.resolve()
+        return apply.promise
+      }
+    })
+    finish.mockReturnValue(finishResult.promise)
+    await instance.start()
+    const port = new FakePort()
+    instance.attachTrack('microphone', port as unknown as MessagePort, 0)
+    port.onPost = (message) => {
+      const command = message as { type: string; requestId?: string }
+      if (command.type === 'seal-and-flush' && command.requestId)
+        port.emit({ type: 'flush-ack', requestId: command.requestId, finalSequence: 0, finalSampleOffset: 0 })
+    }
+
+    const stopping = instance.stop()
+    await vi.waitFor(() => expect(finish).toHaveBeenCalledTimes(1))
+    const stream = { generation: captureGeneration, track: 'microphone' as const, epoch: 3 }
+    finishResult.resolve({
+      ok: true,
+      captureId,
+      captureGeneration,
+      complete: true,
+      reason: 'normal',
+      tracks: [{ stream, lastSequence: 1, closeConfirmed: true, tail: 'complete', reason: 'normal' }]
+    })
+    queueMicrotask(() => {
+      for (const listener of events)
+        listener({
+          type: 'segment',
+          captureId,
+          captureGeneration,
+          sequence: 1,
+          segment: {
+            stream,
+            engine: 'cloudflare-nova3',
+            index: 1,
+            revision: 1,
+            final: false,
+            text: 'pending final revision',
+            startMs: 0,
+            endMs: 20
+          }
+        })
+    })
+    await applyStarted.promise
+    apply.resolve()
+
+    const result = await stopping
+    expect(result).toMatchObject({ ok: true, complete: false, reason: 'incomplete' })
+    instance.dispose()
+  })
+
+  it('bounds queued result application while an earlier application is stalled', async () => {
+    const onFailure = vi.fn()
+    const apply = deferred<void>()
+    const applyStarted = deferred<void>()
+    const applied = vi.fn(() => {
+      applyStarted.resolve()
+      return apply.promise
+    })
+    const { instance, events } = controller({ onFailure, applyEvent: applied })
+    await instance.start()
+    const stream = { generation: captureGeneration, track: 'microphone' as const, epoch: 3 }
+    const makeEvent = (sequence: number): CloudSpeechEvent => ({
+      type: 'segment',
+      captureId,
+      captureGeneration,
+      sequence,
+      segment: {
+        stream,
+        engine: 'cloudflare-nova3',
+        index: sequence,
+        revision: 1,
+        final: true,
+        text: 'bounded pending event',
+        startMs: sequence * 20,
+        endMs: sequence * 20 + 10
+      }
+    })
+    for (const listener of events) listener(makeEvent(1))
+    await applyStarted.promise
+    for (let sequence = 2; sequence <= 65; sequence += 1) {
+      for (const listener of events) listener(makeEvent(sequence))
+    }
+
+    await vi.waitFor(() => expect(onFailure).toHaveBeenCalledWith('QUEUE_LIMIT'))
+    expect(onFailure).toHaveBeenCalledTimes(1)
+    expect(applied).toHaveBeenCalledTimes(1)
+    apply.resolve()
+    instance.dispose()
+  })
+
   it('retains distinct final segments with identical text and rejects a later revision after final', async () => {
     const onFailure = vi.fn()
     const { instance } = controller({ onFailure })
@@ -695,8 +793,7 @@ describe('cloud speech capture controller', () => {
             phase: 'closed',
             lastSequence: 1,
             closeConfirmed: true,
-            tail: 'complete',
-            reason: 'normal'
+            tail: 'complete'
           }
         ]
       })
