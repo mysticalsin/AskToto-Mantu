@@ -126,3 +126,37 @@ export function validReportFixture() {
     }
   }
 }
+
+export function denseReadbackFixture() {
+  const report = validReportFixture()
+  report.timeline[1].loopMaxSinceLastMs = 260
+  report.timeline[2].loopMaxDuringWriteMs = 261
+  report.timeline[4].writeMs = 401
+  report.timeline[5].lookupMs = 300
+  report.timeline[6].settledAtMs = report.timeline[6].requestAtMs + 25_000
+  report.timeline[6].histogramUpperBoundMs = report.timeline[6].settledAtMs
+  report.timeline[7].hung = true
+  report.timeline[8].loopMaxSinceLastMs = 250
+  const stageNames = [
+    'createTray.loadIcon',
+    'createTray.loadIcon.fallback',
+    'createTray.newTray',
+    'createTray.decorate',
+    'createTray.buildMenu',
+    'createTray.attachMenu',
+    'createWindow.prewarm',
+    'createWindow.construct',
+    'createWindow.navigate',
+    'createWindow.firstShow'
+  ]
+  report.bootStages.stages = Array.from({ length: 20 }, (_, index) => ({
+    stage: stageNames[index % stageNames.length],
+    ms: 1_000 + index,
+    sinceSpawnMs: 2_000 + index
+  }))
+  const profile = profileFixture()
+  profile.samples = Array.from({ length: 20_000 }, (_, index) => (index % 2 === 0 ? 2 : 3))
+  profile.timeDeltas = Array.from({ length: 20_000 }, () => 1_000)
+  profile.endTime = profile.startTime + 20_000_000
+  return { report, profile }
+}

@@ -12,7 +12,7 @@ import {
   verifyReportScope,
   verifyRunMetadata
 } from './st1-current-profile-readback.mjs'
-import { profileFixture, validReportFixture } from './st1-current-profile-readback-fixtures.mjs'
+import { denseReadbackFixture, profileFixture, validReportFixture } from './st1-current-profile-readback-fixtures.mjs'
 
 function runRecord() {
   return {
@@ -101,10 +101,14 @@ test('analyzes a complete report and creates closed notices including approved b
     profileSha256: 'c'.repeat(64),
     archiveSha256: ARTIFACT.sha256
   })
-  assert.equal(notices.length, 7)
-  const boot = JSON.parse(notices[6].slice('::notice::'.length)).bootStages
-  assert.equal(boot.stages.length, 1)
-  assert.deepEqual(boot.stages[0], {
+  assert.ok(notices.length >= 1 && notices.length <= 24)
+  const boot = notices
+    .map((notice) => JSON.parse(notice.slice('::notice::'.length)))
+    .find((notice) => notice.section === 'boot-stages')
+  assert.ok(boot)
+  assert.equal(boot.firstStageIndex, 0)
+  assert.equal(boot.bootStages.stages.length, 1)
+  assert.deepEqual(boot.bootStages.stages[0], {
     stage: 'createWindow.construct',
     occurrence: 0,
     durationMs: 180,
@@ -115,6 +119,60 @@ test('analyzes a complete report and creates closed notices including approved b
   assert.equal(serialized.includes('untrusted function name'), false)
   assert.equal(serialized.includes('private://should-never-be-output'), false)
   for (const notice of notices) assert.ok(Buffer.byteLength(notice, 'utf8') <= 3_500)
+})
+
+test('partitions a maximum-density analyzer result losslessly below the annotation cap', () => {
+  const { report, profile } = denseReadbackFixture()
+  const summary = analyzeControlEvidence(report, profile)
+  assert.equal(summary.windows.length, 8)
+  assert.equal(summary.profile.bins.length, 20)
+  assert.equal(summary.bootStages.stages.length, 20)
+  const notices = createReadbackNotices(summary, {
+    runId: SOURCE.runId,
+    attempt: SOURCE.attempt,
+    reportSha256: SOURCE.reportSha256,
+    profileSha256: 'c'.repeat(64),
+    archiveSha256: ARTIFACT.sha256
+  })
+  assert.ok(notices.length <= 24)
+  const payloads = notices.map((notice) => JSON.parse(notice.slice('::notice::'.length)))
+  const summarySha256 = payloads[0]?.summarySha256
+  assert.match(summarySha256, /^[a-f0-9]{64}$/)
+  assert.deepEqual(
+    payloads.map((part) => part.part),
+    payloads.map((_, index) => index + 1)
+  )
+  assert.ok(payloads.every((part) => part.partCount === payloads.length && part.summarySha256 === summarySha256))
+  assert.ok(payloads.every((part) => part.originalVerdict === 'FAIL' && part.st1Evidence === false))
+  assert.ok(payloads.every((part) => part.causalConclusion === 'not-established'))
+  assert.ok(payloads.every((part, index) => Buffer.byteLength(notices[index], 'utf8') <= 3_500))
+  assert.deepEqual(
+    [...new Set(payloads.map((part) => part.section))].sort(),
+    ['boot-stages', 'profile', 'profile-bins', 'summary', 'windows', 'witness']
+  )
+
+  const windows = payloads
+    .filter((part) => part.section === 'windows')
+    .sort((left, right) => left.windowStartIndex - right.windowStartIndex)
+  assert.equal(windows[0]?.windowTotalCount, summary.windows.length)
+  assert.deepEqual(windows.flatMap((part) => part.windows), summary.windows)
+  const bins = payloads
+    .filter((part) => part.section === 'profile-bins')
+    .sort((left, right) => left.firstBinIndex - right.firstBinIndex)
+  assert.equal(bins[0]?.profileBinTotalCount, summary.profile.bins.length)
+  assert.deepEqual(bins.flatMap((part) => part.profileBins), summary.profile.bins)
+  const stages = payloads
+    .filter((part) => part.section === 'boot-stages')
+    .sort((left, right) => left.firstStageIndex - right.firstStageIndex)
+  assert.equal(stages[0]?.stageTotalCount, summary.bootStages.stages.length)
+  assert.deepEqual(stages.flatMap((part) => part.bootStages.stages), summary.bootStages.stages)
+  const { bins: _bins, candidateBuildRunId, candidateInstallerSha256, candidateDigestBinding, ...profileCore } =
+    summary.profile
+  assert.deepEqual(payloads.find((part) => part.section === 'profile')?.profile, profileCore)
+  assert.deepEqual(payloads.find((part) => part.section === 'witness')?.witness, summary.witness)
+  const bootJson = JSON.stringify(stages)
+  assert.equal(bootJson.includes('untrusted function name'), false)
+  assert.equal(bootJson.includes('private://should-never-be-output'), false)
 })
 
 test('readback workflow is branch-guarded, read-only, pinned, and runs pure tests before API access', () => {

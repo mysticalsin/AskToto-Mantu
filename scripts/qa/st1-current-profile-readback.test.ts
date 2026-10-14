@@ -230,17 +230,22 @@ describe('current control profile projection', () => {
       profileSha256: 'c'.repeat(64),
       archiveSha256: ARTIFACT.sha256
     })
-    expect(notices).toHaveLength(7)
+    expect(notices.length).toBeGreaterThan(0)
+    expect(notices.length).toBeLessThanOrEqual(24)
     const first = JSON.parse(notices[0].slice('::notice::'.length))
     expect(first).toMatchObject({
       candidateBuildRunId: SOURCE.runId,
       candidateInstallerSha256: 'd'.repeat(64),
       candidateDigestBinding: 'historical-provenance-report-only'
     })
-    const boot = JSON.parse(notices[6].slice('::notice::'.length)).bootStages
-    expect(boot.stages).toHaveLength(9)
-    expect(boot.stages[0]).toMatchObject({ stage: 'createTray.loadIcon', durationMs: 4 })
-    expect(boot).toMatchObject({ omittedCount: 1, coverageComplete: false })
+    const bootNotices = notices
+      .map((notice) => JSON.parse(notice.slice('::notice::'.length)))
+      .filter((part) => part.section === 'boot-stages')
+      .sort((left, right) => left.firstStageIndex - right.firstStageIndex)
+    const bootStages = bootNotices.flatMap((part) => part.bootStages.stages)
+    expect(bootStages).toHaveLength(9)
+    expect(bootStages[0]).toMatchObject({ stage: 'createTray.loadIcon', durationMs: 4 })
+    expect(bootNotices[0]?.bootStages).toMatchObject({ omittedCount: 1, coverageComplete: false })
     expect(JSON.stringify(notices)).not.toContain('https://private.invalid/secret')
     for (const notice of notices) expect(Buffer.byteLength(notice, 'utf8')).toBeLessThanOrEqual(3_500)
   })
@@ -310,7 +315,8 @@ describe('current control profile projection', () => {
       profileSha256: 'c'.repeat(64),
       archiveSha256: ARTIFACT.sha256
     })
-    expect(notices).toHaveLength(7)
+    expect(notices.length).toBeGreaterThan(0)
+    expect(notices.length).toBeLessThanOrEqual(24)
     for (const notice of notices) expect(Buffer.byteLength(notice, 'utf8')).toBeLessThanOrEqual(3_500)
     const text = notices.join('\n')
     expect(text).toContain('not-established')
@@ -357,8 +363,26 @@ describe('current control profile projection', () => {
         }))
       }))
     }
+    const expandedNotices = createReadbackNotices(expanded, {
+      runId: SOURCE.runId,
+      attempt: SOURCE.attempt,
+      reportSha256: SOURCE.reportSha256,
+      profileSha256: 'c'.repeat(64),
+      archiveSha256: ARTIFACT.sha256
+    })
+    expect(expandedNotices.length).toBeLessThanOrEqual(24)
+    for (const notice of expandedNotices) expect(Buffer.byteLength(notice, 'utf8')).toBeLessThanOrEqual(3_500)
+    const unbounded = {
+      ...result,
+      windows: [
+        {
+          ...fullWindow,
+          selectors: Array.from({ length: 513 }, () => 'worst-loop-since-last')
+        }
+      ]
+    }
     expect(() =>
-      createReadbackNotices(expanded, {
+      createReadbackNotices(unbounded, {
         runId: SOURCE.runId,
         attempt: SOURCE.attempt,
         reportSha256: SOURCE.reportSha256,
