@@ -210,6 +210,10 @@ export class SpeechCaptureGrantRegistry {
     return this.finishOwner?.owner === owner
   }
 
+  getFinishingOwnerContext(owner: object): SpeechCaptureContext | null {
+    return this.finishOwner?.owner === owner ? copyContext(this.finishOwner.context) : null
+  }
+
   releaseFinishingOwner(owner: object): void {
     if (this.finishOwner?.owner === owner) this.finishOwner = null
   }

@@ -12,6 +12,8 @@ import {
 } from '@shared/cloud-speech'
 import { SpeechBrokerClient, type SpeechBrokerClientOptions, type SpeechTrack } from '../cloud-stt/broker-client'
 import type { RelaySpeechSession } from '../cloud-stt/relay-session'
+import type { MainSpeechCaptureSession } from '../cloud-stt/capture-session'
+import type { CaptureDeadlineScheduler } from '../infra/scheduler/capture-deadline'
 import { hostAllowed } from '../net/egress-policy'
 
 export const TRACKS: readonly SpeechTrack[] = ['microphone', 'system']
@@ -24,6 +26,12 @@ export const ROUTES: Record<
 }
 export const IPC_CHANNELS = Object.values(CLOUD_SPEECH_IPC)
 export const identityKey = (captureId: string, generation: number): string => `${captureId}:${generation}`
+export const identityOf = (
+  owner: Pick<Owner, 'captureId' | 'generation'>
+): { captureId: string; captureGeneration: number } => ({
+  captureId: owner.captureId,
+  captureGeneration: owner.generation
+})
 
 export function createIpcHandlerRegistrar(ipcMain: SpeechIpcMain) {
   const registered: string[] = []
@@ -65,6 +73,13 @@ export type Authority = {
   credentialRevision: string
   policyRevision: string
   egressAllowlist: readonly string[] | null
+  captureContext?: {
+    webContents: object
+    frame: object
+    navigationEpoch: number
+    listenStartedAt: number
+  } | null
+  finishAllowed?: boolean
 }
 export type FrameBinding = {
   sender: WebContents
@@ -74,7 +89,8 @@ export type FrameBinding = {
   frameUrl: string
   senderUrl: string
 }
-export type OwnerPhase = 'starting' | 'active' | 'finishing' | 'cancelled' | 'closed'
+export type OwnerPhase = 'starting' | 'active' | 'rotating' | 'finishing' | 'cancelled' | 'closed'
+export type SpeechAllocation = { attempted: boolean; sessionId: string | null }
 export type Owner = {
   binding: FrameBinding
   captureId: string
@@ -82,11 +98,18 @@ export type Owner = {
   engine: CloudSpeechEngine
   tracks: SpeechTrack[]
   authorityRevision: string
-  client: SpeechBrokerClient
+  captureContext: {
+    webContents: object
+    frame: object
+    navigationEpoch: number
+    listenStartedAt: number
+  } | null
+  client: SpeechBrokerClient | null
+  captureSession: MainSpeechCaptureSession | null
   phase: OwnerPhase
-  allocationAttempted: boolean
-  allocationId: string | null
+  primaryAllocation: SpeechAllocation
   session: RelaySpeechSession | null
+  candidateSession: RelaySpeechSession | null
   finishPromise: Promise<unknown> | null
   finishCheckpoint: string | null
   frontier: Map<SpeechTrack, { nextSequence: number; nextSampleOffset: number | null }>
@@ -100,6 +123,21 @@ export type Owner = {
   pendingEventBytes: number
   eventOverflow: boolean
   closureConfirmed: boolean | null
+  finishContextReleased: boolean
+  rotationPromise: Promise<void> | null
+  rotationAbort: AbortController | null
+  cancelRotationSchedule: (() => void) | null
+  cancelCeilingSchedule: (() => void) | null
+  ceilingRequested: boolean
+  ceilingAcked: boolean
+  ceilingFrameDeadlineAt: number | null
+  preflightBinding: { configVersion: string; policyVersion: string } | null
+  rotationDeadlineAt: number | null
+  candidateAllocation: SpeechAllocation | null
+  candidatePendingEvents: Array<z.infer<typeof CloudSpeechEventSchema>>
+  candidateEventBytes: number
+  candidateEventFrontier: Map<string, number>
+  finishAfterRotation: import('../../shared/cloud-speech').CloudSpeechFinishRequest | null
 }
 
 export type CloudSpeechMainAuthority = Authority
@@ -107,7 +145,17 @@ export type CloudSpeechIpcOptions = {
   ipcMain: SpeechIpcMain
   assertMainWindow: (event: SpeechIpcEvent) => void
   /** Synchronous, main-owned snapshot. `captureAllowed` is admission only, never part of stable authority. */
-  readAuthority: (event: SpeechIpcEvent, request?: CloudSpeechStartRequest) => CloudSpeechMainAuthority
+  readAuthority: (
+    event: SpeechIpcEvent,
+    request?: CloudSpeechStartRequest,
+    captureOwner?: object
+  ) => CloudSpeechMainAuthority
+  /** Release the exact Listen finish reservation only after main confirms cleanup. */
+  releaseCaptureOwner?: (captureOwner: object) => void
+  /** Refresh cached async speech metadata only at explicit capability/start boundaries. */
+  prepareAuthority?: (event: SpeechIpcEvent, request?: CloudSpeechStartRequest) => Promise<void>
+  monotonicNow?: () => number
+  scheduleCaptureDeadline?: CaptureDeadlineScheduler
   clientFactory?: (credentials: SpeechBrokerClientOptions) => SpeechBrokerClient
   now?: () => number
 }
@@ -308,6 +356,7 @@ export type CapabilityBinding = {
   configVersion: string
   policyVersion: string
 }
+export type SpeechAllocationSlot = SpeechAllocation
 
 export function capabilityBinding(value: unknown, language: string): CapabilityBinding | null {
   if (typeof value !== 'object' || value === null) return null
@@ -336,16 +385,20 @@ export function capabilityBinding(value: unknown, language: string): CapabilityB
 export function bindCreateToCapability(
   client: SpeechBrokerClient,
   expected: CapabilityBinding,
-  onAllocated: (sessionId: string) => void
+  onAllocated: (sessionId: string, slot: SpeechAllocationSlot) => void,
+  beginAttempt: () => SpeechAllocationSlot = () => ({ attempted: false, sessionId: null })
 ): SpeechBrokerClient {
   return new Proxy(client, {
     get(target, property) {
       if (property === 'createSession') {
-        return async (request: unknown) => {
-          const created = await target.createSession(request)
+        return async (request: unknown, operation?: import('../cloud-stt/broker-client').SpeechBrokerOperation) => {
+          const slot = beginAttempt()
+          slot.attempted = true
+          const created = await target.createSession(request, operation)
           if (!created.ok) return created
           const value = created.value
-          onAllocated(value.sessionId)
+          slot.sessionId = value.sessionId
+          onAllocated(value.sessionId, slot)
           if (
             value.routeId !== expected.routeId ||
             value.model !== expected.modelId ||

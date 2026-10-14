@@ -57,7 +57,10 @@ export type RelaySpeechSessionOptions = {
   onAllocated?: (sessionId: string) => void
   initialFrontiers?: Partial<Record<SpeechTrack, { sequence: number; sampleOffset?: number }>>
   isCurrent?: () => boolean
-  onTranscript?: (event: RelayTranscript, context: { timeBase: 'stream'; firstCaptureSampleOffset: number }) => void
+  onTranscript?: (
+    event: RelayTranscript,
+    context: { timeBase: 'stream'; firstCaptureSampleOffset: number; sessionId: string }
+  ) => void
 }
 
 type TrackRuntime = {
@@ -657,7 +660,8 @@ export class RelaySpeechSession {
         try {
           this.onTranscript?.(accepted.event, {
             timeBase: 'stream',
-            firstCaptureSampleOffset: runtime.firstCaptureSampleOffset ?? 0
+            firstCaptureSampleOffset: runtime.firstCaptureSampleOffset ?? 0,
+            sessionId: this.sessionId
           })
         } catch {
           runtime.deliveryFailed = true
