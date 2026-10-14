@@ -127,7 +127,12 @@ class FakePort {
   }
 }
 
-function pcmFrame(sequence: number, sampleOffset: number, samples = 1_600, sampleRate = 16_000): unknown {
+function pcmFrame(
+  sequence: number,
+  sampleOffset: number,
+  samples = 1_600,
+  sampleRate = 16_000
+): { type: 'pcm-frame'; sequence: number; sampleOffset: number; sampleRate: number; audio: Float32Array } {
   const audio = new Float32Array(samples)
   audio[0] = -1
   audio[1] = 1
@@ -174,7 +179,7 @@ describe('cloud speech capture controller', () => {
     instance.dispose()
   })
 
-  it('refuses non-finite, wrong-rate, spoofed, or discontinuous worklet frames without sending audio', async () => {
+  it('refuses non-finite worklet samples without sending audio', async () => {
     const onFailure = vi.fn()
     const { instance, frame } = controller({ onFailure })
     await instance.start()
@@ -189,20 +194,59 @@ describe('cloud speech capture controller', () => {
     instance.dispose()
   })
 
-  it('serializes one in-flight frame per track and fails closed on a bounded queue overflow', async () => {
+  it.each([
+    ['wrong sample rate', () => pcmFrame(1, 0, 1_600, 44_100)],
+    ['partial frame before sealing', () => pcmFrame(1, 0, 12)],
+    ['sequence gap', () => pcmFrame(2, 0)],
+    ['sample offset gap', () => pcmFrame(1, 1)]
+  ])('fails closed on a %s before any audio is sent', async (_label, makeMessage) => {
     const onFailure = vi.fn()
+    const { instance, frame } = controller({ onFailure })
+    await instance.start()
+    const port = new FakePort()
+    instance.attachTrack('microphone', port as unknown as MessagePort, 0)
+    port.emit(makeMessage())
+
+    await vi.waitFor(() => expect(onFailure).toHaveBeenCalledWith('INVALID_REQUEST'))
+    expect(frame).not.toHaveBeenCalled()
+    instance.dispose()
+  })
+
+  it('rejects a byte-length lookalike instead of trusting renderer-controlled audio metadata', async () => {
+    const onFailure = vi.fn()
+    const { instance, frame } = controller({ onFailure })
+    await instance.start()
+    const port = new FakePort()
+    instance.attachTrack('microphone', port as unknown as MessagePort, 0)
+    port.emit({
+      type: 'pcm-frame',
+      sequence: 1,
+      sampleOffset: 0,
+      sampleRate: 16_000,
+      audio: { length: 1_600, byteLength: 6_400 }
+    })
+
+    await vi.waitFor(() => expect(onFailure).toHaveBeenCalledWith('INVALID_REQUEST'))
+    expect(frame).not.toHaveBeenCalled()
+    instance.dispose()
+  })
+
+  it('serializes one in-flight frame per track and fails closed on a bounded queue overflow', async () => {
+    let port: FakePort | undefined
+    const onFailure = vi.fn(() => port?.emit(pcmFrame(25, 38_400)))
     const { instance, frame, bridge } = controller({ onFailure })
     const first = deferred<CloudSpeechFrameResult>()
     frame.mockImplementationOnce(() => first.promise)
     await instance.start()
-    const port = new FakePort()
-    instance.attachTrack('microphone', port as unknown as MessagePort, 0)
-    port.emit(pcmFrame(1, 0))
-    port.emit(pcmFrame(2, 1_600))
+    const testPort = new FakePort()
+    port = testPort
+    instance.attachTrack('microphone', testPort as unknown as MessagePort, 0)
+    testPort.emit(pcmFrame(1, 0))
+    testPort.emit(pcmFrame(2, 1_600))
     expect(frame).toHaveBeenCalledTimes(1)
 
     for (let index = 2; index < 24; index += 1) {
-      port.emit(pcmFrame(index + 1, index * 1_600))
+      testPort.emit(pcmFrame(index + 1, index * 1_600))
     }
     await vi.waitFor(() => expect(onFailure).toHaveBeenCalledWith('QUEUE_LIMIT'))
     first.resolve({
@@ -218,6 +262,57 @@ describe('cloud speech capture controller', () => {
     expect(bridge.cloudSpeechCancel).toHaveBeenCalledTimes(1)
     expect(frame).toHaveBeenCalledTimes(1)
     instance.dispose()
+  })
+
+  it('admits exactly the configured two-second queue and checks age again after an awaited ACK', async () => {
+    const onFailure = vi.fn()
+    const { instance, frame } = controller({ onFailure })
+    const first = deferred<CloudSpeechFrameResult>()
+    frame.mockImplementationOnce(() => first.promise)
+    await instance.start()
+    const port = new FakePort()
+    instance.attachTrack('microphone', port as unknown as MessagePort, 0)
+    for (let sequence = 1; sequence <= 20; sequence += 1) {
+      port.emit(pcmFrame(sequence, (sequence - 1) * 1_600))
+    }
+    expect(frame).toHaveBeenCalledTimes(1)
+    expect(onFailure).not.toHaveBeenCalled()
+
+    first.resolve({
+      ok: true,
+      captureId,
+      captureGeneration,
+      track: 'microphone',
+      sequence: 1,
+      nextSequence: 2,
+      nextSampleOffset: 1_600
+    })
+    await vi.waitFor(() => expect(frame).toHaveBeenCalledTimes(20))
+    expect(onFailure).not.toHaveBeenCalled()
+    instance.dispose()
+
+    let clock = 0
+    const stale = controller({ now: () => clock, onFailure })
+    const delayedAck = deferred<CloudSpeechFrameResult>()
+    stale.frame.mockImplementationOnce(() => delayedAck.promise)
+    await stale.instance.start()
+    const stalePort = new FakePort()
+    stale.instance.attachTrack('microphone', stalePort as unknown as MessagePort, 0)
+    stalePort.emit(pcmFrame(1, 0))
+    stalePort.emit(pcmFrame(2, 1_600))
+    clock = 2_001
+    delayedAck.resolve({
+      ok: true,
+      captureId,
+      captureGeneration,
+      track: 'microphone',
+      sequence: 1,
+      nextSequence: 2,
+      nextSampleOffset: 1_600
+    })
+    await vi.waitFor(() => expect(onFailure).toHaveBeenCalledWith('QUEUE_STALE'))
+    expect(stale.frame).toHaveBeenCalledTimes(1)
+    stale.instance.dispose()
   })
 
   it('flushes on the exact worklet port, admits the sealed tail and finishes only after its ACK', async () => {
@@ -246,6 +341,96 @@ describe('cloud speech capture controller', () => {
       captureGeneration,
       tracks: [{ track: 'microphone', finalSequence: 1, finalSampleOffset: 16_007 }]
     })
+    instance.dispose()
+  })
+
+  it('preserves an exact full-frame boundary and sends no empty tail', async () => {
+    const { instance, frame, finish } = controller()
+    finish.mockResolvedValue(failure('CLOSED'))
+    await instance.start()
+    const port = new FakePort()
+    instance.attachTrack('microphone', port as unknown as MessagePort, 32_000)
+    port.onPost = (message) => {
+      const command = message as { type: string; requestId?: string }
+      if (command.type === 'seal-and-flush' && command.requestId)
+        port.emit({ type: 'flush-ack', requestId: command.requestId, finalSequence: 1, finalSampleOffset: 1_600 })
+    }
+    port.emit(pcmFrame(1, 0))
+    const stopping = instance.stop()
+    await vi.waitFor(() => expect(frame).toHaveBeenCalledTimes(1))
+    expect(frame.mock.calls[0][0]).toMatchObject({ kind: 'full', pcm16le: new ArrayBuffer(3_200) })
+    await stopping
+    expect(finish).toHaveBeenCalledWith({
+      captureId,
+      captureGeneration,
+      tracks: [{ track: 'microphone', finalSequence: 1, finalSampleOffset: 33_600 }]
+    })
+    instance.dispose()
+  })
+
+  it('accepts the largest legal sealed remainder as one final PCM frame', async () => {
+    const { instance, frame, finish } = controller()
+    finish.mockResolvedValue(failure('CLOSED'))
+    await instance.start()
+    const port = new FakePort()
+    instance.attachTrack('microphone', port as unknown as MessagePort, 0)
+    port.onPost = (message) => {
+      const command = message as { type: string; requestId?: string }
+      if (command.type === 'seal-and-flush' && command.requestId) {
+        port.emit(pcmFrame(1, 0, 1_599))
+        port.emit({ type: 'flush-ack', requestId: command.requestId, finalSequence: 1, finalSampleOffset: 1_599 })
+      }
+    }
+
+    const stopping = instance.stop()
+    await vi.waitFor(() => expect(frame).toHaveBeenCalledTimes(1))
+    expect(frame.mock.calls[0][0].kind).toBe('sealed-final')
+    expect(frame.mock.calls[0][0].pcm16le.byteLength).toBe(3_198)
+    await stopping
+    expect(finish).toHaveBeenCalledWith({
+      captureId,
+      captureGeneration,
+      tracks: [{ track: 'microphone', finalSequence: 1, finalSampleOffset: 1_599 }]
+    })
+    instance.dispose()
+  })
+
+  it('keeps a nonzero track origin out of an empty track finish checkpoint', async () => {
+    const { instance, finish } = controller()
+    finish.mockResolvedValue(failure('CLOSED'))
+    await instance.start()
+    const port = new FakePort()
+    instance.attachTrack('microphone', port as unknown as MessagePort, 48_000)
+    port.onPost = (message) => {
+      const command = message as { type: string; requestId?: string }
+      if (command.type === 'seal-and-flush' && command.requestId)
+        port.emit({ type: 'flush-ack', requestId: command.requestId, finalSequence: 0, finalSampleOffset: 0 })
+    }
+
+    await instance.stop()
+    expect(finish).toHaveBeenCalledWith({
+      captureId,
+      captureGeneration,
+      tracks: [{ track: 'microphone', finalSequence: 0, finalSampleOffset: 0 }]
+    })
+    instance.dispose()
+  })
+
+  it('never retries a frame after an ambiguous bridge failure', async () => {
+    const onFailure = vi.fn()
+    const { instance, frame, bridge } = controller({ onFailure })
+    frame.mockRejectedValueOnce(new Error('private transport detail'))
+    await instance.start()
+    const port = new FakePort()
+    instance.attachTrack('microphone', port as unknown as MessagePort, 0)
+    port.emit(pcmFrame(1, 0))
+    port.emit(pcmFrame(2, 1_600))
+
+    await vi.waitFor(() => expect(onFailure).toHaveBeenCalledWith('TRANSPORT'))
+    await Promise.resolve()
+    expect(onFailure).toHaveBeenCalledTimes(1)
+    expect(frame).toHaveBeenCalledTimes(1)
+    expect(bridge.cloudSpeechCancel).toHaveBeenCalledTimes(1)
     instance.dispose()
   })
 
@@ -348,6 +533,67 @@ describe('cloud speech capture controller', () => {
     next.instance.dispose()
   })
 
+  it('accepts the next public stream epoch only after the prior epoch terminal and keeps epoch-scoped revisions', async () => {
+    const onFailure = vi.fn()
+    const applied: CloudSpeechEvent[] = []
+    const next = controller({ applyEvent: async (event) => void applied.push(event), onFailure })
+    await next.instance.start()
+    const oldStream = { generation: captureGeneration, track: 'microphone' as const, epoch: 3 }
+    const newStream = { ...oldStream, epoch: 4 }
+    for (const listener of next.events) {
+      listener({
+        type: 'terminal',
+        captureId,
+        captureGeneration,
+        stream: oldStream,
+        lastSequence: 0,
+        closeConfirmed: true,
+        tail: 'complete',
+        reason: 'normal'
+      })
+      listener({
+        type: 'segment',
+        captureId,
+        captureGeneration,
+        sequence: 1,
+        segment: {
+          stream: newStream,
+          engine: 'cloudflare-nova3',
+          index: 1,
+          revision: 1,
+          final: true,
+          text: 'same words after renewal are a new stream result',
+          startMs: 100,
+          endMs: 150
+        }
+      })
+    }
+    await vi.waitFor(() => expect(applied).toHaveLength(2))
+    expect(onFailure).not.toHaveBeenCalled()
+
+    for (const listener of next.events) {
+      listener({
+        type: 'segment',
+        captureId,
+        captureGeneration,
+        sequence: 1,
+        segment: {
+          stream: oldStream,
+          engine: 'cloudflare-nova3',
+          index: 2,
+          revision: 1,
+          final: true,
+          text: 'late old-epoch result',
+          startMs: 200,
+          endMs: 210
+        }
+      })
+    }
+    await vi.waitFor(() => expect(onFailure).toHaveBeenCalledWith('STALE'))
+    expect(applied).toHaveLength(2)
+    next.instance.dispose()
+  })
+
   it('fails closed when result epoch does not match the started stream', async () => {
     const onFailure = vi.fn()
     const applied = vi.fn()
@@ -389,6 +635,41 @@ describe('cloud speech capture controller', () => {
     const result = await stop
     expect(result).toMatchObject({ ok: false, code: 'TIMEOUT' })
     expect(bridge.cloudSpeechCancel).toHaveBeenCalledTimes(1)
+    instance.dispose()
+  })
+
+  it('uses closed status only as an incomplete recovery when finish cannot prove the result frontier', async () => {
+    const { instance, bridge, finish } = controller()
+    finish.mockResolvedValue(failure('CLOSURE_UNCONFIRMED'))
+    bridge.cloudSpeechStatus = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        captureId,
+        captureGeneration,
+        state: 'closed',
+        tracks: [
+          {
+            stream: { generation: captureGeneration, track: 'microphone', epoch: 3 },
+            lastSequence: 1,
+            closeConfirmed: true,
+            tail: 'complete',
+            reason: 'normal'
+          }
+        ]
+      })
+    )
+    await instance.start()
+    const port = new FakePort()
+    instance.attachTrack('microphone', port as unknown as MessagePort, 0)
+    port.onPost = (message) => {
+      const command = message as { type: string; requestId?: string }
+      if (command.type === 'seal-and-flush' && command.requestId)
+        port.emit({ type: 'flush-ack', requestId: command.requestId, finalSequence: 0, finalSampleOffset: 0 })
+    }
+
+    const result = await instance.stop()
+    expect(result).toMatchObject({ ok: true, complete: false, reason: 'incomplete' })
+    expect(bridge.cloudSpeechStatus).toHaveBeenCalledTimes(1)
     instance.dispose()
   })
 })
