@@ -45,8 +45,27 @@ function makeMetadata() {
       zlibVersion: process.versions.zlib,
       packages: [{ name: 'electron', version: '43.6.0' }]
     },
-    upstream: [],
-    licenses: []
+    upstream: [
+      {
+        name: 'publisher rejection fixture',
+        version: '1',
+        sourceUri: 'https://example.invalid/source',
+        revision: 'fixture-revision',
+        digest: { algorithm: 'sha256', value: '0'.repeat(64) }
+      }
+    ],
+    licenses: [
+      {
+        package: 'publisher rejection fixture',
+        version: '1',
+        spdx: 'MIT',
+        sourceUri: 'https://example.invalid/source',
+        noticePath: 'model/NOTICE',
+        noticeBytes: 1,
+        noticeSha256: createHash('sha256').update('x').digest('hex'),
+        sourceReceiptUri: 'https://example.invalid/license-receipt'
+      }
+    ]
   }
 }
 
@@ -65,7 +84,7 @@ async function rejected(name, setup, expectedCode) {
     [script, '--root', caseRoot, '--metadata', metadataPath, '--output', output],
     {
       encoding: 'utf8',
-      timeout: 30_000,
+      timeout: 180_000,
       env: {
         ...process.env,
         GITHUB_ACTIONS: 'true'
@@ -131,7 +150,23 @@ try {
     'RUNTIME_PAYLOAD_METADATA_OVERSIZED'
   )
 
-  process.stdout.write('RUNTIME_PAYLOAD_NEGATIVE_CASES_PASSED count=6\n')
+  await rejected(
+    'oversized-inventory',
+    async (payloadRoot) => {
+      await mkdir(resolve(payloadRoot, 'model'), { recursive: true })
+      await writeFile(resolve(payloadRoot, 'model/file.bin'), 'x')
+      await writeFile(resolve(payloadRoot, 'model/NOTICE'), 'x')
+      const longPart = 'p'.repeat(230)
+      const deepRoot = resolve(payloadRoot, longPart, longPart, longPart, longPart)
+      await mkdir(deepRoot, { recursive: true })
+      for (let index = 0; index < 21_000; index += 1) {
+        await writeFile(resolve(deepRoot, `file-${String(index).padStart(5, '0')}.bin`), '')
+      }
+    },
+    'RUNTIME_PAYLOAD_INVENTORY_OVERSIZED'
+  )
+
+  process.stdout.write('RUNTIME_PAYLOAD_NEGATIVE_CASES_PASSED count=7\n')
 } catch {
   process.stderr.write('RUNTIME_PAYLOAD_NEGATIVE_CASES_FAILED\n')
   process.exitCode = 1
