@@ -115,15 +115,14 @@ function withTimeout<T>(promise: Promise<T>, ms: number, signal: AbortSignal): P
     }
     const abort = (): void => finish(() => reject(new Error('Speech-pack self-test was cancelled.')))
     timer = setTimeout(() => finish(() => reject(new Error('Speech-pack self-test timed out.'))), ms)
-    if (signal.aborted) {
-      abort()
-      return
-    }
-    signal.addEventListener('abort', abort, { once: true })
+    // Observe the underlying operation before handling an already-aborted signal. It may already be
+    // rejected by protocol setup; returning first would leave that rejection unhandled.
     promise.then(
       (value) => finish(() => resolve(value)),
       (error: unknown) => finish(() => reject(error))
     )
+    if (signal.aborted) return abort()
+    signal.addEventListener('abort', abort, { once: true })
   })
 }
 

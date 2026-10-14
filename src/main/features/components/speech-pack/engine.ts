@@ -156,6 +156,9 @@ function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw signal.reason
 }
 
+/** The activation seam models process death, where JavaScript rollback code cannot run. */
+class SimulatedActivationProcessStop extends Error {}
+
 export function createSpeechPackEngine(options: SpeechPackEngineOptions): SpeechPackEngine {
   const components = options.components ?? SPEECH_PACK_COMPONENTS
   const byId = new Map(components.map((c) => [c.id, c]))
@@ -270,9 +273,9 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     }
     await mkdir(dirname(markerPath(c)), { recursive: true })
     await writeFile(`${markerPath(c)}.tmp`, JSON.stringify(marker))
-    await options.onActivationStep?.('marker-tmp-written')
+    await activationStep('marker-tmp-written')
     await rename(`${markerPath(c)}.tmp`, markerPath(c))
-    await options.onActivationStep?.('marker-written')
+    await activationStep('marker-written')
   }
 
   function validVersion(version: unknown): version is string {
@@ -419,6 +422,37 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     if (!item.isDirectory() || item.isSymbolicLink()) throw new SpeechPackError('tamper', 'pack directory is unsafe')
   }
 
+  async function assertExistingOwnedPaths(c: SpeechPackComponent): Promise<void> {
+    const paths = [
+      rootDir,
+      join(rootDir, '.staging'),
+      join(rootDir, '.staging', c.id),
+      join(rootDir, c.id),
+      stagingDir(c),
+      workDir(c),
+      finalDir(c)
+    ]
+    for (const path of paths) {
+      try {
+        const item = await lstat(path)
+        if (!item.isDirectory() || item.isSymbolicLink())
+          throw new SpeechPackError('tamper', 'pack directory is unsafe')
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+        throw error
+      }
+    }
+  }
+
+  async function activationStep(step: ActivationStep): Promise<void> {
+    try {
+      await options.onActivationStep?.(step)
+    } catch {
+      // This test seam represents abrupt process death. Do not run the rollback a real process could not run.
+      throw new SimulatedActivationProcessStop()
+    }
+  }
+
   async function prepareComponentPaths(c: SpeechPackComponent): Promise<void> {
     await ensureOwnedDirectory(rootDir, true)
     await ensureOwnedDirectory(join(rootDir, '.staging'), true)
@@ -477,7 +511,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
 
   // --- one install ---
   async function install(c: SpeechPackComponent, signal: AbortSignal, forceRepair: boolean): Promise<void> {
-    await prepareComponentPaths(c)
+    await assertExistingOwnedPaths(c)
     if (!forceRepair && (await hasMarker(c)) && (await exists(finalDir(c)))) {
       if (await dirVerified(c, finalDir(c))) {
         set(c.id, { status: 'ready' })
@@ -526,6 +560,9 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
       const free = await freeBytes(await nearestExisting(staging))
       if (free < required) throw new SpeechPackError('disk', 'not enough free disk space', required, free)
     }
+
+    // Preflight above is read-only. Create owned directories only after pins, source and available space pass.
+    await prepareComponentPaths(c)
 
     if (missing.length > 0 && source.kind === 'files') {
       let done = c.files.reduce((n, f) => n + (missing.includes(f) ? 0 : f.bytes), 0)
@@ -586,7 +623,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
         throw new SpeechPackError('tamper', 'staged file does not match its pin')
       }
     }
-    await options.onActivationStep?.('staged-verified')
+    await activationStep('staged-verified')
 
     // Cancel wins at every step: it is checked again before the self-test and before the activation rename.
     assertAuthorized(c, signal)
@@ -608,7 +645,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     assertAuthorized(c, signal)
     // A verified set that cannot decode the fixture is not a usable pack.
     if (decoded.trim() === '') throw new SpeechPackError('tamper', 'self-test decoded no text')
-    await options.onActivationStep?.('self-tested')
+    await activationStep('self-tested')
 
     assertAuthorized(c, signal)
     const dest = finalDir(c)
@@ -623,22 +660,23 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
       if (await exists(dest)) {
         await rename(dest, aside)
         movedAside = true
-        await options.onActivationStep?.('old-moved-aside')
+        await activationStep('old-moved-aside')
         assertAuthorized(c, signal)
       }
       await rename(staging, dest)
       promoted = true
-      await options.onActivationStep?.('renamed')
+      await activationStep('renamed')
       assertAuthorized(c, signal)
       await writeMarker(c)
       // Every failure after the first activation rename restores the exact prior marker and complete directory.
       assertAuthorized(c, signal)
-      await options.onActivationStep?.('ready-check')
+      await activationStep('ready-check')
       assertAuthorized(c, signal)
       set(c.id, { status: 'ready' }, true)
       // The service clears its activity lease on the ready event; only a user cancellation can still win here.
       if (signal.aborted && signal.reason === 'cancel') throw signal.reason
     } catch (error) {
+      if (error instanceof SimulatedActivationProcessStop) throw error
       if (movedAside || promoted) await deactivate(c, previousMarker)
       throw error
     }
