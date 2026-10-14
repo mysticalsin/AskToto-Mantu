@@ -106,8 +106,10 @@ test('analyzes a complete report and creates closed notices including approved b
   assert.equal(boot.stages.length, 1)
   assert.deepEqual(boot.stages[0], {
     stage: 'createWindow.construct',
+    occurrence: 0,
     durationMs: 180,
-    sinceSpawnUpperBoundMs: 2_900
+    sinceSpawnUpperBoundMs: 2_900,
+    over250Ms: false
   })
   const serialized = notices.join('\n')
   assert.equal(serialized.includes('untrusted function name'), false)
