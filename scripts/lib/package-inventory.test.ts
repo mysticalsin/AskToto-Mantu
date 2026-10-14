@@ -1,12 +1,15 @@
 import { createHash } from 'node:crypto'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import { inventoryCoreFiles, packageInventoryIdentity, validatePackageInventory } from './package-inventory.mjs'
 import type { PackageInventoryV1 } from '../../src/shared/package-profile'
 
 const sha = (value: string) => createHash('sha256').update(value).digest('hex')
+const execFileAsync = promisify(execFile)
 
 function inventory(): PackageInventoryV1 {
   const value = {
@@ -83,6 +86,42 @@ describe('lean package inventory contract', () => {
       expect(files.map(({ path }) => path)).toEqual(['a.json', 'skills/z.md'])
       expect(files.map(({ bytes }) => bytes)).toEqual([2, 1])
       expect(files.map(({ sha256 }) => sha256)).toEqual([sha('{}'), sha('z')])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('excludes only a regular package inventory file and refuses other inventory entry types', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'metis-package-inventory-entry-'))
+    const inventoryPath = join(root, 'package-inventory.json')
+    try {
+      await writeFile(inventoryPath, '{}')
+      await writeFile(join(root, 'payload.json'), '{"ok":true}')
+      await expect(inventoryCoreFiles(root)).resolves.toEqual([
+        {
+          path: 'payload.json',
+          bytes: 11,
+          sha256: sha('{"ok":true}')
+        }
+      ])
+
+      await rm(inventoryPath)
+      await mkdir(inventoryPath)
+      await expect(inventoryCoreFiles(root)).rejects.toThrow(/non-regular staged resource/)
+
+      await rm(inventoryPath, { recursive: true })
+      const linkTarget =
+        process.platform === 'win32' ? join(root, 'linked-inventory-target') : join(root, 'payload.json')
+      const linkType = process.platform === 'win32' ? 'junction' : 'file'
+      if (process.platform === 'win32') await mkdir(linkTarget)
+      await symlink(linkTarget, inventoryPath, linkType)
+      await expect(inventoryCoreFiles(root)).rejects.toThrow(/symbolic link/)
+
+      await rm(inventoryPath)
+      if (process.platform === 'linux') {
+        await execFileAsync('mkfifo', [inventoryPath])
+        await expect(inventoryCoreFiles(root)).rejects.toThrow(/non-regular staged resource/)
+      }
     } finally {
       await rm(root, { recursive: true, force: true })
     }
