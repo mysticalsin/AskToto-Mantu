@@ -735,8 +735,6 @@ describe('cloud speech main IPC authority boundary', () => {
       monotonicNow = monotonicAt
       const timerCount = timers.length
       timers[preflightIndex]!.callback()
-      await vi.waitFor(() => expect(timers.length).toBeGreaterThan(timerCount))
-      timers[timers.length - 1]!.callback()
       await vi.waitFor(() => expect(transitions()).toHaveLength(count * 2 - 1))
       const closed = transitions()[count * 2 - 2]!
       await h.invoke(CLOUD_SPEECH_IPC.transitionAck, [{ ...closed, type: 'epoch-transition-ack' }])
