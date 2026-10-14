@@ -279,7 +279,9 @@ describe('boot wiring in index.ts (M2-0518)', () => {
 
   it('opens the gate on the boot window, and holds app suspension off for every overlay window', () => {
     expect(bootCallback).toBeDefined()
-    expect(findAll(bootCallback!, (node) => isCallTo(node, 'bootWork.releaseAfterFirstShow'))).toHaveLength(1)
+    // The unlock-aware profile coordinator owns the release gate; index.ts requests release once after
+    // the boot window exists, and the coordinator releases only after init/unlock (covered separately).
+    expect(findAll(bootCallback!, (node) => isCallTo(node, 'macProfileBoot.requestBootWorkRelease'))).toHaveLength(1)
     const createWindow = indexSource.statements.find(
       (node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'createWindow'
     )

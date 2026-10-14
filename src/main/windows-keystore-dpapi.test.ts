@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { readFileSync as readSource } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -97,24 +96,50 @@ async function seedLegacyWindowsProfile(): Promise<Buffer> {
   return rawKey
 }
 
-describe('windows keystore — the forced local keystore is darwin-only', () => {
-  // index.ts boots Electron on import (BrowserWindow, globalShortcut, crashReporter), so its wiring is
-  // pinned via the raw source text — the same structural-proof pattern as c-main-fixes.contract.test.ts.
-  const source = readSource(join(__dirname, 'index.ts'), 'utf8')
+describe('packaged macOS keystore — local override cannot create a raw AES key', () => {
+  let originalPlatform: string
+  let originalLocalKeystore: string | undefined
 
-  it('gates the forced local keystore on darwin instead of applying it to every platform', () => {
-    expect(source).toContain("if (process.platform === 'darwin') process.env.ASKTOTO_LOCAL_KEYSTORE ??= '1'")
+  beforeEach(() => {
+    originalPlatform = process.platform
+    originalLocalKeystore = process.env.ASKTOTO_LOCAL_KEYSTORE
+    Object.defineProperty(process, 'platform', { configurable: true, value: 'darwin' })
+    userData = mkdtempSync(join(tmpdir(), 'asktoto-mac-keystore-'))
   })
 
-  it('has no unconditional assignment left that would re-force it on Windows', () => {
-    const assignments = source.match(/^.*process\.env\.ASKTOTO_LOCAL_KEYSTORE\s*(?:\?\?)?=(?!=).*$/gm) ?? []
-    expect(assignments).toHaveLength(1)
-    expect(assignments[0]).toMatch(/process\.platform === 'darwin'/)
+  afterEach(() => {
+    if (originalLocalKeystore === undefined) delete process.env.ASKTOTO_LOCAL_KEYSTORE
+    else process.env.ASKTOTO_LOCAL_KEYSTORE = originalLocalKeystore
+    Object.defineProperty(process, 'platform', { configurable: true, value: originalPlatform })
+    vi.restoreAllMocks()
+    rmSync(userData, { recursive: true, force: true })
   })
 
-  it('still honours an explicit operator/QA override on both platforms (nullish-assign, not assign)', () => {
-    expect(source).toMatch(/ASKTOTO_LOCAL_KEYSTORE \?\?= '1'/)
-    expect(source).not.toMatch(/ASKTOTO_LOCAL_KEYSTORE = '1'/)
+  it('keeps the visible consent gate and wraps the key even when the local override is set', async () => {
+    const electron = await boot({ packaged: true, forceLocalKeystore: true, dpapi: 'ok' })
+    ;(electron.safeStorage.isEncryptionAvailable as Mock).mockClear()
+    ;(electron.safeStorage.encryptString as Mock).mockClear()
+    const {
+      encryptSecret,
+      decryptSecret,
+      useFileBackend,
+      authorizeMacKeychainUnlock,
+      MacKeychainUnlockRequiredError
+    } = await import('./secrets')
+
+    expect(process.env.ASKTOTO_LOCAL_KEYSTORE).toBe('1')
+    expect(useFileBackend()).toBe(true)
+    expect(electron.safeStorage.isEncryptionAvailable).not.toHaveBeenCalled()
+    expect(() => encryptSecret('profile data')).toThrow(MacKeychainUnlockRequiredError)
+    expect(existsSync(keyFile())).toBe(false)
+    expect(electron.safeStorage.encryptString).not.toHaveBeenCalled()
+
+    authorizeMacKeychainUnlock()
+    const encrypted = encryptSecret('profile data')
+    const persistedKey = readFileSync(keyFile())
+    expect(persistedKey).not.toHaveLength(32)
+    expect(persistedKey.toString('utf8')).toMatch(/^dpapi:/)
+    expect(decryptSecret(encrypted)).toBe('profile data')
   })
 })
 

@@ -16,7 +16,7 @@ describe('MQA-294 licence readiness and credential boundaries', () => {
 
   it('refreshes readiness from main events and after licence activation without refocusing', () => {
     expect(source('preload/index.ts')).toContain('sub(IPC.settingsChanged, cb)')
-    expect(source('renderer/src/state.ts')).toContain('window.toto.onSettingsChanged(onFocus)')
+    expect(source('renderer/src/settings-boot.ts')).toContain('window.toto.onSettingsChanged(onFocus)')
     expect(source('main/index.ts')).toContain('onReadinessChanged: notifySettingsChanged')
     const settingsSources = [
       source('renderer/src/features/settings/SettingsRoot.tsx'),

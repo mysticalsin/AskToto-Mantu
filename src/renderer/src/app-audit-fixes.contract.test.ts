@@ -49,7 +49,7 @@ function code(block: string): string {
 // auth.test.ts and index-audit-fixes.contract.test.ts), so the renderer half below completes it.
 describe('MQA-066 — Settings is reachable from behind the sign-in wall', () => {
   it('puts a resolved SSO sign-in gate before onboarding so blocked settings writes cannot masquerade as completion', () => {
-    const sso = sourceIndexOf(source, '// Azure AD gate — blocks all use when SSO is configured OR enforced')
+    const sso = sourceIndexOf(source, 'const signInRequired =')
     const onboarding = sourceIndexOf(source, '// Onboarding gate FIRST')
     expect(sso).toBeGreaterThan(-1)
     expect(onboarding).toBeGreaterThan(-1)
@@ -58,8 +58,8 @@ describe('MQA-066 — Settings is reachable from behind the sign-in wall', () =>
 
   it('renders Settings in place of the wall, the way the onboarding gate already does', () => {
     const wall = blockBetween(
-      '// Azure AD gate — blocks all use when SSO is configured OR enforced',
-      'const panelOpen = (body != null && !collapsed)'
+      'const signInGate = (status:',
+      'if (signInRequired && auth.status && DEMO == null) return signInGate(auth.status)'
     )
     expect(code(wall)).toMatch(/if \(view === 'settings'\) \{/)
     expect(code(wall)).toMatch(/\{settingsBody\}/)
@@ -69,8 +69,8 @@ describe('MQA-066 — Settings is reachable from behind the sign-in wall', () =>
 
   it('hands the wall a route to the screen its own remedy names', () => {
     const wall = blockBetween(
-      '// Azure AD gate — blocks all use when SSO is configured OR enforced',
-      'const panelOpen = (body != null && !collapsed)'
+      'const signInGate = (status:',
+      'if (signInRequired && auth.status && DEMO == null) return signInGate(auth.status)'
     )
     // Calendar, not Account: the Entra client/tenant/domain fields live on the Calendar tab, and there is
     // no Account tab at all — the old copy pointed at a screen that does not exist.
