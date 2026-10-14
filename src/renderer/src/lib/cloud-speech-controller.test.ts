@@ -1743,4 +1743,50 @@ describe('cloud speech capture controller', () => {
     })
     instance.dispose()
   })
+
+  it('tears down the current owner after ceiling recovery confirms closure but not a complete tail', async () => {
+    const stopped = vi.fn()
+    const onFailure = vi.fn()
+    const next = controller({ onStopped: stopped, onFailure })
+    next.finish.mockResolvedValue(failure('CLOSURE_UNCONFIRMED'))
+    next.bridge.cloudSpeechStatus = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        captureId,
+        captureGeneration,
+        state: 'closed',
+        tracks: [
+          {
+            stream: { generation: captureGeneration, track: 'microphone', epoch: 3 },
+            phase: 'closed',
+            lastSequence: 0,
+            closeConfirmed: true,
+            tail: 'complete'
+          }
+        ]
+      })
+    )
+    expect((await next.instance.start()).ok).toBe(true)
+    const port = new FakePort()
+    port.onPost = (message) => {
+      if (typeof message === 'object' && message !== null && 'type' in message && message.type === 'seal-and-flush') {
+        const command = message as { requestId: string }
+        port.emit({ type: 'flush-ack', requestId: command.requestId, finalSequence: 0, finalSampleOffset: 0 })
+      }
+    }
+    expect(next.instance.attachTrack('microphone', port as unknown as MessagePort, 0)).toBe(true)
+    const ceiling: CloudSpeechCaptureCeilingEvent = {
+      type: 'capture-ceiling',
+      captureId,
+      captureGeneration,
+      ceilingId: '00000000-0000-4000-8000-000000000712',
+      maxSampleOffsetExclusive: 230_400_000
+    }
+    for (const listener of next.events) listener(ceiling)
+    await vi.waitFor(() => expect(stopped).toHaveBeenCalledTimes(1))
+    expect(stopped).toHaveBeenCalledWith({ captureId, captureGeneration }, 'ceiling')
+    expect(onFailure).not.toHaveBeenCalled()
+    expect(next.bridge.cloudSpeechStatus).toHaveBeenCalledTimes(1)
+    next.instance.dispose()
+  })
 })
