@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   RECOVERY_ASSERTIONS,
   RECOVERY_REPORT_SCHEMA,
-  packagedRecoveryReportProblems
+  packagedRecoveryReportProblems,
+  releaseCandidateTransports,
+  requestQuitAcknowledgement,
+  shutdownVerdict
 } from './packaged-restart-recovery.mjs'
 import {
   SCENARIOS,
@@ -144,5 +147,57 @@ describe('packaged restart recovery candidate scenario', () => {
     expect(packagedRecoveryReportProblems(invalid)).toContain('isolated app teardown was not acknowledged.')
     const failed = { ...report(), outcome: 'FAIL' }
     expect(packagedRecoveryReportProblems(failed)).toContain('packaged restart recovery outcome is FAIL.')
+  })
+
+  it('requires an acknowledged quit, normal exit status, and no signal for a clean shutdown', () => {
+    const evidence = {
+      censusValid: true,
+      censusCaptured: true,
+      quitAcknowledged: true,
+      naturalExit: true,
+      exitCode: 0,
+      signalCode: null,
+      survivorCount: 0,
+      transportsReleased: true
+    }
+    expect(shutdownVerdict(evidence)).toEqual({ clean: true, teardown: 'ACKNOWLEDGED' })
+    expect(shutdownVerdict({ ...evidence, quitAcknowledged: false }).clean).toBe(false)
+    expect(shutdownVerdict({ ...evidence, exitCode: 1 }).clean).toBe(false)
+    expect(shutdownVerdict({ ...evidence, exitCode: null, signalCode: 'SIGTERM' }).clean).toBe(false)
+  })
+
+  it('does not acknowledge a rejected or timed-out quit request', async () => {
+    expect(await requestQuitAcknowledgement(() => Promise.reject(new Error('synthetic quit rejection')))).toBe(false)
+    expect(await requestQuitAcknowledgement(() => Promise.resolve())).toBe(true)
+  })
+
+  it('waits for an uncertain attach release and keeps teardown unacknowledged', async () => {
+    let releaseSettled = false
+    let releaseBudget = 0
+    const transportsReleased = await releaseCandidateTransports({
+      browser: null,
+      transportUncertain: true,
+      lateRelease: async (timeoutMs: number) => {
+        releaseBudget = timeoutMs
+        await Promise.resolve()
+        releaseSettled = true
+        return true
+      }
+    })
+    expect(releaseSettled).toBe(true)
+    expect(releaseBudget).toBeGreaterThan(0)
+    expect(transportsReleased).toBe(false)
+    expect(
+      shutdownVerdict({
+        censusValid: true,
+        censusCaptured: true,
+        quitAcknowledged: true,
+        naturalExit: true,
+        exitCode: 0,
+        signalCode: null,
+        survivorCount: 0,
+        transportsReleased
+      })
+    ).toEqual({ clean: false, teardown: 'UNACKNOWLEDGED' })
   })
 })

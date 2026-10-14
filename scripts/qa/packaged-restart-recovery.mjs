@@ -55,8 +55,13 @@ const FAILURES = new Set([
   'profile-rejected',
   'launch-failed',
   'cdp-attach-failed',
+  'cdp-endpoint-deadline',
+  'cdp-transport-timeout',
+  'cdp-session-or-process-info-invalid',
+  'cdp-browser-pid-mismatch',
   'storage-api-failed',
   'restart-data-missing',
+  'shutdown-not-clean',
   'shutdown-unacknowledged',
   'profile-cleanup-failed',
   'harness-error'
@@ -167,6 +172,57 @@ function descendantProcesses(table, mainPid) {
 
 const processIdentity = (entry) => `${entry.pid}:${entry.startedMs}`
 
+export function shutdownVerdict({
+  censusValid,
+  censusCaptured,
+  quitAcknowledged,
+  naturalExit,
+  exitCode,
+  signalCode,
+  survivorCount,
+  transportsReleased
+}) {
+  const childExited = (Number.isSafeInteger(exitCode) && exitCode >= 0) || typeof signalCode === 'string'
+  const teardown = censusCaptured && childExited && survivorCount === 0 && transportsReleased
+    ? 'ACKNOWLEDGED'
+    : 'UNACKNOWLEDGED'
+  const clean =
+    censusValid &&
+    censusCaptured &&
+    quitAcknowledged &&
+    naturalExit &&
+    exitCode === 0 &&
+    signalCode === null &&
+    survivorCount === 0 &&
+    transportsReleased
+  return { clean, teardown }
+}
+
+export async function requestQuitAcknowledgement(requestQuit, timeoutMs = 8_000) {
+  try {
+    await boundedCall(requestQuit, timeoutMs, 'shutdown-unacknowledged')
+    return true
+  } catch {
+    return false
+  }
+}
+
+export async function releaseCandidateTransports(
+  attachment,
+  { dispose = disposeFreshOnboardingTransports, timeoutMs = 5_000 } = {}
+) {
+  const lateReleases = Array.isArray(attachment?.lateReleases) ? [...attachment.lateReleases] : []
+  if (typeof attachment?.lateRelease === 'function') lateReleases.push(attachment.lateRelease)
+  return dispose(
+    {
+      browser: attachment?.browser ?? null,
+      transportUncertain: attachment?.transportUncertain === true,
+      lateReleases
+    },
+    timeoutMs
+  )
+}
+
 function createProfile() {
   const root = mkdtempSync(join(tmpdir(), 'metis-packaged-recovery-'))
   const paths = {
@@ -248,6 +304,9 @@ async function twoDifferentPorts() {
 }
 
 async function launchCandidate({ executable, platform, profile, installRoot }) {
+  if (ownedProcesses(listProcesses(platform), { mainPid: null, installRoot, platform }).length) {
+    throw new Error('profile-rejected')
+  }
   const { cdpPort, inspectPort } = await twoDifferentPorts()
   const env = strictLaunchEnvironment(process.env, profile, platform)
   const launch = launchPackagedCdp({ executablePath: executable, env, cdpPort, inspectPort, platform, spawnProcess: spawn })
@@ -256,13 +315,17 @@ async function launchCandidate({ executable, platform, profile, installRoot }) {
     throw new Error('launch-failed')
   }
   let browser = null
+  let transportUncertain = false
+  const lateReleases = []
   try {
     const attached = await attachOwnedCdp({
       endpoint: launch.cdpEndpoint,
       childPid: child.pid,
       timeoutMs: 90_000
     })
-    if (!attached.browser) throw new Error('cdp-attach-failed')
+    transportUncertain = attached.transportUncertain === true
+    if (typeof attached.lateRelease === 'function') lateReleases.push(attached.lateRelease)
+    if (!attached.browser) throw new Error(attached.failure ?? 'cdp-attach-failed')
     browser = attached.browser
     const page = await findPage(
       browser,
@@ -273,7 +336,8 @@ async function launchCandidate({ executable, platform, profile, installRoot }) {
     if (packagedLaunchFailed(child, launch.latches)) throw new Error('launch-failed')
     const processTable = listProcesses(platform)
     const rootResidents = ownedProcesses(processTable, { mainPid: null, installRoot, platform })
-    const launchTree = new Set(descendantProcesses(processTable, child.pid).map(processIdentity))
+    const launchOwned = descendantProcesses(processTable, child.pid)
+    const launchTree = new Set(launchOwned.map(processIdentity))
     const mainProcess = rootResidents.find((entry) => entry.pid === child.pid)
     if (
       !mainProcess ||
@@ -282,9 +346,8 @@ async function launchCandidate({ executable, platform, profile, installRoot }) {
     ) {
       throw new Error('profile-rejected')
     }
-    return { child, browser, page, installRoot, profile, launch }
+    return { child, browser, page, installRoot, profile, launch, launchOwned, transportUncertain, lateReleases }
   } catch (error) {
-    if (browser) await disposeFreshOnboardingTransports({ browser }).catch(() => false)
     let stopped = child.exitCode != null || child.signalCode != null
     if (!stopped) {
       const receipt = await stopOwnedChild(child, { platform, timeoutMs: 5_000 }).catch(() => ({ state: 'unacknowledged' }))
@@ -308,7 +371,8 @@ async function launchCandidate({ executable, platform, profile, installRoot }) {
         stopped = false
       }
     }
-    if (!stopped) {
+    const transportsReleased = await releaseCandidateTransports({ browser, transportUncertain, lateReleases }).catch(() => false)
+    if (!stopped || !transportsReleased) {
       const failure = new Error('shutdown-unacknowledged')
       failure.cleanupAcknowledged = false
       throw failure
@@ -321,70 +385,48 @@ async function launchCandidate({ executable, platform, profile, installRoot }) {
 
 async function stopCandidate(instance, platform) {
   if (!instance) return { clean: false, teardown: 'NOT_ATTEMPTED' }
-  const { child, browser, installRoot } = instance
+  const { child, installRoot } = instance
   let ownedAtQuit = []
   let censusValid = false
+  const censusCaptured = Array.isArray(instance.launchOwned) && instance.launchOwned.some((entry) => entry.pid === child.pid)
   let naturalExit = false
+  let quitAcknowledged = false
   let survivors = []
-  let cleanAfterQuit = false
-  let result = { clean: false, teardown: 'UNACKNOWLEDGED' }
+  let processCensusComplete = false
+  let transportsReleased = false
   try {
     ownedAtQuit = ownedProcesses(listProcesses(platform), { mainPid: child.pid, installRoot, platform })
     censusValid = ownedAtQuit.some((entry) => entry.pid === child.pid) && ownedAtQuit.length >= 2
     if (censusValid) {
-      await boundedCall(
-        () => instance.page.evaluate(() => window.toto.quit()),
-        8_000,
-        'shutdown-unacknowledged'
-      ).catch(() => {})
+      quitAcknowledged = await requestQuitAcknowledgement(() => instance.page.evaluate(() => window.toto.quit()))
       naturalExit = await waitForChildExit(child, 30_000)
     }
     if (!naturalExit && child.exitCode == null && child.signalCode == null) {
       await stopOwnedChild(child, { platform, timeoutMs: 5_000 })
     }
-    survivors = ownedAtQuit.length
-      ? findSurvivors(ownedAtQuit, listProcesses(platform), { installRoot, platform })
-      : ownedProcesses(listProcesses(platform), { mainPid: null, installRoot, platform })
-    const survivorDeadline = Date.now() + 5_000
-    while (survivors.length && Date.now() < survivorDeadline) {
-      await new Promise((resolveSleep) => setTimeout(resolveSleep, 500))
-      survivors = ownedAtQuit.length
-        ? findSurvivors(ownedAtQuit, listProcesses(platform), { installRoot, platform })
-        : ownedProcesses(listProcesses(platform), { mainPid: null, installRoot, platform })
-    }
-    cleanAfterQuit = censusValid && naturalExit && survivors.length === 0
-    if (survivors.length) {
-      // The entries are derived from this exact child or the installed app's own root; never kill by name.
-      for (const entry of survivors) {
-        if (entry.pid === process.pid) continue
-        try {
-          process.kill(entry.pid, 'SIGKILL')
-        } catch {
-          /* already gone */
-        }
-      }
-      const deadline = Date.now() + 5_000
-      while (Date.now() < deadline) {
-        await new Promise((resolveSleep) => setTimeout(resolveSleep, 100))
-        survivors = findSurvivors(ownedAtQuit, listProcesses(platform), { installRoot, platform })
-        if (!survivors.length) break
-      }
-    }
-    if (child.exitCode == null && child.signalCode == null) await waitForChildExit(child, 5_000)
-    result = {
-      clean: cleanAfterQuit,
-      teardown: child.exitCode != null || child.signalCode != null
-        ? survivors.length === 0 ? 'ACKNOWLEDGED' : 'UNACKNOWLEDGED'
-        : 'UNACKNOWLEDGED'
-    }
+    await waitForChildExit(child, 5_000)
   } catch {
     try {
       if (child.exitCode == null && child.signalCode == null) {
         await stopOwnedChild(child, { platform, timeoutMs: 5_000 })
       }
-      const remaining = ownedProcesses(listProcesses(platform), { mainPid: null, installRoot, platform })
-      if (remaining.length) {
-        for (const entry of remaining) {
+    } catch {
+      /* Final process census below decides whether teardown can be acknowledged. */
+    }
+  } finally {
+    const ownershipBaseline = ownedAtQuit.length ? ownedAtQuit : instance.launchOwned ?? []
+    try {
+      const table = listProcesses(platform)
+      survivors = findSurvivors(ownershipBaseline, table, { installRoot, platform })
+      processCensusComplete = true
+      const survivorDeadline = Date.now() + 5_000
+      while (survivors.length && Date.now() < survivorDeadline) {
+        await new Promise((resolveSleep) => setTimeout(resolveSleep, 500))
+        survivors = findSurvivors(ownershipBaseline, listProcesses(platform), { installRoot, platform })
+      }
+      if (survivors.length) {
+        // The entries are derived from this exact child or the installed app's own root; never kill by name.
+        for (const entry of survivors) {
           if (entry.pid === process.pid) continue
           try {
             process.kill(entry.pid, 'SIGKILL')
@@ -392,15 +434,30 @@ async function stopCandidate(instance, platform) {
             /* already gone */
           }
         }
+        const deadline = Date.now() + 5_000
+        while (Date.now() < deadline) {
+          await new Promise((resolveSleep) => setTimeout(resolveSleep, 100))
+          survivors = findSurvivors(ownershipBaseline, listProcesses(platform), { installRoot, platform })
+          if (!survivors.length) break
+        }
       }
     } catch {
-      /* Preserve the unacknowledged result. */
+      processCensusComplete = false
+      survivors = [{}]
     }
-  } finally {
-    const released = await disposeFreshOnboardingTransports({ browser }).catch(() => false)
-    if (!released) result = { clean: false, teardown: 'UNACKNOWLEDGED' }
+    transportsReleased = await releaseCandidateTransports(instance).catch(() => false)
   }
-  return result
+  const verdict = shutdownVerdict({
+    censusValid,
+    censusCaptured,
+    quitAcknowledged,
+    naturalExit,
+    exitCode: child.exitCode,
+    signalCode: child.signalCode,
+    survivorCount: processCensusComplete ? survivors.length : 1,
+    transportsReleased
+  })
+  return verdict
 }
 
 async function writeScenarioSettings(instance) {
@@ -546,7 +603,9 @@ async function execute({ appArg, platform, out }) {
     teardown = firstShutdown.teardown
     assertions['first-shutdown-clean'] = firstShutdown.clean ? 'PASS' : 'FAIL'
     if (firstShutdown.teardown === 'ACKNOWLEDGED') instance = null
-    if (!firstShutdown.clean) throw new Error('shutdown-unacknowledged')
+    if (!firstShutdown.clean) {
+      throw new Error(firstShutdown.teardown === 'ACKNOWLEDGED' ? 'shutdown-not-clean' : 'shutdown-unacknowledged')
+    }
 
     instance = await launchCandidate({ executable: installed.executable, platform: reportPlatform, profile, installRoot })
     const second = await runSecondLaunch(
@@ -580,7 +639,9 @@ async function execute({ appArg, platform, out }) {
     teardown = secondShutdown.teardown
     assertions['second-shutdown-clean'] = secondShutdown.clean ? 'PASS' : 'FAIL'
     if (secondShutdown.teardown === 'ACKNOWLEDGED') instance = null
-    if (!secondShutdown.clean) throw new Error('shutdown-unacknowledged')
+    if (!secondShutdown.clean) {
+      throw new Error(secondShutdown.teardown === 'ACKNOWLEDGED' ? 'shutdown-not-clean' : 'shutdown-unacknowledged')
+    }
   } catch (error) {
     failure = fixedFailure(error)
     if (error?.cleanupAcknowledged === true) teardown = 'ACKNOWLEDGED'
@@ -599,7 +660,9 @@ async function execute({ appArg, platform, out }) {
       const stopped = await stopCandidate(instance, reportPlatform ?? process.platform)
       teardown = stopped.teardown
       if (stopped.teardown === 'ACKNOWLEDGED') instance = null
-      if (!stopped.clean && failure === 'none') failure = 'shutdown-unacknowledged'
+      if (!stopped.clean && failure === 'none') {
+        failure = stopped.teardown === 'ACKNOWLEDGED' ? 'shutdown-not-clean' : 'shutdown-unacknowledged'
+      }
     }
     if (profile && !instance && teardown !== 'UNACKNOWLEDGED') {
       try {
