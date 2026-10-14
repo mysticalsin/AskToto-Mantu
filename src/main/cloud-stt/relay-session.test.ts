@@ -141,25 +141,31 @@ describe('RelaySpeechSession', () => {
 
   it('cancels a create allocation before opening when capability versions changed', async () => {
     MockRelaySocket.instances = []
+    const client = makeClient(undefined, ['microphone'], { configVersion: 'fixture-config-a-v2' })
+    const cancel = vi.spyOn(client, 'cancel')
     const started = await RelaySpeechSession.create({
-      client: makeClient(undefined, ['microphone'], { configVersion: 'fixture-config-a-v2' }),
+      client,
       createRequest: singleTrackCreateRequest(),
       expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' },
       expectedCapability
     })
     expect(started).toEqual({ ok: false, code: 'SCHEMA' })
+    expect(cancel).toHaveBeenCalledWith(sessionId, 1_000)
     expect(MockRelaySocket.instances).toHaveLength(0)
   })
 
   it('cancels a create allocation before opening when the speech policy version changed', async () => {
     MockRelaySocket.instances = []
+    const client = makeClient(undefined, ['microphone'], { policyVersion: 'fixture-policy-a-v2' })
+    const cancel = vi.spyOn(client, 'cancel')
     const started = await RelaySpeechSession.create({
-      client: makeClient(undefined, ['microphone'], { policyVersion: 'fixture-policy-a-v2' }),
+      client,
       createRequest: singleTrackCreateRequest(),
       expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' },
       expectedCapability
     })
     expect(started).toEqual({ ok: false, code: 'SCHEMA' })
+    expect(cancel).toHaveBeenCalledWith(sessionId, 1_000)
     expect(MockRelaySocket.instances).toHaveLength(0)
   })
 
