@@ -572,13 +572,7 @@ async function runUpgrade({
     install(baselineInstaller)
     const baselineExe = join(installRoot, 'Metis.exe')
     if (statSync(baselineExe).size <= 0) throw new Error('baseline installed executable was empty')
-    activeApp = await startApp(
-      baselineExe,
-      join(runnerRoot, 'windows-home'),
-      keyFolder,
-      installRoot,
-      launchRecords
-    )
+    activeApp = await startApp(baselineExe, join(runnerRoot, 'windows-home'), keyFolder, installRoot, launchRecords)
     const settings = await appCall(
       activeApp,
       async (synthetic) => {
@@ -645,12 +639,7 @@ async function runUpgrade({
         settings.saved.temperature === 0.42,
       'settings persisted through app IPC'
     )
-    record(
-      checks,
-      'synthetic_api_key_written',
-      settings.hasOpenAi,
-      'synthetic OpenAI key accepted through app IPC'
-    )
+    record(checks, 'synthetic_api_key_written', settings.hasOpenAi, 'synthetic OpenAI key accepted through app IPC')
     record(
       checks,
       'synthetic_encrypted_meeting_written',
@@ -730,46 +719,32 @@ async function runUpgrade({
       true,
       'candidate Setup reran at the unchanged disposable install root'
     )
-    activeApp = await startApp(
-      baselineExe,
-      join(runnerRoot, 'windows-home'),
-      keyFolder,
-      installRoot,
-      launchRecords
-    )
+    activeApp = await startApp(baselineExe, join(runnerRoot, 'windows-home'), keyFolder, installRoot, launchRecords)
 
-    const after = await appCall(activeApp, async ({ noteFile, expected }) => {
-      const settingsNow = await window.toto.getSettings()
-      const history = await window.toto.recallList()
-      const meeting = Array.isArray(history)
-        ? history.find((item) => item.title === expected.meetingTitle)
-        : null
-      const read = meeting?.file ? await window.toto.recallRead(meeting.file) : null
-      const noteRead = await window.toto.recallRead(noteFile)
-      return {
-        version: settingsNow.version ?? null,
-        onboardingDone: settingsNow.onboardingDone,
-        encryptTranscripts: settingsNow.encryptTranscripts,
-        temperature: settingsNow.temperature,
-        providersBlocked:
-          Array.isArray(settingsNow.allowedProviders) && settingsNow.allowedProviders.length === 0,
-        hasOpenAi: settingsNow.hasKeys?.openai === true,
-        historyTitles: Array.isArray(history) ? history.map((item) => item.title) : null,
-        meeting: meeting
-          ? { file: meeting.file, title: meeting.title, locked: meeting.locked === true }
-          : null,
-        read: read
-          ? { ok: read.ok, title: read.title, lines: read.lines?.map((line) => line.text) ?? [] }
-          : null,
-        noteRead
-      }
-    }, { noteFile: basename(baselineNotePath), expected: SYNTHETIC })
-    record(
-      checks,
-      'candidate_launch_version',
-      after.version === CANDIDATE_VERSION,
-      `version=${String(after.version)}`
+    const after = await appCall(
+      activeApp,
+      async ({ noteFile, expected }) => {
+        const settingsNow = await window.toto.getSettings()
+        const history = await window.toto.recallList()
+        const meeting = Array.isArray(history) ? history.find((item) => item.title === expected.meetingTitle) : null
+        const read = meeting?.file ? await window.toto.recallRead(meeting.file) : null
+        const noteRead = await window.toto.recallRead(noteFile)
+        return {
+          version: settingsNow.version ?? null,
+          onboardingDone: settingsNow.onboardingDone,
+          encryptTranscripts: settingsNow.encryptTranscripts,
+          temperature: settingsNow.temperature,
+          providersBlocked: Array.isArray(settingsNow.allowedProviders) && settingsNow.allowedProviders.length === 0,
+          hasOpenAi: settingsNow.hasKeys?.openai === true,
+          historyTitles: Array.isArray(history) ? history.map((item) => item.title) : null,
+          meeting: meeting ? { file: meeting.file, title: meeting.title, locked: meeting.locked === true } : null,
+          read: read ? { ok: read.ok, title: read.title, lines: read.lines?.map((line) => line.text) ?? [] } : null,
+          noteRead
+        }
+      },
+      { noteFile: basename(baselineNotePath), expected: SYNTHETIC }
     )
+    record(checks, 'candidate_launch_version', after.version === CANDIDATE_VERSION, `version=${String(after.version)}`)
     record(
       checks,
       'settings_app_visible_after_upgrade',
@@ -819,8 +794,7 @@ async function runUpgrade({
     record(
       checks,
       'note_ciphertext_preserved',
-      hashFile(baselineNotePath) === baselineNoteHash &&
-        checkEncryptedFile(baselineNotePath, SYNTHETIC.noteAnswer),
+      hashFile(baselineNotePath) === baselineNoteHash && checkEncryptedFile(baselineNotePath, SYNTHETIC.noteAnswer),
       'note ciphertext is byte-identical and remains encrypted'
     )
     const noteResult = after.noteRead
@@ -867,10 +841,7 @@ async function runUpgrade({
       try {
         await stopApp(activeApp)
       } catch (error) {
-        overallError = [
-          overallError,
-          `app cleanup failed: ${error instanceof Error ? error.message : String(error)}`
-        ]
+        overallError = [overallError, `app cleanup failed: ${error instanceof Error ? error.message : String(error)}`]
           .filter(Boolean)
           .join('; ')
       }
@@ -883,11 +854,7 @@ async function runUpgrade({
             .filter(Boolean)
             .join('; ')
       }
-      if (
-        ownership.teardownVerified &&
-        !ownership.transportReleased &&
-        !(await releaseOwnedTransports(ownership))
-      ) {
+      if (ownership.teardownVerified && !ownership.transportReleased && !(await releaseOwnedTransports(ownership))) {
         overallError = [overallError, 'a launch-owned CDP transport cleanup receipt was not acknowledged']
           .filter(Boolean)
           .join('; ')
@@ -937,23 +904,10 @@ async function runUpgrade({
   }
 }
 
-function verifyCandidateCommand(
-  runPath,
-  provenancePath,
-  candidateRun,
-  approvedCommit,
-  approvedRef,
-  outputPath
-) {
+function verifyCandidateCommand(runPath, provenancePath, candidateRun, approvedCommit, approvedRef, outputPath) {
   const run = JSON.parse(readFileSync(runPath, 'utf8'))
   const provenance = JSON.parse(readFileSync(provenancePath, 'utf8'))
-  const identity = verifyCandidateIdentity(
-    run,
-    provenance,
-    candidateRun,
-    approvedCommit,
-    approvedRef
-  )
+  const identity = verifyCandidateIdentity(run, provenance, candidateRun, approvedCommit, approvedRef)
   writeFileSync(outputPath, `${JSON.stringify(identity, null, 2)}\n`)
 }
 
