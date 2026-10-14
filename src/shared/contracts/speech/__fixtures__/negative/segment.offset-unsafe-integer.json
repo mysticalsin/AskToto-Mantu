@@ -1,0 +1,10 @@
+{
+  "stream": { "generation": 1, "track": "microphone", "epoch": 1 },
+  "engine": "deepgram-nova3",
+  "index": 1,
+  "revision": 1,
+  "final": false,
+  "text": "partial",
+  "startMs": 9007199254740992,
+  "endMs": 9007199254740992
+}

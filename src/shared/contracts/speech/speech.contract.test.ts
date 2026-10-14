@@ -25,6 +25,8 @@ const REJECTED_AT: Record<string, Array<string | number>> = {
   'capture.captured-twice.json': ['capturedTracks', 1],
   'capture.fallback-engine-key.json': [],
   'capture.generation-zero.json': ['generation'],
+  'capture.generation-unsafe-integer.json': ['generation'],
+  'capture.generation-infinite.json': ['generation'],
   'capture.no-requested-track.json': ['requestedTracks'],
   'capture.requested-twice.json': ['requestedTracks', 1],
   'capture.unknown-track.json': ['requestedTracks', 0],
@@ -32,7 +34,11 @@ const REJECTED_AT: Record<string, Array<string | number>> = {
   'segment.generation-engine.json': ['engine'],
   'segment.missing-stream-epoch.json': ['stream', 'epoch'],
   'segment.revision-zero.json': ['revision'],
+  'segment.revision-unsafe-integer.json': ['revision'],
+  'segment.offset-unsafe-integer.json': ['startMs'],
+  'segment.offset-infinite.json': ['startMs'],
   'stream.epoch-zero.json': ['epoch'],
+  'stream.epoch-unsafe-integer.json': ['epoch'],
   'stream.fractional-generation.json': ['generation']
 }
 
