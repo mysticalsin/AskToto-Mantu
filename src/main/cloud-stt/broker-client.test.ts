@@ -1,8 +1,9 @@
 import { EventEmitter } from 'node:events'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
+import WebSocket from 'ws'
 import { describe, expect, it, vi } from 'vitest'
-import { SpeechBrokerClient, normalizeSpeechOperatorOrigin } from './broker-client'
+import { SpeechBrokerClient, normalizeSpeechOperatorOrigin, type SpeechCreateRequest } from './broker-client'
 
 const fixture = JSON.parse(readFileSync('scripts/qa/fixtures/speech-relay-protocol-v1.json', 'utf8')) as {
   capability: { readyResponse: unknown }
@@ -42,7 +43,7 @@ describe('speech broker client', () => {
   })
 
   it('signs the exact capability body and validates the closed response schema', async () => {
-    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchImpl = vi.fn(async (_input: Request | URL | string, init?: RequestInit) => {
       expect(init?.method).toBe('POST')
       expect(init?.body).toBe(JSON.stringify({ operation: 'speech-capability' }))
       expect(new Headers(init?.headers).get('x-metis-license')).toBe(settings.operatorLicenseToken)
@@ -113,14 +114,11 @@ describe('speech broker client', () => {
       WebSocketImpl: MockWebSocket as unknown as typeof WebSocket,
       now: () => 1_893_456_000_000
     })
-    const createRequest = fixture.create.request as Record<string, unknown>
+    const createRequest = fixture.create.request as SpeechCreateRequest
     const singleTrackRequest = {
       ...createRequest,
       tracks: ['microphone'],
-      consent: {
-        ...(createRequest.consent as Record<string, unknown>),
-        tracks: ['microphone']
-      }
+      consent: { ...createRequest.consent, tracks: ['microphone'] }
     }
     const created = await client.createSession(singleTrackRequest)
     expect(created.ok).toBe(true)

@@ -1,13 +1,23 @@
 import { EventEmitter } from 'node:events'
 import { readFileSync } from 'node:fs'
+import WebSocket from 'ws'
 import { describe, expect, it, vi } from 'vitest'
-import { SpeechBrokerClient } from './broker-client'
+import { SpeechBrokerClient, type SpeechCreateRequest } from './broker-client'
 import { RelaySpeechSession } from './relay-session'
 
 const fixture = JSON.parse(readFileSync('scripts/qa/fixtures/speech-relay-protocol-v1.json', 'utf8')) as {
   create: { request: Record<string, unknown>; responseTemplate: Record<string, unknown> }
 }
 const sessionId = '00000000-0000-4000-8000-000000000101'
+
+function singleTrackCreateRequest(): SpeechCreateRequest {
+  const request = fixture.create.request as unknown as SpeechCreateRequest
+  return {
+    ...request,
+    tracks: ['microphone'],
+    consent: { ...request.consent, tracks: ['microphone'] }
+  }
+}
 
 class MockRelaySocket extends EventEmitter {
   static OPEN = 1
@@ -102,14 +112,7 @@ describe('RelaySpeechSession', () => {
     const client = makeClient()
     const started = await RelaySpeechSession.create({
       client,
-      createRequest: {
-        ...(fixture.create.request as Record<string, unknown>),
-        tracks: ['microphone'],
-        consent: {
-          ...((fixture.create.request as Record<string, unknown>).consent as Record<string, unknown>),
-          tracks: ['microphone']
-        }
-      }
+      createRequest: singleTrackCreateRequest()
     })
     expect(started.ok).toBe(true)
     if (!started.ok) return
@@ -132,14 +135,7 @@ describe('RelaySpeechSession', () => {
     MockRelaySocket.instances = []
     const started = await RelaySpeechSession.create({
       client: makeClient(),
-      createRequest: {
-        ...(fixture.create.request as Record<string, unknown>),
-        tracks: ['microphone'],
-        consent: {
-          ...((fixture.create.request as Record<string, unknown>).consent as Record<string, unknown>),
-          tracks: ['microphone']
-        }
-      }
+      createRequest: singleTrackCreateRequest()
     })
     expect(started.ok).toBe(true)
     if (!started.ok) return

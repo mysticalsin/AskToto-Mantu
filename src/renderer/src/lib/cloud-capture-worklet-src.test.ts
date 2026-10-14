@@ -47,12 +47,12 @@ describe('cloud capture worklet', () => {
       sampleOffset: 3_200,
       audio: expect.any(Float32Array)
     })
-    expect((proc.port.postMessage.mock.calls[2][0] as { audio: Float32Array }).audio).toHaveLength(321)
+    expect((proc.port.postMessage.mock.calls[2][0] as { audio: Float32Array }).audio).toHaveLength(1_121)
     expect(proc.port.postMessage.mock.calls[3][0]).toEqual({
       type: 'flush-ack',
       requestId: 'flush-1',
       finalSequence: 3,
-      finalSampleOffset: 3_521
+      finalSampleOffset: 4_321
     })
 
     proc.process([[new Float32Array(4).fill(1)]])
@@ -66,16 +66,14 @@ describe('cloud capture worklet', () => {
 
     expect(proc.port.postMessage.mock.calls.map(([message]) => (message as { type: string }).type)).toEqual([
       'pcm-frame',
-      'pcm-frame',
-      'pcm-frame',
       'flush-ack'
     ])
-    expect(proc.port.postMessage.mock.calls[2][0]).toMatchObject({
-      sequence: 3,
-      sampleOffset: 3_200,
+    expect(proc.port.postMessage.mock.calls[0][0]).toMatchObject({
+      sequence: 1,
+      sampleOffset: 0,
       audio: expect.any(Float32Array)
     })
-    expect((proc.port.postMessage.mock.calls[2][0] as { audio: Float32Array }).audio).toHaveLength(800)
-    expect(proc.port.postMessage.mock.calls[3][0]).toMatchObject({ finalSequence: 3, finalSampleOffset: 4_000 })
+    expect((proc.port.postMessage.mock.calls[0][0] as { audio: Float32Array }).audio).toHaveLength(1_600)
+    expect(proc.port.postMessage.mock.calls[1][0]).toMatchObject({ finalSequence: 1, finalSampleOffset: 1_600 })
   })
 })

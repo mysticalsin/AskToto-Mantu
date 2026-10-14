@@ -70,4 +70,29 @@ describe('BoundedRelayPcmQueue', () => {
     expect(await draining).toEqual({ ok: true })
     expect(sent).toEqual([1, 2])
   })
+
+  it('rechecks queued frame age after a slow send callback before admitting the next frame', async () => {
+    const queue = new BoundedRelayPcmQueue()
+    queue.enqueue(frame(1), 1_000)
+    queue.enqueue(frame(2), 1_000)
+    let clock = 1_000
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const sent: number[] = []
+    const drain = queue.drain(
+      async (_pcm, sequence) => {
+        sent.push(sequence)
+        if (sequence === 1) await gate
+      },
+      () => clock
+    )
+    clock = 3_001
+    release()
+
+    expect(await drain).toEqual({ ok: false, code: 'QUEUE_STALE' })
+    expect(sent).toEqual([1])
+    expect(queue.pendingBytes).toBe(0)
+  })
 })
