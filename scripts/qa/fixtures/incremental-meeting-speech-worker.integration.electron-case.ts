@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { SpeechProvenanceLimits } from '@shared/meeting-speech-contract'
 import {
   consumeIncrementalRecordReceipt,
+  issueIncrementalRecordReceipt,
   type IncrementalRecordReceiptBinding
 } from '../../../src/main/features/meetings/incremental-record-receipt'
 import { createMeetingSpeechPersistenceService } from '../../../src/main/infra/process/meeting-speech-host'
@@ -25,6 +26,7 @@ describe('compiled Electron speech worker incremental record path', () => {
   it('canonicalizes and issues a one-use receipt through the built worker thread', async () => {
     expect(process.versions.electron).toBe('43.6.0')
     const service = createMeetingSpeechPersistenceService({
+      issueIncrementalRecordReceipt,
       readLimits: () => limits,
       readBounds: () => bounds,
       isCurrent: () => true,
