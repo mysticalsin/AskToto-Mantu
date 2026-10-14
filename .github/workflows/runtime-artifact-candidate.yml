@@ -1,0 +1,49 @@
+name: Runtime artifact candidate checks
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/runtime-artifact-candidate.yml
+      - package.json
+      - package-lock.json
+      - resources/runtime-schema/**
+      - scripts/runtime-payload/**
+  push:
+    branches:
+      - m2/M2-0475-runtime-artifact-publisher
+    paths:
+      - .github/workflows/runtime-artifact-candidate.yml
+      - package.json
+      - package-lock.json
+      - resources/runtime-schema/**
+      - scripts/runtime-payload/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-artifact-candidate-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  negative-security-cases:
+    name: Publisher rejection checks (Linux)
+    if: github.repository == 'mysticalsin/AskToto-Mantu'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - name: Install the frozen lock without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Reject unsafe publisher inputs
+        run: node scripts/runtime-payload/check-payload-rejections.mjs

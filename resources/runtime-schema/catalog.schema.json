@@ -4,23 +4,71 @@
   "title": "Métis Runtime Catalog v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "protocolVersion", "catalogId", "trustRoot", "targets"],
+  "required": [
+    "schemaVersion",
+    "protocolVersion",
+    "catalogId",
+    "trustRoot",
+    "targets"
+  ],
   "properties": {
-    "schemaVersion": { "const": 1 },
-    "protocolVersion": { "const": 1 },
-    "catalogId": { "const": "metis-runtime-catalog-v1" },
+    "schemaVersion": {
+      "const": 1
+    },
+    "protocolVersion": {
+      "const": 1
+    },
+    "catalogId": {
+      "const": "metis-runtime-catalog-v1"
+    },
     "trustRoot": {
       "oneOf": [
-        { "type": "null" },
+        {
+          "type": "null"
+        },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["path", "bytes", "sha256", "source"],
+          "required": [
+            "path",
+            "bytes",
+            "sha256",
+            "receipt"
+          ],
           "properties": {
-            "path": { "const": "runtime-trust/sigstore-trusted-root.json" },
-            "bytes": { "type": "integer", "minimum": 1, "maximum": 2000000 },
-            "sha256": { "$ref": "#/$defs/sha256" },
-            "source": { "const": "https://tuf-repo-cdn.sigstore.dev/targets/trusted_root.json" }
+            "path": {
+              "const": "runtime-trust/sigstore-trusted-root.json"
+            },
+            "bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2000000
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "receipt": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "bytes",
+                "sha256"
+              ],
+              "properties": {
+                "path": {
+                  "const": "runtime-trust/acquisition-receipt.json"
+                },
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 2000000
+                },
+                "sha256": {
+                  "$ref": "#/$defs/sha256"
+                }
+              }
+            }
           }
         }
       ]
@@ -28,90 +76,396 @@
     "targets": {
       "type": "array",
       "maxItems": 64,
-      "items": { "$ref": "#/$defs/target" }
+      "items": {
+        "$ref": "#/$defs/target"
+      }
     }
   },
   "$defs": {
-    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-    "gitSha": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "gitSha": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
     "target": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "componentId", "artifactId", "target", "runtime", "archive", "inventory", "bundle", "signer"],
+      "required": [
+        "kind",
+        "componentId",
+        "artifactId",
+        "target",
+        "runtime",
+        "archive",
+        "inventory",
+        "bundle",
+        "signer",
+        "entrypoints",
+        "models"
+      ],
       "properties": {
-        "kind": { "enum": ["runtime", "model"] },
-        "componentId": { "type": "string", "pattern": "^[a-z][a-z0-9.-]{0,79}$" },
-        "artifactId": { "type": "string", "pattern": "^[a-z][a-z0-9.-]{0,79}$" },
+        "kind": {
+          "enum": [
+            "runtime",
+            "model"
+          ]
+        },
+        "componentId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9.-]{0,79}$"
+        },
+        "artifactId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9.-]{0,79}$"
+        },
         "target": {
-          "type": "object", "additionalProperties": false, "required": ["platform", "arch"],
-          "properties": { "platform": { "enum": ["darwin", "win32", "any"] }, "arch": { "enum": ["arm64", "x64", "any"] } }
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "platform",
+            "arch"
+          ],
+          "properties": {
+            "platform": {
+              "enum": [
+                "darwin",
+                "win32",
+                "any"
+              ]
+            },
+            "arch": {
+              "enum": [
+                "arm64",
+                "x64",
+                "any"
+              ]
+            }
+          }
         },
         "runtime": {
           "oneOf": [
-            { "type": "null" },
             {
-          "type": "object", "additionalProperties": false,
-          "required": ["electronVersion", "nodeAbi", "napi", "chromiumVersion", "hostProtocol"],
-          "properties": {
-            "electronVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
-            "nodeAbi": { "type": "string", "pattern": "^[0-9]{1,8}$" },
-            "napi": { "type": "string", "pattern": "^[0-9]{1,8}$" },
-            "chromiumVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$" },
-            "hostProtocol": { "const": 1 }
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "electronVersion",
+                "nodeAbi",
+                "napi",
+                "chromiumVersion",
+                "hostProtocol"
+              ],
+              "properties": {
+                "electronVersion": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                },
+                "nodeAbi": {
+                  "type": "string",
+                  "pattern": "^[0-9]{1,8}$"
+                },
+                "napi": {
+                  "type": "string",
+                  "pattern": "^[0-9]{1,8}$"
+                },
+                "chromiumVersion": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$"
+                },
+                "hostProtocol": {
+                  "const": 1
+                }
               }
             }
           ]
         },
         "archive": {
-          "type": "object", "additionalProperties": false, "required": ["bytes", "sha256", "url", "releaseAssetId"],
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "bytes",
+            "sha256",
+            "url",
+            "releaseAssetId"
+          ],
           "properties": {
-            "bytes": { "type": "integer", "minimum": 1, "maximum": 10000000000 },
-            "sha256": { "$ref": "#/$defs/sha256" },
-            "url": { "type": "string", "pattern": "^https://[^?#]+$" },
-            "releaseAssetId": { "type": "integer", "minimum": 1 }
+            "bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000000000
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "url": {
+              "type": "string",
+              "pattern": "^https://[^?#]+$"
+            },
+            "releaseAssetId": {
+              "type": "integer",
+              "minimum": 1
+            }
           }
         },
         "inventory": {
-          "type": "object", "additionalProperties": false, "required": ["bytes", "sha256"],
-          "properties": { "bytes": { "type": "integer", "minimum": 1, "maximum": 20000000 }, "sha256": { "$ref": "#/$defs/sha256" } }
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "bytes",
+            "sha256",
+            "url",
+            "releaseAssetId"
+          ],
+          "properties": {
+            "bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20000000
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "url": {
+              "type": "string",
+              "pattern": "^https://[^?#]+$"
+            },
+            "releaseAssetId": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
         },
         "bundle": {
-          "type": "object", "additionalProperties": false, "required": ["bytes", "sha256"],
-          "properties": { "bytes": { "type": "integer", "minimum": 1, "maximum": 20000000 }, "sha256": { "$ref": "#/$defs/sha256" } }
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "bytes",
+            "sha256",
+            "url",
+            "releaseAssetId"
+          ],
+          "properties": {
+            "bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20000000
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "url": {
+              "type": "string",
+              "pattern": "^https://[^?#]+$"
+            },
+            "releaseAssetId": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
         },
         "signer": {
-          "type": "object", "additionalProperties": false,
-          "required": ["issuer", "repositoryUri", "repositoryId", "workflowPath", "ref", "sourceCommit", "workflowCommit", "predicateType", "runnerEnvironment"],
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "issuer",
+            "repositoryUri",
+            "repositoryId",
+            "workflowPath",
+            "ref",
+            "sourceCommit",
+            "workflowCommit",
+            "predicateType",
+            "runnerEnvironment"
+          ],
           "properties": {
-            "issuer": { "const": "https://token.actions.githubusercontent.com" },
-            "repositoryUri": { "const": "https://github.com/mysticalsin/AskToto-Mantu" },
-            "repositoryId": { "const": "1282463398" },
-            "workflowPath": { "type": "string", "pattern": "^\\.github/workflows/[a-z0-9-]+\\.yml$" },
-            "ref": { "type": "string", "pattern": "^refs/heads/[a-z0-9._/-]+$" },
-            "sourceCommit": { "$ref": "#/$defs/gitSha" },
-            "workflowCommit": { "$ref": "#/$defs/gitSha" },
-            "predicateType": { "const": "https://slsa.dev/provenance/v1" },
-            "runnerEnvironment": { "const": "github-hosted" }
+            "issuer": {
+              "const": "https://token.actions.githubusercontent.com"
+            },
+            "repositoryUri": {
+              "const": "https://github.com/mysticalsin/AskToto-Mantu"
+            },
+            "repositoryId": {
+              "const": "1282463398"
+            },
+            "workflowPath": {
+              "type": "string",
+              "pattern": "^\\.github/workflows/[a-z0-9-]+\\.yml$"
+            },
+            "ref": {
+              "type": "string",
+              "pattern": "^refs/heads/[a-z0-9._/-]+$"
+            },
+            "sourceCommit": {
+              "$ref": "#/$defs/gitSha"
+            },
+            "workflowCommit": {
+              "$ref": "#/$defs/gitSha"
+            },
+            "predicateType": {
+              "const": "https://slsa.dev/provenance/v1"
+            },
+            "runnerEnvironment": {
+              "const": "github-hosted"
+            }
+          }
+        },
+        "entrypoints": {
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 0,
+          "maxProperties": 5,
+          "properties": {
+            "parakeet-host": {
+              "$ref": "#/$defs/relativePath"
+            },
+            "whisper-import-host": {
+              "$ref": "#/$defs/relativePath"
+            },
+            "whisper-renderer-worker": {
+              "$ref": "#/$defs/relativePath"
+            },
+            "speaker-embedding-host": {
+              "$ref": "#/$defs/relativePath"
+            },
+            "llama-server": {
+              "$ref": "#/$defs/relativePath"
+            }
+          }
+        },
+        "models": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "root",
+              "members"
+            ],
+            "properties": {
+              "id": {
+                "enum": [
+                  "asr.parakeet-tdt-0.6b-v3-int8",
+                  "asr.whisper-base-q8",
+                  "speaker.embedding",
+                  "qwen3.5-0.8b",
+                  "qwen3.5-4b"
+                ]
+              },
+              "root": {
+                "$ref": "#/$defs/relativePath"
+              },
+              "members": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 100000,
+                "uniqueItems": true,
+                "items": {
+                  "$ref": "#/$defs/relativePath"
+                }
+              }
+            }
           }
         }
       },
       "allOf": [
         {
-          "if": { "properties": { "kind": { "const": "runtime" } }, "required": ["kind"] },
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "runtime"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
           "then": {
             "properties": {
-              "target": { "properties": { "platform": { "enum": ["darwin", "win32"] }, "arch": { "enum": ["arm64", "x64"] } } },
-              "runtime": { "type": "object" }
+              "target": {
+                "properties": {
+                  "platform": {
+                    "enum": [
+                      "darwin",
+                      "win32"
+                    ]
+                  },
+                  "arch": {
+                    "enum": [
+                      "arm64",
+                      "x64"
+                    ]
+                  }
+                }
+              },
+              "runtime": {
+                "type": "object"
+              }
             }
           },
           "else": {
             "properties": {
-              "target": { "properties": { "platform": { "const": "any" }, "arch": { "const": "any" } } },
-              "runtime": { "type": "null" }
+              "target": {
+                "properties": {
+                  "platform": {
+                    "const": "any"
+                  },
+                  "arch": {
+                    "const": "any"
+                  }
+                }
+              },
+              "runtime": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "runtime"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "entrypoints": {
+                "minProperties": 1
+              },
+              "models": {
+                "maxItems": 0
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "entrypoints": {
+                "maxProperties": 0
+              },
+              "models": {
+                "minItems": 1
+              }
             }
           }
         }
       ]
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*(?:^|/)[A-Za-z0-9._@+-]*\\.(?:/|$))(?!.*(?:^|/)(?:[cC][oO][nN]|[pP][rR][nN]|[aA][uU][xX]|[nN][uU][lL]|[cC][oO][mM](?:[1-9]|[¹²³])|[lL][pP][tT](?:[1-9]|[¹²³]))(?:\\.|/|$))[A-Za-z0-9._@+-]+(?:/[A-Za-z0-9._@+-]+)*$"
     }
   }
 }
