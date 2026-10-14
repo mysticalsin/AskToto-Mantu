@@ -42,6 +42,18 @@ export function serialize(doc: MeetingDocument): string {
 export const parseMeetingDocument = parse
 export const serializeMeetingDocument = serialize
 
+// A recap ends at the sibling section for its document type. Readers and editors share this boundary.
+const FULL_TRANSCRIPT_HEADING_RE = /^## Full transcript\b/m
+const RETENTION_HEADING_RE = /^## Retention\b/m
+
+export function recapSectionEndRe(type: string | undefined): RegExp {
+  return type === 'meeting-summary' ? RETENTION_HEADING_RE : FULL_TRANSCRIPT_HEADING_RE
+}
+
+export function recapSectionEndIndex(afterNotesHeading: string, type: string | undefined): number {
+  return afterNotesHeading.search(recapSectionEndRe(type))
+}
+
 /** Decodes one raw frontmatter value. Undoes the YAML escaping the writers apply (`\` → `\\`, `"` → `\"`):
  *  without the inverse the escapes reach History verbatim and the rename box re-escapes them on every
  *  commit. Anything that is not a well-formed quoted scalar (a `[a, b]` flow list, a plain unquoted value

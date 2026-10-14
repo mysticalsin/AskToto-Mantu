@@ -1,10 +1,36 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, realpathSync, rmSync, readFileSync, writeFileSync, existsSync, renameSync, statSync } from 'node:fs'
+import {
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  renameSync,
+  statSync
+} from 'node:fs'
 import { join, basename } from 'node:path'
 import { tmpdir } from 'node:os'
 import { safeStorage } from 'electron'
 import { saveMeeting, isEncryptedFile } from './transcripts'
-import { listMeetings, deleteMeeting, recallRead, searchMeetings, searchMeetingsLatest, deleteAllMeetings, sweepExpiredMeetings, updateMeetingRecap, renameMeeting, setMeetingCrmPushed, setMeetingConfidential, isMeetingConfidentialOnDisk, meetingTextNeedsRecap, openExplicitly, HYDRATION_BUSY_MSG, HYDRATION_FAILED_MSG } from './recall'
+import {
+  listMeetings,
+  deleteMeeting,
+  recallRead,
+  searchMeetings,
+  searchMeetingsLatest,
+  deleteAllMeetings,
+  sweepExpiredMeetings,
+  updateMeetingRecap,
+  renameMeeting,
+  setMeetingCrmPushed,
+  setMeetingConfidential,
+  isMeetingConfidentialOnDisk,
+  meetingTextNeedsRecap,
+  openExplicitly,
+  HYDRATION_BUSY_MSG,
+  HYDRATION_FAILED_MSG
+} from './recall'
 import { meetingOpenTarget } from './history-actions'
 import type { Settings, SaveMeeting } from '@shared/ipc'
 import type { RecallHydration } from '@shared/recall-hydration'
@@ -20,7 +46,9 @@ import { HYDRATE_DEADLINE_MS } from './infra/storage/gateway'
  * not narrow it. This makes the assumption an ASSERTION: an absent lines[] is a failure of the thing under
  * test, and it now says so instead of surfacing as "possibly undefined" or being cast away.
  */
-function linesOf(r: { lines?: { t: number; speaker: string; text: string; lang?: string }[] }): { t: number; speaker: string; text: string; lang?: string }[] {
+function linesOf(r: {
+  lines?: { t: number; speaker: string; text: string; lang?: string }[]
+}): { t: number; speaker: string; text: string; lang?: string }[] {
   if (!r.lines) throw new Error('read returned no lines — the transcript did not parse')
   return r.lines
 }
@@ -71,8 +99,11 @@ describe('recall — language tags round-trip through save → recallRead', () =
   it.each([false, true])('MQA-310 round-trips measured duration with encryption=%s', async (encrypted) => {
     testSettings.encryptTranscripts = encrypted
     const saved = await saveMeeting(testSettings, {
-      title: 'Synthetic duration check', mode: 'meeting', startedAt: 1_700_000_000_000,
-      durationMs: 28_840, recap: '',
+      title: 'Synthetic duration check',
+      mode: 'meeting',
+      startedAt: 1_700_000_000_000,
+      durationMs: 28_840,
+      recap: '',
       lines: [{ t: 1_700_000_000_000, speaker: 'unknown', text: 'Synthetic speech.' }]
     })
     if (encrypted) expect(isEncryptedFile(saved)).toBe(true)
@@ -81,9 +112,17 @@ describe('recall — language tags round-trip through save → recallRead', () =
     expect((await listMeetings())[0].durationMin).toBe(1)
   })
 
-  it.each(['-1', 'NaN', 'Infinity', 'not-a-number'])('MQA-310 ignores invalid persisted duration %s', async (duration) => {
+  it.each([
+    '-1',
+    'NaN',
+    'Infinity',
+    'not-a-number'
+  ])('MQA-310 ignores invalid persisted duration %s', async (duration) => {
     const file = 'invalid-duration.md'
-    writeFileSync(join(folder, file), `---\ntype: meeting-transcript\ndate: 2026-09-12T10:00:00Z\nduration_ms: ${duration}\n---\n## Full transcript\n\n**[10:00:00] Speaker:** Synthetic speech.\n`)
+    writeFileSync(
+      join(folder, file),
+      `---\ntype: meeting-transcript\ndate: 2026-09-12T10:00:00Z\nduration_ms: ${duration}\n---\n## Full transcript\n\n**[10:00:00] Speaker:** Synthetic speech.\n`
+    )
     expect((await recallRead(file)).durationMs).toBeUndefined()
   })
 
@@ -95,7 +134,12 @@ describe('recall — language tags round-trip through save → recallRead', () =
       startedAt: t0,
       lines: [
         { speaker: 'them', text: 'Então vamos ver isso com você, não é, para o contrato.', t: t0, lang: 'Portuguese' },
-        { speaker: 'you', text: 'So we are going to talk about the budget and the plan for the team.', t: t0 + 60_000, lang: 'English' }
+        {
+          speaker: 'you',
+          text: 'So we are going to talk about the budget and the plan for the team.',
+          t: t0 + 60_000,
+          lang: 'English'
+        }
       ],
       recap: ''
     }
@@ -108,7 +152,7 @@ describe('recall — language tags round-trip through save → recallRead', () =
     expect(r.lines?.map((l) => l.lang)).toEqual(['Portuguese', 'English'])
 
     // The exact rewrite the Speaker Intelligence backfill performs: formatTranscript over reparsed lines.
-    const { formatTranscript } = await import('./transcripts')
+    const { formatTranscript } = await import('./features/meetings/transcript-format')
     expect(formatTranscript(r.lines ?? [])).toContain('_[conversation switches to English]_')
   })
 })
@@ -119,12 +163,16 @@ describe('recall — language tags round-trip through save → recallRead', () =
 describe('recall — a just-saved meeting reads back while the placeholder probe cannot answer', () => {
   let folder: string
   const meeting = (): SaveMeeting => ({
-    title: 'Synthetic import', mode: 'meeting', startedAt: 1_700_000_000_000, durationMs: 4_000, recap: '',
+    title: 'Synthetic import',
+    mode: 'meeting',
+    startedAt: 1_700_000_000_000,
+    durationMs: 4_000,
+    recap: '',
     lines: [{ t: 1_700_000_000_000, speaker: 'unknown', text: 'Synthetic decoded speech.' }]
   })
   const probes = {
     'outlives the read deadline': () => new Promise<never>(() => {}),
-    'fails': async (files: readonly { path: string }[]) =>
+    fails: async (files: readonly { path: string }[]) =>
       new Map(files.map((f): [string, ContentPresence] => [f.path, 'unknown']))
   }
 
@@ -508,7 +556,8 @@ describe('recall — updateMeetingRecap', () => {
   })
 
   it('preserves a transcript recap that uses a Retention heading', async () => {
-    const recap = '## Retention\n\nKeep the approved decision record for two years.\n\n## Action items:\n- Confirm policy owner'
+    const recap =
+      '## Retention\n\nKeep the approved decision record for two years.\n\n## Action items:\n- Confirm policy owner'
     const file = await saveMeeting(testSettings, { ...meeting, recap })
     const raw = readFileSync(file, 'utf8')
 
@@ -644,7 +693,7 @@ describe('recall — renameMeeting', () => {
     if (read.ok) expect(read.title).toBe(title)
   })
 
-  it('handles other $-patterns ($$, $`, $\') without corrupting the file', async () => {
+  it("handles other $-patterns ($$, $`, $') without corrupting the file", async () => {
     const file = await saveMeeting(testSettings, meeting)
     const title = "cost $$ high $` tail $' end"
     const r = await renameMeeting(testSettings, file, title)
@@ -776,18 +825,30 @@ describe("recall — deleteAllMeetings erases only Métis's own files (MQA-032)"
     const saved = await saveMeeting(testSettings, meeting)
     // A quick note (saveNote's filename shape) and an in-progress autosave (saveDraftTranscript's).
     writeFileSync(join(folder, '2024-01-01_000000-note-idea.md'), '---\ntype: note\n---\n\n# Idea\n', 'utf8')
-    writeFileSync(join(folder, '.autosave-draft-2024-01-01_000000-123.md'), '---\ntype: meeting-transcript-draft\n---\n', 'utf8')
+    writeFileSync(
+      join(folder, '.autosave-draft-2024-01-01_000000-123.md'),
+      '---\ntype: meeting-transcript-draft\n---\n',
+      'utf8'
+    )
     // A transcript the user renamed by hand: the filename no longer identifies it, the frontmatter does.
     writeFileSync(join(folder, 'renault-kickoff.md'), '---\ntype: meeting-transcript\n---\n\n# Renault\n', 'utf8')
     // An encrypted save this device cannot decrypt — still ours, and a GDPR wipe must still remove it.
-    writeFileSync(join(folder, 'export.md'), Buffer.concat([Buffer.from('ATKENC2\n'), Buffer.from('not valid json{{{')]))
+    writeFileSync(
+      join(folder, 'export.md'),
+      Buffer.concat([Buffer.from('ATKENC2\n'), Buffer.from('not valid json{{{')])
+    )
 
     const r = await deleteAllMeetings()
 
     expect(r.skipped).toEqual([])
     expect(r.deleted).toBe(5)
     expect(existsSync(saved)).toBe(false)
-    for (const f of ['2024-01-01_000000-note-idea.md', '.autosave-draft-2024-01-01_000000-123.md', 'renault-kickoff.md', 'export.md']) {
+    for (const f of [
+      '2024-01-01_000000-note-idea.md',
+      '.autosave-draft-2024-01-01_000000-123.md',
+      'renault-kickoff.md',
+      'export.md'
+    ]) {
       expect(existsSync(join(folder, f))).toBe(false)
     }
   })
@@ -806,7 +867,8 @@ describe("recall — deleteAllMeetings erases only Métis's own files (MQA-032)"
     const fsp = await import('node:fs/promises')
     const realReadFile = fsp.readFile
     vi.spyOn(fsp, 'readFile').mockImplementation((async (p: Parameters<typeof realReadFile>[0], ...rest: unknown[]) => {
-      if (String(p).endsWith(renamed)) throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' })
+      if (String(p).endsWith(renamed))
+        throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' })
       return (realReadFile as (...a: unknown[]) => unknown)(p, ...rest)
     }) as typeof realReadFile)
 
@@ -1315,7 +1377,10 @@ describe('recall — dataless files are listed, never read (M2-0193)', () => {
     const search = searchMeetings('march', controller.signal)
     await vi.waitFor(() => expect(probes).toBeGreaterThan(0))
     controller.abort()
-    const settled = await Promise.race([search, new Promise((resolve) => setTimeout(() => resolve('still classifying'), 1_000))])
+    const settled = await Promise.race([
+      search,
+      new Promise((resolve) => setTimeout(() => resolve('still classifying'), 1_000))
+    ])
     release()
     expect(settled).toEqual([])
     expect(reads).toEqual([])
@@ -1333,7 +1398,10 @@ describe('recall — dataless files are listed, never read (M2-0193)', () => {
       const opened = await openRead(basename(path), (event) => events.push(event))
 
       expect(opened.ok).toBe(true)
-      expect(events).toEqual([{ file: basename(path), state: 'hydrating' }, { file: basename(path), state: 'done' }])
+      expect(events).toEqual([
+        { file: basename(path), state: 'hydrating' },
+        { file: basename(path), state: 'done' }
+      ])
     })
 
     it('a meeting already on this device opens without a download event', async () => {
@@ -1376,7 +1444,10 @@ describe('recall — dataless files are listed, never read (M2-0193)', () => {
       reads.length = 0
 
       expect(await openRead(second, send)).toEqual({ ok: false, error: HYDRATION_BUSY_MSG })
-      expect(await openExplicitly(second, send, (options) => meetingOpenTarget(folder, second, options))).toEqual({ ok: false, error: HYDRATION_BUSY_MSG })
+      expect(await openExplicitly(second, send, (options) => meetingOpenTarget(folder, second, options))).toEqual({
+        ok: false,
+        error: HYDRATION_BUSY_MSG
+      })
       expect((await openRead(basename(localPath), send)).ok).toBe(true)
       expect(reads).toEqual([localPath])
 
@@ -1422,7 +1493,10 @@ describe('recall — dataless files are listed, never read (M2-0193)', () => {
         // The timed-out read still holds its content permit: a second download would hold the other one.
         reads.length = 0
         expect(await openRead(second, send)).toEqual({ ok: false, error: HYDRATION_BUSY_MSG })
-        expect(await openExplicitly(second, send, (options) => meetingOpenTarget(folder, second, options))).toEqual({ ok: false, error: HYDRATION_BUSY_MSG })
+        expect(await openExplicitly(second, send, (options) => meetingOpenTarget(folder, second, options))).toEqual({
+          ok: false,
+          error: HYDRATION_BUSY_MSG
+        })
         const list = await listMeetings()
         expect(list.find((m) => m.file === first)?.notDownloaded).toBe(true)
         expect(list.find((m) => m.file === second)?.notDownloaded).toBe(true)

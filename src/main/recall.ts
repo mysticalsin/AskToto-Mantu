@@ -5,10 +5,13 @@ import {
   hasMeetingFlag,
   parse,
   readMeetingFields as frontmatter,
+  recapSectionEndIndex,
+  recapSectionEndRe,
   serialize,
   setMeetingField
 } from './features/meetings/meeting-document'
-import { resolveMeetingsFolder, decodeSaved, isEncryptedBytes, writeSaved, formatTranscript, DEBRIEF_HEADING } from './transcripts'
+import { resolveMeetingsFolder, decodeSaved, isEncryptedBytes, writeSaved, DEBRIEF_HEADING } from './transcripts'
+import { formatTranscript } from './features/meetings/transcript-format'
 import { storageAt } from './infra/storage/meetings-storage'
 import type { HydrationProgress, ReadOptions } from './infra/storage/gateway'
 import { DRAFT_FILENAME, UNREADABLE, isMeetingDocumentType, meetingFiles, readMeetings } from './history-read'
@@ -25,27 +28,20 @@ import type { RecallHydration } from '@shared/recall-hydration'
 // Reaches the meetings folder only through the storage gateway and meeting-files.ts, never node:fs.
 export { listMeetings, searchMeetings, searchMeetingsLatest, type HistoryRow } from './history-read'
 
-// The recap's sibling section per document type (see isMeetingDocumentType in history-read.ts): History,
-// search, recap editing, and erasure must never disagree about where a recap ends.
-const FULL_TRANSCRIPT_HEADING_RE = /^## Full transcript\b/m
-const RETENTION_HEADING_RE = /^## Retention\b/m
-
-function recapSectionEndRe(type: string | undefined): RegExp {
-  return type === 'meeting-summary' ? RETENTION_HEADING_RE : FULL_TRANSCRIPT_HEADING_RE
-}
-
-function recapSectionEndIndex(afterNotesHeading: string, type: string | undefined): number {
-  return afterNotesHeading.search(recapSectionEndRe(type))
-}
-
-async function readMeetingBytes(folder: string, file: string): Promise<{ ok: true; bytes: Buffer } | { ok: false; error: string }> {
+async function readMeetingBytes(
+  folder: string,
+  file: string
+): Promise<{ ok: true; bytes: Buffer } | { ok: false; error: string }> {
   const read = await storageAt(folder).read(file)
   if (read.status === 'missing') return { ok: false, error: 'Meeting file not found.' }
   if (read.status !== 'ok') return { ok: false, error: 'Could not read the meeting file.' }
   return { ok: true, bytes: read.bytes }
 }
 
-async function readMeetingText(folder: string, file: string): Promise<{ ok: true; text: string; encrypted: boolean } | { ok: false; error: string }> {
+async function readMeetingText(
+  folder: string,
+  file: string
+): Promise<{ ok: true; text: string; encrypted: boolean } | { ok: false; error: string }> {
   const read = await readMeetingBytes(folder, file)
   if (!read.ok) return read
   const text = decodeSaved(read.bytes)
@@ -65,7 +61,9 @@ export function meetingTextNeedsRecap(text: string): boolean {
   return recap.length === 0
 }
 
-export async function listMeetingsNeedingRecap(): Promise<Array<{ file: string; mode: string; lines: TranscriptLine[] }>> {
+export async function listMeetingsNeedingRecap(): Promise<
+  Array<{ file: string; mode: string; lines: TranscriptLine[] }>
+> {
   const folder = resolveMeetingsFolder(getSettings())
   const files = await meetingFiles(folder)
   const out: Array<{ file: string; mode: string; lines: TranscriptLine[] }> = []
@@ -120,7 +118,9 @@ export async function openExplicitly<T extends { ok: boolean; error?: string }>(
     }
   }
   const safeName = safeMeetingBasename(file)
-  const fileClass = safeName ? (await storageAt(resolveMeetingsFolder(getSettings())).classify([safeName])).get(safeName) : undefined
+  const fileClass = safeName
+    ? (await storageAt(resolveMeetingsFolder(getSettings())).classify([safeName])).get(safeName)
+    : undefined
   if (!fileClass || fileClass.status === 'ok' || fileClass.status === 'missing') return open({ hydrate: false })
   if (hydrating) return { ok: false, error: HYDRATION_BUSY_MSG }
   hydrating = true
@@ -167,11 +167,13 @@ export async function recallRead(
   // verdicts never skip a read: its deadline is shorter than a read's, so 'unknown' can name a local file.
   const fileClass = (await gateway.classify([safeName])).get(safeName)
   if (fileClass?.status === 'missing') return { ok: false, error: 'Meeting file not found.' }
-  if (fileClass && 'isRegular' in fileClass && !fileClass.isRegular) return { ok: false, error: 'Could not read the meeting file.' }
+  if (fileClass && 'isRegular' in fileClass && !fileClass.isRegular)
+    return { ok: false, error: 'Could not read the meeting file.' }
   let read = await gateway.read(safeName)
   // An explicit open (`hydrate`) is the one place a cloud-only file is hydrated: this one file, under a
   // content permit, reporting progress. Listing, search and background passes never do.
-  if (hydrate && (read.status === 'dataless' || read.status === 'unknown')) read = await gateway.read(safeName, { hydrate: true, onProgress })
+  if (hydrate && (read.status === 'dataless' || read.status === 'unknown'))
+    read = await gateway.read(safeName, { hydrate: true, onProgress })
   if (read.status === 'missing') return { ok: false, error: 'Meeting file not found.' }
   if (read.status !== 'ok') {
     return { ok: false, error: 'Could not read the meeting file.' }
@@ -220,7 +222,7 @@ export async function recallRead(
     // of collapsing to 0 — the parsed HH:MM:SS is real elapsed-time data even without a calendar date.
     const baseDate = startedAt ? new Date(startedAt) : new Date()
     // Optional group 5 captures a Speaker Intelligence display name — "Them (Jane Doe):**" — written by
-    // transcripts.ts's formatTranscriptLine once one has been resolved; absent on every meeting saved
+    // transcript-format.ts's formatTranscriptLine once one has been resolved; absent on every meeting saved
     // before that feature existed, and on any line no name was ever resolved for.
     // MQA-245: `Speaker 1` (a diarization cluster label standing alone) joins the accepted label set.
     // Older files wrote it as `Speaker (Speaker 1)` and still parse through the optional paren group
@@ -413,7 +415,10 @@ const RECAP_MAX = 20000
 // does NOT collapse newlines or strip headings — unlike a title, the recap IS multi-line markdown with its
 // own "## " sub-headings (Overview / Decisions / Action items …), so that structure must survive editing.
 function sanitizeRecap(s: string): string {
-  return (s || '').replace(/\r\n/g, '\n').replace(/^\uFEFF/, '').slice(0, RECAP_MAX)
+  return (s || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/^\uFEFF/, '')
+    .slice(0, RECAP_MAX)
 }
 
 /**
@@ -478,9 +483,7 @@ export async function updateMeetingRecap(
     const endIdx = recapSectionEndIndex(afterStart, type)
     const head = text.slice(0, bodyStart)
     const tail = endIdx === -1 ? '' : afterStart.slice(endIdx)
-    updated = tail
-      ? `${head}${body}${body ? '\n\n' : ''}${tail}`
-      : `${head}${body}${body ? '\n' : ''}`
+    updated = tail ? `${head}${body}${body ? '\n\n' : ''}${tail}` : `${head}${body}${body ? '\n' : ''}`
   } else {
     // No notes section yet (meeting saved with an empty recap). Insert one immediately before its
     // transcript/retention sibling so recallRead parses it exactly as it would a normally-saved recap.
@@ -513,7 +516,7 @@ export async function updateMeetingRecap(
  * Speaker Intelligence backfill (Phase A) — rewrite ONLY the "## Full transcript" section of a saved
  * meeting with freshly-resolved speaker names (see main/graph-transcript.ts + shared/transcript-align.ts),
  * once a Teams transcript for the same meeting has been matched after the fact. Re-renders `lines`
- * through transcripts.ts's own formatTranscript — the exact shape this module's lineRe (in recallRead)
+ * through transcript-format.ts's formatTranscript — the exact shape this module's lineRe (in recallRead)
  * parses back — leaving the frontmatter, the H1/meta line, and any "## Notes & follow-ups" section
  * untouched. Same basename guard + "preserve encryption exactly as found" convention as
  * renameMeeting/updateMeetingRecap/setMeetingConfidential.

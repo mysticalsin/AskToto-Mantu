@@ -26,6 +26,7 @@ import { measuredDurationMs, meetingDurationMinutes } from '@shared/meeting-dura
 import { classifyAll, storageAt } from './infra/storage/meetings-storage'
 import { recordLocalWrite } from './infra/storage/local-writes'
 import type { FileClass } from './infra/storage/gateway'
+import { formatTranscript, speakerLabel } from './features/meetings/transcript-format'
 
 // Optional at-rest encryption for transcripts/notes. Two on-disk formats share one fixed-length
 // `ATKENC<n>\n` magic prefix so detection stays a simple prefix check:
@@ -147,7 +148,10 @@ const OSCRYPT_V10_MIN_INDEXABLE = OSCRYPT_V10_PREFIX.length + 12 // the substr(1
 
 function unwrapWithKeychain(blob: Buffer): string {
   if (blob.length === 0) throw new Error('wrapped key is empty')
-  if (blob.subarray(0, OSCRYPT_V10_PREFIX.length).equals(OSCRYPT_V10_PREFIX) && blob.length < OSCRYPT_V10_MIN_INDEXABLE) {
+  if (
+    blob.subarray(0, OSCRYPT_V10_PREFIX.length).equals(OSCRYPT_V10_PREFIX) &&
+    blob.length < OSCRYPT_V10_MIN_INDEXABLE
+  ) {
     throw new Error('wrapped key is a truncated OSCrypt v10 blob')
   }
   return safeStorage.decryptString(blob)
@@ -250,7 +254,9 @@ function decryptEnvelopeV2(buf: Buffer, allowKeychainRecovery = false, filePath?
       const tmp = `${filePath}.${randomBytes(6).toString('hex')}.tmp`
       try {
         const updated: EnvelopeV2 = { ...env, kLocal: 'F:' + encryptSecret(contentKeyB64).toString('base64') }
-        writeFileSync(tmp, Buffer.concat([ENC_MARKER_V2, Buffer.from(JSON.stringify(updated), 'utf8')]), { mode: 0o600 })
+        writeFileSync(tmp, Buffer.concat([ENC_MARKER_V2, Buffer.from(JSON.stringify(updated), 'utf8')]), {
+          mode: 0o600
+        })
         renameSync(tmp, filePath)
       } catch {
         try {
@@ -271,8 +277,8 @@ function decryptEnvelopeV2(buf: Buffer, allowKeychainRecovery = false, filePath?
 // OS keychain/user — common when an encrypted file is OneDrive-synced to another machine). Beats a dead
 // "Open" click or a silent unhandled rejection.
 const UNDECRYPTABLE_MSG =
-  '# This transcript can\'t be opened here\n\n' +
-  'It was encrypted at rest on a different machine or user account, so this device\'s keychain cannot ' +
+  "# This transcript can't be opened here\n\n" +
+  "It was encrypted at rest on a different machine or user account, so this device's keychain cannot " +
   'decrypt it. Open it on the machine where it was created, or turn off at-rest encryption in Settings ' +
   'before saving if you need transcripts portable across devices.\n'
 
@@ -505,7 +511,14 @@ export function ensureMeetingsFolder(settings: Settings): string {
   return folder
 }
 
-function appendIndexRow(folder: string, dateStr: string, title: string, mode: string, durMin: number, fileName: string): void {
+function appendIndexRow(
+  folder: string,
+  dateStr: string,
+  title: string,
+  mode: string,
+  durMin: number,
+  fileName: string
+): void {
   try {
     const index = join(folder, 'index.md')
     if (!existsSync(index)) writeFileSync(index, INDEX_HEADER, 'utf8')
@@ -552,64 +565,7 @@ const cleanTitle = (s: string): string => {
     .trim()
     .slice(0, 100)
 }
-const speakerLabel = (speaker: TranscriptLine['speaker']): 'Them' | 'You' | 'Speaker' =>
-  speaker === 'them' ? 'Them' : speaker === 'you' ? 'You' : 'Speaker'
-/** A diarization cluster label ("Speaker 1"), as minted by speaker-cluster.ts. Shared with recall.ts's
- *  parser via the same shape, so the writer and the reader cannot disagree about what one looks like. */
-export const CLUSTER_LABEL_RE = /^Speaker \d+$/
-const isClusterLabel = (name: string): boolean => CLUSTER_LABEL_RE.test(name)
-const yamlSafeTitle = (s: string): string =>
-  s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, ' ')
-
-// Speaker Intelligence: `name` can come from a THIRD PARTY (a Teams VTT transcript — see
-// main/graph-transcript.ts), not just the trusted signed-in account, so it must be sanitized before it
-// ever reaches the saved markdown. Strips control/newline characters (would break the single-line
-// "**[HH:MM:SS] Label (Name):**" shape below) and parentheses specifically — they're the round-trip
-// delimiter recall.ts's parser depends on, so a name containing one would corrupt the parse — then caps
-// length in line with the other name-shaped fields in this codebase (see ipc.ts's AsrCorrectionPairSchema).
-function sanitizeSpeakerName(name: string | undefined): string {
-  if (!name) return ''
-  return name
-    .replace(/[\r\n\x00-\x08\x0b\x0c\x0e-\x1f]/g, ' ')
-    .replace(/[()]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 80)
-}
-
-/** Render one transcript line in the fixed on-disk shape recall.ts's parser reads back:
- *  `**[HH:MM:SS] Label:** text`, or `**[HH:MM:SS] Label (Name):** text` once Speaker Intelligence has
- *  resolved a display name for that line (see shared/transcript-align.ts). */
-function formatTranscriptLine(l: TranscriptLine): string {
-  const d = new Date(l.t)
-  const t = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-  const name = sanitizeSpeakerName(l.name)
-  // MQA-245: a diarization cluster label IS the speaker identity, not a name for one. Wrapping it in the
-  // generic role label rendered "Speaker (Speaker 1)" in the durable file the user reads and may share.
-  // Emit the cluster label alone; recall.ts's line regex accepts this form and reads the label back as
-  // the name, so the round trip is unchanged. Only the generic role collapses — "Them (Jane Doe)" says
-  // two different things and keeps both.
-  const label = isClusterLabel(name) && speakerLabel(l.speaker) === 'Speaker' ? name : name ? `${speakerLabel(l.speaker)} (${name})` : speakerLabel(l.speaker)
-  return `**[${t}] ${label}:** ${l.text}`
-}
-
-/** Render a full transcript body. saveMeeting and saveDraftTranscript share this exact shape so a
- *  promoted draft (see recoverOrphanDrafts) parses identically to a normally-saved meeting.
- *
- *  Mixed-language meetings get an italic `_[conversation switches to …]_` marker paragraph wherever the
- *  tagged line language changes (TranscriptLine.lang — absent on untagged/older lines, so those never
- *  emit markers). The marker deliberately does NOT match recall.ts's `**[HH:MM:SS] Label:**` line regex:
- *  re-parsing a saved meeting simply skips it, same as any other non-line prose. */
-export function formatTranscript(lines: TranscriptLine[]): string {
-  const parts: string[] = []
-  let prevLang: string | undefined
-  for (const l of lines) {
-    if (l.lang && prevLang && l.lang !== prevLang) parts.push(`_[conversation switches to ${l.lang}]_`)
-    if (l.lang) prevLang = l.lang
-    parts.push(formatTranscriptLine(l))
-  }
-  return parts.join('\n\n')
-}
+const yamlSafeTitle = (s: string): string => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, ' ')
 
 /** Save any single Q&A / answer as a Dust-readable markdown note. Returns the file path. */
 export async function saveNote(settings: Settings, n: SaveNote): Promise<string> {
@@ -694,25 +650,24 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
   const summaryOnly = isSummaryOnlyProfile(resolveEnterpriseLiveProfile(settings.enterpriseLive ?? settings))
   const transcript = summaryOnly ? '' : formatTranscript(m.lines)
 
-  const frontmatter =
-    [
-      '---',
-      summaryOnly ? 'type: meeting-summary' : 'type: meeting-transcript',
-      'source: Métis',
-      `mode: "${yamlSafeTitle(cleanTitle(m.mode))}"`,
-      `date: ${new Date(started).toISOString()}`,
-      `title: "${yamlSafeTitle(title)}"`,
-      `participants: [${participants.join(', ')}]`,
-      `duration_min: ${durMin}`,
-      ...(measuredDurationMs(m.durationMs) !== undefined ? [`duration_ms: ${measuredDurationMs(m.durationMs)}`] : []),
-      `lines: ${summaryOnly ? 0 : m.lines.length}`,
-      ...(m.recapStatus ? [`recap_status: ${m.recapStatus}`] : []),
-      ...(tags.length ? [`topics: [${tags.map((t) => yamlSafeTitle(t)).join(', ')}]`] : []),
-      ...(summaryOnly ? ['retention: summary-only'] : []),
-      'status: ready-for-followup',
-      '---',
-      ''
-    ].join('\n')
+  const frontmatter = [
+    '---',
+    summaryOnly ? 'type: meeting-summary' : 'type: meeting-transcript',
+    'source: Métis',
+    `mode: "${yamlSafeTitle(cleanTitle(m.mode))}"`,
+    `date: ${new Date(started).toISOString()}`,
+    `title: "${yamlSafeTitle(title)}"`,
+    `participants: [${participants.join(', ')}]`,
+    `duration_min: ${durMin}`,
+    ...(measuredDurationMs(m.durationMs) !== undefined ? [`duration_ms: ${measuredDurationMs(m.durationMs)}`] : []),
+    `lines: ${summaryOnly ? 0 : m.lines.length}`,
+    ...(m.recapStatus ? [`recap_status: ${m.recapStatus}`] : []),
+    ...(tags.length ? [`topics: [${tags.map((t) => yamlSafeTitle(t)).join(', ')}]`] : []),
+    ...(summaryOnly ? ['retention: summary-only'] : []),
+    'status: ready-for-followup',
+    '---',
+    ''
+  ].join('\n')
 
   const body =
     `# ${title}\n\n_${new Date(started).toLocaleString()} · ${m.mode} · ${durMin} min · Métis_\n\n` +
@@ -831,12 +786,15 @@ const draftFilename = (started: number): string =>
  * — that's a real, disclosed limitation: this closes the data-loss gap, it doesn't build recovery UX.
  */
 export async function saveDraftTranscript(settings: Settings, m: SaveMeeting): Promise<void> {
+  // Summary-only retention also applies to crash-recovery snapshots, which contain raw speech.
+  // Leave previously permitted files untouched, as the normal summary-only save does.
+  if (isSummaryOnlyProfile(resolveEnterpriseLiveProfile(settings.enterpriseLive ?? settings))) return
   try {
     const folder = ensureMeetingsFolder(settings)
     const started = m.startedAt || Date.now()
     const file = join(folder, draftFilename(started))
     const title = cleanTitle(m.title) || `${m.mode} meeting`
-const transcript = formatTranscript(m.lines)
+    const transcript = formatTranscript(m.lines)
     // Same duration_min/participants calc as saveMeeting above — without these, a draft promoted by
     // recoverOrphanDrafts (which only swaps the type:/status: lines, never adds fields) reads back with
     // durationMin 0 and an empty participants list forever, silently losing that badge on recovery.
@@ -1083,9 +1041,7 @@ const foldRecapLabel = (text: string): string =>
 
 export function recapSectionKey(text: string): string {
   const folded = foldRecapLabel(text)
-  return Object.prototype.hasOwnProperty.call(RECAP_SECTION_ALIASES, folded)
-    ? RECAP_SECTION_ALIASES[folded]
-    : folded
+  return Object.prototype.hasOwnProperty.call(RECAP_SECTION_ALIASES, folded) ? RECAP_SECTION_ALIASES[folded] : folded
 }
 
 /**
@@ -1104,17 +1060,53 @@ export function parseRecapMarkdown(markdown: string): RecapExport {
   // For KNOWN section names, split at the first colon and treat the remainder as the body's first line;
   // unknown headings keep the strict whole-line key so a legitimate colon in prose isn't mis-split.
   const KNOWN = new Set([
-    'title', 'tags', 'overview', 'topics', 'key q&a', 'key qa',
-    'decisions', 'action items', 'next steps', 'follow-ups', 'follow ups',
-    'open questions', 'notable quotes', 'recap',
-    'outcome', 'key numbers', 'deal snapshot', 'buying signals', 'objections',
-    'what the seller must know', 'stakeholders', 'candidate', 'background',
-    'motivations', 'projects', 'compensation and contract', 'availability',
-    'ratings', 'strengths and concerns', 'role', 'questions and answers',
-    'examples given', 'next rounds', 'positions', 'interests', 'concessions',
-    'agreed terms', 'still open', 'what landed', 'audience questions',
-    'confusion or pushback', 'follow-ups promised', 'reported problem',
-    'steps tried', 'resolution', 'how the call went', 'qualifying facts',
+    'title',
+    'tags',
+    'overview',
+    'topics',
+    'key q&a',
+    'key qa',
+    'decisions',
+    'action items',
+    'next steps',
+    'follow-ups',
+    'follow ups',
+    'open questions',
+    'notable quotes',
+    'recap',
+    'outcome',
+    'key numbers',
+    'deal snapshot',
+    'buying signals',
+    'objections',
+    'what the seller must know',
+    'stakeholders',
+    'candidate',
+    'background',
+    'motivations',
+    'projects',
+    'compensation and contract',
+    'availability',
+    'ratings',
+    'strengths and concerns',
+    'role',
+    'questions and answers',
+    'examples given',
+    'next rounds',
+    'positions',
+    'interests',
+    'concessions',
+    'agreed terms',
+    'still open',
+    'what landed',
+    'audience questions',
+    'confusion or pushback',
+    'follow-ups promised',
+    'reported problem',
+    'steps tried',
+    'resolution',
+    'how the call went',
+    'qualifying facts',
     'commitment'
   ])
   const sections: Record<string, string> = {}

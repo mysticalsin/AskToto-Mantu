@@ -29,10 +29,10 @@ import {
   recoverOrphanDrafts,
   writeSaved,
   resolveMeetingsFolder,
-  formatTranscript,
   meetingDurationMin,
   decryptToTemp
 } from './transcripts'
+import { formatTranscript } from './features/meetings/transcript-format'
 import { useStorageForTests } from './infra/storage/meetings-storage'
 import type { SaveMeeting, Settings } from '@shared/ipc'
 
