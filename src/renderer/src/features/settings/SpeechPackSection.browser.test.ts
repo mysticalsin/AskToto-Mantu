@@ -247,7 +247,10 @@ describe('SpeechPackSection browser behavior', () => {
     expect(await page.getByRole('button', { name: 'Download' }).count()).toBe(0)
     expect((await inspect()).actionRequests).toEqual([])
 
-    await page.evaluate((next) => window.__speechPack.update(next, 'whisper'), snapshot({ featureEnabled: false }))
+    await page.evaluate(
+      (next) => window.__speechPack.update(next, 'parakeet'),
+      snapshot({ engine: 'parakeet', featureEnabled: false })
+    )
     expect(await page.getByRole('button', { name: 'Download' }).isDisabled()).toBe(true)
     expect((await inspect()).actionRequests).toEqual([])
 
