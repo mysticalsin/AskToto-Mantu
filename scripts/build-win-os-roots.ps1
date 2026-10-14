@@ -42,9 +42,23 @@ if not errorlevel 1 exit /b 1
 exit /b 0
 "@
 Set-Content -LiteralPath $commandFile -Value $command -Encoding Ascii
-$build = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/d', '/s', '/c', "`"$commandFile`"") -NoNewWindow -Wait -PassThru
-if ($build.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $output -PathType Leaf)) {
-  throw 'The Windows OS-root helper failed its x64 build and smoke checks.'
+$startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+$startInfo.FileName = 'cmd.exe'
+$startInfo.Arguments = '/d /s /c ""' + $commandFile + '""'
+$startInfo.UseShellExecute = $false
+$startInfo.CreateNoWindow = $true
+$build = [System.Diagnostics.Process]::new()
+$build.StartInfo = $startInfo
+if (-not $build.Start()) { throw 'The Windows OS-root compiler process did not start.' }
+if (-not $build.WaitForExit(60000)) {
+  try { $build.Kill($true) } catch {}
+  $build.Dispose()
+  throw 'The Windows OS-root build exceeded its 60-second process deadline.'
+}
+$exitCode = $build.ExitCode
+$build.Dispose()
+if ($exitCode -ne 0 -or -not (Test-Path -LiteralPath $output -PathType Leaf)) {
+  throw "The Windows OS-root helper failed its x64 build and smoke checks (exit code $exitCode)."
 }
 
 $bytes = [System.IO.File]::ReadAllBytes($output)
