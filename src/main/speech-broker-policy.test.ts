@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { SpeechCapability } from './cloud-stt/broker-client'
 import type { ModelPolicyDocument, ModelPolicyEntry } from '../shared/model-policy'
-import { resolveSpeechBrokerPolicy, type VerifiedSpeechPolicySnapshot } from './speech-broker-policy'
+import {
+  resolveSpeechBrokerAuthority,
+  resolveSpeechBrokerPolicy,
+  type VerifiedSpeechPolicySnapshot
+} from './speech-broker-policy'
 
 const now = 1_893_456_000_000
 type ReadySpeechCapability = Extract<SpeechCapability, { ready: true }>
@@ -78,6 +82,100 @@ function resolve(
     ...options
   })
 }
+
+function resolveAuthority(
+  options: Partial<Parameters<typeof resolveSpeechBrokerAuthority>[0]> = {}
+): ReturnType<typeof resolveSpeechBrokerAuthority> {
+  return resolveSpeechBrokerAuthority({
+    profile: { transport: 'broker-v1', engine: 'deepgram-nova3' },
+    snapshot: snapshot({ provider: 'deepgram-nova3', model: 'nova-3', fallbacks: [] }),
+    currentIdentity: identity,
+    managedProviders: { state: 'absent' },
+    now,
+    ...options
+  })
+}
+
+describe('resolveSpeechBrokerAuthority', () => {
+  it('resolves exact selected and allowed engine/route/model pairs without a remote capability', () => {
+    expect(resolveAuthority()).toEqual({
+      ok: true,
+      engine: 'deepgram-nova3',
+      selected: { engine: 'deepgram-nova3', routeId: 'deepgram-via-gateway', modelId: 'nova-3' },
+      allowed: [{ engine: 'deepgram-nova3', routeId: 'deepgram-via-gateway', modelId: 'nova-3' }]
+    })
+  })
+
+  it('includes only signed policy fallbacks permitted by managed provider policy', () => {
+    const signedPolicy = snapshot({
+      provider: 'deepgram-nova3',
+      model: 'nova-3',
+      fallbacks: [{ provider: 'cloudflare-nova3', model: '@cf/deepgram/nova-3' }]
+    })
+    expect(resolveAuthority({ snapshot: signedPolicy })).toMatchObject({
+      ok: true,
+      allowed: [
+        { engine: 'deepgram-nova3', routeId: 'deepgram-via-gateway', modelId: 'nova-3' },
+        { engine: 'cloudflare-nova3', routeId: 'workers-ai-nova3', modelId: '@cf/deepgram/nova-3' }
+      ]
+    })
+    expect(
+      resolveAuthority({ snapshot: signedPolicy, managedProviders: { state: 'valid', providers: ['deepgram-nova3'] } })
+    ).toMatchObject({
+      ok: true,
+      allowed: [{ engine: 'deepgram-nova3', routeId: 'deepgram-via-gateway', modelId: 'nova-3' }]
+    })
+  })
+
+  it('refuses signed policy denials, unknown provider/model aliases, and invalid managed policy', () => {
+    expect(resolveAuthority({ profile: { transport: 'broker-v1', engine: 'deepgram-nova3', extra: true } })).toEqual({
+      ok: false,
+      code: 'PROFILE_INVALID'
+    })
+    expect(
+      resolveAuthority({
+        snapshot: snapshot({ provider: 'cloudflare-nova3', model: '@cf/deepgram/nova-3', fallbacks: [] })
+      })
+    ).toEqual({
+      ok: false,
+      code: 'STT_NOT_ALLOWED'
+    })
+    expect(resolveAuthority({ snapshot: snapshot({ provider: 'deepgram', model: 'nova-3', fallbacks: [] }) })).toEqual({
+      ok: false,
+      code: 'STT_NOT_ALLOWED'
+    })
+    const validSnapshot = snapshot({ provider: 'deepgram-nova3', model: 'nova-3', fallbacks: [] })
+    expect(
+      resolveAuthority({
+        snapshot: { ...validSnapshot, policy: { ...validSnapshot.policy, extra: true } as ModelPolicyDocument }
+      })
+    ).toEqual({ ok: false, code: 'POLICY_INVALID' })
+    expect(resolveAuthority({ managedProviders: { state: 'invalid' } })).toEqual({
+      ok: false,
+      code: 'PROVIDER_POLICY_INVALID'
+    })
+    expect(resolveAuthority({ managedProviders: { state: 'valid', providers: [] } })).toEqual({
+      ok: false,
+      code: 'PROVIDER_DENIED'
+    })
+  })
+
+  it('requires the current identity and fresh verified policy snapshot', () => {
+    expect(resolveAuthority({ snapshot: null })).toEqual({ ok: false, code: 'POLICY_UNAVAILABLE' })
+    expect(resolveAuthority({ currentIdentity: { ...identity, deviceIdHash: 'f'.repeat(32) } })).toEqual({
+      ok: false,
+      code: 'POLICY_IDENTITY'
+    })
+    expect(
+      resolveAuthority({
+        snapshot: {
+          ...snapshot({ provider: 'deepgram-nova3', model: 'nova-3', fallbacks: [] }),
+          verifiedAt: now - 60_001
+        }
+      })
+    ).toEqual({ ok: false, code: 'POLICY_STALE' })
+  })
+})
 
 describe('resolveSpeechBrokerPolicy', () => {
   it('maps only the exact Deepgram pair and requires equality with ready broker selection', () => {

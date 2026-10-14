@@ -25,6 +25,10 @@ export type SpeechBrokerPair = {
   modelId: 'nova-3' | '@cf/deepgram/nova-3'
 }
 
+export type SpeechBrokerAuthorityPair = SpeechBrokerPair & {
+  engine: Exclude<BrokerSpeechSettings['engine'], 'unconfigured'>
+}
+
 export type SpeechBrokerPolicyRefusalCode =
   | 'PROFILE_INVALID'
   | 'LEGACY_TRANSPORT'
@@ -39,6 +43,11 @@ export type SpeechBrokerPolicyRefusalCode =
   | 'CAPABILITY_UNREADY'
   | 'CAPABILITY_SELECTION'
   | 'LANGUAGE_UNAVAILABLE'
+
+export type SpeechBrokerAuthorityRefusalCode = Exclude<
+  SpeechBrokerPolicyRefusalCode,
+  'CAPABILITY_UNREADY' | 'CAPABILITY_SELECTION' | 'LANGUAGE_UNAVAILABLE'
+>
 
 export type SpeechBrokerPolicyResolution =
   | { ok: false; code: SpeechBrokerPolicyRefusalCode }
@@ -71,14 +80,26 @@ const BROKER_SELECTIONS: Record<BrokerSelection['engine'], BrokerSelection> = {
   }
 }
 
-export interface ResolveSpeechBrokerPolicyOptions {
+export type SpeechBrokerAuthorityResolution =
+  | { ok: false; code: SpeechBrokerAuthorityRefusalCode }
+  | {
+      ok: true
+      engine: Exclude<BrokerSpeechSettings['engine'], 'unconfigured'>
+      selected: SpeechBrokerAuthorityPair
+      allowed: SpeechBrokerAuthorityPair[]
+    }
+
+export interface ResolveSpeechBrokerAuthorityOptions {
   profile: unknown
   snapshot: VerifiedSpeechPolicySnapshot | null
   currentIdentity: SpeechPolicyIdentity
   managedProviders: ManagedSpeechProviders
+  now?: number
+}
+
+export interface ResolveSpeechBrokerPolicyOptions extends ResolveSpeechBrokerAuthorityOptions {
   capability: SpeechCapability
   language: string
-  now?: number
 }
 
 function isCurrentHttpsOrigin(value: unknown): value is string {
@@ -117,7 +138,9 @@ function isPairAllowed(pairs: readonly SpeechBrokerPair[], pair: SpeechBrokerPai
   return pairs.some((candidate) => candidate.routeId === pair.routeId && candidate.modelId === pair.modelId)
 }
 
-export function resolveSpeechBrokerPolicy(options: ResolveSpeechBrokerPolicyOptions): SpeechBrokerPolicyResolution {
+export function resolveSpeechBrokerAuthority(
+  options: ResolveSpeechBrokerAuthorityOptions
+): SpeechBrokerAuthorityResolution {
   const parsedProfile = parseBrokerSpeechSettings(options.profile)
   if (!parsedProfile.ok) return { ok: false, code: 'PROFILE_INVALID' }
   if (parsedProfile.value.transport !== 'broker-v1') return { ok: false, code: 'LEGACY_TRANSPORT' }
@@ -161,6 +184,40 @@ export function resolveSpeechBrokerPolicy(options: ResolveSpeechBrokerPolicyOpti
   if (options.managedProviders.state === 'valid' && !options.managedProviders.providers.includes(selection.provider))
     return { ok: false, code: 'PROVIDER_DENIED' }
 
+  const policyPairs: SpeechBrokerAuthorityPair[] = []
+  const entry = parsedPolicy.data.capabilities.stt
+  for (const candidate of [entry, ...entry.fallbacks]) {
+    const engine = Object.values(BROKER_SELECTIONS).find(
+      (item) => item.provider === candidate.provider && item.model === candidate.model
+    )
+    if (!engine) continue
+    if (options.managedProviders.state === 'valid' && !options.managedProviders.providers.includes(engine.provider))
+      continue
+    const pair = { engine: engine.engine, routeId: engine.routeId, modelId: engine.model }
+    if (
+      !policyPairs.some(
+        (item) => item.engine === pair.engine && item.routeId === pair.routeId && item.modelId === pair.modelId
+      )
+    )
+      policyPairs.push(pair)
+  }
+  const selected = { engine: selection.engine, routeId: selection.routeId, modelId: selection.model }
+  if (
+    !policyPairs.some(
+      (item) =>
+        item.engine === selected.engine && item.routeId === selected.routeId && item.modelId === selected.modelId
+    )
+  )
+    return { ok: false, code: 'STT_NOT_ALLOWED' }
+
+  return { ok: true, engine: selectedEngine, selected, allowed: policyPairs }
+}
+
+export function resolveSpeechBrokerPolicy(options: ResolveSpeechBrokerPolicyOptions): SpeechBrokerPolicyResolution {
+  const authority = resolveSpeechBrokerAuthority(options)
+  if (!authority.ok) return authority
+
+  const now = options.now ?? Date.now()
   const capability = options.capability
   if (
     !capability?.ready ||
@@ -178,11 +235,13 @@ export function resolveSpeechBrokerPolicy(options: ResolveSpeechBrokerPolicyOpti
   )
     return { ok: false, code: 'CAPABILITY_UNREADY' }
   if (
-    capability.routeId !== selection.routeId ||
-    capability.modelId !== selection.model ||
-    capability.selected.routeId !== selection.routeId ||
-    capability.selected.modelId !== selection.model ||
-    !capability.allowed.some((pair) => pair.routeId === selection.routeId && pair.modelId === selection.model) ||
+    capability.routeId !== authority.selected.routeId ||
+    capability.modelId !== authority.selected.modelId ||
+    capability.selected.routeId !== authority.selected.routeId ||
+    capability.selected.modelId !== authority.selected.modelId ||
+    !capability.allowed.some(
+      (pair) => pair.routeId === authority.selected.routeId && pair.modelId === authority.selected.modelId
+    ) ||
     !Number.isSafeInteger(capability.validUntil) ||
     capability.validUntil <= now
   )
@@ -194,26 +253,16 @@ export function resolveSpeechBrokerPolicy(options: ResolveSpeechBrokerPolicyOpti
   )
     return { ok: false, code: 'LANGUAGE_UNAVAILABLE' }
 
-  const policyPairs: SpeechBrokerPair[] = []
-  const entry = parsedPolicy.data.capabilities.stt
-  for (const candidate of [entry, ...entry.fallbacks]) {
-    const engine = Object.values(BROKER_SELECTIONS).find(
-      (item) => item.provider === candidate.provider && item.model === candidate.model
-    )
-    if (!engine) continue
-    if (options.managedProviders.state === 'valid' && !options.managedProviders.providers.includes(engine.provider))
-      continue
-    const pair = { routeId: engine.routeId, modelId: engine.model }
-    if (!isPairAllowed(capability.allowed, pair) || isPairAllowed(policyPairs, pair)) continue
-    policyPairs.push(pair)
-  }
-  const selectedPair = { routeId: selection.routeId, modelId: selection.model }
-  if (!isPairAllowed(policyPairs, selectedPair)) return { ok: false, code: 'CAPABILITY_SELECTION' }
+  const selectedPair = { routeId: authority.selected.routeId, modelId: authority.selected.modelId }
+  const allowed = authority.allowed
+    .filter((pair) => isPairAllowed(capability.allowed, pair))
+    .map(({ routeId, modelId }) => ({ routeId, modelId }))
+  if (!isPairAllowed(allowed, selectedPair)) return { ok: false, code: 'CAPABILITY_SELECTION' }
 
   return {
     ok: true,
-    engine: selection.engine,
+    engine: authority.engine,
     selected: { ...selectedPair, language: options.language },
-    allowed: policyPairs
+    allowed
   }
 }
