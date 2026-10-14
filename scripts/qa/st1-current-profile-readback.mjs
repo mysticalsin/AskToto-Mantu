@@ -917,6 +917,8 @@ function validatePublicTree(value, depth = 0, key = undefined) {
   }
 }
 
+let readbackStage = 'owner'
+
 async function main() {
   const env = process.env
   requireValue(
@@ -936,20 +938,26 @@ async function main() {
   chmodSync(directory, 0o700)
   let cleanupAllowed = true
   try {
+    readbackStage = 'canary'
     await nativeCanary(directory, deadline)
     const json = async (route) =>
       decodeJson(await getBytes(route, { cap: 64 * 1024, deadline, token: env.GH_TOKEN }), 64 * 1024)
+    readbackStage = 'run-metadata'
     verifyRunMetadata(await json(`runs/${SOURCE.runId}`))
+    readbackStage = 'artifact-metadata'
     const artifact = await json(`artifacts/${ARTIFACT.id}`)
     verifyArtifactMetadata(artifact)
+    readbackStage = 'archive-download'
     const archive = await getBytes(`artifacts/${ARTIFACT.id}/zip`, {
       cap: ARTIFACT.size,
       deadline,
       token: env.GH_TOKEN
     })
+    readbackStage = 'archive-verification'
     verifyArchiveBytes(archive, { size: ARTIFACT.size, sha: ARTIFACT.sha256 })
     const archivePath = join(directory, 'control.zip')
     writeFileSync(archivePath, archive, { flag: 'wx', mode: 0o600 })
+    readbackStage = 'archive-members'
     const members = await readMembers(
       archivePath,
       { [ARTIFACT.reportName]: ARTIFACT.reportCap, [ARTIFACT.profileName]: ARTIFACT.profileCap },
@@ -957,11 +965,14 @@ async function main() {
       directory,
       deadline
     )
+    readbackStage = 'report-verification'
     verifyReportDigest(members[ARTIFACT.reportName].sha)
     const report = members[ARTIFACT.reportName].value
     const profile = members[ARTIFACT.profileName].value
     verifyReportScope(report)
+    readbackStage = 'profile-analysis'
     const summary = analyzeControlEvidence(report, profile)
+    readbackStage = 'public-summary'
     const notices = createReadbackNotices(summary, {
       runId: SOURCE.runId,
       attempt: SOURCE.attempt,
@@ -980,8 +991,10 @@ async function main() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  main().catch(() => {
-    process.stderr.write('st1-current-profile-readback: readback-failed\n')
+  main().catch((error) => {
+    process.stderr.write(
+      `::error title=ST-1 readback failure::stage=${readbackStage};code=${closedFailure(error)}\n`
+    )
     process.exitCode = 1
   })
 }
