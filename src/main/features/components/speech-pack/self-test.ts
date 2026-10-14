@@ -8,11 +8,32 @@ const START_TIMEOUT_MS = 30_000
 const RECOGNITION_TIMEOUT_MS = 120_000
 const TEARDOWN_TIMEOUT_MS = 5_000
 const MAX_FIXTURE_SAMPLES = 16_000 * 30
+// Published output for the exact sherpa-onnx Parakeet v3 test_wavs/en.wav fixture.
+// Source: k2-fsa/sherpa-onnx docs commit c02f72ca1540163a54019e845127fa52d5de175b.
+const FIXTURE_TRANSCRIPT = 'ask not what your country can do for you ask what you can do for your country'
 
 let activeSelfTestHost: HostPort | null = null
 let stoppingSelfTestHost: HostPort | null = null
 let stopBarrier: Promise<void> | null = null
 let resolveStopBarrier: (() => void) | null = null
+let hostSlotClaimed = false
+
+export function recognitionMatchesFixture(value: string): boolean {
+  if (value.length > 1024) return false
+  const expected = FIXTURE_TRANSCRIPT.split(' ')
+  const actual = value.toLowerCase().match(/[a-z0-9]+/g) ?? []
+  if (actual.length > 128) return false
+  let previous = new Uint8Array(expected.length + 1)
+  for (const actualWord of actual) {
+    const current = new Uint8Array(expected.length + 1)
+    for (let index = 1; index <= expected.length; index++) {
+      current[index] =
+        actualWord === expected[index - 1] ? previous[index - 1] + 1 : Math.max(previous[index], current[index - 1])
+    }
+    previous = current
+  }
+  return previous[expected.length] === expected.length
+}
 
 interface HostPort {
   on(event: 'message', listener: (message: unknown) => void): unknown
@@ -127,35 +148,46 @@ export function speechPackHostEntryPath(mainOutputDirectory: string, componentId
   return join(mainOutputDirectory, componentId === WHISPER_BASE_Q8.id ? 'whisper-asr-host.js' : 'parakeet-asr-host.js')
 }
 
-async function acquireHostSlot(): Promise<void> {
+async function acquireHostSlot(timeoutMs: number): Promise<void> {
+  if (hostSlotClaimed)
+    throw new Error(
+      stoppingSelfTestHost
+        ? 'Previous speech-pack utility host is still stopping.'
+        : 'A speech-pack self-test is already running.'
+    )
   if (activeSelfTestHost && !stoppingSelfTestHost) throw new Error('A speech-pack self-test is already running.')
-  if (!stopBarrier) return
+  if (!stopBarrier) {
+    hostSlotClaimed = true
+    return
+  }
   let timer: ReturnType<typeof setTimeout> | undefined
   const released = await Promise.race([
     stopBarrier.then(() => true),
     new Promise<boolean>((resolve) => {
-      timer = setTimeout(() => resolve(false), TEARDOWN_TIMEOUT_MS)
+      timer = setTimeout(() => resolve(false), timeoutMs)
     })
   ])
   clearTimeout(timer)
   if (!released) throw new Error('Previous speech-pack utility host is still stopping.')
-}
-
-async function waitForHostSlot(): Promise<void> {
-  await acquireHostSlot()
+  if (hostSlotClaimed || activeSelfTestHost) throw new Error('A speech-pack self-test is already running.')
+  hostSlotClaimed = true
 }
 
 function hostExited(host: HostPort): void {
-  if (activeSelfTestHost === host) activeSelfTestHost = null
+  if (activeSelfTestHost === host) {
+    activeSelfTestHost = null
+    hostSlotClaimed = false
+  }
   if (stoppingSelfTestHost !== host) return
   const resolve = resolveStopBarrier
   stoppingSelfTestHost = null
+  hostSlotClaimed = false
   stopBarrier = null
   resolveStopBarrier = null
   resolve?.()
 }
 
-async function stopHost(host: HostPort, didExit: () => boolean): Promise<void> {
+async function stopHost(host: HostPort, didExit: () => boolean, timeoutMs: number): Promise<void> {
   if (didExit()) {
     hostExited(host)
     return
@@ -179,35 +211,42 @@ async function stopHost(host: HostPort, didExit: () => boolean): Promise<void> {
   const stopped = await Promise.race([
     barrier.then(() => true),
     new Promise<boolean>((resolve) => {
-      timer = setTimeout(() => resolve(false), TEARDOWN_TIMEOUT_MS)
+      timer = setTimeout(() => resolve(false), timeoutMs)
     })
   ])
   clearTimeout(timer)
   if (!stopped || !didExit()) throw new Error('Speech-pack utility host did not stop within the teardown bound.')
 }
 
-/** Run the existing isolated recognizer against the pinned fixture. No transcript is returned to the caller. */
-export async function runSpeechPackSelfTest(input: {
+/** Internal protocol seam for lifecycle tests; production verifies the pinned fixture first. */
+export async function runSpeechPackHostProtocol(input: {
   componentId: SpeechPackComponentId
   packDir: string
-  wavPath: string
+  pcm: ArrayBuffer
   signal: AbortSignal
   fork?: SpeechPackHostFork
+  startupTimeoutMs?: number
+  recognitionTimeoutMs?: number
+  teardownTimeoutMs?: number
 }): Promise<string> {
-  const wav = await readFile(input.wavPath)
-  if (
-    wav.length !== SELF_TEST_FIXTURE.bytes ||
-    createHash('sha256').update(wav).digest('hex') !== SELF_TEST_FIXTURE.sha256
-  )
-    throw new Error('Speech-pack self-test fixture does not match its pin.')
-  const pcm = parseFixturePcm(wav)
   const whisper = input.componentId === WHISPER_BASE_Q8.id
-  await waitForHostSlot()
+  const teardownTimeoutMs = input.teardownTimeoutMs ?? TEARDOWN_TIMEOUT_MS
+  await acquireHostSlot(teardownTimeoutMs)
+  if (input.signal.aborted) {
+    hostSlotClaimed = false
+    throw new Error('Speech-pack self-test was cancelled.')
+  }
   const entry = speechPackHostEntryPath(__dirname, input.componentId)
-  const host = (input.fork ?? defaultFork)(entry, [], {
-    serviceName: `metis-speech-pack-check-${input.componentId.replace(/[^a-z0-9-]/gi, '-')}`,
-    stdio: 'pipe'
-  })
+  let host: HostPort
+  try {
+    host = (input.fork ?? defaultFork)(entry, [], {
+      serviceName: `metis-speech-pack-check-${input.componentId.replace(/[^a-z0-9-]/gi, '-')}`,
+      stdio: 'pipe'
+    })
+  } catch (error) {
+    hostSlotClaimed = false
+    throw error
+  }
   activeSelfTestHost = host
   host.stderr?.on('data', () => undefined)
   host.stdout?.on('data', () => undefined)
@@ -224,6 +263,10 @@ export async function runSpeechPackSelfTest(input: {
 
   const result = new Promise<string>((resolve, reject) => {
     rejectResult = reject
+    if (input.signal.aborted) {
+      reject(new Error('Speech-pack self-test was cancelled.'))
+      return
+    }
     let sent = false
     host.on('message', (raw) => {
       const msg = raw && typeof raw === 'object' && 'data' in raw ? (raw as { data?: unknown }).data : raw
@@ -233,7 +276,7 @@ export async function runSpeechPackSelfTest(input: {
         clearTimeout(startupTimer)
         startupTimer = undefined
         sent = true
-        host.postMessage({ type: 'transcribe', id: 1, pcm })
+        host.postMessage({ type: 'transcribe', id: 1, pcm: input.pcm })
         return
       }
       if (!whisper && response.id === 'speech-pack-startup') {
@@ -253,7 +296,7 @@ export async function runSpeechPackSelfTest(input: {
               joiner: files['joiner.int8.onnx'],
               tokens: files['tokens.txt']
             },
-            pcm
+            pcm: input.pcm
           })
         } else if (response.type === 'error') reject(new Error('Speech-pack utility host failed to start.'))
         return
@@ -266,13 +309,14 @@ export async function runSpeechPackSelfTest(input: {
       }
       if (response.type !== 'result' || response.id !== (whisper ? 1 : 'speech-pack-self-test')) return
       const text = typeof response.text === 'string' ? response.text.trim() : ''
-      if (text.length < 2) reject(new Error('Speech-pack fixture produced no usable recognition text.'))
+      if (!recognitionMatchesFixture(text))
+        reject(new Error('Speech-pack fixture recognition did not match its phrase.'))
       else resolve(text)
     })
     if (whisper) {
       startupTimer = setTimeout(
         () => reject(new Error('Speech-pack utility host failed to start in time.')),
-        START_TIMEOUT_MS
+        input.startupTimeoutMs ?? START_TIMEOUT_MS
       )
       host.postMessage({ type: 'init', modelsPath: input.packDir, fetchedModelsPath: null, allowHighMemoryTier: false })
     } else {
@@ -282,7 +326,7 @@ export async function runSpeechPackSelfTest(input: {
       )
       startupTimer = setTimeout(
         () => reject(new Error('Speech-pack utility host failed to start in time.')),
-        START_TIMEOUT_MS
+        input.startupTimeoutMs ?? START_TIMEOUT_MS
       )
       host.postMessage({
         type: 'warmup',
@@ -300,14 +344,14 @@ export async function runSpeechPackSelfTest(input: {
   let failure: unknown
   let decoded: string | undefined
   try {
-    decoded = await withTimeout(result, RECOGNITION_TIMEOUT_MS, input.signal)
+    decoded = await withTimeout(result, input.recognitionTimeoutMs ?? RECOGNITION_TIMEOUT_MS, input.signal)
     if (exitError) throw exitError
   } catch (error) {
     failure = error
   } finally {
     clearTimeout(startupTimer)
     try {
-      await stopHost(host, () => didExit)
+      await stopHost(host, () => didExit, teardownTimeoutMs)
     } catch (stopError) {
       if (!failure) failure = stopError
     }
@@ -315,4 +359,27 @@ export async function runSpeechPackSelfTest(input: {
   if (failure) throw failure
   if (decoded === undefined) throw new Error('Speech-pack recognition returned no result.')
   return decoded
+}
+
+/** Run the existing isolated recognizer against the pinned fixture. No transcript is returned to the caller. */
+export async function runSpeechPackSelfTest(input: {
+  componentId: SpeechPackComponentId
+  packDir: string
+  wavPath: string
+  signal: AbortSignal
+  fork?: SpeechPackHostFork
+}): Promise<string> {
+  const wav = await readFile(input.wavPath)
+  if (
+    wav.length !== SELF_TEST_FIXTURE.bytes ||
+    createHash('sha256').update(wav).digest('hex') !== SELF_TEST_FIXTURE.sha256
+  )
+    throw new Error('Speech-pack self-test fixture does not match its pin.')
+  return runSpeechPackHostProtocol({
+    componentId: input.componentId,
+    packDir: input.packDir,
+    pcm: parseFixturePcm(wav),
+    signal: input.signal,
+    fork: input.fork
+  })
 }
