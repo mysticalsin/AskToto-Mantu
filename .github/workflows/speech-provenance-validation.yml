@@ -1,0 +1,97 @@
+name: Speech provenance validation
+
+on:
+  push:
+    paths:
+      - .github/workflows/speech-provenance-validation.yml
+      - package.json
+      - package-lock.json
+      - vitest.config.ts
+      - src/main/transcripts*
+      - src/main/recall*
+      - src/main/features/meetings/**
+      - src/shared/transcript-line*
+      - src/shared/cloud-speech*
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: speech-provenance-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  provenance:
+    name: Actual speech persistence (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install frozen test dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Run actual encrypted and plaintext persistence regressions
+        env:
+          METIS_CI_ROOT_REPORT: ${{ runner.temp }}/speech-provenance-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
+        run: |
+          node -e "require('node:fs').rmSync(process.env.METIS_CI_ROOT_REPORT, { force: true })"
+          node node_modules/vitest/vitest.mjs run --config vitest.config.ts --maxWorkers=2 \
+            src/main/transcripts.speech-provenance.test.ts
+      - name: Verify actual nonempty test results
+        env:
+          METIS_CI_ROOT_REPORT: ${{ runner.temp }}/speech-provenance-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs'
+          const report = JSON.parse(readFileSync(process.env.METIS_CI_ROOT_REPORT, 'utf8'))
+          const required = ['src/main/transcripts.speech-provenance.test.ts']
+          const counts = [
+            'numTotalTests', 'numPassedTests', 'numFailedTests', 'numPendingTests', 'numTodoTests',
+            'numTotalTestSuites', 'numPassedTestSuites', 'numFailedTestSuites', 'numPendingTestSuites'
+          ]
+          if (counts.some((name) => !Number.isSafeInteger(report[name]) || report[name] < 0))
+            throw new Error('Missing or invalid test counters.')
+          if (report.success !== true || report.numTotalTests <= 0 || report.numPassedTests !== report.numTotalTests ||
+              report.numFailedTests !== 0 || report.numPendingTests !== 0 || report.numTodoTests !== 0 ||
+              report.numFailedTestSuites !== 0 || report.numPendingTestSuites !== 0 || report.numPassedTestSuites <= 0 ||
+              report.numTotalTestSuites !== report.numPassedTestSuites + report.numFailedTestSuites + report.numPendingTestSuites)
+            throw new Error('Persistence tests failed, skipped, empty or inconsistent.')
+          if (!Array.isArray(report.testResults) || report.testResults.length !== required.length)
+            throw new Error('Test file inventory differs from the required files.')
+          let assertions = 0
+          for (const file of required) {
+            const matches = report.testResults.filter((entry) => typeof entry.name === 'string' &&
+              entry.name.replaceAll('\\', '/').endsWith('/' + file))
+            if (matches.length !== 1 || matches[0].status !== 'passed' ||
+                !Array.isArray(matches[0].assertionResults) || matches[0].assertionResults.length === 0 ||
+                matches[0].assertionResults.some((assertion) => assertion.status !== 'passed'))
+              throw new Error('Required persistence file did not run every case successfully.')
+            assertions += matches[0].assertionResults.length
+          }
+          if (assertions !== report.numTotalTests)
+            throw new Error('Assertion count disagrees with the total test count.')
+          console.log(`Persistence tests: ${report.numPassedTests}/${report.numTotalTests}; no failed or skipped cases.`)
+          NODE
+      - name: Retain actual test report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: speech-provenance-${{ matrix.os }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/speech-provenance-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
+          if-no-files-found: error
+          retention-days: 14

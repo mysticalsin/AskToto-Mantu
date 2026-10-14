@@ -90,9 +90,11 @@ describe('actual saved final speech provenance', () => {
 
   it('reopens exact saved timestamps and word metadata after a timezone change', async () => {
     vi.stubEnv('TZ', 'America/New_York')
+    expect(new Date(startedAt).getHours()).toBe(0)
     const input = meeting()
     const file = await saveMeeting(settings, input)
     vi.stubEnv('TZ', 'UTC')
+    expect(new Date(startedAt).getHours()).toBe(4)
 
     const read = await recallRead(basename(file))
 
