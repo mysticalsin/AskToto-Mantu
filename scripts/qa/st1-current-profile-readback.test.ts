@@ -5,6 +5,7 @@ import {
   ARTIFACT,
   SOURCE,
   analyzeControlEvidence,
+  closedSummaryFailureAttribution,
   createReadbackNotices,
   verifyArtifactMetadata,
   verifyReportDigest,
@@ -365,6 +366,47 @@ describe('current control profile projection', () => {
     expect(boot).toMatchObject({ omittedCount: 1, coverageComplete: false })
     expect(JSON.stringify(notices)).not.toContain('https://private.invalid/secret')
     for (const notice of notices) expect(Buffer.byteLength(notice, 'utf8')).toBeLessThanOrEqual(3_500)
+  })
+
+  it('attributes only closed public-summary validation failures without echoing hostile fields or errors', () => {
+    const context = {
+      runId: SOURCE.runId,
+      attempt: SOURCE.attempt,
+      reportSha256: SOURCE.reportSha256,
+      profileSha256: 'c'.repeat(64),
+      archiveSha256: ARTIFACT.sha256
+    }
+    const rejectedNumber = analyzeControlEvidence(validReport(), profile())
+    rejectedNumber.metrics.sampleCount = -1
+    let numberError: unknown
+    try {
+      createReadbackNotices(rejectedNumber, context)
+    } catch (error) {
+      numberError = error
+    }
+    expect(numberError).toBeInstanceOf(Error)
+    expect((numberError as Error).message).toBe('summary-invalid')
+    expect(closedSummaryFailureAttribution(numberError)).toBe(';kind=number;field=sampleCount')
+
+    const unknownField = analyzeControlEvidence(validReport(), profile()) as Record<string, unknown>
+    unknownField['https://private.invalid/secret'] = { providerKey: 'private-value' }
+    let unknownError: unknown
+    try {
+      createReadbackNotices(unknownField, context)
+    } catch (error) {
+      unknownError = error
+    }
+    expect(unknownError).toBeInstanceOf(Error)
+    expect((unknownError as Error).message).toBe('summary-invalid')
+    expect(closedSummaryFailureAttribution(unknownError)).toBe(';kind=key;field=unknown')
+
+    const externalError = Object.assign(new Error('https://private.invalid/secret provider-key'), {
+      kind: 'private-kind',
+      field: 'https://private.invalid/secret',
+      url: 'https://private.invalid/secret'
+    })
+    expect(closedSummaryFailureAttribution(externalError)).toBe('')
+    expect(closedSummaryFailureAttribution(externalError)).not.toContain('private')
   })
 
   it('bounds notices and prevents untrusted profile/report strings from entering them', () => {

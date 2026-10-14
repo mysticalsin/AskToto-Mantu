@@ -237,6 +237,7 @@ const finite = (value) => typeof value === 'number' && Number.isFinite(value) &&
 const safeHash = (value) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex')
 const localFailures = new WeakMap()
+const summaryFailureAttributions = new WeakMap()
 const PUBLIC_FAILURE_CODES = new Set(['summary-invalid', 'notice-too-large', 'digest-mismatch'])
 const readbackFailureCode = (error) => {
   const localCode = error instanceof Error ? localFailures.get(error) : undefined
@@ -250,6 +251,21 @@ const fail = (code) => {
 }
 const requireValue = (condition, code = 'readback-invalid') => {
   if (!condition) fail(code)
+}
+const invalidPublicSummary = (kind, key) => {
+  const error = new Error('summary-invalid')
+  localFailures.set(error, 'summary-invalid')
+  error.code = 'summary-invalid'
+  summaryFailureAttributions.set(error, {
+    kind,
+    field: typeof key === 'string' && PUBLIC_KEYS.has(key) ? key : 'unknown'
+  })
+  throw error
+}
+
+export function closedSummaryFailureAttribution(error) {
+  const details = error !== null && typeof error === 'object' ? summaryFailureAttributions.get(error) : undefined
+  return details ? `;kind=${details.kind};field=${details.field}` : ''
 }
 
 export function verifyRunMetadata(run) {
@@ -906,28 +922,29 @@ export function createReadbackNotices(summary, context) {
 }
 
 function validatePublicTree(value, depth = 0, key = undefined) {
-  requireValue(depth <= 10, 'summary-invalid')
+  if (depth > 10) invalidPublicSummary('depth', key)
   if (value === null || typeof value === 'boolean') return
   if (typeof value === 'number') {
-    requireValue(Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER, 'summary-invalid')
+    if (!Number.isFinite(value) || value < 0 || value > Number.MAX_SAFE_INTEGER) {
+      invalidPublicSummary('number', key)
+    }
     return
   }
   if (typeof value === 'string') {
-    requireValue(
-      PUBLIC_STRINGS.has(value) || (key === 'candidateInstallerSha256' && safeHash(value)),
-      'summary-invalid'
-    )
+    if (!(PUBLIC_STRINGS.has(value) || (key === 'candidateInstallerSha256' && safeHash(value)))) {
+      invalidPublicSummary('string', key)
+    }
     return
   }
   if (Array.isArray(value)) {
-    requireValue(value.length <= 512, 'summary-invalid')
-    for (const item of value) validatePublicTree(item, depth + 1)
+    if (value.length > 512) invalidPublicSummary('array', key)
+    for (const item of value) validatePublicTree(item, depth + 1, key)
     return
   }
-  requireValue(plain(value) && Object.keys(value).length <= 64, 'summary-invalid')
-  for (const [key, item] of Object.entries(value)) {
-    requireValue(PUBLIC_KEYS.has(key), 'summary-invalid')
-    validatePublicTree(item, depth + 1, key)
+  if (!plain(value) || Object.keys(value).length > 64) invalidPublicSummary('object', key)
+  for (const [field, item] of Object.entries(value)) {
+    if (!PUBLIC_KEYS.has(field)) invalidPublicSummary('key', field)
+    validatePublicTree(item, depth + 1, field)
   }
 }
 
@@ -1006,8 +1023,9 @@ async function main() {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   main().catch((error) => {
+    const attribution = closedSummaryFailureAttribution(error)
     process.stderr.write(
-      `::error title=ST-1 readback failure::stage=${readbackStage};code=${readbackFailureCode(error)}\n`
+      `::error title=ST-1 readback failure::stage=${readbackStage};code=${readbackFailureCode(error)}${attribution}\n`
     )
     process.exitCode = 1
   })
