@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import test from 'node:test'
 import {
+  expectedSourceLockSha256,
   NATIVE_TARGETS,
   parseStrictJsonBytes,
   safeRelativePath,
@@ -259,3 +260,35 @@ test('compares exact CRLF projection only for canonical UTF-8 LF lock bytes', ()
   assert.equal(sourceLockDigests(Uint8Array.from([0x7b, 0xff, 0x0a])), null)
   assert.equal(sourceLockDigests(encoder.encode('{"lockfileVersion":3}')), null)
 })
+
+test('selects one exact source-lock digest per closed target and rejects cross-target or changed content', () => {
+  const encoder = new TextEncoder()
+  const lockText = '{"lockfileVersion":3,\n"packages":{"node_modules/example":{"version":"1.0.0"}}}\n'
+  const digests = sourceLockDigests(encoder.encode(lockText))
+  const changedDigests = sourceLockDigests(encoder.encode(lockText.replace('"1.0.0"', '"1.0.1"')))
+  assert.ok(digests)
+  assert.ok(changedDigests)
+  if (!digests || !changedDigests) throw new Error('Synthetic lock fixtures must be canonical UTF-8 LF.')
+  assert.notEqual(changedDigests.canonicalLfSha256, digests.canonicalLfSha256)
+  assert.notEqual(changedDigests.exactCrlfProjectionSha256, digests.exactCrlfProjectionSha256)
+
+  expectTargetLockSource('darwin-arm64', digests, digests.canonicalLfSha256, changedDigests)
+  expectTargetLockSource('darwin-x64', digests, digests.canonicalLfSha256, changedDigests)
+  expectTargetLockSource('win32-x64', digests, digests.exactCrlfProjectionSha256, changedDigests)
+  assert.equal(expectedSourceLockSha256('linux-x64', digests), null)
+})
+
+function expectTargetLockSource(targetSuffix, digests, expectedDigest, changedDigests) {
+  const lfSource = { ...source, lockSha256: digests.canonicalLfSha256 }
+  const crlfSource = { ...source, lockSha256: digests.exactCrlfProjectionSha256 }
+  const correctSource = targetSuffix === 'win32-x64' ? crlfSource : lfSource
+  const crossTargetSource = targetSuffix === 'win32-x64' ? lfSource : crlfSource
+  assert.equal(expectedSourceLockSha256(targetSuffix, digests), expectedDigest)
+  assert.equal(validSource(correctSource, expectedSourceLockSha256(targetSuffix, digests)), true)
+  assert.equal(validSource(crossTargetSource, expectedSourceLockSha256(targetSuffix, digests)), false)
+  assert.equal(
+    validSource(correctSource, expectedSourceLockSha256(targetSuffix, changedDigests)),
+    false,
+    `${targetSuffix} must reject a lock digest derived from changed dependency content`
+  )
+}

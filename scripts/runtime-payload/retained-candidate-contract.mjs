@@ -208,6 +208,20 @@ export const NATIVE_TARGETS = Object.freeze([
   { platform: 'darwin', arch: 'x64', suffix: 'darwin-x64' },
   { platform: 'win32', arch: 'x64', suffix: 'win32-x64' }
 ])
+
+export function expectedSourceLockSha256(targetSuffix, lockDigests) {
+  const target = NATIVE_TARGETS.find((candidate) => candidate.suffix === targetSuffix)
+  if (
+    !target ||
+    !exactKeys(lockDigests, ['canonicalLfSha256', 'exactCrlfProjectionSha256']) ||
+    typeof lockDigests.canonicalLfSha256 !== 'string' ||
+    typeof lockDigests.exactCrlfProjectionSha256 !== 'string'
+  )
+    return null
+  const digest = target.platform === 'win32' ? lockDigests.exactCrlfProjectionSha256 : lockDigests.canonicalLfSha256
+  return typeof digest === 'string' && /^[a-f0-9]{64}$/.test(digest) ? digest : null
+}
+
 export const MODEL = Object.freeze({
   id: 'qwen3.5-0.8b',
   artifactId: 'model.qwen3.5-0.8b',

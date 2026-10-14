@@ -18,6 +18,7 @@ import {
   SOURCE_REF,
   SOURCE_SHA,
   WORKFLOW_PATH,
+  expectedSourceLockSha256,
   parseStrictJsonBytes,
   sourceLockDigests,
   validBuilder,
@@ -281,7 +282,8 @@ function verifyStatement(bundle, archiveName, archiveHash, inventoryName, invent
 }
 
 async function verifyTarget(root, target, rootProto, lockDigests) {
-  const lockSha256 = lockDigests.canonicalLfSha256
+  const lockSha256 = expectedSourceLockSha256(target.suffix, lockDigests)
+  if (!lockSha256) fail('RUNTIME_READBACK_LOCK_INVALID')
   const directory = `runtime-llama-${target.suffix}-${SOURCE_SHA}-${RUN_ATTEMPT}`
   const base = resolve(root, directory)
   await assertDirectory(root, 'RUNTIME_READBACK_ARTIFACT_LAYOUT_INVALID')
@@ -491,7 +493,7 @@ async function verifyTarget(root, target, rootProto, lockDigests) {
   if (failedInventoryChecks.length > 0) {
     if (failedInventoryChecks.some((name) => name.startsWith('SOURCE_'))) {
       process.stderr.write(
-        `RUNTIME_READBACK_SOURCE_LOCK_DIAGNOSTIC target=${target.suffix} canonicalLFMatch=${source?.lockSha256 === lockSha256} exactCRLFProjectionMatch=${source?.lockSha256 === lockDigests.exactCrlfProjectionSha256} projectionAvailable=${Boolean(lockDigests.exactCrlfProjectionSha256)}\n`
+        `RUNTIME_READBACK_SOURCE_LOCK_DIAGNOSTIC target=${target.suffix} canonicalLFMatch=${source?.lockSha256 === lockDigests.canonicalLfSha256} exactCRLFProjectionMatch=${source?.lockSha256 === lockDigests.exactCrlfProjectionSha256} projectionAvailable=${Boolean(lockDigests.exactCrlfProjectionSha256)}\n`
       )
     }
     process.stderr.write(
