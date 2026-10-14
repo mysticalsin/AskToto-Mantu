@@ -22,7 +22,7 @@ import {
 } from './import-job-checkpoint-contract'
 import type { ImportLegacyOriginHandle } from './import-legacy-origin'
 import type { ImportPersistencePolicy } from './import-persistence-policy'
-import { canonicalizeIncrementalMeetingRecord } from './features/meetings/incremental-record-canonical'
+import { canonicalizeIncrementalMeetingRecord } from './infra/process/incremental-record-canonical'
 import {
   checkpointFromMetadata,
   decodeCheckpointMetadata,

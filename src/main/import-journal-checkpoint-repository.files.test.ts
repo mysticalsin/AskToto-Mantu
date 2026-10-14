@@ -11,8 +11,8 @@ import {
   type IncrementalJournalLimits
 } from './features/meetings/incremental-meeting-journal'
 import { createIncrementalMeetingJournalFileStorage } from './features/meetings/incremental-meeting-journal-files'
-import { canonicalizeIncrementalMeetingRecord } from './features/meetings/incremental-record-canonical'
-import { issueIncrementalRecordReceipt } from './features/meetings/incremental-record-receipt'
+import { canonicalizeIncrementalMeetingRecord } from './infra/process/incremental-record-canonical'
+import { issueIncrementalRecordReceipt } from './infra/process/incremental-record-receipt'
 import type { ImportJobHeader } from './import-job-checkpoint-contract'
 import type { ImportLegacyOriginHandle } from './import-legacy-origin'
 import type { ImportPersistencePolicy } from './import-persistence-policy'

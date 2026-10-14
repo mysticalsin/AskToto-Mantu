@@ -5,10 +5,10 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { SpeechProvenanceLimits } from '@shared/meeting-speech-contract'
 import { createStorageGateway } from '../../infra/storage/gateway'
 import type { ContentPresence, DatalessDetector } from '../../infra/storage/dataless'
-import { canonicalizeIncrementalMeetingRecord } from './incremental-record-canonical'
+import { canonicalizeIncrementalMeetingRecord } from '../../infra/process/incremental-record-canonical'
 import { createIncrementalMeetingAppender, type IncrementalJournalLimits } from './incremental-meeting-journal'
 import { createIncrementalMeetingJournalFileStorage } from './incremental-meeting-journal-files'
-import { issueIncrementalRecordReceipt } from './incremental-record-receipt'
+import { issueIncrementalRecordReceipt } from '../../infra/process/incremental-record-receipt'
 
 const meetingId = '64d5a603-0b18-4da5-8a3f-4a42c9d22031'
 const recordJson = new TextEncoder().encode(
