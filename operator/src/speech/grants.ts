@@ -320,7 +320,8 @@ export async function redeemSpeechGrant(
   token: string,
   binding: SpeechGrantBinding
 ): Promise<{ ok: true } | { ok: false; code: GrantFailureCode }> {
-  if (!db || !token || !Number.isSafeInteger(binding.now)) return { ok: false, code: 'DATABASE_UNAVAILABLE' }
+  if (!db || !Number.isSafeInteger(binding.now)) return { ok: false, code: 'DATABASE_UNAVAILABLE' }
+  if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return { ok: false, code: 'GRANT_REJECTED' }
   const tokenHash = await sha256Hex(token)
   try {
     const result = await db

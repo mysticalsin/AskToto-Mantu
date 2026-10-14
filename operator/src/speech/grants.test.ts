@@ -208,6 +208,11 @@ describe('D1 speech grants', () => {
       if (!allocation.ok) return
       const grant = allocation.grants[0]
       const context = { ...binding, sessionId: allocation.sessionId, track: grant.track }
+      expect(await redeemSpeechGrant(d1, 'x'.repeat(1_000_000), context)).toMatchObject({
+        ok: false,
+        code: 'GRANT_REJECTED'
+      })
+      expect(await redeemSpeechGrant(d1, 'invalid-token', context)).toMatchObject({ ok: false, code: 'GRANT_REJECTED' })
       const mismatches: Array<Partial<typeof context>> = [
         { tenantId: 'tenant-b' },
         { audience: 'operator-other' },
