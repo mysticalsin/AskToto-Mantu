@@ -35,6 +35,16 @@ import {
   type RuntimeOwnedTreeReceipt
 } from './runtime-owned-tree-record'
 import { registerRuntimeOwnedTreeReceipt, runtimeOwnedTreeReceipts } from './runtime-owned-tree-state'
+import {
+  consumeRuntimePayloadFilePin,
+  runtimePayloadDirectoryAllowed,
+  runtimePayloadPlanBudget,
+  runtimePayloadPlanComplete,
+  runtimePayloadPlanRoot,
+  type RuntimePayloadFilePin,
+  type RuntimePayloadWritePlan
+} from './runtime-payload-plan'
+import { runtimeTreeParentDetails, type RuntimeTreeParentPin } from './runtime-pack-namespace'
 export type {
   AuthenticatedRuntimeOwnedTreeRecord,
   RuntimeOwnedTreeAuthenticatedInput,
@@ -58,7 +68,9 @@ interface TreeDirectory {
 
 interface TreeFile {
   readonly path: string
+  readonly targetPath: string
   readonly expectedByteLength: number
+  readonly expectedSha256: string
   version: BigIntStats | null
   sink: RuntimeExclusiveFileSink | null
   sha256: string | null
@@ -67,6 +79,7 @@ interface TreeFile {
 interface TreeWriterState {
   readonly rootPath: string
   readonly parentPath: string
+  readonly plan: RuntimePayloadWritePlan
   snapshot: RuntimePhysicalSnapshotInput
   readonly directories: Map<string, TreeDirectory>
   readonly files: Map<string, TreeFile>
@@ -197,20 +210,26 @@ function queueMutation<T>(state: TreeWriterState, action: () => Promise<T>): Pro
 }
 
 export async function prepareRuntimeOwnedTreeCreation(input: {
-  readonly rootPath: string
-  readonly parentPath: string
-  readonly parentSnapshot: RuntimePhysicalSnapshotInput
+  readonly parentPin: RuntimeTreeParentPin
+  readonly plan: RuntimePayloadWritePlan
   readonly assertCurrentSync: () => void
 }): Promise<RuntimeOwnedTreeWriter> {
-  const rootPath = resolve(input.rootPath)
-  const parentPath = resolve(input.parentPath)
-  if (rootPath !== input.rootPath || parentPath !== input.parentPath || dirname(rootPath) !== parentPath) {
+  const treeParent = runtimeTreeParentDetails(input.parentPin, input.plan, input.assertCurrentSync)
+  const rootPath = resolve(treeParent.rootPath)
+  const parentPath = resolve(treeParent.parentPath)
+  if (rootPath !== treeParent.rootPath || parentPath !== treeParent.parentPath || dirname(rootPath) !== parentPath) {
     throw new Error('RUNTIME_TREE_ROOT_PATH_INVALID')
   }
+  if (runtimePayloadPlanRoot(input.plan) !== rootPath.slice(parentPath.length + 1)) {
+    throw new Error('RUNTIME_TREE_PLAN_ROOT_MISMATCH')
+  }
+  const budget = runtimePayloadPlanBudget(input.plan)
+  if (budget.fileCount + budget.directoryCount > MAX_TREE_NODES) throw new Error('RUNTIME_TREE_PLAN_LIMIT')
   const state: TreeWriterState = {
     rootPath,
     parentPath,
-    snapshot: input.parentSnapshot,
+    plan: input.plan,
+    snapshot: treeParent.parentSnapshot,
     directories: new Map(),
     files: new Map(),
     sinks: new Set(),
@@ -230,8 +249,9 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
           parentPath,
           snapshot: state.snapshot
         })
-        const result = await createRuntimeDirectoryAfterAdmission(admission, input.assertCurrentSync)
+        const result = await createRuntimeDirectoryAfterAdmission(admission, treeParent.assertCurrentSync)
         if (result.status !== 'created') throw new Error('RUNTIME_TREE_ROOT_UNCONFIRMED')
+        treeParent.acknowledgeRoot(result)
         state.rootCreated = true
         state.directories.set(rootPath, { path: rootPath, version: result.version, children: [] })
         updateDirectory(state, parentPath, result.parentVersion, result.parentChildren)
@@ -245,29 +265,29 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
     createDirectory(relativePath: string): Promise<RuntimeDirectoryCreationReceipt> {
       return queueMutation(state, async () => {
         assertTreeReady(state)
+        if (!runtimePayloadDirectoryAllowed(state.plan, relativePath)) {
+          throw new Error('RUNTIME_TREE_DIRECTORY_NOT_IN_PLAN')
+        }
         const path = ensureContained(rootPath, relativePath)
         const parentPath = dirname(path)
         const parent = state.directories.get(parentPath)
         if (!parent || state.directories.has(path) || state.files.has(path))
           throw new Error('RUNTIME_TREE_PARENT_INVALID')
         const admission = await prepareRuntimeDirectoryCreation({ path, parentPath, snapshot: trackedSnapshot(state) })
-        const result = await createRuntimeDirectoryAfterAdmission(admission, input.assertCurrentSync)
+        const result = await createRuntimeDirectoryAfterAdmission(admission, treeParent.assertCurrentSync)
         if (result.status !== 'created') throw new Error('RUNTIME_TREE_DIRECTORY_UNCONFIRMED')
         state.directories.set(path, { path, version: result.version, children: [] })
         updateDirectory(state, parentPath, result.parentVersion, result.parentChildren)
         return result
       })
     },
-    createFile(relativePath: string, expectedByteLength: number): Promise<RuntimeOwnedTreeFileSink> {
+    createFile(pin: RuntimePayloadFilePin): Promise<RuntimeOwnedTreeFileSink> {
       return queueMutation(state, async () => {
         assertTreeReady(state)
-        if (
-          !Number.isSafeInteger(expectedByteLength) ||
-          expectedByteLength < 0 ||
-          expectedByteLength > MAX_RUNTIME_EXCLUSIVE_FILE_BYTES
-        ) {
-          throw new Error('RUNTIME_TREE_FILE_SIZE_INVALID')
-        }
+        const admitted = consumeRuntimePayloadFilePin(state.plan, pin)
+        const expectedByteLength = admitted.byteLength
+        if (expectedByteLength > MAX_RUNTIME_EXCLUSIVE_FILE_BYTES) throw new Error('RUNTIME_TREE_FILE_SIZE_INVALID')
+        const relativePath = `${admitted.path}.partial`
         const path = ensureContained(rootPath, relativePath)
         const parentPath = dirname(path)
         const parent = state.directories.get(parentPath)
@@ -281,11 +301,13 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
         const creation: RuntimeExclusiveFileCreation = await createRuntimeExclusiveFileAfterAdmission(
           admission,
           expectedByteLength,
-          input.assertCurrentSync
+          treeParent.assertCurrentSync
         )
         const file: TreeFile = {
           path,
+          targetPath: admitted.path,
           expectedByteLength,
+          expectedSha256: admitted.sha256,
           version: creation.receipt.status === 'created' ? creation.receipt.version : null,
           sink: creation.sink,
           sha256: null
@@ -324,15 +346,14 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
                 const receipt = await creation.sink.close()
                 state.sinks.delete(wrapped)
                 if (receipt.status !== 'created') throw new Error('RUNTIME_TREE_FILE_UNCONFIRMED')
-                if (receipt.version.size !== BigInt(file.expectedByteLength)) {
-                  throw new Error('RUNTIME_TREE_FILE_SIZE_MISMATCH')
-                }
                 file.version = receipt.version
                 file.sink = null
                 const sha256 = hash.digest('hex')
                 file.sha256 = sha256
                 const byteLength = Number(receipt.version.size)
                 if (!Number.isSafeInteger(byteLength)) throw new Error('RUNTIME_TREE_FILE_SIZE_INVALID')
+                if (byteLength !== file.expectedByteLength) throw new Error('RUNTIME_TREE_FILE_SIZE_MISMATCH')
+                if (sha256 !== file.expectedSha256) throw new Error('RUNTIME_TREE_FILE_DIGEST_MISMATCH')
                 return Object.freeze({
                   path: receipt.path
                     .slice(rootPath.length + 1)
@@ -367,6 +388,7 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
           !file?.version ||
           !file.sha256 ||
           file.sink ||
+          destinationRelativePath !== file.targetPath ||
           !destinationParent ||
           state.files.has(destination) ||
           state.directories.has(destination)
@@ -387,7 +409,7 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
             admission: physical,
             source,
             destination,
-            assertCallerCurrentSync: assertCurrentSync
+            assertCallerCurrentSync: () => treeParent.assertCurrentSync(assertCurrentSync)
           })
         } catch (error) {
           await physical.dispose()
@@ -439,7 +461,9 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
           state.files.delete(source)
           state.files.set(destination, {
             path: destination,
+            targetPath: file.targetPath,
             expectedByteLength: file.expectedByteLength,
+            expectedSha256: file.expectedSha256,
             version: movedVersion,
             sink: null,
             sha256: file.sha256
@@ -474,7 +498,7 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
           path,
           expected: file.version,
           snapshot: trackedSnapshot(state),
-          assertCallerCurrentSync: assertCurrentSync
+          assertCallerCurrentSync: () => treeParent.assertCurrentSync(assertCurrentSync)
         })
         try {
           const [parentVersion, children] = await Promise.all([
@@ -516,7 +540,9 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
             roots: [...snapshot.roots, { path, identity: directory.version }]
           }
         })
-        await removeRuntimeEmptyDirectoryAfterAdmission(admission, assertCurrentSync)
+        await removeRuntimeEmptyDirectoryAfterAdmission(admission, () =>
+          treeParent.assertCurrentSync(assertCurrentSync)
+        )
         try {
           const [parentVersion, children] = await Promise.all([
             lstat(parentPath, { bigint: true }),
@@ -553,7 +579,9 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
           parentPath,
           snapshot: trackedSnapshot(state)
         })
-        await removeRuntimeEmptyDirectoryAfterAdmission(admission, assertCurrentSync)
+        await removeRuntimeEmptyDirectoryAfterAdmission(admission, () =>
+          treeParent.assertCurrentSync(assertCurrentSync)
+        )
         try {
           const [parentVersion, children] = await Promise.all([
             lstat(parentPath, { bigint: true }),
@@ -588,10 +616,16 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
       const closeResults = await Promise.allSettled([...state.sinks].map((sink) => sink.close()))
       if (closeResults.some((result) => result.status === 'rejected'))
         throw new Error('RUNTIME_TREE_WRITER_SETTLEMENT_FAILED')
+      const planBudget = runtimePayloadPlanBudget(state.plan)
+      if (state.files.size !== planBudget.fileCount || state.directories.size !== planBudget.directoryCount + 1) {
+        throw new Error('RUNTIME_TREE_PLAN_INCOMPLETE')
+      }
       for (const [path, file] of state.files) {
         if (file.sink !== null || !file.version) throw new Error('RUNTIME_TREE_WRITER_INCOMPLETE')
         if (file.path !== path) throw new Error('RUNTIME_TREE_WRITER_INCOMPLETE')
+        if (file.version.size !== BigInt(file.expectedByteLength)) throw new Error('RUNTIME_TREE_FILE_SIZE_MISMATCH')
       }
+      if (!runtimePayloadPlanComplete(state.plan)) throw new Error('RUNTIME_TREE_PLAN_INCOMPLETE')
       assertTreeReady(state)
       const snapshot = trackedSnapshot(state)
       const fileDigests = new Map(
@@ -603,7 +637,7 @@ export async function prepareRuntimeOwnedTreeCreation(input: {
       const manifest = makeRuntimeOwnedTreeManifest(rootPath, snapshot, fileDigests)
       const physical = await prepareRuntimePhysicalAdmission(snapshot)
       try {
-        input.assertCurrentSync()
+        treeParent.assertCurrentSync()
       } catch (error) {
         await physical.dispose()
         throw error

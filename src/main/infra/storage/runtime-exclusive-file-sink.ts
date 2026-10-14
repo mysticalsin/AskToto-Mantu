@@ -132,8 +132,12 @@ export async function prepareRuntimeExclusiveFileSink(input: {
     if (busy) throw new Error('RUNTIME_EXCLUSIVE_FILE_WRITE_IN_PROGRESS')
     closed = true
     try {
-      if (!invalidated && currentVersion) currentVersion = await captureCreatedFileVersion(input.fd, input.path)
-      else invalidated = true
+      if (!invalidated && currentVersion) {
+        const beforeClose = currentVersion
+        const afterClose = await captureCreatedFileVersion(input.fd, input.path)
+        if (sameRuntimeFileVersion(beforeClose, afterClose)) currentVersion = afterClose
+        else invalidated = true
+      } else invalidated = true
     } catch {
       invalidated = true
     }

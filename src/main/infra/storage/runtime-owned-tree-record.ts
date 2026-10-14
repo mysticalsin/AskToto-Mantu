@@ -74,7 +74,7 @@ export interface RuntimeOwnedTreeFileSink {
 export interface RuntimeOwnedTreeWriter {
   createRoot(): Promise<RuntimeDirectoryCreationReceipt>
   createDirectory(relativePath: string): Promise<RuntimeDirectoryCreationReceipt>
-  createFile(relativePath: string, expectedByteLength: number): Promise<RuntimeOwnedTreeFileSink>
+  createFile(pin: import('./runtime-payload-plan').RuntimePayloadFilePin): Promise<RuntimeOwnedTreeFileSink>
   renameFile(
     sourceRelativePath: string,
     destinationRelativePath: string,
