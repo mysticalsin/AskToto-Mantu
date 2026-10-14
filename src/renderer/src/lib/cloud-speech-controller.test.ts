@@ -364,6 +364,52 @@ describe('cloud speech capture controller', () => {
     next.instance.dispose()
   })
 
+  it('fails closed if the ceiling arrives after finish was already sent', async () => {
+    const finishing = deferred<CloudSpeechFinishResult>()
+    const onFailure = vi.fn()
+    const next = controller({ onFailure })
+    next.finish.mockReturnValue(finishing.promise)
+    expect((await next.instance.start()).ok).toBe(true)
+    const port = new FakePort()
+    port.onPost = (message) => {
+      if (typeof message === 'object' && message !== null && 'type' in message && message.type === 'seal-and-flush') {
+        const command = message as { requestId: string }
+        port.emit({ type: 'flush-ack', requestId: command.requestId, finalSequence: 0, finalSampleOffset: 0 })
+      }
+    }
+    expect(next.instance.attachTrack('microphone', port as unknown as MessagePort, 0)).toBe(true)
+    const stopping = next.instance.stop()
+    await vi.waitFor(() => expect(next.finish).toHaveBeenCalledTimes(1))
+    const ceiling: CloudSpeechCaptureCeilingEvent = {
+      type: 'capture-ceiling',
+      captureId,
+      captureGeneration,
+      ceilingId: '00000000-0000-4000-8000-000000000711',
+      maxSampleOffsetExclusive: 230_400_000
+    }
+    for (const listener of next.events) listener(ceiling)
+    await vi.waitFor(() => expect(onFailure).toHaveBeenCalledWith('STALE'))
+    finishing.resolve({
+      ok: true,
+      captureId,
+      captureGeneration,
+      complete: true,
+      reason: 'normal',
+      tracks: [
+        {
+          stream: { generation: captureGeneration, track: 'microphone', epoch: 3 },
+          lastSequence: 0,
+          closeConfirmed: true,
+          tail: 'complete',
+          reason: 'normal'
+        }
+      ]
+    })
+    await expect(stopping).resolves.toMatchObject({ ok: false, code: 'STALE' })
+    expect(next.acknowledgeCaptureCeiling).not.toHaveBeenCalled()
+    next.instance.dispose()
+  })
+
   it('converts each genuine Float32 frame once to explicit little-endian PCM and translates the capture offset', async () => {
     const { instance, frame } = controller()
     expect((await instance.start()).ok).toBe(true)
