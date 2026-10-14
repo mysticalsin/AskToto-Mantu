@@ -15,7 +15,7 @@ import { join } from 'node:path'
 describe('will-quit handler crash guard', () => {
   const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
   const handler = (() => {
-    const start = source.indexOf("app.on('will-quit'")
+    const start = source.search(/app\.on\(\s*['"]will-quit['"]\s*,/)
     expect(start).toBeGreaterThan(-1)
     // Grab a generous slice of the handler body (wide enough to include the isReady() guard around
     // globalShortcut.unregisterAll() and the tracked background-timer cancellation loop that follows it —
