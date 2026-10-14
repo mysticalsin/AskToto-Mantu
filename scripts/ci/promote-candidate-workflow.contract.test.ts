@@ -53,11 +53,13 @@ describe('Promote candidate workflow: main and release/1.9.x candidates (M2-0500
   })
 
   it('accepts a completed successful workflow_dispatch qa-candidate run whose head_branch is main or release/1.9.x, and no other', () => {
-    const jq = /jq -e '(\.path == [^\n]*)' <<<"\$run"/.exec(step('Require a fully successful'))?.[1] ?? ''
+    const jq = /jq -e '([\s\S]*?)' <<<"\$run"/.exec(step('Require a fully successful'))?.[1] ?? ''
     expect(jq).toContain('.path == ".github/workflows/qa-candidate.yml"')
     expect(jq).toContain('.event == "workflow_dispatch"')
     expect(jq).toContain('(.head_branch == "main" or .head_branch == "release/1.9.x")')
     expect(jq).toContain('.status == "completed" and .conclusion == "success"')
+    expect(jq).toContain('.run_attempt > 0')
+    expect(step('Require a fully successful')).toContain('attempt=$(jq -r .run_attempt')
     expect(jq.match(/head_branch/g)).toHaveLength(2)
     expect(step('Require a fully successful')).toContain('all(.jobs[]; .conclusion == "success")')
     expect(step('Require a fully successful')).toContain('.total_count == (.jobs | length)')
@@ -74,6 +76,8 @@ describe('Promote candidate workflow: main and release/1.9.x candidates (M2-0500
 
   it('passes the candidate branch to prepare-release and keeps confirm_version exact, never rebuilding', () => {
     expect(step('prepare-release')).toContain('--candidate-branch "$CANDIDATE_BRANCH"')
+    expect(step('prepare-release')).toContain('--candidate-attempt "$CANDIDATE_ATTEMPT"')
+    expect(step('prepare-release')).toContain('CANDIDATE_ATTEMPT: ${{ steps.candidate.outputs.attempt }}')
     expect(step('Confirm the candidate version')).toContain('[ "$CONFIRM" = "$VERSION" ]')
     expect(steps.indexOf(step('Confirm the candidate version'))).toBeLessThan(
       steps.indexOf(step('node scripts/qa/publish-dual-release.mjs'))

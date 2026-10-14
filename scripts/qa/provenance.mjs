@@ -3,7 +3,8 @@
 // candidate lane (M2-0187). Node builtins only.
 //
 // Identified by sha256: every consumer verifies each installer's sha256 against this run's
-// provenance.json before using it — evidence binds to bytes by (build_run_id, artifact_sha256).
+// provenance.json before using it — evidence binds to bytes by (build_run_id, artifact_sha256), while
+// provenance binds the exact workflow attempt, platform, byte size and commit that produced them.
 // Published = tested: promotion uploads exactly the promotable installers, SHA256SUMS.txt and
 // the unmodified provenance.json — no build, install or npm step ever runs here.
 // Evidence required: promotion needs a PASS evidence record bound to this run's bytes for every
@@ -112,6 +113,11 @@ function resolveSigning(platform, env) {
 }
 
 const RUNNER_FIELDS = { os: 'RUNNER_OS', arch: 'RUNNER_ARCH', image: 'ImageOS', image_version: 'ImageVersion' }
+const positiveInteger = (value) => {
+  if (!/^[1-9]\d*$/.test(String(value ?? ''))) return null
+  const number = Number(value)
+  return Number.isSafeInteger(number) ? number : null
+}
 
 /** Reads and hashes one file, folding any error (missing, unreadable) into `problems` by its path. */
 function readAndHash(repoRoot, path, problems) {
@@ -141,7 +147,7 @@ function readDependencyVersion(repoRoot, name, problems) {
  */
 export async function stageBuild({ variant, repoRoot, releaseDir, outDir, env, nodeVersion }) {
   const config = VARIANTS[variant]
-  if (!config) throw new Error(`unknown variant: ${variant}`)
+  if (!Object.hasOwn(VARIANTS, variant)) throw new Error(`unknown variant: ${variant}`)
 
   const pkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'))
   const version = pkg.version
@@ -152,6 +158,12 @@ export async function stageBuild({ variant, repoRoot, releaseDir, outDir, env, n
   const sha = env.GITHUB_SHA ?? ''
   if (!/^[0-9a-f]{40}$/.test(sha)) {
     problems.push(`GITHUB_SHA is not a 40-character lowercase commit hash: ${JSON.stringify(sha)}`)
+  }
+  const runId = positiveInteger(env.GITHUB_RUN_ID)
+  if (runId === null) problems.push(`GITHUB_RUN_ID is not a positive integer: ${JSON.stringify(env.GITHUB_RUN_ID)}`)
+  const runAttempt = positiveInteger(env.GITHUB_RUN_ATTEMPT)
+  if (runAttempt === null) {
+    problems.push(`GITHUB_RUN_ATTEMPT is not a positive integer: ${JSON.stringify(env.GITHUB_RUN_ATTEMPT)}`)
   }
 
   const runner = Object.fromEntries(Object.entries(RUNNER_FIELDS).map(([field, envVar]) => [field, env[envVar] ?? '']))
@@ -195,6 +207,8 @@ export async function stageBuild({ variant, repoRoot, releaseDir, outDir, env, n
     artifact: `candidate-${variant}`,
     commit: sha,
     version,
+    platform: config.platform,
+    run: { id: runId, attempt: runAttempt },
     runner,
     node: nodeVersion,
     electron,
@@ -208,23 +222,31 @@ export async function stageBuild({ variant, repoRoot, releaseDir, outDir, env, n
   return record
 }
 
-/** Binds every per-variant build record to one commit and run, and returns the object written to provenance.json. */
+/** Binds each build record to one commit, workflow attempt, version, platform and exact asset list. */
 export function assembleProvenance(records, env) {
   const problems = []
 
   const sha = env.GITHUB_SHA ?? ''
   if (!/^[0-9a-f]{40}$/.test(sha))
     problems.push(`GITHUB_SHA is not a 40-character lowercase commit hash: ${JSON.stringify(sha)}`)
-  const runId = Number(env.GITHUB_RUN_ID)
-  if (!Number.isInteger(runId) || runId <= 0) {
+  const runId = positiveInteger(env.GITHUB_RUN_ID)
+  if (runId === null) {
     problems.push(`GITHUB_RUN_ID is not a positive integer: ${JSON.stringify(env.GITHUB_RUN_ID)}`)
+  }
+  const runAttempt = positiveInteger(env.GITHUB_RUN_ATTEMPT)
+  if (runAttempt === null) {
+    problems.push(`GITHUB_RUN_ATTEMPT is not a positive integer: ${JSON.stringify(env.GITHUB_RUN_ATTEMPT)}`)
   }
   if (!env.GITHUB_REPOSITORY) problems.push('GITHUB_REPOSITORY is empty')
   if (!env.GITHUB_SERVER_URL) problems.push('GITHUB_SERVER_URL is empty')
 
   const byVariant = new Map()
   for (const record of records) {
-    if (!VARIANTS[record.variant]) {
+    if (typeof record !== 'object' || record === null || Array.isArray(record)) {
+      problems.push('build record is not a JSON object')
+      continue
+    }
+    if (!Object.hasOwn(VARIANTS, record.variant)) {
       problems.push(`unknown variant: ${record.variant}`)
       continue
     }
@@ -242,6 +264,36 @@ export function assembleProvenance(records, env) {
     if (record.commit !== sha) {
       problems.push(`${record.variant}: commit ${record.commit} does not match this run's commit ${sha}`)
     }
+    const expectedPlatform = VARIANTS[record.variant].platform
+    if (record.platform !== expectedPlatform) {
+      problems.push(`${record.variant}: platform ${record.platform} does not match expected ${expectedPlatform}`)
+    }
+    if (record.run?.id !== runId) {
+      problems.push(`${record.variant}: run ${record.run?.id} does not match this run ${runId}`)
+    }
+    if (record.run?.attempt !== runAttempt) {
+      problems.push(`${record.variant}: attempt ${record.run?.attempt} does not match this run attempt ${runAttempt}`)
+    }
+    if (typeof record.version !== 'string' || record.version.length === 0) {
+      problems.push(`${record.variant}: version is empty or invalid`)
+    }
+    const expectedAssetNames = VARIANTS[record.variant].assets(record.version).sort()
+    const recordAssets = Array.isArray(record.assets) ? record.assets : []
+    const actualAssetNames = recordAssets.map((asset) => asset?.name).sort()
+    if (JSON.stringify(actualAssetNames) !== JSON.stringify(expectedAssetNames)) {
+      problems.push(`${record.variant}: assets do not match configured asset names`)
+    }
+    for (const asset of recordAssets) {
+      if (typeof asset?.name !== 'string') {
+        problems.push(`${record.variant}: asset name is missing`)
+      }
+      if (!Number.isSafeInteger(asset?.size) || asset.size < 0) {
+        problems.push(`${record.variant}: ${asset?.name ?? 'asset'} has an invalid byte size`)
+      }
+      if (!/^[0-9a-f]{64}$/.test(asset?.sha256 ?? '')) {
+        problems.push(`${record.variant}: ${asset?.name ?? 'asset'} has an invalid sha256`)
+      }
+    }
   }
   const versions = new Set([...byVariant.values()].map((record) => record.version))
   if (versions.size > 1) {
@@ -249,7 +301,8 @@ export function assembleProvenance(records, env) {
   }
   const ownerOfAsset = new Map()
   for (const record of byVariant.values()) {
-    for (const asset of record.assets) {
+    for (const asset of Array.isArray(record.assets) ? record.assets : []) {
+      if (typeof asset?.name !== 'string') continue
       if (ownerOfAsset.has(asset.name)) {
         problems.push(`asset name ${asset.name} appears in both ${ownerOfAsset.get(asset.name)} and ${record.variant}`)
       } else {
@@ -281,17 +334,86 @@ export function assembleProvenance(records, env) {
   const version = [...byVariant.values()][0].version
   const builds = [...byVariant.values()]
     .sort((a, b) => a.variant.localeCompare(b.variant))
-    // commit and version are hoisted to the top and dropped from every build.
-    .map(({ commit, version: _version, ...rest }) => rest)
+    // commit, version and the exact run identity are hoisted to the top and dropped from every build.
+    .map(({ commit, version: _version, run: _run, ...rest }) => rest)
 
   return {
-    schema: 1,
+    schema: 2,
     repository: env.GITHUB_REPOSITORY,
     commit: sha,
     version,
-    run: { id: runId, url: `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${runId}` },
+    run: {
+      id: runId,
+      attempt: runAttempt,
+      url: `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${runId}`
+    },
     builds
   }
+}
+
+/** Refuses malformed or legacy provenance before it is used to authorize promotion. */
+export function provenanceProblems(provenance) {
+  const problems = []
+  if (typeof provenance !== 'object' || provenance === null || Array.isArray(provenance)) {
+    return ['provenance is not a JSON object']
+  }
+  if (provenance.schema !== 2) problems.push(`provenance schema ${provenance.schema} is not supported (expected 2)`)
+  if (typeof provenance.repository !== 'string' || provenance.repository.length === 0) {
+    problems.push('provenance repository is empty or invalid')
+  }
+  if (!/^[0-9a-f]{40}$/.test(provenance.commit ?? '')) {
+    problems.push('provenance commit is not a 40-character lowercase hash')
+  }
+  if (typeof provenance.version !== 'string' || provenance.version.length === 0) {
+    problems.push('provenance version is empty or invalid')
+  }
+  if (!positiveInteger(provenance.run?.id)) problems.push('provenance run id is not a positive integer')
+  if (!positiveInteger(provenance.run?.attempt)) problems.push('provenance run attempt is not a positive integer')
+  if (!Array.isArray(provenance.builds)) return [...problems, 'provenance builds is not an array']
+
+  const seenVariants = new Set()
+  const seenAssets = new Set()
+  for (const build of provenance.builds) {
+    if (typeof build !== 'object' || build === null || Array.isArray(build)) {
+      problems.push('provenance contains a build that is not a JSON object')
+      continue
+    }
+    const variant = build.variant
+    if (typeof variant !== 'string' || !Object.hasOwn(VARIANTS, variant)) {
+      problems.push(`provenance contains unknown variant ${JSON.stringify(variant)}`)
+      continue
+    }
+    if (seenVariants.has(variant)) problems.push(`provenance contains duplicate variant ${variant}`)
+    seenVariants.add(variant)
+    const config = VARIANTS[variant]
+    if (build.platform !== config.platform) {
+      problems.push(`${variant}: platform ${build.platform} does not match expected ${config.platform}`)
+    }
+    const assets = Array.isArray(build.assets) ? build.assets : []
+    const expectedNames = config.assets(provenance.version).sort()
+    const actualNames = assets.map((asset) => asset?.name).sort()
+    if (JSON.stringify(actualNames) !== JSON.stringify(expectedNames)) {
+      problems.push(`${variant}: provenance assets do not match the expected asset names`)
+    }
+    for (const asset of assets) {
+      if (typeof asset?.name !== 'string') {
+        problems.push(`${variant}: provenance asset name is missing`)
+        continue
+      }
+      if (seenAssets.has(asset.name)) problems.push(`provenance contains duplicate asset ${asset.name}`)
+      seenAssets.add(asset.name)
+      if (!Number.isSafeInteger(asset.size) || asset.size < 0) {
+        problems.push(`${asset.name}: provenance byte size is invalid`)
+      }
+      if (!/^[0-9a-f]{64}$/.test(asset.sha256 ?? '')) {
+        problems.push(`${asset.name}: provenance sha256 is invalid`)
+      }
+    }
+  }
+  for (const variant of Object.keys(VARIANTS)) {
+    if (!seenVariants.has(variant)) problems.push(`provenance has no build for variant ${variant}`)
+  }
+  return problems
 }
 
 /** `shasum -a 256 -c`'s format: one `<sha256>  <name>` line per asset, sorted by name. */
@@ -420,7 +542,7 @@ export function residualsProblems(residuals) {
 }
 
 /**
- * releaseNotes' shape is normative: version, commit, candidate run, promotion run, owner-channel/
+ * releaseNotes' shape is normative: version, commit, candidate run and attempt, promotion run, owner-channel/
  * hand-install framing (never Latest), signing mode, the evidence summary, the residuals section when
  * given (rendered verbatim) and the sha256 table. A release/1.9.x candidate adds one line naming it a
  * hotfix of 1.9.7.
@@ -442,7 +564,7 @@ export function releaseNotes({ provenance, evidence, promotionRunUrl, residuals,
       ? `**Hotfix:** a hotfix of 1.9.7 built from release/1.9.x at commit \`${provenance.commit}\`.\n\n`
       : ''
 
-  return `Owner-channel prerelease of Métis ${provenance.version}. These files are the exact bytes of QA candidate run [${provenance.run.id}](${provenance.run.url}), built once from commit \`${provenance.commit}\` and promoted by [this run](${promotionRunUrl}) without rebuilding.
+  return `Owner-channel prerelease of Métis ${provenance.version}. These files are the exact bytes of QA candidate run [${provenance.run.id}](${provenance.run.url}) (attempt ${provenance.run.attempt}), built once from commit \`${provenance.commit}\` and promoted by [this run](${promotionRunUrl}) without rebuilding.
 
 **This is not a signed customer release.** ${macSigning} The Windows installers carry no Authenticode signature. On macOS, allow the first launch in System Settings → Privacy & Security → Open Anyway; on Windows, choose More info → Run anyway. In-app update does not offer this build, so install it by hand.
 
@@ -452,7 +574,7 @@ ${residualsSection}| File | SHA-256 |
 |---|---|
 ${rows}
 
-\`provenance.json\` records the commit, the candidate run, the runner images and the Node, Electron and electron-builder versions and builder configuration hashes of every build. Check a download with \`shasum -a 256 -c SHA256SUMS.txt\` on macOS or \`Get-FileHash\` on Windows.
+\`provenance.json\` records the commit, candidate run and attempt, platform, per-file byte size and SHA-256, runner images, Node, Electron and electron-builder versions, and builder configuration hashes of every build. Check a download with \`shasum -a 256 -c SHA256SUMS.txt\` on macOS or \`Get-FileHash\` on Windows.
 `
 }
 
@@ -466,6 +588,7 @@ export async function prepareRelease({
   downloadsDir,
   outDir,
   candidateRun,
+  candidateAttempt,
   candidateCommit,
   residuals,
   candidateBranch,
@@ -476,9 +599,27 @@ export async function prepareRelease({
   const evidenceBytes = readFileSync(evidencePath)
   const evidenceText = evidenceBytes.toString('utf8')
 
-  const problems = []
+  const problems = provenanceProblems(provenance)
+  if (problems.length) throw new Error(problems.join('\n'))
+  if (provenance.repository !== env.GITHUB_REPOSITORY) {
+    problems.push(
+      `provenance repository ${provenance.repository} does not match this repository ${env.GITHUB_REPOSITORY}`
+    )
+  }
+  const expectedRunUrl = `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${provenance.run.id}`
+  if (provenance.run.url !== expectedRunUrl) {
+    problems.push('provenance run URL does not match its repository and run id')
+  }
   if (String(provenance.run.id) !== String(candidateRun)) {
     problems.push(`provenance run ${provenance.run.id} does not match the candidate run ${candidateRun}`)
+  }
+  const expectedAttempt = positiveInteger(candidateAttempt)
+  if (expectedAttempt === null) {
+    problems.push(`candidate attempt is not a positive integer: ${JSON.stringify(candidateAttempt)}`)
+  } else if (provenance.run.attempt !== expectedAttempt) {
+    problems.push(
+      `provenance attempt ${provenance.run.attempt} does not match the candidate attempt ${expectedAttempt}`
+    )
   }
   if (provenance.commit !== candidateCommit) {
     problems.push(`provenance commit ${provenance.commit} does not match the candidate commit ${candidateCommit}`)
@@ -558,7 +699,9 @@ function usage() {
       '  stage <variant> <release-dir> <out-dir>\n' +
       '  assemble <records-dir> <out-dir>\n' +
       '  verify <provenance.json> <dir> <variant>...\n' +
-      '  prepare-release <provenance.json> <evidence.jsonl> <downloads-dir> <out-dir> --candidate-run <id> --candidate-commit <sha> [--candidate-branch <head_branch>] [--residuals-file <file>]\n' +
+      '  prepare-release <provenance.json> <evidence.jsonl> <downloads-dir> <out-dir> --candidate-run <id> ' +
+      '--candidate-attempt <attempt> --candidate-commit <sha> [--candidate-branch <head_branch>] ' +
+      '[--residuals-file <file>]\n' +
       '  check-release <manifest.json> <uploaded.json>'
   )
   process.exitCode = 2
@@ -596,6 +739,8 @@ async function main(argv) {
         const [provenancePath, dir, ...variants] = rest
         if (!provenancePath || !dir || variants.length === 0) return usage()
         const provenance = JSON.parse(readFileSync(provenancePath, 'utf8'))
+        const identityProblems = provenanceProblems(provenance)
+        if (identityProblems.length) throw new Error(identityProblems.join('\n'))
         const problems = await directoryProblems(provenance, dir, variants)
         if (problems.length) throw new Error(problems.join('\n'))
         break
@@ -604,9 +749,10 @@ async function main(argv) {
         const [provenancePath, evidencePath, downloadsDir, outDir, ...flags] = rest
         if (!provenancePath || !evidencePath || !downloadsDir || !outDir) return usage()
         const candidateRun = flagValue(flags, '--candidate-run')
+        const candidateAttempt = flagValue(flags, '--candidate-attempt')
         const candidateCommit = flagValue(flags, '--candidate-commit')
         const candidateBranch = flagValue(flags, '--candidate-branch')
-        if (!candidateRun || !candidateCommit) return usage()
+        if (!candidateRun || !candidateAttempt || !candidateCommit) return usage()
         const residualsFile = flagValue(flags, '--residuals-file')
         const residuals = residualsFile === undefined ? undefined : readFileSync(residualsFile, 'utf8')
         await prepareRelease({
@@ -615,6 +761,7 @@ async function main(argv) {
           downloadsDir,
           outDir,
           candidateRun,
+          candidateAttempt,
           candidateCommit,
           residuals,
           candidateBranch,

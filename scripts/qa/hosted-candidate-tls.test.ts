@@ -43,15 +43,16 @@ const identity = {
   platform: 'darwin'
 }
 const provenance = () => ({
-  schema: 1,
+  schema: 2,
   repository: 'mysticalsin/AskToto-Mantu',
-  run: { id: 42 },
+  run: { id: 42, attempt: 1 },
   commit: identity.producer_commit,
   version: identity.version,
   builds: [
     {
       variant: 'mac-qa-identity',
       artifact: 'candidate-mac-qa-identity',
+      platform: 'mac',
       electron: '43.6.0',
       assets: [{ name: 'Metis-QA-1.9.7.zip', size: 12, sha256: identity.installer_sha256 }]
     }
@@ -59,6 +60,7 @@ const provenance = () => ({
 })
 const context = {
   candidateRun: 42,
+  candidateAttempt: 1,
   producerCommit: identity.producer_commit,
   harnessCommit: identity.harness_commit,
   sha256: identity.installer_sha256,
@@ -82,6 +84,7 @@ describe('hosted TLS immutable support evidence', () => {
     expect(bindHostedTlsCandidate(provenance(), context)).toEqual(identity)
     for (const changed of [
       { ...context, candidateRun: 43 },
+      { ...context, candidateAttempt: 2 },
       { ...context, producerCommit: 'd'.repeat(40) },
       { ...context, sha256: 'e'.repeat(64) },
       { ...context, installer: 'assets/Metis-1.9.7.dmg' }

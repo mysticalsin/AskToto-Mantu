@@ -114,9 +114,11 @@ const identityValid = (identity) =>
 export function bindHostedTlsCandidate(provenance, context) {
   if (
     !plain(provenance) ||
-    provenance.schema !== 1 ||
+    provenance.schema !== 2 ||
     provenance.repository !== 'mysticalsin/AskToto-Mantu' ||
     provenance.run?.id !== context.candidateRun ||
+    !positive(context.candidateAttempt) ||
+    provenance.run?.attempt !== context.candidateAttempt ||
     provenance.commit !== context.producerCommit ||
     !Array.isArray(provenance.builds)
   ) {
@@ -129,6 +131,7 @@ export function bindHostedTlsCandidate(provenance, context) {
   if (
     builds.length !== 1 ||
     build.artifact !== 'candidate-mac-qa-identity' ||
+    build.platform !== 'mac' ||
     build.electron !== ELECTRON ||
     !Array.isArray(build.assets) ||
     build.assets.length !== 1 ||
