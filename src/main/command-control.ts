@@ -24,9 +24,32 @@ type CurrentProposal = CommandControlProposal & {
   expiresAt: number
 }
 
+export type CommandConfirmationPolicyInput = {
+  authenticated: boolean
+  listenEntitled: boolean
+  owner: { destroyed: boolean; visible: boolean; focused: boolean } | null
+  onboardingExclusive: boolean
+  lifecycleHooksReady: boolean
+}
+
+/** Pure gate for every non-in-app action. Missing trust or lifecycle state denies confirmation. */
+export function commandConfirmationPolicyAllows(input: CommandConfirmationPolicyInput): boolean {
+  return (
+    input.authenticated &&
+    input.listenEntitled &&
+    input.owner !== null &&
+    !input.owner.destroyed &&
+    input.owner.visible &&
+    input.owner.focused &&
+    !input.onboardingExclusive &&
+    input.lifecycleHooksReady
+  )
+}
+
 type CommandControlDeps = {
   execute: (request: DesktopActionRequest) => Promise<DesktopActionResult>
-  policyAllows?: (request: DesktopActionRequest) => boolean
+  /** Main-process policy is required: omitting it must never turn confirmation into permission. */
+  policyAllows: (request: DesktopActionRequest) => boolean
   audit?: (event: 'command.confirmed' | 'command.revoked', metadata: Record<string, string>) => void
   onState?: (state: CommandControlState) => void
   now?: () => number
@@ -50,11 +73,14 @@ export class CommandControl {
     this.ttlMs = deps.ttlMs ?? COMMAND_PROPOSAL_TTL_MS
   }
 
-  propose(
-    owner: { webContentsId: number; revision: number },
-    request: DesktopActionRequest
-  ): CommandControlProposal {
+  propose(owner: { webContentsId: number; revision: number }, request: DesktopActionRequest): CommandControlProposal {
     this.clearCurrent()
+    // The proposal keeps a private snapshot. No caller that supplied the request can mutate what
+    // the user later confirms, even if a future command source starts reusing request objects.
+    const requestSnapshot = Object.freeze({
+      ...request,
+      args: Object.freeze({ ...request.args })
+    }) as DesktopActionRequest
     const proposal = {
       proposalId: randomBytes(16).toString('hex'),
       nonce: randomBytes(32).toString('hex')
@@ -63,7 +89,7 @@ export class CommandControl {
       ...proposal,
       ownerWebContentsId: owner.webContentsId,
       revision: owner.revision,
-      request,
+      request: requestSnapshot,
       expiresAt: this.now() + this.ttlMs
     }
     this.armExpiry(this.current)
@@ -90,7 +116,14 @@ export class CommandControl {
     // Consume before yielding to the adapter, so a double click or replay cannot execute twice.
     this.clearCurrent()
     this.emit()
-    if (!isDesktopAdapterId(proposal.request.id) || this.deps.policyAllows?.(proposal.request) === false) {
+    let allowed = false
+    try {
+      allowed = isDesktopAdapterId(proposal.request.id) && this.deps.policyAllows(proposal.request) === true
+    } catch {
+      // A broken or unavailable policy check is a denial, never an implicit allow.
+      allowed = false
+    }
+    if (!allowed) {
       this.audit('command.revoked', { actionId: proposal.request.id, reason: 'policy_denied' })
       return { ok: false, reason: 'policy_denied' }
     }
@@ -129,7 +162,9 @@ export class CommandControl {
     this.audit('command.revoked', { actionId: proposal.request.id, reason })
   }
 
-  private validate(input: CommandControlProposal & { webContentsId: number }): CurrentProposal | { ok: false; reason: CommandControlReason } {
+  private validate(
+    input: CommandControlProposal & { webContentsId: number }
+  ): CurrentProposal | { ok: false; reason: CommandControlReason } {
     const proposal = this.current
     if (!proposal) return { ok: false, reason: 'proposal_missing' }
     if (input.webContentsId !== proposal.ownerWebContentsId) return { ok: false, reason: 'owner_mismatch' }
@@ -145,10 +180,13 @@ export class CommandControl {
   }
 
   private armExpiry(proposal: CurrentProposal): void {
-    this.expiryTimer = setTimeout(() => {
-      if (this.current?.proposalId !== proposal.proposalId) return
-      this.revokeForLifecycleEvent('expired')
-    }, Math.max(0, proposal.expiresAt - this.now()))
+    this.expiryTimer = setTimeout(
+      () => {
+        if (this.current?.proposalId !== proposal.proposalId) return
+        this.revokeForLifecycleEvent('expired')
+      },
+      Math.max(0, proposal.expiresAt - this.now())
+    )
   }
 
   private clearCurrent(): void {
