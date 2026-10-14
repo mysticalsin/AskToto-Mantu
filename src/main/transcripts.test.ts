@@ -33,6 +33,7 @@ import {
   decryptToTemp
 } from './transcripts'
 import { formatTranscript } from './features/meetings/transcript-format'
+import { readLegacyTranscript } from './features/meetings/legacy-transcript'
 import { useStorageForTests } from './infra/storage/meetings-storage'
 import type { SaveMeeting, Settings } from '@shared/ipc'
 
@@ -83,15 +84,10 @@ describe('MQA-245 — a diarization cluster label is not wrapped in the generic 
     expect(body).toMatch(/Them \(Speaker 3\):/)
   })
 
-  it('the bare label survives the round trip through recall.ts — the line is not lost', () => {
+  it('the bare label survives the round trip through the actual recall parser — the line is not lost', () => {
     // The real risk of touching a durable format: a line the writer emits that the reader cannot match
-    // disappears from recall entirely. Assert against recall.ts's OWN regex, read from source, so this
-    // cannot drift into testing a copy of the pattern that no longer ships.
-    const recallSrc = readFileSync(join(__dirname, 'recall.ts'), 'utf8')
-    const m = recallSrc.match(/const lineRe = (\/\^.*\/gm)/)
-    expect(m, "recall.ts's line regex not found — did it move?").toBeTruthy()
-    // eslint-disable-next-line no-eval
-    const lineRe: RegExp = eval(m![1])
+    // disappears from recall entirely. Run the actual reader used by recall rather than a source regex
+    // or a duplicated parser, so the durable speaker identity is checked through shipped behavior.
 
     const t = Date.parse('2026-02-02T10:00:00Z')
     const body = formatTranscript([
@@ -99,23 +95,18 @@ describe('MQA-245 — a diarization cluster label is not wrapped in the generic 
       { t: t + 1000, speaker: 'them', text: 'named line', name: 'Jane Doe' },
       { t: t + 2000, speaker: 'you', text: 'plain line' }
     ])
-    const matched = [...body.matchAll(lineRe)]
+    const matched = readLegacyTranscript(`## Full transcript\n\n${body}`, t)
     expect(matched, 'a written line did not match the reader').toHaveLength(3)
-    expect(matched[0][4]).toBe('Speaker 1') // identity lands in the label slot
-    expect(matched[1][4]).toBe('Them')
-    expect(matched[1][5]).toBe('Jane Doe')
+    expect(matched[0]).toMatchObject({ speaker: 'unknown', name: 'Speaker 1', text: 'cluster line', t })
+    expect(matched[1]).toMatchObject({ speaker: 'them', name: 'Jane Doe', text: 'named line', t: t + 1000 })
+    expect(matched[2]).toMatchObject({ speaker: 'you', text: 'plain line', t: t + 2000 })
   })
 
   it('the legacy "Speaker (Speaker 1)" form still parses — old meetings do not change meaning', () => {
-    const recallSrc = readFileSync(join(__dirname, 'recall.ts'), 'utf8')
-    const m = recallSrc.match(/const lineRe = (\/\^.*\/gm)/)
-    // eslint-disable-next-line no-eval
-    const lineRe: RegExp = eval(m![1])
     const legacy = '**[10:00:00] Speaker (Speaker 1):** an older saved line'
-    const hit = [...legacy.matchAll(lineRe)]
+    const hit = readLegacyTranscript(`## Full transcript\n\n${legacy}`, Date.parse('2026-02-02T10:00:00Z'))
     expect(hit).toHaveLength(1)
-    expect(hit[0][4]).toBe('Speaker')
-    expect(hit[0][5]).toBe('Speaker 1')
+    expect(hit[0]).toMatchObject({ speaker: 'unknown', name: 'Speaker 1', text: 'an older saved line' })
   })
 })
 
