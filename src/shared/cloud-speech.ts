@@ -407,6 +407,9 @@ const SegmentEventSchema = z
       context.addIssue({ code: z.ZodIssueCode.custom, path: ['words'] })
   })
 
+/** Public schema for optional persisted final provenance; the event wire contract is unchanged. */
+export const CloudSpeechSegmentEventSchema = SegmentEventSchema
+
 const TerminalEventSchema = z
   .object({
     type: z.literal('terminal'),

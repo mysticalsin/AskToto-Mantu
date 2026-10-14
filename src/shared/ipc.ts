@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { TranscriptLineSchema, type TranscriptLine } from './transcript-line'
 import { CloudSpeechSettingsSchema, DEFAULT_CLOUD_SPEECH_SETTINGS } from './broker-speech-settings'
 import type { ProviderId } from './providers'
 import { LocalVisionEvidenceSchema } from './local-ai'
@@ -441,27 +442,7 @@ export const ProfileSchema = z.object({
 })
 export type Profile = z.infer<typeof ProfileSchema>
 
-export const TranscriptLineSchema = z.object({
-  // Imported recordings have speech but no diarization. `unknown` prevents the UI and recap prompt from
-  // inventing that every imported sentence was spoken by the operator.
-  speaker: z.enum(['them', 'you', 'unknown']),
-  text: z.string(),
-  t: z.number(),
-  // Speaker Intelligence (Phase A) — the resolved human display name for this line's speaker, backfilled
-  // best-effort from the meeting's own Microsoft Teams transcript after the meeting ends (see
-  // main/graph-transcript.ts + shared/transcript-align.ts). Additive only: the SIDE (`speaker` — them/
-  // you/unknown) is never inferred or changed by this. Optional so every previously saved meeting, and
-  // any line no name was ever resolved for, still parses unchanged.
-  name: z.string().optional(),
-  // Detected spoken language of this line (shared/lang-id.ts display name, e.g. 'Portuguese') — tagged
-  // by commitLine so mixed-language meetings render "[conversation switches to …]" markers in the recap
-  // prompt and the saved transcript (the LLM otherwise has no way to know a switch happened). Absent
-  // when detection wasn't confident, and on every line saved before this field existed.
-  lang: z.string().optional(),
-  // Streaming first-caption placeholder (docs/asr/QUALITY.md). Never persisted; transcriptToText drops it.
-  provisional: z.boolean().optional()
-})
-export type TranscriptLine = z.infer<typeof TranscriptLineSchema>
+export { TranscriptLineSchema, type TranscriptLine } from './transcript-line'
 
 /** ASR quality (1B.2b) — strip UI-only provisional placeholders (see TranscriptLineSchema.provisional
  *  above) before a transcript reaches disk or the recap prompt. `transcriptToText` (renderer/lib/
