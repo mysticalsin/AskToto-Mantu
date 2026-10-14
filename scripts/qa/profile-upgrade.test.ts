@@ -126,9 +126,7 @@ describe('hosted in-place Windows profile upgrade acceptance', () => {
   })
 
   it('pins the exact successful hosted candidate workflow run and Setup bytes', () => {
-    expect(
-      verifyCandidateIdentity(run, provenance, run.id, run.head_sha, run.head_branch)
-    ).toEqual({
+    expect(verifyCandidateIdentity(run, provenance, run.id, run.head_sha, run.head_branch)).toEqual({
       run_id: String(run.id),
       attempt: 1,
       commit: run.head_sha,
@@ -137,31 +135,13 @@ describe('hosted in-place Windows profile upgrade acceptance', () => {
       sha256: 'b'.repeat(64)
     })
     expect(() =>
-      verifyCandidateIdentity(
-        { ...run, conclusion: 'failure' },
-        provenance,
-        run.id,
-        run.head_sha,
-        run.head_branch
-      )
+      verifyCandidateIdentity({ ...run, conclusion: 'failure' }, provenance, run.id, run.head_sha, run.head_branch)
     ).toThrow(/concluded failure/)
     expect(() =>
-      verifyCandidateIdentity(
-        { ...run, event: 'pull_request' },
-        provenance,
-        run.id,
-        run.head_sha,
-        run.head_branch
-      )
+      verifyCandidateIdentity({ ...run, event: 'pull_request' }, provenance, run.id, run.head_sha, run.head_branch)
     ).toThrow(/workflow_dispatch/)
     expect(() =>
-      verifyCandidateIdentity(
-        run,
-        { ...provenance, commit: 'c'.repeat(40) },
-        run.id,
-        run.head_sha,
-        run.head_branch
-      )
+      verifyCandidateIdentity(run, { ...provenance, commit: 'c'.repeat(40) }, run.id, run.head_sha, run.head_branch)
     ).toThrow(/commit differs/)
     expect(() =>
       verifyCandidateIdentity(
@@ -173,44 +153,40 @@ describe('hosted in-place Windows profile upgrade acceptance', () => {
       )
     ).toThrow(/provenance run attempt/)
     expect(() =>
-      verifyCandidateIdentity(
-        { ...run, head_sha: 'c'.repeat(40) },
-        provenance,
-        run.id,
-        run.head_sha,
-        run.head_branch
-      )
+      verifyCandidateIdentity({ ...run, head_sha: 'c'.repeat(40) }, provenance, run.id, run.head_sha, run.head_branch)
     ).toThrow(/approved commit/)
-    expect(() =>
-      verifyCandidateIdentity(run, provenance, run.id, 'c'.repeat(40), run.head_branch)
-    ).toThrow(/approved commit/)
-    expect(() =>
-      verifyCandidateIdentity(run, provenance, run.id, run.head_sha, 'release/1.9.x')
-    ).toThrow(/approved ref/)
-    expect(() =>
-      verifyCandidateIdentity(run, provenance, run.id, undefined, run.head_branch)
-    ).toThrow(/explicit approved/)
+    expect(() => verifyCandidateIdentity(run, provenance, run.id, 'c'.repeat(40), run.head_branch)).toThrow(
+      /approved commit/
+    )
+    expect(() => verifyCandidateIdentity(run, provenance, run.id, run.head_sha, 'release/1.9.x')).toThrow(
+      /approved ref/
+    )
+    expect(() => verifyCandidateIdentity(run, provenance, run.id, undefined, run.head_branch)).toThrow(
+      /explicit approved/
+    )
     expect(() => verifyCandidateIdentity(run, provenance, run.id, run.head_sha, undefined)).toThrow(
       /explicit approved candidate ref/
+    )
+    expect(() => verifyCandidateIdentity(run, { ...provenance, builds: [] }, run.id, run.head_sha, run.head_branch)).toThrow(
+      /no Windows/
     )
     expect(() =>
       verifyCandidateIdentity(
         run,
-        { ...provenance, builds: [] },
+        {
+          ...provenance,
+          builds: [
+            {
+              ...provenance.builds[0],
+              assets: [{ ...provenance.builds[0].assets[0], sha256: 'BAD' }]
+            }
+          ]
+        },
         run.id,
         run.head_sha,
         run.head_branch
       )
-    ).toThrow(/no Windows/)
-    expect(() => verifyCandidateIdentity(run, {
-      ...provenance,
-      builds: [
-        {
-          ...provenance.builds[0],
-          assets: [{ ...provenance.builds[0].assets[0], sha256: 'BAD' }]
-        }
-      ]
-    }, run.id, run.head_sha, run.head_branch)).toThrow(/exactly one/)
+    ).toThrow(/exactly one/)
   })
 
   it('accepts only the complete required report bound to exact installer/run values', () => {
@@ -231,9 +207,7 @@ describe('hosted in-place Windows profile upgrade acceptance', () => {
         checks: report.checks.map((row, i) => (i === 4 ? { ...row, status: 'SKIPPED' } : row))
       }).accepted
     ).toBe(false)
-    expect(
-      assessUpgradeReport({ ...report, checks: [...report.checks, report.checks[0]] }).accepted
-    ).toBe(false)
+    expect(assessUpgradeReport({ ...report, checks: [...report.checks, report.checks[0]] }).accepted).toBe(false)
     expect(assessUpgradeReport({ ...report, error: 'installer error' }).accepted).toBe(false)
     expect(
       assessUpgradeReport(
@@ -273,8 +247,6 @@ describe('hosted in-place Windows profile upgrade acceptance', () => {
     note.evidence = 'recallRead did not return the expected saved-note fields'
     const verdict = assessUpgradeReport(report)
     expect(verdict.accepted).toBe(false)
-    expect(verdict.problems.join('\n')).toContain(
-      'note_content_app_visible_after_upgrade status is BLOCKED'
-    )
+    expect(verdict.problems.join('\n')).toContain('note_content_app_visible_after_upgrade status is BLOCKED')
   })
 })
