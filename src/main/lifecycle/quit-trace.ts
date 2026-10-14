@@ -27,6 +27,9 @@ export const QUIT_TRACE_PHASES = [
   'SPEECH_QUIT_RESUME',
   'WINDOW_CLOSE_REQUEST',
   'WINDOW_CLOSED',
+  'CLOSED_CLEANUP_ENTER',
+  'CLOSED_CLEANUP_RETURNED',
+  'CLOSED_CLEANUP_THROWN',
   'WINDOW_UNLOAD_VETO',
   'WINDOW_STATE_C000',
   'WINDOW_STATE_C001',
@@ -45,6 +48,15 @@ export const QUIT_TRACE_PHASES = [
   'WILL_QUIT_STOPALL_EXIT',
   'WILL_QUIT_CLEANUP_ENTER',
   'WILL_QUIT_CLEANUP_EXIT',
+  'FATAL_UNCAUGHT_DURING_QUIT',
+  'FATAL_REJECTION_DURING_QUIT',
+  'FATAL_PERSIST_RETURNED',
+  'FATAL_FIRST_DIALOG',
+  'FATAL_ALREADY_HANDLED',
+  'FATAL_DIALOG_CALL_ENTER',
+  'FATAL_DIALOG_CALL_RETURNED',
+  'FATAL_DIALOG_SETTLED',
+  'FATAL_DIALOG_REJECTED',
   'APP_QUIT',
   'TRACE_OVERFLOW'
 ] as const
@@ -81,6 +93,18 @@ export function observeQuitWindow(window: QuitObservableWindow, trace: QuitTrace
   })
   window.on('closed', () => trace.mark('WINDOW_CLOSED'))
   window.webContents.on('will-prevent-unload', () => trace.mark('WINDOW_UNLOAD_VETO'))
+}
+
+/** Bracket the existing closed cleanup and rethrow its exact failure without turning it into success. */
+export function observeClosedCleanup(trace: QuitTrace, cleanup: () => void): void {
+  trace.mark('CLOSED_CLEANUP_ENTER')
+  try {
+    cleanup()
+  } catch (error) {
+    trace.mark('CLOSED_CLEANUP_THROWN')
+    throw error
+  }
+  trace.mark('CLOSED_CLEANUP_RETURNED')
 }
 
 /** Record only fixed tokens. Diagnostics never change shutdown decisions or wait for output. */
