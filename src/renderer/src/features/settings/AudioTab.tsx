@@ -12,8 +12,9 @@ import { ctl } from '../../ui/ctl'
 import { ManagedChip } from '../../ui/ManagedChip'
 import { Section } from '../../ui/Section'
 import { ToggleRow } from '../../ui/Toggle'
-import { AsrModelRow, CoreAsrAssetsRow, WhisperQualityRow } from './AiSection'
-import { SpeechPackSection, type SpeechPackBridge } from './SpeechPackSection'
+import { AsrModelRow } from './AiSection'
+import type { SpeechPackBridge } from './SpeechPackSection'
+import { OnDeviceSpeechSettings } from './OnDeviceSpeechSettings'
 
 export { LazyTextarea } from '../../ui/LazyText'
 // Local extension until PublicSettings exposes the WebGPU-to-WASM ASR downgrade marker.
@@ -134,9 +135,7 @@ function VocabSuggestions({
     )
   }
 
-  const covered = new Set(
-    settings.asrCorrections.flatMap((c) => [c.from.trim().toLowerCase(), c.to.trim()])
-  )
+  const covered = new Set(settings.asrCorrections.flatMap((c) => [c.from.trim().toLowerCase(), c.to.trim()]))
   const suggestions = names.filter((n) => !covered.has(n.toLowerCase()) && !covered.has(n))
   const atCap = settings.asrCorrections.length >= 100
 
@@ -157,7 +156,9 @@ function VocabSuggestions({
           disabled={locked || atCap}
           title={`Add "${name.toLowerCase()} => ${name}"`}
           onClick={() =>
-            patch({ asrCorrections: [...settings.asrCorrections, { from: name.toLowerCase(), to: name }].slice(0, 100) })
+            patch({
+              asrCorrections: [...settings.asrCorrections, { from: name.toLowerCase(), to: name }].slice(0, 100)
+            })
           }
           className="no-drag focus-ring rounded-full border border-[var(--cl-border)] bg-white/[0.04] px-2 py-0.5 text-[11px] text-[color:var(--cl-foreground)] hover:bg-white/[0.09] disabled:opacity-40"
         >
@@ -215,9 +216,13 @@ function SonioxKeySeat({
   return (
     <div className="mt-1 flex flex-col gap-2 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.02] p-2.5">
       <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-        Soniox runs only when selected here and a key is seated (or SONIOX_API_KEY is set). Nova stays
-        the default transcript source.
-        {envLocked ? ' SONIOX_API_KEY env is active for this seat.' : hasKey ? ' A Soniox key is seated.' : ' No Soniox key seated yet.'}
+        Soniox runs only when selected here and a key is seated (or SONIOX_API_KEY is set). Nova stays the default
+        transcript source.
+        {envLocked
+          ? ' SONIOX_API_KEY env is active for this seat.'
+          : hasKey
+            ? ' A Soniox key is seated.'
+            : ' No Soniox key seated yet.'}
       </p>
       <input
         type="password"
@@ -266,7 +271,9 @@ function getAudioChoices(): {
       id: 'both',
       label: 'Both',
       desc: 'You + them',
-      perm: isWin ? 'Needs Mic; captures your speaker output automatically (no prompt)' : 'Needs Mic + Screen Recording',
+      perm: isWin
+        ? 'Needs Mic; captures your speaker output automatically (no prompt)'
+        : 'Needs Mic + Screen Recording',
       icon: Headphones
     },
     {
@@ -307,7 +314,10 @@ function AudioChoices({
               locked ? 'opacity-60 cursor-not-allowed' : ''
             ].join(' ')}
           >
-            <c.icon size={16} className={active ? 'text-[color:var(--cl-primary)]' : 'text-[color:var(--cl-muted-foreground)]'} />
+            <c.icon
+              size={16}
+              className={active ? 'text-[color:var(--cl-primary)]' : 'text-[color:var(--cl-muted-foreground)]'}
+            />
             <span className="text-[13px] font-medium text-[color:var(--cl-foreground)]">{c.label}</span>
             <span className="min-w-0 break-words text-[11px] text-[color:var(--cl-muted-foreground)]">{c.desc}</span>
             <span className="min-w-0 break-words text-[10px] text-[color:var(--cl-muted-foreground)]">{c.perm}</span>
@@ -529,8 +539,8 @@ function MicPicker({
         </button>
       ) : (
         <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-          Choose a specific mic, or keep the system default. If a chosen device disconnects, Métis falls
-          back to the default so a meeting never loses its mic.
+          Choose a specific mic, or keep the system default. If a chosen device disconnects, Métis falls back to the
+          default so a meeting never loses its mic.
         </span>
       )}
     </div>
@@ -554,7 +564,10 @@ export function AudioTab({
   // preference that has no effect in a production build.
   const [asrBundled, setAsrBundled] = useState(true)
   useEffect(() => {
-    void window.toto.asrBundled().then(setAsrBundled).catch(() => setAsrBundled(true))
+    void window.toto
+      .asrBundled()
+      .then(setAsrBundled)
+      .catch(() => setAsrBundled(true))
   }, [])
 
   // Parakeet native-addon health. addonError is set when the sherpa-onnx addon itself failed to load
@@ -574,342 +587,323 @@ export function AudioTab({
   const sttPolicy = settings.modelPolicyCapabilities.stt
 
   return (
-<div className="flex min-w-0 max-w-full flex-col gap-6">
-                {sttPolicy && (
-                  <div className="flex items-center gap-2 rounded-[10px] border border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)] p-3 text-[12px] text-[color:var(--cl-foreground)]">
-                    <Info size={14} className="shrink-0 text-[color:var(--cl-primary)]" />
-                    <span>
-                      Managed by your organization: {MODEL_POLICY_CAPABILITY_LABELS.stt} uses <strong>{sttPolicy.provider}</strong> (
-                      {sttPolicy.model}), set on the Operator portal.
-                    </span>
-                  </div>
-                )}
-                <Section title="Listen to" desc="Whose audio Métis transcribes during a meeting." icon={Mic}>
-                  <div className="mb-2"><ManagedChip keys={settings.managedKeys} k="audioSource" /></div>
-                  <AudioChoices settings={settings} patch={patch} />
-                  <MicPicker settings={settings} patch={patch} />
-                  {/* Mic-only capture trace — same after-the-fact contract as asrLastFallbackAt in the
+    <div className="flex min-w-0 max-w-full flex-col gap-6">
+      {sttPolicy && (
+        <div className="flex items-center gap-2 rounded-[10px] border border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)] p-3 text-[12px] text-[color:var(--cl-foreground)]">
+          <Info size={14} className="shrink-0 text-[color:var(--cl-primary)]" />
+          <span>
+            Managed by your organization: {MODEL_POLICY_CAPABILITY_LABELS.stt} uses{' '}
+            <strong>{sttPolicy.provider}</strong> ({sttPolicy.model}), set on the Operator portal.
+          </span>
+        </div>
+      )}
+      <Section title="Listen to" desc="Whose audio Métis transcribes during a meeting." icon={Mic}>
+        <div className="mb-2">
+          <ManagedChip keys={settings.managedKeys} k="audioSource" />
+        </div>
+        <AudioChoices settings={settings} patch={patch} />
+        <MicPicker settings={settings} patch={patch} />
+        {/* Mic-only capture trace — same after-the-fact contract as asrLastFallbackAt in the
                       Speech tab: a meeting that requested system audio ran with the microphone only, so
                       the other side's speech is missing from the transcript. Persists until dismissed. */}
-                  {settings.micOnlyFallbackAt != null && (
-                    <div className="mt-1 flex min-w-0 flex-wrap items-start justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
-                      <span className="min-w-0 flex-1 break-words">
-                        A recent meeting captured your microphone only. The other side&apos;s audio was not
-                        recorded
-                        {isWindows
-                          ? ' (check that the call plays through your default output device)'
-                          : ' (usually the Screen Recording permission)'}
-                        . {new Date(settings.micOnlyFallbackAt).toLocaleString()}.
-                      </span>
-                      <span className="flex shrink-0 items-center gap-2">
-                        {!isWindows && (
-                          <TextButton onClick={() => void window.toto.openPermissionSettings('screenRecording')}>
-                            Open Screen Recording settings
-                          </TextButton>
-                        )}
-                        <TextButton onClick={() => patch({ micOnlyFallbackAt: null })}>Dismiss</TextButton>
-                      </span>
-                    </div>
-                  )}
-                </Section>
-                {tapControl}
-                <Section title="In meetings" icon={Headphones}>
-                  <ToggleRow
-                    label="Auto-answer"
-                    desc="Draft a reply the moment they ask a question."
-                    on={settings.autoSuggest}
-                    onChange={(v) => patch({ autoSuggest: v })}
-                    disabled={settings.managedKeys.includes('autoSuggest')}
-                    icon={MessageSquare}
-                  />
-                  <label className="flex items-center justify-between gap-3 px-1 py-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
-                    <span className="flex items-center gap-2">
-                      Auto-answer cooldown · {settings.suggestEverySec}s
-                      <ManagedChip keys={settings.managedKeys} k="suggestEverySec" />
-                    </span>
-                    <input
-                      type="range"
-                      min={5}
-                      max={120}
-                      step={5}
-                      value={settings.suggestEverySec}
-                      disabled={settings.managedKeys.includes('suggestEverySec')}
-                      onChange={(e) => patch({ suggestEverySec: Number(e.target.value) })}
-                      className={['no-drag accent-[var(--cl-primary)]', settings.managedKeys.includes('suggestEverySec') ? 'opacity-60' : ''].join(' ')}
+        {settings.micOnlyFallbackAt != null && (
+          <div className="mt-1 flex min-w-0 flex-wrap items-start justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
+            <span className="min-w-0 flex-1 break-words">
+              A recent meeting captured your microphone only. The other side&apos;s audio was not recorded
+              {isWindows
+                ? ' (check that the call plays through your default output device)'
+                : ' (usually the Screen Recording permission)'}
+              . {new Date(settings.micOnlyFallbackAt).toLocaleString()}.
+            </span>
+            <span className="flex shrink-0 items-center gap-2">
+              {!isWindows && (
+                <TextButton onClick={() => void window.toto.openPermissionSettings('screenRecording')}>
+                  Open Screen Recording settings
+                </TextButton>
+              )}
+              <TextButton onClick={() => patch({ micOnlyFallbackAt: null })}>Dismiss</TextButton>
+            </span>
+          </div>
+        )}
+      </Section>
+      {tapControl}
+      <Section title="In meetings" icon={Headphones}>
+        <ToggleRow
+          label="Auto-answer"
+          desc="Draft a reply the moment they ask a question."
+          on={settings.autoSuggest}
+          onChange={(v) => patch({ autoSuggest: v })}
+          disabled={settings.managedKeys.includes('autoSuggest')}
+          icon={MessageSquare}
+        />
+        <label className="flex items-center justify-between gap-3 px-1 py-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
+          <span className="flex items-center gap-2">
+            Auto-answer cooldown · {settings.suggestEverySec}s
+            <ManagedChip keys={settings.managedKeys} k="suggestEverySec" />
+          </span>
+          <input
+            type="range"
+            min={5}
+            max={120}
+            step={5}
+            value={settings.suggestEverySec}
+            disabled={settings.managedKeys.includes('suggestEverySec')}
+            onChange={(e) => patch({ suggestEverySec: Number(e.target.value) })}
+            className={[
+              'no-drag accent-[var(--cl-primary)]',
+              settings.managedKeys.includes('suggestEverySec') ? 'opacity-60' : ''
+            ].join(' ')}
+          />
+        </label>
+        <ToggleRow
+          label="Show live transcript"
+          desc="On shows the rolling transcript alongside suggested replies; off shows replies only."
+          on={settings.showLiveTranscript}
+          onChange={(v) => patch({ showLiveTranscript: v })}
+          disabled={settings.managedKeys.includes('showLiveTranscript')}
+        />
+        <ToggleRow
+          label="Show full transcript in review"
+          desc="Off = the end-of-meeting screen shows just the summary; the transcript stays one click away."
+          on={settings.showFullTranscriptInReview}
+          onChange={(v) => patch({ showFullTranscriptInReview: v })}
+          disabled={settings.managedKeys.includes('showFullTranscriptInReview')}
+        />
+        {!isCloudOnlyProfile(resolveEnterpriseLiveProfile(settings.enterpriseLive)) && (
+          <OnDeviceSpeechSettings settings={settings} patch={patch} bridge={speechPackBridge} bundled={asrBundled} />
+        )}
+        {(() => {
+          const liveProfile = resolveEnterpriseLiveProfile(settings.enterpriseLive)
+          const cloudOnly = isCloudOnlyProfile(liveProfile)
+          const cloudProvider = effectiveCloudSttProvider(liveProfile, settings.cloudSttProvider)
+          if (cloudOnly) {
+            return (
+              <div className="flex flex-col gap-1.5 px-1 py-1">
+                <label className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
+                  Transcript source
+                  <FieldHint text="This organization profile sends meeting audio to approved cloud speech recognition. Cloudflare Nova-3 is the default. Soniox is available when your organization has approved it. On-device Whisper, Parakeet, and Apple Speech stay off for this profile, including when cloud speech fails.">
+                    <Info
+                      size={12}
+                      className="shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
                     />
-                  </label>
-                  <ToggleRow
-                    label="Show live transcript"
-                    desc="On shows the rolling transcript alongside suggested replies; off shows replies only."
-                    on={settings.showLiveTranscript}
-                    onChange={(v) => patch({ showLiveTranscript: v })}
-                    disabled={settings.managedKeys.includes('showLiveTranscript')}
-                  />
-                  <ToggleRow
-                    label="Show full transcript in review"
-                    desc="Off = the end-of-meeting screen shows just the summary; the transcript stays one click away."
-                    on={settings.showFullTranscriptInReview}
-                    onChange={(v) => patch({ showFullTranscriptInReview: v })}
-                    disabled={settings.managedKeys.includes('showFullTranscriptInReview')}
-                  />
-                  {!isCloudOnlyProfile(resolveEnterpriseLiveProfile(settings.enterpriseLive)) && (
-                    <>
-                      <CoreAsrAssetsRow />
-                      <SpeechPackSection bridge={speechPackBridge} selectedEngine={settings.asrEngine} />
-                      <WhisperQualityRow bundled={asrBundled} settings={settings} patch={patch} />
-                    </>
-                  )}
-                  {(() => {
-                    const liveProfile = resolveEnterpriseLiveProfile(settings.enterpriseLive)
-                    const cloudOnly = isCloudOnlyProfile(liveProfile)
-                    const cloudProvider = effectiveCloudSttProvider(liveProfile, settings.cloudSttProvider)
-                    if (cloudOnly) {
-                      return (
-                        <div className="flex flex-col gap-1.5 px-1 py-1">
-                          <label className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
-                            Transcript source
-                            <FieldHint text="This organization profile sends meeting audio to approved cloud speech recognition. Cloudflare Nova-3 is the default. Soniox is available when your organization has approved it. On-device Whisper, Parakeet, and Apple Speech stay off for this profile, including when cloud speech fails.">
-                              <Info size={12} className="shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]" />
-                            </FieldHint>
-                            <ManagedChip keys={settings.managedKeys} k="cloudSttProvider" />
-                          </label>
-                          <select
-                            value={cloudProvider}
-                            onChange={(e) =>
-                              patch({ cloudSttProvider: e.target.value as CloudSttProviderId })
-                            }
-                            disabled={settings.managedKeys.includes('cloudSttProvider')}
-                            aria-label="Transcript source"
-                            className={'w-full ' + ctl}
-                          >
-                            <option value="cloudflare-nova3">Cloudflare Nova-3 · cloud speech</option>
-                            <option value="soniox">Soniox · cloud speech (when approved)</option>
-                          </select>
-                          <p className="pl-0.5 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                            Live captions use cloud speech. Audio capture stays on this device; transcripts are
-                            transient. Summaries and actions are what get saved.
-                          </p>
-                          {cloudProvider === 'cloudflare-nova3' && (
-                            <div className="mt-1 flex flex-col gap-2 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.02] p-2.5">
-                              <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                                Nova needs a Cloudflare account token (Settings → AI / Keys), plus account id or
-                                an account-scoped base URL. Gateway id is optional (blank uses default).
-                                {settings.hasKeys?.cloudflare
-                                  ? ' Cloudflare token is seated.'
-                                  : ' Cloudflare token is not seated yet.'}
-                              </p>
-                              <label className="flex flex-col gap-1 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
-                                Cloudflare account id
-                                <LazyInput
-                                  value={settings.cloudflareAccountId ?? ''}
-                                  disabled={settings.managedKeys.includes('cloudflareAccountId')}
-                                  onCommit={(v) => patch({ cloudflareAccountId: v.trim() })}
-                                  placeholder="32 hex characters"
-                                  aria-label="Cloudflare account id for Nova"
-                                  className={'w-full ' + ctl}
-                                />
-                              </label>
-                              <label className="flex flex-col gap-1 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
-                                CF AI Gateway id
-                                <LazyInput
-                                  value={settings.cfAiGatewayId ?? ''}
-                                  disabled={settings.managedKeys.includes('cfAiGatewayId')}
-                                  onCommit={(v) => patch({ cfAiGatewayId: v.trim() })}
-                                  placeholder="default"
-                                  aria-label="CF AI Gateway id for Nova"
-                                  className={'w-full ' + ctl}
-                                />
-                              </label>
-                            </div>
-                          )}
-                          {cloudProvider === 'soniox' && (
-                            <SonioxKeySeat
-                              hasKey={!!settings.hasKeys?.soniox}
-                              envLocked={settings.envKeys.includes('soniox')}
-                              onSaved={() => void refreshSettings()}
-                            />
-                          )}
-                        </div>
-                      )
-                    }
-                    return (
-                      <div className="flex flex-col gap-1.5 px-1 py-1">
-                        <label className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
-                          Transcription engine
-                          <FieldHint text="For fresh setup, 8 GB or less selects Parakeet; more than 8 GB selects Whisper. Unknown memory uses Parakeet. Existing choices and organization policy are preserved. Parakeet supports European languages; Whisper supports a wider range of languages. Apple Speech uses the macOS on-device recognizer for live meetings; imports use Whisper. Managed cloud profiles hide these on-device engines and use Cloudflare Nova-3 or Soniox instead.">
-                            <Info size={12} className="shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]" />
-                          </FieldHint>
-                          <ManagedChip keys={settings.managedKeys} k="asrEngine" />
-                        </label>
-                        <select
-                          value={settings.asrEngine}
-                          onChange={(e) => patch({ asrEngine: e.target.value as 'parakeet' | 'whisper' | 'apple' })}
-                          disabled={settings.managedKeys.includes('asrEngine')}
-                          aria-label="Transcription engine"
-                          className={'w-full ' + ctl}
-                        >
-                          <option value="parakeet">Parakeet · European languages</option>
-                          <option value="whisper">Whisper · multilingual</option>
-                          <option value="apple">Apple Speech · on-device{isWindows ? ' (macOS only)' : ''}</option>
-                        </select>
-                      </div>
-                    )
-                  })()}
-                  <div className="flex flex-col gap-1.5 px-1 py-1">
-                    <label className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
-                      Spoken language
-                      <FieldHint text="The language your meetings usually start in. Whisper decodes in this language and follows automatically if the conversation switches mid-meeting; Apple Speech uses it as its recognizer language; Parakeet always auto-detects; cloud STT (Nova-3 / Soniox) maps Auto to multilingual detect for French, English, Spanish, Portuguese, and Italian (and more), pins sticky when speech settles, and follows mid-meeting switches. Explicit French still prefers fr-CA. Applies immediately, even during a live meeting. Auto = detect from speech.">
-                        <Info size={12} className="shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]" />
-                      </FieldHint>
-                      <ManagedChip keys={settings.managedKeys} k="asrLanguage" />
+                  </FieldHint>
+                  <ManagedChip keys={settings.managedKeys} k="cloudSttProvider" />
+                </label>
+                <select
+                  value={cloudProvider}
+                  onChange={(e) => patch({ cloudSttProvider: e.target.value as CloudSttProviderId })}
+                  disabled={settings.managedKeys.includes('cloudSttProvider')}
+                  aria-label="Transcript source"
+                  className={'w-full ' + ctl}
+                >
+                  <option value="cloudflare-nova3">Cloudflare Nova-3 · cloud speech</option>
+                  <option value="soniox">Soniox · cloud speech (when approved)</option>
+                </select>
+                <p className="pl-0.5 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                  Live captions use cloud speech. Audio capture stays on this device; transcripts are transient.
+                  Summaries and actions are what get saved.
+                </p>
+                {cloudProvider === 'cloudflare-nova3' && (
+                  <div className="mt-1 flex flex-col gap-2 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.02] p-2.5">
+                    <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                      Nova needs a Cloudflare account token (Settings → AI / Keys), plus account id or an account-scoped
+                      base URL. Gateway id is optional (blank uses default).
+                      {settings.hasKeys?.cloudflare
+                        ? ' Cloudflare token is seated.'
+                        : ' Cloudflare token is not seated yet.'}
+                    </p>
+                    <label className="flex flex-col gap-1 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+                      Cloudflare account id
+                      <LazyInput
+                        value={settings.cloudflareAccountId ?? ''}
+                        disabled={settings.managedKeys.includes('cloudflareAccountId')}
+                        onCommit={(v) => patch({ cloudflareAccountId: v.trim() })}
+                        placeholder="32 hex characters"
+                        aria-label="Cloudflare account id for Nova"
+                        className={'w-full ' + ctl}
+                      />
                     </label>
-                    <select
-                      value={settings.asrLanguage}
-                      onChange={(e) => patch({ asrLanguage: e.target.value })}
-                      disabled={settings.managedKeys.includes('asrLanguage')}
-                      aria-label="Spoken language"
-                      className={'w-full ' + ctl}
-                    >
-                      <option value="auto">Auto · detect per phrase</option>
-                      {LANGUAGE_OPTIONS.map((l) => (
-                        <option key={l} value={l}>
-                          {l}
-                        </option>
-                      ))}
-                    </select>
+                    <label className="flex flex-col gap-1 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+                      CF AI Gateway id
+                      <LazyInput
+                        value={settings.cfAiGatewayId ?? ''}
+                        disabled={settings.managedKeys.includes('cfAiGatewayId')}
+                        onCommit={(v) => patch({ cfAiGatewayId: v.trim() })}
+                        placeholder="default"
+                        aria-label="CF AI Gateway id for Nova"
+                        className={'w-full ' + ctl}
+                      />
+                    </label>
                   </div>
-                  {/* Engine broken in this build (native addon failed to load) — distinct from missing
-                      packaged assets, which require a complete installer. */}
-                  {parakeetAddonError != null && (
-                    <div className="-mt-1 flex items-start gap-1.5 pl-1 text-[11px] leading-snug text-[color:var(--cl-destructive)]">
-                      <AlertCircle size={12} className="mt-0.5 shrink-0" />
-                      <span>
-                        The Parakeet engine can&apos;t load in this build: {parakeetAddonError}. This is an
-                        engine problem, not a missing model download. Meetings will use Whisper until a
-                        build with a working engine is installed.
-                      </span>
-                    </div>
-                  )}
-                  {settings.asrLastFallbackAt != null && (
-                    <div className="-mt-1 flex min-w-0 flex-wrap items-start justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
-                      <span className="min-w-0 flex-1 break-words">
-                        Parakeet failed and auto-switched to Whisper for the rest of a recent meeting.{' '}
-                        {new Date(settings.asrLastFallbackAt).toLocaleString()}.
-                      </span>
-                      <TextButton onClick={() => patch({ asrLastFallbackAt: null })}>Dismiss</TextButton>
-                    </div>
-                  )}
-                  {!isCloudOnlyProfile(resolveEnterpriseLiveProfile(settings.enterpriseLive)) && (
-                    <AsrModelRow engine={settings.asrEngine} />
-                  )}
-                  {settings.asrImportTierFallbackAt != null && (
-                    <div className="-mt-1 flex min-w-0 flex-wrap items-start justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
-                      <span className="min-w-0 flex-1 break-words">
-                        A recent imported recording used compact Whisper base because the larger
-                        import model was unavailable. {new Date(settings.asrImportTierFallbackAt).toLocaleString()}.
-                      </span>
-                      <TextButton onClick={() => patch({ asrImportTierFallbackAt: null })}>Dismiss</TextButton>
-                    </div>
-                  )}
-                  {(settings as SettingsWithAsrWebgpuFallback).asrWebgpuFallbackAt != null && (
-                    <div className="-mt-1 flex min-w-0 flex-wrap items-start justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
-                      <span className="min-w-0 flex-1 break-words">
-                        A recent live session used Whisper base instead of the requested large model.
-                        Packaged builds use Whisper base for live transcription. The optional larger
-                        download changes imported recordings only.
-                      </span>
-                      <TextButton
-                        onClick={() =>
-                          patch({ asrWebgpuFallbackAt: null } as Partial<SettingsWithAsrWebgpuFallback>)
-                        }
-                      >
-                        Dismiss
-                      </TextButton>
-                    </div>
-                  )}
-                  <ToggleRow
-                    label="Start-of-recording chime"
-                    desc="Plays a short tone so everyone knows the moment Métis starts listening."
-                    on={settings.playListenChime}
-                    onChange={(v) => patch({ playListenChime: v })}
-                    disabled={settings.managedKeys.includes('playListenChime')}
+                )}
+                {cloudProvider === 'soniox' && (
+                  <SonioxKeySeat
+                    hasKey={!!settings.hasKeys?.soniox}
+                    envLocked={settings.envKeys.includes('soniox')}
+                    onSaved={() => void refreshSettings()}
                   />
-                  <ToggleRow
-                    label="Sound cues"
-                    desc="A subtle tone when an answer is ready, and a gentle one if it fails."
-                    on={settings.soundCues}
-                    onChange={(v) => patch({ soundCues: v })}
-                    disabled={settings.managedKeys.includes('soundCues')}
-                  />
-                  <ToggleRow
-                    label="Interface sounds"
-                    desc="A soft click when you tap buttons. Turn off for fully silent interaction."
-                    on={settings.uiSounds}
-                    onChange={(v) => patch({ uiSounds: v })}
-                    disabled={settings.managedKeys.includes('uiSounds')}
-                  />
-                  <ToggleRow
-                    label="Rainbow ring on quick actions"
-                    desc="Show the spinning rainbow border on the quick-action chips."
-                    on={settings.quickActionsRainbow}
-                    onChange={(v) => patch({ quickActionsRainbow: v })}
-                    disabled={settings.managedKeys.includes('quickActionsRainbow')}
-                  />
-                  <ToggleRow
-                    label="Instant suggestions"
-                    desc="Pre-generate 'What to say next' while a meeting is live so it appears instantly. Uses more credits during meetings."
-                    on={settings.instantSuggestions}
-                    onChange={(v) => patch({ instantSuggestions: v })}
-                    disabled={settings.managedKeys.includes('instantSuggestions')}
-                  />
-                  <ToggleRow
-                    label="Preload screen context (on-device)"
-                    desc={
-                      settings.backgroundScreenReady || !settings.backgroundScreenContext
-                        ? // Deliberately does not name the local model as the reader: on macOS the
-                          // reader can be the Vision OCR helper, with no model involved at all.
-                          "When you switch windows, Métis quietly reads your screen on this device so 'What's on my screen' answers instantly. Stays on your device, nothing extra is sent to the cloud, and Private View turns it off."
-                        : settings.localReady
-                          ? isWindows
-                            ? // Local AI is ready, so the missing piece is the OS window signal — telling
-                              // this user to enable Local AI would just be the opposite lie.
-                              "Not running on this machine. Métis can't tell when you switch windows, so screen asks capture live instead."
-                            : // On macOS there is a second way to be off: the reader is gated on Screen
-                              // Recording already being granted, because its own capture would otherwise be
-                              // what raises the system prompt (MQA-209). The renderer can't tell the two
-                              // apart, so name the actionable one first rather than guess wrong.
-                              'Not running on this machine. Check Screen Recording under Permissions below (a new grant needs a restart). Screen asks capture live instead.'
-                          : 'Enable Local AI (below) to use this. The background reader never leaves your device.'
-                    }
-                    on={settings.backgroundScreenContext}
-                    onChange={(v) => patch({ backgroundScreenContext: v })}
-                    disabled={settings.managedKeys.includes('backgroundScreenContext')}
-                  />
-                </Section>
-                <Section title="Vocabulary corrections" desc="Words the transcriber keeps getting wrong. Fix them once, applied to every meeting." icon={MessageSquareQuote}>
-                  <ToggleRow
-                    label="Spell known names correctly"
-                    desc="Spell names from your meeting history correctly in transcripts (people and accounts your brain already knows)."
-                    on={settings.asrEntityBias}
-                    onChange={(v) => patch({ asrEntityBias: v })}
-                    disabled={settings.managedKeys.includes('asrEntityBias')}
-                  />
-                  <VocabCorrectionsTextarea
-                    corrections={settings.asrCorrections}
-                    onCommit={(next) => patch({ asrCorrections: next })}
-                    placeholder={'Metis => Métis\nMantu => Mantu\nparakeet => Parakeet'}
-                    disabled={settings.managedKeys.includes('asrCorrections')}
-                    className={[
-                      ctl,
-                      'h-20 resize-none text-[12px]',
-                      settings.managedKeys.includes('asrCorrections') ? 'opacity-60 cursor-not-allowed' : ''
-                    ].join(' ')}
-                  />
-                  <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
-                    One per line, format: heard =&gt; correct.
-                  </span>
-                  <VocabSuggestions settings={settings} patch={patch} />
-                </Section>
+                )}
               </div>
+            )
+          }
+          return null
+        })()}
+        <div className="flex flex-col gap-1.5 px-1 py-1">
+          <label className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
+            Spoken language
+            <FieldHint text="The language your meetings usually start in. Whisper decodes in this language and follows automatically if the conversation switches mid-meeting; Apple Speech uses it as its recognizer language; Parakeet always auto-detects; cloud STT (Nova-3 / Soniox) maps Auto to multilingual detect for French, English, Spanish, Portuguese, and Italian (and more), pins sticky when speech settles, and follows mid-meeting switches. Explicit French still prefers fr-CA. Applies immediately, even during a live meeting. Auto = detect from speech.">
+              <Info
+                size={12}
+                className="shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
+              />
+            </FieldHint>
+            <ManagedChip keys={settings.managedKeys} k="asrLanguage" />
+          </label>
+          <select
+            value={settings.asrLanguage}
+            onChange={(e) => patch({ asrLanguage: e.target.value })}
+            disabled={settings.managedKeys.includes('asrLanguage')}
+            aria-label="Spoken language"
+            className={'w-full ' + ctl}
+          >
+            <option value="auto">Auto · detect per phrase</option>
+            {LANGUAGE_OPTIONS.map((l) => (
+              <option key={l} value={l}>
+                {l}
+              </option>
+            ))}
+          </select>
+        </div>
+        {/* Engine broken in this build (native addon failed to load) — distinct from missing
+                      packaged assets, which require a complete installer. */}
+        {parakeetAddonError != null && (
+          <div className="-mt-1 flex items-start gap-1.5 pl-1 text-[11px] leading-snug text-[color:var(--cl-destructive)]">
+            <AlertCircle size={12} className="mt-0.5 shrink-0" />
+            <span>
+              The Parakeet engine can&apos;t load in this build: {parakeetAddonError}. This is an engine problem, not a
+              missing model download. Meetings will use Whisper until a build with a working engine is installed.
+            </span>
+          </div>
+        )}
+        {settings.asrLastFallbackAt != null && (
+          <div className="-mt-1 flex min-w-0 flex-wrap items-start justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
+            <span className="min-w-0 flex-1 break-words">
+              Parakeet failed and auto-switched to Whisper for the rest of a recent meeting.{' '}
+              {new Date(settings.asrLastFallbackAt).toLocaleString()}.
+            </span>
+            <TextButton onClick={() => patch({ asrLastFallbackAt: null })}>Dismiss</TextButton>
+          </div>
+        )}
+        {!isCloudOnlyProfile(resolveEnterpriseLiveProfile(settings.enterpriseLive)) && (
+          <AsrModelRow engine={settings.asrEngine} />
+        )}
+        {settings.asrImportTierFallbackAt != null && (
+          <div className="-mt-1 flex min-w-0 flex-wrap items-start justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
+            <span className="min-w-0 flex-1 break-words">
+              A recent imported recording used compact Whisper base because the larger import model was unavailable.{' '}
+              {new Date(settings.asrImportTierFallbackAt).toLocaleString()}.
+            </span>
+            <TextButton onClick={() => patch({ asrImportTierFallbackAt: null })}>Dismiss</TextButton>
+          </div>
+        )}
+        {(settings as SettingsWithAsrWebgpuFallback).asrWebgpuFallbackAt != null && (
+          <div className="-mt-1 flex min-w-0 flex-wrap items-start justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
+            <span className="min-w-0 flex-1 break-words">
+              A recent live session used Whisper base instead of the requested large model. Packaged builds use Whisper
+              base for live transcription. The optional larger download changes imported recordings only.
+            </span>
+            <TextButton onClick={() => patch({ asrWebgpuFallbackAt: null } as Partial<SettingsWithAsrWebgpuFallback>)}>
+              Dismiss
+            </TextButton>
+          </div>
+        )}
+        <ToggleRow
+          label="Start-of-recording chime"
+          desc="Plays a short tone so everyone knows the moment Métis starts listening."
+          on={settings.playListenChime}
+          onChange={(v) => patch({ playListenChime: v })}
+          disabled={settings.managedKeys.includes('playListenChime')}
+        />
+        <ToggleRow
+          label="Sound cues"
+          desc="A subtle tone when an answer is ready, and a gentle one if it fails."
+          on={settings.soundCues}
+          onChange={(v) => patch({ soundCues: v })}
+          disabled={settings.managedKeys.includes('soundCues')}
+        />
+        <ToggleRow
+          label="Interface sounds"
+          desc="A soft click when you tap buttons. Turn off for fully silent interaction."
+          on={settings.uiSounds}
+          onChange={(v) => patch({ uiSounds: v })}
+          disabled={settings.managedKeys.includes('uiSounds')}
+        />
+        <ToggleRow
+          label="Rainbow ring on quick actions"
+          desc="Show the spinning rainbow border on the quick-action chips."
+          on={settings.quickActionsRainbow}
+          onChange={(v) => patch({ quickActionsRainbow: v })}
+          disabled={settings.managedKeys.includes('quickActionsRainbow')}
+        />
+        <ToggleRow
+          label="Instant suggestions"
+          desc="Pre-generate 'What to say next' while a meeting is live so it appears instantly. Uses more credits during meetings."
+          on={settings.instantSuggestions}
+          onChange={(v) => patch({ instantSuggestions: v })}
+          disabled={settings.managedKeys.includes('instantSuggestions')}
+        />
+        <ToggleRow
+          label="Preload screen context (on-device)"
+          desc={
+            settings.backgroundScreenReady || !settings.backgroundScreenContext
+              ? // Deliberately does not name the local model as the reader: on macOS the
+                // reader can be the Vision OCR helper, with no model involved at all.
+                "When you switch windows, Métis quietly reads your screen on this device so 'What's on my screen' answers instantly. Stays on your device, nothing extra is sent to the cloud, and Private View turns it off."
+              : settings.localReady
+                ? isWindows
+                  ? // Local AI is ready, so the missing piece is the OS window signal — telling
+                    // this user to enable Local AI would just be the opposite lie.
+                    "Not running on this machine. Métis can't tell when you switch windows, so screen asks capture live instead."
+                  : // On macOS there is a second way to be off: the reader is gated on Screen
+                    // Recording already being granted, because its own capture would otherwise be
+                    // what raises the system prompt (MQA-209). The renderer can't tell the two
+                    // apart, so name the actionable one first rather than guess wrong.
+                    'Not running on this machine. Check Screen Recording under Permissions below (a new grant needs a restart). Screen asks capture live instead.'
+                : 'Enable Local AI (below) to use this. The background reader never leaves your device.'
+          }
+          on={settings.backgroundScreenContext}
+          onChange={(v) => patch({ backgroundScreenContext: v })}
+          disabled={settings.managedKeys.includes('backgroundScreenContext')}
+        />
+      </Section>
+      <Section
+        title="Vocabulary corrections"
+        desc="Words the transcriber keeps getting wrong. Fix them once, applied to every meeting."
+        icon={MessageSquareQuote}
+      >
+        <ToggleRow
+          label="Spell known names correctly"
+          desc="Spell names from your meeting history correctly in transcripts (people and accounts your brain already knows)."
+          on={settings.asrEntityBias}
+          onChange={(v) => patch({ asrEntityBias: v })}
+          disabled={settings.managedKeys.includes('asrEntityBias')}
+        />
+        <VocabCorrectionsTextarea
+          corrections={settings.asrCorrections}
+          onCommit={(next) => patch({ asrCorrections: next })}
+          placeholder={'Metis => Métis\nMantu => Mantu\nparakeet => Parakeet'}
+          disabled={settings.managedKeys.includes('asrCorrections')}
+          className={[
+            ctl,
+            'h-20 resize-none text-[12px]',
+            settings.managedKeys.includes('asrCorrections') ? 'opacity-60 cursor-not-allowed' : ''
+          ].join(' ')}
+        />
+        <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
+          One per line, format: heard =&gt; correct.
+        </span>
+        <VocabSuggestions settings={settings} patch={patch} />
+      </Section>
+    </div>
   )
 }
