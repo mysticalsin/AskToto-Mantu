@@ -35,6 +35,8 @@ export interface SpeechPackServiceOptions {
   rootDir: string
   selectedEngine: () => 'whisper' | 'parakeet' | 'apple'
   policyAllowsTransfer: () => boolean
+  /** Live authoritative capture state; a throwing getter fails closed. */
+  captureActive?: () => boolean
   featureEnabled?: () => boolean
   fixtureWavPath: string
   createEngine?: (options: Parameters<typeof createSpeechPackEngine>[0]) => SpeechPackEngine
@@ -76,6 +78,15 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
   const repairVerified = new Set<SpeechPackComponentId>()
   const resumeScope = randomUUID()
 
+  const isCaptureActive = (): boolean => {
+    if (captureActive) return true
+    try {
+      return options.captureActive?.() ?? false
+    } catch {
+      return true
+    }
+  }
+
   const getEngine = (): SpeechPackEngine => {
     if (engine) return engine
     engine = createEngine({
@@ -86,7 +97,10 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       components,
       resumeScope,
       authorizeTransfer: (id) =>
-        activity.has(id) && options.policyAllowsTransfer() && selectedId(options.selectedEngine()) === id
+        activity.has(id) &&
+        options.policyAllowsTransfer() &&
+        !isCaptureActive() &&
+        selectedId(options.selectedEngine()) === id
     })
     unsubscribe = engine.subscribe(({ id, state, freshlyVerified }) => {
       const manifestIdentity = componentManifestIdentity(byId.get(id) as SpeechPackComponent)
@@ -181,7 +195,7 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     if (profileRead.profile === null) return result({ ok: false, reason: 'profile-invalid' })
     if (selectedId(currentEngine) !== component.id) return result({ ok: false, reason: 'not-selected' })
     if (!options.policyAllowsTransfer()) return result({ ok: false, reason: 'policy-blocked' })
-    if (captureActive) return result({ ok: false, reason: 'busy' })
+    if (isCaptureActive()) return result({ ok: false, reason: 'busy' })
     const instance = getEngine()
     const state = instance.getState(component.id)
     if (

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { PARAKEET_TDT_V3_INT8, WHISPER_BASE_Q8 } from './manifest'
 import {
   recognitionMatchesFixture,
@@ -6,6 +6,14 @@ import {
   speechPackHostEntryPath,
   type SpeechPackHostFork
 } from './self-test'
+
+vi.mock('electron', () => ({
+  utilityProcess: {
+    fork: () => {
+      throw new Error('Unexpected real utility host in injected-host test')
+    }
+  }
+}))
 
 class MockHost {
   listeners = new Map<string, Array<(value: unknown) => void>>()
@@ -177,7 +185,6 @@ describe('speech-pack utility host protocol', () => {
         return host
       }) as SpeechPackHostFork
     })
-    await host.waitForMessages(1)
     await expect(cancelled).rejects.toThrow('cancelled')
     expect(host.messages).toEqual([])
     expect(host.killed).toBe(true)
@@ -228,6 +235,11 @@ describe('speech-pack utility host protocol', () => {
     await lingering.waitForMessages(1)
     lingering.emit('message', { type: 'result', id: 'speech-pack-startup' })
     await lingering.waitForMessages(2)
+    lingering.emit('message', {
+      type: 'result',
+      id: 'speech-pack-self-test',
+      text: 'Ask not what your country can do for you, ask what you can do for your country.'
+    })
     try {
       await expect(result).rejects.toThrow('did not stop')
       await expect(

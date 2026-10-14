@@ -14,6 +14,14 @@ import * as Resolver from './resolver'
 import { componentManifestIdentity } from './resolver'
 import { createSpeechPackService } from './service'
 
+vi.mock('electron', () => ({
+  utilityProcess: {
+    fork: () => {
+      throw new Error('Unexpected real utility host in injected-engine test')
+    }
+  }
+}))
+
 function fakeEngine(): {
   engine: SpeechPackEngine
   update: (id: SpeechPackComponentId, state: SpeechPackState, freshlyVerified?: boolean) => void
@@ -124,6 +132,7 @@ describe('explicit speech-pack service boundary', () => {
       rootDir: join(root, 'speech-packs'),
       selectedEngine: () => 'whisper',
       policyAllowsTransfer: () => true,
+      featureEnabled: () => true,
       fixtureWavPath: fixturePath,
       components: [component],
       createEngine: (options) => {
@@ -131,6 +140,7 @@ describe('explicit speech-pack service boundary', () => {
           ...options,
           fixture: { bytes: fixture.length, sha256: createHash('sha256').update(fixture).digest('hex') },
           freeBytes: () => Number.MAX_SAFE_INTEGER,
+          emitIntervalMs: 0,
           fetch: async () => new Response(model),
           selfTest: async () => 'Ask not what your country can do for you, ask what you can do for your country.'
         })
@@ -212,6 +222,27 @@ describe('explicit speech-pack service boundary', () => {
       })
     ).toEqual({ ok: false, reason: 'busy' })
     expect(createEngine).not.toHaveBeenCalled()
+  })
+
+  it('uses live capture authority for each action and fails closed when that getter throws', () => {
+    let active = false
+    const { service, createEngine } = setup({ captureActive: () => active })
+    const request = {
+      componentId: WHISPER_BASE_Q8.id,
+      action: 'download' as const,
+      manifestIdentity: componentManifestIdentity(WHISPER_BASE_Q8)
+    }
+    active = true
+    expect(service.action(request)).toEqual({ ok: false, reason: 'busy' })
+    expect(createEngine).not.toHaveBeenCalled()
+
+    const failClosed = setup({
+      captureActive: () => {
+        throw new Error('capture state unavailable')
+      }
+    })
+    expect(failClosed.service.action(request)).toEqual({ ok: false, reason: 'busy' })
+    expect(failClosed.createEngine).not.toHaveBeenCalled()
   })
 
   it('does not claim fresh hash and self-test evidence for a ready shortcut, and clears it after repair failure', () => {
