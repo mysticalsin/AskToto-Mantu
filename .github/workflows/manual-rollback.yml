@@ -11,8 +11,6 @@ on:
   pull_request:
     paths:
       - .github/workflows/manual-rollback.yml
-      - scripts/qa/manual-rollback.mjs
-      - scripts/qa/manual-rollback.test.ts
   workflow_dispatch:
     inputs:
       candidate_run:

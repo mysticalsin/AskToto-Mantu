@@ -288,7 +288,9 @@ export function manualRollbackReportProblems(report, expected = {}) {
     return ['report-shape-invalid']
   }
   if (report.schema !== 'metis.manual-rollback.v1') problems.push('report-schema-invalid')
-  if (!exact(report.identity, ['run_id', 'attempt', 'commit', 'version', 'windows_installer_sha256', 'macos_dmg_sha256'])) {
+  if (
+    !exact(report.identity, ['run_id', 'attempt', 'commit', 'version', 'windows_installer_sha256', 'macos_dmg_sha256'])
+  ) {
     problems.push('identity-shape-invalid')
   } else {
     if (!isPositive(report.identity.run_id) || report.identity.run_id !== Number(expected.runId)) {

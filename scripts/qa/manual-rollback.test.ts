@@ -41,7 +41,8 @@ function provenanceFixture() {
       assets: config.assets(TARGET_VERSION).map((name, assetIndex) => ({
         name,
         size: 100 + index + assetIndex,
-        sha256: variant === 'win' ? WIN_SHA : variant === 'mac' && name.endsWith('.dmg') ? MAC_SHA : `${index + 1}`.repeat(64)
+        sha256:
+          variant === 'win' ? WIN_SHA : variant === 'mac' && name.endsWith('.dmg') ? MAC_SHA : `${index + 1}`.repeat(64)
       }))
     }))
   }
