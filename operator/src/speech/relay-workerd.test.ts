@@ -130,11 +130,17 @@ let inferenceCalls = 0;
 let observedPath = '';
 let observedAuthorization = '';
 let observedGatewayAuthorization = '';
+let binaryFramesReceived = 0;
+let closeStreamControlsReceived = 0;
+let finalResultsSent = 0;
+let metadataSent = 0;
+let closeRequested = 0;
 export default {
   async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === '/_fixture/state') {
-      return Response.json({ inferenceCalls, observedPath, observedAuthorization, observedGatewayAuthorization });
+      return Response.json({ inferenceCalls, observedPath, observedAuthorization, observedGatewayAuthorization,
+        binaryFramesReceived, closeStreamControlsReceived, finalResultsSent, metadataSent, closeRequested });
     }
     if (url.pathname.endsWith('/ai-gateway/gateways/' + ${JSON.stringify(GATEWAY)})) {
       return Response.json({ success: true, result: {
@@ -153,12 +159,17 @@ export default {
     server.addEventListener('message', event => {
       if (typeof event.data === 'string') {
         if (event.data === '{"type":"CloseStream"}') {
+          closeStreamControlsReceived += 1;
+          finalResultsSent += 1;
           server.send(${JSON.stringify(FINAL_PROVIDER_FRAME)});
+          metadataSent += 1;
           server.send(JSON.stringify({ type: 'Metadata', request_id: 'fixture-request' }));
+          closeRequested += 1;
           server.close(1000, 'fixture complete');
         }
         return;
       }
+      binaryFramesReceived += 1;
       server.send(${JSON.stringify(PARTIAL_PROVIDER_FRAME)});
     });
     return new Response(null, { status: 101, webSocket: client });
@@ -223,7 +234,8 @@ async function makeRuntime(routeId: 'deepgram-via-gateway' | 'workers-ai-nova3' 
   const database = (await runtime.getD1Database('DB')) as unknown as {
     prepare(query: string): {
       run(): Promise<unknown>
-      bind(...values: unknown[]): { run(): Promise<unknown> }
+      first<T>(): Promise<T | null>
+      bind(...values: unknown[]): { first<T>(): Promise<T | null>; run(): Promise<unknown> }
     }
   }
   const directory = dirname(fileURLToPath(import.meta.url))
@@ -361,12 +373,126 @@ async function dispatchSignedRequest(
   input: Parameters<typeof signedRequest>[0]
 ): Promise<Response> {
   const signed = await signedRequest(input)
-  return runtime.dispatchFetch(signed.url, signed.init)
+  return (await runtime.dispatchFetch(signed.url, signed.init)) as unknown as Response
+}
+
+type RelayLifecycleDb = {
+  prepare(query: string): {
+    bind(...values: unknown[]): { first<T>(): Promise<T | null> }
+  }
+}
+
+function boundedLifecycleDiagnostic(
+  terminal: Record<string, unknown>,
+  events: readonly Record<string, unknown>[],
+  session: Record<string, unknown> | null,
+  stream: Record<string, unknown> | null,
+  provider: Record<string, unknown>
+): Record<string, unknown> {
+  const enumValue = (value: unknown, values: readonly string[]) =>
+    typeof value === 'string' && values.includes(value) ? value : 'unknown'
+  const count = (value: unknown) => (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0)
+  const present = (value: unknown) => value !== null && value !== undefined
+  return {
+    terminal: {
+      type: enumValue(terminal.type, ['terminal']),
+      reason: enumValue(terminal.reason, [
+        'normal',
+        'cancelled',
+        'lease-expired',
+        'upstream-error',
+        'client-disconnected',
+        'limit',
+        'revoked',
+        'unknown'
+      ]),
+      tail: enumValue(terminal.tail, ['complete', 'incomplete']),
+      closeConfirmed: terminal.closeConfirmed === true,
+      lastSequence: count(terminal.lastSequence),
+      captureGeneration: count(terminal.captureGeneration),
+      track: enumValue(terminal.track, ['microphone', 'system']),
+      streamEpoch: count(terminal.streamEpoch)
+    },
+    events: events.slice(0, 8).map((event) => ({
+      type: enumValue(event.type, ['transcript', 'terminal']),
+      sequence: count(event.sequence),
+      segmentIndex: count(event.segmentIndex),
+      revision: count(event.revision),
+      final: event.final === true
+    })),
+    session: {
+      status: enumValue(session?.status, ['active', 'cancelled', 'expired']),
+      terminalAtPresent: present(session?.terminal_at),
+      terminalReason: enumValue(session?.terminal_reason, [
+        'normal',
+        'cancelled',
+        'lease-expired',
+        'upstream-error',
+        'client-disconnected',
+        'limit',
+        'revoked',
+        'unknown'
+      ])
+    },
+    stream: {
+      transportAttempted: present(stream?.transport_attempted_at),
+      opened: present(stream?.opened_at),
+      finishRequested: present(stream?.finish_requested_at),
+      providerComplete: present(stream?.provider_complete_at),
+      closeConfirmed: present(stream?.close_confirmed_at),
+      stopRequested: present(stream?.stop_requested_at),
+      settled: present(stream?.settled_at),
+      terminalReason: enumValue(stream?.terminal_reason, [
+        'normal',
+        'cancelled',
+        'lease-expired',
+        'upstream-error',
+        'client-disconnected',
+        'limit',
+        'revoked',
+        'unknown'
+      ]),
+      tail: enumValue(stream?.tail_status, ['complete', 'incomplete']),
+      inputBytes: count(stream?.input_bytes),
+      inputMessages: count(stream?.input_messages),
+      outputBytes: count(stream?.output_bytes),
+      outputMessages: count(stream?.output_messages),
+      lastSequence: count(stream?.last_sequence)
+    },
+    provider: {
+      binaryFramesReceived: count(provider.binaryFramesReceived),
+      closeStreamControlsReceived: count(provider.closeStreamControlsReceived),
+      finalResultsSent: count(provider.finalResultsSent),
+      metadataSent: count(provider.metadataSent),
+      closeRequested: count(provider.closeRequested)
+    }
+  }
+}
+
+async function readRouteBLifecycleDiagnostic(
+  database: RelayLifecycleDb,
+  sessionId: string,
+  terminal: Record<string, unknown>,
+  events: readonly Record<string, unknown>[],
+  provider: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  const session = await database
+    .prepare('SELECT status, terminal_at, terminal_reason FROM speech_sessions WHERE id = ?')
+    .bind(sessionId)
+    .first<Record<string, unknown>>()
+  const stream = await database
+    .prepare(`SELECT transport_attempted_at, opened_at, stop_requested_at, finish_requested_at,
+      provider_complete_at, close_confirmed_at, settled_at, input_bytes, input_messages, output_bytes,
+      output_messages, last_sequence, tail_status, terminal_reason
+      FROM speech_streams WHERE session_id = ? AND track = 'microphone' ORDER BY stream_epoch DESC LIMIT 1`)
+    .bind(sessionId)
+    .first<Record<string, unknown>>()
+  return boundedLifecycleDiagnostic(terminal, events, session, stream, provider)
 }
 
 describe('speech relay on pinned hosted workerd', () => {
   it('runs licensed create, actual Upgrade, binary forwarding, final drain and status without provider calls', async () => {
-    const { runtime, now, license } = await makeRuntime()
+    const { runtime, database, now, license } = await makeRuntime()
     try {
       const unauthenticated = await runtime.dispatchFetch('https://operator.fixture/v1/speech/sessions', {
         method: 'POST',
@@ -399,6 +525,7 @@ describe('speech relay on pinned hosted workerd', () => {
 
       const captureGeneration = PROTOCOL_FIXTURE.create.request.captureGeneration
       const createTemplate = PROTOCOL_FIXTURE.create.request
+      const consentExpiresAt = now + 60_000
       const createBody = JSON.stringify({
         ...createTemplate,
         tracks: ['microphone'],
@@ -406,7 +533,7 @@ describe('speech relay on pinned hosted workerd', () => {
           ...createTemplate.consent,
           tracks: ['microphone'],
           issuedAt: now,
-          expiresAt: now + 60_000
+          expiresAt: consentExpiresAt
         }
       })
       const createdResponse = await dispatchSignedRequest(runtime, {
@@ -426,18 +553,44 @@ describe('speech relay on pinned hosted workerd', () => {
         configVersion: string
         policyVersion: string
         language: string
+        grantExpiresAt: number
+        leaseExpiresAt: number
         limits: Record<string, number>
         grants: Array<{ track: 'microphone' | 'system'; token: string; streamEpoch: number }>
       }
       expect(created.protocolVersion).toBe(1)
+      const sessionAuthority = await database
+        .prepare(`SELECT created_at, consent_expires_at, evidence_expires_at, license_expires_at,
+          lease_expires_at, grant_expires_at, reserved_ms FROM speech_sessions WHERE id = ?`)
+        .bind(created.sessionId)
+        .first<Record<string, number>>()
+      expect(sessionAuthority).not.toBeNull()
+      if (!sessionAuthority) throw new Error('fixture session authority row missing')
+      const expectedMaxStreamMs = consentExpiresAt - sessionAuthority.created_at
+      expect(Number.isSafeInteger(expectedMaxStreamMs) && expectedMaxStreamMs > 0).toBe(true)
+      expect(sessionAuthority.consent_expires_at).toBe(consentExpiresAt)
+      expect(sessionAuthority.evidence_expires_at).toBeGreaterThan(consentExpiresAt)
+      expect(sessionAuthority.license_expires_at).toBeGreaterThan(consentExpiresAt)
+      expect(sessionAuthority.lease_expires_at).toBe(consentExpiresAt)
+      expect(sessionAuthority.grant_expires_at).toBe(consentExpiresAt)
+      expect(sessionAuthority.reserved_ms).toBe(expectedMaxStreamMs)
+      expect(created.leaseExpiresAt).toBe(consentExpiresAt)
+      expect(created.grantExpiresAt).toBe(sessionAuthority.grant_expires_at)
+      expect(created.limits).toEqual({
+        ...PROTOCOL_FIXTURE.limits,
+        maxStreamMs: expectedMaxStreamMs,
+        audioDeadlineAt: consentExpiresAt - PROTOCOL_FIXTURE.limits.drainWindowMs
+      })
+      expect(created.limits.maxStreamMs).toBe(expectedMaxStreamMs)
+      expect(created.limits.maxStreamMs).toBeLessThanOrEqual(PROTOCOL_FIXTURE.limits.maxStreamMs)
+      expect(created.limits.audioDeadlineAt).toBe(consentExpiresAt - PROTOCOL_FIXTURE.limits.drainWindowMs)
       expect(created).toMatchObject({
         routeId: ROUTE_A.routeId,
         model: ROUTE_A.modelId,
         configVersion: ROUTE_A.configVersion,
         policyVersion: ROUTE_A.policyVersion,
         language: ROUTE_A.language,
-        captureGeneration,
-        limits: PROTOCOL_FIXTURE.limits
+        captureGeneration
       })
       expect(created.captureGeneration).toBe(captureGeneration)
       expect(created.grants).toHaveLength(1)
@@ -508,13 +661,13 @@ describe('speech relay on pinned hosted workerd', () => {
         observedAuthorization: string
         observedGatewayAuthorization: string
       }
-      expect(providerState).toMatchObject({
-        inferenceCalls: 1,
-        observedPath:
-          '/v1/account-test-001/speech-gateway-test/deepgram/v1/listen?model=nova-3&language=multi&encoding=linear16&sample_rate=16000&channels=1&interim_results=true&mip_opt_out=true',
-        observedAuthorization: `Token ${TEST_DEEPGRAM_KEY}`,
-        observedGatewayAuthorization: `Bearer ${TEST_GATEWAY_TOKEN}`
-      })
+      expect(
+        providerState.inferenceCalls === 1 &&
+          providerState.observedPath ===
+            '/v1/account-test-001/speech-gateway-test/deepgram/v1/listen?model=nova-3&language=multi&encoding=linear16&sample_rate=16000&channels=1&interim_results=true&mip_opt_out=true' &&
+          providerState.observedAuthorization === `Token ${TEST_DEEPGRAM_KEY}` &&
+          providerState.observedGatewayAuthorization === `Bearer ${TEST_GATEWAY_TOKEN}`
+      ).toBe(true)
       const statusBody = JSON.stringify({ ...PROTOCOL_FIXTURE.status.request, sessionId: created.sessionId })
       const status = await dispatchSignedRequest(runtime, {
         license,
@@ -585,7 +738,7 @@ describe('speech relay on pinned hosted workerd', () => {
   })
 
   it('uses the distinct documented Workers AI Route B URL without Deepgram credentials', async () => {
-    const { runtime, now, license } = await makeRuntime('workers-ai-nova3')
+    const { runtime, database, now, license } = await makeRuntime('workers-ai-nova3')
     try {
       const captureGeneration = PROTOCOL_FIXTURE.create.request.captureGeneration
       const createTemplate = PROTOCOL_FIXTURE.create.request
@@ -660,22 +813,44 @@ describe('speech relay on pinned hosted workerd', () => {
       const socket = (opened as unknown as Response & { webSocket?: WorkerdWebSocket }).webSocket
       expect(socket).toBeDefined()
       if (!socket) throw new Error('workerd did not return the Route B WebSocket')
-      const terminal = new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('Route B terminal timed out')), 10_000)
-        socket.addEventListener('message', (event) => {
-          if (typeof event.data !== 'string') return
-          const value = JSON.parse(event.data) as { type?: string; tail?: string }
-          if (value.type === 'terminal') {
-            clearTimeout(timeout)
-            expect(value.tail).toBe('complete')
-            resolve()
+      const events: Array<Record<string, unknown>> = []
+      let timeout: ReturnType<typeof setTimeout>
+      let terminalListener: (event: Event) => void
+      const terminal = new Promise<Record<string, unknown>>((resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error('Route B terminal timed out')), 10_000)
+        terminalListener = (event) => {
+          const message = event as MessageEvent
+          if (typeof message.data !== 'string') return
+          let value: Record<string, unknown>
+          try {
+            value = JSON.parse(message.data) as Record<string, unknown>
+          } catch {
+            reject(new Error('Route B emitted an invalid protocol message'))
+            return
           }
-        })
+          if (value.type === 'transcript' && events.length < 8) {
+            events.push({
+              type: value.type,
+              sequence: value.sequence,
+              segmentIndex: value.segmentIndex,
+              revision: value.revision,
+              final: value.final
+            })
+          }
+          if (value.type === 'terminal') resolve(value)
+        }
+        socket.addEventListener('message', terminalListener)
       })
       socket.accept()
       socket.send(new Uint8Array([0, 0]).buffer)
       socket.send('{"type":"finish"}')
-      await terminal
+      let terminalValue: Record<string, unknown>
+      try {
+        terminalValue = await terminal
+      } finally {
+        clearTimeout(timeout!)
+        socket.removeEventListener('message', terminalListener!)
+      }
       const gateway = (await runtime.getWorker('metis-synthetic-gateway')) as unknown as {
         fetch(input: string): Promise<Response>
       }
@@ -684,13 +859,96 @@ describe('speech relay on pinned hosted workerd', () => {
         observedPath: string
         observedAuthorization: string
         observedGatewayAuthorization: string
+        binaryFramesReceived: number
+        closeStreamControlsReceived: number
+        finalResultsSent: number
+        metadataSent: number
+        closeRequested: number
       }
-      expect(providerState.inferenceCalls).toBe(1)
-      expect(providerState.observedPath).toMatch(
-        /^\/v1\/account-test-001\/speech-gateway-test\/workers-ai\?model=%40cf%2Fdeepgram%2Fnova-3&language=en&encoding=linear16&sample_rate=16000&interim_results=true$/
+      const diagnostic = await readRouteBLifecycleDiagnostic(
+        database,
+        created.sessionId,
+        terminalValue,
+        events,
+        providerState
       )
-      expect(providerState.observedAuthorization).toBe('')
-      expect(providerState.observedGatewayAuthorization).toBe(`Bearer ${TEST_GATEWAY_TOKEN}`)
+      const terminalSummary = {
+        type: terminalValue.type,
+        reason: terminalValue.reason,
+        tail: terminalValue.tail,
+        closeConfirmed: terminalValue.closeConfirmed,
+        lastSequence: terminalValue.lastSequence,
+        captureGeneration: terminalValue.captureGeneration,
+        track: terminalValue.track,
+        streamEpoch: terminalValue.streamEpoch,
+        sessionIdMatches: terminalValue.sessionId === created.sessionId
+      }
+      expect(terminalSummary, `Route B bounded lifecycle diagnostic: ${JSON.stringify(diagnostic)}`).toEqual({
+        type: 'terminal',
+        reason: 'normal',
+        tail: 'complete',
+        closeConfirmed: true,
+        lastSequence: 2,
+        captureGeneration,
+        track: 'microphone',
+        streamEpoch: grant.streamEpoch,
+        sessionIdMatches: true
+      })
+      const diagnosticMessage = `Route B bounded lifecycle diagnostic: ${JSON.stringify(diagnostic)}`
+      expect(events, diagnosticMessage).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: 'transcript', sequence: 1, segmentIndex: 1, revision: 1, final: false }),
+          expect.objectContaining({ type: 'transcript', sequence: 2, segmentIndex: 1, revision: 2, final: true })
+        ])
+      )
+      expect(providerState.inferenceCalls).toBe(1)
+      expect(
+        {
+          binaryFramesReceived: providerState.binaryFramesReceived,
+          closeStreamControlsReceived: providerState.closeStreamControlsReceived,
+          finalResultsSent: providerState.finalResultsSent,
+          metadataSent: providerState.metadataSent,
+          closeRequested: providerState.closeRequested
+        },
+        diagnosticMessage
+      ).toEqual({
+        binaryFramesReceived: 1,
+        closeStreamControlsReceived: 1,
+        finalResultsSent: 1,
+        metadataSent: 1,
+        closeRequested: 1
+      })
+      expect(
+        /^\/v1\/account-test-001\/speech-gateway-test\/workers-ai\?model=%40cf%2Fdeepgram%2Fnova-3&language=en&encoding=linear16&sample_rate=16000&interim_results=true$/.test(
+          providerState.observedPath
+        )
+      ).toBe(true)
+      expect(providerState.observedAuthorization.length === 0).toBe(true)
+      expect(providerState.observedGatewayAuthorization === `Bearer ${TEST_GATEWAY_TOKEN}`).toBe(true)
+      const status = await dispatchSignedRequest(runtime, {
+        license,
+        now: Date.now(),
+        path: `/v1/speech/sessions/${created.sessionId}/status`,
+        method: 'POST',
+        body: JSON.stringify({ operation: 'session-status', sessionId: created.sessionId })
+      })
+      expect(status.status).toBe(200)
+      expect(await status.json()).toMatchObject({
+        protocolVersion: 1,
+        sessionId: created.sessionId,
+        captureGeneration,
+        tracks: [
+          expect.objectContaining({
+            track: 'microphone',
+            streamEpoch: grant.streamEpoch,
+            phase: 'closed',
+            closeConfirmed: true,
+            tail: 'complete',
+            lastSequence: 2
+          })
+        ],
+        cancellationRequested: false
+      })
     } finally {
       await runtime.dispose()
     }

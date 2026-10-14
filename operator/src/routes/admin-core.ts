@@ -223,7 +223,17 @@ export const EXPECTED_D1_COLUMNS: Readonly<Record<string, readonly string[]>> = 
     'budget_window_start',
     'grant_expires_at',
     'lease_expires_at',
-    'license_expires_at'
+    'license_expires_at',
+    'consent_issued_at',
+    'consent_expires_at',
+    'consented_tracks_json',
+    'policy_version',
+    'implementation_revision',
+    'route_evidence_id',
+    'evidence_expires_at',
+    'stop_requested_at',
+    'terminal_at',
+    'terminal_reason'
   ],
   speech_grants: [
     'token_hash',
@@ -240,7 +250,8 @@ export const EXPECTED_D1_COLUMNS: Readonly<Record<string, readonly string[]>> = 
     'issued_at',
     'expires_at',
     'redeemed_at',
-    'revoked_at'
+    'revoked_at',
+    'stream_epoch'
   ]
 }
 
