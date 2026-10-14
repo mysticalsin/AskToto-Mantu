@@ -456,7 +456,12 @@ async function heartbeat(
 }
 
 async function ingest(
-  store: OperatorStore, deviceId: string, bodyText: string, now: number, geo: CfGeo, license?: VerifiedDeviceLicense
+  store: OperatorStore,
+  deviceId: string,
+  bodyText: string,
+  now: number,
+  geo: CfGeo,
+  license?: VerifiedDeviceLicense
 ): Promise<Response> {
   const rawBody = withVerifiedLicense(JSON.parse(bodyText || '{}') as Record<string, unknown>, license)
   if (rawBody.event === 'crm' && rawBody.confidential === true) {
@@ -549,7 +554,7 @@ async function ingest(
     question_type: questionType,
     path_tag: parseAskPathTag(body.pathTag ?? body.path_tag)
   }
-  if (!await store.insertAsk(projectAskTelemetry(row))) return json({ ok: false, error: 'forbidden' }, 403)
+  if (!(await store.insertAsk(projectAskTelemetry(row)))) return json({ ok: false, error: 'forbidden' }, 403)
   // A lost response can replay the same Ask from the durable outbox. Stable activity IDs let each
   // replay repair a partial event write without making a second pulse or second feed entry.
   const pulseId = `ask:${id}`
@@ -639,28 +644,29 @@ async function upsertCrmEvent(
   const connector = typeof projected.connector === 'string' ? projected.connector : 'unknown'
   const err = typeof projected.error === 'string' ? projected.error : null
   const attempt = typeof projected.attempt === 'number' ? Math.floor(projected.attempt) : 0
-  const latencyMs =
-    typeof projected.latencyMs === 'number' ? Math.floor(projected.latencyMs) : 0
+  const latencyMs = typeof projected.latencyMs === 'number' ? Math.floor(projected.latencyMs) : 0
   const prev = await store.getCrm(id)
   // A CRM row (and the retry instruction the console attaches to it) belongs to the device that sent it.
   if (prev && prev.device_id !== deviceId) return 'foreign'
-  await store.upsertCrm(normalizeCrmRow({
-    id,
-    device_id: deviceId,
-    ts: typeof projected.ts === 'number' ? projected.ts : now,
-    status,
-    title: CRM_CANONICAL_TITLE,
-    connector,
-    meeting_file: null,
-    meeting_hash: null,
-    last_error: err,
-    retry_requested: 0,
-    attempt: attempt || prev?.attempt || 0,
-    latency_ms: latencyMs || prev?.latency_ms || 0,
-    remote_id: null,
-    remote_url: null,
-    action: null
-  }))
+  await store.upsertCrm(
+    normalizeCrmRow({
+      id,
+      device_id: deviceId,
+      ts: typeof projected.ts === 'number' ? projected.ts : now,
+      status,
+      title: CRM_CANONICAL_TITLE,
+      connector,
+      meeting_file: null,
+      meeting_hash: null,
+      last_error: err,
+      retry_requested: 0,
+      attempt: attempt || prev?.attempt || 0,
+      latency_ms: latencyMs || prev?.latency_ms || 0,
+      remote_id: null,
+      remote_url: null,
+      action: null
+    })
+  )
   return 'written'
 }
 

@@ -46,11 +46,7 @@ async function request(
 
 const ownerAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
 
-function mintAccessJwt(
-  now: number,
-  exp: number,
-  kid: string
-): { token: string; jwk: JsonWebKey & { kid: string } } {
+function mintAccessJwt(now: number, exp: number, kid: string): { token: string; jwk: JsonWebKey & { kid: string } } {
   const pair = generateKeyPairSync('rsa', { modulusLength: 2048 })
   const jwk = { ...(pair.publicKey.export({ format: 'jwk' }) as JsonWebKey), kid }
   const encode = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url')
@@ -62,10 +58,7 @@ function mintAccessJwt(
     iss: ACCESS_TEAM_DOMAIN,
     iat: Math.floor(now / 1000) - 60
   })
-  const signature = createSign('RSA-SHA256')
-    .update(`${header}.${payload}`)
-    .sign(pair.privateKey)
-    .toString('base64url')
+  const signature = createSign('RSA-SHA256').update(`${header}.${payload}`).sign(pair.privateKey).toString('base64url')
   return { token: `${header}.${payload}.${signature}`, jwk }
 }
 
@@ -131,7 +124,10 @@ describe('Operator app sessions have an absolute 12-hour lifetime', () => {
     const signatureBytes = Buffer.from(signature, 'base64url')
     signatureBytes[0] = (signatureBytes[0] ?? 0) ^ 1
     const invalidSignatureJwt = `${header}.${payload}.${signatureBytes.toString('base64url')}`
-    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ keys: [expiredAccess.jwk, liveAccess.jwk] })))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Response.json({ keys: [expiredAccess.jwk, liveAccess.jwk] }))
+    )
 
     try {
       for (const accessJwt of [expiredAccess.token, invalidSignatureJwt]) {
