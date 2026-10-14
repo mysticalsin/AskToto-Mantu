@@ -10,7 +10,6 @@ import {
   type SpeechPackProgress,
   type SpeechPackSnapshot
 } from '@shared/speech-pack'
-import { IPC } from '@shared/ipc'
 import type { SpeechPackEngine, SpeechPackState } from './engine'
 import { createSpeechPackEngine } from './engine'
 import { speechPackEnabled } from './flag'
@@ -303,36 +302,3 @@ export type {
   SpeechPackProgress,
   SpeechPackSnapshot
 } from '@shared/speech-pack'
-
-/**
- * Thin IPC adapter. The caller supplies the application's existing main-window sender check and
- * progress broadcaster; this module never accepts paths, URLs, manifests or engine choices from IPC.
- */
-export function registerSpeechPackIpc(options: {
-  ipcMain: {
-    handle(channel: string, listener: (event: { sender: unknown }, request?: unknown) => unknown): void
-    removeHandler(channel: string): void
-  }
-  assertMainWindow: (event: { sender: unknown }) => void
-  sendProgress: (progress: SpeechPackProgress) => void
-  service: SpeechPackService
-}): () => void {
-  const channels = [IPC.speechPackState, IPC.speechPackAction] as const
-  const cleanups = channels.map((channel) => {
-    options.ipcMain.removeHandler(channel)
-    return channel
-  })
-  options.ipcMain.handle(IPC.speechPackState, (event) => {
-    options.assertMainWindow(event)
-    return options.service.snapshot()
-  })
-  options.ipcMain.handle(IPC.speechPackAction, (event, request) => {
-    options.assertMainWindow(event)
-    return options.service.action(request)
-  })
-  const unsubscribe = options.service.subscribe(options.sendProgress)
-  return () => {
-    unsubscribe()
-    for (const channel of cleanups) options.ipcMain.removeHandler(channel)
-  }
-}

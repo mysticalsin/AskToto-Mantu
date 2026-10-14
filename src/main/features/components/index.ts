@@ -1,6 +1,5 @@
 export {
   createSpeechPackService,
-  registerSpeechPackIpc,
   type SpeechPackService,
   type SpeechPackActionRequest,
   type SpeechPackActionResult,
