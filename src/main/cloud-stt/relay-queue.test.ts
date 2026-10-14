@@ -49,4 +49,25 @@ describe('BoundedRelayPcmQueue', () => {
     expect(await queue.drain(send, 3_001)).toEqual({ ok: false, code: 'QUEUE_STALE' })
     expect(send).not.toHaveBeenCalled()
   })
+
+  it('does not strand frames admitted while an earlier drain is awaiting its send callback', async () => {
+    const queue = new BoundedRelayPcmQueue()
+    queue.enqueue(frame(1), 1_000)
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const sent: number[] = []
+    const send = async (_pcm: Uint8Array, sequence: number): Promise<void> => {
+      sent.push(sequence)
+      if (sequence === 1) await gate
+    }
+
+    const draining = queue.drain(send)
+    queue.enqueue(frame(2), 1_000)
+    expect(queue.drain(send)).toBe(draining)
+    release()
+    expect(await draining).toEqual({ ok: true })
+    expect(sent).toEqual([1, 2])
+  })
 })
