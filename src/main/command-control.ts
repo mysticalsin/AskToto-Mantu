@@ -73,10 +73,7 @@ export class CommandControl {
     this.ttlMs = deps.ttlMs ?? COMMAND_PROPOSAL_TTL_MS
   }
 
-  propose(
-    owner: { webContentsId: number; revision: number },
-    request: DesktopActionRequest
-  ): CommandControlProposal {
+  propose(owner: { webContentsId: number; revision: number }, request: DesktopActionRequest): CommandControlProposal {
     this.clearCurrent()
     // The proposal keeps a private snapshot. No caller that supplied the request can mutate what
     // the user later confirms, even if a future command source starts reusing request objects.
@@ -165,7 +162,9 @@ export class CommandControl {
     this.audit('command.revoked', { actionId: proposal.request.id, reason })
   }
 
-  private validate(input: CommandControlProposal & { webContentsId: number }): CurrentProposal | { ok: false; reason: CommandControlReason } {
+  private validate(
+    input: CommandControlProposal & { webContentsId: number }
+  ): CurrentProposal | { ok: false; reason: CommandControlReason } {
     const proposal = this.current
     if (!proposal) return { ok: false, reason: 'proposal_missing' }
     if (input.webContentsId !== proposal.ownerWebContentsId) return { ok: false, reason: 'owner_mismatch' }
@@ -181,10 +180,13 @@ export class CommandControl {
   }
 
   private armExpiry(proposal: CurrentProposal): void {
-    this.expiryTimer = setTimeout(() => {
-      if (this.current?.proposalId !== proposal.proposalId) return
-      this.revokeForLifecycleEvent('expired')
-    }, Math.max(0, proposal.expiresAt - this.now()))
+    this.expiryTimer = setTimeout(
+      () => {
+        if (this.current?.proposalId !== proposal.proposalId) return
+        this.revokeForLifecycleEvent('expired')
+      },
+      Math.max(0, proposal.expiresAt - this.now())
+    )
   }
 
   private clearCurrent(): void {

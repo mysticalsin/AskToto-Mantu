@@ -34,7 +34,14 @@ async function createHarness() {
     if (!state.proposalId) throw new Error('Expected an active command proposal')
     return { proposalId: state.proposalId, nonce: state.nonce, webContentsId: 11 }
   }
-  return { controller, execute, confirmation, setOwner: (next: typeof owner) => { owner = next } }
+  return {
+    controller,
+    execute,
+    confirmation,
+    setOwner: (next: typeof owner) => {
+      owner = next
+    }
+  }
 }
 
 describe('command runtime approval lifetime', () => {

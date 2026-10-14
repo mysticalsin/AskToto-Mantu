@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import {
-  CommandControl,
-  commandConfirmationPolicyAllows,
-  type CommandConfirmationPolicyInput
-} from './command-control'
+import { CommandControl, commandConfirmationPolicyAllows, type CommandConfirmationPolicyInput } from './command-control'
 
 const allowCommandPolicy = (): boolean => true
 const confirmedCommandPolicy: CommandConfirmationPolicyInput = {
@@ -37,10 +33,7 @@ describe('CommandControl', () => {
   it('rejects confirmation from a different renderer owner without executing', async () => {
     const execute = vi.fn(async () => ({ id: 'desktop.open_notes' as const, ok: true, outcome: 'unknown' as const }))
     const controller = new CommandControl({ execute, policyAllows: allowCommandPolicy })
-    const proposal = controller.propose(
-      { webContentsId: 11, revision: 3 },
-      { id: 'desktop.open_notes', args: {} }
-    )
+    const proposal = controller.propose({ webContentsId: 11, revision: 3 }, { id: 'desktop.open_notes', args: {} })
 
     expect(await controller.confirm({ ...proposal, webContentsId: 12 })).toEqual({
       ok: false,
@@ -52,15 +45,13 @@ describe('CommandControl', () => {
   it('consumes a proposal before the adapter resolves, preventing duplicate confirmation', async () => {
     let resolveExecute: () => void = () => {}
     const execute = vi.fn(
-      () => new Promise<import('@shared/desktop-actions').DesktopActionResult>((resolve) => {
-        resolveExecute = () => resolve({ id: 'desktop.open_notes', ok: true, outcome: 'verified' })
-      })
+      () =>
+        new Promise<import('@shared/desktop-actions').DesktopActionResult>((resolve) => {
+          resolveExecute = () => resolve({ id: 'desktop.open_notes', ok: true, outcome: 'verified' })
+        })
     )
     const controller = new CommandControl({ execute, policyAllows: allowCommandPolicy })
-    const proposal = controller.propose(
-      { webContentsId: 11, revision: 3 },
-      { id: 'desktop.open_notes', args: {} }
-    )
+    const proposal = controller.propose({ webContentsId: 11, revision: 3 }, { id: 'desktop.open_notes', args: {} })
 
     const first = controller.confirm({ ...proposal, webContentsId: 11 })
     expect(await controller.confirm({ ...proposal, webContentsId: 11 })).toEqual({
@@ -79,10 +70,7 @@ describe('CommandControl', () => {
       policyAllows: allowCommandPolicy,
       audit
     })
-    const proposal = controller.propose(
-      { webContentsId: 11, revision: 3 },
-      { id: 'desktop.open_notes', args: {} }
-    )
+    const proposal = controller.propose({ webContentsId: 11, revision: 3 }, { id: 'desktop.open_notes', args: {} })
 
     expect(await controller.confirm({ ...proposal, webContentsId: 11 })).toEqual({
       ok: false,
@@ -101,10 +89,7 @@ describe('CommandControl', () => {
       policyAllows: allowCommandPolicy,
       audit
     })
-    const proposal = controller.propose(
-      { webContentsId: 11, revision: 3 },
-      { id: 'desktop.open_notes', args: {} }
-    )
+    const proposal = controller.propose({ webContentsId: 11, revision: 3 }, { id: 'desktop.open_notes', args: {} })
 
     expect(await controller.confirm({ ...proposal, webContentsId: 11 })).toEqual({
       ok: false,
@@ -126,13 +111,19 @@ describe('CommandControl', () => {
 
     const replaced = controller.propose({ webContentsId: 11, revision: 2 }, { id: 'desktop.open_notes', args: {} })
     const current = controller.propose({ webContentsId: 11, revision: 3 }, { id: 'desktop.open_notes', args: {} })
-    expect(await controller.confirm({ ...replaced, webContentsId: 11 })).toEqual({ ok: false, reason: 'proposal_mismatch' })
+    expect(await controller.confirm({ ...replaced, webContentsId: 11 })).toEqual({
+      ok: false,
+      reason: 'proposal_mismatch'
+    })
     expect(await controller.confirm({ ...current, nonce: `${current.nonce}x`, webContentsId: 11 })).toEqual({
       ok: false,
       reason: 'nonce_mismatch'
     })
     expect(await controller.cancel({ ...current, webContentsId: 11 })).toEqual({ ok: true })
-    expect(await controller.confirm({ ...current, webContentsId: 11 })).toEqual({ ok: false, reason: 'proposal_missing' })
+    expect(await controller.confirm({ ...current, webContentsId: 11 })).toEqual({
+      ok: false,
+      reason: 'proposal_missing'
+    })
     expect(execute).not.toHaveBeenCalled()
   })
 
