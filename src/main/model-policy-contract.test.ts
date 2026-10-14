@@ -59,7 +59,7 @@ describe('M2-0412 — every real model call site resolves through the fleet poli
 
   it('the cloud STT session start narrows the provider through the stt policy entry', () => {
     const text = src(MAIN_INDEX)
-    expect(text).toMatch(/enforceSttPolicy\(\s*getActiveModelPolicy\(settings\),\s*effectiveCloudSttProvider\(/)
+    expect(text).toMatch(/resolveCloudSttStartProvider\(\s*getActiveModelPolicy\(settings\),\s*profile,\s*settings\.cloudSttProvider\s*\)/)
   })
 
   it('the on-device readiness gate is installed from the localModel policy entry', () => {

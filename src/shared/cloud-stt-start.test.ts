@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { cloudSttStartAcknowledgement } from './cloud-stt-start'
+import { cloudSttStartAcknowledgement, resolveCloudSttStartProvider } from './cloud-stt-start'
 
 describe('cloud speech start acknowledgement', () => {
+  it('resolves the existing managed profile without enabling an unmanaged unconfigured session', () => {
+    expect(resolveCloudSttStartProvider(null, { managed: true, inferenceMode: 'cloud-only' }, 'unconfigured')).toBe('cloudflare-nova3')
+    expect(resolveCloudSttStartProvider(null, {}, 'unconfigured')).toBe('unconfigured')
+    expect(resolveCloudSttStartProvider(null, {}, 'soniox')).toBe('soniox')
+  })
   it('reports only the provider actually selected by main', () => {
     expect(cloudSttStartAcknowledgement({ ok: true }, 'soniox')).toEqual({ ok: true, provider: 'soniox' })
     expect(cloudSttStartAcknowledgement({ ok: true }, 'cloudflare-nova3')).toEqual({
