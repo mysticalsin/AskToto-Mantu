@@ -2,18 +2,20 @@ import {
   CLOUD_SPEECH_MAX_PENDING_AUDIO_MS,
   CLOUD_SPEECH_MAX_PENDING_BYTES,
   CLOUD_SPEECH_MAX_PENDING_FRAMES,
-  CloudSpeechCancelResultSchema,
+  CLOUD_SPEECH_CAPTURE_CEILING_MAX_SAMPLES,
   CloudSpeechFinishResultSchema,
   CloudSpeechFrame,
-  CloudSpeechFrameResultSchema,
   CloudSpeechStartRequest,
   CloudSpeechStartRequestSchema,
   CloudSpeechStartResult,
   CloudSpeechStartResultSchema,
-  CloudSpeechStatusResultSchema,
   type CloudSpeechCancelResult,
   type CloudSpeechCancelRequest,
+  type CloudSpeechCaptureCeilingAck,
+  type CloudSpeechCaptureCeilingEvent,
   type CloudSpeechEvent,
+  type CloudSpeechEpochTransitionAck,
+  type CloudSpeechEpochTransitionEvent,
   type CloudSpeechFailure,
   type CloudSpeechFinishResult,
   type CloudSpeechFinishRequest
@@ -34,6 +36,18 @@ import {
   MAX_PENDING_RESULT_APPLICATIONS
 } from './cloud-speech-results'
 import * as cloudStartup from './cloud-speech-startup'
+import { createCloudSpeechTransitionHandler } from './cloud-speech-transition'
+import {
+  bounded as boundedWithClock,
+  boundedCall as boundedCallWithClock,
+  createAdjustableDeadline
+} from './cloud-speech-deadline'
+import { cloudSpeechAckMatches } from './cloud-speech-frame-ack'
+import { createCloudSpeechCancellation } from './cloud-speech-cancel'
+import { acknowledgeCaptureCeiling } from './cloud-speech-ceiling-ack'
+import { waitForAppliedFrontiers as waitForAppliedResultFrontiers } from './cloud-speech-applied'
+import { createCloudSpeechEventQueue } from './cloud-speech-event-queue'
+import { parseClosedSpeechRecovery } from './cloud-speech-recovery'
 
 export interface CloudSpeechControllerBridge {
   cloudSpeechCapability(): Promise<unknown>
@@ -42,6 +56,8 @@ export interface CloudSpeechControllerBridge {
   cloudSpeechFinish(request: CloudSpeechFinishRequest): Promise<unknown>
   cloudSpeechCancel(identity: CloudSpeechCancelRequest): Promise<unknown>
   cloudSpeechStatus(identity: CloudSpeechCancelRequest): Promise<unknown>
+  cloudSpeechAckEpochTransition(request: CloudSpeechEpochTransitionAck): Promise<unknown>
+  cloudSpeechAckCaptureCeiling(request: CloudSpeechCaptureCeilingAck): Promise<unknown>
   onCloudSpeechEvent(
     captureId: string,
     captureGeneration: number,
@@ -54,6 +70,7 @@ export interface CloudSpeechControllerOptions {
   request: CloudSpeechStartRequest
   applyEvent(event: CloudSpeechEvent): void | Promise<void>
   onFailure(code: CloudSpeechFailure['code']): void
+  onStopped?(identity: { captureId: string; captureGeneration: number }, reason: 'user' | 'ceiling'): void
   now?: () => number
   deadlineMs?: number
 }
@@ -119,12 +136,14 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
   let startPromise: Promise<CloudSpeechStartResult> | null = null
   let started: Extract<CloudSpeechStartResult, { ok: true }> | null = null
   let startupSubscription: ReturnType<typeof cloudStartup.createCloudSpeechStartupSubscription> | null = null
-  let eventApplyTail = Promise.resolve()
-  let pendingEventApplications = 0
   let stopped = false
-  let cancelPromise: Promise<CloudSpeechCancelResult> | null = null
+  let cancellation: ReturnType<typeof createCloudSpeechCancellation>
   let stopPromise: Promise<CloudSpeechFinishResult> | null = null
   let stopCompleted = false
+  let captureCeiling: CloudSpeechCaptureCeilingEvent | null = null
+  let sealedFinishRequest: CloudSpeechFinishRequest | null = null
+  let ceilingAckPromise: Promise<CloudSpeechFailure | null> | null = null
+  let finishInvocationStarted = false
   let failureCode: CloudSpeechFailure['code'] | null = null
   let disposed = false
 
@@ -172,49 +191,11 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
 
   const identity = () => ({ captureId: request.captureId, captureGeneration: request.capture.generation })
 
-  const cancelRequestedIdentity = async (deadline: number): Promise<void> => {
-    if (deadline - now() <= 0) return
-    try {
-      const pending = options.bridge.cloudSpeechCancel(identity())
-      await bounded(pending, deadline, undefined)
-    } catch {
-      // Cleanup is best effort; never replace the original start failure.
-    }
-  }
+  const cancelRequestedIdentity = (deadline: number): Promise<void> => cancellation.cancelRequestedIdentity(deadline)
+  const cancelBridgeWithin = (deadline: number): Promise<CloudSpeechCancelResult> =>
+    cancellation.cancelBridgeWithin(deadline)
 
-  const cancelBridgeWithin = async (deadline: number): Promise<CloudSpeechCancelResult> => {
-    if (cancelPromise) return cancelPromise
-    const call = (async () => {
-      if (!started) return failure('CLOSED', request)
-      const remaining = Math.max(0, deadline - now())
-      if (remaining <= 0) return failure('TIMEOUT', request)
-      let pending: Promise<unknown>
-      try {
-        pending = options.bridge.cloudSpeechCancel(identity())
-      } catch {
-        return failure('TRANSPORT', request)
-      }
-      let timer: ReturnType<typeof setTimeout> | undefined
-      const timeout = new Promise<CloudSpeechFailure>((resolve) => {
-        timer = setTimeout(() => resolve(failure('TIMEOUT', request)), remaining)
-      })
-      try {
-        const result = await Promise.race([pending, timeout])
-        const parsed = CloudSpeechCancelResultSchema.safeParse(result)
-        return parsed.success && (!parsed.data.ok || identityMatches(parsed.data, request))
-          ? parsed.data
-          : failure('TRANSPORT', request)
-      } catch {
-        return failure('TRANSPORT', request)
-      } finally {
-        if (timer) clearTimeout(timer)
-      }
-    })()
-    cancelPromise = call
-    return call
-  }
-
-  let activeDeadline: number | null = null
+  const activeDeadline = createAdjustableDeadline(now)
   const invalidate = (code: CloudSpeechFailure['code'], notify = true): void => {
     if (failureCode || disposed) return
     failureCode = code
@@ -222,65 +203,8 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
     discardStartupSubscription()
     clearUnsent()
     if (notify) reportFailure(code)
-    if (started) void cancelBridgeWithin(activeDeadline ?? now() + deadlineMs)
+    if (started) void cancelBridgeWithin(activeDeadline.current() ?? now() + deadlineMs)
     notifyApplied()
-  }
-
-  const validateEvent = (raw: unknown): CloudSpeechEvent | null => {
-    return started ? resultTracker.validate(raw, started.engine) : null
-  }
-
-  const handleEvent = (raw: unknown): void => {
-    if (stopped || disposed || failureCode) return
-    if (!started) return
-    if (pendingEventApplications >= MAX_PENDING_RESULT_APPLICATIONS) {
-      invalidate('QUEUE_LIMIT')
-      return
-    }
-    const event = validateEvent(raw)
-    if (!event) {
-      invalidate('STALE')
-      return
-    }
-    const stream = event.type === 'segment' ? event.segment.stream : event.stream
-    pendingEventApplications += 1
-    eventApplyTail = eventApplyTail
-      .then(async () => {
-        if (stopped || disposed || failureCode) return
-        await options.applyEvent(event)
-        if (event.type === 'segment') resultTracker.markApplied(stream, event.sequence)
-        notifyApplied()
-      })
-      .catch(() => invalidate('TRANSPORT'))
-      .finally(() => {
-        pendingEventApplications -= 1
-        notifyApplied()
-      })
-  }
-
-  const ackMatches = (raw: unknown, frame: CloudSpeechFrame): boolean => {
-    const parsed = CloudSpeechFrameResultSchema.safeParse(raw)
-    if (!parsed.success) {
-      invalidate('TRANSPORT')
-      return false
-    }
-    if (!parsed.data.ok) {
-      invalidate(parsed.data.code)
-      return false
-    }
-    const byteLength = frame.pcm16le.byteLength
-    const ack = parsed.data
-    if (
-      !identityMatches(ack, request) ||
-      ack.track !== frame.track ||
-      ack.sequence !== frame.sequence ||
-      ack.nextSequence !== frame.sequence + 1 ||
-      ack.nextSampleOffset !== frame.sampleOffset + byteLength / 2
-    ) {
-      invalidate('ORDER')
-      return false
-    }
-    return true
   }
 
   const releaseReservation = (input: TrackInput, frame: QueuedFrame): void => {
@@ -293,14 +217,24 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
     while (!stopped && !failureCode && input.queue.length > 0) {
       const frame = input.queue.shift()!
       const age = now() - frame.enqueuedAt
-      if (!Number.isFinite(age) || age < 0 || age > CLOUD_SPEECH_MAX_PENDING_AUDIO_MS) {
+      const frameDeadline = frame.enqueuedAt + CLOUD_SPEECH_MAX_PENDING_AUDIO_MS
+      if (!Number.isFinite(age) || age < 0 || age >= CLOUD_SPEECH_MAX_PENDING_AUDIO_MS) {
         releaseReservation(input, frame)
         invalidate('QUEUE_STALE')
         return
       }
       try {
-        const raw = await options.bridge.cloudSpeechFrame(frame.wire)
-        if (!ackMatches(raw, frame.wire)) return
+        const raw = await boundedCall(
+          () => options.bridge.cloudSpeechFrame(frame.wire),
+          frameDeadline,
+          failure('QUEUE_STALE', request)
+        )
+        if (now() >= frameDeadline) {
+          releaseReservation(input, frame)
+          invalidate('QUEUE_STALE')
+          return
+        }
+        if (!cloudSpeechAckMatches(raw, frame.wire, request, invalidate)) return
         releaseReservation(input, frame)
       } catch {
         releaseReservation(input, frame)
@@ -330,6 +264,10 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
       (view.length !== 1_600 && (!input.sealing || view.length > 1_599))
     ) {
       invalidate('INVALID_REQUEST')
+      return
+    }
+    if (input.originSampleOffset + input.sampleOffset + view.length > CLOUD_SPEECH_CAPTURE_CEILING_MAX_SAMPLES) {
+      invalidate('ORDER')
       return
     }
     for (let index = 0; index < view.length; index += 1) {
@@ -421,90 +359,97 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
     return parsed.data
   }
 
-  const waitForAppliedFrontiers = async (
-    result: Extract<CloudSpeechFinishResult, { ok: true }>,
-    deadline: number
-  ): Promise<boolean> => {
-    const complete = (): boolean => resultTracker.appliedThrough(result)
-    while (!complete()) {
-      const remaining = deadline - now()
-      if (remaining <= 0) return false
-      const waiter = createDeferred<void>()
-      const wake = () => waiter.resolve()
-      applyWaiters.add(wake)
-      let timer: ReturnType<typeof setTimeout> | undefined
-      const timeout = new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, remaining)
-      })
-      await Promise.race([waiter.promise, timeout])
-      applyWaiters.delete(wake)
-      if (timer) clearTimeout(timer)
-      if (failureCode || disposed) return false
-    }
-    return true
-  }
+  const bounded = <T>(operation: Promise<T>, deadline: number, timeoutValue: T): Promise<T> =>
+    boundedWithClock(operation, deadline, now, timeoutValue)
+  const boundedCall = <T>(operation: () => Promise<T>, deadline: number, timeoutValue: T): Promise<T> =>
+    boundedCallWithClock(operation, deadline, now, timeoutValue)
 
-  const bounded = async <T>(operation: Promise<T>, deadline: number, timeoutValue: T): Promise<T> => {
-    const remaining = deadline - now()
-    if (remaining <= 0) return timeoutValue
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const timeout = new Promise<T>((resolve) => {
-      timer = setTimeout(() => resolve(timeoutValue), remaining)
+  cancellation = createCloudSpeechCancellation({
+    request,
+    bridge: options.bridge,
+    now,
+    isStarted: () => started !== null,
+    bounded,
+    failure
+  })
+
+  const processEpochTransition = createCloudSpeechTransitionHandler({
+    request,
+    bridge: options.bridge,
+    validate: (event) => resultTracker.validateTransition(event),
+    install: (event) => resultTracker.installTransition(event),
+    deadline: () => activeDeadline.current() ?? now() + deadlineMs,
+    timeoutFailure: () => failure('TIMEOUT', request),
+    boundedCall,
+    invalidate
+  })
+
+  const ensureCeilingAcknowledged = (finishRequest: CloudSpeechFinishRequest): Promise<CloudSpeechFailure | null> => {
+    if (ceilingAckPromise) return ceilingAckPromise
+    if (!captureCeiling) return Promise.resolve(null)
+    ceilingAckPromise = acknowledgeCaptureCeiling({
+      event: captureCeiling,
+      finishRequest,
+      bridge: options.bridge,
+      deadline: activeDeadline.current() ?? now() + 5_000,
+      timeoutFailure: failure('TIMEOUT', request),
+      failure: (code) => failure(code, request),
+      boundedCall
     })
-    try {
-      return await Promise.race([operation, timeout])
-    } finally {
-      if (timer) clearTimeout(timer)
-    }
+    return ceilingAckPromise
   }
 
-  const boundedCall = async <T>(operation: () => Promise<T>, deadline: number, timeoutValue: T): Promise<T> => {
-    if (deadline - now() <= 0) return timeoutValue
-    return bounded(operation(), deadline, timeoutValue)
-  }
+  const eventQueue = createCloudSpeechEventQueue({
+    validate: (raw) => (started ? resultTracker.parse(raw) : null),
+    validateState: (event) => (started ? resultTracker.admit(event, started.engine) : false),
+    inactive: () => stopped || disposed || failureCode !== null || !started,
+    maxPending: MAX_PENDING_RESULT_APPLICATIONS,
+    invalidate,
+    processTransition: processEpochTransition,
+    processCeiling: (event) => {
+      if (captureCeiling && captureCeiling.ceilingId !== event.ceilingId) {
+        invalidate('STALE')
+        return
+      }
+      if (!captureCeiling && finishInvocationStarted) {
+        invalidate('STALE')
+        return
+      }
+      captureCeiling = event
+      activeDeadline.shorten(Math.min(activeDeadline.current() ?? now() + 5_000, now() + 5_000))
+      if (sealedFinishRequest) void ensureCeilingAcknowledged(sealedFinishRequest)
+      else void stop()
+    },
+    apply: options.applyEvent,
+    markApplied: (event) => {
+      if (event.type === 'segment') resultTracker.markApplied(event.segment.stream, event.sequence)
+      else resultTracker.markTerminalApplied(event.stream)
+    },
+    notify: notifyApplied
+  })
+  const handleEvent = eventQueue.handle
 
   const recoverClosedButIncomplete = async (deadline: number): Promise<CloudSpeechFinishResult | null> => {
     let raw: unknown
     try {
-      raw = await boundedCall(() => options.bridge.cloudSpeechStatus(identity()), deadline, null)
+      if (now() >= Math.min(deadline, activeDeadline.current() ?? deadline)) return null
+      raw = await activeDeadline.bounded(options.bridge.cloudSpeechStatus(identity()), deadline, null)
     } catch {
       return null
     }
-    const parsed = CloudSpeechStatusResultSchema.safeParse(raw)
-    if (!parsed.success || !parsed.data.ok || !identityMatches(parsed.data, request) || parsed.data.state !== 'closed')
-      return null
-    const tracks = new Set(parsed.data.tracks.map((trackResult) => trackResult.stream.track))
-    if (
-      parsed.data.tracks.length !== request.capture.capturedTracks.length ||
-      tracks.size !== parsed.data.tracks.length ||
-      request.capture.capturedTracks.some((track) => !tracks.has(track)) ||
-      parsed.data.tracks.some(
-        (trackResult) =>
-          !request.capture.capturedTracks.includes(trackResult.stream.track) ||
-          resultTracker.currentEpoch(trackResult.stream.track) !== trackResult.stream.epoch
-      )
-    )
-      return null
-    const recovered = CloudSpeechFinishResultSchema.safeParse({
-      ok: true,
-      captureId: request.captureId,
-      captureGeneration: request.capture.generation,
-      complete: false,
-      tracks: parsed.data.tracks.map((track) => ({
-        stream: track.stream,
-        lastSequence: track.lastSequence,
-        closeConfirmed: track.closeConfirmed,
-        tail: 'incomplete' as const,
-        reason: 'unknown' as const
-      })),
-      reason: 'incomplete'
-    })
-    if (!recovered.success || !recovered.data.ok) return null
+    if (failureCode || disposed || stopped) return null
+    const recovered = parseClosedSpeechRecovery(raw, request, (track) => resultTracker.currentEpoch(track))
+    if (!recovered) return null
     stopped = true
     stopCompleted = true
     discardStartupSubscription()
     for (const input of inputs.values()) detachInput(input, true)
-    return recovered.data
+    try {
+      options.onStopped?.(identity(), captureCeiling ? 'ceiling' : 'user')
+    } catch {
+      // Owner teardown is observational and cannot change the recovered result.
+    }
+    return recovered
   }
 
   const start = (): Promise<CloudSpeechStartResult> => {
@@ -570,7 +515,7 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
         resultTracker.initialize(result)
         const startupDeadline = now() + deadlineMs
         await startupSubscription?.activate(() =>
-          cloudStartup.waitForStartupDispatch(eventApplyTail, startupDeadline, now, () => invalidate('TIMEOUT'))
+          cloudStartup.waitForStartupDispatch(eventQueue.tail(), startupDeadline, now, () => invalidate('TIMEOUT'))
         )
         if (disposed || stopped || failureCode) return failure(failureCode ?? 'CLOSED', request)
         return result
@@ -634,13 +579,14 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
   const stop = (): Promise<CloudSpeechFinishResult> => {
     if (stopPromise) return stopPromise
     stopPromise = (async () => {
-      const deadline = now() + deadlineMs
+      const requestedDeadline = now() + deadlineMs
+      const deadline = Math.min(activeDeadline.current() ?? requestedDeadline, requestedDeadline)
       if (!started || stopped || disposed || failureCode) return failure(failureCode ?? 'CLOSED', request)
       if (inputs.size !== request.capture.capturedTracks.length) {
         invalidate('CLOSED')
         return failure('CLOSED', request)
       }
-      activeDeadline = deadline
+      activeDeadline.shorten(deadline)
       const flushes: Array<Promise<FlushAck>> = []
       for (const track of tracksInOrder) {
         const input = inputs.get(track)
@@ -661,13 +607,13 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
         }
       }
 
-      const flushResult = await bounded(Promise.all(flushes), deadline, null)
+      const flushResult = await activeDeadline.bounded(Promise.all(flushes), deadline, null)
       if (failureCode) return failure(failureCode, request)
       if (flushResult === null) {
         invalidate('TIMEOUT')
         return failure('TIMEOUT', request)
       }
-      const drained = await bounded(
+      const drained = await activeDeadline.bounded(
         Promise.all([...inputs.values()].map((input) => input.pumping ?? Promise.resolve())),
         deadline,
         null
@@ -696,16 +642,47 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
         captureGeneration: request.capture.generation,
         tracks
       }
+      if (
+        captureCeiling &&
+        finishRequest.tracks.some((track) => track.finalSampleOffset > CLOUD_SPEECH_CAPTURE_CEILING_MAX_SAMPLES)
+      ) {
+        invalidate('ORDER')
+        return failure('ORDER', request)
+      }
+      sealedFinishRequest = finishRequest
+      if (captureCeiling) {
+        const ceilingFailure = await ensureCeilingAcknowledged(finishRequest)
+        if (ceilingFailure) {
+          invalidate(ceilingFailure.code)
+          return ceilingFailure
+        }
+        if (now() >= deadline) {
+          invalidate('TIMEOUT')
+          return failure('TIMEOUT', request)
+        }
+      }
       let finishResult: CloudSpeechFinishResult
       try {
-        const raw = await boundedCall(
-          () => options.bridge.cloudSpeechFinish(finishRequest),
+        if (now() >= Math.min(deadline, activeDeadline.current() ?? deadline)) {
+          invalidate('TIMEOUT')
+          return failure('TIMEOUT', request)
+        }
+        finishInvocationStarted = true
+        const raw = await activeDeadline.bounded(
+          options.bridge.cloudSpeechFinish(finishRequest),
           deadline,
           failure('TIMEOUT', request)
         )
         finishResult = parseFinishResult(raw)
       } catch {
         finishResult = failure('TRANSPORT', request)
+      }
+      if (captureCeiling) {
+        const ceilingFailure = await ensureCeilingAcknowledged(finishRequest)
+        if (ceilingFailure) {
+          invalidate(ceilingFailure.code)
+          return ceilingFailure
+        }
       }
       if (!finishResult.ok) {
         if (
@@ -714,6 +691,7 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
           finishResult.code === 'CLOSURE_UNCONFIRMED'
         ) {
           const recovered = await recoverClosedButIncomplete(deadline)
+          if (failureCode) return failure(failureCode, request)
           if (recovered) return recovered
         }
         invalidate(finishResult.code)
@@ -737,18 +715,29 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
       if (!resultTracker.prepareFinish(finishResult)) {
         finishResult = { ...finishResult, complete: false, reason: 'incomplete' }
       }
-      if (now() >= deadline || !(await waitForAppliedFrontiers(finishResult, deadline))) {
+      if (
+        now() >= deadline ||
+        !(await waitForAppliedResultFrontiers({
+          deadline,
+          currentDeadline: () => activeDeadline.current() ?? deadline,
+          subscribeDeadline: (wake) => activeDeadline.subscribe(wake),
+          now,
+          isApplied: () => resultTracker.appliedThrough(finishResult as Extract<CloudSpeechFinishResult, { ok: true }>),
+          isFailed: () => Boolean(failureCode || disposed),
+          waiters: applyWaiters
+        }))
+      ) {
         invalidate('TIMEOUT')
         return failure('TIMEOUT', request)
       }
       while (!failureCode) {
-        const currentCallbacks = eventApplyTail
-        const appliedCallbacks = await bounded(currentCallbacks, deadline, null)
+        const currentCallbacks = eventQueue.tail()
+        const appliedCallbacks = await activeDeadline.bounded(currentCallbacks, deadline, null)
         if (appliedCallbacks === null) {
           invalidate('TIMEOUT')
           return failure('TIMEOUT', request)
         }
-        if (currentCallbacks === eventApplyTail) break
+        if (currentCallbacks === eventQueue.tail()) break
       }
       if (failureCode) return failure(failureCode, request)
       if (disposed || stopped) return failure(failureCode ?? 'CLOSED', request)
@@ -759,6 +748,11 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
       stopCompleted = true
       discardStartupSubscription()
       for (const input of inputs.values()) detachInput(input, true)
+      try {
+        options.onStopped?.(identity(), captureCeiling ? 'ceiling' : 'user')
+      } catch {
+        // Owner teardown is observational and cannot change the validated finish result.
+      }
       return finishResult
     })().catch(() => {
       invalidate('TRANSPORT')
@@ -768,7 +762,7 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
   }
 
   const cancel = (): Promise<CloudSpeechCancelResult> => {
-    if (cancelPromise) return cancelPromise
+    if (cancellation.hasPending()) return cancellation.cancel(now() + deadlineMs)
     if (stopped && stopPromise && !failureCode) return Promise.resolve(failure('CLOSED', request))
     const deadline = now() + deadlineMs
     stopped = true
@@ -777,13 +771,9 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
     clearUnsent()
     notifyApplied()
     if (!started) {
-      cancelPromise = Promise.resolve(failure('CLOSED', request))
-      return cancelPromise
+      return Promise.resolve(failure('CLOSED', request))
     }
-    cancelPromise = bounded(cancelBridgeWithin(deadline), deadline, failure('TIMEOUT', request))
-      .then((result) => result)
-      .catch(() => failure('TRANSPORT', request))
-    return cancelPromise
+    return cancellation.cancel(deadline)
   }
 
   const dispose = (): void => {
@@ -793,7 +783,8 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
     discardStartupSubscription()
     clearUnsent()
     notifyApplied()
-    if (started && !stopCompleted && !cancelPromise) void cancelBridgeWithin(activeDeadline ?? now() + deadlineMs)
+    if (started && !stopCompleted && !cancellation.hasPending())
+      void cancelBridgeWithin(activeDeadline.current() ?? now() + deadlineMs)
   }
 
   return { start, attachTrack, stop, cancel, dispose }

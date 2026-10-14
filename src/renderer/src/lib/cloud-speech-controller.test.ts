@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type {
   CloudSpeechCancelResult,
+  CloudSpeechCaptureCeilingEvent,
   CloudSpeechEvent,
   CloudSpeechFailure,
   CloudSpeechFinishRequest,
@@ -75,11 +76,34 @@ function fakeBridge() {
   const finish = vi.fn<(value: CloudSpeechFinishRequest) => Promise<CloudSpeechFinishResult>>(() =>
     Promise.resolve(failure('CLOSED'))
   )
+  const acknowledgeEpochTransition = vi.fn(
+    (value: Parameters<CloudSpeechControllerBridge['cloudSpeechAckEpochTransition']>[0]) =>
+      Promise.resolve({
+        ok: true as const,
+        captureId: value.captureId,
+        captureGeneration: value.captureGeneration,
+        transitionId: value.transitionId,
+        handoffNonce: value.handoffNonce,
+        stage: value.stage
+      })
+  )
+  const acknowledgeCaptureCeiling = vi.fn(
+    (value: Parameters<CloudSpeechControllerBridge['cloudSpeechAckCaptureCeiling']>[0]) =>
+      Promise.resolve({
+        ok: true as const,
+        captureId: value.captureId,
+        captureGeneration: value.captureGeneration,
+        ceilingId: value.ceilingId,
+        tracks: value.tracks
+      })
+  )
   const bridge: CloudSpeechControllerBridge = {
     cloudSpeechCapability: vi.fn(() => Promise.resolve(readyCapability)),
     cloudSpeechStart: vi.fn(() => Promise.resolve(started())),
     cloudSpeechFrame: frame,
     cloudSpeechFinish: finish,
+    cloudSpeechAckEpochTransition: acknowledgeEpochTransition,
+    cloudSpeechAckCaptureCeiling: acknowledgeCaptureCeiling,
     cloudSpeechCancel: vi.fn(
       (): Promise<CloudSpeechCancelResult> =>
         Promise.resolve({ ok: true, captureId, captureGeneration, closure: 'confirmed' })
@@ -93,7 +117,7 @@ function fakeBridge() {
       return () => events.delete(listener)
     })
   }
-  return { bridge, events, frame, finish }
+  return { bridge, events, frame, finish, acknowledgeEpochTransition, acknowledgeCaptureCeiling }
 }
 
 class FakePort {
@@ -151,6 +175,7 @@ function controller(
     bridge?: CloudSpeechControllerBridge
     onFailure?: (code: CloudSpeechFailure['code']) => void
     applyEvent?: (event: CloudSpeechEvent) => Promise<void>
+    onStopped?: (identity: { captureId: string; captureGeneration: number }, reason: 'user' | 'ceiling') => void
     now?: () => number
     deadlineMs?: number
   } = {}
@@ -161,6 +186,7 @@ function controller(
     request,
     applyEvent: options.applyEvent ?? (() => Promise.resolve()),
     onFailure: options.onFailure ?? vi.fn(),
+    onStopped: options.onStopped,
     now: options.now,
     deadlineMs: options.deadlineMs
   })
@@ -170,6 +196,220 @@ function controller(
 afterEach(() => vi.useRealTimers())
 
 describe('cloud speech capture controller', () => {
+  it('seals once at capture ceiling, ACKs the exact frontier, and tears down the current identity', async () => {
+    const stopped = vi.fn()
+    const next = controller({ onStopped: stopped })
+    next.finish.mockResolvedValue({
+      ok: true,
+      captureId,
+      captureGeneration,
+      complete: true,
+      reason: 'normal',
+      tracks: [
+        {
+          stream: { generation: captureGeneration, track: 'microphone', epoch: 3 },
+          lastSequence: 0,
+          closeConfirmed: true,
+          tail: 'complete',
+          reason: 'normal'
+        }
+      ]
+    })
+    expect((await next.instance.start()).ok).toBe(true)
+    const port = new FakePort()
+    port.onPost = (message) => {
+      if (typeof message === 'object' && message !== null && 'type' in message && message.type === 'seal-and-flush') {
+        const command = message as { requestId: string }
+        port.emit({ type: 'flush-ack', requestId: command.requestId, finalSequence: 0, finalSampleOffset: 0 })
+      }
+    }
+    // A positive stream origin with no emitted PCM still has the exact empty
+    // capture frontier 0/0; the origin is not evidence that samples exist.
+    expect(next.instance.attachTrack('microphone', port as unknown as MessagePort, 48_000)).toBe(true)
+    const ceiling: CloudSpeechCaptureCeilingEvent = {
+      type: 'capture-ceiling',
+      captureId,
+      captureGeneration,
+      ceilingId: '00000000-0000-4000-8000-000000000704',
+      maxSampleOffsetExclusive: 230_400_000
+    }
+    for (const listener of next.events) listener(ceiling)
+    for (const listener of next.events) listener(ceiling)
+    await vi.waitFor(() => expect(next.acknowledgeCaptureCeiling).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(next.finish).toHaveBeenCalledTimes(1))
+    expect(port.sent).toEqual([{ type: 'seal-and-flush', requestId: expect.any(String) }])
+    expect(next.acknowledgeCaptureCeiling).toHaveBeenCalledWith({
+      type: 'capture-ceiling-ack',
+      captureId,
+      captureGeneration,
+      ceilingId: ceiling.ceilingId,
+      tracks: [{ track: 'microphone', finalSequence: 0, finalSampleOffset: 0 }]
+    })
+    await vi.waitFor(() => expect(stopped).toHaveBeenCalledWith({ captureId, captureGeneration }, 'ceiling'))
+    next.instance.dispose()
+  })
+
+  it('refuses ceiling acknowledgement instead of trimming a final frontier past the sample cap', async () => {
+    const onFailure = vi.fn()
+    const next = controller({ onFailure })
+    expect((await next.instance.start()).ok).toBe(true)
+    const port = new FakePort()
+    port.onPost = (message) => {
+      if (typeof message === 'object' && message !== null && 'type' in message && message.type === 'seal-and-flush') {
+        const command = message as { requestId: string }
+        port.emit({ type: 'flush-ack', requestId: command.requestId, finalSequence: 1, finalSampleOffset: 1_600 })
+      }
+    }
+    expect(next.instance.attachTrack('microphone', port as unknown as MessagePort, 230_400_000 - 1_599)).toBe(true)
+    port.emit(pcmFrame(1, 0))
+    const ceiling: CloudSpeechCaptureCeilingEvent = {
+      type: 'capture-ceiling',
+      captureId,
+      captureGeneration,
+      ceilingId: '00000000-0000-4000-8000-000000000705',
+      maxSampleOffsetExclusive: 230_400_000
+    }
+    for (const listener of next.events) listener(ceiling)
+    await vi.waitFor(() => expect(onFailure).toHaveBeenCalled())
+    expect(next.acknowledgeCaptureCeiling).not.toHaveBeenCalled()
+    expect(next.finish).not.toHaveBeenCalled()
+    next.instance.dispose()
+  })
+
+  it('admits the exact last sample but never sends a frame beyond the capture ceiling', async () => {
+    const onFailure = vi.fn()
+    const next = controller({ onFailure })
+    expect((await next.instance.start()).ok).toBe(true)
+    const port = new FakePort()
+    expect(next.instance.attachTrack('microphone', port as unknown as MessagePort, 230_400_000 - 1_600)).toBe(true)
+    port.emit(pcmFrame(1, 0))
+    port.emit(pcmFrame(2, 1_600))
+    await vi.waitFor(() => expect(onFailure).toHaveBeenCalledWith('ORDER'))
+    expect(next.frame).toHaveBeenCalledTimes(1)
+    expect(next.frame.mock.calls[0]?.[0]).toMatchObject({ sampleOffset: 230_398_400 })
+    next.instance.dispose()
+  })
+
+  it('joins a ceiling receipt to an already-started user Stop without sealing twice', async () => {
+    const next = controller()
+    next.finish.mockResolvedValue({
+      ok: true,
+      captureId,
+      captureGeneration,
+      complete: true,
+      reason: 'normal',
+      tracks: [
+        {
+          stream: { generation: captureGeneration, track: 'microphone', epoch: 3 },
+          lastSequence: 0,
+          closeConfirmed: true,
+          tail: 'complete',
+          reason: 'normal'
+        }
+      ]
+    })
+    expect((await next.instance.start()).ok).toBe(true)
+    const port = new FakePort()
+    let flushId = ''
+    port.onPost = (message) => {
+      if (typeof message === 'object' && message !== null && 'type' in message && message.type === 'seal-and-flush') {
+        flushId = (message as { requestId: string }).requestId
+      }
+    }
+    expect(next.instance.attachTrack('microphone', port as unknown as MessagePort, 0)).toBe(true)
+    const stopping = next.instance.stop()
+    const ceiling: CloudSpeechCaptureCeilingEvent = {
+      type: 'capture-ceiling',
+      captureId,
+      captureGeneration,
+      ceilingId: '00000000-0000-4000-8000-000000000706',
+      maxSampleOffsetExclusive: 230_400_000
+    }
+    for (const listener of next.events) listener(ceiling)
+    port.emit({ type: 'flush-ack', requestId: flushId, finalSequence: 0, finalSampleOffset: 0 })
+    await expect(stopping).resolves.toMatchObject({ ok: true, complete: true })
+    expect(port.sent).toHaveLength(1)
+    expect(next.acknowledgeCaptureCeiling).toHaveBeenCalledTimes(1)
+    expect(next.finish).toHaveBeenCalledTimes(1)
+    next.instance.dispose()
+  })
+
+  it('shortens an in-flight user Stop to the original ceiling deadline without sealing again', async () => {
+    vi.useFakeTimers()
+    let clock = 0
+    const onFailure = vi.fn()
+    const next = controller({ onFailure, now: () => clock })
+    expect((await next.instance.start()).ok).toBe(true)
+    const port = new FakePort()
+    expect(next.instance.attachTrack('microphone', port as unknown as MessagePort, 0)).toBe(true)
+    const stopping = next.instance.stop()
+    await vi.waitFor(() => expect(port.sent).toHaveLength(1))
+    const ceiling: CloudSpeechCaptureCeilingEvent = {
+      type: 'capture-ceiling',
+      captureId,
+      captureGeneration,
+      ceilingId: '00000000-0000-4000-8000-000000000710',
+      maxSampleOffsetExclusive: 230_400_000
+    }
+    for (const listener of next.events) listener(ceiling)
+    await vi.advanceTimersByTimeAsync(4_999)
+    clock = 4_999
+    expect(onFailure).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    clock = 5_000
+    await expect(stopping).resolves.toMatchObject({ ok: false, code: 'TIMEOUT' })
+    expect(onFailure).toHaveBeenCalledWith('TIMEOUT')
+    expect(port.sent).toHaveLength(1)
+    expect(next.finish).not.toHaveBeenCalled()
+    next.instance.dispose()
+  })
+
+  it('fails closed if the ceiling arrives after finish was already sent', async () => {
+    const finishing = deferred<CloudSpeechFinishResult>()
+    const onFailure = vi.fn()
+    const next = controller({ onFailure })
+    next.finish.mockReturnValue(finishing.promise)
+    expect((await next.instance.start()).ok).toBe(true)
+    const port = new FakePort()
+    port.onPost = (message) => {
+      if (typeof message === 'object' && message !== null && 'type' in message && message.type === 'seal-and-flush') {
+        const command = message as { requestId: string }
+        port.emit({ type: 'flush-ack', requestId: command.requestId, finalSequence: 0, finalSampleOffset: 0 })
+      }
+    }
+    expect(next.instance.attachTrack('microphone', port as unknown as MessagePort, 0)).toBe(true)
+    const stopping = next.instance.stop()
+    await vi.waitFor(() => expect(next.finish).toHaveBeenCalledTimes(1))
+    const ceiling: CloudSpeechCaptureCeilingEvent = {
+      type: 'capture-ceiling',
+      captureId,
+      captureGeneration,
+      ceilingId: '00000000-0000-4000-8000-000000000711',
+      maxSampleOffsetExclusive: 230_400_000
+    }
+    for (const listener of next.events) listener(ceiling)
+    await vi.waitFor(() => expect(onFailure).toHaveBeenCalledWith('STALE'))
+    finishing.resolve({
+      ok: true,
+      captureId,
+      captureGeneration,
+      complete: true,
+      reason: 'normal',
+      tracks: [
+        {
+          stream: { generation: captureGeneration, track: 'microphone', epoch: 3 },
+          lastSequence: 0,
+          closeConfirmed: true,
+          tail: 'complete',
+          reason: 'normal'
+        }
+      ]
+    })
+    await expect(stopping).resolves.toMatchObject({ ok: false, code: 'STALE' })
+    expect(next.acknowledgeCaptureCeiling).not.toHaveBeenCalled()
+    next.instance.dispose()
+  })
+
   it('converts each genuine Float32 frame once to explicit little-endian PCM and translates the capture offset', async () => {
     const { instance, frame } = controller()
     expect((await instance.start()).ok).toBe(true)
@@ -218,6 +458,313 @@ describe('cloud speech capture controller', () => {
     expect(await starting).toMatchObject({ ok: true })
     await vi.waitFor(() => expect(applied).toEqual([earlyEvent]))
     next.instance.dispose()
+  })
+
+  it('applies predecessor results before the closed receipt and installs only the announced successor epoch', async () => {
+    const applied: CloudSpeechEvent[] = []
+    const next = controller({ applyEvent: async (event) => void applied.push(event) })
+    expect((await next.instance.start()).ok).toBe(true)
+    const oldStream = { generation: captureGeneration, track: 'microphone' as const, epoch: 3 }
+    const final: CloudSpeechEvent = {
+      type: 'segment',
+      captureId,
+      captureGeneration,
+      sequence: 1,
+      segment: {
+        stream: oldStream,
+        engine: 'cloudflare-nova3',
+        index: 1,
+        revision: 1,
+        final: true,
+        text: 'old final',
+        startMs: 0,
+        endMs: 20
+      }
+    }
+    const terminal: CloudSpeechEvent = {
+      type: 'terminal',
+      captureId,
+      captureGeneration,
+      stream: oldStream,
+      lastSequence: 1,
+      closeConfirmed: true,
+      tail: 'complete',
+      reason: 'normal'
+    }
+    const closed: CloudSpeechEvent = {
+      type: 'epoch-transition',
+      captureId,
+      captureGeneration,
+      transitionId: 4,
+      handoffNonce: '00000000-0000-4000-8000-000000000704',
+      stage: 'closed',
+      streams: [{ track: 'microphone', previousEpoch: 3, lastSequence: 1 }]
+    }
+    const opened: CloudSpeechEvent = {
+      type: 'epoch-transition',
+      captureId,
+      captureGeneration,
+      transitionId: 4,
+      handoffNonce: closed.handoffNonce,
+      stage: 'opened',
+      streams: [{ track: 'microphone', previousEpoch: 3, nextEpoch: 9, lastSequence: 1 }]
+    }
+    for (const event of [final, terminal, closed]) for (const listener of next.events) listener(event)
+    await vi.waitFor(() => expect(next.acknowledgeEpochTransition).toHaveBeenCalledTimes(1))
+    expect(applied).toEqual([final, terminal])
+    expect(next.acknowledgeEpochTransition).toHaveBeenNthCalledWith(1, {
+      type: 'epoch-transition-ack',
+      captureId,
+      captureGeneration,
+      transitionId: 4,
+      handoffNonce: closed.handoffNonce,
+      stage: 'closed',
+      streams: closed.streams
+    })
+
+    for (const listener of next.events) listener(opened)
+    await vi.waitFor(() => expect(next.acknowledgeEpochTransition).toHaveBeenCalledTimes(2))
+    expect(next.acknowledgeEpochTransition).toHaveBeenNthCalledWith(2, {
+      type: 'epoch-transition-ack',
+      captureId,
+      captureGeneration,
+      transitionId: 4,
+      handoffNonce: closed.handoffNonce,
+      stage: 'opened',
+      streams: opened.streams
+    })
+
+    const successor: CloudSpeechEvent = {
+      ...final,
+      sequence: 1,
+      segment: { ...final.segment, stream: { ...oldStream, epoch: 9 }, text: 'new final' }
+    }
+    for (const listener of next.events) listener(successor)
+    await vi.waitFor(() => expect(applied).toEqual([final, terminal, successor]))
+    next.instance.dispose()
+  })
+
+  it('rejects an unannounced epoch jump and never applies successor results', async () => {
+    const onFailure = vi.fn()
+    const applied: CloudSpeechEvent[] = []
+    const next = controller({ onFailure, applyEvent: async (event) => void applied.push(event) })
+    expect((await next.instance.start()).ok).toBe(true)
+    const stream = { generation: captureGeneration, track: 'microphone' as const, epoch: 3 }
+    const terminal: CloudSpeechEvent = {
+      type: 'terminal',
+      captureId,
+      captureGeneration,
+      stream,
+      lastSequence: 0,
+      closeConfirmed: true,
+      tail: 'complete',
+      reason: 'normal'
+    }
+    const unannounced: CloudSpeechEvent = {
+      type: 'segment',
+      captureId,
+      captureGeneration,
+      sequence: 1,
+      segment: {
+        stream: { ...stream, epoch: 4 },
+        engine: 'cloudflare-nova3',
+        index: 1,
+        revision: 1,
+        final: true,
+        text: 'must not cross epochs implicitly',
+        startMs: 0,
+        endMs: 20
+      }
+    }
+    for (const listener of next.events) listener(terminal)
+    for (const listener of next.events) listener(unannounced)
+    await vi.waitFor(() => expect(onFailure).toHaveBeenCalledWith('STALE'))
+    expect(applied).toEqual([terminal])
+    expect(next.acknowledgeEpochTransition).not.toHaveBeenCalled()
+    next.instance.dispose()
+  })
+
+  it('queues successor results until the opened epoch inventory is acknowledged', async () => {
+    const applied: CloudSpeechEvent[] = []
+    const fakes = fakeBridge()
+    const openedAck = deferred<unknown>()
+    fakes.bridge.cloudSpeechAckEpochTransition = vi.fn((value) =>
+      value.stage === 'opened'
+        ? openedAck.promise
+        : Promise.resolve({
+            ok: true,
+            captureId: value.captureId,
+            captureGeneration: value.captureGeneration,
+            transitionId: value.transitionId,
+            handoffNonce: value.handoffNonce,
+            stage: value.stage
+          })
+    )
+    const next = controller({ bridge: fakes.bridge, applyEvent: async (event) => void applied.push(event) })
+    expect((await next.instance.start()).ok).toBe(true)
+    const oldStream = { generation: captureGeneration, track: 'microphone' as const, epoch: 3 }
+    const terminal: CloudSpeechEvent = {
+      type: 'terminal',
+      captureId,
+      captureGeneration,
+      stream: oldStream,
+      lastSequence: 0,
+      closeConfirmed: true,
+      tail: 'complete',
+      reason: 'normal'
+    }
+    const closed: CloudSpeechEvent = {
+      type: 'epoch-transition',
+      captureId,
+      captureGeneration,
+      transitionId: 6,
+      handoffNonce: '00000000-0000-4000-8000-000000000706',
+      stage: 'closed',
+      streams: [{ track: 'microphone', previousEpoch: 3, lastSequence: 0 }]
+    }
+    const opened: CloudSpeechEvent = {
+      type: 'epoch-transition',
+      captureId,
+      captureGeneration,
+      transitionId: 6,
+      handoffNonce: closed.handoffNonce,
+      stage: 'opened',
+      streams: [{ track: 'microphone', previousEpoch: 3, nextEpoch: 15, lastSequence: 0 }]
+    }
+    for (const event of [terminal, closed, opened]) for (const listener of next.events) listener(event)
+    await vi.waitFor(() => expect(fakes.bridge.cloudSpeechAckEpochTransition).toHaveBeenCalledTimes(2))
+    const successor: CloudSpeechEvent = {
+      type: 'segment',
+      captureId,
+      captureGeneration,
+      sequence: 1,
+      segment: {
+        stream: { ...oldStream, epoch: 15 },
+        engine: 'cloudflare-nova3',
+        index: 1,
+        revision: 1,
+        final: true,
+        text: 'wait for applied open receipt',
+        startMs: 0,
+        endMs: 20
+      }
+    }
+    for (const listener of next.events) listener(successor)
+    await Promise.resolve()
+    expect(applied).toEqual([terminal])
+    openedAck.resolve({
+      ok: true,
+      captureId,
+      captureGeneration,
+      transitionId: 6,
+      handoffNonce: closed.handoffNonce,
+      stage: 'opened'
+    })
+    await vi.waitFor(() => expect(applied).toEqual([terminal, successor]))
+    next.instance.dispose()
+  })
+
+  it('does not open a successor after an incomplete or unconfirmed predecessor terminal', async () => {
+    const onFailure = vi.fn()
+    const next = controller({ onFailure })
+    expect((await next.instance.start()).ok).toBe(true)
+    const stream = { generation: captureGeneration, track: 'microphone' as const, epoch: 3 }
+    const terminal: CloudSpeechEvent = {
+      type: 'terminal',
+      captureId,
+      captureGeneration,
+      stream,
+      lastSequence: 0,
+      closeConfirmed: true,
+      tail: 'incomplete',
+      reason: 'drain-timeout'
+    }
+    const closed: CloudSpeechEvent = {
+      type: 'epoch-transition',
+      captureId,
+      captureGeneration,
+      transitionId: 7,
+      handoffNonce: '00000000-0000-4000-8000-000000000707',
+      stage: 'closed',
+      streams: [{ track: 'microphone', previousEpoch: 3, lastSequence: 0 }]
+    }
+    for (const event of [terminal, closed]) for (const listener of next.events) listener(event)
+    await vi.waitFor(() => expect(onFailure).toHaveBeenCalledWith('STALE'))
+    expect(next.acknowledgeEpochTransition).not.toHaveBeenCalled()
+    next.instance.dispose()
+  })
+
+  it('does not acknowledge closure while a predecessor revision remains provisional', async () => {
+    const onFailure = vi.fn()
+    const next = controller({ onFailure })
+    expect((await next.instance.start()).ok).toBe(true)
+    const stream = { generation: captureGeneration, track: 'microphone' as const, epoch: 3 }
+    const interim: CloudSpeechEvent = {
+      type: 'segment',
+      captureId,
+      captureGeneration,
+      sequence: 1,
+      segment: {
+        stream,
+        engine: 'cloudflare-nova3',
+        index: 1,
+        revision: 1,
+        final: false,
+        text: 'provisional',
+        startMs: 0,
+        endMs: 20
+      }
+    }
+    const terminal: CloudSpeechEvent = {
+      type: 'terminal',
+      captureId,
+      captureGeneration,
+      stream,
+      lastSequence: 1,
+      closeConfirmed: true,
+      tail: 'complete',
+      reason: 'normal'
+    }
+    const closed: CloudSpeechEvent = {
+      type: 'epoch-transition',
+      captureId,
+      captureGeneration,
+      transitionId: 5,
+      handoffNonce: '00000000-0000-4000-8000-000000000705',
+      stage: 'closed',
+      streams: [{ track: 'microphone', previousEpoch: 3, lastSequence: 1 }]
+    }
+    for (const event of [interim, terminal, closed]) for (const listener of next.events) listener(event)
+    await vi.waitFor(() => expect(onFailure).toHaveBeenCalled())
+    expect(next.acknowledgeEpochTransition).not.toHaveBeenCalled()
+    next.instance.dispose()
+  })
+
+  it('keeps a frame pending only until its original enqueue plus two-second deadline, including Stop', async () => {
+    vi.useFakeTimers()
+    let clock = 0
+    const pendingFrame = deferred<CloudSpeechFrameResult>()
+    const onFailure = vi.fn()
+    const bounded = controller({ now: () => clock, onFailure })
+    bounded.frame.mockReturnValue(pendingFrame.promise)
+    expect((await bounded.instance.start()).ok).toBe(true)
+    const port = new FakePort()
+    port.onPost = (message) => {
+      if (typeof message === 'object' && message !== null && 'type' in message && message.type === 'seal-and-flush') {
+        const command = message as { requestId: string }
+        port.emit({ type: 'flush-ack', requestId: command.requestId, finalSequence: 1, finalSampleOffset: 1_600 })
+      }
+    }
+    expect(bounded.instance.attachTrack('microphone', port as unknown as MessagePort, 0)).toBe(true)
+    port.emit(pcmFrame(1, 0))
+    expect(bounded.frame).toHaveBeenCalledTimes(1)
+    const stopping = bounded.instance.stop()
+    clock = 2_000
+    await vi.advanceTimersByTimeAsync(2_000)
+    await expect(stopping).resolves.toEqual(failure('QUEUE_STALE'))
+    expect(onFailure).toHaveBeenCalledWith('QUEUE_STALE')
+    expect(bounded.finish).not.toHaveBeenCalled()
+    bounded.instance.dispose()
   })
 
   it('drains a bounded startup batch through result application without exceeding the live backlog cap', async () => {
@@ -1036,34 +1583,54 @@ describe('cloud speech capture controller', () => {
     await next.instance.start()
     const oldStream = { generation: captureGeneration, track: 'microphone' as const, epoch: 3 }
     const newStream = { ...oldStream, epoch: 4 }
-    for (const listener of next.events) {
-      listener({
-        type: 'terminal',
-        captureId,
-        captureGeneration,
-        stream: oldStream,
-        lastSequence: 0,
-        closeConfirmed: true,
-        tail: 'complete',
-        reason: 'normal'
-      })
-      listener({
-        type: 'segment',
-        captureId,
-        captureGeneration,
-        sequence: 1,
-        segment: {
-          stream: newStream,
-          engine: 'cloudflare-nova3',
-          index: 1,
-          revision: 1,
-          final: true,
-          text: 'same words after renewal are a new stream result',
-          startMs: 100,
-          endMs: 150
-        }
-      })
+    const terminal: CloudSpeechEvent = {
+      type: 'terminal',
+      captureId,
+      captureGeneration,
+      stream: oldStream,
+      lastSequence: 0,
+      closeConfirmed: true,
+      tail: 'complete',
+      reason: 'normal'
     }
+    for (const listener of next.events) listener(terminal)
+    const closed: CloudSpeechEvent = {
+      type: 'epoch-transition',
+      captureId,
+      captureGeneration,
+      transitionId: 8,
+      handoffNonce: '00000000-0000-4000-8000-000000000708',
+      stage: 'closed',
+      streams: [{ track: 'microphone', previousEpoch: 3, lastSequence: 0 }]
+    }
+    const opened: CloudSpeechEvent = {
+      type: 'epoch-transition',
+      captureId,
+      captureGeneration,
+      transitionId: closed.transitionId,
+      handoffNonce: closed.handoffNonce,
+      stage: 'opened',
+      streams: [{ track: 'microphone', previousEpoch: 3, nextEpoch: 4, lastSequence: 0 }]
+    }
+    for (const event of [closed, opened]) for (const listener of next.events) listener(event)
+    await vi.waitFor(() => expect(next.acknowledgeEpochTransition).toHaveBeenCalledTimes(2))
+    const successor: CloudSpeechEvent = {
+      type: 'segment',
+      captureId,
+      captureGeneration,
+      sequence: 1,
+      segment: {
+        stream: newStream,
+        engine: 'cloudflare-nova3',
+        index: 1,
+        revision: 1,
+        final: true,
+        text: 'same words after renewal are a new stream result',
+        startMs: 100,
+        endMs: 150
+      }
+    }
+    for (const listener of next.events) listener(successor)
     await vi.waitFor(() => expect(applied).toHaveLength(2))
     expect(onFailure).not.toHaveBeenCalled()
 
@@ -1175,5 +1742,89 @@ describe('cloud speech capture controller', () => {
       tracks: [{ stream: { generation: captureGeneration, track: 'microphone', epoch: 3 }, tail: 'incomplete' }]
     })
     instance.dispose()
+  })
+
+  it('tears down the current owner after ceiling recovery confirms closure but not a complete tail', async () => {
+    const stopped = vi.fn()
+    const onFailure = vi.fn()
+    const next = controller({ onStopped: stopped, onFailure })
+    next.finish.mockResolvedValue(failure('CLOSURE_UNCONFIRMED'))
+    next.bridge.cloudSpeechStatus = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        captureId,
+        captureGeneration,
+        state: 'closed',
+        tracks: [
+          {
+            stream: { generation: captureGeneration, track: 'microphone', epoch: 3 },
+            phase: 'closed',
+            lastSequence: 0,
+            closeConfirmed: true,
+            tail: 'complete'
+          }
+        ]
+      })
+    )
+    expect((await next.instance.start()).ok).toBe(true)
+    const port = new FakePort()
+    port.onPost = (message) => {
+      if (typeof message === 'object' && message !== null && 'type' in message && message.type === 'seal-and-flush') {
+        const command = message as { requestId: string }
+        port.emit({ type: 'flush-ack', requestId: command.requestId, finalSequence: 0, finalSampleOffset: 0 })
+      }
+    }
+    expect(next.instance.attachTrack('microphone', port as unknown as MessagePort, 0)).toBe(true)
+    const ceiling: CloudSpeechCaptureCeilingEvent = {
+      type: 'capture-ceiling',
+      captureId,
+      captureGeneration,
+      ceilingId: '00000000-0000-4000-8000-000000000712',
+      maxSampleOffsetExclusive: 230_400_000
+    }
+    for (const listener of next.events) listener(ceiling)
+    await vi.waitFor(() => expect(stopped).toHaveBeenCalledTimes(1))
+    expect(stopped).toHaveBeenCalledWith({ captureId, captureGeneration }, 'ceiling')
+    expect(onFailure).not.toHaveBeenCalled()
+    expect(next.bridge.cloudSpeechStatus).toHaveBeenCalledTimes(1)
+    next.instance.dispose()
+  })
+
+  it('does not notify the owner from a closed-status recovery after cancellation wins', async () => {
+    const status = deferred<unknown>()
+    const stopped = vi.fn()
+    const next = controller({ onStopped: stopped })
+    next.finish.mockResolvedValue(failure('CLOSURE_UNCONFIRMED'))
+    next.bridge.cloudSpeechStatus = vi.fn(() => status.promise)
+    expect((await next.instance.start()).ok).toBe(true)
+    const port = new FakePort()
+    port.onPost = (message) => {
+      if (typeof message === 'object' && message !== null && 'type' in message && message.type === 'seal-and-flush') {
+        const command = message as { requestId: string }
+        port.emit({ type: 'flush-ack', requestId: command.requestId, finalSequence: 0, finalSampleOffset: 0 })
+      }
+    }
+    expect(next.instance.attachTrack('microphone', port as unknown as MessagePort, 0)).toBe(true)
+    const stopping = next.instance.stop()
+    await vi.waitFor(() => expect(next.bridge.cloudSpeechStatus).toHaveBeenCalledTimes(1))
+    await next.instance.cancel()
+    status.resolve({
+      ok: true,
+      captureId,
+      captureGeneration,
+      state: 'closed',
+      tracks: [
+        {
+          stream: { generation: captureGeneration, track: 'microphone', epoch: 3 },
+          phase: 'closed',
+          lastSequence: 0,
+          closeConfirmed: true,
+          tail: 'complete'
+        }
+      ]
+    })
+    await expect(stopping).resolves.toMatchObject({ ok: false, code: 'CLOSED' })
+    expect(stopped).not.toHaveBeenCalled()
+    next.instance.dispose()
   })
 })

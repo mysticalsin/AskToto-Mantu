@@ -7,6 +7,7 @@ import { operatorHmacHeaders } from '../operator-hmac-sign'
 export const SPEECH_BROKER_MAX_REQUEST_BYTES = 8_192
 export const SPEECH_BROKER_MAX_RESPONSE_BYTES = 32 * 1024
 export const SPEECH_BROKER_WS_MAX_PAYLOAD = 64 * 1024
+export const SPEECH_BROKER_MAX_OWNER_OPERATION_MS = 2_000
 
 const RouteSchema = z.enum(['deepgram-via-gateway', 'workers-ai-nova3'])
 const ModelSchema = z.enum(['nova-3', '@cf/deepgram/nova-3'])
@@ -187,7 +188,17 @@ export type ReadySpeechCapability = z.infer<typeof ReadyCapabilitySchema>
 export type SpeechCreateRequest = z.input<typeof CreateRequestSchema>
 export type CreatedSpeechSession = z.infer<typeof CreatedSessionSchema>
 export type SpeechSessionStatus = z.infer<typeof StatusSchema>
-export type BrokerFailureCode = 'CONFIG' | 'AUTH' | 'TRANSPORT' | 'RESPONSE' | 'REFUSED' | 'SCHEMA' | 'WS_CONNECT'
+export type BrokerFailureCode =
+  | 'CONFIG'
+  | 'AUTH'
+  | 'TRANSPORT'
+  | 'RESPONSE'
+  | 'REFUSED'
+  | 'SCHEMA'
+  | 'WS_CONNECT'
+  | 'TIMEOUT'
+  | 'CANCELLED'
+  | 'UNKNOWN_ALLOCATION'
 export type BrokerResult<T> = { ok: true; value: T } | { ok: false; code: BrokerFailureCode }
 
 export function normalizeSpeechOperatorOrigin(raw: string): string | null {
@@ -216,9 +227,72 @@ export type SpeechBrokerClientOptions = {
   fetchImpl?: typeof fetch
   WebSocketImpl?: typeof WebSocket
   now?: () => number
+  monotonicNow?: () => number
 }
 
-type BoundedJsonResult = { ok: true; value: unknown } | { ok: false; code: BrokerFailureCode }
+type BoundedJsonResult =
+  | { ok: true; value: unknown; lateFailure?: BrokerFailureCode }
+  | { ok: false; code: BrokerFailureCode }
+
+export type SpeechBrokerOperation = {
+  signal?: AbortSignal
+  /** Monotonic absolute deadline shared by every create/open operation in one handoff. */
+  deadlineAt?: number
+}
+
+type OperationScope = {
+  signal: AbortSignal
+  failure: () => BrokerFailureCode | null
+  cleanup: () => void
+}
+
+function createOperationScope(
+  operation: SpeechBrokerOperation | undefined,
+  stageLimitMs: number,
+  monotonicNow: () => number
+): { ok: true; value: OperationScope } | { ok: false; code: BrokerFailureCode } {
+  const startedAt = monotonicNow()
+  if (!Number.isFinite(startedAt) || startedAt < 0) return { ok: false, code: 'CONFIG' }
+  if (operation?.signal?.aborted) return { ok: false, code: 'CANCELLED' }
+  let timeoutMs = stageLimitMs
+  if (operation?.deadlineAt !== undefined) {
+    if (!Number.isFinite(operation.deadlineAt) || operation.deadlineAt < 0) return { ok: false, code: 'SCHEMA' }
+    const remaining = operation.deadlineAt - startedAt
+    if (remaining <= 0) return { ok: false, code: 'TIMEOUT' }
+    if (remaining > SPEECH_BROKER_MAX_OWNER_OPERATION_MS) return { ok: false, code: 'SCHEMA' }
+    timeoutMs = Math.min(timeoutMs, remaining)
+  }
+
+  const controller = new AbortController()
+  let timeoutElapsed = false
+  const onOwnerAbort = (): void => controller.abort()
+  operation?.signal?.addEventListener('abort', onOwnerAbort, { once: true })
+  const timer = setTimeout(
+    () => {
+      timeoutElapsed = true
+      controller.abort()
+    },
+    Math.max(1, timeoutMs)
+  )
+  let cleaned = false
+  return {
+    ok: true,
+    value: {
+      signal: controller.signal,
+      failure: () => {
+        if (operation?.signal?.aborted) return 'CANCELLED'
+        if (operation?.deadlineAt !== undefined && monotonicNow() >= operation.deadlineAt) return 'TIMEOUT'
+        return timeoutElapsed ? (operation ? 'TIMEOUT' : 'TRANSPORT') : null
+      },
+      cleanup: () => {
+        if (cleaned) return
+        cleaned = true
+        clearTimeout(timer)
+        operation?.signal?.removeEventListener('abort', onOwnerAbort)
+      }
+    }
+  }
+}
 
 async function readBoundedResponse(response: Response): Promise<BoundedJsonResult> {
   const contentType = response.headers.get('content-type') ?? ''
@@ -277,22 +351,51 @@ export class SpeechBrokerClient {
   private readonly fetchImpl: typeof fetch
   private readonly WebSocketImpl: typeof WebSocket
   private readonly now: () => number
+  private readonly monotonicNow: () => number
 
   constructor(private readonly options: SpeechBrokerClientOptions) {
     this.origin = normalizeSpeechOperatorOrigin(options.operatorUrl)
     this.fetchImpl = options.fetchImpl ?? fetch
     this.WebSocketImpl = options.WebSocketImpl ?? WebSocket
     this.now = options.now ?? Date.now
+    this.monotonicNow = options.monotonicNow ?? (() => performance.now())
   }
 
-  async capability(): Promise<BrokerResult<SpeechCapability>> {
-    const response = await this.postJson('/v1/speech/capability', { operation: 'speech-capability' })
+  operationFailure(operation?: SpeechBrokerOperation): BrokerFailureCode | null {
+    if (operation?.signal?.aborted) return 'CANCELLED'
+    if (operation?.deadlineAt === undefined) return null
+    const now = this.monotonicNow()
+    if (!Number.isFinite(operation.deadlineAt) || operation.deadlineAt < 0) return 'SCHEMA'
+    const remaining = operation.deadlineAt - now
+    if (remaining <= 0) return 'TIMEOUT'
+    if (remaining > SPEECH_BROKER_MAX_OWNER_OPERATION_MS) return 'SCHEMA'
+    return null
+  }
+
+  operationBudgetMs(operation: SpeechBrokerOperation | undefined, stageLimitMs: number): number {
+    const failure = this.operationFailure(operation)
+    if (failure) return 0
+    const remaining = operation?.deadlineAt === undefined ? stageLimitMs : operation.deadlineAt - this.monotonicNow()
+    return Math.max(0, Math.min(stageLimitMs, remaining))
+  }
+
+  async capability(operation?: SpeechBrokerOperation): Promise<BrokerResult<SpeechCapability>> {
+    const response = await this.postJson(
+      '/v1/speech/capability',
+      { operation: 'speech-capability' },
+      false,
+      12_000,
+      operation
+    )
     if (!response.ok) return response
+    if (response.lateFailure) return { ok: false, code: response.lateFailure }
     const parsed = CapabilitySchema.safeParse(response.value)
     return parsed.success ? { ok: true, value: parsed.data } : { ok: false, code: 'SCHEMA' }
   }
 
-  async createSession(value: unknown): Promise<BrokerResult<CreatedSpeechSession>> {
+  async createSession(value: unknown, operation?: SpeechBrokerOperation): Promise<BrokerResult<CreatedSpeechSession>> {
+    const operationFailure = this.operationFailure(operation)
+    if (operationFailure) return { ok: false, code: operationFailure }
     const now = this.now()
     const request = CreateRequestSchema.safeParse(value)
     if (
@@ -302,7 +405,7 @@ export class SpeechBrokerClient {
       request.data.consent.expiresAt - request.data.consent.issuedAt > 120_000
     )
       return { ok: false, code: 'SCHEMA' }
-    const response = await this.postJson('/v1/speech/sessions', request.data)
+    const response = await this.postJson('/v1/speech/sessions', request.data, false, 12_000, operation)
     if (!response.ok) return response
     const parsed = CreatedSessionSchema.safeParse(response.value)
     if (!parsed.success) return { ok: false, code: 'SCHEMA' }
@@ -312,16 +415,31 @@ export class SpeechBrokerClient {
       request.data.tracks.some((track, index) => parsed.data.grants[index]?.track !== track)
     )
       return { ok: false, code: 'SCHEMA' }
+    const lateFailure = response.lateFailure ?? this.operationFailure(operation)
+    if (lateFailure) {
+      await this.cancel(parsed.data.sessionId, 1_000)
+      return { ok: false, code: lateFailure }
+    }
     return { ok: true, value: parsed.data }
   }
 
   async openTrack(
     session: CreatedSpeechSession,
     track: SpeechTrack,
-    onSocketOpen?: (socket: WebSocket) => void
+    onSocketOpen?: (socket: WebSocket) => void,
+    operation?: SpeechBrokerOperation
   ): Promise<BrokerResult<WebSocket>> {
+    const scope = createOperationScope(operation, 10_000, this.monotonicNow)
+    if (!scope.ok) return { ok: false, code: scope.code }
+    if (scope.value.failure()) {
+      scope.value.cleanup()
+      return { ok: false, code: scope.value.failure() ?? 'TIMEOUT' }
+    }
     const grant = session.grants.find((item) => item.track === track)
-    if (!grant || !this.isActiveConfigured()) return { ok: false, code: 'CONFIG' }
+    if (!grant || !this.isActiveConfigured()) {
+      scope.value.cleanup()
+      return { ok: false, code: 'CONFIG' }
+    }
     const grantDigest = createHash('sha256').update(grant.token, 'utf8').digest('hex')
     const descriptor = {
       operation: 'open-track',
@@ -345,31 +463,65 @@ export class SpeechBrokerClient {
         socket = new this.WebSocketImpl(url.toString(), {
           headers,
           followRedirects: false,
-          handshakeTimeout: 10_000,
+          handshakeTimeout: Math.max(
+            1,
+            Math.min(10_000, operation?.deadlineAt === undefined ? 10_000 : operation.deadlineAt - this.monotonicNow())
+          ),
           maxPayload: SPEECH_BROKER_WS_MAX_PAYLOAD,
           perMessageDeflate: false,
           rejectUnauthorized: true
         })
       } catch {
+        scope.value.cleanup()
         resolve({ ok: false, code: 'WS_CONNECT' })
         return
       }
       let opened = false
+      let settled = false
       const safeErrorSink = (): void => undefined
-      const onError = (): void => {
-        if (opened) return
+      const finish = (result: BrokerResult<WebSocket>): void => {
+        if (settled) return
+        settled = true
+        scope.value.signal.removeEventListener('abort', onAbort)
         socket.removeListener('open', onOpen)
         socket.removeListener('error', onError)
+        socket.removeListener('close', onClose)
+        scope.value.cleanup()
+        resolve(result)
+      }
+      const onError = (): void => {
+        if (opened) return
         try {
           socket.terminate()
         } catch {
           /* no grant is retained after an unsuccessful upgrade */
         }
-        resolve({ ok: false, code: 'WS_CONNECT' })
+        finish({ ok: false, code: scope.value.failure() ?? 'WS_CONNECT' })
+      }
+      const onClose = (): void => {
+        if (opened) return
+        finish({ ok: false, code: scope.value.failure() ?? 'WS_CONNECT' })
+      }
+      const onAbort = (): void => {
+        try {
+          socket.terminate()
+        } catch {
+          /* abort keeps the remote grant unusable even if local teardown fails */
+        }
+        finish({ ok: false, code: scope.value.failure() ?? 'TIMEOUT' })
       }
       const onOpen = (): void => {
+        const failed = scope.value.failure()
+        if (failed) {
+          try {
+            socket.terminate()
+          } catch {
+            /* late success is rejected and locally torn down */
+          }
+          finish({ ok: false, code: failed })
+          return
+        }
         opened = true
-        socket.removeListener('open', onOpen)
         try {
           onSocketOpen?.(socket)
         } catch {
@@ -378,22 +530,30 @@ export class SpeechBrokerClient {
           } catch {
             /* failed handoff cannot retain an open grant */
           }
-          resolve({ ok: false, code: 'WS_CONNECT' })
+          finish({ ok: false, code: 'WS_CONNECT' })
           return
         }
-        resolve({ ok: true, value: socket })
+        finish({ ok: true, value: socket })
       }
       socket.on('error', safeErrorSink)
       socket.once('error', onError)
       socket.once('open', onOpen)
+      socket.once('close', onClose)
+      scope.value.signal.addEventListener('abort', onAbort, { once: true })
+      if (scope.value.signal.aborted) onAbort()
     })
   }
 
-  async status(sessionId: string, timeoutMs = 12_000): Promise<BrokerResult<SpeechSessionStatus>> {
+  async status(
+    sessionId: string,
+    timeoutMs = 12_000,
+    operation?: SpeechBrokerOperation
+  ): Promise<BrokerResult<SpeechSessionStatus>> {
     if (!z.string().uuid().safeParse(sessionId).success) return { ok: false, code: 'SCHEMA' }
     const body = { operation: 'session-status', sessionId }
-    const response = await this.postJson(`/v1/speech/sessions/${sessionId}/status`, body, true, timeoutMs)
+    const response = await this.postJson(`/v1/speech/sessions/${sessionId}/status`, body, true, timeoutMs, operation)
     if (!response.ok) return response
+    if (response.lateFailure) return { ok: false, code: response.lateFailure }
     const parsed = StatusSchema.safeParse(response.value)
     return parsed.success && parsed.data.sessionId === sessionId
       ? { ok: true, value: parsed.data }
@@ -415,7 +575,8 @@ export class SpeechBrokerClient {
     path: string,
     body: unknown,
     allowExpiredLicense = false,
-    timeoutMs = 12_000
+    timeoutMs = 12_000,
+    operation?: SpeechBrokerOperation
   ): Promise<BoundedJsonResult> {
     if (!(allowExpiredLicense ? this.hasSignedOwnerCredentials() : this.isActiveConfigured()))
       return { ok: false, code: 'CONFIG' }
@@ -426,6 +587,8 @@ export class SpeechBrokerClient {
       'content-type': 'application/json',
       ...operatorHmacHeaders(this.options.operatorLicenseToken, this.options.deviceIdHash, bodyText, this.now())
     }
+    const scope = createOperationScope(operation, Math.max(1, Math.min(12_000, timeoutMs)), this.monotonicNow)
+    if (!scope.ok) return { ok: false, code: scope.code }
     let response: Response
     try {
       response = await this.fetchImpl(new URL(path, this.origin!), {
@@ -433,19 +596,28 @@ export class SpeechBrokerClient {
         headers,
         body: bodyText,
         redirect: 'manual',
-        signal: AbortSignal.timeout(Math.max(1, Math.min(12_000, timeoutMs)))
+        signal: scope.value.signal
       })
     } catch {
-      return { ok: false, code: 'TRANSPORT' }
+      const failure = scope.value.failure() ?? 'TRANSPORT'
+      scope.value.cleanup()
+      return { ok: false, code: path === '/v1/speech/sessions' ? 'UNKNOWN_ALLOCATION' : failure }
     }
     if (response.status >= 300 && response.status < 400) {
       await response.body?.cancel().catch(() => undefined)
+      scope.value.cleanup()
       return { ok: false, code: 'RESPONSE' }
     }
-    const parsed = await readBoundedResponse(response)
-    if (!parsed.ok) return parsed
+    let parsed: BoundedJsonResult
+    try {
+      parsed = await readBoundedResponse(response)
+    } finally {
+      scope.value.cleanup()
+    }
+    if (!parsed.ok) return { ok: false, code: path === '/v1/speech/sessions' ? 'UNKNOWN_ALLOCATION' : parsed.code }
     if (!response.ok) return { ok: false, code: 'REFUSED' }
-    return parsed
+    const lateFailure = scope.value.failure()
+    return lateFailure ? { ...parsed, lateFailure } : parsed
   }
 
   private hasSignedOwnerCredentials(): boolean {

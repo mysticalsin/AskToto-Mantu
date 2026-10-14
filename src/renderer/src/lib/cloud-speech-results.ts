@@ -4,7 +4,8 @@ import {
   type CloudSpeechFailure,
   type CloudSpeechStartRequest,
   type CloudSpeechStartResult,
-  type CloudSpeechFinishResult
+  type CloudSpeechFinishResult,
+  type CloudSpeechEpochTransitionEvent
 } from '@shared/cloud-speech'
 import type { SpeechStreamRef, Track } from '@shared/contracts/speech'
 
@@ -46,6 +47,9 @@ export function createCloudSpeechResultTracker(request: CloudSpeechStartRequest)
   const appliedSequences = new Map<string, number>()
   const expectedFrontiers = new Map<string, number>()
   const terminalStreams = new Set<string>()
+  const terminalStates = new Map<string, { closeConfirmed: boolean; complete: boolean }>()
+  const appliedTerminals = new Set<string>()
+  let pendingTransition: Extract<CloudSpeechEpochTransitionEvent, { stage: 'closed' }> | null = null
   let unfinalizedSealedStream = false
 
   const pruneSealedOldEpochs = (): void => {
@@ -62,6 +66,8 @@ export function createCloudSpeechResultTracker(request: CloudSpeechStartRequest)
         revisions.delete(revisionKey)
       }
       terminalStreams.delete(key)
+      terminalStates.delete(key)
+      appliedTerminals.delete(key)
       seenSequences.delete(key)
       appliedSequences.delete(key)
       expectedFrontiers.delete(key)
@@ -69,6 +75,47 @@ export function createCloudSpeechResultTracker(request: CloudSpeechStartRequest)
   }
   const hasUnfinalizedRevisions = (): boolean =>
     unfinalizedSealedStream || [...revisions.values()].some((revision) => !revision.final)
+
+  const parse = (raw: unknown): CloudSpeechEvent | null => {
+    const parsed = CloudSpeechEventSchema.safeParse(raw)
+    if (!parsed.success || !cloudSpeechIdentityMatches(parsed.data, request)) return null
+    return parsed.data
+  }
+
+  const admit = (event: CloudSpeechEvent, engine: string): boolean => {
+    if (event.type === 'epoch-transition' || event.type === 'capture-ceiling') return true
+    const stream = event.type === 'terminal' ? event.stream : event.segment.stream
+    const currentEpoch = streams.get(stream.track)
+    if (currentEpoch === undefined || stream.epoch !== currentEpoch) return false
+    if (event.type === 'terminal') {
+      const key = speechStreamKey(event.stream)
+      if (terminalStreams.has(key) || event.lastSequence !== (seenSequences.get(key) ?? 0)) return false
+      terminalStreams.add(key)
+      terminalStates.set(key, { closeConfirmed: event.closeConfirmed, complete: event.tail === 'complete' })
+      return true
+    }
+
+    if (!request.capture.capturedTracks.includes(stream.track) || event.segment.engine !== engine) return false
+    const key = speechStreamKey(stream)
+    if (terminalStreams.has(key)) return false
+    const previousSequence = seenSequences.get(key) ?? 0
+    if (
+      event.sequence !== previousSequence + 1 ||
+      (expectedFrontiers.has(key) && event.sequence > (expectedFrontiers.get(key) ?? 0))
+    )
+      return false
+    const revisionKey = `${request.captureId}:${request.capture.generation}:${stream.track}:${stream.epoch}:${event.segment.index}`
+    const previousRevision = revisions.get(revisionKey)
+    if (
+      (previousRevision && previousRevision.final) ||
+      (previousRevision && event.segment.revision !== previousRevision.revision + 1) ||
+      (!previousRevision && event.segment.revision !== 1)
+    )
+      return false
+    seenSequences.set(key, event.sequence)
+    revisions.set(revisionKey, { revision: event.segment.revision, final: event.segment.final })
+    return true
+  }
 
   return {
     initialize(result: Extract<CloudSpeechStartResult, { ok: true }>): void {
@@ -85,50 +132,74 @@ export function createCloudSpeechResultTracker(request: CloudSpeechStartRequest)
       return seenSequences.get(speechStreamKey(stream)) ?? 0
     },
 
-    validate(raw: unknown, engine: string): CloudSpeechEvent | null {
-      const parsed = CloudSpeechEventSchema.safeParse(raw)
-      if (!parsed.success || !cloudSpeechIdentityMatches(parsed.data, request)) return null
-      const event = parsed.data
-      const stream = event.type === 'terminal' ? event.stream : event.segment.stream
-      const currentEpoch = streams.get(stream.track)
-      if (currentEpoch === undefined || stream.epoch < currentEpoch) return null
-      if (stream.epoch > currentEpoch) {
-        const priorKey = `${stream.track}:${currentEpoch}`
-        if (stream.epoch !== currentEpoch + 1 || !terminalStreams.has(priorKey)) return null
-        streams.set(stream.track, stream.epoch)
-        pruneSealedOldEpochs()
-      }
-      if (event.type === 'terminal') {
-        const key = speechStreamKey(event.stream)
-        if (terminalStreams.has(key) || event.lastSequence !== (seenSequences.get(key) ?? 0)) return null
-        terminalStreams.add(key)
-        return event
-      }
+    parse,
 
-      if (!request.capture.capturedTracks.includes(stream.track) || event.segment.engine !== engine) return null
-      const key = speechStreamKey(stream)
-      if (terminalStreams.has(key)) return null
-      const previousSequence = seenSequences.get(key) ?? 0
-      if (
-        event.sequence !== previousSequence + 1 ||
-        (expectedFrontiers.has(key) && event.sequence > (expectedFrontiers.get(key) ?? 0))
-      )
-        return null
-      const revisionKey = `${request.captureId}:${request.capture.generation}:${stream.track}:${stream.epoch}:${event.segment.index}`
-      const previousRevision = revisions.get(revisionKey)
-      if (
-        (previousRevision && previousRevision.final) ||
-        (previousRevision && event.segment.revision !== previousRevision.revision + 1) ||
-        (!previousRevision && event.segment.revision !== 1)
-      )
-        return null
-      seenSequences.set(key, event.sequence)
-      revisions.set(revisionKey, { revision: event.segment.revision, final: event.segment.final })
-      return event
+    admit,
+
+    validate(raw: unknown, engine: string): CloudSpeechEvent | null {
+      const event = parse(raw)
+      return event && admit(event, engine) ? event : null
     },
 
     markApplied(stream: SpeechStreamRef, sequence: number): void {
       appliedSequences.set(speechStreamKey(stream), sequence)
+      pruneSealedOldEpochs()
+    },
+
+    markTerminalApplied(stream: SpeechStreamRef): void {
+      appliedTerminals.add(speechStreamKey(stream))
+    },
+
+    validateTransition(event: Extract<CloudSpeechEpochTransitionEvent, { stage: 'closed' | 'opened' }>): boolean {
+      const expectedTracks = request.capture.capturedTracks
+      if (
+        event.streams.length !== expectedTracks.length ||
+        expectedTracks.some((track, index) => event.streams[index]?.track !== track)
+      )
+        return false
+      if (event.stage === 'closed') {
+        if (pendingTransition) return false
+        return event.streams.every((item) => {
+          const key = `${item.track}:${item.previousEpoch}`
+          return (
+            streams.get(item.track) === item.previousEpoch &&
+            terminalStreams.has(key) &&
+            terminalStates.get(key)?.closeConfirmed === true &&
+            terminalStates.get(key)?.complete === true &&
+            appliedTerminals.has(key) &&
+            (seenSequences.get(key) ?? 0) === item.lastSequence &&
+            (appliedSequences.get(key) ?? 0) === item.lastSequence &&
+            !hasUnfinalizedRevisions()
+          )
+        })
+      }
+      const closed = pendingTransition
+      return Boolean(
+        closed &&
+          closed.transitionId === event.transitionId &&
+          closed.handoffNonce === event.handoffNonce &&
+          closed.captureId === event.captureId &&
+          closed.captureGeneration === event.captureGeneration &&
+          event.streams.every((item, index) => {
+            const previous = closed.streams[index]
+            return (
+              previous?.track === item.track &&
+              previous.previousEpoch === item.previousEpoch &&
+              previous.lastSequence === item.lastSequence &&
+              streams.get(item.track) === item.previousEpoch &&
+              item.nextEpoch > item.previousEpoch
+            )
+          })
+      )
+    },
+
+    installTransition(event: Extract<CloudSpeechEpochTransitionEvent, { stage: 'closed' | 'opened' }>): void {
+      if (event.stage === 'closed') {
+        pendingTransition = event
+        return
+      }
+      for (const item of event.streams) streams.set(item.track, item.nextEpoch)
+      pendingTransition = null
       pruneSealedOldEpochs()
     },
 

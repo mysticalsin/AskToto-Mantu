@@ -5,6 +5,10 @@ import {
   CLOUD_SPEECH_IPC,
   CLOUD_SPEECH_MAX_EVENT_SUBSCRIPTIONS,
   CLOUD_SPEECH_MAX_PRELOAD_FRAME_INVOKES,
+  CloudSpeechEpochTransitionAckSchema,
+  CloudSpeechEpochTransitionAckResultSchema,
+  CloudSpeechCaptureCeilingAckSchema,
+  CloudSpeechCaptureCeilingAckResultSchema,
   CloudSpeechCancelRequestSchema,
   CloudSpeechCancelResultSchema,
   CloudSpeechCapabilitySchema,
@@ -23,6 +27,10 @@ import {
   type CloudSpeechCancelRequest,
   type CloudSpeechCapability,
   type CloudSpeechEvent,
+  type CloudSpeechEpochTransitionAck,
+  type CloudSpeechEpochTransitionAckResult,
+  type CloudSpeechCaptureCeilingAck,
+  type CloudSpeechCaptureCeilingAckResult,
   type CloudSpeechFinishRequest,
   type CloudSpeechFinishResult,
   type CloudSpeechFrame,
@@ -43,6 +51,10 @@ export type CloudSpeechPreloadApi = {
   cloudSpeechFinish: (request: CloudSpeechFinishRequest) => Promise<CloudSpeechFinishResult>
   cloudSpeechCancel: (request: CloudSpeechCancelRequest) => Promise<CloudSpeechCancelResult>
   cloudSpeechStatus: (request: CloudSpeechStatusRequest) => Promise<CloudSpeechStatusResult>
+  cloudSpeechAckEpochTransition: (
+    request: CloudSpeechEpochTransitionAck
+  ) => Promise<CloudSpeechEpochTransitionAckResult>
+  cloudSpeechAckCaptureCeiling: (request: CloudSpeechCaptureCeilingAck) => Promise<CloudSpeechCaptureCeilingAckResult>
   onCloudSpeechEvent: (
     captureId: string,
     captureGeneration: number,
@@ -262,6 +274,67 @@ export function createCloudSpeechPreloadApi(renderer: Renderer): CloudSpeechPrel
         )
       } catch {
         return failure(parsed.data, 'TRANSPORT')
+      }
+    },
+    async cloudSpeechAckEpochTransition(request) {
+      let parsed: ReturnType<typeof CloudSpeechEpochTransitionAckSchema.safeParse>
+      try {
+        parsed = CloudSpeechEpochTransitionAckSchema.safeParse(request)
+      } catch {
+        return failure(request, 'INVALID_REQUEST')
+      }
+      if (!parsed.success) return failure(request, 'INVALID_REQUEST')
+      const value = parsed.data
+      try {
+        const result = transportFailure(
+          CloudSpeechEpochTransitionAckResultSchema,
+          await renderer.invoke(CLOUD_SPEECH_IPC.transitionAck, value),
+          value
+        )
+        if (
+          result.ok &&
+          (result.captureId !== value.captureId ||
+            result.captureGeneration !== value.captureGeneration ||
+            result.transitionId !== value.transitionId ||
+            result.handoffNonce !== value.handoffNonce ||
+            result.stage !== value.stage)
+        )
+          return failure(value, 'TRANSPORT')
+        return result
+      } catch {
+        return failure(value, 'TRANSPORT')
+      }
+    },
+    async cloudSpeechAckCaptureCeiling(request) {
+      let parsed: ReturnType<typeof CloudSpeechCaptureCeilingAckSchema.safeParse>
+      try {
+        parsed = CloudSpeechCaptureCeilingAckSchema.safeParse(request)
+      } catch {
+        return failure(request, 'INVALID_REQUEST')
+      }
+      if (!parsed.success) return failure(request, 'INVALID_REQUEST')
+      const value = parsed.data
+      try {
+        const result = transportFailure(
+          CloudSpeechCaptureCeilingAckResultSchema,
+          await renderer.invoke(CLOUD_SPEECH_IPC.ceilingAck, value),
+          value
+        )
+        if (
+          result.ok &&
+          (result.ceilingId !== value.ceilingId ||
+            result.tracks.length !== value.tracks.length ||
+            result.tracks.some(
+              (track, index) =>
+                track.track !== value.tracks[index]?.track ||
+                track.finalSequence !== value.tracks[index]?.finalSequence ||
+                track.finalSampleOffset !== value.tracks[index]?.finalSampleOffset
+            ))
+        )
+          return failure(value, 'TRANSPORT')
+        return result
+      } catch {
+        return failure(value, 'TRANSPORT')
       }
     },
     onCloudSpeechEvent(captureId, captureGeneration, callback) {

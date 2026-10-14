@@ -9,6 +9,8 @@ export const CLOUD_SPEECH_IPC = {
   finish: 'cloud-speech:v1:finish',
   cancel: 'cloud-speech:v1:cancel',
   status: 'cloud-speech:v1:status',
+  transitionAck: 'cloud-speech:v1:transition-ack',
+  ceilingAck: 'cloud-speech:v1:ceiling-ack',
   event: 'cloud-speech:v1:event'
 } as const
 
@@ -22,6 +24,10 @@ export const CLOUD_SPEECH_MAX_EVENT_SUBSCRIPTIONS = 2
 export const CLOUD_SPEECH_MAX_EVENT_TEXT = 8_192
 export const CLOUD_SPEECH_MAX_WORDS = 256
 export const CLOUD_SPEECH_MAX_LANGUAGES = 8
+export const CLOUD_SPEECH_CAPTURE_CEILING_SAMPLE_RATE = 16_000
+export const CLOUD_SPEECH_CAPTURE_CEILING_DURATION_SECONDS = 14_400
+export const CLOUD_SPEECH_CAPTURE_CEILING_MAX_SAMPLES =
+  CLOUD_SPEECH_CAPTURE_CEILING_SAMPLE_RATE * CLOUD_SPEECH_CAPTURE_CEILING_DURATION_SECONDS
 
 export const CloudSpeechEngineSchema = z.enum(['deepgram-nova3', 'cloudflare-nova3'])
 export type CloudSpeechEngine = z.infer<typeof CloudSpeechEngineSchema>
@@ -29,6 +35,7 @@ export type CloudSpeechEngine = z.infer<typeof CloudSpeechEngineSchema>
 const CaptureIdSchema = z.string().uuid()
 const CounterSchema = z.number().int().positive().safe()
 const OffsetSchema = z.number().int().nonnegative().safe()
+const HandoffNonceSchema = z.string().uuid()
 const LanguageSchema = z
   .string()
   .regex(/^(?:auto|multi|[a-z]{2}(?:-[A-Z]{2})?)$/)
@@ -429,7 +436,139 @@ const TerminalEventSchema = z
       context.addIssue({ code: z.ZodIssueCode.custom, path: ['closeConfirmed'] })
   })
 
-export const CloudSpeechEventSchema = z.union([SegmentEventSchema, TerminalEventSchema])
+const EpochClosedTrackSchema = z
+  .object({ track: TrackSchema, previousEpoch: CounterSchema, lastSequence: OffsetSchema })
+  .strict()
+const EpochOpenedTrackSchema = z
+  .object({
+    track: TrackSchema,
+    previousEpoch: CounterSchema,
+    nextEpoch: CounterSchema,
+    lastSequence: OffsetSchema
+  })
+  .strict()
+  .superRefine((track, context) => {
+    if (track.nextEpoch <= track.previousEpoch) context.addIssue({ code: z.ZodIssueCode.custom, path: ['nextEpoch'] })
+  })
+
+const EpochTransitionIdentitySchema = z
+  .object({
+    captureId: CaptureIdSchema,
+    captureGeneration: CounterSchema,
+    transitionId: CounterSchema,
+    handoffNonce: HandoffNonceSchema
+  })
+  .strict()
+
+export const CloudSpeechCaptureCeilingEventSchema = z
+  .object({
+    type: z.literal('capture-ceiling'),
+    captureId: CaptureIdSchema,
+    captureGeneration: CounterSchema,
+    ceilingId: z.string().uuid(),
+    maxSampleOffsetExclusive: z.literal(CLOUD_SPEECH_CAPTURE_CEILING_MAX_SAMPLES)
+  })
+  .strict()
+export type CloudSpeechCaptureCeilingEvent = z.infer<typeof CloudSpeechCaptureCeilingEventSchema>
+
+const CeilingTrackFrontierSchema = z
+  .object({ track: TrackSchema, finalSequence: OffsetSchema, finalSampleOffset: OffsetSchema })
+  .strict()
+  .superRefine((track, context) => {
+    if (track.finalSampleOffset > CLOUD_SPEECH_CAPTURE_CEILING_MAX_SAMPLES)
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['finalSampleOffset'] })
+    if (track.finalSequence === 0 && track.finalSampleOffset !== 0)
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['finalSampleOffset'] })
+  })
+
+function refineCeilingFrontiers(value: { tracks: Array<{ track: string }> }, context: z.RefinementCtx): void {
+  if (value.tracks.length < 1 || value.tracks.length > 2)
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['tracks'] })
+  if (new Set(value.tracks.map(({ track }) => track)).size !== value.tracks.length)
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['tracks'] })
+}
+
+export const CloudSpeechCaptureCeilingAckSchema = z
+  .object({
+    type: z.literal('capture-ceiling-ack'),
+    captureId: CaptureIdSchema,
+    captureGeneration: CounterSchema,
+    ceilingId: z.string().uuid(),
+    tracks: z.array(CeilingTrackFrontierSchema).min(1).max(2)
+  })
+  .strict()
+  .superRefine(refineCeilingFrontiers)
+export type CloudSpeechCaptureCeilingAck = z.infer<typeof CloudSpeechCaptureCeilingAckSchema>
+
+export const CloudSpeechCaptureCeilingAckResultSchema = z.union([
+  FailureSchema,
+  z
+    .object({
+      ok: z.literal(true),
+      captureId: CaptureIdSchema,
+      captureGeneration: CounterSchema,
+      ceilingId: z.string().uuid(),
+      tracks: z.array(CeilingTrackFrontierSchema).min(1).max(2)
+    })
+    .strict()
+    .superRefine(refineCeilingFrontiers)
+])
+export type CloudSpeechCaptureCeilingAckResult = z.infer<typeof CloudSpeechCaptureCeilingAckResultSchema>
+
+function refineUniqueEpochTracks(value: { streams: Array<{ track: string }> }, context: z.RefinementCtx): void {
+  if (value.streams.length < 1 || value.streams.length > 2)
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['streams'] })
+  if (new Set(value.streams.map(({ track }) => track)).size !== value.streams.length)
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['streams'] })
+}
+
+export const CloudSpeechEpochTransitionEventSchema = z
+  .discriminatedUnion('stage', [
+    EpochTransitionIdentitySchema.extend({
+      type: z.literal('epoch-transition'),
+      stage: z.literal('closed'),
+      streams: z.array(EpochClosedTrackSchema).min(1).max(2)
+    }).strict(),
+    EpochTransitionIdentitySchema.extend({
+      type: z.literal('epoch-transition'),
+      stage: z.literal('opened'),
+      streams: z.array(EpochOpenedTrackSchema).min(1).max(2)
+    }).strict()
+  ])
+  .superRefine(refineUniqueEpochTracks)
+export type CloudSpeechEpochTransitionEvent = z.infer<typeof CloudSpeechEpochTransitionEventSchema>
+
+export const CloudSpeechEpochTransitionAckSchema = z
+  .discriminatedUnion('stage', [
+    EpochTransitionIdentitySchema.extend({
+      type: z.literal('epoch-transition-ack'),
+      stage: z.literal('closed'),
+      streams: z.array(EpochClosedTrackSchema).min(1).max(2)
+    }).strict(),
+    EpochTransitionIdentitySchema.extend({
+      type: z.literal('epoch-transition-ack'),
+      stage: z.literal('opened'),
+      streams: z.array(EpochOpenedTrackSchema).min(1).max(2)
+    }).strict()
+  ])
+  .superRefine(refineUniqueEpochTracks)
+export type CloudSpeechEpochTransitionAck = z.infer<typeof CloudSpeechEpochTransitionAckSchema>
+
+export const CloudSpeechEpochTransitionAckResultSchema = z.union([
+  FailureSchema,
+  EpochTransitionIdentitySchema.extend({
+    ok: z.literal(true),
+    stage: z.enum(['closed', 'opened'])
+  }).strict()
+])
+export type CloudSpeechEpochTransitionAckResult = z.infer<typeof CloudSpeechEpochTransitionAckResultSchema>
+
+export const CloudSpeechEventSchema = z.union([
+  SegmentEventSchema,
+  TerminalEventSchema,
+  CloudSpeechEpochTransitionEventSchema,
+  CloudSpeechCaptureCeilingEventSchema
+])
 export type CloudSpeechEvent = z.infer<typeof CloudSpeechEventSchema>
 
 export const CloudSpeechIdentitySchema = CaptureIdentitySchema
