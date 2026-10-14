@@ -1486,7 +1486,10 @@ describe('recall — dataless files are listed, never read (M2-0193)', () => {
       await vi.waitFor(() => expect(events).toEqual([{ file: first, state: 'hydrating' }]))
       reads.length = 0
 
-      expect(await openRead(second, send)).toEqual({ ok: false, error: HYDRATION_BUSY_MSG })
+      expect(await openRead(second, send)).toEqual({
+        ok: false,
+        error: HYDRATION_BUSY_MSG
+      })
       expect(await openExplicitly(second, send, (options) => meetingOpenTarget(folder, second, options))).toEqual({
         ok: false,
         error: HYDRATION_BUSY_MSG
@@ -1535,7 +1538,10 @@ describe('recall — dataless files are listed, never read (M2-0193)', () => {
 
         // The timed-out read still holds its content permit: a second download would hold the other one.
         reads.length = 0
-        expect(await openRead(second, send)).toEqual({ ok: false, error: HYDRATION_BUSY_MSG })
+        expect(await openRead(second, send)).toEqual({
+          ok: false,
+          error: HYDRATION_BUSY_MSG
+        })
         expect(await openExplicitly(second, send, (options) => meetingOpenTarget(folder, second, options))).toEqual({
           ok: false,
           error: HYDRATION_BUSY_MSG

@@ -12,6 +12,7 @@ import {
 } from './features/meetings/meeting-document'
 import { resolveMeetingsFolder, decodeSaved, isEncryptedBytes, writeSaved, DEBRIEF_HEADING } from './transcripts'
 import { formatTranscript } from './features/meetings/transcript-format'
+import { readSavedNote } from './features/meetings/recall-note'
 import { storageAt } from './infra/storage/meetings-storage'
 import type { HydrationProgress, ReadOptions } from './infra/storage/gateway'
 import { DRAFT_FILENAME, UNREADABLE, isMeetingDocumentType, meetingFiles, readMeetings } from './history-read'
@@ -181,46 +182,9 @@ export async function recallRead(
   const text = decodeSaved(read.bytes)
   if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
 
+  const note = readSavedNote(text, safeName)
+  if (note) return note
   const fm = frontmatter(text)
-  if (fm.type === 'note') {
-    const document = parse(text)
-    const body = document?.body.replace(/^\r?\n/, '')
-    // The current note writer has no escaping for structural section headings, so reject ambiguous copies
-    // rather than misattribute question/answer text when it repeats one of these exact headings.
-    const answerHeadings = body?.match(/^## Answer[ \t]*\r?$/gm) ?? []
-    const questionHeadings = body?.match(/^## Question[ \t]*\r?$/gm) ?? []
-    const answerSection = body?.match(/^## Answer[ \t]*\r?\n\r?\n([\s\S]*)$/m)
-    if (!body || answerHeadings.length !== 1 || questionHeadings.length > 1 || !answerSection) {
-      return { ok: false, error: 'This saved note could not be read.' }
-    }
-
-    const answerIndex = answerSection.index
-    if (answerIndex === undefined) return { ok: false, error: 'This saved note could not be read.' }
-    const questionSection = /^## Question[ \t]*\r?\n\r?\n/m.exec(body)
-    if (questionSection && questionSection.index >= answerIndex) {
-      return { ok: false, error: 'This saved note could not be read.' }
-    }
-    let question = ''
-    if (questionSection && questionSection.index < answerIndex) {
-      question = body.slice(questionSection.index + questionSection[0].length, answerIndex)
-      // saveNote writes two separator line endings before the Answer heading. Remove only those so
-      // question text that itself ends in a newline still round-trips without being trimmed.
-      question = question.replace(/\r?\n\r?\n$/, '')
-    }
-
-    let answer = answerSection[1]
-    // saveNote adds one terminal newline after the answer; preserve any newline already in the value.
-    answer = answer.replace(/(?:\r?\n)$/, '')
-    if (!answer) return { ok: false, error: 'This saved note could not be read.' }
-    return {
-      ok: true,
-      kind: 'note',
-      title: fm.title || safeName.replace(/\.md$/, ''),
-      mode: fm.mode || 'general',
-      question,
-      answer
-    }
-  }
   if (!isMeetingDocumentType(fm.type)) {
     return { ok: false, error: 'This does not look like a meeting file.' }
   }

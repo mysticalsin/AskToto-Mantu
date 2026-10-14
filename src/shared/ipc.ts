@@ -4,6 +4,7 @@ import { LocalVisionEvidenceSchema } from './local-ai'
 import { EntityKindSchema } from './brain'
 import { OPERATOR_LICENSE_MAX } from './operator-license'
 import { RECAP_STATUSES, recapStatusValidationError, type RecapStatus } from './recap-status'
+import type { RecallNoteReadFields } from './recall-note'
 import { RENDERER_VIEWS } from './renderer-view'
 import { DEFAULT_PERMISSION_STATE, PermissionStateSchema } from './screen-permission'
 export type { PermissionStatus, PlatformPermissions, ScreenCaptureCheckResult } from './screen-permission'
@@ -2042,15 +2043,9 @@ export const RecallBackfillSpeakersPayloadSchema = z.object({
 export type RecallBackfillSpeakersPayload = z.infer<typeof RecallBackfillSpeakersPayloadSchema>
 
 /** Result of reading a saved meeting or quick note back through the explicit History reader. */
-export interface RecallReadResult {
+export interface RecallReadResult extends RecallNoteReadFields {
   ok: boolean
   error?: string
-  /** `note` is returned only for a saved Q&A note; these fields are absent on meeting reads. */
-  kind?: 'note'
-  title?: string
-  mode?: string
-  question?: string
-  answer?: string
   startedAt?: number
   durationMs?: number
   recap?: string
