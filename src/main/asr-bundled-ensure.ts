@@ -17,7 +17,6 @@ import {
   rmSync,
   statSync
 } from 'node:fs'
-import { lstat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { pipeline } from 'node:stream/promises'
@@ -35,6 +34,7 @@ import {
 import { mainLog } from './logger'
 import { extractParakeetArchiveWindows } from './parakeet-extract'
 import { asrManifestComplete } from './asr-manifest'
+import { asrMetadataStatusReady, parakeetMetadataStatusReady } from './asr-metadata-readiness'
 import { getSettings } from './store'
 import {
   PARAKEET_TDT_V3_INT8,
@@ -303,11 +303,7 @@ export async function resolveParakeetDir(): Promise<string> {
 /** Cheap status probe: checks metadata only and never opens model weights. */
 export async function parakeetModelMetadataReady(): Promise<boolean> {
   const profile = await speechPackBuildProfile()
-  if (profile.profile === null) return false
-  if (profile.profile === 'lean') return parakeetMetadataReadyForProfile('', profile)
-  if (app.isPackaged) return parakeetMetadataReadyForProfile(parakeetBundledDir(), profile)
-  if (await parakeetMetadataReadyForProfile(parakeetBundledDir(), profile)) return true
-  return parakeetMetadataReadyForProfile(parakeetUserDir(), profile)
+  return parakeetMetadataStatusReady(asrMetadataOptions(profile))
 }
 
 /** Installed builds never use a userData copy to mask a damaged bundled payload. */
@@ -366,67 +362,29 @@ async function importAsrAssetsReadyForProfile(
 }
 
 export async function importAsrAssetsReady(): Promise<boolean> {
-  return importAsrAssetsMetadataReadyForProfile(await speechPackBuildProfile())
+  const profile = await speechPackBuildProfile()
+  return asrMetadataStatusReady(asrMetadataOptions(profile))
 }
 
-async function metadataFilePresent(path: string): Promise<boolean> {
-  try {
-    const info = await lstat(path)
-    return info.isFile() && info.nlink === 1 && info.size > 0
-  } catch {
-    return false
-  }
-}
-
-async function parakeetMetadataReadyForProfile(
-  dir: string,
+function asrMetadataOptions(
   profile: Awaited<ReturnType<typeof speechPackBuildProfile>>
-): Promise<boolean> {
-  if (profile.profile === null) return false
-  if (profile.profile === 'lean') {
-    return (
-      selectedAsrEngine() === 'parakeet' && (await resolveSelectedSpeechPack('parakeet')).readiness?.status === 'ready'
-    )
+): Parameters<typeof asrMetadataStatusReady>[0] {
+  const resourceRoot = bundledResourceRoot()
+  return {
+    profile,
+    packaged: app.isPackaged,
+    selectedEngine: selectedAsrEngine(),
+    bundledRoot: resourceRoot,
+    bundledParakeetDir: parakeetBundledDir(),
+    userDataParakeetDir: parakeetUserDir(),
+    bundledModelsRoot: join(resourceRoot, 'models'),
+    userDataModelsRoot: userDataAsrRoot(),
+    parakeetFiles: PARAKEET_REQUIRED_FILES,
+    whisperFloorId: WHISPER_FLOOR_ID,
+    whisperFloorFiles: WHISPER_FLOOR_REQUIRED_FILES,
+    manifestComplete: asrManifestComplete,
+    resolveLeanComponent: async (engine) => (await resolveSelectedSpeechPack(engine)).readiness?.status === 'ready'
   }
-  return (await Promise.all(PARAKEET_REQUIRED_FILES.map((name) => metadataFilePresent(join(dir, name))))).every(Boolean)
-}
-
-async function whisperFloorMetadataReadyForProfile(
-  modelsRoot: string,
-  profile: Awaited<ReturnType<typeof speechPackBuildProfile>>
-): Promise<boolean> {
-  if (profile.profile === null) return false
-  if (profile.profile === 'lean') {
-    return (
-      selectedAsrEngine() === 'whisper' && (await resolveSelectedSpeechPack('whisper')).readiness?.status === 'ready'
-    )
-  }
-  const dir = join(modelsRoot, ...WHISPER_FLOOR_ID.split('/'))
-  return (await Promise.all(WHISPER_FLOOR_REQUIRED_FILES.map((name) => metadataFilePresent(join(dir, name))))).every(
-    Boolean
-  )
-}
-
-async function importAsrAssetsMetadataReadyForProfile(
-  profile: Awaited<ReturnType<typeof speechPackBuildProfile>>
-): Promise<boolean> {
-  if (profile.profile === null) return false
-  if (profile.profile === 'lean') return importAsrAssetsReadyForProfile(profile)
-  if (app.isPackaged) {
-    return (
-      (await parakeetMetadataReadyForProfile(parakeetBundledDir(), profile)) &&
-      asrManifestComplete(bundledResourceRoot())
-    )
-  }
-  const bundledParakeetReady = await parakeetMetadataReadyForProfile(parakeetBundledDir(), profile)
-  const parakeetDir = bundledParakeetReady ? parakeetBundledDir() : parakeetUserDir()
-  const bundledModelsRoot = join(bundledResourceRoot(), 'models')
-  const bundledWhisperReady = await whisperFloorMetadataReadyForProfile(bundledModelsRoot, profile)
-  const whisperRoot = bundledWhisperReady ? bundledModelsRoot : userDataAsrRoot()
-  return (
-    (await parakeetMetadataReadyForProfile(parakeetDir, profile)) &&
-    (await whisperFloorMetadataReadyForProfile(whisperRoot, profile))
-  )
 }
 
 /** Renderer-safe snapshot. An installed app must report a missing bundled payload explicitly. */
@@ -442,7 +400,7 @@ export async function asrAssetsStatusSnapshot(): Promise<AsrAssetsProgress & { r
       reason: 'invalid-profile'
     }
   }
-  const ready = await importAsrAssetsMetadataReadyForProfile(profile)
+  const ready = await asrMetadataStatusReady(asrMetadataOptions(profile))
   if (profile.profile === 'lean' && !ready) {
     return {
       ready: false,
