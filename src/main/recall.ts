@@ -8,7 +8,14 @@ import {
   serialize,
   setMeetingField
 } from './features/meetings/meeting-document'
-import { resolveMeetingsFolder, decodeSaved, isEncryptedBytes, writeSaved, formatTranscript, DEBRIEF_HEADING } from './transcripts'
+import {
+  resolveMeetingsFolder,
+  decodeSaved,
+  isEncryptedBytes,
+  writeSaved,
+  formatTranscript,
+  DEBRIEF_HEADING
+} from './transcripts'
 import { storageAt } from './infra/storage/meetings-storage'
 import type { HydrationProgress, ReadOptions } from './infra/storage/gateway'
 import { DRAFT_FILENAME, UNREADABLE, isMeetingDocumentType, meetingFiles, readMeetings } from './history-read'
@@ -38,14 +45,20 @@ function recapSectionEndIndex(afterNotesHeading: string, type: string | undefine
   return afterNotesHeading.search(recapSectionEndRe(type))
 }
 
-async function readMeetingBytes(folder: string, file: string): Promise<{ ok: true; bytes: Buffer } | { ok: false; error: string }> {
+async function readMeetingBytes(
+  folder: string,
+  file: string
+): Promise<{ ok: true; bytes: Buffer } | { ok: false; error: string }> {
   const read = await storageAt(folder).read(file)
   if (read.status === 'missing') return { ok: false, error: 'Meeting file not found.' }
   if (read.status !== 'ok') return { ok: false, error: 'Could not read the meeting file.' }
   return { ok: true, bytes: read.bytes }
 }
 
-async function readMeetingText(folder: string, file: string): Promise<{ ok: true; text: string; encrypted: boolean } | { ok: false; error: string }> {
+async function readMeetingText(
+  folder: string,
+  file: string
+): Promise<{ ok: true; text: string; encrypted: boolean } | { ok: false; error: string }> {
   const read = await readMeetingBytes(folder, file)
   if (!read.ok) return read
   const text = decodeSaved(read.bytes)
@@ -65,7 +78,9 @@ export function meetingTextNeedsRecap(text: string): boolean {
   return recap.length === 0
 }
 
-export async function listMeetingsNeedingRecap(): Promise<Array<{ file: string; mode: string; lines: TranscriptLine[] }>> {
+export async function listMeetingsNeedingRecap(): Promise<
+  Array<{ file: string; mode: string; lines: TranscriptLine[] }>
+> {
   const folder = resolveMeetingsFolder(getSettings())
   const files = await meetingFiles(folder)
   const out: Array<{ file: string; mode: string; lines: TranscriptLine[] }> = []
@@ -120,7 +135,9 @@ export async function openExplicitly<T extends { ok: boolean; error?: string }>(
     }
   }
   const safeName = safeMeetingBasename(file)
-  const fileClass = safeName ? (await storageAt(resolveMeetingsFolder(getSettings())).classify([safeName])).get(safeName) : undefined
+  const fileClass = safeName
+    ? (await storageAt(resolveMeetingsFolder(getSettings())).classify([safeName])).get(safeName)
+    : undefined
   if (!fileClass || fileClass.status === 'ok' || fileClass.status === 'missing') return open({ hydrate: false })
   if (hydrating) return { ok: false, error: HYDRATION_BUSY_MSG }
   hydrating = true
@@ -147,8 +164,8 @@ export async function openExplicitly<T extends { ok: boolean; error?: string }>(
 }
 
 /**
- * Read a saved meeting file back into memory for "Resume session".
- * Parses frontmatter (title, mode, date → startedAt), the recap section, and the transcript lines.
+ * Read a saved meeting or Q&A note back through the explicit History reader.
+ * Meeting reads return the recap/transcript; note reads return the saved title, question and answer.
  * Constrained to the meetings folder (same basename guard as recallOpen in index.ts — no traversal).
  */
 export async function recallRead(
@@ -167,11 +184,13 @@ export async function recallRead(
   // verdicts never skip a read: its deadline is shorter than a read's, so 'unknown' can name a local file.
   const fileClass = (await gateway.classify([safeName])).get(safeName)
   if (fileClass?.status === 'missing') return { ok: false, error: 'Meeting file not found.' }
-  if (fileClass && 'isRegular' in fileClass && !fileClass.isRegular) return { ok: false, error: 'Could not read the meeting file.' }
+  if (fileClass && 'isRegular' in fileClass && !fileClass.isRegular)
+    return { ok: false, error: 'Could not read the meeting file.' }
   let read = await gateway.read(safeName)
   // An explicit open (`hydrate`) is the one place a cloud-only file is hydrated: this one file, under a
   // content permit, reporting progress. Listing, search and background passes never do.
-  if (hydrate && (read.status === 'dataless' || read.status === 'unknown')) read = await gateway.read(safeName, { hydrate: true, onProgress })
+  if (hydrate && (read.status === 'dataless' || read.status === 'unknown'))
+    read = await gateway.read(safeName, { hydrate: true, onProgress })
   if (read.status === 'missing') return { ok: false, error: 'Meeting file not found.' }
   if (read.status !== 'ok') {
     return { ok: false, error: 'Could not read the meeting file.' }
@@ -180,6 +199,45 @@ export async function recallRead(
   if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
 
   const fm = frontmatter(text)
+  if (fm.type === 'note') {
+    const document = parse(text)
+    const body = document?.body.replace(/^\r?\n/, '')
+    // The current note writer has no escaping for structural section headings, so reject ambiguous copies
+    // rather than misattribute question/answer text when it repeats one of these exact headings.
+    const answerHeadings = body?.match(/^## Answer[ \t]*\r?$/gm) ?? []
+    const questionHeadings = body?.match(/^## Question[ \t]*\r?$/gm) ?? []
+    const answerSection = body?.match(/^## Answer[ \t]*\r?\n\r?\n([\s\S]*)$/m)
+    if (!body || answerHeadings.length !== 1 || questionHeadings.length > 1 || !answerSection) {
+      return { ok: false, error: 'This saved note could not be read.' }
+    }
+
+    const answerIndex = answerSection.index
+    if (answerIndex === undefined) return { ok: false, error: 'This saved note could not be read.' }
+    const questionSection = /^## Question[ \t]*\r?\n\r?\n/m.exec(body)
+    if (questionSection && questionSection.index >= answerIndex) {
+      return { ok: false, error: 'This saved note could not be read.' }
+    }
+    let question = ''
+    if (questionSection && questionSection.index < answerIndex) {
+      question = body.slice(questionSection.index + questionSection[0].length, answerIndex)
+      // saveNote writes two separator line endings before the Answer heading. Remove only those so
+      // question text that itself ends in a newline still round-trips without being trimmed.
+      question = question.replace(/\r?\n\r?\n$/, '')
+    }
+
+    let answer = answerSection[1]
+    // saveNote adds one terminal newline after the answer; preserve any newline already in the value.
+    answer = answer.replace(/(?:\r?\n)$/, '')
+    if (!answer) return { ok: false, error: 'This saved note could not be read.' }
+    return {
+      ok: true,
+      kind: 'note',
+      title: fm.title || safeName.replace(/\.md$/, ''),
+      mode: fm.mode || 'general',
+      question,
+      answer
+    }
+  }
   if (!isMeetingDocumentType(fm.type)) {
     return { ok: false, error: 'This does not look like a meeting file.' }
   }
@@ -413,7 +471,10 @@ const RECAP_MAX = 20000
 // does NOT collapse newlines or strip headings — unlike a title, the recap IS multi-line markdown with its
 // own "## " sub-headings (Overview / Decisions / Action items …), so that structure must survive editing.
 function sanitizeRecap(s: string): string {
-  return (s || '').replace(/\r\n/g, '\n').replace(/^\uFEFF/, '').slice(0, RECAP_MAX)
+  return (s || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/^\uFEFF/, '')
+    .slice(0, RECAP_MAX)
 }
 
 /**
@@ -478,9 +539,7 @@ export async function updateMeetingRecap(
     const endIdx = recapSectionEndIndex(afterStart, type)
     const head = text.slice(0, bodyStart)
     const tail = endIdx === -1 ? '' : afterStart.slice(endIdx)
-    updated = tail
-      ? `${head}${body}${body ? '\n\n' : ''}${tail}`
-      : `${head}${body}${body ? '\n' : ''}`
+    updated = tail ? `${head}${body}${body ? '\n\n' : ''}${tail}` : `${head}${body}${body ? '\n' : ''}`
   } else {
     // No notes section yet (meeting saved with an empty recap). Insert one immediately before its
     // transcript/retention sibling so recallRead parses it exactly as it would a normally-saved recap.
