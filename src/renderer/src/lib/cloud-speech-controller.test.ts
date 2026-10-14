@@ -1789,4 +1789,42 @@ describe('cloud speech capture controller', () => {
     expect(next.bridge.cloudSpeechStatus).toHaveBeenCalledTimes(1)
     next.instance.dispose()
   })
+
+  it('does not notify the owner from a closed-status recovery after cancellation wins', async () => {
+    const status = deferred<unknown>()
+    const stopped = vi.fn()
+    const next = controller({ onStopped: stopped })
+    next.finish.mockResolvedValue(failure('CLOSURE_UNCONFIRMED'))
+    next.bridge.cloudSpeechStatus = vi.fn(() => status.promise)
+    expect((await next.instance.start()).ok).toBe(true)
+    const port = new FakePort()
+    port.onPost = (message) => {
+      if (typeof message === 'object' && message !== null && 'type' in message && message.type === 'seal-and-flush') {
+        const command = message as { requestId: string }
+        port.emit({ type: 'flush-ack', requestId: command.requestId, finalSequence: 0, finalSampleOffset: 0 })
+      }
+    }
+    expect(next.instance.attachTrack('microphone', port as unknown as MessagePort, 0)).toBe(true)
+    const stopping = next.instance.stop()
+    await vi.waitFor(() => expect(next.bridge.cloudSpeechStatus).toHaveBeenCalledTimes(1))
+    await next.instance.cancel()
+    status.resolve({
+      ok: true,
+      captureId,
+      captureGeneration,
+      state: 'closed',
+      tracks: [
+        {
+          stream: { generation: captureGeneration, track: 'microphone', epoch: 3 },
+          phase: 'closed',
+          lastSequence: 0,
+          closeConfirmed: true,
+          tail: 'complete'
+        }
+      ]
+    })
+    await expect(stopping).resolves.toMatchObject({ ok: false, code: 'CLOSED' })
+    expect(stopped).not.toHaveBeenCalled()
+    next.instance.dispose()
+  })
 })
