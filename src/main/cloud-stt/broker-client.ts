@@ -218,7 +218,10 @@ type BoundedJsonResult = { ok: true; value: unknown } | { ok: false; code: Broke
 
 async function readBoundedResponse(response: Response): Promise<BoundedJsonResult> {
   const contentType = response.headers.get('content-type') ?? ''
-  if (!/^application\/json(?:\s*;|$)/i.test(contentType)) return { ok: false, code: 'RESPONSE' }
+  if (!/^application\/json(?:\s*;|$)/i.test(contentType)) {
+    await response.body?.cancel().catch(() => undefined)
+    return { ok: false, code: 'RESPONSE' }
+  }
   const reader = response.body?.getReader()
   if (!reader) return { ok: false, code: 'RESPONSE' }
   const chunks: Uint8Array[] = []
@@ -302,7 +305,7 @@ export class SpeechBrokerClient {
     if (
       parsed.data.captureGeneration !== request.data.captureGeneration ||
       parsed.data.grants.length !== request.data.tracks.length ||
-      request.data.tracks.some((track) => !parsed.data.grants.some((grant) => grant.track === track))
+      request.data.tracks.some((track, index) => parsed.data.grants[index]?.track !== track)
     )
       return { ok: false, code: 'SCHEMA' }
     return { ok: true, value: parsed.data }
@@ -310,7 +313,7 @@ export class SpeechBrokerClient {
 
   async openTrack(session: CreatedSpeechSession, track: SpeechTrack): Promise<BrokerResult<WebSocket>> {
     const grant = session.grants.find((item) => item.track === track)
-    if (!grant || !this.isConfigured()) return { ok: false, code: 'CONFIG' }
+    if (!grant || !this.isActiveConfigured()) return { ok: false, code: 'CONFIG' }
     const grantDigest = createHash('sha256').update(grant.token, 'utf8').digest('hex')
     const descriptor = {
       operation: 'open-track',
@@ -343,25 +346,34 @@ export class SpeechBrokerClient {
         resolve({ ok: false, code: 'WS_CONNECT' })
         return
       }
+      let opened = false
+      const safeErrorSink = (): void => undefined
       const onError = (): void => {
+        if (opened) return
         socket.removeListener('open', onOpen)
         socket.removeListener('error', onError)
+        try {
+          socket.terminate()
+        } catch {
+          /* no grant is retained after an unsuccessful upgrade */
+        }
         resolve({ ok: false, code: 'WS_CONNECT' })
       }
       const onOpen = (): void => {
-        socket.removeListener('error', onError)
+        opened = true
         socket.removeListener('open', onOpen)
         resolve({ ok: true, value: socket })
       }
+      socket.on('error', safeErrorSink)
       socket.once('error', onError)
       socket.once('open', onOpen)
     })
   }
 
-  async status(sessionId: string): Promise<BrokerResult<SpeechSessionStatus>> {
+  async status(sessionId: string, timeoutMs = 12_000): Promise<BrokerResult<SpeechSessionStatus>> {
     if (!z.string().uuid().safeParse(sessionId).success) return { ok: false, code: 'SCHEMA' }
     const body = { operation: 'session-status', sessionId }
-    const response = await this.postJson(`/v1/speech/sessions/${sessionId}/status`, body)
+    const response = await this.postJson(`/v1/speech/sessions/${sessionId}/status`, body, true, timeoutMs)
     if (!response.ok) return response
     const parsed = StatusSchema.safeParse(response.value)
     return parsed.success && parsed.data.sessionId === sessionId
@@ -369,10 +381,10 @@ export class SpeechBrokerClient {
       : { ok: false, code: 'SCHEMA' }
   }
 
-  async cancel(sessionId: string): Promise<BrokerResult<z.infer<typeof CancelSchema>>> {
+  async cancel(sessionId: string, timeoutMs = 1_000): Promise<BrokerResult<z.infer<typeof CancelSchema>>> {
     if (!z.string().uuid().safeParse(sessionId).success) return { ok: false, code: 'SCHEMA' }
     const body = { operation: 'cancel-session', sessionId }
-    const response = await this.postJson(`/v1/speech/sessions/${sessionId}/cancel`, body)
+    const response = await this.postJson(`/v1/speech/sessions/${sessionId}/cancel`, body, true, timeoutMs)
     if (!response.ok) return response
     const parsed = CancelSchema.safeParse(response.value)
     return parsed.success && parsed.data.sessionId === sessionId
@@ -380,8 +392,14 @@ export class SpeechBrokerClient {
       : { ok: false, code: 'SCHEMA' }
   }
 
-  private async postJson(path: string, body: unknown): Promise<BoundedJsonResult> {
-    if (!this.isConfigured()) return { ok: false, code: 'CONFIG' }
+  private async postJson(
+    path: string,
+    body: unknown,
+    allowExpiredLicense = false,
+    timeoutMs = 12_000
+  ): Promise<BoundedJsonResult> {
+    if (!(allowExpiredLicense ? this.hasSignedOwnerCredentials() : this.isActiveConfigured()))
+      return { ok: false, code: 'CONFIG' }
     const bodyText = JSON.stringify(body)
     if (new TextEncoder().encode(bodyText).byteLength > SPEECH_BROKER_MAX_REQUEST_BYTES)
       return { ok: false, code: 'SCHEMA' }
@@ -396,22 +414,28 @@ export class SpeechBrokerClient {
         headers,
         body: bodyText,
         redirect: 'manual',
-        signal: AbortSignal.timeout(12_000)
+        signal: AbortSignal.timeout(Math.max(1, Math.min(12_000, timeoutMs)))
       })
     } catch {
       return { ok: false, code: 'TRANSPORT' }
     }
-    if (response.status >= 300 && response.status < 400) return { ok: false, code: 'RESPONSE' }
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel().catch(() => undefined)
+      return { ok: false, code: 'RESPONSE' }
+    }
     const parsed = await readBoundedResponse(response)
     if (!parsed.ok) return parsed
     if (!response.ok) return { ok: false, code: 'REFUSED' }
     return parsed
   }
 
-  private isConfigured(): boolean {
+  private hasSignedOwnerCredentials(): boolean {
     const token = parseOperatorLicense(this.options.operatorLicenseToken)
-    return Boolean(
-      this.origin && token && token.exp * 1_000 > this.now() && /^[a-f0-9]{32}$/.test(this.options.deviceIdHash)
-    )
+    return Boolean(this.origin && token && /^[a-f0-9]{32}$/.test(this.options.deviceIdHash))
+  }
+
+  private isActiveConfigured(): boolean {
+    const token = parseOperatorLicense(this.options.operatorLicenseToken)
+    return this.hasSignedOwnerCredentials() && Boolean(token && token.exp * 1_000 > this.now())
   }
 }

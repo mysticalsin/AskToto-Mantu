@@ -65,4 +65,10 @@ describe('RelayResultSequence', () => {
       code: 'TERMINAL_MISMATCH'
     })
   })
+
+  it('caps cumulative accepted transcript and terminal bytes per stream', () => {
+    const partial = fixture.events.partial as Record<string, unknown>
+    const results = new RelayResultSequence(expected, 60_000, 100)
+    expect(results.accept(partial)).toMatchObject({ ok: false, code: 'OUTPUT_LIMIT' })
+  })
 })

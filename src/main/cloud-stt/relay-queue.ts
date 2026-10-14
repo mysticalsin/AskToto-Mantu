@@ -13,6 +13,7 @@ export type RelayQueueFailureCode = 'CLOSED' | 'FRAME' | 'ORDER' | 'QUEUE_LIMIT'
 export type RelayQueueResult = { ok: true } | { ok: false; code: RelayQueueFailureCode }
 
 type QueuedFrame = RelayPcmFrame & { admittedAt: number }
+type QueueClock = number | (() => number)
 
 /** One-way, bounded queue for PCM frames that have not yet been handed to the relay WebSocket. */
 export class BoundedRelayPcmQueue {
@@ -90,7 +91,7 @@ export class BoundedRelayPcmQueue {
    */
   drain(
     send: (pcm16le: Uint8Array, sequence: number, sampleOffset: number) => Promise<void> | void,
-    now = Date.now()
+    now: QueueClock = Date.now
   ): Promise<RelayQueueResult> {
     if (this.draining) {
       this.drainAgain = true
@@ -109,13 +110,14 @@ export class BoundedRelayPcmQueue {
 
   private async drainQueue(
     send: (pcm16le: Uint8Array, sequence: number, sampleOffset: number) => Promise<void> | void,
-    now: number
+    now: QueueClock
   ): Promise<RelayQueueResult> {
     while (this.queue.length > 0) {
       if (this.failed) return { ok: false, code: 'CLOSED' }
       const frame = this.queue.shift()!
       this.bytes -= frame.pcm16le.byteLength
-      if (now - frame.admittedAt > RELAY_PCM_QUEUE_MAX_AGE_MS) {
+      const dequeuedAt = typeof now === 'function' ? now() : now
+      if (dequeuedAt - frame.admittedAt > RELAY_PCM_QUEUE_MAX_AGE_MS) {
         this.fail()
         return { ok: false, code: 'QUEUE_STALE' }
       }
@@ -131,7 +133,7 @@ export class BoundedRelayPcmQueue {
 
   private async drainUntilStable(
     send: (pcm16le: Uint8Array, sequence: number, sampleOffset: number) => Promise<void> | void,
-    now: number
+    now: QueueClock
   ): Promise<RelayQueueResult> {
     for (;;) {
       this.drainAgain = false

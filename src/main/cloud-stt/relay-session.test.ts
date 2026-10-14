@@ -107,12 +107,36 @@ function makeClient(): SpeechBrokerClient {
 }
 
 describe('RelaySpeechSession', () => {
+  it('cancels a create allocation before opening when capability selection changed', async () => {
+    MockRelaySocket.instances = []
+    const started = await RelaySpeechSession.create({
+      client: makeClient(),
+      createRequest: singleTrackCreateRequest(),
+      expectedSelection: { routeId: 'workers-ai-nova3', modelId: '@cf/deepgram/nova-3', language: 'en' }
+    })
+    expect(started).toEqual({ ok: false, code: 'SCHEMA' })
+    expect(MockRelaySocket.instances).toHaveLength(0)
+  })
+
+  it('cancels an allocation that no longer belongs to the active capture owner', async () => {
+    MockRelaySocket.instances = []
+    const started = await RelaySpeechSession.create({
+      client: makeClient(),
+      createRequest: singleTrackCreateRequest(),
+      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' },
+      isCurrent: () => false
+    })
+    expect(started).toEqual({ ok: false, code: 'CANCELLED' })
+    expect(MockRelaySocket.instances).toHaveLength(0)
+  })
+
   it('orders admitted PCM before the finish marker and waits for confirmed terminal closure', async () => {
     MockRelaySocket.instances = []
     const client = makeClient()
     const started = await RelaySpeechSession.create({
       client,
-      createRequest: singleTrackCreateRequest()
+      createRequest: singleTrackCreateRequest(),
+      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' }
     })
     expect(started.ok).toBe(true)
     if (!started.ok) return
@@ -135,7 +159,8 @@ describe('RelaySpeechSession', () => {
     MockRelaySocket.instances = []
     const started = await RelaySpeechSession.create({
       client: makeClient(),
-      createRequest: singleTrackCreateRequest()
+      createRequest: singleTrackCreateRequest(),
+      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' }
     })
     expect(started.ok).toBe(true)
     if (!started.ok) return
@@ -149,7 +174,8 @@ describe('RelaySpeechSession', () => {
     MockRelaySocket.instances = []
     const started = await RelaySpeechSession.create({
       client: makeClient(),
-      createRequest: singleTrackCreateRequest()
+      createRequest: singleTrackCreateRequest(),
+      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' }
     })
     expect(started.ok).toBe(true)
     if (!started.ok) return
@@ -160,5 +186,35 @@ describe('RelaySpeechSession', () => {
     const stopped = await started.value.finish(50)
     expect(Date.now() - start).toBeLessThan(500)
     expect(stopped).toMatchObject({ complete: false, reason: 'incomplete' })
+  })
+
+  it('rebases cumulative capture frontiers onto a fresh relay stream without replay', async () => {
+    MockRelaySocket.instances = []
+    const started = await RelaySpeechSession.create({
+      client: makeClient(),
+      createRequest: singleTrackCreateRequest(),
+      expectedSelection: { routeId: 'deepgram-via-gateway', modelId: 'nova-3', language: 'multi' },
+      initialFrontiers: { microphone: { sequence: 9, sampleOffset: 12_800 } }
+    })
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    expect(
+      started.value.pushFrame('microphone', {
+        sequence: 9,
+        sampleOffset: 12_800,
+        pcm16le: new Uint8Array(3_200)
+      })
+    ).toEqual({ ok: true })
+    expect(
+      started.value.pushFrame('microphone', {
+        sequence: 1,
+        sampleOffset: 0,
+        pcm16le: new Uint8Array(3_200)
+      })
+    ).toEqual({ ok: false, code: 'ORDER' })
+    const stopped = await started.value.finish(500)
+    expect(stopped.complete).toBe(true)
+    expect(MockRelaySocket.instances[0].sent[0]).toBeInstanceOf(Uint8Array)
+    expect(MockRelaySocket.instances[0].sent[1]).toBe('{"type":"finish"}')
   })
 })

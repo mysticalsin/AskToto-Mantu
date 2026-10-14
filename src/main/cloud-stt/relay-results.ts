@@ -86,6 +86,7 @@ export type RelayResultFailureCode =
   | 'AFTER_FINAL'
   | 'TERMINAL_MISMATCH'
   | 'AFTER_TERMINAL'
+  | 'OUTPUT_LIMIT'
 
 export type RelayResultAcceptance = { ok: true; event: RelayEvent } | { ok: false; code: RelayResultFailureCode }
 
@@ -99,11 +100,17 @@ export class RelayResultSequence {
   private readonly segments = new Map<number, SegmentState>()
   private lastSequence = 0
   private terminal = false
+  private outputBytes = 0
 
   constructor(
     private readonly expected: RelayIdentity,
-    private readonly maxStreamMs: number
+    private readonly maxStreamMs: number,
+    private readonly maxOutputBytes = 1024 * 1024
   ) {}
+
+  get sequence(): number {
+    return this.lastSequence
+  }
 
   accept(value: unknown): RelayResultAcceptance {
     if (this.terminal) return { ok: false, code: 'AFTER_TERMINAL' }
@@ -130,6 +137,7 @@ export class RelayResultSequence {
       } else if (event.revision !== 1 || event.segmentIndex !== this.segments.size + 1) {
         return { ok: false, code: 'REVISION' }
       }
+      if (!this.accountEvent(event)) return { ok: false, code: 'OUTPUT_LIMIT' }
       this.segments.set(event.segmentIndex, {
         revision: event.revision,
         final: event.final,
@@ -141,8 +149,18 @@ export class RelayResultSequence {
 
     if (event.type === 'terminal') {
       if (event.lastSequence !== this.lastSequence) return { ok: false, code: 'TERMINAL_MISMATCH' }
+      if (!this.accountEvent(event)) return { ok: false, code: 'OUTPUT_LIMIT' }
       this.terminal = true
+    } else if (event.type === 'error' && !this.accountEvent(event)) {
+      return { ok: false, code: 'OUTPUT_LIMIT' }
     }
     return { ok: true, event }
+  }
+
+  private accountEvent(event: RelayEvent): boolean {
+    const bytes = Buffer.byteLength(JSON.stringify(event), 'utf8')
+    if (!Number.isSafeInteger(bytes) || bytes < 1 || this.outputBytes + bytes > this.maxOutputBytes) return false
+    this.outputBytes += bytes
+    return true
   }
 }
