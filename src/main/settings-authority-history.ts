@@ -72,6 +72,7 @@ let settingsReadable = false
 const settingsFrameCurrent: Record<SettingsAuthorityDomain, boolean> = { import: false, persistence: false }
 let effectiveImportPolicy: EffectiveImportPolicyObservation | null = null
 let dispatching = false
+let producerFrameDepth = 0
 
 const SETTINGS_KEYS: readonly SelectedSettingsKey[] = [
   'meetingsFolder',
@@ -209,7 +210,7 @@ function updateDomain(domain: SettingsAuthorityDomain): void {
 }
 
 export function flushSettingsAuthorityInvalidations(): void {
-  if (dispatching) return
+  if (dispatching || producerFrameDepth > 0) return
   dispatching = true
   try {
     while (domains.import.dirty || domains.persistence.dirty) {
@@ -229,6 +230,17 @@ export function flushSettingsAuthorityInvalidations(): void {
   } finally {
     dispatching = false
   }
+}
+
+/** Store-owned coherent read assembly: generations still advance synchronously, callbacks wait for commit. */
+export function beginSettingsAuthorityProducerFrame(): void {
+  producerFrameDepth += 1
+}
+
+export function endSettingsAuthorityProducerFrame(): void {
+  if (producerFrameDepth === 0) return
+  producerFrameDepth -= 1
+  if (producerFrameDepth === 0) flushSettingsAuthorityInvalidations()
 }
 
 export function captureSettingsAuthority(domain: SettingsAuthorityDomain): SettingsAuthorityReceipt | null {
