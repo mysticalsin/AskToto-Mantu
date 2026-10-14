@@ -921,27 +921,27 @@ export function createReadbackNotices(summary, context) {
   return notices
 }
 
-function validatePublicTree(value, depth = 0, key = undefined) {
-  if (depth > 10) invalidPublicSummary('depth', key)
+function validatePublicTree(value, depth = 0, key = undefined, attributionKey = key) {
+  if (depth > 10) invalidPublicSummary('depth', attributionKey)
   if (value === null || typeof value === 'boolean') return
   if (typeof value === 'number') {
     if (!Number.isFinite(value) || value < 0 || value > Number.MAX_SAFE_INTEGER) {
-      invalidPublicSummary('number', key)
+      invalidPublicSummary('number', attributionKey)
     }
     return
   }
   if (typeof value === 'string') {
     if (!(PUBLIC_STRINGS.has(value) || (key === 'candidateInstallerSha256' && safeHash(value)))) {
-      invalidPublicSummary('string', key)
+      invalidPublicSummary('string', attributionKey)
     }
     return
   }
   if (Array.isArray(value)) {
-    if (value.length > 512) invalidPublicSummary('array', key)
-    for (const item of value) validatePublicTree(item, depth + 1, key)
+    if (value.length > 512) invalidPublicSummary('array', attributionKey)
+    for (const item of value) validatePublicTree(item, depth + 1, undefined, attributionKey)
     return
   }
-  if (!plain(value) || Object.keys(value).length > 64) invalidPublicSummary('object', key)
+  if (!plain(value) || Object.keys(value).length > 64) invalidPublicSummary('object', attributionKey)
   for (const [field, item] of Object.entries(value)) {
     if (!PUBLIC_KEYS.has(field)) invalidPublicSummary('key', field)
     validatePublicTree(item, depth + 1, field)

@@ -388,6 +388,18 @@ describe('current control profile projection', () => {
     expect((numberError as Error).message).toBe('summary-invalid')
     expect(closedSummaryFailureAttribution(numberError)).toBe(';kind=number;field=sampleCount')
 
+    const rejectedHashArray = analyzeControlEvidence(validReport(), profile())
+    rejectedHashArray.profile.candidateInstallerSha256 = ['d'.repeat(64)]
+    let hashArrayError: unknown
+    try {
+      createReadbackNotices(rejectedHashArray, context)
+    } catch (error) {
+      hashArrayError = error
+    }
+    expect(hashArrayError).toBeInstanceOf(Error)
+    expect((hashArrayError as Error).message).toBe('summary-invalid')
+    expect(closedSummaryFailureAttribution(hashArrayError)).toBe(';kind=string;field=candidateInstallerSha256')
+
     const unknownField = analyzeControlEvidence(validReport(), profile()) as Record<string, unknown>
     unknownField['https://private.invalid/secret'] = { providerKey: 'private-value' }
     let unknownError: unknown
