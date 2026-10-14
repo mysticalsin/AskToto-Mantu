@@ -14,7 +14,8 @@ import {
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
-  attach,
+  attachOwnedCdp,
+  disposeFreshOnboardingTransports,
   freeLoopbackPort,
   launchPackagedCdp,
   packagedLaunchFailed,
@@ -46,6 +47,7 @@ export const REQUIRED_CHECKS = Object.freeze([
   'synthetic_encrypted_note_written',
   'meeting_and_note_ciphertext_at_rest',
   'baseline_clean_shutdown',
+  'baseline_cdp_transport_released',
   'candidate_replaced_same_install_root',
   'candidate_launch_version',
   'settings_app_visible_after_upgrade',
@@ -57,6 +59,7 @@ export const REQUIRED_CHECKS = Object.freeze([
   'note_ciphertext_preserved',
   'note_content_app_visible_after_upgrade',
   'candidate_clean_shutdown',
+  'candidate_cdp_transport_released',
   'disposable_roots_removed'
 ])
 
@@ -181,8 +184,14 @@ export function ownedTreeHasExited({ rootExited, censusAvailable, owned, current
     survivors(owned, current, { installRoot, platform }).length === 0
 }
 
-export function cleanShutdownPassed({ quitDelivered, rootExitCode, rootSignalCode, treeExited }) {
-  return quitDelivered === true && rootExitCode === 0 && rootSignalCode === null && treeExited === true
+export function cleanShutdownPassed({ quitDelivered, rootExitCode, rootSignalCode, treeExited, forcedCleanup, transportReleased }) {
+  return quitDelivered === true && rootExitCode === 0 && rootSignalCode === null && treeExited === true &&
+    forcedCleanup === false && transportReleased === true
+}
+
+export function noteReadMatchesExpected(result, expected) {
+  return result?.ok === true && result.kind === 'note' && result.title === expected?.noteTitle &&
+    result.question === expected?.noteQuestion && result.answer === expected?.noteAnswer
 }
 
 async function stopOwnedProcessTree(ownership, timeoutMs = 15_000) {
@@ -191,6 +200,7 @@ async function stopOwnedProcessTree(ownership, timeoutMs = 15_000) {
   const deadline = Date.now() + timeoutMs
   try { rememberOwnedProcesses(ownership) } catch { ownership.censusAvailable = false }
   if (child.exitCode === null && child.signalCode === null) {
+    ownership.forcedCleanup = true
     try { child.kill('SIGTERM') } catch { /* the bounded census below owns final status */ }
     await waitForChildExit(child, Math.min(3_000, Math.max(1, deadline - Date.now())))
   }
@@ -214,7 +224,10 @@ async function stopOwnedProcessTree(ownership, timeoutMs = 15_000) {
         installRoot: ownership.installRoot,
         platform: 'win32'
       })
-      if (remaining.length) killOwned(remaining)
+      if (remaining.length) {
+        ownership.forcedCleanup = true
+        killOwned(remaining)
+      }
     } catch {
       ownership.censusAvailable = false
     }
@@ -222,6 +235,16 @@ async function stopOwnedProcessTree(ownership, timeoutMs = 15_000) {
   }
   ownership.teardownVerified = false
   return false
+}
+
+async function releaseOwnedTransports(ownership) {
+  const released = await disposeFreshOnboardingTransports({
+    browser: ownership.browser ?? null,
+    transportUncertain: ownership.transportUncertain === true,
+    lateReleases: ownership.lateReleases ?? []
+  })
+  ownership.transportReleased = released
+  return released
 }
 
 function findPages(browser) {
@@ -260,7 +283,12 @@ async function startApp(executable, qaRoot, profile, installRoot, launchRecords)
     installRoot,
     owned: new Map(),
     censusAvailable: true,
-    teardownVerified: false
+    teardownVerified: false,
+    forcedCleanup: false,
+    transportUncertain: false,
+    transportReleased: false,
+    lateReleases: [],
+    browser: null
   }
   launchRecords.push(ownership)
   let browser = null
@@ -269,7 +297,19 @@ async function startApp(executable, qaRoot, profile, installRoot, launchRecords)
     browser = await waitFor(async () => {
       if (packagedLaunchFailed(launched.child, launched.latches)) throw new Error('packaged process exited before CDP attached')
       rememberOwnedProcesses(ownership)
-      try { return await attach(launched.cdpEndpoint, 1_500) } catch { return null }
+      const attachment = await attachOwnedCdp({
+        endpoint: launched.cdpEndpoint,
+        childPid: launched.child.pid,
+        timeoutMs: 1_500
+      })
+      ownership.transportUncertain ||= attachment.transportUncertain
+      if (attachment.lateRelease) ownership.lateReleases.push(attachment.lateRelease)
+      if (attachment.browser) {
+        ownership.browser = attachment.browser
+        return attachment.browser
+      }
+      if (attachment.failure === 'cdp-endpoint-deadline') return null
+      throw new Error(`owned CDP attach failed: ${attachment.failure ?? 'unknown failure'}`)
     }, 'packaged app did not expose loopback CDP', 60_000, 250)
     const page = await waitFor(async () => {
       for (const candidate of findPages(browser)) {
@@ -281,9 +321,11 @@ async function startApp(executable, qaRoot, profile, installRoot, launchRecords)
     }, 'packaged app never exposed its window.toto bridge', 60_000, 250)
     return { ...launched, browser, page, profile, qaRoot, ownership }
   } catch (error) {
-    try { await browser?.close() } catch { /* best effort */ }
     const treeExited = await stopOwnedProcessTree(ownership)
     if (!treeExited) throw new Error(`packaged launch failed and its complete owned process tree was not verified stopped: ${error instanceof Error ? error.message : String(error)}`)
+    if (!(await releaseOwnedTransports(ownership))) {
+      throw new Error(`packaged launch failed and its CDP transport cleanup was not verified: ${error instanceof Error ? error.message : String(error)}`)
+    }
     throw error
   }
 }
@@ -298,18 +340,22 @@ async function stopApp(app) {
       return true
     })
   } catch { /* process exit may close CDP before reply */ }
-  try { await app.browser?.close() } catch { /* best effort */ }
   await waitForChildExit(app.child, 30_000)
   const treeExited = await stopOwnedProcessTree(app.ownership)
+  const transportReleased = treeExited ? await releaseOwnedTransports(app.ownership) : false
   return {
     quitDelivered,
     exited: app.child.exitCode === 0 && app.child.signalCode === null,
     treeExited,
+    forcedCleanup: app.ownership.forcedCleanup,
+    transportReleased,
     passed: cleanShutdownPassed({
       quitDelivered,
       rootExitCode: app.child.exitCode,
       rootSignalCode: app.child.signalCode,
-      treeExited
+      treeExited,
+      forcedCleanup: app.ownership.forcedCleanup,
+      transportReleased
     })
   }
 }
@@ -449,7 +495,8 @@ async function runUpgrade({ baselineInstaller, candidateInstaller, candidateRun,
     const baselineExit = await stopApp(activeApp)
     activeApp = null
     record(checks, 'baseline_clean_shutdown', baselineExit.passed,
-      `quit=${baselineExit.quitDelivered}; rootExit0=${baselineExit.exited}; ownedTreeExited=${baselineExit.treeExited}`)
+      `quit=${baselineExit.quitDelivered}; rootExit0=${baselineExit.exited}; ownedTreeExited=${baselineExit.treeExited}; forcedCleanup=${baselineExit.forcedCleanup}`)
+    record(checks, 'baseline_cdp_transport_released', baselineExit.transportReleased, 'PID-bound CDP transport and any late-attach cleanup receipts were acknowledged')
     if (!baselineExit.passed) throw new Error('baseline app process tree did not shut down cleanly')
 
     // Re-run the same official Setup installer with the same /D target: this is an in-place replacement,
@@ -486,10 +533,8 @@ async function runUpgrade({ baselineInstaller, candidateInstaller, candidateRun,
     record(checks, 'windows_dpapi_keystore_preserved', baselineSecretKeySize > 32 && statSync(join(keyFolder, 'secret-key.bin')).size === baselineSecretKeySize && hashFile(join(keyFolder, 'secret-key.bin')) === baselineSecretKeyHash && hashFile(join(keyFolder, 'key-openai.bin')) === baselineApiKeyHash && after.hasOpenAi, 'non-raw Windows safeStorage-wrapped key and encrypted provider key are byte-identical; app decrypted key after upgrade')
     record(checks, 'meeting_ciphertext_preserved', hashFile(baselineMeetingPath) === baselineMeetingHash && checkEncryptedFile(baselineMeetingPath, SYNTHETIC.meetingLine), 'meeting ciphertext is byte-identical and remains encrypted')
     record(checks, 'note_ciphertext_preserved', hashFile(baselineNotePath) === baselineNoteHash && checkEncryptedFile(baselineNotePath, SYNTHETIC.noteAnswer), 'note ciphertext is byte-identical and remains encrypted')
-    const noteResult = after.noteRead?.result
-    const noteReadable = noteResult?.ok === true && noteResult.kind === 'note' &&
-      noteResult.title === SYNTHETIC.noteTitle && noteResult.question === SYNTHETIC.noteQuestion &&
-      noteResult.answer === SYNTHETIC.noteAnswer
+    const noteResult = after.noteRead
+    const noteReadable = noteReadMatchesExpected(noteResult, SYNTHETIC)
     const noteEvidence = noteReadable
       ? 'candidate recallRead returned the expected note kind, title, question, and answer'
       : 'FAIL: candidate recallRead did not return the expected synthetic note kind/title/question/answer'
@@ -500,7 +545,8 @@ async function runUpgrade({ baselineInstaller, candidateInstaller, candidateRun,
     const candidateExit = await stopApp(activeApp)
     activeApp = null
     record(checks, 'candidate_clean_shutdown', candidateExit.passed,
-      `quit=${candidateExit.quitDelivered}; rootExit0=${candidateExit.exited}; ownedTreeExited=${candidateExit.treeExited}`)
+      `quit=${candidateExit.quitDelivered}; rootExit0=${candidateExit.exited}; ownedTreeExited=${candidateExit.treeExited}; forcedCleanup=${candidateExit.forcedCleanup}`)
+    record(checks, 'candidate_cdp_transport_released', candidateExit.transportReleased, 'PID-bound CDP transport and any late-attach cleanup receipts were acknowledged')
     if (!after.version || !after.onboardingDone || !after.encryptTranscripts || !after.hasOpenAi || !after.meeting || !after.read?.ok || !noteReadable || !candidateExit.passed) {
       throw new Error('candidate failed at least one app-visible preservation assertion')
     }
@@ -513,13 +559,18 @@ async function runUpgrade({ baselineInstaller, candidateInstaller, candidateRun,
       }
     }
     for (const ownership of launchRecords) {
-      if (ownership.teardownVerified) continue
-      const treeExited = await stopOwnedProcessTree(ownership)
-      if (!treeExited) overallError = [overallError, 'a launch-owned process tree could not be verified stopped'].filter(Boolean).join('; ')
+      if (!ownership.teardownVerified) {
+        const treeExited = await stopOwnedProcessTree(ownership)
+        if (!treeExited) overallError = [overallError, 'a launch-owned process tree could not be verified stopped'].filter(Boolean).join('; ')
+      }
+      if (ownership.teardownVerified && !ownership.transportReleased && !(await releaseOwnedTransports(ownership))) {
+        overallError = [overallError, 'a launch-owned CDP transport cleanup receipt was not acknowledged'].filter(Boolean).join('; ')
+      }
     }
     let removed = false
     const allLaunchTreesExited = launchRecords.every((ownership) => ownership.teardownVerified)
-    if (safeRoots && allLaunchTreesExited) {
+    const allTransportsReleased = launchRecords.every((ownership) => ownership.transportReleased)
+    if (safeRoots && allLaunchTreesExited && allTransportsReleased) {
       try {
         rmSync(installRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 500 })
         rmSync(runnerRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 500 })

@@ -5,6 +5,7 @@ import {
   REQUIRED_CHECKS,
   assessUpgradeReport,
   cleanShutdownPassed,
+  noteReadMatchesExpected,
   ownedTreeHasExited,
   verifyCandidateIdentity
 } from './profile-upgrade.mjs'
@@ -55,8 +56,20 @@ describe('hosted in-place Windows profile upgrade acceptance', () => {
     expect(ownedTreeHasExited({ ...base, current: [{ ...renderer, pid: 412, exe: `${installRoot}\\helper.exe` }] })).toBe(false)
     expect(ownedTreeHasExited({ ...base, rootExited: false, current: [] })).toBe(false)
     expect(ownedTreeHasExited({ ...base, censusAvailable: false, current: [] })).toBe(false)
-    expect(cleanShutdownPassed({ quitDelivered: true, rootExitCode: 0, rootSignalCode: null, treeExited: true })).toBe(true)
-    expect(cleanShutdownPassed({ quitDelivered: true, rootExitCode: 0, rootSignalCode: null, treeExited: false })).toBe(false)
+    const clean = { quitDelivered: true, rootExitCode: 0, rootSignalCode: null, treeExited: true, forcedCleanup: false, transportReleased: true }
+    expect(cleanShutdownPassed(clean)).toBe(true)
+    expect(cleanShutdownPassed({ ...clean, treeExited: false })).toBe(false)
+    expect(cleanShutdownPassed({ ...clean, forcedCleanup: true })).toBe(false)
+    expect(cleanShutdownPassed({ ...clean, transportReleased: false })).toBe(false)
+  })
+
+  it('assesses the direct recallRead result against the saved-note contract', () => {
+    const expected = { noteTitle: 'synthetic note', noteQuestion: 'synthetic question', noteAnswer: 'synthetic answer' }
+    const result = { ok: true, kind: 'note', title: expected.noteTitle, question: expected.noteQuestion, answer: expected.noteAnswer }
+    expect(noteReadMatchesExpected(result, expected)).toBe(true)
+    expect(noteReadMatchesExpected({ ...result, answer: 'wrong answer' }, expected)).toBe(false)
+    expect(noteReadMatchesExpected({ result }, expected)).toBe(false)
+    expect(noteReadMatchesExpected({ ...result, kind: undefined }, expected)).toBe(false)
   })
 
   it('pins the exact successful hosted candidate workflow run and Setup bytes', () => {
