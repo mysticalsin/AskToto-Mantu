@@ -154,14 +154,18 @@ describe('D1 speech grants', () => {
   it('cancellation releases only its session reservation and is idempotent', async () => {
     const db = brokerDb()
     try {
-      const first = await allocateSpeechSession(sqliteD1(db), binding)
+      const d1 = sqliteD1(db)
+      const sharedCapacity = { ...binding, maxSessions: 2, maxTracks: 4 }
+      const first = await allocateSpeechSession(d1, sharedCapacity)
       expect(first.ok).toBe(true)
       if (!first.ok) return
-      const second = await allocateSpeechSession(sqliteD1(db), { ...binding, deviceId: 'device-b', licenseJti: 'license-b' })
-      expect(second).toMatchObject({ ok: false, code: 'CONCURRENCY_LIMIT' })
-      expect(await cancelSpeechSession(sqliteD1(db), first.sessionId, binding)).toMatchObject({ ok: true })
-      expect(await cancelSpeechSession(sqliteD1(db), first.sessionId, binding)).toMatchObject({ ok: true })
-      expect((await allocateSpeechSession(sqliteD1(db), { ...binding, deviceId: 'device-b', licenseJti: 'license-b' })).ok).toBe(true)
+      const second = await allocateSpeechSession(d1, { ...sharedCapacity, deviceId: 'device-b', licenseJti: 'license-b' })
+      expect(second.ok).toBe(true)
+      if (!second.ok) return
+      expect(await cancelSpeechSession(d1, first.sessionId, binding)).toMatchObject({ ok: true })
+      expect(await cancelSpeechSession(d1, first.sessionId, binding)).toMatchObject({ ok: true })
+      expect(db.prepare('SELECT status, reserved_ms FROM speech_sessions WHERE id = ?').get(second.sessionId)).toMatchObject({ status: 'active', reserved_ms: binding.maxReservedMs })
+      expect((await allocateSpeechSession(d1, sharedCapacity)).ok).toBe(true)
     } finally { db.close() }
   })
 
