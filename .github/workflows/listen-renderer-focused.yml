@@ -1,0 +1,141 @@
+name: Listen renderer focused qualification
+
+on:
+  push:
+    branches:
+      - m2/M2-0108-listen-renderer-focused-ci
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: listen-renderer-focused-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  renderer-tests:
+    name: Renderer Listen tests (${{ matrix.os }})
+    if: github.ref == 'refs/heads/m2/M2-0108-listen-renderer-focused-ci'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - name: Initialize bounded report
+        env:
+          REPORT_DIR: ${{ runner.temp }}/listen-renderer-focused
+        run: |
+          mkdir -p "$REPORT_DIR"
+          printf '{"schema":"metis-listen-focused-v1","headSha":"%s","os":"%s","status":"NOT_RUN"}\n' \
+            "$GITHUB_SHA" "$RUNNER_OS" > "$REPORT_DIR/summary.json"
+      - name: Run the seven focused suites without retries
+        id: focused
+        env:
+          REPORT_DIR: ${{ runner.temp }}/listen-renderer-focused
+        run: |
+          set +e
+          raw_report="$REPORT_DIR/vitest.json"
+          raw_log="$REPORT_DIR/vitest.log"
+          summary="$REPORT_DIR/summary.json"
+          npx vitest run --retry=0 --reporter=json --outputFile="$raw_report" \
+            src/renderer/src/lib/cloud-speech-controller.test.ts \
+            src/renderer/src/lib/cloud-speech-results.test.ts \
+            src/renderer/src/lib/listen.instant-start.contract.test.ts \
+            src/renderer/src/lib/listen.loopback.contract.test.ts \
+            src/renderer/src/lib/listen.pcm-format.contract.test.ts \
+            src/renderer/src/lib/listen.stop-drain.test.ts \
+            src/renderer/src/lib/listen.test.ts > "$raw_log" 2>&1
+          test_exit=$?
+          node - "$raw_report" "$summary" "$test_exit" <<'NODE'
+          const { createHash } = require('node:crypto')
+          const { readFileSync, writeFileSync } = require('node:fs')
+          const { basename } = require('node:path')
+
+          const reportPath = process.argv[2]
+          const summaryPath = process.argv[3]
+          const testExitCode = Number(process.argv[4])
+          const files = [
+            'src/renderer/src/lib/cloud-speech-controller.test.ts',
+            'src/renderer/src/lib/cloud-speech-results.test.ts',
+            'src/renderer/src/lib/listen.instant-start.contract.test.ts',
+            'src/renderer/src/lib/listen.loopback.contract.test.ts',
+            'src/renderer/src/lib/listen.pcm-format.contract.test.ts',
+            'src/renderer/src/lib/listen.stop-drain.test.ts',
+            'src/renderer/src/lib/listen.test.ts'
+          ].sort()
+          const sourceManifest = createHash('sha256')
+          for (const file of files) {
+            const fileHash = createHash('sha256').update(readFileSync(file)).digest('hex')
+            sourceManifest.update(file).update('\0').update(fileHash).update('\n')
+          }
+
+          let report
+          let reportValid = true
+          try {
+            report = JSON.parse(readFileSync(reportPath, 'utf8'))
+          } catch {
+            reportValid = false
+          }
+
+          const results = Array.isArray(report?.testResults) ? report.testResults : []
+          const expected = new Set(files.map((file) => basename(file)))
+          const observed = results.map((result) => basename(String(result.name).replaceAll('\\', '/')))
+          const exactSuites = observed.length === expected.size && new Set(observed).size === expected.size && observed.every((name) => expected.has(name))
+          const passed = Number(report?.numPassedTests ?? 0)
+          const failed = Number(report?.numFailedTests ?? 0)
+          const skipped = Number(report?.numPendingTests ?? 0) + Number(report?.numTodoTests ?? 0)
+          const total = Number(report?.numTotalTests ?? (passed + failed + skipped))
+          const countConsistent = total === passed + failed + skipped
+          const summary = {
+            schema: 'metis-listen-focused-v1',
+            headSha: process.env.GITHUB_SHA,
+            os: process.env.RUNNER_OS,
+            sourceManifestSha256: sourceManifest.digest('hex'),
+            suiteCountExpected: files.length,
+            suiteCountObserved: results.length,
+            exactSuites,
+            countConsistent,
+            actualTestCount: total,
+            passed,
+            failed,
+            skipped,
+            retryLimit: 0,
+            noRetries: true,
+            configuredTestTimeoutMs: 30000,
+            configuredHookTimeoutMs: 30000,
+            frameAckDeadlineMs: 50,
+            reportValid,
+            testExitCode,
+            status: reportValid && exactSuites && countConsistent && total > 0 && failed === 0 && skipped === 0 && report?.success === true && testExitCode === 0
+              ? 'PASS'
+              : 'FAIL'
+          }
+          writeFileSync(summaryPath, `${JSON.stringify(summary, null, 2)}\n`)
+          process.stdout.write(`${JSON.stringify(summary)}\n`)
+          if (summary.status !== 'PASS') process.exitCode = 1
+          NODE
+          summary_exit=$?
+          cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+          rm -f "$raw_report" "$raw_log"
+          exit "$summary_exit"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: listen-renderer-focused-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/listen-renderer-focused/summary.json
+          if-no-files-found: error
+          retention-days: 14
