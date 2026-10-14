@@ -65,7 +65,7 @@
   },
   "FF-05a": {
     "src/main/apple-speech.ts": 2,
-    "src/main/asr-bundled-ensure.ts": 18,
+    "src/main/asr-bundled-ensure.ts": 4,
     "src/main/asr-manifest.ts": 1,
     "src/main/asr-model-download.ts": 7,
     "src/main/asr-model-path.ts": 1,
@@ -90,7 +90,8 @@
     "src/main/infra/process/reaper.ts": 3,
     "src/main/infra/process/registry.ts": 3,
     "src/main/infra/process/supervisor.ts": 3,
-    "src/main/infra/storage/paths.ts": 13,
+    "src/main/infra/storage/paths.ts": 12,
+    "src/main/infra/storage/runtime-owned-files.ts": 14,
     "src/main/intelligence.ts": 1,
     "src/main/license-lease-key.ts": 2,
     "src/main/license.ts": 19,

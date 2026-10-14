@@ -161,6 +161,49 @@ describe('spawnSidecarProcess', () => {
     })
   })
 
+  it('waits for fresh fallback admission and disposes it after the direct spawn', async () => {
+    const wrapper = fakeProc()
+    const direct = fakeProc(2468)
+    spawnMock.spawn.mockReturnValueOnce(wrapper).mockReturnValueOnce(direct)
+    let releaseAdmission: (value: { assertCurrentSync(): void; dispose(): Promise<void> }) => void = () => {}
+    const admissionReady = new Promise<{ assertCurrentSync(): void; dispose(): Promise<void> }>((resolve) => {
+      releaseAdmission = resolve
+    })
+    const assertCurrentSync = vi.fn()
+    const dispose = vi.fn(async () => {})
+    const audit = vi.fn()
+    const prepareUnsupervisedFallback = vi.fn(() => admissionReady)
+    const result = spawnSidecarProcess(
+      'llama-server',
+      '/bin/llama-server',
+      ['--port', '0'],
+      { stdio: ['ignore', 'pipe', 'pipe'] },
+      audit,
+      { METIS_SIDECAR_SUPERVISION: '1' },
+      'darwin',
+      {
+        prepareUnsupervisedFallback,
+        onUnsupervisedFallbackSpawned: vi.fn()
+      }
+    )
+
+    wrapper.emit('error', new Error('bad helper'))
+    wrapper.emit('exit', 125, null)
+    await Promise.resolve()
+    expect(spawnMock.spawn).toHaveBeenCalledTimes(1)
+    expect(prepareUnsupervisedFallback).toHaveBeenCalledTimes(1)
+
+    releaseAdmission({ assertCurrentSync, dispose })
+    await result.waitForUnsupervisedFallback?.()
+
+    expect(assertCurrentSync).toHaveBeenCalledTimes(1)
+    expect(spawnMock.spawn).toHaveBeenLastCalledWith('/bin/llama-server', ['--port', '0'], {
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+    expect(dispose).toHaveBeenCalledTimes(1)
+    expect(result.child.pid).toBe(direct.pid)
+  })
+
   it('falls back to direct spawn and audits when the helper reports a setup failure before the sidecar is usable', async () => {
     const wrapper = fakeProc()
     const direct = fakeProc(2468)
@@ -290,11 +333,9 @@ describe('spawnSidecarProcess', () => {
     )
 
     expect(result).toEqual({ child, supervised: false })
-    expect(spawnMock.spawn).toHaveBeenCalledWith(
-      '/bin/llama-server',
-      ['--port', '0'],
-      { stdio: ['ignore', 'pipe', 'pipe'] }
-    )
+    expect(spawnMock.spawn).toHaveBeenCalledWith('/bin/llama-server', ['--port', '0'], {
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
     expect(audit).toHaveBeenCalledWith('sidecar.unsupervised', {
       name: 'llama-server',
       reason: 'wrapper-missing'

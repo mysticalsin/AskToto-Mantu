@@ -21,7 +21,8 @@ import { mainLog } from './logger'
 import { getSettings, setSettings } from './store'
 import { asrModelRoot, isHighTierAsrModelReady } from './asr-model-download'
 import { ensureWhisperFloorAssets, resolveWhisperModelsRoot } from './asr-bundled-ensure'
-import { assertLegacyRuntimeClosure } from './features/components/speech-pack/package-runtime-state'
+import { acquirePackageRuntimeLease } from './features/components/speech-pack/runtime-admission'
+import { runtimeHostEnvironment, type RuntimeFeatureLease } from './features/components/speech-pack/runtime-lease'
 
 /** resources/models — or userData/asr-models when the floor was fetched after install. */
 function modelsDir(): Promise<string> {
@@ -38,6 +39,7 @@ interface PendingRequest {
 }
 
 let host: UtilityProcess | null = null
+let hostLease: RuntimeFeatureLease | null = null
 let hostReady = false
 let nextRequestId = 1
 const pending = new Map<number, PendingRequest>()
@@ -124,6 +126,16 @@ function waitForStoppedHost(): Promise<void> {
   return hostStopBarrier ?? Promise.resolve()
 }
 
+function ensureHostStopBarrier(child: UtilityProcess): void {
+  if (stoppingHost === child && hostStopBarrier) return
+  let resolve!: () => void
+  hostStopBarrier = new Promise<void>((done) => {
+    resolve = done
+  })
+  stoppingHost = child
+  resolveHostStopBarrier = resolve
+}
+
 /** Request termination and return only after the exact helper has exited. */
 function requestHostStop(): Promise<void> {
   const child = host
@@ -155,17 +167,44 @@ async function createHost(): Promise<UtilityProcess> {
     if (host) return host
     if (!importTierAdmissionActive) throw new Error('No import decoder admission is active for Whisper.')
     const admissionVersion = importTierAdmissionVersion
-    const tierAdmission = await admitHostTierAtStart()
-    await waitForStoppedHost()
-    if (host) return host
-    if (!importTierAdmissionActive) throw new Error('Whisper helper was released before transcription started.')
-    // Re-resolve the profile and activated path after the old-host exit barrier. A path checked before
-    // that wait is stale authority if selection/profile changes while the old helper is stopping.
-    if (admissionVersion !== importTierAdmissionVersion) continue
-    const approvedModelsPath = await modelsDir()
-    if (!importTierAdmissionActive) throw new Error('Whisper helper was released before transcription started.')
-    if (admissionVersion !== importTierAdmissionVersion) continue
-    return forkHost(tierAdmission, approvedModelsPath)
+    const runtimeLease = await acquirePackageRuntimeLease('offline-asr')
+    let leaseTransferred = false
+    try {
+      if (!importTierAdmissionActive) throw new Error('Whisper helper was released before transcription started.')
+      if (admissionVersion !== importTierAdmissionVersion) continue
+      // Lean installs use the verified compact model closure only. Full/development builds preserve the
+      // existing separately admitted high-memory user model path.
+      if (!runtimeLease) await ensureWhisperFloorAssets()
+      const tierAdmission = runtimeLease ? { allowHighMemoryTier: false } : await admitHostTierAtStart()
+      await waitForStoppedHost()
+      if (host) return host
+      if (!importTierAdmissionActive) throw new Error('Whisper helper was released before transcription started.')
+      // Re-resolve the profile and activated path after the old-host exit barrier. A path checked before
+      // that wait is stale authority if selection/profile changes while the old helper is stopping.
+      if (admissionVersion !== importTierAdmissionVersion) continue
+      const approvedModelsPath = runtimeLease ? runtimeLease.model('asr.whisper-base-q8') : await modelsDir()
+      if (!importTierAdmissionActive) throw new Error('Whisper helper was released before transcription started.')
+      if (admissionVersion !== importTierAdmissionVersion) continue
+      await runtimeLease?.verifyCurrentBytes()
+      if (!importTierAdmissionActive) throw new Error('Whisper helper was released before transcription started.')
+      if (admissionVersion !== importTierAdmissionVersion) continue
+      const physicalAdmission = await runtimeLease?.preparePhysicalAdmission()
+      try {
+        if (!importTierAdmissionActive) throw new Error('Whisper helper was released before transcription started.')
+        if (admissionVersion !== importTierAdmissionVersion) continue
+        physicalAdmission?.assertCurrentSync()
+        if (!importTierAdmissionActive) throw new Error('Whisper helper was released before transcription started.')
+        if (admissionVersion !== importTierAdmissionVersion) continue
+        const child = forkHost(tierAdmission, approvedModelsPath, runtimeLease, () => {
+          leaseTransferred = true
+        })
+        return child
+      } finally {
+        await physicalAdmission?.dispose()
+      }
+    } finally {
+      if (!leaseTransferred) await runtimeLease?.release()
+    }
   }
 }
 
@@ -178,11 +217,23 @@ function ensureHost(): Promise<UtilityProcess> {
   return hostStarting
 }
 
-function forkHost(tierAdmission: HostTierAdmission, approvedModelsPath: string): UtilityProcess {
-  const child = utilityProcess.fork(join(__dirname, 'whisper-asr-host.js'), [], {
-    serviceName: 'metis-whisper-import',
-    stdio: 'pipe'
-  })
+function forkHost(
+  tierAdmission: HostTierAdmission,
+  approvedModelsPath: string,
+  runtimeLease: RuntimeFeatureLease | null,
+  onLeaseTransferred: () => void
+): UtilityProcess {
+  const child = utilityProcess.fork(
+    runtimeLease?.entry('whisper-import-host') ?? join(__dirname, 'whisper-asr-host.js'),
+    [],
+    {
+      serviceName: 'metis-whisper-import',
+      stdio: 'pipe',
+      ...(runtimeLease ? { env: runtimeHostEnvironment(runtimeLease) } : {})
+    }
+  )
+  hostLease = runtimeLease
+  onLeaseTransferred()
   child.stderr?.on('data', (chunk: Buffer) => mainLog.warn('[whisper-host]', chunk.toString('utf8').trim()))
   child.stdout?.on('data', () => {})
   child.on('message', (msg: unknown) => {
@@ -218,14 +269,24 @@ function forkHost(tierAdmission: HostTierAdmission, approvedModelsPath: string):
     }
   })
   child.on('exit', (code) => {
-    settleHostStop(child)
+    ensureHostStopBarrier(child)
     // A crashed/killed child (OOM, native fault) must fail fast, not hang the import until timeout —
     // and the NEXT transcribe call gets a fresh child rather than a dead handle.
-    if (host !== child) return
-    host = null
-    hostReady = false
-    hostAllowsHighMemoryTier = false
-    failAllPending(`The transcription helper exited unexpectedly (code ${code ?? 'unknown'}).`)
+    if (host === child) {
+      host = null
+      hostReady = false
+      hostAllowsHighMemoryTier = false
+      failAllPending(`The transcription helper exited unexpectedly (code ${code ?? 'unknown'}).`)
+    }
+    if (hostLease === runtimeLease) hostLease = null
+    void Promise.resolve(runtimeLease?.release())
+      .catch((error: unknown) => {
+        mainLog.warn(
+          '[whisper-host] runtime lease release failed:',
+          error instanceof Error ? error.message : String(error)
+        )
+      })
+      .finally(() => settleHostStop(child))
   })
   host = child
   hostReady = false
@@ -500,8 +561,6 @@ export async function whisperImportTranscribe(
   language: string,
   probe?: LanguageProbe
 ): Promise<string> {
-  await assertLegacyRuntimeClosure('asr')
-  await ensureWhisperFloorAssets()
   applyInitLanguage(language)
   await probeLanguage(samples, probe)
   await reprobeForSwitch(samples, probe)

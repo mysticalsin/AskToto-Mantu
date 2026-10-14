@@ -34,13 +34,11 @@ function detectOneDriveUncached(): string {
   // macOS: ~/Library/CloudStorage/OneDrive-*
   try {
     const base = join(homedir(), 'Library', 'CloudStorage')
-    if (existsSync(base)) {
-      const dirs = readdirSync(base)
-      const personal = dirs.find((d) => /^OneDrive-(?!SharedLibraries)/i.test(d))
-      const any = dirs.find((d) => /^OneDrive/i.test(d))
-      if (personal) return join(base, personal)
-      if (any) return join(base, any)
-    }
+    const dirs = readdirSync(base)
+    const personal = dirs.find((d) => /^OneDrive-(?!SharedLibraries)/i.test(d))
+    const any = dirs.find((d) => /^OneDrive/i.test(d))
+    if (personal) return join(base, personal)
+    if (any) return join(base, any)
   } catch {
     /* ignore */
   }

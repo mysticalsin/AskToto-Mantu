@@ -42,7 +42,7 @@ const MEETINGS_ROOT_READERS = new Set([
   'src/main/brain/store.ts',
   'src/main/graphify.ts',
   'src/main/recall.ts',
-  'src/main/transcripts.ts',
+  'src/main/transcripts.ts'
 ])
 
 const RULES = [
@@ -58,7 +58,7 @@ const RULES = [
   ['FF-10', 'Process spawning outside src/main/infra/process/'],
   ['FF-11', 'BrowserWindow construction outside src/main/windows/'],
   ['FF-14', 'Background timers outside src/main/infra/scheduler/'],
-  ['FF-15', 'Frontmatter-delimiter regexes outside the meeting-document codec'],
+  ['FF-15', 'Frontmatter-delimiter regexes outside the meeting-document codec']
 ]
 
 const RULE_IDS = RULES.map(([id]) => id)
@@ -91,7 +91,7 @@ export function countSourceFile(file, text) {
 
   const fsBindings = collectFsBindings(sourceFile)
   if (isProductionFile(file) && file.startsWith('src/main/')) {
-    add('FF-05a', countFsCalls(sourceFile, fsBindings, true))
+    add('FF-05a', countFsCalls(sourceFile, fsBindings, true) + countDirectoryHandleCalls(sourceFile, fsBindings))
   }
   if (isProductionFile(file) && MEETINGS_ROOT_READERS.has(file)) {
     add('FF-05b', countFsCalls(sourceFile, fsBindings, false))
@@ -252,7 +252,11 @@ function collectFsBindings(sourceFile) {
   /** @type {FsBindings} */
   const bindings = { named: new Map(), namespaces: new Set() }
   const visit = (node) => {
-    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && FS_MODULES.has(node.moduleSpecifier.text)) {
+    if (
+      ts.isImportDeclaration(node) &&
+      ts.isStringLiteral(node.moduleSpecifier) &&
+      FS_MODULES.has(node.moduleSpecifier.text)
+    ) {
       const clause = node.importClause
       if (clause && !clause.isTypeOnly) {
         if (clause.name) bindings.namespaces.add(clause.name.text)
@@ -274,7 +278,10 @@ function collectFsBindings(sourceFile) {
         }
       }
     }
-    const initializer = unwrapExpression(node.initializer)
+    const initializer =
+      node.initializer && ts.isAwaitExpression(node.initializer)
+        ? unwrapExpression(node.initializer.expression)
+        : unwrapExpression(node.initializer)
     if (isRequireCall(initializer) && FS_MODULES.has(initializer.arguments[0].text)) {
       collectFsRequireBinding(node.name, bindings)
     }
@@ -323,7 +330,8 @@ function collectFsRequireBinding(name, bindings) {
   if (!ts.isObjectBindingPattern(name)) return
   for (const element of name.elements) {
     if (ts.isIdentifier(element.name)) {
-      const imported = element.propertyName && ts.isIdentifier(element.propertyName) ? element.propertyName.text : element.name.text
+      const imported =
+        element.propertyName && ts.isIdentifier(element.propertyName) ? element.propertyName.text : element.name.text
       if (imported === 'promises') {
         bindings.namespaces.add(element.name.text)
       } else {
@@ -350,6 +358,89 @@ function countFsCalls(sourceFile, bindings, syncOnly) {
   }
   ts.forEachChild(sourceFile, visit)
   return count
+}
+
+/**
+ * Counts sync methods on a const handle returned by a known fs opendir API.
+ * The local scope map prevents unrelated objects and shadowed handles from being charged.
+ * @param {ts.SourceFile} sourceFile Source file to inspect.
+ * @param {FsBindings} bindings fs bindings.
+ * @returns {number} Directory-handle methods.
+ */
+function countDirectoryHandleCalls(sourceFile, bindings) {
+  /** @type {WeakMap<ts.Node, Map<string, boolean>>} */
+  const namesByScope = new WeakMap()
+  const scopeFor = (node) => {
+    let current = node
+    while (current && !isLexicalScope(current)) current = current.parent
+    return current ?? sourceFile
+  }
+  const addName = (scope, name, isDirectoryHandle) => {
+    let names = namesByScope.get(scope)
+    if (!names) {
+      names = new Map()
+      namesByScope.set(scope, names)
+    }
+    names.set(name, isDirectoryHandle)
+  }
+  const visitDeclarations = (node) => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
+      const list = node.parent
+      const isConst = ts.isVariableDeclarationList(list) && (list.flags & ts.NodeFlags.Const) !== 0
+      const initializer =
+        node.initializer && ts.isAwaitExpression(node.initializer)
+          ? unwrapExpression(node.initializer.expression)
+          : unwrapExpression(node.initializer)
+      const openName =
+        initializer && ts.isCallExpression(initializer) ? fsCallName(initializer.expression, bindings) : undefined
+      addName(scopeFor(node), node.name.text, isConst && (openName === 'opendirSync' || openName === 'opendir'))
+    } else if (ts.isParameter(node) && ts.isIdentifier(node.name)) {
+      addName(scopeFor(node), node.name.text, false)
+    } else if ((ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) && node.name) {
+      addName(scopeFor(node), node.name.text, false)
+    }
+    ts.forEachChild(node, visitDeclarations)
+  }
+  visitDeclarations(sourceFile)
+
+  const isHandleAt = (scope, name) => {
+    let current = scope
+    while (current) {
+      const names = namesByScope.get(current)
+      if (names?.has(name)) return names.get(name) === true
+      current = current.parent
+    }
+    return false
+  }
+  let count = 0
+  const visitCalls = (node) => {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+      const receiver = node.expression.expression
+      const method = node.expression.name.text
+      if (
+        ts.isIdentifier(receiver) &&
+        (method === 'readSync' || method === 'closeSync') &&
+        isHandleAt(scopeFor(node), receiver.text)
+      )
+        count += 1
+    }
+    ts.forEachChild(node, visitCalls)
+  }
+  visitCalls(sourceFile)
+  return count
+}
+
+function isLexicalScope(node) {
+  return (
+    ts.isSourceFile(node) ||
+    ts.isBlock(node) ||
+    ts.isModuleBlock(node) ||
+    ts.isFunctionLike(node) ||
+    ts.isForStatement(node) ||
+    ts.isForInStatement(node) ||
+    ts.isForOfStatement(node) ||
+    ts.isCatchClause(node)
+  )
 }
 
 /**
@@ -426,7 +517,12 @@ function countNativeDialogs(sourceFile) {
       count += 1
     } else if (destructuredDialogs > 0) {
       count += destructuredDialogs
-    } else if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && DIALOG_NAMES.has(node.expression.text) && !localNames.has(node.expression.text)) {
+    } else if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      DIALOG_NAMES.has(node.expression.text) &&
+      !localNames.has(node.expression.text)
+    ) {
       count += 1
     }
     ts.forEachChild(node, visit)
@@ -468,9 +564,15 @@ function isNativeDialogElementAccess(node) {
  */
 function countNativeDialogDestructure(node) {
   if (!ts.isVariableDeclaration(node) || !ts.isObjectBindingPattern(node.name)) return 0
-  if (!node.initializer || !ts.isIdentifier(node.initializer) || !['window', 'globalThis', 'self'].includes(node.initializer.text)) return 0
+  if (
+    !node.initializer ||
+    !ts.isIdentifier(node.initializer) ||
+    !['window', 'globalThis', 'self'].includes(node.initializer.text)
+  )
+    return 0
   return node.name.elements.filter((element) => {
-    const property = element.propertyName && ts.isIdentifier(element.propertyName) ? element.propertyName.text : undefined
+    const property =
+      element.propertyName && ts.isIdentifier(element.propertyName) ? element.propertyName.text : undefined
     const name = ts.isIdentifier(element.name) ? element.name.text : undefined
     return DIALOG_NAMES.has(property ?? name ?? '')
   }).length
@@ -550,7 +652,11 @@ function countIpcMainRegistrations(sourceFile) {
 function countProcessSpawning(sourceFile) {
   let count = 0
   const visit = (node) => {
-    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && CHILD_PROCESS_MODULES.has(node.moduleSpecifier.text)) {
+    if (
+      ts.isImportDeclaration(node) &&
+      ts.isStringLiteral(node.moduleSpecifier) &&
+      CHILD_PROCESS_MODULES.has(node.moduleSpecifier.text)
+    ) {
       if (node.importClause && !node.importClause.isTypeOnly && !hasOnlyTypeNamedImports(node.importClause)) count += 1
     }
     if (isRequireCall(node) && CHILD_PROCESS_MODULES.has(node.arguments[0].text)) count += 1
@@ -589,7 +695,10 @@ function countBrowserWindowConstruction(sourceFile) {
   const visit = (node) => {
     if (ts.isNewExpression(node)) {
       const chain = propertyChain(node.expression)
-      if ((chain.length === 1 && chain[0] === 'BrowserWindow') || (chain.length === 2 && chain[1] === 'BrowserWindow')) {
+      if (
+        (chain.length === 1 && chain[0] === 'BrowserWindow') ||
+        (chain.length === 2 && chain[1] === 'BrowserWindow')
+      ) {
         count += 1
       }
     }
@@ -650,7 +759,12 @@ function timeoutRearmsEnclosingFunction(node) {
     if (found) return
     if (ts.isCallExpression(child)) {
       if (ts.isIdentifier(child.expression) && names.has(child.expression.text)) found = true
-      if (ts.isPropertyAccessExpression(child.expression) && ts.isThis(child.expression.expression) && names.has(child.expression.name.text)) found = true
+      if (
+        ts.isPropertyAccessExpression(child.expression) &&
+        ts.isThis(child.expression.expression) &&
+        names.has(child.expression.name.text)
+      )
+        found = true
     }
     ts.forEachChild(child, visit)
   }
@@ -666,7 +780,8 @@ function enclosingFunctionNames(node) {
   const names = new Set()
   let current = node.parent
   while (current) {
-    if ((ts.isFunctionDeclaration(current) || ts.isFunctionExpression(current)) && current.name) names.add(current.name.text)
+    if ((ts.isFunctionDeclaration(current) || ts.isFunctionExpression(current)) && current.name)
+      names.add(current.name.text)
     if (ts.isArrowFunction(current) || ts.isFunctionExpression(current)) {
       const parent = current.parent
       if (ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)) names.add(parent.name.text)
@@ -746,10 +861,19 @@ function collectCurrentCounts() {
  * @returns {Counts} dependency-cruiser violation counts.
  */
 function runDependencyCruiser() {
-  const stdout = execFileSync(process.execPath, [
-    join(repoRoot, 'node_modules', 'dependency-cruiser', 'bin', 'dependency-cruiser.mjs'),
-    'src', '--config', '.dependency-cruiser.cjs', '--output-type', 'json', '--no-progress',
-  ], { cwd: repoRoot, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 })
+  const stdout = execFileSync(
+    process.execPath,
+    [
+      join(repoRoot, 'node_modules', 'dependency-cruiser', 'bin', 'dependency-cruiser.mjs'),
+      'src',
+      '--config',
+      '.dependency-cruiser.cjs',
+      '--output-type',
+      'json',
+      '--no-progress'
+    ],
+    { cwd: repoRoot, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 }
+  )
   const report = JSON.parse(stdout)
   return countDependencyViolations(report.summary.violations)
 }
@@ -762,7 +886,9 @@ function printSummary(counts) {
   for (const [rule, title] of RULES) {
     const values = Object.values(counts[rule] ?? {})
     const total = values.reduce((sum, count) => sum + count, 0)
-    console.log(`[check:architecture] ${rule.padEnd(8)}${String(total).padStart(4)} in ${values.length} files: ${title}`)
+    console.log(
+      `[check:architecture] ${rule.padEnd(8)}${String(total).padStart(4)} in ${values.length} files: ${title}`
+    )
   }
 }
 
@@ -781,7 +907,9 @@ function readBaseline() {
     return { ok: false }
   }
   if (canonical !== text) {
-    console.log('[check:architecture] FAIL: scripts/architecture-baseline.json is not canonical; use the rendering below.')
+    console.log(
+      '[check:architecture] FAIL: scripts/architecture-baseline.json is not canonical; use the rendering below.'
+    )
     console.log(canonical)
     process.exitCode = 1
     return { ok: false }
@@ -806,7 +934,9 @@ function main() {
   printSummary(current)
 
   if (!existsSync(BASELINE_PATH)) {
-    console.log('[check:architecture] FAIL: scripts/architecture-baseline.json does not exist. Commit the counts below as that file:')
+    console.log(
+      '[check:architecture] FAIL: scripts/architecture-baseline.json does not exist. Commit the counts below as that file:'
+    )
     console.log(formatBaseline(current))
     process.exitCode = 1
     return
@@ -820,13 +950,19 @@ function main() {
   if (differenceCount > 0) {
     console.log(`[check:architecture] FAIL: ${differenceCount} counts differ from scripts/architecture-baseline.json`)
     for (const difference of regressions) {
-      console.log(`  ${difference.rule} ${difference.file}: ${difference.baseline} -> ${difference.current} (rose; counts may only fall)`)
+      console.log(
+        `  ${difference.rule} ${difference.file}: ${difference.baseline} -> ${difference.current} (rose; counts may only fall)`
+      )
     }
     for (const difference of stale) {
-      console.log(`  ${difference.rule} ${difference.file}: ${difference.baseline} -> ${difference.current} (fell; lower the baseline)`)
+      console.log(
+        `  ${difference.rule} ${difference.file}: ${difference.baseline} -> ${difference.current} (fell; lower the baseline)`
+      )
     }
     if (regressions.length > 0) {
-      console.log('A count rises only through a reviewed edit of the baseline, for example a pure move that relocates existing violations.')
+      console.log(
+        'A count rises only through a reviewed edit of the baseline, for example a pure move that relocates existing violations.'
+      )
     }
     if (stale.length > 0) {
       console.log('Baseline with every fallen count lowered (raises nothing):')

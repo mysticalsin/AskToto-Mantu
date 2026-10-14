@@ -7,7 +7,8 @@ import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { utilityProcess, type UtilityProcess } from 'electron'
 import { mainLog } from './logger'
-import { assertLegacyRuntimeClosure } from './features/components/speech-pack/package-runtime-state'
+import { acquirePackageRuntimeLease } from './features/components/speech-pack/runtime-admission'
+import { runtimeHostEnvironment, type RuntimeFeatureLease } from './features/components/speech-pack/runtime-lease'
 import {
   ASR_ASSETS_MISSING,
   PARAKEET_MODEL_NAME,
@@ -49,6 +50,8 @@ interface PendingRequest {
 interface HostGeneration {
   number: number
   child: UtilityProcess
+  modelFiles: ModelFiles
+  runtimeLease: RuntimeFeatureLease | null
   state: 'active' | 'releasing' | 'blocked'
   pending: Map<string, PendingRequest>
   termination: Promise<void> | null
@@ -104,35 +107,63 @@ function failPending(generation: HostGeneration, error: Error): void {
   generation.pending.clear()
 }
 
+function releaseRuntimeLease(generation: HostGeneration): Promise<void> {
+  const lease = generation.runtimeLease
+  generation.runtimeLease = null
+  return Promise.resolve(lease?.release()).then(() => undefined)
+}
+
 function finishTermination(generation: HostGeneration): void {
   if (generation.exitTimer) clearTimeout(generation.exitTimer)
   generation.exitTimer = null
-  if (current === generation) current = null
-  if (releaseGate === generation.termination) releaseGate = null
-  if (blockedRelease?.generation === generation) blockedRelease = null
-  generation.resolveTermination?.()
-  generation.resolveTermination = null
-  generation.rejectTermination = null
+  const termination = generation.termination
+  void releaseRuntimeLease(generation)
+    .catch((error: unknown) => {
+      mainLog.warn('[parakeet] runtime lease release failed:', asError(error).message)
+    })
+    .finally(() => {
+      if (current === generation) current = null
+      if (releaseGate === termination) releaseGate = null
+      if (blockedRelease?.generation === generation) blockedRelease = null
+      generation.resolveTermination?.()
+      generation.resolveTermination = null
+      generation.rejectTermination = null
+    })
 }
 
 function handleExit(generation: HostGeneration, code: number | null): void {
   if (generation.state === 'active') {
     failPending(generation, new Error(`The Parakeet helper exited unexpectedly (code ${code ?? 'unknown'}).`))
+    generation.state = 'releasing'
     if (current === generation) current = null
+    const releaseBarrier = releaseRuntimeLease(generation).catch((error: unknown) => {
+      mainLog.warn('[parakeet] runtime lease release failed:', asError(error).message)
+    })
+    releaseGate = releaseBarrier
+    void releaseBarrier.finally(() => {
+      if (releaseGate === releaseBarrier) releaseGate = null
+    })
     return
   }
   finishTermination(generation)
 }
 
-function spawnGeneration(): HostGeneration {
+function spawnGeneration(modelFiles: ModelFiles, runtimeLease: RuntimeFeatureLease | null): HostGeneration {
   const number = nextGeneration++
-  const child = utilityProcess.fork(join(__dirname, 'parakeet-asr-host.js'), [], {
-    serviceName: `metis-parakeet-asr-${number}`,
-    stdio: 'pipe'
-  })
+  const child: UtilityProcess = utilityProcess.fork(
+    runtimeLease?.entry('parakeet-host') ?? join(__dirname, 'parakeet-asr-host.js'),
+    [],
+    {
+      serviceName: `metis-parakeet-asr-${number}`,
+      stdio: 'pipe',
+      ...(runtimeLease ? { env: runtimeHostEnvironment(runtimeLease) } : {})
+    }
+  )
   const generation: HostGeneration = {
     number,
     child,
+    modelFiles,
+    runtimeLease,
     state: 'active',
     pending: new Map(),
     termination: null,
@@ -158,7 +189,7 @@ function spawnGeneration(): HostGeneration {
 }
 
 async function activeGeneration(
-  prepareBeforeSpawn: (() => Promise<void>) | undefined,
+  prepareBeforeSpawn: (() => Promise<{ files: ModelFiles; lease: RuntimeFeatureLease | null }>) | undefined,
   revision: number
 ): Promise<HostGeneration> {
   for (;;) {
@@ -176,13 +207,72 @@ async function activeGeneration(
     if (currentBeforePrepare?.state === 'active') return currentBeforePrepare
     // If a previous helper was exiting, re-resolve the current lean selection after its exit and
     // before creating a replacement. No helper starts while fresh path admission is pending.
-    await prepareBeforeSpawn?.()
-    assertCurrentOperation(revision)
-    if (releaseGate || blockedRelease) continue
+    const prepared = await prepareBeforeSpawn?.()
+    let preparedLeaseOwned = prepared?.lease !== null && prepared?.lease !== undefined
+    const releasePreparedLease = async (): Promise<void> => {
+      if (!preparedLeaseOwned) return
+      preparedLeaseOwned = false
+      await prepared?.lease?.release()
+    }
+    try {
+      assertCurrentOperation(revision)
+    } catch (error) {
+      await releasePreparedLease()
+      throw error
+    }
+    if (releaseGate || blockedRelease) {
+      await releasePreparedLease()
+      continue
+    }
     const currentAfterPrepare = (() => current)()
-    if (currentAfterPrepare?.state === 'active') return currentAfterPrepare
-    assertCurrentOperation(revision)
-    return spawnGeneration()
+    if (currentAfterPrepare?.state === 'active') {
+      await releasePreparedLease()
+      assertCurrentOperation(revision)
+      if (releaseGate || blockedRelease) continue
+      const currentAfterRelease = (() => current)()
+      if (currentAfterRelease === currentAfterPrepare && currentAfterRelease.state === 'active') {
+        return currentAfterRelease
+      }
+      continue
+    }
+    if (!prepared) throw new Error('Parakeet host preparation was not completed.')
+    try {
+      await prepared.lease?.verifyCurrentBytes()
+      assertCurrentOperation(revision)
+      if (releaseGate || blockedRelease) {
+        await releasePreparedLease()
+        continue
+      }
+      // Verification yields even for legacy/full runtimes, where there is no lease to verify.
+      // Another concurrent caller may have installed the shared host during that turn.
+      const currentAfterVerification = (() => current)()
+      if (currentAfterVerification?.state === 'active') {
+        await releasePreparedLease()
+        assertCurrentOperation(revision)
+        if (releaseGate || blockedRelease) continue
+        const currentAfterRelease = (() => current)()
+        if (currentAfterRelease === currentAfterVerification && currentAfterRelease.state === 'active') {
+          return currentAfterRelease
+        }
+        continue
+      }
+      const physicalAdmission = await prepared.lease?.preparePhysicalAdmission()
+      try {
+        physicalAdmission?.assertCurrentSync()
+        assertCurrentOperation(revision)
+        if (releaseGate || blockedRelease) {
+          await physicalAdmission?.dispose()
+          await releasePreparedLease()
+          continue
+        }
+        return spawnGeneration(prepared.files, prepared.lease)
+      } finally {
+        await physicalAdmission?.dispose()
+      }
+    } catch (error) {
+      await releasePreparedLease()
+      throw error
+    }
   }
 }
 
@@ -216,22 +306,23 @@ function terminateGeneration(generation: HostGeneration, pendingError: Error): P
 }
 
 async function requestHost(
-  request:
-    | { type: 'probe' }
-    | { type: 'warmup'; files: ModelFiles }
-    | { type: 'transcribe'; files: ModelFiles; pcm: ArrayBuffer },
+  request: { type: 'probe' } | { type: 'warmup' } | { type: 'transcribe'; pcm: ArrayBuffer },
   revision = operationRevision
 ): Promise<HostResponse> {
   assertCurrentOperation(revision)
-  let requestForHost = request
-  const prepareBeforeSpawn =
-    request.type === 'probe'
-      ? undefined
-      : async (): Promise<void> => {
-          const dir = await modelDir()
-          assertCurrentOperation(revision)
-          requestForHost = { ...request, files: modelFiles(dir) }
-        }
+  const requestForHost = request
+  const prepareBeforeSpawn = async (): Promise<{ files: ModelFiles; lease: RuntimeFeatureLease | null }> => {
+    const lease = await acquirePackageRuntimeLease('offline-asr')
+    try {
+      assertCurrentOperation(revision)
+      const dir = lease ? lease.model('asr.parakeet-tdt-0.6b-v3-int8') : await modelDir()
+      assertCurrentOperation(revision)
+      return { files: modelFiles(dir), lease }
+    } catch (error) {
+      await lease?.release()
+      throw error
+    }
+  }
   let generation = await activeGeneration(prepareBeforeSpawn, revision)
   assertCurrentOperation(revision)
   // activeGeneration crosses an async boundary. A release can begin before this continuation resumes;
@@ -241,6 +332,9 @@ async function requestHost(
     assertCurrentOperation(revision)
   }
   if (generation.pending.size >= MAX_PENDING_REQUESTS) throw new ParakeetBusyError()
+  if (revision !== operationRevision || generation.state !== 'active' || current !== generation) {
+    throw new Error('Parakeet processing was cancelled.')
+  }
   const id = `g${generation.number}:r${nextRequest++}`
   return new Promise<HostResponse>((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -252,8 +346,18 @@ async function requestHost(
       })
     }, DEFAULT_REQUEST_TIMEOUT_MS)
     generation.pending.set(id, { resolve, reject, timer })
+    if (revision !== operationRevision || generation.state !== 'active' || current !== generation) {
+      generation.pending.delete(id)
+      clearTimeout(timer)
+      reject(new Error('Parakeet processing was cancelled.'))
+      return
+    }
     try {
-      generation.child.postMessage({ ...requestForHost, id })
+      const hostRequest =
+        requestForHost.type === 'probe'
+          ? { ...requestForHost, id }
+          : { ...requestForHost, files: generation.modelFiles, id }
+      generation.child.postMessage(hostRequest)
     } catch (error) {
       generation.pending.delete(id)
       clearTimeout(timer)
@@ -269,7 +373,14 @@ async function requestHost(
 /** True when all model files are present and are real weights, not an HTML error page. */
 export async function parakeetModelReady(): Promise<boolean> {
   try {
-    await assertLegacyRuntimeClosure('asr')
+    const lease = await acquirePackageRuntimeLease('offline-asr')
+    if (lease) {
+      try {
+        return await parakeetFilesReady(lease.model('asr.parakeet-tdt-0.6b-v3-int8'))
+      } finally {
+        await lease.release()
+      }
+    }
   } catch {
     return false
   }
@@ -279,7 +390,6 @@ export async function parakeetModelReady(): Promise<boolean> {
 /** Probe native addon availability in the helper without constructing model weights. */
 export async function parakeetAddonError(): Promise<string | null> {
   try {
-    await assertLegacyRuntimeClosure('asr')
     await requestHost({ type: 'probe' })
     return null
   } catch (error) {
@@ -289,36 +399,41 @@ export async function parakeetAddonError(): Promise<string | null> {
 
 /** Ensure model assets and prewarm genuine weights in the isolated helper. */
 export async function ensureParakeetModel(onProgress?: (pct: number) => void): Promise<void> {
-  await assertLegacyRuntimeClosure('asr')
   const revision = operationRevision
-  const initialDir = await modelDir()
-  assertCurrentOperation(revision)
-  const initiallyReady = await parakeetFilesReady(initialDir)
-  assertCurrentOperation(revision)
-  if (!initiallyReady) {
-    await ensureParakeetAssets(onProgress)
-    assertCurrentOperation(revision)
-  }
-  const dir = await modelDir()
-  assertCurrentOperation(revision)
-  const ready = await parakeetFilesReady(dir)
-  assertCurrentOperation(revision)
-  if (!ready) throw new Error(ASR_ASSETS_MISSING)
-  const files = modelFiles(dir)
-  // Unit tests use tiny placeholder ONNX files. Never pass them into Ort, which
-  // treats malformed protobufs as a process-fatal error in some builds.
+  const runtimeLease = await acquirePackageRuntimeLease('offline-asr')
   try {
-    const encoderInfo = await stat(files.encoder)
     assertCurrentOperation(revision)
-    if (encoderInfo.size > 1_024) await requestHost({ type: 'warmup', files }, revision)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    const initialDir = runtimeLease ? runtimeLease.model('asr.parakeet-tdt-0.6b-v3-int8') : await modelDir()
+    assertCurrentOperation(revision)
+    const initiallyReady = await parakeetFilesReady(initialDir)
+    assertCurrentOperation(revision)
+    if (!initiallyReady) {
+      if (runtimeLease) throw new Error('The approved Parakeet model is not installed for this runtime.')
+      await ensureParakeetAssets(onProgress)
+      assertCurrentOperation(revision)
+    }
+    const dir = runtimeLease ? runtimeLease.model('asr.parakeet-tdt-0.6b-v3-int8') : await modelDir()
+    assertCurrentOperation(revision)
+    const ready = await parakeetFilesReady(dir)
+    assertCurrentOperation(revision)
+    if (!ready) throw new Error(ASR_ASSETS_MISSING)
+    const files = modelFiles(dir)
+    // Unit tests use tiny placeholder ONNX files. Never pass them into Ort, which
+    // treats malformed protobufs as a process-fatal error in some builds.
+    try {
+      const encoderInfo = await stat(files.encoder)
+      assertCurrentOperation(revision)
+      if (encoderInfo.size > 1_024) await requestHost({ type: 'warmup' }, revision)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+  } finally {
+    await runtimeLease?.release()
   }
 }
 
 /** Transcribe one mono 16kHz Float32 PCM window. Empty text means genuine silence. */
 export async function parakeetTranscribe(samples: Float32Array): Promise<string> {
-  await assertLegacyRuntimeClosure('asr')
   if (!(samples instanceof Float32Array)) throw new Error('Parakeet PCM must be Float32 samples.')
   if (samples.length > MAX_SAMPLES) throw new Error('Parakeet PCM is too large.')
   for (const sample of samples) {
@@ -336,10 +451,8 @@ export async function parakeetTranscribe(samples: Float32Array): Promise<string>
     // Reserve first, then clone. Rejected callers never allocate a second PCM buffer and are never
     // parked in an await queue that would retain their original audio indefinitely.
     const pcm = new Float32Array(samples).buffer
-    const dir = await modelDir()
     assertCurrentOperation(revision)
-    const files = modelFiles(dir)
-    const response = await requestHost({ type: 'transcribe', files, pcm }, revision)
+    const response = await requestHost({ type: 'transcribe', pcm }, revision)
     return String(response.text ?? '').trim()
   } finally {
     admittedPcmBytes -= admittedBytes

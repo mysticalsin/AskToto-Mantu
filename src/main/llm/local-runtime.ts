@@ -22,6 +22,10 @@ import { errMsg } from './shared'
 import { recordSidecarIntent, recordSidecarSpawned, recordSidecarSupervisedSpawned } from '../infra/process/registry'
 import { markSidecarProcessUsable, spawnSidecarProcess, stopSidecarProcess } from '../infra/process/supervisor'
 import { assertLegacyRuntimeClosure } from '../features/components/speech-pack/package-runtime-state'
+import type { RuntimeFeatureLease } from '../features/components/speech-pack/runtime-lease'
+import { runtimeHostEnvironment } from '../features/components/speech-pack/runtime-lease'
+import { acquirePackageRuntimeLease } from '../features/components/speech-pack/runtime-admission'
+import { trackLocalRuntimeChild, type LocalRuntimeChildLifecycle } from './local-runtime-child'
 
 export type LlamaPlatform = 'mac' | 'win'
 export type WinVariant = 'vulkan' | 'cpu'
@@ -41,6 +45,10 @@ export interface ModelPaths {
   ctxSize: number
   parallel: number
   gpuLayers: number
+  /** Present only when the main runtime store supplied a verified immutable generation. */
+  runtimeLease?: RuntimeFeatureLease
+  runtimeBinary?: string
+  runtimeModelId?: 'qwen3.5-0.8b' | 'qwen3.5-4b'
 }
 
 export interface BinaryCandidate {
@@ -53,16 +61,8 @@ export type RuntimeState = 'stopped' | 'starting' | 'running' | 'unavailable'
 // Health budget: Windows Defender's first-run scan of a freshly-unpacked exe can add tens of seconds
 // before the process even starts executing (PLAN.md §7 risk 3) — mac has no such AV tax.
 const HEALTH_BUDGET_MS: Record<LlamaPlatform, number> = { mac: 30_000, win: 60_000 }
-// Port-line budget: bounds the wait for the `listening on http://127.0.0.1:<port>` line, which is what
-// GATES the health poll — HEALTH_BUDGET_MS only starts counting after that line is parsed. Without this
-// budget a child that starts but never prints the line (wrong build, GPU driver stall, a changed log
-// format in a future llama.cpp release) leaves start() pending forever with nothing surfaced to the user.
-// Deliberately DOUBLE the health budget rather than equal to it: this is a hang-breaker, not a
-// performance SLA, and a false timeout is the worse failure (it would silently disable Métis Local on
-// slow-but-healthy hardware). Everything expensive about a cold start lands in THIS phase, not the health
-// phase — Defender's first-run scan of the freshly-unpacked exe, plus the full GGUF+mmproj read off a
-// cold disk, which the live spike log shows completing BEFORE the listening line is printed. In the
-// healthy case the line arrives in well under a second, so the headroom costs nothing.
+// The listener-line budget bounds stalls before the health timer starts. Double the health budget to
+// tolerate Defender scans and cold model reads without leaving a malformed child pending forever.
 const PORT_LINE_BUDGET_MS: Record<LlamaPlatform, number> = { mac: 60_000, win: 120_000 }
 const HEALTH_POLL_INTERVAL_MS = 250
 const IDLE_STOP_MS = 15 * 60_000
@@ -237,6 +237,9 @@ async function pollHealth(port: number, budgetMs: number): Promise<void> {
 // ─── Session state (per app process — see the module doc comment) ─────────────────────────────────────
 const apiKey = randomBytes(32).toString('hex') // 32 bytes -> 64 hex chars, generated once per app session
 let child: ChildProcess | null = null
+const childLifecycles = new WeakMap<ChildProcess, LocalRuntimeChildLifecycle>()
+let currentChildLifecycle: { readonly child: ChildProcess; readonly lifecycle: LocalRuntimeChildLifecycle } | null =
+  null
 let port: number | null = null
 let state: RuntimeState = 'stopped'
 let idleTimer: NodeJS.Timeout | null = null
@@ -320,7 +323,7 @@ function scheduleIdleStop(): void {
   if (state !== 'running') return
   idleTimer = setTimeout(() => {
     auditLog('local.runtime.stop', { reason: 'idle' })
-    stop()
+    void stop().catch((error: unknown) => mainLog.warn('local runtime idle stop failed', { error: errMsg(error) }))
   }, IDLE_STOP_MS)
 }
 
@@ -361,203 +364,235 @@ function waitForDrain(): Promise<void> {
   return new Promise((resolve) => drainWaiters.push(resolve))
 }
 
-function spawnAndWaitHealthy(
+async function spawnAndWaitHealthy(
   binaryPath: string,
   modelPaths: ModelPaths,
   platform: LlamaPlatform,
   generation: number,
   variant: BinaryVariant
 ): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const args = buildSpawnArgs({
-      gguf: modelPaths.gguf,
-      mmproj: modelPaths.mmproj,
-      vision: modelPaths.vision,
-      ctxSize: modelPaths.ctxSize,
-      parallel: modelPaths.parallel,
-      gpuLayers: modelPaths.gpuLayers
-    })
-    let proc: ChildProcess
-    let waitForSpawnRecorded = (): Promise<void> => Promise.resolve()
-    try {
-      // The per-session api key travels via env, never argv (see module doc comment) — `ps`/the process
-      // table can see the flag list of every local process but not another process's environment.
-      recordSidecarIntent('llama-server', args)
-      const launched = spawnSidecarProcess(
-        'llama-server',
-        binaryPath,
-        args,
-        {
-          stdio: ['ignore', 'pipe', 'pipe'],
-          windowsHide: true,
-          env: { ...process.env, LLAMA_API_KEY: apiKey }
-        },
-        auditLog,
-        process.env,
-        process.platform,
-        {
-          onUnsupervisedFallbackSpawned: (fallback) => recordSidecarSpawned('llama-server', fallback, binaryPath, args)
-        }
-      )
-      proc = launched.child
-      if (launched.supervised) {
-        // Both the wrapper and the sidecar it spawns are registered, so the next-launch reaper still finds
-        // them if the wrapper itself dies; a later direct fallback registers its own spawn via the hook.
-        const supervisedRecorded = launched.wrapperLaunch
-          ? recordSidecarSupervisedSpawned('llama-server', proc, launched.wrapperLaunch, {
-              executable: binaryPath,
-              args
-            })
-          : Promise.resolve()
-        waitForSpawnRecorded = async () => {
-          await supervisedRecorded
-          await launched.waitForUnsupervisedFallback?.()
-        }
-      } else {
-        const spawnRecorded = recordSidecarSpawned('llama-server', proc, binaryPath, args)
-        waitForSpawnRecorded = () => spawnRecorded
-      }
-    } catch (err) {
-      reject(err instanceof Error ? err : new Error(String(err)))
-      return
-    }
-    child = proc
-    observeSidecar('llama-server', proc, auditLog)
-    let settled = false
-    let boundPort: number | null = null
-    // The "listening on" line can arrive split across separate stdout/stderr `data` events (llama-server
-    // emits a few KB of model-load logging first) — accumulate and search the buffer, not each raw chunk
-    // in isolation, or a mid-line split silently loses the port and the health poll never starts.
-    let outputBuffer = ''
-
-    let portLineTimer: NodeJS.Timeout | null = setTimeout(() => {
-      portLineTimer = null
-      if (settled) return
-      settled = true
-      // Kill + reap before rejecting. The candidate loop's stopChildProcess() only kills a child that is
-      // still the module's CURRENT one, so a superseded/cancelled attempt would otherwise leave a live
-      // llama-server.exe behind holding the model's RAM. The 'exit' handler below clears child/port once
-      // the kill lands; a stale proc's exit is already ignored by its `child !== proc` guard.
-      stopSidecarProcess(proc)
-      const tail = outputBuffer.trim()
-      const detail = tail ? ` — last output: ${tail.slice(-800)}` : ''
-      mainLog.warn('local runtime: sidecar never reported a listening port', { platform, variant })
-      reject(
-        new Error(
-          `llama-server started but never reported a listening port within ${PORT_LINE_BUDGET_MS[platform]}ms (${binaryPath})${detail}`
+  const physicalAdmission = await modelPaths.runtimeLease?.preparePhysicalAdmission()
+  try {
+    physicalAdmission?.assertCurrentSync()
+    assertCurrentGeneration(generation)
+    const launch = new Promise<void>((resolve, reject) => {
+      const args = buildSpawnArgs({
+        gguf: modelPaths.gguf,
+        mmproj: modelPaths.mmproj,
+        vision: modelPaths.vision,
+        ctxSize: modelPaths.ctxSize,
+        parallel: modelPaths.parallel,
+        gpuLayers: modelPaths.gpuLayers
+      })
+      let proc: ChildProcess
+      let waitForSpawnRecorded = (): Promise<void> => Promise.resolve()
+      try {
+        // The per-session api key travels via env, never argv (see module doc comment) — `ps`/the process
+        // table can see the flag list of every local process but not another process's environment.
+        recordSidecarIntent('llama-server', args)
+        const launched = spawnSidecarProcess(
+          'llama-server',
+          binaryPath,
+          args,
+          {
+            stdio: ['ignore', 'pipe', 'pipe'],
+            windowsHide: true,
+            env: modelPaths.runtimeLease
+              ? { ...runtimeHostEnvironment(modelPaths.runtimeLease), LLAMA_API_KEY: apiKey }
+              : { ...process.env, LLAMA_API_KEY: apiKey }
+          },
+          auditLog,
+          process.env,
+          process.platform,
+          {
+            prepareUnsupervisedFallback: async () => {
+              const fallbackAdmission = await modelPaths.runtimeLease?.preparePhysicalAdmission()
+              return {
+                assertCurrentSync: () => {
+                  fallbackAdmission?.assertCurrentSync()
+                  assertCurrentGeneration(generation)
+                },
+                dispose: async () => {
+                  await fallbackAdmission?.dispose()
+                }
+              }
+            },
+            onUnsupervisedFallbackSpawned: (fallback) =>
+              recordSidecarSpawned('llama-server', fallback, binaryPath, args)
+          }
         )
-      )
-    }, PORT_LINE_BUDGET_MS[platform])
-    const clearPortLineTimer = (): void => {
-      if (portLineTimer) {
-        clearTimeout(portLineTimer)
-        portLineTimer = null
-      }
-    }
-
-    const onOutput = (chunk: Buffer): void => {
-      if (boundPort !== null) return
-      outputBuffer += chunk.toString('utf8')
-      const parsed = parseBoundPort(outputBuffer)
-      if (parsed === null) return
-      boundPort = parsed
-      // The port line arrived — from here HEALTH_BUDGET_MS owns the deadline.
-      clearPortLineTimer()
-      // Keep the candidate port local until health succeeds. A detached process can flush buffered output
-      // after stop() and even after a newer generation is already healthy; publishing here would redirect
-      // the running app to the killed process's endpoint.
-      if (generation !== startGeneration || child !== proc) {
-        settled = true
-        reject(new StartCancelledError())
+        proc = launched.child
+        if (launched.supervised) {
+          // Both the wrapper and the sidecar it spawns are registered, so the next-launch reaper still finds
+          // them if the wrapper itself dies; a later direct fallback registers its own spawn via the hook.
+          const supervisedRecorded = launched.wrapperLaunch
+            ? recordSidecarSupervisedSpawned('llama-server', proc, launched.wrapperLaunch, {
+                executable: binaryPath,
+                args
+              })
+            : Promise.resolve()
+          waitForSpawnRecorded = async () => {
+            await supervisedRecorded
+            await launched.waitForUnsupervisedFallback?.()
+          }
+        } else {
+          const spawnRecorded = recordSidecarSpawned('llama-server', proc, binaryPath, args)
+          waitForSpawnRecorded = () => spawnRecorded
+        }
+      } catch (err) {
+        reject(err instanceof Error ? err : new Error(String(err)))
         return
       }
-      pollHealth(parsed, HEALTH_BUDGET_MS[platform]).then(
-        async () => {
-          if (!settled) {
-            if (generation !== startGeneration || child !== proc) {
-              settled = true
-              reject(new StartCancelledError())
-              return
-            }
-            await waitForSpawnRecorded()
-            if (settled) return
-            if (generation !== startGeneration || child !== proc) {
-              settled = true
-              reject(new StartCancelledError())
-              return
-            }
-            markSidecarProcessUsable(proc)
-            port = parsed
-            settled = true
-            resolve()
-          }
-        },
-        (err) => {
-          if (!settled) {
-            settled = true
-            reject(err)
-          }
-        }
+      child = proc
+      const lifecycle = trackLocalRuntimeChild(proc, (error) =>
+        mainLog.warn('local runtime child lifecycle failed', { error: errMsg(error) })
       )
-    }
-    proc.stdout?.on('data', onOutput)
-    proc.stderr?.on('data', onOutput)
+      childLifecycles.set(proc, lifecycle)
+      const ownedChild = { child: proc, lifecycle }
+      currentChildLifecycle = ownedChild
+      void lifecycle.exit.finally(() => {
+        if (currentChildLifecycle === ownedChild) currentChildLifecycle = null
+      })
+      observeSidecar('llama-server', proc, auditLog)
+      let settled = false
+      let boundPort: number | null = null
+      // The "listening on" line can arrive split across separate stdout/stderr `data` events (llama-server
+      // emits a few KB of model-load logging first) — accumulate and search the buffer, not each raw chunk
+      // in isolation, or a mid-line split silently loses the port and the health poll never starts.
+      let outputBuffer = ''
 
-    proc.once('error', (err) => {
-      clearPortLineTimer()
-      if (!settled) {
-        settled = true
-        reject(err)
+      let portLineTimer: NodeJS.Timeout | null = setTimeout(() => {
+        portLineTimer = null
+        if (settled) return
+        const tail = outputBuffer.trim()
+        const detail = tail ? ` — last output: ${tail.slice(-800)}` : ''
+        mainLog.warn('local runtime: sidecar never reported a listening port', { platform, variant })
+        rejectAfterExit(
+          new Error(
+            `llama-server started but never reported a listening port within ${PORT_LINE_BUDGET_MS[platform]}ms (${binaryPath})${detail}`
+          )
+        )
+      }, PORT_LINE_BUDGET_MS[platform])
+      const clearPortLineTimer = (): void => {
+        if (portLineTimer) {
+          clearTimeout(portLineTimer)
+          portLineTimer = null
+        }
       }
-    })
 
-    proc.once('exit', (code, signal) => {
-      clearPortLineTimer()
-      // This process is no longer the module's current child: stop() already detached it, or a newer start
-      // owns the global child/port/state. Its own pre-health promise must still reject, but a stale exit must
-      // never clear or restart the newer child. A settled stale process needs no further action at all.
-      if (child !== proc) {
+      const rejectAfterExit = (error: Error): void => {
+        if (settled) return
+        settled = true
+        clearPortLineTimer()
+        void stopChildProcess(proc).finally(() => reject(error))
+      }
+
+      const onOutput = (chunk: Buffer): void => {
+        if (boundPort !== null) return
+        outputBuffer += chunk.toString('utf8')
+        const parsed = parseBoundPort(outputBuffer)
+        if (parsed === null) return
+        boundPort = parsed
+        // The port line arrived — from here HEALTH_BUDGET_MS owns the deadline.
+        clearPortLineTimer()
+        // Keep the candidate port local until health succeeds. A detached process can flush buffered output
+        // after stop() and even after a newer generation is already healthy; publishing here would redirect
+        // the running app to the killed process's endpoint.
+        if (generation !== startGeneration || child !== proc) {
+          rejectAfterExit(new StartCancelledError())
+          return
+        }
+        pollHealth(parsed, HEALTH_BUDGET_MS[platform]).then(
+          async () => {
+            if (!settled) {
+              if (generation !== startGeneration || child !== proc) {
+                rejectAfterExit(new StartCancelledError())
+                return
+              }
+              await waitForSpawnRecorded()
+              if (settled) return
+              if (generation !== startGeneration || child !== proc) {
+                rejectAfterExit(new StartCancelledError())
+                return
+              }
+              markSidecarProcessUsable(proc)
+              port = parsed
+              settled = true
+              resolve()
+            }
+          },
+          (err) => {
+            if (!settled) {
+              settled = true
+              reject(err)
+            }
+          }
+        )
+      }
+      proc.stdout?.on('data', onOutput)
+      proc.stderr?.on('data', onOutput)
+
+      proc.once('error', (err) => {
+        clearPortLineTimer()
+        if (!settled) {
+          const error = err instanceof Error ? err : new Error(String(err))
+          if (proc.pid == null) {
+            settled = true
+            lifecycle.confirmNoChild()
+            reject(error)
+          } else rejectAfterExit(error)
+        }
+      })
+
+      proc.once('exit', (code, signal) => {
+        clearPortLineTimer()
+        // A stale child may reject its own start, but must never mutate a newer child's state.
+        if (child !== proc) {
+          if (!settled) {
+            settled = true
+            const tail = outputBuffer.trim()
+            const detail = tail ? ` — last output: ${tail.slice(-800)}` : ''
+            reject(new Error(`llama-server exited before becoming healthy (code=${code}, signal=${signal})${detail}`))
+          }
+          return
+        }
+
+        const wasRunning = state === 'running'
+        child = null
+        port = null
         if (!settled) {
           settled = true
           const tail = outputBuffer.trim()
           const detail = tail ? ` — last output: ${tail.slice(-800)}` : ''
           reject(new Error(`llama-server exited before becoming healthy (code=${code}, signal=${signal})${detail}`))
+          return
         }
-        return
-      }
-
-      const wasRunning = state === 'running'
-      child = null
-      port = null
-      if (!settled) {
-        settled = true
-        const tail = outputBuffer.trim()
-        const detail = tail ? ` — last output: ${tail.slice(-800)}` : ''
-        reject(new Error(`llama-server exited before becoming healthy (code=${code}, signal=${signal})${detail}`))
-        return
-      }
-      if (wasRunning) {
-        state = 'stopped'
-        auditLog('local.runtime.crash', { platform, code, signal, variant })
-        // Vulkan initialized well enough to reach 'running' and then died — restarting the same GPU build
-        // would crash-loop (see cpuPinned). Pin CPU BEFORE maybeAutoRestart so the restart it triggers
-        // already skips the Vulkan candidate.
-        if (variant === 'vulkan' && !cpuPinned) {
-          cpuPinned = true
-          mainLog.warn('local runtime: pinning CPU sidecar for this session after a Vulkan crash', { code, signal })
+        if (wasRunning) {
+          state = 'stopped'
+          auditLog('local.runtime.crash', { platform, code, signal, variant })
+          // Vulkan initialized well enough to reach 'running' and then died — restarting the same GPU build
+          // would crash-loop (see cpuPinned). Pin CPU BEFORE maybeAutoRestart so the restart it triggers
+          // already skips the Vulkan candidate.
+          if (variant === 'vulkan' && !cpuPinned) {
+            cpuPinned = true
+            mainLog.warn('local runtime: pinning CPU sidecar for this session after a Vulkan crash', { code, signal })
+          }
+          maybeAutoRestart(platform, lifecycle.exit)
         }
-        maybeAutoRestart(platform)
-      }
+      })
     })
-  })
+    return launch
+  } finally {
+    await physicalAdmission?.dispose()
+  }
 }
 
-function maybeAutoRestart(platform: LlamaPlatform): void {
+function maybeAutoRestart(platform: LlamaPlatform, exited: Promise<void>): void {
+  const generation = startGeneration
   const now = Date.now()
   restartTimestamps = restartTimestamps.filter((t) => now - t < RESTART_WINDOW_MS)
   if (restartTimestamps.length >= 1) {
-    // Already restarted once in this 10-minute window — stay down for the rest of the session; the
-    // provider waterfall (index.ts, Rock 3) covers cloud fallback from here.
+    // One restart per 10-minute window; the provider waterfall covers fallback after exhaustion.
     state = 'unavailable'
     auditLog('local.runtime.missing', { platform, reason: 'restart_budget_exhausted' })
     return
@@ -565,29 +600,49 @@ function maybeAutoRestart(platform: LlamaPlatform): void {
   restartTimestamps.push(now)
   if (!lastModelPaths) return
   auditLog('local.runtime.restart', { platform })
-  void start(lastModelPaths, platform).catch(() => {
-    state = 'unavailable'
+  void (async () => {
+    let lease: RuntimeFeatureLease | null = null
+    try {
+      await exited
+      assertCurrentGeneration(generation)
+      const previous = lastModelPaths
+      if (!previous) return
+      let next = previous
+      if (previous.runtimeLease) {
+        if (!previous.runtimeModelId) throw new Error('Managed local model identity is unavailable.')
+        lease = await acquirePackageRuntimeLease('local-llm', previous.runtimeModelId)
+        if (!lease) throw new Error('Managed local model runtime is unavailable.')
+        assertCurrentGeneration(generation)
+        next = {
+          ...previous,
+          runtimeLease: lease,
+          runtimeBinary: lease.entry('llama-server'),
+          gguf: lease.modelFile(previous.runtimeModelId, 'model.gguf'),
+          mmproj: lease.modelFile(previous.runtimeModelId, 'mmproj.gguf')
+        }
+      }
+      await start(next, platform)
+      lease = null
+    } finally {
+      await lease?.release()
+    }
+  })().catch(() => {
+    if (generation === startGeneration) state = 'unavailable'
   })
 }
 
-/** True when `a` (the currently-running/loaded model paths, if any) is the SAME model as `b` (a fresh
- *  start() request) — the switch/no-op decision (F2) hinges on this. */
-/** Does the RUNNING configuration `a` satisfy the REQUEST `b`? MQA-270 (B1): vision is one-way sticky —
- *  a runtime holding the projector satisfies a text request (superset), but a text-only runtime does NOT
- *  satisfy a vision request, which forces the switch path and its restart. Without the asymmetry an
- *  interleaved text/vision session would thrash a 14.6 s reload on every alternation; with it, the
- *  projector loads at most once per runtime lifetime and is only released by the idle stop. This
- *  comparison previously ignored vision entirely, which would have reported "same model" and silently
- *  never restarted for the first screen ask. */
+/** A vision-loaded runtime satisfies text requests; the reverse requires a restart. */
 function samePaths(a: ModelPaths | null, b: ModelPaths): boolean {
-  return !!a && a.gguf === b.gguf && a.mmproj === b.mmproj && (a.vision || !b.vision)
+  return (
+    !!a &&
+    a.gguf === b.gguf &&
+    a.mmproj === b.mmproj &&
+    (a.vision || !b.vision) &&
+    a.runtimeLease?.generationIdentity === b.runtimeLease?.generationIdentity &&
+    a.runtimeBinary === b.runtimeBinary
+  )
 }
 
-/**
- * The candidate-spawn loop for one start attempt — unchanged in substance from before F1/F2, just
- * extracted so the public start() below can own startPromise/switch bookkeeping around it. Mutates module
- * state (child/port/state) exactly as it always has.
- */
 class StartCancelledError extends Error {
   constructor() {
     super('local runtime start cancelled')
@@ -600,9 +655,10 @@ function assertCurrentGeneration(generation: number): void {
 }
 
 async function spawnCandidates(modelPaths: ModelPaths, platform: LlamaPlatform, generation: number): Promise<void> {
-  // cpuPinned drops the Vulkan candidate for the rest of the session (no-op on mac, which has no Vulkan
-  // candidate). Filtered here rather than in resolveBinaryPath() so that stays a pure path resolver.
-  const candidates = resolveBinaryPath(platform).filter((c) => !(cpuPinned && c.variant === 'vulkan'))
+  // Filter the sticky Windows Vulkan fallback here, keeping resolveBinaryPath() pure.
+  const candidates = modelPaths.runtimeBinary
+    ? [{ path: modelPaths.runtimeBinary, variant: platform === 'win' ? ('cpu' as const) : ('mac' as const) }]
+    : resolveBinaryPath(platform).filter((c) => !(cpuPinned && c.variant === 'vulkan'))
   let lastErr: Error | null = null
   for (let i = 0; i < candidates.length; i++) {
     assertCurrentGeneration(generation)
@@ -620,10 +676,9 @@ async function spawnCandidates(modelPaths: ModelPaths, platform: LlamaPlatform, 
       return
     } catch (err) {
       lastErr = err instanceof Error ? err : new Error(String(err))
-      // A cancelled generation was already detached/killed by stop(). Do not touch the module-level child
-      // here: a newer start may already own it by the time this stale continuation resumes.
+      // Cancellation already owns this process's exit barrier; never mutate newer state here.
       if (generation !== startGeneration || err instanceof StartCancelledError) throw new StartCancelledError()
-      stopChildProcess()
+      await stopChildProcess()
       // Windows only: a failed Vulkan spawn/health falls back to the CPU candidate once.
       if (platform !== 'win' || i === candidates.length - 1) break
     }
@@ -634,43 +689,49 @@ async function spawnCandidates(modelPaths: ModelPaths, platform: LlamaPlatform, 
   throw lastErr ?? new Error('llama-server failed to start')
 }
 
-/**
- * Start the sidecar against `modelPaths`. Idempotent per-model (F2): a caller while the SAME model is
- * already 'running' resolves immediately with no restart; a caller for a DIFFERENT model while one is
- * 'running' stops the old sidecar first (two llama-server processes must never race for the same loopback
- * port/RAM) and starts the new one. Concurrent callers while a start is already 'starting' (F1) await the
- * SAME in-flight promise instead of racing ahead on their own — baseURL()/sessionKey() are never reachable
- * by a caller whose await resolved before the sidecar actually finished spawning + health. Once that
- * in-flight start settles, a caller whose requested model differs from what actually started re-evaluates
- * (via recursion) and triggers a switch if still needed.
- * Throws (does not silently swallow) when the session has been marked unavailable, or when every binary
- * candidate fails — the caller (Rock 3's eligibility check) treats a rejection as "local ineligible now."
- */
+/** Reuse a matching runtime or drain streams and await exact child exit before switching models. */
 export async function start(modelPaths: ModelPaths, platform: LlamaPlatform = detectPlatform()): Promise<void> {
-  await assertLegacyRuntimeClosure('local LLM')
-  if (state === 'unavailable') throw new Error('local runtime unavailable for this session (restart budget exhausted)')
+  const requestGeneration = startGeneration
+  if (!modelPaths.runtimeLease) await assertLegacyRuntimeClosure('local LLM')
   if (state === 'starting') {
     await startPromise
     return start(modelPaths, platform)
   }
+  assertCurrentGeneration(requestGeneration)
+  if (state === 'unavailable') {
+    throw new Error('local runtime unavailable for this session (restart budget exhausted)')
+  }
   if (state === 'running') {
-    if (samePaths(lastModelPaths, modelPaths)) return
+    if (samePaths(lastModelPaths, modelPaths)) {
+      const matchedChild = child
+      if (modelPaths.runtimeLease !== lastModelPaths?.runtimeLease) {
+        await modelPaths.runtimeLease?.release()
+        assertCurrentGeneration(requestGeneration)
+        if (state !== 'running' || !matchedChild || child !== matchedChild || !samePaths(lastModelPaths, modelPaths))
+          throw new StartCancelledError()
+      }
+      return
+    }
     if (activeStreamCount > 0) {
-      // A different model was requested while >=1 request is actively streaming from the current sidecar
-      // (switch-kill hardening) — killing it now would truncate that response mid-flight with no retry
-      // (index.ts's onError only retries/fails over when the stream hasn't produced a token yet). Defer:
-      // wait for every in-flight stream to finish, then re-evaluate (mirrors the 'starting' branch above)
-      // instead of switching here. A caller for the SAME model that becomes active in the meantime resolves
-      // via the samePaths() check above once this recurses. Diagnostic only (mainLog, not auditLog) — no
-      // security-relevant action has happened yet; the eventual stop/start still audits as it always did.
+      // Drain active streams before changing the runtime they use.
       mainLog.info('local runtime: model switch deferred — stream(s) active', { activeStreamCount })
       await waitForDrain()
+      assertCurrentGeneration(requestGeneration)
       return start(modelPaths, platform)
     }
-    // Model switch: kill the running sidecar synchronously before spawning the newly requested model.
     clearIdleTimer()
-    stopChildProcess()
+    state = 'stopped'
+    port = null
+    await stopChildProcess(child)
+    assertCurrentGeneration(requestGeneration)
     auditLog('local.runtime.stop', { reason: 'model_switch' })
+  }
+  if (child) {
+    await stopChildProcess(child)
+    assertCurrentGeneration(requestGeneration)
+  } else if (currentChildLifecycle) {
+    await currentChildLifecycle.lifecycle.exit
+    assertCurrentGeneration(requestGeneration)
   }
   lastModelPaths = modelPaths
   state = 'starting'
@@ -679,26 +740,42 @@ export async function start(modelPaths: ModelPaths, platform: LlamaPlatform = de
   startPromise = p
   try {
     await p
+    assertCurrentGeneration(generation)
+    if (modelPaths.runtimeLease) {
+      const startedChild = child
+      const lifecycle = startedChild && childLifecycles.get(startedChild)
+      if (!lifecycle || lifecycle.exited) throw new StartCancelledError()
+      lifecycle.transferLease(modelPaths.runtimeLease)
+    }
   } finally {
     // A stale start may finish after a newer one has already installed its own shared promise.
     if (startPromise === p) startPromise = null
   }
 }
 
-function stopChildProcess(): void {
-  if (child && !child.killed) stopSidecarProcess(child)
-  child = null
-  port = null
+async function stopChildProcess(stopping: ChildProcess | null = child): Promise<void> {
+  if (!stopping) {
+    await currentChildLifecycle?.lifecycle.exit
+    return
+  }
+  const lifecycle = childLifecycles.get(stopping)
+  if (!lifecycle) throw new Error('Local runtime child is missing its exit barrier.')
+  await lifecycle.stop(stopSidecarProcess)
+  if (child === stopping) {
+    child = null
+    port = null
+  }
 }
 
-/** Kill the sidecar (SIGKILL) and clear idle bookkeeping. Idempotent. */
-export function stop(): void {
+/** Kill the sidecar (SIGKILL) and resolve only after its exact exit and lease release. */
+export async function stop(): Promise<void> {
   clearIdleTimer()
   const wasRunning = state === 'running' || state === 'starting'
   startGeneration++
-  stopChildProcess()
   state = 'stopped'
+  port = null
   if (wasRunning) auditLog('local.runtime.stop', { reason: 'explicit' })
+  await stopChildProcess(child)
 }
 
 /**
