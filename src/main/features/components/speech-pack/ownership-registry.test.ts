@@ -137,6 +137,60 @@ describe('speech-pack ownership registry schema', () => {
     await store.settleAndDispose()
   })
 
+  it('serializes overlapping updates without losing a transaction', async () => {
+    const digest = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex')
+    const store = await createSpeechPackOwnershipStore({
+      binding: snapshot().binding,
+      protector: {
+        keyId: 'key-1',
+        async encrypt(bytes) {
+          await Promise.resolve()
+          return Uint8Array.from(bytes)
+        },
+        async decrypt(bytes) {
+          return Uint8Array.from(bytes)
+        },
+        assertCurrent() {},
+        retire() {},
+        async settleAndDispose() {}
+      },
+      backend: {
+        async readSlot() {
+          return null
+        },
+        async publishSlot(input) {
+          await Promise.resolve()
+          return { digest: digest(input.bytes), durable: true }
+        },
+        async acquireWriter() {
+          return { async release() {} }
+        }
+      },
+      mode: 'create-explicit'
+    })
+    await Promise.all([
+      store.beginInstall({
+        componentId: 'asr.whisper-base-q8',
+        version: '1',
+        manifestIdentity: 'a'.repeat(64),
+        transactionId: 'tx_1',
+        originalMarkerBase64: null,
+        previousMarkerWasAbsent: true
+      }),
+      store.beginInstall({
+        componentId: 'asr.whisper-base-q8',
+        version: '1',
+        manifestIdentity: 'b'.repeat(64),
+        transactionId: 'tx_2',
+        originalMarkerBase64: null,
+        previousMarkerWasAbsent: true
+      })
+    ])
+    expect(store.snapshot().sequence).toBe('3')
+    expect(store.snapshot().transactions.map((transaction) => transaction.id)).toEqual(['tx_1', 'tx_2'])
+    await store.settleAndDispose()
+  })
+
   it.each([
     ['wrong purpose', (value: PackRegistrySnapshot) => ({ ...value, purpose: 'metis-protected-meeting-key/v2' })],
     [

@@ -532,9 +532,25 @@ export async function createSpeechPackOwnershipStore(input: {
     protector.assertCurrent()
   })
   let disposed = false
+  let closing = false
+  let updateQueue: Promise<void> = Promise.resolve()
+  let disposal: Promise<void> | null = null
   const assertCurrent = (): void => {
     if (disposed) throw new SpeechPackError('policy', 'speech-pack receipt session is retired')
     protector.assertCurrent()
+  }
+  const serializeUpdate = <T>(operation: () => Promise<T>): Promise<T> => {
+    if (closing || disposed)
+      return Promise.reject(new SpeechPackError('policy', 'speech-pack receipt session is closing'))
+    const result = updateQueue.then(async () => {
+      assertCurrent()
+      return operation()
+    })
+    updateQueue = result.then(
+      () => undefined,
+      () => undefined
+    )
+    return result
   }
   const readSlot = async (
     slot: RegistrySlot
@@ -631,20 +647,21 @@ export async function createSpeechPackOwnershipStore(input: {
   const replaceTransaction = async (
     transactionId: string,
     transform: (current: Readonly<PackTransactionRecord>) => PackTransactionRecord
-  ): Promise<PackTransactionRecord> => {
-    assertCurrent()
-    const index = current.transactions.findIndex((record) => record.id === transactionId)
-    if (index < 0) throw new SpeechPackError('tamper', 'speech-pack transaction receipt is missing')
-    const before = current.transactions[index]
-    const after = transform(frozenTransaction(before))
-    if (!validateTransaction(after) || after.id !== before.id)
-      throw new SpeechPackError('tamper', 'speech-pack transaction receipt update is invalid')
-    assertTransactionTransition(before.phase, after.phase)
-    const transactions = [...current.transactions]
-    transactions[index] = after
-    await persist({ ...current, transactions })
-    return frozenTransaction(after)
-  }
+  ): Promise<PackTransactionRecord> =>
+    serializeUpdate(async () => {
+      assertCurrent()
+      const index = current.transactions.findIndex((record) => record.id === transactionId)
+      if (index < 0) throw new SpeechPackError('tamper', 'speech-pack transaction receipt is missing')
+      const before = current.transactions[index]
+      const after = transform(frozenTransaction(before))
+      if (!validateTransaction(after) || after.id !== before.id)
+        throw new SpeechPackError('tamper', 'speech-pack transaction receipt update is invalid')
+      assertTransactionTransition(before.phase, after.phase)
+      const transactions = [...current.transactions]
+      transactions[index] = after
+      await persist({ ...current, transactions })
+      return frozenTransaction(after)
+    })
 
   if (input.mode === 'create-explicit') {
     try {
@@ -659,30 +676,32 @@ export async function createSpeechPackOwnershipStore(input: {
 
   return {
     snapshot: () => frozenSnapshot(current),
-    async beginInstall(data) {
-      assertCurrent()
-      if (current.transactions.length >= SPEECH_PACK_REGISTRY_LIMITS.transactions)
-        throw new SpeechPackError('tamper', 'speech-pack receipt transaction limit reached')
-      if (!COMPONENT_IDS.has(data.componentId) || !TOKEN.test(data.transactionId))
-        throw new SpeechPackError('tamper', 'speech-pack install receipt identity is invalid')
-      const transaction: PackTransactionRecord = {
-        id: data.transactionId,
-        componentId: data.componentId,
-        version: data.version,
-        manifestIdentity: data.manifestIdentity,
-        phase: 'install-intent',
-        previousMarkerBase64: data.originalMarkerBase64,
-        previousMarkerWasAbsent: data.previousMarkerWasAbsent,
-        nodes: [],
-        moves: [],
-        supersedes: [],
-        cleanupRemaining: []
-      }
-      if (!validateTransaction(transaction) || current.transactions.some((record) => record.id === transaction.id))
-        throw new SpeechPackError('tamper', 'speech-pack install receipt is invalid')
-      const next = { ...current, transactions: [...current.transactions, transaction] }
-      await persist(next)
-      return frozenTransaction(transaction)
+    beginInstall(data) {
+      return serializeUpdate(async () => {
+        assertCurrent()
+        if (current.transactions.length >= SPEECH_PACK_REGISTRY_LIMITS.transactions)
+          throw new SpeechPackError('tamper', 'speech-pack receipt transaction limit reached')
+        if (!COMPONENT_IDS.has(data.componentId) || !TOKEN.test(data.transactionId))
+          throw new SpeechPackError('tamper', 'speech-pack install receipt identity is invalid')
+        const transaction: PackTransactionRecord = {
+          id: data.transactionId,
+          componentId: data.componentId,
+          version: data.version,
+          manifestIdentity: data.manifestIdentity,
+          phase: 'install-intent',
+          previousMarkerBase64: data.originalMarkerBase64,
+          previousMarkerWasAbsent: data.previousMarkerWasAbsent,
+          nodes: [],
+          moves: [],
+          supersedes: [],
+          cleanupRemaining: []
+        }
+        if (!validateTransaction(transaction) || current.transactions.some((record) => record.id === transaction.id))
+          throw new SpeechPackError('tamper', 'speech-pack install receipt is invalid')
+        const next = { ...current, transactions: [...current.transactions, transaction] }
+        await persist(next)
+        return frozenTransaction(transaction)
+      })
     },
     async recordExtraction(transactionId, receipt) {
       if (!isOwnedExtractionReceipt(receipt))
@@ -729,15 +748,20 @@ export async function createSpeechPackOwnershipStore(input: {
       if (!PHASES.has(phase)) throw new SpeechPackError('tamper', 'speech-pack phase is invalid')
       return replaceTransaction(transactionId, (record) => ({ ...record, phase }))
     },
-    async settleAndDispose() {
-      if (disposed) return
-      disposed = true
-      protector.retire()
-      try {
-        await lease.release()
-      } finally {
-        await protector.settleAndDispose()
-      }
+    settleAndDispose() {
+      if (disposal) return disposal
+      closing = true
+      disposal = (async () => {
+        await updateQueue
+        disposed = true
+        protector.retire()
+        try {
+          await lease.release()
+        } finally {
+          await protector.settleAndDispose()
+        }
+      })()
+      return disposal
     }
   }
 }
