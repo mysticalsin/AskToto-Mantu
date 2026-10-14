@@ -12,6 +12,105 @@ import { sha256Hex } from '../crypto'
 // The existing repository bundle checker is the canonical deploy-equivalent esbuild path.
 import { bundleEntry } from '../../scripts/check-worker-bundle.mjs'
 
+interface RelayProtocolFixture {
+  runtimeOnlySlots: {
+    grantToken: { wireLength: number; valueIncluded: false }
+    grantDigest: { wireLength: number; valueIncluded: false }
+  }
+  routes: {
+    routeA: {
+      routeId: 'deepgram-via-gateway'
+      modelId: 'nova-3'
+      policyVersion: string
+      configVersion: string
+      language: string
+    }
+    routeB: {
+      routeId: 'workers-ai-nova3'
+      modelId: '@cf/deepgram/nova-3'
+      policyVersion: string
+      configVersion: string
+      language: string
+    }
+  }
+  limits: Record<string, number>
+  capability: {
+    request: Record<string, unknown>
+    readyResponse: Record<string, unknown>
+  }
+  create: {
+    request: {
+      operation: 'create-session'
+      captureGeneration: number
+      tracks: Array<'microphone' | 'system'>
+      language: string
+      consent: {
+        accepted: true
+        captureGeneration: number
+        tracks: Array<'microphone' | 'system'>
+        issuedAt: number
+        expiresAt: number
+      }
+    }
+    responseTemplate: {
+      captureGeneration: number
+      grants: Array<{ track: 'microphone' | 'system'; streamEpoch: number }>
+      limits: Record<string, number>
+    }
+  }
+  upgrade: { descriptorTemplate: Record<string, unknown> }
+  status: { request: Record<string, unknown> }
+  cancel: { request: Record<string, unknown> }
+  events: {
+    partial: Record<string, unknown>
+    final: Record<string, unknown>
+    terminal: Record<string, unknown>
+  }
+  epochProgression: { sessions: Array<{ streamEpoch: number }> }
+}
+
+const PROTOCOL_FIXTURE = JSON.parse(
+  readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '../../../scripts/qa/fixtures/speech-relay-protocol-v1.json'),
+    'utf8'
+  )
+) as RelayProtocolFixture
+const ROUTE_A = PROTOCOL_FIXTURE.routes.routeA
+const ROUTE_B = PROTOCOL_FIXTURE.routes.routeB
+const PARTIAL_PROVIDER_FRAME = JSON.stringify({
+  type: 'Results',
+  start: 0,
+  duration: 0.45,
+  is_final: false,
+  channel: {
+    alternatives: [
+      {
+        transcript: 'Hello',
+        words: [{ word: 'Hello', start: 0, end: 0.45, language: 'en', speaker: 0 }]
+      }
+    ]
+  },
+  languages: ['en']
+})
+const FINAL_PROVIDER_FRAME = JSON.stringify({
+  type: 'Results',
+  start: 0,
+  duration: 0.9,
+  is_final: true,
+  channel: {
+    alternatives: [
+      {
+        transcript: 'Hello, world.',
+        words: [
+          { word: 'Hello,', start: 0, end: 0.45, language: 'en', speaker: 0 },
+          { word: 'bonjour.', start: 0.5, end: 0.9, language: 'fr', speaker: 0 }
+        ]
+      }
+    ]
+  },
+  languages: ['en', 'fr']
+})
+
 const TEST_INGEST_SECRET = 'fixture-only-operator-ingest-secret'
 const TEST_MANAGEMENT_TOKEN = 'fixture-only-management-token'
 const TEST_GATEWAY_TOKEN = 'fixture-only-gateway-run-token'
@@ -23,8 +122,6 @@ const AUDIENCE = 'metis-test-audience'
 const ACCOUNT = 'account-test-001'
 const GATEWAY = 'speech-gateway-test'
 const DEPLOYMENT = 'staging-synthetic'
-const POLICY_VERSION = 'runtime-policy-v1'
-const CONFIG_VERSION = 'runtime-config-v1'
 const IMPLEMENTATION_REVISION = 'runtime-fixture-revision'
 
 const providerWorker = `
@@ -55,15 +152,13 @@ export default {
     server.addEventListener('message', event => {
       if (typeof event.data === 'string') {
         if (event.data === '{"type":"CloseStream"}') {
+          server.send(${JSON.stringify(FINAL_PROVIDER_FRAME)});
           server.send(JSON.stringify({ type: 'Metadata', request_id: 'fixture-request' }));
           server.close(1000, 'fixture complete');
         }
         return;
       }
-      server.send(JSON.stringify({ type: 'Results', start: 0, duration: 0.1, is_final: true,
-        channel: { alternatives: [{ transcript: 'fixture transcript', words: [
-          { word: 'fixture', start: 0, end: 0.05, speaker: 0 }
-        ] }] }, languages: ['en'] }));
+      server.send(${JSON.stringify(PARTIAL_PROVIDER_FRAME)});
     });
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -71,7 +166,8 @@ export default {
 `
 
 async function makeRuntime(routeId: 'deepgram-via-gateway' | 'workers-ai-nova3' = 'deepgram-via-gateway') {
-  const modelId = routeId === 'deepgram-via-gateway' ? 'nova-3' : '@cf/deepgram/nova-3'
+  const route = routeId === 'deepgram-via-gateway' ? ROUTE_A : ROUTE_B
+  const modelId = route.modelId
   const operatorBundle = await bundleEntry()
   const runtime = new Miniflare({
     workers: [
@@ -90,16 +186,19 @@ async function makeRuntime(routeId: 'deepgram-via-gateway' | 'workers-ai-nova3' 
           OPERATOR_SKILL_PRIVATE_KEY: 'fixture-only-skill-key',
           SPEECH_TENANT_ID: TENANT,
           SPEECH_AUDIENCE: AUDIENCE,
-          SPEECH_POLICY_VERSION: POLICY_VERSION,
+          SPEECH_POLICY_VERSION: route.policyVersion,
           SPEECH_ROUTE_ID: routeId,
           SPEECH_MODEL_ID: modelId,
-          SPEECH_CONFIG_VERSION: CONFIG_VERSION,
-          SPEECH_ALLOWED_LANGUAGES: 'multi,en,fr',
+          SPEECH_CONFIG_VERSION: route.configVersion,
+          SPEECH_ALLOWED_LANGUAGES:
+            routeId === 'deepgram-via-gateway'
+              ? (PROTOCOL_FIXTURE.capability.readyResponse.languages as string[]).join(',')
+              : route.language,
           SPEECH_MAX_CONCURRENT_SESSIONS: '2',
           SPEECH_MAX_CONCURRENT_TRACKS: '4',
-          SPEECH_BUDGET_WINDOW_MS: '60000',
-          SPEECH_BUDGET_MAX_MS: '60000',
-          SPEECH_MAX_SESSION_MS: '30000',
+          SPEECH_BUDGET_WINDOW_MS: '120000',
+          SPEECH_BUDGET_MAX_MS: '120000',
+          SPEECH_MAX_SESSION_MS: '60000',
           SPEECH_DEPLOYMENT_ID: DEPLOYMENT,
           SPEECH_GATEWAY_ID: GATEWAY,
           SPEECH_IMPLEMENTATION_REVISION: IMPLEMENTATION_REVISION,
@@ -166,6 +265,24 @@ async function makeRuntime(routeId: 'deepgram-via-gateway' | 'workers-ai-nova3' 
     approval: 'approved',
     license_jti: LICENSE_JTI
   })
+  for (const track of ['microphone', 'system'] as const) {
+    await database
+      .prepare(`INSERT INTO speech_capture_epochs (
+        tenant_id, audience, license_jti, device_id, capture_generation, track, last_epoch, expires_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(
+        TENANT,
+        AUDIENCE,
+        LICENSE_JTI,
+        DEVICE,
+        PROTOCOL_FIXTURE.create.request.captureGeneration,
+        track,
+        10,
+        now + 300_000,
+        now
+      )
+      .run()
+  }
   const refs = ['gateway-readback', 'provider-retention', 'synthetic-sink-test', 'relay-runtime-test'].map((kind) => ({
     kind,
     reference: `fixture:${kind}`,
@@ -188,13 +305,13 @@ async function makeRuntime(routeId: 'deepgram-via-gateway' | 'workers-ai-nova3' 
       GATEWAY,
       routeId,
       modelId,
-      CONFIG_VERSION,
-      POLICY_VERSION,
+      route.configVersion,
+      route.policyVersion,
       IMPLEMENTATION_REVISION,
       'reviewer@example.invalid',
       'reviewer@example.invalid',
       JSON.stringify(refs),
-      now + 60_000,
+      now + 300_000,
       1,
       now
     )
@@ -246,17 +363,34 @@ describe('speech relay on pinned hosted workerd', () => {
         inferenceCalls: 0
       })
 
+      const capabilityBody = JSON.stringify(PROTOCOL_FIXTURE.capability.request)
+      const capability = await runtime.dispatchFetch(
+        (await signedRequest({
+          license,
+          now,
+          path: '/v1/speech/capability',
+          method: 'POST',
+          body: capabilityBody
+        })) as never
+      )
+      expect(capability.status).toBe(200)
+      const capabilityResponse = (await capability.json()) as Record<string, unknown>
+      expect(capabilityResponse).toMatchObject({
+        ...PROTOCOL_FIXTURE.capability.readyResponse,
+        validUntil: expect.any(Number)
+      })
+      expect(Number(capabilityResponse.validUntil)).toBeGreaterThan(now)
+
+      const captureGeneration = PROTOCOL_FIXTURE.create.request.captureGeneration
+      const createTemplate = PROTOCOL_FIXTURE.create.request
       const createBody = JSON.stringify({
-        operation: 'create-session',
-        captureGeneration: 3,
+        ...createTemplate,
         tracks: ['microphone'],
-        language: 'multi',
         consent: {
-          accepted: true,
-          captureGeneration: 3,
+          ...createTemplate.consent,
           tracks: ['microphone'],
           issuedAt: now,
-          expiresAt: now + 30_000
+          expiresAt: now + 60_000
         }
       })
       const createdResponse = await runtime.dispatchFetch(
@@ -267,22 +401,43 @@ describe('speech relay on pinned hosted workerd', () => {
         protocolVersion: number
         sessionId: string
         captureGeneration: number
+        routeId: string
+        model: string
+        configVersion: string
+        policyVersion: string
+        language: string
+        limits: Record<string, number>
         grants: Array<{ track: 'microphone' | 'system'; token: string; streamEpoch: number }>
       }
       expect(created.protocolVersion).toBe(1)
-      expect(created.captureGeneration).toBe(3)
+      expect(created).toMatchObject({
+        routeId: ROUTE_A.routeId,
+        model: ROUTE_A.modelId,
+        configVersion: ROUTE_A.configVersion,
+        policyVersion: ROUTE_A.policyVersion,
+        language: ROUTE_A.language,
+        captureGeneration,
+        limits: PROTOCOL_FIXTURE.limits
+      })
+      expect(created.captureGeneration).toBe(captureGeneration)
       expect(created.grants).toHaveLength(1)
       const grant = created.grants[0]
       expect(grant).toBeDefined()
       if (!grant) throw new Error('fixture expected one grant')
+      expect(grant.streamEpoch).toBe(PROTOCOL_FIXTURE.create.responseTemplate.grants[0]?.streamEpoch)
+      expect(grant.token).toMatch(
+        new RegExp(`^[A-Za-z0-9_-]{${PROTOCOL_FIXTURE.runtimeOnlySlots.grantToken.wireLength}}$`)
+      )
+      const grantDigest = await sha256Hex(grant.token)
+      expect(grantDigest).toMatch(/^[a-f0-9]{64}$/)
 
       const descriptor = JSON.stringify({
-        operation: 'open-track',
+        ...PROTOCOL_FIXTURE.upgrade.descriptorTemplate,
         sessionId: created.sessionId,
         track: grant.track,
         captureGeneration: created.captureGeneration,
         streamEpoch: grant.streamEpoch,
-        grantDigest: await sha256Hex(grant.token)
+        grantDigest
       })
       const opened = await runtime.dispatchFetch(
         (await signedRequest({
@@ -324,25 +479,9 @@ describe('speech relay on pinned hosted workerd', () => {
       await terminalReceived
       expect(events).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({
-            type: 'transcript',
-            protocolVersion: 1,
-            sessionId: created.sessionId,
-            captureGeneration: 3,
-            track: 'microphone',
-            streamEpoch: grant.streamEpoch,
-            sequence: 1,
-            text: 'fixture transcript',
-            languages: ['en']
-          }),
-          expect.objectContaining({
-            type: 'terminal',
-            protocolVersion: 1,
-            sessionId: created.sessionId,
-            closeConfirmed: true,
-            tail: 'complete',
-            lastSequence: 1
-          })
+          expect.objectContaining({ ...PROTOCOL_FIXTURE.events.partial, sessionId: created.sessionId }),
+          expect.objectContaining({ ...PROTOCOL_FIXTURE.events.final, sessionId: created.sessionId }),
+          expect.objectContaining({ ...PROTOCOL_FIXTURE.events.terminal, sessionId: created.sessionId })
         ])
       )
       const providerState = (await (await gateway.fetch('https://gateway.fixture/_fixture/state')).json()) as {
@@ -358,7 +497,7 @@ describe('speech relay on pinned hosted workerd', () => {
         observedAuthorization: `Token ${TEST_DEEPGRAM_KEY}`,
         observedGatewayAuthorization: `Bearer ${TEST_GATEWAY_TOKEN}`
       })
-      const statusBody = JSON.stringify({ operation: 'session-status', sessionId: created.sessionId })
+      const statusBody = JSON.stringify({ ...PROTOCOL_FIXTURE.status.request, sessionId: created.sessionId })
       const status = await runtime.dispatchFetch(
         (await signedRequest({
           license,
@@ -372,6 +511,7 @@ describe('speech relay on pinned hosted workerd', () => {
       expect(await status.json()).toMatchObject({
         protocolVersion: 1,
         sessionId: created.sessionId,
+        captureGeneration,
         tracks: [
           expect.objectContaining({
             track: 'microphone',
@@ -379,9 +519,53 @@ describe('speech relay on pinned hosted workerd', () => {
             phase: 'closed',
             closeConfirmed: true,
             tail: 'complete',
-            lastSequence: 1
+            lastSequence: 2
           })
         ]
+      })
+
+      const nextNow = Date.now()
+      const secondRequest = JSON.stringify({
+        ...createTemplate,
+        tracks: ['microphone'],
+        consent: {
+          ...createTemplate.consent,
+          tracks: ['microphone'],
+          issuedAt: nextNow,
+          expiresAt: nextNow + 60_000
+        }
+      })
+      const nextResponse = await runtime.dispatchFetch(
+        (await signedRequest({
+          license,
+          now: nextNow,
+          path: '/v1/speech/sessions',
+          method: 'POST',
+          body: secondRequest
+        })) as never
+      )
+      expect(nextResponse.status).toBe(200)
+      const nextSession = (await nextResponse.json()) as {
+        sessionId: string
+        grants: Array<{ track: 'microphone'; streamEpoch: number }>
+      }
+      expect(nextSession.grants[0]?.streamEpoch).toBe(PROTOCOL_FIXTURE.epochProgression.sessions[1]?.streamEpoch)
+      const cancelBody = JSON.stringify({ ...PROTOCOL_FIXTURE.cancel.request, sessionId: nextSession.sessionId })
+      const cancelled = await runtime.dispatchFetch(
+        (await signedRequest({
+          license,
+          now: Date.now(),
+          path: `/v1/speech/sessions/${nextSession.sessionId}/cancel`,
+          method: 'POST',
+          body: cancelBody
+        })) as never
+      )
+      expect(cancelled.status).toBe(200)
+      expect(await cancelled.json()).toMatchObject({
+        protocolVersion: 1,
+        sessionId: nextSession.sessionId,
+        cancelled: true,
+        cancellationRequested: false
       })
     } finally {
       await runtime.dispose()
@@ -391,17 +575,19 @@ describe('speech relay on pinned hosted workerd', () => {
   it('uses the distinct documented Workers AI Route B URL without Deepgram credentials', async () => {
     const { runtime, now, license } = await makeRuntime('workers-ai-nova3')
     try {
+      const captureGeneration = PROTOCOL_FIXTURE.create.request.captureGeneration
+      const createTemplate = PROTOCOL_FIXTURE.create.request
       const createBody = JSON.stringify({
-        operation: 'create-session',
-        captureGeneration: 4,
+        ...createTemplate,
+        captureGeneration,
         tracks: ['microphone'],
-        language: 'en',
+        language: ROUTE_B.language,
         consent: {
-          accepted: true,
-          captureGeneration: 4,
+          ...createTemplate.consent,
+          captureGeneration,
           tracks: ['microphone'],
           issuedAt: now,
-          expiresAt: now + 30_000
+          expiresAt: now + 60_000
         }
       })
       const createdResponse = await runtime.dispatchFetch(
@@ -411,17 +597,36 @@ describe('speech relay on pinned hosted workerd', () => {
       const created = (await createdResponse.json()) as {
         sessionId: string
         captureGeneration: number
+        routeId: string
+        model: string
+        configVersion: string
+        policyVersion: string
+        language: string
         grants: Array<{ track: 'microphone'; token: string; streamEpoch: number }>
       }
+      expect(created).toMatchObject({
+        routeId: ROUTE_B.routeId,
+        model: ROUTE_B.modelId,
+        configVersion: ROUTE_B.configVersion,
+        policyVersion: ROUTE_B.policyVersion,
+        language: ROUTE_B.language,
+        captureGeneration
+      })
       const grant = created.grants[0]
       if (!grant) throw new Error('fixture expected one Route B grant')
+      expect(grant.streamEpoch).toBe(PROTOCOL_FIXTURE.create.responseTemplate.grants[0]?.streamEpoch)
+      expect(grant.token).toMatch(
+        new RegExp(`^[A-Za-z0-9_-]{${PROTOCOL_FIXTURE.runtimeOnlySlots.grantToken.wireLength}}$`)
+      )
+      const grantDigest = await sha256Hex(grant.token)
+      expect(grantDigest).toMatch(/^[a-f0-9]{64}$/)
       const descriptor = JSON.stringify({
-        operation: 'open-track',
+        ...PROTOCOL_FIXTURE.upgrade.descriptorTemplate,
         sessionId: created.sessionId,
         track: grant.track,
         captureGeneration: created.captureGeneration,
         streamEpoch: grant.streamEpoch,
-        grantDigest: await sha256Hex(grant.token)
+        grantDigest
       })
       const opened = await runtime.dispatchFetch(
         (await signedRequest({
