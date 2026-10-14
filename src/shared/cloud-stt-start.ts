@@ -1,3 +1,5 @@
+import { effectiveCloudSttProvider, enforceSttPolicy, type CloudSttProviderId } from './cloud-stt-provider'
+
 export type CloudSttStartResult =
   | { ok: true; provider: 'cloudflare-nova3' | 'soniox' }
   | { ok: false; error?: string; code?: string }
@@ -13,8 +15,6 @@ export function cloudSttStartAcknowledgement(
   }
   return { ok: true, provider }
 }
-import { effectiveCloudSttProvider, enforceSttPolicy, type CloudSttProviderId } from './cloud-stt-provider'
-
 export function resolveCloudSttStartProvider(
   policy: Parameters<typeof enforceSttPolicy>[0],
   profile: unknown,
