@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import {
   compareMultisets,
   normalizeImportPaths,
@@ -336,7 +336,7 @@ function gitFixture(root, args) {
 
 function writeFixtureFile(root, path, contents) {
   const filePath = join(root, path)
-  mkdirSync(filePath.slice(0, filePath.lastIndexOf('/')), { recursive: true })
+  mkdirSync(dirname(filePath), { recursive: true })
   writeFileSync(filePath, contents)
 }
 
