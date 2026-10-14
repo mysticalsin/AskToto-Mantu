@@ -235,8 +235,15 @@ const plain = (value) =>
 const finite = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0
 const safeHash = (value) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex')
+const localFailures = new WeakMap()
+const PUBLIC_FAILURE_CODES = new Set(['summary-invalid', 'notice-too-large', 'digest-mismatch'])
+const readbackFailureCode = (error) => {
+  const localCode = error instanceof Error ? localFailures.get(error) : undefined
+  return PUBLIC_FAILURE_CODES.has(localCode) ? localCode : closedFailure(error)
+}
 const fail = (code) => {
   const error = new Error(code)
+  localFailures.set(error, code)
   error.code = code
   throw error
 }
@@ -993,7 +1000,7 @@ async function main() {
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   main().catch((error) => {
     process.stderr.write(
-      `::error title=ST-1 readback failure::stage=${readbackStage};code=${closedFailure(error)}\n`
+      `::error title=ST-1 readback failure::stage=${readbackStage};code=${readbackFailureCode(error)}\n`
     )
     process.exitCode = 1
   })
