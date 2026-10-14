@@ -25,6 +25,7 @@ on:
       - scripts/qa/provenance.mjs
       - scripts/qa/release-line.mjs
       - scripts/qa/st-1.mjs
+      - scripts/qa/st1-evidence-notice.mjs
       - scripts/qa/lib/st-1-core.mjs
       - scripts/qa/lib/st-1-termination.mjs
       - scripts/qa/lib/st-1-termination.test.ts
@@ -620,6 +621,12 @@ jobs:
             --fixtures fifo \
             --minutes 5 \
             --out st1-report/st-1-macos-fifo.json
+      - name: Summarize strict ST-1 report as a bounded notice
+        if: always()
+        continue-on-error: true
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: node scripts/qa/st1-evidence-notice.mjs --report st1-report/st-1-macos-fifo.json --provenance provenance/provenance.json --row fifo
       - name: Require a complete PASS report bound to this candidate
         if: always()
         env:
@@ -723,6 +730,10 @@ jobs:
             --history after-idle \
             --minutes 5 \
             --out st1-report/st-1-macos-synthetic-dataless.json
+      - name: Summarize strict ST-1 report as a bounded notice
+        if: always()
+        continue-on-error: true
+        run: node scripts/qa/st1-evidence-notice.mjs --report st1-report/st-1-macos-synthetic-dataless.json --provenance provenance/provenance.json --row synthetic-dataless
       - name: Require a complete PASS report bound to this candidate
         if: always()
         env:
@@ -928,6 +939,12 @@ jobs:
             --fixtures none \
             --minutes 5 \
             --out st1-report/st-1-macos-none.json
+      - name: Summarize strict ST-1 report as a bounded notice
+        if: always()
+        continue-on-error: true
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: node scripts/qa/st1-evidence-notice.mjs --report st1-report/st-1-macos-none.json --provenance provenance/provenance.json --row none
       - name: Require a complete PASS report bound to this candidate
         if: always()
         env:

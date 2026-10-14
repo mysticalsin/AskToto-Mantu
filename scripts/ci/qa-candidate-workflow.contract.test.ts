@@ -666,6 +666,41 @@ describe('QA candidate strict hosted ST-1 final reports', () => {
   })
 })
 
+describe('strict hosted ST-1 report notices remain diagnostic only', () => {
+  const jobs = [
+    ['st1-mac-fifo', 'fifo', 'st-1-macos-fifo.json'],
+    ['st1-mac-control', 'none', 'st-1-macos-none.json'],
+    ['st1-mac-dataless-synthetic', 'synthetic-dataless', 'st-1-macos-synthetic-dataless.json']
+  ]
+
+  it.each(
+    jobs
+  )('%s emits a bounded notice after measurement and before the unchanged strict gate', (name, row, report) => {
+    const jobSteps = steps(name)
+    const measurementIndex = jobSteps.findIndex((step) => step.includes('scripts/qa/st-1.mjs'))
+    const noticeIndex = jobSteps.findIndex((step) => step.includes('Summarize strict ST-1 report as a bounded notice'))
+    const gateIndex = jobSteps.findIndex((step) =>
+      step.includes('Require a complete PASS report bound to this candidate')
+    )
+    const notice = jobSteps[noticeIndex] ?? ''
+    expect(measurementIndex).toBeGreaterThan(-1)
+    expect(noticeIndex).toBeGreaterThan(measurementIndex)
+    expect(gateIndex).toBeGreaterThan(noticeIndex)
+    expect(notice).toContain('if: always()')
+    expect(notice).toContain('continue-on-error: true')
+    expect(notice).toContain('scripts/qa/st1-evidence-notice.mjs')
+    expect(notice).toContain(`--report st1-report/${report}`)
+    expect(notice).toContain(`--row ${row}`)
+    expect(jobContinueOnError(job(name))).toBe('false')
+    expect(jobSteps[gateIndex]).toContain('.verdict == "PASS"')
+    expect(jobSteps[gateIndex]).not.toContain('st1-evidence-notice')
+  })
+
+  it('runs a self-test when the notice serializer changes', () => {
+    expect(workflow).toContain('      - scripts/qa/st1-evidence-notice.mjs')
+  })
+})
+
 describe('QA candidate binds hosted ST-1 provenance before measurement', () => {
   const strictJobs = ['st1-mac-fifo', 'st1-mac-control', 'st1-mac-dataless-synthetic']
   const bindingName = 'Bind QA provenance to this workflow identity'
