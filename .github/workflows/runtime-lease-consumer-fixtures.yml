@@ -50,7 +50,7 @@ jobs:
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Run held runtime admission and actual speaker-handler tests
         run: >-
-          node node_modules/vitest/vitest.mjs run --maxWorkers=2 --reporter=json --outputFile="$REPORT"
+          node node_modules/vitest/vitest.mjs run --maxWorkers=2 --reporter=default --reporter=json --outputFile="$REPORT"
           src/main/llm/local-runtime.concurrency.test.ts
           src/main/whisper-import.test.ts
           src/main/speaker-session-wiring.test.ts
