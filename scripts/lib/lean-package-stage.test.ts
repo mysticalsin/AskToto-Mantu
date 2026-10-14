@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto'
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { realpathSync, unlinkSync, writeFileSync as writeFileSyncNow } from 'node:fs'
+import { closeSync, fstatSync, openSync, realpathSync, unlinkSync, writeFileSync as writeFileSyncNow } from 'node:fs'
+import { createRequire } from 'node:module'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   canonicalPrivateTemporaryRoot,
@@ -10,7 +11,8 @@ import {
   electronFactoryArchiveMemberPath,
   electronFactoryArchivePath,
   electronFactoryTemplatePath,
-  removeElectronDefaultAppTemplate
+  removeElectronDefaultAppTemplate,
+  retainedElectronArchiveSource
 } from './lean-package-stage.mjs'
 
 const roots: string[] = []
@@ -146,5 +148,39 @@ describe('lean package factory template cleanup', () => {
     expect(electronFactoryArchivePath('/selected/resources/electron-dist', '43.6.0', 'darwin', 'x64')).toBe(
       join('/selected/resources/electron-dist', 'electron-v43.6.0-darwin-x64.zip')
     )
+  })
+})
+
+describe('verified Electron archive stream ownership', () => {
+  it('extracts through real unzipper without letting stream destruction close the owner descriptor', async () => {
+    const { resources } = await fixture()
+    const path = join(resources, 'factory.zip')
+    const zip = Buffer.from(
+      'UEsDBBQAAAAIAAAAIVD0kwwKIQAAAB8AAAAaAAAAcmVzb3VyY2VzL2RlZmF1bHRfYXBwLmFzYXLLL89LTVFwzUlNLinKz1NIS0wuyS+qVChJzS3ISSxJBQBQSwECFAMUAAAACAAAACFQ9JMMCiEAAAAfAAAAGgAAAAAAAAAAAAAAgAEAAAAAcmVzb3VyY2VzL2RlZmF1bHRfYXBwLmFzYXJQSwUGAAAAAAEAAQBIAAAAWQAAAAAA',
+      'base64'
+    )
+    await writeFile(path, zip)
+    const fd = openSync(path, 'r')
+    try {
+      const source = retainedElectronArchiveSource(fd, zip.length)
+      const unzipper = createRequire(import.meta.url)('unzipper')
+      const archive = await unzipper.Open.custom(source)
+      expect(archive.files).toHaveLength(1)
+      expect(archive.files[0].path).toBe('resources/default_app.asar')
+      await expect(archive.files[0].buffer()).resolves.toEqual(Buffer.from('owned Electron factory template'))
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(fstatSync(fd).size).toBe(zip.length)
+      const stream = source.stream(0, 4)
+      stream.destroy()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(fstatSync(fd).size).toBe(zip.length)
+      const chunks: Buffer[] = []
+      for await (const chunk of source.stream(1, 3)) chunks.push(Buffer.from(chunk))
+      expect(Buffer.concat(chunks)).toEqual(zip.subarray(1, 4))
+      expect(() => source.stream(-1, 1)).toThrow(/invalid range/)
+      expect(() => source.stream(0, zip.length + 1)).toThrow(/invalid range/)
+    } finally {
+      closeSync(fd)
+    }
   })
 })
