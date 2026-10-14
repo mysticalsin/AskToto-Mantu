@@ -693,7 +693,7 @@ export function requireAuth(): boolean {
   if (isStickyConfigured()) return s.signedIn
   return !s.configured || s.signedIn
 }
-
+export const captureAuthSessionBoundary = () => speechAuthLeaseController.captureSessionBoundary(requireAuth)
 speechAuthLeaseController = new SpeechAuthLeaseController({
   prepareSession: loadSession,
   readSession: () => session,

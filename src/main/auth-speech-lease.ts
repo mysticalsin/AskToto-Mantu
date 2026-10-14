@@ -98,6 +98,18 @@ export class SpeechAuthLeaseController {
 
   constructor(private readonly dependencies: SpeechAuthLeaseDependencies) {}
 
+  /** Bind non-speech async reads to the underlying auth session without minting a provider lease. */
+  captureSessionBoundary(isAuthorized: () => boolean): () => boolean {
+    const session = this.dependencies.readSession()
+    const sessionEpoch = this.dependencies.readSessionEpoch()
+    const profilePath = this.dependencies.readProfilePath()
+    return () =>
+      this.dependencies.readProfilePath() === profilePath &&
+      this.dependencies.readSessionEpoch() === sessionEpoch &&
+      this.dependencies.readSession() === session &&
+      isAuthorized()
+  }
+
   private retire(): void {
     this.authorityEpoch += 1
     if (this.latestRecord) this.latestRecord.retired = true

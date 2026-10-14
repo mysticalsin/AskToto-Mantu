@@ -101,7 +101,6 @@ import {
   type Settings,
   type CalendarEvent,
   type AskStart,
-  type ImportJobView,
   type ImportAssetsProgress,
   type ListeningStatePayload,
   type ScreenContextResult,
@@ -743,6 +742,7 @@ import {
   ssoBootstrapAllowed
 } from './auth'
 import { calendarToday } from './calendar'
+import * as importJobsSnapshotIpc from './import-jobs-snapshot-ipc'
 import { fetchTeamsTranscriptForMeeting } from './graph-transcript'
 import {
   parakeetModelReady,
@@ -1387,35 +1387,7 @@ function assertBrainReader(event: Electron.IpcMainInvokeEvent): void {
   assertMainWindow(event)
 }
 
-function importJobView(job: ImportJob): ImportJobView {
-  let pct: number | null = null
-  if (job.state === 'done') pct = 100
-  else if (job.progressPct !== undefined) pct = Math.min(99, Math.max(0, Math.round(job.progressPct)))
-  else if (job.totalChunks > 0) pct = Math.min(99, Math.round((job.cursor / job.totalChunks) * 100))
-  let queuePosition: number | undefined
-  if (job.state === 'queued' && importJobs) {
-    const waiting = importJobs
-      .list()
-      .filter((j) => j.state === 'queued')
-      .sort((a, b) => a.createdAt - b.createdAt)
-    const i = waiting.findIndex((j) => j.jobId === job.jobId)
-    if (i >= 0) queuePosition = i + 1
-  }
-  return {
-    jobId: job.jobId,
-    title: job.title,
-    state: job.state,
-    cursor: job.cursor,
-    totalChunks: job.totalChunks,
-    pct,
-    error: job.error,
-    recapError: job.recapError,
-    file: job.file,
-    createdAt: job.createdAt,
-    updatedAt: job.updatedAt,
-    queuePosition
-  }
-}
+const importJobView = importJobsSnapshotIpc.createImportJobView(() => importJobs?.list() ?? [])
 
 function publishAsrAssetsProgress(progress = asrAssetsProgress()): void {
   if (win && !win.isDestroyed()) {
@@ -2968,9 +2940,11 @@ function createWindow(targetDisplay?: Electron.Display): void {
     webContents: selfWebContents,
     webContentsId: selfWebContents.id
   }
-  selfWebContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
-    if (win === self && isMainFrame && !isInPlace) invalidateCloudSttOwner(selfOwner)
-  })
+  importJobsSnapshotIpc.trackMainDocument(
+    selfWebContents,
+    () => win === self,
+    () => invalidateCloudSttOwner(selfOwner)
+  )
   win.on('blur', () => commandControl.onWindowBlurred(win === self, parkRightEdgeReaderOnBlur))
   win.on('hide', () => commandControl.onWindowHidden(win === self))
   win.on('closed', () =>
@@ -9184,8 +9158,12 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.importJobsList, (e) => {
     assertMainWindow(e)
-    if (!requireAuth()) return []
-    return getImportJobs().list().map(importJobView)
+    return importJobsSnapshotIpc.listImportJobsSnapshot(
+      e,
+      () => win,
+      () => getImportJobs().snapshot(),
+      importJobView
+    )
   })
   ipcMain.handle(IPC.importJobCancel, async (e, raw) => {
     assertMainWindow(e)
