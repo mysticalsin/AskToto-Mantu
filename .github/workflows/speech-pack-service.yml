@@ -1,0 +1,150 @@
+name: Speech pack service validation
+
+on:
+  push:
+    paths:
+      - .github/workflows/speech-pack-service.yml
+      - package.json
+      - package-lock.json
+      - vitest.config.ts
+      - src/main/features/components/speech-pack/**
+      - src/main/speech-pack-bootstrap*
+      - src/main/asr-bundled-ensure*
+      - src/main/asr-model-protocol*
+      - src/main/infra/scheduler/speech-pack-poll.ts
+      - src/shared/speech-pack*
+      - src/preload/speech-pack*
+      - src/renderer/src/features/settings/SpeechPackSection.tsx
+      - scripts/speech-pack-resources.test.ts
+      - resources/speech-pack-fixtures/**
+      - build/speech-pack-profile.json
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: speech-pack-service-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  pack-service:
+    name: Speech pack service and desktop boundary (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install locked test dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Run the optional pack and desktop boundary tests
+        env:
+          METIS_CI_ROOT_REPORT: ${{ runner.temp }}/speech-pack-service-root-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
+        run: |
+          node -e "require('node:fs').rmSync(process.env.METIS_CI_ROOT_REPORT, { force: true })"
+          node node_modules/vitest/vitest.mjs run --config vitest.config.ts --maxWorkers=2 \
+            src/main/features/components/speech-pack/engine.test.ts \
+            src/main/features/components/speech-pack/download.test.ts \
+            src/main/features/components/speech-pack/manifest.test.ts \
+            src/main/features/components/speech-pack/isolation.contract.test.ts \
+            src/main/features/components/speech-pack/flag.test.ts \
+            src/main/features/components/speech-pack/profile.test.ts \
+            src/main/features/components/speech-pack/resolver.test.ts \
+            src/main/features/components/speech-pack/self-test.test.ts \
+            src/main/features/components/speech-pack/service.test.ts \
+            src/main/asr-bundled-ensure.test.ts \
+            src/main/asr-model-protocol.test.ts \
+            src/main/speech-pack-bootstrap.test.ts \
+            src/preload/speech-pack.test.ts \
+            src/shared/speech-pack.test.ts \
+            scripts/speech-pack-resources.test.ts
+
+      - name: Verify and summarize the actual shared test report
+        if: always()
+        env:
+          REPORT: ${{ runner.temp }}/speech-pack-service-root-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs')
+          const reportPath = process.env.REPORT
+          if (!fs.existsSync(reportPath)) {
+            console.error('Speech foundation Vitest report is missing.')
+            process.exit(1)
+          }
+          const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'))
+          const passed = report.numPassedTests
+          const failed = report.numFailedTests
+          const pending = report.numPendingTests ?? 0
+          const todo = report.numTodoTests ?? 0
+          const skipped = pending + todo
+          const total = report.numTotalTests
+          const counts = [total, passed, failed, pending, todo]
+          const results = report.testResults ?? []
+          const passedSuites = report.numPassedTestSuites
+          const failedSuites = report.numFailedTestSuites
+          const pendingSuites = report.numPendingTestSuites
+          const suiteCounts = [report.numTotalTestSuites, passedSuites, failedSuites, pendingSuites]
+          const assertionCount = results.reduce(
+            (sum, result) => sum + (Array.isArray(result.assertionResults) ? result.assertionResults.length : 0),
+            0
+          )
+          const invalidFiles = results.filter(
+            (result) =>
+              result.status !== 'passed' ||
+              !Array.isArray(result.assertionResults) ||
+              result.assertionResults.length === 0 ||
+              result.assertionResults.some((assertion) => assertion.status !== 'passed')
+          )
+          const files = results.map((result) => String(result.name).replace(/\\/g, '/'))
+          const required = [
+            'src/main/features/components/speech-pack/engine.test.ts',
+            'src/main/features/components/speech-pack/download.test.ts',
+            'src/main/features/components/speech-pack/manifest.test.ts',
+            'src/main/features/components/speech-pack/isolation.contract.test.ts',
+            'src/main/features/components/speech-pack/flag.test.ts',
+            'src/main/features/components/speech-pack/profile.test.ts',
+            'src/main/features/components/speech-pack/resolver.test.ts',
+            'src/main/features/components/speech-pack/self-test.test.ts',
+            'src/main/features/components/speech-pack/service.test.ts',
+            'src/main/asr-bundled-ensure.test.ts',
+            'src/main/asr-model-protocol.test.ts',
+            'src/main/speech-pack-bootstrap.test.ts',
+            'src/preload/speech-pack.test.ts',
+            'src/shared/speech-pack.test.ts',
+            'scripts/speech-pack-resources.test.ts'
+          ]
+          const missing = required.filter((file) => !files.some((actual) => actual.endsWith(file)))
+          console.log(`Shared speech tests: files=${files.length}, total=${total}, assertion_count=${assertionCount}, executed=${passed + failed}, passed=${passed}, failed=${failed}, skipped=${skipped}, suites_passed=${passedSuites}, suites_failed=${failedSuites}, suites_pending=${pendingSuites}`)
+          if (report.success !== true || !counts.every(Number.isSafeInteger) || counts.some((count) => count < 0) ||
+              !suiteCounts.every(Number.isSafeInteger) || suiteCounts.some((count) => count < 0) ||
+              results.length !== required.length || missing.length > 0 || invalidFiles.length > 0 ||
+              report.numTotalTestSuites < 1 ||
+              report.numTotalTestSuites !== passedSuites + failedSuites + pendingSuites ||
+              failedSuites !== 0 || pendingSuites !== 0 || passedSuites !== report.numTotalTestSuites ||
+              total < 1 || assertionCount !== total ||
+              total !== passed + failed + skipped || passed !== total || failed > 0 || skipped > 0) {
+            console.error('Shared speech test report is incomplete or contains failures/skips.')
+            process.exit(1)
+          }
+          NODE
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: speech-pack-service-shared-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/speech-pack-service-root-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.os }}.json
+          if-no-files-found: error
+          retention-days: 14
