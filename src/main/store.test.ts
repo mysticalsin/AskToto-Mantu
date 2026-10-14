@@ -35,6 +35,7 @@ import {
   observeSettingsSnapshot,
   getSettingsObservationEpoch
 } from './settings-observation'
+import { captureSettingsAuthority, isSettingsAuthorityCurrent } from './settings-authority-history'
 
 const hardware = vi.hoisted(() => ({ totalmem: vi.fn(() => 16 * 1024 ** 3) }))
 vi.mock('node:os', async (importOriginal) => {
@@ -135,6 +136,54 @@ describe('store', () => {
     }
   })
 
+  it('observes managed getter A→B→A without a settings read and keeps the old import receipt retired', () => {
+    writeFileSync(join(userData, 'settings.json'), JSON.stringify({ onboardingDone: true }), 'utf8')
+    const managedPath = join(userData, 'managed-config.json')
+    writeFileSync(managedPath, JSON.stringify({ allowedProviders: ['openai', 'anthropic'] }), 'utf8')
+    resetSettingsCacheForTests()
+    getSettings()
+    const original = captureSettingsAuthority('import')
+    expect(original).not.toBeNull()
+
+    writeFileSync(managedPath, JSON.stringify({ allowedProviders: ['anthropic', 'openai', 'openai'] }), 'utf8')
+    expect(getAllowedProviders()).toEqual(['anthropic', 'openai', 'openai'])
+    expect(isSettingsAuthorityCurrent(original!)).toBe(true)
+
+    writeFileSync(managedPath, JSON.stringify({ allowedProviders: ['anthropic'] }), 'utf8')
+    expect(getAllowedProviders()).toEqual(['anthropic'])
+    expect(isSettingsAuthorityCurrent(original!)).toBe(false)
+    expect(captureSettingsAuthority('import')).toBeNull()
+
+    writeFileSync(managedPath, JSON.stringify({ allowedProviders: ['openai', 'anthropic'] }), 'utf8')
+    expect(getAllowedProviders()).toEqual(['openai', 'anthropic'])
+    expect(captureSettingsAuthority('import')).toBeNull()
+    resetSettingsCacheForTests()
+    getSettings()
+    const restored = captureSettingsAuthority('import')
+    expect(restored).not.toBeNull()
+    expect(isSettingsAuthorityCurrent(original!)).toBe(false)
+  })
+
+  it('keeps semantic receipts current across equivalent verified settings boundaries', async () => {
+    writeFileSync(join(userData, 'settings.json'), JSON.stringify({ onboardingDone: true }), 'utf8')
+    writeFileSync(join(userData, 'managed-config.json'), JSON.stringify({ allowedProviders: ['openai'] }), 'utf8')
+    resetSettingsCacheForTests()
+    getSettings()
+    const importReceipt = captureSettingsAuthority('import')
+    const persistenceReceipt = captureSettingsAuthority('persistence')
+    expect(importReceipt).not.toBeNull()
+    expect(persistenceReceipt).not.toBeNull()
+
+    const first = await readSettingsAtAuthorityBoundary()
+    const second = await readSettingsAtAuthorityBoundary()
+    expect(first.history.import).not.toBeNull()
+    expect(first.history.persistence).not.toBeNull()
+    expect(second.history.import).not.toBeNull()
+    expect(second.history.persistence).not.toBeNull()
+    expect(isSettingsAuthorityCurrent(importReceipt!)).toBe(true)
+    expect(isSettingsAuthorityCurrent(persistenceReceipt!)).toBe(true)
+  })
+
   it('projects the fresh lean route, persists it on the first unrelated write, and preserves it after restart', async () => {
     await configureFreshLeanSpeechDefaults('lean', verifiedLeanPackage())
     const projected = getSettings()
@@ -218,11 +267,11 @@ describe('store', () => {
   it('preserves an explicit broker route on a fresh lean profile', async () => {
     writeFileSync(
       join(userData, 'settings.json'),
-      JSON.stringify({ brokerSpeech: { transport: 'broker-v1', engine: 'openai-realtime' } }),
+      JSON.stringify({ brokerSpeech: { transport: 'broker-v1', engine: 'cloudflare-nova3' } }),
       'utf8'
     )
     await configureFreshLeanSpeechDefaults('lean', verifiedLeanPackage())
-    expect(getSettings().brokerSpeech).toEqual({ transport: 'broker-v1', engine: 'openai-realtime' })
+    expect(getSettings().brokerSpeech).toEqual({ transport: 'broker-v1', engine: 'cloudflare-nova3' })
   })
 
   it('advances the opaque speech selection identity on accepted selection changes, including a return', () => {

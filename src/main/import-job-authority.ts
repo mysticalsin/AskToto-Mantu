@@ -1,5 +1,6 @@
 import type { Settings } from '@shared/ipc'
 import { isCloudOnlyProfile, resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
+import type { SettingsAuthorityReceipt } from './settings-authority-history'
 import type { SettingsObservation, SettingsPolicyAuthoritySnapshot } from './settings-observation'
 import {
   canRetainImportedTranscript,
@@ -11,17 +12,13 @@ import type { PrepareSavedReplacement } from './infra/storage/atomic-saved-write
 
 export type ImportCapabilityState = 'available' | 'cloud-only-unsupported' | 'unavailable'
 
-type ImportAuthoritySnapshot = SettingsPolicyAuthoritySnapshot & {
-  readonly history: Readonly<{ import: object | null }>
-}
-
 export interface ImportJobAuthorityDependencies {
   requireAuth(): boolean
   authGeneration(): number
-  readAuthority(): Promise<ImportAuthoritySnapshot>
+  readAuthority(): Promise<SettingsPolicyAuthoritySnapshot>
   currentObservation(): SettingsObservation | null
-  captureAuthorityReceipt(): object | null
-  isAuthorityReceiptCurrent(receipt: object): boolean
+  captureAuthorityReceipt(): SettingsAuthorityReceipt | null
+  isAuthorityReceiptCurrent(receipt: SettingsAuthorityReceipt): boolean
 }
 
 export interface ImportOperationAuthority {
@@ -74,7 +71,7 @@ export function createImportJobAuthority(deps: ImportJobAuthorityDependencies) {
   let authorityQueue: Promise<void> = Promise.resolve()
   let authorityRevision = 0
   let lastVerifiedEpoch: number | undefined
-  let lastVerifiedReceipt: object | undefined
+  let lastVerifiedReceipt: SettingsAuthorityReceipt | undefined
   let lastAuthGeneration: number | undefined
   let lastAuthorityScope: string | undefined
 
@@ -95,7 +92,7 @@ export function createImportJobAuthority(deps: ImportJobAuthorityDependencies) {
     return observation
   }
 
-  function receiptCurrent(receipt: object): boolean {
+  function receiptCurrent(receipt: SettingsAuthorityReceipt): boolean {
     try {
       return deps.isAuthorityReceiptCurrent(receipt)
     } catch {
@@ -103,8 +100,8 @@ export function createImportJobAuthority(deps: ImportJobAuthorityDependencies) {
     }
   }
 
-  function captureReceipt(): object {
-    let receipt: object | null
+  function captureReceipt(): SettingsAuthorityReceipt {
+    let receipt: SettingsAuthorityReceipt | null
     try {
       receipt = deps.captureAuthorityReceipt()
     } catch {

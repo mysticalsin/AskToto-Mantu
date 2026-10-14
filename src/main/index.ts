@@ -135,6 +135,7 @@ import {
   readSettingsAtAuthorityBoundary
 } from './store'
 import { getPublishedSettingsObservation } from './settings-observation'
+import { captureSettingsAuthority, isSettingsAuthorityCurrent } from './settings-authority-history'
 import { createStream } from './llm'
 import { isProxyOperatorFault, isTransient, nextBackoff, stripProxyFaultMarker } from './llm/retry'
 import { classifyExhaustion, type ExhaustionSignal } from './llm/exhaustion'
@@ -1425,7 +1426,9 @@ const importJobAuthority = createImportJobAuthority({
   requireAuth,
   authGeneration: getSpeechAuthSessionEpoch,
   readAuthority: readSettingsAtAuthorityBoundary,
-  currentObservation: getPublishedSettingsObservation
+  currentObservation: getPublishedSettingsObservation,
+  captureAuthorityReceipt: () => captureSettingsAuthority('import'),
+  isAuthorityReceiptCurrent: isSettingsAuthorityCurrent
 })
 const currentImportSettings = importJobAuthority.currentSettings
 const refreshImportSettings = importJobAuthority.refreshSettings

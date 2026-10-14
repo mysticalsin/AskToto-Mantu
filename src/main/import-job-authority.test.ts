@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import type { Settings } from '@shared/ipc'
 import type { SettingsObservation, SettingsPolicyAuthoritySnapshot } from './settings-observation'
+import type { SettingsAuthorityReceipt } from './settings-authority-history'
+import {
+  captureSettingsAuthority,
+  commitManagedAuthorityDocument,
+  getSettingsAuthorityHistory,
+  isSettingsAuthorityCurrent
+} from './settings-authority-history'
+import { getPublishedSettingsObservation, publishSettingsSnapshot } from './settings-observation'
 import { resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
 import { createImportJobAuthority } from './import-job-authority'
 
@@ -18,14 +26,14 @@ function settings(summaryOnly = false, cloudOnly = false): Settings {
   } as Settings
 }
 
-const authorityReceipt = Object.freeze({})
+const authorityReceipt = Object.freeze({}) as unknown as SettingsAuthorityReceipt
 
 function snapshot(
   value: Settings,
   epoch: number,
   readable = true,
-  receipt: object | null = authorityReceipt
-): SettingsPolicyAuthoritySnapshot & { history: { import: object | null; persistence?: object | null } } {
+  receipt: SettingsAuthorityReceipt | null = authorityReceipt
+): SettingsPolicyAuthoritySnapshot {
   return {
     settings: value,
     readable,
@@ -33,14 +41,14 @@ function snapshot(
     allowedProviders: null,
     localSpeechPack: null,
     lockedKeys: [],
-    history: { import: receipt }
+    history: { import: receipt, persistence: null }
   }
 }
 
 function testAuthorityReceipt() {
   return {
     captureAuthorityReceipt: () => authorityReceipt,
-    isAuthorityReceiptCurrent: (receipt: object) => receipt === authorityReceipt
+    isAuthorityReceiptCurrent: (receipt: SettingsAuthorityReceipt) => receipt === authorityReceipt
   }
 }
 
@@ -108,7 +116,7 @@ describe('import job authority boundary', () => {
   })
 
   it('rejects a settings A to B to A transition while the initial authority refresh is queued', async () => {
-    let receipt: object = Object.freeze({ generation: 1 })
+    let receipt = Object.freeze({ generation: 1 }) as unknown as SettingsAuthorityReceipt
     let current: SettingsObservation | null = snapshot(settings(), 1, true, receipt)
     let releaseRead: (() => void) | undefined
     let announceRead: (() => void) | undefined
@@ -134,16 +142,16 @@ describe('import job authority boundary', () => {
 
     const captured = authority.captureOperation()
     await readStarted
-    receipt = Object.freeze({ generation: 2 })
+    receipt = Object.freeze({ generation: 2 }) as unknown as SettingsAuthorityReceipt
     current = snapshot(settings(true), 2, true, receipt)
-    receipt = Object.freeze({ generation: 3 })
+    receipt = Object.freeze({ generation: 3 }) as unknown as SettingsAuthorityReceipt
     current = snapshot(settings(), 3, true, receipt)
     releaseRead?.()
     await expect(captured).rejects.toThrow(/policy could not be verified/)
   })
 
   it('never revives an operation across a completed semantic A to B to A before a generic refresh', async () => {
-    let receipt: object = Object.freeze({ generation: 1 })
+    let receipt = Object.freeze({ generation: 1 }) as unknown as SettingsAuthorityReceipt
     let current: SettingsObservation | null = snapshot(settings(), 1, true, receipt)
     let epoch = 1
     const authority = createImportJobAuthority({
@@ -160,9 +168,9 @@ describe('import job authority boundary', () => {
     })
     const operation = await authority.captureOperation()
     const firstReceipt = receipt
-    receipt = Object.freeze({ generation: 2 })
+    receipt = Object.freeze({ generation: 2 }) as unknown as SettingsAuthorityReceipt
     current = snapshot(settings(true), ++epoch, true, receipt)
-    receipt = Object.freeze({ generation: 3 })
+    receipt = Object.freeze({ generation: 3 }) as unknown as SettingsAuthorityReceipt
     current = snapshot(settings(), ++epoch, true, receipt)
 
     await authority.assertAdmissionAllowed()
@@ -172,8 +180,44 @@ describe('import job authority boundary', () => {
     expect(() => operation.assertCurrent()).toThrow(/policy could not be verified/)
   })
 
+  it('rejects a captured operation after the real settings publisher advances A to B to A', async () => {
+    const original = settings()
+    commitManagedAuthorityDocument('user', '/profile/import-authority-test.json', null, 'readable')
+    commitManagedAuthorityDocument('admin', '/machine/import-authority-test.json', null, 'readable')
+    publishSettingsSnapshot(original, true)
+
+    const authority = createImportJobAuthority({
+      requireAuth: () => true,
+      authGeneration: () => 3,
+      readAuthority: async () => {
+        const observation = getPublishedSettingsObservation()
+        if (!observation) throw new Error('No published settings')
+        return {
+          ...observation,
+          allowedProviders: null,
+          localSpeechPack: null,
+          lockedKeys: [],
+          history: getSettingsAuthorityHistory()
+        }
+      },
+      currentObservation: getPublishedSettingsObservation,
+      captureAuthorityReceipt: () => captureSettingsAuthority('import'),
+      isAuthorityReceiptCurrent: isSettingsAuthorityCurrent
+    })
+    const operation = await authority.captureOperation()
+    const originalReceipt = captureSettingsAuthority('import')
+    expect(originalReceipt).not.toBeNull()
+
+    publishSettingsSnapshot(settings(true), true)
+    publishSettingsSnapshot(original, true)
+    await authority.assertAdmissionAllowed()
+
+    expect(isSettingsAuthorityCurrent(originalReceipt!)).toBe(false)
+    expect(() => operation.assertCurrent()).toThrow(/policy could not be verified/)
+  })
+
   it('keeps a refused operation retired after its settings are restored and authority is refreshed', async () => {
-    let receipt: object = Object.freeze({ generation: 1 })
+    let receipt = Object.freeze({ generation: 1 }) as unknown as SettingsAuthorityReceipt
     let current: SettingsObservation | null = snapshot(settings(), 1, true, receipt)
     let epoch = 1
     const authority = createImportJobAuthority({
@@ -189,11 +233,11 @@ describe('import job authority boundary', () => {
       isAuthorityReceiptCurrent: (candidate) => candidate === receipt
     })
     const operation = await authority.captureOperation()
-    receipt = Object.freeze({ generation: 2 })
+    receipt = Object.freeze({ generation: 2 }) as unknown as SettingsAuthorityReceipt
     current = snapshot(settings(true), ++epoch, true, receipt)
     expect(() => operation.assertCurrent()).toThrow(/policy could not be verified/)
 
-    receipt = Object.freeze({ generation: 3 })
+    receipt = Object.freeze({ generation: 3 }) as unknown as SettingsAuthorityReceipt
     current = snapshot(settings(), ++epoch, true, receipt)
     await authority.assertAdmissionAllowed()
     expect(() => operation.assertCurrent()).toThrow(/policy could not be verified/)
