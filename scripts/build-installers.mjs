@@ -121,6 +121,11 @@ if (requestedTargets.includes('mac')) run('node', ['scripts/provision-electron-d
 for (const target of requestedTargets) run('node', ['scripts/fetch-llama-server.mjs', target])
 for (const target of requestedTargets) run('node', ['scripts/check-llama-sidecar.mjs', target])
 for (const target of requestedTargets) run('node', ['scripts/fetch-managed-node.mjs', target])
+// A Windows package is incomplete without the app-owned, API-backed OS-root helper and its exact byte
+// manifest. Build it on the Windows host; never check in a guessed or locally supplied executable.
+if (requestedTargets.includes('win')) {
+  run('pwsh', ['-NoProfile', '-File', 'scripts/build-win-os-roots.ps1'])
+}
 // metis-mac-helper Swift sidecar — must exist before a mac package or electron-builder only WARNS about
 // the missing extraResources dir and ships a silently degraded app (no Vision OCR, no frontmost watcher).
 if (requestedTargets.includes('mac')) {
@@ -141,6 +146,7 @@ run(
       }
     : {}
 )
+if (requestedTargets.includes('win')) run('node', ['scripts/stage-win-os-roots-inventory.mjs'])
 
 for (const t of requestedTargets) {
   if (t === 'mac') {
@@ -192,6 +198,7 @@ for (const t of requestedTargets) {
       ])
     )
     run('node', ['scripts/check-packaged-runtime.mjs', 'win', join(outDir, 'win-unpacked', 'resources'), '--post-sign'])
+    run('node', ['scripts/check-win-os-roots-package.mjs', join(outDir, 'win-unpacked', 'resources')])
     run('node', ['scripts/check-update-metadata.mjs', join(outDir, 'latest.yml')])
     if (verifyWindowsSignature) run('node', ['scripts/verify-signing.mjs', outDir])
     const executable = join(outDir, 'win-unpacked', 'Metis.exe')
