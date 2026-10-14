@@ -84,7 +84,7 @@ describe('MQA-245 — a diarization cluster label is not wrapped in the generic 
     expect(body).toMatch(/Them \(Speaker 3\):/)
   })
 
-  it('the bare label survives the round trip through the actual recall parser — the line is not lost', () => {
+  it('the bare label survives the round trip through recall.ts — the line is not lost', () => {
     // The real risk of touching a durable format: a line the writer emits that the reader cannot match
     // disappears from recall entirely. Run the actual reader used by recall rather than a source regex
     // or a duplicated parser, so the durable speaker identity is checked through shipped behavior.
