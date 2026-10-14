@@ -6,6 +6,7 @@ import {
   parse,
   readMeetingFields as frontmatter,
   recapSectionEndIndex,
+  recapSectionEndRe,
   serialize,
   setMeetingField
 } from './features/meetings/meeting-document'
