@@ -78,6 +78,9 @@ export default defineConfig({
     root: dirname(fileURLToPath(import.meta.url)),
     environment: 'node',
     env: hermeticHomeEnv,
+    // The real Workerd relay fixtures share CPU with the broader Operator suite.
+    // Match the two-worker limit already validated by the focused cross-platform relay CI lane.
+    maxWorkers: 2,
     include: ['src/**/*.test.ts', 'scripts/**/*.test.ts']
   }
 })
