@@ -1,4 +1,5 @@
-import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, type Stats } from 'node:fs'
+import { constants, type Stats } from 'node:fs'
+import { lstat, open, type FileHandle } from 'node:fs/promises'
 import type { ManagedSpeechProviders } from './speech-broker-policy'
 
 const MAX_POLICY_BYTES = 1_048_576
@@ -29,9 +30,9 @@ function sameFileIdentity(left: Stats, right: Stats): boolean {
   )
 }
 
-function inspectRegularFile(path: string): FileInspection {
+async function inspectRegularFile(path: string): Promise<FileInspection> {
   try {
-    const stat = lstatSync(path)
+    const stat = await lstat(path)
     if (stat.isSymbolicLink() || !stat.isFile() || !Number.isSafeInteger(stat.size) || stat.size < 0)
       return { state: 'invalid' }
     return { state: 'present', stat }
@@ -40,21 +41,21 @@ function inspectRegularFile(path: string): FileInspection {
   }
 }
 
-function readBoundedRegularFile(path: string): FileRead {
-  const initial = inspectRegularFile(path)
+async function readBoundedRegularFile(path: string): Promise<FileRead> {
+  const initial = await inspectRegularFile(path)
   if (initial.state !== 'present') return initial
   if (initial.stat.size > MAX_POLICY_BYTES) return { state: 'invalid' }
 
-  let descriptor: number
+  let handle: FileHandle
   try {
-    descriptor = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
   } catch (error) {
     return errorCode(error) === 'ENOENT' ? { state: 'missing' } : { state: 'invalid' }
   }
 
   try {
-    const opened = fstatSync(descriptor)
-    const pathAtOpen = inspectRegularFile(path)
+    const opened = await handle.stat()
+    const pathAtOpen = await inspectRegularFile(path)
     if (
       pathAtOpen.state !== 'present' ||
       !sameFileIdentity(initial.stat, opened) ||
@@ -67,14 +68,14 @@ function readBoundedRegularFile(path: string): FileRead {
     let total = 0
     while (total <= MAX_POLICY_BYTES) {
       const requested = Math.min(READ_CHUNK_BYTES, MAX_POLICY_BYTES + 1 - total)
-      const count = readSync(descriptor, buffer, total, requested, null)
+      const { bytesRead: count } = await handle.read(buffer, total, requested, null)
       if (count === 0) break
       total += count
     }
     if (total > MAX_POLICY_BYTES) return { state: 'invalid' }
 
-    const after = fstatSync(descriptor)
-    const pathAfterRead = inspectRegularFile(path)
+    const after = await handle.stat()
+    const pathAfterRead = await inspectRegularFile(path)
     if (
       pathAfterRead.state !== 'present' ||
       !sameFileIdentity(initial.stat, after) ||
@@ -88,7 +89,7 @@ function readBoundedRegularFile(path: string): FileRead {
     return errorCode(error) === 'ENOENT' ? { state: 'missing' } : { state: 'invalid' }
   } finally {
     try {
-      closeSync(descriptor)
+      await handle.close()
     } catch {
       // A close failure cannot make the policy valid; the read result remains fail-closed.
     }
@@ -121,8 +122,8 @@ function parsePolicyBytes(bytes: Uint8Array): ParsedPolicy {
   return { state: 'valid', providers: [...new Set(providers)] }
 }
 
-function readUserPolicy(path: string): ManagedSpeechProviders {
-  const read = readBoundedRegularFile(path)
+async function readUserPolicy(path: string): Promise<ManagedSpeechProviders> {
+  const read = await readBoundedRegularFile(path)
   if (read.state === 'missing') return { state: 'absent' }
   if (read.state === 'invalid') return { state: 'invalid' }
   const parsed = parsePolicyBytes(read.bytes)
@@ -138,7 +139,7 @@ export function readManagedSpeechProviders(
   userPolicyPath: string,
   adminPolicyPath: string,
   readTrustedAdminBytes: ReadTrustedAdminBytes
-): ManagedSpeechProviders {
+): Promise<ManagedSpeechProviders> {
   if (
     typeof userPolicyPath !== 'string' ||
     userPolicyPath.length === 0 ||
@@ -146,9 +147,17 @@ export function readManagedSpeechProviders(
     adminPolicyPath.length === 0 ||
     typeof readTrustedAdminBytes !== 'function'
   )
-    return { state: 'invalid' }
+    return Promise.resolve({ state: 'invalid' })
 
-  const admin = inspectRegularFile(adminPolicyPath)
+  return readManagedSpeechProvidersAsync(userPolicyPath, adminPolicyPath, readTrustedAdminBytes)
+}
+
+async function readManagedSpeechProvidersAsync(
+  userPolicyPath: string,
+  adminPolicyPath: string,
+  readTrustedAdminBytes: ReadTrustedAdminBytes
+): Promise<ManagedSpeechProviders> {
+  const admin = await inspectRegularFile(adminPolicyPath)
   if (admin.state === 'missing') return readUserPolicy(userPolicyPath)
   if (admin.state === 'invalid' || admin.stat.size > MAX_POLICY_BYTES) return { state: 'invalid' }
 
@@ -160,7 +169,7 @@ export function readManagedSpeechProviders(
   }
   if (!(trustedBytes instanceof Uint8Array) || trustedBytes.byteLength > MAX_POLICY_BYTES) return { state: 'invalid' }
 
-  const adminAfterRead = inspectRegularFile(adminPolicyPath)
+  const adminAfterRead = await inspectRegularFile(adminPolicyPath)
   if (
     adminAfterRead.state !== 'present' ||
     !sameFileIdentity(admin.stat, adminAfterRead.stat) ||
