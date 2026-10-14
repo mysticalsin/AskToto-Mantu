@@ -183,8 +183,8 @@ async function utilitySelfTest(input: {
   if (input.signal.aborted) throw input.signal.reason ?? new Error('RUNTIME_SELF_TEST_CANCELLED')
   const pcm = parseFixturePcm(fixture)
   await input.assertCurrent()
+  if (input.signal.aborted) throw input.signal.reason ?? new Error('RUNTIME_SELF_TEST_CANCELLED')
   await input.lease.verifyCurrentBytes()
-  await input.assertCurrent()
   if (input.signal.aborted) throw input.signal.reason ?? new Error('RUNTIME_SELF_TEST_CANCELLED')
   const child = utilityProcess.fork(input.lease.entry(input.role), [], {
     serviceName: `metis-runtime-selftest-${input.role}`,
@@ -394,8 +394,8 @@ async function testLlama(
   const key = randomBytes(32).toString('hex')
   if (signal.aborted) throw signal.reason ?? new Error('RUNTIME_SELF_TEST_CANCELLED')
   await assertCurrent()
+  if (signal.aborted) throw signal.reason ?? new Error('RUNTIME_SELF_TEST_CANCELLED')
   await lease.verifyCurrentBytes()
-  await assertCurrent()
   if (signal.aborted) throw signal.reason ?? new Error('RUNTIME_SELF_TEST_CANCELLED')
   const child: ChildProcess = spawn(
     executable,

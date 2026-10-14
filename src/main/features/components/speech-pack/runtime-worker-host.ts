@@ -189,7 +189,6 @@ export async function createRuntimeWhisperHost(input: {
   const hostAssets = await hostAssetsPromise
   await input.assertCurrent()
   await input.lease.verifyCurrentBytes()
-  await input.assertCurrent()
 
   const hostSession = session.fromPartition(`metis-runtime-${token}`, { cache: false })
   const resource = createRuntimeResourceProtocol({
