@@ -302,6 +302,7 @@ export class ImportJobManager {
     this.loaded = true
     for (const saved of await this.deps.store.list()) {
       if (!saved?.jobId || !saved.sourcePath || !saved.sourceName) continue
+      if (this.jobs.has(saved.jobId)) continue
       const job = copy(saved)
       this.jobs.set(job.jobId, job)
       if (!terminal(job.state)) {
