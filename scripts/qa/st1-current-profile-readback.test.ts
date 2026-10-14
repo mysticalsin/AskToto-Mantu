@@ -156,7 +156,7 @@ describe('current control profile projection', () => {
 
   it('keeps timeout observation separate from unknown target completion and histogram bounds', () => {
     const report = validReport()
-    const sample = report.timeline[0]
+    const sample = report.timeline[0] as Record<string, unknown>
     sample.diagnosticStatus = 'timed-out'
     sample.hung = true
     sample.late = true

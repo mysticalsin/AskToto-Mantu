@@ -146,28 +146,92 @@ test('partitions a maximum-density analyzer result losslessly below the annotati
   assert.ok(payloads.every((part) => part.originalVerdict === 'FAIL' && part.st1Evidence === false))
   assert.ok(payloads.every((part) => part.causalConclusion === 'not-established'))
   assert.ok(payloads.every((part, index) => Buffer.byteLength(notices[index], 'utf8') <= 3_500))
+  assert.deepEqual([...new Set(payloads.map((part) => part.section))].sort(), [
+    'boot-stages',
+    'profile',
+    'profile-bins',
+    'summary',
+    'windows',
+    'witness'
+  ])
+  const base = payloads.find((part) => part.section === 'summary')
   assert.deepEqual(
-    [...new Set(payloads.map((part) => part.section))].sort(),
-    ['boot-stages', 'profile', 'profile-bins', 'summary', 'windows', 'witness']
+    {
+      originalVerdict: base.originalVerdict,
+      st1Evidence: base.st1Evidence,
+      causalConclusion: base.causalConclusion,
+      preProfileCause: base.preProfileCause,
+      candidateBuildRunId: base.candidateBuildRunId,
+      candidateInstallerSha256: base.candidateInstallerSha256,
+      candidateDigestBinding: base.candidateDigestBinding,
+      criteria: base.criteria,
+      metrics: base.metrics,
+      violations: base.violations,
+      profiler: base.profiler
+    },
+    {
+      originalVerdict: summary.originalVerdict,
+      st1Evidence: summary.st1Evidence,
+      causalConclusion: summary.causalConclusion,
+      preProfileCause: summary.preProfileCause,
+      candidateBuildRunId: summary.profile.candidateBuildRunId,
+      candidateInstallerSha256: summary.profile.candidateInstallerSha256,
+      candidateDigestBinding: summary.profile.candidateDigestBinding,
+      criteria: summary.criteria,
+      metrics: summary.metrics,
+      violations: summary.violations,
+      profiler: summary.profiler
+    }
   )
 
   const windows = payloads
     .filter((part) => part.section === 'windows')
     .sort((left, right) => left.windowStartIndex - right.windowStartIndex)
   assert.equal(windows[0]?.windowTotalCount, summary.windows.length)
-  assert.deepEqual(windows.flatMap((part) => part.windows), summary.windows)
+  assert.deepEqual(
+    windows.map((part) => part.windowStartIndex),
+    [0, 1, 2, 3, 4, 5, 6, 7]
+  )
+  assert.deepEqual(
+    windows.flatMap((part) => part.windows),
+    summary.windows
+  )
   const bins = payloads
     .filter((part) => part.section === 'profile-bins')
     .sort((left, right) => left.firstBinIndex - right.firstBinIndex)
   assert.equal(bins[0]?.profileBinTotalCount, summary.profile.bins.length)
-  assert.deepEqual(bins.flatMap((part) => part.profileBins), summary.profile.bins)
+  assert.deepEqual(
+    bins.map((part) => part.firstBinIndex),
+    [0, 4, 8, 12, 16]
+  )
+  assert.deepEqual(
+    bins.flatMap((part) => part.profileBins),
+    summary.profile.bins
+  )
   const stages = payloads
     .filter((part) => part.section === 'boot-stages')
     .sort((left, right) => left.firstStageIndex - right.firstStageIndex)
   assert.equal(stages[0]?.stageTotalCount, summary.bootStages.stages.length)
-  assert.deepEqual(stages.flatMap((part) => part.bootStages.stages), summary.bootStages.stages)
-  const { bins: _bins, candidateBuildRunId, candidateInstallerSha256, candidateDigestBinding, ...profileCore } =
-    summary.profile
+  assert.deepEqual(
+    stages.map((part) => part.firstStageIndex),
+    [0, 3, 6, 9, 12, 15, 18]
+  )
+  assert.deepEqual(
+    stages.flatMap((part) => part.bootStages.stages),
+    summary.bootStages.stages
+  )
+  const { stages: _stages, ...bootMetadata } = summary.bootStages
+  for (const part of stages) {
+    const { stages: _partialStages, ...metadata } = part.bootStages
+    assert.deepEqual(metadata, bootMetadata)
+  }
+  const {
+    bins: _bins,
+    candidateBuildRunId,
+    candidateInstallerSha256,
+    candidateDigestBinding,
+    ...profileCore
+  } = summary.profile
   assert.deepEqual(payloads.find((part) => part.section === 'profile')?.profile, profileCore)
   assert.deepEqual(payloads.find((part) => part.section === 'witness')?.witness, summary.witness)
   const bootJson = JSON.stringify(stages)
