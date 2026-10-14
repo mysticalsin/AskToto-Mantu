@@ -37,6 +37,16 @@ receipt for independent review. A fetched target is not silently added to the
 app's trust policy: the catalog remains empty until the reviewed snapshot and
 actual promoted immutable runtime assets are incorporated.
 
+`create-attestation-fixture.mjs` exercises the same packer with a synthetic,
+explicitly non-runtime fixture. On a protected publisher-branch push, a second
+job downloads only its archive and inventory, hashes those bytes, and asks the
+pinned GitHub provenance action to attest those two subjects. That job does not
+check out or execute repository or artifact contents. The retained bundle is
+named `<artifactId>.sigstore.bundle.json` so the app verifier can be checked
+against an actual Sigstore bundle before any production row is enabled. The
+fixture's identity and notice are not a production license receipt, signer
+allow-list, runtime candidate, or promotion authorization.
+
 Candidate archive construction and native inference remain separate evidence.
 The publisher does not mark an artifact production-ready merely because it was
 built or attested.

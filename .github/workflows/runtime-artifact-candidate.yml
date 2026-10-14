@@ -8,6 +8,7 @@ on:
       - package-lock.json
       - resources/runtime-schema/**
       - scripts/runtime-payload/**
+      - scripts/runtime-payload/create-attestation-fixture.mjs
   push:
     branches:
       - m2/M2-0475-runtime-artifact-publisher
@@ -17,6 +18,7 @@ on:
       - package-lock.json
       - resources/runtime-schema/**
       - scripts/runtime-payload/**
+      - scripts/runtime-payload/create-attestation-fixture.mjs
 
 permissions:
   contents: read
@@ -47,3 +49,86 @@ jobs:
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Reject unsafe publisher inputs
         run: node scripts/runtime-payload/check-payload-rejections.mjs
+
+  provenance-fixture:
+    name: Build synthetic provenance-verification fixture
+    if: github.repository == 'mysticalsin/AskToto-Mantu'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - name: Install the frozen schema validator without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build a labeled synthetic candidate through the production packer
+        env:
+          RUNTIME_FIXTURE_OUTPUT: ${{ runner.temp }}/runtime-attestation-fixture
+        run: node scripts/runtime-payload/create-attestation-fixture.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: runtime-attestation-fixture-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/runtime-attestation-fixture/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  attest-provenance-fixture:
+    name: Attest fixture bytes without executing payload
+    needs: provenance-fixture
+    if: >-
+      github.repository == 'mysticalsin/AskToto-Mantu' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/m2/M2-0475-runtime-artifact-publisher'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: runtime-attestation-fixture-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/runtime-attestation-fixture
+      - name: Ensure the attested input set is exact and closed
+        env:
+          FIXTURE_PATH: ${{ runner.temp }}/runtime-attestation-fixture
+        run: |
+          set -euo pipefail
+          test "$(find "$FIXTURE_PATH" -maxdepth 1 -type f -printf '%f\n' | sort | tr '\n' ' ')" = "candidate.json runtime.attestation-fixture.inventory.json runtime.attestation-fixture.tar.gz "
+          test "$(jq -r .artifactId "$FIXTURE_PATH/candidate.json")" = "runtime.attestation-fixture"
+          test "$(jq -r .archive.path "$FIXTURE_PATH/candidate.json")" = "runtime.attestation-fixture.tar.gz"
+          test "$(jq -r .inventory.path "$FIXTURE_PATH/candidate.json")" = "runtime.attestation-fixture.inventory.json"
+          sha256sum "$FIXTURE_PATH/runtime.attestation-fixture.tar.gz" "$FIXTURE_PATH/runtime.attestation-fixture.inventory.json"
+      - id: provenance
+        uses: actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2 # v2.2.3
+        with:
+          subject-path: |
+            ${{ runner.temp }}/runtime-attestation-fixture/runtime.attestation-fixture.tar.gz
+            ${{ runner.temp }}/runtime-attestation-fixture/runtime.attestation-fixture.inventory.json
+          push-to-registry: false
+          show-summary: false
+      - name: Retain the exact Sigstore bundle with its subject artifact names
+        env:
+          BUNDLE_PATH: ${{ steps.provenance.outputs.bundle-path }}
+          FIXTURE_PATH: ${{ runner.temp }}/runtime-attestation-fixture
+        run: |
+          set -euo pipefail
+          test -s "$BUNDLE_PATH"
+          cp -- "$BUNDLE_PATH" "$FIXTURE_PATH/runtime.attestation-fixture.sigstore.bundle.json"
+          jq -e 'type == "object" and has("dsseEnvelope") and has("verificationMaterial")' \
+            "$FIXTURE_PATH/runtime.attestation-fixture.sigstore.bundle.json" >/dev/null
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: runtime-attested-fixture-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/runtime-attestation-fixture/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
