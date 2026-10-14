@@ -1,0 +1,7 @@
+{
+  "capability": "generation",
+  "selected": "cloudflare",
+  "allowed": ["cloudflare", "local"],
+  "ready": ["local"],
+  "status": { "state": "ready" }
+}

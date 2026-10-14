@@ -1,0 +1,7 @@
+{
+  "capability": "generation",
+  "selected": "parakeet",
+  "allowed": ["cloudflare"],
+  "ready": ["cloudflare"],
+  "status": { "state": "not-ready", "reason": "not-configured" }
+}
