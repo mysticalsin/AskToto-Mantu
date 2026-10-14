@@ -1094,6 +1094,21 @@ let tray: Tray | null = null
 let audioArmed = false // loopback capture only granted during an explicit user-initiated Listen
 const commandControl = new CommandControl({
   execute: executeDesktopAction,
+  // Command input is a microphone capability. Reuse the existing Listen entitlement instead of
+  // inventing a new license field, and re-evaluate auth, entitlement and foreground state at Confirm.
+  policyAllows: () => {
+    const owner = win
+    return (
+      requireAuth() &&
+      operatorGate('listen').allowed &&
+      !!owner &&
+      !owner.isDestroyed() &&
+      owner.isVisible() &&
+      owner.isFocused() &&
+      !islandResting &&
+      !onboardingExclusiveLive()
+    )
+  },
   audit: (event, metadata) => auditLog(event as Parameters<typeof auditLog>[0], metadata),
   onState: (state) => {
     if (win && !win.isDestroyed()) win.webContents.send(IPC.metisCommandState, state)
@@ -2899,7 +2914,12 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // while it is valid; touching `self.webContents` from the callback throws and falsely crashes Métis.
   const selfWebContentsId = self.webContents.id
   win.on('blur', () => {
-    if (win === self) parkRightEdgeReaderOnBlur()
+    if (win !== self) return
+    commandControl.revokeForLifecycleEvent('window_blurred')
+    parkRightEdgeReaderOnBlur()
+  })
+  win.on('hide', () => {
+    if (win === self) commandControl.revokeForLifecycleEvent('window_hidden')
   })
   win.on('closed', () => {
     clearCompletedOnboardingExitFallback(self)
@@ -4565,6 +4585,7 @@ function refreshScreenPreprocess(): void {
 
 /** Revoke every privileged surface that outlives one IPC call when the session ends. */
 function revokePrivilegedSurface(): void {
+  commandControl.revokeForLifecycleEvent('auth_session_cleared')
   refreshScreenPreprocess() // stops the watcher child, the 6s tick and the cached description
   invalidateCloudSttOwner() // closes authenticated live-speech sockets and invalidates their callbacks
   if (!requireAuth()) closeIntelligenceWindow()
@@ -9624,6 +9645,14 @@ if (!app.requestSingleInstanceLock()) {
     .whenReady()
     .then(async () => {
       initLogging() // route main-process logs to a rotated file before anything else can fail
+      // Register before the overlay can issue proposals. A laptop lock or sleep must revoke any
+      // outstanding confirmation even if its TTL timer pauses with the process.
+      try {
+        powerMonitor.on('suspend', () => commandControl.revokeForLifecycleEvent('system_suspend'))
+        powerMonitor.on('lock-screen', () => commandControl.revokeForLifecycleEvent('screen_locked'))
+      } catch (e) {
+        mainLog.warn('[boot] powerMonitor command-revocation hooks failed:', e)
+      }
       const bootWork = createBootWork() // M2-0031: non-first-paint fs work starts after the first show, under the pool cap
       bootWorkGate = bootWork
       configureSidecarRegistry(createSidecarRegistry(app.getPath('userData')))
@@ -10360,6 +10389,7 @@ app.on('before-quit', (e) => {
 })
 
 app.on('will-quit', () => {
+  commandControl.revokeForLifecycleEvent('app_quit')
   // The renderer may already be unavailable during shutdown; main owns the socket and must still stop it.
   invalidateCloudSttOwner()
   // MQA-175: quitting before the boot watch closed on its own is a normal exit, not an early death —

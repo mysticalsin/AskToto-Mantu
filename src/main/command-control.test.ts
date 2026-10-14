@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 import { CommandControl } from './command-control'
 
+const allowCommandPolicy = (): boolean => true
+
 describe('CommandControl', () => {
   it('rejects confirmation from a different renderer owner without executing', async () => {
     const execute = vi.fn(async () => ({ id: 'desktop.open_notes' as const, ok: true, outcome: 'unknown' as const }))
-    const controller = new CommandControl({ execute })
+    const controller = new CommandControl({ execute, policyAllows: allowCommandPolicy })
     const proposal = controller.propose(
       { webContentsId: 11, revision: 3 },
       { id: 'desktop.open_notes', args: {} }
@@ -24,7 +26,7 @@ describe('CommandControl', () => {
         resolveExecute = () => resolve({ id: 'desktop.open_notes', ok: true, outcome: 'verified' })
       })
     )
-    const controller = new CommandControl({ execute })
+    const controller = new CommandControl({ execute, policyAllows: allowCommandPolicy })
     const proposal = controller.propose(
       { webContentsId: 11, revision: 3 },
       { id: 'desktop.open_notes', args: {} }
@@ -44,6 +46,7 @@ describe('CommandControl', () => {
     const audit = vi.fn()
     const controller = new CommandControl({
       execute: async () => ({ id: 'desktop.open_notes', ok: true, outcome: 'unknown' }),
+      policyAllows: allowCommandPolicy,
       audit
     })
     const proposal = controller.propose(
@@ -65,6 +68,7 @@ describe('CommandControl', () => {
     const audit = vi.fn()
     const controller = new CommandControl({
       execute: async () => ({ id: 'desktop.open_arc', ok: true, outcome: 'verified' }),
+      policyAllows: allowCommandPolicy,
       audit
     })
     const proposal = controller.propose(
@@ -85,7 +89,7 @@ describe('CommandControl', () => {
   it('rejects an expired, replaced, cancelled, or nonce-mismatched proposal', async () => {
     let now = 100
     const execute = vi.fn(async () => ({ id: 'desktop.open_notes' as const, ok: true, outcome: 'unknown' as const }))
-    const controller = new CommandControl({ execute, now: () => now, ttlMs: 10 })
+    const controller = new CommandControl({ execute, policyAllows: allowCommandPolicy, now: () => now, ttlMs: 10 })
     const expired = controller.propose({ webContentsId: 11, revision: 1 }, { id: 'desktop.open_notes', args: {} })
     now = 110
     expect(await controller.confirm({ ...expired, webContentsId: 11 })).toEqual({ ok: false, reason: 'expired' })
@@ -106,6 +110,7 @@ describe('CommandControl', () => {
     const audit = vi.fn()
     const controller = new CommandControl({
       execute: async () => ({ id: 'desktop.open_notes', ok: true, outcome: 'unknown' }),
+      policyAllows: allowCommandPolicy,
       audit
     })
     controller.propose({ webContentsId: 11, revision: 4 }, { id: 'desktop.open_notes', args: {} })
@@ -122,6 +127,7 @@ describe('CommandControl', () => {
     try {
       const controller = new CommandControl({
         execute: async () => ({ id: 'desktop.open_notes', ok: true, outcome: 'unknown' }),
+        policyAllows: allowCommandPolicy,
         ttlMs: 25
       })
       controller.propose({ webContentsId: 11, revision: 4 }, { id: 'desktop.open_notes', args: {} })
@@ -133,10 +139,38 @@ describe('CommandControl', () => {
   })
 
   it('rechecks policy at confirmation time before invoking the static adapter', async () => {
+    let allowed = true
     const execute = vi.fn(async () => ({ id: 'desktop.open_notes' as const, ok: true, outcome: 'unknown' as const }))
-    const controller = new CommandControl({ execute, policyAllows: () => false })
+    const controller = new CommandControl({ execute, policyAllows: () => allowed })
     const proposal = controller.propose({ webContentsId: 11, revision: 4 }, { id: 'desktop.open_notes', args: {} })
+
+    // Entitlement/foreground state can change while the proposal is displayed.
+    allowed = false
     expect(await controller.confirm({ ...proposal, webContentsId: 11 })).toEqual({ ok: false, reason: 'policy_denied' })
     expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when the confirmation policy throws', async () => {
+    const execute = vi.fn(async () => ({ id: 'desktop.open_notes' as const, ok: true, outcome: 'verified' as const }))
+    const controller = new CommandControl({
+      execute,
+      policyAllows: () => { throw new Error('policy unavailable') }
+    })
+    const proposal = controller.propose({ webContentsId: 11, revision: 4 }, { id: 'desktop.open_notes', args: {} })
+
+    expect(await controller.confirm({ ...proposal, webContentsId: 11 })).toEqual({ ok: false, reason: 'policy_denied' })
+    expect(execute).not.toHaveBeenCalled()
+    expect(controller.getState()).toEqual({ proposalId: null })
+  })
+
+  it('snapshots the proposed action before exposing confirmation authority', async () => {
+    const execute = vi.fn(async () => ({ id: 'desktop.create_note' as const, ok: true, outcome: 'verified' as const }))
+    const controller = new CommandControl({ execute, policyAllows: allowCommandPolicy })
+    const request = { id: 'desktop.create_note' as const, args: { title: 'hello' } }
+    const proposal = controller.propose({ webContentsId: 11, revision: 4 }, request)
+    request.args.title = 'changed after propose'
+
+    expect(await controller.confirm({ ...proposal, webContentsId: 11 })).toEqual({ ok: true, outcome: 'verified' })
+    expect(execute).toHaveBeenCalledWith({ id: 'desktop.create_note', args: { title: 'hello' } })
   })
 })

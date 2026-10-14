@@ -26,7 +26,8 @@ type CurrentProposal = CommandControlProposal & {
 
 type CommandControlDeps = {
   execute: (request: DesktopActionRequest) => Promise<DesktopActionResult>
-  policyAllows?: (request: DesktopActionRequest) => boolean
+  /** Main-process policy is required: omitting it must never turn confirmation into permission. */
+  policyAllows: (request: DesktopActionRequest) => boolean
   audit?: (event: 'command.confirmed' | 'command.revoked', metadata: Record<string, string>) => void
   onState?: (state: CommandControlState) => void
   now?: () => number
@@ -55,6 +56,12 @@ export class CommandControl {
     request: DesktopActionRequest
   ): CommandControlProposal {
     this.clearCurrent()
+    // The proposal keeps a private snapshot. No caller that supplied the request can mutate what
+    // the user later confirms, even if a future command source starts reusing request objects.
+    const requestSnapshot = Object.freeze({
+      ...request,
+      args: Object.freeze({ ...request.args })
+    }) as DesktopActionRequest
     const proposal = {
       proposalId: randomBytes(16).toString('hex'),
       nonce: randomBytes(32).toString('hex')
@@ -63,7 +70,7 @@ export class CommandControl {
       ...proposal,
       ownerWebContentsId: owner.webContentsId,
       revision: owner.revision,
-      request,
+      request: requestSnapshot,
       expiresAt: this.now() + this.ttlMs
     }
     this.armExpiry(this.current)
@@ -90,7 +97,14 @@ export class CommandControl {
     // Consume before yielding to the adapter, so a double click or replay cannot execute twice.
     this.clearCurrent()
     this.emit()
-    if (!isDesktopAdapterId(proposal.request.id) || this.deps.policyAllows?.(proposal.request) === false) {
+    let allowed = false
+    try {
+      allowed = isDesktopAdapterId(proposal.request.id) && this.deps.policyAllows(proposal.request) === true
+    } catch {
+      // A broken or unavailable policy check is a denial, never an implicit allow.
+      allowed = false
+    }
+    if (!allowed) {
       this.audit('command.revoked', { actionId: proposal.request.id, reason: 'policy_denied' })
       return { ok: false, reason: 'policy_denied' }
     }

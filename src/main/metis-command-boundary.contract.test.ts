@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { sourceIndexOf } from '../../scripts/lib/source-layout'
 
 const main = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+const control = readFileSync(join(__dirname, 'command-control.ts'), 'utf8')
 const preload = readFileSync(join(__dirname, '../preload/index.ts'), 'utf8')
 const ipc = readFileSync(join(__dirname, '../shared/ipc.ts'), 'utf8')
 const app = readFileSync(join(__dirname, '../renderer/src/App.tsx'), 'utf8')
@@ -35,6 +36,36 @@ describe('Cap2 command authority boundary', () => {
     expect(confirm).toContain('assertMainWindow(e)')
     expect(confirm).toContain('commandControl.confirm')
     expect(confirm).not.toContain('request')
+  })
+
+  it('requires main-process auth, Listen entitlement and a visible focused command owner at confirmation', () => {
+    const setup = between(main, 'const commandControl = new CommandControl({', '// Electron can dispatch an invoke')
+    expect(setup).toContain('policyAllows: () =>')
+    expect(setup).toContain('requireAuth()')
+    expect(setup).toContain("operatorGate('listen').allowed")
+    expect(setup).toContain('owner.isVisible()')
+    expect(setup).toContain('owner.isFocused()')
+    expect(setup).toContain('!onboardingExclusiveLive()')
+    expect(control).not.toContain('policyAllows?')
+    expect(control).toContain('this.deps.policyAllows(proposal.request) === true')
+    expect(control).toContain('Object.freeze(')
+  })
+
+  it('revokes pending authority when the window loses focus, hides, auth clears, locks, or suspends', () => {
+    const blur = between(main, "win.on('blur', () => {", "win.on('hide', () => {")
+    expect(blur).toContain("commandControl.revokeForLifecycleEvent('window_blurred')")
+    const hidden = between(main, "win.on('hide', () => {", "win.on('closed', () => {")
+    expect(hidden).toContain("commandControl.revokeForLifecycleEvent('window_hidden')")
+    const session = between(
+      main,
+      'function revokePrivilegedSurface(): void {',
+      'setSessionClearedHandler(revokePrivilegedSurface)'
+    )
+    expect(session).toContain("commandControl.revokeForLifecycleEvent('auth_session_cleared')")
+    expect(main).toContain("powerMonitor.on('suspend', () => commandControl.revokeForLifecycleEvent('system_suspend'))")
+    expect(main).toContain(
+      "powerMonitor.on('lock-screen', () => commandControl.revokeForLifecycleEvent('screen_locked'))"
+    )
   })
 
   it('revokes command authority when the owning window or renderer is replaced', () => {
