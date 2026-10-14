@@ -55,6 +55,8 @@ function capability(
     ready: true,
     routeId,
     modelId,
+    configVersion: 'synthetic-config-v1',
+    policyVersion: 'synthetic-policy-v1',
     languages,
     format: { encoding: 'pcm_s16le', sampleRate: 16_000, channels: 1 },
     validUntil: now + 60_000,
