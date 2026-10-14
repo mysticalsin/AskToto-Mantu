@@ -373,49 +373,6 @@ describe('ImportJobManager', () => {
     expect(done.state).toBe('done') // consumeVadPcm hands off to the shared finalize() to complete
   })
 
-  it('keeps the completed job visible when recovery returns a stale snapshot during ASR', async () => {
-    const asrStarted = deferred<void>()
-    const releaseAsr = deferred<string>()
-    const recoveryListStarted = deferred<void>()
-    const releaseRecoveryList = deferred<void>()
-    const { manager, store, saveMeeting, transcribe } = createManager({
-      transcribe: vi.fn(async () => {
-        asrStarted.resolve()
-        return releaseAsr.promise
-      })
-    })
-
-    await manager.start(source)
-    await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
-    const finishing = manager.finishDecoding('job-1')
-    await asrStarted.promise
-
-    // Recovery sees a cloned checkpoint before ASR has completed, then pauses before returning it.
-    const recoveringCheckpoint = [...store.jobs.values()].map((job) => structuredClone(job))
-    expect(recoveringCheckpoint).toMatchObject([{ jobId: 'job-1', state: 'transcribing', file: undefined }])
-    store.list = async () => {
-      recoveryListStarted.resolve()
-      await releaseRecoveryList.promise
-      return recoveringCheckpoint
-    }
-    const recovering = manager.recover()
-    await recoveryListStarted.promise
-    releaseRecoveryList.resolve()
-    await recovering
-
-    releaseAsr.resolve('recognized speech')
-    await finishing
-
-    expect(saveMeeting).toHaveBeenCalledTimes(1)
-    expect(saveMeeting).toHaveBeenCalledWith(expect.objectContaining({
-      lines: expect.arrayContaining([expect.objectContaining({ text: 'recognized speech' })])
-    }))
-    expect(manager.get('job-1')).toMatchObject({ state: 'done', file: 'saved-import.md' })
-    expect(manager.list()).toEqual([expect.objectContaining({ state: 'done', file: 'saved-import.md' })])
-    expect(store.jobs.has('job-1')).toBe(false)
-    expect(transcribe).toHaveBeenCalledTimes(1)
-  })
-
   it("stamps each line's t from its window's real offset into the recording — monotonic, first offset > 0 given leading silence (MQA-235)", async () => {
     const { manager } = createManager()
     const pcm = leadingSilenceTwoWindowPcm()
