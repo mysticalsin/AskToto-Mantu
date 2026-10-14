@@ -6,20 +6,27 @@ import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { bundleFromJSON, bundleToJSON } from '@sigstore/bundle'
 import { TrustedRoot } from '@sigstore/protobuf-specs'
 import { toSignedEntity, toTrustMaterial, Verifier } from '@sigstore/verify'
+import {
+  MODEL,
+  MODEL_FILES,
+  MODEL_PAYLOAD_BYTES,
+  NATIVE_TARGETS,
+  REPOSITORY_ID,
+  REPOSITORY_URI,
+  RUN_ATTEMPT,
+  RUN_ID,
+  SOURCE_REF,
+  SOURCE_SHA,
+  WORKFLOW_PATH,
+  parseStrictJsonBytes,
+  validBuilder,
+  validFileRows,
+  validModelInventory,
+  validNativeReceipts,
+  validRuntimeFacts,
+  validSource
+} from './retained-candidate-contract.mjs'
 import { assertRequiredFulcioClaims, FULCIO_OID } from './sigstore-identity-claims.mjs'
-
-const SOURCE_SHA = 'a78de2590a05c09ecc5198009c3509085a4f5053'
-const SOURCE_REF = 'refs/heads/m2/M2-0475-runtime-artifact-publisher'
-const WORKFLOW_PATH = '.github/workflows/runtime-llama-candidate.yml'
-const RUN_ID = '38594471312'
-const RUN_ATTEMPT = 1
-const REPOSITORY_URI = 'https://github.com/mysticalsin/AskToto-Mantu'
-const REPOSITORY_ID = '1282463398'
-const TARGETS = Object.freeze([
-  { platform: 'darwin', arch: 'arm64', suffix: 'darwin-arm64' },
-  { platform: 'darwin', arch: 'x64', suffix: 'darwin-x64' },
-  { platform: 'win32', arch: 'x64', suffix: 'win32-x64' }
-])
 
 function fail(code) {
   throw new Error(code)
@@ -35,7 +42,7 @@ function record(value) {
 
 function parseJson(bytes, code) {
   try {
-    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+    return parseStrictJsonBytes(bytes)
   } catch {
     fail(code)
   }
@@ -188,7 +195,7 @@ function verifyRootPin(catalog, rootBytes, receiptBytes) {
   )
     fail('RUNTIME_READBACK_TRUST_RECEIPT_INVALID')
   try {
-    return TrustedRoot.fromJSON(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(rootBytes)))
+    return TrustedRoot.fromJSON(parseStrictJsonBytes(rootBytes))
   } catch {
     fail('RUNTIME_READBACK_TRUST_ROOT_INVALID')
   }
@@ -272,7 +279,7 @@ function verifyStatement(bundle, archiveName, archiveHash, inventoryName, invent
     fail('RUNTIME_READBACK_ATTESTATION_SUBJECT_MISMATCH')
 }
 
-async function verifyTarget(root, target, rootProto) {
+async function verifyTarget(root, target, rootProto, lockSha256) {
   const directory = `runtime-llama-${target.suffix}-${SOURCE_SHA}-${RUN_ATTEMPT}`
   const base = resolve(root, directory)
   await assertDirectory(root, 'RUNTIME_READBACK_ARTIFACT_LAYOUT_INVALID')
@@ -315,6 +322,7 @@ async function verifyTarget(root, target, rootProto) {
       'artifactId',
       'target',
       'runtime',
+      'directories',
       'archive',
       'inventory',
       'payloadFiles',
@@ -326,9 +334,46 @@ async function verifyTarget(root, target, rootProto) {
     candidate.artifactId !== `runtime.llama-server-${target.suffix}` ||
     candidate.target?.platform !== target.platform ||
     candidate.target?.arch !== target.arch ||
+    !exactKeys(candidate.target, ['platform', 'arch']) ||
+    !exactKeys(candidate.directories, []) ||
+    !validRuntimeFacts(candidate.runtime) ||
+    !exactKeys(candidate.archive, ['path', 'bytes', 'sha256']) ||
+    !Number.isSafeInteger(candidate.archive.bytes) ||
+    candidate.archive.bytes < 1 ||
+    typeof candidate.archive.sha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(candidate.archive.sha256) ||
+    !exactKeys(candidate.inventory, ['path', 'bytes', 'sha256']) ||
+    !Number.isSafeInteger(candidate.inventory.bytes) ||
+    candidate.inventory.bytes < 1 ||
+    typeof candidate.inventory.sha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(candidate.inventory.sha256) ||
+    !Number.isSafeInteger(candidate.payloadFiles) ||
+    candidate.payloadFiles < 1 ||
+    !Number.isSafeInteger(candidate.payloadBytes) ||
+    candidate.payloadBytes < 1 ||
     candidate.archive?.path !== archiveName ||
     candidate.inventory?.path !== inventoryName ||
     inference.inferencePassed !== true ||
+    !exactKeys(inference, [
+      'schemaVersion',
+      'componentId',
+      'target',
+      'nativeFilesVerified',
+      'modelId',
+      'modelSha256',
+      'modelIncludedInArchive',
+      'licenseCoverageComplete',
+      'inferencePassed',
+      'cpuOnly',
+      'elapsedMs'
+    ]) ||
+    inference.schemaVersion !== 1 ||
+    inference.componentId !== 'runtime.llama-server' ||
+    inference.target !== target.suffix ||
+    inference.modelId !== 'qwen3.5-0.8b' ||
+    inference.modelSha256 !== '3177ebd67afe4438374da19e690bc1b98756f7e0fea9240e1be404336156a7b5' ||
+    !Number.isSafeInteger(inference.elapsedMs) ||
+    inference.elapsedMs < 1 ||
     inference.cpuOnly !== true ||
     inference.modelIncludedInArchive !== false ||
     inference.licenseCoverageComplete !== false ||
@@ -346,6 +391,7 @@ async function verifyTarget(root, target, rootProto) {
     'target',
     'runtime',
     'entrypoints',
+    'directories',
     'models',
     'source',
     'builder',
@@ -353,10 +399,7 @@ async function verifyTarget(root, target, rootProto) {
     'files',
     'licenses'
   ]
-  const filePaths = new Set()
-  const foldedFilePaths = new Set()
   let inventoryFileBytes = 0
-  let priorPath = ''
   const validFiles =
     Array.isArray(inventory.files) &&
     inventory.files.every((raw) => {
@@ -364,21 +407,11 @@ async function verifyTarget(root, target, rootProto) {
       if (
         !file ||
         !exactKeys(file, ['path', 'bytes', 'sha256', 'executable']) ||
-        typeof file.path !== 'string' ||
-        !/^[A-Za-z0-9._@+-]+(?:\/[A-Za-z0-9._@+-]+)*$/.test(file.path) ||
         !Number.isSafeInteger(file.bytes) ||
         file.bytes < 1 ||
-        typeof file.sha256 !== 'string' ||
-        !/^[a-f0-9]{64}$/.test(file.sha256) ||
-        typeof file.executable !== 'boolean' ||
-        file.path <= priorPath ||
-        filePaths.has(file.path) ||
-        foldedFilePaths.has(file.path.toLowerCase())
+        typeof file.path !== 'string'
       )
         return false
-      priorPath = file.path
-      filePaths.add(file.path)
-      foldedFilePaths.add(file.path.toLowerCase())
       inventoryFileBytes += file.bytes
       return Number.isSafeInteger(inventoryFileBytes)
     })
@@ -391,14 +424,7 @@ async function verifyTarget(root, target, rootProto) {
     inventoryTarget?.platform !== target.platform ||
     inventoryTarget?.arch !== target.arch ||
     !source ||
-    source.repositoryUri !== REPOSITORY_URI ||
-    source.commit !== SOURCE_SHA ||
-    source.ref !== SOURCE_REF ||
-    source.workflowPath !== WORKFLOW_PATH ||
-    source.workflowCommit !== SOURCE_SHA ||
-    source.runId !== RUN_ID ||
-    source.attempt !== RUN_ATTEMPT ||
-    source.runnerEnvironment !== 'github-hosted' ||
+    !validSource(source, lockSha256) ||
     !validFiles ||
     inventory.files.length !== candidate.payloadFiles ||
     inventoryFileBytes !== candidate.payloadBytes ||
@@ -407,18 +433,27 @@ async function verifyTarget(root, target, rootProto) {
       (target.platform === 'win32' ? 'runtime/llama-server.exe' : 'runtime/llama-server') ||
     !Array.isArray(inventory.models) ||
     inventory.models.length !== 0 ||
+    !exactKeys(inventory.directories, []) ||
+    !exactKeys(inventory.target, ['platform', 'arch']) ||
+    !validRuntimeFacts(inventory.runtime) ||
+    !validBuilder(inventory.builder) ||
+    !validNativeReceipts(inventory, target) ||
+    !validFileRows(
+      inventory.files,
+      inventory.files.map((file) =>
+        record(file)?.path === 'licenses/llama.cpp-LICENSE.txt'
+          ? {
+              path: 'licenses/llama.cpp-LICENSE.txt',
+              bytes: 1078,
+              sha256: '94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d',
+              executable: false
+            }
+          : null
+      ),
+      true
+    ) ||
     JSON.stringify(inventory.runtime) !== JSON.stringify(candidate.runtime) ||
-    !exactKeys(source, [
-      'repositoryUri',
-      'commit',
-      'workflowPath',
-      'workflowCommit',
-      'runId',
-      'attempt',
-      'lockSha256',
-      'ref',
-      'runnerEnvironment'
-    ])
+    inventory.files.filter((file) => file.path.startsWith('runtime/')).length < 1
   )
     fail('RUNTIME_READBACK_INVENTORY_IDENTITY_INVALID')
   const archive = await hashStableFile(resolve(base, archiveName), 10_000_000_000, 'RUNTIME_READBACK_ARCHIVE_INVALID')
@@ -459,6 +494,110 @@ async function verifyTarget(root, target, rootProto) {
   }
 }
 
+async function verifyModel(root, rootProto, lockSha256) {
+  const base = resolve(root, `runtime-llama-model-${SOURCE_SHA}-${RUN_ATTEMPT}`)
+  await assertDirectory(base, 'RUNTIME_READBACK_MODEL_LAYOUT_INVALID')
+  await assertExactEntries(
+    base,
+    ['candidate.json', MODEL.archive, MODEL.inventory, MODEL.bundle],
+    false,
+    'RUNTIME_READBACK_MODEL_LAYOUT_INVALID'
+  )
+  const candidateBytes = await readStable(
+    resolve(base, 'candidate.json'),
+    2_000_000,
+    'RUNTIME_READBACK_MODEL_CANDIDATE_INVALID'
+  )
+  const inventoryBytes = await readStable(
+    resolve(base, MODEL.inventory),
+    20_000_000,
+    'RUNTIME_READBACK_MODEL_INVENTORY_INVALID'
+  )
+  const candidate = record(parseJson(candidateBytes, 'RUNTIME_READBACK_MODEL_CANDIDATE_INVALID'))
+  const inventory = record(parseJson(inventoryBytes, 'RUNTIME_READBACK_MODEL_INVENTORY_INVALID'))
+  if (
+    !candidate ||
+    !inventory ||
+    !exactKeys(candidate, [
+      'schemaVersion',
+      'kind',
+      'componentId',
+      'artifactId',
+      'target',
+      'runtime',
+      'directories',
+      'archive',
+      'inventory',
+      'payloadFiles',
+      'payloadBytes'
+    ]) ||
+    candidate.schemaVersion !== 1 ||
+    candidate.kind !== 'model' ||
+    candidate.componentId !== MODEL.artifactId ||
+    candidate.artifactId !== MODEL.artifactId ||
+    !exactKeys(candidate.target, ['platform', 'arch']) ||
+    candidate.target.platform !== 'any' ||
+    candidate.target.arch !== 'any' ||
+    candidate.runtime !== null ||
+    !exactKeys(candidate.directories, []) ||
+    !exactKeys(candidate.archive, ['path', 'bytes', 'sha256']) ||
+    candidate.archive.path !== MODEL.archive ||
+    !Number.isSafeInteger(candidate.archive.bytes) ||
+    candidate.archive.bytes < 1 ||
+    candidate.archive.bytes > 1_000_000_000 ||
+    typeof candidate.archive.sha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(candidate.archive.sha256) ||
+    !exactKeys(candidate.inventory, ['path', 'bytes', 'sha256']) ||
+    candidate.inventory.path !== MODEL.inventory ||
+    !Number.isSafeInteger(candidate.inventory.bytes) ||
+    candidate.inventory.bytes < 1 ||
+    typeof candidate.inventory.sha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(candidate.inventory.sha256) ||
+    candidate.payloadFiles !== MODEL_FILES.length ||
+    candidate.payloadBytes !== MODEL_PAYLOAD_BYTES ||
+    !validModelInventory(inventory) ||
+    !validSource(inventory.source, lockSha256) ||
+    candidate.inventory.bytes !== inventoryBytes.length ||
+    candidate.inventory.sha256 !== sha256(inventoryBytes)
+  )
+    fail('RUNTIME_READBACK_MODEL_INVENTORY_INVALID')
+
+  const archiveName = MODEL.archive
+  const archive = await hashStableFile(
+    resolve(base, archiveName),
+    1_000_000_000,
+    'RUNTIME_READBACK_MODEL_ARCHIVE_INVALID'
+  )
+  if (candidate.archive.bytes !== archive.bytes || candidate.archive.sha256 !== archive.sha256)
+    fail('RUNTIME_READBACK_MODEL_ARCHIVE_INVALID')
+  const bundleBytes = await readStable(resolve(base, MODEL.bundle), 20_000_000, 'RUNTIME_READBACK_MODEL_BUNDLE_INVALID')
+  let bundle
+  try {
+    bundle = bundleFromJSON(parseJson(bundleBytes, 'RUNTIME_READBACK_MODEL_BUNDLE_INVALID'))
+    const payload = dssePayload(bundle)
+    if (!payload.equals(dssePayload(bundleFromJSON(bundleToJSON(bundle)))))
+      fail('RUNTIME_READBACK_MODEL_BUNDLE_INVALID')
+    const verifier = new Verifier(toTrustMaterial(rootProto), {
+      tlogThreshold: 1,
+      ctlogThreshold: 1,
+      timestampThreshold: 1
+    })
+    verifySigner(await verifier.verify(toSignedEntity(bundle)), inventory)
+  } catch {
+    fail('RUNTIME_READBACK_MODEL_SIGSTORE_INVALID')
+  }
+  verifyStatement(bundle, MODEL.archive, archive.sha256, MODEL.inventory, sha256(inventoryBytes))
+  return {
+    target: 'model-any-any',
+    archiveBytes: archive.bytes,
+    archiveSha256: archive.sha256,
+    inventoryBytes: inventoryBytes.length,
+    inventorySha256: sha256(inventoryBytes),
+    bundleBytes: bundleBytes.length,
+    bundleSha256: sha256(bundleBytes)
+  }
+}
+
 async function main() {
   const readbackPath = process.env.RUNTIME_CANDIDATE_READBACK
   const runnerTemp = process.env.RUNNER_TEMP
@@ -471,7 +610,10 @@ async function main() {
   await assertDirectory(root, 'RUNTIME_READBACK_ARTIFACT_LAYOUT_INVALID')
   await assertExactEntries(
     root,
-    TARGETS.map((target) => `runtime-llama-${target.suffix}-${SOURCE_SHA}-${RUN_ATTEMPT}`),
+    [
+      ...NATIVE_TARGETS.map((target) => `runtime-llama-${target.suffix}-${SOURCE_SHA}-${RUN_ATTEMPT}`),
+      `runtime-llama-model-${SOURCE_SHA}-${RUN_ATTEMPT}`
+    ],
     true,
     'RUNTIME_READBACK_ARTIFACT_LAYOUT_INVALID'
   )
@@ -483,6 +625,7 @@ async function main() {
   const catalog = record(parseJson(catalogBytes, 'RUNTIME_READBACK_CATALOG_INVALID'))
   if (
     !catalog ||
+    !exactKeys(catalog, ['schemaVersion', 'protocolVersion', 'catalogId', 'trustRoot', 'targets']) ||
     catalog.schemaVersion !== 1 ||
     catalog.protocolVersion !== 1 ||
     catalog.catalogId !== 'metis-runtime-catalog-v1' ||
@@ -501,8 +644,10 @@ async function main() {
     'RUNTIME_READBACK_TRUST_RECEIPT_INVALID'
   )
   const rootProto = verifyRootPin(catalog, trustRootBytes, receiptBytes)
+  const packageLock = await hashStableFile(resolve('package-lock.json'), 20_000_000, 'RUNTIME_READBACK_LOCK_INVALID')
   const results = []
-  for (const target of TARGETS) results.push(await verifyTarget(root, target, rootProto))
+  for (const target of NATIVE_TARGETS) results.push(await verifyTarget(root, target, rootProto, packageLock.sha256))
+  results.push(await verifyModel(root, rootProto, packageLock.sha256))
   const archiveBytes = results.reduce((total, result) => total + result.archiveBytes, 0)
   const inventoryBytes = results.reduce((total, result) => total + result.inventoryBytes, 0)
   const bundleBytes = results.reduce((total, result) => total + result.bundleBytes, 0)
@@ -510,7 +655,7 @@ async function main() {
     Buffer.from(results.flatMap((result) => [result.archiveSha256, result.inventorySha256]).join(''))
   )
   process.stdout.write(
-    `RUNTIME_ATTESTATION_READBACK_OK verified=true targets=${results.length} subjects=${results.length * 2} archiveBytes=${archiveBytes} inventoryBytes=${inventoryBytes} bundleBytes=${bundleBytes} trustRootSha256=${sha256(trustRootBytes)} subjectSetSha256=${subjectSha256}\n`
+    `RUNTIME_ATTESTATION_READBACK_OK verified=true roots=${results.length} subjects=${results.length * 2} archiveBytes=${archiveBytes} inventoryBytes=${inventoryBytes} bundleBytes=${bundleBytes} trustRootSha256=${sha256(trustRootBytes)} subjectSetSha256=${subjectSha256}\n`
   )
 }
 

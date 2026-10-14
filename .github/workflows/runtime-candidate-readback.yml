@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - m2/M2-0475-runtime-artifact-publisher
+      - m2/runtime-candidate-readback-four-root
     paths:
       - .github/workflows/runtime-candidate-readback.yml
       - package.json
@@ -17,7 +18,7 @@ permissions:
 
 jobs:
   verify-retained-llama-candidate:
-    name: Verify retained native candidate provenance
+    name: Verify retained native and model candidate provenance
     if: github.repository == 'mysticalsin/AskToto-Mantu'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -35,6 +36,8 @@ jobs:
           cache: npm
       - name: Install frozen verifier dependencies without lifecycle scripts
         run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Check bounded duplicate-aware JSON and closed inventory fixtures
+        run: node --test scripts/runtime-payload/verify-retained-candidate-readback.test.mjs
       - name: Check maintained Sigstore DER claim parsing boundaries
         run: node scripts/runtime-payload/check-sigstore-claim-der.mjs
       - name: Confirm exact retained workflow run and artifact metadata
@@ -42,33 +45,39 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if ! gh api repos/mysticalsin/AskToto-Mantu/actions/runs/38594471312 >"$RUNNER_TEMP/runtime-run-metadata.json" 2>/dev/null; then
+          if ! gh api repos/mysticalsin/AskToto-Mantu/actions/runs/38626866933 >"$RUNNER_TEMP/runtime-run-metadata.json" 2>/dev/null; then
             echo 'RUNTIME_READBACK_RUN_METADATA_UNAVAILABLE'
             exit 1
           fi
           jq -e '
-            .id == 38594471312 and
+            .id == 38626866933 and
             .event == "push" and
             .status == "completed" and
             .conclusion == "success" and
-            .head_sha == "a78de2590a05c09ecc5198009c3509085a4f5053" and
+            .head_sha == "613d7886504f608766022fa740b1ed7297e17b16" and
             .head_branch == "m2/M2-0475-runtime-artifact-publisher" and
             .run_attempt == 1 and
-            (.path | contains(".github/workflows/runtime-llama-candidate.yml")) and
+            .path == ".github/workflows/runtime-llama-candidate.yml@refs/heads/m2/M2-0475-runtime-artifact-publisher" and
+            .head_repository.id == 1282463398 and
             .head_repository.full_name == "mysticalsin/AskToto-Mantu"
           ' "$RUNNER_TEMP/runtime-run-metadata.json" >/dev/null || {
             echo 'RUNTIME_READBACK_RUN_METADATA_MISMATCH'
             exit 1
           }
-          if ! gh api repos/mysticalsin/AskToto-Mantu/actions/runs/38594471312/artifacts >"$RUNNER_TEMP/runtime-artifact-metadata.json" 2>/dev/null; then
+          if ! gh api repos/mysticalsin/AskToto-Mantu/actions/runs/38626866933/artifacts >"$RUNNER_TEMP/runtime-artifact-metadata.json" 2>/dev/null; then
             echo 'RUNTIME_READBACK_ARTIFACT_METADATA_UNAVAILABLE'
             exit 1
           fi
           jq -e '
             [.artifacts[] | select(
-              .id == 11908439090 and
-              .name == "runtime-attested-llama-candidates-a78de2590a05c09ecc5198009c3509085a4f5053-1" and
-              .size_in_bytes == 60040386 and
+              .id == 11924496850 and
+              .name == "runtime-attested-llama-candidates-613d7886504f608766022fa740b1ed7297e17b16-1" and
+              .size_in_bytes == 760446612 and
+              .digest == "sha256:e4187aec2cba8e11735fab02d3f42f9952561478359960cff8d280f265de3568" and
+              .workflow_run.id == 38626866933 and
+              .workflow_run.head_sha == "613d7886504f608766022fa740b1ed7297e17b16" and
+              .workflow_run.head_branch == "m2/M2-0475-runtime-artifact-publisher" and
+              .workflow_run.repository_id == 1282463398 and
               .expired == false
             )] | length == 1
           ' "$RUNNER_TEMP/runtime-artifact-metadata.json" >/dev/null || {
@@ -80,13 +89,13 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           repository: mysticalsin/AskToto-Mantu
-          run-id: '38594471312'
-          artifact-ids: '11908439090'
+          run-id: '38626866933'
+          artifact-ids: '11924496850'
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/runtime-candidate-readback
           merge-multiple: true
-      - name: Verify app-owned root, Sigstore identity, and both signed subjects
+      - name: Verify app-pinned trust root and all four signed payload roots
         env:
           RUNNER_TEMP: ${{ runner.temp }}
           RUNTIME_CANDIDATE_READBACK: ${{ runner.temp }}/runtime-candidate-readback
-        run: node scripts/runtime-payload/verify-a78-candidate-readback.mjs
+        run: node scripts/runtime-payload/verify-retained-candidate-readback.mjs
