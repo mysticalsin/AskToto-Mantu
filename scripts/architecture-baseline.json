@@ -48,7 +48,7 @@
     "src/main/index.ts": 10402,
     "src/main/store.ts": 1364,
     "src/main/transcripts.ts": 1210,
-    "src/renderer/src/App.tsx": 4796,
+    "src/renderer/src/App.tsx": 4794,
     "src/renderer/src/components/Bar.tsx": 962,
     "src/renderer/src/components/BrainRecordPage.tsx": 831,
     "src/renderer/src/components/BrainView.tsx": 1445,
@@ -60,7 +60,7 @@
     "src/renderer/src/features/settings/AudioTab.tsx": 909,
     "src/renderer/src/features/settings/DustSetup.tsx": 980,
     "src/renderer/src/features/settings/SettingsRoot.tsx": 1246,
-    "src/renderer/src/lib/listen.ts": 3128,
+    "src/renderer/src/lib/listen.ts": 3121,
     "src/shared/ipc.ts": 2466
   },
   "FF-05a": {

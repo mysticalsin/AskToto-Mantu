@@ -84,6 +84,14 @@ Separate App Store submission from `native-app/`. Does not use the `Metis-Releas
   `src/main/infra/process/speech-pack-host.ts` (owned utility process), and
   `src/main/speech-pack-bootstrap.ts` (desktop lifecycle). The package-owned
   `build/speech-pack-profile.json` keeps the shipping full profile until a lean package is qualified.
+- Live cloud speech in the desktop renderer → `src/renderer/src/App.tsx` owns the selected live-speech settings
+  and consent UI; `src/renderer/src/lib/cloud-speech-consent.ts` validates the explicit disclosure decision, and
+  `src/renderer/src/lib/cloud-speech-listen.ts` binds the controller to Listen lifecycle callbacks. The Listen
+  hook in `src/renderer/src/lib/listen.ts` owns capture admission, stop/drain and transcript application;
+  `listen-audio-channels.ts` owns acquired streams and audio graph setup/teardown, while
+  `listen-audio-recovery.ts` owns recovery policy and fails broker capture closed when a track cannot be
+  safely reattached. `listen-startup-policy.ts` owns the cached Operator Listen gate and effective engine
+  selection; `cloud-speech-startup.ts` validates live broker capability/readiness and bounds startup events.
 - ASR asset IPC → `src/main/ipc/asr-assets-ipc.ts`, `src/main/ipc/parakeet-assets-ipc.ts`, and
   `src/main/ipc/speech-pack-ipc.ts`; ASR status wire types live in `src/shared/asr-assets.ts` and are
   re-exported by `src/shared/ipc.ts`. Metadata-only probes use `src/main/asr-metadata-readiness.ts`.
