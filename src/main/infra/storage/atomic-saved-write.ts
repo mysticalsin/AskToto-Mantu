@@ -217,7 +217,7 @@ export async function atomicSavedWriteStream(
         error.name = 'TEMP_OWNERSHIP'
         throw error
       }
-       const preparedGuard = await limits.prepareBeforeReplace?.()
+      const preparedGuard = await limits.prepareBeforeReplace?.()
       if (!(await isUnchangedTemp(tmp, tempIdentity, bytesWritten))) {
         const error = new Error('Streamed saved write lost ownership of its temporary file.')
         error.name = 'TEMP_OWNERSHIP'
@@ -225,7 +225,7 @@ export async function atomicSavedWriteStream(
       }
       // This synchronous policy check follows the final metadata await and stays outside the retry catch.
       checkAdmission(limits.beforeReplace)
-       if (typeof preparedGuard === 'function') preparedGuard()
+      if (typeof preparedGuard === 'function') preparedGuard()
       checkAdmission(limits.beforeChunk)
       try {
         await rename(tmp, file)

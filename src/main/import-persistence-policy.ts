@@ -212,11 +212,7 @@ function missingFields(input: ImportPersistencePolicyInput): ImportPersistenceCo
     const value = field(input, path)
     if (path === 'revision') return value === undefined
     if (path === 'legacy.nativeV1') return value === undefined
-    if (
-      path === 'ownerAuthority' ||
-      path === 'rootCapability' ||
-      path === 'protectedKeyProvider'
-    ) {
+    if (path === 'ownerAuthority' || path === 'rootCapability' || path === 'protectedKeyProvider') {
       return !hasCapability(value, path)
     }
     return value === undefined

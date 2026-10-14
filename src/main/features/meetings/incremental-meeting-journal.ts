@@ -22,6 +22,10 @@ export interface IncrementalJournalSnapshot {
 
 export type IncrementalJournalStorageResult<T> = { status: 'ok'; snapshot: T } | { status: 'unavailable' }
 
+export type IncrementalJournalApplicationMetadataResult =
+  | { readonly status: 'ok'; readonly revision: number; readonly bytes: Uint8Array | null }
+  | { readonly status: 'stale-revision' | 'stale-owner' | 'limit' | 'unavailable' }
+
 export type IncrementalIdentityLookup =
   | { status: 'absent' }
   | { status: 'found'; sha256: string; revision: number }
@@ -62,6 +66,13 @@ export interface IncrementalMeetingJournalStorage {
   lookupIdentity(meetingId: string, identityKey: string, isCurrent: () => boolean): Promise<IncrementalIdentityLookup>
   /** Must check currentness at each mutation boundary, CAS the revision and atomically publish record plus frontier. */
   commitAppend(request: IncrementalAppendCommit, isCurrent: () => boolean): Promise<IncrementalAppendCommitResult>
+  readApplicationMetadata?(isCurrent: () => boolean): Promise<IncrementalJournalApplicationMetadataResult>
+  commitApplicationMetadata?(
+    expectedRevision: number,
+    bytes: Uint8Array | null,
+    maxBytes: number,
+    isCurrent: () => boolean
+  ): Promise<IncrementalJournalApplicationMetadataResult>
 }
 
 export type IncrementalAppendResult =

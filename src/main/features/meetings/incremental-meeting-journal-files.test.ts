@@ -92,6 +92,78 @@ function appender(storage: IncrementalMeetingJournalStorage | undefined, isCurre
 }
 
 describe('encrypted incremental meeting journal files', () => {
+  it('stores application cursor metadata in the authenticated manifest with revision CAS', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'metis-incremental-app-metadata-'))
+    roots.push(root)
+    const journal = await store(root)
+    await expect(journal.initialize()).resolves.toMatchObject({ status: 'ok' })
+    await expect(journal.readApplicationMetadata(() => true)).resolves.toEqual({
+      status: 'ok',
+      revision: 0,
+      bytes: null
+    })
+
+    const metadata = new TextEncoder().encode('{"cursor":4,"pending":"6370e1cc-43f4-4976-a912-04d0c3ca8f9f"}')
+    await expect(journal.commitApplicationMetadata(0, metadata, 1024, () => true)).resolves.toEqual({
+      status: 'ok',
+      revision: 1,
+      bytes: metadata
+    })
+    await expect(journal.readApplicationMetadata(() => true)).resolves.toMatchObject({
+      status: 'ok',
+      revision: 1,
+      bytes: metadata
+    })
+    await expect(journal.commitApplicationMetadata(0, metadata, 1024, () => true)).resolves.toEqual({
+      status: 'stale-revision'
+    })
+    await expect(journal.commitApplicationMetadata(1, metadata, 4, () => true)).resolves.toEqual({
+      status: 'limit'
+    })
+    await expect(journal.commitApplicationMetadata(1, metadata.subarray(1), 1024, () => true)).resolves.toEqual({
+      status: 'limit'
+    })
+    await expect(appender(journal).append(recordJson, 0)).resolves.toEqual({
+      status: 'durable',
+      revision: 1,
+      duplicate: false
+    })
+    journal.dispose()
+
+    const reopened = await store(root)
+    await expect(reopened.initialize()).resolves.toMatchObject({ status: 'ok' })
+    await expect(reopened.readSnapshot(meetingId, () => true)).resolves.toMatchObject({
+      status: 'ok',
+      snapshot: { acceptedRevision: 1, durableRevision: 1, recordCount: 1 }
+    })
+    await expect(reopened.readApplicationMetadata(() => true)).resolves.toMatchObject({
+      status: 'ok',
+      revision: 1,
+      bytes: metadata
+    })
+    await expect(appender(reopened).append(recordJson, 0)).resolves.toEqual({
+      status: 'durable',
+      revision: 1,
+      duplicate: true
+    })
+    const advanced = new TextEncoder().encode('{"cursor":5,"pending":null}')
+    await expect(reopened.commitApplicationMetadata(1, advanced, 1024, () => true)).resolves.toEqual({
+      status: 'ok',
+      revision: 2,
+      bytes: advanced
+    })
+    reopened.dispose()
+
+    const final = await store(root)
+    await expect(final.initialize()).resolves.toMatchObject({ status: 'ok' })
+    await expect(final.readApplicationMetadata(() => true)).resolves.toMatchObject({
+      status: 'ok',
+      revision: 2,
+      bytes: advanced
+    })
+    final.dispose()
+  })
+
   it('persists an authenticated frontier and encrypted immutable record for exact retry', async () => {
     const root = await mkdtemp(join(tmpdir(), 'metis-incremental-files-'))
     roots.push(root)

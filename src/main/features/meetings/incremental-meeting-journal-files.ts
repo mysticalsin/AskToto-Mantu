@@ -34,6 +34,7 @@ import {
   type IncrementalIdentityLookup,
   type IncrementalJournalSnapshot,
   type IncrementalJournalStorageResult,
+  type IncrementalJournalApplicationMetadataResult,
   type IncrementalMeetingJournalStorage
 } from './incremental-meeting-journal'
 
@@ -66,6 +67,13 @@ export interface IncrementalMeetingJournalFileStorage extends IncrementalMeeting
     sink: (record: IncrementalJournalFileRecord) => void | Promise<void>,
     isCurrent: () => boolean
   ): Promise<IncrementalJournalPageResult>
+  readApplicationMetadata(isCurrent: () => boolean): Promise<IncrementalJournalApplicationMetadataResult>
+  commitApplicationMetadata(
+    expectedRevision: number,
+    bytes: Uint8Array | null,
+    maxBytes: number,
+    isCurrent: () => boolean
+  ): Promise<IncrementalJournalApplicationMetadataResult>
   dispose(): void
 }
 
@@ -237,7 +245,9 @@ export function createIncrementalMeetingJournalFileStorage(
           linePayloadBytes: 0,
           storedBytes: 0,
           manifestBytes: 0,
-          pending: null
+          pending: null,
+          applicationRevision: 0,
+          applicationMetadata: null
         }
         const encoded = setManifestStoredBytes(core, 0, key!)
         if (encoded.byteLength > maxJournalBytes) {
@@ -735,6 +745,118 @@ export function createIncrementalMeetingJournalFileStorage(
       return wrote ? 'committed' : requestCurrent() ? 'unavailable' : 'stale-owner'
     },
 
+    async readApplicationMetadata(isCurrent) {
+      const requestCurrent = activeCheck(baseCurrent, isCurrent)
+      if (!requestCurrent()) return { status: 'stale-owner' }
+      const loaded = await readManifest(requestCurrent)
+      if (loaded.status !== 'ok' || !requestCurrent())
+        return { status: requestCurrent() ? 'unavailable' : 'stale-owner' }
+      try {
+        const encoded = loaded.core.applicationMetadata
+        if (encoded === null) return { status: 'ok', revision: loaded.core.applicationRevision, bytes: null }
+        const bytes = Buffer.from(encoded, 'base64')
+        if (bytes.toString('base64') !== encoded || !requestCurrent()) {
+          bytes.fill(0)
+          return { status: requestCurrent() ? 'unavailable' : 'stale-owner' }
+        }
+        const output = Uint8Array.from(bytes)
+        bytes.fill(0)
+        return { status: 'ok', revision: loaded.core.applicationRevision, bytes: output }
+      } catch {
+        return { status: 'unavailable' }
+      } finally {
+        loaded.bytes.fill(0)
+      }
+    },
+
+    async commitApplicationMetadata(expectedRevision, suppliedBytes, maxBytes, isCurrent) {
+      const requestCurrent = activeCheck(baseCurrent, isCurrent)
+      const loaded = await readManifest(requestCurrent)
+      if (loaded.status !== 'ok' || !requestCurrent())
+        return { status: requestCurrent() ? 'unavailable' : 'stale-owner' }
+      const old = loaded.core
+      if (old.pending || old.state !== 'active') {
+        loaded.bytes.fill(0)
+        return { status: 'unavailable' }
+      }
+      if (!validCounter(expectedRevision) || expectedRevision !== old.applicationRevision) {
+        loaded.bytes.fill(0)
+        return { status: 'stale-revision' }
+      }
+      if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+        loaded.bytes.fill(0)
+        return { status: 'limit' }
+      }
+      let encodedMetadata: string | null = null
+      let ownedMetadata: Uint8Array | null = null
+      if (suppliedBytes !== null) {
+        const prototype = Object.getPrototypeOf(Uint8Array.prototype) as object
+        const lengthGetter = Object.getOwnPropertyDescriptor(prototype, 'byteLength')?.get
+        const offsetGetter = Object.getOwnPropertyDescriptor(prototype, 'byteOffset')?.get
+        const bufferGetter = Object.getOwnPropertyDescriptor(prototype, 'buffer')?.get
+        const arrayBufferLengthGetter = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'byteLength')?.get
+        const resizableGetter = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'resizable')?.get
+        let byteLength = -1
+        try {
+          if (!(suppliedBytes instanceof Uint8Array) || Object.getPrototypeOf(suppliedBytes) !== Uint8Array.prototype)
+            throw new Error()
+          byteLength = lengthGetter?.call(suppliedBytes) as number
+          const byteOffset = offsetGetter?.call(suppliedBytes) as number
+          const buffer = bufferGetter?.call(suppliedBytes) as unknown
+          if (
+            !lengthGetter ||
+            !offsetGetter ||
+            !bufferGetter ||
+            !arrayBufferLengthGetter ||
+            !resizableGetter ||
+            !(buffer instanceof ArrayBuffer) ||
+            byteOffset !== 0 ||
+            arrayBufferLengthGetter?.call(buffer) !== byteLength ||
+            resizableGetter?.call(buffer) === true
+          )
+            throw new Error()
+        } catch {
+          loaded.bytes.fill(0)
+          return { status: 'limit' }
+        }
+        if (byteLength <= 0 || byteLength > maxBytes) {
+          loaded.bytes.fill(0)
+          return { status: 'limit' }
+        }
+        ownedMetadata = new Uint8Array(new ArrayBuffer(byteLength))
+        ownedMetadata.set(suppliedBytes)
+        encodedMetadata = Buffer.from(ownedMetadata).toString('base64')
+      }
+      const core: ManifestCore = {
+        ...old,
+        applicationRevision: old.applicationRevision + 1,
+        applicationMetadata: encodedMetadata,
+        manifestBytes: 0
+      }
+      const recordBytes = old.storedBytes - old.manifestBytes
+      const bytes = setManifestStoredBytes(core, recordBytes, key!)
+      loaded.bytes.fill(0)
+      if (!requestCurrent()) {
+        bytes.fill(0)
+        ownedMetadata?.fill(0)
+        return { status: 'stale-owner' }
+      }
+      if (bytes.byteLength > 16_384 || core.storedBytes > maxJournalBytes) {
+        bytes.fill(0)
+        ownedMetadata?.fill(0)
+        return { status: 'limit' }
+      }
+      const wrote = await writeAtomic(manifestName, bytes, requestCurrent, maxJournalBytes)
+      bytes.fill(0)
+      if (!wrote || !requestCurrent()) {
+        ownedMetadata?.fill(0)
+        return { status: requestCurrent() ? 'unavailable' : 'stale-owner' }
+      }
+      const output = ownedMetadata === null ? null : Uint8Array.from(ownedMetadata)
+      ownedMetadata?.fill(0)
+      return { status: 'ok', revision: core.applicationRevision, bytes: output }
+    },
+
     dispose() {
       if (disposed) return
       disposed = true
@@ -770,6 +892,30 @@ export function createIncrementalMeetingJournalFileStorage(
         () => storage.transitionState(state, isCurrent)
       )
       return locked.status === 'ok' ? locked.value : locked.status === 'stale-owner' ? 'stale-owner' : 'unavailable'
+    },
+    async readApplicationMetadata(isCurrent) {
+      const canonicalKey = await canonicalMutationKey()
+      if (!canonicalKey) return { status: 'unavailable' }
+      const locked = await withIncrementalMeetingMutation(
+        canonicalKey,
+        () => baseCurrent() && safeCurrent(isCurrent),
+        () => storage.readApplicationMetadata(isCurrent)
+      )
+      return locked.status === 'ok'
+        ? locked.value
+        : { status: locked.status === 'stale-owner' ? 'stale-owner' : 'unavailable' }
+    },
+    async commitApplicationMetadata(expectedRevision, bytes, maxBytes, isCurrent) {
+      const canonicalKey = await canonicalMutationKey()
+      if (!canonicalKey) return { status: 'unavailable' }
+      const locked = await withIncrementalMeetingMutation(
+        canonicalKey,
+        () => baseCurrent() && safeCurrent(isCurrent),
+        () => storage.commitApplicationMetadata(expectedRevision, bytes, maxBytes, isCurrent)
+      )
+      return locked.status === 'ok'
+        ? locked.value
+        : { status: locked.status === 'stale-owner' ? 'stale-owner' : 'unavailable' }
     }
   }
 }

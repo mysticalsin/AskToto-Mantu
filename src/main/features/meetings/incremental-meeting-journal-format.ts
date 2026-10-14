@@ -37,6 +37,8 @@ export type ManifestCore = {
   storedBytes: number
   manifestBytes: number
   pending: PendingRecord | null
+  applicationRevision: number
+  applicationMetadata: string | null
 }
 export type StoredManifest = ManifestCore & { hmac: string }
 export type RecordMetadata = {
@@ -142,9 +144,13 @@ export function verifyManifest(bytes: Uint8Array, key: Buffer, meetingId: string
     const parsed: unknown = JSON.parse(Buffer.from(bytes).toString('utf8'))
     if (!plainObject(parsed)) return null
     const keys = Object.keys(parsed).sort().join(',')
-    if (
-      keys !==
+    const legacyManifest =
+      keys ===
       'acceptedRevision,durableRevision,hmac,linePayloadBytes,manifestBytes,meetingId,pending,recordCount,state,storedBytes,version,wordCount'
+    if (
+      !legacyManifest &&
+      keys !==
+        'acceptedRevision,applicationMetadata,applicationRevision,durableRevision,hmac,linePayloadBytes,manifestBytes,meetingId,pending,recordCount,state,storedBytes,version,wordCount'
     )
       return null
     const value = parsed as StoredManifest
@@ -159,12 +165,19 @@ export function verifyManifest(bytes: Uint8Array, key: Buffer, meetingId: string
         value.wordCount,
         value.linePayloadBytes,
         value.storedBytes,
-        value.manifestBytes
+        value.manifestBytes,
+        ...(legacyManifest ? [] : [value.applicationRevision])
       ].every(validCounter) ||
       value.acceptedRevision !== value.durableRevision ||
       value.acceptedRevision < value.recordCount ||
       value.manifestBytes !== bytes.byteLength ||
       !SHA256.test(value.hmac) ||
+      (!legacyManifest &&
+        value.applicationMetadata !== null &&
+        (typeof value.applicationMetadata !== 'string' ||
+          value.applicationMetadata.length > 16_384 ||
+          !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value.applicationMetadata))) ||
+      (!legacyManifest && value.applicationRevision === 0 && value.applicationMetadata !== null) ||
       (value.recordCount === 0 ? value.linePayloadBytes !== 0 : value.linePayloadBytes < value.recordCount * 2) ||
       (value.pending === null && value.storedBytes < value.manifestBytes)
     )
@@ -190,13 +203,15 @@ export function verifyManifest(bytes: Uint8Array, key: Buffer, meetingId: string
       )
         return null
     }
-    const core = { ...value } as ManifestCore & { hmac?: string }
-    delete core.hmac
-    const expected = createHmac('sha256', key).update(JSON.stringify(core)).digest()
+    const rawCore = { ...value } as Record<string, unknown> & { hmac?: string }
+    delete rawCore.hmac
+    const expected = createHmac('sha256', key).update(JSON.stringify(rawCore)).digest()
     const actual = Buffer.from(value.hmac, 'hex')
     if (expected.byteLength !== actual.byteLength || !timingSafeEqual(expected, actual)) return null
-    if (JSON.stringify({ ...core, hmac: value.hmac }) !== Buffer.from(bytes).toString('utf8')) return null
-    return core
+    if (JSON.stringify({ ...rawCore, hmac: value.hmac }) !== Buffer.from(bytes).toString('utf8')) return null
+    return (
+      legacyManifest ? { ...rawCore, applicationRevision: 0, applicationMetadata: null } : rawCore
+    ) as ManifestCore
   } catch {
     return null
   }

@@ -90,16 +90,18 @@ function setup({
     requireAuth: auth ?? (() => requireAuth),
     getImportJobs,
     refreshImportAuthority,
-    captureImportOperation: captureImportOperation ?? (async () => {
-      await refreshImportAuthority()
-      const isAuthenticated = auth ?? (() => requireAuth)
-      return {
-        assertCurrent: () => {
-          if (!isAuthenticated()) throw new Error('The original import authority is no longer current.')
-        },
-        refreshSameScope: refreshImportAuthority
-      }
-    }),
+    captureImportOperation:
+      captureImportOperation ??
+      (async () => {
+        await refreshImportAuthority()
+        const isAuthenticated = auth ?? (() => requireAuth)
+        return {
+          assertCurrent: () => {
+            if (!isAuthenticated()) throw new Error('The original import authority is no longer current.')
+          },
+          refreshSameScope: refreshImportAuthority
+        }
+      }),
     assertImportAdmissionAllowed,
     assertImportAdmissionCurrent,
     currentImportRetentionState,
