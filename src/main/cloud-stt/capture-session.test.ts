@@ -33,11 +33,42 @@ describe('main speech capture transition owner', () => {
       [{ track: 'microphone', previousEpoch: 3, nextEpoch: 9, lastSequence: 8 }],
       20
     )
+    expect(opened.transitionId).toBe(closed.transitionId)
+    expect(opened.handoffNonce).toBe(closed.handoffNonce)
     expect(h.acknowledge({ ...acknowledgement(opened), streams: [] } as never)).toBe(false)
     expect(h.acknowledge(acknowledgement(opened))).toBe(true)
     await expect(next).resolves.toBe(true)
     h.completeTransition()
     expect(h.acknowledge(acknowledgement(closed))).toBe(false)
+  })
+
+  it('pairs opened receipts only with the acknowledged closed inventory and strictly newer epochs', async () => {
+    const h = new MainSpeechCaptureSession({ captureId, captureGeneration: 2, tracks: ['microphone'], startedAt: 0 })
+    const { event: closed, applied } = h.beginTransition(
+      'closed',
+      [{ track: 'microphone', previousEpoch: 4, lastSequence: 12 }],
+      10
+    )
+    h.acknowledge(acknowledgement(closed))
+    await expect(applied).resolves.toBe(true)
+    h.completeTransition()
+
+    expect(() =>
+      h.beginTransition('opened', [{ track: 'microphone', previousEpoch: 4, nextEpoch: 5, lastSequence: 11 }], 10)
+    ).toThrow('speech transition inventory or deadline is invalid')
+    expect(() =>
+      h.beginTransition('opened', [{ track: 'microphone', previousEpoch: 4, nextEpoch: 4, lastSequence: 12 }], 10)
+    ).toThrow('speech transition inventory or deadline is invalid')
+
+    const { event: opened, applied: openedApplied } = h.beginTransition(
+      'opened',
+      [{ track: 'microphone', previousEpoch: 4, nextEpoch: 8, lastSequence: 12 }],
+      10
+    )
+    expect(opened.transitionId).toBe(closed.transitionId)
+    expect(opened.handoffNonce).toBe(closed.handoffNonce)
+    h.acknowledge(acknowledgement(opened))
+    await expect(openedApplied).resolves.toBe(true)
   })
 
   it('reserves at most one unresolved invoke per track and expires it at the original deadline', () => {
@@ -93,13 +124,7 @@ describe('main speech capture transition owner', () => {
     await expect(waiting).resolves.toBe(false)
     expect(h.acknowledge(acknowledgement(event))).toBe(false)
 
-    const { applied: second } = h.beginTransition(
-      'opened',
-      [{ track: 'microphone', previousEpoch: 3, nextEpoch: 9, lastSequence: 8 }],
-      30
-    )
     h.invalidate()
-    await expect(second).resolves.toBe(false)
     expect(h.phase).toBe('cancelled')
   })
 
