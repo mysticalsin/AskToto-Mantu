@@ -65,9 +65,17 @@ async function createFixture() {
   const db: DatabaseSync = migratedDb()
   const d1 = sqliteD1(db)
   const store = d1Store(d1)
-  await store.putTier({ id: 'metis', label: 'Métis', entitlements_json: JSON.stringify(['listen', 'operator_keys']), updated_at: NOW })
+  await store.putTier({
+    id: 'metis',
+    label: 'Métis',
+    entitlements_json: JSON.stringify(['listen', 'operator_keys']),
+    updated_at: NOW
+  })
   const tokens = new Map<string, string>()
-  for (const [device, jti] of [[DEVICE, 'aaaaaaaaaaaaaaaa'], [OTHER_DEVICE, 'bbbbbbbbbbbbbbbb']]) {
+  for (const [device, jti] of [
+    [DEVICE, 'aaaaaaaaaaaaaaaa'],
+    [OTHER_DEVICE, 'bbbbbbbbbbbbbbbb']
+  ]) {
     const issued = await generateOperatorLicense(TEST_INGEST_SECRET, { days: 7, now: NOW, jti })
     tokens.set(device, issued.token)
     await store.putIssuedLicense({
@@ -136,13 +144,21 @@ async function signedRequest(options: {
 
 describe('authenticated speech session broker boundary', () => {
   let fixture: Awaited<ReturnType<typeof createFixture>>
-  beforeEach(async () => { fixture = await createFixture() })
+  beforeEach(async () => {
+    fixture = await createFixture()
+  })
 
   it('rejects legacy fleet HMAC without allocating a session', async () => {
     const hitRate = vi.spyOn(fixture.store, 'hitRate')
-    const response = await handleRequest(await signedRequest({ token: null, secret: TEST_INGEST_SECRET }), baseEnv, {}, {
-      store: fixture.store, now: NOW
-    })
+    const response = await handleRequest(
+      await signedRequest({ token: null, secret: TEST_INGEST_SECRET }),
+      baseEnv,
+      {},
+      {
+        store: fixture.store,
+        now: NOW
+      }
+    )
     expect(response.status).toBe(401)
     expect(await response.json()).toMatchObject({ ok: false, code: 'license-required' })
     expect(hitRate).not.toHaveBeenCalled()
@@ -150,9 +166,15 @@ describe('authenticated speech session broker boundary', () => {
   })
 
   it('fails closed without verified server privacy and consumer evidence', async () => {
-    const response = await handleRequest(await signedRequest({ token: fixture.tokens.get(DEVICE) }), {
-      ...baseEnv, DB: fixture.d1
-    }, {}, { store: fixture.store, now: NOW })
+    const response = await handleRequest(
+      await signedRequest({ token: fixture.tokens.get(DEVICE) }),
+      {
+        ...baseEnv,
+        DB: fixture.d1
+      },
+      {},
+      { store: fixture.store, now: NOW }
+    )
     expect(response.status).toBe(403)
     expect(await response.json()).toMatchObject({ ok: false, code: 'PRIVACY_UNVERIFIED' })
     expect(fixture.db.prepare('SELECT COUNT(*) AS n FROM speech_sessions').get()).toMatchObject({ n: 0 })
@@ -160,82 +182,152 @@ describe('authenticated speech session broker boundary', () => {
 
   it('creates only a synthetic test grant after exact licensed authorization and policy evidence', async () => {
     const providerFetch = vi.fn(async () => new Response('unexpected upstream'))
-    const response = await handleRequest(await signedRequest({ token: fixture.tokens.get(DEVICE) }), {
-      ...baseEnv, DB: fixture.d1
-    }, {}, { store: fixture.store, now: NOW, speechPolicyEvidence: TOKEN, providerFetch })
+    const response = await handleRequest(
+      await signedRequest({ token: fixture.tokens.get(DEVICE) }),
+      {
+        ...baseEnv,
+        DB: fixture.d1
+      },
+      {},
+      { store: fixture.store, now: NOW, speechPolicyEvidence: TOKEN, providerFetch }
+    )
     expect(response.status).toBe(200)
-    const body = await response.json() as { ok: boolean; sessionId: string; grants: Array<{ track: string; token: string }> }
+    const body = (await response.json()) as {
+      ok: boolean
+      sessionId: string
+      grants: Array<{ track: string; token: string }>
+    }
     expect(body.ok).toBe(true)
     expect(body.grants.map((grant) => grant.track)).toEqual(['microphone', 'system'])
     expect(body.grants.every((grant) => grant.token.length === 43)).toBe(true)
     expect(providerFetch).not.toHaveBeenCalled()
     for (const grant of body.grants) {
-      expect(fixture.db.prepare('SELECT COUNT(*) AS n FROM speech_grants WHERE token_hash = ?').get(grant.token)).toMatchObject({ n: 0 })
+      expect(
+        fixture.db.prepare('SELECT COUNT(*) AS n FROM speech_grants WHERE token_hash = ?').get(grant.token)
+      ).toMatchObject({ n: 0 })
     }
   })
 
   it('rejects body/path cancellation mismatch and cross-device session cancellation', async () => {
-    const create = await handleRequest(await signedRequest({ token: fixture.tokens.get(DEVICE) }), {
-      ...baseEnv, DB: fixture.d1
-    }, {}, { store: fixture.store, now: NOW, speechPolicyEvidence: TOKEN })
-    const created = await create.json() as { sessionId: string }
-    const wrongBody = await handleRequest(await signedRequest({
-      token: fixture.tokens.get(DEVICE),
-      path: `/v1/speech/sessions/${created.sessionId}/cancel`,
-      body: { operation: 'cancel-session', sessionId: crypto.randomUUID() }
-    }), { ...baseEnv, DB: fixture.d1 }, {}, { store: fixture.store, now: NOW, speechPolicyEvidence: TOKEN })
+    const create = await handleRequest(
+      await signedRequest({ token: fixture.tokens.get(DEVICE) }),
+      {
+        ...baseEnv,
+        DB: fixture.d1
+      },
+      {},
+      { store: fixture.store, now: NOW, speechPolicyEvidence: TOKEN }
+    )
+    const created = (await create.json()) as { sessionId: string }
+    const wrongBody = await handleRequest(
+      await signedRequest({
+        token: fixture.tokens.get(DEVICE),
+        path: `/v1/speech/sessions/${created.sessionId}/cancel`,
+        body: { operation: 'cancel-session', sessionId: crypto.randomUUID() }
+      }),
+      { ...baseEnv, DB: fixture.d1 },
+      {},
+      { store: fixture.store, now: NOW, speechPolicyEvidence: TOKEN }
+    )
     expect(wrongBody.status).toBe(400)
 
-    const otherDevice = await handleRequest(await signedRequest({
-      device: OTHER_DEVICE,
-      token: fixture.tokens.get(OTHER_DEVICE),
-      path: `/v1/speech/sessions/${created.sessionId}/cancel`,
-      body: { operation: 'cancel-session', sessionId: created.sessionId }
-    }), { ...baseEnv, DB: fixture.d1 }, {}, { store: fixture.store, now: NOW })
+    const otherDevice = await handleRequest(
+      await signedRequest({
+        device: OTHER_DEVICE,
+        token: fixture.tokens.get(OTHER_DEVICE),
+        path: `/v1/speech/sessions/${created.sessionId}/cancel`,
+        body: { operation: 'cancel-session', sessionId: created.sessionId }
+      }),
+      { ...baseEnv, DB: fixture.d1 },
+      {},
+      { store: fixture.store, now: NOW }
+    )
     expect(otherDevice.status).toBe(404)
     expect(await otherDevice.json()).toMatchObject({ code: 'SESSION_NOT_FOUND' })
   })
 
   it('keeps authenticated cancellation reachable after the create throttle is exhausted', async () => {
-    const create = await handleRequest(await signedRequest({ token: fixture.tokens.get(DEVICE) }), {
-      ...baseEnv, DB: fixture.d1
-    }, {}, { store: fixture.store, now: NOW, speechPolicyEvidence: TOKEN })
-    const created = await create.json() as { sessionId: string }
+    const create = await handleRequest(
+      await signedRequest({ token: fixture.tokens.get(DEVICE) }),
+      {
+        ...baseEnv,
+        DB: fixture.d1
+      },
+      {},
+      { store: fixture.store, now: NOW, speechPolicyEvidence: TOKEN }
+    )
+    const created = (await create.json()) as { sessionId: string }
     for (let i = 0; i < 12; i++) await fixture.store.hitRate(`speech:${DEVICE}`, NOW, 60_000, 10)
     const hitRate = vi.spyOn(fixture.store, 'hitRate')
-    const response = await handleRequest(await signedRequest({
-      token: fixture.tokens.get(DEVICE),
-      path: `/v1/speech/sessions/${created.sessionId}/cancel`,
-      body: { operation: 'cancel-session', sessionId: created.sessionId }
-    }), { ...baseEnv, DB: fixture.d1 }, {}, { store: fixture.store, now: NOW })
+    const response = await handleRequest(
+      await signedRequest({
+        token: fixture.tokens.get(DEVICE),
+        path: `/v1/speech/sessions/${created.sessionId}/cancel`,
+        body: { operation: 'cancel-session', sessionId: created.sessionId }
+      }),
+      { ...baseEnv, DB: fixture.d1 },
+      {},
+      { store: fixture.store, now: NOW }
+    )
     expect(response.status).toBe(200)
     expect(hitRate).not.toHaveBeenCalled()
-    expect(fixture.db.prepare('SELECT status FROM speech_sessions WHERE id = ?').get(created.sessionId)).toMatchObject({ status: 'cancelled' })
+    expect(fixture.db.prepare('SELECT status FROM speech_sessions WHERE id = ?').get(created.sessionId)).toMatchObject({
+      status: 'cancelled'
+    })
   })
 
   it('rejects stale consent and request replay without creating paid reservations', async () => {
-    const stale = sessionBody({ consent: {
-      accepted: true, captureGeneration: 7, tracks: ['microphone', 'system'],
-      issuedAt: NOW - 180_000, expiresAt: NOW - 1
-    } })
-    const staleResponse = await handleRequest(await signedRequest({ token: fixture.tokens.get(DEVICE), body: stale }), {
-      ...baseEnv, DB: fixture.d1
-    }, {}, { store: fixture.store, now: NOW, speechPolicyEvidence: TOKEN })
+    const stale = sessionBody({
+      consent: {
+        accepted: true,
+        captureGeneration: 7,
+        tracks: ['microphone', 'system'],
+        issuedAt: NOW - 180_000,
+        expiresAt: NOW - 1
+      }
+    })
+    const staleResponse = await handleRequest(
+      await signedRequest({ token: fixture.tokens.get(DEVICE), body: stale }),
+      {
+        ...baseEnv,
+        DB: fixture.d1
+      },
+      {},
+      { store: fixture.store, now: NOW, speechPolicyEvidence: TOKEN }
+    )
     expect(staleResponse.status).toBe(400)
     expect(await staleResponse.json()).toMatchObject({ code: 'CONSENT_EXPIRED' })
 
     const nonce = crypto.randomUUID()
     const make = () => signedRequest({ token: fixture.tokens.get(DEVICE), nonce })
-    const first = await handleRequest(await make(), { ...baseEnv, DB: fixture.d1 }, {}, { store: fixture.store, now: NOW })
-    const replay = await handleRequest(await make(), { ...baseEnv, DB: fixture.d1 }, {}, { store: fixture.store, now: NOW })
+    const first = await handleRequest(
+      await make(),
+      { ...baseEnv, DB: fixture.d1 },
+      {},
+      { store: fixture.store, now: NOW }
+    )
+    const replay = await handleRequest(
+      await make(),
+      { ...baseEnv, DB: fixture.d1 },
+      {},
+      { store: fixture.store, now: NOW }
+    )
     expect(first.status).toBe(403)
     expect(replay.status).toBe(401)
     expect(fixture.db.prepare('SELECT COUNT(*) AS n FROM speech_sessions').get()).toMatchObject({ n: 0 })
   })
 
   it('rejects unbounded body input before parsing or database writes', async () => {
-    const request = await signedRequest({ token: fixture.tokens.get(DEVICE), body: { ...sessionBody(), padding: 'x'.repeat(9_000) } })
-    const response = await handleRequest(request, { ...baseEnv, DB: fixture.d1 }, {}, { store: fixture.store, now: NOW })
+    const request = await signedRequest({
+      token: fixture.tokens.get(DEVICE),
+      body: { ...sessionBody(), padding: 'x'.repeat(9_000) }
+    })
+    const response = await handleRequest(
+      request,
+      { ...baseEnv, DB: fixture.d1 },
+      {},
+      { store: fixture.store, now: NOW }
+    )
     expect(response.status).toBe(413)
     expect(fixture.db.prepare('SELECT COUNT(*) AS n FROM speech_sessions').get()).toMatchObject({ n: 0 })
   })

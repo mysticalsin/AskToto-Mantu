@@ -29,7 +29,9 @@ describe('speech policy resolution', () => {
   })
 
   it('keeps Route A and Route B identifiers distinct and refuses evidence from another route', () => {
-    expect(resolveSpeechPolicy({ ...configured, SPEECH_ROUTE_ID: 'deepgram-via-gateway', SPEECH_MODEL_ID: 'nova-3' })).toMatchObject({
+    expect(
+      resolveSpeechPolicy({ ...configured, SPEECH_ROUTE_ID: 'deepgram-via-gateway', SPEECH_MODEL_ID: 'nova-3' })
+    ).toMatchObject({
       ok: false,
       code: 'PRIVACY_UNVERIFIED'
     })
@@ -51,7 +53,13 @@ describe('speech policy resolution', () => {
       synthetic: true as const
     }
     expect(resolveSpeechPolicy(configured, evidence).ok).toBe(true)
-    expect(resolveSpeechPolicy(configured, { ...evidence, audience: 'other' })).toMatchObject({ ok: false, code: 'PRIVACY_UNVERIFIED' })
-    expect(resolveSpeechPolicy(configured, { ...evidence, transportConsumer: 'UNAVAILABLE' })).toMatchObject({ ok: false, code: 'TRANSPORT_UNAVAILABLE' })
+    expect(resolveSpeechPolicy(configured, { ...evidence, audience: 'other' })).toMatchObject({
+      ok: false,
+      code: 'PRIVACY_UNVERIFIED'
+    })
+    expect(resolveSpeechPolicy(configured, { ...evidence, transportConsumer: 'UNAVAILABLE' })).toMatchObject({
+      ok: false,
+      code: 'TRANSPORT_UNAVAILABLE'
+    })
   })
 })

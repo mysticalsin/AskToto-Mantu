@@ -1,7 +1,12 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { isPlaceholderDatabaseId, parseStatements, resolveDatabaseName, stripJsonComments } from '../scripts/migrate.mjs'
+import {
+  isPlaceholderDatabaseId,
+  parseStatements,
+  resolveDatabaseName,
+  stripJsonComments
+} from '../scripts/migrate.mjs'
 
 const OPERATOR_ROOT = join(__dirname, '..')
 const schemaSql = readFileSync(join(OPERATOR_ROOT, 'schema.sql'), 'utf8')
@@ -138,7 +143,12 @@ describe('schema-alter.sql operator_settings table (task B6, operator/src/routes
   it('creates operator_settings with exactly the four columns the settings store needs', () => {
     const stmt = parseStatements(schemaAlterSql).find((s) => /^CREATE TABLE IF NOT EXISTS operator_settings\b/i.test(s))
     expect(stmt).toBeTruthy()
-    for (const col of ['key TEXT PRIMARY KEY', 'value_json TEXT NOT NULL', 'updated_at INTEGER NOT NULL', 'updated_by TEXT NOT NULL']) {
+    for (const col of [
+      'key TEXT PRIMARY KEY',
+      'value_json TEXT NOT NULL',
+      'updated_at INTEGER NOT NULL',
+      'updated_by TEXT NOT NULL'
+    ]) {
       expect(stmt.replace(/\s+/g, ' ')).toContain(col)
     }
   })
@@ -158,7 +168,12 @@ describe('schema-alter.sql model_policy table (M2-0412, operator/src/model-polic
   it('creates model_policy with exactly the four columns the policy store needs', () => {
     const stmt = parseStatements(schemaAlterSql).find((s) => /^CREATE TABLE IF NOT EXISTS model_policy\b/i.test(s))
     expect(stmt).toBeTruthy()
-    for (const col of ['id TEXT PRIMARY KEY', 'policy_json TEXT NOT NULL', 'updated_at INTEGER NOT NULL', 'updated_by TEXT NOT NULL']) {
+    for (const col of [
+      'id TEXT PRIMARY KEY',
+      'policy_json TEXT NOT NULL',
+      'updated_at INTEGER NOT NULL',
+      'updated_by TEXT NOT NULL'
+    ]) {
       expect(stmt.replace(/\s+/g, ' ')).toContain(col)
     }
   })
@@ -183,21 +198,45 @@ describe('speech broker additive schema (M2-0107)', () => {
       expect(sessions).toBeTruthy()
       expect(grants).toBeTruthy()
       for (const column of [
-        'id TEXT PRIMARY KEY', 'tenant_id TEXT NOT NULL', 'audience TEXT NOT NULL',
-        'license_jti TEXT NOT NULL', 'device_id TEXT NOT NULL', 'capture_generation INTEGER NOT NULL',
-        'route_id TEXT NOT NULL', 'model_id TEXT NOT NULL', 'config_version TEXT NOT NULL', 'language TEXT',
-        'track_count INTEGER NOT NULL', 'reserved_ms INTEGER NOT NULL', 'settled_ms INTEGER NOT NULL',
-        'budget_window_start INTEGER NOT NULL', 'lease_expires_at INTEGER NOT NULL'
-      ]) expect(sessions?.replace(/\s+/g, ' ')).toContain(column)
+        'id TEXT PRIMARY KEY',
+        'tenant_id TEXT NOT NULL',
+        'audience TEXT NOT NULL',
+        'license_jti TEXT NOT NULL',
+        'device_id TEXT NOT NULL',
+        'capture_generation INTEGER NOT NULL',
+        'route_id TEXT NOT NULL',
+        'model_id TEXT NOT NULL',
+        'config_version TEXT NOT NULL',
+        'language TEXT',
+        'track_count INTEGER NOT NULL',
+        'reserved_ms INTEGER NOT NULL',
+        'settled_ms INTEGER NOT NULL',
+        'budget_window_start INTEGER NOT NULL',
+        'lease_expires_at INTEGER NOT NULL'
+      ])
+        expect(sessions?.replace(/\s+/g, ' ')).toContain(column)
       for (const column of [
-        'token_hash TEXT NOT NULL UNIQUE', 'session_id TEXT NOT NULL', 'track TEXT NOT NULL',
-        'capture_generation INTEGER NOT NULL', 'route_id TEXT NOT NULL', 'model_id TEXT NOT NULL',
-        'config_version TEXT NOT NULL', 'language TEXT', 'expires_at INTEGER NOT NULL', 'redeemed_at INTEGER', 'revoked_at INTEGER'
-      ]) expect(grants?.replace(/\s+/g, ' ')).toContain(column)
+        'token_hash TEXT NOT NULL UNIQUE',
+        'session_id TEXT NOT NULL',
+        'track TEXT NOT NULL',
+        'capture_generation INTEGER NOT NULL',
+        'route_id TEXT NOT NULL',
+        'model_id TEXT NOT NULL',
+        'config_version TEXT NOT NULL',
+        'language TEXT',
+        'expires_at INTEGER NOT NULL',
+        'redeemed_at INTEGER',
+        'revoked_at INTEGER'
+      ])
+        expect(grants?.replace(/\s+/g, ' ')).toContain(column)
       expect(grants).not.toMatch(/\btoken\s+TEXT\b/i)
       expect(grants).not.toMatch(/audio|transcript|content/i)
-      expect(statements.some((statement) => /^CREATE INDEX IF NOT EXISTS speech_sessions_active_tenant\b/i.test(statement))).toBe(true)
-      expect(statements.some((statement) => /^CREATE INDEX IF NOT EXISTS speech_grants_session\b/i.test(statement))).toBe(true)
+      expect(
+        statements.some((statement) => /^CREATE INDEX IF NOT EXISTS speech_sessions_active_tenant\b/i.test(statement))
+      ).toBe(true)
+      expect(
+        statements.some((statement) => /^CREATE INDEX IF NOT EXISTS speech_grants_session\b/i.test(statement))
+      ).toBe(true)
     }
   })
 })

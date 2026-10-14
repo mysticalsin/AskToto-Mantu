@@ -228,7 +228,10 @@ async function lastCronAt(store: OperatorStore): Promise<number | null> {
 
 async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: HandleOpts = {}): Promise<Response> {
   const url = new URL(request.url)
-  const speechCancelMatch = /^\/v1\/speech\/sessions\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/cancel$/i.exec(url.pathname)
+  const speechCancelMatch =
+    /^\/v1\/speech\/sessions\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/cancel$/i.exec(
+      url.pathname
+    )
   const speechCreate = url.pathname === '/v1/speech/sessions'
   // The Worker never constructs an ephemeral store: without a D1 binding it refuses to serve (a tests-only
   // `opts.store` is the one injection seam), so an unbound deploy can never look live.
@@ -312,8 +315,12 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
     speechCreate ||
     speechCancelMatch !== null
   ) {
-    if ((speechCreate || speechCancelMatch) && request.method !== 'POST') return json({ ok: false, error: 'method not allowed' }, 405)
-    if ((speechCreate || speechCancelMatch) && !/^application\/json(?:\s*;|$)/i.test(request.headers.get('content-type') ?? '')) {
+    if ((speechCreate || speechCancelMatch) && request.method !== 'POST')
+      return json({ ok: false, error: 'method not allowed' }, 405)
+    if (
+      (speechCreate || speechCancelMatch) &&
+      !/^application\/json(?:\s*;|$)/i.test(request.headers.get('content-type') ?? '')
+    ) {
       return json({ ok: false, code: 'INVALID_REQUEST', error: 'Speech requests must use application/json.' }, 415)
     }
     if ((speechCreate || speechCancelMatch) && request.headers.get(OPERATOR_LICENSE_HEADER) === null) {
@@ -324,20 +331,30 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
         ? ''
         : speechCreate || speechCancelMatch
           ? await readSpeechBody(request)
-        : url.pathname === '/v1/ask' || url.pathname === '/v1/use'
-          ? await readUseBody(request)
-          : await request.text()
+          : url.pathname === '/v1/ask' || url.pathname === '/v1/use'
+            ? await readUseBody(request)
+            : await request.text()
     if (bodyText === null) {
-      return json({ ok: false, error: speechCreate || speechCancelMatch ? 'Speech request is too large.' : 'Request is too large. Capture a smaller region or start a new Ask.' }, 413)
+      return json(
+        {
+          ok: false,
+          error:
+            speechCreate || speechCancelMatch
+              ? 'Speech request is too large.'
+              : 'Request is too large. Capture a smaller region or start a new Ask.'
+        },
+        413
+      )
     }
     const hmac = await verifyDeviceRequest(request, bodyText, env.OPERATOR_INGEST_SECRET, store, now)
     if (!hmac.ok) return json({ ok: false, error: hmac.error, ...(hmac.code ? { code: hmac.code } : {}) }, hmac.status)
     if (speechCreate || speechCancelMatch) {
       // A valid fleet HMAC proves a shared secret, not the licensed device principal this paid route needs.
-      if (!hmac.license) return json({ ok: false, code: 'license-required', error: 'A per-device licence is required.' }, 401)
+      if (!hmac.license)
+        return json({ ok: false, code: 'license-required', error: 'A per-device licence is required.' }, 401)
       // This advisory issuance throttle runs only after the signed per-device licence was verified.
       // Cancellation stays reachable so clients can release their own unused reservation.
-      if (speechCreate && await store.hitRate(`speech:${hmac.deviceId}`, now, RATE_WINDOW_MS, 10)) {
+      if (speechCreate && (await store.hitRate(`speech:${hmac.deviceId}`, now, RATE_WINDOW_MS, 10))) {
         return json({ ok: false, error: 'rate limited', retryAfterMs: RATE_WINDOW_MS }, 429)
       }
       const speechDevice = { deviceId: hmac.deviceId, licenseJti: hmac.license.jti }
@@ -345,7 +362,12 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
         return handleSpeechSessionCreate({ store, env, opts, bodyText, now, device: speechDevice })
       }
       return handleSpeechSessionCancel({
-        store, env, bodyText, urlSessionId: (speechCancelMatch?.[1] ?? '').toLowerCase(), now, device: speechDevice
+        store,
+        env,
+        bodyText,
+        urlSessionId: (speechCancelMatch?.[1] ?? '').toLowerCase(),
+        now,
+        device: speechDevice
       })
     }
     const bucket = rateBucketFor(url.pathname)

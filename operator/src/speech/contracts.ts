@@ -3,38 +3,65 @@ import { CaptureGenerationSchema, TrackSchema, type Track } from '../../../src/s
 
 const SessionIdSchema = z.string().uuid()
 const TimestampSchema = z.number().int().positive()
-const TrackListSchema = z.array(TrackSchema).min(1).max(2).superRefine((tracks, context) => {
-  if (new Set(tracks).size !== tracks.length) context.addIssue({ code: z.ZodIssueCode.custom, message: 'tracks must be unique' })
-})
+const TrackListSchema = z
+  .array(TrackSchema)
+  .min(1)
+  .max(2)
+  .superRefine((tracks, context) => {
+    if (new Set(tracks).size !== tracks.length)
+      context.addIssue({ code: z.ZodIssueCode.custom, message: 'tracks must be unique' })
+  })
 
-const ConsentAttestationSchema = z.object({
-  accepted: z.literal(true),
-  captureGeneration: CaptureGenerationSchema,
-  tracks: TrackListSchema,
-  issuedAt: TimestampSchema,
-  expiresAt: TimestampSchema
-}).strict()
+const ConsentAttestationSchema = z
+  .object({
+    accepted: z.literal(true),
+    captureGeneration: CaptureGenerationSchema,
+    tracks: TrackListSchema,
+    issuedAt: TimestampSchema,
+    expiresAt: TimestampSchema
+  })
+  .strict()
 
-export const SpeechSessionRequestSchema = z.object({
-  operation: z.literal('create-session'),
-  captureGeneration: CaptureGenerationSchema,
-  tracks: TrackListSchema,
-  language: z.string().regex(/^[a-z]{2}(?:-[A-Z]{2})?$/).max(5).optional(),
-  consent: ConsentAttestationSchema
-}).strict().superRefine((request, context) => {
-  if (request.captureGeneration !== request.consent.captureGeneration) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'consent generation must match capture', path: ['consent', 'captureGeneration'] })
-  }
-  if (request.tracks.length !== request.consent.tracks.length || request.tracks.some((track, index) => track !== request.consent.tracks[index])) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'consent tracks must exactly match requested tracks', path: ['consent', 'tracks'] })
-  }
-})
+export const SpeechSessionRequestSchema = z
+  .object({
+    operation: z.literal('create-session'),
+    captureGeneration: CaptureGenerationSchema,
+    tracks: TrackListSchema,
+    language: z
+      .string()
+      .regex(/^[a-z]{2}(?:-[A-Z]{2})?$/)
+      .max(5)
+      .optional(),
+    consent: ConsentAttestationSchema
+  })
+  .strict()
+  .superRefine((request, context) => {
+    if (request.captureGeneration !== request.consent.captureGeneration) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'consent generation must match capture',
+        path: ['consent', 'captureGeneration']
+      })
+    }
+    if (
+      request.tracks.length !== request.consent.tracks.length ||
+      request.tracks.some((track, index) => track !== request.consent.tracks[index])
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'consent tracks must exactly match requested tracks',
+        path: ['consent', 'tracks']
+      })
+    }
+  })
 export type SpeechSessionRequest = z.infer<typeof SpeechSessionRequestSchema>
 
-export const SpeechCancelRequestSchema = z.object({
-  operation: z.literal('cancel-session'),
-  sessionId: SessionIdSchema
-}).strict()
+export const SpeechCancelRequestSchema = z
+  .object({
+    operation: z.literal('cancel-session'),
+    sessionId: SessionIdSchema
+  })
+  .strict()
 export type SpeechCancelRequest = z.infer<typeof SpeechCancelRequestSchema>
 
 export type SpeechSafeFailureCode =
@@ -54,19 +81,35 @@ export type SpeechSafeFailureCode =
   | 'GRANT_REJECTED'
 
 /** Diagnostic shape is intentionally content-free and can never carry a grant token. */
-export const SpeechFailureSchema = z.object({
-  ok: z.literal(false),
-  code: z.enum([
-    'INVALID_REQUEST', 'CONSENT_REQUIRED', 'CONSENT_EXPIRED', 'AUTH_REQUIRED', 'NOT_AUTHORIZED',
-    'POLICY_UNAVAILABLE', 'ROUTE_NOT_READY', 'PRIVACY_UNVERIFIED', 'TRANSPORT_UNAVAILABLE',
-    'DATABASE_UNAVAILABLE', 'CONCURRENCY_LIMIT', 'BUDGET_LIMIT', 'SESSION_NOT_FOUND', 'GRANT_REJECTED'
-  ]),
-  error: z.string().max(100)
-}).strict()
+export const SpeechFailureSchema = z
+  .object({
+    ok: z.literal(false),
+    code: z.enum([
+      'INVALID_REQUEST',
+      'CONSENT_REQUIRED',
+      'CONSENT_EXPIRED',
+      'AUTH_REQUIRED',
+      'NOT_AUTHORIZED',
+      'POLICY_UNAVAILABLE',
+      'ROUTE_NOT_READY',
+      'PRIVACY_UNVERIFIED',
+      'TRANSPORT_UNAVAILABLE',
+      'DATABASE_UNAVAILABLE',
+      'CONCURRENCY_LIMIT',
+      'BUDGET_LIMIT',
+      'SESSION_NOT_FOUND',
+      'GRANT_REJECTED'
+    ]),
+    error: z.string().max(100)
+  })
+  .strict()
 
 export type SpeechTrack = Track
 
-export function parseSpeechSessionRequest(value: unknown, now: number):
+export function parseSpeechSessionRequest(
+  value: unknown,
+  now: number
+):
   | { ok: true; request: SpeechSessionRequest }
   | { ok: false; code: 'INVALID_REQUEST' | 'CONSENT_REQUIRED' | 'CONSENT_EXPIRED' } {
   const parsed = SpeechSessionRequestSchema.safeParse(value)

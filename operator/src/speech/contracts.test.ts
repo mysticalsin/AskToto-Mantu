@@ -35,17 +35,32 @@ describe('speech session request contract', () => {
   })
 
   it('rejects expired, future, and overlong consent attestations', () => {
-    expect(parseSpeechSessionRequest({
-      ...valid,
-      consent: { ...valid.consent, issuedAt: 1_000, expiresAt: 9_999 }
-    }, 10_000)).toMatchObject({ ok: false, code: 'CONSENT_EXPIRED' })
-    expect(parseSpeechSessionRequest({
-      ...valid,
-      consent: { ...valid.consent, issuedAt: 10_001, expiresAt: 20_000 }
-    }, 10_000)).toMatchObject({ ok: false, code: 'CONSENT_EXPIRED' })
-    expect(parseSpeechSessionRequest({
-      ...valid,
-      consent: { ...valid.consent, issuedAt: 1_000, expiresAt: 121_001 }
-    }, 10_000)).toMatchObject({ ok: false, code: 'CONSENT_EXPIRED' })
+    expect(
+      parseSpeechSessionRequest(
+        {
+          ...valid,
+          consent: { ...valid.consent, issuedAt: 1_000, expiresAt: 9_999 }
+        },
+        10_000
+      )
+    ).toMatchObject({ ok: false, code: 'CONSENT_EXPIRED' })
+    expect(
+      parseSpeechSessionRequest(
+        {
+          ...valid,
+          consent: { ...valid.consent, issuedAt: 10_001, expiresAt: 20_000 }
+        },
+        10_000
+      )
+    ).toMatchObject({ ok: false, code: 'CONSENT_EXPIRED' })
+    expect(
+      parseSpeechSessionRequest(
+        {
+          ...valid,
+          consent: { ...valid.consent, issuedAt: 1_000, expiresAt: 121_001 }
+        },
+        10_000
+      )
+    ).toMatchObject({ ok: false, code: 'CONSENT_EXPIRED' })
   })
 })

@@ -36,9 +36,14 @@ async function authorizedSpeechDevice(
 ): Promise<{ ok: true; licenseExpiresAt: number } | { ok: false }> {
   const [seat, issued] = await Promise.all([store.getSeat(device.deviceId), store.getIssuedLicense(device.licenseJti)])
   if (
-    !seat || !issued || !issuedLicenseActive(issued, now) || issued.activated_device !== device.deviceId ||
-    seat.license_jti !== device.licenseJti || (seat.approval || '').trim().toLowerCase() === 'revoked'
-  ) return { ok: false }
+    !seat ||
+    !issued ||
+    !issuedLicenseActive(issued, now) ||
+    issued.activated_device !== device.deviceId ||
+    seat.license_jti !== device.licenseJti ||
+    (seat.approval || '').trim().toLowerCase() === 'revoked'
+  )
+    return { ok: false }
   if (requireEntitlements) {
     try {
       const tiers = await store.listTiers()
@@ -64,7 +69,11 @@ export async function handleSpeechSessionCreate(input: {
   device: VerifiedSpeechDevice
 }): Promise<Response> {
   let value: unknown
-  try { value = JSON.parse(input.bodyText) } catch { return refusal('INVALID_REQUEST', 400) }
+  try {
+    value = JSON.parse(input.bodyText)
+  } catch {
+    return refusal('INVALID_REQUEST', 400)
+  }
   const parsed = parseSpeechSessionRequest(value, input.now)
   if (!parsed.ok) return refusal(parsed.code, 400)
 
@@ -75,7 +84,8 @@ export async function handleSpeechSessionCreate(input: {
   if (!input.env.DB) return refusal('DATABASE_UNAVAILABLE', 503)
 
   const policy = policyResult.policy
-  if (parsed.request.language && !policy.allowedLanguages.includes(parsed.request.language)) return refusal('INVALID_REQUEST', 400)
+  if (parsed.request.language && !policy.allowedLanguages.includes(parsed.request.language))
+    return refusal('INVALID_REQUEST', 400)
   const allocation = await allocateSpeechSession(input.env.DB, {
     tenantId: policy.tenantId,
     audience: policy.audience,
@@ -121,7 +131,11 @@ export async function handleSpeechSessionCancel(input: {
   device: VerifiedSpeechDevice
 }): Promise<Response> {
   let value: unknown
-  try { value = JSON.parse(input.bodyText) } catch { return refusal('INVALID_REQUEST', 400) }
+  try {
+    value = JSON.parse(input.bodyText)
+  } catch {
+    return refusal('INVALID_REQUEST', 400)
+  }
   const parsed = SpeechCancelRequestSchema.safeParse(value)
   if (!parsed.success || parsed.data.sessionId !== input.urlSessionId) return refusal('INVALID_REQUEST', 400)
   const auth = await authorizedSpeechDevice(input.store, input.device, input.now, false)
