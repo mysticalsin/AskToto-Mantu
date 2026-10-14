@@ -38,7 +38,7 @@
     "src/shared/contracts/knowledge/record.ts": 1
   },
   "FF-04": {
-    "src/main/auth.ts": 997,
+    "src/main/auth.ts": 986,
     "src/main/brain/corrections.ts": 1637,
     "src/main/brain/ingest.ts": 3076,
     "src/main/brain/publish.ts": 974,
