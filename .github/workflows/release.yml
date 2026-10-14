@@ -3,8 +3,9 @@ name: Release
 # Publishes only verified customer installers to the public Metis-Releases feed (electron-builder.yml
 # publish.owner/repo) on a version tag push (v1.2.3). macOS requires Developer ID signing plus notarization
 # and Windows requires trusted Authenticode signing; missing signing inputs fail that platform's build
-# before it produces an artifact. Each platform publishes as soon as its own gates pass, so a held or
-# failed macOS lane never blocks a signed Windows release, and vice versa (M2-0053). This workflow never
+# before it produces an artifact. Publication requires the computed Release Decision and that platform's
+# own verified artifact, so one platform's held or failed build never blocks the other (M2-0053).
+# This workflow never
 # publishes unsigned bytes: local ad-hoc builds stay local, and owner-channel prereleases come only from
 # promote-candidate.yml.
 on:
@@ -48,9 +49,9 @@ jobs:
         run: npx vitest run scripts/release-lanes.contract.test.ts
 
   # The computed release decision (M2-0171): the ten section 27 contract checks over the evidence registry
-  # and traceability matrix, on the tagged commit. It stands alone, needing and needed by no other job,
-  # so a FAIL is a visible red lane and an attached report without ever holding one platform's publish
-  # hostage to the other's (M2-0053). The ledger, receipts and matrix live in the private program
+  # and traceability matrix, on the tagged commit. It runs independently; both publishers require its
+  # successful conclusion while remaining independent of each other's platform build (M2-0053). The
+  # ledger, receipts and matrix live in the private program
   # repository and is checked out beside this one; when that is not configured the lane fails at the
   # checkout, never a skipped or assumed PASS.
   release-decision:
@@ -392,15 +393,16 @@ jobs:
             release/*.blockmap
             release/latest.yml
 
-  # Each platform publishes on its own gates (M2-0053, MASTER 20.5): a held or failed macOS lane never
-  # blocks a signed Windows release, and vice versa. Both jobs write the same feed release for this tag,
+  # Each platform publishes after the release decision and its own platform gates (M2-0053, MASTER 20.5):
+  # a held or failed macOS lane never blocks a signed Windows release, and vice versa. Both jobs write the
+  # same feed release for this tag,
   # so they take turns on one concurrency group. scripts/publish-release.mjs owns the release states:
   # the first platform goes draft -> verified -> public and Latest; the second joins that release with
   # its update metadata uploaded last, after GitHub's digests of its installers match.
   publish-macos:
     name: Publish macOS release
     if: github.event_name == 'push'
-    needs: release-macos
+    needs: [release-macos, release-decision]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     concurrency:
@@ -425,7 +427,7 @@ jobs:
   publish-windows:
     name: Publish Windows release
     if: github.event_name == 'push'
-    needs: release-windows
+    needs: [release-windows, release-decision]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     concurrency:

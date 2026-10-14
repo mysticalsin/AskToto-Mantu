@@ -114,9 +114,11 @@ const identityValid = (identity) =>
 export function bindHostedTlsCandidate(provenance, context) {
   if (
     !plain(provenance) ||
-    provenance.schema !== 1 ||
+    provenance.schema !== 2 ||
     provenance.repository !== 'mysticalsin/AskToto-Mantu' ||
     provenance.run?.id !== context.candidateRun ||
+    !positive(context.candidateAttempt) ||
+    provenance.run?.attempt !== context.candidateAttempt ||
     provenance.commit !== context.producerCommit ||
     !Array.isArray(provenance.builds)
   ) {
@@ -129,6 +131,7 @@ export function bindHostedTlsCandidate(provenance, context) {
   if (
     builds.length !== 1 ||
     build.artifact !== 'candidate-mac-qa-identity' ||
+    build.platform !== 'mac' ||
     build.electron !== ELECTRON ||
     !Array.isArray(build.assets) ||
     build.assets.length !== 1 ||
@@ -1250,8 +1253,18 @@ export async function runHostedTls(args, provenance) {
   return report
 }
 
-async function main(argv) {
-  const keys = ['app', 'installer', 'sha256', 'provenance', 'candidate-run', 'producer-commit', 'harness-commit', 'out']
+export function parseHostedTlsArgs(argv) {
+  const keys = [
+    'app',
+    'installer',
+    'sha256',
+    'provenance',
+    'candidate-run',
+    'candidate-attempt',
+    'producer-commit',
+    'harness-commit',
+    'out'
+  ]
   const values = {}
   for (let index = 0; index < argv.length; index += 2) {
     const name = argv[index]?.slice(2)
@@ -1263,6 +1276,19 @@ async function main(argv) {
   if (Object.keys(values).length !== keys.length || values.out !== `candidate-scenario/${TLS_REPORT}`) {
     fail('invalid-context')
   }
+  const isPositiveDecimal = (value) => /^[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value))
+  if (!isPositiveDecimal(values['candidate-run']) || !isPositiveDecimal(values['candidate-attempt'])) {
+    fail('invalid-context')
+  }
+  return {
+    ...values,
+    candidateRun: Number(values['candidate-run']),
+    candidateAttempt: Number(values['candidate-attempt'])
+  }
+}
+
+async function main(argv) {
+  const values = parseHostedTlsArgs(argv)
   const cwd = realpathSync(process.cwd())
   safePath(cwd, resolve(values.provenance), 'file', 1_048_576)
   safePath(cwd, join(cwd, 'candidate-scenario'), 'directory')
@@ -1270,7 +1296,8 @@ async function main(argv) {
     app: values.app,
     installer: values.installer,
     sha256: values.sha256,
-    candidateRun: Number(values['candidate-run']),
+    candidateRun: values.candidateRun,
+    candidateAttempt: values.candidateAttempt,
     producerCommit: values['producer-commit'],
     harnessCommit: values['harness-commit']
   }
