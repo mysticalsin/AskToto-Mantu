@@ -590,7 +590,7 @@ describe('speech-pack engine', () => {
       })
     })
 
-    it('removes a corrupt pack found on start instead of adopting it', async () => {
+    it('keeps a corrupt active pack and marker available until an explicit verified repair swaps it', async () => {
       server = await serveFiles()
       const c = whisper(server.base)
       const first = make([c])
@@ -601,8 +601,12 @@ describe('speech-pack engine', () => {
       const next = make([c])
       await next.initialise()
       expect(next.getState(WHISPER)).toEqual({ status: 'not-installed' })
-      expect(existsSync(marker(WHISPER))).toBe(false)
-      expect(existsSync(join(root, WHISPER, '1'))).toBe(false)
+      expect(existsSync(marker(WHISPER))).toBe(true)
+      expect(existsSync(join(root, WHISPER, '1', 'a.bin'))).toBe(true)
+      next.enqueue([WHISPER])
+      await next.whenIdle()
+      expect(next.getState(WHISPER)).toEqual({ status: 'ready' })
+      expect(packMatches(c, join(root, WHISPER, '1'))).toBe(true)
     })
 
     it('refetches a same-size corrupt staged file instead of treating its length as verification', async () => {

@@ -30,7 +30,11 @@ describe('speech-pack manifest pins', () => {
     expect(WHISPER_BASE_Q8.files).toHaveLength(11)
     expect(componentBytes(WHISPER_BASE_Q8)).toBe(81_263_214)
     for (const file of WHISPER_BASE_Q8.files) {
-      expect(runtime.assets[WHISPER_PREFIX + file.path], file.path).toEqual({ bytes: file.bytes, sha256: file.sha256 })
+      expect(runtime.assets[WHISPER_PREFIX + (file.sourcePath ?? file.path)], file.path).toEqual({
+        bytes: file.bytes,
+        sha256: file.sha256
+      })
+      expect(file.path).toBe(`Xenova/whisper-base/${file.sourcePath}`)
     }
   })
 
