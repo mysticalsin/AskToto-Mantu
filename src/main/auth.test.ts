@@ -41,9 +41,7 @@ describe('auth trust boundary — requireAuth / authStatus', () => {
 
   beforeEach(() => {
     ud = mkdtempSync(join(tmpdir(), 'asktoto-auth-test-'))
-    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) =>
-      n === 'userData' ? ud : join(ud, n)
-    )
+    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) => (n === 'userData' ? ud : join(ud, n)))
     for (const k of AZURE_ENV) delete process.env[k]
   })
   afterEach(() => {
@@ -97,9 +95,7 @@ describe('MQA-027 — tenant id shape / sign-in gate cannot brick the install', 
 
   beforeEach(() => {
     ud = mkdtempSync(join(tmpdir(), 'asktoto-auth-tenant-test-'))
-    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) =>
-      n === 'userData' ? ud : join(ud, n)
-    )
+    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) => (n === 'userData' ? ud : join(ud, n)))
     for (const k of AZURE_ENV) delete process.env[k]
   })
   afterEach(() => {
@@ -137,7 +133,9 @@ describe('MQA-027 — tenant id shape / sign-in gate cannot brick the install', 
   it('rejects a non-GUID tenant id from managed-config, not just env', () => {
     writeFileSync(
       join(ud, 'managed-config.json'),
-      JSON.stringify({ azure: { clientId: 'client-id', tenantId: 'mantu.onmicrosoft.com', allowedDomain: 'mantu.com' } }),
+      JSON.stringify({
+        azure: { clientId: 'client-id', tenantId: 'mantu.onmicrosoft.com', allowedDomain: 'mantu.com' }
+      }),
       'utf8'
     )
     expect(authStatus().configured).toBe(false)
@@ -176,9 +174,7 @@ describe('MQA-107 — SignInWall reset escape hatch recovers a wrong-tenant self
 
   beforeEach(() => {
     ud = mkdtempSync(join(tmpdir(), 'asktoto-auth-reset-test-'))
-    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) =>
-      n === 'userData' ? ud : join(ud, n)
-    )
+    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) => (n === 'userData' ? ud : join(ud, n)))
     for (const k of AZURE_ENV) delete process.env[k]
     vi.mocked(readTrustedAdminManaged).mockReturnValue(null) // default: no admin policy
   })
@@ -271,9 +267,7 @@ describe('MQA-066 — SSO bootstrap escapes an enforced-but-unconfigured wall', 
 
   beforeEach(() => {
     ud = mkdtempSync(join(tmpdir(), 'asktoto-auth-bootstrap-test-'))
-    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) =>
-      n === 'userData' ? ud : join(ud, n)
-    )
+    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) => (n === 'userData' ? ud : join(ud, n)))
     for (const k of AZURE_ENV) delete process.env[k]
   })
   afterEach(() => {
@@ -498,11 +492,7 @@ describe('speech auth lease (auth module authority)', () => {
     vi.restoreAllMocks()
   })
 
-  async function writeSessionFile(
-    tid = TENANT_GUID,
-    email = 'user@example.com',
-    at = Date.now()
-  ): Promise<void> {
+  async function writeSessionFile(tid = TENANT_GUID, email = 'user@example.com', at = Date.now()): Promise<void> {
     const { encryptSecret } = await import('./secrets')
     const session = { email, domain: 'example.com', tid, at }
     writeFileSync(join(ud, 'auth-session.bin'), encryptSecret(JSON.stringify(session)), { mode: 0o600 })
@@ -700,18 +690,12 @@ describe('speech auth lease (auth module authority)', () => {
     auth.subscribeSpeechAuthLeaseInvalidation(afterThrow)
     const { getSettings } = await import('./store')
     const settings = getSettings()
-    auth.observeSpeechAuthSettings(
-      { settings, readable: true, epoch: settingsEpoch },
-      policyRevision
-    )
+    auth.observeSpeechAuthSettings({ settings, readable: true, epoch: settingsEpoch }, policyRevision)
     const first = await auth.refreshSpeechAuthLease()
     expect(first).not.toBeNull()
     expect(auth.isSpeechAuthLeaseCurrent(first)).toBe(true)
     policyRevision = 'profile-a|policy-b'
-    auth.observeSpeechAuthSettings(
-      { settings, readable: true, epoch: settingsEpoch + 1 },
-      policyRevision
-    )
+    auth.observeSpeechAuthSettings({ settings, readable: true, epoch: settingsEpoch + 1 }, policyRevision)
     expect(auth.isSpeechAuthLeaseCurrent(first)).toBe(false)
     expect(invalidated).toHaveBeenCalled()
     expect(afterThrow).toHaveBeenCalled()
@@ -722,10 +706,7 @@ describe('speech auth lease (auth module authority)', () => {
     expect(auth.isSpeechAuthLeaseCurrent(held)).toBe(false)
 
     settingsEpoch += 1
-    auth.observeSpeechAuthSettings(
-      { settings, readable: true, epoch: settingsEpoch },
-      policyRevision
-    )
+    auth.observeSpeechAuthSettings({ settings, readable: true, epoch: settingsEpoch }, policyRevision)
     const second = await auth.refreshSpeechAuthLease()
     expect(second).not.toBeNull()
     auth.setSessionClearedHandler(() => {
@@ -747,7 +728,9 @@ describe('speech auth lease (auth module authority)', () => {
     const { encryptSecret } = await import('./secrets')
     writeFileSync(
       join(nextProfile, 'auth-session.bin'),
-      encryptSecret(JSON.stringify({ email: 'profile-b@example.com', domain: 'example.com', tid: TENANT_GUID, at: Date.now() })),
+      encryptSecret(
+        JSON.stringify({ email: 'profile-b@example.com', domain: 'example.com', tid: TENANT_GUID, at: Date.now() })
+      ),
       { mode: 0o600 }
     )
     const profileBLease = await auth.refreshSpeechAuthLease()
@@ -925,10 +908,13 @@ describe('speech auth lease (auth module authority)', () => {
       state = options.state || ''
       return 'https://login.example.test/authorize'
     })
-    vi.spyOn(msal.PublicClientApplication.prototype, 'acquireTokenByCode').mockImplementation(async () => ({
-      account: { username: replacementEmail, name: 'Replacement' },
-      idTokenClaims: { tid: TENANT_GUID }
-    }) as Awaited<ReturnType<typeof msal.PublicClientApplication.prototype.acquireTokenByCode>>)
+    vi.spyOn(msal.PublicClientApplication.prototype, 'acquireTokenByCode').mockImplementation(
+      async () =>
+        ({
+          account: { username: replacementEmail, name: 'Replacement' },
+          idTokenClaims: { tid: TENANT_GUID }
+        }) as Awaited<ReturnType<typeof msal.PublicClientApplication.prototype.acquireTokenByCode>>
+    )
     const { readTrustedAdminManagedBytes } = await import('./win-security')
     let adminReads = 0
     let began!: () => void

@@ -74,7 +74,9 @@ function settingsSemantic(settings: Settings): string {
   return JSON.stringify([
     String(settings.azureClientId || '').trim(),
     String(settings.azureTenantId || '').trim(),
-    String(settings.azureAllowedDomain || '').trim().replace(/^@/, '')
+    String(settings.azureAllowedDomain || '')
+      .trim()
+      .replace(/^@/, '')
   ])
 }
 
