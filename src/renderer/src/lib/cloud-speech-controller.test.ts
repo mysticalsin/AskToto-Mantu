@@ -186,6 +186,112 @@ describe('cloud speech capture controller', () => {
     instance.dispose()
   })
 
+  it('subscribes before Start and applies a result emitted before the Start response', async () => {
+    const applied: CloudSpeechEvent[] = []
+    const next = controller({ applyEvent: async (event) => void applied.push(event) })
+    const startResult = deferred<unknown>()
+    next.bridge.cloudSpeechStart = vi.fn(() => startResult.promise)
+    const starting = next.instance.start()
+    await vi.waitFor(() => expect(next.bridge.cloudSpeechStart).toHaveBeenCalledTimes(1))
+    expect(next.events.size).toBe(1)
+    const stream = { generation: captureGeneration, track: 'microphone' as const, epoch: 3 }
+    const earlyEvent: CloudSpeechEvent = {
+      type: 'segment',
+      captureId,
+      captureGeneration,
+      sequence: 1,
+      segment: {
+        stream,
+        engine: 'cloudflare-nova3',
+        index: 1,
+        revision: 1,
+        final: true,
+        text: 'startup flush result',
+        startMs: 0,
+        endMs: 12
+      }
+    }
+    for (const listener of next.events) listener(earlyEvent)
+    expect(applied).toEqual([])
+    startResult.resolve(started())
+
+    expect(await starting).toMatchObject({ ok: true })
+    await vi.waitFor(() => expect(applied).toEqual([earlyEvent]))
+    next.instance.dispose()
+  })
+
+  it('discards startup results and unsubscribes when Start fails', async () => {
+    const onFailure = vi.fn()
+    const applied = vi.fn()
+    const next = controller({ onFailure, applyEvent: async (event) => void applied(event) })
+    const startResult = deferred<unknown>()
+    next.bridge.cloudSpeechStart = vi.fn(() => startResult.promise)
+    const starting = next.instance.start()
+    await vi.waitFor(() => expect(next.bridge.cloudSpeechStart).toHaveBeenCalledTimes(1))
+    expect(next.events.size).toBe(1)
+    const stream = { generation: captureGeneration, track: 'microphone' as const, epoch: 3 }
+    for (const listener of next.events)
+      listener({
+        type: 'segment',
+        captureId,
+        captureGeneration,
+        sequence: 1,
+        segment: {
+          stream,
+          engine: 'cloudflare-nova3',
+          index: 1,
+          revision: 1,
+          final: true,
+          text: 'must not escape failed start',
+          startMs: 0,
+          endMs: 12
+        }
+      })
+    startResult.resolve(failure('POLICY'))
+
+    expect(await starting).toEqual(failure('POLICY'))
+    expect(next.events.size).toBe(0)
+    expect(applied).not.toHaveBeenCalled()
+    expect(onFailure).toHaveBeenCalledWith('POLICY')
+    next.instance.dispose()
+  })
+
+  it('discards buffered results and cancels the exact identity after a stale late Start', async () => {
+    const applied = vi.fn()
+    const next = controller({ applyEvent: async (event) => void applied(event) })
+    const startResult = deferred<unknown>()
+    next.bridge.cloudSpeechStart = vi.fn(() => startResult.promise)
+    const starting = next.instance.start()
+    await vi.waitFor(() => expect(next.bridge.cloudSpeechStart).toHaveBeenCalledTimes(1))
+    const stream = { generation: captureGeneration, track: 'microphone' as const, epoch: 3 }
+    for (const listener of next.events)
+      listener({
+        type: 'segment',
+        captureId,
+        captureGeneration,
+        sequence: 1,
+        segment: {
+          stream,
+          engine: 'cloudflare-nova3',
+          index: 1,
+          revision: 1,
+          final: true,
+          text: 'must not escape cancelled start',
+          startMs: 0,
+          endMs: 12
+        }
+      })
+    await next.instance.cancel()
+    expect(next.events.size).toBe(0)
+    startResult.resolve(started())
+
+    expect(await starting).toMatchObject({ ok: false, code: 'CLOSED' })
+    await vi.waitFor(() => expect(next.bridge.cloudSpeechCancel).toHaveBeenCalledTimes(1))
+    expect(next.bridge.cloudSpeechCancel).toHaveBeenCalledWith({ captureId, captureGeneration })
+    expect(applied).not.toHaveBeenCalled()
+    next.instance.dispose()
+  })
+
   it('refuses non-finite worklet samples without sending audio', async () => {
     const onFailure = vi.fn()
     const { instance, frame } = controller({ onFailure })

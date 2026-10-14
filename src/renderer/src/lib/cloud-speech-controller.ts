@@ -2,7 +2,6 @@ import {
   CLOUD_SPEECH_MAX_PENDING_AUDIO_MS,
   CLOUD_SPEECH_MAX_PENDING_BYTES,
   CLOUD_SPEECH_MAX_PENDING_FRAMES,
-  CloudSpeechCapabilitySchema,
   CloudSpeechCancelResultSchema,
   CloudSpeechFinishResultSchema,
   CloudSpeechFrame,
@@ -14,7 +13,6 @@ import {
   CloudSpeechStatusResultSchema,
   type CloudSpeechCancelResult,
   type CloudSpeechCancelRequest,
-  type CloudSpeechCapability,
   type CloudSpeechEvent,
   type CloudSpeechFailure,
   type CloudSpeechFinishResult,
@@ -35,6 +33,7 @@ import {
   createCloudSpeechResultTracker,
   MAX_PENDING_RESULT_APPLICATIONS
 } from './cloud-speech-results'
+import { createCloudSpeechStartupSubscription, selectCloudSpeechStartRoute } from './cloud-speech-startup'
 
 export interface CloudSpeechControllerBridge {
   cloudSpeechCapability(): Promise<unknown>
@@ -119,7 +118,7 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
 
   let startPromise: Promise<CloudSpeechStartResult> | null = null
   let started: Extract<CloudSpeechStartResult, { ok: true }> | null = null
-  let unsubscribeEvents: (() => void) | null = null
+  let startupSubscription: ReturnType<typeof createCloudSpeechStartupSubscription> | null = null
   let eventApplyTail = Promise.resolve()
   let pendingEventApplications = 0
   let stopped = false
@@ -139,6 +138,11 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
 
   const notifyApplied = (): void => {
     for (const wake of [...applyWaiters]) wake()
+  }
+
+  const discardStartupSubscription = (): void => {
+    startupSubscription?.close()
+    startupSubscription = null
   }
 
   const detachInput = (input: TrackInput, close: boolean): void => {
@@ -215,9 +219,8 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
     if (failureCode || disposed) return
     failureCode = code
     stopped = true
+    discardStartupSubscription()
     clearUnsent()
-    unsubscribeEvents?.()
-    unsubscribeEvents = null
     if (notify) reportFailure(code)
     if (started) void cancelBridgeWithin(activeDeadline ?? now() + deadlineMs)
     notifyApplied()
@@ -229,6 +232,7 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
 
   const handleEvent = (raw: unknown): void => {
     if (stopped || disposed || failureCode) return
+    if (!started) return
     if (pendingEventApplications >= MAX_PENDING_RESULT_APPLICATIONS) {
       invalidate('QUEUE_LIMIT')
       return
@@ -498,8 +502,7 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
     if (!recovered.success || !recovered.data.ok) return null
     stopped = true
     stopCompleted = true
-    unsubscribeEvents?.()
-    unsubscribeEvents = null
+    discardStartupSubscription()
     for (const input of inputs.values()) detachInput(input, true)
     return recovered.data
   }
@@ -516,41 +519,41 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
       try {
         const capabilityResult = await options.bridge.cloudSpeechCapability()
         if (disposed || stopped || failureCode) return failure(failureCode ?? 'CLOSED', request)
-        const parsedCapability = CloudSpeechCapabilitySchema.safeParse(capabilityResult)
-        if (!parsedCapability.success) return failure('TRANSPORT', request)
-        const capability = parsedCapability.data as CloudSpeechCapability
-        const selected = capability.selected
-        if (
-          !capability.ready ||
-          !selected ||
-          selected.engine !== request.capture.engine ||
-          !capability.allowed.some(
-            (route) =>
-              route.engine === selected.engine &&
-              route.routeId === selected.routeId &&
-              route.modelId === selected.modelId
-          )
-        ) {
-          const rejected = failure(capability.refusal ?? 'NOT_READY', request)
-          reportFailure(rejected.code)
-          return rejected
+        const route = selectCloudSpeechStartRoute(capabilityResult, request.capture.engine)
+        if (!route.ok) {
+          if (route.report) reportFailure(route.code)
+          return failure(route.code, request)
+        }
+        const selected = route.selected
+        startupSubscription = createCloudSpeechStartupSubscription(
+          (callback) => options.bridge.onCloudSpeechEvent(request.captureId, request.capture.generation, callback),
+          identity(),
+          handleEvent,
+          invalidate
+        )
+        if (disposed || stopped || failureCode) {
+          discardStartupSubscription()
+          return failure(failureCode ?? 'CLOSED', request)
         }
         startAttempted = true
         const raw = await options.bridge.cloudSpeechStart(request)
         const parsed = CloudSpeechStartResultSchema.safeParse(raw)
         if (!parsed.success) {
+          discardStartupSubscription()
           await cancelRequestedIdentity(now() + deadlineMs)
           reportFailure('TRANSPORT')
           return failure('TRANSPORT', request)
         }
         const result = parsed.data
+        if (disposed || stopped || failureCode) {
+          discardStartupSubscription()
+          if (result.ok) await cancelRequestedIdentity(now() + deadlineMs)
+          return failure(failureCode ?? 'CLOSED', request)
+        }
         if (!result.ok) {
+          discardStartupSubscription()
           reportFailure(result.code)
           return result
-        }
-        if (disposed || stopped || failureCode) {
-          await cancelRequestedIdentity(now() + deadlineMs)
-          return failure(failureCode ?? 'CLOSED', request)
         }
         if (
           !identityMatches(result, request) ||
@@ -558,19 +561,18 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
           result.streams.length !== request.capture.capturedTracks.length ||
           result.streams.some((stream) => !request.capture.capturedTracks.includes(stream.track))
         ) {
+          discardStartupSubscription()
           await cancelRequestedIdentity(now() + deadlineMs)
           reportFailure('STALE')
           return failure('STALE', request)
         }
         started = result
         resultTracker.initialize(result)
-        unsubscribeEvents = options.bridge.onCloudSpeechEvent(
-          request.captureId,
-          request.capture.generation,
-          handleEvent
-        )
+        startupSubscription?.activate()
+        if (disposed || stopped || failureCode) return failure(failureCode ?? 'CLOSED', request)
         return result
       } catch {
+        discardStartupSubscription()
         if (started) {
           invalidate('TRANSPORT')
           return failure('TRANSPORT', request)
@@ -752,8 +754,7 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
       }
       stopped = true
       stopCompleted = true
-      unsubscribeEvents?.()
-      unsubscribeEvents = null
+      discardStartupSubscription()
       for (const input of inputs.values()) detachInput(input, true)
       return finishResult
     })().catch(() => {
@@ -768,10 +769,9 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
     if (stopped && stopPromise && !failureCode) return Promise.resolve(failure('CLOSED', request))
     const deadline = now() + deadlineMs
     stopped = true
+    discardStartupSubscription()
     failureCode = failureCode ?? 'CLOSED'
     clearUnsent()
-    unsubscribeEvents?.()
-    unsubscribeEvents = null
     notifyApplied()
     if (!started) {
       cancelPromise = Promise.resolve(failure('CLOSED', request))
@@ -787,9 +787,8 @@ export function createCloudSpeechController(options: CloudSpeechControllerOption
     if (disposed) return
     disposed = true
     stopped = true
+    discardStartupSubscription()
     clearUnsent()
-    unsubscribeEvents?.()
-    unsubscribeEvents = null
     notifyApplied()
     if (started && !stopCompleted && !cancelPromise) void cancelBridgeWithin(activeDeadline ?? now() + deadlineMs)
   }
