@@ -18,8 +18,12 @@ import { annotationMessage } from './st1-evidence-notice.mjs'
 const REPOSITORY = 'mysticalsin/AskToto-Mantu'
 const REPOSITORY_ID = 1282463398
 const MAX_NOTICE_BYTES = 3_500
+const MAX_NOTICE_PARTS = 24
 const MAX_WINDOWS = 8
 const MAX_BOOT_STAGES = 20
+const WINDOW_PART_SIZE = 1
+const PROFILE_BIN_PART_SIZE = 4
+const BOOT_STAGE_PART_SIZE = 3
 const MAX_WITNESS_INTERVALS = 4
 const LOOP_LIMIT_MS = 250
 const WRITE_LIMIT_MS = 250
@@ -180,7 +184,13 @@ const PUBLIC_KEYS = new Set([
   'sinceSpawnUpperBoundMs',
   'over250Ms',
   'omittedCount',
-  'timingInterpretation'
+  'timingInterpretation',
+  'section',
+  'windowStartIndex',
+  'windowTotalCount',
+  'profileBinTotalCount',
+  'firstStageIndex',
+  'stageTotalCount'
 ])
 const PUBLIC_STRINGS = new Set([
   'FAIL',
@@ -196,6 +206,12 @@ const PUBLIC_STRINGS = new Set([
   'sampled-deltas-not-exclusive-cpu-time',
   'since-spawn-is-upper-bound-on-stage-end',
   'historical-provenance-report-only',
+  'summary',
+  'windows',
+  'profile',
+  'profile-bins',
+  'witness',
+  'boot-stages',
   ...CRITERIA,
   ...PROFILER_COMMANDS,
   ...SAMPLE_SELECTORS,
@@ -851,6 +867,7 @@ function publicParts(summary) {
   const { bins, candidateBuildRunId, candidateInstallerSha256, candidateDigestBinding, ...profile } = summary.profile
   return [
     {
+      section: 'summary',
       originalVerdict: summary.originalVerdict,
       st1Evidence: summary.st1Evidence,
       causalConclusion: summary.causalConclusion,
@@ -864,16 +881,78 @@ function publicParts(summary) {
       profiler: summary.profiler
     },
     {
-      windows: summary.windows.slice(0, 4),
+      section: 'windows',
+      windows: summary.windows,
+      windowStartIndex: 0,
+      windowTotalCount: summary.windows.length,
       omittedWindowCount: summary.omittedWindowCount,
       windowsCoverageComplete: summary.windowsCoverageComplete
     },
-    { windows: summary.windows.slice(4, 8), windowsCoverageComplete: summary.windowsCoverageComplete },
-    { profile },
-    { profileBins: bins.slice(0, 10), firstBinIndex: 0 },
-    { profileBins: bins.slice(10, 20), firstBinIndex: 10 },
-    { witness: summary.witness, bootStages: summary.bootStages }
+    { section: 'profile', profile },
+    {
+      section: 'profile-bins',
+      profileBins: bins,
+      firstBinIndex: 0,
+      profileBinTotalCount: bins.length
+    },
+    { section: 'witness', witness: summary.witness },
+    {
+      section: 'boot-stages',
+      bootStages: summary.bootStages,
+      firstStageIndex: 0,
+      stageTotalCount: summary.bootStages.stages.length
+    }
   ]
+}
+
+function partitionPublicParts(parts) {
+  const result = []
+  for (const part of parts) {
+    if (part.section === 'windows') {
+      const windows = part.windows
+      const chunks = windows.length === 0 ? [[]] : []
+      for (let offset = 0; offset < windows.length; offset += WINDOW_PART_SIZE) {
+        chunks.push(windows.slice(offset, offset + WINDOW_PART_SIZE))
+      }
+      for (let index = 0; index < chunks.length; index += 1) {
+        const windowStartIndex = index * WINDOW_PART_SIZE
+        result.push({ ...part, windows: chunks[index], windowStartIndex })
+      }
+      continue
+    }
+    if (part.section === 'profile-bins') {
+      const bins = part.profileBins
+      const chunks = bins.length === 0 ? [[]] : []
+      for (let offset = 0; offset < bins.length; offset += PROFILE_BIN_PART_SIZE) {
+        chunks.push(bins.slice(offset, offset + PROFILE_BIN_PART_SIZE))
+      }
+      for (let index = 0; index < chunks.length; index += 1) {
+        result.push({
+          ...part,
+          profileBins: chunks[index],
+          firstBinIndex: index * PROFILE_BIN_PART_SIZE
+        })
+      }
+      continue
+    }
+    if (part.section === 'boot-stages') {
+      const stages = part.bootStages.stages
+      const chunks = stages.length === 0 ? [[]] : []
+      for (let offset = 0; offset < stages.length; offset += BOOT_STAGE_PART_SIZE) {
+        chunks.push(stages.slice(offset, offset + BOOT_STAGE_PART_SIZE))
+      }
+      for (let index = 0; index < chunks.length; index += 1) {
+        result.push({
+          ...part,
+          bootStages: { ...part.bootStages, stages: chunks[index] },
+          firstStageIndex: index * BOOT_STAGE_PART_SIZE
+        })
+      }
+      continue
+    }
+    result.push(part)
+  }
+  return result
 }
 
 export function createReadbackNotices(summary, context) {
@@ -888,10 +967,27 @@ export function createReadbackNotices(summary, context) {
       summary.windows.length <= MAX_WINDOWS,
     'summary-invalid'
   )
+  requireValue(
+    plain(summary.profile) &&
+      Array.isArray(summary.profile.bins) &&
+      summary.profile.bins.length === 20 &&
+      plain(summary.profiler) &&
+      plain(summary.witness) &&
+      plain(summary.bootStages) &&
+      Array.isArray(summary.bootStages.stages) &&
+      summary.bootStages.stages.length <= MAX_BOOT_STAGES,
+    'summary-invalid'
+  )
   validatePublicTree(summary)
   const parts = publicParts(summary)
-  const summarySha256 = sha256(Buffer.from(JSON.stringify(parts), 'utf8'))
-  const notices = parts.map((part, index) => {
+  validatePublicTree(parts)
+  const noticeParts = partitionPublicParts(parts)
+  requireValue(noticeParts.length > 0 && noticeParts.length <= MAX_NOTICE_PARTS, 'summary-invalid')
+  validatePublicTree(noticeParts)
+  const summarySha256 = sha256(
+    Buffer.from(JSON.stringify({ partCount: noticeParts.length, parts: noticeParts }), 'utf8')
+  )
+  const notices = noticeParts.map((part, index) => {
     const payload = {
       schema: 1,
       runId: context.runId,
@@ -906,7 +1002,7 @@ export function createReadbackNotices(summary, context) {
       causalConclusion: 'not-established',
       summarySha256,
       part: index + 1,
-      partCount: parts.length,
+      partCount: noticeParts.length,
       ...part
     }
     const notice = annotationMessage(payload)
