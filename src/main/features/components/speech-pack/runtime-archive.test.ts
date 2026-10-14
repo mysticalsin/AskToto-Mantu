@@ -1,0 +1,38 @@
+import { execFileSync } from 'node:child_process'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { describe, expect, it } from 'vitest'
+import { hashPinnedArchive } from './runtime-archive'
+
+describe('runtime archive held-descriptor hashing', () => {
+  it('hashes only the pinned length and detects a regular-file length mismatch', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'metis-runtime-archive-'))
+    try {
+      const path = join(root, 'payload.tar.gz')
+      const bytes = Buffer.from('archive bytes')
+      await writeFile(path, bytes)
+      await expect(hashPinnedArchive(path, bytes.byteLength)).resolves.toBe(
+        createHash('sha256').update(bytes).digest('hex')
+      )
+      await expect(hashPinnedArchive(path, bytes.byteLength - 1)).rejects.toThrow('RUNTIME_ARCHIVE_SHAPE_MISMATCH')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(process.platform === 'win32')(
+    'opens a raced-in FIFO without blocking before rejecting its type',
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'metis-runtime-fifo-'))
+      try {
+        const path = join(root, 'raced-pipe')
+        execFileSync('mkfifo', [path])
+        await expect(hashPinnedArchive(path, 1)).rejects.toThrow('RUNTIME_ARCHIVE_SHAPE_MISMATCH')
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    }
+  )
+})

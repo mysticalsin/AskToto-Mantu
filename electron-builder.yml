@@ -136,6 +136,7 @@ extraResources:
   - from: resources/runtime-assets-manifest.json
     to: runtime-assets-manifest.json
   # App-owned Sigstore trust snapshot and acquisition receipt. The reviewed runtime catalog pins the
+  # App-owned Sigstore trust snapshot and acquisition receipt. The signed runtime catalog pins the
   # exact root bytes/source; candidate runtime rows remain empty until native payload promotion is reviewed.
   - from: resources/runtime-catalog.json
     to: runtime-catalog.json
@@ -304,6 +305,11 @@ win:
   # resolves it at process.resourcesPath/llama/win/<vulkan|cpu> in a packaged build. electron-builder merges
   # this list with the top-level extraResources.
   extraResources:
+    # Read-only authority for the Windows OS loader roots. The build script generates this unsigned x64
+    # helper and its exact byte inventory before electron-builder runs; source paths and ambient env are
+    # never used as a substitute when the packaged helper is missing.
+    - from: resources/win-os-roots/osroots.exe
+      to: win-os-roots/osroots.exe
     - from: resources/llama/win
       to: llama/win
     # Portable official Node so the managed Dust CLI can load keytar (Electron-as-node cannot).

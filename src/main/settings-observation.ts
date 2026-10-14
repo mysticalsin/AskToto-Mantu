@@ -9,18 +9,29 @@ export type SettingsPolicyAuthoritySnapshot = SettingsObservation & {
 }
 type Listener = (observation: SettingsObservation) => void
 let observer: Listener | null = null
+const additionalObservers = new Set<Listener>()
 let current: Settings | null = null
 let readable = false
 let epoch = 0
 
 function notifyObserver(): void {
-  if (!current || !observer) return
-  try {
-    observer({ settings: current, readable, epoch })
-  } catch {
-    // Existing settings callers must remain usable; any speech cache at the old epoch closes.
-    readable = false
-    epoch += 1
+  if (!current) return
+  const observation = { settings: current, readable, epoch }
+  if (observer) {
+    try {
+      observer(observation)
+    } catch {
+      // Existing settings callers must remain usable; any speech cache at the old epoch closes.
+      readable = false
+      epoch += 1
+    }
+  }
+  for (const listener of additionalObservers) {
+    try {
+      listener({ settings: current, readable, epoch })
+    } catch {
+      // Independent retirement listeners cannot break settings publication.
+    }
   }
 }
 
@@ -30,6 +41,12 @@ export function observeSettingsSnapshot(listener: Listener): () => void {
   return () => {
     if (observer === listener) observer = null
   }
+}
+
+/** Add an independent authority-retirement observer without replacing the speech-cache owner. */
+export function observeSettingsAuthorityChanges(listener: Listener): () => void {
+  additionalObservers.add(listener)
+  return () => additionalObservers.delete(listener)
 }
 
 export function getSettingsObservationEpoch(): number {

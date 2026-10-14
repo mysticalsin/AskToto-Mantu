@@ -106,6 +106,11 @@ export function setSpeechPolicyProofRevocationListener(listener: SpeechPolicyPro
   speechPolicyAuthority.setProofListener(listener)
 }
 
+/** Add an independent one-way policy retirement observer without replacing the speech-pack owner. */
+export function observeSpeechPolicyProofRevocations(listener: SpeechPolicyProofListener): () => void {
+  return speechPolicyAuthority.addProofListener(listener)
+}
+
 /** Hard settings/MDM invalidation. This only clears in-memory speech proof snapshots and advances
  *  pending refresh epochs; legacy policy state, disk cache, and per-scope version high-water remain. */
 export function invalidateSpeechPolicyProof(): void {

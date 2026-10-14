@@ -85,8 +85,12 @@ import type { RightEdgeState, RightEdgeSurfaceState } from '@shared/right-edge-s
 import type { ProviderId } from '@shared/providers'
 import type { RecapStatus } from '@shared/recap-status'
 import type { RecallHydration } from '@shared/recall-hydration'
+import type { RuntimeInstallFeature, RuntimeInstallPlanPreview, RuntimeInstallResponse } from '@shared/runtime-install'
 
 type Unsub = () => void
+const pageWindow = globalThis as unknown as {
+  postMessage(message: unknown, targetOrigin: string, transfer?: object[]): void
+}
 function sub<T>(channel: string, cb: (payload: T) => void): Unsub {
   const listener = (_e: unknown, payload: T): void => cb(payload)
   ipcRenderer.on(channel, listener)
@@ -96,6 +100,14 @@ function sub<T>(channel: string, cb: (payload: T) => void): Unsub {
 const api = {
   ...createSpeechPackBridge({ invoke: (channel, payload) => ipcRenderer.invoke(channel, payload), subscribe: sub }),
   ...createCloudSpeechPreloadApi(ipcRenderer),
+  runtimeInstallPlanPreview: (feature: RuntimeInstallFeature): Promise<RuntimeInstallPlanPreview | null> =>
+    ipcRenderer.invoke(IPC.runtimeInstallPlanPreview, { feature }),
+  runtimeInstallWithPlan: (planId: string, action: 'install' | 'cancel'): Promise<RuntimeInstallResponse> =>
+    ipcRenderer.invoke(IPC.runtimeInstallWithPlan, { planId, action }),
+  runtimeWhisperWorkerOpen: (requestId: string): Promise<{ ok: boolean; requestId?: string }> =>
+    ipcRenderer.invoke(IPC.runtimeWhisperWorkerOpen, { requestId }),
+  runtimeWhisperWorkerClose: (requestId: string): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke(IPC.runtimeWhisperWorkerClose, { requestId }),
   getSettings: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.settingsGet),
   onSettingsChanged: (cb: () => void): Unsub => sub(IPC.settingsChanged, cb),
   /** Wave 2 — dismiss the one-shot last-failover chip after the user has seen it. */
@@ -431,7 +443,6 @@ const api = {
   asrBundled: (): Promise<boolean> => ipcRenderer.invoke(IPC.asrBundled),
   asrAssetsStatus: (): Promise<AsrAssetsStatus> => ipcRenderer.invoke(IPC.asrAssetsStatus),
   asrAssetsEnsure: (): Promise<AsrAssetsStatus> => ipcRenderer.invoke(IPC.asrAssetsEnsure),
-
   // Métis Local (on-device LLM): readiness plus start/retry. Local AI `enabled` is routing only —
   // this does not require toggling it on.
   localModelsList: (): Promise<LocalModelSummary[]> => ipcRenderer.invoke(IPC.localModelsList),
@@ -590,6 +601,22 @@ const api = {
   licenseConfig: (payload: LicenseConfigPayload): Promise<LicenseConfigResult> =>
     ipcRenderer.invoke(IPC.licenseConfig, payload)
 }
+
+ipcRenderer.on('metis-runtime-worker-port', (event, metadata: unknown) => {
+  if (
+    !metadata ||
+    typeof metadata !== 'object' ||
+    !('requestId' in metadata) ||
+    typeof (metadata as { requestId?: unknown }).requestId !== 'string' ||
+    event.ports.length !== 1
+  )
+    return
+  pageWindow.postMessage(
+    { type: 'metis-runtime-worker-port', requestId: (metadata as { requestId: string }).requestId },
+    '*',
+    [event.ports[0]]
+  )
+})
 
 contextBridge.exposeInMainWorld('toto', api)
 

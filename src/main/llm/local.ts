@@ -3,6 +3,8 @@ import { mainLog } from '../logger'
 import { modelPaths as resolveLocalModelPaths, verifyIntegrity } from './local-models'
 import * as localRuntime from './local-runtime'
 import * as fmRuntime from './fm-runtime'
+import { acquirePackageRuntimeLease } from '../features/components/speech-pack/runtime-admission'
+import type { RuntimeFeatureLease, RuntimeModelId } from '../features/components/speech-pack/runtime-lease'
 import { streamOpenAI } from './openai'
 import type { HkMRamFloorOverride } from '../qa-hk-m'
 import { type StreamOptions, type StreamHandle, errMsg } from './shared'
@@ -116,25 +118,35 @@ export async function ensureLocalRuntimeStarted(
   // cannot turn a requested local answer into a silent no-op. Check both before costly verification and
   // again immediately before start: an import can begin while the integrity read is in flight.
   if (canStartSpeculatively?.() === false) return
-  const paths = resolveLocalModelPaths(modelId)
-  if (localRuntime.getState() === 'stopped' || localRuntime.getActiveModelKey() !== paths.gguf) {
-    // Passed only when present, so every other caller's verification call is unchanged.
-    await (ramFloorOverride ? verifyIntegrity(modelId, ramFloorOverride) : verifyIntegrity(modelId))
-  }
-  if (canStartSpeculatively?.() === false) return
-  // MQA-270 (B1): the multimodal projector loads at server START, never lazily, and costs 1.03 GB
-  // whether or not vision is ever used — so text-only starts spawn with --no-mmproj. A vision request
-  // against a text-only runtime fails samePaths (vision is one-way sticky there) and takes start()'s
-  // existing switch path, which drains in-flight streams before the restart. Callers pass true only
-  // when the request actually carries an image.
-  await localRuntime.start({
-      gguf: paths.gguf,
-      mmproj: paths.mmproj,
+  let lease: RuntimeFeatureLease | null = await acquirePackageRuntimeLease('local-llm', modelId as RuntimeModelId)
+  try {
+    if (canStartSpeculatively?.() === false) return
+    const paths = resolveLocalModelPaths(modelId)
+    const gguf = lease ? lease.modelFile(modelId as RuntimeModelId, 'model.gguf') : paths.gguf
+    const mmproj = lease ? lease.modelFile(modelId as RuntimeModelId, 'mmproj.gguf') : paths.mmproj
+    if (!lease && (localRuntime.getState() === 'stopped' || localRuntime.getActiveModelKey() !== gguf)) {
+      // Legacy full/development model files retain the existing integrity check. Lean files were checked
+      // against the authenticated immutable generation inventory before a lease was issued.
+      await (ramFloorOverride ? verifyIntegrity(modelId, ramFloorOverride) : verifyIntegrity(modelId))
+    }
+    if (canStartSpeculatively?.() === false) return
+    // MQA-270: the projector loads only for vision. Preserve the existing model-switch and stream drain.
+    await localRuntime.start({
+      gguf,
+      mmproj,
       vision,
       ctxSize: paths.ctxSize,
       parallel: paths.parallel,
-      gpuLayers: paths.gpuLayers
+      gpuLayers: paths.gpuLayers,
+      runtimeLease: lease ?? undefined,
+      runtimeBinary: lease?.entry('llama-server'),
+      runtimeModelId: lease ? (modelId as 'qwen3.5-0.8b' | 'qwen3.5-4b') : undefined
     })
+    // On success local-runtime owns this lease through the actual child exit event.
+    lease = null
+  } finally {
+    await lease?.release()
+  }
 }
 
 export type LocalEngine = 'llama' | 'apple'
@@ -181,9 +193,14 @@ export async function prewarmLocal(
 ): Promise<void> {
   // A summary warm must land on the engine and slot the recap itself will use, so it is qualified with
   // the same prompt size and answer budget the recap request carries.
-  const engine = purpose === 'summary'
-    ? await pickLocalEngine('summary', messages.reduce((n, m) => n + m.content.length, 0), LOCAL_OUTPUT_TOKEN_BUDGETS.summary)
-    : await pickLocalEngine('suggest')
+  const engine =
+    purpose === 'summary'
+      ? await pickLocalEngine(
+          'summary',
+          messages.reduce((n, m) => n + m.content.length, 0),
+          LOCAL_OUTPUT_TOKEN_BUDGETS.summary
+        )
+      : await pickLocalEngine('suggest')
   if (engine === 'apple') {
     // Engine selection is async. Recheck after it, directly before loading fm serve, so a concurrent
     // import can defer this best-effort warm without affecting the later user-initiated request.
@@ -211,18 +228,26 @@ export function streamLocal(opts: StreamOptions): StreamHandle {
       if (aborted) return
       opts.handlers.onError(
         'This transcript is too long to summarize locally without omitting earlier discussion. ' +
-        'Use a shorter transcript, or explicitly choose a cloud provider in Settings → AI. ' +
-        'Métis will not send this local request to the cloud automatically.'
+          'Use a shorter transcript, or explicitly choose a cloud provider in Settings → AI. ' +
+          'Métis will not send this local request to the cloud automatically.'
       )
     })
-    return { abort: () => { aborted = true } }
+    return {
+      abort: () => {
+        aborted = true
+      }
+    }
   }
   const background = opts.background === true
   if (background && interactiveSummaries > 0) {
     queueMicrotask(() => {
       if (!aborted) opts.handlers.onError(LOCAL_PREEMPTED_MESSAGE)
     })
-    return { abort: () => { aborted = true } }
+    return {
+      abort: () => {
+        aborted = true
+      }
+    }
   }
   const releaseInteractive = !background && opts.req.mode === 'summary' ? beginInteractiveSummary() : () => {}
   let inner: StreamHandle | null = null

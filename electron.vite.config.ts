@@ -90,7 +90,9 @@ export default defineConfig({
           // Minimal preload for the Mantu Intelligence dashboard window (see src/main/intelligence.ts).
           intelligence: resolve(__dirname, 'src/preload/intelligence.ts'),
           // Isolated Chromium audio decoder used by main-owned import jobs. It exposes no app APIs.
-          'import-decoder': resolve(__dirname, 'src/preload/import-decoder.ts')
+          'import-decoder': resolve(__dirname, 'src/preload/import-decoder.ts'),
+          // Hidden, dedicated Session that runs only a verified optional browser worker.
+          'runtime-worker-host': resolve(__dirname, 'src/preload/runtime-worker-host.ts')
         }
       }
     },
@@ -106,10 +108,16 @@ export default defineConfig({
     },
     assetsInclude: ['**/*.mp4'],
     resolve: {
-      alias: {
-        '@': resolve(__dirname, 'src/renderer/src'),
-        '@shared': resolve(__dirname, 'src/shared')
-      }
+      alias: [
+        ...(PACKAGE_PROFILE === 'lean'
+          ? [{
+              find: /\/src\/renderer\/src\/lib\/whisper\.worker\.ts$/,
+              replacement: resolve(__dirname, 'src/renderer/src/lib/whisper.worker.stub.ts')
+            }]
+          : []),
+        { find: '@', replacement: resolve(__dirname, 'src/renderer/src') },
+        { find: '@shared', replacement: resolve(__dirname, 'src/shared') }
+      ]
     },
     plugins: [react(), tailwindcss()],
     build: {
