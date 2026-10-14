@@ -200,7 +200,7 @@ describe('speech broker client', () => {
       ...fixture.create.responseTemplate,
       grants: [{ track: 'microphone', streamEpoch: 11, token: 'A'.repeat(43) }]
     }
-    const sockets: Array<MockWebSocket> = []
+    const sockets: Array<PendingWebSocket> = []
     class PendingWebSocket extends EventEmitter {
       static OPEN = 1
       static CONNECTING = 0
@@ -209,7 +209,7 @@ describe('speech broker client', () => {
       constructor(_url: string, options: unknown) {
         super()
         this.options = options
-        sockets.push(this as unknown as MockWebSocket)
+        sockets.push(this)
       }
       terminate(): void {
         this.readyState = 3
