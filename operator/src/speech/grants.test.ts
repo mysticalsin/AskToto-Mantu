@@ -242,6 +242,67 @@ describe('D1 speech grants', () => {
     }
   })
 
+  it('enforces the exact grant TTL boundary and caps the grant at licence expiry', async () => {
+    const db = brokerDb()
+    try {
+      const d1 = sqliteD1(db)
+      const allocation = await allocateSpeechSession(d1, { ...binding, maxSessions: 2, maxTracks: 4 })
+      expect(allocation.ok).toBe(true)
+      if (!allocation.ok) return
+      const [first, second] = allocation.grants
+      expect(allocation.grantExpiresAt).toBe(binding.now + binding.grantTtlMs)
+      expect(
+        await redeemSpeechGrant(d1, first.token, {
+          ...binding,
+          sessionId: allocation.sessionId,
+          track: first.track,
+          now: allocation.grantExpiresAt - 1
+        })
+      ).toMatchObject({ ok: true })
+      expect(
+        await redeemSpeechGrant(d1, second.token, {
+          ...binding,
+          sessionId: allocation.sessionId,
+          track: second.track,
+          now: allocation.grantExpiresAt
+        })
+      ).toMatchObject({ ok: false, code: 'GRANT_REJECTED' })
+
+      db.prepare("UPDATE issued_licenses SET exp = 40 WHERE jti = 'license-a'").run()
+      const capped = await allocateSpeechSession(d1, {
+        ...binding,
+        licenseExpiresAt: 40_000,
+        maxSessions: 2,
+        maxTracks: 4
+      })
+      expect(capped.ok).toBe(true)
+      if (!capped.ok) return
+      expect(capped.grantExpiresAt).toBe(40_000)
+      expect(capped.leaseExpiresAt).toBe(40_000)
+      const [beforeLicenseExpiry, atLicenseExpiry] = capped.grants
+      expect(
+        await redeemSpeechGrant(d1, beforeLicenseExpiry.token, {
+          ...binding,
+          licenseExpiresAt: 40_000,
+          sessionId: capped.sessionId,
+          track: beforeLicenseExpiry.track,
+          now: 39_999
+        })
+      ).toMatchObject({ ok: true })
+      expect(
+        await redeemSpeechGrant(d1, atLicenseExpiry.token, {
+          ...binding,
+          licenseExpiresAt: 40_000,
+          sessionId: capped.sessionId,
+          track: atLicenseExpiry.track,
+          now: 40_000
+        })
+      ).toMatchObject({ ok: false, code: 'GRANT_REJECTED' })
+    } finally {
+      db.close()
+    }
+  })
+
   it.each([
     ['revoked license', "UPDATE issued_licenses SET revoked = 1 WHERE jti = 'license-a'"],
     ['normalized revoked seat', "UPDATE seats SET approval = ' ReVoKeD ' WHERE device_id = 'device-a'"],
@@ -315,6 +376,22 @@ describe('D1 speech grants', () => {
       expect(
         db.prepare('SELECT status, reserved_ms FROM speech_sessions WHERE id = ?').get(second.sessionId)
       ).toMatchObject({ status: 'active', reserved_ms: binding.maxReservedMs })
+      expect(
+        await redeemSpeechGrant(d1, first.grants[0].token, {
+          ...binding,
+          sessionId: first.sessionId,
+          track: first.grants[0].track
+        })
+      ).toMatchObject({ ok: false, code: 'GRANT_REJECTED' })
+      expect(
+        await redeemSpeechGrant(d1, second.grants[0].token, {
+          ...binding,
+          deviceId: 'device-b',
+          licenseJti: 'license-b',
+          sessionId: second.sessionId,
+          track: second.grants[0].track
+        })
+      ).toMatchObject({ ok: true })
       expect((await allocateSpeechSession(d1, sharedCapacity)).ok).toBe(true)
     } finally {
       db.close()
