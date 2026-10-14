@@ -83,6 +83,12 @@ export class SpeechCaptureGrantRegistry {
     return true
   }
 
+  /** An accepted keyed transition can replace the owner without changing the on/off boolean. */
+  reconcileListenContext(context: SpeechCaptureContext): boolean {
+    if (!validContext(context)) return false
+    return sameContext(this.acceptedContext, context) || this.acceptListenContext(context)
+  }
+
   /** The renderer may clear arm after acquisition; only pending requests are ended by that transition. */
   setArmed(armed: boolean): void {
     this.armed = armed

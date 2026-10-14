@@ -765,6 +765,8 @@ import { buildPolishPrompt, parsePolishResponse, polishBatches, type PolishLine 
 import { detectLanguage as detectTextLanguage } from '@shared/lang-id'
 import type { TranscriptLine } from '@shared/ipc'
 import { assertBrokerSpeechSettingsPatch } from '@shared/broker-speech-settings'
+import { SpeechCaptureGrantRegistry } from './capture-permissions/speech-capture-grant'
+import { registerListenDisplayMedia } from './capture-permissions/listen-display-media'
 import { pickAudioFile, consumePickedAudio, offerAudioPaths } from './import-audio'
 import {
   ImportJobManager,
@@ -1099,6 +1101,8 @@ function privateViewOn(): boolean {
 let win: BrowserWindow | null = null
 let tray: Tray | null = null
 let audioArmed = false // loopback capture only granted during an explicit user-initiated Listen
+const speechCaptureGrants = new SpeechCaptureGrantRegistry()
+let speechNavigationEpoch = 1
 const commandControl = new CommandConfirmation({
   execute: executeDesktopAction,
   isAuthenticated: requireAuth,
@@ -1182,6 +1186,11 @@ function isCurrentCloudSttOwner(owner: CloudSttIpcOwner, sender: { id: number; i
 
 /** Renderer replacement/close is a hard boundary: never leave cloud sockets or old callbacks alive. */
 function invalidateCloudSttOwner(webContentsId?: number): void {
+  const context = speechCaptureGrants.getAcceptedListenContext()
+  if (webContentsId === undefined || (context?.webContents as Electron.WebContents | undefined)?.id === webContentsId) {
+    speechNavigationEpoch += 1
+    speechCaptureGrants.invalidateAll()
+  }
   if (webContentsId !== undefined && cloudSttIpcOwner?.webContentsId !== webContentsId) return
   cloudSttIpcGeneration += 1
   setCloudSttIpcOwner(null)
@@ -1195,6 +1204,17 @@ let listeningActive = false
 let speechPackDesktop: ReturnType<typeof startSpeechPackDesktop> | null = null
 
 function setListeningActive(on: boolean): void {
+  if (on && win && !win.isDestroyed() && activeLiveSpeakerStartedAt !== null)
+    speechCaptureGrants.reconcileListenContext({
+      webContents: win.webContents,
+      frame: win.webContents.mainFrame,
+      navigationEpoch: speechNavigationEpoch,
+      listenStartedAt: activeLiveSpeakerStartedAt
+    })
+  else if (!on) {
+    const context = speechCaptureGrants.getAcceptedListenContext()
+    if (context) speechCaptureGrants.normalStop(context)
+  }
   if (listeningActive === on) return
   listeningActive = on
   speechPackDesktop?.refresh()
@@ -1202,6 +1222,7 @@ function setListeningActive(on: boolean): void {
 }
 
 function setAudioArmed(on: boolean): void {
+  speechCaptureGrants.setArmed(on)
   if (audioArmed === on) return
   audioArmed = on
   speechPackDesktop?.refresh()
@@ -2910,6 +2931,9 @@ function createWindow(targetDisplay?: Electron.Display): void {
   // `closed` fires after BrowserWindow.destroy() has torn down WebContents. Cache the numeric owner
   // while it is valid; touching `self.webContents` from the callback throws and falsely crashes Métis.
   const selfWebContentsId = self.webContents.id
+  self.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
+    if (win === self && isMainFrame && !isInPlace) invalidateCloudSttOwner(selfWebContentsId)
+  })
   win.on('blur', () => commandControl.onWindowBlurred(win === self, parkRightEdgeReaderOnBlur))
   win.on('hide', () => commandControl.onWindowHidden(win === self))
   win.on('closed', () => {
@@ -9910,111 +9934,18 @@ if (!app.requestSingleInstanceLock()) {
       // hand back the system audio loopback device (the "Them" channel) only.
       // Screenshot capture uses desktopCapturer directly, so no video track is ever returned here.
       runStep('initScreenPermission', screenPerm.initScreenPermission)
-      runStep('setDisplayMediaHandler', () => {
-        session.defaultSession.setDisplayMediaRequestHandler(
-          async (request, callback) => {
-            // Electron validates the callback argument against the request: denying a request that asked for
-            // video (our renderer requests a 1fps video track to bootstrap the macOS ScreenCaptureKit session
-            // for audio loopback) with callback({}) makes Electron throw "Video was requested, but no video
-            // stream was provided". Because this handler is async, that throw escapes as an unhandledRejection.
-            // Wrap every callback call: the deny still reaches the renderer (its getDisplayMedia rejects and
-            // listen.ts falls back to mic-only), we just don't let the validation throw crash the main process.
-            const respond = (spec: Parameters<typeof callback>[0]): void => {
-              try {
-                callback(spec)
-              } catch (err) {
-                mainLog.warn(`[display-media] callback rejected: ${err instanceof Error ? err.message : String(err)}`)
-              }
-            }
-            try {
-              await handleDisplayMedia(request, respond)
-            } catch (err) {
-              // Absolute backstop: nothing in the loopback grant path may escape as an unhandledRejection.
-              mainLog.warn(`[display-media] handler error: ${err instanceof Error ? err.message : String(err)}`)
-              respond({})
-            }
-          },
-          { useSystemPicker: false }
-        )
-
-        async function handleDisplayMedia(
-          request: Parameters<
-            NonNullable<Parameters<typeof session.defaultSession.setDisplayMediaRequestHandler>[0]>
-          >[0],
-          callback: Parameters<
-            NonNullable<Parameters<typeof session.defaultSession.setDisplayMediaRequestHandler>[0]>
-          >[1]
-        ): Promise<void> {
-          const frame = request.frame
-          const mainFrame = win?.webContents.mainFrame
-          const origin = request.securityOrigin
-          const mainUrl = win?.webContents.getURL() ?? ''
-          let expectedOrigin = ''
-          try {
-            expectedOrigin = new URL(mainUrl).origin
-          } catch {
-            expectedOrigin = mainUrl
-          }
-          const isMainFrame = !!frame && frame === mainFrame
-          // In the PACKAGED app the renderer is loaded from file://, whose origin is the opaque string
-          // "null" (from new URL(...).origin) while the request reports securityOrigin "file:///". Without
-          // this case the check denied EVERY system-audio request in production. The real identity guard is
-          // isMainFrame (frame === the main window's frame); the origin match is defense-in-depth.
-          const isFileOrigin = origin.startsWith('file://')
-          const originOk =
-            !mainUrl || origin === expectedOrigin || origin === mainUrl || (expectedOrigin === 'null' && isFileOrigin)
-          if (process.env.ASKTOTO_DEBUG) {
-            console.log('[display-media]', {
-              origin,
-              expectedOrigin,
-              frameUrl: frame?.url,
-              mainUrl,
-              mainFrame: isMainFrame,
-              originOk,
-              audioRequested: request.audioRequested,
-              videoRequested: request.videoRequested,
-              armed: audioArmed
-            })
-          }
-          if (!audioArmed) {
-            callback({}) // deny unless the user explicitly started Listen
-            return
-          }
-          if (!isMainFrame || !originOk) {
-            callback({}) // deny requests from unexpected origins or subframes
-            return
-          }
-          if (!request.audioRequested) {
-            callback({}) // must be an audio (loopback) request
-            return
-          }
-          // Windows loopback doesn't bind audio to a video stream the way macOS's ScreenCaptureKit does
-          // (see the comment below) — listen.ts's isWindows branch requests getDisplayMedia({ audio: true })
-          // with no video key at all, so request.videoRequested is false here. Skip desktopCapturer entirely
-          // in that case: no screen source is grabbed for a request that never wanted one.
-          // CAVEAT: Chromium's support for Windows loopback-audio-without-video hasn't been validated on real
-          // hardware yet. If it turns out a bound video track is still required, listen.ts already retries
-          // with { video: { frameRate: 1 }, audio: true }, which falls through to the video path below.
-          if (!request.videoRequested) {
-            callback({ audio: 'loopback' })
-            return
-          }
-          // macOS binds system-audio loopback to a ScreenCaptureKit screen stream, so the loopback only
-          // starts when a screen video source is attached. We grant one here (gated above on armed +
-          // main-frame + origin); the renderer drops the video track instantly, so no frame is rendered,
-          // saved, or sent. This is the only way to capture the "them" side of a call on macOS.
-          //
-          // getSources can BOTH return empty transiently (fresh grant) AND reject outright with "Failed to
-          // get sources." (a ScreenCaptureKit hiccup, or a Screen Recording grant not in effect). M2-0429: a
-          // capture the diagnosis already knows macOS will refuse is denied before any getSources call, and
-          // every other path retries and never rejects (capture-permissions/loopback-grant.ts). A deny is
-          // callback(null), never callback({}): for a request that asked for video, Electron rejects {} with
-          // "Video was requested, but no video stream was provided". The renderer's getDisplayMedia then rejects
-          // and listen.ts falls back to the microphone with the diagnosis-backed note.
-          const screenSrc = await screenPerm.acquireListenScreenSource()
-          callback(screenSrc ? { video: screenSrc, audio: 'loopback' } : screenPerm.DENY_DISPLAY_MEDIA)
-        }
-      })
+      runStep('setDisplayMediaHandler', () =>
+        registerListenDisplayMedia({
+          session: session.defaultSession,
+          getWindow: () => win,
+          isAudioArmed: () => audioArmed,
+          acquireScreenSource: screenPerm.acquireListenScreenSource,
+          denyDisplayMedia: screenPerm.DENY_DISPLAY_MEDIA,
+          warn: (message) => mainLog.warn(message),
+          grants: speechCaptureGrants,
+          readContext: () => speechCaptureGrants.getAcceptedListenContext()
+        })
+      )
 
       // Deny every web permission by default; only the main window may use media or write sanitized clipboard text.
       runStep('permissionHandlers', () => {
