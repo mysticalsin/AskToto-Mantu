@@ -61,7 +61,7 @@ describe('packaged macOS secure-keystore startup', () => {
     expect(main).toContain('resumeDeferredMacProfileBootSteps()')
     expect(main).toContain('if (!isMacProfileUnlockError(e)) throw e')
     expect(main).toContain('if (isMacProfileUnlockError(e)) {\n              deferMacProfileBootStep(name, () => runStep(name, fn))')
-    expect(auth).toContain('json === null && !useFileBackend() && safeStorage.isEncryptionAvailable()')
+    expect(auth).toContain('json === null &&\n      (packagedMac || !useFileBackend())')
     expect(auth).toContain('export function reloadSessionAfterProfileUnlock(): void')
   })
 
@@ -135,5 +135,20 @@ describe('packaged macOS secure-keystore startup', () => {
     expect(state).toContain('setBootError(message)\n      throw e')
     expect(app).toContain("if (settingsBootError && isMacKeychainUnlockMessage(settingsBootError))")
     expect(app).toContain(".finally(() => setUnlockingEncryptedProfile(false))")
+  })
+
+  it('keeps denied auth-session reads uncached so a later Keychain retry can restore the session', () => {
+    const loadStart = auth.indexOf('function loadSession(): void {')
+    const loadEnd = auth.indexOf('\nfunction saveSession(', loadStart)
+    expect(loadStart).toBeGreaterThanOrEqual(0)
+    expect(loadEnd).toBeGreaterThan(loadStart)
+    const loadSession = auth.slice(loadStart, loadEnd)
+
+    expect(loadSession).toContain('if (packagedMac && !isMacKeychainUnlockAuthorized())')
+    expect(loadSession).toContain('safeStorageDecryptFailed = true')
+    expect(loadSession).toContain('if (json === null && packagedMac && safeStorageDecryptFailed) throw new MacKeychainUnlockRequiredError()')
+    expect(loadSession).toMatch(/if \(e instanceof KeychainKeyRecoveryError\)[\s\S]*?loaded = false[\s\S]*?throw new MacKeychainUnlockRequiredError\(\)/)
+    expect(loadSession.indexOf('loaded = true')).toBeGreaterThan(loadSession.indexOf('} catch (e) {'))
+    expect(auth).toMatch(/export function reloadSessionAfterProfileUnlock\(\): void \{\s*session = null\s*loaded = false\s*loadSession\(\)/)
   })
 })

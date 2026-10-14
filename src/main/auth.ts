@@ -7,7 +7,14 @@ import type { PublicClientApplication } from '@azure/msal-node'
 import type { AuthStatus, SignInResult } from '@shared/ipc'
 import { getSettings, setSettings } from './store'
 import { auditLog, mainLog, setAuditActor } from './logger'
-import { useFileBackend, encryptSecret, decryptSecret } from './secrets'
+import {
+  useFileBackend,
+  encryptSecret,
+  decryptSecret,
+  KeychainKeyRecoveryError,
+  MacKeychainUnlockRequiredError,
+  isMacKeychainUnlockAuthorized
+} from './secrets'
 import { readTrustedAdminManaged } from './win-security'
 
 // Scopes requested at sign-in: identity + read-only calendar (so the agenda can be pulled later with no
@@ -583,7 +590,14 @@ function ensureRevalidationTimer(): void {
 
 function loadSession(): void {
   if (loaded) return
-  loaded = true
+  const packagedMac = app.isPackaged && process.platform === 'darwin'
+  // A boot-time auth status may run before the visible unlock surface. Leave the cache retryable
+  // and do not touch either encrypted backend until the user takes that action.
+  if (packagedMac && !isMacKeychainUnlockAuthorized()) {
+    session = null
+    return
+  }
+  let safeStorageDecryptFailed = false
   try {
     const buf = readFileSync(sessionPath())
     let json: string | null = null
@@ -592,11 +606,20 @@ function loadSession(): void {
     if (useFileBackend()) {
       try { json = decryptSecret(buf) } catch { /* not AES-GCM format — try safeStorage below */ }
     }
-    // Fallback / migration: try safeStorage only when this build did not explicitly opt out of
-    // Keychain. The unsigned package sets ASKTOTO_LOCAL_KEYSTORE so an old auth-session.bin can never
-    // place a hidden Keychain dialog in front of onboarding; it is treated as an expired local cache.
-    if (json === null && !useFileBackend() && safeStorage.isEncryptionAvailable()) {
-      try { json = safeStorage.decryptString(buf) } catch { /* not a safeStorage blob */ }
+    // Fallback / migration: try legacy safeStorage after explicit unlock on packaged macOS, or when
+    // the current backend otherwise uses safeStorage. On macOS preserve a failed attempt until the
+    // AES-GCM fallback is tried, then surface denial instead of caching a false signed-out state.
+    if (
+      json === null &&
+      (packagedMac || !useFileBackend()) &&
+      (packagedMac || safeStorage.isEncryptionAvailable())
+    ) {
+      try {
+        json = safeStorage.decryptString(buf)
+      } catch {
+        safeStorageDecryptFailed = true
+        /* could be an AES-GCM blob; try that format before treating Mac denial as locked */
+      }
       // Migrate to file backend if we're now in file-backend mode (best-effort).
       if (json !== null && useFileBackend()) {
         try { writeFileSync(sessionPath(), encryptSecret(json), { mode: 0o600 }) } catch { /* best-effort */ }
@@ -605,17 +628,32 @@ function loadSession(): void {
     // Reverse migration: this file may have been written by a build that FORCED the file keystore on a
     // platform that no longer does (Windows, once the forced local keystore became darwin-only). Without
     // this the AES-GCM blob is never even tried and every upgrading user is silently signed out. Only
-    // runs when the file backend is off, so a keystore-forced build still never probes the Keychain here.
-    if (json === null && !useFileBackend()) {
-      try { json = decryptSecret(buf) } catch { /* not AES-GCM either, or the file key is unrecoverable */ }
+    // runs when the file backend is off, plus packaged macOS after explicit unlock so older AES-GCM
+    // session files remain readable when the backend policy changes.
+    if (json === null && (packagedMac || !useFileBackend())) {
+      try {
+        json = decryptSecret(buf)
+      } catch (e) {
+        if (e instanceof KeychainKeyRecoveryError) throw e
+        /* not AES-GCM either */
+      }
       if (json !== null && safeStorage.isEncryptionAvailable()) {
         try { writeFileSync(sessionPath(), safeStorage.encryptString(json), { mode: 0o600 }) } catch { /* best-effort */ }
       }
     }
+    if (json === null && packagedMac && safeStorageDecryptFailed) throw new MacKeychainUnlockRequiredError()
     session = json !== null ? (JSON.parse(json) as Session) : null
-  } catch {
+  } catch (e) {
     session = null
+    if (e instanceof KeychainKeyRecoveryError) {
+      // Do not mark the encrypted session as absent. An explicit retry after Keychain access changes
+      // must re-read the original bytes and can restore the existing signed-in session.
+      loaded = false
+      if (packagedMac) throw new MacKeychainUnlockRequiredError()
+      throw e
+    }
   }
+  loaded = true
   // Treat the file as a CACHE: a session past the max local age is evicted on read (memory + disk),
   // forcing fresh interactive sign-in. (Config re-validation, domain and tenant, needs cfg and runs in
   // authStatus and the sweep.)
