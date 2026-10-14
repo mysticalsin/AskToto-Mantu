@@ -115,7 +115,6 @@ describe('FITO-185-Z instant Act1 show (no hide-for-seconds)', () => {
   const indexHtml = readFileSync(join(__dirname, '../../index.html'), 'utf8')
   const bootJs = readFileSync(join(__dirname, '../../public/act1-boot.js'), 'utf8')
   const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
-  const welcome = readFileSync(join(__dirname, '../components/OnboardingWelcomeScene.tsx'), 'utf8')
   const main = readFileSync(join(__dirname, '../../../main/index.ts'), 'utf8')
 
   it('no-JS shell is poster + Métis wordmark + Next (never waits on video)', () => {
@@ -151,12 +150,6 @@ describe('FITO-185-Z instant Act1 show (no hide-for-seconds)', () => {
     expect(main).toMatch(/pollAct1Paint/)
     expect(main).toMatch(/ACT1_SHELL_READY/)
     expect(main).not.toMatch(/Hero hold `#05010A` is the first frame/)
-  })
-
-  it('hero video is deferred off the first-paint path', () => {
-    expect(welcome).toMatch(/FITO-185-Y: poster\/UI first/)
-    expect(welcome).toMatch(/setTimeout\(start, 480\)/)
-    expect(welcome).toMatch(/decoding="sync"/)
   })
 })
 

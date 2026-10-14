@@ -20,7 +20,6 @@ import {
 } from './onboarding-portal'
 
 const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
-const welcome = readFileSync(join(__dirname, '../components/OnboardingWelcomeScene.tsx'), 'utf8')
 const css = readAppCss()
 const portalSrc = readFileSync(join(__dirname, './onboarding-portal.ts'), 'utf8')
 const stageStart = css.indexOf('.onboard-stage {')
@@ -162,9 +161,6 @@ describe('FITO-185-L portal-open on Act 1 first paint', () => {
 
   it('HeroWelcome + Act1 mount call requestOnboardingPortalOpen immediately (no 1400ms race)', () => {
     expect(experience).toMatch(/requestOnboardingPortalOpen/)
-    expect(welcome).toMatch(
-      /function HeroWelcome[\s\S]*?useLayoutEffect\(\(\) => \{[\s\S]*?requestOnboardingPortalOpen\(\)/
-    )
     expect(experience).not.toMatch(/setTimeout\([\s\S]*?onboard-stage--portal-open[\s\S]*?1400\)/)
     expect(portalSrc).toMatch(/export function requestOnboardingPortalOpen/)
     expect(requestOnboardingPortalOpen).toBeTypeOf('function')

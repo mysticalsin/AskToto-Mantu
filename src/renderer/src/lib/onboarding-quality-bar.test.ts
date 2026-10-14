@@ -1,7 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readAppCss } from '../../../../scripts/lib/read-app-css.mjs'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import { HeroWelcome } from '../components/OnboardingWelcomeScene'
 import {
   ONBOARDING_BAR_LAND_GAIN,
   ONBOARDING_PORTAL_CLOSE_GAIN,
@@ -17,7 +20,6 @@ import {
 } from './onboarding-starfield-spec'
 
 const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
-const welcome = readFileSync(join(__dirname, '../components/OnboardingWelcomeScene.tsx'), 'utf8')
 const demo = readFileSync(join(__dirname, '../components/OnboardingDemoScene.tsx'), 'utf8')
 const engine = readFileSync(join(__dirname, './onboarding-starfield-engine.ts'), 'utf8')
 const css = readAppCss()
@@ -71,15 +73,15 @@ describe('Apple-grade quality bar — PR 66 re-pass', () => {
   })
 
   it('Continue / Next / Set me up sit outside scene-enter on first paint of that act', () => {
-    const hero = actSlice(welcome, 'export function HeroWelcome', 'export function ')
-    const nextAt = hero.indexOf('onboard-cta')
+    const hero = renderToStaticMarkup(createElement(HeroWelcome, { onBegin: () => {} }))
+    const nextAt = hero.indexOf('class="onboard-cta')
     const heroCta = hero.slice(nextAt, hero.indexOf('</button>', nextAt))
     expect(heroCta).toMatch(/\bNext\b/)
     expect(heroCta).not.toMatch(/fade-up/)
     expect(heroCta).not.toMatch(/onboard-glass/)
     expect(heroCta).not.toMatch(/animationDelay/)
-    expect(hero.indexOf('scene-enter')).toBeLessThan(hero.indexOf('onboard-cta'))
-    expect(hero.lastIndexOf('</div>', hero.indexOf('onboard-cta'))).toBeGreaterThan(hero.indexOf('scene-enter'))
+    expect(hero.indexOf('class="scene-enter')).toBeLessThan(nextAt)
+    expect(hero.lastIndexOf('</div>', nextAt)).toBeGreaterThan(hero.indexOf('class="scene-enter'))
 
     // FITO-185-P keep-alive: slice problem scene block, not the video ternary.
     const problem = actSlice(experience, "scene === 'problem' && (", "scene === 'reveal' && (")

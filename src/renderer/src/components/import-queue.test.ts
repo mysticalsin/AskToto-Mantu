@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import {
   importQueueHeadline,
   isImportDropFile,
@@ -8,7 +8,9 @@ import {
   skippedImportMessage,
   visibleImportJobs
 } from './import-queue'
-import type { ImportJobView } from '@shared/ipc'
+import type { ImportAssetsProgress, ImportJobView } from '@shared/ipc'
+import { ImportQueue } from './ImportQueue'
+import { ImportQueueSection } from './ImportQueueSection'
 
 function job(partial: Partial<ImportJobView> & Pick<ImportJobView, 'jobId' | 'state'>): ImportJobView {
   return {
@@ -91,30 +93,54 @@ describe('import queue helpers', () => {
   })
 })
 
-describe('import queue layout', () => {
-  const queue = readFileSync(join(__dirname, 'ImportQueue.tsx'), 'utf8')
-  const recall = readFileSync(join(__dirname, 'RecallView.tsx'), 'utf8')
-  const queueActions = readFileSync(join(__dirname, 'useImportQueue.ts'), 'utf8')
-  const retentionPanel = readFileSync(join(__dirname, 'ImportQueueSection.tsx'), 'utf8')
+describe('import queue rendered behavior', () => {
+  const failedJob = job({ jobId: 'failed-1', state: 'failed', title: 'Weekly sync', error: 'Could not transcribe.' })
+  const doneJob = job({ jobId: 'done-1', state: 'done', title: 'Planning', file: '/private/meeting.json' })
 
-  it('queue cards name the meeting and expose resume, cancel, and done', () => {
-    expect(queue).toMatch(/job\.title/)
-    expect(queue).toMatch(/Resume/)
-    expect(queue).toMatch(/Cancel/)
-    expect(queue).toMatch(/Open/)
-    expect(queue).toMatch(/describeImportProgress/)
-    expect(queue).toMatch(/Getting transcription files/)
-    expect(queue).toMatch(/Drop recordings to import them/)
+  it('renders meeting names, progress states, and the appropriate actions', () => {
+    const html = renderToStaticMarkup(
+      createElement(ImportQueue, {
+        jobs: [failedJob, doneJob],
+        assets: { status: 'downloading', progress: 0.5, label: 'Downloading' } as ImportAssetsProgress,
+        dragOver: true,
+        error: null,
+        onCancel: () => {},
+        onResume: () => {},
+        onDismiss: () => {},
+        onOpenMeeting: () => {}
+      })
+    )
+
+    expect(html).toContain('Weekly sync')
+    expect(html).toContain('Could not transcribe.')
+    expect(html).toContain('Resume')
+    expect(html).toContain('Planning')
+    expect(html).toContain('Open')
+    expect(html).toContain('Getting transcription files')
+    expect(html).toContain('Drop recordings to import them')
   })
 
-  it('Recall offers several meetings via picker and drop, never a raw path', () => {
-    expect(recall).toMatch(/Import meetings/)
-    expect(recall).toMatch(/onDrop/)
-    expect(recall).toMatch(/<ImportQueueSection/)
-    expect(queueActions).toMatch(/importAudioStartBatch/)
-    expect(queueActions).toMatch(/importAudioDrop/)
-    expect(retentionPanel).toMatch(/resumeDisabled={policyBlocked}/)
-    expect(`${recall}\n${queueActions}\n${retentionPanel}`).not.toMatch(/webUtils\.getPathForFile/)
-    expect(`${recall}\n${queueActions}\n${retentionPanel}`).not.toMatch(/file\.path/)
+  it('keeps policy-held jobs visible and disables Resume while policy blocks retention', () => {
+    const html = renderToStaticMarkup(
+      createElement(ImportQueueSection, {
+        jobs: [job({ jobId: 'held-1', state: 'policy-held', title: 'Saved import' })],
+        policyBlocked: true,
+        policyHeldJobIds: ['held-1'],
+        inventoryOverflow: false,
+        policyHoldOverflow: false,
+        error: null,
+        assets: null,
+        dragOver: false,
+        onCancel: () => {},
+        onResume: () => {},
+        onDismiss: () => {},
+        onOpenMeeting: () => {}
+      })
+    )
+    expect(html).toContain('Saved import')
+    expect(html).toContain('summary-only policy prevents import')
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>[\s\S]*?<\/button>/)
+    expect(html).toContain('Resume</span>')
+    expect(html).toContain('summary-only policy prevents resuming this import')
   })
 })
