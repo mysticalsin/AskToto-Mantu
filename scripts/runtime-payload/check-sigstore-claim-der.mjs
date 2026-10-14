@@ -54,6 +54,8 @@ assert.equal(decodeDerUtf8String(longDer), 'A'.repeat(128))
 
 const shortDer = Buffer.from('0c0d6769746875622d686f73746564', 'hex')
 assert.equal(decodeDerUtf8String(shortDer), 'github-hosted')
+const bomDer = encodeDerUtf8String(`\uFEFF${expected.get(FULCIO_OID.runnerEnvironment)}`)
+assert.equal(decodeDerUtf8String(bomDer), `\uFEFF${expected.get(FULCIO_OID.runnerEnvironment)}`)
 for (const malformed of [
   Buffer.from([0x13, 0x01, 0x41]),
   Buffer.from([0x0c, 0x02, 0x41]),
@@ -76,5 +78,10 @@ rejectsClaimSet(
       : extension
   )
 )
+rejectsClaimSet(
+  positiveExtensions.map((extension) =>
+    extension.oid.id.join('.') === FULCIO_OID.runnerEnvironment ? { ...extension, value: bomDer } : extension
+  )
+)
 
-process.stdout.write('RUNTIME_SIGSTORE_DER_CASES_PASSED positives=3 negatives=11\n')
+process.stdout.write('RUNTIME_SIGSTORE_DER_CASES_PASSED positives=4 negatives=12\n')

@@ -12,7 +12,7 @@ export const FULCIO_OID = Object.freeze({
 const REQUIRED_OIDS = Object.freeze(Object.values(FULCIO_OID))
 const OID_INTEGER_MAX = 4_294_967_295
 const MAX_CLAIM_BYTES = 8192
-const UTF8 = new TextDecoder('utf-8', { fatal: true })
+const UTF8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
 
 function fail() {
   throw new Error('RUNTIME_READBACK_CERTIFICATE_CLAIMS_INVALID')
