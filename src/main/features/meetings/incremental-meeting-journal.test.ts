@@ -8,7 +8,11 @@ import {
   type IncrementalJournalSnapshot,
   type IncrementalMeetingJournalStorage
 } from './incremental-meeting-journal'
-import { issueIncrementalRecordReceipt, type IncrementalRecordReceipt } from './incremental-record-receipt'
+import {
+  discardIncrementalRecordReceipt,
+  issueIncrementalRecordReceipt,
+  type IncrementalRecordReceipt
+} from './incremental-record-receipt'
 
 const meetingId = '64d5a603-0b18-4da5-8a3f-4a42c9d22031'
 const localRecordId = '6370e1cc-43f4-4976-a912-04d0c3ca8f9f'
@@ -19,12 +23,15 @@ const recordJson = new TextEncoder().encode(
     line: { speaker: 'you', text: 'one', t: 1_700_000_000_000 }
   })
 )
-const limits: SpeechProvenanceLimits & { maxJournalBytes: number } = {
+const provenanceLimits: SpeechProvenanceLimits = {
   maxRecords: 3,
   maxWords: 4,
   maxFieldBytes: 1_024,
   maxRecordBytes: 2_048,
-  maxPayloadBytes: 8_192,
+  maxPayloadBytes: 8_192
+}
+const limits: SpeechProvenanceLimits & { maxJournalBytes: number } = {
+  ...provenanceLimits,
   maxJournalBytes: 16_384
 }
 
@@ -48,7 +55,7 @@ function canonical(text = 'one', wordCount = 0): CanonicalIncrementalRecord {
         kind: 'cloud',
         captureId,
         captureGeneration: 7,
-        streamGeneration: 9,
+        streamGeneration: 7,
         track: 'microphone',
         epoch: 11,
         segmentIndex: 4
@@ -65,7 +72,7 @@ function canonical(text = 'one', wordCount = 0): CanonicalIncrementalRecord {
           captureGeneration: 7,
           sequence: 1,
           segment: {
-            stream: { generation: 9, track: 'microphone', epoch: 11 },
+            stream: { generation: 7, track: 'microphone', epoch: 11 },
             engine: 'deepgram-nova3',
             index: 4,
             revision: 1,
@@ -165,15 +172,18 @@ function fixture(
 describe('bounded incremental meeting append journal', () => {
   it('does not issue a receipt for schema-valid canonical data over the worker field budget', () => {
     const candidate = canonical('x'.repeat(limits.maxFieldBytes + 1))
-    expect(
-      issueIncrementalRecordReceipt(candidate, {
-        ownerToken: Object.freeze(Object.create(null) as object),
-        meetingId,
-        limits,
-        maxCanonicalBytes: limits.maxJournalBytes,
-        isCurrent: () => true
-      })
-    ).toBeNull()
+    const binding = {
+      ownerToken: Object.freeze(Object.create(null) as object),
+      meetingId,
+      limits: provenanceLimits,
+      maxCanonicalBytes: limits.maxJournalBytes,
+      isCurrent: () => true
+    }
+    expect(issueIncrementalRecordReceipt(candidate, binding)).toBeNull()
+
+    const validReceipt = issueIncrementalRecordReceipt(canonical('within field limit'), binding)
+    expect(validReceipt).not.toBeNull()
+    discardIncrementalRecordReceipt(validReceipt ?? undefined)
   })
 
   it('computes the exact v1 payload overhead from record count and canonical line bytes', () => {
