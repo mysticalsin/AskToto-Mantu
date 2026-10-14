@@ -13,8 +13,31 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  profile-contract:
+    name: Lean packaging contract tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - name: Verify lean profile, inventory, exclusions, architecture, and staging-path contracts
+        run: >-
+          npx vitest run
+          scripts/lib/package-inventory.test.ts
+          scripts/lib/contained-tree-copy.test.ts
+          scripts/lib/forbidden-inference-path.test.ts
+          scripts/lib/macho-architecture.test.ts
+          scripts/lib/lean-checker-args.test.ts
+
   candidate:
     name: Unsigned ${{ matrix.target }} ${{ matrix.arch }} candidate
+    needs: profile-contract
     strategy:
       fail-fast: false
       matrix:

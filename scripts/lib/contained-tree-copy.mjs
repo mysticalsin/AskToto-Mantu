@@ -51,6 +51,9 @@ async function copyEntry(source, destination, boundary, activeDirectories) {
 /**
  * Copy a staged resource tree. Symlinks are refused by default; an approved target tree may opt in to
  * materializing only symlinks whose fully resolved target remains strictly inside that tree.
+ * @param {string} sourceArgument
+ * @param {string} destination
+ * @param {{ allowSymlinkTargetsWithin?: string | null }} [options]
  */
 export async function copyContainedTree(sourceArgument, destination, { allowSymlinkTargetsWithin = null } = {}) {
   const source = resolve(sourceArgument)
