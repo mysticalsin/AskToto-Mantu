@@ -27,7 +27,7 @@ vi.mock('./asr-bundled-ensure', () => ({
 type Api = typeof import('./parakeet')
 type ResizableArrayBuffer = ArrayBuffer & { resize(byteLength: number): void }
 const ResizableBuffer = ArrayBuffer as unknown as {
-  new(byteLength: number, options: { maxByteLength: number }): ResizableArrayBuffer
+  new (byteLength: number, options: { maxByteLength: number }): ResizableArrayBuffer
   prototype: ResizableArrayBuffer
 }
 let api: Api
@@ -77,7 +77,8 @@ describe('Parakeet utilityProcess client', () => {
     const first = api.parakeetTranscribe(samples)
     const second = api.parakeetTranscribe(Float32Array.from([0.1]))
     const firstRequest = await waitForRequest(child, 'transcribe')
-    const requests = child.postMessage.mock.calls.map(([m]) => m as { type: string; id: string; pcm: ArrayBuffer })
+    const requests = child.postMessage.mock.calls
+      .map(([m]) => m as { type: string; id: string; pcm: ArrayBuffer })
       .filter((m) => m.type === 'transcribe')
 
     expect(electron.utilityProcess.fork).toHaveBeenCalledTimes(1)
@@ -109,7 +110,8 @@ describe('Parakeet utilityProcess client', () => {
       code: 'PARAKEET_BUSY',
       message: expect.stringMatching(/busy.*retry/i)
     })
-    const requests = child.postMessage.mock.calls.map(([message]) => message as { type: string; id: string })
+    const requests = child.postMessage.mock.calls
+      .map(([message]) => message as { type: string; id: string })
       .filter((message) => message.type === 'transcribe')
     expect(requests).toHaveLength(2)
 
@@ -119,7 +121,8 @@ describe('Parakeet utilityProcess client', () => {
     for (let i = 0; i < 50 && child.postMessage.mock.calls.length < 3; i++) {
       await new Promise((resolve) => setTimeout(resolve, 0))
     }
-    const allRequests = child.postMessage.mock.calls.map(([message]) => message as { type: string; id: string })
+    const allRequests = child.postMessage.mock.calls
+      .map(([message]) => message as { type: string; id: string })
       .filter((message) => message.type === 'transcribe')
     expect(allRequests).toHaveLength(3)
     const newest = allRequests[2]
@@ -258,7 +261,7 @@ describe('Parakeet utilityProcess client', () => {
     vi.useFakeTimers()
     const timedOut = api.parakeetTranscribe(new Float32Array(16))
     const timeoutAssertion = expect(timedOut).rejects.toThrow(/timed out/i)
-    await Promise.resolve()
+    await vi.waitFor(() => expect(child.postMessage).toHaveBeenCalled())
     expect(child.postMessage).toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(120_001)
     await timeoutAssertion
@@ -267,12 +270,9 @@ describe('Parakeet utilityProcess client', () => {
     const secondChild = new FakeChild()
     electron.utilityProcess.fork.mockReturnValue(secondChild)
     const waiting = api.parakeetTranscribe(new Float32Array(16))
-    await Promise.resolve()
     expect(electron.utilityProcess.fork).toHaveBeenCalledTimes(1)
     child.emit('exit', 0)
-    await Promise.resolve()
-    await Promise.resolve()
-    expect(electron.utilityProcess.fork).toHaveBeenCalledTimes(2)
+    await vi.waitFor(() => expect(electron.utilityProcess.fork).toHaveBeenCalledTimes(2))
 
     const request = secondChild.postMessage.mock.calls[0][0] as { id: string }
     secondChild.emit('message', { type: 'result', id: request.id, text: 'after timeout' })
@@ -286,7 +286,9 @@ describe('Parakeet utilityProcess client', () => {
     await warm
 
     let released = false
-    const releasing = api.parakeetRelease().then(() => { released = true })
+    const releasing = api.parakeetRelease().then(() => {
+      released = true
+    })
     await Promise.resolve()
     expect(child.kill).toHaveBeenCalledTimes(1)
     expect(released).toBe(false)
@@ -304,27 +306,20 @@ describe('Parakeet utilityProcess client', () => {
     await expect(waiting).resolves.toBe('new generation')
   })
 
-  it('does not admit a request that was awaiting its generation when release starts', async () => {
+  it('does not fork when release wins during async model-path resolution', async () => {
     const racing = api.parakeetTranscribe(new Float32Array(16))
     const releasing = api.parakeetRelease()
-    await Promise.resolve()
-
-    expect(child.postMessage).not.toHaveBeenCalled()
-    expect(child.kill).toHaveBeenCalledTimes(1)
-
-    const secondChild = new FakeChild()
-    electron.utilityProcess.fork.mockReturnValue(secondChild)
-    child.emit('exit', 0)
+    await expect(racing).rejects.toThrow(/cancelled/i)
     await releasing
-    const request = await waitForRequest(secondChild, 'transcribe')
-    secondChild.emit('message', { type: 'result', id: request.id, text: 'admitted after exit' })
-    await expect(racing).resolves.toBe('admitted after exit')
+    expect(child.postMessage).not.toHaveBeenCalled()
+    expect(child.kill).not.toHaveBeenCalled()
+    expect(electron.utilityProcess.fork).not.toHaveBeenCalled()
   })
 
   it('reports an unconfirmed termination and never risks a second native recognizer', async () => {
     vi.useFakeTimers()
     const status = api.parakeetAddonError()
-    await Promise.resolve()
+    await vi.waitFor(() => expect(child.postMessage).toHaveBeenCalled())
     const probe = child.postMessage.mock.calls[0][0] as { id: string }
     child.emit('message', { type: 'result', id: probe.id })
     await status
@@ -342,7 +337,7 @@ describe('Parakeet utilityProcess client', () => {
   it('does not let a stale released-child exit clear a newer generation termination failure', async () => {
     vi.useFakeTimers()
     const firstStatus = api.parakeetAddonError()
-    await Promise.resolve()
+    await vi.waitFor(() => expect(child.postMessage).toHaveBeenCalled())
     const firstProbe = child.postMessage.mock.calls[0][0] as { id: string }
     child.emit('message', { type: 'result', id: firstProbe.id })
     await firstStatus
@@ -353,7 +348,7 @@ describe('Parakeet utilityProcess client', () => {
     const secondChild = new FakeChild()
     electron.utilityProcess.fork.mockReturnValue(secondChild)
     const secondStatus = api.parakeetAddonError()
-    await Promise.resolve()
+    await vi.waitFor(() => expect(secondChild.postMessage).toHaveBeenCalled())
     const secondProbe = secondChild.postMessage.mock.calls[0][0] as { id: string }
     secondChild.emit('message', { type: 'result', id: secondProbe.id })
     await secondStatus
