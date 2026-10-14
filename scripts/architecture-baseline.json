@@ -67,7 +67,7 @@
     "src/main/apple-speech.ts": 2,
     "src/main/asr-bundled-ensure.ts": 18,
     "src/main/asr-manifest.ts": 1,
-    "src/main/asr-model-download.ts": 10,
+    "src/main/asr-model-download.ts": 7,
     "src/main/asr-model-path.ts": 1,
     "src/main/asr-model-protocol.ts": 3,
     "src/main/auth.ts": 24,

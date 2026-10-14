@@ -26,16 +26,8 @@
  * transcribed by the floor model, as before", never "the app is worse than it was".
  */
 import { createHash } from 'node:crypto'
-import {
-  createReadStream,
-  createWriteStream,
-  existsSync,
-  mkdirSync,
-  renameSync,
-  rmSync,
-  statSync,
-  statfsSync
-} from 'node:fs'
+import { createReadStream, createWriteStream, existsSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs'
+import { mkdir, stat, statfs } from 'node:fs/promises'
 import { pipeline } from 'node:stream/promises'
 import { dirname, join } from 'node:path'
 import { app, net } from 'electron'
@@ -93,7 +85,7 @@ function sha256Of(path: string): Promise<string> {
 
 async function fileIsValid(path: string, spec: AsrModelFile): Promise<boolean> {
   try {
-    if (statSync(path).size !== spec.bytes) return false
+    if ((await stat(path)).size !== spec.bytes) return false
   } catch {
     return false
   }
@@ -117,10 +109,10 @@ export async function isHighTierAsrModelReady(
 }
 
 /** Refuse a transfer the volume cannot hold, before the network is touched. Unmeasurable != insufficient. */
-function assertRoomForAll(bytes: number, dir: string): void {
+async function assertRoomForAll(bytes: number, dir: string): Promise<void> {
   let freeBytes: number
   try {
-    const fs = statfsSync(dir)
+    const fs = await statfs(dir)
     freeBytes = fs.bavail * fs.bsize
   } catch {
     return
@@ -266,9 +258,9 @@ async function run(spec: AsrModelSpec): Promise<boolean> {
   const dir = asrModelDir(spec)
   const total = asrModelBytes(spec)
   try {
-    mkdirSync(dir, { recursive: true })
+    await mkdir(dir, { recursive: true })
     // The WHOLE transfer, before any of it starts. Per-file would pass seven times and still fill the disk.
-    assertRoomForAll(total, dir)
+    await assertRoomForAll(total, dir)
   } catch (e) {
     state = { status: 'error', progress: 0, error: e instanceof Error ? e.message : String(e) }
     mainLog.warn('[asr-model] refused:', state.error)
