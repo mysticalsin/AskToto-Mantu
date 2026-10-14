@@ -28,9 +28,10 @@ const validateCatalogSchema = ajv.compile(
 
 async function createValidModelFiles(payloadRoot) {
   await mkdir(resolve(payloadRoot, 'model'), { recursive: true })
+  await mkdir(resolve(payloadRoot, 'licenses'), { recursive: true })
   await writeFile(resolve(payloadRoot, 'model/file.bin'), 'fixture-model')
   const notice = Buffer.from('x')
-  await writeFile(resolve(payloadRoot, 'model/NOTICE'), notice)
+  await writeFile(resolve(payloadRoot, 'licenses/NOTICE'), notice)
 }
 
 function makeMetadata() {
@@ -78,7 +79,7 @@ function makeMetadata() {
         version: '1',
         spdx: 'MIT',
         sourceUri: 'https://example.invalid/source',
-        noticePath: 'model/NOTICE',
+        noticePath: 'licenses/NOTICE',
         noticeBytes: 1,
         noticeSha256: createHash('sha256').update('x').digest('hex'),
         sourceReceiptUri: 'https://example.invalid/license-receipt'
@@ -152,7 +153,9 @@ async function positiveCandidate() {
   const longBasename = 'f'.repeat(100)
   await mkdir(resolve(caseRoot, 'model', longDirectory), { recursive: true })
   await writeFile(resolve(caseRoot, 'model', longDirectory, longBasename), 'ustar-prefix-fixture')
-  await writeFile(metadataPath, `${JSON.stringify(makeMetadata())}\n`)
+  const metadata = makeMetadata()
+  metadata.models[0].members = ['model/file.bin', `model/${longDirectory}/${longBasename}`]
+  await writeFile(metadataPath, `${JSON.stringify(metadata)}\n`)
   const run = spawnSync(
     process.execPath,
     [script, '--root', caseRoot, '--metadata', metadataPath, '--output', output],
@@ -195,7 +198,13 @@ async function positiveCandidate() {
   assert.equal(candidate.inventory.path, 'model.test-fixture.inventory.json')
   assert.equal(inventory.source.ref, process.env.GITHUB_REF)
   assert.equal(inventory.source.runnerEnvironment, 'github-hosted')
-  assert.deepEqual(inventory.models, [{ id: 'speaker.embedding', root: 'model', members: ['model/file.bin'] }])
+  assert.deepEqual(inventory.models, [
+    {
+      id: 'speaker.embedding',
+      root: 'model',
+      members: ['model/file.bin', `model/${longDirectory}/${longBasename}`]
+    }
+  ])
   assert.deepEqual(inventory.directories, {})
   assert.equal(candidate.archive.bytes, archiveBytes.length)
   assert.equal(candidate.archive.sha256, createHash('sha256').update(archiveBytes).digest('hex'))
@@ -268,7 +277,7 @@ async function positiveCandidate() {
     },
     entrypoints: {},
     directories: {},
-    models: [{ id: 'speaker.embedding', root: 'model', members: ['model/file.bin'] }]
+    models: inventory.models
   }
   const catalogWithTarget = structuredClone(approvedCatalogShape)
   catalogWithTarget.targets.push(catalogTarget)
@@ -458,6 +467,14 @@ try {
   )
 
   await rejected(
+    'case-fold-duplicate-model-members',
+    async (_payloadRoot, _metadataPath, metadata) => {
+      metadata.models[0].members.push('model/FILE.bin')
+    },
+    'RUNTIME_PAYLOAD_METADATA_INVALID'
+  )
+
+  await rejected(
     'oversized-license-notice',
     async (payloadRoot, _metadataPath, metadata) => {
       await createValidModelFiles(payloadRoot)
@@ -466,8 +483,17 @@ try {
     'RUNTIME_PAYLOAD_LICENSE_RECEIPT_INVALID'
   )
 
+  await rejected(
+    'extra-model-sibling',
+    async (payloadRoot, _metadataPath, metadata) => {
+      await createValidModelFiles(payloadRoot)
+      await writeFile(resolve(payloadRoot, 'model/unmapped.bin'), 'unmapped sibling')
+    },
+    'RUNTIME_PAYLOAD_MODEL_CLOSURE_MISMATCH'
+  )
+
   await positiveCandidate()
-  process.stdout.write('RUNTIME_PAYLOAD_PUBLISHER_CASES_PASSED negative=20 positive=1\n')
+  process.stdout.write('RUNTIME_PAYLOAD_PUBLISHER_CASES_PASSED negative=22 positive=1\n')
 } catch {
   process.stderr.write('RUNTIME_PAYLOAD_NEGATIVE_CASES_FAILED\n')
   process.exitCode = 1

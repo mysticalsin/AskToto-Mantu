@@ -174,9 +174,10 @@ function validMetadata(value) {
       return false
     seenModelIds.add(model.id)
     for (const member of model.members) {
-      if (!safeRelativePath(member) || !member.startsWith(`${model.root}/`) || seenModelMembers.has(member))
+      const foldedMember = typeof member === 'string' ? member.toLowerCase() : ''
+      if (!safeRelativePath(member) || !member.startsWith(`${model.root}/`) || seenModelMembers.has(foldedMember))
         return false
-      seenModelMembers.add(member)
+      seenModelMembers.add(foldedMember)
     }
   }
   if (
@@ -597,9 +598,14 @@ function validateMetadataRecords(metadata, fileMap) {
   )
   const models = [...metadata.models]
     .map((model) => {
+      const expected = new Set(model.members)
       for (const path of model.members) {
         if (!fileMap.has(path) || !path.startsWith(`${model.root}/`))
           throw new Error('RUNTIME_PAYLOAD_MODEL_MEMBER_MISSING')
+      }
+      const actual = [...fileMap.keys()].filter((path) => path.startsWith(`${model.root}/`))
+      if (fileMap.has(model.root) || actual.length !== expected.size || actual.some((path) => !expected.has(path))) {
+        throw new Error('RUNTIME_PAYLOAD_MODEL_CLOSURE_MISMATCH')
       }
       return { id: model.id, root: model.root, members: [...model.members].sort() }
     })
