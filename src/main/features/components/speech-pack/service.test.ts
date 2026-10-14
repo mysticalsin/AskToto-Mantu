@@ -272,6 +272,46 @@ describe('explicit speech-pack service boundary', () => {
     }
   })
 
+  it('does not let an obsolete admission clear a newer same-component pending action', async () => {
+    const pendingReads: Array<{
+      promise: Promise<Awaited<ReturnType<typeof Profile.readSpeechPackProfile>>>
+      release: (value: Awaited<ReturnType<typeof Profile.readSpeechPackProfile>>) => void
+    }> = []
+    const read = vi.spyOn(Profile, 'readSpeechPackProfile').mockImplementation(() => {
+      let release!: (value: Awaited<ReturnType<typeof Profile.readSpeechPackProfile>>) => void
+      const promise = new Promise<Awaited<ReturnType<typeof Profile.readSpeechPackProfile>>>((resolve) => {
+        release = resolve
+      })
+      pendingReads.push({ promise, release })
+      return promise
+    })
+    try {
+      const { service, engine } = setup()
+      const request = {
+        componentId: WHISPER_BASE_Q8.id,
+        action: 'download' as const,
+        manifestIdentity: componentManifestIdentity(WHISPER_BASE_Q8)
+      }
+      const obsolete = service.action(request)
+      await Promise.resolve()
+      await service.action({ ...request, action: 'cancel' })
+      const current = service.action(request)
+      await Promise.resolve()
+      expect(pendingReads).toHaveLength(2)
+
+      pendingReads[0].release({ profile: 'development' })
+      await expect(obsolete).resolves.toEqual({ ok: false, reason: 'busy' })
+      await expect(service.action(request)).resolves.toEqual({ ok: false, reason: 'busy' })
+      expect(engine.enqueue).not.toHaveBeenCalled()
+
+      pendingReads[1].release({ profile: 'development' })
+      await expect(current).resolves.toEqual({ ok: true })
+      expect(engine.enqueue).toHaveBeenCalledTimes(1)
+    } finally {
+      read.mockRestore()
+    }
+  })
+
   it('rechecks selection, policy, capture and shutdown after async profile admission', async () => {
     const identity = componentManifestIdentity(WHISPER_BASE_Q8)
     const run = async (
