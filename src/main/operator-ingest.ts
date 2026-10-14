@@ -21,7 +21,11 @@ import { hashOperatorId, operatorHmacHeaders } from './operator-hmac-sign'
 import { mainLog } from './logger'
 import type { OperatorCrmEvent } from './operator-crm'
 import { drainOperatorQueue, enqueueOperatorItem, type QueueSendResult } from './operator-queue'
-import { operatorEntitled, recordOperatorHeartbeatResult, resetOperatorEntitlementsState } from './operator-entitlements-state'
+import {
+  operatorEntitled,
+  recordOperatorHeartbeatResult,
+  resetOperatorEntitlementsState
+} from './operator-entitlements-state'
 import { maybeRefreshOperatorIntegrations, resetOperatorIntegrationsState } from './operator-integrations'
 import { parseOperatorHeartbeatEntitlements } from '@shared/operator-entitlements'
 import { getActiveModelPolicy, refreshModelPolicyChecked } from './model-policy-client'
@@ -183,6 +187,8 @@ export type { OperatorCrmEvent, OperatorCrmStatus } from './operator-crm'
 export interface OperatorRuntimeHooks {
   onCrmRetry?: (ids: string[]) => Promise<void>
   onReadinessChanged?: () => void
+  /** Refresh main-owned authority metadata before every policy fetch, even an unchanged response. */
+  beforePolicyRefresh?: () => Promise<void>
 }
 
 async function signedPost(
@@ -203,12 +209,20 @@ async function signedPost(
     ...operatorHmacHeaders(secret, hashOperatorId(machineId), body)
   }
   const res = await fetchImpl(`${url}${path}`, {
-    method: 'POST', headers, body, redirect: 'manual', signal: AbortSignal.timeout(15_000)
+    method: 'POST',
+    headers,
+    body,
+    redirect: 'manual',
+    signal: AbortSignal.timeout(15_000)
   })
   const text = await res.text()
   let parsed: unknown = null
   if (res.headers.get('content-type')?.includes('application/json')) {
-    try { parsed = JSON.parse(text) } catch { /* malformed response */ }
+    try {
+      parsed = JSON.parse(text)
+    } catch {
+      /* malformed response */
+    }
   }
   const inspected = inspectBundleResponse({
     status: res.status,
@@ -314,20 +328,28 @@ export async function confirmOperatorLicenseConnection(
   const transport = operatorAskTransport(settings)
   if (!transport) return { ok: false, error: 'Set a valid Métis service address before activating.' }
   if (!getDurableMachineId()) {
-    return { ok: false, error: 'Métis could not save this device identity in its data folder. Close other Métis copies, check that the folder is writable, and try again. If it persists, contact support to repair the data folder.' }
+    return {
+      ok: false,
+      error:
+        'Métis could not save this device identity in its data folder. Close other Métis copies, check that the folder is writable, and try again. If it persists, contact support to repair the data folder.'
+    }
   }
   try {
     const result = await signedPost(transport.url, transport.secret, '/v1/heartbeat', { ...seatMeta(settings) })
-    const data = result.json && typeof result.json === 'object' ? result.json as Record<string, unknown> : {}
+    const data = result.json && typeof result.json === 'object' ? (result.json as Record<string, unknown>) : {}
     if (!result.ok || data.ok !== true) {
       const errors: Record<string, string> = {
         'license-invalid': 'This Métis licence is not valid. Check the licence you pasted.',
         'license-expired': 'This Métis licence has expired. Request a renewed licence.',
         'license-revoked': 'This Métis licence has been revoked. Contact your administrator.',
-        'license-device': 'This Métis licence is already activated on another device. Contact your administrator to transfer it.',
+        'license-device':
+          'This Métis licence is already activated on another device. Contact your administrator to transfer it.',
         'seat-revoked': 'This device has been revoked. Contact your administrator.'
       }
-      return { ok: false, error: errors[String(data.code)] || 'Could not confirm your Métis licence. Check your connection and try again.' }
+      return {
+        ok: false,
+        error: errors[String(data.code)] || 'Could not confirm your Métis licence. Check your connection and try again.'
+      }
     }
     if (data.approved !== true || !parseOperatorHeartbeatEntitlements(data).tier) {
       return { ok: false, error: 'Your licence has not been approved for this device. Contact your administrator.' }
@@ -344,9 +366,7 @@ export function acceptOperatorHeartbeat(json: unknown): void {
   recordOperatorHeartbeatResult(true, json)
 }
 
-export async function operatorHeartbeat(
-  settings: OperatorRuntimeSettings
-): Promise<{ ok: boolean; retry: string[] }> {
+export async function operatorHeartbeat(settings: OperatorRuntimeSettings): Promise<{ ok: boolean; retry: string[] }> {
   const url = resolveUrl(settings)
   const secret = resolveSecret(settings)
   const generation = runtimeGeneration
@@ -372,7 +392,7 @@ export async function operatorHeartbeat(
       dropped: queueReport.dropped
     })
     if (generation !== runtimeGeneration) return { ok: false, retry: [] }
-    const body = res.json && typeof res.json === 'object' ? res.json as { ok?: unknown; approved?: unknown } : null
+    const body = res.json && typeof res.json === 'object' ? (res.json as { ok?: unknown; approved?: unknown }) : null
     if (res.status === 401 || res.status === 403 || body?.ok === false || body?.approved === false) {
       // An explicit rejection is not a network outage: revoke cached grants immediately.
       lastFundedProviders = []
@@ -400,10 +420,7 @@ export async function operatorHeartbeat(
   }
 }
 
-export function startOperatorRuntime(
-  getSettings: () => OperatorRuntimeSettings,
-  hooks?: OperatorRuntimeHooks
-): void {
+export function startOperatorRuntime(getSettings: () => OperatorRuntimeSettings, hooks?: OperatorRuntimeHooks): void {
   stopOperatorRuntime()
   const settings = getSettings()
   if (!operatorUrlConfigured(settings) || !resolveSecret(settings)) return
@@ -425,17 +442,19 @@ export function startOperatorRuntime(
   let policyPending = false
   let policyPendingSource = 'pending'
   let policyFailureBackoffMs = POLICY_FAILURE_BACKOFF_INITIAL_MS
-  const runPolicyRefresh = (source: string): Promise<void> => {
-    return refreshModelPolicyChecked(getSettings(), source)
-      .then(({ changed, ok }) => {
+  const runPolicyRefresh = async (source: string): Promise<void> => {
+    try {
+      if (hooks?.beforePolicyRefresh) await hooks.beforePolicyRefresh()
+      if (policyGeneration !== runtimeGeneration) return
+      await refreshModelPolicyChecked(getSettings(), source).then(({ changed, ok }) => {
         if (policyGeneration !== runtimeGeneration) return
         if (ok) policyFailureBackoffMs = POLICY_FAILURE_BACKOFF_INITIAL_MS
         else schedulePolicyRetry()
         if (changed) hooks?.onReadinessChanged?.()
       })
-      .catch(() => {
-        schedulePolicyRetry()
-      })
+    } catch {
+      schedulePolicyRetry()
+    }
   }
   const schedulePolicyRetry = (): void => {
     if (policyRetryTimer || policyGeneration !== runtimeGeneration) return
@@ -462,14 +481,13 @@ export function startOperatorRuntime(
       return
     }
     policyInFlight = true
-    void runPolicyRefresh(source)
-      .finally(() => {
-        policyInFlight = false
-        if (policyPending && policyGeneration === runtimeGeneration) {
-          policyPending = false
-          pollPolicy(policyPendingSource)
-        }
-      })
+    void runPolicyRefresh(source).finally(() => {
+      policyInFlight = false
+      if (policyPending && policyGeneration === runtimeGeneration) {
+        policyPending = false
+        pollPolicy(policyPendingSource)
+      }
+    })
   }
   policyRefreshNow = pollPolicy
   const onFocus = (): void => pollPolicy('focus')
@@ -550,7 +568,9 @@ export function pathTagForSeatProvider(
 }
 
 /** Resolve the wire value: caller's label wins; otherwise classify locally; never absent, never free-form. */
-export function resolveQuestionType(event: Pick<OperatorAskEvent, 'questionType' | 'question' | 'vision'>): QuestionType {
+export function resolveQuestionType(
+  event: Pick<OperatorAskEvent, 'questionType' | 'question' | 'vision'>
+): QuestionType {
   const given = normalizeQuestionType(event.questionType)
   if (given !== 'unknown') return given
   return classifyQuestionType(event.question, { vision: event.vision === true })
@@ -595,10 +615,7 @@ export async function recordOperatorAsk(
   await postIngestWithQueue(url, secret, payload)
 }
 
-export async function recordOperatorCrmSend(
-  settings: OperatorRuntimeSettings,
-  event: OperatorCrmEvent
-): Promise<void> {
+export async function recordOperatorCrmSend(settings: OperatorRuntimeSettings, event: OperatorCrmEvent): Promise<void> {
   const url = resolveUrl(settings)
   const secret = resolveSecret(settings)
   if (!operatorUrlConfigured(settings) || !secret) return

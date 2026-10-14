@@ -56,6 +56,8 @@ export type SpeechBootstrapStateOptions = {
   /** Forced, bounded authority-boundary read. It must not return before all required inputs are read. */
   readBoundary: () => Promise<SpeechBootstrapBoundaryRead>
   now?: () => number
+  /** Synchronous owner tombstone notification; never read or refresh settings from this callback. */
+  onInvalidated?: (reason: string) => void
 }
 
 type ProjectedObservation = {
@@ -201,6 +203,7 @@ export function createSpeechBootstrapState(options: SpeechBootstrapStateOptions)
   let disposed = false
   let inFlight: Promise<void> | null = null
   let followupRequested = false
+  let revocationAcknowledged = true
 
   const safeNow = (): number | null => {
     try {
@@ -211,11 +214,18 @@ export function createSpeechBootstrapState(options: SpeechBootstrapStateOptions)
     }
   }
 
-  const invalidate = (_reason: string): void => {
+  const invalidate = (reason: string): void => {
     if (disposed) return
     generation += 1
     revocationGeneration += 1
     published = null
+    revocationAcknowledged = false
+    try {
+      options.onInvalidated?.(reason)
+      revocationAcknowledged = true
+    } catch {
+      // A failed owner tombstone cannot be followed by fresh usable metadata.
+    }
   }
 
   const observeSettings = (value: SpeechSettingsObservation): void => {
@@ -315,8 +325,14 @@ export function createSpeechBootstrapState(options: SpeechBootstrapStateOptions)
       invalidate('boundary-settings-invalid')
       return
     }
-    if (observationEpochAtStart !== null && boundary.observation.epoch < observationEpochAtStart) return
-    if (observed && nextObservation.epoch < observed.epoch) return
+    if (
+      (observationEpochAtStart !== null && boundary.observation.epoch < observationEpochAtStart) ||
+      (observed && nextObservation.epoch < observed.epoch)
+    ) {
+      // A forced read that cannot publish must not leave an older policy proof usable at this boundary.
+      invalidate('boundary-settings-stale')
+      return
+    }
 
     if (observed && observed.semanticRevision !== nextObservation.semanticRevision) {
       // A forced boundary read can discover a change before the store observer callback arrives.
@@ -338,6 +354,24 @@ export function createSpeechBootstrapState(options: SpeechBootstrapStateOptions)
       invalidate('clock-invalid')
       return
     }
+    if (published) {
+      const canonicalMetadata = (
+        durableDeviceId: string,
+        providers: Exclude<ManagedSpeechProviders, { state: 'invalid' }>,
+        egressAllowlist: readonly string[] | null
+      ): string =>
+        JSON.stringify([
+          durableDeviceId,
+          providers.state === 'absent' ? null : [...providers.providers].sort(),
+          egressAllowlist === null ? null : [...egressAllowlist].sort()
+        ])
+      const changed =
+        canonicalMetadata(published.durableDeviceId, published.managedProviders, published.egressAllowlist) !==
+        canonicalMetadata(boundary.durableDeviceId, managed.providers, managed.egressAllowlist)
+      const screenRevoked = published.screenDiagnosisState === 'granted' && boundary.screenDiagnosisState !== 'granted'
+      if (changed || screenRevoked) invalidate('boundary-authority-changed')
+    }
+    if (!revocationAcknowledged) return
     published = {
       observation: nextObservation,
       durableDeviceId: boundary.durableDeviceId,

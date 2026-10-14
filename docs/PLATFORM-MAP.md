@@ -96,6 +96,13 @@ Separate App Store submission from `native-app/`. Does not use the `Metis-Releas
   `listen-audio-recovery.ts` owns recovery policy and fails broker capture closed when a track cannot be
   safely reattached. `listen-startup-policy.ts` owns the cached Operator Listen gate and effective engine
   selection; `cloud-speech-startup.ts` validates live broker capability/readiness and bounds startup events.
+- Live cloud speech in main → `speech-desktop-bootstrap.ts` composes the registered runtime, fresh authority
+  boundaries and revocation; `speech-desktop-boundary.ts` provides the actual Electron/store adapters.
+  `settings-observation.ts` publishes memory snapshots without reading files; `speech-bootstrap-state.ts`
+  owns metadata freshness and publication checks. `auth.ts` owns opaque speech authorization leases,
+  backed by its private configuration, bounded boundary readers and lease controller. Repeated speech
+  authority checks use these memory snapshots; explicit boundaries refresh the trusted files and policy.
+  Cloud capture handlers, renewal and finishing ownership live under `src/main/ipc/cloud-speech-*.ts`.
 - ASR asset IPC → `src/main/ipc/asr-assets-ipc.ts`, `src/main/ipc/parakeet-assets-ipc.ts`, and
   `src/main/ipc/speech-pack-ipc.ts`; ASR status wire types live in `src/shared/asr-assets.ts` and are
   re-exported by `src/shared/ipc.ts`. Metadata-only probes use `src/main/asr-metadata-readiness.ts`.

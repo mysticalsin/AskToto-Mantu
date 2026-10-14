@@ -492,17 +492,17 @@ describe('fleet model policy scheduler', () => {
   })
 
   it('does not refresh a retired runtime after its authority boundary settles', async () => {
-    let release: (() => void) | null = null
+    const gate: { release?: () => void } = {}
     captureFetch()
     startOperatorRuntime(() => SETTINGS, {
       beforePolicyRefresh: () =>
         new Promise<void>((resolve) => {
-          release = resolve
+          gate.release = resolve
         })
     })
     await flushPromises()
     stopOperatorRuntime()
-    release?.()
+    gate.release?.()
     await flushPromises()
     expect(policyClientMock.refreshModelPolicy).not.toHaveBeenCalled()
   })

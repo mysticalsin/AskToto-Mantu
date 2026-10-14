@@ -42,9 +42,9 @@ import {
   resetSecretKeyCache,
   useFileBackend
 } from './secrets'
-import { adminManagedConfigPath } from './win-security'
-import { adminManagedContent } from './admin-managed-cache'
-export { resetAdminManagedCache, resetAdminManagedCacheForTests } from './admin-managed-cache'
+import { adminManagedConfigPath, readTrustedAdminManaged } from './win-security'
+import { AdminManagedCache, type AdminPolicyIdentity } from './admin-managed-cache'
+import { publishSettingsSnapshot } from './settings-observation'
 import { parseEgressAllowlist } from './net/egress-policy'
 // Static (eager) imports — dynamic import() throws under the bytecode-compiled main (electron-vite
 // bytecodePlugin). These SDKs are already eager-loaded by the streaming modules (llm/anthropic|dust|openai),
@@ -59,6 +59,21 @@ import { LocalSpeechPackPolicySchema, type LocalSpeechPackPolicy } from '@shared
 import { assertBrokerSpeechSettingsPatch, BrokerSpeechSettingsLoadSchema } from '@shared/broker-speech-settings'
 
 const dir = () => app.getPath('userData')
+function adminPolicyIdentity(): AdminPolicyIdentity {
+  const path = adminManagedConfigPath()
+  try {
+    const stat = statSync(path)
+    return { path, mtime: stat.mtimeMs, dev: stat.dev, ino: stat.ino }
+  } catch {
+    return { path, mtime: 0, dev: 0, ino: 0 }
+  }
+}
+const adminCache = new AdminManagedCache({ readIdentity: adminPolicyIdentity, readTrusted: readTrustedAdminManaged })
+const adminManagedContent = (): string | null => adminCache.read()
+export function resetAdminManagedCache(): void {
+  adminCache.reset()
+}
+export const resetAdminManagedCacheForTests = resetAdminManagedCache
 const settingsPath = () => join(dir(), 'settings.json')
 const keyPath = (provider: ProviderId) => join(dir(), `key-${provider}.bin`)
 
@@ -556,6 +571,13 @@ export function resetSettingsCacheForTests(): void {
   _settingsCache = null
 }
 
+/** Resolve real current settings and revalidate machine trust at an explicit authority boundary. */
+export function readSettingsAtAuthorityBoundary(): Settings {
+  _settingsCache = null
+  adminCache.reset()
+  return getSettings()
+}
+
 function currentSettingsMtimes(): Pick<SettingsCache, 'userPath' | 'userMtime' | 'managedMtime' | 'adminMtime'> {
   return {
     // settings.json path is part of the key so a change of profile directory always misses the cache.
@@ -579,6 +601,7 @@ export function getSettings(): Settings {
     _settingsCache.managedMtime === m.managedMtime &&
     _settingsCache.adminMtime === m.adminMtime
   ) {
+    publishSettingsSnapshot(_settingsCache.value, true)
     return _settingsCache.value
   }
 
@@ -689,6 +712,7 @@ export function getSettings(): Settings {
 
   // Only memoise a result derived from a settings.json we could actually read — see `stored` above.
   if (stored !== null) _settingsCache = { value, ...m }
+  publishSettingsSnapshot(value, stored !== null)
   return value
 }
 
