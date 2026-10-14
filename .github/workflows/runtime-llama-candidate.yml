@@ -12,6 +12,7 @@ on:
       - scripts/fetch-llama-server.mjs
       - scripts/fetch-local-model.mjs
       - scripts/local-model-assets.mjs
+      - scripts/lib/macho-architecture.mjs
       - scripts/runtime-payload/**
       - src/main/llm/local-models.ts
   push:
@@ -26,6 +27,7 @@ on:
       - scripts/fetch-llama-server.mjs
       - scripts/fetch-local-model.mjs
       - scripts/local-model-assets.mjs
+      - scripts/lib/macho-architecture.mjs
       - scripts/runtime-payload/**
       - src/main/llm/local-models.ts
 
@@ -49,12 +51,12 @@ jobs:
       matrix:
         include:
           - target: darwin-arm64
-            runner: macos-15-xlarge
+            runner: macos-15
             platform: darwin
             arch: arm64
             llama-target: mac
           - target: darwin-x64
-            runner: macos-15
+            runner: macos-15-intel
             platform: darwin
             arch: x64
             llama-target: mac
@@ -80,6 +82,10 @@ jobs:
           EXPECTED_ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
+          case "${EXPECTED_ARCH}:${RUNNER_ARCH}" in
+            arm64:ARM64|x64:X64) ;;
+            *) echo 'RUNTIME_LLAMA_HOST_ARCH_MISMATCH'; exit 1 ;;
+          esac
           test "$(node -p 'process.platform')" = "$EXPECTED_PLATFORM"
           test "$(node -p 'process.arch')" = "$EXPECTED_ARCH"
           npm ci --ignore-scripts --no-audit --no-fund
@@ -89,9 +95,19 @@ jobs:
       - name: Fetch pinned llama runtime and Qwen inference model
         run: |
           set -euo pipefail
-          node scripts/fetch-llama-server.mjs '${{ matrix.llama-target }}'
-          node scripts/fetch-local-model.mjs
-          node scripts/check-local-model.mjs
+          fetch_log="$RUNNER_TEMP/runtime-llama-fetch.log"
+          node scripts/fetch-llama-server.mjs '${{ matrix.llama-target }}' >"$fetch_log" 2>&1 || {
+            echo 'RUNTIME_LLAMA_NATIVE_FETCH_FAILED'
+            exit 1
+          }
+          node scripts/fetch-local-model.mjs >>"$fetch_log" 2>&1 || {
+            echo 'RUNTIME_LLAMA_MODEL_FETCH_FAILED'
+            exit 1
+          }
+          node scripts/check-local-model.mjs >>"$fetch_log" 2>&1 || {
+            echo 'RUNTIME_LLAMA_MODEL_PIN_CHECK_FAILED'
+            exit 1
+          }
       - name: Run native CPU inference and create the closed candidate inventory
         env:
           RUNTIME_EXPECTED_PLATFORM: ${{ matrix.platform }}
@@ -133,16 +149,35 @@ jobs:
           set -euo pipefail
           for target in darwin-arm64 darwin-x64 win32-x64; do
             dir="$CANDIDATE_ROOT/runtime-llama-$target-$GITHUB_SHA-$GITHUB_RUN_ATTEMPT"
+            entrypoint=runtime/llama-server
+            if [ "$target" = win32-x64 ]; then entrypoint=runtime/llama-server.exe; fi
             test "$(find "$dir" -maxdepth 1 -type f -printf '%f\n' | sort | tr '\n' ' ')" = "candidate.json runtime-inference.json runtime.llama-server-$target.inventory.json runtime.llama-server-$target.tar.gz "
             test "$(jq -r '.target.platform + "-" + .target.arch' "$dir/candidate.json")" = "$target"
             test "$(jq -r '.inferencePassed' "$dir/runtime-inference.json")" = true
             test "$(jq -r '.cpuOnly' "$dir/runtime-inference.json")" = true
+            jq -e '.nativeFilesVerified | type == "number" and . > 0' "$dir/runtime-inference.json" >/dev/null
             test "$(jq -r '.modelIncludedInArchive' "$dir/runtime-inference.json")" = false
             test "$(jq -r '.licenseCoverageComplete' "$dir/runtime-inference.json")" = false
+            test "$(jq -r '.artifactId' "$dir/candidate.json")" = "runtime.llama-server-$target"
+            test "$(jq -r '.kind' "$dir/candidate.json")" = runtime
+            test "$(jq -r '.componentId' "$dir/candidate.json")" = runtime.llama-server
             archive="runtime.llama-server-$target.tar.gz"
             inventory="runtime.llama-server-$target.inventory.json"
             test "$(jq -r '.archive.path' "$dir/candidate.json")" = "$archive"
             test "$(jq -r '.inventory.path' "$dir/candidate.json")" = "$inventory"
+            test "$(jq -r '.artifactId' "$dir/$inventory")" = "runtime.llama-server-$target"
+            test "$(jq -r '.kind' "$dir/$inventory")" = runtime
+            test "$(jq -r '.componentId' "$dir/$inventory")" = runtime.llama-server
+            test "$(jq -r '.target.platform + "-" + .target.arch' "$dir/$inventory")" = "$target"
+            test "$(jq -r '.target.platform + "-" + .target.arch' "$dir/candidate.json")" = "$(jq -r '.target.platform + "-" + .target.arch' "$dir/$inventory")"
+            test "$(jq -r '.entrypoints["llama-server"]' "$dir/$inventory")" = "$entrypoint"
+            test "$(jq -r '.source.commit' "$dir/$inventory")" = "$GITHUB_SHA"
+            test "$(jq -r '.source.workflowPath' "$dir/$inventory")" = .github/workflows/runtime-llama-candidate.yml
+            test "$(jq -r '.source.runId' "$dir/$inventory")" = "$GITHUB_RUN_ID"
+            test "$(jq -r '.source.attempt' "$dir/$inventory")" = "$GITHUB_RUN_ATTEMPT"
+            test "$(jq -r '.source.ref' "$dir/$inventory")" = "$GITHUB_REF"
+            test "$(jq -r '.source.runnerEnvironment' "$dir/$inventory")" = github-hosted
+            test "$(jq -r '.payloadBytes' "$dir/candidate.json")" = "$(jq '[.files[].bytes] | add' "$dir/$inventory")"
             test "$(sha256sum "$dir/$archive" | cut -d' ' -f1)" = "$(jq -r '.archive.sha256' "$dir/candidate.json")"
             test "$(sha256sum "$dir/$inventory" | cut -d' ' -f1)" = "$(jq -r '.inventory.sha256' "$dir/candidate.json")"
           done

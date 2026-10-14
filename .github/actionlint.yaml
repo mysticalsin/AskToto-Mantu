@@ -1,0 +1,4 @@
+# Official GitHub-hosted macOS 15 Intel label; actionlint's bundled runner list is older.
+self-hosted-runner:
+  labels:
+    - macos-15-intel

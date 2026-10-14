@@ -49,6 +49,10 @@ jobs:
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Reject unsafe publisher inputs
         run: node scripts/runtime-payload/check-payload-rejections.mjs
+      - name: Bound failed spawn and resistant-child shutdown
+        run: node scripts/runtime-payload/check-llama-child-lifecycle.mjs
+      - name: Reject a successful-looking response after the shared deadline
+        run: node scripts/runtime-payload/check-llama-deadline.mjs
 
   provenance-fixture:
     name: Build synthetic provenance-verification fixture

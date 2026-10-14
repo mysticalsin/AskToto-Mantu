@@ -199,6 +199,10 @@ async function positiveCandidate() {
   assert.equal(candidate.inventory.bytes, inventoryBytes.length)
   assert.equal(candidate.inventory.sha256, createHash('sha256').update(inventoryBytes).digest('hex'))
   assert.equal(candidate.payloadFiles, inventory.files.length)
+  assert.equal(
+    candidate.payloadBytes,
+    inventory.files.reduce((total, file) => total + file.bytes, 0)
+  )
   assert.deepEqual(
     readTarRows(archiveBytes),
     inventory.files.map(({ path, bytes, sha256 }) => ({ path, bytes, sha256 }))
@@ -222,6 +226,55 @@ async function positiveCandidate() {
     targets: []
   }
   assert.equal(validateCatalogSchema(approvedCatalogShape), true, 'approved app-owned root catalog shape validates')
+
+  const catalogTarget = {
+    kind: 'model',
+    componentId: 'model.test-fixture',
+    artifactId: 'model.test-fixture',
+    target: { platform: 'any', arch: 'any' },
+    runtime: null,
+    payloadBytes: candidate.payloadBytes,
+    archive: {
+      bytes: candidate.archive.bytes,
+      sha256: candidate.archive.sha256,
+      url: 'https://example.invalid/model.test-fixture.tar.gz',
+      releaseAssetId: 1
+    },
+    inventory: {
+      bytes: candidate.inventory.bytes,
+      sha256: candidate.inventory.sha256,
+      url: 'https://example.invalid/model.test-fixture.inventory.json',
+      releaseAssetId: 2
+    },
+    bundle: {
+      bytes: 1,
+      sha256: '0'.repeat(64),
+      url: 'https://example.invalid/model.test-fixture.bundle.json',
+      releaseAssetId: 3
+    },
+    signer: {
+      issuer: 'https://token.actions.githubusercontent.com',
+      repositoryUri: 'https://github.com/mysticalsin/AskToto-Mantu',
+      repositoryId: '1282463398',
+      workflowPath: '.github/workflows/runtime-artifact-candidate.yml',
+      ref: 'refs/heads/publisher-fixture',
+      sourceCommit: '0'.repeat(40),
+      workflowCommit: '0'.repeat(40),
+      predicateType: 'https://slsa.dev/provenance/v1',
+      runnerEnvironment: 'github-hosted'
+    },
+    entrypoints: {},
+    models: [{ id: 'speaker.embedding', root: 'model', members: ['model/file.bin'] }]
+  }
+  const catalogWithTarget = structuredClone(approvedCatalogShape)
+  catalogWithTarget.targets.push(catalogTarget)
+  assert.equal(validateCatalogSchema(catalogWithTarget), true, 'catalog accepts a complete target with payloadBytes')
+  const catalogWithoutPayloadBytes = structuredClone(catalogWithTarget)
+  delete catalogWithoutPayloadBytes.targets[0].payloadBytes
+  assert.equal(validateCatalogSchema(catalogWithoutPayloadBytes), false, 'catalog requires payloadBytes')
+  const catalogWithOversizedPayload = structuredClone(catalogWithTarget)
+  catalogWithOversizedPayload.targets[0].payloadBytes = 10_000_000_001
+  assert.equal(validateCatalogSchema(catalogWithOversizedPayload), false, 'catalog caps payloadBytes')
 }
 
 try {

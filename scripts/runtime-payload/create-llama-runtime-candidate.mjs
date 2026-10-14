@@ -6,6 +6,9 @@ import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile
 import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { assertBeforeDeadline } from './candidate-deadline.mjs'
+import { assertNativeBinaryArchitecture } from './native-binary-architecture.mjs'
+import { stopOwnedChild } from './owned-child-shutdown.mjs'
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const output = process.env.RUNTIME_CANDIDATE_OUTPUT
@@ -149,12 +152,13 @@ async function smokeInfer(binary, model, directory) {
   })
   let collected = ''
   let port = 0
-  let settled = false
   let timedOut = false
   let spawnFailed = false
-  const start = Date.now()
+  const start = performance.now()
+  const deadline = start + 300_000
+  let inferenceResult
   const kill = () => {
-    if (!child.killed) child.kill('SIGTERM')
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM')
   }
   const timer = setTimeout(() => {
     timedOut = true
@@ -173,20 +177,27 @@ async function smokeInfer(binary, model, directory) {
     const match = /listening on http:\/\/127\.0\.0\.1:(\d+)/.exec(collected)
     if (match) port = Number(match[1])
   })
+  const ensureWithinDeadline = () => {
+    if (timedOut) fail('RUNTIME_LLAMA_INFERENCE_TIMEOUT')
+    assertBeforeDeadline(deadline)
+  }
   try {
-    const listenDeadline = Date.now() + 180_000
-    while (!port && Date.now() < listenDeadline) {
-      if (timedOut) fail('RUNTIME_LLAMA_INFERENCE_TIMEOUT')
+    const listenDeadline = Math.min(performance.now() + 180_000, deadline)
+    while (!port && performance.now() < listenDeadline) {
+      ensureWithinDeadline()
       if (spawnFailed) fail('RUNTIME_LLAMA_SERVER_SPAWN_FAILED')
       if (child.exitCode !== null) fail('RUNTIME_LLAMA_SERVER_EXITED_BEFORE_LISTEN')
       await new Promise((resolvePromise) => setTimeout(resolvePromise, 250))
     }
+    ensureWithinDeadline()
     if (!port) fail('RUNTIME_LLAMA_SERVER_LISTEN_FAILED')
-    const healthDeadline = Date.now() + 120_000
+    const healthDeadline = Math.min(performance.now() + 120_000, deadline)
     let healthy = false
-    while (Date.now() < healthDeadline) {
+    while (performance.now() < healthDeadline) {
+      ensureWithinDeadline()
       try {
         const health = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(2_000) })
+        ensureWithinDeadline()
         if (health.status === 200) {
           healthy = true
           break
@@ -196,7 +207,10 @@ async function smokeInfer(binary, model, directory) {
       }
       await new Promise((resolvePromise) => setTimeout(resolvePromise, 500))
     }
+    ensureWithinDeadline()
     if (!healthy) fail('RUNTIME_LLAMA_SERVER_HEALTH_FAILED')
+    const remainingMs = Math.floor(deadline - performance.now())
+    if (remainingMs <= 0) fail('RUNTIME_LLAMA_INFERENCE_TIMEOUT')
     const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -207,29 +221,45 @@ async function smokeInfer(binary, model, directory) {
         temperature: 0,
         stream: false
       }),
-      signal: AbortSignal.timeout(90_000)
+      signal: AbortSignal.timeout(Math.min(90_000, remainingMs))
     })
+    ensureWithinDeadline()
     if (!response.ok) fail('RUNTIME_LLAMA_INFERENCE_HTTP_FAILED')
     const result = await response.json()
+    ensureWithinDeadline()
     if (typeof result.choices?.[0]?.message?.content !== 'string' || !result.choices[0].message.content.trim())
       fail('RUNTIME_LLAMA_INFERENCE_EMPTY')
-    settled = true
-    return { inferencePassed: true, cpuOnly: true, elapsedMs: Date.now() - start }
+    inferenceResult = { inferencePassed: true, cpuOnly: true, elapsedMs: Math.round(performance.now() - start) }
   } finally {
-    settled = true
     clearTimeout(timer)
-    kill()
-    await new Promise((resolvePromise) => {
-      if (child.exitCode !== null) resolvePromise()
-      else child.once('exit', resolvePromise)
-    })
+    await stopOwnedChild(child).catch(() => fail('RUNTIME_LLAMA_CHILD_EXIT_UNCONFIRMED'))
   }
+  ensureWithinDeadline()
+  return inferenceResult
 }
 
 async function downloadLicense(destination) {
   const response = await fetch(LLAMA_LICENSE_URL, { redirect: 'error', signal: AbortSignal.timeout(20_000) })
   if (!response.ok) fail('RUNTIME_LLAMA_LICENSE_FETCH_FAILED')
-  const bytes = Buffer.from(await response.arrayBuffer())
+  if (!response.body) fail('RUNTIME_LLAMA_LICENSE_BODY_MISSING')
+  const reader = response.body.getReader()
+  const chunks = []
+  let totalBytes = 0
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    const remaining = 1079 - totalBytes
+    if (remaining <= 0 || value.byteLength > remaining) {
+      if (remaining > 0) chunks.push(Buffer.from(value.subarray(0, remaining)))
+      totalBytes = 1079
+      await reader.cancel()
+      break
+    }
+    chunks.push(Buffer.from(value))
+    totalBytes += value.byteLength
+  }
+  if (totalBytes > 1078) fail('RUNTIME_LLAMA_LICENSE_OVERSIZED')
+  const bytes = Buffer.concat(chunks, totalBytes)
   if (bytes.length !== 1078 || sha256(bytes) !== LLAMA_LICENSE_SHA256) fail('RUNTIME_LLAMA_LICENSE_PIN_MISMATCH')
   await writeFile(destination, bytes, { flag: 'wx', mode: 0o600 })
   return bytes
@@ -281,6 +311,7 @@ async function main() {
       const destination = resolve(runtimeDirectory, name)
       await copyFile(source, destination)
       if (name === binaryName && platform === 'darwin') await chmod(destination, 0o755)
+      await assertNativeBinaryArchitecture(destination, platform, arch)
     }
     const noticePath = resolve(licensesDirectory, 'llama.cpp-LICENSE.txt')
     const notice = await downloadLicense(noticePath)
@@ -315,10 +346,7 @@ async function main() {
         nodeVersion: process.version,
         npmVersion: process.env.RUNTIME_NPM_VERSION ?? '',
         zlibVersion: process.versions.zlib,
-        packages: [
-          { name: 'electron', version: electronVersion },
-          { name: 'llama.cpp', version: 'b9957' }
-        ]
+        packages: [{ name: 'electron', version: electronVersion }]
       },
       upstream: [
         {
@@ -372,6 +400,7 @@ async function main() {
           schemaVersion: 1,
           componentId: metadata.componentId,
           target,
+          nativeFilesVerified: fileNames.length,
           modelId: 'qwen3.5-0.8b',
           modelSha256: expectedModel,
           modelIncludedInArchive: false,

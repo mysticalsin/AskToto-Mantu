@@ -87,6 +87,7 @@
         "artifactId",
         "target",
         "runtime",
+        "payloadBytes",
         "archive",
         "inventory",
         "bundle",
@@ -151,6 +152,11 @@
               }
             }
           ]
+        },
+        "payloadBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000000000
         },
         "archive": {
           "type": "object",
