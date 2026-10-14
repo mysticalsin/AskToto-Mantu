@@ -41,9 +41,9 @@ const REJECTED_AT: Record<string, Array<string | number>> = {
 }
 
 /** Infinity can trigger more than one Zod numeric check at the same field path. */
-const NONFINITE_REJECTED_AT: Record<string, Array<string | number>> = {
-  'capture.generation-infinite.json': ['generation'],
-  'segment.offset-infinite.json': ['startMs']
+const NONFINITE_REJECTED_AT: Record<string, Array<Array<string | number>>> = {
+  'capture.generation-infinite.json': [['generation']],
+  'segment.offset-infinite.json': [['startMs'], ['endMs']]
 }
 
 type Fixture = { file: string; schema: ZodTypeAny; value: unknown }
@@ -119,6 +119,11 @@ describe('speech contract: non-finite numeric fixtures', () => {
     const expectedPath = NONFINITE_REJECTED_AT[file]
     const issuePaths = result.error?.issues.map((issue) => issue.path) ?? []
     expect(issuePaths.length).toBeGreaterThan(0)
-    expect(issuePaths.every((path) => JSON.stringify(path) === JSON.stringify(expectedPath))).toBe(true)
+    expect(issuePaths.every((path) => expectedPath.some((expected) => JSON.stringify(path) === JSON.stringify(expected)))).toBe(
+      true
+    )
+    expect(expectedPath.every((expected) => issuePaths.some((path) => JSON.stringify(path) === JSON.stringify(expected)))).toBe(
+      true
+    )
   })
 })
