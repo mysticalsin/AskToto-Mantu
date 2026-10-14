@@ -26,12 +26,17 @@ describe('MQA-294 licence readiness and credential boundaries', () => {
   })
 
   it('rejects an activation if its verified endpoint changed during the request', () => {
-    expect(source('main/index.ts')).toContain('resolveOperatorBaseUrl(candidate) !== resolveOperatorBaseUrl(getSettings())')
+    expect(source('main/index.ts')).toContain(
+      'resolveOperatorBaseUrl(candidate) !== resolveOperatorBaseUrl(getSettings())'
+    )
   })
 
   it('MQA-295 clears saved credentials before a renderer-requested endpoint change', () => {
     const main = source('main/index.ts')
-    const guard = main.slice(main.indexOf("if ('operatorUrl' in p && resolveOperatorBaseUrl"), main.indexOf('const next = setSettingsWithSpeakerPolicy(p)'))
+    const guard = main.slice(
+      main.indexOf("if ('operatorUrl' in p && resolveOperatorBaseUrl"),
+      main.indexOf('const next = setSettingsWithSpeakerPolicy(p)')
+    )
     expect(guard.includes("operatorLicenseToken: ''")).toBe(true)
     expect(guard.includes("operatorIngestSecret: ''")).toBe(true)
   })

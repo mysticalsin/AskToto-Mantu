@@ -120,13 +120,8 @@ describe('packaged macOS keystore — local override cannot create a raw AES key
     const startupSource = readFileSync(join(__dirname, 'index.ts'), 'utf8')
     ;(electron.safeStorage.isEncryptionAvailable as Mock).mockClear()
     ;(electron.safeStorage.encryptString as Mock).mockClear()
-    const {
-      encryptSecret,
-      decryptSecret,
-      useFileBackend,
-      authorizeMacKeychainUnlock,
-      MacKeychainUnlockRequiredError
-    } = await import('./secrets')
+    const { encryptSecret, decryptSecret, useFileBackend, authorizeMacKeychainUnlock, MacKeychainUnlockRequiredError } =
+      await import('./secrets')
 
     expect(process.env.ASKTOTO_LOCAL_KEYSTORE).toBe('1')
     expect(startupSource).not.toMatch(/process\.env\.ASKTOTO_LOCAL_KEYSTORE\s*(?:\?\?|\|\||&&)?=/)
@@ -298,9 +293,7 @@ describe('windows keystore — fail-closed when DPAPI cannot unwrap the key', ()
     await boot({ packaged: true, forceLocalKeystore: false, dpapi: 'denied' })
     const { setApiKey } = await import('./store')
 
-    expect(() => setApiKey('openai', 'sk-replacement')).toThrow(
-      'Métis could not unlock the existing encrypted profile'
-    )
+    expect(() => setApiKey('openai', 'sk-replacement')).toThrow('Métis could not unlock the existing encrypted profile')
     expect(readFileSync(join(userData, 'key-openai.bin'))).toEqual(apiKeyBefore)
   })
 })
