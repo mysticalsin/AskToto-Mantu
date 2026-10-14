@@ -109,10 +109,11 @@ describe('packaged macOS secure-keystore startup', () => {
 
   it('drops a cached auth session and retries disk after unlock authorization is reset', () => {
     const sessionBytes = Buffer.from('existing-encrypted-session')
+    const sessionAt = Date.now()
     const readSession = vi.fn(() => {
       const bytes = sessionBytes
       if (bytes.toString() !== 'existing-encrypted-session') throw new Error('session bytes changed')
-      return { accessToken: 'cached-session' }
+      return { accessToken: 'cached-session', at: sessionAt }
     })
     let loaded = false
     let session: { accessToken: string } | null = null
@@ -130,7 +131,7 @@ describe('packaged macOS secure-keystore startup', () => {
 
     authorizeMacKeychainUnlock()
     loadSession()
-    expect(session).toEqual({ accessToken: 'cached-session' })
+    expect(session).toEqual({ accessToken: 'cached-session', at: sessionAt })
     expect(loaded).toBe(true)
     expect(readSession).toHaveBeenCalledOnce()
 
@@ -144,7 +145,7 @@ describe('packaged macOS secure-keystore startup', () => {
 
     authorizeMacKeychainUnlock()
     loadSession()
-    expect(session).toEqual({ accessToken: 'cached-session' })
+    expect(session).toEqual({ accessToken: 'cached-session', at: sessionAt })
     expect(loaded).toBe(true)
     expect(readSession).toHaveBeenCalledTimes(2)
   })
