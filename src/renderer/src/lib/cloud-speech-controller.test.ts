@@ -1692,12 +1692,16 @@ describe('cloud speech capture controller', () => {
   it('stops within one absolute deadline when a frame ACK never resolves', async () => {
     vi.useFakeTimers()
     const { instance, frame, bridge } = controller({ deadlineMs: 50 })
-    frame.mockReturnValue(new Promise<CloudSpeechFrameResult>(() => {}))
+    const frameEntered = deferred<void>()
+    frame.mockImplementation(() => {
+      frameEntered.resolve(undefined)
+      return new Promise<CloudSpeechFrameResult>(() => {})
+    })
     await instance.start()
     const port = new FakePort()
     instance.attachTrack('microphone', port as unknown as MessagePort, 0)
     port.emit(pcmFrame(1, 0))
-    for (let i = 0; i < 8 && frame.mock.calls.length === 0; i++) await Promise.resolve()
+    await frameEntered.promise
     expect(frame).toHaveBeenCalledOnce()
     const stop = instance.stop()
     await vi.advanceTimersByTimeAsync(50)
