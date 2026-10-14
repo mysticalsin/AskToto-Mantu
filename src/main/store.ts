@@ -8,7 +8,9 @@ import {
   renameSync,
   statSync,
   readdirSync,
-  mkdtempSync, unlinkSync } from 'node:fs'
+  mkdtempSync,
+  unlinkSync
+} from 'node:fs'
 import { join } from 'node:path'
 import { totalmem as physicalTotalMemory } from 'node:os'
 import {
@@ -40,7 +42,9 @@ import {
   resetSecretKeyCache,
   useFileBackend
 } from './secrets'
-import { adminManagedConfigPath, readTrustedAdminManaged } from './win-security'
+import { adminManagedConfigPath } from './win-security'
+import { adminManagedContent } from './admin-managed-cache'
+export { resetAdminManagedCache, resetAdminManagedCacheForTests } from './admin-managed-cache'
 import { parseEgressAllowlist } from './net/egress-policy'
 // Static (eager) imports — dynamic import() throws under the bytecode-compiled main (electron-vite
 // bytecodePlugin). These SDKs are already eager-loaded by the streaming modules (llm/anthropic|dust|openai),
@@ -52,6 +56,7 @@ import { stripProxyFaultMarker } from './llm/retry'
 import { migrateOverlayLayout } from '@shared/overlay-chrome'
 import { preferredFreshAsrEngine, type FreshAsrEngine } from '@shared/asr-hardware-preference'
 import { LocalSpeechPackPolicySchema, type LocalSpeechPackPolicy } from '@shared/model-policy'
+import { assertBrokerSpeechSettingsPatch, BrokerSpeechSettingsLoadSchema } from '@shared/broker-speech-settings'
 
 const dir = () => app.getPath('userData')
 const settingsPath = () => join(dir(), 'settings.json')
@@ -206,61 +211,6 @@ function parseLocalSpeechPackContent(raw: string): LocalSpeechPackPolicy | null 
   }
 }
 
-// readTrustedAdminManaged() owns the trust check and reads through the verified fd; cache those bytes.
-// Path + dev + inode + mtime prevent replace races and stale fast-test/admin-edit snapshots.
-const ADMIN_POLICY_REPROBE_MS = 60_000
-let _adminManagedCache: {
-  path: string
-  mtime: number
-  dev: number
-  ino: number
-  at: number
-  content: string | null
-} | null = null
-
-function adminPolicyIdentity(p: string): { path: string; mtime: number; dev: number; ino: number } {
-  try {
-    const st = statSync(p)
-    return { path: p, mtime: st.mtimeMs, dev: st.dev, ino: st.ino }
-  } catch {
-    return { path: p, mtime: 0, dev: 0, ino: 0 }
-  }
-}
-
-/** Test seam: drop the machine-policy snapshot so a rebuilt %ProgramData% fixture is re-probed. */
-export function resetAdminManagedCache(): void {
-  _adminManagedCache = null
-}
-
-/** Test-only: drop admin-policy bytes between ProgramData redirection/recreate cases. */
-export function resetAdminManagedCacheForTests(): void {
-  _adminManagedCache = null
-}
-
-function adminManagedContent(): string | null {
-  const id = adminPolicyIdentity(adminManagedConfigPath())
-  const now = Date.now()
-  const c = _adminManagedCache
-  // A clock set backwards must not extend the snapshot indefinitely — any negative age counts as stale.
-  // Path + dev + inode belong in the key: a delete-and-replace (or a test that rebuilds %ProgramData%)
-  // can reuse the previous mtime on a fast filesystem, and that must not keep serving the old bytes.
-  if (
-    c &&
-    c.path === id.path &&
-    c.mtime === id.mtime &&
-    c.dev === id.dev &&
-    c.ino === id.ino &&
-
-    now - c.at >= 0 &&
-    now - c.at < ADMIN_POLICY_REPROBE_MS
-  ) {
-    return c.content
-  }
-  const content = readTrustedAdminManaged()
-  _adminManagedCache = { ...id, at: now, content }
-  return content
-}
-
 /** Enterprise managed defaults: per-user (userData) overlaid by machine-wide admin policy. Validated. */
 export function validatedManaged(): Record<string, unknown> {
   const admin = adminManagedContent()
@@ -401,7 +351,9 @@ function tryRecoveredSettings(): Record<string, unknown> | null {
   }
   const recovered = tryParseSettingsBuffer(buf)
   if (!recovered) return null
-  mainLog.warn(`[store] settings.json was unreadable; using previously recovered settings from ${settingsPath()}.recovered`)
+  mainLog.warn(
+    `[store] settings.json was unreadable; using previously recovered settings from ${settingsPath()}.recovered`
+  )
   return recovered
 }
 
@@ -449,13 +401,19 @@ function readUserRaw(): Record<string, unknown> | null {
     if (useFileBackend()) {
       const recovered = tryRecoveredSettings()
       if (recovered) return recovered
-      preserveUnreadableSettings(buf, 'settings.json (legacy V1) is unreadable — file backend is forced, so the Keychain is not probed')
+      preserveUnreadableSettings(
+        buf,
+        'settings.json (legacy V1) is unreadable — file backend is forced, so the Keychain is not probed'
+      )
       return null
     }
     if (!safeStorage.isEncryptionAvailable()) {
       const recovered = tryRecoveredSettings()
       if (recovered) return recovered
-      preserveUnreadableSettings(buf, 'settings.json (legacy V1) is unreadable — safeStorage is unavailable on this machine')
+      preserveUnreadableSettings(
+        buf,
+        'settings.json (legacy V1) is unreadable — safeStorage is unavailable on this machine'
+      )
       return null
     }
     const parsed = tryParseSettingsBuffer(buf)
@@ -467,14 +425,19 @@ function readUserRaw(): Record<string, unknown> | null {
           const tmp = `${p}.tmp`
           writeFileSync(tmp, serializeUserRaw(parsed), { mode: 0o600 })
           renameSync(tmp, p)
-        } catch { /* migration is best-effort; old format still works */ }
+        } catch {
+          /* migration is best-effort; old format still works */
+        }
       }
       return parsed
     }
     // Undecryptable (keychain/OS user changed) — fall back to defaults, but try `.recovered` first.
     const recoveredV1 = tryRecoveredSettings()
     if (recoveredV1) return recoveredV1
-    preserveUnreadableSettings(buf, 'settings.json (legacy V1) is undecryptable — Keychain access lost or the OS user changed')
+    preserveUnreadableSettings(
+      buf,
+      'settings.json (legacy V1) is undecryptable — Keychain access lost or the OS user changed'
+    )
     return null
   }
 
@@ -540,7 +503,11 @@ function migrateLegacyBidstackConnection(raw: Record<string, unknown>): void {
 // Cache is also explicitly invalidated in setSettings / setApiKey / clearApiKey for safety.
 
 function safeMtime(p: string): number {
-  try { return statSync(p).mtimeMs } catch { return 0 }
+  try {
+    return statSync(p).mtimeMs
+  } catch {
+    return 0
+  }
 }
 
 interface SettingsCache {
@@ -574,13 +541,10 @@ export function resetAsrHardwarePreferenceForTests(): void {
 
 function setupIsComplete(user: Record<string, unknown>, managed: Record<string, unknown>): boolean {
   const userDone = 'onboardingDone' in user ? shape().onboardingDone.safeParse(user.onboardingDone) : null
-  const managedDone =
-    'onboardingDone' in managed ? shape().onboardingDone.safeParse(managed.onboardingDone) : null
+  const managedDone = 'onboardingDone' in managed ? shape().onboardingDone.safeParse(managed.onboardingDone) : null
   return (
     (userDone?.success ? userDone.data : managedDone?.success ? managedDone.data : false) === true ||
-    (typeof user.onboardingDoneAt === 'number' &&
-      Number.isFinite(user.onboardingDoneAt) &&
-      user.onboardingDoneAt > 0)
+    (typeof user.onboardingDoneAt === 'number' && Number.isFinite(user.onboardingDoneAt) && user.onboardingDoneAt > 0)
   )
 }
 
@@ -592,10 +556,7 @@ export function resetSettingsCacheForTests(): void {
   _settingsCache = null
 }
 
-function currentSettingsMtimes(): Pick<
-  SettingsCache,
-  'userPath' | 'userMtime' | 'managedMtime' | 'adminMtime'
-> {
+function currentSettingsMtimes(): Pick<SettingsCache, 'userPath' | 'userMtime' | 'managedMtime' | 'adminMtime'> {
   return {
     // settings.json path is part of the key so a change of profile directory always misses the cache.
     // In production `settingsPath()` is constant; test suites point app.getPath('userData') at a fresh
@@ -674,6 +635,7 @@ export function getSettings(): Settings {
   // value is stripped too — a legacy field must not be able to resurrect a key IT has locked.
   const lockedKeys = getLockedKeys()
   if (lockedKeys.length) for (const k of lockedKeys) delete (raw as Record<string, unknown>)[k]
+  const effectiveBrokerSpeech = BrokerSpeechSettingsLoadSchema.parse({ ...base, ...raw }.brokerSpeech)
   const storedAsr = 'asrEngine' in raw && shape().asrEngine.safeParse(raw.asrEngine).success
   const completedSetup = setupIsComplete(raw, managed)
   // A readable fresh/incomplete sparse profile gets the one-time hardware preference. Completed sparse
@@ -720,7 +682,9 @@ export function getSettings(): Settings {
       merged.provider = DEFAULT_SETTINGS.provider
     }
     const repaired = SettingsSchema.safeParse(merged)
-    value = repaired.success ? repaired.data : SettingsSchema.parse(DEFAULT_SETTINGS) // always valid
+    value = repaired.success
+      ? repaired.data
+      : SettingsSchema.parse({ ...DEFAULT_SETTINGS, brokerSpeech: effectiveBrokerSpeech })
   }
 
   // Only memoise a result derived from a settings.json we could actually read — see `stored` above.
@@ -749,6 +713,7 @@ export function recordMeetingSummarized(durationMin: number): void {
 }
 
 export function setSettings(patch: Partial<Settings>): Settings {
+  assertBrokerSpeechSettingsPatch(patch)
   ensureDir()
   // A user-initiated save is the safe time to recover a legacy Keychain-wrapped
   // file key. This happens before readUserRaw() so an existing encrypted
@@ -791,6 +756,7 @@ export function setSettings(patch: Partial<Settings>): Settings {
       `Couldn't save settings — Métis can't read its existing settings file at ${settingsPath()}, and saving now would erase everything already saved there. This is usually antivirus, a backup tool, or a synced profile folder holding the file open. Try again in a moment.`
     )
   }
+  if (Object.hasOwn(prev, 'brokerSpeech')) prev.brokerSpeech = BrokerSpeechSettingsLoadSchema.parse(prev.brokerSpeech)
   const next = { ...prev, ...allowed }
   const managed = validatedManaged()
   const previousAsr = 'asrEngine' in prev && shape().asrEngine.safeParse(prev.asrEngine).success
@@ -1151,7 +1117,11 @@ export function getApiKey(provider: ProviderId): string {
       const plain = buf.subarray(6).toString('utf8')
       // Migrate to current backend on first read (defense-in-depth for disk backups).
       // setApiKey will delete _apiKeyCache[provider]; we re-set it below.
-      try { setApiKey(provider, plain) } catch { /* keep the plaintext file; key still works */ }
+      try {
+        setApiKey(provider, plain)
+      } catch {
+        /* keep the plaintext file; key still works */
+      }
       key = plain
     } else if (buf.length > AES_KEY_MARKER.length && buf.subarray(0, AES_KEY_MARKER.length).equals(AES_KEY_MARKER)) {
       // ── New AES-GCM format (ATKAES1 marker) ────────────────────────────────
@@ -1166,7 +1136,11 @@ export function getApiKey(provider: ProviderId): string {
       try {
         const plain = safeStorage.decryptString(buf)
         // Best-effort migration: re-save with the current backend so future reads don't need keychain.
-        try { setApiKey(provider, plain) } catch { /* keep the old blob; key still works */ }
+        try {
+          setApiKey(provider, plain)
+        } catch {
+          /* keep the old blob; key still works */
+        }
         key = plain
       } catch {
         /* not a safeStorage blob for this OS user — unreadable */

@@ -10,6 +10,13 @@ export const BrokerSpeechSettingsSchema = z
 export type BrokerSpeechSettings = z.infer<typeof BrokerSpeechSettingsSchema>
 export const BrokerSpeechSettingsWriteSchema = BrokerSpeechSettingsSchema
 
+/** Explicit writes must be valid; load-time refusal and legacy omission are not writable profiles. */
+export function assertBrokerSpeechSettingsPatch(patch: unknown): void {
+  if (patch === null || typeof patch !== 'object' || !Object.hasOwn(patch, 'brokerSpeech')) return
+  if (!BrokerSpeechSettingsWriteSchema.safeParse((patch as Record<string, unknown>).brokerSpeech).success)
+    throw new Error('INVALID_PROFILE')
+}
+
 export const BrokerSpeechSettingsRefusalSchema = z
   .object({
     transport: z.literal('refused'),

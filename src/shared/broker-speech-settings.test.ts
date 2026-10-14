@@ -7,11 +7,23 @@ import {
   DEFAULT_CLOUD_SPEECH_SETTINGS,
   BrokerSpeechSettingsLoadSchema,
   BrokerSpeechSettingsWriteSchema,
+  assertBrokerSpeechSettingsPatch,
   parseBrokerSpeechSettings
 } from './broker-speech-settings'
 import { BaseSettingsSchema, DEFAULT_SETTINGS } from './ipc'
 
 describe('broker speech settings', () => {
+  it('rejects explicit invalid patches while preserving omission and valid writes', () => {
+    expect(() => assertBrokerSpeechSettingsPatch({ askFollowUpMemory: true })).not.toThrow()
+    expect(() => assertBrokerSpeechSettingsPatch({ brokerSpeech: DEFAULT_BROKER_SPEECH_SETTINGS })).not.toThrow()
+    for (const brokerSpeech of [
+      undefined,
+      null,
+      BROKER_SPEECH_SETTINGS_REFUSAL,
+      { transport: 'broker-v1', engine: 'soniox' }
+    ])
+      expect(() => assertBrokerSpeechSettingsPatch({ brokerSpeech })).toThrow('INVALID_PROFILE')
+  })
   it('defaults an omitted profile to the old transport and keeps old cloud defaults', () => {
     expect(parseBrokerSpeechSettings(undefined)).toEqual({ ok: true, value: DEFAULT_BROKER_SPEECH_SETTINGS })
     expect(CloudSpeechSettingsSchema.parse({})).toEqual(DEFAULT_CLOUD_SPEECH_SETTINGS)

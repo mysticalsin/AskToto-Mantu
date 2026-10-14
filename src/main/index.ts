@@ -764,6 +764,7 @@ import {
 import { buildPolishPrompt, parsePolishResponse, polishBatches, type PolishLine } from './polish'
 import { detectLanguage as detectTextLanguage } from '@shared/lang-id'
 import type { TranscriptLine } from '@shared/ipc'
+import { assertBrokerSpeechSettingsPatch } from '@shared/broker-speech-settings'
 import { pickAudioFile, consumePickedAudio, offerAudioPaths } from './import-audio'
 import {
   ImportJobManager,
@@ -5439,6 +5440,7 @@ function registerIpc(): void {
 
   ipcMain.handle(IPC.settingsSet, async (e, patch) => {
     assertMainWindow(e)
+    assertBrokerSpeechSettingsPatch(patch)
     // Trust boundary is main, not the renderer's SignInWall — block the mutation for an unauthenticated
     // caller (DevTools/compromised renderer) when auth is enforced. Return the current (unchanged)
     // settings so the shape matches the normal success return exactly; nothing is persisted.

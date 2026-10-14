@@ -1,14 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import {
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-  mkdirSync,
-  readFileSync,
-  existsSync,
-  statSync,
-  utimesSync
-} from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync, statSync, utimesSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { app, safeStorage } from 'electron'
@@ -133,8 +124,12 @@ describe('store', () => {
     setSettings({ askFollowUpMemory: true })
     const path = join(userData, 'settings.json')
     const before = readFileSync(path)
-    for (const brokerSpeech of [undefined, null, { transport: 'broker-v1', engine: 'soniox' },
-      { transport: 'refused', engine: 'unconfigured', reason: 'INVALID_PROFILE' }]) {
+    for (const brokerSpeech of [
+      undefined,
+      null,
+      { transport: 'broker-v1', engine: 'soniox' },
+      { transport: 'refused', engine: 'unconfigured', reason: 'INVALID_PROFILE' }
+    ]) {
       expect(() => setSettings({ askFollowUpMemory: false, brokerSpeech } as never)).toThrow('INVALID_PROFILE')
       expect(readFileSync(path)).toEqual(before)
       expect(getSettings().askFollowUpMemory).toBe(true)
@@ -142,10 +137,14 @@ describe('store', () => {
   })
 
   it('keeps a bounded broker refusal through fallback and unrelated saves', () => {
-    writeFileSync(join(userData, 'settings.json'), JSON.stringify({
-      provider: 'custom', customBaseUrl: 'http://unsafe.example.test',
-      brokerSpeech: { transport: 'broker-v1', engine: 'soniox', arbitrary: 'x'.repeat(8192) }
-    }))
+    writeFileSync(
+      join(userData, 'settings.json'),
+      JSON.stringify({
+        provider: 'custom',
+        customBaseUrl: 'http://unsafe.example.test',
+        brokerSpeech: { transport: 'broker-v1', engine: 'soniox', arbitrary: 'x'.repeat(8192) }
+      })
+    )
     const refusal = { transport: 'refused', engine: 'unconfigured', reason: 'INVALID_PROFILE' }
     expect(getSettings().brokerSpeech).toEqual(refusal)
     setSettings({ askFollowUpMemory: true })
@@ -154,13 +153,24 @@ describe('store', () => {
   })
 
   it('keeps a managed locked broker refusal authoritative over valid user selection', () => {
-    writeFileSync(join(userData, 'managed-config.json'), JSON.stringify({
-      brokerSpeech: { transport: 'broker-v1', engine: 'unknown' }, lockedKeys: ['brokerSpeech']
-    }))
-    writeFileSync(join(userData, 'settings.json'), JSON.stringify({
-      brokerSpeech: { transport: 'broker-v1', engine: 'deepgram-nova3' }
-    }))
-    expect(getSettings().brokerSpeech).toEqual({ transport: 'refused', engine: 'unconfigured', reason: 'INVALID_PROFILE' })
+    writeFileSync(
+      join(userData, 'managed-config.json'),
+      JSON.stringify({
+        brokerSpeech: { transport: 'broker-v1', engine: 'unknown' },
+        lockedKeys: ['brokerSpeech']
+      })
+    )
+    writeFileSync(
+      join(userData, 'settings.json'),
+      JSON.stringify({
+        brokerSpeech: { transport: 'broker-v1', engine: 'deepgram-nova3' }
+      })
+    )
+    expect(getSettings().brokerSpeech).toEqual({
+      transport: 'refused',
+      engine: 'unconfigured',
+      reason: 'INVALID_PROFILE'
+    })
   })
 
   it('recordMeetingSummarized bumps the durable time-saved counters once per meeting', () => {
@@ -212,24 +222,16 @@ describe('store', () => {
   it('layers defaults, managed config, and user overrides', () => {
     // Managed defaults live in userData/managed-config.json for this test.
     const managed = join(userData, 'managed-config.json')
-    writeFileSync(
-      managed,
-      JSON.stringify({ temperature: 0.1, suggestEverySec: 30, _ignored: 'secret' }),
-      'utf8'
-    )
+    writeFileSync(managed, JSON.stringify({ temperature: 0.1, suggestEverySec: 30, _ignored: 'secret' }), 'utf8')
 
     const settingsPath = join(userData, 'settings.json')
-    writeFileSync(
-      settingsPath,
-      JSON.stringify({ provider: 'openai', temperature: 0.9 }),
-      'utf8'
-    )
+    writeFileSync(settingsPath, JSON.stringify({ provider: 'openai', temperature: 0.9 }), 'utf8')
 
     const s = getSettings()
-    expect(s.provider).toBe('openai')       // user wins
-    expect(s.temperature).toBe(0.9)          // user wins over managed
-    expect(s.suggestEverySec).toBe(30)       // managed wins over default
-    expect(s.contentProtection).toBe(true)   // untouched default
+    expect(s.provider).toBe('openai') // user wins
+    expect(s.temperature).toBe(0.9) // user wins over managed
+    expect(s.suggestEverySec).toBe(30) // managed wins over default
+    expect(s.contentProtection).toBe(true) // untouched default
   })
 
   it('reads localSpeechPack as a raw MDM policy key, not a user setting', () => {
@@ -255,11 +257,7 @@ describe('store', () => {
 
   it('drops locked keys when setSettings is called', () => {
     const managed = join(userData, 'managed-config.json')
-    writeFileSync(
-      managed,
-      JSON.stringify({ temperature: 0.2, locked: ['temperature', 'providerModels'] }),
-      'utf8'
-    )
+    writeFileSync(managed, JSON.stringify({ temperature: 0.2, locked: ['temperature', 'providerModels'] }), 'utf8')
 
     const result = setSettings({ temperature: 0.99, provider: 'openai', autoSuggest: false })
 
@@ -296,8 +294,7 @@ describe('store', () => {
     })
     const bytes = readFileSync(join(userData, 'settings.json'))
     // An encryption marker (V1 safeStorage or V2 AES) is present and the secret text is NOT plaintext.
-    const encrypted =
-      bytes.subarray(0, ENC_V1.length).equals(ENC_V1) || bytes.subarray(0, ENC_V2.length).equals(ENC_V2)
+    const encrypted = bytes.subarray(0, ENC_V1.length).equals(ENC_V1) || bytes.subarray(0, ENC_V2.length).equals(ENC_V2)
     expect(encrypted).toBe(true)
     expect(bytes.toString('utf8')).not.toContain('SECRET-RESUME-CONTENT-12345')
     expect(bytes.toString('utf8')).not.toContain('CONFIDENTIAL-RESUME')
@@ -366,11 +363,7 @@ describe('store', () => {
 
   it('keeps a historically completed sparse profile on Parakeet across onboarding replay', () => {
     const settingsFile = join(userData, 'settings.json')
-    writeFileSync(
-      settingsFile,
-      JSON.stringify({ onboardingDone: true, onboardingDoneAt: 123 }),
-      'utf8'
-    )
+    writeFileSync(settingsFile, JSON.stringify({ onboardingDone: true, onboardingDoneAt: 123 }), 'utf8')
 
     expect(getSettings().asrEngine).toBe('parakeet')
     expect(setSettings({ onboardingDone: false }).asrEngine).toBe('parakeet')
@@ -541,7 +534,7 @@ describe('store', () => {
       expect(readFileSync(recoveredPath)).toEqual(garbage)
     })
 
-    it('returns a readable .recovered file\'s content when the main settings.json is corrupt', () => {
+    it("returns a readable .recovered file's content when the main settings.json is corrupt", () => {
       const settingsFile = join(userData, 'settings.json')
       const garbage = Buffer.concat([ENC_V2, Buffer.from('another-invalid-ciphertext-blob')])
       writeFileSync(settingsFile, garbage)
