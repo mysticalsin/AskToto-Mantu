@@ -87,8 +87,9 @@ function fixture() {
     async openExisting() {
       return anchor ? makeLease(anchor) : null
     },
-    async createExclusive(_scope, _root, bytes, maxBytes) {
+    async createExclusive(_scope, _root, bytes, keyId, maxBytes) {
       if (anchor || bytes.byteLength > maxBytes) throw new Error('ANCHOR_ALREADY_EXISTS_OR_OVERSIZED')
+      if (!/^[a-f0-9]{32}$/.test(keyId)) throw new Error('ANCHOR_KEY_ID_INVALID')
       anchor = Buffer.from(bytes)
       return makeLease(anchor)
     }

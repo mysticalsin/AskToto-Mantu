@@ -584,7 +584,7 @@ export function createProtectedSpeechPackReceiptKeys(
           zero(parsed.bytes)
           zero(parsed.json)
         }
-        lease = await options.anchorOwner.createExclusive(scope, registryRoot, envelope, maxAnchorBytes)
+        lease = await options.anchorOwner.createExclusive(scope, registryRoot, envelope, keyId, maxAnchorBytes)
         await assertPhysicalCurrent(scope, registryRoot)
         await lease.assertCurrent()
         if (!Buffer.from(lease.bytes).equals(envelope)) throw new Error('SPEECH_PACK_KEY_ANCHOR_READBACK_MISMATCH')
