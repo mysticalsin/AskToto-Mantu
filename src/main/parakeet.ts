@@ -285,21 +285,24 @@ export async function ensureParakeetModel(onProgress?: (pct: number) => void): P
   const revision = operationRevision
   const initialDir = await modelDir()
   assertCurrentOperation(revision)
-  if (!(await parakeetFilesReady(initialDir))) {
+  const initiallyReady = await parakeetFilesReady(initialDir)
+  assertCurrentOperation(revision)
+  if (!initiallyReady) {
     await ensureParakeetAssets(onProgress)
     assertCurrentOperation(revision)
   }
   const dir = await modelDir()
   assertCurrentOperation(revision)
-  if (!(await parakeetFilesReady(dir))) throw new Error(ASR_ASSETS_MISSING)
+  const ready = await parakeetFilesReady(dir)
+  assertCurrentOperation(revision)
+  if (!ready) throw new Error(ASR_ASSETS_MISSING)
   const files = modelFiles(dir)
   // Unit tests use tiny placeholder ONNX files. Never pass them into Ort, which
   // treats malformed protobufs as a process-fatal error in some builds.
   try {
-    if ((await stat(files.encoder)).size > 1_024) {
-      assertCurrentOperation(revision)
-      await requestHost({ type: 'warmup', files }, revision)
-    }
+    const encoderInfo = await stat(files.encoder)
+    assertCurrentOperation(revision)
+    if (encoderInfo.size > 1_024) await requestHost({ type: 'warmup', files }, revision)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }

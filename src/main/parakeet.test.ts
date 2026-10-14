@@ -116,6 +116,33 @@ describe('bundled Parakeet runtime', () => {
     }
   })
 
+  it('does not start a legacy transfer when release wins during async warmup readiness', async () => {
+    let releaseReadiness!: (ready: boolean) => void
+    let reportReadinessStart!: () => void
+    const readinessPending = new Promise<boolean>((resolve) => {
+      releaseReadiness = resolve
+    })
+    const readinessStarted = new Promise<void>((resolve) => {
+      reportReadinessStart = resolve
+    })
+    const ready = vi.spyOn(AsrEnsure, 'parakeetFilesReady').mockImplementation(() => {
+      reportReadinessStart()
+      return readinessPending
+    })
+    const ensure = vi.spyOn(AsrEnsure, 'ensureParakeetAssets')
+    try {
+      const pending = ensureParakeetModel()
+      await readinessStarted
+      await parakeetRelease()
+      releaseReadiness(false)
+      await expect(pending).rejects.toThrow('cancelled')
+      expect(ensure).not.toHaveBeenCalled()
+    } finally {
+      ready.mockRestore()
+      ensure.mockRestore()
+    }
+  })
+
   it('a development fetch failure stays an honest connection error', async () => {
     setAsrEnsureTestHooks(
       withTestResources({
