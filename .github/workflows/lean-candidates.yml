@@ -36,6 +36,7 @@ jobs:
           scripts/lib/macho-architecture.test.ts
           scripts/lib/lean-checker-args.test.ts
           scripts/lib/lean-package-stage.test.ts
+          scripts/lean-builder-exclusions.test.ts
 
   candidate:
     name: Unsigned ${{ matrix.target }} ${{ matrix.arch }} candidate
