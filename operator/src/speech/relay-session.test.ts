@@ -146,6 +146,7 @@ describe('speech session Durable Object internal boundary', () => {
       finishRequestedAt: null,
       audioDrained: false,
       providerCompleteAt: null,
+      upstreamErrorObserved: false,
       stopRequested: false,
       stopReason: null,
       stopDeadlineAt: null,
@@ -305,6 +306,7 @@ describe('speech session Durable Object internal boundary', () => {
       finishRequestedAt: null,
       audioDrained: false,
       providerCompleteAt: null,
+      upstreamErrorObserved: false,
       stopRequested: false,
       stopReason: null,
       stopDeadlineAt: null,
@@ -352,7 +354,7 @@ describe('speech session Durable Object internal boundary', () => {
       }
     }
     const object = new SpeechSessionDurableObject(state() as never, { DB: db } as never)
-    const internals = bindTestStream(object, common, clientSocket.socket, upstreamSocket.socket)
+    bindTestStream(object, common, clientSocket.socket, upstreamSocket.socket)
     const privateObject = object as unknown as { streamTails: Map<string, Promise<void>> }
 
     await object.webSocketMessage(clientSocket.socket, '{"type":"finish"}')
@@ -393,8 +395,88 @@ describe('speech session Durable Object internal boundary', () => {
     expect(batchWrites[0][0]?.values[1]).toBe('normal')
     expect(batchWrites[0][0]?.values[7]).toBe('complete')
     expect(batchWrites[0][0]?.values[9]).toEqual(expect.any(Number))
-    expect(internals.attachment(upstreamSocket.socket)?.stopRequested).toBe(false)
-    expect(internals.attachment(upstreamSocket.socket)?.closeConfirmed).toBe(true)
+    expect(common.stopRequested).toBe(false)
+    expect(common.closeConfirmed).toBe(true)
+  })
+
+  it('stops admission on an early upstream error and keeps a missing provider completion incomplete', async () => {
+    const now = Date.now()
+    const common = {
+      streamId: 'stream-early-upstream-error',
+      sessionId: 'session-early-upstream-error',
+      routeEvidenceId: 'evidence-1',
+      captureGeneration: 1,
+      streamEpoch: 1,
+      track: 'microphone' as const,
+      deadlineAt: now + 30_000,
+      authorizedUntil: now + 10_000,
+      budget: createSpeechStreamBudget(now, now + 30_000),
+      finishQueued: false,
+      finishRequested: true,
+      finishRequestedAt: now,
+      audioDrained: true,
+      providerCompleteAt: null,
+      upstreamErrorObserved: false,
+      stopRequested: false,
+      stopReason: 'normal' as const,
+      stopDeadlineAt: null,
+      closeControlSent: true,
+      upstreamCloseRequested: false,
+      closeConfirmed: false,
+      lastSequence: 0,
+      segmentStartMs: -1,
+      segmentIndex: 0,
+      segmentRevision: 0,
+      segmentStates: new Map()
+    }
+    const clientSocket = eventSocket()
+    const upstreamSocket = eventSocket()
+    const terminalWrites: Array<Array<{ query: string; values: unknown[] }>> = []
+    const db = {
+      prepare(query: string) {
+        return {
+          bind(...values: unknown[]) {
+            return {
+              query,
+              values,
+              async run() {
+                return { success: true, meta: { changes: 1 } }
+              }
+            }
+          }
+        }
+      },
+      async batch(statements: Array<{ query: string; values: unknown[] }>) {
+        terminalWrites.push(statements)
+        return [
+          { success: true, meta: { changes: 1 } },
+          { success: true, meta: { changes: 1 } },
+          { success: true, meta: { changes: 1 } }
+        ]
+      }
+    }
+    const object = new SpeechSessionDurableObject(state() as never, { DB: db } as never)
+    bindTestStream(object, common, clientSocket.socket, upstreamSocket.socket)
+    const privateObject = object as unknown as { streamTails: Map<string, Promise<void>> }
+
+    upstreamSocket.dispatch('error', {})
+    const errorTail = privateObject.streamTails.get(common.streamId)
+    if (errorTail) await errorTail
+    expect(common.stopRequested).toBe(true)
+    expect(common.stopReason).toBe('unknown')
+
+    await object.webSocketMessage(clientSocket.socket, new ArrayBuffer(8))
+    await object.webSocketMessage(upstreamSocket.socket, JSON.stringify({ type: 'Metadata' }))
+    expect(common.budget.inputBytes).toBe(0)
+    expect(common.providerCompleteAt).toBeNull()
+
+    upstreamSocket.dispatch('close', { code: 1000, reason: '', wasClean: true })
+    const closeTail = privateObject.streamTails.get(common.streamId)
+    if (closeTail) await closeTail
+    const terminal = clientSocket.socket.send.mock.calls.map(([value]) => JSON.parse(String(value)))[0]
+    expect(terminal).toMatchObject({ type: 'terminal', tail: 'incomplete', reason: 'unknown' })
+    expect(terminalWrites[0]?.[0]?.values[1]).toBe('unknown')
+    expect(terminalWrites[0]?.[0]?.values[7]).toBe('incomplete')
   })
 
   it('stops queued audio after cancellation and bounds repeated stop controls when the provider stalls', async () => {
@@ -414,6 +496,7 @@ describe('speech session Durable Object internal boundary', () => {
       finishRequestedAt: null,
       audioDrained: false,
       providerCompleteAt: null,
+      upstreamErrorObserved: false,
       stopRequested: false,
       stopReason: null,
       stopDeadlineAt: null,
@@ -495,6 +578,7 @@ describe('speech session Durable Object internal boundary', () => {
       finishRequestedAt: null,
       audioDrained: false,
       providerCompleteAt: null,
+      upstreamErrorObserved: false,
       stopRequested: false,
       stopReason: null,
       stopDeadlineAt: null,
@@ -581,6 +665,7 @@ describe('speech session Durable Object internal boundary', () => {
       finishRequestedAt: null,
       audioDrained: false,
       providerCompleteAt: null,
+      upstreamErrorObserved: false,
       stopRequested: false,
       stopReason: null,
       stopDeadlineAt: null,

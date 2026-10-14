@@ -50,6 +50,7 @@ interface Attachment {
   finishRequestedAt: number | null
   audioDrained: boolean
   providerCompleteAt: number | null
+  upstreamErrorObserved: boolean
   stopRequested: boolean
   stopReason: SpeechTerminalReason | null
   stopDeadlineAt: number | null
@@ -182,6 +183,7 @@ export class SpeechSessionDurableObject {
     if (!attachment) return closeSocket(socket, 1008)
     if (
       attachment.closeConfirmed ||
+      attachment.upstreamErrorObserved ||
       (attachment.stopRequested && (attachment.role === 'client' || !this.leaseDrainActive(attachment)))
     )
       return
@@ -329,7 +331,14 @@ export class SpeechSessionDurableObject {
 
   async webSocketError(socket: WebSocket): Promise<void> {
     const attachment = this.attachment(socket)
-    if (attachment) await this.requestStop(attachment, 'unknown')
+    if (!attachment) return
+    if (attachment.role !== 'upstream') return this.requestStop(attachment, 'unknown')
+    if (attachment.upstreamErrorObserved || attachment.closeConfirmed) return
+    attachment.upstreamErrorObserved = true
+    this.updateAttachments(attachment)
+    await this.enqueueStreamTask(attachment, async () => {
+      if (!attachment.closeConfirmed) await this.requestStop(attachment, 'unknown')
+    })
   }
 
   async alarm(): Promise<void> {
@@ -498,6 +507,7 @@ export class SpeechSessionDurableObject {
       finishRequestedAt: null,
       audioDrained: false,
       providerCompleteAt: null,
+      upstreamErrorObserved: false,
       stopRequested: false,
       stopReason: null,
       stopDeadlineAt: null,
@@ -600,6 +610,7 @@ export class SpeechSessionDurableObject {
       finishRequestedAt: null,
       audioDrained: false,
       providerCompleteAt: null,
+      upstreamErrorObserved: false,
       stopRequested: false,
       stopReason: null,
       stopDeadlineAt: null,
