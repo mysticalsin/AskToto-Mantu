@@ -68,7 +68,8 @@ window.__onboardingWelcome = {
   },
   counts() { return { loadCalls, playCalls, pauseCalls, videoStartDelay, fallbackDelay } },
   startVideo() { releaseVideoStart?.(); releaseVideoStart = null },
-  triggerReadyFallback() { flushSync(() => releaseReadyFallback?.()); releaseReadyFallback = null }
+  triggerReadyFallback() { flushSync(() => releaseReadyFallback?.()); releaseReadyFallback = null },
+  dispatchNext() { flushSync(() => window.dispatchEvent(new Event('act1-boot-next'))) }
 }
 `
 
@@ -128,6 +129,7 @@ declare global {
       unmount(): void
       startVideo(): void
       triggerReadyFallback(): void
+      dispatchNext(): void
       counts(): MediaCalls
     }
   }
@@ -184,7 +186,7 @@ describe('Act 1 welcome rendered behavior', () => {
 
     await page.getByRole('button', { name: 'Next' }).click()
     expect(await page.locator('#begin-count').textContent()).toBe('2')
-    await page.evaluate(() => window.dispatchEvent(new Event('act1-boot-next')))
+    await page.evaluate(() => window.__onboardingWelcome.dispatchNext())
     expect(await page.locator('#begin-count').textContent()).toBe('3')
     const hero = await page.locator('.hero-welcome').innerHTML()
     expect(hero).toContain('Metis Maintainers')
