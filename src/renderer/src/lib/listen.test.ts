@@ -24,6 +24,7 @@ import type { TranscriptLine } from '@shared/ipc'
 // Normalize CRLF → LF (same rationale as App.mic-only-visibility.test.ts): Windows checkouts would
 // otherwise break any anchor whose newline sits mid-string.
 const listenSrc = readFileSync(join(__dirname, 'listen.ts'), 'utf8').replace(/\r\n/g, '\n')
+const recoverySrc = readFileSync(join(__dirname, 'listen-audio-recovery.ts'), 'utf8').replace(/\r\n/g, '\n')
 
 // Guards the auto-answer trigger. The live VAD endpoint is a snappy 0.6s (vad.ts), which can split a
 // hesitated question across two transcription windows. isQuestion must NOT fire on the truncated first
@@ -132,13 +133,17 @@ describe('themDeviceChangeAction — them-side silent-death recovery (MQA-011)',
   })
 
   it('is wired into the devicechange handler, the probation timer, and the them audio callback', () => {
-    // The handler used to bail on `!channels.current.you`, so a system-only session never even reached it.
-    expect(listenSrc).toMatch(/if \(channels\.current\.you\) void recoverMicRef\.current\?\.\(\)/)
-    expect(listenSrc).toMatch(/themDeviceChangeAction\(wantsSystemRef\.current, !!channels\.current\.them, null\)/)
-    expect(listenSrc).toMatch(/if \(action === 'watch'\) armThemProbation\(\)/)
+    // The helper owns the devicechange subscription; Listen supplies the actual per-session recoveries.
+    expect(recoverySrc).toMatch(/if \(latest\.hasChannel\('you'\)\) latest\.recoverMicNow\(\)/)
+    expect(recoverySrc).toMatch(
+      /latest\.themDeviceChangeAction\(latest\.wantsSystemAudio\(\), latest\.hasChannel\('them'\), null\)/
+    )
+    expect(recoverySrc).toMatch(/if \(action === 'watch'\) armThemProbation\(\)/)
+    expect(listenSrc).toMatch(/recoverMicNow: \(\) => void recoverMicRef\.current\?\.\(\)/)
+    expect(listenSrc).toMatch(/scheduleThemProbation: \(callback, delay\) => \{\s*audioChannels\.clearThemWatchdog\(\)/)
     // The recycle must close the channel first — recoverSystemAudio returns early while one is registered.
-    expect(listenSrc).toMatch(/if \(verdict !== 'recycle'\) return[\s\S]{0,200}closeChannel\('them'\)/)
-    expect(listenSrc).toMatch(/void recoverSystemAudioRef\.current\?\.\(\)\n {4}\}, THEM_WATCHDOG_MS\)/)
+    expect(recoverySrc).toMatch(/if \(verdict === 'recycle'\) latest\.onThemProbationRecycle\(\)/)
+    expect(listenSrc).toMatch(/audioChannels\.close\('them'\)[\s\S]{0,240}recoverSystemAudioRef\.current/)
     // Proof-of-life is recorded per window; nothing heavier than a boolean store on the capture path.
     expect(listenSrc).toMatch(/themWindowSeenRef\.current = true/)
   })
@@ -172,7 +177,10 @@ describe('themTracksLookDead — positive death evidence for an already-healthy 
     expect(themTracksLookDead([{ readyState: 'live', muted: false }])).toBe(false)
     // A dead track alongside a live one is not yet fully dead (still delivering audio).
     expect(
-      themTracksLookDead([{ readyState: 'ended', muted: false }, { readyState: 'live', muted: false }])
+      themTracksLookDead([
+        { readyState: 'ended', muted: false },
+        { readyState: 'live', muted: false }
+      ])
     ).toBe(false)
   })
 
@@ -180,7 +188,10 @@ describe('themTracksLookDead — positive death evidence for an already-healthy 
     expect(themTracksLookDead([{ readyState: 'ended', muted: false }])).toBe(true)
     expect(themTracksLookDead([{ readyState: 'live', muted: true }])).toBe(true)
     expect(
-      themTracksLookDead([{ readyState: 'ended', muted: false }, { readyState: 'live', muted: true }])
+      themTracksLookDead([
+        { readyState: 'ended', muted: false },
+        { readyState: 'live', muted: true }
+      ])
     ).toBe(true)
   })
 
@@ -190,11 +201,11 @@ describe('themTracksLookDead — positive death evidence for an already-healthy 
 
   it('the probation timer gates recycle on positive death evidence, not bare silence (MQA-109 wiring)', () => {
     // themHeardRef (already-confirmed-healthy) OR a real track anomaly must gate the recycle.
-    expect(listenSrc).toMatch(
-      /const hasDeathEvidence = !themHeardRef\.current \|\| themTracksLookDead\(ch \? ch\.stream\.getAudioTracks\(\) : \[\]\)/
+    expect(recoverySrc).toMatch(
+      /const hasDeathEvidence = !latest\.themHeard\(\) \|\| themTracksLookDead\(channel\?\.stream\.getAudioTracks\(\) \?\? \[\]\)/
     )
-    expect(listenSrc).toMatch(
-      /themDeviceChangeAction\(\s*wantsSystemRef\.current,\s*!!ch,\s*themWindowSeenRef\.current,\s*hasDeathEvidence\s*\)/
+    expect(recoverySrc).toMatch(
+      /latest\.themDeviceChangeAction\(\s*latest\.wantsSystemAudio\(\),\s*!!channel,\s*latest\.themWindowSeen\(\),\s*hasDeathEvidence\s*\)/
     )
   })
 })
@@ -231,9 +242,7 @@ describe('shouldProbeLanguageWindow — auto-language probe cadence (MQA-012)', 
   })
 
   it('is the cadence pump() actually uses', () => {
-    expect(listenSrc).toMatch(
-      /shouldProbeLanguageWindow\(probeWindowCountRef\.current, probePinnedRef\.current\)/
-    )
+    expect(listenSrc).toMatch(/shouldProbeLanguageWindow\(probeWindowCountRef\.current, probePinnedRef\.current\)/)
   })
 })
 
@@ -376,16 +385,14 @@ describe('sysRetryDelayMs — the Windows loopback retry is paced, never abandon
 
   it('MQA-163 — is what the Windows branch of the watcher actually runs', () => {
     // The pre-fix shape: an unconditional re-acquire on every tick.
-    expect(listenSrc).not.toMatch(
+    expect(recoverySrc).not.toMatch(
       /if \(isWindows\) \{\n {8}void recoverSystemAudioRef\.current\?\.\(\)\n {8}return\n {6}\}/
     )
-    expect(listenSrc).toMatch(/if \(now < sysRetryNextAtRef\.current\) return/)
-    expect(listenSrc).toMatch(
-      /sysRetryNextAtRef\.current = now \+ sysRetryDelayMs\(sysRetryAttemptsRef\.current\+\+\)/
-    )
+    expect(recoverySrc).toMatch(/if \(now < retryNextAt\) return/)
+    expect(recoverySrc).toMatch(/retryNextAt = now \+ sysRetryDelayMs\(retryAttempts\+\+\)/)
     // Reset in all three places recovery becomes plausible again: a new session, a successful re-acquire,
     // and a real device change (which must get an immediate attempt, not wait out the backoff).
-    expect(listenSrc.match(/sysRetryAttemptsRef\.current = 0/g)).toHaveLength(3)
+    expect(recoverySrc.match(/retryAttempts = 0/g)).toHaveLength(3)
   })
 })
 
@@ -405,10 +412,12 @@ describe('themRecoveryFailureIsNoop — a repeated failure must not re-render th
   })
 
   it('MQA-163 — is the guard the failed-retry catch bails out on', () => {
-    expect(listenSrc).toMatch(/themRecoveryFailureIsNoop\(s\.error, s\.captureDegraded\)\n\s*\? s\n\s*:/)
+    expect(listenSrc).toMatch(/themRecoveryFailureIsNoop\(state\.error, state\.captureDegraded\)\n\s*\? state\n\s*:/)
     // The write itself still only ever RAISES — an existing captureDegraded carries the more specific
     // start-time cause (the Screen-Recording copy) and must survive the retry.
-    expect(listenSrc).toMatch(/captureDegraded: s\.captureDegraded \?\? \{ side: 'them', note: THEM_LOST_MSG, permission: false \}/)
+    expect(listenSrc).toMatch(
+      /captureDegraded: state\.captureDegraded \?\? \{ side: 'them', note: THEM_LOST_MSG, permission: false \}/
+    )
   })
 })
 
@@ -584,7 +593,9 @@ describe('advanceLanguageProbe — live first-pin needs SWITCH_AFTER (MQA-235)',
 
   it('is what useListen feeds into pinLanguage (source contract)', () => {
     expect(listenSrc).toMatch(/advanceLanguageProbe\(\{/)
-    expect(listenSrc).toMatch(/workerRef\.current\?\.postMessage\(\{ type: 'pinLanguage', language: next\.pinnedLang \}\)/)
+    expect(listenSrc).toMatch(
+      /workerRef\.current\?\.postMessage\(\{ type: 'pinLanguage', language: next\.pinnedLang \}\)/
+    )
   })
 
   it('a mixed window confirms a mid-meeting switch immediately (does not keep the first pin forever)', () => {
@@ -643,23 +654,17 @@ describe('speakerEmbedResultIsStale — late Whisper labels stay in their meetin
 
 describe('cloud them named WHO — attach upgrades + embed after final', () => {
   it('attachSpeakerName upgrades session/unknown placeholders via canUpgradeSpeakerLabel', () => {
-    expect(listenSrc).toMatch(
-      /l\.t === t && l\.speaker === 'them' && canUpgradeSpeakerLabel\(l\.name\)/
-    )
+    expect(listenSrc).toMatch(/l\.t === t && l\.speaker === 'them' && canUpgradeSpeakerLabel\(l\.name\)/)
     expect(listenSrc).toMatch(/import \{ canUpgradeSpeakerLabel \} from '@shared\/speaker-names'/)
   })
 
   it('cloud pump stashes lastThemEmbedRef for them windows', () => {
     expect(listenSrc).toMatch(/lastThemEmbedRef\.current = \{\s*audio: job\.audio\.slice\(\)/)
-    expect(listenSrc).toMatch(
-      /cloudSttPush\(job\.audio, job\.speaker === 'them' \? 'them' : 'you', cloudCaptureId\)/
-    )
+    expect(listenSrc).toMatch(/cloudSttPush\(job\.audio, job\.speaker === 'them' \? 'them' : 'you', cloudCaptureId\)/)
   })
 
   it('onCloudSttFinal voiceprints them session/unknown lines then attachSpeakerName', () => {
-    expect(listenSrc).toMatch(
-      /const committedAt = commitLine\(line\.text, line\.speaker, line\.name\)/
-    )
+    expect(listenSrc).toMatch(/const committedAt = commitLine\(line\.text, line\.speaker, line\.name\)/)
     expect(listenSrc).toMatch(/\.speakerEmbed\(emb\.audio, 'them', emb\.startedAt\)/)
     expect(listenSrc).toMatch(/if \(res\?\.name\) attachSpeakerName\(committedAt, res\.name\)/)
     expect(listenSrc).toMatch(

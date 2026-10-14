@@ -116,7 +116,9 @@ export function shouldShowNoSpeechWarning(
 export function listenSpeechEngine(engine: unknown, cloudProvider?: unknown): Capture['engine'] | null {
   if (engine === 'whisper' || engine === 'parakeet' || engine === 'apple') return engine
   if (engine !== 'cloud') return null
-  return cloudProvider === 'cloudflare-nova3' || cloudProvider === 'soniox' ? cloudProvider : null
+  return cloudProvider === 'cloudflare-nova3' || cloudProvider === 'deepgram-nova3' || cloudProvider === 'soniox'
+    ? cloudProvider
+    : null
 }
 
 function requestedTracksFor(source: unknown): Track[] {
