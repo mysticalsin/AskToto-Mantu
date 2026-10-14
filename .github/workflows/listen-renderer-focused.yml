@@ -109,6 +109,30 @@ jobs:
             if (typeof name !== 'string' || name.length === 0) return null
             return relative(process.cwd(), resolve(name)).replaceAll('\\', '/')
           }
+          const failureSource = (messages) => {
+            for (const message of messages) {
+              if (typeof message !== 'string') continue
+              const candidates = message.matchAll(
+                /(?:^|[\\/])src[\\/]+renderer[\\/]+src[\\/]+lib[\\/]+([A-Za-z0-9._-]+\.test\.ts):([0-9]+)(?::[0-9]+)?(?=$|[\s)\]])/g
+              )
+              for (const match of candidates) {
+                const file = `src/renderer/src/lib/${match[1]}`
+                const line = Number(match[2])
+                if (expectedSet.has(file) && Number.isSafeInteger(line) && line > 0) return { file, line }
+              }
+            }
+            return { file: null, line: null }
+          }
+          const failureCode = (messages, suiteFailure = false) => {
+            const text = messages.filter((message) => typeof message === 'string').join('\n')
+            if (/\bTimeoutError\b|\bTimed out\b/i.test(text)) return 'TIMEOUT'
+            if (/\bAssertionError\b/.test(text)) return 'ASSERTION_FAILED'
+            if (/\bTypeError\b/.test(text)) return 'TYPE_ERROR'
+            if (/\bReferenceError\b/.test(text)) return 'REFERENCE_ERROR'
+            if (/\bRangeError\b/.test(text)) return 'RANGE_ERROR'
+            if (/\bSyntaxError\b/.test(text)) return 'SYNTAX_ERROR'
+            return suiteFailure ? 'SUITE_SETUP_FAILURE' : 'UNCLASSIFIED_FAILURE'
+          }
           const resultPaths = results.map((result) => relativeReportPath(result?.name))
           const expectedSet = new Set(requiredFiles)
           const resultSet = new Set(resultPaths.filter((file) => typeof file === 'string'))
@@ -126,7 +150,16 @@ jobs:
             assertionCount += assertions.length
             const expectedFile = typeof file === 'string' && expectedSet.has(file) ? file : '<unexpected-suite>'
             if (assertions.length === 0 || result?.status !== 'passed') {
-              cases.push({ file: expectedFile, case: '<suite-level failure>', status: result?.status === 'passed' ? 'empty' : String(result?.status ?? 'missing') })
+              const suiteMessages = typeof result?.message === 'string' ? [result.message] : []
+              const source = failureSource(suiteMessages)
+              cases.push({
+                file: expectedFile,
+                case: '<suite-level failure>',
+                status: result?.status === 'passed' ? 'empty' : String(result?.status ?? 'missing'),
+                code: failureCode(suiteMessages, true),
+                sourceFile: source.file,
+                line: source.line
+              })
             }
             for (let assertionIndex = 0; assertionIndex < assertions.length; assertionIndex += 1) {
               const assertion = assertions[assertionIndex]
@@ -135,7 +168,16 @@ jobs:
                 ? assertion.fullName
                 : typeof assertion?.title === 'string' ? assertion.title : `<assertion-${assertionIndex + 1}>`
               const title = rawTitle.replace(/[\r\n\t]/g, ' ').slice(0, 200)
-              cases.push({ file: expectedFile, case: title, status: String(assertion?.status ?? 'missing') })
+              const failureMessages = Array.isArray(assertion?.failureMessages) ? assertion.failureMessages : []
+              const source = failureSource(failureMessages)
+              cases.push({
+                file: expectedFile,
+                case: title,
+                status: String(assertion?.status ?? 'missing'),
+                code: failureCode(failureMessages),
+                sourceFile: source.file,
+                line: source.line
+              })
             }
           }
 
@@ -220,14 +262,21 @@ jobs:
           writeFileSync(summaryPath, `${JSON.stringify(summary, null, 2)}\n`)
           writeFileSync(failuresPath, `${JSON.stringify(failureReport, null, 2)}\n`)
           process.stdout.write(`Listen focused summary: status=${summary.status} suites=${results.length}/${requiredFiles.length} tests=${total ?? 'invalid'} passed=${passed ?? 'invalid'} failed=${failed ?? 'invalid'} skipped=${skipped ?? 'invalid'} assertions=${assertionCount} retries=0 manifest=${summary.sourceManifestSha256}\n`)
+          for (const item of retainedCases.slice(0, 20)) {
+            const source = item.sourceFile && Number.isSafeInteger(item.line) ? `${item.sourceFile}:${item.line}` : 'unavailable'
+            process.stdout.write(`Focused failure: code=${item.code} case=${item.case} source=${source}\n`)
+          }
           if (!passedGate) {
             process.stdout.write(`::error title=Listen focused qualification failed::${reasons.join(',')} suites=${results.length}/${requiredFiles.length} tests=${total ?? 'invalid'} passed=${passed ?? 'invalid'} failed=${failed ?? 'invalid'} skipped=${skipped ?? 'invalid'}; inspect the retained bounded artifact.\n`)
             const escapeProperty = (value) => String(value).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A').replace(/:/g, '%3A').replace(/,/g, '%2C')
             for (const item of retainedCases.slice(0, 20)) {
-              const file = expectedSet.has(item.file) ? item.file : undefined
-              const title = escapeProperty(item.case)
-              const location = file ? ` file=${escapeProperty(file)},title=${title}` : ''
-              process.stdout.write(`::error${location}::Focused test case failed; inspect the retained bounded artifact.\n`)
+              const file = expectedSet.has(item.sourceFile) && Number.isSafeInteger(item.line) && item.line > 0
+                ? item.sourceFile
+                : undefined
+              const line = file ? item.line : undefined
+              const title = escapeProperty(`${item.code}: ${item.case}`)
+              const location = file && line ? ` file=${escapeProperty(file)},line=${line},title=${title}` : `title=${title}`
+              process.stdout.write(`::error ${location}::Focused test failure code=${item.code}; details remain in the bounded private artifact.\n`)
             }
             process.exitCode = 1
           }
