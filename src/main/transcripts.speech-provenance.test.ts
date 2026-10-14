@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { app } from 'electron'
@@ -13,7 +13,14 @@ import {
   readSavedFile
 } from './transcripts'
 import { configureMeetingSpeechLimits } from './features/meetings/meeting-speech'
-import { recallRead, updateMeetingTranscript, updateMeetingRecap, searchMeetings, renameMeeting } from './recall'
+import {
+  recallRead,
+  updateMeetingTranscript,
+  updateMeetingRecap,
+  searchMeetings,
+  renameMeeting,
+  listMeetings
+} from './recall'
 import { readSavedMeeting, meetingOpenTarget } from './history-actions'
 import { readSourceText } from './brain/inputs'
 import { useStorageForTests } from './infra/storage/meetings-storage'
@@ -271,5 +278,21 @@ describe('actual saved final speech provenance', () => {
     expect(readSavedFile(file)).toContain('**[00:00:00]')
     expect(readSavedFile(file)).not.toContain('**[04:00:00]')
     expect((await recallRead(basename(file))).lines).toEqual(renamed)
+  })
+
+  it('keeps ambiguous private documents visible as unavailable without exposing their payload', async () => {
+    const input = meeting()
+    const file = await saveMeeting(settings, input)
+    writeFileSync(file, readSavedFile(file) + '\n<!-- /metis-speech-provenance -->\n')
+    const before = readFileSync(file)
+    const rows = await listMeetings()
+    expect(rows.some((row) => row.file === basename(file))).toBe(true)
+    expect((await recallRead(basename(file))).ok).toBe(false)
+    await expect(readSavedMeeting(folder, basename(file))).rejects.toThrow(
+      'Meeting text could not be projected safely.'
+    )
+    expect((await readSourceText(file)).status).toBe('unreadable')
+    expect(await searchMeetings(input.lines[0].speech!.captureId)).toEqual([])
+    expect(readFileSync(file)).toEqual(before)
   })
 })
