@@ -43,6 +43,9 @@ export interface DownloadDeps {
   sleep: (ms: number) => Promise<void>
   random: () => number
   timing: DownloadTiming
+  /** File-operation seams keep partial cleanup ordering deterministic in tests. */
+  openFile?: typeof open
+  removeFile?: typeof rm
 }
 
 export interface DownloadRequest {
@@ -65,6 +68,14 @@ class Transient extends Error {
     readonly restart = false
   ) {
     super(kind)
+  }
+}
+
+/** The response body crossed a pinned byte boundary; it must not be retried or retained. */
+class OversizedResponse extends SpeechPackError {
+  constructor() {
+    super('tamper', 'response exceeded its pinned byte range')
+    this.name = 'OversizedResponse'
   }
 }
 
@@ -102,7 +113,12 @@ function validatorOf(headers: Headers): string | null {
   return headers.get('last-modified')
 }
 
-async function request(url: string, headers: Record<string, string>, signal: AbortSignal, deps: DownloadDeps): Promise<Response> {
+async function request(
+  url: string,
+  headers: Record<string, string>,
+  signal: AbortSignal,
+  deps: DownloadDeps
+): Promise<Response> {
   let current = url
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const res = await deps.fetch(current, { headers, signal, redirect: 'manual' })
@@ -126,9 +142,10 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
   const partial = `${req.dest}.partial`
   const meta = `${req.dest}.partial.json`
   const { timing } = deps
+  const removeFile = deps.removeFile ?? rm
   const discard = async (): Promise<void> => {
-    await rm(partial, { force: true })
-    await rm(meta, { force: true })
+    await removeFile(partial, { force: true })
+    await removeFile(meta, { force: true })
   }
 
   let offset = await sizeOf(partial)
@@ -152,6 +169,7 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
     timer = setTimeout(() => ctrl.abort(), ms)
   }
   const onOuterAbort = (): void => ctrl.abort()
+  let unclaimedBody: ReadableStream<Uint8Array> | null = null
   if (req.signal.aborted) throw req.signal.reason
   req.signal.addEventListener('abort', onOuterAbort, { once: true })
   arm(timing.requestTimeoutMs)
@@ -163,6 +181,7 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
       headers['If-Range'] = validator
     }
     const res = await request(req.url, headers, ctrl.signal, deps)
+    unclaimedBody = res.body
     const contentType = res.headers.get('content-type')
 
     if (res.status === 416) {
@@ -186,9 +205,27 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
 
     let append = false
     let declaredWrong = false
+    let rangeBytes = 0
     if (res.status === 206) {
       const range = /^bytes (\d+)-(\d+)\/(\d+|\*)$/.exec(res.headers.get('content-range') ?? '')
-      if (!range || Number(range[1]) !== offset || (range[3] !== '*' && Number(range[3]) !== req.bytes)) {
+      const start = range ? Number(range[1]) : Number.NaN
+      const end = range ? Number(range[2]) : Number.NaN
+      const total = range ? Number(range[3]) : Number.NaN
+      rangeBytes = end - start + 1
+      const contentLength = res.headers.get('content-length')
+      const rangeInvalid =
+        offset <= 0 ||
+        !validator ||
+        validatorOf(res.headers) !== validator ||
+        !range ||
+        start !== offset ||
+        !Number.isSafeInteger(end) ||
+        end < start ||
+        end >= req.bytes ||
+        !Number.isSafeInteger(rangeBytes) ||
+        total !== req.bytes ||
+        (contentLength !== null && Number(contentLength) !== rangeBytes)
+      if (rangeInvalid) {
         await res.body?.cancel().catch(() => undefined)
         await discard()
         throw new Transient('http', 0, true)
@@ -209,29 +246,46 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
     if (!append && fresh) await writeFile(meta, JSON.stringify({ validator: fresh }))
     if (!append && !fresh) await rm(meta, { force: true })
 
-    const handle = await open(partial, append ? 'a' : 'w')
+    const reader = res.body.getReader()
+    unclaimedBody = null
+    let handle: Awaited<ReturnType<typeof open>> | undefined
+    let bodyDone = false
     try {
-      const reader = res.body.getReader()
+      handle = await (deps.openFile ?? open)(partial, append ? 'a' : 'w')
       let written = offset
+      let receivedInRange = 0
       let first = true
       arm(timing.idleTimeoutMs)
       for (;;) {
         const { done, value } = await reader.read()
-        if (done) break
-        if (!value) continue
+        if (done) {
+          bodyDone = true
+          break
+        }
+        if (!value || value.byteLength === 0) continue
         if (first) {
           first = false
           if (looksLikeHtmlBytes(value)) throw new SpeechPackError('captive', 'received a web page instead of the file')
           if (declaredWrong) throw new SpeechPackError('http', 'server declared an unexpected length')
         }
         arm(timing.idleTimeoutMs)
+        // Reject the entire chunk before it reaches disk. A chunk is never partially written because
+        // that could make a malformed range look like a valid resumable prefix.
+        if (value.byteLength > req.bytes - written || (append && value.byteLength > rangeBytes - receivedInRange)) {
+          throw new OversizedResponse()
+        }
         await handle.write(value)
         written += value.byteLength
+        receivedInRange += value.byteLength
         req.onProgress(written)
-        if (written > req.bytes) break
       }
     } finally {
-      await handle.close()
+      try {
+        if (!bodyDone) await reader.cancel().catch(() => undefined)
+        reader.releaseLock()
+      } finally {
+        if (handle) await handle.close()
+      }
     }
 
     const size = await sizeOf(partial)
@@ -241,6 +295,11 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
     }
     if (size < req.bytes) throw new Transient('offline')
   } catch (err) {
+    // The body reader and actual FileHandle have both been closed before this removes the partial.
+    if (err instanceof OversizedResponse) {
+      await discard()
+      throw err
+    }
     if (err instanceof SpeechPackError || err instanceof Transient) throw err
     // Timeouts and network errors alike are transient; the caller's own abort is not.
     if (req.signal.aborted) throw req.signal.reason
@@ -248,6 +307,8 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
   } finally {
     clearTimeout(timer)
     req.signal.removeEventListener('abort', onOuterAbort)
+    if (unclaimedBody) await unclaimedBody.cancel().catch(() => undefined)
+    ctrl.abort()
   }
 }
 
@@ -258,28 +319,40 @@ async function transferOnce(req: DownloadRequest, deps: DownloadDeps): Promise<v
 export async function downloadVerified(req: DownloadRequest, deps: DownloadDeps): Promise<void> {
   if (!isImmutableUrl(req.url)) throw new SpeechPackError('http', 'source is not pinned to an immutable reference')
   if ((await sizeOf(req.dest)) === req.bytes) {
-    req.onProgress(req.bytes)
-    return
+    try {
+      if ((await sha256File(req.dest)) === req.sha256) {
+        req.onProgress(req.bytes)
+        return
+      }
+    } catch {
+      // A failed read is not evidence that an existing artifact matches the pin.
+    }
   }
   const partial = `${req.dest}.partial`
   const { timing } = deps
+  const removeFile = deps.removeFile ?? rm
   let attempts = 0
   let mismatches = 0
 
   for (;;) {
     if (req.signal.aborted) throw req.signal.reason
-    const before = await sizeOf(partial)
+    let before = await sizeOf(partial)
+    if (before > req.bytes) {
+      await removeFile(partial, { force: true })
+      await removeFile(`${partial}.json`, { force: true })
+      before = 0
+    }
     req.onProgress(before)
     try {
       await transferOnce(req, deps)
       if ((await sha256File(partial)) === req.sha256) {
-        await rm(`${partial}.json`, { force: true })
+        await removeFile(`${partial}.json`, { force: true })
         await rename(partial, req.dest)
         req.onProgress(req.bytes)
         return
       }
-      await rm(partial, { force: true })
-      await rm(`${partial}.json`, { force: true })
+      await removeFile(partial, { force: true })
+      await removeFile(`${partial}.json`, { force: true })
       if (++mismatches > 1) throw new SpeechPackError('tamper', 'downloaded file does not match its pin')
     } catch (err) {
       if (!(err instanceof Transient)) throw err
@@ -287,14 +360,17 @@ export async function downloadVerified(req: DownloadRequest, deps: DownloadDeps)
       if ((await sizeOf(partial)) > before) attempts = 0
       if (++attempts >= timing.maxAttempts) throw new SpeechPackError(err.kind, 'transfer failed')
       if (err.restart) continue
-      const backoff = Math.min(timing.backoffCapMs, timing.backoffBaseMs * 2 ** (attempts - 1)) * (0.5 + deps.random() / 2)
+      const backoff =
+        Math.min(timing.backoffCapMs, timing.backoffBaseMs * 2 ** (attempts - 1)) * (0.5 + deps.random() / 2)
       const wait = Math.max(backoff, Math.min(err.retryAfterMs, timing.retryAfterCapMs))
       // Pause and cancel must not wait out a long Retry-After.
       const stopWaiting = new AbortController()
       try {
         await Promise.race([
           deps.sleep(wait),
-          new Promise<void>((resolve) => req.signal.addEventListener('abort', () => resolve(), { once: true, signal: stopWaiting.signal }))
+          new Promise<void>((resolve) =>
+            req.signal.addEventListener('abort', () => resolve(), { once: true, signal: stopWaiting.signal })
+          )
         ])
       } finally {
         stopWaiting.abort()

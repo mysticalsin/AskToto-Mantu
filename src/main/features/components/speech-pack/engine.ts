@@ -14,21 +14,29 @@
  *   2. the injected self-test decodes the pinned fixture to non-empty text
  *   3. an existing <id>/<version> is renamed aside to <version>.old-<ts>   (never deleted first)
  *   4. rename staging -> <id>/<version>      (atomic: the directory is whole or absent)
- *   5. write active.json.tmp, rename to active.json, then delete the aside directory
+ *   5. write active.json.tmp, rename to active.json, and retain the aside until a verified later startup
  *
  * A marker exists only after step 4 completed, and step 4 only runs on a fully verified, self-tested set,
  * so no crash can leave a marker without a complete directory or a half-filled directory behind a marker.
  * A crash between 4 and 5 leaves a complete but unmarked directory; the next start re-verifies it and
- * writes the marker, or removes it. initialise() deletes any aside directory a crash left behind.
- * Cancel is checked before the self-test and again before step 3, so a cancelled pack never ends 'ready'.
+ * writes the marker, or removes it. initialise() restores a verified aside if needed and prunes asides only
+ * after the current directory and marker have both been verified.
+ * Cancel is checked before the self-test, before activation, after the marker switch and before 'ready'.
  *
  * State and events carry component ids, byte counts and error kinds only — no path, transcript, audio or
  * user text ever enters a state, an event or a log line.
  */
-import { mkdir, readFile, readdir, rename, rm, stat, statfs, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readFile, readdir, rename, rm, stat, statfs, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { adoptExtracted, createArchiveSink, type ExtractArchive } from './archive'
-import { DEFAULT_TIMING, downloadVerified, sha256File, sizeOf, type DownloadDeps, type DownloadTiming } from './download'
+import { adoptExtracted, createArchiveSink, isSafeEntryName, type ExtractArchive } from './archive'
+import {
+  DEFAULT_TIMING,
+  downloadVerified,
+  sha256File,
+  sizeOf,
+  type DownloadDeps,
+  type DownloadTiming
+} from './download'
 import { SpeechPackError, type SpeechPackErrorKind } from './errors'
 import {
   SELF_TEST_FIXTURE,
@@ -59,6 +67,7 @@ export type ActivationStep =
   | 'renamed'
   | 'marker-tmp-written'
   | 'marker-written'
+  | 'ready-check'
 
 export interface SpeechPackEngineOptions {
   rootDir: string
@@ -101,6 +110,11 @@ interface Marker {
   version: string
 }
 
+interface MarkerSnapshot {
+  marker: Marker
+  bytes: Buffer
+}
+
 async function exists(path: string): Promise<boolean> {
   try {
     await stat(path)
@@ -139,7 +153,9 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
   const { rootDir } = options
   const fixture = options.fixture ?? SELF_TEST_FIXTURE
 
-  const states = new Map<SpeechPackComponentId, SpeechPackState>(components.map((c) => [c.id, { status: 'not-installed' }]))
+  const states = new Map<SpeechPackComponentId, SpeechPackState>(
+    components.map((c) => [c.id, { status: 'not-installed' }])
+  )
   const listeners = new Set<(event: { id: SpeechPackComponentId; state: SpeechPackState }) => void>()
   const queue: SpeechPackComponentId[] = []
   const controllers = new Map<SpeechPackComponentId, AbortController>()
@@ -195,10 +211,55 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     await options.onActivationStep?.('marker-written')
   }
 
-  async function hasMarker(c: SpeechPackComponent): Promise<boolean> {
+  function validVersion(version: unknown): version is string {
+    return (
+      typeof version === 'string' &&
+      version.length <= 64 &&
+      /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(version) &&
+      isSafeEntryName(version)
+    )
+  }
+
+  async function readMarkerSnapshot(c: SpeechPackComponent): Promise<MarkerSnapshot | null> {
     try {
-      const marker = JSON.parse(await readFile(markerPath(c), 'utf8')) as Partial<Marker>
-      return marker.schema === 1 && marker.component === c.id && marker.version === c.version
+      const componentDir = await lstat(join(rootDir, c.id))
+      if (!componentDir.isDirectory()) return null
+      const markerFile = markerPath(c)
+      const markerStat = await lstat(markerFile)
+      if (!markerStat.isFile() || markerStat.nlink !== 1) return null
+      const bytes = await readFile(markerFile)
+      const marker = JSON.parse(bytes.toString('utf8')) as Partial<Marker>
+      if (
+        Object.keys(marker).length !== 3 ||
+        marker.schema !== 1 ||
+        marker.component !== c.id ||
+        !validVersion(marker.version)
+      ) {
+        return null
+      }
+      const versionDir = await lstat(join(rootDir, c.id, marker.version))
+      if (!versionDir.isDirectory()) return null
+      return { marker: marker as Marker, bytes }
+    } catch {
+      return null
+    }
+  }
+
+  async function hasMarker(c: SpeechPackComponent): Promise<boolean> {
+    return (await readMarkerSnapshot(c))?.marker.version === c.version
+  }
+
+  async function restoreMarkerSnapshot(c: SpeechPackComponent, snapshot: MarkerSnapshot): Promise<boolean> {
+    try {
+      const componentDir = await lstat(join(rootDir, c.id))
+      if (!componentDir.isDirectory()) return false
+      const versionDir = await lstat(join(rootDir, c.id, snapshot.marker.version))
+      if (!versionDir.isDirectory()) return false
+      const markerFile = markerPath(c)
+      const temp = `${markerFile}.restore.tmp`
+      await writeFile(temp, snapshot.bytes)
+      await rename(temp, markerFile)
+      return true
     } catch {
       return false
     }
@@ -217,25 +278,68 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     }
   }
 
+  async function verifiedAsideDirs(c: SpeechPackComponent): Promise<string[]> {
+    let names: string[] = []
+    try {
+      names = await readdir(join(rootDir, c.id))
+    } catch {
+      return []
+    }
+    const candidates = names
+      .filter((name) => name.startsWith(`${c.version}.old-`))
+      .sort((a, b) => Number(b.slice(`${c.version}.old-`.length)) - Number(a.slice(`${c.version}.old-`.length)))
+    const verified: string[] = []
+    for (const name of candidates) {
+      const path = join(rootDir, c.id, name)
+      if (await dirVerified(c, path)) verified.push(path)
+    }
+    return verified
+  }
+
+  /** Restore the latest complete old directory after a kill or a cancel during activation. */
+  async function restoreAside(c: SpeechPackComponent): Promise<boolean> {
+    const candidates = await verifiedAsideDirs(c)
+    if (candidates.length === 0) return false
+    const dest = finalDir(c)
+    if (await exists(dest)) await rm(dest, { recursive: true, force: true })
+    await rename(candidates[0], dest)
+    return true
+  }
+
   async function initialise(): Promise<void> {
     for (const c of components) {
-      await removeAsideDirs(c)
       const dir = finalDir(c)
-      if (!(await exists(dir))) continue
-      if (!(await dirVerified(c, dir))) {
-        await rm(markerPath(c), { force: true })
-        await rm(dir, { recursive: true, force: true })
-        continue
+      const marker = await readMarkerSnapshot(c)
+      if (!(await exists(dir)) || !(await dirVerified(c, dir))) {
+        if (!marker || marker.marker.version === c.version) await rm(markerPath(c), { force: true })
+        if (await exists(dir)) await rm(dir, { recursive: true, force: true })
+        if (!(await restoreAside(c))) continue
       }
-      if (!(await hasMarker(c))) await writeMarker(c)
+      if (marker?.marker.version !== c.version) await writeMarker(c)
       set(c.id, { status: 'ready' })
+      // Keep the old complete directory until a verified current directory and its marker both exist.
+      await removeAsideDirs(c)
     }
   }
 
   // A cancel that lands after its pack is already active must still win: the pack is taken back out.
-  async function deactivate(c: SpeechPackComponent): Promise<void> {
-    await rm(markerPath(c), { force: true })
+  async function deactivate(c: SpeechPackComponent, previousMarker: MarkerSnapshot | null): Promise<void> {
+    if (previousMarker && previousMarker.marker.version !== c.version) {
+      // Restore the old active pointer atomically before removing the new candidate directory.
+      if (!(await restoreMarkerSnapshot(c, previousMarker))) return
+      await rm(finalDir(c), { recursive: true, force: true })
+      await restoreAside(c)
+      return
+    }
+
     await rm(finalDir(c), { recursive: true, force: true })
+    const restoredCurrent = await restoreAside(c)
+    if (previousMarker && restoredCurrent) {
+      await restoreMarkerSnapshot(c, previousMarker)
+    } else {
+      await rm(markerPath(c), { force: true })
+      if (!previousMarker && restoredCurrent) await writeMarker(c)
+    }
   }
 
   // --- one install ---
@@ -253,7 +357,10 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     const source = c.source
     const archiveDest = join(work, 'archive.download')
     const missing: SpeechPackComponent['files'][number][] = []
-    for (const f of c.files) if ((await sizeOf(fileAt(staging, f.path))) !== f.bytes) missing.push(f)
+    for (const f of c.files) {
+      const path = fileAt(staging, f.path)
+      if ((await sizeOf(path)) !== f.bytes || (await sha256File(path)) !== f.sha256) missing.push(f)
+    }
 
     // Everything below the disk check writes to disk; nothing above it does.
     let bytesTotal = 0
@@ -267,7 +374,18 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
         if (source.archive === null) throw new SpeechPackError('http', 'source is not pinned')
         if (!options.extractArchive) throw new SpeechPackError('http', 'no archive extractor available')
         bytesTotal = source.archive.bytes
-        const held = (await sizeOf(archiveDest)) === source.archive.bytes ? source.archive.bytes : await sizeOf(`${archiveDest}.partial`)
+        const archiveSize = await sizeOf(archiveDest)
+        let archiveVerified = false
+        if (archiveSize === source.archive.bytes) {
+          try {
+            archiveVerified = (await sha256File(archiveDest)) === source.archive.sha256
+          } catch {
+            // A failed read cannot count as trusted space already held for the pinned archive.
+          }
+        }
+        const held = archiveVerified
+          ? source.archive.bytes
+          : Math.min(source.archive.bytes, await sizeOf(`${archiveDest}.partial`))
         // Download remainder, plus the extraction cap (the archive holds files beyond the pinned ones) while the archive still exists.
         required += Math.max(0, source.archive.bytes - held) + source.extractCapBytes
       }
@@ -310,7 +428,11 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
       const extractDir = join(work, 'extract')
       await rm(extractDir, { recursive: true, force: true })
       await mkdir(extractDir, { recursive: true })
-      await (options.extractArchive as ExtractArchive)(archiveDest, createArchiveSink(extractDir, source.extractCapBytes), signal)
+      await (options.extractArchive as ExtractArchive)(
+        archiveDest,
+        createArchiveSink(extractDir, source.extractCapBytes),
+        signal
+      )
       await adoptExtracted(extractDir, source.entryPrefix, c.files, staging, source.extractCapBytes)
     }
     await rm(work, { recursive: true, force: true })
@@ -328,7 +450,10 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     // Cancel wins at every step: it is checked again before the self-test and before the activation rename.
     throwIfAborted(signal)
     set(c.id, { status: 'self-testing' })
-    if ((await sizeOf(options.fixtureWavPath)) !== fixture.bytes || (await sha256File(options.fixtureWavPath)) !== fixture.sha256) {
+    if (
+      (await sizeOf(options.fixtureWavPath)) !== fixture.bytes ||
+      (await sha256File(options.fixtureWavPath)) !== fixture.sha256
+    ) {
       throw new SpeechPackError('tamper', 'self-test fixture does not match its pin')
     }
     let decoded = ''
@@ -345,8 +470,9 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     throwIfAborted(signal)
     const dest = finalDir(c)
     const aside = `${dest}.old-${Date.now()}`
+    const previousMarker = await readMarkerSnapshot(c)
     await mkdir(dirname(dest), { recursive: true })
-    await rm(markerPath(c), { force: true })
+    if (!previousMarker) await rm(markerPath(c), { force: true })
     // An existing pack is renamed aside, never deleted first, so the swap has no moment without a whole directory.
     if (await exists(dest)) {
       await rename(dest, aside)
@@ -355,13 +481,21 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     await rename(staging, dest)
     await options.onActivationStep?.('renamed')
     await writeMarker(c)
-    await removeAsideDirs(c)
     // A cancel that arrived after the last check above has no step left to stop, so it takes the pack back out.
     if (signal.aborted && signal.reason === 'cancel') {
-      await deactivate(c)
+      await deactivate(c, previousMarker)
+      throw signal.reason
+    }
+    await options.onActivationStep?.('ready-check')
+    if (signal.aborted && signal.reason === 'cancel') {
+      await deactivate(c, previousMarker)
       throw signal.reason
     }
     set(c.id, { status: 'ready' })
+    if (signal.aborted && signal.reason === 'cancel') {
+      await deactivate(c, previousMarker)
+      throw signal.reason
+    }
   }
 
   async function run(id: SpeechPackComponentId): Promise<void> {
@@ -453,6 +587,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
         set(id, { status: 'error', kind: 'cancelled' })
       }
     },
-    whenIdle: () => (running || queue.length > 0 ? new Promise<void>((resolve) => idleWaiters.push(resolve)) : Promise.resolve())
+    whenIdle: () =>
+      running || queue.length > 0 ? new Promise<void>((resolve) => idleWaiters.push(resolve)) : Promise.resolve()
   }
 }

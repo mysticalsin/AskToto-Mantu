@@ -7,7 +7,7 @@
  * regular files are admitted, and every file that is kept is checked against its own per-file pin.
  */
 import { lstat, mkdir, open, readdir, rename } from 'node:fs/promises'
-import { dirname, join, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { SpeechPackError } from './errors'
 import { sha256File } from './download'
 import type { SpeechPackFile } from './manifest'
@@ -21,11 +21,23 @@ export interface ArchiveSink {
 /** Streams the entries of `archivePath` into `sink`; a link or special entry must be reported as an error. */
 export type ExtractArchive = (archivePath: string, sink: ArchiveSink, signal: AbortSignal) => Promise<void>
 
+const WINDOWS_DEVICE_NAME = /^(con|prn|aux|nul|conin\$|conout\$|clock\$|com[1-9¹²³]|lpt[1-9¹²³])(?:\..*)?$/iu
+
 /** True when an archive entry name stays inside the extraction directory on both macOS and Windows. */
 export function isSafeEntryName(name: string): boolean {
   if (!name || name.includes('\0') || name.includes('\\')) return false
   if (name.startsWith('/') || /^[A-Za-z]:/.test(name)) return false
-  return !name.split('/').some((part) => part === '..')
+  return name
+    .split('/')
+    .every(
+      (part) =>
+        part.length > 0 &&
+        part !== '.' &&
+        part !== '..' &&
+        !part.includes(':') &&
+        !/[. ]$/.test(part) &&
+        !WINDOWS_DEVICE_NAME.test(part)
+    )
 }
 
 /** A sink that writes under `destDir`, holding all entries together to `capBytes`. */
@@ -36,7 +48,10 @@ export function createArchiveSink(destDir: string, capBytes: number): ArchiveSin
     async addFile(name, data) {
       if (!isSafeEntryName(name)) throw new SpeechPackError('tamper', 'archive entry name is not allowed')
       const abs = resolve(root, ...name.split('/'))
-      if (!abs.startsWith(root + sep)) throw new SpeechPackError('tamper', 'archive entry escapes its directory')
+      const rel = relative(root, abs)
+      if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+        throw new SpeechPackError('tamper', 'archive entry escapes its directory')
+      }
       await mkdir(dirname(abs), { recursive: true })
       // 'wx' refuses an existing path, so a duplicate entry or a planted link is never written through.
       const handle = await open(abs, 'wx')
@@ -86,13 +101,20 @@ export async function adoptExtracted(
   capBytes: number
 ): Promise<void> {
   const found = await listExtracted(extractRoot, capBytes)
+  const root = resolve(extractRoot)
   for (const file of files) {
+    if (!isSafeEntryName(file.path)) throw new SpeechPackError('tamper', 'pinned file path is not allowed')
     const rel = `${entryPrefix}/${file.path}`
+    if (!isSafeEntryName(rel)) throw new SpeechPackError('tamper', 'archive prefix is not allowed')
     if (found.get(rel) !== file.bytes) throw new SpeechPackError('tamper', 'extracted file has the wrong length')
-    const abs = join(extractRoot, ...rel.split('/'))
-    if (!abs.startsWith(extractRoot + sep)) throw new SpeechPackError('tamper', 'extracted path escapes its directory')
-    if ((await sha256File(abs)) !== file.sha256) throw new SpeechPackError('tamper', 'extracted file does not match its pin')
-    const dest = join(destDir, ...file.path.split('/'))
+    const abs = resolve(root, ...rel.split('/'))
+    const relativePath = relative(root, abs)
+    if (!relativePath || relativePath === '..' || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {
+      throw new SpeechPackError('tamper', 'extracted path escapes its directory')
+    }
+    if ((await sha256File(abs)) !== file.sha256)
+      throw new SpeechPackError('tamper', 'extracted file does not match its pin')
+    const dest = resolve(destDir, ...file.path.split('/'))
     await mkdir(dirname(dest), { recursive: true })
     await rename(abs, dest)
   }
