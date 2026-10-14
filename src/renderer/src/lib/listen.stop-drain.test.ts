@@ -44,6 +44,20 @@ const host = vi.hoisted(() => {
   }
   return {
     useRef: slot,
+    useMemo<T>(factory: () => T, dependencies?: readonly unknown[]): T {
+      const cached = slot<{ value: T; dependencies: readonly unknown[] | undefined } | undefined>(undefined)
+      const prior = cached.current
+      if (
+        !prior ||
+        !dependencies ||
+        !prior.dependencies ||
+        dependencies.length !== prior.dependencies.length ||
+        dependencies.some((value, index) => !Object.is(value, prior.dependencies?.[index]))
+      ) {
+        cached.current = { value: factory(), dependencies: dependencies ? [...dependencies] : undefined }
+      }
+      return cached.current!.value
+    },
     useState<T>(initial: T): [T, (value: T | ((previous: T) => T)) => void] {
       const state = slot(initial)
       return [
@@ -89,8 +103,8 @@ vi.mock('react', () => ({
   useRef: <T>(initial: T) => host.useRef(initial),
   useState: <T>(initial: T) => host.useState(initial),
   useEffect: (effect: () => void | (() => void)) => host.useEffect(effect),
-  useCallback: <T>(fn: T) => fn,
-  useMemo: <T>(fn: () => T) => fn()
+  useCallback: <T>(fn: T, dependencies?: readonly unknown[]) => host.useMemo(() => fn, dependencies),
+  useMemo: <T>(fn: () => T, dependencies?: readonly unknown[]) => host.useMemo(fn, dependencies)
 }))
 
 type WorkletMessage = {
@@ -1753,7 +1767,7 @@ describe('broker cloud speech Listen lifecycle', () => {
     expect(streams[0]?.track.stop).not.toHaveBeenCalled()
 
     releaseFinish()
-    await settle()
+    await vi.waitFor(() => expect(renderBroker()).toMatchObject({ listening: false, capturing: false, ready: false }))
     api = renderBroker()
     expect(api).toMatchObject({ listening: false, capturing: false, ready: false })
     expect(api.error).toContain('four-hour capture limit')
