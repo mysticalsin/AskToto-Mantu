@@ -104,6 +104,65 @@ describe('meeting speech persistence worker host', () => {
     await service.dispose()
   })
 
+  it('canonicalizes one retained record in the worker under an explicit current owner', async () => {
+    const worker = new TestWorker()
+    const service = createMeetingSpeechPersistenceService({
+      readLimits: () => policy.limits,
+      readBounds: () => policy,
+      isCurrent: () => true,
+      workerFactory: () => worker
+    })
+    const recordBytes = new TextEncoder().encode(JSON.stringify({
+      identity: { kind: 'local', recordId: '6370e1cc-43f4-4976-a912-04d0c3ca8f9f' },
+      source: 'local-final',
+      line: { speaker: 'you', text: 'one bounded record', t: 1_700_000_000_000 }
+    }))
+    const result = await service.canonicalizeIncrementalRecord(recordBytes)
+
+    expect(worker.requests).toHaveLength(1)
+    expect(worker.requests[0].operation).toBe('canonical-record')
+    expect(result.identityKey).toBe('{"kind":"local","recordId":"6370e1cc-43f4-4976-a912-04d0c3ca8f9f"}')
+    expect(Buffer.from(result.canonicalBytes).toString('utf8')).toContain('one bounded record')
+    expect(result.canonicalBytes.byteOffset).toBe(0)
+    expect(result.canonicalBytes.byteLength).toBe(result.canonicalByteLength)
+    await service.dispose()
+  })
+
+  it('keeps incremental record canonicalization unavailable without a configured current-owner predicate', async () => {
+    let starts = 0
+    const service = createMeetingSpeechPersistenceService({
+      readLimits: () => policy.limits,
+      readBounds: () => policy,
+      workerFactory: () => {
+        starts++
+        return new TestWorker()
+      }
+    })
+    await expect(
+      service.canonicalizeIncrementalRecord(new TextEncoder().encode(JSON.stringify({
+        identity: { kind: 'local', recordId: '6370e1cc-43f4-4976-a912-04d0c3ca8f9f' },
+        source: 'local-final',
+        line: { speaker: 'you', text: 'closed', t: 1_700_000_000_000 }
+      })))
+    ).rejects.toMatchObject({ name: 'UNCONFIGURED' })
+    expect(starts).toBe(0)
+    await service.dispose()
+  })
+
+  it('rejects borrowed byte views before worker admission', async () => {
+    const worker = new TestWorker()
+    const service = createMeetingSpeechPersistenceService({
+      readLimits: () => policy.limits,
+      readBounds: () => policy,
+      isCurrent: () => true,
+      workerFactory: () => worker
+    })
+    const borrowed = new TextEncoder().encode('x{"record":true}').subarray(1)
+    await expect(service.canonicalizeIncrementalRecord(borrowed)).rejects.toMatchObject({ name: 'RESOURCE_LIMIT' })
+    expect(worker.requests).toHaveLength(0)
+    await service.dispose()
+  })
+
   it('admits one active and one queued request, refusing overflow without dispatch', async () => {
     const worker = new TestWorker(-1)
     const service = createMeetingSpeechPersistenceService({
