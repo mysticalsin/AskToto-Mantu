@@ -6,6 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SPEECH_PACK_COMPONENTS, type SpeechPackComponent } from './manifest'
 import { componentManifestIdentity, resolveSpeechPack } from './resolver'
 
+// Keep real filesystem behavior while giving Vitest a configurable module namespace for instrumentation.
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return { ...actual, open: (...args: Parameters<typeof actual.open>) => actual.open(...args) }
+})
+
 const component = (files = [{ path: 'model.bin', bytes: 6, sha256: '0'.repeat(64) }]): SpeechPackComponent => ({
   id: 'asr.whisper-base-q8',
   version: '2',
@@ -83,6 +89,29 @@ describe('speech-pack resolver', () => {
     await expect(resolveSpeechPack(root, c)).resolves.toMatchObject({ status: 'ready' })
     rmSync(marker)
     await expect(resolveSpeechPack(root, c)).resolves.toMatchObject({ status: 'not-installed' })
+  })
+
+  it('resolves an owned pack through an ancestor directory alias while rejecting a linked model file', async () => {
+    const c = component()
+    const canonicalParent = join(root, 'canonical')
+    const canonicalRoot = join(canonicalParent, 'packs')
+    const aliasParent = join(root, 'alias')
+    const pack = join(canonicalRoot, c.id, c.version)
+    mkdirSync(pack, { recursive: true })
+    writeFileSync(join(pack, 'model.bin'), 'abcdef')
+    writeFileSync(
+      join(canonicalRoot, c.id, 'active.json'),
+      JSON.stringify({ schema: 2, component: c.id, version: c.version, manifestIdentity: componentManifestIdentity(c) })
+    )
+    symlinkSync(canonicalParent, aliasParent, process.platform === 'win32' ? 'junction' : 'dir')
+    const aliasedRoot = join(aliasParent, 'packs')
+    await expect(resolveSpeechPack(aliasedRoot, c)).resolves.toMatchObject({ status: 'ready' })
+
+    rmSync(join(pack, 'model.bin'))
+    const outside = join(root, 'outside.bin')
+    writeFileSync(outside, 'abcdef')
+    symlinkSync(outside, join(pack, 'model.bin'))
+    await expect(resolveSpeechPack(aliasedRoot, c)).resolves.toMatchObject({ status: 'repair-needed', reason: 'path' })
   })
 
   it('requires explicit repair for legacy, unknown-field, wrong-manifest, wrong-size and symlink markers or files', async () => {

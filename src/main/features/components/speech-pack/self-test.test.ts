@@ -13,6 +13,12 @@ import {
   type SpeechPackHostFork
 } from './self-test'
 
+// Delegate to real I/O; a mocked namespace lets the open-count assertion instrument an ESM built-in.
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return { ...actual, open: (...args: Parameters<typeof actual.open>) => actual.open(...args) }
+})
+
 vi.mock('electron', () => ({
   utilityProcess: {
     fork: () => {

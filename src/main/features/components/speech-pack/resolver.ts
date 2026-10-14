@@ -203,7 +203,8 @@ export async function resolveSpeechPack(rootDir: string, component: SpeechPackCo
 
   for (const file of component.files) {
     const target = resolve(packDir, ...file.path.split('/'))
-    if (!isInside(packReal, target)) return notReady(component, manifestIdentity, 'repair-needed', 'path')
+    // Lexical paths must share a base; the final realpath check below enforces canonical containment.
+    if (!isInside(packDir, target)) return notReady(component, manifestIdentity, 'repair-needed', 'path')
     let current = packDir
     for (const part of file.path.split('/')) {
       current = resolve(current, part)
