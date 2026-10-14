@@ -13,7 +13,12 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { attachOwnedCdp, killOwned, strictLaunchEnvironment, waitForChildExit } from './lib/app-driver.mjs'
+import {
+  attachOwnedCdp,
+  killOwned,
+  quitOwnedAppBeforeAutomationClose,
+  strictLaunchEnvironment
+} from './lib/app-driver.mjs'
 import { listProcesses, ownedProcesses, survivors } from './owned-processes.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -850,32 +855,42 @@ async function main() {
         // stopOwnedProcessTree records an incomplete census if it cannot refresh the ownership snapshot.
       }
     }
-    if (connected && !leaveRunning) {
-      const close = await runAgentBrowser(['close'], 10_000, false)
-      if (close.code !== 0) {
-        report.agentBrowserProcessesCleaned = false
-        agentBrowserCloseFailure = failureClass(close)
-        report.agentBrowserCleanupDiagnostic = agentBrowserCloseFailure
-        report.agentBrowserCleanupEvidence = safeCommandEvidence(close, ['close'])
-      }
-    }
-    if (ownedBrowser && !leaveRunning) {
-      try {
-        if (appPage) {
-          const quitRequested = await appPage.evaluate(() => {
-            if (!window.toto || typeof window.toto.quit !== 'function') return false
-            void window.toto.quit()
-            return true
-          })
-          if (quitRequested) {
-            const exited = await waitForChildExit(appChild, CHILD_STOP_TIMEOUT_MS)
-            report.cleanShutdown = exited && appChild.exitCode === 0 && appChild.signalCode === null
+    if (!leaveRunning) {
+      report.cleanShutdown = await quitOwnedAppBeforeAutomationClose(
+        appChild,
+        () =>
+          ownedBrowser && appPage
+            ? appPage.evaluate(() => {
+                if (!window.toto || typeof window.toto.quit !== 'function') return false
+                void window.toto.quit()
+                return true
+              })
+            : Promise.resolve(false),
+        async () => {
+          try {
+            await ownedBrowser?.close()
+          } catch {
+            /* The app may have closed its browser target during a successful quit. */
           }
-        }
-      } catch {
-        // The owned process tree is stopped below if its normal quit path did not complete.
-      }
-      await ownedBrowser.close().catch(() => {})
+          if (connected) {
+            // The pinned CLI's `close` command closes the browser; run it only after the app's own quit
+            // IPC has been delivered and its clean process exit has been observed.
+            try {
+              const close = await runAgentBrowser(['close'], 10_000, false)
+              if (close.code === 0) return
+              report.agentBrowserProcessesCleaned = false
+              agentBrowserCloseFailure = failureClass(close)
+              report.agentBrowserCleanupDiagnostic = agentBrowserCloseFailure
+              report.agentBrowserCleanupEvidence = safeCommandEvidence(close, ['close'])
+            } catch {
+              report.agentBrowserProcessesCleaned = false
+              agentBrowserCloseFailure = 'close-failed'
+              report.agentBrowserCleanupDiagnostic = agentBrowserCloseFailure
+            }
+          }
+        },
+        CHILD_STOP_TIMEOUT_MS
+      )
     }
 
     if (appChild && !leaveRunning) {
