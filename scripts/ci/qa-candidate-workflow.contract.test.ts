@@ -148,17 +148,11 @@ describe('qa-candidate smoke jobs write per-asset launch reports (M2-0508)', () 
     const block = job('smoke-win')
     expect(block).toContain('npm ci')
     expect(block).toContain("Get-ChildItem $portableArchive -Recurse -Filter 'app-64.7z'")
-    expect(block).toContain("if ($appArchives.Count -ne 1) { throw \"Expected exactly one app-64.7z")
+    expect(block).toContain('if ($appArchives.Count -ne 1) { throw "Expected exactly one app-64.7z')
     expect(block).toContain("$portableExe = Get-Item (Join-Path $portablePayload 'Metis.exe')")
     expect(block).toContain('node scripts/check-packaged-asr.mjs $launch.AsrExe')
     expect(block).toContain("Source = 'portable-payload'")
-    for (const flag of [
-      '--report',
-      '--installer',
-      '--artifact-sha256',
-      '--candidate-run',
-      '--executable-source'
-    ]) {
+    for (const flag of ['--report', '--installer', '--artifact-sha256', '--candidate-run', '--executable-source']) {
       expect(block, flag).toContain(`${flag} `)
     }
     expect(block).toContain("$report.verdict -ne 'PASS'")
