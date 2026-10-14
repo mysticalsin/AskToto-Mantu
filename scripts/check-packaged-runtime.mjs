@@ -18,6 +18,7 @@ import { verifyLocalModelPayload } from './lib/local-model-inventory.mjs'
 import { verifyPackagedSharp } from './verify-packaged-sharp.mjs'
 import { assertMacHelperSpeechUsage } from './lib/mac-helper-privacy.mjs'
 import { assertQaFaultHookMatchesIdentity } from './lib/qa-fault-hook.mjs'
+import { assertRuntimeTrustPins } from './lib/runtime-trust-pins.mjs'
 
 const argv = process.argv.slice(2)
 const target = argv.shift()
@@ -414,6 +415,8 @@ const runtimeManifest = JSON.parse(readFileSync(runtimeManifestSource, 'utf8'))
 if (runtimeManifest.schemaVersion !== 1 || !runtimeManifest.assets || typeof runtimeManifest.assets !== 'object') {
   throw new Error(`Invalid reviewed runtime manifest: ${runtimeManifestSource}`)
 }
+// The same strict app-owned empty-target pin is enforced by full and lean package gates.
+await assertRuntimeTrustPins(resourcesRoot)
 await requireSameFile(
   join(REPO_ROOT, 'build', 'speech-pack-profile.json'),
   join(resourcesRoot, 'speech-pack-profile.json')

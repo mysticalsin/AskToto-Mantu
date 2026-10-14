@@ -11,6 +11,7 @@ import { assertMachOArchitectures } from './lib/macho-architecture.mjs'
 import { parseLeanCheckerArgs } from './lib/lean-checker-args.mjs'
 import { constants as fsConstants } from 'node:fs'
 import { packageInventoryIdentity, validatePackageInventory } from './lib/package-inventory.mjs'
+import { assertRuntimeTrustPins } from './lib/runtime-trust-pins.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const { target, resourcesArg, arch, executableName, platform } = parseLeanCheckerArgs(process.argv.slice(2))
@@ -99,6 +100,7 @@ if (inventory.appVersion !== packageJson.version || inventory.electronVersion !=
   throw new Error('Package inventory application or locked Electron version differs from source')
 }
 if (packageInventoryIdentity(inventory) !== inventory.identity) throw new Error('Package inventory identity is invalid')
+await assertRuntimeTrustPins(resourcesRoot)
 
 // The resource inventory covers the immutable staged core files it lists. Executables rewritten by
 // platform signing are checked by their existing target-specific build gates and by the requirements
