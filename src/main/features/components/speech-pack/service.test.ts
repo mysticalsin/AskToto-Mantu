@@ -13,7 +13,7 @@ import {
 import * as Resolver from './resolver'
 import { componentManifestIdentity } from './resolver'
 import * as Profile from './profile'
-import { createSpeechPackService } from './service'
+import { createSpeechPackService } from '../index'
 
 vi.mock('electron', () => ({
   utilityProcess: {

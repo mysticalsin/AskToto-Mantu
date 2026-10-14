@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import * as fs from 'node:fs'
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -89,6 +90,17 @@ describe('bundled Parakeet runtime', () => {
     const html = '<!DOCTYPE html><html><body>cloudflareaccess.com Sign in</body></html>'
     for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(dir, name), html)
     await expect(parakeetFilesReady(dir)).resolves.toBe(false)
+  })
+
+  it('keeps the Parakeet status probe from opening model files', async () => {
+    writeParakeet(join(paths.resources, 'asr', 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8'))
+    const openSync = vi.spyOn(fs, 'openSync')
+    try {
+      await expect(parakeetModelReady()).resolves.toBe(true)
+      expect(openSync).not.toHaveBeenCalled()
+    } finally {
+      openSync.mockRestore()
+    }
   })
 
   it('does not start a helper when release wins during async model-path resolution', async () => {
