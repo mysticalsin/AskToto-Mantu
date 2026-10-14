@@ -25,6 +25,7 @@ import {
   resetSettingsCacheForTests
 } from './store'
 import { decryptSecret } from './secrets'
+import { observeSettingsSnapshot, getSettingsObservationEpoch } from './settings-observation'
 
 const hardware = vi.hoisted(() => ({ totalmem: vi.fn(() => 16 * 1024 ** 3) }))
 vi.mock('node:os', async (importOriginal) => {
@@ -85,6 +86,27 @@ function operatorPolicy(localSpeechPack: ModelPolicyDocument['localSpeechPack'])
 
 describe('store', () => {
   let userData: string
+
+  it('publishes actual settings cache hits and closes an unreadable profile observation', () => {
+    writeFileSync(join(userData, 'settings.json'), JSON.stringify({ onboardingDone: true }), 'utf8')
+    const observed = vi.fn()
+    const unsubscribe = observeSettingsSnapshot(observed)
+    try {
+      const first = getSettings()
+      const epoch = getSettingsObservationEpoch()
+      getSettings()
+      expect(observed.mock.lastCall?.[0]).toEqual({ settings: first, readable: true, epoch })
+      expect(getSettingsObservationEpoch()).toBe(epoch)
+      rmSync(join(userData, 'settings.json'))
+      mkdirSync(join(userData, 'settings.json'))
+      resetSettingsCacheForTests()
+      getSettings()
+      expect(observed.mock.lastCall?.[0].readable).toBe(false)
+      expect(getSettingsObservationEpoch()).toBeGreaterThan(epoch)
+    } finally {
+      unsubscribe()
+    }
+  })
 
   beforeEach(() => {
     hardware.totalmem.mockReset().mockReturnValue(16 * 1024 ** 3)
