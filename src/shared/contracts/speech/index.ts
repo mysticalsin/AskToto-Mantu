@@ -18,7 +18,7 @@ import { SpeechEngineIdSchema } from '../capability'
 export const TrackSchema = z.enum(['microphone', 'system'])
 export type Track = z.infer<typeof TrackSchema>
 
-const CounterSchema = z.number().int().positive()
+const CounterSchema = z.number().int().positive().safe()
 
 export const CaptureGenerationSchema = CounterSchema
 export const StreamEpochSchema = CounterSchema
@@ -29,7 +29,7 @@ function addIssue(context: z.RefinementCtx, message: string, path: Array<string 
 }
 
 /** Milliseconds from the start of the capture generation. */
-const OffsetSchema = z.number().int().nonnegative()
+const OffsetSchema = z.number().int().nonnegative().safe()
 
 /**
  * One capture generation. `capturedTracks` are the requested tracks that are actually being captured; a
