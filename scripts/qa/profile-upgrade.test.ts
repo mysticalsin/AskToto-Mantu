@@ -210,6 +210,12 @@ describe('hosted in-place Windows profile upgrade acceptance', () => {
     expect(assessUpgradeReport({ ...report, checks: [...report.checks, report.checks[0]] }).accepted).toBe(false)
     expect(assessUpgradeReport({ ...report, error: 'installer error' }).accepted).toBe(false)
     expect(
+      assessUpgradeReport({
+        ...report,
+        baseline: { ...report.baseline, sha256: 'f'.repeat(64) }
+      }).accepted
+    ).toBe(false)
+    expect(
       assessUpgradeReport(
         { ...report, baseline: { ...report.baseline, sha256: 'f'.repeat(64) } },
         { baselineSha256: BASELINE.sha256 }

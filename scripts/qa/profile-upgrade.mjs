@@ -135,6 +135,7 @@ export function assessUpgradeReport(report, expected = {}) {
   if (report.error !== null) problems.push('scenario contains an execution error')
   if (
     !SHA256.test(report.baseline?.sha256 ?? '') ||
+    report.baseline.sha256 !== BASELINE.sha256 ||
     (expected.baselineSha256 && report.baseline.sha256 !== expected.baselineSha256)
   ) {
     problems.push('baseline installer sha256 is missing or does not match the expected bytes')
