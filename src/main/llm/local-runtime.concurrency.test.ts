@@ -105,19 +105,49 @@ async function waitUntil(cond: () => boolean, timeoutMs = 2000): Promise<void> {
 
 function testLease(
   generationIdentity: string,
-  releaseLease: () => Promise<void> = async () => undefined
+  releaseLease: () => Promise<void> = async () => undefined,
+  verifyCurrentBytes: () => Promise<void> = async () => undefined
 ): { lease: RuntimeFeatureLease; release: ReturnType<typeof vi.fn> } {
   const release = vi.fn(releaseLease)
   const lease = {
     generationIdentity,
     entry: vi.fn(() => '/managed/llama-server'),
     modelFile: vi.fn((_, member: string) => `/managed/model/${member}`),
+    verifyCurrentBytes: vi.fn(verifyCurrentBytes),
     release
   } as unknown as RuntimeFeatureLease
   return { lease, release }
 }
 
 describe('F1 — concurrent start() calls share one in-flight start', () => {
+  it('holds native launch until the leased physical closure has been reverified', async () => {
+    let finishVerification!: () => void
+    const lease = testLease(
+      'managed-physical-gate',
+      async () => undefined,
+      () => new Promise<void>((resolve) => (finishVerification = resolve))
+    )
+    const started = start(
+      {
+        gguf: '/managed/model/model.gguf',
+        mmproj: '/managed/model/mmproj.gguf',
+        ...SPAWN_PROFILE,
+        runtimeLease: lease.lease,
+        runtimeBinary: '/managed/llama-server'
+      },
+      'mac'
+    )
+    await Promise.resolve()
+    expect(lease.lease.verifyCurrentBytes).toHaveBeenCalledOnce()
+    expect(spawnState.calls).toHaveLength(0)
+    finishVerification()
+    await waitUntil(() => spawnState.calls.length === 1)
+    emitListening(0, 55129)
+    await started
+    expect(spawnState.calls).toHaveLength(1)
+    await stop()
+  })
+
   it('a second concurrent start() call for the SAME model spawns only once, and neither caller resolves before health actually completes', async () => {
     let healthSettled = false
     fetchImpl = () =>

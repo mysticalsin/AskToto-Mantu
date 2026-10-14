@@ -565,7 +565,14 @@ import { createScreenPreprocess, type ScreenPreprocess } from './screen-preproce
 import { startForegroundWatcher } from './foreground-watcher'
 import { createStopAll } from './infra/process/stop-all'
 import { installExitPaths } from './lifecycle/exit-paths'
-import { createQuitTrace, observeQuitWindow } from './lifecycle/quit-trace'
+import { createQuitTrace, observeClosedCleanup, observeQuitWindow } from './lifecycle/quit-trace'
+import { createFatalHandler } from './lifecycle/fatal-handler'
+import {
+  isCurrentCloudSttSender,
+  shouldClearCloudSttIpcOwner,
+  shouldInvalidateCloudSttOwner,
+  type CloudSttWindowOwner
+} from './lifecycle/cloud-stt-window-owner'
 import { installAppQuitLifecycle } from './lifecycle/app-quit-lifecycle'
 import { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-hooks'
 import { installQaCaptureSource } from './qa-capture-source'
@@ -1190,28 +1197,19 @@ function setCloudSttIpcOwner(owner: CloudSttIpcOwner | null): void {
 
 /** Only the renderer that opened the current live-STT session may receive its tail callbacks. */
 function isCurrentCloudSttOwner(owner: CloudSttIpcOwner, sender: { id: number; isDestroyed: () => boolean }): boolean {
-  return (
-    cloudSttIpcOwner === owner &&
-    win?.webContents === sender &&
-    !sender.isDestroyed() &&
-    owner.webContentsId === sender.id
-  )
+  return cloudSttIpcOwner === owner && isCurrentCloudSttSender(win, owner.webContentsId, sender)
 }
 
 /** Renderer replacement/close is a hard boundary: never leave cloud sockets or old callbacks alive. */
-function invalidateCloudSttOwner(webContentsId?: number): void {
+function invalidateCloudSttOwner(owner?: CloudSttWindowOwner<BrowserWindow, Electron.WebContents>): void {
   const context = speechCaptureGrants.getAcceptedListenContext()
-  if (
-    webContentsId === undefined ||
-    win?.webContents.id === webContentsId ||
-    (context?.webContents as Electron.WebContents | undefined)?.id === webContentsId
-  ) {
+  if (shouldInvalidateCloudSttOwner(win, context?.webContents as Electron.WebContents | undefined, owner)) {
     speechNavigationEpoch += 1
     speechPackCaptureRevision += 1
     speechCaptureGrants.invalidateAll()
     speechDesktop?.invalidate('renderer-navigation')
   }
-  if (webContentsId !== undefined && cloudSttIpcOwner?.webContentsId !== webContentsId) return
+  if (!shouldClearCloudSttIpcOwner(cloudSttIpcOwner?.webContentsId, owner)) return
   cloudSttIpcGeneration += 1
   setCloudSttIpcOwner(null)
   void stopCloudSttLive()
@@ -2443,7 +2441,8 @@ function replaceTransparentOverlayWithExclusiveOnboarding(): void {
   clearCompletedOnboardingExitFallback(dying)
   streams.forEach((stream) => stream.abort())
   streams.clear()
-  invalidateCloudSttOwner(dying.webContents.id)
+  const dyingWebContents = dying.webContents
+  invalidateCloudSttOwner({ window: dying, webContents: dyingWebContents, webContentsId: dyingWebContents.id })
   try {
     dying.destroy()
   } catch {
@@ -2929,31 +2928,38 @@ function createWindow(targetDisplay?: Electron.Display): void {
   const self = win
   // M2-0518: App Nap must not throttle the shown overlay once the boot power-save hold ends.
   holdAppSuspensionWhileVisible(self, powerSaveBlocker)
-  // `closed` fires after BrowserWindow.destroy() has torn down WebContents. Cache the numeric owner
-  // while it is valid; touching `self.webContents` from the callback throws and falsely crashes Métis.
-  const selfWebContentsId = self.webContents.id
-  self.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
-    if (win === self && isMainFrame && !isInPlace) invalidateCloudSttOwner(selfWebContentsId)
+  // `closed` fires after Electron destroys WebContents. Capture the exact wrappers and owner ID while
+  // live so cleanup never reads a destroyed getter or revokes a replacement renderer.
+  const selfWebContents = self.webContents
+  const selfOwner: CloudSttWindowOwner<BrowserWindow, Electron.WebContents> = {
+    window: self,
+    webContents: selfWebContents,
+    webContentsId: selfWebContents.id
+  }
+  selfWebContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
+    if (win === self && isMainFrame && !isInPlace) invalidateCloudSttOwner(selfOwner)
   })
   win.on('blur', () => commandControl.onWindowBlurred(win === self, parkRightEdgeReaderOnBlur))
   win.on('hide', () => commandControl.onWindowHidden(win === self))
-  win.on('closed', () => {
-    clearCompletedOnboardingExitFallback(self)
-    // Import jobs belong to main plus the hidden decoder window, so closing the overlay never abandons
-    // a selected recording. Their checkpointed state resumes even if the entire app exits. A retiring
-    // window can close after an opaque replacement has already become `win`; it must not cancel work
-    // owned by that replacement.
-    if (win !== self) return
-    commandControl.revokeForLifecycleEvent('window_closed')
-    // Abort any in-flight LLM streams so their callbacks don't fire against a destroyed window.
-    streams.forEach((s) => s.abort())
-    streams.clear()
-    invalidateCloudSttOwner(selfWebContentsId)
-    stopOverlayCursorWatch()
-    stopExclusiveBoundsWatch()
-    stopExclusiveBoundsEventGuard()
-    win = null
-  })
+  win.on('closed', () =>
+    observeClosedCleanup(quitTrace, () => {
+      clearCompletedOnboardingExitFallback(self)
+      // Import jobs belong to main plus the hidden decoder window, so closing the overlay never abandons
+      // a selected recording. Their checkpointed state resumes even if the entire app exits. A retiring
+      // window can close after an opaque replacement has already become `win`; it must not cancel work
+      // owned by that replacement.
+      if (win !== self) return
+      commandControl.revokeForLifecycleEvent('window_closed')
+      // Abort any in-flight LLM streams so their callbacks don't fire against a destroyed window.
+      streams.forEach((s) => s.abort())
+      streams.clear()
+      invalidateCloudSttOwner(selfOwner)
+      stopOverlayCursorWatch()
+      stopExclusiveBoundsWatch()
+      stopExclusiveBoundsEventGuard()
+      win = null
+    })
+  )
 
   // Security: never let model-output links navigate the trusted renderer or open child windows
   // that inherit the privileged preload. External https links open in the real browser instead.
@@ -3016,7 +3022,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
     responsiveness.markGone()
     // A dead/reloading renderer cannot receive final STT messages or issue Stop. Force-close the live
     // socket before reload so provider callbacks cannot bleed into the new renderer session.
-    invalidateCloudSttOwner(selfWebContentsId)
+    invalidateCloudSttOwner(selfOwner)
     // MQA-038: recovery reloads the SAME window, so createWindow()'s crash/recovery guard above never
     // runs and the renderer-OWNED module state survives the renderer that set it. The remounted renderer
     // starts idle and never sends the listeningState(false) it owed us, so `listeningActive` would stay
@@ -4211,46 +4217,6 @@ function handleSmokeReopenProbe(commandLine: readonly string[]): boolean {
   return true
 }
 
-let fatalHandled = false
-/**
- * For a fatal exception, offer a ONE-TIME relaunch — but default to "Continue" so a benign async error
- * never kills the overlay. No crashReporter upload by design (zero telemetry).
- */
-function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown): void {
-  // M2-0429: a refused macOS capture, already audited as capture.failed by its caller — not a crash.
-  if (kind === 'unhandledRejection' && isOrphanScreenSourcesRejection(err, process.platform)) {
-    return void mainLog.warn(
-      '[capture] desktopCapturer rejected a screen-source request (Screen Recording not in effect)'
-    )
-  }
-  const detail = err instanceof Error ? err.stack || err.message : String(err)
-  persistCrash(kind, detail, err instanceof Error ? err.message : String(err))
-  if (kind !== 'uncaughtException' || fatalHandled) return
-  fatalHandled = true
-  void showFatalDialog()
-}
-
-// M2-0037: split out of onFatal so the main thread is never blocked showing this — a synchronous native
-// dialog (showMessageBoxSync) froze every window, including whatever else the user was mid-click in,
-// until they dismissed it.
-async function showFatalDialog(): Promise<void> {
-  try {
-    const dialogOpts = {
-      type: 'error' as const,
-      title: 'Métis hit a problem',
-      message: 'Métis ran into an unexpected error.',
-      detail: 'A crash report was saved to your Métis data folder. Relaunch now, or keep going.',
-      buttons: ['Relaunch Métis', 'Continue'],
-      defaultId: 1,
-      cancelId: 1
-    }
-    const { response } = win ? await dialog.showMessageBox(win, dialogOpts) : await dialog.showMessageBox(dialogOpts)
-    if (response === 0) exitAndRelaunch()
-  } catch {
-    /* if the dialog itself fails, leave the app running */
-  }
-}
-
 // --- Screen capture (cached + pre-warmable for vision latency) -----------------------------------------
 // A vision ask issued within CAPTURE_TTL_MS of a (pre-warmed) capture reuses the JPEG instead of paying the
 // ~150-450ms capture cost again. 4s covers hover→click and shortcut→Enter without showing a visibly stale
@@ -4604,7 +4570,7 @@ function refreshScreenPreprocess(): void {
 function revokePrivilegedSurface(): void {
   refreshScreenPreprocess() // stops the watcher child, the 6s tick and the cached description
   invalidateCloudSttOwner() // closes authenticated live-speech sockets and invalidates their callbacks
-  void runtimeConsumers?.revokeWhisper().catch((error: unknown) => mainLog.warn('[runtime] revoke failed:', error))
+  void runtimeConsumers?.revokeAll().catch((error: unknown) => mainLog.warn('[runtime] revoke failed:', error))
   if (!requireAuth()) closeIntelligenceWindow()
 }
 setSessionClearedHandler(commandControl.wrapLifecycleListener('auth_session_cleared', revokePrivilegedSurface))
@@ -4862,6 +4828,17 @@ const { forceQuit: forceQuitMétis, exitAndRelaunch } = installExitPaths(app, {
     endBootWatch(app.getPath('userData'))
   },
   warn: (...args) => mainLog.warn(...args)
+})
+
+const { onFatal } = createFatalHandler({
+  quitTrace,
+  platform: process.platform,
+  isOrphanScreenSourcesRejection,
+  persistCrash,
+  warnCaptureRefusal: () =>
+    mainLog.warn('[capture] desktopCapturer rejected a screen-source request (Screen Recording not in effect)'),
+  showMessageBox: (options) => (win ? dialog.showMessageBox(win, options) : dialog.showMessageBox(options)),
+  exitAndRelaunch
 })
 
 function registerEmergencyForceQuitShortcut(): boolean {
@@ -6835,7 +6812,7 @@ function registerIpc(): void {
     assertMainWindow(e)
     speechDesktop?.invalidate('auth-signout')
     authSignOut()
-    await runtimeConsumers?.revokeWhisper()
+    await runtimeConsumers?.revokeAll()
     await importJobs?.cancelAll()
   })
   // --- Calendar ---
@@ -7301,19 +7278,26 @@ function registerIpc(): void {
     // synchronous decode of an arbitrarily large buffer and hang or OOM the whole app.
     if (p.samples.length > 16_000 * 30) return ''
     const speakerKey = captureLiveSpeakerKey(p.startedAt)
+    const feedAuthority = `${getSettings().asrEngine}:${getSpeechPolicyAuthorityStatus(getSettings()).identity}`
+    const feedStillAuthorized = (): boolean =>
+      requireAuth() &&
+      `${getSettings().asrEngine}:${getSpeechPolicyAuthorityStatus(getSettings()).identity}` === feedAuthority
     const text = await parakeetTranscribe(p.samples)
+    if (!feedStillAuthorized()) return ''
     // Speaker Intelligence (SPEAKER-INTELLIGENCE-PLAN §3): label THEM windows with a voice-derived name
     // ("Jane Doe" from an enrolled profile, else a stable "Speaker N" session label). Same PCM buffer the
     // ASR just consumed — no extra capture. Strictly additive and best-effort: any failure or the feature
     // being off/unprovisioned attaches no name and the line renders exactly as before.
     if (p.speaker === 'them') {
       const label = await labelThemAudio(p.samples, speakerKey, 'live')
+      if (!feedStillAuthorized()) return ''
       // P2 echo defense: this window is the operator's OWN voice bleeding through the loopback —
       // drop the transcribed text rather than mislabel the operator's words as THEM.
       if (label?.echo) return { text: '', echo: true }
       if (text && label) return { text, name: label.name }
     } else if (p.speaker === 'you') {
       await observeOperatorAudio(p.samples, speakerKey)
+      if (!feedStillAuthorized()) return ''
     }
     return { text }
   })

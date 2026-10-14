@@ -471,12 +471,37 @@ async function testLlama(
     })
     if (!response.ok) throw new Error('RUNTIME_SELF_TEST_SERVER_REQUEST_FAILED')
     const contentLength = Number(response.headers.get('content-length') ?? '0')
-    if (contentLength > 64 * 1024) throw new Error('RUNTIME_SELF_TEST_SERVER_RESPONSE_INVALID')
+    if (!Number.isFinite(contentLength) || contentLength < 0 || contentLength > 64 * 1024) {
+      await response.body?.cancel().catch(() => undefined)
+      throw new Error('RUNTIME_SELF_TEST_SERVER_RESPONSE_INVALID')
+    }
     await assertCurrent()
-    const responseText = await response.text()
-    if (responseText.length > 64 * 1024) throw new Error('RUNTIME_SELF_TEST_SERVER_RESPONSE_INVALID')
-    const body = JSON.parse(responseText) as { choices?: Array<{ message?: { content?: unknown } }> }
-    const content = body.choices?.[0]?.message?.content
+    const reader = response.body?.getReader()
+    if (!reader) throw new Error('RUNTIME_SELF_TEST_SERVER_RESPONSE_INVALID')
+    const chunks: Uint8Array[] = []
+    let responseBytes = 0
+    try {
+      while (true) {
+        const next = await reader.read()
+        if (next.done) break
+        responseBytes += next.value.byteLength
+        if (responseBytes > 64 * 1024) throw new Error('RUNTIME_SELF_TEST_SERVER_RESPONSE_INVALID')
+        chunks.push(next.value)
+        await assertCurrent()
+      }
+    } catch (error) {
+      await reader.cancel(error).catch(() => undefined)
+      throw error
+    }
+    const body = new Uint8Array(responseBytes)
+    let offset = 0
+    for (const chunk of chunks) {
+      body.set(chunk, offset)
+      offset += chunk.byteLength
+    }
+    const responseText = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(body)
+    const parsed = JSON.parse(responseText) as { choices?: Array<{ message?: { content?: unknown } }> }
+    const content = parsed.choices?.[0]?.message?.content
     if (typeof content !== 'string' || !/\bREADY\b/i.test(content))
       throw new Error('RUNTIME_SELF_TEST_SERVER_RESPONSE_INVALID')
     await assertCurrent()

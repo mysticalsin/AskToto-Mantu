@@ -7,6 +7,7 @@ import {
   windowsSystemLoaderRoots,
   type VerifiedRuntimeGeneration
 } from './runtime-lease'
+import { configureRuntimeExecutionAuthority, invalidateRuntimeExecutionAuthority } from './runtime-execution-authority'
 import type { OptionalRuntimeTarget } from './runtime-components'
 
 describe('Windows optional-host system loader roots', () => {
@@ -165,5 +166,20 @@ describe('Windows optional-host system loader roots', () => {
     expect(verificationCount).toBe(2)
     await lease.release()
     await expect(lease.verifyCurrentBytes()).rejects.toThrow('Optional runtime lease has been released.')
+
+    configureRuntimeExecutionAuthority(async () => true)
+    const authorityLease = await acquireFeatureRuntime('offline-asr', target)
+    let releaseAuthority!: () => void
+    configureRuntimeExecutionAuthority(
+      () => new Promise<boolean>((resolveAuthority) => (releaseAuthority = () => resolveAuthority(true)))
+    )
+    const heldAdmission = authorityLease.verifyCurrentBytes()
+    for (let attempt = 0; attempt < 10 && !releaseAuthority; attempt++) await Promise.resolve()
+    expect(releaseAuthority).toBeTypeOf('function')
+    invalidateRuntimeExecutionAuthority()
+    releaseAuthority()
+    await expect(heldAdmission).rejects.toThrow(/authority was revoked/i)
+    expect(verificationCount).toBe(3)
+    await authorityLease.release()
   })
 })

@@ -194,12 +194,13 @@ async function writeExclusive(path: string, data: Uint8Array, mode: number): Pro
 async function writeBytesAtomic(
   path: string,
   bytes: Uint8Array,
-  beforeRename: () => Promise<void> | void
+  beforeRename: () => Promise<void | (() => void)> | void | (() => void)
 ): Promise<void> {
   const temp = `${path}.${randomBytes(16).toString('hex')}.tmp`
   await writeExclusive(temp, bytes, 0o600)
   try {
-    await beforeRename()
+    const finalGuard = await beforeRename()
+    if (typeof finalGuard === 'function') finalGuard()
     await rename(temp, path)
   } catch (error) {
     await rm(temp, { force: true }).catch(() => undefined)
@@ -396,7 +397,15 @@ export function createRuntimeInstaller(options: {
       throw new Error('RUNTIME_PLAN_CLOSURE_CHANGED')
     }
     const selectedRows = rowsFor(derivedIds, catalogSnapshot.catalog.targets)
+    await ensureOwnedDirectory(storeRoot)
+    const storeRootIdentity = await directoryIdentity(storeRoot)
     const previousActiveBytes = await options.provider.previousActiveBytes(input.feature)
+    if (
+      (await realpath(storeRoot)) !== storeRoot ||
+      !sameDirectoryIdentity(storeRootIdentity, await lstat(storeRoot, { bigint: true }))
+    ) {
+      throw new Error('RUNTIME_INSTALL_STORE_ROOT_CHANGED')
+    }
     await check()
     const requirements = calculateRuntimeInstallRequirements({
       rows: catalogSnapshot.catalog.targets,
@@ -408,7 +417,6 @@ export function createRuntimeInstaller(options: {
     if (!requirements || canonicalJson(requirements.artifactIds) !== canonicalJson(derivedIds)) {
       throw new Error('RUNTIME_PLAN_UNAVAILABLE')
     }
-    await ensureOwnedDirectory(storeRoot)
     await check()
     const disk = await statfs(storeRoot, { bigint: true })
     if (disk.bavail * disk.bsize < BigInt(requirements.installedBytes)) {
@@ -420,6 +428,7 @@ export function createRuntimeInstaller(options: {
     const stagingRoot = await ensureOwnedDirectory(join(storeRoot, 'staging'))
     await check()
     const activeRoot = await ensureOwnedDirectory(join(storeRoot, 'active'))
+    const activeRootIdentity = await directoryIdentity(activeRoot)
     await check()
     const generation = generationIdentity({
       feature: input.feature,
@@ -446,6 +455,23 @@ export function createRuntimeInstaller(options: {
     let priorPointerVersion: BigIntStats | null = null
     let finalPointerVersion: BigIntStats | null = null
     let finalPointerBytes: Buffer | null = null
+    const assertActiveRootOwned = async (): Promise<void> => {
+      const path = join(storeRoot, 'active')
+      const [parentStat, parentCanonical, stat, canonical] = await Promise.all([
+        lstat(storeRoot, { bigint: true }),
+        realpath(storeRoot),
+        lstat(path, { bigint: true }),
+        realpath(path)
+      ])
+      if (
+        parentCanonical !== storeRoot ||
+        !sameDirectoryIdentity(storeRootIdentity, parentStat) ||
+        canonical !== activeRoot ||
+        !sameDirectoryIdentity(activeRootIdentity, stat)
+      ) {
+        throw new Error('RUNTIME_INSTALL_ACTIVE_ROOT_CHANGED')
+      }
+    }
     try {
       const trustRoot = await readPinnedFile(
         join(resourcesRoot, catalogSnapshot.catalog.trustRoot.path),
@@ -632,18 +658,22 @@ export function createRuntimeInstaller(options: {
       temporaryPointer = `${priorPointerPath}.${randomBytes(16).toString('hex')}.tmp`
       await writeExclusive(temporaryPointer, finalPointer, 0o600)
       await check()
-      input.assertCurrentSync()
       if (!sameFileVersion(priorPointerVersion, await fileVersion(priorPointerPath))) {
         throw new Error('RUNTIME_INSTALL_POINTER_CHANGED')
       }
+      // This is the final awaited operation before publication. Recheck transaction authority
+      // after metadata I/O so cancellation or policy revocation cannot race the pointer rename.
+      await assertActiveRootOwned()
+      input.assertCurrentSync()
       await rename(temporaryPointer, priorPointerPath)
       temporaryPointer = null
-      finalPointerVersion = await fileVersion(priorPointerPath)
-      if (!finalPointerVersion) throw new Error('RUNTIME_INSTALL_POINTER_PUBLISH_FAILED')
       try {
+        finalPointerVersion = await fileVersion(priorPointerPath)
+        if (!finalPointerVersion) throw new Error('RUNTIME_INSTALL_POINTER_PUBLISH_FAILED')
         await syncDirectory(activeRoot)
         await check()
       } catch (error) {
+        await assertActiveRootOwned()
         let current: Buffer | null
         try {
           current = await readPinnedFile(priorPointerPath, 64 * 1024)
@@ -654,20 +684,46 @@ export function createRuntimeInstaller(options: {
             throw error
           }
         }
-        const pointerVersion = await fileVersion(priorPointerPath)
+        let pointerVersion = await fileVersion(priorPointerPath)
+        if (current?.equals(finalPointer) && finalPointerVersion === null) {
+          // Recover the transaction's published inode after a transient metadata failure. The
+          // exact bytes and app-owned active directory must both still match before rollback.
+          finalPointerVersion = pointerVersion
+        }
         if (current?.equals(finalPointer) && sameFileVersion(finalPointerVersion, pointerVersion)) {
-          const assertPublishedPointerStillOwned = async (): Promise<void> => {
+          const assertPublishedPointerStillOwned = async (): Promise<() => void> => {
+            await assertActiveRootOwned()
             const bytes = await readPinnedFile(priorPointerPath, 64 * 1024)
-            const version = await fileVersion(priorPointerPath)
-            if (!bytes.equals(finalPointer) || !sameFileVersion(finalPointerVersion, version)) {
+            pointerVersion = await fileVersion(priorPointerPath)
+            if (!bytes.equals(finalPointer) || !sameFileVersion(finalPointerVersion, pointerVersion)) {
               throw new Error('RUNTIME_INSTALL_ROLLBACK_POINTER_CHANGED')
+            }
+            return () => {
+              if (!bytes.equals(finalPointer) || !sameFileVersion(finalPointerVersion, pointerVersion)) {
+                throw new Error('RUNTIME_INSTALL_ROLLBACK_POINTER_CHANGED')
+              }
             }
           }
           if (priorPointer) {
             await writeBytesAtomic(priorPointerPath, priorPointer, assertPublishedPointerStillOwned)
           } else {
-            await assertPublishedPointerStillOwned()
-            await rm(priorPointerPath, { force: true })
+            const rollbackPath = `${priorPointerPath}.${randomBytes(16).toString('hex')}.rollback`
+            const finalGuard = await assertPublishedPointerStillOwned()
+            finalGuard()
+            await rename(priorPointerPath, rollbackPath)
+            retainPublishedGeneration = true
+            const movedBytes = await readPinnedFile(rollbackPath, 64 * 1024)
+            const movedVersion = await fileVersion(rollbackPath)
+            if (!movedBytes.equals(finalPointer) || !sameFileVersion(finalPointerVersion, movedVersion)) {
+              if ((await fileVersion(priorPointerPath)) === null) {
+                await assertActiveRootOwned()
+                await rename(rollbackPath, priorPointerPath)
+              } else retainPublishedGeneration = true
+              throw new Error('RUNTIME_INSTALL_ROLLBACK_POINTER_CHANGED')
+            }
+            await assertActiveRootOwned()
+            await rm(rollbackPath, { force: true })
+            retainPublishedGeneration = false
           }
           await syncDirectory(activeRoot)
         } else if (!(priorPointer ? current?.equals(priorPointer) : current === null)) {

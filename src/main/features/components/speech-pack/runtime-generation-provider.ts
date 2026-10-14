@@ -290,7 +290,7 @@ async function assertInstalledClosure(
   root: string,
   inventory: RuntimeInventoryV1,
   signal?: AbortSignal
-): Promise<void> {
+): Promise<Map<string, BigIntStats>> {
   const expected = new Map(inventory.files.map((file) => [file.path, file]))
   const expectedDirectories = new Set<string>()
   for (const path of expected.keys()) {
@@ -319,11 +319,16 @@ async function assertInstalledClosure(
   }
   await visit(root, '')
   if (found.size !== expected.size) throw new Error('RUNTIME_GENERATION_FILE_CLOSURE_MISMATCH')
+  const versions = new Map<string, BigIntStats>()
   for (const [rel, pin] of expected) {
     if (signal?.aborted) throw signal.reason ?? new Error('RUNTIME_VERIFY_CANCELLED')
     const path = await assertFileRoot(root, rel)
-    const fileStat = await lstat(path)
-    if (path !== found.get(rel) || fileStat.size !== pin.bytes || ((fileStat.mode & 0o111) !== 0) !== pin.executable) {
+    const fileStat = await lstat(path, { bigint: true })
+    if (
+      path !== found.get(rel) ||
+      fileStat.size !== BigInt(pin.bytes) ||
+      ((fileStat.mode & 0o111n) !== 0n) !== pin.executable
+    ) {
       throw new Error('RUNTIME_GENERATION_FILE_PIN_MISMATCH')
     }
     if (pin.bytes > 0 && (await hashPinnedArchive(path, pin.bytes)) !== pin.sha256) {
@@ -332,7 +337,26 @@ async function assertInstalledClosure(
     if (pin.bytes === 0 && sha256(Buffer.alloc(0)) !== pin.sha256) {
       throw new Error('RUNTIME_GENERATION_FILE_PIN_MISMATCH')
     }
+    const afterHash = await lstat(path, { bigint: true })
+    if (
+      afterHash.dev !== fileStat.dev ||
+      afterHash.ino !== fileStat.ino ||
+      afterHash.mode !== fileStat.mode ||
+      afterHash.nlink !== fileStat.nlink ||
+      afterHash.uid !== fileStat.uid ||
+      afterHash.gid !== fileStat.gid ||
+      afterHash.rdev !== fileStat.rdev ||
+      afterHash.size !== fileStat.size ||
+      afterHash.blocks !== fileStat.blocks ||
+      afterHash.mtimeNs !== fileStat.mtimeNs ||
+      afterHash.ctimeNs !== fileStat.ctimeNs ||
+      afterHash.birthtimeNs !== fileStat.birthtimeNs
+    ) {
+      throw new Error('RUNTIME_GENERATION_FILE_CHANGED')
+    }
+    versions.set(path, afterHash)
   }
+  return versions
 }
 
 function requiredClosure(
@@ -683,12 +707,37 @@ export function createRuntimeGenerationProvider(options: RuntimeGenerationProvid
         }
         await assertExactDirectories(artifactParent, pointer.artifactIds)
         await assertExactDirectories(evidenceParent, pointer.artifactIds)
-        for (const closure of physicalClosures) {
-          await assertInstalledClosure(closure.root, closure.inventory)
-          await assertEvidenceClosure(closure.evidenceRoot)
-        }
         const currentPointer = await readBoundedRegular(join(activeRoot, `${feature}.json`), MAX_POINTER_BYTES)
         if (!currentPointer.equals(pointerBytes)) throw new Error('RUNTIME_ACTIVE_POINTER_CHANGED')
+        const verifiedVersions: Array<Map<string, BigIntStats>> = []
+        for (const closure of physicalClosures) {
+          verifiedVersions.push(await assertInstalledClosure(closure.root, closure.inventory))
+          await assertEvidenceClosure(closure.evidenceRoot)
+        }
+        // Recheck the physical versions after every metadata/pointer await. Launch callers perform
+        // this as their final async admission step, so changed earlier members cannot hide behind a
+        // later pointer read or a hash of another member.
+        for (const versions of verifiedVersions) {
+          for (const [path, verified] of versions) {
+            const current = await lstat(path, { bigint: true })
+            if (
+              current.dev !== verified.dev ||
+              current.ino !== verified.ino ||
+              current.mode !== verified.mode ||
+              current.nlink !== verified.nlink ||
+              current.uid !== verified.uid ||
+              current.gid !== verified.gid ||
+              current.rdev !== verified.rdev ||
+              current.size !== verified.size ||
+              current.blocks !== verified.blocks ||
+              current.mtimeNs !== verified.mtimeNs ||
+              current.ctimeNs !== verified.ctimeNs ||
+              current.birthtimeNs !== verified.birthtimeNs
+            ) {
+              throw new Error('RUNTIME_GENERATION_FILE_CHANGED')
+            }
+          }
+        }
       }
       references.set(pointer.generationIdentity, (references.get(pointer.generationIdentity) ?? 0) + 1)
       let released = false

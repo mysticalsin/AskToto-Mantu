@@ -8,6 +8,20 @@ import {
   type RuntimeFeatureLease,
   type RuntimeModelId
 } from './runtime-lease'
+import { configureRuntimeExecutionAuthority } from './runtime-execution-authority'
+
+type RuntimeAdmissionAuthority = (
+  feature: RuntimeFeatureId,
+  selectedModelId: RuntimeModelId | undefined,
+  signal: AbortSignal | undefined
+) => Promise<boolean>
+
+let runtimeAdmissionAuthority: RuntimeAdmissionAuthority | null = null
+
+export function configureRuntimeAdmissionAuthority(authority: RuntimeAdmissionAuthority): void {
+  runtimeAdmissionAuthority = authority
+  configureRuntimeExecutionAuthority(async (feature, selectedModelId) => authority(feature, selectedModelId, undefined))
+}
 
 function packageIdentity(contract: PackageRuntimeContract): string {
   if (contract.status === 'verified') return `${contract.profile}:${contract.inventory.identity}`
@@ -24,7 +38,13 @@ export async function acquirePackageRuntimeLease(
   selectedModelId?: RuntimeModelId,
   signal?: AbortSignal
 ): Promise<RuntimeFeatureLease | null> {
-  if (signal?.aborted) throw signal.reason ?? new Error('Optional runtime admission was cancelled.')
+  const assertAuthority = async (): Promise<void> => {
+    if (signal?.aborted) throw signal.reason ?? new Error('Optional runtime admission was cancelled.')
+    if (runtimeAdmissionAuthority && !(await runtimeAdmissionAuthority(feature, selectedModelId, signal))) {
+      throw new Error('Optional runtime execution authority was revoked.')
+    }
+    if (signal?.aborted) throw signal.reason ?? new Error('Optional runtime admission was cancelled.')
+  }
   const before = await getPackageRuntimeContract()
   if (before.status === 'invalid') throw new Error('The packaged runtime contract is invalid.')
   if (before.status !== 'verified' || before.profile !== 'lean') {
@@ -33,6 +53,7 @@ export async function acquirePackageRuntimeLease(
     await assertLegacyRuntimeClosure(legacyFeature)
     return null
   }
+  await assertAuthority()
   const identity = packageIdentity(before)
   const lease = await acquireFeatureRuntime(
     feature,
@@ -41,8 +62,9 @@ export async function acquirePackageRuntimeLease(
     signal
   )
   try {
-    if (signal?.aborted) throw signal.reason ?? new Error('Optional runtime admission was cancelled.')
+    await assertAuthority()
     const after = await getPackageRuntimeContract()
+    await assertAuthority()
     if (after.status === 'invalid' || after.status !== 'verified' || packageIdentity(after) !== identity) {
       throw new Error('The package runtime identity changed during admission.')
     }

@@ -13,6 +13,7 @@ import { delimiter, isAbsolute, join, relative, resolve, sep, win32 } from 'node
 import { app } from 'electron'
 import type { OptionalRuntimeTarget } from './runtime-components'
 import { readBoundedAppAsarMember } from './runtime-app-asar'
+import { assertRuntimeExecutionAuthority, runtimeExecutionAuthorityRevision } from './runtime-execution-authority'
 
 export type RuntimeFeatureId = 'offline-asr' | 'speaker-embedding' | 'local-llm'
 export type RuntimeEntryRole =
@@ -565,9 +566,13 @@ export async function createRuntimeFeatureLeaseForVerifiedGeneration(
   selectedModelId?: RuntimeModelId
 ): Promise<RuntimeFeatureLease> {
   let generation: VerifiedRuntimeGeneration
+  const authorityRevision = runtimeExecutionAuthorityRevision()
   try {
     generation = snapshotGeneration(generationInput)
     validateGeneration(feature, generation, target, selectedModelId)
+    await assertRuntimeExecutionAuthority(feature, selectedModelId)
+    if (runtimeExecutionAuthorityRevision() !== authorityRevision)
+      throw new Error('Optional runtime execution authority was revoked.')
   } catch (error) {
     await generationInput.release()
     throw error
@@ -595,8 +600,11 @@ export async function createRuntimeFeatureLeaseForVerifiedGeneration(
     target: Object.freeze({ ...generation.target }),
     verifyCurrentBytes: async () => {
       if (released) throw new Error('Optional runtime lease has been released.')
+      await assertRuntimeExecutionAuthority(feature, selectedModelId)
       await generation.verifyCurrentBytes()
-      if (released) throw new Error('Optional runtime lease has been released.')
+      if (released || runtimeExecutionAuthorityRevision() !== authorityRevision) {
+        throw new Error('Optional runtime execution authority was revoked.')
+      }
     },
     loaderDirectories: () => {
       if (released) throw new Error('Optional runtime lease has been released.')
@@ -670,10 +678,14 @@ export async function acquireFeatureRuntime(
   const acquiredGeneration = await configuredProvider.acquire({ feature, target, selectedModelId, signal })
   if (!acquiredGeneration) throw new Error('The required offline runtime is not installed or is not trusted.')
   let generation = acquiredGeneration
+  const authorityRevision = runtimeExecutionAuthorityRevision()
   try {
     generation = snapshotGeneration(acquiredGeneration)
     validateGeneration(feature, generation, target, selectedModelId)
     if (signal?.aborted) throw signal.reason ?? new Error('Optional runtime admission was cancelled.')
+    await assertRuntimeExecutionAuthority(feature, selectedModelId)
+    if (runtimeExecutionAuthorityRevision() !== authorityRevision)
+      throw new Error('Optional runtime execution authority was revoked.')
   } catch (error) {
     await acquiredGeneration.release()
     throw error
@@ -701,8 +713,11 @@ export async function acquireFeatureRuntime(
     target: Object.freeze({ ...generation.target }),
     verifyCurrentBytes: async () => {
       if (released) throw new Error('Optional runtime lease has been released.')
+      await assertRuntimeExecutionAuthority(feature, selectedModelId)
       await generation.verifyCurrentBytes()
-      if (released) throw new Error('Optional runtime lease has been released.')
+      if (released || runtimeExecutionAuthorityRevision() !== authorityRevision) {
+        throw new Error('Optional runtime execution authority was revoked.')
+      }
     },
     loaderDirectories: () => {
       if (released) throw new Error('Optional runtime lease has been released.')

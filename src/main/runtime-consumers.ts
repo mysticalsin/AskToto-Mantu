@@ -22,11 +22,15 @@ import { resolveTrustedSpeechPackPolicy } from './speech-pack-bootstrap'
 import type { SpeechCaptureGrantRegistry } from './capture-permissions/speech-capture-grant'
 import type { PackageRuntimeContract } from './features/components/speech-pack/package-contract'
 import { getPackageRuntimeContract } from './features/components/speech-pack/package-runtime-state'
-import { acquirePackageRuntimeLease } from './features/components/speech-pack/runtime-admission'
+import {
+  acquirePackageRuntimeLease,
+  configureRuntimeAdmissionAuthority
+} from './features/components/speech-pack/runtime-admission'
 import {
   configureRuntimeLeaseProvider,
   initializeRuntimeHostEnvironment
 } from './features/components/speech-pack/runtime-lease'
+import { invalidateRuntimeExecutionAuthority } from './features/components/speech-pack/runtime-execution-authority'
 import { createRuntimeGenerationProvider } from './features/components/speech-pack/runtime-generation-provider'
 import { createRuntimeInstallService } from './features/components/speech-pack/runtime-install-service'
 import type { RuntimeInstallAuthoritySnapshot } from './features/components/speech-pack/runtime-install-plans'
@@ -35,6 +39,9 @@ import { runtimeTargetFor } from './features/components/speech-pack/runtime-comp
 import { createRuntimeWhisperHost } from './features/components/speech-pack/runtime-worker-host'
 import { registerRuntimeInstallIpc } from './ipc/runtime-install-ipc'
 import { registerRuntimeWhisperWorkerIpc } from './ipc/runtime-whisper-worker-ipc'
+import { parakeetRelease } from './parakeet'
+import { releaseSpeakerEmbedding } from './speaker-embedding-client'
+import * as localRuntime from './llm/local-runtime'
 
 export function registerRuntimeConsumers(options: {
   readonly app: Pick<Electron.App, 'getPath' | 'getVersion' | 'on' | 'quit'>
@@ -55,6 +62,24 @@ export function registerRuntimeConsumers(options: {
   const storeRoot = join(app.getPath('userData'), 'optional-runtimes')
   const provider = createRuntimeGenerationProvider({ resourcesRoot: options.resourcesRoot, storeRoot })
   configureRuntimeLeaseProvider(provider)
+  configureRuntimeAdmissionAuthority(async (feature, selectedModelId, signal) => {
+    if (signal?.aborted) return false
+    const authority = await readSettingsAtAuthorityBoundary()
+    if (signal?.aborted || !authority.readable || !options.requireAuth()) return false
+    if (options.packageContract.status !== 'verified' || options.packageContract.profile !== 'lean') return false
+    const settings = authority.settings
+    if (resolveTrustedSpeechPackPolicy(settings, authority.localSpeechPack) === 'blocked') return false
+    if (getSpeechPolicyAuthorityStatus(settings).status === 'unverified') return false
+    if (feature === 'offline-asr') {
+      return settings.asrEngine === 'whisper' || settings.asrEngine === 'parakeet' || settings.asrEngine === 'apple'
+    }
+    if (feature === 'speaker-embedding') return settings.speakerId.enabled === true
+    return (
+      selectedModelId === settings.localLlm.modelId &&
+      (selectedModelId === 'qwen3.5-0.8b' || selectedModelId === 'qwen3.5-4b') &&
+      localModelAllowedByPolicy(getActiveModelPolicy(settings), selectedModelId)
+    )
+  })
   options.runBootWork('validateRuntimeCatalog', async () => {
     await provider.initialize()
     await initializeRuntimeHostEnvironment()
@@ -224,28 +249,36 @@ export function registerRuntimeConsumers(options: {
       stopPolicyObservation()
     },
     whisperCleanup: whisper.cleanup,
-    revokeWhisper: whisper.revokeAll
+    revokeWhisper: whisper.revokeAll,
+    revokeAll: async (): Promise<void> => {
+      if (options.packageContract.profile === 'lean') invalidateRuntimeExecutionAuthority()
+      const nativeCleanup =
+        options.packageContract.profile === 'lean'
+          ? [parakeetRelease(), releaseSpeakerEmbedding('live'), releaseSpeakerEmbedding('import'), localRuntime.stop()]
+          : []
+      await Promise.all([whisper.revokeAll(), ...nativeCleanup])
+    }
   }
   const current = getPublishedSettingsObservation()
   const authorityKey = (settings: Settings): string => {
     const policy = getSpeechPolicyAuthorityStatus(settings)
-    return `${settings.asrEngine}:${settings.speakerId.enabled}:${policy.identity}:${getSpeechPackPolicyIdentity()}`
+    return `${settings.asrEngine}:${settings.speakerId.enabled}:${settings.localLlm.modelId}:${policy.identity}:${getSpeechPackPolicyIdentity()}`
   }
   let observedAuthority = current?.readable ? authorityKey(current.settings) : null
   stopAuthorityObservation = observeSettingsAuthorityChanges((observation) => {
     if (!observation.readable) {
       observedAuthority = null
-      void consumers.revokeWhisper().catch((error: unknown) => options.warn(String(error)))
+      void consumers.revokeAll().catch((error: unknown) => options.warn(String(error)))
       return
     }
     const next = authorityKey(observation.settings)
     if (observedAuthority !== null && observedAuthority !== next) {
-      void consumers.revokeWhisper().catch((error: unknown) => options.warn(String(error)))
+      void consumers.revokeAll().catch((error: unknown) => options.warn(String(error)))
     }
     observedAuthority = next
   })
   stopPolicyObservation = observeSpeechPolicyProofRevocations(() => {
-    void consumers.revokeWhisper().catch((error: unknown) => options.warn(String(error)))
+    void consumers.revokeAll().catch((error: unknown) => options.warn(String(error)))
   })
   registerRuntimeConsumerShutdown(app, () => consumers, options.warn)
   return consumers

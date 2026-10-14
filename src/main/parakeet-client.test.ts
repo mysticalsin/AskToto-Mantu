@@ -116,6 +116,49 @@ describe('Parakeet utilityProcess client', () => {
     await expect(second).resolves.toBe('')
   })
 
+  it('rechecks the shared generation after a held lease verification', async () => {
+    let releaseFirstVerification!: () => void
+    const firstVerification = new Promise<void>((resolve) => {
+      releaseFirstVerification = resolve
+    })
+    let verifications = 0
+    const releases: Array<ReturnType<typeof vi.fn>> = []
+    runtime.acquire.mockImplementation(async () => {
+      const release = vi.fn(async () => undefined)
+      releases.push(release)
+      return {
+        entry: vi.fn(() => '/runtime/parakeet-asr-host.js'),
+        model: vi.fn(() => paths.model),
+        verifyCurrentBytes: vi.fn(async () => {
+          verifications += 1
+          if (verifications === 1) await firstVerification
+        }),
+        release
+      } as never
+    })
+
+    const first = api.parakeetTranscribe(Float32Array.from([0.25]))
+    const second = api.parakeetTranscribe(Float32Array.from([0.5]))
+    for (let i = 0; i < 50 && verifications < 2; i++) await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(verifications).toBe(2)
+    releaseFirstVerification()
+
+    for (let i = 0; i < 50; i++) {
+      const posted = child.postMessage.mock.calls.filter(
+        ([message]) => (message as { type?: string }).type === 'transcribe'
+      )
+      if (posted.length === 2) break
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    const requests = child.postMessage.mock.calls
+      .map(([message]) => message as { type?: string; id?: string })
+      .filter((message): message is { type: string; id: string } => message.type === 'transcribe' && !!message.id)
+    expect(electron.utilityProcess.fork).toHaveBeenCalledTimes(1)
+    expect(releases.filter((release) => release.mock.calls.length > 0)).toHaveLength(1)
+    for (const request of requests) child.emit('message', { type: 'result', id: request.id, text: 'ok' })
+    await expect(Promise.all([first, second])).resolves.toEqual(['ok', 'ok'])
+  })
+
   it('rejects non-finite and oversized PCM before forking a child', async () => {
     await expect(api.parakeetTranscribe(Float32Array.from([Number.NaN]))).rejects.toThrow(/finite/i)
     await expect(api.parakeetTranscribe(new Float32Array(16_000 * 30 + 1))).rejects.toThrow(/too large/i)

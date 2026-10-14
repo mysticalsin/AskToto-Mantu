@@ -589,7 +589,9 @@ function derUtf8StringClaim(value: unknown): string | null {
   }
   if (contentBytes < 1 || headerBytes + contentBytes !== value.byteLength) return null
   try {
-    const result = new TextDecoder('utf-8', { fatal: true }).decode(value.subarray(headerBytes))
+    // Preserve an encoded BOM as claim data; TextDecoder's default strips it, which would
+    // make a non-canonical certificate value compare equal to the app-owned identity pin.
+    const result = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(value.subarray(headerBytes))
     return result.length > 0 && !/[\u0000-\u001f\u007f]/.test(result) ? result : null
   } catch {
     return null

@@ -66,31 +66,38 @@ static int valid_canonical_directory(const WCHAR *path) {
   return 1;
 }
 
+static int append_literal(char *out, size_t capacity, size_t *used, const char *value, size_t length) {
+  if (*used > capacity || length > capacity - *used) return 0;
+  memcpy(out + *used, value, length);
+  *used += length;
+  return 1;
+}
+
 static int append_json_string(char *out, size_t capacity, size_t *used, const WCHAR *value) {
   char utf8[ROOT_CAPACITY * 4];
   int utf8Length = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value, -1, utf8,
                                        (int)sizeof(utf8), NULL, NULL);
   if (utf8Length <= 0 || (size_t)utf8Length > sizeof(utf8)) return 0;
   utf8Length--; /* omit the terminating NUL */
-  if (*used + 2 >= capacity) return 0;
+  if (*used > capacity || capacity - *used < 2) return 0;
   out[(*used)++] = '"';
   for (int i = 0; i < utf8Length; i++) {
     unsigned char ch = (unsigned char)utf8[i];
     if (ch == '"' || ch == '\\') {
-      if (*used + 2 >= capacity) return 0;
+      if (*used > capacity || capacity - *used < 3) return 0;
       out[(*used)++] = '\\';
       out[(*used)++] = (char)ch;
     } else if (ch < 0x20) {
-      if (*used + 6 >= capacity) return 0;
+      if (*used > capacity || capacity - *used < 7) return 0;
       int count = snprintf(out + *used, capacity - *used, "\\u%04x", (unsigned int)ch);
       if (count != 6) return 0;
       *used += 6;
     } else {
-      if (*used + 1 >= capacity) return 0;
+      if (*used > capacity || capacity - *used < 2) return 0;
       out[(*used)++] = (char)ch;
     }
   }
-  if (*used + 1 >= capacity) return 0;
+  if (*used > capacity || capacity - *used < 2) return 0;
   out[(*used)++] = '"';
   return 1;
 }
@@ -100,18 +107,14 @@ static int emit_success(const WCHAR *windowsRoot, const WCHAR *systemRoot) {
   size_t used = 0;
   const char prefix[] = "{\"version\":1,\"windowsRoot\":";
   const char middle[] = ",\"systemRoot\":";
-  if (sizeof(prefix) - 1 >= sizeof(line)) return emit_error("OUTPUT_FAILED");
-  memcpy(line, prefix, sizeof(prefix) - 1);
-  used = sizeof(prefix) - 1;
-  if (!append_json_string(line, sizeof(line), &used, windowsRoot) ||
-      sizeof(middle) - 1 > sizeof(line) - used) return emit_error("OUTPUT_FAILED");
-  memcpy(line + used, middle, sizeof(middle) - 1);
-  used += sizeof(middle) - 1;
-  if (!append_json_string(line, sizeof(line), &used, systemRoot) || used + 3 > sizeof(line)) {
+  const char suffix[] = "}\n";
+  if (!append_literal(line, sizeof(line), &used, prefix, sizeof(prefix) - 1) ||
+      !append_json_string(line, sizeof(line), &used, windowsRoot) ||
+      !append_literal(line, sizeof(line), &used, middle, sizeof(middle) - 1) ||
+      !append_json_string(line, sizeof(line), &used, systemRoot) ||
+      !append_literal(line, sizeof(line), &used, suffix, sizeof(suffix) - 1)) {
     return emit_error("OUTPUT_FAILED");
   }
-  line[used++] = '}';
-  line[used++] = '\n';
   DWORD written = 0;
   HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
   if (output == INVALID_HANDLE_VALUE || !WriteFile(output, line, (DWORD)used, &written, NULL) ||

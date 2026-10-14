@@ -364,13 +364,17 @@ function waitForDrain(): Promise<void> {
   return new Promise((resolve) => drainWaiters.push(resolve))
 }
 
-function spawnAndWaitHealthy(
+async function spawnAndWaitHealthy(
   binaryPath: string,
   modelPaths: ModelPaths,
   platform: LlamaPlatform,
   generation: number,
   variant: BinaryVariant
 ): Promise<void> {
+  // A lease pins an immutable generation, but files may still have been replaced since it
+  // was acquired. Re-verify at every actual launch boundary, including restart and model switch.
+  if (modelPaths.runtimeLease) await modelPaths.runtimeLease.verifyCurrentBytes()
+  assertCurrentGeneration(generation)
   return new Promise((resolve, reject) => {
     const args = buildSpawnArgs({
       gguf: modelPaths.gguf,

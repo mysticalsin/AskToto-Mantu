@@ -208,32 +208,57 @@ async function activeGeneration(
     // If a previous helper was exiting, re-resolve the current lean selection after its exit and
     // before creating a replacement. No helper starts while fresh path admission is pending.
     const prepared = await prepareBeforeSpawn?.()
+    let preparedLeaseOwned = prepared?.lease !== null && prepared?.lease !== undefined
+    const releasePreparedLease = async (): Promise<void> => {
+      if (!preparedLeaseOwned) return
+      preparedLeaseOwned = false
+      await prepared?.lease?.release()
+    }
     try {
       assertCurrentOperation(revision)
     } catch (error) {
-      await prepared?.lease?.release()
+      await releasePreparedLease()
       throw error
     }
     if (releaseGate || blockedRelease) {
-      await prepared?.lease?.release()
+      await releasePreparedLease()
       continue
     }
     const currentAfterPrepare = (() => current)()
     if (currentAfterPrepare?.state === 'active') {
-      await prepared?.lease?.release()
-      return currentAfterPrepare
+      await releasePreparedLease()
+      assertCurrentOperation(revision)
+      if (releaseGate || blockedRelease) continue
+      const currentAfterRelease = (() => current)()
+      if (currentAfterRelease === currentAfterPrepare && currentAfterRelease.state === 'active') {
+        return currentAfterRelease
+      }
+      continue
     }
     if (!prepared) throw new Error('Parakeet host preparation was not completed.')
     try {
       await prepared.lease?.verifyCurrentBytes()
       assertCurrentOperation(revision)
       if (releaseGate || blockedRelease) {
-        await prepared.lease?.release()
+        await releasePreparedLease()
+        continue
+      }
+      // Verification yields even for legacy/full runtimes, where there is no lease to verify.
+      // Another concurrent caller may have installed the shared host during that turn.
+      const currentAfterVerification = (() => current)()
+      if (currentAfterVerification?.state === 'active') {
+        await releasePreparedLease()
+        assertCurrentOperation(revision)
+        if (releaseGate || blockedRelease) continue
+        const currentAfterRelease = (() => current)()
+        if (currentAfterRelease === currentAfterVerification && currentAfterRelease.state === 'active') {
+          return currentAfterRelease
+        }
         continue
       }
       return spawnGeneration(prepared.files, prepared.lease)
     } catch (error) {
-      await prepared.lease?.release()
+      await releasePreparedLease()
       throw error
     }
   }
