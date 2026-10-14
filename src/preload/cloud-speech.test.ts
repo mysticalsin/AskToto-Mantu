@@ -138,6 +138,38 @@ describe('cloud speech preload boundary', () => {
     await expect(first).resolves.toMatchObject({ ok: true, nextSequence: 2 })
   })
 
+  it('copies PCM into a fixed buffer without invoking a caller-controlled ArrayBuffer species', async () => {
+    const fixture = makeRenderer()
+    fixture.invoke.mockResolvedValueOnce({
+      ok: true,
+      captureId,
+      captureGeneration: capture.generation,
+      track: 'microphone',
+      sequence: 1,
+      nextSequence: 2,
+      nextSampleOffset: 1_600
+    })
+    const source = new ArrayBuffer(3_200)
+    let speciesCalls = 0
+    Object.defineProperty(source, 'constructor', {
+      value: {
+        [Symbol.species]: class {
+          constructor() {
+            speciesCalls += 1
+            throw new Error('caller-controlled species must not run')
+          }
+        }
+      }
+    })
+
+    const api = createCloudSpeechPreloadApi(fixture.renderer)
+    await expect(api.cloudSpeechFrame(pcmFrame(source))).resolves.toMatchObject({ ok: true })
+    const sent = fixture.invoke.mock.calls[0]?.[1] as ReturnType<typeof pcmFrame>
+    expect(sent.pcm16le).not.toBe(source)
+    expect(sent.pcm16le.byteLength).toBe(3_200)
+    expect(speciesCalls).toBe(0)
+  })
+
   it('caps total frame invokes and event subscriptions even across distinct tracks', async () => {
     const fixture = makeRenderer()
     const pending: Array<(value: unknown) => void> = []

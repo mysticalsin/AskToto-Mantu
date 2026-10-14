@@ -103,6 +103,13 @@ function fixedPcmByteLength(value: ArrayBuffer): number {
   return byteLengthGetter.call(value) as number
 }
 
+function cloneFixedPcmBuffer(value: ArrayBuffer, byteLength: number): ArrayBuffer {
+  const copy = new Uint8Array(byteLength)
+  const source = new Uint8Array(value, 0, byteLength)
+  Uint8Array.prototype.set.call(copy, source)
+  return copy.buffer as ArrayBuffer
+}
+
 function invalidCapability(): CloudSpeechCapability {
   return {
     disclosureVersion: CLOUD_SPEECH_DISCLOSURE_VERSION,
@@ -173,7 +180,7 @@ export function createCloudSpeechPreloadApi(renderer: Renderer): CloudSpeechPrel
         const pcmLength = fixedPcmByteLength(value.pcm16le)
         const copy: CloudSpeechFrame = {
           ...value,
-          pcm16le: ArrayBuffer.prototype.slice.call(value.pcm16le, 0) as ArrayBuffer
+          pcm16le: cloneFixedPcmBuffer(value.pcm16le, pcmLength)
         }
         const result = transportFailure(
           CloudSpeechFrameResultSchema,
