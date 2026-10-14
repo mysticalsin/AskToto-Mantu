@@ -18,6 +18,8 @@ class MockWs extends EventEmitter {
   static CLOSING = 2
   static CLOSED = 3
   readyState = MockWs.CONNECTING
+  bufferedAmount = 0
+  terminateCalls = 0
   sent: unknown[] = []
   url: string
   opts: unknown
@@ -32,12 +34,14 @@ class MockWs extends EventEmitter {
   }
   send(data: unknown): void {
     this.sent.push(data)
+    if (Buffer.isBuffer(data)) this.bufferedAmount += data.byteLength
   }
   close(): void {
     this.readyState = MockWs.CLOSED
     this.emit('close')
   }
   terminate(): void {
+    this.terminateCalls += 1
     this.close()
   }
 }
@@ -109,6 +113,14 @@ class FailingCloseFrameWs extends MockWs {
   }
 }
 
+class ErrorOnTerminateWs extends MockWs {
+  terminate(): void {
+    this.terminateCalls += 1
+    this.emit('error', new Error('synthetic termination error'))
+    this.close()
+  }
+}
+
 describe('CloudSttLiveSession', () => {
   it('returns honest CREDENTIALS error without opening sockets when Nova creds missing', async () => {
     const onFinal = vi.fn()
@@ -139,8 +151,7 @@ describe('CloudSttLiveSession', () => {
         asrLanguage: 'French',
         profile: { name: 'Tony' },
         cloudflareToken: 'tok',
-        cloudflareBaseUrl:
-          'https://api.cloudflare.com/client/v4/accounts/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/ai/v1',
+        cloudflareBaseUrl: 'https://api.cloudflare.com/client/v4/accounts/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/ai/v1',
         gatewayId: 'gw1',
         WebSocketImpl: MockWs as unknown as typeof WebSocket
       },
@@ -160,9 +171,7 @@ describe('CloudSttLiveSession', () => {
         alternatives: [
           {
             transcript: 'bonjour',
-            words: [
-              { punctuated_word: 'Bonjour', start: 0.0, end: 0.4, speaker: 0, language: 'fr' }
-            ]
+            words: [{ punctuated_word: 'Bonjour', start: 0.0, end: 0.4, speaker: 0, language: 'fr' }]
           }
         ]
       }
@@ -183,6 +192,162 @@ describe('CloudSttLiveSession', () => {
     session.close()
   })
 
+  it.each([
+    { label: 'just below the cap', bufferedDelta: -1, shouldSend: true },
+    { label: 'exactly at the cap', bufferedDelta: 0, shouldSend: true },
+    { label: 'over the cap', bufferedDelta: 1, shouldSend: false }
+  ])('enforces the outbound PCM cap when the buffered amount is $label', async ({ bufferedDelta, shouldSend }) => {
+    const errors: string[] = []
+    const session = new CloudSttLiveSession(
+      {
+        provider: 'cloudflare-nova3',
+        cloudflareToken: 'test-token',
+        cloudflareAccountId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        gatewayId: 'default',
+        WebSocketImpl: ErrorOnTerminateWs as unknown as typeof WebSocket
+      },
+      { onFinal: () => {}, onError: (message) => errors.push(message) }
+    )
+
+    await expect(session.start()).resolves.toEqual({ ok: true })
+    const tracks = (session as unknown as { tracks: Map<string, { ws: ErrorOnTerminateWs }> }).tracks
+    const you = tracks.get('you')!.ws
+    const them = tracks.get('them')!.ws
+    const samples = new Float32Array(4)
+    const prospectiveBytes = samples.byteLength / 2
+    you.bufferedAmount = 1024 * 1024 - prospectiveBytes + bufferedDelta
+
+    session.pushFloat32('you', samples)
+
+    expect(you.sent.filter(Buffer.isBuffer)).toHaveLength(shouldSend ? 1 : 0)
+    if (shouldSend) {
+      expect(errors).toEqual([])
+      session.close()
+    } else {
+      expect(errors).toEqual(['Cloud STT transcription stopped because the network send queue exceeded its limit.'])
+      expect(you.terminateCalls).toBe(1)
+      expect(them.terminateCalls).toBe(1)
+      expect(you.readyState).toBe(MockWs.CLOSED)
+      expect(them.readyState).toBe(MockWs.CLOSED)
+    }
+  })
+
+  it.each([
+    { label: 'non-finite', bufferedAmount: Number.NaN },
+    { label: 'negative', bufferedAmount: -1 }
+  ])('stops the session when the socket reports a $label buffered amount', async ({ bufferedAmount }) => {
+    const errors: string[] = []
+    const session = new CloudSttLiveSession(
+      {
+        provider: 'cloudflare-nova3',
+        cloudflareToken: 'test-token',
+        cloudflareAccountId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        gatewayId: 'default',
+        WebSocketImpl: MockWs as unknown as typeof WebSocket
+      },
+      { onFinal: () => {}, onError: (message) => errors.push(message) }
+    )
+
+    await expect(session.start()).resolves.toEqual({ ok: true })
+    const tracks = (session as unknown as { tracks: Map<string, { ws: MockWs }> }).tracks
+    const you = tracks.get('you')!.ws
+    const them = tracks.get('them')!.ws
+    you.bufferedAmount = bufferedAmount
+
+    session.pushFloat32('you', new Float32Array([0.2]))
+
+    expect(you.sent.filter(Buffer.isBuffer)).toHaveLength(0)
+    expect(you.terminateCalls).toBe(1)
+    expect(them.terminateCalls).toBe(1)
+    expect(errors).toEqual(['Cloud STT transcription stopped because the network send queue exceeded its limit.'])
+  })
+
+  it('stops both tracks before overflow callbacks, emits one fixed error, and preserves finalized lines', async () => {
+    const finals: unknown[] = []
+    const errors: string[] = []
+    let session!: CloudSttLiveSession
+    session = new CloudSttLiveSession(
+      {
+        provider: 'cloudflare-nova3',
+        cloudflareToken: 'test-token',
+        cloudflareAccountId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        gatewayId: 'default',
+        WebSocketImpl: ErrorOnTerminateWs as unknown as typeof WebSocket
+      },
+      {
+        onFinal: (line) => finals.push(line),
+        onStatus: (status) => {
+          if (status === 'closed') session.pushFloat32('them', new Float32Array([0.2]))
+        },
+        onError: (message) => {
+          errors.push(message)
+          session.pushFloat32('you', new Float32Array([0.2]))
+          session.pushFloat32('them', new Float32Array([0.2]))
+        }
+      }
+    )
+
+    await expect(session.start()).resolves.toEqual({ ok: true })
+    const tracks = (session as unknown as { tracks: Map<string, { ws: ErrorOnTerminateWs }> }).tracks
+    const you = tracks.get('you')!.ws
+    const them = tracks.get('them')!.ws
+    them.emit(
+      'message',
+      Buffer.from(
+        JSON.stringify({
+          type: 'Results',
+          is_final: true,
+          channel: {
+            alternatives: [
+              { words: [{ punctuated_word: 'Already final.', start: 0, end: 0.2, speaker: 0, language: 'en' }] }
+            ]
+          }
+        })
+      )
+    )
+    expect(finals).toEqual([expect.objectContaining({ speaker: 'them', text: 'Already final.' })])
+
+    const maxFrame = new Float32Array(16_000 * 30)
+    session.pushFloat32('you', maxFrame)
+    expect(you.bufferedAmount).toBe(960_000)
+    expect(you.sent.filter(Buffer.isBuffer)).toHaveLength(1)
+    expect(errors).toEqual([])
+    const sentBeforeOverflow = [you.sent.length, them.sent.length]
+
+    // A non-draining socket keeps the first maximum-size frame queued, so this second frame crosses 1 MiB.
+    const nextFrame = new Float32Array(48_000)
+    session.pushFloat32('you', nextFrame)
+
+    expect(you.terminateCalls).toBe(1)
+    expect(them.terminateCalls).toBe(1)
+    expect(you.readyState).toBe(MockWs.CLOSED)
+    expect(them.readyState).toBe(MockWs.CLOSED)
+    expect([you.sent.length, them.sent.length]).toEqual(sentBeforeOverflow)
+    expect(errors).toEqual(['Cloud STT transcription stopped because the network send queue exceeded its limit.'])
+    expect(finals).toEqual([expect.objectContaining({ speaker: 'them', text: 'Already final.' })])
+
+    them.emit(
+      'message',
+      Buffer.from(
+        JSON.stringify({
+          type: 'Results',
+          is_final: true,
+          channel: {
+            alternatives: [
+              { words: [{ punctuated_word: 'Late final.', start: 1, end: 1.2, speaker: 0, language: 'en' }] }
+            ]
+          }
+        })
+      )
+    )
+    session.pushFloat32('you', new Float32Array([0.2]))
+    session.pushFloat32('them', new Float32Array([0.2]))
+    expect([you.sent.length, them.sent.length]).toEqual(sentBeforeOverflow)
+    expect(errors).toHaveLength(1)
+    expect(finals).toHaveLength(1)
+    await expect(session.closeGracefully(100)).resolves.toEqual({ timedOut: true })
+  })
+
   it('normalizer → line mapping (unit, no WS): mic profile + remote cluster', () => {
     const norm = normalizeNova3ResultsMessage(
       {
@@ -191,9 +356,7 @@ describe('CloudSttLiveSession', () => {
         channel: {
           alternatives: [
             {
-              words: [
-                { punctuated_word: 'Salut', start: 0, end: 0.3, speaker: 1, language: 'fr' }
-              ]
+              words: [{ punctuated_word: 'Salut', start: 0, end: 0.3, speaker: 1, language: 'fr' }]
             }
           ]
         }
@@ -321,9 +484,7 @@ describe('CloudSttLiveSession', () => {
     you.emit('message', Buffer.from(JSON.stringify({ tokens: [], finished: true })))
 
     await expect(stopping).resolves.toEqual({ timedOut: false })
-    expect(finals).toEqual([
-      expect.objectContaining({ speaker: 'them', name: 'Speaker 2', text: 'Goodbye' })
-    ])
+    expect(finals).toEqual([expect.objectContaining({ speaker: 'them', name: 'Speaker 2', text: 'Goodbye' })])
     expect(you.readyState).toBe(MockWs.CLOSED)
     expect(them.readyState).toBe(MockWs.CLOSED)
   })
@@ -474,9 +635,7 @@ describe('CloudSttLiveSession', () => {
           channel: {
             alternatives: [
               {
-                words: [
-                  { punctuated_word: 'Done', start: 0, end: 0.4, speaker: 0, language: 'en' }
-                ]
+                words: [{ punctuated_word: 'Done', start: 0, end: 0.4, speaker: 0, language: 'en' }]
               }
             ]
           }
@@ -489,9 +648,7 @@ describe('CloudSttLiveSession', () => {
     them.close()
 
     await expect(stopping).resolves.toEqual({ timedOut: false })
-    expect(finals).toEqual([
-      expect.objectContaining({ speaker: 'them', name: 'Speaker 1', text: 'Done' })
-    ])
+    expect(finals).toEqual([expect.objectContaining({ speaker: 'them', name: 'Speaker 1', text: 'Done' })])
   })
 
   it('reports incomplete when Nova closes without terminal provider evidence', async () => {
@@ -518,9 +675,7 @@ describe('CloudSttLiveSession', () => {
           type: 'Results',
           is_final: true,
           channel: {
-            alternatives: [
-              { words: [{ punctuated_word: 'Earlier.', start: 0, end: 0.2, speaker: 0, language: 'en' }] }
-            ]
+            alternatives: [{ words: [{ punctuated_word: 'Earlier.', start: 0, end: 0.2, speaker: 0, language: 'en' }] }]
           }
         })
       )
@@ -529,5 +684,4 @@ describe('CloudSttLiveSession', () => {
     tracks.get('them')!.ws.close()
     await expect(stopping).resolves.toEqual({ timedOut: true })
   })
-
 })
